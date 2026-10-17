@@ -1,13 +1,13 @@
 {
-  "name": "kennis",
+  "name": "knowledge",
   "owner": {
     "name": "To0wnn"
   },
   "plugins": [
     {
-      "name": "kennis",
+      "name": "knowledge",
       "source": "./plugin",
-      "description": "Live shared homelab knowledge (docs + Claude memory) through the kennis server",
+      "description": "Live shared homelab knowledge (docs + Claude memory) through the knowledge server",
       "version": "0.1.0"
     }
   ],

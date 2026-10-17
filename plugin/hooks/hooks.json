@@ -1,5 +1,5 @@
 {
-  "description": "Load the shared kennis context (CLAUDE.md + memory index) at session start",
+  "description": "Load the shared knowledge context (CLAUDE.md + memory index) at session start",
   "hooks": {
     "SessionStart": [
       {

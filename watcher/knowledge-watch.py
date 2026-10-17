@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Runs on the VM (where the shared files live): reports changed files to the kennis server right away.
+"""Runs on the VM (where the shared files live): reports changed files to the knowledge server right away.
 
 inotify (via inotifywait) tells us about every write, create, delete and rename under the shared trees, so the
 server re-reads only those files and never has to poll NFS. Events are batched for 200 ms. If a report fails,
 nothing is lost: the server's periodic rescan picks the change up. Run by the systemd user unit
-kennis-watch.service (Restart=always).
+knowledge-watch.service (Restart=always).
 """
 import json
 import os
@@ -15,15 +15,15 @@ import time
 import urllib.request
 
 HOME = os.path.expanduser("~")
-TREES = [  # local path -> path prefix on the kennis server (longest first)
+TREES = [  # local path -> path prefix on the knowledge server (longest first)
     (f"{HOME}/.claude/projects/-home-to0wnn-homelab/memory", "memory"),
     (f"{HOME}/.claude/gedeeld", "claude"),
     (f"{HOME}/.claude/skills", "claude/skills"),
     (f"{HOME}/.claude/agents", "claude/agents"),
     (f"{HOME}/homelab", "homelab"),
 ]
-SERVER = os.environ.get("KENNIS_URL", "http://<lan-ip>:8766")
-TOKEN = open(os.path.expanduser("~/.config/kennis-server/watcher.token")).read().strip()
+SERVER = os.environ.get("KNOWLEDGE_URL", "http://<lan-ip>:8766")
+TOKEN = open(os.path.expanduser("~/.config/knowledge-server/watcher.token")).read().strip()
 EXCLUDE = r"(/\.git/|/node_modules/|/\.venv/|/__pycache__/|/\.cache/|\.swp$|~$)"
 
 

@@ -1,16 +1,16 @@
-"""Kennis server: live, shared access to the homelab docs and Claude memory for Claude Code on any device.
+"""Knowledge server: live, shared access to the homelab docs and Claude memory for Claude Code on any device.
 
 The files on the VM stay the single source of truth (VM sessions keep using them natively). Other
-devices reach them through this MCP server over HTTPS via the `kennis` plugin. Design choices that keep
+devices reach them through this MCP server over HTTPS via the `knowledge` plugin. Design choices that keep
 it from breaking:
   - stateless streamable HTTP + JSON responses: no MCP sessions that expire or get lost on a restart;
   - a static bearer token per device (no login that times out); revoke a device by removing its token;
   - responses are gzip-compressed by the server when the client accepts it;
-  - writes are serialized per file and atomic; `kennis_edit` replaces one unique snippet (concurrent
-    edits elsewhere in the file survive), `kennis_write` refuses when the file changed since it was read.
+  - writes are serialized per file and atomic; `knowledge_edit` replaces one unique snippet (concurrent
+    edits elsewhere in the file survive), `knowledge_write` refuses when the file changed since it was read.
 
 Config: tokens.json with hashes only: {"<device>": {"sha256": "<hex of sha256(token)>", "write": bool, "watch": bool}}
-Run:    uv run server.py   (systemd user unit kennis-server.service)
+Run:    uv run server.py   (systemd user unit knowledge-server.service)
 """
 import asyncio
 import fnmatch
@@ -36,9 +36,9 @@ HOME = Path.home()
 # Where the shared trees are mounted. Option A (now): the files stay on the VM and are NFS-mounted into the
 # container on forge. Option B (later): move the files to forge and only change these mounts.
 ROOTS = {
-    "memory": Path(os.environ.get("KENNIS_MEMORY", HOME / ".claude/projects/-home-to0wnn-homelab/memory")),
-    "homelab": Path(os.environ.get("KENNIS_HOMELAB", HOME / "homelab")),
-    "claude": Path(os.environ.get("KENNIS_CLAUDE", HOME / ".claude/gedeeld")),
+    "memory": Path(os.environ.get("KNOWLEDGE_MEMORY", HOME / ".claude/projects/-home-to0wnn-homelab/memory")),
+    "homelab": Path(os.environ.get("KNOWLEDGE_HOMELAB", HOME / "homelab")),
+    "claude": Path(os.environ.get("KNOWLEDGE_CLAUDE", HOME / ".claude/gedeeld")),
 }
 # The "claude" root is a dedicated share (CLAUDE.md, skills/, agents/), never all of ~/.claude (credentials).
 CLAUDE_READABLE = ("CLAUDE.md", "skills/*", "agents/*")
@@ -46,8 +46,8 @@ WRITABLE = ("memory/*.md", "memory/archief/*.md", "homelab/*.md")
 SKIP_PARTS = {".git", "__pycache__", "node_modules", ".venv", ".cache"}
 SKIP_NAMES = re.compile(r"(\.bak|\.vault_pass$|\.env$|credentials|\.pem$|\.key$|id_ed25519|id_rsa)")
 MAX_BYTES = 2_000_000
-TOKENS_FILE = Path(os.environ.get("KENNIS_TOKENS", HOME / ".config/kennis-server/tokens.json"))
-AUDIT = Path(os.environ.get("KENNIS_AUDIT", HOME / ".local/state/kennis-server/audit.log"))
+TOKENS_FILE = Path(os.environ.get("KNOWLEDGE_TOKENS", HOME / ".config/knowledge-server/tokens.json"))
+AUDIT = Path(os.environ.get("KNOWLEDGE_AUDIT", HOME / ".local/state/knowledge-server/audit.log"))
 
 device: ContextVar[dict] = ContextVar("device", default={})
 _locks: dict[str, asyncio.Lock] = {}
@@ -76,7 +76,7 @@ def version(data: bytes) -> str:
 
 BINARY = {".zip", ".gz", ".tgz", ".xz", ".7z", ".tar", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf",
           ".bin", ".img", ".iso", ".so", ".pyc", ".whl", ".mp4", ".mkv", ".db", ".sqlite", ".woff", ".woff2", ".ttf"}
-RESCAN_SECONDS = int(os.environ.get("KENNIS_RESCAN", "60"))
+RESCAN_SECONDS = int(os.environ.get("KNOWLEDGE_RESCAN", "60"))
 
 
 def shared_files(root: str):
@@ -179,7 +179,7 @@ def audit(action: str, rel: str):
 
 def atomic_write(full: Path, data: bytes):
     full.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=full.parent, prefix=".kennis-")
+    fd, tmp = tempfile.mkstemp(dir=full.parent, prefix=".knowledge-")
     with os.fdopen(fd, "wb") as f:
         f.write(data)
     os.chmod(tmp, full.stat().st_mode & 0o777 if full.exists() else 0o644)  # mkstemp would leave new files 0600
@@ -187,18 +187,18 @@ def atomic_write(full: Path, data: bytes):
 
 
 server = MCPServer(
-    name="kennis",
+    name="knowledge",
     instructions=(
         "Shared homelab knowledge of Anthony (To0wnn): docs in homelab/ (00_OVERZICHT.md ... 14_*.md, tools/), "
         "Claude memory in memory/ (index memory/MEMORY.md, one fact per file), shared instructions in claude/CLAUDE.md "
         "and claude/skills/. This replaces local auto-memory on this device: read memory files here, and save new "
-        "memories here (new file + one index line in memory/MEMORY.md). Prefer kennis_edit over kennis_write."
+        "memories here (new file + one index line in memory/MEMORY.md). Prefer knowledge_edit over knowledge_write."
     ),
 )
 
 
 @server.tool()
-def kennis_list(root: str = "memory", pattern: str = "*") -> str:
+def knowledge_list(root: str = "memory", pattern: str = "*") -> str:
     """List shared files under a root (memory, homelab or claude), optionally filtered by a glob on the relative path."""
     if root not in ROOTS:
         raise ToolError(f"root must be one of {sorted(ROOTS)}")
@@ -207,9 +207,9 @@ def kennis_list(root: str = "memory", pattern: str = "*") -> str:
 
 
 @server.tool()
-def kennis_read(path: str, offset: int = 1, limit: int = 600) -> str:
+def knowledge_read(path: str, offset: int = 1, limit: int = 600) -> str:
     """Read a shared text file, e.g. memory/MEMORY.md or homelab/05_SERVICES.md. Returns lines offset..offset+limit-1
-    with line numbers, plus the file version needed by kennis_write."""
+    with line numbers, plus the file version needed by knowledge_write."""
     full, rel = resolve(path)
     data = full.read_bytes()
     lines = data.decode("utf-8", errors="replace").splitlines()
@@ -221,7 +221,7 @@ def kennis_read(path: str, offset: int = 1, limit: int = 600) -> str:
 
 
 @server.tool()
-def kennis_search(pattern: str, root: str = "", max_results: int = 60) -> str:
+def knowledge_search(pattern: str, root: str = "", max_results: int = 60) -> str:
     """Case-insensitive regex search over shared files (all roots, or one root). Returns path:line: text."""
     try:
         rx_i = re.compile(pattern, re.I | re.M)
@@ -249,7 +249,7 @@ def kennis_search(pattern: str, root: str = "", max_results: int = 60) -> str:
 
 
 @server.tool()
-async def kennis_edit(path: str, old_string: str, new_string: str) -> str:
+async def knowledge_edit(path: str, old_string: str, new_string: str) -> str:
     """Replace one unique snippet in a shared file (like the Edit tool). Edits by other sessions elsewhere in the
     file are kept. Fails if old_string is missing or not unique: read the file again and retry."""
     full, rel = resolve(path)
@@ -267,8 +267,8 @@ async def kennis_edit(path: str, old_string: str, new_string: str) -> str:
 
 
 @server.tool()
-async def kennis_write(path: str, content: str, base_version: str = "") -> str:
-    """Create or replace a whole shared file. For an existing file pass base_version from kennis_read; it is refused
+async def knowledge_write(path: str, content: str, base_version: str = "") -> str:
+    """Create or replace a whole shared file. For an existing file pass base_version from knowledge_read; it is refused
     when another session changed the file since then. Leave base_version empty only to create a new file."""
     full, rel = resolve(path)
     check_writable(rel)
@@ -293,16 +293,16 @@ def context_parts() -> list[str]:
     """Startup context for the plugin's SessionStart hooks: what VM sessions get loaded natively, split on line
     boundaries into parts that each fit one hook output, so nothing is cut off."""
     text = [
-        "===== kennis plugin =====\nThe memory and docs below live on the kennis MCP server (the VM), not on this "
+        "===== knowledge plugin =====\nThe memory and docs below live on the knowledge MCP server (the VM), not on this "
         "machine; other sessions on other devices use the same files live. Read memory files with "
-        "kennis_read('memory/<file>'), search with kennis_search, and save or update memories there (kennis_edit, or "
-        "kennis_write for a new file, plus one index line in memory/MEMORY.md) instead of local files. Docs: "
+        "knowledge_read('memory/<file>'), search with knowledge_search, and save or update memories there (knowledge_edit, or "
+        "knowledge_write for a new file, plus one index line in memory/MEMORY.md) instead of local files. Docs: "
         "homelab/<file>; skills: claude/skills/<name>/SKILL.md."
     ]
     for rel in ("claude/CLAUDE.md", "homelab/CLAUDE.md", "memory/MEMORY.md"):
         full, _ = resolve(rel)
         if full.exists():
-            text.append(f"===== {rel} (via kennis server) =====\n{full.read_text(encoding='utf-8')}")
+            text.append(f"===== {rel} (via knowledge server) =====\n{full.read_text(encoding='utf-8')}")
     parts, cur = [], ""
     for line in "\n\n".join(text).splitlines(keepends=True):
         if len(cur) + len(line) > PART_CHARS:
@@ -364,12 +364,12 @@ async def context_route(request: Request):
     n = int(request.path_params["part"])
     if not 1 <= n <= len(parts):
         return PlainTextResponse("")  # the plugin asks for a fixed number of parts; extra ones are empty
-    head = f"[kennis context part {n}/{len(parts)}]\n"
+    head = f"[knowledge context part {n}/{len(parts)}]\n"
     return PlainTextResponse(head + parts[n - 1])
 
 
 def build_app():
-    hosts = os.environ.get("KENNIS_ALLOWED_HOSTS", "kennis.to0wnn.com,<lan-ip>:8766,127.0.0.1:8766").split(",")
+    hosts = os.environ.get("KNOWLEDGE_ALLOWED_HOSTS", "knowledge.to0wnn.com,<lan-ip>:8766,127.0.0.1:8766").split(",")
     app = server.streamable_http_app(
         stateless_http=True,
         json_response=True,
@@ -386,5 +386,5 @@ if __name__ == "__main__":
     index.rescan()
     print(f"index: {len(index.files)} files in {time.time() - t0:.1f}s", flush=True)
     threading.Thread(target=index.loop, daemon=True).start()
-    uvicorn.run(build_app(), host=os.environ.get("KENNIS_BIND", "0.0.0.0"), port=int(os.environ.get("KENNIS_PORT", "8766")),
+    uvicorn.run(build_app(), host=os.environ.get("KNOWLEDGE_BIND", "0.0.0.0"), port=int(os.environ.get("KNOWLEDGE_PORT", "8766")),
                 log_level="warning", proxy_headers=True, forwarded_allow_ips="<lan-ip>")

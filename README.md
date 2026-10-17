@@ -1,13 +1,13 @@
-# kennis
+# knowledge
 
 Live, shared access to Anthony's homelab docs and Claude memory for Claude Code on every device.
 
 - **Server** (`server/`): small MCP server (streamable HTTP, stateless) in a Docker container on forge
-  (CT 101, Dockhand stack `kennis`, port 8766, `https://kennis.to0wnn.com`, LAN/WireGuard only).
+  (CT 101, Dockhand stack `knowledge`, port 8766, `https://knowledge.to0wnn.com`, LAN/WireGuard only).
 - **Plugin** (`plugin/`): Claude Code plugin with the MCP connection and a SessionStart hook that loads the
   shared CLAUDE.md files and the memory index. This repo is also the plugin marketplace.
 - **Source of truth (option A, current):** the files stay on the VM (<lan-ip>) and are NFS-exported to forge
-  only (`/etc/exports.d/kennis.exports`). Sessions on the VM keep using them natively; other devices use the plugin.
+  only (`/etc/exports.d/knowledge.exports`). Sessions on the VM keep using them natively; other devices use the plugin.
   Everyone sees the same files live.
 
 ## What is shared
@@ -30,15 +30,15 @@ Never shared: `.git`, `.env`, `*.bak*`, keys, `credentials*`, the rest of `~/.cl
 - **Only documented Claude Code features:** an `http` MCP server with a header, `userConfig` (token in the OS
   keychain), and a SessionStart hook. Hook output is capped at 10,000 characters by Claude Code, so the server
   splits the startup context into parts (`/context/1..4`).
-- **Safe concurrent writes:** per-file lock + atomic replace. `kennis_edit` replaces one unique snippet, so
-  edits by another session elsewhere in the file survive; `kennis_write` refuses if the file changed since it
-  was read. Every write is logged with the device name (`/root/docker/kennis/state/audit.log` on forge).
-- **Monitoring:** Uptime Kuma monitor "Kennis-server" (`/health`).
+- **Safe concurrent writes:** per-file lock + atomic replace. `knowledge_edit` replaces one unique snippet, so
+  edits by another session elsewhere in the file survive; `knowledge_write` refuses if the file changed since it
+  was read. Every write is logged with the device name (`/root/docker/knowledge/state/audit.log` on forge).
+- **Monitoring:** Uptime Kuma monitor "Knowledge server" (`/health`).
 - **Speed (measured 18 Oct, end to end over HTTPS incl. a fresh TLS handshake):** search over everything
   21–50 ms (was 15.4 s), list 11 ms, read 11 ms; server at ~0.3 % CPU and ~120 MB RAM.
   - **In-memory index:** all shared text (~1.3k files, 24 MB) lives in RAM, so list and search never touch NFS.
-  - **Event-driven freshness, no polling:** `watcher/kennis-watch.py` runs on the VM (systemd user unit
-    `kennis-watch`, inotify via `inotifywait`) and posts changed paths to `/invalidate` (token with `"watch": true`)
+  - **Event-driven freshness, no polling:** `watcher/knowledge-watch.py` runs on the VM (systemd user unit
+    `knowledge-watch`, inotify via `inotifywait`) and posts changed paths to `/invalidate` (token with `"watch": true`)
     within ~0.2 s; the server re-reads only those files with `open()` (NFS close-to-open, so no stale attribute
     cache). Native edits on the VM are searchable within ~0.4 s. A stat-only rescan every 60 s is the safety net.
   - **Case-insensitive search on a lowercase copy** without `re.I` (12x faster: 8 ms vs 98 ms over 24 MB), falling
@@ -49,26 +49,26 @@ Never shared: `.git`, `.env`, `*.bak*`, keys, `credentials*`, the rest of `~/.cl
 ## Install on a device (once)
 
 1. Create a token on the VM: add `"<device>": {"token": "<long random>", "write": true}` to
-   `~/.config/kennis-server/tokens.json` (e.g. `python3 -c 'import secrets;print(secrets.token_urlsafe(32))'`),
-   copy the file to forge `/root/docker/kennis/config/tokens.json` (owner 1000, mode 600). Read-only device:
+   `~/.config/knowledge-server/tokens.json` (e.g. `python3 -c 'import secrets;print(secrets.token_urlsafe(32))'`),
+   copy the file to forge `/root/docker/knowledge/config/tokens.json` (owner 1000, mode 600). Read-only device:
    `"write": false`. Also add the token to `~/.config/kennis-sync/geheimen.tsv`.
 2. The device needs LAN or WireGuard (the route only admits 10.0.0.0/8).
 3. In Claude Code on that device:
    ```
    claude plugin marketplace add <git URL of this repo>
-   claude plugin install kennis@kennis
+   claude plugin install knowledge@knowledge
    ```
-   Enter the token when asked (stored in the keychain). URL default: `https://kennis.to0wnn.com`.
+   Enter the token when asked (stored in the keychain). URL default: `https://knowledge.to0wnn.com`.
 4. Turn off local auto memory on that device so it does not build a second memory:
    `"autoMemoryEnabled": false` in `~/.claude/settings.json`.
-5. Start a session: the first lines show `[kennis context part 1/2]`; `/mcp` lists `kennis`.
+5. Start a session: the first lines show `[knowledge context part 1/2]`; `/mcp` lists `knowledge`.
 
 Do **not** install the plugin on the VM itself: sessions there read the files natively.
 
 ## Watcher on the VM (option A)
 
-`ln -s ~/kennis/watcher/kennis-watch.service ~/.config/systemd/user/ && systemctl --user enable --now kennis-watch`
-(needs `inotify-tools`, linger on, and `~/.config/kennis-server/watcher.token` = the `vm-watcher` token).
+`ln -s ~/knowledge/watcher/knowledge-watch.service ~/.config/systemd/user/ && systemctl --user enable --now knowledge-watch`
+(needs `inotify-tools`, linger on, and `~/.config/knowledge-server/watcher.token` = the `vm-watcher` token).
 With option B the watcher runs wherever the files live (forge) instead.
 
 ## Deploy / update the server
@@ -78,8 +78,8 @@ With option B the watcher runs wherever the files live (forge) instead.
 
 ## Option B (later): files on forge
 
-1. Stop the stack, copy the three trees to forge (e.g. `/root/docker/kennis/data/{memory,homelab,claude}`).
+1. Stop the stack, copy the three trees to forge (e.g. `/root/docker/knowledge/data/{memory,homelab,claude}`).
 2. In `compose.yaml` replace the NFS volumes with those bind mounts (owner 1000).
-3. On the VM: remove `/etc/exports.d/kennis.exports`, install the plugin there too and set
+3. On the VM: remove `/etc/exports.d/knowledge.exports`, install the plugin there too and set
    `autoMemoryEnabled: false` (the VM then also works through the server).
-The server itself needs no change (paths come from `KENNIS_*` environment variables).
+The server itself needs no change (paths come from `KNOWLEDGE_*` environment variables).
