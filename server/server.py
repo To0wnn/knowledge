@@ -72,16 +72,41 @@ def version(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()[:16]
 
 
+BINARY = {".zip", ".gz", ".tgz", ".xz", ".7z", ".tar", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf",
+          ".bin", ".img", ".iso", ".so", ".pyc", ".whl", ".mp4", ".mkv", ".db", ".sqlite", ".woff", ".woff2", ".ttf"}
+_text_cache: dict[Path, tuple[int, int, str | None]] = {}
+
+
 def shared_files(root: str):
+    """Walk a root, pruning skipped directories while walking (the homelab tree has ~21k files, ~1.3k shared)."""
     base = ROOTS[root]
-    for p in sorted(base.rglob("*")):
-        if not p.is_file() or p.stat().st_size > MAX_BYTES:
-            continue
-        try:
-            resolve(f"{root}/{p.relative_to(base).as_posix()}")
-        except ToolError:
-            continue
-        yield p
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_PARTS)
+        for name in sorted(filenames):
+            p = Path(dirpath) / name
+            if p.suffix.lower() in BINARY:
+                continue
+            try:
+                resolve(f"{root}/{p.relative_to(base).as_posix()}")
+                if p.stat().st_size > MAX_BYTES:
+                    continue
+            except (ToolError, OSError):
+                continue
+            yield p
+
+
+def cached_text(p: Path) -> str | None:
+    """File text, re-read only when size or mtime changed (every write changes mtime, so results stay live)."""
+    st = p.stat()
+    hit = _text_cache.get(p)
+    if hit and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
+        return hit[2]
+    try:
+        text = p.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError):
+        text = None
+    _text_cache[p] = (st.st_mtime_ns, st.st_size, text)
+    return text
 
 
 def check_writable(rel: str):
@@ -152,9 +177,8 @@ def kennis_search(pattern: str, root: str = "", max_results: int = 60) -> str:
     out = []
     for r in ([root] if root else list(ROOTS)):
         for p in shared_files(r):
-            try:
-                text = p.read_text(encoding="utf-8")
-            except (UnicodeDecodeError, OSError):
+            text = cached_text(p)
+            if text is None:
                 continue
             for n, line in enumerate(text.splitlines(), 1):
                 if rx.search(line):
