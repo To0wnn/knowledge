@@ -1,33 +1,33 @@
-# Dockhand stack "kennis" on forge (CT 101). Option A: the shared files stay on the VM (<lan-ip>) and are
+# Dockhand stack "knowledge" on forge (CT 101). Option A: the shared files stay on the VM (<lan-ip>) and are
 # NFS-mounted into the container; the server only ever sees these trees. Option B (later): point the volumes
 # at local paths on forge instead (see README).
 # actimeo=1: NFS attribute cache at most 1 s, so edits made natively on the VM show up live (default is up to 60 s).
 services:
-  kennis:
+  knowledge:
     build: .
-    image: kennis-server:local
+    image: knowledge-server:local
     # Local image: tells `docker compose pull` (Ansible docker_update) to skip it instead of failing on
     # "pull access denied"; `up` builds from the pinned Dockerfile/uv.lock (cached layers, deterministic).
     pull_policy: build
-    container_name: kennis
+    container_name: knowledge
     restart: always
     ports:
       - "8766:8766"
     environment:
-      KENNIS_MEMORY: /data/memory
-      KENNIS_HOMELAB: /data/homelab
-      KENNIS_CLAUDE: /data/claude
-      KENNIS_TOKENS: /config/tokens.json
-      KENNIS_AUDIT: /state/audit.log
-      KENNIS_ALLOWED_HOSTS: kennis.to0wnn.com,<lan-ip>:8766,127.0.0.1:8766
+      KNOWLEDGE_MEMORY: /data/memory
+      KNOWLEDGE_HOMELAB: /data/homelab
+      KNOWLEDGE_CLAUDE: /data/claude
+      KNOWLEDGE_TOKENS: /config/tokens.json
+      KNOWLEDGE_AUDIT: /state/audit.log
+      KNOWLEDGE_ALLOWED_HOSTS: knowledge.to0wnn.com,<lan-ip>:8766,127.0.0.1:8766
     volumes:
       - memory:/data/memory
       - homelab:/data/homelab
       - claude:/data/claude
       - claude_skills:/data/claude/skills
       - claude_agents:/data/claude/agents
-      - /root/docker/kennis/config:/config:ro
-      - /root/docker/kennis/state:/state
+      - /root/docker/knowledge/config:/config:ro
+      - /root/docker/knowledge/state:/state
 
 x-nfs: &nfs
   driver: local

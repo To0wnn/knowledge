@@ -339,7 +339,7 @@ wheels = [
 ]
 
 [[package]]
-name = "kennis-server"
+name = "knowledge-server"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

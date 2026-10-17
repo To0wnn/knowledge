@@ -1,5 +1,5 @@
 [project]
-name = "kennis-server"
+name = "knowledge-server"
 version = "0.1.0"
 description = "Live shared access to the homelab docs and Claude memory over MCP (streamable HTTP)"
 requires-python = ">=3.13"

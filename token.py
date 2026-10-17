@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Manage device tokens for the kennis server. Run on the VM.
+"""Manage device tokens for the knowledge server. Run on the VM.
 
   ./token.py list
   ./token.py add <device> [--read-only] [--watch]   prints the new token once (enter it in the plugin)
   ./token.py revoke <device>
 
-Readable tokens stay on the VM only (~/.config/kennis-server/tokens-plain.json, 0600) so they can be handed out.
-Forge gets only SHA-256 hashes (/root/docker/kennis/config/tokens.json), so a leaked file there is useless.
+Readable tokens stay on the VM only (~/.config/knowledge-server/tokens-plain.json, 0600) so they can be handed out.
+Forge gets only SHA-256 hashes (/root/docker/knowledge/config/tokens.json), so a leaked file there is useless.
 Every change is pushed to forge right away; the server picks it up without a restart.
 """
 import hashlib
@@ -17,8 +17,8 @@ import subprocess
 import sys
 import tempfile
 
-PLAIN = os.path.expanduser("~/.config/kennis-server/tokens-plain.json")
-REMOTE = "root@<lan-ip>:/root/docker/kennis/config/tokens.json"
+PLAIN = os.path.expanduser("~/.config/knowledge-server/tokens-plain.json")
+REMOTE = "root@<lan-ip>:/root/docker/knowledge/config/tokens.json"
 GEHEIMEN = os.path.expanduser("~/.config/kennis-sync/geheimen.tsv")
 
 
@@ -37,8 +37,8 @@ def save_and_push(tokens: dict):
         json.dump(hashed, f, indent=2)
     try:
         subprocess.run(["scp", "-q", f.name, REMOTE], check=True)
-        subprocess.run(["ssh", REMOTE.split(":")[0], "chown 1000:1000 /root/docker/kennis/config/tokens.json && "
-                        "chmod 600 /root/docker/kennis/config/tokens.json"], check=True)
+        subprocess.run(["ssh", REMOTE.split(":")[0], "chown 1000:1000 /root/docker/knowledge/config/tokens.json && "
+                        "chmod 600 /root/docker/knowledge/config/tokens.json"], check=True)
     finally:
         os.unlink(f.name)
 
@@ -54,7 +54,7 @@ def main(argv):
         tokens[name] = {"token": tok, "write": "--read-only" not in argv, "watch": "--watch" in argv}
         save_and_push(tokens)
         with open(GEHEIMEN, "a") as f:  # kennis-sync redacts it if it ever ends up in a doc
-            f.write(f"{tok}\tKENNIS_TOKEN_{name.upper().replace('-', '_')}\n")
+            f.write(f"{tok}\tKNOWLEDGE_TOKEN_{name.upper().replace('-', '_')}\n")
         print(tok)
     elif argv[0] == "revoke" and len(argv) == 2:
         tokens.pop(argv[1], None)

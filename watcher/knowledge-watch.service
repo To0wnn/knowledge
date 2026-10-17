@@ -1,0 +1,11 @@
+[Unit]
+Description=Report changes in the shared knowledge trees to the knowledge server (inotify)
+After=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 %h/knowledge/watcher/knowledge-watch.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
