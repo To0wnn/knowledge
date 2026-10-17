@@ -1,6 +1,7 @@
 """End-to-end self-check: starts server.py on temp dirs and talks raw MCP JSON-RPC over HTTP to it.
 Run: uv run test_server.py"""
 import gzip
+import hashlib
 import json
 import os
 import subprocess
@@ -49,8 +50,10 @@ def main():
     (cla / "CLAUDE.md").write_text("global rules\n")
     (cla / "skills/x/SKILL.md").write_text("skill\n")
     tokens = tmp / "tokens.json"
-    tokens.write_text(json.dumps({"laptop": {"token": "rw-token", "write": True}, "workpc": {"token": "ro-token", "write": False},
-                                  "watcher": {"token": "watch-token", "watch": True}}))
+    h = lambda t: hashlib.sha256(t.encode()).hexdigest()
+    tokens.write_text(json.dumps({"laptop": {"sha256": h("rw-token"), "write": True},
+                                  "workpc": {"sha256": h("ro-token"), "write": False},
+                                  "watcher": {"sha256": h("watch-token"), "watch": True}}))
     env = {**os.environ, "KENNIS_MEMORY": str(mem), "KENNIS_HOMELAB": str(lab), "KENNIS_CLAUDE": str(cla),
            "KENNIS_TOKENS": str(tokens), "KENNIS_AUDIT": str(tmp / "audit.log"), "KENNIS_PORT": str(PORT),
            "KENNIS_BIND": "127.0.0.1", "KENNIS_RESCAN": "3600", "KENNIS_ALLOWED_HOSTS": f"127.0.0.1:{PORT}"}
