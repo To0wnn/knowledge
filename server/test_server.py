@@ -49,10 +49,11 @@ def main():
     (cla / "CLAUDE.md").write_text("global rules\n")
     (cla / "skills/x/SKILL.md").write_text("skill\n")
     tokens = tmp / "tokens.json"
-    tokens.write_text(json.dumps({"laptop": {"token": "rw-token", "write": True}, "workpc": {"token": "ro-token", "write": False}}))
+    tokens.write_text(json.dumps({"laptop": {"token": "rw-token", "write": True}, "workpc": {"token": "ro-token", "write": False},
+                                  "watcher": {"token": "watch-token", "watch": True}}))
     env = {**os.environ, "KENNIS_MEMORY": str(mem), "KENNIS_HOMELAB": str(lab), "KENNIS_CLAUDE": str(cla),
            "KENNIS_TOKENS": str(tokens), "KENNIS_AUDIT": str(tmp / "audit.log"), "KENNIS_PORT": str(PORT),
-           "KENNIS_BIND": "127.0.0.1", "KENNIS_ALLOWED_HOSTS": f"127.0.0.1:{PORT}"}
+           "KENNIS_BIND": "127.0.0.1", "KENNIS_RESCAN": "3600", "KENNIS_ALLOWED_HOSTS": f"127.0.0.1:{PORT}"}
     proc = subprocess.Popen([sys.executable, str(Path(__file__).with_name("server.py"))], env=env)
     try:
         for _ in range(50):
@@ -97,6 +98,25 @@ def main():
         with urllib.request.urlopen(big, timeout=10) as r:
             assert r.headers.get("Content-Encoding") == "gzip", r.headers  # compressed by the server itself
             assert b"Item 119" in gzip.decompress(r.read())
+
+        # Case-insensitive fast path, uppercase-escape fallback, and a file whose lowercase form changes length.
+        (mem / "case.md").write_text("Mixed CASE Velux\nİstanbul Velux\n")
+        http("POST", "/invalidate", {"paths": ["memory/case.md"]}, token="watch-token")
+        assert "memory/case.md:1" in call("kennis_search", {"pattern": "mixed case velux"})[1]
+        assert "memory/case.md:1" in call("kennis_search", {"pattern": r"\S+ CASE"})[1]  # \S must stay non-space
+        assert "memory/case.md:2" in call("kennis_search", {"pattern": "istanbul|İstanbul"})[1]
+        # Index: every matching line, not only the first per file.
+        hits = call("kennis_search", {"pattern": "^line", "root": "memory"})[1].splitlines()
+        assert len([h for h in hits if h.startswith("memory/fact.md:")]) == 2, hits
+        # A native edit on the VM is invisible until the watcher reports it; then it is visible at once.
+        (mem / "fact.md").write_text("line one\nnative edit\n")
+        assert "native edit" not in call("kennis_search", {"pattern": "native edit"})[1]
+        assert http("POST", "/invalidate", {"paths": ["memory/fact.md"]}, token="rw-token")[0] == 403
+        assert http("POST", "/invalidate", {"paths": ["memory/fact.md"]}, token="watch-token")[0] == 200
+        assert "memory/fact.md:2" in call("kennis_search", {"pattern": "native edit"})[1]
+        (mem / "fact.md").unlink()
+        http("POST", "/invalidate", {"paths": ["memory/fact.md"]}, token="watch-token")
+        assert "memory/fact.md" not in call("kennis_list", {"root": "memory"})[1]
 
         parts, n = [], 1
         while True:

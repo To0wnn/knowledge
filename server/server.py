@@ -20,6 +20,7 @@ import json
 import os
 import re
 import tempfile
+import threading
 import time
 from contextvars import ContextVar
 from pathlib import Path, PurePosixPath
@@ -76,7 +77,7 @@ def version(data: bytes) -> str:
 
 BINARY = {".zip", ".gz", ".tgz", ".xz", ".7z", ".tar", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf",
           ".bin", ".img", ".iso", ".so", ".pyc", ".whl", ".mp4", ".mkv", ".db", ".sqlite", ".woff", ".woff2", ".ttf"}
-_text_cache: dict[Path, tuple[int, int, str | None]] = {}
+RESCAN_SECONDS = int(os.environ.get("KENNIS_RESCAN", "60"))
 
 
 def shared_files(root: str):
@@ -97,18 +98,70 @@ def shared_files(root: str):
             yield p
 
 
-def cached_text(p: Path) -> str | None:
-    """File text, re-read only when size or mtime changed (every write changes mtime, so results stay live)."""
-    st = p.stat()
-    hit = _text_cache.get(p)
-    if hit and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
-        return hit[2]
-    try:
-        text = p.read_text(encoding="utf-8")
-    except (UnicodeDecodeError, OSError):
-        text = None
-    _text_cache[p] = (st.st_mtime_ns, st.st_size, text)
-    return text
+class Index:
+    """All shared text in RAM (a few MB), so list and search never touch NFS.
+
+    Kept fresh without polling: the watcher on the VM (inotify) posts changed paths to /invalidate, and writes
+    through this server update it directly. A cheap rescan (stat only, re-read on size/mtime change) every
+    RESCAN_SECONDS is the safety net for a missed event. Re-reading uses open(), which makes NFS revalidate
+    (close-to-open), so the 1 s attribute cache does not delay an invalidated file.
+    """
+
+    def __init__(self):
+        # rel -> (mtime_ns, size, text, lowercase text). Case-insensitive search on the lowercase copy without re.I is
+        # ~12x faster than re.I on the original (8 ms vs 98 ms over 24 MB, measured 18 Oct).
+        self.files: dict[str, tuple[int, int, str, str | None]] = {}
+        self.lock = threading.Lock()
+
+    def refresh(self, rel: str):
+        try:
+            full, rel = resolve(rel)
+            with open(full, "rb") as f:
+                st = os.fstat(f.fileno())
+                if st.st_size > MAX_BYTES or full.suffix.lower() in BINARY:
+                    raise OSError("not indexed")
+                text = f.read().decode("utf-8")
+        except (ToolError, OSError, UnicodeDecodeError):
+            with self.lock:
+                self.files.pop(rel, None)
+            return
+        low = text.lower()
+        with self.lock:
+            # A few Unicode characters change length when lowercased; then positions would not line up.
+            self.files[rel] = (st.st_mtime_ns, st.st_size, text, low if len(low) == len(text) else None)
+
+    def rescan(self):
+        seen = set()
+        for root in ROOTS:
+            for p in shared_files(root):
+                rel = f"{root}/{p.relative_to(ROOTS[root]).as_posix()}"
+                seen.add(rel)
+                try:
+                    st = p.stat()
+                except OSError:
+                    continue
+                hit = self.files.get(rel)
+                if not hit or hit[0] != st.st_mtime_ns or hit[1] != st.st_size:
+                    self.refresh(rel)
+        with self.lock:
+            for rel in set(self.files) - seen:
+                del self.files[rel]
+
+    def loop(self):
+        while True:
+            time.sleep(RESCAN_SECONDS)
+            try:
+                self.rescan()
+            except Exception as e:  # never let the safety net die
+                print(f"rescan failed: {e}", flush=True)
+
+    def items(self, root: str = ""):
+        with self.lock:
+            snap = sorted(self.files.items())
+        return [(rel, v[2], v[3]) for rel, v in snap if not root or rel.startswith(root + "/")]
+
+
+index = Index()
 
 
 def check_writable(rel: str):
@@ -150,8 +203,7 @@ def kennis_list(root: str = "memory", pattern: str = "*") -> str:
     """List shared files under a root (memory, homelab or claude), optionally filtered by a glob on the relative path."""
     if root not in ROOTS:
         raise ToolError(f"root must be one of {sorted(ROOTS)}")
-    rels = [p.relative_to(ROOTS[root]).as_posix() for p in shared_files(root)]
-    hits = [f"{root}/{r}" for r in rels if fnmatch.fnmatch(r, pattern)]
+    hits = [rel for rel, _, _ in index.items(root) if fnmatch.fnmatch(rel.split("/", 1)[1], pattern)]
     return "\n".join(hits[:2000]) or "(no files)"
 
 
@@ -173,20 +225,27 @@ def kennis_read(path: str, offset: int = 1, limit: int = 600) -> str:
 def kennis_search(pattern: str, root: str = "", max_results: int = 60) -> str:
     """Case-insensitive regex search over shared files (all roots, or one root). Returns path:line: text."""
     try:
-        rx = re.compile(pattern, re.I)
+        rx_i = re.compile(pattern, re.I | re.M)
+        # Fast path: lowercase pattern on the lowercase copy. Not when the pattern has uppercase escapes (\S, \W, \D,
+        # \B, \A, \Z), whose meaning would change by lowercasing.
+        rx_low = None if re.search(r"\\[A-Z]", pattern) else re.compile(pattern.lower(), re.M)
     except re.error as e:
         raise ToolError(f"invalid regex: {e}")
     out = []
-    for r in ([root] if root else list(ROOTS)):
-        for p in shared_files(r):
-            text = cached_text(p)
-            if text is None:
+    for rel, text, low in index.items(root):
+        hay, rx = (low, rx_low) if rx_low is not None and low is not None else (text, rx_i)
+        # One C-level regex pass over the whole file (re.M keeps ^/$ per line); at most one hit per line.
+        last, lineno, pos = -1, 1, 0
+        for m in rx.finditer(hay):
+            start = text.rfind("\n", 0, m.start()) + 1
+            if start == last:
                 continue
-            for n, line in enumerate(text.splitlines(), 1):
-                if rx.search(line):
-                    out.append(f"{r}/{p.relative_to(ROOTS[r]).as_posix()}:{n}: {line[:300]}")
-                    if len(out) >= max_results:
-                        return "\n".join(out) + "\n[max_results reached]"
+            lineno += text.count("\n", pos, start)
+            pos, last = start, start
+            end = text.find("\n", start)
+            out.append(f"{rel}:{lineno}: {text[start:end if end >= 0 else None][:300]}")
+            if len(out) >= max_results:
+                return "\n".join(out) + "\n[max_results reached]"
     return "\n".join(out) or "(no matches)"
 
 
@@ -203,6 +262,7 @@ async def kennis_edit(path: str, old_string: str, new_string: str) -> str:
             raise ToolError(f"old_string found {count} times in {rel}; it must occur exactly once (re-read the file)")
         new = text.replace(old_string, new_string, 1).encode()
         atomic_write(full, new)
+        index.refresh(rel)
     audit("edit", rel)
     return f"edited {rel} (version {version(new)})"
 
@@ -222,6 +282,7 @@ async def kennis_write(path: str, content: str, base_version: str = "") -> str:
             raise ToolError(f"{rel} does not exist; create it with an empty base_version")
         data = content.encode()
         atomic_write(full, data)
+        index.refresh(rel)
     audit("write", rel)
     return f"wrote {rel} (version {version(data)})"
 
@@ -272,9 +333,19 @@ class BearerAuth:
         given = auth[7:] if auth.lower().startswith("bearer ") else ""
         for name, cfg in load_tokens().items():
             if given and hmac.compare_digest(given, cfg["token"]):
-                device.set({"name": name, "write": bool(cfg.get("write"))})
+                device.set({"name": name, "write": bool(cfg.get("write")), "watch": bool(cfg.get("watch"))})
                 return await self.app(scope, receive, send)
         return await JSONResponse({"error": "invalid or missing token"}, status_code=401)(scope, receive, send)
+
+
+@server.custom_route("/invalidate", methods=["POST"])
+async def invalidate_route(request: Request):
+    """Called by the inotify watcher on the VM with the paths that changed there: {"paths": ["memory/x.md", ...]}."""
+    if not device.get().get("watch"):
+        return JSONResponse({"error": "token may not invalidate"}, status_code=403)
+    paths = (await request.json()).get("paths", [])[:5000]
+    await asyncio.to_thread(lambda: [index.refresh(p) for p in paths])
+    return JSONResponse({"refreshed": len(paths)})
 
 
 @server.custom_route("/context/{part}", methods=["GET"])
@@ -301,5 +372,9 @@ def build_app():
 
 
 if __name__ == "__main__":
+    t0 = time.time()
+    index.rescan()
+    print(f"index: {len(index.files)} files in {time.time() - t0:.1f}s", flush=True)
+    threading.Thread(target=index.loop, daemon=True).start()
     uvicorn.run(build_app(), host=os.environ.get("KENNIS_BIND", "0.0.0.0"), port=int(os.environ.get("KENNIS_PORT", "8766")),
                 log_level="warning", proxy_headers=True, forwarded_allow_ips="<lan-ip>")
