@@ -84,6 +84,8 @@ def main():
         assert err and "read-only" in text, text
         assert not call("kennis_read", {"path": "claude/skills/x/SKILL.md"}, token="ro-token")[0]
         assert "memory/feit.md" in call("kennis_search", {"pattern": "regel 1"})[1]
+        assert not call("kennis_edit", {"path": "memory/feit.md", "old_string": "regel 1", "new_string": "regel cache"})[0]
+        assert "memory/feit.md" in call("kennis_search", {"pattern": "regel cache"})[1]  # text cache must not go stale
 
         parts, n = [], 1
         while True:

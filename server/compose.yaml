@@ -1,6 +1,7 @@
 # Dockhand stack "kennis" on forge (CT 101). Option A: the shared files stay on the VM (<lan-ip>) and are
 # NFS-mounted into the container; the server only ever sees these trees. Option B (later): point the volumes
 # at local paths on forge instead (see README).
+# actimeo=1: NFS attribute cache at most 1 s, so edits made natively on the VM show up live (default is up to 60 s).
 services:
   kennis:
     build: .
@@ -33,16 +34,16 @@ x-nfs: &nfs
 volumes:
   memory:
     <<: *nfs
-    driver_opts: {type: nfs, o: "addr=<lan-ip>,nfsvers=4.2,rw,hard,timeo=50", device: ":/home/user/.claude/projects/-home-user-homelab/memory"}
+    driver_opts: {type: nfs, o: "addr=<lan-ip>,nfsvers=4.2,rw,hard,timeo=50,actimeo=1", device: ":/home/user/.claude/projects/-home-user-homelab/memory"}
   homelab:
     <<: *nfs
-    driver_opts: {type: nfs, o: "addr=<lan-ip>,nfsvers=4.2,rw,hard,timeo=50", device: ":/home/user/homelab"}
+    driver_opts: {type: nfs, o: "addr=<lan-ip>,nfsvers=4.2,rw,hard,timeo=50,actimeo=1", device: ":/home/user/homelab"}
   claude:
     <<: *nfs
-    driver_opts: {type: nfs, o: "addr=<lan-ip>,nfsvers=4.2,ro,hard,timeo=50", device: ":/home/user/.claude/gedeeld"}
+    driver_opts: {type: nfs, o: "addr=<lan-ip>,nfsvers=4.2,ro,hard,timeo=50,actimeo=1", device: ":/home/user/.claude/gedeeld"}
   claude_skills:
     <<: *nfs
-    driver_opts: {type: nfs, o: "addr=<lan-ip>,nfsvers=4.2,ro,hard,timeo=50", device: ":/home/user/.claude/skills"}
+    driver_opts: {type: nfs, o: "addr=<lan-ip>,nfsvers=4.2,ro,hard,timeo=50,actimeo=1", device: ":/home/user/.claude/skills"}
   claude_agents:
     <<: *nfs
-    driver_opts: {type: nfs, o: "addr=<lan-ip>,nfsvers=4.2,ro,hard,timeo=50", device: ":/home/user/.claude/agents"}
+    driver_opts: {type: nfs, o: "addr=<lan-ip>,nfsvers=4.2,ro,hard,timeo=50,actimeo=1", device: ":/home/user/.claude/agents"}
