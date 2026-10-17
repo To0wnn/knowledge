@@ -177,13 +177,29 @@ def audit(action: str, rel: str):
         f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {device.get().get('name', '?')} {action} {rel}\n")
 
 
-def atomic_write(full: Path, data: bytes):
+def replace_if_unchanged(full: Path, expected: bytes | None, data: bytes) -> bool:
+    """Atomically replace `full` with `data`, but only if it still holds `expected` (None = must not exist).
+
+    Sessions on the VM edit these files natively, outside this server's locks. The temp file is written first and
+    the current content is re-read right before os.replace, so a native edit can only slip in during that
+    microsecond window instead of during the whole edit. Returns False when the file changed meanwhile.
+    """
     full.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=full.parent, prefix=".knowledge-")
     with os.fdopen(fd, "wb") as f:
         f.write(data)
-    os.chmod(tmp, full.stat().st_mode & 0o777 if full.exists() else 0o644)  # mkstemp would leave new files 0600
-    os.replace(tmp, full)
+    try:
+        current = full.read_bytes() if full.exists() else None
+        if current != expected:
+            os.unlink(tmp)
+            return False
+        os.chmod(tmp, full.stat().st_mode & 0o777 if full.exists() else 0o644)  # mkstemp would leave new files 0600
+        os.replace(tmp, full)
+        return True
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
 
 
 server = MCPServer(
@@ -255,12 +271,17 @@ async def knowledge_edit(path: str, old_string: str, new_string: str) -> str:
     full, rel = resolve(path)
     check_writable(rel)
     async with _locks.setdefault(rel, asyncio.Lock()):
-        text = full.read_text(encoding="utf-8")
-        count = text.count(old_string)
-        if count != 1:
-            raise ToolError(f"old_string found {count} times in {rel}; it must occur exactly once (re-read the file)")
-        new = text.replace(old_string, new_string, 1).encode()
-        atomic_write(full, new)
+        for _ in range(5):  # retry on fresh content when a native edit on the VM landed in between
+            data = full.read_bytes()
+            text = data.decode("utf-8")
+            count = text.count(old_string)
+            if count != 1:
+                raise ToolError(f"old_string found {count} times in {rel}; it must occur exactly once (re-read the file)")
+            new = text.replace(old_string, new_string, 1).encode()
+            if replace_if_unchanged(full, data, new):
+                break
+        else:
+            raise ToolError(f"{rel} kept changing while editing; read it again and retry")
         index.refresh(rel)
     audit("edit", rel)
     return f"edited {rel} (version {version(new)})"
@@ -273,17 +294,39 @@ async def knowledge_write(path: str, content: str, base_version: str = "") -> st
     full, rel = resolve(path)
     check_writable(rel)
     async with _locks.setdefault(rel, asyncio.Lock()):
-        if full.exists():
-            current = version(full.read_bytes())
-            if base_version != current:
-                raise ToolError(f"{rel} changed since you read it (now {current}); read it again and redo your change")
-        elif base_version:
+        current = full.read_bytes() if full.exists() else None
+        if current is not None and base_version != version(current):
+            raise ToolError(f"{rel} changed since you read it (now {version(current)}); read it again and redo your change")
+        if current is None and base_version:
             raise ToolError(f"{rel} does not exist; create it with an empty base_version")
         data = content.encode()
-        atomic_write(full, data)
+        if not replace_if_unchanged(full, current, data):
+            raise ToolError(f"{rel} changed while writing; read it again and redo your change")
         index.refresh(rel)
     audit("write", rel)
     return f"wrote {rel} (version {version(data)})"
+
+
+@server.tool()
+async def knowledge_delete(path: str, base_version: str) -> str:
+    """Delete a shared file you are allowed to write (e.g. an outdated memory). Pass base_version from knowledge_read;
+    refused if the file changed since. A copy is kept on the server (state/deleted/), so nothing is lost for good.
+    Also remove its line from memory/MEMORY.md with knowledge_edit."""
+    full, rel = resolve(path)
+    check_writable(rel)
+    async with _locks.setdefault(rel, asyncio.Lock()):
+        if not full.exists():
+            raise ToolError(f"{rel} does not exist")
+        data = full.read_bytes()
+        if base_version != version(data):
+            raise ToolError(f"{rel} changed since you read it (now {version(data)}); read it again first")
+        keep = AUDIT.parent / "deleted" / f"{time.strftime('%Y%m%d-%H%M%S')}_{rel.replace('/', '__')}"
+        keep.parent.mkdir(parents=True, exist_ok=True)
+        keep.write_bytes(data)
+        full.unlink()
+        index.refresh(rel)
+    audit("delete", rel)
+    return f"deleted {rel} (copy kept on the server as {keep.name})"
 
 
 PART_CHARS = 9500  # Claude Code caps each SessionStart hook output at 10,000 characters
