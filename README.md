@@ -34,10 +34,17 @@ Never shared: `.git`, `.env`, `*.bak*`, keys, `credentials*`, the rest of `~/.cl
   edits by another session elsewhere in the file survive; `kennis_write` refuses if the file changed since it
   was read. Every write is logged with the device name (`/root/docker/kennis/state/audit.log` on forge).
 - **Monitoring:** Uptime Kuma monitor "Kennis-server" (`/health`).
-- **Speed (measured 17 Oct):** the walk prunes `.git`/`node_modules`/`.venv` while walking and skips binaries
-  (homelab tree: ~21.9k files, ~1.3k shared), file text is cached until size/mtime changes, and the server gzips
-  responses itself (Starlette GZipMiddleware, also on direct :8766 access). Search over everything 15.4 s → ~0.5 s, list homelab 11.5 s → 0.09 s, a large
-  doc 97 KB → 42 KB on the wire. NFS mounts use `actimeo=1`, so native edits on the VM are visible within ~1 s.
+- **Speed (measured 18 Oct, end to end over HTTPS incl. a fresh TLS handshake):** search over everything
+  21–50 ms (was 15.4 s), list 11 ms, read 11 ms; server at ~0.3 % CPU and ~120 MB RAM.
+  - **In-memory index:** all shared text (~1.3k files, 24 MB) lives in RAM, so list and search never touch NFS.
+  - **Event-driven freshness, no polling:** `watcher/kennis-watch.py` runs on the VM (systemd user unit
+    `kennis-watch`, inotify via `inotifywait`) and posts changed paths to `/invalidate` (token with `"watch": true`)
+    within ~0.2 s; the server re-reads only those files with `open()` (NFS close-to-open, so no stale attribute
+    cache). Native edits on the VM are searchable within ~0.4 s. A stat-only rescan every 60 s is the safety net.
+  - **Case-insensitive search on a lowercase copy** without `re.I` (12x faster: 8 ms vs 98 ms over 24 MB), falling
+    back to `re.I` for patterns with uppercase escapes (`\S`, `\W`, …) or files whose lowercase form changes length.
+  - Directory walk prunes `.git`/`node_modules`/`.venv`, binaries are skipped, responses are gzip-compressed by the
+    server, uvicorn runs on uvloop + httptools (C), NFS mounts use `actimeo=1`.
 
 ## Install on a device (once)
 
@@ -57,6 +64,12 @@ Never shared: `.git`, `.env`, `*.bak*`, keys, `credentials*`, the rest of `~/.cl
 5. Start a session: the first lines show `[kennis context part 1/2]`; `/mcp` lists `kennis`.
 
 Do **not** install the plugin on the VM itself: sessions there read the files natively.
+
+## Watcher on the VM (option A)
+
+`ln -s ~/kennis/watcher/kennis-watch.service ~/.config/systemd/user/ && systemctl --user enable --now kennis-watch`
+(needs `inotify-tools`, linger on, and `~/.config/kennis-server/watcher.token` = the `vm-watcher` token).
+With option B the watcher runs wherever the files live (forge) instead.
 
 ## Deploy / update the server
 
