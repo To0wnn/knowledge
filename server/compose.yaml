@@ -5,6 +5,9 @@ services:
   kennis:
     build: .
     image: kennis-server:local
+    # Local image: tells `docker compose pull` (Ansible docker_update) to skip it instead of failing on
+    # "pull access denied"; `up` builds from the pinned Dockerfile/uv.lock (cached layers, deterministic).
+    pull_policy: build
     container_name: kennis
     restart: always
     ports:
