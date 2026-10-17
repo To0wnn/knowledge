@@ -102,6 +102,23 @@ def main():
             assert r.headers.get("Content-Encoding") == "gzip", r.headers  # compressed by the server itself
             assert b"Item 119" in gzip.decompress(r.read())
 
+        # Delete keeps a copy, refuses a stale version and read-only tokens.
+        (mem / "old.md").write_text("outdated\n")
+        ver_old = call("knowledge_read", {"path": "memory/old.md"})[1].split("version ")[1].split(",")[0]
+        assert call("knowledge_delete", {"path": "memory/old.md", "base_version": "0" * 16})[0]
+        assert call("knowledge_delete", {"path": "memory/old.md", "base_version": ver_old}, token="ro-token")[0]
+        err, text = call("knowledge_delete", {"path": "memory/old.md", "base_version": ver_old})
+        assert not err and not (mem / "old.md").exists(), text
+        assert list((tmp / "deleted").glob("*_memory__old.md"))[0].read_text() == "outdated\n"
+        # The re-check right before replacing refuses when the file changed meanwhile (a native edit on the VM).
+        sys.path.insert(0, str(Path(__file__).parent))
+        os.environ.update({k: v for k, v in env.items() if k.startswith("KNOWLEDGE_")})
+        import server as srv
+        f = mem / "race.md"
+        f.write_text("native\n")
+        assert not srv.replace_if_unchanged(f, b"stale\n", b"server\n") and f.read_text() == "native\n"
+        assert srv.replace_if_unchanged(f, b"native\n", b"server\n") and f.read_text() == "server\n"
+        assert not list(mem.glob(".knowledge-*")), "temp files must not be left behind"
         # Case-insensitive fast path, uppercase-escape fallback, and a file whose lowercase form changes length.
         (mem / "case.md").write_text("Mixed CASE Velux\nİstanbul Velux\n")
         http("POST", "/invalidate", {"paths": ["memory/case.md"]}, token="watch-token")

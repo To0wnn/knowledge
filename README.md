@@ -30,9 +30,15 @@ Never shared: `.git`, `.env`, `*.bak*`, keys, `credentials*`, the rest of `~/.cl
 - **Only documented Claude Code features:** an `http` MCP server with a header, `userConfig` (token in the OS
   keychain), and a SessionStart hook. Hook output is capped at 10,000 characters by Claude Code, so the server
   splits the startup context into parts (`/context/1..4`).
-- **Safe concurrent writes:** per-file lock + atomic replace. `knowledge_edit` replaces one unique snippet, so
-  edits by another session elsewhere in the file survive; `knowledge_write` refuses if the file changed since it
-  was read. Every write is logged with the device name (`/root/docker/knowledge/state/audit.log` on forge).
+- **Safe concurrent writes:** per-file lock + atomic replace for everything that goes through the server.
+  `knowledge_edit` replaces one unique snippet, so edits elsewhere in the file survive; `knowledge_write` and
+  `knowledge_delete` refuse when the file changed since it was read. Right before replacing, the server re-reads the
+  file and retries the edit on fresh content if a native edit on the VM landed in between (up to 5 times). Measured
+  18 Oct: 2 clients x 25 simultaneous edits = no loss; with 25 native VM edits interleaved within milliseconds,
+  1-3 per round were lost (remaining window ~1-2 ms = one NFS round trip). In real use (edits minutes apart) that is
+  negligible, and Claude Code's own Edit tool refuses to write a file that changed since it read it. Fully race-free
+  needs all writers to go through the server (option B). Every write/delete is logged with the device name; deleted
+  files are kept in `state/deleted/` on forge.
 - **Monitoring:** Uptime Kuma monitor "Knowledge server" (`/health`).
 - **Speed (measured 18 Oct, end to end over HTTPS incl. a fresh TLS handshake):** search over everything
   21–50 ms (was 15.4 s), list 11 ms, read 11 ms; server at ~0.3 % CPU and ~120 MB RAM.
