@@ -1,19 +1,21 @@
 {
   "name": "kennis",
   "version": "0.1.0",
-  "description": "Live gedeelde homelab-kennis (docs + Claude-memory) via de kennis-server op forge",
-  "author": { "name": "To0wnn" },
+  "description": "Live shared homelab knowledge (docs + Claude memory) through the kennis server on forge",
+  "author": {
+    "name": "To0wnn"
+  },
   "userConfig": {
     "url": {
       "type": "string",
-      "title": "Kennis-server URL",
-      "description": "Basis-URL van de kennis-server, zonder /mcp",
+      "title": "Kennis server URL",
+      "description": "Base URL of the kennis server, without /mcp",
       "default": "https://kennis.to0wnn.com"
     },
     "token": {
       "type": "string",
-      "title": "Apparaat-token",
-      "description": "Token voor dit apparaat (staat in tokens.json op forge)",
+      "title": "Device token",
+      "description": "Token for this device (from tokens.json on forge)",
       "sensitive": true
     }
   }

@@ -1,5 +1,6 @@
 """End-to-end self-check: starts server.py on temp dirs and talks raw MCP JSON-RPC over HTTP to it.
 Run: uv run test_server.py"""
+import gzip
 import json
 import os
 import subprocess
@@ -42,13 +43,13 @@ def main():
     for d in (mem, lab, cla / "skills/x"):
         d.mkdir(parents=True)
     (mem / "MEMORY.md").write_text("# Index\n" + "".join(f"- [Item {i}](f{i}.md) — {'x' * 120}\n" for i in range(120)))
-    (mem / "feit.md").write_text("regel een\nregel twee\n")
-    (lab / "00_OVERZICHT.md").write_text("overzicht\n")
-    (lab / "geheim.env").write_text("nope")
-    (cla / "CLAUDE.md").write_text("globale regels\n")
+    (mem / "fact.md").write_text("line one\nline two\n")
+    (lab / "00_OVERZICHT.md").write_text("overview\n")
+    (lab / "secret.env").write_text("nope")
+    (cla / "CLAUDE.md").write_text("global rules\n")
     (cla / "skills/x/SKILL.md").write_text("skill\n")
     tokens = tmp / "tokens.json"
-    tokens.write_text(json.dumps({"laptop": {"token": "rw-token", "write": True}, "werkpc": {"token": "ro-token", "write": False}}))
+    tokens.write_text(json.dumps({"laptop": {"token": "rw-token", "write": True}, "workpc": {"token": "ro-token", "write": False}}))
     env = {**os.environ, "KENNIS_MEMORY": str(mem), "KENNIS_HOMELAB": str(lab), "KENNIS_CLAUDE": str(cla),
            "KENNIS_TOKENS": str(tokens), "KENNIS_AUDIT": str(tmp / "audit.log"), "KENNIS_PORT": str(PORT),
            "KENNIS_BIND": "127.0.0.1", "KENNIS_ALLOWED_HOSTS": f"127.0.0.1:{PORT}"}
@@ -68,24 +69,34 @@ def main():
         names = {t["name"] for t in json.loads(body)["result"]["tools"]}
         assert {"kennis_list", "kennis_read", "kennis_search", "kennis_edit", "kennis_write"} <= names, names
 
-        err, text = call("kennis_read", {"path": "memory/feit.md"})
-        assert not err and "regel twee" in text, text
+        err, text = call("kennis_read", {"path": "memory/fact.md"})
+        assert not err and "line two" in text, text
         ver = text.split("version ")[1].split(",")[0]
-        assert not call("kennis_edit", {"path": "memory/feit.md", "old_string": "regel een", "new_string": "regel 1"})[0]
-        err, text = call("kennis_write", {"path": "memory/feit.md", "content": "overschreven\n", "base_version": ver})
+        assert not call("kennis_edit", {"path": "memory/fact.md", "old_string": "line one", "new_string": "line 1"})[0]
+        err, text = call("kennis_write", {"path": "memory/fact.md", "content": "overwritten\n", "base_version": ver})
         assert err and "changed since you read it" in text, text  # stale version refused
-        assert "regel 1" in (mem / "feit.md").read_text()
-        assert not call("kennis_write", {"path": "memory/nieuw.md", "content": "nieuw\n"})[0]
+        assert "line 1" in (mem / "fact.md").read_text()
+        assert not call("kennis_write", {"path": "memory/new.md", "content": "new\n"})[0]
 
-        for bad in ("memory/../../etc/passwd", "homelab/geheim.env", "claude/settings.json", "etc/x"):
+        for bad in ("memory/../../etc/passwd", "homelab/secret.env", "claude/settings.json", "etc/x"):
             assert call("kennis_read", {"path": bad})[0], bad
         assert call("kennis_write", {"path": "homelab/sub/x.md", "content": "x"})[0]  # not a writable pattern
-        err, text = call("kennis_edit", {"path": "memory/feit.md", "old_string": "regel", "new_string": "r"}, token="ro-token")
+        err, text = call("kennis_edit", {"path": "memory/fact.md", "old_string": "line", "new_string": "l"}, token="ro-token")
         assert err and "read-only" in text, text
         assert not call("kennis_read", {"path": "claude/skills/x/SKILL.md"}, token="ro-token")[0]
-        assert "memory/feit.md" in call("kennis_search", {"pattern": "regel 1"})[1]
-        assert not call("kennis_edit", {"path": "memory/feit.md", "old_string": "regel 1", "new_string": "regel cache"})[0]
-        assert "memory/feit.md" in call("kennis_search", {"pattern": "regel cache"})[1]  # text cache must not go stale
+        assert "memory/fact.md" in call("kennis_search", {"pattern": "line 1"})[1]
+        assert not call("kennis_edit", {"path": "memory/fact.md", "old_string": "line 1", "new_string": "line cache"})[0]
+        assert "memory/fact.md" in call("kennis_search", {"pattern": "line cache"})[1]  # text cache must not go stale
+
+        big = urllib.request.Request(BASE + "/mcp", method="POST", data=json.dumps(
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+             "params": {"name": "kennis_read", "arguments": {"path": "memory/MEMORY.md"}}}).encode())
+        for k, v in (("Content-Type", "application/json"), ("Accept", "application/json, text/event-stream"),
+                     ("Accept-Encoding", "gzip"), ("Authorization", "Bearer rw-token")):
+            big.add_header(k, v)
+        with urllib.request.urlopen(big, timeout=10) as r:
+            assert r.headers.get("Content-Encoding") == "gzip", r.headers  # compressed by the server itself
+            assert b"Item 119" in gzip.decompress(r.read())
 
         parts, n = [], 1
         while True:
@@ -95,8 +106,8 @@ def main():
             assert len(body) <= 10_000, (n, len(body))
             parts.append(body)
             n += 1
-        assert len(parts) >= 2 and "Item 119" in parts[-1] and "globale regels" in parts[0], len(parts)
-        assert "laptop edit memory/feit.md" in (tmp / "audit.log").read_text()
+        assert len(parts) >= 2 and "Item 119" in parts[-1] and "global rules" in parts[0], len(parts)
+        assert "laptop edit memory/fact.md" in (tmp / "audit.log").read_text()
         print(f"ok ({len(parts)} context parts)")
     finally:
         proc.terminate()
