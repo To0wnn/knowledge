@@ -19,6 +19,7 @@ services:
       KNOWLEDGE_CLAUDE: /data/claude
       KNOWLEDGE_TOKENS: /config/tokens.json
       KNOWLEDGE_AUDIT: /state/audit.log
+      TZ: Europe/Amsterdam  # local dates in source file names, LOG.md and the audit log (forge itself runs UTC)
       KNOWLEDGE_ALLOWED_HOSTS: knowledge.to0wnn.com,<lan-ip>:8766,127.0.0.1:8766
     volumes:
       - memory:/data/memory

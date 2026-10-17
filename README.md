@@ -52,6 +52,30 @@ Never shared: `.git`, `.env`, `*.bak*`, keys, `credentials*`, the rest of `~/.cl
   - Directory walk prunes `.git`/`node_modules`/`.venv`, binaries are skipped, responses are gzip-compressed by the
     server, uvicorn runs on uvloop + httptools (C), NFS mounts use `actimeo=1`.
 
+## LLM-wiki features: lint, ingest, web UI
+
+Following Karpathy's "LLM Wiki" pattern (raw sources -> wiki pages -> index, with ingest / query / lint):
+
+- **`knowledge_lint`** (tool + UI tab): deterministic checks on the in-memory index, ~80 ms: index lines pointing to
+  missing files, memos missing from `MEMORY.md`, dead `[[wikilinks]]`, missing frontmatter, memos > 15 KB without an
+  archive copy, long index lines, orphans, stale open items (newest date > 45 days), memos that probably contain a
+  secret (counts only, values never shown) and raw sources not yet turned into a memo. Contradictions and superseded
+  claims are judged by the Claude session reading the report, not by the server.
+- **`knowledge_ingest`** (tool: URL or pasted text; UI: also PDF/DOCX/MD/TXT/HTML upload): stores the source unchanged
+  in `homelab/sources/<date>-<slug>.md` (never overwritten), appends `homelab/sources/LOG.md`, and returns the text
+  plus possibly related memos (IDF-weighted, nothing rather than noise). The session then writes/updates memos.
+  Extraction: trafilatura (web), pypdf (PDF), python-docx, run in a child process with CPU/memory limits.
+  URL fetching is SSRF-safe: http(s) on 80/443 only, every resolved address must be public (no private, loopback,
+  link-local, CGNAT, reserved), the connection goes to the validated IP (no DNS rebinding), redirects re-checked,
+  identity encoding, 10 MB / 20 s caps. Source text is treated as data, never as instructions.
+- **Web UI** at `https://knowledge.to0wnn.com/ui`: an Obsidian-style "brain" graph (force-graph, canvas; the layout
+  settles and stops, so no CPU while idle) of memos (coloured by type), docs, skills and sources with edges for
+  wikilinks, markdown links, doc/skill references and cited sources; type filters; full search (server-side, ~20 ms);
+  note preview (marked + DOMPurify) with clickable links and connected notes; lint tab; ingest form. Sign in once
+  with a device token: an HttpOnly, SameSite=Strict cookie keeps the browser signed in for a year; UI writes also
+  need an `X-Knowledge-UI` header (CSRF). All JS is vendored with its license in `server/static/vendor/`
+  (force-graph 1.52.0 MIT, marked 18.1.1 MIT, DOMPurify 3.4.17 Apache-2.0/MPL-2.0); no CDN, works on the LAN only.
+
 ## Install on a device (once)
 
 1. Create a token on the VM: add `"<device>": {"token": "<long random>", "write": true}` to

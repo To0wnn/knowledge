@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Knowledge</title>
+<link rel="stylesheet" href="/ui/static/app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">Knowledge</div>
+  <input id="q" type="search" placeholder="Search everything…  ( / )" autocomplete="off" aria-label="Search">
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="results" aria-selected="true">Results</button>
+    <button role="tab" data-tab="lint">Lint <span id="lint-count" class="badge"></span></button>
+    <button role="tab" data-tab="ingest">Ingest</button>
+  </nav>
+  <a class="logout" href="/ui/logout">Sign out</a>
+</header>
+
+<aside class="left">
+  <section id="tab-results" class="tab">
+    <div id="filters" class="filters" aria-label="Show node types"></div>
+    <ol id="hits" class="hits"></ol>
+    <p id="hits-empty" class="muted">Type to search all docs and memory. Click a node to read it.</p>
+  </section>
+  <section id="tab-lint" class="tab" hidden>
+    <p class="muted">Facts only: fix what is clearly wrong, ask Claude to judge the rest.</p>
+    <div id="lint"></div>
+  </section>
+  <section id="tab-ingest" class="tab" hidden>
+    <form id="ingest-form">
+      <label for="in-url">Web page or PDF URL</label>
+      <input id="in-url" type="url" placeholder="https://…">
+      <label for="in-file">or a file (pdf, docx, md, txt, html)</label>
+      <input id="in-file" type="file" accept=".pdf,.docx,.md,.txt,.html,.htm,.markdown">
+      <label for="in-text">or pasted text</label>
+      <textarea id="in-text" rows="6"></textarea>
+      <label for="in-title">Title (optional)</label>
+      <input id="in-title" type="text">
+      <button type="submit">Add source</button>
+    </form>
+    <div id="ingest-result" class="muted">Sources are stored unchanged in <code>homelab/sources/</code>. Ask Claude to turn a new source into memos; lint lists unprocessed sources.</div>
+  </section>
+</aside>
+
+<main id="graph" aria-label="Knowledge graph"></main>
+
+<aside class="right" id="note" aria-live="polite">
+  <div class="note-empty muted">Select a node or a search result.</div>
+</aside>
+
+<script src="/ui/static/vendor/force-graph-1.52.0.js"></script>
+<script src="/ui/static/vendor/marked-18.1.1.js"></script>
+<script src="/ui/static/vendor/dompurify-3.4.17.js"></script>
+<script src="/ui/static/app.js"></script>
+</body>
+</html>

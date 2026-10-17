@@ -2,6 +2,7 @@
 Run: uv run test_server.py"""
 import gzip
 import hashlib
+import http.client as httpc
 import json
 import os
 import subprocess
@@ -119,6 +120,9 @@ def main():
         assert not srv.replace_if_unchanged(f, b"stale\n", b"server\n") and f.read_text() == "native\n"
         assert srv.replace_if_unchanged(f, b"native\n", b"server\n") and f.read_text() == "server\n"
         assert not list(mem.glob(".knowledge-*")), "temp files must not be left behind"
+        # Lint runs on the in-memory index (the temp MEMORY.md points to 120 files that do not exist).
+        lint_out = call("knowledge_lint", {})[1]
+        assert "index_points_to_missing_file (120)" in lint_out, lint_out[:300]
         # Case-insensitive fast path, uppercase-escape fallback, and a file whose lowercase form changes length.
         (mem / "case.md").write_text("Mixed CASE Velux\nİstanbul Velux\n")
         http("POST", "/invalidate", {"paths": ["memory/case.md"]}, token="watch-token")
@@ -137,6 +141,49 @@ def main():
         (mem / "fact.md").unlink()
         http("POST", "/invalidate", {"paths": ["memory/fact.md"]}, token="watch-token")
         assert "memory/fact.md" not in call("knowledge_list", {"root": "memory"})[1]
+
+        # ---- web UI: login cookie, CSRF header, graph, note, search, lint, ingest
+        def raw(method, path, body=None, headers=None):
+            c = httpc.HTTPConnection("127.0.0.1", PORT, timeout=15)
+            c.request(method, path, body=body, headers=headers or {})
+            r = c.getresponse()
+            return r.status, dict(r.getheaders()), r.read()
+        st, hd, _ = raw("GET", "/ui")
+        assert st == 303 and hd["location"] == "/ui/login", (st, hd)
+        assert raw("GET", "/ui/static/app.js")[0] == 200  # static is public (no data)
+        st, hd, _ = raw("POST", "/ui/login", "token=wrong", {"Content-Type": "application/x-www-form-urlencoded"})
+        assert st == 303 and "bad=1" in hd["location"]
+        st, hd, _ = raw("POST", "/ui/login", "token=rw-token", {"Content-Type": "application/x-www-form-urlencoded"})
+        cookie = hd["set-cookie"].split(";")[0]
+        assert st == 303 and cookie.startswith("kn_token=") and "HttpOnly" in hd["set-cookie"] and "SameSite=strict" in hd["set-cookie"]
+        ck = {"Cookie": cookie}
+        assert raw("GET", "/ui", headers=ck)[0] == 200
+        g = json.loads(raw("GET", "/ui/api/graph", headers=ck)[2])
+        assert any(n["id"] == "memory/MEMORY.md" for n in g["nodes"]), g["nodes"][:3]
+        note = json.loads(raw("GET", "/ui/api/note?path=memory/MEMORY.md", headers=ck)[2])
+        assert "Item 1" in note["text"] and note["version"]
+        assert raw("GET", "/ui/api/note?path=../../etc/passwd", headers=ck)[0] == 404
+        hits = json.loads(raw("GET", "/ui/api/search?q=Item%20119", headers=ck)[2])["hits"]
+        assert hits and hits[0]["path"] == "memory/MEMORY.md", hits
+        assert isinstance(json.loads(raw("GET", "/ui/api/lint", headers=ck)[2]), dict)
+        body = json.dumps({"text": "# Source\nRouter firmware notes", "title": "Router notes"})
+        assert raw("POST", "/ui/api/ingest", body, {**ck, "Content-Type": "application/json"})[0] == 401  # no CSRF header
+        st, _, res = raw("POST", "/ui/api/ingest", body, {**ck, "Content-Type": "application/json", "X-Knowledge-UI": "1"})
+        res = json.loads(res)
+        assert st == 200 and res["path"].startswith("homelab/sources/") and res["path"].endswith("router-notes.md"), res
+        src = lab / "sources" / res["path"].split("/")[-1]
+        assert "Router firmware notes" in src.read_text() and "by: laptop" in src.read_text()
+        assert "| Router notes |" in (lab / "sources" / "LOG.md").read_text()
+        html = b"<html><head><title>Wolf guide</title></head><body><nav>menu</nav><article><h1>Wolf guide</h1>" + b"".join(f"<p>Paragraph {i}: Games on Whales streams game number {i} to player {i % 3}, with its own controller and audio.</p>".encode() for i in range(20)) + b"</article></body></html>"
+        st, _, res = raw("POST", "/ui/api/ingest", html, {**ck, "X-Knowledge-UI": "1", "X-Filename": "wolf.html", "Content-Type": "application/octet-stream"})
+        res = json.loads(res)
+        assert st == 200 and res["title"] == "Wolf guide" and res["chars"] > 100, res
+        assert "unprocessed_source" in call("knowledge_lint", {})[1]
+        err, text = call("knowledge_ingest", {"text": "pasted note about PBS", "title": "PBS note"})
+        assert not err and "homelab/sources/" in text and "<source_document" in text, text
+        err, text = call("knowledge_ingest", {"url": "http://127.0.0.1/secret"})
+        assert err and "non-public" in text, text  # SSRF guard
+        assert call("knowledge_ingest", {"text": "x"}, token="ro-token")[0]
 
         parts, n = [], 1
         while True:

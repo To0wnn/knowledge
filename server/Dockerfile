@@ -4,7 +4,9 @@ COPY --from=ghcr.io/astral-sh/uv:0.13.1 /uv /usr/local/bin/uv
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
-COPY server.py ./
+# All modules (a forgotten module once crash-looped the container; deploy.sh now waits for /health).
+COPY *.py ./
+COPY static ./static
 # Runs as the uid that owns the shared files on the VM (to0wnn, 1000), so NFS root_squash is no issue.
 USER 1000:1000
 ENV HOME=/tmp PYTHONUNBUFFERED=1
