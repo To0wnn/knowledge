@@ -9,13 +9,12 @@ it from breaking:
   - writes are serialized per file and atomic; `kennis_edit` replaces one unique snippet (concurrent
     edits elsewhere in the file survive), `kennis_write` refuses when the file changed since it was read.
 
-Config: ~/.config/kennis-server/tokens.json  {"<device>": {"token": "...", "write": true|false}}
+Config: tokens.json with hashes only: {"<device>": {"sha256": "<hex of sha256(token)>", "write": bool, "watch": bool}}
 Run:    uv run server.py   (systemd user unit kennis-server.service)
 """
 import asyncio
 import fnmatch
 import hashlib
-import hmac
 import json
 import os
 import re
@@ -313,13 +312,23 @@ def context_parts() -> list[str]:
     return parts + [cur]
 
 
+_tokens_cache: tuple[int, int, dict] = (0, 0, {})
+
+
 def load_tokens() -> dict:
-    return json.loads(TOKENS_FILE.read_text())
+    """sha256(token) -> (device name, config). The file holds only hashes: {"<device>": {"sha256": "<hex>",
+    "write": bool, "watch": bool}}, so a leaked tokens.json gives no usable token. Re-read when it changes, so adding
+    or revoking a device needs no restart."""
+    global _tokens_cache
+    st = TOKENS_FILE.stat()
+    if (st.st_mtime_ns, st.st_size) != _tokens_cache[:2]:
+        by_hash = {cfg["sha256"]: (name, cfg) for name, cfg in json.loads(TOKENS_FILE.read_text()).items()}
+        _tokens_cache = (st.st_mtime_ns, st.st_size, by_hash)
+    return _tokens_cache[2]
 
 
 class BearerAuth:
-    """ASGI middleware: every request needs 'Authorization: Bearer <device token>'. Tokens are re-read per request,
-    so adding or revoking a device needs no restart."""
+    """ASGI middleware: every request needs 'Authorization: Bearer <device token>', matched by its SHA-256 hash."""
 
     def __init__(self, app):
         self.app = app
@@ -331,10 +340,11 @@ class BearerAuth:
             return await PlainTextResponse("ok")(scope, receive, send)
         auth = dict(scope["headers"]).get(b"authorization", b"").decode()
         given = auth[7:] if auth.lower().startswith("bearer ") else ""
-        for name, cfg in load_tokens().items():
-            if given and hmac.compare_digest(given, cfg["token"]):
-                device.set({"name": name, "write": bool(cfg.get("write")), "watch": bool(cfg.get("watch"))})
-                return await self.app(scope, receive, send)
+        hit = load_tokens().get(hashlib.sha256(given.encode()).hexdigest()) if given else None
+        if hit:
+            name, cfg = hit
+            device.set({"name": name, "write": bool(cfg.get("write")), "watch": bool(cfg.get("watch"))})
+            return await self.app(scope, receive, send)
         return await JSONResponse({"error": "invalid or missing token"}, status_code=401)(scope, receive, send)
 
 
