@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "kennis": {
+      "type": "http",
+      "url": "${user_config.url}/mcp",
+      "headers": { "Authorization": "Bearer ${user_config.token}" }
+    }
+  }
+}
