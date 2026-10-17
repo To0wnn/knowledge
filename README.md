@@ -35,8 +35,8 @@ Never shared: `.git`, `.env`, `*.bak*`, keys, `credentials*`, the rest of `~/.cl
   was read. Every write is logged with the device name (`/root/docker/kennis/state/audit.log` on forge).
 - **Monitoring:** Uptime Kuma monitor "Kennis-server" (`/health`).
 - **Speed (measured 17 Oct):** the walk prunes `.git`/`node_modules`/`.venv` while walking and skips binaries
-  (homelab tree: ~21.9k files, ~1.3k shared), file text is cached until size/mtime changes, and Traefik gzips
-  responses (`kennis-compress`). Search over everything 15.4 s → ~0.5 s, list homelab 11.5 s → 0.09 s, a large
+  (homelab tree: ~21.9k files, ~1.3k shared), file text is cached until size/mtime changes, and the server gzips
+  responses itself (Starlette GZipMiddleware, also on direct :8766 access). Search over everything 15.4 s → ~0.5 s, list homelab 11.5 s → 0.09 s, a large
   doc 97 KB → 42 KB on the wire. NFS mounts use `actimeo=1`, so native edits on the VM are visible within ~1 s.
 
 ## Install on a device (once)

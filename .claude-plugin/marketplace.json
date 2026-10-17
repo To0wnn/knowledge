@@ -7,11 +7,11 @@
     {
       "name": "kennis",
       "source": "./plugin",
-      "description": "Live gedeelde homelab-kennis (docs + Claude-memory) via de kennis-server",
+      "description": "Live shared homelab knowledge (docs + Claude memory) through the kennis server",
       "version": "0.1.0"
     }
   ],
   "metadata": {
-    "description": "Live gedeelde homelab-kennis voor Claude Code"
+    "description": "Live shared homelab knowledge for Claude Code"
   }
 }

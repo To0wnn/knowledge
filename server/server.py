@@ -5,6 +5,7 @@ devices reach them through this MCP server over HTTPS via the `kennis` plugin. D
 it from breaking:
   - stateless streamable HTTP + JSON responses: no MCP sessions that expire or get lost on a restart;
   - a static bearer token per device (no login that times out); revoke a device by removing its token;
+  - responses are gzip-compressed by the server when the client accepts it;
   - writes are serialized per file and atomic; `kennis_edit` replaces one unique snippet (concurrent
     edits elsewhere in the file survive), `kennis_write` refuses when the file changed since it was read.
 
@@ -27,6 +28,7 @@ import uvicorn
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError  # anticipated refusals: the client sees the message
 from mcp.server.transport_security import TransportSecuritySettings
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
 
@@ -294,7 +296,8 @@ def build_app():
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=True, allowed_hosts=hosts,
                                                      allowed_origins=[f"https://{h}" for h in hosts]),
     )
-    return BearerAuth(app)
+    # gzip in the server itself, so responses are compressed on every path (also direct :8766 without Traefik).
+    return BearerAuth(GZipMiddleware(app, minimum_size=1024))
 
 
 if __name__ == "__main__":

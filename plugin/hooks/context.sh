@@ -9,11 +9,11 @@ code=$(curl -sS --max-time 8 -o /tmp/kennis-context.$$ -w '%{http_code}' -H "Aut
 if [ "$code" = 200 ]; then
     cat /tmp/kennis-context.$$
 elif [ "$part" = 1 ] && [ "$code" = 401 ]; then
-    echo "kennis-server: token ongeldig of ingetrokken (plugin-instelling 'token'). Gedeelde memory en docs zijn niet geladen."
+    echo "kennis server: token invalid or revoked (plugin setting 'token'). Shared memory and docs were not loaded."
 elif [ "$part" = 1 ] && [ "$code" = 403 ]; then
-    echo "kennis-server: alleen bereikbaar via thuisnetwerk of WireGuard. Gedeelde memory en docs zijn niet geladen."
+    echo "kennis server: only reachable from the home network or WireGuard. Shared memory and docs were not loaded."
 elif [ "$part" = 1 ]; then
-    echo "kennis-server ($url) niet bereikbaar (HTTP $code): gedeelde memory en docs zijn deze sessie niet geladen."
+    echo "kennis server ($url) unreachable (HTTP $code): shared memory and docs were not loaded for this session."
 fi
 rm -f /tmp/kennis-context.$$
 exit 0
