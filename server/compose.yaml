@@ -1,0 +1,45 @@
+# Dockhand stack "kennis" on forge (CT 101). Option A: the shared files stay on the VM (<lan-ip>) and are
+# NFS-mounted into the container; the server only ever sees these trees. Option B (later): point the volumes
+# at local paths on forge instead (see README).
+services:
+  kennis:
+    build: .
+    image: kennis-server:local
+    container_name: kennis
+    restart: always
+    ports:
+      - "8766:8766"
+    environment:
+      KENNIS_MEMORY: /data/memory
+      KENNIS_HOMELAB: /data/homelab
+      KENNIS_CLAUDE: /data/claude
+      KENNIS_TOKENS: /config/tokens.json
+      KENNIS_AUDIT: /state/audit.log
+      KENNIS_ALLOWED_HOSTS: kennis.to0wnn.com,<lan-ip>:8766,127.0.0.1:8766
+    volumes:
+      - memory:/data/memory
+      - homelab:/data/homelab
+      - claude:/data/claude
+      - claude_skills:/data/claude/skills
+      - claude_agents:/data/claude/agents
+      - /root/docker/kennis/config:/config:ro
+      - /root/docker/kennis/state:/state
+
+x-nfs: &nfs
+  driver: local
+volumes:
+  memory:
+    <<: *nfs
+    driver_opts: {type: nfs, o: "addr=<lan-ip>,nfsvers=4.2,rw,hard,timeo=50", device: ":/home/user/.claude/projects/-home-user-homelab/memory"}
+  homelab:
+    <<: *nfs
+    driver_opts: {type: nfs, o: "addr=<lan-ip>,nfsvers=4.2,rw,hard,timeo=50", device: ":/home/user/homelab"}
+  claude:
+    <<: *nfs
+    driver_opts: {type: nfs, o: "addr=<lan-ip>,nfsvers=4.2,ro,hard,timeo=50", device: ":/home/user/.claude/gedeeld"}
+  claude_skills:
+    <<: *nfs
+    driver_opts: {type: nfs, o: "addr=<lan-ip>,nfsvers=4.2,ro,hard,timeo=50", device: ":/home/user/.claude/skills"}
+  claude_agents:
+    <<: *nfs
+    driver_opts: {type: nfs, o: "addr=<lan-ip>,nfsvers=4.2,ro,hard,timeo=50", device: ":/home/user/.claude/agents"}
