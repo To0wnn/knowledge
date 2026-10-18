@@ -243,6 +243,22 @@ def main():
         assert isinstance(rel, list)
         assert "isolated_note" in json.loads(raw("GET", "/ui/api/lint", headers=ck)[2])
         assert (tmp / "vectors.npz").exists()
+        # Caching: vendor files immutable, app files revalidated, graph 304 on an unchanged ETag.
+        assert "immutable" in raw("GET", "/ui/static/vendor/force-graph-1.52.0.js")[1]["cache-control"]
+        assert raw("GET", "/ui/static/app.js")[1]["cache-control"] == "no-cache"
+        st, hd, _ = raw("GET", "/ui/api/graph", headers=ck)
+        assert raw("GET", "/ui/api/graph", headers={**ck, "If-None-Match": hd["etag"]})[0] == 304
+        # Live updates: the event stream says "changed" after a write by any session.
+        c = httpc.HTTPConnection("127.0.0.1", PORT, timeout=10)
+        c.request("GET", "/ui/api/events", headers=ck)
+        r = c.getresponse()
+        assert r.status == 200 and r.getheader("content-type").startswith("text/event-stream")
+        assert b"event: hello" in r.fp.readline() + r.fp.readline() + r.fp.readline()
+        call("knowledge_write", {"path": "trade-memory/live.md", "content": "live\n"})
+        got = b""
+        while b"event: changed" not in got:
+            got += r.fp.readline()
+        c.close()
 
         parts, n = [], 1
         while True:
