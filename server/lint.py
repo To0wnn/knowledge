@@ -96,7 +96,7 @@ def lint(files: dict[str, str], today: date | None = None, mem: str = "memory") 
         opens = len(OPEN_WORDS.findall(text))
         if last and opens and (today - last).days > 45:
             report["possibly_stale_open_item"].append(f"{name}: {opens} open/TODO mention(s), newest date {last}")
-        hits = len(SECRET_HINT.findall(text))
+        hits = len(SECRET_HINT.findall(re.sub(r"‹[^›\n]*›", "", text)))  # ‹secret:NAME› placeholders are the fix, not a leak
         if hits:
             report["possible_secret_in_memo"].append(f"{name}: {hits} line(s) (values not shown)")
 
@@ -144,6 +144,7 @@ if __name__ == "__main__":  # self-check
     assert r["missing_frontmatter"] == ["b.md: description, type"], r
     assert r["possibly_stale_open_item"][0].startswith("a.md"), r
     assert r["possible_secret_in_memo"] == ["b.md: 1 line(s) (values not shown)"], r
+    assert not lint({"memory/MEMORY.md": "", "memory/p.md": "root password: ‹secret:ROOT_PW›\n"})["possible_secret_in_memo"]
     assert r["unprocessed_source"] == ["homelab/sources/2026-10-18-x.md"], r
     t = lint({**files, "trade-memory/MEMORY.md": "- [X](x.md) — y\n"}, today=date(2026, 10, 18), mem="trade-memory")
     assert t["index_points_to_missing_file"] == ["MEMORY.md → x.md"] and not t["unprocessed_source"], t
