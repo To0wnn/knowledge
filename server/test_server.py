@@ -50,12 +50,22 @@ def main():
     (lab / "secret.env").write_text("nope")
     (cla / "CLAUDE.md").write_text("global rules\n")
     (cla / "skills/x/SKILL.md").write_text("skill\n")
+    trade, tmem = tmp / "trade", tmp / "trade-memory"
+    for d in (trade / "venv", tmem, tmp / "anpitek", tmp / "anpitek-memory"):
+        d.mkdir(parents=True)
+    (trade / "CLAUDE.md").write_text("trade bot rules\n")
+    (trade / "bot.py").write_text("API_KEY = 'x'\n")
+    (trade / "venv" / "README.md").write_text("vendored\n")
+    (tmem / "MEMORY.md").write_text("- [Bot plan](plan.md) — entry timing\n")
+    (tmem / "plan.md").write_text("---\nname: plan\n---\nentry timing plan\n")
     tokens = tmp / "tokens.json"
     h = lambda t: hashlib.sha256(t.encode()).hexdigest()
     tokens.write_text(json.dumps({"laptop": {"sha256": h("rw-token"), "write": True},
                                   "workpc": {"sha256": h("ro-token"), "write": False},
                                   "watcher": {"sha256": h("watch-token"), "watch": True}}))
     env = {**os.environ, "KNOWLEDGE_MEMORY": str(mem), "KNOWLEDGE_HOMELAB": str(lab), "KNOWLEDGE_CLAUDE": str(cla),
+           "KNOWLEDGE_TRADE": str(trade), "KNOWLEDGE_TRADE_MEMORY": str(tmem), "KNOWLEDGE_ANPITEK": str(tmp / "anpitek"),
+           "KNOWLEDGE_ANPITEK_MEMORY": str(tmp / "anpitek-memory"),
            "KNOWLEDGE_TOKENS": str(tokens), "KNOWLEDGE_AUDIT": str(tmp / "audit.log"), "KNOWLEDGE_PORT": str(PORT),
            "KNOWLEDGE_BIND": "127.0.0.1", "KNOWLEDGE_RESCAN": "3600", "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}"}
     proc = subprocess.Popen([sys.executable, str(Path(__file__).with_name("server.py"))], env=env)
@@ -86,6 +96,14 @@ def main():
         for bad in ("memory/../../etc/passwd", "homelab/secret.env", "claude/settings.json", "etc/x"):
             assert call("knowledge_read", {"path": bad})[0], bad
         assert call("knowledge_write", {"path": "homelab/sub/x.md", "content": "x"})[0]  # not a writable pattern
+        # Project roots: only Markdown of the code repos, never venv; project memory is writable.
+        err, text = call("knowledge_read", {"path": "trade/bot.py"})
+        assert err and "only Markdown" in text, text
+        assert "trade/venv" not in call("knowledge_list", {"root": "trade"})[1]
+        assert "trade-memory/plan.md:4" in call("knowledge_search", {"pattern": "entry timing plan", "root": "trade,trade-memory"})[1]
+        assert "trade-memory" not in call("knowledge_search", {"pattern": "entry timing plan", "root": "memory"})[1]
+        assert not call("knowledge_write", {"path": "trade-memory/new.md", "content": "x\n"})[0]
+        assert call("knowledge_write", {"path": "trade/bot2.py", "content": "x"})[0]
         err, text = call("knowledge_edit", {"path": "memory/fact.md", "old_string": "line", "new_string": "l"}, token="ro-token")
         assert err and "read-only" in text, text
         assert not call("knowledge_read", {"path": "claude/skills/x/SKILL.md"}, token="ro-token")[0]
@@ -160,6 +178,10 @@ def main():
         assert raw("GET", "/ui", headers=ck)[0] == 200
         g = json.loads(raw("GET", "/ui/api/graph", headers=ck)[2])
         assert any(n["id"] == "memory/MEMORY.md" for n in g["nodes"]), g["nodes"][:3]
+        assert {n["project"] for n in g["nodes"] if n["id"].startswith("trade")} == {"trade"}
+        th = json.loads(raw("GET", "/ui/api/search?q=entry%20timing&project=trade", headers=ck)[2])["hits"]
+        assert th and all(h["project"] == "trade" for h in th), th
+        assert not json.loads(raw("GET", "/ui/api/search?q=entry%20timing&project=homelab", headers=ck)[2])["hits"]
         note = json.loads(raw("GET", "/ui/api/note?path=memory/MEMORY.md", headers=ck)[2])
         assert "Item 1" in note["text"] and note["version"]
         assert raw("GET", "/ui/api/note?path=../../etc/passwd", headers=ck)[0] == 404
@@ -194,6 +216,9 @@ def main():
             parts.append(body)
             n += 1
         assert len(parts) >= 2 and "Item 119" in parts[-1] and "global rules" in parts[0], len(parts)
+        st, body = http("GET", "/context/1?project=/home/x/trade_bot")
+        assert "project trade" in body and "trade bot rules" in body and "Bot plan" in body and "Item 1 " not in body, body[:500]
+        assert "project anpitek" in http("GET", "/context/1?project=/home/x/anpitek/boekhouding")[1]
         assert "laptop edit memory/fact.md" in (tmp / "audit.log").read_text()
         print(f"ok ({len(parts)} context parts)")
     finally:

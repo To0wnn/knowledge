@@ -33,6 +33,11 @@ button { cursor: pointer; }
 .tabs button { padding: 6px 12px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); }
 .tabs button[aria-selected="true"] { background: var(--hover); color: var(--ink); }
 .badge { display: inline-block; min-width: 18px; padding: 0 6px; border-radius: 9px; background: var(--hover); color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.seg { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { padding: 6px 11px; border: 0; background: transparent; color: var(--muted); font-size: 13px; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--hover); color: var(--ink); font-weight: 600; }
+.seg .n { margin-left: 5px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .logout { color: var(--muted); text-decoration: none; font-size: 13px; }
 
 .left, .right { background: var(--panel); overflow-y: auto; min-height: 0; }

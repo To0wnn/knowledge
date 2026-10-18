@@ -17,6 +17,17 @@ Live, shared access to Anthony's homelab docs and Claude memory for Claude Code 
 | `memory/…` | `~/.claude/projects/-home-to0wnn-homelab/memory` | read; write `*.md` and `archief/*.md` |
 | `homelab/…` | `~/homelab` | read; write top-level `*.md` docs |
 | `claude/CLAUDE.md`, `claude/skills/`, `claude/agents/` | `~/.claude/gedeeld/CLAUDE.md` (symlinked from `~/.claude/CLAUDE.md`), `~/.claude/skills`, `~/.claude/agents` | read |
+| `anpitek/…` | `~/anpitek` (code repo) | **Markdown only**; write `anpitek/*/*.md` |
+| `anpitek-memory/…` | `~/.claude/projects/-home-to0wnn-anpitek/memory` | read; write `*.md` and `archief/*.md` |
+| `trade/…` | `~/trade_bot` (code repo) | **Markdown only**; write `trade/*.md`, `trade/docs/*.md` |
+| `trade-memory/…` | `~/.claude/projects/-home-to0wnn-trade-bot/memory` | read; write `*.md` and `archief/*.md` |
+
+**Projects.** homelab, anpitek and trade each have a docs root and a memory root (`PROJECTS` in `server/graph.py`).
+The plugin's SessionStart hook sends `$CLAUDE_PROJECT_DIR`; the server picks the project from it (`…/trade_bot` →
+trade, `…/anpitek/…` → anpitek, anything else → homelab) and returns that project's `CLAUDE.md` and memory index,
+like a native session in that directory gets. Code, logs and state files of the code repos are never indexed or
+served (`venv/`, `.next/` skipped too); code reaches other devices through git. The web UI has a project switch
+(all / homelab / anpitek / trade; skills show in every project); search and lint cover all projects.
 
 Never shared: `.git`, `.env`, `*.bak*`, keys, `credentials*`, the rest of `~/.claude` (logins, sessions, settings).
 

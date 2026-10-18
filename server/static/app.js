@@ -11,6 +11,10 @@ const api = (path, opts = {}) => fetch(path, { credentials: "same-origin", ...op
 let data = { nodes: [], links: [] };
 let byId = new Map(), neighbors = new Map(), slugToId = new Map();
 let hidden = new Set(), selected = null, hover = null, focusSet = new Set();
+const PROJECTS = ["all", "homelab", "anpitek", "trade"];
+let project = "all";
+try { project = PROJECTS.includes(localStorage.getItem("kn_project")) ? localStorage.getItem("kn_project") : "all"; } catch { /* storage blocked */ }
+const inProject = (p) => project === "all" || p === project || p === "shared"; // skills are shared by every project
 let Graph;
 
 // ---------------------------------------------------------------- graph
@@ -29,7 +33,7 @@ function indexGraph() {
 }
 
 function visibleData() {
-  const nodes = data.nodes.filter((n) => !hidden.has(n.group));
+  const nodes = data.nodes.filter((n) => !hidden.has(n.group) && inProject(n.project));
   const keep = new Set(nodes.map((n) => n.id));
   const links = data.links.filter((l) => keep.has(l.source.id || l.source) && keep.has(l.target.id || l.target));
   return { nodes, links };
@@ -72,17 +76,35 @@ async function loadGraph() {
     .onNodeClick((n) => openNote(n.id, true))
     .onBackgroundClick(() => { selected = null; setFocus(null); });
   new ResizeObserver(() => Graph.width($("graph").clientWidth).height($("graph").clientHeight)).observe($("graph"));
-  renderFilters();
+  renderProjects(); renderFilters();
+}
+
+function renderProjects() {
+  const box = $("projects"); box.replaceChildren();
+  for (const p of PROJECTS) {
+    const b = document.createElement("button");
+    b.setAttribute("aria-pressed", String(p === project));
+    const n = document.createElement("span"); n.className = "n";
+    n.textContent = p === "all" ? data.nodes.length : data.nodes.filter((x) => x.project === p).length;
+    b.append(p, n);
+    b.onclick = () => {
+      project = p; try { localStorage.setItem("kn_project", p); } catch { /* storage blocked */ }
+      renderProjects(); renderFilters(); Graph.graphData(visibleData()); loadGraph.fitted = false;
+      if ($("q").value.trim()) $("q").dispatchEvent(new Event("input"));
+    };
+    box.append(b);
+  }
 }
 
 function renderFilters() {
-  const present = new Set(data.nodes.map((n) => n.group));
+  const shown = data.nodes.filter((n) => inProject(n.project));
+  const present = new Set(shown.map((n) => n.group));
   const box = $("filters"); box.replaceChildren();
   for (const g of GROUPS.filter((g) => present.has(g))) {
     const b = document.createElement("button");
     b.className = "chip"; b.setAttribute("aria-pressed", String(!hidden.has(g)));
     const dot = document.createElement("i"); dot.style.background = color(g);
-    b.append(dot, `${g} ${data.nodes.filter((n) => n.group === g).length}`);
+    b.append(dot, `${g} ${shown.filter((n) => n.group === g).length}`);
     b.onclick = () => { hidden.has(g) ? hidden.delete(g) : hidden.add(g); b.setAttribute("aria-pressed", String(!hidden.has(g))); Graph.graphData(visibleData()); };
     box.append(b);
   }
@@ -146,7 +168,8 @@ $("q").addEventListener("input", () => {
     const q = $("q").value.trim(), seq = ++searchSeq;
     selectTab("results");
     if (!q) { $("hits").replaceChildren(); $("hits-empty").hidden = false; return; }
-    let res; try { res = await api(`/ui/api/search?q=${encodeURIComponent(q)}`); } catch (e) { $("hits").textContent = e.message; return; }
+    const scope = project === "all" ? "" : `&project=${project}`;
+    let res; try { res = await api(`/ui/api/search?q=${encodeURIComponent(q)}${scope}`); } catch (e) { $("hits").textContent = e.message; return; }
     if (seq !== searchSeq) return; // a newer search is on its way
     $("hits-empty").hidden = res.hits.length > 0;
     if (!res.hits.length) $("hits-empty").textContent = "No matches.";
@@ -214,7 +237,7 @@ $("ingest-form").addEventListener("submit", async (e) => {
     }
     const hint = document.createElement("p"); hint.className = "muted"; hint.textContent = "Next: ask Claude to integrate this source into the memos."; out.append(hint);
     e.target.reset();
-    data = await api("/ui/api/graph"); indexGraph(); Graph.graphData(visibleData()); renderFilters();
+    data = await api("/ui/api/graph"); indexGraph(); Graph.graphData(visibleData()); renderProjects(); renderFilters();
   } catch (err) { out.className = "error"; out.textContent = err.message; }
 });
 

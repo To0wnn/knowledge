@@ -21,16 +21,22 @@ TREES = [  # local path -> path prefix on the knowledge server (longest first)
     (f"{HOME}/.claude/skills", "claude/skills"),
     (f"{HOME}/.claude/agents", "claude/agents"),
     (f"{HOME}/homelab", "homelab"),
+    (f"{HOME}/.claude/projects/-home-to0wnn-anpitek/memory", "anpitek-memory"),
+    (f"{HOME}/.claude/projects/-home-to0wnn-trade-bot/memory", "trade-memory"),
+    (f"{HOME}/anpitek", "anpitek"),
+    (f"{HOME}/trade_bot", "trade"),
 ]
+MD_ONLY = ("anpitek/", "trade/")  # code repos: only Markdown is shared, so logs and state files are not reported
 SERVER = os.environ.get("KNOWLEDGE_URL", "http://<lan-ip>:8766")
 TOKEN = open(os.path.expanduser("~/.config/knowledge-server/watcher.token")).read().strip()
-EXCLUDE = r"(/\.git/|/node_modules/|/\.venv/|/__pycache__/|/\.cache/|\.swp$|~$)"
+EXCLUDE = r"(/\.git/|/node_modules/|/\.venv/|/venv/|/\.next/|/__pycache__/|/\.cache/|\.swp$|~$)"
 
 
 def to_rel(path: str) -> str | None:
     for local, prefix in TREES:
         if path == local or path.startswith(local + "/"):
-            return prefix + path[len(local):]
+            rel = prefix + path[len(local):]
+            return None if rel.startswith(MD_ONLY) and not rel.endswith(".md") else rel
     return None
 
 
