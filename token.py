@@ -24,7 +24,8 @@ import tempfile
 
 PLAIN = os.path.expanduser("~/.config/knowledge-server/tokens-plain.json")
 REMOTE = "root@<lan-ip>:/root/docker/knowledge/config/tokens.json"
-GEHEIMEN = os.path.expanduser("~/.config/kennis-sync/geheimen.tsv")
+# Optional local list of secrets (value<TAB>NAME per line). The Vaultwarden helper `secret tsv` is preferred.
+SECRETS_TSV = os.path.expanduser(os.environ.get("KNOWLEDGE_SECRETS_TSV", "~/.config/kennis-sync/geheimen.tsv"))
 
 
 def load() -> dict:
@@ -51,14 +52,22 @@ def save_and_push(tokens: dict):
 def push_secrets():
     """Hashes only: the server can recognise a secret value in a text without knowing it."""
     values = set()
-    for line in open(GEHEIMEN, encoding="utf-8"):
+    try:  # Vaultwarden via the `secret` helper; else the local list
+        lines = subprocess.run(["secret", "tsv"], check=True, capture_output=True, text=True).stdout.splitlines()
+    except (OSError, subprocess.CalledProcessError):
+        lines = open(SECRETS_TSV, encoding="utf-8").read().splitlines() if os.path.exists(SECRETS_TSV) else []
+    for line in lines:
         if line.startswith("#") or "\t" not in line:
             continue
-        value = line.rstrip("\n").split("\t", 1)[0].strip()
+        value = line.split("\t", 1)[0].strip()
         if len(value) >= 6:  # shorter values would also mask ordinary words
             values.add(hashlib.sha256(value.encode()).hexdigest())
     for cfg in load().values():  # device tokens are secrets too
         values.add(hashlib.sha256(cfg["token"].encode()).hexdigest())
+    local = os.path.join(os.path.dirname(PLAIN), "secret-hashes.json")  # for the local secret-guard hook
+    with open(local, "w") as f:
+        json.dump(sorted(values), f)
+    os.chmod(local, 0o600)
     with tempfile.NamedTemporaryFile("w", delete=False, suffix=".json") as f:
         json.dump(sorted(values), f)
     target = REMOTE.replace("tokens.json", "secrets.json")
@@ -85,8 +94,14 @@ def main(argv):
         if "--redact" in argv:
             tokens[name]["redact"] = True
         save_and_push(tokens)
-        with open(GEHEIMEN, "a") as f:  # kennis-sync redacts it if it ever ends up in a doc
-            f.write(f"{tok}\tKNOWLEDGE_TOKEN_{name.upper().replace('-', '_')}\n")
+        label = f"KNOWLEDGE_TOKEN_{name.upper().replace('-', '_')}"
+        try:  # keep it in the vault too, so redaction and push-secrets know it
+            subprocess.run(["secret", "set", label, "--note", "knowledge server device token"], input=tok,
+                           text=True, check=True, capture_output=True)
+        except (OSError, subprocess.CalledProcessError):
+            if os.path.exists(SECRETS_TSV):
+                with open(SECRETS_TSV, "a") as f:
+                    f.write(f"{tok}\t{label}\n")
         print(tok)
     elif argv[0] == "push-secrets":
         push_secrets()

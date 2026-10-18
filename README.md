@@ -141,12 +141,34 @@ Following Karpathy's "LLM Wiki" pattern (raw sources -> wiki pages -> index, wit
   `<project memory>/sessions/<YYYY-MM>.md`. It remembers per session how far it logged. On the VM via
   `~/.claude/settings.json` + `~/.config/knowledge-server/session.env` (token `vm-sessions`, memory roots only).
 
+## Secrets (Vaultwarden) — `secrets/`
+
+Notes never hold secret values; they say `‹secret:NAME›`. The values live in a Vaultwarden/Bitwarden **organisation**
+("Homelab", collection "Homelab") shared between the owner's account and a dedicated automation account, so the owner
+sees and edits them in the normal Bitwarden apps and the automation cannot see the owner's personal vault.
+
+- `secrets/secret` (installed as `~/.local/bin/secret`): `secret NAME` (read, ~50 ms), `secret ls`, `secret set NAME`
+  (stdin), `secret rm NAME`, `secret tsv`, `secret scrub [--apply] FILE...` (replace vault values in notes by
+  placeholders; values that are dictionary words such as `sunflower` only on lines about logging in),
+  `secret import-tsv FILE`. Reads use **rbw** (agent keeps the keys in memory); writes use the official **bw** CLI,
+  because rbw cannot write to an organisation.
+- **Always unlocked:** the automation account's master password is encrypted with `systemd-creds --user`
+  (`~/.config/knowledge-server/vw-master.cred`); `secrets/rbw-pinentry-creds` hands it to rbw, so the vault unlocks
+  itself after a lock or reboot (tested: fresh Claude session with a locked vault logged in over SSH using
+  `sshpass -p "$(secret NAME)"` without printing the value).
+- **Never back in:** the server refuses MCP/UI writes that contain a known secret; on the VM the PreToolUse hook
+  `plugin/hooks/secret-guard.py` (Edit|Write) does the same for native edits. Both compare SHA-256 hashes
+  (`token.py push-secrets` writes `/config/secrets.json` on forge and `~/.config/knowledge-server/secret-hashes.json`).
+  Run `push-secrets` after every `secret set`.
+- Why not Bitwarden Secrets Manager or `bw serve`: Vaultwarden does not implement Secrets Manager (Bitwarden-licensed),
+  and `bw serve` exposes an unauthenticated local API.
+
 ## Install on a device (once)
 
 1. Create a token on the VM: add `"<device>": {"token": "<long random>", "write": true}` to
    `~/.config/knowledge-server/tokens.json` (e.g. `python3 -c 'import secrets;print(secrets.token_urlsafe(32))'`),
    copy the file to forge `/root/docker/knowledge/config/tokens.json` (owner 1000, mode 600). Read-only device:
-   `"write": false`. Also add the token to `~/.config/kennis-sync/geheimen.tsv`.
+   `"write": false`. `token.py add` also stores the token in the vault (`secret set`).
 2. The device needs LAN or WireGuard (the route only admits 10.0.0.0/8).
 3. In Claude Code on that device:
    ```

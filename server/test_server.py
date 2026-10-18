@@ -112,6 +112,11 @@ def main():
         assert "homelab/" not in call("knowledge_search", {"pattern": "overview"}, token="agent-token")[1]
         assert call("knowledge_write", {"path": "memory/x.md", "content": "x"}, token="agent-token")[0]
         assert http("GET", "/ui/api/graph", token="agent-token")[0] == 403
+        # Write guard: a known secret value in a note is refused with a hint; the placeholder is fine.
+        err, text = call("knowledge_write", {"path": "memory/leak.md", "content": "db password Sup3rSecret99\n"})
+        assert err and "secret set" in text and not (mem / "leak.md").exists(), text
+        assert not call("knowledge_write", {"path": "memory/leak.md", "content": "db password ‹secret:DB_PASSWORD›\n"})[0]
+        assert call("knowledge_edit", {"path": "memory/leak.md", "old_string": "‹secret:DB_PASSWORD›", "new_string": "Sup3rSecret99"})[0]
         # Project roots: only Markdown of the code repos, never venv; project memory is writable.
         err, text = call("knowledge_read", {"path": "trade/bot.py"})
         assert err and "only Markdown" in text, text
@@ -276,19 +281,19 @@ def main():
         assert raw("GET", "/ui/api/history?path=trade-memory/hist.md&version=../../x", headers=ck)[0] == 404
         # Session log: the hook script posts prompts/files/summary; server redacts and appends per project and month.
         tr = tmp / "transcript.jsonl"
-        rows = [{"type": "user", "message": {"content": "fix de trade bot, wachtwoord Sup3rSecret99"}},
+        rows = [{"type": "user", "message": {"content": "fix the trade bot, password Sup3rSecret99"}},
                 {"type": "user", "isMeta": True, "message": {"content": "<local-command-caveat>x"}},
                 {"type": "user", "message": {"content": [{"type": "tool_result", "content": "x"}]}},
                 {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Edit", "input": {"file_path": "/home/x/trade_bot/bot.py"}},
-                                                              {"type": "text", "text": "Klaar: bot.py gefixt."}]}}]
+                                                              {"type": "text", "text": "Done: fixed bot.py."}]}}]
         tr.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
         hook = json.dumps({"session_id": "abcdef1234", "transcript_path": str(tr), "cwd": "/home/x/trade_bot", "reason": "clear"})
         senv = {**os.environ, "KNOWLEDGE_URL": BASE, "KNOWLEDGE_TOKEN": "rw-token", "XDG_CACHE_HOME": str(tmp / "cache"), "HOME": str(tmp)}
         script = str(Path(__file__).parents[1] / "plugin/hooks/session-log.py")
         subprocess.run([sys.executable, script], input=hook, text=True, env=senv, check=True)
         log = (tmem / "sessions" / f"{time.strftime('%Y-%m')}.md").read_text()
-        assert "· trade · laptop · clear · sessie abcdef12" in log and "Vraag: fix de trade bot" in log, log
-        assert "Sup3rSecret99" not in log and "bot.py" in log and "Afsluiting: Klaar" in log and "caveat" not in log, log
+        assert "· trade · laptop · clear · session abcdef12" in log and "Asked: fix the trade bot" in log, log
+        assert "Sup3rSecret99" not in log and "bot.py" in log and "Outcome: Done" in log and "caveat" not in log, log
         subprocess.run([sys.executable, script], input=hook, text=True, env=senv, check=True)  # nothing new: no entry
         assert (tmem / "sessions" / f"{time.strftime('%Y-%m')}.md").read_text() == log
         assert http("POST", "/sessions", {"prompts": ["x"], "cwd": "/"}, token="ro-token")[0] == 403
