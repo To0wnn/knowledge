@@ -31,6 +31,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 import extract
 import fetch
 import graph as kb_graph
+from graph import MD_ONLY, PROJECTS
 import lint as kb_lint
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
@@ -43,11 +44,16 @@ ROOTS = {
     "memory": Path(os.environ.get("KNOWLEDGE_MEMORY", HOME / ".claude/projects/-home-user-homelab/memory")),
     "homelab": Path(os.environ.get("KNOWLEDGE_HOMELAB", HOME / "homelab")),
     "claude": Path(os.environ.get("KNOWLEDGE_CLAUDE", HOME / ".claude/gedeeld")),
+    "anpitek": Path(os.environ.get("KNOWLEDGE_ANPITEK", HOME / "anpitek")),
+    "anpitek-memory": Path(os.environ.get("KNOWLEDGE_ANPITEK_MEMORY", HOME / ".claude/projects/-home-user-anpitek/memory")),
+    "trade": Path(os.environ.get("KNOWLEDGE_TRADE", HOME / "trade_bot")),
+    "trade-memory": Path(os.environ.get("KNOWLEDGE_TRADE_MEMORY", HOME / ".claude/projects/-home-user-trade-bot/memory")),
 }
 # The "claude" root is a dedicated share (CLAUDE.md, skills/, agents/), never all of ~/.claude (credentials).
 CLAUDE_READABLE = ("CLAUDE.md", "skills/*", "agents/*")
-WRITABLE = ("memory/*.md", "memory/archief/*.md", "homelab/*.md")
-SKIP_PARTS = {".git", "__pycache__", "node_modules", ".venv", ".cache"}
+WRITABLE = ("memory/*.md", "memory/archief/*.md", "homelab/*.md", "anpitek-memory/*.md", "anpitek-memory/archief/*.md",
+            "trade-memory/*.md", "trade-memory/archief/*.md", "anpitek/*/*.md", "trade/*.md", "trade/docs/*.md")
+SKIP_PARTS = {".git", "__pycache__", "node_modules", ".venv", "venv", ".next", ".cache"}
 SKIP_NAMES = re.compile(r"(\.bak|\.vault_pass$|\.env$|credentials|\.pem$|\.key$|id_ed25519|id_rsa)")
 MAX_BYTES = 2_000_000
 TOKENS_FILE = Path(os.environ.get("KNOWLEDGE_TOKENS", HOME / ".config/knowledge-server/tokens.json"))
@@ -70,7 +76,9 @@ def resolve(path: str) -> tuple[Path, str]:
     if set(Path(rel).parts) & SKIP_PARTS or SKIP_NAMES.search(rel):
         raise ToolError("path not shared")
     if root == "claude" and not any(fnmatch.fnmatch(rel, p) for p in CLAUDE_READABLE):
-        raise ToolError("only CLAUDE.md, skills/, agents/ and hooks/ are shared from ~/.claude")
+        raise ToolError("only CLAUDE.md, skills/ and agents/ are shared from ~/.claude")
+    if root in MD_ONLY and not rel.endswith(".md"):
+        raise ToolError(f"only Markdown is shared from {root}/ (it is a code repo)")
     return full, f"{root}/{rel}"
 
 
@@ -165,7 +173,8 @@ class Index:
     def items(self, root: str = ""):
         with self.lock:
             snap = sorted(self.files.items())
-        return [(rel, v[2], v[3]) for rel, v in snap if not root or rel.startswith(root + "/")]
+        prefixes = tuple(r.strip() + "/" for r in root.split(","))  # "trade,trade-memory" = several roots
+        return [(rel, v[2], v[3]) for rel, v in snap if not root or rel.startswith(prefixes)]
 
 
 index = Index()
@@ -213,10 +222,12 @@ def replace_if_unchanged(full: Path, expected: bytes | None, data: bytes) -> boo
 server = MCPServer(
     name="knowledge",
     instructions=(
-        "Shared homelab knowledge of the owner: docs in homelab/ (00_OVERZICHT.md ... 14_*.md, tools/), "
-        "Claude memory in memory/ (index memory/MEMORY.md, one fact per file), shared instructions in claude/CLAUDE.md "
-        "and claude/skills/, raw sources in homelab/sources/. This replaces local auto-memory on this device: read memory "
-        "files here, and save new memories here (new file + one index line in memory/MEMORY.md). Prefer knowledge_edit "
+        "Shared knowledge of the owner, per project: homelab (docs homelab/ 00_OVERZICHT.md ... 14_*.md, memory "
+        "memory/), anpitek (Markdown of ~/anpitek in anpitek/, memory anpitek-memory/) and trade (Markdown of the trading "
+        "bot in trade/, memory trade-memory/). Each memory root has an index MEMORY.md, one fact per file. Shared "
+        "instructions in claude/CLAUDE.md and claude/skills/, raw sources in homelab/sources/. This replaces local "
+        "auto-memory on this device: read memory files here, and save new memories in the memory root of the project you "
+        "work on (new file + one index line in its MEMORY.md). Prefer knowledge_edit "
         "over knowledge_write. knowledge_ingest adds a web page/PDF/text as a raw source for you to turn into memos; "
         "knowledge_lint reports index/link/size problems and unprocessed sources; knowledge_delete removes an outdated "
         "memo (a copy is kept). Web UI with graph view: https://knowledge.to0wnn.com/ui"
@@ -226,7 +237,8 @@ server = MCPServer(
 
 @server.tool()
 def knowledge_list(root: str = "memory", pattern: str = "*") -> str:
-    """List shared files under a root (memory, homelab or claude), optionally filtered by a glob on the relative path."""
+    """List shared files under a root (memory, homelab, claude, anpitek, anpitek-memory, trade, trade-memory), optionally
+    filtered by a glob on the relative path."""
     if root not in ROOTS:
         raise ToolError(f"root must be one of {sorted(ROOTS)}")
     hits = [rel for rel, _, _ in index.items(root) if fnmatch.fnmatch(rel.split("/", 1)[1], pattern)]
@@ -249,7 +261,8 @@ def knowledge_read(path: str, offset: int = 1, limit: int = 600) -> str:
 
 @server.tool()
 def knowledge_search(pattern: str, root: str = "", max_results: int = 60) -> str:
-    """Case-insensitive regex search over shared files (all roots, or one root). Returns path:line: text."""
+    """Case-insensitive regex search over shared files (all roots, or one or more comma-separated roots, e.g.
+    "trade,trade-memory"). Returns path:line: text."""
     try:
         rx_i = re.compile(pattern, re.I | re.M)
         # Fast path: lowercase pattern on the lowercase copy. Not when the pattern has uppercase escapes (\S, \W, \D,
@@ -346,7 +359,17 @@ def knowledge_lint() -> str:
     [[wikilinks]], missing frontmatter, big memos without an archive copy, long index lines, orphan memos, stale open
     items, memos that probably contain a secret (values not shown) and raw sources not yet turned into a memo. Fix what
     is clearly wrong; judge contradictions yourself by reading the memos involved."""
-    return kb_lint.render(kb_lint.lint({rel: text for rel, text, _ in index.items()}))
+    return kb_lint.render(lint_all())
+
+
+def lint_all() -> dict[str, list[str]]:
+    """Lint every project's memory root; findings outside the homelab memory carry their root as prefix."""
+    files = {rel: text for rel, text, _ in index.items()}
+    report: dict[str, list[str]] = {}
+    for _, mem in PROJECTS.values():
+        for check, items in kb_lint.lint(files, mem=mem).items():
+            report.setdefault(check, []).extend(items if mem == "memory" else [f"{mem}/{i}" for i in items])
+    return report
 
 
 SOURCES = "homelab/sources"  # raw sources (immutable once written) + LOG.md, the LLM-wiki "raw" layer
@@ -444,19 +467,32 @@ async def knowledge_ingest(url: str = "", text: str = "", title: str = "") -> st
 PART_CHARS = 9500  # Claude Code caps each SessionStart hook output at 10,000 characters
 
 
-def context_parts() -> list[str]:
-    """Startup context for the plugin's SessionStart hooks: what VM sessions get loaded natively, split on line
-    boundaries into parts that each fit one hook output, so nothing is cut off."""
+def project_for(directory: str) -> str:
+    """Project of a session from its working directory (the plugin sends $CLAUDE_PROJECT_DIR), e.g.
+    ~/trade_bot -> trade, ~/anpitek/boekhouding -> anpitek; anything else is homelab."""
+    parts = [x.lower() for x in PurePosixPath(directory).parts]
+    if directory in PROJECTS:
+        return directory
+    if any(x.startswith("trade") for x in parts):
+        return "trade"
+    return "anpitek" if "anpitek" in parts else "homelab"
+
+
+def context_parts(project: str = "homelab") -> list[str]:
+    """Startup context for the plugin's SessionStart hooks: what a VM session in that project gets loaded natively,
+    split on line boundaries into parts that each fit one hook output, so nothing is cut off."""
+    docs, mem = PROJECTS[project]
+    others = "; ".join(f"{p}: {d}/ and {m}/" for p, (d, m) in PROJECTS.items() if p != project)
     text = [
-        "===== knowledge plugin =====\nThe memory and docs below live on the knowledge MCP server (the VM), not on this "
-        "machine; other sessions on other devices use the same files live. Read memory files with "
-        "knowledge_read('memory/<file>'), search with knowledge_search, and save or update memories there (knowledge_edit, or "
-        "knowledge_write for a new file, plus one index line in memory/MEMORY.md) instead of local files. Docs: "
-        "homelab/<file>; skills: claude/skills/<name>/SKILL.md. New raw material (a URL, PDF or pasted text): "
-        "knowledge_ingest, then turn it into memos. Housekeeping: knowledge_lint. Graph view for the user: "
-        "https://knowledge.to0wnn.com/ui"
+        f"===== knowledge plugin (project {project}) =====\nThe memory and docs below live on the knowledge MCP server "
+        "(the VM), not on this machine; other sessions on other devices use the same files live. Read memory files with "
+        f"knowledge_read('{mem}/<file>'), search with knowledge_search, and save or update memories there (knowledge_edit, "
+        f"or knowledge_write for a new file, plus one index line in {mem}/MEMORY.md) instead of local files. Docs of this "
+        f"project: {docs}/<file>; other projects: {others}; skills: claude/skills/<name>/SKILL.md. New raw material "
+        "(a URL, PDF or pasted text): knowledge_ingest, then turn it into memos. Housekeeping: knowledge_lint. Graph view "
+        "for the user: https://knowledge.to0wnn.com/ui"
     ]
-    for rel in ("claude/CLAUDE.md", "homelab/CLAUDE.md", "memory/MEMORY.md"):
+    for rel in ("claude/CLAUDE.md", f"{docs}/CLAUDE.md", f"{mem}/MEMORY.md"):
         full, _ = resolve(rel)
         if full.exists():
             text.append(f"===== {rel} (via knowledge server) =====\n{full.read_text(encoding='utf-8')}")
@@ -540,7 +576,7 @@ async def invalidate_route(request: Request):
 
 @server.custom_route("/context/{part}", methods=["GET"])
 async def context_route(request: Request):
-    parts = context_parts()
+    parts = context_parts(project_for(request.query_params.get("project", "")))
     n = int(request.path_params["part"])
     if not 1 <= n <= len(parts):
         return PlainTextResponse("")  # the plugin asks for a fixed number of parts; extra ones are empty
@@ -616,20 +652,23 @@ async def ui_search(request: Request):
     if not q:
         return JSONResponse({"hits": []})
     try:
-        out = knowledge_search(re.escape(q) if request.query_params.get("regex") != "1" else q, max_results=80)
+        project = request.query_params.get("project", "")
+        roots = ",".join(PROJECTS[project] + ("claude",)) if project in PROJECTS else ""
+        out = knowledge_search(re.escape(q) if request.query_params.get("regex") != "1" else q, roots, max_results=80)
     except ToolError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     hits = []
     for line in out.splitlines():
         m = re.match(r"^(.+?):(\d+): (.*)$", line)
         if m:
-            hits.append({"path": m.group(1), "line": int(m.group(2)), "text": m.group(3)})
+            hits.append({"path": m.group(1), "line": int(m.group(2)), "text": m.group(3),
+                         "project": kb_graph.project_of(m.group(1))})
     return JSONResponse({"hits": hits})
 
 
 @server.custom_route("/ui/api/lint", methods=["GET"])
 async def ui_lint(request: Request):
-    return JSONResponse(kb_lint.lint({rel: text for rel, text, _ in index.items()}))
+    return JSONResponse(lint_all())
 
 
 @server.custom_route("/ui/api/ingest", methods=["POST"])

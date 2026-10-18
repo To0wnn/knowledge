@@ -48,11 +48,12 @@ def latest_date(text: str) -> date | None:
     return max(found) if found else None
 
 
-def lint(files: dict[str, str], today: date | None = None) -> dict[str, list[str]]:
-    """Check memory/ (index, links, frontmatter, size, staleness, secrets) and sources/ (unprocessed raw sources)."""
+def lint(files: dict[str, str], today: date | None = None, mem: str = "memory") -> dict[str, list[str]]:
+    """Check one memory root (index, links, frontmatter, size, staleness, secrets); with the homelab root "memory"
+    also homelab/sources/ (unprocessed raw sources)."""
     today = today or date.today()
-    memos = {rel[len("memory/"):]: text for rel, text in files.items()
-             if rel.startswith("memory/") and rel.count("/") == 1 and rel.endswith(".md")}
+    memos = {rel[len(mem) + 1:]: text for rel, text in files.items()
+             if rel.startswith(mem + "/") and rel.count("/") == 1 and rel.endswith(".md")}
     index = memos.get("MEMORY.md", "")
     indexed = {m.group("file") for m in INDEX_LINE.finditer(index)}
     slugs = {name[:-3] for name in memos} | {frontmatter(t).get("name", "") for t in memos.values()}
@@ -98,6 +99,8 @@ def lint(files: dict[str, str], today: date | None = None) -> dict[str, list[str
             report["orphan_memo"].append(name)
 
     # A raw source counts as processed once anything outside sources/ (a memo, a doc) mentions its file name.
+    if mem != "memory":
+        return report
     outside = "\n".join(t for r, t in files.items() if not r.startswith("homelab/sources/"))
     for rel in files:
         name = rel.split("/")[-1]
@@ -132,4 +135,6 @@ if __name__ == "__main__":  # self-check
     assert r["possibly_stale_open_item"][0].startswith("a.md"), r
     assert r["possible_secret_in_memo"] == ["b.md: 1 line(s) (values not shown)"], r
     assert r["unprocessed_source"] == ["homelab/sources/2026-10-18-x.md"], r
+    t = lint({**files, "trade-memory/MEMORY.md": "- [X](x.md) — y\n"}, today=date(2026, 10, 18), mem="trade-memory")
+    assert t["index_points_to_missing_file"] == ["MEMORY.md → x.md"] and not t["unprocessed_source"], t
     print("ok")

@@ -24,6 +24,16 @@
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/context.sh\" 4",
             "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/context.sh\" 5",
+            "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/context.sh\" 6",
+            "timeout": 15
           }
         ]
       }

@@ -17,6 +17,10 @@ services:
       KNOWLEDGE_MEMORY: /data/memory
       KNOWLEDGE_HOMELAB: /data/homelab
       KNOWLEDGE_CLAUDE: /data/claude
+      KNOWLEDGE_ANPITEK: /data/anpitek
+      KNOWLEDGE_ANPITEK_MEMORY: /data/anpitek-memory
+      KNOWLEDGE_TRADE: /data/trade
+      KNOWLEDGE_TRADE_MEMORY: /data/trade-memory
       KNOWLEDGE_TOKENS: /config/tokens.json
       KNOWLEDGE_AUDIT: /state/audit.log
       TZ: Europe/Amsterdam  # local dates in source file names, LOG.md and the audit log (forge itself runs UTC)
@@ -27,6 +31,10 @@ services:
       - claude:/data/claude
       - claude_skills:/data/claude/skills
       - claude_agents:/data/claude/agents
+      - anpitek:/data/anpitek
+      - anpitek_memory:/data/anpitek-memory
+      - trade:/data/trade
+      - trade_memory:/data/trade-memory
       - /root/docker/knowledge/config:/config:ro
       - /root/docker/knowledge/state:/state
 
@@ -48,3 +56,15 @@ volumes:
   claude_agents:
     <<: *nfs
     driver_opts: {type: nfs, o: "addr=<lan-ip>,nfsvers=4.2,ro,hard,timeo=50,actimeo=1", device: ":/home/user/.claude/agents"}
+  anpitek:
+    <<: *nfs
+    driver_opts: {type: nfs, o: "addr=<lan-ip>,nfsvers=4.2,rw,hard,timeo=50,actimeo=1", device: ":/home/user/anpitek"}
+  anpitek_memory:
+    <<: *nfs
+    driver_opts: {type: nfs, o: "addr=<lan-ip>,nfsvers=4.2,rw,hard,timeo=50,actimeo=1", device: ":/home/user/.claude/projects/-home-user-anpitek/memory"}
+  trade:
+    <<: *nfs
+    driver_opts: {type: nfs, o: "addr=<lan-ip>,nfsvers=4.2,rw,hard,timeo=50,actimeo=1", device: ":/home/user/trade_bot"}
+  trade_memory:
+    <<: *nfs
+    driver_opts: {type: nfs, o: "addr=<lan-ip>,nfsvers=4.2,rw,hard,timeo=50,actimeo=1", device: ":/home/user/.claude/projects/-home-user-trade-bot/memory"}
