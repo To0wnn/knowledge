@@ -3,7 +3,8 @@
 set -eu
 STACK=/root/docker/dockhand/dockhand_data/stacks/forge/knowledge
 cd "$(dirname "$0")/server"
-uv run --quiet test_server.py
+PATH="$HOME/.local/bin:$PATH"  # uv lives there; shells started at boot may lack it
+uv run --quiet graph.py && uv run --quiet lint.py && uv run --quiet test_server.py
 ssh root@<lan-ip> "mkdir -p $STACK /root/docker/knowledge/config /root/docker/knowledge/state && chown 1000:1000 /root/docker/knowledge/state"
 rsync -a --delete --exclude .venv --exclude __pycache__ ./ root@<lan-ip>:$STACK/
 ssh root@<lan-ip> "cd $STACK && docker compose -p knowledge build -q && docker compose -p knowledge up -d"

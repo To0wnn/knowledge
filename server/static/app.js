@@ -26,6 +26,8 @@ let colorBy = store.get("kn_colorby") === "cluster" ? "cluster" : "type";
 let labelMin = 0, current = null, editing = false, Graph, Graph3D = null;
 
 const inProject = (p) => p === project || p === "shared";
+// A shared note (skill) shows only in the projects that link to it.
+const nodeIn = (n) => n.project === project || (n.project === "shared" && (!n.projects || n.projects.includes(project)));
 const lintProject = (item) => item.startsWith("anpitek") ? "anpitek" : item.startsWith("trade") ? "trade" : "homelab";
 const nodeColor = (n) => colorBy === "cluster" ? (clusterColor.get(n.cluster) || css("--g-doc")) : (css(`--g-${n.group}`) || css("--g-doc"));
 const linkId = (end) => end.id || end;
@@ -42,7 +44,7 @@ function indexGraph() {
   }
   // Cluster colours: the biggest topics of this project get a hue, in a fixed order.
   const sizes = new Map();
-  for (const n of data.nodes) if (n.cluster && inProject(n.project)) sizes.set(n.cluster, (sizes.get(n.cluster) || 0) + 1);
+  for (const n of data.nodes) if (n.cluster && nodeIn(n)) sizes.set(n.cluster, (sizes.get(n.cluster) || 0) + 1);
   const ranked = [...sizes.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
   clusterColor = new Map(ranked.slice(0, CLUSTER_HUES.length).map(([c], i) => [c, css(`--g-${CLUSTER_HUES[i]}`)]));
 }
@@ -60,7 +62,7 @@ function localSet() {
 
 function visibleData() {
   const local = localSet();
-  const nodes = data.nodes.filter((n) => inProject(n.project) && !hidden.has(colorBy === "cluster" ? `c:${n.cluster}` : n.group) && (!local || local.has(n.id)));
+  const nodes = data.nodes.filter((n) => nodeIn(n) && !hidden.has(colorBy === "cluster" ? `c:${n.cluster}` : n.group) && (!local || local.has(n.id)));
   const keep = new Set(nodes.map((n) => n.id));
   const links = data.links.filter((l) => keep.has(linkId(l.source)) && keep.has(linkId(l.target)));
   // Labels at overview zoom: the ~15 best-connected notes in view.
@@ -230,7 +232,7 @@ function switchProject(p, refit = true) {
 }
 
 function renderFilters() {
-  const shown = data.nodes.filter((n) => inProject(n.project));
+  const shown = data.nodes.filter((n) => nodeIn(n));
   const box = $("filters"); box.replaceChildren();
   const chips = colorBy === "cluster"
     ? [...clusterColor.keys()].map((c) => ({ key: `c:${c}`, label: c, color: clusterColor.get(c), count: shown.filter((n) => n.cluster === c).length }))
@@ -550,7 +552,7 @@ function renderInsights() {
   const topics = (data.communities || []).filter((c) => c.project === project);
   section("Topics", "Louvain communities; cohesion = share of possible links inside the topic. Below 0.15 is loose.", topics, (c, a) => {
     a.textContent = `${c.name} — ${c.size} notes, cohesion ${c.cohesion}${c.cohesion < 0.15 && c.size >= 3 ? " (loose)" : ""}`;
-    a.onclick = () => highlight(data.nodes.filter((n) => n.cluster === c.name && inProject(n.project)).map((n) => n.id));
+    a.onclick = () => highlight(data.nodes.filter((n) => n.cluster === c.name && nodeIn(n)).map((n) => n.id));
   });
   if (!box.children.length) box.textContent = "Nothing to report for this project.";
 }
