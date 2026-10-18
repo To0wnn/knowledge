@@ -25,6 +25,12 @@ def links(text: str) -> list[str]:
 
 FRONT = re.compile(r"\A---\n(.*?)\n---\n", re.S)
 BIG_MEMO = 15_000
+# Claude Code loads only the first 200 lines / 25 KB of MEMORY.md and silently drops the rest; warn well before.
+INDEX_WARN_LINES, INDEX_WARN_BYTES = 150, 20_000
+# Relative dates go stale the day after they are written; memos need absolute dates.
+RELATIVE_DATE = re.compile(r"\b(eergisteren|gisteren|overmorgen|morgen|vandaag|vanavond|vannacht|vanochtend|vanmiddag|"
+                           r"(?:volgende|vorige|deze|afgelopen) (?:week|maand)|yesterday|tomorrow|today|tonight|"
+                           r"(?:next|last) week)\b", re.I)
 
 
 def frontmatter(text: str) -> dict:
@@ -79,8 +85,12 @@ def lint(files: dict[str, str], today: date | None = None, mem: str = "memory") 
     report: dict[str, list[str]] = {k: [] for k in (
         "index_points_to_missing_file", "memo_not_in_index", "dead_wikilink", "missing_frontmatter",
         "big_memo_without_archive", "long_index_line", "orphan_memo", "possibly_stale_open_item",
-        "possible_secret_in_memo", "unprocessed_source", "index_line_without_heading")}
+        "possible_secret_in_memo", "unprocessed_source", "index_line_without_heading", "index_near_load_limit",
+        "relative_date")}
 
+    lines, size = index.count("\n") + 1 if index else 0, len(index.encode())
+    if lines >= INDEX_WARN_LINES or size >= INDEX_WARN_BYTES:
+        report["index_near_load_limit"].append(f"MEMORY.md: {lines} lines / {size // 1024} KB (Claude Code loads 200 lines / 25 KB)")
     # Where the index uses "## " headings (the topics in the graph), every index line belongs under one.
     if re.search(r"^## ", index, re.M):
         first = re.search(r"^## ", index, re.M).start()
@@ -92,6 +102,12 @@ def lint(files: dict[str, str], today: date | None = None, mem: str = "memory") 
             report["long_index_line"].append(f"{line.group('file')} ({len(line.group(0))} chars, rule ~150)")
 
     for name, text in memos.items():
+        if name != "MEMORY.md":
+            no_code = CODE.sub(lambda m: "\n" * m.group(0).count("\n"), text)  # keep line numbers right
+            for no, line in enumerate(no_code.splitlines(), 1):
+                if m := RELATIVE_DATE.search(line):
+                    report["relative_date"].append(f"{name}: line {no} '{m.group(0)}'")
+                    break  # one per memo is enough to act on
         if name == "MEMORY.md":
             continue
         for slug in links(text):
@@ -159,6 +175,8 @@ if __name__ == "__main__":  # self-check
     assert r["possibly_stale_open_item"][0].startswith("a.md"), r
     assert r["possible_secret_in_memo"] == ["b.md: 1 line(s) (values not shown)"], r
     assert not lint({"memory/MEMORY.md": "", "memory/a.md": "[[b]]", "trade-memory/b.md": "x"})["dead_wikilink"]  # cross-root
+    r4 = lint({"memory/MEMORY.md": "x\n" * 160, "memory/a.md": "```\ntoday\n```\nfixed gisteren", "memory/b.md": "goedemorgen, 's morgens"})
+    assert r4["index_near_load_limit"] and r4["relative_date"] == ["a.md: line 4 'gisteren'"], r4
     r3 = lint({"memory/MEMORY.md": "- [A](a.md) — x\n## Net\n- [B](b.md) — y\n", "memory/a.md": "", "memory/b.md": ""})
     assert r3["index_line_without_heading"] == ["MEMORY.md → a.md"], r3
     assert not lint({"memory/MEMORY.md": "- [A](a.md) — x\n", "memory/a.md": ""})["index_line_without_heading"]  # no headings: fine

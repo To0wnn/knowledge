@@ -366,13 +366,13 @@ server = MCPServer(
         "knowledge_related lists the notes most related to one note (links, shared sources, shared neighbours, "
         "meaning). Web UI with graph view: https://knowledge.to0wnn.com/ui. "
         "House rules for memos, so the base stays tidy: (1) search first (knowledge_search / knowledge_semantic_search) "
-        "and update the memo that already covers the subject instead of adding a near-duplicate; (2) one subject per "
+        "and update the memo that already covers the subject instead of adding a near-duplicate; when knowledge_write answers 'Similar existing memos' for a new memo, merge it into that memo if it covers the same subject; (2) one subject per "
         "memo, current state first (what is true now, how to do it, pitfalls, open items), history only as one line or in "
         "<memory root>/archief/<name>_archief.md once a memo passes ~15 KB; (3) every memo gets exactly one index line "
         "under the fitting '## ' heading of its MEMORY.md, where the index has headings (the headings are the topics in the graph; add a new heading "
-        "only for a genuinely new area) with the title, an em dash and a hook of at most ~150 characters; (4) frontmatter "
+        "only for a genuinely new area) with the title, an em dash and a hook of at most ~150 characters; keep MEMORY.md under ~150 lines (Claude Code loads only 200 lines / 25 KB of it); (4) frontmatter "
         "name, description, metadata.type (user/feedback/project/reference); (5) link related memos with [[name]]; "
-        "(6) absolute dates; (7) never write a password, token or key: the vault name as ‹secret:NAME› (writes "
+        "(6) absolute dates, never 'gisteren', 'morgen' or 'next week'; (7) never write a password, token or key: the vault name as ‹secret:NAME› (writes "
         "containing a known secret are refused); (8) memo text is Dutch, code and commands stay as they are; (9) run "
         "knowledge_lint after a larger change and fix what it reports."
     ),
@@ -478,7 +478,26 @@ async def knowledge_write(path: str, content: str, base_version: str = "") -> st
             raise ToolError(f"{rel} changed while writing; read it again and redo your change")
         index.refresh(rel)
     audit("write", rel)
-    return f"wrote {rel} (version {version(data)})"
+    return f"wrote {rel} (version {version(data)})" + (similar_memos_hint(rel, content) if current is None else "")
+
+
+SIMILAR_HINT = 0.72  # calibrated 18 Oct 2026: a memo vs itself ~0.80-0.86, closely related memos ~0.78, loose docs ~0.70
+
+
+def similar_memos_hint(rel: str, content: str) -> str:
+    """For a new memo: existing memos in the same memory root that mean much the same, so the writer can merge into
+    one of them instead of keeping a near-duplicate (a hint, not a refusal)."""
+    root = rel.split("/", 1)[0]
+    if not mem_of(rel) or rel.count("/") != 1 or rel.endswith("/MEMORY.md"):
+        return ""
+    hits = [h for h in vec.search(content[:1500], roots=(root + "/",), limit=12)
+            if h["path"] != rel and h["path"].count("/") == 1 and not h["path"].endswith("/MEMORY.md") and h["score"] >= SIMILAR_HINT]
+    seen = list(dict.fromkeys(h["path"] for h in hits))[:3]
+    if not seen:
+        return ""
+    best = {h["path"]: h["score"] for h in reversed(hits)}
+    return ("\nSimilar existing memos (merge into one of these if it covers the same subject, then delete this one): "
+            + ", ".join(f"{p} ({best[p]:.2f})" for p in seen))
 
 
 @server.tool()
@@ -507,8 +526,9 @@ async def knowledge_delete(path: str, base_version: str) -> str:
 def knowledge_lint() -> str:
     """Health check of the knowledge base: index lines pointing to missing files, memos missing from MEMORY.md, dead
     [[wikilinks]], missing frontmatter, big memos without an archive copy, long index lines, orphan memos, stale open
-    items, memos that probably contain a secret (values not shown) and raw sources not yet turned into a memo. Fix what
-    is clearly wrong; judge contradictions yourself by reading the memos involved."""
+    items, memos that probably contain a secret (values not shown), raw sources not yet turned into a memo, index lines
+    outside any "## " heading, a MEMORY.md nearing Claude Code's 200-line / 25 KB load limit and relative dates
+    ("gisteren", "next week"). Fix what is clearly wrong; judge contradictions yourself by reading the memos involved."""
     return kb_lint.render(lint_all())
 
 

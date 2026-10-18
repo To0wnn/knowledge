@@ -259,6 +259,11 @@ def main():
         assert res["hits"] and res["hits"][0]["path"].startswith("trade"), res
         assert "trade-memory/" in call("knowledge_semantic_search", {"query": "entry timing", "root": "trade-memory"})[1]
         assert not call("knowledge_related", {"path": "trade-memory/plan.md"})[0]
+        # A new memo that says the same as an existing one gets a merge hint (not a refusal); a different one does not.
+        err, text = call("knowledge_write", {"path": "trade-memory/plan_copy.md", "content": "---\nname: plan copy\n---\nentry timing plan\n"})
+        assert not err and "Similar existing memos" in text and "trade-memory/plan.md" in text, text
+        err, text = call("knowledge_write", {"path": "trade-memory/other.md", "content": "---\nname: other\n---\nvolcano weather report\n"})
+        assert not err and "Similar existing memos" not in text, text
         rel = json.loads(raw("GET", "/ui/api/related?path=trade-memory/plan.md", headers=ck)[2])["related"]
         assert isinstance(rel, list)
         assert "isolated_note" in json.loads(raw("GET", "/ui/api/lint", headers=ck)[2])
