@@ -148,7 +148,7 @@ async function loadGraph() {
     .onEngineStop(() => { if (!loadGraph.fitted) { Graph.zoomToFit(400, 40); loadGraph.fitted = true; } })
     .onNodeHover((n) => { hover = n ? n.id : null; if (!selected) setFocus(hover); $("g2d").style.cursor = n ? "pointer" : ""; Graph.linkDirectionalParticles(Graph.linkDirectionalParticles()); animateHover(); })
     .onNodeClick((n) => openNote(n.id))
-    .onBackgroundClick(() => { selected = null; setFocus(null); if ($("local").checked) applyView(true); });
+    .onBackgroundClick(() => deselect());
   // More room than the force-graph defaults (-30 / 30) so labels do not pile up.
   Graph.d3Force("charge").strength(-90); Graph.d3Force("link").distance(42);
   new ResizeObserver(() => { const w = $("graph").clientWidth, h = $("graph").clientHeight; Graph.width(w).height(h); Graph3D?.width(w).height(h); }).observe($("graph"));
@@ -171,7 +171,7 @@ async function toggle3D() {
     .linkColor((l) => (linkLit(l) ? css("--accent") : css("--muted"))).linkOpacity(0.35)
     .cooldownTicks(300)
     .onNodeClick((n) => openNote(n.id))
-    .onBackgroundClick(() => { selected = null; setFocus(null); });
+    .onBackgroundClick(() => deselect());
   applyView();
 }
 
@@ -231,6 +231,15 @@ function splitFront(text) {
 }
 
 const ago = (sec) => { const d = Date.now() / 1000 - sec; return d < 90 ? "just now" : d < 3600 ? `${Math.round(d / 60)} min ago` : d < 86400 ? `${Math.round(d / 3600)} h ago` : new Date(sec * 1000).toLocaleDateString(); };
+
+// Clicking empty canvas clears the selection and the #note in the URL, so a refresh opens nothing.
+function deselect({ push = true } = {}) {
+  if (editing) return; // keep unsaved edits on screen
+  selected = null; current = null; setFocus(null);
+  if (push && location.hash) history.pushState(null, "", location.pathname + location.search);
+  $("note").replaceChildren(el("div", "note-empty muted", "Select a node or a search result."));
+  if ($("local").checked) applyView(true);
+}
 
 async function openNote(id, { push = true } = {}) {
   if (editing && !confirm("Discard your unsaved changes?")) return;
@@ -366,7 +375,7 @@ $("note").addEventListener("click", (e) => {
   if (/^[^:/]+\.md$/.test(href) && current) { e.preventDefault(); openNote(current.path.split("/").slice(0, -1).concat(href).join("/")); return; }
   if (/^https?:/.test(href)) { a.target = "_blank"; a.rel = "noopener noreferrer"; }
 });
-window.addEventListener("popstate", () => { const id = decodeURIComponent(location.hash.slice(1)); if (id) openNote(id, { push: false }); });
+window.addEventListener("popstate", () => { const id = decodeURIComponent(location.hash.slice(1)); if (id) openNote(id, { push: false }); else deselect({ push: false }); });
 window.addEventListener("beforeunload", (e) => { if (editing) e.preventDefault(); });
 
 // ---------------------------------------------------------------- new memo
