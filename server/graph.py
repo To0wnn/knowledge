@@ -108,9 +108,43 @@ def build(files: dict[str, str]) -> dict:
     for a, b in edges:
         degree[a] = degree.get(a, 0) + 1
         degree[b] = degree.get(b, 0) + 1
-    nodes = [{"id": rel, "label": label_of(rel, text, titles), "group": group_of(rel, text), "project": project_of(rel),
-              "size": len(text), "degree": degree.get(rel, 0)} for rel, text in sorted(keep.items())]
+    labels = {rel: label_of(rel, text, titles) for rel, text in keep.items()}
+    cluster = clusters(sorted(keep), edges, degree, labels)
+    nodes = [{"id": rel, "label": labels[rel], "group": group_of(rel, text), "project": project_of(rel),
+              "cluster": cluster[rel], "size": len(text), "degree": degree.get(rel, 0)} for rel, text in sorted(keep.items())]
     return {"nodes": nodes, "links": [{"source": a, "target": b} for a, b in sorted(edges)]}
+
+
+def clusters(ids: list[str], edges: set[tuple[str, str]], degree: dict[str, int], labels: dict[str, str]) -> dict[str, str]:
+    """Topic clusters by label propagation: each node repeatedly takes the label most common among its neighbours
+    (ties: the label of the best-connected node), in a fixed order, so the result is deterministic. Index files are
+    left out (they link to everything). A cluster is named after its best-connected member."""
+    hubs = {i for i in ids if i.endswith("/MEMORY.md")}
+    nb: dict[str, list[str]] = {i: [] for i in ids}
+    for a, b in edges:
+        if a not in hubs and b not in hubs:
+            nb[a].append(b)
+            nb[b].append(a)
+    label = {i: i for i in ids}
+    order = sorted(ids, key=lambda i: (-degree.get(i, 0), i))
+    for _ in range(20):
+        changed = False
+        for i in order:
+            if not nb[i]:
+                continue
+            count: dict[str, int] = {}
+            for j in nb[i]:
+                count[label[j]] = count.get(label[j], 0) + 1
+            best = max(count, key=lambda lab: (count[lab], degree.get(lab, 0), lab))
+            if count[best] > count.get(label[i], 0) and best != label[i]:
+                label[i], changed = best, True
+        if not changed:
+            break
+    members: dict[str, list[str]] = {}
+    for i, lab in label.items():
+        members.setdefault(lab, []).append(i)
+    name = {lab: labels[max(m, key=lambda i: (degree.get(i, 0), i))] for lab, m in members.items()}
+    return {i: name[label[i]] if len(members[label[i]]) > 1 else "" for i in ids}
 
 
 if __name__ == "__main__":
@@ -143,5 +177,8 @@ if __name__ == "__main__":
     assert ids["claude/skills/forge-stack/SKILL.md"]["project"] == "shared"
     assert ("trade-memory/MEMORY.md", "trade-memory/a.md") in links and ("trade-memory/a.md", "memory/b_c.md") in links
     assert ("trade-memory/a.md", "trade/STATUS.md") in links and ("trade/FIXES_PLAN.md", "trade/STATUS.md") in links
-    assert ("trade-memory/a.md", "memory/a.md") not in links  # same slug resolves inside its own project
+    assert ("trade-memory/a.md", "memory/a.md") not in links
+    two = clusters(["a", "b", "c", "x", "y", "z", "lone"], {("a", "b"), ("b", "c"), ("a", "c"), ("x", "y"), ("y", "z"), ("x", "z")},
+                   {"a": 3, "b": 2, "c": 2, "x": 2, "y": 3, "z": 2}, {k: k.upper() for k in "abcxyz"} | {"lone": "L"})
+    assert two["a"] == two["b"] == two["c"] == "A" and two["x"] == two["y"] == two["z"] == "Y" and two["lone"] == "", two  # same slug resolves inside its own project
     print("ok", len(g["nodes"]), "nodes", len(g["links"]), "links")

@@ -180,11 +180,15 @@ class Index:
 index = Index()
 
 
+def writable_path(rel: str) -> bool:
+    # PurePosixPath.match: "*" stays within one directory level (fnmatch's "*" would also match "sub/x.md").
+    return any(PurePosixPath(rel).match(p) for p in WRITABLE)
+
+
 def check_writable(rel: str):
     if not device.get().get("write"):
         raise ToolError("this device token is read-only")
-    # PurePosixPath.match: "*" stays within one directory level (fnmatch's "*" would also match "sub/x.md").
-    if not any(PurePosixPath(rel).match(p) for p in WRITABLE):
+    if not writable_path(rel):
         raise ToolError(f"writes are allowed only for {', '.join(WRITABLE)}")
 
 
@@ -623,7 +627,8 @@ async def ui_static(request: Request):
     full = (STATIC / request.path_params["name"]).resolve()
     if STATIC.resolve() not in full.parents or not full.is_file():
         return PlainTextResponse("not found", status_code=404)
-    return FileResponse(full, headers={"Cache-Control": "public, max-age=86400"})
+    # no-cache = revalidate via ETag (a 304 on the LAN), so a deploy shows up at the next reload
+    return FileResponse(full, headers={"Cache-Control": "no-cache"})
 
 
 @server.custom_route("/ui/api/graph", methods=["GET"])
@@ -643,7 +648,77 @@ async def ui_note(request: Request):
         data = full.read_bytes()
     except (ToolError, OSError) as e:
         return JSONResponse({"error": str(e)}, status_code=404)
-    return JSONResponse({"path": rel, "version": version(data), "text": data.decode("utf-8", errors="replace")})
+    return JSONResponse({"path": rel, "version": version(data), "text": data.decode("utf-8", errors="replace"),
+                         "writable": bool(device.get().get("write")) and writable_path(rel)})
+
+
+@server.custom_route("/ui/api/save", methods=["POST"])
+async def ui_save(request: Request):
+    """Save a note from the UI editor with the same conflict check as knowledge_write. A new memo can also get its
+    line in the project's MEMORY.md (index_line), like Claude adds one."""
+    body = await request.json()
+    try:
+        full, rel = resolve(body.get("path", ""))
+        line = " ".join(str(body.get("index_line", "")).split())  # one line, no injected newlines
+        root = rel.split("/", 1)[0]
+        if line and (root not in {mem for _, mem in PROJECTS.values()} or rel.count("/") != 1):
+            raise ToolError("an index line is only for a memo directly in a memory root")  # checked before writing
+        await knowledge_write(rel, body.get("text", ""), body.get("base_version", ""))
+        if line:
+            await append_line(f"{root}/MEMORY.md", line)
+    except (ToolError, KeyError) as e:
+        return JSONResponse({"error": str(e)}, status_code=409)
+    return JSONResponse({"path": rel, "version": version(full.read_bytes())})
+
+
+async def append_line(path: str, line: str):
+    full, rel = resolve(path)
+    check_writable(rel)
+    async with _locks.setdefault(rel, asyncio.Lock()):
+        for _ in range(5):
+            current = full.read_bytes() if full.exists() else None
+            new = (current or b"").rstrip(b"\n") + b"\n" + line.encode() + b"\n"
+            if replace_if_unchanged(full, current, new.lstrip(b"\n")):
+                break
+        else:
+            raise ToolError(f"{rel} kept changing; try again")
+        index.refresh(rel)
+    audit("edit", rel)
+
+
+def last_writers() -> dict[str, tuple[float, str]]:
+    """rel -> (time, device) of the newest server write per file, from the tail of the audit log."""
+    out: dict[str, tuple[float, str]] = {}
+    try:
+        with AUDIT.open("rb") as f:
+            f.seek(max(0, AUDIT.stat().st_size - 512_000))
+            tail = f.read().decode("utf-8", errors="replace").splitlines()[1:]
+    except OSError:
+        return out
+    for line in tail:
+        bits = line.split(" ", 3)
+        if len(bits) == 4:
+            try:
+                out[bits[3]] = (time.mktime(time.strptime(bits[0], "%Y-%m-%dT%H:%M:%S")), bits[1])
+            except ValueError:
+                pass
+    return out
+
+
+@server.custom_route("/ui/api/recent", methods=["GET"])
+async def ui_recent(request: Request):
+    """Newest changed Markdown files of a project, with the device when the change came through this server
+    (otherwise it was edited natively on the VM)."""
+    roots = PROJECTS.get(request.query_params.get("project", "homelab"), PROJECTS["homelab"])
+    with index.lock:
+        rows = sorted(((v[0], rel) for rel, v in index.files.items() if rel.split("/", 1)[0] in roots
+                       and rel.endswith(".md")), reverse=True)[:60]
+    who = last_writers()
+    out = []
+    for ns, rel in rows:
+        t, dev = who.get(rel, (0, ""))
+        out.append({"path": rel, "mtime": ns // 1_000_000_000, "by": dev if abs(t - ns / 1e9) < 120 else "VM"})
+    return JSONResponse({"files": out})
 
 
 @server.custom_route("/ui/api/search", methods=["GET"])
