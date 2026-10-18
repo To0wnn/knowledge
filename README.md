@@ -190,6 +190,17 @@ Do **not** install the plugin on the VM itself: sessions there read the files na
 (needs `inotify-tools`, linger on, and `~/.config/knowledge-server/watcher.token` = the `vm-watcher` token).
 With option B the watcher runs wherever the files live (forge) instead.
 
+## Weekly lint report (VM)
+
+`watcher/lint-report.py` sends the lint findings that are **new since the last run** to Matrix (room Homelab Alerts),
+silent when nothing is new. Timer: `ln -s ~/knowledge/watcher/lint-report.{service,timer} ~/.config/systemd/user/ &&
+systemctl --user enable --now lint-report.timer` (Monday 08:00). Needs `~/.config/knowledge-server/report.token`
+(`token.py add vm-lint-report --read-only`) and `secret MATRIX_BOT_TOKEN`. State in
+`~/.local/state/knowledge-lint-report.json`; `--init` stores a baseline without sending, `--dry-run` prints.
+
+When `knowledge_write` creates a memo, the answer lists existing memos in the same memory root with a similar
+meaning (score ≥ 0.72, calibrated on embeddinggemma), so the writer can merge instead of duplicating.
+
 ## Deploy / update the server
 
 `./deploy.sh` runs the self-test, rsyncs `server/` to the forge stack and rebuilds. Bump versions in

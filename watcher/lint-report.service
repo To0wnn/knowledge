@@ -1,0 +1,7 @@
+[Unit]
+Description=Send new knowledge lint findings to Matrix (weekly)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/knowledge/watcher/lint-report.py
