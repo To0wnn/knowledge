@@ -253,7 +253,11 @@ async function openNote(id, { push = true } = {}) {
   selected = byId.has(note.path) ? note.path : null; setFocus(selected);
   if ($("local").checked) applyView(true);
   const n = byId.get(note.path);
-  if (n && Graph && n.x != null && !$("local").checked) { Graph.centerAt(n.x, n.y, 600); Graph.zoom(Math.max(Graph.zoom(), 2.5), 600); }
+  // Zoom to the note and everything it links to, capped so a lone note is not blown up.
+  if (n && Graph && n.x != null && !$("local").checked) {
+    Graph.zoomToFit(600, 90, (m) => focusSet.has(m.id));
+    setTimeout(() => { if (Graph.zoom() > 4) Graph.zoom(4, 300); }, 650);
+  }
   renderNote();
 }
 
