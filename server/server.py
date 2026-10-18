@@ -124,6 +124,24 @@ def redact(text: str) -> str:
     return SECRET_LABEL.sub(lambda m: m.group(1) + "‹secret›", SECRET_TOKEN.sub(one, text))
 
 
+def contains_secret(text: str) -> bool:
+    """True when the text holds a known secret value: a word, or part of user/pass, KEY=value or url:token."""
+    hashes = secret_hashes()
+    if not hashes:
+        return False
+    for tok in SECRET_TOKEN.findall(text):
+        for part in [tok, *re.split(r"[=:@/]", tok)]:
+            if part and hashlib.sha256(part.encode()).hexdigest() in hashes:
+                return True
+    return False
+
+
+def refuse_secrets(text: str):
+    if contains_secret(text):
+        raise ToolError("this text contains a known secret value: store it with `secret set NAME` (value on stdin) "
+                        "and write ‹secret:NAME› in the note instead")
+
+
 def in_scope(rel: str) -> bool:
     roots = device.get().get("roots")
     return not roots or rel.split("/", 1)[0] in roots
@@ -414,6 +432,7 @@ async def knowledge_edit(path: str, old_string: str, new_string: str) -> str:
     file are kept. Fails if old_string is missing or not unique: read the file again and retry."""
     full, rel = resolve(path)
     check_writable(rel)
+    refuse_secrets(new_string)
     async with _locks.setdefault(rel, asyncio.Lock()):
         for _ in range(5):  # retry on fresh content when a native edit on the VM landed in between
             data = full.read_bytes()
@@ -437,6 +456,7 @@ async def knowledge_write(path: str, content: str, base_version: str = "") -> st
     when another session changed the file since then. Leave base_version empty only to create a new file."""
     full, rel = resolve(path)
     check_writable(rel)
+    refuse_secrets(content)
     async with _locks.setdefault(rel, asyncio.Lock()):
         current = full.read_bytes() if full.exists() else None
         if current is not None and base_version != version(current):
@@ -663,7 +683,10 @@ def context_parts(project: str = "homelab") -> list[str]:
         "(the VM), not on this machine; other sessions on other devices use the same files live. Read memory files with "
         f"knowledge_read('{mem}/<file>'), search with knowledge_search, and save or update memories there (knowledge_edit, "
         f"or knowledge_write for a new file, plus one index line in {mem}/MEMORY.md) instead of local files. Docs of this "
-        f"project: {docs}/<file>; other projects: {others}; skills: claude/skills/<name>/SKILL.md. Search by meaning: "
+        f"project: {docs}/<file>; other projects: {others}; skills: claude/skills/<name>/SKILL.md. Secrets appear as "
+        "‹secret:NAME›: use the value inside a command with $(secret NAME) (never print it), store a new one with "
+        "`secret set NAME` (value on stdin) and write ‹secret:NAME› in notes; writes containing a known secret are "
+        "refused. Search by meaning: "
         "knowledge_semantic_search; context of one note: knowledge_related. New raw material "
         "(a URL, PDF or pasted text): knowledge_ingest, then turn it into memos. Housekeeping: knowledge_lint. Graph view "
         "for the user: https://knowledge.to0wnn.com/ui"
@@ -761,14 +784,14 @@ async def sessions_route(request: Request):
     mem = PROJECTS[project][1]
     rel = f"{mem}/sessions/{time.strftime('%Y-%m')}.md"
     lines = [f"\n## {time.strftime('%Y-%m-%d %H:%M')} · {project} · {device.get().get('name', '?')} · "
-             f"{str(b.get('reason', 'end'))[:20]} · sessie {str(b.get('session_id', ''))[:8]}",
-             *[f"- Vraag: {p}" for p in prompts]]
+             f"{str(b.get('reason', 'end'))[:20]} · session {str(b.get('session_id', ''))[:8]}",
+             *[f"- Asked: {p}" for p in prompts]]
     files = sorted({str(f)[:160] for f in b.get("files", [])})[:20]
     if files:
-        lines.append(f"- Gewijzigd: {', '.join(files)}")
+        lines.append(f"- Changed: {', '.join(files)}")
     summary = " ".join(str(b.get("summary", "")).split())[:700]
     if summary:
-        lines.append(f"- Afsluiting: {summary}")
+        lines.append(f"- Outcome: {summary}")
     entry = redact("\n".join(lines))
     try:
         full, rel = resolve(rel)
@@ -776,7 +799,7 @@ async def sessions_route(request: Request):
         async with _locks.setdefault(rel, asyncio.Lock()):
             for _ in range(5):
                 current = full.read_bytes() if full.exists() else None
-                base = current or f"# Sessies {time.strftime('%Y-%m')} ({project})\n\nAutomatisch per Claude Code-sessie (vragen, gewijzigde bestanden, afsluiting).\n".encode()
+                base = current or f"# Sessions {time.strftime('%Y-%m')} ({project})\n\nOne entry per Claude Code session (prompts, changed files, outcome), written automatically.\n".encode()
                 if replace_if_unchanged(full, current, base + entry.encode() + b"\n"):
                     break
             index.refresh(rel)
