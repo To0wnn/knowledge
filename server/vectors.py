@@ -3,9 +3,10 @@
 Markdown files are split into chunks of ~1200 characters on paragraph boundaries; each chunk is embedded with a local
 model (embeddinggemma-300m through fastembed/ONNX, no GPU, no external service; best of four models in a test on the
 real memos, 18 Oct). Vectors live in RAM as one normalized matrix, so a query is one matrix product (~1 ms for a few
-thousand chunks) plus embedding the query (~50 ms). They are cached on disk by chunk hash: a restart or an edit only
-embeds new text. One background thread with 2 CPU threads and small batches keeps forge responsive (~1 GB RAM);
-the first full run takes about an hour, later edits seconds.
+thousand chunks) plus embedding the query (~50 ms). They are cached on disk by chunk hash (saved every few hundred
+chunks), so a restart or an edit only embeds new text. One background thread at nice 10 with 6 CPU threads: the
+kernel serves every other forge service first. Measured on forge (18 Oct): 6 threads 5.5 chunks/s (full run ~13 min),
+2 threads 3.2/s; the Intel UHD 770 iGPU via OpenVINO only 1.2/s (and out of memory at batch 16), so no GPU.
 """
 import hashlib
 import os
@@ -22,7 +23,7 @@ CACHE = Path(os.environ.get("KNOWLEDGE_VECTORS", Path.home() / ".local/state/kno
 QUERY_PREFIX = "task: search result | query: "  # embeddinggemma prompt format; documents get "title: ... | text: ..."
 CHUNK_CHARS = 1200
 MAX_FILE = 300_000  # bigger files (generated logs such as trade/claude_insights.md) stay regex-only
-THREADS = int(os.environ.get("KNOWLEDGE_EMBED_THREADS", "2"))
+THREADS = int(os.environ.get("KNOWLEDGE_EMBED_THREADS", "6"))
 
 
 def title_of(rel: str, text: str) -> str:
@@ -132,8 +133,9 @@ class Vectors:
             for h, v in zip(batch, self.embed([texts[h] for h in batch])):
                 self.cache[h] = v
             self.pending = len(todo) - i - len(batch)
-            if i % 640 == 0:
+            if i % 640 == 0:  # make finished chunks searchable and keep them across a restart
                 self.publish(wanted)
+                self.save()
         live = {h for *_, h in wanted}
         changed = bool(todo) or len(self.cache) != len(live)
         self.cache = {h: v for h, v in self.cache.items() if h in live}
