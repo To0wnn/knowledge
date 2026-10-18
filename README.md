@@ -27,7 +27,7 @@ The plugin's SessionStart hook sends `$CLAUDE_PROJECT_DIR`; the server picks the
 trade, `…/anpitek/…` → anpitek, anything else → homelab) and returns that project's `CLAUDE.md` and memory index,
 like a native session in that directory gets. Code, logs and state files of the code repos are never indexed or
 served (`venv/`, `.next/` skipped too); code reaches other devices through git. The web UI has a project switch
-(homelab / anpitek / trade, one graph each; skills show in every project).
+(homelab / anpitek / trade, one graph each; a skill shows in the projects whose notes mention it, an unmentioned one in homelab).
 
 **Web UI features (18 Oct):** one graph per project; colour by type or by topic (deterministic label-propagation
 clusters, named after their best-connected note); local graph (1–3 steps around the selected note); optional 3D view

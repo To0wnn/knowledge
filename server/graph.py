@@ -100,6 +100,10 @@ def build(files: dict[str, str]) -> dict:
     docs = {rel.split("/")[1][:2]: rel for rel in keep if rel.startswith("homelab/") and not rel.startswith("homelab/sources/")}
     skills = {rel.split("/")[2]: rel for rel in keep if rel.startswith("claude/skills/")}
     sources = {rel.split("/")[-1]: rel for rel in keep if rel.startswith("homelab/sources/")}
+    # Any mention of a skill's name counts ("`forge-stack`", "skill forge-stack"); names with a hyphen only,
+    # so a one-word skill name does not match ordinary prose. Paths count too.
+    names = sorted((n for n in skills if "-" in n), key=len, reverse=True)
+    skill_names = re.compile(r"(?<![\w-])(" + "|".join(map(re.escape, names)) + r")(?![\w-])") if names else re.compile(r"(?!)")
     by_name: dict[tuple[str, str], str] = {}
     for rel in keep:
         by_name.setdefault((project_of(rel), rel.split("/")[-1]), rel)
@@ -116,6 +120,7 @@ def build(files: dict[str, str]) -> dict:
         for a, b in DOC_WORD.findall(text):
             targets |= {docs.get(a), docs.get(b)}
         targets |= {skills.get(s) for s in SKILL_REF.findall(text)}
+        targets |= {skills.get(s) for s in skill_names.findall(text)}
         targets |= {sources.get(s) for s in SOURCE_REF.findall(text)}
         targets |= {by_name.get((project_of(rel), n)) for n in BARE_MD.findall(text)}
         for t in targets:
@@ -128,7 +133,17 @@ def build(files: dict[str, str]) -> dict:
     labels = {rel: label_of(rel, text, titles) for rel, text in keep.items()}
     groups = {rel: group_of(rel, text) for rel, text in keep.items()}
     comm, communities = louvain(sorted(keep), edges, degree, labels)
-    nodes = [{"id": rel, "label": labels[rel], "group": groups[rel], "project": project_of(rel),
+    # Shared notes (skills) show only in the projects that link to them; unlinked ones in homelab, where lint flags them.
+    linked = {}
+    for a, b in edges:
+        linked.setdefault(a, set()).add(project_of(b)); linked.setdefault(b, set()).add(project_of(a))
+    def shown_in(rel):
+        if project_of(rel) != "shared":
+            return project_of(rel)
+        ps = linked.get(rel, set()) - {"shared"}
+        return ps.pop() if len(ps) == 1 else "shared" if ps else "homelab"
+    nodes = [{"id": rel, "label": labels[rel], "group": groups[rel], "project": shown_in(rel),
+              **({"projects": sorted(linked[rel] - {"shared"})} if shown_in(rel) == "shared" else {}),
               "cluster": comm[rel], "size": len(text), "degree": degree.get(rel, 0), "sources": sources_of(text)}
              for rel, text in sorted(keep.items())]
     graph = {"nodes": nodes, "links": [{"source": a, "target": b} for a, b in sorted(edges)], "communities": communities}
@@ -264,7 +279,17 @@ if __name__ == "__main__":
     assert ids["trade-memory/a.md"]["label"] == "Bot plan" and ids["trade-memory/a.md"]["project"] == "trade"
     assert ids["trade-memory/MEMORY.md"]["group"] == "index" and ids["anpitek/website/OVERZICHT.md"]["project"] == "anpitek"
     assert "trade/bot.py" not in ids and "anpitek/boekhouding/.agents/skills/x.md" not in ids
-    assert ids["claude/skills/forge-stack/SKILL.md"]["project"] == "shared"
+    assert ids["claude/skills/forge-stack/SKILL.md"]["project"] == "homelab"  # linked from homelab only
+    s3 = build({"memory/a.md": "skills in ~/.claude/skills/: `forge-stack`, wolf-spel", "trade/X.md": "use forge-stack",
+                "claude/skills/forge-stack/SKILL.md": "s", "claude/skills/wolf-spel/SKILL.md": "s",
+                "claude/skills/lonely-one/SKILL.md": "s", "memory/b.md": "not-wolf-spelx, forge-stacks"})
+    p3 = {n["id"]: n["project"] for n in s3["nodes"]}
+    l3 = {(l["source"], l["target"]) for l in s3["links"]}
+    assert ("memory/a.md", "claude/skills/wolf-spel/SKILL.md") in l3 and ("trade/X.md", "claude/skills/forge-stack/SKILL.md") in l3, l3
+    assert not any(a == "memory/b.md" for a, _ in l3), l3  # no partial-name matches
+    assert [n.get("projects") for n in s3["nodes"] if n["id"] == "claude/skills/forge-stack/SKILL.md"] == [["homelab", "trade"]]
+    assert p3["claude/skills/forge-stack/SKILL.md"] == "shared" and p3["claude/skills/wolf-spel/SKILL.md"] == "homelab"
+    assert p3["claude/skills/lonely-one/SKILL.md"] == "homelab", p3
     assert ("trade-memory/MEMORY.md", "trade-memory/a.md") in links and ("trade-memory/a.md", "memory/b_c.md") in links
     assert ("trade-memory/a.md", "trade/STATUS.md") in links and ("trade/FIXES_PLAN.md", "trade/STATUS.md") in links
     assert ("trade-memory/a.md", "memory/a.md") not in links
