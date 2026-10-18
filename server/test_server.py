@@ -274,6 +274,24 @@ def main():
         one = json.loads(raw("GET", f"/ui/api/history?path=trade-memory/hist.md&version={hv[0]['id']}", headers=ck)[2])
         assert one["text"] == "v3 native\n" and "+v3 native" in one["diff"], one
         assert raw("GET", "/ui/api/history?path=trade-memory/hist.md&version=../../x", headers=ck)[0] == 404
+        # Session log: the hook script posts prompts/files/summary; server redacts and appends per project and month.
+        tr = tmp / "transcript.jsonl"
+        rows = [{"type": "user", "message": {"content": "fix de trade bot, wachtwoord Sup3rSecret99"}},
+                {"type": "user", "isMeta": True, "message": {"content": "<local-command-caveat>x"}},
+                {"type": "user", "message": {"content": [{"type": "tool_result", "content": "x"}]}},
+                {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Edit", "input": {"file_path": "/home/x/trade_bot/bot.py"}},
+                                                              {"type": "text", "text": "Klaar: bot.py gefixt."}]}}]
+        tr.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+        hook = json.dumps({"session_id": "abcdef1234", "transcript_path": str(tr), "cwd": "/home/x/trade_bot", "reason": "clear"})
+        senv = {**os.environ, "KNOWLEDGE_URL": BASE, "KNOWLEDGE_TOKEN": "rw-token", "XDG_CACHE_HOME": str(tmp / "cache"), "HOME": str(tmp)}
+        script = str(Path(__file__).parents[1] / "plugin/hooks/session-log.py")
+        subprocess.run([sys.executable, script], input=hook, text=True, env=senv, check=True)
+        log = (tmem / "sessions" / f"{time.strftime('%Y-%m')}.md").read_text()
+        assert "· trade · laptop · clear · sessie abcdef12" in log and "Vraag: fix de trade bot" in log, log
+        assert "Sup3rSecret99" not in log and "bot.py" in log and "Afsluiting: Klaar" in log and "caveat" not in log, log
+        subprocess.run([sys.executable, script], input=hook, text=True, env=senv, check=True)  # nothing new: no entry
+        assert (tmem / "sessions" / f"{time.strftime('%Y-%m')}.md").read_text() == log
+        assert http("POST", "/sessions", {"prompts": ["x"], "cwd": "/"}, token="ro-token")[0] == 403
         # Caching: vendor files immutable, app files revalidated, graph 304 on an unchanged ETag.
         assert "immutable" in raw("GET", "/ui/static/vendor/force-graph-1.52.0.js")[1]["cache-control"]
         assert raw("GET", "/ui/static/app.js")[1]["cache-control"] == "no-cache"
