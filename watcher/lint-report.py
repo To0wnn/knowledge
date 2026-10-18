@@ -9,6 +9,7 @@ Config: ~/.config/knowledge-server/report.token (read-only device token), the Ma
 Standard library only.
 """
 import json
+import re
 import subprocess
 import sys
 import time
@@ -22,6 +23,8 @@ ROOM = "!<room-id>:to0wnn"  # Homelab Alerts
 TOKEN = Path.home() / ".config/knowledge-server/report.token"
 STATE = Path.home() / ".local/state/knowledge-lint-report.json"
 SHOW = 20
+COMPOSE = Path(__file__).resolve().parent.parent / "server/compose.yaml"  # the memory dirs the server serves
+PROJECTS_DIR = Path.home() / ".claude/projects"
 
 
 def findings() -> set[str]:
@@ -29,6 +32,18 @@ def findings() -> set[str]:
     with urllib.request.urlopen(req, timeout=60) as r:
         report = json.load(r)
     return {f"{check}: {item}" for check, items in report.items() for item in items}
+
+
+def unserved(projects_dir: Path = PROJECTS_DIR, compose: Path = COMPOSE) -> set[str]:
+    """Claude Code memory dirs on the VM that hold memos but are not served by the knowledge server: a new working
+    folder got its own memory. Fix: add it as a project, or point the folder's autoMemoryDirectory at an existing one."""
+    served = set(re.findall(r'device: ":(/[^"]+/memory)"', compose.read_text()))
+    out = set()
+    for mem in sorted(projects_dir.glob("*/memory")):
+        memos = [f for f in mem.glob("*.md") if f.name != "MEMORY.md"]
+        if memos and str(mem) not in served:
+            out.add(f"unserved_memory: {mem} ({len(memos)} memos)")
+    return out
 
 
 def message(new: set[str], total: int, resolved: int) -> str:
@@ -55,7 +70,7 @@ def diff(previous: set[str], current: set[str]) -> tuple[set[str], int]:
 
 
 def main() -> None:
-    current = findings()
+    current = findings() | unserved()
     previous = set(json.loads(STATE.read_text())["findings"]) if STATE.exists() else set()
     new, resolved = diff(previous, current)
     if "--init" not in sys.argv and new:
@@ -71,6 +86,14 @@ if __name__ == "__main__":
     if "--selftest" in sys.argv:
         new, resolved = diff({"a: 1", "b: 2"}, {"b: 2", "c: 3"})
         assert new == {"c: 3"} and resolved == 1
+        import tempfile
+        with tempfile.TemporaryDirectory() as t:
+            t = Path(t)
+            (t / "p/-home-a/memory").mkdir(parents=True); (t / "p/-home-a/memory/x.md").write_text("x")
+            (t / "p/-home-b/memory").mkdir(parents=True); (t / "p/-home-b/memory/MEMORY.md").write_text("")
+            (t / "p/-home-c/memory").mkdir(parents=True); (t / "p/-home-c/memory/y.md").write_text("y")
+            (t / "compose.yaml").write_text(f'device: ":{t}/p/-home-c/memory"')
+            assert unserved(t / "p", t / "compose.yaml") == {f"unserved_memory: {t}/p/-home-a/memory (1 memos)"}
         assert message({"x: y"}, 3, 1).startswith("Knowledge lint: 1 new finding(s) since last week (3 open, 1 resolved).")
         print("ok")
     else:

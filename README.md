@@ -182,7 +182,11 @@ sees and edits them in the normal Bitwarden apps and the automation cannot see t
    `"autoMemoryEnabled": false` in `~/.claude/settings.json`.
 5. Start a session: the first lines show `[knowledge context part 1/2]`; `/mcp` lists `knowledge`.
 
-Do **not** install the plugin on the VM itself: sessions there read the files natively.
+Do **not** install the plugin on the VM itself: sessions there read the files natively. They do get the MCP server (user scope, token
+`vm-sessions`) for search across all projects: `claude mcp add --scope user --transport http knowledge
+https://knowledge.to0wnn.com/mcp --header "Authorization: Bearer <token>"`. A small side folder that is no project
+of its own shares the memory of the project it belongs to via `autoMemoryDirectory` in its
+`.claude/settings.local.json`; the weekly report lists memory dirs with memos that the server does not serve.
 
 ## Watcher on the VM (option A)
 
