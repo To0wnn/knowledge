@@ -92,7 +92,7 @@ def resolve(path: str) -> tuple[Path, str]:
 # A token can be limited to some roots ("roots": [...]) and can get every known secret masked on the way out
 # ("redact": true): the PA's read mail from outside, so a crafted mail must not be able to make them leak a password.
 SECRET_TOKEN = re.compile(r"[^\s`'\"<>()\[\]{},;|*]+")
-SECRET_LABEL = re.compile(r"((?:wachtwoord|password|passwd|token|api[-_ ]?key|secret)\s*[:=]?\s*`?)([A-Za-z0-9_\-+/=@!.$#%^&]{8,})", re.I)
+SECRET_LABEL = re.compile(r"((?:wachtwoord|password|passwd|token|api[-_ ]?key|secret)\s*[|:=]?\s*`?)([A-Za-z0-9_\-+/=@!.$#%^&]{8,})", re.I)
 _secrets_cache: tuple[int, int, frozenset] = (0, 0, frozenset())
 
 
