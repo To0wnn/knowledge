@@ -84,10 +84,29 @@ def build(files: dict[str, str]) -> dict:
                 or (rel.startswith("homelab/sources/") and parts[-1] != "LOG.md") \
                 or (rel.startswith("claude/skills/") and parts[-1] == "SKILL.md" and len(parts) == 4):
             keep[rel] = text
-    titles = {}
+    titles, sections = {}, {}
     for mem in MEMORY_ROOTS:
-        for m in re.finditer(r"^- \[([^\]]+)\]\(([^)]+\.md)\)", files.get(f"{mem}/MEMORY.md", ""), re.M):
-            titles[f"{mem}/{m.group(2)}"] = m.group(1)
+        section = ""
+        for line in files.get(f"{mem}/MEMORY.md", "").splitlines():
+            if line.startswith("## "):
+                section = line[3:].strip()
+            elif m := re.match(r"- \[([^\]]+)\]\(([^)]+\.md)\)", line):
+                titles[f"{mem}/{m.group(2)}"] = m.group(1)
+                if section:
+                    sections[f"{mem}/{m.group(2)}"] = section  # the user's own grouping of memos
+    # Projects without MEMORY.md headings: a doc's subfolder ("gema-truckwaardering"), or a file-name family of 3+
+    # files ("FABLE_*", "OPUS_REVIEW_*") is its section.
+    headed = {project_of(r) for r in sections}
+    flat = [r for r in keep if project_of(r) not in headed | {"shared"} and not mem_root(r)]
+    family = {}
+    for r in flat:
+        family.setdefault(r.split("/")[-1].split("_")[0], []).append(r)
+    for r in flat:
+        parts, head = r.split("/"), r.split("/")[-1].split("_")[0]
+        if len(parts) >= 3:
+            sections[r] = parts[1]
+        elif "_" in parts[-1] and len(family[head]) >= 3:
+            sections[r] = head.capitalize()
     by_slug = {}  # slug -> memo, and (memory root, slug) -> memo so a link prefers its own project's memo
     for rel, text in keep.items():
         if mem_root(rel):
@@ -126,13 +145,16 @@ def build(files: dict[str, str]) -> dict:
         for t in targets:
             if t and t != rel and t in keep:
                 edges.add((rel, t))
+    # MEMORY.md links to every memo: a star that only adds clutter. The index stays readable and searchable.
+    edges = {(a, b) for a, b in edges if not a.endswith("/MEMORY.md") and not b.endswith("/MEMORY.md")}
+    keep = {rel: text for rel, text in keep.items() if not rel.endswith("/MEMORY.md")}
     degree: dict[str, int] = {}
     for a, b in edges:
         degree[a] = degree.get(a, 0) + 1
         degree[b] = degree.get(b, 0) + 1
     labels = {rel: label_of(rel, text, titles) for rel, text in keep.items()}
     groups = {rel: group_of(rel, text) for rel, text in keep.items()}
-    comm, communities = louvain(sorted(keep), edges, degree, labels)
+    comm, communities = louvain(sorted(keep), edges, degree, labels, sections)
     # Shared notes (skills) show only in the projects that link to them; unlinked ones in homelab, where lint flags them.
     linked = {}
     for a, b in edges:
@@ -159,22 +181,35 @@ def topic_graph(ids, edges) -> nx.Graph:
     return g
 
 
-def louvain(ids, edges, degree, labels) -> tuple[dict[str, str], list[dict]]:
-    """Louvain communities (fixed seed: same input, same topics). Each is named after its best-connected member and
-    scored by cohesion = internal edges / possible internal edges. Singletons get no topic."""
+def louvain(ids, edges, degree, labels, sections=None) -> tuple[dict[str, str], list[dict]]:
+    """Topics, scored by cohesion = internal edges / possible internal edges.
+    1. A note with a section takes it as its topic: its MEMORY.md heading (the user's own grouping), or for docs in
+       projects without headings their subfolder or file-name family (see build).
+    2. Other notes (and shared skills) join the topic most of their linked notes are in, repeated so chains settle.
+    3. What is still open forms Louvain communities (fixed seed) named after their best-connected member;
+       singletons there get no topic."""
+    sections = sections or {}
     g = topic_graph(ids, edges)
-    comm = {i: "" for i in ids}
+    comm = {i: sections.get(i, "") for i in ids}
+    same = lambda i, j: project_of(i) == "shared" or project_of(i) == project_of(j)
+    for _ in range(3):
+        for i in sorted((i for i in g if i not in sections), key=lambda i: (-degree.get(i, 0), i)):
+            near = [comm[j] for j in g[i] if comm[j] and same(i, j)]
+            if near:
+                comm[i] = max(set(near), key=lambda c: (near.count(c), c))
+    rest = [i for i in g if not comm[i]]
+    for members in nx.community.louvain_communities(g.subgraph(rest), seed=42):
+        if len(members) >= 2:
+            top = labels[max(members, key=lambda i: (degree.get(i, 0), i))]
+            for i in members:
+                comm[i] = top
     out = []
-    for members in nx.community.louvain_communities(g, seed=42):
-        if len(members) < 2:
-            continue
-        name = labels[max(members, key=lambda i: (degree.get(i, 0), i))]
-        inner = g.subgraph(members).number_of_edges()
-        n = len(members)
-        for i in members:
-            comm[i] = name
-        out.append({"name": name, "size": n, "cohesion": round(inner / (n * (n - 1) / 2), 3),
-                    "project": project_of(max(members, key=lambda i: (degree.get(i, 0), i)))})
+    for name in sorted({c for c in comm.values() if c}):
+        members = [i for i in g if comm[i] == name]
+        n, inner = len(members), g.subgraph(members).number_of_edges()
+        hub = max(members, key=lambda i: (degree.get(i, 0), i))
+        out.append({"name": name, "size": n, "cohesion": round(inner / (n * (n - 1) / 2), 3) if n > 1 else 0.0,
+                    "project": project_of(hub)})
     return comm, sorted(out, key=lambda c: (-c["size"], c["name"]))
 
 
@@ -275,9 +310,9 @@ if __name__ == "__main__":
     links = {(l["source"], l["target"]) for l in g["links"]}
     for t in ("memory/b_c.md", "homelab/14_FRAMEWORK.md", "claude/skills/forge-stack/SKILL.md", "homelab/sources/2026-10-18-x.md"):
         assert ("memory/a.md", t) in links, (t, links)
-    assert ("memory/MEMORY.md", "memory/a.md") in links and ("memory/b_c.md", "memory/a.md") in links
+    assert ("memory/b_c.md", "memory/a.md") in links and "memory/MEMORY.md" not in ids  # the index is not drawn
     assert ids["trade-memory/a.md"]["label"] == "Bot plan" and ids["trade-memory/a.md"]["project"] == "trade"
-    assert ids["trade-memory/MEMORY.md"]["group"] == "index" and ids["anpitek/website/OVERZICHT.md"]["project"] == "anpitek"
+    assert ids["anpitek/website/OVERZICHT.md"]["project"] == "anpitek"
     assert "trade/bot.py" not in ids and "anpitek/boekhouding/.agents/skills/x.md" not in ids
     assert ids["claude/skills/forge-stack/SKILL.md"]["project"] == "homelab"  # linked from homelab only
     s3 = build({"memory/a.md": "skills in ~/.claude/skills/: `forge-stack`, wolf-spel", "trade/X.md": "use forge-stack",
@@ -290,9 +325,18 @@ if __name__ == "__main__":
     assert [n.get("projects") for n in s3["nodes"] if n["id"] == "claude/skills/forge-stack/SKILL.md"] == [["homelab", "trade"]]
     assert p3["claude/skills/forge-stack/SKILL.md"] == "shared" and p3["claude/skills/wolf-spel/SKILL.md"] == "homelab"
     assert p3["claude/skills/lonely-one/SKILL.md"] == "homelab", p3
-    assert ("trade-memory/MEMORY.md", "trade-memory/a.md") in links and ("trade-memory/a.md", "memory/b_c.md") in links
+    assert ("trade-memory/a.md", "memory/b_c.md") in links
     assert ("trade-memory/a.md", "trade/STATUS.md") in links and ("trade/FIXES_PLAN.md", "trade/STATUS.md") in links
     assert ("trade-memory/a.md", "memory/a.md") not in links
+    s4 = build({"memory/MEMORY.md": "## Netwerk\n- [A](a.md) — x\n- [B](b.md) — x\n## Huis\n- [C](c.md) — x\n",
+                "memory/a.md": "[[b]] [[c]]", "memory/b.md": "[[a]]", "memory/c.md": "[[a]]", "memory/d.md": "[[a]]"})
+    c4 = {n["id"]: n["cluster"] for n in s4["nodes"]}
+    assert c4["memory/a.md"] == "Netwerk" and c4["memory/d.md"] == c4["memory/a.md"], c4  # section name; singleton adopted
+    s5 = build({"trade/FABLE_A.md": "x", "trade/FABLE_B.md": "x", "trade/FABLE_C.md": "x", "trade/ONE_X.md": "y",
+                "anpitek/website/X.md": "z", "trade-memory/m.md": "see FABLE_A.md"})
+    c5 = {n["id"]: n["cluster"] for n in s5["nodes"]}
+    assert c5["trade/FABLE_A.md"] == "Fable" and c5["trade/ONE_X.md"] == "" and c5["anpitek/website/X.md"] == "website", c5
+    assert c5["trade-memory/m.md"] == "Fable", c5  # joins its linked notes
     comm, cs = louvain(["a", "b", "c", "x", "y", "z", "lone"], {("a", "b"), ("b", "c"), ("a", "c"), ("x", "y"), ("y", "z"), ("x", "z"), ("c", "x")},
                        {"a": 2, "b": 2, "c": 3, "x": 3, "y": 2, "z": 2}, {k: k.upper() for k in "abcxyz"} | {"lone": "L"})
     assert comm["a"] == comm["b"] == comm["c"] == "C" and comm["x"] == comm["y"] == comm["z"] == "X" and comm["lone"] == "", comm

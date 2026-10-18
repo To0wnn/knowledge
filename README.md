@@ -58,7 +58,7 @@ version; the live stream sends the release in its `hello`, and an open tab that 
   via OpenVINO (1.2 chunks/s, OOM at batch 16) and rejected: slower than 2 CPU threads. Cache `/state/vectors.npz` (by chunk
   hash). Files > 300 KB stay regex-only. Container `mem_limit: 3g`. MCP tool `knowledge_semantic_search`; the UI shows
   "By meaning" results under the exact matches.
-- `graph.py`: **Louvain** communities (networkx, seed 42) with cohesion; **insights**: isolated notes, sparse topics
+- `graph.py`: **topics** with cohesion: a memo takes its MEMORY.md heading, a doc its subfolder or file-name family (3+ files, e.g. `FABLE_*`), other notes the topic of most of their links, the rest Louvain communities (networkx, seed 42); the MEMORY.md index itself is not drawn; **insights**: isolated notes, sparse topics
   (cohesion < 0.15), bridge notes (3+ topics), surprising cross-topic links (UI tab Insights; isolated memos and sparse
   topics also in lint); **relevance model** for `knowledge_related` and the note panel: link ×3, shared source ×4,
   Adamic-Adar ×1.5, same type ×1, meaning ×3 (cosine > 0.3).
