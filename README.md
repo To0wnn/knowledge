@@ -27,7 +27,15 @@ The plugin's SessionStart hook sends `$CLAUDE_PROJECT_DIR`; the server picks the
 trade, `…/anpitek/…` → anpitek, anything else → homelab) and returns that project's `CLAUDE.md` and memory index,
 like a native session in that directory gets. Code, logs and state files of the code repos are never indexed or
 served (`venv/`, `.next/` skipped too); code reaches other devices through git. The web UI has a project switch
-(all / homelab / anpitek / trade; skills show in every project); search and lint cover all projects.
+(homelab / anpitek / trade, one graph each; skills show in every project).
+
+**Web UI features (18 Oct):** one graph per project; colour by type or by topic (deterministic label-propagation
+clusters, named after their best-connected note); local graph (1–3 steps around the selected note); optional 3D view
+(vendored 3d-force-graph, loaded only when switched on); edit a note in the browser (same version check as
+`knowledge_write`, Ctrl+S) and create a memo with its index line; Recent tab (newest changes per project, with the
+device when the change came through the server, otherwise "edited on the VM"); deep links `/ui#<path>` with working
+back/forward; quick open Ctrl+K across projects; keys `/`, `1`–`3`, `E`, `L`, `Esc`. Static files are served with
+`Cache-Control: no-cache` (ETag revalidation), so a deploy shows up at the next reload.
 
 Never shared: `.git`, `.env`, `*.bak*`, keys, `credentials*`, the rest of `~/.claude` (logins, sessions, settings).
 

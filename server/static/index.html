@@ -10,20 +10,39 @@
 <header class="top">
   <div class="brand">Knowledge</div>
   <div id="projects" class="seg" role="group" aria-label="Project"></div>
-  <input id="q" type="search" placeholder="Search everything…  ( / )" autocomplete="off" aria-label="Search">
+  <input id="q" type="search" placeholder="Search this project…  ( / )" autocomplete="off" aria-label="Search">
   <nav class="tabs" role="tablist">
     <button role="tab" data-tab="results" aria-selected="true">Results</button>
+    <button role="tab" data-tab="recent">Recent</button>
     <button role="tab" data-tab="lint">Lint <span id="lint-count" class="badge"></span></button>
     <button role="tab" data-tab="ingest">Ingest</button>
   </nav>
+  <button id="quick-open" class="ghost" title="Quick open (Ctrl+K)">Open… <kbd>Ctrl K</kbd></button>
   <a class="logout" href="/ui/logout">Sign out</a>
 </header>
 
 <aside class="left">
-  <section id="tab-results" class="tab">
+  <section class="view">
+    <div class="row">
+      <div id="colorby" class="seg small" role="group" aria-label="Color by">
+        <button data-mode="type" aria-pressed="true">Type</button>
+        <button data-mode="cluster" aria-pressed="false">Topic</button>
+      </div>
+      <label class="check" title="Only the selected note and its neighbours (L)"><input id="local" type="checkbox"> Local</label>
+      <select id="depth" aria-label="Local graph depth" title="Steps from the selected note">
+        <option value="1">1 step</option><option value="2" selected>2 steps</option><option value="3">3 steps</option>
+      </select>
+      <button id="toggle3d" class="ghost small" aria-pressed="false" title="3D view">3D</button>
+    </div>
     <div id="filters" class="filters" aria-label="Show node types"></div>
+  </section>
+  <section id="tab-results" class="tab">
+    <button id="new-memo" class="ghost">+ New memo</button>
     <ol id="hits" class="hits"></ol>
-    <p id="hits-empty" class="muted">Type to search all docs and memory. Click a node to read it.</p>
+    <p id="hits-empty" class="muted">Type to search this project. Click a node to read it.</p>
+  </section>
+  <section id="tab-recent" class="tab" hidden>
+    <ol id="recent" class="hits"></ol>
   </section>
   <section id="tab-lint" class="tab" hidden>
     <p class="muted">Facts only: fix what is clearly wrong, ask Claude to judge the rest.</p>
@@ -45,11 +64,32 @@
   </section>
 </aside>
 
-<main id="graph" aria-label="Knowledge graph"></main>
+<main id="graph" aria-label="Knowledge graph"><div id="g2d"></div><div id="g3d" hidden></div></main>
 
 <aside class="right" id="note" aria-live="polite">
   <div class="note-empty muted">Select a node or a search result.</div>
 </aside>
+
+<dialog id="quick" aria-label="Quick open">
+  <input id="quick-q" type="search" placeholder="Open a note in any project…" autocomplete="off">
+  <ol id="quick-list" class="hits"></ol>
+  <p class="keys muted"><kbd>/</kbd> search · <kbd>Ctrl K</kbd> open · <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> project · <kbd>E</kbd> edit · <kbd>L</kbd> local graph · <kbd>Esc</kbd> close</p>
+</dialog>
+
+<dialog id="new-dialog" aria-label="New memo">
+  <form id="new-form" method="dialog">
+    <h2>New memo</h2>
+    <p class="muted" id="new-where"></p>
+    <label for="new-type">Type</label>
+    <select id="new-type"><option>project</option><option>feedback</option><option>reference</option><option>user</option></select>
+    <label for="new-title">Title</label>
+    <input id="new-title" type="text" required>
+    <label for="new-desc">One-line description (for the index)</label>
+    <input id="new-desc" type="text" required>
+    <p id="new-error" class="error" hidden></p>
+    <div class="actions"><button type="button" class="ghost" id="new-cancel">Cancel</button><button type="submit">Create</button></div>
+  </form>
+</dialog>
 
 <script src="/ui/static/vendor/force-graph-1.52.0.js"></script>
 <script src="/ui/static/vendor/marked-18.1.1.js"></script>

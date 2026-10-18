@@ -206,6 +206,25 @@ def main():
         err, text = call("knowledge_ingest", {"url": "http://127.0.0.1/secret"})
         assert err and "non-public" in text, text  # SSRF guard
         assert call("knowledge_ingest", {"text": "x"}, token="ro-token")[0]
+        # UI editor: save with the version check, new memo plus index line, read-only refused; recent; clusters.
+        post = lambda body, hdr=ck: raw("POST", "/ui/api/save", json.dumps(body), {**hdr, "Content-Type": "application/json", "X-Knowledge-UI": "1"})
+        note = json.loads(raw("GET", "/ui/api/note?path=trade-memory/plan.md", headers=ck)[2])
+        assert note["writable"] and not json.loads(raw("GET", "/ui/api/note?path=claude/CLAUDE.md", headers=ck)[2])["writable"]
+        st, _, res = post({"path": "trade-memory/plan.md", "text": "edited in the UI\n", "base_version": note["version"]})
+        assert st == 200 and (tmem / "plan.md").read_text() == "edited in the UI\n", res
+        st, _, res = post({"path": "trade-memory/plan.md", "text": "stale\n", "base_version": note["version"]})
+        assert st == 409 and b"changed since you read it" in res, res
+        st, _, res = post({"path": "trade-memory/project_new.md", "text": "new\n", "index_line": "- [New](project_new.md) — x\n- injected"})
+        assert st == 200 and (tmem / "MEMORY.md").read_text().endswith("- [New](project_new.md) — x - injected\n"), (tmem / "MEMORY.md").read_text()
+        assert post({"path": "trade/STATUS2.md", "text": "x", "index_line": "- x"})[0] == 409  # index line only for memos
+        _, hd2, _ = raw("POST", "/ui/login", "token=ro-token", {"Content-Type": "application/x-www-form-urlencoded"})
+        ro = {"Cookie": hd2["set-cookie"].split(";")[0]}
+        assert not json.loads(raw("GET", "/ui/api/note?path=trade-memory/plan.md", headers=ro)[2])["writable"]
+        assert post({"path": "trade-memory/x.md", "text": "x"}, ro)[0] == 409
+        files = json.loads(raw("GET", "/ui/api/recent?project=trade", headers=ck)[2])["files"]
+        assert files[0]["path"] in ("trade-memory/MEMORY.md", "trade-memory/project_new.md") and files[0]["by"] == "laptop", files[:3]
+        assert all(f["path"].startswith("trade") for f in files)
+        assert all("cluster" in n for n in json.loads(raw("GET", "/ui/api/graph", headers=ck)[2])["nodes"])
 
         parts, n = [], 1
         while True:
