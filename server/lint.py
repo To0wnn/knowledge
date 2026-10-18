@@ -79,8 +79,12 @@ def lint(files: dict[str, str], today: date | None = None, mem: str = "memory") 
     report: dict[str, list[str]] = {k: [] for k in (
         "index_points_to_missing_file", "memo_not_in_index", "dead_wikilink", "missing_frontmatter",
         "big_memo_without_archive", "long_index_line", "orphan_memo", "possibly_stale_open_item",
-        "possible_secret_in_memo", "unprocessed_source")}
+        "possible_secret_in_memo", "unprocessed_source", "index_line_without_heading")}
 
+    # Where the index uses "## " headings (the topics in the graph), every index line belongs under one.
+    if re.search(r"^## ", index, re.M):
+        first = re.search(r"^## ", index, re.M).start()
+        report["index_line_without_heading"] += [f"MEMORY.md → {m.group('file')}" for m in INDEX_LINE.finditer(index[:first])]
     for line in INDEX_LINE.finditer(index):
         if line.group("file") not in memos:
             report["index_points_to_missing_file"].append(f"MEMORY.md → {line.group('file')}")
@@ -155,6 +159,9 @@ if __name__ == "__main__":  # self-check
     assert r["possibly_stale_open_item"][0].startswith("a.md"), r
     assert r["possible_secret_in_memo"] == ["b.md: 1 line(s) (values not shown)"], r
     assert not lint({"memory/MEMORY.md": "", "memory/a.md": "[[b]]", "trade-memory/b.md": "x"})["dead_wikilink"]  # cross-root
+    r3 = lint({"memory/MEMORY.md": "- [A](a.md) — x\n## Net\n- [B](b.md) — y\n", "memory/a.md": "", "memory/b.md": ""})
+    assert r3["index_line_without_heading"] == ["MEMORY.md → a.md"], r3
+    assert not lint({"memory/MEMORY.md": "- [A](a.md) — x\n", "memory/a.md": ""})["index_line_without_heading"]  # no headings: fine
     assert not lint({"memory/MEMORY.md": "", "memory/p.md": "root password: ‹secret:ROOT_PW›\ntoken: /etc/x/tok.txt\n"
                      "secret `HOMELAB_SSH_KEY`\n"})["possible_secret_in_memo"]
     assert r["unprocessed_source"] == ["homelab/sources/2026-10-18-x.md"], r

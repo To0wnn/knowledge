@@ -364,7 +364,17 @@ server = MCPServer(
         "knowledge_lint reports index/link/size problems and unprocessed sources; knowledge_delete removes an outdated "
         "memo (a copy is kept). knowledge_semantic_search finds notes by meaning when a regex finds nothing; "
         "knowledge_related lists the notes most related to one note (links, shared sources, shared neighbours, "
-        "meaning). Web UI with graph view: https://knowledge.to0wnn.com/ui"
+        "meaning). Web UI with graph view: https://knowledge.to0wnn.com/ui. "
+        "House rules for memos, so the base stays tidy: (1) search first (knowledge_search / knowledge_semantic_search) "
+        "and update the memo that already covers the subject instead of adding a near-duplicate; (2) one subject per "
+        "memo, current state first (what is true now, how to do it, pitfalls, open items), history only as one line or in "
+        "<memory root>/archief/<name>_archief.md once a memo passes ~15 KB; (3) every memo gets exactly one index line "
+        "under the fitting '## ' heading of its MEMORY.md, where the index has headings (the headings are the topics in the graph; add a new heading "
+        "only for a genuinely new area) with the title, an em dash and a hook of at most ~150 characters; (4) frontmatter "
+        "name, description, metadata.type (user/feedback/project/reference); (5) link related memos with [[name]]; "
+        "(6) absolute dates; (7) never write a password, token or key: the vault name as ‹secret:NAME› (writes "
+        "containing a known secret are refused); (8) memo text is Dutch, code and commands stay as they are; (9) run "
+        "knowledge_lint after a larger change and fix what it reports."
     ),
 )
 
