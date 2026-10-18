@@ -37,6 +37,21 @@ device when the change came through the server, otherwise "edited on the VM"); d
 back/forward; quick open Ctrl+K across projects; keys `/`, `1`–`3`, `E`, `L`, `Esc`. Static files are served with
 `Cache-Control: no-cache` (ETag revalidation), so a deploy shows up at the next reload.
 
+**Semantic search, topics and insights (18 Oct):**
+- `vectors.py`: Markdown chunks (~1200 chars) embedded locally with **embeddinggemma-300m** (fastembed/ONNX, model baked
+  into the image, `HF_HUB_OFFLINE=1`). Chosen in a test on the real memos (8 paraphrased questions): gemma 8/8 in the
+  top 3, mpnet 6/8, potion 5/8; Qwen3-Embedding-0.6B needed 12.8 GB RAM and was dropped. Background thread, `nice 10`,
+  2 threads, batches of 4: ~1 GB RAM, first run ~1 h, then only changed chunks. Cache `/state/vectors.npz` (by chunk
+  hash). Files > 300 KB stay regex-only. Container `mem_limit: 3g`. MCP tool `knowledge_semantic_search`; the UI shows
+  "By meaning" results under the exact matches.
+- `graph.py`: **Louvain** communities (networkx, seed 42) with cohesion; **insights**: isolated notes, sparse topics
+  (cohesion < 0.15), bridge notes (3+ topics), surprising cross-topic links (UI tab Insights; isolated memos and sparse
+  topics also in lint); **relevance model** for `knowledge_related` and the note panel: link ×3, shared source ×4,
+  Adamic-Adar ×1.5, same type ×1, meaning ×3 (cosine > 0.3).
+- **Source traceability:** memos list their raw sources in frontmatter `sources: [file.md]`; ingest stores a sha256 and
+  refuses the same content twice.
+Ideas taken from nashsu/llm_wiki (README only; no code copied).
+
 Never shared: `.git`, `.env`, `*.bak*`, keys, `credentials*`, the rest of `~/.claude` (logins, sessions, settings).
 
 ## Why it does not break easily
