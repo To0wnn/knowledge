@@ -209,19 +209,20 @@ def louvain(ids, edges, degree, labels, sections=None) -> tuple[dict[str, str], 
         n, inner = len(members), g.subgraph(members).number_of_edges()
         hub = max(members, key=lambda i: (degree.get(i, 0), i))
         out.append({"name": name, "size": n, "cohesion": round(inner / (n * (n - 1) / 2), 3) if n > 1 else 0.0,
-                    "project": project_of(hub)})
+                    "project": project_of(hub), "kind": "section" if name in set(sections.values()) else "links"})
     return comm, sorted(out, key=lambda c: (-c["size"], c["name"]))
 
 
 def insights(graph: dict) -> dict[str, list[dict]]:
     """Knowledge gaps and surprises from the graph structure (facts for the user or Claude to act on):
-    isolated notes (degree <= 1), sparse topics (cohesion < 0.15, 3+ notes), bridge notes (neighbours in 3+ topics)
+    isolated notes (no links; the MEMORY.md index is not counted), sparse topics (found from links, not a user's section:
+    cohesion < 0.15, 3+ notes), bridge notes (neighbours in 3+ topics)
     and surprising connections (links across topics, across types, or between a peripheral note and a hub)."""
     nodes = {n["id"]: n for n in graph["nodes"]}
     g = topic_graph(nodes, [(l["source"], l["target"]) for l in graph["links"]])
-    isolated = [{"id": i, "project": nodes[i]["project"], "degree": g.degree(i)} for i in sorted(g) if g.degree(i) <= 1
+    isolated = [{"id": i, "project": nodes[i]["project"], "degree": g.degree(i)} for i in sorted(g) if g.degree(i) == 0
                 and nodes[i]["group"] not in ("skill",)]
-    sparse = [c for c in graph["communities"] if c["size"] >= 3 and c["cohesion"] < 0.15]
+    sparse = [c for c in graph["communities"] if c["size"] >= 3 and c["cohesion"] < 0.15 and c.get("kind") != "section"]
     bridges = []
     for i in g:
         topics = {nodes[j]["cluster"] for j in g[i] if nodes[j]["cluster"]}

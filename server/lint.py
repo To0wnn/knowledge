@@ -72,7 +72,9 @@ def lint(files: dict[str, str], today: date | None = None, mem: str = "memory") 
              if rel.startswith(mem + "/") and rel.count("/") == 1 and rel.endswith(".md")}
     index = memos.get("MEMORY.md", "")
     indexed = {m.group("file") for m in INDEX_LINE.finditer(index)}
-    slugs = {s.replace("-", "_") for s in [name[:-3] for name in memos] + [frontmatter(t).get("name", "") for t in memos.values()]}
+    # A [[link]] may point to a memo in another project's memory root (the graph resolves those too).
+    all_memos = {rel: t for rel, t in files.items() if rel.count("/") == 1 and rel.endswith(".md") and rel.split("/")[0].endswith("memory")}
+    slugs = {s.replace("-", "_") for s in [rel.split("/")[1][:-3] for rel in all_memos] + [frontmatter(t).get("name", "") for t in all_memos.values()]}
     inbound: dict[str, int] = {}
     report: dict[str, list[str]] = {k: [] for k in (
         "index_points_to_missing_file", "memo_not_in_index", "dead_wikilink", "missing_frontmatter",
@@ -152,6 +154,7 @@ if __name__ == "__main__":  # self-check
     assert r["missing_frontmatter"] == ["b.md: description, type"], r
     assert r["possibly_stale_open_item"][0].startswith("a.md"), r
     assert r["possible_secret_in_memo"] == ["b.md: 1 line(s) (values not shown)"], r
+    assert not lint({"memory/MEMORY.md": "", "memory/a.md": "[[b]]", "trade-memory/b.md": "x"})["dead_wikilink"]  # cross-root
     assert not lint({"memory/MEMORY.md": "", "memory/p.md": "root password: ‹secret:ROOT_PW›\ntoken: /etc/x/tok.txt\n"
                      "secret `HOMELAB_SSH_KEY`\n"})["possible_secret_in_memo"]
     assert r["unprocessed_source"] == ["homelab/sources/2026-10-18-x.md"], r
