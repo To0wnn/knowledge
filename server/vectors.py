@@ -19,10 +19,22 @@ import numpy as np
 MODEL = os.environ.get("KNOWLEDGE_EMBED_MODEL", "google/embeddinggemma-300m")  # "hash" = tiny test embedder
 MODELS_DIR = os.environ.get("KNOWLEDGE_MODELS", "")
 CACHE = Path(os.environ.get("KNOWLEDGE_VECTORS", Path.home() / ".local/state/knowledge-server/vectors.npz"))
-QUERY_PREFIX, DOC_PREFIX = "task: search result | query: ", "title: none | text: "  # embeddinggemma prompt format
+QUERY_PREFIX = "task: search result | query: "  # embeddinggemma prompt format; documents get "title: ... | text: ..."
 CHUNK_CHARS = 1200
 MAX_FILE = 300_000  # bigger files (generated logs such as trade/claude_insights.md) stay regex-only
 THREADS = int(os.environ.get("KNOWLEDGE_EMBED_THREADS", "2"))
+
+
+def title_of(rel: str, text: str) -> str:
+    """Context for every chunk of a file: frontmatter name + description, else the first heading, else the file name.
+    Without it a chunk from the middle of a memo does not know what the memo is about (live test 18 Oct: 8/14 in the
+    top 3 without titles)."""
+    m = re.match(r"\A---\n(.*?)\n---\n", text, re.S)
+    fm = dict(re.findall(r"^(name|description|title):[ \t]*(.+)$", m.group(1), re.M)) if m else {}
+    if fm.get("description") or fm.get("title"):
+        return f"{fm.get('name') or fm.get('title')}: {fm.get('description', '')}".strip(" :")[:300]
+    h = re.search(r"^#{1,2} (.+)$", text, re.M)
+    return (h.group(1) if h else rel.split("/")[-1][:-3].replace("_", " "))[:300]
 
 
 def chunks(text: str) -> list[tuple[int, str]]:
@@ -104,16 +116,20 @@ class Vectors:
     def sync(self):
         gen = self.index.gen
         wanted: list[tuple[str, int, str, str]] = []
+        texts: dict[str, str] = {}  # hash -> exact text embedded (title + chunk), so a new title re-embeds the chunk
         for rel, text, _ in self.index.items():
             if rel.endswith(".md") and len(text) <= MAX_FILE:
+                title = title_of(rel, text)
                 for line, chunk in chunks(text):
-                    wanted.append((rel, line, chunk, hashlib.sha1(chunk.encode()).hexdigest()))
+                    doc = f"title: {title} | text: {chunk}"
+                    h = hashlib.sha1(doc.encode()).hexdigest()
+                    texts[h] = doc
+                    wanted.append((rel, line, chunk, h))
         todo = list(dict.fromkeys(h for *_, h in wanted if h not in self.cache))
-        texts = {h: c for _, _, c, h in wanted}
         self.pending = len(todo)
         for i in range(0, len(todo), 32):  # publish progress between batches
             batch = todo[i:i + 32]
-            for h, v in zip(batch, self.embed([DOC_PREFIX + texts[h] for h in batch])):
+            for h, v in zip(batch, self.embed([texts[h] for h in batch])):
                 self.cache[h] = v
             self.pending = len(todo) - i - len(batch)
             if i % 640 == 0:
@@ -189,6 +205,8 @@ if __name__ == "__main__":  # self-check of the chunker and the search ranking w
     cs = chunks(text)
     assert cs[0][0] == 1 and all(len(c) <= 2 * CHUNK_CHARS for _, c in cs) and len(cs) >= 3, cs
     assert text.splitlines()[cs[1][0] - 1].startswith("Paragraph"), cs[1]
+    assert title_of("memory/x.md", "---\nname: wolf\ndescription: games per kind\n---\nbody") == "wolf: games per kind"
+    assert title_of("trade/A_B.md", "intro\n# Kelly sizing\ntext") == "Kelly sizing" and title_of("trade/A_B.md", "x") == "A B"
 
     class FakeIndex:
         gen = 1
