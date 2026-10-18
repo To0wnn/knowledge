@@ -508,7 +508,15 @@ async function onChanged() {
 function connectLive() {
   const es = new EventSource("/ui/api/events");
   es.addEventListener("changed", () => { clearTimeout(liveTimer); liveTimer = setTimeout(onChanged, 700); });
-  es.addEventListener("hello", () => $("live").classList.add("on"));
+  es.addEventListener("hello", (e) => {
+    $("live").classList.add("on");
+    // A new release was deployed while this tab was open (the stream reconnects after the restart): reload, unless
+    // the user is typing, then say so instead.
+    if (e.data && e.data !== document.documentElement.dataset.release) {
+      if (!editing) location.reload();
+      else $("live").title = "A new version is available: save your edit, then reload";
+    }
+  });
   es.onerror = () => $("live").classList.remove("on"); // the browser reconnects by itself (retry: 3 s)
 }
 

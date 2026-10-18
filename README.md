@@ -39,7 +39,10 @@ back/forward; quick open Ctrl+K across projects; keys `/`, `1`–`3`, `E`, `L`, 
 version in the name and are cached as `immutable`; `/ui/api/graph` has an ETag on the index generation (304 when
 unchanged). **Live:** `/ui/api/events` (Server-Sent Events) says `changed` within ~1 s of any change (watcher, MCP
 write, UI save); the page then reloads the graph keeping its layout, refreshes Recent/Insights/Lint and the open note,
-and only warns while you are editing. Green dot next to the title = live connection.
+and only warns while you are editing. Green dot next to the title = live connection. **Always the latest release:** the page itself is `no-cache`; app.js/app.css are linked as
+`?v=<release>` (hash of the UI files, fixed at startup) and cached as immutable, so a refresh always gets the new
+version; the live stream sends the release in its `hello`, and an open tab that reconnects after a deploy reloads itself
+(or shows a hint while you are editing). `timeout_graceful_shutdown=3`: open tabs no longer hold up a restart.
 
 **Semantic search, topics and insights (18 Oct):**
 - `vectors.py`: Markdown chunks (~1200 chars) embedded locally with **embeddinggemma-300m** (fastembed/ONNX, model baked

@@ -645,15 +645,27 @@ async def context_route(request: Request):
 # ---------------------------------------------------------------- web UI ("brain" graph, search, preview, lint, ingest)
 STATIC = Path(__file__).with_name("static")
 COOKIE = "kn_token"
+# Release id = hash of the UI files, fixed at startup. Pages link app.js/app.css with ?v=<release>, so every deploy
+# is a new URL (no stale script after a refresh), and the live stream tells open tabs to reload on a new release.
+RELEASE = hashlib.sha256(b"".join((STATIC / f).read_bytes() for f in ("index.html", "login.html", "app.js", "app.css"))).hexdigest()[:12]
+
+
+def page(name: str) -> HTMLResponse:
+    html = (STATIC / name).read_text().replace("/ui/static/app.js\"", f"/ui/static/app.js?v={RELEASE}\"") \
+        .replace("/ui/static/app.css\"", f"/ui/static/app.css?v={RELEASE}\"")
+    return HTMLResponse(html.replace("<html lang=\"en\">", f"<html lang=\"en\" data-release=\"{RELEASE}\">"),
+                        headers={"Cache-Control": "no-cache"})  # the page itself is always fetched fresh
+
+
 @server.custom_route("/ui", methods=["GET"])
 async def ui_page(request: Request):
-    return FileResponse(STATIC / "index.html")
+    return page("index.html")
 
 
 @server.custom_route("/ui/login", methods=["GET", "POST"])
 async def ui_login(request: Request):
     if request.method == "GET":
-        return FileResponse(STATIC / "login.html")
+        return page("login.html")
     token = (await request.body()).decode().partition("token=")[2].split("&")[0]
     from urllib.parse import unquote_plus
     token = unquote_plus(token).strip()
@@ -680,8 +692,8 @@ async def ui_static(request: Request):
         return PlainTextResponse("not found", status_code=404)
     # vendor/ files carry their version in the name, so the browser keeps them for good; the app's own files are
     # revalidated via ETag (a 304 on the LAN), so a deploy shows up at the next reload.
-    vendor = request.path_params["name"].startswith("vendor/")
-    return FileResponse(full, headers={"Cache-Control": "public, max-age=31536000, immutable" if vendor else "no-cache"})
+    versioned = request.path_params["name"].startswith("vendor/") or request.query_params.get("v") == RELEASE
+    return FileResponse(full, headers={"Cache-Control": "public, max-age=31536000, immutable" if versioned else "no-cache"})
 
 
 @server.custom_route("/ui/api/graph", methods=["GET"])
@@ -698,7 +710,7 @@ async def ui_events(request: Request):
     updates itself. Checks the index generation once a second; a comment every 25 s keeps proxies from closing it."""
     async def stream():
         last, quiet = index.gen, 0
-        yield f"retry: 3000\nevent: hello\ndata: {last}\n\n"
+        yield f"retry: 3000\nevent: hello\ndata: {RELEASE}\n\n"
         while not await request.is_disconnected():
             await asyncio.sleep(1)
             if index.gen != last:
@@ -895,4 +907,5 @@ if __name__ == "__main__":
     threading.Thread(target=index.loop, daemon=True).start()
     threading.Thread(target=vec.loop, daemon=True).start()
     uvicorn.run(build_app(), host=os.environ.get("KNOWLEDGE_BIND", "0.0.0.0"), port=int(os.environ.get("KNOWLEDGE_PORT", "8766")),
-                log_level="warning", proxy_headers=True, forwarded_allow_ips="<lan-ip>")
+                log_level="warning", proxy_headers=True, forwarded_allow_ips="<lan-ip>",
+                timeout_graceful_shutdown=3)  # open live streams (browser tabs) must not hold up a restart
