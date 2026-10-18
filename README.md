@@ -169,12 +169,15 @@ sees and edits them in the normal Bitwarden apps and the automation cannot see t
    copy the file to forge `/root/docker/knowledge/config/tokens.json` (owner 1000, mode 600). Read-only device:
    `"write": false`. `token.py add` also stores the token in the vault (`secret set`).
 2. The device needs LAN or WireGuard (the route only admits 10.0.0.0/8).
-3. In Claude Code on that device:
+3. In Claude Code on that device (no GitHub login needed when the device has an SSH key for the VM; the
+   marketplace is then cloned straight from the VM's repo):
    ```
-   claude plugin marketplace add <git URL of this repo>
-   claude plugin install knowledge@knowledge
+   claude plugin marketplace add to0wnn@<lan-ip>:/home/to0wnn/knowledge   # or the GitHub URL
+   claude plugin install knowledge@knowledge --scope user
+   printf '{"url":"https://knowledge.to0wnn.com","token":"%s"}' "$TOKEN" | claude plugin configure knowledge@knowledge --values-stdin
    ```
-   Enter the token when asked (stored in the keychain). URL default: `https://knowledge.to0wnn.com`.
+   The token goes in over stdin, so it stays out of shell history. Set `"autoUpdate": true` on the marketplace in
+   `extraKnownMarketplaces`; installed copies only update when `plugin/.claude-plugin/plugin.json` gets a new `version`.
 4. Turn off local auto memory on that device so it does not build a second memory:
    `"autoMemoryEnabled": false` in `~/.claude/settings.json`.
 5. Start a session: the first lines show `[knowledge context part 1/2]`; `/mcp` lists `knowledge`.
