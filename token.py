@@ -2,8 +2,13 @@
 """Manage device tokens for the knowledge server. Run on the VM.
 
   ./token.py list
-  ./token.py add <device> [--read-only] [--watch]   prints the new token once (enter it in the plugin)
+  ./token.py add <device> [--read-only] [--watch] [--roots memory,homelab] [--redact]
+                                                    prints the new token once (enter it in the plugin)
   ./token.py revoke <device>
+  ./token.py push-secrets                           sends SHA-256 hashes of the known secrets to forge (redaction)
+
+--roots limits a token to some roots; --redact masks known secrets in everything it reads (for agents and PA's,
+which also read untrusted mail). Scoped tokens have no web UI access.
 
 Readable tokens stay on the VM only (~/.config/knowledge-server/tokens-plain.json, 0600) so they can be handed out.
 Forge gets only SHA-256 hashes (/root/docker/knowledge/config/tokens.json), so a leaked file there is useless.
@@ -43,6 +48,29 @@ def save_and_push(tokens: dict):
         os.unlink(f.name)
 
 
+def push_secrets():
+    """Hashes only: the server can recognise a secret value in a text without knowing it."""
+    values = set()
+    for line in open(GEHEIMEN, encoding="utf-8"):
+        if line.startswith("#") or "\t" not in line:
+            continue
+        value = line.rstrip("\n").split("\t", 1)[0].strip()
+        if len(value) >= 6:  # shorter values would also mask ordinary words
+            values.add(hashlib.sha256(value.encode()).hexdigest())
+    for cfg in load().values():  # device tokens are secrets too
+        values.add(hashlib.sha256(cfg["token"].encode()).hexdigest())
+    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".json") as f:
+        json.dump(sorted(values), f)
+    target = REMOTE.replace("tokens.json", "secrets.json")
+    try:
+        subprocess.run(["scp", "-q", f.name, target], check=True)
+        subprocess.run(["ssh", target.split(":")[0], "chown 1000:1000 /root/docker/knowledge/config/secrets.json && "
+                        "chmod 600 /root/docker/knowledge/config/secrets.json"], check=True)
+    finally:
+        os.unlink(f.name)
+    print(f"pushed {len(values)} secret hashes")
+
+
 def main(argv):
     tokens = load()
     if not argv or argv[0] == "list":
@@ -52,10 +80,16 @@ def main(argv):
         name = argv[1]
         tok = secrets.token_urlsafe(32)
         tokens[name] = {"token": tok, "write": "--read-only" not in argv, "watch": "--watch" in argv}
+        if "--roots" in argv:
+            tokens[name]["roots"] = argv[argv.index("--roots") + 1].split(",")
+        if "--redact" in argv:
+            tokens[name]["redact"] = True
         save_and_push(tokens)
         with open(GEHEIMEN, "a") as f:  # kennis-sync redacts it if it ever ends up in a doc
             f.write(f"{tok}\tKNOWLEDGE_TOKEN_{name.upper().replace('-', '_')}\n")
         print(tok)
+    elif argv[0] == "push-secrets":
+        push_secrets()
     elif argv[0] == "revoke" and len(argv) == 2:
         tokens.pop(argv[1], None)
         save_and_push(tokens)

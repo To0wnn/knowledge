@@ -238,6 +238,7 @@ function renderNote() {
   copy.onclick = () => navigator.clipboard?.writeText(`${location.origin}/ui#${note.path}`).then(() => { copy.textContent = "Copied"; setTimeout(() => (copy.textContent = "Copy link"), 1500); });
   tools.append(copy);
   if (note.writable) { const edit = el("button", "ghost small", "Edit (E)"); edit.onclick = startEdit; tools.append(edit); }
+  const hist = el("button", "ghost small", "History"); hist.onclick = showHistory; tools.append(hist);
   pane.append(head, tools, el("div", "note-path", `${note.path} · version ${note.version}`));
   if (meta.description) pane.append(el("p", "note-desc", meta.description));
   const md = el("div", "md"); md.innerHTML = DOMPurify.sanitize(marked.parse(linked, { gfm: true })); pane.append(md);
@@ -259,6 +260,47 @@ function renderNote() {
       rel.append(a);
     }
   }).catch(() => {});
+}
+
+async function showHistory() {
+  // Every version of this note (who, when), its diff against the version before, and restore.
+  const note = current, pane = $("note");
+  const res = await api(`/ui/api/history?path=${encodeURIComponent(note.path)}`);
+  pane.replaceChildren();
+  const head = el("div", "note-head"); head.append(el("h2", null, `History of ${note.path.split("/").pop()}`));
+  const back = el("button", "ghost small", "Back to the note"); back.onclick = renderNote;
+  pane.append(head, el("div", "note-tools"), el("div", "note-path", note.path));
+  pane.querySelector(".note-tools").append(back);
+  if (!res.versions.length) { pane.append(el("p", "muted", "No earlier versions yet: history starts at the first change.")); return; }
+  const list = el("ol", "hits"), view = el("div", "version");
+  pane.append(list, view);
+  res.versions.forEach((v, i) => {
+    const when = new Date(v.time * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+    const li = hitItem(`${when}${i === 0 ? " (current)" : ""}`, `${v.by === "VM" ? "edited on the VM" : v.by === "before" ? "baseline" : `via ${v.by}`} · ${v.size} bytes`, async () => {
+      for (const b of list.querySelectorAll("button")) b.classList.remove("active");
+      li.firstChild.classList.add("active");
+      const ver = await api(`/ui/api/history?path=${encodeURIComponent(note.path)}&version=${encodeURIComponent(v.id)}`);
+      view.replaceChildren(el("h3", "sub", "Changes in this version"));
+      const pre = el("pre", "diff");
+      for (const line of (ver.diff || "(first version)").split("\n")) {
+        const span = el("span", line.startsWith("+") && !line.startsWith("+++") ? "add" : line.startsWith("-") && !line.startsWith("---") ? "del" : null, line + "\n");
+        pre.append(span);
+      }
+      view.append(pre);
+      if (note.writable && i > 0) {
+        const restore = el("button", "ghost small", "Restore this version");
+        restore.onclick = async () => {
+          if (!confirm("Replace the current note with this version? The current text stays in the history.")) return;
+          try {
+            await api("/ui/api/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: note.path, text: ver.text, base_version: note.version }) });
+            await openNote(note.path, { push: false }); refreshData();
+          } catch (e) { alert(e.message); }
+        };
+        view.append(restore);
+      }
+    });
+    list.append(li);
+  });
 }
 
 function startEdit() {
