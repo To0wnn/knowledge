@@ -198,7 +198,7 @@ def main():
         ck = {"Cookie": cookie}
         assert raw("GET", "/ui", headers=ck)[0] == 200
         g = json.loads(raw("GET", "/ui/api/graph", headers=ck)[2])
-        assert any(n["id"] == "memory/MEMORY.md" for n in g["nodes"]), g["nodes"][:3]
+        assert g["nodes"] and not any(n["id"].endswith("/MEMORY.md") for n in g["nodes"]), g["nodes"][:3]  # index not drawn, still readable below
         assert {n["project"] for n in g["nodes"] if n["id"].startswith("trade")} == {"trade"}
         th = json.loads(raw("GET", "/ui/api/search?q=entry%20timing&project=trade", headers=ck)[2])["hits"]
         assert th and all(h["project"] == "trade" for h in th), th

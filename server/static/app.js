@@ -22,7 +22,7 @@ let data = { nodes: [], links: [] };
 let byId = new Map(), neighbors = new Map(), slugToId = new Map(), clusterColor = new Map();
 let hidden = new Set(), selected = null, hover = null, focusSet = new Set();
 let project = PROJECTS.includes(store.get("kn_project")) ? store.get("kn_project") : "homelab";
-let colorBy = store.get("kn_colorby") === "cluster" ? "cluster" : "type";
+let colorBy = store.get("kn_colorby") === "type" ? "type" : "cluster"; // topics by default: they match the islands
 let labelMin = 0, current = null, editing = false, Graph, Graph3D = null;
 
 const inProject = (p) => p === project || p === "shared";
@@ -108,8 +108,11 @@ function drawNode(node, ctx, scale) {
 
 // Labels after all nodes, most important first; a label that would overlap one already drawn is skipped.
 function drawLabels(ctx, scale) {
+  const overview = !focusSet.size && scale < 1.3;
+  if (overview && colorBy === "cluster") drawTopics(ctx, scale);
   const rank = (n) => n.id === hover ? 3 : n.id === selected ? 2 : focusSet.has(n.id) ? 1 : 0;
-  const wanted = Graph.graphData().nodes.filter((n) => n.x != null && (rank(n) || (!focusSet.size && (scale > 2.2 || ((n.degree || 0) >= labelMin && scale > 0.6)))));
+  const wanted = Graph.graphData().nodes.filter((n) => n.x != null && (rank(n) ||
+    (!focusSet.size && !(overview && colorBy === "cluster") && (scale > 2.2 || ((n.degree || 0) >= labelMin && scale > 0.6)))));
   wanted.sort((a, b) => rank(b) - rank(a) || (b.degree || 0) - (a.degree || 0));
   const taken = [];
   ctx.textAlign = "center"; ctx.textBaseline = "top";
@@ -127,6 +130,25 @@ function drawLabels(ctx, scale) {
       ctx.lineWidth = 3 / scale; ctx.strokeStyle = css("--canvas"); ctx.strokeText(node.label, node.x, y); // halo keeps labels readable over links
     }
     ctx.fillStyle = css("--ink"); ctx.fillText(node.label, node.x, y);
+  }
+}
+
+// Zoomed out: one name per topic in the topic colour, just above the island's core (mean distance from its
+// centre, so a stray note does not push the name away); larger topics first, names that would overlap skipped.
+function drawTopics(ctx, scale) {
+  const groups = new Map();
+  for (const n of Graph.graphData().nodes) if (n.cluster && n.x != null) (groups.get(n.cluster) || groups.set(n.cluster, []).get(n.cluster)).push(n);
+  const size = 15 / scale, taken = [];
+  ctx.font = `650 ${size}px ${css("--font")}`; ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+  for (const [name, ns] of [...groups].sort((a, b) => b[1].length - a[1].length)) {
+    if (ns.length < 2) continue;
+    const cx = ns.reduce((s, n) => s + n.x, 0) / ns.length, cy = ns.reduce((s, n) => s + n.y, 0) / ns.length;
+    const spread = ns.reduce((s, n) => s + Math.hypot(n.x - cx, n.y - cy), 0) / ns.length;
+    const y = cy - spread - 6 / scale, w = ctx.measureText(name).width, box = [cx - w / 2, y - size, w, size];
+    if (taken.some((t) => box[0] < t[0] + t[2] && t[0] < box[0] + box[2] && box[1] < t[1] + t[3] && t[1] < box[1] + box[3])) continue;
+    taken.push(box);
+    ctx.lineWidth = 4 / scale; ctx.strokeStyle = css("--canvas"); ctx.strokeText(name, cx, y);
+    ctx.fillStyle = clusterColor.get(name) || css("--ink"); ctx.fillText(name, cx, y);
   }
 }
 
@@ -161,7 +183,8 @@ async function loadGraph() {
     .nodeId("id").nodeLabel(() => "") // the hover pill shows the name
     .nodeCanvasObject(drawNode)
     .nodePointerAreaPaint((n, c, ctx) => { ctx.fillStyle = c; ctx.beginPath(); ctx.arc(n.x, n.y, (baseRadius(n) + 2) * (n.__s || 1), 0, 2 * Math.PI); ctx.fill(); })
-    .linkColor((l) => (linkLit(l) ? css("--accent") : css("--line")))
+    // Links between topics stay faint at rest so the islands read; highlighted when their note is in focus.
+    .linkColor((l) => (linkLit(l) ? css("--accent") : l.source.cluster !== l.target.cluster ? css("--line") + "66" : css("--line")))
     .linkWidth((l) => (linkLit(l) ? 1.4 : 0.6))
     .linkDirectionalParticles((l) => (!calm && (hover || selected) && linkLit(l) ? 2 : 0))
     .linkDirectionalParticleWidth(2.2).linkDirectionalParticleSpeed(0.006)
@@ -178,10 +201,27 @@ async function loadGraph() {
     .onNodeClick((n) => openNote(n.id))
     .onBackgroundClick(() => deselect());
   // More room than the force-graph defaults (-30 / 30) so labels do not pile up.
-  Graph.d3Force("charge").strength(-90); Graph.d3Force("link").distance(42);
+  // Links inside a topic hold its island together; links between topics barely pull, so islands stay apart.
+  // Repulsion only acts nearby, so a loosely linked note is not flung to the edge.
+  Graph.d3Force("charge").strength(-90).distanceMax(260);
+  Graph.d3Force("link").distance(42).strength((l) => (l.source.cluster && l.source.cluster === l.target.cluster ? 0.5 : 0.02));
   let simNodes = [];
-  const gravity = (alpha) => { for (const n of simNodes) { n.vx -= n.x * 0.04 * alpha; n.vy -= n.y * 0.04 * alpha; } };
-  gravity.initialize = (nodes) => { simNodes = nodes; };
+  // Each topic gets its own island: an anchor point its notes are pulled to. The largest topic sits in the
+  // middle, the rest on a golden-angle spiral around it. Notes without a topic drift to the centre.
+  let anchors = new Map();
+  const gravity = (alpha) => {
+    for (const n of simNodes) {
+      const a = anchors.get(n.cluster), k = (a ? 0.18 : 0.04) * alpha;
+      n.vx += ((a ? a.x : 0) - n.x) * k; n.vy += ((a ? a.y : 0) - n.y) * k;
+    }
+  };
+  gravity.initialize = (nodes) => {
+    simNodes = nodes;
+    const sizes = new Map();
+    for (const n of nodes) if (n.cluster) sizes.set(n.cluster, (sizes.get(n.cluster) || 0) + 1);
+    anchors = new Map([...sizes].sort((a, b) => b[1] - a[1]).map(([c], i) =>
+      [c, { x: 230 * Math.sqrt(i) * Math.cos(i * 2.4), y: 230 * Math.sqrt(i) * Math.sin(i * 2.4) }]));
+  };
   Graph.d3Force("gravity", gravity);
   Graph.onRenderFramePost(drawLabels);
   new ResizeObserver(() => { const w = $("graph").clientWidth, h = $("graph").clientHeight; Graph.width(w).height(h); Graph3D?.width(w).height(h); }).observe($("graph"));
