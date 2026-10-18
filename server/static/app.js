@@ -486,7 +486,34 @@ $("ingest-form").addEventListener("submit", async (e) => {
   } catch (err) { out.className = "error"; out.textContent = err.message; }
 });
 
+// ---------------------------------------------------------------- live updates (Server-Sent Events)
+let liveTimer;
+async function onChanged() {
+  await refreshData();
+  if (!$("tab-recent").hidden) loadRecent();
+  if (!$("tab-insights").hidden) renderInsights();
+  loadLint(!$("tab-lint").hidden);
+  if (!current) return;
+  let fresh; try { fresh = await api(`/ui/api/note?path=${encodeURIComponent(current.path)}`); } catch { return; }
+  if (fresh.version === current.version) return;
+  if (editing) { // never overwrite what the user is typing: warn instead
+    const warn = document.querySelector("#note .live-warn") || el("p", "error live-warn");
+    warn.textContent = `This note was just changed elsewhere (now version ${fresh.version}). Saving will be refused; copy your text first.`;
+    $("note").querySelector(".actions")?.before(warn);
+    return;
+  }
+  const top = $("note").scrollTop;
+  current = fresh; renderNote(); $("note").scrollTop = top;
+}
+function connectLive() {
+  const es = new EventSource("/ui/api/events");
+  es.addEventListener("changed", () => { clearTimeout(liveTimer); liveTimer = setTimeout(onChanged, 700); });
+  es.addEventListener("hello", () => $("live").classList.add("on"));
+  es.onerror = () => $("live").classList.remove("on"); // the browser reconnects by itself (retry: 3 s)
+}
+
 loadGraph().then(() => {
+  connectLive();
   loadLint(false);
   const id = decodeURIComponent(location.hash.slice(1));
   if (id) openNote(id, { push: false });

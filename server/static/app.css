@@ -27,7 +27,9 @@ button { cursor: pointer; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .top { grid-area: top; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
-.brand { font-weight: 650; letter-spacing: .02em; }
+.brand { font-weight: 650; letter-spacing: .02em; display: flex; align-items: center; gap: 6px; }
+#live { width: 7px; height: 7px; border-radius: 50%; background: var(--line); }
+#live.on { background: var(--g-skill); }
 #q { flex: 1; max-width: 560px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
 .tabs { display: flex; gap: 4px; }
 .tabs button { padding: 6px 12px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); }

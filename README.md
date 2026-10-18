@@ -35,7 +35,11 @@ clusters, named after their best-connected note); local graph (1–3 steps aroun
 `knowledge_write`, Ctrl+S) and create a memo with its index line; Recent tab (newest changes per project, with the
 device when the change came through the server, otherwise "edited on the VM"); deep links `/ui#<path>` with working
 back/forward; quick open Ctrl+K across projects; keys `/`, `1`–`3`, `E`, `L`, `Esc`. Static files are served with
-`Cache-Control: no-cache` (ETag revalidation), so a deploy shows up at the next reload.
+`Cache-Control: no-cache` (ETag revalidation), so a deploy shows up at the next reload; `vendor/` files have their
+version in the name and are cached as `immutable`; `/ui/api/graph` has an ETag on the index generation (304 when
+unchanged). **Live:** `/ui/api/events` (Server-Sent Events) says `changed` within ~1 s of any change (watcher, MCP
+write, UI save); the page then reloads the graph keeping its layout, refreshes Recent/Insights/Lint and the open note,
+and only warns while you are editing. Green dot next to the title = live connection.
 
 **Semantic search, topics and insights (18 Oct):**
 - `vectors.py`: Markdown chunks (~1200 chars) embedded locally with **embeddinggemma-300m** (fastembed/ONNX, model baked

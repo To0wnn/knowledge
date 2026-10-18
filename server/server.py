@@ -36,7 +36,8 @@ import lint as kb_lint
 import vectors
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
-from starlette.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from starlette.responses import (FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response,
+                                 StreamingResponse)
 
 HOME = Path.home()
 # Where the shared trees are mounted. Option A (now): the files stay on the VM and are NFS-mounted into the
@@ -677,13 +678,39 @@ async def ui_static(request: Request):
     full = (STATIC / request.path_params["name"]).resolve()
     if STATIC.resolve() not in full.parents or not full.is_file():
         return PlainTextResponse("not found", status_code=404)
-    # no-cache = revalidate via ETag (a 304 on the LAN), so a deploy shows up at the next reload
-    return FileResponse(full, headers={"Cache-Control": "no-cache"})
+    # vendor/ files carry their version in the name, so the browser keeps them for good; the app's own files are
+    # revalidated via ETag (a 304 on the LAN), so a deploy shows up at the next reload.
+    vendor = request.path_params["name"].startswith("vendor/")
+    return FileResponse(full, headers={"Cache-Control": "public, max-age=31536000, immutable" if vendor else "no-cache"})
 
 
 @server.custom_route("/ui/api/graph", methods=["GET"])
 async def ui_graph(request: Request):
-    return JSONResponse(await asyncio.to_thread(get_graph))
+    etag = f'"g{index.gen}"'  # the graph only changes with the index generation
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag})
+    return JSONResponse(await asyncio.to_thread(get_graph), headers={"ETag": etag, "Cache-Control": "no-cache"})
+
+
+@server.custom_route("/ui/api/events", methods=["GET"])
+async def ui_events(request: Request):
+    """Server-Sent Events: tells open browsers that the knowledge changed (any session, any device), so the page
+    updates itself. Checks the index generation once a second; a comment every 25 s keeps proxies from closing it."""
+    async def stream():
+        last, quiet = index.gen, 0
+        yield f"retry: 3000\nevent: hello\ndata: {last}\n\n"
+        while not await request.is_disconnected():
+            await asyncio.sleep(1)
+            if index.gen != last:
+                last, quiet = index.gen, 0
+                yield f"event: changed\ndata: {last}\n\n"
+            else:
+                quiet += 1
+                if quiet >= 25:
+                    quiet = 0
+                    yield ": keepalive\n\n"
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @server.custom_route("/ui/api/semantic", methods=["GET"])
