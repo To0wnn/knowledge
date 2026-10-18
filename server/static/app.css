@@ -129,9 +129,25 @@ body.login { display: grid; place-items: center; grid-template: none; }
 .login-card h1 { margin: 0 0 6px; font-size: 20px; }
 
 @media (max-width: 1100px) { body { grid-template: "top top" auto "left graph" 1fr "right right" 45vh / 280px 1fr; } .right { border-left: 0; border-top: 1px solid var(--line); } }
+#readchip { display: none; }
 @media (max-width: 720px) {
-  body { grid-template: "top" auto "graph" 45vh "left" auto "right" auto / 100%; }
-  .top { flex-wrap: wrap; } #q { order: 3; flex-basis: 100%; max-width: none; }
-  .left { border-right: 0; }
+  html, body { height: auto; } /* the page scrolls as one column; panels grow with their content */
+  body { grid-template: "top" auto "graph" 62svh "right" auto "left" auto / 100%; }
+  .left, .right { overflow: visible; }
+  /* One compact header: brand + projects, search, then tabs that scroll sideways instead of wrapping. */
+  .top { gap: 8px; padding: 8px 12px; }
+  #q { order: 3; flex-basis: 100%; max-width: none; }
+  .tabs { order: 4; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  .tabs button { white-space: nowrap; padding: 6px 10px; }
+  #quick-open { display: none; } /* Ctrl+K has no keyboard here; the search box does the same */
+  .logout { order: 5; }
+  .left { border-right: 0; border-top: 1px solid var(--line); }
+  .right { padding: 14px 16px; }
+  #readchip:not([hidden]) {
+    display: block; position: absolute; left: 12px; right: 12px; bottom: 12px; padding: 10px 14px;
+    border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--ink);
+    font-weight: 600; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    box-shadow: 0 4px 14px rgb(0 0 0 / .12);
+  }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
