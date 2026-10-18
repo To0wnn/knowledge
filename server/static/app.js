@@ -199,7 +199,8 @@ async function loadGraph() {
     })
     .onNodeHover((n) => { if (touch) return; hover = n ? n.id : null; if (!selected) setFocus(hover); $("g2d").style.cursor = n ? "pointer" : ""; animateHover(selected ? 6000 : 400); })
     .onNodeClick((n) => openNote(n.id))
-    .onBackgroundClick(() => deselect());
+    .onBackgroundClick(() => deselect())
+    .onLinkClick(() => deselect()); // lines cross the empty space; a click on one is a click beside the nodes
   // More room than the force-graph defaults (-30 / 30) so labels do not pile up.
   // Links inside a topic hold its island together; links between topics barely pull, so islands stay apart.
   // Repulsion only acts nearby, so a loosely linked note is not flung to the edge.
@@ -244,7 +245,8 @@ async function toggle3D() {
     .linkColor((l) => (linkLit(l) ? css("--accent") : css("--muted"))).linkOpacity(0.35)
     .cooldownTicks(300)
     .onNodeClick((n) => openNote(n.id))
-    .onBackgroundClick(() => deselect());
+    .onBackgroundClick(() => deselect())
+    .onLinkClick(() => deselect()); // lines cross the empty space; a click on one is a click beside the nodes
   applyView();
 }
 
@@ -312,7 +314,8 @@ function deselect({ push = true } = {}) {
   if (push && location.hash) history.pushState(null, "", location.pathname + location.search);
   $("note").replaceChildren(el("div", "note-empty muted", "Select a node or a search result."));
   $("readchip").hidden = true;
-  if ($("local").checked) applyView(true);
+  if ($("local").checked) applyView(true); // refits to the whole graph once the layout settles
+  else if (!Graph3D) Graph.zoomToFit(600, 40); // back to the overview
 }
 
 async function openNote(id, { push = true } = {}) {
