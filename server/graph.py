@@ -7,7 +7,7 @@ import re
 
 import networkx as nx
 
-from lint import FRONT, WIKILINK, frontmatter
+from lint import FRONT, frontmatter, links as wikilinks
 
 MD_LINK = re.compile(r"\]\(([^)#\s]+\.md)\)")
 DOC_FILE = re.compile(r"\b(\d\d)_[A-Z0-9_]+\.md\b")
@@ -108,8 +108,7 @@ def build(files: dict[str, str]) -> dict:
     for rel, text in keep.items():
         targets = set()
         home = mem_root(rel) or PROJECTS.get(project_of(rel), ("", ""))[1]
-        for slug in WIKILINK.findall(text):
-            slug = slug.replace("-", "_")
+        for slug in wikilinks(text):  # outside code, already normalized
             targets.add(by_slug.get((home, slug)) or by_slug.get(slug))
         if mem_root(rel):
             targets |= {f"{mem_root(rel)}/{f.split('/')[-1]}" for f in MD_LINK.findall(text) if not f.startswith("http")}
