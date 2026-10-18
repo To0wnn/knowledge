@@ -79,6 +79,7 @@ function applyView(refit = false) {
 }
 
 async function refreshData() {
+  await releaseFocus({ instant: true });
   // Reload after a change but keep the layout: copy positions of known nodes onto the new data.
   const old = new Map(data.nodes.map((n) => [n.id, n]));
   data = await api("/ui/api/graph");
@@ -159,7 +160,7 @@ function animateHover(ms = 400) {
   if (calm) return;
   Graph.linkDirectionalParticles(Graph.linkDirectionalParticles()); // re-evaluate which links flow
   Graph.autoPauseRedraw(false); clearTimeout(settleTimer);
-  if (!hover) settleTimer = setTimeout(() => Graph.autoPauseRedraw(true), ms);
+  if (!hover) settleTimer = setTimeout(() => { if (!tweening) Graph.autoPauseRedraw(true); }, ms);
 }
 
 // Zoom to the selected note and everything it links to, capped so a lone note is not blown up.
@@ -167,6 +168,53 @@ let settling = true;
 function zoomToFocus() {
   Graph.zoomToFit(600, 90, (m) => focusSet.has(m.id));
   setTimeout(() => { if (Graph.zoom() > 4) Graph.zoom(4, 300); }, 650);
+}
+
+// ---------------------------------------------------------------- focus mode
+// Hover leans a note's neighbours towards it; a click gathers them in a ring around it (grouped by topic), a click
+// beside the nodes sends everything home. Positions are animated, not simulated, so the island map comes back
+// exactly as it was and the rest of the map does not shift.
+const home = new Map(); // node -> {x, y} before focus mode moved it
+let tweenId = 0, hoverTimer, tweening = false;
+
+function tween(moves, done) {
+  const id = ++tweenId, t0 = performance.now(), ms = calm ? 0 : 450;
+  const step = (now) => {
+    if (id !== tweenId) return; // a newer move took over
+    const k = ms ? Math.min(1, (now - t0) / ms) : 1, e = 1 - Math.pow(1 - k, 3); // ease-out cubic
+    for (const m of moves) { m.n.x = m.n.fx = m.x0 + (m.x1 - m.x0) * e; m.n.y = m.n.fy = m.y0 + (m.y1 - m.y0) * e; m.n.vx = m.n.vy = 0; }
+    if (k < 1) return requestAnimationFrame(step);
+    tweening = false; animateHover(selected ? 6000 : 400); // redraw pauses again once idle
+    if (done) done();
+  };
+  tweening = true; Graph.autoPauseRedraw(false); requestAnimationFrame(step);
+}
+
+function gather(id, strength) {
+  // strength 1 = ring around the note (click), below 1 = lean that fraction of the way (hover)
+  const c = byId.get(id);
+  if (!Graph || Graph3D || $("local").checked || !c || c.x == null) return;
+  const hc = home.get(c) || { x: c.x, y: c.y };
+  const nb = [...(neighbors.get(id) || [])].map((n) => byId.get(n)).filter((n) => n && n.x != null && n !== c)
+    .sort((a, b) => (a.cluster || "").localeCompare(b.cluster || "") || a.label.localeCompare(b.label));
+  const radius = Math.max(60, 40 + nb.length * 7), targets = new Map([[c, hc]]);
+  nb.forEach((n, i) => {
+    const h = home.get(n) || { x: n.x, y: n.y }, a = -Math.PI / 2 + (2 * Math.PI * i) / nb.length;
+    targets.set(n, strength >= 1 ? { x: hc.x + radius * Math.cos(a), y: hc.y + radius * Math.sin(a) }
+                                  : { x: h.x + (hc.x - h.x) * strength, y: h.y + (hc.y - h.y) * strength });
+  });
+  for (const [n, h] of home) if (!targets.has(n)) targets.set(n, h); // nodes of an earlier focus go home
+  for (const n of targets.keys()) if (!home.has(n)) home.set(n, { x: n.x, y: n.y });
+  return new Promise((resolve) => tween([...targets].map(([n, t]) => ({ n, x0: n.x, y0: n.y, x1: t.x, y1: t.y })), resolve));
+}
+
+function releaseFocus({ instant = false } = {}) {
+  clearTimeout(hoverTimer);
+  if (!home.size) return Promise.resolve();
+  const moves = [...home].map(([n, h]) => ({ n, x0: n.x, y0: n.y, x1: h.x, y1: h.y }));
+  const free = () => { for (const m of moves) m.n.fx = m.n.fy = undefined; home.clear(); };
+  if (instant) { tweenId++; for (const m of moves) { m.n.x = m.x1; m.n.y = m.y1; } free(); return Promise.resolve(); }
+  return new Promise((resolve) => tween(moves, () => { free(); resolve(); }));
 }
 
 function setFocus(id) {
@@ -197,7 +245,13 @@ async function loadGraph() {
       else if (!loadGraph.fitted) Graph.zoomToFit(400, 40);
       zoomToFocus.again = false; loadGraph.fitted = true;
     })
-    .onNodeHover((n) => { if (touch) return; hover = n ? n.id : null; if (!selected) setFocus(hover); $("g2d").style.cursor = n ? "pointer" : ""; animateHover(selected ? 6000 : 400); })
+    .onNodeHover((n) => {
+      if (touch) return;
+      hover = n ? n.id : null; if (!selected) setFocus(hover);
+      $("g2d").style.cursor = n ? "pointer" : ""; animateHover(selected ? 6000 : 400);
+      clearTimeout(hoverTimer);
+      if (!selected) hoverTimer = setTimeout(() => (hover ? gather(hover, 0.3) : releaseFocus()), hover ? 150 : 250);
+    })
     .onNodeClick((n) => openNote(n.id))
     .onBackgroundClick(() => deselect())
     .onLinkClick(() => deselect()); // lines cross the empty space; a click on one is a click beside the nodes
@@ -230,6 +284,7 @@ async function loadGraph() {
 }
 
 async function toggle3D() {
+  await releaseFocus({ instant: true });
   const on = !Graph3D;
   $("toggle3d").setAttribute("aria-pressed", String(on));
   if (!on) { Graph3D._destructor(); Graph3D = null; $("g3d").replaceChildren(); $("g3d").hidden = true; $("g2d").hidden = false; Graph.resumeAnimation(); return; }
@@ -263,6 +318,7 @@ function renderProjects() {
 }
 
 function switchProject(p, refit = true) {
+  releaseFocus({ instant: true });
   if (p === project || !PROJECTS.includes(p)) return;
   project = p; store.set("kn_project", p);
   selected = null; setFocus(null); hidden = new Set();
@@ -315,7 +371,7 @@ function deselect({ push = true } = {}) {
   $("note").replaceChildren(el("div", "note-empty muted", "Select a node or a search result."));
   $("readchip").hidden = true;
   if ($("local").checked) applyView(true); // refits to the whole graph once the layout settles
-  else if (!Graph3D) Graph.zoomToFit(600, 40); // back to the overview
+  else if (!Graph3D) releaseFocus().then(() => { if (!selected) Graph.zoomToFit(600, 40); }); // home, then the overview
 }
 
 async function openNote(id, { push = true } = {}) {
@@ -332,7 +388,9 @@ async function openNote(id, { push = true } = {}) {
   const n = byId.get(note.path);
   if (n && Graph && n.x != null && !$("local").checked) {
     loadGraph.fitted = true; // the reader chose a view: no overview fit after the layout settles
-    zoomToFocus(); if (settling) zoomToFocus.again = true; // nodes still move: fit once more when they stop
+    clearTimeout(hoverTimer);
+    gather(n.id, 1).then(() => { if (selected === n.id) zoomToFocus(); });
+    if (settling) zoomToFocus.again = true; // nodes still move: fit once more when they stop
   }
   renderNote();
   $("readchip").hidden = false; $("readchip").textContent = `Read: ${n ? n.label : note.path.split("/").pop()} ↓`;
