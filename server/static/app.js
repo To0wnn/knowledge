@@ -86,6 +86,7 @@ async function refreshData() {
 
 // ---------------------------------------------------------------- 2D / 3D rendering
 const calm = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const touch = matchMedia("(hover: none)").matches; // phones: a tap selects, there is no hover
 const baseRadius = (n) => 3 + Math.sqrt(n.degree || 0) * 1.6;
 
 function drawNode(node, ctx, scale) {
@@ -100,28 +101,41 @@ function drawNode(node, ctx, scale) {
   if (node.id === hover) { ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 20; }
   ctx.fill(); ctx.shadowBlur = 0;
   if (node.id === selected) { ctx.lineWidth = 2 / scale; ctx.strokeStyle = css("--ink"); ctx.stroke(); }
-  const showLabel = node.id === selected || node.id === hover || (focusSet.size && focusSet.has(node.id)) || scale > 2.2 || ((node.degree || 0) >= labelMin && scale > 0.6);
-  if (showLabel && lit) {
-    const size = Math.max((node.id === hover ? 16 : 12.5) / scale, 3), y = node.y + r + 2 / scale;
-    ctx.font = `${node.id === hover ? 600 : 400} ${size}px ${css("--font")}`; ctx.textAlign = "center"; ctx.textBaseline = "top";
-    if (node.id === hover) { // a pill behind the hovered label
-      const w = ctx.measureText(node.label).width + size, h = size * 1.5;
-      ctx.fillStyle = css("--panel") || css("--canvas"); ctx.strokeStyle = nodeColor(node); ctx.lineWidth = 1 / scale;
-      ctx.beginPath(); ctx.roundRect(node.x - w / 2, y - size * 0.25, w, h, h / 2); ctx.fill(); ctx.stroke();
+  ctx.globalAlpha = 1;
+}
+
+// Labels after all nodes, most important first; a label that would overlap one already drawn is skipped.
+function drawLabels(ctx, scale) {
+  const rank = (n) => n.id === hover ? 3 : n.id === selected ? 2 : focusSet.has(n.id) ? 1 : 0;
+  const wanted = Graph.graphData().nodes.filter((n) => n.x != null && (rank(n) || (!focusSet.size && (scale > 2.2 || ((n.degree || 0) >= labelMin && scale > 0.6)))));
+  wanted.sort((a, b) => rank(b) - rank(a) || (b.degree || 0) - (a.degree || 0));
+  const taken = [];
+  ctx.textAlign = "center"; ctx.textBaseline = "top";
+  for (const node of wanted) {
+    const big = node.id === hover, size = Math.max((big ? 16 : 12.5) / scale, 3);
+    const r = baseRadius(node) * (node.__s || 1), y = node.y + r + 2 / scale;
+    ctx.font = `${big ? 600 : 400} ${size}px ${css("--font")}`;
+    const w = ctx.measureText(node.label).width + size, h = size * 1.5, box = [node.x - w / 2, y - size * 0.25, w, h];
+    if (!big && node.id !== selected && taken.some((t) => box[0] < t[0] + t[2] && t[0] < box[0] + box[2] && box[1] < t[1] + t[3] && t[1] < box[1] + box[3])) continue;
+    taken.push(box);
+    if (big) { // a pill behind the hovered label
+      ctx.fillStyle = css("--panel"); ctx.strokeStyle = nodeColor(node); ctx.lineWidth = 1 / scale;
+      ctx.beginPath(); ctx.roundRect(...box, h / 2); ctx.fill(); ctx.stroke();
     } else {
       ctx.lineWidth = 3 / scale; ctx.strokeStyle = css("--canvas"); ctx.strokeText(node.label, node.x, y); // halo keeps labels readable over links
     }
     ctx.fillStyle = css("--ink"); ctx.fillText(node.label, node.x, y);
   }
-  ctx.globalAlpha = 1;
 }
 
-// Keep redrawing while hover animations run; force-graph pauses redraws when idle.
+// Keep redrawing while hover/selection animations run (link particles, easing); force-graph pauses
+// redraws when idle. A selection flows for a few seconds, then pauses to spare phone batteries.
 let settleTimer;
-function animateHover() {
+function animateHover(ms = 400) {
   if (calm) return;
+  Graph.linkDirectionalParticles(Graph.linkDirectionalParticles()); // re-evaluate which links flow
   Graph.autoPauseRedraw(false); clearTimeout(settleTimer);
-  if (!hover) settleTimer = setTimeout(() => Graph.autoPauseRedraw(true), 400);
+  if (!hover) settleTimer = setTimeout(() => Graph.autoPauseRedraw(true), ms);
 }
 
 // Zoom to the selected note and everything it links to, capped so a lone note is not blown up.
@@ -147,7 +161,7 @@ async function loadGraph() {
     .nodePointerAreaPaint((n, c, ctx) => { ctx.fillStyle = c; ctx.beginPath(); ctx.arc(n.x, n.y, (baseRadius(n) + 2) * (n.__s || 1), 0, 2 * Math.PI); ctx.fill(); })
     .linkColor((l) => (linkLit(l) ? css("--accent") : css("--line")))
     .linkWidth((l) => (linkLit(l) ? 1.4 : 0.6))
-    .linkDirectionalParticles((l) => (!calm && hover && linkLit(l) ? 2 : 0))
+    .linkDirectionalParticles((l) => (!calm && (hover || selected) && linkLit(l) ? 2 : 0))
     .linkDirectionalParticleWidth(2.2).linkDirectionalParticleSpeed(0.006)
     .linkDirectionalParticleColor(() => css("--accent"))
     .backgroundColor(css("--canvas"))
@@ -158,11 +172,16 @@ async function loadGraph() {
       else if (!loadGraph.fitted) Graph.zoomToFit(400, 40);
       zoomToFocus.again = false; loadGraph.fitted = true;
     })
-    .onNodeHover((n) => { hover = n ? n.id : null; if (!selected) setFocus(hover); $("g2d").style.cursor = n ? "pointer" : ""; Graph.linkDirectionalParticles(Graph.linkDirectionalParticles()); animateHover(); })
+    .onNodeHover((n) => { if (touch) return; hover = n ? n.id : null; if (!selected) setFocus(hover); $("g2d").style.cursor = n ? "pointer" : ""; animateHover(selected ? 6000 : 400); })
     .onNodeClick((n) => openNote(n.id))
     .onBackgroundClick(() => deselect());
   // More room than the force-graph defaults (-30 / 30) so labels do not pile up.
   Graph.d3Force("charge").strength(-90); Graph.d3Force("link").distance(42);
+  let simNodes = [];
+  const gravity = (alpha) => { for (const n of simNodes) { n.vx -= n.x * 0.04 * alpha; n.vy -= n.y * 0.04 * alpha; } };
+  gravity.initialize = (nodes) => { simNodes = nodes; };
+  Graph.d3Force("gravity", gravity);
+  Graph.onRenderFramePost(drawLabels);
   new ResizeObserver(() => { const w = $("graph").clientWidth, h = $("graph").clientHeight; Graph.width(w).height(h); Graph3D?.width(w).height(h); }).observe($("graph"));
   renderProjects(); renderFilters(); applyView(true);
 }
@@ -247,9 +266,10 @@ const ago = (sec) => { const d = Date.now() / 1000 - sec; return d < 90 ? "just 
 // Clicking empty canvas clears the selection and the #note in the URL, so a refresh opens nothing.
 function deselect({ push = true } = {}) {
   if (editing) return; // keep unsaved edits on screen
-  selected = null; current = null; setFocus(null);
+  selected = null; current = null; setFocus(null); animateHover();
   if (push && location.hash) history.pushState(null, "", location.pathname + location.search);
   $("note").replaceChildren(el("div", "note-empty muted", "Select a node or a search result."));
+  $("readchip").hidden = true;
   if ($("local").checked) applyView(true);
 }
 
@@ -262,7 +282,7 @@ async function openNote(id, { push = true } = {}) {
   if (p !== "shared" && p !== project) switchProject(p, false);
   if (push && decodeURIComponent(location.hash.slice(1)) !== note.path) history.pushState(null, "", `#${note.path}`);
   current = note;
-  selected = byId.has(note.path) ? note.path : null; setFocus(selected);
+  selected = byId.has(note.path) ? note.path : null; setFocus(selected); if (Graph) animateHover(6000);
   if ($("local").checked) applyView(true);
   const n = byId.get(note.path);
   if (n && Graph && n.x != null && !$("local").checked) {
@@ -270,6 +290,7 @@ async function openNote(id, { push = true } = {}) {
     zoomToFocus(); if (settling) zoomToFocus.again = true; // nodes still move: fit once more when they stop
   }
   renderNote();
+  $("readchip").hidden = false; $("readchip").textContent = `Read: ${n ? n.label : note.path.split("/").pop()} ↓`;
 }
 
 function renderNote() {
@@ -391,6 +412,7 @@ $("note").addEventListener("click", (e) => {
   if (/^https?:/.test(href)) { a.target = "_blank"; a.rel = "noopener noreferrer"; }
 });
 window.addEventListener("popstate", () => { const id = decodeURIComponent(location.hash.slice(1)); if (id) openNote(id, { push: false }); else deselect({ push: false }); });
+$("readchip").addEventListener("click", () => $("note").scrollIntoView({ behavior: calm ? "auto" : "smooth" }));
 window.addEventListener("beforeunload", (e) => { if (editing) e.preventDefault(); });
 
 // ---------------------------------------------------------------- new memo
