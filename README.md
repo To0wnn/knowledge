@@ -49,7 +49,9 @@ and only warns while you are editing. Green dot next to the title = live connect
   every ~640 chunks. Each chunk is embedded with its file title (`title: … | text: …`): a live test of 14 paraphrased questions went from top-3 8/14 to 10/14 (top-5 11 → 12/14; regex 0/14). Tried and rejected on 24 questions (14 paraphrases + 10 with one exact term;
   semantic alone: top-1 14, top-3 19, top-5 22): **hybrid** BM25 + embeddings with reciprocal rank fusion was never
   better (weight 1: 13/17/19; 0.15–0.5: 13–15/19/21); a **reranker** (bge-reranker-v2-m3-int8) gave 16/20/22 but
-  costs ~6 s per query and ~2 GB extra RAM, and it pushed two right answers down. The UHD 770 iGPU was tested
+  costs ~6 s per query and ~2 GB extra RAM, and it pushed two right answers down. What did help: rewriting 29 vague or outdated memo descriptions in plain words
+  (the description is part of every chunk's title): 20/21/24 on the same 24 questions. That number is optimistic,
+  since the descriptions were written knowing the test questions; a fresh question set is needed for a fair figure. The UHD 770 iGPU was tested
   via OpenVINO (1.2 chunks/s, OOM at batch 16) and rejected: slower than 2 CPU threads. Cache `/state/vectors.npz` (by chunk
   hash). Files > 300 KB stay regex-only. Container `mem_limit: 3g`. MCP tool `knowledge_semantic_search`; the UI shows
   "By meaning" results under the exact matches.
