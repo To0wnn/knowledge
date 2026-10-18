@@ -15,6 +15,14 @@ DATE_NL = re.compile(r"\b(\d{1,2}) (jan|feb|mrt|maa|mar|apr|mei|may|jun|jul|aug|
 DATE_ISO = re.compile(r"\b(20\d\d)-(\d\d)-(\d\d)\b")
 OPEN_WORDS = re.compile(r"\b(TODO|open|nog niet|wacht op|later|volgende stap)\b", re.I)
 SECRET_HINT = re.compile(r"(wachtwoord|password|passwd|token|api[-_ ]?key|secret)\s*[:=]?\s*`?[A-Za-z0-9_\-+/=@!.]{8,}", re.I)
+CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)  # [[x]] inside code is syntax (TOML tables, shell tests), not a link
+
+
+def links(text: str) -> list[str]:
+    """[[wikilink]] slugs outside code, normalized so [[a-b]] and [[a_b]] point to the same memo."""
+    return [s.replace("-", "_") for s in WIKILINK.findall(CODE.sub("", text))]
+
+
 FRONT = re.compile(r"\A---\n(.*?)\n---\n", re.S)
 BIG_MEMO = 15_000
 
@@ -56,7 +64,7 @@ def lint(files: dict[str, str], today: date | None = None, mem: str = "memory") 
              if rel.startswith(mem + "/") and rel.count("/") == 1 and rel.endswith(".md")}
     index = memos.get("MEMORY.md", "")
     indexed = {m.group("file") for m in INDEX_LINE.finditer(index)}
-    slugs = {name[:-3] for name in memos} | {frontmatter(t).get("name", "") for t in memos.values()}
+    slugs = {s.replace("-", "_") for s in [name[:-3] for name in memos] + [frontmatter(t).get("name", "") for t in memos.values()]}
     inbound: dict[str, int] = {}
     report: dict[str, list[str]] = {k: [] for k in (
         "index_points_to_missing_file", "memo_not_in_index", "dead_wikilink", "missing_frontmatter",
@@ -72,7 +80,7 @@ def lint(files: dict[str, str], today: date | None = None, mem: str = "memory") 
     for name, text in memos.items():
         if name == "MEMORY.md":
             continue
-        for slug in WIKILINK.findall(text):
+        for slug in links(text):
             inbound[slug] = inbound.get(slug, 0) + 1
             if slug not in slugs:
                 report["dead_wikilink"].append(f"{name}: [[{slug}]]")
@@ -93,8 +101,8 @@ def lint(files: dict[str, str], today: date | None = None, mem: str = "memory") 
             report["possible_secret_in_memo"].append(f"{name}: {hits} line(s) (values not shown)")
 
     for name in memos:
-        stem = name[:-3]
-        fm_name = frontmatter(memos[name]).get("name", "")
+        stem = name[:-3].replace("-", "_")
+        fm_name = frontmatter(memos[name]).get("name", "").replace("-", "_")
         if name != "MEMORY.md" and name not in indexed and not inbound.get(stem) and not inbound.get(fm_name):
             report["orphan_memo"].append(name)
 
@@ -129,6 +137,8 @@ if __name__ == "__main__":  # self-check
     r = lint(files, today=date(2026, 10, 18))
     assert r["index_points_to_missing_file"] == ["MEMORY.md → gone.md"], r
     assert r["dead_wikilink"] == ["a.md: [[nope]]"], r
+    r2 = lint({"memory/MEMORY.md": "", "memory/x_y.md": "---\nname: x-y\n---\n", "memory/z.md": "see [[x-y]] and `[[apps]]`\n```\n[[tool]]\n```"})
+    assert not r2["dead_wikilink"] and "x_y.md" not in r2["orphan_memo"], r2
     assert sorted(r["memo_not_in_index"]) == ["b.md", "c.md"], r
     assert r["orphan_memo"] == ["c.md"], r  # b.md is linked from a.md
     assert r["missing_frontmatter"] == ["b.md: description, type"], r
