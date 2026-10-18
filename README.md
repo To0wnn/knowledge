@@ -129,8 +129,7 @@ Following Karpathy's "LLM Wiki" pattern (raw sources -> wiki pages -> index, wit
 - **Scoped tokens** (`token.py add <name> --read-only --roots a,b --redact`): limited to some roots, and every known
   secret is masked on the way out (`‹secret›`), also inside `user/pass`, `KEY=value`, tables and "password: …".
   The server only holds SHA-256 hashes of the secrets (`token.py push-secrets` → `/config/secrets.json`), and scoped
-  tokens get no web UI. Tokens: `paperclip-agents` (all roots, redacted; `claude mcp add --scope user` as to0wnn on
-  CT 109, picked up by every agent run), `pa-anthony` (memory + homelab, redacted; `mcp_servers.knowledge` with a
+  tokens get no web UI. Tokens: `pa-anthony` (memory + homelab, redacted; `mcp_servers.knowledge` with a
   `headers:` Authorization in `/home/assistent/.hermes/config.yaml`, tools limited to search/read/list/related).
   The second PA has no access (family scope).
 - **History:** every version of every Markdown file is kept in `/state/history/<rel with __>/` (who: device name, or
