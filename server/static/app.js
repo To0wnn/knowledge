@@ -168,6 +168,7 @@ function switchProject(p, refit = true) {
   if ($("q").value.trim()) runSearch();
   loadLint(!$("tab-lint").hidden);
   if (!$("tab-recent").hidden) loadRecent();
+  if (!$("tab-insights").hidden) renderInsights();
 }
 
 function renderFilters() {
@@ -240,13 +241,24 @@ function renderNote() {
   pane.append(head, tools, el("div", "note-path", `${note.path} · version ${note.version}`));
   if (meta.description) pane.append(el("p", "note-desc", meta.description));
   const md = el("div", "md"); md.innerHTML = DOMPurify.sanitize(marked.parse(linked, { gfm: true })); pane.append(md);
+  const rel = el("div", "backlinks"); pane.append(rel);
   const back = [...(neighbors.get(note.path) || [])].map((x) => byId.get(x)).filter(Boolean).sort((a, b) => a.label.localeCompare(b.label));
   if (back.length) {
-    const box = el("div", "backlinks"); box.append(el("h3", null, `Connected (${back.length})`));
+    const box = el("div", "backlinks"); box.append(el("h3", null, `Linked (${back.length})`));
     for (const b of back) { const a = el("a", null, b.label); a.href = `#${b.id}`; box.append(a); }
     pane.append(box);
   }
   pane.scrollTop = 0;
+  // Related notes by the relevance model (links, shared sources, shared neighbours, meaning), loaded after the text.
+  api(`/ui/api/related?path=${encodeURIComponent(note.path)}`).then((r) => {
+    if (current !== note || !r.related.length) return;
+    rel.append(el("h3", null, "Related"));
+    for (const x of r.related) {
+      const a = el("a"); a.href = `#${x.id}`;
+      a.append(x.label, el("span", "why", ` ${x.project !== project ? x.project + " · " : ""}${x.why}`));
+      rel.append(a);
+    }
+  }).catch(() => {});
 }
 
 function startEdit() {
@@ -310,12 +322,20 @@ $("new-form").addEventListener("submit", async (e) => {
 let searchTimer, searchSeq = 0;
 async function runSearch() {
   const q = $("q").value.trim(), seq = ++searchSeq;
-  if (!q) { $("hits").replaceChildren(); $("hits-empty").hidden = false; return; }
+  if (!q) { $("hits").replaceChildren(); $("sem").replaceChildren(); $("sem-head").hidden = true; $("hits-empty").hidden = false; return; }
   let res; try { res = await api(`/ui/api/search?q=${encodeURIComponent(q)}&project=${project}`); } catch (e) { $("hits").textContent = e.message; return; }
   if (seq !== searchSeq) return; // a newer search is on its way
   $("hits-empty").hidden = res.hits.length > 0;
   if (!res.hits.length) $("hits-empty").textContent = "No matches.";
   $("hits").replaceChildren(...res.hits.map((h) => hitItem(`${h.path}:${h.line}`, h.text, () => openNote(h.path))));
+  // Meaning-based results next to the exact matches: finds notes that use other words.
+  let sem; try { sem = await api(`/ui/api/semantic?q=${encodeURIComponent(q)}&project=${project}`); } catch { return; }
+  if (seq !== searchSeq) return;
+  const seen = new Set(res.hits.map((h) => h.path));
+  const extra = sem.hits.filter((h) => !seen.has(h.path));
+  $("sem-head").hidden = false;
+  $("sem-head").textContent = sem.hits.length ? "By meaning" : `By meaning: ${sem.status}`;
+  $("sem").replaceChildren(...extra.map((h) => hitItem(`${(byId.get(h.path) || {}).label || h.path} · ${Math.round(h.score * 100)}%`, `${h.path}:${h.line} — ${h.text}`, () => openNote(h.path))));
 }
 function hitItem(top, sub, onclick) {
   const li = el("li"), b = el("button");
@@ -360,8 +380,9 @@ document.addEventListener("keydown", (e) => {
 // ---------------------------------------------------------------- tabs, recent, lint, ingest
 function selectTab(name) {
   for (const b of document.querySelectorAll(".tabs button")) b.setAttribute("aria-selected", String(b.dataset.tab === name));
-  for (const t of ["results", "recent", "lint", "ingest"]) $(`tab-${t}`).hidden = t !== name;
+  for (const t of ["results", "recent", "insights", "lint", "ingest"]) $(`tab-${t}`).hidden = t !== name;
   if (name === "lint") loadLint(true);
+  if (name === "insights") renderInsights();
   if (name === "recent") loadRecent();
 }
 for (const b of document.querySelectorAll(".tabs button")) b.onclick = () => selectTab(b.dataset.tab);
@@ -381,6 +402,42 @@ async function loadRecent() {
     box.append(hitItem(n ? n.label : f.path.split("/").pop(), `${ago(f.mtime)} · ${f.by === "VM" ? "edited on the VM" : `via ${f.by}`} · ${f.path}`, () => openNote(f.path)));
   }
   if (!res.files.length) box.append(el("li", "muted", "No files yet."));
+}
+
+function highlight(ids) {
+  // Show a set of notes in the graph: dim the rest and zoom to them.
+  selected = null; focusSet = new Set(ids);
+  if (Graph3D) Graph3D.nodeColor(Graph3D.nodeColor());
+  const pts = ids.map((i) => byId.get(i)).filter((n) => n && n.x != null);
+  if (pts.length && !Graph3D) Graph.zoomToFit(600, 80, (n) => focusSet.has(n.id));
+}
+
+function renderInsights() {
+  const ins = data.insights || {}, box = $("insights"); box.replaceChildren();
+  const mine = (x) => (x.project || projectOf(x.id || x.source)) === project;
+  const label = (id) => (byId.get(id) || {}).label || id;
+  const section = (title, hint, items, render) => {
+    if (!items.length) return;
+    box.append(el("h3", null, `${title} (${items.length})`), el("p", "muted small", hint));
+    const ul = el("ul");
+    for (const it of items.slice(0, 15)) { const li = el("li"), a = el("a"); render(it, a); li.append(a); ul.append(li); }
+    box.append(ul);
+  };
+  section("Surprising connections", "Links between different topics: worth a look, sometimes a new insight.", (ins.surprising || []).filter(mine), (s, a) => {
+    a.textContent = `${label(s.source)} ↔ ${label(s.target)}`; a.onclick = () => highlight([s.source, s.target]);
+  });
+  section("Bridge notes", "Notes that connect three or more topics; keep them accurate.", (ins.bridges || []).filter(mine), (b, a) => {
+    a.textContent = `${label(b.id)} — ${b.topics} topics`; a.onclick = () => { highlight([b.id, ...(neighbors.get(b.id) || [])]); };
+  });
+  section("Isolated notes", "One link or none: link them from a related memo or merge them.", (ins.isolated || []).filter(mine), (i, a) => {
+    a.textContent = label(i.id); a.onclick = () => openNote(i.id);
+  });
+  const topics = (data.communities || []).filter((c) => c.project === project);
+  section("Topics", "Louvain communities; cohesion = share of possible links inside the topic. Below 0.15 is loose.", topics, (c, a) => {
+    a.textContent = `${c.name} — ${c.size} notes, cohesion ${c.cohesion}${c.cohesion < 0.15 && c.size >= 3 ? " (loose)" : ""}`;
+    a.onclick = () => highlight(data.nodes.filter((n) => n.cluster === c.name && inProject(n.project)).map((n) => n.id));
+  });
+  if (!box.children.length) box.textContent = "Nothing to report for this project.";
 }
 
 async function loadLint(render = true) {

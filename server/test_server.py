@@ -67,7 +67,8 @@ def main():
            "KNOWLEDGE_TRADE": str(trade), "KNOWLEDGE_TRADE_MEMORY": str(tmem), "KNOWLEDGE_ANPITEK": str(tmp / "anpitek"),
            "KNOWLEDGE_ANPITEK_MEMORY": str(tmp / "anpitek-memory"),
            "KNOWLEDGE_TOKENS": str(tokens), "KNOWLEDGE_AUDIT": str(tmp / "audit.log"), "KNOWLEDGE_PORT": str(PORT),
-           "KNOWLEDGE_BIND": "127.0.0.1", "KNOWLEDGE_RESCAN": "3600", "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}"}
+           "KNOWLEDGE_BIND": "127.0.0.1", "KNOWLEDGE_RESCAN": "3600",
+           "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}"}
     proc = subprocess.Popen([sys.executable, str(Path(__file__).with_name("server.py"))], env=env)
     try:
         for _ in range(50):
@@ -224,7 +225,24 @@ def main():
         files = json.loads(raw("GET", "/ui/api/recent?project=trade", headers=ck)[2])["files"]
         assert files[0]["path"] in ("trade-memory/MEMORY.md", "trade-memory/project_new.md") and files[0]["by"] == "laptop", files[:3]
         assert all(f["path"].startswith("trade") for f in files)
-        assert all("cluster" in n for n in json.loads(raw("GET", "/ui/api/graph", headers=ck)[2])["nodes"])
+        g = json.loads(raw("GET", "/ui/api/graph", headers=ck)[2])
+        assert all("cluster" in n and "sources" in n for n in g["nodes"]) and {"isolated", "bridges", "surprising", "sparse_topics"} <= set(g["insights"])
+        # Ingest dedup: the same text twice is refused with the existing path.
+        err, text = call("knowledge_ingest", {"text": "pasted note about PBS", "title": "PBS again"})
+        assert err and "already ingested as homelab/sources/" in text, text
+        # Semantic search (test embedder) once the background index is built; related notes; graph gaps in lint.
+        for _ in range(40):
+            res = json.loads(raw("GET", "/ui/api/semantic?q=entry%20timing&project=trade", headers=ck)[2])
+            if res["hits"]:
+                break
+            time.sleep(0.5)
+        assert res["hits"] and res["hits"][0]["path"].startswith("trade"), res
+        assert "trade-memory/" in call("knowledge_semantic_search", {"query": "entry timing", "root": "trade-memory"})[1]
+        assert not call("knowledge_related", {"path": "trade-memory/plan.md"})[0]
+        rel = json.loads(raw("GET", "/ui/api/related?path=trade-memory/plan.md", headers=ck)[2])["related"]
+        assert isinstance(rel, list)
+        assert "isolated_note" in json.loads(raw("GET", "/ui/api/lint", headers=ck)[2])
+        assert (tmp / "vectors.npz").exists()
 
         parts, n = [], 1
         while True:

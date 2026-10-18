@@ -14,6 +14,7 @@
   <nav class="tabs" role="tablist">
     <button role="tab" data-tab="results" aria-selected="true">Results</button>
     <button role="tab" data-tab="recent">Recent</button>
+    <button role="tab" data-tab="insights">Insights</button>
     <button role="tab" data-tab="lint">Lint <span id="lint-count" class="badge"></span></button>
     <button role="tab" data-tab="ingest">Ingest</button>
   </nav>
@@ -40,9 +41,15 @@
     <button id="new-memo" class="ghost">+ New memo</button>
     <ol id="hits" class="hits"></ol>
     <p id="hits-empty" class="muted">Type to search this project. Click a node to read it.</p>
+    <h3 id="sem-head" class="sub" hidden>By meaning</h3>
+    <ol id="sem" class="hits"></ol>
   </section>
   <section id="tab-recent" class="tab" hidden>
     <ol id="recent" class="hits"></ol>
+  </section>
+  <section id="tab-insights" class="tab" hidden>
+    <p class="muted">Where the knowledge is thin or surprisingly connected. Click an item to show it in the graph.</p>
+    <div id="insights"></div>
   </section>
   <section id="tab-lint" class="tab" hidden>
     <p class="muted">Facts only: fix what is clearly wrong, ask Claude to judge the rest.</p>

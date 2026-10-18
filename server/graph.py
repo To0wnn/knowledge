@@ -1,8 +1,13 @@
 """Build the "brain" graph for the web UI from the in-memory index: one node per memo, doc, skill and raw source,
-edges for wikilinks, markdown links, doc/skill references and cited sources. Pure function, a few ms."""
+edges for wikilinks, markdown links, doc/skill references and cited sources. On top of it: Louvain topic communities,
+graph insights (knowledge gaps, bridges, surprising connections) and a relevance model for related notes.
+Pure functions over {rel: text}, tens of ms."""
+import math
 import re
 
-from lint import WIKILINK, frontmatter
+import networkx as nx
+
+from lint import FRONT, WIKILINK, frontmatter
 
 MD_LINK = re.compile(r"\]\(([^)#\s]+\.md)\)")
 DOC_FILE = re.compile(r"\b(\d\d)_[A-Z0-9_]+\.md\b")
@@ -10,6 +15,7 @@ DOC_WORD = re.compile(r"\bdocs? (\d\d)(?:\s*(?:,|en|and|/|–|-)\s*(\d\d))?\b", 
 SKILL_REF = re.compile(r"\bskill[s]? `([a-z0-9][a-z0-9-]*)`", re.I)
 BARE_MD = re.compile(r"(?<![\w/.-])([A-Za-z0-9][\w.-]*\.md)\b")  # "see ENTRY_TIMING_FIXES.md" in the same project
 SOURCE_REF = re.compile(r"\b(20\d\d-\d\d-\d\d-[a-z0-9-]+\.md)\b")
+FM_SOURCES = re.compile(r"^sources:[ \t]*(\[[^\]\n]*\]|(?:\n[ \t]+-[^\n]*)+)", re.M)
 # project -> (docs root, memory root). Docs roots other than homelab are code repos: only their Markdown is shared.
 PROJECTS = {"homelab": ("homelab", "memory"), "anpitek": ("anpitek", "anpitek-memory"), "trade": ("trade", "trade-memory")}
 MEMORY_ROOTS = {mem for _, mem in PROJECTS.values()}
@@ -54,6 +60,18 @@ def label_of(rel: str, text: str, titles: dict[str, str]) -> str:
     if rel.startswith("homelab/sources/") and fm.get("title"):
         return fm["title"].strip('"')[:60]
     return name[:-3].replace("_", " ")
+
+
+def sources_of(text: str) -> list[str]:
+    """Raw sources a note is based on: the frontmatter `sources:` list (inline [a, b] or YAML lines) plus source file
+    names cited in the text."""
+    found = []
+    fm = FRONT.match(text)
+    m = FM_SOURCES.search(fm.group(1)) if fm else None
+    if m:
+        found = [x.strip().strip("'\"").split("/")[-1] for x in re.split(r"[,\n]", m.group(1).strip("[]")) if x.strip(" -\t")]
+        found = [x.lstrip("- ").strip().strip("'\"") for x in found]
+    return sorted({x for x in found if x} | set(SOURCE_REF.findall(text)))
 
 
 def build(files: dict[str, str]) -> dict:
@@ -109,42 +127,115 @@ def build(files: dict[str, str]) -> dict:
         degree[a] = degree.get(a, 0) + 1
         degree[b] = degree.get(b, 0) + 1
     labels = {rel: label_of(rel, text, titles) for rel, text in keep.items()}
-    cluster = clusters(sorted(keep), edges, degree, labels)
-    nodes = [{"id": rel, "label": labels[rel], "group": group_of(rel, text), "project": project_of(rel),
-              "cluster": cluster[rel], "size": len(text), "degree": degree.get(rel, 0)} for rel, text in sorted(keep.items())]
-    return {"nodes": nodes, "links": [{"source": a, "target": b} for a, b in sorted(edges)]}
+    groups = {rel: group_of(rel, text) for rel, text in keep.items()}
+    comm, communities = louvain(sorted(keep), edges, degree, labels)
+    nodes = [{"id": rel, "label": labels[rel], "group": groups[rel], "project": project_of(rel),
+              "cluster": comm[rel], "size": len(text), "degree": degree.get(rel, 0), "sources": sources_of(text)}
+             for rel, text in sorted(keep.items())]
+    graph = {"nodes": nodes, "links": [{"source": a, "target": b} for a, b in sorted(edges)], "communities": communities}
+    graph["insights"] = insights(graph)
+    return graph
 
 
-def clusters(ids: list[str], edges: set[tuple[str, str]], degree: dict[str, int], labels: dict[str, str]) -> dict[str, str]:
-    """Topic clusters by label propagation: each node repeatedly takes the label most common among its neighbours
-    (ties: the label of the best-connected node), in a fixed order, so the result is deterministic. Index files are
-    left out (they link to everything). A cluster is named after its best-connected member."""
-    hubs = {i for i in ids if i.endswith("/MEMORY.md")}
-    nb: dict[str, list[str]] = {i: [] for i in ids}
-    for a, b in edges:
-        if a not in hubs and b not in hubs:
-            nb[a].append(b)
-            nb[b].append(a)
-    label = {i: i for i in ids}
-    order = sorted(ids, key=lambda i: (-degree.get(i, 0), i))
-    for _ in range(20):
-        changed = False
-        for i in order:
-            if not nb[i]:
-                continue
-            count: dict[str, int] = {}
-            for j in nb[i]:
-                count[label[j]] = count.get(label[j], 0) + 1
-            best = max(count, key=lambda lab: (count[lab], degree.get(lab, 0), lab))
-            if count[best] > count.get(label[i], 0) and best != label[i]:
-                label[i], changed = best, True
-        if not changed:
-            break
-    members: dict[str, list[str]] = {}
-    for i, lab in label.items():
-        members.setdefault(lab, []).append(i)
-    name = {lab: labels[max(m, key=lambda i: (degree.get(i, 0), i))] for lab, m in members.items()}
-    return {i: name[label[i]] if len(members[label[i]]) > 1 else "" for i in ids}
+def topic_graph(ids, edges) -> nx.Graph:
+    """Undirected graph without the MEMORY.md index files: they link to every memo and would merge all topics."""
+    g = nx.Graph()
+    g.add_nodes_from(i for i in ids if not i.endswith("/MEMORY.md"))
+    g.add_edges_from((a, b) for a, b in edges if a in g and b in g)
+    return g
+
+
+def louvain(ids, edges, degree, labels) -> tuple[dict[str, str], list[dict]]:
+    """Louvain communities (fixed seed: same input, same topics). Each is named after its best-connected member and
+    scored by cohesion = internal edges / possible internal edges. Singletons get no topic."""
+    g = topic_graph(ids, edges)
+    comm = {i: "" for i in ids}
+    out = []
+    for members in nx.community.louvain_communities(g, seed=42):
+        if len(members) < 2:
+            continue
+        name = labels[max(members, key=lambda i: (degree.get(i, 0), i))]
+        inner = g.subgraph(members).number_of_edges()
+        n = len(members)
+        for i in members:
+            comm[i] = name
+        out.append({"name": name, "size": n, "cohesion": round(inner / (n * (n - 1) / 2), 3),
+                    "project": project_of(max(members, key=lambda i: (degree.get(i, 0), i)))})
+    return comm, sorted(out, key=lambda c: (-c["size"], c["name"]))
+
+
+def insights(graph: dict) -> dict[str, list[dict]]:
+    """Knowledge gaps and surprises from the graph structure (facts for the user or Claude to act on):
+    isolated notes (degree <= 1), sparse topics (cohesion < 0.15, 3+ notes), bridge notes (neighbours in 3+ topics)
+    and surprising connections (links across topics, across types, or between a peripheral note and a hub)."""
+    nodes = {n["id"]: n for n in graph["nodes"]}
+    g = topic_graph(nodes, [(l["source"], l["target"]) for l in graph["links"]])
+    isolated = [{"id": i, "project": nodes[i]["project"], "degree": g.degree(i)} for i in sorted(g) if g.degree(i) <= 1
+                and nodes[i]["group"] not in ("skill",)]
+    sparse = [c for c in graph["communities"] if c["size"] >= 3 and c["cohesion"] < 0.15]
+    bridges = []
+    for i in g:
+        topics = {nodes[j]["cluster"] for j in g[i] if nodes[j]["cluster"]}
+        if len(topics) >= 3:
+            bridges.append({"id": i, "project": nodes[i]["project"], "topics": len(topics)})
+    bridges.sort(key=lambda b: (-b["topics"], b["id"]))
+    top = max((g.degree(i) for i in g), default=1) or 1
+    surprising = []
+    for a, b in g.edges():
+        na, nb = nodes[a], nodes[b]
+        score = (2.0 if na["cluster"] != nb["cluster"] else 0) + (1.0 if na["group"] != nb["group"] else 0) \
+            + abs(g.degree(a) - g.degree(b)) / top
+        if na["cluster"] != nb["cluster"] and na["project"] == nb["project"]:
+            surprising.append({"source": a, "target": b, "project": na["project"], "score": round(score, 2)})
+    surprising.sort(key=lambda s: (-s["score"], s["source"], s["target"]))
+    return {"isolated": isolated, "sparse_topics": sparse, "bridges": bridges[:30], "surprising": surprising[:30]}
+
+
+def related(graph: dict, rel: str, limit: int = 10, semantic: dict[str, float] | None = None) -> list[dict]:
+    """Notes most related to `rel`, by a relevance model with 4 graph signals, plus meaning when vectors are ready:
+    direct link x3, shared raw source x4 (per source), Adamic-Adar (shared neighbours, weighted by their rarity) x1.5,
+    same type x1, and semantic similarity x3 (cosine of the note vectors, above 0.3)."""
+    nodes = {n["id"]: n for n in graph["nodes"]}
+    if rel not in nodes:
+        return []
+    g = topic_graph(nodes, [(l["source"], l["target"]) for l in graph["links"]])
+    me = nodes[rel]
+    cands = set()
+    if rel in g:
+        for j in g[rel]:
+            cands.add(j)
+            cands |= set(g[j])
+    mine = set(me["sources"])
+    cands |= {i for i, n in nodes.items() if mine & set(n["sources"])}
+    cands |= set(semantic or {})
+    cands.discard(rel)
+    out = []
+    for c in cands:
+        if c not in nodes:
+            continue
+        why, score = [], 0.0
+        if rel in g and c in g and g.has_edge(rel, c):
+            score += 3.0
+            why.append("linked")
+        shared = mine & set(nodes[c]["sources"])
+        if shared:
+            score += 4.0 * len(shared)
+            why.append(f"same source ({len(shared)})")
+        if rel in g and c in g:
+            aa = sum(1 / math.log(g.degree(z)) for z in nx.common_neighbors(g, rel, c) if g.degree(z) > 1)
+            if aa:
+                score += 1.5 * aa
+                why.append("shared neighbours")
+        if nodes[c]["group"] == me["group"]:
+            score += 1.0
+        sim = (semantic or {}).get(c, 0.0)
+        if sim > 0.3:
+            score += 3.0 * sim
+            why.append(f"similar meaning ({sim:.2f})")
+        if why:
+            out.append({"id": c, "label": nodes[c]["label"], "project": nodes[c]["project"], "score": round(score, 2),
+                        "why": ", ".join(why)})
+    return sorted(out, key=lambda r: (-r["score"], r["id"]))[:limit]
 
 
 if __name__ == "__main__":
@@ -178,7 +269,16 @@ if __name__ == "__main__":
     assert ("trade-memory/MEMORY.md", "trade-memory/a.md") in links and ("trade-memory/a.md", "memory/b_c.md") in links
     assert ("trade-memory/a.md", "trade/STATUS.md") in links and ("trade/FIXES_PLAN.md", "trade/STATUS.md") in links
     assert ("trade-memory/a.md", "memory/a.md") not in links
-    two = clusters(["a", "b", "c", "x", "y", "z", "lone"], {("a", "b"), ("b", "c"), ("a", "c"), ("x", "y"), ("y", "z"), ("x", "z")},
-                   {"a": 3, "b": 2, "c": 2, "x": 2, "y": 3, "z": 2}, {k: k.upper() for k in "abcxyz"} | {"lone": "L"})
-    assert two["a"] == two["b"] == two["c"] == "A" and two["x"] == two["y"] == two["z"] == "Y" and two["lone"] == "", two  # same slug resolves inside its own project
+    comm, cs = louvain(["a", "b", "c", "x", "y", "z", "lone"], {("a", "b"), ("b", "c"), ("a", "c"), ("x", "y"), ("y", "z"), ("x", "z"), ("c", "x")},
+                       {"a": 2, "b": 2, "c": 3, "x": 3, "y": 2, "z": 2}, {k: k.upper() for k in "abcxyz"} | {"lone": "L"})
+    assert comm["a"] == comm["b"] == comm["c"] == "C" and comm["x"] == comm["y"] == comm["z"] == "X" and comm["lone"] == "", comm
+    assert {c["name"]: c["cohesion"] for c in cs} == {"C": 1.0, "X": 1.0}, cs
+    assert sources_of("---\nname: x\nsources: [2026-10-01-a.md, \"b.md\"]\n---\nsee 2026-10-02-c.md") == ["2026-10-01-a.md", "2026-10-02-c.md", "b.md"]
+    assert sources_of("---\nsources:\n  - one.md\n  - two.md\n---\n") == ["one.md", "two.md"]
+    s2 = build({"memory/m1.md": "---\nsources: [s.md]\n---\nx", "memory/m2.md": "---\nsources: [s.md]\n---\ny",
+                "memory/m3.md": "z [[m1]]"})
+    rel = {r["id"]: r for r in related(s2, "memory/m1.md")}
+    assert rel["memory/m2.md"]["why"].startswith("same source") and rel["memory/m3.md"]["why"] == "linked", rel
+    assert related(s2, "memory/m1.md", semantic={"memory/m2.md": 0.9})[0]["why"].endswith("similar meaning (0.90)")
+    assert any(i["id"] == "memory/m2.md" for i in s2["insights"]["isolated"])  # same slug resolves inside its own project
     print("ok", len(g["nodes"]), "nodes", len(g["links"]), "links")
