@@ -24,6 +24,7 @@ services:
       KNOWLEDGE_TRADE: /data/trade
       KNOWLEDGE_TRADE_MEMORY: /data/trade-memory
       KNOWLEDGE_TOKENS: /config/tokens.json
+      KNOWLEDGE_SECRETS: /config/secrets.json  # SHA-256 of known secrets (token.py push-secrets), for redaction
       KNOWLEDGE_AUDIT: /state/audit.log
       KNOWLEDGE_VECTORS: /state/vectors.npz  # embedding cache: a restart only embeds new text
       TZ: Europe/Amsterdam  # local dates in source file names, LOG.md and the audit log (forge itself runs UTC)

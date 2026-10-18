@@ -124,6 +124,23 @@ Following Karpathy's "LLM Wiki" pattern (raw sources -> wiki pages -> index, wit
   need an `X-Knowledge-UI` header (CSRF). All JS is vendored with its license in `server/static/vendor/`
   (force-graph 1.52.0 MIT, marked 18.1.1 MIT, DOMPurify 3.4.17 Apache-2.0/MPL-2.0); no CDN, works on the LAN only.
 
+## Agents, PA, history and session log (18 Oct)
+
+- **Scoped tokens** (`token.py add <name> --read-only --roots a,b --redact`): limited to some roots, and every known
+  secret is masked on the way out (`‹secret›`), also inside `user/pass`, `KEY=value`, tables and "password: …".
+  The server only holds SHA-256 hashes of the secrets (`token.py push-secrets` → `/config/secrets.json`), and scoped
+  tokens get no web UI. Tokens: `paperclip-agents` (all roots, redacted; `claude mcp add --scope user` as to0wnn on
+  CT 109, picked up by every agent run), `pa-anthony` (memory + homelab, redacted; `mcp_servers.knowledge` with a
+  `headers:` Authorization in `/home/assistent/.hermes/config.yaml`, tools limited to search/read/list/related).
+  The second PA has no access (family scope).
+- **History:** every version of every Markdown file is kept in `/state/history/<rel with __>/` (who: device name, or
+  VM for edits on the VM; first change keeps the baseline; 200 versions per file). MCP `knowledge_history`, UI button
+  "History" with diff and restore.
+- **Session log:** `plugin/hooks/session-log.py` on SessionEnd and PreCompact (long tmux sessions rarely end) posts the
+  latest prompts, changed files and Claude's last answer to `POST /sessions`; the server redacts and appends to
+  `<project memory>/sessions/<YYYY-MM>.md`. It remembers per session how far it logged. On the VM via
+  `~/.claude/settings.json` + `~/.config/knowledge-server/session.env` (token `vm-sessions`, memory roots only).
+
 ## Install on a device (once)
 
 1. Create a token on the VM: add `"<device>": {"token": "<long random>", "write": true}` to
