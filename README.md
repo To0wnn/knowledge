@@ -205,6 +205,15 @@ systemctl --user enable --now lint-report.timer` (Monday 08:00). Needs `~/.confi
 When `knowledge_write` creates a memo, the answer lists existing memos in the same memory root with a similar
 meaning (score ≥ 0.72, calibrated on embeddinggemma), so the writer can merge instead of duplicating.
 
+## Checks outside the server
+
+- **UI smoke test** (`tests/ui_smoke.py`, headless system Chrome via Playwright, read-only against the live server):
+  click zoom, ring, exact release, deselect, phone tap and Read chip. Run after UI changes:
+  `systemd-run --user --scope -q -p MemoryMax=3G ~/.local/bin/uv run -q --with playwright python tests/ui_smoke.py`.
+- **Memo hook on the VM** (`plugin/hooks/memory-check.py`, PostToolUse `Edit|Write|MultiEdit` in `~/.claude/settings.json`,
+  timeout 15 s): after a session edits a memo directly, it runs lint on that memory root and tells Claude what concerns
+  that file, plus the similar-memo hint for a new memo. Advisory only (`additionalContext`), never blocks.
+
 ## Deploy / update the server
 
 `./deploy.sh` runs the self-test, rsyncs `server/` to the forge stack and rebuilds. Bump versions in
