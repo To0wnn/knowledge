@@ -86,23 +86,23 @@ async function refreshData() {
 
 // ---------------------------------------------------------------- 2D / 3D rendering
 const calm = matchMedia("(prefers-reduced-motion: reduce)").matches;
-const baseRadius = (n) => 2.2 + Math.sqrt(n.degree || 0) * 1.25;
+const baseRadius = (n) => 3 + Math.sqrt(n.degree || 0) * 1.6;
 
 function drawNode(node, ctx, scale) {
-  // Hover: the node eases up to 1.8x with a glow, its neighbours to 1.25x.
-  const target = node.id === hover ? 1.8 : hover && focusSet.has(node.id) ? 1.25 : 1;
+  // Hover: the node eases up to 2.4x with a glow, its neighbours to 1.4x.
+  const target = node.id === hover ? 2.4 : hover && focusSet.has(node.id) ? 1.4 : 1;
   node.__s = calm ? target : (node.__s || 1) + (target - (node.__s || 1)) * 0.25;
   const r = baseRadius(node) * node.__s;
   const lit = focusSet.size === 0 || focusSet.has(node.id);
   ctx.globalAlpha = lit ? 1 : 0.15;
   ctx.beginPath(); ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
   ctx.fillStyle = nodeColor(node);
-  if (node.id === hover) { ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 14; }
+  if (node.id === hover) { ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 20; }
   ctx.fill(); ctx.shadowBlur = 0;
   if (node.id === selected) { ctx.lineWidth = 2 / scale; ctx.strokeStyle = css("--ink"); ctx.stroke(); }
   const showLabel = node.id === selected || node.id === hover || (focusSet.size && focusSet.has(node.id)) || scale > 2.2 || ((node.degree || 0) >= labelMin && scale > 0.6);
   if (showLabel && lit) {
-    const size = Math.max((node.id === hover ? 12 : 10) / scale, 2.5), y = node.y + r + 2 / scale;
+    const size = Math.max((node.id === hover ? 16 : 12.5) / scale, 3), y = node.y + r + 2 / scale;
     ctx.font = `${node.id === hover ? 600 : 400} ${size}px ${css("--font")}`; ctx.textAlign = "center"; ctx.textBaseline = "top";
     if (node.id === hover) { // a pill behind the hovered label
       const w = ctx.measureText(node.label).width + size, h = size * 1.5;
@@ -137,7 +137,7 @@ async function loadGraph() {
   Graph = ForceGraph()($("g2d"))
     .nodeId("id").nodeLabel(() => "") // the hover pill shows the name
     .nodeCanvasObject(drawNode)
-    .nodePointerAreaPaint((n, c, ctx) => { ctx.fillStyle = c; ctx.beginPath(); ctx.arc(n.x, n.y, (baseRadius(n) + 1.8) * (n.__s || 1), 0, 2 * Math.PI); ctx.fill(); })
+    .nodePointerAreaPaint((n, c, ctx) => { ctx.fillStyle = c; ctx.beginPath(); ctx.arc(n.x, n.y, (baseRadius(n) + 2) * (n.__s || 1), 0, 2 * Math.PI); ctx.fill(); })
     .linkColor((l) => (linkLit(l) ? css("--accent") : css("--line")))
     .linkWidth((l) => (linkLit(l) ? 1.4 : 0.6))
     .linkDirectionalParticles((l) => (!calm && hover && linkLit(l) ? 2 : 0))
@@ -149,6 +149,8 @@ async function loadGraph() {
     .onNodeHover((n) => { hover = n ? n.id : null; if (!selected) setFocus(hover); $("g2d").style.cursor = n ? "pointer" : ""; Graph.linkDirectionalParticles(Graph.linkDirectionalParticles()); animateHover(); })
     .onNodeClick((n) => openNote(n.id))
     .onBackgroundClick(() => { selected = null; setFocus(null); if ($("local").checked) applyView(true); });
+  // More room than the force-graph defaults (-30 / 30) so labels do not pile up.
+  Graph.d3Force("charge").strength(-90); Graph.d3Force("link").distance(42);
   new ResizeObserver(() => { const w = $("graph").clientWidth, h = $("graph").clientHeight; Graph.width(w).height(h); Graph3D?.width(w).height(h); }).observe($("graph"));
   renderProjects(); renderFilters(); applyView(true);
 }
