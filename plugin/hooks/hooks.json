@@ -1,5 +1,5 @@
 {
-  "description": "Load the shared knowledge context (CLAUDE.md + memory index) at session start",
+  "description": "Load the shared knowledge context at session start; log each session to the knowledge server",
   "hooks": {
     "SessionStart": [
       {
@@ -33,6 +33,28 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/context.sh\" 6",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/session-log.py\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/session-log.py\"",
             "timeout": 15
           }
         ]

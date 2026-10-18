@@ -54,7 +54,8 @@ ROOTS = {
 # The "claude" root is a dedicated share (CLAUDE.md, skills/, agents/), never all of ~/.claude (credentials).
 CLAUDE_READABLE = ("CLAUDE.md", "skills/*", "agents/*")
 WRITABLE = ("memory/*.md", "memory/archief/*.md", "homelab/*.md", "anpitek-memory/*.md", "anpitek-memory/archief/*.md",
-            "trade-memory/*.md", "trade-memory/archief/*.md", "anpitek/*/*.md", "trade/*.md", "trade/docs/*.md")
+            "trade-memory/*.md", "trade-memory/archief/*.md", "anpitek/*/*.md", "trade/*.md", "trade/docs/*.md",
+            "memory/sessions/*.md", "anpitek-memory/sessions/*.md", "trade-memory/sessions/*.md")
 SKIP_PARTS = {".git", "__pycache__", "node_modules", ".venv", "venv", ".next", ".cache"}
 SKIP_NAMES = re.compile(r"(\.bak|\.vault_pass$|\.env$|credentials|\.pem$|\.key$|id_ed25519|id_rsa)")
 MAX_BYTES = 2_000_000
@@ -743,6 +744,46 @@ class BearerAuth:
         if is_ui and scope["method"] == "GET" and not path.startswith("/ui/api/"):
             return await RedirectResponse("/ui/login", status_code=303)(scope, receive, send)
         return await JSONResponse({"error": "invalid or missing token"}, status_code=401)(scope, receive, send)
+
+
+@server.custom_route("/sessions", methods=["POST"])
+async def sessions_route(request: Request):
+    """Session log, posted by the plugin's SessionEnd/PreCompact hook: one short entry per (part of a) Claude Code
+    session in <project memory>/sessions/<YYYY-MM>.md, so the next session (on any device) can see what was done.
+    Everything is redacted: prompts can contain passwords."""
+    if not device.get().get("write"):
+        return JSONResponse({"error": "token may not write"}, status_code=403)
+    b = await request.json()
+    prompts = [" ".join(str(p).split())[:200] for p in b.get("prompts", [])][:8]
+    if not prompts:
+        return JSONResponse({"skipped": "no prompts"})
+    project = project_for(str(b.get("cwd", "")))
+    mem = PROJECTS[project][1]
+    rel = f"{mem}/sessions/{time.strftime('%Y-%m')}.md"
+    lines = [f"\n## {time.strftime('%Y-%m-%d %H:%M')} · {project} · {device.get().get('name', '?')} · "
+             f"{str(b.get('reason', 'end'))[:20]} · sessie {str(b.get('session_id', ''))[:8]}",
+             *[f"- Vraag: {p}" for p in prompts]]
+    files = sorted({str(f)[:160] for f in b.get("files", [])})[:20]
+    if files:
+        lines.append(f"- Gewijzigd: {', '.join(files)}")
+    summary = " ".join(str(b.get("summary", "")).split())[:700]
+    if summary:
+        lines.append(f"- Afsluiting: {summary}")
+    entry = redact("\n".join(lines))
+    try:
+        full, rel = resolve(rel)
+        check_writable(rel)
+        async with _locks.setdefault(rel, asyncio.Lock()):
+            for _ in range(5):
+                current = full.read_bytes() if full.exists() else None
+                base = current or f"# Sessies {time.strftime('%Y-%m')} ({project})\n\nAutomatisch per Claude Code-sessie (vragen, gewijzigde bestanden, afsluiting).\n".encode()
+                if replace_if_unchanged(full, current, base + entry.encode() + b"\n"):
+                    break
+            index.refresh(rel)
+    except ToolError as e:
+        return JSONResponse({"error": str(e)}, status_code=403)
+    audit("session", rel)
+    return JSONResponse({"logged": rel})
 
 
 @server.custom_route("/invalidate", methods=["POST"])
