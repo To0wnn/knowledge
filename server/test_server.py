@@ -63,13 +63,16 @@ def main():
     h = lambda t: hashlib.sha256(t.encode()).hexdigest()
     tokens.write_text(json.dumps({"laptop": {"sha256": h("rw-token"), "write": True},
                                   "workpc": {"sha256": h("ro-token"), "write": False},
-                                  "watcher": {"sha256": h("watch-token"), "watch": True}}))
+                                  "watcher": {"sha256": h("watch-token"), "watch": True},
+                                  "agent": {"sha256": h("agent-token"), "roots": ["memory", "claude"], "redact": True}}))
+    (tmp / "secrets.json").write_text(json.dumps([h("Sup3rSecret99")]))
+    (mem / "creds.md").write_text("login pi/Sup3rSecret99 or KEY=Sup3rSecret99, password: hunter2hunter2\nplain line\n")
     env = {**os.environ, "KNOWLEDGE_MEMORY": str(mem), "KNOWLEDGE_HOMELAB": str(lab), "KNOWLEDGE_CLAUDE": str(cla),
            "KNOWLEDGE_TRADE": str(trade), "KNOWLEDGE_TRADE_MEMORY": str(tmem), "KNOWLEDGE_ANPITEK": str(tmp / "anpitek"),
            "KNOWLEDGE_ANPITEK_MEMORY": str(tmp / "anpitek-memory"),
            "KNOWLEDGE_TOKENS": str(tokens), "KNOWLEDGE_AUDIT": str(tmp / "audit.log"), "KNOWLEDGE_PORT": str(PORT),
            "KNOWLEDGE_BIND": "127.0.0.1", "KNOWLEDGE_RESCAN": "3600",
-           "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}"}
+           "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}"}
     proc = subprocess.Popen([sys.executable, str(Path(__file__).with_name("server.py"))], env=env)
     try:
         for _ in range(50):
@@ -98,6 +101,17 @@ def main():
         for bad in ("memory/../../etc/passwd", "homelab/secret.env", "claude/settings.json", "etc/x"):
             assert call("knowledge_read", {"path": bad})[0], bad
         assert call("knowledge_write", {"path": "homelab/sub/x.md", "content": "x"})[0]  # not a writable pattern
+        # Scoped agent token: only its roots, secrets masked everywhere, no web UI, no writes.
+        err, text = call("knowledge_read", {"path": "memory/creds.md"}, token="agent-token")
+        assert not err and "Sup3rSecret99" not in text and "hunter2" not in text and text.count("‹secret›") == 3, text
+        assert "plain line" in text and "pi/‹secret›" in text, text
+        assert "Sup3rSecret99" in call("knowledge_read", {"path": "memory/creds.md"})[1]  # full token unchanged
+        assert "Sup3rSecret99" not in call("knowledge_search", {"pattern": "login pi"}, token="agent-token")[1]
+        assert call("knowledge_read", {"path": "homelab/00_OVERZICHT.md"}, token="agent-token")[0]
+        assert call("knowledge_list", {"root": "homelab"}, token="agent-token")[0]
+        assert "homelab/" not in call("knowledge_search", {"pattern": "overview"}, token="agent-token")[1]
+        assert call("knowledge_write", {"path": "memory/x.md", "content": "x"}, token="agent-token")[0]
+        assert http("GET", "/ui/api/graph", token="agent-token")[0] == 403
         # Project roots: only Markdown of the code repos, never venv; project memory is writable.
         err, text = call("knowledge_read", {"path": "trade/bot.py"})
         assert err and "only Markdown" in text, text
@@ -244,6 +258,22 @@ def main():
         assert isinstance(rel, list)
         assert "isolated_note" in json.loads(raw("GET", "/ui/api/lint", headers=ck)[2])
         assert (tmp / "vectors.npz").exists()
+        # History: every version with who changed it; native VM edits show as VM; diff + restore via the UI.
+        (tmem / "hist.md").write_text("v1\n")
+        http("POST", "/invalidate", {"paths": ["trade-memory/hist.md"]}, token="watch-token")
+        ver = call("knowledge_read", {"path": "trade-memory/hist.md"})[1].split("version ")[1].split(",")[0]
+        assert not call("knowledge_write", {"path": "trade-memory/hist.md", "content": "v2\n", "base_version": ver})[0]
+        (tmem / "hist.md").write_text("v3 native\n")
+        http("POST", "/invalidate", {"paths": ["trade-memory/hist.md"]}, token="watch-token")
+        hist = call("knowledge_history", {"path": "trade-memory/hist.md"})[1].splitlines()
+        assert len(hist) == 3 and "by VM" in hist[0] and "by laptop" in hist[1] and "by before" in hist[2], hist
+        old_id = hist[1].split()[0]
+        text = call("knowledge_history", {"path": "trade-memory/hist.md", "version": old_id})[1]
+        assert "-v2" in text and "+v3 native" in text and "<version" in text, text
+        hv = json.loads(raw("GET", "/ui/api/history?path=trade-memory/hist.md", headers=ck)[2])["versions"]
+        one = json.loads(raw("GET", f"/ui/api/history?path=trade-memory/hist.md&version={hv[0]['id']}", headers=ck)[2])
+        assert one["text"] == "v3 native\n" and "+v3 native" in one["diff"], one
+        assert raw("GET", "/ui/api/history?path=trade-memory/hist.md&version=../../x", headers=ck)[0] == 404
         # Caching: vendor files immutable, app files revalidated, graph 304 on an unchanged ETag.
         assert "immutable" in raw("GET", "/ui/static/vendor/force-graph-1.52.0.js")[1]["cache-control"]
         assert raw("GET", "/ui/static/app.js")[1]["cache-control"] == "no-cache"

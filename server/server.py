@@ -59,6 +59,7 @@ SKIP_PARTS = {".git", "__pycache__", "node_modules", ".venv", "venv", ".next", "
 SKIP_NAMES = re.compile(r"(\.bak|\.vault_pass$|\.env$|credentials|\.pem$|\.key$|id_ed25519|id_rsa)")
 MAX_BYTES = 2_000_000
 TOKENS_FILE = Path(os.environ.get("KNOWLEDGE_TOKENS", HOME / ".config/knowledge-server/tokens.json"))
+SECRETS_FILE = Path(os.environ.get("KNOWLEDGE_SECRETS", HOME / ".config/knowledge-server/secrets.json"))
 AUDIT = Path(os.environ.get("KNOWLEDGE_AUDIT", HOME / ".local/state/knowledge-server/audit.log"))
 
 device: ContextVar[dict] = ContextVar("device", default={})
@@ -81,7 +82,54 @@ def resolve(path: str) -> tuple[Path, str]:
         raise ToolError("only CLAUDE.md, skills/ and agents/ are shared from ~/.claude")
     if root in MD_ONLY and not rel.endswith(".md"):
         raise ToolError(f"only Markdown is shared from {root}/ (it is a code repo)")
+    if not in_scope(f"{root}/{rel}"):
+        raise ToolError(f"{root}/ is not shared with this device")
     return full, f"{root}/{rel}"
+
+
+# ---------------------------------------------------------------- token scope (agents, PA's)
+# A token can be limited to some roots ("roots": [...]) and can get every known secret masked on the way out
+# ("redact": true): the PA's read mail from outside, so a crafted mail must not be able to make them leak a password.
+SECRET_TOKEN = re.compile(r"[^\s`'\"<>()\[\]{},;|*]+")
+SECRET_LABEL = re.compile(r"((?:wachtwoord|password|passwd|token|api[-_ ]?key|secret)\s*[:=]?\s*`?)([A-Za-z0-9_\-+/=@!.$#%^&]{8,})", re.I)
+_secrets_cache: tuple[int, int, frozenset] = (0, 0, frozenset())
+
+
+def secret_hashes() -> frozenset:
+    """SHA-256 of every known secret value (secrets.json, pushed from the VM by token.py push-secrets). The server never
+    holds the values themselves."""
+    global _secrets_cache
+    try:
+        st = SECRETS_FILE.stat()
+    except OSError:
+        return frozenset()
+    if (st.st_mtime_ns, st.st_size) != _secrets_cache[:2]:
+        _secrets_cache = (st.st_mtime_ns, st.st_size, frozenset(json.loads(SECRETS_FILE.read_text())))
+    return _secrets_cache[2]
+
+
+def redact(text: str) -> str:
+    """Mask known secret values (also inside user/password, KEY=value, url:token) and anything labelled as a
+    password or token."""
+    hashes = secret_hashes()
+    sha = lambda t: hashlib.sha256(t.encode()).hexdigest()
+
+    def one(m):
+        tok = m.group(0)
+        if sha(tok) in hashes:
+            return "‹secret›"
+        parts = re.split(r"([=:@/])", tok)
+        return "".join("‹secret›" if p and p not in "=:@/" and sha(p) in hashes else p for p in parts)
+    return SECRET_LABEL.sub(lambda m: m.group(1) + "‹secret›", SECRET_TOKEN.sub(one, text))
+
+
+def in_scope(rel: str) -> bool:
+    roots = device.get().get("roots")
+    return not roots or rel.split("/", 1)[0] in roots
+
+
+def shown(text: str) -> str:
+    return redact(text) if device.get().get("redact") else text
 
 
 def version(data: bytes) -> str:
@@ -141,6 +189,9 @@ class Index:
                     self.gen += 1
             return
         low = text.lower()
+        old = self.files.get(rel)
+        if old is not None and old[2] != text and rel.endswith(".md"):
+            keep_version(rel, old, text)
         with self.lock:
             # A few Unicode characters change length when lowercased; then positions would not line up.
             self.files[rel] = (st.st_mtime_ns, st.st_size, text, low if len(low) == len(text) else None)
@@ -177,6 +228,51 @@ class Index:
             snap = sorted(self.files.items())
         prefixes = tuple(r.strip() + "/" for r in root.split(","))  # "trade,trade-memory" = several roots
         return [(rel, v[2], v[3]) for rel, v in snap if not root or rel.startswith(prefixes)]
+
+
+HISTORY = AUDIT.parent / "history"
+HISTORY_KEEP = 200  # versions per file; text is small, so this covers months of edits
+
+
+def history_dir(rel: str) -> Path:
+    return HISTORY / rel.replace("/", "__")
+
+
+def keep_version(rel: str, old: tuple, new_text: str):
+    """Store every version of a Markdown file (who changed it and when), so any change can be inspected and undone.
+    The first time a file changes, its previous content is kept as the baseline."""
+    d = history_dir(rel)
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        if not any(d.iterdir()):
+            (d / f"{time.strftime('%Y%m%d-%H%M%S', time.localtime(old[0] / 1e9))}.000000_before.md").write_text(old[2])
+        dev = device.get()  # the watcher (watch token) or the rescan thread (no device) = an edit made on the VM
+        who = "VM" if dev.get("watch") or not dev.get("name") else re.sub(r"[^A-Za-z0-9-]", "-", dev["name"])
+        now = time.time()  # microseconds keep versions from the same second in order
+        path = d / f"{time.strftime('%Y%m%d-%H%M%S', time.localtime(now))}.{int(now % 1 * 1e6):06d}_{who}.md"
+        path.write_text(new_text)
+        versions = sorted(d.iterdir())
+        for extra in versions[:-HISTORY_KEEP]:
+            extra.unlink()
+    except OSError as e:  # history is a safety net; never let it break an edit
+        print(f"history for {rel} failed: {e}", flush=True)
+
+
+def versions_of(rel: str) -> list[dict]:
+    d = history_dir(rel)
+    out = []
+    for p in sorted(d.iterdir(), reverse=True) if d.is_dir() else []:
+        stamp, _, who = p.stem.partition("_")
+        out.append({"id": p.stem, "time": time.mktime(time.strptime(stamp[:15], "%Y%m%d-%H%M%S")),
+                    "by": who, "size": p.stat().st_size})
+    return out
+
+
+def version_text(rel: str, vid: str) -> str:
+    p = history_dir(rel) / f"{vid}.md"
+    if "/" in vid or not p.is_file():
+        raise ToolError(f"no version {vid} of {rel}")
+    return p.read_text()
 
 
 index = Index()
@@ -260,6 +356,8 @@ def knowledge_list(root: str = "memory", pattern: str = "*") -> str:
     filtered by a glob on the relative path."""
     if root not in ROOTS:
         raise ToolError(f"root must be one of {sorted(ROOTS)}")
+    if not in_scope(root + "/"):
+        raise ToolError(f"{root}/ is not shared with this device")
     hits = [rel for rel, _, _ in index.items(root) if fnmatch.fnmatch(rel.split("/", 1)[1], pattern)]
     return "\n".join(hits[:2000]) or "(no files)"
 
@@ -275,7 +373,7 @@ def knowledge_read(path: str, offset: int = 1, limit: int = 600) -> str:
     chunk = lines[start - 1:start - 1 + limit]
     body = "\n".join(f"{i}\t{line}" for i, line in enumerate(chunk, start))
     more = f"\n[... {len(lines) - (start - 1 + len(chunk))} more lines, use offset]" if start - 1 + len(chunk) < len(lines) else ""
-    return f"{rel} (version {version(data)}, {len(lines)} lines)\n{body}{more}"
+    return f"{rel} (version {version(data)}, {len(lines)} lines)\n{shown(body)}{more}"
 
 
 @server.tool()
@@ -291,6 +389,8 @@ def knowledge_search(pattern: str, root: str = "", max_results: int = 60) -> str
         raise ToolError(f"invalid regex: {e}")
     out = []
     for rel, text, low in index.items(root):
+        if not in_scope(rel):
+            continue
         hay, rx = (low, rx_low) if rx_low is not None and low is not None else (text, rx_i)
         # One C-level regex pass over the whole file (re.M keeps ^/$ per line); at most one hit per line.
         last, lineno, pos = -1, 1, 0
@@ -301,7 +401,7 @@ def knowledge_search(pattern: str, root: str = "", max_results: int = 60) -> str
             lineno += text.count("\n", pos, start)
             pos, last = start, start
             end = text.find("\n", start)
-            out.append(f"{rel}:{lineno}: {text[start:end if end >= 0 else None][:300]}")
+            out.append(f"{rel}:{lineno}: {shown(text[start:end if end >= 0 else None][:300])}")
             if len(out) >= max_results:
                 return "\n".join(out) + "\n[max_results reached]"
     return "\n".join(out) or "(no matches)"
@@ -505,10 +605,10 @@ async def knowledge_semantic_search(query: str, root: str = "", limit: int = 10)
     finds nothing or you do not know the exact words. root: one or more comma-separated roots, e.g. "trade,trade-memory".
     Returns path:line (score): passage."""
     roots = tuple(r.strip() + "/" for r in root.split(",") if r.strip())
-    hits = await asyncio.to_thread(vec.search, query, roots, min(limit, 30))
+    hits = [h for h in await asyncio.to_thread(vec.search, query, roots, min(limit, 30)) if in_scope(h["path"])]
     if not hits:
         return f"(no semantic results: {vec.status()})"
-    return "\n".join(f"{h['path']}:{h['line']} ({h['score']}): {' '.join(h['text'].split())[:240]}" for h in hits)
+    return "\n".join(f"{h['path']}:{h['line']} ({h['score']}): {shown(' '.join(h['text'].split())[:240])}" for h in hits)
 
 
 @server.tool()
@@ -517,8 +617,25 @@ async def knowledge_related(path: str, limit: int = 10) -> str:
     neighbours (Adamic-Adar), same type and similar meaning. Use it to find context before changing or adding a memo."""
     _, rel = resolve(path)
     graph = await asyncio.to_thread(get_graph)
-    out = kb_graph.related(graph, rel, min(limit, 30), vec.similar(rel))
+    out = [r for r in kb_graph.related(graph, rel, 30, vec.similar(rel)) if in_scope(r["id"])][:min(limit, 30)]
     return "\n".join(f"{r['id']} ({r['score']}): {r['label']} — {r['why']}" for r in out) or "(no related notes found)"
+
+
+@server.tool()
+def knowledge_history(path: str, version: str = "") -> str:
+    """Earlier versions of a Markdown file: without `version` a list (newest first, with who changed it: a device
+    name, or VM for edits made directly on the VM); with `version` that version's full text plus its diff against the
+    current file. To undo a change, write the old text back with knowledge_write (pass the current base_version)."""
+    import difflib
+    _, rel = resolve(path)
+    if not version:
+        vs = versions_of(rel)
+        return "\n".join(f"{v['id']}  {time.strftime('%Y-%m-%d %H:%M', time.localtime(v['time']))}  by {v['by']}  "
+                         f"({v['size']} bytes)" for v in vs) or f"(no history yet for {rel}: it has not changed since history started)"
+    old = version_text(rel, version)
+    cur = (resolve(path)[0]).read_text()
+    diff = "".join(difflib.unified_diff(old.splitlines(True), cur.splitlines(True), f"{rel}@{version}", f"{rel} (now)"))
+    return shown(f"{diff or '(identical to the current file)'}\n\n<version {version}>\n{old}\n</version>")
 
 
 PART_CHARS = 9500  # Claude Code caps each SessionStart hook output at 10,000 characters
@@ -551,9 +668,12 @@ def context_parts(project: str = "homelab") -> list[str]:
         "for the user: https://knowledge.to0wnn.com/ui"
     ]
     for rel in ("claude/CLAUDE.md", f"{docs}/CLAUDE.md", f"{mem}/MEMORY.md"):
-        full, _ = resolve(rel)
+        try:
+            full, _ = resolve(rel)
+        except ToolError:  # outside this token's scope
+            continue
         if full.exists():
-            text.append(f"===== {rel} (via knowledge server) =====\n{full.read_text(encoding='utf-8')}")
+            text.append(f"===== {rel} (via knowledge server) =====\n{shown(full.read_text(encoding='utf-8'))}")
     parts, cur = [], ""
     for line in "\n\n".join(text).splitlines(keepends=True):
         if len(cur) + len(line) > PART_CHARS:
@@ -583,7 +703,8 @@ def token_device(given: str) -> dict | None:
     if not hit:
         return None
     name, cfg = hit
-    return {"name": name, "write": bool(cfg.get("write")), "watch": bool(cfg.get("watch"))}
+    return {"name": name, "write": bool(cfg.get("write")), "watch": bool(cfg.get("watch")),
+            "roots": cfg.get("roots") or [], "redact": bool(cfg.get("redact"))}
 
 
 class BearerAuth:
@@ -614,6 +735,8 @@ class BearerAuth:
         dev = token_device(given)
         if dev and is_ui and scope["method"] == "POST" and headers.get(b"x-knowledge-ui") != b"1":
             dev = None
+        if dev and is_ui and (dev["roots"] or dev["redact"]):  # scoped agent tokens: MCP only, no web UI
+            return await JSONResponse({"error": "this token has no web UI access"}, status_code=403)(scope, receive, send)
         if dev:
             device.set(dev)
             return await self.app(scope, receive, send)
@@ -723,6 +846,24 @@ async def ui_events(request: Request):
                     yield ": keepalive\n\n"
     return StreamingResponse(stream(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@server.custom_route("/ui/api/history", methods=["GET"])
+async def ui_history(request: Request):
+    """Versions of a note, or one version with its diff against the version before it."""
+    import difflib
+    try:
+        _, rel = resolve(request.query_params.get("path", ""))
+        vid = request.query_params.get("version", "")
+        if not vid:
+            return JSONResponse({"versions": versions_of(rel)})
+        ids = [v["id"] for v in versions_of(rel)]
+        text = version_text(rel, vid)
+        prev = version_text(rel, ids[ids.index(vid) + 1]) if vid in ids and ids.index(vid) + 1 < len(ids) else ""
+    except ToolError as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+    diff = "".join(difflib.unified_diff(prev.splitlines(True), text.splitlines(True), "before", vid, n=2))
+    return JSONResponse({"id": vid, "text": text, "diff": diff})
 
 
 @server.custom_route("/ui/api/semantic", methods=["GET"])
