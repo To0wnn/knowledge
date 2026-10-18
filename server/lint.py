@@ -46,7 +46,7 @@ def looks_secret(hit: str) -> bool:
     ‹secret:NAME› placeholders are removed before matching: they are the fix, not a leak."""
     value = re.sub(r"^[A-Za-z_ -]+\s*[:=]?\s*`?", "", hit)
     return bool(re.search(r"\d", value)) and not value.startswith(("/", ".", "~", "$", "_", "-")) \
-        and not re.fullmatch(r"[A-Z0-9_]+", value) and not re.match(r"(seconds|minutes|hours|days|weeks)=", value)
+        and not re.fullmatch(r"[A-Z0-9_/]+", value) and not re.match(r"(seconds|minutes|hours|days|weeks)=", value)
 
 
 def latest_date(text: str) -> date | None:
