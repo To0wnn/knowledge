@@ -41,7 +41,9 @@ back/forward; quick open Ctrl+K across projects; keys `/`, `1`–`3`, `E`, `L`, 
 - `vectors.py`: Markdown chunks (~1200 chars) embedded locally with **embeddinggemma-300m** (fastembed/ONNX, model baked
   into the image, `HF_HUB_OFFLINE=1`). Chosen in a test on the real memos (8 paraphrased questions): gemma 8/8 in the
   top 3, mpnet 6/8, potion 5/8; Qwen3-Embedding-0.6B needed 12.8 GB RAM and was dropped. Background thread, `nice 10`,
-  2 threads, batches of 4: ~1 GB RAM, first run ~1 h, then only changed chunks. Cache `/state/vectors.npz` (by chunk
+  6 CPU threads, batches of 4: ~1.8 GB RAM, full run ~13 min (5.5 chunks/s), then only changed chunks; cache saved
+  every ~640 chunks. Each chunk is embedded with its file title (`title: … | text: …`). The UHD 770 iGPU was tested
+  via OpenVINO (1.2 chunks/s, OOM at batch 16) and rejected: slower than 2 CPU threads. Cache `/state/vectors.npz` (by chunk
   hash). Files > 300 KB stay regex-only. Container `mem_limit: 3g`. MCP tool `knowledge_semantic_search`; the UI shows
   "By meaning" results under the exact matches.
 - `graph.py`: **Louvain** communities (networkx, seed 42) with cohesion; **insights**: isolated notes, sparse topics
