@@ -72,7 +72,7 @@ function visibleData() {
 function applyView(refit = false) {
   if (refit) loadGraph.fitted = false;
   const v = visibleData();
-  Graph.graphData(v);
+  Graph.graphData(v); settling = true; // new data reheats the layout
   if (Graph3D) Graph3D.graphData({ nodes: v.nodes, links: v.links.map((l) => ({ source: linkId(l.source), target: linkId(l.target) })) });
 }
 
@@ -124,6 +124,13 @@ function animateHover() {
   if (!hover) settleTimer = setTimeout(() => Graph.autoPauseRedraw(true), 400);
 }
 
+// Zoom to the selected note and everything it links to, capped so a lone note is not blown up.
+let settling = true;
+function zoomToFocus() {
+  Graph.zoomToFit(600, 90, (m) => focusSet.has(m.id));
+  setTimeout(() => { if (Graph.zoom() > 4) Graph.zoom(4, 300); }, 650);
+}
+
 function setFocus(id) {
   focusSet = id ? new Set([id, ...(neighbors.get(id) || [])]) : new Set();
   if (Graph3D) Graph3D.nodeColor(Graph3D.nodeColor()); // repaint
@@ -145,7 +152,12 @@ async function loadGraph() {
     .linkDirectionalParticleColor(() => css("--accent"))
     .backgroundColor(css("--canvas"))
     .cooldownTicks(250) // the layout settles, then the simulation stops: no CPU while idle
-    .onEngineStop(() => { if (!loadGraph.fitted) { Graph.zoomToFit(400, 40); loadGraph.fitted = true; } })
+    .onEngineStop(() => {
+      settling = false;
+      if (zoomToFocus.again && selected) zoomToFocus();
+      else if (!loadGraph.fitted) Graph.zoomToFit(400, 40);
+      zoomToFocus.again = false; loadGraph.fitted = true;
+    })
     .onNodeHover((n) => { hover = n ? n.id : null; if (!selected) setFocus(hover); $("g2d").style.cursor = n ? "pointer" : ""; Graph.linkDirectionalParticles(Graph.linkDirectionalParticles()); animateHover(); })
     .onNodeClick((n) => openNote(n.id))
     .onBackgroundClick(() => deselect());
@@ -253,10 +265,9 @@ async function openNote(id, { push = true } = {}) {
   selected = byId.has(note.path) ? note.path : null; setFocus(selected);
   if ($("local").checked) applyView(true);
   const n = byId.get(note.path);
-  // Zoom to the note and everything it links to, capped so a lone note is not blown up.
   if (n && Graph && n.x != null && !$("local").checked) {
-    Graph.zoomToFit(600, 90, (m) => focusSet.has(m.id));
-    setTimeout(() => { if (Graph.zoom() > 4) Graph.zoom(4, 300); }, 650);
+    loadGraph.fitted = true; // the reader chose a view: no overview fit after the layout settles
+    zoomToFocus(); if (settling) zoomToFocus.again = true; // nodes still move: fit once more when they stop
   }
   renderNote();
 }
