@@ -181,7 +181,9 @@ def build(files: dict[str, str]) -> dict:
         return ps.pop() if len(ps) == 1 else "shared" if ps else "homelab"
     nodes = [{"id": rel, "label": labels[rel], "group": groups[rel], "project": shown_in(rel),
               **({"projects": sorted(linked[rel] - {"shared"})} if shown_in(rel) == "shared" else {}),
-              "cluster": comm[rel], "size": len(text), "degree": degree.get(rel, 0), "sources": sources_of(text)}
+              "cluster": comm[rel], "size": len(text), "degree": degree.get(rel, 0), "sources": sources_of(text),
+              # [[slug]] links may use the frontmatter name; the UI needs it when it differs from the file name
+              **({"name": nm} if mem_root(rel) and (nm := frontmatter(text).get("name", "")) and nm != rel.split("/")[-1][:-3] else {})}
              for rel, text in sorted(keep.items())]
     graph = {"nodes": nodes, "links": [{"source": a, "target": b} for a, b in sorted(edges)], "communities": communities}
     graph["insights"] = insights(graph)
@@ -317,6 +319,7 @@ if __name__ == "__main__":
     for t in ("memory/b_c.md", "homelab/framework.md", "claude/skills/forge-stack/SKILL.md", "homelab/sources/2026-10-18-x.md"):
         assert ("memory/a.md", t) in links, (t, links)
     assert ("memory/b_c.md", "memory/a.md") in links and "memory/MEMORY.md" not in ids  # the index is not drawn
+    assert ids["memory/b_c.md"]["name"] == "b-c" and "name" not in ids["memory/a.md"]  # only when it differs
     assert ids["trade-memory/a.md"]["label"] == "Bot plan" and ids["trade-memory/a.md"]["project"] == "trade"
     assert ids["anpitek/website/OVERZICHT.md"]["project"] == "anpitek"
     assert "trade/bot.py" not in ids and "anpitek/boekhouding/.agents/skills/x.md" not in ids

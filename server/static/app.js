@@ -54,8 +54,10 @@ function indexGraph() {
   for (const l of data.links) { neighbors.get(linkId(l.source))?.add(linkId(l.target)); neighbors.get(linkId(l.target))?.add(linkId(l.source)); }
   slugToId = new Map();
   for (const n of data.nodes) {
-    const key = n.id.split("/").pop().replace(/\.md$/, "").replace(/-/g, "_");
-    if (!slugToId.has(key) || inProject(n.project)) slugToId.set(key, n.id); // prefer the memo of this project
+    for (const k of [n.id.split("/").pop().replace(/\.md$/, ""), n.name].filter(Boolean)) { // file name and frontmatter name
+      const key = k.replace(/-/g, "_");
+      if (!slugToId.has(key) || inProject(n.project)) slugToId.set(key, n.id); // prefer the memo of this project
+    }
   }
   // Cluster colours: the biggest topics of this project get a hue, in a fixed order.
   const sizes = new Map();
@@ -610,12 +612,19 @@ $("new-form").addEventListener("submit", async (e) => {
   const type = $("new-type").value, title = $("new-title").value.trim(), desc = $("new-desc").value.trim();
   const slug = title.toLowerCase().normalize("NFKD").replace(/\p{M}/gu, "").replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 50);
   const file = `${type}_${slug}.md`, path = `${MEMORY_ROOT[project]}/${file}`;
+  const fail = (msg) => { $("new-error").hidden = false; $("new-error").textContent = msg; };
+  if (!slug) return fail("The title needs letters or digits: they make the file name.");
+  if (byId.has(path)) return fail(`${file} already exists: open it and update it instead, or pick another title.`);
   const text = `---\nname: ${type}_${slug}\ndescription: ${JSON.stringify(desc)}\nmetadata:\n  type: ${type}\n---\n\n${desc}\n\n## Stand\n\n## Keuzes\n`; // the house-rules layout
   const heading = $("new-heading").selectedIndex < $("new-heading").options.length - 1 ? $("new-heading").value : "";
   try {
-    await api("/ui/api/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path, text, base_version: "", index_line: `- [${title}](${file}) — ${desc}`, heading }) });
-    $("new-dialog").close(); await refreshData(); if (await openNote(path)) startEdit();
-  } catch (err) { $("new-error").hidden = false; $("new-error").textContent = err.message; }
+    const res = await api("/ui/api/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path, text, base_version: "", index_line: `- [${title}](${file}) — ${desc}`, heading }) });
+    $("new-dialog").close(); await refreshData();
+    if (await openNote(path)) {
+      startEdit();
+      if (res.hint) { const w = el("p", "error live-warn", res.hint); w.setAttribute("role", "status"); $("note").querySelector(".actions")?.before(w); }
+    }
+  } catch (err) { fail(err.message); }
 });
 
 // ---------------------------------------------------------------- search and shortcuts

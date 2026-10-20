@@ -374,6 +374,7 @@ def main():
         # Review fixes 20 Oct: a project named like a path part does not capture other sessions; write patterns are
         # anchored; "Add" never wipes access; graph ETag per user; body cap; scoped ingest/lint; token routes.
         assert admin("/ui/api/admin/project", {"name": "home"})[0] == 200
+        assert admin("/ui/api/admin/project", {"name": "shared"})[0] == 400  # the UI's label for shared skills
         assert "project anpitek" in http("GET", "/context/1?project=/home/x/anpitek/boekhouding")[1]
         assert "project homelab" in http("GET", "/context/1?project=/home/x/homelab")[1]
         assert call("knowledge_write", {"path": "homelab/deep/memory/x.md", "content": "x"})[0]
