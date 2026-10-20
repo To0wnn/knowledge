@@ -75,7 +75,8 @@ PROJECTS_DIR = Path(os.environ.get("KNOWLEDGE_PROJECTS_DIR", HOME / ".local/shar
 # The web UI trusts the Authentik user header only when Traefik also sends this shared secret, because the
 # container port is reachable on the LAN without Traefik.
 PROXY_SECRET = os.environ.get("KNOWLEDGE_PROXY_SECRET", "")
-ADMINS = {u.strip() for u in os.environ.get("KNOWLEDGE_ADMINS", "").split(",") if u.strip()}
+CONFIG_ADMINS = frozenset(u.strip() for u in os.environ.get("KNOWLEDGE_ADMINS", "").split(",") if u.strip())
+ADMINS = set(CONFIG_ADMINS)  # plus the extra admins of the admin page (settings.json); the config ones can't be removed
 SECRETS_FILE = Path(os.environ.get("KNOWLEDGE_SECRETS", HOME / ".config/knowledge-server/secrets.json"))
 AUDIT = Path(os.environ.get("KNOWLEDGE_AUDIT", HOME / ".local/state/knowledge-server/audit.log"))
 
@@ -175,6 +176,7 @@ def version(data: bytes) -> str:
 BINARY = {".zip", ".gz", ".tgz", ".xz", ".7z", ".tar", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf",
           ".bin", ".img", ".iso", ".so", ".pyc", ".whl", ".mp4", ".mkv", ".db", ".sqlite", ".woff", ".woff2", ".ttf"}
 RESCAN_SECONDS = int(os.environ.get("KNOWLEDGE_RESCAN", "60"))
+BACKGROUND: dict[str, dict] = {}  # last run of the background work, for the admin page
 
 
 def shared_files(root: str):
@@ -258,9 +260,12 @@ class Index:
     def loop(self):
         while True:
             time.sleep(RESCAN_SECONDS)
+            t0 = time.time()
             try:
                 self.rescan()
+                BACKGROUND["rescan"] = {"at": t0, "seconds": round(time.time() - t0, 2)}
             except Exception as e:  # never let the safety net die
+                BACKGROUND["rescan"] = {"at": t0, "error": str(e)}
                 print(f"rescan failed: {e}", flush=True)
 
     def items(self, root: str = ""):
@@ -1234,6 +1239,7 @@ async def invalidate_route(request: Request):
         return JSONResponse({"error": "token may not invalidate"}, status_code=403)
     paths = (await request.json()).get("paths", [])[:5000]
     await asyncio.to_thread(lambda: [index.refresh(p) for p in paths])
+    BACKGROUND["watcher"] = {"at": time.time(), "paths": len(paths)}
     if f"claude/{RULES_FILE}" in paths:  # new sessions get the edited rules
         server._lowlevel_server.instructions = instructions()
     return JSONResponse({"refreshed": len(paths)})
@@ -1269,6 +1275,7 @@ async def semantic_route(request: Request):
 STATIC = Path(__file__).with_name("static")
 # Release id = hash of the UI files, fixed at startup. Pages link app.js/app.css with ?v=<release>, so every deploy
 # is a new URL (no stale script after a refresh), and the live stream tells open tabs to reload on a new release.
+STARTED = time.time()
 BOOT = secrets.token_hex(4)  # changes on every start, so ETags from before a restart never match
 RELEASE = hashlib.sha256(b"".join((STATIC / f).read_bytes() for f in ("index.html", "admin.html", "app.js", "admin.js", "app.css"))).hexdigest()[:12]
 
@@ -1337,6 +1344,128 @@ async def ui_admin_page(request: Request):
     return page("admin.html")
 
 
+# Settings the admin page may change: policy, not infrastructure. Paths, hosts, proxy IPs and the port stay in
+# compose.yaml / local.env (infra as code) and are only shown. Defaults are the calibrated values in the code.
+SETTINGS_FILE = ADMIN_DIR / "settings.json"
+SETTINGS = {  # key: (type, min, max, label)
+    "similar_hint": (float, 0.5, 0.95, "New memo: similarity from which 'similar existing memos' is shown (calibrated 18 Oct 2026: 0.72)"),
+    "history_keep": (int, 10, 2000, "History: versions kept per file"),
+    "stale_unchecked_days": (int, 7, 365, "Lint: days before a fact marked 'niet opnieuw gecontroleerd' is reported"),
+    "big_memo": (int, 5000, 100000, "Lint: memo size in bytes from which history should move to the archive"),
+    "rescan_seconds": (int, 15, 3600, "Safety-net rescan of all files, in seconds (the VM watcher reports changes at once)"),
+}
+
+
+def current_settings() -> dict:
+    return {"similar_hint": SIMILAR_HINT, "history_keep": HISTORY_KEEP, "stale_unchecked_days": kb_lint.STALE_UNCHECKED_DAYS,
+            "big_memo": kb_lint.BIG_MEMO, "rescan_seconds": RESCAN_SECONDS, "extra_admins": sorted(ADMINS - CONFIG_ADMINS)}
+
+
+def check_settings(values: dict) -> dict:
+    out = {}
+    for k, v in values.items():
+        if k == "extra_admins":
+            names = [str(n).strip() for n in v if str(n).strip()]
+            bad = [n for n in names if not re.fullmatch(r"[\w.@+-]{1,150}", n)]
+            if bad:
+                raise ToolError(f"not an Authentik username: {', '.join(bad)}")
+            out[k] = sorted(set(names) - CONFIG_ADMINS)
+            continue
+        if k not in SETTINGS:
+            raise ToolError(f"unknown setting {k}")
+        kind, lo, hi, _ = SETTINGS[k]
+        try:
+            n = kind(v)
+        except (TypeError, ValueError):
+            raise ToolError(f"{k}: not a number")
+        if not lo <= n <= hi:
+            raise ToolError(f"{k}: between {lo} and {hi}")
+        out[k] = n
+    return out
+
+
+def apply_settings(values: dict):
+    global SIMILAR_HINT, HISTORY_KEEP, RESCAN_SECONDS
+    SIMILAR_HINT = values.get("similar_hint", SIMILAR_HINT)
+    HISTORY_KEEP = values.get("history_keep", HISTORY_KEEP)
+    RESCAN_SECONDS = values.get("rescan_seconds", RESCAN_SECONDS)
+    kb_lint.STALE_UNCHECKED_DAYS = values.get("stale_unchecked_days", kb_lint.STALE_UNCHECKED_DAYS)
+    kb_lint.BIG_MEMO = values.get("big_memo", kb_lint.BIG_MEMO)
+    if "extra_admins" in values:
+        ADMINS.clear(); ADMINS.update(CONFIG_ADMINS | set(values["extra_admins"]))
+
+
+def load_settings():
+    try:
+        apply_settings(check_settings(read_json(SETTINGS_FILE, {})))
+    except ToolError as e:  # a hand-edited file: run on the defaults and say so on the admin page
+        BACKGROUND["settings"] = {"at": time.time(), "error": f"settings.json ignored: {e}"}
+        print(f"settings.json ignored: {e}", flush=True)
+
+
+def audit_tail(n: int = 25) -> list[str]:
+    try:
+        with AUDIT.open("rb") as f:
+            f.seek(0, 2); f.seek(max(0, f.tell() - 16384))
+            return [l for l in f.read().decode("utf-8", "replace").splitlines()[1:] if l][-n:][::-1]
+    except OSError:
+        return []
+
+
+def system_state() -> dict:
+    """What runs in the background and how the server is configured, for the admin page. No secret values."""
+    with index.lock:
+        per_root: dict[str, list] = {}
+        for rel, v in index.files.items():
+            r = per_root.setdefault(rel.split("/", 1)[0], [0, 0]); r[0] += 1; r[1] += v[1]
+    tokens = read_json(TOKENS_FILE, {})
+    try:
+        known = len(read_json(SECRETS_FILE, []))
+    except Exception:
+        known = None
+    used = lambda n: _last_used.get(n)
+    return {
+        "release": RELEASE, "started": STARTED,
+        "background": [
+            {"name": "VM file watcher", "what": "reports changed files at once (inotify on the VM); also rebuilds GEMINI.md and AGENTS.md",
+             "last": (BACKGROUND.get("watcher") or {}).get("at") or used("vm-watcher"), "detail": f"{(BACKGROUND.get('watcher') or {}).get('paths', '?')} paths in the last report"},
+            {"name": "Rescan", "what": f"safety net: re-reads changed files every {RESCAN_SECONDS} s",
+             "last": (BACKGROUND.get("rescan") or {}).get("at"), "detail": (BACKGROUND.get("rescan") or {}).get("error") or f"{(BACKGROUND.get('rescan') or {}).get('seconds', '?')} s"},
+            {"name": "Semantic index", "what": f"embeds new text ({vectors.MODEL}, {vectors.THREADS} threads)", "last": None, "detail": vec.status()},
+            {"name": "Weekly lint report", "what": "VM timer, Monday 08:00, posts new findings to Matrix", "last": used("vm-lint-report"), "detail": "last call of the vm-lint-report token"},
+            {"name": "Session logs", "what": "SessionEnd/PreCompact hooks of Claude Code, Stop of agy, SessionEnd of Codex", "last": used("vm-sessions"), "detail": "last call of the vm-sessions token (VM)"},
+            {"name": "History", "what": f"keeps up to {HISTORY_KEEP} versions per file", "last": None,
+             "detail": f"{len(HISTORY_FAILED)} failed writes" if HISTORY_FAILED else "no failed writes"},
+            *([{"name": "Settings", "what": "settings.json", "last": BACKGROUND["settings"]["at"], "detail": BACKGROUND["settings"]["error"]}] if "settings" in BACKGROUND else []),
+        ],
+        "index": [{"root": r, "path": str(ROOTS.get(r, "")), "files": n, "mb": round(b / 1e6, 1)} for r, (n, b) in sorted(per_root.items())],
+        "config": [  # where each value is set: change it there, then deploy
+            {"name": "Admins (config)", "value": ", ".join(sorted(CONFIG_ADMINS)) or "(none)", "where": "compose.yaml KNOWLEDGE_ADMINS"},
+            {"name": "Allowed hosts", "value": os.environ.get("KNOWLEDGE_ALLOWED_HOSTS", ""), "where": "local.env KNOWLEDGE_ALLOWED_HOSTS"},
+            {"name": "Trusted proxy IPs", "value": os.environ.get("KNOWLEDGE_PROXY_IPS", ""), "where": "local.env KNOWLEDGE_PROXY_IPS"},
+            {"name": "Proxy secret", "value": "set" if PROXY_SECRET else "MISSING: the web UI cannot sign anyone in", "where": "config/proxy.env (Vaultwarden KNOWLEDGE_PROXY_SECRET)"},
+            {"name": "Known secrets (hashes)", "value": "unreadable" if known is None else str(known), "where": "token.py push-secrets → /config/secrets.json"},
+            {"name": "Device tokens", "value": str(len(tokens)), "where": "this page → /admin/tokens.json"},
+            {"name": "Embedding model", "value": vectors.MODEL, "where": "compose.yaml KNOWLEDGE_EMBED_MODEL"},
+            {"name": "Time zone", "value": os.environ.get("TZ", "(container default)"), "where": "compose.yaml TZ"},
+            {"name": "Audit log", "value": str(AUDIT), "where": "compose.yaml KNOWLEDGE_AUDIT"},
+        ],
+        "audit": audit_tail(),
+    }
+
+
+@server.custom_route("/ui/api/admin/settings", methods=["POST"])
+@admin_only
+async def ui_admin_settings(request: Request, body: dict):
+    values = check_settings(dict(body))
+    stored = {**read_json(SETTINGS_FILE, {}), **values}
+    write_json(SETTINGS_FILE, stored)
+    apply_settings(values)
+    BACKGROUND.pop("settings", None)
+    audit("admin-settings", ",".join(f"{k}={v}" for k, v in values.items()))
+    return JSONResponse({"ok": True, "settings": current_settings()})
+
+
 @server.custom_route("/ui/api/admin", methods=["GET"])
 @admin_only
 async def ui_admin_state(request: Request, _):
@@ -1348,6 +1477,10 @@ async def ui_admin_state(request: Request, _):
         "roots": sorted(ROOTS),
         "tokens": [{"name": n, **{k: v for k, v in cfg.items() if k != "sha256"}, "last_used": _last_used.get(n)}
                    for n, cfg in sorted(tokens.items())],
+        "config_admins": sorted(CONFIG_ADMINS),
+        "settings": current_settings(), "setting_info": {k: {"min": lo, "max": hi, "label": label, "float": kind is float}
+                                                         for k, (kind, lo, hi, label) in SETTINGS.items()},
+        "system": await asyncio.to_thread(system_state),
     })
 
 
@@ -1746,6 +1879,7 @@ async def ui_ingest(request: Request):
 
 
 def build_app():
+    load_settings()
     hosts = os.environ.get("KNOWLEDGE_ALLOWED_HOSTS", "knowledge.to0wnn.com,127.0.0.1:8766").split(",")
     app = server.streamable_http_app(
         stateless_http=True,
