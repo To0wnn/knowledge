@@ -1,52 +1,27 @@
 #!/usr/bin/env python3
-"""Manage device tokens for the knowledge server. Run on the VM.
+"""Push the SHA-256 hashes of the known secrets to the knowledge server (redaction and the write guard). Run on the VM.
 
-  ./token.py list
-  ./token.py add <device> [--read-only] [--watch] [--roots memory,homelab] [--redact]
-                                                    prints the new token once (enter it in the plugin)
-  ./token.py revoke <device>
-  ./token.py push-secrets                           sends SHA-256 hashes of the known secrets to forge (redaction)
+  ./token.py push-secrets
 
---roots limits a token to some roots; --redact masks known secrets in everything it reads (for agents and PA's,
-which also read untrusted mail). Scoped tokens have no web UI access.
-
-Readable tokens stay on the VM only (~/.config/knowledge-server/tokens-plain.json, 0600) so they can be handed out.
-Forge gets only SHA-256 hashes (/root/docker/knowledge/config/tokens.json), so a leaked file there is useless.
-Every change is pushed to forge right away; the server picks it up without a restart.
+Device tokens are created and revoked in the web UI (https://knowledge.to0wnn.com/ui/admin); the server stores only
+their hashes and treats them as secrets too. tokens-plain.json still holds the tokens made before the web UI, so
+push-secrets keeps masking those.
 """
 import hashlib
 import json
 import os
-import secrets
 import subprocess
 import sys
 import tempfile
 
 PLAIN = os.path.expanduser("~/.config/knowledge-server/tokens-plain.json")
-REMOTE = "root@<lan-ip>:/root/docker/knowledge/config/tokens.json"
+REMOTE = "root@<lan-ip>:/root/docker/knowledge/config/secrets.json"
 # Optional local list of secrets (value<TAB>NAME per line). The Vaultwarden helper `secret tsv` is preferred.
 SECRETS_TSV = os.path.expanduser(os.environ.get("KNOWLEDGE_SECRETS_TSV", "~/.config/kennis-sync/geheimen.tsv"))
 
 
 def load() -> dict:
     return json.load(open(PLAIN)) if os.path.exists(PLAIN) else {}
-
-
-def save_and_push(tokens: dict):
-    os.makedirs(os.path.dirname(PLAIN), mode=0o700, exist_ok=True)
-    with open(PLAIN, "w") as f:
-        json.dump(tokens, f, indent=2)
-    os.chmod(PLAIN, 0o600)
-    hashed = {name: {"sha256": hashlib.sha256(cfg["token"].encode()).hexdigest(),
-                     **{k: v for k, v in cfg.items() if k != "token"}} for name, cfg in tokens.items()}
-    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".json") as f:
-        json.dump(hashed, f, indent=2)
-    try:
-        subprocess.run(["scp", "-q", f.name, REMOTE], check=True)
-        subprocess.run(["ssh", REMOTE.split(":")[0], "chown 1000:1000 /root/docker/knowledge/config/tokens.json && "
-                        "chmod 600 /root/docker/knowledge/config/tokens.json"], check=True)
-    finally:
-        os.unlink(f.name)
 
 
 def push_secrets():
@@ -70,7 +45,7 @@ def push_secrets():
     os.chmod(local, 0o600)
     with tempfile.NamedTemporaryFile("w", delete=False, suffix=".json") as f:
         json.dump(sorted(values), f)
-    target = REMOTE.replace("tokens.json", "secrets.json")
+    target = REMOTE
     try:
         subprocess.run(["scp", "-q", f.name, target], check=True)
         subprocess.run(["ssh", target.split(":")[0], "chown 1000:1000 /root/docker/knowledge/config/secrets.json && "
@@ -81,34 +56,10 @@ def push_secrets():
 
 
 def main(argv):
-    tokens = load()
-    if not argv or argv[0] == "list":
-        for name, cfg in tokens.items():
-            print(name, "write" if cfg.get("write") else "read-only", "watch" if cfg.get("watch") else "")
-    elif argv[0] == "add" and len(argv) >= 2:
-        name = argv[1]
-        tok = secrets.token_urlsafe(32)
-        tokens[name] = {"token": tok, "write": "--read-only" not in argv, "watch": "--watch" in argv}
-        if "--roots" in argv:
-            tokens[name]["roots"] = argv[argv.index("--roots") + 1].split(",")
-        if "--redact" in argv:
-            tokens[name]["redact"] = True
-        save_and_push(tokens)
-        label = f"KNOWLEDGE_TOKEN_{name.upper().replace('-', '_')}"
-        try:  # keep it in the vault too, so redaction and push-secrets know it
-            subprocess.run(["secret", "set", label, "--note", "knowledge server device token"], input=tok,
-                           text=True, check=True, capture_output=True)
-        except (OSError, subprocess.CalledProcessError):
-            if os.path.exists(SECRETS_TSV):
-                with open(SECRETS_TSV, "a") as f:
-                    f.write(f"{tok}\t{label}\n")
-        print(tok)
-    elif argv[0] == "push-secrets":
+    if argv[:1] == ["push-secrets"]:
         push_secrets()
-    elif argv[0] == "revoke" and len(argv) == 2:
-        tokens.pop(argv[1], None)
-        save_and_push(tokens)
-        print("revoked", argv[1])
+    elif argv[:1] in (["add"], ["revoke"], ["list"]):
+        sys.exit("Tokens are managed in the web UI now: https://knowledge.to0wnn.com/ui/admin")
     else:
         sys.exit(__doc__)
 

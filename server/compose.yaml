@@ -23,12 +23,17 @@ services:
       KNOWLEDGE_ANPITEK_MEMORY: /data/anpitek-memory
       KNOWLEDGE_TRADE: /data/trade
       KNOWLEDGE_TRADE_MEMORY: /data/trade-memory
-      KNOWLEDGE_TOKENS: /config/tokens.json
+      KNOWLEDGE_ADMIN_DIR: /admin  # tokens.json, users.json, projects.json: managed in the web UI (admin page)
+      KNOWLEDGE_TOKENS: /admin/tokens.json
+      KNOWLEDGE_PROJECTS_DIR: /projects  # projects created in the web UI
+      KNOWLEDGE_ADMINS: to0wnn  # Authentik usernames with full access; everyone else gets projects in the admin page
       KNOWLEDGE_SECRETS: /config/secrets.json  # SHA-256 of known secrets (token.py push-secrets), for redaction
       KNOWLEDGE_AUDIT: /state/audit.log
       KNOWLEDGE_VECTORS: /state/vectors.npz  # embedding cache: a restart only embeds new text
       TZ: Europe/Amsterdam  # local dates in source file names, LOG.md and the audit log (forge itself runs UTC)
       KNOWLEDGE_ALLOWED_HOSTS: knowledge.to0wnn.com,<lan-ip>:8766,127.0.0.1:8766
+    # KNOWLEDGE_PROXY_SECRET (Vaultwarden KNOWLEDGE_PROXY_SECRET): Traefik sends it with the Authentik user header.
+    env_file: /root/docker/knowledge/config/proxy.env
     volumes:
       - memory:/data/memory
       - homelab:/data/homelab
@@ -41,6 +46,8 @@ services:
       - trade_memory:/data/trade-memory
       - /root/docker/knowledge/config:/config:ro
       - /root/docker/knowledge/state:/state
+      - /root/docker/knowledge/admin:/admin
+      - /root/docker/knowledge/projects:/projects
 
 x-nfs: &nfs
   driver: local
