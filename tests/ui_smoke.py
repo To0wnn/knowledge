@@ -54,6 +54,14 @@ async def page(browser, secret: str, path: str = "/ui", **opts):
     return ctx, pg, errors
 
 
+async def click_node(pg, box, sc):
+    """Like a person: move onto the node first. force-graph finds the node under the pointer in its next frame, so a
+    click in the same instant as the move can land "beside" it when nothing else is animating."""
+    await pg.mouse.move(box["x"] + sc["x"], box["y"] + sc["y"])
+    await pg.wait_for_timeout(300)
+    await pg.mouse.click(box["x"] + sc["x"], box["y"] + sc["y"])
+
+
 EMPTY_POINT = """() => { const w = Graph.width(), h = Graph.height(), ns = Graph.graphData().nodes.map(n => Graph.graph2ScreenCoords(n.x, n.y));
   for (let y = 20; y < h; y += 20) for (let x = 20; x < w; x += 20) if (ns.every(c => Math.hypot(c.x - x, c.y - y) > 60)) return {x, y};
   return null; }"""
@@ -82,7 +90,7 @@ async def desktop(browser, secret: str) -> None:
     home = await pg.evaluate("Object.fromEntries(Graph.graphData().nodes.map(n => [n.id, [n.x, n.y]]))")
     overview = await pg.evaluate("Graph.zoom()")
     sc = await pg.evaluate("(id) => { const n = byId.get(id); return Graph.graph2ScreenCoords(n.x, n.y); }", nid)
-    await pg.mouse.click(box["x"] + sc["x"], box["y"] + sc["y"])
+    await click_node(pg, box, sc)
     await pg.wait_for_timeout(2000)
     zoom = await pg.evaluate("Graph.zoom()")
     radii = await pg.evaluate("""(id) => { const c = byId.get(id); return [...neighbors.get(id)].map(i => byId.get(i))
@@ -101,13 +109,14 @@ async def desktop(browser, secret: str) -> None:
     check(drift < 0.01 and not any(v[2] is not None for v in after.values()), f"every node back home (drift {drift:.3f})")
     check(abs(await pg.evaluate("Graph.zoom()") - overview) < 0.05, "zoomed back to the overview")
     sc = await pg.evaluate("(id) => { const n = byId.get(id); return Graph.graph2ScreenCoords(n.x, n.y); }", nid)
-    await pg.mouse.click(box["x"] + sc["x"], box["y"] + sc["y"])
+    await click_node(pg, box, sc)
     await pg.wait_for_timeout(1500)
     check(await pg.evaluate("!!$('side').querySelector('.map-card')"), "on the map the right column shows the note card")
     sc = await pg.evaluate("(id) => { const n = byId.get(id); return Graph.graph2ScreenCoords(n.x, n.y); }", nid)
-    await pg.mouse.click(box["x"] + sc["x"], box["y"] + sc["y"])
+    await click_node(pg, box, sc)
     await pg.wait_for_timeout(500)
-    check(await pg.evaluate("$('graph').hidden && !$('note').hidden && current.path") == nid, "a second click reads the note")
+    state = await pg.evaluate("({map: !$('graph').hidden, note: current && current.path, selected, hover})")
+    check(not state["map"] and state["note"] == nid, f"a second click reads the note {state if state['note'] != nid or state['map'] else ''}")
     check(not errors, f"no page errors on desktop {errors[:2]}")
     await ctx.close()
 
