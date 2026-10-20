@@ -43,7 +43,9 @@ def check(ok: bool, what: str) -> None:
 
 
 async def page(browser, secret: str, path: str = "/ui", **opts):
-    ctx = await browser.new_context(ignore_https_errors=True, **opts,
+    # bypass_csp: Playwright's wait_for_function evaluates strings, which the page's CSP forbids; csp() checks the
+    # app itself under the real policy.
+    ctx = await browser.new_context(ignore_https_errors=True, bypass_csp=True, **opts,
                                     extra_http_headers={"X-Knowledge-Proxy": secret, "X-authentik-username": USER})
     pg = await ctx.new_page()
     errors = []
@@ -174,10 +176,28 @@ async def admin(browser, secret: str) -> None:
     await ctx.close()
 
 
+async def csp(browser, secret: str) -> None:
+    """The app under its real Content-Security-Policy: the map and a note render, nothing is blocked."""
+    for path in ("/ui", "/ui/admin"):
+        ctx = await browser.new_context(ignore_https_errors=True,
+                                        extra_http_headers={"X-Knowledge-Proxy": secret, "X-authentik-username": USER})
+        pg, blocked = await ctx.new_page(), []
+        pg.on("console", lambda m: blocked.append(m.text) if "Content Security Policy" in m.text else None)
+        pg.on("pageerror", lambda e: blocked.append(str(e)))
+        await pg.goto(URL + path)
+        await pg.wait_for_timeout(2500)
+        if path == "/ui":
+            await pg.click("#map-btn")
+            await pg.wait_for_timeout(1500)
+        check(not blocked, f"nothing blocked by the CSP on {path} {blocked[:2]}")
+        await ctx.close()
+
+
 async def main() -> None:
     secret = subprocess.run(["secret", "KNOWLEDGE_PROXY_SECRET"], check=True, capture_output=True, text=True).stdout.strip()
     async with async_playwright() as p:
         browser = await p.chromium.launch(channel="chrome")
+        await csp(browser, secret)
         await desktop(browser, secret)
         await search(browser, secret)
         await phone(browser, p.devices, secret)

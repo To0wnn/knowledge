@@ -17,7 +17,7 @@ const SYSTEM = new Set(["vm-watcher", "vm-sessions", "vm-lint-report"]);
 
 let state = null;
 const ago = (sec) => { if (!sec) return "never"; const d = Date.now() / 1000 - sec;
-  return d < 900 ? "in the last 15 min" : d < 86400 ? `${Math.round(d / 3600)} h ago` : `${Math.round(d / 86400)} days ago`; };
+  return d < 900 ? "in the last 15 min" : d < 3600 ? `${Math.round(d / 60)} min ago` : d < 86400 ? `${Math.round(d / 3600)} h ago` : `${Math.round(d / 86400)} days ago`; };
 
 function showError(e) { $("error").textContent = e ? String(e.message || e) : ""; $("error").hidden = !e; }
 
