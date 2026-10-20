@@ -65,7 +65,7 @@ version; the live stream sends the release in its `hello`, and an open tab that 
   via OpenVINO (1.2 chunks/s, OOM at batch 16) and rejected: slower than 2 CPU threads. Cache `/state/vectors.npz` (by chunk
   hash). Files > 300 KB stay regex-only. Container `mem_limit: 3g`. MCP tool `knowledge_semantic_search`; the UI shows
   "By meaning" results under the exact matches.
-- `graph.py`: **topics** with cohesion: a memo takes its MEMORY.md heading, a doc its subfolder or file-name family (3+ files, e.g. `FABLE_*`), other notes the topic of most of their links, the rest Louvain communities (networkx, seed 42); the MEMORY.md index itself is not drawn; **insights** for lint: isolated memos and sparse topics
+- `graph.py`: **topics** with cohesion: a memo takes its MEMORY.md heading, a homelab doc (any `.md` at the top of `homelab/`) the heading named in its frontmatter `topic:` (title from `title:`), other projects' docs their subfolder or file-name family (3+ files, e.g. `FABLE_*`), other notes the topic of most of their links, the rest Louvain communities (networkx, seed 42); the MEMORY.md index itself is not drawn; **insights** for lint: isolated memos and sparse topics. Lint also checks the structure: every memo (except feedback/user) and every homelab doc has `## Stand` and `## Keuzes` (history in `archief/`), and every homelab doc a known `topic:`
   (cohesion < 0.15); **relevance model** for `knowledge_related` and the Connected list: link ×3, shared source ×4,
   Adamic-Adar ×1.5, same type ×1, meaning ×3 (cosine > 0.3).
 - **Source traceability:** memos list their raw sources in frontmatter `sources: [file.md]`; ingest stores a sha256 and
