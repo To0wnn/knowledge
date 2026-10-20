@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect a client · Knowledge</title>
+<link rel="icon" href="data:,">
+<style>
+/* Layout: one reading column; a sticky tab bar switches between the three clients; reference tables below. */
+:root {
+  --bg: #f5f6f3; --panel: #ffffff; --ink: #1c2420; --muted: #5c6862; --line: #dde2dc;
+  --accent: #1f6f5c; --accent-ink: #ffffff; --code-bg: #eef1ec; --warn: #9a5a12; --warn-bg: #fbf1e3;
+  --display: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --body: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121614; --panel: #1a201d; --ink: #e3e9e5; --muted: #98a59e; --line: #2c3530;
+  --accent: #5cc4a6; --accent-ink: #0f1a16; --code-bg: #222a26; --warn: #e6b062; --warn-bg: #2e2617; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #121614; --panel: #1a201d; --ink: #e3e9e5; --muted: #98a59e; --line: #2c3530;
+  --accent: #5cc4a6; --accent-ink: #0f1a16; --code-bg: #222a26; --warn: #e6b062; --warn-bg: #2e2617; color-scheme: dark }
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 16px/1.6 var(--body); }
+.wrap { max-width: 860px; margin: 0 auto; padding-block: 40px 72px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+h1, h2, h3 { font-family: var(--display); text-wrap: balance; line-height: 1.2; margin: 0; }
+h1 { font-size: clamp(30px, 5vw, 42px); letter-spacing: -0.01em; }
+h2 { font-size: 24px; margin-top: 40px; }
+h3 { font-size: 18px; margin-top: 28px; }
+p { margin: 10px 0; max-width: 68ch; }
+.lede { color: var(--muted); font-size: 18px; margin-top: 12px; }
+.eyebrow { font: 500 12px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin-bottom: 10px; }
+code { font-family: var(--mono); font-size: .9em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+a { color: var(--accent); }
+.how { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-top: 22px; }
+.how div { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; min-width: 0; }
+.how b { display: block; font-family: var(--display); font-size: 17px; margin-bottom: 4px; }
+.how span { color: var(--muted); font-size: 14.5px; }
+.tabs { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; display: flex; gap: 6px; flex-wrap: wrap;
+  background: var(--bg); padding: 12px 0; margin-top: 36px; border-bottom: 1px solid var(--line); }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+.tabs button { font: 600 15px var(--body); color: var(--muted); background: transparent; border: 1px solid var(--line);
+  border-radius: 999px; padding: 7px 16px; cursor: pointer; }
+.tabs button[aria-selected="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.tabs button:focus-visible, .copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+ol.steps { list-style: none; counter-reset: s; padding: 0; margin: 18px 0 0; display: grid; gap: 18px; }
+ol.steps > li { counter-increment: s; position: relative; padding-left: 44px; min-width: 0; }
+ol.steps > li::before { content: counter(s); position: absolute; left: 0; top: 0; width: 30px; height: 30px; border-radius: 50%;
+  display: grid; place-items: center; font: 600 14px var(--mono); background: var(--code-bg); color: var(--accent); }
+ol.steps > li > b { display: block; font-size: 16.5px; }
+.cmd { position: relative; margin-top: 8px; background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px; min-width: 0; }
+.cmd pre { margin: 0; padding: 12px 84px 12px 14px; overflow-x: auto; font: 13.5px/1.55 var(--mono); white-space: pre; }
+.copy { position: absolute; top: 8px; right: 8px; font: 500 12px var(--body); color: var(--ink); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+.note { margin-top: 10px; padding: 10px 14px; border-left: 3px solid var(--warn); background: var(--warn-bg); border-radius: 0 8px 8px 0; font-size: 15px; }
+.note b { color: var(--warn); }
+.table-wrap { overflow-x: auto; margin-top: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 600 12px var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+tr:last-child td { border-bottom: 0; }
+.yes { color: var(--accent); font-weight: 600; } .no { color: var(--muted); }
+ul.rules { margin: 12px 0 0; padding-left: 20px; } ul.rules li { margin: 6px 0; max-width: 68ch; }
+footer { margin-top: 48px; color: var(--muted); font-size: 13.5px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+.top { margin: 0 0 18px; font-size: 14px; } .top a { color: var(--muted); text-decoration: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="top"><a href="/ui">← Back to the knowledge base</a></p>
+  <div class="eyebrow">MCP · https://knowledge.to0wnn.com</div>
+  <h1>Connect a client</h1>
+  <p class="lede">How to connect Claude Code, agy (Antigravity) or Codex to the shared knowledge: the docs and memory of your project, live on every machine, with the same house rules.</p>
+
+  <div class="how">
+    <div><b>One token per device</b><span>You get it from the admin of this server. It decides which project you see and whether you may write.</span></div>
+    <div><b>Memory lives on the server</b><span>Memos are central; every session, on every machine, reads and writes the same files.</span></div>
+    <div><b>Your folder stays the source</b><span>Code stays with you. Only your <code>.md</code> files are mirrored (Claude Code).</span></div>
+  </div>
+
+  <div class="note"><b>Receive the token safely.</b> Ask for a one-time Bitwarden Send link, not a chat or e-mail message. Never put the token in a memo, doc or git repository.</div>
+
+  <nav class="tabs" role="tablist" aria-label="Client">
+    <button role="tab" id="tab-claude" aria-controls="claude" aria-selected="true">Claude Code</button>
+    <button role="tab" id="tab-agy" aria-controls="agy" aria-selected="false">agy (Antigravity)</button>
+    <button role="tab" id="tab-codex" aria-controls="codex" aria-selected="false">Codex</button>
+  </nav>
+
+  <section id="claude" role="tabpanel" aria-labelledby="tab-claude">
+    <h2>Claude Code</h2>
+    <p>The most complete connection: the plugin loads the context and house rules at every start, writes a session log and mirrors your docs.</p>
+    <ol class="steps">
+      <li><b>Windows: Git and Python</b>
+        Install <a href="https://git-scm.com/download/win" target="_blank" rel="noopener">Git for Windows</a> (Claude Code runs hooks in Git Bash) and <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">Python 3</a> with the <code>py</code> launcher. Linux and macOS usually have Python already.</li>
+      <li><b>Install the plugin</b>
+        <div class="cmd"><pre>claude plugin marketplace add To0wnn/knowledge
+claude plugin install knowledge@knowledge --scope user</pre><button class="copy" type="button">Copy</button></div></li>
+      <li><b>Set the URL and token</b>
+        <div class="cmd"><pre>claude plugin configure knowledge@knowledge</pre><button class="copy" type="button">Copy</button></div>
+        URL: <code>https://knowledge.to0wnn.com</code>, token: the one you received.</li>
+      <li><b>Turn local auto memory off</b>
+        In <code>~/.claude/settings.json</code> (Windows: <code>%USERPROFILE%\.claude\settings.json</code>):
+        <div class="cmd"><pre>"autoMemoryEnabled": false</pre><button class="copy" type="button">Copy</button></div>
+        Your memory is on the server, so Claude does not also write it locally.</li>
+      <li><b>Mark your project folder</b> (only when your folder is the source)
+        In the root of your project, a file <code>.knowledge-project</code> with the project name (for example <code>a350</code>):
+        <div class="cmd"><pre>echo a350 &gt; .knowledge-project</pre><button class="copy" type="button">Copy</button></div>
+        From then on every <code>.md</code> file goes to the server at each start, and each changed one right after the change. Code, <code>.venv</code> and hidden folders never go.</li>
+      <li><b>Check</b>
+        Start a new session in your project folder. It begins with <code>knowledge (project …)</code>. Ask: "search the knowledge for …".</li>
+    </ol>
+  </section>
+
+  <section id="agy" role="tabpanel" aria-labelledby="tab-agy" hidden>
+    <h2>agy (Antigravity CLI)</h2>
+    <p>agy is a standalone binary that updates itself (<code>agy update</code>), not an npm package. It gets the tools and, through a rules file, the house rules.</p>
+    <ol class="steps">
+      <li><b>Add the MCP server</b>
+        <div class="cmd"><pre>agy mcp add --header "Authorization: Bearer YOUR_TOKEN" knowledge https://knowledge.to0wnn.com/mcp</pre><button class="copy" type="button">Copy</button></div>
+        This lands in <code>~/.gemini/config/mcp_config.json</code> (fields <code>serverUrl</code> and <code>headers</code>).</li>
+      <li><b>Protect the config file</b>
+        agy keeps the token in plain text in that file.
+        <div class="cmd"><pre>chmod 600 ~/.gemini/config/mcp_config.json</pre><button class="copy" type="button">Copy</button></div>
+        Windows: make the file readable for your own account only (Properties › Security).</li>
+      <li><b>House rules as a rules file</b>
+        Put this text in <code>~/.gemini/GEMINI.md</code>; agy always loads that file.
+        <div class="cmd"><pre>Use the MCP server "knowledge" for this project's docs and memory: look things up with
+knowledge_search or knowledge_semantic_search before answering, open hits with knowledge_read.
+Memos: search first and update the existing one; every memo has "## Stand" (true now) and
+"## Keuzes" (decisions with date and reason); history goes to archief/; one index line in
+MEMORY.md; absolute dates; never write a password, token or key.</pre><button class="copy" type="button">Copy</button></div></li>
+      <li><b>Check</b>
+        <div class="cmd"><pre>agy mcp list</pre><button class="copy" type="button">Copy</button></div>
+        <code>knowledge  http  enabled</code>. In a session, <code>/mcp</code> shows the connection.</li>
+    </ol>
+  </section>
+
+  <section id="codex" role="tabpanel" aria-labelledby="tab-codex" hidden>
+    <h2>Codex (OpenAI)</h2>
+    <p>Codex reads the token from an environment variable, so it is not stored in a config file. Install or update with <code>npm i -g @openai/codex@latest</code>.</p>
+    <ol class="steps">
+      <li><b>Token as an environment variable</b>
+        <div class="cmd"><pre># Linux/macOS (in ~/.bashrc or ~/.zshrc)
+export KNOWLEDGE_TOKEN="YOUR_TOKEN"
+
+# Windows (PowerShell, once; then open a new window)
+setx KNOWLEDGE_TOKEN "YOUR_TOKEN"</pre><button class="copy" type="button">Copy</button></div></li>
+      <li><b>The MCP server in <code>~/.codex/config.toml</code></b>
+        <div class="cmd"><pre>[mcp_servers.knowledge]
+url = "https://knowledge.to0wnn.com/mcp"
+bearer_token_env_var = "KNOWLEDGE_TOKEN"
+default_tools_approval_mode = "writes"
+startup_timeout_sec = 15</pre><button class="copy" type="button">Copy</button></div>
+        <code>writes</code>: reading just works, Codex asks before writing.</li>
+      <li><b>House rules in <code>~/.codex/AGENTS.md</code></b>
+        The same text as for agy (step 3 there). Codex loads this file at every start.</li>
+      <li><b>Check</b>
+        <div class="cmd"><pre>codex mcp list</pre><button class="copy" type="button">Copy</button></div>
+        Ask in a session: "search the knowledge for …".</li>
+    </ol>
+    <div class="note"><b>Hooks in Codex.</b> For the context at start (as in Claude Code), use exactly one SessionStart hook: with several, Codex drops the context. Codex runs hooks with a bare PATH, so use full paths.</div>
+  </section>
+
+  <h2>What each client gets</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th></th><th>Claude Code</th><th>agy</th><th>Codex</th></tr></thead>
+    <tbody>
+      <tr><td>Search, read, write (MCP)</td><td class="yes">yes</td><td class="yes">yes</td><td class="yes">yes</td></tr>
+      <tr><td>House rules</td><td class="yes">automatic</td><td>via GEMINI.md</td><td>via AGENTS.md</td></tr>
+      <tr><td>Context at start (index)</td><td class="yes">automatic</td><td class="no">no</td><td>with one hook</td></tr>
+      <tr><td>Session log on the server</td><td class="yes">yes</td><td class="no">no</td><td class="no">no</td></tr>
+      <tr><td>Mirror docs (<code>.md</code>)</td><td class="yes">yes, with .knowledge-project</td><td class="no">no</td><td class="no">no</td></tr>
+      <tr><td>Refuses known secrets in writes</td><td class="yes">yes (server)</td><td class="yes">yes (server)</td><td class="yes">yes (server)</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2>The house rules</h2>
+  <p>They apply to every client; the server checks them with <code>knowledge_lint</code>.</p>
+  <ul class="rules" id="rules">
+    <li><b>Search first.</b> Update the memo that already covers the subject; no near-duplicates.</li>
+    <li><b>One subject per memo</b>, built as <code>## Stand</code> (what is true now, how, pitfalls, open items) and <code>## Keuzes</code> (decisions with date and reason, also what was decided against).</li>
+    <li><b>History</b> does not go in the memo but in <code>archief/&lt;name&gt;_archief.md</code>.</li>
+    <li><b>One index line</b> per memo under the fitting <code>##</code> heading of <code>MEMORY.md</code>, at most ~150 characters.</li>
+    <li><b>Absolute dates</b> (20 Oct 2026), never "yesterday" or "next week".</li>
+    <li><b>Never a password, token or key</b> in a memo or doc; the server refuses known secrets.</li>
+  </ul>
+
+  <h2>When it does not work</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>What you see</th><th>Cause and fix</th></tr></thead>
+    <tbody>
+      <tr><td><code>401</code> or "token invalid"</td><td>Token copied wrongly or revoked. Set it again; ask for a new one if needed.</td></tr>
+      <tr><td>No context at start (Claude Code, Windows)</td><td>Git for Windows missing or Python not found. Install both and restart Claude Code.</td></tr>
+      <tr><td>Docs do not reach the server</td><td>No <code>.knowledge-project</code> in the project root, or its name does not match your token's project.</td></tr>
+      <tr><td>Codex ignores the context hook</td><td>More than one SessionStart hook, or the hook is not trusted yet: open <code>/hooks</code> in Codex.</td></tr>
+      <tr><td>"writes are allowed only for …"</td><td>Your token may not write that path: only the memory of your own project.</td></tr>
+    </tbody>
+  </table></div>
+
+  <footer>Source and technical details: <a href="https://github.com/To0wnn/knowledge" target="_blank" rel="noopener">github.com/To0wnn/knowledge</a> (README, sections "A guest project" and "Other agents").</footer>
+</div>
+<script>
+const tabs = [...document.querySelectorAll('[role="tab"]')];
+function show(id, push) {
+  for (const t of tabs) {
+    const on = t.getAttribute('aria-controls') === id;
+    t.setAttribute('aria-selected', String(on));
+    document.getElementById(t.getAttribute('aria-controls')).hidden = !on;
+  }
+  if (push) { try { history.replaceState(null, '', '#' + id); } catch (e) {} }
+}
+tabs.forEach((t, i) => {
+  t.addEventListener('click', () => show(t.getAttribute('aria-controls'), true));
+  t.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+    const n = tabs[(i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
+    n.focus(); n.click();
+  });
+});
+const start = location.hash.slice(1);
+if (['claude', 'agy', 'codex'].includes(start)) show(start, false);
+document.querySelectorAll('.copy').forEach((b) => b.addEventListener('click', async () => {
+  const pre = b.parentElement.querySelector('pre');
+  try { await navigator.clipboard.writeText(pre.textContent); b.textContent = 'Copied'; }
+  catch (e) { const r = document.createRange(); r.selectNodeContents(pre); const s = getSelection(); s.removeAllRanges(); s.addRange(r); b.textContent = 'Selected'; }
+  setTimeout(() => (b.textContent = 'Copy'), 1500);
+}));
+</script>
+</body>
+</html>

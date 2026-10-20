@@ -451,6 +451,8 @@ def main():
         # Caching: vendor files immutable, app files revalidated, graph 304 on an unchanged ETag.
         assert "immutable" in raw("GET", "/ui/static/vendor/force-graph-1.52.0.js")[1]["cache-control"]
         assert raw("GET", "/ui/static/app.js")[1]["cache-control"] == "no-cache"
+        st, _, body = raw("GET", "/ui/help", headers=ck)
+        assert st == 200 and b"Connect a client" in body and b"fonts.googleapis" not in body  # no external requests
         st, hd, body = raw("GET", "/ui", headers=ck)
         rel = re.search(rb'app\.js\?v=([0-9a-f]{12})"', body).group(1).decode()
         assert hd["cache-control"] == "no-cache" and f'data-release="{rel}"'.encode() in body and b"app.css?v=" + rel.encode() in body
