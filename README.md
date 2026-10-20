@@ -200,6 +200,27 @@ sees and edits them in the normal Bitwarden apps and the automation cannot see t
 - Why not Bitwarden Secrets Manager or `bw serve`: Vaultwarden does not implement Secrets Manager (Bitwarden-licensed),
   and `bw serve` exposes an unauthenticated local API.
 
+## A guest project (someone else's machine, e.g. Windows)
+
+The guest's own folder stays the source of the code and docs; the knowledge server holds the project's memory and a
+read-only mirror of its Markdown, and the guest's sessions follow the same house rules.
+
+On the server (admin page): create the project (`<name>` + `<name>-memory`), a **write token limited to those two
+roots** with secrets masked, and, for the web UI, add the guest's Authentik username under People with write on that
+project only. A token limited to one project always works in that project, whatever the folder on the guest's machine
+is called, and its session context holds this project and the house rules only.
+
+On the guest's machine:
+1. Windows: install Git for Windows (Claude Code runs hooks in Git Bash) and Python 3 (python.org, with the `py`
+   launcher). Hooks run Python through `hooks/py.sh` (`python3`, `py` or `python`).
+2. In the project folder, a file `.knowledge-project` with the project name (one line). Only below such a folder are
+   `.md` files mirrored: every one at session start (files deleted there are removed on the server, a copy is kept),
+   and each one Claude edits right after the edit. Code is never sent; dot-folders and venvs are skipped.
+3. Claude Code: `claude plugin marketplace add To0wnn/knowledge`, `claude plugin install knowledge@knowledge --scope user`,
+   `claude plugin configure knowledge@knowledge` (URL and the token), and `"autoMemoryEnabled": false` in
+   `~/.claude/settings.json` (memory lives on the server).
+4. Check: a new session in the folder starts with "knowledge (project <name>)"; ask it to search the knowledge.
+
 ## Local addresses
 
 The addresses of an installation (docker host, NFS host, LAN URL, Matrix, proxy) live in `local.env`, which is not in
