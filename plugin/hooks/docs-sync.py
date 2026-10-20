@@ -28,6 +28,8 @@ def edited_paths(hook: dict) -> list:
         target = args.get("Path") or args.get("TargetFile") or ""  # agy CLI: write_file/edit_file Path; app/IDE: TargetFile
         return [json.loads(target) if target.startswith('"') else target] if target else []
     inp = hook.get("tool_input") or {}
+    if isinstance(inp, str):  # a raw patch instead of {"command": patch}
+        inp = {"command": inp}
     if inp.get("file_path"):
         return [inp["file_path"]]
     return [a or b for a, b in PATCH_FILE.findall(str(inp.get("command") or inp.get("patch") or ""))]

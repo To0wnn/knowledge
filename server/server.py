@@ -278,6 +278,9 @@ def history_dir(rel: str) -> Path:
     return HISTORY / rel.replace("/", "__")
 
 
+HISTORY_FAILED: dict[str, str] = {}  # rel -> error of the last failed history write; lint reports it
+
+
 def keep_version(rel: str, old: tuple, new_text: str):
     """Store every version of a Markdown file (who changed it and when), so any change can be inspected and undone.
     The first time a file changes, its previous content is kept as the baseline."""
@@ -296,7 +299,9 @@ def keep_version(rel: str, old: tuple, new_text: str):
         versions = sorted(d.iterdir(), key=lambda p: p.stat().st_mtime_ns)
         for extra in versions[:-HISTORY_KEEP]:
             extra.unlink()
-    except OSError as e:  # history is a safety net; never let it break an edit
+        HISTORY_FAILED.pop(rel, None)
+    except OSError as e:  # history is a safety net; never let it break an edit, but say so in lint
+        HISTORY_FAILED[rel] = str(e)
         print(f"history for {rel} failed: {e}", flush=True)
 
 
@@ -646,6 +651,7 @@ def lint_all() -> dict[str, list[str]]:
     report["isolated_note"] = [f"{i['id']} ({i['degree']} link)" for i in gaps["isolated"] if mem_of(i["id"])]
     report["sparse_topic"] = [f"{c['project']}: topic '{c['name']}' ({c['size']} notes, cohesion {c['cohesion']})"
                               for c in gaps["sparse_topics"]]
+    report["history_failed"] = [f"{rel}: {err}" for rel, err in sorted(HISTORY_FAILED.items()) if in_scope(rel)]
     return report
 
 
@@ -979,6 +985,8 @@ def load_projects():
 def create_project(name: str):
     if not PROJECT_NAME.match(name):
         raise ToolError("project name: 2-24 lowercase letters or digits, starting with a letter")
+    if name == "shared":
+        raise ToolError("'shared' is taken: the UI uses it for the shared skills")
     if name in PROJECTS or name in ROOTS or f"{name}-memory" in ROOTS:
         raise ToolError(f"{name} already exists")
     base = PROJECTS_DIR / name
@@ -1524,12 +1532,13 @@ async def ui_save(request: Request):
         refuse_secrets(line)
         if mirrored(rel):
             raise ToolError(f"{rel} is a mirror of the guest's own folder: the next sync would overwrite it; change it there")
-        await knowledge_write(rel, body.get("text", ""), body.get("base_version", ""))
+        written = await knowledge_write(rel, body.get("text", ""), body.get("base_version", ""))
         if line:
             await append_line(f"{root}/MEMORY.md", line, " ".join(str(body.get("heading", "")).split()))
     except (ToolError, KeyError) as e:
         return JSONResponse({"error": str(e)}, status_code=409)
-    return JSONResponse({"path": rel, "version": version(full.read_bytes())})
+    hint = written.split("\n", 1)[1].strip() if "\n" in written else ""  # "Similar existing memos: ..." for a new memo
+    return JSONResponse({"path": rel, "version": version(full.read_bytes()), **({"hint": hint} if hint else {})})
 
 
 def insert_index_line(text: str, line: str, heading: str = "") -> str:

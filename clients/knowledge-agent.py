@@ -12,6 +12,7 @@ agy/Codex tokens on the VM stay read-only (install always gives session-log "-")
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 import urllib.error
@@ -31,7 +32,8 @@ def token(name: str) -> str:
 
 
 def hook_config(agent: str, name: str) -> dict:
-    exe, me = sys.executable, str(Path(__file__).resolve())
+    # Windows: the py launcher (C:\Windows\py.exe, no spaces): a quoted interpreter path would not run in PowerShell.
+    exe, me = ("py" if os.name == "nt" and shutil.which("py") else sys.executable), str(Path(__file__).resolve())
     q = lambda s: f'"{s}"' if " " in s else s  # unquoted where possible: PowerShell does not run a quoted path
     # Full paths: Codex runs hooks with a bare PATH. -X utf8: Windows pipes are cp1252 otherwise.
     cmd = lambda *a: " ".join([q(exe), "-X", "utf8", q(me), *a, "-" if a == ("session-log",) else name])

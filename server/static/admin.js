@@ -149,7 +149,7 @@ $("token-form").onsubmit = (e) => {
       all: !!$("t-roots").querySelector('input[value="*"]:checked'),
       roots: [...$("t-roots").querySelectorAll("input:checked")].flatMap((c) => c.value.split(",")).filter((r) => r !== "*"),
     });
-  }, button).then((ok) => { if (ok) { e.target.reset(); showNewToken(res); } });
+  }, button).then(() => { if (res) { e.target.reset(); showNewToken(res); } }); // shown once: even if the reload after it failed
 };
 $("copy-token").onclick = async () => {
   try { await navigator.clipboard.writeText($("new-token-value").textContent); $("copy-token").textContent = "Copied"; }
