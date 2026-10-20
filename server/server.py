@@ -784,10 +784,51 @@ def project_for(directory: str) -> str:
     return "anpitek" if "anpitek" in parts else "homelab"
 
 
+def token_project() -> str | None:
+    """The project a device token is limited to, when its roots belong to exactly one project (e.g. a friend's pc with
+    roots a350 + a350-memory). Such a session always works in that project, whatever its directory is called; a
+    Windows path like C:\\Users\\x\\A350Copilot matches nothing in project_for."""
+    roots = set(device.get().get("roots") or [])
+    owners = {p for p, (d, m) in PROJECTS.items() if roots & {d, m}}
+    return owners.pop() if roots and len(owners) == 1 else None
+
+
+# For guests (a token without the shared claude/ root): the house rules travel with the context, because the docs root
+# of their project is a mirror of their own folder and their CLAUDE.md there is theirs.
+GUEST_RULES = """House rules for the memory of this project (the server checks them with knowledge_lint):
+1. Search first (knowledge_search / knowledge_semantic_search) and update the memo that already covers the subject
+   instead of adding a near-duplicate; when knowledge_write answers "Similar existing memos", merge.
+2. One subject per memo. Frontmatter: name, description (one line), metadata: type (project, feedback, reference or
+   user). Body: "## Stand" (what is true now: how it works, where things are, pitfalls, open items) and "## Keuzes"
+   (decisions with date and reason, also what was decided against). History is not kept in the memo: move it to
+   {mem}/archief/<name>_archief.md.
+3. Every memo gets exactly one index line under the fitting "## " heading of {mem}/MEMORY.md:
+   "- [Title](file.md) — hook", at most ~150 characters; keep MEMORY.md under ~150 lines.
+4. Absolute dates only (20 Oct 2026), never "yesterday" or "next week".
+5. Never write a password, token or key into a memo or doc.
+6. Write memos in the language the user speaks with you; code and commands stay as they are.
+7. After a larger change run knowledge_lint and fix what it reports for this project."""
+
+
 def context_parts(project: str = "homelab") -> list[str]:
     """Startup context for the plugin's SessionStart hooks: what a VM session in that project gets loaded natively,
     split on line boundaries into parts that each fit one hook output, so nothing is cut off."""
     docs, mem = PROJECTS[project]
+    if not in_scope("claude/"):  # a guest: only this project, no word about the owner's other projects or vault
+        text = [f"===== knowledge (project {project}) =====\nThis project's memory and docs live on the knowledge server "
+                "(https://knowledge.to0wnn.com); other sessions and the web UI see the same files live. Docs: "
+                f"{docs}/ is a read-only mirror of the project folder on this machine: edit the files here, the plugin "
+                f"copies every .md to the server. Memory: {mem}/ with the index {mem}/MEMORY.md (below). Save and update "
+                f"memories there (knowledge_edit, or knowledge_write for a new file plus one index line), never in local "
+                "files. Search: knowledge_search, by meaning knowledge_semantic_search; housekeeping: knowledge_lint.",
+                GUEST_RULES.format(mem=mem)]
+        try:
+            full, _ = resolve(f"{mem}/MEMORY.md")
+            if full.exists():
+                text.append(f"===== {mem}/MEMORY.md (via knowledge server) =====\n{shown(full.read_text(encoding='utf-8'))}")
+        except ToolError:
+            pass
+        return split_parts("\n\n".join(text))
     others = "; ".join(f"{p}: {d}/ and {m}/" for p, (d, m) in PROJECTS.items() if p != project)
     text = [
         f"===== knowledge plugin (project {project}) =====\nThe memory and docs below live on the knowledge MCP server "
@@ -809,8 +850,12 @@ def context_parts(project: str = "homelab") -> list[str]:
             continue
         if full.exists():
             text.append(f"===== {rel} (via knowledge server) =====\n{shown(full.read_text(encoding='utf-8'))}")
+    return split_parts("\n\n".join(text))
+
+
+def split_parts(text: str) -> list[str]:
     parts, cur = [], ""
-    for line in "\n\n".join(text).splitlines(keepends=True):
+    for line in text.splitlines(keepends=True):
         if len(cur) + len(line) > PART_CHARS:
             parts.append(cur)
             cur = ""
@@ -904,7 +949,7 @@ def mount_project(name: str):
     PROJECTS[name] = (docs, mem)
     kb_graph.MEMORY_ROOTS.add(mem)
     MD_ONLY.add(docs)
-    WRITABLE.extend([f"{docs}/*.md", f"{docs}/*/*.md", f"{mem}/*.md", f"{mem}/archief/*.md", f"{mem}/sessions/*.md"])
+    WRITABLE.extend([f"{docs}/*.md", f"{docs}/**/*.md", f"{mem}/*.md", f"{mem}/archief/*.md", f"{mem}/sessions/*.md"])
 
 
 def load_projects():
@@ -1047,7 +1092,7 @@ async def sessions_route(request: Request):
     prompts = [" ".join(str(p).split())[:200] for p in b.get("prompts", [])][:8]
     if not prompts:
         return JSONResponse({"skipped": "no prompts"})
-    project = project_for(str(b.get("cwd", "")))
+    project = token_project() or project_for(str(b.get("cwd", "")))
     mem = PROJECTS[project][1]
     rel = f"{mem}/sessions/{time.strftime('%Y-%m')}.md"
     lines = [f"\n## {time.strftime('%Y-%m-%d %H:%M')} · {project} · {device.get().get('name', '?')} · "
@@ -1078,6 +1123,84 @@ async def sessions_route(request: Request):
     return JSONResponse({"logged": rel})
 
 
+SYNC_SKIP = {"venv", "node_modules", "__pycache__", "dist", "build", "site-packages"}  # plus every dot-folder
+SYNC_MAX_FILE = 300_000
+
+
+def sync_name(name: str) -> str | None:
+    """A path relative to the project folder as the plugin sends it (Windows or POSIX separators) -> "a/b.md", or None
+    when it is no Markdown file of the project itself (absolute, "..", dot-folders, venvs)."""
+    parts = PurePosixPath(str(name).replace("\\", "/")).parts
+    if not parts or parts[0] == "/" or ":" in parts[0] or not parts[-1].endswith(".md"):
+        return None
+    if any(x in ("..", "") or x.startswith(".") or x in SYNC_SKIP for x in parts):
+        return None
+    return "/".join(parts)
+
+
+@server.custom_route("/sync", methods=["POST"])
+async def sync_route(request: Request):
+    """Mirror of the Markdown in a guest's project folder (plugin option sync_docs): {"files": {"a/b.md": "text"},
+    "full": true}. Only for a write token limited to one project; files land in that project's docs root. The folder on
+    the guest's machine is the source: full = the list is the whole folder, so mirrored files that are gone there are
+    removed here (a copy is kept in state/deleted/, like knowledge_delete)."""
+    project = token_project()
+    if not project or not device.get().get("write"):
+        return JSONResponse({"error": "sync needs a write token limited to one project"}, status_code=403)
+    docs = PROJECTS[project][0]
+    b = await request.json()
+    if b.get("project") not in (None, project):  # the folder's .knowledge-project names another project
+        return JSONResponse({"error": f"this folder is marked for project {b.get('project')}, the token is for {project}"},
+                            status_code=409)
+    files = b.get("files") if isinstance(b.get("files"), dict) else {}
+    out = {"written": 0, "unchanged": 0, "deleted": 0, "refused": []}
+    keep = set()
+    for name, text in list(files.items())[:2000]:
+        clean = sync_name(name)
+        if not clean:
+            out["refused"].append(f"{name}: not a Markdown file of the project")
+            continue
+        if not isinstance(text, str) or len(text.encode()) > SYNC_MAX_FILE:
+            out["refused"].append(f"{name}: not text or bigger than {SYNC_MAX_FILE // 1000} KB")
+            continue
+        try:
+            full, rel = resolve(f"{docs}/{clean}")
+            check_writable(rel)
+            refuse_secrets(text)
+        except ToolError as e:
+            out["refused"].append(f"{name}: {e}")
+            continue
+        keep.add(rel)
+        data = text.encode()
+        async with _locks.setdefault(rel, asyncio.Lock()):
+            current = full.read_bytes() if full.exists() else None
+            if current == data:
+                out["unchanged"] += 1
+                continue
+            if not replace_if_unchanged(full, current, data):
+                out["refused"].append(f"{name}: changed while writing")
+                continue
+            index.refresh(rel)
+        audit("sync", rel)
+        out["written"] += 1
+    if b.get("full") and keep:  # never empty the mirror because of an empty or failed listing
+        with index.lock:
+            gone = [r for r in index.files if r.startswith(docs + "/") and r.endswith(".md") and r not in keep]
+        for rel in gone:
+            full, rel = resolve(rel)
+            async with _locks.setdefault(rel, asyncio.Lock()):
+                if not full.exists():
+                    continue
+                copy = AUDIT.parent / "deleted" / f"{time.strftime('%Y%m%d-%H%M%S')}_{rel.replace('/', '__')}"
+                copy.parent.mkdir(parents=True, exist_ok=True)
+                copy.write_bytes(full.read_bytes())
+                full.unlink()
+                index.refresh(rel)
+            audit("sync-delete", rel)
+            out["deleted"] += 1
+    return JSONResponse(out)
+
+
 @server.custom_route("/invalidate", methods=["POST"])
 async def invalidate_route(request: Request):
     """Called by the inotify watcher on the VM with the paths that changed there: {"paths": ["memory/x.md", ...]}."""
@@ -1090,7 +1213,7 @@ async def invalidate_route(request: Request):
 
 @server.custom_route("/context/{part}", methods=["GET"])
 async def context_route(request: Request):
-    parts = context_parts(project_for(request.query_params.get("project", "")))
+    parts = context_parts(token_project() or project_for(request.query_params.get("project", "")))
     n = int(request.path_params["part"])
     if not 1 <= n <= len(parts):
         return PlainTextResponse("")  # the plugin asks for a fixed number of parts; extra ones are empty
