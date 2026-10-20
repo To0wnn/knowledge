@@ -375,6 +375,17 @@ def main():
         # anchored; "Add" never wipes access; graph ETag per user; body cap; scoped ingest/lint; token routes.
         assert admin("/ui/api/admin/project", {"name": "home"})[0] == 200
         assert admin("/ui/api/admin/project", {"name": "shared"})[0] == 400  # the UI's label for shared skills
+        # Settings: policy from the admin page, checked and applied at once; the config admins stay admin.
+        st, _, res = raw("GET", "/ui/api/admin", headers=ck)
+        state = json.loads(res)
+        assert state["settings"]["history_keep"] == 200 and state["system"]["background"] and state["system"]["config"], state["settings"]
+        assert all("secret" not in json.dumps(c["value"]).lower() or c["value"] in ("set",) for c in state["system"]["config"] if c["name"] == "Proxy secret")
+        assert admin("/ui/api/admin/settings", {"similar_hint": 2})[0] == 400 and admin("/ui/api/admin/settings", {"nope": 1})[0] == 400
+        st, _, res = admin("/ui/api/admin/settings", {"stale_unchecked_days": 30, "extra_admins": ["carol"]})
+        assert st == 200 and json.loads(res)["settings"]["stale_unchecked_days"] == 30, res
+        assert raw("GET", "/ui/admin", headers=user("carol"))[0] == 200  # an extra admin
+        assert admin("/ui/api/admin/settings", {"extra_admins": []})[0] == 200 and raw("GET", "/ui/admin", headers=user("carol"))[0] == 403
+        assert "admin-settings" in "\n".join(json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["system"]["audit"])
         assert "project anpitek" in http("GET", "/context/1?project=/home/x/anpitek/boekhouding")[1]
         assert "project homelab" in http("GET", "/context/1?project=/home/x/homelab")[1]
         assert call("knowledge_write", {"path": "homelab/deep/memory/x.md", "content": "x"})[0]

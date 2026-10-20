@@ -117,10 +117,43 @@ function renderProjects() {
   }));
 }
 
+// Settings: a number field per server setting (range and meaning from the server), plus the extra admins.
+function renderSettings() {
+  const info = state.setting_info, cur = state.settings;
+  $("settings-fields").replaceChildren(...Object.entries(info).map(([k, i]) => {
+    const wrap = el("div", "setting"), id = `s-${k}`, label = el("label", "", i.label), input = el("input");
+    label.htmlFor = id; input.id = id; input.name = k; input.type = "number"; input.required = true;
+    input.min = i.min; input.max = i.max; input.step = i.float ? "0.01" : "1"; input.value = cur[k];
+    wrap.append(label, input); return wrap;
+  }));
+  $("s-admins").value = cur.extra_admins.join("\n");
+  $("s-config-admins").textContent = `Always admin (server config): ${state.config_admins.join(", ") || "nobody"}.`;
+}
+
+const when = (sec) => sec ? `${new Date(sec * 1000).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" })} (${ago(sec)})` : "—";
+function renderSystem() {
+  const sys = state.system, row = (...cells) => { const tr = el("tr"); tr.append(...cells.map((c) => el("td", "", c))); return tr; };
+  $("system-head").textContent = `Release ${sys.release} · running since ${when(sys.started)}.`;
+  $("background").replaceChildren(...sys.background.map((b) => row(b.name, b.what, when(b.last), b.detail)));
+  $("index-roots").replaceChildren(...sys.index.map((r) => { const tr = row(r.root, r.path, String(r.files), String(r.mb)); tr.children[1].className = "mono"; return tr; }));
+  $("config").replaceChildren(...sys.config.map((c) => row(c.name, c.value, c.where)));
+  $("audit").textContent = sys.audit.join("\n") || "(empty)";
+}
+
 async function load() {
   state = await api("/ui/api/admin");
-  renderTokens(); renderUsers(); renderProjects();
+  renderTokens(); renderUsers(); renderProjects(); renderSystem();
+  if (!$("settings-form").contains(document.activeElement)) renderSettings(); // don't overwrite what is being typed
 }
+
+$("settings-form").onsubmit = (e) => {
+  e.preventDefault();
+  const body = Object.fromEntries([...$("settings-fields").querySelectorAll("input")].map((i) => [i.name, Number(i.value)]));
+  body.extra_admins = $("s-admins").value.split("\n").map((x) => x.trim()).filter(Boolean);
+  run(() => api("/ui/api/admin/settings", body), e.target.querySelector("button")).then((ok) => {
+    if (ok) { renderSettings(); $("settings-saved").textContent = "Saved."; setTimeout(() => ($("settings-saved").textContent = ""), 3000); }
+  });
+};
 
 function showNewToken(res) {
   $("new-token-name").textContent = res.name;

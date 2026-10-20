@@ -29,7 +29,7 @@
       <label for="t-name">Device or agent name</label>
       <input id="t-name" required pattern="[A-Za-z0-9][A-Za-z0-9._\-]{0,39}" placeholder="e.g. work-laptop">
       <fieldset>
-        <legend>Projects (none ticked = all projects)</legend>
+        <legend>Projects (tick at least one, or "All projects")</legend>
         <div id="t-roots" class="checks"></div>
       </fieldset>
       <label class="check"><input id="t-write" type="checkbox"> May write memos</label>
@@ -47,7 +47,7 @@
 
   <section aria-labelledby="h-users">
     <h2 id="h-users">People</h2>
-    <p class="muted">Sign-in is Authentik (group "Knowledge"); here you decide which projects someone may read or edit. A change is saved right away. Someone who signs in without access appears at the top. Admins are set in the server config.</p>
+    <p class="muted">Sign-in is Authentik (group "Knowledge"); here you decide which projects someone may read or edit. A change is saved shortly after you pick it. Someone who signs in without access appears at the top. Admins: the ones in the server config plus the extra admins under Settings.</p>
     <div class="table-wrap"><table>
       <thead id="users-head"></thead>
       <tbody id="users"></tbody>
@@ -71,6 +71,40 @@
       <input id="p-name" required pattern="[a-z][a-z0-9]{1,23}" placeholder="lowercase, e.g. garden">
       <button type="submit">Create</button>
     </form>
+  </section>
+  <section aria-labelledby="h-settings">
+    <h2 id="h-settings">Settings</h2>
+    <p class="muted">Policy the server applies at once, stored in <code>/admin/settings.json</code>. Infrastructure (paths, hosts, proxy IPs, port) is set in the repo's compose.yaml and local.env and shown below.</p>
+    <form id="settings-form" class="admin-form">
+      <div id="settings-fields"></div>
+      <label for="s-admins">Extra admins (Authentik usernames, one per line)</label>
+      <textarea id="s-admins" rows="3" spellcheck="false"></textarea>
+      <p class="muted" id="s-config-admins"></p>
+      <button type="submit">Save settings</button>
+      <span id="settings-saved" class="muted" role="status"></span>
+    </form>
+  </section>
+
+  <section aria-labelledby="h-system">
+    <h2 id="h-system">Background &amp; config</h2>
+    <p class="muted" id="system-head"></p>
+    <h3>What runs in the background</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Job</th><th>What it does</th><th>Last run</th><th>State</th></tr></thead>
+      <tbody id="background"></tbody>
+    </table></div>
+    <h3>Index</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Root</th><th>Mounted from</th><th>Files</th><th>MB</th></tr></thead>
+      <tbody id="index-roots"></tbody>
+    </table></div>
+    <h3>Config (read-only)</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Setting</th><th>Value</th><th>Change it in</th></tr></thead>
+      <tbody id="config"></tbody>
+    </table></div>
+    <h3>Recent activity (audit log)</h3>
+    <pre id="audit" class="setup"></pre>
   </section>
 </main>
 <script src="/ui/static/admin.js"></script>
