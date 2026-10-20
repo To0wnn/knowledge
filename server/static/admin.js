@@ -16,6 +16,8 @@ const api = (path, body) => fetch(path, {
 const SYSTEM = new Set(["vm-watcher", "vm-sessions", "vm-lint-report"]);
 
 let state = null;
+const ago = (sec) => { if (!sec) return "never"; const d = Date.now() / 1000 - sec;
+  return d < 900 ? "in the last 15 min" : d < 86400 ? `${Math.round(d / 3600)} h ago` : `${Math.round(d / 86400)} days ago`; };
 
 function showError(e) { $("error").textContent = e ? String(e.message || e) : ""; $("error").hidden = !e; }
 
@@ -39,7 +41,8 @@ function renderTokens() {
     const name = el("td", "mono", t.name);
     if (SYSTEM.has(t.name) || t.watch) name.append(el("span", "muted", " · used by the VM"));
     tr.append(name, el("td", "", access), el("td", "", scopeText(t) + (t.redact ? " · secrets masked" : "")),
-      el("td", "muted", t.created ? `${t.created}${t.by ? " · " + t.by : ""}` : "before the admin page"));
+      el("td", "muted", t.created ? `${t.created}${t.by ? " · " + t.by : ""}` : "before the admin page"),
+      el("td", "muted", ago(t.last_used)));
     const td = el("td"), b = el("button", "ghost danger", "Revoke");
     b.setAttribute("aria-label", `Revoke ${t.name}`);
     b.onclick = () => {

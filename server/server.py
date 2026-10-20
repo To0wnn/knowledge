@@ -821,11 +821,31 @@ def load_tokens() -> dict:
     return _tokens_cache[2]
 
 
+LAST_USED_FILE = ADMIN_DIR / "last_used.json"
+_last_used: dict[str, float] = {}
+
+
+def mark_used(name: str):
+    """When a token was last used, for the admin page. Written at most every 10 minutes per token, so the watcher's
+    many small requests cost nothing."""
+    now = time.time()
+    if not _last_used:
+        _last_used.update(read_json(LAST_USED_FILE, {}) or {"": 0})
+    if now - _last_used.get(name, 0) < 600:
+        return
+    _last_used[name] = now
+    try:
+        write_json(LAST_USED_FILE, {k: v for k, v in _last_used.items() if k})
+    except OSError as e:  # bookkeeping only; never fail a request over it
+        print(f"last_used not saved: {e}", flush=True)
+
+
 def token_device(given: str) -> dict | None:
     hit = load_tokens().get(hashlib.sha256(given.encode()).hexdigest()) if given else None
     if not hit:
         return None
     name, cfg = hit
+    mark_used(name)
     return {"name": name, "write": bool(cfg.get("write")), "watch": bool(cfg.get("watch")),
             "roots": cfg.get("roots") or [], "redact": bool(cfg.get("redact"))}
 
@@ -1146,7 +1166,8 @@ async def ui_admin_state(request: Request, _):
         "users": read_json(USERS_FILE, {}),
         "projects": [{"name": p, "docs": d, "memory": m, "builtin": p in BUILTIN_PROJECTS} for p, (d, m) in PROJECTS.items()],
         "roots": sorted(ROOTS),
-        "tokens": [{"name": n, **{k: v for k, v in cfg.items() if k != "sha256"}} for n, cfg in sorted(tokens.items())],
+        "tokens": [{"name": n, **{k: v for k, v in cfg.items() if k != "sha256"}, "last_used": _last_used.get(n)}
+                   for n, cfg in sorted(tokens.items())],
     })
 
 

@@ -108,6 +108,19 @@ async def search(browser, secret: str) -> None:
     await pg.locator("#hits li button").first.click()
     await pg.wait_for_timeout(1200)
     check(await pg.locator("#note .md mark").count() == 1, "opening a hit marks the word in the note")
+    # + Add: both dialogs open from the menu and close again (nothing is submitted).
+    await pg.click("#add-menu summary")
+    await pg.click("#new-memo")
+    await pg.wait_for_timeout(500)
+    check(await pg.locator("#new-dialog").is_visible() and await pg.locator("#new-heading option").count() > 1,
+          "+ Add → New memo opens with the index headings")
+    await pg.click("#new-cancel")
+    await pg.click("#add-menu summary")
+    await pg.click("#ingest-open")
+    check(await pg.locator("#ingest-dialog").is_visible() and not await pg.locator("#add-menu").get_attribute("open"),
+          "+ Add → Add a source opens (menu closed)")
+    await pg.click("#ingest-cancel")
+    check(not await pg.locator("#ingest-dialog").is_visible(), "the source dialog closes")
     check(not errors, f"no page errors while searching {errors[:2]}")
     await ctx.close()
 
@@ -140,6 +153,8 @@ async def admin(browser, secret: str) -> None:
     ctx, pg, errors = await page(browser, secret, "/ui/admin", viewport={"width": 1300, "height": 900})
     await pg.wait_for_selector("#tokens tr")
     check(await pg.locator("#tokens tr").count() > 0, "admin page lists the device tokens")
+    check("ago" in await pg.locator("#tokens").inner_text() or "last 15 min" in await pg.locator("#tokens").inner_text(),
+          "admin page shows when tokens were last used")
     check(await pg.locator("#projects tr").count() >= 3, "admin page lists the projects")
     check(not await pg.locator("#error").is_visible(), "admin page shows no error")
     check(not errors, f"no page errors on the admin page {errors[:2]}")
