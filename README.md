@@ -3,7 +3,7 @@
 Live, shared access to Anthony's homelab docs and Claude memory for Claude Code on every device.
 
 - **Server** (`server/`): small MCP server (streamable HTTP, stateless) in a Docker container on forge
-  (CT 101, Dockhand stack `knowledge`, port 8766, `https://knowledge.to0wnn.com`, LAN/WireGuard only).
+  (CT 101, Dockhand stack `knowledge`, port 8766, `https://knowledge.to0wnn.com`; web UI public behind Authentik, MCP LAN/WireGuard only).
 - **Plugin** (`plugin/`): Claude Code plugin with the MCP connection and a SessionStart hook that loads the
   shared CLAUDE.md files and the memory index. This repo is also the plugin marketplace.
 - **Source of truth (option A, current):** the files stay on the VM (<lan-ip>) and are NFS-exported to forge
