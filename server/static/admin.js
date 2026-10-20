@@ -52,10 +52,12 @@ function renderTokens() {
     td.append(b); tr.append(td);
     return tr;
   }));
-  const boxes = state.projects.map((p) => [p.name, [p.docs, p.memory]]).concat([["shared skills (claude/)", ["claude"]]]);
+  // Rebuilt after every action: keep what was ticked. "All projects" is explicit, the server refuses an empty pick.
+  const ticked = new Set([...$("t-roots").querySelectorAll("input:checked")].map((c) => c.value));
+  const boxes = state.projects.map((p) => [p.name, [p.docs, p.memory]]).concat([["shared skills (claude/)", ["claude"]], ["All projects (everything, now and later)", ["*"]]]);
   $("t-roots").replaceChildren(...boxes.map(([label, roots]) => {
     const l = el("label", "check"), c = el("input"); c.type = "checkbox"; c.value = roots.join(",");
-    l.append(c, " " + label); return l;
+    c.checked = ticked.has(c.value); l.append(c, " " + label); return l;
   }));
 }
 
@@ -83,9 +85,19 @@ function renderUsers() {
       const td = el("td"); td.append(s); tr.append(td);
       return [p, s];
     });
-    // A change is saved right away; the table reloads from the server, so what you see is what is stored.
+    // Saved shortly after the last change, without rebuilding the table: arrow keys on a closed select fire a change
+    // per step, and a rebuild would drop the focus. On an error the table reloads, so it shows what is stored.
     for (const [, s] of selects) {
-      s.onchange = () => run(() => api("/ui/api/admin/user", { username: name, projects: Object.fromEntries(selects.map(([p, x]) => [p, x.value])) }), s);
+      s.onchange = () => {
+        clearTimeout(s.saveTimer);
+        s.saveTimer = setTimeout(async () => {
+          showError(null);
+          try {
+            await api("/ui/api/admin/user", { username: name, projects: Object.fromEntries(selects.map(([p, x]) => [p, x.value])) });
+            tr.classList.toggle("pending", selects.every(([, x]) => x.value === "none"));
+          } catch (e) { showError(e); load().catch(showError); }
+        }, 700);
+      };
     }
     const td = el("td", "actions"), del = el("button", "ghost danger", "Remove");
     del.setAttribute("aria-label", `Remove ${name}`);
@@ -134,7 +146,8 @@ $("token-form").onsubmit = (e) => {
   run(async () => {
     res = await api("/ui/api/admin/token", {
       name: $("t-name").value.trim(), write: $("t-write").checked, redact: $("t-redact").checked, watch: $("t-watch").checked,
-      roots: [...$("t-roots").querySelectorAll("input:checked")].flatMap((c) => c.value.split(",")),
+      all: !!$("t-roots").querySelector('input[value="*"]:checked'),
+      roots: [...$("t-roots").querySelectorAll("input:checked")].flatMap((c) => c.value.split(",")).filter((r) => r !== "*"),
     });
   }, button).then((ok) => { if (ok) { e.target.reset(); showNewToken(res); } });
 };

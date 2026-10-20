@@ -33,7 +33,8 @@ def token(name: str) -> str:
 def hook_config(agent: str, name: str) -> dict:
     exe, me = sys.executable, str(Path(__file__).resolve())
     q = lambda s: f'"{s}"' if " " in s else s  # unquoted where possible: PowerShell does not run a quoted path
-    cmd = lambda *a: " ".join([q(exe), q(me), *a, "-" if a == ("session-log",) else name])  # full paths: bare PATH in Codex
+    # Full paths: Codex runs hooks with a bare PATH. -X utf8: Windows pipes are cp1252 otherwise.
+    cmd = lambda *a: " ".join([q(exe), "-X", "utf8", q(me), *a, "-" if a == ("session-log",) else name])
     # agy CLI edits with write_file/edit_file (arg Path); the documented names (TargetFile) are the app's and IDE's.
     if agent == "agy":  # agy has no session end: the log gets one entry per turn (Stop)
         return {"knowledge": {
@@ -53,9 +54,10 @@ def hook_config(agent: str, name: str) -> dict:
 
 def install(agent: str, name: str):
     path, new = CONFIG[agent], json.dumps(hook_config(agent, name), indent=2) + "\n"
-    if path.exists() and path.read_text(encoding="utf-8-sig") != new:
-        path.with_suffix(".json.bak").write_text(path.read_text(encoding="utf-8-sig"), encoding="utf-8")
-        print(f"kept the old file as {path.with_suffix('.json.bak')}")
+    bak = path.with_suffix(".json.bak")
+    if path.exists() and path.read_text(encoding="utf-8-sig") != new and not bak.exists():  # the first original stays
+        bak.write_text(path.read_text(encoding="utf-8-sig"), encoding="utf-8")
+        print(f"kept the old file as {bak}; merge your own hooks from it if it had any")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(new, encoding="utf-8")
     print(f"wrote {path}" + ("; trust the hooks once with /hooks in a Codex session" if agent == "codex" else ""))
@@ -84,15 +86,16 @@ def context_text(tok: str, cwd: str) -> str:
 
 def run_hook(script: str, tok: str, stdin: str) -> str:
     env = {**os.environ, "KNOWLEDGE_URL": URL, **({"KNOWLEDGE_TOKEN": tok} if tok else {})}
-    return subprocess.run([sys.executable, str(HOOKS / script)], input=stdin, env=env, capture_output=True, text=True,
-                          encoding="utf-8").stdout
+    return subprocess.run([sys.executable, "-X", "utf8", str(HOOKS / script)], input=stdin, env=env, capture_output=True,
+                          text=True, encoding="utf-8", errors="replace").stdout
 
 
 def context(agent: str, tok: str):
     stdin = sys.stdin.read()
     hook = json.loads(stdin or "{}")
     cwd = hook.get("cwd") or (hook.get("workspacePaths") or [os.getcwd()])[0]
-    text = "\n\n".join(t for t in (run_hook("docs-sync.py", tok, stdin).strip(), context_text(tok, cwd)) if t)
+    ctx = context_text(tok, cwd)  # first: a slow mirror must not cost the session its context
+    text = "\n\n".join(t for t in (run_hook("docs-sync.py", tok, stdin).strip(), ctx) if t)
     print(json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": text}}]} if agent == "agy" else
                      {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}}))
 
@@ -119,5 +122,5 @@ if __name__ == "__main__":
     else:
         try:
             main(sys.argv[1:])
-        except subprocess.CalledProcessError as e:  # the vault is locked: say so, never fail the session
-            print(f"knowledge hook: could not read the token ({e})", file=sys.stderr)
+        except Exception as e:  # locked vault, bad stdin, network: say so, never fail the session
+            print(f"knowledge hook skipped: {e}", file=sys.stderr)

@@ -24,6 +24,7 @@ import secrets
 import tempfile
 import threading
 import time
+import urllib.parse
 from contextvars import ContextVar
 from pathlib import Path, PurePosixPath
 
@@ -87,7 +88,7 @@ def resolve(path: str, scoped: bool = True) -> tuple[Path, str]:
     outside the caller's roots. The index is shared by everyone, so it resolves unscoped."""
     root, _, rest = path.strip().lstrip("/").partition("/")
     if root not in ROOTS or not rest:
-        raise ToolError(f"path must start with one of {sorted(ROOTS)}/, e.g. memory/MEMORY.md")
+        raise ToolError(f"path must start with one of {sorted(r for r in ROOTS if in_scope(r + '/'))}/, e.g. memory/MEMORY.md")
     base = ROOTS[root].resolve()
     full = (base / rest).resolve()
     if base not in full.parents and full != base:
@@ -209,6 +210,12 @@ class Index:
         self.files: dict[str, tuple[int, int, str, str | None]] = {}
         self.lock = threading.Lock()
         self.gen = 0  # bumped on every change; the UI graph cache keys on it
+        self.root_gen: dict[str, int] = {}  # changes per root, so a user only hears about their own roots
+
+    def bump(self, rel: str):  # call with self.lock held
+        self.gen += 1
+        root = rel.split("/", 1)[0]
+        self.root_gen[root] = self.root_gen.get(root, 0) + 1
 
     def refresh(self, rel: str):
         try:
@@ -221,7 +228,7 @@ class Index:
         except (ToolError, OSError, UnicodeDecodeError):
             with self.lock:
                 if self.files.pop(rel, None) is not None:
-                    self.gen += 1
+                    self.bump(rel)
             return
         low = text.lower()
         old = self.files.get(rel)
@@ -230,7 +237,7 @@ class Index:
         with self.lock:
             # A few Unicode characters change length when lowercased; then positions would not line up.
             self.files[rel] = (st.st_mtime_ns, st.st_size, text, low if len(low) == len(text) else None)
-            self.gen += 1
+            self.bump(rel)
 
     def rescan(self):
         seen = set()
@@ -570,7 +577,8 @@ async def knowledge_write(path: str, content: str, base_version: str = "") -> st
             raise ToolError(f"{rel} changed while writing; read it again and redo your change")
         index.refresh(rel)
     audit("write", rel)
-    return f"wrote {rel} (version {version(data)})" + (similar_memos_hint(rel, content) if current is None else "")
+    hint = await asyncio.to_thread(similar_memos_hint, rel, content) if current is None else ""  # embeds: not on the loop
+    return f"wrote {rel} (version {version(data)})" + hint
 
 
 SIMILAR_HINT = 0.72  # calibrated 18 Oct 2026: a memo vs itself ~0.80-0.86, closely related memos ~0.78, loose docs ~0.70
@@ -678,6 +686,7 @@ def related_memos(text: str, limit: int = 6) -> list[str]:
 def save_source(markdown: str, title: str, origin: str) -> str:
     """Write a new raw source file (never overwrites) and append to sources/LOG.md. Returns its relative path.
     The same content ingested again is refused with the path of the existing source (sha256 in its frontmatter)."""
+    refuse_secrets(f"{title}\n{origin}\n{markdown}")
     digest = hashlib.sha256(markdown.strip().encode()).hexdigest()
     for rel, text, _ in index.items("homelab"):
         if rel.startswith(SOURCES + "/") and f"\nsha256: {digest}\n" in text[:1000]:
@@ -1256,12 +1265,18 @@ BOOT = secrets.token_hex(4)  # changes on every start, so ETags from before a re
 RELEASE = hashlib.sha256(b"".join((STATIC / f).read_bytes() for f in ("index.html", "admin.html", "app.js", "admin.js", "app.css"))).hexdigest()[:12]
 
 
+# Note HTML is sanitized, and this is the second wall: no foreign images (tracking), no forms posting elsewhere, no
+# framing. force-graph adds a <style> at runtime, hence 'unsafe-inline' for styles only.
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+       "connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'")
+
+
 def page(name: str) -> HTMLResponse:
     text = (STATIC / name).read_text()
     for f in ("app.js", "admin.js", "app.css"):
         text = text.replace(f"/ui/static/{f}\"", f"/ui/static/{f}?v={RELEASE}\"")
     return HTMLResponse(text.replace("<html lang=\"en\">", f"<html lang=\"en\" data-release=\"{RELEASE}\">"),
-                        headers={"Cache-Control": "no-cache"})  # the page itself is always fetched fresh
+                        headers={"Cache-Control": "no-cache", **({"Content-Security-Policy": CSP} if name != "help.html" else {})})
 
 
 @server.custom_route("/ui", methods=["GET"])
@@ -1376,6 +1391,10 @@ async def ui_admin_token(request: Request, body: dict):
     if not TOKEN_NAME.match(name) or name in tokens:
         raise ToolError("token name: letters, digits, . _ - (max 40), and not in use yet")
     roots = [str(r) for r in body.get("roots", [])]
+    if not roots and not body.get("all"):  # empty roots mean every project: only when asked for explicitly
+        raise ToolError("pick the projects this token may see, or 'All projects'")
+    if body.get("all"):
+        roots = []
     if set(roots) - set(ROOTS):
         raise ToolError(f"unknown root: {', '.join(sorted(set(roots) - set(ROOTS)))}")
     token = secrets.token_urlsafe(32)
@@ -1399,12 +1418,18 @@ async def ui_static(request: Request):
     return FileResponse(full, headers={"Cache-Control": "public, max-age=31536000, immutable" if versioned else "no-cache"})
 
 
+def scoped_gen() -> int:
+    """Changes in the caller's roots only: what the graph ETag and the live stream key on."""
+    with index.lock:
+        return sum(n for r, n in index.root_gen.items() if in_scope(r + "/"))
+
+
 @server.custom_route("/ui/api/graph", methods=["GET"])
 async def ui_graph(request: Request):
     # The graph only changes with the index generation; per boot (gen restarts) and per scope (users see different
     # graphs), so a cached graph of someone else never validates.
     scope = hashlib.sha256(",".join(device.get().get("roots") or ()).encode()).hexdigest()[:8]
-    etag = f'"g{BOOT}-{index.gen}-{scope}"'
+    etag = f'"g{BOOT}-{scoped_gen()}-{scope}"'
     if request.headers.get("if-none-match") == etag:
         return Response(status_code=304, headers={"ETag": etag})
     return JSONResponse(await asyncio.to_thread(get_graph), headers={"ETag": etag, "Cache-Control": "private, no-cache"})
@@ -1413,15 +1438,16 @@ async def ui_graph(request: Request):
 @server.custom_route("/ui/api/events", methods=["GET"])
 async def ui_events(request: Request):
     """Server-Sent Events: tells open browsers that the knowledge changed (any session, any device), so the page
-    updates itself. Checks the index generation once a second; a comment every 25 s keeps proxies from closing it."""
+    updates itself. Checks the changes in the user's own roots once a second (no count is sent: a user scoped to one
+    project learns nothing about the others); a comment every 25 s keeps proxies from closing it."""
     async def stream():
-        last, quiet = index.gen, 0
+        last, quiet = scoped_gen(), 0
         yield f"retry: 3000\nevent: hello\ndata: {RELEASE}\n\n"
         while not await request.is_disconnected():
             await asyncio.sleep(1)
-            if index.gen != last:
-                last, quiet = index.gen, 0
-                yield f"event: changed\ndata: {last}\n\n"
+            if (now := scoped_gen()) != last:
+                last, quiet = now, 0
+                yield "event: changed\ndata: 1\n\n"
             else:
                 quiet += 1
                 if quiet >= 25:
@@ -1476,7 +1502,12 @@ async def ui_note(request: Request):
     except (ToolError, OSError) as e:
         return JSONResponse({"error": str(e)}, status_code=404)
     return JSONResponse({"path": rel, "version": version(data), "text": data.decode("utf-8", errors="replace"),
-                         "writable": may_write(rel)})
+                         "writable": may_write(rel) and not mirrored(rel)})
+
+
+def mirrored(rel: str) -> bool:
+    """The docs root of a project made in the admin page is a /sync mirror of the guest's folder."""
+    return rel.split("/", 1)[0] in read_json(PROJECTS_FILE, [])
 
 
 @server.custom_route("/ui/api/save", methods=["POST"])
@@ -1490,6 +1521,9 @@ async def ui_save(request: Request):
         root = rel.split("/", 1)[0]
         if line and (root not in {mem for _, mem in PROJECTS.values()} or rel.count("/") != 1):
             raise ToolError("an index line is only for a memo directly in a memory root")  # checked before writing
+        refuse_secrets(line)
+        if mirrored(rel):
+            raise ToolError(f"{rel} is a mirror of the guest's own folder: the next sync would overwrite it; change it there")
         await knowledge_write(rel, body.get("text", ""), body.get("base_version", ""))
         if line:
             await append_line(f"{root}/MEMORY.md", line, " ".join(str(body.get("heading", "")).split()))
@@ -1520,6 +1554,7 @@ assert insert_index_line("", "- n") == "- n\n"
 async def append_line(path: str, line: str, heading: str = ""):
     full, rel = resolve(path)
     check_writable(rel)
+    refuse_secrets(f"{line}\n{heading}")
     async with _locks.setdefault(rel, asyncio.Lock()):
         for _ in range(5):
             current = full.read_bytes() if full.exists() else None
@@ -1594,6 +1629,10 @@ async def ui_recent(request: Request):
     it was edited natively on the VM), lines added/removed, and the session that changed it (the session log entry
     written after the change that names the file), so you see who changed what and why."""
     roots = PROJECTS.get(request.query_params.get("project", "homelab"), PROJECTS["homelab"])
+    return JSONResponse({"files": await asyncio.to_thread(recent_files, roots)})  # audit log + diffs: not on the loop
+
+
+def recent_files(roots: tuple) -> list[dict]:
     with index.lock:
         rows = sorted(((v[0], rel) for rel, v in index.files.items() if rel.split("/", 1)[0] in roots
                        and rel.endswith(".md") and "/sessions/" not in rel and in_scope(rel)), reverse=True)[:60]
@@ -1607,7 +1646,7 @@ async def ui_recent(request: Request):
         out.append({"path": rel, "mtime": int(mtime), "by": dev if abs(t - mtime) < 120 else "VM",
                     **change_size(rel, mtime),
                     **({"session": {"time": s["time"], "device": s["device"], "asked": s["asked"]}} if s else {})})
-    return JSONResponse({"files": out})
+    return out
 
 
 def search_notes(q: str, roots: tuple, limit: int = 40) -> list[dict]:
@@ -1652,7 +1691,7 @@ async def ui_search(request: Request):
 
 @server.custom_route("/ui/api/lint", methods=["GET"])
 async def ui_lint(request: Request):
-    return JSONResponse(lint_all() if device.get().get("admin") else {})  # lint spans every project
+    return JSONResponse(await asyncio.to_thread(lint_all) if device.get().get("admin") else {})  # lint spans every project
 
 
 @server.custom_route("/ui/api/ingest", methods=["POST"])
@@ -1672,7 +1711,7 @@ async def ui_ingest(request: Request):
             else:
                 return JSONResponse({"error": "give a URL, text or a file"}, status_code=400)
         else:  # raw file upload: body = file bytes, X-Filename header
-            name = request.headers.get("x-filename", "upload")
+            name = urllib.parse.unquote(request.headers.get("x-filename", "upload"))  # sent encoded: headers are Latin-1
             data = await request.body()
             if len(data) > fetch.MAX_BYTES:
                 return JSONResponse({"error": "file larger than 10 MB"}, status_code=413)
@@ -1687,9 +1726,9 @@ async def ui_ingest(request: Request):
             else:
                 return JSONResponse({"error": "supported files: pdf, docx, md, txt, html"}, status_code=415)
             res = await asyncio.to_thread(ingest_document, data, dtype, f"upload: {name}",
-                                          request.headers.get("x-title", ""))
-    except (fetch.FetchError, ToolError) as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
+                                          urllib.parse.unquote(request.headers.get("x-title", "")))
+    except (fetch.FetchError, ToolError, OSError, ValueError) as e:  # OSError: TLS, refused, timeout
+        return JSONResponse({"error": str(e) or type(e).__name__}, status_code=400)
     return JSONResponse({k: res[k] for k in ("path", "title", "chars", "related")})
 
 

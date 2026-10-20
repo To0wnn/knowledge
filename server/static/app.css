@@ -1,4 +1,5 @@
 :root {
+  color-scheme: light dark;
   --bg: #f4f6f9; --panel: #ffffff; --ink: #1d2430; --muted: #657084; --line: #dfe3ea; --accent: #3d6fd8;
   --canvas: #eef1f6; --hover: #eef2fa; --error: #c2412e;
   --g-project: #3d6fd8; --g-feedback: #c98420; --g-reference: #1f9a8c; --g-user: #c2508a; --g-incident: #c2412e;
@@ -15,6 +16,10 @@
   }
 }
 * { box-sizing: border-box; }
+/* The "no access" page (server NO_ACCESS): one card in the middle. */
+body.login { display: grid; grid-template: none; place-items: center; padding: 16px; }
+.login-card { max-width: 420px; padding: 24px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+.login-card h1 { margin: 0 0 8px; font-size: 20px; }
 html, body { height: 100%; margin: 0; }
 body {
   background: var(--bg); color: var(--ink); font: 14px/1.5 var(--font);
