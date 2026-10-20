@@ -269,6 +269,10 @@ def main():
         st, _, res = post({"path": "trade-memory/project_new.md", "text": "new\n", "index_line": "- [New](project_new.md) — x\n- injected"})
         assert st == 200 and (tmem / "MEMORY.md").read_text().endswith("- [New](project_new.md) — x - injected\n"), (tmem / "MEMORY.md").read_text()
         assert post({"path": "trade/STATUS2.md", "text": "x", "index_line": "- x"})[0] == 409  # index line only for memos
+        # A known secret is refused in the index line too, before the memo is written; the app pages carry a CSP.
+        st, _, res = post({"path": "trade-memory/project_leak.md", "text": "x\n", "index_line": "- [Pi Sup3rSecret99](project_leak.md) — x"})
+        assert st == 409 and b"known secret" in res and not (tmem / "project_leak.md").exists(), res
+        assert "form-action 'self'" in raw("GET", "/ui", headers=ck)[1]["content-security-policy"]
         # People: unknown users get no access but show up for the admin; access per project, read or write.
         admin = lambda path, body, hdr=ck: raw("POST", path, json.dumps(body), {**hdr, "Content-Type": "application/json", "X-Knowledge-UI": "1"})
         assert raw("GET", "/ui", headers=user("bob"))[0] == 403
@@ -330,6 +334,10 @@ def main():
         assert json.loads(body) == {"written": 0, "unchanged": 1, "deleted": 1, "refused": []}, body
         assert not (tmp / "projects/garden/docs/docs/design/voice.md").exists()
         assert http("POST", "/sync", {"files": {"README.md": "x"}}, token="rw-token")[0] == 403  # not limited to one project
+        # The mirror is the guest's folder: the UI does not offer to edit it, and refuses a save (the next sync would undo it).
+        assert not json.loads(raw("GET", "/ui/api/note?path=garden/README.md", headers=ck)[2])["writable"]
+        assert raw("POST", "/ui/api/save", json.dumps({"path": "garden/README.md", "text": "x", "base_version": "x"}),
+                   {**ck, "Content-Type": "application/json", "X-Knowledge-UI": "1"})[0] == 409
         assert http("POST", "/sync", {"files": {"README.md": "x"}, "project": "trade"}, token=fr)[0] == 409
         assert call("knowledge_read", {"path": "memory/MEMORY.md"}, token=fr)[0]  # nothing outside garden
         # The plugin hook: SessionStart mirrors the marked folder, PostToolUse one changed file, a wrong marker is refused.
@@ -388,7 +396,8 @@ def main():
         assert listed["tradebot"]["last_used"] and time.time() - listed["tradebot"]["last_used"] < 60, listed["tradebot"]
         st, body = http("GET", "/semantic?q=entry%20timing&project=trade")
         assert st == 200 and "hits" in json.loads(body)
-        st, _, res = admin("/ui/api/admin/token", {"name": "watcher2", "watch": True})
+        assert admin("/ui/api/admin/token", {"name": "nothing-ticked", "write": True, "roots": []})[0] == 400  # fails closed
+        st, _, res = admin("/ui/api/admin/token", {"name": "watcher2", "watch": True, "all": True})
         assert http("POST", "/invalidate", {"paths": []}, token=json.loads(res)["token"])[0] == 200
         # New memo from the UI: the index line goes under the chosen heading.
         (tmem / "MEMORY.md").write_text("# Index\n\n## Plans\n- [Bot plan](plan.md) — entry timing\n\n## Other\n- [X](x.md) — x\n")

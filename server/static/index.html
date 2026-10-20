@@ -34,11 +34,11 @@
 
 <aside class="left">
   <nav class="tabs" role="tablist">
-    <button role="tab" data-tab="notes" aria-selected="true">Notes</button>
-    <button role="tab" data-tab="changes">Changes <span id="changes-count" class="badge" title="New since your last look"></span></button>
-    <button role="tab" data-tab="lint">Lint <span id="lint-count" class="badge"></span></button>
+    <button role="tab" data-tab="notes" id="tabbtn-notes" aria-controls="tab-notes" aria-selected="true">Notes</button>
+    <button role="tab" data-tab="changes" id="tabbtn-changes" aria-controls="tab-changes">Changes <span id="changes-count" class="badge" title="New since your last look"></span></button>
+    <button role="tab" data-tab="lint" id="tabbtn-lint" aria-controls="tab-lint">Lint <span id="lint-count" class="badge"></span></button>
   </nav>
-  <section id="tab-notes" class="tab">
+  <section id="tab-notes" class="tab" role="tabpanel" aria-labelledby="tabbtn-notes">
     <div id="results" hidden>
       <h3 id="titles-head" class="sub">Titles</h3>
       <ol id="titles" class="hits"></ol>
@@ -50,10 +50,10 @@
     </div>
     <div id="topics"></div>
   </section>
-  <section id="tab-changes" class="tab" hidden>
+  <section id="tab-changes" class="tab" role="tabpanel" aria-labelledby="tabbtn-changes" hidden>
     <ol id="recent" class="hits"></ol>
   </section>
-  <section id="tab-lint" class="tab" hidden>
+  <section id="tab-lint" class="tab" role="tabpanel" aria-labelledby="tabbtn-lint" hidden>
     <p class="muted">Facts only: fix what is clearly wrong, ask Claude to judge the rest.</p>
     <div id="lint"></div>
   </section>
@@ -78,7 +78,7 @@
     <input id="new-desc" type="text" required>
     <label for="new-heading">Index heading (topic)</label>
     <select id="new-heading"></select>
-    <p id="new-error" class="error" hidden></p>
+    <p id="new-error" class="error" role="alert" hidden></p>
     <div class="actions"><button type="button" class="ghost" id="new-cancel">Cancel</button><button type="submit">Create</button></div>
   </form>
 </dialog>
@@ -94,7 +94,7 @@
     <textarea id="in-text" rows="6"></textarea>
     <label for="in-title">Title (optional)</label>
     <input id="in-title" type="text">
-    <div id="ingest-result" class="muted">Sources are stored unchanged in <code>homelab/sources/</code>. Ask Claude to turn a new source into memos; lint lists unprocessed sources.</div>
+    <div id="ingest-result" class="muted" aria-live="polite">Sources are stored unchanged in <code>homelab/sources/</code>. Ask Claude to turn a new source into memos; lint lists unprocessed sources.</div>
     <div class="actions"><button type="button" class="ghost" id="ingest-cancel">Close</button><button type="submit">Add source</button></div>
   </form>
 </dialog>

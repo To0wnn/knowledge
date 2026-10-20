@@ -30,7 +30,7 @@ def config() -> tuple[str, str]:
     env = dict(os.environ)
     conf = Path.home() / ".config/knowledge-server/session.env"
     if conf.exists():
-        for line in conf.read_text().splitlines():
+        for line in conf.read_text(encoding="utf-8").splitlines():
             if "=" in line and not line.startswith("#"):
                 k, v = line.split("=", 1)
                 env.setdefault(k.strip(), v.strip())
@@ -135,7 +135,10 @@ def main():
     STATE.mkdir(parents=True, exist_ok=True)
     mark = STATE / f"{sid or 'unknown'}.json"
     done = json.loads(mark.read_text()).get("lines", 0) if mark.exists() else 0
-    lines = Path(transcript).read_text(errors="replace").splitlines()
+    raw = Path(transcript).read_text(encoding="utf-8", errors="replace")
+    lines = raw.splitlines()
+    if raw and not raw.endswith("\n"):
+        lines = lines[:-1]  # a line still being written: read it next time
     prompts, files, summary = collect(lines[done:])
     if not prompts:
         return
@@ -145,8 +148,9 @@ def main():
             "summary": summary}  # the latest prompts and files: they belong with the closing summary
     req = urllib.request.Request(f"{url}/sessions", data=json.dumps(body).encode(), method="POST",
                                  headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
-    # Codex allows SessionEnd hooks at most 3 seconds
-    with urllib.request.urlopen(req, timeout=2.5 if hook.get("reason") == "codex SessionEnd" else 8) as r:
+    # Codex gives SessionEnd hooks at most 3 seconds, Python start-up included
+    codex_end = hook.get("reason") == "codex SessionEnd"
+    with urllib.request.urlopen(req, timeout=2 if codex_end else 8) as r:
         if r.status == 200:
             mark.write_text(json.dumps({"lines": len(lines)}))
 
