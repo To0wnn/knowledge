@@ -119,14 +119,31 @@ Following Karpathy's "LLM Wiki" pattern (raw sources -> wiki pages -> index, wit
 - **Web UI** at `https://knowledge.to0wnn.com/ui`: an Obsidian-style "brain" graph (force-graph, canvas; the layout
   settles and stops, so no CPU while idle) of memos (coloured by type), docs, skills and sources with edges for
   wikilinks, markdown links, doc/skill references and cited sources; type filters; full search (server-side, ~20 ms);
-  note preview (marked + DOMPurify) with clickable links and connected notes; lint tab; ingest form. Sign in once
-  with a device token: an HttpOnly, SameSite=Strict cookie keeps the browser signed in for a year; UI writes also
-  need an `X-Knowledge-UI` header (CSRF). All JS is vendored with its license in `server/static/vendor/`
+  note preview (marked + DOMPurify) with clickable links and connected notes; lint tab; ingest form. See
+  "Sign-in, people and admin page" below; UI writes also need an `X-Knowledge-UI` header (CSRF). All JS is vendored with its license in `server/static/vendor/`
   (force-graph 1.52.0 MIT, marked 18.1.1 MIT, DOMPurify 3.4.17 Apache-2.0/MPL-2.0); no CDN, works on the LAN only.
+
+## Sign-in, people and admin page (20 Oct)
+
+- **Sign-in = Authentik**, no tokens in the browser. Traefik router `knowledge-ui` (`/`, `/ui*`,
+  `/outpost.goauthentik.io/*`) runs `authentik-forwardauth` and then `knowledge-proxy-secret`, which adds
+  `X-Knowledge-Proxy: <secret>`. The server trusts `X-authentik-username` only together with that secret
+  (`KNOWLEDGE_PROXY_SECRET`, from `/root/docker/knowledge/config/proxy.env`, Vaultwarden `KNOWLEDGE_PROXY_SECRET`),
+  because port 8766 is reachable on the LAN without Traefik. Authentik: provider/application "Knowledge" (pk 43,
+  forward_single, session 30 days), access = group "Knowledge".
+- **People:** admins = `KNOWLEDGE_ADMINS` (compose). Everyone else needs projects in `users.json` (read or write per
+  project); without any they get "no access yet" and appear on the admin page. Graph, search, semantic, related and
+  recent only show their projects; lint and ingest are admin-only.
+- **Admin page** `/ui/admin`: create a device token (shown once, only the SHA-256 is stored in `/admin/tokens.json`;
+  scope = roots, write, redact) or revoke one; grant project access; create a project (roots `<name>` docs and
+  `<name>-memory`, stored in `/projects/<name>/` on forge, listed in `/admin/projects.json`). Device tokens also
+  count as secrets (redaction, write guard).
+- `/admin` = forge `/root/docker/knowledge/admin` (rw, 0700, uid 1000); `/config` stays read-only (secrets.json).
+- **MCP and plugin endpoints** keep device tokens (router `knowledge`, priority 100).
 
 ## Agents, PA, history and session log (18 Oct)
 
-- **Scoped tokens** (`token.py add <name> --read-only --roots a,b --redact`): limited to some roots, and every known
+- **Scoped tokens** (admin page: tick roots, untick write, tick "mask secrets"): limited to some roots, and every known
   secret is masked on the way out (`‹secret›`), also inside `user/pass`, `KEY=value`, tables and "password: …".
   The server only holds SHA-256 hashes of the secrets (`token.py push-secrets` → `/config/secrets.json`), and scoped
   tokens get no web UI. Tokens: `pa-anthony` (memory + homelab, redacted; `mcp_servers.knowledge` with a
@@ -164,10 +181,8 @@ sees and edits them in the normal Bitwarden apps and the automation cannot see t
 
 ## Install on a device (once)
 
-1. Create a token on the VM: add `"<device>": {"token": "<long random>", "write": true}` to
-   `~/.config/knowledge-server/tokens.json` (e.g. `python3 -c 'import secrets;print(secrets.token_urlsafe(32))'`),
-   copy the file to forge `/root/docker/knowledge/config/tokens.json` (owner 1000, mode 600). Read-only device:
-   `"write": false`. `token.py add` also stores the token in the vault (`secret set`).
+1. Create a token on the admin page (`/ui/admin` → New token) and store it in the vault
+   (`printf %s '<token>' | secret set KNOWLEDGE_TOKEN_<DEVICE>`).
 2. The device needs LAN or WireGuard (the route only admits 10.0.0.0/8).
 3. In Claude Code on that device (no GitHub login needed when the device has an SSH key for the VM; the
    marketplace is then cloned straight from the VM's repo):
@@ -199,7 +214,7 @@ With option B the watcher runs wherever the files live (forge) instead.
 `watcher/lint-report.py` sends the lint findings that are **new since the last run** to Matrix (room Homelab Alerts),
 silent when nothing is new. Timer: `ln -s ~/knowledge/watcher/lint-report.{service,timer} ~/.config/systemd/user/ &&
 systemctl --user enable --now lint-report.timer` (Monday 08:00). Needs `~/.config/knowledge-server/report.token`
-(`token.py add vm-lint-report --read-only`) and `secret MATRIX_BOT_TOKEN`. State in
+(token `vm-lint-report`, read-only) and `secret MATRIX_BOT_TOKEN`. State in
 `~/.local/state/knowledge-lint-report.json`; `--init` stores a baseline without sending, `--dry-run` prints.
 
 When `knowledge_write` creates a memo, the answer lists existing memos in the same memory root with a similar
