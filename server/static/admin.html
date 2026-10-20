@@ -4,11 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Knowledge admin</title>
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="/ui/static/app.css">
 </head>
 <body class="admin-page">
 <header class="top">
-  <div class="brand">Knowledge · admin</div>
+  <h1 class="brand">Knowledge · admin</h1>
   <a class="logout" href="/ui">← Back to the graph</a>
   <a class="logout" href="/outpost.goauthentik.io/sign_out">Sign out</a>
 </header>
@@ -27,22 +28,25 @@
       <label for="t-name">Device or agent name</label>
       <input id="t-name" required pattern="[A-Za-z0-9][A-Za-z0-9._\-]{0,39}" placeholder="e.g. work-laptop">
       <fieldset>
-        <legend>Scope (none ticked = every project)</legend>
+        <legend>Projects (none ticked = all projects)</legend>
         <div id="t-roots" class="checks"></div>
       </fieldset>
       <label class="check"><input id="t-write" type="checkbox"> May write memos</label>
       <label class="check"><input id="t-redact" type="checkbox"> Mask known secrets in everything it reads (agents that read outside mail)</label>
+      <label class="check"><input id="t-watch" type="checkbox"> VM file watcher (may refresh the index; only for the watcher on the VM)</label>
       <button type="submit">Create token</button>
     </form>
     <div id="new-token" class="new-token" hidden>
-      <p><strong>Copy this token now</strong>, it is not shown again. Enter it in the knowledge plugin of <span id="new-token-name"></span>.</p>
-      <div class="row"><code id="new-token-value"></code><button type="button" id="copy-token" class="ghost">Copy</button></div>
+      <p><strong>Copy this token now</strong>, it is not shown again. Set up Claude Code on <span id="new-token-name"></span>:</p>
+      <div class="row"><code id="new-token-value"></code><button type="button" id="copy-token" class="ghost">Copy token</button></div>
+      <pre id="new-token-setup" class="setup"></pre>
+      <button type="button" id="hide-token" class="ghost">Done, hide it</button>
     </div>
   </section>
 
   <section aria-labelledby="h-users">
     <h2 id="h-users">People</h2>
-    <p class="muted">Sign-in is Authentik; here you decide which projects someone may read or edit. Someone who signs in without access appears here by themselves. Admins are set in the server config.</p>
+    <p class="muted">Sign-in is Authentik (group "Knowledge"); here you decide which projects someone may read or edit. A change is saved right away. Someone who signs in without access appears at the top. Admins are set in the server config.</p>
     <div class="table-wrap"><table>
       <thead id="users-head"></thead>
       <tbody id="users"></tbody>

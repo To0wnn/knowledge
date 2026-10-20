@@ -28,7 +28,7 @@ let labelMin = 0, current = null, editing = false, Graph, Graph3D = null;
 const inProject = (p) => p === project || p === "shared";
 // A shared note (skill) shows only in the projects that link to it.
 const nodeIn = (n) => n.project === project || (n.project === "shared" && (!n.projects || n.projects.includes(project)));
-const lintProject = (item) => ROOT_PROJECT[item.split("/")[0]] || "homelab"; // homelab memory items carry no root prefix
+const lintProject = (item) => ROOT_PROJECT[item.split(/[/:]/)[0]] || "homelab"; // homelab memory items carry no root prefix
 const nodeColor = (n) => colorBy === "cluster" ? (clusterColor.get(n.cluster) || css("--g-doc")) : (css(`--g-${n.group}`) || css("--g-doc"));
 const linkId = (end) => end.id || end;
 
@@ -90,6 +90,7 @@ async function refreshData() {
 // ---------------------------------------------------------------- 2D / 3D rendering
 const calm = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const touch = matchMedia("(hover: none)").matches; // phones: a tap selects, there is no hover
+if (touch) $("q").placeholder = "Search this project…"; // no "/" key on a phone
 const baseRadius = (n) => 3 + Math.sqrt(n.degree || 0) * 1.6;
 
 function drawNode(node, ctx, scale) {
@@ -285,6 +286,7 @@ async function loadGraph() {
 
 async function toggle3D() {
   await releaseFocus({ instant: true });
+  hover = null; setFocus(selected); // no stale hover focus greying out the 3D view
   const on = !Graph3D;
   $("toggle3d").setAttribute("aria-pressed", String(on));
   if (!on) { Graph3D._destructor(); Graph3D = null; $("g3d").replaceChildren(); $("g3d").hidden = true; $("g2d").hidden = false; Graph.resumeAnimation(); return; }
@@ -295,7 +297,7 @@ async function toggle3D() {
   Graph3D = ForceGraph3D()($("g3d"))
     .width($("graph").clientWidth).height($("graph").clientHeight)
     .backgroundColor(css("--canvas"))
-    .nodeId("id").nodeLabel((n) => `${n.label}`).nodeVal((n) => 1 + (n.degree || 0) / 2)
+    .nodeId("id").nodeLabel((n) => { const d = el("div", "tip", n.label); return d; }) // an element, never HTML: labels are note text.nodeVal((n) => 1 + (n.degree || 0) / 2)
     .nodeColor((n) => (focusSet.size && !focusSet.has(n.id) ? css("--line") : nodeColor(n)))
     .linkColor((l) => (linkLit(l) ? css("--accent") : css("--muted"))).linkOpacity(0.35)
     .cooldownTicks(300)
@@ -321,8 +323,10 @@ function switchProject(p, refit = true) {
   releaseFocus({ instant: true });
   if (p === project || !PROJECTS.includes(p)) return;
   project = p; store.set("kn_project", p);
+  $("new-memo").hidden = !me.writable.includes(p);
   selected = null; setFocus(null); hidden = new Set();
   indexGraph(); renderProjects(); renderFilters(); applyView(refit);
+  if (!current) homeView();
   if ($("q").value.trim()) runSearch();
   loadLint(!$("tab-lint").hidden);
   if (!$("tab-recent").hidden) loadRecent();
@@ -370,11 +374,23 @@ function deselect({ push = true } = {}) {
   if (push && location.hash) history.pushState(null, "", location.pathname + location.search);
   $("note").replaceChildren(el("div", "note-empty muted", "Select a node or a search result."));
   $("readchip").hidden = true;
+  homeView();
   if ($("local").checked) applyView(true); // refits to the whole graph once the layout settles
   else if (!Graph3D) releaseFocus().then(() => { if (!selected) Graph.zoomToFit(600, 40); }); // home, then the overview
 }
 
-async function openNote(id, { push = true } = {}) {
+// With nothing selected the right panel shows the project's MEMORY.md: the user's own table of contents.
+let homeNote = null;
+async function homeView() {
+  const path = `${MEMORY_ROOT[project]}/MEMORY.md`;
+  let note; try { note = await api(`/ui/api/note?path=${encodeURIComponent(path)}`); } catch { return; } // no index yet
+  if (current || editing) return; // the user opened something meanwhile
+  homeNote = note;
+  const md = el("div", "md"); md.innerHTML = DOMPurify.sanitize(marked.parse(splitFront(note.text).body, { gfm: true }));
+  $("note").replaceChildren(el("div", "note-empty muted", "Select a node or a search result. Index of this project:"), md);
+}
+
+async function openNote(id, { push = true, find = null } = {}) {
   if (editing && !confirm("Discard your unsaved changes?")) return;
   editing = false;
   let note;
@@ -391,9 +407,26 @@ async function openNote(id, { push = true } = {}) {
     clearTimeout(hoverTimer);
     gather(n.id, 1).then(() => { if (selected === n.id) zoomToFocus(); });
     if (settling) zoomToFocus.again = true; // nodes still move: fit once more when they stop
-  }
+  } else if (Graph) releaseFocus(); // MEMORY.md and other notes without a node: no ring of the previous one
   renderNote();
+  if (find) markInNote(find);
+  else if (matchMedia("(max-width: 720px)").matches && push) $("note").scrollIntoView({ behavior: calm ? "auto" : "smooth" }); // phone: the note is below the list
   $("readchip").hidden = false; $("readchip").textContent = `Read: ${n ? n.label : note.path.split("/").pop()} ↓`;
+}
+
+// Scroll the note to the first place where a search word occurs and mark it, so a hit lands on its line.
+function markInNote(words) {
+  const md = $("note").querySelector(".md"); if (!md) return;
+  const walk = document.createTreeWalker(md, NodeFilter.SHOW_TEXT);
+  for (let t = walk.nextNode(); t; t = walk.nextNode()) {
+    const low = t.data.toLowerCase(), w = words.find((x) => low.includes(x));
+    if (!w) continue;
+    const at = low.indexOf(w), range = document.createRange();
+    range.setStart(t, at); range.setEnd(t, at + w.length);
+    const m = document.createElement("mark"); range.surroundContents(m);
+    m.scrollIntoView({ block: "center", behavior: calm ? "auto" : "smooth" });
+    return;
+  }
 }
 
 function renderNote() {
@@ -407,12 +440,12 @@ function renderNote() {
   const pane = $("note"); pane.replaceChildren();
   const head = el("div", "note-head");
   head.append(el("h2", null, n ? n.label : note.path.split("/").pop()));
-  if (n) { const pill = el("span", "pill", colorBy === "cluster" && n.cluster ? n.cluster : n.group); pill.style.background = nodeColor(n); head.append(pill); }
+  if (n) { const pill = el("span", "pill", colorBy === "cluster" && n.cluster ? n.cluster : n.group); pill.style.borderColor = nodeColor(n); head.append(pill); }
   const tools = el("div", "note-tools");
   const copy = el("button", "ghost small", "Copy link");
   copy.onclick = () => navigator.clipboard?.writeText(`${location.origin}/ui#${note.path}`).then(() => { copy.textContent = "Copied"; setTimeout(() => (copy.textContent = "Copy link"), 1500); });
   tools.append(copy);
-  if (note.writable) { const edit = el("button", "ghost small", "Edit (E)"); edit.onclick = startEdit; tools.append(edit); }
+  if (note.writable) { const edit = el("button", "ghost small", touch ? "Edit" : "Edit (E)"); edit.onclick = startEdit; tools.append(edit); }
   const hist = el("button", "ghost small", "History"); hist.onclick = showHistory; tools.append(hist);
   pane.append(head, tools, el("div", "note-path", `${note.path} · version ${note.version}`));
   if (meta.description) pane.append(el("p", "note-desc", meta.description));
@@ -448,7 +481,7 @@ async function showHistory() {
   pane.querySelector(".note-tools").append(back);
   if (!res.versions.length) { pane.append(el("p", "muted", "No earlier versions yet: history starts at the first change.")); return; }
   const list = el("ol", "hits"), view = el("div", "version");
-  pane.append(list, view);
+  pane.append(view, list); // the chosen diff above the list, so it is in sight
   res.versions.forEach((v, i) => {
     const when = new Date(v.time * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
     const li = hitItem(`${when}${i === 0 ? " (current)" : ""}`, `${v.by === "VM" ? "edited on the VM" : v.by === "before" ? "baseline" : `via ${v.by}`} · ${v.size} bytes`, async () => {
@@ -462,6 +495,7 @@ async function showHistory() {
         pre.append(span);
       }
       view.append(pre);
+      view.scrollIntoView({ block: "start", behavior: calm ? "auto" : "smooth" });
       if (note.writable && i > 0) {
         const restore = el("button", "ghost small", "Restore this version");
         restore.onclick = async () => {
@@ -488,7 +522,7 @@ function startEdit() {
   const save = el("button", null, "Save (Ctrl+S)"), cancel = el("button", "ghost", "Cancel");
   const actions = el("div", "actions"); actions.append(cancel, save);
   pane.append(head, el("div", "note-path", `${current.path} · based on version ${current.version}`), area, err, actions);
-  area.focus();
+  area.focus(); area.setSelectionRange(0, 0); area.scrollTop = 0;
   cancel.onclick = () => { editing = false; renderNote(); };
   save.onclick = async () => {
     save.disabled = true;
@@ -511,7 +545,8 @@ $("note").addEventListener("click", (e) => {
   const a = e.target.closest("a"); if (!a) return;
   const href = a.getAttribute("href") || "";
   if (href.startsWith("#") && href.length > 1) { e.preventDefault(); openNote(decodeURIComponent(href.slice(1))); return; }
-  if (/^[^:/]+\.md$/.test(href) && current) { e.preventDefault(); openNote(current.path.split("/").slice(0, -1).concat(href).join("/")); return; }
+  const base = current || homeNote; // links in a note, or in the index shown when nothing is selected
+  if (/^[^:/]+\.md$/.test(href) && base) { e.preventDefault(); openNote(base.path.split("/").slice(0, -1).concat(href).join("/")); return; }
   if (/^https?:/.test(href)) { a.target = "_blank"; a.rel = "noopener noreferrer"; }
 });
 window.addEventListener("popstate", () => { const id = decodeURIComponent(location.hash.slice(1)); if (id) openNote(id, { push: false }); else deselect({ push: false }); });
@@ -519,19 +554,24 @@ $("readchip").addEventListener("click", () => $("note").scrollIntoView({ behavio
 window.addEventListener("beforeunload", (e) => { if (editing) e.preventDefault(); });
 
 // ---------------------------------------------------------------- new memo
-$("new-memo").onclick = () => {
-  $("new-where").textContent = `In ${MEMORY_ROOT[project]}/ (project ${project}), with a line in its MEMORY.md.`;
-  $("new-error").hidden = true; $("new-form").reset(); $("new-dialog").showModal(); $("new-title").focus();
+$("new-memo").onclick = async () => {
+  $("new-where").textContent = `In ${MEMORY_ROOT[project]}/ (project ${project}), with a line in its MEMORY.md under the heading you pick.`;
+  $("new-error").hidden = true; $("new-form").reset();
+  let headings = [];
+  try { headings = (await api(`/ui/api/note?path=${encodeURIComponent(MEMORY_ROOT[project] + "/MEMORY.md")}`)).text.split("\n").filter((l) => l.startsWith("## ")).map((l) => l.slice(3).trim()); } catch { /* no index yet */ }
+  $("new-heading").replaceChildren(...headings.map((h) => el("option", null, h)), el("option", null, "(end of the index)"));
+  $("new-dialog").showModal(); $("new-title").focus();
 };
 $("new-cancel").onclick = () => $("new-dialog").close();
 $("new-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const type = $("new-type").value, title = $("new-title").value.trim(), desc = $("new-desc").value.trim();
-  const slug = title.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 50);
+  const slug = title.toLowerCase().normalize("NFKD").replace(/\p{M}/gu, "").replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 50);
   const file = `${type}_${slug}.md`, path = `${MEMORY_ROOT[project]}/${file}`;
-  const text = `---\nname: ${type}_${slug}\ndescription: ${desc}\nmetadata:\n  type: ${type}\n---\n\n${desc}\n`;
+  const text = `---\nname: ${type}_${slug}\ndescription: ${JSON.stringify(desc)}\nmetadata:\n  type: ${type}\n---\n\n${desc}\n`;
+  const heading = $("new-heading").selectedIndex < $("new-heading").options.length - 1 ? $("new-heading").value : "";
   try {
-    await api("/ui/api/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path, text, base_version: "", index_line: `- [${title}](${file}) — ${desc}` }) });
+    await api("/ui/api/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path, text, base_version: "", index_line: `- [${title}](${file}) — ${desc}`, heading }) });
     $("new-dialog").close(); await refreshData(); await openNote(path); startEdit();
   } catch (err) { $("new-error").hidden = false; $("new-error").textContent = err.message; }
 });
@@ -540,20 +580,44 @@ $("new-form").addEventListener("submit", async (e) => {
 let searchTimer, searchSeq = 0;
 async function runSearch() {
   const q = $("q").value.trim(), seq = ++searchSeq;
-  if (!q) { $("hits").replaceChildren(); $("sem").replaceChildren(); $("sem-head").hidden = true; $("hits-empty").hidden = false; return; }
+  if (!q) {
+    $("hits").replaceChildren(); $("sem").replaceChildren(); $("sem-head").hidden = true;
+    $("hits-empty").hidden = false; $("hits-empty").textContent = "Type to search this project. Click a node to read it.";
+    return;
+  }
   let res; try { res = await api(`/ui/api/search?q=${encodeURIComponent(q)}&project=${project}`); } catch (e) { $("hits").textContent = e.message; return; }
   if (seq !== searchSeq) return; // a newer search is on its way
-  $("hits-empty").hidden = res.hits.length > 0;
-  if (!res.hits.length) $("hits-empty").textContent = "No matches.";
-  $("hits").replaceChildren(...res.hits.map((h) => hitItem(`${h.path}:${h.line}`, h.text, () => openNote(h.path))));
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  $("hits-empty").hidden = res.notes.length > 0;
+  if (!res.notes.length) $("hits-empty").textContent = "No note contains all of these words.";
+  $("hits").replaceChildren(...res.notes.map((h) => {
+    const li = el("li"), b = el("button");
+    b.append(el("span", "hit-path", `${(byId.get(h.path) || {}).label || h.path.split("/").pop()}${h.count > h.hits.length ? `  +${h.count - h.hits.length}` : ""}`));
+    b.append(el("span", "hit-sub muted", h.path));
+    for (const x of h.hits) b.append(marked_(x.text, words));
+    b.onclick = () => openNote(h.path, { find: words });
+    li.append(b); return li;
+  }));
   // Meaning-based results next to the exact matches: finds notes that use other words.
   let sem; try { sem = await api(`/ui/api/semantic?q=${encodeURIComponent(q)}&project=${project}`); } catch { return; }
   if (seq !== searchSeq) return;
-  const seen = new Set(res.hits.map((h) => h.path));
-  const extra = sem.hits.filter((h) => !seen.has(h.path));
+  const seen = new Set(res.notes.map((h) => h.path));
+  const extra = sem.hits.filter((h) => !seen.has(h.path) && seen.add(h.path)); // one row per note
   $("sem-head").hidden = false;
   $("sem-head").textContent = sem.hits.length ? "By meaning" : `By meaning: ${sem.status}`;
   $("sem").replaceChildren(...extra.map((h) => hitItem(`${(byId.get(h.path) || {}).label || h.path} · ${Math.round(h.score * 100)}%`, `${h.path}:${h.line} — ${h.text}`, () => openNote(h.path))));
+}
+// A search line as text with the query words in <mark>, built from text nodes (never innerHTML).
+function marked_(text, words) {
+  const span = el("span", "hit-text"), low = text.toLowerCase();
+  let i = 0;
+  while (i < text.length) {
+    let at = -1, len = 0;
+    for (const w of words) { const j = low.indexOf(w, i); if (j >= 0 && (at < 0 || j < at)) { at = j; len = w.length; } }
+    if (at < 0) { span.append(text.slice(i)); break; }
+    span.append(text.slice(i, at), el("mark", null, text.slice(at, at + len))); i = at + len;
+  }
+  return span;
 }
 function hitItem(top, sub, onclick) {
   const li = el("li"), b = el("button");
@@ -592,7 +656,7 @@ document.addEventListener("keydown", (e) => {
   else if (/^[1-9]$/.test(e.key) && PROJECTS[Number(e.key) - 1]) switchProject(PROJECTS[Number(e.key) - 1]);
   else if (e.key.toLowerCase() === "e" && current?.writable) { e.preventDefault(); startEdit(); }
   else if (e.key.toLowerCase() === "l") { $("local").checked = !$("local").checked; applyView(true); }
-  else if (e.key === "Escape") { selected = null; setFocus(null); if ($("local").checked) applyView(true); }
+  else if (e.key === "Escape") deselect();
 });
 
 // ---------------------------------------------------------------- tabs, recent, lint, ingest
@@ -659,10 +723,14 @@ function renderInsights() {
 }
 
 async function loadLint(render = true) {
+  if (!me.admin) return; // lint spans every project: admins only
   const full = await api("/ui/api/lint");
   const report = Object.fromEntries(Object.entries(full).map(([k, v]) => [k, v.filter((i) => lintProject(i) === project)]));
-  const total = Object.values(report).reduce((a, v) => a + v.length, 0);
-  $("lint-count").textContent = total || "";
+  const here = Object.values(report).reduce((a, v) => a + v.length, 0);
+  const all = Object.values(full).reduce((a, v) => a + v.length, 0);
+  // The badge counts every project, so findings elsewhere are not missed; the tab lists this project's.
+  $("lint-count").textContent = all || "";
+  $("lint-count").title = `${here} in ${project}, ${all} in all projects`;
   if (!render) return;
   const box = $("lint"); box.replaceChildren();
   for (const [check, items] of Object.entries(report)) {
@@ -738,20 +806,25 @@ function connectLive() {
   es.onerror = () => $("live").classList.remove("on"); // the browser reconnects by itself (retry: 3 s)
 }
 
+let me = { admin: false, writable: [] };
 async function loadMe() {
   // Projects created in the admin page have roots <name> (docs) and <name>-memory, like the built-in ones.
-  const me = await api("/ui/api/me");
+  me = await api("/ui/api/me");
   PROJECTS = me.projects;
   for (const p of PROJECTS) if (!MEMORY_ROOT[p]) { MEMORY_ROOT[p] = `${p}-memory`; ROOT_PROJECT[p] = p; ROOT_PROJECT[`${p}-memory`] = p; }
   if (!PROJECTS.includes(project)) project = PROJECTS[0];
   $("admin-link").hidden = !me.admin;
   $("who").textContent = me.user;
   if (!me.admin) document.querySelector('[data-tab="lint"]').hidden = document.querySelector('[data-tab="ingest"]').hidden = true;
+  $("new-memo").hidden = !me.writable.includes(project);
 }
 
-loadMe().then(loadGraph).then(() => {
+loadMe().then(loadGraph).catch((e) => {
+  $("note").replaceChildren(el("p", "error", `Could not load the knowledge base: ${e.message}. Reload the page; if it stays, the server may be restarting.`));
+  throw e;
+}).then(() => {
   connectLive();
   loadLint(false);
   const id = decodeURIComponent(location.hash.slice(1));
-  if (id) openNote(id, { push: false });
+  if (id) openNote(id, { push: false }); else homeView();
 });

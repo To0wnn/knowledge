@@ -85,8 +85,10 @@ def fetch(url: str, deadline_s: float = 20.0) -> tuple[bytes, str, str]:
             if not ctype.startswith(ALLOWED_TYPES):
                 raise FetchError(f"content type {ctype or 'unknown'} is not supported")
             body = bytearray()
-            while chunk := resp.read(65536):
+            # read1 returns whatever arrived, so the deadline is checked even when a server trickles a byte at a time.
+            while chunk := resp.read1(65536):
                 body += chunk
+                sock.settimeout(max(0.5, min(5.0, end - time.monotonic())))
                 if len(body) > MAX_BYTES:
                     raise FetchError("document larger than 10 MB")
                 if time.monotonic() > end:

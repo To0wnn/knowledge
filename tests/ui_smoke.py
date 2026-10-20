@@ -74,10 +74,30 @@ async def desktop(browser, secret: str) -> None:
     await ctx.close()
 
 
+async def search(browser, secret: str) -> None:
+    ctx, pg, errors = await page(browser, secret, viewport={"width": 1500, "height": 900})
+    await pg.wait_for_function("typeof Graph !== 'undefined' && Graph && Graph.graphData().nodes.length > 10", timeout=20000)
+    await pg.fill("#q", "velux")
+    await pg.wait_for_selector("#hits li", timeout=5000)
+    paths = await pg.locator("#hits .hit-sub").all_inner_texts()
+    check(len(paths) == len(set(paths)) and any("velux" in p for p in paths[:3]), f"search: one row per note, the memo near the top {paths[:3]}")
+    check(await pg.locator("#hits mark").count() > 0, "search marks the words")
+    await pg.locator("#hits li button").first.click()
+    await pg.wait_for_timeout(1200)
+    check(await pg.locator("#note .md mark").count() == 1, "opening a hit marks the word in the note")
+    check(not errors, f"no page errors while searching {errors[:2]}")
+    await ctx.close()
+
+
 async def phone(browser, devices, secret: str) -> None:
     ctx, pg, errors = await page(browser, secret, **devices["iPhone 14"])
     await pg.wait_for_function("typeof Graph !== 'undefined' && Graph && Graph.graphData().nodes.length > 10", timeout=20000)
     await pg.wait_for_timeout(8000)
+    # Phone layout since 20 Oct: search and lists first, the note, the graph last.
+    check(await pg.evaluate("$('tab-results').getBoundingClientRect().top < $('graph').getBoundingClientRect().top"),
+          "phone shows the lists above the graph")
+    await pg.evaluate("$('graph').scrollIntoView()")
+    await pg.wait_for_timeout(500)
     t = await pg.evaluate("""() => { const r = $('g2d').getBoundingClientRect(), n = Graph.graphData().nodes.find(n => (neighbors.get(n.id) || new Set()).size >= 4),
         s = Graph.graph2ScreenCoords(n.x, n.y); return {x: r.x + s.x, y: r.y + s.y}; }""")
     await pg.touchscreen.tap(t["x"], t["y"])
@@ -86,7 +106,7 @@ async def phone(browser, devices, secret: str) -> None:
     check(await pg.evaluate("!$('readchip').hidden"), "Read chip shows")
     await pg.tap("#readchip")
     await pg.wait_for_timeout(1500)
-    check(await pg.evaluate("scrollY") > 100, "Read chip scrolls to the note")
+    check(await pg.evaluate("Math.abs($('note').getBoundingClientRect().top) < 5"), "the note is in view (opening scrolls to it; so does the Read chip)")
     check(not errors, f"no page errors on the phone {errors[:2]}")
     await ctx.close()
 
@@ -106,6 +126,7 @@ async def main() -> None:
     async with async_playwright() as p:
         browser = await p.chromium.launch(channel="chrome")
         await desktop(browser, secret)
+        await search(browser, secret)
         await phone(browser, p.devices, secret)
         await admin(browser, secret)
         await browser.close()

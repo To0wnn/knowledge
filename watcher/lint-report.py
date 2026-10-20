@@ -28,7 +28,7 @@ PROJECTS_DIR = Path.home() / ".claude/projects"
 
 
 def findings() -> set[str]:
-    req = urllib.request.Request(f"{SERVER}/ui/api/lint", headers={"Authorization": f"Bearer {TOKEN.read_text().strip()}"})
+    req = urllib.request.Request(f"{SERVER}/lint", headers={"Authorization": f"Bearer {TOKEN.read_text().strip()}"})
     with urllib.request.urlopen(req, timeout=60) as r:
         report = json.load(r)
     return {f"{check}: {item}" for check, items in report.items() for item in items}
@@ -97,4 +97,9 @@ if __name__ == "__main__":
         assert message({"x: y"}, 3, 1).startswith("Knowledge lint: 1 new finding(s) since last week (3 open, 1 resolved).")
         print("ok")
     else:
-        main()
+        try:
+            main()
+        except Exception as e:  # fail loudly: a silent weekly job is worse than a noisy one
+            if "--dry-run" not in sys.argv:
+                send(f"Knowledge lint report failed: {type(e).__name__}: {e}")
+            raise

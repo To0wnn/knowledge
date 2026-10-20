@@ -197,18 +197,39 @@ def main():
         assert raw("GET", "/ui/static/app.js")[0] == 200  # static is public (no data)
         assert raw("GET", "/", headers=ck)[1].get("location") == "/ui"
         assert raw("GET", "/ui", headers=ck)[0] == 200
-        assert json.loads(raw("GET", "/ui/api/me", headers=ck)[2]) == {"user": "anthony", "admin": True, "projects": ["homelab", "anpitek", "trade"]}
+        assert json.loads(raw("GET", "/ui/api/me", headers=ck)[2]) == {"user": "anthony", "admin": True, "projects": ["homelab", "anpitek", "trade"], "writable": ["homelab", "anpitek", "trade"]}
         g = json.loads(raw("GET", "/ui/api/graph", headers=ck)[2])
         assert g["nodes"] and not any(n["id"].endswith("/MEMORY.md") for n in g["nodes"]), g["nodes"][:3]  # index not drawn, still readable below
         assert {n["project"] for n in g["nodes"] if n["id"].startswith("trade")} == {"trade"}
-        th = json.loads(raw("GET", "/ui/api/search?q=entry%20timing&project=trade", headers=ck)[2])["hits"]
+        th = json.loads(raw("GET", "/ui/api/search?q=entry%20timing&project=trade", headers=ck)[2])["notes"]
         assert th and all(h["project"] == "trade" for h in th), th
-        assert not json.loads(raw("GET", "/ui/api/search?q=entry%20timing&project=homelab", headers=ck)[2])["hits"]
+        assert not json.loads(raw("GET", "/ui/api/search?q=entry%20timing&project=homelab", headers=ck)[2])["notes"]
         note = json.loads(raw("GET", "/ui/api/note?path=memory/MEMORY.md", headers=ck)[2])
         assert "Item 1" in note["text"] and note["version"]
         assert raw("GET", "/ui/api/note?path=../../etc/passwd", headers=ck)[0] == 404
-        hits = json.loads(raw("GET", "/ui/api/search?q=Item%20119", headers=ck)[2])["hits"]
-        assert hits and hits[0]["path"] == "memory/MEMORY.md", hits
+        hits = json.loads(raw("GET", "/ui/api/search?q=Item%20119", headers=ck)[2])["notes"]
+        assert hits and hits[0]["path"] == "memory/MEMORY.md" and 121 in [h["line"] for h in hits[0]["hits"]], hits
+        # Several words: all must occur in the note (not as one phrase); the note named after them ranks first.
+        (mem / "project_nas_freeze.md").write_text("---\nname: NAS freeze\n---\nThe NAS hangs at 05:15.\n")
+        (lab / "07_BACKUP.md").write_text("backup notes: nas, later the freeze of the pool\n")
+        http("POST", "/invalidate", {"paths": ["memory/project_nas_freeze.md", "homelab/07_BACKUP.md"]}, token="watch-token")
+        hits = json.loads(raw("GET", "/ui/api/search?q=nas%20freeze&project=homelab", headers=ck)[2])["notes"]
+        assert [h["path"] for h in hits][:2] == ["memory/project_nas_freeze.md", "homelab/07_BACKUP.md"], hits
+        # A catastrophic regex costs at most a few seconds and never blocks other requests.
+        t0 = time.time()
+        err, text = call("knowledge_search", {"pattern": "(a+)+$"})
+        assert time.time() - t0 < 6, time.time() - t0
+        (mem / "redos.md").write_text("a" * 30000 + "!\n")
+        http("POST", "/invalidate", {"paths": ["memory/redos.md"]}, token="watch-token")
+        import threading
+        res = {}
+        th_ = threading.Thread(target=lambda: res.update(r=call("knowledge_search", {"pattern": "(a+)+$"})))
+        th_.start(); time.sleep(0.5)
+        t1 = time.time(); assert http("GET", "/health", token=None)[0] == 200 and time.time() - t1 < 1.5
+        th_.join()
+        assert res["r"][0] and "longer than" in res["r"][1], res
+        (mem / "redos.md").unlink()
+        http("POST", "/invalidate", {"paths": ["memory/redos.md"]}, token="watch-token")
         assert isinstance(json.loads(raw("GET", "/ui/api/lint", headers=ck)[2]), dict)
         body = json.dumps({"text": "# Source\nRouter firmware notes", "title": "Router notes"})
         assert raw("POST", "/ui/api/ingest", body, {**ck, "Content-Type": "application/json"})[0] == 403  # no CSRF header
@@ -248,11 +269,11 @@ def main():
         assert admin("/ui/api/admin/user", {"username": "anthony", "projects": {}})[0] == 400  # admins come from the config
         assert admin("/ui/api/admin/user", {"username": "bob", "projects": {"trade": "read", "homelab": "none"}})[0] == 200
         ro = user("bob")
-        assert json.loads(raw("GET", "/ui/api/me", headers=ro)[2]) == {"user": "bob", "admin": False, "projects": ["trade"]}
+        assert json.loads(raw("GET", "/ui/api/me", headers=ro)[2]) == {"user": "bob", "admin": False, "projects": ["trade"], "writable": []}
         assert not json.loads(raw("GET", "/ui/api/note?path=trade-memory/plan.md", headers=ro)[2])["writable"]
         assert post({"path": "trade-memory/x.md", "text": "x"}, ro)[0] == 409
         assert raw("GET", "/ui/api/note?path=memory/MEMORY.md", headers=ro)[0] == 404
-        assert not json.loads(raw("GET", "/ui/api/search?q=Item%20119", headers=ro)[2])["hits"]
+        assert not json.loads(raw("GET", "/ui/api/search?q=Item%20119", headers=ro)[2])["notes"]
         assert all(n["id"].startswith("trade") for n in json.loads(raw("GET", "/ui/api/graph", headers=ro)[2])["nodes"])
         assert json.loads(raw("GET", "/ui/api/lint", headers=ro)[2]) == {} and raw("GET", "/ui/admin", headers=ro)[0] == 403
         assert raw("GET", "/ui/api/admin", headers=ro)[0] == 403
@@ -281,6 +302,36 @@ def main():
         assert "raised beds" in call("knowledge_read", {"path": "garden-memory/project_beds.md"})[1]
         assert "garden" in json.loads(raw("GET", "/ui/api/me", headers=ck)[2])["projects"]
         assert "project garden" in http("GET", "/context/1?project=/home/x/garden")[1]
+        # Review fixes 20 Oct: a project named like a path part does not capture other sessions; write patterns are
+        # anchored; "Add" never wipes access; graph ETag per user; body cap; scoped ingest/lint; token routes.
+        assert admin("/ui/api/admin/project", {"name": "home"})[0] == 200
+        assert "project anpitek" in http("GET", "/context/1?project=/home/x/anpitek/boekhouding")[1]
+        assert "project homelab" in http("GET", "/context/1?project=/home/x/homelab")[1]
+        assert call("knowledge_write", {"path": "homelab/deep/memory/x.md", "content": "x"})[0]
+        assert admin("/ui/api/admin/user", {"username": "dora", "projects": {"trade": "write"}})[0] == 200
+        assert admin("/ui/api/admin/user", {"username": "dora", "projects": {}, "add": True})[0] == 400
+        assert json.loads(raw("GET", "/ui/api/me", headers=user("dora"))[2])["writable"] == ["trade"]
+        etag_admin = raw("GET", "/ui/api/graph", headers=ck)[1]["etag"]
+        assert raw("GET", "/ui/api/graph", headers={**user("dora"), "If-None-Match": etag_admin})[0] == 200
+        st = raw("POST", "/ui/api/save", b"x" * (13 * 1024 * 1024), {**user("dora"), "Content-Type": "application/json", "X-Knowledge-UI": "1"})[0]
+        assert st == 413, st
+        st, _, res = admin("/ui/api/admin/token", {"name": "tradebot", "write": True, "roots": ["trade", "trade-memory"]})
+        tb = json.loads(res)["token"]
+        err, text = call("knowledge_ingest", {"text": "a trade-only token may not add homelab sources"}, token=tb)
+        assert err and "may not add sources" in text, text
+        assert "memory/" not in call("knowledge_lint", {}, token=tb)[1].replace("trade-memory/", "")
+        st, body = http("GET", "/lint", token=tb)
+        assert st == 200 and all(not i.startswith(("memory", "homelab")) for v in json.loads(body).values() for i in v), body[:300]
+        assert http("GET", "/ui/api/lint", token="rw-token")[0] == 401
+        st, body = http("GET", "/semantic?q=entry%20timing&project=trade")
+        assert st == 200 and "hits" in json.loads(body)
+        st, _, res = admin("/ui/api/admin/token", {"name": "watcher2", "watch": True})
+        assert http("POST", "/invalidate", {"paths": []}, token=json.loads(res)["token"])[0] == 200
+        # New memo from the UI: the index line goes under the chosen heading.
+        (tmem / "MEMORY.md").write_text("# Index\n\n## Plans\n- [Bot plan](plan.md) — entry timing\n\n## Other\n- [X](x.md) — x\n")
+        http("POST", "/invalidate", {"paths": ["trade-memory/MEMORY.md"]}, token="watch-token")
+        st, _, res = post({"path": "trade-memory/project_risk.md", "text": "risk\n", "index_line": "- [Risk](project_risk.md) — r", "heading": "Plans"})
+        assert st == 200 and "- [Bot plan](plan.md) — entry timing\n- [Risk](project_risk.md) — r\n\n## Other" in (tmem / "MEMORY.md").read_text(), (tmem / "MEMORY.md").read_text()
         files = json.loads(raw("GET", "/ui/api/recent?project=trade", headers=ck)[2])["files"]
         assert files[0]["path"] in ("trade-memory/MEMORY.md", "trade-memory/project_new.md") and files[0]["by"] == "user:anthony", files[:3]
         assert all(f["path"].startswith("trade") for f in files)

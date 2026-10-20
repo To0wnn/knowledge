@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Knowledge</title>
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="/ui/static/app.css">
 </head>
 <body>
@@ -75,14 +76,14 @@
 
 <main id="graph" aria-label="Knowledge graph"><div id="g2d"></div><div id="g3d" hidden></div><button id="readchip" type="button" hidden></button></main>
 
-<aside class="right" id="note" aria-live="polite">
+<aside class="right" id="note" aria-label="Note">
   <div class="note-empty muted">Select a node or a search result.</div>
 </aside>
 
 <dialog id="quick" aria-label="Quick open">
-  <input id="quick-q" type="search" placeholder="Open a note in any project…" autocomplete="off">
+  <input id="quick-q" type="text" placeholder="Open a note in any project…" autocomplete="off">
   <ol id="quick-list" class="hits"></ol>
-  <p class="keys muted"><kbd>/</kbd> search · <kbd>Ctrl K</kbd> open · <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> project · <kbd>E</kbd> edit · <kbd>L</kbd> local graph · <kbd>Esc</kbd> close</p>
+  <p class="keys muted"><kbd>/</kbd> search · <kbd>Ctrl K</kbd> open · <kbd>1</kbd>–<kbd>9</kbd> project · <kbd>E</kbd> edit · <kbd>L</kbd> local graph · <kbd>Esc</kbd> close</p>
 </dialog>
 
 <dialog id="new-dialog" aria-label="New memo">
@@ -95,6 +96,8 @@
     <input id="new-title" type="text" required>
     <label for="new-desc">One-line description (for the index)</label>
     <input id="new-desc" type="text" required>
+    <label for="new-heading">Index heading (topic)</label>
+    <select id="new-heading"></select>
     <p id="new-error" class="error" hidden></p>
     <div class="actions"><button type="button" class="ghost" id="new-cancel">Cancel</button><button type="submit">Create</button></div>
   </form>
