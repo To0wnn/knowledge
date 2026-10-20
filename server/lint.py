@@ -123,7 +123,7 @@ def lint(files: dict[str, str], today: date | None = None, mem: str = "memory") 
         if len(text.encode()) > BIG_MEMO and "archief/" not in text:
             report["big_memo_without_archive"].append(f"{name} ({len(text.encode()) // 1024} KB)")
         last = latest_date(text)
-        opens = len(OPEN_WORDS.findall(text))
+        opens = len(OPEN_WORDS.findall(no_code))  # not in code: `open(...)` or an 'open' column is no open item
         if last and opens and (today - last).days > 45:
             report["possibly_stale_open_item"].append(f"{name}: {opens} open/TODO mention(s), newest date {last}")
         hits = sum(1 for m in SECRET_HINT.finditer(re.sub(r"‹[^›\n]*›", "", text)) if looks_secret(m.group(0)))
@@ -173,6 +173,8 @@ if __name__ == "__main__":  # self-check
     assert r["orphan_memo"] == ["c.md"], r  # b.md is linked from a.md
     assert r["missing_frontmatter"] == ["b.md: description, type"], r
     assert r["possibly_stale_open_item"][0].startswith("a.md"), r
+    assert not lint({"memory/MEMORY.md": "", "memory/o.md": "1 jun 2026\n```\nopen('x').read()\n```\nuse `open()`\n"},
+                    today=date(2026, 10, 18))["possibly_stale_open_item"]
     assert r["possible_secret_in_memo"] == ["b.md: 1 line(s) (values not shown)"], r
     assert not lint({"memory/MEMORY.md": "", "memory/a.md": "[[b]]", "trade-memory/b.md": "x"})["dead_wikilink"]  # cross-root
     r4 = lint({"memory/MEMORY.md": "x\n" * 160, "memory/a.md": "```\ntoday\n```\nfixed gisteren", "memory/b.md": "goedemorgen, 's morgens"})
