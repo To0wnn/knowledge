@@ -13,6 +13,7 @@ dependencies = [
     "python-docx==1.2.0",  # ingest: Word documents (MIT)
     "networkx==3.7",  # graph: Louvain communities, Adamic-Adar (BSD-3)
     "fastembed==0.9.0",  # semantic search: local ONNX embeddings, no torch (Apache-2.0)
+    "regex==2026.9.29",
 ]
 
 [tool.uv]

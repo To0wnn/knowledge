@@ -24,7 +24,7 @@ MD_ONLY = {docs for docs, _ in PROJECTS.values()} - {"homelab"}
 
 def project_of(rel: str) -> str:
     root = rel.split("/", 1)[0]
-    return next((p for p, roots in PROJECTS.items() if root in roots), "shared")
+    return next((p for p, roots in list(PROJECTS.items()) if root in roots), "shared")  # copy: the UI can add projects
 
 
 def mem_root(rel: str) -> str | None:
@@ -85,7 +85,7 @@ def build(files: dict[str, str]) -> dict:
                 or (rel.startswith("claude/skills/") and parts[-1] == "SKILL.md" and len(parts) == 4):
             keep[rel] = text
     titles, sections = {}, {}
-    for mem in MEMORY_ROOTS:
+    for mem in sorted(MEMORY_ROOTS):
         section = ""
         for line in files.get(f"{mem}/MEMORY.md", "").splitlines():
             if line.startswith("## "):
@@ -94,6 +94,11 @@ def build(files: dict[str, str]) -> dict:
                 titles[f"{mem}/{m.group(2)}"] = m.group(1)
                 if section:
                     sections[f"{mem}/{m.group(2)}"] = section  # the user's own grouping of memos
+    # The same heading in two projects (e.g. "## General" of new UI projects) must stay two topics.
+    owners: dict[str, set] = {}
+    for r, sec in sections.items():
+        owners.setdefault(sec, set()).add(project_of(r))
+    sections = {r: f"{sec} ({project_of(r)})" if len(owners[sec]) > 1 else sec for r, sec in sections.items()}
     # Projects without MEMORY.md headings: a doc's subfolder ("gema-truckwaardering"), or a file-name family of 3+
     # files ("FABLE_*", "OPUS_REVIEW_*") is its section.
     headed = {project_of(r) for r in sections}

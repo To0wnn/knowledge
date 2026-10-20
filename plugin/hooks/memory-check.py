@@ -55,7 +55,7 @@ def similar_notes(mem_dir: Path, name: str, text: str) -> list[str]:
     if not root or name == "MEMORY.md" or not TOKEN.exists():
         return []
     body = re.sub(r"\A---\n.*?\n---\n", "", text, flags=re.S)[:1500]
-    url = f"{SERVER}/ui/api/semantic?" + urllib.parse.urlencode({"q": body, "project": project})
+    url = f"{SERVER}/semantic?" + urllib.parse.urlencode({"q": body, "project": project})
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {TOKEN.read_text().strip()}"})
     with urllib.request.urlopen(req, timeout=6) as r:
         hits = json.load(r).get("hits", [])
@@ -79,7 +79,11 @@ def main() -> None:
     notes = lint_notes(mem_dir, name)
     created = (hook.get("tool_response") or {}).get("type") == "create"
     if created:
-        similar = similar_notes(mem_dir, name, Path(path).read_text(errors="replace"))
+        try:
+            similar = similar_notes(mem_dir, name, Path(path).read_text(errors="replace"))
+        except (OSError, ValueError) as e:  # server unreachable: still report the lint notes
+            similar = []
+            notes.append(f"duplicate check unavailable ({type(e).__name__})")
         if similar:
             notes.append("Similar existing memos (merge into one of these if it covers the same subject, then delete "
                          "this one): " + ", ".join(similar))
