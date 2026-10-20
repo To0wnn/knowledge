@@ -137,13 +137,12 @@ The full house rules are in the server's instructions; the core:
 - Memory is a hint: check a fact that can change on the live system before acting on it,
   and fix the memo when it is wrong.
 - Absolute dates; never write a password, token or key.</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Hooks: context, session log, mirror</b> (Linux/macOS)
+      <li><b>Hooks: context, session log, mirror</b>
         <div class="cmd"><pre>git clone https://github.com/To0wnn/knowledge ~/knowledge
-# in ~/.bashrc or ~/.zshrc: the token the hooks use (session log and mirror need a write token)
-export KNOWLEDGE_TOKEN="YOUR_TOKEN"</pre><button class="copy" type="button">Copy</button></div>
-        Then copy <code>~/knowledge/clients/agy-hooks.json</code> to <code>~/.gemini/config/hooks.json</code> and in it replace
-        <code>/home/user/.local/bin/</code> by <code>~/knowledge/clients/</code> (full path) and the vault names
-        <code>KNOWLEDGE_TOKEN_AGY</code> by <code>-</code>. agy has no session-end event, so the log gets one entry per turn.</li>
+python3 ~/knowledge/clients/knowledge-agent.py install agy</pre><button class="copy" type="button">Copy</button></div>
+        Windows: <code>py</code> instead of <code>python3</code> and <code>%USERPROFILE%\knowledge</code> instead of <code>~/knowledge</code>.
+        This writes <code>~/.gemini/config/hooks.json</code> (an existing one is kept as <code>.bak</code>). The hooks take the token from
+        <code>KNOWLEDGE_TOKEN</code> (see above for Codex; for agy set it the same way); session log and mirror need a write token. agy has no session-end event, so the log gets one entry per turn.</li>
       <li><b>Check</b>
         <div class="cmd"><pre>agy mcp list</pre><button class="copy" type="button">Copy</button></div>
         <code>knowledge  http  enabled</code>. In a session, <code>/mcp</code> shows the connection.</li>
@@ -169,18 +168,17 @@ startup_timeout_sec = 15</pre><button class="copy" type="button">Copy</button></
         <code>writes</code>: reading just works, Codex asks before writing.</li>
       <li><b>House rules in <code>~/.codex/AGENTS.md</code></b>
         The same text as for agy (step 3 there). Codex loads this file at every start.</li>
-      <li><b>Hooks: context, session log, mirror</b> (Linux/macOS)
+      <li><b>Hooks: context, session log, mirror</b>
         <div class="cmd"><pre>git clone https://github.com/To0wnn/knowledge ~/knowledge
-# in ~/.bashrc or ~/.zshrc: the token the hooks use (session log and mirror need a write token)
-export KNOWLEDGE_TOKEN="YOUR_TOKEN"</pre><button class="copy" type="button">Copy</button></div>
-        Then copy <code>~/knowledge/clients/codex-hooks.json</code> to <code>~/.codex/hooks.json</code> and in it replace
-        <code>/home/user/.local/bin/</code> by <code>~/knowledge/clients/</code> (full path) and the vault names
-        <code>KNOWLEDGE_TOKEN_CODEX</code> by <code>-</code>. Trust the hooks once with <code>/hooks</code> in a session: Codex skips new or changed hooks until then.</li>
+python3 ~/knowledge/clients/knowledge-agent.py install codex</pre><button class="copy" type="button">Copy</button></div>
+        Windows: <code>py</code> instead of <code>python3</code> and <code>%USERPROFILE%\knowledge</code> instead of <code>~/knowledge</code>.
+        This writes <code>~/.codex/hooks.json</code> (an existing one is kept as <code>.bak</code>). The hooks take the token from
+        <code>KNOWLEDGE_TOKEN</code> (see above for Codex; for agy set it the same way); session log and mirror need a write token. Trust the hooks once with <code>/hooks</code> in a session: Codex skips new or changed hooks until then.</li>
       <li><b>Check</b>
         <div class="cmd"><pre>codex mcp list</pre><button class="copy" type="button">Copy</button></div>
         Ask in a session: "search the knowledge for …".</li>
     </ol>
-    <div class="note"><b>Hooks in Codex.</b> Keep exactly one SessionStart hook: with several, Codex drops the context. Codex runs hooks with a bare PATH, so use full paths. On Windows the hooks do not run (they are shell scripts); use Claude Code there.</div>
+    <div class="note"><b>Hooks in Codex.</b> Keep exactly one SessionStart hook: with several, Codex drops the context. Codex runs hooks with a bare PATH, so use full paths.</div>
   </section>
 
   <h2>What each client gets</h2>

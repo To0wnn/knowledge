@@ -22,7 +22,7 @@ from pathlib import Path
 
 STATE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "knowledge-session-log"
 EDIT_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit"}
-AGY_EDIT_TOOLS = {"write_to_file", "replace_file_content", "multi_replace_file_content"}
+AGY_EDIT_TOOLS = {"write_file", "edit_file", "write_to_file", "replace_file_content", "multi_replace_file_content"}
 PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update) File: (.+)$", re.M)  # Codex apply_patch
 
 
@@ -88,7 +88,7 @@ def collect_other(d: dict, prompts: list, files: list) -> str | None:
         for c in d.get("tool_calls") or []:
             a = c.get("args") or {}
             if c.get("name") in AGY_EDIT_TOOLS:
-                files.append(str(arg(a.get("TargetFile", ""))))
+                files.append(str(arg(a.get("Path") or a.get("TargetFile") or "")))
             elif c.get("name") == "call_mcp_tool" and arg(a.get("ToolName")) in ("knowledge_edit", "knowledge_write"):
                 files.append(str((arg(a.get("Arguments")) or {}).get("path", "")))
         return d.get("content") if str(d.get("content", "")).strip() else None
@@ -127,7 +127,7 @@ def main():
     if "conversationId" in hook:  # agy: camelCase fields, Stop after every turn, no event name
         hook = {"session_id": hook["conversationId"], "transcript_path": os.path.expanduser(hook.get("transcriptPath", "")),
                 "cwd": (hook.get("workspacePaths") or [""])[0], "reason": "agy"}
-    elif "/.codex/" in hook.get("transcript_path", ""):  # Codex uses Claude's field names
+    elif "/.codex/" in hook.get("transcript_path", "").replace("\\", "/"):  # Codex uses Claude's field names
         hook["reason"] = f"codex {hook.get('hook_event_name', '')}"
     transcript, sid = hook.get("transcript_path", ""), hook.get("session_id", "")
     if not transcript or not os.path.exists(transcript):
