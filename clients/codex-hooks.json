@@ -12,6 +12,40 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "apply_patch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/to0wnn/.local/bin/knowledge-hook KNOWLEDGE_TOKEN_CODEX docs-sync",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/to0wnn/.local/bin/knowledge-hook - session-log",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/to0wnn/.local/bin/knowledge-hook - session-log",
+            "timeout": 3
+          }
+        ]
+      }
     ]
   }
 }

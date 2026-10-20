@@ -1,0 +1,30 @@
+{
+  "knowledge": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "/home/to0wnn/.local/bin/knowledge-context KNOWLEDGE_TOKEN_AGY agy",
+        "timeout": 30
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "write_to_file|replace_file_content|multi_replace_file_content",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/to0wnn/.local/bin/knowledge-hook KNOWLEDGE_TOKEN_AGY docs-sync",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "/home/to0wnn/.local/bin/knowledge-hook - session-log",
+        "timeout": 15
+      }
+    ]
+  }
+}

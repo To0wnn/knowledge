@@ -343,6 +343,16 @@ def main():
         subprocess.run([sys.executable, sync], input=json.dumps({"hook_event_name": "PostToolUse", "tool_input":
                         {"file_path": str(proj / "notes" / "taxi.md")}}), text=True, env=genv, check=True)
         assert (tmp / "projects/garden/docs/notes/taxi.md").read_text() == "taxi speed fixed\n"
+        # Codex (a patch with a relative path) and agy (camelCase, no event name) with KNOWLEDGE_* instead of plugin options.
+        oenv = {**os.environ, "KNOWLEDGE_URL": BASE, "KNOWLEDGE_TOKEN": fr}
+        (proj / "notes" / "taxi.md").write_text("taxi speed codex\n")
+        subprocess.run([sys.executable, sync], input=json.dumps({"hook_event_name": "PostToolUse", "cwd": str(proj), "tool_input":
+                        {"command": "*** Begin Patch\n*** Update File: notes/taxi.md\n@@\n*** End Patch"}}), text=True, env=oenv, check=True)
+        assert (tmp / "projects/garden/docs/notes/taxi.md").read_text() == "taxi speed codex\n"
+        (proj / "notes" / "taxi.md").write_text("taxi speed agy\n")
+        subprocess.run([sys.executable, sync], input=json.dumps({"workspacePaths": [str(proj)], "toolCall": {"name": "write_to_file",
+                        "args": {"TargetFile": str(proj / "notes" / "taxi.md")}}}), text=True, env=oenv, check=True)
+        assert (tmp / "projects/garden/docs/notes/taxi.md").read_text() == "taxi speed agy\n"
         (proj / ".knowledge-project").write_text("trade\n")
         out = subprocess.run([sys.executable, sync], input=json.dumps({"hook_event_name": "SessionStart"}), text=True,
                              env=genv, capture_output=True, check=True).stdout
@@ -441,6 +451,28 @@ def main():
         subprocess.run([sys.executable, script], input=hook, text=True, env=senv, check=True)  # nothing new: no entry
         assert (tmem / "sessions" / f"{time.strftime('%Y-%m')}.md").read_text() == log
         assert http("POST", "/sessions", {"prompts": ["x"], "cwd": "/"}, token="ro-token")[0] == 403
+        # The same script reads a Codex rollout and an agy transcript.
+        (tmp / ".codex").mkdir(exist_ok=True)
+        cx = tmp / ".codex" / "rollout.jsonl"
+        cx.write_text("\n".join(json.dumps(r) for r in [
+            {"type": "session_meta", "payload": {"cwd": "/home/x/trade_bot"}},
+            {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "# AGENTS.md instructions"}]}},
+            {"type": "event_msg", "payload": {"type": "item_completed", "item": {"type": "UserMessage", "content": [{"type": "text", "text": "tune the codex stop loss"}]}}},
+            {"type": "response_item", "payload": {"type": "custom_tool_call", "name": "apply_patch", "input": "*** Begin Patch\n*** Update File: /home/x/trade_bot/stop.py\n@@\n*** End Patch"}},
+            {"type": "event_msg", "payload": {"type": "item_completed", "item": {"type": "AgentMessage", "content": [{"type": "Text", "text": "Stop loss tuned."}]}}}]) + "\n")
+        subprocess.run([sys.executable, script], input=json.dumps({"session_id": "codex12345", "transcript_path": str(cx), "cwd": "/home/x/trade_bot",
+                        "hook_event_name": "SessionEnd", "reason": "other"}), text=True, env=senv, check=True)
+        ag = tmp / "agy.jsonl"
+        ag.write_text("\n".join(json.dumps(r) for r in [
+            {"type": "USER_INPUT", "content": "<USER_REQUEST>\nrename the agy bot\n</USER_REQUEST>"},
+            {"type": "PLANNER_RESPONSE", "tool_calls": [{"name": "write_to_file", "args": {"TargetFile": "\"/home/x/trade_bot/name.py\""}}]},
+            {"type": "PLANNER_RESPONSE", "content": "Renamed."}]) + "\n")
+        subprocess.run([sys.executable, script], input=json.dumps({"conversationId": "agy9876543", "transcriptPath": str(ag),
+                        "workspacePaths": ["/home/x/trade_bot"], "fullyIdle": True}), text=True, env=senv, check=True)
+        log = (tmem / "sessions" / f"{time.strftime('%Y-%m')}.md").read_text()
+        assert "· codex SessionEnd · session codex123" in log and "Asked: tune the codex stop loss" in log and "AGENTS" not in log, log
+        assert "stop.py" in log and "Outcome: Stop loss tuned." in log, log
+        assert "· agy · session agy98765" in log and "Asked: rename the agy bot" in log and "name.py" in log and "Outcome: Renamed." in log, log
         # Changes: lines added/removed by the last change, its version for the diff, and the session that made it.
         assert http("POST", "/sessions", {"prompts": ["tidy the hist memo"], "cwd": "/home/x/trade_bot",
                                           "files": ["/home/x/.claude/trade-memory/hist.md"]})[0] == 200

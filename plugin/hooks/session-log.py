@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """SessionEnd/PreCompact hook: post a short log of this Claude Code session to the knowledge server.
 
+Also reads the transcripts of Codex (rollout JSONL, SessionEnd/PreCompact hooks) and agy (transcript.jsonl, Stop hook,
+camelCase payload); the transcript format is the only difference. Neither format is a stable interface: a change there
+makes the log skip, never the session fail.
+
 Logs the user's prompts, the files Claude changed and Claude's last answer (usually its summary) since the previous
 log of the same session, so long-running tmux sessions get an entry at every compaction and nothing is logged twice.
 The server picks the project from the working directory, redacts secrets and appends to
@@ -11,12 +15,15 @@ Config: KNOWLEDGE_URL + KNOWLEDGE_TOKEN, or the plugin options (CLAUDE_PLUGIN_OP
 """
 import json
 import os
+import re
 import sys
 import urllib.request
 from pathlib import Path
 
 STATE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "knowledge-session-log"
 EDIT_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit"}
+AGY_EDIT_TOOLS = {"write_to_file", "replace_file_content", "multi_replace_file_content"}
+PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update) File: (.+)$", re.M)  # Codex apply_patch
 
 
 def config() -> tuple[str, str]:
@@ -46,6 +53,48 @@ def prompt_text(msg: dict) -> str:
     return text
 
 
+def short(path: str) -> str:
+    """'' for scratch files (not worth logging), else the path with ~ for the home folder."""
+    return "" if not path or path.startswith("/tmp/") or "/scratchpad/" in path else path.replace(str(Path.home()), "~")
+
+
+def arg(value):
+    """agy sometimes JSON-encodes a tool argument a second time ("\"/path\""); undo that."""
+    try:
+        return json.loads(value) if isinstance(value, str) and value[:1] in '"{' else value
+    except ValueError:
+        return value
+
+
+def collect_other(d: dict, prompts: list, files: list) -> str | None:
+    """One line of a Codex or agy transcript: adds prompts/files, returns the answer text if the line holds one."""
+    p = d.get("payload") or {}
+    if d.get("type") == "event_msg":  # Codex: user_message/agent_message (older), item_completed (0.16x)
+        item = p.get("item") or {}
+        text = p.get("message") if p.get("type") in ("user_message", "agent_message") else " ".join(
+            c.get("text", "") for c in item.get("content") or [] if isinstance(c, dict))
+        kind = {"user_message": "user", "agent_message": "agent"}.get(p.get("type")) or \
+            {"UserMessage": "user", "AgentMessage": "agent"}.get(item.get("type"))
+        if kind == "user" and text.strip() and not text.lstrip().startswith(("<", "# AGENTS.md")):
+            prompts.append(text.strip())
+        return text if kind == "agent" and text.strip() else None
+    if d.get("type") == "response_item" and p.get("name") == "apply_patch":
+        files.extend(PATCH_FILE.findall(str(p.get("input") or p.get("arguments") or "")))
+    if d.get("type") == "USER_INPUT":  # agy
+        text = re.sub(r"</?USER_REQUEST>|<ADDITIONAL_METADATA>.*", "", str(d.get("content", "")), flags=re.S).strip()
+        if text and not text.startswith("<"):
+            prompts.append(text)
+    if d.get("type") == "PLANNER_RESPONSE":
+        for c in d.get("tool_calls") or []:
+            a = c.get("args") or {}
+            if c.get("name") in AGY_EDIT_TOOLS:
+                files.append(str(arg(a.get("TargetFile", ""))))
+            elif c.get("name") == "call_mcp_tool" and arg(a.get("ToolName")) in ("knowledge_edit", "knowledge_write"):
+                files.append(str((arg(a.get("Arguments")) or {}).get("path", "")))
+        return d.get("content") if str(d.get("content", "")).strip() else None
+    return None
+
+
 def collect(lines: list[str]) -> tuple[list[str], list[str], str]:
     prompts, files, summary = [], [], ""
     for line in lines:
@@ -53,7 +102,9 @@ def collect(lines: list[str]) -> tuple[list[str], list[str], str]:
             d = json.loads(line)
         except ValueError:
             continue
-        if d.get("type") == "user":
+        if d.get("type") not in ("user", "assistant"):
+            summary = collect_other(d, prompts, files) or summary
+        elif d.get("type") == "user":
             text = prompt_text(d)
             if text:
                 prompts.append(text)
@@ -64,15 +115,20 @@ def collect(lines: list[str]) -> tuple[list[str], list[str], str]:
                 elif c.get("type") == "tool_use":
                     inp = c.get("input", {}) or {}
                     path = inp.get("file_path", "")
-                    if c.get("name") in EDIT_TOOLS and path and not path.startswith("/tmp/") and "/scratchpad/" not in path:
-                        files.append(path.replace(str(Path.home()), "~"))  # scratch files are not worth logging
+                    if c.get("name") in EDIT_TOOLS:
+                        files.append(path)
                     elif str(c.get("name", "")).endswith(("knowledge_edit", "knowledge_write")) and inp.get("path"):
                         files.append(inp["path"])
-    return prompts, files, summary
+    return list(dict.fromkeys(prompts)), [f for f in map(short, files) if f], summary
 
 
 def main():
     hook = json.load(sys.stdin)
+    if "conversationId" in hook:  # agy: camelCase fields, Stop after every turn, no event name
+        hook = {"session_id": hook["conversationId"], "transcript_path": os.path.expanduser(hook.get("transcriptPath", "")),
+                "cwd": (hook.get("workspacePaths") or [""])[0], "reason": "agy"}
+    elif "/.codex/" in hook.get("transcript_path", ""):  # Codex uses Claude's field names
+        hook["reason"] = f"codex {hook.get('hook_event_name', '')}"
     transcript, sid = hook.get("transcript_path", ""), hook.get("session_id", "")
     if not transcript or not os.path.exists(transcript):
         return
@@ -89,7 +145,8 @@ def main():
             "summary": summary}  # the latest prompts and files: they belong with the closing summary
     req = urllib.request.Request(f"{url}/sessions", data=json.dumps(body).encode(), method="POST",
                                  headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=8) as r:
+    # Codex allows SessionEnd hooks at most 3 seconds
+    with urllib.request.urlopen(req, timeout=2.5 if hook.get("reason") == "codex SessionEnd" else 8) as r:
         if r.status == 200:
             mark.write_text(json.dumps({"lines": len(lines)}))
 
