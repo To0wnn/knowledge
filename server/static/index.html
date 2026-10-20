@@ -11,80 +11,59 @@
 <header class="top">
   <div class="brand">Knowledge <span id="live" title="Live: updates as sessions change notes"></span></div>
   <div id="projects" class="seg" role="group" aria-label="Project"></div>
-  <input id="q" type="search" placeholder="Search this project…  ( / )" autocomplete="off" aria-label="Search">
-  <nav class="tabs" role="tablist">
-    <button role="tab" data-tab="results" aria-selected="true">Results</button>
-    <button role="tab" data-tab="recent">Recent</button>
-    <button role="tab" data-tab="insights">Insights</button>
-    <button role="tab" data-tab="lint">Lint <span id="lint-count" class="badge"></span></button>
-    <button role="tab" data-tab="ingest">Ingest</button>
-  </nav>
-  <button id="quick-open" class="ghost" title="Quick open (Ctrl+K)">Open… <kbd>Ctrl K</kbd></button>
-  <a id="admin-link" class="logout" href="/ui/admin" hidden>Admin</a>
-  <span id="who" class="muted"></span>
-  <a class="logout" href="/outpost.goauthentik.io/sign_out">Sign out</a>
+  <input id="q" type="search" placeholder="Search titles, text and meaning…  ( / )" autocomplete="off" aria-label="Search">
+  <div class="actionsbar">
+    <button id="map-btn" class="ghost" aria-pressed="false" title="Map of this project (M)">Map</button>
+    <details id="add-menu" class="menu">
+      <summary class="ghost">+ Add</summary>
+      <div class="menu-list">
+        <button id="new-memo" type="button">New memo</button>
+        <button id="ingest-open" type="button">Add a source (web page, PDF, text)</button>
+      </div>
+    </details>
+    <details id="user-menu" class="menu">
+      <summary class="ghost" id="who">…</summary>
+      <div class="menu-list">
+        <a id="admin-link" href="/ui/admin" hidden>Admin</a>
+        <a href="/outpost.goauthentik.io/sign_out">Sign out</a>
+      </div>
+    </details>
+  </div>
 </header>
 
 <aside class="left">
-  <section class="view">
-    <div class="row">
-      <div id="colorby" class="seg small" role="group" aria-label="Color by">
-        <button data-mode="type" aria-pressed="true">Type</button>
-        <button data-mode="cluster" aria-pressed="false">Topic</button>
-      </div>
-      <label class="check" title="Only the selected note and its neighbours (L)"><input id="local" type="checkbox"> Local</label>
-      <select id="depth" aria-label="Local graph depth" title="Steps from the selected note">
-        <option value="1">1 step</option><option value="2" selected>2 steps</option><option value="3">3 steps</option>
-      </select>
-      <button id="toggle3d" class="ghost small" aria-pressed="false" title="3D view">3D</button>
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="notes" aria-selected="true">Notes</button>
+    <button role="tab" data-tab="changes">Changes <span id="changes-count" class="badge" title="New since your last look"></span></button>
+    <button role="tab" data-tab="lint">Lint <span id="lint-count" class="badge"></span></button>
+  </nav>
+  <section id="tab-notes" class="tab">
+    <div id="results" hidden>
+      <h3 id="titles-head" class="sub">Titles</h3>
+      <ol id="titles" class="hits"></ol>
+      <h3 class="sub">Text</h3>
+      <ol id="hits" class="hits"></ol>
+      <p id="hits-empty" class="muted" hidden></p>
+      <h3 id="sem-head" class="sub" hidden>By meaning</h3>
+      <ol id="sem" class="hits"></ol>
     </div>
-    <div id="filters" class="filters" aria-label="Show node types"></div>
+    <div id="topics"></div>
   </section>
-  <section id="tab-results" class="tab">
-    <button id="new-memo" class="ghost">+ New memo</button>
-    <ol id="hits" class="hits"></ol>
-    <p id="hits-empty" class="muted">Type to search this project. Click a node to read it.</p>
-    <h3 id="sem-head" class="sub" hidden>By meaning</h3>
-    <ol id="sem" class="hits"></ol>
-  </section>
-  <section id="tab-recent" class="tab" hidden>
+  <section id="tab-changes" class="tab" hidden>
     <ol id="recent" class="hits"></ol>
-  </section>
-  <section id="tab-insights" class="tab" hidden>
-    <p class="muted">Where the knowledge is thin or surprisingly connected. Click an item to show it in the graph.</p>
-    <div id="insights"></div>
   </section>
   <section id="tab-lint" class="tab" hidden>
     <p class="muted">Facts only: fix what is clearly wrong, ask Claude to judge the rest.</p>
     <div id="lint"></div>
   </section>
-  <section id="tab-ingest" class="tab" hidden>
-    <form id="ingest-form">
-      <label for="in-url">Web page or PDF URL</label>
-      <input id="in-url" type="url" placeholder="https://…">
-      <label for="in-file">or a file (pdf, docx, md, txt, html)</label>
-      <input id="in-file" type="file" accept=".pdf,.docx,.md,.txt,.html,.htm,.markdown">
-      <label for="in-text">or pasted text</label>
-      <textarea id="in-text" rows="6"></textarea>
-      <label for="in-title">Title (optional)</label>
-      <input id="in-title" type="text">
-      <button type="submit">Add source</button>
-    </form>
-    <div id="ingest-result" class="muted">Sources are stored unchanged in <code>homelab/sources/</code>. Ask Claude to turn a new source into memos; lint lists unprocessed sources.</div>
-  </section>
 </aside>
 
-<main id="graph" aria-label="Knowledge graph"><div id="g2d"></div><div id="g3d" hidden></div><button id="readchip" type="button" hidden></button></main>
+<main class="center">
+  <article id="note" aria-label="Note"></article>
+  <div id="graph" aria-label="Map of the project" hidden><div id="g2d"></div></div>
+</main>
 
-<aside class="right" id="note" aria-label="Note">
-  <div class="note-empty muted">Select a node or a search result.</div>
-</aside>
-
-<dialog id="quick" aria-label="Quick open">
-  <input id="quick-q" type="text" placeholder="Open a note in any project…" autocomplete="off">
-  <ol id="quick-list" class="hits"></ol>
-  <p class="keys muted"><kbd>/</kbd> search · <kbd>Ctrl K</kbd> open · <kbd>1</kbd>–<kbd>9</kbd> project · <kbd>E</kbd> edit · <kbd>L</kbd> local graph · <kbd>Esc</kbd> close</p>
-</dialog>
+<aside class="right" id="side" aria-label="Connected notes"></aside>
 
 <dialog id="new-dialog" aria-label="New memo">
   <form id="new-form" method="dialog">
@@ -100,6 +79,22 @@
     <select id="new-heading"></select>
     <p id="new-error" class="error" hidden></p>
     <div class="actions"><button type="button" class="ghost" id="new-cancel">Cancel</button><button type="submit">Create</button></div>
+  </form>
+</dialog>
+
+<dialog id="ingest-dialog" aria-label="Add a source">
+  <form id="ingest-form">
+    <h2>Add a source</h2>
+    <label for="in-url">Web page or PDF URL</label>
+    <input id="in-url" type="url" placeholder="https://…">
+    <label for="in-file">or a file (pdf, docx, md, txt, html)</label>
+    <input id="in-file" type="file" accept=".pdf,.docx,.md,.txt,.html,.htm,.markdown">
+    <label for="in-text">or pasted text</label>
+    <textarea id="in-text" rows="6"></textarea>
+    <label for="in-title">Title (optional)</label>
+    <input id="in-title" type="text">
+    <div id="ingest-result" class="muted">Sources are stored unchanged in <code>homelab/sources/</code>. Ask Claude to turn a new source into memos; lint lists unprocessed sources.</div>
+    <div class="actions"><button type="button" class="ghost" id="ingest-cancel">Close</button><button type="submit">Add source</button></div>
   </form>
 </dialog>
 

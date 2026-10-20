@@ -1,8 +1,7 @@
-// Knowledge UI: one "brain" graph per project, search, note preview and editor, recent changes, lint and ingest.
-// No build step, no external requests (3D is loaded from vendor/ only when switched on).
+// Knowledge UI: the note in the middle (or the project map), topics/search/changes/lint on the left, connected notes
+// on the right; editor, history, new memo and ingest. No build step, no external requests.
 "use strict";
 
-const GROUPS = ["project", "feedback", "reference", "user", "infra", "incident", "doc", "skill", "source", "index"];
 // Topic clusters reuse the group hues in a fixed order; clusters beyond these share the neutral doc colour.
 const CLUSTER_HUES = ["project", "feedback", "reference", "user", "infra", "incident", "skill", "source"];
 let PROJECTS = ["homelab", "anpitek", "trade"]; // replaced by the projects this user may see (/ui/api/me)
@@ -20,16 +19,15 @@ const store = { get: (k) => { try { return localStorage.getItem(k); } catch { re
 
 let data = { nodes: [], links: [] };
 let byId = new Map(), neighbors = new Map(), slugToId = new Map(), clusterColor = new Map();
-let hidden = new Set(), selected = null, hover = null, focusSet = new Set();
+let selected = null, hover = null, focusSet = new Set();
 let project = store.get("kn_project") || "homelab";
-let colorBy = store.get("kn_colorby") === "type" ? "type" : "cluster"; // topics by default: they match the islands
-let labelMin = 0, current = null, editing = false, Graph, Graph3D = null;
+let labelMin = 0, current = null, editing = false, Graph, mapOn = false;
 
 const inProject = (p) => p === project || p === "shared";
 // A shared note (skill) shows only in the projects that link to it.
 const nodeIn = (n) => n.project === project || (n.project === "shared" && (!n.projects || n.projects.includes(project)));
 const lintProject = (item) => ROOT_PROJECT[item.split(/[/:]/)[0]] || "homelab"; // homelab memory items carry no root prefix
-const nodeColor = (n) => colorBy === "cluster" ? (clusterColor.get(n.cluster) || css("--g-doc")) : (css(`--g-${n.group}`) || css("--g-doc"));
+const nodeColor = (n) => clusterColor.get(n.cluster) || css("--g-doc");
 const linkId = (end) => end.id || end;
 
 // ---------------------------------------------------------------- graph data
@@ -49,20 +47,8 @@ function indexGraph() {
   clusterColor = new Map(ranked.slice(0, CLUSTER_HUES.length).map(([c], i) => [c, css(`--g-${CLUSTER_HUES[i]}`)]));
 }
 
-function localSet() {
-  if (!$("local").checked || !selected) return null;
-  const seen = new Set([selected]); let edge = [selected];
-  for (let d = 0; d < Number($("depth").value); d++) {
-    const next = [];
-    for (const id of edge) for (const nb of neighbors.get(id) || []) if (!seen.has(nb)) { seen.add(nb); next.push(nb); }
-    edge = next;
-  }
-  return seen;
-}
-
 function visibleData() {
-  const local = localSet();
-  const nodes = data.nodes.filter((n) => nodeIn(n) && !hidden.has(colorBy === "cluster" ? `c:${n.cluster}` : n.group) && (!local || local.has(n.id)));
+  const nodes = data.nodes.filter(nodeIn);
   const keep = new Set(nodes.map((n) => n.id));
   const links = data.links.filter((l) => keep.has(linkId(l.source)) && keep.has(linkId(l.target)));
   // Labels at overview zoom: the ~15 best-connected notes in view.
@@ -75,7 +61,6 @@ function applyView(refit = false) {
   if (refit) loadGraph.fitted = false;
   const v = visibleData();
   Graph.graphData(v); settling = true; // new data reheats the layout
-  if (Graph3D) Graph3D.graphData({ nodes: v.nodes, links: v.links.map((l) => ({ source: linkId(l.source), target: linkId(l.target) })) });
 }
 
 async function refreshData() {
@@ -84,13 +69,13 @@ async function refreshData() {
   const old = new Map(data.nodes.map((n) => [n.id, n]));
   data = await api("/ui/api/graph");
   for (const n of data.nodes) { const o = old.get(n.id); if (o) Object.assign(n, { x: o.x, y: o.y, vx: 0, vy: 0 }); }
-  indexGraph(); renderProjects(); renderFilters(); applyView();
+  indexGraph(); renderProjects(); renderTopics(); applyView();
 }
 
-// ---------------------------------------------------------------- 2D / 3D rendering
+// ---------------------------------------------------------------- map rendering
 const calm = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const touch = matchMedia("(hover: none)").matches; // phones: a tap selects, there is no hover
-if (touch) $("q").placeholder = "Search this project…"; // no "/" key on a phone
+if (touch) $("q").placeholder = "Search titles, text and meaning…"; // no "/" key on a phone
 const baseRadius = (n) => 3 + Math.sqrt(n.degree || 0) * 1.6;
 
 function drawNode(node, ctx, scale) {
@@ -111,10 +96,10 @@ function drawNode(node, ctx, scale) {
 // Labels after all nodes, most important first; a label that would overlap one already drawn is skipped.
 function drawLabels(ctx, scale) {
   const overview = !focusSet.size && scale < 1.3;
-  if (overview && colorBy === "cluster") drawTopics(ctx, scale);
+  if (overview) drawTopics(ctx, scale);
   const rank = (n) => n.id === hover ? 3 : n.id === selected ? 2 : focusSet.has(n.id) ? 1 : 0;
   const wanted = Graph.graphData().nodes.filter((n) => n.x != null && (rank(n) ||
-    (!focusSet.size && !(overview && colorBy === "cluster") && (scale > 2.2 || ((n.degree || 0) >= labelMin && scale > 0.6)))));
+    (!focusSet.size && !overview && (scale > 2.2 || ((n.degree || 0) >= labelMin && scale > 0.6)))));
   wanted.sort((a, b) => rank(b) - rank(a) || (b.degree || 0) - (a.degree || 0));
   const taken = [];
   ctx.textAlign = "center"; ctx.textBaseline = "top";
@@ -194,7 +179,7 @@ function tween(moves, done) {
 function gather(id, strength) {
   // strength 1 = ring around the note (click), below 1 = lean that fraction of the way (hover)
   const c = byId.get(id);
-  if (!Graph || Graph3D || $("local").checked || !c || c.x == null) return;
+  if (!Graph || !c || c.x == null) return Promise.resolve();
   const hc = home.get(c) || { x: c.x, y: c.y };
   const nb = [...(neighbors.get(id) || [])].map((n) => byId.get(n)).filter((n) => n && n.x != null && n !== c)
     .sort((a, b) => (a.cluster || "").localeCompare(b.cluster || "") || a.label.localeCompare(b.label));
@@ -220,7 +205,6 @@ function releaseFocus({ instant = false } = {}) {
 
 function setFocus(id) {
   focusSet = id ? new Set([id, ...(neighbors.get(id) || [])]) : new Set();
-  if (Graph3D) Graph3D.nodeColor(Graph3D.nodeColor()); // repaint
 }
 
 const linkLit = (l) => focusSet.size && focusSet.has(linkId(l.source)) && focusSet.has(linkId(l.target));
@@ -253,7 +237,7 @@ async function loadGraph() {
       clearTimeout(hoverTimer);
       if (!selected) hoverTimer = setTimeout(() => (hover ? gather(hover, 0.3) : releaseFocus()), hover ? 150 : 250);
     })
-    .onNodeClick((n) => openNote(n.id))
+    .onNodeClick((n) => (selected === n.id ? setMap(false) : openNote(n.id))) // a second click reads it
     .onBackgroundClick(() => deselect())
     .onLinkClick(() => deselect()); // lines cross the empty space; a click on one is a click beside the nodes
   // More room than the force-graph defaults (-30 / 30) so labels do not pile up.
@@ -280,31 +264,8 @@ async function loadGraph() {
   };
   Graph.d3Force("gravity", gravity);
   Graph.onRenderFramePost(drawLabels);
-  new ResizeObserver(() => { const w = $("graph").clientWidth, h = $("graph").clientHeight; Graph.width(w).height(h); Graph3D?.width(w).height(h); }).observe($("graph"));
-  renderProjects(); renderFilters(); applyView(true);
-}
-
-async function toggle3D() {
-  await releaseFocus({ instant: true });
-  hover = null; setFocus(selected); // no stale hover focus greying out the 3D view
-  const on = !Graph3D;
-  $("toggle3d").setAttribute("aria-pressed", String(on));
-  if (!on) { Graph3D._destructor(); Graph3D = null; $("g3d").replaceChildren(); $("g3d").hidden = true; $("g2d").hidden = false; Graph.resumeAnimation(); return; }
-  if (!window.ForceGraph3D) {
-    await new Promise((ok, fail) => { const s = document.createElement("script"); s.src = "/ui/static/vendor/3d-force-graph-1.80.1.js"; s.onload = ok; s.onerror = fail; document.head.append(s); });
-  }
-  Graph.pauseAnimation(); $("g2d").hidden = true; $("g3d").hidden = false;
-  Graph3D = ForceGraph3D()($("g3d"))
-    .width($("graph").clientWidth).height($("graph").clientHeight)
-    .backgroundColor(css("--canvas"))
-    .nodeId("id").nodeLabel((n) => { const d = el("div", "tip", n.label); return d; }) // an element, never HTML: labels are note text.nodeVal((n) => 1 + (n.degree || 0) / 2)
-    .nodeColor((n) => (focusSet.size && !focusSet.has(n.id) ? css("--line") : nodeColor(n)))
-    .linkColor((l) => (linkLit(l) ? css("--accent") : css("--muted"))).linkOpacity(0.35)
-    .cooldownTicks(300)
-    .onNodeClick((n) => openNote(n.id))
-    .onBackgroundClick(() => deselect())
-    .onLinkClick(() => deselect()); // lines cross the empty space; a click on one is a click beside the nodes
-  applyView();
+  new ResizeObserver(() => { const w = $("graph").clientWidth, h = $("graph").clientHeight; if (w && h) Graph.width(w).height(h); }).observe($("graph"));
+  renderProjects(); renderTopics(); applyView(true);
 }
 
 // ---------------------------------------------------------------- side panel controls
@@ -324,37 +285,54 @@ function switchProject(p, refit = true) {
   if (p === project || !PROJECTS.includes(p)) return;
   project = p; store.set("kn_project", p);
   $("new-memo").hidden = !me.writable.includes(p);
-  selected = null; setFocus(null); hidden = new Set();
-  indexGraph(); renderProjects(); renderFilters(); applyView(refit);
+  $("add-menu").hidden = $("new-memo").hidden && $("ingest-open").hidden;
+  selected = null; setFocus(null);
+  indexGraph(); renderProjects(); renderTopics(); applyView(refit);
   if (!current) homeView();
   if ($("q").value.trim()) runSearch();
   loadLint(!$("tab-lint").hidden);
-  if (!$("tab-recent").hidden) loadRecent();
-  if (!$("tab-insights").hidden) renderInsights();
+  loadRecent();
 }
 
-function renderFilters() {
-  const shown = data.nodes.filter((n) => nodeIn(n));
-  const box = $("filters"); box.replaceChildren();
-  const chips = colorBy === "cluster"
-    ? [...clusterColor.keys()].map((c) => ({ key: `c:${c}`, label: c, color: clusterColor.get(c), count: shown.filter((n) => n.cluster === c).length }))
-    : GROUPS.map((g) => ({ key: g, label: g, color: css(`--g-${g}`), count: shown.filter((n) => n.group === g).length })).filter((c) => c.count);
-  for (const c of chips) {
-    const b = el("button", "chip"); b.setAttribute("aria-pressed", String(!hidden.has(c.key)));
-    const dot = el("i"); dot.style.background = c.color;
-    b.append(dot, `${c.label} ${c.count}`);
-    b.onclick = () => { hidden.has(c.key) ? hidden.delete(c.key) : hidden.add(c.key); b.setAttribute("aria-pressed", String(!hidden.has(c.key))); applyView(); };
-    box.append(b);
+// Every topic of the project with its notes, biggest first; the topic of the open note is unfolded. On the map,
+// unfolding a topic highlights its island.
+function renderTopics() {
+  const groups = new Map();
+  for (const n of data.nodes.filter(nodeIn)) {
+    const t = n.cluster || (n.group === "doc" ? "Docs" : "Other");
+    (groups.get(t) || groups.set(t, []).get(t)).push(n);
   }
-  for (const b of $("colorby").querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.mode === colorBy));
+  const open = new Set([...$("topics").querySelectorAll("details[open]")].map((d) => d.dataset.topic));
+  const sel = byId.get(selected);
+  $("topics").replaceChildren(...[...groups].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0])).map(([topic, ns]) => {
+    const d = el("details", "topic"); d.dataset.topic = topic;
+    d.open = open.has(topic) || (sel && (sel.cluster || "") === topic);
+    const s = el("summary"), dot = el("i"); dot.style.background = clusterColor.get(topic) || css("--g-doc");
+    s.append(dot, topic, el("span", "n", String(ns.length)));
+    const list = el("ol", "hits");
+    for (const n of ns.sort((a, b) => a.label.localeCompare(b.label))) {
+      const li = hitItem(n.label, "", () => openNote(n.id));
+      li.firstChild.dataset.id = n.id;
+      if (n.id === selected) li.firstChild.classList.add("active");
+      list.append(li);
+    }
+    d.ontoggle = () => { if (d.open && mapOn) highlight(ns.map((n) => n.id)); };
+    d.append(s, list); return d;
+  }));
 }
 
-for (const b of $("colorby").querySelectorAll("button")) b.onclick = () => {
-  colorBy = b.dataset.mode; store.set("kn_colorby", colorBy); hidden = new Set(); renderFilters(); applyView();
-};
-$("local").onchange = () => applyView(true);
-$("depth").onchange = () => { if ($("local").checked) applyView(true); };
-$("toggle3d").onclick = () => toggle3D().catch((e) => alert(`3D view failed to load: ${e.message || e}`));
+// The middle column shows the note, or the map of the project instead.
+function setMap(on) {
+  mapOn = on; $("map-btn").setAttribute("aria-pressed", String(on));
+  $("graph").hidden = !on; $("note").hidden = on;
+  if (current) renderSide();
+  if (!on) return;
+  requestAnimationFrame(() => { // once the map has its size
+    Graph.width($("graph").clientWidth).height($("graph").clientHeight);
+    if (selected) { gather(selected, 1).then(zoomToFocus); if (settling) zoomToFocus.again = true; } else Graph.zoomToFit(400, 40);
+  });
+}
+$("map-btn").onclick = () => setMap(!mapOn);
 
 // ---------------------------------------------------------------- note preview, deep links and editor
 function splitFront(text) {
@@ -372,14 +350,13 @@ function deselect({ push = true } = {}) {
   if (editing) return; // keep unsaved edits on screen
   selected = null; current = null; setFocus(null); animateHover();
   if (push && location.hash) history.pushState(null, "", location.pathname + location.search);
-  $("note").replaceChildren(el("div", "note-empty muted", "Select a node or a search result."));
-  $("readchip").hidden = true;
+  $("note").replaceChildren(el("div", "note-empty muted", "Pick a note from the list or search."));
+  $("side").replaceChildren(); markActive();
   homeView();
-  if ($("local").checked) applyView(true); // refits to the whole graph once the layout settles
-  else if (!Graph3D) releaseFocus().then(() => { if (!selected) Graph.zoomToFit(600, 40); }); // home, then the overview
+  releaseFocus().then(() => { if (!selected && mapOn) Graph.zoomToFit(600, 40); }); // home, then the overview
 }
 
-// With nothing selected the right panel shows the project's MEMORY.md: the user's own table of contents.
+// With nothing selected the middle shows the project's MEMORY.md: the user's own table of contents.
 let homeNote = null;
 async function homeView() {
   const path = `${MEMORY_ROOT[project]}/MEMORY.md`;
@@ -387,7 +364,15 @@ async function homeView() {
   if (current || editing) return; // the user opened something meanwhile
   homeNote = note;
   const md = el("div", "md"); md.innerHTML = DOMPurify.sanitize(marked.parse(splitFront(note.text).body, { gfm: true }));
-  $("note").replaceChildren(el("div", "note-empty muted", "Select a node or a search result. Index of this project:"), md);
+  $("note").replaceChildren(el("div", "note-empty muted", "Pick a note from the list or search. Index of this project:"), md);
+}
+
+// The open note is marked in the topic list, and its topic unfolded.
+function markActive() {
+  for (const b of $("topics").querySelectorAll("button[data-id]")) {
+    b.classList.toggle("active", b.dataset.id === selected);
+    if (b.dataset.id === selected) b.closest("details").open = true;
+  }
 }
 
 async function openNote(id, { push = true, find = null } = {}) {
@@ -399,19 +384,17 @@ async function openNote(id, { push = true, find = null } = {}) {
   if (p !== "shared" && p !== project) switchProject(p, false);
   if (push && decodeURIComponent(location.hash.slice(1)) !== note.path) history.pushState(null, "", `#${note.path}`);
   current = note;
-  selected = byId.has(note.path) ? note.path : null; setFocus(selected); if (Graph) animateHover(6000);
-  if ($("local").checked) applyView(true);
+  selected = byId.has(note.path) ? note.path : null; setFocus(selected); markActive(); if (Graph) animateHover(6000);
   const n = byId.get(note.path);
-  if (n && Graph && n.x != null && !$("local").checked) {
+  if (mapOn && n && n.x != null) {
     loadGraph.fitted = true; // the reader chose a view: no overview fit after the layout settles
     clearTimeout(hoverTimer);
     gather(n.id, 1).then(() => { if (selected === n.id) zoomToFocus(); });
     if (settling) zoomToFocus.again = true; // nodes still move: fit once more when they stop
-  } else if (Graph) releaseFocus(); // MEMORY.md and other notes without a node: no ring of the previous one
+  } else if (Graph) releaseFocus({ instant: !mapOn }); // no ring of the previous note
   renderNote();
   if (find) markInNote(find);
-  else if (matchMedia("(max-width: 720px)").matches && push) $("note").scrollIntoView({ behavior: calm ? "auto" : "smooth" }); // phone: the note is below the list
-  $("readchip").hidden = false; $("readchip").textContent = `Read: ${n ? n.label : note.path.split("/").pop()} ↓`;
+  else if (matchMedia("(max-width: 720px)").matches && push) $(mapOn ? "side" : "note").scrollIntoView({ behavior: calm ? "auto" : "smooth" }); // phone: below the list
 }
 
 // Scroll the note to the first place where a search word occurs and mark it, so a hit lands on its line.
@@ -440,38 +423,59 @@ function renderNote() {
   const pane = $("note"); pane.replaceChildren();
   const head = el("div", "note-head");
   head.append(el("h2", null, n ? n.label : note.path.split("/").pop()));
-  if (n) { const pill = el("span", "pill", colorBy === "cluster" && n.cluster ? n.cluster : n.group); pill.style.borderColor = nodeColor(n); head.append(pill); }
+  if (n) { const pill = el("span", "pill", n.cluster || n.group); pill.style.borderColor = nodeColor(n); head.append(pill); }
   const tools = el("div", "note-tools");
   const copy = el("button", "ghost small", "Copy link");
   copy.onclick = () => navigator.clipboard?.writeText(`${location.origin}/ui#${note.path}`).then(() => { copy.textContent = "Copied"; setTimeout(() => (copy.textContent = "Copy link"), 1500); });
   tools.append(copy);
   if (note.writable) { const edit = el("button", "ghost small", touch ? "Edit" : "Edit (E)"); edit.onclick = startEdit; tools.append(edit); }
-  const hist = el("button", "ghost small", "History"); hist.onclick = showHistory; tools.append(hist);
+  const hist = el("button", "ghost small", "History"); hist.onclick = () => showHistory(); tools.append(hist);
   pane.append(head, tools, el("div", "note-path", `${note.path} · version ${note.version}`));
   if (meta.description) pane.append(el("p", "note-desc", meta.description));
   const md = el("div", "md"); md.innerHTML = DOMPurify.sanitize(marked.parse(linked, { gfm: true })); pane.append(md);
-  const rel = el("div", "backlinks"); pane.append(rel);
-  const back = [...(neighbors.get(note.path) || [])].map((x) => byId.get(x)).filter(Boolean).sort((a, b) => a.label.localeCompare(b.label));
-  if (back.length) {
-    const box = el("div", "backlinks"); box.append(el("h3", null, `Linked (${back.length})`));
-    for (const b of back) { const a = el("a", null, b.label); a.href = `#${b.id}`; box.append(a); }
-    pane.append(box);
-  }
   pane.scrollTop = 0;
-  // Related notes by the relevance model (links, shared sources, shared neighbours, meaning), loaded after the text.
-  api(`/ui/api/related?path=${encodeURIComponent(note.path)}`).then((r) => {
-    if (current !== note || !r.related.length) return;
-    rel.append(el("h3", null, "Related"));
-    for (const x of r.related) {
-      const a = el("a"); a.href = `#${x.id}`;
-      a.append(x.label, el("span", "why", ` ${x.project !== project ? x.project + " · " : ""}${x.why}`));
-      rel.append(a);
-    }
-  }).catch(() => {});
+  renderSide();
 }
 
-async function showHistory() {
-  // Every version of this note (who, when), its diff against the version before, and restore.
+// Right column: what the open note connects to, one list. Related notes (the relevance model: links, shared sources,
+// shared neighbours, meaning) come first with the reason; linked notes the model did not rank follow. On the map the
+// column also carries the note's title and a button to read it.
+function renderSide() {
+  const note = current, n = byId.get(note.path), side = $("side");
+  side.replaceChildren();
+  if (mapOn) {
+    const card = el("div", "map-card");
+    card.append(el("h2", null, n ? n.label : note.path.split("/").pop()));
+    const desc = splitFront(note.text).meta.description; if (desc) card.append(el("p", "note-desc", desc));
+    const read = el("button", null, "Read note"); read.onclick = () => setMap(false); card.append(read);
+    side.append(card);
+  }
+  const box = el("div", "connected"); side.append(box);
+  const draw = (related) => {
+    if (current !== note) return;
+    const seen = new Set(related.map((x) => x.id));
+    const linked = [...(neighbors.get(note.path) || [])].filter((x) => !seen.has(x)).map((x) => byId.get(x)).filter(Boolean)
+      .sort((a, b) => a.label.localeCompare(b.label)).map((b) => ({ id: b.id, label: b.label, project: b.project, why: "linked" }));
+    const all = [...related, ...linked];
+    box.replaceChildren(el("h3", null, all.length ? `Connected (${all.length})` : "Not connected to other notes yet"));
+    for (const x of all) {
+      const a = el("a"); a.href = `#${x.id}`;
+      a.append(x.label, el("span", "why", `${x.project !== project && x.project !== "shared" ? x.project + " · " : ""}${x.why}`));
+      box.append(a);
+    }
+  };
+  if (note.related) return draw(note.related);
+  draw([]); // links at once, the ranked list when it arrives
+  api(`/ui/api/related?path=${encodeURIComponent(note.path)}`).then((r) => { note.related = r.related; draw(r.related); }).catch(() => {});
+}
+$("side").addEventListener("click", (e) => {
+  const a = e.target.closest("a[href^='#']"); if (!a) return;
+  e.preventDefault(); openNote(decodeURIComponent(a.getAttribute("href").slice(1)));
+});
+
+async function showHistory(open = null) {
+  // Every version of this note (who, when), its diff against the version before, and restore. `open` = a version id
+  // to show at once (a click in Changes).
   const note = current, pane = $("note");
   const res = await api(`/ui/api/history?path=${encodeURIComponent(note.path)}`);
   pane.replaceChildren();
@@ -509,6 +513,7 @@ async function showHistory() {
       }
     });
     list.append(li);
+    if (v.id === open || (open && i === 0 && !res.versions.some((x) => x.id === open))) li.firstChild.click();
   });
 }
 
@@ -550,11 +555,11 @@ $("note").addEventListener("click", (e) => {
   if (/^https?:/.test(href)) { a.target = "_blank"; a.rel = "noopener noreferrer"; }
 });
 window.addEventListener("popstate", () => { const id = decodeURIComponent(location.hash.slice(1)); if (id) openNote(id, { push: false }); else deselect({ push: false }); });
-$("readchip").addEventListener("click", () => $("note").scrollIntoView({ behavior: calm ? "auto" : "smooth" }));
 window.addEventListener("beforeunload", (e) => { if (editing) e.preventDefault(); });
 
 // ---------------------------------------------------------------- new memo
 $("new-memo").onclick = async () => {
+  $("add-menu").open = false;
   $("new-where").textContent = `In ${MEMORY_ROOT[project]}/ (project ${project}), with a line in its MEMORY.md under the heading you pick.`;
   $("new-error").hidden = true; $("new-form").reset();
   let headings = [];
@@ -576,18 +581,20 @@ $("new-form").addEventListener("submit", async (e) => {
   } catch (err) { $("new-error").hidden = false; $("new-error").textContent = err.message; }
 });
 
-// ---------------------------------------------------------------- search, quick open, shortcuts
+// ---------------------------------------------------------------- search and shortcuts
+// One search box: note titles of every project (instant, from the graph), then full text and meaning in this project.
 let searchTimer, searchSeq = 0;
 async function runSearch() {
   const q = $("q").value.trim(), seq = ++searchSeq;
-  if (!q) {
-    $("hits").replaceChildren(); $("sem").replaceChildren(); $("sem-head").hidden = true;
-    $("hits-empty").hidden = false; $("hits-empty").textContent = "Type to search this project. Click a node to read it.";
-    return;
-  }
+  $("results").hidden = !q; $("topics").hidden = !!q;
+  if (!q) { $("hits").replaceChildren(); $("sem").replaceChildren(); $("titles").replaceChildren(); return; }
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const titles = data.nodes.filter((n) => words.every((w) => `${n.label} ${n.id}`.toLowerCase().includes(w)))
+    .sort((a, b) => (inProject(b.project) - inProject(a.project)) || (b.degree - a.degree)).slice(0, 6);
+  $("titles-head").hidden = !titles.length;
+  $("titles").replaceChildren(...titles.map((n) => hitItem(n.label, `${n.project} · ${n.id}`, () => openNote(n.id))));
   let res; try { res = await api(`/ui/api/search?q=${encodeURIComponent(q)}&project=${project}`); } catch (e) { $("hits").textContent = e.message; return; }
   if (seq !== searchSeq) return; // a newer search is on its way
-  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
   $("hits-empty").hidden = res.notes.length > 0;
   if (!res.notes.length) $("hits-empty").textContent = "No note contains all of these words.";
   $("hits").replaceChildren(...res.notes.map((h) => {
@@ -621,56 +628,42 @@ function marked_(text, words) {
 }
 function hitItem(top, sub, onclick) {
   const li = el("li"), b = el("button");
-  b.append(el("span", "hit-path", top), el("span", "hit-text", sub)); b.onclick = onclick; li.append(b); return li;
+  b.append(el("span", "hit-path", top)); if (sub) b.append(el("span", "hit-text", sub));
+  b.onclick = onclick; li.append(b); return li;
 }
-$("q").addEventListener("input", () => { clearTimeout(searchTimer); selectTab("results"); searchTimer = setTimeout(runSearch, 150); });
-
-function quickOpen() {
-  $("quick").showModal(); $("quick-q").value = ""; renderQuick(); $("quick-q").focus();
-}
-let quickSel = 0;
-function renderQuick() {
-  const words = $("quick-q").value.toLowerCase().split(/\s+/).filter(Boolean);
-  const list = data.nodes.filter((n) => words.every((w) => `${n.label} ${n.id}`.toLowerCase().includes(w)))
-    .sort((a, b) => (inProject(b.project) - inProject(a.project)) || (b.degree - a.degree)).slice(0, 12);
-  quickSel = Math.min(quickSel, Math.max(0, list.length - 1));
-  $("quick-list").replaceChildren(...list.map((n, i) => {
-    const li = hitItem(n.label, `${n.project} · ${n.id}`, () => { $("quick").close(); openNote(n.id); });
-    if (i === quickSel) li.firstChild.classList.add("active");
-    return li;
-  }));
-}
-$("quick-q").addEventListener("input", () => { quickSel = 0; renderQuick(); });
-$("quick-q").addEventListener("keydown", (e) => {
-  const items = $("quick-list").querySelectorAll("button");
-  if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); quickSel = (quickSel + (e.key === "ArrowDown" ? 1 : -1) + items.length) % Math.max(1, items.length); renderQuick(); }
-  if (e.key === "Enter") { e.preventDefault(); items[quickSel]?.click(); }
+$("q").addEventListener("input", () => { clearTimeout(searchTimer); selectTab("notes"); searchTimer = setTimeout(runSearch, 150); });
+$("q").addEventListener("keydown", (e) => { // Enter opens the first result
+  if (e.key === "Enter") { e.preventDefault(); clearTimeout(searchTimer); runSearch().then(() => $("results").querySelector("button")?.click()); }
 });
-$("quick-open").onclick = quickOpen;
 
 document.addEventListener("keydown", (e) => {
   const typing = /input|textarea|select/i.test(document.activeElement.tagName) || document.querySelector("dialog[open]");
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); quickOpen(); return; }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); $("q").focus(); $("q").select(); return; }
   if (typing) return;
   if (e.key === "/") { e.preventDefault(); $("q").focus(); }
   else if (/^[1-9]$/.test(e.key) && PROJECTS[Number(e.key) - 1]) switchProject(PROJECTS[Number(e.key) - 1]);
   else if (e.key.toLowerCase() === "e" && current?.writable) { e.preventDefault(); startEdit(); }
-  else if (e.key.toLowerCase() === "l") { $("local").checked = !$("local").checked; applyView(true); }
+  else if (e.key.toLowerCase() === "m") setMap(!mapOn);
   else if (e.key === "Escape") deselect();
 });
 
-// ---------------------------------------------------------------- tabs, recent, lint, ingest
+// ---------------------------------------------------------------- tabs, changes, lint, ingest
 function selectTab(name) {
   for (const b of document.querySelectorAll(".tabs button")) b.setAttribute("aria-selected", String(b.dataset.tab === name));
-  for (const t of ["results", "recent", "insights", "lint", "ingest"]) $(`tab-${t}`).hidden = t !== name;
+  for (const t of ["notes", "changes", "lint"]) $(`tab-${t}`).hidden = t !== name;
   if (name === "lint") loadLint(true);
-  if (name === "insights") renderInsights();
-  if (name === "recent") loadRecent();
+  if (name === "changes") loadRecent(true);
 }
 for (const b of document.querySelectorAll(".tabs button")) b.onclick = () => selectTab(b.dataset.tab);
 
-async function loadRecent() {
+// Changes: newest first, per day; lines added/removed, who, and the question of the session that made the change.
+// A click opens the diff. Changes since the last look at this tab are marked; the badge counts them meanwhile.
+async function loadRecent(look = false) {
   const res = await api(`/ui/api/recent?project=${project}`);
+  const key = `kn_seen_${project}`, seen = Number(store.get(key)) || Date.now() / 1000;
+  const fresh = res.files.filter((f) => f.mtime > seen).length;
+  $("changes-count").textContent = fresh && !look ? fresh : "";
+  if (!look && $("tab-changes").hidden) { if (!store.get(key)) store.set(key, String(seen)); return; }
   const box = $("recent"); box.replaceChildren();
   let day = "";
   for (const f of res.files) {
@@ -680,46 +673,27 @@ async function loadRecent() {
       const today = new Date().toDateString(), yesterday = new Date(Date.now() - 864e5).toDateString();
       box.append(el("li", "day", d === today ? "Today" : d === yesterday ? "Yesterday" : new Date(f.mtime * 1000).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })));
     }
-    const n = byId.get(f.path);
-    box.append(hitItem(n ? n.label : f.path.split("/").pop(), `${ago(f.mtime)} · ${f.by === "VM" ? "edited on the VM" : `via ${f.by}`} · ${f.path}`, () => openNote(f.path)));
+    const n = byId.get(f.path), li = el("li"), b = el("button");
+    const top = el("span", "hit-path", n ? n.label : f.path.split("/").pop());
+    if (f.mtime > seen) top.append(el("span", "new", "new"));
+    const meta = el("span", "hit-text");
+    if (f.added != null) meta.append(el("span", "plus", `+${f.added}`), " ", el("span", "minus", `−${f.removed}`), " · ");
+    meta.append(`${ago(f.mtime)} · ${f.session ? f.session.device : f.by === "VM" ? "on the VM" : f.by}`);
+    b.append(top, meta);
+    if (f.session?.asked) b.append(el("span", "hit-text why", `“${f.session.asked}”`));
+    b.title = f.path;
+    b.onclick = async () => { await openNote(f.path); if (current?.path === f.path && f.version) { setMap(false); showHistory(f.version); } };
+    li.append(b); box.append(li);
   }
-  if (!res.files.length) box.append(el("li", "muted", "No files yet."));
+  if (!res.files.length) box.append(el("li", "muted", "No changes yet."));
+  store.set(key, String(Math.max(seen, ...res.files.map((f) => f.mtime))));
 }
 
 function highlight(ids) {
   // Show a set of notes in the graph: dim the rest and zoom to them.
   selected = null; focusSet = new Set(ids);
-  if (Graph3D) Graph3D.nodeColor(Graph3D.nodeColor());
   const pts = ids.map((i) => byId.get(i)).filter((n) => n && n.x != null);
-  if (pts.length && !Graph3D) Graph.zoomToFit(600, 80, (n) => focusSet.has(n.id));
-}
-
-function renderInsights() {
-  const ins = data.insights || {}, box = $("insights"); box.replaceChildren();
-  const mine = (x) => (x.project || projectOf(x.id || x.source)) === project;
-  const label = (id) => (byId.get(id) || {}).label || id;
-  const section = (title, hint, items, render) => {
-    if (!items.length) return;
-    box.append(el("h3", null, `${title} (${items.length})`), el("p", "muted small", hint));
-    const ul = el("ul");
-    for (const it of items.slice(0, 15)) { const li = el("li"), a = el("a"); render(it, a); li.append(a); ul.append(li); }
-    box.append(ul);
-  };
-  section("Surprising connections", "Links between different topics: worth a look, sometimes a new insight.", (ins.surprising || []).filter(mine), (s, a) => {
-    a.textContent = `${label(s.source)} ↔ ${label(s.target)}`; a.onclick = () => highlight([s.source, s.target]);
-  });
-  section("Bridge notes", "Notes that connect three or more topics; keep them accurate.", (ins.bridges || []).filter(mine), (b, a) => {
-    a.textContent = `${label(b.id)} — ${b.topics} topics`; a.onclick = () => { highlight([b.id, ...(neighbors.get(b.id) || [])]); };
-  });
-  section("Isolated notes", "One link or none: link them from a related memo or merge them.", (ins.isolated || []).filter(mine), (i, a) => {
-    a.textContent = label(i.id); a.onclick = () => openNote(i.id);
-  });
-  const topics = (data.communities || []).filter((c) => c.project === project);
-  section("Topics", "Louvain communities; cohesion = share of possible links inside the topic. Below 0.15 is loose.", topics, (c, a) => {
-    a.textContent = `${c.name} — ${c.size} notes, cohesion ${c.cohesion}${c.cohesion < 0.15 && c.size >= 3 ? " (loose)" : ""}`;
-    a.onclick = () => highlight(data.nodes.filter((n) => n.cluster === c.name && nodeIn(n)).map((n) => n.id));
-  });
-  if (!box.children.length) box.textContent = "Nothing to report for this project.";
+  if (pts.length) { animateHover(); Graph.zoomToFit(600, 80, (n) => focusSet.has(n.id)); }
 }
 
 async function loadLint(render = true) {
@@ -743,10 +717,12 @@ async function loadLint(render = true) {
     }
     box.append(el("h3", null, `${check.replace(/_/g, " ")} (${items.length})`), ul);
   }
-  if (!total) box.textContent = "No findings.";
+  if (!here) box.textContent = "No findings.";
 }
 $("lint").addEventListener("click", (e) => { const a = e.target.closest("a"); if (a) { e.preventDefault(); openNote(decodeURIComponent(a.getAttribute("href").slice(1))); } });
 
+$("ingest-open").onclick = () => { $("add-menu").open = false; $("ingest-dialog").showModal(); };
+$("ingest-cancel").onclick = () => $("ingest-dialog").close();
 $("ingest-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const out = $("ingest-result"), title = $("in-title").value.trim();
@@ -761,10 +737,10 @@ $("ingest-form").addEventListener("submit", async (e) => {
       res = await api("/ui/api/ingest", { method: "POST", body: JSON.stringify(body), headers: { "Content-Type": "application/json" } });
     }
     out.replaceChildren(el("p", null, `Saved ${res.path} (${res.chars} characters): ${res.title}`));
-    const open = el("a", null, "Open the source"); open.onclick = () => openNote(res.path); out.append(open);
+    const open = el("a", null, "Open the source"); open.onclick = () => { $("ingest-dialog").close(); openNote(res.path); }; out.append(open);
     if (res.related.length) {
       out.append(el("p", null, "Possibly related memos:"));
-      for (const rel of res.related) { const a = el("a", null, rel); a.style.display = "block"; a.onclick = () => openNote(rel); out.append(a); }
+      for (const rel of res.related) { const a = el("a", null, rel); a.style.display = "block"; a.onclick = () => { $("ingest-dialog").close(); openNote(rel); }; out.append(a); }
     }
     out.append(el("p", "muted", "Next: ask Claude to integrate this source into the memos."));
     e.target.reset();
@@ -776,8 +752,7 @@ $("ingest-form").addEventListener("submit", async (e) => {
 let liveTimer;
 async function onChanged() {
   await refreshData();
-  if (!$("tab-recent").hidden) loadRecent();
-  if (!$("tab-insights").hidden) renderInsights();
+  loadRecent();
   loadLint(!$("tab-lint").hidden);
   if (!current) return;
   let fresh; try { fresh = await api(`/ui/api/note?path=${encodeURIComponent(current.path)}`); } catch { return; }
@@ -815,8 +790,9 @@ async function loadMe() {
   if (!PROJECTS.includes(project)) project = PROJECTS[0];
   $("admin-link").hidden = !me.admin;
   $("who").textContent = me.user;
-  if (!me.admin) document.querySelector('[data-tab="lint"]').hidden = document.querySelector('[data-tab="ingest"]').hidden = true;
+  if (!me.admin) document.querySelector('[data-tab="lint"]').hidden = $("ingest-open").hidden = true;
   $("new-memo").hidden = !me.writable.includes(project);
+  $("add-menu").hidden = $("new-memo").hidden && $("ingest-open").hidden;
 }
 
 loadMe().then(loadGraph).catch((e) => {
@@ -824,7 +800,7 @@ loadMe().then(loadGraph).catch((e) => {
   throw e;
 }).then(() => {
   connectLive();
-  loadLint(false);
+  loadLint(false); loadRecent();
   const id = decodeURIComponent(location.hash.slice(1));
   if (id) openNote(id, { push: false }); else homeView();
 });

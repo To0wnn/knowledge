@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Browser smoke test of the web UI against the live server (headless system Chrome via Playwright).
 
-Checks what broke before: the graph loads without page errors; a click on a note zooms to it and its neighbours
-(after the layout settled); the neighbours gather in a ring; a click beside the nodes (which usually lands on a link)
-deselects, puts every node back exactly and zooms out; on a phone a tap selects, the Read chip appears and scrolls
-to the note. Read-only: it opens notes, it never edits.
+Checks what broke before: the page loads without errors; the topic list opens a note in the middle with its
+connected notes on the right; Changes lists lines added/removed. On the map (Map button) a click on a note zooms to it
+and its neighbours (after the layout settled); the neighbours gather in a ring; a click beside the nodes (which usually
+lands on a link) deselects, puts every node back exactly and zooms out; a second click on a note reads it. On a phone
+the lists come first and opening a note scrolls to it. Read-only: it opens notes, it never edits.
 
   systemd-run --user --scope -q -p MemoryMax=3G ~/.local/bin/uv run -q --with playwright python tests/ui_smoke.py
 (talks to the container port directly and sends what Traefik sends after the Authentik sign-in: the proxy secret
@@ -46,6 +47,20 @@ EMPTY_POINT = """() => { const w = Graph.width(), h = Graph.height(), ns = Graph
 async def desktop(browser, secret: str) -> None:
     ctx, pg, errors = await page(browser, secret, viewport={"width": 1500, "height": 900})
     await pg.wait_for_function("typeof Graph !== 'undefined' && Graph && Graph.graphData().nodes.length > 10", timeout=20000)
+    # Reading: a note from the topic list opens in the middle, connected notes on the right.
+    await pg.locator("#topics summary").first.click()
+    await pg.locator("#topics details[open] .hits button").first.click()
+    await pg.wait_for_selector("#side .connected a", timeout=5000)
+    check(await pg.evaluate("!!current && $('note').querySelector('.md') && $('graph').hidden"), "topic list opens the note in the middle")
+    check(await pg.evaluate("$('side').querySelector('h3').textContent.startsWith('Connected')"), "connected notes on the right")
+    await pg.click('[data-tab="changes"]')
+    await pg.wait_for_selector("#recent li button", timeout=5000)
+    check(await pg.locator("#recent .plus").count() > 0, "Changes shows lines added/removed")
+    # The map.
+    await pg.keyboard.press("Escape")
+    await pg.click("#map-btn")
+    await pg.wait_for_timeout(500)
+    check(await pg.evaluate("!$('graph').hidden && $('note').hidden"), "Map swaps the middle column to the map")
     nid = await pg.evaluate("Graph.graphData().nodes.find(n => (neighbors.get(n.id) || new Set()).size >= 4).id")
     box = await pg.evaluate("$('g2d').getBoundingClientRect().toJSON()")
     await pg.wait_for_timeout(8000)
@@ -70,6 +85,14 @@ async def desktop(browser, secret: str) -> None:
     check(await pg.evaluate("selected") is None, "click beside the nodes deselects")
     check(drift < 0.01 and not any(v[2] is not None for v in after.values()), f"every node back home (drift {drift:.3f})")
     check(abs(await pg.evaluate("Graph.zoom()") - overview) < 0.05, "zoomed back to the overview")
+    sc = await pg.evaluate("(id) => { const n = byId.get(id); return Graph.graph2ScreenCoords(n.x, n.y); }", nid)
+    await pg.mouse.click(box["x"] + sc["x"], box["y"] + sc["y"])
+    await pg.wait_for_timeout(1500)
+    check(await pg.evaluate("!!$('side').querySelector('.map-card')"), "on the map the right column shows the note card")
+    sc = await pg.evaluate("(id) => { const n = byId.get(id); return Graph.graph2ScreenCoords(n.x, n.y); }", nid)
+    await pg.mouse.click(box["x"] + sc["x"], box["y"] + sc["y"])
+    await pg.wait_for_timeout(500)
+    check(await pg.evaluate("$('graph').hidden && !$('note').hidden && current.path") == nid, "a second click reads the note")
     check(not errors, f"no page errors on desktop {errors[:2]}")
     await ctx.close()
 
@@ -92,21 +115,23 @@ async def search(browser, secret: str) -> None:
 async def phone(browser, devices, secret: str) -> None:
     ctx, pg, errors = await page(browser, secret, **devices["iPhone 14"])
     await pg.wait_for_function("typeof Graph !== 'undefined' && Graph && Graph.graphData().nodes.length > 10", timeout=20000)
+    # Phone layout: search and lists first, then the note; the map only on request.
+    check(await pg.evaluate("$('tab-notes').getBoundingClientRect().top < $('note').getBoundingClientRect().top && $('graph').hidden"),
+          "phone shows the lists above the note, no map")
+    await pg.locator("#topics summary").first.tap()
+    await pg.locator("#topics details[open] .hits button").first.tap()
+    await pg.wait_for_timeout(1500)
+    check(await pg.evaluate("Math.abs($('note').getBoundingClientRect().top) < 5"), "opening a note scrolls to it")
+    # A phone widens its layout viewport to fit content that is too wide (and zooms out), so compare with the screen.
+    check(await pg.evaluate("document.documentElement.scrollWidth <= screen.width"), "phone page fits the screen with a note open")
+    await pg.tap("#map-btn")
     await pg.wait_for_timeout(8000)
-    # Phone layout since 20 Oct: search and lists first, the note, the graph last.
-    check(await pg.evaluate("$('tab-results').getBoundingClientRect().top < $('graph').getBoundingClientRect().top"),
-          "phone shows the lists above the graph")
     await pg.evaluate("$('graph').scrollIntoView()")
-    await pg.wait_for_timeout(500)
-    t = await pg.evaluate("""() => { const r = $('g2d').getBoundingClientRect(), n = Graph.graphData().nodes.find(n => (neighbors.get(n.id) || new Set()).size >= 4),
-        s = Graph.graph2ScreenCoords(n.x, n.y); return {x: r.x + s.x, y: r.y + s.y}; }""")
+    t = await pg.evaluate("""() => { const r = $('g2d').getBoundingClientRect(), n = Graph.graphData().nodes.find(n => n.id !== selected && (neighbors.get(n.id) || new Set()).size >= 4),
+        s = Graph.graph2ScreenCoords(n.x, n.y); return {x: r.x + s.x, y: r.y + s.y, id: n.id}; }""")
     await pg.touchscreen.tap(t["x"], t["y"])
     await pg.wait_for_timeout(2500)
-    check(await pg.evaluate("selected") is not None, "tap selects a note")
-    check(await pg.evaluate("!$('readchip').hidden"), "Read chip shows")
-    await pg.tap("#readchip")
-    await pg.wait_for_timeout(1500)
-    check(await pg.evaluate("Math.abs($('note').getBoundingClientRect().top) < 5"), "the note is in view (opening scrolls to it; so does the Read chip)")
+    check(await pg.evaluate("selected") is not None, "tap on the map selects a note")
     check(not errors, f"no page errors on the phone {errors[:2]}")
     await ctx.close()
 

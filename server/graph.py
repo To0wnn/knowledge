@@ -1,6 +1,6 @@
 """Build the "brain" graph for the web UI from the in-memory index: one node per memo, doc, skill and raw source,
 edges for wikilinks, markdown links, doc/skill references and cited sources. On top of it: Louvain topic communities,
-graph insights (knowledge gaps, bridges, surprising connections) and a relevance model for related notes.
+graph insights (knowledge gaps for lint) and a relevance model for related notes.
 Pure functions over {rel: text}, tens of ms."""
 import math
 import re
@@ -219,31 +219,14 @@ def louvain(ids, edges, degree, labels, sections=None) -> tuple[dict[str, str], 
 
 
 def insights(graph: dict) -> dict[str, list[dict]]:
-    """Knowledge gaps and surprises from the graph structure (facts for the user or Claude to act on):
-    isolated notes (no links; the MEMORY.md index is not counted), sparse topics (found from links, not a user's section:
-    cohesion < 0.15, 3+ notes), bridge notes (neighbours in 3+ topics)
-    and surprising connections (links across topics, across types, or between a peripheral note and a hub)."""
+    """Knowledge gaps from the graph structure, reported by lint: isolated notes (no links; the MEMORY.md index is not
+    counted) and sparse topics (found from links, not a user's section: cohesion < 0.15, 3+ notes)."""
     nodes = {n["id"]: n for n in graph["nodes"]}
     g = topic_graph(nodes, [(l["source"], l["target"]) for l in graph["links"]])
     isolated = [{"id": i, "project": nodes[i]["project"], "degree": g.degree(i)} for i in sorted(g) if g.degree(i) == 0
                 and nodes[i]["group"] not in ("skill",)]
     sparse = [c for c in graph["communities"] if c["size"] >= 3 and c["cohesion"] < 0.15 and c.get("kind") != "section"]
-    bridges = []
-    for i in g:
-        topics = {nodes[j]["cluster"] for j in g[i] if nodes[j]["cluster"]}
-        if len(topics) >= 3:
-            bridges.append({"id": i, "project": nodes[i]["project"], "topics": len(topics)})
-    bridges.sort(key=lambda b: (-b["topics"], b["id"]))
-    top = max((g.degree(i) for i in g), default=1) or 1
-    surprising = []
-    for a, b in g.edges():
-        na, nb = nodes[a], nodes[b]
-        score = (2.0 if na["cluster"] != nb["cluster"] else 0) + (1.0 if na["group"] != nb["group"] else 0) \
-            + abs(g.degree(a) - g.degree(b)) / top
-        if na["cluster"] != nb["cluster"] and na["project"] == nb["project"]:
-            surprising.append({"source": a, "target": b, "project": na["project"], "score": round(score, 2)})
-    surprising.sort(key=lambda s: (-s["score"], s["source"], s["target"]))
-    return {"isolated": isolated, "sparse_topics": sparse, "bridges": bridges[:30], "surprising": surprising[:30]}
+    return {"isolated": isolated, "sparse_topics": sparse}
 
 
 def related(graph: dict, rel: str, limit: int = 10, semantic: dict[str, float] | None = None) -> list[dict]:
