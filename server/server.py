@@ -389,7 +389,7 @@ def replace_if_unchanged(full: Path, expected: bytes | None, data: bytes) -> boo
 server = MCPServer(
     name="knowledge",
     instructions=(
-        "Shared knowledge of the owner, per project: homelab (docs homelab/ 00_OVERZICHT.md ... 14_*.md, memory "
+        "Shared knowledge of the owner, per project: homelab (docs homelab/<topic>.md such as overzicht.md, netwerk.md, diensten.md; memory "
         "memory/), anpitek (Markdown of ~/anpitek in anpitek/, memory anpitek-memory/) and trade (Markdown of the trading "
         "bot in trade/, memory trade-memory/). Each memory root has an index MEMORY.md, one fact per file. Shared "
         "instructions in claude/CLAUDE.md and claude/skills/, raw sources in homelab/sources/. On devices "
@@ -404,8 +404,10 @@ server = MCPServer(
         "meaning). Web UI with graph view: https://knowledge.to0wnn.com/ui. "
         "House rules for memos, so the base stays tidy: (1) search first (knowledge_search / knowledge_semantic_search) "
         "and update the memo that already covers the subject instead of adding a near-duplicate; when knowledge_write answers 'Similar existing memos' for a new memo, merge it into that memo if it covers the same subject; (2) one subject per "
-        "memo, current state first (what is true now, how to do it, pitfalls, open items), history only as one line or in "
-        "<memory root>/archief/<name>_archief.md once a memo passes ~15 KB; (3) every memo gets exactly one index line "
+        "memo, built as '## Stand' (what is true now, how to do it, pitfalls, open items) and '## Keuzes' (deliberate "
+        "decisions with date and reason, so nobody undoes them unknowingly; feedback/user memos keep their rule + Why/How "
+        "to apply), history only in <memory root>/archief/<name>_archief.md (homelab docs: homelab/archief/), never "
+        "inline; homelab docs (homelab/<topic>.md) have the same two sections and a frontmatter topic: = a MEMORY.md heading; (3) every memo gets exactly one index line "
         "under the fitting '## ' heading of its MEMORY.md, where the index has headings (the headings are the topics in the graph; add a new heading "
         "only for a genuinely new area) with the title, an em dash and a hook of at most ~150 characters; keep MEMORY.md under ~150 lines (Claude Code loads only 200 lines / 25 KB of it); (4) frontmatter "
         "name, description, metadata.type (user/feedback/project/reference); (5) link related memos with [[name]], "
@@ -432,7 +434,7 @@ def knowledge_list(root: str = "memory", pattern: str = "*") -> str:
 
 @server.tool()
 def knowledge_read(path: str, offset: int = 1, limit: int = 600) -> str:
-    """Read a shared text file, e.g. memory/MEMORY.md or homelab/05_SERVICES.md. Returns lines offset..offset+limit-1
+    """Read a shared text file, e.g. memory/MEMORY.md or homelab/diensten.md. Returns lines offset..offset+limit-1
     with line numbers, plus the file version needed by knowledge_write."""
     full, rel = resolve(path)
     data = full.read_bytes()
