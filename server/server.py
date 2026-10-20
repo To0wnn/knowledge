@@ -1288,6 +1288,12 @@ def admin_only(handler):
     return wrapped
 
 
+@server.custom_route("/ui/help", methods=["GET"])
+async def ui_help_page(request: Request):
+    """How to connect Claude Code, agy or Codex; for everyone who may sign in."""
+    return page("help.html")
+
+
 @server.custom_route("/ui/admin", methods=["GET"])
 async def ui_admin_page(request: Request):
     if not device.get().get("admin"):
