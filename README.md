@@ -129,6 +129,21 @@ Following Karpathy's "LLM Wiki" pattern (raw sources -> wiki pages -> index, wit
   "Sign-in, people and admin page" below; UI writes also need an `X-Knowledge-UI` header (CSRF). All JS is vendored with its license in `server/static/vendor/`
   (force-graph 1.52.0 MIT, marked 18.1.1 MIT, DOMPurify 3.4.17 Apache-2.0/MPL-2.0); no CDN.
 
+## Other agents: agy (Antigravity CLI) and Codex (20 Oct 2026)
+
+The MCP server is a plain streamable-HTTP server with a Bearer token, so any MCP client works. Each client gets its own
+token from the admin page; agy and Codex have read-only tokens with secrets masked (both talk to cloud models).
+The Claude Code hooks (context, session log, memo check) are Claude-only; below is what each client gets instead.
+
+| | agy | Codex |
+|---|---|---|
+| MCP | `agy mcp add --header "Authorization: Bearer $(secret KNOWLEDGE_TOKEN_AGY)" knowledge https://knowledge.to0wnn.com/mcp` → `~/.gemini/config/mcp_config.json` (`serverUrl` + `headers`; the token is stored in plain text there, so `chmod 600`) | `~/.codex/config.toml` `[mcp_servers.knowledge]` with `url` and `http_headers_helper = "~/.local/bin/knowledge-mcp-header KNOWLEDGE_TOKEN_CODEX"`: the token comes from the vault, never from a file; `default_tools_approval_mode = "writes"` |
+| Working rules | `~/.gemini/GEMINI.md` → symlink to the shared `CLAUDE.md` (always on) | SessionStart hook `clients/codex-hooks.json` → `~/.codex/hooks.json`: `clients/knowledge-context <VAULT_NAME> <part>` runs the plugin's `context.sh` (parts 1–6, `additionalContextLimit` 10000 each); trust it once with `/hooks`. Fallback `clients/codex-AGENTS.md` → `~/.codex/AGENTS.md` |
+| Session log, memo check | no | no (Codex transcripts have another format) |
+
+Server side for every client: tools carry MCP annotations (`readOnlyHint`, `destructiveHint`, `openWorldHint`), and the
+first ~500 characters of the instructions stand alone (Codex only shows that part when choosing tools).
+
 ## Sign-in, people and admin page (20 Oct)
 
 - **Sign-in = Authentik**, no tokens in the browser. Traefik router `knowledge-ui` (`/`, `/ui*`,
