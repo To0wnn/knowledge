@@ -158,14 +158,12 @@ $("settings-form").onsubmit = (e) => {
 function showNewToken(res) {
   $("new-token-name").textContent = res.name;
   $("new-token-value").textContent = res.token;
-  // The same steps as README "Install on a device": the token goes in over stdin, so it stays out of shell history.
+  // The setup steps per client and OS are on the help page; here only the vault line for a device of the admin's own.
   const label = `KNOWLEDGE_TOKEN_${res.name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
   $("new-token-setup").textContent = [
     "read -rs TOKEN   # paste the token, then Enter (keeps it out of the shell history)",
-    `printf %s "$TOKEN" | secret set ${label}   # on the VM: keep it in the vault`,
-    "claude plugin marketplace add To0wnn/knowledge",
-    "claude plugin install knowledge@knowledge --scope user",
-    `printf '{"url":"${location.origin}","token":"%s"}' "$TOKEN" | claude plugin configure knowledge@knowledge --values-stdin`,
+    `printf %s "$TOKEN" | secret set ${label}`,
+    `# agy/Codex on the VM: /usr/bin/python3 ~/knowledge/clients/knowledge-agent.py install codex ${label}`,
   ].join("\n");
   $("new-token").hidden = false;
   $("copy-token").textContent = "Copy token";

@@ -45,7 +45,9 @@ def project_root(start: Path):
     for d in [start, *start.parents]:
         marker = d / MARKER
         if marker.is_file():
-            name = marker.read_text(encoding="utf-8", errors="replace").strip().splitlines()[:1]
+            raw = marker.read_bytes()  # PowerShell's "echo a350 > file" writes UTF-16, Set-Content -Encoding utf8 a BOM
+            text = raw.decode("utf-16") if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else raw.decode("utf-8-sig", errors="replace")
+            name = text.strip().splitlines()[:1]
             return d, (name[0].strip() if name else "")
     return None, None
 
@@ -106,6 +108,10 @@ if __name__ == "__main__":
             (r / "docs").mkdir(); (r / "docs" / "x.md").write_text("x")
             (r / ".venv").mkdir(); (r / ".venv" / "y.md").write_text("y")
             (r / "main.py").write_text("code")
+            assert project_root(r / "docs") == (r, "a350")
+            (r / MARKER).write_bytes("a350\r\n".encode("utf-16"))  # PowerShell 5 echo
+            assert project_root(r / "docs") == (r, "a350")
+            (r / MARKER).write_bytes(b"\xef\xbb\xbfa350\r\n")  # Set-Content -Encoding utf8
             assert project_root(r / "docs") == (r, "a350")
             assert markdown_files(r) == {"docs/x.md": "x"}, markdown_files(r)
             assert project_root(Path(tempfile.gettempdir()).parent) == (None, None)

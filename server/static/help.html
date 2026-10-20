@@ -21,6 +21,7 @@
   --bg: #121614; --panel: #1a201d; --ink: #e3e9e5; --muted: #98a59e; --line: #2c3530;
   --accent: #5cc4a6; --accent-ink: #0f1a16; --code-bg: #222a26; --warn: #e6b062; --warn-bg: #2e2617; color-scheme: dark }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; } /* ol.steps sets display: grid, which would beat the hidden attribute */
 html, body { margin: 0; }
 body { background: var(--bg); color: var(--ink); font: 16px/1.6 var(--body); }
 .wrap { max-width: 860px; margin: 0 auto; padding-block: 40px 72px;
@@ -41,9 +42,13 @@ a { color: var(--accent); }
 .tabs { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; display: flex; gap: 6px; flex-wrap: wrap;
   background: var(--bg); padding: 12px 0; margin-top: 36px; border-bottom: 1px solid var(--line); }
 body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
-.tabs button { font: 600 15px var(--body); color: var(--muted); background: transparent; border: 1px solid var(--line);
+.tabs > button { font: 600 15px var(--body); color: var(--muted); background: transparent; border: 1px solid var(--line);
   border-radius: 999px; padding: 7px 16px; cursor: pointer; }
-.tabs button[aria-selected="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.os { margin-left: auto; display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+.os button { font: 500 14px var(--body); color: var(--muted); background: transparent; border: 0; padding: 7px 14px; cursor: pointer; }
+.os button[aria-checked="true"] { background: var(--code-bg); color: var(--ink); }
+.os button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.tabs > button[aria-selected="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .tabs button:focus-visible, .copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 ol.steps { list-style: none; counter-reset: s; padding: 0; margin: 18px 0 0; display: grid; gap: 18px; }
 ol.steps > li { counter-increment: s; position: relative; padding-left: 44px; min-width: 0; }
@@ -88,14 +93,16 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13.5px; }
     <button role="tab" id="tab-claude" aria-controls="claude" aria-selected="true">Claude Code</button>
     <button role="tab" id="tab-agy" aria-controls="agy" aria-selected="false">agy (Antigravity)</button>
     <button role="tab" id="tab-codex" aria-controls="codex" aria-selected="false">Codex</button>
+    <span class="os" role="radiogroup" aria-label="Operating system">
+      <button type="button" role="radio" data-os="linux" aria-checked="true">Linux &amp; macOS</button>
+      <button type="button" role="radio" data-os="windows" aria-checked="false">Windows</button>
+    </span>
   </nav>
 
   <section id="claude" role="tabpanel" aria-labelledby="tab-claude">
     <h2>Claude Code</h2>
     <p>The most complete connection: the plugin loads the context and house rules at every start, writes a session log and mirrors your docs.</p>
-    <ol class="steps">
-      <li><b>Windows: Git and Python</b>
-        Install <a href="https://git-scm.com/download/win" target="_blank" rel="noopener">Git for Windows</a> (Claude Code runs hooks in Git Bash) and <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">Python 3</a> with the <code>py</code> launcher. Linux and macOS usually have Python already.</li>
+    <ol class="steps" data-os="linux">
       <li><b>Install the plugin</b>
         <div class="cmd"><pre>claude plugin marketplace add To0wnn/knowledge
 claude plugin install knowledge@knowledge --scope user</pre><button class="copy" type="button">Copy</button></div></li>
@@ -103,12 +110,30 @@ claude plugin install knowledge@knowledge --scope user</pre><button class="copy"
         <div class="cmd"><pre>claude plugin configure knowledge@knowledge</pre><button class="copy" type="button">Copy</button></div>
         URL: <code>https://knowledge.to0wnn.com</code>, token: the one you received.</li>
       <li><b>Turn local auto memory off</b>
-        In <code>~/.claude/settings.json</code> (Windows: <code>%USERPROFILE%\.claude\settings.json</code>):
-        <div class="cmd"><pre>"autoMemoryEnabled": false</pre><button class="copy" type="button">Copy</button></div>
-        Your memory is on the server, so Claude does not also write it locally.</li>
-      <li><b>Mark your project folder</b> (only when your folder is the source)
-        In the root of your project, a file <code>.knowledge-project</code> with the project name (for example <code>a350</code>):
+        Add this line to <code>~/.claude/settings.json</code>; your memory is on the server, so Claude does not also write it locally:
+        <div class="cmd"><pre>"autoMemoryEnabled": false</pre><button class="copy" type="button">Copy</button></div></li>
+      <li><b>Only for a guest project: mark your project folder</b>
+        In the root of your project, a file <code>.knowledge-project</code> with the project name you got (for example <code>a350</code>):
         <div class="cmd"><pre>echo a350 &gt; .knowledge-project</pre><button class="copy" type="button">Copy</button></div>
+        From then on every <code>.md</code> file goes to the server at each start, and each changed one right after the change. Code, <code>.venv</code> and hidden folders never go.</li>
+      <li><b>Check</b>
+        Start a new session in your project folder. It begins with <code>knowledge (project …)</code>. Ask: "search the knowledge for …".</li>
+    </ol>
+    <ol class="steps" data-os="windows" hidden>
+      <li><b>Install Git and Python</b>
+        <a href="https://git-scm.com/download/win" target="_blank" rel="noopener">Git for Windows</a> (Claude Code runs the plugin's hooks in Git Bash) and <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">Python 3</a> (keep "py launcher" ticked). The steps below are for PowerShell.</li>
+      <li><b>Install the plugin</b>
+        <div class="cmd"><pre>claude plugin marketplace add To0wnn/knowledge
+claude plugin install knowledge@knowledge --scope user</pre><button class="copy" type="button">Copy</button></div></li>
+      <li><b>Set the URL and token</b>
+        <div class="cmd"><pre>claude plugin configure knowledge@knowledge</pre><button class="copy" type="button">Copy</button></div>
+        URL: <code>https://knowledge.to0wnn.com</code>, token: the one you received.</li>
+      <li><b>Turn local auto memory off</b>
+        Add this line to <code>%USERPROFILE%\.claude\settings.json</code>; your memory is on the server, so Claude does not also write it locally:
+        <div class="cmd"><pre>"autoMemoryEnabled": false</pre><button class="copy" type="button">Copy</button></div></li>
+      <li><b>Only for a guest project: mark your project folder</b>
+        In the root of your project, a file <code>.knowledge-project</code> with the project name you got (for example <code>a350</code>):
+        <div class="cmd"><pre>Set-Content .knowledge-project a350</pre><button class="copy" type="button">Copy</button></div>
         From then on every <code>.md</code> file goes to the server at each start, and each changed one right after the change. Code, <code>.venv</code> and hidden folders never go.</li>
       <li><b>Check</b>
         Start a new session in your project folder. It begins with <code>knowledge (project …)</code>. Ask: "search the knowledge for …".</li>
@@ -117,60 +142,96 @@ claude plugin install knowledge@knowledge --scope user</pre><button class="copy"
 
   <section id="agy" role="tabpanel" aria-labelledby="tab-agy" hidden>
     <h2>agy (Antigravity CLI)</h2>
-    <p>agy is a standalone binary that updates itself (<code>agy update</code>), not an npm package. It gets the tools and, through a rules file, the house rules.</p>
-    <ol class="steps">
-      <li><b>Add the MCP server</b>
-        <div class="cmd"><pre>agy mcp add --header "Authorization: Bearer YOUR_TOKEN" knowledge https://knowledge.to0wnn.com/mcp</pre><button class="copy" type="button">Copy</button></div>
-        This lands in <code>~/.gemini/config/mcp_config.json</code> (fields <code>serverUrl</code> and <code>headers</code>).</li>
-      <li><b>Protect the config file</b>
-        agy keeps the token in plain text in that file.
-        <div class="cmd"><pre>chmod 600 ~/.gemini/config/mcp_config.json</pre><button class="copy" type="button">Copy</button></div>
-        Windows: make the file readable for your own account only (Properties › Security).</li>
-      <li><b>House rules as a rules file</b>
-        Save the house rules (the list below, also <code>claude/house_rules.md</code> on the server) as <code>~/.gemini/GEMINI.md</code>; agy always loads that file.
-        With the hooks (next step) the rules also arrive with the context at every start, so this file is the fallback.</li>
-      <li><b>Hooks: context, session log, mirror</b>
+    <p>One setup command connects agy: the tools, the context at every start, the session log, the docs mirror and the house rules. agy itself comes from <a href="https://antigravity.google" target="_blank" rel="noopener">antigravity.google</a> and updates itself (<code>agy update</code>).</p>
+    <ol class="steps" data-os="linux">
+      <li><b>Put the token in an environment variable</b>
+        The setup and the hooks read it from there; it never goes into a file you share.
+        <div class="cmd"><pre>echo 'export KNOWLEDGE_TOKEN="YOUR_TOKEN"' &gt;&gt; ~/.bashrc   # zsh: ~/.zshrc
+exec $SHELL                                              # load it in this terminal</pre><button class="copy" type="button">Copy</button></div></li>
+      <li><b>Get the knowledge scripts and run the setup</b>
         <div class="cmd"><pre>git clone https://github.com/To0wnn/knowledge ~/knowledge
 python3 ~/knowledge/clients/knowledge-agent.py install agy</pre><button class="copy" type="button">Copy</button></div>
-        Windows: <code>py</code> instead of <code>python3</code> and <code>%USERPROFILE%\knowledge</code> instead of <code>~/knowledge</code>.
-        This writes <code>~/.gemini/config/hooks.json</code> (an existing one is kept as <code>.bak</code>). The hooks take the token from
-        <code>KNOWLEDGE_TOKEN</code> (see above for Codex; for agy set it the same way); session log and mirror need a write token. agy has no session-end event, so the log gets one entry per turn.</li>
+        It checks the token, then writes <code>~/.gemini/config/mcp_config.json</code> (the MCP server; agy keeps the token in this file, so it is made readable for you only), <code>~/.gemini/config/hooks.json</code> and <code>~/.gemini/GEMINI.md</code> (the house rules). It is safe to run again; an existing file is extended, not replaced.</li>
+      <li><b>Only for a guest project: mark your project folder</b>
+        In the root of your project, a file <code>.knowledge-project</code> with the project name you got (for example <code>a350</code>):
+        <div class="cmd"><pre>echo a350 &gt; .knowledge-project</pre><button class="copy" type="button">Copy</button></div>
+        From then on every <code>.md</code> file goes to the server at each start, and each changed one right after the change. Code, <code>.venv</code> and hidden folders never go.</li>
       <li><b>Check</b>
         <div class="cmd"><pre>agy mcp list</pre><button class="copy" type="button">Copy</button></div>
-        <code>knowledge  http  enabled</code>. In a session, <code>/mcp</code> shows the connection.</li>
+        It lists <code>knowledge  http  enabled</code>. Start <code>agy</code> and ask: "search the knowledge for …".</li>
+      <li><b>Later: update</b>
+        <div class="cmd"><pre>git -C ~/knowledge pull
+python3 ~/knowledge/clients/knowledge-agent.py install agy</pre><button class="copy" type="button">Copy</button></div></li>
+    </ol>
+    <ol class="steps" data-os="windows" hidden>
+      <li><b>Install Git and Python</b>
+        <a href="https://git-scm.com/download/win" target="_blank" rel="noopener">Git for Windows</a> and <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">Python 3</a> (keep "py launcher" ticked). The steps below are for PowerShell.</li>
+      <li><b>Put the token in an environment variable</b>
+        The setup and the hooks read it from there; it never goes into a file you share.
+        <div class="cmd"><pre>setx KNOWLEDGE_TOKEN "YOUR_TOKEN"
+# then close this window and open a new PowerShell</pre><button class="copy" type="button">Copy</button></div></li>
+      <li><b>Get the knowledge scripts and run the setup</b>
+        <div class="cmd"><pre>git clone https://github.com/To0wnn/knowledge $HOME\knowledge
+py $HOME\knowledge\clients\knowledge-agent.py install agy</pre><button class="copy" type="button">Copy</button></div>
+        It checks the token, then writes <code>%USERPROFILE%\.gemini\config\mcp_config.json</code> (the MCP server; agy keeps the token in this file: do not share or sync it), <code>%USERPROFILE%\.gemini\config\hooks.json</code> and <code>%USERPROFILE%\.gemini\GEMINI.md</code> (the house rules). It is safe to run again; an existing file is extended, not replaced.</li>
+      <li><b>Only for a guest project: mark your project folder</b>
+        In the root of your project, a file <code>.knowledge-project</code> with the project name you got (for example <code>a350</code>):
+        <div class="cmd"><pre>Set-Content .knowledge-project a350</pre><button class="copy" type="button">Copy</button></div>
+        From then on every <code>.md</code> file goes to the server at each start, and each changed one right after the change. Code, <code>.venv</code> and hidden folders never go.</li>
+      <li><b>Check</b>
+        <div class="cmd"><pre>agy mcp list</pre><button class="copy" type="button">Copy</button></div>
+        It lists <code>knowledge  http  enabled</code>. Start <code>agy</code> and ask: "search the knowledge for …".</li>
+      <li><b>Later: update</b>
+        <div class="cmd"><pre>git -C $HOME\knowledge pull
+py $HOME\knowledge\clients\knowledge-agent.py install agy</pre><button class="copy" type="button">Copy</button></div></li>
     </ol>
   </section>
 
   <section id="codex" role="tabpanel" aria-labelledby="tab-codex" hidden>
     <h2>Codex (OpenAI)</h2>
-    <p>Codex reads the token from an environment variable, so it is not stored in a config file. Install or update with <code>npm i -g @openai/codex@latest</code>.</p>
-    <ol class="steps">
-      <li><b>Token as an environment variable</b>
-        <div class="cmd"><pre># Linux/macOS (in ~/.bashrc or ~/.zshrc)
-export KNOWLEDGE_TOKEN="YOUR_TOKEN"
-
-# Windows (PowerShell, once; then open a new window)
-setx KNOWLEDGE_TOKEN "YOUR_TOKEN"</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>The MCP server in <code>~/.codex/config.toml</code></b>
-        <div class="cmd"><pre>[mcp_servers.knowledge]
-url = "https://knowledge.to0wnn.com/mcp"
-bearer_token_env_var = "KNOWLEDGE_TOKEN"
-default_tools_approval_mode = "writes"
-startup_timeout_sec = 15</pre><button class="copy" type="button">Copy</button></div>
-        <code>writes</code>: reading just works, Codex asks before writing.</li>
-      <li><b>House rules in <code>~/.codex/AGENTS.md</code></b>
-        The house rules (the list below) as <code>~/.codex/AGENTS.md</code>. Codex loads this file at every start; with the hooks the rules also arrive with the context.</li>
-      <li><b>Hooks: context, session log, mirror</b>
+    <p>One setup command connects Codex: the tools, the context at every start, the session log, the docs mirror and the house rules. Install or update Codex with <code>npm i -g @openai/codex@latest</code>.</p>
+    <ol class="steps" data-os="linux">
+      <li><b>Put the token in an environment variable</b>
+        The setup and the hooks read it from there; it never goes into a file you share.
+        <div class="cmd"><pre>echo 'export KNOWLEDGE_TOKEN="YOUR_TOKEN"' &gt;&gt; ~/.bashrc   # zsh: ~/.zshrc
+exec $SHELL                                              # load it in this terminal</pre><button class="copy" type="button">Copy</button></div></li>
+      <li><b>Get the knowledge scripts and run the setup</b>
         <div class="cmd"><pre>git clone https://github.com/To0wnn/knowledge ~/knowledge
 python3 ~/knowledge/clients/knowledge-agent.py install codex</pre><button class="copy" type="button">Copy</button></div>
-        Windows: <code>py</code> instead of <code>python3</code> and <code>%USERPROFILE%\knowledge</code> instead of <code>~/knowledge</code>.
-        This writes <code>~/.codex/hooks.json</code> (an existing one is kept as <code>.bak</code>). The hooks take the token from
-        <code>KNOWLEDGE_TOKEN</code> (see above for Codex; for agy set it the same way); session log and mirror need a write token. Trust the hooks once with <code>/hooks</code> in a session: Codex skips new or changed hooks until then.</li>
+        It checks the token, then writes <code>~/.codex/config.toml</code> (the MCP server; Codex reads the token from <code>KNOWLEDGE_TOKEN</code> and asks before it writes), <code>~/.codex/hooks.json</code> and <code>~/.codex/AGENTS.md</code> (the house rules). It is safe to run again; an existing file is extended, not replaced.</li>
+      <li><b>Only for a guest project: mark your project folder</b>
+        In the root of your project, a file <code>.knowledge-project</code> with the project name you got (for example <code>a350</code>):
+        <div class="cmd"><pre>echo a350 &gt; .knowledge-project</pre><button class="copy" type="button">Copy</button></div>
+        From then on every <code>.md</code> file goes to the server at each start, and each changed one right after the change. Code, <code>.venv</code> and hidden folders never go.</li>
       <li><b>Check</b>
-        <div class="cmd"><pre>codex mcp list</pre><button class="copy" type="button">Copy</button></div>
-        Ask in a session: "search the knowledge for …".</li>
+        <div class="cmd"><pre>codex</pre><button class="copy" type="button">Copy</button></div>
+        Type <code>/hooks</code> once and trust the knowledge hooks (Codex skips new hooks until then). Then ask: "search the knowledge for …".</li>
+      <li><b>Later: update</b>
+        <div class="cmd"><pre>git -C ~/knowledge pull
+python3 ~/knowledge/clients/knowledge-agent.py install codex</pre><button class="copy" type="button">Copy</button></div></li>
     </ol>
-    <div class="note"><b>Hooks in Codex.</b> Keep exactly one SessionStart hook: with several, Codex drops the context. Codex runs hooks with a bare PATH, so use full paths.</div>
+    <ol class="steps" data-os="windows" hidden>
+      <li><b>Install Git and Python</b>
+        <a href="https://git-scm.com/download/win" target="_blank" rel="noopener">Git for Windows</a> and <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">Python 3</a> (keep "py launcher" ticked). The steps below are for PowerShell.</li>
+      <li><b>Put the token in an environment variable</b>
+        The setup and the hooks read it from there; it never goes into a file you share.
+        <div class="cmd"><pre>setx KNOWLEDGE_TOKEN "YOUR_TOKEN"
+# then close this window and open a new PowerShell</pre><button class="copy" type="button">Copy</button></div></li>
+      <li><b>Get the knowledge scripts and run the setup</b>
+        <div class="cmd"><pre>git clone https://github.com/To0wnn/knowledge $HOME\knowledge
+py $HOME\knowledge\clients\knowledge-agent.py install codex</pre><button class="copy" type="button">Copy</button></div>
+        It checks the token, then writes <code>%USERPROFILE%\.codex\config.toml</code> (the MCP server; Codex reads the token from <code>KNOWLEDGE_TOKEN</code> and asks before it writes), <code>%USERPROFILE%\.codex\hooks.json</code> and <code>%USERPROFILE%\.codex\AGENTS.md</code> (the house rules). It is safe to run again; an existing file is extended, not replaced.</li>
+      <li><b>Only for a guest project: mark your project folder</b>
+        In the root of your project, a file <code>.knowledge-project</code> with the project name you got (for example <code>a350</code>):
+        <div class="cmd"><pre>Set-Content .knowledge-project a350</pre><button class="copy" type="button">Copy</button></div>
+        From then on every <code>.md</code> file goes to the server at each start, and each changed one right after the change. Code, <code>.venv</code> and hidden folders never go.</li>
+      <li><b>Check</b>
+        <div class="cmd"><pre>codex</pre><button class="copy" type="button">Copy</button></div>
+        Type <code>/hooks</code> once and trust the knowledge hooks (Codex skips new hooks until then). Then ask: "search the knowledge for …".</li>
+      <li><b>Later: update</b>
+        <div class="cmd"><pre>git -C $HOME\knowledge pull
+py $HOME\knowledge\clients\knowledge-agent.py install codex</pre><button class="copy" type="button">Copy</button></div></li>
+    </ol>
   </section>
 
   <h2>What each client gets</h2>
@@ -195,7 +256,8 @@ python3 ~/knowledge/clients/knowledge-agent.py install codex</pre><button class=
     <thead><tr><th>What you see</th><th>Cause and fix</th></tr></thead>
     <tbody>
       <tr><td><code>401</code> or "token invalid"</td><td>Token copied wrongly or revoked. Set it again; ask for a new one if needed.</td></tr>
-      <tr><td>No context at start (Claude Code, Windows)</td><td>Git for Windows missing or Python not found. Install both and restart Claude Code.</td></tr>
+      <tr><td>No context at start (Windows)</td><td>Git for Windows or Python missing, or a PowerShell window opened before <code>setx</code>. Install both, open a new window, start again.</td></tr>
+      <tr><td>Setup says "No token"</td><td><code>KNOWLEDGE_TOKEN</code> is not set in this terminal: step 1, then a new terminal.</td></tr>
       <tr><td>Docs do not reach the server</td><td>No <code>.knowledge-project</code> in the project root, or its name does not match your token's project.</td></tr>
       <tr><td>Codex ignores the context hook</td><td>More than one SessionStart hook, or the hook is not trusted yet: open <code>/hooks</code> in Codex.</td></tr>
       <tr><td>"writes are allowed only for …"</td><td>Your token may not write that path: only the memory of your own project.</td></tr>
@@ -205,25 +267,36 @@ python3 ~/knowledge/clients/knowledge-agent.py install codex</pre><button class=
   <footer>Source and technical details: <a href="https://github.com/To0wnn/knowledge" target="_blank" rel="noopener">github.com/To0wnn/knowledge</a> (README, sections "A guest project" and "Other agents").</footer>
 </div>
 <script>
-const tabs = [...document.querySelectorAll('[role="tab"]')];
-function show(id, push) {
+const tabs = [...document.querySelectorAll('[role="tab"]')], oses = [...document.querySelectorAll('.os [role="radio"]')];
+let client = 'claude', os = /Windows/.test(navigator.userAgent) ? 'windows' : 'linux';
+try { os = localStorage.getItem('kn_help_os') || os; } catch (e) {}
+function render(push) {
   for (const t of tabs) {
-    const on = t.getAttribute('aria-controls') === id;
+    const on = t.getAttribute('aria-controls') === client;
     t.setAttribute('aria-selected', String(on));
     document.getElementById(t.getAttribute('aria-controls')).hidden = !on;
   }
-  if (push) { try { history.replaceState(null, '', '#' + id); } catch (e) {} }
+  for (const b of oses) b.setAttribute('aria-checked', String(b.dataset.os === os));
+  for (const ol of document.querySelectorAll('ol.steps[data-os]')) ol.hidden = ol.dataset.os !== os;
+  if (push) { try { history.replaceState(null, '', '#' + client + '-' + os); localStorage.setItem('kn_help_os', os); } catch (e) {} }
 }
 tabs.forEach((t, i) => {
-  t.addEventListener('click', () => show(t.getAttribute('aria-controls'), true));
+  t.addEventListener('click', () => { client = t.getAttribute('aria-controls'); render(true); });
   t.addEventListener('keydown', (e) => {
     if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
     const n = tabs[(i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
     n.focus(); n.click();
   });
 });
-const start = location.hash.slice(1);
-if (['claude', 'agy', 'codex'].includes(start)) show(start, false);
+oses.forEach((b) => b.addEventListener('click', () => { os = b.dataset.os; render(true); }));
+function fromHash() { // #codex-windows, also #codex; a link from the admin page may change it while the page is open
+  const [c, o] = location.hash.slice(1).split('-');
+  if (['claude', 'agy', 'codex'].includes(c)) client = c;
+  if (['linux', 'windows'].includes(o)) os = o;
+  render(false);
+}
+window.addEventListener('hashchange', fromHash);
+fromHash();
 document.querySelectorAll('.copy').forEach((b) => b.addEventListener('click', async () => {
   const pre = b.parentElement.querySelector('pre');
   try { await navigator.clipboard.writeText(pre.textContent); b.textContent = 'Copied'; }
