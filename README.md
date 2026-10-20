@@ -139,12 +139,23 @@ memo check and secret guard stay Claude-only; the server refuses known secrets f
 | | agy | Codex |
 |---|---|---|
 | MCP | `agy mcp add --header "Authorization: Bearer $(secret KNOWLEDGE_TOKEN_AGY)" knowledge https://knowledge.to0wnn.com/mcp` → `~/.gemini/config/mcp_config.json` (`serverUrl` + `headers`; the token is stored in plain text there, so `chmod 600`) | `~/.codex/config.toml` `[mcp_servers.knowledge]` with `url` and `http_headers_helper = "~/.local/bin/knowledge-mcp-header KNOWLEDGE_TOKEN_CODEX"`: the token comes from the vault, never from a file; `default_tools_approval_mode = "writes"` |
-| Working rules | `~/.gemini/GEMINI.md` → symlink to the shared `CLAUDE.md` (always on) | the SessionStart hook below; fallback `clients/codex-AGENTS.md` → `~/.codex/AGENTS.md` |
+| Working rules | `~/.gemini/GEMINI.md` (always on) | the SessionStart hook below; fallback `~/.codex/AGENTS.md` |
 | Hooks | `python3 clients/knowledge-agent.py install agy <VAULT_NAME>` writes `~/.gemini/config/hooks.json`: SessionStart → context as `injectSteps` plus the docs mirror; PostToolUse on the CLI's `write_file\|edit_file` (arg `Path`; the documented `write_to_file`/`TargetFile` are the app's and IDE's) → docs-sync; Stop → session-log (agy has no session end: one entry per turn) | `install codex <VAULT_NAME>` writes `~/.codex/hooks.json`: one SessionStart handler (context + mirror; several handlers make Codex drop the context, openai/codex#45999; homelab ~20k, trade ~36k characters arrive), PostToolUse `apply_patch` → docs-sync (paths parsed from the patch, relative to cwd), PreCompact and SessionEnd (max 3 s, upload timeout 2.5 s) → session-log. Trust new or changed hooks once with `/hooks` (`--dangerously-bypass-hook-trust` for a test run) |
 | Tokens in hooks | A vault name on the VM, `-` elsewhere (`KNOWLEDGE_TOKEN`; Linux, macOS, Windows). The session log always gets `-`: without `KNOWLEDGE_TOKEN` it posts with `~/.config/knowledge-server/session.env` (`vm-sessions`), so the agy/Codex tokens on the VM stay read-only | same; full paths in the commands because Codex runs hooks with a bare PATH |
 
 Server side for every client: tools carry MCP annotations (`readOnlyHint`, `destructiveHint`, `openWorldHint`), and the
 first ~500 characters of the instructions stand alone (Codex only shows that part when choosing tools).
+
+## House rules: one file (20 Oct 2026)
+
+`claude/house_rules.md` (on the VM `~/.claude/gedeeld/house_rules.md`, English, a numbered list) is the only copy.
+The shared `CLAUDE.md` imports it with the Claude Code import line `@~/.claude/gedeeld/house_rules.md`; the server
+expands that line in the context it sends to other devices (`expand_imports`) and reads the list for the MCP
+instructions, the guest context and the help page (`house_rule_items`; `<memory root>` becomes the project's memory
+root). The instructions are rebuilt when the watcher reports the file, so no restart is needed; a missing file shows
+"THE HOUSE RULES ARE MISSING" everywhere. `knowledge-watch` writes `~/.gemini/GEMINI.md` and `~/.codex/AGENTS.md`
+(CLAUDE.md with the import filled in) at start and on every change: agy and Codex do not read imports. In the graph
+the file is its own node on its frontmatter `topic:`, linked to the memos it names.
 
 ## Sign-in, people and admin page (20 Oct)
 

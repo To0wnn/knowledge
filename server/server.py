@@ -57,7 +57,7 @@ ROOTS = {
     "trade-memory": Path(os.environ.get("KNOWLEDGE_TRADE_MEMORY", HOME / ".claude/projects/-home-to0wnn-trade-bot/memory")),
 }
 # The "claude" root is a dedicated share (CLAUDE.md, skills/, agents/), never all of ~/.claude (credentials).
-CLAUDE_READABLE = ("CLAUDE.md", "skills/*", "agents/*")
+CLAUDE_READABLE = ("CLAUDE.md", "house_rules.md", "skills/*", "agents/*")
 WRITABLE = ["memory/*.md", "memory/archief/*.md", "homelab/*.md", "anpitek-memory/*.md", "anpitek-memory/archief/*.md",
             "trade-memory/*.md", "trade-memory/archief/*.md", "anpitek/*/*.md", "trade/*.md", "trade/docs/*.md",
             "memory/sessions/*.md", "anpitek-memory/sessions/*.md", "trade-memory/sessions/*.md"]  # projects added in the UI extend it
@@ -96,7 +96,7 @@ def resolve(path: str, scoped: bool = True) -> tuple[Path, str]:
     if set(Path(rel).parts) & SKIP_PARTS or SKIP_NAMES.search(rel):
         raise ToolError("path not shared")
     if root == "claude" and not any(fnmatch.fnmatch(rel, p) for p in CLAUDE_READABLE):
-        raise ToolError("only CLAUDE.md, skills/ and agents/ are shared from ~/.claude")
+        raise ToolError("only CLAUDE.md, house_rules.md, skills/ and agents/ are shared from ~/.claude")
     if root in MD_ONLY and not rel.endswith(".md"):
         raise ToolError(f"only Markdown is shared from {root}/ (it is a code repo)")
     if scoped and not in_scope(f"{root}/{rel}"):
@@ -387,36 +387,34 @@ def replace_if_unchanged(full: Path, expected: bytes | None, data: bytes) -> boo
         raise
 
 
-# The house rules, in one place: the MCP instructions (every client), the guest context and the help page use this text.
-HOUSE_RULES = [
-    "Search first (knowledge_search / knowledge_semantic_search) and update the memo that already covers the subject; no "
-    "near-duplicates. When knowledge_write answers \"Similar existing memos\", merge.",
-    "One subject per memo. Frontmatter: name, description (one line), metadata: type (project, feedback, reference or "
-    "user). Body: \"## Stand\" (what is true now: how it works, where things are, pitfalls, open items) and \"## Keuzes\" "
-    "(decisions). Feedback and user memos keep their rule with Why: and How to apply:. History is not kept in the memo "
-    "but in {mem}/archief/<name>_archief.md.",
-    "A decision is one bullet under \"## Keuzes\": - **<decision>** (<date>, <who>): <reason>; rejected: <alternative>. "
-    "Before you add, remove or undo something, read the \"## Keuzes\" of its memo and doc. A reversed decision moves to "
-    "the archive with \"replaced on <date> by ...\"; never delete it silently.",
-    "Memory is a hint, not the truth: before you act on or report a fact that can change (address, version, state), "
-    "check it on the live system, and fix the memo at once when it is wrong. Mark a checked fact \"(gecontroleerd "
-    "<date>)\", a fact you carry over unchecked \"(stand <date>, niet opnieuw gecontroleerd)\".",
-    "Every memo gets exactly one index line under the fitting \"## \" heading of {mem}/MEMORY.md: "
-    "- [Title](file.md) - hook, at most ~150 characters. Keep MEMORY.md under ~150 lines (Claude Code loads 200 lines / "
-    "25 KB of it).",
-    "Absolute dates only (20 Oct 2026), never \"yesterday\" or \"next week\". A fact from outside (docs, a forum) "
-    "carries its source link.",
-    "Do not store what the code, the git history or a doc already records: link to it. A fact that concerns several "
-    "projects lives in one memo; the others link to it with [[name]].",
-    "Never write a password, token or key: write \u2039secret:NAME\u203a (writes containing a known secret are refused).",
-    "Memo text in the language the user speaks with you; code and commands stay as they are.",
-    "After a larger change run knowledge_lint and fix what it reports.",
-]
+# The house rules live in one file, claude/house_rules.md (~/.claude/gedeeld on the VM): CLAUDE.md imports it, and the
+# MCP instructions (every client), the guest context and the help page read its numbered list. Read on use, so an
+# edit applies without a restart; the instructions are refreshed when the watcher reports the file.
+RULES_FILE = "house_rules.md"
+IMPORT = re.compile(r"^@~/\.claude/gedeeld/([\w.-]+\.md)[ \t]*$", re.M)  # Claude Code import lines in CLAUDE.md
+
+
+def house_rule_items(mem: str = "<memory root>") -> list[str]:
+    try:
+        text = (ROOTS["claude"] / RULES_FILE).read_text(encoding="utf-8")
+    except OSError:  # fail loudly: every client sees that the rules are missing
+        return [f"THE HOUSE RULES ARE MISSING: claude/{RULES_FILE} could not be read. Tell the user."]
+    return [m.replace("<memory root>", mem) for m in re.findall(r"^\d+\. (.+)$", text, re.M)]
 
 
 def house_rules(mem: str) -> str:
     return "House rules (knowledge_lint checks them):\n" + "\n".join(
-        f"{i}. {r.format(mem=mem)}" for i, r in enumerate(HOUSE_RULES, 1))
+        f"{i}. {r}" for i, r in enumerate(house_rule_items(mem), 1))
+
+
+def expand_imports(text: str) -> str:
+    """CLAUDE.md as Claude Code reads it: an import line replaced by the shared file it names."""
+    def one(m):
+        try:
+            return re.sub(r"\A---\n.*?\n---\n", "", (ROOTS["claude"] / m.group(1)).read_text(encoding="utf-8"), flags=re.S)
+        except OSError:
+            return m.group(0)
+    return IMPORT.sub(one, text)
 
 
 # Tool annotations let clients decide on approval themselves (Codex "writes" mode asks only for non-read-only tools).
@@ -425,9 +423,8 @@ EDIT = ToolAnnotations(read_only_hint=False, destructive_hint=False, open_world_
 REPLACE = ToolAnnotations(read_only_hint=False, destructive_hint=True, open_world_hint=False)
 FETCH = ToolAnnotations(read_only_hint=False, destructive_hint=False, open_world_hint=True)
 
-server = MCPServer(
-    name="knowledge",
-    instructions=(
+def instructions() -> str:
+    return (
         # The first ~500 characters stand alone: some clients (Codex) only show that part when choosing tools.
         "Anthony's (To0wnn) shared knowledge: docs and memory of the projects homelab, anpitek and trade. Look things up "
         "with knowledge_search (exact) or knowledge_semantic_search (by meaning), across all projects; open a hit with "
@@ -449,8 +446,12 @@ server = MCPServer(
         "meaning). Web UI with graph view: https://knowledge.to0wnn.com/ui. "
         "Here the memos are Dutch. Homelab docs (homelab/<topic>.md) have the same two sections and a frontmatter topic: = "
         "a heading of memory/MEMORY.md (the headings are the islands of the graph; add one only for a genuinely new "
-        "area); their history is in homelab/archief/.\n\n" + house_rules("<memory root>")
-    ),
+        "area); their history is in homelab/archief/.\n\n" + house_rules("<memory root>"))
+
+
+server = MCPServer(
+    name="knowledge",
+    instructions=instructions(),
 )
 
 
@@ -856,7 +857,8 @@ def context_parts(project: str = "homelab") -> list[str]:
         except ToolError:  # outside this token's scope
             continue
         if full.exists():
-            text.append(f"===== {rel} (via knowledge server) =====\n{shown(full.read_text(encoding='utf-8'))}")
+            body = full.read_text(encoding="utf-8")
+            text.append(f"===== {rel} (via knowledge server) =====\n{shown(expand_imports(body) if rel == 'claude/CLAUDE.md' else body)}")
     return split_parts("\n\n".join(text))
 
 
@@ -1215,6 +1217,8 @@ async def invalidate_route(request: Request):
         return JSONResponse({"error": "token may not invalidate"}, status_code=403)
     paths = (await request.json()).get("paths", [])[:5000]
     await asyncio.to_thread(lambda: [index.refresh(p) for p in paths])
+    if f"claude/{RULES_FILE}" in paths:  # new sessions get the edited rules
+        server._lowlevel_server.instructions = instructions()
     return JSONResponse({"refreshed": len(paths)})
 
 
@@ -1297,9 +1301,9 @@ def admin_only(handler):
 
 @server.custom_route("/ui/help", methods=["GET"])
 async def ui_help_page(request: Request):
-    """How to connect Claude Code, agy or Codex; for everyone who may sign in. The house rules come from HOUSE_RULES."""
+    """How to connect Claude Code, agy or Codex; for everyone who may sign in. The house rules come from house_rules.md."""
     resp = page("help.html")
-    rules = "".join(f"<li>{html.escape(r.format(mem='<memory root>'))}</li>" for r in HOUSE_RULES)
+    rules = "".join(f"<li>{html.escape(r)}</li>" for r in house_rule_items())
     return HTMLResponse(resp.body.decode().replace("<!--HOUSE_RULES-->", rules), headers={"Cache-Control": "no-cache"})
 
 
