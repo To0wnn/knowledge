@@ -198,3 +198,4 @@ button.danger { color: var(--error); }
 .admin-page h1.brand { margin: 0; font-size: 14px; }
 .new-token .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .new-token code { word-break: break-all; padding: 6px 8px; background: var(--panel); border-radius: 6px; user-select: all; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

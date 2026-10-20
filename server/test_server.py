@@ -323,6 +323,8 @@ def main():
         st, body = http("GET", "/lint", token=tb)
         assert st == 200 and all(not i.startswith(("memory", "homelab")) for v in json.loads(body).values() for i in v), body[:300]
         assert http("GET", "/ui/api/lint", token="rw-token")[0] == 401
+        listed = {x["name"]: x for x in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["tokens"]}
+        assert listed["tradebot"]["last_used"] and time.time() - listed["tradebot"]["last_used"] < 60, listed["tradebot"]
         st, body = http("GET", "/semantic?q=entry%20timing&project=trade")
         assert st == 200 and "hits" in json.loads(body)
         st, _, res = admin("/ui/api/admin/token", {"name": "watcher2", "watch": True})
