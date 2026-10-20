@@ -6,39 +6,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/home/user/.local/bin/knowledge-context KNOWLEDGE_TOKEN_CODEX 1",
-            "timeout": 15,
-            "additionalContextLimit": 10000
-          },
-          {
-            "type": "command",
-            "command": "/home/user/.local/bin/knowledge-context KNOWLEDGE_TOKEN_CODEX 2",
-            "timeout": 15,
-            "additionalContextLimit": 10000
-          },
-          {
-            "type": "command",
-            "command": "/home/user/.local/bin/knowledge-context KNOWLEDGE_TOKEN_CODEX 3",
-            "timeout": 15,
-            "additionalContextLimit": 10000
-          },
-          {
-            "type": "command",
-            "command": "/home/user/.local/bin/knowledge-context KNOWLEDGE_TOKEN_CODEX 4",
-            "timeout": 15,
-            "additionalContextLimit": 10000
-          },
-          {
-            "type": "command",
-            "command": "/home/user/.local/bin/knowledge-context KNOWLEDGE_TOKEN_CODEX 5",
-            "timeout": 15,
-            "additionalContextLimit": 10000
-          },
-          {
-            "type": "command",
-            "command": "/home/user/.local/bin/knowledge-context KNOWLEDGE_TOKEN_CODEX 6",
-            "timeout": 15,
-            "additionalContextLimit": 10000
+            "command": "/home/user/.local/bin/knowledge-context KNOWLEDGE_TOKEN_CODEX all",
+            "timeout": 30,
+            "additionalContextLimit": 60000
           }
         ]
       }

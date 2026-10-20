@@ -1,5 +1,13 @@
 #!/bin/sh
-# Session-start context for non-Claude agents (Codex hook): prints part <n> of the knowledge server's startup context
-# (shared CLAUDE.md + project CLAUDE.md + memory index) for the current directory, using the plugin's context.sh.
-# Usage: knowledge-context <VAULT_NAME> <part>
-CLAUDE_PLUGIN_OPTION_TOKEN=$(secret "${1:?vault name}") CLAUDE_PROJECT_DIR=$PWD exec sh /home/user/knowledge/plugin/hooks/context.sh "${2:-1}"
+# Session-start context for non-Claude agents (Codex hook): the knowledge server's startup context (shared CLAUDE.md,
+# project CLAUDE.md, memory index) for the current directory, using the plugin's context.sh.
+# Full paths: Codex starts hooks and helpers with a bare PATH (no ~/.local/bin).
+# Usage: knowledge-context <VAULT_NAME> <part>   one part as plain text
+#        knowledge-context <VAULT_NAME> all      every part as one Codex SessionStart JSON answer; Codex rejects the
+#                                                 context when several SessionStart hooks are registered (openai/codex#45999)
+token=$(/home/user/.local/bin/secret "${1:?vault name}")
+part=${2:-1}
+run() { CLAUDE_PLUGIN_OPTION_TOKEN=$token CLAUDE_PROJECT_DIR=$PWD sh /home/user/knowledge/plugin/hooks/context.sh "$1"; }
+if [ "$part" != all ]; then run "$part"; exit 0; fi
+n=1; while [ $n -le 9 ]; do out=$(run $n); [ -n "$out" ] || break; printf '%s\n\n' "$out"; n=$((n + 1)); done |
+    /usr/bin/python3 -c 'import json, sys; print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": sys.stdin.read()}}))'
