@@ -1373,19 +1373,62 @@ def last_writers() -> dict[str, tuple[float, str]]:
     return out
 
 
+def change_size(rel: str, mtime: float) -> dict:
+    """Lines added and removed by the change that produced the current file, and that version's id (for its diff),
+    when the history holds that change."""
+    import difflib
+    vs = versions_of(rel)
+    if len(vs) < 2 or abs(vs[0]["time"] - mtime) > 120:
+        return {}
+    try:
+        new, old = version_text(rel, vs[0]["id"]).splitlines(), version_text(rel, vs[1]["id"]).splitlines()
+    except (ToolError, OSError):
+        return {}
+    diff = list(difflib.unified_diff(old, new, n=0, lineterm=""))[2:]  # skip the ---/+++ header
+    return {"version": vs[0]["id"], "added": sum(d.startswith("+") for d in diff),
+            "removed": sum(d.startswith("-") for d in diff)}
+
+
+SESSION_HEAD = re.compile(r"(\d{4}-\d\d-\d\d \d\d:\d\d) · [^·\n]+ · ([^·\n]+) · ")
+
+
+def session_log(roots: tuple) -> list[dict]:
+    """Entries of the session logs of these roots, oldest first: when, device, first question, changed file names."""
+    out = []
+    for rel, text, _ in index.items(",".join(roots)):
+        if "/sessions/" not in rel or not in_scope(rel):
+            continue
+        for block in text.split("\n## ")[1:]:
+            m = SESSION_HEAD.match(block)
+            if not m:
+                continue
+            lines = block.splitlines()
+            asked = next((x[9:] for x in lines if x.startswith("- Asked: ")), "")
+            changed = next((x[11:] for x in lines if x.startswith("- Changed: ")), "")
+            out.append({"time": time.mktime(time.strptime(m[1], "%Y-%m-%d %H:%M")), "device": m[2].strip(), "asked": asked,
+                        "names": {c.strip().rsplit("/", 1)[-1] for c in changed.split(",") if c.strip()}})
+    return sorted(out, key=lambda e: e["time"])
+
+
 @server.custom_route("/ui/api/recent", methods=["GET"])
 async def ui_recent(request: Request):
-    """Newest changed Markdown files of a project, with the device when the change came through this server
-    (otherwise it was edited natively on the VM)."""
+    """Newest changed Markdown files of a project: the device when the change came through this server (otherwise
+    it was edited natively on the VM), lines added/removed, and the session that changed it (the session log entry
+    written after the change that names the file), so you see who changed what and why."""
     roots = PROJECTS.get(request.query_params.get("project", "homelab"), PROJECTS["homelab"])
     with index.lock:
         rows = sorted(((v[0], rel) for rel, v in index.files.items() if rel.split("/", 1)[0] in roots
-                       and rel.endswith(".md") and in_scope(rel)), reverse=True)[:60]
-    who = last_writers()
+                       and rel.endswith(".md") and "/sessions/" not in rel and in_scope(rel)), reverse=True)[:60]
+    who, log = last_writers(), session_log(roots)
     out = []
     for ns, rel in rows:
-        t, dev = who.get(rel, (0, ""))
-        out.append({"path": rel, "mtime": ns // 1_000_000_000, "by": dev if abs(t - ns / 1e9) < 120 else "VM"})
+        t, dev, mtime = *who.get(rel, (0, "")), ns / 1e9
+        name = rel.rsplit("/", 1)[-1]
+        # Log entries carry the minute only, so one up to two minutes "before" the change still counts.
+        s = next((e for e in log if name in e["names"] and -120 <= e["time"] - mtime < 12 * 3600), None)
+        out.append({"path": rel, "mtime": int(mtime), "by": dev if abs(t - mtime) < 120 else "VM",
+                    **change_size(rel, mtime),
+                    **({"session": {"time": s["time"], "device": s["device"], "asked": s["asked"]}} if s else {})})
     return JSONResponse({"files": out})
 
 

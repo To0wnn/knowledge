@@ -336,7 +336,7 @@ def main():
         assert files[0]["path"] in ("trade-memory/MEMORY.md", "trade-memory/project_new.md") and files[0]["by"] == "user:anthony", files[:3]
         assert all(f["path"].startswith("trade") for f in files)
         g = json.loads(raw("GET", "/ui/api/graph", headers=ck)[2])
-        assert all("cluster" in n and "sources" in n for n in g["nodes"]) and {"isolated", "bridges", "surprising", "sparse_topics"} <= set(g["insights"])
+        assert all("cluster" in n and "sources" in n for n in g["nodes"]) and {"isolated", "sparse_topics"} <= set(g["insights"])
         # Ingest dedup: the same text twice is refused with the existing path.
         err, text = call("knowledge_ingest", {"text": "pasted note about PBS", "title": "PBS again"})
         assert err and "already ingested as homelab/sources/" in text, text
@@ -392,6 +392,14 @@ def main():
         subprocess.run([sys.executable, script], input=hook, text=True, env=senv, check=True)  # nothing new: no entry
         assert (tmem / "sessions" / f"{time.strftime('%Y-%m')}.md").read_text() == log
         assert http("POST", "/sessions", {"prompts": ["x"], "cwd": "/"}, token="ro-token")[0] == 403
+        # Changes: lines added/removed by the last change, its version for the diff, and the session that made it.
+        assert http("POST", "/sessions", {"prompts": ["tidy the hist memo"], "cwd": "/home/x/trade_bot",
+                                          "files": ["/home/x/.claude/trade-memory/hist.md"]})[0] == 200
+        files = json.loads(raw("GET", "/ui/api/recent?project=trade", headers=ck)[2])["files"]
+        h = next(f for f in files if f["path"] == "trade-memory/hist.md")
+        assert h["added"] == 1 and h["removed"] == 1 and h["version"] == hv[0]["id"], h
+        assert h["session"]["asked"] == "tidy the hist memo" and h["session"]["device"] == "laptop", h
+        assert not any("/sessions/" in f["path"] for f in files)
         # Caching: vendor files immutable, app files revalidated, graph 304 on an unchanged ETag.
         assert "immutable" in raw("GET", "/ui/static/vendor/force-graph-1.52.0.js")[1]["cache-control"]
         assert raw("GET", "/ui/static/app.js")[1]["cache-control"] == "no-cache"

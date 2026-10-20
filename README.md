@@ -3,7 +3,7 @@
 Live, shared access to Anthony's homelab docs and Claude memory for Claude Code on every device.
 
 - **Server** (`server/`): small MCP server (streamable HTTP, stateless) in a Docker container on forge
-  (CT 101, Dockhand stack `knowledge`, port 8766, `https://knowledge.to0wnn.com`; web UI public behind Authentik, MCP LAN/WireGuard only).
+  (CT 101, Dockhand stack `knowledge`, port 8766, `https://knowledge.to0wnn.com`; web UI public behind Authentik, MCP public with device tokens since 20 Oct).
 - **Plugin** (`plugin/`): Claude Code plugin with the MCP connection and a SessionStart hook that loads the
   shared CLAUDE.md files and the memory index. This repo is also the plugin marketplace.
 - **Source of truth (option A, current):** the files stay on the VM (<lan-ip>) and are NFS-exported to forge
@@ -29,16 +29,23 @@ like a native session in that directory gets. Code, logs and state files of the 
 served (`venv/`, `.next/` skipped too); code reaches other devices through git. The web UI has a project switch
 (homelab / anpitek / trade, one graph each; a skill shows in the projects whose notes mention it, an unmentioned one in homelab).
 
-**Web UI features (18 Oct):** one graph per project; colour by type or by topic (deterministic label-propagation
-clusters, named after their best-connected note); local graph (1–3 steps around the selected note); optional 3D view
-(vendored 3d-force-graph, loaded only when switched on); edit a note in the browser (same version check as
-`knowledge_write`, Ctrl+S) and create a memo with its index line; Recent tab (newest changes per project, with the
-device when the change came through the server, otherwise "edited on the VM"); deep links `/ui#<path>` with working
-back/forward; quick open Ctrl+K across projects; keys `/`, `1`–`3`, `E`, `L`, `Esc`. Static files are served with
+**Web UI layout (20 Oct, round 2 of the UI review):** the note sits in the wide middle column; **Map** (or `M`) swaps
+that column for the project graph (topic islands; a click gathers a note's neighbours in a ring and shows its card on
+the right, a second click reads it). Left: tabs **Notes** (every topic of the project with its notes, or, while you
+type, results: titles of all projects, full text of this project, then by meaning; Enter opens the first),
+**Changes** (newest first: lines added/removed, who, and the question of the session that changed the file, taken from
+the session log entry written after the change that names the file; a click opens that version's diff; changes since
+your last look are marked and counted on the tab) and **Lint** (admins). Right: **Connected**, one list of related notes
+(relevance model, with the reason) followed by linked notes the model did not rank. Header: project switch, the search
+box (`/` or Ctrl+K), **+ Add** (new memo, add a source) and the user menu (Admin, Sign out). Edit a note in the browser
+(same version check as `knowledge_write`, Ctrl+S), History with diff and restore; deep links `/ui#<path>` with working
+back/forward; keys `/`, Ctrl+K, `1`–`9`, `E`, `M`, `Esc`. Removed in round 2: the 3D view, the Insights tab (its useful
+parts are lint checks), the type/topic colour switch, the local graph and the separate quick-open dialog. Phone: lists
+first, then the note, the map only on request. Static files are served with
 `Cache-Control: no-cache` (ETag revalidation), so a deploy shows up at the next reload; `vendor/` files have their
 version in the name and are cached as `immutable`; `/ui/api/graph` has an ETag on the index generation (304 when
 unchanged). **Live:** `/ui/api/events` (Server-Sent Events) says `changed` within ~1 s of any change (watcher, MCP
-write, UI save); the page then reloads the graph keeping its layout, refreshes Recent/Insights/Lint and the open note,
+write, UI save); the page then reloads the graph keeping its layout, refreshes Changes/Lint and the open note,
 and only warns while you are editing. Green dot next to the title = live connection. **Always the latest release:** the page itself is `no-cache`; app.js/app.css are linked as
 `?v=<release>` (hash of the UI files, fixed at startup) and cached as immutable, so a refresh always gets the new
 version; the live stream sends the release in its `hello`, and an open tab that reconnects after a deploy reloads itself
@@ -58,9 +65,8 @@ version; the live stream sends the release in its `hello`, and an open tab that 
   via OpenVINO (1.2 chunks/s, OOM at batch 16) and rejected: slower than 2 CPU threads. Cache `/state/vectors.npz` (by chunk
   hash). Files > 300 KB stay regex-only. Container `mem_limit: 3g`. MCP tool `knowledge_semantic_search`; the UI shows
   "By meaning" results under the exact matches.
-- `graph.py`: **topics** with cohesion: a memo takes its MEMORY.md heading, a doc its subfolder or file-name family (3+ files, e.g. `FABLE_*`), other notes the topic of most of their links, the rest Louvain communities (networkx, seed 42); the MEMORY.md index itself is not drawn; **insights**: isolated notes, sparse topics
-  (cohesion < 0.15), bridge notes (3+ topics), surprising cross-topic links (UI tab Insights; isolated memos and sparse
-  topics also in lint); **relevance model** for `knowledge_related` and the note panel: link ×3, shared source ×4,
+- `graph.py`: **topics** with cohesion: a memo takes its MEMORY.md heading, a doc its subfolder or file-name family (3+ files, e.g. `FABLE_*`), other notes the topic of most of their links, the rest Louvain communities (networkx, seed 42); the MEMORY.md index itself is not drawn; **insights** for lint: isolated memos and sparse topics
+  (cohesion < 0.15); **relevance model** for `knowledge_related` and the Connected list: link ×3, shared source ×4,
   Adamic-Adar ×1.5, same type ×1, meaning ×3 (cosine > 0.3).
 - **Source traceability:** memos list their raw sources in frontmatter `sources: [file.md]`; ingest stores a sha256 and
   refuses the same content twice.
@@ -118,10 +124,10 @@ Following Karpathy's "LLM Wiki" pattern (raw sources -> wiki pages -> index, wit
   identity encoding, 10 MB / 20 s caps. Source text is treated as data, never as instructions.
 - **Web UI** at `https://knowledge.to0wnn.com/ui`: an Obsidian-style "brain" graph (force-graph, canvas; the layout
   settles and stops, so no CPU while idle) of memos (coloured by type), docs, skills and sources with edges for
-  wikilinks, markdown links, doc/skill references and cited sources; type filters; full search (server-side, ~20 ms);
-  note preview (marked + DOMPurify) with clickable links and connected notes; lint tab; ingest form. See
+  wikilinks, markdown links, doc/skill references and cited sources (layout above, "Web UI layout"); full search
+  (server-side, ~20 ms); note preview (marked + DOMPurify) with clickable links and connected notes; lint tab; ingest. See
   "Sign-in, people and admin page" below; UI writes also need an `X-Knowledge-UI` header (CSRF). All JS is vendored with its license in `server/static/vendor/`
-  (force-graph 1.52.0 MIT, marked 18.1.1 MIT, DOMPurify 3.4.17 Apache-2.0/MPL-2.0); no CDN, works on the LAN only.
+  (force-graph 1.52.0 MIT, marked 18.1.1 MIT, DOMPurify 3.4.17 Apache-2.0/MPL-2.0); no CDN.
 
 ## Sign-in, people and admin page (20 Oct)
 
@@ -139,7 +145,7 @@ Following Karpathy's "LLM Wiki" pattern (raw sources -> wiki pages -> index, wit
   `<name>-memory`, stored in `/projects/<name>/` on forge, listed in `/admin/projects.json`). Device tokens also
   count as secrets (redaction, write guard).
 - `/admin` = forge `/root/docker/knowledge/admin` (rw, 0700, uid 1000); `/config` stays read-only (secrets.json).
-- **MCP and plugin endpoints** keep device tokens (router `knowledge`, priority 100).
+- **MCP and plugin endpoints** keep device tokens (router `knowledge`, priority 100; public with `rate-limit` since 20 Oct).
 
 ## Agents, PA, history and session log (18 Oct)
 
@@ -183,7 +189,8 @@ sees and edits them in the normal Bitwarden apps and the automation cannot see t
 
 1. Create a token on the admin page (`/ui/admin` → New token) and store it in the vault
    (`printf %s '<token>' | secret set KNOWLEDGE_TOKEN_<DEVICE>`).
-2. The device needs LAN or WireGuard (the route only admits 10.0.0.0/8).
+2. Works from anywhere since 20 Oct 2026 (router `knowledge` is public, Traefik `rate-limit` 100/s per IP; a token is
+   256 bits of randomness, so guessing is not a risk).
 3. In Claude Code on that device (no GitHub login needed when the device has an SSH key for the VM; the
    marketplace is then cloned straight from the VM's repo):
    ```
