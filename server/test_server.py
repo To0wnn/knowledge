@@ -47,7 +47,7 @@ def main():
         d.mkdir(parents=True)
     (mem / "MEMORY.md").write_text("# Index\n" + "".join(f"- [Item {i}](f{i}.md) — {'x' * 120}\n" for i in range(120)))
     (mem / "fact.md").write_text("line one\nline two\n")
-    (lab / "00_OVERZICHT.md").write_text("overview\n")
+    (lab / "overzicht.md").write_text("overview\n")
     (lab / "secret.env").write_text("nope")
     (cla / "CLAUDE.md").write_text("global rules\n")
     (cla / "skills/x/SKILL.md").write_text("skill\n")
@@ -108,7 +108,7 @@ def main():
         assert "plain line" in text and "pi/‹secret›" in text, text
         assert "Sup3rSecret99" in call("knowledge_read", {"path": "memory/creds.md"})[1]  # full token unchanged
         assert "Sup3rSecret99" not in call("knowledge_search", {"pattern": "login pi"}, token="agent-token")[1]
-        assert call("knowledge_read", {"path": "homelab/00_OVERZICHT.md"}, token="agent-token")[0]
+        assert call("knowledge_read", {"path": "homelab/overzicht.md"}, token="agent-token")[0]
         assert call("knowledge_list", {"root": "homelab"}, token="agent-token")[0]
         assert "homelab/" not in call("knowledge_search", {"pattern": "overview"}, token="agent-token")[1]
         assert call("knowledge_write", {"path": "memory/x.md", "content": "x"}, token="agent-token")[0]

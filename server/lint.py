@@ -70,6 +70,22 @@ def latest_date(text: str) -> date | None:
     return max(found) if found else None
 
 
+# Every memo (except feedback/user rules) and every homelab doc is built the same way: the current state, then the
+# deliberate choices with their reasons; history goes to archief/<name>_archief.md.
+STRUCTURE = ("## Stand", "## Keuzes")
+NOT_DOCS = {"CLAUDE.md", "README.md"}
+
+
+def memo_type(text: str) -> str:
+    m = FRONT.match(text)
+    t = re.search(r"^\s*type:\s*(\w+)", m.group(1), re.M) if m else None
+    return t.group(1) if t else ""
+
+
+def missing_structure(text: str) -> list[str]:
+    return [h for h in STRUCTURE if not re.search(rf"^{h}\b", text, re.M)]
+
+
 def lint(files: dict[str, str], today: date | None = None, mem: str = "memory") -> dict[str, list[str]]:
     """Check one memory root (index, links, frontmatter, size, staleness, secrets); with the homelab root "memory"
     also homelab/sources/ (unprocessed raw sources)."""
@@ -86,7 +102,7 @@ def lint(files: dict[str, str], today: date | None = None, mem: str = "memory") 
         "index_points_to_missing_file", "memo_not_in_index", "dead_wikilink", "missing_frontmatter",
         "big_memo_without_archive", "long_index_line", "orphan_memo", "possibly_stale_open_item",
         "possible_secret_in_memo", "unprocessed_source", "index_line_without_heading", "index_near_load_limit",
-        "relative_date")}
+        "relative_date", "missing_structure", "doc_without_topic")}
 
     lines, size = index.count("\n") + 1 if index else 0, len(index.encode())
     if lines >= INDEX_WARN_LINES or size >= INDEX_WARN_BYTES:
@@ -126,6 +142,8 @@ def lint(files: dict[str, str], today: date | None = None, mem: str = "memory") 
         opens = len(OPEN_WORDS.findall(no_code))  # not in code: `open(...)` or an 'open' column is no open item
         if last and opens and (today - last).days > 45:
             report["possibly_stale_open_item"].append(f"{name}: {opens} open/TODO mention(s), newest date {last}")
+        if memo_type(text) not in ("feedback", "user") and (gone := missing_structure(text)):
+            report["missing_structure"].append(f"{name}: no {' / '.join(gone)}")
         hits = sum(1 for m in SECRET_HINT.finditer(re.sub(r"‹[^›\n]*›", "", text)) if looks_secret(m.group(0)))
         if hits:
             report["possible_secret_in_memo"].append(f"{name}: {hits} line(s) (values not shown)")
@@ -139,6 +157,17 @@ def lint(files: dict[str, str], today: date | None = None, mem: str = "memory") 
     # A raw source counts as processed once anything outside sources/ (a memo, a doc) mentions its file name.
     if mem != "memory":
         return report
+    # Homelab docs: the same structure, and a topic that is a heading of the homelab index (their island in the graph).
+    headings = {h.strip() for h in re.findall(r"^## (.+)$", index, re.M)}
+    for rel, text in sorted(files.items()):
+        parts = rel.split("/")
+        if parts[0] != "homelab" or len(parts) != 2 or not rel.endswith(".md") or parts[1] in NOT_DOCS:
+            continue
+        if (gone := missing_structure(text)):
+            report["missing_structure"].append(f"{rel}: no {' / '.join(gone)}")
+        topic = frontmatter(text).get("topic", "").strip('"')
+        if topic not in headings:
+            report["doc_without_topic"].append(f"{rel}: topic '{topic}' is no heading of MEMORY.md" if topic else f"{rel}: no topic")
     outside = "\n".join(t for r, t in files.items() if not r.startswith("homelab/sources/"))
     for rel in files:
         name = rel.split("/")[-1]
@@ -185,6 +214,12 @@ if __name__ == "__main__":  # self-check
     assert not lint({"memory/MEMORY.md": "", "memory/p.md": "root password: ‹secret:ROOT_PW›\ntoken: /etc/x/tok.txt\n"
                      "secret `HOMELAB_SSH_KEY`\n"})["possible_secret_in_memo"]
     assert r["unprocessed_source"] == ["homelab/sources/2026-10-18-x.md"], r
+    assert r["missing_structure"] == ["a.md: no ## Stand / ## Keuzes", "b.md: no ## Stand / ## Keuzes"], r  # c.md is a user memo
+    r5 = lint({"memory/MEMORY.md": "## Net\n- [N](n.md) — x\n", "memory/n.md": "---\nmetadata:\n  type: project\n---\n## Stand\nx\n## Keuzes\ny\n",
+               "homelab/netwerk.md": "---\ntopic: \"Net\"\n---\n## Stand\n## Keuzes\n", "homelab/x.md": "---\ntopic: \"Nope\"\n---\n",
+               "homelab/CLAUDE.md": "rules", "homelab/archief/x_archief.md": "old"})
+    assert r5["missing_structure"] == ["homelab/x.md: no ## Stand / ## Keuzes"], r5
+    assert r5["doc_without_topic"] == ["homelab/x.md: topic 'Nope' is no heading of MEMORY.md"], r5
     t = lint({**files, "trade-memory/MEMORY.md": "- [X](x.md) — y\n"}, today=date(2026, 10, 18), mem="trade-memory")
     assert t["index_points_to_missing_file"] == ["MEMORY.md → x.md"] and not t["unprocessed_source"], t
     print("ok")

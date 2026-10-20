@@ -96,7 +96,7 @@ if __name__ == "__main__":
     if "--selftest" in sys.argv:
         assert memo_of(str(PROJECTS / "-home-to0wnn-homelab/memory/x.md")) == (PROJECTS / "-home-to0wnn-homelab/memory", "x.md")
         assert memo_of(str(PROJECTS / "-home-to0wnn-homelab/memory/archief/x.md")) is None
-        assert memo_of("/home/to0wnn/homelab/05_SERVICES.md") is None
+        assert memo_of("/home/to0wnn/homelab/diensten.md") is None
         print("ok")
         sys.exit(0)
     try:
