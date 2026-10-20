@@ -24,7 +24,8 @@ PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update) File: (.+)$|^\*\*\* Move to: (.
 def edited_paths(hook: dict) -> list:
     """The files an edit tool changed: Claude's file_path, the paths in a Codex patch, agy's TargetFile."""
     if "toolCall" in hook:
-        target = ((hook.get("toolCall") or {}).get("args") or {}).get("TargetFile", "")
+        args = (hook.get("toolCall") or {}).get("args") or {}
+        target = args.get("Path") or args.get("TargetFile") or ""  # agy CLI: write_file/edit_file Path; app/IDE: TargetFile
         return [json.loads(target) if target.startswith('"') else target] if target else []
     inp = hook.get("tool_input") or {}
     if inp.get("file_path"):
@@ -109,6 +110,7 @@ if __name__ == "__main__":
         patch = "*** Begin Patch\n*** Update File: docs/a.md\n@@\n-x\n+y\n*** Add File: /p/b.md\n+z\n*** End Patch"
         assert edited_paths({"tool_input": {"command": patch}}) == ["docs/a.md", "/p/b.md"]
         assert edited_paths({"toolCall": {"args": {"TargetFile": '"/p/c.md"'}}}) == ["/p/c.md"]
+        assert edited_paths({"toolCall": {"name": "edit_file", "args": {"Path": '"/p/e.md"'}}}) == ["/p/e.md"]
         assert edited_paths({"tool_input": {"file_path": "/p/d.md"}}) == ["/p/d.md"]
         print("ok")
     else:
