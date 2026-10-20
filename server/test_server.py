@@ -87,6 +87,10 @@ def main():
         assert http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, token="wrong")[0] == 401
 
         st, body = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        hints = {x["name"]: x.get("annotations", {}) for x in json.loads(body)["result"]["tools"]}
+        assert hints["knowledge_read"]["readOnlyHint"] and hints["knowledge_search"]["readOnlyHint"], hints["knowledge_read"]
+        assert not hints["knowledge_write"]["readOnlyHint"] and hints["knowledge_delete"]["destructiveHint"], hints["knowledge_write"]
+        assert all("readOnlyHint" in h for h in hints.values()), hints  # every tool says whether it only reads
         names = {t["name"] for t in json.loads(body)["result"]["tools"]}
         assert {"knowledge_list", "knowledge_read", "knowledge_search", "knowledge_edit", "knowledge_write"} <= names, names
 

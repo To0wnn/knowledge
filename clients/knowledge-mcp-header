@@ -1,0 +1,6 @@
+#!/bin/sh
+# Prints the knowledge server's Authorization header as JSON for an MCP client header helper (Codex
+# http_headers_helper). The token comes from the vault, so it is never stored in the client's config.
+# Usage: knowledge-mcp-header <VAULT_NAME>   e.g. KNOWLEDGE_TOKEN_CODEX
+t=$(secret "${1:?vault name}") || exit 1
+printf '{"Authorization": "Bearer %s"}\n' "$t"

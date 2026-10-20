@@ -1,0 +1,5 @@
+#!/bin/sh
+# Session-start context for non-Claude agents (Codex hook): prints part <n> of the knowledge server's startup context
+# (shared CLAUDE.md + project CLAUDE.md + memory index) for the current directory, using the plugin's context.sh.
+# Usage: knowledge-context <VAULT_NAME> <part>
+CLAUDE_PLUGIN_OPTION_TOKEN=$(secret "${1:?vault name}") CLAUDE_PROJECT_DIR=$PWD exec sh /home/user/knowledge/plugin/hooks/context.sh "${2:-1}"
