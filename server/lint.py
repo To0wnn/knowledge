@@ -82,6 +82,14 @@ def memo_type(text: str) -> str:
     return t.group(1) if t else ""
 
 
+def open_text(text: str) -> str:
+    """The part of a memo where an open item can live: not the frontmatter, not "## Keuzes" (a decision is no open
+    item), not headings ("### Open"), not "niets open" / "geen open punten"."""
+    body = FRONT.sub("", text, count=1)
+    body = re.sub(r"^## Keuzes\b.*?(?=^## |\Z)", "", body, flags=re.M | re.S)
+    return "\n".join(l for l in body.splitlines() if not l.startswith("#") and not re.search(r"\b(niets|geen)\s+open", l, re.I))
+
+
 def missing_structure(text: str) -> list[str]:
     return [h for h in STRUCTURE if not re.search(rf"^{h}\b", text, re.M)]
 
@@ -139,7 +147,7 @@ def lint(files: dict[str, str], today: date | None = None, mem: str = "memory") 
         if len(text.encode()) > BIG_MEMO and "archief/" not in text:
             report["big_memo_without_archive"].append(f"{name} ({len(text.encode()) // 1024} KB)")
         last = latest_date(text)
-        opens = len(OPEN_WORDS.findall(no_code))  # not in code: `open(...)` or an 'open' column is no open item
+        opens = len(OPEN_WORDS.findall(open_text(no_code)))
         if last and opens and (today - last).days > 45:
             report["possibly_stale_open_item"].append(f"{name}: {opens} open/TODO mention(s), newest date {last}")
         if memo_type(text) not in ("feedback", "user") and (gone := missing_structure(text)):
@@ -202,6 +210,10 @@ if __name__ == "__main__":  # self-check
     assert r["orphan_memo"] == ["c.md"], r  # b.md is linked from a.md
     assert r["missing_frontmatter"] == ["b.md: description, type"], r
     assert r["possibly_stale_open_item"][0].startswith("a.md"), r
+    old = "---\ndescription: hardware nog niet gekocht\n---\n1 jun 2026\n### Open\n- Niets open.\n## Keuzes\n- **Keuze geparkeerd, nog niet besloten**\n"
+    assert not lint({"memory/MEMORY.md": "", "memory/p.md": old}, today=date(2026, 10, 18))["possibly_stale_open_item"]
+    assert lint({"memory/MEMORY.md": "", "memory/q.md": "1 jun 2026\n### Open\n- wacht op onderdelen\n"},
+                today=date(2026, 10, 18))["possibly_stale_open_item"]
     assert not lint({"memory/MEMORY.md": "", "memory/o.md": "1 jun 2026\n```\nopen('x').read()\n```\nuse `open()`\n"},
                     today=date(2026, 10, 18))["possibly_stale_open_item"]
     assert r["possible_secret_in_memo"] == ["b.md: 1 line(s) (values not shown)"], r
