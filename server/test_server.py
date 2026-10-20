@@ -70,7 +70,8 @@ def main():
     env = {**os.environ, "KNOWLEDGE_MEMORY": str(mem), "KNOWLEDGE_HOMELAB": str(lab), "KNOWLEDGE_CLAUDE": str(cla),
            "KNOWLEDGE_TRADE": str(trade), "KNOWLEDGE_TRADE_MEMORY": str(tmem), "KNOWLEDGE_ANPITEK": str(tmp / "anpitek"),
            "KNOWLEDGE_ANPITEK_MEMORY": str(tmp / "anpitek-memory"),
-           "KNOWLEDGE_TOKENS": str(tokens), "KNOWLEDGE_AUDIT": str(tmp / "audit.log"), "KNOWLEDGE_PORT": str(PORT),
+           "KNOWLEDGE_TOKENS": str(tokens), "KNOWLEDGE_ADMIN_DIR": str(tmp), "KNOWLEDGE_PROJECTS_DIR": str(tmp / "projects"),
+           "KNOWLEDGE_PROXY_SECRET": "proxy-secret", "KNOWLEDGE_ADMINS": "anthony", "KNOWLEDGE_AUDIT": str(tmp / "audit.log"), "KNOWLEDGE_PORT": str(PORT),
            "KNOWLEDGE_BIND": "127.0.0.1", "KNOWLEDGE_RESCAN": "3600",
            "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}"}
     proc = subprocess.Popen([sys.executable, str(Path(__file__).with_name("server.py"))], env=env)
@@ -111,7 +112,7 @@ def main():
         assert call("knowledge_list", {"root": "homelab"}, token="agent-token")[0]
         assert "homelab/" not in call("knowledge_search", {"pattern": "overview"}, token="agent-token")[1]
         assert call("knowledge_write", {"path": "memory/x.md", "content": "x"}, token="agent-token")[0]
-        assert http("GET", "/ui/api/graph", token="agent-token")[0] == 403
+        assert http("GET", "/ui/api/graph", token="rw-token")[0] == 401  # tokens are for the API; the UI signs in via Authentik
         # Write guard: a known secret value in a note is refused with a hint; the placeholder is fine.
         err, text = call("knowledge_write", {"path": "memory/leak.md", "content": "db password Sup3rSecret99\n"})
         assert err and "secret set" in text and not (mem / "leak.md").exists(), text
@@ -181,22 +182,22 @@ def main():
         http("POST", "/invalidate", {"paths": ["memory/fact.md"]}, token="watch-token")
         assert "memory/fact.md" not in call("knowledge_list", {"root": "memory"})[1]
 
-        # ---- web UI: login cookie, CSRF header, graph, note, search, lint, ingest
+        # ---- web UI: Authentik identity via Traefik (shared secret), CSRF header, graph, note, search, lint, ingest
         def raw(method, path, body=None, headers=None):
             c = httpc.HTTPConnection("127.0.0.1", PORT, timeout=15)
             c.request(method, path, body=body, headers=headers or {})
             r = c.getresponse()
             return r.status, dict(r.getheaders()), r.read()
-        st, hd, _ = raw("GET", "/ui")
-        assert st == 303 and hd["location"] == "/ui/login", (st, hd)
+        user = lambda name, secret="proxy-secret": {"X-Knowledge-Proxy": secret, "X-authentik-username": name}
+        ck = user("anthony")
+        assert raw("GET", "/ui")[0] == 401
+        assert raw("GET", "/ui", headers={"X-authentik-username": "anthony"})[0] == 401  # header without the secret: forged
+        assert raw("GET", "/ui", headers=user("anthony", "wrong"))[0] == 401
+        assert raw("GET", "/ui/api/graph", headers=user("anthony", ""))[0] == 401
         assert raw("GET", "/ui/static/app.js")[0] == 200  # static is public (no data)
-        st, hd, _ = raw("POST", "/ui/login", "token=wrong", {"Content-Type": "application/x-www-form-urlencoded"})
-        assert st == 303 and "bad=1" in hd["location"]
-        st, hd, _ = raw("POST", "/ui/login", "token=rw-token", {"Content-Type": "application/x-www-form-urlencoded"})
-        cookie = hd["set-cookie"].split(";")[0]
-        assert st == 303 and cookie.startswith("kn_token=") and "HttpOnly" in hd["set-cookie"] and "SameSite=strict" in hd["set-cookie"]
-        ck = {"Cookie": cookie}
+        assert raw("GET", "/", headers=ck)[1].get("location") == "/ui"
         assert raw("GET", "/ui", headers=ck)[0] == 200
+        assert json.loads(raw("GET", "/ui/api/me", headers=ck)[2]) == {"user": "anthony", "admin": True, "projects": ["homelab", "anpitek", "trade"]}
         g = json.loads(raw("GET", "/ui/api/graph", headers=ck)[2])
         assert g["nodes"] and not any(n["id"].endswith("/MEMORY.md") for n in g["nodes"]), g["nodes"][:3]  # index not drawn, still readable below
         assert {n["project"] for n in g["nodes"] if n["id"].startswith("trade")} == {"trade"}
@@ -210,12 +211,12 @@ def main():
         assert hits and hits[0]["path"] == "memory/MEMORY.md", hits
         assert isinstance(json.loads(raw("GET", "/ui/api/lint", headers=ck)[2]), dict)
         body = json.dumps({"text": "# Source\nRouter firmware notes", "title": "Router notes"})
-        assert raw("POST", "/ui/api/ingest", body, {**ck, "Content-Type": "application/json"})[0] == 401  # no CSRF header
+        assert raw("POST", "/ui/api/ingest", body, {**ck, "Content-Type": "application/json"})[0] == 403  # no CSRF header
         st, _, res = raw("POST", "/ui/api/ingest", body, {**ck, "Content-Type": "application/json", "X-Knowledge-UI": "1"})
         res = json.loads(res)
         assert st == 200 and res["path"].startswith("homelab/sources/") and res["path"].endswith("router-notes.md"), res
         src = lab / "sources" / res["path"].split("/")[-1]
-        assert "Router firmware notes" in src.read_text() and "by: laptop" in src.read_text()
+        assert "Router firmware notes" in src.read_text() and "by: user:anthony" in src.read_text()
         assert "| Router notes |" in (lab / "sources" / "LOG.md").read_text()
         html = b"<html><head><title>Wolf guide</title></head><body><nav>menu</nav><article><h1>Wolf guide</h1>" + b"".join(f"<p>Paragraph {i}: Games on Whales streams game number {i} to player {i % 3}, with its own controller and audio.</p>".encode() for i in range(20)) + b"</article></body></html>"
         st, _, res = raw("POST", "/ui/api/ingest", html, {**ck, "X-Knowledge-UI": "1", "X-Filename": "wolf.html", "Content-Type": "application/octet-stream"})
@@ -238,12 +239,50 @@ def main():
         st, _, res = post({"path": "trade-memory/project_new.md", "text": "new\n", "index_line": "- [New](project_new.md) — x\n- injected"})
         assert st == 200 and (tmem / "MEMORY.md").read_text().endswith("- [New](project_new.md) — x - injected\n"), (tmem / "MEMORY.md").read_text()
         assert post({"path": "trade/STATUS2.md", "text": "x", "index_line": "- x"})[0] == 409  # index line only for memos
-        _, hd2, _ = raw("POST", "/ui/login", "token=ro-token", {"Content-Type": "application/x-www-form-urlencoded"})
-        ro = {"Cookie": hd2["set-cookie"].split(";")[0]}
+        # People: unknown users get no access but show up for the admin; access per project, read or write.
+        admin = lambda path, body, hdr=ck: raw("POST", path, json.dumps(body), {**hdr, "Content-Type": "application/json", "X-Knowledge-UI": "1"})
+        assert raw("GET", "/ui", headers=user("bob"))[0] == 403
+        assert "bob" in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["users"]
+        assert admin("/ui/api/admin/user", {"username": "bob", "projects": {"trade": "read"}}, user("bob"))[0] == 403  # only admins
+        assert admin("/ui/api/admin/user", {"username": "bob", "projects": {"nope": "read"}})[0] == 400
+        assert admin("/ui/api/admin/user", {"username": "anthony", "projects": {}})[0] == 400  # admins come from the config
+        assert admin("/ui/api/admin/user", {"username": "bob", "projects": {"trade": "read", "homelab": "none"}})[0] == 200
+        ro = user("bob")
+        assert json.loads(raw("GET", "/ui/api/me", headers=ro)[2]) == {"user": "bob", "admin": False, "projects": ["trade"]}
         assert not json.loads(raw("GET", "/ui/api/note?path=trade-memory/plan.md", headers=ro)[2])["writable"]
         assert post({"path": "trade-memory/x.md", "text": "x"}, ro)[0] == 409
+        assert raw("GET", "/ui/api/note?path=memory/MEMORY.md", headers=ro)[0] == 404
+        assert not json.loads(raw("GET", "/ui/api/search?q=Item%20119", headers=ro)[2])["hits"]
+        assert all(n["id"].startswith("trade") for n in json.loads(raw("GET", "/ui/api/graph", headers=ro)[2])["nodes"])
+        assert json.loads(raw("GET", "/ui/api/lint", headers=ro)[2]) == {} and raw("GET", "/ui/admin", headers=ro)[0] == 403
+        assert raw("GET", "/ui/api/admin", headers=ro)[0] == 403
+        assert admin("/ui/api/admin/user", {"username": "bob", "projects": {"trade": "write"}})[0] == 200
+        assert json.loads(raw("GET", "/ui/api/note?path=trade-memory/plan.md", headers=ro)[2])["writable"]
+        assert admin("/ui/api/admin/user", {"username": "bob", "delete": True})[0] == 200
+        assert raw("GET", "/ui", headers=ro)[0] == 403
+        # Tokens: created in the UI (shown once, hash stored), usable right away, revoked right away.
+        st, _, res = admin("/ui/api/admin/token", {"name": "phone", "write": False, "roots": ["trade", "trade-memory"]})
+        tok = json.loads(res)["token"]
+        assert st == 200 and tok not in tokens.read_text() and json.loads(tokens.read_text())["phone"]["roots"] == ["trade", "trade-memory"]
+        assert admin("/ui/api/admin/token", {"name": "phone"})[0] == 400  # name in use
+        assert call("knowledge_write", {"path": "memory/tokleak.md", "content": f"phone token {tok}\n"})[0]  # a token is a secret
+        assert admin("/ui/api/admin/token", {"name": "x", "roots": ["../etc"]})[0] == 400
+        assert not call("knowledge_read", {"path": "trade-memory/plan.md"}, token=tok)[0]
+        assert call("knowledge_read", {"path": "memory/fact.md"}, token=tok)[0]  # outside its scope
+        assert call("knowledge_write", {"path": "trade-memory/y.md", "content": "y"}, token=tok)[0]  # read-only
+        assert admin("/ui/api/admin/token", {"name": "phone", "revoke": True})[0] == 200
+        assert http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, token=tok)[0] == 401
+        # Projects: created in the UI with docs + memory roots, writable, known to /ui/api/me and the session context.
+        assert admin("/ui/api/admin/project", {"name": "Bad-Name"})[0] == 400
+        assert admin("/ui/api/admin/project", {"name": "trade"})[0] == 400
+        assert admin("/ui/api/admin/project", {"name": "garden"})[0] == 200
+        assert (tmp / "projects/garden/memory/MEMORY.md").exists()
+        assert not call("knowledge_write", {"path": "garden-memory/project_beds.md", "content": "raised beds\n"})[0]
+        assert "raised beds" in call("knowledge_read", {"path": "garden-memory/project_beds.md"})[1]
+        assert "garden" in json.loads(raw("GET", "/ui/api/me", headers=ck)[2])["projects"]
+        assert "project garden" in http("GET", "/context/1?project=/home/x/garden")[1]
         files = json.loads(raw("GET", "/ui/api/recent?project=trade", headers=ck)[2])["files"]
-        assert files[0]["path"] in ("trade-memory/MEMORY.md", "trade-memory/project_new.md") and files[0]["by"] == "laptop", files[:3]
+        assert files[0]["path"] in ("trade-memory/MEMORY.md", "trade-memory/project_new.md") and files[0]["by"] == "user:anthony", files[:3]
         assert all(f["path"].startswith("trade") for f in files)
         g = json.loads(raw("GET", "/ui/api/graph", headers=ck)[2])
         assert all("cluster" in n and "sources" in n for n in g["nodes"]) and {"isolated", "bridges", "surprising", "sparse_topics"} <= set(g["insights"])

@@ -5,7 +5,7 @@
 const GROUPS = ["project", "feedback", "reference", "user", "infra", "incident", "doc", "skill", "source", "index"];
 // Topic clusters reuse the group hues in a fixed order; clusters beyond these share the neutral doc colour.
 const CLUSTER_HUES = ["project", "feedback", "reference", "user", "infra", "incident", "skill", "source"];
-const PROJECTS = ["homelab", "anpitek", "trade"];
+let PROJECTS = ["homelab", "anpitek", "trade"]; // replaced by the projects this user may see (/ui/api/me)
 const ROOT_PROJECT = { memory: "homelab", homelab: "homelab", anpitek: "anpitek", "anpitek-memory": "anpitek",
   trade: "trade", "trade-memory": "trade", claude: "shared" };
 const MEMORY_ROOT = { homelab: "memory", anpitek: "anpitek-memory", trade: "trade-memory" };
@@ -15,20 +15,20 @@ const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const projectOf = (path) => ROOT_PROJECT[path.split("/")[0]] || "homelab";
 const api = (path, opts = {}) => fetch(path, { credentials: "same-origin", ...opts, headers: { "X-Knowledge-UI": "1", ...(opts.headers || {}) } })
-  .then(async (r) => { if (r.status === 401) location.href = "/ui/login"; const j = await r.json(); if (!r.ok) throw new Error(j.error || r.statusText); return j; });
+  .then(async (r) => { if (r.status === 401) location.reload(); const j = await r.json(); if (!r.ok) throw new Error(j.error || r.statusText); return j; });
 const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* blocked */ } } };
 
 let data = { nodes: [], links: [] };
 let byId = new Map(), neighbors = new Map(), slugToId = new Map(), clusterColor = new Map();
 let hidden = new Set(), selected = null, hover = null, focusSet = new Set();
-let project = PROJECTS.includes(store.get("kn_project")) ? store.get("kn_project") : "homelab";
+let project = store.get("kn_project") || "homelab";
 let colorBy = store.get("kn_colorby") === "type" ? "type" : "cluster"; // topics by default: they match the islands
 let labelMin = 0, current = null, editing = false, Graph, Graph3D = null;
 
 const inProject = (p) => p === project || p === "shared";
 // A shared note (skill) shows only in the projects that link to it.
 const nodeIn = (n) => n.project === project || (n.project === "shared" && (!n.projects || n.projects.includes(project)));
-const lintProject = (item) => item.startsWith("anpitek") ? "anpitek" : item.startsWith("trade") ? "trade" : "homelab";
+const lintProject = (item) => ROOT_PROJECT[item.split("/")[0]] || "homelab"; // homelab memory items carry no root prefix
 const nodeColor = (n) => colorBy === "cluster" ? (clusterColor.get(n.cluster) || css("--g-doc")) : (css(`--g-${n.group}`) || css("--g-doc"));
 const linkId = (end) => end.id || end;
 
@@ -589,7 +589,7 @@ document.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); quickOpen(); return; }
   if (typing) return;
   if (e.key === "/") { e.preventDefault(); $("q").focus(); }
-  else if (["1", "2", "3"].includes(e.key)) switchProject(PROJECTS[Number(e.key) - 1]);
+  else if (/^[1-9]$/.test(e.key) && PROJECTS[Number(e.key) - 1]) switchProject(PROJECTS[Number(e.key) - 1]);
   else if (e.key.toLowerCase() === "e" && current?.writable) { e.preventDefault(); startEdit(); }
   else if (e.key.toLowerCase() === "l") { $("local").checked = !$("local").checked; applyView(true); }
   else if (e.key === "Escape") { selected = null; setFocus(null); if ($("local").checked) applyView(true); }
@@ -738,7 +738,18 @@ function connectLive() {
   es.onerror = () => $("live").classList.remove("on"); // the browser reconnects by itself (retry: 3 s)
 }
 
-loadGraph().then(() => {
+async function loadMe() {
+  // Projects created in the admin page have roots <name> (docs) and <name>-memory, like the built-in ones.
+  const me = await api("/ui/api/me");
+  PROJECTS = me.projects;
+  for (const p of PROJECTS) if (!MEMORY_ROOT[p]) { MEMORY_ROOT[p] = `${p}-memory`; ROOT_PROJECT[p] = p; ROOT_PROJECT[`${p}-memory`] = p; }
+  if (!PROJECTS.includes(project)) project = PROJECTS[0];
+  $("admin-link").hidden = !me.admin;
+  $("who").textContent = me.user;
+  if (!me.admin) document.querySelector('[data-tab="lint"]').hidden = document.querySelector('[data-tab="ingest"]').hidden = true;
+}
+
+loadMe().then(loadGraph).then(() => {
   connectLive();
   loadLint(false);
   const id = decodeURIComponent(location.hash.slice(1));

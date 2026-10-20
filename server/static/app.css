@@ -151,3 +151,30 @@ body.login { display: grid; place-items: center; grid-template: none; }
   }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* admin page: tokens, people, projects */
+body.admin-page { display: block; overflow-y: auto; }
+.admin { max-width: 1040px; margin: 0 auto; padding: 20px 16px 48px; display: grid; gap: 32px; }
+.admin > section { min-width: 0; } /* else a wide table stretches the grid column past the screen */
+.admin h2 { margin: 0 0 4px; font-size: 17px; }
+.admin h3 { margin: 0; font-size: 14px; }
+.admin section > p.muted { margin: 0 0 12px; max-width: 70ch; }
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.admin table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.admin th, .admin td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; white-space: nowrap; }
+.admin tbody tr:last-child td { border-bottom: 0; }
+.admin th { color: var(--muted); font-weight: 600; font-size: 12px; }
+.admin td.actions { display: flex; gap: 6px; justify-content: flex-end; }
+.mono { font-family: var(--mono); font-size: 12.5px; }
+.admin-form { display: grid; gap: 8px; margin-top: 14px; max-width: 520px; }
+.admin-form.inline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; max-width: none; }
+.admin-form input:not([type=checkbox]) { padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
+.admin-form fieldset { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin: 0; }
+.admin-form legend { font-size: 12px; color: var(--muted); padding: 0 4px; }
+.checks { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.admin button:not(.ghost) { padding: 7px 14px; border: 0; border-radius: 6px; background: var(--accent); color: var(--panel); font-weight: 600; justify-self: start; }
+button.danger { color: var(--error); }
+.new-token { margin-top: 14px; padding: 12px 14px; border: 1px solid var(--accent); border-radius: 8px; background: var(--hover); }
+.new-token p { margin: 0 0 8px; }
+.new-token .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.new-token code { word-break: break-all; padding: 6px 8px; background: var(--panel); border-radius: 6px; user-select: all; }

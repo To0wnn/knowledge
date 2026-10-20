@@ -15,9 +15,12 @@ Run:    uv run server.py   (systemd user unit knowledge-server.service)
 import asyncio
 import fnmatch
 import hashlib
+import hmac
+import html
 import json
 import os
 import re
+import secrets
 import tempfile
 import threading
 import time
@@ -53,13 +56,23 @@ ROOTS = {
 }
 # The "claude" root is a dedicated share (CLAUDE.md, skills/, agents/), never all of ~/.claude (credentials).
 CLAUDE_READABLE = ("CLAUDE.md", "skills/*", "agents/*")
-WRITABLE = ("memory/*.md", "memory/archief/*.md", "homelab/*.md", "anpitek-memory/*.md", "anpitek-memory/archief/*.md",
+WRITABLE = ["memory/*.md", "memory/archief/*.md", "homelab/*.md", "anpitek-memory/*.md", "anpitek-memory/archief/*.md",
             "trade-memory/*.md", "trade-memory/archief/*.md", "anpitek/*/*.md", "trade/*.md", "trade/docs/*.md",
-            "memory/sessions/*.md", "anpitek-memory/sessions/*.md", "trade-memory/sessions/*.md")
+            "memory/sessions/*.md", "anpitek-memory/sessions/*.md", "trade-memory/sessions/*.md"]  # projects added in the UI extend it
 SKIP_PARTS = {".git", "__pycache__", "node_modules", ".venv", "venv", ".next", ".cache"}
 SKIP_NAMES = re.compile(r"(\.bak|\.vault_pass$|\.env$|credentials|\.pem$|\.key$|id_ed25519|id_rsa)")
 MAX_BYTES = 2_000_000
-TOKENS_FILE = Path(os.environ.get("KNOWLEDGE_TOKENS", HOME / ".config/knowledge-server/tokens.json"))
+# Admin state the web UI manages (tokens, users, projects): a writable directory, unlike the read-only /config.
+ADMIN_DIR = Path(os.environ.get("KNOWLEDGE_ADMIN_DIR", HOME / ".config/knowledge-server"))
+TOKENS_FILE = Path(os.environ.get("KNOWLEDGE_TOKENS", ADMIN_DIR / "tokens.json"))
+USERS_FILE = ADMIN_DIR / "users.json"
+PROJECTS_FILE = ADMIN_DIR / "projects.json"
+# Projects created in the UI live here (<name>/docs, <name>/memory), next to the built-in ones on the VM.
+PROJECTS_DIR = Path(os.environ.get("KNOWLEDGE_PROJECTS_DIR", HOME / ".local/share/knowledge-projects"))
+# The web UI trusts the Authentik user header only when Traefik also sends this shared secret, because the
+# container port is reachable on the LAN without Traefik.
+PROXY_SECRET = os.environ.get("KNOWLEDGE_PROXY_SECRET", "")
+ADMINS = {u.strip() for u in os.environ.get("KNOWLEDGE_ADMINS", "").split(",") if u.strip()}
 SECRETS_FILE = Path(os.environ.get("KNOWLEDGE_SECRETS", HOME / ".config/knowledge-server/secrets.json"))
 AUDIT = Path(os.environ.get("KNOWLEDGE_AUDIT", HOME / ".local/state/knowledge-server/audit.log"))
 
@@ -106,7 +119,7 @@ def secret_hashes() -> frozenset:
         return frozenset()
     if (st.st_mtime_ns, st.st_size) != _secrets_cache[:2]:
         _secrets_cache = (st.st_mtime_ns, st.st_size, frozenset(json.loads(SECRETS_FILE.read_text())))
-    return _secrets_cache[2]
+    return _secrets_cache[2] | load_tokens().keys()  # device tokens (also those made in the web UI) are secrets too
 
 
 def redact(text: str) -> str:
@@ -296,16 +309,19 @@ def version_text(rel: str, vid: str) -> str:
 
 index = Index()
 vec = vectors.Vectors(index)
-_graph_cache: tuple[int, dict] = (-1, {})
+_graph_cache: dict[tuple, tuple[int, dict]] = {}
 
 
 def get_graph() -> dict:
-    """The graph with communities and insights, rebuilt only after a change (index.gen)."""
-    global _graph_cache
-    if _graph_cache[0] != index.gen:
+    """The graph with communities and insights over what this device may see, rebuilt only after a change
+    (index.gen). Built from the visible files only, so names outside the scope never show up in links or insights."""
+    scope = tuple(device.get().get("roots") or ())
+    hit = _graph_cache.get(scope)
+    if not hit or hit[0] != index.gen:
         gen = index.gen
-        _graph_cache = (gen, kb_graph.build({rel: text for rel, text, _ in index.items()}))
-    return _graph_cache[1]
+        hit = (gen, kb_graph.build({rel: text for rel, text, _ in index.items() if in_scope(rel)}))
+        _graph_cache[scope] = hit
+    return hit[1]
 
 
 def writable_path(rel: str) -> bool:
@@ -313,9 +329,18 @@ def writable_path(rel: str) -> bool:
     return any(PurePosixPath(rel).match(p) for p in WRITABLE)
 
 
+def may_write(rel: str) -> bool:
+    dev = device.get()
+    wr = dev.get("write_roots")  # web UI users: only the projects they may edit
+    return bool(dev.get("write")) and writable_path(rel) and (wr is None or rel.split("/", 1)[0] in wr)
+
+
 def check_writable(rel: str):
-    if not device.get().get("write"):
+    dev = device.get()
+    if not dev.get("write"):
         raise ToolError("this device token is read-only")
+    if dev.get("write_roots") is not None and rel.split("/", 1)[0] not in dev["write_roots"]:
+        raise ToolError("you may only read this project")
     if not writable_path(rel):
         raise ToolError(f"writes are allowed only for {', '.join(WRITABLE)}")
 
@@ -704,6 +729,9 @@ def project_for(directory: str) -> str:
         return directory
     if any(x.startswith("trade") for x in parts):
         return "trade"
+    extra = next((p for p in PROJECTS if p not in BUILTIN_PROJECTS and p in parts), None)
+    if extra:
+        return extra
     return "anpitek" if "anpitek" in parts else "homelab"
 
 
@@ -765,12 +793,110 @@ def token_device(given: str) -> dict | None:
             "roots": cfg.get("roots") or [], "redact": bool(cfg.get("redact"))}
 
 
-class BearerAuth:
-    """ASGI middleware: every request needs a device token, matched by its SHA-256 hash. API clients send
-    'Authorization: Bearer <token>'; the browser UI uses the HttpOnly cookie set by /ui/login. UI writes also need
-    the X-Knowledge-UI header, which other sites cannot send (CSRF)."""
+def write_json(path: Path, data):
+    """Atomic replace, 0600: tokens.json holds hashes only, but users and projects are nobody else's business."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".knowledge-")
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f, indent=2, sort_keys=True)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
 
-    OPEN = ("/health", "/ui/login", "/ui/static/")
+
+_json_cache: dict[Path, tuple[int, int, object]] = {}
+
+
+def read_json(path: Path, default):
+    """Re-read only when the file changed, so per-request lookups stay cheap."""
+    try:
+        st = path.stat()
+    except FileNotFoundError:
+        return default
+    hit = _json_cache.get(path)
+    if not hit or hit[:2] != (st.st_mtime_ns, st.st_size):
+        hit = (st.st_mtime_ns, st.st_size, json.loads(path.read_text()))
+        _json_cache[path] = hit
+    return hit[2]
+
+
+# ---------------------------------------------------------------- projects created in the web UI
+BUILTIN_PROJECTS = frozenset(PROJECTS)
+PROJECT_NAME = re.compile(r"^[a-z][a-z0-9]{1,23}$")  # no "-": "<name>-memory" must never clash with another root
+
+
+def mount_project(name: str):
+    """Give a UI project its two roots (<name> = docs, Markdown only; <name>-memory = memos), like the built-in ones.
+    graph.py reads PROJECTS, MEMORY_ROOTS and MD_ONLY at call time, so extending them in place is enough."""
+    docs, mem = name, f"{name}-memory"
+    ROOTS[docs], ROOTS[mem] = PROJECTS_DIR / name / "docs", PROJECTS_DIR / name / "memory"
+    PROJECTS[name] = (docs, mem)
+    kb_graph.MEMORY_ROOTS.add(mem)
+    MD_ONLY.add(docs)
+    WRITABLE.extend([f"{docs}/*.md", f"{docs}/*/*.md", f"{mem}/*.md", f"{mem}/archief/*.md", f"{mem}/sessions/*.md"])
+
+
+def load_projects():
+    for name in read_json(PROJECTS_FILE, []):
+        if name not in PROJECTS and PROJECT_NAME.match(name):
+            mount_project(name)
+
+
+def create_project(name: str):
+    if not PROJECT_NAME.match(name):
+        raise ToolError("project name: 2-24 lowercase letters or digits, starting with a letter")
+    if name in PROJECTS or name in ROOTS or f"{name}-memory" in ROOTS:
+        raise ToolError(f"{name} already exists")
+    base = PROJECTS_DIR / name
+    (base / "docs").mkdir(parents=True, exist_ok=True)
+    (base / "memory").mkdir(parents=True, exist_ok=True)
+    index_md = base / "memory" / "MEMORY.md"
+    if not index_md.exists():
+        index_md.write_text(f"# Memory Index ({name})\n\nOne line per memo under the fitting heading.\n\n## General\n")
+    write_json(PROJECTS_FILE, sorted({*read_json(PROJECTS_FILE, []), name}))
+    mount_project(name)
+    index.rescan()
+
+
+# ---------------------------------------------------------------- web UI users (identity from Authentik)
+def user_device(username: str) -> dict | None:
+    """The device record for a person signed in through Authentik. Admins (KNOWLEDGE_ADMINS) see and edit everything;
+    others only the projects an admin gave them (read or write). None = no access (yet)."""
+    if username in ADMINS:
+        return {"name": f"user:{username}", "user": username, "admin": True, "write": True, "roots": [], "redact": False}
+    perms = {p: m for p, m in read_json(USERS_FILE, {}).get(username, {}).get("projects", {}).items() if p in PROJECTS}
+    if not perms:
+        return None
+    write_roots = [r for p, m in perms.items() if m == "write" for r in PROJECTS[p]]
+    # roots is never empty here: an empty list would mean "everything" (see in_scope).
+    return {"name": f"user:{username}", "user": username, "admin": False, "write": bool(write_roots),
+            "roots": [r for p in perms for r in PROJECTS[p]], "write_roots": write_roots, "redact": False}
+
+
+def note_user(username: str):
+    """Remember someone who signed in without access, so an admin can grant it in the UI."""
+    users = read_json(USERS_FILE, {})
+    if username not in users and username not in ADMINS and len(users) < 500:
+        write_json(USERS_FILE, {**users, username: {"projects": {}, "first_seen": int(time.time())}})
+
+
+def proxied_user(headers: dict) -> str:
+    """The Authentik username, but only on requests that really came through Traefik (shared secret header)."""
+    given = headers.get(b"x-knowledge-proxy", b"").decode()
+    if not (PROXY_SECRET and given and hmac.compare_digest(given, PROXY_SECRET)):
+        return ""
+    return headers.get(b"x-authentik-username", b"").decode().strip()
+
+
+NO_ACCESS = """<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Knowledge</title><link rel="stylesheet" href="/ui/static/app.css"><body class="login"><main class="login-card">
+<h1>Knowledge</h1><p>{msg}</p></main></body></html>"""
+
+
+class BearerAuth:
+    """ASGI middleware. API clients (Claude Code plugin, agents, the VM watcher) send 'Authorization: Bearer <token>',
+    matched by its SHA-256 hash. The web UI has no tokens: Traefik signs people in with Authentik and passes the
+    username plus a shared secret; the user's projects come from users.json. UI writes also need the X-Knowledge-UI
+    header, which other sites cannot send (CSRF)."""
 
     def __init__(self, app):
         self.app = app
@@ -781,26 +907,37 @@ class BearerAuth:
         path = scope["path"]
         if path == "/health":
             return await PlainTextResponse("ok")(scope, receive, send)
-        if path.startswith(self.OPEN):
+        if path.startswith("/ui/static/"):
             return await self.app(scope, receive, send)
         headers = dict(scope["headers"])
+        if path in ("/", "/ui") or path.startswith("/ui/"):
+            return await self.ui(scope, receive, send, path, headers)
         auth = headers.get(b"authorization", b"").decode()
-        given = auth[7:] if auth.lower().startswith("bearer ") else ""
-        is_ui = path == "/ui" or path.startswith("/ui/")
-        if not given and is_ui:
-            cookies = headers.get(b"cookie", b"").decode()
-            given = next((c.split("=", 1)[1] for c in cookies.split("; ") if c.startswith(COOKIE + "=")), "")
-        dev = token_device(given)
-        if dev and is_ui and scope["method"] == "POST" and headers.get(b"x-knowledge-ui") != b"1":
-            dev = None
-        if dev and is_ui and (dev["roots"] or dev["redact"]):  # scoped agent tokens: MCP only, no web UI
-            return await JSONResponse({"error": "this token has no web UI access"}, status_code=403)(scope, receive, send)
-        if dev:
-            device.set(dev)
-            return await self.app(scope, receive, send)
-        if is_ui and scope["method"] == "GET" and not path.startswith("/ui/api/"):
-            return await RedirectResponse("/ui/login", status_code=303)(scope, receive, send)
-        return await JSONResponse({"error": "invalid or missing token"}, status_code=401)(scope, receive, send)
+        dev = token_device(auth[7:] if auth.lower().startswith("bearer ") else "")
+        if not dev:
+            return await JSONResponse({"error": "invalid or missing token"}, status_code=401)(scope, receive, send)
+        device.set(dev)
+        return await self.app(scope, receive, send)
+
+    async def ui(self, scope, receive, send, path, headers):
+        api = path.startswith("/ui/api/")
+        user = proxied_user(headers)
+        if not user:
+            msg = "Open the knowledge base via https://knowledge.to0wnn.com/ui (sign in with Authentik)."
+            resp = JSONResponse({"error": msg}, status_code=401) if api else HTMLResponse(NO_ACCESS.format(msg=msg), 401)
+            return await resp(scope, receive, send)
+        if scope["method"] != "GET" and headers.get(b"x-knowledge-ui") != b"1":
+            return await JSONResponse({"error": "missing X-Knowledge-UI header"}, status_code=403)(scope, receive, send)
+        dev = user_device(user)
+        if not dev:
+            await asyncio.to_thread(note_user, user)
+            msg = f"Signed in as {html.escape(user)}, but no project is shared with you yet. Ask the admin."
+            resp = JSONResponse({"error": msg}, status_code=403) if api else HTMLResponse(NO_ACCESS.format(msg=msg), 403)
+            return await resp(scope, receive, send)
+        if path == "/":
+            return await RedirectResponse("/ui", status_code=303)(scope, receive, send)
+        device.set(dev)
+        return await self.app(scope, receive, send)
 
 
 @server.custom_route("/sessions", methods=["POST"])
@@ -865,16 +1002,16 @@ async def context_route(request: Request):
 
 # ---------------------------------------------------------------- web UI ("brain" graph, search, preview, lint, ingest)
 STATIC = Path(__file__).with_name("static")
-COOKIE = "kn_token"
 # Release id = hash of the UI files, fixed at startup. Pages link app.js/app.css with ?v=<release>, so every deploy
 # is a new URL (no stale script after a refresh), and the live stream tells open tabs to reload on a new release.
-RELEASE = hashlib.sha256(b"".join((STATIC / f).read_bytes() for f in ("index.html", "login.html", "app.js", "app.css"))).hexdigest()[:12]
+RELEASE = hashlib.sha256(b"".join((STATIC / f).read_bytes() for f in ("index.html", "admin.html", "app.js", "admin.js", "app.css"))).hexdigest()[:12]
 
 
 def page(name: str) -> HTMLResponse:
-    html = (STATIC / name).read_text().replace("/ui/static/app.js\"", f"/ui/static/app.js?v={RELEASE}\"") \
-        .replace("/ui/static/app.css\"", f"/ui/static/app.css?v={RELEASE}\"")
-    return HTMLResponse(html.replace("<html lang=\"en\">", f"<html lang=\"en\" data-release=\"{RELEASE}\">"),
+    text = (STATIC / name).read_text()
+    for f in ("app.js", "admin.js", "app.css"):
+        text = text.replace(f"/ui/static/{f}\"", f"/ui/static/{f}?v={RELEASE}\"")
+    return HTMLResponse(text.replace("<html lang=\"en\">", f"<html lang=\"en\" data-release=\"{RELEASE}\">"),
                         headers={"Cache-Control": "no-cache"})  # the page itself is always fetched fresh
 
 
@@ -883,27 +1020,107 @@ async def ui_page(request: Request):
     return page("index.html")
 
 
-@server.custom_route("/ui/login", methods=["GET", "POST"])
-async def ui_login(request: Request):
-    if request.method == "GET":
-        return page("login.html")
-    token = (await request.body()).decode().partition("token=")[2].split("&")[0]
-    from urllib.parse import unquote_plus
-    token = unquote_plus(token).strip()
-    if not token_device(token):
-        return RedirectResponse("/ui/login?bad=1", status_code=303)
-    resp = RedirectResponse("/ui", status_code=303)
-    # One year, so the browser stays signed in; HttpOnly + SameSite=Strict keep it away from scripts and other sites.
-    resp.set_cookie(COOKIE, token, max_age=365 * 86400, httponly=True, secure=request.url.scheme == "https"
-                    or request.headers.get("x-forwarded-proto") == "https", samesite="strict", path="/ui")
-    return resp
+@server.custom_route("/ui/api/me", methods=["GET"])
+async def ui_me(request: Request):
+    dev = device.get()
+    roots = dev.get("roots")
+    return JSONResponse({"user": dev.get("user"), "admin": bool(dev.get("admin")),
+                         "projects": [p for p, (d, m) in PROJECTS.items() if not roots or d in roots]})
 
 
-@server.custom_route("/ui/logout", methods=["GET"])
-async def ui_logout(request: Request):
-    resp = RedirectResponse("/ui/login", status_code=303)
-    resp.delete_cookie(COOKIE, path="/ui")
-    return resp
+# ---------------------------------------------------------------- admin: users, projects, tokens (admins only)
+TOKEN_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$")
+_admin_lock = asyncio.Lock()
+
+
+def admin_only(handler):
+    async def wrapped(request: Request):
+        if not device.get().get("admin"):
+            return JSONResponse({"error": "admins only"}, status_code=403)
+        try:
+            async with _admin_lock:
+                return await handler(request, await request.json() if request.method == "POST" else {})
+        except (ToolError, ValueError, TypeError, AttributeError) as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+    wrapped.__name__ = handler.__name__
+    return wrapped
+
+
+@server.custom_route("/ui/admin", methods=["GET"])
+async def ui_admin_page(request: Request):
+    if not device.get().get("admin"):
+        return HTMLResponse(NO_ACCESS.format(msg="Admins only."), 403)
+    return page("admin.html")
+
+
+@server.custom_route("/ui/api/admin", methods=["GET"])
+@admin_only
+async def ui_admin_state(request: Request, _):
+    tokens = read_json(TOKENS_FILE, {})
+    return JSONResponse({
+        "admins": sorted(ADMINS),
+        "users": read_json(USERS_FILE, {}),
+        "projects": [{"name": p, "docs": d, "memory": m, "builtin": p in BUILTIN_PROJECTS} for p, (d, m) in PROJECTS.items()],
+        "roots": sorted(ROOTS),
+        "tokens": [{"name": n, **{k: v for k, v in cfg.items() if k != "sha256"}} for n, cfg in sorted(tokens.items())],
+    })
+
+
+@server.custom_route("/ui/api/admin/user", methods=["POST"])
+@admin_only
+async def ui_admin_user(request: Request, body: dict):
+    """{"username": "...", "projects": {"homelab": "read" | "write" | "none"}} or {"username": "...", "delete": true}."""
+    name = str(body["username"]).strip()
+    if not re.fullmatch(r"[\w.@+-]{1,150}", name) or name in ADMINS:
+        raise ToolError("unknown or protected username (admins are set in the server config)")
+    users = dict(read_json(USERS_FILE, {}))
+    if body.get("delete"):
+        users.pop(name, None)
+    else:
+        perms = {p: m for p, m in dict(body.get("projects", {})).items() if m in ("read", "write")}
+        if set(perms) - set(PROJECTS):
+            raise ToolError(f"unknown project: {', '.join(sorted(set(perms) - set(PROJECTS)))}")
+        users[name] = {**users.get(name, {}), "projects": perms}
+    write_json(USERS_FILE, users)
+    audit("admin-user", name)
+    return JSONResponse({"ok": True})
+
+
+@server.custom_route("/ui/api/admin/project", methods=["POST"])
+@admin_only
+async def ui_admin_project(request: Request, body: dict):
+    name = str(body["name"]).strip()
+    await asyncio.to_thread(create_project, name)
+    audit("admin-project", name)
+    return JSONResponse({"ok": True, "project": name})
+
+
+@server.custom_route("/ui/api/admin/token", methods=["POST"])
+@admin_only
+async def ui_admin_token(request: Request, body: dict):
+    """Create {"name", "write", "roots": [...] (empty = all), "redact"} -> the token, shown once; or {"name", "revoke": true}.
+    Only the SHA-256 is stored, so a lost token cannot be shown again: revoke it and make a new one."""
+    name = str(body["name"]).strip()
+    tokens = dict(read_json(TOKENS_FILE, {}))
+    if body.get("revoke"):
+        if name not in tokens:
+            raise ToolError(f"no token {name}")
+        del tokens[name]
+        write_json(TOKENS_FILE, tokens)
+        audit("admin-token-revoke", name)
+        return JSONResponse({"ok": True})
+    if not TOKEN_NAME.match(name) or name in tokens:
+        raise ToolError("token name: letters, digits, . _ - (max 40), and not in use yet")
+    roots = [str(r) for r in body.get("roots", [])]
+    if set(roots) - set(ROOTS):
+        raise ToolError(f"unknown root: {', '.join(sorted(set(roots) - set(ROOTS)))}")
+    token = secrets.token_urlsafe(32)
+    tokens[name] = {"sha256": hashlib.sha256(token.encode()).hexdigest(), "write": bool(body.get("write")),
+                    "roots": roots, "redact": bool(body.get("redact")), "created": time.strftime("%Y-%m-%d"),
+                    "by": device.get()["user"]}
+    write_json(TOKENS_FILE, tokens)
+    audit("admin-token", name)
+    return JSONResponse({"ok": True, "name": name, "token": token})
 
 
 @server.custom_route("/ui/static/{name:path}", methods=["GET"])
@@ -969,7 +1186,7 @@ async def ui_semantic(request: Request):
     project = request.query_params.get("project", "")
     roots = tuple(r + "/" for r in PROJECTS[project] + ("claude",)) if project in PROJECTS else ()
     q = request.query_params.get("q", "").strip()[:500]
-    hits = await asyncio.to_thread(vec.search, q, roots, 15) if q else []
+    hits = [h for h in await asyncio.to_thread(vec.search, q, roots, 30) if in_scope(h["path"])][:15] if q else []
     return JSONResponse({"hits": hits, "status": vec.status()})
 
 
@@ -980,7 +1197,7 @@ async def ui_related(request: Request):
     except ToolError as e:
         return JSONResponse({"error": str(e)}, status_code=404)
     graph = await asyncio.to_thread(get_graph)
-    return JSONResponse({"related": kb_graph.related(graph, rel, 12, vec.similar(rel))})
+    return JSONResponse({"related": [r for r in kb_graph.related(graph, rel, 30, vec.similar(rel)) if in_scope(r["id"])][:12]})
 
 
 @server.custom_route("/ui/api/note", methods=["GET"])
@@ -991,7 +1208,7 @@ async def ui_note(request: Request):
     except (ToolError, OSError) as e:
         return JSONResponse({"error": str(e)}, status_code=404)
     return JSONResponse({"path": rel, "version": version(data), "text": data.decode("utf-8", errors="replace"),
-                         "writable": bool(device.get().get("write")) and writable_path(rel)})
+                         "writable": may_write(rel)})
 
 
 @server.custom_route("/ui/api/save", methods=["POST"])
@@ -1054,7 +1271,7 @@ async def ui_recent(request: Request):
     roots = PROJECTS.get(request.query_params.get("project", "homelab"), PROJECTS["homelab"])
     with index.lock:
         rows = sorted(((v[0], rel) for rel, v in index.files.items() if rel.split("/", 1)[0] in roots
-                       and rel.endswith(".md")), reverse=True)[:60]
+                       and rel.endswith(".md") and in_scope(rel)), reverse=True)[:60]
     who = last_writers()
     out = []
     for ns, rel in rows:
@@ -1085,13 +1302,13 @@ async def ui_search(request: Request):
 
 @server.custom_route("/ui/api/lint", methods=["GET"])
 async def ui_lint(request: Request):
-    return JSONResponse(lint_all())
+    return JSONResponse(lint_all() if device.get().get("admin") else {})  # lint spans every project
 
 
 @server.custom_route("/ui/api/ingest", methods=["POST"])
 async def ui_ingest(request: Request):
-    if not device.get().get("write"):
-        return JSONResponse({"error": "this device token is read-only"}, status_code=403)
+    if not device.get().get("admin"):  # sources go to homelab/sources
+        return JSONResponse({"error": "only an admin can add sources"}, status_code=403)
     ctype = request.headers.get("content-type", "").split(";")[0].strip().lower()
     try:
         if ctype == "application/json":
@@ -1141,6 +1358,7 @@ def build_app():
 
 if __name__ == "__main__":
     t0 = time.time()
+    load_projects()
     index.rescan()
     print(f"index: {len(index.files)} files in {time.time() - t0:.1f}s", flush=True)
     threading.Thread(target=index.loop, daemon=True).start()

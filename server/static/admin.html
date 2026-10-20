@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Knowledge admin</title>
+<link rel="stylesheet" href="/ui/static/app.css">
+</head>
+<body class="admin-page">
+<header class="top">
+  <div class="brand">Knowledge · admin</div>
+  <a class="logout" href="/ui">← Back to the graph</a>
+  <a class="logout" href="/outpost.goauthentik.io/sign_out">Sign out</a>
+</header>
+<main class="admin">
+  <p id="error" class="error" role="alert" hidden></p>
+
+  <section aria-labelledby="h-tokens">
+    <h2 id="h-tokens">Device tokens</h2>
+    <p class="muted">For Claude Code (the knowledge plugin), agents and assistants. A token is shown once; only its hash is kept. Lost it? Revoke it and create a new one.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Name</th><th>Access</th><th>Scope</th><th>Created</th><th></th></tr></thead>
+      <tbody id="tokens"></tbody>
+    </table></div>
+    <form id="token-form" class="admin-form">
+      <h3>New token</h3>
+      <label for="t-name">Device or agent name</label>
+      <input id="t-name" required pattern="[A-Za-z0-9][A-Za-z0-9._\-]{0,39}" placeholder="e.g. work-laptop">
+      <fieldset>
+        <legend>Scope (none ticked = every project)</legend>
+        <div id="t-roots" class="checks"></div>
+      </fieldset>
+      <label class="check"><input id="t-write" type="checkbox"> May write memos</label>
+      <label class="check"><input id="t-redact" type="checkbox"> Mask known secrets in everything it reads (agents that read outside mail)</label>
+      <button type="submit">Create token</button>
+    </form>
+    <div id="new-token" class="new-token" hidden>
+      <p><strong>Copy this token now</strong>, it is not shown again. Enter it in the knowledge plugin of <span id="new-token-name"></span>.</p>
+      <div class="row"><code id="new-token-value"></code><button type="button" id="copy-token" class="ghost">Copy</button></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="h-users">
+    <h2 id="h-users">People</h2>
+    <p class="muted">Sign-in is Authentik; here you decide which projects someone may read or edit. Someone who signs in without access appears here by themselves. Admins are set in the server config.</p>
+    <div class="table-wrap"><table>
+      <thead id="users-head"></thead>
+      <tbody id="users"></tbody>
+    </table></div>
+    <form id="user-form" class="admin-form inline">
+      <label for="u-name">Add by Authentik username</label>
+      <input id="u-name" required pattern="[\w.@+\-]{1,150}">
+      <button type="submit">Add</button>
+    </form>
+  </section>
+
+  <section aria-labelledby="h-projects">
+    <h2 id="h-projects">Projects</h2>
+    <p class="muted">Each project has docs and a memory with its own MEMORY.md index. New projects are stored on the server; the built-in ones live on the VM.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Project</th><th>Docs root</th><th>Memory root</th><th>Where</th></tr></thead>
+      <tbody id="projects"></tbody>
+    </table></div>
+    <form id="project-form" class="admin-form inline">
+      <label for="p-name">New project</label>
+      <input id="p-name" required pattern="[a-z][a-z0-9]{1,23}" placeholder="lowercase, e.g. garden">
+      <button type="submit">Create</button>
+    </form>
+  </section>
+</main>
+<script src="/ui/static/admin.js"></script>
+</body>
+</html>
