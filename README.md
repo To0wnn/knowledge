@@ -145,7 +145,7 @@ Following Karpathy's "LLM Wiki" pattern (raw sources -> wiki pages -> index, wit
   `<name>-memory`, stored in `/projects/<name>/` on forge, listed in `/admin/projects.json`). Device tokens also
   count as secrets (redaction, write guard).
 - `/admin` = forge `/root/docker/knowledge/admin` (rw, 0700, uid 1000); `/config` stays read-only (secrets.json).
-- **MCP and plugin endpoints** keep device tokens (router `knowledge`, priority 100; public with `rate-limit` since 20 Oct).
+- **MCP and plugin endpoints** keep device tokens: from outside router `knowledge` (priority 100) with `rate-limit`, from the LAN router `knowledge-lan` (priority 150, `ClientIP(10.0.0.0/8)`) without a limit; public since 20 Oct. Traefik config lives in the homelab Ansible role `traefik_config`.
 
 ## Agents, PA, history and session log (18 Oct)
 
@@ -189,7 +189,7 @@ sees and edits them in the normal Bitwarden apps and the automation cannot see t
 
 1. Create a token on the admin page (`/ui/admin` → New token) and store it in the vault
    (`printf %s '<token>' | secret set KNOWLEDGE_TOKEN_<DEVICE>`).
-2. Works from anywhere since 20 Oct 2026 (router `knowledge` is public, Traefik `rate-limit` 100/s per IP; a token is
+2. Works from anywhere since 20 Oct 2026 (router `knowledge` is public, Traefik `rate-limit` 100/s per IP from outside; a token is
    256 bits of randomness, so guessing is not a risk).
 3. In Claude Code on that device (no GitHub login needed when the device has an SSH key for the VM; the
    marketplace is then cloned straight from the VM's repo):
