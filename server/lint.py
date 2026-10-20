@@ -98,9 +98,10 @@ STALE_UNCHECKED_DAYS = 60
 
 
 def keuzes(text: str) -> list[str]:
-    """The decision bullets under "## Keuzes" (not the "no decisions yet" placeholder)."""
+    """The decision bullets under "## Keuzes": a decision starts with its bold title ("- **..."); plain bullets there are
+    explanation or pointers."""
     m = re.search(r"^## Keuzes\b(.*?)(?=^## |\Z)", text, re.M | re.S)
-    return [l for l in (m.group(1).splitlines() if m else []) if l.startswith("- ") and not re.match(r"- (Nog )?geen bewuste", l, re.I)]
+    return [l for l in (m.group(1).splitlines() if m else []) if l.startswith("- **")]
 
 
 def stale_unchecked(text: str, today: date) -> int:
