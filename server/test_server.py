@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import http.client as httpc
 import json
+import urllib.parse
 import re
 import os
 import subprocess
@@ -306,6 +307,47 @@ def main():
         assert "raised beds" in call("knowledge_read", {"path": "garden-memory/project_beds.md"})[1]
         assert "garden" in json.loads(raw("GET", "/ui/api/me", headers=ck)[2])["projects"]
         assert "project garden" in http("GET", "/context/1?project=/home/x/garden")[1]
+        # A guest (a friend's Windows pc): a write token limited to garden. The project comes from the token, the context
+        # carries the house rules and nothing of the owner, and /sync mirrors the Markdown of the guest's folder.
+        st, _, res = admin("/ui/api/admin/token", {"name": "friend-pc", "write": True, "redact": True, "roots": ["garden", "garden-memory"]})
+        fr = json.loads(res)["token"]
+        ctx = http("GET", "/context/1?project=" + urllib.parse.quote("C:\\Users\\Bob\\A350Copilot"), token=fr)[1]
+        assert "project garden" in ctx and "## Stand" in ctx and "garden-memory/MEMORY.md" in ctx, ctx[:400]
+        assert "homelab" not in ctx and "secret set" not in ctx and "trade" not in ctx, ctx
+        files = {"README.md": "# Copilot\n", "docs\\design\\voice.md": "voice notes\n", "C:\\x.md": "no",
+                 "../escape.md": "no", ".venv/lib/x.md": "no", "main.py": "no"}
+        st, body = http("POST", "/sync", {"files": files, "full": True}, token=fr)
+        res = json.loads(body)
+        assert st == 200 and res["written"] == 2 and len(res["refused"]) == 4, res
+        assert (tmp / "projects/garden/docs/docs/design/voice.md").read_text() == "voice notes\n"
+        assert call("knowledge_read", {"path": "garden/docs/design/voice.md"}, token=fr)[1].count("voice notes") == 1
+        st, body = http("POST", "/sync", {"files": {"README.md": "# Copilot\n"}, "full": True}, token=fr)
+        assert json.loads(body) == {"written": 0, "unchanged": 1, "deleted": 1, "refused": []}, body
+        assert not (tmp / "projects/garden/docs/docs/design/voice.md").exists()
+        assert http("POST", "/sync", {"files": {"README.md": "x"}}, token="rw-token")[0] == 403  # not limited to one project
+        assert http("POST", "/sync", {"files": {"README.md": "x"}, "project": "trade"}, token=fr)[0] == 409
+        assert call("knowledge_read", {"path": "memory/MEMORY.md"}, token=fr)[0]  # nothing outside garden
+        # The plugin hook: SessionStart mirrors the marked folder, PostToolUse one changed file, a wrong marker is refused.
+        proj = tmp / "friend" / "Copilot"
+        (proj / "notes").mkdir(parents=True)
+        (proj / ".knowledge-project").write_text("garden\n")
+        (proj / "README.md").write_text("# Copilot v2\n")
+        (proj / "notes" / "taxi.md").write_text("taxi speed\n")
+        genv = {**os.environ, "CLAUDE_PLUGIN_OPTION_URL": BASE, "CLAUDE_PLUGIN_OPTION_TOKEN": fr, "CLAUDE_PROJECT_DIR": str(proj / "notes")}
+        sync = str(Path(__file__).parents[1] / "plugin/hooks/docs-sync.py")
+        out = subprocess.run([sys.executable, sync], input=json.dumps({"hook_event_name": "SessionStart"}), text=True,
+                             env=genv, capture_output=True, check=True).stdout
+        assert not out and (tmp / "projects/garden/docs/notes/taxi.md").read_text() == "taxi speed\n", out
+        (proj / "notes" / "taxi.md").write_text("taxi speed fixed\n")
+        subprocess.run([sys.executable, sync], input=json.dumps({"hook_event_name": "PostToolUse", "tool_input":
+                        {"file_path": str(proj / "notes" / "taxi.md")}}), text=True, env=genv, check=True)
+        assert (tmp / "projects/garden/docs/notes/taxi.md").read_text() == "taxi speed fixed\n"
+        (proj / ".knowledge-project").write_text("trade\n")
+        out = subprocess.run([sys.executable, sync], input=json.dumps({"hook_event_name": "SessionStart"}), text=True,
+                             env=genv, capture_output=True, check=True).stdout
+        assert "failed" in out and "409" in out, out
+        assert http("POST", "/sessions", {"prompts": ["fix the taxi speed"], "cwd": "C:\\Users\\Bob\\A350Copilot"}, token=fr)[0] == 200
+        assert "fix the taxi speed" in "".join(p.read_text() for p in (tmp / "projects/garden/memory/sessions").glob("*.md"))
         # Review fixes 20 Oct: a project named like a path part does not capture other sessions; write patterns are
         # anchored; "Add" never wipes access; graph ETag per user; body cap; scoped ingest/lint; token routes.
         assert admin("/ui/api/admin/project", {"name": "home"})[0] == 200

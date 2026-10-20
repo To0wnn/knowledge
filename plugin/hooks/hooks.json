@@ -1,5 +1,5 @@
 {
-  "description": "Load the shared knowledge context at session start; log each session to the knowledge server",
+  "description": "Load the shared knowledge context at session start, log each session, guard secrets, and mirror a guest project's Markdown (folders with .knowledge-project)",
   "hooks": {
     "SessionStart": [
       {
@@ -34,6 +34,11 @@
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/context.sh\" 6",
             "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/py.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/docs-sync.py\"",
+            "timeout": 30
           }
         ]
       }
@@ -43,7 +48,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/session-log.py\"",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/py.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/session-log.py\"",
             "timeout": 15
           }
         ]
@@ -54,7 +59,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/session-log.py\"",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/py.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/session-log.py\"",
             "timeout": 15
           }
         ]
@@ -66,8 +71,20 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/secret-guard.py\"",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/py.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/secret-guard.py\"",
             "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/py.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/docs-sync.py\"",
+            "timeout": 20
           }
         ]
       }
