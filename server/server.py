@@ -1618,7 +1618,11 @@ def session_log(roots: tuple) -> list[dict]:
             lines = block.splitlines()
             asked = next((x[9:] for x in lines if x.startswith("- Asked: ")), "")
             changed = next((x[11:] for x in lines if x.startswith("- Changed: ")), "")
-            out.append({"time": time.mktime(time.strptime(m[1], "%Y-%m-%d %H:%M")), "device": m[2].strip(), "asked": asked,
+            try:
+                when = time.mktime(time.strptime(m[1], "%Y-%m-%d %H:%M"))
+            except ValueError:  # a hand-edited or odd heading: skip that entry, not the whole Changes list
+                continue
+            out.append({"time": when, "device": m[2].strip(), "asked": asked,
                         "names": {c.strip().rsplit("/", 1)[-1] for c in changed.split(",") if c.strip()}})
     return sorted(out, key=lambda e: e["time"])
 
