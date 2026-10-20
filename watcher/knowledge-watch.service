@@ -3,6 +3,7 @@ Description=Report changes in the shared knowledge trees to the knowledge server
 After=network-online.target
 
 [Service]
+EnvironmentFile=%h/knowledge/local.env
 ExecStart=/usr/bin/python3 %h/knowledge/watcher/knowledge-watch.py
 Restart=always
 RestartSec=5

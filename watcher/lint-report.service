@@ -4,4 +4,5 @@ After=network-online.target
 
 [Service]
 Type=oneshot
+EnvironmentFile=%h/knowledge/local.env
 ExecStart=/usr/bin/python3 %h/knowledge/watcher/lint-report.py

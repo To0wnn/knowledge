@@ -12,14 +12,15 @@ import json
 import re
 import subprocess
 import sys
+import os
 import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
 SERVER = "https://knowledge.to0wnn.com"
-MATRIX = "http://<lan-ip>:8450"
-ROOM = "!<room-id>:to0wnn"  # Homelab Alerts
+MATRIX = os.environ["KNOWLEDGE_MATRIX_URL"]  # from local.env via the unit (EnvironmentFile); missing = fail loudly
+ROOM = os.environ["KNOWLEDGE_MATRIX_ROOM"]
 TOKEN = Path.home() / ".config/knowledge-server/report.token"
 STATE = Path.home() / ".local/state/knowledge-lint-report.json"
 SHOW = 20

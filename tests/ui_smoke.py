@@ -18,7 +18,20 @@ import sys
 
 from playwright.async_api import async_playwright
 
-URL = os.environ.get("KNOWLEDGE_URL", "http://<lan-ip>:8766")
+
+def local_env():
+    """Addresses of this installation from local.env next to this repo (not in git); the environment wins."""
+    f = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "local.env")
+    if os.path.exists(f):
+        for line in open(f):
+            k, _, v = line.split("#")[0].strip().partition("=")
+            if k and v:
+                os.environ.setdefault(k, v.strip())
+
+
+local_env()
+
+URL = os.environ["KNOWLEDGE_URL"]  # the server on the LAN, from local.env
 USER = os.environ.get("KNOWLEDGE_TEST_USER", "to0wnn")
 failures = []
 

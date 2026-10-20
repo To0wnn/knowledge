@@ -6,7 +6,7 @@ Live, shared access to Anthony's homelab docs and Claude memory for Claude Code 
   (CT 101, Dockhand stack `knowledge`, port 8766, `https://knowledge.to0wnn.com`; web UI public behind Authentik, MCP public with device tokens since 20 Oct).
 - **Plugin** (`plugin/`): Claude Code plugin with the MCP connection and a SessionStart hook that loads the
   shared CLAUDE.md files and the memory index. This repo is also the plugin marketplace.
-- **Source of truth (option A, current):** the files stay on the VM (<lan-ip>) and are NFS-exported to forge
+- **Source of truth (option A, current):** the files stay on the VM and are NFS-exported to forge
   only (`/etc/exports.d/knowledge.exports`). Sessions on the VM keep using them natively; other devices use the plugin.
   Everyone sees the same files live.
 
@@ -200,6 +200,12 @@ sees and edits them in the normal Bitwarden apps and the automation cannot see t
 - Why not Bitwarden Secrets Manager or `bw serve`: Vaultwarden does not implement Secrets Manager (Bitwarden-licensed),
   and `bw serve` exposes an unauthenticated local API.
 
+## Local addresses
+
+The addresses of an installation (docker host, NFS host, LAN URL, Matrix, proxy) live in `local.env`, which is not in
+git: copy `local.env.example`. `deploy.sh` reads it and copies it to `server/.env` for docker compose; the systemd units
+read it with `EnvironmentFile`; `token.py` and `tests/ui_smoke.py` load it themselves.
+
 ## Install on a device (once)
 
 1. Create a token on the admin page (`/ui/admin` → New token) and store it in the vault
@@ -209,7 +215,7 @@ sees and edits them in the normal Bitwarden apps and the automation cannot see t
 3. In Claude Code on that device (no GitHub login needed when the device has an SSH key for the VM; the
    marketplace is then cloned straight from the VM's repo):
    ```
-   claude plugin marketplace add to0wnn@<lan-ip>:/home/to0wnn/knowledge   # or the GitHub URL
+   claude plugin marketplace add To0wnn/knowledge
    claude plugin install knowledge@knowledge --scope user
    printf '{"url":"https://knowledge.to0wnn.com","token":"%s"}' "$TOKEN" | claude plugin configure knowledge@knowledge --values-stdin
    ```

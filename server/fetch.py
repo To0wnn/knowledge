@@ -106,7 +106,7 @@ if __name__ == "__main__":  # self-check of the address rules (no network needed
             raise SystemExit(f"accepted {bad}")
         except FetchError:
             pass
-    for host in ("127.0.0.1", "<lan-ip>", "192.168.1.1", "169.254.169.254", "100.64.0.1", "::1", "::ffff:10.0.0.1", "localhost"):
+    for host in ("127.0.0.1", "10.1.2.3", "192.168.1.1", "169.254.169.254", "100.64.0.1", "::1", "::ffff:10.0.0.1", "localhost"):
         try:
             public_ip(host, 80)
             raise SystemExit(f"accepted internal {host}")
