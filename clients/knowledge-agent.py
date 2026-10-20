@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""The knowledge plugin's hooks for agents other than Claude Code: agy (Antigravity CLI) and Codex.
+"""Connect agy (Antigravity CLI) or Codex to the knowledge server, and run the knowledge plugin's hooks for them.
 
 Linux, macOS and Windows; standard library only. The token comes from KNOWLEDGE_TOKEN (TOKEN "-") or, on the owner's VM,
 from the vault (TOKEN = a vault name). The session log falls back to ~/.config/knowledge-server/session.env, so the
 agy/Codex tokens on the VM stay read-only (install always gives session-log "-").
 
-  knowledge-agent.py install <agy|codex> [TOKEN]   write the agent's hooks.json for this machine (old file kept as .bak)
+  knowledge-agent.py install <agy|codex> [TOKEN]   one-time setup: checks the token, adds the MCP server, the hooks
+                                                   and the house rules file (GEMINI.md / AGENTS.md); safe to run again
   knowledge-agent.py context <agy|codex> TOKEN     SessionStart: startup context + docs mirror, as the agent's JSON
   knowledge-agent.py docs-sync TOKEN               PostToolUse: mirror an edited .md (folder with .knowledge-project)
   knowledge-agent.py session-log TOKEN             SessionEnd/PreCompact (Codex), Stop (agy): post the session log
@@ -23,6 +24,8 @@ from pathlib import Path
 HOOKS = Path(__file__).resolve().parent.parent / "plugin" / "hooks"
 URL = os.environ.get("KNOWLEDGE_URL", "https://knowledge.to0wnn.com").rstrip("/")
 CONFIG = {"agy": Path.home() / ".gemini" / "config" / "hooks.json", "codex": Path.home() / ".codex" / "hooks.json"}
+RULES = {"agy": Path.home() / ".gemini" / "GEMINI.md", "codex": Path.home() / ".codex" / "AGENTS.md"}
+BEGIN, END = "<!-- knowledge:house-rules (written by knowledge-agent.py install) -->", "<!-- /knowledge:house-rules -->"
 
 
 def token(name: str) -> str:
@@ -54,7 +57,74 @@ def hook_config(agent: str, name: str) -> dict:
         "SessionEnd": [{"hooks": [{"type": "command", "command": cmd("session-log"), "timeout": 3}]}]}}
 
 
+def fetch(path: str, tok: str) -> str:
+    req = urllib.request.Request(f"{URL}{path}", headers={"Authorization": f"Bearer {tok}"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return r.read().decode("utf-8")
+
+
 def install(agent: str, name: str):
+    """One-time setup; every step says what it did. Fails loudly: a wrong token or no connection stops here."""
+    tok = token(name)
+    if not tok:
+        sys.exit("No token: set KNOWLEDGE_TOKEN first (see the help page), then run this again.")
+    try:
+        rules = fetch("/house-rules", tok)  # also proves the token and the connection
+    except urllib.error.HTTPError as e:
+        sys.exit({401: "The server refuses this token (401): copied wrongly or revoked.",
+                  403: "The server is only reachable from the home network or WireGuard (403)."}.get(e.code, f"Server answered HTTP {e.code}."))
+    except OSError as e:
+        sys.exit(f"Cannot reach {URL}: {e}")
+    print(f"token ok ({URL})")
+    install_mcp(agent, tok)
+    install_hooks(agent, name)
+    install_rules(agent, rules)
+    print("done" + ("; open codex and type /hooks once to trust the hooks" if agent == "codex" else "; start agy and ask it to search the knowledge"))
+
+
+def install_mcp(agent: str, tok: str):
+    if agent == "codex":  # Codex reads the token from KNOWLEDGE_TOKEN itself, so no token is written to a file
+        path = Path.home() / ".codex" / "config.toml"
+        text = path.read_text(encoding="utf-8") if path.exists() else ""
+        if "[mcp_servers.knowledge]" in text:
+            return print(f"MCP: {path} already has [mcp_servers.knowledge], left as it is")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text.rstrip("\n") + ("\n\n" if text.strip() else "") + f'''[mcp_servers.knowledge]
+url = "{URL}/mcp"
+bearer_token_env_var = "KNOWLEDGE_TOKEN"
+default_tools_approval_mode = "writes"
+startup_timeout_sec = 15
+''', encoding="utf-8")
+        return print(f"MCP: added the knowledge server to {path} (Codex asks before it writes)")
+    path = Path.home() / ".gemini" / "config" / "mcp_config.json"  # agy keeps the header in this file
+    data = json.loads(path.read_text(encoding="utf-8-sig")) if path.exists() else {}
+    if "knowledge" in data.get("mcpServers", {}):
+        return print(f"MCP: {path} already has 'knowledge', left as it is")
+    data.setdefault("mcpServers", {})["knowledge"] = {"serverUrl": f"{URL}/mcp", "headers": {"Authorization": f"Bearer {tok}"}}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    if os.name != "nt":
+        path.chmod(0o600)  # the token is in it
+    print(f"MCP: added the knowledge server to {path}" + ("" if os.name != "nt" else " (holds the token: keep the file to yourself)"))
+
+
+def install_rules(agent: str, rules: str):
+    """The always-loaded rules file: a marked block, so a rerun updates it and the rest of the file stays yours."""
+    path = RULES[agent]
+    text = path.read_text(encoding="utf-8-sig") if path.exists() else ""
+    if text.startswith("<!-- Generated by knowledge-watch"):
+        return print(f"rules: {path} is generated on this machine (it already holds the house rules)")
+    block = f"{BEGIN}\n{rules.strip()}\n{END}"
+    if BEGIN in text and END in text:
+        new = text[:text.index(BEGIN)] + block + text[text.index(END) + len(END):]
+    else:
+        new = (text.rstrip("\n") + "\n\n" if text.strip() else "") + block + "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(new, encoding="utf-8")
+    print(f"rules: house rules in {path}")
+
+
+def install_hooks(agent: str, name: str):
     path, new = CONFIG[agent], json.dumps(hook_config(agent, name), indent=2) + "\n"
     bak = path.with_suffix(".json.bak")
     if path.exists() and path.read_text(encoding="utf-8-sig") != new and not bak.exists():  # the first original stays
@@ -62,7 +132,7 @@ def install(agent: str, name: str):
         print(f"kept the old file as {bak}; merge your own hooks from it if it had any")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(new, encoding="utf-8")
-    print(f"wrote {path}" + ("; trust the hooks once with /hooks in a Codex session" if agent == "codex" else ""))
+    print(f"hooks: context at start, session log and docs mirror in {path}")
 
 
 def context_text(tok: str, cwd: str) -> str:
@@ -115,7 +185,9 @@ def main(argv: list):
 
 
 if __name__ == "__main__":
-    if "--selftest" in sys.argv:
+    if sys.argv[1:2] == ["install"]:  # setup is run by a person: errors go to them, loudly
+        main(sys.argv[1:])
+    elif "--selftest" in sys.argv:
         c = hook_config("codex", "-")["hooks"]
         assert len(c["SessionStart"]) == 1 and c["SessionEnd"][0]["hooks"][0]["timeout"] <= 3
         a = hook_config("agy", "X")["knowledge"]

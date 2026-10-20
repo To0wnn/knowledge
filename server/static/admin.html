@@ -38,9 +38,18 @@
       <button type="submit">Create token</button>
     </form>
     <div id="new-token" class="new-token" hidden>
-      <p><strong>Copy this token now</strong>, it is not shown again. Set up Claude Code on <span id="new-token-name"></span>:</p>
+      <p><strong>Copy this token now</strong>, it is not shown again: <span id="new-token-name"></span></p>
       <div class="row"><code id="new-token-value"></code><button type="button" id="copy-token" class="ghost">Copy token</button></div>
-      <pre id="new-token-setup" class="setup"></pre>
+      <p>Give it to the person with a one-time Bitwarden Send link, never by chat or e-mail. Then send them the setup steps for their client:</p>
+      <div class="table-wrap"><table class="setup-links">
+        <thead><tr><th>Client</th><th>Linux &amp; macOS</th><th>Windows</th></tr></thead>
+        <tbody>
+          <tr><td>Claude Code</td><td><a href="/ui/help#claude-linux" target="_blank">steps</a></td><td><a href="/ui/help#claude-windows" target="_blank">steps</a></td></tr>
+          <tr><td>agy (Antigravity)</td><td><a href="/ui/help#agy-linux" target="_blank">steps</a></td><td><a href="/ui/help#agy-windows" target="_blank">steps</a></td></tr>
+          <tr><td>Codex</td><td><a href="/ui/help#codex-linux" target="_blank">steps</a></td><td><a href="/ui/help#codex-windows" target="_blank">steps</a></td></tr>
+        </tbody>
+      </table></div>
+      <details><summary>A device of your own on the VM: keep the token in the vault</summary><pre id="new-token-setup" class="setup"></pre></details>
       <button type="button" id="hide-token" class="ghost">Done, hide it</button>
     </div>
   </section>

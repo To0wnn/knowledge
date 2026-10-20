@@ -525,6 +525,8 @@ def main():
         assert "Search first, always." in init, init[:300]
         assert b"Search first, always." in raw("GET", "/ui/help", headers=ck)[2]
         assert "Search first, always." in call("knowledge_read", {"path": "claude/house_rules.md"})[1]
+        st, body = http("GET", "/house-rules", token=fr)  # a guest: its own memory root in the rules
+        assert st == 200 and "1. Search first, always." in body and "garden-memory/archief" in body, body
         st, hd, body = raw("GET", "/ui", headers=ck)
         rel = re.search(rb'app\.js\?v=([0-9a-f]{12})"', body).group(1).decode()
         assert hd["cache-control"] == "no-cache" and f'data-release="{rel}"'.encode() in body and b"app.css?v=" + rel.encode() in body

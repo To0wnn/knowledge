@@ -1252,6 +1252,18 @@ async def invalidate_route(request: Request):
     return JSONResponse({"refreshed": len(paths)})
 
 
+@server.custom_route("/house-rules", methods=["GET"])
+async def house_rules_route(request: Request):
+    """The house rules as Markdown, for an agent's always-loaded rules file (GEMINI.md, AGENTS.md): written by
+    knowledge-agent.py install. A guest token gets its own project's memory root filled in."""
+    project = token_project()
+    mem = PROJECTS[project][1] if project in PROJECTS else "<memory root>"
+    body = ("# Knowledge house rules\n\nUse the MCP server \"knowledge\" for this project's docs and memory: search with "
+            "knowledge_search or knowledge_semantic_search before answering, open hits with knowledge_read.\n\n"
+            + "\n".join(f"{i}. {r}" for i, r in enumerate(house_rule_items(mem), 1)) + "\n")
+    return PlainTextResponse(body, media_type="text/markdown")
+
+
 @server.custom_route("/context/{part}", methods=["GET"])
 async def context_route(request: Request):
     parts = context_parts(token_project() or project_for(request.query_params.get("project", "")))
