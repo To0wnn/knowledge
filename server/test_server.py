@@ -50,7 +50,11 @@ def main():
     (mem / "fact.md").write_text("line one\nline two\n")
     (lab / "overzicht.md").write_text("overview\n")
     (lab / "secret.env").write_text("nope")
-    (cla / "CLAUDE.md").write_text("global rules\n")
+    (cla / "CLAUDE.md").write_text("global rules\n@~/.claude/gedeeld/house_rules.md\n")
+    (cla / "house_rules.md").write_text("---\ntitle: House rules\ntopic: General\n---\n# House rules\n\n"
+                                        "1. Search first.\n2. A memo has \"## Stand\" and \"## Keuzes\"; history goes to <memory root>/archief/<name>_archief.md.\n"
+                                        "3. Before you change something, read the \"## Keuzes\" of its memo.\n"
+                                        "4. Memory is a hint, not the truth.\n\nBackground: [[a]]\n")
     (cla / "skills/x/SKILL.md").write_text("skill\n")
     trade, tmem = tmp / "trade", tmp / "trade-memory"
     for d in (trade / "venv", tmem, tmp / "anpitek", tmp / "anpitek-memory"):
@@ -491,6 +495,15 @@ def main():
         init = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18",
                     "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}})[1]
         assert "Memory is a hint, not the truth" in init and "read the \\\"## Keuzes\\\"" in init, init[:300]
+        # An edit of the rules file reaches new MCP sessions once the watcher reports it; missing rules fail loudly.
+        rules = cla / "house_rules.md"
+        rules.write_text(rules.read_text().replace("Search first.", "Search first, always."))
+        http("POST", "/invalidate", {"paths": ["claude/house_rules.md"]}, token="watch-token")
+        init = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18",
+                    "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}})[1]
+        assert "Search first, always." in init, init[:300]
+        assert b"Search first, always." in raw("GET", "/ui/help", headers=ck)[2]
+        assert "Search first, always." in call("knowledge_read", {"path": "claude/house_rules.md"})[1]
         st, hd, body = raw("GET", "/ui", headers=ck)
         rel = re.search(rb'app\.js\?v=([0-9a-f]{12})"', body).group(1).decode()
         assert hd["cache-control"] == "no-cache" and f'data-release="{rel}"'.encode() in body and b"app.css?v=" + rel.encode() in body
@@ -520,6 +533,8 @@ def main():
             parts.append(body)
             n += 1
         assert len(parts) >= 2 and "Item 119" in parts[-1] and "global rules" in parts[0], len(parts)
+        # CLAUDE.md's import line arrives expanded: a remote device has no ~/.claude/gedeeld/house_rules.md.
+        assert "Memory is a hint, not the truth" in parts[0] and "@~/.claude/gedeeld" not in "".join(parts), parts[0][:800]
         st, body = http("GET", "/context/1?project=/home/x/trade_bot")
         assert "project trade" in body and "trade bot rules" in body and "Bot plan" in body and "Item 1 " not in body, body[:500]
         assert "project anpitek" in http("GET", "/context/1?project=/home/x/anpitek/boekhouding")[1]

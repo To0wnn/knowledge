@@ -12,6 +12,7 @@ from lint import FRONT, frontmatter, links as wikilinks
 MD_LINK = re.compile(r"\]\(([^)#\s]+\.md)\)")
 SKILL_REF = re.compile(r"\bskill[s]? `([a-z0-9][a-z0-9-]*)`", re.I)
 NOT_DOCS = {"CLAUDE.md", "README.md"}
+RULES = "claude/house_rules.md"  # the shared house rules: a node on its frontmatter topic, like a doc
 BARE_MD = re.compile(r"(?<![\w/.-])([A-Za-z0-9][\w.-]*\.md)\b")  # "see ENTRY_TIMING_FIXES.md" in the same project
 SOURCE_REF = re.compile(r"\b(20\d\d-\d\d-\d\d-[a-z0-9-]+\.md)\b")
 FM_SOURCES = re.compile(r"^sources:[ \t]*(\[[^\]\n]*\]|(?:\n[ \t]+-[^\n]*)+)", re.M)
@@ -62,7 +63,7 @@ def label_of(rel: str, text: str, titles: dict[str, str]) -> str:
     if rel in titles:
         return titles[rel]
     fm = frontmatter(text)
-    if (rel.startswith("homelab/sources/") or is_doc(rel)) and fm.get("title"):
+    if (rel.startswith("homelab/sources/") or is_doc(rel) or rel == RULES) and fm.get("title"):
         return fm["title"].strip('"')[:60]
     return name[:-3].replace("_", " ")
 
@@ -87,7 +88,7 @@ def build(files: dict[str, str]) -> dict:
                 or (parts[0] in MD_ONLY and rel.endswith(".md") and len(parts) <= 3 and not any(x.startswith(".") for x in parts)) \
                 or (rel.startswith("homelab/") and len(parts) == 2 and rel.endswith(".md") and parts[1] not in NOT_DOCS) \
                 or (rel.startswith("homelab/sources/") and parts[-1] != "LOG.md") \
-                or (rel.startswith("claude/skills/") and parts[-1] == "SKILL.md" and len(parts) == 4):
+                or (rel.startswith("claude/skills/") and parts[-1] == "SKILL.md" and len(parts) == 4) or rel == RULES:
             keep[rel] = text
     titles, sections = {}, {}
     for mem in sorted(MEMORY_ROOTS):
@@ -101,12 +102,13 @@ def build(files: dict[str, str]) -> dict:
                     sections[f"{mem}/{m.group(2)}"] = section  # the user's own grouping of memos
     # A homelab doc names its topic (a MEMORY.md heading) in its frontmatter, so it sits on that island.
     for rel, text in keep.items():
-        if is_doc(rel) and (topic := frontmatter(text).get("topic", "").strip('"')):
+        if (is_doc(rel) or rel == RULES) and (topic := frontmatter(text).get("topic", "").strip('"')):
             sections[rel] = topic
-    # The same heading in two projects (e.g. "## General" of new UI projects) must stay two topics.
+    # The same heading in two projects (e.g. "## General" of new UI projects) must stay two topics; a shared note
+    # (the house rules) joins the heading it names.
     owners: dict[str, set] = {}
     for r, sec in sections.items():
-        owners.setdefault(sec, set()).add(project_of(r))
+        owners.setdefault(sec, set()).update({project_of(r)} - {"shared"})
     sections = {r: f"{sec} ({project_of(r)})" if len(owners[sec]) > 1 else sec for r, sec in sections.items()}
     # Projects without MEMORY.md headings: a doc's subfolder ("gema-truckwaardering"), or a file-name family of 3+
     # files ("FABLE_*", "OPUS_REVIEW_*") is its section.
@@ -130,7 +132,7 @@ def build(files: dict[str, str]) -> dict:
                     key = key.replace("-", "_")  # hyphen/underscore variants point to the same memo
                     by_slug[(mem_root(rel), key)] = rel
                     by_slug.setdefault(key, rel)
-    docs = {rel.split("/")[1]: rel for rel in keep if is_doc(rel)}  # "netwerk.md" -> homelab/netwerk.md
+    docs = {rel.split("/")[-1]: rel for rel in keep if is_doc(rel) or rel == RULES}  # "netwerk.md" -> homelab/netwerk.md
     skills = {rel.split("/")[2]: rel for rel in keep if rel.startswith("claude/skills/")}
     sources = {rel.split("/")[-1]: rel for rel in keep if rel.startswith("homelab/sources/")}
     # Any mention of a skill's name counts ("`forge-stack`", "skill forge-stack"); names with a hyphen only,
@@ -293,6 +295,7 @@ if __name__ == "__main__":
         "homelab/CLAUDE.md": "instructions, not a doc",
         "homelab/sources/2026-10-18-x.md": "---\ntitle: \"X\"\n---\nraw",
         "claude/skills/forge-stack/SKILL.md": "skill",
+        "claude/house_rules.md": "---\ntitle: House rules\ntopic: Werk\n---\n1. Search first. Background: [[b_c]]",
         "homelab/tools/ignored.md": "not a node",
         "trade-memory/MEMORY.md": "- [Bot plan](a.md) — x\n",
         "trade-memory/a.md": "---\nname: a\n---\nsee [[b_c]] and STATUS.md",
@@ -308,6 +311,8 @@ if __name__ == "__main__":
     doc = ids["homelab/framework.md"]  # a doc: its frontmatter title and topic, on the island of that heading
     assert doc["label"] == "Framework-laptop" and doc["cluster"] == "Werk" == ids["memory/a.md"]["cluster"], doc
     assert "homelab/CLAUDE.md" not in ids
+    hr = ids["claude/house_rules.md"]  # the house rules: their own node on their topic, linked to what they name
+    assert hr["label"] == "House rules" and hr["cluster"] == "Werk" and hr["project"] == "homelab", hr
     links = {(l["source"], l["target"]) for l in g["links"]}
     for t in ("memory/b_c.md", "homelab/framework.md", "claude/skills/forge-stack/SKILL.md", "homelab/sources/2026-10-18-x.md"):
         assert ("memory/a.md", t) in links, (t, links)

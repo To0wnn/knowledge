@@ -127,16 +127,8 @@ claude plugin install knowledge@knowledge --scope user</pre><button class="copy"
         <div class="cmd"><pre>chmod 600 ~/.gemini/config/mcp_config.json</pre><button class="copy" type="button">Copy</button></div>
         Windows: make the file readable for your own account only (Properties › Security).</li>
       <li><b>House rules as a rules file</b>
-        Put this text in <code>~/.gemini/GEMINI.md</code>; agy always loads that file.
-        <div class="cmd"><pre>Use the MCP server "knowledge" for this project's docs and memory: look things up with
-knowledge_search or knowledge_semantic_search before answering, open hits with knowledge_read.
-The full house rules are in the server's instructions; the core:
-- Search first and update the existing memo. A memo has "## Stand" (true now) and "## Keuzes"
-  (- **decision** (date, who): reason). History goes to archief/; one index line in MEMORY.md.
-- Before you add, remove or undo something, read "## Keuzes" of its memo and doc.
-- Memory is a hint: check a fact that can change on the live system before acting on it,
-  and fix the memo when it is wrong.
-- Absolute dates; never write a password, token or key.</pre><button class="copy" type="button">Copy</button></div></li>
+        Save the house rules (the list below, also <code>claude/house_rules.md</code> on the server) as <code>~/.gemini/GEMINI.md</code>; agy always loads that file.
+        With the hooks (next step) the rules also arrive with the context at every start, so this file is the fallback.</li>
       <li><b>Hooks: context, session log, mirror</b>
         <div class="cmd"><pre>git clone https://github.com/To0wnn/knowledge ~/knowledge
 python3 ~/knowledge/clients/knowledge-agent.py install agy</pre><button class="copy" type="button">Copy</button></div>
@@ -167,7 +159,7 @@ default_tools_approval_mode = "writes"
 startup_timeout_sec = 15</pre><button class="copy" type="button">Copy</button></div>
         <code>writes</code>: reading just works, Codex asks before writing.</li>
       <li><b>House rules in <code>~/.codex/AGENTS.md</code></b>
-        The same text as for agy (step 3 there). Codex loads this file at every start.</li>
+        The house rules (the list below) as <code>~/.codex/AGENTS.md</code>. Codex loads this file at every start; with the hooks the rules also arrive with the context.</li>
       <li><b>Hooks: context, session log, mirror</b>
         <div class="cmd"><pre>git clone https://github.com/To0wnn/knowledge ~/knowledge
 python3 ~/knowledge/clients/knowledge-agent.py install codex</pre><button class="copy" type="button">Copy</button></div>
