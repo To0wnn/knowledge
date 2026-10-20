@@ -192,6 +192,7 @@ body.admin-page { display: block; overflow-y: auto; }
 .admin-form { display: grid; gap: 8px; margin-top: 14px; max-width: 520px; }
 .admin-form.inline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; max-width: none; }
 .admin-form input:not([type=checkbox]), .admin-form textarea { padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
+.admin section > h3 { margin: 22px 0 8px; }
 .setting { display: grid; grid-template-columns: minmax(0, 1fr) 120px; gap: 12px; align-items: center; }
 .setting input { font-variant-numeric: tabular-nums; }
 .admin-form fieldset { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin: 0; }

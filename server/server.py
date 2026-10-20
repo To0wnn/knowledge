@@ -914,6 +914,13 @@ LAST_USED_FILE = ADMIN_DIR / "last_used.json"
 _last_used: dict[str, float] = {}
 
 
+def last_used(name: str) -> float | None:
+    """Also right after a restart, before any token was used again (else the admin page says "never")."""
+    if not _last_used:
+        _last_used.update(read_json(LAST_USED_FILE, {}) or {"": 0})
+    return _last_used.get(name)
+
+
 def mark_used(name: str):
     """When a token was last used, for the admin page. Written at most every 10 minutes per token, so the watcher's
     many small requests cost nothing."""
@@ -1423,14 +1430,17 @@ def system_state() -> dict:
         known = len(read_json(SECRETS_FILE, []))
     except Exception:
         known = None
-    used = lambda n: _last_used.get(n)
+    used = last_used
+    watcher, rescan = BACKGROUND.get("watcher"), BACKGROUND.get("rescan")
     return {
         "release": RELEASE, "started": STARTED,
         "background": [
             {"name": "VM file watcher", "what": "reports changed files at once (inotify on the VM); also rebuilds GEMINI.md and AGENTS.md",
-             "last": (BACKGROUND.get("watcher") or {}).get("at") or used("vm-watcher"), "detail": f"{(BACKGROUND.get('watcher') or {}).get('paths', '?')} paths in the last report"},
+             "last": watcher["at"] if watcher else used("vm-watcher"),
+             "detail": f"{watcher['paths']} paths in the last report" if watcher else "no report since this start (last token use shown)"},
             {"name": "Rescan", "what": f"safety net: re-reads changed files every {RESCAN_SECONDS} s",
-             "last": (BACKGROUND.get("rescan") or {}).get("at"), "detail": (BACKGROUND.get("rescan") or {}).get("error") or f"{(BACKGROUND.get('rescan') or {}).get('seconds', '?')} s"},
+             "last": rescan["at"] if rescan else None,
+             "detail": (rescan.get("error") or f"took {rescan['seconds']} s") if rescan else f"first run {RESCAN_SECONDS} s after the start"},
             {"name": "Semantic index", "what": f"embeds new text ({vectors.MODEL}, {vectors.THREADS} threads)", "last": None, "detail": vec.status()},
             {"name": "Weekly lint report", "what": "VM timer, Monday 08:00, posts new findings to Matrix", "last": used("vm-lint-report"), "detail": "last call of the vm-lint-report token"},
             {"name": "Session logs", "what": "SessionEnd/PreCompact hooks of Claude Code, Stop of agy, SessionEnd of Codex", "last": used("vm-sessions"), "detail": "last call of the vm-sessions token (VM)"},
@@ -1475,7 +1485,7 @@ async def ui_admin_state(request: Request, _):
         "users": read_json(USERS_FILE, {}),
         "projects": [{"name": p, "docs": d, "memory": m, "builtin": p in BUILTIN_PROJECTS} for p, (d, m) in PROJECTS.items()],
         "roots": sorted(ROOTS),
-        "tokens": [{"name": n, **{k: v for k, v in cfg.items() if k != "sha256"}, "last_used": _last_used.get(n)}
+        "tokens": [{"name": n, **{k: v for k, v in cfg.items() if k != "sha256"}, "last_used": last_used(n)}
                    for n, cfg in sorted(tokens.items())],
         "config_admins": sorted(CONFIG_ADMINS),
         "settings": current_settings(), "setting_info": {k: {"min": lo, "max": hi, "label": label, "float": kind is float}
