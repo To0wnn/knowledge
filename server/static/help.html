@@ -62,7 +62,7 @@ th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--lin
 th { font: 600 12px var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
 tr:last-child td { border-bottom: 0; }
 .yes { color: var(--accent); font-weight: 600; } .no { color: var(--muted); }
-ul.rules { margin: 12px 0 0; padding-left: 20px; } ul.rules li { margin: 6px 0; max-width: 68ch; }
+ol.rules { margin: 12px 0 0; padding-left: 22px; } ol.rules li { margin: 6px 0; max-width: 68ch; }
 footer { margin-top: 48px; color: var(--muted); font-size: 13.5px; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 
@@ -130,9 +130,13 @@ claude plugin install knowledge@knowledge --scope user</pre><button class="copy"
         Put this text in <code>~/.gemini/GEMINI.md</code>; agy always loads that file.
         <div class="cmd"><pre>Use the MCP server "knowledge" for this project's docs and memory: look things up with
 knowledge_search or knowledge_semantic_search before answering, open hits with knowledge_read.
-Memos: search first and update the existing one; every memo has "## Stand" (true now) and
-"## Keuzes" (decisions with date and reason); history goes to archief/; one index line in
-MEMORY.md; absolute dates; never write a password, token or key.</pre><button class="copy" type="button">Copy</button></div></li>
+The full house rules are in the server's instructions; the core:
+- Search first and update the existing memo. A memo has "## Stand" (true now) and "## Keuzes"
+  (- **decision** (date, who): reason). History goes to archief/; one index line in MEMORY.md.
+- Before you add, remove or undo something, read "## Keuzes" of its memo and doc.
+- Memory is a hint: check a fact that can change on the live system before acting on it,
+  and fix the memo when it is wrong.
+- Absolute dates; never write a password, token or key.</pre><button class="copy" type="button">Copy</button></div></li>
       <li><b>Check</b>
         <div class="cmd"><pre>agy mcp list</pre><button class="copy" type="button">Copy</button></div>
         <code>knowledge  http  enabled</code>. In a session, <code>/mcp</code> shows the connection.</li>
@@ -180,14 +184,7 @@ startup_timeout_sec = 15</pre><button class="copy" type="button">Copy</button></
 
   <h2>The house rules</h2>
   <p>They apply to every client; the server checks them with <code>knowledge_lint</code>.</p>
-  <ul class="rules" id="rules">
-    <li><b>Search first.</b> Update the memo that already covers the subject; no near-duplicates.</li>
-    <li><b>One subject per memo</b>, built as <code>## Stand</code> (what is true now, how, pitfalls, open items) and <code>## Keuzes</code> (decisions with date and reason, also what was decided against).</li>
-    <li><b>History</b> does not go in the memo but in <code>archief/&lt;name&gt;_archief.md</code>.</li>
-    <li><b>One index line</b> per memo under the fitting <code>##</code> heading of <code>MEMORY.md</code>, at most ~150 characters.</li>
-    <li><b>Absolute dates</b> (20 Oct 2026), never "yesterday" or "next week".</li>
-    <li><b>Never a password, token or key</b> in a memo or doc; the server refuses known secrets.</li>
-  </ul>
+  <ol class="rules" id="rules"><!--HOUSE_RULES--></ol>
 
   <h2>When it does not work</h2>
   <div class="table-wrap"><table>

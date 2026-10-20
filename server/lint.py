@@ -90,8 +90,37 @@ def open_text(text: str) -> str:
     return "\n".join(l for l in body.splitlines() if not l.startswith("#") and not re.search(r"\b(niets|geen)\s+open", l, re.I))
 
 
+_MON = "jan|feb|mrt|maa|mar|apr|mei|may|jun|jul|aug|sep|okt|oct|nov|dec"
+# A decision carries when it was taken: "20 okt 2026", "20 okt", "okt 2026" or 2026-10-20.
+DECISION_DATE = re.compile(rf"\b\d{{1,2}} ({_MON})[a-z]*\b|\b({_MON})[a-z]* 20\d\d\b|\b20\d\d-\d\d", re.I)
+UNCHECKED = re.compile(r"\(stand ([^)]*?),? niet (?:opnieuw )?gecontroleerd\)", re.I)
+STALE_UNCHECKED_DAYS = 60
+
+
+def keuzes(text: str) -> list[str]:
+    """The decision bullets under "## Keuzes" (not the "no decisions yet" placeholder)."""
+    m = re.search(r"^## Keuzes\b(.*?)(?=^## |\Z)", text, re.M | re.S)
+    return [l for l in (m.group(1).splitlines() if m else []) if l.startswith("- ") and not re.match(r"- (Nog )?geen bewuste", l, re.I)]
+
+
+def stale_unchecked(text: str, today: date) -> int:
+    """Facts carried over with "(stand <date>, niet opnieuw gecontroleerd)" whose date is older than 60 days."""
+    n = 0
+    for when in UNCHECKED.findall(text):
+        d = latest_date(when + (" " + str(today.year) if not re.search(r"20\d\d", when) else ""))
+        n += bool(d and (today - d).days > STALE_UNCHECKED_DAYS)
+    return n
+
+
 def missing_structure(text: str) -> list[str]:
     return [h for h in STRUCTURE if not re.search(rf"^{h}\b", text, re.M)]
+
+
+def check_decisions(report: dict, name: str, text: str, today: date):
+    if undated := [k for k in keuzes(text) if not DECISION_DATE.search(k)]:
+        report["decision_without_date"].append(f"{name}: {len(undated)} decision(s), e.g. {undated[0][2:70]}")
+    if stale := stale_unchecked(text, today):
+        report["stale_unchecked_fact"].append(f"{name}: {stale} fact(s) unchecked for over {STALE_UNCHECKED_DAYS} days")
 
 
 def lint(files: dict[str, str], today: date | None = None, mem: str = "memory") -> dict[str, list[str]]:
@@ -110,7 +139,7 @@ def lint(files: dict[str, str], today: date | None = None, mem: str = "memory") 
         "index_points_to_missing_file", "memo_not_in_index", "dead_wikilink", "missing_frontmatter",
         "big_memo_without_archive", "long_index_line", "orphan_memo", "possibly_stale_open_item",
         "possible_secret_in_memo", "unprocessed_source", "index_line_without_heading", "index_near_load_limit",
-        "relative_date", "missing_structure", "doc_without_topic")}
+        "relative_date", "missing_structure", "doc_without_topic", "decision_without_date", "stale_unchecked_fact")}
 
     lines, size = index.count("\n") + 1 if index else 0, len(index.encode())
     if lines >= INDEX_WARN_LINES or size >= INDEX_WARN_BYTES:
@@ -152,6 +181,7 @@ def lint(files: dict[str, str], today: date | None = None, mem: str = "memory") 
             report["possibly_stale_open_item"].append(f"{name}: {opens} open/TODO mention(s), newest date {last}")
         if memo_type(text) not in ("feedback", "user") and (gone := missing_structure(text)):
             report["missing_structure"].append(f"{name}: no {' / '.join(gone)}")
+        check_decisions(report, name, text, today)
         hits = sum(1 for m in SECRET_HINT.finditer(re.sub(r"‹[^›\n]*›", "", text)) if looks_secret(m.group(0)))
         if hits:
             report["possible_secret_in_memo"].append(f"{name}: {hits} line(s) (values not shown)")
@@ -173,6 +203,7 @@ def lint(files: dict[str, str], today: date | None = None, mem: str = "memory") 
             continue
         if (gone := missing_structure(text)):
             report["missing_structure"].append(f"{rel}: no {' / '.join(gone)}")
+        check_decisions(report, rel, text, today)
         topic = frontmatter(text).get("topic", "").strip('"')
         if topic not in headings:
             report["doc_without_topic"].append(f"{rel}: topic '{topic}' is no heading of MEMORY.md" if topic else f"{rel}: no topic")
@@ -232,6 +263,10 @@ if __name__ == "__main__":  # self-check
                "homelab/CLAUDE.md": "rules", "homelab/archief/x_archief.md": "old"})
     assert r5["missing_structure"] == ["homelab/x.md: no ## Stand / ## Keuzes"], r5
     assert r5["doc_without_topic"] == ["homelab/x.md: topic 'Nope' is no heading of MEMORY.md"], r5
+    k = "---\nmetadata:\n  type: project\n---\n## Stand\nIP 10.0.0.9 (stand 1 jul 2026, niet opnieuw gecontroleerd), port 80 (stand 15 okt, niet gecontroleerd)\n## Keuzes\n- **A** (20 okt 2026): x\n- **B**: no date\n- **C** (2026-10-01, Anthony): y\n"
+    r6 = lint({"memory/MEMORY.md": "", "memory/k.md": k, "memory/n.md": "## Stand\n## Keuzes\n- Nog geen bewuste keuzes vastgelegd.\n"}, today=date(2026, 10, 20))
+    assert r6["decision_without_date"] == ["k.md: 1 decision(s), e.g. **B**: no date"], r6
+    assert r6["stale_unchecked_fact"] == ["k.md: 1 fact(s) unchecked for over 60 days"], r6
     t = lint({**files, "trade-memory/MEMORY.md": "- [X](x.md) — y\n"}, today=date(2026, 10, 18), mem="trade-memory")
     assert t["index_points_to_missing_file"] == ["MEMORY.md → x.md"] and not t["unprocessed_source"], t
     print("ok")

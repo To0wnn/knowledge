@@ -313,6 +313,7 @@ def main():
         fr = json.loads(res)["token"]
         ctx = http("GET", "/context/1?project=" + urllib.parse.quote("C:\\Users\\Bob\\A350Copilot"), token=fr)[1]
         assert "project garden" in ctx and "## Stand" in ctx and "garden-memory/MEMORY.md" in ctx, ctx[:400]
+        assert "Memory is a hint, not the truth" in ctx and "garden-memory/archief/<name>_archief.md" in ctx, ctx
         assert "homelab" not in ctx and "secret set" not in ctx and "trade" not in ctx, ctx
         files = {"README.md": "# Copilot\n", "docs\\design\\voice.md": "voice notes\n", "C:\\x.md": "no",
                  "../escape.md": "no", ".venv/lib/x.md": "no", "main.py": "no"}
@@ -453,6 +454,11 @@ def main():
         assert raw("GET", "/ui/static/app.js")[1]["cache-control"] == "no-cache"
         st, _, body = raw("GET", "/ui/help", headers=ck)
         assert st == 200 and b"Connect a client" in body and b"fonts.googleapis" not in body  # no external requests
+        # One source for the house rules: the help page, the MCP instructions and a guest's context show the same rules.
+        assert b"Memory is a hint, not the truth" in body and b"<!--HOUSE_RULES-->" not in body
+        init = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18",
+                    "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}})[1]
+        assert "Memory is a hint, not the truth" in init and "read the \\\"## Keuzes\\\"" in init, init[:300]
         st, hd, body = raw("GET", "/ui", headers=ck)
         rel = re.search(rb'app\.js\?v=([0-9a-f]{12})"', body).group(1).decode()
         assert hd["cache-control"] == "no-cache" and f'data-release="{rel}"'.encode() in body and b"app.css?v=" + rel.encode() in body
