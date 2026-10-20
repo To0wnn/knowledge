@@ -14,8 +14,21 @@ import subprocess
 import sys
 import tempfile
 
+
+def local_env():
+    """Addresses of this installation from local.env next to this repo (not in git); the environment wins."""
+    f = os.path.join(os.path.dirname(os.path.abspath(__file__)), "local.env")
+    if os.path.exists(f):
+        for line in open(f):
+            k, _, v = line.split("#")[0].strip().partition("=")
+            if k and v:
+                os.environ.setdefault(k, v.strip())
+
+
+local_env()
+
 PLAIN = os.path.expanduser("~/.config/knowledge-server/tokens-plain.json")
-REMOTE = "root@<lan-ip>:/root/docker/knowledge/config/secrets.json"
+REMOTE_PATH = "/root/docker/knowledge/config/secrets.json"
 # Optional local list of secrets (value<TAB>NAME per line). The Vaultwarden helper `secret tsv` is preferred.
 SECRETS_TSV = os.path.expanduser(os.environ.get("KNOWLEDGE_SECRETS_TSV", "~/.config/kennis-sync/geheimen.tsv"))
 
@@ -45,7 +58,7 @@ def push_secrets():
     os.chmod(local, 0o600)
     with tempfile.NamedTemporaryFile("w", delete=False, suffix=".json") as f:
         json.dump(sorted(values), f)
-    target = REMOTE
+    target = f"{os.environ['KNOWLEDGE_FORGE_SSH']}:{REMOTE_PATH}"  # KeyError = local.env missing
     try:
         subprocess.run(["scp", "-q", f.name, target], check=True)
         subprocess.run(["ssh", target.split(":")[0], "chown 1000:1000 /root/docker/knowledge/config/secrets.json && "

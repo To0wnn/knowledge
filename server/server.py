@@ -1675,7 +1675,7 @@ async def ui_ingest(request: Request):
 
 
 def build_app():
-    hosts = os.environ.get("KNOWLEDGE_ALLOWED_HOSTS", "knowledge.to0wnn.com,<lan-ip>:8766,127.0.0.1:8766").split(",")
+    hosts = os.environ.get("KNOWLEDGE_ALLOWED_HOSTS", "knowledge.to0wnn.com,127.0.0.1:8766").split(",")
     app = server.streamable_http_app(
         stateless_http=True,
         json_response=True,
@@ -1695,5 +1695,5 @@ if __name__ == "__main__":
     threading.Thread(target=index.loop, daemon=True).start()
     threading.Thread(target=vec.loop, daemon=True).start()
     uvicorn.run(build_app(), host=os.environ.get("KNOWLEDGE_BIND", "0.0.0.0"), port=int(os.environ.get("KNOWLEDGE_PORT", "8766")),
-                log_level="warning", proxy_headers=True, forwarded_allow_ips="<lan-ip>",
+                log_level="warning", proxy_headers=True, forwarded_allow_ips=os.environ.get("KNOWLEDGE_PROXY_IPS", "127.0.0.1"),
                 timeout_graceful_shutdown=3)  # open live streams (browser tabs) must not hold up a restart

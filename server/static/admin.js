@@ -118,7 +118,7 @@ function showNewToken(res) {
   $("new-token-setup").textContent = [
     "read -rs TOKEN   # paste the token, then Enter (keeps it out of the shell history)",
     `printf %s "$TOKEN" | secret set ${label}   # on the VM: keep it in the vault`,
-    "claude plugin marketplace add to0wnn@<lan-ip>:/home/user/knowledge   # or the GitHub URL",
+    "claude plugin marketplace add To0wnn/knowledge",
     "claude plugin install knowledge@knowledge --scope user",
     `printf '{"url":"${location.origin}","token":"%s"}' "$TOKEN" | claude plugin configure knowledge@knowledge --values-stdin`,
   ].join("\n");

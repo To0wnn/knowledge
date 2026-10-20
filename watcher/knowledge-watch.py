@@ -27,7 +27,7 @@ TREES = [  # local path -> path prefix on the knowledge server (longest first)
     (f"{HOME}/trade_bot", "trade"),
 ]
 MD_ONLY = ("anpitek/", "trade/")  # code repos: only Markdown is shared, so logs and state files are not reported
-SERVER = os.environ.get("KNOWLEDGE_URL", "http://<lan-ip>:8766")
+SERVER = os.environ.get("KNOWLEDGE_URL", "https://knowledge.to0wnn.com")  # LAN address from local.env (unit)
 TOKEN = open(os.path.expanduser("~/.config/knowledge-server/watcher.token")).read().strip()
 EXCLUDE = r"(/\.git/|/node_modules/|/\.venv/|/venv/|/\.next/|/__pycache__/|/\.cache/|\.swp$|~$)"
 
