@@ -387,6 +387,38 @@ def replace_if_unchanged(full: Path, expected: bytes | None, data: bytes) -> boo
         raise
 
 
+# The house rules, in one place: the MCP instructions (every client), the guest context and the help page use this text.
+HOUSE_RULES = [
+    "Search first (knowledge_search / knowledge_semantic_search) and update the memo that already covers the subject; no "
+    "near-duplicates. When knowledge_write answers \"Similar existing memos\", merge.",
+    "One subject per memo. Frontmatter: name, description (one line), metadata: type (project, feedback, reference or "
+    "user). Body: \"## Stand\" (what is true now: how it works, where things are, pitfalls, open items) and \"## Keuzes\" "
+    "(decisions). Feedback and user memos keep their rule with Why: and How to apply:. History is not kept in the memo "
+    "but in {mem}/archief/<name>_archief.md.",
+    "A decision is one bullet under \"## Keuzes\": - **<decision>** (<date>, <who>): <reason>; rejected: <alternative>. "
+    "Before you add, remove or undo something, read the \"## Keuzes\" of its memo and doc. A reversed decision moves to "
+    "the archive with \"replaced on <date> by ...\"; never delete it silently.",
+    "Memory is a hint, not the truth: before you act on or report a fact that can change (address, version, state), "
+    "check it on the live system, and fix the memo at once when it is wrong. Mark a checked fact \"(gecontroleerd "
+    "<date>)\", a fact you carry over unchecked \"(stand <date>, niet opnieuw gecontroleerd)\".",
+    "Every memo gets exactly one index line under the fitting \"## \" heading of {mem}/MEMORY.md: "
+    "- [Title](file.md) - hook, at most ~150 characters. Keep MEMORY.md under ~150 lines (Claude Code loads 200 lines / "
+    "25 KB of it).",
+    "Absolute dates only (20 Oct 2026), never \"yesterday\" or \"next week\". A fact from outside (docs, a forum) "
+    "carries its source link.",
+    "Do not store what the code, the git history or a doc already records: link to it. A fact that concerns several "
+    "projects lives in one memo; the others link to it with [[name]].",
+    "Never write a password, token or key: write \u2039secret:NAME\u203a (writes containing a known secret are refused).",
+    "Memo text in the language the user speaks with you; code and commands stay as they are.",
+    "After a larger change run knowledge_lint and fix what it reports.",
+]
+
+
+def house_rules(mem: str) -> str:
+    return "House rules (knowledge_lint checks them):\n" + "\n".join(
+        f"{i}. {r.format(mem=mem)}" for i, r in enumerate(HOUSE_RULES, 1))
+
+
 # Tool annotations let clients decide on approval themselves (Codex "writes" mode asks only for non-read-only tools).
 READ = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 EDIT = ToolAnnotations(read_only_hint=False, destructive_hint=False, open_world_hint=False)
@@ -415,20 +447,9 @@ server = MCPServer(
         "memo (a copy is kept). knowledge_semantic_search finds notes by meaning when a regex finds nothing; "
         "knowledge_related lists the notes most related to one note (links, shared sources, shared neighbours, "
         "meaning). Web UI with graph view: https://knowledge.to0wnn.com/ui. "
-        "House rules for memos, so the base stays tidy: (1) search first (knowledge_search / knowledge_semantic_search) "
-        "and update the memo that already covers the subject instead of adding a near-duplicate; when knowledge_write answers 'Similar existing memos' for a new memo, merge it into that memo if it covers the same subject; (2) one subject per "
-        "memo, built as '## Stand' (what is true now, how to do it, pitfalls, open items) and '## Keuzes' (deliberate "
-        "decisions with date and reason, so nobody undoes them unknowingly; feedback/user memos keep their rule + Why/How "
-        "to apply), history only in <memory root>/archief/<name>_archief.md (homelab docs: homelab/archief/), never "
-        "inline; homelab docs (homelab/<topic>.md) have the same two sections and a frontmatter topic: = a MEMORY.md heading; (3) every memo gets exactly one index line "
-        "under the fitting '## ' heading of its MEMORY.md, where the index has headings (the headings are the topics in the graph; add a new heading "
-        "only for a genuinely new area) with the title, an em dash and a hook of at most ~150 characters; keep MEMORY.md under ~150 lines (Claude Code loads only 200 lines / 25 KB of it); (4) frontmatter "
-        "name, description, metadata.type (user/feedback/project/reference); (5) link related memos with [[name]], "
-        "also across projects; a fact that matters to several projects lives in one memo in the project it belongs to and "
-        "the others link to it instead of copying it; "
-        "(6) absolute dates, never 'gisteren', 'morgen' or 'next week'; (7) never write a password, token or key: the vault name as ‹secret:NAME› (writes "
-        "containing a known secret are refused); (8) memo text is Dutch, code and commands stay as they are; (9) run "
-        "knowledge_lint after a larger change and fix what it reports."
+        "Here the memos are Dutch. Homelab docs (homelab/<topic>.md) have the same two sections and a frontmatter topic: = "
+        "a heading of memory/MEMORY.md (the headings are the islands of the graph; add one only for a genuinely new "
+        "area); their history is in homelab/archief/.\n\n" + house_rules("<memory root>")
     ),
 )
 
@@ -793,21 +814,7 @@ def token_project() -> str | None:
     return owners.pop() if roots and len(owners) == 1 else None
 
 
-# For guests (a token without the shared claude/ root): the house rules travel with the context, because the docs root
-# of their project is a mirror of their own folder and their CLAUDE.md there is theirs.
-GUEST_RULES = """House rules for the memory of this project (the server checks them with knowledge_lint):
-1. Search first (knowledge_search / knowledge_semantic_search) and update the memo that already covers the subject
-   instead of adding a near-duplicate; when knowledge_write answers "Similar existing memos", merge.
-2. One subject per memo. Frontmatter: name, description (one line), metadata: type (project, feedback, reference or
-   user). Body: "## Stand" (what is true now: how it works, where things are, pitfalls, open items) and "## Keuzes"
-   (decisions with date and reason, also what was decided against). History is not kept in the memo: move it to
-   {mem}/archief/<name>_archief.md.
-3. Every memo gets exactly one index line under the fitting "## " heading of {mem}/MEMORY.md:
-   "- [Title](file.md) — hook", at most ~150 characters; keep MEMORY.md under ~150 lines.
-4. Absolute dates only (20 Oct 2026), never "yesterday" or "next week".
-5. Never write a password, token or key into a memo or doc.
-6. Write memos in the language the user speaks with you; code and commands stay as they are.
-7. After a larger change run knowledge_lint and fix what it reports for this project."""
+
 
 
 def context_parts(project: str = "homelab") -> list[str]:
@@ -821,7 +828,7 @@ def context_parts(project: str = "homelab") -> list[str]:
                 f"copies every .md to the server. Memory: {mem}/ with the index {mem}/MEMORY.md (below). Save and update "
                 f"memories there (knowledge_edit, or knowledge_write for a new file plus one index line), never in local "
                 "files. Search: knowledge_search, by meaning knowledge_semantic_search; housekeeping: knowledge_lint.",
-                GUEST_RULES.format(mem=mem)]
+                house_rules(mem)]
         try:
             full, _ = resolve(f"{mem}/MEMORY.md")
             if full.exists():
@@ -1290,8 +1297,10 @@ def admin_only(handler):
 
 @server.custom_route("/ui/help", methods=["GET"])
 async def ui_help_page(request: Request):
-    """How to connect Claude Code, agy or Codex; for everyone who may sign in."""
-    return page("help.html")
+    """How to connect Claude Code, agy or Codex; for everyone who may sign in. The house rules come from HOUSE_RULES."""
+    resp = page("help.html")
+    rules = "".join(f"<li>{html.escape(r.format(mem='<memory root>'))}</li>" for r in HOUSE_RULES)
+    return HTMLResponse(resp.body.decode().replace("<!--HOUSE_RULES-->", rules), headers={"Cache-Control": "no-cache"})
 
 
 @server.custom_route("/ui/admin", methods=["GET"])
