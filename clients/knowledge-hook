@@ -1,0 +1,11 @@
+#!/bin/sh
+# Run a knowledge plugin hook for a non-Claude agent (Codex, agy); stdin is the hook's JSON.
+# Usage: knowledge-hook <VAULT_NAME> docs-sync   mirror an edited .md of a folder with .knowledge-project (write token)
+#        knowledge-hook - session-log            post the session log with KNOWLEDGE_TOKEN, else the VM's own session
+#                                                 token (~/.config/knowledge-server/session.env): agy/Codex tokens stay read-only
+# VAULT_NAME "-" takes the token from KNOWLEDGE_TOKEN (any machine with a clone of this repo; Linux/macOS).
+hooks=$(dirname "$(readlink -f "$0")")/../plugin/hooks
+if [ "${1:?vault name or -}" != - ]; then KNOWLEDGE_TOKEN=$(/home/user/.local/bin/secret "$1"); export KNOWLEDGE_TOKEN; fi
+case ${2:?hook} in
+    session-log|docs-sync) exec python3 "$hooks/$2.py" ;;
+esac
