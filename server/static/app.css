@@ -44,7 +44,7 @@ button { cursor: pointer; }
 .seg { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .seg button { padding: 6px 11px; border: 0; background: transparent; color: var(--muted); font-size: 13px; }
 .seg button + button { border-left: 1px solid var(--line); }
-.seg button[aria-pressed="true"] { background: var(--hover); color: var(--ink); font-weight: 600; }
+.seg button[aria-pressed="true"], .seg button[aria-checked="true"] { background: var(--hover); color: var(--ink); font-weight: 600; }
 .seg .n { margin-left: 5px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .logout { color: var(--muted); text-decoration: none; font-size: 13px; }
 .actionsbar { display: flex; align-items: center; gap: 8px; margin-left: auto; }
@@ -152,6 +152,20 @@ h3.sub { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; colo
 .map-card .note-desc { margin: 0; }
 .map-card button { padding: 7px 14px; border: 0; border-radius: 6px; background: var(--accent); color: var(--panel); font-weight: 600; }
 
+/* home view: an overview of the project's topics instead of the raw index */
+.home-head h2 { margin: 0; font-size: 21px; text-transform: capitalize; }
+.home-head p { margin: 4px 0 18px; }
+.home-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; align-items: start; }
+.home-card { min-width: 0; display: grid; gap: 4px; justify-items: start; padding: 12px 12px 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+.home-card h3 { display: flex; align-items: center; gap: 7px; width: 100%; margin: 0 0 2px; padding: 0 8px; font-size: 13px; }
+.home-card h3 i { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.home-card h3 .n { margin-left: auto; font-weight: 400; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.home-card .hits { width: 100%; }
+.home-card .hit-path { color: var(--ink); font-size: 13px; }
+.home-card > button { margin-left: 8px; }
+.connected > button { margin-top: 6px; }
+.connected h3.home-lint { margin-top: 20px; }
+
 /* narrower screens: connected notes under the note */
 @media (max-width: 1100px) {
   body { grid-template: "top top" auto "left center" 1fr "left right" auto / 260px minmax(0, 1fr); }
@@ -169,6 +183,7 @@ h3.sub { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; colo
   .actionsbar { margin-left: auto; }
   .left { border-right: 0; border-bottom: 1px solid var(--line); }
   #note { padding: 16px; border-bottom: 1px solid var(--line); }
+  body.home:has(#note:not([hidden])) #topics { display: none; } /* the home cards show the same topics (not on the map) */
 }
 @media (hover: none) { kbd { display: none; } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }

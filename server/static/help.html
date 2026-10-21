@@ -5,78 +5,59 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Connect a client · Knowledge</title>
 <link rel="icon" href="data:,">
+<link rel="stylesheet" href="/ui/static/app.css">
 <style>
-/* Layout: one reading column; a sticky tab bar switches between the three clients; reference tables below. */
-:root {
-  --bg: #f5f6f3; --panel: #ffffff; --ink: #1c2420; --muted: #5c6862; --line: #dde2dc;
-  --accent: #1f6f5c; --accent-ink: #ffffff; --code-bg: #eef1ec; --warn: #9a5a12; --warn-bg: #fbf1e3;
-  --display: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --body: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
-  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
-}
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
-  --bg: #121614; --panel: #1a201d; --ink: #e3e9e5; --muted: #98a59e; --line: #2c3530;
-  --accent: #5cc4a6; --accent-ink: #0f1a16; --code-bg: #222a26; --warn: #e6b062; --warn-bg: #2e2617; color-scheme: dark } }
-:root[data-theme="dark"] {
-  --bg: #121614; --panel: #1a201d; --ink: #e3e9e5; --muted: #98a59e; --line: #2c3530;
-  --accent: #5cc4a6; --accent-ink: #0f1a16; --code-bg: #222a26; --warn: #e6b062; --warn-bg: #2e2617; color-scheme: dark }
-* { box-sizing: border-box; }
+/* The help page uses the app's tokens and header (app.css); here only what a reading page needs: one column, client
+   tabs that stay in view, numbered steps, copyable commands. */
 [hidden] { display: none !important; } /* ol.steps sets display: grid, which would beat the hidden attribute */
-html, body { margin: 0; }
-body { background: var(--bg); color: var(--ink); font: 16px/1.6 var(--body); }
-.wrap { max-width: 860px; margin: 0 auto; padding-block: 40px 72px;
-  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
-h1, h2, h3 { font-family: var(--display); text-wrap: balance; line-height: 1.2; margin: 0; }
-h1 { font-size: clamp(30px, 5vw, 42px); letter-spacing: -0.01em; }
-h2 { font-size: 24px; margin-top: 40px; }
-h3 { font-size: 18px; margin-top: 28px; }
-p { margin: 10px 0; max-width: 68ch; }
-.lede { color: var(--muted); font-size: 18px; margin-top: 12px; }
-.eyebrow { font: 500 12px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin-bottom: 10px; }
-code { font-family: var(--mono); font-size: .9em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
-a { color: var(--accent); }
-.how { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-top: 22px; }
-.how div { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; min-width: 0; }
-.how b { display: block; font-family: var(--display); font-size: 17px; margin-bottom: 4px; }
-.how span { color: var(--muted); font-size: 14.5px; }
-.tabs { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; display: flex; gap: 6px; flex-wrap: wrap;
-  background: var(--bg); padding: 12px 0; margin-top: 36px; border-bottom: 1px solid var(--line); }
-body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
-.tabs > button { font: 600 15px var(--body); color: var(--muted); background: transparent; border: 1px solid var(--line);
-  border-radius: 999px; padding: 7px 16px; cursor: pointer; }
-.os { margin-left: auto; display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
-.os button { font: 500 14px var(--body); color: var(--muted); background: transparent; border: 0; padding: 7px 14px; cursor: pointer; }
-.os button[aria-checked="true"] { background: var(--code-bg); color: var(--ink); }
-.os button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.tabs > button[aria-selected="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
-.tabs button:focus-visible, .copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-ol.steps { list-style: none; counter-reset: s; padding: 0; margin: 18px 0 0; display: grid; gap: 18px; }
-ol.steps > li { counter-increment: s; position: relative; padding-left: 44px; min-width: 0; }
-ol.steps > li::before { content: counter(s); position: absolute; left: 0; top: 0; width: 30px; height: 30px; border-radius: 50%;
-  display: grid; place-items: center; font: 600 14px var(--mono); background: var(--code-bg); color: var(--accent); }
-ol.steps > li > b { display: block; font-size: 16.5px; }
-.cmd { position: relative; margin-top: 8px; background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px; min-width: 0; }
-.cmd pre { margin: 0; padding: 12px 84px 12px 14px; overflow-x: auto; font: 13.5px/1.55 var(--mono); white-space: pre; }
-.copy { position: absolute; top: 8px; right: 8px; font: 500 12px var(--body); color: var(--ink); background: var(--panel);
-  border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
-.note { margin-top: 10px; padding: 10px 14px; border-left: 3px solid var(--warn); background: var(--warn-bg); border-radius: 0 8px 8px 0; font-size: 15px; }
-.note b { color: var(--warn); }
-.table-wrap { overflow-x: auto; margin-top: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
-table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
-th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
-th { font: 600 12px var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
-tr:last-child td { border-bottom: 0; }
-.yes { color: var(--accent); font-weight: 600; } .no { color: var(--muted); }
+.wrap { max-width: 860px; margin: 0 auto; padding: 28px 16px 64px; font-size: 15px; line-height: 1.6; }
+.wrap h1, .wrap h2, .wrap h3 { text-wrap: balance; line-height: 1.25; margin: 0; }
+.wrap h1 { font-size: 26px; }
+.wrap h2 { font-size: 19px; margin-top: 36px; }
+.wrap h3 { font-size: 16px; margin-top: 24px; }
+.wrap p { margin: 10px 0; max-width: 68ch; }
+.lede { color: var(--muted); font-size: 16px; }
+.eyebrow { font: 12px var(--mono); color: var(--muted); margin-bottom: 6px; }
+.wrap :not(pre) > code { background: var(--hover); padding: 1px 5px; border-radius: 4px; font-size: .88em; }
+.wrap a { color: var(--accent); }
+.how { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 20px; }
+.how div { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; min-width: 0; }
+.how b { display: block; margin-bottom: 2px; }
+.how span { color: var(--muted); font-size: 14px; }
+.client-tabs { position: sticky; top: 0; z-index: 5; display: flex; gap: 4px; flex-wrap: wrap; align-items: center;
+  background: var(--bg); padding: 10px 0; margin-top: 28px; border-bottom: 1px solid var(--line); }
+.client-tabs > button { padding: 6px 12px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 14px; }
+.client-tabs > button[aria-selected="true"] { background: var(--hover); color: var(--ink); font-weight: 600; }
+.os { margin-left: auto; }
+ol.steps { list-style: none; counter-reset: s; padding: 0; margin: 16px 0 0; display: grid; gap: 18px; }
+ol.steps > li { counter-increment: s; position: relative; padding-left: 38px; min-width: 0; }
+ol.steps > li::before { content: counter(s); position: absolute; left: 0; top: 1px; width: 24px; height: 24px; border-radius: 50%;
+  display: grid; place-items: center; font: 600 12px var(--mono); background: var(--hover); color: var(--accent); }
+ol.steps > li > b { display: block; }
+.cmd { position: relative; margin-top: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; min-width: 0; }
+.cmd pre { margin: 0; padding: 10px 76px 10px 12px; overflow-x: auto; font: 13px/1.55 var(--mono); white-space: pre; }
+.copy { position: absolute; top: 7px; right: 7px; padding: 3px 9px; font-size: 12px; color: var(--ink); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 6px; }
+.copy:hover { background: var(--hover); }
+.note { margin-top: 12px; padding: 10px 14px; border: 1px solid color-mix(in srgb, var(--g-feedback) 45%, var(--line));
+  background: color-mix(in srgb, var(--g-feedback) 10%, var(--panel)); border-radius: 8px; font-size: 14px; }
+.wrap .table-wrap { margin-top: 14px; }
+.wrap table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+.wrap th, .wrap td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.wrap th { color: var(--muted); font-weight: 600; font-size: 12px; }
+.wrap tr:last-child td { border-bottom: 0; }
+.yes { color: var(--g-skill); font-weight: 600; } .no { color: var(--muted); }
 ol.rules { margin: 12px 0 0; padding-left: 22px; } ol.rules li { margin: 6px 0; max-width: 68ch; }
-footer { margin-top: 48px; color: var(--muted); font-size: 13.5px; }
-@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
-
-.top { margin: 0 0 18px; font-size: 14px; } .top a { color: var(--muted); text-decoration: none; }
+footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
 </style>
 </head>
-<body>
+<body class="admin-page">
+<header class="top">
+  <h1 class="brand">Knowledge · help</h1>
+  <a class="logout" href="/ui">← Back to the graph</a>
+  <a class="logout" href="/outpost.goauthentik.io/sign_out">Sign out</a>
+</header>
 <div class="wrap">
-  <p class="top"><a href="/ui">← Back to the knowledge base</a></p>
   <div class="eyebrow">MCP · https://knowledge.to0wnn.com</div>
   <h1>Connect a client</h1>
   <p class="lede">How to connect Claude Code, agy (Antigravity) or Codex to the shared knowledge: the docs and memory of your project, live on every machine, with the same house rules.</p>
@@ -89,11 +70,11 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13.5px; }
 
   <div class="note"><b>Receive the token safely.</b> Ask for a one-time Bitwarden Send link, not a chat or e-mail message. Never put the token in a memo, doc or git repository.</div>
 
-  <nav class="tabs" role="tablist" aria-label="Client">
+  <nav class="client-tabs" role="tablist" aria-label="Client">
     <button role="tab" id="tab-claude" aria-controls="claude" aria-selected="true">Claude Code</button>
     <button role="tab" id="tab-agy" aria-controls="agy" aria-selected="false">agy (Antigravity)</button>
     <button role="tab" id="tab-codex" aria-controls="codex" aria-selected="false">Codex</button>
-    <span class="os" role="radiogroup" aria-label="Operating system">
+    <span class="os seg" role="radiogroup" aria-label="Operating system">
       <button type="button" role="radio" data-os="linux" aria-checked="true">Linux &amp; macOS</button>
       <button type="button" role="radio" data-os="windows" aria-checked="false">Windows</button>
     </span>
@@ -244,8 +225,23 @@ py $HOME\knowledge\clients\knowledge-agent.py install codex</pre><button class="
       <tr><td>Session log on the server</td><td class="yes">yes</td><td class="yes">with the hooks (one entry per turn)</td><td class="yes">with the hooks</td></tr>
       <tr><td>Mirror docs (<code>.md</code>)</td><td class="yes">yes, with .knowledge-project</td><td class="yes">with the hooks + .knowledge-project</td><td class="yes">with the hooks + .knowledge-project</td></tr>
       <tr><td>Refuses known secrets in writes</td><td class="yes">yes (server)</td><td class="yes">yes (server)</td><td class="yes">yes (server)</td></tr>
+      <tr><td>Offline copy of the memory</td><td class="yes">yes</td><td class="yes">with the hooks</td><td class="yes">with the hooks</td></tr>
     </tbody>
   </table></div>
+
+  <h2>When the server is down</h2>
+  <p>With a token that may write, your memory is also kept on your own machine, in <code>~/.knowledge/mirror/</code>
+    (on Windows <code>%USERPROFILE%\.knowledge\mirror\</code>). It syncs in the background at every start, so a session
+    never waits for it, and only what changed travels.</p>
+  <ul>
+    <li><b>Server unreachable:</b> the session starts with the context of your last online session and the agent reads
+      and writes memos in that copy, by the same house rules.</li>
+    <li><b>Back online:</b> the next start uploads what you wrote offline and fetches what changed on the server.</li>
+    <li><b>Changed on both sides:</b> nothing is overwritten. Your offline text is kept next to the memo as
+      <code>&lt;name&gt;.offline-&lt;time&gt;.md</code>; <code>knowledge_lint</code> asks the agent to merge the two.</li>
+    <li>Something to look at (a conflict, a refused write, a failed sync) is written to <code>last-sync.log</code> in
+      that folder; when all is well the file is not there.</li>
+  </ul>
 
   <h2>The house rules</h2>
   <p>They apply to every client; the server checks them with <code>knowledge_lint</code>.</p>
