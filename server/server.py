@@ -1654,9 +1654,18 @@ async def ui_admin_user(request: Request, body: dict):
 @admin_only
 async def ui_admin_project(request: Request, body: dict):
     name = str(body["name"]).strip()
+    mems = {m for _, m in PROJECTS.values()}  # the memory roots before the new project
     await asyncio.to_thread(create_project, name)
+    # A token that sees the memory of every project (vm-sessions: session logs, VM sessions) also gets the new one;
+    # otherwise its links into the new project look dead and its sessions cannot read that memory.
+    tokens = dict(read_json(TOKENS_FILE, {}))
+    widened = [t for t, cfg in tokens.items() if set(cfg.get("roots") or []) == mems]
+    for t in widened:
+        tokens[t]["roots"] = sorted(mems | {PROJECTS[name][1]})
+    if widened:
+        write_json(TOKENS_FILE, tokens)
     audit("admin-project", name)
-    return JSONResponse({"ok": True, "project": name})
+    return JSONResponse({"ok": True, "project": name, "tokens_widened": widened})
 
 
 @server.custom_route("/ui/api/admin/token", methods=["POST"])

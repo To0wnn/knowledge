@@ -309,7 +309,10 @@ def main():
         # Projects: created in the UI with docs + memory roots, writable, known to /ui/api/me and the session context.
         assert admin("/ui/api/admin/project", {"name": "Bad-Name"})[0] == 400
         assert admin("/ui/api/admin/project", {"name": "trade"})[0] == 400
-        assert admin("/ui/api/admin/project", {"name": "garden"})[0] == 200
+        st, _, res = admin("/ui/api/admin/token", {"name": "all-memory", "write": True, "roots": ["memory", "anpitek-memory", "trade-memory"]})
+        assert st == 200, res
+        st, _, res = admin("/ui/api/admin/project", {"name": "garden"})
+        assert st == 200 and json.loads(res)["tokens_widened"] == ["all-memory"], res  # a memory-of-every-project token follows
         assert (tmp / "projects/garden/memory/MEMORY.md").exists()
         st, _, res = admin("/ui/api/admin/token", {"name": "friend-pc", "write": True, "redact": True, "roots": ["garden", "garden-memory"]})
         fr = json.loads(res)["token"]  # a new guest with an empty memory: the context offers to bring in existing notes
