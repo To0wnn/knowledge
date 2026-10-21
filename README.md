@@ -262,6 +262,24 @@ in the background at session start (and end, Claude), so a session never waits f
 A read-only token gets no copy. Tested on the Framework (188 memos, a memo written there reached the server, a
 deletion on the server reached the copy) and in `test_server.py` (offline edit, conflict, lost file); not on Windows.
 
+## Client test on Windows, macOS and Linux (CI, 21 Oct 2026)
+
+`.github/workflows/clients.yml` runs `tests/clients_e2e.py` on every push, on real Windows, macOS and Linux runners.
+It starts the real server on the runner (fake embeddings) and drives the client side the way the tools do, under
+awkward conditions on purpose: a home folder with a space and an "é", a UTF-16 `.knowledge-project` (PowerShell 5),
+text with → and ✅, the plugin and `knowledge-agent.py` under a path with a space.
+
+- Claude Code plugin: every command in `hooks.json` through Git Bash (Windows) or sh, with `${CLAUDE_PLUGIN_ROOT}`
+  both as a variable and substituted; context, docs mirror, secret guard, session log, offline copy.
+- agy and Codex: `knowledge-agent.py install` twice, then every generated hook through PowerShell and
+  `cmd /d /s /c "…"` (Windows) or sh; context JSON, a wrong token stops with 401.
+- Offline: server down → offline context within 10,000 characters; back online → the offline memo goes up.
+- The real `claude plugin install` from this repo and `codex mcp list` (CI fails if the CLIs are missing).
+
+Run it locally: `uv run --project server python tests/clients_e2e.py`. Windows notes: `uvloop` is skipped there,
+`extract.py` refuses to extract without the Unix `resource` limits, Codex finds its folder via the OS (the test
+and `knowledge-agent.py` honour `CODEX_HOME`).
+
 ## Local addresses
 
 The addresses of an installation (docker host, NFS host, LAN URL, Matrix, proxy) live in `local.env`, which is not in
