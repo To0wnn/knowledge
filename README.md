@@ -157,6 +157,20 @@ memo check and secret guard stay Claude-only; the server refuses known secrets f
 Server side for every client: tools carry MCP annotations (`readOnlyHint`, `destructiveHint`, `openWorldHint`), and the
 first ~500 characters of the instructions stand alone (Codex only shows that part when choosing tools).
 
+## Development rules and skills (21 Oct 2026)
+
+How code is changed, the same for every project and agent: `claude/dev_rules.md` (`~/.claude/gedeeld/dev_rules.md`
+on the VM), twelve numbered rules (read first, plan only larger work, root cause with a failing test, measure
+before/after, one change with a way back, done = check passed with output, fail loudly, Conventional Commits, English,
+docs and Keuzes in the same change, ask before visible actions, review larger changes). It travels like the house
+rules: CLAUDE.md imports it, the watcher writes it into GEMINI.md/AGENTS.md, a guest's context and `/house-rules`
+carry it. Each project keeps only its own commands and exceptions in AGENTS.md (`## Commands`, `## Project rules`).
+
+The plugin ships the procedures as skills in `plugin/skills/`: `project-setup` (AGENTS.md template, one check
+command, git pre-commit hook, README), `plan-change`, `debug-root-cause`, `verify-done`, `review-diff`.
+`knowledge-agent.py install` copies them into `~/.agents/skills` for Codex and agy; on the VM they are symlinked into
+`~/.claude/skills`. Background and sources: memo `reference_ai_ontwikkelwerkwijze`.
+
 ## House rules: one file (20 Oct 2026)
 
 `claude/house_rules.md` (on the VM `~/.claude/gedeeld/house_rules.md`, English, a numbered list) is the only copy.
