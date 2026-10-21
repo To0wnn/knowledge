@@ -40,11 +40,15 @@ let selected = null, hover = null, focusSet = new Set();
 let project = store.get("kn_project") || "homelab";
 let labelMin = 0, current = null, editing = false, Graph, mapOn = false;
 
-const inProject = (p) => p === project || p === "shared";
+// "all": every project on one map, each project an island; otherwise one project and its topics.
+const ALL = "all", allMode = () => project === ALL;
+const inProject = (p) => allMode() || p === project || p === "shared";
 // A shared note (skill) shows only in the projects that link to it.
-const nodeIn = (n) => n.project === project || (n.project === "shared" && (!n.projects || n.projects.includes(project)));
+const nodeIn = (n) => allMode() || n.project === project || (n.project === "shared" && (!n.projects || n.projects.includes(project)));
+// What colours a note and makes its island: its project on the All map, its topic otherwise.
+const groupOf = (n) => (allMode() ? n.project : n.cluster);
 const lintProject = (item) => ROOT_PROJECT[item.split(/[/:]/)[0]] || "homelab"; // homelab memory items carry no root prefix
-const nodeColor = (n) => clusterColor.get(n.cluster) || tok("--g-doc");
+const nodeColor = (n) => clusterColor.get(groupOf(n)) || tok("--g-doc");
 const linkId = (end) => end.id || end;
 
 // ---------------------------------------------------------------- graph data
@@ -61,7 +65,7 @@ function indexGraph() {
   }
   // Cluster colours: the biggest topics of this project get a hue, in a fixed order.
   const sizes = new Map();
-  for (const n of data.nodes) if (n.cluster && nodeIn(n)) sizes.set(n.cluster, (sizes.get(n.cluster) || 0) + 1);
+  for (const n of data.nodes) if (groupOf(n) && nodeIn(n)) sizes.set(groupOf(n), (sizes.get(groupOf(n)) || 0) + 1);
   const ranked = [...sizes.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
   clusterColor = new Map(ranked.slice(0, CLUSTER_HUES.length).map(([c], i) => [c, tok(`--g-${CLUSTER_HUES[i]}`)]));
 }
@@ -143,7 +147,7 @@ function drawLabels(ctx, scale) {
 // centre, so a stray note does not push the name away); larger topics first, names that would overlap skipped.
 function drawTopics(ctx, scale) {
   const groups = new Map();
-  for (const n of Graph.graphData().nodes) if (n.cluster && n.x != null) (groups.get(n.cluster) || groups.set(n.cluster, []).get(n.cluster)).push(n);
+  for (const n of Graph.graphData().nodes) if (groupOf(n) && n.x != null) (groups.get(groupOf(n)) || groups.set(groupOf(n), []).get(groupOf(n))).push(n);
   const size = 15 / scale, taken = [];
   ctx.font = `650 ${size}px ${tok("--font")}`; ctx.textAlign = "center"; ctx.textBaseline = "bottom";
   for (const [name, ns] of [...groups].sort((a, b) => b[1].length - a[1].length)) {
@@ -236,8 +240,9 @@ async function loadGraph() {
     .nodeCanvasObject(drawNode)
     .nodePointerAreaPaint((n, c, ctx) => { ctx.fillStyle = c; ctx.beginPath(); ctx.arc(n.x, n.y, (baseRadius(n) + 2) * (n.__s || 1), 0, 2 * Math.PI); ctx.fill(); })
     // Links between topics stay faint at rest so the islands read; highlighted when their note is in focus.
-    .linkColor((l) => (linkLit(l) ? tok("--accent") : l.source.cluster !== l.target.cluster ? tok("--line") + "66" : tok("--line")))
-    .linkWidth((l) => (linkLit(l) ? 1.4 : 0.6))
+    // On the All map a link between two projects is the point of the view: drawn in the accent, not faded.
+    .linkColor((l) => (linkLit(l) ? tok("--accent") : groupOf(l.source) === groupOf(l.target) ? tok("--line") : allMode() ? tok("--accent") + "99" : tok("--line") + "66"))
+    .linkWidth((l) => (linkLit(l) ? 1.4 : allMode() && groupOf(l.source) !== groupOf(l.target) ? 1.2 : 0.6))
     .linkDirectionalParticles((l) => (!calm && mapOn && (hover || selected) && linkLit(l) ? 2 : 0)) // particles keep force-graph drawing every frame
     .linkDirectionalParticleWidth(2.2).linkDirectionalParticleSpeed(0.006)
     .linkDirectionalParticleColor(() => tok("--accent"))
@@ -263,23 +268,24 @@ async function loadGraph() {
   // Links inside a topic hold its island together; links between topics barely pull, so islands stay apart.
   // Repulsion only acts nearby, so a loosely linked note is not flung to the edge.
   Graph.d3Force("charge").strength(-90).distanceMax(260);
-  Graph.d3Force("link").distance(42).strength((l) => (l.source.cluster && l.source.cluster === l.target.cluster ? 0.5 : 0.02));
+  Graph.d3Force("link").distance(42).strength((l) => (groupOf(l.source) && groupOf(l.source) === groupOf(l.target) ? 0.5 : 0.02));
   let simNodes = [];
   // Each topic gets its own island: an anchor point its notes are pulled to. The largest topic sits in the
   // middle, the rest on a golden-angle spiral around it. Notes without a topic drift to the centre.
   let anchors = new Map();
   const gravity = (alpha) => {
     for (const n of simNodes) {
-      const a = anchors.get(n.cluster), k = (a ? 0.18 : 0.04) * alpha;
+      const a = anchors.get(groupOf(n)), k = (a ? 0.18 : 0.04) * alpha;
       n.vx += ((a ? a.x : 0) - n.x) * k; n.vy += ((a ? a.y : 0) - n.y) * k;
     }
   };
   gravity.initialize = (nodes) => {
     simNodes = nodes;
     const sizes = new Map();
-    for (const n of nodes) if (n.cluster) sizes.set(n.cluster, (sizes.get(n.cluster) || 0) + 1);
+    for (const n of nodes) if (groupOf(n)) sizes.set(groupOf(n), (sizes.get(groupOf(n)) || 0) + 1);
+    const step = allMode() ? 520 : 230; // projects are bigger islands than topics
     anchors = new Map([...sizes].sort((a, b) => b[1] - a[1]).map(([c], i) =>
-      [c, { x: 230 * Math.sqrt(i) * Math.cos(i * 2.4), y: 230 * Math.sqrt(i) * Math.sin(i * 2.4) }]));
+      [c, { x: step * Math.sqrt(i) * Math.cos(i * 2.4), y: step * Math.sqrt(i) * Math.sin(i * 2.4) }]));
   };
   Graph.d3Force("gravity", gravity);
   Graph.onRenderFramePost(drawLabels);
@@ -290,10 +296,10 @@ async function loadGraph() {
 // ---------------------------------------------------------------- side panel controls
 function renderProjects() {
   const box = $("projects"); box.replaceChildren();
-  PROJECTS.forEach((p, i) => {
-    const b = el("button"); b.title = `${p} (${i + 1})`;
+  [...PROJECTS, ALL].forEach((p, i) => {
+    const b = el("button"); b.title = p === ALL ? "All projects on one map, with the links between them (0)" : `${p} (${i + 1})`;
     b.setAttribute("aria-pressed", String(p === project));
-    b.append(p, el("span", "n", String(data.nodes.filter((x) => x.project === p).length)));
+    b.append(p === ALL ? "All" : p, el("span", "n", String(p === ALL ? data.nodes.length : data.nodes.filter((x) => x.project === p).length)));
     b.onclick = () => switchProject(p);
     box.append(b);
   });
@@ -301,7 +307,7 @@ function renderProjects() {
 
 function switchProject(p, refit = true) {
   releaseFocus({ instant: true });
-  if (p === project || !PROJECTS.includes(p)) return;
+  if (p === project || (p !== ALL && !PROJECTS.includes(p))) return;
   project = p; store.set("kn_project", p);
   $("new-memo").hidden = !me.writable.includes(p);
   $("add-menu").hidden = $("new-memo").hidden && $("ingest-open").hidden;
@@ -321,7 +327,7 @@ function topicGroups() {
   const own = new Set(ns.filter((n) => !n.id.startsWith("claude/")).map((n) => n.cluster)); // this project's topics
   for (const n of ns) {
     // A shared skill whose topic is another project's heading ("Servers & beheer" in gema) goes under Skills.
-    const t = n.id.startsWith("claude/") && !own.has(n.cluster) ? "Skills" : n.cluster || (n.group === "doc" ? "Docs" : "Other");
+    const t = allMode() ? n.project : n.id.startsWith("claude/") && !own.has(n.cluster) ? "Skills" : n.cluster || (n.group === "doc" ? "Docs" : "Other");
     (groups.get(t) || groups.set(t, []).get(t)).push(n);
   }
   return [...groups].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
@@ -387,13 +393,14 @@ function deselect({ push = true } = {}) {
 let homeNote = null;
 async function homeView() {
   const p = project, path = `${MEMORY_ROOT[p]}/MEMORY.md`;
-  let note; try { note = await api(`/ui/api/note?path=${encodeURIComponent(path)}`); } catch { return; } // no index yet
+  let note = { text: "" }; // All: no one index, the cards come from the projects themselves
+  if (p !== ALL) try { note = await api(`/ui/api/note?path=${encodeURIComponent(path)}`); } catch { return; } // no index yet
   if (current || editing || p !== project) return; // the user opened something or switched meanwhile
   homeNote = note;
   if (!data.nodes.length) return; // the map data is still loading: its arrival draws the home view
   homeSide();
   const body = splitFront(note.text).body, groups = topicGroups();
-  if (!/^## /m.test(body) || !groups.length) { // no headings yet: the index as it is
+  if (p !== ALL && (!/^## /m.test(body) || !groups.length)) { // no headings yet: the index as it is
     const md = el("div", "md"); md.innerHTML = renderMd(body);
     $("note").replaceChildren(el("div", "note-empty muted", "Pick a note from the list or search. Index of this project:"), md);
     return;
@@ -402,7 +409,9 @@ async function homeView() {
   const hooks = new Map([...body.matchAll(/^- \[[^\]]+\]\(([^)]+\.md)\)\s*[—–-]\s*(.+)$/gm)].map((m) => [`${MEMORY_ROOT[p]}/${m[1]}`, m[2]]));
   const notes = groups.reduce((a, [, ns]) => a + ns.length, 0);
   const head = el("header", "home-head");
-  head.append(el("h2", null, p), el("p", "muted", `${notes} notes in ${groups.length} topics. Pick a note, search with /, or open the map with M.`));
+  head.append(el("h2", null, p === ALL ? "All projects" : p), el("p", "muted", p === ALL
+    ? `${notes} notes in ${groups.length} projects. The map (M) shows how they link to each other.`
+    : `${notes} notes in ${groups.length} topics. Pick a note, search with /, or open the map with M.`));
   const grid = el("div", "home-grid");
   for (const [topic, ns] of groups) {
     const card = el("section", "home-card"), h = el("h3"), dot = el("i");
@@ -462,7 +471,7 @@ async function openNote(id, { push = true, find = null } = {}) {
   let note;
   try { note = await api(`/ui/api/note?path=${encodeURIComponent(id)}`); } catch (e) { $("note").textContent = e.message; return false; }
   const p = projectOf(note.path);
-  if (p !== "shared" && p !== project) switchProject(p, false);
+  if (p !== "shared" && p !== project && !allMode()) switchProject(p, false); // the All map stays the All map
   if (push && decode(location.hash.slice(1)) !== note.path) history.pushState(null, "", `#${note.path}`);
   current = note; document.body.classList.remove("home");
   selected = byId.has(note.path) ? note.path : null; setFocus(selected); markActive(); if (Graph) animateHover(6000);
@@ -746,6 +755,7 @@ document.addEventListener("keydown", (e) => {
   if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.key === "/") { e.preventDefault(); $("q").focus(); }
   else if (/^[1-9]$/.test(e.key) && PROJECTS[Number(e.key) - 1]) switchProject(PROJECTS[Number(e.key) - 1]);
+  else if (e.key === "0") switchProject(ALL);
   else if (e.key.toLowerCase() === "e" && current?.writable) { e.preventDefault(); startEdit(); }
   else if (e.key.toLowerCase() === "m") setMap(!mapOn);
   else if (e.key === "Escape") deselect();
@@ -804,7 +814,7 @@ function highlight(ids) {
 async function loadLint(render = true) {
   if (!me.admin) return; // lint spans every project: admins only
   const full = await api("/ui/api/lint");
-  const report = Object.fromEntries(Object.entries(full).map(([k, v]) => [k, v.filter((i) => lintProject(i) === project)]));
+  const report = Object.fromEntries(Object.entries(full).map(([k, v]) => [k, v.filter((i) => allMode() || lintProject(i) === project)]));
   const here = Object.values(report).reduce((a, v) => a + v.length, 0);
   const all = Object.values(full).reduce((a, v) => a + v.length, 0);
   // The badge counts every project, so findings elsewhere are not missed; the tab lists this project's.
@@ -929,7 +939,7 @@ async function loadMe() {
   me = await api("/ui/api/me");
   PROJECTS = me.projects;
   for (const p of PROJECTS) if (!MEMORY_ROOT[p]) { MEMORY_ROOT[p] = `${p}-memory`; ROOT_PROJECT[p] = p; ROOT_PROJECT[`${p}-memory`] = p; }
-  if (!PROJECTS.includes(project)) project = PROJECTS[0];
+  if (!PROJECTS.includes(project) && project !== ALL) project = PROJECTS[0];
   $("admin-link").hidden = !me.admin;
   $("who").textContent = me.user;
   if (!me.admin) document.querySelector('[data-tab="lint"]').hidden = $("ingest-open").hidden = true;

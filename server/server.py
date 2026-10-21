@@ -1927,7 +1927,8 @@ async def ui_recent(request: Request):
     """Newest changed Markdown files of a project: the device when the change came through this server (otherwise
     it was edited natively on the VM), lines added/removed, and the session that changed it (the session log entry
     written after the change that names the file), so you see who changed what and why."""
-    roots = PROJECTS.get(request.query_params.get("project", "homelab"), PROJECTS["homelab"])
+    want = request.query_params.get("project", "homelab")
+    roots = tuple(r for pr in PROJECTS.values() for r in pr) if want == "all" else PROJECTS.get(want, PROJECTS["homelab"])
     return JSONResponse({"files": await asyncio.to_thread(recent_files, roots)})  # audit log + diffs: not on the loop
 
 
