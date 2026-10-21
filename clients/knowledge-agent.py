@@ -159,7 +159,7 @@ def context_text(tok: str, cwd: str) -> str:
             break
         out.append(text)
     memory_mirror.save_context(key, "\n\n".join(out))
-    return "\n\n".join(out)
+    return "\n\n".join(out + [n for n in [memory_mirror.sync_notice()] if n])  # a conflict or failed sync, said once per start
 
 
 def run_hook(script: str, tok: str, stdin: str) -> str:

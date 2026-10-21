@@ -363,6 +363,8 @@ def main():
         err, res = call("knowledge_write", {"path": "garden-memory/project_gate.md", "content": "gate v2\npassword: ‹secret›\n", "base_version": gver}, token=fr)
         assert err and "‹secret›" in res and "gategategate" in (tmp / "projects/garden/memory/project_gate.md").read_text(), res
         assert not call("knowledge_edit", {"path": "garden-memory/project_gate.md", "old_string": "gate\npassword", "new_string": "gate v2\npassword"}, token=fr)[0]
+        # Review 21 Oct: a device that does not redact may write the mask as text (a memo can explain it).
+        assert not call("knowledge_write", {"path": "garden-memory/project_mask.md", "content": memo("reads ‹secret› for a masked value\n", "mask")})[0]
         (tmp / "projects/garden/memory/project_gate.md").unlink()
         files = {"README.md": "# Copilot\n", "docs\\design\\voice.md": "voice notes\n", "C:\\x.md": "no",
                  "../escape.md": "no", ".venv/lib/x.md": "no", "main.py": "no"}
@@ -441,6 +443,17 @@ def main():
         run_mm()
         assert not (mirror / "garden-memory/project_paths.md").exists() and not (mirror / "garden-memory" / copies[0].name).exists()
         assert (mirror / "garden-memory/MEMORY.md").exists()
+        st, body = http("POST", "/mirror/push", {"files": {"garden-memory/MEMORY.md": {"text": (gmem / "MEMORY.md").read_text(), "base": ""}}}, token=fr)
+        assert json.loads(body)["unchanged_files"] == ["garden-memory/MEMORY.md"], body  # the client marks only these as in sync
+        (mirror / ".context-k-1").write_text("index → ✅\n")
+        win = subprocess.run(mm + ["offline", "k", "1"], env={**menv, "PYTHONIOENCODING": "cp1252"}, capture_output=True)
+        assert win.returncode == 0 and "→ ✅" in win.stdout.decode("utf-8"), win.stderr  # a Windows pipe is cp1252
+        ctx_sh = str(Path(__file__).parents[1] / "plugin/hooks/context.sh")
+        ck_key = subprocess.run("printf %s /p/x | cksum | cut -d' ' -f1", shell=True, capture_output=True, text=True).stdout.strip()
+        (mirror / f".context-{ck_key}-2").write_text("OLD CACHED PART\n")
+        revoked = subprocess.run(["sh", ctx_sh, "2"], env={**menv, "CLAUDE_PLUGIN_OPTION_URL": BASE, "CLAUDE_PLUGIN_OPTION_TOKEN": "revoked",
+                                 "CLAUDE_PROJECT_DIR": "/p/x"}, capture_output=True, text=True)
+        assert revoked.stdout == "", revoked.stdout  # 401: no cached context for a revoked token
         assert json.loads(http("POST", "/mirror", {"have": {}}, token="ro-token")[1])["roots"] == []  # read-only: no copy
         # Review fixes 20 Oct: a project named like a path part does not capture other sessions; write patterns are
         # anchored; "Add" never wipes access; graph ETag per user; body cap; scoped ingest/lint; token routes.
