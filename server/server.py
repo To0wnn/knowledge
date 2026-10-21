@@ -1053,7 +1053,8 @@ def token_device(given: str) -> dict | None:
     name, cfg = hit
     mark_used(name)
     return {"name": name, "write": bool(cfg.get("write")), "watch": bool(cfg.get("watch")),
-            "roots": cfg.get("roots") or [], "redact": bool(cfg.get("redact"))}
+            "roots": cfg.get("roots") or [], "redact": bool(cfg.get("redact")),
+            "write_roots": cfg.get("write_roots")}  # None: may write every root it reads (a PA: reads all, writes memory)
 
 
 def write_json(path: Path, data):
