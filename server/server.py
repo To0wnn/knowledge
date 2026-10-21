@@ -63,7 +63,10 @@ WRITABLE = ["memory/*.md", "memory/archief/*.md", "homelab/*.md", "anpitek-memor
             "trade-memory/*.md", "trade-memory/archief/*.md", "anpitek/*/*.md", "trade/*.md", "trade/docs/*.md",
             "memory/sessions/*.md", "anpitek-memory/sessions/*.md", "trade-memory/sessions/*.md"]  # projects added in the UI extend it
 SKIP_PARTS = {".git", "__pycache__", "node_modules", ".venv", "venv", ".next", ".cache"}
-SKIP_NAMES = re.compile(r"(\.bak|\.vault_pass$|\.env$|credentials|\.pem$|\.key$|id_ed25519|id_rsa)")
+# Never shared, whatever folder they sit in: secrets, keys, and config exports that carry them (an OPNsense config
+# holds WireGuard private keys and password hashes; a UniFi backup the same). Redaction cannot mask unknown keys.
+SKIP_NAMES = re.compile(r"(\.bak|\.vault_pass$|\.env$|credentials|\.pem$|\.key$|id_ed25519|id_rsa|\.unf$|\.unifi$|\.cred$"
+                        r"|\.p12$|\.pfx$|\.kdbx$|\.ovpn$|(^|/)wg\d*\.conf$|opnsense[^/]*\.xml$|(^|/)config[^/]*\.xml$)", re.I)
 MAX_BYTES = 2_000_000
 # Admin state the web UI manages (tokens, users, projects): a writable directory, unlike the read-only /config.
 ADMIN_DIR = Path(os.environ.get("KNOWLEDGE_ADMIN_DIR", HOME / ".config/knowledge-server"))
