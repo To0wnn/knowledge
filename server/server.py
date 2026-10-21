@@ -160,6 +160,13 @@ def refuse_secrets(text: str):
                         "and write ‹secret:NAME› in the note instead")
 
 
+def refuse_mask(text: str):
+    """A redacting device reads ‹secret› where a value was masked; written back, it would replace the real text."""
+    if "‹secret›" in text:
+        raise ToolError("this text contains ‹secret›, the mask this device reads instead of a value: writing it back "
+                        "would erase the original. Change only the other lines with knowledge_edit")
+
+
 def in_scope(rel: str) -> bool:
     roots = device.get().get("roots")
     return not roots or rel.split("/", 1)[0] in roots
@@ -554,6 +561,7 @@ async def knowledge_edit(path: str, old_string: str, new_string: str) -> str:
     full, rel = resolve(path)
     check_writable(rel)
     refuse_secrets(new_string)
+    refuse_mask(new_string)
     async with _locks.setdefault(rel, asyncio.Lock()):
         for _ in range(5):  # retry on fresh content when a native edit on the VM landed in between
             data = full.read_bytes()
@@ -578,6 +586,7 @@ async def knowledge_write(path: str, content: str, base_version: str = "") -> st
     full, rel = resolve(path)
     check_writable(rel)
     refuse_secrets(content)
+    refuse_mask(content)
     async with _locks.setdefault(rel, asyncio.Lock()):
         current = full.read_bytes() if full.exists() else None
         if current is not None and base_version != version(current):

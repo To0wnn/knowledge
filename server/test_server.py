@@ -334,6 +334,15 @@ def main():
         assert "homelab" not in ctx and "secret set" not in ctx and "trade" not in ctx, ctx
         assert "First session" not in ctx  # garden-memory has a memo now
         assert "garden-memory/project_beds.md" in call("knowledge_list", {}, token=fr)[1]  # a guest's own memory by default
+        # A redacting guest reads ‹secret› for a masked value; writing that back must not erase the original.
+        call("knowledge_write", {"path": "garden-memory/project_gate.md", "content": "gate\npassword: gategategate\n"})
+        masked = call("knowledge_read", {"path": "garden-memory/project_gate.md"}, token=fr)[1]
+        assert "‹secret›" in masked and "gategategate" not in masked, masked
+        gver = re.search(r"version ([0-9a-f]+)", masked).group(1)
+        err, res = call("knowledge_write", {"path": "garden-memory/project_gate.md", "content": "gate v2\npassword: ‹secret›\n", "base_version": gver}, token=fr)
+        assert err and "‹secret›" in res and "gategategate" in (tmp / "projects/garden/memory/project_gate.md").read_text(), res
+        assert not call("knowledge_edit", {"path": "garden-memory/project_gate.md", "old_string": "gate\n", "new_string": "gate v2\n"}, token=fr)[0]
+        (tmp / "projects/garden/memory/project_gate.md").unlink()
         files = {"README.md": "# Copilot\n", "docs\\design\\voice.md": "voice notes\n", "C:\\x.md": "no",
                  "../escape.md": "no", ".venv/lib/x.md": "no", "main.py": "no"}
         st, body = http("POST", "/sync", {"files": files, "full": True}, token=fr)
