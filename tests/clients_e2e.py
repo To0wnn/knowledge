@@ -118,7 +118,8 @@ def _health() -> bool:
 def user_env(home: Path, **extra) -> dict:
     """A clean user environment rooted at `home` (Path.home() reads USERPROFILE on Windows, HOME elsewhere)."""
     env = {k: v for k, v in os.environ.items() if not k.startswith(("KNOWLEDGE_", "CLAUDE_"))}
-    env.update(HOME=str(home), USERPROFILE=str(home), PYTHONUTF8="0", **extra)  # PYTHONUTF8 off: like a fresh Windows
+    # Codex on Windows finds its folder through Windows itself, not USERPROFILE: CODEX_HOME is its own override.
+    env.update(HOME=str(home), USERPROFILE=str(home), CODEX_HOME=str(home / ".codex"), PYTHONUTF8="0", **extra)  # PYTHONUTF8 off: like a fresh Windows
     if WIN:
         env.pop("PYTHONIOENCODING", None)
     return env
@@ -200,11 +201,14 @@ def agents(tok: str, home: Path, project: Path, garden: Path):
         payloads = {"context": {"hook_event_name": "SessionStart", "cwd": str(project), "workspacePaths": [str(project)]},
                     "docs-sync": {"hook_event_name": "PostToolUse", "cwd": str(project), "tool_input": {"command": "*** Begin Patch\n*** Update File: docs/taxi.md\n*** End Patch"}},
                     "session-log": {"hook_event_name": "SessionEnd", "session_id": f"{name}-1", "cwd": str(project), "transcript_path": ""}}
-        shells = [("powershell", ["powershell", "-NoProfile", "-Command"]), ("cmd", ["cmd", "/c"])] if WIN else [("sh", [shutil.which("sh"), "-c"])]
-        for label, prefix in shells:
+        # How a program starts a hook command on Windows: PowerShell -Command, or cmd /d /s /c "<command>" as one
+        # string (a list would make Python add its own quoting, which cmd reads differently).
+        shells = [("powershell", lambda c: ["powershell", "-NoProfile", "-Command", c]), ("cmd", lambda c: f'cmd /d /s /c "{c}"')] \
+            if WIN else [("sh", lambda c: [shutil.which("sh"), "-c", c])]
+        for label, wrap in shells:
             for cmd in cmds:
                 kind = next(k for k in payloads if f" {k} " in f" {cmd} " or cmd.split(" ")[-2:-1] == [k])
-                code, out, err = run(prefix + [cmd], json.dumps(payloads[kind]), env, cwd=str(project))
+                code, out, err = run(wrap(cmd), json.dumps(payloads[kind]), env, cwd=str(project))
                 check(code == 0, f"{name} via {label}: {kind} hook runs", err[-600:])
                 if kind == "context":
                     try:
