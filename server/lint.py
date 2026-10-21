@@ -55,7 +55,7 @@ def looks_secret(hit: str) -> bool:
         and not re.fullmatch(r"[A-Z0-9_/]+", value) and not re.match(r"(seconds|minutes|hours|days|weeks)=", value)
 
 
-def latest_date(text: str) -> date | None:
+def latest_date(text: str, until: date | None = None) -> date | None:
     found = []
     for d, mon, y in DATE_NL.findall(text):
         try:
@@ -67,6 +67,7 @@ def latest_date(text: str) -> date | None:
             found.append(date(int(y), int(m), int(d)))
         except ValueError:
             pass
+    found = [d for d in found if until is None or d <= until]  # a contract end in 2029 is not a check
     return max(found) if found else None
 
 
@@ -95,6 +96,17 @@ _MON = "jan|feb|mrt|maa|mar|apr|mei|may|jun|jul|aug|sep|okt|oct|nov|dec"
 DECISION_DATE = re.compile(rf"\b\d{{1,2}} ({_MON})[a-z]*\b|\b({_MON})[a-z]* 20\d\d\b|\b20\d\d-\d\d", re.I)
 UNCHECKED = re.compile(r"\(stand ([^)]*?),? niet (?:opnieuw )?gecontroleerd\)", re.I)
 STALE_UNCHECKED_DAYS = 60
+# Facts that change on the live system (IP addresses, x.y.z versions), and the "(gecontroleerd <date>)" mark of rule 4.
+CHANGEABLE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b|\bv?\d+\.\d+\.\d+\b")
+CHECKED = re.compile(r"\bgecontroleerd (\d[^)]*?)\)", re.I)
+REVIEW_AFTER_DAYS = 45  # Guru-style review cycle; measured 21 Oct 2026: 8 of 68 such memos were older
+
+
+def last_checked(text: str, today: date) -> date | None:
+    """Newest "(gecontroleerd <date>)" mark; without one the newest date in the memo.
+    shortcut: the newest date is when something was written, not checked; good enough until most memos carry marks."""
+    marks = [latest_date(w + ("" if re.search(r"20\d\d", w) else f" {today.year}"), today) for w in CHECKED.findall(text)]
+    return max((m for m in marks if m), default=None) or latest_date(text, today)
 
 
 def keuzes(text: str) -> list[str]:
@@ -148,7 +160,8 @@ def lint(files: dict[str, str], today: date | None = None, mem: str = "memory") 
         "index_points_to_missing_file", "memo_not_in_index", "dead_wikilink", "missing_frontmatter",
         "big_memo_without_archive", "long_index_line", "orphan_memo", "possibly_stale_open_item",
         "possible_secret_in_memo", "unprocessed_source", "index_line_without_heading", "index_near_load_limit",
-        "relative_date", "missing_structure", "doc_without_topic", "decision_without_date", "stale_unchecked_fact")}
+        "relative_date", "missing_structure", "doc_without_topic", "decision_without_date", "stale_unchecked_fact",
+        "review_due")}
 
     lines, size = index.count("\n") + 1 if index else 0, len(index.encode())
     if lines >= INDEX_WARN_LINES or size >= INDEX_WARN_BYTES:
@@ -191,6 +204,12 @@ def lint(files: dict[str, str], today: date | None = None, mem: str = "memory") 
         if memo_type(text) not in ("feedback", "user") and (gone := missing_structure(text)):
             report["missing_structure"].append(f"{name}: no {' / '.join(gone)}")
         check_decisions(report, name, text, today)
+        # The whole text: IPs and versions usually sit in `code`.
+        facts = len(CHANGEABLE.findall(text)) if memo_type(text) not in ("feedback", "user") else 0
+        checked = last_checked(text, today) if facts else None
+        if facts and (not checked or (today - checked).days > REVIEW_AFTER_DAYS):
+            since = f"not checked since {checked.isoformat()}" if checked else "never checked (no date)"
+            report["review_due"].append(f"{name}: {since} ({facts} addresses/versions)")
         hits = sum(1 for m in SECRET_HINT.finditer(re.sub(r"‹[^›\n]*›", "", text)) if looks_secret(m.group(0)))
         if hits:
             report["possible_secret_in_memo"].append(f"{name}: {hits} line(s) (values not shown)")
@@ -278,6 +297,14 @@ if __name__ == "__main__":  # self-check
     r6 = lint({"memory/MEMORY.md": "", "memory/k.md": k, "memory/n.md": "## Stand\n## Keuzes\n- Nog geen bewuste keuzes vastgelegd.\n"}, today=date(2026, 10, 20))
     assert r6["decision_without_date"] == ["k.md: 1 decision(s), e.g. **B**: no date"], r6
     assert r6["stale_unchecked_fact"] == ["k.md: 1 fact(s) unchecked for over 60 days"], r6
+    old_ip = "---\nmetadata:\n  type: project\n---\nIP 10.0.0.9 (gecontroleerd 1 aug 2026), contract t/m 1 nov 2029\n"
+    r7 = lint({"memory/MEMORY.md": "", "memory/o.md": old_ip, "memory/f.md": old_ip.replace("1 aug", "15 okt"),
+               "memory/u.md": old_ip.replace("project", "feedback"), "memory/v.md": "---\nmetadata:\n  type: project\n---\n`v1.2.3` on 1 jun 2026\n", "memory/w.md": "host `10.0.0.1`\n"},
+              today=date(2026, 10, 20))
+    assert r7["review_due"] == ["o.md: not checked since 2026-08-01 (1 addresses/versions)",
+                                "v.md: not checked since 2026-06-01 (1 addresses/versions)",
+                                "w.md: never checked (no date) (1 addresses/versions)"], r7  # 2029 is no check
+    assert not r6["review_due"], r6  # k.md: IP, but a decision of 20 Oct
     t = lint({**files, "trade-memory/MEMORY.md": "- [X](x.md) — y\n"}, today=date(2026, 10, 18), mem="trade-memory")
     assert t["index_points_to_missing_file"] == ["MEMORY.md → x.md"] and not t["unprocessed_source"], t
     print("ok")
