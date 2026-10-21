@@ -5,8 +5,9 @@ Linux, macOS and Windows; standard library only. The token comes from KNOWLEDGE_
 from the vault (TOKEN = a vault name). The session log falls back to ~/.config/knowledge-server/session.env, so the
 agy/Codex tokens on the VM stay read-only (install always gives session-log "-").
 
-  knowledge-agent.py install <agy|codex> [TOKEN]   one-time setup: checks the token, adds the MCP server, the hooks
-                                                   and the house rules file (GEMINI.md / AGENTS.md); safe to run again
+  knowledge-agent.py install <agy|codex> [TOKEN]   one-time setup: checks the token, adds the MCP server, the hooks,
+                                                   the house and development rules (GEMINI.md / AGENTS.md) and the
+                                                   development skills (~/.agents/skills); safe to run again
   knowledge-agent.py context <agy|codex> TOKEN     SessionStart: startup context + docs mirror, as the agent's JSON
   knowledge-agent.py docs-sync TOKEN               PostToolUse: mirror an edited .md (folder with .knowledge-project)
   knowledge-agent.py session-log TOKEN             SessionEnd/PreCompact (Codex), Stop (agy): post the session log
@@ -83,6 +84,7 @@ def install(agent: str, name: str):
     install_mcp(agent, tok)
     install_hooks(agent, name)
     install_rules(agent, rules)
+    install_skills()
     print("done" + ("; open codex and type /hooks once to trust the hooks" if agent == "codex" else "; start agy and ask it to search the knowledge"))
 
 
@@ -126,6 +128,19 @@ def install_rules(agent: str, rules: str):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(new, encoding="utf-8")
     print(f"rules: house rules in {path}")
+
+
+def install_skills():
+    """The shared development skills (plugin/skills) into ~/.agents/skills, the folder Codex and agy read; ours are
+    replaced on a rerun, other skills there stay."""
+    dest = Path.home() / ".agents" / "skills"
+    names = []
+    for src in sorted((HOOKS.parent / "skills").glob("*/SKILL.md")):
+        target = dest / src.parent.name / "SKILL.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(src.read_bytes())
+        names.append(src.parent.name)
+    print(f"skills: {', '.join(names)} in {dest}" if names else "skills: none found next to this script")
 
 
 def install_hooks(agent: str, name: str):
