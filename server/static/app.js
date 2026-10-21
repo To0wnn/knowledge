@@ -542,7 +542,8 @@ function renderSide() {
     box.replaceChildren(el("h3", null, all.length ? `Connected (${all.length})` : "Not connected to other notes yet"));
     for (const x of all) {
       const a = el("a"); a.href = `#${x.id}`;
-      a.append(x.label, el("span", "why", `${x.project !== project && x.project !== "shared" ? x.project + " · " : ""}${x.why}`));
+      const why = x.why.replace("shared neighbours", "neighbours").replace(/similar meaning \(([\d.]+)\)/, "meaning $1").replace(/, /g, " · ");
+      a.append(x.label, el("span", "why", `${x.project !== project && x.project !== "shared" ? x.project + " · " : ""}${why}`));
       box.append(a);
     }
   };
@@ -811,17 +812,43 @@ async function loadLint(render = true) {
   const box = $("lint"); box.replaceChildren();
   for (const [check, items] of Object.entries(report)) {
     if (!items.length) continue;
-    const ul = el("ul");
-    for (const item of items) {
-      const li = el("li"), m = item.match(/^([\w./-]+\.md)/);
-      if (m) { const a = el("a", null, item); a.href = `#${m[1].includes("/") ? m[1] : `memory/${m[1]}`}`; li.append(a); } else li.textContent = item;
-      ul.append(li);
+    const ul = el("ol", "hits"), [title, fix] = LINT_INFO[check] || [check.replace(/_/g, " "), ""];
+    for (const item of items) { // "file.md: detail" -> the note's title, the detail under it
+      const m = item.match(/^([\w./-]+\.md)(?::\s*|\s+)?(.*)$/);
+      if (!m) { ul.append(el("li", "hit-text", item)); continue; }
+      const id = m[1].includes("/") ? m[1] : `memory/${m[1]}`;
+      const li = hitItem(byId.get(id)?.label || m[1].split("/").pop(), m[2].replace(/\*\*/g, ""), () => openNote(id));
+      li.firstChild.title = item; ul.append(li);
     }
-    box.append(el("h3", null, `${check.replace(/_/g, " ")} (${items.length})`), ul);
+    const h = el("h3", null, `${title} (${items.length})`);
+    box.append(h, ...(fix ? [el("p", "lint-fix muted", fix)] : []), ul);
   }
   if (!here) box.textContent = "No findings.";
 }
-$("lint").addEventListener("click", (e) => { const a = e.target.closest("a"); if (a) { e.preventDefault(); openNote(decode(a.getAttribute("href").slice(1))); } });
+// Lint checks in plain words, with what to do about them (unknown checks fall back to their name).
+const LINT_INFO = {
+  index_points_to_missing_file: ["Index line without a file", "Remove the line from MEMORY.md, or restore the memo."],
+  memo_not_in_index: ["Memo missing from MEMORY.md", "Add one index line under its heading."],
+  dead_wikilink: ["Link to a memo that does not exist", "Fix the [[name]], or write that memo."],
+  missing_frontmatter: ["Frontmatter incomplete", "Add name, description and metadata.type."],
+  big_memo_without_archive: ["Big memo without archive", "Move the history to archief/<name>_archief.md."],
+  long_index_line: ["Index line too long", "Keep it under about 150 characters."],
+  orphan_memo: ["Nothing points to this memo", "Index it, or link it from a related memo."],
+  possibly_stale_open_item: ["Open item that may be stale", "Check it; update or close it."],
+  possible_secret_in_memo: ["Possible secret", "Replace the value with ‹secret:NAME›."],
+  unprocessed_source: ["Source not turned into memos yet", "Ask Claude to process it."],
+  index_line_without_heading: ["Index line outside a heading", "Move it under a ## heading."],
+  index_near_load_limit: ["MEMORY.md near Claude Code's load limit", "Shorten or merge index lines."],
+  relative_date: ["Relative date", "Write the absolute date."],
+  missing_structure: ["Missing ## Stand / ## Keuzes", "Add the two sections."],
+  doc_without_topic: ["Doc without topic", "Add topic: (a MEMORY.md heading) to its frontmatter."],
+  decision_without_date: ["Decision without date", "Add the date when you know it; leave it when you don't."],
+  stale_unchecked_fact: ["Fact unchecked for long", "Check it on the live system, then mark it (gecontroleerd <date>)."],
+  isolated_note: ["Memo without links", "Link it to the memos it belongs with."],
+  sparse_topic: ["Topic whose notes barely link", "Link its notes, or move them to a better topic."],
+  history_failed: ["History not saved", "See the server log."],
+  offline_conflict: ["Written offline while it changed here", "Merge it into the memo, then delete it."],
+};
 
 $("ingest-open").onclick = () => {
   $("add-menu").open = false; $("ingest-form").reset();
