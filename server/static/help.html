@@ -247,6 +247,11 @@ py $HOME\knowledge\clients\knowledge-agent.py install codex</pre><button class="
   <p>They apply to every client; the server checks them with <code>knowledge_lint</code>.</p>
   <ol class="rules" id="rules"><!--HOUSE_RULES--></ol>
 
+  <h2>The development rules</h2>
+  <p>How code is changed, for every client. A project's own commands (check, run, deploy) go in its
+    <code>AGENTS.md</code>; ask the agent to run the skill <code>project-setup</code> for a new or existing project.</p>
+  <ol class="rules"><!--DEV_RULES--></ol>
+
   <h2>When it does not work</h2>
   <div class="table-wrap"><table>
     <thead><tr><th>What you see</th><th>Cause and fix</th></tr></thead>

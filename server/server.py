@@ -1543,7 +1543,9 @@ async def ui_help_page(request: Request):
     """How to connect Claude Code, agy or Codex; for everyone who may sign in. The house rules come from house_rules.md."""
     resp = page("help.html")
     rules = "".join(f"<li>{html.escape(r)}</li>" for r in house_rule_items())
-    return HTMLResponse(resp.body.decode().replace("<!--HOUSE_RULES-->", rules), headers={"Cache-Control": "no-cache"})
+    dev = "".join(f"<li>{html.escape(r)}</li>" for r in re.findall(r"^\d+\. (.+)$", dev_rules(), re.M))
+    return HTMLResponse(resp.body.decode().replace("<!--HOUSE_RULES-->", rules).replace("<!--DEV_RULES-->", dev),
+                        headers={"Cache-Control": "no-cache"})
 
 
 @server.custom_route("/ui/admin", methods=["GET"])
