@@ -35,6 +35,11 @@ a phone the cards replace the topic list. Lint findings show the note's title an
 do (`LINT_INFO` in `app.js`: give a new lint check a line there). The admin page has tabs with counts
 (`/ui/admin#tokens|people|projects|settings|system`); the help page uses `app.css` like the rest.
 
+**All map and new memos (21 Oct):** the project switch ends with **All** (key `0`): every project on one map as its
+own island, links between projects drawn in the accent, one home card per project. `knowledge_new_memo` writes a
+memo the house-rules way (frontmatter, `## Stand`, `## Keuzes`, the index line under its heading) in one call; a new
+memo through `knowledge_write` without that layout is refused with what is missing (existing memos only get hints).
+
 **Web UI layout (20 Oct, round 2 of the UI review):** the note sits in the wide middle column; **Map** (or `M`) swaps
 that column for the project graph (topic islands; a click gathers a note's neighbours in a ring and shows its card on
 the right, a second click reads it). Left: tabs **Notes** (every topic of the project with its notes, or, while you
