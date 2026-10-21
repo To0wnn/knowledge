@@ -566,7 +566,7 @@ async def knowledge_edit(path: str, old_string: str, new_string: str) -> str:
             raise ToolError(f"{rel} kept changing while editing; read it again and retry")
         index.refresh(rel)
     audit("edit", rel)
-    return f"edited {rel} (version {version(new)})"
+    return f"edited {rel} (version {version(new)})" + await asyncio.to_thread(house_rules_hint, rel)
 
 
 @server.tool(annotations=REPLACE)
@@ -588,7 +588,24 @@ async def knowledge_write(path: str, content: str, base_version: str = "") -> st
         index.refresh(rel)
     audit("write", rel)
     hint = await asyncio.to_thread(similar_memos_hint, rel, content) if current is None else ""  # embeds: not on the loop
-    return f"wrote {rel} (version {version(data)})" + hint
+    return f"wrote {rel} (version {version(data)})" + hint + await asyncio.to_thread(house_rules_hint, rel)
+
+
+# Not decision_without_date: old decisions with an unknown date would push an agent to invent one (lint still lists them).
+MEMO_CHECKS = ("missing_frontmatter", "memo_not_in_index", "missing_structure", "dead_wikilink", "relative_date",
+               "possible_secret_in_memo")
+
+
+def house_rules_hint(rel: str) -> str:
+    """What knowledge_lint would report about this one memo, right after it is written, so the agent fixes it while
+    it still has the memo in mind (a hint, not a refusal: an import of many memos must not stop halfway)."""
+    root, name = rel.split("/", 1)
+    if not mem_of(rel) or "/" in name or name == "MEMORY.md":
+        return ""
+    files = {r: t for r, t, _ in index.items() if r.count("/") == 1 and mem_of(r)}  # all roots: [[links]] may cross
+    found = [f"{check}: {item}" for check, items in kb_lint.lint(files, mem=root).items() if check in MEMO_CHECKS
+             for item in items if item == name or item.startswith(name + ":")]
+    return ("\nHouse rules still open for this memo (fix them now): " + "; ".join(found)) if found else ""
 
 
 SIMILAR_HINT = 0.72  # calibrated 18 Oct 2026: a memo vs itself ~0.80-0.86, closely related memos ~0.78, loose docs ~0.70
@@ -656,8 +673,9 @@ def lint_all() -> dict[str, list[str]]:
     report["isolated_note"] = [f"{i['id']} ({i['degree']} link)" for i in gaps["isolated"] if mem_of(i["id"])]
     report["sparse_topic"] = [f"{c['project']}: topic '{c['name']}' ({c['size']} notes, cohesion {c['cohesion']})"
                               for c in gaps["sparse_topics"]]
-    report["doc_without_topic"] = [rel for rel, text in sorted(files.items())  # a guest's mirrored docs, house rule 2
-                                   if mirrored(rel) and rel.endswith(".md") and not kb_lint.frontmatter(text).get("topic")]
+    report.setdefault("doc_without_topic", []).extend(  # a guest's mirrored docs (house rule 2); lint did homelab's
+        rel for rel, text in sorted(files.items())
+        if mirrored(rel) and rel.endswith(".md") and not kb_lint.frontmatter(text).get("topic"))
     report["history_failed"] = [f"{rel}: {err}" for rel, err in sorted(HISTORY_FAILED.items()) if in_scope(rel)]
     return report
 
