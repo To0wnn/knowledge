@@ -408,8 +408,8 @@ def gaps_summary(n: int = 30) -> list[dict]:
     """Recent gaps grouped by query (case-insensitive), most recent first, with how often and by whom."""
     try:
         with GAPS.open("rb") as f:
-            f.seek(0, 2); f.seek(max(0, f.tell() - 65536))
-            lines = f.read().decode("utf-8", "replace").splitlines()[1:]
+            f.seek(0, 2); start = max(0, f.tell() - 65536); f.seek(start)
+            lines = f.read().decode("utf-8", "replace").splitlines()[bool(start):]  # skip a cut-off first line only
     except OSError:
         return []
     out: dict[str, dict] = {}
@@ -1665,8 +1665,8 @@ def load_settings():
 def audit_tail(n: int = 25) -> list[str]:
     try:
         with AUDIT.open("rb") as f:
-            f.seek(0, 2); f.seek(max(0, f.tell() - 16384))
-            return [l for l in f.read().decode("utf-8", "replace").splitlines()[1:] if l][-n:][::-1]
+            f.seek(0, 2); start = max(0, f.tell() - 16384); f.seek(start)
+            return [l for l in f.read().decode("utf-8", "replace").splitlines()[bool(start):] if l][-n:][::-1]
     except OSError:
         return []
 
