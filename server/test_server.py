@@ -483,7 +483,9 @@ def main():
         assert raw("GET", "/ui/admin", headers=user("carol"))[0] == 200  # an extra admin
         assert admin("/ui/api/admin/settings", {"extra_admins": []})[0] == 200 and raw("GET", "/ui/admin", headers=user("carol"))[0] == 403
         assert "admin-settings" in "\n".join(json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["system"]["audit"])
-        # Knowledge gaps: a search that finds nothing is listed once per query (case-insensitive), with its count.
+        # Knowledge gaps: a search that finds nothing is listed once per query (case-insensitive), with its count;
+        # also the very first line of a small log (it was skipped like a cut-off line).
+        (tmp / "gaps.log").unlink(missing_ok=True)
         for q in ("Pond Mowing Schedule", "pond mowing schedule"):
             assert call("knowledge_search", {"pattern": q})[1] == "(no matches)"
         gaps = json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["system"]["gaps"]
