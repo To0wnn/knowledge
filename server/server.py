@@ -432,6 +432,19 @@ def house_rules(mem: str) -> str:
         f"{i}. {r}" for i, r in enumerate(house_rule_items(mem), 1))
 
 
+DEV_RULES_FILE = "dev_rules.md"  # how code is changed; next to the house rules, same delivery
+
+
+def dev_rules() -> str:
+    """The development rules as Markdown, or "" when the file is not there (then only the house rules apply)."""
+    try:
+        text = (ROOTS["claude"] / DEV_RULES_FILE).read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    items = re.findall(r"^\d+\. (.+)$", text, re.M)
+    return "Development rules (a project's own commands are in its AGENTS.md):\n" + "\n".join(f"{i}. {r}" for i, r in enumerate(items, 1)) if items else ""
+
+
 def expand_imports(text: str) -> str:
     """CLAUDE.md as Claude Code reads it: an import line replaced by the shared file it names."""
     def one(m):
@@ -934,7 +947,7 @@ def context_parts(project: str = "homelab") -> list[str]:
                 f"copies every .md to the server. Memory: {mem}/ with the index {mem}/MEMORY.md (below). Save and update "
                 f"memories there (knowledge_edit, or knowledge_write for a new file plus one index line), never in local "
                 "files. Search: knowledge_search, by meaning knowledge_semantic_search; housekeeping: knowledge_lint.",
-                house_rules(mem)]
+                house_rules(mem), *[r for r in [dev_rules()] if r]]
         with index.lock:
             empty = not any(r.startswith(mem + "/") and r != f"{mem}/MEMORY.md" for r in index.files)
         if empty:  # a new guest whose folder may already hold CLAUDE.md / AGENTS.md / GEMINI.md and notes
@@ -1436,7 +1449,8 @@ async def house_rules_route(request: Request):
     mem = PROJECTS[project][1] if project in PROJECTS else "<memory root>"
     body = ("# Knowledge house rules\n\nUse the MCP server \"knowledge\" for this project's docs and memory: search with "
             "knowledge_search or knowledge_semantic_search before answering, open hits with knowledge_read.\n\n"
-            + "\n".join(f"{i}. {r}" for i, r in enumerate(house_rule_items(mem), 1)) + "\n")
+            + "\n".join(f"{i}. {r}" for i, r in enumerate(house_rule_items(mem), 1)) + "\n"
+            + (f"\n# {dev}\n" if (dev := dev_rules()) else ""))
     return PlainTextResponse(body, media_type="text/markdown")
 
 

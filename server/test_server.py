@@ -61,6 +61,7 @@ def main():
                                         "3. Before you change something, read the \"## Keuzes\" of its memo.\n"
                                         "4. Memory is a hint, not the truth.\n\nBackground: [[a]]\n")
     (cla / "skills/x/SKILL.md").write_text("skill\n")
+    (cla / "dev_rules.md").write_text("# Development rules\n\n1. Read first.\n2. Done means proven.\n")
     trade, tmem = tmp / "trade", tmp / "trade-memory"
     for d in (trade / "venv", tmem, tmp / "anpitek", tmp / "anpitek-memory"):
         d.mkdir(parents=True)
@@ -354,6 +355,8 @@ def main():
         assert "Memory is a hint, not the truth" in ctx and "garden-memory/archief/<name>_archief.md" in ctx, ctx
         assert "homelab" not in ctx and "secret set" not in ctx and "trade" not in ctx, ctx
         assert "First session" not in ctx  # garden-memory has a memo now
+        assert "Development rules" in ctx and "2. Done means proven." in ctx, ctx  # a guest gets the development rules too
+        assert "# Development rules" in http("GET", "/house-rules", token=fr)[1]  # and so does an agent's rules file
         assert "garden-memory/project_beds.md" in call("knowledge_list", {}, token=fr)[1]  # a guest's own memory by default
         # A redacting guest reads ‹secret› for a masked value; writing that back must not erase the original.
         call("knowledge_write", {"path": "garden-memory/project_gate.md", "content": memo("gate\npassword: gategategate\n", "gate")})

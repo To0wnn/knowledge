@@ -82,6 +82,8 @@ def start_server(tmp: Path):
         d.mkdir(parents=True)
     (data["memory"] / "MEMORY.md").write_text("# Index\n\n## General\n", encoding="utf-8")
     (data["claude"] / "CLAUDE.md").write_text("global rules\n", encoding="utf-8")
+    (data["claude"] / "dev_rules.md").write_text((Path.home() / ".claude/gedeeld/dev_rules.md").read_text(encoding="utf-8")
+                                             if (Path.home() / ".claude/gedeeld/dev_rules.md").exists() else "# Development rules\n\n1. Read first.\n", encoding="utf-8")
     (data["claude"] / "house_rules.md").write_text("# House rules\n\n1. Search first.\n2. A memo has \"## Stand\" and \"## Keuzes\".\n", encoding="utf-8")
     h = lambda t: hashlib.sha256(t.encode()).hexdigest()
     (tmp / "tokens.json").write_text(json.dumps({"owner": {"sha256": h("owner-token"), "write": True}}), encoding="utf-8")
@@ -155,6 +157,7 @@ def claude_plugin(tok: str, home: Path, project: Path, garden: Path):
                     outs.setdefault(event, []).append(out)
         start = "".join(outs["SessionStart"])
         check("project garden" in start and "Search first" in start, f"[{mode}] SessionStart: guest context with the house rules", start[:500])
+        check("Development rules" in start, f"[{mode}] SessionStart: guest context with the development rules", start[:500])
         check("unreachable" not in start and "skipped" not in start, f"[{mode}] SessionStart: no error notice", start[:500])
         check((garden / "docs" / "README.md").exists() and "→ ✅" in (garden / "docs" / "README.md").read_text(encoding="utf-8"),
               f"[{mode}] SessionStart mirrors the folder's .md (UTF-16 marker, → ✅ intact)")
@@ -196,6 +199,8 @@ def agents(tok: str, home: Path, project: Path, garden: Path):
             check(code == 0 and "token ok" in out, f"{name}: install run {attempt}", out + err)
         check(conf.exists() and rules.read_text(encoding="utf-8").count("knowledge:house-rules (written") == 1,
               f"{name}: hooks written, house rules block once after a rerun")
+        check("Development rules" in rules.read_text(encoding="utf-8"), f"{name}: the rules file carries the development rules")
+        check((home / ".agents" / "skills" / "verify-done" / "SKILL.md").exists(), f"{name}: development skills in ~/.agents/skills")
         cfg = json.loads(conf.read_text(encoding="utf-8"))
         cmds = [h["command"] for g in (cfg.get("hooks") or cfg["knowledge"]).values() for e in g for h in (e.get("hooks") or [e])]
         payloads = {"context": {"hook_event_name": "SessionStart", "cwd": str(project), "workspacePaths": [str(project)]},
