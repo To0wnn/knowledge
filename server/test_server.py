@@ -4,14 +4,14 @@ import gzip
 import hashlib
 import http.client as httpc
 import json
-import urllib.parse
-import re
 import os
+import re
 import subprocess
 import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -314,8 +314,16 @@ def main():
         st, _, res = admin("/ui/api/admin/token", {"name": "friend-pc", "write": True, "redact": True, "roots": ["garden", "garden-memory"]})
         fr = json.loads(res)["token"]  # a new guest with an empty memory: the context offers to bring in existing notes
         assert "First session in this project" in http("GET", "/context/1?project=x", token=fr)[1]
-        assert not call("knowledge_write", {"path": "garden-memory/project_beds.md", "content": "raised beds\n"})[0]
-        assert "raised beds" in call("knowledge_read", {"path": "garden-memory/project_beds.md"})[1]
+        err, res = call("knowledge_write", {"path": "garden-memory/project_beds.md", "content": "raised beds\n"})
+        assert not err and "missing_frontmatter: project_beds.md" in res and "memo_not_in_index: project_beds.md" in res, res
+        ver = lambda path: re.search(r"version ([0-9a-f]+)", call("knowledge_read", {"path": path})[1]).group(1)
+        good = "---\nname: beds\ndescription: d\nmetadata:\n  type: project\n---\n## Stand\nraised\n\n## Keuzes\n"
+        call("knowledge_write", {"path": "garden-memory/MEMORY.md", "content": "## General\n- [Beds](project_beds.md) — hook\n",
+                                 "base_version": ver("garden-memory/MEMORY.md")})
+        err, res = call("knowledge_write", {"path": "garden-memory/project_beds.md", "content": good,
+                                            "base_version": ver("garden-memory/project_beds.md")})
+        assert not err and "House rules still open" not in res, res  # a memo by the rules: no hint
+        assert "raised" in call("knowledge_read", {"path": "garden-memory/project_beds.md"})[1]
         assert "garden" in json.loads(raw("GET", "/ui/api/me", headers=ck)[2])["projects"]
         assert "project garden" in http("GET", "/context/1?project=/home/x/garden")[1]
         # A guest (a friend's Windows pc): a write token limited to garden. The project comes from the token, the context
