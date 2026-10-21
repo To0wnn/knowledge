@@ -200,7 +200,8 @@ the file is its own node on its frontmatter `topic:`, linked to the memos it nam
 - **Searched, not found** (admin page, System tab): every `knowledge_search` without matches and every
   `knowledge_semantic_search` that answered nothing useful is logged: best score below 0.45, or below 0.55 while the
   best note lacks the question's subject words (`lint.query_coverage` < 0.7). Calibrated 21 Oct 2026 on 20 answerable
-  and 20 plausible unanswerable questions: score alone caught 8 of 20 gaps, with coverage 15 of 20, no false alarms. Logged to
+  and 20 plausible unanswerable questions: score alone caught 8 of 20 gaps, with coverage 15 of 20, no false alarms. Re-measure with `server/calibrate_gaps.py`
+  (exit 1 on a false alarm) after changing the model or the thresholds. Logged to
   `gaps.log` next to the audit log, grouped per query with count and devices: the memos that are missing. The UI search and the plugin hook are not logged
   (typing and automatic prompts would be noise).
 - `/admin` = forge `/root/docker/knowledge/admin` (rw, 0700, uid 1000); `/config` stays read-only (secrets.json).

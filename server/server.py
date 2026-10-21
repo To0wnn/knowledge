@@ -1533,7 +1533,9 @@ async def semantic_route(request: Request):
     roots = tuple(r + "/" for r in PROJECTS[project] + ("claude",)) if project in PROJECTS else ()
     q = request.query_params.get("q", "").strip()[:500]
     hits = [h for h in await asyncio.to_thread(vec.search, q, roots, 30) if in_scope(h["path"])][:15] if q else []
-    return JSONResponse({"hits": [{**h, "text": shown(h["text"])} for h in hits], "status": vec.status()})
+    # "gap": what knowledge_semantic_search would log (calibrate_gaps.py measures the thresholds through this)
+    return JSONResponse({"hits": [{**h, "text": shown(h["text"])} for h in hits], "status": vec.status(),
+                         "gap": vec.matrix is not None and bool(q) and weak_answer(q, hits)})
 
 
 # ---------------------------------------------------------------- web UI ("brain" graph, search, preview, lint, ingest)
