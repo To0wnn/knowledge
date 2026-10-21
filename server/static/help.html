@@ -20,10 +20,6 @@
 .eyebrow { font: 12px var(--mono); color: var(--muted); margin-bottom: 6px; }
 .wrap :not(pre) > code { background: var(--hover); padding: 1px 5px; border-radius: 4px; font-size: .88em; }
 .wrap a { color: var(--accent); }
-.how { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 20px; }
-.how div { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; min-width: 0; }
-.how b { display: block; margin-bottom: 2px; }
-.how span { color: var(--muted); font-size: 14px; }
 .client-tabs { position: sticky; top: 0; z-index: 5; display: flex; gap: 4px; flex-wrap: wrap; align-items: center;
   background: var(--bg); padding: 10px 0; margin-top: 28px; border-bottom: 1px solid var(--line); }
 .client-tabs > button { padding: 6px 12px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 14px; }
@@ -46,8 +42,8 @@ ol.steps > li > b { display: block; }
 .wrap th, .wrap td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
 .wrap th { color: var(--muted); font-weight: 600; font-size: 12px; }
 .wrap tr:last-child td { border-bottom: 0; }
-.yes { color: var(--g-skill); font-weight: 600; } .no { color: var(--muted); }
 ol.rules { margin: 12px 0 0; padding-left: 22px; } ol.rules li { margin: 6px 0; max-width: 68ch; }
+.rules-box { margin-top: 36px; } .rules-box summary { cursor: pointer; font-weight: 600; }
 footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
 </style>
 </head>
@@ -62,11 +58,6 @@ footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
   <h1>Connect a client</h1>
   <p class="lede">How to connect Claude Code, agy (Antigravity) or Codex to the shared knowledge: the docs and memory of your project, live on every machine, with the same house rules.</p>
 
-  <div class="how">
-    <div><b>One token per device</b><span>You get it from the admin of this server. It decides which project you see and whether you may write.</span></div>
-    <div><b>Memory lives on the server</b><span>Memos are central; every session, on every machine, reads and writes the same files.</span></div>
-    <div><b>Your folder stays the source</b><span>Code stays with you. Only your <code>.md</code> files are mirrored (Claude Code).</span></div>
-  </div>
 
   <div class="note"><b>Receive the token safely.</b> Ask for a one-time Bitwarden Send link, not a chat or e-mail message. Never put the token in a memo, doc or git repository.</div>
 
@@ -215,43 +206,6 @@ py $HOME\knowledge\clients\knowledge-agent.py install codex</pre><button class="
     </ol>
   </section>
 
-  <h2>What each client gets</h2>
-  <div class="table-wrap"><table>
-    <thead><tr><th></th><th>Claude Code</th><th>agy</th><th>Codex</th></tr></thead>
-    <tbody>
-      <tr><td>Search, read, write (MCP)</td><td class="yes">yes</td><td class="yes">yes</td><td class="yes">yes</td></tr>
-      <tr><td>House rules</td><td class="yes">automatic</td><td>via GEMINI.md</td><td>via AGENTS.md</td></tr>
-      <tr><td>Context at start (index)</td><td class="yes">automatic</td><td class="yes">with the hooks</td><td class="yes">with the hooks</td></tr>
-      <tr><td>Session log on the server</td><td class="yes">yes</td><td class="yes">with the hooks (one entry per turn)</td><td class="yes">with the hooks</td></tr>
-      <tr><td>Mirror docs (<code>.md</code>)</td><td class="yes">yes, with .knowledge-project</td><td class="yes">with the hooks + .knowledge-project</td><td class="yes">with the hooks + .knowledge-project</td></tr>
-      <tr><td>Refuses known secrets in writes</td><td class="yes">yes (server)</td><td class="yes">yes (server)</td><td class="yes">yes (server)</td></tr>
-      <tr><td>Offline copy of the memory</td><td class="yes">yes</td><td class="yes">with the hooks</td><td class="yes">with the hooks</td></tr>
-    </tbody>
-  </table></div>
-
-  <h2>When the server is down</h2>
-  <p>With a token that may write, your memory is also kept on your own machine, in <code>~/.knowledge/mirror/</code>
-    (on Windows <code>%USERPROFILE%\.knowledge\mirror\</code>). It syncs in the background at every start, so a session
-    never waits for it, and only what changed travels.</p>
-  <ul>
-    <li><b>Server unreachable:</b> the session starts with the context of your last online session and the agent reads
-      and writes memos in that copy, by the same house rules.</li>
-    <li><b>Back online:</b> the next start uploads what you wrote offline and fetches what changed on the server.</li>
-    <li><b>Changed on both sides:</b> nothing is overwritten. Your offline text is kept next to the memo as
-      <code>&lt;name&gt;.offline-&lt;time&gt;.md</code>; <code>knowledge_lint</code> asks the agent to merge the two.</li>
-    <li>Something to look at (a conflict, a refused write, a failed sync) is written to <code>last-sync.log</code> in
-      that folder; when all is well the file is not there.</li>
-  </ul>
-
-  <h2>The house rules</h2>
-  <p>They apply to every client; the server checks them with <code>knowledge_lint</code>.</p>
-  <ol class="rules" id="rules"><!--HOUSE_RULES--></ol>
-
-  <h2>The development rules</h2>
-  <p>How code is changed, for every client. A project's own commands (check, run, deploy) go in its
-    <code>AGENTS.md</code>; ask the agent to run the skill <code>project-setup</code> for a new or existing project.</p>
-  <ol class="rules"><!--DEV_RULES--></ol>
-
   <h2>When it does not work</h2>
   <div class="table-wrap"><table>
     <thead><tr><th>What you see</th><th>Cause and fix</th></tr></thead>
@@ -262,8 +216,19 @@ py $HOME\knowledge\clients\knowledge-agent.py install codex</pre><button class="
       <tr><td>Docs do not reach the server</td><td>No <code>.knowledge-project</code> in the project root, or its name does not match your token's project.</td></tr>
       <tr><td>Codex ignores the context hook</td><td>More than one SessionStart hook, or the hook is not trusted yet: open <code>/hooks</code> in Codex.</td></tr>
       <tr><td>"writes are allowed only for …"</td><td>Your token may not write that path: only the memory of your own project.</td></tr>
+      <tr><td>"knowledge server unreachable: offline mode"</td><td>The server is down. The agent works in your offline copy (<code>~/.knowledge/mirror/</code>); what it writes goes up at the next start. A memo changed on both sides is kept as <code>&lt;name&gt;.offline-&lt;time&gt;.md</code> to merge.</td></tr>
     </tbody>
   </table></div>
+
+  <details class="rules-box">
+    <summary>Rules your agent follows</summary>
+    <p>Your agent gets these automatically at every start; they are here to read. A project's own commands (check, run,
+      deploy) go in its <code>AGENTS.md</code>: ask the agent to run the skill <code>project-setup</code>.</p>
+    <h3>House rules (memos and docs)</h3>
+    <ol class="rules" id="rules"><!--HOUSE_RULES--></ol>
+    <h3>Development rules (code)</h3>
+    <ol class="rules"><!--DEV_RULES--></ol>
+  </details>
 
   <footer>Source and technical details: <a href="https://github.com/To0wnn/knowledge" target="_blank" rel="noopener">github.com/To0wnn/knowledge</a> (README, sections "A guest project" and "Other agents").</footer>
 </div>
