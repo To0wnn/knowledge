@@ -84,8 +84,11 @@ SECRETS_FILE = Path(os.environ.get("KNOWLEDGE_SECRETS", HOME / ".config/knowledg
 AUDIT = Path(os.environ.get("KNOWLEDGE_AUDIT", HOME / ".local/state/knowledge-server/audit.log"))
 # Searches that found nothing (or only weak meaning hits): the missing memos, shown on the admin page.
 GAPS = AUDIT.with_name("gaps.log")
-# Calibrated 21 Oct 2026: a question the knowledge cannot answer scored at most 0.37, real questions 0.51-0.57.
-WEAK_SCORE = 0.45
+# A meaning search answered nothing useful when its best score is below WEAK_SCORE, or below DOUBT_SCORE while the
+# best note lacks the question's subject words (lint.query_coverage < MIN_COVERAGE). Calibrated 21 Oct 2026 on 20
+# answerable and 20 plausible but unanswerable questions: score alone caught 8 of 20 gaps (answerable 0.45-0.75,
+# unanswerable 0.34-0.54); with coverage 15 of 20, and 0 of the 20 answerable ones flagged.
+WEAK_SCORE, DOUBT_SCORE, MIN_COVERAGE = 0.45, 0.55, 0.7
 
 device: ContextVar[dict] = ContextVar("device", default={})
 _locks: dict[str, asyncio.Lock] = {}
@@ -402,6 +405,14 @@ def log_gap(tool: str, query: str, score: float | None = None):
                     f"{'' if score is None else score}\t{' '.join(query.split())[:200]}\n")
     except OSError:
         pass  # a full disk must not break searching; the admin page then just shows fewer gaps
+
+
+def weak_answer(query: str, hits: list[dict]) -> bool:
+    if not hits or hits[0]["score"] < WEAK_SCORE:
+        return True
+    entry = index.files.get(hits[0]["path"])
+    text = (entry[3] or entry[2].lower()) if entry else ""
+    return hits[0]["score"] < DOUBT_SCORE and kb_lint.query_coverage(query, text) < MIN_COVERAGE
 
 
 def gaps_summary(n: int = 30) -> list[dict]:
@@ -915,7 +926,7 @@ async def knowledge_semantic_search(query: str, root: str = "", limit: int = 10)
     # A scoped token searches its own roots by default, so the top hits are not used up by notes it may not see.
     roots = tuple(r.strip() + "/" for r in root.split(",") if r.strip()) or tuple(r + "/" for r in device.get().get("roots") or ())
     hits = [h for h in await asyncio.to_thread(vec.search, query, roots, min(limit, 30)) if in_scope(h["path"])]
-    if not hits or hits[0]["score"] < WEAK_SCORE:
+    if vec.matrix is not None and weak_answer(query, hits):  # while the index is (re)built nothing is a gap
         log_gap("semantic", query, hits[0]["score"] if hits else None)
     if not hits:
         return f"(no semantic results: {vec.status()})"
