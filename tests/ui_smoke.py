@@ -5,7 +5,7 @@ Checks what broke before: the page loads without errors; the topic list opens a 
 connected notes on the right; Changes lists lines added/removed. On the map (Map button) a click on a note zooms to it
 and its neighbours (after the layout settled); the neighbours gather in a ring; a click beside the nodes (which usually
 lands on a link) deselects, puts every node back exactly and zooms out; a second click on a note reads it. On a phone
-the lists come first and opening a note scrolls to it. Read-only: it opens notes, it never edits.
+the lists come first (on the home view the topic cards instead of the topic list) and opening a note scrolls to it. Read-only: it opens notes, it never edits.
 
   systemd-run --user --scope -q -p MemoryMax=3G ~/.local/bin/uv run -q --with playwright python tests/ui_smoke.py
 (talks to the container port directly and sends what Traefik sends after the Authentik sign-in: the proxy secret
@@ -155,8 +155,9 @@ async def phone(browser, devices, secret: str) -> None:
     # Phone layout: search and lists first, then the note; the map only on request.
     check(await pg.evaluate("$('tab-notes').getBoundingClientRect().top < $('note').getBoundingClientRect().top && $('graph').hidden"),
           "phone shows the lists above the note, no map")
-    await pg.locator("#topics summary").first.tap()
-    await pg.locator("#topics details[open] .hits button").first.tap()
+    await pg.wait_for_selector(".home-card .hits button")
+    check(await pg.evaluate("!$('topics').offsetParent"), "phone home: the topic cards replace the topic list")
+    await pg.locator(".home-card .hits button").first.tap()
     await pg.wait_for_timeout(1500)
     check(await pg.evaluate("Math.abs($('note').getBoundingClientRect().top) < 5"), "opening a note scrolls to it")
     # A phone widens its layout viewport to fit content that is too wide (and zooms out), so compare with the screen.

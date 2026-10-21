@@ -315,15 +315,20 @@ function switchProject(p, refit = true) {
 
 // Every topic of the project with its notes, biggest first; the topic of the open note is unfolded. On the map,
 // unfolding a topic highlights its island.
-function renderTopics() {
+// The project's topics, biggest first: [[topic, notes]]. Shared by the topic list and the overview on the home view.
+function topicGroups() {
   const groups = new Map();
   for (const n of data.nodes.filter(nodeIn)) {
     const t = n.cluster || (n.group === "doc" ? "Docs" : "Other");
     (groups.get(t) || groups.set(t, []).get(t)).push(n);
   }
+  return [...groups].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
+}
+
+function renderTopics() {
   const open = new Set([...$("topics").querySelectorAll("details[open]")].map((d) => d.dataset.topic));
   const sel = byId.get(selected);
-  $("topics").replaceChildren(...[...groups].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0])).map(([topic, ns]) => {
+  $("topics").replaceChildren(...topicGroups().map(([topic, ns]) => {
     const d = el("details", "topic"); d.dataset.topic = topic;
     d.open = open.has(topic) || (sel && (sel.cluster || "") === topic);
     const s = el("summary"), dot = el("i"); dot.style.background = clusterColor.get(topic) || tok("--g-doc");
@@ -383,8 +388,57 @@ async function homeView() {
   let note; try { note = await api(`/ui/api/note?path=${encodeURIComponent(path)}`); } catch { return; } // no index yet
   if (current || editing || p !== project) return; // the user opened something or switched meanwhile
   homeNote = note;
-  const md = el("div", "md"); md.innerHTML = renderMd(splitFront(note.text).body);
-  $("note").replaceChildren(el("div", "note-empty muted", "Pick a note from the list or search. Index of this project:"), md);
+  if (!data.nodes.length) return; // the map data is still loading: its arrival draws the home view
+  homeSide();
+  const body = splitFront(note.text).body, groups = topicGroups();
+  if (!/^## /m.test(body) || !groups.length) { // no headings yet: the index as it is
+    const md = el("div", "md"); md.innerHTML = renderMd(body);
+    $("note").replaceChildren(el("div", "note-empty muted", "Pick a note from the list or search. Index of this project:"), md);
+    return;
+  }
+  // An overview: one card per topic with its best-connected notes and their index hook, the rest one click away.
+  const hooks = new Map([...body.matchAll(/^- \[[^\]]+\]\(([^)]+\.md)\)\s*[—–-]\s*(.+)$/gm)].map((m) => [`${MEMORY_ROOT[p]}/${m[1]}`, m[2]]));
+  const notes = groups.reduce((a, [, ns]) => a + ns.length, 0);
+  const head = el("header", "home-head");
+  head.append(el("h2", null, p), el("p", "muted", `${notes} notes in ${groups.length} topics. Pick a note, search with /, or open the map with M.`));
+  const grid = el("div", "home-grid");
+  for (const [topic, ns] of groups) {
+    const card = el("section", "home-card"), h = el("h3"), dot = el("i");
+    dot.style.background = clusterColor.get(topic) || tok("--g-doc");
+    h.append(dot, topic, el("span", "n", String(ns.length)));
+    const list = el("ol", "hits"), ranked = [...ns].sort((a, b) => (b.degree || 0) - (a.degree || 0) || a.label.localeCompare(b.label));
+    const show = (k) => list.replaceChildren(...ranked.slice(0, k).map((n) => hitItem(n.label, hooks.get(n.id) || "", () => openNote(n.id))));
+    show(5); card.append(h, list);
+    if (ns.length > 5) {
+      const more = el("button", "ghost small", `All ${ns.length}`);
+      more.onclick = () => { show(ns.length); more.remove(); }; // unfold in place: works on a phone too, where the list is hidden
+      card.append(more);
+    }
+    grid.append(card);
+  }
+  $("note").replaceChildren(head, grid);
+  document.body.classList.add("home"); // phone: the cards replace the topic list
+}
+
+// The right column on the home view: what changed lately and what lint asks for, instead of an empty panel.
+async function homeSide() {
+  const p = project;
+  let res; try { res = await api(`/ui/api/recent?project=${p}`); } catch { return; }
+  if (current || p !== project) return;
+  const box = el("div", "connected"), list = el("ol", "hits");
+  for (const f of res.files.slice(0, 8)) {
+    const n = byId.get(f.path);
+    list.append(hitItem(n ? n.label : f.path.split("/").pop(), `${ago(f.mtime)} · ${f.session ? f.session.device : f.by === "VM" ? "on the VM" : f.by}`, () => openNote(f.path)));
+  }
+  if (!res.files.length) list.append(el("li", "muted", "No changes yet."));
+  const all = el("button", "ghost small", "All changes"); all.onclick = () => selectTab("changes");
+  box.append(el("h3", null, "Recently changed"), list, all);
+  const lint = $("lint-count").textContent;
+  if (lint) {
+    const b = el("button", "ghost small", `${lint} lint findings`); b.onclick = () => selectTab("lint");
+    box.append(el("h3", "home-lint", "Housekeeping"), b);
+  }
+  $("side").replaceChildren(box);
 }
 
 // The open note is marked in the topic list, and its topic unfolded.
@@ -408,7 +462,7 @@ async function openNote(id, { push = true, find = null } = {}) {
   const p = projectOf(note.path);
   if (p !== "shared" && p !== project) switchProject(p, false);
   if (push && decode(location.hash.slice(1)) !== note.path) history.pushState(null, "", `#${note.path}`);
-  current = note;
+  current = note; document.body.classList.remove("home");
   selected = byId.has(note.path) ? note.path : null; setFocus(selected); markActive(); if (Graph) animateHover(6000);
   const n = byId.get(note.path);
   if (mapOn && n && n.x != null) {
