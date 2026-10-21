@@ -55,6 +55,8 @@ def main():
     (mem / "fact.md").write_text("line one\nline two\n")
     (lab / "overzicht.md").write_text("overview\n")
     (lab / "secret.env").write_text("nope")
+    (lab / "opnsense-config.xml").write_text("<opnsense><wireguard>privkey</wireguard></opnsense>")
+    (lab / "unifi_backup_1.unf").write_text("unifi")
     (cla / "CLAUDE.md").write_text("global rules\n@~/.claude/gedeeld/house_rules.md\n")
     (cla / "house_rules.md").write_text("---\ntitle: House rules\ntopic: General\n---\n# House rules\n\n"
                                         "1. Search first.\n2. A memo has \"## Stand\" and \"## Keuzes\"; history goes to <memory root>/archief/<name>_archief.md.\n"
@@ -127,7 +129,8 @@ def main():
         assert call("knowledge_new_memo", {"title": "Garage door", "description": "x", "type": "project", "heading": "Huis", "stand": "x"})[0]  # exists
         assert call("knowledge_new_memo", {"title": "X", "description": "x", "type": "note", "heading": "Huis", "stand": "x"})[0]  # bad type
 
-        for bad in ("memory/../../etc/passwd", "homelab/secret.env", "claude/settings.json", "etc/x"):
+        for bad in ("memory/../../etc/passwd", "homelab/secret.env", "claude/settings.json", "etc/x",
+                    "homelab/opnsense-config.xml", "homelab/unifi_backup_1.unf"):  # config exports carry keys
             assert call("knowledge_read", {"path": bad})[0], bad
         assert call("knowledge_write", {"path": "homelab/sub/x.md", "content": "x"})[0]  # not a writable pattern
         # Scoped agent token: only its roots, secrets masked everywhere, no web UI, no writes.
