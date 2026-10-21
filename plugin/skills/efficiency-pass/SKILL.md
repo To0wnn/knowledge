@@ -104,3 +104,9 @@ complexity). Record before/after in the commit or the project's Keuzes. A pure g
 ## Report
 Before/after numbers on the same load, what was changed, what was tried and rejected (with numbers), and what was not
 measured.
+
+## Keep this list current
+A new trick that measured a clear win, a listed one that stopped paying off, or a tool that changed (new version,
+deprecated backend): add or fix it here, as one line with its numbers, in the section it belongs to, and move it to
+"Rejected" when the numbers say so. Without write access to this skill (a guest), put it in the project's memory with
+its numbers and say so to the user; the owner folds it in. Version-bound facts carry their date and source link.
