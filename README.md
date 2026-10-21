@@ -29,6 +29,12 @@ like a native session in that directory gets. Code, logs and state files of the 
 served (`venv/`, `.next/` skipped too); code reaches other devices through git. The web UI has a project switch
 (homelab / anpitek / trade, one graph each; a skill shows in the projects whose notes mention it, an unmentioned one in homelab).
 
+**Home view, admin and help (21 Oct):** with no note open, the middle shows one card per topic (its best-connected
+notes with their index hook; "All N" unfolds the card) and the right column what changed lately and the lint count; on
+a phone the cards replace the topic list. Lint findings show the note's title and a plain-words check name with what to
+do (`LINT_INFO` in `app.js`: give a new lint check a line there). The admin page has tabs with counts
+(`/ui/admin#tokens|people|projects|settings|system`); the help page uses `app.css` like the rest.
+
 **Web UI layout (20 Oct, round 2 of the UI review):** the note sits in the wide middle column; **Map** (or `M`) swaps
 that column for the project graph (topic islands; a click gathers a note's neighbours in a ring and shows its card on
 the right, a second click reads it). Left: tabs **Notes** (every topic of the project with its notes, or, while you
