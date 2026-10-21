@@ -801,9 +801,19 @@ def lint_all() -> dict[str, list[str]]:
     report["isolated_note"] = [f"{i['id']} ({i['degree']} link)" for i in gaps["isolated"] if mem_of(i["id"])]
     report["sparse_topic"] = [f"{c['project']}: topic '{c['name']}' ({c['size']} notes, cohesion {c['cohesion']})"
                               for c in gaps["sparse_topics"]]
-    report.setdefault("doc_without_topic", []).extend(  # a guest's mirrored docs (house rule 2); lint did homelab's
-        rel for rel, text in sorted(files.items())
-        if mirrored(rel) and rel.endswith(".md") and not kb_lint.frontmatter(text).get("topic"))
+    # The docs of every other project (house rule 2; lint did homelab's): the notes the graph draws, each with a topic
+    # that is a heading of its project's MEMORY.md, or the map invents islands from file names.
+    docs_root = {d: m for d, m in PROJECTS.values() if d != "homelab"}
+    for n in get_graph()["nodes"]:
+        root = n["id"].split("/", 1)[0]
+        if n.get("group") != "doc" or root not in docs_root or n["id"] not in files \
+                or n["id"].rsplit("/", 1)[-1] in ("CLAUDE.md", "AGENTS.md", "GEMINI.md"):  # instructions, not docs
+            continue
+        headings = set(re.findall(r"^## (.+?)\s*$", files.get(f"{docs_root[root]}/MEMORY.md", ""), re.M))
+        topic = kb_lint.frontmatter(files[n["id"]]).get("topic", "").strip('"')
+        if topic not in headings:
+            report.setdefault("doc_without_topic", []).append(
+                f"{n['id']}: topic '{topic}' is no heading of {docs_root[root]}/MEMORY.md" if topic else f"{n['id']}: no topic")
     report["offline_conflict"] = [f"{rel}: written offline while {re.sub(r'[.]offline-[0-9-]+[.]md$', '.md', rel)} changed "
                                   "here; merge it into that memo, then delete it" for rel in sorted(files)
                                   if re.search(r"[.]offline-[0-9-]+[.]md$", rel)]

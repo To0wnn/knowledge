@@ -70,7 +70,9 @@ def main():
     (trade / "CLAUDE.md").write_text("trade bot rules\n")
     (trade / "bot.py").write_text("API_KEY = 'x'\n")
     (trade / "venv" / "README.md").write_text("vendored\n")
-    (tmem / "MEMORY.md").write_text("- [Bot plan](plan.md) — entry timing\n")
+    (tmem / "MEMORY.md").write_text("## Bot\n- [Bot plan](plan.md) — entry timing\n")
+    (trade / "STATUS.md").write_text("# Status\nsee plan\n")  # a doc without topic: lint reports it
+    (trade / "NOTES.md").write_text("---\ntopic: Bot\n---\nnotes\n")  # topic = a heading of trade-memory: fine
     (tmem / "plan.md").write_text("---\nname: plan\n---\nentry timing plan\n")
     tokens = tmp / "tokens.json"
     h = lambda t: hashlib.sha256(t.encode()).hexdigest()
@@ -199,6 +201,7 @@ def main():
         assert not list(mem.glob(".knowledge-*")), "temp files must not be left behind"
         # Lint runs on the in-memory index (the temp MEMORY.md points to 120 files that do not exist).
         lint_out = call("knowledge_lint", {})[1]
+        assert "trade/STATUS.md: no topic" in lint_out and "trade/NOTES.md" not in lint_out and "trade/CLAUDE.md" not in lint_out, lint_out
         assert "index_points_to_missing_file (120)" in lint_out, lint_out[:300]
         # Case-insensitive fast path, uppercase-escape fallback, and a file whose lowercase form changes length.
         (mem / "case.md").write_text("Mixed CASE Velux\nİstanbul Velux\n")
