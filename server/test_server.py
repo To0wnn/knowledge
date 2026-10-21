@@ -341,7 +341,7 @@ def main():
         gver = re.search(r"version ([0-9a-f]+)", masked).group(1)
         err, res = call("knowledge_write", {"path": "garden-memory/project_gate.md", "content": "gate v2\npassword: ‹secret›\n", "base_version": gver}, token=fr)
         assert err and "‹secret›" in res and "gategategate" in (tmp / "projects/garden/memory/project_gate.md").read_text(), res
-        assert not call("knowledge_edit", {"path": "garden-memory/project_gate.md", "old_string": "gate\n", "new_string": "gate v2\n"}, token=fr)[0]
+        assert not call("knowledge_edit", {"path": "garden-memory/project_gate.md", "old_string": "gate\npassword", "new_string": "gate v2\npassword"}, token=fr)[0]
         (tmp / "projects/garden/memory/project_gate.md").unlink()
         files = {"README.md": "# Copilot\n", "docs\\design\\voice.md": "voice notes\n", "C:\\x.md": "no",
                  "../escape.md": "no", ".venv/lib/x.md": "no", "main.py": "no"}
