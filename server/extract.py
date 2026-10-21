@@ -5,7 +5,10 @@
 """
 import io
 import json
-import resource
+try:
+    import resource
+except ImportError:  # Windows: the server runs on Linux; on Windows only for the client tests (no ingest there)
+    resource = None
 import subprocess
 import sys
 
@@ -37,6 +40,8 @@ def extract(data: bytes, ctype: str, url: str = "") -> dict:
 
 
 def _limits():
+    if resource is None:
+        raise RuntimeError("extraction limits need Linux (resource module)")  # fail loudly, never extract unlimited
     resource.setrlimit(resource.RLIMIT_CPU, (CPU_SECONDS, CPU_SECONDS))
     resource.setrlimit(resource.RLIMIT_AS, (MEMORY_BYTES, MEMORY_BYTES))
 
