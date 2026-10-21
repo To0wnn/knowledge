@@ -26,8 +26,9 @@ HOOKS = Path(__file__).resolve().parent.parent / "plugin" / "hooks"
 sys.path.insert(0, str(HOOKS))
 import memory_mirror  # noqa: E402  (the offline copy of the memory, shared with the Claude plugin)
 URL = os.environ.get("KNOWLEDGE_URL", "https://knowledge.to0wnn.com").rstrip("/")
-CONFIG = {"agy": Path.home() / ".gemini" / "config" / "hooks.json", "codex": Path.home() / ".codex" / "hooks.json"}
-RULES = {"agy": Path.home() / ".gemini" / "GEMINI.md", "codex": Path.home() / ".codex" / "AGENTS.md"}
+CODEX = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")  # Codex's own override, as Codex reads it
+CONFIG = {"agy": Path.home() / ".gemini" / "config" / "hooks.json", "codex": CODEX / "hooks.json"}
+RULES = {"agy": Path.home() / ".gemini" / "GEMINI.md", "codex": CODEX / "AGENTS.md"}
 BEGIN, END = "<!-- knowledge:house-rules (written by knowledge-agent.py install) -->", "<!-- /knowledge:house-rules -->"
 
 
@@ -87,7 +88,7 @@ def install(agent: str, name: str):
 
 def install_mcp(agent: str, tok: str):
     if agent == "codex":  # Codex reads the token from KNOWLEDGE_TOKEN itself, so no token is written to a file
-        path = Path.home() / ".codex" / "config.toml"
+        path = CODEX / "config.toml"
         text = path.read_text(encoding="utf-8") if path.exists() else ""
         if "[mcp_servers.knowledge]" in text:
             return print(f"MCP: {path} already has [mcp_servers.knowledge], left as it is")
