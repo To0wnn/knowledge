@@ -105,8 +105,8 @@ def sync_locked():
     os.close(fd)
     try:
         report = sync()
-        if report:
-            (MIRROR / "last-sync.log").write_text(report + "\n", encoding="utf-8")
+        log = MIRROR / "last-sync.log"  # only what needs a look: conflicts, refusals, a failed sync
+        log.write_text(report + "\n", encoding="utf-8") if report else log.unlink(missing_ok=True)
     except Exception as e:  # offline or server down: the copy stays as it is, the next session tries again
         (MIRROR / "last-sync.log").write_text(f"sync failed {time.strftime('%d %b %Y %H:%M')}: {e}\n", encoding="utf-8")
     finally:
