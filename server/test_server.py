@@ -77,7 +77,8 @@ def main():
     tokens.write_text(json.dumps({"laptop": {"sha256": h("rw-token"), "write": True},
                                   "workpc": {"sha256": h("ro-token"), "write": False},
                                   "watcher": {"sha256": h("watch-token"), "watch": True},
-                                  "agent": {"sha256": h("agent-token"), "roots": ["memory", "claude"], "redact": True}}))
+                                  "agent": {"sha256": h("agent-token"), "roots": ["memory", "claude"], "redact": True},
+                                  "pa": {"sha256": h("pa-token"), "write": True, "redact": True, "write_roots": ["memory"]}}))
     (tmp / "secrets.json").write_text(json.dumps([h("Sup3rSecret99")]))
     (mem / "creds.md").write_text("login pi/Sup3rSecret99 or KEY=Sup3rSecret99, password: hunter2hunter2\nplain line\n")
     env = {**os.environ, "KNOWLEDGE_MEMORY": str(mem), "KNOWLEDGE_HOMELAB": str(lab), "KNOWLEDGE_CLAUDE": str(cla),
@@ -117,6 +118,11 @@ def main():
         err, text = call("knowledge_write", {"path": "memory/new.md", "content": "new\n"})
         assert err and "frontmatter name" in text and "## Stand" in text and "knowledge_new_memo" in text, text  # house rule 2
         assert not call("knowledge_write", {"path": "memory/new.md", "content": memo("new\n", "new")})[0]
+        # A PA token reads every project but writes only its memory root.
+        assert "trade-memory/plan.md" in call("knowledge_search", {"pattern": "entry timing plan"}, token="pa-token")[1]
+        assert not call("knowledge_write", {"path": "memory/pa_note.md", "content": memo("from the PA\n", "pa_note")}, token="pa-token")[0]
+        err, text = call("knowledge_write", {"path": "trade-memory/pa_note.md", "content": memo("x\n", "pa_note")}, token="pa-token")
+        assert err and "only read" in text, text
         assert not call("knowledge_write", {"path": "memory/fb.md", "content": "---\nname: fb\ndescription: d\nmetadata:\n  type: feedback\n---\nRule. Why: x. How to apply: y.\n"})[0]
         # knowledge_new_memo: the server writes the layout and the index line; a new heading is said out loud.
         err, text = call("knowledge_new_memo", {"title": "Garage door", "description": "opener on the wifi", "type": "project",
