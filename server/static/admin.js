@@ -143,6 +143,10 @@ function renderSystem() {
 async function load() {
   state = await api("/ui/api/admin");
   renderTokens(); renderUsers(); renderProjects(); renderSystem();
+  $("n-tokens").textContent = state.tokens.length; $("n-projects").textContent = state.projects.length;
+  const users = Object.values(state.users), waiting = users.filter((u) => !Object.keys(u.projects || {}).length).length; // asks for access
+  $("n-people").textContent = waiting ? `${waiting} new` : $("users").rows.length; // config admins are rows too
+  $("n-people").classList.toggle("alert", !!waiting);
   if (!$("settings-form").contains(document.activeElement)) renderSettings(); // don't overwrite what is being typed
 }
 
@@ -180,7 +184,7 @@ $("token-form").onsubmit = (e) => {
       all: !!$("t-roots").querySelector('input[value="*"]:checked'),
       roots: [...$("t-roots").querySelectorAll("input:checked")].flatMap((c) => c.value.split(",")).filter((r) => r !== "*"),
     });
-  }, button).then(() => { if (res) { e.target.reset(); showNewToken(res); } }); // shown once: even if the reload after it failed
+  }, button).then(() => { if (res) { e.target.reset(); $("new-token-box").open = false; showNewToken(res); } }); // shown once: even if the reload after it failed
 };
 $("copy-token").onclick = async () => {
   try { await navigator.clipboard.writeText($("new-token-value").textContent); $("copy-token").textContent = "Copied"; }
@@ -197,5 +201,18 @@ $("project-form").onsubmit = (e) => {
   run(() => api("/ui/api/admin/project", { name: $("p-name").value.trim() }), e.target.querySelector("button"))
     .then((ok) => ok && e.target.reset());
 };
+
+// One section at a time, chosen in the nav; the hash keeps it on reload (/ui/admin#settings).
+const tabs = [...document.querySelectorAll(".admin-nav [role=tab]")];
+function showSection() {
+  const want = location.hash.slice(1), sec = tabs.some((t) => t.dataset.sec === want) ? want : "tokens";
+  for (const t of tabs) {
+    t.setAttribute("aria-selected", String(t.dataset.sec === sec));
+    $(`sec-${t.dataset.sec}`).hidden = t.dataset.sec !== sec;
+  }
+}
+for (const t of tabs) t.onclick = () => { history.replaceState(null, "", `#${t.dataset.sec}`); showSection(); };
+addEventListener("hashchange", showSection);
+showSection();
 
 load().catch(showError);
