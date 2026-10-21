@@ -647,10 +647,7 @@ def new_memo_refusal(rel: str, content: str) -> str:
     rules and are edited with hints instead. The writer fixes it in the same call, so an import does not stall."""
     if not mem_of(rel) or rel.count("/") != 1 or rel.endswith("/MEMORY.md"):
         return ""
-    fm = kb_lint.frontmatter(content)
-    lacks = [f"frontmatter {k}" for k in ("name", "description", "type") if not fm.get(k)]
-    if kb_lint.memo_type(content) not in ("feedback", "user"):
-        lacks += kb_lint.missing_structure(content)
+    lacks = kb_lint.new_memo_lacks(content)
     return (f"a new memo needs {', '.join(lacks)} (house rule 2). Easiest: knowledge_new_memo, which writes the "
             "frontmatter, both sections and the index line for you") if lacks else ""
 

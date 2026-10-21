@@ -117,6 +117,14 @@ def missing_structure(text: str) -> list[str]:
     return [h for h in STRUCTURE if not re.search(rf"^{h}\b", text, re.M)]
 
 
+def new_memo_lacks(text: str) -> list[str]:
+    """What a new memo misses by house rule 2: frontmatter name/description/type and, except feedback and user memos,
+    "## Stand" and "## Keuzes". The server refuses such a write, and so does the VM hook (memory-check.py --pre)."""
+    fm = frontmatter(text)
+    lacks = [f"frontmatter {k}" for k in ("name", "description", "type") if not fm.get(k)]
+    return lacks + (missing_structure(text) if memo_type(text) not in ("feedback", "user") else [])
+
+
 def check_decisions(report: dict, name: str, text: str, today: date):
     if undated := [k for k in keuzes(text) if not DECISION_DATE.search(k)]:
         report["decision_without_date"].append(f"{name}: {len(undated)} decision(s), e.g. {undated[0][2:70]}")
@@ -226,6 +234,8 @@ def render(report: dict[str, list[str]]) -> str:
 
 
 if __name__ == "__main__":  # self-check
+    assert new_memo_lacks("plain") == ["frontmatter name", "frontmatter description", "frontmatter type", "## Stand", "## Keuzes"]
+    assert new_memo_lacks("---\nname: a\ndescription: d\nmetadata:\n  type: feedback\n---\nRule.") == []
     files = {
         "memory/MEMORY.md": "- [A](a.md) — hook\n- [Gone](gone.md) — x\n",
         "memory/a.md": "---\nname: a\ndescription: d\nmetadata:\n  type: project\n---\nSee [[b]] and [[nope]]. TODO 1 jan 2026\n",

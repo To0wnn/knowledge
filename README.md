@@ -315,6 +315,9 @@ meaning (score ≥ 0.72, calibrated on embeddinggemma), so the writer can merge 
 - **UI smoke test** (`tests/ui_smoke.py`, headless system Chrome via Playwright, read-only against the live server):
   click zoom, ring, exact release, deselect, phone tap and Read chip. Run after UI changes:
   `systemd-run --user --scope -q -p MemoryMax=3G ~/.local/bin/uv run -q --with playwright python tests/ui_smoke.py`.
+- **New-memo guard on the VM** (`memory-check.py --pre`, PreToolUse `Write` in `~/.claude/settings.json`, since 21 Oct 2026):
+  a session that writes a NEW memo without frontmatter or `## Stand` / `## Keuzes` is refused before the file exists,
+  with the same rule the server applies (`lint.new_memo_lacks`). Existing memos and other files pass.
 - **Memo hook on the VM** (`plugin/hooks/memory-check.py`, PostToolUse `Edit|Write|MultiEdit` in `~/.claude/settings.json`,
   timeout 15 s): after a session edits a memo directly, it runs lint on that memory root and tells Claude what concerns
   that file, plus the similar-memo hint for a new memo. Advisory only (`additionalContext`), never blocks.

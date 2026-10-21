@@ -5,6 +5,9 @@ concerns this file; for a new memo, also list existing memos with a similar mean
 
 Advisory only: always exits 0, prints {"hookSpecificOutput": {"additionalContext": ...}} when there is something to
 say, and stays silent (and fast) for every other file. Standard library only; never breaks a session.
+
+With --pre (PreToolUse Write): a NEW memo that misses its frontmatter or ## Stand / ## Keuzes (house rule 2) is
+refused before it is written, like the server refuses it; existing memos and all other files pass.
 """
 import json
 import os
@@ -69,6 +72,20 @@ def similar_notes(mem_dir: Path, name: str, text: str) -> list[str]:
     return out[:3]
 
 
+def pre_check(hook: dict) -> str:
+    """Why this Write is refused ("" = allowed): a new memo that misses what house rule 2 asks."""
+    inp = hook.get("tool_input") or {}
+    found = memo_of(inp.get("file_path", ""))
+    if not found or found[1] == "MEMORY.md" or Path(inp["file_path"]).exists():
+        return ""
+    sys.path.insert(0, str(LINT_DIR))
+    import lint
+    lacks = lint.new_memo_lacks(inp.get("content", ""))
+    return (f"A new memo needs {', '.join(lacks)} (house rule 2): frontmatter name, description, metadata.type, then "
+            "## Stand and ## Keuzes (feedback/user memos: frontmatter only). Write it with those, or create it with the "
+            "MCP tool knowledge_new_memo, which also adds the index line.") if lacks else ""
+
+
 def main() -> None:
     hook = json.load(sys.stdin)
     path = (hook.get("tool_input") or {}).get("file_path", "")
@@ -97,10 +114,21 @@ if __name__ == "__main__":
         assert memo_of(str(PROJECTS / "-home-to0wnn-homelab/memory/x.md")) == (PROJECTS / "-home-to0wnn-homelab/memory", "x.md")
         assert memo_of(str(PROJECTS / "-home-to0wnn-homelab/memory/archief/x.md")) is None
         assert memo_of("/home/to0wnn/homelab/diensten.md") is None
+        new = str(PROJECTS / "-home-to0wnn-homelab/memory/zz_selftest_new.md")
+        assert "## Stand" in pre_check({"tool_input": {"file_path": new, "content": "plain"}})
+        good = "---\nname: z\ndescription: d\nmetadata:\n  type: project\n---\n## Stand\nx\n## Keuzes\n"
+        assert pre_check({"tool_input": {"file_path": new, "content": good}}) == ""
+        assert pre_check({"tool_input": {"file_path": str(PROJECTS / "-home-to0wnn-homelab/memory/MEMORY.md"), "content": "x"}}) == ""
+        assert pre_check({"tool_input": {"file_path": "/home/to0wnn/homelab/diensten.md", "content": "x"}}) == ""
         print("ok")
         sys.exit(0)
     try:
-        main()
-    except Exception as e:  # advisory: a failing check must never break or block a session
+        if "--pre" in sys.argv:
+            if why := pre_check(json.load(sys.stdin)):
+                print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                                         "permissionDecisionReason": why}}))
+        else:
+            main()
+    except Exception as e:  # a failing check must never break or block a session
         print(f"memory-check skipped: {e}", file=sys.stderr)
     sys.exit(0)
