@@ -41,8 +41,8 @@ function renderTokens() {
     const name = el("td", "mono", t.name);
     if (SYSTEM.has(t.name) || t.watch) name.append(el("span", "muted", " · used by the VM"));
     tr.append(name, el("td", "", access), el("td", "", scopeText(t) + (t.redact ? " · secrets masked" : "")),
-      el("td", "muted", t.created ? `${t.created}${t.by ? " · " + t.by : ""}` : "before the admin page"),
-      el("td", "muted", ago(t.last_used)));
+      el("td", "muted", t.created ? `${day(t.created)}${t.by ? " · " + t.by : ""}` : "before the admin page"),
+      el("td", t.last_used ? "muted" : "unused", t.last_used ? ago(t.last_used) : "never used"));
     const td = el("td"), b = el("button", "ghost danger", "Revoke");
     b.setAttribute("aria-label", `Revoke ${t.name}`);
     b.onclick = () => {
@@ -76,7 +76,7 @@ function renderUsers() {
     const tr = el("tr");
     if (!Object.keys(u.projects || {}).length) tr.className = "pending";
     const who = el("td", "mono", name);
-    if (u.first_seen) who.title = `first signed in ${new Date(u.first_seen * 1000).toLocaleString()}`;
+    if (u.first_seen) who.title = `first signed in ${stamp(new Date(u.first_seen * 1000))}`;
     tr.append(who);
     const selects = projects.map((p) => {
       const s = el("select"); s.setAttribute("aria-label", `${name}: ${p}`);
@@ -109,9 +109,14 @@ function renderUsers() {
 }
 
 function renderProjects() {
+  const files = Object.fromEntries(state.system.index.map((r) => [r.root, r.files]));
   $("projects").replaceChildren(...state.projects.map((p) => {
-    const tr = el("tr");
+    const tr = el("tr"), mine = (roots) => !roots || !roots.length || roots.includes(p.docs) || roots.includes(p.memory);
+    const tokens = state.tokens.filter((t) => mine(t.roots)).length;
+    const people = state.admins.length + Object.values(state.users).filter((u) => (u.projects || {})[p.name] && u.projects[p.name] !== "none").length;
     tr.append(el("td", "", p.name), el("td", "mono", p.docs + "/"), el("td", "mono", p.memory + "/"),
+      el("td", "num", `${files[p.memory] ?? 0} memory · ${files[p.docs] ?? 0} docs`),
+      el("td", "", `${tokens} token${tokens === 1 ? "" : "s"} · ${people} ${people === 1 ? "person" : "people"}`),
       el("td", "muted", p.builtin ? "VM (built in)" : "server"));
     return tr;
   }));
@@ -130,14 +135,21 @@ function renderSettings() {
   $("s-config-admins").textContent = `Always admin (server config): ${state.config_admins.join(", ") || "nobody"}.`;
 }
 
-const when = (sec) => sec ? `${new Date(sec * 1000).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" })} (${ago(sec)})` : "—";
+// One date style on the whole page: "21 Oct 09:26", the year only when it is not this year.
+const stamp = (d) => d.toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
+  ...(d.getFullYear() !== new Date().getFullYear() ? { year: "numeric" } : {}) });
+const day = (iso) => new Date(`${iso}T12:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+const when = (sec) => sec ? `${stamp(new Date(sec * 1000))} (${ago(sec)})` : "—";
 function renderSystem() {
   const sys = state.system, row = (...cells) => { const tr = el("tr"); tr.append(...cells.map((c) => el("td", "", c))); return tr; };
   $("system-head").textContent = `Release ${sys.release} · running since ${when(sys.started)}.`;
   $("background").replaceChildren(...sys.background.map((b) => row(b.name, b.what, when(b.last), b.detail)));
   $("index-roots").replaceChildren(...sys.index.map((r) => { const tr = row(r.root, r.path, String(r.files), String(r.mb)); tr.children[1].className = "mono"; return tr; }));
   $("config").replaceChildren(...sys.config.map((c) => row(c.name, c.value, c.where)));
-  $("audit").textContent = sys.audit.join("\n") || "(empty)";
+  $("audit").replaceChildren(...(sys.audit.length ? sys.audit.map((line) => { // "2026-10-21T08:56:45 device action path"
+    const [t, who, action, ...rest] = line.split(" "), tr = row(stamp(new Date(t)), who, action, rest.join(" "));
+    tr.children[3].className = "mono"; return tr;
+  }) : [row("—", "", "", "")]));
 }
 
 async function load() {
