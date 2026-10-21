@@ -670,7 +670,7 @@ dependencies = [
     { name = "regex" },
     { name = "trafilatura" },
     { name = "uvicorn" },
-    { name = "uvloop" },
+    { name = "uvloop", marker = "sys_platform != 'win32'" },
 ]
 
 [package.metadata]
@@ -684,7 +684,7 @@ requires-dist = [
     { name = "regex", specifier = "==2026.9.29" },
     { name = "trafilatura", specifier = "==2.3.1" },
     { name = "uvicorn", specifier = "==0.54.0" },
-    { name = "uvloop", specifier = "==0.23.0" },
+    { name = "uvloop", marker = "sys_platform != 'win32'", specifier = "==0.23.0" },
 ]
 
 [[package]]

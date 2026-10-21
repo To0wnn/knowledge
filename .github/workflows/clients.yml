@@ -1,0 +1,31 @@
+# The client side on every OS a device or guest uses: plugin hooks through Git Bash on Windows, knowledge-agent.py
+# for agy/Codex through PowerShell and cmd, the offline copy, and the real Claude Code and Codex CLIs.
+# tests/clients_e2e.py starts the real server on the runner itself.
+name: clients
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Real CLIs
+        run: npm install -g @anthropic-ai/claude-code @openai/codex
+      - name: Server dependencies
+        run: uv sync --project server --frozen --no-dev
+      - name: Client end-to-end
+        run: uv run --project server --frozen python tests/clients_e2e.py
