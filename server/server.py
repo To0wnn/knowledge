@@ -656,6 +656,8 @@ def lint_all() -> dict[str, list[str]]:
     report["isolated_note"] = [f"{i['id']} ({i['degree']} link)" for i in gaps["isolated"] if mem_of(i["id"])]
     report["sparse_topic"] = [f"{c['project']}: topic '{c['name']}' ({c['size']} notes, cohesion {c['cohesion']})"
                               for c in gaps["sparse_topics"]]
+    report["doc_without_topic"] = [rel for rel, text in sorted(files.items())  # a guest's mirrored docs, house rule 2
+                                   if mirrored(rel) and rel.endswith(".md") and not kb_lint.frontmatter(text).get("topic")]
     report["history_failed"] = [f"{rel}: {err}" for rel, err in sorted(HISTORY_FAILED.items()) if in_scope(rel)]
     return report
 
@@ -850,6 +852,15 @@ def context_parts(project: str = "homelab") -> list[str]:
                 f"memories there (knowledge_edit, or knowledge_write for a new file plus one index line), never in local "
                 "files. Search: knowledge_search, by meaning knowledge_semantic_search; housekeeping: knowledge_lint.",
                 house_rules(mem)]
+        with index.lock:
+            empty = not any(r.startswith(mem + "/") and r != f"{mem}/MEMORY.md" for r in index.files)
+        if empty:  # a new guest whose folder may already hold CLAUDE.md / AGENTS.md / GEMINI.md and notes
+            text.append("First session in this project: its memory is still empty. If this folder or this agent already "
+                        "holds instructions or notes (CLAUDE.md, AGENTS.md, GEMINI.md, other .md files, Claude Code's local "
+                        "memory in ~/.claude/projects/), ask the user once whether to turn the lasting knowledge in them "
+                        f"into memos in {mem}/ by the house rules above. Leave those files where they are (the folder's .md "
+                        "files are mirrored as docs), but give each doc in this folder a frontmatter topic: that matches "
+                        "a MEMORY.md heading, so it sits on that topic in the graph; knowledge_lint lists the docs without one.")
         try:
             full, _ = resolve(f"{mem}/MEMORY.md")
             if full.exists():
