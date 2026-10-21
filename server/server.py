@@ -676,6 +676,9 @@ def lint_all() -> dict[str, list[str]]:
     report.setdefault("doc_without_topic", []).extend(  # a guest's mirrored docs (house rule 2); lint did homelab's
         rel for rel, text in sorted(files.items())
         if mirrored(rel) and rel.endswith(".md") and not kb_lint.frontmatter(text).get("topic"))
+    report["offline_conflict"] = [f"{rel}: written offline while {re.sub(r'[.]offline-[0-9-]+[.]md$', '.md', rel)} changed "
+                                  "here; merge it into that memo, then delete it" for rel in sorted(files)
+                                  if re.search(r"[.]offline-[0-9-]+[.]md$", rel)]
     report["history_failed"] = [f"{rel}: {err}" for rel, err in sorted(HISTORY_FAILED.items()) if in_scope(rel)]
     return report
 
@@ -1192,6 +1195,85 @@ async def sessions_route(request: Request):
 
 SYNC_SKIP = {"venv", "node_modules", "__pycache__", "dist", "build", "site-packages"}  # plus every dot-folder
 SYNC_MAX_FILE = 300_000
+
+
+def mirror_roots() -> list[str]:
+    """The memory roots this device keeps an offline copy of: the ones it may write (a read-only token gets none)."""
+    return [mem for _, mem in list(PROJECTS.values()) if in_scope(mem + "/") and may_write(f"{mem}/MEMORY.md")]
+
+
+def mirrorable(rel: str, roots: list[str]) -> bool:
+    """Memos and their archief/, not the session logs (they only grow and are never edited offline)."""
+    return rel.split("/", 1)[0] in roots and rel.endswith(".md") and not rel.split("/", 2)[1:2] == ["sessions"]
+
+
+def mirror_files(roots: list[str]) -> dict[str, bytes]:
+    """Every mirrorable file of these roots, as the device sees it (redacted for a redacting token)."""
+    with index.lock:
+        rels = [r for r in index.files if mirrorable(r, roots)]
+    out = {}
+    for rel in rels:
+        full, rel = resolve(rel)
+        if full.is_file():
+            data = full.read_bytes()
+            out[rel] = shown(data.decode("utf-8", "replace")).encode() if device.get().get("redact") else data
+    return out
+
+
+@server.custom_route("/mirror", methods=["POST"])
+async def mirror_route(request: Request):
+    """Offline copy of a device's memory roots: {"have": {rel: version}} -> the files that differ from what the device
+    has, plus the version of every file (what is missing there was deleted here). One round trip, nothing re-sent."""
+    have = (await request.json()).get("have") or {}
+    roots = mirror_roots()
+    files = await asyncio.to_thread(mirror_files, roots)
+    versions = {rel: version(data) for rel, data in files.items()}
+    return JSONResponse({"roots": roots, "versions": versions,
+                         "files": {rel: files[rel].decode("utf-8", "replace") for rel, v in versions.items() if have.get(rel) != v}})
+
+
+@server.custom_route("/mirror/push", methods=["POST"])
+async def mirror_push(request: Request):
+    """Memos a device wrote or changed in its offline copy: {"files": {rel: {"text", "base"}}}, base = the version the
+    copy had ("" = new there). Written when the server still has that version; when both sides changed (or the server
+    deleted it, or the file is redacted for this device) the device's text lands next to it as <name>.offline-<time>.md,
+    so nothing is lost and knowledge_lint asks to merge them."""
+    files = (await request.json()).get("files") or {}
+    roots = mirror_roots()
+    out = {"written": {}, "unchanged": 0, "conflicts": {}, "refused": []}
+    for name, f in list(files.items())[:2000]:
+        try:
+            if not isinstance(f, dict) or not isinstance(f.get("text"), str):
+                raise ToolError("not text")
+            full, rel = resolve(name)
+            if not mirrorable(rel, roots):
+                raise ToolError("not a memo of a memory root this device mirrors")
+            check_writable(rel)
+            refuse_secrets(f["text"])
+        except ToolError as e:
+            out["refused"].append(f"{name}: {e}")
+            continue
+        data, base = f["text"].encode(), str(f.get("base") or "")
+        async with _locks.setdefault(rel, asyncio.Lock()):
+            current = full.read_bytes() if full.exists() else None
+            if current == data:
+                out["unchanged"] += 1
+                continue
+            plain = current is None or shown(current.decode("utf-8", "replace")).encode() == current
+            if (current is None and not base) or (current is not None and plain and base == version(current)):
+                if replace_if_unchanged(full, current, data):
+                    index.refresh(rel)
+                    audit("mirror", rel)
+                    out["written"][rel] = version(data)
+                    continue
+            copy, copy_rel = resolve(f"{rel[:-3]}.offline-{time.strftime('%Y%m%d-%H%M%S')}.md")
+            if not replace_if_unchanged(copy, None, data):
+                out["refused"].append(f"{name}: changed while writing")
+                continue
+            index.refresh(copy_rel)
+            audit("mirror-conflict", copy_rel)
+            out["conflicts"][rel] = copy_rel
+    return JSONResponse(out)
 
 
 def sync_name(name: str) -> str | None:

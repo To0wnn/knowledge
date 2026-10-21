@@ -11,6 +11,7 @@ agy/Codex tokens on the VM stay read-only (install always gives session-log "-")
   knowledge-agent.py docs-sync TOKEN               PostToolUse: mirror an edited .md (folder with .knowledge-project)
   knowledge-agent.py session-log TOKEN             SessionEnd/PreCompact (Codex), Stop (agy): post the session log
 """
+import hashlib
 import json
 import os
 import shutil
@@ -22,6 +23,8 @@ import urllib.request
 from pathlib import Path
 
 HOOKS = Path(__file__).resolve().parent.parent / "plugin" / "hooks"
+sys.path.insert(0, str(HOOKS))
+import memory_mirror  # noqa: E402  (the offline copy of the memory, shared with the Claude plugin)
 URL = os.environ.get("KNOWLEDGE_URL", "https://knowledge.to0wnn.com").rstrip("/")
 CONFIG = {"agy": Path.home() / ".gemini" / "config" / "hooks.json", "codex": Path.home() / ".codex" / "hooks.json"}
 RULES = {"agy": Path.home() / ".gemini" / "GEMINI.md", "codex": Path.home() / ".codex" / "AGENTS.md"}
@@ -136,8 +139,9 @@ def install_hooks(agent: str, name: str):
 
 
 def context_text(tok: str, cwd: str) -> str:
-    """Every part of the startup context (/context/<n>, empty past the last), or one short notice."""
-    out = []
+    """Every part of the startup context (/context/<n>, empty past the last), or one short notice; with the server
+    down, the context of the last online session and the offline copy of the memory."""
+    key, out = hashlib.sha256(cwd.encode()).hexdigest()[:12], []
     for n in range(1, 10):
         q = urllib.parse.urlencode({"project": cwd})
         req = urllib.request.Request(f"{URL}/context/{n}?{q}", headers={"Authorization": f"Bearer {tok}"})
@@ -145,14 +149,16 @@ def context_text(tok: str, cwd: str) -> str:
             with urllib.request.urlopen(req, timeout=8) as r:
                 text = r.read().decode("utf-8", "replace")
         except urllib.error.HTTPError as e:
-            return {401: "knowledge server: token invalid or revoked (KNOWLEDGE_TOKEN). Shared memory and docs were not loaded.",
-                    403: "knowledge server: only reachable from the home network or WireGuard. Shared memory and docs were not loaded."
-                    }.get(e.code, f"knowledge server ({URL}) answered HTTP {e.code}: shared memory and docs were not loaded.")
-        except OSError as e:
-            return f"knowledge server ({URL}) unreachable ({e}): shared memory and docs were not loaded for this session."
+            if e.code in (401, 403):
+                return {401: "knowledge server: token invalid or revoked (KNOWLEDGE_TOKEN). Shared memory and docs were not loaded.",
+                        403: "knowledge server: only reachable from the home network or WireGuard. Shared memory and docs were not loaded."}[e.code]
+            return memory_mirror.offline_context(key)  # 5xx: the server (or its proxy) is down
+        except OSError:
+            return memory_mirror.offline_context(key)
         if not text:
             break
         out.append(text)
+    memory_mirror.save_context(key, "\n\n".join(out))
     return "\n\n".join(out)
 
 
@@ -167,6 +173,7 @@ def context(agent: str, tok: str):
     hook = json.loads(stdin or "{}")
     cwd = hook.get("cwd") or (hook.get("workspacePaths") or [os.getcwd()])[0]
     ctx = context_text(tok, cwd)  # first: a slow mirror must not cost the session its context
+    run_hook("memory_mirror.py", tok, "")  # returns at once: the sync runs in the background
     text = "\n\n".join(t for t in (run_hook("docs-sync.py", tok, stdin).strip(), ctx) if t)
     print(json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": text}}]} if agent == "agy" else
                      {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}}))

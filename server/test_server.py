@@ -382,6 +382,35 @@ def main():
         assert "failed" in out and "409" in out, out
         assert http("POST", "/sessions", {"prompts": ["fix the taxi speed"], "cwd": "C:\\Users\\Bob\\A350Copilot"}, token=fr)[0] == 200
         assert "fix the taxi speed" in "".join(p.read_text() for p in (tmp / "projects/garden/memory/sessions").glob("*.md"))
+        # Offline copy of the memory: a first sync fetches it, offline edits go up, both-sides edits never overwrite.
+        mirror, menv = tmp / "mirror", {**os.environ, "KNOWLEDGE_URL": BASE, "KNOWLEDGE_TOKEN": fr, "KNOWLEDGE_MIRROR": str(tmp / "mirror")}
+        mm = [sys.executable, str(Path(__file__).parents[1] / "plugin/hooks/memory_mirror.py")]
+        run_mm = lambda env=menv: subprocess.run(mm + ["--now"], env=env, check=True)
+        run_mm()
+        beds, gmem = mirror / "garden-memory/project_beds.md", tmp / "projects/garden/memory"
+        assert beds.read_bytes() == (gmem / "project_beds.md").read_bytes() and (mirror / "garden-memory/MEMORY.md").exists()
+        assert not (mirror / "garden-memory/sessions").exists()  # session logs stay on the server
+        down = {**menv, "KNOWLEDGE_URL": "http://127.0.0.1:9"}  # the server is unreachable
+        (mirror / "garden-memory/project_paths.md").write_text("offline memo\n")
+        beds.write_text(beds.read_text() + "edited offline\n")
+        run_mm(down)
+        assert "sync failed" in (mirror / "last-sync.log").read_text() and "edited offline" in beds.read_text()
+        assert "offline copy in" in subprocess.run(mm + ["offline", "k"], env=menv, capture_output=True, text=True).stdout
+        run_mm()  # back online: only the two changed files go up
+        assert (gmem / "project_paths.md").read_text() == "offline memo\n" and "edited offline" in (gmem / "project_beds.md").read_text()
+        (gmem / "project_beds.md").write_text("changed on the server\n")
+        beds.write_text("changed offline too\n")
+        run_mm()
+        copies = list(gmem.glob("project_beds.offline-*.md"))
+        assert (gmem / "project_beds.md").read_text() == "changed on the server\n" == beds.read_text(), beds.read_text()
+        assert len(copies) == 1 and copies[0].read_text() == "changed offline too\n" and (mirror / "garden-memory" / copies[0].name).exists()
+        assert "offline_conflict" in call("knowledge_lint", {}, token=fr)[1]
+        copies[0].unlink(); (gmem / "project_paths.md").unlink()  # merged / deleted on the server
+        (mirror / "garden-memory/MEMORY.md").unlink()  # lost locally: comes back
+        run_mm()
+        assert not (mirror / "garden-memory/project_paths.md").exists() and not (mirror / "garden-memory" / copies[0].name).exists()
+        assert (mirror / "garden-memory/MEMORY.md").exists()
+        assert json.loads(http("POST", "/mirror", {"have": {}}, token="ro-token")[1])["roots"] == []  # read-only: no copy
         # Review fixes 20 Oct: a project named like a path part does not capture other sessions; write patterns are
         # anchored; "Add" never wipes access; graph ETag per user; body cap; scoped ingest/lint; token routes.
         assert admin("/ui/api/admin/project", {"name": "home"})[0] == 200
