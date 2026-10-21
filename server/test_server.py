@@ -357,6 +357,7 @@ def main():
         assert "First session" not in ctx  # garden-memory has a memo now
         assert "Development rules" in ctx and "2. Done means proven." in ctx, ctx  # a guest gets the development rules too
         assert "# Development rules" in http("GET", "/house-rules", token=fr)[1]  # and so does an agent's rules file
+        assert b"<li>Done means proven.</li>" in raw("GET", "/ui/help", headers=ck)[2]  # and the help page
         assert "garden-memory/project_beds.md" in call("knowledge_list", {}, token=fr)[1]  # a guest's own memory by default
         # A redacting guest reads ‹secret› for a masked value; writing that back must not erase the original.
         call("knowledge_write", {"path": "garden-memory/project_gate.md", "content": memo("gate\npassword: gategategate\n", "gate")})
