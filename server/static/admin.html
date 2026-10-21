@@ -15,28 +15,33 @@
   <a class="logout" href="/outpost.goauthentik.io/sign_out">Sign out</a>
 </header>
 <main class="admin">
+  <nav class="admin-nav" role="tablist" aria-label="Admin sections">
+    <button role="tab" data-sec="tokens" aria-controls="sec-tokens">Tokens <span class="badge" id="n-tokens"></span></button>
+    <button role="tab" data-sec="people" aria-controls="sec-people">People <span class="badge" id="n-people"></span></button>
+    <button role="tab" data-sec="projects" aria-controls="sec-projects">Projects <span class="badge" id="n-projects"></span></button>
+    <button role="tab" data-sec="settings" aria-controls="sec-settings">Settings</button>
+    <button role="tab" data-sec="system" aria-controls="sec-system">System</button>
+  </nav>
   <p id="error" class="error" role="alert" hidden></p>
 
-  <section aria-labelledby="h-tokens">
+  <section id="sec-tokens" role="tabpanel" aria-labelledby="h-tokens">
     <h2 id="h-tokens">Device tokens</h2>
     <p class="muted">For Claude Code (the knowledge plugin), agents and assistants. A token is shown once; only its hash is kept. Lost it? Revoke it and create a new one.</p>
-    <div class="table-wrap"><table>
-      <thead><tr><th>Name</th><th>Access</th><th>Scope</th><th>Created</th><th title="Recorded since 20 Oct 2026, to the nearest 10 minutes">Last used</th><th><span class="sr-only">Actions</span></th></tr></thead>
-      <tbody id="tokens"></tbody>
-    </table></div>
-    <form id="token-form" class="admin-form">
-      <h3>New token</h3>
-      <label for="t-name">Device or agent name</label>
-      <input id="t-name" required pattern="[A-Za-z0-9][A-Za-z0-9._\-]{0,39}" placeholder="e.g. work-laptop">
-      <fieldset>
-        <legend>Projects (tick at least one, or "All projects")</legend>
-        <div id="t-roots" class="checks"></div>
-      </fieldset>
-      <label class="check"><input id="t-write" type="checkbox"> May write memos</label>
-      <label class="check"><input id="t-redact" type="checkbox"> Mask known secrets in everything it reads (agents that read outside mail)</label>
-      <label class="check"><input id="t-watch" type="checkbox"> VM file watcher (may refresh the index; only for the watcher on the VM)</label>
-      <button type="submit">Create token</button>
-    </form>
+    <details id="new-token-box" class="admin-new">
+      <summary class="ghost">+ New token</summary>
+      <form id="token-form" class="admin-form">
+        <label for="t-name">Device or agent name</label>
+        <input id="t-name" required pattern="[A-Za-z0-9][A-Za-z0-9._\-]{0,39}" placeholder="e.g. work-laptop">
+        <fieldset>
+          <legend>Projects (tick at least one, or "All projects")</legend>
+          <div id="t-roots" class="checks"></div>
+        </fieldset>
+        <label class="check"><input id="t-write" type="checkbox"> May write memos</label>
+        <label class="check"><input id="t-redact" type="checkbox"> Mask known secrets in everything it reads (agents that read outside mail)</label>
+        <label class="check"><input id="t-watch" type="checkbox"> VM file watcher (may refresh the index; only for the watcher on the VM)</label>
+        <button type="submit">Create token</button>
+      </form>
+    </details>
     <div id="new-token" class="new-token" hidden>
       <p><strong>Copy this token now</strong>, it is not shown again: <span id="new-token-name"></span></p>
       <div class="row"><code id="new-token-value"></code><button type="button" id="copy-token" class="ghost">Copy token</button></div>
@@ -52,9 +57,13 @@
       <details><summary>A device of your own on the VM: keep the token in the vault</summary><pre id="new-token-setup" class="setup"></pre></details>
       <button type="button" id="hide-token" class="ghost">Done, hide it</button>
     </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Name</th><th>Access</th><th>Scope</th><th>Created</th><th title="Recorded since 20 Oct 2026, to the nearest 10 minutes">Last used</th><th><span class="sr-only">Actions</span></th></tr></thead>
+      <tbody id="tokens"></tbody>
+    </table></div>
   </section>
 
-  <section aria-labelledby="h-users">
+  <section id="sec-people" role="tabpanel" aria-labelledby="h-users" hidden>
     <h2 id="h-users">People</h2>
     <p class="muted">Sign-in is Authentik (group "Knowledge"); here you decide which projects someone may read or edit. A change is saved shortly after you pick it. Someone who signs in without access appears at the top. Admins: the ones in the server config plus the extra admins under Settings.</p>
     <div class="table-wrap"><table>
@@ -68,7 +77,7 @@
     </form>
   </section>
 
-  <section aria-labelledby="h-projects">
+  <section id="sec-projects" role="tabpanel" aria-labelledby="h-projects" hidden>
     <h2 id="h-projects">Projects</h2>
     <p class="muted">Each project has docs and a memory with its own MEMORY.md index. New projects are stored on the server; the built-in ones live on the VM.</p>
     <div class="table-wrap"><table>
@@ -81,7 +90,7 @@
       <button type="submit">Create</button>
     </form>
   </section>
-  <section aria-labelledby="h-settings">
+  <section id="sec-settings" role="tabpanel" aria-labelledby="h-settings" hidden>
     <h2 id="h-settings">Settings</h2>
     <p class="muted">Policy the server applies at once, stored in <code>/admin/settings.json</code>. Infrastructure (paths, hosts, proxy IPs, port) is set in the repo's compose.yaml and local.env and shown below.</p>
     <form id="settings-form" class="admin-form">
@@ -94,7 +103,7 @@
     </form>
   </section>
 
-  <section aria-labelledby="h-system">
+  <section id="sec-system" role="tabpanel" aria-labelledby="h-system" hidden>
     <h2 id="h-system">Background &amp; config</h2>
     <p class="muted" id="system-head"></p>
     <h3>What runs in the background</h3>
