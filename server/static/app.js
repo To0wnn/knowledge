@@ -317,9 +317,11 @@ function switchProject(p, refit = true) {
 // unfolding a topic highlights its island.
 // The project's topics, biggest first: [[topic, notes]]. Shared by the topic list and the overview on the home view.
 function topicGroups() {
-  const groups = new Map();
-  for (const n of data.nodes.filter(nodeIn)) {
-    const t = n.cluster || (n.group === "doc" ? "Docs" : "Other");
+  const groups = new Map(), ns = data.nodes.filter(nodeIn);
+  const own = new Set(ns.filter((n) => !n.id.startsWith("claude/")).map((n) => n.cluster)); // this project's topics
+  for (const n of ns) {
+    // A shared skill whose topic is another project's heading ("Servers & beheer" in gema) goes under Skills.
+    const t = n.id.startsWith("claude/") && !own.has(n.cluster) ? "Skills" : n.cluster || (n.group === "doc" ? "Docs" : "Other");
     (groups.get(t) || groups.set(t, []).get(t)).push(n);
   }
   return [...groups].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
@@ -407,7 +409,7 @@ async function homeView() {
     dot.style.background = clusterColor.get(topic) || tok("--g-doc");
     h.append(dot, topic, el("span", "n", String(ns.length)));
     const list = el("ol", "hits"), ranked = [...ns].sort((a, b) => (b.degree || 0) - (a.degree || 0) || a.label.localeCompare(b.label));
-    const show = (k) => list.replaceChildren(...ranked.slice(0, k).map((n) => hitItem(n.label, hooks.get(n.id) || "", () => openNote(n.id))));
+    const show = (k) => list.replaceChildren(...ranked.slice(0, k).map((n) => hitItem(n.label, hooks.get(n.id) || n.desc || "", () => openNote(n.id))));
     show(5); card.append(h, list);
     if (ns.length > 5) {
       const more = el("button", "ghost small", `All ${ns.length}`);
