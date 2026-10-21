@@ -32,6 +32,11 @@ def http(method, path, body=None, token="rw-token"):
         return e.code, e.read().decode()
 
 
+def memo(body: str, name: str = "m") -> str:
+    """A new memo by house rule 2 (new memos without it are refused)."""
+    return f"---\nname: {name}\ndescription: d\nmetadata:\n  type: project\n---\n\n## Stand\n\n{body}\n## Keuzes\n"
+
+
 def call(tool, args, token="rw-token"):
     st, body = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                                      "params": {"name": tool, "arguments": args}}, token)
@@ -106,7 +111,20 @@ def main():
         err, text = call("knowledge_write", {"path": "memory/fact.md", "content": "overwritten\n", "base_version": ver})
         assert err and "changed since you read it" in text, text  # stale version refused
         assert "line 1" in (mem / "fact.md").read_text()
-        assert not call("knowledge_write", {"path": "memory/new.md", "content": "new\n"})[0]
+        err, text = call("knowledge_write", {"path": "memory/new.md", "content": "new\n"})
+        assert err and "frontmatter name" in text and "## Stand" in text and "knowledge_new_memo" in text, text  # house rule 2
+        assert not call("knowledge_write", {"path": "memory/new.md", "content": memo("new\n", "new")})[0]
+        assert not call("knowledge_write", {"path": "memory/fb.md", "content": "---\nname: fb\ndescription: d\nmetadata:\n  type: feedback\n---\nRule. Why: x. How to apply: y.\n"})[0]
+        # knowledge_new_memo: the server writes the layout and the index line; a new heading is said out loud.
+        err, text = call("knowledge_new_memo", {"title": "Garage door", "description": "opener on the wifi", "type": "project",
+                                                 "heading": "Huis", "stand": "Opener at 10.0.0.9.", "keuzes": "- **Local only** (1 Oct 2026, A): no cloud."})
+        assert not err and "created memory/project_garage_door.md" in text and "new heading ## Huis" in text, text
+        made = (mem / "project_garage_door.md").read_text()
+        assert made.startswith("---\nname: project_garage_door\n") and "## Stand\n\nOpener" in made and "## Keuzes\n\n- **Local only**" in made, made
+        assert "- [Garage door](project_garage_door.md) — opener on the wifi" in (mem / "MEMORY.md").read_text()
+        assert "memo_not_in_index" not in text  # the index line is there before the hint is computed
+        assert call("knowledge_new_memo", {"title": "Garage door", "description": "x", "type": "project", "heading": "Huis", "stand": "x"})[0]  # exists
+        assert call("knowledge_new_memo", {"title": "X", "description": "x", "type": "note", "heading": "Huis", "stand": "x"})[0]  # bad type
 
         for bad in ("memory/../../etc/passwd", "homelab/secret.env", "claude/settings.json", "etc/x"):
             assert call("knowledge_read", {"path": bad})[0], bad
@@ -125,7 +143,7 @@ def main():
         # Write guard: a known secret value in a note is refused with a hint; the placeholder is fine.
         err, text = call("knowledge_write", {"path": "memory/leak.md", "content": "db password Sup3rSecret99\n"})
         assert err and "secret set" in text and not (mem / "leak.md").exists(), text
-        assert not call("knowledge_write", {"path": "memory/leak.md", "content": "db password ‹secret:DB_PASSWORD›\n"})[0]
+        assert not call("knowledge_write", {"path": "memory/leak.md", "content": memo("db password ‹secret:DB_PASSWORD›\n", "leak")})[0]
         assert call("knowledge_edit", {"path": "memory/leak.md", "old_string": "‹secret:DB_PASSWORD›", "new_string": "Sup3rSecret99"})[0]
         # Project roots: only Markdown of the code repos, never venv; project memory is writable.
         err, text = call("knowledge_read", {"path": "trade/bot.py"})
@@ -133,7 +151,7 @@ def main():
         assert "trade/venv" not in call("knowledge_list", {"root": "trade"})[1]
         assert "trade-memory/plan.md:4" in call("knowledge_search", {"pattern": "entry timing plan", "root": "trade,trade-memory"})[1]
         assert "trade-memory" not in call("knowledge_search", {"pattern": "entry timing plan", "root": "memory"})[1]
-        assert not call("knowledge_write", {"path": "trade-memory/new.md", "content": "x\n"})[0]
+        assert not call("knowledge_write", {"path": "trade-memory/new.md", "content": memo("x\n", "new")})[0]
         assert call("knowledge_write", {"path": "trade/bot2.py", "content": "x"})[0]
         err, text = call("knowledge_edit", {"path": "memory/fact.md", "old_string": "line", "new_string": "l"}, token="ro-token")
         assert err and "read-only" in text, text
@@ -266,7 +284,7 @@ def main():
         assert st == 200 and (tmem / "plan.md").read_text() == "edited in the UI\n", res
         st, _, res = post({"path": "trade-memory/plan.md", "text": "stale\n", "base_version": note["version"]})
         assert st == 409 and b"changed since you read it" in res, res
-        st, _, res = post({"path": "trade-memory/project_new.md", "text": "new\n", "index_line": "- [New](project_new.md) — x\n- injected"})
+        st, _, res = post({"path": "trade-memory/project_new.md", "text": memo("new\n", "project_new"), "index_line": "- [New](project_new.md) — x\n- injected"})
         assert st == 200 and (tmem / "MEMORY.md").read_text().endswith("- [New](project_new.md) — x - injected\n"), (tmem / "MEMORY.md").read_text()
         assert post({"path": "trade/STATUS2.md", "text": "x", "index_line": "- x"})[0] == 409  # index line only for memos
         # A known secret is refused in the index line too, before the memo is written; the app pages carry a CSP.
@@ -317,8 +335,8 @@ def main():
         st, _, res = admin("/ui/api/admin/token", {"name": "friend-pc", "write": True, "redact": True, "roots": ["garden", "garden-memory"]})
         fr = json.loads(res)["token"]  # a new guest with an empty memory: the context offers to bring in existing notes
         assert "First session in this project" in http("GET", "/context/1?project=x", token=fr)[1]
-        err, res = call("knowledge_write", {"path": "garden-memory/project_beds.md", "content": "raised beds\n"})
-        assert not err and "missing_frontmatter: project_beds.md" in res and "memo_not_in_index: project_beds.md" in res, res
+        err, res = call("knowledge_write", {"path": "garden-memory/project_beds.md", "content": "---\nname: beds\ndescription: d\nmetadata:\n  type: project\n---\n## Stand\nraised beds\n\n## Keuzes\n"})
+        assert not err and "memo_not_in_index: project_beds.md" in res, res  # still a hint: the index line comes next
         ver = lambda path: re.search(r"version ([0-9a-f]+)", call("knowledge_read", {"path": path})[1]).group(1)
         good = "---\nname: beds\ndescription: d\nmetadata:\n  type: project\n---\n## Stand\nraised\n\n## Keuzes\n"
         call("knowledge_write", {"path": "garden-memory/MEMORY.md", "content": "## General\n- [Beds](project_beds.md) — hook\n",
@@ -338,7 +356,7 @@ def main():
         assert "First session" not in ctx  # garden-memory has a memo now
         assert "garden-memory/project_beds.md" in call("knowledge_list", {}, token=fr)[1]  # a guest's own memory by default
         # A redacting guest reads ‹secret› for a masked value; writing that back must not erase the original.
-        call("knowledge_write", {"path": "garden-memory/project_gate.md", "content": "gate\npassword: gategategate\n"})
+        call("knowledge_write", {"path": "garden-memory/project_gate.md", "content": memo("gate\npassword: gategategate\n", "gate")})
         masked = call("knowledge_read", {"path": "garden-memory/project_gate.md"}, token=fr)[1]
         assert "‹secret›" in masked and "gategategate" not in masked, masked
         gver = re.search(r"version ([0-9a-f]+)", masked).group(1)
@@ -467,7 +485,7 @@ def main():
         # New memo from the UI: the index line goes under the chosen heading.
         (tmem / "MEMORY.md").write_text("# Index\n\n## Plans\n- [Bot plan](plan.md) — entry timing\n\n## Other\n- [X](x.md) — x\n")
         http("POST", "/invalidate", {"paths": ["trade-memory/MEMORY.md"]}, token="watch-token")
-        st, _, res = post({"path": "trade-memory/project_risk.md", "text": "risk\n", "index_line": "- [Risk](project_risk.md) — r", "heading": "Plans"})
+        st, _, res = post({"path": "trade-memory/project_risk.md", "text": memo("risk\n", "project_risk"), "index_line": "- [Risk](project_risk.md) — r", "heading": "Plans"})
         assert st == 200 and "- [Bot plan](plan.md) — entry timing\n- [Risk](project_risk.md) — r\n\n## Other" in (tmem / "MEMORY.md").read_text(), (tmem / "MEMORY.md").read_text()
         files = json.loads(raw("GET", "/ui/api/recent?project=trade", headers=ck)[2])["files"]
         assert files[0]["path"] in ("trade-memory/MEMORY.md", "trade-memory/project_new.md") and files[0]["by"] == "user:anthony", files[:3]
@@ -487,9 +505,9 @@ def main():
         assert "trade-memory/" in call("knowledge_semantic_search", {"query": "entry timing", "root": "trade-memory"})[1]
         assert not call("knowledge_related", {"path": "trade-memory/plan.md"})[0]
         # A new memo that says the same as an existing one gets a merge hint (not a refusal); a different one does not.
-        err, text = call("knowledge_write", {"path": "trade-memory/plan_copy.md", "content": "---\nname: plan copy\n---\nentry timing plan\n"})
+        err, text = call("knowledge_write", {"path": "trade-memory/plan_copy.md", "content": memo("entry timing plan\n", "plan copy")})
         assert not err and "Similar existing memos" in text and "trade-memory/plan.md" in text, text
-        err, text = call("knowledge_write", {"path": "trade-memory/other.md", "content": "---\nname: other\n---\nvolcano weather report\n"})
+        err, text = call("knowledge_write", {"path": "trade-memory/other.md", "content": memo("volcano weather report\n", "other")})
         assert not err and "Similar existing memos" not in text, text
         rel = json.loads(raw("GET", "/ui/api/related?path=trade-memory/plan.md", headers=ck)[2])["related"]
         assert isinstance(rel, list)
@@ -594,7 +612,7 @@ def main():
         assert r.status == 200 and r.getheader("content-type").startswith("text/event-stream")
         hello = b"".join(r.fp.readline() for _ in range(5))  # chunk-size line + retry + event + data
         assert b"event: hello" in hello and rel.encode() in hello, hello
-        call("knowledge_write", {"path": "trade-memory/live.md", "content": "live\n"})
+        call("knowledge_write", {"path": "trade-memory/live.md", "content": memo("live\n", "live")})
         got = b""
         while b"event: changed" not in got:
             got += r.fp.readline()
