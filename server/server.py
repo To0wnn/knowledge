@@ -473,9 +473,11 @@ server = MCPServer(
 
 
 @server.tool(annotations=READ)
-def knowledge_list(root: str = "memory", pattern: str = "*") -> str:
-    """List shared files under a root (memory, homelab, claude, anpitek, anpitek-memory, trade, trade-memory), optionally
-    filtered by a glob on the relative path."""
+def knowledge_list(root: str = "", pattern: str = "*") -> str:
+    """List shared files under a root (memory, homelab, claude, anpitek, anpitek-memory, trade, trade-memory, or a guest
+    project's <name> and <name>-memory), optionally filtered by a glob on the relative path. Without a root: the memory
+    of this device's project (a guest's own), else memory."""
+    root = root or (PROJECTS[p][1] if (p := token_project()) else "memory")
     if root not in ROOTS:
         raise ToolError(f"root must be one of {sorted(ROOTS)}")
     if not in_scope(root + "/"):

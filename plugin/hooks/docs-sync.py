@@ -2,8 +2,8 @@
 """Mirror the Markdown of a project folder to the knowledge server, for a guest whose own folder is the source.
 
 Opt-in per folder: only below a folder that holds a file `.knowledge-project` with the project name (e.g. "a350").
-SessionStart: every .md of that folder (full mirror: the server removes mirrored files that are gone here, keeping a
-copy). PostToolUse Edit|Write|MultiEdit: the one .md that changed. The token must be a write token limited to that
+SessionStart and SessionEnd: every .md of that folder (full mirror: the server removes mirrored files that are gone here,
+keeping a copy; at the end it also catches files changed through the shell, which PostToolUse never sees). PostToolUse Edit|Write|MultiEdit: the one .md that changed. The token must be a write token limited to that
 project. Standard library only, works on Windows; never blocks a session.
 Also takes the hook input of Codex (apply_patch: the paths are in the patch text) and agy (camelCase, toolCall.args);
 outside the Claude plugin the URL and token come from KNOWLEDGE_URL and KNOWLEDGE_TOKEN.
@@ -80,7 +80,7 @@ def main():
     root, project = project_root(Path(cwd).resolve())
     if not root or not project:
         return
-    if event == "SessionStart":
+    if event in ("SessionStart", "SessionEnd"):
         payload = {"project": project, "files": markdown_files(root), "full": True}
     else:
         changed = [p for p in (Path(cwd, f).resolve() for f in edited_paths(hook))  # Codex patch paths can be relative
