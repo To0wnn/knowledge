@@ -242,6 +242,7 @@ def real_clis(tok: str, home: Path):
 
 
 def main():
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # this report only; the clients run as a stock Windows has them
     tmp = Path(tempfile.mkdtemp(prefix="kn e2e "))
     home = tmp / "Test Usér"
     project = home / "A350 Copilot"
