@@ -593,6 +593,8 @@ async def knowledge_write(path: str, content: str, base_version: str = "") -> st
             raise ToolError(f"{rel} changed since you read it (now {version(current)}); read it again and redo your change")
         if current is None and base_version:
             raise ToolError(f"{rel} does not exist; create it with an empty base_version")
+        if current is None and (why := new_memo_refusal(rel, content)):
+            raise ToolError(why)
         data = content.encode()
         if not replace_if_unchanged(full, current, data):
             raise ToolError(f"{rel} changed while writing; read it again and redo your change")
@@ -603,6 +605,56 @@ async def knowledge_write(path: str, content: str, base_version: str = "") -> st
 
 
 # Not decision_without_date: old decisions with an unknown date would push an agent to invent one (lint still lists them).
+@server.tool(annotations=EDIT)
+async def knowledge_new_memo(title: str, description: str, type: str, heading: str, stand: str, keuzes: str = "",
+                             project: str = "") -> str:
+    """Create a memo the house-rules way in one step: frontmatter (name, description, metadata.type), "## Stand" (what
+    is true now: how it works, where things are, pitfalls, open items), "## Keuzes" (one bullet per decision:
+    "- **<decision>** (<date>, <who>): <reason>; rejected: <alternative>") and its line under "## <heading>" in the
+    project's MEMORY.md. Search first (knowledge_search / knowledge_semantic_search): when a memo already covers the
+    subject, edit that one. type: project, reference, feedback or user (feedback and user memos put their rule with
+    Why: and How to apply: in stand). heading: an existing index heading; a new one only for a genuinely new area.
+    project: default this device's project (a guest's own), else homelab."""
+    proj = project or token_project() or "homelab"
+    if proj not in PROJECTS:
+        raise ToolError(f"project must be one of {sorted(PROJECTS)}")
+    if type not in ("project", "reference", "feedback", "user"):
+        raise ToolError("type must be project, reference, feedback or user")
+    title, description, heading = (" ".join(str(x).split()) for x in (title, description, heading))
+    if not title or not description or not heading:
+        raise ToolError("title, description and heading are required (one line each)")
+    mem = PROJECTS[proj][1]
+    slug = slugify(title).replace("-", "_")
+    file, rel = f"{type}_{slug}.md", f"{mem}/{type}_{slug}.md"
+    if resolve(rel)[0].exists():
+        raise ToolError(f"{rel} exists: read it and change it with knowledge_edit")
+    index_full, _ = resolve(f"{mem}/MEMORY.md")
+    headings = re.findall(r"^## (.+?)\s*$", index_full.read_text(encoding="utf-8"), re.M) if index_full.exists() else []
+    content = (f"---\nname: {type}_{slug}\ndescription: {json.dumps(description, ensure_ascii=False)}\nmetadata:\n"
+               f"  type: {type}\n---\n\n## Stand\n\n{stand.strip()}\n\n## Keuzes\n\n{keuzes.strip()}\n".replace("\n\n\n", "\n\n"))
+    written = await knowledge_write(rel, content, "")
+    line = f"- [{title}]({file}) — {description}"
+    await append_line(f"{mem}/MEMORY.md", line if heading in headings else f"\n## {heading}\n{line}", heading)
+    similar = "".join(written.split("\n")[1:2]) if "Similar existing memos" in written else ""
+    notes = ([f"new heading ## {heading} (a new topic: keep it only for a genuinely new area)"] if heading not in headings else []) + \
+            ([f"the index line is {len(line)} characters; keep it near 150"] if len(line) > 200 else [])
+    return (f"created {rel} with its line under ## {heading} in {mem}/MEMORY.md" + (f"\n{similar}" if similar else "")
+            + "".join(f"\nNote: {n}" for n in notes) + await asyncio.to_thread(house_rules_hint, rel))
+
+
+def new_memo_refusal(rel: str, content: str) -> str:
+    """Why a new memo is refused (house rule 2), "" when it may be written. Only new files: old memos may predate the
+    rules and are edited with hints instead. The writer fixes it in the same call, so an import does not stall."""
+    if not mem_of(rel) or rel.count("/") != 1 or rel.endswith("/MEMORY.md"):
+        return ""
+    fm = kb_lint.frontmatter(content)
+    lacks = [f"frontmatter {k}" for k in ("name", "description", "type") if not fm.get(k)]
+    if kb_lint.memo_type(content) not in ("feedback", "user"):
+        lacks += kb_lint.missing_structure(content)
+    return (f"a new memo needs {', '.join(lacks)} (house rule 2). Easiest: knowledge_new_memo, which writes the "
+            "frontmatter, both sections and the index line for you") if lacks else ""
+
+
 MEMO_CHECKS = ("missing_frontmatter", "memo_not_in_index", "missing_structure", "dead_wikilink", "relative_date",
                "possible_secret_in_memo")
 
@@ -628,7 +680,8 @@ def similar_memos_hint(rel: str, content: str) -> str:
     root = rel.split("/", 1)[0]
     if not mem_of(rel) or rel.count("/") != 1 or rel.endswith("/MEMORY.md"):
         return ""
-    hits = [h for h in vec.search(content[:1500], roots=(root + "/",), limit=12)
+    body = re.sub(r"^## (Stand|Keuzes)\s*$", "", kb_lint.FRONT.sub("", content, count=1), flags=re.M).strip()  # the layout is the same in every memo
+    hits = [h for h in vec.search(body[:1500], roots=(root + "/",), limit=12)
             if h["path"] != rel and h["path"].count("/") == 1 and not h["path"].endswith("/MEMORY.md") and h["score"] >= SIMILAR_HINT]
     seen = list(dict.fromkeys(h["path"] for h in hits))[:3]
     if not seen:
