@@ -14,6 +14,8 @@ SKILL_REF = re.compile(r"\bskill[s]? `([a-z0-9][a-z0-9-]*)`", re.I)
 NOT_DOCS = {"CLAUDE.md", "README.md"}
 RULES = "claude/house_rules.md"  # the shared house rules: a node on its frontmatter topic, like a doc
 BARE_MD = re.compile(r"(?<![\w/.-])([A-Za-z0-9][\w.-]*\.md)\b")  # "see ENTRY_TIMING_FIXES.md" in the same project
+# A path to a shared note: "~/anpitek/klant-gema/VERKOOP.md", "/home/x/homelab/netwerk.md" or "anpitek/website/X.md".
+PATH_MD = re.compile(r"(?<![\w.-])((?:~/|/home/[\w.-]+/)?[\w.-]+/[\w./-]*\.md)\b")
 SOURCE_REF = re.compile(r"\b(20\d\d-\d\d-\d\d-[a-z0-9-]+\.md)\b")
 FM_SOURCES = re.compile(r"^sources:[ \t]*(\[[^\]\n]*\]|(?:\n[ \t]+-[^\n]*)+)", re.M)
 # project -> (docs root, memory root). Docs roots other than homelab are code repos: only their Markdown is shared.
@@ -173,6 +175,7 @@ def build(files: dict[str, str]) -> dict:
         targets |= {skills.get(s) for s in skill_names.findall(text)}
         targets |= {sources.get(s) for s in SOURCE_REF.findall(text)}
         targets |= {by_name.get((project_of(rel), n)) for n in BARE_MD.findall(text)}
+        targets |= {re.sub(r"^(?:~/|/home/[\w.-]+/)", "", p) for p in PATH_MD.findall(text)}
         for t in targets:
             if t and t != rel and t in keep:
                 edges.add((rel, t))
@@ -324,6 +327,7 @@ if __name__ == "__main__":
         "trade/bot.py": "code",
         "anpitek/boekhouding/.agents/skills/x.md": "hidden",
         "anpitek/website/OVERZICHT.md": "site",
+        "anpitek-memory/k.md": "---\nname: k\n---\nprice in `~/anpitek/website/OVERZICHT.md`",
     })
     ids = {n["id"]: n for n in g["nodes"]}
     assert "homelab/tools/ignored.md" not in ids and ids["memory/a.md"]["label"] == "Alpha memo"
@@ -340,6 +344,7 @@ if __name__ == "__main__":
     assert ids["memory/b_c.md"]["name"] == "b-c" and "name" not in ids["memory/a.md"]  # only when it differs
     assert ids["trade-memory/a.md"]["label"] == "Bot plan" and ids["trade-memory/a.md"]["project"] == "trade"
     assert ids["anpitek/website/OVERZICHT.md"]["project"] == "anpitek"
+    assert ("anpitek-memory/k.md", "anpitek/website/OVERZICHT.md") in links  # a path mention is a link
     assert ids["trade/NOTES.md"]["cluster"] == "Bot"  # any project's doc sits on its frontmatter topic
     assert ids["trade/STATUS.md"]["label"] == "Trading status" and ids["trade/STATUS.md"]["desc"] == "Where the bot stands.", ids["trade/STATUS.md"]
     assert "desc" not in ids["memory/a.md"]  # a memo without description gets none
