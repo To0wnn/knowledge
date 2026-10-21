@@ -333,6 +333,7 @@ def main():
         assert "Memory is a hint, not the truth" in ctx and "garden-memory/archief/<name>_archief.md" in ctx, ctx
         assert "homelab" not in ctx and "secret set" not in ctx and "trade" not in ctx, ctx
         assert "First session" not in ctx  # garden-memory has a memo now
+        assert "garden-memory/project_beds.md" in call("knowledge_list", {}, token=fr)[1]  # a guest's own memory by default
         files = {"README.md": "# Copilot\n", "docs\\design\\voice.md": "voice notes\n", "C:\\x.md": "no",
                  "../escape.md": "no", ".venv/lib/x.md": "no", "main.py": "no"}
         st, body = http("POST", "/sync", {"files": files, "full": True}, token=fr)
