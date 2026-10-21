@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Weekly knowledge lint report to Matrix: only findings that are new since the last run, so known items do not
-repeat every week. Silent when nothing is new. Runs on the VM from lint-report.timer.
+repeat every week, plus every week the memos most overdue for a check (review_due, oldest first) so a few get
+checked each week. Silent when there is neither. Runs on the VM from lint-report.timer.
 
 Config: ~/.config/knowledge-server/report.token (read-only device token), the Matrix bot token from the vault
 (`secret MATRIX_BOT_TOKEN`), room and homeserver below. State: ~/.local/state/knowledge-lint-report.json.
@@ -24,6 +25,7 @@ ROOM = os.environ["KNOWLEDGE_MATRIX_ROOM"]
 TOKEN = Path.home() / ".config/knowledge-server/report.token"
 STATE = Path.home() / ".local/state/knowledge-lint-report.json"
 SHOW = 20
+DUE = 5  # memos to check per week
 COMPOSE = Path(__file__).resolve().parent.parent / "server/compose.yaml"  # the memory dirs the server serves
 PROJECTS_DIR = Path.home() / ".claude/projects"
 
@@ -47,11 +49,20 @@ def unserved(projects_dir: Path = PROJECTS_DIR, compose: Path = COMPOSE) -> set[
     return out
 
 
-def message(new: set[str], total: int, resolved: int) -> str:
+def due(current: set[str]) -> list[str]:
+    """The DUE review_due findings with the oldest check date ("…: not checked since 2026-08-01 (…)")."""
+    items = [f.removeprefix("review_due: ") for f in current if f.startswith("review_due: ")]
+    return sorted(items, key=lambda i: (m := re.search(r"since (\S+)", i)) and m.group(1) or "")[:DUE]  # never = first
+
+
+def message(new: set[str], total: int, resolved: int, check: list[str] = ()) -> str:
     lines = [f"Knowledge lint: {len(new)} new finding(s) since last week ({total} open, {resolved} resolved)."]
     lines += [f"- {f}" for f in sorted(new)[:SHOW]]
     if len(new) > SHOW:
         lines.append(f"- … and {len(new) - SHOW} more")
+    if check:
+        lines.append(f"Check these {len(check)} on the live system this week, then mark them (gecontroleerd <date>):")
+        lines += [f"- {c}" for c in check]
     lines.append(f"Details: {SERVER}/ui (tab Lint) or knowledge_lint.")
     return "\n".join(lines)
 
@@ -74,8 +85,9 @@ def main() -> None:
     current = findings() | unserved()
     previous = set(json.loads(STATE.read_text())["findings"]) if STATE.exists() else set()
     new, resolved = diff(previous, current)
-    if "--init" not in sys.argv and new:
-        text = message(new, len(current), resolved)
+    new = {f for f in new if not f.startswith("review_due: ")}  # those are listed every week below
+    if "--init" not in sys.argv and (new or due(current)):
+        text = message(new, len(current), resolved, due(current))
         print(text) if "--dry-run" in sys.argv else send(text)
     if "--dry-run" not in sys.argv:
         STATE.parent.mkdir(parents=True, exist_ok=True)
@@ -95,6 +107,10 @@ if __name__ == "__main__":
             (t / "p/-home-c/memory").mkdir(parents=True); (t / "p/-home-c/memory/y.md").write_text("y")
             (t / "compose.yaml").write_text(f'device: ":{t}/p/-home-c/memory"')
             assert unserved(t / "p", t / "compose.yaml") == {f"unserved_memory: {t}/p/-home-a/memory (1 memos)"}
+        cur = {f"review_due: m{i}.md: not checked since 2026-0{i}-01 (1 addresses/versions)" for i in range(1, 8)} | {"x: y"}
+        assert due(cur) == [f"m{i}.md: not checked since 2026-0{i}-01 (1 addresses/versions)" for i in range(1, 6)], due(cur)
+        assert due(cur | {"review_due: n.md: never checked (no date) (1 addresses/versions)"})[0].startswith("n.md"), "never first"
+        assert "- m1.md: not checked since 2026-01-01" in message(set(), 8, 0, due(cur))
         assert message({"x: y"}, 3, 1).startswith("Knowledge lint: 1 new finding(s) since last week (3 open, 1 resolved).")
         print("ok")
     else:

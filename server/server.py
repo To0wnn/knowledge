@@ -1607,6 +1607,7 @@ SETTINGS = {  # key: (type, min, max, label)
     "similar_hint": (float, 0.5, 0.95, "New memo: similarity from which 'similar existing memos' is shown (calibrated 18 Oct 2026: 0.72)"),
     "history_keep": (int, 10, 2000, "History: versions kept per file"),
     "stale_unchecked_days": (int, 7, 365, "Lint: days before a fact marked 'niet opnieuw gecontroleerd' is reported"),
+    "review_after_days": (int, 7, 365, "Lint: days without a check before a memo with IPs/versions is due for review"),
     "big_memo": (int, 5000, 100000, "Lint: memo size in bytes from which history should move to the archive"),
     "rescan_seconds": (int, 15, 3600, "Safety-net rescan of all files, in seconds (the VM watcher reports changes at once)"),
 }
@@ -1614,6 +1615,7 @@ SETTINGS = {  # key: (type, min, max, label)
 
 def current_settings() -> dict:
     return {"similar_hint": SIMILAR_HINT, "history_keep": HISTORY_KEEP, "stale_unchecked_days": kb_lint.STALE_UNCHECKED_DAYS,
+            "review_after_days": kb_lint.REVIEW_AFTER_DAYS,
             "big_memo": kb_lint.BIG_MEMO, "rescan_seconds": RESCAN_SECONDS, "extra_admins": sorted(ADMINS - CONFIG_ADMINS)}
 
 
@@ -1647,6 +1649,7 @@ def apply_settings(values: dict):
     RESCAN_SECONDS = values.get("rescan_seconds", RESCAN_SECONDS)
     kb_lint.STALE_UNCHECKED_DAYS = values.get("stale_unchecked_days", kb_lint.STALE_UNCHECKED_DAYS)
     kb_lint.BIG_MEMO = values.get("big_memo", kb_lint.BIG_MEMO)
+    kb_lint.REVIEW_AFTER_DAYS = values.get("review_after_days", kb_lint.REVIEW_AFTER_DAYS)
     if "extra_admins" in values:
         ADMINS.clear(); ADMINS.update(CONFIG_ADMINS | set(values["extra_admins"]))
 

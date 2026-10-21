@@ -343,6 +343,10 @@ silent when nothing is new. Timer: `ln -s ~/knowledge/watcher/lint-report.{servi
 systemctl --user enable --now lint-report.timer` (Monday 08:00). Needs `~/.config/knowledge-server/report.token`
 (token `vm-lint-report`, read-only) and `secret MATRIX_BOT_TOKEN`. State in
 `~/.local/state/knowledge-lint-report.json`; `--init` stores a baseline without sending, `--dry-run` prints.
+Review cycle (like Guru's verification): lint check `review_due` lists memos with IP addresses or x.y.z versions whose
+newest `(gecontroleerd <date>)` mark (without one: the newest date in the memo; future dates do not count) is older
+than 45 days (admin setting `review_after_days`; measured 21 Oct 2026: 8 of 68 such memos). The weekly report always
+lists the 5 oldest of them, also when nothing else is new, so a few get checked each week.
 
 When `knowledge_write` creates a memo, the answer lists existing memos in the same memory root with a similar
 meaning (score ≥ 0.72, calibrated on embeddinggemma), so the writer can merge instead of duplicating.
