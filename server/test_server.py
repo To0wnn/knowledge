@@ -483,6 +483,11 @@ def main():
         assert raw("GET", "/ui/admin", headers=user("carol"))[0] == 200  # an extra admin
         assert admin("/ui/api/admin/settings", {"extra_admins": []})[0] == 200 and raw("GET", "/ui/admin", headers=user("carol"))[0] == 403
         assert "admin-settings" in "\n".join(json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["system"]["audit"])
+        # Knowledge gaps: a search that finds nothing is listed once per query (case-insensitive), with its count.
+        for q in ("Pond Mowing Schedule", "pond mowing schedule"):
+            assert call("knowledge_search", {"pattern": q})[1] == "(no matches)"
+        gaps = json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["system"]["gaps"]
+        assert gaps[0]["query"].lower() == "pond mowing schedule" and gaps[0]["count"] == 2 and gaps[0]["tool"] == "search", gaps
         assert "project anpitek" in http("GET", "/context/1?project=/home/x/anpitek/boekhouding")[1]
         assert "project homelab" in http("GET", "/context/1?project=/home/x/homelab")[1]
         assert call("knowledge_write", {"path": "homelab/deep/memory/x.md", "content": "x"})[0]

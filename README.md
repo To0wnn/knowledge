@@ -197,6 +197,11 @@ the file is its own node on its frontmatter `topic:`, linked to the memos it nam
   scope = roots, write, redact) or revoke one; grant project access; create a project (roots `<name>` docs and
   `<name>-memory`, stored in `/projects/<name>/` on forge, listed in `/admin/projects.json`). Device tokens also
   count as secrets (redaction, write guard).
+- **Searched, not found** (admin page, System tab): every `knowledge_search` without matches and every
+  `knowledge_semantic_search` whose best score is below 0.45 (`WEAK_SCORE`, calibrated 21 Oct 2026: unanswerable
+  questions scored at most 0.37, real ones 0.51-0.57) is logged to `gaps.log` next to the audit log, grouped per
+  query with count and devices: the memos that are missing. The UI search and the plugin hook are not logged
+  (typing and automatic prompts would be noise).
 - `/admin` = forge `/root/docker/knowledge/admin` (rw, 0700, uid 1000); `/config` stays read-only (secrets.json).
 - **MCP and plugin endpoints** keep device tokens: from outside router `knowledge` (priority 100) with `rate-limit`, from the LAN router `knowledge-lan` (priority 150, `ClientIP(10.0.0.0/8)`) without a limit; public since 20 Oct. Traefik config lives in the homelab Ansible role `traefik_config`.
 

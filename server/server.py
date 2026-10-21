@@ -82,6 +82,10 @@ CONFIG_ADMINS = frozenset(u.strip() for u in os.environ.get("KNOWLEDGE_ADMINS", 
 ADMINS = set(CONFIG_ADMINS)  # plus the extra admins of the admin page (settings.json); the config ones can't be removed
 SECRETS_FILE = Path(os.environ.get("KNOWLEDGE_SECRETS", HOME / ".config/knowledge-server/secrets.json"))
 AUDIT = Path(os.environ.get("KNOWLEDGE_AUDIT", HOME / ".local/state/knowledge-server/audit.log"))
+# Searches that found nothing (or only weak meaning hits): the missing memos, shown on the admin page.
+GAPS = AUDIT.with_name("gaps.log")
+# Calibrated 21 Oct 2026: a question the knowledge cannot answer scored at most 0.37, real questions 0.51-0.57.
+WEAK_SCORE = 0.45
 
 device: ContextVar[dict] = ContextVar("device", default={})
 _locks: dict[str, asyncio.Lock] = {}
@@ -390,6 +394,38 @@ def audit(action: str, rel: str):
         f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {device.get().get('name', '?')} {action} {rel}\n")
 
 
+def log_gap(tool: str, query: str, score: float | None = None):
+    """One line per search that found nothing useful: time, device, tool, best score, query (tab-separated)."""
+    try:
+        with GAPS.open("a") as f:
+            f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')}\t{device.get().get('name', '?')}\t{tool}\t"
+                    f"{'' if score is None else score}\t{' '.join(query.split())[:200]}\n")
+    except OSError:
+        pass  # a full disk must not break searching; the admin page then just shows fewer gaps
+
+
+def gaps_summary(n: int = 30) -> list[dict]:
+    """Recent gaps grouped by query (case-insensitive), most recent first, with how often and by whom."""
+    try:
+        with GAPS.open("rb") as f:
+            f.seek(0, 2); f.seek(max(0, f.tell() - 65536))
+            lines = f.read().decode("utf-8", "replace").splitlines()[1:]
+    except OSError:
+        return []
+    out: dict[str, dict] = {}
+    for line in lines:
+        parts = line.split("\t")
+        if len(parts) != 5:
+            continue
+        t, who, tool, score, q = parts
+        g = out.pop(q.lower(), None) or {"query": q, "count": 0, "who": [], "tool": tool, "score": score}
+        g.update(count=g["count"] + 1, last=t, tool=tool, score=score)
+        if who not in g["who"]:
+            g["who"].append(who)
+        out[q.lower()] = g  # re-insert, so dict order = most recent last
+    return list(out.values())[::-1][:n]
+
+
 def replace_if_unchanged(full: Path, expected: bytes | None, data: bytes) -> bool:
     """Atomically replace `full` with `data`, but only if it still holds `expected` (None = must not exist).
 
@@ -541,7 +577,10 @@ def knowledge_search(pattern: str, root: str = "", max_results: int = 60) -> str
     except regex.error as e:
         raise ToolError(f"invalid regex: {e}")
     try:
-        return search_lines(rx_i, rx_low, root, max_results)
+        found = search_lines(rx_i, rx_low, root, max_results)
+        if found == "(no matches)":
+            log_gap("search", pattern)
+        return found
     except TimeoutError:
         raise ToolError(f"search took longer than {SEARCH_SECONDS} s; use a simpler pattern")
 
@@ -876,6 +915,8 @@ async def knowledge_semantic_search(query: str, root: str = "", limit: int = 10)
     # A scoped token searches its own roots by default, so the top hits are not used up by notes it may not see.
     roots = tuple(r.strip() + "/" for r in root.split(",") if r.strip()) or tuple(r + "/" for r in device.get().get("roots") or ())
     hits = [h for h in await asyncio.to_thread(vec.search, query, roots, min(limit, 30)) if in_scope(h["path"])]
+    if not hits or hits[0]["score"] < WEAK_SCORE:
+        log_gap("semantic", query, hits[0]["score"] if hits else None)
     if not hits:
         return f"(no semantic results: {vec.status()})"
     return "\n".join(f"{h['path']}:{h['line']} ({h['score']}): {shown(' '.join(h['text'].split())[:240])}" for h in hits)
@@ -1669,6 +1710,7 @@ def system_state() -> dict:
             {"name": "Audit log", "value": str(AUDIT), "where": "compose.yaml KNOWLEDGE_AUDIT"},
         ],
         "audit": audit_tail(),
+        "gaps": gaps_summary(),
     }
 
 

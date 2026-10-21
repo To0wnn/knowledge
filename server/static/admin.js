@@ -150,6 +150,10 @@ function renderSystem() {
     const [t, who, action, ...rest] = line.split(" "), tr = row(stamp(new Date(t)), who, action, rest.join(" "));
     tr.children[3].className = "mono"; return tr;
   }) : [row("—", "", "", "")]));
+  $("gaps").replaceChildren(...(sys.gaps.length ? sys.gaps.map((g) => {
+    const tr = row(stamp(new Date(g.last)), String(g.count), g.who.join(", "), `${g.query} (${g.tool}${g.score ? ` ${g.score}` : ""})`);
+    tr.children[3].className = "mono"; return tr;
+  }) : [row("—", "", "", "")]));
 }
 
 async function load() {
