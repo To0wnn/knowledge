@@ -3,7 +3,8 @@
 "use strict";
 
 // Topic clusters reuse the group hues in a fixed order; clusters beyond these share the neutral doc colour.
-const CLUSTER_HUES = ["project", "feedback", "reference", "user", "infra", "incident", "skill", "source"];
+const CLUSTER_HUES = ["project", "feedback", "reference", "user", "infra", "incident", "skill", "source",
+  "sky", "brown", "lime", "magenta", "coral", "steel"];
 let PROJECTS = ["homelab", "anpitek", "trade"]; // replaced by the projects this user may see (/ui/api/me)
 const ROOT_PROJECT = { memory: "homelab", homelab: "homelab", anpitek: "anpitek", "anpitek-memory": "anpitek",
   trade: "trade", "trade-memory": "trade", claude: "shared" };
@@ -12,7 +13,7 @@ const MEMORY_ROOT = { homelab: "memory", anpitek: "anpitek-memory", trade: "trad
 const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 // Drawing reads the theme tokens per link and label each frame: cache them, cleared when the theme flips.
 let tokens = {};
-const tok = (v) => (tokens[v] ??= css(v));
+const tok = (v) => tokens[v] || (tokens[v] = css(v)); // an empty read (stylesheet not applied yet) is not cached
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { tokens = {}; });
 const decode = (s) => { try { return decodeURIComponent(s); } catch { return s; } }; // a literal % is not an escape
 const $ = (id) => document.getElementById(id);
@@ -63,11 +64,10 @@ function indexGraph() {
       if (!slugToId.has(key) || inProject(n.project)) slugToId.set(key, n.id); // prefer the memo of this project
     }
   }
-  // Cluster colours: the biggest topics of this project get a hue, in a fixed order.
-  const sizes = new Map();
-  for (const n of data.nodes) if (groupOf(n) && nodeIn(n)) sizes.set(groupOf(n), (sizes.get(groupOf(n)) || 0) + 1);
-  const ranked = [...sizes.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  clusterColor = new Map(ranked.slice(0, CLUSTER_HUES.length).map(([c], i) => [c, tok(`--g-${CLUSTER_HUES[i]}`)]));
+  // Cluster colours by topic name, not by size: a topic keeps its colour when notes are added or moved (by size,
+  // a topic that shrank out of the top 8 turned grey and the others shifted). Past the hues it is grey.
+  const groups = [...new Set(data.nodes.filter((n) => groupOf(n) && nodeIn(n)).map(groupOf))].sort((a, b) => a.localeCompare(b));
+  clusterColor = new Map(groups.slice(0, CLUSTER_HUES.length).map((c, i) => [c, tok(`--g-${CLUSTER_HUES[i]}`)]));
 }
 
 function visibleData() {
