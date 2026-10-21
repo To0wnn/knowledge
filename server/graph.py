@@ -63,9 +63,24 @@ def label_of(rel: str, text: str, titles: dict[str, str]) -> str:
     if rel in titles:
         return titles[rel]
     fm = frontmatter(text)
-    if (rel.startswith("homelab/sources/") or is_doc(rel) or rel == RULES) and fm.get("title"):
+    if not mem_root(rel) and fm.get("title"):
         return fm["title"].strip('"')[:60]
+    if not mem_root(rel) and (h1 := re.search(r"^# +(.+?)\s*#*$", FRONT.sub("", text, count=1), re.M)):
+        return re.sub(r"[*_`]", "", h1.group(1))[:60]  # a doc's own heading reads better than "BRONBEWAKING"
     return name[:-3].replace("_", " ")
+
+
+def desc_of(rel: str, text: str) -> str:
+    """One line about a note for the overview: its frontmatter description, else (docs) the first paragraph."""
+    if d := frontmatter(text).get("description", "").strip('"'):
+        return d[:140]
+    if mem_root(rel) or rel.startswith("claude/skills/"):
+        return ""
+    for para in re.split(r"\n\s*\n", FRONT.sub("", text, count=1)):
+        line = " ".join(para.split())
+        if line and not line.startswith(("#", "|", "```", "<", "---", "- ", "* ", ">")):
+            return re.sub(r"[*_`]|\[([^\]]*)\]\([^)]*\)", lambda m: m.group(1) or "", line)[:140]
+    return ""
 
 
 def sources_of(text: str) -> list[str]:
@@ -183,6 +198,7 @@ def build(files: dict[str, str]) -> dict:
     nodes = [{"id": rel, "label": labels[rel], "group": groups[rel], "project": shown_in(rel),
               **({"projects": sorted(linked[rel] - {"shared"})} if shown_in(rel) == "shared" else {}),
               "cluster": comm[rel], "size": len(text), "degree": degree.get(rel, 0), "sources": sources_of(text),
+              **({"desc": d} if (d := desc_of(rel, text)) else {}),
               # [[slug]] links may use the frontmatter name; the UI needs it when it differs from the file name
               **({"name": nm} if mem_root(rel) and (nm := frontmatter(text).get("name", "")) and nm != rel.split("/")[-1][:-3] else {})}
              for rel, text in sorted(keep.items())]
@@ -303,7 +319,7 @@ if __name__ == "__main__":
         "trade-memory/MEMORY.md": "- [Bot plan](a.md) — x\n",
         "trade-memory/a.md": "---\nname: a\n---\nsee [[b_c]] and STATUS.md",
         "trade/FIXES_PLAN.md": "read STATUS.md first; not docs/STATUS.md",
-        "trade/STATUS.md": "status",
+        "trade/STATUS.md": "# Trading **status**\n\nWhere the bot stands.\n\n## More\n",
         "trade/NOTES.md": "---\ntopic: Bot\n---\nnotes",
         "trade/bot.py": "code",
         "anpitek/boekhouding/.agents/skills/x.md": "hidden",
@@ -325,6 +341,8 @@ if __name__ == "__main__":
     assert ids["trade-memory/a.md"]["label"] == "Bot plan" and ids["trade-memory/a.md"]["project"] == "trade"
     assert ids["anpitek/website/OVERZICHT.md"]["project"] == "anpitek"
     assert ids["trade/NOTES.md"]["cluster"] == "Bot"  # any project's doc sits on its frontmatter topic
+    assert ids["trade/STATUS.md"]["label"] == "Trading status" and ids["trade/STATUS.md"]["desc"] == "Where the bot stands.", ids["trade/STATUS.md"]
+    assert "desc" not in ids["memory/a.md"]  # a memo without description gets none
     assert "trade/bot.py" not in ids and "anpitek/boekhouding/.agents/skills/x.md" not in ids
     assert ids["claude/skills/forge-stack/SKILL.md"]["project"] == "homelab"  # linked from homelab only
     s3 = build({"memory/a.md": "skills in ~/.claude/skills/: `forge-stack`, wolf-spel", "trade/X.md": "use forge-stack",
