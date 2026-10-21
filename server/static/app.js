@@ -240,9 +240,10 @@ async function loadGraph() {
     .nodeCanvasObject(drawNode)
     .nodePointerAreaPaint((n, c, ctx) => { ctx.fillStyle = c; ctx.beginPath(); ctx.arc(n.x, n.y, (baseRadius(n) + 2) * (n.__s || 1), 0, 2 * Math.PI); ctx.fill(); })
     // At rest: links inside a topic clearly visible, links between topics fainter so the islands still read (the
-    // border colour --line was nearly the canvas colour); highlighted when their note is in focus.
+    // border colour --line was nearly the canvas colour; dark mode needs a lighter, stronger line: own tokens).
+    // Highlighted when their note is in focus.
     // On the All map a link between two projects is the point of the view: drawn in the accent, not faded.
-    .linkColor((l) => (linkLit(l) ? tok("--accent") : groupOf(l.source) === groupOf(l.target) ? tok("--muted") + "80" : allMode() ? tok("--accent") + "99" : tok("--muted") + "40"))
+    .linkColor((l) => (linkLit(l) ? tok("--accent") : groupOf(l.source) === groupOf(l.target) ? tok("--link-in") : allMode() ? tok("--accent") + "99" : tok("--link-cross")))
     .linkWidth((l) => (linkLit(l) ? 1.4 : allMode() && groupOf(l.source) !== groupOf(l.target) ? 1.2 : groupOf(l.source) === groupOf(l.target) ? 0.9 : 0.6))
     .linkDirectionalParticles((l) => (!calm && mapOn && (hover || selected) && linkLit(l) ? 2 : 0)) // particles keep force-graph drawing every frame
     .linkDirectionalParticleWidth(2.2).linkDirectionalParticleSpeed(0.006)
