@@ -234,6 +234,23 @@ On the guest's machine:
    `~/.claude/settings.json` (memory lives on the server).
 4. Check: a new session in the folder starts with "knowledge (project <name>)"; ask it to search the knowledge.
 
+## Offline copy of the memory (21 Oct 2026)
+
+Every device with a write token (Claude plugin, agy/Codex via `knowledge-agent.py`) keeps
+`~/.knowledge/mirror/<memory root>/`: the memos and their `archief/`, not the session logs. `memory_mirror.py` syncs
+in the background at session start (and end, Claude), so a session never waits for it:
+
+- up first: only files this device wrote or changed since the last sync (`POST /mirror/push`, with the version it had);
+- then down: the device sends the versions it has, the server returns only what differs (`POST /mirror`);
+- a memo changed on both sides is never overwritten: the offline text lands next to it as
+  `<name>.offline-<time>.md`, and `knowledge_lint` (`offline_conflict`) asks to merge it;
+- server down: the startup context is the cached one of the last online session, plus where the copy is and that new
+  memos go there by the house rules; they go up at the next start. `~/.knowledge/mirror/last-sync.log` only exists
+  when something needs a look (conflict, refusal such as a secret, failed sync).
+
+A read-only token gets no copy. Tested on the Framework (188 memos, a memo written there reached the server, a
+deletion on the server reached the copy) and in `test_server.py` (offline edit, conflict, lost file); not on Windows.
+
 ## Local addresses
 
 The addresses of an installation (docker host, NFS host, LAN URL, Matrix, proxy) live in `local.env`, which is not in
