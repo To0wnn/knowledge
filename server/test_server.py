@@ -311,24 +311,27 @@ def main():
         assert admin("/ui/api/admin/project", {"name": "trade"})[0] == 400
         assert admin("/ui/api/admin/project", {"name": "garden"})[0] == 200
         assert (tmp / "projects/garden/memory/MEMORY.md").exists()
+        st, _, res = admin("/ui/api/admin/token", {"name": "friend-pc", "write": True, "redact": True, "roots": ["garden", "garden-memory"]})
+        fr = json.loads(res)["token"]  # a new guest with an empty memory: the context offers to bring in existing notes
+        assert "First session in this project" in http("GET", "/context/1?project=x", token=fr)[1]
         assert not call("knowledge_write", {"path": "garden-memory/project_beds.md", "content": "raised beds\n"})[0]
         assert "raised beds" in call("knowledge_read", {"path": "garden-memory/project_beds.md"})[1]
         assert "garden" in json.loads(raw("GET", "/ui/api/me", headers=ck)[2])["projects"]
         assert "project garden" in http("GET", "/context/1?project=/home/x/garden")[1]
         # A guest (a friend's Windows pc): a write token limited to garden. The project comes from the token, the context
         # carries the house rules and nothing of the owner, and /sync mirrors the Markdown of the guest's folder.
-        st, _, res = admin("/ui/api/admin/token", {"name": "friend-pc", "write": True, "redact": True, "roots": ["garden", "garden-memory"]})
-        fr = json.loads(res)["token"]
         ctx = http("GET", "/context/1?project=" + urllib.parse.quote("C:\\Users\\Bob\\A350Copilot"), token=fr)[1]
         assert "project garden" in ctx and "## Stand" in ctx and "garden-memory/MEMORY.md" in ctx, ctx[:400]
         assert "Memory is a hint, not the truth" in ctx and "garden-memory/archief/<name>_archief.md" in ctx, ctx
         assert "homelab" not in ctx and "secret set" not in ctx and "trade" not in ctx, ctx
+        assert "First session" not in ctx  # garden-memory has a memo now
         files = {"README.md": "# Copilot\n", "docs\\design\\voice.md": "voice notes\n", "C:\\x.md": "no",
                  "../escape.md": "no", ".venv/lib/x.md": "no", "main.py": "no"}
         st, body = http("POST", "/sync", {"files": files, "full": True}, token=fr)
         res = json.loads(body)
         assert st == 200 and res["written"] == 2 and len(res["refused"]) == 4, res
         assert (tmp / "projects/garden/docs/docs/design/voice.md").read_text() == "voice notes\n"
+        assert "doc_without_topic" in (lint := call("knowledge_lint", {}, token=fr)[1]) and "garden/README.md" in lint, lint
         assert call("knowledge_read", {"path": "garden/docs/design/voice.md"}, token=fr)[1].count("voice notes") == 1
         st, body = http("POST", "/sync", {"files": {"README.md": "# Copilot\n"}, "full": True}, token=fr)
         assert json.loads(body) == {"written": 0, "unchanged": 1, "deleted": 1, "refused": []}, body

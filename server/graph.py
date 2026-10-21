@@ -100,9 +100,10 @@ def build(files: dict[str, str]) -> dict:
                 titles[f"{mem}/{m.group(2)}"] = m.group(1)
                 if section:
                     sections[f"{mem}/{m.group(2)}"] = section  # the user's own grouping of memos
-    # A homelab doc names its topic (a MEMORY.md heading) in its frontmatter, so it sits on that island.
+    # A doc names its topic (a MEMORY.md heading) in its frontmatter, so it sits on that island: homelab's top-level
+    # docs and any Markdown in another project's docs root (a guest's mirrored folder).
     for rel, text in keep.items():
-        if (is_doc(rel) or rel == RULES) and (topic := frontmatter(text).get("topic", "").strip('"')):
+        if (is_doc(rel) or rel == RULES or project_of(rel) not in ("homelab", "shared") and not mem_root(rel)) and (topic := frontmatter(text).get("topic", "").strip('"')):
             sections[rel] = topic
     # The same heading in two projects (e.g. "## General" of new UI projects) must stay two topics; a shared note
     # (the house rules) joins the heading it names.
@@ -303,6 +304,7 @@ if __name__ == "__main__":
         "trade-memory/a.md": "---\nname: a\n---\nsee [[b_c]] and STATUS.md",
         "trade/FIXES_PLAN.md": "read STATUS.md first; not docs/STATUS.md",
         "trade/STATUS.md": "status",
+        "trade/NOTES.md": "---\ntopic: Bot\n---\nnotes",
         "trade/bot.py": "code",
         "anpitek/boekhouding/.agents/skills/x.md": "hidden",
         "anpitek/website/OVERZICHT.md": "site",
@@ -322,6 +324,7 @@ if __name__ == "__main__":
     assert ids["memory/b_c.md"]["name"] == "b-c" and "name" not in ids["memory/a.md"]  # only when it differs
     assert ids["trade-memory/a.md"]["label"] == "Bot plan" and ids["trade-memory/a.md"]["project"] == "trade"
     assert ids["anpitek/website/OVERZICHT.md"]["project"] == "anpitek"
+    assert ids["trade/NOTES.md"]["cluster"] == "Bot"  # any project's doc sits on its frontmatter topic
     assert "trade/bot.py" not in ids and "anpitek/boekhouding/.agents/skills/x.md" not in ids
     assert ids["claude/skills/forge-stack/SKILL.md"]["project"] == "homelab"  # linked from homelab only
     s3 = build({"memory/a.md": "skills in ~/.claude/skills/: `forge-stack`, wolf-spel", "trade/X.md": "use forge-stack",
