@@ -73,8 +73,11 @@ def sync() -> str:
         res = post("/mirror/push", {"files": {rel: {"text": data.decode("utf-8", "replace"), "base": known.get(rel, "")}
                                               for rel, data in mine.items()}})
         known.update(res["written"])
+        same = res.get("unchanged_files")  # a server before 21 Oct 2026 only counts them
         for rel, data in mine.items():
-            if rel not in res["written"] and rel not in res["conflicts"] and not any(r.startswith(rel + ":") for r in res["refused"]):
+            listed = rel in same if same is not None else rel not in res["written"] and rel not in res["conflicts"] \
+                and not any(r.startswith(rel + ":") for r in res["refused"])
+            if listed:
                 known[rel] = version(data)  # unchanged: the server already had exactly this
         keep = {r.split(":", 1)[0] for r in res["refused"]}  # refused (e.g. a secret): stays local, tried again next time
         conflicts = set(res["conflicts"])  # the offline text is safe on the server now, as the .offline- copy
@@ -128,6 +131,16 @@ def save_context(key: str, text: str, part: str = "all"):
         pass
 
 
+def sync_notice() -> str:
+    """What the last sync left to look at (conflict, refusal, failure), for the next session's context: fail loudly."""
+    log = MIRROR / "last-sync.log"
+    try:
+        text = log.read_text(encoding="utf-8").strip() if log.exists() else ""
+    except OSError:
+        return ""
+    return f"knowledge offline copy, last sync: {text[:400]}" if text else ""
+
+
 def offline_context(key: str, part: str = "all") -> str:
     state = json.loads(STATE.read_text(encoding="utf-8")) if STATE.exists() else {}
     cached = MIRROR / f".context-{key}-{part}"
@@ -141,12 +154,15 @@ def offline_context(key: str, part: str = "all") -> str:
             f"The memory is the offline copy in {where} (last synced {state.get('synced', '?')}); the knowledge_* tools do "
             "not work now. Read memos there with your file tools, and save new or changed memos there by the house rules "
             "(frontmatter, ## Stand / ## Keuzes, one index line in that MEMORY.md). They are uploaded at the next session "
-            "start once the server is back. Do not delete files there. Context of the last online session:\n\n" + text)
+            "start once the server is back. Do not delete files there." + (f" {sync_notice()}" if sync_notice() else "")
+            + " Context of the last online session:\n\n" + text)
 
 
 if __name__ == "__main__":
-    if sys.argv[1:2] == ["offline"]:
-        sys.stdout.write(offline_context(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else "all"))
+    if sys.argv[1:2] == ["offline"]:  # bytes: a Windows pipe is cp1252 and the context has → and ✅
+        sys.stdout.buffer.write(offline_context(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else "all").encode("utf-8"))
+    elif sys.argv[1:2] == ["notice"]:
+        sys.stdout.buffer.write(sync_notice().encode("utf-8"))
     elif "--now" in sys.argv:
         sync_locked()
     elif "--selftest" in sys.argv:

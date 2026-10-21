@@ -160,9 +160,10 @@ def refuse_secrets(text: str):
                         "and write ‹secret:NAME› in the note instead")
 
 
-def refuse_mask(text: str):
-    """A redacting device reads ‹secret› where a value was masked; written back, it would replace the real text."""
-    if "‹secret›" in text:
+def refuse_mask(text: str, before: str = ""):
+    """A redacting device reads ‹secret› where a value was masked; written back, it would replace the real text. Only
+    for such a device, and only when the text has more of them than what it replaces (a memo may mention the mask)."""
+    if device.get().get("redact") and text.count("‹secret›") > before.count("‹secret›"):
         raise ToolError("this text contains ‹secret›, the mask this device reads instead of a value: writing it back "
                         "would erase the original. Change only the other lines with knowledge_edit")
 
@@ -561,7 +562,7 @@ async def knowledge_edit(path: str, old_string: str, new_string: str) -> str:
     full, rel = resolve(path)
     check_writable(rel)
     refuse_secrets(new_string)
-    refuse_mask(new_string)
+    refuse_mask(new_string, old_string)
     async with _locks.setdefault(rel, asyncio.Lock()):
         for _ in range(5):  # retry on fresh content when a native edit on the VM landed in between
             data = full.read_bytes()
@@ -586,7 +587,6 @@ async def knowledge_write(path: str, content: str, base_version: str = "") -> st
     full, rel = resolve(path)
     check_writable(rel)
     refuse_secrets(content)
-    refuse_mask(content)
     async with _locks.setdefault(rel, asyncio.Lock()):
         current = full.read_bytes() if full.exists() else None
         if current is not None and base_version != version(current):
@@ -595,6 +595,7 @@ async def knowledge_write(path: str, content: str, base_version: str = "") -> st
             raise ToolError(f"{rel} does not exist; create it with an empty base_version")
         if current is None and (why := new_memo_refusal(rel, content)):
             raise ToolError(why)
+        refuse_mask(content, (current or b"").decode("utf-8", "replace"))
         data = content.encode()
         if not replace_if_unchanged(full, current, data):
             raise ToolError(f"{rel} changed while writing; read it again and redo your change")
@@ -891,7 +892,7 @@ def knowledge_history(path: str, version: str = "") -> str:
     return shown(f"{diff or '(identical to the current file)'}\n\n<version {version}>\n{old}\n</version>")
 
 
-PART_CHARS = 9500  # Claude Code caps each SessionStart hook output at 10,000 characters
+PART_CHARS = 9000  # Claude Code caps each SessionStart hook output at 10,000 characters; offline adds a notice
 
 
 def project_for(directory: str) -> str:
@@ -1301,8 +1302,10 @@ async def mirror_push(request: Request):
     so nothing is lost and knowledge_lint asks to merge them."""
     files = (await request.json()).get("files") or {}
     roots = mirror_roots()
-    out = {"written": {}, "unchanged": 0, "conflicts": {}, "refused": []}
-    for name, f in list(files.items())[:2000]:
+    out = {"written": {}, "unchanged": 0, "unchanged_files": [], "conflicts": {}, "refused": []}
+    items = list(files.items())
+    out["refused"] += [f"{name}: more than 2000 files in one push, it goes up with the next sync" for name, _ in items[2000:]]
+    for name, f in items[:2000]:
         try:
             if not isinstance(f, dict) or not isinstance(f.get("text"), str):
                 raise ToolError("not text")
@@ -1319,6 +1322,7 @@ async def mirror_push(request: Request):
             current = full.read_bytes() if full.exists() else None
             if current == data:
                 out["unchanged"] += 1
+                out["unchanged_files"].append(rel)
                 continue
             plain = current is None or shown(current.decode("utf-8", "replace")).encode() == current
             if (current is None and not base) or (current is not None and plain and base == version(current)):
