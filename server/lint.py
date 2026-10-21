@@ -102,6 +102,18 @@ CHECKED = re.compile(r"\bgecontroleerd (\d[^)]*?)\)", re.I)
 REVIEW_AFTER_DAYS = 45  # Guru-style review cycle; measured 21 Oct 2026: 8 of 68 such memos were older
 
 
+# Question words and fillers (Dutch and English) that say nothing about the subject of a search.
+QUERY_STOP = frozenset("welk welke wat hoe hoeveel waar waarom wanneer wie is de het een en van in op met voor door ik je "
+                       "mijn heeft hebben draait staat staan maak maakt werkt gebruikt kost per moet nieuw nieuwe update "
+                       "herstart verbind koppel the a an of to how what where which why is are do does".split())
+
+
+def query_coverage(query: str, text: str) -> float:
+    """Share of the query's subject words found in `text` (lowercase); a 5-letter prefix covers Dutch inflections."""
+    words = [w for w in re.findall(r"[a-z0-9]+", query.lower()) if len(w) >= 3 and w not in QUERY_STOP]
+    return sum((w if len(w) < 6 else w[:5]) in text for w in words) / len(words) if words else 1.0
+
+
 def last_checked(text: str, today: date) -> date | None:
     """Newest "(gecontroleerd <date>)" mark; without one the newest date in the memo.
     shortcut: the newest date is when something was written, not checked; good enough until most memos carry marks."""
@@ -305,6 +317,9 @@ if __name__ == "__main__":  # self-check
                                 "v.md: not checked since 2026-06-01 (1 addresses/versions)",
                                 "w.md: never checked (no date) (1 addresses/versions)"], r7  # 2029 is no check
     assert not r6["review_due"], r6  # k.md: IP, but a decision of 20 Oct
+    assert query_coverage("welk IP heeft de NAS BMC", "bmc van de nas: 10.10.0.12 ip") == 1.0
+    assert query_coverage("waarom bevriest de NAS", "nas bevriezen dinsdag") == 1.0  # prefix: bevri
+    assert query_coverage("hoe werkt de Nest thermostaat", "honeywell en hue") == 0.0 and query_coverage("hoe is het", "") == 1.0
     t = lint({**files, "trade-memory/MEMORY.md": "- [X](x.md) — y\n"}, today=date(2026, 10, 18), mem="trade-memory")
     assert t["index_points_to_missing_file"] == ["MEMORY.md → x.md"] and not t["unprocessed_source"], t
     print("ok")
