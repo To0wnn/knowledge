@@ -121,6 +121,7 @@ Never shared: `.git`, `.env`, `*.bak*`, keys, `credentials*`, the rest of `~/.cl
 
 Following Karpathy's "LLM Wiki" pattern (raw sources -> wiki pages -> index, with ingest / query / lint):
 
+- **Overdue open items:** a memo line `open tot <date>: <what>` is listed by lint as `open_overdue` once the date has passed, appended to the session-start context of its project and listed every week in the Matrix report.
 - **`knowledge_lint`** (tool + UI tab): deterministic checks on the in-memory index, ~80 ms: index lines pointing to
   missing files, memos missing from `MEMORY.md`, dead `[[wikilinks]]`, missing frontmatter, memos > 15 KB without an
   archive copy, long index lines, orphans, stale open items (newest date > 45 days), memos that probably contain a
