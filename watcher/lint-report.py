@@ -55,11 +55,19 @@ def due(current: set[str]) -> list[str]:
     return sorted(items, key=lambda i: (m := re.search(r"since (\S+)", i)) and m.group(1) or "")[:DUE]  # never = first
 
 
-def message(new: set[str], total: int, resolved: int, check: list[str] = ()) -> str:
+def overdue(current: set[str]) -> list[str]:
+    """Open items past their 'open tot <date>', listed every week until they are done or moved."""
+    return sorted(f.removeprefix("open_overdue: ") for f in current if f.startswith("open_overdue: "))
+
+
+def message(new: set[str], total: int, resolved: int, check: list[str] = (), late: list[str] = ()) -> str:
     lines = [f"Knowledge lint: {len(new)} new finding(s) since last week ({total} open, {resolved} resolved)."]
     lines += [f"- {f}" for f in sorted(new)[:SHOW]]
     if len(new) > SHOW:
         lines.append(f"- … and {len(new) - SHOW} more")
+    if late:
+        lines.append(f"Overdue open items ({len(late)}): do them or move the date:")
+        lines += [f"- {o}" for o in late]
     if check:
         lines.append(f"Check these {len(check)} on the live system this week, then mark them (gecontroleerd <date>):")
         lines += [f"- {c}" for c in check]
@@ -85,9 +93,9 @@ def main() -> None:
     current = findings() | unserved()
     previous = set(json.loads(STATE.read_text())["findings"]) if STATE.exists() else set()
     new, resolved = diff(previous, current)
-    new = {f for f in new if not f.startswith("review_due: ")}  # those are listed every week below
-    if "--init" not in sys.argv and (new or due(current)):
-        text = message(new, len(current), resolved, due(current))
+    new = {f for f in new if not f.startswith(("review_due: ", "open_overdue: "))}  # those are listed every week below
+    if "--init" not in sys.argv and (new or due(current) or overdue(current)):
+        text = message(new, len(current), resolved, due(current), overdue(current))
         print(text) if "--dry-run" in sys.argv else send(text)
     if "--dry-run" not in sys.argv:
         STATE.parent.mkdir(parents=True, exist_ok=True)
@@ -111,6 +119,8 @@ if __name__ == "__main__":
         assert due(cur) == [f"m{i}.md: not checked since 2026-0{i}-01 (1 addresses/versions)" for i in range(1, 6)], due(cur)
         assert due(cur | {"review_due: n.md: never checked (no date) (1 addresses/versions)"})[0].startswith("n.md"), "never first"
         assert "- m1.md: not checked since 2026-01-01" in message(set(), 8, 0, due(cur))
+        assert overdue({"open_overdue: d.md: due 2026-10-21: x", "x: y"}) == ["d.md: due 2026-10-21: x"]
+        assert "Overdue open items (1)" in message(set(), 2, 0, late=["d.md: due 2026-10-21: x"])
         assert message({"x: y"}, 3, 1).startswith("Knowledge lint: 1 new finding(s) since last week (3 open, 1 resolved).")
         print("ok")
     else:

@@ -858,6 +858,7 @@ const LINT_INFO = {
   doc_without_topic: ["Doc without topic", "Add topic: (a MEMORY.md heading) to its frontmatter."],
   decision_without_date: ["Decision without date", "Add the date when you know it; leave it when you don't."],
   stale_unchecked_fact: ["Fact unchecked for long", "Check it on the live system, then mark it (gecontroleerd <date>)."],
+  open_overdue: ["Open item overdue", "An item marked 'open tot <date>' passed its date: do it, or move the date with a reason."],
   review_due: ["Due for a check", "IPs or versions not checked for a while: check them on the live system, then mark (gecontroleerd <date>)."],
   isolated_note: ["Memo without links", "Link it to the memos it belongs with."],
   sparse_topic: ["Topic whose notes barely link", "Link its notes, or move them to a better topic."],

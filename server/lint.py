@@ -13,6 +13,8 @@ WIKILINK = re.compile(r"\[\[([a-z0-9][a-z0-9_-]*)\]\]")  # [[slug]]; skips shell
 INDEX_LINE = re.compile(r"^- \[(?P<title>[^\]]+)\]\((?P<file>[^)]+\.md)\)(?P<hook>.*)$", re.M)
 DATE_NL = re.compile(r"\b(\d{1,2}) (jan|feb|mrt|maa|mar|apr|mei|may|jun|jul|aug|sep|okt|oct|nov|dec)[a-z]* (20\d\d)\b", re.I)
 DATE_ISO = re.compile(r"\b(20\d\d)-(\d\d)-(\d\d)\b")
+# An open item with a deadline: "open tot 29 okt 2026: …"; overdue ones are listed every week and at session start.
+OPEN_DUE = re.compile(r"\bopen tot (\d{1,2} [a-z]+ 20\d\d|20\d\d-\d\d-\d\d)\b:?\s*(.*)", re.I)
 OPEN_WORDS = re.compile(r"\b(TODO|open|nog niet|wacht op|later|volgende stap)\b", re.I)
 SECRET_HINT = re.compile(r"(wachtwoord|password|passwd|token|api[-_ ]?key|secret)\s*[:=]?\s*`?[A-Za-z0-9_\-+/=@!.]{8,}", re.I)
 CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)  # [[x]] inside code is syntax (TOML tables, shell tests), not a link
@@ -173,7 +175,7 @@ def lint(files: dict[str, str], today: date | None = None, mem: str = "memory") 
         "big_memo_without_archive", "long_index_line", "orphan_memo", "possibly_stale_open_item",
         "possible_secret_in_memo", "unprocessed_source", "index_line_without_heading", "index_near_load_limit",
         "relative_date", "missing_structure", "doc_without_topic", "decision_without_date", "stale_unchecked_fact",
-        "review_due")}
+        "review_due", "open_overdue")}
 
     lines, size = index.count("\n") + 1 if index else 0, len(index.encode())
     if lines >= INDEX_WARN_LINES or size >= INDEX_WARN_BYTES:
@@ -191,6 +193,9 @@ def lint(files: dict[str, str], today: date | None = None, mem: str = "memory") 
     for name, text in memos.items():
         if name != "MEMORY.md":
             no_code = CODE.sub(lambda m: "\n" * m.group(0).count("\n"), text)  # keep line numbers right
+            for no, line in enumerate(no_code.splitlines(), 1):
+                if (d := OPEN_DUE.search(line)) and (due := latest_date(d.group(1))) and due < today:
+                    report["open_overdue"].append(f"{name}: due {due.isoformat()}: {d.group(2).strip()[:100]}")
             for no, line in enumerate(no_code.splitlines(), 1):
                 if m := RELATIVE_DATE.search(line):
                     report["relative_date"].append(f"{name}: line {no} '{m.group(0)}'")
@@ -317,6 +322,9 @@ if __name__ == "__main__":  # self-check
                                 "v.md: not checked since 2026-06-01 (1 addresses/versions)",
                                 "w.md: never checked (no date) (1 addresses/versions)"], r7  # 2029 is no check
     assert not r6["review_due"], r6  # k.md: IP, but a decision of 20 Oct
+    od = lint({"memory/MEMORY.md": "", "memory/d.md": "- open tot 21 okt 2026: HA-herhaling weghalen\n- Open tot 2026-10-30: later\n"
+               "- open tot 20 okt 2026 zonder dubbele punt\n```\nopen tot 1 jan 2026: in code\n```\n"}, today=date(2026, 10, 22))
+    assert od["open_overdue"] == ["d.md: due 2026-10-21: HA-herhaling weghalen", "d.md: due 2026-10-20: zonder dubbele punt"], od
     assert query_coverage("welk IP heeft de NAS BMC", "bmc van de nas: 10.10.0.12 ip") == 1.0
     assert query_coverage("waarom bevriest de NAS", "nas bevriezen dinsdag") == 1.0  # prefix: bevri
     assert query_coverage("hoe werkt de Nest thermostaat", "honeywell en hue") == 0.0 and query_coverage("hoe is het", "") == 1.0
