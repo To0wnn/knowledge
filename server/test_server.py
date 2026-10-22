@@ -53,6 +53,7 @@ def main():
         d.mkdir(parents=True)
     (mem / "MEMORY.md").write_text("# Index\n" + "".join(f"- [Item {i}](f{i}.md) — {'x' * 120}\n" for i in range(120)))
     (mem / "fact.md").write_text("line one\nline two\n")
+    (mem / "due.md").write_text("- open tot 1 jan 2026: overdue sample item\n")
     (lab / "overzicht.md").write_text("overview\n")
     (lab / "secret.env").write_text("nope")
     (lab / "opnsense-config.xml").write_text("<opnsense><wireguard>privkey</wireguard></opnsense>")
@@ -662,6 +663,7 @@ def main():
             assert len(body) <= 10_000, (n, len(body))
             parts.append(body)
             n += 1
+        assert "overdue sample item" in "".join(parts), parts[-1][-500:]  # overdue open items at session start
         assert len(parts) >= 2 and "Item 119" in parts[-1] and "global rules" in parts[0], len(parts)
         # CLAUDE.md's import line arrives expanded: a remote device has no ~/.claude/gedeeld/house_rules.md.
         assert "Memory is a hint, not the truth" in parts[0] and "@~/.claude/gedeeld" not in "".join(parts), parts[0][:800]

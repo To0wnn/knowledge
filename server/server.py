@@ -1051,6 +1051,10 @@ def context_parts(project: str = "homelab") -> list[str]:
         if full.exists():
             body = full.read_text(encoding="utf-8")
             text.append(f"===== {rel} (via knowledge server) =====\n{shown(expand_imports(body) if rel == 'claude/CLAUDE.md' else body)}")
+    if overdue := kb_lint.lint({r: t for r, t, _ in index.items() if in_scope(r)}, mem=mem)["open_overdue"]:
+        text.append(f"===== overdue open items ({mem}) =====\nThese items passed their 'open tot <date>'. Mention them to the "
+                    "user once at the start, do them when asked, or move the date with a reason:\n"
+                    + "\n".join(f"- {o}" for o in overdue))
     return split_parts("\n\n".join(text))
 
 
