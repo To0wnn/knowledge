@@ -7,6 +7,7 @@ clients/knowledge-agent.py (the setup without a plugin) calls the same functions
   agent_hooks.py docs-sync [TOKEN]             PostToolUse: mirror an edited .md (folder with .knowledge-project)
   agent_hooks.py session-log [TOKEN]           SessionEnd/PreCompact (Codex), Stop (agy): post the session log
   agent_hooks.py header [TOKEN]                MCP header helper: the token as JSON, {} without one
+  agent_hooks.py mcp [TOKEN]                   stdio MCP server of the Codex plugin: relays to the server's /mcp
 TOKEN: "-" (default) = KNOWLEDGE_TOKEN or the keyring (token_store.py); on Anthony's VM a vault name.
 Never fails a session: errors go to stderr. Linux, macOS and Windows; standard library only.
 """
@@ -75,12 +76,43 @@ def context(agent: str, tok: str):
                      {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}}))
 
 
+def mcp(tok: str):
+    """Relay each JSON-RPC line from stdin to /mcp and the answer to stdout. Codex gives a plugin's HTTP header helper
+    neither the plugin folder nor KNOWLEDGE_TOKEN; a stdio server gets both (cwd, env_vars). The server is stateless
+    with JSON responses, so one message is one POST and its body."""
+    # shortcut: one request at a time, so parallel tool calls wait on each other; use a thread per line if that hurts.
+    headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream",
+               **({"Authorization": f"Bearer {tok}"} if tok else {})}
+    for raw in sys.stdin.buffer:
+        if not raw.strip():
+            continue
+        try:
+            with urllib.request.urlopen(urllib.request.Request(f"{URL}/mcp", raw, headers), timeout=120) as r:
+                out = r.read().strip()
+        except OSError as e:  # HTTPError too: answer the request with the reason, keep serving
+            try:
+                msg_id = json.loads(raw).get("id")
+            except (ValueError, AttributeError):
+                msg_id = None
+            if msg_id is None:  # a notification gets no answer
+                continue
+            reason = {401: "token invalid or revoked (KNOWLEDGE_TOKEN or the keyring)",
+                      403: "only reachable from the home network or WireGuard"}.get(getattr(e, "code", 0), str(e))
+            out = json.dumps({"jsonrpc": "2.0", "id": msg_id, "error": {"code": -32000,
+                              "message": f"knowledge server: {reason}"}}).encode()
+        if out:
+            sys.stdout.buffer.write(out + b"\n")
+            sys.stdout.buffer.flush()
+
+
 def main(argv: list):
     cmd, rest = (argv[0] if argv else ""), argv[1:]
     if cmd == "context" and rest[:1] and rest[0] in AGENTS and len(rest) <= 2:
         context(rest[0], token(rest[1] if len(rest) == 2 else "-"))
     elif cmd in ("docs-sync", "session-log") and len(rest) <= 1:
         sys.stdout.write(run_hook(f"{cmd}.py", token(rest[0] if rest else "-"), sys.stdin.read()))
+    elif cmd == "mcp" and len(rest) <= 1:
+        mcp(token(rest[0] if rest else "-"))
     elif cmd == "header" and len(rest) <= 1:
         tok = token(rest[0] if rest else "-")
         print(json.dumps({"Authorization": f"Bearer {tok}"} if tok else {}))
