@@ -159,8 +159,9 @@ def install_claude():
     claude = cli("claude")
     run_cli([claude, "plugin", "marketplace", "add", MARKET], already_ok=True)
     run_cli([claude, "plugin", "marketplace", "update", "knowledge"])
-    if not run_cli([claude, "plugin", "install", "knowledge@knowledge", "--scope", "user"], already_ok=True):
-        run_cli([claude, "plugin", "update", "knowledge@knowledge"])
+    run_cli([claude, "plugin", "install", "knowledge@knowledge", "--scope", "user"], already_ok=True)
+    run_cli([claude, "plugin", "update", "knowledge@knowledge"])  # install leaves an installed copy at its old version
+    print("(a note that options are not set is fine: the plugin takes the token from the keyring)")
     # The memory lives on the server: Claude's local auto memory would build a second one.
     path = Path.home() / ".claude" / "settings.json"
     data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
