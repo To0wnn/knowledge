@@ -575,6 +575,8 @@ def main():
         run_mm(senv)
         assert not (cla / "skills/broken").exists() and (skills / "broken/SKILL.md").exists() and "no frontmatter" in log.read_text()
         (skills / "broken/SKILL.md").unlink(); (skills / "broken").rmdir()
+        bg = json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["system"]["background"]
+        assert any("laptop" in b["detail"] and "skill" in b["detail"] for b in bg if b["name"] == "Matrix"), bg  # the admin hears of it
         (cla / "skills/y/SKILL.md").write_text(SK("see [[project_nowhere]]")); inval("claude/skills/y/SKILL.md")
         lint_out = call("knowledge_lint", {})[1]
         assert "claude/skills/y/SKILL.md: [[project_nowhere]]" in lint_out and "skill_dead_link" in lint_out, lint_out[-800:]

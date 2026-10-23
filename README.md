@@ -226,7 +226,8 @@ the file is its own node on its frontmatter `topic:`, linked to the memos it nam
   once holds them back and says so in `last-sync.log` (confirm with `KNOWLEDGE_ALLOW_REMOVALS=1`). A `SKILL.md`
   without frontmatter or a one-line description is refused on every write path; lint checks skills
   (`skill_broken`, `skill_name_mismatch`, `skill_too_long` > 500 lines, `skill_dead_link`, `possible_secret_in_skill`),
-  calibrated on 44 skills (all 22 own pass).
+  calibrated on 44 skills (all 22 own pass). A skill added, changed or removed by a device (not on the VM itself) posts one
+  Matrix message per skill per 10 minutes, with how to look and undo; the System tab shows the last message.
 - **Searched, not found** (admin page, System tab): every `knowledge_search` without matches and every
   `knowledge_semantic_search` that answered nothing useful is logged: best score below 0.45, or below 0.55 while the
   best note lacks the question's subject words (`lint.query_coverage` < 0.7). Calibrated 21 Oct 2026 on 20 answerable
