@@ -299,6 +299,44 @@ def agents(tok: str, home: Path, project: Path, garden: Path):
     check(code != 0 and "401" in (out + err), "install with a wrong token stops with a clear 401 message", out + err)
 
 
+def script_mcp(tok: str, home: Path):
+    """The setup script writes no token into a config: agy runs the stdio relay, Codex the header helper (Linux/macOS) or
+    the relay (Windows), and each configured relay answers a knowledge_search started exactly as configured. On Windows
+    the token comes from the Credential Manager (cmdkey) with KNOWLEDGE_TOKEN unset, also for Claude's headersHelper."""
+    import tomllib
+    agy_file, codex_file = home / ".gemini" / "config" / "mcp_config.json", home / ".codex" / "config.toml"
+    agy = json.loads(agy_file.read_text(encoding="utf-8"))["mcpServers"]["knowledge"]
+    codex = tomllib.loads(codex_file.read_text(encoding="utf-8"))["mcp_servers"]["knowledge"]
+    check(tok not in agy_file.read_text(encoding="utf-8") + codex_file.read_text(encoding="utf-8"),
+          "setup: no token in agy's mcp_config.json or in Codex's config.toml")
+    check(("command" in codex) == WIN and ("http_headers_helper" in codex) != WIN,
+          "codex setup: the relay on Windows, the header helper elsewhere", json.dumps(codex))
+    env = user_env(home, KNOWLEDGE_URL=BASE)  # no KNOWLEDGE_TOKEN: the relay finds the token itself
+    if WIN:
+        code, out, err = run(["cmdkey", "/generic:knowledge", "/user:knowledge", f"/pass:{tok}"], "", env)
+        check(code == 0, "windows: cmdkey stores the token in the Credential Manager", out + err)
+    else:
+        env["KNOWLEDGE_TOKEN"] = tok  # CI runners have no keyring
+    msgs = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                                                                          "clientInfo": {"name": "e2e", "version": "0"}}},
+            {"jsonrpc": "2.0", "method": "notifications/initialized"},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "knowledge_search", "arguments": {"pattern": "taxi"}}}]
+    try:
+        for label, srv in (("agy", agy), ("codex", codex)) if WIN else (("agy", agy),):
+            code, out, err = run([shutil.which(srv["command"]) or srv["command"], *srv["args"]],
+                                 "".join(json.dumps(m) + "\n" for m in msgs), env, timeout=90)
+            replies = {m.get("id"): m for m in map(json.loads, out.splitlines())} if code == 0 and out.strip() else {}
+            check(set(replies) == {1, 2} and "taxi" in json.dumps(replies[2].get("result")),
+                  f"{label} setup: the configured relay answers a knowledge_search", out[:400] + err[-400:])
+        if WIN:  # Claude Code runs the plugin's headersHelper through Git Bash
+            code, out, err = run([shutil.which("sh"), str(CLIENT / "plugin" / "hooks" / "token-header.sh")], "", env)
+            check(f"Bearer {tok}" in out, "claude on windows: the headersHelper reads the token from the Credential Manager",
+                  out[:100].replace(tok, "<token>") + err[-300:])
+    finally:
+        if WIN:
+            run(["cmdkey", "/delete:knowledge"], "", env)
+
+
 def codex_plugin(tok: str, home: Path, project: Path):
     """The Codex plugin (plugin/.codex-plugin): every hook command the way Codex runs it (sh, or cmd with commandWindows,
     PLUGIN_ROOT in the environment), its stdio MCP server, and with the CLI: install from this repo's marketplace."""
@@ -482,6 +520,7 @@ def main():
         offline(tok, home, project, garden, mirror)
         skills(tmp, home)
         agents(tok, home, project, garden)
+        script_mcp(tok, home)
         codex_plugin(tok, tmp / "Codex Usér", project)  # its own home: the plugin next to the setup's server would clash
         agy_plugin(tok, home, project, garden)
         relay_errors(home)
