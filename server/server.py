@@ -558,7 +558,7 @@ def expand_imports(text: str) -> str:
     """CLAUDE.md as Claude Code reads it: an import line replaced by the shared file it names."""
     def one(m):
         try:
-            return re.sub(r"\A---\n.*?\n---\n", "", (ROOTS["claude"] / m.group(1)).read_text(encoding="utf-8"), flags=re.S)
+            return kb_lint.FRONT.sub("", (ROOTS["claude"] / m.group(1)).read_text(encoding="utf-8"), count=1)
         except OSError:
             return m.group(0)
     return IMPORT.sub(one, text)
