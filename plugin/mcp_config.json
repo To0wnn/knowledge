@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "knowledge": {
+      "command": "python3",
+      "args": [
+        "-X",
+        "utf8",
+        "hooks/agent_hooks.py",
+        "mcp"
+      ]
+    }
+  }
+}
