@@ -368,6 +368,14 @@ read it with `EnvironmentFile`; `token.py` and `tests/ui_smoke.py` load it thems
 
 ### Codex and agy as plugins (23 Oct 2026)
 
+One command per agent on every OS: `python3 ~/knowledge/clients/knowledge-agent.py install <claude|codex|agy>`
+(Windows: `py`). It asks for the device token (hidden) when none is stored, or whether to replace the stored one,
+checks it with the server and saves it in the OS keyring (`token_store.store`: secret-tool, macOS Keychain, Windows
+Credential Manager via CredWriteW); without a keyring it says how to set `KNOWLEDGE_TOKEN` instead. Then: Claude Code
+the plugin (+ `autoMemoryEnabled: false`); Codex/agy on Linux/macOS the plugin, after removing an older setup of the
+script; Codex/agy on Windows, with a vault name, or with `KNOWLEDGE_SETUP=script` the script's own setup.
+`KNOWLEDGE_MARKETPLACE` / `KNOWLEDGE_AGY_PLUGIN` point the plugin install elsewhere (the tests use the checkout).
+
 The same `plugin/` folder installs in Codex and agy, so every agent gets the same hooks, skills and MCP server:
 
 - Codex: `codex plugin marketplace add To0wnn/knowledge` + `codex plugin add knowledge@knowledge` (marketplace file

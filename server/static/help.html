@@ -75,43 +75,28 @@ footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
     <h2>Claude Code</h2>
     <p>The most complete connection: the plugin loads the context and house rules at every start, writes a session log and mirrors your docs.</p>
     <ol class="steps" data-os="linux">
-      <li><b>Put the token in the keyring</b>
-        Paste the token you received at the <code>Password:</code> prompt (it is not shown). Every agent on this computer reads it from there; it is in no file.
-        <div class="cmd"><pre>secret-tool store --label="Knowledge server token" service knowledge</pre><button class="copy" type="button">Copy</button></div>
-        No <code>secret-tool</code>? Install <code>libsecret</code> (Arch) or <code>libsecret-tools</code> (Debian/Ubuntu).
-        A server or container without a desktop has no keyring: there give the token to the plugin instead (URL <code>https://knowledge.to0wnn.com</code>, then the token); it is kept in <code>~/.claude/.credentials.json</code>, readable only by you.
-        <div class="cmd"><pre>claude plugin configure knowledge@knowledge</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Install the plugin</b>
-        <div class="cmd"><pre>claude plugin marketplace add To0wnn/knowledge
-claude plugin install knowledge@knowledge --scope user</pre><button class="copy" type="button">Copy</button></div>
-        It may say that options are not set yet: that is fine, the plugin takes the token from the keyring (step 1).</li>
-      <li><b>Turn local auto memory off</b>
-        Add this line to <code>~/.claude/settings.json</code>; your memory is on the server, so Claude does not also write it locally:
-        <div class="cmd"><pre>"autoMemoryEnabled": false</pre><button class="copy" type="button">Copy</button></div></li>
+      <li><b>Get the knowledge scripts</b>
+        Needs <code>git</code> and <code>python3</code>.
+        <div class="cmd"><pre>git -C ~/knowledge pull 2&gt;/dev/null || git clone https://github.com/To0wnn/knowledge ~/knowledge</pre><button class="copy" type="button">Copy</button></div></li>
+      <li><b>Run the setup</b>
+        It asks for the token you received (paste it; it is not shown), checks it with the server and keeps it in the keyring (Linux) or the Keychain (macOS); with a token already stored it asks whether to replace it. Then it installs the plugin and turns Claude's local auto memory off (your memory is on the server). A server or container without a desktop has no keyring: the setup then says how to set the token instead. Run it again later to update.
+        <div class="cmd"><pre>python3 ~/knowledge/clients/knowledge-agent.py install claude</pre><button class="copy" type="button">Copy</button></div></li>
       <li><b>Only for a guest project: mark your project folder</b>
-        In the root of your project, a file <code>.knowledge-project</code> with the project name you got (for example <code>a350</code>):
-        <div class="cmd"><pre>echo a350 &gt; .knowledge-project</pre><button class="copy" type="button">Copy</button></div>
-        From then on every <code>.md</code> file goes to the server at each start, and each changed one right after the change. Code, <code>.venv</code> and hidden folders never go.</li>
+        In the root of your project, a file <code>.knowledge-project</code> with the project name you got (for example <code>a350</code>); from then on its <code>.md</code> files go to the server. Code, <code>.venv</code> and hidden folders never go.
+        <div class="cmd"><pre>echo a350 &gt; .knowledge-project</pre><button class="copy" type="button">Copy</button></div></li>
       <li><b>Check</b>
         Start a new session in your project folder. It begins with <code>knowledge (project …)</code>. Ask: "search the knowledge for …".</li>
     </ol>
     <ol class="steps" data-os="windows" hidden>
-      <li><b>Install Git and Python</b>
-        <a href="https://git-scm.com/download/win" target="_blank" rel="noopener">Git for Windows</a> (Claude Code runs the plugin's hooks in Git Bash) and <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">Python 3</a> (keep "py launcher" ticked). The steps below are for PowerShell.</li>
-      <li><b>Put the token in the Windows Credential Manager</b>
-        It asks for a password: paste the token you received (it is not shown and stays out of the PowerShell history). Every agent on this computer reads it from there; it is in no file.
-        <div class="cmd"><pre>cmdkey /generic:knowledge /user:knowledge /pass</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Install the plugin</b>
-        <div class="cmd"><pre>claude plugin marketplace add To0wnn/knowledge
-claude plugin install knowledge@knowledge --scope user</pre><button class="copy" type="button">Copy</button></div>
-        It may say that options are not set yet: that is fine, the plugin takes the token from the Credential Manager (step 2).</li>
-      <li><b>Turn local auto memory off</b>
-        Add this line to <code>%USERPROFILE%\.claude\settings.json</code>; your memory is on the server, so Claude does not also write it locally:
-        <div class="cmd"><pre>"autoMemoryEnabled": false</pre><button class="copy" type="button">Copy</button></div></li>
+      <li><b>Get the knowledge scripts</b>
+        Needs <a href="https://git-scm.com/download/win" target="_blank" rel="noopener">Git for Windows</a> and <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">Python 3</a> (keep "py launcher" ticked). The steps are for PowerShell.
+        <div class="cmd"><pre>if (Test-Path $HOME\knowledge) { git -C $HOME\knowledge pull } else { git clone https://github.com/To0wnn/knowledge $HOME\knowledge }</pre><button class="copy" type="button">Copy</button></div></li>
+      <li><b>Run the setup</b>
+        It asks for the token you received (paste it; it is not shown), checks it with the server and keeps it in the Windows Credential Manager; with a token already stored it asks whether to replace it. Then it installs the plugin and turns Claude's local auto memory off (your memory is on the server). Run it again later to update.
+        <div class="cmd"><pre>py $HOME\knowledge\clients\knowledge-agent.py install claude</pre><button class="copy" type="button">Copy</button></div></li>
       <li><b>Only for a guest project: mark your project folder</b>
-        In the root of your project, a file <code>.knowledge-project</code> with the project name you got (for example <code>a350</code>):
-        <div class="cmd"><pre>Set-Content .knowledge-project a350</pre><button class="copy" type="button">Copy</button></div>
-        From then on every <code>.md</code> file goes to the server at each start, and each changed one right after the change. Code, <code>.venv</code> and hidden folders never go.</li>
+        In the root of your project, a file <code>.knowledge-project</code> with the project name you got (for example <code>a350</code>); from then on its <code>.md</code> files go to the server. Code, <code>.venv</code> and hidden folders never go.
+        <div class="cmd"><pre>Set-Content .knowledge-project a350</pre><button class="copy" type="button">Copy</button></div></li>
       <li><b>Check</b>
         Start a new session in your project folder. It begins with <code>knowledge (project …)</code>. Ask: "search the knowledge for …".</li>
     </ol>
@@ -119,95 +104,67 @@ claude plugin install knowledge@knowledge --scope user</pre><button class="copy"
 
   <section id="agy" role="tabpanel" aria-labelledby="tab-agy" hidden>
     <h2>agy (Antigravity CLI)</h2>
-    <p>The knowledge plugin connects agy: the tools, the context at every start (with the house rules), the session log, the docs mirror and the shared development skills. On Windows a setup script does it for now. agy itself comes from <a href="https://antigravity.google" target="_blank" rel="noopener">antigravity.google</a> and updates itself (<code>agy update</code>).</p>
+    <p>The knowledge plugin connects agy: the tools, the context at every start (with the house rules), the session log, the docs mirror and the shared development skills. On Windows the setup sets Codex and agy up without the plugin for now; the steps are the same. agy itself comes from <a href="https://antigravity.google" target="_blank" rel="noopener">antigravity.google</a> and updates itself (<code>agy update</code>).</p>
     <ol class="steps" data-os="linux">
-      <li><b>Put the token in the keyring</b>
-        Paste the token you received at the <code>Password:</code> prompt (it is not shown). Every agent on this computer reads it from there; it is in no file.
-        <div class="cmd"><pre>secret-tool store --label="Knowledge server token" service knowledge</pre><button class="copy" type="button">Copy</button></div>
-        No <code>secret-tool</code>? Install <code>libsecret</code> (Arch) or <code>libsecret-tools</code> (Debian/Ubuntu).
-        A server or container without a desktop has no keyring: there put the token in your profile instead, then log in again.
-        <div class="cmd"><pre>echo 'export KNOWLEDGE_TOKEN="YOUR_TOKEN"' &gt;&gt; ~/.profile</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Install the plugin</b>
-        <div class="cmd"><pre>agy plugin install https://github.com/To0wnn/knowledge/tree/main/plugin</pre><button class="copy" type="button">Copy</button></div>
-        The plugin's MCP server reads the token from the keyring each time, so it is in no file. Set up with the old setup script before? Then remove its <code>knowledge</code> entries from <code>~/.gemini/config/mcp_config.json</code> and <code>~/.gemini/config/hooks.json</code> first, or agy loads the server and the hooks twice.</li>
+      <li><b>Get the knowledge scripts</b>
+        Needs <code>git</code> and <code>python3</code>.
+        <div class="cmd"><pre>git -C ~/knowledge pull 2&gt;/dev/null || git clone https://github.com/To0wnn/knowledge ~/knowledge</pre><button class="copy" type="button">Copy</button></div></li>
+      <li><b>Run the setup</b>
+        It asks for the token you received (paste it; it is not shown), checks it with the server and keeps it in the keyring (Linux) or the Keychain (macOS); with a token already stored it asks whether to replace it. Then it installs the plugin; an older setup of this script is removed first. A server or container without a desktop has no keyring: the setup then says how to set the token instead. Run it again later to update.
+        <div class="cmd"><pre>python3 ~/knowledge/clients/knowledge-agent.py install agy</pre><button class="copy" type="button">Copy</button></div></li>
       <li><b>Only for a guest project: mark your project folder</b>
-        In the root of your project, a file <code>.knowledge-project</code> with the project name you got (for example <code>a350</code>):
-        <div class="cmd"><pre>echo a350 &gt; .knowledge-project</pre><button class="copy" type="button">Copy</button></div>
-        From then on every <code>.md</code> file goes to the server at each start, and each changed one right after the change. Code, <code>.venv</code> and hidden folders never go.</li>
+        In the root of your project, a file <code>.knowledge-project</code> with the project name you got (for example <code>a350</code>); from then on its <code>.md</code> files go to the server. Code, <code>.venv</code> and hidden folders never go.
+        <div class="cmd"><pre>echo a350 &gt; .knowledge-project</pre><button class="copy" type="button">Copy</button></div></li>
       <li><b>Check</b>
-        <div class="cmd"><pre>agy plugin list</pre><button class="copy" type="button">Copy</button></div>
-        It lists <code>knowledge</code> as enabled. Start <code>agy</code> and ask: "search the knowledge for …".</li>
-      <li><b>Later: update</b>
-        Run the install command again.</li>
+        Start <code>agy</code> and ask: "search the knowledge for …".
+        <div class="cmd"><pre>agy</pre><button class="copy" type="button">Copy</button></div></li>
     </ol>
     <ol class="steps" data-os="windows" hidden>
-      <li><b>Install Git and Python</b>
-        <a href="https://git-scm.com/download/win" target="_blank" rel="noopener">Git for Windows</a> and <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">Python 3</a> (keep "py launcher" ticked). The steps below are for PowerShell.</li>
-      <li><b>Put the token in the Windows Credential Manager</b>
-        It asks for a password: paste the token you received (it is not shown and stays out of the PowerShell history). Every agent on this computer reads it from there; it is in no file.
-        <div class="cmd"><pre>cmdkey /generic:knowledge /user:knowledge /pass</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Get the knowledge scripts and run the setup</b>
-        <div class="cmd"><pre>if (Test-Path $HOME\knowledge) { git -C $HOME\knowledge pull } else { git clone https://github.com/To0wnn/knowledge $HOME\knowledge }
-py $HOME\knowledge\clients\knowledge-agent.py install agy</pre><button class="copy" type="button">Copy</button></div>
-        It checks the token, then writes <code>%USERPROFILE%\.gemini\config\mcp_config.json</code> (the MCP server: a small relay that fetches the token, so it is in no file), <code>%USERPROFILE%\.gemini\config\hooks.json</code> and <code>%USERPROFILE%\.gemini\GEMINI.md</code> (the house rules). It is safe to run again; an existing file is extended, not replaced.</li>
+      <li><b>Get the knowledge scripts</b>
+        Needs <a href="https://git-scm.com/download/win" target="_blank" rel="noopener">Git for Windows</a> and <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">Python 3</a> (keep "py launcher" ticked). The steps are for PowerShell.
+        <div class="cmd"><pre>if (Test-Path $HOME\knowledge) { git -C $HOME\knowledge pull } else { git clone https://github.com/To0wnn/knowledge $HOME\knowledge }</pre><button class="copy" type="button">Copy</button></div></li>
+      <li><b>Run the setup</b>
+        It asks for the token you received (paste it; it is not shown), checks it with the server and keeps it in the Windows Credential Manager; with a token already stored it asks whether to replace it. Then it sets up the MCP server (a small relay that fetches the token, so it is in no file), the hooks and the house rules. Run it again later to update.
+        <div class="cmd"><pre>py $HOME\knowledge\clients\knowledge-agent.py install agy</pre><button class="copy" type="button">Copy</button></div></li>
       <li><b>Only for a guest project: mark your project folder</b>
-        In the root of your project, a file <code>.knowledge-project</code> with the project name you got (for example <code>a350</code>):
-        <div class="cmd"><pre>Set-Content .knowledge-project a350</pre><button class="copy" type="button">Copy</button></div>
-        From then on every <code>.md</code> file goes to the server at each start, and each changed one right after the change. Code, <code>.venv</code> and hidden folders never go.</li>
+        In the root of your project, a file <code>.knowledge-project</code> with the project name you got (for example <code>a350</code>); from then on its <code>.md</code> files go to the server. Code, <code>.venv</code> and hidden folders never go.
+        <div class="cmd"><pre>Set-Content .knowledge-project a350</pre><button class="copy" type="button">Copy</button></div></li>
       <li><b>Check</b>
-        <div class="cmd"><pre>agy mcp list</pre><button class="copy" type="button">Copy</button></div>
-        It lists <code>knowledge  http  enabled</code>. Start <code>agy</code> and ask: "search the knowledge for …".</li>
-      <li><b>Later: update</b>
-        <div class="cmd"><pre>git -C $HOME\knowledge pull
-py $HOME\knowledge\clients\knowledge-agent.py install agy</pre><button class="copy" type="button">Copy</button></div></li>
+        Start <code>agy</code> and ask: "search the knowledge for …".
+        <div class="cmd"><pre>agy</pre><button class="copy" type="button">Copy</button></div></li>
     </ol>
   </section>
 
   <section id="codex" role="tabpanel" aria-labelledby="tab-codex" hidden>
     <h2>Codex (OpenAI)</h2>
-    <p>The knowledge plugin connects Codex, from the same repository as the Claude Code plugin: the tools, the context at every start (with the house rules), the session log, the docs mirror and the shared development skills. On Windows a setup script does it for now. Install or update Codex with <code>npm i -g @openai/codex@latest</code>.</p>
+    <p>The knowledge plugin connects Codex, from the same repository as the Claude Code plugin: the tools, the context at every start (with the house rules), the session log, the docs mirror and the shared development skills. On Windows the setup sets Codex and agy up without the plugin for now; the steps are the same. Install or update Codex with <code>npm i -g @openai/codex@latest</code>.</p>
     <ol class="steps" data-os="linux">
-      <li><b>Put the token in the keyring</b>
-        Paste the token you received at the <code>Password:</code> prompt (it is not shown). Every agent on this computer reads it from there; it is in no file.
-        <div class="cmd"><pre>secret-tool store --label="Knowledge server token" service knowledge</pre><button class="copy" type="button">Copy</button></div>
-        No <code>secret-tool</code>? Install <code>libsecret</code> (Arch) or <code>libsecret-tools</code> (Debian/Ubuntu).
-        A server or container without a desktop has no keyring: there put the token in your profile instead, then log in again.
-        <div class="cmd"><pre>echo 'export KNOWLEDGE_TOKEN="YOUR_TOKEN"' &gt;&gt; ~/.profile</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Install the plugin</b>
-        <div class="cmd"><pre>codex plugin marketplace add To0wnn/knowledge
-codex plugin add knowledge@knowledge</pre><button class="copy" type="button">Copy</button></div>
-        The plugin's MCP server reads the token from the keyring each time, so it is in no file. Set up with the old setup script before? Then remove the <code>[mcp_servers.knowledge]</code> block from <code>~/.codex/config.toml</code> and the knowledge entries from <code>~/.codex/hooks.json</code> first, or Codex loads them twice.</li>
+      <li><b>Get the knowledge scripts</b>
+        Needs <code>git</code> and <code>python3</code>.
+        <div class="cmd"><pre>git -C ~/knowledge pull 2&gt;/dev/null || git clone https://github.com/To0wnn/knowledge ~/knowledge</pre><button class="copy" type="button">Copy</button></div></li>
+      <li><b>Run the setup</b>
+        It asks for the token you received (paste it; it is not shown), checks it with the server and keeps it in the keyring (Linux) or the Keychain (macOS); with a token already stored it asks whether to replace it. Then it installs the plugin; an older setup of this script is removed first, and a running Codex is offered a restart. A server or container without a desktop has no keyring: the setup then says how to set the token instead. Run it again later to update.
+        <div class="cmd"><pre>python3 ~/knowledge/clients/knowledge-agent.py install codex</pre><button class="copy" type="button">Copy</button></div></li>
       <li><b>Only for a guest project: mark your project folder</b>
-        In the root of your project, a file <code>.knowledge-project</code> with the project name you got (for example <code>a350</code>):
-        <div class="cmd"><pre>echo a350 &gt; .knowledge-project</pre><button class="copy" type="button">Copy</button></div>
-        From then on every <code>.md</code> file goes to the server at each start, and each changed one right after the change. Code, <code>.venv</code> and hidden folders never go.</li>
+        In the root of your project, a file <code>.knowledge-project</code> with the project name you got (for example <code>a350</code>); from then on its <code>.md</code> files go to the server. Code, <code>.venv</code> and hidden folders never go.
+        <div class="cmd"><pre>echo a350 &gt; .knowledge-project</pre><button class="copy" type="button">Copy</button></div></li>
       <li><b>Check</b>
-        <div class="cmd"><pre>codex</pre><button class="copy" type="button">Copy</button></div>
-        Type <code>/hooks</code> once and trust the four knowledge hooks (Codex skips new hooks until then; the tools work right away). Then ask: "search the knowledge for …".</li>
-      <li><b>Later: update</b>
-        <div class="cmd"><pre>codex plugin marketplace upgrade knowledge
-codex plugin add knowledge@knowledge</pre><button class="copy" type="button">Copy</button></div></li>
+        Type <code>/hooks</code> once and trust the knowledge hooks (Codex skips new hooks until then; the tools work right away). Then ask: "search the knowledge for …".
+        <div class="cmd"><pre>codex</pre><button class="copy" type="button">Copy</button></div></li>
     </ol>
     <ol class="steps" data-os="windows" hidden>
-      <li><b>Install Git and Python</b>
-        <a href="https://git-scm.com/download/win" target="_blank" rel="noopener">Git for Windows</a> and <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">Python 3</a> (keep "py launcher" ticked). The steps below are for PowerShell.</li>
-      <li><b>Put the token in the Windows Credential Manager</b>
-        It asks for a password: paste the token you received (it is not shown and stays out of the PowerShell history). Every agent on this computer reads it from there; it is in no file.
-        <div class="cmd"><pre>cmdkey /generic:knowledge /user:knowledge /pass</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Get the knowledge scripts and run the setup</b>
-        <div class="cmd"><pre>if (Test-Path $HOME\knowledge) { git -C $HOME\knowledge pull } else { git clone https://github.com/To0wnn/knowledge $HOME\knowledge }
-py $HOME\knowledge\clients\knowledge-agent.py install codex</pre><button class="copy" type="button">Copy</button></div>
-        It checks the token, then writes <code>%USERPROFILE%\.codex\config.toml</code> (the MCP server: a small relay that fetches the token, so it is in no file; Codex asks before it writes), <code>%USERPROFILE%\.codex\hooks.json</code> and <code>%USERPROFILE%\.codex\AGENTS.md</code> (the house rules). It is safe to run again; an existing file is extended, not replaced.</li>
+      <li><b>Get the knowledge scripts</b>
+        Needs <a href="https://git-scm.com/download/win" target="_blank" rel="noopener">Git for Windows</a> and <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">Python 3</a> (keep "py launcher" ticked). The steps are for PowerShell.
+        <div class="cmd"><pre>if (Test-Path $HOME\knowledge) { git -C $HOME\knowledge pull } else { git clone https://github.com/To0wnn/knowledge $HOME\knowledge }</pre><button class="copy" type="button">Copy</button></div></li>
+      <li><b>Run the setup</b>
+        It asks for the token you received (paste it; it is not shown), checks it with the server and keeps it in the Windows Credential Manager; with a token already stored it asks whether to replace it. Then it sets up the MCP server (a small relay that fetches the token, so it is in no file), the hooks and the house rules; a running Codex is offered a restart. Run it again later to update.
+        <div class="cmd"><pre>py $HOME\knowledge\clients\knowledge-agent.py install codex</pre><button class="copy" type="button">Copy</button></div></li>
       <li><b>Only for a guest project: mark your project folder</b>
-        In the root of your project, a file <code>.knowledge-project</code> with the project name you got (for example <code>a350</code>):
-        <div class="cmd"><pre>Set-Content .knowledge-project a350</pre><button class="copy" type="button">Copy</button></div>
-        From then on every <code>.md</code> file goes to the server at each start, and each changed one right after the change. Code, <code>.venv</code> and hidden folders never go.</li>
+        In the root of your project, a file <code>.knowledge-project</code> with the project name you got (for example <code>a350</code>); from then on its <code>.md</code> files go to the server. Code, <code>.venv</code> and hidden folders never go.
+        <div class="cmd"><pre>Set-Content .knowledge-project a350</pre><button class="copy" type="button">Copy</button></div></li>
       <li><b>Check</b>
-        <div class="cmd"><pre>codex</pre><button class="copy" type="button">Copy</button></div>
-        Type <code>/hooks</code> once and trust the knowledge hooks (Codex skips new hooks until then). Then ask: "search the knowledge for …".</li>
-      <li><b>Later: update</b>
-        <div class="cmd"><pre>git -C $HOME\knowledge pull
-py $HOME\knowledge\clients\knowledge-agent.py install codex</pre><button class="copy" type="button">Copy</button></div></li>
+        Type <code>/hooks</code> once and trust the knowledge hooks (Codex skips new hooks until then; the tools work right away). Then ask: "search the knowledge for …".
+        <div class="cmd"><pre>codex</pre><button class="copy" type="button">Copy</button></div></li>
     </ol>
   </section>
 
@@ -239,7 +196,8 @@ py $HOME\knowledge\clients\knowledge-agent.py install codex</pre><button class="
     <tbody>
       <tr><td><code>401</code> or "token invalid"</td><td>Token copied wrongly or revoked. Set it again; ask for a new one if needed.</td></tr>
       <tr><td>No context at start (Windows)</td><td>Git for Windows or Python missing, or the token not in the Credential Manager (<code>cmdkey /list:knowledge</code> shows it). Install both or store the token, then start again.</td></tr>
-      <tr><td>Setup says "No token"</td><td>Linux: the token is not in the keyring yet (step 1; <code>secret-tool lookup service knowledge</code> shows it). Windows: the token is not in the Credential Manager yet (<code>cmdkey /list:knowledge</code>).</td></tr>
+      <tr><td>Setup says "No token"</td><td>It ran without a terminal (it can only ask in one): run it in a terminal, or set <code>KNOWLEDGE_TOKEN</code>.</td></tr>
+      <tr><td>A new token, or the old one revoked</td><td>Run the setup again and answer <code>y</code> when it asks whether to replace the stored token.</td></tr>
       <tr><td>The session gets the wrong project</td><td>The folder name does not match a project exactly, or the token is for one project only: see "Which project does my session get?".</td></tr>
       <tr><td>Docs do not reach the server</td><td>No <code>.knowledge-project</code> in the project root, or its name does not match your token's project.</td></tr>
       <tr><td>Codex ignores the context hook</td><td>More than one SessionStart hook, or the hook is not trusted yet: open <code>/hooks</code> in Codex.</td></tr>

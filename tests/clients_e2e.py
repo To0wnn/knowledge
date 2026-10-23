@@ -261,7 +261,7 @@ def skills(tmp: Path, home: Path):
 
 def agents(tok: str, home: Path, project: Path, garden: Path):
     agent = CLIENT / "clients" / "knowledge-agent.py"
-    env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok)
+    env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, KNOWLEDGE_SETUP="script")  # the plugin path: installer()
     for name, conf, rules in (("codex", home / ".codex" / "hooks.json", home / ".codex" / "AGENTS.md"),
                               ("agy", home / ".gemini" / "config" / "hooks.json", home / ".gemini" / "GEMINI.md")):
         for attempt in (1, 2):
@@ -447,6 +447,42 @@ def agy_plugin(tok: str, home: Path, project: Path, garden: Path):
           "agy: plugin listed and enabled, with its MCP server and hooks", out + err)
 
 
+def installer(tok: str, tmp: Path):
+    """knowledge-agent.py install as a person runs it: the keyring of the OS stores and returns a token (macOS Keychain,
+    Windows Credential Manager; CI's Linux has no keyring), and with the CLIs installed, install claude/codex set up the
+    plugin from this repo; Codex on Linux/macOS first removes an older setup of this script."""
+    agent = CLIENT / "clients" / "knowledge-agent.py"
+    sys.path.insert(0, str(CLIENT / "plugin" / "hooks"))
+    import token_store
+    if WIN or sys.platform == "darwin":
+        try:
+            token_store.store("e2e-store-test")
+            check(token_store.from_keyring() == "e2e-store-test", f"keyring: store and read back on {sys.platform}")
+        finally:
+            run(["cmdkey", "/delete:knowledge"] if WIN else ["security", "delete-generic-password", "-s", "knowledge"], "")
+    home = tmp / "Install Usér"
+    (home / ".codex").mkdir(parents=True, exist_ok=True)
+    env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, KNOWLEDGE_MARKETPLACE=str(REPO))
+    if shutil.which("claude"):
+        code, out, err = run([sys.executable, str(agent), "install", "claude"], "", env, timeout=300)
+        settings = json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8")) if code == 0 else {}
+        check(code == 0 and settings.get("autoMemoryEnabled") is False, "install claude: plugin installed, auto memory off", out + err)
+        code, out, err = run([shutil.which("claude"), "plugin", "list"], "", env, timeout=60)
+        check("knowledge@knowledge" in out, "install claude: claude plugin list shows knowledge", out + err)
+    if shutil.which("codex") and not WIN:
+        (home / ".codex" / "config.toml").write_text('[mcp_servers.knowledge]\nurl = "x"\nbearer_token_env_var = "KNOWLEDGE_TOKEN"\n', encoding="utf-8")
+        (home / ".codex" / "hooks.json").write_text(json.dumps({"hooks": {"SessionStart": [{"hooks": [
+            {"type": "command", "command": "python3 knowledge-agent.py context codex -"}]}]}}), encoding="utf-8")
+        code, out, err = run([sys.executable, str(agent), "install", "codex"], "", env, timeout=300)
+        conf = (home / ".codex" / "config.toml").read_text(encoding="utf-8")
+        hooks = json.loads((home / ".codex" / "hooks.json").read_text(encoding="utf-8"))
+        check(code == 0 and "[mcp_servers.knowledge]" not in conf and not hooks.get("hooks"),
+              "install codex: the old setup is removed first", out + err + conf)
+        code, out, err = run([shutil.which("codex"), "plugin", "list"], "", env, timeout=60)
+        check(any(ln.startswith("knowledge@knowledge") and "installed" in ln for ln in out.splitlines()),
+              "install codex: the plugin is installed", out + err)
+
+
 def relay_errors(home: Path):
     """The stdio MCP relay survives a server that answers HTML instead of JSON: every request (also in a batch)
     gets an error reply and the relay keeps serving (review 23 Oct 2026: it used to exit and leave the session without
@@ -524,6 +560,7 @@ def main():
         codex_plugin(tok, tmp / "Codex Usér", project)  # its own home: the plugin next to the setup's server would clash
         agy_plugin(tok, home, project, garden)
         relay_errors(home)
+        installer(tok, tmp)
         real_clis(tok, home)
     finally:
         proc.kill()
