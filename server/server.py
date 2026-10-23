@@ -20,6 +20,7 @@ import html
 import json
 import os
 import re
+from datetime import date, timedelta
 import secrets
 import tempfile
 import threading
@@ -636,8 +637,8 @@ SEARCH_SECONDS = 3
 @server.tool(annotations=READ)
 def knowledge_search(pattern: str, root: str = "", max_results: int = 60, archive: bool = False) -> str:
     """Case-insensitive regex search over shared files (all roots, or one or more comma-separated roots, e.g.
-    "trade,trade-memory"). Returns path:line: text. Archive folders (archief/, old/, history/, sessions/ ...) are
-    skipped and only counted; archive=true searches them too."""
+    "trade,trade-memory"). Returns path:line: text. Archive folders (archief/, old/, history/ ...) and session-log
+    entries older than two weeks are skipped and only counted; archive=true searches them too."""
     # The `regex` module, not `re`: it can time out and release the GIL, so a catastrophic pattern such as (a+)+$
     # costs at most SEARCH_SECONDS instead of freezing the whole server (security review 20 Oct 2026).
     try:
@@ -669,6 +670,8 @@ def search_lines(rx_i, rx_low, root: str, max_results: int, archive: bool = Fals
                 raise TimeoutError
             archived += bool(rx.search(hay, timeout=left, concurrent=True))
             continue
+        session = not archive and "/sessions/" in rel  # entries older than SESSION_DAYS are archive
+        old_hit = False
         # One C-level regex pass over the whole file (re.M keeps ^/$ per line); at most one hit per line.
         last, lineno, pos = -1, 1, 0
         left = deadline - time.monotonic()
@@ -680,10 +683,14 @@ def search_lines(rx_i, rx_low, root: str, max_results: int, archive: bool = Fals
                 continue
             lineno += text.count("\n", pos, start)
             pos, last = start, start
+            if session and is_archive(rel, text, start):
+                old_hit = True
+                continue
             end = text.find("\n", start)
             out.append(f"{rel}:{lineno}: {shown(text[start:end if end >= 0 else None][:300])}")
             if len(out) >= max_results:
                 return "\n".join(out) + "\n[max_results reached]"
+        archived += old_hit
     note = f"\n[{archived} more file(s) in the archive match: archive=true to include them]" if archived else ""
     return ("\n".join(out) or "(no matches)") + note
 
@@ -905,11 +912,36 @@ def mem_of(rel: str) -> bool:
 SOURCES = "homelab/sources"  # raw sources (immutable once written) + LOG.md, the LLM-wiki "raw" layer
 # The archive: history, superseded and frozen material in any project. Agents' searches skip it unless asked
 # (archive=true) and say how many hits it held; a path is always readable. Same names in the house rules.
-ARCHIVE_DIRS = {"archief", "archive", "old", "history", "sessions"}
+ARCHIVE_DIRS = {"archief", "archive", "old", "history"}
+SESSION_DAYS = 14  # session-log entries ("## YYYY-MM-DD ...") older than this count as archive (the owner, 24 Oct 2026)
 
 
-def is_archive(rel: str) -> bool:
-    return any(p in ARCHIVE_DIRS or p.startswith(("archief-", "archive-")) for p in rel.split("/")[1:-1])
+def is_archive(rel: str, text: str | None = None, pos: int | None = None) -> bool:
+    """A path in an archive folder; or, in sessions/<YYYY-MM>.md, the entry around `pos` (the newest entry when pos
+    is None) when it is older than SESSION_DAYS. Without text a session file counts as current."""
+    parts = rel.split("/")[1:-1]
+    if any(p in ARCHIVE_DIRS or p.startswith(("archief-", "archive-")) for p in parts):
+        return True
+    if "sessions" not in parts or text is None:
+        return False
+    head = text.rfind("\n## ", 0, len(text) if pos is None else pos)
+    m = re.match(r"\n## (\d{4}-\d\d-\d\d)", text[head:head + 16]) if head >= 0 else None
+    return bool(m) and date.fromisoformat(m.group(1)) < date.today() - timedelta(days=SESSION_DAYS)
+
+
+def text_of(rel: str) -> str:
+    return index.files.get(rel, (0, 0, "", None))[2]
+
+
+def is_archive_line(rel: str, line: int) -> bool:
+    """is_archive for one line of a file (semantic search hits carry a line number)."""
+    if "/sessions/" not in rel:
+        return is_archive(rel)
+    text = text_of(rel)
+    pos = 0
+    for _ in range(max(line - 1, 0)):
+        pos = text.find("\n", pos) + 1 or len(text)
+    return is_archive(rel, text, pos)
 STOPWORDS = set("de het een en van voor met dat die niet ook naar maar als bij over this that with from have will your "
                 "the and for are was were what when which into about".split())
 
@@ -1018,7 +1050,7 @@ async def knowledge_semantic_search(query: str, root: str = "", limit: int = 10,
     Returns path:line (score): passage. Archive folders are skipped unless archive=true."""
     # A scoped token searches its own roots by default, so the top hits are not used up by notes it may not see.
     roots = tuple(r.strip() + "/" for r in root.split(",") if r.strip()) or tuple(r + "/" for r in device.get().get("roots") or ())
-    hits = [h for h in await asyncio.to_thread(vec.search, query, roots, min(limit, 30), None if archive else is_archive) if in_scope(h["path"])]
+    hits = [h for h in await asyncio.to_thread(vec.search, query, roots, min(limit, 30), None if archive else is_archive_line) if in_scope(h["path"])]
     if vec.matrix is not None and weak_answer(query, hits):  # while the index is (re)built nothing is a gap
         log_gap("semantic", query, hits[0]["score"] if hits else None)
     if not hits:
@@ -1034,7 +1066,7 @@ async def knowledge_related(path: str, limit: int = 10, archive: bool = False) -
     _, rel = resolve(path)
     graph = await asyncio.to_thread(get_graph)
     out = [r for r in kb_graph.related(graph, rel, 30, vec.similar(rel))
-           if in_scope(r["id"]) and (archive or not is_archive(r["id"]))][:min(limit, 30)]
+           if in_scope(r["id"]) and (archive or not is_archive(r["id"], text_of(r["id"])))][:min(limit, 30)]
     return "\n".join(f"{r['id']} ({r['score']}): {r['label']} — {r['why']}" for r in out) or "(no related notes found)"
 
 
@@ -2357,7 +2389,7 @@ def search_notes(q: str, roots: tuple, limit: int = 40) -> list[dict]:
         head = hay[:400]
         score = 100 * all(w in rel.lower() for w in words) + 50 * all(w in head for w in words)
         score += 30 if mem_of(rel) and rel.count("/") == 1 else 20 if rel.endswith(".md") and "/skills/" not in rel else 10
-        if is_archive(rel) or rel.startswith(SOURCES):
+        if is_archive(rel, text) or rel.startswith(SOURCES):
             score -= 40
         phrase, found = " ".join(words), []
         for n, line in enumerate(text.splitlines(), 1):
