@@ -86,7 +86,12 @@ def start_server(tmp: Path):
                                              if (Path.home() / ".claude/gedeeld/dev_rules.md").exists() else "# Development rules\n\n1. Read first.\n", encoding="utf-8")
     (data["claude"] / "house_rules.md").write_text("# House rules\n\n1. Search first.\n2. A memo has \"## Stand\" and \"## Keuzes\".\n", encoding="utf-8")
     h = lambda t: hashlib.sha256(t.encode()).hexdigest()
-    (tmp / "tokens.json").write_text(json.dumps({"owner": {"sha256": h("owner-token"), "write": True}}), encoding="utf-8")
+    (tmp / "tokens.json").write_text(json.dumps({"owner": {"sha256": h("owner-token"), "write": True, "skills": True},
+                                                 "watcher": {"sha256": h("watch-token"), "watch": True}}), encoding="utf-8")
+    (data["claude"] / "skills" / "s1").mkdir(parents=True)
+    (data["claude"] / "skills" / "s1" / "SKILL.md").write_text("---\nname: s1\n---\nshared skill → ✅\n", encoding="utf-8")
+    (data["claude"] / "skills" / "linked").mkdir()
+    (data["claude"] / "skills" / "linked" / "SKILL.md").write_text("server linked\n", encoding="utf-8")
     (tmp / "secrets.json").write_text(json.dumps([h("Sup3rSecret99")]), encoding="utf-8")
     env = {**os.environ, "KNOWLEDGE_MEMORY": str(data["memory"]), "KNOWLEDGE_HOMELAB": str(data["homelab"]),
            "KNOWLEDGE_CLAUDE": str(data["claude"]), "KNOWLEDGE_TRADE": str(data["trade"]),
@@ -189,6 +194,51 @@ def offline(tok: str, home: Path, project: Path, garden: Path, mirror: Path):
     check("written offline → ✅" in (garden / "memory" / "project_offline.md").read_text(encoding="utf-8"), "  with its text intact")
 
 
+def link_dir(link: Path, target: Path):
+    """A symlink, or on Windows a junction: what a user gets from mklink /J without admin rights."""
+    if WIN:
+        subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)], check=True, capture_output=True)
+    else:
+        link.symlink_to(target, target_is_directory=True)
+
+
+def skills(tmp: Path, home: Path):
+    """Shared skills both ways in ~/.claude/skills: arrive as real skills, a local one goes up, a linked folder is never
+    written or emptied through, a skill removed on the server goes here too (folder included)."""
+    server_skills, local = tmp / "data" / "claude" / "skills", home / ".claude" / "skills"
+    (local / "mine").mkdir(parents=True)
+    (local / "mine" / "SKILL.md").write_text("---\nname: mine\n---\nmade on this device, é\n", encoding="utf-8")
+    repo = home / "elsewhere" / "linked"
+    repo.mkdir(parents=True)
+    (repo / "SKILL.md").write_text("repo version\n", encoding="utf-8")
+    link_dir(local / "linked", repo)
+    env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN="owner-token", KNOWLEDGE_MIRROR=str(home / "mirror-owner"))
+    mm = [sys.executable, str(CLIENT / "plugin" / "hooks" / "memory_mirror.py"), "--now"]
+    log = home / "mirror-owner" / "last-sync.log"
+    logged = lambda: log.read_text(encoding="utf-8") if log.exists() else ""
+    for _ in range(2):
+        code, out, err = run(mm, "", env)
+    got = local / "s1" / "SKILL.md"
+    check(code == 0 and got.exists() and "shared skill → ✅" in got.read_text(encoding="utf-8"), "skills: a shared skill arrives in ~/.claude/skills, text intact", err + logged())
+    check((server_skills / "mine" / "SKILL.md").exists() and "é" in (server_skills / "mine" / "SKILL.md").read_text(encoding="utf-8"),
+          "skills: a skill made on the device goes up", logged())
+    check((repo / "SKILL.md").read_text(encoding="utf-8") == "repo version\n", "skills: never writes through a linked folder (junction on Windows)")
+    for name in ("s1", "linked"):
+        (server_skills / name / "SKILL.md").unlink()
+        (server_skills / name).rmdir()
+        http("POST", "/invalidate", {"paths": [f"claude/skills/{name}/SKILL.md"]}, {"Authorization": "Bearer watch-token"})
+    code, out, err = run(mm, "", env)
+    check(not (local / "s1").exists(), "skills: removed on the server, gone here with its folder", logged())
+    check((repo / "SKILL.md").exists() and "failed" not in logged(), "skills: a linked folder is never emptied, the sync does not break", logged())
+    # The PostToolUse hook (Git Bash on Windows) starts a sync when the edited file is a skill.
+    (local / "mine" / "SKILL.md").write_text("---\nname: mine\n---\nedited → ✅\n", encoding="utf-8")
+    hook = json.dumps({"tool_name": "Write", "tool_input": {"file_path": str(local / "mine" / "SKILL.md")}})
+    env2 = {**env, "CLAUDE_PLUGIN_ROOT": str(CLIENT / "plugin")}
+    code, out, err = run([bash(), "-c", 'sh "${CLAUDE_PLUGIN_ROOT}/hooks/py.sh" "${CLAUDE_PLUGIN_ROOT}/hooks/memory_mirror.py" edited'], hook, env2)
+    check(code == 0 and wait_for(lambda: "edited → ✅" in (server_skills / "mine" / "SKILL.md").read_text(encoding="utf-8")),
+          "skills: an edit through the PostToolUse hook goes up", err + logged())
+
+
 def agents(tok: str, home: Path, project: Path, garden: Path):
     agent = CLIENT / "clients" / "knowledge-agent.py"
     env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok)
@@ -268,6 +318,7 @@ def main():
         print(f"platform {sys.platform}, python {sys.version.split()[0]}, home {home}")
         mirror = claude_plugin(tok, home, project, garden)
         offline(tok, home, project, garden, mirror)
+        skills(tmp, home)
         agents(tok, home, project, garden)
         real_clis(tok, home)
     finally:
