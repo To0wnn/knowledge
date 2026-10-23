@@ -96,7 +96,8 @@ def install(agent: str, name: str):
     if not tok:
         sys.exit("No token: put the token in the keyring first (Windows: setx KNOWLEDGE_TOKEN; see the help page), then run this again.")
     rules = check(tok)
-    install_mcp(agent, tok, name)
+    if install_mcp(agent, tok, name) and agent == "codex":
+        restart_codex()
     install_hooks(agent, name)
     install_rules(agent, rules)
     install_skills()
@@ -116,8 +117,10 @@ def install_mcp(agent: str, tok: str, name: str = "-"):
             block = text[start:end]
             if old in block and os.name != "nt":  # older setup: switch it to the helper (only this server's block)
                 path.write_text(text[:start] + block.replace(old, helper_line(name)) + text[end:], encoding="utf-8")
-                return print(f"MCP: {path} now takes the token from the header helper")
-            return print(f"MCP: {path} already has [mcp_servers.knowledge], left as it is")
+                print(f"MCP: {path} now takes the token from the header helper")
+                return True
+            print(f"MCP: {path} already has [mcp_servers.knowledge], left as it is")
+            return False
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text.rstrip("\n") + ("\n\n" if text.strip() else "") + f'''[mcp_servers.knowledge]
 url = "{URL}/mcp"
@@ -125,7 +128,8 @@ url = "{URL}/mcp"
 default_tools_approval_mode = "writes"
 startup_timeout_sec = 15
 ''', encoding="utf-8")
-        return print(f"MCP: added the knowledge server to {path} (Codex asks before it writes)")
+        print(f"MCP: added the knowledge server to {path} (Codex asks before it writes)")
+        return True
     path = Path.home() / ".gemini" / "config" / "mcp_config.json"  # agy keeps the header in this file
     data = json.loads(path.read_text(encoding="utf-8-sig")) if path.exists() else {}
     if "knowledge" in data.get("mcpServers", {}):
@@ -136,6 +140,29 @@ startup_timeout_sec = 15
     if os.name != "nt":
         path.chmod(0o600)  # the token is in it
     print(f"MCP: added the knowledge server to {path}" + ("" if os.name != "nt" else " (holds the token: keep the file to yourself)"))
+
+
+def restart_codex():
+    """Codex keeps a background app-server that holds the MCP settings it started with, so a changed config only
+    counts after it restarts. Offer to stop it (Codex starts a new one on its next run); never without asking."""
+    # shortcut: Linux/macOS only (pgrep); on Windows the setup only says to restart Codex.
+    try:
+        pids = subprocess.run(["pgrep", "-f", "codex app-server"], capture_output=True, text=True).stdout.split()
+    except OSError:
+        pids = []
+    if not pids:
+        return
+    msg = "Codex is still running with the old settings."
+    if not sys.stdin.isatty():
+        return print(f"{msg} Quit Codex (and its background server) so the new settings apply.")
+    if input(f"{msg} Stop it now? [y/N] ").strip().lower() not in ("y", "yes", "j", "ja"):
+        return print("left running: quit Codex yourself so the new settings apply")
+    for pid in pids:
+        try:
+            os.kill(int(pid), 15)
+        except (OSError, ValueError):
+            pass
+    print("stopped; Codex starts it again on its next run")
 
 
 def install_rules(agent: str, rules: str):
