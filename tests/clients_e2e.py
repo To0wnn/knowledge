@@ -262,6 +262,8 @@ def skills(tmp: Path, home: Path):
 def agents(tok: str, home: Path, project: Path, garden: Path):
     agent = CLIENT / "clients" / "knowledge-agent.py"
     env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, KNOWLEDGE_SETUP="script")  # the plugin path: installer()
+    (home / ".gemini" / "config").mkdir(parents=True, exist_ok=True)
+    (home / ".gemini" / "config" / "mcp_config.json").write_text("", encoding="utf-8")  # agy leaves it empty on Windows
     for name, conf, rules in (("codex", home / ".codex" / "hooks.json", home / ".codex" / "AGENTS.md"),
                               ("agy", home / ".gemini" / "config" / "hooks.json", home / ".gemini" / "GEMINI.md")):
         for attempt in (1, 2):

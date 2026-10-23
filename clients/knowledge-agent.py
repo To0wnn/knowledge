@@ -164,7 +164,7 @@ def install_claude():
     print("(a note that options are not set is fine: the plugin takes the token from the keyring)")
     # The memory lives on the server: Claude's local auto memory would build a second one.
     path = Path.home() / ".claude" / "settings.json"
-    data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    data = load_json(path)
     if data.get("autoMemoryEnabled") is not False:
         data["autoMemoryEnabled"] = False
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -184,7 +184,7 @@ def remove_old_setup(agent: str):
             end = len(text) if end < 0 else end + 1
             conf.write_text((text[:start].rstrip("\n") + "\n\n" + text[end:]).strip("\n") + "\n", encoding="utf-8")
             print(f"removed the old [mcp_servers.knowledge] from {conf}")
-        data = json.loads(hooks.read_text(encoding="utf-8")) if hooks.exists() else {}
+        data = load_json(hooks)
         ours = lambda g: any("knowledge-agent.py" in h.get("command", "") or "agent_hooks.py" in h.get("command", "")
                              for h in g.get("hooks", []))
         events = data.get("hooks", {})
@@ -195,7 +195,7 @@ def remove_old_setup(agent: str):
         return
     for path, key in ((Path.home() / ".gemini" / "config" / "mcp_config.json", "mcpServers"),
                       (Path.home() / ".gemini" / "config" / "hooks.json", None)):
-        data = json.loads(path.read_text(encoding="utf-8-sig")) if path.exists() else {}
+        data = load_json(path)
         holder = data.get(key, {}) if key else data
         if "knowledge" in holder:
             del holder["knowledge"]
@@ -246,6 +246,12 @@ def codex_block(name: str) -> str:
     return f'[mcp_servers.knowledge]\n{how}\ndefault_tools_approval_mode = "writes"\nstartup_timeout_sec = 15\n'
 
 
+def load_json(path: Path) -> dict:
+    """A missing or empty config counts as {}: agy creates an empty mcp_config.json on Windows."""
+    text = path.read_text(encoding="utf-8-sig").strip() if path.exists() else ""
+    return json.loads(text) if text else {}
+
+
 def install_mcp(agent: str, name: str = "-"):
     if agent == "codex":  # no token is written to a file: the header helper or the stdio relay fetches it
         path = CODEX / "config.toml"
@@ -268,7 +274,7 @@ def install_mcp(agent: str, name: str = "-"):
         return True
     # agy sends a ${VAR} header as is, so the stdio relay fetches the token; an older entry held it in plain text.
     path = Path.home() / ".gemini" / "config" / "mcp_config.json"
-    data = json.loads(path.read_text(encoding="utf-8-sig")) if path.exists() else {}
+    data = load_json(path)
     had = data.get("mcpServers", {}).get("knowledge")
     if had and "headers" not in had:
         print(f"MCP: {path} already has 'knowledge', left as it is")
@@ -377,6 +383,10 @@ if __name__ == "__main__":
         a = hook_config("agy", "X")["knowledge"]
         assert a["Stop"][0]["command"].endswith("session-log -") and a["SessionStart"][0]["command"].endswith("context agy X")
         assert helper_line("-").startswith('http_headers_helper = "') and helper_line("-").endswith(' header -"')
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "e.json").write_text("\ufeff \n", encoding="utf-8")
+            assert load_json(Path(d) / "e.json") == {} and load_json(Path(d) / "missing.json") == {}
         print("ok")
     else:
         try:
