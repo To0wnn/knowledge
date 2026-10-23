@@ -56,10 +56,23 @@ def local_path(rel: str) -> Path:
         if parts[1:2] != ["skills"] or len(parts) < 4 or parts[2] == "synced" or any(p.startswith(".") for p in parts) \
                 or Path(rel).suffix.lower() not in SKILL_EXT:
             raise ValueError(f"unsafe path from server: {rel}")
-        return SKILLS.joinpath(*parts[2:])
+        path = SKILLS
+        for part in parts[2:]:  # never through a linked folder: that leads into someone else's files (a repo, /usr/share)
+            path = path / part
+            if linked(path):
+                raise ValueError(f"linked folder, stays local: {rel}")
+        return path
     if not rel.endswith(".md"):
         raise ValueError(f"unsafe path from server: {rel}")
     return MIRROR.joinpath(*parts)
+
+
+def target(rel: str):
+    """local_path, or None for a path this device must leave alone (a linked skill folder, an unsafe name)."""
+    try:
+        return local_path(rel)
+    except ValueError:
+        return None
 
 
 def write_atomic(path: Path, data: bytes):
@@ -69,14 +82,18 @@ def write_atomic(path: Path, data: bytes):
     os.replace(tmp, path)
 
 
+def linked(p: Path) -> bool:
+    return p.is_symlink() or (hasattr(p, "is_junction") and p.is_junction())  # a Windows junction is no symlink
+
+
 def local_skills() -> dict:
     out = {}
     for d in sorted(SKILLS.iterdir()) if SKILLS.is_dir() else ():
-        if d.is_symlink() or not d.is_dir() or d.name == "synced" or d.name.startswith("."):
+        if linked(d) or not d.is_dir() or d.name == "synced" or d.name.startswith("."):
             continue
         for p in d.rglob("*"):
             rel = p.relative_to(SKILLS)
-            if p.is_file() and p.suffix.lower() in SKILL_EXT and not any(x.startswith(".") for x in rel.parts):
+            if p.is_file() and not linked(p) and p.suffix.lower() in SKILL_EXT and not any(x.startswith(".") for x in rel.parts):
                 out["claude/skills/" + rel.as_posix()] = p.read_bytes()
     return out
 
@@ -109,13 +126,20 @@ def sync() -> str:
         conflicts = set(res["conflicts"])  # the offline text is safe on the server now, as the .offline- copy
         report += [f"conflict: {rel} -> {copy}" for rel, copy in res["conflicts"].items()] + [f"refused: {r}" for r in res["refused"]]
     # 2. Down: only what differs from the versions this device has.
-    res = post("/mirror", {"have": {rel: v for rel, v in known.items() if local_path(rel).exists()}})  # a lost file comes back
+    res = post("/mirror", {"have": {rel: v for rel, v in known.items() if (p := target(rel)) and p.exists()}})  # a lost file comes back
     for rel, text in res["files"].items():
-        if rel not in keep:
-            write_atomic(local_path(rel), text.encode())
-            known[rel] = res["versions"][rel]
+        p = target(rel)
+        if rel in keep or not p:
+            continue
+        if rel not in known and rel not in conflicts and p.exists() and p.read_bytes() != text.encode():
+            continue  # here before the sync knew it (skills just switched on): it goes up next time, as a conflict copy
+        write_atomic(p, text.encode())
+        known[rel] = res["versions"][rel]
     for rel in [r for r in known if r not in res["versions"]]:  # deleted on the server
-        p = local_path(rel)
+        p = target(rel)
+        if not p:
+            known.pop(rel)
+            continue
         if p.exists() and (version(p.read_bytes()) == known[rel] or rel in conflicts):
             p.unlink()
             while rel.startswith("claude/") and p.parent != SKILLS and not any(p.parent.iterdir()):

@@ -516,6 +516,33 @@ def main():
         assert not (skills / "y/SKILL.md").exists() and not (skills / "y/scripts").exists() and (skills / "y/blob.bin").exists() \
             and (skills / "mine/SKILL.md").read_text() == "unsent\n"  # right off: synced copies go, own work stays
         assert return_skills(True) == 200 and not call("knowledge_write", {"path": "claude/skills/y/NOTES.md", "content": "notes\n"})[0]
+        inval = lambda rel: http("POST", "/invalidate", {"paths": [rel]}, token="watch-token")
+        # Review 23 Oct 2026: never write or empty through a linked skill folder (it leads into someone else's files).
+        (tmp / "repo").mkdir(); (tmp / "repo/SKILL.md").write_text("repo version\n")
+        (cla / "skills/linked").mkdir(); (cla / "skills/linked/SKILL.md").write_text("server linked\n"); inval("claude/skills/linked/SKILL.md")
+        (skills / "linked").symlink_to(tmp / "repo")
+        run_mm(senv)
+        assert (tmp / "repo/SKILL.md").read_text() == "repo version\n"
+        (cla / "skills/linked/SKILL.md").unlink(); (cla / "skills/linked").rmdir(); inval("claude/skills/linked/SKILL.md")
+        run_mm(senv)
+        log = tmp / "mirror-own/last-sync.log"
+        assert (tmp / "repo/SKILL.md").exists() and "failed" not in (log.read_text() if log.exists() else ""), log.read_text()
+        # A skill the device had before skills were switched on is not overwritten: it becomes a conflict copy, once.
+        (cla / "skills/x2").mkdir(); (cla / "skills/x2/SKILL.md").write_text("server x2\n"); inval("claude/skills/x2/SKILL.md")
+        skills2 = tmp / "home-skills2"; (skills2 / "x2").mkdir(parents=True); (skills2 / "x2/SKILL.md").write_text("my local x2\n")
+        senv2 = {**senv, "KNOWLEDGE_MIRROR": str(tmp / "mirror-two"), "KNOWLEDGE_SKILLS": str(skills2)}
+        for _ in range(3):
+            run_mm(senv2)
+        copies = list((cla / "skills/x2").glob("SKILL.offline-*.md"))
+        assert (skills2 / "x2/SKILL.md").read_text() == "server x2\n" and len(copies) == 1 and copies[0].read_text() == "my local x2\n", copies
+        # A file the index cannot hold (> 2 MB) is refused and stays on the device instead of vanishing there.
+        (skills / "big").mkdir(); (skills / "big/data.json").write_text("x" * 2_100_000)
+        run_mm(senv); run_mm(senv)
+        assert (skills / "big/data.json").exists() and "bigger than" in log.read_text()
+        (skills / "big/data.json").unlink(); (skills / "big").rmdir()
+        # Shared skills need a token that sees them: else a refusal, not a broken sync.
+        assert raw("POST", "/ui/api/admin/token", json.dumps({"name": "x-pa", "write": True, "roots": ["memory"], "skills": True}),
+                   {**ck, "Content-Type": "application/json", "X-Knowledge-UI": "1"})[0] == 400
         # Review fixes 20 Oct: a project named like a path part does not capture other sessions; write patterns are
         # anchored; "Add" never wipes access; graph ETag per user; body cap; scoped ingest/lint; token routes.
         assert admin("/ui/api/admin/project", {"name": "home"})[0] == 200
@@ -562,6 +589,16 @@ def main():
         assert err and "is full" in text, text
         ver = re.search(r"version (\w+)", call("knowledge_read", {"path": "erinproj/big.md"})[1]).group(1)
         assert not call("knowledge_delete", {"path": "erinproj/big.md", "base_version": ver})[0]  # a full project may shrink
+        # Review 23 Oct 2026: a refusal in /sync never deletes; files over 2 MB are not indexed but still count.
+        st, _, res = admin("/ui/api/admin/token", {"name": "erinsync", "write": True, "roots": ["erinproj", "erinproj-memory"]})
+        est = json.loads(res)["token"]
+        st, body = http("POST", "/sync", {"files": {"keep.md": "# Keep\n"}, "full": True}, token=est)
+        assert json.loads(body)["written"] == 1, body
+        assert not call("knowledge_write", {"path": "erinproj/huge.md", "content": "# H\n" + "word " * 500_000})[0]  # 2.5 MB
+        err, text = call("knowledge_write", {"path": "erinproj/huge2.md", "content": "# H2\n"})
+        assert err and "is full" in text, text
+        st, body = http("POST", "/sync", {"files": {"keep.md": "# Keep\n", "new.md": "# New\n"}, "full": True}, token=est)
+        assert json.loads(body)["deleted"] == 0 and (tmp / "projects/erinproj/docs/keep.md").exists(), body
         assert admin("/ui/api/admin/settings", {"user_max_tokens": 5, "user_max_projects": 3, "project_max_mb": 20})[0] == 200
         assert admin("/ui/api/admin/user", {"username": "erin", "delete": True})[0] == 200
         assert http("GET", "/lint", token=et)[0] == 401  # no access left: the token is dead too

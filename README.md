@@ -208,14 +208,18 @@ the file is its own node on its frontmatter `topic:`, linked to the memos it nam
   `KNOWLEDGE_MATRIX_TOKEN` in forge `config/proxy.env` = Vaultwarden `MATRIX_BOT_TOKEN`); a failed post shows on the
   System tab. Tokens do not expire (choice Anthony). A person needs access to one project first (admin, People).
 - **Shared skills (23 Oct 2026):** `claude/skills/<name>/` is writable for tokens with the flag `skills` (admin page,
-  Tokens: tick "Shared skills" on a new token, or "Skills on/off" on an existing one; needs write and no masking; never
-  for a person's token, a guest or a PA). Text files only (`SKILL_EXT`). Such a device keeps the skills in
+  Tokens: tick "Shared skills" on a new token, or the switch in the "Shared skills" column; needs write, no masking and
+  a token that sees the skills; never for a person's token, a guest or a PA; "—" in the column says why not). Text files only (`SKILL_EXT`). Such a device keeps the skills in
   `~/.claude/skills/<name>/` through the offline-copy sync (`memory_mirror.py`, root `claude`), so Claude Code loads
   them as real skills in every project and reloads them live; a skill made there goes up at the next sync (after an
   edit, at session start and end). Removed on the server = removed on the device (unless changed there); removed only
   on the device = it returns; flag off = the device drops its synced copies and keeps what it made itself. Symlinked
   folders, `synced/` (claude.ai) and dot-folders stay local, and the server no longer indexes `synced/` or `.trash`.
   CLAUDE.md, the house and dev rules stay read-only. NFS: `~/.claude/skills` is exported and mounted rw.
+  Review fixes (23 Oct 2026): the device never writes or deletes through a linked (symlink/junction) skill folder; a
+  skill it had before the sync knew it is not overwritten but goes up as a conflict copy once; a file over 2 MB is
+  refused (the index cannot hold it) and stays on the device; the project size limit counts files on disk; a refusal
+  in `/sync` never deletes the server copy.
 - **Searched, not found** (admin page, System tab): every `knowledge_search` without matches and every
   `knowledge_semantic_search` that answered nothing useful is logged: best score below 0.45, or below 0.55 while the
   best note lacks the question's subject words (`lint.query_coverage` < 0.7). Calibrated 21 Oct 2026 on 20 answerable
