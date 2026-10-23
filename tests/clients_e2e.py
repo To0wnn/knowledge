@@ -454,7 +454,7 @@ def installer(tok: str, tmp: Path):
     agent = CLIENT / "clients" / "knowledge-agent.py"
     sys.path.insert(0, str(CLIENT / "plugin" / "hooks"))
     import token_store
-    if WIN or sys.platform == "darwin":
+    if (WIN or sys.platform == "darwin") and os.environ.get("CI"):  # on a real machine this would replace its token
         try:
             token_store.store("e2e-store-test")
             check(token_store.from_keyring() == "e2e-store-test", f"keyring: store and read back on {sys.platform}")
