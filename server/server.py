@@ -1098,7 +1098,7 @@ def context_parts(project: str = "homelab") -> list[str]:
                 text.append(f"===== {mem}/MEMORY.md (via knowledge server) =====\n{shown(full.read_text(encoding='utf-8'))}")
         except ToolError:
             pass
-        return split_parts("\n\n".join(text))
+        return split_parts("\n\n".join(text + open_items_text(mem)))
     others = "; ".join(f"{p}: {d}/ and {m}/" for p, (d, m) in PROJECTS.items() if p != project)
     text = [
         f"===== knowledge plugin (project {project}) =====\nThe memory and docs below live on the knowledge MCP server "
@@ -1121,11 +1121,25 @@ def context_parts(project: str = "homelab") -> list[str]:
         if full.exists():
             body = full.read_text(encoding="utf-8")
             text.append(f"===== {rel} (via knowledge server) =====\n{shown(expand_imports(body) if rel == 'claude/CLAUDE.md' else body)}")
-    if overdue := kb_lint.lint({r: t for r, t, _ in index.items() if in_scope(r)}, mem=mem)["open_overdue"]:
-        text.append(f"===== overdue open items ({mem}) =====\nThese items passed their 'open tot <date>'. Mention them to the "
-                    "user once at the start, do them when asked, or move the date with a reason:\n"
-                    + "\n".join(f"- {o}" for o in overdue))
-    return split_parts("\n\n".join(text))
+    return split_parts("\n\n".join(text + open_items_text(mem)))
+
+
+def open_items_text(mem: str) -> list[str]:
+    """Hand-overs between agents and overdue items, for every session start (guests too): a task line
+    "open tot <date> [<owner>, <ID>]: ..." in any memo of this project is listed until someone removes it."""
+    memos = {r: t for r, t, _ in index.items() if in_scope(r) and r.startswith(mem + "/")}
+    out, overdue = [], kb_lint.lint(memos, mem=mem)["open_overdue"]
+    tasks = [f"- {r.removeprefix(mem + '/')}: {line.strip().removeprefix('- ')}" for r, t in sorted(memos.items())
+             if "/archief/" not in r for line in t.splitlines() if (m := kb_lint.OPEN_DUE.search(line)) and m.group(2).startswith("[")]
+    if tasks:
+        out.append(f"===== open tasks between agents ({mem}) =====\nEach line names its owner. Yours: acknowledge it by adding "
+                   "'(bezig <owner>, <date>)' to that line with knowledge_edit, and when done remove the line from the "
+                   "memo's Stand (result to its archive). Others': leave them, but say so if one blocks you:\n" + "\n".join(tasks))
+    if overdue:
+        out.append(f"===== overdue open items ({mem}) =====\nThese items passed their 'open tot <date>'. Mention them to the "
+                   "user once at the start, do them when asked, or move the date with a reason:\n"
+                   + "\n".join(f"- {o}" for o in overdue))
+    return out
 
 
 def split_parts(text: str) -> list[str]:
