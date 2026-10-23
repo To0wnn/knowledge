@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Connect agy (Antigravity CLI) or Codex to the knowledge server, and run the knowledge plugin's hooks for them.
 
-Linux, macOS and Windows; standard library only. The token comes from KNOWLEDGE_TOKEN (TOKEN "-") or, on Anthony's VM,
-from the vault (TOKEN = a vault name). The session log falls back to ~/.config/knowledge-server/session.env, so the
+Linux, macOS and Windows; standard library only. The token (TOKEN "-") comes from KNOWLEDGE_TOKEN or the Linux keyring
+(secret-tool store --label="Knowledge server token" service knowledge), or on Anthony's VM from the vault (TOKEN = a vault name). The session log falls back to ~/.config/knowledge-server/session.env, so the
 agy/Codex tokens on the VM stay read-only (install always gives session-log "-").
 
+  knowledge-agent.py header [TOKEN]                 MCP header helper (Codex http_headers_helper): the token as JSON
   knowledge-agent.py install <agy|codex> [TOKEN]   one-time setup: checks the token, adds the MCP server, the hooks,
                                                    the house and development rules (GEMINI.md / AGENTS.md) and the
                                                    development skills (~/.agents/skills); safe to run again
@@ -26,6 +27,7 @@ from pathlib import Path
 HOOKS = Path(__file__).resolve().parent.parent / "plugin" / "hooks"
 sys.path.insert(0, str(HOOKS))
 import memory_mirror  # noqa: E402  (the offline copy of the memory, shared with the Claude plugin)
+import token_store  # noqa: E402  (KNOWLEDGE_TOKEN or the keyring, shared with the Claude plugin)
 URL = os.environ.get("KNOWLEDGE_URL", "https://knowledge.to0wnn.com").rstrip("/")
 CODEX = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")  # Codex's own override, as Codex reads it
 CONFIG = {"agy": Path.home() / ".gemini" / "config" / "hooks.json", "codex": CODEX / "hooks.json"}
@@ -35,8 +37,15 @@ BEGIN, END = "<!-- knowledge:house-rules (written by knowledge-agent.py install)
 
 def token(name: str) -> str:
     if name == "-":
-        return os.environ.get("KNOWLEDGE_TOKEN", "")
+        return token_store.token()
     return subprocess.run([str(Path.home() / ".local/bin/secret"), name], capture_output=True, text=True, check=True).stdout.strip()
+
+
+def helper_line(name: str) -> str:
+    """Codex config line: run this script's header command. json.dumps gives a valid TOML basic string (escapes)."""
+    exe, me = ("py" if os.name == "nt" and shutil.which("py") else sys.executable), str(Path(__file__).resolve())
+    q = lambda s: f'"{s}"' if " " in s else s
+    return "http_headers_helper = " + json.dumps(" ".join([q(exe), q(me), "header", name]))
 
 
 def hook_config(agent: str, name: str) -> dict:
@@ -68,36 +77,51 @@ def fetch(path: str, tok: str) -> str:
         return r.read().decode("utf-8")
 
 
-def install(agent: str, name: str):
-    """One-time setup; every step says what it did. Fails loudly: a wrong token or no connection stops here."""
-    tok = token(name)
-    if not tok:
-        sys.exit("No token: set KNOWLEDGE_TOKEN first (see the help page), then run this again.")
+def check(tok: str) -> str:
+    """The house rules, which also proves the token and the connection; stops with a plain reason otherwise."""
     try:
-        rules = fetch("/house-rules", tok)  # also proves the token and the connection
+        rules = fetch("/house-rules", tok)
     except urllib.error.HTTPError as e:
         sys.exit({401: "The server refuses this token (401): copied wrongly or revoked.",
                   403: "The server is only reachable from the home network or WireGuard (403)."}.get(e.code, f"Server answered HTTP {e.code}."))
     except OSError as e:
         sys.exit(f"Cannot reach {URL}: {e}")
     print(f"token ok ({URL})")
-    install_mcp(agent, tok)
+    return rules
+
+
+def install(agent: str, name: str):
+    """One-time setup; every step says what it did. Fails loudly: a wrong token or no connection stops here."""
+    tok = token(name)
+    if not tok:
+        sys.exit("No token: put the token in the keyring first (Windows: setx KNOWLEDGE_TOKEN; see the help page), then run this again.")
+    rules = check(tok)
+    install_mcp(agent, tok, name)
     install_hooks(agent, name)
     install_rules(agent, rules)
     install_skills()
     print("done" + ("; open codex and type /hooks once to trust the hooks" if agent == "codex" else "; start agy and ask it to search the knowledge"))
 
 
-def install_mcp(agent: str, tok: str):
-    if agent == "codex":  # Codex reads the token from KNOWLEDGE_TOKEN itself, so no token is written to a file
+def install_mcp(agent: str, tok: str, name: str = "-"):
+    if agent == "codex":  # Codex asks the header helper for the token, so no token is written to a file.
+        # shortcut: Windows keeps bearer_token_env_var (setx KNOWLEDGE_TOKEN): how Codex splits the helper there is untested.
         path = CODEX / "config.toml"
         text = path.read_text(encoding="utf-8") if path.exists() else ""
+        old = 'bearer_token_env_var = "KNOWLEDGE_TOKEN"'
         if "[mcp_servers.knowledge]" in text:
+            start = text.index("[mcp_servers.knowledge]")
+            end = text.find("\n[", start + 1)  # the next table, or the end of the file
+            end = len(text) if end < 0 else end
+            block = text[start:end]
+            if old in block and os.name != "nt":  # older setup: switch it to the helper (only this server's block)
+                path.write_text(text[:start] + block.replace(old, helper_line(name)) + text[end:], encoding="utf-8")
+                return print(f"MCP: {path} now takes the token from the header helper")
             return print(f"MCP: {path} already has [mcp_servers.knowledge], left as it is")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text.rstrip("\n") + ("\n\n" if text.strip() else "") + f'''[mcp_servers.knowledge]
 url = "{URL}/mcp"
-bearer_token_env_var = "KNOWLEDGE_TOKEN"
+{helper_line(name) if os.name != "nt" else old}
 default_tools_approval_mode = "writes"
 startup_timeout_sec = 15
 ''', encoding="utf-8")
@@ -197,7 +221,10 @@ def context(agent: str, tok: str):
 
 def main(argv: list):
     cmd = argv[0] if argv else ""
-    if cmd == "install" and len(argv) >= 2 and argv[1] in CONFIG:
+    if cmd == "header" and len(argv) <= 2:
+        tok = token(argv[1] if len(argv) == 2 else "-")
+        print(json.dumps({"Authorization": f"Bearer {tok}"} if tok else {}))
+    elif cmd == "install" and len(argv) >= 2 and argv[1] in CONFIG:
         install(argv[1], argv[2] if len(argv) > 2 else "-")
     elif cmd == "context" and len(argv) == 3 and argv[1] in CONFIG:
         context(argv[1], token(argv[2]))
@@ -215,6 +242,7 @@ if __name__ == "__main__":
         assert len(c["SessionStart"]) == 1 and c["SessionEnd"][0]["hooks"][0]["timeout"] <= 3
         a = hook_config("agy", "X")["knowledge"]
         assert a["Stop"][0]["command"].endswith("session-log -") and a["SessionStart"][0]["command"].endswith("context agy X")
+        assert helper_line("-").startswith('http_headers_helper = "') and helper_line("-").endswith(' header -"')
         print("ok")
     else:
         try:

@@ -3,7 +3,10 @@
     "knowledge": {
       "type": "http",
       "url": "${user_config.url}/mcp",
-      "headers": { "Authorization": "Bearer ${user_config.token}" }
+      "headers": {
+        "Authorization": "Bearer ${user_config.token}"
+      },
+      "headersHelper": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/token-header.sh\""
     }
   }
 }

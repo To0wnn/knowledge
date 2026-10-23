@@ -9,6 +9,7 @@ Also takes the hook input of Codex (apply_patch: the paths are in the patch text
 outside the Claude plugin the URL and token come from KNOWLEDGE_URL and KNOWLEDGE_TOKEN.
 """
 import json
+import token_store
 import os
 import re
 import sys
@@ -36,6 +37,8 @@ def edited_paths(hook: dict) -> list:
 
 
 def option(name: str, default: str = "") -> str:
+    if name == "token":  # one lookup order for every hook and the MCP header: token_store.py
+        return token_store.token()
     return os.environ.get(f"CLAUDE_PLUGIN_OPTION_{name.upper()}", os.environ.get(f"CLAUDE_PLUGIN_OPTION_{name}")) \
         or os.environ.get(f"KNOWLEDGE_{name.upper()}", default)
 

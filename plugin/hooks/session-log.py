@@ -14,6 +14,7 @@ Config: KNOWLEDGE_URL + KNOWLEDGE_TOKEN, or the plugin options (CLAUDE_PLUGIN_OP
 ~/.config/knowledge-server/session.env on the VM.
 """
 import json
+import token_store
 import os
 import re
 import sys
@@ -36,7 +37,7 @@ def config() -> tuple[str, str]:
                 env.setdefault(k.strip(), v.strip())
     url = env.get("KNOWLEDGE_URL") or env.get("CLAUDE_PLUGIN_OPTION_URL") or env.get("CLAUDE_PLUGIN_OPTION_url") \
         or "https://knowledge.to0wnn.com"
-    token = env.get("KNOWLEDGE_TOKEN") or env.get("CLAUDE_PLUGIN_OPTION_TOKEN") or env.get("CLAUDE_PLUGIN_OPTION_token", "")
+    token = env.get("KNOWLEDGE_TOKEN") or token_store.token()  # env includes session.env (the VM's sessions token)
     return url.rstrip("/"), token
 
 

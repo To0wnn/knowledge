@@ -47,6 +47,10 @@ def call(tool, args, token="rw-token"):
 
 
 def main():
+    # Every command block on the help page must paste in one go: zsh runs a "# ..." line as a command (help 23 Oct 2026).
+    import html as _html
+    blocks = re.findall(r"<pre>(.*?)</pre>", (Path(__file__).parent / "static" / "help.html").read_text(), re.S)
+    assert blocks and not [b for b in blocks if re.search(r"(^|\s)#", _html.unescape(b), re.M)], "help.html: # in a <pre>"
     tmp = Path(tempfile.mkdtemp())
     mem, lab, cla = tmp / "memory", tmp / "homelab", tmp / "claude"
     for d in (mem, lab, cla / "skills/x"):

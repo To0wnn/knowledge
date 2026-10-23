@@ -18,6 +18,7 @@ next to it (<name>.offline-<time>.md) and knowledge_lint asks to merge. Standard
 """
 import hashlib
 import json
+import token_store
 import os
 import subprocess
 import sys
@@ -32,7 +33,9 @@ MAX_REMOVALS = 5  # more skills or memos gone from the server in one sync looks 
 SKILL_EXT = {".md", ".py", ".sh", ".json", ".txt", ".yaml", ".yml", ".toml", ".js", ".html", ".css", ".xml", ".xsd"}  # = server
 
 
-def option(name: str, default: str = "") -> str:  # same lookup as docs-sync.py: plugin option, else KNOWLEDGE_*
+def option(name: str, default: str = "") -> str:
+    if name == "token":  # one lookup order for every hook and the MCP header: token_store.py
+        return token_store.token()  # same lookup as docs-sync.py: plugin option, else KNOWLEDGE_*
     return os.environ.get(f"CLAUDE_PLUGIN_OPTION_{name.upper()}", os.environ.get(f"CLAUDE_PLUGIN_OPTION_{name}")) \
         or os.environ.get(f"KNOWLEDGE_{name.upper()}", default)
 
