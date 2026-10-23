@@ -384,6 +384,9 @@ The same `plugin/` folder installs in Codex and agy, so every agent gets the sam
 - Windows: the MCP command is `python3`, which a stock python.org install may lack; Windows keeps
   `clients/knowledge-agent.py install codex|agy` until that is tested on a real PC. Devices that ran the setup
   script remove its knowledge entries before installing the plugin, else server and hooks load twice.
+- Anthony's VM (no keyring): agy runs the plugin with `KNOWLEDGE_TOKEN` from the vault through an `agy()` function
+  in `~/.zshenv` (read by every zsh, so tmux commands and Claude Code calling agy get it too); VM Codex keeps the
+  vault header helper `clients/knowledge-mcp-header`.
 4. Turn off local auto memory on that device so it does not build a second memory:
    `"autoMemoryEnabled": false` in `~/.claude/settings.json`.
 5. Start a session: the first lines show `[knowledge context part 1/2]`; `/mcp` lists `knowledge`.
