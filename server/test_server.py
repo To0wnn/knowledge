@@ -180,6 +180,13 @@ def main():
         assert "plan_archief.md:1" in call("knowledge_search", {"pattern": "zebra", "root": "trade-memory", "archive": True})[1]
         res = call("knowledge_search", {"pattern": "old zebra", "root": "trade-memory"})[1]
         assert res.startswith("(no matches)") and "1 more file(s) in the archive" in res, res
+        from datetime import date as d_, timedelta as td_
+        recent, old = d_.today().isoformat(), (d_.today() - td_(days=30)).isoformat()
+        call("knowledge_write", {"path": "trade-memory/sessions/2026-01.md", "content":
+             f"# Sessions\n\n## {old} 10:00 · trade · pc · end · session a\n- Asked: giraffe old\n\n## {recent} 10:00 · trade · pc · end · session b\n- Asked: giraffe new\n"})
+        res = call("knowledge_search", {"pattern": "giraffe", "root": "trade-memory"})[1]
+        assert "giraffe new" in res and "giraffe old" not in res and "1 more file(s) in the archive" in res, res
+        assert "giraffe old" in call("knowledge_search", {"pattern": "giraffe", "root": "trade-memory", "archive": True})[1]
         import server as srv
         assert srv.is_archive("a350/docs/history/x.md") and srv.is_archive("a/requests/archief-2026-10-23/x.md")
         assert not srv.is_archive("a350/old.md") and not srv.is_archive("memory/project_old.md")

@@ -182,7 +182,7 @@ class Vectors:
         out, per_file = [], {}
         for i in np.argsort(-scores):
             rel, line, chunk = rows[i]
-            if roots and not rel.startswith(roots) or skip and skip(rel):
+            if roots and not rel.startswith(roots) or skip and skip(rel, line):
                 continue
             if per_file.get(rel, 0) >= 2:  # at most two passages per file, so one long file cannot fill the list
                 continue
