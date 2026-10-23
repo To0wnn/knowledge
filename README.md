@@ -355,8 +355,11 @@ read it with `EnvironmentFile`; `token.py` and `tests/ui_smoke.py` load it thems
    The token goes into the keyring (prompt, not shown), so it is in no file: not in shell history, not in
    `~/.claude/.credentials.json` (where a plugin setting marked "sensitive" lands on Linux, as plain JSON). The plugin's
    `headersHelper` (`plugin/hooks/token-header.sh` → `token_store.py header`) and its hooks read it from there, and so
-   does Codex (`http_headers_helper`). Lookup order: `KNOWLEDGE_TOKEN`, the plugin setting `token` (older installs and
-   Windows, where the keyring is not supported yet), the keyring. One token per device for every agent on it. Set `"autoUpdate": true` on the marketplace in
+   does Codex (`http_headers_helper`). Lookup order: `KNOWLEDGE_TOKEN`, the keyring, the plugin setting `token` (older
+   installs, Windows, machines without a keyring). One token per device for every agent on it.
+   A server or container without a desktop has no keyring (no Secret Service, e.g. the GEMA CT): there Claude keeps
+   the plugin setting (`claude plugin configure`) and Codex/agy `KNOWLEDGE_TOKEN` in `~/.profile`; the helper then
+   prints `{}` and the static plugin header applies (tested on CT 113 with plugin 0.8.1). Set `"autoUpdate": true` on the marketplace in
    `extraKnownMarketplaces`; installed copies only update when `plugin/.claude-plugin/plugin.json` gets a new `version`.
 4. Turn off local auto memory on that device so it does not build a second memory:
    `"autoMemoryEnabled": false` in `~/.claude/settings.json`.

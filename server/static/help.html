@@ -82,7 +82,9 @@ claude plugin install knowledge@knowledge --scope user</pre><button class="copy"
       <li><b>Put the token in the keyring</b>
         Paste the token you received at the <code>Password:</code> prompt (it is not shown). Every agent on this computer reads it from there; it is in no file.
         <div class="cmd"><pre>secret-tool store --label="Knowledge server token" service knowledge</pre><button class="copy" type="button">Copy</button></div>
-        No <code>secret-tool</code>? Install <code>libsecret</code> (Arch) or <code>libsecret-tools</code> (Debian/Ubuntu).</li>
+        No <code>secret-tool</code>? Install <code>libsecret</code> (Arch) or <code>libsecret-tools</code> (Debian/Ubuntu).
+        A server or container without a desktop has no keyring: there give the token to the plugin instead (URL <code>https://knowledge.to0wnn.com</code>, then the token); it is kept in <code>~/.claude/.credentials.json</code>, readable only by you.
+        <div class="cmd"><pre>claude plugin configure knowledge@knowledge</pre><button class="copy" type="button">Copy</button></div></li>
       <li><b>Turn local auto memory off</b>
         Add this line to <code>~/.claude/settings.json</code>; your memory is on the server, so Claude does not also write it locally:
         <div class="cmd"><pre>"autoMemoryEnabled": false</pre><button class="copy" type="button">Copy</button></div></li>
@@ -121,7 +123,9 @@ claude plugin install knowledge@knowledge --scope user</pre><button class="copy"
       <li><b>Put the token in the keyring</b>
         Paste the token you received at the <code>Password:</code> prompt (it is not shown). Every agent on this computer reads it from there; it is in no file.
         <div class="cmd"><pre>secret-tool store --label="Knowledge server token" service knowledge</pre><button class="copy" type="button">Copy</button></div>
-        No <code>secret-tool</code>? Install <code>libsecret</code> (Arch) or <code>libsecret-tools</code> (Debian/Ubuntu).</li>
+        No <code>secret-tool</code>? Install <code>libsecret</code> (Arch) or <code>libsecret-tools</code> (Debian/Ubuntu).
+        A server or container without a desktop has no keyring: there put the token in your profile instead, then log in again.
+        <div class="cmd"><pre>echo 'export KNOWLEDGE_TOKEN="YOUR_TOKEN"' &gt;&gt; ~/.profile</pre><button class="copy" type="button">Copy</button></div></li>
       <li><b>Get the knowledge scripts and run the setup</b>
         <div class="cmd"><pre>git -C ~/knowledge pull 2&gt;/dev/null || git clone https://github.com/To0wnn/knowledge ~/knowledge
 python3 ~/knowledge/clients/knowledge-agent.py install agy</pre><button class="copy" type="button">Copy</button></div>
@@ -168,7 +172,9 @@ py $HOME\knowledge\clients\knowledge-agent.py install agy</pre><button class="co
       <li><b>Put the token in the keyring</b>
         Paste the token you received at the <code>Password:</code> prompt (it is not shown). Every agent on this computer reads it from there; it is in no file.
         <div class="cmd"><pre>secret-tool store --label="Knowledge server token" service knowledge</pre><button class="copy" type="button">Copy</button></div>
-        No <code>secret-tool</code>? Install <code>libsecret</code> (Arch) or <code>libsecret-tools</code> (Debian/Ubuntu).</li>
+        No <code>secret-tool</code>? Install <code>libsecret</code> (Arch) or <code>libsecret-tools</code> (Debian/Ubuntu).
+        A server or container without a desktop has no keyring: there put the token in your profile instead, then log in again.
+        <div class="cmd"><pre>echo 'export KNOWLEDGE_TOKEN="YOUR_TOKEN"' &gt;&gt; ~/.profile</pre><button class="copy" type="button">Copy</button></div></li>
       <li><b>Get the knowledge scripts and run the setup</b>
         <div class="cmd"><pre>git -C ~/knowledge pull 2&gt;/dev/null || git clone https://github.com/To0wnn/knowledge ~/knowledge
 python3 ~/knowledge/clients/knowledge-agent.py install codex</pre><button class="copy" type="button">Copy</button></div>
