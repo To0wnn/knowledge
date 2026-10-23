@@ -41,6 +41,12 @@ def helper_line(name: str) -> str:
     return "http_headers_helper = " + json.dumps(" ".join([q(exe), q(me), "header", name]))
 
 
+def relay(name: str) -> tuple:
+    """(command, args) of the stdio MCP relay in plugin/hooks/agent_hooks.py: the token stays in its memory."""
+    exe = "py" if os.name == "nt" and shutil.which("py") else sys.executable
+    return exe, ["-X", "utf8", str(HOOKS / "agent_hooks.py"), "mcp", name]
+
+
 def hook_config(agent: str, name: str) -> dict:
     # Windows: the py launcher (C:\Windows\py.exe, no spaces): a quoted interpreter path would not run in PowerShell.
     exe, me = ("py" if os.name == "nt" and shutil.which("py") else sys.executable), str(Path(__file__).resolve())
@@ -90,9 +96,9 @@ def install(agent: str, name: str):
     """One-time setup; every step says what it did. Fails loudly: a wrong token or no connection stops here."""
     tok = token(name)
     if not tok:
-        sys.exit("No token: put the token in the keyring first (Windows: setx KNOWLEDGE_TOKEN; see the help page), then run this again.")
+        sys.exit("No token: put the token in the keyring first (Windows: cmdkey /generic:knowledge /user:knowledge /pass; see the help page), then run this again.")
     rules = check(tok)
-    if install_mcp(agent, tok, name):
+    if install_mcp(agent, name):
         restart_codex() if agent == "codex" else say_restart("agy")
     install_hooks(agent, name)
     install_rules(agent, rules)
@@ -100,9 +106,19 @@ def install(agent: str, name: str):
     print("done" + ("; open codex and type /hooks once to trust the hooks" if agent == "codex" else "; start agy and ask it to search the knowledge"))
 
 
-def install_mcp(agent: str, tok: str, name: str = "-"):
-    if agent == "codex":  # Codex asks the header helper for the token, so no token is written to a file.
-        # shortcut: Windows keeps bearer_token_env_var (setx KNOWLEDGE_TOKEN): how Codex splits the helper there is untested.
+def codex_block(name: str) -> str:
+    """[mcp_servers.knowledge] without a token: the header helper on Linux/macOS, the stdio relay on Windows (a
+    helper command line there is split in ways we could not test). json.dumps gives valid TOML strings and arrays."""
+    if os.name != "nt":
+        how = f'url = "{URL}/mcp"\n{helper_line(name)}'
+    else:
+        exe, args = relay(name)
+        how = f'command = {json.dumps(exe)}\nargs = {json.dumps(args)}\nenv_vars = ["KNOWLEDGE_TOKEN", "KNOWLEDGE_URL"]'
+    return f'[mcp_servers.knowledge]\n{how}\ndefault_tools_approval_mode = "writes"\nstartup_timeout_sec = 15\n'
+
+
+def install_mcp(agent: str, name: str = "-"):
+    if agent == "codex":  # no token is written to a file: the header helper or the stdio relay fetches it
         path = CODEX / "config.toml"
         text = path.read_text(encoding="utf-8") if path.exists() else ""
         old = 'bearer_token_env_var = "KNOWLEDGE_TOKEN"'
@@ -111,32 +127,28 @@ def install_mcp(agent: str, tok: str, name: str = "-"):
             end = text.find("\n[", start + 1)  # the next table, or the end of the file
             end = len(text) if end < 0 else end
             block = text[start:end]
-            if old in block and os.name != "nt":  # older setup: switch it to the helper (only this server's block)
-                path.write_text(text[:start] + block.replace(old, helper_line(name)) + text[end:], encoding="utf-8")
-                print(f"MCP: {path} now takes the token from the header helper")
+            if old in block:  # older setup that read KNOWLEDGE_TOKEN: replace this server's block only
+                path.write_text(text[:start] + codex_block(name).rstrip("\n") + text[end:], encoding="utf-8")
+                print(f"MCP: {path} now gets the token without KNOWLEDGE_TOKEN in a config")
                 return True
             print(f"MCP: {path} already has [mcp_servers.knowledge], left as it is")
             return False
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text.rstrip("\n") + ("\n\n" if text.strip() else "") + f'''[mcp_servers.knowledge]
-url = "{URL}/mcp"
-{helper_line(name) if os.name != "nt" else old}
-default_tools_approval_mode = "writes"
-startup_timeout_sec = 15
-''', encoding="utf-8")
+        path.write_text(text.rstrip("\n") + ("\n\n" if text.strip() else "") + codex_block(name), encoding="utf-8")
         print(f"MCP: added the knowledge server to {path} (Codex asks before it writes)")
         return True
-    path = Path.home() / ".gemini" / "config" / "mcp_config.json"  # agy keeps the header in this file
+    # agy sends a ${VAR} header as is, so the stdio relay fetches the token; an older entry held it in plain text.
+    path = Path.home() / ".gemini" / "config" / "mcp_config.json"
     data = json.loads(path.read_text(encoding="utf-8-sig")) if path.exists() else {}
-    if "knowledge" in data.get("mcpServers", {}):
+    had = data.get("mcpServers", {}).get("knowledge")
+    if had and "headers" not in had:
         print(f"MCP: {path} already has 'knowledge', left as it is")
         return False
-    data.setdefault("mcpServers", {})["knowledge"] = {"serverUrl": f"{URL}/mcp", "headers": {"Authorization": f"Bearer {tok}"}}
+    exe, args = relay(name)
+    data.setdefault("mcpServers", {})["knowledge"] = {"command": exe, "args": args}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    if os.name != "nt":
-        path.chmod(0o600)  # the token is in it
-    print(f"MCP: added the knowledge server to {path}" + ("" if os.name != "nt" else " (holds the token: keep the file to yourself)"))
+    print(f"MCP: {path} " + ("no longer holds the token (it runs the relay)" if had else "runs the knowledge server's relay"))
     return True
 
 
