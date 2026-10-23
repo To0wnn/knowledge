@@ -409,6 +409,38 @@ def agy_plugin(tok: str, home: Path, project: Path, garden: Path):
           "agy: plugin listed and enabled, with its MCP server and hooks", out + err)
 
 
+def relay_errors(home: Path):
+    """The stdio MCP relay survives a server that answers HTML instead of JSON: every request (also in a batch)
+    gets an error reply and the relay keeps serving (review 23 Oct 2026: it used to exit and leave the session without
+    knowledge tools)."""
+    import http.server
+    import threading
+
+    class Bad(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", "20")
+            self.end_headers()
+            self.wfile.write(b"<html>maintenance</html>"[:20])
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Bad)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    env = user_env(home, KNOWLEDGE_URL=f"http://127.0.0.1:{srv.server_address[1]}", KNOWLEDGE_TOKEN="x")
+    lines = [{"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+             [{"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, {"jsonrpc": "2.0", "method": "notifications/initialized"}],
+             {"jsonrpc": "2.0", "id": 3, "method": "tools/list"}]
+    stdin = "".join(json.dumps(x) + "\n" for x in lines)
+    code, out, err = run([sys.executable, "-X", "utf8", str(CLIENT / "plugin" / "hooks" / "agent_hooks.py"), "mcp"], stdin, env, timeout=60)
+    srv.shutdown()
+    ids = sorted(json.loads(x)["id"] for x in out.splitlines() if x.strip())
+    check(ids == [1, 2, 3] and "skipped" not in err, "relay: a non-JSON reply and a batch each get an error, the relay keeps serving", out + err)
+
+
 def real_clis(tok: str, home: Path):
     """The real Claude Code and Codex CLIs, when installed: they accept what we install."""
     claude, codex = shutil.which("claude"), shutil.which("codex")
@@ -452,6 +484,7 @@ def main():
         agents(tok, home, project, garden)
         codex_plugin(tok, tmp / "Codex Usér", project)  # its own home: the plugin next to the setup's server would clash
         agy_plugin(tok, home, project, garden)
+        relay_errors(home)
         real_clis(tok, home)
     finally:
         proc.kill()

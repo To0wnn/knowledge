@@ -51,6 +51,10 @@ def main():
     import html as _html
     blocks = re.findall(r"<pre>(.*?)</pre>", (Path(__file__).parent / "static" / "help.html").read_text(), re.S)
     assert blocks and not [b for b in blocks if re.search(r"(^|\s)#", _html.unescape(b), re.M)], "help.html: # in a <pre>"
+    # One plugin version for every agent, or one of them never sees an update.
+    versions = {json.loads((Path(__file__).parent.parent / "plugin" / d / "plugin.json").read_text())["version"]
+                for d in (".claude-plugin", ".codex-plugin")}
+    assert len(versions) == 1, f"plugin versions differ: {versions}"
     tmp = Path(tempfile.mkdtemp())
     mem, lab, cla = tmp / "memory", tmp / "homelab", tmp / "claude"
     for d in (mem, lab, cla / "skills/x"):
