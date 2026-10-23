@@ -25,6 +25,7 @@ import tempfile
 import threading
 import time
 import urllib.parse
+import urllib.request
 from contextvars import ContextVar
 from pathlib import Path, PurePosixPath
 
@@ -386,9 +387,12 @@ def may_write(rel: str) -> bool:
     return not write_refusal(rel)
 
 
-def check_writable(rel: str):
+def check_writable(rel: str, grows: bool = True):
     if reason := write_refusal(rel):
         raise ToolError(reason)
+    # shortcut: the write that crosses the limit still lands (at most one file, <= 2 MB), every later one is refused.
+    if grows and (p := ui_project_of(rel)) and project_bytes(p) > PROJECT_MAX_MB * 1_000_000:
+        raise ToolError(f"project {p} is full ({PROJECT_MAX_MB} MB): delete or shorten files first")
 
 
 def audit(action: str, rel: str):
@@ -761,7 +765,7 @@ async def knowledge_delete(path: str, base_version: str) -> str:
     refused if the file changed since. A copy is kept on the server (state/deleted/), so nothing is lost for good.
     Also remove its line from memory/MEMORY.md with knowledge_edit."""
     full, rel = resolve(path)
-    check_writable(rel)
+    check_writable(rel, grows=False)  # a full project must still be able to shrink
     async with _locks.setdefault(rel, asyncio.Lock()):
         if not full.exists():
             raise ToolError(f"{rel} does not exist")
@@ -1117,10 +1121,34 @@ def token_device(given: str) -> dict | None:
     if not hit:
         return None
     name, cfg = hit
+    dev = {"name": name, "write": bool(cfg.get("write")), "watch": bool(cfg.get("watch")),
+           "roots": cfg.get("roots") or [], "redact": bool(cfg.get("redact")),
+           "write_roots": cfg.get("write_roots")}  # None: may write every root it reads (a PA: reads all, writes memory)
+    if cfg.get("owner"):  # made by a person on the admin page: never more than that person may do right now
+        if not (dev := owned_scope(dev, user_device(cfg["owner"]))):
+            return None
     mark_used(name)
-    return {"name": name, "write": bool(cfg.get("write")), "watch": bool(cfg.get("watch")),
-            "roots": cfg.get("roots") or [], "redact": bool(cfg.get("redact")),
-            "write_roots": cfg.get("write_roots")}  # None: may write every root it reads (a PA: reads all, writes memory)
+    return dev
+
+
+def owned_scope(dev: dict, user: dict | None) -> dict | None:
+    """A person's token: its own roots, cut to what the owner may read and write now (access taken away = gone)."""
+    if not user:
+        return None
+    if user.get("admin"):
+        return dev
+    roots = [r for r in dev["roots"] if r in user["roots"]]
+    if not roots:  # empty roots would mean "everything"
+        return None
+    write_roots = [r for r in roots if r in user["write_roots"]] if dev["write"] else []
+    return {**dev, "roots": roots, "write_roots": write_roots, "write": bool(write_roots), "watch": False}
+
+
+assert owned_scope({"roots": ["a", "a-memory", "b"], "write": True, "watch": True},
+                   {"roots": ["a", "a-memory"], "write_roots": ["a-memory"]}) == \
+    {"roots": ["a", "a-memory"], "write": True, "write_roots": ["a-memory"], "watch": False}
+assert owned_scope({"roots": ["b"], "write": False, "watch": False}, {"roots": ["a"], "write_roots": []}) is None
+assert owned_scope({"roots": ["a"], "write": False}, None) is None
 
 
 def write_json(path: Path, data):
@@ -1152,6 +1180,22 @@ def read_json(path: Path, default):
 # ---------------------------------------------------------------- projects created in the web UI
 BUILTIN_PROJECTS = frozenset(PROJECTS)
 PROJECT_NAME = re.compile(r"^[a-z][a-z0-9]{1,23}$")  # no "-": "<name>-memory" must never clash with another root
+# Hard limits for what people who are not admins create themselves (23 Oct 2026); defaults, the admin page Settings
+# may change them. Measured: the largest built-in project holds ~5 MB of Markdown in ~270 files, gema 0.35 MB.
+USER_MAX_PROJECTS = 3
+USER_MAX_TOKENS = 5
+PROJECT_MAX_MB = 20  # every project created in the UI, by an admin or not
+
+
+def ui_project_of(rel: str) -> str | None:
+    root = rel.split("/", 1)[0]
+    return next((p for p, roots in list(PROJECTS.items()) if root in roots and p not in BUILTIN_PROJECTS), None)
+
+
+def project_bytes(project: str) -> int:
+    roots = PROJECTS[project]
+    with index.lock:
+        return sum(v[1] for rel, v in index.files.items() if rel.split("/", 1)[0] in roots)
 
 
 def mount_project(name: str):
@@ -1595,9 +1639,9 @@ TOKEN_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$")
 _admin_lock = asyncio.Lock()
 
 
-def admin_only(handler):
+def admin_only(handler, everyone: bool = False):
     async def wrapped(request: Request):
-        if not device.get().get("admin"):
+        if not everyone and not device.get().get("admin"):
             return JSONResponse({"error": "admins only"}, status_code=403)
         try:
             async with _admin_lock:
@@ -1608,6 +1652,32 @@ def admin_only(handler):
             return JSONResponse({"error": str(e)}, status_code=400)
     wrapped.__name__ = handler.__name__
     return wrapped
+
+
+def signed_in(handler):
+    """Like admin_only, for every signed-in person; the handler itself limits what non-admins may do."""
+    return admin_only(handler, everyone=True)
+
+
+def notify(text: str):
+    """One Matrix message to the admin room, in the background: a failure never fails the request, but shows on the
+    admin page (System) and in the container log."""
+    url, room, token = (os.environ.get(k, "") for k in ("KNOWLEDGE_MATRIX_URL", "KNOWLEDGE_MATRIX_ROOM", "KNOWLEDGE_MATRIX_TOKEN"))
+
+    def send():
+        try:
+            if not (url and room and token):
+                raise RuntimeError("KNOWLEDGE_MATRIX_URL/ROOM/TOKEN not set")
+            req = urllib.request.Request(
+                f"{url}/_matrix/client/v3/rooms/{urllib.parse.quote(room)}/send/m.room.message/kn-{time.time_ns()}",
+                method="PUT", data=json.dumps({"msgtype": "m.text", "body": text}).encode(),
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=15).close()
+            BACKGROUND["matrix"] = {"at": time.time(), "detail": "last message sent"}
+        except Exception as e:
+            BACKGROUND["matrix"] = {"at": time.time(), "error": f"Matrix message failed: {e}"}
+            print(f"matrix: {e}: {text}", flush=True)
+    threading.Thread(target=send, daemon=True).start()
 
 
 @server.custom_route("/ui/help", methods=["GET"])
@@ -1622,9 +1692,7 @@ async def ui_help_page(request: Request):
 
 @server.custom_route("/ui/admin", methods=["GET"])
 async def ui_admin_page(request: Request):
-    if not device.get().get("admin"):
-        return HTMLResponse(NO_ACCESS.format(msg="Admins only."), 403)
-    return page("admin.html")
+    return page("admin.html")  # non-admins see only their own tokens and projects (the API decides)
 
 
 # Settings the admin page may change: policy, not infrastructure. Paths, hosts, proxy IPs and the port stay in
@@ -1637,13 +1705,17 @@ SETTINGS = {  # key: (type, min, max, label)
     "review_after_days": (int, 7, 365, "Lint: days without a check before a memo with IPs/versions is due for review"),
     "big_memo": (int, 5000, 100000, "Lint: memo size in bytes from which history should move to the archive"),
     "rescan_seconds": (int, 15, 3600, "Safety-net rescan of all files, in seconds (the VM watcher reports changes at once)"),
+    "user_max_projects": (int, 0, 50, "People (not admins): projects each may create themselves"),
+    "user_max_tokens": (int, 0, 50, "People (not admins): device tokens each may hold"),
+    "project_max_mb": (int, 1, 1000, "Projects made in the UI: maximum size in MB, then writes are refused"),
 }
 
 
 def current_settings() -> dict:
     return {"similar_hint": SIMILAR_HINT, "history_keep": HISTORY_KEEP, "stale_unchecked_days": kb_lint.STALE_UNCHECKED_DAYS,
             "review_after_days": kb_lint.REVIEW_AFTER_DAYS,
-            "big_memo": kb_lint.BIG_MEMO, "rescan_seconds": RESCAN_SECONDS, "extra_admins": sorted(ADMINS - CONFIG_ADMINS)}
+            "big_memo": kb_lint.BIG_MEMO, "rescan_seconds": RESCAN_SECONDS, "user_max_projects": USER_MAX_PROJECTS,
+            "user_max_tokens": USER_MAX_TOKENS, "project_max_mb": PROJECT_MAX_MB, "extra_admins": sorted(ADMINS - CONFIG_ADMINS)}
 
 
 def check_settings(values: dict) -> dict:
@@ -1670,7 +1742,10 @@ def check_settings(values: dict) -> dict:
 
 
 def apply_settings(values: dict):
-    global SIMILAR_HINT, HISTORY_KEEP, RESCAN_SECONDS
+    global SIMILAR_HINT, HISTORY_KEEP, RESCAN_SECONDS, USER_MAX_PROJECTS, USER_MAX_TOKENS, PROJECT_MAX_MB
+    USER_MAX_PROJECTS = values.get("user_max_projects", USER_MAX_PROJECTS)
+    USER_MAX_TOKENS = values.get("user_max_tokens", USER_MAX_TOKENS)
+    PROJECT_MAX_MB = values.get("project_max_mb", PROJECT_MAX_MB)
     SIMILAR_HINT = values.get("similar_hint", SIMILAR_HINT)
     HISTORY_KEEP = values.get("history_keep", HISTORY_KEEP)
     RESCAN_SECONDS = values.get("rescan_seconds", RESCAN_SECONDS)
@@ -1726,6 +1801,8 @@ def system_state() -> dict:
             {"name": "History", "what": f"keeps up to {HISTORY_KEEP} versions per file", "last": None,
              "detail": f"{len(HISTORY_FAILED)} failed writes" if HISTORY_FAILED else "no failed writes"},
             *([{"name": "Settings", "what": "settings.json", "last": BACKGROUND["settings"]["at"], "detail": BACKGROUND["settings"]["error"]}] if "settings" in BACKGROUND else []),
+            *([{"name": "Matrix", "what": "tells the admin about projects and tokens people made", "last": BACKGROUND["matrix"]["at"],
+                "detail": BACKGROUND["matrix"].get("error") or BACKGROUND["matrix"]["detail"]}] if "matrix" in BACKGROUND else []),
         ],
         "index": [{"root": r, "path": str(ROOTS.get(r, "")), "files": n, "mb": round(b / 1e6, 1)} for r, (n, b) in sorted(per_root.items())],
         "config": [  # where each value is set: change it there, then deploy
@@ -1757,10 +1834,22 @@ async def ui_admin_settings(request: Request, body: dict):
 
 
 @server.custom_route("/ui/api/admin", methods=["GET"])
-@admin_only
+@signed_in
 async def ui_admin_state(request: Request, _):
     tokens = read_json(TOKENS_FILE, {})
-    return JSONResponse({
+    dev = device.get()
+    if not dev.get("admin"):
+        me = read_json(USERS_FILE, {}).get(dev["user"], {})
+        return JSONResponse({
+            "admin": False, "user": dev["user"],
+            "projects": [{"name": p, "docs": d, "memory": m, "builtin": p in BUILTIN_PROJECTS,
+                          "mode": me.get("projects", {}).get(p)} for p, (d, m) in list(PROJECTS.items()) if d in dev["roots"]],
+            "tokens": [{"name": n, **{k: v for k, v in cfg.items() if k != "sha256"}, "last_used": last_used(n)}
+                       for n, cfg in sorted(tokens.items()) if cfg.get("owner") == dev["user"]],
+            "limits": {"projects": USER_MAX_PROJECTS, "tokens": USER_MAX_TOKENS, "project_mb": PROJECT_MAX_MB,
+                       "created": len(me.get("created", []))},
+        })
+    return JSONResponse({"admin": True,
         "admins": sorted(ADMINS),
         "users": read_json(USERS_FILE, {}),
         "projects": [{"name": p, "docs": d, "memory": m, "builtin": p in BUILTIN_PROJECTS} for p, (d, m) in PROJECTS.items()],
@@ -1797,11 +1886,24 @@ async def ui_admin_user(request: Request, body: dict):
 
 
 @server.custom_route("/ui/api/admin/project", methods=["POST"])
-@admin_only
+@signed_in
 async def ui_admin_project(request: Request, body: dict):
     name = str(body["name"]).strip()
+    dev = device.get()
+    users = dict(read_json(USERS_FILE, {}))
+    if not dev.get("admin"):
+        me = users.get(dev["user"], {})
+        if len(me.get("created", [])) >= USER_MAX_PROJECTS:
+            raise ToolError(f"you may create {USER_MAX_PROJECTS} projects; ask the admin for more")
     mems = {m for _, m in PROJECTS.values()}  # the memory roots before the new project
     await asyncio.to_thread(create_project, name)
+    if not dev.get("admin"):  # the maker may edit it; the admin sees it under People
+        me = users.get(dev["user"], {})
+        users[dev["user"]] = {**me, "projects": {**me.get("projects", {}), name: "write"},
+                              "created": [*me.get("created", []), name]}
+        write_json(USERS_FILE, users)
+    if not dev.get("admin"):
+        notify(f"Knowledge: {dev['user']} created project {name} (limit {PROJECT_MAX_MB} MB); see admin page, Projects.")
     # A token that sees the memory of every project (vm-sessions: session logs, VM sessions) also gets the new one;
     # otherwise its links into the new project look dead and its sessions cannot read that memory.
     tokens = dict(read_json(TOKENS_FILE, {}))
@@ -1815,12 +1917,32 @@ async def ui_admin_project(request: Request, body: dict):
 
 
 @server.custom_route("/ui/api/admin/token", methods=["POST"])
-@admin_only
+@signed_in
 async def ui_admin_token(request: Request, body: dict):
     """Create {"name", "write", "roots": [...] (empty = all), "redact"} -> the token, shown once; or {"name", "revoke": true}.
-    Only the SHA-256 is stored, so a lost token cannot be shown again: revoke it and make a new one."""
+    Only the SHA-256 is stored, so a lost token cannot be shown again: revoke it and make a new one.
+    A non-admin only makes and revokes their own tokens ("<user>.<name>", "owner"), within their projects and the limit;
+    token_device cuts such a token to the owner's access at every request."""
     name = str(body["name"]).strip()
     tokens = dict(read_json(TOKENS_FILE, {}))
+    dev = device.get()
+    owner = None if dev.get("admin") else dev["user"]
+    if owner:
+        prefix = re.sub(r"[^A-Za-z0-9._-]", "-", owner) + "."
+        if body.get("revoke"):
+            if tokens.get(name, {}).get("owner") != owner:
+                raise ToolError(f"no token {name} of yours")
+        else:
+            name = prefix + name.removeprefix(prefix)
+            if sum(cfg.get("owner") == owner for cfg in tokens.values()) >= USER_MAX_TOKENS:
+                raise ToolError(f"you may hold {USER_MAX_TOKENS} tokens; revoke one first")
+            if body.get("all") or body.get("watch"):
+                raise ToolError("only admins make tokens for all projects or the VM watcher")
+            roots = [str(r) for r in body.get("roots", [])]
+            if set(roots) - set(dev["roots"]):
+                raise ToolError("pick only projects you have access to")
+            if body.get("write") and not set(roots) & set(dev["write_roots"]):
+                raise ToolError("you may only read these projects: untick 'May write memos'")
     if body.get("revoke"):
         if name not in tokens:
             raise ToolError(f"no token {name}")
@@ -1841,9 +1963,11 @@ async def ui_admin_token(request: Request, body: dict):
     tokens[name] = {"sha256": hashlib.sha256(token.encode()).hexdigest(), "write": bool(body.get("write")),
                     "watch": bool(body.get("watch")),  # the VM's file watcher (/invalidate)
                     "roots": roots, "redact": bool(body.get("redact")), "created": time.strftime("%Y-%m-%d"),
-                    "by": device.get()["user"]}
+                    "by": device.get()["user"], **({"owner": owner} if owner else {})}
     write_json(TOKENS_FILE, tokens)
     audit("admin-token", name)
+    if owner:  # a token outlives the sign-in: the admin hears about every new one
+        notify(f"Knowledge: {owner} created token {name} ({'read + write' if body.get('write') else 'read'}: {', '.join(roots)}).")
     return JSONResponse({"ok": True, "name": name, "token": token})
 
 

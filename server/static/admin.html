@@ -27,6 +27,7 @@
   <section id="sec-tokens" role="tabpanel" aria-labelledby="h-tokens">
     <h2 id="h-tokens">Device tokens</h2>
     <p class="muted">For Claude Code (the knowledge plugin), agents and assistants. A token is shown once; only its hash is kept. Lost it? Revoke it and create a new one.</p>
+    <p class="muted" id="limits-tokens"></p>
     <details id="new-token-box" class="admin-new">
       <summary class="ghost">+ New token</summary>
       <form id="token-form" class="admin-form">
@@ -80,6 +81,7 @@
   <section id="sec-projects" role="tabpanel" aria-labelledby="h-projects" hidden>
     <h2 id="h-projects">Projects</h2>
     <p class="muted">Each project has docs and a memory with its own MEMORY.md index. New projects are stored on the server; the built-in ones live on the VM.</p>
+    <p class="muted" id="limits-projects"></p>
     <div class="table-wrap"><table>
       <thead><tr><th>Project</th><th>Docs root</th><th>Memory root</th><th>Files</th><th>Access</th><th>Where</th></tr></thead>
       <tbody id="projects"></tbody>

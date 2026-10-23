@@ -1,4 +1,5 @@
-// Knowledge admin: device tokens, people (project access) and projects. Admins only (the server checks every call).
+// Knowledge admin: device tokens, people (project access) and projects. The server checks every call; a person who
+// is not an admin gets only their own tokens and projects (state.admin false) and sees only those two tabs.
 "use strict";
 
 const $ = (id) => document.getElementById(id);
@@ -54,7 +55,8 @@ function renderTokens() {
   }));
   // Rebuilt after every action: keep what was ticked. "All projects" is explicit, the server refuses an empty pick.
   const ticked = new Set([...$("t-roots").querySelectorAll("input:checked")].map((c) => c.value));
-  const boxes = state.projects.map((p) => [p.name, [p.docs, p.memory]]).concat([["shared skills (claude/)", ["claude"]], ["All projects (everything, now and later)", ["*"]]]);
+  const boxes = state.projects.map((p) => [p.name, [p.docs, p.memory]])
+    .concat(state.admin ? [["shared skills (claude/)", ["claude"]], ["All projects (everything, now and later)", ["*"]]] : []);
   $("t-roots").replaceChildren(...boxes.map(([label, roots]) => {
     const l = el("label", "check"), c = el("input"); c.type = "checkbox"; c.value = roots.join(",");
     c.checked = ticked.has(c.value); l.append(c, " " + label); return l;
@@ -109,6 +111,13 @@ function renderUsers() {
 }
 
 function renderProjects() {
+  if (!state.admin) {
+    $("projects").replaceChildren(...state.projects.map((p) => { const tr = el("tr");
+      tr.append(el("td", "", p.name), el("td", "mono", p.docs + "/"), el("td", "mono", p.memory + "/"), el("td", "num", "—"),
+        el("td", "", p.mode === "write" ? "you: read + write" : "you: read"), el("td", "muted", p.builtin ? "VM (built in)" : "server"));
+      return tr; }));
+    return;
+  }
   const files = Object.fromEntries(state.system.index.map((r) => [r.root, r.files]));
   $("projects").replaceChildren(...state.projects.map((p) => {
     const tr = el("tr"), mine = (roots) => !roots || !roots.length || roots.includes(p.docs) || roots.includes(p.memory);
@@ -158,6 +167,18 @@ function renderSystem() {
 
 async function load() {
   state = await api("/ui/api/admin");
+  if (!state.admin) { // a person: own tokens and projects, within the limits the admin set
+    const l = state.limits;
+    document.querySelector(".brand").textContent = `Knowledge · ${state.user}`;
+    for (const sec of ["people", "settings", "system"]) document.querySelector(`[data-sec=${sec}]`).hidden = true;
+    $("t-watch").closest("label").style.display = "none"; // .check sets display, which beats [hidden]
+    $("t-roots").previousElementSibling.textContent = "Projects (tick at least one)";
+    $("limits-tokens").textContent = `You may hold ${l.tokens} tokens, for the projects you have access to. Revoke one you no longer use.`;
+    $("limits-projects").textContent = `You may create ${l.projects} projects (${l.created} made so far), up to ${l.project_mb} MB each. The admin is told about every new project and token.`;
+    renderTokens(); renderProjects();
+    $("n-tokens").textContent = state.tokens.length; $("n-projects").textContent = state.projects.length;
+    return;
+  }
   renderTokens(); renderUsers(); renderProjects(); renderSystem();
   $("n-tokens").textContent = state.tokens.length; $("n-projects").textContent = state.projects.length;
   const users = Object.values(state.users), waiting = users.filter((u) => !Object.keys(u.projects || {}).length).length; // asks for access
@@ -221,7 +242,7 @@ $("project-form").onsubmit = (e) => {
 // One section at a time, chosen in the nav; the hash keeps it on reload (/ui/admin#settings).
 const tabs = [...document.querySelectorAll(".admin-nav [role=tab]")];
 function showSection() {
-  const want = location.hash.slice(1), sec = tabs.some((t) => t.dataset.sec === want) ? want : "tokens";
+  const want = location.hash.slice(1), sec = tabs.some((t) => t.dataset.sec === want && !t.hidden) ? want : "tokens";
   for (const t of tabs) {
     t.setAttribute("aria-selected", String(t.dataset.sec === sec));
     $(`sec-${t.dataset.sec}`).hidden = t.dataset.sec !== sec;
@@ -231,4 +252,4 @@ for (const t of tabs) t.onclick = () => { history.replaceState(null, "", `#${t.d
 addEventListener("hashchange", showSection);
 showSection();
 
-load().catch(showError);
+load().then(showSection).catch(showError); // after load: a person's hidden tabs are known

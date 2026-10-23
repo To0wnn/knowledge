@@ -944,7 +944,8 @@ async function loadMe() {
   PROJECTS = me.projects;
   for (const p of PROJECTS) if (!MEMORY_ROOT[p]) { MEMORY_ROOT[p] = `${p}-memory`; ROOT_PROJECT[p] = p; ROOT_PROJECT[`${p}-memory`] = p; }
   if (!PROJECTS.includes(project) && project !== ALL) project = PROJECTS[0];
-  $("admin-link").hidden = !me.admin;
+  $("admin-link").hidden = false;
+  $("admin-link").textContent = me.admin ? "Admin" : "My tokens & projects"; // non-admins manage their own there
   $("who").textContent = me.user;
   if (!me.admin) document.querySelector('[data-tab="lint"]').hidden = $("ingest-open").hidden = true;
   $("new-memo").hidden = !me.writable.includes(project);

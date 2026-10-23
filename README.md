@@ -198,6 +198,15 @@ the file is its own node on its frontmatter `topic:`, linked to the memos it nam
   scope = roots, write, redact) or revoke one; grant project access; create a project (roots `<name>` docs and
   `<name>-memory`, stored in `/projects/<name>/` on forge, listed in `/admin/projects.json`). Device tokens also
   count as secrets (redaction, write guard).
+- **Self-service (23 Oct 2026):** a person with access opens the same page ("My tokens & projects" in the user menu)
+  and sees only two tabs. Tokens: named `<user>.<name>`, `owner` stored, only their own projects, never "All
+  projects" or watcher; at every request `token_device` cuts the token to what the owner may read and write *now*
+  (access lowered or removed = the token follows). Projects: the maker gets write access (`users.json` `created`).
+  Limits on the admin page (Settings): `user_max_tokens` 5, `user_max_projects` 3, `project_max_mb` 20 (every UI
+  project; the write that crosses it lands, later writes are refused, deleting still works). Every new token or
+  project made by a person posts to Matrix (`KNOWLEDGE_MATRIX_URL/ROOM` from local.env, bot token
+  `KNOWLEDGE_MATRIX_TOKEN` in forge `config/proxy.env` = Vaultwarden `MATRIX_BOT_TOKEN`); a failed post shows on the
+  System tab. Tokens do not expire (choice Anthony). A person needs access to one project first (admin, People).
 - **Searched, not found** (admin page, System tab): every `knowledge_search` without matches and every
   `knowledge_semantic_search` that answered nothing useful is logged: best score below 0.45, or below 0.55 while the
   best note lacks the question's subject words (`lint.query_coverage` < 0.7). Calibrated 21 Oct 2026 on 20 answerable
