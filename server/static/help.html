@@ -75,16 +75,16 @@ footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
     <h2>Claude Code</h2>
     <p>The most complete connection: the plugin loads the context and house rules at every start, writes a session log and mirrors your docs.</p>
     <ol class="steps" data-os="linux">
-      <li><b>Install the plugin</b>
-        <div class="cmd"><pre>claude plugin marketplace add To0wnn/knowledge
-claude plugin install knowledge@knowledge --scope user</pre><button class="copy" type="button">Copy</button></div>
-        If it asks for the URL and token: keep the URL, leave the token empty.</li>
       <li><b>Put the token in the keyring</b>
         Paste the token you received at the <code>Password:</code> prompt (it is not shown). Every agent on this computer reads it from there; it is in no file.
         <div class="cmd"><pre>secret-tool store --label="Knowledge server token" service knowledge</pre><button class="copy" type="button">Copy</button></div>
         No <code>secret-tool</code>? Install <code>libsecret</code> (Arch) or <code>libsecret-tools</code> (Debian/Ubuntu).
         A server or container without a desktop has no keyring: there give the token to the plugin instead (URL <code>https://knowledge.to0wnn.com</code>, then the token); it is kept in <code>~/.claude/.credentials.json</code>, readable only by you.
         <div class="cmd"><pre>claude plugin configure knowledge@knowledge</pre><button class="copy" type="button">Copy</button></div></li>
+      <li><b>Install the plugin</b>
+        <div class="cmd"><pre>claude plugin marketplace add To0wnn/knowledge
+claude plugin install knowledge@knowledge --scope user</pre><button class="copy" type="button">Copy</button></div>
+        It may say that options are not set yet: that is fine, the plugin takes the token from the keyring (step 1).</li>
       <li><b>Turn local auto memory off</b>
         Add this line to <code>~/.claude/settings.json</code>; your memory is on the server, so Claude does not also write it locally:
         <div class="cmd"><pre>"autoMemoryEnabled": false</pre><button class="copy" type="button">Copy</button></div></li>
