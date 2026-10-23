@@ -12,7 +12,9 @@ a .knowledge-project written the PowerShell 5 way (UTF-16), text with → and �
   3. The offline copy: background sync, an edit made offline, the offline context, the upload when the server is back.
   4. Codex plugin (plugin/.codex-plugin): its hook commands as Codex runs them, its stdio MCP server, and with the CLI
      the install from this repo's marketplace.
-  5. Optional, when the CLIs are installed (CI installs them): `claude plugin install` from this repo and
+  5. agy plugin: plugin/hooks.json run the way agy runs it (in the plugin folder; cmd /c on Windows), and with agy
+     installed `agy plugin validate` and `agy plugin install` from this repo.
+  6. Optional, when the CLIs are installed (CI installs them): `claude plugin install` from this repo and
      `codex mcp list` see the knowledge server.
 
   uv run --project server python tests/clients_e2e.py        (exit 0 = all passed; every check prints a line)
@@ -361,6 +363,52 @@ def codex_plugin(tok: str, home: Path, project: Path):
     check(len(listed) == 4 and not problems, "codex: hooks/list shows the plugin's four hooks, no warnings", json.dumps(reply)[:800])
 
 
+def agy_plugin(tok: str, home: Path, project: Path, garden: Path):
+    """The agy plugin install path: agy reads plugin/hooks.json and plugin/mcp_config.json (not Claude's files) and runs
+    each hook command with sh -c (Windows: cmd /c) in the plugin folder; with agy installed, validate and install it."""
+    root = CLIENT / "plugin"
+    env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok)
+    mcp = json.loads((root / "mcp_config.json").read_text(encoding="utf-8"))["mcpServers"]["knowledge"]
+    msgs = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26", "capabilities": {},
+                                                                           "clientInfo": {"name": "e2e", "version": "1"}}},
+            {"jsonrpc": "2.0", "method": "notifications/initialized"},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "knowledge_search", "arguments": {"pattern": "taxi"}}}]
+    # agy starts the server in the plugin folder; sys.executable stands in for its "python3" (py on Windows).
+    code, out, err = run([sys.executable, *mcp["args"]], "".join(json.dumps(m) + "\n" for m in msgs), env, cwd=str(root))
+    replies = {r.get("id"): r for r in map(json.loads, out.splitlines())} if code == 0 else {}
+    check("result" in replies.get(1, {}) and "taxi" in json.dumps(replies.get(2, {})), "agy plugin: stdio MCP bridge answers a knowledge_search", out[-600:] + err[-600:])
+    check("headers" not in mcp and "env" not in mcp, "agy plugin: no token in mcp_config.json (the bridge reads KNOWLEDGE_TOKEN or the keyring)")
+    hooks = json.loads((root / "hooks.json").read_text(encoding="utf-8"))["knowledge"]
+    cmds = [h["command"] for e in hooks.values() for g in e for h in (g.get("hooks") or [g])]
+    common = {"conversationId": "agy-plugin", "workspacePaths": [str(project)]}
+    payloads = {"context": common, "session-log": {**common, "transcriptPath": ""},
+                "docs-sync": {**common, "toolCall": {"name": "write_file", "args": {"Path": json.dumps(str(project / "docs" / "agy.md"))}}}}
+    (project / "docs" / "agy.md").write_text("agy plugin → ✅\n", encoding="utf-8")
+    for cmd in cmds:
+        kind = next(k for k in payloads if f" {k}" in cmd)
+        code, out, err = run(f'cmd /d /s /c "{cmd}"' if WIN else [shutil.which("sh"), "-c", cmd], json.dumps(payloads[kind]), env, cwd=str(root))
+        check(code == 0 and "skipped" not in err, f"agy plugin: {kind} hook runs in the plugin folder", err[-600:])
+        if kind == "context":
+            try:
+                msg = json.loads(out)["injectSteps"][0]["systemMessage"]["systemMessage"]
+                check("project garden" in msg, "agy plugin: context arrives as injectSteps with the guest context", out[:300])
+            except (ValueError, KeyError, IndexError):
+                check(False, "agy plugin: context prints injectSteps JSON", out[:300] + err[-300:])
+    check((garden / "docs" / "docs" / "agy.md").exists(), "agy plugin: PostToolUse mirrors the written file")
+    agy = shutil.which("agy")
+    if not agy:
+        print("skip agy plugin validate/install (agy not installed)")
+        return
+    code, out, err = run([agy, "plugin", "validate", str(root), "--json"], "", env, timeout=60)
+    check(code == 0, "agy: plugin validate, no errors", out + err)
+    code, out, err = run([agy, "plugin", "install", str(root)], "", env, timeout=120)
+    check(code == 0 and "[ok]" in out, "agy: plugin install from this repo", out + err)
+    code, out, err = run([agy, "plugin", "list", "--json"], "", env, timeout=60)
+    got = next((x for x in json.loads(out or "[]") if x.get("name") == "knowledge"), {}) if code == 0 else {}
+    check(bool(got.get("enabled")) and got.get("mcpServers") == ["knowledge"] and got.get("hooks") == ["knowledge"],
+          "agy: plugin listed and enabled, with its MCP server and hooks", out + err)
+
+
 def real_clis(tok: str, home: Path):
     """The real Claude Code and Codex CLIs, when installed: they accept what we install."""
     claude, codex = shutil.which("claude"), shutil.which("codex")
@@ -403,6 +451,7 @@ def main():
         skills(tmp, home)
         agents(tok, home, project, garden)
         codex_plugin(tok, tmp / "Codex Usér", project)  # its own home: the plugin next to the setup's server would clash
+        agy_plugin(tok, home, project, garden)
         real_clis(tok, home)
     finally:
         proc.kill()

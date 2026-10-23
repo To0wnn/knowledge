@@ -7,7 +7,7 @@ clients/knowledge-agent.py (the setup without a plugin) calls the same functions
   agent_hooks.py docs-sync [TOKEN]             PostToolUse: mirror an edited .md (folder with .knowledge-project)
   agent_hooks.py session-log [TOKEN]           SessionEnd/PreCompact (Codex), Stop (agy): post the session log
   agent_hooks.py header [TOKEN]                MCP header helper: the token as JSON, {} without one
-  agent_hooks.py mcp [TOKEN]                   stdio MCP server of the Codex plugin: relays to the server's /mcp
+  agent_hooks.py mcp [TOKEN]                   stdio MCP server of the Codex and agy plugins: relays to /mcp
 TOKEN: "-" (default) = KNOWLEDGE_TOKEN or the keyring (token_store.py); on the owner's VM a vault name.
 Never fails a session: errors go to stderr. Linux, macOS and Windows; standard library only.
 """
@@ -77,18 +77,21 @@ def context(agent: str, tok: str):
 
 
 def mcp(tok: str):
-    """Relay each JSON-RPC line from stdin to /mcp and the answer to stdout. Codex gives a plugin's HTTP header helper
-    neither the plugin folder nor KNOWLEDGE_TOKEN; a stdio server gets both (cwd, env_vars). The server is stateless
-    with JSON responses, so one message is one POST and its body."""
+    """stdio MCP server of the Codex and agy plugins: relays each JSON-RPC line from stdin to the server's /mcp and the
+    answer to stdout. Neither agent can hand a plugin's HTTP server the token without a plain file (Codex runs a plugin's
+    header helper without the plugin folder or env, agy sends a ${VAR} header as is), so the token comes from
+    token_store here and stays in memory."""
     # shortcut: one request at a time, so parallel tool calls wait on each other; use a thread per line if that hurts.
-    headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream",
-               **({"Authorization": f"Bearer {tok}"} if tok else {})}
+    session, out = "", sys.stdout.buffer
     for raw in sys.stdin.buffer:
         if not raw.strip():
             continue
+        headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream",
+                   **({"Authorization": f"Bearer {tok}"} if tok else {}), **({"Mcp-Session-Id": session} if session else {})}
         try:
             with urllib.request.urlopen(urllib.request.Request(f"{URL}/mcp", raw, headers), timeout=120) as r:
-                out = r.read().strip()
+                session = r.headers.get("Mcp-Session-Id") or session
+                sse, body = r.headers.get("Content-Type", "").startswith("text/event-stream"), r.read().decode("utf-8")
         except OSError as e:  # HTTPError too: answer the request with the reason, keep serving
             try:
                 msg_id = json.loads(raw).get("id")
@@ -98,11 +101,14 @@ def mcp(tok: str):
                 continue
             reason = {401: "token invalid or revoked (KNOWLEDGE_TOKEN or the keyring)",
                       403: "only reachable from the home network or WireGuard"}.get(getattr(e, "code", 0), str(e))
-            out = json.dumps({"jsonrpc": "2.0", "id": msg_id, "error": {"code": -32000,
-                              "message": f"knowledge server: {reason}"}}).encode()
-        if out:
-            sys.stdout.buffer.write(out + b"\n")
-            sys.stdout.buffer.flush()
+            out.write(json.dumps({"jsonrpc": "2.0", "id": msg_id, "error": {"code": -32000,
+                                  "message": f"knowledge server: {reason}"}}).encode() + b"\n")
+            out.flush()
+            continue
+        for data in ([ln[5:].strip() for ln in body.splitlines() if ln.startswith("data:")] if sse else [body]):
+            if data.strip():
+                out.write(json.dumps(json.loads(data)).encode() + b"\n")  # one message per line, as stdio needs
+        out.flush()
 
 
 def main(argv: list):

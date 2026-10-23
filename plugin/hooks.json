@@ -1,0 +1,16 @@
+{
+  "knowledge": {
+    "SessionStart": [
+      {"type": "command", "command": "python3 -X utf8 hooks/agent_hooks.py context agy", "timeout": 30}
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "write_file|edit_file|write_to_file|replace_file_content|multi_replace_file_content",
+        "hooks": [{"type": "command", "command": "python3 -X utf8 hooks/agent_hooks.py docs-sync", "timeout": 20}]
+      }
+    ],
+    "Stop": [
+      {"type": "command", "command": "python3 -X utf8 hooks/agent_hooks.py session-log", "timeout": 15}
+    ]
+  }
+}
