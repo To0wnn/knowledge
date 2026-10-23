@@ -212,6 +212,28 @@ py $HOME\knowledge\clients\knowledge-agent.py install codex</pre><button class="
     </ol>
   </section>
 
+  <h2>Which project does my session get?</h2>
+  <p>At every start the server picks the project whose memory and context the session gets:</p>
+  <ol>
+    <li><b>A token for one project</b> (a guest): always that project, whatever the folder is called, also on Windows.</li>
+    <li><b>Otherwise the folder you start the agent in:</b></li>
+  </ol>
+  <div class="table-wrap"><table>
+    <thead><tr><th>Folder (example)</th><th>Project</th></tr></thead>
+    <tbody>
+      <tr><td>a name starting with <code>trade</code> anywhere in the path</td><td>trade</td></tr>
+      <tr><td><code>~/&lt;project name&gt;/…</code>, e.g. <code>~/gema</code></td><td>that project</td></tr>
+      <tr><td><code>anpitek</code> anywhere in the path</td><td>anpitek</td></tr>
+      <tr><td>anything else, e.g. <code>~/Work</code></td><td>homelab</td></tr>
+    </tbody>
+  </table></div>
+  <p>A folder name counts only when it is exactly the name of a project (admin page, Projects): <code>~/a350</code> works,
+    <code>~/A350Copilot</code> does not. A new project of your own: create it under Projects, then start the agent in a folder
+    with that name.</p>
+  <p><code>.knowledge-project</code> does something else: it marks a folder whose <code>.md</code> files are mirrored to the
+    server as the docs of that project. It only works with a token for one project, and the name in the file must be that
+    project. Your own devices do not need it.</p>
+
   <h2>When it does not work</h2>
   <div class="table-wrap"><table>
     <thead><tr><th>What you see</th><th>Cause and fix</th></tr></thead>
@@ -219,6 +241,7 @@ py $HOME\knowledge\clients\knowledge-agent.py install codex</pre><button class="
       <tr><td><code>401</code> or "token invalid"</td><td>Token copied wrongly or revoked. Set it again; ask for a new one if needed.</td></tr>
       <tr><td>No context at start (Windows)</td><td>Git for Windows or Python missing, or a PowerShell window opened before <code>setx</code>. Install both, open a new window, start again.</td></tr>
       <tr><td>Setup says "No token"</td><td>Linux: the token is not in the keyring yet (step 1; <code>secret-tool lookup service knowledge</code> shows it). Windows: <code>KNOWLEDGE_TOKEN</code> is not set in this window: step 1, then a new PowerShell.</td></tr>
+      <tr><td>The session gets the wrong project</td><td>The folder name does not match a project exactly, or the token is for one project only: see "Which project does my session get?".</td></tr>
       <tr><td>Docs do not reach the server</td><td>No <code>.knowledge-project</code> in the project root, or its name does not match your token's project.</td></tr>
       <tr><td>Codex ignores the context hook</td><td>More than one SessionStart hook, or the hook is not trusted yet: open <code>/hooks</code> in Codex.</td></tr>
       <tr><td>"writes are allowed only for …"</td><td>Your token may not write that path: only the memory of your own project.</td></tr>
