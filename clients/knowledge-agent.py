@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Connect agy (Antigravity CLI) or Codex to the knowledge server, and run the knowledge plugin's hooks for them.
+"""Connect Claude Code, Codex or agy to the knowledge server, and run the knowledge plugin's hooks for them.
 
-Linux, macOS and Windows; standard library only. The token (TOKEN "-") comes from KNOWLEDGE_TOKEN or the Linux keyring
-(secret-tool store --label="Knowledge server token" service knowledge), or on the owner's VM from the vault (TOKEN = a vault name). The session log falls back to ~/.config/knowledge-server/session.env, so the
-agy/Codex tokens on the VM stay read-only (install always gives session-log "-").
+Linux, macOS and Windows; standard library only. install asks for the device token (hidden) when none is stored, or
+whether to replace the stored one, checks it with the server and saves it in the keyring of the OS (Linux secret-tool,
+macOS Keychain, Windows Credential Manager; token_store.py). Without a terminal it uses KNOWLEDGE_TOKEN or the stored
+token. On the owner's VM TOKEN is a vault name. The session log falls back to ~/.config/knowledge-server/session.env.
 
+  knowledge-agent.py install <claude|codex|agy> [TOKEN]   set up or update; safe to run again. Claude Code: the plugin.
+                    Codex and agy on Linux/macOS: the plugin (an older setup of this script is removed first); on
+                    Windows, with a vault name or with KNOWLEDGE_SETUP=script: this script's setup (MCP relay, hooks,
+                    rules in AGENTS.md/GEMINI.md, skills in ~/.agents/skills)
   knowledge-agent.py header [TOKEN]                 MCP header helper (Codex http_headers_helper): the token as JSON
-  knowledge-agent.py install <agy|codex> [TOKEN]   one-time setup: checks the token, adds the MCP server, the hooks,
-                                                   the house and development rules (GEMINI.md / AGENTS.md) and the
-                                                   development skills (~/.agents/skills); safe to run again
   knowledge-agent.py context <agy|codex> TOKEN     SessionStart: startup context + docs mirror, as the agent's JSON
   knowledge-agent.py docs-sync TOKEN               PostToolUse: mirror an edited .md (folder with .knowledge-project)
   knowledge-agent.py session-log TOKEN             SessionEnd/PreCompact (Codex), Stop (agy): post the session log
@@ -32,6 +34,10 @@ CODEX = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")  # Codex's 
 CONFIG = {"agy": Path.home() / ".gemini" / "config" / "hooks.json", "codex": CODEX / "hooks.json"}
 RULES = {"agy": Path.home() / ".gemini" / "GEMINI.md", "codex": CODEX / "AGENTS.md"}
 BEGIN, END = "<!-- knowledge:house-rules (written by knowledge-agent.py install) -->", "<!-- /knowledge:house-rules -->"
+MARKET = os.environ.get("KNOWLEDGE_MARKETPLACE", "To0wnn/knowledge")  # a local checkout in the tests
+AGY_PLUGIN = os.environ.get("KNOWLEDGE_AGY_PLUGIN", "https://github.com/To0wnn/knowledge/tree/main/plugin")
+KEYRING = "Windows Credential Manager" if os.name == "nt" else "macOS Keychain" if sys.platform == "darwin" else "keyring"
+YES = ("y", "yes", "j", "ja")
 
 
 def helper_line(name: str) -> str:
@@ -76,28 +82,150 @@ def fetch(path: str, tok: str) -> str:
         return r.read().decode("utf-8")
 
 
+def check_token(tok: str) -> tuple:
+    """(house rules, "") when the server accepts the token, else (None, a plain reason)."""
+    try:
+        return fetch("/house-rules", tok), ""
+    except urllib.error.HTTPError as e:
+        if e.code == 401 and os.environ.get("KNOWLEDGE_TOKEN") == tok:  # env wins over the keyring: often a stale export
+            return None, ("The server refuses the token in KNOWLEDGE_TOKEN (401): copied wrongly or revoked. If the token "
+                          "is in the keyring now, run 'unset KNOWLEDGE_TOKEN' (or open a new terminal) and try again.")
+        return None, {401: "The server refuses this token (401): copied wrongly or revoked.",
+                      403: "The server is only reachable from the home network or WireGuard (403)."}.get(e.code, f"Server answered HTTP {e.code}.")
+    except OSError as e:
+        return None, f"Cannot reach {URL}: {e}"
+
+
 def check(tok: str) -> str:
     """The house rules, which also proves the token and the connection; stops with a plain reason otherwise."""
-    try:
-        rules = fetch("/house-rules", tok)
-    except urllib.error.HTTPError as e:
-        if e.code == 401 and os.environ.get("KNOWLEDGE_TOKEN"):  # env wins over the keyring: often a stale export
-            sys.exit("The server refuses the token in KNOWLEDGE_TOKEN (401): copied wrongly or revoked. If the token "
-                     "is in the keyring now, run 'unset KNOWLEDGE_TOKEN' (or open a new terminal) and try again.")
-        sys.exit({401: "The server refuses this token (401): copied wrongly or revoked.",
-                  403: "The server is only reachable from the home network or WireGuard (403)."}.get(e.code, f"Server answered HTTP {e.code}."))
-    except OSError as e:
-        sys.exit(f"Cannot reach {URL}: {e}")
+    rules, err = check_token(tok)
+    if rules is None:
+        sys.exit(err)
     print(f"token ok ({URL})")
     return rules
 
 
+def ensure_token(name: str) -> str:
+    """The token for the setup. A vault name (the VM) is used as is. Otherwise the stored one; in a terminal the setup
+    asks for it (hidden) when there is none or the person wants a new one, checks it and saves it in the keyring."""
+    if name != "-":
+        return token(name)
+    env, stored = os.environ.get("KNOWLEDGE_TOKEN", ""), token_store.from_keyring()
+    if env:
+        print("Using KNOWLEDGE_TOKEN from this shell (it wins over the keyring).")
+        return env
+    if not sys.stdin.isatty():
+        return stored
+    if stored and input(f"A token is already stored in the {KEYRING}. Replace it? [y/N] ").strip().lower() not in YES:
+        return stored
+    import getpass
+    for _ in range(3):
+        tok = getpass.getpass("Token for this device (paste it; it is not shown): ").strip()
+        rules, err = check_token(tok)
+        if rules is not None:
+            break
+        print(err)
+    else:
+        sys.exit("No working token after three tries: ask for a new one on the admin page.")
+    try:
+        token_store.store(tok)
+        print(f"token saved in the {KEYRING}")
+    except OSError as e:
+        print(f"Could not save the token in a keyring ({e}). This computer has none (a server without a desktop?): "
+              "add 'export KNOWLEDGE_TOKEN=\"<the token>\"' to ~/.profile and log in again; Claude Code there takes it "
+              "with 'claude plugin configure knowledge@knowledge'. This run goes on with the token.")
+        os.environ["KNOWLEDGE_TOKEN"] = tok  # the agent CLIs this setup starts
+    return tok
+
+
+def cli(name: str) -> str:
+    path = shutil.which(name)
+    if not path:
+        sys.exit(f"{name} is not on PATH: install it first, then run this again.")
+    return path
+
+
+def run_cli(argv: list, already_ok: bool = False) -> bool:
+    """Run an agent CLI step and say what it did; stop loudly on a failure (unless it only says it is already done)."""
+    r = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    text = (r.stdout + r.stderr).strip()
+    if r.returncode != 0 and not (already_ok and "already" in text.lower()):
+        sys.exit(f"{Path(argv[0]).stem} {' '.join(argv[1:])} failed:\n{text[-1500:]}")
+    print(f"{Path(argv[0]).stem} {' '.join(argv[1:3])}: {text.splitlines()[-1] if text else 'ok'}")
+    return r.returncode == 0
+
+
+def install_claude():
+    claude = cli("claude")
+    run_cli([claude, "plugin", "marketplace", "add", MARKET], already_ok=True)
+    run_cli([claude, "plugin", "marketplace", "update", "knowledge"])
+    if not run_cli([claude, "plugin", "install", "knowledge@knowledge", "--scope", "user"], already_ok=True):
+        run_cli([claude, "plugin", "update", "knowledge@knowledge"])
+    # The memory lives on the server: Claude's local auto memory would build a second one.
+    path = Path.home() / ".claude" / "settings.json"
+    data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    if data.get("autoMemoryEnabled") is not False:
+        data["autoMemoryEnabled"] = False
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        print(f"settings: autoMemoryEnabled false in {path}")
+    print("done; start a new Claude Code session in your project folder")
+
+
+def remove_old_setup(agent: str):
+    """What this script's own setup wrote (MCP server, hooks), so the plugin does not load it all twice."""
+    if agent == "codex":
+        conf, hooks = CODEX / "config.toml", CODEX / "hooks.json"
+        text = conf.read_text(encoding="utf-8") if conf.exists() else ""
+        if "[mcp_servers.knowledge]" in text:
+            start = text.index("[mcp_servers.knowledge]")
+            end = text.find("\n[", start + 1)
+            end = len(text) if end < 0 else end + 1
+            conf.write_text((text[:start].rstrip("\n") + "\n\n" + text[end:]).strip("\n") + "\n", encoding="utf-8")
+            print(f"removed the old [mcp_servers.knowledge] from {conf}")
+        data = json.loads(hooks.read_text(encoding="utf-8")) if hooks.exists() else {}
+        ours = lambda g: any("knowledge-agent.py" in h.get("command", "") or "agent_hooks.py" in h.get("command", "")
+                             for h in g.get("hooks", []))
+        events = data.get("hooks", {})
+        if any(ours(g) for gs in events.values() for g in gs):
+            data["hooks"] = {e: [g for g in gs if not ours(g)] for e, gs in events.items() if [g for g in gs if not ours(g)]}
+            hooks.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+            print(f"removed the old knowledge hooks from {hooks}")
+        return
+    for path, key in ((Path.home() / ".gemini" / "config" / "mcp_config.json", "mcpServers"),
+                      (Path.home() / ".gemini" / "config" / "hooks.json", None)):
+        data = json.loads(path.read_text(encoding="utf-8-sig")) if path.exists() else {}
+        holder = data.get(key, {}) if key else data
+        if "knowledge" in holder:
+            del holder["knowledge"]
+            path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+            print(f"removed the old knowledge entry from {path}")
+
+
+def install_plugin(agent: str):
+    remove_old_setup(agent)
+    if agent == "codex":
+        codex = cli("codex")
+        run_cli([codex, "plugin", "marketplace", "add", MARKET], already_ok=True)
+        run_cli([codex, "plugin", "marketplace", "upgrade", "knowledge"])
+        run_cli([codex, "plugin", "add", "knowledge@knowledge"])
+        restart_codex()
+        return print("done; open codex and type /hooks once to trust the four knowledge hooks")
+    run_cli([cli("agy"), "plugin", "install", AGY_PLUGIN])
+    say_restart("agy")
+    print("done; start agy and ask it to search the knowledge")
+
+
 def install(agent: str, name: str):
-    """One-time setup; every step says what it did. Fails loudly: a wrong token or no connection stops here."""
-    tok = token(name)
+    """Set up or update; every step says what it did. Fails loudly: a wrong token or no connection stops here."""
+    tok = ensure_token(name)
     if not tok:
-        sys.exit("No token: put the token in the keyring first (Windows: cmdkey /generic:knowledge /user:knowledge /pass; see the help page), then run this again.")
+        sys.exit("No token: run this in a terminal so it can ask for it, or set KNOWLEDGE_TOKEN.")
     rules = check(tok)
+    if agent == "claude":
+        return install_claude()
+    if name == "-" and os.name != "nt" and os.environ.get("KNOWLEDGE_SETUP") != "script":
+        return install_plugin(agent)
     if install_mcp(agent, name):
         restart_codex() if agent == "codex" else say_restart("agy")
     install_hooks(agent, name)
@@ -230,7 +358,7 @@ def main(argv: list):
     if cmd == "header" and len(argv) <= 2:
         tok = token(argv[1] if len(argv) == 2 else "-")
         print(json.dumps({"Authorization": f"Bearer {tok}"} if tok else {}))
-    elif cmd == "install" and len(argv) >= 2 and argv[1] in CONFIG:
+    elif cmd == "install" and len(argv) >= 2 and argv[1] in (*CONFIG, "claude"):
         install(argv[1], argv[2] if len(argv) > 2 else "-")
     elif cmd in ("context", "docs-sync", "session-log"):  # hooks written by older setups call this script
         agent_hooks.main(argv)
