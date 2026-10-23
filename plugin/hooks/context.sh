@@ -5,8 +5,10 @@
 # Never blocks a session: on failure it prints one short notice, or the offline context when this device has a copy.
 part=${1:-1}
 url=${CLAUDE_PLUGIN_OPTION_URL:-${CLAUDE_PLUGIN_OPTION_url:-https://knowledge.to0wnn.com}}
-token=${CLAUDE_PLUGIN_OPTION_TOKEN:-${CLAUDE_PLUGIN_OPTION_token:-}}
-code=$(curl -sS --max-time 8 -o /tmp/knowledge-context.$$ -w '%{http_code}' -H "Authorization: Bearer $token" -G --data-urlencode "project=${CLAUDE_PROJECT_DIR:-$PWD}" "$url/context/$part" 2>/dev/null)
+token=$(sh "$(dirname "$0")/py.sh" "$(dirname "$0")/token_store.py" token)
+[ -n "$token" ] || token=${CLAUDE_PLUGIN_OPTION_TOKEN:-${CLAUDE_PLUGIN_OPTION_token:-}}  # no Python: plugin setting
+# The header goes in over stdin (-H @-), so the token is not on the command line (ps).
+code=$(printf 'Authorization: Bearer %s\n' "$token" | curl -sS --max-time 8 -o /tmp/knowledge-context.$$ -w '%{http_code}' -H @- -G --data-urlencode "project=${CLAUDE_PROJECT_DIR:-$PWD}" "$url/context/$part" 2>/dev/null)
 # Offline: the context of the last online session plus the offline copy of the memory (memory_mirror.py).
 cache=${KNOWLEDGE_MIRROR:-$HOME/.knowledge/mirror}
 key=$(printf %s "${CLAUDE_PROJECT_DIR:-$PWD}" | cksum | cut -d' ' -f1)
@@ -15,7 +17,7 @@ if [ "$code" = 200 ]; then
     mkdir -p "$cache" && cp /tmp/knowledge-context.$$ "$cache/.context-$key-$part" 2>/dev/null
     [ "$part" = 1 ] && [ -s "$cache/last-sync.log" ] && { echo; sh "$(dirname "$0")/py.sh" "$(dirname "$0")/memory_mirror.py" notice; echo; }
 elif [ "$part" = 1 ] && [ "$code" = 401 ]; then
-    echo "knowledge server: token invalid or revoked (plugin setting 'token'). Shared memory and docs were not loaded."
+    echo "knowledge server: token invalid or revoked (keyring or plugin setting 'token'). Shared memory and docs were not loaded."
 elif [ "$part" = 1 ] && [ "$code" = 403 ]; then
     echo "knowledge server: only reachable from the home network or WireGuard. Shared memory and docs were not loaded."
 elif [ -f "$cache/.state.json" ] && { [ "$code" = 000 ] || [ "${code#5}" != "$code" ]; }; then  # down, not refused

@@ -77,10 +77,12 @@ footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
     <ol class="steps" data-os="linux">
       <li><b>Install the plugin</b>
         <div class="cmd"><pre>claude plugin marketplace add To0wnn/knowledge
-claude plugin install knowledge@knowledge --scope user</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Set the URL and token</b>
-        <div class="cmd"><pre>claude plugin configure knowledge@knowledge</pre><button class="copy" type="button">Copy</button></div>
-        URL: <code>https://knowledge.to0wnn.com</code>, token: the one you received.</li>
+claude plugin install knowledge@knowledge --scope user</pre><button class="copy" type="button">Copy</button></div>
+        If it asks for the URL and token: keep the URL, leave the token empty.</li>
+      <li><b>Put the token in the keyring</b>
+        Paste the token you received at the <code>Password:</code> prompt (it is not shown). Every agent on this computer reads it from there; it is in no file.
+        <div class="cmd"><pre>secret-tool store --label="Knowledge server token" service knowledge</pre><button class="copy" type="button">Copy</button></div>
+        No <code>secret-tool</code>? Install <code>libsecret</code> (Arch) or <code>libsecret-tools</code> (Debian/Ubuntu).</li>
       <li><b>Turn local auto memory off</b>
         Add this line to <code>~/.claude/settings.json</code>; your memory is on the server, so Claude does not also write it locally:
         <div class="cmd"><pre>"autoMemoryEnabled": false</pre><button class="copy" type="button">Copy</button></div></li>
@@ -116,12 +118,12 @@ claude plugin install knowledge@knowledge --scope user</pre><button class="copy"
     <h2>agy (Antigravity CLI)</h2>
     <p>One setup command connects agy: the tools, the context at every start, the session log, the docs mirror and the house rules. agy itself comes from <a href="https://antigravity.google" target="_blank" rel="noopener">antigravity.google</a> and updates itself (<code>agy update</code>).</p>
     <ol class="steps" data-os="linux">
-      <li><b>Put the token in an environment variable</b>
-        The setup and the hooks read it from there; it never goes into a file you share.
-        <div class="cmd"><pre>echo 'export KNOWLEDGE_TOKEN="YOUR_TOKEN"' &gt;&gt; ~/.bashrc   # zsh: ~/.zshrc
-exec $SHELL                                              # load it in this terminal</pre><button class="copy" type="button">Copy</button></div></li>
+      <li><b>Put the token in the keyring</b>
+        Paste the token you received at the <code>Password:</code> prompt (it is not shown). Every agent on this computer reads it from there; it is in no file.
+        <div class="cmd"><pre>secret-tool store --label="Knowledge server token" service knowledge</pre><button class="copy" type="button">Copy</button></div>
+        No <code>secret-tool</code>? Install <code>libsecret</code> (Arch) or <code>libsecret-tools</code> (Debian/Ubuntu).</li>
       <li><b>Get the knowledge scripts and run the setup</b>
-        <div class="cmd"><pre>git clone https://github.com/To0wnn/knowledge ~/knowledge
+        <div class="cmd"><pre>git -C ~/knowledge pull 2&gt;/dev/null || git clone https://github.com/To0wnn/knowledge ~/knowledge
 python3 ~/knowledge/clients/knowledge-agent.py install agy</pre><button class="copy" type="button">Copy</button></div>
         It checks the token, then writes <code>~/.gemini/config/mcp_config.json</code> (the MCP server; agy keeps the token in this file, so it is made readable for you only), <code>~/.gemini/config/hooks.json</code> and <code>~/.gemini/GEMINI.md</code> (the house rules). It is safe to run again; an existing file is extended, not replaced.</li>
       <li><b>Only for a guest project: mark your project folder</b>
@@ -140,10 +142,10 @@ python3 ~/knowledge/clients/knowledge-agent.py install agy</pre><button class="c
         <a href="https://git-scm.com/download/win" target="_blank" rel="noopener">Git for Windows</a> and <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">Python 3</a> (keep "py launcher" ticked). The steps below are for PowerShell.</li>
       <li><b>Put the token in an environment variable</b>
         The setup and the hooks read it from there; it never goes into a file you share.
-        <div class="cmd"><pre>setx KNOWLEDGE_TOKEN "YOUR_TOKEN"
-# then close this window and open a new PowerShell</pre><button class="copy" type="button">Copy</button></div></li>
+        <div class="cmd"><pre>setx KNOWLEDGE_TOKEN "YOUR_TOKEN"</pre><button class="copy" type="button">Copy</button></div>
+        Then close this window and open a new PowerShell.</li>
       <li><b>Get the knowledge scripts and run the setup</b>
-        <div class="cmd"><pre>git clone https://github.com/To0wnn/knowledge $HOME\knowledge
+        <div class="cmd"><pre>if (Test-Path $HOME\knowledge) { git -C $HOME\knowledge pull } else { git clone https://github.com/To0wnn/knowledge $HOME\knowledge }
 py $HOME\knowledge\clients\knowledge-agent.py install agy</pre><button class="copy" type="button">Copy</button></div>
         It checks the token, then writes <code>%USERPROFILE%\.gemini\config\mcp_config.json</code> (the MCP server; agy keeps the token in this file: do not share or sync it), <code>%USERPROFILE%\.gemini\config\hooks.json</code> and <code>%USERPROFILE%\.gemini\GEMINI.md</code> (the house rules). It is safe to run again; an existing file is extended, not replaced.</li>
       <li><b>Only for a guest project: mark your project folder</b>
@@ -163,14 +165,14 @@ py $HOME\knowledge\clients\knowledge-agent.py install agy</pre><button class="co
     <h2>Codex (OpenAI)</h2>
     <p>One setup command connects Codex: the tools, the context at every start, the session log, the docs mirror and the house rules. Install or update Codex with <code>npm i -g @openai/codex@latest</code>.</p>
     <ol class="steps" data-os="linux">
-      <li><b>Put the token in an environment variable</b>
-        The setup and the hooks read it from there; it never goes into a file you share.
-        <div class="cmd"><pre>echo 'export KNOWLEDGE_TOKEN="YOUR_TOKEN"' &gt;&gt; ~/.bashrc   # zsh: ~/.zshrc
-exec $SHELL                                              # load it in this terminal</pre><button class="copy" type="button">Copy</button></div></li>
+      <li><b>Put the token in the keyring</b>
+        Paste the token you received at the <code>Password:</code> prompt (it is not shown). Every agent on this computer reads it from there; it is in no file.
+        <div class="cmd"><pre>secret-tool store --label="Knowledge server token" service knowledge</pre><button class="copy" type="button">Copy</button></div>
+        No <code>secret-tool</code>? Install <code>libsecret</code> (Arch) or <code>libsecret-tools</code> (Debian/Ubuntu).</li>
       <li><b>Get the knowledge scripts and run the setup</b>
-        <div class="cmd"><pre>git clone https://github.com/To0wnn/knowledge ~/knowledge
+        <div class="cmd"><pre>git -C ~/knowledge pull 2&gt;/dev/null || git clone https://github.com/To0wnn/knowledge ~/knowledge
 python3 ~/knowledge/clients/knowledge-agent.py install codex</pre><button class="copy" type="button">Copy</button></div>
-        It checks the token, then writes <code>~/.codex/config.toml</code> (the MCP server; Codex reads the token from <code>KNOWLEDGE_TOKEN</code> and asks before it writes), <code>~/.codex/hooks.json</code> and <code>~/.codex/AGENTS.md</code> (the house rules). It is safe to run again; an existing file is extended, not replaced.</li>
+        It checks the token, then writes <code>~/.codex/config.toml</code> (the MCP server; Codex asks the knowledge script for the token, so it is in no file, and asks before it writes), <code>~/.codex/hooks.json</code> and <code>~/.codex/AGENTS.md</code> (the house rules). It is safe to run again; an existing file is extended, not replaced.</li>
       <li><b>Only for a guest project: mark your project folder</b>
         In the root of your project, a file <code>.knowledge-project</code> with the project name you got (for example <code>a350</code>):
         <div class="cmd"><pre>echo a350 &gt; .knowledge-project</pre><button class="copy" type="button">Copy</button></div>
@@ -187,12 +189,12 @@ python3 ~/knowledge/clients/knowledge-agent.py install codex</pre><button class=
         <a href="https://git-scm.com/download/win" target="_blank" rel="noopener">Git for Windows</a> and <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">Python 3</a> (keep "py launcher" ticked). The steps below are for PowerShell.</li>
       <li><b>Put the token in an environment variable</b>
         The setup and the hooks read it from there; it never goes into a file you share.
-        <div class="cmd"><pre>setx KNOWLEDGE_TOKEN "YOUR_TOKEN"
-# then close this window and open a new PowerShell</pre><button class="copy" type="button">Copy</button></div></li>
+        <div class="cmd"><pre>setx KNOWLEDGE_TOKEN "YOUR_TOKEN"</pre><button class="copy" type="button">Copy</button></div>
+        Then close this window and open a new PowerShell.</li>
       <li><b>Get the knowledge scripts and run the setup</b>
-        <div class="cmd"><pre>git clone https://github.com/To0wnn/knowledge $HOME\knowledge
+        <div class="cmd"><pre>if (Test-Path $HOME\knowledge) { git -C $HOME\knowledge pull } else { git clone https://github.com/To0wnn/knowledge $HOME\knowledge }
 py $HOME\knowledge\clients\knowledge-agent.py install codex</pre><button class="copy" type="button">Copy</button></div>
-        It checks the token, then writes <code>%USERPROFILE%\.codex\config.toml</code> (the MCP server; Codex reads the token from <code>KNOWLEDGE_TOKEN</code> and asks before it writes), <code>%USERPROFILE%\.codex\hooks.json</code> and <code>%USERPROFILE%\.codex\AGENTS.md</code> (the house rules). It is safe to run again; an existing file is extended, not replaced.</li>
+        It checks the token, then writes <code>%USERPROFILE%\.codex\config.toml</code> (the MCP server; Codex asks the knowledge script for the token, so it is in no file, and asks before it writes), <code>%USERPROFILE%\.codex\hooks.json</code> and <code>%USERPROFILE%\.codex\AGENTS.md</code> (the house rules). It is safe to run again; an existing file is extended, not replaced.</li>
       <li><b>Only for a guest project: mark your project folder</b>
         In the root of your project, a file <code>.knowledge-project</code> with the project name you got (for example <code>a350</code>):
         <div class="cmd"><pre>Set-Content .knowledge-project a350</pre><button class="copy" type="button">Copy</button></div>
@@ -212,7 +214,7 @@ py $HOME\knowledge\clients\knowledge-agent.py install codex</pre><button class="
     <tbody>
       <tr><td><code>401</code> or "token invalid"</td><td>Token copied wrongly or revoked. Set it again; ask for a new one if needed.</td></tr>
       <tr><td>No context at start (Windows)</td><td>Git for Windows or Python missing, or a PowerShell window opened before <code>setx</code>. Install both, open a new window, start again.</td></tr>
-      <tr><td>Setup says "No token"</td><td><code>KNOWLEDGE_TOKEN</code> is not set in this terminal: step 1, then a new terminal.</td></tr>
+      <tr><td>Setup says "No token"</td><td>Linux: the token is not in the keyring yet (step 1; <code>secret-tool lookup service knowledge</code> shows it). Windows: <code>KNOWLEDGE_TOKEN</code> is not set in this window: step 1, then a new PowerShell.</td></tr>
       <tr><td>Docs do not reach the server</td><td>No <code>.knowledge-project</code> in the project root, or its name does not match your token's project.</td></tr>
       <tr><td>Codex ignores the context hook</td><td>More than one SessionStart hook, or the hook is not trusted yet: open <code>/hooks</code> in Codex.</td></tr>
       <tr><td>"writes are allowed only for …"</td><td>Your token may not write that path: only the memory of your own project.</td></tr>

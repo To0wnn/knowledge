@@ -1,6 +1,6 @@
 {
   "name": "knowledge",
-  "version": "0.7.4",
+  "version": "0.8.0",
   "description": "Live shared knowledge (docs + Claude memory) through a knowledge server",
   "author": {
     "name": "To0wnn"
@@ -15,7 +15,7 @@
     "token": {
       "type": "string",
       "title": "Device token",
-      "description": "Token for this device (created on the admin page /ui/admin)",
+      "description": "Leave empty when the token is in the keyring (Linux: secret-tool store --label=\"Knowledge server token\" service knowledge). Otherwise the token for this device from the admin page /ui/admin",
       "sensitive": true
     }
   }
