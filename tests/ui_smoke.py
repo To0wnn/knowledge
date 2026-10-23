@@ -181,6 +181,23 @@ async def admin(browser, secret: str) -> None:
     check("ago" in await pg.locator("#tokens").inner_text() or "last 15 min" in await pg.locator("#tokens").inner_text(),
           "admin page shows when tokens were last used")
     check(await pg.locator("#projects tr").count() >= 3, "admin page lists the projects")
+    # New token: the kind of token sets the switches; shared skills are greyed out with the reason where not allowed.
+    await pg.click("#new-token-box summary")
+    flags = "() => ({w: $('t-write').checked, r: $('t-redact').checked, s: $('t-skills').checked, sd: $('t-skills').disabled, why: $('t-skills-why').textContent, all: !!$('t-roots').querySelector('input[value=\"*\"]:checked')})"
+    f = await pg.evaluate(flags)
+    check(f["w"] and not f["r"] and f["s"] and f["all"], f"token kind 'own computer' sets write + skills + all projects {f}")
+    await pg.check('input[name="t-kind"][value="guest"]')
+    f = await pg.evaluate(flags)
+    check(f["w"] and f["r"] and not f["s"] and f["sd"] and "masked" in f["why"], f"token kind 'someone else' masks and greys out skills {f}")
+    await pg.check('input[name="t-kind"][value="reader"]')
+    f = await pg.evaluate(flags)
+    check(not f["w"] and f["r"] and f["sd"], f"token kind 'only reads' never writes {f}")
+    await pg.check('input[name="t-kind"][value="own"]')
+    await pg.click("#t-advanced summary")
+    await pg.uncheck("#t-write")
+    f = await pg.evaluate(flags)
+    kind = await pg.evaluate("document.querySelector('input[name=\"t-kind\"]:checked')")
+    check(kind is None and f["sd"] and "write" in f["why"], f"a hand-changed switch clears the kind and explains skills {f}")
     check(not await pg.locator("#error").is_visible(), "admin page shows no error")
     check(not errors, f"no page errors on the admin page {errors[:2]}")
     await ctx.close()

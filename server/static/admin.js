@@ -190,6 +190,7 @@ function renderSystem() {
   }) : [row("—", "", "", "")]));
 }
 
+let loaded = false;
 async function load() {
   state = await api("/ui/api/admin");
   if (!state.admin) { // a person: own tokens and projects, within the limits the admin set
@@ -197,6 +198,7 @@ async function load() {
     document.querySelector(".brand").textContent = `Knowledge · ${state.user}`;
     for (const sec of ["people", "settings", "system"]) document.querySelector(`[data-sec=${sec}]`).hidden = true;
     for (const id of ["t-watch", "t-skills"]) $(id).closest("label").style.display = "none"; // .check sets display, which beats [hidden]
+    document.querySelectorAll(".admin-only").forEach((x) => (x.hidden = true));
     $("t-roots").previousElementSibling.textContent = "Projects (tick at least one)";
     $("limits-tokens").textContent = `You may hold ${l.tokens} tokens, for the projects you have access to. Revoke one you no longer use.`;
     $("limits-projects").textContent = `You may create ${l.projects} projects (${l.created} made so far), up to ${l.project_mb} MB each. The admin is told about every new project and token.`;
@@ -205,6 +207,7 @@ async function load() {
     return;
   }
   renderTokens(); renderUsers(); renderProjects(); renderSystem();
+  if (!loaded) { loaded = true; applyKind(); } // later reloads keep what is being filled in
   $("n-tokens").textContent = state.tokens.length; $("n-projects").textContent = state.projects.length;
   const users = Object.values(state.users), waiting = users.filter((u) => !Object.keys(u.projects || {}).length).length; // asks for access
   $("n-people").textContent = waiting ? `${waiting} new` : $("users").rows.length; // config admins are rows too
@@ -226,11 +229,8 @@ function showNewToken(res) {
   $("new-token-value").textContent = res.token;
   // The setup steps per client and OS are on the help page; here only the vault line for a device of the admin's own.
   const label = `KNOWLEDGE_TOKEN_${res.name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
-  $("new-token-setup").textContent = [
-    "read -rs TOKEN   # paste the token, then Enter (keeps it out of the shell history)",
-    `printf %s "$TOKEN" | secret set ${label}`,
-    `# agy/Codex on the VM: /usr/bin/python3 ~/knowledge/clients/knowledge-agent.py install codex ${label}`,
-  ].join("\n");
+  $("new-token-setup").textContent = ["read -rs TOKEN", `printf %s "$TOKEN" | secret set ${label}`].join("\n");
+  $("new-token-agent").textContent = `/usr/bin/python3 ~/knowledge/clients/knowledge-agent.py install codex ${label}`;
   $("new-token").hidden = false;
   $("copy-token").textContent = "Copy token";
   $("new-token").scrollIntoView({ block: "center" });
@@ -247,13 +247,40 @@ $("token-form").onsubmit = (e) => {
       all: !!$("t-roots").querySelector('input[value="*"]:checked'),
       roots: [...$("t-roots").querySelectorAll("input:checked")].flatMap((c) => c.value.split(",")).filter((r) => r !== "*"),
     });
-  }, button).then(() => { if (res) { e.target.reset(); $("new-token-box").open = false; showNewToken(res); } }); // shown once: even if the reload after it failed
+  }, button).then(() => { if (res) { e.target.reset(); applyKind(); $("new-token-box").open = false; showNewToken(res); } }); // shown once: even if the reload after it failed
 };
 $("copy-token").onclick = async () => {
   try { await navigator.clipboard.writeText($("new-token-value").textContent); $("copy-token").textContent = "Copied"; }
   catch { getSelection().selectAllChildren($("new-token-value")); } // no clipboard access: select it for Ctrl+C
 };
 $("hide-token").onclick = () => { $("new-token").hidden = true; $("new-token-value").textContent = ""; $("new-token-setup").textContent = ""; };
+
+// "What is this token for?" sets the switches under Fine-tune; changing a switch there by hand clears the choice.
+const KINDS = { own: { write: true, redact: false, skills: true, all: true }, guest: { write: true, redact: true, skills: false, all: false },
+  reader: { write: false, redact: true, skills: false, all: false } };
+function applyKind() {
+  const k = KINDS[document.querySelector('input[name="t-kind"]:checked')?.value];
+  if (!k) return;
+  $("t-write").checked = k.write; $("t-redact").checked = k.redact; $("t-watch").checked = false;
+  $("t-skills").checked = k.skills && state.admin;
+  const all = $("t-roots").querySelector('input[value="*"]');
+  if (all) all.checked = k.all;
+  checkRules();
+}
+// Shared skills only where the server allows them; say why instead of refusing after the click.
+function checkRules() {
+  const ticked = [...$("t-roots").querySelectorAll("input:checked")].map((c) => c.value);
+  const why = !$("t-write").checked ? "they need 'May write memos'" : $("t-redact").checked ? "not together with masked secrets"
+    : !ticked.some((v) => v === "*" || v === "claude") ? "tick 'shared skills (claude/)' or 'All projects'" : "";
+  $("t-skills").disabled = !!why;
+  if (why) $("t-skills").checked = false;
+  $("t-skills-why").textContent = why && state.admin ? `Shared skills are off: ${why}.` : "";
+}
+document.querySelectorAll('input[name="t-kind"]').forEach((r) => (r.onchange = applyKind));
+for (const id of ["t-write", "t-redact", "t-skills", "t-watch"]) {
+  $(id).addEventListener("change", () => { document.querySelectorAll('input[name="t-kind"]').forEach((r) => (r.checked = false)); checkRules(); });
+}
+$("t-roots").addEventListener("change", checkRules);
 $("user-form").onsubmit = (e) => {
   e.preventDefault();
   run(() => api("/ui/api/admin/user", { username: $("u-name").value.trim(), projects: {}, add: true }), e.target.querySelector("button"))
