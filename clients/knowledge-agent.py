@@ -82,6 +82,9 @@ def check(tok: str) -> str:
     try:
         rules = fetch("/house-rules", tok)
     except urllib.error.HTTPError as e:
+        if e.code == 401 and os.environ.get("KNOWLEDGE_TOKEN"):  # env wins over the keyring: often a stale export
+            sys.exit("The server refuses the token in KNOWLEDGE_TOKEN (401): copied wrongly or revoked. If the token "
+                     "is in the keyring now, run 'unset KNOWLEDGE_TOKEN' (or open a new terminal) and try again.")
         sys.exit({401: "The server refuses this token (401): copied wrongly or revoked.",
                   403: "The server is only reachable from the home network or WireGuard (403)."}.get(e.code, f"Server answered HTTP {e.code}."))
     except OSError as e:
