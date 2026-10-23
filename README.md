@@ -220,6 +220,13 @@ the file is its own node on its frontmatter `topic:`, linked to the memos it nam
   skill it had before the sync knew it is not overwritten but goes up as a conflict copy once; a file over 2 MB is
   refused (the index cannot hold it) and stays on the device; the project size limit counts files on disk; a refusal
   in `/sync` never deletes the server copy.
+  Safety (23 Oct 2026): every skill file (not only .md) has history; a removed file, also by `rm` on the VM, keeps
+  its last text as the version before "<who>-removed" (`knowledge_history`, restore with `knowledge_write`), except
+  when the whole root looks empty (an unmounted share); a sync that would remove more than 5 skills or memos at
+  once holds them back and says so in `last-sync.log` (confirm with `KNOWLEDGE_ALLOW_REMOVALS=1`). A `SKILL.md`
+  without frontmatter or a one-line description is refused on every write path; lint checks skills
+  (`skill_broken`, `skill_name_mismatch`, `skill_too_long` > 500 lines, `skill_dead_link`, `possible_secret_in_skill`),
+  calibrated on 44 skills (all 22 own pass).
 - **Searched, not found** (admin page, System tab): every `knowledge_search` without matches and every
   `knowledge_semantic_search` that answered nothing useful is logged: best score below 0.45, or below 0.55 while the
   best note lacks the question's subject words (`lint.query_coverage` < 0.7). Calibrated 21 Oct 2026 on 20 answerable

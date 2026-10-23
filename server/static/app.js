@@ -586,7 +586,7 @@ async function showHistory(open = null) {
   pane.append(view, list); // the chosen diff above the list, so it is in sight
   res.versions.forEach((v, i) => {
     const when = new Date(v.time * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
-    const li = hitItem(`${when}${i === 0 ? " (current)" : ""}`, `${v.by === "VM" ? "edited on the VM" : v.by === "before" ? "baseline" : `via ${v.by}`} · ${v.size} bytes`, async () => {
+    const li = hitItem(`${when}${i === 0 ? " (current)" : ""}`, `${v.by.endsWith("-removed") ? `removed (${v.by === "VM-removed" ? "on the VM" : `via ${v.by.slice(0, -8)}`}); the version below holds its last text` : v.by === "VM" ? "edited on the VM" : v.by === "before" ? "baseline" : `via ${v.by}`} · ${v.size} bytes`, async () => {
       for (const b of list.querySelectorAll("button")) b.classList.remove("active");
       li.firstChild.classList.add("active");
       const ver = await api(`/ui/api/history?path=${encodeURIComponent(note.path)}&version=${encodeURIComponent(v.id)}`);
@@ -841,6 +841,11 @@ async function loadLint(render = true) {
 }
 // Lint checks in plain words, with what to do about them (unknown checks fall back to their name).
 const LINT_INFO = {
+  skill_broken: ["Skill Claude cannot use", "Give SKILL.md frontmatter with name and a one-line description; without it the skill is never picked."],
+  skill_name_mismatch: ["Skill name differs from its folder", "Set name: to the folder name (lowercase, digits, hyphens)."],
+  skill_too_long: ["Skill longer than 500 lines", "Keep SKILL.md short; move details to a file next to it and link it."],
+  skill_dead_link: ["Skill points to something missing", "Fix the memo or file name, or remove the reference."],
+  possible_secret_in_skill: ["Possible secret in a skill", "Replace the value with ‹secret:NAME› and fetch it with the secret tool."],
   index_points_to_missing_file: ["Index line without a file", "Remove the line from MEMORY.md, or restore the memo."],
   memo_not_in_index: ["Memo missing from MEMORY.md", "Add one index line under its heading."],
   dead_wikilink: ["Link to a memo that does not exist", "Fix the [[name]], or write that memo."],

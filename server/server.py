@@ -169,6 +169,13 @@ def contains_secret(text: str) -> bool:
     return False
 
 
+def refuse_broken_skill(rel: str, text: str):
+    """A SKILL.md Claude Code could not use (no frontmatter or description) never replaces a working one."""
+    parts = rel.split("/")
+    if len(parts) == 4 and parts[:2] == ["claude", "skills"] and parts[3] == "SKILL.md" and (why := kb_lint.skill_broken(text)):
+        raise ToolError(f"{rel}: {why}. Write it as ---\nname: {parts[2]}\ndescription: <when to use it, one line>\n---")
+
+
 def refuse_secrets(text: str):
     if contains_secret(text):
         raise ToolError("this text contains a known secret value: store it with `secret set NAME` (value on stdin) "
@@ -250,14 +257,19 @@ class Index:
                 if st.st_size > MAX_BYTES or full.suffix.lower() in BINARY:
                     raise OSError("not indexed")
                 text = f.read().decode("utf-8")
-        except (ToolError, OSError, UnicodeDecodeError):
+        except (ToolError, OSError, UnicodeDecodeError) as e:
             with self.lock:
-                if self.files.pop(rel, None) is not None:
+                old = self.files.pop(rel, None)
+                if old is not None:
                     self.bump(rel)
+            # Removed, also by a plain rm on the VM: its last text stays in the history (knowledge_history restores
+            # it). Not when the whole root looks empty: that is an unmounted share, not a deletion.
+            if old is not None and isinstance(e, FileNotFoundError) and tracked(rel) and root_present(rel):
+                keep_version(rel, old, "", removed=True)
             return
         low = text.lower()
         old = self.files.get(rel)
-        if old is not None and old[2] != text and rel.endswith(".md"):
+        if old is not None and old[2] != text and tracked(rel):
             keep_version(rel, old, text)
         with self.lock:
             # A few Unicode characters change length when lowercased; then positions would not line up.
@@ -309,9 +321,23 @@ def history_dir(rel: str) -> Path:
 HISTORY_FAILED: dict[str, str] = {}  # rel -> error of the last failed history write; lint reports it
 
 
-def keep_version(rel: str, old: tuple, new_text: str):
-    """Store every version of a Markdown file (who changed it and when), so any change can be inspected and undone.
-    The first time a file changes, its previous content is kept as the baseline."""
+def tracked(rel: str) -> bool:
+    """Files whose versions are kept: Markdown, and every file of a shared skill (its scripts and data too)."""
+    return rel.endswith(".md") or rel.startswith("claude/skills/")
+
+
+def root_present(rel: str) -> bool:
+    base = ROOTS.get(rel.split("/", 1)[0])
+    try:
+        return bool(base and base.is_dir() and any(base.iterdir()))
+    except OSError:
+        return False
+
+
+def keep_version(rel: str, old: tuple, new_text: str, removed: bool = False):
+    """Store every version of a tracked file (who changed it and when), so any change can be inspected and undone.
+    The first time a file changes, its previous content is kept as the baseline; a removal adds an empty version
+    "<who>-removed", so the version before it holds the last text."""
     d = history_dir(rel)
     try:
         d.mkdir(parents=True, exist_ok=True)
@@ -322,7 +348,7 @@ def keep_version(rel: str, old: tuple, new_text: str):
         dev = device.get()  # the watcher (watch token) or the rescan thread (no device) = an edit made on the VM
         who = "VM" if dev.get("watch") or not dev.get("name") else re.sub(r"[^A-Za-z0-9-]", "-", dev["name"])
         now = time.time()  # microseconds keep versions from the same second in order
-        path = d / f"{time.strftime('%Y%m%d-%H%M%S', time.localtime(now))}.{int(now % 1 * 1e6):06d}_{who}.md"
+        path = d / f"{time.strftime('%Y%m%d-%H%M%S', time.localtime(now))}.{int(now % 1 * 1e6):06d}_{who}{'-removed' * removed}.md"
         path.write_text(new_text)
         versions = sorted(d.iterdir(), key=lambda p: p.stat().st_mtime_ns)
         for extra in versions[:-HISTORY_KEEP]:
@@ -650,6 +676,7 @@ async def knowledge_edit(path: str, old_string: str, new_string: str) -> str:
             if count != 1:
                 raise ToolError(f"old_string found {count} times in {rel}; it must occur exactly once (re-read the file)")
             new = text.replace(old_string, new_string, 1).encode()
+            refuse_broken_skill(rel, new.decode("utf-8"))
             if replace_if_unchanged(full, data, new):
                 break
         else:
@@ -666,6 +693,7 @@ async def knowledge_write(path: str, content: str, base_version: str = "") -> st
     full, rel = resolve(path)
     check_writable(rel)
     refuse_secrets(content)
+    refuse_broken_skill(rel, content)
     async with _locks.setdefault(rel, asyncio.Lock()):
         current = full.read_bytes() if full.exists() else None
         if current is not None and base_version != version(current):
@@ -810,6 +838,13 @@ def lint_all() -> dict[str, list[str]]:
             continue
         for check, items in kb_lint.lint(files, mem=mem).items():
             report.setdefault(check, []).extend(items if mem == "memory" else [f"{mem}/{i}" for i in items])
+    if in_scope("claude/skills/"):  # the shared skills: what would make one useless or misleading
+        mem_files = [r for r in files if r.count("/") == 1 and r.endswith(".md") and r.split("/")[0].endswith("memory")]
+        slugs = {r.split("/")[1][:-3].replace("-", "_") for r in mem_files} \
+            | {kb_lint.frontmatter(files[r]).get("name", "").replace("-", "_") for r in mem_files}
+        skills = {r[len("claude/skills/"):]: t for r, t in files.items() if r.startswith("claude/skills/")}
+        for check, items in kb_lint.skill_lint(skills, slugs, {r.split("/")[1] for r in mem_files}).items():
+            report.setdefault(check, []).extend(f"claude/skills/{i}" for i in items)
     gaps = get_graph()["insights"]
     report["isolated_note"] = [f"{i['id']} ({i['degree']} link)" for i in gaps["isolated"] if mem_of(i["id"])]
     report["sparse_topic"] = [f"{c['project']}: topic '{c['name']}' ({c['size']} notes, cohesion {c['cohesion']})"
@@ -968,9 +1003,10 @@ async def knowledge_related(path: str, limit: int = 10) -> str:
 
 @server.tool(annotations=READ)
 def knowledge_history(path: str, version: str = "") -> str:
-    """Earlier versions of a Markdown file: without `version` a list (newest first, with who changed it: a device
-    name, or VM for edits made directly on the VM); with `version` that version's full text plus its diff against the
-    current file. To undo a change, write the old text back with knowledge_write (pass the current base_version)."""
+    """Earlier versions of a Markdown file or a shared skill's file: without `version` a list (newest first, with who
+    changed it: a device name, or VM for edits made directly on the VM; "-removed" = the file was deleted); with
+    `version` that version's full text plus its diff against the current file. To undo a change, write the old text
+    back with knowledge_write (pass the current base_version; for a removed file leave it empty)."""
     import difflib
     _, rel = resolve(path)
     if not version:
@@ -978,7 +1014,8 @@ def knowledge_history(path: str, version: str = "") -> str:
         return "\n".join(f"{v['id']}  {time.strftime('%Y-%m-%d %H:%M', time.localtime(v['time']))}  by {v['by']}  "
                          f"({v['size']} bytes)" for v in vs) or f"(no history yet for {rel}: it has not changed since history started)"
     old = version_text(rel, version)
-    cur = (resolve(path)[0]).read_text()
+    full = resolve(path)[0]
+    cur = full.read_text() if full.exists() else ""  # removed: the diff shows the whole old text
     diff = "".join(difflib.unified_diff(old.splitlines(True), cur.splitlines(True), f"{rel}@{version}", f"{rel} (now)"))
     return shown(f"{diff or '(identical to the current file)'}\n\n<version {version}>\n{old}\n</version>")
 
@@ -1457,6 +1494,7 @@ async def mirror_push(request: Request):
                 raise ToolError("not a memo of a memory root this device mirrors")
             check_writable(rel)
             refuse_secrets(f["text"])
+            refuse_broken_skill(rel, f["text"])
             if len(f["text"].encode()) > MAX_BYTES:  # not indexed, so /mirror would never list it and the device drops it
                 raise ToolError(f"bigger than {MAX_BYTES // 1_000_000} MB")
         except ToolError as e:

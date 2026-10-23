@@ -476,18 +476,19 @@ def main():
         # Shared skills (23 Oct 2026): the admin's own device keeps them in ~/.claude/skills as real skills, both ways;
         # guests, PA's, masked and read-only tokens never write them; claude.ai's synced/ and dot-folders stay out.
         skills = tmp / "home-skills"
+        SK = lambda body: f"---\nname: t\ndescription: test skill\n---\n{body}\n"
         senv = {**menv, "KNOWLEDGE_TOKEN": "rw-token", "KNOWLEDGE_MIRROR": str(tmp / "mirror-own"), "KNOWLEDGE_SKILLS": str(skills)}
         (cla / "skills/synced/q").mkdir(parents=True); (cla / "skills/synced/q/SKILL.md").write_text("claude.ai skill\n")
         assert call("knowledge_read", {"path": "claude/skills/synced/q/SKILL.md"})[0]
         run_mm(senv)
         assert (skills / "x/SKILL.md").read_text() == "skill\n" and not (skills / "synced").exists()
-        (skills / "y/scripts").mkdir(parents=True); (skills / "y/SKILL.md").write_text("new skill\n")
+        (skills / "y/scripts").mkdir(parents=True); (skills / "y/SKILL.md").write_text(SK("new skill"))
         (skills / "y/scripts/run.py").write_text("print(1)\n"); (skills / "y/blob.bin").write_bytes(b"\0")
         (tmp / "elsewhere").mkdir(); (tmp / "elsewhere/SKILL.md").write_text("local only\n")
         (skills / "z").symlink_to(tmp / "elsewhere"); (skills / ".trash/old").mkdir(parents=True)
         (skills / ".trash/old/SKILL.md").write_text("trashed\n")
         run_mm(senv)
-        assert (cla / "skills/y/SKILL.md").read_text() == "new skill\n" and (cla / "skills/y/scripts/run.py").exists()
+        assert "new skill" in (cla / "skills/y/SKILL.md").read_text() and (cla / "skills/y/scripts/run.py").exists()
         assert not (cla / "skills/z").exists() and not (cla / "skills/.trash").exists() and not (cla / "skills/y/blob.bin").exists()
         (cla / "skills/x/SKILL.md").write_text("skill v2\n"); http("POST", "/invalidate", {"paths": ["claude/skills/x/SKILL.md"]}, token="watch-token")
         run_mm(senv)
@@ -511,10 +512,10 @@ def main():
         assert raw("POST", "/ui/api/admin/token", json.dumps({"name": "workpc", "update": True, "skills": True}),
                    {**ck, "Content-Type": "application/json", "X-Knowledge-UI": "1"})[0] == 400  # read-only token
         assert call("knowledge_write", {"path": "claude/skills/y/SKILL.md", "content": "x\n"})[0]
-        (skills / "mine").mkdir(); (skills / "mine/SKILL.md").write_text("unsent\n")
+        (skills / "mine").mkdir(); (skills / "mine/SKILL.md").write_text(SK("unsent"))
         run_mm(senv)
         assert not (skills / "y/SKILL.md").exists() and not (skills / "y/scripts").exists() and (skills / "y/blob.bin").exists() \
-            and (skills / "mine/SKILL.md").read_text() == "unsent\n"  # right off: synced copies go, own work stays
+            and "unsent" in (skills / "mine/SKILL.md").read_text()  # right off: synced copies go, own work stays
         assert return_skills(True) == 200 and not call("knowledge_write", {"path": "claude/skills/y/NOTES.md", "content": "notes\n"})[0]
         inval = lambda rel: http("POST", "/invalidate", {"paths": [rel]}, token="watch-token")
         # Review 23 Oct 2026: never write or empty through a linked skill folder (it leads into someone else's files).
@@ -529,12 +530,12 @@ def main():
         assert (tmp / "repo/SKILL.md").exists() and "failed" not in (log.read_text() if log.exists() else ""), log.read_text()
         # A skill the device had before skills were switched on is not overwritten: it becomes a conflict copy, once.
         (cla / "skills/x2").mkdir(); (cla / "skills/x2/SKILL.md").write_text("server x2\n"); inval("claude/skills/x2/SKILL.md")
-        skills2 = tmp / "home-skills2"; (skills2 / "x2").mkdir(parents=True); (skills2 / "x2/SKILL.md").write_text("my local x2\n")
+        skills2 = tmp / "home-skills2"; (skills2 / "x2").mkdir(parents=True); (skills2 / "x2/SKILL.md").write_text(SK("my local x2"))
         senv2 = {**senv, "KNOWLEDGE_MIRROR": str(tmp / "mirror-two"), "KNOWLEDGE_SKILLS": str(skills2)}
         for _ in range(3):
             run_mm(senv2)
         copies = list((cla / "skills/x2").glob("SKILL.offline-*.md"))
-        assert (skills2 / "x2/SKILL.md").read_text() == "server x2\n" and len(copies) == 1 and copies[0].read_text() == "my local x2\n", copies
+        assert (skills2 / "x2/SKILL.md").read_text() == "server x2\n" and len(copies) == 1 and "my local x2" in copies[0].read_text(), copies
         # A file the index cannot hold (> 2 MB) is refused and stays on the device instead of vanishing there.
         (skills / "big").mkdir(); (skills / "big/data.json").write_text("x" * 2_100_000)
         run_mm(senv); run_mm(senv)
@@ -543,6 +544,40 @@ def main():
         # Shared skills need a token that sees them: else a refusal, not a broken sync.
         assert raw("POST", "/ui/api/admin/token", json.dumps({"name": "x-pa", "write": True, "roots": ["memory"], "skills": True}),
                    {**ck, "Content-Type": "application/json", "X-Knowledge-UI": "1"})[0] == 400
+        # Nothing can be lost (23 Oct 2026): every skill file has history, a removal (also rm on the VM) keeps the last
+        # text, and a sync never removes many skills at once without a confirmation.
+        cur = re.search(r"version (\w+)", call("knowledge_read", {"path": "claude/skills/y/scripts/run.py"})[1]).group(1)
+        assert not call("knowledge_write", {"path": "claude/skills/y/scripts/run.py", "content": "print(2)\n", "base_version": cur})[0]
+        assert "by laptop" in call("knowledge_history", {"path": "claude/skills/y/scripts/run.py"})[1]  # scripts too, not only .md
+        (cla / "skills/y/scripts/run.py").unlink(); inval("claude/skills/y/scripts/run.py")  # a plain rm on the VM
+        hist = call("knowledge_history", {"path": "claude/skills/y/scripts/run.py"})[1]
+        assert "-removed" in hist, hist
+        before = [l.split()[0] for l in hist.splitlines() if "-removed" not in l][0]
+        assert "print(2)" in call("knowledge_history", {"path": "claude/skills/y/scripts/run.py", "version": before})[1]
+        assert not call("knowledge_write", {"path": "claude/skills/y/scripts/run.py", "content": "print(2)\n"})[0]  # restored
+        for i in range(6):
+            (cla / f"skills/bulk{i}").mkdir(); (cla / f"skills/bulk{i}/SKILL.md").write_text(f"---\nname: bulk{i}\ndescription: d\n---\n")
+            inval(f"claude/skills/bulk{i}/SKILL.md")
+        run_mm(senv)
+        assert all((skills / f"bulk{i}/SKILL.md").exists() for i in range(6))
+        for i in range(6):
+            (cla / f"skills/bulk{i}/SKILL.md").unlink(); (cla / f"skills/bulk{i}").rmdir(); inval(f"claude/skills/bulk{i}/SKILL.md")
+        run_mm(senv)
+        assert all((skills / f"bulk{i}/SKILL.md").exists() for i in range(6)) and "held back" in log.read_text(), log.read_text()
+        run_mm({**senv, "KNOWLEDGE_ALLOW_REMOVALS": "1"})
+        assert not any((skills / f"bulk{i}").exists() for i in range(6))
+        # A SKILL.md Claude could not use is refused, from every path; lint checks the skills.
+        err, text = call("knowledge_write", {"path": "claude/skills/nofront/SKILL.md", "content": "just text\n"})
+        assert err and "no frontmatter" in text, text
+        err, text = call("knowledge_edit", {"path": "claude/skills/y/SKILL.md", "old_string": "description: test skill\n", "new_string": ""})
+        assert err and "no description" in text, text  # an edit that strips the description is refused too
+        (skills / "broken").mkdir(); (skills / "broken/SKILL.md").write_text("no frontmatter\n")
+        run_mm(senv)
+        assert not (cla / "skills/broken").exists() and (skills / "broken/SKILL.md").exists() and "no frontmatter" in log.read_text()
+        (skills / "broken/SKILL.md").unlink(); (skills / "broken").rmdir()
+        (cla / "skills/y/SKILL.md").write_text(SK("see [[project_nowhere]]")); inval("claude/skills/y/SKILL.md")
+        lint_out = call("knowledge_lint", {})[1]
+        assert "claude/skills/y/SKILL.md: [[project_nowhere]]" in lint_out and "skill_dead_link" in lint_out, lint_out[-800:]
         # Review fixes 20 Oct: a project named like a path part does not capture other sessions; write patterns are
         # anchored; "Add" never wipes access; graph ETag per user; body cap; scoped ingest/lint; token routes.
         assert admin("/ui/api/admin/project", {"name": "home"})[0] == 200

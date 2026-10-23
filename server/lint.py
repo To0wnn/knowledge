@@ -4,6 +4,7 @@ Pure functions over {rel_path: text}, so they run on the in-memory index in mill
 The server only reports facts; judging contradictions or rewriting memos is left to the Claude session that
 reads the report.
 """
+import posixpath
 import re
 from datetime import date
 
@@ -143,6 +144,53 @@ def missing_structure(text: str) -> list[str]:
     return [h for h in STRUCTURE if not re.search(rf"^{h}\b", text, re.M)]
 
 
+SKILL_NAME = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+SKILL_LINES = 500  # Anthropic's skill guidance: keep SKILL.md under ~500 lines, details in referenced files
+MEMO_FILE = re.compile(r"\b((?:project|reference|feedback|incident|infra|user)_[\w-]+\.md)\b")
+MD_LINK = re.compile(r"\]\(([^)\s#]+)\)")
+
+
+def skill_broken(text: str) -> str:
+    """Why Claude Code could not use this SKILL.md ("" = fine): without frontmatter or description it loads with
+    empty metadata and is never picked up by itself. A write that would cause this is refused."""
+    if not FRONT.match(text):
+        return "no frontmatter (--- name / description --- at the top)"
+    desc = frontmatter(text).get("description", "").strip("'\"")
+    if not desc or desc in (">", "|", ">-", "|-"):  # a folded YAML block is not read by this parser: write it on one line
+        return "no description on one line in the frontmatter (it is how Claude decides to use the skill)"
+    return ""
+
+
+def skill_lint(skills: dict[str, str], memo_slugs: set[str], memo_files: set[str]) -> dict[str, list[str]]:
+    """Checks for the shared skills: {"<folder>/<file>": text} of claude/skills. Calibrated 23 Oct 2026 on 44 skills
+    (22 own, 22 of Anthropic): every own skill passes; 9 of Anthropic's use a display name or run long."""
+    report: dict[str, list[str]] = {k: [] for k in ("skill_broken", "skill_name_mismatch", "skill_too_long",
+                                                   "skill_dead_link", "possible_secret_in_skill")}
+    for rel, text in sorted(skills.items()):
+        folder, _, file = rel.partition("/")
+        if file == "SKILL.md":
+            if why := skill_broken(text):
+                report["skill_broken"].append(f"{folder}: {why}")
+            name = frontmatter(text).get("name", "").strip("'\"")
+            if name and (name != folder or not SKILL_NAME.match(name) or len(name) > 64):
+                report["skill_name_mismatch"].append(f"{folder}: name '{name}' (use the folder name: lowercase, digits, hyphens)")
+            if (n := text.count("\n")) > SKILL_LINES:
+                report["skill_too_long"].append(f"{folder}: {n} lines (move details to a referenced file)")
+        if not file.endswith(".md"):
+            continue
+        plain = CODE.sub("", text)
+        dead = [f"[[{s}]]" for s in links(text) if s not in memo_slugs]
+        dead += [m for m in MEMO_FILE.findall(plain) if m not in memo_files]
+        here = rel.rsplit("/", 1)[0]  # a link is relative to the file's own folder (references/a.md -> b.md)
+        dead += [t for t in MD_LINK.findall(plain) if "://" not in t and not t.startswith(("/", "~", "mailto:"))
+                 and posixpath.normpath(f"{here}/{t}") not in skills]
+        if dead:
+            report["skill_dead_link"].append(f"{rel}: {', '.join(sorted(set(dead))[:5])}")
+        if hits := sum(1 for m in SECRET_HINT.finditer(re.sub(r"‹[^›\n]*›", "", text)) if looks_secret(m.group(0))):
+            report["possible_secret_in_skill"].append(f"{rel}: {hits} line(s) (values not shown)")
+    return report
+
+
 def new_memo_lacks(text: str) -> list[str]:
     """What a new memo misses by house rule 2: frontmatter name/description/type and, except feedback and user memos,
     "## Stand" and "## Keuzes". The server refuses such a write, and so does the VM hook (memory-check.py --pre)."""
@@ -271,6 +319,13 @@ def render(report: dict[str, list[str]]) -> str:
 
 if __name__ == "__main__":  # self-check
     assert new_memo_lacks("plain") == ["frontmatter name", "frontmatter description", "frontmatter type", "## Stand", "## Keuzes"]
+    assert skill_broken("# just text") and skill_broken("---\nname: a\n---\nx") and skill_broken("---\nname: a\ndescription: >\n  x\n---\n")
+    assert skill_broken("---\nname: a\ndescription: Does a.\n---\nbody") == ""
+    sk = skill_lint({"a/SKILL.md": "---\nname: b\ndescription: d\n---\nsee [[project_x]], project_gone.md, [ref](ref.md), [ok](ok.md)\n",
+                     "a/ok.md": "fine", "a/refs/one.md": "[two](two.md) [up](../ok.md)", "a/refs/two.md": "x", "c/SKILL.md": "---\ndescription: d\n---\n" + "x\n" * 501}, {"project_x"}, {"project_x.md"})
+    assert sk["skill_name_mismatch"] == ["a: name 'b' (use the folder name: lowercase, digits, hyphens)"], sk
+    assert sk["skill_dead_link"] == ["a/SKILL.md: project_gone.md, ref.md"], sk
+    assert sk["skill_too_long"] == ["c: 504 lines (move details to a referenced file)"] and not sk["skill_broken"], sk
     assert new_memo_lacks("---\nname: a\ndescription: d\nmetadata:\n  type: feedback\n---\nRule.") == []
     files = {
         "memory/MEMORY.md": "- [A](a.md) — hook\n- [Gone](gone.md) — x\n",
