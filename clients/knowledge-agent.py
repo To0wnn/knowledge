@@ -145,11 +145,11 @@ def cli(name: str) -> str:
     return path
 
 
-def run_cli(argv: list, already_ok: bool = False) -> bool:
-    """Run an agent CLI step and say what it did; stop loudly on a failure (unless it only says it is already done)."""
+def run_cli(argv: list, ok_if: tuple = ()) -> bool:
+    """Run an agent CLI step and say what it did; stop loudly on a failure, unless its output holds one of ok_if."""
     r = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace")
     text = (r.stdout + r.stderr).strip()
-    if r.returncode != 0 and not (already_ok and "already" in text.lower()):
+    if r.returncode != 0 and not any(x in text.lower() for x in ok_if):
         sys.exit(f"{Path(argv[0]).stem} {' '.join(argv[1:])} failed:\n{text[-1500:]}")
     print(f"{Path(argv[0]).stem} {' '.join(argv[1:3])}: {text.splitlines()[-1] if text else 'ok'}")
     return r.returncode == 0
@@ -157,9 +157,9 @@ def run_cli(argv: list, already_ok: bool = False) -> bool:
 
 def install_claude():
     claude = cli("claude")
-    run_cli([claude, "plugin", "marketplace", "add", MARKET], already_ok=True)
+    run_cli([claude, "plugin", "marketplace", "add", MARKET], ok_if=("already",))
     run_cli([claude, "plugin", "marketplace", "update", "knowledge"])
-    run_cli([claude, "plugin", "install", "knowledge@knowledge", "--scope", "user"], already_ok=True)
+    run_cli([claude, "plugin", "install", "knowledge@knowledge", "--scope", "user"], ok_if=("already",))
     run_cli([claude, "plugin", "update", "knowledge@knowledge"])  # install leaves an installed copy at its old version
     print("(a note that options are not set is fine: the plugin takes the token from the keyring)")
     # The memory lives on the server: Claude's local auto memory would build a second one.
@@ -207,8 +207,8 @@ def install_plugin(agent: str):
     remove_old_setup(agent)
     if agent == "codex":
         codex = cli("codex")
-        run_cli([codex, "plugin", "marketplace", "add", MARKET], already_ok=True)
-        run_cli([codex, "plugin", "marketplace", "upgrade", "knowledge"])
+        run_cli([codex, "plugin", "marketplace", "add", MARKET], ok_if=("already",))
+        run_cli([codex, "plugin", "marketplace", "upgrade", "knowledge"], ok_if=("not configured as a git",))  # a local checkout
         run_cli([codex, "plugin", "add", "knowledge@knowledge"])
         restart_codex()
         return print("done; open codex and type /hooks once to trust the four knowledge hooks")
@@ -369,6 +369,7 @@ def main(argv: list):
 
 if __name__ == "__main__":
     if sys.argv[1:2] == ["install"]:  # setup is run by a person: errors go to them, loudly
+        sys.stdout.reconfigure(errors="replace")  # agent CLIs print ✔ and such; a Windows pipe is cp1252
         main(sys.argv[1:])
     elif "--selftest" in sys.argv:
         c = hook_config("codex", "-")["hooks"]
