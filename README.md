@@ -361,6 +361,29 @@ read it with `EnvironmentFile`; `token.py` and `tests/ui_smoke.py` load it thems
    the plugin setting (`claude plugin configure`) and Codex/agy `KNOWLEDGE_TOKEN` in `~/.profile`; the helper then
    prints `{}` and the static plugin header applies (tested on CT 113 with plugin 0.8.1). Set `"autoUpdate": true` on the marketplace in
    `extraKnownMarketplaces`; installed copies only update when `plugin/.claude-plugin/plugin.json` gets a new `version`.
+   One version for every agent: bump `plugin/.claude-plugin/plugin.json` and `plugin/.codex-plugin/plugin.json`
+   together (agy reads the Claude one); `server/test_server.py` fails when they differ.
+
+### Codex and agy as plugins (23 Oct 2026)
+
+The same `plugin/` folder installs in Codex and agy, so every agent gets the same hooks, skills and MCP server:
+
+- Codex: `codex plugin marketplace add To0wnn/knowledge` + `codex plugin add knowledge@knowledge` (marketplace file
+  `.agents/plugins/marketplace.json`; manifest, hooks and MCP in `plugin/.codex-plugin/`). Update:
+  `codex plugin marketplace upgrade knowledge` + `codex plugin add knowledge@knowledge`. Trust the four hooks once
+  with `/hooks`; a running Codex app-server keeps the old settings until it restarts.
+- agy: `agy plugin install https://github.com/To0wnn/knowledge/tree/main/plugin` (manifest
+  `plugin/.antigravity-plugin/plugin.json`, hooks `plugin/hooks.json`, MCP `plugin/mcp_config.json`; agy runs
+  hooks in the plugin folder, `plugin/python3.cmd` maps `python3` to `py` under `cmd /c`). Update: the same command.
+- MCP for both: a stdio relay, `plugin/hooks/agent_hooks.py mcp`, that forwards each JSON-RPC line to `/mcp` with
+  the token from `token_store.py`. Neither agent can give a plugin's HTTP server the token without a plain file:
+  Codex runs a plugin's header helper without the plugin folder or the environment, agy sends a `${VAR}` header as
+  is and keeps a plugin variable in plain `config.json`.
+- Each agent loads only its own files (`agy plugin validate` warns that Claude's `.mcp.json` and `hooks/hooks.json`
+  are never loaded; Codex follows the paths in its manifest).
+- Windows: the MCP command is `python3`, which a stock python.org install may lack; Windows keeps
+  `clients/knowledge-agent.py install codex|agy` until that is tested on a real PC. Devices that ran the setup
+  script remove its knowledge entries before installing the plugin, else server and hooks load twice.
 4. Turn off local auto memory on that device so it does not build a second memory:
    `"autoMemoryEnabled": false` in `~/.claude/settings.json`.
 5. Start a session: the first lines show `[knowledge context part 1/2]`; `/mcp` lists `knowledge`.

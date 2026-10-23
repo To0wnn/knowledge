@@ -92,22 +92,19 @@ def mcp(tok: str):
             with urllib.request.urlopen(urllib.request.Request(f"{URL}/mcp", raw, headers), timeout=120) as r:
                 session = r.headers.get("Mcp-Session-Id") or session
                 sse, body = r.headers.get("Content-Type", "").startswith("text/event-stream"), r.read().decode("utf-8")
-        except OSError as e:  # HTTPError too: answer the request with the reason, keep serving
+            replies = [json.loads(d) for d in ([ln[5:].strip() for ln in body.splitlines() if ln.startswith("data:")]
+                                               if sse else [body]) if d.strip()]
+        except Exception as e:  # HTTP error, cut-off or non-JSON body: answer every request in it, keep serving
             try:
-                msg_id = json.loads(raw).get("id")
-            except (ValueError, AttributeError):
-                msg_id = None
-            if msg_id is None:  # a notification gets no answer
-                continue
+                msg = json.loads(raw)
+            except ValueError:
+                msg = None
+            ids = [m["id"] for m in (msg if isinstance(msg, list) else [msg]) if isinstance(m, dict) and m.get("id") is not None]
             reason = {401: "token invalid or revoked (KNOWLEDGE_TOKEN or the keyring)",
-                      403: "only reachable from the home network or WireGuard"}.get(getattr(e, "code", 0), str(e))
-            out.write(json.dumps({"jsonrpc": "2.0", "id": msg_id, "error": {"code": -32000,
-                                  "message": f"knowledge server: {reason}"}}).encode() + b"\n")
-            out.flush()
-            continue
-        for data in ([ln[5:].strip() for ln in body.splitlines() if ln.startswith("data:")] if sse else [body]):
-            if data.strip():
-                out.write(json.dumps(json.loads(data)).encode() + b"\n")  # one message per line, as stdio needs
+                      403: "only reachable from the home network or WireGuard"}.get(getattr(e, "code", 0), str(e) or type(e).__name__)
+            replies = [{"jsonrpc": "2.0", "id": i, "error": {"code": -32000, "message": f"knowledge server: {reason}"}} for i in ids]
+        for reply in replies:
+            out.write(json.dumps(reply).encode() + b"\n")  # one message per line, as stdio needs
         out.flush()
 
 
