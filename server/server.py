@@ -634,9 +634,10 @@ SEARCH_SECONDS = 3
 
 
 @server.tool(annotations=READ)
-def knowledge_search(pattern: str, root: str = "", max_results: int = 60) -> str:
+def knowledge_search(pattern: str, root: str = "", max_results: int = 60, archive: bool = False) -> str:
     """Case-insensitive regex search over shared files (all roots, or one or more comma-separated roots, e.g.
-    "trade,trade-memory"). Returns path:line: text."""
+    "trade,trade-memory"). Returns path:line: text. Archive folders (archief/, old/, history/, sessions/ ...) are
+    skipped and only counted; archive=true searches them too."""
     # The `regex` module, not `re`: it can time out and release the GIL, so a catastrophic pattern such as (a+)+$
     # costs at most SEARCH_SECONDS instead of freezing the whole server (security review 20 Oct 2026).
     try:
@@ -647,21 +648,27 @@ def knowledge_search(pattern: str, root: str = "", max_results: int = 60) -> str
     except regex.error as e:
         raise ToolError(f"invalid regex: {e}")
     try:
-        found = search_lines(rx_i, rx_low, root, max_results)
-        if found == "(no matches)":
+        found = search_lines(rx_i, rx_low, root, max_results, archive)
+        if found.startswith("(no matches)"):
             log_gap("search", pattern)
         return found
     except TimeoutError:
         raise ToolError(f"search took longer than {SEARCH_SECONDS} s; use a simpler pattern")
 
 
-def search_lines(rx_i, rx_low, root: str, max_results: int) -> str:
-    out = []
+def search_lines(rx_i, rx_low, root: str, max_results: int, archive: bool = False) -> str:
+    out, archived = [], 0
     deadline = time.monotonic() + SEARCH_SECONDS
     for rel, text, low in index.items(root):
         if not in_scope(rel):
             continue
         hay, rx = (low, rx_low) if rx_low is not None and low is not None else (text, rx_i)
+        if not archive and is_archive(rel):
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise TimeoutError
+            archived += bool(rx.search(hay, timeout=left, concurrent=True))
+            continue
         # One C-level regex pass over the whole file (re.M keeps ^/$ per line); at most one hit per line.
         last, lineno, pos = -1, 1, 0
         left = deadline - time.monotonic()
@@ -677,7 +684,8 @@ def search_lines(rx_i, rx_low, root: str, max_results: int) -> str:
             out.append(f"{rel}:{lineno}: {shown(text[start:end if end >= 0 else None][:300])}")
             if len(out) >= max_results:
                 return "\n".join(out) + "\n[max_results reached]"
-    return "\n".join(out) or "(no matches)"
+    note = f"\n[{archived} more file(s) in the archive match: archive=true to include them]" if archived else ""
+    return ("\n".join(out) or "(no matches)") + note
 
 
 @server.tool(annotations=EDIT)
@@ -895,6 +903,13 @@ def mem_of(rel: str) -> bool:
 
 
 SOURCES = "homelab/sources"  # raw sources (immutable once written) + LOG.md, the LLM-wiki "raw" layer
+# The archive: history, superseded and frozen material in any project. Agents' searches skip it unless asked
+# (archive=true) and say how many hits it held; a path is always readable. Same names in the house rules.
+ARCHIVE_DIRS = {"archief", "archive", "old", "history", "sessions"}
+
+
+def is_archive(rel: str) -> bool:
+    return any(p in ARCHIVE_DIRS or p.startswith(("archief-", "archive-")) for p in rel.split("/")[1:-1])
 STOPWORDS = set("de het een en van voor met dat die niet ook naar maar als bij over this that with from have will your "
                 "the and for are was were what when which into about".split())
 
@@ -997,13 +1012,13 @@ async def knowledge_ingest(url: str = "", text: str = "", title: str = "") -> st
 
 
 @server.tool(annotations=READ)
-async def knowledge_semantic_search(query: str, root: str = "", limit: int = 10) -> str:
+async def knowledge_semantic_search(query: str, root: str = "", limit: int = 10, archive: bool = False) -> str:
     """Search Markdown notes by meaning (synonyms, paraphrases, Dutch or English), for when knowledge_search (regex)
     finds nothing or you do not know the exact words. root: one or more comma-separated roots, e.g. "trade,trade-memory".
-    Returns path:line (score): passage."""
+    Returns path:line (score): passage. Archive folders are skipped unless archive=true."""
     # A scoped token searches its own roots by default, so the top hits are not used up by notes it may not see.
     roots = tuple(r.strip() + "/" for r in root.split(",") if r.strip()) or tuple(r + "/" for r in device.get().get("roots") or ())
-    hits = [h for h in await asyncio.to_thread(vec.search, query, roots, min(limit, 30)) if in_scope(h["path"])]
+    hits = [h for h in await asyncio.to_thread(vec.search, query, roots, min(limit, 30), None if archive else is_archive) if in_scope(h["path"])]
     if vec.matrix is not None and weak_answer(query, hits):  # while the index is (re)built nothing is a gap
         log_gap("semantic", query, hits[0]["score"] if hits else None)
     if not hits:
@@ -1012,12 +1027,14 @@ async def knowledge_semantic_search(query: str, root: str = "", limit: int = 10)
 
 
 @server.tool(annotations=READ)
-async def knowledge_related(path: str, limit: int = 10) -> str:
+async def knowledge_related(path: str, limit: int = 10, archive: bool = False) -> str:
     """The notes most related to one note, ranked by a relevance model: direct links, shared raw sources, shared
-    neighbours (Adamic-Adar), same type and similar meaning. Use it to find context before changing or adding a memo."""
+    neighbours (Adamic-Adar), same type and similar meaning. Use it to find context before changing or adding a memo.
+    Archive folders are left out unless archive=true."""
     _, rel = resolve(path)
     graph = await asyncio.to_thread(get_graph)
-    out = [r for r in kb_graph.related(graph, rel, 30, vec.similar(rel)) if in_scope(r["id"])][:min(limit, 30)]
+    out = [r for r in kb_graph.related(graph, rel, 30, vec.similar(rel))
+           if in_scope(r["id"]) and (archive or not is_archive(r["id"]))][:min(limit, 30)]
     return "\n".join(f"{r['id']} ({r['score']}): {r['label']} — {r['why']}" for r in out) or "(no related notes found)"
 
 
@@ -1130,7 +1147,7 @@ def open_items_text(mem: str) -> list[str]:
     memos = {r: t for r, t, _ in index.items() if in_scope(r) and r.startswith(mem + "/")}
     out, overdue = [], kb_lint.lint(memos, mem=mem)["open_overdue"]
     tasks = [f"- {r.removeprefix(mem + '/')}: {line.strip().removeprefix('- ')}" for r, t in sorted(memos.items())
-             if "/archief/" not in r for line in t.splitlines() if (m := kb_lint.OPEN_DUE.search(line)) and m.group(2).startswith("[")]
+             if not is_archive(r) for line in t.splitlines() if (m := kb_lint.OPEN_DUE.search(line)) and m.group(2).startswith("[")]
     if tasks:
         out.append(f"===== open tasks between agents ({mem}) =====\nEach line names its owner. Yours: acknowledge it by adding "
                    "'(bezig <owner>, <date>)' to that line with knowledge_edit, and when done remove the line from the "
@@ -2340,7 +2357,7 @@ def search_notes(q: str, roots: tuple, limit: int = 40) -> list[dict]:
         head = hay[:400]
         score = 100 * all(w in rel.lower() for w in words) + 50 * all(w in head for w in words)
         score += 30 if mem_of(rel) and rel.count("/") == 1 else 20 if rel.endswith(".md") and "/skills/" not in rel else 10
-        if "/archief/" in rel or rel.startswith(SOURCES) or "/sessions/" in rel:
+        if is_archive(rel) or rel.startswith(SOURCES):
             score -= 40
         phrase, found = " ".join(words), []
         for n, line in enumerate(text.splitlines(), 1):

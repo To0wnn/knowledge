@@ -173,7 +173,7 @@ class Vectors:
             return "semantic index is being built for the first time; use knowledge_search meanwhile"
         return f"{len(self.rows)} chunks" + (f", {self.pending} still being embedded" if self.pending else "")
 
-    def search(self, query: str, roots: tuple[str, ...] = (), limit: int = 10) -> list[dict]:
+    def search(self, query: str, roots: tuple[str, ...] = (), limit: int = 10, skip=None) -> list[dict]:
         with self.lock:
             rows, matrix = self.rows, self.matrix
         if matrix is None:
@@ -182,7 +182,7 @@ class Vectors:
         out, per_file = [], {}
         for i in np.argsort(-scores):
             rel, line, chunk = rows[i]
-            if roots and not rel.startswith(roots):
+            if roots and not rel.startswith(roots) or skip and skip(rel):
                 continue
             if per_file.get(rel, 0) >= 2:  # at most two passages per file, so one long file cannot fill the list
                 continue

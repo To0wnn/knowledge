@@ -172,6 +172,17 @@ def main():
         assert "trade/venv" not in call("knowledge_list", {"root": "trade"})[1]
         assert "trade-memory/plan.md:4" in call("knowledge_search", {"pattern": "entry timing plan", "root": "trade,trade-memory"})[1]
         assert "trade-memory" not in call("knowledge_search", {"pattern": "entry timing plan", "root": "memory"})[1]
+        # The archive (archief/, old/, history/, sessions/, archief-*): skipped and counted unless archive=true.
+        call("knowledge_write", {"path": "trade-memory/archief/plan_archief.md", "content": "old zebra plan\n"})
+        call("knowledge_write", {"path": "trade-memory/zebra.md", "content": memo("current zebra\n", "zebra")})
+        res = call("knowledge_search", {"pattern": "zebra", "root": "trade-memory"})[1]
+        assert "trade-memory/zebra.md" in res and "plan_archief" not in res and "1 more file(s) in the archive" in res, res
+        assert "plan_archief.md:1" in call("knowledge_search", {"pattern": "zebra", "root": "trade-memory", "archive": True})[1]
+        res = call("knowledge_search", {"pattern": "old zebra", "root": "trade-memory"})[1]
+        assert res.startswith("(no matches)") and "1 more file(s) in the archive" in res, res
+        import server as srv
+        assert srv.is_archive("a350/docs/history/x.md") and srv.is_archive("a/requests/archief-2026-10-23/x.md")
+        assert not srv.is_archive("a350/old.md") and not srv.is_archive("memory/project_old.md")
         assert not call("knowledge_write", {"path": "trade-memory/new.md", "content": memo("x\n", "new")})[0]
         assert call("knowledge_write", {"path": "trade/bot2.py", "content": "x"})[0]
         err, text = call("knowledge_edit", {"path": "memory/fact.md", "old_string": "line", "new_string": "l"}, token="ro-token")
