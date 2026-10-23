@@ -41,7 +41,7 @@ function renderTokens() {
     const access = t.watch ? "VM watcher" : t.write ? "read + write" : "read";
     const name = el("td", "mono", t.name);
     if (SYSTEM.has(t.name) || t.watch) name.append(el("span", "muted", " · used by the VM"));
-    tr.append(name, el("td", "", access), el("td", "", scopeText(t) + (t.redact ? " · secrets masked" : "")),
+    tr.append(name, el("td", "", access + (t.skills ? " · shared skills" : "")), el("td", "", scopeText(t) + (t.redact ? " · secrets masked" : "")),
       el("td", "muted", t.created ? `${day(t.created)}${t.by ? " · " + t.by : ""}` : "before the admin page"),
       el("td", t.last_used ? "muted" : "unused", t.last_used ? ago(t.last_used) : "never used"));
     const td = el("td"), b = el("button", "ghost danger", "Revoke");
@@ -50,7 +50,16 @@ function renderTokens() {
       const warn = SYSTEM.has(t.name) || t.watch ? " The VM uses this token: live updates, the weekly report or the VM sessions stop." : "";
       if (confirm(`Revoke ${t.name}? Devices using it stop working right away.${warn}`)) run(() => api("/ui/api/admin/token", { name: t.name, revoke: true }), b);
     };
-    td.append(b); tr.append(td);
+    td.append(b);
+    if (state.admin && !t.owner && !t.watch) { // switch shared skills without making a new token
+      const s = el("button", "ghost", t.skills ? "Skills off" : "Skills on");
+      s.setAttribute("aria-label", `${t.skills ? "Stop" : "Start"} shared skills for ${t.name}`);
+      s.title = t.skills ? "The device removes its synced copies at the next sync; skills it made itself stay there"
+                         : "The device fetches the shared skills at its next session start and may add or change them";
+      s.onclick = () => run(() => api("/ui/api/admin/token", { name: t.name, update: true, skills: !t.skills }), s);
+      td.append(" ", s);
+    }
+    tr.append(td);
     return tr;
   }));
   // Rebuilt after every action: keep what was ticked. "All projects" is explicit, the server refuses an empty pick.
@@ -171,7 +180,7 @@ async function load() {
     const l = state.limits;
     document.querySelector(".brand").textContent = `Knowledge · ${state.user}`;
     for (const sec of ["people", "settings", "system"]) document.querySelector(`[data-sec=${sec}]`).hidden = true;
-    $("t-watch").closest("label").style.display = "none"; // .check sets display, which beats [hidden]
+    for (const id of ["t-watch", "t-skills"]) $(id).closest("label").style.display = "none"; // .check sets display, which beats [hidden]
     $("t-roots").previousElementSibling.textContent = "Projects (tick at least one)";
     $("limits-tokens").textContent = `You may hold ${l.tokens} tokens, for the projects you have access to. Revoke one you no longer use.`;
     $("limits-projects").textContent = `You may create ${l.projects} projects (${l.created} made so far), up to ${l.project_mb} MB each. The admin is told about every new project and token.`;
@@ -218,6 +227,7 @@ $("token-form").onsubmit = (e) => {
   run(async () => {
     res = await api("/ui/api/admin/token", {
       name: $("t-name").value.trim(), write: $("t-write").checked, redact: $("t-redact").checked, watch: $("t-watch").checked,
+      skills: $("t-skills").checked,
       all: !!$("t-roots").querySelector('input[value="*"]:checked'),
       roots: [...$("t-roots").querySelectorAll("input:checked")].flatMap((c) => c.value.split(",")).filter((r) => r !== "*"),
     });

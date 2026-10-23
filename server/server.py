@@ -60,7 +60,9 @@ ROOTS = {
 }
 # The "claude" root is a dedicated share (CLAUDE.md, skills/, agents/), never all of ~/.claude (credentials).
 CLAUDE_READABLE = ("CLAUDE.md", "house_rules.md", "skills/*", "agents/*")
-WRITABLE = ["memory/*.md", "memory/archief/*.md", "homelab/*.md", "anpitek-memory/*.md", "anpitek-memory/archief/*.md",
+# Shared skills: text files in claude/skills/<name>/, written only by the admin's own devices (write_refusal).
+SKILL_EXT = {".md", ".py", ".sh", ".json", ".txt", ".yaml", ".yml", ".toml", ".js", ".html", ".css", ".xml", ".xsd"}
+WRITABLE = ["claude/skills/*/**", "memory/*.md", "memory/archief/*.md", "homelab/*.md", "anpitek-memory/*.md", "anpitek-memory/archief/*.md",
             "trade-memory/*.md", "trade-memory/archief/*.md", "anpitek/*/*.md", "trade/*.md", "trade/docs/*.md",
             "memory/sessions/*.md", "anpitek-memory/sessions/*.md", "trade-memory/sessions/*.md"]  # projects added in the UI extend it
 SKIP_PARTS = {".git", "__pycache__", "node_modules", ".venv", "venv", ".next", ".cache"}
@@ -110,6 +112,8 @@ def resolve(path: str, scoped: bool = True) -> tuple[Path, str]:
         raise ToolError("path not shared")
     if root == "claude" and not any(fnmatch.fnmatch(rel, p) for p in CLAUDE_READABLE):
         raise ToolError("only CLAUDE.md, house_rules.md, skills/ and agents/ are shared from ~/.claude")
+    if root == "claude" and (rel.startswith("skills/synced/") or any(x.startswith(".") for x in rel.split("/"))):
+        raise ToolError("path not shared")  # Claude Code's own: skills synced from claude.ai, .trash
     if root in MD_ONLY and not rel.endswith(".md"):
         raise ToolError(f"only Markdown is shared from {root}/ (it is a code repo)")
     if scoped and not in_scope(f"{root}/{rel}"):
@@ -380,6 +384,11 @@ def write_refusal(rel: str) -> str:
         return "you may only read this project"
     if not writable_path(rel):
         return f"writes are allowed only for {', '.join(WRITABLE)}"
+    if rel.startswith("claude/"):  # instructions every agent follows: only tokens the admin ticked "Shared skills" for
+        if not dev.get("skills") or dev.get("redact"):
+            return "this device may not change shared skills (admin page, Tokens: Shared skills)"
+        if PurePosixPath(rel).suffix.lower() not in SKILL_EXT:
+            return f"skills hold text files only ({', '.join(sorted(SKILL_EXT))})"
     return ""
 
 
@@ -1122,7 +1131,7 @@ def token_device(given: str) -> dict | None:
         return None
     name, cfg = hit
     dev = {"name": name, "write": bool(cfg.get("write")), "watch": bool(cfg.get("watch")),
-           "roots": cfg.get("roots") or [], "redact": bool(cfg.get("redact")),
+           "roots": cfg.get("roots") or [], "redact": bool(cfg.get("redact")), "skills": bool(cfg.get("skills")),
            "write_roots": cfg.get("write_roots")}  # None: may write every root it reads (a PA: reads all, writes memory)
     if cfg.get("owner"):  # made by a person on the admin page: never more than that person may do right now
         if not (dev := owned_scope(dev, user_device(cfg["owner"]))):
@@ -1141,12 +1150,12 @@ def owned_scope(dev: dict, user: dict | None) -> dict | None:
     if not roots:  # empty roots would mean "everything"
         return None
     write_roots = [r for r in roots if r in user["write_roots"]] if dev["write"] else []
-    return {**dev, "roots": roots, "write_roots": write_roots, "write": bool(write_roots), "watch": False}
+    return {**dev, "roots": roots, "write_roots": write_roots, "write": bool(write_roots), "watch": False, "skills": False}
 
 
 assert owned_scope({"roots": ["a", "a-memory", "b"], "write": True, "watch": True},
                    {"roots": ["a", "a-memory"], "write_roots": ["a-memory"]}) == \
-    {"roots": ["a", "a-memory"], "write": True, "write_roots": ["a-memory"], "watch": False}
+    {"roots": ["a", "a-memory"], "write": True, "write_roots": ["a-memory"], "watch": False, "skills": False}
 assert owned_scope({"roots": ["b"], "write": False, "watch": False}, {"roots": ["a"], "write_roots": []}) is None
 assert owned_scope({"roots": ["a"], "write": False}, None) is None
 
@@ -1238,7 +1247,8 @@ def user_device(username: str) -> dict | None:
     """The device record for a person signed in through Authentik. Admins (KNOWLEDGE_ADMINS) see and edit everything;
     others only the projects an admin gave them (read or write). None = no access (yet)."""
     if username in ADMINS:
-        return {"name": f"user:{username}", "user": username, "admin": True, "write": True, "roots": [], "redact": False}
+        return {"name": f"user:{username}", "user": username, "admin": True, "write": True, "roots": [], "redact": False,
+                "skills": True}
     perms = {p: m for p, m in read_json(USERS_FILE, {}).get(username, {}).get("projects", {}).items() if p in PROJECTS}
     if not perms:
         return None
@@ -1387,12 +1397,18 @@ SYNC_MAX_FILE = 300_000
 
 
 def mirror_roots() -> list[str]:
-    """The memory roots this device keeps an offline copy of: the ones it may write (a read-only token gets none)."""
-    return [mem for _, mem in list(PROJECTS.values()) if in_scope(mem + "/") and may_write(f"{mem}/MEMORY.md")]
+    """The memory roots this device keeps an offline copy of: the ones it may write (a read-only token gets none).
+    "claude" = the shared skills, for a device that may change them; it keeps them in ~/.claude/skills/ as real skills."""
+    mems = [mem for _, mem in list(PROJECTS.values()) if in_scope(mem + "/") and may_write(f"{mem}/MEMORY.md")]
+    return mems + ["claude"] * may_write("claude/skills/x/SKILL.md")
 
 
 def mirrorable(rel: str, roots: list[str]) -> bool:
-    """Memos and their archief/, not the session logs (they only grow and are never edited offline)."""
+    """Memos and their archief/, not the session logs (they only grow and are never edited offline); for "claude" the
+    text files of the skills."""
+    if rel.split("/", 1)[0] == "claude":
+        return "claude" in roots and rel.startswith("claude/skills/") and rel.count("/") >= 3 \
+            and PurePosixPath(rel).suffix.lower() in SKILL_EXT
     return rel.split("/", 1)[0] in roots and rel.endswith(".md") and not rel.split("/", 2)[1:2] == ["sessions"]
 
 
@@ -1458,7 +1474,8 @@ async def mirror_push(request: Request):
                     audit("mirror", rel)
                     out["written"][rel] = version(data)
                     continue
-            copy, copy_rel = resolve(f"{rel[:-3]}.offline-{time.strftime('%Y%m%d-%H%M%S')}.md")
+            p = PurePosixPath(rel)  # also a skill's script: x.offline-<time>.py
+            copy, copy_rel = resolve(str(p.with_name(f"{p.stem}.offline-{time.strftime('%Y%m%d-%H%M%S')}{p.suffix}")))
             if not replace_if_unchanged(copy, None, data):
                 out["refused"].append(f"{name}: changed while writing")
                 continue
@@ -1936,13 +1953,22 @@ async def ui_admin_token(request: Request, body: dict):
             name = prefix + name.removeprefix(prefix)
             if sum(cfg.get("owner") == owner for cfg in tokens.values()) >= USER_MAX_TOKENS:
                 raise ToolError(f"you may hold {USER_MAX_TOKENS} tokens; revoke one first")
-            if body.get("all") or body.get("watch"):
-                raise ToolError("only admins make tokens for all projects or the VM watcher")
+            if body.get("all") or body.get("watch") or body.get("skills") or body.get("update"):
+                raise ToolError("only admins make tokens for all projects, shared skills or the VM watcher")
             roots = [str(r) for r in body.get("roots", [])]
             if set(roots) - set(dev["roots"]):
                 raise ToolError("pick only projects you have access to")
             if body.get("write") and not set(roots) & set(dev["write_roots"]):
                 raise ToolError("you may only read these projects: untick 'May write memos'")
+    if body.get("update"):  # {"name", "update": true, "skills": bool}: switch shared skills on an existing token
+        if name not in tokens or tokens[name].get("owner"):
+            raise ToolError(f"no admin token {name}")
+        if body.get("skills") and (not tokens[name].get("write") or tokens[name].get("redact")):
+            raise ToolError("shared skills need a write token that does not mask secrets")
+        tokens[name] = {**tokens[name], "skills": bool(body.get("skills"))}
+        write_json(TOKENS_FILE, tokens)
+        audit("admin-token-skills-" + ("on" if body.get("skills") else "off"), name)
+        return JSONResponse({"ok": True})
     if body.get("revoke"):
         if name not in tokens:
             raise ToolError(f"no token {name}")
@@ -1959,9 +1985,12 @@ async def ui_admin_token(request: Request, body: dict):
         roots = []
     if set(roots) - set(ROOTS):
         raise ToolError(f"unknown root: {', '.join(sorted(set(roots) - set(ROOTS)))}")
+    if body.get("skills") and (not body.get("write") or body.get("redact")):
+        raise ToolError("shared skills need 'May write memos' and no masking")
     token = secrets.token_urlsafe(32)
     tokens[name] = {"sha256": hashlib.sha256(token.encode()).hexdigest(), "write": bool(body.get("write")),
                     "watch": bool(body.get("watch")),  # the VM's file watcher (/invalidate)
+                    "skills": bool(body.get("skills")),  # may sync and change claude/skills (write_refusal)
                     "roots": roots, "redact": bool(body.get("redact")), "created": time.strftime("%Y-%m-%d"),
                     "by": device.get()["user"], **({"owner": owner} if owner else {})}
     write_json(TOKENS_FILE, tokens)

@@ -66,9 +66,9 @@ volumes:
   claude:
     <<: *nfs
     driver_opts: {type: nfs, o: "addr=${KNOWLEDGE_VM_HOST},nfsvers=4.2,ro,hard,timeo=50,actimeo=1", device: ":/home/user/.claude/gedeeld"}
-  claude_skills:
+  claude_skills:  # rw since 23 Oct 2026: the admin's own devices write shared skills (server.py write_refusal)
     <<: *nfs
-    driver_opts: {type: nfs, o: "addr=${KNOWLEDGE_VM_HOST},nfsvers=4.2,ro,hard,timeo=50,actimeo=1", device: ":/home/user/.claude/skills"}
+    driver_opts: {type: nfs, o: "addr=${KNOWLEDGE_VM_HOST},nfsvers=4.2,rw,hard,timeo=50,actimeo=1", device: ":/home/user/.claude/skills"}
   claude_agents:
     <<: *nfs
     driver_opts: {type: nfs, o: "addr=${KNOWLEDGE_VM_HOST},nfsvers=4.2,ro,hard,timeo=50,actimeo=1", device: ":/home/user/.claude/agents"}
