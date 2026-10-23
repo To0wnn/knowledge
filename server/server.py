@@ -266,11 +266,14 @@ class Index:
             # it). Not when the whole root looks empty: that is an unmounted share, not a deletion.
             if old is not None and isinstance(e, FileNotFoundError) and tracked(rel) and root_present(rel):
                 keep_version(rel, old, "", removed=True)
+                skill_changed(rel, "removed")
             return
         low = text.lower()
         old = self.files.get(rel)
         if old is not None and old[2] != text and tracked(rel):
             keep_version(rel, old, text)
+        if old is None or old[2] != text:
+            skill_changed(rel, "added" if old is None else "changed")
         with self.lock:
             # A few Unicode characters change length when lowercased; then positions would not line up.
             self.files[rel] = (st.st_mtime_ns, st.st_size, text, low if len(low) == len(text) else None)
@@ -324,6 +327,23 @@ HISTORY_FAILED: dict[str, str] = {}  # rel -> error of the last failed history w
 def tracked(rel: str) -> bool:
     """Files whose versions are kept: Markdown, and every file of a shared skill (its scripts and data too)."""
     return rel.endswith(".md") or rel.startswith("claude/skills/")
+
+
+_skill_noticed: dict[str, float] = {}
+
+
+def skill_changed(rel: str, what: str):
+    """A shared skill changed by a device (not on the VM itself): tell the admin, so a good skill that an agent
+    rewrote somewhere is noticed and can be undone. One message per skill per 10 minutes (a sync sends several files)."""
+    dev = device.get()
+    parts = rel.split("/")
+    if parts[:2] != ["claude", "skills"] or len(parts) < 4 or not dev.get("name") or dev.get("watch"):
+        return
+    if time.time() - _skill_noticed.get(parts[2], 0) < 600:
+        return
+    _skill_noticed[parts[2]] = time.time()
+    notify(f"Knowledge: {dev['name']} {what} skill {parts[2]} ({'/'.join(parts[3:])}). Look or undo: web UI, open the "
+           f"file, History; or knowledge_history {rel}.")
 
 
 def root_present(rel: str) -> bool:
@@ -1730,9 +1750,9 @@ def notify(text: str):
                 method="PUT", data=json.dumps({"msgtype": "m.text", "body": text}).encode(),
                 headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
             urllib.request.urlopen(req, timeout=15).close()
-            BACKGROUND["matrix"] = {"at": time.time(), "detail": "last message sent"}
+            BACKGROUND["matrix"] = {"at": time.time(), "detail": f"last message sent: {text[:160]}"}
         except Exception as e:
-            BACKGROUND["matrix"] = {"at": time.time(), "error": f"Matrix message failed: {e}"}
+            BACKGROUND["matrix"] = {"at": time.time(), "error": f"Matrix message failed ({e}): {text[:160]}"}
             print(f"matrix: {e}: {text}", flush=True)
     threading.Thread(target=send, daemon=True).start()
 
