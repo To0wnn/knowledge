@@ -320,8 +320,9 @@ def main():
         assert raw("GET", "/ui/api/note?path=memory/MEMORY.md", headers=ro)[0] == 404
         assert not json.loads(raw("GET", "/ui/api/search?q=Item%20119", headers=ro)[2])["notes"]
         assert all(n["id"].startswith("trade") for n in json.loads(raw("GET", "/ui/api/graph", headers=ro)[2])["nodes"])
-        assert json.loads(raw("GET", "/ui/api/lint", headers=ro)[2]) == {} and raw("GET", "/ui/admin", headers=ro)[0] == 403
-        assert raw("GET", "/ui/api/admin", headers=ro)[0] == 403
+        assert json.loads(raw("GET", "/ui/api/lint", headers=ro)[2]) == {} and raw("GET", "/ui/admin", headers=ro)[0] == 200
+        mine = json.loads(raw("GET", "/ui/api/admin", headers=ro)[2])  # a person sees only their own part
+        assert not mine["admin"] and "users" not in mine and [p["name"] for p in mine["projects"]] == ["trade"], mine
         assert admin("/ui/api/admin/user", {"username": "bob", "projects": {"trade": "write"}})[0] == 200
         assert json.loads(raw("GET", "/ui/api/note?path=trade-memory/plan.md", headers=ro)[2])["writable"]
         assert admin("/ui/api/admin/user", {"username": "bob", "delete": True})[0] == 200
@@ -487,6 +488,40 @@ def main():
         assert raw("GET", "/ui/admin", headers=user("carol"))[0] == 200  # an extra admin
         assert admin("/ui/api/admin/settings", {"extra_admins": []})[0] == 200 and raw("GET", "/ui/admin", headers=user("carol"))[0] == 403
         assert "admin-settings" in "\n".join(json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["system"]["audit"])
+        # People make their own tokens and projects (23 Oct 2026): within their access and the limits, and a token
+        # never does more than its owner may do right now.
+        assert admin("/ui/api/admin/user", {"username": "erin", "projects": {"trade": "write"}})[0] == 200
+        er = user("erin")
+        st, _, res = admin("/ui/api/admin/token", {"name": "laptop", "write": True, "roots": ["trade", "trade-memory"]}, er)
+        assert st == 200 and json.loads(res)["name"] == "erin.laptop", res
+        et = json.loads(res)["token"]
+        assert admin("/ui/api/admin/token", {"name": "x", "roots": ["memory"]}, er)[0] == 400  # not her project
+        assert admin("/ui/api/admin/token", {"name": "x", "all": True}, er)[0] == 400
+        assert admin("/ui/api/admin/token", {"name": "x", "watch": True, "roots": ["trade"]}, er)[0] == 400
+        assert admin("/ui/api/admin/token", {"name": "erin.laptop", "revoke": True}, ro)[0] == 403  # bob has no access left
+        assert [t["name"] for t in json.loads(raw("GET", "/ui/api/admin", headers=er)[2])["tokens"]] == ["erin.laptop"]
+        assert not call("knowledge_write", {"path": "trade-memory/erin.md", "content": memo("x\n", "erin")}, token=et)[0]
+        err, text = call("knowledge_read", {"path": "memory/MEMORY.md"}, token=et)
+        assert err, text
+        assert admin("/ui/api/admin/user", {"username": "erin", "projects": {"trade": "read"}})[0] == 200
+        err, text = call("knowledge_write", {"path": "trade-memory/erin2.md", "content": memo("x\n", "erin2")}, token=et)
+        assert err and "read-only" in text, text  # access lowered: the token follows
+        assert admin("/ui/api/admin/token", {"name": "w", "write": True, "roots": ["trade-memory"]}, er)[0] == 400
+        assert admin("/ui/api/admin/settings", {"user_max_tokens": 1, "user_max_projects": 1, "project_max_mb": 1})[0] == 200
+        assert admin("/ui/api/admin/token", {"name": "second", "roots": ["trade"]}, er)[0] == 400  # limit
+        assert admin("/ui/api/admin/project", {"name": "erinproj"}, er)[0] == 200
+        assert "erinproj" in json.loads(raw("GET", "/ui/api/me", headers=er)[2])["writable"]
+        assert admin("/ui/api/admin/project", {"name": "erinproj2"}, er)[0] == 400  # limit
+        assert "erinproj" in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["users"]["erin"]["created"]
+        big = "# Big\n" + "word " * 220_000  # 1.1 MB: crosses the 1 MB limit, so the next write is refused
+        assert not call("knowledge_write", {"path": "erinproj/big.md", "content": big})[0]
+        err, text = call("knowledge_write", {"path": "erinproj/more.md", "content": "# More\n"})
+        assert err and "is full" in text, text
+        ver = re.search(r"version (\w+)", call("knowledge_read", {"path": "erinproj/big.md"})[1]).group(1)
+        assert not call("knowledge_delete", {"path": "erinproj/big.md", "base_version": ver})[0]  # a full project may shrink
+        assert admin("/ui/api/admin/settings", {"user_max_tokens": 5, "user_max_projects": 3, "project_max_mb": 20})[0] == 200
+        assert admin("/ui/api/admin/user", {"username": "erin", "delete": True})[0] == 200
+        assert http("GET", "/lint", token=et)[0] == 401  # no access left: the token is dead too
         # Knowledge gaps: a search that finds nothing is listed once per query (case-insensitive), with its count;
         # also the very first line of a small log (it was skipped like a cut-off line).
         (tmp / "gaps.log").unlink(missing_ok=True)

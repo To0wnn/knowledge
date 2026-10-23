@@ -33,7 +33,11 @@ services:
       TZ: Europe/Amsterdam  # local dates in source file names, LOG.md and the audit log (forge itself runs UTC)
       KNOWLEDGE_ALLOWED_HOSTS: ${KNOWLEDGE_ALLOWED_HOSTS}
       KNOWLEDGE_PROXY_IPS: ${KNOWLEDGE_PROXY_IPS}
+      # A new project or token made by a person (not an admin) is reported here; the bot token is in proxy.env.
+      KNOWLEDGE_MATRIX_URL: ${KNOWLEDGE_MATRIX_URL}
+      KNOWLEDGE_MATRIX_ROOM: ${KNOWLEDGE_MATRIX_ROOM}
     # KNOWLEDGE_PROXY_SECRET (Vaultwarden KNOWLEDGE_PROXY_SECRET): Traefik sends it with the Authentik user header.
+    # KNOWLEDGE_MATRIX_TOKEN (Vaultwarden MATRIX_BOT_TOKEN): the bot that posts to KNOWLEDGE_MATRIX_ROOM.
     env_file: /root/docker/knowledge/config/proxy.env
     volumes:
       - memory:/data/memory
