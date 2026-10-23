@@ -96,8 +96,8 @@ def install(agent: str, name: str):
     if not tok:
         sys.exit("No token: put the token in the keyring first (Windows: setx KNOWLEDGE_TOKEN; see the help page), then run this again.")
     rules = check(tok)
-    if install_mcp(agent, tok, name) and agent == "codex":
-        restart_codex()
+    if install_mcp(agent, tok, name):
+        restart_codex() if agent == "codex" else say_restart("agy")
     install_hooks(agent, name)
     install_rules(agent, rules)
     install_skills()
@@ -133,13 +133,25 @@ startup_timeout_sec = 15
     path = Path.home() / ".gemini" / "config" / "mcp_config.json"  # agy keeps the header in this file
     data = json.loads(path.read_text(encoding="utf-8-sig")) if path.exists() else {}
     if "knowledge" in data.get("mcpServers", {}):
-        return print(f"MCP: {path} already has 'knowledge', left as it is")
+        print(f"MCP: {path} already has 'knowledge', left as it is")
+        return False
     data.setdefault("mcpServers", {})["knowledge"] = {"serverUrl": f"{URL}/mcp", "headers": {"Authorization": f"Bearer {tok}"}}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     if os.name != "nt":
         path.chmod(0o600)  # the token is in it
     print(f"MCP: added the knowledge server to {path}" + ("" if os.name != "nt" else " (holds the token: keep the file to yourself)"))
+    return True
+
+
+def say_restart(agent: str):
+    """A running agy session keeps its old MCP settings. It is the person's own work, so only say so, never stop it."""
+    try:
+        running = subprocess.run(["pgrep", "-x", agent], capture_output=True).returncode == 0
+    except OSError:  # shortcut: no pgrep (Windows): nothing said
+        running = False
+    if running:
+        print(f"{agent} is running with the old settings: restart it so the knowledge server is used")
 
 
 def restart_codex():
