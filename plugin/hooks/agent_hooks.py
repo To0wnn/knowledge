@@ -7,6 +7,7 @@ clients/knowledge-agent.py (the setup without a plugin) calls the same functions
   agent_hooks.py docs-sync [TOKEN]             PostToolUse: mirror an edited .md (folder with .knowledge-project)
   agent_hooks.py session-log [TOKEN]           SessionEnd/PreCompact (Codex), Stop (agy): post the session log
   agent_hooks.py header [TOKEN]                MCP header helper: the token as JSON, {} without one
+  agent_hooks.py mcp [TOKEN]                   stdio MCP server that forwards to the knowledge server (agy plugin)
 TOKEN: "-" (default) = KNOWLEDGE_TOKEN or the keyring (token_store.py); on the owner's VM a vault name.
 Never fails a session: errors go to stderr. Linux, macOS and Windows; standard library only.
 """
@@ -75,12 +76,40 @@ def context(agent: str, tok: str):
                      {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}}))
 
 
+def mcp(tok: str):
+    """stdio MCP server that forwards every message to the knowledge server's /mcp with the token. agy sends a plugin's
+    ${VAR} header as is and keeps a configured value in plain config.json, so the token comes from token_store here."""
+    session, out = "", sys.stdout.buffer
+    for line in sys.stdin.buffer:
+        if not line.strip():
+            continue
+        msg = json.loads(line)
+        headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream",
+                   **({"Authorization": f"Bearer {tok}"} if tok else {}), **({"Mcp-Session-Id": session} if session else {})}
+        try:
+            with urllib.request.urlopen(urllib.request.Request(f"{URL}/mcp", data=line, headers=headers), timeout=120) as r:
+                session = r.headers.get("Mcp-Session-Id") or session
+                sse, body = r.headers.get("Content-Type", "").startswith("text/event-stream"), r.read().decode("utf-8")
+        except OSError as e:  # HTTPError included: answer the request, so agy shows the reason instead of waiting
+            if isinstance(msg, dict) and "id" in msg:
+                err = {"jsonrpc": "2.0", "id": msg["id"], "error": {"code": -32000, "message": f"knowledge server: {e}"}}
+                out.write(json.dumps(err).encode() + b"\n")
+                out.flush()
+            continue
+        for data in ([ln[5:].strip() for ln in body.splitlines() if ln.startswith("data:")] if sse else [body]):
+            if data.strip():
+                out.write(json.dumps(json.loads(data)).encode() + b"\n")  # one message per line, as stdio needs
+        out.flush()
+
+
 def main(argv: list):
     cmd, rest = (argv[0] if argv else ""), argv[1:]
     if cmd == "context" and rest[:1] and rest[0] in AGENTS and len(rest) <= 2:
         context(rest[0], token(rest[1] if len(rest) == 2 else "-"))
     elif cmd in ("docs-sync", "session-log") and len(rest) <= 1:
         sys.stdout.write(run_hook(f"{cmd}.py", token(rest[0] if rest else "-"), sys.stdin.read()))
+    elif cmd == "mcp" and len(rest) <= 1:
+        mcp(token(rest[0] if rest else "-"))
     elif cmd == "header" and len(rest) <= 1:
         tok = token(rest[0] if rest else "-")
         print(json.dumps({"Authorization": f"Bearer {tok}"} if tok else {}))
