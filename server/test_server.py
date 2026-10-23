@@ -77,7 +77,7 @@ def main():
     (tmem / "plan.md").write_text("---\nname: plan\n---\nentry timing plan\n")
     tokens = tmp / "tokens.json"
     h = lambda t: hashlib.sha256(t.encode()).hexdigest()
-    tokens.write_text(json.dumps({"laptop": {"sha256": h("rw-token"), "write": True},
+    tokens.write_text(json.dumps({"laptop": {"sha256": h("rw-token"), "write": True, "skills": True},
                                   "workpc": {"sha256": h("ro-token"), "write": False},
                                   "watcher": {"sha256": h("watch-token"), "watch": True},
                                   "agent": {"sha256": h("agent-token"), "roots": ["memory", "claude"], "redact": True},
@@ -473,6 +473,49 @@ def main():
                                  "CLAUDE_PROJECT_DIR": "/p/x"}, capture_output=True, text=True)
         assert revoked.stdout == "", revoked.stdout  # 401: no cached context for a revoked token
         assert json.loads(http("POST", "/mirror", {"have": {}}, token="ro-token")[1])["roots"] == []  # read-only: no copy
+        # Shared skills (23 Oct 2026): the admin's own device keeps them in ~/.claude/skills as real skills, both ways;
+        # guests, PA's, masked and read-only tokens never write them; claude.ai's synced/ and dot-folders stay out.
+        skills = tmp / "home-skills"
+        senv = {**menv, "KNOWLEDGE_TOKEN": "rw-token", "KNOWLEDGE_MIRROR": str(tmp / "mirror-own"), "KNOWLEDGE_SKILLS": str(skills)}
+        (cla / "skills/synced/q").mkdir(parents=True); (cla / "skills/synced/q/SKILL.md").write_text("claude.ai skill\n")
+        assert call("knowledge_read", {"path": "claude/skills/synced/q/SKILL.md"})[0]
+        run_mm(senv)
+        assert (skills / "x/SKILL.md").read_text() == "skill\n" and not (skills / "synced").exists()
+        (skills / "y/scripts").mkdir(parents=True); (skills / "y/SKILL.md").write_text("new skill\n")
+        (skills / "y/scripts/run.py").write_text("print(1)\n"); (skills / "y/blob.bin").write_bytes(b"\0")
+        (tmp / "elsewhere").mkdir(); (tmp / "elsewhere/SKILL.md").write_text("local only\n")
+        (skills / "z").symlink_to(tmp / "elsewhere"); (skills / ".trash/old").mkdir(parents=True)
+        (skills / ".trash/old/SKILL.md").write_text("trashed\n")
+        run_mm(senv)
+        assert (cla / "skills/y/SKILL.md").read_text() == "new skill\n" and (cla / "skills/y/scripts/run.py").exists()
+        assert not (cla / "skills/z").exists() and not (cla / "skills/.trash").exists() and not (cla / "skills/y/blob.bin").exists()
+        (cla / "skills/x/SKILL.md").write_text("skill v2\n"); http("POST", "/invalidate", {"paths": ["claude/skills/x/SKILL.md"]}, token="watch-token")
+        run_mm(senv)
+        assert (skills / "x/SKILL.md").read_text() == "skill v2\n"
+        for tok in (fr, "ro-token", "agent-token", "pa-token"):
+            err, text = call("knowledge_write", {"path": "claude/skills/x/SKILL.md", "content": "hijack\n"}, token=tok)
+            assert err, (tok, text)
+        assert json.loads(http("POST", "/mirror", {"have": {}}, token=fr)[1])["roots"] == ["garden-memory"]
+        assert call("knowledge_write", {"path": "claude/CLAUDE.md", "content": "x"})[0]  # rules stay read-only
+        assert call("knowledge_write", {"path": "claude/skills/x/a.bin", "content": "x"})[0]
+        assert (cla / "skills/x/SKILL.md").read_text() == "skill v2\n"
+        # Shared skills per token, switched on the admin page; removing a skill or the right cleans up the device.
+        (cla / "skills/x/SKILL.md").unlink(); (cla / "skills/x").rmdir(); http("POST", "/invalidate", {"paths": ["claude/skills/x/SKILL.md"]}, token="watch-token")
+        run_mm(senv)
+        assert not (skills / "x").exists() and (skills / "y/SKILL.md").exists()  # removed on the server: gone here, folder too
+        (skills / "y/SKILL.md").unlink(); run_mm(senv)
+        assert (skills / "y/SKILL.md").exists()  # removed only here: it returns (like a memo)
+        return_skills = lambda on: raw("POST", "/ui/api/admin/token", json.dumps({"name": "laptop", "update": True, "skills": on}),
+                                       {**ck, "Content-Type": "application/json", "X-Knowledge-UI": "1"})[0]
+        assert return_skills(False) == 200
+        assert raw("POST", "/ui/api/admin/token", json.dumps({"name": "workpc", "update": True, "skills": True}),
+                   {**ck, "Content-Type": "application/json", "X-Knowledge-UI": "1"})[0] == 400  # read-only token
+        assert call("knowledge_write", {"path": "claude/skills/y/SKILL.md", "content": "x\n"})[0]
+        (skills / "mine").mkdir(); (skills / "mine/SKILL.md").write_text("unsent\n")
+        run_mm(senv)
+        assert not (skills / "y/SKILL.md").exists() and not (skills / "y/scripts").exists() and (skills / "y/blob.bin").exists() \
+            and (skills / "mine/SKILL.md").read_text() == "unsent\n"  # right off: synced copies go, own work stays
+        assert return_skills(True) == 200 and not call("knowledge_write", {"path": "claude/skills/y/NOTES.md", "content": "notes\n"})[0]
         # Review fixes 20 Oct: a project named like a path part does not capture other sessions; write patterns are
         # anchored; "Add" never wipes access; graph ETag per user; body cap; scoped ingest/lint; token routes.
         assert admin("/ui/api/admin/project", {"name": "home"})[0] == 200

@@ -5,6 +5,11 @@ is down; what was written offline goes up at the next sync.
   memory_mirror.py                      SessionStart/SessionEnd hook: start a sync in the background and return at once
   memory_mirror.py --now                sync in the foreground: push local changes, then fetch what changed on the server
   memory_mirror.py offline KEY [PART]   the context for a session that cannot reach the server (cached + offline notice)
+  memory_mirror.py edited               PostToolUse hook: sync in the background when the edit was a skill or a memo here
+
+The shared skills (root "claude", only for a device that may change them) live in ~/.claude/skills/<name>/ instead, so
+Claude Code loads them as real skills in every project and picks up changes live; a skill made there goes up the same
+way. Symlinked skill folders (installed by something else), synced/ (claude.ai) and dot-folders stay local.
 
 The copy lives in ~/.knowledge/mirror/<memory root>/ (KNOWLEDGE_MIRROR overrides). Only files whose content differs
 from the last sync travel: the device sends the versions it has, the server only what it has newer, and the device
@@ -22,6 +27,8 @@ from pathlib import Path
 
 MIRROR = Path(os.environ.get("KNOWLEDGE_MIRROR") or Path.home() / ".knowledge" / "mirror")
 STATE, LOCK = MIRROR / ".state.json", MIRROR / ".lock"
+SKILLS = Path(os.environ.get("KNOWLEDGE_SKILLS") or Path.home() / ".claude" / "skills")
+SKILL_EXT = {".md", ".py", ".sh", ".json", ".txt", ".yaml", ".yml", ".toml", ".js", ".html", ".css", ".xml", ".xsd"}  # = server
 
 
 def option(name: str, default: str = "") -> str:  # same lookup as docs-sync.py: plugin option, else KNOWLEDGE_*
@@ -43,7 +50,14 @@ def post(path: str, payload: dict) -> dict:
 
 def local_path(rel: str) -> Path:
     parts = rel.split("/")
-    if not rel.endswith(".md") or any(p in ("", ".", "..") or ":" in p or "\\" in p for p in parts):
+    if any(p in ("", ".", "..") or ":" in p or "\\" in p for p in parts):
+        raise ValueError(f"unsafe path from server: {rel}")
+    if parts[0] == "claude":
+        if parts[1:2] != ["skills"] or len(parts) < 4 or parts[2] == "synced" or any(p.startswith(".") for p in parts) \
+                or Path(rel).suffix.lower() not in SKILL_EXT:
+            raise ValueError(f"unsafe path from server: {rel}")
+        return SKILLS.joinpath(*parts[2:])
+    if not rel.endswith(".md"):
         raise ValueError(f"unsafe path from server: {rel}")
     return MIRROR.joinpath(*parts)
 
@@ -55,9 +69,21 @@ def write_atomic(path: Path, data: bytes):
     os.replace(tmp, path)
 
 
-def local_files(roots: list) -> dict:
+def local_skills() -> dict:
     out = {}
-    for root in roots:
+    for d in sorted(SKILLS.iterdir()) if SKILLS.is_dir() else ():
+        if d.is_symlink() or not d.is_dir() or d.name == "synced" or d.name.startswith("."):
+            continue
+        for p in d.rglob("*"):
+            rel = p.relative_to(SKILLS)
+            if p.is_file() and p.suffix.lower() in SKILL_EXT and not any(x.startswith(".") for x in rel.parts):
+                out["claude/skills/" + rel.as_posix()] = p.read_bytes()
+    return out
+
+
+def local_files(roots: list) -> dict:
+    out = local_skills() if "claude" in roots else {}
+    for root in [r for r in roots if r != "claude"]:
         for p in (MIRROR / root).rglob("*.md"):
             out[p.relative_to(MIRROR).as_posix()] = p.read_bytes()
     return out
@@ -92,6 +118,9 @@ def sync() -> str:
         p = local_path(rel)
         if p.exists() and (version(p.read_bytes()) == known[rel] or rel in conflicts):
             p.unlink()
+            while rel.startswith("claude/") and p.parent != SKILLS and not any(p.parent.iterdir()):
+                p = p.parent  # a removed skill leaves no empty folder behind
+                p.rmdir()
         known.pop(rel)
     write_atomic(STATE, json.dumps({"files": known, "roots": res["roots"], "synced": time.strftime("%d %b %Y %H:%M")}).encode())
     return "\n".join(report)
@@ -149,7 +178,7 @@ def offline_context(key: str, part: str = "all") -> str:
         return text
     if not state.get("roots"):
         return "knowledge server unreachable and no offline copy on this device: shared memory and docs were not loaded."
-    where = ", ".join(str(MIRROR / r) for r in state["roots"])
+    where = ", ".join(str(MIRROR / r) for r in state["roots"] if r != "claude")
     return ("===== knowledge server unreachable: offline mode =====\n"
             f"The memory is the offline copy in {where} (last synced {state.get('synced', '?')}); the knowledge_* tools do "
             "not work now. Read memos there with your file tools, and save new or changed memos there by the house rules "
@@ -163,6 +192,13 @@ if __name__ == "__main__":
         sys.stdout.buffer.write(offline_context(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else "all").encode("utf-8"))
     elif sys.argv[1:2] == ["notice"]:
         sys.stdout.buffer.write(sync_notice().encode("utf-8"))
+    elif sys.argv[1:2] == ["edited"]:
+        try:
+            path = Path((json.load(sys.stdin).get("tool_input") or {}).get("file_path") or "").resolve()
+            if any(base.resolve() in path.parents for base in (SKILLS, MIRROR)):
+                start_background()
+        except Exception as e:  # never fail the session
+            print(f"knowledge mirror skipped: {e}", file=sys.stderr)
     elif "--now" in sys.argv:
         sync_locked()
     elif "--selftest" in sys.argv:
@@ -173,6 +209,13 @@ if __name__ == "__main__":
             except ValueError:
                 pass
         assert local_path("g-memory/archief/x.md") == MIRROR / "g-memory" / "archief" / "x.md"
+        assert local_path("claude/skills/s/scripts/a.py") == SKILLS / "s" / "scripts" / "a.py"
+        for bad in ("claude/CLAUDE.md", "claude/skills/synced/x/SKILL.md", "claude/skills/s/.x/a.md", "claude/skills/s/a.bin", "g/a.py"):
+            try:
+                local_path(bad)
+                raise AssertionError(bad)
+            except ValueError:
+                pass
         print("ok")
     else:
         try:
