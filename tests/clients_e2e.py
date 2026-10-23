@@ -207,7 +207,7 @@ def skills(tmp: Path, home: Path):
     written or emptied through, a skill removed on the server goes here too (folder included)."""
     server_skills, local = tmp / "data" / "claude" / "skills", home / ".claude" / "skills"
     (local / "mine").mkdir(parents=True)
-    (local / "mine" / "SKILL.md").write_text("---\nname: mine\n---\nmade on this device, é\n", encoding="utf-8")
+    (local / "mine" / "SKILL.md").write_text("---\nname: mine\ndescription: test skill\n---\nmade on this device, é\n", encoding="utf-8")
     repo = home / "elsewhere" / "linked"
     repo.mkdir(parents=True)
     (repo / "SKILL.md").write_text("repo version\n", encoding="utf-8")
@@ -231,12 +231,28 @@ def skills(tmp: Path, home: Path):
     check(not (local / "s1").exists(), "skills: removed on the server, gone here with its folder", logged())
     check((repo / "SKILL.md").exists() and "failed" not in logged(), "skills: a linked folder is never emptied, the sync does not break", logged())
     # The PostToolUse hook (Git Bash on Windows) starts a sync when the edited file is a skill.
-    (local / "mine" / "SKILL.md").write_text("---\nname: mine\n---\nedited → ✅\n", encoding="utf-8")
+    (local / "mine" / "SKILL.md").write_text("---\nname: mine\ndescription: test skill\n---\nedited → ✅\n", encoding="utf-8")
     hook = json.dumps({"tool_name": "Write", "tool_input": {"file_path": str(local / "mine" / "SKILL.md")}})
     env2 = {**env, "CLAUDE_PLUGIN_ROOT": str(CLIENT / "plugin")}
     code, out, err = run([bash(), "-c", 'sh "${CLAUDE_PLUGIN_ROOT}/hooks/py.sh" "${CLAUDE_PLUGIN_ROOT}/hooks/memory_mirror.py" edited'], hook, env2)
     check(code == 0 and wait_for(lambda: "edited → ✅" in (server_skills / "mine" / "SKILL.md").read_text(encoding="utf-8")),
           "skills: an edit through the PostToolUse hook goes up", err + logged())
+    # Many skills gone from the server at once (an emptied folder) are held back until confirmed.
+    wait_for(lambda: not (home / "mirror-owner" / ".lock").exists())  # the hook's background sync is done
+    bulk = [f"bulk{i}" for i in range(6)]
+    for name in bulk:
+        (server_skills / name).mkdir()
+        (server_skills / name / "SKILL.md").write_text(f"---\nname: {name}\ndescription: d\n---\n", encoding="utf-8")
+        http("POST", "/invalidate", {"paths": [f"claude/skills/{name}/SKILL.md"]}, {"Authorization": "Bearer watch-token"})
+    run(mm, "", env)
+    for name in bulk:
+        (server_skills / name / "SKILL.md").unlink()
+        (server_skills / name).rmdir()
+        http("POST", "/invalidate", {"paths": [f"claude/skills/{name}/SKILL.md"]}, {"Authorization": "Bearer watch-token"})
+    run(mm, "", env)
+    check(all((local / n / "SKILL.md").exists() for n in bulk) and "held back" in logged(), "skills: 6 removed at once are held back", logged())
+    run(mm, "", {**env, "KNOWLEDGE_ALLOW_REMOVALS": "1"})
+    check(not any((local / n).exists() for n in bulk), "skills: removed after confirming (KNOWLEDGE_ALLOW_REMOVALS=1)")
 
 
 def agents(tok: str, home: Path, project: Path, garden: Path):

@@ -28,6 +28,7 @@ from pathlib import Path
 MIRROR = Path(os.environ.get("KNOWLEDGE_MIRROR") or Path.home() / ".knowledge" / "mirror")
 STATE, LOCK = MIRROR / ".state.json", MIRROR / ".lock"
 SKILLS = Path(os.environ.get("KNOWLEDGE_SKILLS") or Path.home() / ".claude" / "skills")
+MAX_REMOVALS = 5  # more skills or memos gone from the server in one sync looks like an accident: hold and say so
 SKILL_EXT = {".md", ".py", ".sh", ".json", ".txt", ".yaml", ".yml", ".toml", ".js", ".html", ".css", ".xml", ".xsd"}  # = server
 
 
@@ -135,7 +136,17 @@ def sync() -> str:
             continue  # here before the sync knew it (skills just switched on): it goes up next time, as a conflict copy
         write_atomic(p, text.encode())
         known[rel] = res["versions"][rel]
-    for rel in [r for r in known if r not in res["versions"]]:  # deleted on the server
+    gone = [r for r in known if r not in res["versions"]]  # deleted on the server
+    # A root the server no longer gives this device (skills switched off) goes on purpose; within a root it still
+    # gives, many removals at once (an emptied folder on the VM) are held back until someone confirms them.
+    units = {"/".join(r.split("/")[:3]) if r.startswith("claude/") else r
+             for r in gone if r.split("/", 1)[0] in res["roots"]}
+    if len(units) > MAX_REMOVALS and not os.environ.get("KNOWLEDGE_ALLOW_REMOVALS"):
+        report.append(f"held back: the server no longer has {len(units)} items ({', '.join(sorted(units)[:6])}...); they stay "
+                      "here. Removed on purpose? Delete them here too, or run memory_mirror.py --now once with "
+                      "KNOWLEDGE_ALLOW_REMOVALS=1. By mistake? Restore them with knowledge_history.")
+        gone = [r for r in gone if r.split("/", 1)[0] not in res["roots"]]
+    for rel in gone:
         p = target(rel)
         if not p:
             known.pop(rel)
