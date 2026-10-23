@@ -377,6 +377,13 @@ def main():
         assert "Memory is a hint, not the truth" in ctx and "garden-memory/archief/<name>_archief.md" in ctx, ctx
         assert "homelab" not in ctx and "secret set" not in ctx and "trade" not in ctx, ctx
         assert "First session" not in ctx  # garden-memory has a memo now
+        # Hand-overs between agents reach a guest's session start: task lines (future too) and overdue items; not the archive.
+        call("knowledge_write", {"path": "garden-memory/project_tasks.md", "content": memo(
+            "- open tot 1 jan 2099 [Gemini, VS-1]: water the beds\n- open tot 1 jan 2026: overdue chore\n", "tasks")})
+        call("knowledge_write", {"path": "garden-memory/archief/project_tasks_archief.md", "content": "- open tot 1 jan 2099 [Codex, OLD-1]: done\n"})
+        ctx = "".join(http("GET", f"/context/{n}?project=x", token=fr)[1] for n in range(1, 5))
+        assert "project_tasks.md: open tot 1 jan 2099 [Gemini, VS-1]: water the beds" in ctx, ctx[-800:]
+        assert "overdue chore" in ctx and "OLD-1" not in ctx, ctx[-800:]
         assert "Development rules" in ctx and "2. Done means proven." in ctx, ctx  # a guest gets the development rules too
         assert "# Development rules" in http("GET", "/house-rules", token=fr)[1]  # and so does an agent's rules file
         assert b"<li>Done means proven.</li>" in raw("GET", "/ui/help", headers=ck)[2]  # and the help page
