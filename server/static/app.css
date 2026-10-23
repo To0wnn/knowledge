@@ -242,3 +242,10 @@ button.danger { color: var(--error); }
 .new-token .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .new-token code { word-break: break-all; padding: 6px 8px; background: var(--panel); border-radius: 6px; user-select: all; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+.kind { display: grid; grid-template-columns: auto 1fr; column-gap: 6px; margin: 6px 0; color: var(--ink); cursor: pointer; }
+.kind input { grid-row: span 2; margin-top: 2px; }
+.kind .muted { grid-column: 2; font-size: 12px; }
+#t-advanced { margin: 8px 0; }
+#t-advanced .check { display: flex; margin: 4px 0; }
+#t-skills-why { margin: 2px 0 6px 22px; font-size: 12px; }

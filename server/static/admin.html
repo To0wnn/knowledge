@@ -33,14 +33,27 @@
       <form id="token-form" class="admin-form">
         <label for="t-name">Device or agent name</label>
         <input id="t-name" required pattern="[A-Za-z0-9][A-Za-z0-9._\-]{0,39}" placeholder="e.g. work-laptop">
+        <fieldset id="t-kind">
+          <legend>What is this token for?</legend>
+          <label class="kind"><input type="radio" name="t-kind" value="own" checked> <b>A computer of my own</b>
+            <span class="muted">Claude Code or Codex on your laptop or PC: reads and writes<span class="admin-only">, and keeps the shared skills as real skills</span>.</span></label>
+          <label class="kind"><input type="radio" name="t-kind" value="guest"> <b>Someone else</b>
+            <span class="muted">A friend or customer on their own project: reads and writes only the projects you tick; known secrets are masked.</span></label>
+          <label class="kind"><input type="radio" name="t-kind" value="reader"> <b>An agent that only reads</b>
+            <span class="muted">For example agy or an assistant that talks to an outside AI service: never writes; known secrets are masked.</span></label>
+        </fieldset>
         <fieldset>
           <legend>Projects (tick at least one, or "All projects")</legend>
           <div id="t-roots" class="checks"></div>
         </fieldset>
-        <label class="check"><input id="t-write" type="checkbox"> May write memos</label>
-        <label class="check"><input id="t-redact" type="checkbox"> Mask known secrets in everything it reads (agents that read outside mail)</label>
-        <label class="check"><input id="t-skills" type="checkbox"> Shared skills: keep them on the device as real skills and let it add or change them (your own devices only)</label>
-        <label class="check"><input id="t-watch" type="checkbox"> VM file watcher (may refresh the index; only for the watcher on the VM)</label>
+        <details id="t-advanced">
+          <summary class="ghost">Fine-tune (what the choice above set)</summary>
+          <label class="check"><input id="t-write" type="checkbox"> May write memos</label>
+          <label class="check"><input id="t-redact" type="checkbox"> Mask known secrets in everything it reads</label>
+          <label class="check"><input id="t-skills" type="checkbox"> Shared skills on the device, and may change them</label>
+          <p id="t-skills-why" class="muted"></p>
+          <label class="check"><input id="t-watch" type="checkbox"> VM file watcher (only for the watcher on the VM itself)</label>
+        </details>
         <button type="submit">Create token</button>
       </form>
     </details>
@@ -56,7 +69,10 @@
           <tr><td>Codex</td><td><a href="/ui/help#codex-linux" target="_blank">steps</a></td><td><a href="/ui/help#codex-windows" target="_blank">steps</a></td></tr>
         </tbody>
       </table></div>
-      <details><summary>A device of your own on the VM: keep the token in the vault</summary><pre id="new-token-setup" class="setup"></pre></details>
+      <details><summary>A device of your own on the VM: keep the token in the vault</summary>
+        <p class="muted">Paste the token after the first line (it is not shown and stays out of the shell history).</p>
+        <pre id="new-token-setup" class="setup"></pre>
+        <p class="muted">agy or Codex on the VM, afterwards: <code id="new-token-agent"></code></p></details>
       <button type="button" id="hide-token" class="ghost">Done, hide it</button>
     </div>
     <div class="table-wrap"><table>
