@@ -26,7 +26,7 @@ def links(text: str) -> list[str]:
     return [s.replace("-", "_") for s in WIKILINK.findall(CODE.sub("", text))]
 
 
-FRONT = re.compile(r"\A---\n(.*?)\n---\n", re.S)
+FRONT = re.compile(r"\A---\r?\n(.*?)\r?\n---\r?\n", re.S)  # \r: files written on Windows (CRLF)
 BIG_MEMO = 15_000
 # Claude Code loads only the first 200 lines / 25 KB of MEMORY.md and silently drops the rest; warn well before.
 INDEX_WARN_LINES, INDEX_WARN_BYTES = 150, 20_000
@@ -321,6 +321,8 @@ if __name__ == "__main__":  # self-check
     assert new_memo_lacks("plain") == ["frontmatter name", "frontmatter description", "frontmatter type", "## Stand", "## Keuzes"]
     assert skill_broken("# just text") and skill_broken("---\nname: a\n---\nx") and skill_broken("---\nname: a\ndescription: >\n  x\n---\n")
     assert skill_broken("---\nname: a\ndescription: Does a.\n---\nbody") == ""
+    assert skill_broken("---\r\nname: a\r\ndescription: Does a.\r\n---\r\nbody\r\n") == ""  # written on Windows
+    assert new_memo_lacks("---\r\nname: a\r\ndescription: d\r\nmetadata:\r\n  type: project\r\n---\r\n## Stand\r\nx\r\n## Keuzes\r\n") == []
     sk = skill_lint({"a/SKILL.md": "---\nname: b\ndescription: d\n---\nsee [[project_x]], project_gone.md, [ref](ref.md), [ok](ok.md)\n",
                      "a/ok.md": "fine", "a/refs/one.md": "[two](two.md) [up](../ok.md)", "a/refs/two.md": "x", "c/SKILL.md": "---\ndescription: d\n---\n" + "x\n" * 501}, {"project_x"}, {"project_x.md"})
     assert sk["skill_name_mismatch"] == ["a: name 'b' (use the folder name: lowercase, digits, hyphens)"], sk
