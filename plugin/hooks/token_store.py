@@ -16,8 +16,13 @@ SERVICE = "knowledge"
 
 def from_keyring() -> str:
     # shortcut: Linux only (secret-tool); Windows/macOS keep KNOWLEDGE_TOKEN until a device there needs the keyring.
+    env = dict(os.environ)
+    if not env.get("DBUS_SESSION_BUS_ADDRESS") and not env.get("XDG_RUNTIME_DIR") and hasattr(os, "getuid"):
+        # Codex runs its header helper with a bare environment; libsecret finds the session bus via XDG_RUNTIME_DIR.
+        env["XDG_RUNTIME_DIR"] = f"/run/user/{os.getuid()}"
     try:
-        r = subprocess.run(["secret-tool", "lookup", "service", SERVICE], capture_output=True, text=True, timeout=5)
+        r = subprocess.run(["secret-tool", "lookup", "service", SERVICE], capture_output=True, text=True, timeout=5,
+                           env=env)
     except (OSError, subprocess.SubprocessError):
         return ""
     return r.stdout.strip() if r.returncode == 0 else ""
