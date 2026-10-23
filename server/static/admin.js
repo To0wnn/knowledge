@@ -35,13 +35,38 @@ function scopeText(t) {
   return [...names, ...(t.roots.includes("claude") ? ["shared skills"] : [])].join(", ");
 }
 
+// Shared skills per token: a switch that shows the state, only where the server allows it (else why not).
+function skillsWhyNot(t) {
+  if (!state.admin || t.owner) return "only for the admin's own devices";
+  if (t.watch) return "the VM watcher needs no skills";
+  if (!t.write) return "read-only token";
+  if (t.redact) return "masks secrets";
+  if (t.roots && t.roots.length && !t.roots.includes("claude")) return "does not see the shared skills";
+  return "";
+}
+function skillsCell(t) {
+  const td = el("td"), why = skillsWhyNot(t);
+  if (why) { const x = el("span", "muted", "—"); x.title = `Not possible: ${why}`; td.append(x); return td; }
+  const l = el("label", "check"), c = el("input"); c.type = "checkbox"; c.setAttribute("role", "switch"); c.checked = !!t.skills;
+  c.setAttribute("aria-label", `Shared skills for ${t.name}`);
+  l.title = t.skills ? "On: the device keeps the shared skills in ~/.claude/skills and may add or change them"
+                     : "Off: switch on to give this device the shared skills at its next session start";
+  c.onchange = () => {
+    if (!c.checked && !confirm(`Switch shared skills off for ${t.name}? At its next sync the device removes the skills it got from here; skills it made itself and did not send yet stay.`)) {
+      c.checked = true; return;
+    }
+    run(() => api("/ui/api/admin/token", { name: t.name, update: true, skills: c.checked }), c);
+  };
+  l.append(c, " " + (t.skills ? "on" : "off")); td.append(l); return td;
+}
+
 function renderTokens() {
   $("tokens").replaceChildren(...state.tokens.map((t) => {
     const tr = el("tr");
     const access = t.watch ? "VM watcher" : t.write ? "read + write" : "read";
     const name = el("td", "mono", t.name);
     if (SYSTEM.has(t.name) || t.watch) name.append(el("span", "muted", " · used by the VM"));
-    tr.append(name, el("td", "", access + (t.skills ? " · shared skills" : "")), el("td", "", scopeText(t) + (t.redact ? " · secrets masked" : "")),
+    tr.append(name, el("td", "", access), el("td", "", scopeText(t) + (t.redact ? " · secrets masked" : "")), skillsCell(t),
       el("td", "muted", t.created ? `${day(t.created)}${t.by ? " · " + t.by : ""}` : "before the admin page"),
       el("td", t.last_used ? "muted" : "unused", t.last_used ? ago(t.last_used) : "never used"));
     const td = el("td"), b = el("button", "ghost danger", "Revoke");
@@ -50,16 +75,7 @@ function renderTokens() {
       const warn = SYSTEM.has(t.name) || t.watch ? " The VM uses this token: live updates, the weekly report or the VM sessions stop." : "";
       if (confirm(`Revoke ${t.name}? Devices using it stop working right away.${warn}`)) run(() => api("/ui/api/admin/token", { name: t.name, revoke: true }), b);
     };
-    td.append(b);
-    if (state.admin && !t.owner && !t.watch) { // switch shared skills without making a new token
-      const s = el("button", "ghost", t.skills ? "Skills off" : "Skills on");
-      s.setAttribute("aria-label", `${t.skills ? "Stop" : "Start"} shared skills for ${t.name}`);
-      s.title = t.skills ? "The device removes its synced copies at the next sync; skills it made itself stay there"
-                         : "The device fetches the shared skills at its next session start and may add or change them";
-      s.onclick = () => run(() => api("/ui/api/admin/token", { name: t.name, update: true, skills: !t.skills }), s);
-      td.append(" ", s);
-    }
-    tr.append(td);
+    td.append(b); tr.append(td);
     return tr;
   }));
   // Rebuilt after every action: keep what was ticked. "All projects" is explicit, the server refuses an empty pick.

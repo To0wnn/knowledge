@@ -399,7 +399,7 @@ def may_write(rel: str) -> bool:
 def check_writable(rel: str, grows: bool = True):
     if reason := write_refusal(rel):
         raise ToolError(reason)
-    # shortcut: the write that crosses the limit still lands (at most one file, <= 2 MB), every later one is refused.
+    # shortcut: the write that crosses the limit still lands (one file, <= MAX_BODY), every later one is refused.
     if grows and (p := ui_project_of(rel)) and project_bytes(p) > PROJECT_MAX_MB * 1_000_000:
         raise ToolError(f"project {p} is full ({PROJECT_MAX_MB} MB): delete or shorten files first")
 
@@ -1202,9 +1202,9 @@ def ui_project_of(rel: str) -> str | None:
 
 
 def project_bytes(project: str) -> int:
-    roots = PROJECTS[project]
-    with index.lock:
-        return sum(v[1] for rel, v in index.files.items() if rel.split("/", 1)[0] in roots)
+    """Bytes on disk: the index skips files over MAX_BYTES, so it would undercount. UI projects are small and local on
+    forge (measured: gema 0.35 MB), so walking one per write is cheap."""
+    return sum(f.stat().st_size for f in (PROJECTS_DIR / project).rglob("*") if f.is_file() and not f.is_symlink())
 
 
 def mount_project(name: str):
@@ -1400,7 +1400,7 @@ def mirror_roots() -> list[str]:
     """The memory roots this device keeps an offline copy of: the ones it may write (a read-only token gets none).
     "claude" = the shared skills, for a device that may change them; it keeps them in ~/.claude/skills/ as real skills."""
     mems = [mem for _, mem in list(PROJECTS.values()) if in_scope(mem + "/") and may_write(f"{mem}/MEMORY.md")]
-    return mems + ["claude"] * may_write("claude/skills/x/SKILL.md")
+    return mems + ["claude"] * (in_scope("claude/") and may_write("claude/skills/x/SKILL.md"))
 
 
 def mirrorable(rel: str, roots: list[str]) -> bool:
@@ -1457,6 +1457,8 @@ async def mirror_push(request: Request):
                 raise ToolError("not a memo of a memory root this device mirrors")
             check_writable(rel)
             refuse_secrets(f["text"])
+            if len(f["text"].encode()) > MAX_BYTES:  # not indexed, so /mirror would never list it and the device drops it
+                raise ToolError(f"bigger than {MAX_BYTES // 1_000_000} MB")
         except ToolError as e:
             out["refused"].append(f"{name}: {e}")
             continue
@@ -1523,12 +1525,12 @@ async def sync_route(request: Request):
             continue
         try:
             full, rel = resolve(f"{docs}/{clean}")
+            keep.add(rel)  # still in the folder: a refusal (full project, secret) must never delete the server copy
             check_writable(rel)
             refuse_secrets(text)
         except ToolError as e:
             out["refused"].append(f"{name}: {e}")
             continue
-        keep.add(rel)
         data = text.encode()
         async with _locks.setdefault(rel, asyncio.Lock()):
             current = full.read_bytes() if full.exists() else None
@@ -1963,8 +1965,9 @@ async def ui_admin_token(request: Request, body: dict):
     if body.get("update"):  # {"name", "update": true, "skills": bool}: switch shared skills on an existing token
         if name not in tokens or tokens[name].get("owner"):
             raise ToolError(f"no admin token {name}")
-        if body.get("skills") and (not tokens[name].get("write") or tokens[name].get("redact")):
-            raise ToolError("shared skills need a write token that does not mask secrets")
+        roots = tokens[name].get("roots") or []
+        if body.get("skills") and (not tokens[name].get("write") or tokens[name].get("redact") or (roots and "claude" not in roots)):
+            raise ToolError("shared skills need a write token that does not mask secrets and sees the shared skills")
         tokens[name] = {**tokens[name], "skills": bool(body.get("skills"))}
         write_json(TOKENS_FILE, tokens)
         audit("admin-token-skills-" + ("on" if body.get("skills") else "off"), name)
@@ -1985,8 +1988,8 @@ async def ui_admin_token(request: Request, body: dict):
         roots = []
     if set(roots) - set(ROOTS):
         raise ToolError(f"unknown root: {', '.join(sorted(set(roots) - set(ROOTS)))}")
-    if body.get("skills") and (not body.get("write") or body.get("redact")):
-        raise ToolError("shared skills need 'May write memos' and no masking")
+    if body.get("skills") and (not body.get("write") or body.get("redact") or (roots and "claude" not in roots)):
+        raise ToolError("shared skills need 'May write memos', no masking, and the shared skills ticked (or all projects)")
     token = secrets.token_urlsafe(32)
     tokens[name] = {"sha256": hashlib.sha256(token.encode()).hexdigest(), "write": bool(body.get("write")),
                     "watch": bool(body.get("watch")),  # the VM's file watcher (/invalidate)
