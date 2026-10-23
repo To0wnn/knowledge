@@ -1,0 +1,56 @@
+{
+  "description": "Codex: the knowledge context at session start (one handler: with several Codex drops the context, openai/codex#45999), the docs mirror after apply_patch, the session log (SessionEnd may take at most 3 s)",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -X utf8 \"$PLUGIN_ROOT/hooks/agent_hooks.py\" context codex",
+            "commandWindows": "py -3 -X utf8 \"%PLUGIN_ROOT%\\hooks\\agent_hooks.py\" context codex",
+            "timeout": 30,
+            "additionalContextLimit": 60000
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "apply_patch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -X utf8 \"$PLUGIN_ROOT/hooks/agent_hooks.py\" docs-sync",
+            "commandWindows": "py -3 -X utf8 \"%PLUGIN_ROOT%\\hooks\\agent_hooks.py\" docs-sync",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -X utf8 \"$PLUGIN_ROOT/hooks/agent_hooks.py\" session-log",
+            "commandWindows": "py -3 -X utf8 \"%PLUGIN_ROOT%\\hooks\\agent_hooks.py\" session-log",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -X utf8 \"$PLUGIN_ROOT/hooks/agent_hooks.py\" session-log",
+            "commandWindows": "py -3 -X utf8 \"%PLUGIN_ROOT%\\hooks\\agent_hooks.py\" session-log",
+            "timeout": 3
+          }
+        ]
+      }
+    ]
+  }
+}

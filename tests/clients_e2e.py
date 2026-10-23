@@ -10,7 +10,9 @@ a .knowledge-project written the PowerShell 5 way (UTF-16), text with → and �
   2. agy and Codex: knowledge-agent.py install (twice: safe to rerun), then every generated hook command, on Windows
      through PowerShell and cmd.
   3. The offline copy: background sync, an edit made offline, the offline context, the upload when the server is back.
-  4. Optional, when the CLIs are installed (CI installs them): `claude plugin install` from this repo and
+  4. Codex plugin (plugin/.codex-plugin): its hook commands as Codex runs them, its stdio MCP server, and with the CLI
+     the install from this repo's marketplace.
+  5. Optional, when the CLIs are installed (CI installs them): `claude plugin install` from this repo and
      `codex mcp list` see the knowledge server.
 
   uv run --project server python tests/clients_e2e.py        (exit 0 = all passed; every check prints a line)
@@ -295,6 +297,70 @@ def agents(tok: str, home: Path, project: Path, garden: Path):
     check(code != 0 and "401" in (out + err), "install with a wrong token stops with a clear 401 message", out + err)
 
 
+def codex_plugin(tok: str, home: Path, project: Path):
+    """The Codex plugin (plugin/.codex-plugin): every hook command the way Codex runs it (sh, or cmd with commandWindows,
+    PLUGIN_ROOT in the environment), its stdio MCP server, and with the CLI: install from this repo's marketplace."""
+    root = CLIENT / "plugin"
+    manifest = json.loads((root / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
+    hooks = json.loads((root / manifest["hooks"]).read_text(encoding="utf-8"))["hooks"]
+    env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, PLUGIN_ROOT=str(root))
+    payloads = {"SessionStart": {"hook_event_name": "SessionStart", "source": "startup", "cwd": str(project)},
+                "PostToolUse": {"hook_event_name": "PostToolUse", "cwd": str(project), "tool_input": {"command": "*** Begin Patch\n*** Update File: docs/taxi.md\n*** End Patch"}},
+                "PreCompact": {"hook_event_name": "PreCompact", "session_id": "cx-1", "cwd": str(project), "transcript_path": ""},
+                "SessionEnd": {"hook_event_name": "SessionEnd", "session_id": "cx-2", "cwd": str(project), "transcript_path": ""}}
+    check(set(hooks) == set(payloads) and len(hooks["SessionStart"][0]["hooks"]) == 1,
+          "codex plugin: the four hook events, one SessionStart handler (openai/codex#45999)", str(list(hooks)))
+    for event, groups in hooks.items():
+        for hk in (h for g in groups for h in g["hooks"]):
+            # Codex: COMSPEC /C "<commandWindows>" on Windows, $SHELL -lc "<command>" elsewhere.
+            argv = f'cmd /d /s /c "{hk["commandWindows"]}"' if WIN else [shutil.which("sh"), "-c", hk["command"]]
+            code, out, err = run(argv, json.dumps(payloads[event]), env, cwd=str(project), timeout=hk["timeout"] + 30)
+            check(code == 0 and "skipped" not in err, f"codex plugin: {event} hook runs", err[-600:])
+            if event == "SessionStart":
+                ctx = json.loads(out or "{}").get("hookSpecificOutput", {}).get("additionalContext", "")
+                check("project garden" in ctx and "Search first" in ctx, "codex plugin: SessionStart gives the guest context with the house rules", out[:300] + err[-300:])
+    server = json.loads((root / manifest["mcpServers"]).read_text(encoding="utf-8"))["mcpServers"]["knowledge"]
+    exe = shutil.which(server["command"])
+    check(exe is not None, f"codex plugin: the MCP command {server['command']} is on PATH")
+    msgs = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                                                                          "clientInfo": {"name": "e2e", "version": "0"}}},
+            {"jsonrpc": "2.0", "method": "notifications/initialized"},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "knowledge_search", "arguments": {"pattern": "taxi"}}}]
+    # Codex starts it in the plugin folder with only the env_vars it lists (plus HOME, PATH and the like).
+    code, out, err = run([exe or server["command"], *server["args"]], "".join(json.dumps(m) + "\n" for m in msgs),
+                         env, cwd=str(root / server["cwd"]))
+    replies = {m.get("id"): m for m in map(json.loads, out.splitlines())} if code == 0 and out.strip() else {}
+    check(set(replies) == {1, 2} and "taxi" in json.dumps(replies[2].get("result")), "codex plugin: the stdio MCP server answers initialize and knowledge_search", out[:400] + err[-400:])
+    code, out, err = run([exe or server["command"], *server["args"]], json.dumps(msgs[2]) + "\n", {**env, "KNOWLEDGE_TOKEN": "wrong"}, cwd=str(root))
+    check("token invalid" in out, "codex plugin: a wrong token answers with a plain reason", out[:300] + err[-300:])
+    codex = shutil.which("codex")
+    if not codex:
+        return print("skip codex plugin install (codex not installed)")
+    env = user_env(home)
+    (home / ".codex").mkdir(parents=True, exist_ok=True)  # Codex refuses a CODEX_HOME that does not exist
+    code, out, err = run([codex, "plugin", "marketplace", "add", str(REPO)], "", env, timeout=120)
+    check(code == 0, "codex: marketplace add from this repo", out + err)
+    code, out, err = run([codex, "plugin", "add", "knowledge@knowledge"], "", env, timeout=120)
+    check(code == 0, "codex: plugin add knowledge@knowledge", out + err)
+    code, out, err = run([codex, "mcp", "list"], "", env, timeout=60)
+    check("agent_hooks.py mcp" in out, "codex: mcp list shows the plugin's knowledge server", out + err)
+    # The hooks as Codex reads them (app-server hooks/list): all four parse and wait for the user's trust (/hooks).
+    p = subprocess.Popen([codex, "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env,
+                         text=True, encoding="utf-8")
+    try:
+        for m in ({"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "e2e", "version": "0"}}}, {"method": "initialized"},
+                  {"id": 2, "method": "hooks/list", "params": {"cwds": [str(project)]}}):
+            p.stdin.write(json.dumps({"jsonrpc": "2.0", **m}) + "\n")
+        p.stdin.flush()
+        reply = next((m for m in map(json.loads, p.stdout) if m.get("id") == 2), {})
+    finally:
+        p.kill()
+    data = reply.get("result", {}).get("data", [])
+    listed = [h for e in data for h in e["hooks"] if h.get("pluginId") == "knowledge@knowledge"]
+    problems = [w for e in data for w in e["warnings"] + [x["message"] for x in e["errors"]]]
+    check(len(listed) == 4 and not problems, "codex: hooks/list shows the plugin's four hooks, no warnings", json.dumps(reply)[:800])
+
+
 def real_clis(tok: str, home: Path):
     """The real Claude Code and Codex CLIs, when installed: they accept what we install."""
     claude, codex = shutil.which("claude"), shutil.which("codex")
@@ -336,6 +402,7 @@ def main():
         offline(tok, home, project, garden, mirror)
         skills(tmp, home)
         agents(tok, home, project, garden)
+        codex_plugin(tok, tmp / "Codex Usér", project)  # its own home: the plugin next to the setup's server would clash
         real_clis(tok, home)
     finally:
         proc.kill()
