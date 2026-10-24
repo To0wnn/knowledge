@@ -375,7 +375,8 @@ One command per agent on every OS: `python3 ~/knowledge/clients/knowledge-agent.
 checks it with the server and saves it in the OS keyring (`token_store.store`: secret-tool, macOS Keychain, Windows
 Credential Manager via CredWriteW); without a keyring it says how to set `KNOWLEDGE_TOKEN` instead. Then: Claude Code
 the plugin (+ `autoMemoryEnabled: false`); Codex/agy on Linux/macOS the plugin, after removing an older setup of the
-script; Codex/agy on Windows, with a vault name, or with `KNOWLEDGE_SETUP=script` the script's own setup.
+script; Codex on Windows the plugin as well; agy on Windows, a vault name, or `KNOWLEDGE_SETUP=script` the
+script's own setup.
 `KNOWLEDGE_MARKETPLACE` / `KNOWLEDGE_AGY_PLUGIN` point the plugin install elsewhere (the tests use the checkout).
 
 The same `plugin/` folder installs in Codex and agy, so every agent gets the same hooks, skills and MCP server:
@@ -393,11 +394,13 @@ The same `plugin/` folder installs in Codex and agy, so every agent gets the sam
   is and keeps a plugin variable in plain `config.json`.
 - Each agent loads only its own files (`agy plugin validate` warns that Claude's `.mcp.json` and `hooks/hooks.json`
   are never loaded; Codex follows the paths in its manifest).
-- Windows: the plugins' MCP command is `python3`, which a stock python.org install may lack, so Windows keeps
-  `clients/knowledge-agent.py install codex|agy`; that setup writes the same stdio relay with `py` (agy everywhere,
-  Codex on Windows; Codex on Linux/macOS keeps the header helper), so no config file holds the token. CI proves it
-  on Windows: cmdkey, the configured relay answering a search, Claude's headersHelper (tests/clients_e2e.py
-  script_mcp). Devices that ran the setup
+- Codex starts the MCP server as `./python3` in the plugin folder: `plugin/python3` (sh, runs `hooks/py.sh`) on
+  Linux/macOS, `plugin/python3.cmd` (py, else python) on Windows, which Codex finds through PATHEXT; a python.org
+  install has no `python3`. CI lets the real `codex app-server` start it (`mcpServerStatus/list`), on Windows with a
+  PATH that holds only a py launcher (tests/clients_e2e.py codex_plugin).
+- agy on Windows keeps `clients/knowledge-agent.py install agy` until its MCP start is proven the same way; that
+  setup writes the same stdio relay with `py`, so no config file holds the token. CI proves it on Windows: cmdkey,
+  the configured relay answering a search, Claude's headersHelper (tests/clients_e2e.py script_mcp). Devices that ran the setup
   script remove its knowledge entries before installing the plugin, else server and hooks load twice.
 - Anthony's VM (no keyring): agy runs the plugin with `KNOWLEDGE_TOKEN` from the vault through an `agy()` function
   in `~/.zshenv` (read by every zsh, so tmux commands and Claude Code calling agy get it too); VM Codex keeps the
