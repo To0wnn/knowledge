@@ -14,7 +14,13 @@ const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v
 // Drawing reads the theme tokens per link and label each frame: cache them, cleared when the theme flips.
 let tokens = {};
 const tok = (v) => tokens[v] || (tokens[v] = css(v)); // an empty read (stylesheet not applied yet) is not cached
-matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { tokens = {}; });
+// The theme changed (system, or the viewer's pick in the user menu): re-read the tokens and recolour the map.
+function themeChanged() {
+  tokens = {};
+  if (!Graph) return;
+  indexGraph(); renderTopics(); Graph.backgroundColor(tok("--canvas"));
+}
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", themeChanged);
 const decode = (s) => { try { return decodeURIComponent(s); } catch { return s; } }; // a literal % is not an escape
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -372,7 +378,7 @@ function renderTopics() {
 
 // The middle column shows the note, or the map of the project instead.
 function setMap(on) {
-  mapOn = on; $("map-btn").setAttribute("aria-pressed", String(on));
+  mapOn = on; $("map-btn").setAttribute("aria-pressed", String(on)); store.set("kn_map", on ? "1" : "0"); // kept over a reload
   $("graph").hidden = !on; $("note").hidden = on;
   if (current) renderSide();
   if (Graph) { Graph.linkDirectionalParticles(Graph.linkDirectionalParticles()); on ? Graph.resumeAnimation() : Graph.pauseAnimation(); }
@@ -383,6 +389,16 @@ function setMap(on) {
   });
 }
 $("map-btn").onclick = () => setMap(!mapOn);
+
+// Theme: Auto (the system's), Light or Dark; theme.js applies the stored pick before the page paints.
+const THEMES = ["auto", "light", "dark"];
+const showTheme = () => { $("theme-btn").textContent = `Theme: ${{ auto: "Auto", light: "Light", dark: "Dark" }[document.documentElement.dataset.theme || "auto"]}`; };
+$("theme-btn").onclick = () => {
+  const next = THEMES[(THEMES.indexOf(document.documentElement.dataset.theme || "auto") + 1) % THEMES.length];
+  if (next === "auto") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = next;
+  store.set("kn_theme", next); showTheme(); themeChanged();
+};
+showTheme();
 
 // ---------------------------------------------------------------- note preview, deep links and editor
 function splitFront(text) {
@@ -980,4 +996,5 @@ loadMe().then(loadGraph).catch((e) => {
   loadLint(false); loadRecent();
   const id = decode(location.hash.slice(1));
   if (id) openNote(id, { push: false }); else homeView();
+  if (store.get("kn_map") === "1") setMap(true); // the map stays open over a reload
 });

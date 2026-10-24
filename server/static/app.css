@@ -9,8 +9,9 @@
   --font: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
 }
+/* Dark: the system's choice unless the viewer picked Light, or the viewer's own pick (theme.js, user menu). */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #0c1018; --panel: #121825; --ink: #dfe6f1; --muted: #8592a8; --line: #232c3d; --accent: #7aa2ff;
     --canvas: #080b12; --hover: #1a2233; --error: #ff7a66;
     --g-project: #6f9bff; --g-feedback: #f2b45a; --g-reference: #4fd1c0; --g-user: #f07ab6; --g-incident: #ff6e5a;
@@ -19,6 +20,16 @@
     --g-sky: #63b8ec; --g-brown: #c9965f; --g-lime: #a6cf52; --g-magenta: #e07ce6; --g-coral: #ff9877; --g-steel: #86b5c4;
   }
 }
+:root[data-theme="dark"] {
+  --bg: #0c1018; --panel: #121825; --ink: #dfe6f1; --muted: #8592a8; --line: #232c3d; --accent: #7aa2ff;
+  --canvas: #080b12; --hover: #1a2233; --error: #ff7a66;
+  --g-project: #6f9bff; --g-feedback: #f2b45a; --g-reference: #4fd1c0; --g-user: #f07ab6; --g-incident: #ff6e5a;
+  --g-infra: #a693ff; --g-doc: #9aa6b8; --g-skill: #6fd486; --g-source: #e0c95a; --g-index: #ffffff;
+  --link-in: rgba(170, 184, 208, 0.62); --link-cross: rgba(170, 184, 208, 0.32);
+  --g-sky: #63b8ec; --g-brown: #c9965f; --g-lime: #a6cf52; --g-magenta: #e07ce6; --g-coral: #ff9877; --g-steel: #86b5c4;
+}
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
 * { box-sizing: border-box; }
 /* The "no access" page (server NO_ACCESS): one card in the middle. */
 body.login { display: grid; grid-template: none; place-items: center; padding: 16px; }

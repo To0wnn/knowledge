@@ -1753,7 +1753,7 @@ CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
 
 def page(name: str) -> HTMLResponse:
     text = (STATIC / name).read_text()
-    for f in ("app.js", "admin.js", "app.css"):
+    for f in ("app.js", "admin.js", "app.css", "theme.js"):
         text = text.replace(f"/ui/static/{f}\"", f"/ui/static/{f}?v={RELEASE}\"")
     return HTMLResponse(text.replace("<html lang=\"en\">", f"<html lang=\"en\" data-release=\"{RELEASE}\">"),
                         headers={"Cache-Control": "no-cache", **({"Content-Security-Policy": CSP} if name != "help.html" else {})})
