@@ -4,7 +4,7 @@
 Linux, macOS and Windows; standard library only. install asks for the device token (hidden) when none is stored, or
 whether to replace the stored one, checks it with the server and saves it in the keyring of the OS (Linux secret-tool,
 macOS Keychain, Windows Credential Manager; token_store.py). Without a terminal it uses KNOWLEDGE_TOKEN or the stored
-token. On the owner's VM TOKEN is a vault name. The session log falls back to ~/.config/knowledge-server/session.env.
+token. On the machine that holds the files, TOKEN can be a vault name. The session log falls back to ~/.config/knowledge-server/session.env.
 
   knowledge-agent.py install <claude|codex|agy> [TOKEN]   set up or update; safe to run again. Claude Code: the plugin.
                     Codex and agy: the plugin (an older setup of this script is removed first); with a vault name,

@@ -2,5 +2,5 @@
 # Prints the knowledge server's Authorization header as JSON for an MCP client header helper (Codex
 # http_headers_helper). The token comes from the vault, so it is never stored in the client's config.
 # Usage: knowledge-mcp-header <VAULT_NAME>   e.g. KNOWLEDGE_TOKEN_CODEX
-t=$(/home/user/.local/bin/secret "${1:?vault name}") || exit 1
+t=$("${KNOWLEDGE_SECRET_BIN:-$HOME/.local/bin/secret}" "${1:?vault name}") || exit 1  # full path: Codex runs helpers with a bare PATH
 printf '{"Authorization": "Bearer %s"}\n' "$t"

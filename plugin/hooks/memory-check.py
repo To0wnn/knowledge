@@ -22,8 +22,8 @@ LINT_DIR = Path(__file__).resolve().parents[2] / "server"  # ~/knowledge/server/
 SERVER = "https://knowledge.to0wnn.com"
 TOKEN = Path.home() / ".config/knowledge-server/report.token"  # read-only device token
 # Claude Code memory dir -> knowledge server root and project (the semantic search filters on project)
-ROOTS = {"-home-user-homelab": ("memory", "homelab"), "-home-user-anpitek": ("anpitek-memory", "anpitek"),
-         "-home-user-trade-bot": ("trade-memory", "trade")}
+CC = lambda folder: re.sub(r"[^A-Za-z0-9]", "-", str(Path.home() / folder))  # Claude Code's memory folder name
+ROOTS = {CC("homelab"): ("memory", "homelab"), CC("anpitek"): ("anpitek-memory", "anpitek"), CC("trade_bot"): ("trade-memory", "trade")}
 SIMILAR = 0.72  # same threshold as the server (calibrated 18 Oct 2026)
 
 
@@ -111,15 +111,15 @@ def main() -> None:
 
 if __name__ == "__main__":
     if "--selftest" in sys.argv:
-        assert memo_of(str(PROJECTS / "-home-user-homelab/memory/x.md")) == (PROJECTS / "-home-user-homelab/memory", "x.md")
-        assert memo_of(str(PROJECTS / "-home-user-homelab/memory/archief/x.md")) is None
-        assert memo_of("/home/user/homelab/diensten.md") is None
-        new = str(PROJECTS / "-home-user-homelab/memory/zz_selftest_new.md")
+        assert memo_of(str(PROJECTS / CC("homelab") / "memory/x.md")) == (PROJECTS / CC("homelab") / "memory", "x.md")
+        assert memo_of(str(PROJECTS / CC("homelab") / "memory/archief/x.md")) is None
+        assert memo_of(str(Path.home() / "homelab/diensten.md")) is None
+        new = str(PROJECTS / CC("homelab") / "memory/zz_selftest_new.md")
         assert "## Stand" in pre_check({"tool_input": {"file_path": new, "content": "plain"}})
         good = "---\nname: z\ndescription: d\nmetadata:\n  type: project\n---\n## Stand\nx\n## Keuzes\n"
         assert pre_check({"tool_input": {"file_path": new, "content": good}}) == ""
-        assert pre_check({"tool_input": {"file_path": str(PROJECTS / "-home-user-homelab/memory/MEMORY.md"), "content": "x"}}) == ""
-        assert pre_check({"tool_input": {"file_path": "/home/user/homelab/diensten.md", "content": "x"}}) == ""
+        assert pre_check({"tool_input": {"file_path": str(PROJECTS / CC("homelab") / "memory/MEMORY.md"), "content": "x"}}) == ""
+        assert pre_check({"tool_input": {"file_path": str(Path.home() / "homelab/diensten.md"), "content": "x"}}) == ""
         print("ok")
         sys.exit(0)
     try:

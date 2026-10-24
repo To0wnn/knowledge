@@ -26,7 +26,7 @@ services:
       KNOWLEDGE_ADMIN_DIR: /admin  # tokens.json, users.json, projects.json: managed in the web UI (admin page)
       KNOWLEDGE_TOKENS: /admin/tokens.json
       KNOWLEDGE_PROJECTS_DIR: /projects  # projects created in the web UI
-      KNOWLEDGE_ADMINS: admin  # Authentik usernames with full access; everyone else gets projects in the admin page
+      KNOWLEDGE_ADMINS: ${KNOWLEDGE_ADMINS}  # Authentik usernames with full access; everyone else gets projects in the admin page
       KNOWLEDGE_SECRETS: /config/secrets.json  # SHA-256 of known secrets (token.py push-secrets), for redaction
       KNOWLEDGE_AUDIT: /state/audit.log
       KNOWLEDGE_VECTORS: /state/vectors.npz  # embedding cache: a restart only embeds new text
@@ -59,28 +59,28 @@ x-nfs: &nfs
 volumes:
   memory:
     <<: *nfs
-    driver_opts: {type: nfs, o: "addr=${KNOWLEDGE_VM_HOST},nfsvers=4.2,rw,hard,timeo=50,actimeo=1", device: ":/home/user/.claude/projects/-home-user-homelab/memory"}
+    driver_opts: {type: nfs, o: "addr=${KNOWLEDGE_VM_HOST},nfsvers=4.2,rw,hard,timeo=50,actimeo=1", device: ":${KNOWLEDGE_VM_HOME}/.claude/projects/${KNOWLEDGE_VM_CC_PREFIX}-homelab/memory"}
   homelab:
     <<: *nfs
-    driver_opts: {type: nfs, o: "addr=${KNOWLEDGE_VM_HOST},nfsvers=4.2,rw,hard,timeo=50,actimeo=1", device: ":/home/user/homelab"}
+    driver_opts: {type: nfs, o: "addr=${KNOWLEDGE_VM_HOST},nfsvers=4.2,rw,hard,timeo=50,actimeo=1", device: ":${KNOWLEDGE_VM_HOME}/homelab"}
   claude:
     <<: *nfs
-    driver_opts: {type: nfs, o: "addr=${KNOWLEDGE_VM_HOST},nfsvers=4.2,ro,hard,timeo=50,actimeo=1", device: ":/home/user/.claude/gedeeld"}
+    driver_opts: {type: nfs, o: "addr=${KNOWLEDGE_VM_HOST},nfsvers=4.2,ro,hard,timeo=50,actimeo=1", device: ":${KNOWLEDGE_VM_HOME}/.claude/gedeeld"}
   claude_skills:  # rw since 23 Oct 2026: the admin's own devices write shared skills (server.py write_refusal)
     <<: *nfs
-    driver_opts: {type: nfs, o: "addr=${KNOWLEDGE_VM_HOST},nfsvers=4.2,rw,hard,timeo=50,actimeo=1", device: ":/home/user/.claude/skills"}
+    driver_opts: {type: nfs, o: "addr=${KNOWLEDGE_VM_HOST},nfsvers=4.2,rw,hard,timeo=50,actimeo=1", device: ":${KNOWLEDGE_VM_HOME}/.claude/skills"}
   claude_agents:
     <<: *nfs
-    driver_opts: {type: nfs, o: "addr=${KNOWLEDGE_VM_HOST},nfsvers=4.2,ro,hard,timeo=50,actimeo=1", device: ":/home/user/.claude/agents"}
+    driver_opts: {type: nfs, o: "addr=${KNOWLEDGE_VM_HOST},nfsvers=4.2,ro,hard,timeo=50,actimeo=1", device: ":${KNOWLEDGE_VM_HOME}/.claude/agents"}
   anpitek:
     <<: *nfs
-    driver_opts: {type: nfs, o: "addr=${KNOWLEDGE_VM_HOST},nfsvers=4.2,rw,hard,timeo=50,actimeo=1", device: ":/home/user/anpitek"}
+    driver_opts: {type: nfs, o: "addr=${KNOWLEDGE_VM_HOST},nfsvers=4.2,rw,hard,timeo=50,actimeo=1", device: ":${KNOWLEDGE_VM_HOME}/anpitek"}
   anpitek_memory:
     <<: *nfs
-    driver_opts: {type: nfs, o: "addr=${KNOWLEDGE_VM_HOST},nfsvers=4.2,rw,hard,timeo=50,actimeo=1", device: ":/home/user/.claude/projects/-home-user-anpitek/memory"}
+    driver_opts: {type: nfs, o: "addr=${KNOWLEDGE_VM_HOST},nfsvers=4.2,rw,hard,timeo=50,actimeo=1", device: ":${KNOWLEDGE_VM_HOME}/.claude/projects/${KNOWLEDGE_VM_CC_PREFIX}-anpitek/memory"}
   trade:
     <<: *nfs
-    driver_opts: {type: nfs, o: "addr=${KNOWLEDGE_VM_HOST},nfsvers=4.2,rw,hard,timeo=50,actimeo=1", device: ":/home/user/trade_bot"}
+    driver_opts: {type: nfs, o: "addr=${KNOWLEDGE_VM_HOST},nfsvers=4.2,rw,hard,timeo=50,actimeo=1", device: ":${KNOWLEDGE_VM_HOME}/trade_bot"}
   trade_memory:
     <<: *nfs
-    driver_opts: {type: nfs, o: "addr=${KNOWLEDGE_VM_HOST},nfsvers=4.2,rw,hard,timeo=50,actimeo=1", device: ":/home/user/.claude/projects/-home-user-trade-bot/memory"}
+    driver_opts: {type: nfs, o: "addr=${KNOWLEDGE_VM_HOST},nfsvers=4.2,rw,hard,timeo=50,actimeo=1", device: ":${KNOWLEDGE_VM_HOME}/.claude/projects/${KNOWLEDGE_VM_CC_PREFIX}-trade-bot/memory"}

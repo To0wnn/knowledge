@@ -8,7 +8,7 @@ clients/knowledge-agent.py (the setup without a plugin) calls the same functions
   agent_hooks.py session-log [TOKEN]           SessionEnd/PreCompact (Codex), Stop (agy): post the session log
   agent_hooks.py header [TOKEN]                MCP header helper: the token as JSON, {} without one
   agent_hooks.py mcp [TOKEN]                   stdio MCP server of the Codex and agy plugins: relays to /mcp
-TOKEN: "-" (default) = KNOWLEDGE_TOKEN or the keyring (token_store.py); on the owner's VM a vault name.
+TOKEN: "-" (default) = KNOWLEDGE_TOKEN or the keyring (token_store.py); on the machine that holds the files, a vault name.
 Never fails a session: errors go to stderr. Linux, macOS and Windows; standard library only.
 """
 import hashlib

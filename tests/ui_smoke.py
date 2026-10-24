@@ -32,7 +32,7 @@ def local_env():
 local_env()
 
 URL = os.environ["KNOWLEDGE_URL"]  # the server on the LAN, from local.env
-USER = os.environ.get("KNOWLEDGE_TEST_USER", "admin")
+USER = os.environ["KNOWLEDGE_TEST_USER"]  # an admin user name, from local.env
 failures = []
 
 

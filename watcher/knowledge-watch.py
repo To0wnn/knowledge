@@ -20,14 +20,15 @@ import time
 import urllib.request
 
 HOME = os.path.expanduser("~")
+cc_memory = lambda folder: f"{HOME}/.claude/projects/{re.sub(r'[^A-Za-z0-9]', '-', f'{HOME}/{folder}')}/memory"  # Claude Code's naming
 TREES = [  # local path -> path prefix on the knowledge server (longest first)
-    (f"{HOME}/.claude/projects/-home-user-homelab/memory", "memory"),
+    (cc_memory("homelab"), "memory"),
     (f"{HOME}/.claude/gedeeld", "claude"),
     (f"{HOME}/.claude/skills", "claude/skills"),
     (f"{HOME}/.claude/agents", "claude/agents"),
     (f"{HOME}/homelab", "homelab"),
-    (f"{HOME}/.claude/projects/-home-user-anpitek/memory", "anpitek-memory"),
-    (f"{HOME}/.claude/projects/-home-user-trade-bot/memory", "trade-memory"),
+    (cc_memory("anpitek"), "anpitek-memory"),
+    (cc_memory("trade_bot"), "trade-memory"),
     (f"{HOME}/anpitek", "anpitek"),
     (f"{HOME}/trade_bot", "trade"),
 ]
