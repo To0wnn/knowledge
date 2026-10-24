@@ -925,7 +925,8 @@ def lint_all() -> dict[str, list[str]]:
         for check, items in kb_lint.skill_lint(skills, slugs, {r.split("/")[1] for r in mem_files}).items():
             report.setdefault(check, []).extend(f"claude/skills/{i}" for i in items)
     gaps = get_graph()["insights"]
-    report["isolated_note"] = [f"{i['id']} ({i['degree']} link)" for i in gaps["isolated"] if mem_of(i["id"])]
+    report["isolated_note"] = [f"{i['id']} ({i['degree']} link)" for i in gaps["isolated"]
+                               if mem_of(i["id"]) or i["id"].startswith("claude/skills/")]
     report["sparse_topic"] = [f"{c['project']}: topic '{c['name']}' ({c['size']} notes, cohesion {c['cohesion']})"
                               for c in gaps["sparse_topics"]]
     # The docs of every other project (house rule 2; lint did homelab's): the notes the graph draws, each with a topic

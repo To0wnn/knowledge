@@ -289,11 +289,10 @@ def louvain(ids, edges, degree, labels, sections=None) -> tuple[dict[str, str], 
 
 def insights(graph: dict) -> dict[str, list[dict]]:
     """Knowledge gaps from the graph structure, reported by lint: isolated notes (no links; the MEMORY.md index is not
-    counted) and sparse topics (found from links, not a user's section: cohesion < 0.15, 3+ notes)."""
+    counted), skills included since 24 Oct 2026 (a skill no memo names is a loose dot on the map), and sparse topics (found from links, not a user's section: cohesion < 0.15, 3+ notes)."""
     nodes = {n["id"]: n for n in graph["nodes"]}
     g = topic_graph(nodes, [(l["source"], l["target"]) for l in graph["links"]])
-    isolated = [{"id": i, "project": nodes[i]["project"], "degree": g.degree(i)} for i in sorted(g) if g.degree(i) == 0
-                and nodes[i]["group"] not in ("skill",)]
+    isolated = [{"id": i, "project": nodes[i]["project"], "degree": g.degree(i)} for i in sorted(g) if g.degree(i) == 0]
     sparse = [c for c in graph["communities"] if c["size"] >= 3 and c["cohesion"] < 0.15 and c.get("kind") != "section"]
     return {"isolated": isolated, "sparse_topics": sparse}
 
@@ -409,4 +408,7 @@ if __name__ == "__main__":
     assert rel["memory/m2.md"]["why"].startswith("same source") and rel["memory/m3.md"]["why"] == "linked", rel
     assert related(s2, "memory/m1.md", semantic={"memory/m2.md": 0.9})[0]["why"].endswith("similar meaning (0.90)")
     assert any(i["id"] == "memory/m2.md" for i in s2["insights"]["isolated"])  # same slug resolves inside its own project
+    lone = build({"memory/a.md": "uses `forge-stack`", "claude/skills/forge-stack/SKILL.md": "s", "claude/skills/lone/SKILL.md": "s"})
+    loose = {i["id"] for i in lone["insights"]["isolated"]}
+    assert "claude/skills/lone/SKILL.md" in loose and "claude/skills/forge-stack/SKILL.md" not in loose, loose  # a loose skill
     print("ok", len(g["nodes"]), "nodes", len(g["links"]), "links")
