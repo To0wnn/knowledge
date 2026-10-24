@@ -205,9 +205,46 @@ def build(files: dict[str, str]) -> dict:
               # [[slug]] links may use the frontmatter name; the UI needs it when it differs from the file name
               **({"name": nm} if mem_root(rel) and (nm := frontmatter(text).get("name", "")) and nm != rel.split("/")[-1][:-3] else {})}
              for rel, text in sorted(keep.items())]
-    graph = {"nodes": nodes, "links": [{"source": a, "target": b} for a, b in sorted(edges)], "communities": communities}
+    graph = {"nodes": nodes, "links": weighted_links(nodes, edges), "communities": communities}
     graph["insights"] = insights(graph)
     return graph
+
+
+def pair_score(g: nx.Graph, a: dict, b: dict) -> tuple[float, list[str]]:
+    """The graph part of the relevance model, for two notes: direct link x3, shared raw source x4 (per source),
+    Adamic-Adar (shared neighbours, weighted by their rarity) x1.5, same type x1. Also the weight of a drawn link."""
+    why, score = [], 0.0
+    i, j = a["id"], b["id"]
+    if i in g and j in g and g.has_edge(i, j):
+        score += 3.0
+        why.append("linked")
+    shared = set(a["sources"]) & set(b["sources"])
+    if shared:
+        score += 4.0 * len(shared)
+        why.append(f"same source ({len(shared)})")
+    if i in g and j in g:
+        aa = sum(1 / math.log(g.degree(z)) for z in nx.common_neighbors(g, i, j) if g.degree(z) > 1)
+        if aa:
+            score += 1.5 * aa
+            why.append("shared neighbours")
+    if a["group"] == b["group"]:
+        score += 1.0
+    return score, why
+
+
+def weighted_links(nodes: list[dict], edges: set) -> list[dict]:
+    """One link per pair (a note linking back is the same line), with `w` in 0..1: its relevance score on a log
+    scale between the weakest and the strongest link, so the map can draw a strong relation thicker and closer."""
+    by_id = {n["id"]: n for n in nodes}
+    pairs, seen = [], set()
+    for a, b in sorted(edges):
+        if (b, a) not in seen:
+            seen.add((a, b)); pairs.append((a, b))
+    g = topic_graph(by_id, pairs)
+    raw = [math.log1p(pair_score(g, by_id[a], by_id[b])[0]) for a, b in pairs]
+    lo, hi = min(raw, default=0.0), max(raw, default=0.0)
+    return [{"source": a, "target": b, "w": round((r - lo) / (hi - lo), 3) if hi > lo else 1.0}
+            for (a, b), r in zip(pairs, raw)]
 
 
 def topic_graph(ids, edges) -> nx.Graph:
@@ -283,21 +320,7 @@ def related(graph: dict, rel: str, limit: int = 10, semantic: dict[str, float] |
     for c in cands:
         if c not in nodes:
             continue
-        why, score = [], 0.0
-        if rel in g and c in g and g.has_edge(rel, c):
-            score += 3.0
-            why.append("linked")
-        shared = mine & set(nodes[c]["sources"])
-        if shared:
-            score += 4.0 * len(shared)
-            why.append(f"same source ({len(shared)})")
-        if rel in g and c in g:
-            aa = sum(1 / math.log(g.degree(z)) for z in nx.common_neighbors(g, rel, c) if g.degree(z) > 1)
-            if aa:
-                score += 1.5 * aa
-                why.append("shared neighbours")
-        if nodes[c]["group"] == me["group"]:
-            score += 1.0
+        score, why = pair_score(g, me, nodes[c])
         sim = (semantic or {}).get(c, 0.0)
         if sim > 0.3:
             score += 3.0 * sim
@@ -340,7 +363,9 @@ if __name__ == "__main__":
     links = {(l["source"], l["target"]) for l in g["links"]}
     for t in ("memory/b_c.md", "homelab/framework.md", "claude/skills/forge-stack/SKILL.md", "homelab/sources/2026-10-18-x.md"):
         assert ("memory/a.md", t) in links, (t, links)
-    assert ("memory/b_c.md", "memory/a.md") in links and "memory/MEMORY.md" not in ids  # the index is not drawn
+    assert ("memory/a.md", "memory/b_c.md") in links and ("memory/b_c.md", "memory/a.md") not in links  # one line per pair
+    assert "memory/MEMORY.md" not in ids  # the index is not drawn
+    assert all(0 <= l["w"] <= 1 for l in g["links"]) and {l["w"] for l in g["links"]} >= {0.0, 1.0}, g["links"]
     assert ids["memory/b_c.md"]["name"] == "b-c" and "name" not in ids["memory/a.md"]  # only when it differs
     assert ids["trade-memory/a.md"]["label"] == "Bot plan" and ids["trade-memory/a.md"]["project"] == "trade"
     assert ids["anpitek/website/OVERZICHT.md"]["project"] == "anpitek"

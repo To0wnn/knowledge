@@ -51,6 +51,8 @@ const groupOf = (n) => (allMode() ? n.project : n.cluster);
 const lintProject = (item) => ROOT_PROJECT[item.split(/[/:]/)[0]] || "homelab"; // homelab memory items carry no root prefix
 const nodeColor = (n) => clusterColor.get(groupOf(n)) || tok("--g-doc");
 const linkId = (end) => end.id || end;
+const linkW = (l) => l.w ?? 0.5; // an older server sends no weight
+const fade = (color, f) => color.replace(/rgba\(([^)]+),\s*([\d.]+)\)/, (_, rgb, a) => `rgba(${rgb}, ${(a * f).toFixed(3)})`);
 
 // ---------------------------------------------------------------- graph data
 function indexGraph() {
@@ -74,6 +76,10 @@ function visibleData() {
   const nodes = data.nodes.filter(nodeIn);
   const keep = new Set(nodes.map((n) => n.id));
   const links = data.links.filter((l) => keep.has(linkId(l.source)) && keep.has(linkId(l.target)));
+  // Every note keeps its strongest link in sight, so hiding weak links never makes a note look unlinked.
+  const best = new Map();
+  for (const l of links) for (const end of [linkId(l.source), linkId(l.target)]) if (!best.has(end) || linkW(l) > linkW(best.get(end))) best.set(end, l);
+  for (const l of links) l.keep = best.get(linkId(l.source)) === l || best.get(linkId(l.target)) === l;
   // Labels at overview zoom: the ~15 best-connected notes in view.
   const degrees = nodes.map((n) => n.degree || 0).sort((a, b) => b - a);
   labelMin = Math.max(3, degrees[Math.min(14, degrees.length - 1)] || 0);
@@ -243,8 +249,15 @@ async function loadGraph() {
     // border colour --line was nearly the canvas colour; dark mode needs a lighter, stronger line: own tokens).
     // Highlighted when their note is in focus.
     // On the All map a link between two projects is the point of the view: drawn in the accent, not faded.
-    .linkColor((l) => (linkLit(l) ? tok("--accent") : groupOf(l.source) === groupOf(l.target) ? tok("--link-in") : allMode() ? tok("--accent") + "99" : tok("--link-cross")))
-    .linkWidth((l) => (linkLit(l) ? 1.4 : allMode() && groupOf(l.source) !== groupOf(l.target) ? 1.2 : groupOf(l.source) === groupOf(l.target) ? 0.9 : 0.6))
+    // Weight (l.w, 0..1, graph.py weighted_links: link, shared sources and neighbours, type) sets thickness and
+    // strength, so a strong relation reads at a glance. The weakest links between topics are hidden until their
+    // note is in focus, except a note's strongest link (visibleData): less spaghetti between the islands, and no
+    // note looks unlinked (24 Oct 2026, the owner: "some have no line now").
+    .linkColor((l) => (linkLit(l) ? tok("--accent") : groupOf(l.source) === groupOf(l.target) ? fade(tok("--link-in"), 0.55 + 0.45 * linkW(l))
+      : allMode() ? tok("--accent") + "99" : fade(tok("--link-cross"), 0.6 + 0.4 * linkW(l))))
+    .linkWidth((l) => (linkLit(l) ? 1 + 1.6 * linkW(l) : allMode() && groupOf(l.source) !== groupOf(l.target) ? 1.2
+      : groupOf(l.source) === groupOf(l.target) ? 0.5 + 1.6 * linkW(l) : 0.4 + 0.9 * linkW(l)))
+    .linkVisibility((l) => linkLit(l) || l.keep || allMode() || groupOf(l.source) === groupOf(l.target) || linkW(l) >= 0.2)
     .linkDirectionalParticles((l) => (!calm && mapOn && (hover || selected) && linkLit(l) ? 2 : 0)) // particles keep force-graph drawing every frame
     .linkDirectionalParticleWidth(2.2).linkDirectionalParticleSpeed(0.006)
     .linkDirectionalParticleColor(() => tok("--accent"))
@@ -270,7 +283,9 @@ async function loadGraph() {
   // Links inside a topic hold its island together; links between topics barely pull, so islands stay apart.
   // Repulsion only acts nearby, so a loosely linked note is not flung to the edge.
   Graph.d3Force("charge").strength(-90).distanceMax(260);
-  Graph.d3Force("link").distance(42).strength((l) => (groupOf(l.source) && groupOf(l.source) === groupOf(l.target) ? 0.5 : 0.02));
+  // A strong relation pulls its notes closer; between topics the pull stays weak so the islands keep apart.
+  Graph.d3Force("link").distance((l) => 48 - 14 * linkW(l))
+    .strength((l) => (groupOf(l.source) && groupOf(l.source) === groupOf(l.target) ? 0.3 + 0.4 * linkW(l) : 0.01 + 0.03 * linkW(l)));
   let simNodes = [];
   // Each topic gets its own island: an anchor point its notes are pulled to. The largest topic sits in the
   // middle, the rest on a golden-angle spiral around it. Notes without a topic drift to the centre.
