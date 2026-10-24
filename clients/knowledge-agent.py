@@ -165,11 +165,22 @@ def install_claude():
     # The memory lives on the server: Claude's local auto memory would build a second one.
     path = Path.home() / ".claude" / "settings.json"
     data = load_json(path)
+    changed = False
     if data.get("autoMemoryEnabled") is not False:
         data["autoMemoryEnabled"] = False
+        changed = True
+        print(f"settings: autoMemoryEnabled false in {path}")
+    # Third-party marketplaces do not auto-update by default; this entry is where Claude Code reads it first.
+    market = data.setdefault("extraKnownMarketplaces", {}).setdefault("knowledge", {})
+    market.setdefault("source", {"source": "github", "repo": MARKET} if "/" in MARKET and not Path(MARKET).exists()
+                      else {"source": "directory", "path": MARKET})
+    if market.get("autoUpdate") is not True:
+        market["autoUpdate"] = True
+        changed = True
+        print(f"settings: auto-update on for the knowledge marketplace in {path}")
+    if changed:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-        print(f"settings: autoMemoryEnabled false in {path}")
     print("done; start a new Claude Code session in your project folder")
 
 

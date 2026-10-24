@@ -539,6 +539,9 @@ def installer(tok: str, tmp: Path):
         code, out, err = run([sys.executable, str(agent), "install", "claude"], "", env, timeout=300)
         settings = json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8")) if code == 0 else {}
         check(code == 0 and settings.get("autoMemoryEnabled") is False, "install claude: plugin installed, auto memory off", (out + err)[-1500:])
+        market = settings.get("extraKnownMarketplaces", {}).get("knowledge", {})
+        check(market.get("autoUpdate") is True and market.get("source"), "install claude: auto-update on for the marketplace",
+              json.dumps(market))
         code, out, err = run([shutil.which("claude"), "plugin", "list"], "", env, timeout=60)
         check("knowledge@knowledge" in out, "install claude: claude plugin list shows knowledge", out + err)
     if shutil.which("codex"):  # Windows too: the plugin since 0.9.3
