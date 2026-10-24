@@ -112,7 +112,7 @@ def run(agent: str, mode: str = "plugin") -> str | None:
             p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300,
                                stdin=subprocess.DEVNULL)
             out = (p.stdout + p.stderr).strip()
-            ok = p.returncode == 0 or "already" in out or "not configured as a git" in out  # a local checkout, as the setup
+            ok = p.returncode == 0 or "already" in out.lower() or "not configured as a git" in out.lower()  # a local checkout, as the setup
         except (OSError, subprocess.TimeoutExpired) as e:
             ok, out = False, str(e)
         if not ok:
