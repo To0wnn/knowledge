@@ -57,9 +57,11 @@ git clone https://github.com/To0wnn/knowledge ~/knowledge
 python3 ~/knowledge/clients/knowledge-agent.py install claude   # or codex, agy (Windows: py instead of python3)
 ```
 
-It asks for the token once, checks it with the server, stores it in the keyring and installs the plugin. Claude Code
-then updates the plugin by itself (the setup turns on auto-update for the marketplace); for Codex and agy, run it again
-to update. On Windows, agy needs a `python3` command on PATH (Python from the python.org install manager or the
+It asks for the token once, checks it with the server, stores it in the keyring and installs the plugin. The plugin
+keeps itself up to date in every agent, and says so once at session start: in Claude Code it turns on the marketplace's
+auto-update (off under `/plugin` > Marketplaces); Codex and agy have no plugin auto-update, so there the plugin checks
+GitHub at most once a day and updates itself with the agent's own CLI (the setup without a plugin: `git pull` and the
+setup again). Off: `KNOWLEDGE_AUTO_UPDATE=0`. A new version loads at the next start. On Windows, agy needs a `python3` command on PATH (Python from the python.org install manager or the
 Microsoft Store has one); without it the setup configures agy without the plugin.
 
 ## Development

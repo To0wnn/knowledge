@@ -154,6 +154,10 @@ def claude_plugin(tok: str, home: Path, project: Path, garden: Path):
     hashes = home / ".config" / "knowledge-server" / "secret-hashes.json"  # an owner device has them (token.py push-secrets)
     hashes.parent.mkdir(parents=True, exist_ok=True)
     hashes.write_text(json.dumps([hashlib.sha256(b"Sup3rSecret99").hexdigest()]), encoding="utf-8")
+    known = home / ".claude" / "plugins" / "known_marketplaces.json"  # installed by hand: marketplace known, no autoUpdate
+    known.parent.mkdir(parents=True, exist_ok=True)
+    known.write_text(json.dumps({"knowledge": {"source": {"source": "directory", "path": str(REPO)}, "installLocation": str(REPO),
+                                               "lastUpdated": "2026-10-24T00:00:00.000Z"}}), encoding="utf-8")  # as Claude Code writes it
     for mode in ("env", "literal"):  # Claude Code may expand ${CLAUDE_PLUGIN_ROOT} itself or leave it to the shell
         env = user_env(home, CLAUDE_PLUGIN_ROOT=root, CLAUDE_PLUGIN_OPTION_URL=BASE, CLAUDE_PLUGIN_OPTION_TOKEN=tok,
                        CLAUDE_PROJECT_DIR=str(project))
@@ -169,6 +173,10 @@ def claude_plugin(tok: str, home: Path, project: Path, garden: Path):
         check("project garden" in start and "Search first" in start, f"[{mode}] SessionStart: guest context with the house rules", start[:500])
         check("Development rules" in start, f"[{mode}] SessionStart: guest context with the development rules", start[:500])
         check("unreachable" not in start and "skipped" not in start, f"[{mode}] SessionStart: no error notice", start[:500])
+        settings = json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8"))
+        check(settings["extraKnownMarketplaces"]["knowledge"].get("autoUpdate") is True
+              and ("auto-update is now on" in start) == (mode == "env"),
+              f"[{mode}] SessionStart: auto-update turned on once, said once", json.dumps(settings) + start[-300:])
         check((garden / "docs" / "README.md").exists() and "→ ✅" in (garden / "docs" / "README.md").read_text(encoding="utf-8"),
               f"[{mode}] SessionStart mirrors the folder's .md (UTF-16 marker, → ✅ intact)")
         check("deny" in "".join(outs["PreToolUse"]), f"[{mode}] PreToolUse: a known secret is refused", "".join(outs["PreToolUse"]))
@@ -262,7 +270,8 @@ def skills(tmp: Path, home: Path):
 
 def agents(tok: str, home: Path, project: Path, garden: Path):
     agent = CLIENT / "clients" / "knowledge-agent.py"
-    env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, KNOWLEDGE_SETUP="script")  # the plugin path: installer()
+    env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, KNOWLEDGE_SETUP="script",  # the plugin path: installer()
+                   KNOWLEDGE_PLUGIN_LATEST=str(latest_file(home)))
     (home / ".gemini" / "config").mkdir(parents=True, exist_ok=True)
     (home / ".gemini" / "config" / "mcp_config.json").write_text("", encoding="utf-8")  # agy leaves it empty on Windows
     for name, conf, rules in (("codex", home / ".codex" / "hooks.json", home / ".codex" / "AGENTS.md"),
@@ -292,6 +301,8 @@ def agents(tok: str, home: Path, project: Path, garden: Path):
                     try:
                         msg = json.dumps(json.loads(out))
                         check("project garden" in msg, f"{name} via {label}: context JSON carries the guest context", out[:300])
+                        if label == shells[0][0]:  # the first start says it, later ones not
+                            check("auto-update is on for " + name in msg, f"{name}: the script setup says auto-update is on", msg[-300:])
                     except ValueError:
                         check(False, f"{name} via {label}: context prints valid JSON", out[:300] + err[-300:])
     st, body = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_write", "arguments":
@@ -340,6 +351,24 @@ def script_mcp(tok: str, home: Path):
             run(["cmdkey", "/delete:knowledge"], "", env)
 
 
+def latest_file(home: Path, version: str = "0.0.1") -> Path:
+    """What the plugin compares its own version with (GitHub's plugin.json in real life); old = nothing to do."""
+    path = home / "latest-plugin.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"version": version}), encoding="utf-8")
+    return path
+
+
+def self_update(env: dict, home: Path, agent: str):
+    """The plugin's own auto-update with the real CLI: GitHub 'has' a newer version, the update runs and says so."""
+    script = CLIENT / "plugin" / "hooks" / "self_update.py"
+    code, out, err = run([sys.executable, str(script), "run", agent], "",
+                         {**env, "KNOWLEDGE_PLUGIN_LATEST": str(latest_file(home, "99.0.0"))}, timeout=400)
+    state = json.loads((home / ".knowledge" / "auto-update.json").read_text(encoding="utf-8"))
+    check(code == 0 and "updated to 99.0.0" in state.get(f"{agent}:result", ""), f"{agent}: the plugin updates itself with the CLI",
+          json.dumps(state)[-600:] + err[-300:])
+
+
 def codex_plugin(tok: str, home: Path, project: Path):
     """The Codex plugin (plugin/.codex-plugin): every hook command the way Codex runs it (sh, or cmd with commandWindows,
     PLUGIN_ROOT in the environment), its stdio MCP server, and with the CLI: install from this repo's marketplace."""
@@ -347,7 +376,8 @@ def codex_plugin(tok: str, home: Path, project: Path):
     manifest = json.loads((root / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
     hooks = json.loads((root / manifest["hooks"]).read_text(encoding="utf-8"))["hooks"]
     path = pythonorg_path(home) if WIN else os.environ["PATH"]
-    env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, PLUGIN_ROOT=str(root), PATH=path)
+    env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, PLUGIN_ROOT=str(root), PATH=path,
+                   KNOWLEDGE_PLUGIN_LATEST=str(latest_file(home)))
     payloads = {"SessionStart": {"hook_event_name": "SessionStart", "source": "startup", "cwd": str(project)},
                 "PostToolUse": {"hook_event_name": "PostToolUse", "cwd": str(project), "tool_input": {"command": "*** Begin Patch\n*** Update File: docs/taxi.md\n*** End Patch"}},
                 "PreCompact": {"hook_event_name": "PreCompact", "session_id": "cx-1", "cwd": str(project), "transcript_path": ""},
@@ -363,6 +393,7 @@ def codex_plugin(tok: str, home: Path, project: Path):
             if event == "SessionStart":
                 ctx = json.loads(out or "{}").get("hookSpecificOutput", {}).get("additionalContext", "")
                 check("project garden" in ctx and "Search first" in ctx, "codex plugin: SessionStart gives the guest context with the house rules", out[:300] + err[-300:])
+                check("auto-update is on for codex" in ctx, "codex plugin: SessionStart says auto-update is on", ctx[-300:])
     server = json.loads((root / manifest["mcpServers"]).read_text(encoding="utf-8"))["mcpServers"]["knowledge"]
     # Codex resolves ./python3 in the plugin folder (Windows: with PATHEXT, so python3.cmd).
     exe = str(root / server["cwd"] / (server["command"] + (".cmd" if WIN else "")))
@@ -389,6 +420,7 @@ def codex_plugin(tok: str, home: Path, project: Path):
     check(code == 0, "codex: plugin add knowledge@knowledge", out + err)
     code, out, err = run([codex, "mcp", "list"], "", env, timeout=60)
     check("agent_hooks.py mcp" in out, "codex: mcp list shows the plugin's knowledge server", out + err)
+    self_update(env, home, "codex")
     # The hooks as Codex reads them (app-server hooks/list): all four parse and wait for the user's trust (/hooks).
     reply = app_server(codex, env, "hooks/list", {"cwds": [str(project)]})
     data = reply.get("result", {}).get("data", [])
@@ -476,7 +508,8 @@ def agy_plugin(tok: str, home: Path, project: Path, garden: Path):
     """The agy plugin install path: agy reads plugin/hooks.json and plugin/mcp_config.json (not Claude's files) and runs
     each hook command with sh -c (Windows: cmd /c) in the plugin folder; with agy installed, validate and install it."""
     root = CLIENT / "plugin"
-    env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok)
+    env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, KNOWLEDGE_PLUGIN_LATEST=str(latest_file(home)))
+    (home / ".knowledge" / "auto-update.json").unlink(missing_ok=True)  # agents() used this home for the script setup
     mcp = json.loads((root / "mcp_config.json").read_text(encoding="utf-8"))["mcpServers"]["knowledge"]
     msgs = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26", "capabilities": {},
                                                                            "clientInfo": {"name": "e2e", "version": "1"}}},
@@ -502,6 +535,7 @@ def agy_plugin(tok: str, home: Path, project: Path, garden: Path):
             try:
                 msg = json.loads(out)["injectSteps"][0]["systemMessage"]["systemMessage"]
                 check("project garden" in msg, "agy plugin: context arrives as injectSteps with the guest context", out[:300])
+                check("auto-update is on for agy" in msg, "agy plugin: context says auto-update is on", msg[-300:])
             except (ValueError, KeyError, IndexError):
                 check(False, "agy plugin: context prints injectSteps JSON", out[:300] + err[-300:])
     check((garden / "docs" / "docs" / "agy.md").exists(), "agy plugin: PostToolUse mirrors the written file")
@@ -513,6 +547,7 @@ def agy_plugin(tok: str, home: Path, project: Path, garden: Path):
     check(code == 0, "agy: plugin validate, no errors", out + err)
     code, out, err = run([agy, "plugin", "install", str(root)], "", env, timeout=120)
     check(code == 0 and "[ok]" in out, "agy: plugin install from this repo", out + err)
+    self_update({**env, "KNOWLEDGE_AGY_PLUGIN": str(root)}, home, "agy")
     code, out, err = run([agy, "plugin", "list", "--json"], "", env, timeout=60)
     got = next((x for x in json.loads(out or "[]") if x.get("name") == "knowledge"), {}) if code == 0 else {}
     check(bool(got.get("enabled")) and got.get("mcpServers") == ["knowledge"] and got.get("hooks") == ["knowledge"],

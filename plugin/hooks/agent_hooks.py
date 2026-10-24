@@ -25,8 +25,10 @@ HOOKS = Path(__file__).resolve().parent
 sys.path.insert(0, str(HOOKS))
 import memory_mirror  # noqa: E402  (the offline copy of the memory, shared with the Claude plugin)
 import token_store  # noqa: E402  (KNOWLEDGE_TOKEN or the keyring, shared with the Claude plugin)
+import self_update  # noqa: E402  (auto-update of this plugin, the counterpart of Claude Code's own)
 URL = os.environ.get("KNOWLEDGE_URL", "https://knowledge.to0wnn.com").rstrip("/")
 AGENTS = ("agy", "codex")
+SETUP = "plugin"  # clients/knowledge-agent.py sets "script": the setup without a plugin updates itself another way
 
 
 def token(name: str) -> str:
@@ -71,7 +73,11 @@ def context(agent: str, tok: str):
     cwd = hook.get("cwd") or (hook.get("workspacePaths") or [os.getcwd()])[0]
     ctx = context_text(tok, cwd)  # first: a slow mirror must not cost the session its context
     run_hook("memory_mirror.py", tok, "")  # returns at once: the sync runs in the background
-    text = "\n\n".join(t for t in (run_hook("docs-sync.py", tok, stdin).strip(), ctx) if t)
+    try:
+        update = self_update.notice(agent, mode=SETUP)
+    except Exception as e:  # never cost the session its context
+        update = f"knowledge plugin: auto-update check failed ({type(e).__name__}: {e})"
+    text = "\n\n".join(t for t in (run_hook("docs-sync.py", tok, stdin).strip(), ctx, update) if t)
     print(json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": text}}]} if agent == "agy" else
                      {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}}))
 

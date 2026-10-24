@@ -1,9 +1,0 @@
-[Unit]
-Description=Update the knowledge plugin of agy when GitHub has a newer one (daily)
-After=network-online.target
-
-[Service]
-Type=oneshot
-EnvironmentFile=%h/knowledge/local.env
-Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/usr/bin/python3 %h/knowledge/watcher/agy-update.py

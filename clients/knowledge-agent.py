@@ -392,6 +392,7 @@ def main(argv: list):
     elif cmd == "install" and len(argv) >= 2 and argv[1] in (*CONFIG, "claude"):
         install(argv[1], argv[2] if len(argv) > 2 else "-")
     elif cmd in ("context", "docs-sync", "session-log"):  # hooks written by older setups call this script
+        agent_hooks.SETUP = "script"  # its auto-update: git pull + install, not the plugin CLI
         agent_hooks.main(argv)
     else:
         sys.exit(__doc__)
