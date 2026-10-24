@@ -258,7 +258,7 @@ async function loadGraph() {
     // Weight (l.w, 0..1, graph.py weighted_links: link, shared sources and neighbours, type) sets thickness and
     // strength, so a strong relation reads at a glance. The weakest links between topics are hidden until their
     // note is in focus, except a note's strongest link (visibleData): less spaghetti between the islands, and no
-    // note looks unlinked (24 Oct 2026, the owner: "some have no line now").
+    // note looks unlinked (24 Oct 2026: before this, 27 notes looked unlinked).
     .linkColor((l) => (linkLit(l) ? tok("--accent") : groupOf(l.source) === groupOf(l.target) ? fade(tok("--link-in"), 0.55 + 0.45 * linkW(l))
       : allMode() ? tok("--accent") + "99" : fade(tok("--link-cross"), 0.6 + 0.4 * linkW(l))))
     .linkWidth((l) => (linkLit(l) ? 1 + 1.6 * linkW(l) : allMode() && groupOf(l.source) !== groupOf(l.target) ? 1.2
@@ -796,6 +796,7 @@ document.addEventListener("keydown", (e) => {
 
 // ---------------------------------------------------------------- tabs, changes, lint, ingest
 function selectTab(name) {
+  store.set("kn_tab", name); // kept over a reload, like the map
   for (const b of document.querySelectorAll(".tabs button")) b.setAttribute("aria-selected", String(b.dataset.tab === name));
   for (const t of ["notes", "changes", "lint"]) $(`tab-${t}`).hidden = t !== name;
   if (name === "lint") loadLint(true);
@@ -997,4 +998,6 @@ loadMe().then(loadGraph).catch((e) => {
   const id = decode(location.hash.slice(1));
   if (id) openNote(id, { push: false }); else homeView();
   if (store.get("kn_map") === "1") setMap(true); // the map stays open over a reload
+  const tab = store.get("kn_tab");
+  if (["changes", "lint"].includes(tab) && !document.querySelector(`.tabs [data-tab="${tab}"]`).hidden) selectTab(tab); // Lint only for admins
 });
