@@ -26,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -345,7 +346,8 @@ def codex_plugin(tok: str, home: Path, project: Path):
     root = CLIENT / "plugin"
     manifest = json.loads((root / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
     hooks = json.loads((root / manifest["hooks"]).read_text(encoding="utf-8"))["hooks"]
-    env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, PLUGIN_ROOT=str(root))
+    path = pythonorg_path(home) if WIN else os.environ["PATH"]
+    env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, PLUGIN_ROOT=str(root), PATH=path)
     payloads = {"SessionStart": {"hook_event_name": "SessionStart", "source": "startup", "cwd": str(project)},
                 "PostToolUse": {"hook_event_name": "PostToolUse", "cwd": str(project), "tool_input": {"command": "*** Begin Patch\n*** Update File: docs/taxi.md\n*** End Patch"}},
                 "PreCompact": {"hook_event_name": "PreCompact", "session_id": "cx-1", "cwd": str(project), "transcript_path": ""},
@@ -362,23 +364,24 @@ def codex_plugin(tok: str, home: Path, project: Path):
                 ctx = json.loads(out or "{}").get("hookSpecificOutput", {}).get("additionalContext", "")
                 check("project garden" in ctx and "Search first" in ctx, "codex plugin: SessionStart gives the guest context with the house rules", out[:300] + err[-300:])
     server = json.loads((root / manifest["mcpServers"]).read_text(encoding="utf-8"))["mcpServers"]["knowledge"]
-    exe = shutil.which(server["command"])
-    check(exe is not None, f"codex plugin: the MCP command {server['command']} is on PATH")
+    # Codex resolves ./python3 in the plugin folder (Windows: with PATHEXT, so python3.cmd).
+    exe = str(root / server["cwd"] / (server["command"] + (".cmd" if WIN else "")))
+    check(os.path.isfile(exe), f"codex plugin: the MCP command {server['command']} is in the plugin folder", exe)
     msgs = [{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {},
                                                                           "clientInfo": {"name": "e2e", "version": "0"}}},
             {"jsonrpc": "2.0", "method": "notifications/initialized"},
             {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "knowledge_search", "arguments": {"pattern": "taxi"}}}]
     # Codex starts it in the plugin folder with only the env_vars it lists (plus HOME, PATH and the like).
-    code, out, err = run([exe or server["command"], *server["args"]], "".join(json.dumps(m) + "\n" for m in msgs),
+    code, out, err = run([exe, *server["args"]], "".join(json.dumps(m) + "\n" for m in msgs),
                          env, cwd=str(root / server["cwd"]))
     replies = {m.get("id"): m for m in map(json.loads, out.splitlines())} if code == 0 and out.strip() else {}
     check(set(replies) == {1, 2} and "taxi" in json.dumps(replies[2].get("result")), "codex plugin: the stdio MCP server answers initialize and knowledge_search", out[:400] + err[-400:])
-    code, out, err = run([exe or server["command"], *server["args"]], json.dumps(msgs[2]) + "\n", {**env, "KNOWLEDGE_TOKEN": "wrong"}, cwd=str(root))
+    code, out, err = run([exe, *server["args"]], json.dumps(msgs[2]) + "\n", {**env, "KNOWLEDGE_TOKEN": "wrong"}, cwd=str(root))
     check("token invalid" in out, "codex plugin: a wrong token answers with a plain reason", out[:300] + err[-300:])
     codex = shutil.which("codex")
     if not codex:
         return print("skip codex plugin install (codex not installed)")
-    env = user_env(home)
+    env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, PATH=path)
     (home / ".codex").mkdir(parents=True, exist_ok=True)  # Codex refuses a CODEX_HOME that does not exist
     code, out, err = run([codex, "plugin", "marketplace", "add", str(REPO)], "", env, timeout=120)
     check(code == 0, "codex: marketplace add from this repo", out + err)
@@ -387,20 +390,43 @@ def codex_plugin(tok: str, home: Path, project: Path):
     code, out, err = run([codex, "mcp", "list"], "", env, timeout=60)
     check("agent_hooks.py mcp" in out, "codex: mcp list shows the plugin's knowledge server", out + err)
     # The hooks as Codex reads them (app-server hooks/list): all four parse and wait for the user's trust (/hooks).
-    p = subprocess.Popen([codex, "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env,
-                         text=True, encoding="utf-8")
-    try:
-        for m in ({"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "e2e", "version": "0"}}}, {"method": "initialized"},
-                  {"id": 2, "method": "hooks/list", "params": {"cwds": [str(project)]}}):
-            p.stdin.write(json.dumps({"jsonrpc": "2.0", **m}) + "\n")
-        p.stdin.flush()
-        reply = next((m for m in map(json.loads, p.stdout) if m.get("id") == 2), {})
-    finally:
-        p.kill()
+    reply = app_server(codex, env, "hooks/list", {"cwds": [str(project)]})
     data = reply.get("result", {}).get("data", [])
     listed = [h for e in data for h in e["hooks"] if h.get("pluginId") == "knowledge@knowledge"]
     problems = [w for e in data for w in e["warnings"] + [x["message"] for x in e["errors"]]]
     check(len(listed) == 4 and not problems, "codex: hooks/list shows the plugin's four hooks, no warnings", json.dumps(reply)[:800])
+    # Codex itself starts the plugin's MCP server (on Windows with a python.org PATH: py, no python3) and lists its tools.
+    reply = app_server(codex, env, "mcpServerStatus/list", {"detail": "full"}, timeout=90)
+    entry = next((e for e in reply.get("result", {}).get("data", []) if "knowledge" in e.get("name", "")), {})
+    check("knowledge_search" in json.dumps(entry), "codex: starts the plugin's MCP server and lists knowledge_search", json.dumps(reply)[:1500])
+
+
+def app_server(codex: str, env: dict, method: str, params: dict, timeout=60) -> dict:
+    """One request to `codex app-server` (JSON-RPC over stdio) after the handshake; its reply, or {} on a timeout."""
+    p = subprocess.Popen([codex, "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env,
+                         text=True, encoding="utf-8")
+    timer = threading.Timer(timeout, p.kill)
+    timer.start()
+    try:
+        for m in ({"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "e2e", "version": "0"}}}, {"method": "initialized"},
+                  {"id": 2, "method": method, "params": params}):
+            p.stdin.write(json.dumps({"jsonrpc": "2.0", **m}) + "\n")
+        p.stdin.flush()
+        return next((m for m in map(json.loads, p.stdout) if m.get("id") == 2), {})
+    finally:
+        timer.cancel()
+        p.kill()
+
+
+def pythonorg_path(home: Path) -> str:
+    """PATH as on a pc with Python from python.org: the py launcher, no python3 (and here no python either). A py.cmd
+    stands in for the launcher; every folder that holds a python.exe or python3.exe leaves PATH."""
+    shim = home / "pylauncher"
+    shim.mkdir(parents=True, exist_ok=True)
+    (shim / "py.cmd").write_text(f'@"{sys.executable}" %*\r\n', encoding="utf-8")
+    keep = [d for d in os.environ["PATH"].split(os.pathsep)
+            if d and not any((Path(d) / n).exists() for n in ("python.exe", "python3.exe"))]
+    return os.pathsep.join([str(shim), *keep])
 
 
 def agy_plugin(tok: str, home: Path, project: Path, garden: Path):
@@ -471,7 +497,7 @@ def installer(tok: str, tmp: Path):
         check(code == 0 and settings.get("autoMemoryEnabled") is False, "install claude: plugin installed, auto memory off", (out + err)[-1500:])
         code, out, err = run([shutil.which("claude"), "plugin", "list"], "", env, timeout=60)
         check("knowledge@knowledge" in out, "install claude: claude plugin list shows knowledge", out + err)
-    if shutil.which("codex") and not WIN:
+    if shutil.which("codex"):  # Windows too: the plugin since 0.9.3
         (home / ".codex" / "config.toml").write_text('[mcp_servers.knowledge]\nurl = "x"\nbearer_token_env_var = "KNOWLEDGE_TOKEN"\n', encoding="utf-8")
         (home / ".codex" / "hooks.json").write_text(json.dumps({"hooks": {"SessionStart": [{"hooks": [
             {"type": "command", "command": "python3 knowledge-agent.py context codex -"}]}]}}), encoding="utf-8")
@@ -490,7 +516,6 @@ def relay_errors(home: Path):
     gets an error reply and the relay keeps serving (review 23 Oct 2026: it used to exit and leave the session without
     knowledge tools)."""
     import http.server
-    import threading
 
     class Bad(http.server.BaseHTTPRequestHandler):
         def do_POST(self):

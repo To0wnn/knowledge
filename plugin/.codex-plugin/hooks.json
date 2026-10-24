@@ -8,7 +8,7 @@
           {
             "type": "command",
             "command": "python3 -X utf8 \"$PLUGIN_ROOT/hooks/agent_hooks.py\" context codex",
-            "commandWindows": "py -3 -X utf8 \"%PLUGIN_ROOT%\\hooks\\agent_hooks.py\" context codex",
+            "commandWindows": "\"%PLUGIN_ROOT%\\python3.cmd\" -X utf8 \"%PLUGIN_ROOT%\\hooks\\agent_hooks.py\" context codex",
             "timeout": 30,
             "additionalContextLimit": 60000
           }
@@ -22,7 +22,7 @@
           {
             "type": "command",
             "command": "python3 -X utf8 \"$PLUGIN_ROOT/hooks/agent_hooks.py\" docs-sync",
-            "commandWindows": "py -3 -X utf8 \"%PLUGIN_ROOT%\\hooks\\agent_hooks.py\" docs-sync",
+            "commandWindows": "\"%PLUGIN_ROOT%\\python3.cmd\" -X utf8 \"%PLUGIN_ROOT%\\hooks\\agent_hooks.py\" docs-sync",
             "timeout": 20
           }
         ]
@@ -34,7 +34,7 @@
           {
             "type": "command",
             "command": "python3 -X utf8 \"$PLUGIN_ROOT/hooks/agent_hooks.py\" session-log",
-            "commandWindows": "py -3 -X utf8 \"%PLUGIN_ROOT%\\hooks\\agent_hooks.py\" session-log",
+            "commandWindows": "\"%PLUGIN_ROOT%\\python3.cmd\" -X utf8 \"%PLUGIN_ROOT%\\hooks\\agent_hooks.py\" session-log",
             "timeout": 15
           }
         ]
@@ -46,7 +46,7 @@
           {
             "type": "command",
             "command": "python3 -X utf8 \"$PLUGIN_ROOT/hooks/agent_hooks.py\" session-log",
-            "commandWindows": "py -3 -X utf8 \"%PLUGIN_ROOT%\\hooks\\agent_hooks.py\" session-log",
+            "commandWindows": "\"%PLUGIN_ROOT%\\python3.cmd\" -X utf8 \"%PLUGIN_ROOT%\\hooks\\agent_hooks.py\" session-log",
             "timeout": 3
           }
         ]

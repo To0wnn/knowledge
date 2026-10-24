@@ -1,0 +1,3 @@
+#!/bin/sh
+# Codex starts the MCP server as ./python3 in this folder (python3.cmd on Windows): the machine's own Python.
+exec sh "$(dirname "$0")/hooks/py.sh" "$@"
