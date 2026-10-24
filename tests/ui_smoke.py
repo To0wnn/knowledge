@@ -181,6 +181,8 @@ async def admin(browser, secret: str) -> None:
     check("ago" in await pg.locator("#tokens").inner_text() or "last 15 min" in await pg.locator("#tokens").inner_text(),
           "admin page shows when tokens were last used")
     check(await pg.locator("#projects tr").count() >= 3, "admin page lists the projects")
+    sizes = await pg.locator("#projects tr td:nth-child(5)").all_inner_texts()
+    check(bool(sizes) and all(t.endswith((" KB", " MB")) for t in sizes), f"admin page shows each project's size {sizes[:3]}")
     # New token: the kind of token sets the switches; shared skills are greyed out with the reason where not allowed.
     await pg.click("#new-token-box summary")
     flags = "() => ({w: $('t-write').checked, r: $('t-redact').checked, s: $('t-skills').checked, sd: $('t-skills').disabled, why: $('t-skills-why').textContent, all: !!$('t-roots').querySelector('input[value=\"*\"]:checked')})"

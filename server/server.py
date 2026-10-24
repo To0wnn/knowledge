@@ -1945,7 +1945,7 @@ def system_state() -> dict:
             *([{"name": "Matrix", "what": "tells the admin about projects and tokens people made", "last": BACKGROUND["matrix"]["at"],
                 "detail": BACKGROUND["matrix"].get("error") or BACKGROUND["matrix"]["detail"]}] if "matrix" in BACKGROUND else []),
         ],
-        "index": [{"root": r, "path": str(ROOTS.get(r, "")), "files": n, "mb": round(b / 1e6, 1)} for r, (n, b) in sorted(per_root.items())],
+        "index": [{"root": r, "path": str(ROOTS.get(r, "")), "files": n, "mb": round(b / 1e6, 1), "bytes": b} for r, (n, b) in sorted(per_root.items())],
         "config": [  # where each value is set: change it there, then deploy
             {"name": "Admins (config)", "value": ", ".join(sorted(CONFIG_ADMINS)) or "(none)", "where": "compose.yaml KNOWLEDGE_ADMINS"},
             {"name": "Allowed hosts", "value": os.environ.get("KNOWLEDGE_ALLOWED_HOSTS", ""), "where": "local.env KNOWLEDGE_ALLOWED_HOSTS"},

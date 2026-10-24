@@ -135,21 +135,26 @@ function renderUsers() {
   $("users").replaceChildren(...rows);
 }
 
+// What the knowledge holds of a project (its indexed files), as KB or MB.
+const size = (b) => b < 1e6 ? `${Math.max(1, Math.round(b / 1e3))} KB` : `${(b / 1e6).toFixed(1)} MB`;
+
 function renderProjects() {
   if (!state.admin) {
     $("projects").replaceChildren(...state.projects.map((p) => { const tr = el("tr");
-      tr.append(el("td", "", p.name), el("td", "mono", p.docs + "/"), el("td", "mono", p.memory + "/"), el("td", "num", "—"),
+      tr.append(el("td", "", p.name), el("td", "mono", p.docs + "/"), el("td", "mono", p.memory + "/"), el("td", "num", "—"), el("td", "num", "—"),
         el("td", "", p.mode === "write" ? "you: read + write" : "you: read"), el("td", "muted", p.builtin ? "VM (built in)" : "server"));
       return tr; }));
     return;
   }
   const files = Object.fromEntries(state.system.index.map((r) => [r.root, r.files]));
+  const bytes = Object.fromEntries(state.system.index.map((r) => [r.root, r.bytes || 0]));
   $("projects").replaceChildren(...state.projects.map((p) => {
     const tr = el("tr"), mine = (roots) => !roots || !roots.length || roots.includes(p.docs) || roots.includes(p.memory);
     const tokens = state.tokens.filter((t) => mine(t.roots)).length;
     const people = state.admins.length + Object.values(state.users).filter((u) => (u.projects || {})[p.name] && u.projects[p.name] !== "none").length;
     tr.append(el("td", "", p.name), el("td", "mono", p.docs + "/"), el("td", "mono", p.memory + "/"),
       el("td", "num", `${files[p.memory] ?? 0} memory · ${files[p.docs] ?? 0} docs`),
+      el("td", "num", size((bytes[p.memory] ?? 0) + (bytes[p.docs] ?? 0))),
       el("td", "", `${tokens} token${tokens === 1 ? "" : "s"} · ${people} ${people === 1 ? "person" : "people"}`),
       el("td", "muted", p.builtin ? "VM (built in)" : "server"));
     return tr;
