@@ -10,13 +10,13 @@ outside the Claude plugin the URL and token come from KNOWLEDGE_URL and KNOWLEDG
 """
 import json
 import token_store
+from project_marker import MARKER, project_root  # the folder-to-project link, shared with the session start
 import os
 import re
 import sys
 import urllib.request
 from pathlib import Path
 
-MARKER = ".knowledge-project"
 SKIP = {"venv", "node_modules", "__pycache__", "dist", "build", "site-packages"}  # plus every dot-folder
 MAX_FILE, MAX_FILES = 300_000, 2000
 PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update) File: (.+)$|^\*\*\* Move to: (.+)$", re.M)
@@ -41,18 +41,6 @@ def option(name: str, default: str = "") -> str:
         return token_store.token()
     return os.environ.get(f"CLAUDE_PLUGIN_OPTION_{name.upper()}", os.environ.get(f"CLAUDE_PLUGIN_OPTION_{name}")) \
         or os.environ.get(f"KNOWLEDGE_{name.upper()}", default)
-
-
-def project_root(start: Path):
-    """(folder, project name) of the nearest folder at or above `start` that holds the marker, else (None, None)."""
-    for d in [start, *start.parents]:
-        marker = d / MARKER
-        if marker.is_file():
-            raw = marker.read_bytes()  # PowerShell's "echo a350 > file" writes UTF-16, Set-Content -Encoding utf8 a BOM
-            text = raw.decode("utf-16") if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else raw.decode("utf-8-sig", errors="replace")
-            name = text.strip().splitlines()[:1]
-            return d, (name[0].strip() if name else "")
-    return None, None
 
 
 def markdown_files(root: Path) -> dict:

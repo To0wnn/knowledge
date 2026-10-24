@@ -25,6 +25,7 @@ HOOKS = Path(__file__).resolve().parent
 sys.path.insert(0, str(HOOKS))
 import memory_mirror  # noqa: E402  (the offline copy of the memory, shared with the Claude plugin)
 import token_store  # noqa: E402  (KNOWLEDGE_TOKEN or the keyring, shared with the Claude plugin)
+import project_marker  # noqa: E402  (the folder-to-project link, shared with the Claude plugin)
 import self_update  # noqa: E402  (auto-update of this plugin, the counterpart of Claude Code's own)
 URL = os.environ.get("KNOWLEDGE_URL", "https://knowledge.to0wnn.com").rstrip("/")
 AGENTS = ("agy", "codex")
@@ -41,8 +42,13 @@ def context_text(tok: str, cwd: str) -> str:
     """Every part of the startup context (/context/<n>, empty past the last), or one short notice; with the server
     down, the context of the last online session and the offline copy of the memory."""
     key, out = hashlib.sha256(cwd.encode()).hexdigest()[:12], []
+    try:
+        linked = project_marker.project_root(Path(cwd).resolve())[1]
+    except OSError:
+        linked = None
+    query = urllib.parse.urlencode({"project": linked, "linked": "1"} if linked else {"project": cwd})
     for n in range(1, 10):
-        q = urllib.parse.urlencode({"project": cwd})
+        q = query
         req = urllib.request.Request(f"{URL}/context/{n}?{q}", headers={"Authorization": f"Bearer {tok}"})
         try:
             with urllib.request.urlopen(req, timeout=8) as r:

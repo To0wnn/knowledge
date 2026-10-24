@@ -26,8 +26,8 @@ facts into the AGENTS.md sections below instead of deleting instructions.
    On the VM `core.hooksPath` is global (`~/.config/git/hooks`), so git ignores `.git/hooks`; the global
    `pre-commit` there chains to the repo's own hook. Prove it: stage a broken file, the commit must be refused.
 7. **README**: what it is, how to run it, how to check it, where decisions are kept.
-8. **Knowledge server** (ask first): a file `.knowledge-project` with the project name mirrors the folder's Markdown
-   (`Set-Content .knowledge-project <name>` in PowerShell, `echo <name> > .knowledge-project` elsewhere).
+8. **Knowledge server** (ask first): link the folder to its project with the skill knowledge-init (a file
+   `.knowledge-project` with the project name: sessions here get that project, its Markdown is mirrored).
 9. Run the check once, show the output, commit `chore: project setup`.
 
 ## AGENTS.md template

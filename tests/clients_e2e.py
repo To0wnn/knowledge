@@ -190,6 +190,26 @@ def claude_plugin(tok: str, home: Path, project: Path, garden: Path):
     return mirror
 
 
+def folder_link(home: Path):
+    """The folder-to-project link: a folder with any name and a .knowledge-project (written the PowerShell 5 way) gets that
+    project at session start, in the Claude plugin and in the Codex/agy hook; without one the directory decides."""
+    linked, plain = home / "Some Folder é", home / "elsewhere-unlinked"
+    for d in (linked, plain):
+        d.mkdir(parents=True, exist_ok=True)
+    (linked / ".knowledge-project").write_bytes("garden\r\n".encode("utf-16"))
+    hooks = CLIENT / "plugin" / "hooks"
+    env = user_env(home, CLAUDE_PLUGIN_OPTION_URL=BASE, CLAUDE_PLUGIN_OPTION_TOKEN="owner-token", KNOWLEDGE_URL=BASE,
+                   KNOWLEDGE_TOKEN="owner-token", KNOWLEDGE_PLUGIN_LATEST=str(latest_file(home)))
+    for folder, want in ((linked, "garden"), (plain, "homelab")):
+        code, out, err = run([bash(), "-c", f'sh "{(hooks / "context.sh").as_posix()}" 1'], "", {**env, "CLAUDE_PROJECT_DIR": str(folder)})
+        check(f"(project {want})" in out, f"claude: a folder {'linked' if folder == linked else 'without a link'} gets project {want}",
+              out[:200] + err[-300:])
+        code, out, err = run([sys.executable, "-X", "utf8", str(hooks / "agent_hooks.py"), "context", "codex"],
+                             json.dumps({"cwd": str(folder)}), env)
+        check(f"(project {want})" in out, f"codex/agy: a folder {'linked' if folder == linked else 'without a link'} gets project {want}",
+              out[:200] + err[-300:])
+
+
 def offline(tok: str, home: Path, project: Path, garden: Path, mirror: Path):
     memo = mirror / "garden-memory" / "project_offline.md"
     check(memo.parent.is_dir(), "the offline copy holds the guest's memory folder")
@@ -662,6 +682,7 @@ def main():
     try:
         print(f"platform {sys.platform}, python {sys.version.split()[0]}, home {home}")
         mirror = claude_plugin(tok, home, project, garden)
+        folder_link(tmp / "Link Usér")
         offline(tok, home, project, garden, mirror)
         skills(tmp, home)
         agents(tok, home, project, garden)

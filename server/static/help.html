@@ -82,8 +82,8 @@ footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
       <li><b>Run the setup</b>
         It asks for the token you received (paste it; it is not shown), checks it with the server and keeps it in the keyring (Linux) or the Keychain (macOS); with a token already stored it asks whether to replace it. Then it installs the plugin and turns Claude's local auto memory off (your memory is on the server). A server or container without a desktop has no keyring: the setup then says how to set the token instead. Run it again later to update.
         <div class="cmd"><pre>python3 ~/knowledge/clients/knowledge-agent.py install claude</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Only for a guest project: mark your project folder</b>
-        In the root of your project, a file <code>.knowledge-project</code> with the project name you got (for example <code>a350</code>); from then on its <code>.md</code> files go to the server. Code, <code>.venv</code> and hidden folders never go.
+      <li><b>Link your project folder</b>
+        In the root of your project, a file <code>.knowledge-project</code> with the project name (for example <code>a350</code>): every session started in that folder gets that project, and its <code>.md</code> files go to the server. Easiest: ask your agent to link the folder (skill <code>knowledge-init</code>), or run the command below. Code, <code>.venv</code> and hidden folders never go.
         <div class="cmd"><pre>echo a350 &gt; .knowledge-project</pre><button class="copy" type="button">Copy</button></div></li>
       <li><b>Check</b>
         Start a new session in your project folder. It begins with <code>knowledge (project …)</code>. Ask: "search the knowledge for …".</li>
@@ -95,8 +95,8 @@ footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
       <li><b>Run the setup</b>
         It asks for the token you received (paste it; it is not shown), checks it with the server and keeps it in the Windows Credential Manager; with a token already stored it asks whether to replace it. Then it installs the plugin and turns Claude's local auto memory off (your memory is on the server). Run it again later to update.
         <div class="cmd"><pre>py $HOME\knowledge\clients\knowledge-agent.py install claude</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Only for a guest project: mark your project folder</b>
-        In the root of your project, a file <code>.knowledge-project</code> with the project name you got (for example <code>a350</code>); from then on its <code>.md</code> files go to the server. Code, <code>.venv</code> and hidden folders never go.
+      <li><b>Link your project folder</b>
+        In the root of your project, a file <code>.knowledge-project</code> with the project name (for example <code>a350</code>): every session started in that folder gets that project, and its <code>.md</code> files go to the server. Easiest: ask your agent to link the folder (skill <code>knowledge-init</code>), or run the command below. Code, <code>.venv</code> and hidden folders never go.
         <div class="cmd"><pre>Set-Content .knowledge-project a350</pre><button class="copy" type="button">Copy</button></div></li>
       <li><b>Check</b>
         Start a new session in your project folder. It begins with <code>knowledge (project …)</code>. Ask: "search the knowledge for …".</li>
@@ -113,8 +113,8 @@ footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
       <li><b>Run the setup</b>
         It asks for the token you received (paste it; it is not shown), checks it with the server and keeps it in the keyring (Linux) or the Keychain (macOS); with a token already stored it asks whether to replace it. Then it installs the plugin; an older setup of this script is removed first. A server or container without a desktop has no keyring: the setup then says how to set the token instead. Run it again later to update.
         <div class="cmd"><pre>python3 ~/knowledge/clients/knowledge-agent.py install agy</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Only for a guest project: mark your project folder</b>
-        In the root of your project, a file <code>.knowledge-project</code> with the project name you got (for example <code>a350</code>); from then on its <code>.md</code> files go to the server. Code, <code>.venv</code> and hidden folders never go.
+      <li><b>Link your project folder</b>
+        In the root of your project, a file <code>.knowledge-project</code> with the project name (for example <code>a350</code>): every session started in that folder gets that project, and its <code>.md</code> files go to the server. Easiest: ask your agent to link the folder (skill <code>knowledge-init</code>), or run the command below. Code, <code>.venv</code> and hidden folders never go.
         <div class="cmd"><pre>echo a350 &gt; .knowledge-project</pre><button class="copy" type="button">Copy</button></div></li>
       <li><b>Check</b>
         Start <code>agy</code> and ask: "search the knowledge for …".
@@ -127,8 +127,8 @@ footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
       <li><b>Run the setup</b>
         It asks for the token you received (paste it; it is not shown), checks it with the server and keeps it in the Windows Credential Manager; with a token already stored it asks whether to replace it. Then it installs the plugin; an older setup of this script is removed first. agy needs the <code>python3</code> command for the plugin, which Python from the python.org install manager or the Microsoft Store has; an older python.org installer only has <code>py</code>, and then the setup says so and sets agy up without the plugin. Quit agy before you run it, so the new settings apply. Run it again later to update.
         <div class="cmd"><pre>py $HOME\knowledge\clients\knowledge-agent.py install agy</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Only for a guest project: mark your project folder</b>
-        In the root of your project, a file <code>.knowledge-project</code> with the project name you got (for example <code>a350</code>); from then on its <code>.md</code> files go to the server. Code, <code>.venv</code> and hidden folders never go.
+      <li><b>Link your project folder</b>
+        In the root of your project, a file <code>.knowledge-project</code> with the project name (for example <code>a350</code>): every session started in that folder gets that project, and its <code>.md</code> files go to the server. Easiest: ask your agent to link the folder (skill <code>knowledge-init</code>), or run the command below. Code, <code>.venv</code> and hidden folders never go.
         <div class="cmd"><pre>Set-Content .knowledge-project a350</pre><button class="copy" type="button">Copy</button></div></li>
       <li><b>Check</b>
         Start <code>agy</code> and ask: "search the knowledge for …".
@@ -146,8 +146,8 @@ footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
       <li><b>Run the setup</b>
         It asks for the token you received (paste it; it is not shown), checks it with the server and keeps it in the keyring (Linux) or the Keychain (macOS); with a token already stored it asks whether to replace it. Then it installs the plugin; an older setup of this script is removed first, and a running Codex is offered a restart. A server or container without a desktop has no keyring: the setup then says how to set the token instead. Run it again later to update.
         <div class="cmd"><pre>python3 ~/knowledge/clients/knowledge-agent.py install codex</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Only for a guest project: mark your project folder</b>
-        In the root of your project, a file <code>.knowledge-project</code> with the project name you got (for example <code>a350</code>); from then on its <code>.md</code> files go to the server. Code, <code>.venv</code> and hidden folders never go.
+      <li><b>Link your project folder</b>
+        In the root of your project, a file <code>.knowledge-project</code> with the project name (for example <code>a350</code>): every session started in that folder gets that project, and its <code>.md</code> files go to the server. Easiest: ask your agent to link the folder (skill <code>knowledge-init</code>), or run the command below. Code, <code>.venv</code> and hidden folders never go.
         <div class="cmd"><pre>echo a350 &gt; .knowledge-project</pre><button class="copy" type="button">Copy</button></div></li>
       <li><b>Check</b>
         Type <code>/hooks</code> once and trust the knowledge hooks (Codex skips new hooks until then; the tools work right away). Then ask: "search the knowledge for …".
@@ -160,8 +160,8 @@ footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
       <li><b>Run the setup</b>
         It asks for the token you received (paste it; it is not shown), checks it with the server and keeps it in the Windows Credential Manager; with a token already stored it asks whether to replace it. Then it installs the plugin; an older setup of this script is removed first. Quit Codex before you run it, so the new settings apply. Run it again later to update.
         <div class="cmd"><pre>py $HOME\knowledge\clients\knowledge-agent.py install codex</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Only for a guest project: mark your project folder</b>
-        In the root of your project, a file <code>.knowledge-project</code> with the project name you got (for example <code>a350</code>); from then on its <code>.md</code> files go to the server. Code, <code>.venv</code> and hidden folders never go.
+      <li><b>Link your project folder</b>
+        In the root of your project, a file <code>.knowledge-project</code> with the project name (for example <code>a350</code>): every session started in that folder gets that project, and its <code>.md</code> files go to the server. Easiest: ask your agent to link the folder (skill <code>knowledge-init</code>), or run the command below. Code, <code>.venv</code> and hidden folders never go.
         <div class="cmd"><pre>Set-Content .knowledge-project a350</pre><button class="copy" type="button">Copy</button></div></li>
       <li><b>Check</b>
         Type <code>/hooks</code> once and trust the knowledge hooks (Codex skips new hooks until then; the tools work right away). Then ask: "search the knowledge for …".
@@ -173,6 +173,8 @@ footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
   <p>At every start the server picks the project whose memory and context the session gets:</p>
   <ol>
     <li><b>A token for one project</b> (a guest): always that project, whatever the folder is called, also on Windows.</li>
+    <li><b>A linked folder:</b> the project named in <code>.knowledge-project</code> in the folder or a folder above it
+      (skill <code>knowledge-init</code> writes it; a person with several projects is told at session start when a folder is not linked).</li>
     <li><b>Otherwise the folder you start the agent in:</b></li>
   </ol>
   <div class="table-wrap"><table>
@@ -199,7 +201,7 @@ footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
       <tr><td>No context at start (Windows)</td><td>Git for Windows or Python missing, or the token not in the Credential Manager (<code>cmdkey /list:knowledge</code> shows it). Install both or store the token, then start again.</td></tr>
       <tr><td>Setup says "No token"</td><td>It ran without a terminal (it can only ask in one): run it in a terminal, or set <code>KNOWLEDGE_TOKEN</code>.</td></tr>
       <tr><td>A new token, or the old one revoked</td><td>Run the setup again and answer <code>y</code> when it asks whether to replace the stored token.</td></tr>
-      <tr><td>The session gets the wrong project</td><td>The folder name does not match a project exactly, or the token is for one project only: see "Which project does my session get?".</td></tr>
+      <tr><td>The session gets the wrong project</td><td>The folder is not linked: ask your agent to link it (skill <code>knowledge-init</code>), or see "Which project does my session get?".</td></tr>
       <tr><td>Docs do not reach the server</td><td>No <code>.knowledge-project</code> in the project root, or its name does not match your token's project.</td></tr>
       <tr><td>Codex ignores the context hook</td><td>More than one SessionStart hook, or the hook is not trusted yet: open <code>/hooks</code> in Codex.</td></tr>
       <tr><td>"writes are allowed only for …"</td><td>Your token may not write that path: only the memory of your own project.</td></tr>

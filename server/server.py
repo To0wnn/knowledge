@@ -646,12 +646,19 @@ def knowledge_list(root: str = "", pattern: str = "*") -> str:
     project's <name> and <name>-memory), optionally filtered by a glob on the relative path. Without a root: the memory
     of this device's project (a guest's own), else memory."""
     root = root or (PROJECTS[p][1] if (p := token_project()) else "memory")
-    if root not in ROOTS:
-        raise ToolError(f"root must be one of {sorted(ROOTS)}")
-    if not in_scope(root + "/"):
-        raise ToolError(f"{root}/ is not shared with this device")
+    if root not in ROOTS or not in_scope(root + "/"):  # never name roots this device may not see
+        raise ToolError(f"root must be one of {sorted(r for r in ROOTS if in_scope(r + '/'))}")
     hits = [rel for rel, _, _ in index.items(root) if fnmatch.fnmatch(rel.split("/", 1)[1], pattern)]
     return "\n".join(hits[:2000]) or "(no files)"
+
+
+@server.tool(annotations=READ)
+def knowledge_projects() -> str:
+    """The projects this device may use, one per line: name, docs root, memory root, read or write. The name is what a
+    folder's .knowledge-project holds to link that folder to the project (skill knowledge-init)."""
+    rows = [f"{p}: docs {d}/, memory {m}/, {'write' if may_write(f'{m}/MEMORY.md') else 'read'}"
+            for p, (d, m) in PROJECTS.items() if in_scope(m + "/")]
+    return "\n".join(rows) or "(no projects)"
 
 
 @server.tool(annotations=READ)
@@ -1662,14 +1669,19 @@ def sync_name(name: str) -> str | None:
 @server.custom_route("/sync", methods=["POST"])
 async def sync_route(request: Request):
     """Mirror of the Markdown in a guest's project folder (plugin option sync_docs): {"files": {"a/b.md": "text"},
-    "full": true}. Only for a write token limited to one project; files land in that project's docs root. The folder on
+    "full": true}. For a write token limited to one project, or (a person with several) the server project the folder's
+    .knowledge-project names, never a built-in one; files land in that project's docs root. The folder on
     the guest's machine is the source: full = the list is the whole folder, so mirrored files that are gone there are
     removed here (a copy is kept in state/deleted/, like knowledge_delete)."""
-    project = token_project()
-    if not project or not device.get().get("write"):
-        return JSONResponse({"error": "sync needs a write token limited to one project"}, status_code=403)
-    docs = PROJECTS[project][0]
     b = await request.json()
+    project, asked = token_project(), b.get("project")
+    if not project and asked in PROJECTS and asked not in BUILTIN_PROJECTS and in_scope(PROJECTS[asked][0] + "/") \
+            and not in_scope("claude/"):  # a person's device with several projects (never the admin's: one source per docs)
+        project = asked  # the folder's link picks one
+    dev = device.get()
+    if not project or not dev.get("write") or (dev.get("write_roots") is not None and PROJECTS[project][0] not in dev["write_roots"]):
+        return JSONResponse({"error": "sync needs a write token for the folder's project (.knowledge-project)"}, status_code=403)
+    docs = PROJECTS[project][0]
     if b.get("project") not in (None, project):  # the folder's .knowledge-project names another project
         return JSONResponse({"error": f"this folder is marked for project {b.get('project')}, the token is for {project}"},
                             status_code=409)
@@ -1750,7 +1762,22 @@ async def house_rules_route(request: Request):
 
 @server.custom_route("/context/{part}", methods=["GET"])
 async def context_route(request: Request):
-    parts = context_parts(token_project() or project_for(request.query_params.get("project", "")))
+    """?project= is the folder's project name from its .knowledge-project (with linked=1, sent by the plugin), else the
+    session's directory. A folder linked to a project this device may not use gets one it may, and is told why."""
+    asked, linked = request.query_params.get("project", ""), request.query_params.get("linked") == "1"
+    project, note = token_project() or project_for(asked), ""
+    if not in_scope(PROJECTS[project][1] + "/"):
+        mine = [p for p, (_, m) in PROJECTS.items() if in_scope(m + "/")]
+        if linked:
+            note = (f"knowledge: this folder is linked to project {asked} (.knowledge-project), which this device may not "
+                    f"use; the session got {mine[0] if mine else project} instead. Fix the name in .knowledge-project.")
+        project = mine[0] if mine else project
+    if not linked and not token_project() and not in_scope("claude/"):  # someone else's device with several projects
+        note = (f"knowledge: this folder is not linked to a project, so the session got {project} by guessing from the "
+                "folder name. Link it once with the knowledge-init skill (it writes .knowledge-project with the project name).")
+    parts = context_parts(project)
+    if note:
+        parts = parts[:-1] + split_parts(parts[-1] + "\n\n" + note)
     n = int(request.path_params["part"])
     if not 1 <= n <= len(parts):
         return PlainTextResponse("")  # the plugin asks for a fixed number of parts; extra ones are empty

@@ -666,6 +666,21 @@ def main():
         assert "erinproj" in json.loads(raw("GET", "/ui/api/me", headers=er)[2])["writable"]
         roots = next(t["roots"] for t in json.loads(raw("GET", "/ui/api/admin", headers=er)[2])["tokens"] if t["name"] == "erin.laptop")
         assert {"erinproj", "erinproj-memory"} <= set(roots), roots  # her devices reach her new project at once
+        # The folder link (.knowledge-project, skill knowledge-init): her token now sees two projects, so the folder picks.
+        assert "not linked to a project" in http("GET", "/context/1?project=/home/erin/stuff", token=et)[1]
+        ctx = http("GET", "/context/1?project=erinproj&linked=1", token=et)[1]
+        assert "project erinproj" in ctx and "not linked" not in ctx, ctx[:300]
+        ctx = http("GET", "/context/1?project=homelab&linked=1", token=et)[1]
+        assert "may not use" in ctx and "(project trade)" in ctx and "(project homelab)" not in ctx, ctx[-300:]
+        projects = call("knowledge_projects", {}, token=et)[1]
+        assert "erinproj: docs erinproj/, memory erinproj-memory/, write" in projects and "trade: " in projects \
+            and "homelab" not in projects, projects
+        err, text = call("knowledge_list", {"root": "nope"}, token=et)
+        assert err and "'memory'" not in text and "homelab" not in text, text  # no word about roots she cannot see
+        st, body = http("POST", "/sync", {"files": {"README.md": "# Erin\n"}, "full": True, "project": "erinproj"}, token=et)
+        assert st == 200, body
+        assert http("POST", "/sync", {"files": {"README.md": "x"}, "project": "trade"}, token=et)[0] == 403  # read-only there
+        assert http("POST", "/sync", {"files": {"README.md": "x"}, "project": "erinproj"})[0] == 403  # the admin's own device
         assert admin("/ui/api/admin/project", {"name": "erinproj2"}, er)[0] == 400  # limit
         assert "erinproj" in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["users"]["erin"]["created"]
         big = "# Big\n" + "word " * 220_000  # 1.1 MB: crosses the 1 MB limit, so the next write is refused
