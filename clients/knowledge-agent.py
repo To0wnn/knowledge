@@ -7,9 +7,9 @@ macOS Keychain, Windows Credential Manager; token_store.py). Without a terminal 
 token. On Anthony's VM TOKEN is a vault name. The session log falls back to ~/.config/knowledge-server/session.env.
 
   knowledge-agent.py install <claude|codex|agy> [TOKEN]   set up or update; safe to run again. Claude Code: the plugin.
-                    Codex and agy on Linux/macOS: the plugin (an older setup of this script is removed first); on
-                    Windows, with a vault name or with KNOWLEDGE_SETUP=script: this script's setup (MCP relay, hooks,
-                    rules in AGENTS.md/GEMINI.md, skills in ~/.agents/skills)
+                    Codex everywhere and agy on Linux/macOS: the plugin (an older setup of this script is removed
+                    first); agy on Windows, a vault name or KNOWLEDGE_SETUP=script: this script's setup (MCP relay,
+                    hooks, rules in AGENTS.md/GEMINI.md, skills in ~/.agents/skills)
   knowledge-agent.py header [TOKEN]                 MCP header helper (Codex http_headers_helper): the token as JSON
   knowledge-agent.py context <agy|codex> TOKEN     SessionStart: startup context + docs mirror, as the agent's JSON
   knowledge-agent.py docs-sync TOKEN               PostToolUse: mirror an edited .md (folder with .knowledge-project)
@@ -225,7 +225,8 @@ def install(agent: str, name: str):
     rules = check(tok)
     if agent == "claude":
         return install_claude()
-    if name == "-" and os.name != "nt" and os.environ.get("KNOWLEDGE_SETUP") != "script":
+    # agy on Windows stays on the script setup: how agy starts the plugin's MCP command there is not proven yet.
+    if name == "-" and (os.name != "nt" or agent == "codex") and os.environ.get("KNOWLEDGE_SETUP") != "script":
         return install_plugin(agent)
     if install_mcp(agent, name):
         restart_codex() if agent == "codex" else say_restart("agy")
