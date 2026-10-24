@@ -2090,6 +2090,12 @@ async def ui_admin_project(request: Request, body: dict):
     widened = [t for t, cfg in tokens.items() if set(cfg.get("roots") or []) == mems]
     for t in widened:
         tokens[t]["roots"] = sorted(mems | {PROJECTS[name][1]})
+    # The maker's own device tokens reach the new project too, or their agents could not use it until the admin edits
+    # each token (a token never does more than its owner may: the owner has write on what they created).
+    mine = [t for t, cfg in tokens.items() if not dev.get("admin") and cfg.get("owner") == dev["user"] and cfg.get("roots")]
+    for t in mine:
+        tokens[t]["roots"] = sorted(set(tokens[t]["roots"]) | set(PROJECTS[name]))
+    widened += mine
     if widened:
         write_json(TOKENS_FILE, tokens)
     audit("admin-project", name)

@@ -664,6 +664,8 @@ def main():
         assert admin("/ui/api/admin/token", {"name": "second", "roots": ["trade"]}, er)[0] == 400  # limit
         assert admin("/ui/api/admin/project", {"name": "erinproj"}, er)[0] == 200
         assert "erinproj" in json.loads(raw("GET", "/ui/api/me", headers=er)[2])["writable"]
+        roots = next(t["roots"] for t in json.loads(raw("GET", "/ui/api/admin", headers=er)[2])["tokens"] if t["name"] == "erin.laptop")
+        assert {"erinproj", "erinproj-memory"} <= set(roots), roots  # her devices reach her new project at once
         assert admin("/ui/api/admin/project", {"name": "erinproj2"}, er)[0] == 400  # limit
         assert "erinproj" in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["users"]["erin"]["created"]
         big = "# Big\n" + "word " * 220_000  # 1.1 MB: crosses the 1 MB limit, so the next write is refused
