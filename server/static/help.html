@@ -104,7 +104,7 @@ footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
 
   <section id="agy" role="tabpanel" aria-labelledby="tab-agy" hidden>
     <h2>agy (Antigravity CLI)</h2>
-    <p>The knowledge plugin connects agy: the tools, the context at every start (with the house rules), the session log, the docs mirror and the shared development skills. On Windows the setup sets Codex and agy up without the plugin for now; the steps are the same. agy itself comes from <a href="https://antigravity.google" target="_blank" rel="noopener">antigravity.google</a> and updates itself (<code>agy update</code>).</p>
+    <p>The knowledge plugin connects agy: the tools, the context at every start (with the house rules), the session log, the docs mirror and the shared development skills. On Windows the setup still sets agy up without the plugin; the steps are the same. agy itself comes from <a href="https://antigravity.google" target="_blank" rel="noopener">antigravity.google</a> and updates itself (<code>agy update</code>).</p>
     <ol class="steps" data-os="linux">
       <li><b>Get the knowledge scripts</b>
         Needs <code>git</code> and <code>python3</code>.
@@ -137,7 +137,7 @@ footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
 
   <section id="codex" role="tabpanel" aria-labelledby="tab-codex" hidden>
     <h2>Codex (OpenAI)</h2>
-    <p>The knowledge plugin connects Codex, from the same repository as the Claude Code plugin: the tools, the context at every start (with the house rules), the session log, the docs mirror and the shared development skills. On Windows the setup sets Codex and agy up without the plugin for now; the steps are the same. Install or update Codex with <code>npm i -g @openai/codex@latest</code>.</p>
+    <p>The knowledge plugin connects Codex, from the same repository as the Claude Code plugin: the tools, the context at every start (with the house rules), the session log, the docs mirror and the shared development skills, on Linux, macOS and Windows. Install or update Codex with <code>npm i -g @openai/codex@latest</code>.</p>
     <ol class="steps" data-os="linux">
       <li><b>Get the knowledge scripts</b>
         Needs <code>git</code> and <code>python3</code>.
@@ -157,7 +157,7 @@ footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
         Needs <a href="https://git-scm.com/download/win" target="_blank" rel="noopener">Git for Windows</a> and <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">Python 3</a> (keep "py launcher" ticked). The steps are for PowerShell.
         <div class="cmd"><pre>if (Test-Path $HOME\knowledge) { git -C $HOME\knowledge pull } else { git clone https://github.com/To0wnn/knowledge $HOME\knowledge }</pre><button class="copy" type="button">Copy</button></div></li>
       <li><b>Run the setup</b>
-        It asks for the token you received (paste it; it is not shown), checks it with the server and keeps it in the Windows Credential Manager; with a token already stored it asks whether to replace it. Then it sets up the MCP server (a small relay that fetches the token, so it is in no file), the hooks and the house rules; a running Codex is offered a restart. Run it again later to update.
+        It asks for the token you received (paste it; it is not shown), checks it with the server and keeps it in the Windows Credential Manager; with a token already stored it asks whether to replace it. Then it installs the plugin; an older setup of this script is removed first. Quit Codex before you run it, so the new settings apply. Run it again later to update.
         <div class="cmd"><pre>py $HOME\knowledge\clients\knowledge-agent.py install codex</pre><button class="copy" type="button">Copy</button></div></li>
       <li><b>Only for a guest project: mark your project folder</b>
         In the root of your project, a file <code>.knowledge-project</code> with the project name you got (for example <code>a350</code>); from then on its <code>.md</code> files go to the server. Code, <code>.venv</code> and hidden folders never go.
