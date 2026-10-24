@@ -22,6 +22,10 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.13"  # as on the VM and in the image: onnxruntime has no wheels for newer yet
+      - uses: actions/setup-go@v5  # tests/clients_e2e.py starts the agy plugin's MCP command the way Go (agy) does
+        with:
+          go-version: stable
+          cache: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22

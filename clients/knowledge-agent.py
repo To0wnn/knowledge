@@ -7,8 +7,8 @@ macOS Keychain, Windows Credential Manager; token_store.py). Without a terminal 
 token. On the owner's VM TOKEN is a vault name. The session log falls back to ~/.config/knowledge-server/session.env.
 
   knowledge-agent.py install <claude|codex|agy> [TOKEN]   set up or update; safe to run again. Claude Code: the plugin.
-                    Codex everywhere and agy on Linux/macOS: the plugin (an older setup of this script is removed
-                    first); agy on Windows, a vault name or KNOWLEDGE_SETUP=script: this script's setup (MCP relay,
+                    Codex and agy: the plugin (an older setup of this script is removed first); with a vault name,
+                    KNOWLEDGE_SETUP=script, or agy on Windows without python3 on PATH: this script's setup (MCP relay,
                     hooks, rules in AGENTS.md/GEMINI.md, skills in ~/.agents/skills)
   knowledge-agent.py header [TOKEN]                 MCP header helper (Codex http_headers_helper): the token as JSON
   knowledge-agent.py context <agy|codex> TOKEN     SessionStart: startup context + docs mirror, as the agent's JSON
@@ -217,6 +217,16 @@ def install_plugin(agent: str):
     print("done; start agy and ask it to search the knowledge")
 
 
+def has_python3() -> bool:
+    """A working python3 on PATH, found the way agy (Go) finds it: PATH only (Windows itself would first look next to
+    the running Python). The Store's python3 alias without Python installed fails the run."""
+    exe = shutil.which("python3")
+    try:
+        return bool(exe) and subprocess.run([exe, "-c", "pass"], capture_output=True, timeout=30).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def install(agent: str, name: str):
     """Set up or update; every step says what it did. Fails loudly: a wrong token or no connection stops here."""
     tok = ensure_token(name)
@@ -225,9 +235,11 @@ def install(agent: str, name: str):
     rules = check(tok)
     if agent == "claude":
         return install_claude()
-    # agy on Windows stays on the script setup: how agy starts the plugin's MCP command there is not proven yet.
-    if name == "-" and (os.name != "nt" or agent == "codex") and os.environ.get("KNOWLEDGE_SETUP") != "script":
-        return install_plugin(agent)
+    if name == "-" and os.environ.get("KNOWLEDGE_SETUP") != "script":
+        if agent != "agy" or os.name != "nt" or has_python3():
+            return install_plugin(agent)
+        print("agy starts the plugin's MCP server with python3, which is not on PATH here (Python from the python.org "
+              "install manager or the Microsoft Store has it): using the script setup")
     if install_mcp(agent, name):
         restart_codex() if agent == "codex" else say_restart("agy")
     install_hooks(agent, name)

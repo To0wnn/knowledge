@@ -401,6 +401,49 @@ def codex_plugin(tok: str, home: Path, project: Path):
     check("knowledge_search" in json.dumps(entry), "codex: starts the plugin's MCP server and lists knowledge_search", json.dumps(reply)[:1500])
 
 
+def agy_go_start(env: dict, home: Path, root: Path, mcp: dict, stdin: str):
+    """agy's own start of the plugin's MCP command, imitated in Go."""
+    # agy (Go) starts mcp_config.json's command as given, with Dir = the plugin folder (seen on the VM, 24 Oct 2026:
+    # $0 = ./python3; ${PLUGIN_ROOT} and ${extensionPath} are not filled in). agy needs a login, so a Go program
+    # starts it the same way. On Windows ./python3 cannot work (Go hands cmd.exe "./python3.cmd"), so the command
+    # stays python3 from PATH, and install agy checks that a real python3 is there.
+    go = shutil.which("go")
+    if not go:
+        return print("skip agy MCP start through Go (go not installed)")
+    src = home / "gostart" / "main.go"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text("""package main
+
+import (
+	"os"
+	"os/exec"
+)
+
+func main() {
+	cmd := exec.Command(os.Args[2], os.Args[3:]...)
+	cmd.Dir = os.Args[1]
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		os.Stderr.WriteString(err.Error() + "\\n")
+		os.Exit(1)
+	}
+}
+""", encoding="utf-8")
+    exe = home / "gostart" / ("gostart.exe" if WIN else "gostart")
+    code, out, err = run([go, "build", "-o", str(exe), str(src)], "", {**os.environ, "GO111MODULE": "off"}, timeout=300)
+    check(code == 0, "agy plugin: Go starter builds", err[-600:])
+    code, out, err = run([str(exe), str(root), mcp["command"], *mcp["args"]], stdin, env, cwd=str(home))
+    replies = {r.get("id"): r for r in map(json.loads, out.splitlines())} if code == 0 else {}
+    check("taxi" in json.dumps(replies.get(2, {})), f"agy plugin: Go starts {mcp['command']} for the plugin and it answers a knowledge_search", out[-600:] + err[-600:])
+    if WIN:  # why install agy checks for python3: a python.org PATH with only py cannot start it
+        code, out, err = run([str(exe), str(root), mcp["command"], *mcp["args"]], stdin, {**env, "PATH": pythonorg_path(home)}, cwd=str(home))
+        check(code != 0 and "taxi" not in out, "agy plugin: python3 does not start on a PATH with only py", out[-300:] + err[-300:])
+        code, out, err = run([sys.executable, str(CLIENT / "clients" / "knowledge-agent.py"), "install", "agy"], "",
+                             {**env, "PATH": pythonorg_path(home)}, timeout=120)
+        conf = home / ".gemini" / "config" / "mcp_config.json"
+        check(code == 0 and "script setup" in out and "knowledge" in (conf.read_text(encoding="utf-8") if conf.exists() else ""),
+              "install agy: without python3 on Windows it says so and uses the script setup", (out + err)[-800:])
+
 def app_server(codex: str, env: dict, method: str, params: dict, timeout=60) -> dict:
     """One request to `codex app-server` (JSON-RPC over stdio) after the handshake; its reply, or {} on a timeout."""
     p = subprocess.Popen([codex, "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env,
@@ -439,10 +482,11 @@ def agy_plugin(tok: str, home: Path, project: Path, garden: Path):
                                                                            "clientInfo": {"name": "e2e", "version": "1"}}},
             {"jsonrpc": "2.0", "method": "notifications/initialized"},
             {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "knowledge_search", "arguments": {"pattern": "taxi"}}}]
-    # agy starts the server in the plugin folder; sys.executable stands in for its "python3" (py on Windows).
-    code, out, err = run([sys.executable, *mcp["args"]], "".join(json.dumps(m) + "\n" for m in msgs), env, cwd=str(root))
+    stdin = "".join(json.dumps(m) + "\n" for m in msgs)
+    code, out, err = run([sys.executable, *mcp["args"]], stdin, env, cwd=str(root))
     replies = {r.get("id"): r for r in map(json.loads, out.splitlines())} if code == 0 else {}
     check("result" in replies.get(1, {}) and "taxi" in json.dumps(replies.get(2, {})), "agy plugin: stdio MCP bridge answers a knowledge_search", out[-600:] + err[-600:])
+    agy_go_start(env, home, root, mcp, stdin)
     check("headers" not in mcp and "env" not in mcp, "agy plugin: no token in mcp_config.json (the bridge reads KNOWLEDGE_TOKEN or the keyring)")
     hooks = json.loads((root / "hooks.json").read_text(encoding="utf-8"))["knowledge"]
     cmds = [h["command"] for e in hooks.values() for g in e for h in (g.get("hooks") or [g])]
