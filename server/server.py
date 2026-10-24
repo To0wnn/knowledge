@@ -99,6 +99,37 @@ device: ContextVar[dict] = ContextVar("device", default={})
 _locks: dict[str, asyncio.Lock] = {}
 
 
+# Skills that ship with the plugin (plugin/skills/ in the repo). On the VM ~/.claude/skills links to them, a link this
+# server cannot follow over NFS, so deploy.sh bundles a copy and they show read-only under claude/skills/. A real
+# folder of the same name in ~/.claude/skills wins.
+PLUGIN_SKILLS = Path(os.environ.get("KNOWLEDGE_PLUGIN_SKILLS", Path(__file__).resolve().parent / "plugin_skills"))
+
+
+def plugin_skill(rest: str) -> Path | None:
+    """The bundled file for 'skills/<name>/<file>' of the claude root, or None (no such plugin skill, or shadowed)."""
+    parts = PurePosixPath(rest).parts
+    if len(parts) < 3 or parts[0] != "skills" or ".." in parts or not (PLUGIN_SKILLS / parts[1]).is_dir():
+        return None
+    own = ROOTS["claude"] / "skills" / parts[1]
+    if own.exists() and not own.is_symlink():
+        return None
+    full = (PLUGIN_SKILLS / Path(*parts[1:])).resolve()
+    return full if PLUGIN_SKILLS.resolve() in full.parents else None
+
+
+def from_plugin(rel: str) -> bool:
+    return rel.startswith("claude/") and plugin_skill(rel.split("/", 1)[1]) is not None
+
+
+def plugin_skill_files():
+    """(rel, path) of every bundled plugin skill file that is not shadowed, for the index."""
+    if PLUGIN_SKILLS.is_dir():
+        for p in sorted(PLUGIN_SKILLS.rglob("*")):
+            rel = f"claude/skills/{p.relative_to(PLUGIN_SKILLS).as_posix()}"
+            if p.is_file() and p.suffix.lower() not in BINARY and from_plugin(rel):
+                yield rel, p
+
+
 def resolve(path: str, scoped: bool = True) -> tuple[Path, str]:
     """'memory/x.md' -> absolute path inside its root; rejects traversal and hidden secrets, and (scoped) paths
     outside the caller's roots. The index is shared by everyone, so it resolves unscoped."""
@@ -106,10 +137,13 @@ def resolve(path: str, scoped: bool = True) -> tuple[Path, str]:
     if root not in ROOTS or not rest:
         raise ToolError(f"path must start with one of {sorted(r for r in ROOTS if in_scope(r + '/'))}/, e.g. memory/MEMORY.md")
     base = ROOTS[root].resolve()
-    full = (base / rest).resolve()
-    if base not in full.parents and full != base:
-        raise ToolError("path escapes its root")
-    rel = full.relative_to(base).as_posix()
+    if root == "claude" and (bundled := plugin_skill(rest)):
+        full, rel = bundled, PurePosixPath(rest).as_posix()
+    else:
+        full = (base / rest).resolve()
+        if base not in full.parents and full != base:
+            raise ToolError("path escapes its root")
+        rel = full.relative_to(base).as_posix()
     if set(Path(rel).parts) & SKIP_PARTS or SKIP_NAMES.search(rel):
         raise ToolError("path not shared")
     if root == "claude" and not any(fnmatch.fnmatch(rel, p) for p in CLAUDE_READABLE):
@@ -283,17 +317,17 @@ class Index:
 
     def rescan(self):
         seen = set()
-        for root in list(ROOTS):  # a copy: a project created in the UI may add roots meanwhile
-            for p in shared_files(root):
-                rel = f"{root}/{p.relative_to(ROOTS[root]).as_posix()}"
-                seen.add(rel)
-                try:
-                    st = p.stat()
-                except OSError:
-                    continue
-                hit = self.files.get(rel)
-                if not hit or hit[0] != st.st_mtime_ns or hit[1] != st.st_size:
-                    self.refresh(rel)
+        found = [(f"{root}/{p.relative_to(ROOTS[root]).as_posix()}", p)
+                 for root in list(ROOTS) for p in shared_files(root)]  # a copy of ROOTS: the UI may add a project meanwhile
+        for rel, p in found + list(plugin_skill_files()):
+            seen.add(rel)
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            hit = self.files.get(rel)
+            if not hit or hit[0] != st.st_mtime_ns or hit[1] != st.st_size:
+                self.refresh(rel)
         for rel in set(self.files) - seen:  # gone, or added while this walk ran: refresh decides
             self.refresh(rel)
 
@@ -432,6 +466,8 @@ def write_refusal(rel: str) -> str:
         return "you may only read this project"
     if not writable_path(rel):
         return f"writes are allowed only for {', '.join(WRITABLE)}"
+    if from_plugin(rel):
+        return f"{rel.split('/')[2]} ships with the knowledge plugin: change plugin/skills/{rel.split('/')[2]}/ in the knowledge repo"
     if rel.startswith("claude/"):  # instructions every agent follows: only tokens the admin ticked "Shared skills" for
         if not dev.get("skills") or dev.get("redact"):
             return "this device may not change shared skills (admin page, Tokens: Shared skills)"
@@ -1517,11 +1553,14 @@ SYNC_SKIP = {"venv", "node_modules", "__pycache__", "dist", "build", "site-packa
 SYNC_MAX_FILE = 300_000
 
 
+SKILL_PROBE = "claude/skills/<any skill>/SKILL.md"  # the right to write skills, not one skill (never a plugin skill)
+
+
 def mirror_roots() -> list[str]:
     """The memory roots this device keeps an offline copy of: the ones it may write (a read-only token gets none).
     "claude" = the shared skills, for a device that may change them; it keeps them in ~/.claude/skills/ as real skills."""
     mems = [mem for _, mem in list(PROJECTS.values()) if in_scope(mem + "/") and may_write(f"{mem}/MEMORY.md")]
-    return mems + ["claude"] * (in_scope("claude/") and may_write("claude/skills/x/SKILL.md"))
+    return mems + ["claude"] * (in_scope("claude/") and may_write(SKILL_PROBE))
 
 
 def mirrorable(rel: str, roots: list[str]) -> bool:
@@ -1529,7 +1568,7 @@ def mirrorable(rel: str, roots: list[str]) -> bool:
     text files of the skills."""
     if rel.split("/", 1)[0] == "claude":
         return "claude" in roots and rel.startswith("claude/skills/") and rel.count("/") >= 3 \
-            and PurePosixPath(rel).suffix.lower() in SKILL_EXT
+            and PurePosixPath(rel).suffix.lower() in SKILL_EXT and not from_plugin(rel)  # devices have those from the plugin
     return rel.split("/", 1)[0] in roots and rel.endswith(".md") and not rel.split("/", 2)[1:2] == ["sessions"]
 
 

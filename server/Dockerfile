@@ -12,6 +12,9 @@ RUN mkdir -p /opt/models && /app/.venv/bin/python -c "from fastembed import Text
 # All modules (a forgotten module once crash-looped the container; deploy.sh now waits for /health).
 COPY *.py ./
 COPY static ./static
+# The skills that ship with the plugin (deploy.sh copies plugin/skills here): on the VM ~/.claude/skills only links to
+# them, which NFS cannot follow, so the server shows this copy read-only.
+COPY plugin_skills ./plugin_skills
 # Runs as the uid that owns the shared files on the VM (uid 1000), so NFS root_squash is no issue.
 USER 1000:1000
 ENV HOME=/tmp PYTHONUNBUFFERED=1 HF_HUB_OFFLINE=1

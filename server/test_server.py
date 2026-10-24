@@ -72,6 +72,11 @@ def main():
                                         "3. Before you change something, read the \"## Keuzes\" of its memo.\n"
                                         "4. Memory is a hint, not the truth.\n\nBackground: [[a]]\n")
     (cla / "skills/x/SKILL.md").write_text("skill\n")
+    # Plugin skills: bundled by deploy.sh; on the VM ~/.claude/skills links to the repo (dangling inside the container).
+    bundled = tmp / "plugin_skills"
+    for name, text in (("pv", "---\nname: pv\ndescription: plugin skill\n---\nverify before done\n"), ("x", "plugin copy of x\n")):
+        (bundled / name).mkdir(parents=True); (bundled / name / "SKILL.md").write_text(text)
+    (cla / "skills/pv").symlink_to(tmp / "repo-not-mounted" / "pv")
     (cla / "dev_rules.md").write_text("# Development rules\n\n1. Read first.\n2. Done means proven.\n")
     trade, tmem = tmp / "trade", tmp / "trade-memory"
     for d in (trade / "venv", tmem, tmp / "anpitek", tmp / "anpitek-memory"):
@@ -95,7 +100,7 @@ def main():
     env = {**os.environ, "KNOWLEDGE_MEMORY": str(mem), "KNOWLEDGE_HOMELAB": str(lab), "KNOWLEDGE_CLAUDE": str(cla),
            "KNOWLEDGE_TRADE": str(trade), "KNOWLEDGE_TRADE_MEMORY": str(tmem), "KNOWLEDGE_ANPITEK": str(tmp / "anpitek"),
            "KNOWLEDGE_ANPITEK_MEMORY": str(tmp / "anpitek-memory"),
-           "KNOWLEDGE_TOKENS": str(tokens), "KNOWLEDGE_ADMIN_DIR": str(tmp), "KNOWLEDGE_PROJECTS_DIR": str(tmp / "projects"),
+           "KNOWLEDGE_TOKENS": str(tokens), "KNOWLEDGE_PLUGIN_SKILLS": str(bundled), "KNOWLEDGE_ADMIN_DIR": str(tmp), "KNOWLEDGE_PROJECTS_DIR": str(tmp / "projects"),
            "KNOWLEDGE_PROXY_SECRET": "proxy-secret", "KNOWLEDGE_ADMINS": "anthony", "KNOWLEDGE_AUDIT": str(tmp / "audit.log"), "KNOWLEDGE_PORT": str(PORT),
            "KNOWLEDGE_BIND": "127.0.0.1", "KNOWLEDGE_RESCAN": "3600",
            "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}"}
@@ -195,6 +200,13 @@ def main():
         err, text = call("knowledge_edit", {"path": "memory/fact.md", "old_string": "line", "new_string": "l"}, token="ro-token")
         assert err and "read-only" in text, text
         assert not call("knowledge_read", {"path": "claude/skills/x/SKILL.md"}, token="ro-token")[0]
+        # A plugin skill the VM links to: read, searched and listed from the bundled copy, never written; a real folder wins.
+        err, text = call("knowledge_read", {"path": "claude/skills/pv/SKILL.md"})
+        assert not err and "verify before done" in text, text
+        assert "claude/skills/pv/SKILL.md" in call("knowledge_search", {"pattern": "verify before done"})[1]
+        assert "plugin copy" not in call("knowledge_read", {"path": "claude/skills/x/SKILL.md"})[1], "a real folder wins"
+        err, text = call("knowledge_write", {"path": "claude/skills/pv/SKILL.md", "content": "---\nname: pv\ndescription: d\n---\nx\n"})
+        assert err and "ships with the knowledge plugin" in text, text
         assert "memory/fact.md" in call("knowledge_search", {"pattern": "line 1"})[1]
         assert not call("knowledge_edit", {"path": "memory/fact.md", "old_string": "line 1", "new_string": "line cache"})[0]
         assert "memory/fact.md" in call("knowledge_search", {"pattern": "line cache"})[1]  # text cache must not go stale
@@ -526,6 +538,7 @@ def main():
         (cla / "skills/x/SKILL.md").write_text("skill v2\n"); http("POST", "/invalidate", {"paths": ["claude/skills/x/SKILL.md"]}, token="watch-token")
         run_mm(senv)
         assert (skills / "x/SKILL.md").read_text() == "skill v2\n"
+        assert not (skills / "pv").exists(), "plugin skills are not synced: devices have them from the plugin"
         for tok in (fr, "ro-token", "agent-token", "pa-token"):
             err, text = call("knowledge_write", {"path": "claude/skills/x/SKILL.md", "content": "hijack\n"}, token=tok)
             assert err, (tok, text)
