@@ -193,6 +193,9 @@ function renderSystem() {
     const tr = row(stamp(new Date(g.last)), String(g.count), g.who.join(", "), `${g.query} (${g.tool}${g.score ? ` ${g.score}` : ""})`);
     tr.children[3].className = "mono"; return tr;
   }) : [row("—", "", "", "")]));
+  $("lessons").replaceChildren(...(sys.lessons.length ? sys.lessons.map((l) =>
+    row(stamp(new Date(l.at)), `${l.device} (${l.project})`, l.status, `${l.what} — prevent: ${l.prevent}${l.note ? ` [${l.note}]` : ""}`)
+  ) : [row("—", "", "", "")]));
 }
 
 let loaded = false;

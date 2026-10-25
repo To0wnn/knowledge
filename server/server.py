@@ -89,6 +89,7 @@ SECRETS_FILE = Path(os.environ.get("KNOWLEDGE_SECRETS", HOME / ".config/knowledg
 AUDIT = Path(os.environ.get("KNOWLEDGE_AUDIT", HOME / ".local/state/knowledge-server/audit.log"))
 # Searches that found nothing (or only weak meaning hits): the missing memos, shown on the admin page.
 GAPS = AUDIT.with_name("gaps.log")
+LESSONS = AUDIT.with_name("lessons.json")  # the lesson queue: agents add, the weekly lesson loop on the VM decides
 # A meaning search answered nothing useful when its best score is below WEAK_SCORE, or below DOUBT_SCORE while the
 # best note lacks the question's subject words (lint.query_coverage < MIN_COVERAGE). Calibrated 21 Oct 2026 on 20
 # answerable and 20 plausible but unanswerable questions: score alone caught 8 of 20 gaps (answerable 0.45-0.75,
@@ -538,6 +539,26 @@ def gaps_summary(n: int = 30) -> list[dict]:
     return list(out.values())[::-1][:n]
 
 
+LESSON_STATUSES = ("new", "applied", "rejected", "kept", "removed", "escalated")
+LESSONS_MAX = 500  # the queue is for a weekly review, not a log: a flood means something is wrong
+lessons_lock = threading.Lock()
+
+
+def update_lessons(change) -> list[dict]:
+    """Read the queue, let change() alter the list in place, write it back atomically; returns the list."""
+    with lessons_lock:
+        items = list(read_json(LESSONS, []))
+        change(items)
+        write_json(LESSONS, items)
+        return items
+
+
+def lesson_admin_only() -> JSONResponse | None:
+    """The queue routes are for the lesson loop: a write token that is not limited to one project."""
+    if not device.get().get("write") or token_project():
+        return JSONResponse({"error": "needs a write token for all projects"}, status_code=403)
+    return None
+
 def replace_if_unchanged(full: Path, expected: bytes | None, data: bytes) -> bool:
     """Atomically replace `full` with `data`, but only if it still holds `expected` (None = must not exist).
 
@@ -632,7 +653,8 @@ def instructions() -> str:
         "knowledge_lint reports index/link/size problems and unprocessed sources; knowledge_delete removes an outdated "
         "memo (a copy is kept). knowledge_semantic_search finds notes by meaning when a regex finds nothing; "
         "knowledge_related lists the notes most related to one note (links, shared sources, shared neighbours, "
-        "meaning). Web UI with graph view: https://knowledge.to0wnn.com/ui. "
+        "meaning). When the user corrects you or you find your own mistake, record it with knowledge_lesson (a weekly "
+        "review applies it). Web UI with graph view: https://knowledge.to0wnn.com/ui. "
         "Here the memos are Dutch. Homelab docs (homelab/<topic>.md) have the same two sections and a frontmatter topic: = "
         "a heading of memory/MEMORY.md (the headings are the islands of the graph; add one only for a genuinely new "
         "area); their history is in homelab/archief/.\n\n" + house_rules("<memory root>"))
@@ -899,6 +921,32 @@ async def knowledge_delete(path: str, base_version: str) -> str:
         index.refresh(rel)
     audit("delete", rel)
     return f"deleted {rel} (copy kept on the server as {keep.name})"
+
+
+@server.tool(annotations=EDIT)
+def knowledge_lesson(what: str, why: str, prevent: str, project: str = "") -> str:
+    """Record a lesson when the user corrects you or you find your own mistake: what happened, why it happened, and
+    which rule, check or step would have prevented it. Write about the task, not about yourself, concrete enough to act
+    on. It goes into a queue, not into the memos: a weekly review checks it against the session and applies it on
+    probation. Do not edit rules or memos for it yourself. project: default this device's project, else homelab."""
+    if not device.get().get("write"):
+        raise ToolError("this device token is read-only")
+    proj = project or token_project() or "homelab"
+    if proj not in PROJECTS:
+        raise ToolError(f"project must be one of {sorted(PROJECTS)}")
+    fields = {k: " ".join(str(v).split())[:500] for k, v in (("what", what), ("why", why), ("prevent", prevent))}
+    if not all(fields.values()):
+        raise ToolError("what, why and prevent are all required")
+    refuse_secrets(" ".join(fields.values()))
+    lid = hashlib.sha1(f"{time.time()}{fields}".encode()).hexdigest()[:8]
+
+    def add(items):
+        if sum(i["status"] == "new" for i in items) >= LESSONS_MAX:
+            raise ToolError(f"the lesson queue holds {LESSONS_MAX} unreviewed lessons; try again after the weekly review")
+        items.append({"id": lid, "at": time.strftime("%Y-%m-%dT%H:%M:%S"), "device": device.get().get("name", "?"),
+                      "project": proj, **fields, "status": "new"})
+    update_lessons(add)
+    return f"queued lesson {lid}; the weekly review checks it and applies it on probation"
 
 
 @server.tool(annotations=READ)
@@ -1790,6 +1838,33 @@ async def context_route(request: Request):
     return PlainTextResponse(head + parts[n - 1])
 
 
+@server.custom_route("/lessons", methods=["GET"])
+async def lessons_route(request: Request):
+    """The lesson queue as JSON, for the weekly lesson loop on the VM."""
+    return lesson_admin_only() or JSONResponse(read_json(LESSONS, []))
+
+
+@server.custom_route("/lessons", methods=["POST"])
+async def lessons_update_route(request: Request):
+    """The lesson loop's verdict on one lesson: {id, status, and optional note, target, line, attempt, changed}."""
+    if (refused := lesson_admin_only()):
+        return refused
+    b = await request.json()
+    if b.get("status") not in LESSON_STATUSES:
+        return JSONResponse({"error": f"status must be one of {LESSON_STATUSES}"}, status_code=400)
+    extra = {k: b[k] for k in ("note", "target", "line", "attempt", "changed") if k in b}
+    if contains_secret(json.dumps(extra)):
+        return JSONResponse({"error": "contains a known secret value"}, status_code=400)
+    found = []
+
+    def set_status(items):
+        for i in items:
+            if i["id"] == b.get("id"):
+                i.update(extra, status=b["status"], decided=time.strftime("%Y-%m-%dT%H:%M:%S")); found.append(i)
+    await asyncio.to_thread(update_lessons, set_status)
+    return JSONResponse(found[0]) if found else JSONResponse({"error": "no such lesson"}, status_code=404)
+
+
 @server.custom_route("/lint", methods=["GET"])
 async def lint_route(request: Request):
     """Lint report as JSON for device tokens (the weekly report on the VM); scoped tokens get their roots only."""
@@ -2030,6 +2105,7 @@ def system_state() -> dict:
         ],
         "audit": audit_tail(),
         "gaps": gaps_summary(),
+        "lessons": read_json(LESSONS, [])[-30:][::-1],
     }
 
 

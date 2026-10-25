@@ -709,6 +709,22 @@ def main():
             assert call("knowledge_search", {"pattern": q})[1] == "(no matches)"
         gaps = json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["system"]["gaps"]
         assert gaps[0]["query"].lower() == "pond mowing schedule" and gaps[0]["count"] == 2 and gaps[0]["tool"] == "search", gaps
+        # Lesson queue: agents add, only an unscoped write token reads it and sets a verdict; never a secret.
+        lesson = {"what": "said done without running the check", "why": "skipped verify", "prevent": "run ./check.sh first"}
+        err, text = call("knowledge_lesson", lesson)
+        assert not err and "queued lesson" in text, text
+        lid = text.split()[2].rstrip(";")
+        assert call("knowledge_lesson", lesson, token="ro-token")[0]
+        assert call("knowledge_lesson", {**lesson, "why": " "})[0]
+        assert "known secret" in call("knowledge_lesson", {**lesson, "why": "pw Sup3rSecret99"})[1]
+        assert http("GET", "/lessons", token="ro-token")[0] == 403
+        q = json.loads(http("GET", "/lessons")[1])
+        assert q[-1]["id"] == lid and q[-1]["status"] == "new" and q[-1]["project"] == "homelab", q
+        assert http("POST", "/lessons", {"id": lid, "status": "bogus"})[0] == 400
+        assert http("POST", "/lessons", {"id": "nope", "status": "rejected"})[0] == 404
+        st, body = http("POST", "/lessons", {"id": lid, "status": "applied", "target": "memory/fact.md", "line": "x"})
+        assert st == 200 and json.loads(body)["status"] == "applied", body
+        assert json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["system"]["lessons"][0]["id"] == lid
         assert "project anpitek" in http("GET", "/context/1?project=/home/x/anpitek/boekhouding")[1]
         assert "project homelab" in http("GET", "/context/1?project=/home/x/homelab")[1]
         assert call("knowledge_write", {"path": "homelab/deep/memory/x.md", "content": "x"})[0]
