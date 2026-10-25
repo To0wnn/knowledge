@@ -1184,11 +1184,15 @@ async def knowledge_semantic_search(query: str, root: str = "", limit: int = 10,
     # A scoped token searches its own roots by default, so the top hits are not used up by notes it may not see.
     roots = tuple(r.strip() + "/" for r in root.split(",") if r.strip()) or tuple(r + "/" for r in device.get().get("roots") or ())
     hits = [h for h in await asyncio.to_thread(vec.search, query, roots, min(limit, 30), None if archive else is_archive_line) if in_scope(h["path"])]
-    if vec.matrix is not None and weak_answer(query, hits):  # while the index is (re)built nothing is a gap
+    weak = vec.matrix is not None and weak_answer(query, hits)  # while the index is (re)built nothing is a gap
+    if weak:
         log_gap("semantic", query, hits[0]["score"] if hits else None)
     if not hits:
         return f"(no semantic results: {vec.status()})"
-    return "\n".join(f"{h['path']}:{h['line']} ({h['score']}): {shown(' '.join(h['text'].split())[:240])}" for h in hits)
+    # The agent sees hits even when they are weak, so say it here: the moment it can make the next search find it.
+    tip = (f"\nThese matches are weak. If you find the answer in a memo, add '{' '.join(query.split())[:60]}' to that "
+           "memo's 'aliases:' frontmatter line with knowledge_edit, so this search finds it next time.") if weak else ""
+    return "\n".join(f"{h['path']}:{h['line']} ({h['score']}): {shown(' '.join(h['text'].split())[:240])}" for h in hits) + tip
 
 
 @server.tool(annotations=READ)

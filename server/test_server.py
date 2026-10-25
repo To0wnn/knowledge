@@ -860,6 +860,10 @@ def main():
             time.sleep(0.5)
         assert res["hits"] and res["hits"][0]["path"].startswith("trade"), res
         assert "trade-memory/" in call("knowledge_semantic_search", {"query": "entry timing", "root": "trade-memory"})[1]
+        # A weak answer tells the agent, in the result, to add the search words as an alias where it finds the answer.
+        weak = call("knowledge_semantic_search", {"query": "zzqx plumbing quantum walrus"})[1]
+        assert "(no semantic results" in weak or "'aliases:' frontmatter line" in weak, weak[-300:]
+        assert "'aliases:'" not in call("knowledge_semantic_search", {"query": "entry timing plan", "root": "trade-memory"})[1]
         assert not call("knowledge_related", {"path": "trade-memory/plan.md"})[0]
         # A new memo that says the same as an existing one gets a merge hint (not a refusal); a different one does not.
         err, text = call("knowledge_write", {"path": "trade-memory/plan_copy.md", "content": memo("entry timing plan\n", "plan copy")})
