@@ -17,6 +17,9 @@ public repo). At most MAX_PER_RUN lessons per run.
    solve it (zendriver first, WebSearch as fallback, at most RESEARCH_PAGES pages) and the line is replaced by a better
    one for a second probation. Failed twice: the line is removed and the owner gets one Matrix message with a proposal
    for a hook or check, the only thing that needs him.
+Projects whose memory is not on this machine (guests, e.g. a350) take part too: their lessons may only go into their
+own memos, which are read and written through the server (its history, secret check and house rules apply), and the
+evidence is what their session logs on the server show (the "Asked:" lines, labelled by the same Haiku counter).
 Silent when it works (Uptime Kuma heartbeat); a failure goes to Matrix and turns the heartbeat red.
 
   --dry-run        show what pass 1 would get, call nothing, change nothing
@@ -44,6 +47,7 @@ MEMORY = {  # root name on the server -> folder on this machine
     "anpitek-memory": HOME / f".claude/projects/{PREFIX}-anpitek/memory",
     "trade-memory": HOME / f".claude/projects/{PREFIX}-trade-bot/memory",
 }
+LOCAL = {"homelab": "memory", "anpitek": "anpitek-memory", "trade": "trade-memory"}  # projects with memory here
 SKILLS = HOME / ".claude/skills"
 REPO = Path(__file__).resolve().parent.parent  # plugin skills live here: changing them is a public commit, never
 SERVER = os.environ.get("KNOWLEDGE_URL", "https://knowledge.to0wnn.com")
@@ -91,9 +95,13 @@ SCHEMA3 = {"type": "object", "required": ["verdicts"], "properties": {"verdicts"
         "id": {"type": "string"}, "recurred": {"type": "boolean"}, "reason": {"type": "string"}}}}}}
 SCHEMA_R = {"type": "object", "required": ["line", "sources", "hook"], "properties": {
     "line": {"type": "string"}, "sources": {"type": "array", "items": {"type": "string"}}, "hook": {"type": "string"}}}
+GENERAL = """
+These lessons come from one project. A lesson about that project goes into its own memos. When a lesson is about how
+any agent in any project should work (not about this project's code, tools or domain), answer "general" instead: it
+is then proposed to the server's owner as a shared rule, never applied by you."""
 SCHEMA1 = {"type": "object", "required": ["verdicts"], "properties": {"verdicts": {"type": "array", "items": {
     "type": "object", "required": ["id", "verdict", "reason"], "properties": {
-        "id": {"type": "string"}, "verdict": {"enum": ["apply", "reject"]}, "reason": {"type": "string"},
+        "id": {"type": "string"}, "verdict": {"enum": ["apply", "reject", "general"]}, "reason": {"type": "string"},
         "target": {"type": "string"}}}}}}
 SCHEMA2 = {"type": "object", "required": ["verdicts"], "properties": {"verdicts": {"type": "array", "items": {
     "type": "object", "required": ["id", "verdict", "reason"], "properties": {
@@ -105,9 +113,67 @@ def today_nl(d: date) -> str:
     return f"{d.day} {NL_MONTHS[d.month - 1]} {d.year}"
 
 
-def target_path(target: str) -> Path | None:
-    """The file a target names, or None when it is not one the loop may change."""
+def mcp(tool: str, args: dict) -> str:
+    """One knowledge tool call as the VM token (a session per call: a handful of calls a week)."""
+    token = subprocess.run(["secret", TOKEN], capture_output=True, text=True, check=True).stdout.strip()
+    h = {"Authorization": f"Bearer {token}", "Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
+
+    def post(body, sid=None):
+        req = urllib.request.Request(f"{SERVER}/mcp", json.dumps(body).encode(), dict(h, **({"mcp-session-id": sid} if sid else {})))
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return r.headers.get("mcp-session-id"), r.read().decode()
+    sid, _ = post({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+        "protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "lesson-loop", "version": "1"}}})
+    post({"jsonrpc": "2.0", "method": "notifications/initialized"}, sid)
+    _, out = post({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": tool, "arguments": args}}, sid)
+    d = json.loads(([x[5:] for x in out.splitlines() if x.startswith("data:")] or [out])[-1])
+    res = d.get("result") or {}
+    if "error" in d or res.get("isError"):
+        raise RuntimeError(f"{tool} failed: {(res.get('content') or [{}])[0].get('text') or d.get('error')}")
+    return res["content"][0]["text"]
+
+
+MCP = mcp  # tests swap in a fake
+
+
+class Remote:
+    """A file of a project that lives on the server only (a guest's memo), read and written through the knowledge
+    tools, so the server's history, secret check and house-rule hints apply. Offers the Path methods the loop uses."""
+    def __init__(self, rel: str):
+        self.rel, self.name, self.version = rel, rel.rsplit("/", 1)[-1], None
+
+    def read_text(self, encoding: str = "utf-8", errors: str | None = None) -> str:
+        head, _, body = MCP("knowledge_read", {"path": self.rel, "limit": 5000}).partition("\n")
+        self.version = re.search(r"version (\w+)", head).group(1)
+        return "\n".join(x.split("\t", 1)[1] for x in body.split("\n") if re.match(r"^\d+\t", x)) + "\n"
+
+    def write_text(self, text: str, encoding: str = "utf-8"):
+        if self.version is None:
+            self.read_text()
+        MCP("knowledge_write", {"path": self.rel, "content": text, "base_version": self.version})
+        self.version = None
+
+
+def project_roots() -> dict[str, str]:
+    """{project: memory root} from the server (knowledge_projects: "a350: docs a350/, memory a350-memory/, write")."""
+    return dict(re.findall(r"^([\w-]+): docs [^,]*, memory ([\w-]+)/", MCP("knowledge_projects", {}), re.M))
+
+
+def target_path(target: str, allowed: set[str] | None = None):
+    """The file a target names (a Path here, a Remote for a guest's memo), or None when the loop may not change it.
+    allowed: the roots this lesson may write to."""
     root, _, rest = target.strip().partition("/")
+    if allowed is not None and root not in allowed:
+        return None
+    if root not in MEMORY and root != "skills":
+        if not root.endswith("-memory") or not re.fullmatch(r"[A-Za-z0-9_.-]+\.md", rest) or rest == "MEMORY.md":
+            return None
+        r = Remote(f"{root}/{rest}")
+        try:
+            r.read_text()
+            return r
+        except Exception:
+            return None
     if root == "skills":
         if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", rest):
             return None
@@ -134,6 +200,34 @@ def targets_text() -> str:
         d = re.search(r"^description:\s*(.+)$", s.read_text(encoding="utf-8"), re.M)
         out.append(f"skills/{s.parent.name}: {(d.group(1) if d else '')[:150]}")
     return "\n".join(out)
+
+
+def guest_targets(root: str) -> str:
+    text = Remote(f"{root}/MEMORY.md").read_text()
+    return "\n".join(f"{root}/{m.group(1)}: {m.group(2)[:150]}"
+                     for m in re.finditer(r"^- \[[^\]]*\]\(([^)]+\.md)\)\s*[—-]?\s*(.*)$", text, re.M))
+
+
+def guest_evidence(root: str, since: str) -> tuple[str, float]:
+    """Corrections in a guest project's session logs on the server since a date: the "Asked:" lines (the first 8
+    prompts of each session, 200 characters each: thinner than the transcripts here), labelled by the Haiku counter."""
+    asked = []
+    for month in sorted({since[:7], date.today().isoformat()[:7]}):
+        try:
+            text = Remote(f"{root}/sessions/{month}.md").read_text()
+        except Exception:
+            continue
+        day = ""
+        for line in text.splitlines():
+            if (m := re.match(r"^## (\d{4}-\d\d-\d\d)", line)):
+                day = m.group(1)
+            elif line.startswith("- Asked: ") and day >= since:
+                asked.append({"ts": day, "prompt": line[9:], "prev": ""})
+    if not asked:
+        return "(none)", 0.0
+    asked = asked[-corrections.BATCH:]
+    hits, cost = corrections.classify(asked)
+    return "\n".join(f"- {asked[i]['ts']} USER: {asked[i]['prompt'][:200]}" for i in sorted(hits)) or "(none)", cost
 
 
 def insert(path: Path, line: str) -> str:
@@ -185,16 +279,29 @@ def evidence(items: list[dict], labels: dict, since: str) -> str:
     return "\n".join(f"- {p['ts']} [agent: ...{p['prev'][-120:]}] USER: {p['prompt'][:200]}" for p in hits) or "(none)"
 
 
-def run(lessons: list[dict], ev: str, pass1, pass2, decide, day: date) -> dict:
-    """The loop with its passes and the queue update injected (tests use fakes). Returns counts per outcome."""
+def run(lessons: list[dict], ev: str, pass1, pass2, decide, day: date, targets: str | None = None,
+        allowed: set[str] | None = None, notify=None) -> dict:
+    """The loop with its passes and the queue update injected (tests use fakes). Returns counts per outcome.
+    targets/allowed: what these lessons may go into (default: this machine's memories and skills)."""
     done = {"applied": [], "rejected": []}
-    v1, cost = pass1(f"LESSONS\n{lessons_text(lessons)}\n\nCORRECTIONS\n{ev}\n\nTARGETS\n{targets_text()}")
+    targets = targets_text() if targets is None else targets
+    allowed = set(MEMORY) | {"skills"} if allowed is None else allowed
+    v1, cost = pass1(f"{GENERAL if notify else ''}\nLESSONS\n{lessons_text(lessons)}\n\nCORRECTIONS\n{ev}\n\nTARGETS\n{targets}")
     by_id = {x["id"]: x for x in lessons}
     chosen = []
     for v in v1:
         if v["id"] not in by_id:
             continue
-        path = target_path(v.get("target", "")) if v["verdict"] == "apply" else None
+        if v["verdict"] == "general" and notify:  # one project's lesson that would hold for all: the owner decides
+            x = by_id[v["id"]]
+            decide(x["id"], "escalated", note=f"general, proposed as a shared rule: {v['reason']}"[:300])
+            notify(f"Lesson loop: a lesson from project {x['project']} seems to hold for every project. Make it a shared "
+                   f"rule or skill? What: {x['what']} | prevent: {x['prevent']} | why general: {v['reason']}")
+            done.setdefault("general", []).append(x["id"])
+            continue
+        if v["verdict"] == "general":
+            v = {**v, "verdict": "reject", "reason": f"general (not for one project): {v['reason']}"}
+        path = target_path(v.get("target", ""), allowed) if v["verdict"] == "apply" else None
         if v["verdict"] == "apply" and not path:
             v = {**v, "verdict": "reject", "reason": f"target not allowed or missing: {v.get('target')}"}
         if v["verdict"] == "reject":
@@ -310,23 +417,47 @@ def main() -> None:
     report_mod = __import__("lint-report")  # the same Matrix room and sender as the weekly lint report
     try:
         items, labels, rows, cost = corrections.update()
+        roots = project_roots()
+        decide = lambda lid, status, **kw: api("POST", "/lessons", {"id": lid, "status": status, **kw})
         res = {"applied": [], "rejected": [], "cost": 0.0}
-        if lessons:
-            since = (date.fromisoformat(min(x["at"][:10] for x in lessons)) - timedelta(days=1)).isoformat()
-            res = run(lessons, evidence(items, labels, since),
-                      lambda p: bare(p, PASS1, SCHEMA1), lambda p: bare(p, PASS2, SCHEMA2),
-                      lambda lid, status, **kw: api("POST", "/lessons", {"id": lid, "status": status, **kw}), date.today())
+        pro = {"kept": [], "retried": [], "escalated": [], "gone": [], "cost": 0.0}
         cutoff = (date.today() - timedelta(days=PROBATION)).isoformat()
-        due = [x for x in queue if x["status"] == "applied" and x.get("changed", "9") <= cutoff]
-        pro = probation(due, lambda since: evidence(items, labels, since), lambda p: bare(p, PASS3, SCHEMA3),
-                        research_pass, lambda lid, status, **kw: api("POST", "/lessons", {"id": lid, "status": status, **kw}),
-                        report_mod.send, date.today())
+        due_all = [x for x in queue if x["status"] == "applied" and x.get("changed", "9") <= cutoff]
+        for proj in sorted({x["project"] for x in lessons} | {x["project"] for x in due_all}):
+            mine, due = [x for x in lessons if x["project"] == proj], [x for x in due_all if x["project"] == proj]
+            root = roots.get(proj)
+            if not root:
+                for x in mine:
+                    decide(x["id"], "rejected", note=f"project {proj} is not on the server")
+                    res["rejected"].append(x["id"])
+                continue
+            if proj in LOCAL:
+                ev_since = lambda since: (evidence(items, labels, since), 0.0)
+                targets, allowed = None, None
+            else:  # a guest: only its own memos, its own session logs as evidence
+                ev_since = lambda since, root=root: guest_evidence(root, since)
+                targets, allowed = guest_targets(root), {root}
+            if mine:
+                since = (date.fromisoformat(min(x["at"][:10] for x in mine)) - timedelta(days=1)).isoformat()
+                ev, c = ev_since(since)
+                r = run(mine, ev, lambda p: bare(p, PASS1, SCHEMA1), lambda p: bare(p, PASS2, SCHEMA2), decide,
+                        date.today(), targets, allowed, None if proj in LOCAL else report_mod.send)
+                res["applied"] += r["applied"]; res["rejected"] += r["rejected"]; res["cost"] += r["cost"] + c
+                res.setdefault("general", []).extend(r.get("general", []))
+            if due:
+                spent = []
+                p = probation(due, lambda since: (lambda e: spent.append(e[1]) or e[0])(ev_since(since)),
+                              lambda q: bare(q, PASS3, SCHEMA3), research_pass, decide, report_mod.send, date.today())
+                for k in ("kept", "retried", "escalated", "gone"):
+                    pro[k] += p[k]
+                pro["cost"] += p["cost"] + sum(spent)
         flag = corrections.STATE / "compared"
         if (msg := comparison(rows, date.today(), flag.exists())):
             report_mod.send(msg)
             flag.write_text(msg)
         last = rows[-1] if rows else ("-", 0, 0)
-        summary = (f"{len(res['applied'])} applied, {len(res['rejected'])} rejected, {len(pro['kept'])} kept, "
+        summary = (f"{len(res['applied'])} applied, {len(res['rejected'])} rejected, {len(res.get('general', []))} proposed "
+                   f"as shared, {len(pro['kept'])} kept, "
                    f"{len(pro['retried'])} retried, {len(pro['escalated'])} escalated; corrections {last[0]}: "
                    f"{last[2]}/{last[1]}; cost ${cost + res['cost'] + pro['cost']:.3f}")
         print(summary)
@@ -395,6 +526,36 @@ def selftest() -> None:
         r = probation([{**a1, "line": "- gone"}], lambda s: "", p3(True), res_fn, dec, sent.append, later)
         assert r["gone"] == ["a1"] and calls[-1][1] == "removed"
         assert probation([], None, None, None, None, None, later)["cost"] == 0.0  # nothing due: no call
+        # A guest project: its memo lives on the server (fake MCP), it may only target its own root, and a lesson
+        # that holds for every project is proposed, not applied.
+        global MCP
+        store = {"g-memory/MEMORY.md": "- [Flow](project_flow.md) — how flows run\n",
+                 "g-memory/project_flow.md": "---\nname: f\n---\n## Stand\n- one\n\n## Keuzes\n- **k** (1 okt 2026): r\n"}
+
+        def fake_mcp(tool, args):
+            if tool == "knowledge_read":
+                if args["path"] not in store:
+                    raise RuntimeError("missing")
+                lines = store[args["path"]].rstrip("\n").split("\n")
+                return f"{args['path']} (version v1, {len(lines)} lines)\n" + "\n".join(f"{i}\t{x}" for i, x in enumerate(lines, 1))
+            assert tool == "knowledge_write" and args["base_version"] == "v1", args
+            store[args["path"]] = args["content"]
+            return "wrote"
+        MCP = fake_mcp
+        assert guest_targets("g-memory") == "g-memory/project_flow.md: how flows run"
+        assert target_path("memory/feedback_werk.md", {"g-memory"}) is None  # a guest never writes outside its root
+        assert target_path("g-memory/nope.md", {"g-memory"}) is None
+        gl = [{"id": i, "at": "2026-10-24T10:00", "project": "g", "what": f"w{i}", "why": "y", "prevent": "p"} for i in ("g1", "g2", "g3")]
+        gp1 = lambda p: ([{"id": "g1", "verdict": "apply", "reason": "ok", "target": "g-memory/project_flow.md"},
+                          {"id": "g2", "verdict": "general", "reason": "any agent"},
+                          {"id": "g3", "verdict": "apply", "reason": "ok", "target": "memory/feedback_werk.md"}], 0.0)
+        gp2 = lambda p: ([{"id": "g1", "verdict": "add", "reason": "new", "line": "wacht 15 s na boarding"}], 0.0)
+        calls, sent = [], []
+        r = run(gl, "(none)", gp1, gp2, lambda lid, st, **kw: calls.append((lid, st)), day, guest_targets("g-memory"),
+                {"g-memory"}, sent.append)
+        assert r["applied"] == ["g1"] and r["general"] == ["g2"] and r["rejected"] == ["g3"], r
+        assert "- one\n- wacht 15 s na boarding (les 25 okt 2026, proef g1)\n\n## Keuzes" in store["g-memory/project_flow.md"]
+        assert ("g2", "escalated") in calls and sent and "every project" in sent[0]
         rows = [("2026-W40", 100, 25), ("2026-W43", 100, 17), ("2026-W44", 100, 10), ("2026-W47", 100, 14)]
         assert comparison(rows, date(2026, 11, 22), False) is None and comparison(rows, date(2026, 11, 29), True) is None
         msg = comparison(rows, date(2026, 11, 29), False)
