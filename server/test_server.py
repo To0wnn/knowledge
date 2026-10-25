@@ -559,6 +559,18 @@ def main():
         assert (mirror / "garden-memory/MEMORY.md").exists()
         st, body = http("POST", "/mirror/push", {"files": {"garden-memory/MEMORY.md": {"text": (gmem / "MEMORY.md").read_text(), "base": ""}}}, token=fr)
         assert json.loads(body)["unchanged_files"] == ["garden-memory/MEMORY.md"], body  # the client marks only these as in sync
+        # Both sides changed different lines (an offline edit during a deploy): the server merges, no conflict copy,
+        # and the device's next sync fetches the merged text.
+        flow = mirror / "garden-memory/project_flow.md"
+        flow.write_text("---\nname: flow\n---\none\ntwo\nthree\nfour\nfive\n")
+        run_mm()
+        assert not call("knowledge_edit", {"path": "garden-memory/project_flow.md", "old_string": "one", "new_string": "ONE (server)"}, token=fr)[0]
+        flow.write_text(flow.read_text().replace("five", "FIVE (offline)"))
+        run_mm()
+        merged = (gmem / "project_flow.md").read_text()
+        assert "ONE (server)" in merged and "FIVE (offline)" in merged and not list(gmem.glob("project_flow.offline-*.md")), merged
+        run_mm()
+        assert flow.read_text() == merged, flow.read_text()
         (mirror / ".context-k-1").write_text("index → ✅\n")
         win = subprocess.run(mm + ["offline", "k", "1"], env={**menv, "PYTHONIOENCODING": "cp1252"}, capture_output=True)
         assert win.returncode == 0 and "→ ✅" in win.stdout.decode("utf-8"), win.stderr  # a Windows pipe is cp1252

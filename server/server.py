@@ -13,6 +13,7 @@ Config: tokens.json with hashes only: {"<device>": {"sha256": "<hex of sha256(to
 Run:    uv run server.py   (systemd user unit knowledge-server.service)
 """
 import asyncio
+import difflib
 import fnmatch
 import hashlib
 import hmac
@@ -439,6 +440,37 @@ def version_text(rel: str, vid: str) -> str:
     if "/" in vid or not p.is_file():
         raise ToolError(f"no version {vid} of {rel}")
     return p.read_text()
+
+
+def base_text(rel: str, base: str) -> str | None:
+    """The text a device's offline copy started from: the history version whose content hash is `base`."""
+    d = history_dir(rel)
+    for p in sorted(d.iterdir(), key=lambda p: p.stat().st_mtime_ns, reverse=True) if d.is_dir() else []:
+        data = p.read_bytes()
+        if version(data) == base:
+            return data.decode("utf-8", "replace")
+    return None
+
+
+def merge3(base: str, ours: str, theirs: str) -> str | None:
+    """Line-based three-way merge: both sides' changes against base, applied together when they touch different
+    lines (as git does); None when they overlap or touch neighbouring lines, so a person decides."""
+    b, o, t = base.splitlines(keepends=True), ours.splitlines(keepends=True), theirs.splitlines(keepends=True)
+    def edits(new):
+        return [(i1, i2, new[j1:j2]) for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, b, new, autojunk=False).get_opcodes()
+                if tag != "equal"]
+    changes = sorted([(*e, "o") for e in edits(o)] + [(*e, "t") for e in edits(t)], key=lambda e: (e[0], e[1]))
+    for (a1, a2, ra, sa), (b1, b2, rb, sb) in zip(changes, changes[1:]):
+        if sa != sb and b1 <= a2 and not (ra == rb and (a1, a2) == (b1, b2)):  # overlap or touching: not ours to decide
+            return None
+    out, pos, done = [], 0, set()
+    for i1, i2, rep, _ in changes:
+        if (i1, i2, tuple(rep)) in done:
+            continue  # both sides made the same change
+        done.add((i1, i2, tuple(rep)))
+        out += b[pos:i1] + rep
+        pos = i2
+    return "".join(out + b[pos:])
 
 
 index = Index()
@@ -1736,6 +1768,16 @@ async def mirror_push(request: Request):
                     index.refresh(rel)
                     audit("mirror", rel)
                     out["written"][rel] = version(data)
+                    continue
+            # Both sides changed it: merge when they touched different lines, so an offline edit during a short
+            # outage (a deploy) does not leave a conflict copy for a person (a350 memo, 25 Oct 2026).
+            if current is not None and plain and base and (old := base_text(rel, base)) is not None and \
+                    (merged := merge3(old, current.decode("utf-8", "replace"), f["text"])) is not None:
+                refuse_secrets(merged)
+                if replace_if_unchanged(full, current, merged.encode()):
+                    index.refresh(rel)
+                    audit("mirror-merge", rel)
+                    out.setdefault("merged", []).append(rel)  # not in "written": the device fetches the merged text
                     continue
             p = PurePosixPath(rel)  # also a skill's script: x.offline-<time>.py
             copy, copy_rel = resolve(str(p.with_name(f"{p.stem}.offline-{time.strftime('%Y%m%d-%H%M%S')}{p.suffix}")))
