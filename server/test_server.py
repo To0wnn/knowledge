@@ -760,6 +760,13 @@ def main():
             assert call("knowledge_search", {"pattern": q})[1] == "(no matches)"
         gaps = json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["system"]["gaps"]
         assert gaps[0]["query"].lower() == "pond mowing schedule" and gaps[0]["count"] == 2 and gaps[0]["tool"] == "search", gaps
+        # A note opened soon after a failed search is kept as a (query, note) pair for the lesson loop's aliases, once.
+        assert not call("knowledge_read", {"path": "homelab/overzicht.md"})[0]
+        pairs = json.loads(http("GET", "/gap-answers")[1])
+        assert any(x["query"].lower() == "pond mowing schedule" and x["path"] == "homelab/overzicht.md" for x in pairs), pairs
+        n = len(pairs); call("knowledge_read", {"path": "homelab/overzicht.md"})
+        assert len(json.loads(http("GET", "/gap-answers")[1])) == n  # the gap is used up
+        assert http("GET", "/gap-answers", token="ro-token")[0] == 403
         # External skills: add from GitHub (pinned, checked), small update alone, big one waits, unsafe one refused.
         ext_api = lambda body: admin("/ui/api/admin/external", body)
         st, _, res = ext_api({"url": "https://github.com/o/r/tree/main/skills/x"})

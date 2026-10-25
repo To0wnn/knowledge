@@ -20,6 +20,11 @@ public repo). At most MAX_PER_RUN lessons per run.
 Projects whose memory is not on this machine (guests, e.g. a350) take part too: their lessons may only go into their
 own memos, which are read and written through the server (its history, secret check and house rules apply), and the
 evidence is what their session logs on the server show (the "Asked:" lines, labelled by the same Haiku counter).
+6. aliases from real misses: the server keeps (search that found nothing, note the same device opened next) pairs; a
+   pass checks each pair ("does this note answer that search?") and a good one adds the search's words to the note's
+   frontmatter aliases:, which the server weighs in its search title. Memos of any project (a guest's through the
+   server), top-level homelab docs; never a guest's mirrored docs (their next sync would undo it), never code-like
+   searches. Measured on the 45-question set first: generated aliases gave nothing, so only real misses become one.
 Silent when it works (Uptime Kuma heartbeat); a failure goes to Matrix and turns the heartbeat red.
 
   --dry-run        show what pass 1 would get, call nothing, change nothing
@@ -64,6 +69,15 @@ ZENDRIVER = os.environ.get("KNOWLEDGE_ZENDRIVER_MCP", "")
 BEFORE, AFTER = ("2026-W40", "2026-W41", "2026-W42", "2026-W43"), ("2026-W44", "2026-W45", "2026-W46", "2026-W47")
 COMPARE_FROM = date(2026, 11, 23)  # Monday after 2026-W47
 MEANINGFUL = 5.0  # points per 100: the week-to-week noise in the baseline was 15-47
+ALIAS_MAX = 8  # per note: a few real names, not a keyword dump
+ALIAS_QUERY = re.compile(r"^[^\W_][\w' .-]{2,59}$")  # plain words; no regex, paths or code names
+ALIAS_PASS = """Each item is a search an AI agent made in a knowledge base that found nothing, and the note the agent opened
+right after. Decide per item whether that note really answers the search. If it does, give an alias: the search's own
+words, shortened to the 1-4 words that name the subject (lowercase, Dutch or English as written). If the note does not
+answer it, or the search is too vague to name anything, say no."""
+SCHEMA_A = {"type": "object", "required": ["verdicts"], "properties": {"verdicts": {"type": "array", "items": {
+    "type": "object", "required": ["id", "answers"], "properties": {
+        "id": {"type": "integer"}, "answers": {"type": "boolean"}, "alias": {"type": "string"}}}}}}
 NL_MONTHS = "jan feb mrt apr mei jun jul aug sep okt nov dec".split()
 PASS1 = """You review lessons that AI coding agents recorded after a mistake, for a household's homelab, trading bot and \
 small company. Each lesson says what happened, why, and what would have prevented it. Below the lessons are recent \
@@ -399,6 +413,73 @@ def comparison(rows: list, day: date, done: bool) -> str | None:
             f"the same weeks count too; keep the loop when better, look at the lessons when not.")
 
 
+def alias_file(rel: str):
+    """Where an alias may be written for this note: a memo (here or a guest's on the server) or a top-level homelab
+    doc; None for anything else (a guest's mirrored docs would lose it at their next sync)."""
+    root, _, rest = rel.partition("/")
+    if "/" in rest or not rest.endswith(".md") or rest == "MEMORY.md":
+        return None
+    if root == "homelab":
+        p = HOME / "homelab" / rest
+        return p if p.is_file() else None
+    if root in MEMORY:
+        p = MEMORY[root] / rest
+        return p if p.is_file() else None
+    return Remote(rel) if root.endswith("-memory") else None
+
+
+def add_alias(text: str, alias: str) -> str | None:
+    """The text with the alias in its frontmatter aliases: line (made after description when missing); None when
+    there is no frontmatter, the alias is there already or the line is full."""
+    m = re.match(r"\A---\n(.*?)\n---\n", text, re.S)
+    if not m:
+        return None
+    fm = m.group(1)
+    if (line := re.search(r"^aliases:[ \t]*(.*)$", fm, re.M)):
+        have = [a.strip() for a in line.group(1).strip("[]").split(",") if a.strip()]
+        if alias in have or len(have) >= ALIAS_MAX:
+            return None
+        fm = fm[:line.start()] + "aliases: " + ", ".join(have + [alias]) + fm[line.end():]
+    else:
+        d = re.search(r"^description:.*$", fm, re.M)
+        fm = fm[:d.end()] + f"\naliases: {alias}" + fm[d.end():] if d else fm + f"\naliases: {alias}"
+    return text[:m.start(1)] + fm + text[m.end(1):]
+
+
+def alias_loop(pairs: list[dict], handled: set, check, today: date) -> tuple[list[str], float]:
+    """Check the new (search, note) pairs and add the good aliases. Returns (added "note: alias", cost)."""
+    todo, seen = [], set()
+    for x in pairs:
+        key = f"{x['query'].lower()}|{x['path']}"
+        if key in handled or key in seen:
+            continue
+        seen.add(key)
+        if ALIAS_QUERY.match(x["query"]) and re.search(r"[^\W\d_]", x["query"]) and alias_file(x["path"]) is not None:
+            todo.append(x)
+        else:
+            handled.add(key)
+    todo = todo[:40]
+    if not todo:
+        return [], 0.0
+    files = {x["path"]: alias_file(x["path"]) for x in todo}
+    body = "\n\n".join(f"[{i}] SEARCH: {x['query']}\nNOTE {x['path']}:\n{files[x['path']].read_text()[:700]}" for i, x in enumerate(todo))
+    verdicts, cost = check(body)
+    added = []
+    for v in verdicts:
+        if not isinstance(v.get("id"), int) or not 0 <= v["id"] < len(todo):
+            continue
+        x = todo[v["id"]]
+        alias = " ".join(str(v.get("alias", "")).lower().replace(",", " ").split())
+        words = set(x["query"].lower().split())
+        if v.get("answers") and alias and len(alias) <= 40 and set(alias.split()) <= words:  # only the searcher's own words
+            f = files[x["path"]]
+            if (new := add_alias(f.read_text(), alias)) is not None:
+                f.write_text(new)
+                added.append(f"{x['path']}: {alias}")
+    handled.update(f"{x['query'].lower()}|{x['path']}" for x in todo)
+    return added, cost
+
+
 def research_pass(x: dict, why: str):
     return bare(f"LESSON: {x['what']} | prevent: {x['prevent']}\nCURRENT LINE: {x['line']}\nCAME BACK: {why}",
                 RESEARCH.format(pages=RESEARCH_PAGES), SCHEMA_R, web=True)
@@ -451,6 +532,12 @@ def main() -> None:
                 for k in ("kept", "retried", "escalated", "gone"):
                     pro[k] += p[k]
                 pro["cost"] += p["cost"] + sum(spent)
+        hf = corrections.STATE / "gap_aliases.json"
+        handled = set(json.loads(hf.read_text())) if hf.exists() else set()
+        aliases, acost = alias_loop(api("GET", "/gap-answers"), handled,
+                                    lambda b: bare(b, ALIAS_PASS, SCHEMA_A), date.today())
+        hf.write_text(json.dumps(sorted(handled)))
+        res["cost"] += acost
         flag = corrections.STATE / "compared"
         if (msg := comparison(rows, date.today(), flag.exists())):
             report_mod.send(msg)
@@ -458,7 +545,7 @@ def main() -> None:
         last = rows[-1] if rows else ("-", 0, 0)
         summary = (f"{len(res['applied'])} applied, {len(res['rejected'])} rejected, {len(res.get('general', []))} proposed "
                    f"as shared, {len(pro['kept'])} kept, "
-                   f"{len(pro['retried'])} retried, {len(pro['escalated'])} escalated; corrections {last[0]}: "
+                   f"{len(pro['retried'])} retried, {len(pro['escalated'])} escalated, {len(aliases)} aliases; corrections {last[0]}: "
                    f"{last[2]}/{last[1]}; cost ${cost + res['cost'] + pro['cost']:.3f}")
         print(summary)
         kuma.push(PUSH, msg=summary)
@@ -556,6 +643,21 @@ def selftest() -> None:
         assert r["applied"] == ["g1"] and r["general"] == ["g2"] and r["rejected"] == ["g3"], r
         assert "- one\n- wacht 15 s na boarding (les 25 okt 2026, proef g1)\n\n## Keuzes" in store["g-memory/project_flow.md"]
         assert ("g2", "escalated") in calls and sent and "every project" in sent[0]
+        # Aliases from real misses: plain searches only, own words only, guest memos via the server, not their docs.
+        assert add_alias("---\nname: x\ndescription: d\n---\nb", "dev vm") == "---\nname: x\ndescription: d\naliases: dev vm\n---\nb"
+        assert add_alias("---\nname: x\naliases: a, b\n---\n", "c") == "---\nname: x\naliases: a, b, c\n---\n"
+        assert add_alias("---\naliases: a\n---\n", "a") is None and add_alias("no front", "a") is None
+        assert add_alias("---\naliases: " + ", ".join(map(str, range(ALIAS_MAX))) + "\n---\n", "z") is None
+        assert isinstance(alias_file("g-memory/project_flow.md"), Remote) and alias_file("g/docs/x.md") is None
+        assert alias_file("memory/feedback_werk.md") == memo and alias_file("memory/MEMORY.md") is None
+        pairs = [{"query": "Flow Timing", "path": "g-memory/project_flow.md"}, {"query": "PASSENGER_MISMATCH", "path": "g-memory/project_flow.md"},
+                 {"query": "werk afspraken", "path": "memory/feedback_werk.md"}, {"query": "x|y.*", "path": "memory/feedback_werk.md"}]
+        handled = set()
+        got, _ = alias_loop(pairs, handled, lambda b: ([{"id": 0, "answers": True, "alias": "flow timing"},
+                                                         {"id": 1, "answers": True, "alias": "invented words"}], 0.0), day)
+        assert got == ["g-memory/project_flow.md: flow timing"], got
+        assert "aliases: flow timing" in store["g-memory/project_flow.md"] and "aliases" not in memo.read_text()
+        assert len(handled) == 4 and alias_loop(pairs, handled, None, day) == ([], 0.0)  # every pair once
         rows = [("2026-W40", 100, 25), ("2026-W43", 100, 17), ("2026-W44", 100, 10), ("2026-W47", 100, 14)]
         assert comparison(rows, date(2026, 11, 22), False) is None and comparison(rows, date(2026, 11, 29), True) is None
         msg = comparison(rows, date(2026, 11, 29), False)

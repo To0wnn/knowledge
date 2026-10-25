@@ -90,6 +90,7 @@ SECRETS_FILE = Path(os.environ.get("KNOWLEDGE_SECRETS", HOME / ".config/knowledg
 AUDIT = Path(os.environ.get("KNOWLEDGE_AUDIT", HOME / ".local/state/knowledge-server/audit.log"))
 # Searches that found nothing (or only weak meaning hits): the missing memos, shown on the admin page.
 GAPS = AUDIT.with_name("gaps.log")
+GAP_ANSWERS = AUDIT.with_name("gap_answers.jsonl")  # a search that found nothing + the note the same device opened next
 LESSONS = AUDIT.with_name("lessons.json")  # the lesson queue: agents add, the weekly lesson loop on the VM decides
 # A meaning search answered nothing useful when its best score is below WEAK_SCORE, or below DOUBT_SCORE while the
 # best note lacks the question's subject words (lint.query_coverage < MIN_COVERAGE). Calibrated 21 Oct 2026 on 20
@@ -500,8 +501,29 @@ def audit(action: str, rel: str):
         f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {device.get().get('name', '?')} {action} {rel}\n")
 
 
+GAP_WINDOW = 600  # seconds: a note opened this soon after a failed search probably held the answer
+_recent_gaps: dict[str, list[tuple[float, str, str]]] = {}
+
+
+def note_gap_answer(rel: str):
+    """The device opened a note soon after searches that found nothing: keep each (query, note) pair, once. The weekly
+    lesson loop checks the pairs and turns good ones into aliases of that note, so the same words find it next time."""
+    dev = device.get().get("name", "?")
+    gaps = [g for g in _recent_gaps.pop(dev, []) if time.time() - g[0] < GAP_WINDOW]
+    if not gaps or rel.endswith("/MEMORY.md") or is_archive(rel):
+        return
+    try:
+        with GAP_ANSWERS.open("a") as f:
+            for t, tool, q in gaps:
+                f.write(json.dumps({"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "device": dev, "tool": tool, "query": q,
+                                    "path": rel}, ensure_ascii=False) + "\n")
+    except OSError:
+        pass  # a full disk must not break reading
+
+
 def log_gap(tool: str, query: str, score: float | None = None):
     """One line per search that found nothing useful: time, device, tool, best score, query (tab-separated)."""
+    _recent_gaps.setdefault(device.get().get("name", "?"), []).append((time.time(), tool, " ".join(query.split())[:200]))
     try:
         with GAPS.open("a") as f:
             f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')}\t{device.get().get('name', '?')}\t{tool}\t"
@@ -694,6 +716,7 @@ def knowledge_read(path: str, offset: int = 1, limit: int = 600) -> str:
     with line numbers, plus the file version needed by knowledge_write."""
     full, rel = resolve(path)
     data = full.read_bytes()
+    note_gap_answer(rel)
     lines = data.decode("utf-8", errors="replace").splitlines()
     start = max(offset, 1)
     chunk = lines[start - 1:start - 1 + limit]
@@ -1859,6 +1882,18 @@ async def context_route(request: Request):
 async def lessons_route(request: Request):
     """The lesson queue as JSON, for the weekly lesson loop on the VM."""
     return lesson_admin_only() or JSONResponse(read_json(LESSONS, []))
+
+
+@server.custom_route("/gap-answers", methods=["GET"])
+async def gap_answers_route(request: Request):
+    """The (failed search, note opened next) pairs, for the weekly lesson loop on the VM."""
+    if (refused := lesson_admin_only()):
+        return refused
+    try:
+        lines = GAP_ANSWERS.read_text(encoding="utf-8").splitlines()[-2000:]
+    except OSError:
+        lines = []
+    return JSONResponse([json.loads(x) for x in lines if x.strip()])
 
 
 @server.custom_route("/lessons", methods=["POST"])
