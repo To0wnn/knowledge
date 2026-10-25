@@ -109,9 +109,9 @@ kbd { font-family: var(--mono); font-size: 11px; padding: 0 4px; border: 1px sol
 .hits li.day { padding: 10px 8px 2px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
 .hits li button.active { background: var(--hover); }
 .note-tools { display: flex; gap: 6px; margin: 6px 0; }
-pre.diff { max-width: 100%; box-sizing: border-box; background: var(--bg); padding: 10px; border-radius: 6px; overflow-x: auto; font: 12px/1.45 var(--mono); white-space: pre; }
-pre.diff .add { color: var(--g-skill); background: color-mix(in srgb, var(--g-skill) 12%, transparent); display: block; width: max-content; min-width: 100%; }
-pre.diff .del { color: var(--error); background: color-mix(in srgb, var(--error) 12%, transparent); display: block; width: max-content; min-width: 100%; }
+pre.diff { max-width: 100%; box-sizing: border-box; background: var(--bg); padding: 10px; border-radius: 6px; font: 12px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; } /* wrapped: a long line and its marked words are seen at once */
+pre.diff .add { color: var(--g-skill); background: color-mix(in srgb, var(--g-skill) 12%, transparent); display: block; }
+pre.diff .del { color: var(--error); background: color-mix(in srgb, var(--error) 12%, transparent); display: block; }
 pre.diff mark { color: inherit; border-radius: 3px; }
 pre.diff .add mark { background: color-mix(in srgb, var(--g-skill) 32%, transparent); }
 pre.diff .del mark { background: color-mix(in srgb, var(--error) 32%, transparent); text-decoration: line-through; }
