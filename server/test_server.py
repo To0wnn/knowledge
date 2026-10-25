@@ -137,7 +137,7 @@ def main():
            "KNOWLEDGE_TOKENS": str(tokens), "KNOWLEDGE_PLUGIN_SKILLS": str(bundled), "KNOWLEDGE_ADMIN_DIR": str(tmp), "KNOWLEDGE_PROJECTS_DIR": str(tmp / "projects"),
            "KNOWLEDGE_PROXY_SECRET": "proxy-secret", "KNOWLEDGE_ADMINS": "anthony", "KNOWLEDGE_AUDIT": str(tmp / "audit.log"), "KNOWLEDGE_PORT": str(PORT),
            "KNOWLEDGE_BIND": "127.0.0.1", "KNOWLEDGE_RESCAN": "3600",
-           "KNOWLEDGE_GITHUB_API": ghurl, "KNOWLEDGE_GITHUB_RAW": ghurl + "/raw", "KNOWLEDGE_EXTERNAL_SLEEP": "3600",
+           "KNOWLEDGE_GITHUB_API": ghurl, "KNOWLEDGE_GITHUB_RAW": ghurl + "/raw", "KNOWLEDGE_EXTERNAL_SLEEP": "3600", "KNOWLEDGE_INSTANCE": "blue",
            "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}"}
     proc = subprocess.Popen([sys.executable, str(Path(__file__).with_name("server.py"))], env=env)
     try:
@@ -871,6 +871,12 @@ def main():
                 break
             time.sleep(0.5)
         assert res["hits"] and res["hits"][0]["path"].startswith("trade"), res
+        # The proxy's readiness check: ready once the semantic index is there, not while deploy.sh drains this instance.
+        assert http("GET", "/health?ready=1", token=None) == (200, "ok")
+        (tmp / "drain-blue").write_text("")
+        assert http("GET", "/health?ready=1", token=None)[0] == 503 and http("GET", "/health", token=None)[0] == 200
+        (tmp / "drain-blue").unlink()
+        assert http("GET", "/health?ready=1", token=None)[0] == 200
         assert "trade-memory/" in call("knowledge_semantic_search", {"query": "entry timing", "root": "trade-memory"})[1]
         # A weak answer tells the agent, in the result, to add the search words as an alias where it finds the answer.
         weak = call("knowledge_semantic_search", {"query": "zzqx plumbing quantum walrus"})[1]

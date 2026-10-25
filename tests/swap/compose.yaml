@@ -1,0 +1,22 @@
+# Test double of server/compose.yaml for tests/swap/run.sh: the same proxy and haproxy.cfg, fake servers.
+x-server: &server
+  image: python:3.13.16-slim-trixie
+  command: ["python", "-u", "/app/fake_server.py"]
+  volumes:
+    - ./fake_server.py:/app/fake_server.py:ro
+    - ./state:/state
+services:
+  proxy:
+    image: haproxy:3.4.7-alpine
+    container_name: kswap-proxy
+    ports: ["18766:8766"]
+    volumes: ["./haproxy:/usr/local/etc/haproxy:ro"]
+  knowledge:
+    <<: *server
+    container_name: kswap
+    environment: {KNOWLEDGE_INSTANCE: blue}
+  knowledge-green:
+    <<: *server
+    container_name: kswap-green
+    profiles: [deploy]
+    environment: {KNOWLEDGE_INSTANCE: green}

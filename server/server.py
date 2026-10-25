@@ -478,6 +478,16 @@ vec = vectors.Vectors(index)
 _graph_cache: dict[tuple, tuple[int, dict]] = {}
 
 
+INSTANCE = os.environ.get("KNOWLEDGE_INSTANCE", "")  # blue / green behind the proxy (compose.yaml); "" = alone
+
+
+def instance_ready() -> bool:
+    """Loaded and not drained: deploy.sh drains an instance (state/drain-<instance>) before it stops it."""
+    if INSTANCE and (AUDIT.parent / f"drain-{INSTANCE}").exists():
+        return False
+    return bool(getattr(index, "loaded", False)) and vec.matrix is not None
+
+
 def get_graph() -> dict:
     """The graph with communities and insights over what this device may see, rebuilt only after a change
     (index.gen). Built from the visible files only, so names outside the scope never show up in links or insights."""
@@ -1599,6 +1609,10 @@ class BearerAuth:
             return await self.app(scope, receive, send)
         path = scope["path"]
         if path == "/health":
+            # ?ready=1 (the proxy's check): 503 until this instance can serve everything (index and semantic index
+            # loaded) and while it is being drained for a deploy, so the proxy only routes to a ready server.
+            if b"ready=1" in scope.get("query_string", b"") and not instance_ready():
+                return await PlainTextResponse("not ready", status_code=503)(scope, receive, send)
             return await PlainTextResponse("ok")(scope, receive, send)
         if path.startswith("/ui/static/"):
             return await self.app(scope, receive, send)

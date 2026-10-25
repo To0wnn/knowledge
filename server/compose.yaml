@@ -2,57 +2,80 @@
 # NFS-mounted into the container; the server only ever sees these trees. Option B (later): point the volumes
 # at local paths on forge instead (see README).
 # actimeo=1: NFS attribute cache at most 1 s, so edits made natively on the VM show up live (default is up to 60 s).
+x-server: &server
+  build: .
+  image: knowledge-server:local
+  # Local image: tells `docker compose pull` (Ansible docker_update) to skip it instead of failing on
+  # "pull access denied"; `up` builds from the pinned Dockerfile/uv.lock (cached layers, deterministic).
+  pull_policy: build
+  # Hard cap: the embedding model uses ~1 GB; a runaway can never squeeze the other forge services (measured 18 Oct).
+  mem_limit: 3g
+  environment: &env
+    KNOWLEDGE_MEMORY: /data/memory
+    KNOWLEDGE_HOMELAB: /data/homelab
+    KNOWLEDGE_CLAUDE: /data/claude
+    KNOWLEDGE_ANPITEK: /data/anpitek
+    KNOWLEDGE_ANPITEK_MEMORY: /data/anpitek-memory
+    KNOWLEDGE_TRADE: /data/trade
+    KNOWLEDGE_TRADE_MEMORY: /data/trade-memory
+    KNOWLEDGE_ADMIN_DIR: /admin  # tokens.json, users.json, projects.json: managed in the web UI (admin page)
+    KNOWLEDGE_TOKENS: /admin/tokens.json
+    KNOWLEDGE_PROJECTS_DIR: /projects  # projects created in the web UI
+    KNOWLEDGE_ADMINS: ${KNOWLEDGE_ADMINS}  # Authentik usernames with full access; everyone else gets projects in the admin page
+    KNOWLEDGE_SECRETS: /config/secrets.json  # SHA-256 of known secrets (token.py push-secrets), for redaction
+    KNOWLEDGE_AUDIT: /state/audit.log
+    KNOWLEDGE_VECTORS: /state/vectors.npz  # embedding cache: a restart only embeds new text
+    TZ: Europe/Amsterdam  # local dates in source file names, LOG.md and the audit log (forge itself runs UTC)
+    KNOWLEDGE_ALLOWED_HOSTS: ${KNOWLEDGE_ALLOWED_HOSTS}
+    KNOWLEDGE_PROXY_IPS: ${KNOWLEDGE_PROXY_IPS}
+    # A new project or token made by a person (not an admin) is reported here; the bot token is in proxy.env.
+    KNOWLEDGE_MATRIX_URL: ${KNOWLEDGE_MATRIX_URL}
+    KNOWLEDGE_MATRIX_ROOM: ${KNOWLEDGE_MATRIX_ROOM}
+  # KNOWLEDGE_PROXY_SECRET (Vaultwarden KNOWLEDGE_PROXY_SECRET): Traefik sends it with the Authentik user header.
+  # KNOWLEDGE_MATRIX_TOKEN (Vaultwarden MATRIX_BOT_TOKEN): the bot that posts to KNOWLEDGE_MATRIX_ROOM.
+  env_file: /root/docker/knowledge/config/proxy.env
+  volumes:
+    - memory:/data/memory
+    - homelab:/data/homelab
+    - claude:/data/claude
+    - claude_skills:/data/claude/skills
+    - claude_agents:/data/claude/agents
+    - anpitek:/data/anpitek
+    - anpitek_memory:/data/anpitek-memory
+    - trade:/data/trade
+    - trade_memory:/data/trade-memory
+    - /root/docker/knowledge/config:/config:ro
+    - /root/docker/knowledge/state:/state
+    - /root/docker/knowledge/admin:/admin
+    - /root/docker/knowledge/projects:/projects
+
 services:
-  knowledge:
-    build: .
-    image: knowledge-server:local
-    # Local image: tells `docker compose pull` (Ansible docker_update) to skip it instead of failing on
-    # "pull access denied"; `up` builds from the pinned Dockerfile/uv.lock (cached layers, deterministic).
-    pull_policy: build
-    container_name: knowledge
+  # Fixed front door on :8766 (Traefik, Uptime Kuma, the VM and every client keep their address): routes to blue, and
+  # to green only while blue is down. deploy.sh starts green with the new code, waits until it is ready, drains and
+  # renews blue, then stops green: there is always one ready server (zero-downtime deploys, 25 Oct 2026).
+  proxy:
+    image: haproxy:3.4.7-alpine
+    container_name: knowledge-proxy
     restart: always
-    # Hard cap: the embedding model uses ~1 GB; a runaway can never squeeze the other forge services (measured 18 Oct).
-    mem_limit: 3g
     ports:
       - "8766:8766"
-    environment:
-      KNOWLEDGE_MEMORY: /data/memory
-      KNOWLEDGE_HOMELAB: /data/homelab
-      KNOWLEDGE_CLAUDE: /data/claude
-      KNOWLEDGE_ANPITEK: /data/anpitek
-      KNOWLEDGE_ANPITEK_MEMORY: /data/anpitek-memory
-      KNOWLEDGE_TRADE: /data/trade
-      KNOWLEDGE_TRADE_MEMORY: /data/trade-memory
-      KNOWLEDGE_ADMIN_DIR: /admin  # tokens.json, users.json, projects.json: managed in the web UI (admin page)
-      KNOWLEDGE_TOKENS: /admin/tokens.json
-      KNOWLEDGE_PROJECTS_DIR: /projects  # projects created in the web UI
-      KNOWLEDGE_ADMINS: ${KNOWLEDGE_ADMINS}  # Authentik usernames with full access; everyone else gets projects in the admin page
-      KNOWLEDGE_SECRETS: /config/secrets.json  # SHA-256 of known secrets (token.py push-secrets), for redaction
-      KNOWLEDGE_AUDIT: /state/audit.log
-      KNOWLEDGE_VECTORS: /state/vectors.npz  # embedding cache: a restart only embeds new text
-      TZ: Europe/Amsterdam  # local dates in source file names, LOG.md and the audit log (forge itself runs UTC)
-      KNOWLEDGE_ALLOWED_HOSTS: ${KNOWLEDGE_ALLOWED_HOSTS}
-      KNOWLEDGE_PROXY_IPS: ${KNOWLEDGE_PROXY_IPS}
-      # A new project or token made by a person (not an admin) is reported here; the bot token is in proxy.env.
-      KNOWLEDGE_MATRIX_URL: ${KNOWLEDGE_MATRIX_URL}
-      KNOWLEDGE_MATRIX_ROOM: ${KNOWLEDGE_MATRIX_ROOM}
-    # KNOWLEDGE_PROXY_SECRET (Vaultwarden KNOWLEDGE_PROXY_SECRET): Traefik sends it with the Authentik user header.
-    # KNOWLEDGE_MATRIX_TOKEN (Vaultwarden MATRIX_BOT_TOKEN): the bot that posts to KNOWLEDGE_MATRIX_ROOM.
-    env_file: /root/docker/knowledge/config/proxy.env
     volumes:
-      - memory:/data/memory
-      - homelab:/data/homelab
-      - claude:/data/claude
-      - claude_skills:/data/claude/skills
-      - claude_agents:/data/claude/agents
-      - anpitek:/data/anpitek
-      - anpitek_memory:/data/anpitek-memory
-      - trade:/data/trade
-      - trade_memory:/data/trade-memory
-      - /root/docker/knowledge/config:/config:ro
-      - /root/docker/knowledge/state:/state
-      - /root/docker/knowledge/admin:/admin
-      - /root/docker/knowledge/projects:/projects
+      - ./haproxy:/usr/local/etc/haproxy:ro  # the folder, not the file: rsync replaces the file and a reload must see it
+  knowledge:  # blue: the one that normally serves
+    <<: *server
+    container_name: knowledge
+    restart: always
+    environment:
+      <<: *env
+      KNOWLEDGE_INSTANCE: blue
+  knowledge-green:  # only during a deploy (profile: a plain `compose up` never starts it)
+    <<: *server
+    container_name: knowledge-green
+    restart: "no"
+    profiles: [deploy]
+    environment:
+      <<: *env
+      KNOWLEDGE_INSTANCE: green
 
 x-nfs: &nfs
   driver: local
