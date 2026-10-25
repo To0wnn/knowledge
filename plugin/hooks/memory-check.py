@@ -6,6 +6,10 @@ concerns this file; for a new memo, also list existing memos with a similar mean
 Advisory only: always exits 0, prints {"hookSpecificOutput": {"additionalContext": ...}} when there is something to
 say, and stays silent (and fast) for every other file. Standard library only; never breaks a session.
 
+A project doc (Markdown in ~/homelab top level, ~/anpitek or ~/trade_bot) whose frontmatter has no topic: that is a
+heading of its project's MEMORY.md gets a hint with the headings to choose from: the server places docs on that island
+and its lint lists docs without one (36 trade docs piled up unseen before 25 Oct 2026). A hint, never a block.
+
 With --pre (PreToolUse Write): a NEW memo that misses its frontmatter or ## Stand / ## Keuzes (house rule 2) is
 refused before it is written, like the server refuses it; existing memos and all other files pass.
 """
@@ -24,6 +28,10 @@ TOKEN = Path.home() / ".config/knowledge-server/report.token"  # read-only devic
 # Claude Code memory dir -> knowledge server root and project (the semantic search filters on project)
 CC = lambda folder: re.sub(r"[^A-Za-z0-9]", "-", str(Path.home() / folder))  # Claude Code's memory folder name
 ROOTS = {CC("homelab"): ("memory", "homelab"), CC("anpitek"): ("anpitek-memory", "anpitek"), CC("trade_bot"): ("trade-memory", "trade")}
+# Project folder -> its Claude Code memory dir; homelab docs are only the top-level .md files (lint.py, NOT_DOCS)
+DOCS = {Path.home() / "homelab": CC("homelab"), Path.home() / "anpitek": CC("anpitek"), Path.home() / "trade_bot": CC("trade_bot")}
+NOT_PLACED = {"CLAUDE.md", "AGENTS.md", "GEMINI.md"}  # instructions, not docs (server.py lint_all)
+SKIP_DIRS = {"archief", "archive", "old", "history", "node_modules", "venv", "site-packages"}  # server ARCHIVE_DIRS + code
 SIMILAR = 0.72  # same threshold as the server (calibrated 18 Oct 2026)
 
 
@@ -86,9 +94,45 @@ def pre_check(hook: dict) -> str:
             "MCP tool knowledge_new_memo, which also adds the index line.") if lacks else ""
 
 
+def doc_of(path: str) -> Path | None:
+    """The memory dir of the project whose doc this is, or None (not a doc the server places on a topic)."""
+    p = Path(path)
+    if p.suffix != ".md" or p.name in NOT_PLACED:
+        return None
+    for root, cc in DOCS.items():
+        try:
+            parts = p.relative_to(root).parts
+        except ValueError:
+            continue
+        if root.name == "homelab" and (len(parts) != 1 or p.name == "README.md"):
+            return None
+        if any(x in SKIP_DIRS or x.startswith((".", "archief-", "archive-")) for x in parts[:-1]):
+            return None
+        return PROJECTS / cc / "memory"
+    return None
+
+
+def topic_note(path: str, mem_dir: Path) -> str:
+    """A hint when the doc's topic: is missing or no heading of its project's MEMORY.md; "" when it is fine."""
+    text = Path(path).read_text(errors="replace")
+    m = re.match(r"\A---\r?\n(.*?)\r?\n---", text, re.S)
+    topic = (re.search(r"^topic:\s*(.+?)\s*$", m.group(1), re.M).group(1).strip('"') if m and re.search(r"^topic:", m.group(1), re.M) else "")
+    headings = re.findall(r"^## (.+?)\s*$", (mem_dir / "MEMORY.md").read_text(errors="replace"), re.M) if (mem_dir / "MEMORY.md").exists() else []
+    if not headings or topic in headings:
+        return ""
+    what = f"Its topic {topic!r} is no heading" if topic else "It has no topic: line, which must be a heading"
+    return (f"{what} of the project's MEMORY.md, so the knowledge graph cannot place this doc. Add at the very top: "
+            f"'---' / 'topic: <one of: {' | '.join(headings)}>' / '---' (or add the topic line to frontmatter it already has).")
+
+
 def main() -> None:
     hook = json.load(sys.stdin)
     path = (hook.get("tool_input") or {}).get("file_path", "")
+    if (mem_dir := doc_of(path)) is not None:
+        if (note := topic_note(path, mem_dir)):
+            print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext":
+                  "Knowledge house rules, about the doc you just wrote:\n- " + note}}))
+        return
     found = memo_of(path)
     if not found:
         return
@@ -120,6 +164,22 @@ if __name__ == "__main__":
         assert pre_check({"tool_input": {"file_path": new, "content": good}}) == ""
         assert pre_check({"tool_input": {"file_path": str(PROJECTS / CC("homelab") / "memory/MEMORY.md"), "content": "x"}}) == ""
         assert pre_check({"tool_input": {"file_path": str(Path.home() / "homelab/diensten.md"), "content": "x"}}) == ""
+        tb = Path.home() / "trade_bot"
+        assert doc_of(str(tb / "OPUS_REVIEW_X.md")) == PROJECTS / CC("trade_bot") / "memory"
+        for not_doc in (tb / "old/README.md", tb / "venv/lib/x.md", tb / "CLAUDE.md", tb / "bot.py", tb / ".github/x.md",
+                        Path.home() / "homelab/README.md", Path.home() / "homelab/ansible/x.md", Path.home() / "other/x.md"):
+            assert doc_of(str(not_doc)) is None, not_doc
+        assert doc_of(str(Path.home() / "homelab/diensten.md")) == PROJECTS / CC("homelab") / "memory"
+        import tempfile
+        with tempfile.TemporaryDirectory() as t:
+            (Path(t) / "MEMORY.md").write_text("# I\n## Bot en strategie\n## Reviews en adviezen\n")
+            d = Path(t) / "d.md"
+            for text, ok in (("# no front\n", False), ("---\ntopic: Nope\n---\n", False), ("---\ntopic: Bot en strategie\n---\nx", True),
+                             ('---\ntitle: x\ntopic: "Reviews en adviezen"\n---\n', True)):
+                d.write_text(text)
+                assert (topic_note(str(d), Path(t)) == "") == ok, (text, topic_note(str(d), Path(t)))
+            d.write_text("# x\n")
+            assert "Bot en strategie | Reviews en adviezen" in topic_note(str(d), Path(t))
         print("ok")
         sys.exit(0)
     try:
