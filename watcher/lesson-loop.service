@@ -1,0 +1,9 @@
+[Unit]
+Description=Verify the queued lessons and apply them on probation (weekly, bare claude -p passes)
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/knowledge/local.env
+ExecStart=/usr/bin/python3 %h/knowledge/watcher/lesson-loop.py
+TimeoutStartSec=2h

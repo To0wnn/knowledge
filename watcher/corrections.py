@@ -139,6 +139,21 @@ def selftest() -> None:
     print("selftest ok")
 
 
+def update() -> tuple[list[dict], dict, list, float]:
+    """Label the new prompts and refresh weekly.json: (prompts, labels, weekly rows, cost of this run)."""
+    STATE.mkdir(parents=True, exist_ok=True)
+    items = [p for f in sorted(glob.glob(TRANSCRIPTS)) for p in prompts(open(f, errors="replace"))]
+    lf = STATE / "labels.json"
+    labels = json.loads(lf.read_text()) if lf.exists() else {}
+    try:
+        cost = label_all(items, labels)
+    finally:
+        lf.write_text(json.dumps(labels))  # keep what was paid for, also when a batch fails
+    rows = weekly(items, labels)
+    (STATE / "weekly.json").write_text(json.dumps(rows))
+    return items, labels, rows, cost
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--calibrate")
@@ -149,15 +164,7 @@ def main() -> None:
     STATE.mkdir(parents=True, exist_ok=True)
     if a.calibrate:
         return calibrate(a.calibrate)
-    items = [p for f in sorted(glob.glob(TRANSCRIPTS)) for p in prompts(open(f, errors="replace"))]
-    lf = STATE / "labels.json"
-    labels = json.loads(lf.read_text()) if lf.exists() else {}
-    try:
-        cost = label_all(items, labels)
-    finally:
-        lf.write_text(json.dumps(labels))  # keep what was paid for, also when a batch fails
-    rows = weekly(items, labels)
-    (STATE / "weekly.json").write_text(json.dumps(rows))
+    items, labels, rows, cost = update()
     for w, n, k in rows:
         print(f"{w}  {k:4d}/{n:<5d} {100 * k / n:5.1f} per 100")
     print(f"cost this run ${cost:.3f}", file=sys.stderr)

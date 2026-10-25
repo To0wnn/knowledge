@@ -1,0 +1,9 @@
+[Unit]
+Description=Weekly lesson loop (Sunday night, after the memo check, before Monday's lint report)
+
+[Timer]
+OnCalendar=Sun *-*-* 04:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
