@@ -19,12 +19,15 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+import kuma  # noqa: E402  (next to this file)
+
 SERVER = "https://knowledge.to0wnn.com"
 MATRIX = os.environ["KNOWLEDGE_MATRIX_URL"]  # from local.env via the unit (EnvironmentFile); missing = fail loudly
 ROOM = os.environ["KNOWLEDGE_MATRIX_ROOM"]
 TOKEN = Path.home() / ".config/knowledge-server/report.token"
 STATE = Path.home() / ".local/state/knowledge-lint-report.json"
 SHOW = 20
+PUSH = "UPTIME_KUMA_PUSH_KNOWLEDGE_LINT_REPORT"  # vault name of the heartbeat token (Uptime Kuma "Knowledge lint report")
 DUE = 5  # memos to check per week
 COMPOSE = Path(__file__).resolve().parent.parent / "server/compose.yaml"  # the memory dirs the server serves
 PROJECTS_DIR = Path.home() / ".claude/projects"
@@ -101,6 +104,8 @@ def main() -> None:
         STATE.parent.mkdir(parents=True, exist_ok=True)
         STATE.write_text(json.dumps({"findings": sorted(current), "at": time.strftime("%Y-%m-%d %H:%M")}, indent=1))
     print(f"{len(current)} open, {len(new)} new, {resolved} resolved")
+    if "--dry-run" not in sys.argv:
+        kuma.push(PUSH)
 
 
 if __name__ == "__main__":
@@ -129,4 +134,5 @@ if __name__ == "__main__":
         except Exception as e:  # fail loudly: a silent weekly job is worse than a noisy one
             if "--dry-run" not in sys.argv:
                 send(f"Knowledge lint report failed: {type(e).__name__}: {e}")
+                kuma.push(PUSH, up=False, msg=f"{type(e).__name__}: {e}")
             raise

@@ -30,11 +30,14 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
+import kuma  # noqa: E402  (next to this file)
+
 HOME = Path.home()
 PREFIX = os.environ.get("KNOWLEDGE_VM_CC_PREFIX", "-home-" + HOME.name)
 NOTE = HOME / ".claude/projects" / f"{PREFIX}-homelab" / "memory/rapporten/agent-gebruik.md"
 STATE = HOME / ".local/state/agent-report.json"
 WEEK = 7 * 86400
+PUSH = "UPTIME_KUMA_PUSH_AGENT_REPORT"  # vault name of the heartbeat token (Uptime Kuma "Agent report")
 
 
 def ts(value) -> float:
@@ -196,6 +199,21 @@ def codex_models(cache: Path = HOME / ".codex/models_cache.json") -> list[str]:
     return sorted(m["slug"] for m in data.get("models", []) if m.get("visibility") == "list")
 
 
+def read_models(readers) -> tuple[dict, list[str]]:
+    """Each CLI's model list; one that cannot be read (or is empty) is an action, never silence, and does not hide
+    the others."""
+    models, unreadable = {}, []
+    for cli, read in readers:
+        try:
+            models[cli] = read()
+            if not models[cli]:
+                raise ValueError("empty list")
+        except Exception as e:
+            models[cli] = []
+            unreadable.append(f"{cli}: model list could not be read ({type(e).__name__}: {e}); new or retired models go unseen")
+    return models, unreadable
+
+
 def configured() -> dict:
     """The model each CLI is set to (None = its default)."""
     out = {"claude": json.load(open(HOME / ".claude/settings.json")).get("model")}
@@ -287,17 +305,12 @@ def main() -> None:
     agy_model = next((i for i, label in labels.items() if label == config.get("agy")), config.get("agy") or "?")
     stats = {"claude": claude(HOME / ".claude/projects", since), "codex": codex(HOME / ".codex/sessions", since),
              "agy": agy(HOME / ".gemini/antigravity-cli/brain", since, agy_model)}
-    models = {}
-    for cli, read in (("claude", claude_models), ("codex", codex_models), ("agy", lambda: sorted(labels))):
-        try:
-            models[cli] = read()
-        except Exception as e:  # one unreadable list must not hide the others; it shows in the note
-            print(f"{cli} models: {type(e).__name__}: {e}", file=sys.stderr)
-            models[cli] = []
+    models, unreadable = read_models((("claude", claude_models), ("codex", codex_models), ("agy", lambda: sorted(labels))))
     state = json.loads(STATE.read_text()) if STATE.exists() else {}
-    actions = changes(state.get("models", {}), {c: m for c, m in models.items() if m}) + missing_config(models, config, labels)
+    actions = (unreadable + changes(state.get("models", {}), {c: m for c, m in models.items() if m})
+               + missing_config(models, config, labels))
     text = note(stats, state.get("stats", {}), models, config, actions, time.strftime("%Y-%m-%d"))
-    message = ("Agent models changed, test before using:\n" + "\n".join(f"- {a}" for a in actions)
+    message = ("Agent report needs action (a changed model: test it before using it):\n" + "\n".join(f"- {a}" for a in actions)
                + "\nDetails: rapporten/agent-gebruik.md in the homelab memory") if actions else ""
     if "--dry-run" in sys.argv:
         print(text, message, sep="\n")
@@ -310,6 +323,7 @@ def main() -> None:
     STATE.write_text(json.dumps({"stats": stats, "models": {c: m for c, m in models.items() if m}
                                  or state.get("models", {}), "at": time.strftime("%Y-%m-%d %H:%M")}, indent=1))
     print(f"note written, {len(actions)} action(s)")
+    kuma.push(PUSH, msg=f"{len(actions)} action(s)")
 
 
 def selftest() -> None:
@@ -361,6 +375,10 @@ def selftest() -> None:
         # Codex model list: only visible models.
         (t / "mc.json").write_text(json.dumps({"models": [{"slug": "a", "visibility": "list"}, {"slug": "h", "visibility": "hide"}]}))
         assert codex_models(t / "mc.json") == ["a"]
+    def broken():
+        raise OSError("no cache")
+    m, bad = read_models((("codex", lambda: ["a"]), ("agy", broken), ("claude", lambda: [])))
+    assert m == {"codex": ["a"], "agy": [], "claude": []} and len(bad) == 2 and bad[0].startswith("agy: model list could not be read"), bad
     assert changes({}, {"codex": ["a"]}) == []  # first run: a baseline, no alarm
     assert changes({"codex": ["a", "b"]}, {"codex": ["a", "c"]}) == ["codex: new model c", "codex: model gone b"]
     assert missing_config({"codex": ["a"]}, {"codex": "b", "agy": "L"}, {"id": "L"}) == ["codex: configured model b is not offered any more"]
@@ -379,4 +397,5 @@ if __name__ == "__main__":
         except Exception as e:  # fail loudly: a silent weekly job is worse than a noisy one
             if "--dry-run" not in sys.argv:
                 send(f"Agent report failed: {type(e).__name__}: {e}")
+                kuma.push(PUSH, up=False, msg=f"{type(e).__name__}: {e}")
             raise
