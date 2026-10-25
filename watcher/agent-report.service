@@ -1,0 +1,8 @@
+[Unit]
+Description=Weekly agent usage and model report (knowledge note + Matrix on model changes)
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/knowledge/local.env
+ExecStart=/usr/bin/python3 %h/knowledge/watcher/agent-report.py

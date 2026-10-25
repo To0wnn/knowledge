@@ -1,0 +1,9 @@
+[Unit]
+Description=Weekly agent report (Monday morning, after the lint report)
+
+[Timer]
+OnCalendar=Mon *-*-* 08:05
+Persistent=true
+
+[Install]
+WantedBy=timers.target
