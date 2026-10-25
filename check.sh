@@ -3,4 +3,4 @@
 set -eu
 cd "$(dirname "$0")/server"
 PATH="$HOME/.local/bin:$PATH"  # uv lives there; shells started at boot may lack it
-uv run --quiet graph.py && uv run --quiet lint.py && uv run --quiet test_server.py
+uv run --quiet graph.py && uv run --quiet lint.py && uv run --quiet external_skills.py && uv run --quiet test_server.py

@@ -20,6 +20,10 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   lint tab and an admin page for tokens, people and projects. Light or dark, your pick.
 - **Graph:** notes as nodes, links as lines, one island per topic. A line's thickness and pull follow how related two
   notes are (direct link, shared source, shared neighbours, same type); weak links between topics show on hover.
+- **External skills:** an admin adds a skill folder from GitHub by its link; it is pinned to a commit, taken in only as
+  plain text (no tools, hooks or load-time commands, a licence that allows copying) and shared like your own skills.
+  A weekly check takes small updates in by itself and holds big or unsafe ones for the admin; local additions below
+  `<!-- local -->` survive updates.
 - **Archive:** folders such as `archief/`, `archive/`, `old/` or `history/` are skipped by search unless asked for.
 - **Offline copy:** a device with a write token keeps a copy of the memory and syncs only differences; when the server
   is down, the agent still gets a cached start context.

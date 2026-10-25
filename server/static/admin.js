@@ -161,6 +161,34 @@ function renderProjects() {
   }));
 }
 
+// External skills: one row per skill from GitHub, with its state and the actions the server allows.
+function renderExternal() {
+  const rows = Object.entries(state.external || {});
+  $("external").replaceChildren(...(rows.length ? rows.map(([name, x]) => {
+    const tr = el("tr"), src = el("a", "mono", `${x.owner}/${x.repo}/${x.path}`), act = el("td", "actions");
+    src.href = x.url; src.rel = "noopener noreferrer"; src.target = "_blank";
+    const status = el("td", x.status === "ok" ? "" : "alert", x.status + (x.note ? `: ${x.note}` : ""));
+    const button = (label, action, cls) => { const b = el("button", cls || "ghost", label); b.type = "button";
+      b.setAttribute("aria-label", `${label} ${name}`);
+      b.onclick = () => (action !== "remove" || confirm(`Remove the skill ${name} from every device?`)) &&
+        run(() => api("/ui/api/admin/external", { name, action }), b);
+      return b; };
+    act.append(button("Check now", "check"), ...(x.status === "waiting" ? [button("Approve", "approve", "")] : []), button("Remove", "remove", "ghost danger"));
+    const srcTd = el("td"); srcTd.append(src);
+    tr.append(el("td", "", name), srcTd, el("td", "mono", x.commit.slice(0, 7) + (x.pending ? ` → ${x.pending.slice(0, 7)}` : "")),
+      el("td", "", x.licence), status, el("td", "", ago(x.checked)), act);
+    return tr;
+  }) : [(() => { const tr = el("tr"), td = el("td", "muted", "No external skills yet."); td.colSpan = 7; tr.append(td); return tr; })()]));
+  const waiting = rows.filter(([, x]) => x.status !== "ok").length;
+  $("n-external").textContent = waiting ? `${waiting} !` : rows.length || "";
+  $("n-external").classList.toggle("alert", !!waiting);
+}
+$("external-form").onsubmit = (e) => {
+  e.preventDefault();
+  run(() => api("/ui/api/admin/external", { url: $("x-url").value.trim() }), e.target.querySelector("button"))
+    .then((ok) => ok && e.target.reset());
+};
+
 // Settings: a number field per server setting (range and meaning from the server), plus the extra admins.
 function renderSettings() {
   const info = state.setting_info, cur = state.settings;
@@ -204,7 +232,7 @@ async function load() {
   if (!state.admin) { // a person: own tokens and projects, within the limits the admin set
     const l = state.limits;
     document.querySelector(".brand").textContent = `Knowledge · ${state.user}`;
-    for (const sec of ["people", "settings", "system"]) document.querySelector(`[data-sec=${sec}]`).hidden = true;
+    for (const sec of ["people", "external", "settings", "system"]) document.querySelector(`[data-sec=${sec}]`).hidden = true;
     for (const id of ["t-watch", "t-skills"]) $(id).closest("label").style.display = "none"; // .check sets display, which beats [hidden]
     document.querySelectorAll(".admin-only").forEach((x) => (x.hidden = true));
     $("t-roots").previousElementSibling.textContent = "Projects (tick at least one)";
@@ -214,7 +242,7 @@ async function load() {
     $("n-tokens").textContent = state.tokens.length; $("n-projects").textContent = state.projects.length;
     return;
   }
-  renderTokens(); renderUsers(); renderProjects(); renderSystem();
+  renderTokens(); renderUsers(); renderProjects(); renderSystem(); renderExternal();
   if (!loaded) { loaded = true; applyKind(); } // later reloads keep what is being filled in
   $("n-tokens").textContent = state.tokens.length; $("n-projects").textContent = state.projects.length;
   const users = Object.values(state.users), waiting = users.filter((u) => !Object.keys(u.projects || {}).length).length; // asks for access

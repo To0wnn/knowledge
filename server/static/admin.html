@@ -20,6 +20,7 @@
     <button role="tab" data-sec="tokens" aria-controls="sec-tokens">Tokens <span class="badge" id="n-tokens"></span></button>
     <button role="tab" data-sec="people" aria-controls="sec-people">People <span class="badge" id="n-people"></span></button>
     <button role="tab" data-sec="projects" aria-controls="sec-projects">Projects <span class="badge" id="n-projects"></span></button>
+    <button role="tab" data-sec="external" aria-controls="sec-external">External skills <span class="badge" id="n-external"></span></button>
     <button role="tab" data-sec="settings" aria-controls="sec-settings">Settings</button>
     <button role="tab" data-sec="system" aria-controls="sec-system">System</button>
   </nav>
@@ -110,6 +111,20 @@
       <button type="submit">Create</button>
     </form>
   </section>
+  <section id="sec-external" role="tabpanel" aria-labelledby="h-external" hidden>
+    <h2 id="h-external">External skills</h2>
+    <p class="muted">Skills from GitHub, shared like your own skills with every device and agent, pinned to a commit. Only plain text is taken in: Markdown or text files (plus Codex's <code>agents/openai.yaml</code> with only its interface), no <code>allowed-tools</code>, hooks or declared tools, no command that runs when the skill loads, a licence that allows copying. Every week each skill is compared with GitHub: an update that passes the same checks goes in by itself, unless it rewrites more than 30% of SKILL.md; then it waits for Approve and you get a Matrix message. Your own additions go below a line <code>&lt;!-- local --&gt;</code> in SKILL.md and survive updates.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Skill</th><th>Source</th><th>Commit</th><th>Licence</th><th>Status</th><th>Checked</th><th></th></tr></thead>
+      <tbody id="external"></tbody>
+    </table></div>
+    <form id="external-form" class="admin-form inline">
+      <label for="x-url">GitHub link of the skill folder</label>
+      <input id="x-url" required type="url" pattern="https://github\.com/.+/(tree|blob)/.+" placeholder="https://github.com/owner/repo/tree/main/skills/name">
+      <button type="submit">Add</button>
+    </form>
+  </section>
+
   <section id="sec-settings" role="tabpanel" aria-labelledby="h-settings" hidden>
     <h2 id="h-settings">Settings</h2>
     <p class="muted">Policy the server applies at once, stored in <code>/admin/settings.json</code>. Infrastructure (paths, hosts, proxy IPs, port) is set in the repo's compose.yaml and local.env and shown below.</p>

@@ -37,6 +37,7 @@ from mcp.server.mcpserver.exceptions import ToolError  # anticipated refusals: t
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 import extract
+import external_skills as ext
 import fetch
 import graph as kb_graph
 from graph import MD_ONLY, PROJECTS
@@ -2090,6 +2091,9 @@ def system_state() -> dict:
             {"name": "Session logs", "what": "SessionEnd/PreCompact hooks of Claude Code, Stop of agy, SessionEnd of Codex", "last": used("vm-sessions"), "detail": "last call of the vm-sessions token (VM)"},
             {"name": "History", "what": f"keeps up to {HISTORY_KEEP} versions per file", "last": None,
              "detail": f"{len(HISTORY_FAILED)} failed writes" if HISTORY_FAILED else "no failed writes"},
+            {"name": "External skills", "what": f"compares each skill from GitHub with its source every {EXTERNAL_EVERY // 86400} days",
+             "last": BACKGROUND["external"]["at"] if "external" in BACKGROUND else None,
+             "detail": (BACKGROUND["external"].get("error") or BACKGROUND["external"]["detail"]) if "external" in BACKGROUND else "not run since this start"},
             *([{"name": "Settings", "what": "settings.json", "last": BACKGROUND["settings"]["at"], "detail": BACKGROUND["settings"]["error"]}] if "settings" in BACKGROUND else []),
             *([{"name": "Matrix", "what": "tells the admin about projects and tokens people made", "last": BACKGROUND["matrix"]["at"],
                 "detail": BACKGROUND["matrix"].get("error") or BACKGROUND["matrix"]["detail"]}] if "matrix" in BACKGROUND else []),
@@ -2124,6 +2128,159 @@ async def ui_admin_settings(request: Request, body: dict):
     return JSONResponse({"ok": True, "settings": current_settings()})
 
 
+# ---------------------------------------------------------------- skills from GitHub (admin tab "External skills")
+# An admin adds a skill folder by its GitHub link; it lands in claude/skills/<name>/ like any shared skill (every device
+# with the skills flag, every agent), pinned to a commit. A background check takes updates in by itself when they pass
+# the same checks and change little; otherwise the skill stays as it is and the admin gets one Matrix message.
+EXTERNAL_FILE = ADMIN_DIR / "external_skills.json"
+EXTERNAL_EVERY = 7 * 86400  # how often each skill is compared with GitHub
+external_lock = threading.Lock()
+
+
+def external_write(rel: str, text: str):
+    full, rel = resolve(rel, scoped=False)
+    current = full.read_bytes() if full.exists() else None
+    if current == text.encode():
+        return
+    if not replace_if_unchanged(full, current, text.encode()):
+        raise ext.SkillError(f"{rel} changed while writing; try again")
+    index.refresh(rel)  # the index keeps the old version in History
+
+
+def external_delete(rel: str):
+    full, rel = resolve(rel, scoped=False)
+    if full.is_file():
+        keep = AUDIT.parent / "deleted" / f"{time.strftime('%Y%m%d-%H%M%S')}_{rel.replace('/', '__')}"
+        keep.parent.mkdir(parents=True, exist_ok=True)
+        keep.write_bytes(full.read_bytes())
+        full.unlink()
+        index.refresh(rel)
+
+
+def external_install(name: str, files: dict[str, str], old_files: list[str]) -> list[str]:
+    """Write the upstream files (our section of SKILL.md kept) and drop files upstream removed."""
+    base = f"claude/skills/{name}"
+    skill_path, _ = resolve(f"{base}/SKILL.md", scoped=False)
+    current = skill_path.read_text(encoding="utf-8") if skill_path.exists() else None
+    for rel, text in files.items():
+        text = ext.merge_local(text, current) if rel == "SKILL.md" else text
+        if rel == "SKILL.md":
+            refuse_broken_skill(f"{base}/SKILL.md", text)
+        external_write(f"{base}/{rel}", text)
+    for rel in old_files:
+        if rel not in files:
+            external_delete(f"{base}/{rel}")
+    return sorted(files)
+
+
+def external_add(url: str) -> dict:
+    src = ext.parse_source(url)
+    commit = ext.latest_commit(src)
+    lic, files = ext.licence(src), ext.fetch_files(src, commit)
+    if (problems := ext.check(files, lic)):
+        raise ext.SkillError("not taken in: " + "; ".join(problems))
+    name = ext.frontmatter(files["SKILL.md"])["name"]
+    with external_lock:
+        reg = dict(read_json(EXTERNAL_FILE, {}))
+        if name in reg or (ROOTS["claude"] / "skills" / name).exists() or (PLUGIN_SKILLS / name).is_dir():
+            raise ext.SkillError(f"a skill named {name} already exists")
+        now = time.time()
+        reg[name] = {**src, "url": url, "commit": commit, "licence": lic, "added": now, "checked": now,
+                     "status": "ok", "note": "", "files": external_install(name, files, [])}
+        write_json(EXTERNAL_FILE, reg)
+    audit("external-add", f"claude/skills/{name} {url}@{commit[:7]}")
+    return reg[name]
+
+
+def external_check(name: str, approve: bool = False) -> dict:
+    """Compare one skill with GitHub and take the update in when it may; approve=True takes a waiting one in."""
+    with external_lock:
+        reg = dict(read_json(EXTERNAL_FILE, {}))
+        e = dict(reg[name])
+        src = {k: e[k] for k in ("owner", "repo", "ref", "path")}
+        try:
+            target = e["pending"] if approve and e.get("pending") else ext.latest_commit(src)
+            if target != e["commit"]:
+                lic, files = ext.licence(src), ext.fetch_files(src, target)
+                skill_path, _ = resolve(f"claude/skills/{name}/SKILL.md", scoped=False)
+                current = skill_path.read_text(encoding="utf-8") if skill_path.exists() else ""
+                ratio = ext.change_ratio(ext.upstream_part(current), ext.upstream_part(files.get("SKILL.md") or ""))
+                if (problems := ext.check(files, lic)):
+                    if e.get("pending") != target:
+                        notify(f"Knowledge: update of external skill {name} refused ({target[:7]}): {'; '.join(problems)[:400]}. "
+                               f"The old version stays. Admin page, External skills.")
+                    e.update(status="blocked", pending=target, note="; ".join(problems)[:500])
+                elif ratio > ext.BIG_CHANGE and not approve:
+                    if e.get("pending") != target:
+                        notify(f"Knowledge: external skill {name} has an update that rewrites {ratio:.0%} of SKILL.md "
+                               f"({e['url']}, {target[:7]}). It waits for you: admin page, External skills, Approve.")
+                    e.update(status="waiting", pending=target, note=f"{ratio:.0%} of SKILL.md changed")
+                else:
+                    e["files"] = external_install(name, files, e.get("files", []))
+                    e.update(status="ok", pending=None, licence=lic, note=f"updated {e['commit'][:7]} -> {target[:7]} ({ratio:.0%} changed)",
+                             commit=target, updated=time.time())
+                    audit("external-update", f"claude/skills/{name} {target[:7]}")
+            elif e["status"] in ("error",):
+                e.update(status="ok", note="")
+        except ext.SkillError as err:
+            if e.get("status") != "error":
+                notify(f"Knowledge: checking external skill {name} failed: {err}")
+            e.update(status="error", note=str(err)[:500])
+        e["checked"] = time.time()
+        reg[name] = e
+        write_json(EXTERNAL_FILE, reg)
+        return e
+
+
+def external_remove(name: str):
+    with external_lock:
+        reg = dict(read_json(EXTERNAL_FILE, {}))
+        e = reg.pop(name)
+        for rel in e.get("files", []):
+            external_delete(f"claude/skills/{name}/{rel}")
+        folder, _ = resolve(f"claude/skills/{name}", scoped=False)
+        if folder.is_dir() and not any(folder.iterdir()):
+            folder.rmdir()
+        write_json(EXTERNAL_FILE, reg)
+    audit("external-remove", f"claude/skills/{name}")
+
+
+def external_loop():
+    """Every few hours: check the skills whose last check is older than EXTERNAL_EVERY."""
+    while True:
+        try:
+            due = [n for n, e in read_json(EXTERNAL_FILE, {}).items() if time.time() - e.get("checked", 0) >= EXTERNAL_EVERY]
+            for n in due:
+                external_check(n)
+            BACKGROUND["external"] = {"at": time.time(), "detail": f"{len(due)} checked"}
+        except Exception as e:  # never kill the thread; show it on the admin page and in Matrix
+            BACKGROUND["external"] = {"at": time.time(), "error": str(e)}
+            notify(f"Knowledge: the external skills check crashed: {e}")
+        time.sleep(float(os.environ.get("KNOWLEDGE_EXTERNAL_SLEEP", 6 * 3600)))
+
+
+@server.custom_route("/ui/api/admin/external", methods=["POST"])
+@admin_only
+async def ui_admin_external(request: Request, body: dict):
+    """{url} adds a skill; {name, action: check | approve | remove} acts on one."""
+    try:
+        if body.get("url"):
+            await asyncio.to_thread(external_add, str(body["url"]))
+        else:
+            name, action = str(body["name"]), body.get("action")
+            if name not in read_json(EXTERNAL_FILE, {}):
+                raise ValueError(f"no external skill {name}")
+            if action in ("check", "approve"):
+                await asyncio.to_thread(external_check, name, action == "approve")
+            elif action == "remove":
+                await asyncio.to_thread(external_remove, name)
+            else:
+                raise ValueError("action must be check, approve or remove")
+    except ext.SkillError as e:
+        raise ValueError(str(e)) from None
+    return JSONResponse({"ok": True, "external": read_json(EXTERNAL_FILE, {})})
+
+
 @server.custom_route("/ui/api/admin", methods=["GET"])
 @signed_in
 async def ui_admin_state(request: Request, _):
@@ -2151,6 +2308,7 @@ async def ui_admin_state(request: Request, _):
         "settings": current_settings(), "setting_info": {k: {"min": lo, "max": hi, "label": label, "float": kind is float}
                                                          for k, (kind, lo, hi, label) in SETTINGS.items()},
         "system": await asyncio.to_thread(system_state),
+        "external": read_json(EXTERNAL_FILE, {}),
     })
 
 
@@ -2634,6 +2792,7 @@ if __name__ == "__main__":
     print(f"index: {len(index.files)} files in {time.time() - t0:.1f}s", flush=True)
     threading.Thread(target=index.loop, daemon=True).start()
     threading.Thread(target=vec.loop, daemon=True).start()
+    threading.Thread(target=external_loop, daemon=True).start()
     uvicorn.run(build_app(), host=os.environ.get("KNOWLEDGE_BIND", "0.0.0.0"), port=int(os.environ.get("KNOWLEDGE_PORT", "8766")),
                 log_level="warning", proxy_headers=True, forwarded_allow_ips=os.environ.get("KNOWLEDGE_PROXY_IPS", "127.0.0.1"),
                 timeout_graceful_shutdown=3)  # open live streams (browser tabs) must not hold up a restart
