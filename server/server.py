@@ -478,13 +478,11 @@ vec = vectors.Vectors(index)
 _graph_cache: dict[tuple, tuple[int, dict]] = {}
 
 
-INSTANCE = os.environ.get("KNOWLEDGE_INSTANCE", "")  # blue / green behind the proxy (compose.yaml); "" = alone
+INSTANCE = os.environ.get("KNOWLEDGE_INSTANCE", "")  # blue / green sharing :8766 (compose.yaml, swap.sh); "" = alone
 
 
 def instance_ready() -> bool:
-    """Loaded and not drained: deploy.sh drains an instance (state/drain-<instance>) before it stops it."""
-    if INSTANCE and (AUDIT.parent / f"drain-{INSTANCE}").exists():
-        return False
+    """Index and semantic index loaded (also what a taking-over server waits for before it opens the port)."""
     return bool(getattr(index, "loaded", False)) and vec.matrix is not None
 
 
@@ -1609,8 +1607,7 @@ class BearerAuth:
             return await self.app(scope, receive, send)
         path = scope["path"]
         if path == "/health":
-            # ?ready=1 (the proxy's check): 503 until this instance can serve everything (index and semantic index
-            # loaded) and while it is being drained for a deploy, so the proxy only routes to a ready server.
+            # ?ready=1: 503 until this server can serve everything (index and semantic index loaded).
             if b"ready=1" in scope.get("query_string", b"") and not instance_ready():
                 return await PlainTextResponse("not ready", status_code=503)(scope, receive, send)
             return await PlainTextResponse("ok")(scope, receive, send)
@@ -2933,6 +2930,27 @@ def build_app():
     return BearerAuth(GZipMiddleware(app, minimum_size=1024))
 
 
+def open_port(host: str, port: int):
+    """The listening socket, shared with SO_REUSEPORT so a new server can take over :8766 while the old one still
+    serves (swap.sh). When another server already listens, open it only once this one is ready (index and semantic
+    index loaded): from then on the kernel sends it connections. Alone (first start, a reboot) it opens at once."""
+    import socket
+    try:
+        socket.create_connection(("127.0.0.1" if host in ("0.0.0.0", "") else host, port), timeout=1).close()
+        taken = True
+    except OSError:
+        taken = False
+    while taken and vec.matrix is None:
+        time.sleep(0.5)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    sock.bind((host, port))
+    sock.listen(2048)
+    print(f"listening on {host}:{port}" + (" (took over from the running server)" if taken else ""), flush=True)
+    return sock
+
+
 if __name__ == "__main__":
     t0 = time.time()
     load_projects()
@@ -2942,6 +2960,16 @@ if __name__ == "__main__":
     threading.Thread(target=index.loop, daemon=True).start()
     threading.Thread(target=vec.loop, daemon=True).start()
     threading.Thread(target=external_loop, daemon=True).start()
-    uvicorn.run(build_app(), host=os.environ.get("KNOWLEDGE_BIND", "0.0.0.0"), port=int(os.environ.get("KNOWLEDGE_PORT", "8766")),
-                log_level="warning", proxy_headers=True, forwarded_allow_ips=os.environ.get("KNOWLEDGE_PROXY_IPS", "127.0.0.1"),
-                timeout_graceful_shutdown=3)  # open live streams (browser tabs) must not hold up a restart
+    host, port = os.environ.get("KNOWLEDGE_BIND", "0.0.0.0"), int(os.environ.get("KNOWLEDGE_PORT", "8766"))
+    sock = open_port(host, port)
+    listening = AUDIT.parent / f"listening-{INSTANCE}" if INSTANCE else None
+    if listening:
+        listening.write_text(str(os.getpid()))  # swap.sh waits for this before it stops the other server
+    try:
+        uvicorn.Server(uvicorn.Config(
+            build_app(), log_level="warning", proxy_headers=True,
+            forwarded_allow_ips=os.environ.get("KNOWLEDGE_PROXY_IPS", "127.0.0.1"),
+            timeout_graceful_shutdown=3)).run(sockets=[sock])  # open live streams (browser tabs) must not hold up a stop
+    finally:
+        if listening:
+            listening.unlink(missing_ok=True)

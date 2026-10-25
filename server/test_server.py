@@ -871,12 +871,9 @@ def main():
                 break
             time.sleep(0.5)
         assert res["hits"] and res["hits"][0]["path"].startswith("trade"), res
-        # The proxy's readiness check: ready once the semantic index is there, not while deploy.sh drains this instance.
+        # Readiness once the semantic index is there; the listening flag swap.sh waits for.
         assert http("GET", "/health?ready=1", token=None) == (200, "ok")
-        (tmp / "drain-blue").write_text("")
-        assert http("GET", "/health?ready=1", token=None)[0] == 503 and http("GET", "/health", token=None)[0] == 200
-        (tmp / "drain-blue").unlink()
-        assert http("GET", "/health?ready=1", token=None)[0] == 200
+        assert (tmp / "listening-blue").read_text().strip().isdigit()
         assert "trade-memory/" in call("knowledge_semantic_search", {"query": "entry timing", "root": "trade-memory"})[1]
         # A weak answer tells the agent, in the result, to add the search words as an alias where it finds the answer.
         weak = call("knowledge_semantic_search", {"query": "zzqx plumbing quantum walrus"})[1]

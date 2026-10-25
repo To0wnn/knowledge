@@ -4,6 +4,8 @@
 # actimeo=1: NFS attribute cache at most 1 s, so edits made natively on the VM show up live (default is up to 60 s).
 x-server: &server
   build: .
+  network_mode: host  # share :8766 with SO_REUSEPORT (no published ports, no proxy)
+  stop_grace_period: 15s  # time to finish open requests after the port closed
   image: knowledge-server:local
   # Local image: tells `docker compose pull` (Ansible docker_update) to skip it instead of failing on
   # "pull access denied"; `up` builds from the pinned Dockerfile/uv.lock (cached layers, deterministic).
@@ -50,17 +52,9 @@ x-server: &server
     - /root/docker/knowledge/projects:/projects
 
 services:
-  # Fixed front door on :8766 (Traefik, Uptime Kuma, the VM and every client keep their address): routes to blue, and
-  # to green only while blue is down. deploy.sh starts green with the new code, waits until it is ready, drains and
-  # renews blue, then stops green: there is always one ready server (zero-downtime deploys, 25 Oct 2026).
-  proxy:
-    image: haproxy:3.4.7-alpine
-    container_name: knowledge-proxy
-    restart: always
-    ports:
-      - "8766:8766"
-    volumes:
-      - ./haproxy:/usr/local/etc/haproxy:ro  # the folder, not the file: rsync replaces the file and a reload must see it
+  # Both servers use the host network and share :8766 with SO_REUSEPORT (server.py open_port): a new server opens the
+  # port only when it is ready, so swap.sh (deploy.sh) can renew blue while green serves; no proxy, no second address.
+  # Needs net.ipv4.tcp_migrate_req=1 on the host (Ansible role forge_sysctl) so a stopping server's queue moves over.
   knowledge:  # blue: the one that normally serves
     <<: *server
     container_name: knowledge

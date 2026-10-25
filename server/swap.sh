@@ -1,49 +1,42 @@
 #!/bin/sh
 # Zero-downtime switch of the knowledge stack, run on the Docker host by deploy.sh after the image is built.
-# blue (container knowledge) normally serves behind the proxy on :8766; green only during this script:
-#   1. green starts with the new image and must become ready (index + semantic index loaded)
-#   2. blue is drained (the proxy stops sending to it within ~2 s), renewed with the new image, and must become ready
-#   3. green is drained and stopped
-# Any step that fails leaves a ready server serving and exits non-zero (deploy.sh fails loudly).
+# Both servers use the host network and share :8766 with SO_REUSEPORT. A server opens the port only when it is ready
+# (index and semantic index loaded) and then writes state/listening-<instance>; when it stops, it closes the port
+# first and its queued connections move to the other server (net.ipv4.tcp_migrate_req=1 on the host).
+#   1. green starts with the new image and must be listening
+#   2. blue stops (green serves alone), is renewed with the new image and must be listening
+#   3. green stops
+# Any step that fails leaves a server listening and exits non-zero (deploy.sh fails loudly).
 set -eu
 cd "$(dirname "$0")"
 c="docker compose -p ${KNOWLEDGE_PROJECT:-knowledge}"
 state=${KNOWLEDGE_STATE_DIR:-/root/docker/knowledge/state}
-n=${KNOWLEDGE_NAME:-knowledge}  # container names: $n (blue), $n-green, $n-proxy (tests/swap/run.sh uses its own)
-ready() { docker exec "$1" python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8766/health?ready=1', timeout=3)" >/dev/null 2>&1; }
-proxy_serves() {  # the proxy itself routes to a ready server (it needs two good checks after a start)
-    i=0; while [ $i -lt 60 ]; do
-        docker exec "$n-proxy" wget -q -O /dev/null http://127.0.0.1:8766/health?ready=1 2>/dev/null && return 0
-        sleep 1; i=$((i + 1)); done
-    return 1
+n=${KNOWLEDGE_NAME:-knowledge}  # container names: $n (blue), $n-green (tests/swap/run.sh uses its own)
+listening() {  # up to 10 minutes: a changed embedding model re-embeds everything before the port opens
+    i=0; while [ $i -lt 600 ]; do [ -f "$state/listening-$1" ] && return 0; sleep 1; i=$((i + 1)); done
+    docker logs "$2" --tail 20; return 1
 }
-wait_ready() {  # up to 10 minutes: a changed embedding model re-embeds everything
-    i=0; while [ $i -lt 600 ]; do ready "$1" && return 0; sleep 1; i=$((i + 1)); done
-    docker logs "$1" --tail 20; return 1
-}
-# Check both configs before anything stops: a typo must never take the running server down.
-$c --profile deploy config -q
-docker run --rm -v "$PWD/haproxy:/usr/local/etc/haproxy:ro" "$(sed -n 's/^ *image: \(haproxy:.*\)/\1/p' compose.yaml | head -1)" \
-    haproxy -c -q -f /usr/local/etc/haproxy/haproxy.cfg
-if ! docker ps --format '{{.Names}}' | grep -qx "$n-proxy"; then
-    # First run of this layout (blue still owns :8766): one short outage, once.
-    $c up -d --remove-orphans proxy knowledge
-    wait_ready "$n" && proxy_serves
-    echo "proxy layout started"; exit 0
+# The handover needs the kernel to move a stopping server's queued connections (Linux 5.14+); fail when it is off.
+[ "$(cat /proc/sys/net/ipv4/tcp_migrate_req 2>/dev/null)" = 1 ] || { echo "net.ipv4.tcp_migrate_req is not 1" >&2; exit 1; }
+$c --profile deploy config -q  # a broken compose file must never stop the running server
+if docker ps -a --format '{{.Names}}' | grep -qx "$n-proxy"; then
+    # Once, from the HAProxy layout (25 Oct 2026): the proxy held :8766; blue moves to the host network.
+    docker rm -f "$n-proxy" "$n-green" >/dev/null 2>&1 || true
 fi
-docker kill -s USR2 "$n-proxy" >/dev/null  # reload haproxy/haproxy.cfg (rsynced by deploy.sh), no dropped connections
-rm -f "$state/drain-green" "$state/drain-blue"
+if ! docker ps --format '{{.Names}}' | grep -qx "$n" || [ "$(docker inspect -f '{{.HostConfig.NetworkMode}}' "$n")" != host ]; then
+    rm -f "$state/listening-blue"
+    $c up -d --remove-orphans --force-recreate knowledge  # first start, or the layout before this one
+    listening blue "$n"
+    echo "blue started"; exit 0
+fi
+rm -f "$state/listening-green"
 $c --profile deploy up -d --no-deps --force-recreate knowledge-green
-if ! wait_ready "$n-green"; then
+if ! listening green "$n-green"; then
     $c --profile deploy stop knowledge-green; echo "green not ready: blue keeps the old version" >&2; exit 1
 fi
-touch "$state/drain-blue"; sleep 3       # check every 1 s, fall 2: green serves from here
+$c stop knowledge                         # green serves alone; blue's queued connections move to green
+rm -f "$state/listening-blue"
 $c up -d --no-deps --force-recreate knowledge
-rm -f "$state/drain-blue"
-if ! wait_ready "$n"; then echo "new blue not ready: green keeps serving the new version" >&2; exit 1; fi
-sleep 3                                  # rise 2: blue serves again
-touch "$state/drain-green"; sleep 3
+if ! listening blue "$n"; then echo "new blue not ready: green keeps serving the new version" >&2; exit 1; fi
 $c --profile deploy stop knowledge-green
-rm -f "$state/drain-green"
-proxy_serves
 echo "switched with no downtime"

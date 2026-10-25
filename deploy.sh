@@ -14,4 +14,5 @@ rsync -a --delete --copy-links ../plugin/skills/ "$KNOWLEDGE_FORGE_SSH:$STACK/pl
 # Build, then switch with no downtime (swap.sh: green takes over while blue is renewed; fails loudly, never leaves
 # no server). The proxy keeps :8766, so nothing else has to know.
 ssh "$KNOWLEDGE_FORGE_SSH" "cd $STACK && docker compose -p knowledge build -q && sh swap.sh"
-ssh "$KNOWLEDGE_FORGE_SSH" 'curl -fsS -o /dev/null http://127.0.0.1:8766/health?ready=1 && docker ps --filter name=^knowledge --format "{{.Names}} {{.Status}}" && echo ok'
+# Ready = semantic index loaded too (a first start opens the port before that; a switch only after): wait for it.
+ssh "$KNOWLEDGE_FORGE_SSH" 'for i in $(seq 1 600); do curl -fsS -o /dev/null http://127.0.0.1:8766/health?ready=1 2>/dev/null && { docker ps --filter name=^knowledge --format "{{.Names}} {{.Status}}"; echo ok; exit 0; }; sleep 1; done; docker logs knowledge --tail 20; exit 1'
