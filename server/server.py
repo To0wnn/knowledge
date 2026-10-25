@@ -278,6 +278,7 @@ class Index:
         self.files: dict[str, tuple[int, int, str, str | None]] = {}
         self.lock = threading.Lock()
         self.gen = 0  # bumped on every change; the UI graph cache keys on it
+        self.loaded = False  # set after the startup scan: from then on a file that appears is new, not just unseen
         self.root_gen: dict[str, int] = {}  # changes per root, so a user only hears about their own roots
 
     def bump(self, rel: str):  # call with self.lock held
@@ -308,6 +309,9 @@ class Index:
         old = self.files.get(rel)
         if old is not None and old[2] != text and tracked(rel):
             keep_version(rel, old, text)
+        elif old is None and self.loaded and tracked(rel):
+            # A new file: an empty baseline plus its first version, so Changes and History show what it added.
+            keep_version(rel, (st.st_mtime_ns, 0, ""), text)
         if old is None or old[2] != text:
             skill_changed(rel, "added" if old is None else "changed")
         with self.lock:
@@ -2547,6 +2551,7 @@ if __name__ == "__main__":
     t0 = time.time()
     load_projects()
     index.rescan()
+    index.loaded = True
     print(f"index: {len(index.files)} files in {time.time() - t0:.1f}s", flush=True)
     threading.Thread(target=index.loop, daemon=True).start()
     threading.Thread(target=vec.loop, daemon=True).start()

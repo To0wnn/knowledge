@@ -773,7 +773,8 @@ def main():
         (tmem / "hist.md").write_text("v3 native\n")
         http("POST", "/invalidate", {"paths": ["trade-memory/hist.md"]}, token="watch-token")
         hist = call("knowledge_history", {"path": "trade-memory/hist.md"})[1].splitlines()
-        assert len(hist) == 3 and "by VM" in hist[0] and "by laptop" in hist[1] and "by before" in hist[2], hist
+        # v1 appeared after the startup scan, so it is a version too, on an empty baseline
+        assert len(hist) == 4 and "by VM" in hist[0] and "by laptop" in hist[1] and "by VM" in hist[2] and "by before" in hist[3], hist
         old_id = hist[1].split()[0]
         text = call("knowledge_history", {"path": "trade-memory/hist.md", "version": old_id})[1]
         assert "-v2" in text and "+v3 native" in text and "<version" in text, text
@@ -781,6 +782,13 @@ def main():
         one = json.loads(raw("GET", f"/ui/api/history?path=trade-memory/hist.md&version={hv[0]['id']}", headers=ck)[2])
         assert one["text"] == "v3 native\n" and "+v3 native" in one["diff"], one
         assert raw("GET", "/ui/api/history?path=trade-memory/hist.md&version=../../x", headers=ck)[0] == 404
+        # A new file has history from its first version (25 Oct 2026): Changes shows +N, History its added lines.
+        (tmem / "fresh.md").write_text("one\ntwo\nthree\n")
+        http("POST", "/invalidate", {"paths": ["trade-memory/fresh.md"]}, token="watch-token")
+        hist = call("knowledge_history", {"path": "trade-memory/fresh.md"})[1].splitlines()
+        assert len(hist) == 2 and "by before" in hist[1] and "(0 bytes)" in hist[1], hist
+        fresh = next(f for f in json.loads(raw("GET", "/ui/api/recent?project=trade", headers=ck)[2])["files"] if f["path"] == "trade-memory/fresh.md")
+        assert fresh.get("added") == 3 and fresh.get("removed") == 0, fresh
         # Session log: the hook script posts prompts/files/summary; server redacts and appends per project and month.
         tr = tmp / "transcript.jsonl"
         rows = [{"type": "user", "message": {"content": "fix the trade bot, password Sup3rSecret99"}},

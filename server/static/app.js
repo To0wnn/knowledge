@@ -617,7 +617,7 @@ async function showHistory(open = null) {
   pane.append(view, list); // the chosen diff above the list, so it is in sight
   res.versions.forEach((v, i) => {
     const when = new Date(v.time * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
-    const li = hitItem(`${when}${i === 0 ? " (current)" : ""}`, `${v.by.endsWith("-removed") ? `removed (${v.by === "VM-removed" ? "on the VM" : `via ${v.by.slice(0, -8)}`}); the version below holds its last text` : v.by === "VM" ? "edited on the VM" : v.by === "before" ? "baseline" : `via ${v.by}`} · ${v.size} bytes`, async () => {
+    const li = hitItem(`${when}${i === 0 ? " (current)" : ""}`, `${v.by.endsWith("-removed") ? `removed (${v.by === "VM-removed" ? "on the VM" : `via ${v.by.slice(0, -8)}`}); the version below holds its last text` : v.by === "VM" ? "edited on the VM" : v.by === "before" ? (v.size ? "baseline" : "did not exist yet") : `via ${v.by}`} · ${v.size} bytes`, async () => {
       for (const b of list.querySelectorAll("button")) b.classList.remove("active");
       li.firstChild.classList.add("active");
       const ver = await api(`/ui/api/history?path=${encodeURIComponent(note.path)}&version=${encodeURIComponent(v.id)}`);
