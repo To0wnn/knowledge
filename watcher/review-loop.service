@@ -1,0 +1,10 @@
+[Unit]
+Description=Check the review_due memos against the live systems (weekly, unattended claude -p loop)
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/knowledge/local.env
+ExecStart=/usr/bin/python3 %h/knowledge/watcher/review-loop.py
+# no limit: the run ends by itself (finite list, stop after 2 passes without progress), see review-loop.py
+TimeoutStartSec=infinity
