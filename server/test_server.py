@@ -777,6 +777,15 @@ def main():
         assert not err and "Similar existing memos" in text and "trade-memory/plan.md" in text, text
         err, text = call("knowledge_write", {"path": "trade-memory/other.md", "content": memo("volcano weather report\n", "other")})
         assert not err and "Similar existing memos" not in text, text
+        # /semantic skips the archive like the MCP tool, unless archive=true.
+        call("knowledge_write", {"path": "trade-memory/archief/walrus_archief.md", "content": "walrus migration notes\n"})
+        sem = lambda extra="": {h["path"] for h in json.loads(http("GET", f"/semantic?q=walrus%20migration&project=trade{extra}")[1])["hits"]}
+        for _ in range(40):
+            if "trade-memory/archief/walrus_archief.md" in sem("&archive=true"):
+                break
+            time.sleep(0.5)
+        assert "trade-memory/archief/walrus_archief.md" in sem("&archive=true"), sem("&archive=true")
+        assert "trade-memory/archief/walrus_archief.md" not in sem(), sem()
         rel = json.loads(raw("GET", "/ui/api/related?path=trade-memory/plan.md", headers=ck)[2])["related"]
         assert isinstance(rel, list)
         assert "isolated_note" in json.loads(raw("GET", "/ui/api/lint", headers=ck)[2])

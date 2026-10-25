@@ -1873,11 +1873,14 @@ async def lint_route(request: Request):
 
 @server.custom_route("/semantic", methods=["GET"])
 async def semantic_route(request: Request):
-    """Search by meaning for device tokens (the plugin's memory-check hook): {"hits": [...]} like the web UI."""
+    """Search by meaning for device tokens (the plugin's memory-check hook): {"hits": [...]} like the web UI. Archive
+    folders are skipped unless archive=true, as in knowledge_semantic_search: their old copies of a memo otherwise
+    took the top places (retrieval eval 25 Oct 2026)."""
     project = request.query_params.get("project", "")
     roots = tuple(r + "/" for r in PROJECTS[project] + ("claude",)) if project in PROJECTS else ()
     q = request.query_params.get("q", "").strip()[:500]
-    hits = [h for h in await asyncio.to_thread(vec.search, q, roots, 30) if in_scope(h["path"])][:15] if q else []
+    skip = None if request.query_params.get("archive") == "true" else is_archive_line
+    hits = [h for h in await asyncio.to_thread(vec.search, q, roots, 30, skip) if in_scope(h["path"])][:15] if q else []
     # "gap": what knowledge_semantic_search would log (calibrate_gaps.py measures the thresholds through this)
     return JSONResponse({"hits": [{**h, "text": shown(h["text"])} for h in hits], "status": vec.status(),
                          "gap": vec.matrix is not None and bool(q) and weak_answer(q, hits)})
