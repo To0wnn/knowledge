@@ -55,6 +55,11 @@ EVIDENCE = 80  # most recent corrections shown to pass 1
 PROBATION = 28  # days
 RESEARCH_PAGES = 5
 ZENDRIVER = os.environ.get("KNOWLEDGE_ZENDRIVER_MCP", "")
+# The one comparison the loop was built to answer: corrections per 100 follow-up prompts in the 4 weeks before it
+# started (baseline 25 Oct 2026: ~21) against the first 4 full weeks after. Sent once, when those weeks are complete.
+BEFORE, AFTER = ("2026-W40", "2026-W41", "2026-W42", "2026-W43"), ("2026-W44", "2026-W45", "2026-W46", "2026-W47")
+COMPARE_FROM = date(2026, 11, 23)  # Monday after 2026-W47
+MEANINGFUL = 5.0  # points per 100: the week-to-week noise in the baseline was 15-47
 NL_MONTHS = "jan feb mrt apr mei jun jul aug sep okt nov dec".split()
 PASS1 = """You review lessons that AI coding agents recorded after a mistake, for a household's homelab, trading bot and \
 small company. Each lesson says what happened, why, and what would have prevented it. Below the lessons are recent \
@@ -274,6 +279,19 @@ def probation(due: list[dict], ev_since, pass3, research, decide, notify, day: d
     return out
 
 
+def comparison(rows: list, day: date, done: bool) -> str | None:
+    """The before/after message, once, when the AFTER weeks are complete; None otherwise."""
+    if done or day < COMPARE_FROM:
+        return None
+    per = {w: (n, k) for w, n, k in rows}
+    rate = lambda ws: 100 * sum(per.get(w, (0, 0))[1] for w in ws) / max(sum(per.get(w, (0, 0))[0] for w in ws), 1)
+    b, a = rate(BEFORE), rate(AFTER)
+    verdict = ("better" if b - a >= MEANINGFUL else "worse" if a - b >= MEANINGFUL else "no measurable difference")
+    return (f"Lesson loop, 4 weeks in: corrections per 100 follow-up prompts {b:.1f} before ({BEFORE[0]}-{BEFORE[-1]}) "
+            f"vs {a:.1f} after ({AFTER[0]}-{AFTER[-1]}): {verdict} (threshold {MEANINGFUL:g} points). Other changes in "
+            f"the same weeks count too; keep the loop when better, look at the lessons when not.")
+
+
 def research_pass(x: dict, why: str):
     return bare(f"LESSON: {x['what']} | prevent: {x['prevent']}\nCURRENT LINE: {x['line']}\nCAME BACK: {why}",
                 RESEARCH.format(pages=RESEARCH_PAGES), SCHEMA_R, web=True)
@@ -303,6 +321,10 @@ def main() -> None:
         pro = probation(due, lambda since: evidence(items, labels, since), lambda p: bare(p, PASS3, SCHEMA3),
                         research_pass, lambda lid, status, **kw: api("POST", "/lessons", {"id": lid, "status": status, **kw}),
                         report_mod.send, date.today())
+        flag = corrections.STATE / "compared"
+        if (msg := comparison(rows, date.today(), flag.exists())):
+            report_mod.send(msg)
+            flag.write_text(msg)
         last = rows[-1] if rows else ("-", 0, 0)
         summary = (f"{len(res['applied'])} applied, {len(res['rejected'])} rejected, {len(pro['kept'])} kept, "
                    f"{len(pro['retried'])} retried, {len(pro['escalated'])} escalated; corrections {last[0]}: "
@@ -373,6 +395,10 @@ def selftest() -> None:
         r = probation([{**a1, "line": "- gone"}], lambda s: "", p3(True), res_fn, dec, sent.append, later)
         assert r["gone"] == ["a1"] and calls[-1][1] == "removed"
         assert probation([], None, None, None, None, None, later)["cost"] == 0.0  # nothing due: no call
+        rows = [("2026-W40", 100, 25), ("2026-W43", 100, 17), ("2026-W44", 100, 10), ("2026-W47", 100, 14)]
+        assert comparison(rows, date(2026, 11, 22), False) is None and comparison(rows, date(2026, 11, 29), True) is None
+        msg = comparison(rows, date(2026, 11, 29), False)
+        assert "21.0 before" in msg and "12.0 after" in msg and ": better" in msg, msg
     print("selftest ok")
 
 
