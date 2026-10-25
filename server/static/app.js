@@ -326,6 +326,7 @@ function renderProjects() {
     b.onclick = () => switchProject(p);
     box.append(b);
   });
+  box.querySelector('[aria-pressed="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" }); // in sight when scrolled
 }
 
 function switchProject(p, refit = true) {
