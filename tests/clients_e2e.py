@@ -330,7 +330,8 @@ def agents(tok: str, home: Path, project: Path, garden: Path):
         cmds = [h["command"] for g in (cfg.get("hooks") or cfg["knowledge"]).values() for e in g for h in (e.get("hooks") or [e])]
         payloads = {"context": {"hook_event_name": "SessionStart", "cwd": str(project), "workspacePaths": [str(project)]},
                     "docs-sync": {"hook_event_name": "PostToolUse", "cwd": str(project), "tool_input": {"command": "*** Begin Patch\n*** Update File: docs/taxi.md\n*** End Patch"}},
-                    "session-log": {"hook_event_name": "SessionEnd", "session_id": f"{name}-1", "cwd": str(project), "transcript_path": ""}}
+                    "session-log": {"hook_event_name": "SessionEnd", "session_id": f"{name}-1", "cwd": str(project), "transcript_path": ""},
+                    "hints": {"invocationNum": 1, "workspacePaths": [str(project)]}}
         # How a program starts a hook command on Windows: PowerShell -Command, or cmd /d /s /c "<command>" as one
         # string (a list would make Python add its own quoting, which cmd reads differently).
         shells = [("powershell", lambda c: ["powershell", "-NoProfile", "-Command", c]), ("cmd", lambda c: f'cmd /d /s /c "{c}"')] \
@@ -348,6 +349,11 @@ def agents(tok: str, home: Path, project: Path, garden: Path):
                             check("auto-update is on for " + name in msg, f"{name}: the script setup says auto-update is on", msg[-300:])
                     except ValueError:
                         check(False, f"{name} via {label}: context prints valid JSON", out[:300] + err[-300:])
+                if kind == "hints":  # agy PostInvocation: {} or injectSteps, never anything else
+                    try:
+                        check(json.loads(out) == {} or "injectSteps" in json.loads(out), f"{name} via {label}: hints prints agy JSON", out[:300])
+                    except ValueError:
+                        check(False, f"{name} via {label}: hints prints valid JSON", out[:300] + err[-300:])
     st, body = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_write", "arguments":
                     {"path": "garden-memory/leak.md", "content": "---\nname: l\ndescription: d\nmetadata:\n  type: project\n---\n## Stand\nSup3rSecret99\n## Keuzes\n"}}},
                     {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})
@@ -567,7 +573,7 @@ def agy_plugin(tok: str, home: Path, project: Path, garden: Path):
     hooks = json.loads((root / "hooks.json").read_text(encoding="utf-8"))["knowledge"]
     cmds = [h["command"] for e in hooks.values() for g in e for h in (g.get("hooks") or [g])]
     common = {"conversationId": "agy-plugin", "workspacePaths": [str(project)]}
-    payloads = {"context": common, "session-log": {**common, "transcriptPath": ""},
+    payloads = {"context": common, "session-log": {**common, "transcriptPath": ""}, "hints": {**common, "invocationNum": 1},
                 "docs-sync": {**common, "toolCall": {"name": "write_file", "args": {"Path": json.dumps(str(project / "docs" / "agy.md"))}}}}
     (project / "docs" / "agy.md").write_text("agy plugin → ✅\n", encoding="utf-8")
     for cmd in cmds:
@@ -581,6 +587,13 @@ def agy_plugin(tok: str, home: Path, project: Path, garden: Path):
                 check("auto-update is on for agy" in msg, "agy plugin: context says auto-update is on", msg[-300:])
             except (ValueError, KeyError, IndexError):
                 check(False, "agy plugin: context prints injectSteps JSON", out[:300] + err[-300:])
+        if kind == "hints":  # PostInvocation after the write: the pending topic hint (or {} when the project has no headings)
+            try:
+                got = json.loads(out)
+                check(got == {} or "agy.md" in got["injectSteps"][0]["systemMessage"]["systemMessage"],
+                      "agy plugin: PostInvocation shows docs-sync's pending hint as injectSteps", out[:300])
+            except (ValueError, KeyError, IndexError):
+                check(False, "agy plugin: hints prints injectSteps JSON or {}", out[:300] + err[-300:])
     check((garden / "docs" / "docs" / "agy.md").exists(), "agy plugin: PostToolUse mirrors the written file")
     agy = shutil.which("agy")
     if not agy:

@@ -6,6 +6,8 @@ clients/knowledge-agent.py (the setup without a plugin) calls the same functions
   agent_hooks.py context <agy|codex> [TOKEN]   SessionStart: startup context + docs mirror, as the agent's JSON
   agent_hooks.py docs-sync [TOKEN]             PostToolUse: mirror an edited .md (folder with .knowledge-project)
   agent_hooks.py session-log [TOKEN]           SessionEnd/PreCompact (Codex), Stop (agy): post the session log
+  agent_hooks.py hints [TOKEN]                 PostInvocation (agy): show a hint docs-sync left (agy's PostToolUse
+                                               may only answer {}), once
   agent_hooks.py header [TOKEN]                MCP header helper: the token as JSON, {} without one
   agent_hooks.py mcp [TOKEN]                   stdio MCP server of the Codex and agy plugins: relays to /mcp
 TOKEN: "-" (default) = KNOWLEDGE_TOKEN or the keyring (token_store.py); on the machine that holds the files, a vault name.
@@ -124,12 +126,25 @@ def mcp(tok: str):
         out.flush()
 
 
+def hints():
+    """agy: the hint docs-sync left behind, injected once before the next model turn; {} when there is none."""
+    pending = Path.home() / ".knowledge" / "pending-hints.txt"
+    try:
+        text = pending.read_text(encoding="utf-8")
+        pending.unlink()
+    except OSError:
+        text = ""
+    print(json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": text}}]} if text.strip() else {}))
+
+
 def main(argv: list):
     cmd, rest = (argv[0] if argv else ""), argv[1:]
     if cmd == "context" and rest[:1] and rest[0] in AGENTS and len(rest) <= 2:
         context(rest[0], token(rest[1] if len(rest) == 2 else "-"))
     elif cmd in ("docs-sync", "session-log") and len(rest) <= 1:
         sys.stdout.write(run_hook(f"{cmd}.py", token(rest[0] if rest else "-"), sys.stdin.read()))
+    elif cmd == "hints" and len(rest) <= 1:
+        hints()
     elif cmd == "mcp" and len(rest) <= 1:
         mcp(token(rest[0] if rest else "-"))
     elif cmd == "header" and len(rest) <= 1:

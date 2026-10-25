@@ -7,6 +7,10 @@ keeping a copy; at the end it also catches files changed through the shell, whic
 project. Standard library only, works on Windows; never blocks a session.
 Also takes the hook input of Codex (apply_patch: the paths are in the patch text) and agy (camelCase, toolCall.args);
 outside the Claude plugin the URL and token come from KNOWLEDGE_URL and KNOWLEDGE_TOKEN.
+A doc the server cannot place (no topic: that is a heading of the project's MEMORY.md) comes back as a hint. Claude
+and Codex get it at once as PostToolUse additionalContext (plain stdout reaches neither model there); agy's
+PostToolUse may only answer {}, so its hint waits in PENDING until agent_hooks.py hints (PostInvocation) injects it.
+At session start the hint is a line of the startup context.
 """
 import json
 import token_store
@@ -19,6 +23,7 @@ from pathlib import Path
 
 SKIP = {"venv", "node_modules", "__pycache__", "dist", "build", "site-packages"}  # plus every dot-folder
 MAX_FILE, MAX_FILES = 300_000, 2000
+PENDING = Path.home() / ".knowledge" / "pending-hints.txt"  # agy: shown by agent_hooks.py hints at the next turn
 PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update) File: (.+)$|^\*\*\* Move to: (.+)$", re.M)
 
 
@@ -64,6 +69,17 @@ def post(payload: dict) -> dict:
         return json.load(r)
 
 
+def hint_text(res: dict) -> str:
+    hints = res.get("hints") or []
+    if not hints:
+        return ""
+    more = f" (and {res['more_hints']} more)" if res.get("more_hints") else ""
+    return ("Knowledge house rules: these docs need a topic: in their frontmatter that is a heading of the project's "
+            f"MEMORY.md, or the knowledge graph cannot place them: {'; '.join(hints)}{more}. Choose one of: "
+            f"{' | '.join(res.get('headings') or [])}. Add at the very top '---' / 'topic: <heading>' / '---' "
+            "(or the topic line in frontmatter the doc already has).")
+
+
 def main():
     hook = json.load(sys.stdin)
     event = hook.get("hook_event_name") or ("PostToolUse" if "toolCall" in hook else "SessionStart")  # agy names no event
@@ -88,11 +104,23 @@ def main():
     if res.get("refused"):
         print(f"knowledge docs sync for {project}: refused {', '.join(res['refused'][:5])}",
               file=sys.stderr if event != "SessionStart" else sys.stdout)
+    if not (text := hint_text(res)) or event == "SessionEnd":
+        return
+    if event == "SessionStart":
+        print(text)  # becomes part of the startup context (Claude: SessionStart stdout; Codex/agy: agent_hooks context)
+    elif "toolCall" in hook:  # agy: its PostToolUse output must be {}; the next PostInvocation shows it
+        PENDING.parent.mkdir(parents=True, exist_ok=True)
+        PENDING.write_text(text, encoding="utf-8")
+    else:  # Claude Code and Codex read the same PostToolUse JSON
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": text}}))
 
 
 if __name__ == "__main__":
     if "--selftest" in sys.argv:
         import tempfile
+        assert hint_text({}) == "" and hint_text({"hints": []}) == ""
+        t = hint_text({"hints": ["a.md: no topic"], "more_hints": 2, "headings": ["Bot", "Reviews"]})
+        assert "a.md: no topic" in t and "(and 2 more)" in t and "Bot | Reviews" in t, t
         with tempfile.TemporaryDirectory() as d:
             r = Path(d)
             (r / MARKER).write_text("a350\n")

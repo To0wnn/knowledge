@@ -960,6 +960,18 @@ def knowledge_lint() -> str:
     return kb_lint.render(lint_all())
 
 
+def doc_headings(mem: str, files: dict | None = None) -> list[str]:
+    """The "## " headings of a project's MEMORY.md: the topics its docs may name (their islands in the graph)."""
+    text = files.get(f"{mem}/MEMORY.md", "") if files is not None else text_of(f"{mem}/MEMORY.md")
+    return re.findall(r"^## (.+?)\s*$", text or "", re.M)
+
+
+def topic_problem(text: str, headings: list[str]) -> str:
+    """Why a doc cannot be placed ("" = fine): no topic, or one that is no heading of its project's index."""
+    topic = kb_lint.frontmatter(text).get("topic", "").strip('"')
+    return "" if topic in headings else f"topic '{topic}' is no heading" if topic else "no topic"
+
+
 def lint_all() -> dict[str, list[str]]:
     """Lint every project's memory root (findings outside the homelab memory carry their root as prefix), plus the
     knowledge gaps from the graph: isolated notes and topics whose notes barely link to each other."""
@@ -991,11 +1003,8 @@ def lint_all() -> dict[str, list[str]]:
                 or n["id"].rsplit("/", 1)[-1] in ("CLAUDE.md", "AGENTS.md", "GEMINI.md") \
                 or is_archive(n["id"], files[n["id"]]):  # instructions and archived files are not docs to place
             continue
-        headings = set(re.findall(r"^## (.+?)\s*$", files.get(f"{docs_root[root]}/MEMORY.md", ""), re.M))
-        topic = kb_lint.frontmatter(files[n["id"]]).get("topic", "").strip('"')
-        if topic not in headings:
-            report.setdefault("doc_without_topic", []).append(
-                f"{n['id']}: topic '{topic}' is no heading of {docs_root[root]}/MEMORY.md" if topic else f"{n['id']}: no topic")
+        if (why := topic_problem(files[n["id"]], doc_headings(docs_root[root], files))):
+            report.setdefault("doc_without_topic", []).append(f"{n['id']}: {why} of {docs_root[root]}/MEMORY.md")
     report["offline_conflict"] = [f"{rel}: written offline while {re.sub(r'[.]offline-[0-9-]+[.]md$', '.md', rel)} changed "
                                   "here; merge it into that memo, then delete it" for rel in sorted(files)
                                   if re.search(r"[.]offline-[0-9-]+[.]md$", rel)]
@@ -1742,6 +1751,7 @@ async def sync_route(request: Request):
                             status_code=409)
     files = b.get("files") if isinstance(b.get("files"), dict) else {}
     out = {"written": 0, "unchanged": 0, "deleted": 0, "refused": []}
+    headings, hints = doc_headings(PROJECTS[project][1]), []
     keep = set()
     for name, text in list(files.items())[:2000]:
         clean = sync_name(name)
@@ -1754,6 +1764,9 @@ async def sync_route(request: Request):
         try:
             full, rel = resolve(f"{docs}/{clean}")
             keep.add(rel)  # still in the folder: a refusal (full project, secret) must never delete the server copy
+            if headings and clean.rsplit("/", 1)[-1] not in ("CLAUDE.md", "AGENTS.md", "GEMINI.md") \
+                    and not is_archive(rel) and (why := topic_problem(text if isinstance(text, str) else "", headings)):
+                hints.append(f"{clean}: {why}")  # the same rule as lint doc_without_topic, told at once
             check_writable(rel)
             refuse_secrets(text)
         except ToolError as e:
@@ -1786,6 +1799,8 @@ async def sync_route(request: Request):
                 index.refresh(rel)
             audit("sync-delete", rel)
             out["deleted"] += 1
+    if hints:  # docs the graph cannot place: the plugin tells the agent which headings to choose from
+        out.update(hints=hints[:20], more_hints=max(0, len(hints) - 20), headings=headings)
     return JSONResponse(out)
 
 

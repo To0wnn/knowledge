@@ -13,6 +13,7 @@ token. On the machine that holds the files, TOKEN can be a vault name. The sessi
   knowledge-agent.py header [TOKEN]                 MCP header helper (Codex http_headers_helper): the token as JSON
   knowledge-agent.py context <agy|codex> TOKEN     SessionStart: startup context + docs mirror, as the agent's JSON
   knowledge-agent.py docs-sync TOKEN               PostToolUse: mirror an edited .md (folder with .knowledge-project)
+  knowledge-agent.py hints TOKEN                   PostInvocation (agy): show the hint docs-sync left, once
   knowledge-agent.py session-log TOKEN             SessionEnd/PreCompact (Codex), Stop (agy): post the session log
 """
 import json
@@ -65,6 +66,7 @@ def hook_config(agent: str, name: str) -> dict:
             "SessionStart": [{"type": "command", "command": cmd("context", "agy"), "timeout": 30}],
             "PostToolUse": [{"matcher": "write_file|edit_file|write_to_file|replace_file_content|multi_replace_file_content",
                              "hooks": [{"type": "command", "command": cmd("docs-sync"), "timeout": 20}]}],
+            "PostInvocation": [{"type": "command", "command": cmd("hints"), "timeout": 10}],  # docs-sync's hint, once
             "Stop": [{"type": "command", "command": cmd("session-log"), "timeout": 15}]}}
     # One SessionStart handler only: with several, Codex drops the context (openai/codex#45999).
     # SessionEnd hooks may take at most 3 seconds.
@@ -391,7 +393,7 @@ def main(argv: list):
         print(json.dumps({"Authorization": f"Bearer {tok}"} if tok else {}))
     elif cmd == "install" and len(argv) >= 2 and argv[1] in (*CONFIG, "claude"):
         install(argv[1], argv[2] if len(argv) > 2 else "-")
-    elif cmd in ("context", "docs-sync", "session-log"):  # hooks written by older setups call this script
+    elif cmd in ("context", "docs-sync", "session-log", "hints"):  # hooks written by the setup call this script
         agent_hooks.SETUP = "script"  # its auto-update: git pull + install, not the plugin CLI
         agent_hooks.main(argv)
     else:

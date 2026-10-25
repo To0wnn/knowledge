@@ -469,12 +469,18 @@ def main():
         st, body = http("POST", "/sync", {"files": files, "full": True}, token=fr)
         res = json.loads(body)
         assert st == 200 and res["written"] == 3 and len(res["refused"]) == 4, res
+        # Docs without a topic come back as hints at once (the lint rule), archive folders excepted.
+        assert "README.md: no topic" in res["hints"] and "docs/design/voice.md: no topic" in res["hints"], res
+        assert not any(h.startswith("old/") for h in res["hints"]) and "General" in res["headings"], res
+        st, body = http("POST", "/sync", {"files": {"docs/ok.md": "---\ntopic: General\n---\nfine\n"}}, token=fr)
+        assert "hints" not in json.loads(body), body
         assert (tmp / "projects/garden/docs/docs/design/voice.md").read_text() == "voice notes\n"
         assert "doc_without_topic" in (lint := call("knowledge_lint", {}, token=fr)[1]) and "garden/README.md" in lint, lint
         assert "garden/old/README.md" not in lint, lint  # an archive folder holds no docs to place
         assert call("knowledge_read", {"path": "garden/docs/design/voice.md"}, token=fr)[1].count("voice notes") == 1
         st, body = http("POST", "/sync", {"files": {"README.md": "# Copilot\n"}, "full": True}, token=fr)
-        assert json.loads(body) == {"written": 0, "unchanged": 1, "deleted": 2, "refused": []}, body
+        assert {k: v for k, v in json.loads(body).items() if k in ("written", "unchanged", "deleted", "refused")} == \
+            {"written": 0, "unchanged": 1, "deleted": 3, "refused": []}, body
         assert not (tmp / "projects/garden/docs/docs/design/voice.md").exists()
         assert http("POST", "/sync", {"files": {"README.md": "x"}}, token="rw-token")[0] == 403  # not limited to one project
         # The mirror is the guest's folder: the UI does not offer to edit it, and refuses a save (the next sync would undo it).
@@ -493,13 +499,15 @@ def main():
         sync = str(Path(__file__).parents[1] / "plugin/hooks/docs-sync.py")
         out = subprocess.run([sys.executable, sync], input=json.dumps({"hook_event_name": "SessionStart"}), text=True,
                              env=genv, capture_output=True, check=True).stdout
-        assert not out and (tmp / "projects/garden/docs/notes/taxi.md").read_text() == "taxi speed\n", out
+        # A doc without topic: a line of the startup context (SessionStart stdout), then JSON after an edit.
+        assert "notes/taxi.md: no topic" in out and "General" in out and (tmp / "projects/garden/docs/notes/taxi.md").read_text() == "taxi speed\n", out
         (proj / "notes" / "taxi.md").write_text("taxi speed fixed\n")
-        subprocess.run([sys.executable, sync], input=json.dumps({"hook_event_name": "PostToolUse", "tool_input":
-                        {"file_path": str(proj / "notes" / "taxi.md")}}), text=True, env=genv, check=True)
+        out = subprocess.run([sys.executable, sync], input=json.dumps({"hook_event_name": "PostToolUse", "tool_input":
+                              {"file_path": str(proj / "notes" / "taxi.md")}}), text=True, env=genv, capture_output=True, check=True).stdout
+        assert "notes/taxi.md: no topic" in json.loads(out)["hookSpecificOutput"]["additionalContext"], out
         assert (tmp / "projects/garden/docs/notes/taxi.md").read_text() == "taxi speed fixed\n"
         # Codex (a patch with a relative path) and agy (camelCase, no event name) with KNOWLEDGE_* instead of plugin options.
-        oenv = {**os.environ, "KNOWLEDGE_URL": BASE, "KNOWLEDGE_TOKEN": fr}
+        oenv = {**os.environ, "KNOWLEDGE_URL": BASE, "KNOWLEDGE_TOKEN": fr, "HOME": str(tmp / "agyhome"), "USERPROFILE": str(tmp / "agyhome")}
         (proj / "notes" / "taxi.md").write_text("taxi speed codex\n")
         subprocess.run([sys.executable, sync], input=json.dumps({"hook_event_name": "PostToolUse", "cwd": str(proj), "tool_input":
                         {"command": "*** Begin Patch\n*** Update File: notes/taxi.md\n@@\n*** End Patch"}}), text=True, env=oenv, check=True)
@@ -508,6 +516,13 @@ def main():
         subprocess.run([sys.executable, sync], input=json.dumps({"workspacePaths": [str(proj)], "toolCall": {"name": "write_to_file",
                         "args": {"TargetFile": str(proj / "notes" / "taxi.md")}}}), text=True, env=oenv, check=True)
         assert (tmp / "projects/garden/docs/notes/taxi.md").read_text() == "taxi speed agy\n"
+        # agy's PostToolUse may only answer {}: the hint waits and the PostInvocation hook (agent_hooks hints) shows it once.
+        assert "notes/taxi.md" in (tmp / "agyhome/.knowledge/pending-hints.txt").read_text()
+        hooks_py = str(Path(__file__).parents[1] / "plugin/hooks/agent_hooks.py")
+        out = subprocess.run([sys.executable, hooks_py, "hints"], text=True, env=oenv, capture_output=True, check=True).stdout
+        assert "notes/taxi.md" in json.loads(out)["injectSteps"][0]["systemMessage"]["systemMessage"], out
+        out = subprocess.run([sys.executable, hooks_py, "hints"], text=True, env=oenv, capture_output=True, check=True).stdout
+        assert json.loads(out) == {}, out  # once
         (proj / ".knowledge-project").write_text("trade\n")
         out = subprocess.run([sys.executable, sync], input=json.dumps({"hook_event_name": "SessionStart"}), text=True,
                              env=genv, capture_output=True, check=True).stdout

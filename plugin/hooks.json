@@ -9,6 +9,9 @@
         "hooks": [{"type": "command", "command": "python3 -X utf8 hooks/agent_hooks.py docs-sync", "timeout": 20}]
       }
     ],
+    "PostInvocation": [
+      {"type": "command", "command": "python3 -X utf8 hooks/agent_hooks.py hints", "timeout": 10}
+    ],
     "Stop": [
       {"type": "command", "command": "python3 -X utf8 hooks/agent_hooks.py session-log", "timeout": 15}
     ]
