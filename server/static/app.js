@@ -624,7 +624,9 @@ async function showHistory(open = null) {
       view.replaceChildren(el("h3", "sub", "Changes in this version"));
       const pre = el("pre", "diff");
       for (const line of (ver.diff || "(first version)").split("\n")) {
-        const span = el("span", line.startsWith("+") && !line.startsWith("+++") ? "add" : line.startsWith("-") && !line.startsWith("---") ? "del" : null, line + "\n");
+        // .add/.del are blocks (each on its own row, under each other): their own line break would add an empty row
+        const cls = line.startsWith("+") && !line.startsWith("+++") ? "add" : line.startsWith("-") && !line.startsWith("---") ? "del" : null;
+        const span = el("span", cls, cls ? line : line + "\n");
         pre.append(span);
       }
       view.append(pre);
