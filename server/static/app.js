@@ -472,7 +472,7 @@ async function homeSide() {
   const box = el("div", "connected"), list = el("ol", "hits");
   for (const f of res.files.slice(0, 8)) {
     const n = byId.get(f.path);
-    list.append(hitItem(n ? n.label : f.path.split("/").pop(), `${ago(f.mtime)} · ${f.session ? f.session.device : f.by === "VM" ? "on the VM" : f.by}`, () => openNote(f.path)));
+    list.append(hitItem(n ? n.label : f.path.split("/").pop(), `${ago(f.mtime)} · ${f.session ? f.session.device : f.by === "VM" ? "on the VM" : writer(f.by)}`, () => openNote(f.path)));
   }
   if (!res.files.length) list.append(el("li", "muted", "No changes yet."));
   const all = el("button", "ghost small", "All changes"); all.onclick = () => selectTab("changes");
@@ -600,6 +600,10 @@ $("side").addEventListener("click", (e) => {
   e.preventDefault(); openNote(decode(a.getAttribute("href").slice(1)));
 });
 
+// The VM's Claude Code sessions reach the server with the "vm-sessions" token (also the session-log token), so their
+// edits carry that name; say who it is.
+const writer = (name) => (name === "vm-sessions" ? "Claude on the VM" : name);
+
 async function showHistory(open = null) {
   // Every version of this note (who, when), its diff against the version before, and restore. `open` = a version id
   // to show at once (a click in Changes).
@@ -617,7 +621,7 @@ async function showHistory(open = null) {
   pane.append(view, list); // the chosen diff above the list, so it is in sight
   res.versions.forEach((v, i) => {
     const when = new Date(v.time * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
-    const li = hitItem(`${when}${i === 0 ? " (current)" : ""}`, `${v.by.endsWith("-removed") ? `removed (${v.by === "VM-removed" ? "on the VM" : `via ${v.by.slice(0, -8)}`}); the version below holds its last text` : v.by === "VM" ? "edited on the VM" : v.by === "before" ? (v.size ? "baseline" : "did not exist yet") : `via ${v.by}`} · ${v.size} bytes`, async () => {
+    const li = hitItem(`${when}${i === 0 ? " (current)" : ""}`, `${v.by.endsWith("-removed") ? `removed (${v.by === "VM-removed" ? "on the VM" : `via ${v.by.slice(0, -8)}`}); the version below holds its last text` : v.by === "VM" ? "edited on the VM" : v.by === "before" ? (v.size ? "baseline" : "did not exist yet") : `via ${writer(v.by)}`} · ${v.size} bytes`, async () => {
       for (const b of list.querySelectorAll("button")) b.classList.remove("active");
       li.firstChild.classList.add("active");
       const ver = await api(`/ui/api/history?path=${encodeURIComponent(note.path)}&version=${encodeURIComponent(v.id)}`);
@@ -829,7 +833,7 @@ async function loadRecent(look = false) {
     if (f.mtime > seen) top.append(el("span", "new", "new"));
     const meta = el("span", "hit-text");
     if (f.added != null) meta.append(el("span", "plus", `+${f.added}`), " ", el("span", "minus", `−${f.removed}`), " · ");
-    meta.append(`${ago(f.mtime)} · ${f.session ? f.session.device : f.by === "VM" ? "on the VM" : f.by}`);
+    meta.append(`${ago(f.mtime)} · ${f.session ? f.session.device : f.by === "VM" ? "on the VM" : writer(f.by)}`);
     b.append(top, meta);
     if (f.session?.asked) b.append(el("span", "hit-text why", `“${f.session.asked}”`));
     b.title = f.path;
