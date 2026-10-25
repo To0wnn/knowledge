@@ -83,7 +83,11 @@ def context(agent: str, tok: str):
         update = self_update.notice(agent, mode=SETUP)
     except Exception as e:  # never cost the session its context
         update = f"knowledge plugin: auto-update check failed ({type(e).__name__}: {e})"
-    text = "\n\n".join(t for t in (run_hook("docs-sync.py", tok, stdin).strip(), ctx, update) if t)
+    try:
+        worktree = project_marker.notice(Path(cwd).resolve())
+    except OSError:
+        worktree = ""
+    text = "\n\n".join(t for t in (worktree, run_hook("docs-sync.py", tok, stdin).strip(), ctx, update) if t)
     print(json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": text}}]} if agent == "agy" else
                      {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}}))
 

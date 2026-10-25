@@ -209,6 +209,20 @@ def folder_link(home: Path):
                              json.dumps({"cwd": str(folder)}), env)
         check(f"(project {want})" in out, f"codex/agy: a folder {'linked' if folder == linked else 'without a link'} gets project {want}",
               out[:200] + err[-300:])
+    # A git worktree elsewhere (Codex/agy make one per chat under ~/.codex/worktrees/): the main checkout's link counts,
+    # though .knowledge-project is not committed, and the session is told it runs in a separate checkout.
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-C", str(linked)]
+    wt = home / ".codex" / "worktrees" / "ab12" / "Some Folder é"
+    for args in (["init", "-q"], ["commit", "-q", "--allow-empty", "-m", "init"], ["worktree", "add", "-q", "--detach", str(wt)]):
+        subprocess.run(git + args, check=True, capture_output=True)
+    code, out, err = run([bash(), "-c", f'sh "{(hooks / "context.sh").as_posix()}" 1'], "", {**env, "CLAUDE_PROJECT_DIR": str(wt)})
+    check("(project garden)" in out and "separate git worktree" in out, "claude: a worktree gets the main checkout's project and a notice",
+          out[:300] + err[-300:])
+    code, out, err = run([sys.executable, "-X", "utf8", str(hooks / "agent_hooks.py"), "context", "codex"], json.dumps({"cwd": str(wt)}), env)
+    check("(project garden)" in out and "separate git worktree" in out, "codex/agy: a worktree gets the main checkout's project and a notice",
+          out[:300] + err[-300:])
+    code, out, err = run([bash(), "-c", f'sh "{(hooks / "context.sh").as_posix()}" 1'], "", {**env, "CLAUDE_PROJECT_DIR": str(linked)})
+    check("separate git worktree" not in out, "claude: no worktree notice in the main checkout", out[:300])
 
 
 def offline(tok: str, home: Path, project: Path, garden: Path, mirror: Path):

@@ -106,6 +106,13 @@ if __name__ == "__main__":
             assert project_root(r / "docs") == (r, "a350")
             assert markdown_files(r) == {"docs/x.md": "x"}, markdown_files(r)
             assert project_root(Path(tempfile.gettempdir()).parent) == (None, None)
+            # a worktree, even with its own stale marker, syncs from its main checkout: it never overwrites main's docs
+            import subprocess
+            git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-C", str(r)]
+            for args in (["init", "-q"], ["commit", "-q", "--allow-empty", "-m", "i"], ["worktree", "add", "-q", "--detach", str(r / ".wt")]):
+                subprocess.run(git + args, check=True, capture_output=True)
+            (r / ".wt" / MARKER).write_text("other\n")
+            assert project_root(r / ".wt") == (r.resolve(), "a350"), project_root(r / ".wt")
         patch = "*** Begin Patch\n*** Update File: docs/a.md\n@@\n-x\n+y\n*** Add File: /p/b.md\n+z\n*** End Patch"
         assert edited_paths({"tool_input": {"command": patch}}) == ["docs/a.md", "/p/b.md"]
         assert edited_paths({"toolCall": {"args": {"TargetFile": '"/p/c.md"'}}}) == ["/p/c.md"]

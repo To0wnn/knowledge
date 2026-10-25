@@ -64,7 +64,7 @@ GitHub at most once a day and updates itself with the agent's own CLI (the setup
 setup again). Off: `KNOWLEDGE_AUTO_UPDATE=0`. A new version loads at the next start.
 
 Link a project folder to its project once: ask your agent (skill `knowledge-init`), which writes a file
-`.knowledge-project` with the project name in the folder's root. Every session started there gets that project. On Windows, agy needs a `python3` command on PATH (Python from the python.org install manager or the
+`.knowledge-project` with the project name in the folder's root. Every session started there gets that project. A linked git worktree (Codex and agy make one per chat) counts as its main checkout: same project, docs mirrored from the main checkout only, and the session is told it runs in a separate checkout. On Windows, agy needs a `python3` command on PATH (Python from the python.org install manager or the
 Microsoft Store has one); without it the setup configures agy without the plugin.
 
 The plugin also ships development skills, the same in every agent: `plan-change`, `debug-root-cause`, `verify-done`,

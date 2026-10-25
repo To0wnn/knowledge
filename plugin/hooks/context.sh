@@ -10,6 +10,7 @@ token=$(sh "$(dirname "$0")/py.sh" "$(dirname "$0")/token_store.py" token)
 # The header goes in over stdin (-H @-), so the token is not on the command line (ps).
 # A folder linked with .knowledge-project (knowledge-init skill) asks for that project; else the directory decides.
 linked=$(sh "$(dirname "$0")/py.sh" "$(dirname "$0")/project_marker.py" "${CLAUDE_PROJECT_DIR:-$PWD}")
+[ "$part" = 1 ] && sh "$(dirname "$0")/py.sh" "$(dirname "$0")/project_marker.py" notice "${CLAUDE_PROJECT_DIR:-$PWD}"
 if [ -n "$linked" ]; then set -- --data-urlencode "project=$linked" --data-urlencode "linked=1"
 else set -- --data-urlencode "project=${CLAUDE_PROJECT_DIR:-$PWD}"; fi
 code=$(printf 'Authorization: Bearer %s\n' "$token" | curl -sS --max-time 8 -o /tmp/knowledge-context.$$ -w '%{http_code}' -H @- -G "$@" "$url/context/$part" 2>/dev/null)
