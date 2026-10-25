@@ -1,6 +1,7 @@
 ---
 name: debug-root-cause
 description: Find and fix the real cause of a bug, failure or wrong output instead of the symptom - reproduce, prove, fix once, check the pattern elsewhere, record the pitfall. Use for any bug report, failing test or unexpected behaviour.
+effort: high
 ---
 
 # Debug to the root cause

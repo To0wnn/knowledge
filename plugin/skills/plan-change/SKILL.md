@@ -1,6 +1,7 @@
 ---
 name: plan-change
 description: Plan a change that touches several files, is unclear, or is risky, before writing code - files involved, what stays out of scope, how it is verified and how it is rolled back. Skip it when the whole diff fits in one sentence.
+effort: high
 ---
 
 # Plan a change

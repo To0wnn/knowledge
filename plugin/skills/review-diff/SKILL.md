@@ -1,6 +1,7 @@
 ---
 name: review-diff
 description: Review a larger change in a fresh context before calling it finished - only the diff since a given commit, focused on security, data loss and real bugs, every finding verified. Use after a feature, a refactor or a risky fix.
+effort: high
 ---
 
 # Review a diff

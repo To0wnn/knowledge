@@ -1,6 +1,7 @@
 ---
 name: fan-out-verify
 description: Do a broad job that must be trustworthy (an audit, a review of many files or memos, checking facts against live systems) by splitting it over subagents, having every finding refuted by an independent verifier and reporting only what survives. Use when one pass over many items would not fit one context or when findings must hold up.
+effort: high
 ---
 
 # Fan out, verify, report
