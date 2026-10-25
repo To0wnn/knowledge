@@ -1930,11 +1930,15 @@ TOKEN_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$")
 _admin_lock = asyncio.Lock()
 
 
-def admin_only(handler, everyone: bool = False):
+def admin_only(handler, everyone: bool = False, lock: bool = True):
+    """lock=False for a route that waits on the network and guards its own data (external skills), so it never
+    holds up the rest of the admin page."""
     async def wrapped(request: Request):
         if not everyone and not device.get().get("admin"):
             return JSONResponse({"error": "admins only"}, status_code=403)
         try:
+            if not lock:
+                return await handler(request, await request.json() if request.method == "POST" else {})
             async with _admin_lock:
                 return await handler(request, await request.json() if request.method == "POST" else {})
         except KeyError as e:
@@ -2157,16 +2161,23 @@ def external_delete(rel: str):
         index.refresh(rel)
 
 
+def external_validate(name: str, files: dict[str, str]):
+    """Everything the server itself would refuse, checked before the first file is written (no half installs)."""
+    try:
+        for rel in files:
+            resolve(f"claude/skills/{name}/{rel}", scoped=False)
+        refuse_broken_skill(f"claude/skills/{name}/SKILL.md", files["SKILL.md"])
+    except ToolError as e:
+        raise ext.SkillError(f"not taken in: {e}") from None
+
+
 def external_install(name: str, files: dict[str, str], old_files: list[str]) -> list[str]:
     """Write the upstream files (our section of SKILL.md kept) and drop files upstream removed."""
     base = f"claude/skills/{name}"
     skill_path, _ = resolve(f"{base}/SKILL.md", scoped=False)
     current = skill_path.read_text(encoding="utf-8") if skill_path.exists() else None
     for rel, text in files.items():
-        text = ext.merge_local(text, current) if rel == "SKILL.md" else text
-        if rel == "SKILL.md":
-            refuse_broken_skill(f"{base}/SKILL.md", text)
-        external_write(f"{base}/{rel}", text)
+        external_write(f"{base}/{rel}", ext.merge_local(text, current) if rel == "SKILL.md" else text)
     for rel in old_files:
         if rel not in files:
             external_delete(f"{base}/{rel}")
@@ -2180,6 +2191,7 @@ def external_add(url: str) -> dict:
     if (problems := ext.check(files, lic)):
         raise ext.SkillError("not taken in: " + "; ".join(problems))
     name = ext.frontmatter(files["SKILL.md"])["name"]
+    external_validate(name, files)
     with external_lock:
         reg = dict(read_json(EXTERNAL_FILE, {}))
         if name in reg or (ROOTS["claude"] / "skills" / name).exists() or (PLUGIN_SKILLS / name).is_dir():
@@ -2192,44 +2204,67 @@ def external_add(url: str) -> dict:
     return reg[name]
 
 
+def external_current(name: str, rels: list[str]) -> dict[str, str]:
+    out = {}
+    for rel in rels:
+        full, _ = resolve(f"claude/skills/{name}/{rel}", scoped=False)
+        if full.is_file():
+            out[rel] = full.read_text(encoding="utf-8", errors="replace")
+    return out
+
+
 def external_check(name: str, approve: bool = False) -> dict:
-    """Compare one skill with GitHub and take the update in when it may; approve=True takes a waiting one in."""
+    """Compare one skill with GitHub and take the update in when it may; approve=True takes a waiting one in.
+    GitHub is asked outside the lock (it can be slow); only the compare-and-write holds it."""
+    e = dict(read_json(EXTERNAL_FILE, {})[name])
+    src = {k: e[k] for k in ("owner", "repo", "ref", "path")}
+    change, msg = {}, None
+    try:
+        target = e["pending"] if approve and e.get("pending") else ext.latest_commit(src)
+        files = lic = None
+        if target != e["commit"]:
+            lic, files = ext.licence(src), ext.fetch_files(src, target)
+            problems = ext.check(files, lic)
+            if not problems:
+                try:
+                    external_validate(name, files)
+                except ext.SkillError as err:
+                    problems = [str(err)]
+            ratio = ext.change_ratio(ext.joined(external_current(name, e.get("files", []))), ext.joined(files))
+            if problems:
+                change = dict(status="blocked", pending=target, note="; ".join(problems)[:500])
+                if e.get("pending") != target or e.get("status") != "blocked":
+                    msg = (f"Knowledge: update of external skill {name} refused ({target[:7]}): {'; '.join(problems)[:400]}. "
+                           f"The old version stays. Admin page, External skills.")
+            elif ratio > ext.BIG_CHANGE and not approve:
+                change = dict(status="waiting", pending=target, note=f"{ratio:.0%} of the skill's text changed")
+                if e.get("pending") != target or e.get("status") != "waiting":
+                    msg = (f"Knowledge: external skill {name} has an update that rewrites {ratio:.0%} of its text "
+                           f"({e['url']}, {target[:7]}). It waits for you: admin page, External skills, Approve.")
+            else:
+                change = dict(status="ok", pending=None, licence=lic, commit=target, updated=time.time(),
+                              note=f"updated {e['commit'][:7]} -> {target[:7]} ({ratio:.0%} changed)")
+        elif e["status"] == "error":
+            change = dict(status="ok", note="")
+    except Exception as err:  # GitHub down, odd answers, a bug: the skill stays as it is, the admin hears once
+        files = None
+        change = dict(status="error", note=f"{type(err).__name__}: {err}"[:500])
+        if e.get("status") != "error":
+            msg = f"Knowledge: checking external skill {name} failed: {err}"
     with external_lock:
         reg = dict(read_json(EXTERNAL_FILE, {}))
-        e = dict(reg[name])
-        src = {k: e[k] for k in ("owner", "repo", "ref", "path")}
-        try:
-            target = e["pending"] if approve and e.get("pending") else ext.latest_commit(src)
-            if target != e["commit"]:
-                lic, files = ext.licence(src), ext.fetch_files(src, target)
-                skill_path, _ = resolve(f"claude/skills/{name}/SKILL.md", scoped=False)
-                current = skill_path.read_text(encoding="utf-8") if skill_path.exists() else ""
-                ratio = ext.change_ratio(ext.upstream_part(current), ext.upstream_part(files.get("SKILL.md") or ""))
-                if (problems := ext.check(files, lic)):
-                    if e.get("pending") != target:
-                        notify(f"Knowledge: update of external skill {name} refused ({target[:7]}): {'; '.join(problems)[:400]}. "
-                               f"The old version stays. Admin page, External skills.")
-                    e.update(status="blocked", pending=target, note="; ".join(problems)[:500])
-                elif ratio > ext.BIG_CHANGE and not approve:
-                    if e.get("pending") != target:
-                        notify(f"Knowledge: external skill {name} has an update that rewrites {ratio:.0%} of SKILL.md "
-                               f"({e['url']}, {target[:7]}). It waits for you: admin page, External skills, Approve.")
-                    e.update(status="waiting", pending=target, note=f"{ratio:.0%} of SKILL.md changed")
-                else:
-                    e["files"] = external_install(name, files, e.get("files", []))
-                    e.update(status="ok", pending=None, licence=lic, note=f"updated {e['commit'][:7]} -> {target[:7]} ({ratio:.0%} changed)",
-                             commit=target, updated=time.time())
-                    audit("external-update", f"claude/skills/{name} {target[:7]}")
-            elif e["status"] in ("error",):
-                e.update(status="ok", note="")
-        except ext.SkillError as err:
-            if e.get("status") != "error":
-                notify(f"Knowledge: checking external skill {name} failed: {err}")
-            e.update(status="error", note=str(err)[:500])
-        e["checked"] = time.time()
-        reg[name] = e
+        if name not in reg or reg[name]["commit"] != e["commit"]:
+            return reg.get(name, e)  # removed or updated meanwhile: this result is stale
+        cur = dict(reg[name])
+        if change.get("status") == "ok" and files and change.get("commit"):
+            cur["files"] = external_install(name, files, cur.get("files", []))
+            audit("external-update", f"claude/skills/{name} {change['commit'][:7]}")
+        cur.update(change, checked=time.time())
+        reg[name] = cur
         write_json(EXTERNAL_FILE, reg)
-        return e
+    if msg:
+        notify(msg)
+    return cur
 
 
 def external_remove(name: str):
@@ -2259,8 +2294,6 @@ def external_loop():
         time.sleep(float(os.environ.get("KNOWLEDGE_EXTERNAL_SLEEP", 6 * 3600)))
 
 
-@server.custom_route("/ui/api/admin/external", methods=["POST"])
-@admin_only
 async def ui_admin_external(request: Request, body: dict):
     """{url} adds a skill; {name, action: check | approve | remove} acts on one."""
     try:
@@ -2279,6 +2312,9 @@ async def ui_admin_external(request: Request, body: dict):
     except ext.SkillError as e:
         raise ValueError(str(e)) from None
     return JSONResponse({"ok": True, "external": read_json(EXTERNAL_FILE, {})})
+
+
+server.custom_route("/ui/api/admin/external", methods=["POST"])(admin_only(ui_admin_external, lock=False))
 
 
 @server.custom_route("/ui/api/admin", methods=["GET"])
