@@ -677,7 +677,9 @@ def instructions() -> str:
         "memo (a copy is kept). knowledge_semantic_search finds notes by meaning when a regex finds nothing; "
         "knowledge_related lists the notes most related to one note (links, shared sources, shared neighbours, "
         "meaning). When the user corrects you or you find your own mistake, record it with knowledge_lesson (a weekly "
-        "review applies it). Web UI with graph view: https://knowledge.to0wnn.com/ui. "
+        "review applies it). When a search found nothing and you then found the answer in a memo, add the words you "
+        "searched with to that memo's frontmatter line 'aliases:' (comma-separated, lowercase, max 8) with "
+        "knowledge_edit, so the next search finds it. Web UI with graph view: https://knowledge.to0wnn.com/ui. "
         "Here the memos are Dutch. Homelab docs (homelab/<topic>.md) have the same two sections and a frontmatter topic: = "
         "a heading of memory/MEMORY.md (the headings are the islands of the graph; add one only for a genuinely new "
         "area); their history is in homelab/archief/.\n\n" + house_rules("<memory root>"))

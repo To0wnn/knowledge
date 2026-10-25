@@ -961,6 +961,7 @@ def main():
         init = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18",
                     "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}})[1]
         assert "Memory is a hint, not the truth" in init and "read the \\\"## Keuzes\\\"" in init, init[:300]
+        assert "knowledge_lesson" in init and "'aliases:'" in init, "every agent (guests too) is told to record lessons and aliases"
         # An edit of the rules file reaches new MCP sessions once the watcher reports it; missing rules fail loudly.
         rules = cla / "house_rules.md"
         rules.write_text(rules.read_text().replace("Search first.", "Search first, always."))
