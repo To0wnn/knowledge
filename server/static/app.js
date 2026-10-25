@@ -604,6 +604,46 @@ $("side").addEventListener("click", (e) => {
 // edits carry that name; say who it is.
 const writer = (name) => (name === "vm-sessions" ? "Claude on the VM" : name);
 
+// Words that differ between two lines, by longest common subsequence over words and spaces: [[text, changed], ...]
+// for each side. Long lines skip it (quadratic), and a pair that shares almost nothing stays a plain whole-line change.
+function wordDiff(a, b) {
+  const x = a.split(/(\s+)/), y = b.split(/(\s+)/);
+  if (x.length * y.length > 250000) return null;
+  const L = Array.from({ length: x.length + 1 }, () => new Uint16Array(y.length + 1));
+  for (let i = x.length - 1; i >= 0; i--) for (let j = y.length - 1; j >= 0; j--)
+    L[i][j] = x[i] === y[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  if (L[0][0] * 2 < Math.min(x.length, y.length)) return null;
+  const left = [], right = [], push = (side, t, ch) => { const last = side[side.length - 1];
+    if (last && last[1] === ch) last[0] += t; else side.push([t, ch]); };
+  let i = 0, j = 0;
+  while (i < x.length || j < y.length) {
+    if (i < x.length && j < y.length && x[i] === y[j]) { push(left, x[i], false); push(right, y[j], false); i++; j++; }
+    else if (j < y.length && (i >= x.length || L[i][j + 1] >= L[i + 1][j])) push(right, y[j++], true);
+    else push(left, x[i++], true);
+  }
+  return [left, right];
+}
+
+// A unified diff as a <pre>: removed and added lines as rows; where a block of removed lines is followed by as many
+// added ones, the pairs show only the words that changed (an appended note no longer looks like a rewritten line).
+function diffView(text) {
+  const pre = el("pre", "diff"), lines = text.split("\n");
+  const kind = (l) => (l.startsWith("+") && !l.startsWith("+++") ? "add" : l.startsWith("-") && !l.startsWith("---") ? "del" : null);
+  const row = (cls, parts) => { const span = el("span", cls); // .add/.del are blocks: their own line break would add a row
+    for (const [t, ch] of parts) span.append(ch ? el("mark", null, t) : document.createTextNode(t));
+    return span; };
+  for (let i = 0; i < lines.length;) {
+    if (kind(lines[i]) !== "del") { const k = kind(lines[i]); pre.append(el("span", k, k ? lines[i] : lines[i] + "\n")); i++; continue; }
+    let d = i; while (d < lines.length && kind(lines[d]) === "del") d++;
+    let a = d; while (a < lines.length && kind(lines[a]) === "add") a++;
+    const dels = lines.slice(i, d), adds = lines.slice(d, a), pairs = dels.length === adds.length ? dels.map((l, n) => wordDiff(l.slice(1), adds[n].slice(1))) : [];
+    dels.forEach((l, n) => pre.append(pairs[n] ? row("del", [["-", false], ...pairs[n][0]]) : el("span", "del", l)));
+    adds.forEach((l, n) => pre.append(pairs[n] ? row("add", [["+", false], ...pairs[n][1]]) : el("span", "add", l)));
+    i = a;
+  }
+  return pre;
+}
+
 async function showHistory(open = null) {
   // Every version of this note (who, when), its diff against the version before, and restore. `open` = a version id
   // to show at once (a click in Changes).
@@ -626,14 +666,7 @@ async function showHistory(open = null) {
       li.firstChild.classList.add("active");
       const ver = await api(`/ui/api/history?path=${encodeURIComponent(note.path)}&version=${encodeURIComponent(v.id)}`);
       view.replaceChildren(el("h3", "sub", "Changes in this version"));
-      const pre = el("pre", "diff");
-      for (const line of (ver.diff || "(first version)").split("\n")) {
-        // .add/.del are blocks (each on its own row, under each other): their own line break would add an empty row
-        const cls = line.startsWith("+") && !line.startsWith("+++") ? "add" : line.startsWith("-") && !line.startsWith("---") ? "del" : null;
-        const span = el("span", cls, cls ? line : line + "\n");
-        pre.append(span);
-      }
-      view.append(pre);
+      view.append(diffView(ver.diff || "(first version)"));
       view.scrollIntoView({ block: "start", behavior: calm ? "auto" : "smooth" });
       if (note.writable && i > 0) {
         const restore = el("button", "ghost small", "Restore this version");

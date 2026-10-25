@@ -112,6 +112,9 @@ kbd { font-family: var(--mono); font-size: 11px; padding: 0 4px; border: 1px sol
 pre.diff { max-width: 100%; box-sizing: border-box; background: var(--bg); padding: 10px; border-radius: 6px; overflow-x: auto; font: 12px/1.45 var(--mono); white-space: pre; }
 pre.diff .add { color: var(--g-skill); background: color-mix(in srgb, var(--g-skill) 12%, transparent); display: block; width: max-content; min-width: 100%; }
 pre.diff .del { color: var(--error); background: color-mix(in srgb, var(--error) 12%, transparent); display: block; width: max-content; min-width: 100%; }
+pre.diff mark { color: inherit; border-radius: 3px; }
+pre.diff .add mark { background: color-mix(in srgb, var(--g-skill) 32%, transparent); }
+pre.diff .del mark { background: color-mix(in srgb, var(--error) 32%, transparent); text-decoration: line-through; }
 .version { margin-top: 12px; display: grid; gap: 8px; justify-items: start; }
 .editor { width: 100%; min-height: 60vh; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); font: 12.5px/1.5 var(--mono); resize: vertical; tab-size: 2; }
 .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
