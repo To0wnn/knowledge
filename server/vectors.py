@@ -22,6 +22,10 @@ MODELS_DIR = os.environ.get("KNOWLEDGE_MODELS", "")
 CACHE = Path(os.environ.get("KNOWLEDGE_VECTORS", Path.home() / ".local/state/knowledge-server/vectors.npz"))
 QUERY_PREFIX = "task: search result | query: "  # embeddinggemma prompt format; documents get "title: ... | text: ..."
 CHUNK_CHARS = 1200
+# Raw sources (ingested pages, "<root>/sources/") rank this much lower than notes: the processed memo is the better
+# answer when both match. Measured 25 Oct 2026 on 45 real questions: hit@5 0.80 -> 0.84 at 0.1 (0.82 at 0.02-0.05);
+# the same penalty for Markdown in code folders and skills changed nothing, so they are left alone.
+SOURCE_PENALTY = 0.1
 MAX_FILE = 300_000  # bigger files (generated logs such as trade/claude_insights.md) stay regex-only
 THREADS = int(os.environ.get("KNOWLEDGE_EMBED_THREADS", "6"))
 
@@ -72,6 +76,7 @@ class Vectors:
         self.cache: dict[str, np.ndarray] = {}  # sha1 of chunk text -> unit vector
         self.rows: list[tuple[str, int, str]] = []  # (rel, line, chunk) per matrix row
         self.matrix = None
+        self.bias = None  # per row: what search subtracts from the score (SOURCE_PENALTY for raw sources)
         self.doc_ids: list[str] = []
         self.doc_matrix = None  # mean vector per file, for "similar notes"
         self.pending = 0
@@ -155,8 +160,9 @@ class Vectors:
         doc_ids = list(docs)
         dm = np.stack([matrix[idx].mean(axis=0) for idx in docs.values()])
         dm /= np.maximum(np.linalg.norm(dm, axis=1, keepdims=True), 1e-9)
+        bias = np.array([SOURCE_PENALTY if "/sources/" in f"/{rel}" else 0.0 for rel, _, _ in rows], dtype=matrix.dtype)
         with self.lock:
-            self.rows, self.matrix, self.doc_ids, self.doc_matrix = rows, matrix, doc_ids, dm
+            self.rows, self.matrix, self.doc_ids, self.doc_matrix, self.bias = rows, matrix, doc_ids, dm, bias
 
     def save(self):
         CACHE.parent.mkdir(parents=True, exist_ok=True)
@@ -175,10 +181,10 @@ class Vectors:
 
     def search(self, query: str, roots: tuple[str, ...] = (), limit: int = 10, skip=None) -> list[dict]:
         with self.lock:
-            rows, matrix = self.rows, self.matrix
+            rows, matrix, bias = self.rows, self.matrix, self.bias
         if matrix is None:
             return []
-        scores = matrix @ self.embed([QUERY_PREFIX + query])[0]
+        scores = matrix @ self.embed([QUERY_PREFIX + query])[0] - bias
         out, per_file = [], {}
         for i in np.argsort(-scores):
             rel, line, chunk = rows[i]
@@ -214,6 +220,7 @@ if __name__ == "__main__":  # self-check of the chunker and the search ranking w
         gen = 1
         def items(self):
             return [("memory/a.md", "the boiler heats water for the house", None),
+                    ("homelab/sources/s.md", "boiler water boiler water", None),
                     ("memory/b.md", "the printer prints paper", None), ("trade/c.md", "boiler water again", None)]
     import tempfile
     CACHE = Path(tempfile.mkdtemp()) / "vectors.npz"  # module global: keep the self-check away from the real cache
@@ -222,5 +229,8 @@ if __name__ == "__main__":  # self-check of the chunker and the search ranking w
     v.sync()
     hits = v.search("boiler water", roots=("memory/",))
     assert hits[0]["path"] == "memory/a.md" and all(h["path"].startswith("memory/") for h in hits), hits
-    assert list(v.similar("memory/a.md"))[0] == "trade/c.md", v.similar("memory/a.md")
+    assert list(v.similar("memory/a.md"))[0] in ("trade/c.md", "homelab/sources/s.md"), v.similar("memory/a.md")
+    src = next(h for h in v.search("boiler water") if h["path"] == "homelab/sources/s.md")
+    raw = float(v.matrix[[r[0] for r in v.rows].index("homelab/sources/s.md")] @ v.embed([QUERY_PREFIX + "boiler water"])[0])
+    assert abs(src["score"] - (raw - SOURCE_PENALTY)) < 1e-3, (src, raw)  # a raw source ranks lower by the penalty
     print("ok", len(cs), "chunks")
