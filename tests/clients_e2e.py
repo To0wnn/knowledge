@@ -22,6 +22,7 @@ a .knowledge-project written the PowerShell 5 way (UTF-16), text with â†’ and âœ
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -294,6 +295,12 @@ def agents(tok: str, home: Path, project: Path, garden: Path):
                    KNOWLEDGE_PLUGIN_LATEST=str(latest_file(home)))
     (home / ".gemini" / "config").mkdir(parents=True, exist_ok=True)
     (home / ".gemini" / "config" / "mcp_config.json").write_text("", encoding="utf-8")  # agy leaves it empty on Windows
+    for skill in sorted((REPO / "plugin" / "skills").glob("*/SKILL.md")):
+        head = skill.read_text(encoding="utf-8").split("---")[1]
+        meta = dict(l.split(": ", 1) for l in head.strip().splitlines() if ": " in l)
+        # agentskills.io: name = folder, lowercase and hyphens, a description of at most 1024 characters; Codex refuses a skill without one
+        check(meta.get("name") == skill.parent.name and re.fullmatch(r"[a-z0-9-]{1,64}", skill.parent.name) and 0 < len(meta.get("description", "")) <= 1024,
+              f"skill {skill.parent.name}: valid name and description")
     for name, conf, rules in (("codex", home / ".codex" / "hooks.json", home / ".codex" / "AGENTS.md"),
                               ("agy", home / ".gemini" / "config" / "hooks.json", home / ".gemini" / "GEMINI.md")):
         for attempt in (1, 2):
@@ -302,7 +309,8 @@ def agents(tok: str, home: Path, project: Path, garden: Path):
         check(conf.exists() and rules.read_text(encoding="utf-8").count("knowledge:house-rules (written") == 1,
               f"{name}: hooks written, house rules block once after a rerun")
         check("Development rules" in rules.read_text(encoding="utf-8"), f"{name}: the rules file carries the development rules")
-        check((home / ".agents" / "skills" / "verify-done" / "SKILL.md").exists(), f"{name}: development skills in ~/.agents/skills")
+        shipped = sorted(d.name for d in (REPO / "plugin" / "skills").iterdir() if (d / "SKILL.md").exists())
+        check(all((home / ".agents" / "skills" / s / "SKILL.md").exists() for s in shipped), f"{name}: all plugin skills in ~/.agents/skills", shipped)
         cfg = json.loads(conf.read_text(encoding="utf-8"))
         cmds = [h["command"] for g in (cfg.get("hooks") or cfg["knowledge"]).values() for e in g for h in (e.get("hooks") or [e])]
         payloads = {"context": {"hook_event_name": "SessionStart", "cwd": str(project), "workspacePaths": [str(project)]},

@@ -14,3 +14,5 @@ No "done", "fixed" or "works" without fresh evidence from this session.
    add that check to the CI test in the same change instead of listing the platform as "not tested".
 4. Report in a few lines: what passed (with the relevant output), what was **not** tested and why, and any risk left.
 5. Something failed: say so with the output; do not soften it, do not claim partial success as success.
+
+A task that takes many turns: set the check as the goal up front (skill verified-goal), so the work stops only when it passes.

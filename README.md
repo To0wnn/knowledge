@@ -67,6 +67,11 @@ Link a project folder to its project once: ask your agent (skill `knowledge-init
 `.knowledge-project` with the project name in the folder's root. Every session started there gets that project. On Windows, agy needs a `python3` command on PATH (Python from the python.org install manager or the
 Microsoft Store has one); without it the setup configures agy without the plugin.
 
+The plugin also ships development skills, the same in every agent: `plan-change`, `debug-root-cause`, `verify-done`,
+`review-diff`, `project-setup`, `efficiency-pass`, `knowledge-init`, `verified-goal` (keep working until a check command
+proves the task is done, with a hard cap and an unattended loop recipe for each agent) and `fan-out-verify` (split a
+broad job over subagents, have every finding refuted by a fresh verifier, report only what survives).
+
 ## Development
 
 - `server/graph.py`, `server/lint.py` and `server/vectors.py` have self-checks under `__main__`; `server/test_server.py`
