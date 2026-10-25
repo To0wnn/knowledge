@@ -113,6 +113,21 @@ if __name__ == "__main__":
                 subprocess.run(git + args, check=True, capture_output=True)
             (r / ".wt" / MARKER).write_text("other\n")
             assert project_root(r / ".wt") == (r.resolve(), "a350"), project_root(r / ".wt")
+        with tempfile.TemporaryDirectory() as d:  # no main checkout to name: unlinked, its own stale marker never syncs
+            import shutil
+            d = Path(d)
+            main, orphan, bare = d / "main", d / "orphan", d / "bare.git"
+            main.mkdir()
+            git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid"]
+            for args in (["init", "-q"], ["commit", "-q", "--allow-empty", "-m", "i"], ["worktree", "add", "-q", "--detach", str(orphan)]):
+                subprocess.run(git + ["-C", str(main)] + args, check=True, capture_output=True)
+            (orphan / MARKER).write_text("a350\n")
+            subprocess.run(git + ["clone", "-q", "--bare", str(main), str(bare)], check=True, capture_output=True)
+            shutil.rmtree(main)
+            assert project_root(orphan) == (None, None), project_root(orphan)
+            (d / MARKER).write_text("unrelated\n")  # a marker above a bare repo is not the worktree's
+            subprocess.run(git + ["-C", str(bare), "worktree", "add", "-q", "--detach", str(d / "bw")], check=True, capture_output=True)
+            assert project_root(d / "bw") == (None, None), project_root(d / "bw")
         patch = "*** Begin Patch\n*** Update File: docs/a.md\n@@\n-x\n+y\n*** Add File: /p/b.md\n+z\n*** End Patch"
         assert edited_paths({"tool_input": {"command": patch}}) == ["docs/a.md", "/p/b.md"]
         assert edited_paths({"toolCall": {"args": {"TargetFile": '"/p/c.md"'}}}) == ["/p/c.md"]

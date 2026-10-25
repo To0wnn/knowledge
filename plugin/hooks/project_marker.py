@@ -17,7 +17,8 @@ MARKER = ".knowledge-project"
 
 
 def worktree(start: Path):
-    """(worktree root, main checkout) when `start` is inside a linked git worktree, else None."""
+    """(worktree root, main checkout) when `start` is inside a linked git worktree, else None. The main checkout is
+    None when it cannot be named: deleted or moved (the gitdir is gone), or a bare repository (no .git folder)."""
     for d in [start, *start.parents]:
         git = d / ".git"
         if git.is_dir():
@@ -27,17 +28,22 @@ def worktree(start: Path):
             if not line.startswith("gitdir:"):
                 return None
             gitdir = (d / line[len("gitdir:"):].strip()).resolve()
+            if not gitdir.is_dir():
+                return d, None  # orphaned: its own marker may be stale, so it must not decide
             common = gitdir / "commondir"
             if not common.is_file():
                 return None  # a submodule, not a worktree
-            return d, (gitdir / common.read_text(encoding="utf-8").strip()).resolve().parent
+            common_dir = (gitdir / common.read_text(encoding="utf-8").strip()).resolve()
+            return d, (common_dir.parent if common_dir.name == ".git" else None)
     return None
 
 
 def project_root(start: Path):
     """(folder, project name) of the nearest folder at or above `start` that holds the marker, else (None, None).
-    Inside a linked worktree the search starts at its main checkout."""
+    Inside a linked worktree the search starts at its main checkout; one without a known main checkout is unlinked."""
     wt = worktree(start)
+    if wt and wt[1] is None:
+        return None, None
     for d in ([wt[1], *wt[1].parents] if wt else [start, *start.parents]):
         marker = d / MARKER
         if marker.is_file():
@@ -53,6 +59,10 @@ def notice(start: Path) -> str:
     wt = worktree(start)
     if not wt:
         return ""
+    if wt[1] is None:
+        return (f"knowledge: this session runs in a git worktree ({wt[0]}) whose main checkout was not found (moved, "
+                f"deleted or a bare repository), so it is not linked to a knowledge project and its docs are not "
+                f"mirrored. Tell the user before relying on work here.")
     return (f"knowledge: this session runs in a separate git worktree ({wt[0]}) of {wt[1]}. Other agents and the user "
             f"work in the main checkout and do not see these changes until they are merged. Follow the project's rule on "
             f"worktrees in its memory; before you finish, merge or hand the work off and say where it is. Docs are "
@@ -61,6 +71,7 @@ def notice(start: Path) -> str:
 
 if __name__ == "__main__":
     args = sys.argv[1:]
+    sys.stdout.reconfigure(encoding="utf-8")  # Windows: py.sh runs plain python, whose stdout is cp1252
     try:
         if args[:1] == ["notice"] and args[1:2]:
             if text := notice(Path(args[1]).resolve()):

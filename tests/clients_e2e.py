@@ -218,6 +218,7 @@ def folder_link(home: Path):
     code, out, err = run([bash(), "-c", f'sh "{(hooks / "context.sh").as_posix()}" 1'], "", {**env, "CLAUDE_PROJECT_DIR": str(wt)})
     check("(project garden)" in out and "separate git worktree" in out, "claude: a worktree gets the main checkout's project and a notice",
           out[:300] + err[-300:])
+    check("Some Folder é" in out, "claude: the worktree notice keeps a non-ASCII path intact (UTF-8, also on Windows)", out[:300])
     code, out, err = run([sys.executable, "-X", "utf8", str(hooks / "agent_hooks.py"), "context", "codex"], json.dumps({"cwd": str(wt)}), env)
     check("(project garden)" in out and "separate git worktree" in out, "codex/agy: a worktree gets the main checkout's project and a notice",
           out[:300] + err[-300:])
