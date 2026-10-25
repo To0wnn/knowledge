@@ -47,7 +47,7 @@ def prompts(lines) -> list[dict]:
         if d.get("type") == "assistant":
             for c in m.get("content") or []:
                 if isinstance(c, dict) and c.get("type") == "text" and c["text"].strip():
-                    prev = c["text"]
+                    prev = c["text"].replace("\0", "")  # a NUL cannot go into a command-line argument
         elif d.get("type") == "user":
             interactive = d.get("entrypoint", "cli") == "cli" if interactive is None else interactive
             if not interactive:
@@ -55,7 +55,7 @@ def prompts(lines) -> list[dict]:
             c = m.get("content")
             t = c if isinstance(c, str) else " ".join(
                 x.get("text", "") for x in c or [] if isinstance(x, dict) and x.get("type") == "text")
-            t = " ".join(t.split())
+            t = " ".join(t.replace("\0", "").split())
             if not t or t.startswith(("<", "[Request interrupted", "Caveat:", "This session is being continued")):
                 continue
             if prev:
@@ -123,7 +123,7 @@ def selftest() -> None:
     lines = [json.dumps(d) for d in [
         {"type": "user", "entrypoint": "cli", "timestamp": "2026-10-19T10:00", "message": {"content": "fix the dns"}},
         {"type": "assistant", "message": {"content": [{"type": "text", "text": "Fixed it."}]}},
-        {"type": "user", "timestamp": "2026-10-19T10:05", "message": {"content": "werkt nog steeds niet"}},
+        {"type": "user", "timestamp": "2026-10-19T10:05", "message": {"content": "werkt nog\u0000 steeds niet"}},
         {"type": "assistant", "message": {"content": [{"type": "text", "text": "Now it is."}]}},
         {"type": "user", "isMeta": True, "message": {"content": "meta"}},
         {"type": "user", "timestamp": "2026-10-26T09:00", "message": {"content": [{"type": "text", "text": "ok top"}]}}]]
