@@ -988,7 +988,8 @@ def lint_all() -> dict[str, list[str]]:
     for n in get_graph()["nodes"]:
         root = n["id"].split("/", 1)[0]
         if n.get("group") != "doc" or root not in docs_root or n["id"] not in files \
-                or n["id"].rsplit("/", 1)[-1] in ("CLAUDE.md", "AGENTS.md", "GEMINI.md"):  # instructions, not docs
+                or n["id"].rsplit("/", 1)[-1] in ("CLAUDE.md", "AGENTS.md", "GEMINI.md") \
+                or is_archive(n["id"], files[n["id"]]):  # instructions and archived files are not docs to place
             continue
         headings = set(re.findall(r"^## (.+?)\s*$", files.get(f"{docs_root[root]}/MEMORY.md", ""), re.M))
         topic = kb_lint.frontmatter(files[n["id"]]).get("topic", "").strip('"')

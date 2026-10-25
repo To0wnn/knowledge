@@ -464,16 +464,17 @@ def main():
         # Review 21 Oct: a device that does not redact may write the mask as text (a memo can explain it).
         assert not call("knowledge_write", {"path": "garden-memory/project_mask.md", "content": memo("reads ‹secret› for a masked value\n", "mask")})[0]
         (tmp / "projects/garden/memory/project_gate.md").unlink()
-        files = {"README.md": "# Copilot\n", "docs\\design\\voice.md": "voice notes\n", "C:\\x.md": "no",
+        files = {"README.md": "# Copilot\n", "docs\\design\\voice.md": "voice notes\n", "old/README.md": "retired code\n", "C:\\x.md": "no",
                  "../escape.md": "no", ".venv/lib/x.md": "no", "main.py": "no"}
         st, body = http("POST", "/sync", {"files": files, "full": True}, token=fr)
         res = json.loads(body)
-        assert st == 200 and res["written"] == 2 and len(res["refused"]) == 4, res
+        assert st == 200 and res["written"] == 3 and len(res["refused"]) == 4, res
         assert (tmp / "projects/garden/docs/docs/design/voice.md").read_text() == "voice notes\n"
         assert "doc_without_topic" in (lint := call("knowledge_lint", {}, token=fr)[1]) and "garden/README.md" in lint, lint
+        assert "garden/old/README.md" not in lint, lint  # an archive folder holds no docs to place
         assert call("knowledge_read", {"path": "garden/docs/design/voice.md"}, token=fr)[1].count("voice notes") == 1
         st, body = http("POST", "/sync", {"files": {"README.md": "# Copilot\n"}, "full": True}, token=fr)
-        assert json.loads(body) == {"written": 0, "unchanged": 1, "deleted": 1, "refused": []}, body
+        assert json.loads(body) == {"written": 0, "unchanged": 1, "deleted": 2, "refused": []}, body
         assert not (tmp / "projects/garden/docs/docs/design/voice.md").exists()
         assert http("POST", "/sync", {"files": {"README.md": "x"}}, token="rw-token")[0] == 403  # not limited to one project
         # The mirror is the guest's folder: the UI does not offer to edit it, and refuses a save (the next sync would undo it).
