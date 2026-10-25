@@ -35,9 +35,11 @@ def title_of(rel: str, text: str) -> str:
     Without it a chunk from the middle of a memo does not know what the memo is about (live test 18 Oct: 8/14 in the
     top 3 without titles)."""
     m = re.match(r"\A---\n(.*?)\n---\n", text, re.S)
-    fm = dict(re.findall(r"^(name|description|title):[ \t]*(.+)$", m.group(1), re.M)) if m else {}
+    fm = dict(re.findall(r"^(name|description|title|aliases):[ \t]*(.+)$", m.group(1), re.M)) if m else {}
+    # aliases: the names people use for the subject ("ubuntu-vm, dev vm"), so a question in their words finds it
+    also = f" (also: {fm['aliases'].strip('[]')})" if fm.get("aliases") else ""
     if fm.get("description") or fm.get("title"):
-        return f"{fm.get('name') or fm.get('title')}: {fm.get('description', '')}".strip(" :")[:300]
+        return (f"{fm.get('name') or fm.get('title')}: {fm.get('description', '')}".strip(" :") + also)[:400]
     h = re.search(r"^#{1,2} (.+)$", text, re.M)
     return (h.group(1) if h else rel.split("/")[-1][:-3].replace("_", " "))[:300]
 
@@ -214,6 +216,7 @@ if __name__ == "__main__":  # self-check of the chunker and the search ranking w
     assert cs[0][0] == 1 and all(len(c) <= 2 * CHUNK_CHARS for _, c in cs) and len(cs) >= 3, cs
     assert text.splitlines()[cs[1][0] - 1].startswith("Paragraph"), cs[1]
     assert title_of("memory/x.md", "---\nname: wolf\ndescription: games per kind\n---\nbody") == "wolf: games per kind"
+    assert title_of("memory/x.md", "---\nname: vm\ndescription: dev box\naliases: ubuntu-vm, vm 111\n---\n") == "vm: dev box (also: ubuntu-vm, vm 111)"
     assert title_of("trade/A_B.md", "intro\n# Kelly sizing\ntext") == "Kelly sizing" and title_of("trade/A_B.md", "x") == "A B"
 
     class FakeIndex:
