@@ -11,10 +11,16 @@ them, and memories that only grow get copied blindly. So nothing goes straight i
 4. this script, not the agent, inserts that line, marked "(les <date>, proef <id>)", and records target and line in the
    queue, so a later run can find and remove it again.
 Never touched: the shared rules, CLAUDE.md, hooks, the index files, archives, and skills that ship with the plugin (the
-public repo). At most MAX_PER_RUN lessons per run. Probation (does the same correction come back within 4 weeks?) is
-a later step. Silent when it works (Uptime Kuma heartbeat); a failure goes to Matrix and turns the heartbeat red.
+public repo). At most MAX_PER_RUN lessons per run.
+5. probation: PROBATION days after a lesson was applied, a pass checks the corrections since then. No correction of the
+   same kind: the lesson stays ("proef" is dropped from its mark). It came back: a research pass looks up how others
+   solve it (zendriver first, WebSearch as fallback, at most RESEARCH_PAGES pages) and the line is replaced by a better
+   one for a second probation. Failed twice: the line is removed and the owner gets one Matrix message with a proposal
+   for a hook or check, the only thing that needs him.
+Silent when it works (Uptime Kuma heartbeat); a failure goes to Matrix and turns the heartbeat red.
 
-  --dry-run   show what pass 1 would get, call nothing, change nothing
+  --dry-run        show what pass 1 would get, call nothing, change nothing
+  --research ID    run only the research pass for one applied lesson and print it (changes nothing)
   --selftest  check target validation and insertion with fake passes
 Standard library only.
 """
@@ -46,6 +52,9 @@ PUSH = "UPTIME_KUMA_PUSH_LESSON_LOOP"  # vault name of the heartbeat token (Upti
 MODEL = "sonnet"  # judging rules is the hard part and the volume is tiny (<= MAX_PER_RUN a week); counting uses haiku
 MAX_PER_RUN = 10
 EVIDENCE = 80  # most recent corrections shown to pass 1
+PROBATION = 28  # days
+RESEARCH_PAGES = 5
+ZENDRIVER = os.environ.get("KNOWLEDGE_ZENDRIVER_MCP", "")
 NL_MONTHS = "jan feb mrt apr mei jun jul aug sep okt nov dec".split()
 PASS1 = """You review lessons that AI coding agents recorded after a mistake, for a household's homelab, trading bot and \
 small company. Each lesson says what happened, why, and what would have prevented it. Below the lessons are recent \
@@ -62,6 +71,21 @@ PASS2 = """For each lesson you get the full text of the memo or skill it should 
 skills English), without a leading "- " and without a date.
 - skip: the target already says this, or it contradicts a decision under "## Keuzes" (a lesson must not undo a \
 decision). Say why."""
+PASS3 = """Each lesson below was added to a memo or skill some weeks ago, to stop a kind of mistake. Below them are the \
+messages in which the user corrected an agent since then (Dutch, many typos). For each lesson decide whether a \
+correction of the SAME kind came back after the lesson was added (quote it), or not. Only the same mistake counts, not \
+any correction on the same subject."""
+RESEARCH = """A lesson for AI coding agents did not stop a mistake from coming back. Find out how others prevent this \
+kind of mistake: official docs first, then issue trackers and forums. Search with read_page on \
+https://html.duckduckgo.com/html/?q=<words> and read the best pages with read_page (max_chars 8000); at most {pages} \
+pages in total. If read_page fails, use WebSearch instead. Then give one better line for the memo or skill (max ~200 \
+characters, concrete, in the language of the old line, no leading "- ", no date), the source URLs, and a proposal for a \
+hook or automatic check that would enforce it (one or two sentences)."""
+SCHEMA3 = {"type": "object", "required": ["verdicts"], "properties": {"verdicts": {"type": "array", "items": {
+    "type": "object", "required": ["id", "recurred", "reason"], "properties": {
+        "id": {"type": "string"}, "recurred": {"type": "boolean"}, "reason": {"type": "string"}}}}}}
+SCHEMA_R = {"type": "object", "required": ["line", "sources", "hook"], "properties": {
+    "line": {"type": "string"}, "sources": {"type": "array", "items": {"type": "string"}}, "hook": {"type": "string"}}}
 SCHEMA1 = {"type": "object", "required": ["verdicts"], "properties": {"verdicts": {"type": "array", "items": {
     "type": "object", "required": ["id", "verdict", "reason"], "properties": {
         "id": {"type": "string"}, "verdict": {"enum": ["apply", "reject"]}, "reason": {"type": "string"},
@@ -121,16 +145,21 @@ def insert(path: Path, line: str) -> str:
     return bullet
 
 
-def bare(prompt: str, system: str, schema: dict) -> tuple[list[dict], float]:
-    """One claude -p call without tools, MCP, settings or CLAUDE.md (~1k tokens overhead instead of ~100k)."""
+def bare(prompt: str, system: str, schema: dict, web: bool = False):
+    """One claude -p call without settings or CLAUDE.md (~1k tokens overhead instead of ~100k). No tools, or with
+    web=True only zendriver's read_page and WebSearch. Returns (structured output, cost)."""
+    tools = ["--tools", "WebSearch", "--allowedTools", "WebSearch,mcp__zendriver__read_page", "--max-turns",
+             str(2 * RESEARCH_PAGES + 4)] if web else ["--tools", "", "--max-turns", "3"]
+    mcp = ["--mcp-config", json.dumps({"mcpServers": {"zendriver": {"type": "http", "url": ZENDRIVER}}})] if web and ZENDRIVER else []
     r = subprocess.run(["claude", "-p", prompt, "--system-prompt", system, "--model", MODEL, "--output-format", "json",
-                        "--max-turns", "3", "--tools", "", "--strict-mcp-config", "--setting-sources", "",
-                        "--no-session-persistence", "--json-schema", json.dumps(schema)],
-                       capture_output=True, text=True, timeout=900, cwd=corrections.STATE)
+                        *tools, *mcp, "--strict-mcp-config", "--setting-sources", "", "--no-session-persistence",
+                        "--json-schema", json.dumps(schema)],
+                       capture_output=True, text=True, timeout=1800, cwd=corrections.STATE)
     out = json.loads(r.stdout or "{}")
     if r.returncode or out.get("is_error") or not out.get("structured_output"):
         raise RuntimeError(f"claude -p failed (exit {r.returncode}): {(out.get('result') or r.stderr)[-300:]}")
-    return out["structured_output"]["verdicts"], out.get("total_cost_usd") or 0.0
+    so = out["structured_output"]
+    return (so if web else so["verdicts"]), out.get("total_cost_usd") or 0.0
 
 
 def api(method: str, path: str, body: dict | None = None):
@@ -186,8 +215,77 @@ def run(lessons: list[dict], ev: str, pass1, pass2, decide, day: date) -> dict:
     return done
 
 
+def mark(line: str, day: date, lid: str, attempt: int) -> str:
+    return f"{line} (les {today_nl(day)}, proef {lid}{f', poging {attempt}' if attempt > 1 else ''})"
+
+
+def replace_line(path: Path | None, old: str, new: str | None) -> bool:
+    """Swap (or with new=None remove) the exact line the loop added; False when it is no longer there."""
+    if not path:
+        return False
+    text = path.read_text(encoding="utf-8")
+    lines = text.split("\n")
+    if old not in lines:
+        return False
+    if new is None:
+        lines.remove(old)
+    else:
+        lines[lines.index(old)] = new
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return True
+
+
+def probation(due: list[dict], ev_since, pass3, research, decide, notify, day: date) -> dict:
+    """Judge the lessons whose probation ended. ev_since(date) gives the corrections since a date."""
+    out = {"kept": [], "retried": [], "escalated": [], "gone": [], "cost": 0.0}
+    if not due:
+        return out
+    since = min(x["changed"] for x in due)
+    body = "\n".join(f"[{x['id']}] added {x['changed']} to {x['target']}: {x['line']}" for x in due)
+    v3, out["cost"] = pass3(f"LESSONS\n{body}\n\nCORRECTIONS SINCE {since}\n{ev_since(since)}")
+    verdicts = {v["id"]: v for v in v3}
+    for x in due:
+        v, path = verdicts.get(x["id"]), target_path(x["target"])
+        if not v:
+            continue  # no verdict: try again next week
+        if not v["recurred"]:
+            kept = re.sub(r", proef \w+(, poging \d)?\)$", ")", x["line"])
+            if replace_line(path, x["line"], kept):
+                decide(x["id"], "kept", line=kept, note=v["reason"][:300]); out["kept"].append(x["id"])
+            else:
+                decide(x["id"], "removed", note="line no longer in the target (edited by hand?)"); out["gone"].append(x["id"])
+            continue
+        if x.get("attempt", 1) == 1:
+            r, c = research(x, v["reason"])
+            out["cost"] += c
+            new = "- " + mark(" ".join(r["line"].split()).removeprefix("- ")[:300], day, x["id"], 2)
+            if replace_line(path, x["line"], new):
+                decide(x["id"], "applied", line=new, attempt=2, changed=day.isoformat(),
+                       note=f"came back: {v['reason']}"[:200] + f" | sources: {' '.join(r['sources'])}"[:250])
+                out["retried"].append(x["id"])
+            else:
+                decide(x["id"], "removed", note="line no longer in the target (edited by hand?)"); out["gone"].append(x["id"])
+        else:
+            replace_line(path, x["line"], None)
+            decide(x["id"], "escalated", note=f"failed twice: {v['reason']}"[:300])
+            notify(f"Lesson loop: a lesson failed twice, a hook or check may be needed.\nLesson: {x['what']}\n"
+                   f"Last line ({x['target']}, removed): {x['line']}\nCame back: {v['reason']}\n{x.get('note', '')}")
+            out["escalated"].append(x["id"])
+    return out
+
+
+def research_pass(x: dict, why: str):
+    return bare(f"LESSON: {x['what']} | prevent: {x['prevent']}\nCURRENT LINE: {x['line']}\nCAME BACK: {why}",
+                RESEARCH.format(pages=RESEARCH_PAGES), SCHEMA_R, web=True)
+
+
 def main() -> None:
-    lessons = [x for x in api("GET", "/lessons") if x["status"] == "new"][:MAX_PER_RUN]
+    queue = api("GET", "/lessons")
+    lessons = [x for x in queue if x["status"] == "new"][:MAX_PER_RUN]
+    if "--research" in sys.argv:
+        x = next(x for x in queue if x["id"] == sys.argv[sys.argv.index("--research") + 1])
+        print(json.dumps(research_pass(x, "(test run: assume it came back)"), indent=1, ensure_ascii=False))
+        return
     if "--dry-run" in sys.argv:
         print(lessons_text(lessons), "", targets_text()[:3000], sep="\n")
         return
@@ -200,9 +298,15 @@ def main() -> None:
             res = run(lessons, evidence(items, labels, since),
                       lambda p: bare(p, PASS1, SCHEMA1), lambda p: bare(p, PASS2, SCHEMA2),
                       lambda lid, status, **kw: api("POST", "/lessons", {"id": lid, "status": status, **kw}), date.today())
+        cutoff = (date.today() - timedelta(days=PROBATION)).isoformat()
+        due = [x for x in queue if x["status"] == "applied" and x.get("changed", "9") <= cutoff]
+        pro = probation(due, lambda since: evidence(items, labels, since), lambda p: bare(p, PASS3, SCHEMA3),
+                        research_pass, lambda lid, status, **kw: api("POST", "/lessons", {"id": lid, "status": status, **kw}),
+                        report_mod.send, date.today())
         last = rows[-1] if rows else ("-", 0, 0)
-        summary = (f"{len(res['applied'])} applied, {len(res['rejected'])} rejected; corrections {last[0]}: {last[2]}/{last[1]}"
-                   f"; cost ${cost + res['cost']:.3f}")
+        summary = (f"{len(res['applied'])} applied, {len(res['rejected'])} rejected, {len(pro['kept'])} kept, "
+                   f"{len(pro['retried'])} retried, {len(pro['escalated'])} escalated; corrections {last[0]}: "
+                   f"{last[2]}/{last[1]}; cost ${cost + res['cost'] + pro['cost']:.3f}")
         print(summary)
         kuma.push(PUSH, msg=summary)
     except Exception as e:  # fail loudly
@@ -250,6 +354,25 @@ def selftest() -> None:
         assert (SKILLS / "own/SKILL.md").read_text().endswith("# Own\n")  # skipped: unchanged
         insert(SKILLS / "own/SKILL.md", "x")
         assert (SKILLS / "own/SKILL.md").read_text().endswith("# Own\n- x\n")
+        # Probation: kept drops "proef", a comeback gets a researched second line, a second failure escalates.
+        later = date(2026, 11, 22)
+        a1 = {"id": "a1", "what": "w", "prevent": "p", "target": "memory/feedback_werk.md", "changed": "2026-10-25",
+              "line": "- check eerst de exitcode (les 25 okt 2026, proef a1)", "attempt": 1}
+        p3 = lambda keep: (lambda p: ([{"id": "a1", "recurred": not keep, "reason": "same again"}], 0.01))
+        res_fn = lambda x, why: ({"line": "lees altijd het foutbestand", "sources": ["https://ex.org"], "hook": "h"}, 0.1)
+        calls, sent = [], []
+        dec = lambda lid, st, **kw: calls.append((lid, st, kw))
+        r = probation([a1], lambda s: "", p3(False), res_fn, dec, sent.append, later)
+        assert r["retried"] == ["a1"] and "- lees altijd het foutbestand (les 22 nov 2026, proef a1, poging 2)" in memo.read_text()
+        a1b = {**a1, "line": calls[-1][2]["line"], "attempt": 2, "changed": "2026-11-22"}
+        r = probation([a1b], lambda s: "", p3(False), res_fn, dec, sent.append, date(2026, 12, 20))
+        assert r["escalated"] == ["a1"] and sent and "lees altijd" not in memo.read_text() and "regel een" in memo.read_text()
+        insert(memo, "x2 (les 25 okt 2026, proef a1)")
+        r = probation([{**a1, "line": "- x2 (les 25 okt 2026, proef a1)"}], lambda s: "", p3(True), res_fn, dec, sent.append, later)
+        assert r["kept"] == ["a1"] and "- x2 (les 25 okt 2026)\n" in memo.read_text(), memo.read_text()
+        r = probation([{**a1, "line": "- gone"}], lambda s: "", p3(True), res_fn, dec, sent.append, later)
+        assert r["gone"] == ["a1"] and calls[-1][1] == "removed"
+        assert probation([], None, None, None, None, None, later)["cost"] == 0.0  # nothing due: no call
     print("selftest ok")
 
 
