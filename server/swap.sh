@@ -4,7 +4,7 @@
 # (index and semantic index loaded) and then writes state/listening-<instance>; when it stops, it closes the port
 # first and its queued connections move to the other server (net.ipv4.tcp_migrate_req=1 on the host).
 #   1. green starts with the new image and must be listening
-#   2. blue stops (green serves alone), is renewed with the new image and must be listening
+#   2. blue is renewed with the new image (green serves meanwhile) and must be listening
 #   3. green stops
 # Any step that fails leaves a server listening and exits non-zero (deploy.sh fails loudly).
 set -eu
@@ -34,7 +34,8 @@ $c --profile deploy up -d --no-deps --force-recreate knowledge-green
 if ! listening green "$n-green"; then
     $c --profile deploy stop knowledge-green; echo "green not ready: blue keeps the old version" >&2; exit 1
 fi
-$c stop knowledge                         # green serves alone; blue's queued connections move to green
+# Renew blue in one step: compose stops the old one (its queued connections move to green) and replaces it at once, so
+# there is never a stopped old blue for forge's knowledge-ensure timer (role forge_nfs_guard) to start again.
 rm -f "$state/listening-blue"
 $c up -d --no-deps --force-recreate knowledge
 if ! listening blue "$n"; then echo "new blue not ready: green keeps serving the new version" >&2; exit 1; fi
