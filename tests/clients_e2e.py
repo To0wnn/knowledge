@@ -19,6 +19,7 @@ a .knowledge-project written the PowerShell 5 way (UTF-16), text with â†’ and âœ
 
   uv run --project server python tests/clients_e2e.py        (exit 0 = all passed; every check prints a line)
 """
+import contextlib
 import hashlib
 import json
 import os
@@ -443,6 +444,12 @@ def codex_plugin(tok: str, home: Path, project: Path):
                 ctx = json.loads(out or "{}").get("hookSpecificOutput", {}).get("additionalContext", "")
                 check("project garden" in ctx and "Search first" in ctx, "codex plugin: SessionStart gives the guest context with the house rules", out[:300] + err[-300:])
                 check("auto-update is on for codex" in ctx, "codex plugin: SessionStart says auto-update is on", ctx[-300:])
+    if WIN:  # python.org without py and without the PATH box: python on PATH is the Store stub, the install is only in the registry
+        hk = hooks["SessionStart"][0]["hooks"][0]
+        with registered_python():
+            code, out, err = run(f'cmd /d /s /c "{hk["commandWindows"]}"', json.dumps(payloads["SessionStart"]),
+                                 {**env, "PATH": store_stub_path(home)}, cwd=str(project), timeout=hk["timeout"] + 30)
+        check(code == 0 and "additionalContext" in out, "codex plugin: python3.cmd finds a registered Python past the Store stub", out[:300] + err[-600:])
     server = json.loads((root / manifest["mcpServers"]).read_text(encoding="utf-8"))["mcpServers"]["knowledge"]
     # Codex resolves ./python3 in the plugin folder (Windows: with PATHEXT, so python3.cmd).
     exe = str(root / server["cwd"] / (server["command"] + (".cmd" if WIN else "")))
@@ -551,6 +558,30 @@ def pythonorg_path(home: Path) -> str:
     keep = [d for d in os.environ["PATH"].split(os.pathsep)
             if d and not any((Path(d) / n).exists() for n in ("python.exe", "python3.exe"))]
     return os.pathsep.join([str(shim), *keep])
+
+
+def store_stub_path(home: Path) -> str:
+    """PATH with no py and no real Python, only a python.cmd that fails like the Microsoft Store stub."""
+    stub = home / "storestub"
+    stub.mkdir(parents=True, exist_ok=True)
+    (stub / "python.cmd").write_text("@echo Python was not found; run without arguments to install from the Microsoft Store 1>&2\r\n@exit /b 9009\r\n", encoding="utf-8")
+    keep = [d for d in os.environ["PATH"].split(os.pathsep)
+            if d and not any((Path(d) / n).exists() for n in ("python.exe", "python3.exe", "py.exe"))]
+    return os.pathsep.join([str(stub), *keep])
+
+
+@contextlib.contextmanager
+def registered_python():
+    """This Python registered under HKCU the way the python.org installer does it (PEP 514), removed afterwards."""
+    import winreg
+    key = r"SOFTWARE\Python\KnowledgeE2E\3.99"
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key + r"\InstallPath") as k:
+        winreg.SetValueEx(k, "ExecutablePath", 0, winreg.REG_SZ, sys.executable)
+    try:
+        yield
+    finally:
+        for sub in (key + r"\InstallPath", key, r"SOFTWARE\Python\KnowledgeE2E"):
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, sub)
 
 
 def agy_plugin(tok: str, home: Path, project: Path, garden: Path):

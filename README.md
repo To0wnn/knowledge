@@ -69,7 +69,9 @@ setup again). Off: `KNOWLEDGE_AUTO_UPDATE=0`. A new version loads at the next st
 
 Link a project folder to its project once: ask your agent (skill `knowledge-init`), which writes a file
 `.knowledge-project` with the project name in the folder's root. Every session started there gets that project. A linked git worktree (Codex and agy make one per chat) counts as its main checkout: same project, docs mirrored from the main checkout only, and the session is told it runs in a separate checkout. On Windows, agy needs a `python3` command on PATH (Python from the python.org install manager or the
-Microsoft Store has one); without it the setup configures agy without the plugin.
+Microsoft Store has one); without it the setup configures agy without the plugin. Codex and the agy hooks on Windows start Python through
+`plugin/python3.cmd`: the py launcher, then Python on PATH, then any install in the registry (PEP 514), each one
+test-run first, so the Microsoft Store stub is skipped and a python.org install without py or PATH still works.
 
 The plugin also ships development skills, the same in every agent: `plan-change`, `debug-root-cause`, `verify-done`,
 `review-diff`, `project-setup`, `efficiency-pass`, `knowledge-init`, `verified-goal` (keep working until a check command
