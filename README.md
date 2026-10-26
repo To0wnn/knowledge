@@ -65,7 +65,9 @@ It asks for the token once, checks it with the server, stores it in the keyring 
 keeps itself up to date in every agent, and says so once at session start: in Claude Code it turns on the marketplace's
 auto-update (off under `/plugin` > Marketplaces); Codex and agy have no plugin auto-update, so there the plugin checks
 GitHub at most once a day and updates itself with the agent's own CLI (the setup without a plugin: `git pull` and the
-setup again). Off: `KNOWLEDGE_AUTO_UPDATE=0`. A new version loads at the next start.
+setup again). Off: `KNOWLEDGE_AUTO_UPDATE=0`. A new version loads at the next start. Each session start
+reports the plugin version: the admin page shows it per device and agent, and a device still behind the newest
+version after two days hears how to update by hand (also listed in lint as `plugin_behind`).
 
 Link a project folder to its project once: ask your agent (skill `knowledge-init`), which writes a file
 `.knowledge-project` with the project name in the folder's root. Every session started there gets that project. A linked git worktree (Codex and agy make one per chat) counts as its main checkout: same project, docs mirrored from the main checkout only, and the session is told it runs in a separate checkout. On Windows, agy needs a `python3` command on PATH (Python from the python.org install manager or the
