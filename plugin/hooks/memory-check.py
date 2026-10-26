@@ -125,6 +125,25 @@ def topic_note(path: str, mem_dir: Path) -> str:
             f"'---' / 'topic: <one of: {' | '.join(headings)}>' / '---' (or add the topic line to frontmatter it already has).")
 
 
+def replaced_note(hook: dict, path: str, created: bool) -> str:
+    """The server's hint for a newly added replacing decision. The old text is rebuilt from the Edit's own strings.
+    shortcut: an overwrite with Write has no old text here and stays quiet; upgrade if Write gets used for edits."""
+    sys.path.insert(0, str(LINT_DIR))
+    import lint
+    ti = hook.get("tool_input") or {}
+    try:
+        new = Path(path).read_text(errors="replace")
+    except OSError:
+        return ""
+    if "new_string" in ti:
+        old = new.replace(ti["new_string"], ti.get("old_string", ""), -1 if ti.get("replace_all") else 1)
+    elif created:
+        old = ""
+    else:
+        return ""
+    return lint.replaced_decision(old, new).strip()
+
+
 def main() -> None:
     hook = json.load(sys.stdin)
     path = (hook.get("tool_input") or {}).get("file_path", "")
@@ -148,6 +167,8 @@ def main() -> None:
         if similar:
             notes.append("Similar existing memos (merge into one of these if it covers the same subject, then delete "
                          "this one): " + ", ".join(similar))
+    if (note := replaced_note(hook, path, created)):
+        notes.append(note)
     if notes:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext":
               "Knowledge house rules, about the memo you just wrote:\n- " + "\n- ".join(notes)}}))
@@ -180,6 +201,12 @@ if __name__ == "__main__":
                 assert (topic_note(str(d), Path(t)) == "") == ok, (text, topic_note(str(d), Path(t)))
             d.write_text("# x\n")
             assert "Bot en strategie | Reviews en adviezen" in topic_note(str(d), Path(t))
+            f = Path(t) / "r.md"
+            f.write_text("---\nname: r\n---\n## Stand\n## Keuzes\n- **B** (2 okt): y. Vervangt A.\n")
+            edit = {"tool_input": {"old_string": "## Keuzes\n", "new_string": "## Keuzes\n- **B** (2 okt): y. Vervangt A.\n"}}
+            assert "replaces an earlier one" in replaced_note(edit, str(f), False)
+            assert replaced_note({"tool_input": {"old_string": "x", "new_string": "y."}}, str(f), False) == ""
+            assert replaced_note({"tool_input": {"content": "z"}}, str(f), False) == ""
         print("ok")
         sys.exit(0)
     try:

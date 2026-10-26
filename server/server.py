@@ -854,7 +854,8 @@ async def knowledge_edit(path: str, old_string: str, new_string: str) -> str:
             raise ToolError(f"{rel} kept changing while editing; read it again and retry")
         index.refresh(rel)
     audit("edit", rel)
-    return f"edited {rel} (version {version(new)})" + await asyncio.to_thread(house_rules_hint, rel)
+    replaced = kb_lint.replaced_decision(text, new.decode("utf-8")) if mem_of(rel) else ""
+    return f"edited {rel} (version {version(new)})" + replaced + await asyncio.to_thread(house_rules_hint, rel)
 
 
 @server.tool(annotations=REPLACE)
@@ -880,6 +881,7 @@ async def knowledge_write(path: str, content: str, base_version: str = "") -> st
         index.refresh(rel)
     audit("write", rel)
     hint = await asyncio.to_thread(similar_memos_hint, rel, content) if current is None else ""  # embeds: not on the loop
+    hint += kb_lint.replaced_decision((current or b"").decode("utf-8", "replace"), content) if mem_of(rel) else ""
     return f"wrote {rel} (version {version(data)})" + hint + await asyncio.to_thread(house_rules_hint, rel)
 
 
@@ -918,7 +920,8 @@ async def knowledge_new_memo(title: str, description: str, type: str, heading: s
     notes = ([f"new heading ## {heading} (a new topic: keep it only for a genuinely new area)"] if heading not in headings else []) + \
             ([f"the index line is {len(line)} characters; keep it near 150"] if len(line) > 200 else [])
     return (f"created {rel} with its line under ## {heading} in {mem}/MEMORY.md" + (f"\n{similar}" if similar else "")
-            + "".join(f"\nNote: {n}" for n in notes) + await asyncio.to_thread(house_rules_hint, rel))
+            + "".join(f"\nNote: {n}" for n in notes) + kb_lint.replaced_decision("", content)
+            + await asyncio.to_thread(house_rules_hint, rel))
 
 
 def new_memo_refusal(rel: str, content: str) -> str:

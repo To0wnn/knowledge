@@ -131,6 +131,20 @@ def keuzes(text: str) -> list[str]:
     return [l for l in (m.group(1).splitlines() if m else []) if l.startswith("- **")]
 
 
+# A decision that replaces an earlier one; the old wording often lives on in the description, index line, other memos.
+REPLACED = re.compile(r"\b(vervangt|vervangen door|replaces|replaced by|supersedes)\b", re.I)
+REPLACED_HINT = ("\nThis change adds a decision that replaces an earlier one (house rule 3). In the same change: update this "
+                 "memo's description and its MEMORY.md index line, move the old decision to archief/<name>_archief.md "
+                 "('replaced on <date> by ...'), and knowledge_search the old wording in other memos, docs and the "
+                 "project's AGENTS.md and skills.")
+
+
+def replaced_decision(old: str, new: str) -> str:
+    """REPLACED_HINT when new has more replacing decisions under "## Keuzes" than old (a memo that already had one stays quiet)."""
+    count = lambda text: sum(len(REPLACED.findall(k)) for k in keuzes(text))
+    return REPLACED_HINT if count(new) > count(old) else ""
+
+
 def stale_unchecked(text: str, today: date) -> int:
     """Facts carried over with "(stand <date>, niet opnieuw gecontroleerd)" whose date is older than 60 days."""
     n = 0
@@ -318,6 +332,10 @@ def render(report: dict[str, list[str]]) -> str:
 
 
 if __name__ == "__main__":  # self-check
+    m = lambda k: f"---\nname: a\n---\n## Stand\nVervangt in Stand telt niet\n## Keuzes\n{k}"
+    assert replaced_decision(m(""), m("- **Worktrees** (25 okt 2026): x. Vervangt main-only van 23 okt.")) == REPLACED_HINT
+    assert replaced_decision(m("- **A** (1 okt): replaces B"), m("- **A** (1 okt): replaces B\n- **C** (2 okt): y")) == ""
+    assert replaced_decision("", m("")) == "" and replaced_decision("", m("- uitleg: vervangt niets, geen besluit")) == ""
     assert new_memo_lacks("plain") == ["frontmatter name", "frontmatter description", "frontmatter type", "## Stand", "## Keuzes"]
     assert skill_broken("# just text") and skill_broken("---\nname: a\n---\nx") and skill_broken("---\nname: a\ndescription: >\n  x\n---\n")
     assert skill_broken("---\nname: a\ndescription: Does a.\n---\nbody") == ""

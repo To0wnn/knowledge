@@ -885,6 +885,12 @@ def main():
         assert not err and "Similar existing memos" in text and "trade-memory/plan.md" in text, text
         err, text = call("knowledge_write", {"path": "trade-memory/other.md", "content": memo("volcano weather report\n", "other")})
         assert not err and "Similar existing memos" not in text, text
+        # A decision that replaces an earlier one asks for the description, index line and old wording; once only.
+        err, text = call("knowledge_edit", {"path": "trade-memory/other.md", "old_string": "## Keuzes\n",
+                                            "new_string": "## Keuzes\n- **Worktrees** (25 okt 2026): parallel. Vervangt main-only.\n"})
+        assert not err and "replaces an earlier one" in text, text
+        err, text = call("knowledge_edit", {"path": "trade-memory/other.md", "old_string": "parallel.", "new_string": "parallel, claimed."})
+        assert not err and "replaces an earlier one" not in text, text
         # /semantic skips the archive like the MCP tool, unless archive=true.
         call("knowledge_write", {"path": "trade-memory/archief/walrus_archief.md", "content": "walrus migration notes\n"})
         sem = lambda extra="": {h["path"] for h in json.loads(http("GET", f"/semantic?q=walrus%20migration&project=trade{extra}")[1])["hits"]}
