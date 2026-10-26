@@ -40,7 +40,7 @@ def token(name: str) -> str:
     return subprocess.run([str(Path.home() / ".local/bin/secret"), name], capture_output=True, text=True, check=True).stdout.strip()
 
 
-def context_text(tok: str, cwd: str) -> str:
+def context_text(tok: str, cwd: str, agent: str = "") -> str:
     """Every part of the startup context (/context/<n>, empty past the last), or one short notice; with the server
     down, the context of the last online session and the offline copy of the memory."""
     key, out = hashlib.sha256(cwd.encode()).hexdigest()[:12], []
@@ -48,7 +48,7 @@ def context_text(tok: str, cwd: str) -> str:
         linked = project_marker.project_root(Path(cwd).resolve())[1]
     except OSError:
         linked = None
-    query = urllib.parse.urlencode({"project": linked, "linked": "1"} if linked else {"project": cwd})
+    query = urllib.parse.urlencode(({"project": linked, "linked": "1"} if linked else {"project": cwd}) | {"agent": agent})
     for n in range(1, 10):
         q = query
         req = urllib.request.Request(f"{URL}/context/{n}?{q}", headers={"Authorization": f"Bearer {tok}"})
@@ -79,7 +79,7 @@ def context(agent: str, tok: str):
     stdin = sys.stdin.read()
     hook = json.loads(stdin or "{}")
     cwd = hook.get("cwd") or (hook.get("workspacePaths") or [os.getcwd()])[0]
-    ctx = context_text(tok, cwd)  # first: a slow mirror must not cost the session its context
+    ctx = context_text(tok, cwd, agent)  # first: a slow mirror must not cost the session its context
     run_hook("memory_mirror.py", tok, "")  # returns at once: the sync runs in the background
     try:
         update = self_update.notice(agent, mode=SETUP)

@@ -13,6 +13,7 @@ linked=$(sh "$(dirname "$0")/py.sh" "$(dirname "$0")/project_marker.py" "${CLAUD
 [ "$part" = 1 ] && sh "$(dirname "$0")/py.sh" "$(dirname "$0")/project_marker.py" notice "${CLAUDE_PROJECT_DIR:-$PWD}"
 if [ -n "$linked" ]; then set -- --data-urlencode "project=$linked" --data-urlencode "linked=1"
 else set -- --data-urlencode "project=${CLAUDE_PROJECT_DIR:-$PWD}"; fi
+set -- "$@" --data-urlencode "agent=claude"  # the server puts this agent's own tasks first
 code=$(printf 'Authorization: Bearer %s\n' "$token" | curl -sS --max-time 8 -o /tmp/knowledge-context.$$ -w '%{http_code}' -H @- -G "$@" "$url/context/$part" 2>/dev/null)
 # Offline: the context of the last online session plus the offline copy of the memory (memory_mirror.py).
 cache=${KNOWLEDGE_MIRROR:-$HOME/.knowledge/mirror}

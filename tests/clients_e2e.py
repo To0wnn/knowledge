@@ -119,7 +119,14 @@ def start_server(tmp: Path):
     st, body = http("POST", "/ui/api/admin/token", {"name": "friend-pc", "write": True, "redact": True,
                                                     "roots": ["garden", "garden-memory"]}, admin)
     assert st == 200, body
-    return proc, json.loads(body)["token"], tmp / "projects" / "garden"
+    tok = json.loads(body)["token"]
+    # One hand-over per agent: each plugin must say which agent it is, so its own task opens the session context.
+    tasks = "".join(f"- open tot 1 jan 2099 [{o}, {o.upper()}-1]: task for {o}\n" for o in ("Claude", "Codex", "Gemini"))
+    st, body = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_write", "arguments":
+                    {"path": "garden-memory/project_tasks.md", "content": "---\nname: tasks\ndescription: d\nmetadata:\n  type: project\n---\n"
+                     f"## Stand\n{tasks}\n## Keuzes\n"}}}, {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})
+    assert "\"isError\":false" in body, body
+    return proc, tok, tmp / "projects" / "garden"
 
 
 def _health() -> bool:
@@ -174,6 +181,8 @@ def claude_plugin(tok: str, home: Path, project: Path, garden: Path):
         start = "".join(outs["SessionStart"])
         check("project garden" in start and "Search first" in start, f"[{mode}] SessionStart: guest context with the house rules", start[:500])
         check("Development rules" in start, f"[{mode}] SessionStart: guest context with the development rules", start[:500])
+        check("your open tasks (Claude" in start and "CLAUDE-1" in start.split("===== knowledge")[0],
+              f"[{mode}] SessionStart: Claude's own task comes first", start[:500])
         check("unreachable" not in start and "skipped" not in start, f"[{mode}] SessionStart: no error notice", start[:500])
         settings = json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8"))
         check(settings["extraKnownMarketplaces"]["knowledge"].get("autoUpdate") is True
@@ -346,6 +355,8 @@ def agents(tok: str, home: Path, project: Path, garden: Path):
                     try:
                         msg = json.dumps(json.loads(out))
                         check("project garden" in msg, f"{name} via {label}: context JSON carries the guest context", out[:300])
+                        own = {"codex": "Codex", "agy": "Gemini"}[name]
+                        check(f"your open tasks ({own}" in msg, f"{name} via {label}: its own task comes first", msg[:300])
                         if label == shells[0][0]:  # the first start says it, later ones not
                             check("auto-update is on for " + name in msg, f"{name}: the script setup says auto-update is on", msg[-300:])
                     except ValueError:
@@ -442,6 +453,8 @@ def codex_plugin(tok: str, home: Path, project: Path):
                 if event == "SessionStart":
                     ctx = json.loads(out or "{}").get("hookSpecificOutput", {}).get("additionalContext", "")
                     check("project garden" in ctx and "Search first" in ctx, f"codex plugin: SessionStart gives the guest context with the house rules ({shell})", out[:300] + err[-300:])
+                    check("your open tasks (Codex" in ctx and "CODEX-1" in ctx.split("===== knowledge")[0],
+                          f"codex plugin: its own task comes first ({shell})", ctx[:300])
                     if i == 0:  # said once, at the first start only
                         check("auto-update is on for codex" in ctx, "codex plugin: SessionStart says auto-update is on", ctx[-300:])
     if WIN:  # python.org without py and without the PATH box: python on PATH is the Store stub, the install is only in the registry
@@ -626,6 +639,8 @@ def agy_plugin(tok: str, home: Path, project: Path, garden: Path):
             try:
                 msg = json.loads(out)["injectSteps"][0]["systemMessage"]["systemMessage"]
                 check("project garden" in msg, "agy plugin: context arrives as injectSteps with the guest context", out[:300])
+                check("your open tasks (Gemini" in msg and "GEMINI-1" in msg.split("===== knowledge")[0],
+                      "agy plugin: its own task comes first", msg[:300])
                 check("auto-update is on for agy" in msg, "agy plugin: context says auto-update is on", msg[-300:])
             except (ValueError, KeyError, IndexError):
                 check(False, "agy plugin: context prints injectSteps JSON", out[:300] + err[-300:])

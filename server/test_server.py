@@ -449,6 +449,22 @@ def main():
         ctx = "".join(http("GET", f"/context/{n}?project=x", token=fr)[1] for n in range(1, 5))
         assert "project_tasks.md: open tot 1 jan 2099 [Gemini, VS-1]: water the beds" in ctx, ctx[-800:]
         assert "overdue chore" in ctx and "OLD-1" not in ctx, ctx[-800:]
+        # With ?agent= the agent's own tasks open part 1, VOORRANG first; a session log quoting a task line is no task.
+        call("knowledge_write", {"path": "garden-memory/project_tasks.md", "content": memo(
+            "- open tot 1 jan 2099 [Gemini, VS-1]: water the beds\n- open tot 1 jan 2026: overdue chore\n"
+            "- open tot 2 feb 2098 [Codex, CX-1]: prune\n- open tot 3 mar 2099 [Codex, CX-2]: VOORRANG mow\n", "tasks"),
+            "base_version": ver("garden-memory/project_tasks.md")})
+        call("knowledge_write", {"path": "garden-memory/sessions/2026-10.md", "content": "- open tot 1 jan 2099 [Codex, LOG-1]: quoted\n"})
+        first = http("GET", "/context/1?project=x&agent=codex", token=fr)[1]
+        assert first.split("\n", 1)[1].startswith("===== your open tasks (Codex, project garden-memory)"), first[:300]
+        assert first.index("CX-2") < first.index("CX-1") < first.index("===== knowledge (project garden)"), first[:800]
+        mine = first.split("\n\n", 1)[0]
+        assert "CX-1" in mine and "CX-2" in mine, mine
+        assert "VS-1" not in mine and "LOG-1" not in first, mine
+        ctx = "".join(http("GET", f"/context/{n}?project=x&agent=codex", token=fr)[1] for n in range(1, 5))
+        assert "[Gemini, VS-1]" in ctx and "LOG-1" not in ctx and "overdue chore" in ctx, ctx[-800:]
+        assert "your open tasks (Gemini" in http("GET", "/context/1?project=x&agent=agy", token=fr)[1]
+        assert "your open tasks" not in http("GET", "/context/1?project=x", token=fr)[1]  # older plugins: as before
         assert "Development rules" in ctx and "2. Done means proven." in ctx, ctx  # a guest gets the development rules too
         assert "# Development rules" in http("GET", "/house-rules", token=fr)[1]  # and so does an agent's rules file
         assert b"<li>Done means proven.</li>" in raw("GET", "/ui/help", headers=ck)[2]  # and the help page

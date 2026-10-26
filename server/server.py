@@ -1300,10 +1300,12 @@ def token_project() -> str | None:
 
 
 
-def context_parts(project: str = "homelab") -> list[str]:
+def context_parts(project: str = "homelab", agent: str = "") -> list[str]:
     """Startup context for the plugin's SessionStart hooks: what a VM session in that project gets loaded natively,
-    split on line boundaries into parts that each fit one hook output, so nothing is cut off."""
+    split on line boundaries into parts that each fit one hook output, so nothing is cut off. The tasks handed to
+    `agent` come first, so they sit in part 1 instead of after the memory index."""
     docs, mem = PROJECTS[project]
+    mine, rest = open_items_text(mem, agent)
     if not in_scope("claude/"):  # a guest: only this project, no word about the owner's other projects or vault
         text = [f"===== knowledge (project {project}) =====\nThis project's memory and docs live on the knowledge server "
                 "(https://knowledge.to0wnn.com); other sessions and the web UI see the same files live. Docs: "
@@ -1327,7 +1329,7 @@ def context_parts(project: str = "homelab") -> list[str]:
                 text.append(f"===== {mem}/MEMORY.md (via knowledge server) =====\n{shown(full.read_text(encoding='utf-8'))}")
         except ToolError:
             pass
-        return split_parts("\n\n".join(text + open_items_text(mem)))
+        return split_parts("\n\n".join(mine + text + rest))
     others = "; ".join(f"{p}: {d}/ and {m}/" for p, (d, m) in PROJECTS.items() if p != project)
     text = [
         f"===== knowledge plugin (project {project}) =====\nThe memory and docs below live on the knowledge MCP server "
@@ -1350,25 +1352,50 @@ def context_parts(project: str = "homelab") -> list[str]:
         if full.exists():
             body = full.read_text(encoding="utf-8")
             text.append(f"===== {rel} (via knowledge server) =====\n{shown(expand_imports(body) if rel == 'claude/CLAUDE.md' else body)}")
-    return split_parts("\n\n".join(text + open_items_text(mem)))
+    return split_parts("\n\n".join(mine + text + rest))
 
 
-def open_items_text(mem: str) -> list[str]:
+TASK_OWNER = re.compile(r"^\[([^,\]]+),\s*([^\]]+)\]")
+AGENT_OWNERS = {"claude": ("claude",), "codex": ("codex",), "agy": ("gemini", "agy", "antigravity")}  # names used in task lines
+TASK_CHARS = 240  # the memo holds the full text; the start context only has to make the agent look
+
+
+def open_items_text(mem: str, agent: str = "") -> tuple[list[str], list[str]]:
     """Hand-overs between agents and overdue items, for every session start (guests too): a task line
-    "open tot <date> [<owner>, <ID>]: ..." in any memo of this project is listed until someone removes it."""
-    memos = {r: t for r, t, _ in index.items() if in_scope(r) and r.startswith(mem + "/")}
-    out, overdue = [], kb_lint.lint(memos, mem=mem)["open_overdue"]
-    tasks = [f"- {r.removeprefix(mem + '/')}: {line.strip().removeprefix('- ')}" for r, t in sorted(memos.items())
-             if not is_archive(r) for line in t.splitlines() if (m := kb_lint.OPEN_DUE.search(line)) and m.group(2).startswith("[")]
-    if tasks:
-        out.append(f"===== open tasks between agents ({mem}) =====\nEach line names its owner. Yours: acknowledge it by adding "
-                   "'(bezig <owner>, <date>)' to that line with knowledge_edit, and when done remove the line from the "
-                   "memo's Stand (result to its archive). Others': leave them, but say so if one blocks you:\n" + "\n".join(tasks))
+    "open tot <date> [<owner>, <ID>]: ..." in any memo of this project is listed until someone removes it.
+    Returns (the tasks of `agent`, to go first; everything else, for the tail). Session logs only quote task lines."""
+    memos = {r: t for r, t, _ in index.items() if in_scope(r) and r.startswith(mem + "/")
+             and not r.startswith(mem + "/sessions/") and not is_archive(r)}
+    overdue = kb_lint.lint(memos, mem=mem)["open_overdue"]
+    names, mine, others = AGENT_OWNERS.get(agent, ()), [], []
+    for r, t in sorted(memos.items()):
+        for line in t.splitlines():
+            if not ((m := kb_lint.OPEN_DUE.search(line)) and (o := TASK_OWNER.match(m.group(2)))):
+                continue
+            body = line.strip().removeprefix("- ")
+            item = f"- {r.removeprefix(mem + '/')}: {body if len(body) <= TASK_CHARS else body[:TASK_CHARS] + '…'}"
+            if o.group(1).strip().lower() in names:
+                mine.append(("VOORRANG" not in body.upper(), kb_lint.latest_date(m.group(1)) or date.max, item))
+            else:
+                others.append(item)
+    head, tail = [], []
+    if mine:
+        who = next(o for o in ("Claude", "Codex", "Gemini") if o.lower() in names)
+        head.append(f"===== your open tasks ({who}, project {mem}) =====\nThese tasks were handed to you ({who}). In your "
+                    "first reply of this session, list them for the user, one short line each (ID, due date, what), and "
+                    "ask which one to start; when the user's first message already asks for something, do that first "
+                    f"and list these at the end. Starting one: add '(bezig {who}, <date>)' to its line with knowledge_edit; "
+                    "done: remove the line from the memo's Stand (result to its archive). Full text: the memo named in front.\n"
+                    + "\n".join(i for *_, i in sorted(mine)))
+    if others:
+        tail.append(f"===== open tasks between agents ({mem}) =====\nEach line names its owner. Yours: acknowledge it by adding "
+                    "'(bezig <owner>, <date>)' to that line with knowledge_edit, and when done remove the line from the "
+                    "memo's Stand (result to its archive). Others': leave them, but say so if one blocks you:\n" + "\n".join(others))
     if overdue:
-        out.append(f"===== overdue open items ({mem}) =====\nThese items passed their 'open tot <date>'. Mention them to the "
-                   "user once at the start, do them when asked, or move the date with a reason:\n"
-                   + "\n".join(f"- {o}" for o in overdue))
-    return out
+        tail.append(f"===== overdue open items ({mem}) =====\nThese items passed their 'open tot <date>'. Mention them to the "
+                    "user once at the start, do them when asked, or move the date with a reason:\n"
+                    + "\n".join(f"- {o}" for o in overdue))
+    return head, tail
 
 
 def split_parts(text: str) -> list[str]:
@@ -1930,7 +1957,8 @@ async def context_route(request: Request):
     if not linked and not token_project() and not in_scope("claude/"):  # someone else's device with several projects
         note = (f"knowledge: this folder is not linked to a project, so the session got {project} by guessing from the "
                 "folder name. Link it once with the knowledge-init skill (it writes .knowledge-project with the project name).")
-    parts = context_parts(project)
+    agent = request.query_params.get("agent", "")  # claude, codex or agy: whose tasks go first
+    parts = context_parts(project, agent if agent in AGENT_OWNERS else "")
     if note:
         parts = parts[:-1] + split_parts(parts[-1] + "\n\n" + note)
     n = int(request.path_params["part"])
