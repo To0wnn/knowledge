@@ -426,8 +426,8 @@ def codex_plugin(tok: str, home: Path, project: Path):
     manifest = json.loads((root / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
     hooks = json.loads((root / manifest["hooks"]).read_text(encoding="utf-8"))["hooks"]
     path = pythonorg_path(home) if WIN else os.environ["PATH"]
-    env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, PLUGIN_ROOT=str(root), PATH=path,
-                   KNOWLEDGE_PLUGIN_LATEST=str(latest_file(home)))
+    # No PLUGIN_ROOT in the environment: the commands must work from Codex's own ${PLUGIN_ROOT} substitution alone.
+    env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, PATH=path, KNOWLEDGE_PLUGIN_LATEST=str(latest_file(home)))
     payloads = {"SessionStart": {"hook_event_name": "SessionStart", "source": "startup", "cwd": str(project)},
                 "PostToolUse": {"hook_event_name": "PostToolUse", "cwd": str(project), "tool_input": {"command": "*** Begin Patch\n*** Update File: docs/taxi.md\n*** End Patch"}},
                 "PreCompact": {"hook_event_name": "PreCompact", "session_id": "cx-1", "cwd": str(project), "transcript_path": ""},
@@ -436,18 +436,17 @@ def codex_plugin(tok: str, home: Path, project: Path):
           "codex plugin: the four hook events, one SessionStart handler (openai/codex#45999)", str(list(hooks)))
     for event, groups in hooks.items():
         for hk in (h for g in groups for h in g["hooks"]):
-            # Codex: COMSPEC /C "<commandWindows>" on Windows, $SHELL -lc "<command>" elsewhere.
-            argv = f'cmd /d /s /c "{hk["commandWindows"]}"' if WIN else [shutil.which("sh"), "-c", hk["command"]]
-            code, out, err = run(argv, json.dumps(payloads[event]), env, cwd=str(project), timeout=hk["timeout"] + 30)
-            check(code == 0 and "skipped" not in err, f"codex plugin: {event} hook runs", err[-600:])
-            if event == "SessionStart":
-                ctx = json.loads(out or "{}").get("hookSpecificOutput", {}).get("additionalContext", "")
-                check("project garden" in ctx and "Search first" in ctx, "codex plugin: SessionStart gives the guest context with the house rules", out[:300] + err[-300:])
-                check("auto-update is on for codex" in ctx, "codex plugin: SessionStart says auto-update is on", ctx[-300:])
+            for shell, argv in codex_hook_argvs(hk, root):
+                code, out, err = run(argv, json.dumps(payloads[event]), env, cwd=str(project), timeout=hk["timeout"] + 30)
+                check(code == 0 and "skipped" not in err, f"codex plugin: {event} hook runs ({shell})", err[-600:])
+                if event == "SessionStart":
+                    ctx = json.loads(out or "{}").get("hookSpecificOutput", {}).get("additionalContext", "")
+                    check("project garden" in ctx and "Search first" in ctx, f"codex plugin: SessionStart gives the guest context with the house rules ({shell})", out[:300] + err[-300:])
+                    check("auto-update is on for codex" in ctx, f"codex plugin: SessionStart says auto-update is on ({shell})", ctx[-300:])
     if WIN:  # python.org without py and without the PATH box: python on PATH is the Store stub, the install is only in the registry
         hk = hooks["SessionStart"][0]["hooks"][0]
         with registered_python():
-            code, out, err = run(f'cmd /d /s /c "{hk["commandWindows"]}"', json.dumps(payloads["SessionStart"]),
+            code, out, err = run(codex_hook_argvs(hk, root)[0][1], json.dumps(payloads["SessionStart"]),
                                  {**env, "PATH": store_stub_path(home)}, cwd=str(project), timeout=hk["timeout"] + 30)
         check(code == 0 and "additionalContext" in out, "codex plugin: python3.cmd finds a registered Python past the Store stub", out[:300] + err[-600:])
     server = json.loads((root / manifest["mcpServers"]).read_text(encoding="utf-8"))["mcpServers"]["knowledge"]
@@ -558,6 +557,17 @@ def pythonorg_path(home: Path) -> str:
     keep = [d for d in os.environ["PATH"].split(os.pathsep)
             if d and not any((Path(d) / n).exists() for n in ("python.exe", "python3.exe"))]
     return os.pathsep.join([str(shim), *keep])
+
+
+def codex_hook_argvs(hk: dict, root: Path) -> list:
+    """A plugin hook the way Codex runs it (codex-rs hooks discovery.rs, command_runner.rs): commandWindows on Windows,
+    ${PLUGIN_ROOT} replaced in the text, then the session's shell: PowerShell (-NoProfile -Command <line>) as on most
+    Windows pcs, or cmd (/c "<line>"); elsewhere sh -c."""
+    if not WIN:
+        return [("sh", [shutil.which("sh"), "-c", hk["command"].replace("${PLUGIN_ROOT}", str(root))])]
+    line = hk["commandWindows"].replace("${PLUGIN_ROOT}", str(root))
+    shells = [(n, [shutil.which(n), "-NoProfile", "-Command", line]) for n in ("powershell", "pwsh") if shutil.which(n)]
+    return shells + [("cmd", f'cmd.exe /c "{line}"')]
 
 
 def store_stub_path(home: Path) -> str:
