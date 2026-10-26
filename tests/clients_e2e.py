@@ -436,13 +436,14 @@ def codex_plugin(tok: str, home: Path, project: Path):
           "codex plugin: the four hook events, one SessionStart handler (openai/codex#45999)", str(list(hooks)))
     for event, groups in hooks.items():
         for hk in (h for g in groups for h in g["hooks"]):
-            for shell, argv in codex_hook_argvs(hk, root):
+            for i, (shell, argv) in enumerate(codex_hook_argvs(hk, root)):
                 code, out, err = run(argv, json.dumps(payloads[event]), env, cwd=str(project), timeout=hk["timeout"] + 30)
                 check(code == 0 and "skipped" not in err, f"codex plugin: {event} hook runs ({shell})", err[-600:])
                 if event == "SessionStart":
                     ctx = json.loads(out or "{}").get("hookSpecificOutput", {}).get("additionalContext", "")
                     check("project garden" in ctx and "Search first" in ctx, f"codex plugin: SessionStart gives the guest context with the house rules ({shell})", out[:300] + err[-300:])
-                    check("auto-update is on for codex" in ctx, f"codex plugin: SessionStart says auto-update is on ({shell})", ctx[-300:])
+                    if i == 0:  # said once, at the first start only
+                        check("auto-update is on for codex" in ctx, "codex plugin: SessionStart says auto-update is on", ctx[-300:])
     if WIN:  # python.org without py and without the PATH box: python on PATH is the Store stub, the install is only in the registry
         hk = hooks["SessionStart"][0]["hooks"][0]
         with registered_python():
