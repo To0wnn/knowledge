@@ -2943,8 +2943,9 @@ def open_port(host: str, port: int):
     while taken and vec.matrix is None:
         time.sleep(0.5)
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    if hasattr(socket, "SO_REUSEPORT"):  # the handover is Linux-only; Windows (CI) has neither the option nor swap.sh
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
     sock.bind((host, port))
     sock.listen(2048)
     print(f"listening on {host}:{port}" + (" (took over from the running server)" if taken else ""), flush=True)
