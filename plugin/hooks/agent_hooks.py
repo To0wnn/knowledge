@@ -7,7 +7,8 @@ clients/knowledge-agent.py (the setup without a plugin) calls the same functions
   agent_hooks.py docs-sync [TOKEN]             PostToolUse: mirror an edited .md (folder with .knowledge-project)
   agent_hooks.py session-log [TOKEN]           SessionEnd/PreCompact (Codex), Stop (agy): post the session log
   agent_hooks.py hints [TOKEN]                 PostInvocation (agy): show a hint docs-sync left (agy's PostToolUse
-                                               may only answer {}), once
+                                               may only answer {}), once; and tasks handed to agy since its last turn
+  agent_hooks.py tasks <claude|codex> [TOKEN]  UserPromptSubmit: tasks handed to this agent since the session started
   agent_hooks.py header [TOKEN]                MCP header helper: the token as JSON, {} without one
   agent_hooks.py mcp [TOKEN]                   stdio MCP server of the Codex and agy plugins: relays to /mcp
 TOKEN: "-" (default) = KNOWLEDGE_TOKEN or the keyring (token_store.py); on the machine that holds the files, a vault name.
@@ -16,8 +17,10 @@ Never fails a session: errors go to stderr. Linux, macOS and Windows; standard l
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -44,13 +47,8 @@ def context_text(tok: str, cwd: str, agent: str = "") -> str:
     """Every part of the startup context (/context/<n>, empty past the last), or one short notice; with the server
     down, the context of the last online session and the offline copy of the memory."""
     key, out = hashlib.sha256(cwd.encode()).hexdigest()[:12], []
-    try:
-        linked = project_marker.project_root(Path(cwd).resolve())[1]
-    except OSError:
-        linked = None
     version = ".".join(map(str, self_update.own()))  # the admin page shows who stays behind; the server says so here
-    query = urllib.parse.urlencode(({"project": linked, "linked": "1"} if linked else {"project": cwd}) | {"agent": agent}
-                                   | ({"plugin": version} if version else {}))
+    query = urllib.parse.urlencode({**project_query(cwd), "agent": agent, **({"plugin": version} if version else {})})
     for n in range(1, 10):
         q = query
         req = urllib.request.Request(f"{URL}/context/{n}?{q}", headers={"Authorization": f"Bearer {tok}"})
@@ -69,6 +67,66 @@ def context_text(tok: str, cwd: str, agent: str = "") -> str:
         out.append(text)
     memory_mirror.save_context(key, "\n\n".join(out))
     return "\n\n".join(out + [n for n in [memory_mirror.sync_notice()] if n])  # a conflict or failed sync, said once per start
+
+
+TASK_ID = re.compile(r"open tot [^\[:]*\[[^,\]]+,\s*([^\]]+)\]", re.I)  # the owner bracket, not a link before it
+TASKS_EVERY = 120  # seconds between two asks of one session: a prompt costs one small request at most this often
+
+
+def project_query(cwd: str) -> dict:
+    try:
+        linked = project_marker.project_root(Path(cwd).resolve())[1]
+    except OSError:
+        linked = None
+    return {"project": linked, "linked": "1"} if linked else {"project": cwd}
+
+
+def new_tasks(agent: str, tok: str, hook: dict, now=None) -> str:
+    """Tasks handed to `agent` after this session started, said once: the startup context lists the open ones, but a
+    session that runs for hours (or is resumed for days) never sees a task another agent hands over meanwhile. The
+    first ask of a session only remembers what is open; '' when nothing is new, the server is away or it is too soon."""
+    now = time.time() if now is None else now
+    sid = hook.get("session_id") or hook.get("conversationId") or hook.get("cwd") or os.getcwd()
+    # shortcut: two agy sessions without a conversationId in one folder share what they have seen.
+    seen_dir = Path.home() / ".knowledge" / "tasks-seen"
+    seen_file = seen_dir / (hashlib.sha256(f"{agent}:{sid}".encode()).hexdigest()[:16] + ".json")
+    try:
+        seen = json.loads(seen_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        seen = None
+    if seen and now - seen.get("at", 0) < TASKS_EVERY:
+        return ""
+    cwd = hook.get("cwd") or (hook.get("workspacePaths") or [os.getcwd()])[0]
+    query = urllib.parse.urlencode({**project_query(cwd), "agent": agent})
+    req = urllib.request.Request(f"{URL}/tasks?{query}", headers={"Authorization": f"Bearer {tok}"})
+    try:
+        with urllib.request.urlopen(req, timeout=4) as r:
+            lines = [ln for ln in r.read().decode("utf-8", "replace").splitlines() if ln.strip()]
+        ids = {m.group(1).strip(): ln for ln in lines if (m := TASK_ID.search(ln))}
+    except Exception:  # the next session start says so loudly; a prompt is no place to nag
+        ids = None  # still throttled: away from home every prompt would wait for the timeout
+    known = (seen or {}).get("ids")
+    fresh = [] if ids is None or known is None else [ln for i, ln in ids.items() if i not in known]
+    try:
+        seen_dir.mkdir(parents=True, exist_ok=True)
+        for old in seen_dir.glob("*.json"):  # sessions end without telling: forget them after a week
+            if now - old.stat().st_mtime > 7 * 86400:
+                old.unlink()
+        seen_file.write_text(json.dumps({"at": now, "ids": known if ids is None else sorted(ids)}), encoding="utf-8")
+    except OSError:
+        return ""  # without a memory of what was said, it would say it again every prompt
+    if not fresh:
+        return ""
+    return ("knowledge: a new task was handed to you while this session runs (full text in the memo named in front). "
+            "Tell the user in one line at the end of your reply and ask whether to start it; starting it: add "
+            "'(bezig <you>, <date>)' to its line with knowledge_edit.\n" + "\n".join(fresh))
+
+
+def tasks(agent: str, tok: str):
+    stdin = sys.stdin.read()
+    text = new_tasks(agent, tok, json.loads(stdin or "{}"))
+    if text:
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": text}}))
 
 
 def run_hook(script: str, tok: str, stdin: str) -> str:
@@ -128,14 +186,21 @@ def mcp(tok: str):
         out.flush()
 
 
-def hints():
-    """agy: the hint docs-sync left behind, injected once before the next model turn; {} when there is none."""
+def hints(tok: str):
+    """agy: the hint docs-sync left behind and tasks handed to agy meanwhile, injected once before the next model turn;
+    {} when there is none."""
     pending = Path.home() / ".knowledge" / "pending-hints.txt"
+    try:
+        news = new_tasks("agy", tok, json.loads(sys.stdin.read() or "{}"))
+    except Exception as e:  # never cost agy its pending hint or its JSON
+        news = ""
+        print(f"knowledge task check skipped: {e}", file=sys.stderr)
     try:
         text = pending.read_text(encoding="utf-8")
         pending.unlink()
     except OSError:
         text = ""
+    text = "\n\n".join(t for t in (text.strip(), news) if t)
     print(json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": text}}]} if text.strip() else {}))
 
 
@@ -146,7 +211,14 @@ def main(argv: list):
     elif cmd in ("docs-sync", "session-log") and len(rest) <= 1:
         sys.stdout.write(run_hook(f"{cmd}.py", token(rest[0] if rest else "-"), sys.stdin.read()))
     elif cmd == "hints" and len(rest) <= 1:
-        hints()
+        try:
+            tok = token(rest[0] if rest else "-")
+        except Exception:  # a locked vault must not cost agy the pending hint
+            tok = ""
+        hints(tok)
+    elif cmd == "tasks" and rest[:1] and rest[0] in ("claude", "codex") and len(rest) <= 2:
+        # Claude without Python's keyring: the plugin setting, as context.sh does
+        tasks(rest[0], token(rest[1] if len(rest) == 2 else "-") or os.environ.get("CLAUDE_PLUGIN_OPTION_TOKEN", ""))
     elif cmd == "mcp" and len(rest) <= 1:
         mcp(token(rest[0] if rest else "-"))
     elif cmd == "header" and len(rest) <= 1:

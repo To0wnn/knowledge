@@ -467,6 +467,10 @@ def main():
         assert "[Gemini, VS-1]" in ctx and "LOG-1" not in ctx and "overdue chore" in ctx, ctx[-800:]
         assert "your open tasks (Gemini" in http("GET", "/context/1?project=x&agent=agy", token=fr)[1]
         assert "your open tasks" not in http("GET", "/context/1?project=x", token=fr)[1]  # older plugins: as before
+        # /tasks: only the asking agent's task lines, for the per-prompt check of a running session.
+        t = http("GET", "/tasks?project=x&agent=codex", token=fr)[1]
+        assert t.splitlines()[0].endswith("[Codex, CX-2]: VOORRANG mow") and "VS-1" not in t and "LOG-1" not in t, t
+        assert http("GET", "/tasks?project=x&agent=nobody", token=fr)[1] == ""
         # The plugin version: recorded per token and agent, a device behind the newest hears it at session start.
         parts = lambda q: "".join(http("GET", f"/context/{n}?project=x&{q}", token=fr)[1] for n in range(1, 6))
         assert "runs 0.9.10 for codex, the newest is 0.9.16" in parts("agent=codex&plugin=0.9.10"), parts("agent=codex&plugin=0.9.10")[-600:]

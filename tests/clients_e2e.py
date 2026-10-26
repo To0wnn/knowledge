@@ -160,7 +160,8 @@ def claude_plugin(tok: str, home: Path, project: Path, garden: Path):
                                "tool_input": {"file_path": str(project / "docs" / "taxi.md")}},
                "SessionEnd": {"hook_event_name": "SessionEnd", "session_id": "s1", "transcript_path": str(transcript),
                               "cwd": str(project), "reason": "exit"},
-               "PreCompact": {"hook_event_name": "PreCompact", "session_id": "s2", "transcript_path": str(transcript), "cwd": str(project)}}
+               "PreCompact": {"hook_event_name": "PreCompact", "session_id": "s2", "transcript_path": str(transcript), "cwd": str(project)},
+               "UserPromptSubmit": {"hook_event_name": "UserPromptSubmit", "session_id": "s3", "cwd": str(project), "prompt": "hi"}}
     hashes = home / ".config" / "knowledge-server" / "secret-hashes.json"  # an owner device has them (token.py push-secrets)
     hashes.parent.mkdir(parents=True, exist_ok=True)
     hashes.write_text(json.dumps([hashlib.sha256(b"Sup3rSecret99").hexdigest()]), encoding="utf-8")
@@ -172,7 +173,7 @@ def claude_plugin(tok: str, home: Path, project: Path, garden: Path):
         env = user_env(home, CLAUDE_PLUGIN_ROOT=root, CLAUDE_PLUGIN_OPTION_URL=BASE, CLAUDE_PLUGIN_OPTION_TOKEN=tok,
                        CLAUDE_PROJECT_DIR=str(project))
         outs = {}
-        for event in ("SessionStart", "PostToolUse", "PreToolUse", "SessionEnd"):
+        for event in ("SessionStart", "PostToolUse", "PreToolUse", "SessionEnd", "UserPromptSubmit"):
             for group in hooks.get(event, []):
                 for hk in group["hooks"]:
                     cmd = hk["command"] if mode == "env" else hk["command"].replace("${CLAUDE_PLUGIN_ROOT}", root)
@@ -191,6 +192,8 @@ def claude_plugin(tok: str, home: Path, project: Path, garden: Path):
               f"[{mode}] SessionStart: auto-update turned on once, said once", json.dumps(settings) + start[-300:])
         check((garden / "docs" / "README.md").exists() and "→ ✅" in (garden / "docs" / "README.md").read_text(encoding="utf-8"),
               f"[{mode}] SessionStart mirrors the folder's .md (UTF-16 marker, → ✅ intact)")
+        check("".join(outs["UserPromptSubmit"]) == "", f"[{mode}] UserPromptSubmit: the first prompt only remembers the open tasks",
+              "".join(outs["UserPromptSubmit"]))
         check("deny" in "".join(outs["PreToolUse"]), f"[{mode}] PreToolUse: a known secret is refused", "".join(outs["PreToolUse"]))
         check((garden / "docs" / "docs" / "taxi.md").exists(), f"[{mode}] PostToolUse mirrors the edited file")
         logs = list((garden / "memory" / "sessions").glob("*.md"))
@@ -342,7 +345,8 @@ def agents(tok: str, home: Path, project: Path, garden: Path):
         payloads = {"context": {"hook_event_name": "SessionStart", "cwd": str(project), "workspacePaths": [str(project)]},
                     "docs-sync": {"hook_event_name": "PostToolUse", "cwd": str(project), "tool_input": {"command": "*** Begin Patch\n*** Update File: docs/taxi.md\n*** End Patch"}},
                     "session-log": {"hook_event_name": "SessionEnd", "session_id": f"{name}-1", "cwd": str(project), "transcript_path": ""},
-                    "hints": {"invocationNum": 1, "workspacePaths": [str(project)]}}
+                    "hints": {"invocationNum": 1, "workspacePaths": [str(project)]},
+                    "tasks": {"hook_event_name": "UserPromptSubmit", "session_id": f"{name}-1", "cwd": str(project), "prompt": "hi"}}
         # How a program starts a hook command on Windows: PowerShell -Command, or cmd /d /s /c "<command>" as one
         # string (a list would make Python add its own quoting, which cmd reads differently).
         shells = [("powershell", lambda c: ["powershell", "-NoProfile", "-Command", c]), ("cmd", lambda c: f'cmd /d /s /c "{c}"')] \
@@ -367,12 +371,32 @@ def agents(tok: str, home: Path, project: Path, garden: Path):
                         check(json.loads(out) == {} or "injectSteps" in json.loads(out), f"{name} via {label}: hints prints agy JSON", out[:300])
                     except ValueError:
                         check(False, f"{name} via {label}: hints prints valid JSON", out[:300] + err[-300:])
+    new_task(agent, env, project, tok, home)
     st, body = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_write", "arguments":
                     {"path": "garden-memory/leak.md", "content": "---\nname: l\ndescription: d\nmetadata:\n  type: project\n---\n## Stand\nSup3rSecret99\n## Keuzes\n"}}},
                     {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})
     check("known secret" in body, "a guest (no local hashes): the server refuses a known secret", body[:300])
     code, out, err = run([sys.executable, str(agent), "install", "codex"], "", user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN="wrong"))
     check(code != 0 and "401" in (out + err), "install with a wrong token stops with a clear 401 message", out + err)
+
+
+def new_task(agent: Path, env: dict, project: Path, tok: str, home: Path):
+    """A task handed to Codex while its session runs reaches the next prompt once; the first prompt only remembers."""
+    ask = lambda: run([sys.executable, str(agent), "tasks", "codex", "-"],
+                      json.dumps({"session_id": "long-1", "cwd": str(project), "prompt": "go on"}), env, cwd=str(project))[1]
+    rewind = lambda: [f.write_text(json.dumps({**json.loads(f.read_text()), "at": 0})) for f in (home / ".knowledge" / "tasks-seen").glob("*.json")]
+    check(ask() == "", "tasks: the first prompt of a session says nothing (the start context listed the open tasks)")
+    http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_write", "arguments":
+         {"path": "garden-memory/project_handover.md", "content": "---\nname: h\ndescription: d\nmetadata:\n  type: project\n---\n"
+          "## Stand\n- open tot 1 jan 2099 [Codex, NEW-1-int]: install the clips\n## Keuzes\n"}}},
+         {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})
+    check(ask() == "", "tasks: within two minutes of the last ask it does not ask again")
+    rewind()
+    out = ask()
+    check("NEW-1-int" in out and json.loads(out)["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit",
+          "tasks: a task handed over meanwhile reaches the next prompt", out[:300])
+    rewind()
+    check(ask() == "", "tasks: said once, not at every prompt")
 
 
 def script_mcp(tok: str, home: Path):
@@ -443,9 +467,10 @@ def codex_plugin(tok: str, home: Path, project: Path):
     payloads = {"SessionStart": {"hook_event_name": "SessionStart", "source": "startup", "cwd": str(project)},
                 "PostToolUse": {"hook_event_name": "PostToolUse", "cwd": str(project), "tool_input": {"command": "*** Begin Patch\n*** Update File: docs/taxi.md\n*** End Patch"}},
                 "PreCompact": {"hook_event_name": "PreCompact", "session_id": "cx-1", "cwd": str(project), "transcript_path": ""},
-                "SessionEnd": {"hook_event_name": "SessionEnd", "session_id": "cx-2", "cwd": str(project), "transcript_path": ""}}
+                "SessionEnd": {"hook_event_name": "SessionEnd", "session_id": "cx-2", "cwd": str(project), "transcript_path": ""},
+                "UserPromptSubmit": {"hook_event_name": "UserPromptSubmit", "session_id": "cx-3", "cwd": str(project), "prompt": "hi"}}
     check(set(hooks) == set(payloads) and len(hooks["SessionStart"][0]["hooks"]) == 1,
-          "codex plugin: the four hook events, one SessionStart handler (openai/codex#45999)", str(list(hooks)))
+          "codex plugin: the five hook events, one SessionStart handler (openai/codex#45999)", str(list(hooks)))
     for event, groups in hooks.items():
         for hk in (h for g in groups for h in g["hooks"]):
             for i, (shell, argv) in enumerate(codex_hook_argvs(hk, root)):
@@ -491,12 +516,12 @@ def codex_plugin(tok: str, home: Path, project: Path):
     code, out, err = run([codex, "mcp", "list"], "", env, timeout=60)
     check("agent_hooks.py mcp" in out, "codex: mcp list shows the plugin's knowledge server", out + err)
     self_update(env, home, "codex")
-    # The hooks as Codex reads them (app-server hooks/list): all four parse and wait for the user's trust (/hooks).
+    # The hooks as Codex reads them (app-server hooks/list): all five parse and wait for the user's trust (/hooks).
     reply = app_server(codex, env, "hooks/list", {"cwds": [str(project)]})
     data = reply.get("result", {}).get("data", [])
     listed = [h for e in data for h in e["hooks"] if h.get("pluginId") == "knowledge@knowledge"]
     problems = [w for e in data for w in e["warnings"] + [x["message"] for x in e["errors"]]]
-    check(len(listed) == 4 and not problems, "codex: hooks/list shows the plugin's four hooks, no warnings", json.dumps(reply)[:800])
+    check(len(listed) == 5 and not problems, "codex: hooks/list shows the plugin's five hooks, no warnings", json.dumps(reply)[:800])
     # Codex itself starts the plugin's MCP server (on Windows with a python.org PATH: py, no python3) and lists its tools.
     reply = app_server(codex, env, "mcpServerStatus/list", {"detail": "full"}, timeout=90)
     entry = next((e for e in reply.get("result", {}).get("data", []) if "knowledge" in e.get("name", "")), {})

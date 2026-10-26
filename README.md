@@ -12,6 +12,8 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   checks), new memo, delete (kept as a copy), history, lint, and ingest of a web page, PDF or text as a raw source.
 - **Session start context:** each agent gets the shared instructions, the house rules and the memory index of the
   project it works in, plus open items whose date has passed and hand-over tasks between agents.
+- **Hand-overs during a session:** before a prompt (at most every two minutes) Claude Code, Codex and agy ask
+  `/tasks` for the tasks handed to them; a task added after the session started is told to the agent once.
 - **Projects:** each project has a docs root and a memory root. A session picks its project from its working folder;
   a token can also be limited to one project (a guest).
 - **Lint:** deterministic checks in ~80 ms: dead links, index lines without a file and the reverse, missing frontmatter

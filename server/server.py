@@ -1362,14 +1362,16 @@ AGENT_OWNERS = {"claude": ("claude",), "codex": ("codex",), "agy": ("gemini", "a
 TASK_CHARS = 240  # the memo holds the full text; the start context only has to make the agent look
 
 
-def open_items_text(mem: str, agent: str = "") -> tuple[list[str], list[str]]:
-    """Hand-overs between agents and overdue items, for every session start (guests too): a task line
-    "open tot <date> [<owner>, <ID>]: ..." in any memo of this project is listed until someone removes it.
-    Returns (the tasks of `agent`, to go first; everything else, for the tail). Session logs only quote task lines."""
-    memos = {r: t for r, t, _ in index.items() if in_scope(r) and r.startswith(mem + "/")
-             and not r.startswith(mem + "/sessions/") and not is_archive(r)}
-    overdue = kb_lint.lint(memos, mem=mem)["open_overdue"]
-    names, mine, others = AGENT_OWNERS.get(agent, ()), [], []
+def task_memos(mem: str) -> dict[str, str]:
+    """The memos of `mem` that can hold task lines: session logs only quote them, archives hold finished ones."""
+    return {r: t for r, t, _ in index.items() if in_scope(r) and r.startswith(mem + "/")
+            and not r.startswith(mem + "/sessions/") and not is_archive(r)}
+
+
+def task_items(memos: dict[str, str], mem: str, names: tuple) -> tuple[list[str], list[str]]:
+    """Task lines "open tot <date> [<owner>, <ID>]: ..." as shortened items: (those of the owners in `names`, VOORRANG
+    first, then due date; all others)."""
+    mine, others = [], []
     for r, t in sorted(memos.items()):
         for line in t.splitlines():
             if not ((m := kb_lint.OPEN_DUE.search(line)) and (o := TASK_OWNER.match(m.group(2)))):
@@ -1380,6 +1382,17 @@ def open_items_text(mem: str, agent: str = "") -> tuple[list[str], list[str]]:
                 mine.append(("VOORRANG" not in body.upper(), kb_lint.latest_date(m.group(1)) or date.max, item))
             else:
                 others.append(item)
+    return [i for *_, i in sorted(mine)], others
+
+
+def open_items_text(mem: str, agent: str = "") -> tuple[list[str], list[str]]:
+    """Hand-overs between agents and overdue items, for every session start (guests too): a task line
+    "open tot <date> [<owner>, <ID>]: ..." in any memo of this project is listed until someone removes it.
+    Returns (the tasks of `agent`, to go first; everything else, for the tail). Session logs only quote task lines."""
+    memos = task_memos(mem)
+    overdue = kb_lint.lint(memos, mem=mem)["open_overdue"]
+    names = AGENT_OWNERS.get(agent, ())
+    mine, others = task_items(memos, mem, names)
     head, tail = [], []
     if mine:
         who = next(o for o in ("Claude", "Codex", "Gemini") if o.lower() in names)
@@ -1388,7 +1401,7 @@ def open_items_text(mem: str, agent: str = "") -> tuple[list[str], list[str]]:
                     "ask which one to start; when the user's first message already asks for something, do that first "
                     f"and list these at the end. Starting one: add '(bezig {who}, <date>)' to its line with knowledge_edit; "
                     "done: remove the line from the memo's Stand (result to its archive). Full text: the memo named in front.\n"
-                    + "\n".join(i for *_, i in sorted(mine)))
+                    + "\n".join(mine))
     if others:
         tail.append(f"===== open tasks between agents ({mem}) =====\nEach line names its owner. Yours: acknowledge it by adding "
                     "'(bezig <owner>, <date>)' to that line with knowledge_edit, and when done remove the line from the "
@@ -2025,10 +2038,8 @@ async def house_rules_route(request: Request):
     return PlainTextResponse(body, media_type="text/markdown")
 
 
-@server.custom_route("/context/{part}", methods=["GET"])
-async def context_route(request: Request):
-    """?project= is the folder's project name from its .knowledge-project (with linked=1, sent by the plugin), else the
-    session's directory. A folder linked to a project this device may not use gets one it may, and is told why."""
+def session_project(request: Request) -> tuple[str, str]:
+    """The project a session gets, and a note when that is not the one its folder asked for."""
     asked, linked = request.query_params.get("project", ""), request.query_params.get("linked") == "1"
     project, note = token_project() or project_for(asked), ""
     if not in_scope(PROJECTS[project][1] + "/"):
@@ -2040,6 +2051,22 @@ async def context_route(request: Request):
     if not linked and not token_project() and not in_scope("claude/"):  # someone else's device with several projects
         note = (f"knowledge: this folder is not linked to a project, so the session got {project} by guessing from the "
                 "folder name. Link it once with the knowledge-init skill (it writes .knowledge-project with the project name).")
+    return project, note
+
+
+@server.custom_route("/tasks", methods=["GET"])
+async def tasks_route(request: Request):
+    """The open tasks handed to ?agent= in the session's project, one item per line: the plugin asks before a turn, so a
+    task handed over while a session runs reaches it without a new session."""
+    mem = PROJECTS[session_project(request)[0]][1]
+    return PlainTextResponse("\n".join(task_items(task_memos(mem), mem, AGENT_OWNERS.get(request.query_params.get("agent", ""), ()))[0]))
+
+
+@server.custom_route("/context/{part}", methods=["GET"])
+async def context_route(request: Request):
+    """?project= is the folder's project name from its .knowledge-project (with linked=1, sent by the plugin), else the
+    session's directory. A folder linked to a project this device may not use gets one it may, and is told why."""
+    project, note = session_project(request)
     agent = request.query_params.get("agent", "")  # claude, codex or agy: whose tasks go first
     parts = context_parts(project, agent if agent in AGENT_OWNERS else "")
     if v := request.query_params.get("plugin", ""):  # every part asks, so all of them split the same way

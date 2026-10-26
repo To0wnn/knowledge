@@ -1,5 +1,5 @@
 {
-  "description": "Load the shared knowledge context at session start, turn on auto-update for this plugin once, log each session, guard secrets, and mirror a guest project's Markdown (folders with .knowledge-project) and keep an offline copy of the memory and the shared skills that syncs both ways",
+  "description": "Load the shared knowledge context at session start, turn on auto-update for this plugin once, log each session, tell a running session about tasks handed to it meanwhile, guard secrets, and mirror a guest project's Markdown (folders with .knowledge-project) and keep an offline copy of the memory and the shared skills that syncs both ways",
   "hooks": {
     "SessionStart": [
       {
@@ -81,6 +81,17 @@
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/py.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/session-log.py\"",
             "timeout": 15
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/py.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/agent_hooks.py\" tasks claude",
+            "timeout": 8
           }
         ]
       }
