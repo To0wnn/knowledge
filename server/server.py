@@ -1057,6 +1057,8 @@ def lint_all() -> dict[str, list[str]]:
         skills = {r[len("claude/skills/"):]: t for r, t in files.items() if r.startswith("claude/skills/")}
         for check, items in kb_lint.skill_lint(skills, slugs, {r.split("/")[1] for r in mem_files}).items():
             report.setdefault(check, []).extend(f"claude/skills/{i}" for i in items)
+    if in_scope("claude/"):  # the owner's report: a device whose auto-update stopped working
+        report["plugin_behind"] = plugins_behind()
     gaps = get_graph()["insights"]
     report["isolated_note"] = [f"{i['id']} ({i['degree']} link)" for i in gaps["isolated"]
                                if mem_of(i["id"]) or i["id"].startswith("claude/skills/")]
@@ -1450,6 +1452,87 @@ def mark_used(name: str):
         write_json(LAST_USED_FILE, {k: v for k, v in _last_used.items() if k})
     except OSError as e:  # bookkeeping only; never fail a request over it
         print(f"last_used not saved: {e}", flush=True)
+
+
+PLUGIN_SEEN_FILE = ADMIN_DIR / "plugin_seen.json"
+PLUGIN_LATEST_URL = f"{ext.RAW}/To0wnn/knowledge/main/plugin/.claude-plugin/plugin.json"
+PLUGIN_GRACE = int(os.environ.get("KNOWLEDGE_PLUGIN_GRACE", 2 * 86400))  # Codex and agy check for updates once a day; only a device behind for longer is told
+PLUGIN_STALE = 30 * 86400  # a device not seen for this long is gone, not behind
+_plugin_latest: dict = {"at": 0.0}
+
+
+def plugin_version(v: str) -> tuple:
+    try:
+        return tuple(int(p) for p in v.split("."))
+    except ValueError:
+        return ()
+
+
+def plugin_latest() -> tuple[str, float] | None:
+    """The newest plugin version on GitHub and since when the server knows it, checked at most once an hour.
+    The "since" starts the grace period, so a fresh release does not make every device "behind" at once."""
+    seen = dict(read_json(PLUGIN_SEEN_FILE, {}))
+    if time.time() - _plugin_latest["at"] > 3600:
+        _plugin_latest["at"] = time.time()
+        try:
+            with urllib.request.urlopen(PLUGIN_LATEST_URL, timeout=5) as r:
+                v = json.loads(r.read().decode())["version"]
+            if v != seen.get("_latest", {}).get("v") and plugin_version(v):
+                seen["_latest"] = {"v": v, "since": time.time()}
+                write_json(PLUGIN_SEEN_FILE, seen)
+        except (OSError, ValueError, KeyError) as e:  # GitHub away: no notice, never a failed session start
+            print(f"plugin version check failed: {e}", flush=True)
+    latest = seen.get("_latest")
+    return (latest["v"], latest["since"]) if latest else None
+
+
+def mark_plugin(name: str, agent: str, v: str):
+    """Which plugin version each token runs per agent, for the admin page and the weekly report."""
+    if not name or agent not in AGENT_OWNERS or not plugin_version(v):
+        return
+    seen = dict(read_json(PLUGIN_SEEN_FILE, {}))
+    old = seen.get(name, {}).get(agent, {})
+    if old.get("v") == v and time.time() - old.get("at", 0) < 600:
+        return
+    seen[name] = {**seen.get(name, {}), agent: {"v": v, "at": time.time()}}
+    try:
+        write_json(PLUGIN_SEEN_FILE, seen)
+    except OSError as e:  # bookkeeping only
+        print(f"plugin_seen not saved: {e}", flush=True)
+
+
+def plugin_seen(name: str) -> list[dict]:
+    """Per agent: the plugin version this token last reported, when, and whether that is behind the newest."""
+    seen = read_json(PLUGIN_SEEN_FILE, {})
+    newest = plugin_version(seen.get("_latest", {}).get("v", ""))
+    return [{"agent": a, "v": s["v"], "at": s["at"], "behind": bool(newest) and plugin_version(s["v"]) < newest}
+            for a, s in sorted(seen.get(name, {}).items())] if name != "_latest" else []
+
+
+def plugins_behind() -> list[str]:
+    """'<token> <agent>: plugin <v>, newest <latest>' for every device seen lately that is behind past the grace
+    period. Uses the stored newest version only: the weekly lint must not wait on GitHub."""
+    seen, now = read_json(PLUGIN_SEEN_FILE, {}), time.time()
+    latest = seen.get("_latest")
+    if not latest or now - latest["since"] < PLUGIN_GRACE:
+        return []
+    return [f"{name} {agent}: plugin {s['v']}, newest {latest['v']}"
+            for name, agents in sorted(seen.items()) if name != "_latest"
+            for agent, s in sorted(agents.items())
+            if now - s["at"] < PLUGIN_STALE and plugin_version(s["v"]) < plugin_version(latest["v"])]
+
+
+def plugin_notice(agent: str, v: str) -> str:
+    """Said at session start when this device's plugin stayed behind: auto-update should have fetched it by now."""
+    latest = plugin_latest()
+    if not latest or not plugin_version(v) or plugin_version(v) >= plugin_version(latest[0]) \
+            or time.time() - latest[1] < PLUGIN_GRACE:
+        return ""
+    how = {"claude": "/plugin marketplace update knowledge, then restart Claude Code",
+           "codex": "codex plugin marketplace upgrade knowledge && codex plugin add knowledge@knowledge, then restart Codex",
+           "agy": "agy plugin install https://github.com/To0wnn/knowledge/tree/main/plugin, then start a new conversation"}
+    return (f"knowledge plugin: this device runs {v} for {agent}, the newest is {latest[0]}. Auto-update should have "
+            f"fetched it; tell the user it did not, and how to update by hand: {how.get(agent, how['claude'])}.")
 
 
 def token_device(given: str) -> dict | None:
@@ -1959,6 +2042,11 @@ async def context_route(request: Request):
                 "folder name. Link it once with the knowledge-init skill (it writes .knowledge-project with the project name).")
     agent = request.query_params.get("agent", "")  # claude, codex or agy: whose tasks go first
     parts = context_parts(project, agent if agent in AGENT_OWNERS else "")
+    if v := request.query_params.get("plugin", ""):  # every part asks, so all of them split the same way
+        if request.path_params["part"] == "1":
+            mark_plugin(device.get().get("name", ""), agent, v)
+        if behind := await asyncio.to_thread(plugin_notice, agent, v):
+            note = "\n\n".join(n for n in (note, behind) if n)
     if note:
         parts = parts[:-1] + split_parts(parts[-1] + "\n\n" + note)
     n = int(request.path_params["part"])
@@ -2469,7 +2557,7 @@ async def ui_admin_state(request: Request, _):
             "admin": False, "user": dev["user"],
             "projects": [{"name": p, "docs": d, "memory": m, "builtin": p in BUILTIN_PROJECTS,
                           "mode": me.get("projects", {}).get(p)} for p, (d, m) in list(PROJECTS.items()) if d in dev["roots"]],
-            "tokens": [{"name": n, **{k: v for k, v in cfg.items() if k != "sha256"}, "last_used": last_used(n)}
+            "tokens": [{"name": n, **{k: v for k, v in cfg.items() if k != "sha256"}, "last_used": last_used(n), "plugin": plugin_seen(n)}
                        for n, cfg in sorted(tokens.items()) if cfg.get("owner") == dev["user"]],
             "limits": {"projects": USER_MAX_PROJECTS, "tokens": USER_MAX_TOKENS, "project_mb": PROJECT_MAX_MB,
                        "created": len(me.get("created", []))},
@@ -2479,7 +2567,7 @@ async def ui_admin_state(request: Request, _):
         "users": read_json(USERS_FILE, {}),
         "projects": [{"name": p, "docs": d, "memory": m, "builtin": p in BUILTIN_PROJECTS} for p, (d, m) in PROJECTS.items()],
         "roots": sorted(ROOTS),
-        "tokens": [{"name": n, **{k: v for k, v in cfg.items() if k != "sha256"}, "last_used": last_used(n)}
+        "tokens": [{"name": n, **{k: v for k, v in cfg.items() if k != "sha256"}, "last_used": last_used(n), "plugin": plugin_seen(n)}
                    for n, cfg in sorted(tokens.items())],
         "config_admins": sorted(CONFIG_ADMINS),
         "settings": current_settings(), "setting_info": {k: {"min": lo, "max": hi, "label": label, "float": kind is float}

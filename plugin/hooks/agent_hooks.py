@@ -48,7 +48,9 @@ def context_text(tok: str, cwd: str, agent: str = "") -> str:
         linked = project_marker.project_root(Path(cwd).resolve())[1]
     except OSError:
         linked = None
-    query = urllib.parse.urlencode(({"project": linked, "linked": "1"} if linked else {"project": cwd}) | {"agent": agent})
+    version = ".".join(map(str, self_update.own()))  # the admin page shows who stays behind; the server says so here
+    query = urllib.parse.urlencode(({"project": linked, "linked": "1"} if linked else {"project": cwd}) | {"agent": agent}
+                                   | ({"plugin": version} if version else {}))
     for n in range(1, 10):
         q = query
         req = urllib.request.Request(f"{URL}/context/{n}?{q}", headers={"Authorization": f"Bearer {tok}"})

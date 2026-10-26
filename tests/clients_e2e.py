@@ -108,7 +108,8 @@ def start_server(tmp: Path):
            "KNOWLEDGE_PROXY_SECRET": "proxy-secret", "KNOWLEDGE_ADMINS": "anthony", "KNOWLEDGE_AUDIT": str(tmp / "audit.log"),
            "KNOWLEDGE_PORT": str(PORT), "KNOWLEDGE_BIND": "127.0.0.1", "KNOWLEDGE_RESCAN": "3600", "KNOWLEDGE_EMBED_MODEL": "hash",
            "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"),
-           "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}", "PYTHONUTF8": "1"}
+           "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}", "PYTHONUTF8": "1",
+           "KNOWLEDGE_GITHUB_RAW": "http://127.0.0.1:9"}  # no newest-version lookup on GitHub from a test
     log = open(tmp / "server.log", "wb")
     proc = subprocess.Popen([sys.executable, str(REPO / "server" / "server.py")], env=env, stdout=log, stderr=subprocess.STDOUT)
     if not wait_for(lambda: _health(), 60):
@@ -758,6 +759,15 @@ def real_clis(tok: str, home: Path):
         check("knowledge" in out, "codex: mcp list shows the knowledge server", out + err)
 
 
+def plugin_versions(tmp: Path):
+    """Each agent's session start told the server which plugin version it runs (admin page, weekly report)."""
+    want = json.loads((REPO / "plugin/.claude-plugin/plugin.json").read_text(encoding="utf-8"))["version"]
+    seen = json.loads((tmp / "plugin_seen.json").read_text(encoding="utf-8")) if (tmp / "plugin_seen.json").exists() else {}
+    got = {a: s["v"] for name, agents in seen.items() if name != "_latest" for a, s in agents.items()}
+    for agent in ("claude", "codex", "agy"):
+        check(got.get(agent) == want, f"{agent}: session start reports plugin version {want}", json.dumps(seen)[:300])
+
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # this report only; the clients run as a stock Windows has them
     tmp = Path(tempfile.mkdtemp(prefix="kn e2e "))
@@ -782,6 +792,7 @@ def main():
         script_mcp(tok, home)
         codex_plugin(tok, tmp / "Codex Usér", project)  # its own home: the plugin next to the setup's server would clash
         agy_plugin(tok, home, project, garden)
+        plugin_versions(tmp)
         relay_errors(home)
         installer(tok, tmp)
         real_clis(tok, home)

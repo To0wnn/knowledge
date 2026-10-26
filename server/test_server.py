@@ -115,7 +115,9 @@ def main():
         def do_GET(self):
             path, _, q = self.path.partition("?")
             files = lambda c: gh["commits"][c]
-            if path.startswith("/raw/"):
+            if path.endswith("/main/plugin/.claude-plugin/plugin.json"):  # the newest plugin version
+                body = json.dumps({"version": "0.9.16"}).encode()
+            elif path.startswith("/raw/"):
                 _, _, _, _, commit, *rest = path.split("/")
                 body = files(commit)["/".join(rest[2:])].encode()
             elif path.endswith("/commits"):
@@ -137,7 +139,7 @@ def main():
            "KNOWLEDGE_TOKENS": str(tokens), "KNOWLEDGE_PLUGIN_SKILLS": str(bundled), "KNOWLEDGE_ADMIN_DIR": str(tmp), "KNOWLEDGE_PROJECTS_DIR": str(tmp / "projects"),
            "KNOWLEDGE_PROXY_SECRET": "proxy-secret", "KNOWLEDGE_ADMINS": "anthony", "KNOWLEDGE_AUDIT": str(tmp / "audit.log"), "KNOWLEDGE_PORT": str(PORT),
            "KNOWLEDGE_BIND": "127.0.0.1", "KNOWLEDGE_RESCAN": "3600",
-           "KNOWLEDGE_GITHUB_API": ghurl, "KNOWLEDGE_GITHUB_RAW": ghurl + "/raw", "KNOWLEDGE_EXTERNAL_SLEEP": "3600", "KNOWLEDGE_INSTANCE": "blue",
+           "KNOWLEDGE_GITHUB_API": ghurl, "KNOWLEDGE_GITHUB_RAW": ghurl + "/raw", "KNOWLEDGE_EXTERNAL_SLEEP": "3600", "KNOWLEDGE_INSTANCE": "blue", "KNOWLEDGE_PLUGIN_GRACE": "0",
            "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}"}
     proc = subprocess.Popen([sys.executable, str(Path(__file__).with_name("server.py"))], env=env)
     try:
@@ -465,6 +467,17 @@ def main():
         assert "[Gemini, VS-1]" in ctx and "LOG-1" not in ctx and "overdue chore" in ctx, ctx[-800:]
         assert "your open tasks (Gemini" in http("GET", "/context/1?project=x&agent=agy", token=fr)[1]
         assert "your open tasks" not in http("GET", "/context/1?project=x", token=fr)[1]  # older plugins: as before
+        # The plugin version: recorded per token and agent, a device behind the newest hears it at session start.
+        parts = lambda q: "".join(http("GET", f"/context/{n}?project=x&{q}", token=fr)[1] for n in range(1, 6))
+        assert "runs 0.9.10 for codex, the newest is 0.9.16" in parts("agent=codex&plugin=0.9.10"), parts("agent=codex&plugin=0.9.10")[-600:]
+        assert "codex plugin marketplace upgrade knowledge" in parts("agent=codex&plugin=0.9.10")
+        assert "the newest is" not in parts("agent=agy&plugin=0.9.16") + parts("agent=claude")  # current, or an old plugin
+        seen = json.loads((tmp / "plugin_seen.json").read_text())
+        frname = next(n for n, a in seen.items() if "codex" in a)
+        assert seen[frname]["codex"]["v"] == "0.9.10" and seen[frname]["agy"]["v"] == "0.9.16" and "claude" not in seen[frname], seen
+        assert f"{frname} codex: plugin 0.9.10, newest 0.9.16" in call("knowledge_lint", {})[1], call("knowledge_lint", {})[1][-500:]
+        row = next(t for t in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["tokens"] if t["name"] == frname)
+        assert {(p["agent"], p["v"], p["behind"]) for p in row["plugin"]} == {("agy", "0.9.16", False), ("codex", "0.9.10", True)}, row
         assert "Development rules" in ctx and "2. Done means proven." in ctx, ctx  # a guest gets the development rules too
         assert "# Development rules" in http("GET", "/house-rules", token=fr)[1]  # and so does an agent's rules file
         assert b"<li>Done means proven.</li>" in raw("GET", "/ui/help", headers=ck)[2]  # and the help page

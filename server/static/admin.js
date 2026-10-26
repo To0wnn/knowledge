@@ -60,6 +60,17 @@ function skillsCell(t) {
   l.append(c, " " + (t.skills ? "on" : "off")); td.append(l); return td;
 }
 
+// The plugin version per agent this token reported at its last session start; "behind" when older than the newest.
+function pluginCell(t) {
+  const td = el("td", "muted");
+  if (!t.plugin || !t.plugin.length) { td.textContent = "–"; return td; }
+  t.plugin.forEach((p, i) => {
+    if (i) td.append(el("br"));
+    td.append(el("span", p.behind ? "unused" : "", `${p.agent} ${p.v}${p.behind ? " (behind)" : ""}`), ` · ${ago(p.at)}`);
+  });
+  return td;
+}
+
 function renderTokens() {
   $("tokens").replaceChildren(...state.tokens.map((t) => {
     const tr = el("tr");
@@ -68,7 +79,7 @@ function renderTokens() {
     if (SYSTEM.has(t.name) || t.watch) name.append(el("span", "muted", " · used by the VM"));
     tr.append(name, el("td", "", access), el("td", "", scopeText(t) + (t.redact ? " · secrets masked" : "")), skillsCell(t),
       el("td", "muted", t.created ? `${day(t.created)}${t.by ? " · " + t.by : ""}` : "before the admin page"),
-      el("td", t.last_used ? "muted" : "unused", t.last_used ? ago(t.last_used) : "never used"));
+      el("td", t.last_used ? "muted" : "unused", t.last_used ? ago(t.last_used) : "never used"), pluginCell(t));
     const td = el("td"), b = el("button", "ghost danger", "Revoke");
     b.setAttribute("aria-label", `Revoke ${t.name}`);
     b.onclick = () => {
