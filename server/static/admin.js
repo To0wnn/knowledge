@@ -15,6 +15,7 @@ const api = (path, body) => fetch(path, {
 });
 // Tokens the VM itself uses: revoking one breaks the live sync, the weekly report or the VM sessions.
 const SYSTEM = new Set(["vm-watcher", "vm-sessions", "vm-lint-report"]);
+const openClients = new Set();  // tokens whose client rows are unfolded; kept across re-renders
 
 let state = null;
 const ago = (sec) => { if (!sec) return "never"; const d = Date.now() / 1000 - sec;
@@ -61,9 +62,9 @@ function skillsCell(t) {
 }
 
 // The plugin version per agent this token reported at its last session start; "behind" when older than the newest.
-function pluginCell(t) {
+function pluginCell(t, open) {
   const td = el("td", "muted");
-  const own = new Set((t.clients || []).map((c) => c.agent));  // those show their version in their own rows
+  const own = new Set(open ? t.clients.map((c) => c.agent) : []);  // unfolded, those show it in their own rows
   const rest = (t.plugin || []).filter((p) => !own.has(p.agent));
   if (!rest.length) { td.textContent = "–"; return td; }
   rest.forEach((p, i) => {
@@ -90,13 +91,20 @@ function clientRows(t) {
 
 function renderTokens() {
   $("tokens").replaceChildren(...state.tokens.flatMap((t) => {
-    const tr = el("tr", t.clients && t.clients.length ? "has-clients" : "");
+    const n = (t.clients || []).length, open = n && openClients.has(t.name);
+    const tr = el("tr", open ? "has-clients" : "");
     const access = t.watch ? "VM watcher" : t.write ? "read + write" : "read";
     const name = el("td", "mono", t.name);
     if (SYSTEM.has(t.name) || t.watch) name.append(el("span", "muted", " · used by the VM"));
+    if (n) {
+      const fold = el("button", "ghost fold", `${open ? "▾" : "▸"} ${n} client${n === 1 ? "" : "s"}`);
+      fold.setAttribute("aria-expanded", String(Boolean(open)));
+      fold.onclick = () => { openClients.has(t.name) ? openClients.delete(t.name) : openClients.add(t.name); renderTokens(); };
+      name.append(" ", fold);
+    }
     tr.append(name, el("td", "", access), el("td", "", scopeText(t) + (t.redact ? " · secrets masked" : "")), skillsCell(t),
       el("td", "muted", t.created ? `${day(t.created)}${t.by ? " · " + t.by : ""}` : "before the admin page"),
-      el("td", t.last_used ? "muted" : "unused", t.last_used ? ago(t.last_used) : "never used"), pluginCell(t));
+      el("td", t.last_used ? "muted" : "unused", t.last_used ? ago(t.last_used) : "never used"), pluginCell(t, open));
     const td = el("td"), b = el("button", "ghost danger", "Revoke");
     b.setAttribute("aria-label", `Revoke ${t.name}`);
     b.onclick = () => {
@@ -104,7 +112,7 @@ function renderTokens() {
       if (confirm(`Revoke ${t.name}? Devices using it stop working right away.${warn}`)) run(() => api("/ui/api/admin/token", { name: t.name, revoke: true }), b);
     };
     td.append(b); tr.append(td);
-    return [tr, ...clientRows(t)];
+    return [tr, ...(open ? clientRows(t) : [])];
   }));
   // Rebuilt after every action: keep what was ticked. "All projects" is explicit, the server refuses an empty pick.
   const ticked = new Set([...$("t-roots").querySelectorAll("input:checked")].map((c) => c.value));
