@@ -3,6 +3,7 @@ edges for wikilinks, markdown links, doc/skill references and cited sources. On 
 graph insights (knowledge gaps for lint) and a relevance model for related notes.
 Pure functions over {rel: text}, tens of ms."""
 import math
+import os
 import re
 
 import networkx as nx
@@ -19,9 +20,12 @@ PATH_MD = re.compile(r"(?<![\w.-])((?:~/|/home/[\w.-]+/)?[\w.-]+/[\w./-]*\.md)\b
 SOURCE_REF = re.compile(r"\b(20\d\d-\d\d-\d\d-[a-z0-9-]+\.md)\b")
 FM_SOURCES = re.compile(r"^sources:[ \t]*(\[[^\]\n]*\]|(?:\n[ \t]+-[^\n]*)+)", re.M)
 # project -> (docs root, memory root). Docs roots other than homelab are code repos: only their Markdown is shared.
-PROJECTS = {"homelab": ("homelab", "memory"), "anpitek": ("anpitek", "anpitek-memory"), "trade": ("trade", "trade-memory")}
-MEMORY_ROOTS = {mem for _, mem in PROJECTS.values()}
-MD_ONLY = {docs for docs, _ in PROJECTS.values()} - {"homelab"}
+# The first is always on; the other two belong to the original installation (KNOWLEDGE_BUILTIN_PROJECTS turns them on).
+ALL_BUILTIN = {"homelab": ("homelab", "memory"), "anpitek": ("anpitek", "anpitek-memory"), "trade": ("trade", "trade-memory")}
+ENABLED = {"homelab", *os.environ.get("KNOWLEDGE_BUILTIN_PROJECTS", "").replace(" ", "").split(",")}
+PROJECTS = {p: roots for p, roots in ALL_BUILTIN.items() if p in ENABLED}
+MEMORY_ROOTS = {mem for _, mem in ALL_BUILTIN.values()}
+MD_ONLY = {docs for docs, _ in ALL_BUILTIN.values()} - {"homelab"}
 
 
 def project_of(rel: str) -> str:
@@ -331,6 +335,7 @@ def related(graph: dict, rel: str, limit: int = 10, semantic: dict[str, float] |
 
 
 if __name__ == "__main__":
+    PROJECTS.update(ALL_BUILTIN)  # the tests below use all three
     g = build({
         "memory/MEMORY.md": "## Werk\n- [Alpha memo](a.md) — x\n",
         "memory/a.md": "---\nname: a\nmetadata:\n  type: feedback\n---\nsee [[b_c]], `framework.md`, skill `forge-stack`, 2026-10-18-x.md",

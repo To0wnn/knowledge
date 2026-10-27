@@ -29,6 +29,9 @@ x-server: &server
     KNOWLEDGE_VECTORS: /state/vectors.npz  # embedding cache: a restart only embeds new text
     TZ: Europe/Amsterdam  # local dates in source file names, LOG.md and the audit log (forge itself runs UTC)
     KNOWLEDGE_ALLOWED_HOSTS: ${KNOWLEDGE_ALLOWED_HOSTS}
+    KNOWLEDGE_PUBLIC_URL: ${KNOWLEDGE_PUBLIC_URL:-}  # named in the agents' instructions (web UI link)
+    KNOWLEDGE_LANGUAGE: ${KNOWLEDGE_LANGUAGE:-en}  # en or nl: section names and words the server writes
+    KNOWLEDGE_BUILTIN_PROJECTS: ${KNOWLEDGE_BUILTIN_PROJECTS:-homelab}  # the original installation: homelab,anpitek,trade
     KNOWLEDGE_PROXY_IPS: ${KNOWLEDGE_PROXY_IPS}
     # A new project or token made by a person (not an admin) is reported here; the bot token is in proxy.env.
     KNOWLEDGE_MATRIX_URL: ${KNOWLEDGE_MATRIX_URL}

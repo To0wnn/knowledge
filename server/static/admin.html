@@ -85,13 +85,13 @@
 
   <section id="sec-people" role="tabpanel" aria-labelledby="h-users" hidden>
     <h2 id="h-users">People</h2>
-    <p class="muted">Sign-in is Authentik (group "Knowledge"); here you decide which projects someone may read or edit. A change is saved shortly after you pick it. Someone who signs in without access appears at the top. Admins: the ones in the server config plus the extra admins under Settings.</p>
+    <p class="muted">People sign in through the reverse proxy (forward auth) or with the server password; here you decide which projects someone may read or edit. A change is saved shortly after you pick it. Someone who signs in without access appears at the top. Admins: the ones in the server config plus the extra admins under Settings.</p>
     <div class="table-wrap"><table>
       <thead id="users-head"></thead>
       <tbody id="users"></tbody>
     </table></div>
     <form id="user-form" class="admin-form inline">
-      <label for="u-name">Add by Authentik username</label>
+      <label for="u-name">Add by username</label>
       <input id="u-name" required pattern="[\w.@+\-]{1,150}">
       <button type="submit">Add</button>
     </form>
@@ -130,7 +130,7 @@
     <p class="muted">Policy the server applies at once, stored in <code>/admin/settings.json</code>. Infrastructure (paths, hosts, proxy IPs, port) is set in the repo's compose.yaml and local.env and shown below.</p>
     <form id="settings-form" class="admin-form">
       <div id="settings-fields"></div>
-      <label for="s-admins">Extra admins (Authentik usernames, one per line)</label>
+      <label for="s-admins">Extra admins (usernames, one per line)</label>
       <textarea id="s-admins" rows="3" spellcheck="false"></textarea>
       <p class="muted" id="s-config-admins"></p>
       <button type="submit">Save settings</button>

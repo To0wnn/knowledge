@@ -7,11 +7,11 @@
     {
       "name": "knowledge",
       "source": "./plugin",
-      "description": "Live shared homelab knowledge (docs + Claude memory) through the knowledge server",
+      "description": "Shared memory and docs for Claude Code, Codex and agy, live from your own knowledge server",
       "version": "0.1.0"
     }
   ],
   "metadata": {
-    "description": "Live shared homelab knowledge for Claude Code"
+    "description": "Shared memory and docs for coding agents, from your own knowledge server"
   }
 }

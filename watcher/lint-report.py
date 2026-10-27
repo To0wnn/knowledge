@@ -21,7 +21,7 @@ from pathlib import Path
 
 import kuma  # noqa: E402  (next to this file)
 
-SERVER = "https://knowledge.to0wnn.com"
+SERVER = (os.environ.get("KNOWLEDGE_PUBLIC_URL") or os.environ.get("KNOWLEDGE_URL", "http://localhost:8766")).rstrip("/")
 MATRIX = os.environ["KNOWLEDGE_MATRIX_URL"]  # from local.env via the unit (EnvironmentFile); missing = fail loudly
 ROOM = os.environ["KNOWLEDGE_MATRIX_ROOM"]
 TOKEN = Path.home() / ".config/knowledge-server/report.token"

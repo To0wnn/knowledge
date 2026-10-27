@@ -32,8 +32,8 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   waiter hook. The woken agent tells the user and waits for consent. The admin page lists per token the sessions
   seen in the last week (agent, session id, project, wakeable), each with a Forget button.
 - **Projects:** each project has a docs root and a memory root. A session picks its project from its working folder;
-  a token can also be limited to one project (a guest). The admin page gives a project the name the web UI shows;
-  a built-in project with no notes on your installation gets no tab.
+  a token can also be limited to one project (a guest). A new server has one project (`homelab`, docs in
+  `data/docs`, memory in `data/memory`); the admin page makes more and gives a project the name the web UI shows.
 - **Lint:** deterministic checks in ~80 ms: dead links, index lines without a file and the reverse, missing frontmatter
   or sections, oversized memos, overdue open items, probable secrets (never shown), raw sources not yet processed.
 - **Web UI:** a home view per topic, full search, a note preview with connected notes, an editor, change history, a
@@ -82,11 +82,16 @@ with HTTPS in front: over plain HTTP the password and tokens cross the network r
 1000; if `./data` belongs to another user, set `KNOWLEDGE_UID` and `KNOWLEDGE_GID` in `.env`. The image (`ghcr.io/to0wnn/knowledge`, about 1.5 GB with the embedding model) is built for every release;
 it is also listed in the MCP registry as `io.github.To0wnn/knowledge`.
 
+Settings in `.env` (all optional): `KNOWLEDGE_PUBLIC_URL` (the address people use, named in the agents' instructions),
+`KNOWLEDGE_LANGUAGE` (`en` or `nl`: a memo's sections are `## Status` and `## Decisions`, or `## Stand` and
+`## Keuzes`; both are always accepted), `TZ`. The house rules every agent gets are `default_house_rules.md` until you
+put your own `house_rules.md` in `data/shared`.
+
 Requirements: Docker and about 2 GB RAM (the embedding model is 1.2 GB; it ships in the image, nothing is fetched at
 runtime).
 
 The original installation runs differently (`server/compose.yaml`: notes shared over NFS from the machine the agents
-run on, a zero-downtime switch on deploy): copy `local.env.example` to `local.env`, point the volumes at your folders
+run on, a zero-downtime switch on deploy, `KNOWLEDGE_BUILTIN_PROJECTS=homelab,anpitek,trade`): copy `local.env.example` to `local.env`, point the volumes at your folders
 and run `./deploy.sh`, which runs the tests, copies `server/` to the Docker host, builds, switches and waits for
 `/health`.
 
@@ -100,8 +105,9 @@ python3 ~/knowledge/clients/knowledge-agent.py install   # finds Claude Code, Co
 python3 ~/knowledge/clients/knowledge-agent.py update    # later: update the plugin in every agent that has it
 ```
 
-`install claude` (or `codex`, `agy`) sets up one agent without asking. For your own server: `install` asks for its
-address (Enter keeps the one shown; or set `KNOWLEDGE_URL`, e.g. `KNOWLEDGE_URL=http://localhost:8766`, for one run).
+`install claude` (or `codex`, `agy`) sets up one agent without asking which ones. `install` asks for your server's
+address (or set `KNOWLEDGE_URL`, e.g. `KNOWLEDGE_URL=http://localhost:8766`, for one run); the installer has no default, so a
+token never goes to a server you did not name.
 The address that answered is stored in `~/.config/knowledge/url` for the hooks of every agent and set as the Claude
 plugin's "Knowledge server URL" option, so later sessions and `update` need nothing else.
 

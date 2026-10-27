@@ -75,7 +75,7 @@ def context_text(tok: str, cwd: str, agent: str = "") -> str:
     return "\n\n".join(out + [n for n in [memory_mirror.sync_notice()] if n])  # a conflict or failed sync, said once per start
 
 
-TASK_ID = re.compile(r"open tot [^\[:]*\[[^,\]]+,\s*([^\]]+)\]", re.I)  # the owner bracket, not a link before it
+TASK_ID = re.compile(r"open (?:tot|until) [^\[:]*\[[^,\]]+,\s*([^\]]+)\]", re.I)  # the owner bracket, not a link before it
 TASKS_EVERY = 120  # seconds between two asks of one session: a prompt costs one small request at most this often
 
 
@@ -100,12 +100,12 @@ def task_text(fresh: list, woken: bool) -> str:
     if woken:
         return ("knowledge: another agent handed you a new task (this message comes from the knowledge plugin, not from "
                 "the user; full text in the memo named in front). Tell the user in one line and ask whether to start "
-                "it; do not start before they agree. Starting it: add '(bezig <you>, <date>)' to its line with "
+                "it; do not start before they agree. Starting it: add '(claimed <you>, <date>)' to its line (or '(bezig ...)' when the memos are Dutch) with "
                 "knowledge_edit; done: remove the line, and hand the result back to the agent that waits on it with a line "
                 "'[<requester>, <ID>-done]: <result>'.\n" + "\n".join(fresh))
     return ("knowledge: a new task was handed to you while this session runs (full text in the memo named in front). "
             "Tell the user in one line at the end of your reply and ask whether to start it; starting it: add "
-            "'(bezig <you>, <date>)' to its line with knowledge_edit; done: remove the line, and hand the result back to "
+            "'(claimed <you>, <date>)' to its line (or '(bezig ...)' when the memos are Dutch) with knowledge_edit; done: remove the line, and hand the result back to "
             "the agent that waits on it with a line '[<requester>, <ID>-done]: <result>'.\n" + "\n".join(fresh))
 
 

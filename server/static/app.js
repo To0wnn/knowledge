@@ -5,7 +5,7 @@
 // Topic clusters reuse the group hues in a fixed order; clusters beyond these share the neutral doc colour.
 const CLUSTER_HUES = ["project", "feedback", "reference", "user", "infra", "incident", "skill", "source",
   "sky", "brown", "lime", "magenta", "coral", "steel"];
-let PROJECTS = ["homelab", "anpitek", "trade"]; // replaced by the projects this user may see (/ui/api/me)
+let PROJECTS = ["homelab"]; // replaced by the projects this user may see (/ui/api/me)
 const ROOT_PROJECT = { memory: "homelab", homelab: "homelab", anpitek: "anpitek", "anpitek-memory": "anpitek",
   trade: "trade", "trade-memory": "trade", claude: "shared" };
 const MEMORY_ROOT = { homelab: "memory", anpitek: "anpitek-memory", trade: "trade-memory" };
@@ -350,7 +350,7 @@ function topicGroups() {
   const groups = new Map(), ns = data.nodes.filter(nodeIn);
   const own = new Set(ns.filter((n) => !n.id.startsWith("claude/")).map((n) => n.cluster)); // this project's topics
   for (const n of ns) {
-    // A shared skill whose topic is another project's heading ("Servers & beheer" in gema) goes under Skills.
+    // A shared skill whose topic is another project's heading (a heading of a guest project) goes under Skills.
     const t = allMode() ? n.project : n.id.startsWith("claude/") && !own.has(n.cluster) ? "Skills" : n.cluster || (n.group === "doc" ? "Docs" : "Other");
     (groups.get(t) || groups.set(t, []).get(t)).push(n);
   }

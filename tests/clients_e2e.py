@@ -390,6 +390,13 @@ def agents(tok: str, home: Path, project: Path, garden: Path):
                     {"path": "garden-memory/leak.md", "content": "---\nname: l\ndescription: d\nmetadata:\n  type: project\n---\n## Stand\nSup3rSecret99\n## Keuzes\n"}}},
                     {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})
     check("known secret" in body, "a guest (no local hashes): the server refuses a known secret", body[:300])
+    st, body = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18",
+                    "capabilities": {}, "clientInfo": {"name": "e2e", "version": "1"}}}, {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})
+    check("## Status" in body and "anpitek" not in body and "to0wnn" not in body.lower() and "Dutch" not in body,
+          "a new server: generic instructions (English sections, no other installation's projects or address)", body[:600])
+    bare = {k: v for k, v in user_env(home.parent / "No Url").items() if k != "KNOWLEDGE_URL"}
+    code, out, err = run([sys.executable, str(CLIENT / "clients" / "knowledge-agent.py"), "install", "codex"], "", {**bare, "KNOWLEDGE_TOKEN": "x"})
+    check(code != 0 and "Which knowledge server" in out + err, "install without a known server asks for it, never a default", out + err)
     code, out, err = run([sys.executable, str(agent), "install", "codex"], "", user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN="wrong"))
     check(code != 0 and "401" in (out + err), "install with a wrong token stops with a clear 401 message", out + err)
 

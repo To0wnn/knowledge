@@ -11,6 +11,7 @@ RUN mkdir -p /opt/models && /app/.venv/bin/python -c "from fastembed import Text
     && chmod -R a+rX /opt/models
 # All modules (a forgotten module once crash-looped the container; deploy.sh now waits for /health).
 COPY *.py ./
+COPY default_house_rules.md ./
 COPY static ./static
 # The skills that ship with the plugin (deploy.sh copies plugin/skills here): on the VM ~/.claude/skills only links to
 # them, which NFS cannot follow, so the server shows this copy read-only.

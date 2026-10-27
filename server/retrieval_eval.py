@@ -9,13 +9,14 @@ Uses /semantic (not logged as a gap). Standard library only.
   python3 retrieval_eval.py SET.json [token-file] [--save]   (default token ~/.config/knowledge-server/report.token)
 """
 import json
+import os
 import sys
 import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
-SERVER = "https://knowledge.to0wnn.com"
+SERVER = os.environ.get("KNOWLEDGE_URL", "http://localhost:8766").rstrip("/")
 
 
 def ranks(paths: list[str], expected: list[str]) -> int | None:

@@ -21,6 +21,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+os.environ.setdefault("KNOWLEDGE_LANGUAGE", "nl")  # this hook runs only on the original installation's VM (Dutch memos)
+
 PROJECTS = Path.home() / ".claude/projects"
 LINT_DIR = Path(__file__).resolve().parents[2] / "server"  # ~/knowledge/server/lint.py
 SERVER = "https://knowledge.to0wnn.com"

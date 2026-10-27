@@ -285,6 +285,25 @@ def choose(found: list, answer) -> list:
     return [a for a in found if answer(f"Set up the knowledge plugin for {a}? [Y/n] ").strip().lower() in ("", *YES)]
 
 
+def ensure_url():
+    """The server for a setup. A known one (KNOWLEDGE_URL, or stored by an earlier install) is offered with Enter to
+    keep it; otherwise the person must type it: never a silent default, which would send their token to another server."""
+    global URL
+    known = bool(os.environ.get("KNOWLEDGE_URL")) or token_store.URL_FILE.exists()
+    if not sys.stdin.isatty():
+        if not known:
+            sys.exit("Which knowledge server? Set KNOWLEDGE_URL (e.g. https://knowledge.example.com) or run this in a terminal.")
+        return
+    for _ in range(3):
+        typed = input(f"Knowledge server [{URL}]: " if known else
+                      "Knowledge server address (e.g. https://knowledge.example.com): ").strip().rstrip("/")
+        if typed.startswith(("http://", "https://")) or (known and not typed):
+            URL = typed or URL
+            return
+        print("Type the address with http:// or https://.")
+    sys.exit("No server address.")
+
+
 def install_found():
     found = [a for a in AGENTS if shutil.which(a)]
     if not found:
@@ -292,8 +311,7 @@ def install_found():
     if not sys.stdin.isatty():
         sys.exit(f"Found {', '.join(found)}. Without a terminal, name one: install <claude|codex|agy>.")
     print(f"found: {', '.join(found)}")
-    global URL
-    URL = input(f"Knowledge server [{URL}]: ").strip().rstrip("/") or URL
+    ensure_url()
     chosen = choose(found, input)
     if not chosen:
         sys.exit("nothing chosen")
@@ -472,6 +490,8 @@ def main(argv: list):
     elif cmd == "update" and len(argv) == 1:
         update()
     elif cmd == "install" and len(argv) >= 2 and argv[1] in (*CONFIG, "claude"):
+        if len(argv) == 2:  # a vault name (the machine that holds the files) keeps the URL it is given
+            ensure_url()
         install(argv[1], argv[2] if len(argv) > 2 else "-")
     elif cmd in ("context", "docs-sync", "session-log", "hints", "tasks", "wake", "register"):  # hooks written by the setup call this script
         agent_hooks.SETUP = "script"  # its auto-update: git pull + install, not the plugin CLI

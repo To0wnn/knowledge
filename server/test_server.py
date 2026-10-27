@@ -140,6 +140,8 @@ def main():
            "KNOWLEDGE_TOKENS": str(tokens), "KNOWLEDGE_PLUGIN_SKILLS": str(bundled), "KNOWLEDGE_ADMIN_DIR": str(tmp), "KNOWLEDGE_PROJECTS_DIR": str(tmp / "projects"),
            "KNOWLEDGE_PROXY_SECRET": "proxy-secret", "KNOWLEDGE_ADMINS": "alice", "KNOWLEDGE_AUDIT": str(tmp / "audit.log"), "KNOWLEDGE_PORT": str(PORT),
            "KNOWLEDGE_UI_PASSWORD": "gategategate", "KNOWLEDGE_UI_USER": "pwadmin",
+           # the original installation's settings; the defaults (English, one project) run in tests/clients_e2e.py
+           "KNOWLEDGE_LANGUAGE": "nl", "KNOWLEDGE_BUILTIN_PROJECTS": "homelab,anpitek,trade",
            "KNOWLEDGE_BIND": "127.0.0.1", "KNOWLEDGE_RESCAN": "3600",
            "KNOWLEDGE_GITHUB_API": ghurl, "KNOWLEDGE_GITHUB_RAW": ghurl + "/raw", "KNOWLEDGE_EXTERNAL_SLEEP": "3600", "KNOWLEDGE_INSTANCE": "blue", "KNOWLEDGE_PLUGIN_GRACE": "0",
            "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}"}
@@ -181,14 +183,14 @@ def main():
         assert not call("knowledge_write", {"path": "memory/fb.md", "content": "---\nname: fb\ndescription: d\nmetadata:\n  type: feedback\n---\nRule. Why: x. How to apply: y.\n"})[0]
         # knowledge_new_memo: the server writes the layout and the index line; a new heading is said out loud.
         err, text = call("knowledge_new_memo", {"title": "Garage door", "description": "opener on the wifi", "type": "project",
-                                                 "heading": "Huis", "stand": "Opener at 10.0.0.9.", "keuzes": "- **Local only** (1 Oct 2026, A): no cloud."})
+                                                 "heading": "Huis", "status": "Opener at 10.0.0.9.", "decisions": "- **Local only** (1 Oct 2026, A): no cloud."})
         assert not err and "created memory/project_garage_door.md" in text and "new heading ## Huis" in text, text
         made = (mem / "project_garage_door.md").read_text()
         assert made.startswith("---\nname: project_garage_door\n") and "## Stand\n\nOpener" in made and "## Keuzes\n\n- **Local only**" in made, made
         assert "- [Garage door](project_garage_door.md) — opener on the wifi" in (mem / "MEMORY.md").read_text()
         assert "memo_not_in_index" not in text  # the index line is there before the hint is computed
-        assert call("knowledge_new_memo", {"title": "Garage door", "description": "x", "type": "project", "heading": "Huis", "stand": "x"})[0]  # exists
-        assert call("knowledge_new_memo", {"title": "X", "description": "x", "type": "note", "heading": "Huis", "stand": "x"})[0]  # bad type
+        assert call("knowledge_new_memo", {"title": "Garage door", "description": "x", "type": "project", "heading": "Huis", "status": "x"})[0]  # exists
+        assert call("knowledge_new_memo", {"title": "X", "description": "x", "type": "note", "heading": "Huis", "status": "x"})[0]  # bad type
 
         for bad in ("memory/../../etc/passwd", "homelab/secret.env", "claude/settings.json", "etc/x",
                     "homelab/opnsense-config.xml", "homelab/unifi_backup_1.unf"):  # config exports carry keys

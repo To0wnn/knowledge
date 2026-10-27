@@ -4,19 +4,28 @@ Pure functions over {rel_path: text}, so they run on the in-memory index in mill
 The server only reports facts; judging contradictions or rewriting memos is left to the Claude session that
 reads the report.
 """
+import os
 import posixpath
 import re
 from datetime import date
 
+# The words of the memo layout. Both languages are always read; KNOWLEDGE_LANGUAGE picks what the server writes
+# (new memos, refusals, instructions). Sections "## Status"/"## Stand", "## Decisions"/"## Keuzes".
+WORDS = {"en": {"now": "Status", "decisions": "Decisions", "open": "open until", "claimed": "claimed", "archive": "archive"},
+         "nl": {"now": "Stand", "decisions": "Keuzes", "open": "open tot", "claimed": "bezig", "archive": "archief"}}
+LANG = os.environ.get("KNOWLEDGE_LANGUAGE", "en") if os.environ.get("KNOWLEDGE_LANGUAGE") in WORDS else "en"
+W = WORDS[LANG]
+NOW_H, DEC_H = r"## (?:Status|Stand)", r"## (?:Decisions|Keuzes)"
 MONTHS = {"jan": 1, "feb": 2, "mrt": 3, "maa": 3, "mar": 3, "apr": 4, "mei": 5, "may": 5, "jun": 6, "jul": 7,
           "aug": 8, "sep": 9, "okt": 10, "oct": 10, "nov": 11, "dec": 12}
 WIKILINK = re.compile(r"\[\[([a-z0-9][a-z0-9_-]*)\]\]")  # [[slug]]; skips shell tests like [[ -t 1 ]]
 INDEX_LINE = re.compile(r"^- \[(?P<title>[^\]]+)\]\((?P<file>[^)]+\.md)\)(?P<hook>.*)$", re.M)
 DATE_NL = re.compile(r"\b(\d{1,2}) (jan|feb|mrt|maa|mar|apr|mei|may|jun|jul|aug|sep|okt|oct|nov|dec)[a-z]* (20\d\d)\b", re.I)
 DATE_ISO = re.compile(r"\b(20\d\d)-(\d\d)-(\d\d)\b")
-# An open item with a deadline: "open tot 29 okt 2026: …"; overdue ones are listed every week and at session start.
-OPEN_DUE = re.compile(r"\bopen tot (\d{1,2} [a-z]+ 20\d\d|20\d\d-\d\d-\d\d)\b:?\s*(.*)", re.I)
-OPEN_WORDS = re.compile(r"\b(TODO|open|nog niet|wacht op|later|volgende stap)\b", re.I)
+# An open item with a deadline: "open until 29 Oct 2026: …" / "open tot 29 okt 2026: …"; overdue ones are listed
+# every week and at session start.
+OPEN_DUE = re.compile(r"\bopen (?:tot|until) (\d{1,2} [a-z]+ 20\d\d|20\d\d-\d\d-\d\d)\b:?\s*(.*)", re.I)
+OPEN_WORDS = re.compile(r"\b(TODO|open|nog niet|wacht op|later|volgende stap|not yet|waiting for|next step)\b", re.I)
 SECRET_HINT = re.compile(r"(wachtwoord|password|passwd|token|api[-_ ]?key|secret)\s*[:=]?\s*`?[A-Za-z0-9_\-+/=@!.]{8,}", re.I)
 CODE = re.compile(r"```.*?```|`[^`\n]*`", re.S)  # [[x]] inside code is syntax (TOML tables, shell tests), not a link
 
@@ -76,7 +85,8 @@ def latest_date(text: str, until: date | None = None) -> date | None:
 
 # Every memo (except feedback/user rules) and every homelab doc is built the same way: the current state, then the
 # deliberate choices with their reasons; history goes to archief/<name>_archief.md.
-STRUCTURE = ("## Stand", "## Keuzes")
+STRUCTURE = (f"## {W['now']}", f"## {W['decisions']}")  # what a report asks for; both languages count as present
+STRUCTURE_RE = (NOW_H, DEC_H)
 NOT_DOCS = {"CLAUDE.md", "README.md"}
 
 
@@ -88,20 +98,21 @@ def memo_type(text: str) -> str:
 
 def open_text(text: str) -> str:
     """The part of a memo where an open item can live: not the frontmatter, not "## Keuzes" (a decision is no open
-    item), not headings ("### Open"), not "niets open" / "geen open punten"."""
+    item), not headings ("### Open"), not "niets open" / "geen open punten" / "nothing open"."""
     body = FRONT.sub("", text, count=1)
-    body = re.sub(r"^## Keuzes\b.*?(?=^## |\Z)", "", body, flags=re.M | re.S)
-    return "\n".join(l for l in body.splitlines() if not l.startswith("#") and not re.search(r"\b(niets|geen)\s+open", l, re.I))
+    body = re.sub(rf"^{DEC_H}\b.*?(?=^## |\Z)", "", body, flags=re.M | re.S)
+    return "\n".join(l for l in body.splitlines()
+                     if not l.startswith("#") and not re.search(r"\b(niets|geen|nothing|no)\s+open", l, re.I))
 
 
 _MON = "jan|feb|mrt|maa|mar|apr|mei|may|jun|jul|aug|sep|okt|oct|nov|dec"
 # A decision carries when it was taken: "20 okt 2026", "20 okt", "okt 2026" or 2026-10-20.
 DECISION_DATE = re.compile(rf"\b\d{{1,2}} ({_MON})[a-z]*\b|\b({_MON})[a-z]* 20\d\d\b|\b20\d\d-\d\d", re.I)
-UNCHECKED = re.compile(r"\(stand ([^)]*?),? niet (?:opnieuw )?gecontroleerd\)", re.I)
+UNCHECKED = re.compile(r"\((?:stand|as of) ([^)]*?),? (?:niet (?:opnieuw )?gecontroleerd|not (?:re-?)?checked)\)", re.I)
 STALE_UNCHECKED_DAYS = 60
 # Facts that change on the live system (IP addresses, x.y.z versions), and the "(gecontroleerd <date>)" mark of rule 4.
 CHANGEABLE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b|\bv?\d+\.\d+\.\d+\b")
-CHECKED = re.compile(r"\bgecontroleerd (\d[^)]*?)\)", re.I)
+CHECKED = re.compile(r"\b(?:gecontroleerd|checked) (\d[^)]*?)\)", re.I)
 REVIEW_AFTER_DAYS = 45  # Guru-style review cycle; measured 21 Oct 2026: 8 of 68 such memos were older
 
 
@@ -127,14 +138,14 @@ def last_checked(text: str, today: date) -> date | None:
 def keuzes(text: str) -> list[str]:
     """The decision bullets under "## Keuzes": a decision starts with its bold title ("- **..."); plain bullets there are
     explanation or pointers."""
-    m = re.search(r"^## Keuzes\b(.*?)(?=^## |\Z)", text, re.M | re.S)
+    m = re.search(rf"^{DEC_H}\b(.*?)(?=^## |\Z)", text, re.M | re.S)
     return [l for l in (m.group(1).splitlines() if m else []) if l.startswith("- **")]
 
 
 # A decision that replaces an earlier one; the old wording often lives on in the description, index line, other memos.
 REPLACED = re.compile(r"\b(vervangt|vervangen door|replaces|replaced by|supersedes)\b", re.I)
 REPLACED_HINT = ("\nThis change adds a decision that replaces an earlier one (house rule 3). In the same change: update this "
-                 "memo's description and its MEMORY.md index line, move the old decision to archief/<name>_archief.md "
+                 f"memo's description and its MEMORY.md index line, move the old decision to {W['archive']}/<name>_{W['archive']}.md "
                  "('replaced on <date> by ...'), and knowledge_search the old wording in other memos, docs and the "
                  "project's AGENTS.md and skills.")
 
@@ -155,7 +166,7 @@ def stale_unchecked(text: str, today: date) -> int:
 
 
 def missing_structure(text: str) -> list[str]:
-    return [h for h in STRUCTURE if not re.search(rf"^{h}\b", text, re.M)]
+    return [h for h, r in zip(STRUCTURE, STRUCTURE_RE) if not re.search(rf"^{r}\b", text, re.M)]
 
 
 SKILL_NAME = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
@@ -274,7 +285,7 @@ def lint(files: dict[str, str], today: date | None = None, mem: str = "memory") 
             report["missing_frontmatter"].append(f"{name}: {', '.join(missing)}")
         if name not in indexed:
             report["memo_not_in_index"].append(name)
-        if len(text.encode()) > BIG_MEMO and "archief/" not in text:
+        if len(text.encode()) > BIG_MEMO and not re.search(r"\b(?:archief|archive)/", text):
             report["big_memo_without_archive"].append(f"{name} ({len(text.encode()) // 1024} KB)")
         last = latest_date(text)
         opens = len(OPEN_WORDS.findall(open_text(no_code)))
@@ -336,7 +347,10 @@ if __name__ == "__main__":  # self-check
     assert replaced_decision(m(""), m("- **Worktrees** (25 okt 2026): x. Vervangt main-only van 23 okt.")) == REPLACED_HINT
     assert replaced_decision(m("- **A** (1 okt): replaces B"), m("- **A** (1 okt): replaces B\n- **C** (2 okt): y")) == ""
     assert replaced_decision("", m("")) == "" and replaced_decision("", m("- uitleg: vervangt niets, geen besluit")) == ""
-    assert new_memo_lacks("plain") == ["frontmatter name", "frontmatter description", "frontmatter type", "## Stand", "## Keuzes"]
+    assert new_memo_lacks("plain") == ["frontmatter name", "frontmatter description", "frontmatter type", *STRUCTURE]
+    assert new_memo_lacks("---\nname: a\ndescription: d\nmetadata:\n  type: project\n---\n## Status\nx\n## Decisions\n") == []
+    assert stale_unchecked("x (as of 1 jul 2026, not re-checked)", date(2026, 10, 20)) == 1
+    assert OPEN_DUE.search("- open until 2026-10-30: later")
     assert skill_broken("# just text") and skill_broken("---\nname: a\n---\nx") and skill_broken("---\nname: a\ndescription: >\n  x\n---\n")
     assert skill_broken("---\nname: a\ndescription: Does a.\n---\nbody") == ""
     assert skill_broken("---\r\nname: a\r\ndescription: Does a.\r\n---\r\nbody\r\n") == ""  # written on Windows
@@ -379,11 +393,11 @@ if __name__ == "__main__":  # self-check
     assert not lint({"memory/MEMORY.md": "", "memory/p.md": "root password: ‹secret:ROOT_PW›\ntoken: /etc/x/tok.txt\n"
                      "secret `HOMELAB_SSH_KEY`\n"})["possible_secret_in_memo"]
     assert r["unprocessed_source"] == ["homelab/sources/2026-10-18-x.md"], r
-    assert r["missing_structure"] == ["a.md: no ## Stand / ## Keuzes", "b.md: no ## Stand / ## Keuzes"], r  # c.md is a user memo
+    assert r["missing_structure"] == [f"{n}.md: no {' / '.join(STRUCTURE)}" for n in "ab"], r  # c.md is a user memo
     r5 = lint({"memory/MEMORY.md": "## Net\n- [N](n.md) — x\n", "memory/n.md": "---\nmetadata:\n  type: project\n---\n## Stand\nx\n## Keuzes\ny\n",
                "homelab/netwerk.md": "---\ntopic: \"Net\"\n---\n## Stand\n## Keuzes\n", "homelab/x.md": "---\ntopic: \"Nope\"\n---\n",
                "homelab/CLAUDE.md": "rules", "homelab/archief/x_archief.md": "old"})
-    assert r5["missing_structure"] == ["homelab/x.md: no ## Stand / ## Keuzes"], r5
+    assert r5["missing_structure"] == [f"homelab/x.md: no {' / '.join(STRUCTURE)}"], r5
     assert r5["doc_without_topic"] == ["homelab/x.md: topic 'Nope' is no heading of MEMORY.md"], r5
     k = "---\nmetadata:\n  type: project\n---\n## Stand\nIP 10.0.0.9 (stand 1 jul 2026, niet opnieuw gecontroleerd), port 80 (stand 15 okt, niet gecontroleerd)\n## Keuzes\n- **A** (20 okt 2026): x\n- **B**: no date\n- **C** (2026-10-01, the owner): y\n"
     r6 = lint({"memory/MEMORY.md": "", "memory/k.md": k, "memory/n.md": "## Stand\n## Keuzes\n- Nog geen bewuste keuzes vastgelegd.\n"}, today=date(2026, 10, 20))

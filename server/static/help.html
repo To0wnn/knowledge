@@ -55,7 +55,7 @@ footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
   <a class="logout" href="/ui/logout">Sign out</a>
 </header>
 <div class="wrap">
-  <div class="eyebrow">MCP · https://knowledge.to0wnn.com</div>
+  <div class="eyebrow">MCP · <span class="server-url">this server</span></div>
   <h1>Connect a client</h1>
   <p class="lede">How to connect Claude Code, agy (Antigravity) or Codex to the shared knowledge: the docs and memory of your project, live on every machine, with the same house rules.</p>
 
@@ -74,16 +74,16 @@ footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
     <li><b>Get the scripts and run the setup</b>
       <span data-os="linux">Needs <code>git</code> and <code>python3</code>.</span>
       <span data-os="windows" hidden>Needs <a href="https://git-scm.com/download/win" target="_blank" rel="noopener">Git for Windows</a> and <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">Python 3</a> (keep "py launcher" ticked); the commands are for PowerShell. Quit Codex and agy first: Windows does not replace files that are in use.</span>
-      The setup finds Claude Code, Codex and agy on this computer and asks y/n for each (Enter = yes). It asks for the token once (paste it; it is not shown), checks it with the server, keeps it in the keyring, Keychain or Credential Manager, and installs the plugin in the agents you chose. One agent only: add its name, e.g. <code>install codex</code>.
+      The setup finds Claude Code, Codex and agy on this computer and asks y/n for each (Enter = yes). It asks for the server address (enter <code class="server-url">this page's address</code>) and for the token once (paste it; it is not shown), checks it with the server, keeps it in the keyring, Keychain or Credential Manager, and installs the plugin in the agents you chose. One agent only: add its name, e.g. <code>install codex</code>.
       <div class="cmd" data-os="linux"><pre>git -C ~/knowledge pull 2&gt;/dev/null || git clone https://github.com/To0wnn/knowledge ~/knowledge
 python3 ~/knowledge/clients/knowledge-agent.py install</pre><button class="copy" type="button">Copy</button></div>
       <div class="cmd" data-os="windows" hidden><pre>cd $HOME
 if (Test-Path $HOME\knowledge) { git -C $HOME\knowledge pull } else { git clone https://github.com/To0wnn/knowledge $HOME\knowledge }
 py $HOME\knowledge\clients\knowledge-agent.py install</pre><button class="copy" type="button">Copy</button></div></li>
     <li><b>Link your project folder</b>
-      In the root of your project, a file <code>.knowledge-project</code> with the project name (for example <code>a350</code>): every session started in that folder gets that project, and its <code>.md</code> files go to the server (code, <code>.venv</code> and hidden folders never). Easiest: ask your agent to link the folder (skill <code>knowledge-init</code>), or:
-      <div class="cmd" data-os="linux"><pre>echo a350 &gt; .knowledge-project</pre><button class="copy" type="button">Copy</button></div>
-      <div class="cmd" data-os="windows" hidden><pre>Set-Content .knowledge-project a350</pre><button class="copy" type="button">Copy</button></div></li>
+      In the root of your project, a file <code>.knowledge-project</code> with the project name (for example <code>garden</code>): every session started in that folder gets that project, and its <code>.md</code> files go to the server (code, <code>.venv</code> and hidden folders never). Easiest: ask your agent to link the folder (skill <code>knowledge-init</code>), or:
+      <div class="cmd" data-os="linux"><pre>echo garden &gt; .knowledge-project</pre><button class="copy" type="button">Copy</button></div>
+      <div class="cmd" data-os="windows" hidden><pre>Set-Content .knowledge-project garden</pre><button class="copy" type="button">Copy</button></div></li>
     <li><b>First start</b>
       Start a new session in your project folder; each agent has one thing to do the first time, see its tab below. Then ask: "search the knowledge for …".</li>
   </ol>
@@ -135,14 +135,12 @@ py $HOME\knowledge\clients\knowledge-agent.py update</pre><button class="copy" t
   <div class="table-wrap"><table>
     <thead><tr><th>Folder (example)</th><th>Project</th></tr></thead>
     <tbody>
-      <tr><td>a name starting with <code>trade</code> anywhere in the path</td><td>trade</td></tr>
-      <tr><td><code>~/&lt;project name&gt;/…</code>, e.g. <code>~/gema</code></td><td>that project</td></tr>
-      <tr><td><code>anpitek</code> anywhere in the path</td><td>anpitek</td></tr>
-      <tr><td>anything else, e.g. <code>~/Work</code></td><td>homelab</td></tr>
+      <tr><td><code>~/&lt;project name&gt;/…</code>, e.g. <code>~/garden</code></td><td>that project</td></tr>
+      <tr><td>anything else, e.g. <code>~/Work</code></td><td>the first project (homelab)</td></tr>
     </tbody>
   </table></div>
-  <p>A folder name counts only when it is exactly the name of a project (admin page, Projects): <code>~/a350</code> works,
-    <code>~/A350Copilot</code> does not. A new project of your own: create it under Projects, then start the agent in a folder
+  <p>A folder name counts only when it is exactly the name of a project (admin page, Projects): <code>~/garden</code> works,
+    <code>~/GardenPlanner</code> does not. A new project of your own: create it under Projects, then start the agent in a folder
     with that name.</p>
   <p><code>.knowledge-project</code> does something else: it marks a folder whose <code>.md</code> files are mirrored to the
     server as the docs of that project. It only works with a token for one project, and the name in the file must be that
@@ -179,6 +177,7 @@ py $HOME\knowledge\clients\knowledge-agent.py update</pre><button class="copy" t
   <footer>Source and technical details: <a href="https://github.com/To0wnn/knowledge" target="_blank" rel="noopener">github.com/To0wnn/knowledge</a> (README, sections "A guest project" and "Other agents").</footer>
 </div>
 <script>
+for (const e of document.querySelectorAll('.server-url')) e.textContent = location.origin;
 const tabs = [...document.querySelectorAll('[role="tab"]')], oses = [...document.querySelectorAll('.os [role="radio"]')];
 let client = 'claude', os = /Windows/.test(navigator.userAgent) ? 'windows' : 'linux';
 try { os = localStorage.getItem('kn_help_os') || os; } catch (e) {}
