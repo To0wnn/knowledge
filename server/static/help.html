@@ -73,12 +73,12 @@ footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
   <ol class="steps">
     <li><b>Get the scripts and run the setup</b>
       <span data-os="linux">Needs <code>git</code> and <code>python3</code>.</span>
-      <span data-os="windows" hidden>Needs <a href="https://git-scm.com/download/win" target="_blank" rel="noopener">Git for Windows</a> and <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">Python 3</a> (keep "py launcher" ticked); the commands are for PowerShell. Quit Codex and agy first: Windows does not replace files that are in use.</span>
+      <span data-os="windows" hidden>Needs <a href="https://git-scm.com/download/win" target="_blank" rel="noopener">Git for Windows</a> and <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">Python 3</a> (keep "py launcher" ticked); the commands are for PowerShell. Quit Codex and agy first: Windows does not replace files that are in use. The folder is only a copy of the repository: local changes in it are overwritten.</span>
       The setup finds Claude Code, Codex and agy on this computer and asks y/n for each (Enter = yes). It asks for the server address (enter <code class="server-url">this page's address</code>) and for the token once (paste it; it is not shown), checks it with the server, keeps it in the keyring, Keychain or Credential Manager, and installs the plugin in the agents you chose. One agent only: add its name, e.g. <code>install codex</code>.
-      <div class="cmd" data-os="linux"><pre>git -C ~/knowledge pull 2&gt;/dev/null || git clone https://github.com/To0wnn/knowledge ~/knowledge
+      <div class="cmd" data-os="linux"><pre>git -C ~/knowledge fetch -q 2&gt;/dev/null &amp;&amp; git -C ~/knowledge reset -q --hard origin/main || git clone https://github.com/To0wnn/knowledge ~/knowledge
 python3 ~/knowledge/clients/knowledge-agent.py install</pre><button class="copy" type="button">Copy</button></div>
       <div class="cmd" data-os="windows" hidden><pre>cd $HOME
-if (Test-Path $HOME\knowledge) { git -C $HOME\knowledge pull } else { git clone https://github.com/To0wnn/knowledge $HOME\knowledge }
+if (Test-Path $HOME\knowledge) { git -C $HOME\knowledge fetch -q; git -C $HOME\knowledge reset -q --hard origin/main } else { git clone https://github.com/To0wnn/knowledge $HOME\knowledge }
 py $HOME\knowledge\clients\knowledge-agent.py install</pre><button class="copy" type="button">Copy</button></div></li>
     <li><b>Link your project folder</b>
       In the root of your project, a file <code>.knowledge-project</code> with the project name (for example <code>garden</code>): every session started in that folder gets that project, and its <code>.md</code> files go to the server (code, <code>.venv</code> and hidden folders never). Easiest: ask your agent to link the folder (skill <code>knowledge-init</code>), or:
@@ -90,10 +90,10 @@ py $HOME\knowledge\clients\knowledge-agent.py install</pre><button class="copy" 
 
   <h2>Update</h2>
   <p>The plugin keeps itself up to date: Claude Code through its marketplace, Codex and agy with a daily check. A new version loads at the next start. By hand, for every agent that has the plugin, without questions:</p>
-  <div class="cmd" data-os="linux"><pre>git -C ~/knowledge pull
+  <div class="cmd" data-os="linux"><pre>git -C ~/knowledge fetch -q &amp;&amp; git -C ~/knowledge reset -q --hard origin/main
 python3 ~/knowledge/clients/knowledge-agent.py update</pre><button class="copy" type="button">Copy</button></div>
   <div class="cmd" data-os="windows" hidden><pre>cd $HOME
-git -C $HOME\knowledge pull
+git -C $HOME\knowledge fetch -q; git -C $HOME\knowledge reset -q --hard origin/main
 py $HOME\knowledge\clients\knowledge-agent.py update</pre><button class="copy" type="button">Copy</button></div>
 
   <nav class="client-tabs" role="tablist" aria-label="Client">
