@@ -523,6 +523,9 @@ def main():
         assert f"{frname} codex: plugin 0.9.10, newest 0.9.16" in call("knowledge_lint", {})[1], call("knowledge_lint", {})[1][-500:]
         row = next(t for t in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["tokens"] if t["name"] == frname)
         assert {(p["agent"], p["v"], p["behind"]) for p in row["plugin"]} == {("agy", "0.9.16", False), ("codex", "0.9.10", True)}, row
+        parts("agent=agy&plugin=0.9.16&url=default")  # a device that names no server: shown before the default goes
+        row = next(t for t in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["tokens"] if t["name"] == frname)
+        assert {p["agent"]: p["default_url"] for p in row["plugin"]} == {"agy": True, "codex": False}, row
         # Sessions per token: the plugin's /tasks names its session and whether another agent can wake it.
         http("GET", "/tasks?project=x&agent=codex&session=cx-77&wake=1", token=fr)
         http("GET", "/tasks?project=x&agent=bogus&session=b-1&wake=1", token=fr)  # not an agent: not listed

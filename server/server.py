@@ -1540,15 +1540,16 @@ def plugin_latest() -> tuple[str, float] | None:
     return (latest["v"], latest["since"]) if latest else None
 
 
-def mark_plugin(name: str, agent: str, v: str):
-    """Which plugin version each token runs per agent, for the admin page and the weekly report."""
+def mark_plugin(name: str, agent: str, v: str, default_url: bool = False):
+    """Which plugin version each token runs per agent, for the admin page and the weekly report; default_url: the
+    device names no server and leans on the plugin's default (shown so that default can be removed safely)."""
     if not name or agent not in AGENT_OWNERS or not plugin_version(v):
         return
     seen = dict(read_json(PLUGIN_SEEN_FILE, {}))
     old = seen.get(name, {}).get(agent, {})
-    if old.get("v") == v and time.time() - old.get("at", 0) < 600:
+    if old.get("v") == v and old.get("d", False) == default_url and time.time() - old.get("at", 0) < 600:
         return
-    seen[name] = {**seen.get(name, {}), agent: {"v": v, "at": time.time()}}
+    seen[name] = {**seen.get(name, {}), agent: {"v": v, "at": time.time(), **({"d": True} if default_url else {})}}
     try:
         write_json(PLUGIN_SEEN_FILE, seen)
     except OSError as e:  # bookkeeping only
@@ -1559,7 +1560,8 @@ def plugin_seen(name: str) -> list[dict]:
     """Per agent: the plugin version this token last reported, when, and whether that is behind the newest."""
     seen = read_json(PLUGIN_SEEN_FILE, {})
     newest = plugin_version(seen.get("_latest", {}).get("v", ""))
-    return [{"agent": a, "v": s["v"], "at": s["at"], "behind": bool(newest) and plugin_version(s["v"]) < newest}
+    return [{"agent": a, "v": s["v"], "at": s["at"], "behind": bool(newest) and plugin_version(s["v"]) < newest,
+             "default_url": s.get("d", False)}
             for a, s in sorted(seen.get(name, {}).items())] if name != "_latest" else []
 
 
@@ -2309,7 +2311,7 @@ async def context_route(request: Request):
     parts = context_parts(project, agent if agent in AGENT_OWNERS else "")
     if v := request.query_params.get("plugin", ""):  # every part asks, so all of them split the same way
         if request.path_params["part"] == "1":
-            mark_plugin(device.get().get("name", ""), agent, v)
+            mark_plugin(device.get().get("name", ""), agent, v, request.query_params.get("url") == "default")
         if behind := await asyncio.to_thread(plugin_notice, agent, v):
             note = "\n\n".join(n for n in (note, behind) if n)
     if note:

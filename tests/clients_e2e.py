@@ -1004,6 +1004,12 @@ def claude_stored_token(tmp: Path):
                          cwd=CLIENT / "plugin" / "hooks")
     check(out.split() == ["gategategate", "http://example.invalid:1"],
           "token and server from Claude's stored plugin option (no keyring)", out + err)
+    probe = "import token_store as t; print(t.url_is_default(), t.url_is_default(claude=True))"
+    code, out, err = run([sys.executable, "-c", probe], env=env, cwd=CLIENT / "plugin" / "hooks")
+    code2, out2, err2 = run([sys.executable, "-c", probe], env=user_env(tmp / "Nothing Set", PATH=str(Path(sys.executable).parent)),
+                            cwd=CLIENT / "plugin" / "hooks")
+    check(out.split() == ["False", "False"] and out2.split() == ["True", "True"],
+          "url_is_default: false once a server is named, true when only the default is left", out + err + out2 + err2)
 
 
 def checkout_update(tmp: Path):

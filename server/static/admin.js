@@ -61,7 +61,10 @@ function skillsCell(t) {
   l.append(c, " " + (t.skills ? "on" : "off")); td.append(l); return td;
 }
 
-// The plugin version per agent this token reported at its last session start; "behind" when older than the newest.
+// "behind" when older than the newest; "default URL" when the device names no server (that default will go).
+const pluginText = (p) => `${p.v}${p.behind ? " (behind)" : ""}${p.default_url ? " · default URL" : ""}`;
+
+// The plugin version per agent this token reported at its last session start.
 function pluginCell(t, open) {
   const td = el("td", "muted");
   const own = new Set(open ? t.clients.map((c) => c.agent) : []);  // unfolded, those show it in their own rows
@@ -69,7 +72,7 @@ function pluginCell(t, open) {
   if (!rest.length) { td.textContent = "–"; return td; }
   rest.forEach((p, i) => {
     if (i) td.append(el("br"));
-    const v = el("span", p.behind ? "plugin-v unused" : "plugin-v", `${p.agent} ${p.v}${p.behind ? " (behind)" : ""}`);
+    const v = el("span", p.behind ? "plugin-v unused" : "plugin-v", `${p.agent} ${pluginText(p)}`);
     v.title = `session start ${ago(p.at)}`;  // the time is in Last used and the client rows; here it only wrapped
     td.append(v);
   });
@@ -86,7 +89,7 @@ function clientRows(t) {
     const p = plugin[c.agent];
     tr.append(el("td", "mono", `↳ ${c.agent}`), id, el("td", c.wake ? "" : "muted", c.wake ? "wakeable" : "not wakeable"),
       el("td", "", c.project || "–"), el("td", "", ago(c.at)),
-      el("td", p && p.behind ? "unused" : "", p ? `${p.v}${p.behind ? " (behind)" : ""}` : "–"));
+      el("td", p && p.behind ? "unused" : "", p ? pluginText(p) : "–"));
     const td = el("td"), b = el("button", "ghost danger", "Forget");
     b.setAttribute("aria-label", `Forget ${c.agent} session ${c.session}`);
     b.title = "Remove from this list; a session still in use comes back at its next prompt";

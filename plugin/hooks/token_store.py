@@ -134,6 +134,14 @@ def url() -> str:
             or os.environ.get("KNOWLEDGE_URL") or stored or claude_option("url") or DEFAULT_URL).rstrip("/")
 
 
+def url_is_default(claude: bool = False) -> bool:
+    """Nothing names the server, so url() falls back to DEFAULT_URL. Claude's MCP entry reads only its plugin option.
+    Reported at session start so the admin page shows which devices still lean on the default before it is removed."""
+    if claude:
+        return not claude_option("url")
+    return not (os.environ.get("KNOWLEDGE_URL") or URL_FILE.exists() or claude_option("url"))
+
+
 def store_url(u: str) -> None:
     URL_FILE.parent.mkdir(parents=True, exist_ok=True)
     URL_FILE.write_text(u.rstrip("/") + "\n", encoding="utf-8")
@@ -146,7 +154,9 @@ if __name__ == "__main__":
         print(json.dumps({"Authorization": f"Bearer {tok}"} if tok else {}))
     elif cmd == "url":  # for context.sh
         print(url())
+    elif cmd == "url-default":  # for context.sh: "1" when Claude's url option is not set
+        print("1" if url_is_default(claude=True) else "")
     elif cmd == "token":  # for shell hooks (context.sh); prints nothing when there is none
         print(tok)
     else:
-        sys.exit("usage: token_store.py [header|token|url]")
+        sys.exit("usage: token_store.py [header|token|url|url-default]")

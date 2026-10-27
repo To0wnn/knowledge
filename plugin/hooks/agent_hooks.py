@@ -54,7 +54,8 @@ def context_text(tok: str, cwd: str, agent: str = "") -> str:
     down, the context of the last online session and the offline copy of the memory."""
     key, out = hashlib.sha256(cwd.encode()).hexdigest()[:12], []
     version = ".".join(map(str, self_update.own()))  # the admin page shows who stays behind; the server says so here
-    query = urllib.parse.urlencode({**project_query(cwd), "agent": agent, **({"plugin": version} if version else {})})
+    query = urllib.parse.urlencode({**project_query(cwd), "agent": agent, **({"plugin": version} if version else {}),
+                                    **({"url": "default"} if token_store.url_is_default() else {})})
     for n in range(1, 10):
         q = query
         req = urllib.request.Request(f"{URL}/context/{n}?{q}", headers={"Authorization": f"Bearer {tok}"})

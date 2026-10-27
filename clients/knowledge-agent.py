@@ -184,7 +184,8 @@ def install_claude(tok: str):
     run_cli([claude, "plugin", "marketplace", "update", "knowledge"])
     run_cli([claude, "plugin", "install", "knowledge@knowledge", "--scope", "user"], ok_if=("already",))
     run_cli([claude, "plugin", "update", "knowledge@knowledge"])  # install leaves an installed copy at its old version
-    values = {"url": URL} if URL != token_store.DEFAULT_URL else {}  # the plugin's MCP entry reads its option, not a file
+    # Always written, also for the default: the plugin's MCP entry reads only its option, and the default will go.
+    values = {"url": URL} if URL != token_store.claude_option("url") else {}
     keyring = bool(token_store.from_keyring())
     # Only Linux can lack a keyring (a server, a container): else a refused old token in this option stays in use.
     # macOS and Windows always have one, and Claude keeps a sensitive option there too.
@@ -296,7 +297,7 @@ def choose(found: list, answer) -> list:
 
 
 def url_known() -> bool:
-    return bool(os.environ.get("KNOWLEDGE_URL") or token_store.URL_FILE.exists() or token_store.claude_option("url"))
+    return not token_store.url_is_default()
 
 
 def ensure_url():
