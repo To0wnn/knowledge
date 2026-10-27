@@ -62,6 +62,17 @@ footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
 
   <div class="note"><b>Receive the token safely.</b> Ask for a one-time Bitwarden Send link, not a chat or e-mail message. Never put the token in a memo, doc or git repository.</div>
 
+  <h2>Quick setup: every agent at once</h2>
+  <p>With <code>git</code> and Python 3 installed: get the scripts, then run <code>install</code> without an agent name. It finds Claude Code, Codex and agy on this computer, asks y/n for each (Enter = yes), asks for the token once and sets up the ones you chose. Later, <code>update</code> brings the plugin in every agent that has it up to date, without questions. The tabs below explain each agent step by step.</p>
+  <div class="cmd"><pre>git -C ~/knowledge pull 2&gt;/dev/null || git clone https://github.com/To0wnn/knowledge ~/knowledge
+python3 ~/knowledge/clients/knowledge-agent.py install
+python3 ~/knowledge/clients/knowledge-agent.py update</pre><button class="copy" type="button">Copy</button></div>
+  <p>Windows (PowerShell):</p>
+  <div class="cmd"><pre>if (Test-Path $HOME\knowledge) { git -C $HOME\knowledge pull } else { git clone https://github.com/To0wnn/knowledge $HOME\knowledge }
+py $HOME\knowledge\clients\knowledge-agent.py install
+py $HOME\knowledge\clients\knowledge-agent.py update</pre><button class="copy" type="button">Copy</button></div>
+  <p><b>Agents hand each other tasks.</b> When one agent writes a task line for another (<code>open tot &lt;date&gt; [Codex, ID]: …</code>), that agent's open, idle session on the same computer is woken and tells you; it starts only when you agree. agy asks once per session to run a small <code>register</code> command for this: allow it (choose "always allow" to not be asked again). The admin page shows per token which sessions are connected and whether they can be woken.</p>
+
   <nav class="client-tabs" role="tablist" aria-label="Client">
     <button role="tab" id="tab-claude" aria-controls="claude" aria-selected="true">Claude Code</button>
     <button role="tab" id="tab-agy" aria-controls="agy" aria-selected="false">agy (Antigravity)</button>
