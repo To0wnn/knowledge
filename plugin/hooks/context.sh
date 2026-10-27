@@ -4,7 +4,8 @@
 # hooks.json asks for each part separately. The folder's .knowledge-project picks the project, else its directory.
 # Never blocks a session: on failure it prints one short notice, or the offline context when this device has a copy.
 part=${1:-1}
-url=${CLAUDE_PLUGIN_OPTION_URL:-${CLAUDE_PLUGIN_OPTION_url:-https://knowledge.to0wnn.com}}
+url=${CLAUDE_PLUGIN_OPTION_URL:-${CLAUDE_PLUGIN_OPTION_url:-$(sh "$(dirname "$0")/py.sh" "$(dirname "$0")/token_store.py" url)}}
+[ -n "$url" ] || url=https://knowledge.to0wnn.com  # no Python
 token=$(sh "$(dirname "$0")/py.sh" "$(dirname "$0")/token_store.py" token)
 [ -n "$token" ] || token=${CLAUDE_PLUGIN_OPTION_TOKEN:-${CLAUDE_PLUGIN_OPTION_token:-}}  # no Python: plugin setting
 # The header goes in over stdin (-H @-), so the token is not on the command line (ps).

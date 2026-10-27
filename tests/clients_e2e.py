@@ -217,6 +217,11 @@ def folder_link(home: Path):
     hooks = CLIENT / "plugin" / "hooks"
     env = user_env(home, CLAUDE_PLUGIN_OPTION_URL=BASE, CLAUDE_PLUGIN_OPTION_TOKEN="owner-token", KNOWLEDGE_URL=BASE,
                    KNOWLEDGE_TOKEN="owner-token", KNOWLEDGE_PLUGIN_LATEST=str(latest_file(home)))
+    (home / ".config" / "knowledge").mkdir(parents=True, exist_ok=True)
+    (home / ".config" / "knowledge" / "url").write_text(BASE + "\n", encoding="utf-8")
+    bare = {k: v for k, v in env.items() if k not in ("CLAUDE_PLUGIN_OPTION_URL", "KNOWLEDGE_URL")}
+    code, out, err = run([bash(), "-c", f'sh "{(hooks / "context.sh").as_posix()}" 1'], "", {**bare, "CLAUDE_PROJECT_DIR": str(plain)})
+    check("(project homelab)" in out, "claude: without the URL option the hook uses the stored server URL", out[:200] + err[-300:])
     for folder, want in ((linked, "garden"), (plain, "homelab")):
         code, out, err = run([bash(), "-c", f'sh "{(hooks / "context.sh").as_posix()}" 1'], "", {**env, "CLAUDE_PROJECT_DIR": str(folder)})
         check(f"(project {want})" in out, f"claude: a folder {'linked' if folder == linked else 'without a link'} gets project {want}",
@@ -343,6 +348,9 @@ def agents(tok: str, home: Path, project: Path, garden: Path):
         shipped = sorted(d.name for d in (REPO / "plugin" / "skills").iterdir() if (d / "SKILL.md").exists())
         check(all((home / ".agents" / "skills" / s / "SKILL.md").exists() for s in shipped), f"{name}: all plugin skills in ~/.agents/skills", shipped)
         cfg = json.loads(conf.read_text(encoding="utf-8"))
+        url_file = home / ".config" / "knowledge" / "url"
+        check(url_file.exists() and url_file.read_text(encoding="utf-8").strip() == BASE, f"{name}: install stores the server URL")
+        hook_env = {k: v for k, v in env.items() if k != "KNOWLEDGE_URL"}  # a self-hosted server: the hooks find the stored URL
         cmds = [h["command"] for g in (cfg.get("hooks") or cfg["knowledge"]).values() for e in g for h in (e.get("hooks") or [e])]
         payloads = {"context": {"hook_event_name": "SessionStart", "cwd": str(project), "workspacePaths": [str(project)]},
                     "docs-sync": {"hook_event_name": "PostToolUse", "cwd": str(project), "tool_input": {"command": "*** Begin Patch\n*** Update File: docs/taxi.md\n*** End Patch"}},
@@ -358,7 +366,7 @@ def agents(tok: str, home: Path, project: Path, garden: Path):
         for label, wrap in shells:
             for cmd in cmds:
                 kind = next(k for k in payloads if f" {k} " in f" {cmd} " or cmd.split(" ")[-2:-1] == [k])
-                code, out, err = run(wrap(cmd), json.dumps(payloads[kind]), env, cwd=str(project))
+                code, out, err = run(wrap(cmd), json.dumps(payloads[kind]), hook_env, cwd=str(project))
                 check(code == 0, f"{name} via {label}: {kind} hook runs", err[-600:])
                 if kind == "context":
                     try:
@@ -872,6 +880,8 @@ def installer(tok: str, tmp: Path):
               json.dumps(market))
         code, out, err = run([shutil.which("claude"), "plugin", "list"], "", env, timeout=60)
         check("knowledge@knowledge" in out, "install claude: claude plugin list shows knowledge", out + err)
+        code, out, err = run([shutil.which("claude"), "plugin", "configure", "knowledge@knowledge", "--json"], "", env, timeout=60)
+        check(BASE in out, "install claude: the plugin's url option is the server it was installed against", out + err)
     if shutil.which("codex"):  # Windows too: the plugin since 0.9.3
         (home / ".codex" / "config.toml").write_text('[mcp_servers.knowledge]\nurl = "x"\nbearer_token_env_var = "KNOWLEDGE_TOKEN"\n', encoding="utf-8")
         (home / ".codex" / "hooks.json").write_text(json.dumps({"hooks": {"SessionStart": [{"hooks": [

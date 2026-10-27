@@ -4,7 +4,8 @@
 Linux, macOS and Windows; standard library only. install asks for the device token (hidden) when none is stored, or
 whether to replace the stored one, checks it with the server and saves it in the keyring of the OS (Linux secret-tool,
 macOS Keychain, Windows Credential Manager; token_store.py). Without a terminal it uses KNOWLEDGE_TOKEN or the stored
-token. On the machine that holds the files, TOKEN can be a vault name. The session log falls back to ~/.config/knowledge-server/session.env.
+token. The server address: KNOWLEDGE_URL, else the one install asks for (Enter keeps the shown one); install stores
+it in ~/.config/knowledge/url for the hooks and sets the Claude plugin option. On the machine that holds the files, TOKEN can be a vault name. The session log falls back to ~/.config/knowledge-server/session.env.
 
   knowledge-agent.py install                       find Claude Code, Codex and agy on this computer, ask y/n for each,
                     then set up the chosen ones with one token
@@ -35,7 +36,7 @@ sys.path.insert(0, str(HOOKS))
 import token_store  # noqa: E402  (KNOWLEDGE_TOKEN or the keyring, shared with the Claude plugin)
 import agent_hooks  # noqa: E402  (the hook runtime, shipped in plugin/ for the Codex and agy plugins)
 from agent_hooks import token  # noqa: E402
-URL = os.environ.get("KNOWLEDGE_URL", "https://knowledge.to0wnn.com").rstrip("/")
+URL = token_store.url()  # KNOWLEDGE_URL, else what an earlier install stored, else the default
 CODEX = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")  # Codex's own override, as Codex reads it
 CONFIG = {"agy": Path.home() / ".gemini" / "config" / "hooks.json", "codex": CODEX / "hooks.json"}
 RULES = {"agy": Path.home() / ".gemini" / "GEMINI.md", "codex": CODEX / "AGENTS.md"}
@@ -180,6 +181,12 @@ def install_claude():
     run_cli([claude, "plugin", "marketplace", "update", "knowledge"])
     run_cli([claude, "plugin", "install", "knowledge@knowledge", "--scope", "user"], ok_if=("already",))
     run_cli([claude, "plugin", "update", "knowledge@knowledge"])  # install leaves an installed copy at its old version
+    if URL != token_store.DEFAULT_URL:  # the plugin's MCP entry reads the URL from its option, not from a file
+        r = subprocess.run([claude, "plugin", "configure", "knowledge@knowledge", "--values-stdin"], input=json.dumps({"url": URL}),
+                           capture_output=True, text=True, encoding="utf-8", errors="replace")
+        if r.returncode != 0:
+            sys.exit(f"claude plugin configure failed:\n{(r.stdout + r.stderr).strip()[-1500:]}")
+        print(f"claude plugin option url: {URL}")
     print("(a note that options are not set is fine: the plugin takes the token from the keyring)")
     # The memory lives on the server: Claude's local auto memory would build a second one.
     path = Path.home() / ".claude" / "settings.json"
@@ -285,6 +292,8 @@ def install_found():
     if not sys.stdin.isatty():
         sys.exit(f"Found {', '.join(found)}. Without a terminal, name one: install <claude|codex|agy>.")
     print(f"found: {', '.join(found)}")
+    global URL
+    URL = input(f"Knowledge server [{URL}]: ").strip().rstrip("/") or URL
     chosen = choose(found, input)
     if not chosen:
         sys.exit("nothing chosen")
@@ -312,6 +321,7 @@ def install(agent: str, name: str, tok: str = ""):
     if not tok:
         sys.exit("No token: run this in a terminal so it can ask for it, or set KNOWLEDGE_TOKEN.")
     rules = check(tok)
+    token_store.store_url(URL)  # the hooks and the MCP relay read it; this address just answered
     if agent == "claude":
         return install_claude()
     if name == "-" and os.environ.get("KNOWLEDGE_SETUP") != "script":

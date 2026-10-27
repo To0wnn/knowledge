@@ -100,9 +100,10 @@ python3 ~/knowledge/clients/knowledge-agent.py install   # finds Claude Code, Co
 python3 ~/knowledge/clients/knowledge-agent.py update    # later: update the plugin in every agent that has it
 ```
 
-`install claude` (or `codex`, `agy`) sets up one agent without asking. For your own server: set `KNOWLEDGE_URL`
-(for example `http://localhost:8766`) in your shell profile before the install (Codex and agy read it), and in
-Claude Code set the plugin's "Knowledge server URL" option under `/plugin`.
+`install claude` (or `codex`, `agy`) sets up one agent without asking. For your own server: `install` asks for its
+address (Enter keeps the one shown; or set `KNOWLEDGE_URL`, e.g. `KNOWLEDGE_URL=http://localhost:8766`, for one run).
+The address that answered is stored in `~/.config/knowledge/url` for the hooks of every agent and set as the Claude
+plugin's "Knowledge server URL" option, so later sessions and `update` need nothing else.
 
 It asks for the token once, checks it with the server, stores it in the keyring and installs the plugin. The plugin
 keeps itself up to date in every agent, and says so once at session start: in Claude Code it turns on the marketplace's

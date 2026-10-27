@@ -5,6 +5,7 @@ entry service=knowledge; macOS: Keychain, service "knowledge"; Windows: Credenti
 "knowledge"; one token per device), then the Claude plugin option (older installs). store() writes the keyring of the
 OS it runs on (clients/knowledge-agent.py install asks for the token and calls it).
 The MCP headersHelper sees no credential env vars (Claude Code strips them), so there the keyring comes first too.
+url() is the server address with the same idea: env, plugin option, the file the setup wrote, the default.
 `token_store.py header` prints the MCP Authorization header as JSON for Claude Code's headersHelper and Codex's
 http_headers_helper; `{}` when there is no token, so a static header still applies. Standard library only.
 """
@@ -12,8 +13,11 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 SERVICE = "knowledge"
+DEFAULT_URL = "https://knowledge.to0wnn.com"
+URL_FILE = Path.home() / ".config" / "knowledge" / "url"  # written by knowledge-agent.py install; not a secret
 
 
 def _windows():
@@ -104,12 +108,29 @@ def token() -> str:
         or os.environ.get("CLAUDE_PLUGIN_OPTION_TOKEN") or os.environ.get("CLAUDE_PLUGIN_OPTION_token", "")
 
 
+def url() -> str:
+    """The server: KNOWLEDGE_URL, the Claude plugin option, the URL the setup stored, else the default."""
+    try:
+        stored = URL_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        stored = ""
+    return (os.environ.get("KNOWLEDGE_URL") or os.environ.get("CLAUDE_PLUGIN_OPTION_URL")
+            or os.environ.get("CLAUDE_PLUGIN_OPTION_url") or stored or DEFAULT_URL).rstrip("/")
+
+
+def store_url(u: str) -> None:
+    URL_FILE.parent.mkdir(parents=True, exist_ok=True)
+    URL_FILE.write_text(u.rstrip("/") + "\n", encoding="utf-8")
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "token"
     tok = token()
     if cmd == "header":
         print(json.dumps({"Authorization": f"Bearer {tok}"} if tok else {}))
+    elif cmd == "url":  # for context.sh
+        print(url())
     elif cmd == "token":  # for shell hooks (context.sh); prints nothing when there is none
         print(tok)
     else:
-        sys.exit("usage: token_store.py [header|token]")
+        sys.exit("usage: token_store.py [header|token|url]")

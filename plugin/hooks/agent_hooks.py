@@ -38,7 +38,7 @@ import memory_mirror  # noqa: E402  (the offline copy of the memory, shared with
 import token_store  # noqa: E402  (KNOWLEDGE_TOKEN or the keyring, shared with the Claude plugin)
 import project_marker  # noqa: E402  (the folder-to-project link, shared with the Claude plugin)
 import self_update  # noqa: E402  (auto-update of this plugin, the counterpart of Claude Code's own)
-URL = os.environ.get("KNOWLEDGE_URL", "https://knowledge.to0wnn.com").rstrip("/")
+URL = token_store.url()
 AGENTS = ("agy", "codex")
 SETUP = "plugin"  # clients/knowledge-agent.py sets "script": the setup without a plugin updates itself another way
 

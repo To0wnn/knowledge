@@ -45,7 +45,7 @@ def version(data: bytes) -> str:  # the server's file version
 
 
 def post(path: str, payload: dict) -> dict:
-    url = option("url", "https://knowledge.to0wnn.com").rstrip("/") + path
+    url = token_store.url() + path
     req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST", headers={
         "Authorization": f"Bearer {option('token')}", "Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=60) as r:

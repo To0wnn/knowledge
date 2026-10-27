@@ -62,7 +62,7 @@ def markdown_files(root: Path) -> dict:
 
 
 def post(payload: dict) -> dict:
-    url = option("url", "https://knowledge.to0wnn.com").rstrip("/") + "/sync"
+    url = token_store.url() + "/sync"
     req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST", headers={
         "Authorization": f"Bearer {option('token')}", "Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=20) as r:

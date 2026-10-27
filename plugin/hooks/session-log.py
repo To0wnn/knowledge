@@ -35,8 +35,7 @@ def config() -> tuple[str, str]:
             if "=" in line and not line.startswith("#"):
                 k, v = line.split("=", 1)
                 env.setdefault(k.strip(), v.strip())
-    url = env.get("KNOWLEDGE_URL") or env.get("CLAUDE_PLUGIN_OPTION_URL") or env.get("CLAUDE_PLUGIN_OPTION_url") \
-        or "https://knowledge.to0wnn.com"
+    url = env.get("KNOWLEDGE_URL") or token_store.url()  # env includes session.env
     token = env.get("KNOWLEDGE_TOKEN") or token_store.token()  # env includes session.env (the VM's sessions token)
     return url.rstrip("/"), token
 
