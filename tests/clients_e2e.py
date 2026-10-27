@@ -845,6 +845,14 @@ def installer(tok: str, tmp: Path):
         code, out, err = run([shutil.which("codex"), "plugin", "list"], "", env, timeout=60)
         check(any(ln.startswith("knowledge@knowledge") and "installed" in ln for ln in out.splitlines()),
               "install codex: the plugin is installed", out + err)
+    have = [a for a in ("claude", "codex") if shutil.which(a)]
+    if have:  # agy is not installed on the CI runners
+        code, out, err = run([sys.executable, str(agent), "update"], "", env, timeout=600)
+        check(code == 0 and all(f"== {a} ==" in out for a in have) and "== agy ==" not in out,
+              f"update: every agent with the plugin is updated ({', '.join(have)}), no questions", (out + err)[-1500:])
+        code, out, err = run([sys.executable, str(agent), "install"], "", env)
+        check(code != 0 and "Found" in (out + err) and "name one" in (out + err),
+              "install without an agent and without a terminal names what it found and asks to choose", out + err)
 
 
 def relay_errors(home: Path):

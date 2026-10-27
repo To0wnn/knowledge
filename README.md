@@ -66,8 +66,11 @@ The server's help page (`/ui/help`) has the exact steps per client and OS. In sh
 
 ```sh
 git clone https://github.com/To0wnn/knowledge ~/knowledge
-python3 ~/knowledge/clients/knowledge-agent.py install claude   # or codex, agy (Windows: py instead of python3)
+python3 ~/knowledge/clients/knowledge-agent.py install   # finds Claude Code, Codex and agy, asks y/n for each (Windows: py)
+python3 ~/knowledge/clients/knowledge-agent.py update    # later: update the plugin in every agent that has it
 ```
+
+`install claude` (or `codex`, `agy`) sets up one agent without asking.
 
 It asks for the token once, checks it with the server, stores it in the keyring and installs the plugin. The plugin
 keeps itself up to date in every agent, and says so once at session start: in Claude Code it turns on the marketplace's

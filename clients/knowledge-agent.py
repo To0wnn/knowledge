@@ -6,6 +6,9 @@ whether to replace the stored one, checks it with the server and saves it in the
 macOS Keychain, Windows Credential Manager; token_store.py). Without a terminal it uses KNOWLEDGE_TOKEN or the stored
 token. On the machine that holds the files, TOKEN can be a vault name. The session log falls back to ~/.config/knowledge-server/session.env.
 
+  knowledge-agent.py install                       find Claude Code, Codex and agy on this computer, ask y/n for each,
+                    then set up the chosen ones with one token
+  knowledge-agent.py update                        update the knowledge plugin in every agent that has it, no questions
   knowledge-agent.py install <claude|codex|agy> [TOKEN]   set up or update; safe to run again. Claude Code: the plugin.
                     Codex and agy: the plugin (an older setup of this script is removed first); with a vault name,
                     KNOWLEDGE_SETUP=script, or agy on Windows without python3 on PATH: this script's setup (MCP relay,
@@ -246,9 +249,56 @@ def has_python3() -> bool:
         return False
 
 
-def install(agent: str, name: str):
+AGENTS = ("claude", "codex", "agy")
+
+
+def has_plugin(agent: str) -> bool:
+    """The knowledge plugin is installed in this agent (as its own plugin list says)."""
+    r = subprocess.run([shutil.which(agent), "plugin", "list"], capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", timeout=120)
+    lines = (r.stdout + r.stderr).splitlines()
+    if agent == "agy":
+        return any(ln.strip().startswith("- knowledge (") for ln in lines)
+    return any("knowledge@knowledge" in ln and (agent == "claude" or "installed" in ln) and "not installed" not in ln
+               for ln in lines)
+
+
+def choose(found: list, answer) -> list:
+    """The agents the person says yes to; Enter means yes."""
+    return [a for a in found if answer(f"Set up the knowledge plugin for {a}? [Y/n] ").strip().lower() in ("", *YES)]
+
+
+def install_found():
+    found = [a for a in AGENTS if shutil.which(a)]
+    if not found:
+        sys.exit("None of claude, codex or agy is on PATH: install one first, then run this again.")
+    if not sys.stdin.isatty():
+        sys.exit(f"Found {', '.join(found)}. Without a terminal, name one: install <claude|codex|agy>.")
+    print(f"found: {', '.join(found)}")
+    chosen = choose(found, input)
+    if not chosen:
+        sys.exit("nothing chosen")
+    tok = ensure_token("-")  # asked once for all of them
+    for agent in chosen:
+        print(f"\n== {agent} ==")
+        install(agent, "-", tok)
+
+
+def update():
+    """Every agent here that has the plugin gets the newest version; the stored token, no questions."""
+    if not token_store.token():
+        sys.exit("No stored token: run install first.")
+    todo = [a for a in AGENTS if shutil.which(a) and has_plugin(a)]
+    if not todo:
+        sys.exit("No agent here has the knowledge plugin: run install first.")
+    for agent in todo:
+        print(f"\n== {agent} ==")
+        install(agent, "-", token_store.token())
+
+
+def install(agent: str, name: str, tok: str = ""):
     """Set up or update; every step says what it did. Fails loudly: a wrong token or no connection stops here."""
-    tok = ensure_token(name)
+    tok = tok or ensure_token(name)
     if not tok:
         sys.exit("No token: run this in a terminal so it can ask for it, or set KNOWLEDGE_TOKEN.")
     rules = check(tok)
@@ -397,6 +447,10 @@ def main(argv: list):
     if cmd == "header" and len(argv) <= 2:
         tok = token(argv[1] if len(argv) == 2 else "-")
         print(json.dumps({"Authorization": f"Bearer {tok}"} if tok else {}))
+    elif cmd == "install" and len(argv) == 1:
+        install_found()
+    elif cmd == "update" and len(argv) == 1:
+        update()
     elif cmd == "install" and len(argv) >= 2 and argv[1] in (*CONFIG, "claude"):
         install(argv[1], argv[2] if len(argv) > 2 else "-")
     elif cmd in ("context", "docs-sync", "session-log", "hints", "tasks", "wake", "register"):  # hooks written by the setup call this script
@@ -407,7 +461,7 @@ def main(argv: list):
 
 
 if __name__ == "__main__":
-    if sys.argv[1:2] == ["install"]:  # setup is run by a person: errors go to them, loudly
+    if sys.argv[1:2] in (["install"], ["update"]):  # setup is run by a person: errors go to them, loudly
         sys.stdout.reconfigure(errors="replace")  # agent CLIs print ✔ and such; a Windows pipe is cp1252
         main(sys.argv[1:])
     elif "--selftest" in sys.argv:
@@ -416,6 +470,8 @@ if __name__ == "__main__":
         a = hook_config("agy", "X")["knowledge"]
         assert a["Stop"][0]["command"].endswith("session-log -") and a["SessionStart"][0]["command"].endswith("context agy X")
         assert helper_line("-").startswith('http_headers_helper = "') and helper_line("-").endswith(' header -"')
+        replies = iter(["", "n", "J"])
+        assert choose(["claude", "codex", "agy"], lambda q: next(replies)) == ["claude", "agy"]
         import tempfile
         with tempfile.TemporaryDirectory() as d:
             (Path(d) / "e.json").write_text("\ufeff \n", encoding="utf-8")
