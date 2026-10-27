@@ -502,6 +502,13 @@ def wake_e2e(tok: str, home: Path, project: Path):
         check(all(clients.get(s, {}).get("wake") for s in ("cx-1", "cl-1", "conv-1")) and clients["cx-1"]["agent"] == "codex"
               and clients["conv-1"]["project"] == "garden", "wake: the admin page lists the sessions, their agent, project and wakeable",
               json.dumps(clients)[:600])
+        hook(["hints", "-"], {"conversationId": "conv-1", "workspacePaths": [str(project)]})  # registered: the ask is reset
+        ls.shutdown(); ls.server_close()  # agy resumed: its old port is gone
+        code, out, err = hook(["hints", "-"], {"conversationId": "conv-1", "workspacePaths": [str(project)]})
+        check(" register" in out and "restarted" in out, "wake: a resumed agy (its registration gone) is told so and asked again",
+              out[:300] + err[-300:])
+        code, out, err = hook(["hints", "-"], {"conversationId": "conv-1", "workspacePaths": [str(project)]})
+        check("register" not in out, "wake: the renewed request is said once", out[:300])
     finally:
         ls.shutdown()
 

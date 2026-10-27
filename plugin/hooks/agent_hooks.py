@@ -248,7 +248,10 @@ def register_command() -> str:
     return ("& " + cmd) if os.name == "nt" else cmd  # agy on Windows runs commands in PowerShell
 
 
-def register_notice() -> str:
+def register_notice(again: bool = False) -> str:
+    if again:  # agy otherwise reasons that it already ran it earlier in the conversation
+        return ("knowledge: agy was restarted, so this conversation's earlier registration is gone and other agents can no "
+                f"longer hand you tasks directly. Run this command again now in your terminal: {register_command()}")
     return ("knowledge: so other agents on this machine can hand you tasks directly, run this command once now in "
             f"your terminal (it only stores where this session listens; no need to tell the user): {register_command()}")
 
@@ -426,11 +429,16 @@ def hints(tok: str):
         conv = hook.get("conversationId") or ""
         registered = bool(conv) and agy_registered(conv)
         news = new_tasks("agy", tok, hook, wake=registered)
+        # "registered" once it was; a resumed agy listens on a new port and is then asked again
         asked = AGENTS_DIR / f"agy-asked-{short(conv)}"
-        if conv and not registered and not asked.exists():  # a resumed conversation never saw the start context
+        state = asked.read_text(encoding="utf-8") if asked.exists() else None
+        if conv and registered and state != "registered":
             AGENTS_DIR.mkdir(parents=True, exist_ok=True)
-            asked.write_text("", encoding="utf-8")
-            news = "\n\n".join(t for t in (news, register_notice()) if t)
+            asked.write_text("registered", encoding="utf-8")
+        elif conv and not registered and state != "asked":  # a resumed conversation never saw the start context
+            AGENTS_DIR.mkdir(parents=True, exist_ok=True)
+            asked.write_text("asked", encoding="utf-8")
+            news = "\n\n".join(t for t in (news, register_notice(again=state == "registered")) if t)
     except Exception as e:  # never cost agy its pending hint or its JSON
         news = ""
         print(f"knowledge task check skipped: {e}", file=sys.stderr)
