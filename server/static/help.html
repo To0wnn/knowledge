@@ -25,7 +25,7 @@
   background: var(--bg); padding: 10px 0; margin-top: 28px; border-bottom: 1px solid var(--line); }
 .client-tabs > button { padding: 6px 12px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 14px; }
 .client-tabs > button[aria-selected="true"] { background: var(--hover); color: var(--ink); font-weight: 600; }
-.os { margin-left: auto; }
+.osbar { display: flex; gap: 10px; align-items: center; margin-top: 18px; color: var(--muted); font-size: 14px; }
 ol.steps { list-style: none; counter-reset: s; padding: 0; margin: 16px 0 0; display: grid; gap: 18px; }
 ol.steps > li { counter-increment: s; position: relative; padding-left: 38px; min-width: 0; }
 ol.steps > li::before { content: counter(s); position: absolute; left: 0; top: 1px; width: 24px; height: 24px; border-radius: 50%;
@@ -62,123 +62,67 @@ footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
 
   <div class="note"><b>Receive the token safely.</b> Ask for a one-time Bitwarden Send link, not a chat or e-mail message. Never put the token in a memo, doc or git repository.</div>
 
-  <h2>Quick setup: every agent at once</h2>
-  <p>With <code>git</code> and Python 3 installed: get the scripts, then run <code>install</code> without an agent name. It finds Claude Code, Codex and agy on this computer, asks y/n for each (Enter = yes), asks for the token once and sets up the ones you chose. Later, <code>update</code> brings the plugin in every agent that has it up to date, without questions. The tabs below explain each agent step by step.</p>
-  <div class="cmd"><pre>git -C ~/knowledge pull 2&gt;/dev/null || git clone https://github.com/To0wnn/knowledge ~/knowledge
-python3 ~/knowledge/clients/knowledge-agent.py install
+  <div class="osbar">Your computer:
+    <span class="os seg" role="radiogroup" aria-label="Operating system">
+      <button type="button" role="radio" data-os="linux" aria-checked="true">Linux &amp; macOS</button>
+      <button type="button" role="radio" data-os="windows" aria-checked="false">Windows</button>
+    </span>
+  </div>
+
+  <h2>Install</h2>
+  <ol class="steps">
+    <li><b>Get the scripts and run the setup</b>
+      <span data-os="linux">Needs <code>git</code> and <code>python3</code>.</span>
+      <span data-os="windows" hidden>Needs <a href="https://git-scm.com/download/win" target="_blank" rel="noopener">Git for Windows</a> and <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">Python 3</a> (keep "py launcher" ticked); the commands are for PowerShell. Quit Codex and agy first: Windows does not replace files that are in use.</span>
+      The setup finds Claude Code, Codex and agy on this computer and asks y/n for each (Enter = yes). It asks for the token once (paste it; it is not shown), checks it with the server, keeps it in the keyring, Keychain or Credential Manager, and installs the plugin in the agents you chose. One agent only: add its name, e.g. <code>install codex</code>.
+      <div class="cmd" data-os="linux"><pre>git -C ~/knowledge pull 2&gt;/dev/null || git clone https://github.com/To0wnn/knowledge ~/knowledge
+python3 ~/knowledge/clients/knowledge-agent.py install</pre><button class="copy" type="button">Copy</button></div>
+      <div class="cmd" data-os="windows" hidden><pre>cd $HOME
+if (Test-Path $HOME\knowledge) { git -C $HOME\knowledge pull } else { git clone https://github.com/To0wnn/knowledge $HOME\knowledge }
+py $HOME\knowledge\clients\knowledge-agent.py install</pre><button class="copy" type="button">Copy</button></div></li>
+    <li><b>Link your project folder</b>
+      In the root of your project, a file <code>.knowledge-project</code> with the project name (for example <code>a350</code>): every session started in that folder gets that project, and its <code>.md</code> files go to the server (code, <code>.venv</code> and hidden folders never). Easiest: ask your agent to link the folder (skill <code>knowledge-init</code>), or:
+      <div class="cmd" data-os="linux"><pre>echo a350 &gt; .knowledge-project</pre><button class="copy" type="button">Copy</button></div>
+      <div class="cmd" data-os="windows" hidden><pre>Set-Content .knowledge-project a350</pre><button class="copy" type="button">Copy</button></div></li>
+    <li><b>First start</b>
+      Start a new session in your project folder; each agent has one thing to do the first time, see its tab below. Then ask: "search the knowledge for …".</li>
+  </ol>
+
+  <h2>Update</h2>
+  <p>The plugin keeps itself up to date: Claude Code through its marketplace, Codex and agy with a daily check. A new version loads at the next start. By hand, for every agent that has the plugin, without questions:</p>
+  <div class="cmd" data-os="linux"><pre>git -C ~/knowledge pull
 python3 ~/knowledge/clients/knowledge-agent.py update</pre><button class="copy" type="button">Copy</button></div>
-  <p>Windows (PowerShell):</p>
-  <div class="cmd"><pre>if (Test-Path $HOME\knowledge) { git -C $HOME\knowledge pull } else { git clone https://github.com/To0wnn/knowledge $HOME\knowledge }
-py $HOME\knowledge\clients\knowledge-agent.py install
+  <div class="cmd" data-os="windows" hidden><pre>cd $HOME
+git -C $HOME\knowledge pull
 py $HOME\knowledge\clients\knowledge-agent.py update</pre><button class="copy" type="button">Copy</button></div>
-  <p><b>Agents hand each other tasks.</b> When one agent writes a task line for another (<code>open tot &lt;date&gt; [Codex, ID]: …</code>), that agent's open, idle session on the same computer is woken and tells you; it starts only when you agree. agy asks once per session to run a small <code>register</code> command for this: allow it (choose "always allow" to not be asked again). The admin page shows per token which sessions are connected and whether they can be woken.</p>
 
   <nav class="client-tabs" role="tablist" aria-label="Client">
     <button role="tab" id="tab-claude" aria-controls="claude" aria-selected="true">Claude Code</button>
     <button role="tab" id="tab-agy" aria-controls="agy" aria-selected="false">agy (Antigravity)</button>
     <button role="tab" id="tab-codex" aria-controls="codex" aria-selected="false">Codex</button>
-    <span class="os seg" role="radiogroup" aria-label="Operating system">
-      <button type="button" role="radio" data-os="linux" aria-checked="true">Linux &amp; macOS</button>
-      <button type="button" role="radio" data-os="windows" aria-checked="false">Windows</button>
-    </span>
   </nav>
 
   <section id="claude" role="tabpanel" aria-labelledby="tab-claude">
     <h2>Claude Code</h2>
-    <p>The most complete connection: the plugin loads the context and house rules at every start, writes a session log and mirrors your docs.</p>
-    <ol class="steps" data-os="linux">
-      <li><b>Get the knowledge scripts</b>
-        Needs <code>git</code> and <code>python3</code>.
-        <div class="cmd"><pre>git -C ~/knowledge pull 2&gt;/dev/null || git clone https://github.com/To0wnn/knowledge ~/knowledge</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Run the setup</b>
-        It asks for the token you received (paste it; it is not shown), checks it with the server and keeps it in the keyring (Linux) or the Keychain (macOS); with a token already stored it asks whether to replace it. Then it installs the plugin and turns Claude's local auto memory off (your memory is on the server). A server or container without a desktop has no keyring: the setup then says how to set the token instead. Run it again later to update.
-        <div class="cmd"><pre>python3 ~/knowledge/clients/knowledge-agent.py install claude</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Link your project folder</b>
-        In the root of your project, a file <code>.knowledge-project</code> with the project name (for example <code>a350</code>): every session started in that folder gets that project, and its <code>.md</code> files go to the server. Easiest: ask your agent to link the folder (skill <code>knowledge-init</code>), or run the command below. Code, <code>.venv</code> and hidden folders never go.
-        <div class="cmd"><pre>echo a350 &gt; .knowledge-project</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Check</b>
-        Start a new session in your project folder. It begins with <code>knowledge (project …)</code>. Ask: "search the knowledge for …".</li>
-    </ol>
-    <ol class="steps" data-os="windows" hidden>
-      <li><b>Get the knowledge scripts</b>
-        Needs <a href="https://git-scm.com/download/win" target="_blank" rel="noopener">Git for Windows</a> and <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">Python 3</a> (keep "py launcher" ticked). The steps are for PowerShell.
-        <div class="cmd"><pre>if (Test-Path $HOME\knowledge) { git -C $HOME\knowledge pull } else { git clone https://github.com/To0wnn/knowledge $HOME\knowledge }</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Run the setup</b>
-        It asks for the token you received (paste it; it is not shown), checks it with the server and keeps it in the Windows Credential Manager; with a token already stored it asks whether to replace it. Then it installs the plugin and turns Claude's local auto memory off (your memory is on the server). Run it again later to update.
-        <div class="cmd"><pre>py $HOME\knowledge\clients\knowledge-agent.py install claude</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Link your project folder</b>
-        In the root of your project, a file <code>.knowledge-project</code> with the project name (for example <code>a350</code>): every session started in that folder gets that project, and its <code>.md</code> files go to the server. Easiest: ask your agent to link the folder (skill <code>knowledge-init</code>), or run the command below. Code, <code>.venv</code> and hidden folders never go.
-        <div class="cmd"><pre>Set-Content .knowledge-project a350</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Check</b>
-        Start a new session in your project folder. It begins with <code>knowledge (project …)</code>. Ask: "search the knowledge for …".</li>
-    </ol>
+    <p>The plugin loads the context and house rules at every start, writes a session log and mirrors your docs. The setup turns Claude's local auto memory off: your memory is on the server.</p>
+    <p><b>First start:</b> a new session begins with <code>knowledge (project …)</code>. Nothing else to do.</p>
   </section>
 
   <section id="agy" role="tabpanel" aria-labelledby="tab-agy" hidden>
     <h2>agy (Antigravity CLI)</h2>
-    <p>The knowledge plugin connects agy: the tools, the context at every start (with the house rules), the session log, the docs mirror and the shared development skills, on Linux, macOS and Windows. agy itself comes from <a href="https://antigravity.google" target="_blank" rel="noopener">antigravity.google</a> and updates itself (<code>agy update</code>).</p>
-    <ol class="steps" data-os="linux">
-      <li><b>Get the knowledge scripts</b>
-        Needs <code>git</code> and <code>python3</code>.
-        <div class="cmd"><pre>git -C ~/knowledge pull 2&gt;/dev/null || git clone https://github.com/To0wnn/knowledge ~/knowledge</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Run the setup</b>
-        It asks for the token you received (paste it; it is not shown), checks it with the server and keeps it in the keyring (Linux) or the Keychain (macOS); with a token already stored it asks whether to replace it. Then it installs the plugin; an older setup of this script is removed first. A server or container without a desktop has no keyring: the setup then says how to set the token instead. Run it again later to update.
-        <div class="cmd"><pre>python3 ~/knowledge/clients/knowledge-agent.py install agy</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Link your project folder</b>
-        In the root of your project, a file <code>.knowledge-project</code> with the project name (for example <code>a350</code>): every session started in that folder gets that project, and its <code>.md</code> files go to the server. Easiest: ask your agent to link the folder (skill <code>knowledge-init</code>), or run the command below. Code, <code>.venv</code> and hidden folders never go.
-        <div class="cmd"><pre>echo a350 &gt; .knowledge-project</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Check</b>
-        Start <code>agy</code> and ask: "search the knowledge for …".
-        <div class="cmd"><pre>agy</pre><button class="copy" type="button">Copy</button></div></li>
-    </ol>
-    <ol class="steps" data-os="windows" hidden>
-      <li><b>Get the knowledge scripts</b>
-        Needs <a href="https://git-scm.com/download/win" target="_blank" rel="noopener">Git for Windows</a> and <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">Python 3</a> (keep "py launcher" ticked). The steps are for PowerShell.
-        <div class="cmd"><pre>if (Test-Path $HOME\knowledge) { git -C $HOME\knowledge pull } else { git clone https://github.com/To0wnn/knowledge $HOME\knowledge }</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Run the setup</b>
-        It asks for the token you received (paste it; it is not shown), checks it with the server and keeps it in the Windows Credential Manager; with a token already stored it asks whether to replace it. Then it installs the plugin; an older setup of this script is removed first. agy needs the <code>python3</code> command for the plugin, which Python from the python.org install manager or the Microsoft Store has; an older python.org installer only has <code>py</code>, and then the setup says so and sets agy up without the plugin. Quit agy before you run it, so the new settings apply. Run it again later to update.
-        <div class="cmd"><pre>py $HOME\knowledge\clients\knowledge-agent.py install agy</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Link your project folder</b>
-        In the root of your project, a file <code>.knowledge-project</code> with the project name (for example <code>a350</code>): every session started in that folder gets that project, and its <code>.md</code> files go to the server. Easiest: ask your agent to link the folder (skill <code>knowledge-init</code>), or run the command below. Code, <code>.venv</code> and hidden folders never go.
-        <div class="cmd"><pre>Set-Content .knowledge-project a350</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Check</b>
-        Start <code>agy</code> and ask: "search the knowledge for …".
-        <div class="cmd"><pre>agy</pre><button class="copy" type="button">Copy</button></div></li>
-    </ol>
+    <p>The plugin gives agy the tools, the context at every start (with the house rules), the session log, the docs mirror and the shared development skills. agy itself comes from <a href="https://antigravity.google" target="_blank" rel="noopener">antigravity.google</a> and updates itself (<code>agy update</code>).</p>
+    <p><b>First start:</b> after your first prompt agy asks to run a small <code>agent_hooks.py register</code> command, so other agents on this computer can hand it tasks. Allow it ("always allow" saves asking again).</p>
+    <p data-os="windows" hidden><b>Windows:</b> agy needs the <code>python3</code> command, which Python from the python.org install manager or the Microsoft Store has. With only <code>py</code> the setup says so and sets agy up without the plugin.</p>
   </section>
 
   <section id="codex" role="tabpanel" aria-labelledby="tab-codex" hidden>
     <h2>Codex (OpenAI)</h2>
-    <p>The knowledge plugin connects Codex, from the same repository as the Claude Code plugin: the tools, the context at every start (with the house rules), the session log, the docs mirror and the shared development skills, on Linux, macOS and Windows. Install or update Codex with <code>npm i -g @openai/codex@latest</code>.</p>
-    <ol class="steps" data-os="linux">
-      <li><b>Get the knowledge scripts</b>
-        Needs <code>git</code> and <code>python3</code>.
-        <div class="cmd"><pre>git -C ~/knowledge pull 2&gt;/dev/null || git clone https://github.com/To0wnn/knowledge ~/knowledge</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Run the setup</b>
-        It asks for the token you received (paste it; it is not shown), checks it with the server and keeps it in the keyring (Linux) or the Keychain (macOS); with a token already stored it asks whether to replace it. Then it installs the plugin; an older setup of this script is removed first, and a running Codex is offered a restart. A server or container without a desktop has no keyring: the setup then says how to set the token instead. Run it again later to update.
-        <div class="cmd"><pre>python3 ~/knowledge/clients/knowledge-agent.py install codex</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Link your project folder</b>
-        In the root of your project, a file <code>.knowledge-project</code> with the project name (for example <code>a350</code>): every session started in that folder gets that project, and its <code>.md</code> files go to the server. Easiest: ask your agent to link the folder (skill <code>knowledge-init</code>), or run the command below. Code, <code>.venv</code> and hidden folders never go.
-        <div class="cmd"><pre>echo a350 &gt; .knowledge-project</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Check</b>
-        Type <code>/hooks</code> once and trust the knowledge hooks (Codex skips new hooks until then; the tools work right away). Then ask: "search the knowledge for …".
-        <div class="cmd"><pre>codex</pre><button class="copy" type="button">Copy</button></div></li>
-    </ol>
-    <ol class="steps" data-os="windows" hidden>
-      <li><b>Get the knowledge scripts</b>
-        Needs <a href="https://git-scm.com/download/win" target="_blank" rel="noopener">Git for Windows</a> and <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">Python 3</a> (keep "py launcher" ticked). The steps are for PowerShell.
-        <div class="cmd"><pre>if (Test-Path $HOME\knowledge) { git -C $HOME\knowledge pull } else { git clone https://github.com/To0wnn/knowledge $HOME\knowledge }</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Run the setup</b>
-        It asks for the token you received (paste it; it is not shown), checks it with the server and keeps it in the Windows Credential Manager; with a token already stored it asks whether to replace it. Then it installs the plugin; an older setup of this script is removed first. Quit Codex before you run it, so the new settings apply. Run it again later to update.
-        <div class="cmd"><pre>py $HOME\knowledge\clients\knowledge-agent.py install codex</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Link your project folder</b>
-        In the root of your project, a file <code>.knowledge-project</code> with the project name (for example <code>a350</code>): every session started in that folder gets that project, and its <code>.md</code> files go to the server. Easiest: ask your agent to link the folder (skill <code>knowledge-init</code>), or run the command below. Code, <code>.venv</code> and hidden folders never go.
-        <div class="cmd"><pre>Set-Content .knowledge-project a350</pre><button class="copy" type="button">Copy</button></div></li>
-      <li><b>Check</b>
-        Type <code>/hooks</code> once and trust the knowledge hooks (Codex skips new hooks until then; the tools work right away). Then ask: "search the knowledge for …".
-        <div class="cmd"><pre>codex</pre><button class="copy" type="button">Copy</button></div></li>
-    </ol>
+    <p>The plugin gives Codex the tools, the context at every start (with the house rules), the session log, the docs mirror and the shared development skills. Install or update Codex with <code>npm i -g @openai/codex@latest</code>.</p>
+    <p><b>First start:</b> type <code>/hooks</code> once and trust the knowledge hooks; Codex skips new hooks until then (the tools work right away). After an update with new hooks it asks again.</p>
   </section>
+
+  <h2>Agents hand each other tasks</h2>
+  <p>When one agent writes a task line for another (<code>open tot &lt;date&gt; [Codex, ID]: …</code>), that agent's open, idle session on the same computer is woken and tells you; it starts only when you agree, and hands the result back the same way. The admin page shows per token which sessions are connected and whether they can be woken.</p>
 
   <h2>Which project does my session get?</h2>
   <p>At every start the server picks the project whose memory and context the session gets:</p>
@@ -214,6 +158,8 @@ py $HOME\knowledge\clients\knowledge-agent.py update</pre><button class="copy" t
       <tr><td>A new token, or the old one revoked</td><td>Run the setup again and answer <code>y</code> when it asks whether to replace the stored token.</td></tr>
       <tr><td>The session gets the wrong project</td><td>The folder is not linked: ask your agent to link it (skill <code>knowledge-init</code>), or see "Which project does my session get?".</td></tr>
       <tr><td>Docs do not reach the server</td><td>No <code>.knowledge-project</code> in the project root, or its name does not match your token's project.</td></tr>
+      <tr><td>"used by another process" or "Access is denied" (Windows)</td><td>An agent or a terminal still has the plugin folder open. Quit Codex and agy, <code>cd $HOME</code>, and run the setup again.</td></tr>
+      <tr><td>agy: no context, never asks to register</td><td><code>agy plugin list</code> shows no knowledge plugin: an install was cut off. Quit agy and run <code>install agy</code> again.</td></tr>
       <tr><td>Codex ignores the context hook</td><td>More than one SessionStart hook, or the hook is not trusted yet: open <code>/hooks</code> in Codex.</td></tr>
       <tr><td>"writes are allowed only for …"</td><td>Your token may not write that path: only the memory of your own project.</td></tr>
       <tr><td>"knowledge server unreachable: offline mode"</td><td>The server is down. The agent works in your offline copy (<code>~/.knowledge/mirror/</code>); what it writes goes up at the next start. A memo changed on both sides is kept as <code>&lt;name&gt;.offline-&lt;time&gt;.md</code> to merge.</td></tr>
@@ -243,7 +189,7 @@ function render(push) {
     document.getElementById(t.getAttribute('aria-controls')).hidden = !on;
   }
   for (const b of oses) b.setAttribute('aria-checked', String(b.dataset.os === os));
-  for (const ol of document.querySelectorAll('ol.steps[data-os]')) ol.hidden = ol.dataset.os !== os;
+  for (const e of document.querySelectorAll('.wrap [data-os]:not([role])')) e.hidden = e.dataset.os !== os;
   if (push) { try { history.replaceState(null, '', '#' + client + '-' + os); localStorage.setItem('kn_help_os', os); } catch (e) {} }
 }
 tabs.forEach((t, i) => {
