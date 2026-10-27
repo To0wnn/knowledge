@@ -77,8 +77,9 @@ docker compose up -d
 Open `http://localhost:8766/ui`, sign in with the password and create a device token on the admin page. Notes live
 in `data/memory` (memos with their `MEMORY.md` index), `data/docs` and `data/shared` (`CLAUDE.md`, house rules and
 skills shared with every agent); more projects can be made on the admin page. Reached from other machines: add their
-`host:port` to `KNOWLEDGE_ALLOWED_HOSTS` in `.env`, and put a reverse proxy with HTTPS in front before it faces the
-internet. The image (`ghcr.io/to0wnn/knowledge`, about 1.5 GB with the embedding model) is built for every release;
+`host:port` to `KNOWLEDGE_ALLOWED_HOSTS` in `.env` (also when you change `KNOWLEDGE_PORT`), and put a reverse proxy
+with HTTPS in front: over plain HTTP the password and tokens cross the network readable. The container runs as uid
+1000; if `./data` belongs to another user, set `KNOWLEDGE_UID` and `KNOWLEDGE_GID` in `.env`. The image (`ghcr.io/to0wnn/knowledge`, about 1.5 GB with the embedding model) is built for every release;
 it is also listed in the MCP registry as `io.github.To0wnn/knowledge`.
 
 Requirements: Docker and about 2 GB RAM (the embedding model is 1.2 GB; it ships in the image, nothing is fetched at

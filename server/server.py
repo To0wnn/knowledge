@@ -1742,7 +1742,7 @@ def proxied_user(headers: dict) -> str:
 
 
 SESSION_COOKIE, COOKIE_DAYS = "kn_session", 30
-_login_fails: list[float] = []  # times of recent wrong passwords, for every client together
+_login_fails: dict[str, list[float]] = {}  # client address -> times of its recent wrong passwords
 
 
 def session_key() -> bytes:
@@ -1766,19 +1766,21 @@ def cookie_user(headers: dict) -> str:
     """The user of a valid session cookie, or ''. Only while a password is configured."""
     if not UI_PASSWORD:
         return ""
-    cookies = {k.strip(): v for k, _, v in (c.partition("=") for c in headers.get(b"cookie", b"").decode().split(";"))}
-    user, _, rest = cookies.get(SESSION_COOKIE, "").partition(".")
-    expires, _, _ = rest.partition(".")
-    if not (user == UI_USER and expires.isdigit() and int(expires) > time.time()):
+    cookies = {k.strip(): v for k, _, v in (c.partition("=") for c in headers.get(b"cookie", b"").decode(errors="replace").split(";"))}
+    value = cookies.get(SESSION_COOKIE, "")
+    user, expires, _ = (value.rsplit(".", 2) + ["", ""])[:3]  # the user name may contain dots
+    if not (user == UI_USER and expires.isascii() and expires.isdigit() and len(expires) < 12 and int(expires) > time.time()):
         return ""
-    return user if hmac.compare_digest(cookies[SESSION_COOKIE], session_value(user, int(expires))) else ""
+    return user if hmac.compare_digest(value.encode(), session_value(user, int(expires)).encode()) else ""
 
 
-def login_allowed() -> bool:
-    """At most 5 wrong passwords a minute in total: guessing stays hopeless, a typo costs a few seconds."""
+def login_allowed(client: str) -> bool:
+    """At most 5 wrong passwords a minute per address: guessing stays hopeless, a typo costs a few seconds, and nobody
+    can lock the admin out from elsewhere. Behind a proxy the address comes from X-Forwarded-For (KNOWLEDGE_PROXY_IPS)."""
     now = time.time()
-    _login_fails[:] = [t for t in _login_fails if now - t < 60]
-    return len(_login_fails) < 5
+    for ip in [ip for ip, ts in _login_fails.items() if now - ts[-1] >= 60]:
+        del _login_fails[ip]
+    return len([t for t in _login_fails.get(client, []) if now - t < 60]) < 5
 
 
 LOGIN = """<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -1854,10 +1856,11 @@ class BearerAuth:
             if not msg.get("more_body"):
                 break
         given = urllib.parse.parse_qs(body.decode(errors="replace")).get("password", [""])[0]
-        if not login_allowed():
+        client = (scope.get("client") or ("?",))[0]
+        if not login_allowed(client):
             return await HTMLResponse(LOGIN.format(msg="<p class='alert'>Too many wrong passwords: wait a minute.</p>"), 429)(scope, receive, send)
         if not (UI_PASSWORD and hmac.compare_digest(given.encode(), UI_PASSWORD.encode())):
-            _login_fails.append(time.time())
+            _login_fails.setdefault(client, []).append(time.time())
             await asyncio.sleep(1)
             return await HTMLResponse(LOGIN.format(msg="<p class='alert'>Wrong password.</p>"), 401)(scope, receive, send)
         audit("ui-login", UI_USER)

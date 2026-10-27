@@ -328,6 +328,8 @@ def main():
         assert raw("GET", "/ui/api/me", headers={"Cookie": forged})[0] == 401
         later = pw["Cookie"].replace("pwadmin.", "pwadmin.9", 1)  # a longer life breaks the signature
         assert raw("GET", "/ui/api/me", headers={"Cookie": later})[0] == 401
+        for odd in ("pwadmin." + "9" * 5000 + ".x", "pwadmin.\u00b2.x", "pwadmin.9999999999.\u00e9", "pwadmin", "x.y.z.w"):  # no 500
+            assert raw("GET", "/ui/api/me", headers={"Cookie": "kn_session=" + odd})[0] == 401, odd
         st, hdr, _ = raw("GET", "/ui/logout", headers=pw)
         assert st == 303 and hdr["location"] == "/ui" and 'kn_session=""' in hdr.get("set-cookie", ""), hdr
         assert [raw("POST", "/ui/login", "password=nope", form)[0] for _ in range(5)] == [401, 401, 401, 401, 429]  # 5 a minute
