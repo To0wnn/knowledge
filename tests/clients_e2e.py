@@ -972,6 +972,20 @@ def plugin_versions(tmp: Path):
         check(got.get(agent) == want, f"{agent}: session start reports plugin version {want}", json.dumps(seen)[:300])
 
 
+def claude_stored_token(tmp: Path):
+    """A machine without a keyring keeps the token only in Claude's plugin option (a container): the setup and the
+    Codex/agy hooks, which run outside Claude, find it where Claude Code stored it."""
+    home = tmp / "Claude Only"
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude" / ".credentials.json").write_text(json.dumps({"pluginSecrets": {"knowledge@knowledge": {"token": "gategategate"}}}), encoding="utf-8")
+    (home / ".claude" / "settings.json").write_text(json.dumps({"pluginConfigs": {"knowledge@knowledge": {"options": {"url": "http://example.invalid:1"}}}}), encoding="utf-8")
+    env = user_env(home, PATH=str(Path(sys.executable).parent))  # no secret-tool or security: no keyring
+    code, out, err = run([sys.executable, "-c", "import token_store as t; print(t.token(), t.url())"], env=env,
+                         cwd=CLIENT / "plugin" / "hooks")
+    check(out.split() == ["gategategate", "http://example.invalid:1"],
+          "token and server from Claude's stored plugin option (no keyring)", out + err)
+
+
 def checkout_update(tmp: Path):
     """The setup's git checkout after a rewritten history (force-push): update resets it to GitHub's main, keeps the
     old HEAD as a branch, and refuses when a tracked file is changed (a pull would stop with conflicts everywhere)."""
@@ -1065,6 +1079,7 @@ def main():
         relay_errors(home)
         installer(tok, tmp)
         checkout_update(tmp)
+        claude_stored_token(tmp)
         real_clis(tok, home)
     finally:
         proc.kill()

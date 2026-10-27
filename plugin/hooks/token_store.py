@@ -2,10 +2,12 @@
 
 Lookup order: KNOWLEDGE_TOKEN (the VM, CI, servers without a keyring), the keyring (Linux: libsecret via secret-tool,
 entry service=knowledge; macOS: Keychain, service "knowledge"; Windows: Credential Manager, generic credential
-"knowledge"; one token per device), then the Claude plugin option (older installs). store() writes the keyring of the
+"knowledge"; one token per device), then the Claude plugin option (older installs, and machines without a keyring;
+outside Claude read where Claude Code stored it, claude_option). store() writes the keyring of the
 OS it runs on (clients/knowledge-agent.py install asks for the token and calls it).
 The MCP headersHelper sees no credential env vars (Claude Code strips them), so there the keyring comes first too.
-url() is the server address the same way: the Claude plugin option, KNOWLEDGE_URL, the file the setup wrote, the default.
+url() is the server address the same way: the Claude plugin option, KNOWLEDGE_URL, the file the setup wrote, the option
+as Claude stored it, the default.
 `token_store.py header` prints the MCP Authorization header as JSON for Claude Code's headersHelper and Codex's
 http_headers_helper; `{}` when there is no token, so a static header still applies. Standard library only.
 """
@@ -103,9 +105,22 @@ def store(tok: str) -> None:
         raise OSError(f"no keyring: {(r.stderr or r.stdout).strip()[:200]}")
 
 
+def claude_option(name: str) -> str:
+    """The Claude plugin's option as Claude Code stored it, for code that runs outside Claude (the setup, Codex and agy
+    hooks): on a machine without a keyring the token is only there (a server, a container). Secrets live in
+    .credentials.json (on macOS in the Keychain instead, then this finds nothing), the rest in settings.json."""
+    home = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    try:
+        if name == "token":
+            return json.loads((home / ".credentials.json").read_text(encoding="utf-8"))["pluginSecrets"]["knowledge@knowledge"]["token"]
+        return json.loads((home / "settings.json").read_text(encoding="utf-8"))["pluginConfigs"]["knowledge@knowledge"]["options"][name]
+    except (OSError, ValueError, KeyError, TypeError):
+        return ""
+
+
 def token() -> str:
     return os.environ.get("KNOWLEDGE_TOKEN") or from_keyring() \
-        or os.environ.get("CLAUDE_PLUGIN_OPTION_TOKEN") or os.environ.get("CLAUDE_PLUGIN_OPTION_token", "")
+        or os.environ.get("CLAUDE_PLUGIN_OPTION_TOKEN") or os.environ.get("CLAUDE_PLUGIN_OPTION_token") or claude_option("token")
 
 
 def url() -> str:
@@ -116,7 +131,7 @@ def url() -> str:
     except OSError:
         stored = ""
     return (os.environ.get("CLAUDE_PLUGIN_OPTION_URL") or os.environ.get("CLAUDE_PLUGIN_OPTION_url")
-            or os.environ.get("KNOWLEDGE_URL") or stored or DEFAULT_URL).rstrip("/")
+            or os.environ.get("KNOWLEDGE_URL") or stored or claude_option("url") or DEFAULT_URL).rstrip("/")
 
 
 def store_url(u: str) -> None:
