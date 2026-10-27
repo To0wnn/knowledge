@@ -456,8 +456,13 @@ def wake_e2e(tok: str, home: Path, project: Path):
         check("agent_hooks.py" in out and " register" in out, "wake: an unregistered agy conversation is asked once to register", out[:300] + err[-300:])
         code, out, err = hook(["hints", "-"], {"conversationId": "conv-1", "workspacePaths": [str(project)]})
         check("register" not in out, "wake: the register request is not repeated", out[:300])
-        code, out, err = hook(["register"], {}, {"ANTIGRAVITY_LS_ADDRESS": f"127.0.0.1:{ls.server_address[1]}", "ANTIGRAVITY_CSRF_TOKEN": csrf})
+        code, out, err = hook(["register"], {}, {"ANTIGRAVITY_LS_ADDRESS": f"127.0.0.1:{ls.server_address[1]}", "ANTIGRAVITY_CSRF_TOKEN": csrf,
+                                                 "ANTIGRAVITY_CONVERSATION_ID": "conv-1"})
         check(code == 0 and "registered" in out, "wake: agy registers from its terminal", out + err)
+        admin = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "anthony"}
+        st, body = http("GET", "/ui/api/admin", None, admin)
+        early = {c["session"]: c for t in json.loads(body)["tokens"] if t["name"] == "friend-pc" for c in t.get("clients", [])}
+        check(early.get("conv-1", {}).get("wake") is True, "wake: the admin page shows agy wakeable right after register, not a turn later", str(early)[:300])
         code, out, err = hook(["register"], {})
         check(code != 0 and "not run by agy" in (out + err), "wake: register outside agy says so", out + err)
         entry = next((home / ".knowledge" / "agents").glob("agy-ls-*.json"))
@@ -492,7 +497,6 @@ def wake_e2e(tok: str, home: Path, project: Path):
                                                     "toolCall": {"name": "call_mcp_tool", "args": {"ToolName": "knowledge_edit"}}})
         check(out.strip() == "{}" and len(sent) == 1 and len(calls.read_text(encoding="utf-8").splitlines()) == 1,
               "wake: said once (a second write wakes nobody again); agy's PostToolUse answers {}", out + err)
-        admin = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "anthony"}
         st, body = http("GET", "/ui/api/admin", None, admin)
         clients = {c["session"]: c for t in json.loads(body)["tokens"] if t["name"] == "friend-pc" for c in t.get("clients", [])}
         check(all(clients.get(s, {}).get("wake") for s in ("cx-1", "cl-1", "conv-1")) and clients["cx-1"]["agent"] == "codex"

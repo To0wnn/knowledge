@@ -233,6 +233,13 @@ def register_agy():
     except Exception as e:
         sys.exit(f"knowledge: agy's language server did not answer ({e}), nothing registered")
     write_private(AGENTS_DIR / f"agy-ls-{short(address)}.json", entry)
+    conv = os.environ.get("ANTIGRAVITY_CONVERSATION_ID", "")
+    try:  # the hooks only see the registration at the next turn: tell the admin page now
+        query = urllib.parse.urlencode({**project_query(os.getcwd()), "agent": "agy", "session": conv[:80], "wake": 1})
+        urllib.request.urlopen(urllib.request.Request(f"{URL}/tasks?{query}", headers={"Authorization": f"Bearer {token('-')}"}),
+                               timeout=4).close()
+    except Exception:  # the next turn's hook says it to the server anyway
+        pass
     print("knowledge: registered; other agents on this machine can now hand you tasks directly")
 
 
