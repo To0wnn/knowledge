@@ -811,12 +811,13 @@ def codex_plugin(tok: str, home: Path, project: Path):
     code, out, err = run([codex, "mcp", "list"], "", env, timeout=60)
     check("agent_hooks.py mcp" in out, "codex: mcp list shows the plugin's knowledge server", out + err)
     self_update(env, home, "codex")
-    # The hooks as Codex reads them (app-server hooks/list): all five parse and wait for the user's trust (/hooks).
+    # The hooks as Codex reads them (app-server hooks/list): all of them parse and wait for the user's trust (/hooks).
     reply = app_server(codex, env, "hooks/list", {"cwds": [str(project)]})
     data = reply.get("result", {}).get("data", [])
     listed = [h for e in data for h in e["hooks"] if h.get("pluginId") == "knowledge@knowledge"]
     problems = [w for e in data for w in e["warnings"] + [x["message"] for x in e["errors"]]]
-    check(len(listed) == 6 and not problems, "codex: hooks/list shows the plugin's six hooks, no warnings", json.dumps(reply)[:800])
+    check(len(listed) == 7 and not problems, "codex: hooks/list shows the plugin's seven hooks, no warnings",
+          f"{len(listed)} hooks, problems {problems}: " + json.dumps(reply)[:800])
     # Codex itself starts the plugin's MCP server (on Windows with a python.org PATH: py, no python3) and lists its tools.
     reply = app_server(codex, env, "mcpServerStatus/list", {"detail": "full"}, timeout=90)
     entry = next((e for e in reply.get("result", {}).get("data", []) if "knowledge" in e.get("name", "")), {})
