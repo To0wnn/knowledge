@@ -2308,7 +2308,10 @@ async def ui_me(request: Request):
     dev = device.get()
     roots = dev.get("roots")
     wr = dev.get("write_roots")
-    projects = [p for p, (d, m) in list(PROJECTS.items()) if not roots or d in roots]
+    used = {rel.split("/", 1)[0] for rel in list(index.files)}
+    # An empty built-in project (its folders absent on this installation) gets no tab; the first one always stays.
+    projects = [p for i, (p, (d, m)) in enumerate(list(PROJECTS.items())) if (not roots or d in roots)
+                and (i == 0 or p not in BUILTIN_PROJECTS or d in used or m in used)]
     return JSONResponse({"user": dev.get("user"), "admin": bool(dev.get("admin")), "projects": projects,
                          "writable": [p for p in projects if wr is None or PROJECTS[p][1] in wr]})
 
