@@ -63,21 +63,27 @@ function skillsCell(t) {
 // The plugin version per agent this token reported at its last session start; "behind" when older than the newest.
 function pluginCell(t) {
   const td = el("td", "muted");
-  if (!t.plugin || !t.plugin.length) { td.textContent = "–"; return td; }
-  t.plugin.forEach((p, i) => {
+  const own = new Set((t.clients || []).map((c) => c.agent));  // those show their version in their own rows
+  const rest = (t.plugin || []).filter((p) => !own.has(p.agent));
+  if (!rest.length) { td.textContent = "–"; return td; }
+  rest.forEach((p, i) => {
     if (i) td.append(el("br"));
     td.append(el("span", p.behind ? "unused" : "", `${p.agent} ${p.v}${p.behind ? " (behind)" : ""}`), ` · ${ago(p.at)}`);
   });
   return td;
 }
 
-// One row per session under its token, in the columns that fit: agent under Name, when under Last used.
+// One row per session under its token, in the columns that fit: agent under Name, when under Last used, the
+// plugin version (recorded per token and agent, not per session) under Plugin.
 function clientRows(t) {
+  const plugin = Object.fromEntries((t.plugin || []).map((p) => [p.agent, p]));
   return [...(t.clients || [])].sort((a, b) => b.at - a.at).map((c, i, all) => {
     const tr = el("tr", i === all.length - 1 ? "client last" : "client");
-    const id = el("td", "mono", c.session); id.colSpan = 3;
-    tr.append(el("td", "mono", `↳ ${c.agent}`), id, el("td", "", c.project || "–"), el("td", "", ago(c.at)),
-      el("td", c.wake ? "" : "muted", c.wake ? "wakeable" : "not wakeable"), el("td"));
+    const id = el("td", "mono", c.session); id.colSpan = 2;
+    const p = plugin[c.agent];
+    tr.append(el("td", "mono", `↳ ${c.agent}`), id, el("td", c.wake ? "" : "muted", c.wake ? "wakeable" : "not wakeable"),
+      el("td", "", c.project || "–"), el("td", "", ago(c.at)),
+      el("td", p && p.behind ? "unused" : "", p ? `${p.v}${p.behind ? " (behind)" : ""}` : "–"), el("td"));
     return tr;
   });
 }
