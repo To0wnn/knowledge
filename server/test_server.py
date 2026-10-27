@@ -515,6 +515,7 @@ def main():
         st, body = http("POST", "/sync", {"files": files, "full": True}, token=fr)
         res = json.loads(body)
         assert st == 200 and res["written"] == 3 and len(res["refused"]) == 4, res
+        assert "archived" not in res, res  # an archive that was already there is no move: nothing to say
         # Docs without a topic come back as hints at once (the lint rule), archive folders excepted.
         assert "README.md: no topic" in res["hints"] and "docs/design/voice.md: no topic" in res["hints"], res
         assert not any(h.startswith("old/") for h in res["hints"]) and "General" in res["headings"], res
@@ -528,6 +529,13 @@ def main():
         assert {k: v for k, v in json.loads(body).items() if k in ("written", "unchanged", "deleted", "refused")} == \
             {"written": 0, "unchanged": 1, "deleted": 3, "refused": []}, body
         assert not (tmp / "projects/garden/docs/docs/design/voice.md").exists()
+        # A doc moved into an archive folder (searches skip it): the plugin asks to keep what is still true.
+        http("POST", "/sync", {"files": {"docs/plan.md": "---\ntopic: General\n---\nplan\n"}}, token=fr)
+        res = json.loads(http("POST", "/sync", {"files": {"README.md": "# Copilot\n", "old/plan.md": "plan\n"}, "full": True}, token=fr)[1])
+        assert res.get("archived") == ["old/plan.md"] and res["deleted"] == 1, res
+        res = json.loads(http("POST", "/sync", {"files": {"archief/notes.md": "x\n"}}, token=fr)[1])
+        assert res.get("archived") == ["archief/notes.md"], res
+        assert "carry over what is still true" in call("knowledge_write", {"path": "garden-memory/archief/project_old_archief.md", "content": "old\n"}, token=fr)[1]
         assert http("POST", "/sync", {"files": {"README.md": "x"}}, token="rw-token")[0] == 403  # not limited to one project
         # The mirror is the guest's folder: the UI does not offer to edit it, and refuses a save (the next sync would undo it).
         assert not json.loads(raw("GET", "/ui/api/note?path=garden/README.md", headers=ck)[2])["writable"]

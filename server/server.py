@@ -882,6 +882,7 @@ async def knowledge_write(path: str, content: str, base_version: str = "") -> st
     audit("write", rel)
     hint = await asyncio.to_thread(similar_memos_hint, rel, content) if current is None else ""  # embeds: not on the loop
     hint += kb_lint.replaced_decision((current or b"").decode("utf-8", "replace"), content) if mem_of(rel) else ""
+    hint += f"\n{ARCHIVE_HINT}" if current is None and is_archive(rel) else ""
     return f"wrote {rel} (version {version(data)})" + hint + await asyncio.to_thread(house_rules_hint, rel)
 
 
@@ -950,6 +951,8 @@ def house_rules_hint(rel: str) -> str:
     return ("\nHouse rules still open for this memo (fix them now): " + "; ".join(found)) if found else ""
 
 
+ARCHIVE_HINT = ("This file is in an archive folder, which searches skip: carry over what is still true in what you archive "
+                "(how it works, decisions, open items) into a memo or doc that stays (house rule 2).")
 SIMILAR_HINT = 0.72  # calibrated 18 Oct 2026: a memo vs itself ~0.80-0.86, closely related memos ~0.78, loose docs ~0.70
 
 
@@ -1988,7 +1991,7 @@ async def sync_route(request: Request):
                             status_code=409)
     files = b.get("files") if isinstance(b.get("files"), dict) else {}
     out = {"written": 0, "unchanged": 0, "deleted": 0, "refused": []}
-    headings, hints = doc_headings(PROJECTS[project][1]), []
+    headings, hints, archived = doc_headings(PROJECTS[project][1]), [], []
     keep = set()
     for name, text in list(files.items())[:2000]:
         clean = sync_name(name)
@@ -2021,6 +2024,8 @@ async def sync_route(request: Request):
             index.refresh(rel)
         audit("sync", rel)
         out["written"] += 1
+        if current is None and is_archive(rel):
+            archived.append(clean)
     if b.get("full") and keep:  # never empty the mirror because of an empty or failed listing
         with index.lock:
             gone = [r for r in index.files if r.startswith(docs + "/") and r.endswith(".md") and r not in keep]
@@ -2036,6 +2041,11 @@ async def sync_route(request: Request):
                 index.refresh(rel)
             audit("sync-delete", rel)
             out["deleted"] += 1
+    if b.get("full"):  # a full listing also brings an old archive to a new device: only a move counts (original gone)
+        moved = {r.rsplit("/", 1)[-1] for r in gone} if keep else set()
+        archived = [a for a in archived if a.rsplit("/", 1)[-1] in moved]
+    if archived:  # moved out of search: the plugin asks the agent to keep what is still true (house rule 2)
+        out.update(archived=archived[:5], more_archived=max(0, len(archived) - 5))
     if hints:  # docs the graph cannot place: the plugin tells the agent which headings to choose from
         out.update(hints=hints[:20], more_hints=max(0, len(hints) - 20), headings=headings)
     return JSONResponse(out)

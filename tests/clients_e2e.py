@@ -375,6 +375,18 @@ def agents(tok: str, home: Path, project: Path, garden: Path):
                         check(json.loads(out) == {} or "injectSteps" in json.loads(out), f"{name} via {label}: hints prints agy JSON", out[:300])
                     except ValueError:
                         check(False, f"{name} via {label}: hints prints valid JSON", out[:300] + err[-300:])
+    # A doc moved into an archive folder at session end: the hint waits for the next session start, once
+    sync, parked = [sys.executable, str(REPO / "plugin" / "hooks" / "docs-sync.py")], home / ".knowledge" / "pending-start.txt"
+    plan = project / "docs" / "plan-e2e.md"
+    plan.write_text("# Plan\n\nstill true: the taxi speed is 20 kt\n", encoding="utf-8")
+    start = json.dumps({"hook_event_name": "SessionStart", "cwd": str(project)})
+    run(sync, start, env, cwd=str(project))
+    (project / "docs" / "old").mkdir(exist_ok=True)
+    plan.rename(project / "docs" / "old" / "plan-e2e.md")
+    code, out, err = run(sync, json.dumps({"hook_event_name": "SessionEnd", "cwd": str(project)}), env, cwd=str(project))
+    check(code == 0 and parked.exists() and "still true" in parked.read_text(encoding="utf-8"), "docs-sync: session end parks the archive hint", out + err)
+    code, out, err = run(sync, start, env, cwd=str(project))
+    check("plan-e2e.md" in out and not parked.exists(), "docs-sync: the next session start says it once", out + err)
     new_task(agent, env, project, tok, home)
     wake_e2e(tok, home.parent / "Wake Usér", project)
     st, body = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_write", "arguments":
