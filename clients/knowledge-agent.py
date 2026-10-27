@@ -156,12 +156,20 @@ def cli(name: str) -> str:
     return path
 
 
+def locked_hint(text: str) -> str:
+    """Windows will not replace a plugin folder that a running agent or a terminal has open."""
+    if any(x in text.lower() for x in ("used by another process", "access is denied")):
+        return ("\nA file is in use: quit the agent (Codex, agy) completely, leave any terminal that is in its plugin "
+                "folder (cd ~), and run this again.")
+    return ""
+
+
 def run_cli(argv: list, ok_if: tuple = ()) -> bool:
     """Run an agent CLI step and say what it did; stop loudly on a failure, unless its output holds one of ok_if."""
     r = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace")
     text = (r.stdout + r.stderr).strip()
     if r.returncode != 0 and not any(x in text.lower() for x in ok_if):
-        sys.exit(f"{Path(argv[0]).stem} {' '.join(argv[1:])} failed:\n{text[-1500:]}")
+        sys.exit(f"{Path(argv[0]).stem} {' '.join(argv[1:])} failed:\n{text[-1500:]}{locked_hint(text)}")
     print(f"{Path(argv[0]).stem} {' '.join(argv[1:3])}: {text.splitlines()[-1] if text else 'ok'}")
     return r.returncode == 0
 
@@ -235,6 +243,8 @@ def install_plugin(agent: str):
         restart_codex()
         return print("done; open codex and type /hooks once to trust the knowledge hooks")
     run_cli([cli("agy"), "plugin", "install", AGY_PLUGIN])
+    if not has_plugin("agy"):  # a failed copy can leave agy without the plugin at all
+        sys.exit("agy plugin list does not show the knowledge plugin after the install: quit agy completely and run this again.")
     say_restart("agy")
     print("done; start agy and ask it to search the knowledge")
 
@@ -472,6 +482,8 @@ if __name__ == "__main__":
         assert helper_line("-").startswith('http_headers_helper = "') and helper_line("-").endswith(' header -"')
         replies = iter(["", "n", "J"])
         assert choose(["claude", "codex", "agy"], lambda q: next(replies)) == ["claude", "agy"]
+        assert locked_hint("unlinkat x: The process cannot access the file because it is being used by another process.")
+        assert locked_hint("token ok") == ""
         import tempfile
         with tempfile.TemporaryDirectory() as d:
             (Path(d) / "e.json").write_text("\ufeff \n", encoding="utf-8")
