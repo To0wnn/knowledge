@@ -40,5 +40,6 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except Exception:  # a broken guard must never block normal work
-        pass
+    except Exception as err:  # never block normal work, but say so: a silent failure would let secrets through
+        print(json.dumps({"systemMessage": f"secret-guard could not check this edit ({type(err).__name__}: {err}); "
+                                           "secrets are not being caught until it is fixed."}))
