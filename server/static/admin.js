@@ -71,26 +71,26 @@ function pluginCell(t) {
   return td;
 }
 
-function clientsCell(t) {
-  const td = el("td", "muted");
-  if (!t.clients || !t.clients.length) { td.textContent = "–"; return td; }
-  t.clients.forEach((c, i) => {
-    if (i) td.append(el("br"));
-    const id = el("span", "mono", c.session);
-    td.append(`${c.agent} · `, id, ` · ${c.project}${c.wake ? " · wakeable" : ""} · ${ago(c.at)}`);
+// One row per session under its token, in the columns that fit: agent under Name, when under Last used.
+function clientRows(t) {
+  return [...(t.clients || [])].sort((a, b) => b.at - a.at).map((c, i, all) => {
+    const tr = el("tr", i === all.length - 1 ? "client last" : "client");
+    const id = el("td", "mono", c.session); id.colSpan = 3;
+    tr.append(el("td", "mono", `↳ ${c.agent}`), id, el("td", "", c.project || "–"), el("td", "", ago(c.at)),
+      el("td", c.wake ? "" : "muted", c.wake ? "wakeable" : "not wakeable"), el("td"));
+    return tr;
   });
-  return td;
 }
 
 function renderTokens() {
-  $("tokens").replaceChildren(...state.tokens.map((t) => {
-    const tr = el("tr");
+  $("tokens").replaceChildren(...state.tokens.flatMap((t) => {
+    const tr = el("tr", t.clients && t.clients.length ? "has-clients" : "");
     const access = t.watch ? "VM watcher" : t.write ? "read + write" : "read";
     const name = el("td", "mono", t.name);
     if (SYSTEM.has(t.name) || t.watch) name.append(el("span", "muted", " · used by the VM"));
     tr.append(name, el("td", "", access), el("td", "", scopeText(t) + (t.redact ? " · secrets masked" : "")), skillsCell(t),
       el("td", "muted", t.created ? `${day(t.created)}${t.by ? " · " + t.by : ""}` : "before the admin page"),
-      el("td", t.last_used ? "muted" : "unused", t.last_used ? ago(t.last_used) : "never used"), pluginCell(t), clientsCell(t));
+      el("td", t.last_used ? "muted" : "unused", t.last_used ? ago(t.last_used) : "never used"), pluginCell(t));
     const td = el("td"), b = el("button", "ghost danger", "Revoke");
     b.setAttribute("aria-label", `Revoke ${t.name}`);
     b.onclick = () => {
@@ -98,7 +98,7 @@ function renderTokens() {
       if (confirm(`Revoke ${t.name}? Devices using it stop working right away.${warn}`)) run(() => api("/ui/api/admin/token", { name: t.name, revoke: true }), b);
     };
     td.append(b); tr.append(td);
-    return tr;
+    return [tr, ...clientRows(t)];
   }));
   // Rebuilt after every action: keep what was ticked. "All projects" is explicit, the server refuses an empty pick.
   const ticked = new Set([...$("t-roots").querySelectorAll("input:checked")].map((c) => c.value));

@@ -236,6 +236,11 @@ body.admin-page { display: block; overflow-y: auto; }
 .admin th, .admin td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
 .admin td:first-child, .admin th { white-space: nowrap; } /* names and headers in one line; descriptions wrap instead of pushing columns off screen */
 .admin tbody tr:last-child td { border-bottom: 0; }
+.admin tr.has-clients td, .admin tr.client td { border-bottom: 0; }
+.admin tr.client.last td { border-bottom: 1px solid var(--line); }
+.admin tr.client td { padding: 2px 10px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.admin tr.client td:first-child { padding-left: 24px; }
+.admin tr.client:last-child td { border-bottom: 0; }
 .admin th { color: var(--muted); font-weight: 600; font-size: 12px; }
 .admin td.actions { display: flex; gap: 6px; justify-content: flex-end; }
 .mono { font-family: var(--mono); font-size: 12.5px; }
