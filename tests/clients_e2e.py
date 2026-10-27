@@ -889,7 +889,7 @@ def installer(tok: str, tmp: Path):
         check("knowledge@knowledge" in out, "install claude: claude plugin list shows knowledge", out + err)
         code, out, err = run([shutil.which("claude"), "plugin", "configure", "knowledge@knowledge", "--json"], "", env, timeout=60)
         check(BASE in out, "install claude: the plugin's url option is the server it was installed against", out + err)
-        if not token_store.from_keyring():  # the Linux runner: the token must land where Claude reads it
+        if sys.platform.startswith("linux") and not token_store.from_keyring():  # the token must land where Claude reads it
             stored = json.loads((home / ".claude" / ".credentials.json").read_text(encoding="utf-8")) if (home / ".claude" / ".credentials.json").exists() else {}
             check(stored.get("pluginSecrets", {}).get("knowledge@knowledge", {}).get("token") == tok,
                   "install claude without a keyring: the token is saved as Claude's plugin option", json.dumps(stored)[:300])

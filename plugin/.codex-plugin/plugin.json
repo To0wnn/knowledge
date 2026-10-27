@@ -1,6 +1,6 @@
 {
   "name": "knowledge",
-  "version": "0.10.5",
+  "version": "0.10.6",
   "description": "Live shared knowledge (docs + memory) through a knowledge server",
   "author": {
     "name": "To0wnn"

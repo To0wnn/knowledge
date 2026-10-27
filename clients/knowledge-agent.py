@@ -186,7 +186,9 @@ def install_claude(tok: str):
     run_cli([claude, "plugin", "update", "knowledge@knowledge"])  # install leaves an installed copy at its old version
     values = {"url": URL} if URL != token_store.DEFAULT_URL else {}  # the plugin's MCP entry reads its option, not a file
     keyring = bool(token_store.from_keyring())
-    if not keyring and tok != token_store.claude_option("token"):  # no keyring: else a refused old token stays in use
+    # Only Linux can lack a keyring (a server, a container): else a refused old token in this option stays in use.
+    # macOS and Windows always have one, and Claude keeps a sensitive option there too.
+    if not keyring and sys.platform.startswith("linux") and tok != token_store.claude_option("token"):
         values["token"] = tok
     if values:
         r = subprocess.run([claude, "plugin", "configure", "knowledge@knowledge", "--values-stdin"], input=json.dumps(values),
