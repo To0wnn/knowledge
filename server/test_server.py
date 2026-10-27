@@ -459,6 +459,7 @@ def main():
         call("knowledge_write", {"path": "garden-memory/sessions/2026-10.md", "content": "- open tot 1 jan 2099 [Codex, LOG-1]: quoted\n"})
         first = http("GET", "/context/1?project=x&agent=codex", token=fr)[1]
         assert first.split("\n", 1)[1].startswith("===== your open tasks (Codex, project garden-memory)"), first[:300]
+        assert "-done]: <result>" in first, first[:900]  # the owner hands the result back when another agent waits on it
         assert first.index("CX-2") < first.index("CX-1") < first.index("===== knowledge (project garden)"), first[:800]
         mine = first.split("\n\n", 1)[0]
         assert "CX-1" in mine and "CX-2" in mine, mine

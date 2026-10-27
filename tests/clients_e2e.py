@@ -500,7 +500,7 @@ def wake_e2e(tok: str, home: Path, project: Path):
         except subprocess.TimeoutExpired:
             waiter.kill()
             werr = "still waiting after 20 s"
-        check(waiter.returncode == 2 and "WAKE-CLAUDE" in werr and "not from the user" in werr,
+        check(waiter.returncode == 2 and "WAKE-CLAUDE" in werr and "not from the user" in werr and "-done]" in werr,
               "wake: Claude's waiter wakes the session (exit 2) with its own new task", werr[-400:])
         code, out, err = hook(["wake", "agy", "-"], {"conversationId": "other", "workspacePaths": [str(project)],
                                                     "toolCall": {"name": "call_mcp_tool", "args": {"ToolName": "knowledge_edit"}}})

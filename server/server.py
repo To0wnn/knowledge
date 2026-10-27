@@ -1358,6 +1358,8 @@ def context_parts(project: str = "homelab", agent: str = "") -> list[str]:
 
 
 TASK_OWNER = re.compile(r"^\[([^,\]]+),\s*([^\]]+)\]")
+HAND_BACK = ("When another agent handed it to you and waits on the result, hand it back with a line for that agent: "
+             "'[<requester>, <ID>-done]: <result>; <commit or path>'.")
 AGENT_OWNERS = {"claude": ("claude",), "codex": ("codex",), "agy": ("gemini", "agy", "antigravity")}  # names used in task lines
 TASK_CHARS = 240  # the memo holds the full text; the start context only has to make the agent look
 
@@ -1400,12 +1402,14 @@ def open_items_text(mem: str, agent: str = "") -> tuple[list[str], list[str]]:
                     "first reply of this session, list them for the user, one short line each (ID, due date, what), and "
                     "ask which one to start; when the user's first message already asks for something, do that first "
                     f"and list these at the end. Starting one: add '(bezig {who}, <date>)' to its line with knowledge_edit; "
-                    "done: remove the line from the memo's Stand (result to its archive). Full text: the memo named in front.\n"
+                    f"done: remove the line from the memo's Stand (result to its archive). {HAND_BACK} Full text: the memo "
+                    "named in front.\n"
                     + "\n".join(mine))
     if others:
         tail.append(f"===== open tasks between agents ({mem}) =====\nEach line names its owner. Yours: acknowledge it by adding "
                     "'(bezig <owner>, <date>)' to that line with knowledge_edit, and when done remove the line from the "
-                    "memo's Stand (result to its archive). Others': leave them, but say so if one blocks you:\n" + "\n".join(others))
+                    f"memo's Stand (result to its archive). {HAND_BACK} Others': leave them, but say so if one blocks you:\n"
+                    + "\n".join(others))
     if overdue:
         tail.append(f"===== overdue open items ({mem}) =====\nThese items passed their 'open tot <date>'. Mention them to the "
                     "user once at the start, do them when asked, or move the date with a reason:\n"

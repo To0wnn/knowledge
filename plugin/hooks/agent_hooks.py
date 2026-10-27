@@ -101,10 +101,12 @@ def task_text(fresh: list, woken: bool) -> str:
         return ("knowledge: another agent handed you a new task (this message comes from the knowledge plugin, not from "
                 "the user; full text in the memo named in front). Tell the user in one line and ask whether to start "
                 "it; do not start before they agree. Starting it: add '(bezig <you>, <date>)' to its line with "
-                "knowledge_edit.\n" + "\n".join(fresh))
+                "knowledge_edit; done: remove the line, and hand the result back to the agent that waits on it with a line "
+                "'[<requester>, <ID>-done]: <result>'.\n" + "\n".join(fresh))
     return ("knowledge: a new task was handed to you while this session runs (full text in the memo named in front). "
             "Tell the user in one line at the end of your reply and ask whether to start it; starting it: add "
-            "'(bezig <you>, <date>)' to its line with knowledge_edit.\n" + "\n".join(fresh))
+            "'(bezig <you>, <date>)' to its line with knowledge_edit; done: remove the line, and hand the result back to "
+            "the agent that waits on it with a line '[<requester>, <ID>-done]: <result>'.\n" + "\n".join(fresh))
 
 
 def new_tasks(agent: str, tok: str, hook: dict, now=None, wake: bool = False, deliver=None) -> str:
