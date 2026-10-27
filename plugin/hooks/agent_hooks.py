@@ -149,14 +149,20 @@ def new_tasks(agent: str, tok: str, hook: dict, now=None, wake: bool = False, de
     return text
 
 
-def write_private(path: Path, data: dict):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data), encoding="utf-8")
+def private_dir():
+    """The registry: only this user may read agy's key or plant an entry (an entry names the codex binary to run)."""
+    AGENTS_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     try:
-        os.chmod(tmp, 0o600)  # agy's entry holds the key to its session
+        os.chmod(AGENTS_DIR, 0o700)
     except OSError:
         pass
+
+
+def write_private(path: Path, data: dict):
+    private_dir()
+    tmp = path.with_suffix(".tmp")
+    with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as f:
+        f.write(json.dumps(data))  # created 0600: agy's entry holds the key to its session
     os.replace(tmp, path)
 
 
@@ -211,8 +217,13 @@ def agy_conversations() -> list:
     for f, entry in read_entries("agy-ls-*.json"):
         try:
             trajectories = agy_call(entry, "GetAllCascadeTrajectories", {}).get("trajectorySummaries") or {}
-        except Exception:
-            f.unlink(missing_ok=True)  # agy closed: its port and key died with it
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403):  # a new agy on the old port: the key is no longer valid
+                f.unlink(missing_ok=True)
+            continue
+        except Exception as e:  # agy closed: its port and key died with it; a busy or slow agy keeps its entry
+            if isinstance(getattr(e, "reason", e), ConnectionRefusedError):
+                f.unlink(missing_ok=True)
             continue
         for conv, t in trajectories.items():
             uri = ((t.get("workspaces") or [{}])[0]).get("workspaceFolderAbsoluteUri", "")
@@ -299,6 +310,8 @@ def codex_queue(entry: dict, text: str) -> bool:
     if not exe:
         return False
     text = " / ".join(t for t in text.splitlines() if t.strip())  # Windows' npm codex.cmd cuts an argument at a newline
+    if exe.lower().endswith((".cmd", ".bat")):  # cmd.exe parses the line itself: a quote or & in a task would run commands
+        text = re.sub(r'["%^&|<>!]', " ", text)
     env = {**os.environ, "CODEX_HOME": entry["codex_home"]} if entry.get("codex_home") else None
     r = subprocess.run([exe, "queue", "--thread", entry["session"], "--message", text], capture_output=True, text=True,
                        encoding="utf-8", errors="replace", timeout=30, stdin=subprocess.DEVNULL, env=env)
@@ -344,7 +357,7 @@ def wait(agent: str, tok: str):
         return
     me = f"{os.getpid()}:{time.time()}"
     lock, poked = AGENTS_DIR / f"{agent}-{short(sid)}.waiter", AGENTS_DIR / f"{agent}-{short(sid)}.poke"
-    AGENTS_DIR.mkdir(parents=True, exist_ok=True)
+    private_dir()
     lock.write_text(me, encoding="utf-8")
     end = time.time() + WAKE_WITHIN
     while time.time() < end:
@@ -433,10 +446,10 @@ def hints(tok: str):
         asked = AGENTS_DIR / f"agy-asked-{short(conv)}"
         state = asked.read_text(encoding="utf-8") if asked.exists() else None
         if conv and registered and state != "registered":
-            AGENTS_DIR.mkdir(parents=True, exist_ok=True)
+            private_dir()
             asked.write_text("registered", encoding="utf-8")
         elif conv and not registered and state != "asked":  # a resumed conversation never saw the start context
-            AGENTS_DIR.mkdir(parents=True, exist_ok=True)
+            private_dir()
             asked.write_text("asked", encoding="utf-8")
             news = "\n\n".join(t for t in (news, register_notice(again=state == "registered")) if t)
     except Exception as e:  # never cost agy its pending hint or its JSON

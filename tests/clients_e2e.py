@@ -419,12 +419,14 @@ def wake_e2e(tok: str, home: Path, project: Path):
     else:
         (bin_dir / "codex").write_text(f'#!/bin/sh\nexec "{sys.executable}" "{bin_dir / "fakecodex.py"}" "$@"\n', encoding="utf-8")
         (bin_dir / "codex").chmod(0o755)
-    sent, csrf = [], "gategategate"
+    sent, csrf, busy = [], "gategategate", threading.Event()
 
     class LS(BaseHTTPRequestHandler):  # agy's language server, as far as the plugin uses it
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
-            if self.headers.get("x-codeium-csrf-token") != csrf:
+            if busy.is_set():
+                reply, code = {}, 503
+            elif self.headers.get("x-codeium-csrf-token") != csrf:
                 reply, code = {"code": "unauthenticated"}, 401
             elif self.path.endswith("/GetAllCascadeTrajectories"):
                 reply, code = {"trajectorySummaries": {"conv-1": {"lastModifiedTime": "2026-10-27T08:00:00Z",
@@ -466,12 +468,17 @@ def wake_e2e(tok: str, home: Path, project: Path):
         code, out, err = hook(["register"], {})
         check(code != 0 and "not run by agy" in (out + err), "wake: register outside agy says so", out + err)
         entry = next((home / ".knowledge" / "agents").glob("agy-ls-*.json"))
-        check(WIN or entry.stat().st_mode & 0o077 == 0, "wake: agy's entry (its key) is private to the user")
+        check(WIN or (entry.stat().st_mode & 0o077 == 0 and entry.parent.stat().st_mode & 0o077 == 0),
+              "wake: agy's entry (its key) and the registry folder are private to the user")
+        busy.set()
+        hook(["hints", "-"], {"conversationId": "conv-1", "workspacePaths": [str(project)]})
+        busy.clear()
+        check(entry.exists(), "wake: a busy agy (HTTP 503) keeps its registration")
         waiter = subprocess.Popen([sys.executable, str(hooks), "wait", "claude", "-"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE, env=env, cwd=str(project), text=True, encoding="utf-8")
         waiter.stdin.write(json.dumps({"session_id": "cl-1", "cwd": str(project)}))
         waiter.stdin.close()
-        tasks = "".join(f"- open tot 1 jan 2099 [{o}, WAKE-{o.upper()}]: wake test for {o}\n" for o in ("Codex", "Claude", "Gemini"))
+        tasks = "".join(f"- open tot 1 jan 2099 [{o}, WAKE-{o.upper()}]: wake test for {o} \"a & b > c %PATH%\n" for o in ("Codex", "Claude", "Gemini"))
         http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_write", "arguments":
              {"path": "garden-memory/project_wake.md", "content": "---\nname: w\ndescription: d\nmetadata:\n  type: project\n---\n"
               f"## Stand\n{tasks}\n## Keuzes\n"}}}, {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})
@@ -484,6 +491,8 @@ def wake_e2e(tok: str, home: Path, project: Path):
         check(len(queued) == 1 and queued[0][:3] == ["queue", "--thread", "cx-1"] and "WAKE-CODEX" in queued[0][-2]
               and "WAKE-GEMINI" not in queued[0][-2] and queued[0][-1] == str(home / "codex-b"),
               "wake: Codex gets its own new task through codex queue, in the session's CODEX_HOME", str(queued)[:400])
+        check(bool(queued) and {"c", "PATH"} <= set(re.findall(r"\w+", queued[0][-2])) and not (project / "c").exists(),
+              "wake: a quote, & or > in a task reaches Codex as text, never as a command (Windows codex.cmd)", str(queued)[:400])
         check(len(sent) == 1 and sent[0]["cascadeId"] == "conv-1" and "WAKE-GEMINI" in sent[0]["items"][0]["text"],
               "wake: agy gets its own new task in its open conversation", str(sent)[:400])
         try:
