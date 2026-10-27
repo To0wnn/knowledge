@@ -119,6 +119,89 @@ def usage_logged(home: Path, agent: str, sid: str) -> bool:
     return [(r["agent"], r.get("in"), r.get("cache_read"), r.get("out")) for r in rows if r["session"] == sid] == [(agent, 40, 60, 7)]
 
 
+def limits_e2e(tok: str, tmp: Path):
+    """The usage-limit ladder in every setup (Claude plugin, Codex and agy as plugin and as script setup): each agent's
+    own source at 96% (Claude's status line through the tap, a Codex rollout, agy's language server), then the real
+    per-turn hook says it once and the subagent hook refuses."""
+    import http.server
+    home, project = tmp / "Limit Usér", tmp / "Limit Usér" / "proj"
+    project.mkdir(parents=True)
+    now, root = time.time(), CLIENT / "plugin"
+
+    class FakeLS(http.server.BaseHTTPRequestHandler):  # agy's language server: GetUserStatus with its CSRF header
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            ok = self.headers.get("x-codeium-csrf-token") == "csrf-e2e"  # the wake check asks GetAllCascadeTrajectories first
+            body = "{}" if not self.path.endswith("/GetUserStatus") else json.dumps({"userStatus": {"cascadeModelConfigData": {"clientModelConfigs": [{"label": "Pro", "quotaInfo": {
+                "remainingFraction": 0.04, "resetTime": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now + 3600))}}]}}})
+            self.send_response(200 if ok else 403)
+            self.end_headers()
+            self.wfile.write(body.encode() if ok else b"{}")
+
+        def log_message(self, *a):
+            pass
+    ls = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeLS)
+    threading.Thread(target=ls.serve_forever, daemon=True).start()
+    (home / ".knowledge" / "agents").mkdir(parents=True)
+    (home / ".knowledge" / "agents" / "agy-ls-e2e.json").write_text(json.dumps(
+        {"address": f"127.0.0.1:{ls.server_port}", "csrf": "csrf-e2e", "cwd": str(project), "at": now}), encoding="utf-8")
+    rollout = home / ".codex" / "sessions" / "rollout-limits.jsonl"
+    rollout.parent.mkdir(parents=True)
+    rollout.write_text(json.dumps({"type": "event_msg", "payload": {"type": "token_count", "rate_limits": {
+        "primary": {"used_percent": 96.0, "window_minutes": 300, "resets_at": int(now + 3600)}}}}) + "\n", encoding="utf-8")
+    (home / ".claude").mkdir()
+    (home / ".claude" / "settings.json").write_text(json.dumps({"statusLine": {"type": "command", "command": "echo my-own-line"}}), encoding="utf-8")
+    try:
+        # Claude: SessionStart puts the tap in front, Claude Code runs the status line, then the hooks read it.
+        hooks = json.loads((root / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
+        env = user_env(home, CLAUDE_PLUGIN_ROOT=str(root), CLAUDE_PLUGIN_OPTION_URL=BASE, CLAUDE_PLUGIN_OPTION_TOKEN=tok)
+        sh = bash()
+        install = next(h["command"] for h in hooks["SessionStart"][0]["hooks"] if "limits.py" in h["command"])
+        code, out, err = run([sh, "-c", install], "{}", env)
+        line = json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8"))["statusLine"]["command"]
+        check(code == 0 and "status line now also hands" in out and "statusline" in line, "claude: SessionStart puts the status line tap in front", out + err)
+        code, out, err = run([sh, "-c", line], json.dumps({"rate_limits": {"five_hour": {"used_percentage": 96, "resets_at": int(now + 3600)}}}), env)
+        check(code == 0 and out.strip() == "my-own-line", "claude: the tapped status line still shows the user's own line", out + err)
+        sets = {"claude plugin": (env, [sh, "-c"], {"session_id": "lim-claude", "cwd": str(project)},
+                                  next(h["command"] for h in hooks["UserPromptSubmit"][0]["hooks"] if " tasks " in h["command"]),
+                                  next(g["hooks"][0]["command"] for g in hooks["PreToolUse"] if "Agent" in g["matcher"]), {"tool_name": "Agent"})}
+        cx = json.loads((root / ".codex-plugin" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
+        cx_env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok)
+        argv = lambda hk: codex_hook_argvs(hk, root)[0][1]
+        sets["codex plugin"] = (cx_env, None, {"session_id": "lim-codex", "cwd": str(project), "transcript_path": str(rollout)},
+                                cx["UserPromptSubmit"][0]["hooks"][0], cx["PreToolUse"][0]["hooks"][0], {"tool_name": "spawn_agent"})
+        ag = json.loads((root / "hooks.json").read_text(encoding="utf-8"))["knowledge"]
+        sets["agy plugin"] = (cx_env, "agy", {"conversationId": "lim-agy", "workspacePaths": [str(project)]},
+                              ag["PostInvocation"][0]["command"], ag["PreToolUse"][0]["hooks"][0]["command"], {"toolCall": {"name": "invoke_subagent"}})
+        agent = CLIENT / "clients" / "knowledge-agent.py"
+        for name in ("codex", "agy"):  # the script setup writes its own hook commands
+            code, out, err = run([sys.executable, str(agent), "install", name], "", {**cx_env, "KNOWLEDGE_SETUP": "script"})
+            check(code == 0, f"{name}: script setup installs in the limits home", out + err)
+        sc = json.loads((home / ".codex" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
+        sets["codex script"] = (cx_env, "plain", {"session_id": "lim-codex-s", "cwd": str(project), "transcript_path": str(rollout)},
+                                sc["UserPromptSubmit"][0]["hooks"][0]["command"], sc["PreToolUse"][0]["hooks"][0]["command"], {"tool_name": "spawn_agent"})
+        sa = json.loads((home / ".gemini" / "config" / "hooks.json").read_text(encoding="utf-8"))["knowledge"]
+        sets["agy script"] = (cx_env, "plain", {"conversationId": "lim-agy-s", "workspacePaths": [str(project)]},
+                              sa["PostInvocation"][0]["command"], sa["PreToolUse"][0]["hooks"][0]["command"], {"toolCall": {"name": "invoke_subagent"}})
+        for label, (e, how, hook, turn, gate, call) in sets.items():
+            def go(cmd, payload):
+                if how is None:  # Codex plugin: as Codex starts a plugin hook
+                    return run(argv(cmd), json.dumps(payload), e, cwd=str(project))
+                if isinstance(how, list):
+                    return run(how + [cmd], json.dumps(payload), e, cwd=str(project))
+                where = str(root) if how == "agy" else str(project)  # agy runs plugin hooks in the plugin folder
+                return run(f'cmd /d /s /c "{cmd}"' if WIN else [shutil.which("sh"), "-c", cmd], json.dumps(payload), e, cwd=where)
+            agent_name = label.split()[0]
+            code, out, err = go(turn, hook)
+            check(code == 0 and f"96% of your {agent_name} usage limit" in out and "refused" in out, f"{label}: the per-turn hook says the 96% rung", out[:400] + err[-400:])
+            code, out, err = go(turn, hook)
+            check(code == 0 and "usage limit" not in out, f"{label}: the rung is said once per session", out[:400])
+            code, out, err = go(gate, {**hook, **call})
+            check(code == 0 and '"deny"' in out, f"{label}: a new subagent is refused at 96%", out[:400] + err[-400:])
+    finally:
+        ls.shutdown()
+
+
 def start_server(tmp: Path):
     data = {n: tmp / "data" / n for n in ("memory", "homelab", "claude", "trade", "trade-memory", "anpitek", "anpitek-memory")}
     for d in data.values():
@@ -394,6 +477,8 @@ def agents(tok: str, home: Path, project: Path, garden: Path):
                     "session-log": {**usage_hook(home, name, f"{name}-usage"), "cwd": str(project), "workspacePaths": [str(project)]},
                     "hints": {"invocationNum": 1, "workspacePaths": [str(project)]},
                     "tasks": {"hook_event_name": "UserPromptSubmit", "session_id": f"{name}-1", "cwd": str(project), "prompt": "hi"},
+                    "gate": {"hook_event_name": "PreToolUse", "session_id": f"{name}-1", "cwd": str(project), "tool_name": "spawn_agent",
+                             "toolCall": {"name": "invoke_subagent"}},
                     "wake": {"hook_event_name": "PostToolUse", "session_id": f"{name}-1", "cwd": str(project),
                              "tool_name": "mcp__knowledge__knowledge_search"}}
         # How a program starts a hook command on Windows: PowerShell -Command, or cmd /d /s /c "<command>" as one
@@ -405,6 +490,8 @@ def agents(tok: str, home: Path, project: Path, garden: Path):
                 kind = next(k for k in payloads if f" {k} " in f" {cmd} " or cmd.split(" ")[-2:-1] == [k])
                 code, out, err = run(wrap(cmd), json.dumps(payloads[kind]), hook_env, cwd=str(project))
                 check(code == 0, f"{name} via {label}: {kind} hook runs", err[-600:])
+                if kind == "gate":
+                    check(out.strip() == "", f"{name} via {label}: below the limit the subagent hook prints nothing", out[:300])
                 if kind == "context":
                     try:
                         msg = json.dumps(json.loads(out))
@@ -674,9 +761,10 @@ def codex_plugin(tok: str, home: Path, project: Path):
                 "PostToolUse": {"hook_event_name": "PostToolUse", "cwd": str(project), "tool_input": {"command": "*** Begin Patch\n*** Update File: docs/taxi.md\n*** End Patch"}},
                 "PreCompact": {"hook_event_name": "PreCompact", "session_id": "cx-1", "cwd": str(project), "transcript_path": ""},
                 "SessionEnd": {**usage_hook(home, "codex", "cx-usage"), "cwd": str(project)},
-                "UserPromptSubmit": {"hook_event_name": "UserPromptSubmit", "session_id": "cx-3", "cwd": str(project), "prompt": "hi"}}
+                "UserPromptSubmit": {"hook_event_name": "UserPromptSubmit", "session_id": "cx-3", "cwd": str(project), "prompt": "hi"},
+                "PreToolUse": {"hook_event_name": "PreToolUse", "session_id": "cx-4", "cwd": str(project), "tool_name": "spawn_agent"}}
     check(set(hooks) == set(payloads) and len(hooks["SessionStart"][0]["hooks"]) == 1,
-          "codex plugin: the five hook events, one SessionStart handler (openai/codex#45999)", str(list(hooks)))
+          "codex plugin: the six hook events, one SessionStart handler (openai/codex#45999)", str(list(hooks)))
     for event, groups in hooks.items():
         for hk in (h for g in groups for h in g["hooks"]):
             for i, (shell, argv) in enumerate(codex_hook_argvs(hk, root)):
@@ -863,12 +951,15 @@ def agy_plugin(tok: str, home: Path, project: Path, garden: Path):
     common = {"conversationId": "agy-plugin", "workspacePaths": [str(project)]}
     payloads = {"context": common, "session-log": {**common, **usage_hook(home, "agy", "agy-plugin-usage")}, "hints": {**common, "invocationNum": 1},
                 "docs-sync": {**common, "toolCall": {"name": "write_file", "args": {"Path": json.dumps(str(project / "docs" / "agy.md"))}}},
-                "wake": {**common, "toolCall": {"name": "call_mcp_tool", "args": {"ToolName": "knowledge_search"}}}}
+                "wake": {**common, "toolCall": {"name": "call_mcp_tool", "args": {"ToolName": "knowledge_search"}}},
+                "gate": {**common, "toolCall": {"name": "invoke_subagent"}}}
     (project / "docs" / "agy.md").write_text("agy plugin → ✅\n", encoding="utf-8")
     for cmd in cmds:
         kind = next(k for k in payloads if f" {k}" in cmd)
         code, out, err = run(f'cmd /d /s /c "{cmd}"' if WIN else [shutil.which("sh"), "-c", cmd], json.dumps(payloads[kind]), env, cwd=str(root))
         check(code == 0 and "skipped" not in err, f"agy plugin: {kind} hook runs in the plugin folder", err[-600:])
+        if kind == "gate":  # agy reads any output, even {}, as a verdict: {} denied every subagent (27 Oct 2026)
+            check(out.strip() == "", "agy plugin: below the limit the subagent hook prints nothing", out[:300])
         if kind == "context":
             try:
                 msg = json.loads(out)["injectSteps"][0]["systemMessage"]["systemMessage"]
@@ -1161,6 +1252,7 @@ def main():
         script_mcp(tok, home)
         codex_plugin(tok, tmp / "Codex Usér", project)  # its own home: the plugin next to the setup's server would clash
         agy_plugin(tok, home, project, garden)
+        limits_e2e(tok, tmp)
         plugin_versions(tmp)
         relay_errors(home)
         installer(tok, tmp)

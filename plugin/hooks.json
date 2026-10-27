@@ -42,6 +42,18 @@
         "command": "python3 -X utf8 hooks/agent_hooks.py session-log",
         "timeout": 15
       }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "invoke_subagent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -X utf8 hooks/agent_hooks.py gate agy",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

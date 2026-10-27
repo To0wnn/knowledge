@@ -12,6 +12,7 @@ clients/knowledge-agent.py (the setup without a plugin) calls the same functions
                                                also notes the session so another agent on this machine can wake it
   agent_hooks.py wake <claude|codex|agy> [TOKEN]  PostToolUse after knowledge_edit/write/new_memo: wake the newest
                                                session of each other agent here that got a new task from it
+  agent_hooks.py gate <claude|codex|agy>        PreToolUse on the subagent tool: refused from 95% of the usage limit
   agent_hooks.py wait claude [TOKEN]           UserPromptSubmit (asyncRewake): wait for a wake, then wake Claude
   agent_hooks.py register                      run by agy in its terminal: note where its language server listens
   agent_hooks.py header [TOKEN]                MCP header helper: the token as JSON, {} without one
@@ -38,6 +39,7 @@ import memory_mirror  # noqa: E402  (the offline copy of the memory, shared with
 import token_store  # noqa: E402  (KNOWLEDGE_TOKEN or the keyring, shared with the Claude plugin)
 import project_marker  # noqa: E402  (the folder-to-project link, shared with the Claude plugin)
 import self_update  # noqa: E402  (auto-update of this plugin, the counterpart of Claude Code's own)
+import limits  # noqa: E402  (the usage-limit ladder, shared with the Claude plugin)
 URL = token_store.url()
 AGENTS = ("agy", "codex")
 SETUP = "plugin"  # clients/knowledge-agent.py sets "script": the setup without a plugin updates itself another way
@@ -214,7 +216,7 @@ def tasks(agent: str, tok: str):
     stdin = sys.stdin.read()
     hook = json.loads(stdin or "{}")
     register_session(agent, hook)
-    text = new_tasks(agent, tok, hook, wake=True)
+    text = "\n\n".join(t for t in (new_tasks(agent, tok, hook, wake=True), limits.notice(agent, hook)) if t)
     if text:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": text}}))
 
@@ -226,6 +228,16 @@ def agy_call(entry: dict, method: str, body: dict, timeout: float = 3) -> dict:
                                                               "x-codeium-csrf-token": entry["csrf"]})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8") or "{}")
+
+
+def agy_status() -> dict:
+    """GetUserStatus (plan, quota per model) from any running agy that registered: the quota is per account."""
+    for _, entry in read_entries("agy-ls-*.json"):
+        try:
+            return agy_call(entry, "GetUserStatus", {})
+        except Exception:
+            continue
+    raise LookupError("no registered agy answers")
 
 
 def agy_conversations() -> list:
@@ -510,7 +522,7 @@ def hints(tok: str):
         pending.unlink()
     except OSError:
         text = ""
-    text = "\n\n".join(t for t in (text.strip(), news) if t)
+    text = "\n\n".join(t for t in (text.strip(), news, limits.notice("agy", hook, agy_status)) if t)
     print(json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": text}}]} if text.strip() else {}))
 
 
@@ -537,6 +549,10 @@ def main(argv: list):
         wake(rest[0], tok)
     elif cmd == "wait" and rest[:1] == ["claude"] and len(rest) <= 2:
         wait("claude", token(rest[1] if len(rest) == 2 else "-") or os.environ.get("CLAUDE_PLUGIN_OPTION_TOKEN", ""))
+    elif cmd == "gate" and rest[:1] and rest[0] in ("claude", "codex", "agy") and len(rest) <= 2:
+        out = limits.gate(rest[0], json.loads(sys.stdin.read() or "{}"), agy_status)
+        if out:
+            print(out)
     elif cmd == "register" and not rest:
         register_agy()
     elif cmd == "mcp" and len(rest) <= 1:

@@ -31,6 +31,16 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   `agent_hooks.py register` as a terminal command, the plugin asks it to), Claude Code through an `asyncRewake`
   waiter hook. The woken agent tells the user and waits for consent. The admin page lists per token the sessions
   seen in the last week (agent, session id, project, wakeable), each with a Forget button.
+- **Usage limits:** each prompt checks how much of the agent's own usage limit is used and says it once per session
+  and limit window at 50, 75 and 90%; from 95% a new subagent is refused (Claude Code `Agent`, Codex `spawn_agent`, agy
+  `invoke_subagent`). The numbers are the agent's own: Codex's rollout, agy's language server (after its one-time
+  `register`), and for Claude Code, which hands them only to its status line, a small tap that the plugin puts in front
+  of your status line at session start (your line still shows; the old command is kept in
+  `~/.knowledge/statusline-original.json`). Without numbers nothing is said or refused.
+- **Token use:** the session log also sends the tokens of each logged part (uncached input, cache writes, cache reads,
+  output; Claude's per-block copies of one call counted once, Codex's running totals differenced). Lint reports
+  `usage_outlier`: a session of the last week far above that agent's usual (modified z-score above 3.5 against the last
+  month, from 10 sessions on).
 - **Projects:** each project has a docs root and a memory root. A session picks its project from its working folder;
   a token can also be limited to one project (a guest). A new server has one project (`homelab`, docs in
   `data/docs`, memory in `data/memory`); the admin page makes more and gives a project the name the web UI shows.

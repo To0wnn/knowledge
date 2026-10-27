@@ -1,5 +1,5 @@
 {
-  "description": "Load the shared knowledge context at session start, turn on auto-update for this plugin once, log each session, tell a running session about tasks handed to it meanwhile, wake the other agents on this machine when it hands them a task, guard secrets, and mirror a guest project's Markdown (folders with .knowledge-project) and keep an offline copy of the memory and the shared skills that syncs both ways",
+  "description": "Load the shared knowledge context at session start, turn on auto-update for this plugin once, log each session, tell a running session about tasks handed to it meanwhile, wake the other agents on this machine when it hands them a task, warn at 50/75/90% of the usage limit and refuse new subagents from 95%, guard secrets, and mirror a guest project's Markdown (folders with .knowledge-project) and keep an offline copy of the memory and the shared skills that syncs both ways",
   "hooks": {
     "SessionStart": [
       {
@@ -48,6 +48,11 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/py.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/auto_update.py\"",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/py.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/limits.py\" install",
             "timeout": 10
           }
         ]
@@ -109,6 +114,16 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/py.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/secret-guard.py\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/py.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/agent_hooks.py\" gate claude",
             "timeout": 10
           }
         ]
