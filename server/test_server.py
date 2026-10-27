@@ -541,6 +541,14 @@ def main():
         assert not json.loads(raw("GET", "/ui/api/note?path=garden/README.md", headers=ck)[2])["writable"]
         assert raw("POST", "/ui/api/save", json.dumps({"path": "garden/README.md", "text": "x", "base_version": "x"}),
                    {**ck, "Content-Type": "application/json", "X-Knowledge-UI": "1"})[0] == 409
+        # The same for the guest's own agents through MCP: refused out loud instead of lost at the next sync.
+        ver = call("knowledge_read", {"path": "garden/README.md"}, token=fr)[1].split("version ")[-1][:16]
+        for tool, args in (("knowledge_edit", {"path": "garden/README.md", "old_string": "x", "new_string": "y"}),
+                           ("knowledge_write", {"path": "garden/README.md", "content": "y", "base_version": ver}),
+                           ("knowledge_write", {"path": "garden/new.md", "content": "y"}),
+                           ("knowledge_delete", {"path": "garden/README.md", "base_version": ver})):
+            assert "mirror of the guest's own folder" in call(tool, args, token=fr)[1], tool
+        assert (tmp / "projects/garden/docs/README.md").exists() and not (tmp / "projects/garden/docs/new.md").exists()
         assert http("POST", "/sync", {"files": {"README.md": "x"}, "project": "trade"}, token=fr)[0] == 409
         assert call("knowledge_read", {"path": "memory/MEMORY.md"}, token=fr)[0]  # nothing outside garden
         # The plugin hook: SessionStart mirrors the marked folder, PostToolUse one changed file, a wrong marker is refused.
@@ -801,18 +809,18 @@ def main():
         assert admin("/ui/api/admin/project", {"name": "erinproj2"}, er)[0] == 400  # limit
         assert "erinproj" in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["users"]["erin"]["created"]
         big = "# Big\n" + "word " * 220_000  # 1.1 MB: crosses the 1 MB limit, so the next write is refused
-        assert not call("knowledge_write", {"path": "erinproj/big.md", "content": big})[0]
-        err, text = call("knowledge_write", {"path": "erinproj/more.md", "content": "# More\n"})
+        assert not call("knowledge_write", {"path": "erinproj-memory/archief/big.md", "content": big})[0]
+        err, text = call("knowledge_write", {"path": "erinproj-memory/archief/more.md", "content": "# More\n"})
         assert err and "is full" in text, text
-        ver = re.search(r"version (\w+)", call("knowledge_read", {"path": "erinproj/big.md"})[1]).group(1)
-        assert not call("knowledge_delete", {"path": "erinproj/big.md", "base_version": ver})[0]  # a full project may shrink
+        ver = re.search(r"version (\w+)", call("knowledge_read", {"path": "erinproj-memory/archief/big.md"})[1]).group(1)
+        assert not call("knowledge_delete", {"path": "erinproj-memory/archief/big.md", "base_version": ver})[0]  # a full project may shrink
         # Review 23 Oct 2026: a refusal in /sync never deletes; files over 2 MB are not indexed but still count.
         st, _, res = admin("/ui/api/admin/token", {"name": "erinsync", "write": True, "roots": ["erinproj", "erinproj-memory"]})
         est = json.loads(res)["token"]
         st, body = http("POST", "/sync", {"files": {"keep.md": "# Keep\n"}, "full": True}, token=est)
         assert json.loads(body)["written"] == 1, body
-        assert not call("knowledge_write", {"path": "erinproj/huge.md", "content": "# H\n" + "word " * 500_000})[0]  # 2.5 MB
-        err, text = call("knowledge_write", {"path": "erinproj/huge2.md", "content": "# H2\n"})
+        assert not call("knowledge_write", {"path": "erinproj-memory/archief/huge.md", "content": "# H\n" + "word " * 500_000})[0]  # 2.5 MB
+        err, text = call("knowledge_write", {"path": "erinproj-memory/archief/huge2.md", "content": "# H2\n"})
         assert err and "is full" in text, text
         st, body = http("POST", "/sync", {"files": {"keep.md": "# Keep\n", "new.md": "# New\n"}, "full": True}, token=est)
         assert json.loads(body)["deleted"] == 0 and (tmp / "projects/erinproj/docs/keep.md").exists(), body

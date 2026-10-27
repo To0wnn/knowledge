@@ -81,7 +81,7 @@ reports the plugin version: the admin page shows it per device and agent, and a 
 version after two days hears how to update by hand (also listed in lint as `plugin_behind`).
 
 Link a project folder to its project once: ask your agent (skill `knowledge-init`), which writes a file
-`.knowledge-project` with the project name in the folder's root. Every session started there gets that project. A linked git worktree (Codex and agy make one per chat) counts as its main checkout: same project, docs mirrored from the main checkout only, and the session is told it runs in a separate checkout. On Windows, agy needs a `python3` command on PATH (Python from the python.org install manager or the
+`.knowledge-project` with the project name in the folder's root. Every session started there gets that project. A linked git worktree (Codex and agy make one per chat) counts as its main checkout: same project, docs mirrored from the main checkout only (the folder is the source: knowledge_write/edit/delete refuse the mirror, as the UI does, since the next sync would undo them), and the session is told it runs in a separate checkout. On Windows, agy needs a `python3` command on PATH (Python from the python.org install manager or the
 Microsoft Store has one); without it the setup configures agy without the plugin. Codex and the agy hooks on Windows start Python through
 `plugin/python3.cmd`: the py launcher, then Python on PATH, then any install in the registry (PEP 514), each one
 test-run first, so the Microsoft Store stub is skipped and a python.org install without py or PATH still works.

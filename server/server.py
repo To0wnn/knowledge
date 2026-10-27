@@ -837,6 +837,7 @@ async def knowledge_edit(path: str, old_string: str, new_string: str) -> str:
     file are kept. Fails if old_string is missing or not unique: read the file again and retry."""
     full, rel = resolve(path)
     check_writable(rel)
+    refuse_mirror(rel)
     refuse_secrets(new_string)
     refuse_mask(new_string, old_string)
     async with _locks.setdefault(rel, asyncio.Lock()):
@@ -864,6 +865,7 @@ async def knowledge_write(path: str, content: str, base_version: str = "") -> st
     when another session changed the file since then. Leave base_version empty only to create a new file."""
     full, rel = resolve(path)
     check_writable(rel)
+    refuse_mirror(rel)
     refuse_secrets(content)
     refuse_broken_skill(rel, content)
     async with _locks.setdefault(rel, asyncio.Lock()):
@@ -980,6 +982,7 @@ async def knowledge_delete(path: str, base_version: str) -> str:
     Also remove its line from memory/MEMORY.md with knowledge_edit."""
     full, rel = resolve(path)
     check_writable(rel, grows=False)  # a full project must still be able to shrink
+    refuse_mirror(rel)
     async with _locks.setdefault(rel, asyncio.Lock()):
         if not full.exists():
             raise ToolError(f"{rel} does not exist")
@@ -2892,6 +2895,13 @@ def mirrored(rel: str) -> bool:
     return rel.split("/", 1)[0] in read_json(PROJECTS_FILE, [])
 
 
+def refuse_mirror(rel: str):
+    """A write here would vanish without a word at the guest's next full sync, so say it now (/sync itself may)."""
+    if mirrored(rel):
+        raise ToolError(f"{rel} is a mirror of the guest's own folder: the next sync would overwrite it; change it there, "
+                        "or ask that folder's agent with a task line in one of the project's memos")
+
+
 @server.custom_route("/ui/api/save", methods=["POST"])
 async def ui_save(request: Request):
     """Save a note from the UI editor with the same conflict check as knowledge_write. A new memo can also get its
@@ -2904,8 +2914,6 @@ async def ui_save(request: Request):
         if line and (root not in {mem for _, mem in PROJECTS.values()} or rel.count("/") != 1):
             raise ToolError("an index line is only for a memo directly in a memory root")  # checked before writing
         refuse_secrets(line)
-        if mirrored(rel):
-            raise ToolError(f"{rel} is a mirror of the guest's own folder: the next sync would overwrite it; change it there")
         written = await knowledge_write(rel, body.get("text", ""), body.get("base_version", ""))
         if line:
             await append_line(f"{root}/MEMORY.md", line, " ".join(str(body.get("heading", "")).split()))
