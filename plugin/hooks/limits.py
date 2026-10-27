@@ -133,12 +133,16 @@ def notice(agent: str, hook: dict, agy_status=None, now: float | None = None) ->
         return ""
     said = {k: v for k, v in said.items() if now - v.get("at", 0) < 8 * 86400}
     said[key] = {"window": resets, "rung": rung, "at": now}
+    tmp = SAID.with_suffix(f".{os.getpid()}.tmp")
     try:
         STATE.mkdir(parents=True, exist_ok=True)
-        tmp = SAID.with_suffix(f".{os.getpid()}.tmp")
         tmp.write_text(json.dumps(said), encoding="utf-8")
         os.replace(tmp, SAID)  # a reader never sees half a file
     except OSError:  # unsaid next time would repeat it every turn: better to stay quiet
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
         return ""
     return (f"knowledge: {pct:.0f}% of your {agent} usage limit is used ({window} window{when(resets)}). "
             f"{ADVICE[rung]}")
@@ -165,7 +169,7 @@ def statusline():
         rl = json.loads(raw).get("rate_limits")
         if rl:
             STATE.mkdir(parents=True, exist_ok=True)
-            tmp = CLAUDE_FILE.with_suffix(".tmp")
+            tmp = CLAUDE_FILE.with_suffix(f".{os.getpid()}.tmp")  # three status lines may write at once
             tmp.write_text(json.dumps({"at": time.time(), "rate_limits": rl}), encoding="utf-8")
             os.replace(tmp, CLAUDE_FILE)
     except Exception:  # never cost the user their status line
@@ -192,14 +196,17 @@ def install(config: Path) -> str:
     data = json.loads(settings.read_text(encoding="utf-8-sig")) if settings.exists() else {}
     current = data.get("statusLine") or {}
     ours = f'"{sys.executable}" "{TAP}" statusline'
-    if current.get("command") == ours:
+    command = str(current.get("command", ""))
+    wrapped = "limits.py\" statusline" in command
+    # Only a Python that is gone gets replaced: another live one (a venv, pyenv per folder) would rewrite settings.json
+    # at every session start.
+    if wrapped and Path(command.split('"')[1] if command.startswith('"') else command.split(" ")[0]).exists():
         return ""
-    wrapped = "limits.py\" statusline" in str(current.get("command", ""))
     if not wrapped:  # shortcut: one saved original per user, not per CLAUDE_CONFIG_DIR; key it by config dir if needed
         ORIGINAL.write_text(json.dumps({"command": current.get("command"), "was": current or None}), encoding="utf-8")
     # already wrapped with another Python (an upgrade removed the old one): only the interpreter changes
     data["statusLine"] = {**current, "type": "command", "command": ours}
-    tmp = settings.with_name(settings.name + ".knowledge-tmp")
+    tmp = settings.with_name(f"{settings.name}.knowledge-{os.getpid()}.tmp")
     tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     os.replace(tmp, settings)
     if wrapped:
@@ -249,6 +256,12 @@ def self_test():
         (config / "settings.json").write_text(json.dumps(s))
         assert install(config) == "" and sys.executable in json.loads((config / "settings.json").read_text())["statusLine"]["command"]
         assert json.loads(ORIGINAL.read_text())["command"] == "echo hi", "a re-wrap keeps the user's original"
+        other = f'"{shutil.which("sh") or sys.executable}" "{TAP}" statusline'  # another Python that still exists
+        s = json.loads((config / "settings.json").read_text())
+        s["statusLine"]["command"] = other
+        (config / "settings.json").write_text(json.dumps(s))
+        assert install(config) == "" and json.loads((config / "settings.json").read_text())["statusLine"]["command"] == other, \
+            "a live interpreter stays: no rewrite at every session start from a venv"
         sl = json.loads((config / "settings.json").read_text())["statusLine"]
         assert sl["padding"] == 1 and "statusline" in sl["command"] and json.loads(ORIGINAL.read_text())["command"] == "echo hi"
     print("ok")
