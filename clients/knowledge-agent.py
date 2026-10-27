@@ -233,7 +233,7 @@ def install_plugin(agent: str):
         run_cli([codex, "plugin", "marketplace", "upgrade", "knowledge"], ok_if=("not configured as a git",))  # a local checkout
         run_cli([codex, "plugin", "add", "knowledge@knowledge"])
         restart_codex()
-        return print("done; open codex and type /hooks once to trust the four knowledge hooks")
+        return print("done; open codex and type /hooks once to trust the knowledge hooks")
     run_cli([cli("agy"), "plugin", "install", AGY_PLUGIN])
     say_restart("agy")
     print("done; start agy and ask it to search the knowledge")
