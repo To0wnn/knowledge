@@ -206,8 +206,10 @@ def redact(text: str) -> str:
         tok = m.group(0)
         if sha(tok) in hashes:
             return "‹secret›"
-        parts = re.split(r"([=:@/])", tok)
-        return "".join("‹secret›" if p and p not in "=:@/" and sha(p) in hashes else p for p in parts)
+        def mask(p):
+            core = p.rstrip(".!?")  # a sentence may end right after the value: keep the full stop
+            return "‹secret›" if sha(p) in hashes else "‹secret›" + p[len(core):] if core and sha(core) in hashes else p
+        return "".join(mask(p) if p and p not in "=:@/" else p for p in re.split(r"([=:@/])", tok))
     return SECRET_LABEL.sub(lambda m: m.group(1) + "‹secret›", SECRET_TOKEN.sub(one, text))
 
 
@@ -218,8 +220,9 @@ def contains_secret(text: str) -> bool:
         return False
     for tok in SECRET_TOKEN.findall(text):
         for part in [tok, *re.split(r"[=:@/]", tok)]:
-            if part and hashlib.sha256(part.encode()).hexdigest() in hashes:
-                return True
+            for p in {part, part.rstrip(".!?")}:  # a sentence may end right after the value
+                if p and hashlib.sha256(p.encode()).hexdigest() in hashes:
+                    return True
     return False
 
 

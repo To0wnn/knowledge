@@ -97,7 +97,7 @@ def main():
                                   "agent": {"sha256": h("agent-token"), "roots": ["memory", "claude"], "redact": True},
                                   "pa": {"sha256": h("pa-token"), "write": True, "redact": True, "write_roots": ["memory"]}}))
     (tmp / "secrets.json").write_text(json.dumps([h("Sup3rSecret99")]))
-    (mem / "creds.md").write_text("login pi/Sup3rSecret99 or KEY=Sup3rSecret99, password: hunter2hunter2\nplain line\n")
+    (mem / "creds.md").write_text("login pi/Sup3rSecret99 or KEY=Sup3rSecret99, password: hunter2hunter2\nplain line\nthe key is Sup3rSecret99.\n")
     # A fake GitHub (API + raw) for the external skills: COMMITS maps a commit to its skill folder.
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     import threading as thr
@@ -198,8 +198,8 @@ def main():
         assert call("knowledge_write", {"path": "homelab/sub/x.md", "content": "x"})[0]  # not a writable pattern
         # Scoped agent token: only its roots, secrets masked everywhere, no web UI, no writes.
         err, text = call("knowledge_read", {"path": "memory/creds.md"}, token="agent-token")
-        assert not err and "Sup3rSecret99" not in text and "hunter2" not in text and text.count("‹secret›") == 3, text
-        assert "plain line" in text and "pi/‹secret›" in text, text
+        assert not err and "Sup3rSecret99" not in text and "hunter2" not in text and text.count("‹secret›") == 4, text
+        assert "plain line" in text and "pi/‹secret›" in text and "the key is ‹secret›." in text, text
         assert "Sup3rSecret99" in call("knowledge_read", {"path": "memory/creds.md"})[1]  # full token unchanged
         assert "Sup3rSecret99" not in call("knowledge_search", {"pattern": "login pi"}, token="agent-token")[1]
         assert call("knowledge_read", {"path": "homelab/overzicht.md"}, token="agent-token")[0]
@@ -210,6 +210,8 @@ def main():
         # Write guard: a known secret value in a note is refused with a hint; the placeholder is fine.
         err, text = call("knowledge_write", {"path": "memory/leak.md", "content": "db password Sup3rSecret99\n"})
         assert err and "secret set" in text and not (mem / "leak.md").exists(), text
+        for end in ".", "?", "!":  # a secret that ends a sentence
+            assert call("knowledge_write", {"path": "memory/leak.md", "content": memo(f"the key is Sup3rSecret99{end}\n", "leak")})[0], end
         assert not call("knowledge_write", {"path": "memory/leak.md", "content": memo("db password ‹secret:DB_PASSWORD›\n", "leak")})[0]
         assert call("knowledge_edit", {"path": "memory/leak.md", "old_string": "‹secret:DB_PASSWORD›", "new_string": "Sup3rSecret99"})[0]
         # Project roots: only Markdown of the code repos, never venv; project memory is writable.

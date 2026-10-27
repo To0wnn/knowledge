@@ -21,7 +21,8 @@ from pathlib import Path
 HASHES = Path.home() / ".config/knowledge-server/secret-hashes.json"
 PENDING = Path.home() / ".knowledge" / "pending-hints.txt"  # agy: said at the next turn by agent_hooks.py hints
 TOKEN = re.compile(r"[^\s`'\"<>()\[\]{},;|*]+")
-OLD = {"Target", "TargetContent", "Path", "TargetFile", "AbsolutePath"}  # agy args that are not new text
+# agy args that are not new file text: old text, paths, and prose about the edit ("remove the password x")
+OLD = {"Target", "TargetContent", "Path", "TargetFile", "AbsolutePath", "Instruction", "Description"}
 REASON = ("This text contains a known secret value. Store it with `secret set NAME` (value on stdin) and write "
           "‹secret:NAME› in the file instead.")
 
@@ -29,8 +30,10 @@ REASON = ("This text contains a known secret value. Store it with `secret set NA
 def leaks(text: str, hashes: set) -> bool:
     for tok in TOKEN.findall(text):
         for part in [tok, *re.split(r"[=:@/]", tok)]:
-            if part and hashlib.sha256(part.encode()).hexdigest() in hashes:
-                return True
+            # a sentence may end right after the value: "the key is abc123."
+            for p in {part, part.rstrip(".!?")}:
+                if p and hashlib.sha256(p.encode()).hexdigest() in hashes:
+                    return True
     return False
 
 
@@ -38,6 +41,14 @@ def strings(value, key=""):
     if key in OLD:
         return
     if isinstance(value, str):
+        if value[:1] in ('"', "[", "{"):  # agy sends some args JSON-encoded ("\"text\""): read what it stands for
+            try:
+                decoded = json.loads(value)
+            except ValueError:
+                decoded = None
+            if decoded is not None and decoded != value:
+                yield from strings(decoded, key)
+                return
         yield value
     elif isinstance(value, dict):
         for k, v in value.items():
@@ -82,6 +93,8 @@ def self_test():
         assert check(agent, hook, hashes), f"{agent}: a new secret is refused"
     assert json.loads(check("agy", leak["agy"], hashes))["decision"] == "deny"
     assert check("claude", {"tool_input": {"command": f"+k={secret}"}}, hashes), "Claude with a Codex-style patch"
+    for end in ".", "?", "!", "...":  # missed live with Codex on 27 Oct 2026: "the cat says <secret>."
+        assert check("claude", {"tool_input": {"content": f"it is {secret}{end}"}}, hashes), f"a secret before {end!r}"
     removed = {"claude": {"tool_input": {"old_string": secret, "new_string": "‹secret:X›"}},
                "codex": {"tool_input": {"command": f"*** Update File: a\n@@\n-{secret}\n+‹secret:X›"}},
                "agy": {"toolCall": {"args": {"Path": "a", "Target": secret, "Replacement": "‹secret:X›"}}}}
@@ -89,6 +102,11 @@ def self_test():
         assert check(agent, hook, hashes) == "", f"{agent}: removing a secret is allowed"
     assert check("agy", {"toolCall": {"args": {"Content": "hello", "Path": "a"}}}, hashes) == "", "agy: silent when clean"
     assert check("agy", {"toolCall": {"args": {"ReplacementChunks": [{"ReplacementContent": secret}]}}}, hashes)
+    for encoded in json.dumps(f'export PW="{secret}"'), json.dumps(f"a\n{secret}"):  # as agy stores CodeContent
+        assert check("agy", {"toolCall": {"args": {"CodeContent": encoded}}}, hashes), f"agy: encoded {encoded}"
+    chunks = json.dumps([{"TargetContent": secret, "ReplacementContent": "‹secret:X›"}])
+    assert check("agy", {"toolCall": {"args": {"ReplacementChunks": chunks, "Instruction": f"remove {secret}"}}}, hashes) == "", \
+        "agy: removing a secret, chunks encoded and named in the instruction, is allowed"
     print("ok")
 
 

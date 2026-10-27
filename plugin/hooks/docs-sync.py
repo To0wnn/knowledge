@@ -112,7 +112,8 @@ def main():
         print(text)  # becomes part of the startup context (Claude: SessionStart stdout; Codex/agy: agent_hooks context)
     elif "toolCall" in hook:  # agy: its PostToolUse output must be {}; the next PostInvocation shows it
         PENDING.parent.mkdir(parents=True, exist_ok=True)
-        PENDING.write_text(text, encoding="utf-8")
+        with PENDING.open("a", encoding="utf-8") as f:  # secret-guard may have left a notice there too
+            f.write(text + "\n")
     else:  # Claude Code and Codex read the same PostToolUse JSON
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": text}}))
 

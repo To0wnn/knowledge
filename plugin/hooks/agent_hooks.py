@@ -556,8 +556,8 @@ def main(argv: list):
             print(out)
     elif cmd == "guard" and rest[:1] and rest[0] in ("claude", "codex", "agy") and len(rest) <= 2:
         sys.stdout.write(subprocess.run([sys.executable, "-X", "utf8", str(HOOKS / "secret-guard.py"), rest[0]],
-                                        input=sys.stdin.read(), capture_output=True, text=True, encoding="utf-8",
-                                        errors="replace").stdout)
+                                        input=sys.stdin.read(), stdout=subprocess.PIPE, text=True, encoding="utf-8",
+                                        errors="replace").stdout)  # its stderr passes on: agy only reads stdout
     elif cmd == "register" and not rest:
         register_agy()
     elif cmd == "mcp" and len(rest) <= 1:
