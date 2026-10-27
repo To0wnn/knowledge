@@ -413,7 +413,7 @@ def wake_e2e(tok: str, home: Path, project: Path):
     bin_dir = home / "bin"
     bin_dir.mkdir(parents=True)
     calls = home / "codex-calls.jsonl"
-    (bin_dir / "fakecodex.py").write_text(f"import json, sys\nopen({str(calls)!r}, 'a', encoding='utf-8').write(json.dumps(sys.argv[1:]) + '\\n')\n", encoding="utf-8")
+    (bin_dir / "fakecodex.py").write_text(f"import json, sys\nimport os\nopen({str(calls)!r}, 'a', encoding='utf-8').write(json.dumps(sys.argv[1:] + [os.environ.get('CODEX_HOME', '')]) + '\\n')\n", encoding="utf-8")
     if WIN:
         (bin_dir / "codex.cmd").write_text(f'@"{sys.executable}" "{bin_dir / "fakecodex.py"}" %*\r\n', encoding="utf-8")
     else:
@@ -450,7 +450,7 @@ def wake_e2e(tok: str, home: Path, project: Path):
     hook = lambda args, payload, extra=None: run([sys.executable, str(hooks), *args], json.dumps(payload), {**env, **(extra or {})}, cwd=str(project))
     try:
         # each agent's session: its first prompt (Claude, Codex) or turn (agy) only remembers the open tasks
-        hook(["tasks", "codex", "-"], {"session_id": "cx-1", "cwd": str(project)})
+        hook(["tasks", "codex", "-"], {"session_id": "cx-1", "cwd": str(project)}, {"CODEX_HOME": str(home / "codex-b")})
         hook(["tasks", "claude", "-"], {"session_id": "cl-1", "cwd": str(project)})
         code, out, err = hook(["hints", "-"], {"conversationId": "conv-1", "workspacePaths": [str(project)]})
         check("agent_hooks.py" in out and " register" in out, "wake: an unregistered agy conversation is asked once to register", out[:300] + err[-300:])
@@ -472,11 +472,13 @@ def wake_e2e(tok: str, home: Path, project: Path):
               f"## Stand\n{tasks}\n## Keuzes\n"}}}, {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})
         code, out, err = hook(["wake", "codex", "-"], {"session_id": "sender", "cwd": str(project), "tool_name": "mcp__knowledge__knowledge_search"})
         check(out.strip() == "{}" and not calls.exists() and not sent, "wake: a read-only knowledge tool wakes nobody", out + err)
-        code, out, err = hook(["wake", "codex", "-"], {"session_id": "sender", "cwd": str(project), "tool_name": "mcp__knowledge__knowledge_write"})
+        code, out, err = hook(["wake", "codex", "-"], {"session_id": "sender", "cwd": str(project), "tool_name": "mcp__knowledge__knowledge_write"},
+                              {"CODEX_HOME": ""})  # the waker's shell lacks the session's CODEX_HOME
         check(code == 0 and "told" in out and "codex" in out and "agy" in out, "wake: the sender hears whom it told", out + err)
         queued = [json.loads(l) for l in calls.read_text(encoding="utf-8").splitlines()] if calls.exists() else []
-        check(len(queued) == 1 and queued[0][:3] == ["queue", "--thread", "cx-1"] and "WAKE-CODEX" in queued[0][-1]
-              and "WAKE-GEMINI" not in queued[0][-1], "wake: Codex gets its own new task through codex queue", str(queued)[:400])
+        check(len(queued) == 1 and queued[0][:3] == ["queue", "--thread", "cx-1"] and "WAKE-CODEX" in queued[0][-2]
+              and "WAKE-GEMINI" not in queued[0][-2] and queued[0][-1] == str(home / "codex-b"),
+              "wake: Codex gets its own new task through codex queue, in the session's CODEX_HOME", str(queued)[:400])
         check(len(sent) == 1 and sent[0]["cascadeId"] == "conv-1" and "WAKE-GEMINI" in sent[0]["items"][0]["text"],
               "wake: agy gets its own new task in its open conversation", str(sent)[:400])
         try:

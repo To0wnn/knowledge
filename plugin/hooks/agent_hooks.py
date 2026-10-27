@@ -177,9 +177,11 @@ def register_session(agent: str, hook: dict):
         return
     cwd = hook.get("cwd") or os.getcwd()
     exe = shutil.which("codex") if agent == "codex" else None  # Codex puts its own folder on the hook's PATH
+    home = os.environ.get("CODEX_HOME") if agent == "codex" else None  # the waker's shell may not have it
     try:
         write_private(AGENTS_DIR / f"{agent}-{short(sid)}.json",
-                      {"agent": agent, "session": sid, "cwd": cwd, "at": time.time(), **({"exe": exe} if exe else {})})
+                      {"agent": agent, "session": sid, "cwd": cwd, "at": time.time(), **({"exe": exe} if exe else {}),
+                       **({"codex_home": home} if home else {})})
     except OSError as e:
         print(f"knowledge: session not registered: {e}", file=sys.stderr)
 
@@ -287,8 +289,9 @@ def codex_queue(entry: dict, text: str) -> bool:
     if not exe:
         return False
     text = " / ".join(t for t in text.splitlines() if t.strip())  # Windows' npm codex.cmd cuts an argument at a newline
+    env = {**os.environ, "CODEX_HOME": entry["codex_home"]} if entry.get("codex_home") else None
     r = subprocess.run([exe, "queue", "--thread", entry["session"], "--message", text], capture_output=True, text=True,
-                       encoding="utf-8", errors="replace", timeout=30, stdin=subprocess.DEVNULL)
+                       encoding="utf-8", errors="replace", timeout=30, stdin=subprocess.DEVNULL, env=env)
     if r.returncode:
         print(f"knowledge: codex queue failed: {(r.stderr or r.stdout).strip()[:200]}", file=sys.stderr)
     return r.returncode == 0
