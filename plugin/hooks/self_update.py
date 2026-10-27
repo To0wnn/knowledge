@@ -44,7 +44,8 @@ def commands(agent: str, mode: str = "plugin") -> list[list[str]]:
 def sync(repo: Path) -> None:
     """A rewritten history (force-push) cannot fast-forward and a pull would merge two histories with conflicts in every
     file. The checkout is only a copy of the repository, so it is reset to GitHub's main, but only when nothing tracked in
-    it is changed; its old HEAD stays as branch knowledge-before-update."""
+    it is changed; its old HEAD stays as branch knowledge-before-update-<old sha> (one per lost state, so none is overwritten).
+    reset --keep, not --hard: it refuses to overwrite a file that git does not track."""
     def git(*args):
         return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, encoding="utf-8",
                               errors="replace", timeout=300, stdin=subprocess.DEVNULL)
@@ -54,7 +55,8 @@ def sync(repo: Path) -> None:
         return
     if git("status", "--porcelain", "--untracked-files=no").stdout.strip():
         raise RuntimeError(f"{repo} has local changes: keep them elsewhere, then: git -C {repo} reset --hard origin/main")
-    for step in (("fetch", "-q"), ("branch", "-f", "knowledge-before-update", "HEAD"), ("reset", "-q", "--hard", "@{u}")):
+    for step in (("fetch", "-q"), ("branch", "-f", "knowledge-before-update-" + git("rev-parse", "--short=8", "HEAD").stdout.strip(), "HEAD"),
+                 ("reset", "-q", "--keep", "@{u}")):
         p = git(*step)
         if p.returncode:
             raise RuntimeError(f"git {step[0]}: {(p.stdout + p.stderr).strip()[-300:]}")

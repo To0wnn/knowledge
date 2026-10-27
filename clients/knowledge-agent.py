@@ -178,19 +178,24 @@ def run_cli(argv: list, ok_if: tuple = ()) -> bool:
     return r.returncode == 0
 
 
-def install_claude():
+def install_claude(tok: str):
     claude = cli("claude")
     run_cli([claude, "plugin", "marketplace", "add", MARKET], ok_if=("already",))
     run_cli([claude, "plugin", "marketplace", "update", "knowledge"])
     run_cli([claude, "plugin", "install", "knowledge@knowledge", "--scope", "user"], ok_if=("already",))
     run_cli([claude, "plugin", "update", "knowledge@knowledge"])  # install leaves an installed copy at its old version
-    if URL != token_store.DEFAULT_URL:  # the plugin's MCP entry reads the URL from its option, not from a file
-        r = subprocess.run([claude, "plugin", "configure", "knowledge@knowledge", "--values-stdin"], input=json.dumps({"url": URL}),
+    values = {"url": URL} if URL != token_store.DEFAULT_URL else {}  # the plugin's MCP entry reads its option, not a file
+    keyring = bool(token_store.from_keyring())
+    if not keyring and tok != token_store.claude_option("token"):  # no keyring: else a refused old token stays in use
+        values["token"] = tok
+    if values:
+        r = subprocess.run([claude, "plugin", "configure", "knowledge@knowledge", "--values-stdin"], input=json.dumps(values),
                            capture_output=True, text=True, encoding="utf-8", errors="replace")
         if r.returncode != 0:
             sys.exit(f"claude plugin configure failed:\n{(r.stdout + r.stderr).strip()[-1500:]}")
-        print(f"claude plugin option url: {URL}")
-    print("(a note that options are not set is fine: the plugin takes the token from the keyring)")
+        print(f"claude plugin options set: {', '.join(values)}")
+    if keyring:
+        print("(a note that options are not set is fine: the plugin takes the token from the keyring)")
     # The memory lives on the server: Claude's local auto memory would build a second one.
     path = Path.home() / ".claude" / "settings.json"
     data = load_json(path)
@@ -288,11 +293,15 @@ def choose(found: list, answer) -> list:
     return [a for a in found if answer(f"Set up the knowledge plugin for {a}? [Y/n] ").strip().lower() in ("", *YES)]
 
 
+def url_known() -> bool:
+    return bool(os.environ.get("KNOWLEDGE_URL") or token_store.URL_FILE.exists() or token_store.claude_option("url"))
+
+
 def ensure_url():
     """The server for a setup. A known one (KNOWLEDGE_URL, or stored by an earlier install) is offered with Enter to
     keep it; otherwise the person must type it: never a silent default, which would send their token to another server."""
     global URL
-    known = bool(os.environ.get("KNOWLEDGE_URL")) or token_store.URL_FILE.exists()
+    known = url_known()
     if not sys.stdin.isatty():
         if not known:
             sys.exit("Which knowledge server? Set KNOWLEDGE_URL (e.g. https://knowledge.example.com) or run this in a terminal.")
@@ -332,9 +341,11 @@ def setup():
     have = [a for a in AGENTS if shutil.which(a) and has_plugin(a)] if tok else []
     if not have:
         return install_found()
+    if not url_known():  # set up before the URL was stored: ask, never send the token to the default
+        ensure_url()
     rules, err = check_token(tok)
     if rules is None and "(401)" in err:
-        print(f"{err} Setting up again: answer y when asked to replace the token.")
+        print(f"{err} Setting up again with a new token (answer y if asked to replace the stored one).")
         return install_found()
     print(f"Already set up ({', '.join(have)}): updating.")
     new = [a for a in AGENTS if shutil.which(a) and a not in have]
@@ -362,6 +373,8 @@ def update():
     todo = [a for a in AGENTS if shutil.which(a) and has_plugin(a)]
     if not todo:
         sys.exit("No agent here has the knowledge plugin: run install first.")
+    if not url_known():
+        ensure_url()
     for agent in todo:
         print(f"\n== {agent} ==")
         install(agent, "-", token_store.token())
@@ -375,7 +388,7 @@ def install(agent: str, name: str, tok: str = ""):
     rules = check(tok)
     token_store.store_url(URL)  # the hooks and the MCP relay read it; this address just answered
     if agent == "claude":
-        return install_claude()
+        return install_claude(tok)
     if name == "-" and os.environ.get("KNOWLEDGE_SETUP") != "script":
         if agent != "agy" or os.name != "nt" or has_python3():
             return install_plugin(agent)

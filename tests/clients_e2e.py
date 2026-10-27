@@ -889,6 +889,10 @@ def installer(tok: str, tmp: Path):
         check("knowledge@knowledge" in out, "install claude: claude plugin list shows knowledge", out + err)
         code, out, err = run([shutil.which("claude"), "plugin", "configure", "knowledge@knowledge", "--json"], "", env, timeout=60)
         check(BASE in out, "install claude: the plugin's url option is the server it was installed against", out + err)
+        if not token_store.from_keyring():  # the Linux runner: the token must land where Claude reads it
+            stored = json.loads((home / ".claude" / ".credentials.json").read_text(encoding="utf-8")) if (home / ".claude" / ".credentials.json").exists() else {}
+            check(stored.get("pluginSecrets", {}).get("knowledge@knowledge", {}).get("token") == tok,
+                  "install claude without a keyring: the token is saved as Claude's plugin option", json.dumps(stored)[:300])
     if shutil.which("codex"):  # Windows too: the plugin since 0.9.3
         (home / ".codex" / "config.toml").write_text('[mcp_servers.knowledge]\nurl = "x"\nbearer_token_env_var = "KNOWLEDGE_TOKEN"\n', encoding="utf-8")
         (home / ".codex" / "hooks.json").write_text(json.dumps({"hooks": {"SessionStart": [{"hooks": [
@@ -906,6 +910,22 @@ def installer(tok: str, tmp: Path):
         code, out, err = run([sys.executable, str(agent), "setup"], "", env, timeout=600)
         check(code == 0 and "Already set up (" in out and all(f"== {a} ==" in out for a in have) and "== agy ==" not in out,
               f"setup (the one-line installer), once set up: every agent with the plugin is updated ({', '.join(have)}), no questions", (out + err)[-1500:])
+        # Set up before the URL was stored (review 27 Oct 2026): the token must not go to the default server.
+        url_file, settings_path = home / ".config" / "knowledge" / "url", home / ".claude" / "settings.json"
+        saved = (url_file.read_bytes() if url_file.exists() else None, settings_path.read_bytes() if settings_path.exists() else None)
+        url_file.unlink(missing_ok=True)
+        if saved[1]:
+            data = json.loads(saved[1])
+            data.get("pluginConfigs", {}).pop("knowledge@knowledge", None)
+            settings_path.write_text(json.dumps(data), encoding="utf-8")
+        bare = {k: v for k, v in env.items() if k != "KNOWLEDGE_URL"}
+        for cmd in ("setup", "update"):
+            code, out, err = run([sys.executable, str(agent), cmd], "", bare, timeout=120)
+            check(code != 0 and "Which knowledge server?" in out + err and "== " not in out,
+                  f"{cmd} with a token but no known server asks for it, never uses the default", (out + err)[-800:])
+        for path, data in zip((url_file, settings_path), saved):
+            if data is not None:
+                path.write_bytes(data)
         code, out, err = run([sys.executable, str(agent), "install"], "", env)
         check(code != 0 and "Found" in (out + err) and "name one" in (out + err),
               "install without an agent and without a terminal names what it found and asks to choose", out + err)
@@ -1010,8 +1030,21 @@ def checkout_update(tmp: Path):
     env = {**os.environ, "HOME": str(tmp), "USERPROFILE": str(tmp), "KNOWLEDGE_TOKEN": "", "KNOWLEDGE_URL": BASE, "PATH": path}
     code, out, err = run([sys.executable, str(setup / "clients" / "knowledge-agent.py"), "update"], env=env, timeout=120)
     check(git(setup, "rev-parse", "HEAD")[1].strip() == new and "up to date with GitHub" in out
-          and git(setup, "rev-parse", "knowledge-before-update")[1].strip() == old,
+          and git(setup, "rev-parse", git(setup, "branch", "--list", "knowledge-before-update-*", "--format=%(refname:short)")[1].split()[0])[1].strip() == old,
           "update: a rewritten history resets the checkout, old HEAD kept as a branch", (out + err)[-600:])
+    # A file git does not track that the new history adds: reset --hard would overwrite it without a copy.
+    (dev / "notes.txt").write_text("upstream\n", encoding="utf-8")
+    git(dev, "add", "notes.txt")
+    rewrite("one, rewritten with notes")
+    (setup / "notes.txt").write_text("mine\n", encoding="utf-8")
+    code, out, err = run([sys.executable, str(setup / "clients" / "knowledge-agent.py"), "update"], env=env, timeout=120)
+    check(code != 0 and (setup / "notes.txt").read_text(encoding="utf-8") == "mine\n",
+          "update: refuses a rewrite that would overwrite a file git does not track", (out + err)[-600:])
+    (setup / "notes.txt").unlink()
+    code, out, err = run([sys.executable, str(setup / "clients" / "knowledge-agent.py"), "update"], env=env, timeout=120)
+    branches = git(setup, "branch", "--list", "knowledge-before-update-*")[1].split()
+    check(code == 0 or "up to date with GitHub" in out, "update: goes on once that file is moved away", (out + err)[-600:])
+    check(len(branches) == 2, "update: every reset keeps its own backup branch", " ".join(branches))
     changed = setup / "clients" / "knowledge-agent.py"
     changed.write_text(changed.read_text(encoding="utf-8") + "# mine\n", encoding="utf-8")
     rewrite("one, rewritten again")
@@ -1023,13 +1056,19 @@ def checkout_update(tmp: Path):
     # where someone's git pull stopped with conflicts after a rewrite (25 Oct 2026 on a Windows client).
     fresh = tmp / "one line"
     shell = shutil.which("powershell") if WIN else shutil.which("sh")
-    def one_line(cmd):
+    def one_line(cmd, where=fresh):
         if WIN:
             argv = [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
                     f"& ([scriptblock]::Create((Get-Content -Raw '{REPO / 'install.ps1'}'))) {cmd}"]
         else:
             argv = [shell, "-c", f"sh -s {cmd} < '{REPO / 'install.sh'}'"]
-        return run(argv, env={**env, "KNOWLEDGE_REPO": str(origin), "KNOWLEDGE_DIR": str(fresh)}, timeout=180)
+        return run(argv, env={**env, "KNOWLEDGE_REPO": str(origin), "KNOWLEDGE_DIR": str(where)}, timeout=180)
+    notes = tmp / "my notes"  # someone's own ~/knowledge, another repository
+    git(tmp, "clone", "-q", str(dev), str(notes))
+    head = git(notes, "rev-parse", "HEAD")[1]
+    code, out, err = one_line("", notes)
+    check(code != 0 and "another repository" in out + err and git(notes, "rev-parse", "HEAD")[1] == head,
+          "one-line setup: leaves another repository in that folder alone", (out + err)[-600:])
     code, out, err = one_line("")
     if not check(fresh.exists(), "one-line setup: the checkout is cloned", (out + err)[-700:]):
         return
