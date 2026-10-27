@@ -9,7 +9,8 @@ it in ~/.config/knowledge/url for the hooks and sets the Claude plugin option. O
 
   knowledge-agent.py install                       find Claude Code, Codex and agy on this computer, ask y/n for each,
                     then set up the chosen ones with one token
-  knowledge-agent.py update                        update the knowledge plugin in every agent that has it, no questions
+  knowledge-agent.py update                        update this checkout from GitHub, then the knowledge plugin in every
+                    agent that has it, no questions
   knowledge-agent.py install <claude|codex|agy> [TOKEN]   set up or update; safe to run again. Claude Code: the plugin.
                     Codex and agy: the plugin (an older setup of this script is removed first); with a vault name,
                     KNOWLEDGE_SETUP=script, or agy on Windows without python3 on PATH: this script's setup (MCP relay,
@@ -322,7 +323,18 @@ def install_found():
 
 
 def update():
-    """Every agent here that has the plugin gets the newest version; the stored token, no questions."""
+    """Every agent here that has the plugin gets the newest version; the stored token, no questions. A git checkout of
+    this script is first brought to GitHub's main (self_update.sync), then the new script does the rest."""
+    repo = HOOKS.parent.parent
+    if (repo / ".git").exists() and not os.environ.get("KNOWLEDGE_SYNCED"):
+        import self_update
+        try:
+            self_update.sync(repo)
+        except RuntimeError as e:
+            sys.exit(str(e))
+        print(f"{repo}: up to date with GitHub")
+        sys.exit(subprocess.run([sys.executable, "-X", "utf8", __file__, "update"],
+                                env={**os.environ, "KNOWLEDGE_SYNCED": "1"}).returncode)
     if not token_store.token():
         sys.exit("No stored token: run install first.")
     todo = [a for a in AGENTS if shutil.which(a) and has_plugin(a)]

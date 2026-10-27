@@ -114,8 +114,9 @@ plugin's "Knowledge server URL" option, so later sessions and `update` need noth
 It asks for the token once, checks it with the server, stores it in the keyring and installs the plugin. The plugin
 keeps itself up to date in every agent, and says so once at session start: in Claude Code it turns on the marketplace's
 auto-update (off under `/plugin` > Marketplaces); Codex and agy have no plugin auto-update, so there the plugin checks
-GitHub at most once a day and updates itself with the agent's own CLI (the setup without a plugin: `git pull` and the
-setup again). Off: `KNOWLEDGE_AUTO_UPDATE=0`. A new version loads at the next start. Each session start
+GitHub at most once a day and updates itself with the agent's own CLI (the setup without a plugin: its git checkout is brought to
+GitHub's main, also after a rewritten history when nothing in it is changed, then the setup runs again;
+`knowledge-agent.py update` does the same by hand). Off: `KNOWLEDGE_AUTO_UPDATE=0`. A new version loads at the next start. Each session start
 reports the plugin version: the admin page shows it per device and agent, and a device still behind the newest
 version after two days hears how to update by hand (also listed in lint as `plugin_behind`).
 

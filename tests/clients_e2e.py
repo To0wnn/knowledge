@@ -972,6 +972,39 @@ def plugin_versions(tmp: Path):
         check(got.get(agent) == want, f"{agent}: session start reports plugin version {want}", json.dumps(seen)[:300])
 
 
+def checkout_update(tmp: Path):
+    """The setup's git checkout after a rewritten history (force-push): update resets it to GitHub's main, keeps the
+    old HEAD as a branch, and refuses when a tracked file is changed (a pull would stop with conflicts everywhere)."""
+    def git(cwd, *args):
+        return run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "init.defaultBranch=main", *args],
+                   cwd=cwd, timeout=120)
+    origin, dev, setup = tmp / "origin.git", tmp / "dev clone", tmp / "setup clone"
+    shutil.copytree(CLIENT, dev, ignore=shutil.ignore_patterns("__pycache__"))
+    git(dev, "init", "-q")
+    git(dev, "add", "-A")
+    git(dev, "commit", "-qm", "one")
+    git(tmp, "clone", "-q", "--bare", str(dev), str(origin))
+    git(tmp, "clone", "-q", str(origin), str(setup))
+
+    def rewrite(msg):
+        git(dev, "commit", "-q", "--amend", "-m", msg)
+        git(dev, "push", "-q", "--force", str(origin), "HEAD:main")
+        return git(dev, "rev-parse", "HEAD")[1].strip()
+    old, new = git(setup, "rev-parse", "HEAD")[1].strip(), rewrite("one, rewritten")
+    path = os.pathsep.join({str(Path(shutil.which("git")).parent), str(Path(sys.executable).parent)})  # no agent CLIs
+    env = {**os.environ, "HOME": str(tmp), "USERPROFILE": str(tmp), "KNOWLEDGE_TOKEN": "", "KNOWLEDGE_URL": BASE, "PATH": path}
+    code, out, err = run([sys.executable, str(setup / "clients" / "knowledge-agent.py"), "update"], env=env, timeout=120)
+    check(git(setup, "rev-parse", "HEAD")[1].strip() == new and "up to date with GitHub" in out
+          and git(setup, "rev-parse", "knowledge-before-update")[1].strip() == old,
+          "update: a rewritten history resets the checkout, old HEAD kept as a branch", (out + err)[-600:])
+    changed = setup / "clients" / "knowledge-agent.py"
+    changed.write_text(changed.read_text(encoding="utf-8") + "# mine\n", encoding="utf-8")
+    rewrite("one, rewritten again")
+    code, out, err = run([sys.executable, str(setup / "clients" / "knowledge-agent.py"), "update"], env=env, timeout=120)
+    check(code != 0 and "local changes" in out + err and changed.read_text(encoding="utf-8").endswith("# mine\n"),
+          "update: refuses a rewritten history when a tracked file is changed", (out + err)[-600:])
+
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # this report only; the clients run as a stock Windows has them
     tmp = Path(tempfile.mkdtemp(prefix="kn e2e "))
@@ -999,6 +1032,7 @@ def main():
         plugin_versions(tmp)
         relay_errors(home)
         installer(tok, tmp)
+        checkout_update(tmp)
         real_clis(tok, home)
     finally:
         proc.kill()

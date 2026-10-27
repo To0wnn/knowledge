@@ -89,11 +89,9 @@ py $HOME\knowledge\clients\knowledge-agent.py install</pre><button class="copy" 
   </ol>
 
   <h2>Update</h2>
-  <p>The plugin keeps itself up to date: Claude Code through its marketplace, Codex and agy with a daily check. A new version loads at the next start. By hand, for every agent that has the plugin, without questions:</p>
-  <div class="cmd" data-os="linux"><pre>git -C ~/knowledge fetch -q &amp;&amp; git -C ~/knowledge reset -q --hard origin/main
-python3 ~/knowledge/clients/knowledge-agent.py update</pre><button class="copy" type="button">Copy</button></div>
+  <p>The plugin keeps itself up to date: Claude Code through its marketplace, Codex and agy with a daily check. A new version loads at the next start. By hand, for every agent that has the plugin, without questions (it updates the scripts from GitHub first):</p>
+  <div class="cmd" data-os="linux"><pre>python3 ~/knowledge/clients/knowledge-agent.py update</pre><button class="copy" type="button">Copy</button></div>
   <div class="cmd" data-os="windows" hidden><pre>cd $HOME
-git -C $HOME\knowledge fetch -q; git -C $HOME\knowledge reset -q --hard origin/main
 py $HOME\knowledge\clients\knowledge-agent.py update</pre><button class="copy" type="button">Copy</button></div>
 
   <nav class="client-tabs" role="tablist" aria-label="Client">

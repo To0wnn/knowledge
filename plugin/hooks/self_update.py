@@ -6,7 +6,8 @@ agent's own CLI; the new version loads at the next start. The session context sa
 after an update, and after a failed one. Off: KNOWLEDGE_AUTO_UPDATE=0.
 
   self_update.py run <codex|agy> [script]   the background update (started by notice()); "script" = the setup
-                                              without a plugin (clients/knowledge-agent.py): git pull, then install
+                                              without a plugin (clients/knowledge-agent.py): sync, then install
+  self_update.py sync <checkout>   bring the setup's git checkout to GitHub's main (also after a rewritten history)
   self_update.py --self-test       the checks of this file
 Standard library only.
 """
@@ -28,14 +29,32 @@ DAY = 86400
 
 
 def commands(agent: str, mode: str = "plugin") -> list[list[str]]:
-    if mode == "script":  # the checkout this file runs from: pull it, then let the setup update itself
+    if mode == "script":  # the checkout this file runs from: sync it, then let the setup update itself
         repo = PLUGIN.parent
-        return [["git", "-C", str(repo), "pull", "--ff-only", "-q"],
+        return [[sys.executable, "-X", "utf8", __file__, "sync", str(repo)],
                 [sys.executable, "-X", "utf8", str(repo / "clients" / "knowledge-agent.py"), "install", agent]]
     if agent == "codex":
         codex = shutil.which("codex") or "codex"
         return [[codex, "plugin", "marketplace", "upgrade", "knowledge"], [codex, "plugin", "add", "knowledge@knowledge"]]
     return [[shutil.which("agy") or "agy", "plugin", "install", AGY_PLUGIN]]
+
+
+def sync(repo: Path) -> None:
+    """A rewritten history (force-push) cannot fast-forward and a pull would merge two histories with conflicts in every
+    file. The checkout is only a copy of the repository, so it is reset to GitHub's main, but only when nothing tracked in
+    it is changed; its old HEAD stays as branch knowledge-before-update."""
+    def git(*args):
+        return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=300, stdin=subprocess.DEVNULL)
+    if git("pull", "--ff-only", "-q").returncode == 0:
+        return
+    if git("status", "--porcelain", "--untracked-files=no").stdout.strip():
+        raise RuntimeError(f"{repo} has local changes or an unfinished merge; update it by hand: "
+                           f"git -C {repo} merge --abort; git -C {repo} reset --hard origin/main")
+    for step in (("fetch", "-q"), ("branch", "-f", "knowledge-before-update", "HEAD"), ("reset", "-q", "--hard", "@{u}")):
+        p = git(*step)
+        if p.returncode:
+            raise RuntimeError(f"git {step[0]}: {(p.stdout + p.stderr).strip()[-300:]}")
 
 
 def version(text: str) -> tuple:
@@ -128,6 +147,11 @@ if __name__ == "__main__":
             state = load()
             state[f"{sys.argv[2]}:result"] = msg
             save(state)
+    elif sys.argv[1:2] == ["sync"] and sys.argv[2:3]:
+        try:
+            sync(Path(sys.argv[2]))
+        except RuntimeError as e:
+            sys.exit(str(e))
     elif "--self-test" in sys.argv:
         import tempfile
         STATE = Path(tempfile.mkdtemp()) / "auto-update.json"
@@ -144,7 +168,7 @@ if __name__ == "__main__":
         assert notice("agy", now=9e9, spawn=started.append) == "" and started[-1] == "codex", "off: nothing"
         assert version('{"version": "0.10.0"}') > version('{"version": "0.9.5"}'), "numeric, not text"
         script = commands("agy", "script")
-        assert script[0][:2] == ["git", "-C"] and script[1][-2:] == ["install", "agy"], "script setup: pull, then install"
+        assert script[0][-2] == "sync" and script[1][-2:] == ["install", "agy"], "script setup: sync, then install"
         assert commands("agy")[0][1:3] == ["plugin", "install"] and commands("codex")[1][-1] == "knowledge@knowledge"
         print("ok")
     else:
