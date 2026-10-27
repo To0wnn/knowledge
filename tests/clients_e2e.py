@@ -1025,12 +1025,13 @@ def checkout_update(tmp: Path):
         git(dev, "push", "-q", "--force", str(origin), "HEAD:main")
         return git(dev, "rev-parse", "HEAD")[1].strip()
     old, new = git(setup, "rev-parse", "HEAD")[1].strip(), rewrite("one, rewritten")
+    backups = lambda: git(setup, "branch", "--list", "knowledge-before-update-*", "--format=%(refname:short)")[1].split()
     path = os.pathsep.join({str(Path(shutil.which("git")).parent), str(Path(sys.executable).parent),
                             *([] if WIN else ["/usr/bin", "/bin"])})  # sh and coreutils, no agent CLIs
     env = {**os.environ, "HOME": str(tmp), "USERPROFILE": str(tmp), "KNOWLEDGE_TOKEN": "", "KNOWLEDGE_URL": BASE, "PATH": path}
     code, out, err = run([sys.executable, str(setup / "clients" / "knowledge-agent.py"), "update"], env=env, timeout=120)
     check(git(setup, "rev-parse", "HEAD")[1].strip() == new and "up to date with GitHub" in out
-          and git(setup, "rev-parse", git(setup, "branch", "--list", "knowledge-before-update-*", "--format=%(refname:short)")[1].split()[0])[1].strip() == old,
+          and [git(setup, "rev-parse", b)[1].strip() for b in backups()] == [old],
           "update: a rewritten history resets the checkout, old HEAD kept as a branch", (out + err)[-600:])
     # A file git does not track that the new history adds: reset --hard would overwrite it without a copy.
     (dev / "notes.txt").write_text("upstream\n", encoding="utf-8")
@@ -1042,7 +1043,7 @@ def checkout_update(tmp: Path):
           "update: refuses a rewrite that would overwrite a file git does not track", (out + err)[-600:])
     (setup / "notes.txt").unlink()
     code, out, err = run([sys.executable, str(setup / "clients" / "knowledge-agent.py"), "update"], env=env, timeout=120)
-    branches = git(setup, "branch", "--list", "knowledge-before-update-*")[1].split()
+    branches = backups()
     check(code == 0 or "up to date with GitHub" in out, "update: goes on once that file is moved away", (out + err)[-600:])
     check(len(branches) == 2, "update: every reset keeps its own backup branch", " ".join(branches))
     changed = setup / "clients" / "knowledge-agent.py"
