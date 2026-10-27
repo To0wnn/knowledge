@@ -176,6 +176,8 @@ def claude_plugin(tok: str, home: Path, project: Path, garden: Path):
         for event in ("SessionStart", "PostToolUse", "PreToolUse", "SessionEnd", "UserPromptSubmit"):
             for group in hooks.get(event, []):
                 for hk in group["hooks"]:
+                    if hk.get("asyncRewake"):  # waits in the background for a wake; wake_e2e runs it
+                        continue
                     cmd = hk["command"] if mode == "env" else hk["command"].replace("${CLAUDE_PLUGIN_ROOT}", root)
                     code, out, err = run([sh, "-c", cmd], json.dumps(payload[event]), env, cwd=str(project), timeout=hk.get("timeout", 30) + 30)
                     check(code == 0, f"[{mode}] {event} hook exits 0: {cmd[-60:]}", err)
@@ -346,7 +348,9 @@ def agents(tok: str, home: Path, project: Path, garden: Path):
                     "docs-sync": {"hook_event_name": "PostToolUse", "cwd": str(project), "tool_input": {"command": "*** Begin Patch\n*** Update File: docs/taxi.md\n*** End Patch"}},
                     "session-log": {"hook_event_name": "SessionEnd", "session_id": f"{name}-1", "cwd": str(project), "transcript_path": ""},
                     "hints": {"invocationNum": 1, "workspacePaths": [str(project)]},
-                    "tasks": {"hook_event_name": "UserPromptSubmit", "session_id": f"{name}-1", "cwd": str(project), "prompt": "hi"}}
+                    "tasks": {"hook_event_name": "UserPromptSubmit", "session_id": f"{name}-1", "cwd": str(project), "prompt": "hi"},
+                    "wake": {"hook_event_name": "PostToolUse", "session_id": f"{name}-1", "cwd": str(project),
+                             "tool_name": "mcp__knowledge__knowledge_search"}}
         # How a program starts a hook command on Windows: PowerShell -Command, or cmd /d /s /c "<command>" as one
         # string (a list would make Python add its own quoting, which cmd reads differently).
         shells = [("powershell", lambda c: ["powershell", "-NoProfile", "-Command", c]), ("cmd", lambda c: f'cmd /d /s /c "{c}"')] \
@@ -372,6 +376,7 @@ def agents(tok: str, home: Path, project: Path, garden: Path):
                     except ValueError:
                         check(False, f"{name} via {label}: hints prints valid JSON", out[:300] + err[-300:])
     new_task(agent, env, project, tok, home)
+    wake_e2e(tok, home.parent / "Wake Usér", project)
     st, body = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_write", "arguments":
                     {"path": "garden-memory/leak.md", "content": "---\nname: l\ndescription: d\nmetadata:\n  type: project\n---\n## Stand\nSup3rSecret99\n## Keuzes\n"}}},
                     {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})
@@ -397,6 +402,102 @@ def new_task(agent: Path, env: dict, project: Path, tok: str, home: Path):
           "tasks: a task handed over meanwhile reaches the next prompt", out[:300])
     rewind()
     check(ask() == "", "tasks: said once, not at every prompt")
+
+
+def wake_e2e(tok: str, home: Path, project: Path):
+    """Agents on one machine wake each other: a knowledge write by one agent puts a new task in front of the newest
+    session of each other agent (Codex through `codex queue`, agy through its language server, Claude through its
+    asyncRewake waiter), once, and the admin page lists those sessions as wakeable."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    hooks = CLIENT / "plugin" / "hooks" / "agent_hooks.py"
+    bin_dir = home / "bin"
+    bin_dir.mkdir(parents=True)
+    calls = home / "codex-calls.jsonl"
+    (bin_dir / "fakecodex.py").write_text(f"import json, sys\nopen({str(calls)!r}, 'a', encoding='utf-8').write(json.dumps(sys.argv[1:]) + '\\n')\n", encoding="utf-8")
+    if WIN:
+        (bin_dir / "codex.cmd").write_text(f'@"{sys.executable}" "{bin_dir / "fakecodex.py"}" %*\r\n', encoding="utf-8")
+    else:
+        (bin_dir / "codex").write_text(f'#!/bin/sh\nexec "{sys.executable}" "{bin_dir / "fakecodex.py"}" "$@"\n', encoding="utf-8")
+        (bin_dir / "codex").chmod(0o755)
+    sent, csrf = [], "gategategate"
+
+    class LS(BaseHTTPRequestHandler):  # agy's language server, as far as the plugin uses it
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+            if self.headers.get("x-codeium-csrf-token") != csrf:
+                reply, code = {"code": "unauthenticated"}, 401
+            elif self.path.endswith("/GetAllCascadeTrajectories"):
+                reply, code = {"trajectorySummaries": {"conv-1": {"lastModifiedTime": "2026-10-27T08:00:00Z",
+                               "workspaces": [{"workspaceFolderAbsoluteUri": project.as_uri()}]}}}, 200
+            elif self.path.endswith("/SendUserCascadeMessage"):
+                sent.append(body)
+                reply, code = {}, 200
+            else:
+                reply, code = {}, 404
+            data = json.dumps(reply).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *a):
+            pass
+
+    ls = ThreadingHTTPServer(("127.0.0.1", 0), LS)
+    threading.Thread(target=ls.serve_forever, daemon=True).start()
+    env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, PATH=str(bin_dir) + os.pathsep + os.environ.get("PATH", ""))
+    hook = lambda args, payload, extra=None: run([sys.executable, str(hooks), *args], json.dumps(payload), {**env, **(extra or {})}, cwd=str(project))
+    try:
+        # each agent's session: its first prompt (Claude, Codex) or turn (agy) only remembers the open tasks
+        hook(["tasks", "codex", "-"], {"session_id": "cx-1", "cwd": str(project)})
+        hook(["tasks", "claude", "-"], {"session_id": "cl-1", "cwd": str(project)})
+        code, out, err = hook(["hints", "-"], {"conversationId": "conv-1", "workspacePaths": [str(project)]})
+        check("agent_hooks.py" in out and " register" in out, "wake: an unregistered agy conversation is asked once to register", out[:300] + err[-300:])
+        code, out, err = hook(["hints", "-"], {"conversationId": "conv-1", "workspacePaths": [str(project)]})
+        check("register" not in out, "wake: the register request is not repeated", out[:300])
+        code, out, err = hook(["register"], {}, {"ANTIGRAVITY_LS_ADDRESS": f"127.0.0.1:{ls.server_address[1]}", "ANTIGRAVITY_CSRF_TOKEN": csrf})
+        check(code == 0 and "registered" in out, "wake: agy registers from its terminal", out + err)
+        code, out, err = hook(["register"], {})
+        check(code != 0 and "not run by agy" in (out + err), "wake: register outside agy says so", out + err)
+        entry = next((home / ".knowledge" / "agents").glob("agy-ls-*.json"))
+        check(WIN or entry.stat().st_mode & 0o077 == 0, "wake: agy's entry (its key) is private to the user")
+        waiter = subprocess.Popen([sys.executable, str(hooks), "wait", "claude", "-"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE, env=env, cwd=str(project), text=True, encoding="utf-8")
+        waiter.stdin.write(json.dumps({"session_id": "cl-1", "cwd": str(project)}))
+        waiter.stdin.close()
+        tasks = "".join(f"- open tot 1 jan 2099 [{o}, WAKE-{o.upper()}]: wake test for {o}\n" for o in ("Codex", "Claude", "Gemini"))
+        http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_write", "arguments":
+             {"path": "garden-memory/project_wake.md", "content": "---\nname: w\ndescription: d\nmetadata:\n  type: project\n---\n"
+              f"## Stand\n{tasks}\n## Keuzes\n"}}}, {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})
+        code, out, err = hook(["wake", "codex", "-"], {"session_id": "sender", "cwd": str(project), "tool_name": "mcp__knowledge__knowledge_search"})
+        check(out.strip() == "{}" and not calls.exists() and not sent, "wake: a read-only knowledge tool wakes nobody", out + err)
+        code, out, err = hook(["wake", "codex", "-"], {"session_id": "sender", "cwd": str(project), "tool_name": "mcp__knowledge__knowledge_write"})
+        check(code == 0 and "told" in out and "codex" in out and "agy" in out, "wake: the sender hears whom it told", out + err)
+        queued = [json.loads(l) for l in calls.read_text(encoding="utf-8").splitlines()] if calls.exists() else []
+        check(len(queued) == 1 and queued[0][:3] == ["queue", "--thread", "cx-1"] and "WAKE-CODEX" in queued[0][-1]
+              and "WAKE-GEMINI" not in queued[0][-1], "wake: Codex gets its own new task through codex queue", str(queued)[:400])
+        check(len(sent) == 1 and sent[0]["cascadeId"] == "conv-1" and "WAKE-GEMINI" in sent[0]["items"][0]["text"],
+              "wake: agy gets its own new task in its open conversation", str(sent)[:400])
+        try:
+            werr = waiter.communicate(timeout=20)[1]
+        except subprocess.TimeoutExpired:
+            waiter.kill()
+            werr = "still waiting after 20 s"
+        check(waiter.returncode == 2 and "WAKE-CLAUDE" in werr and "not from the user" in werr,
+              "wake: Claude's waiter wakes the session (exit 2) with its own new task", werr[-400:])
+        code, out, err = hook(["wake", "agy", "-"], {"conversationId": "other", "workspacePaths": [str(project)],
+                                                    "toolCall": {"name": "call_mcp_tool", "args": {"ToolName": "knowledge_edit"}}})
+        check(out.strip() == "{}" and len(sent) == 1 and len(calls.read_text(encoding="utf-8").splitlines()) == 1,
+              "wake: said once (a second write wakes nobody again); agy's PostToolUse answers {}", out + err)
+        admin = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "anthony"}
+        st, body = http("GET", "/ui/api/admin", None, admin)
+        clients = {c["session"]: c for t in json.loads(body)["tokens"] if t["name"] == "friend-pc" for c in t.get("clients", [])}
+        check(all(clients.get(s, {}).get("wake") for s in ("cx-1", "cl-1", "conv-1")) and clients["cx-1"]["agent"] == "codex"
+              and clients["conv-1"]["project"] == "garden", "wake: the admin page lists the sessions, their agent, project and wakeable",
+              json.dumps(clients)[:600])
+    finally:
+        ls.shutdown()
 
 
 def script_mcp(tok: str, home: Path):
@@ -521,7 +622,7 @@ def codex_plugin(tok: str, home: Path, project: Path):
     data = reply.get("result", {}).get("data", [])
     listed = [h for e in data for h in e["hooks"] if h.get("pluginId") == "knowledge@knowledge"]
     problems = [w for e in data for w in e["warnings"] + [x["message"] for x in e["errors"]]]
-    check(len(listed) == 5 and not problems, "codex: hooks/list shows the plugin's five hooks, no warnings", json.dumps(reply)[:800])
+    check(len(listed) == 6 and not problems, "codex: hooks/list shows the plugin's six hooks, no warnings", json.dumps(reply)[:800])
     # Codex itself starts the plugin's MCP server (on Windows with a python.org PATH: py, no python3) and lists its tools.
     reply = app_server(codex, env, "mcpServerStatus/list", {"detail": "full"}, timeout=90)
     entry = next((e for e in reply.get("result", {}).get("data", []) if "knowledge" in e.get("name", "")), {})
@@ -655,7 +756,8 @@ def agy_plugin(tok: str, home: Path, project: Path, garden: Path):
     cmds = [h["command"] for e in hooks.values() for g in e for h in (g.get("hooks") or [g])]
     common = {"conversationId": "agy-plugin", "workspacePaths": [str(project)]}
     payloads = {"context": common, "session-log": {**common, "transcriptPath": ""}, "hints": {**common, "invocationNum": 1},
-                "docs-sync": {**common, "toolCall": {"name": "write_file", "args": {"Path": json.dumps(str(project / "docs" / "agy.md"))}}}}
+                "docs-sync": {**common, "toolCall": {"name": "write_file", "args": {"Path": json.dumps(str(project / "docs" / "agy.md"))}}},
+                "wake": {**common, "toolCall": {"name": "call_mcp_tool", "args": {"ToolName": "knowledge_search"}}}}
     (project / "docs" / "agy.md").write_text("agy plugin → ✅\n", encoding="utf-8")
     for cmd in cmds:
         kind = next(k for k in payloads if f" {k}" in cmd)

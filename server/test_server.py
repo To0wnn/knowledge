@@ -482,6 +482,13 @@ def main():
         assert f"{frname} codex: plugin 0.9.10, newest 0.9.16" in call("knowledge_lint", {})[1], call("knowledge_lint", {})[1][-500:]
         row = next(t for t in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["tokens"] if t["name"] == frname)
         assert {(p["agent"], p["v"], p["behind"]) for p in row["plugin"]} == {("agy", "0.9.16", False), ("codex", "0.9.10", True)}, row
+        # Sessions per token: the plugin's /tasks names its session and whether another agent can wake it.
+        http("GET", "/tasks?project=x&agent=codex&session=cx-77&wake=1", token=fr)
+        http("GET", "/tasks?project=x&agent=bogus&session=b-1&wake=1", token=fr)  # not an agent: not listed
+        row = next(t for t in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["tokens"] if t["name"] == frname)
+        got = {c["session"]: c for c in row["clients"]}
+        assert got["cx-77"]["agent"] == "codex" and got["cx-77"]["wake"] is True and got["cx-77"]["project"] == "garden", got
+        assert "b-1" not in got, got
         assert "Development rules" in ctx and "2. Done means proven." in ctx, ctx  # a guest gets the development rules too
         assert "# Development rules" in http("GET", "/house-rules", token=fr)[1]  # and so does an agent's rules file
         assert b"<li>Done means proven.</li>" in raw("GET", "/ui/help", headers=ck)[2]  # and the help page
@@ -552,9 +559,9 @@ def main():
         # agy's PostToolUse may only answer {}: the hint waits and the PostInvocation hook (agent_hooks hints) shows it once.
         assert "notes/taxi.md" in (tmp / "agyhome/.knowledge/pending-hints.txt").read_text()
         hooks_py = str(Path(__file__).parents[1] / "plugin/hooks/agent_hooks.py")
-        out = subprocess.run([sys.executable, hooks_py, "hints"], text=True, env=oenv, capture_output=True, check=True).stdout
+        out = subprocess.run([sys.executable, hooks_py, "hints"], input="{}", text=True, env=oenv, capture_output=True, check=True).stdout
         assert "notes/taxi.md" in json.loads(out)["injectSteps"][0]["systemMessage"]["systemMessage"], out
-        out = subprocess.run([sys.executable, hooks_py, "hints"], text=True, env=oenv, capture_output=True, check=True).stdout
+        out = subprocess.run([sys.executable, hooks_py, "hints"], input="{}", text=True, env=oenv, capture_output=True, check=True).stdout
         assert json.loads(out) == {}, out  # once
         (proj / ".knowledge-project").write_text("trade\n")
         out = subprocess.run([sys.executable, sync], input=json.dumps({"hook_event_name": "SessionStart"}), text=True,

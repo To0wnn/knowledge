@@ -14,6 +14,12 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   project it works in, plus open items whose date has passed and hand-over tasks between agents.
 - **Hand-overs during a session:** before a prompt (at most every two minutes) Claude Code, Codex and agy ask
   `/tasks` for the tasks handed to them; a task added after the session started is told to the agent once.
+- **Waking another agent (same machine):** after a `knowledge_edit`/`knowledge_write`/`knowledge_new_memo`, the
+  plugin wakes the newest idle session per agent and project on that machine that has a new task: Codex through
+  `codex queue --thread`, agy through its local language server (the agy session registers once by running
+  `agent_hooks.py register` as a terminal command, the plugin asks it to), Claude Code through an `asyncRewake`
+  waiter hook. The woken agent tells the user and waits for consent. The admin page lists per token the sessions
+  seen in the last week (agent, session id, project, wakeable).
 - **Projects:** each project has a docs root and a memory root. A session picks its project from its working folder;
   a token can also be limited to one project (a guest).
 - **Lint:** deterministic checks in ~80 ms: dead links, index lines without a file and the reverse, missing frontmatter

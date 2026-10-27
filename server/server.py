@@ -1522,6 +1522,31 @@ def plugin_seen(name: str) -> list[dict]:
             for a, s in sorted(seen.get(name, {}).items())] if name != "_latest" else []
 
 
+CLIENTS_FILE = ADMIN_DIR / "clients.json"
+CLIENTS_KEEP = (7 * 86400, 20)  # per token: sessions seen within a week, at most this many
+
+
+def mark_client(name: str, agent: str, session: str, project: str, wake: bool):
+    """Which sessions use a token (agent, conversation id, project, whether another agent can wake it), for the admin
+    page. The plugin asks /tasks at most every two minutes per session, so this is written about as often."""
+    if not name or agent not in AGENT_OWNERS or not session:
+        return
+    now, clients = time.time(), dict(read_json(CLIENTS_FILE, {}))
+    mine = {s: c for s, c in clients.get(name, {}).items() if now - c.get("at", 0) < CLIENTS_KEEP[0]}
+    mine[session[:80]] = {"agent": agent, "project": project, "wake": wake, "at": now}
+    clients[name] = dict(sorted(mine.items(), key=lambda kv: -kv[1]["at"])[:CLIENTS_KEEP[1]])
+    try:
+        write_json(CLIENTS_FILE, clients)
+    except OSError as e:  # bookkeeping only
+        print(f"clients not saved: {e}", flush=True)
+
+
+def clients_seen(name: str) -> list[dict]:
+    now = time.time()
+    return [{"session": s, **c} for s, c in read_json(CLIENTS_FILE, {}).get(name, {}).items()
+            if now - c.get("at", 0) < CLIENTS_KEEP[0]]
+
+
 def plugins_behind() -> list[str]:
     """'<token> <agent>: plugin <v>, newest <latest>' for every device seen lately that is behind past the grace
     period. Uses the stored newest version only: the weekly lint must not wait on GitHub."""
@@ -2058,7 +2083,9 @@ def session_project(request: Request) -> tuple[str, str]:
 async def tasks_route(request: Request):
     """The open tasks handed to ?agent= in the session's project, one item per line: the plugin asks before a turn, so a
     task handed over while a session runs reaches it without a new session."""
-    mem = PROJECTS[session_project(request)[0]][1]
+    project = session_project(request)[0]
+    mem, q = PROJECTS[project][1], request.query_params
+    mark_client(device.get().get("name", ""), q.get("agent", ""), q.get("session", ""), project, q.get("wake") == "1")
     return PlainTextResponse("\n".join(task_items(task_memos(mem), mem, AGENT_OWNERS.get(request.query_params.get("agent", ""), ()))[0]))
 
 
@@ -2584,7 +2611,8 @@ async def ui_admin_state(request: Request, _):
             "admin": False, "user": dev["user"],
             "projects": [{"name": p, "docs": d, "memory": m, "builtin": p in BUILTIN_PROJECTS,
                           "mode": me.get("projects", {}).get(p)} for p, (d, m) in list(PROJECTS.items()) if d in dev["roots"]],
-            "tokens": [{"name": n, **{k: v for k, v in cfg.items() if k != "sha256"}, "last_used": last_used(n), "plugin": plugin_seen(n)}
+            "tokens": [{"name": n, **{k: v for k, v in cfg.items() if k != "sha256"}, "last_used": last_used(n), "plugin": plugin_seen(n),
+                        "clients": clients_seen(n)}
                        for n, cfg in sorted(tokens.items()) if cfg.get("owner") == dev["user"]],
             "limits": {"projects": USER_MAX_PROJECTS, "tokens": USER_MAX_TOKENS, "project_mb": PROJECT_MAX_MB,
                        "created": len(me.get("created", []))},
@@ -2594,7 +2622,8 @@ async def ui_admin_state(request: Request, _):
         "users": read_json(USERS_FILE, {}),
         "projects": [{"name": p, "docs": d, "memory": m, "builtin": p in BUILTIN_PROJECTS} for p, (d, m) in PROJECTS.items()],
         "roots": sorted(ROOTS),
-        "tokens": [{"name": n, **{k: v for k, v in cfg.items() if k != "sha256"}, "last_used": last_used(n), "plugin": plugin_seen(n)}
+        "tokens": [{"name": n, **{k: v for k, v in cfg.items() if k != "sha256"}, "last_used": last_used(n), "plugin": plugin_seen(n),
+                        "clients": clients_seen(n)}
                    for n, cfg in sorted(tokens.items())],
         "config_admins": sorted(CONFIG_ADMINS),
         "settings": current_settings(), "setting_info": {k: {"min": lo, "max": hi, "label": label, "float": kind is float}

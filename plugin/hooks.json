@@ -1,19 +1,47 @@
 {
   "knowledge": {
     "SessionStart": [
-      {"type": "command", "command": "python3 -X utf8 hooks/agent_hooks.py context agy", "timeout": 30}
+      {
+        "type": "command",
+        "command": "python3 -X utf8 hooks/agent_hooks.py context agy",
+        "timeout": 30
+      }
     ],
     "PostToolUse": [
       {
         "matcher": "write_file|edit_file|write_to_file|replace_file_content|multi_replace_file_content",
-        "hooks": [{"type": "command", "command": "python3 -X utf8 hooks/agent_hooks.py docs-sync", "timeout": 20}]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -X utf8 hooks/agent_hooks.py docs-sync",
+            "timeout": 20
+          }
+        ]
+      },
+      {
+        "matcher": "call_mcp_tool",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -X utf8 hooks/agent_hooks.py wake agy",
+            "timeout": 40
+          }
+        ]
       }
     ],
     "PostInvocation": [
-      {"type": "command", "command": "python3 -X utf8 hooks/agent_hooks.py hints", "timeout": 10}
+      {
+        "type": "command",
+        "command": "python3 -X utf8 hooks/agent_hooks.py hints",
+        "timeout": 10
+      }
     ],
     "Stop": [
-      {"type": "command", "command": "python3 -X utf8 hooks/agent_hooks.py session-log", "timeout": 15}
+      {
+        "type": "command",
+        "command": "python3 -X utf8 hooks/agent_hooks.py session-log",
+        "timeout": 15
+      }
     ]
   }
 }

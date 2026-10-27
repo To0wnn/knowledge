@@ -71,6 +71,17 @@ function pluginCell(t) {
   return td;
 }
 
+function clientsCell(t) {
+  const td = el("td", "muted");
+  if (!t.clients || !t.clients.length) { td.textContent = "–"; return td; }
+  t.clients.forEach((c, i) => {
+    if (i) td.append(el("br"));
+    const id = el("span", "mono", c.session);
+    td.append(`${c.agent} · `, id, ` · ${c.project}${c.wake ? " · wakeable" : ""} · ${ago(c.at)}`);
+  });
+  return td;
+}
+
 function renderTokens() {
   $("tokens").replaceChildren(...state.tokens.map((t) => {
     const tr = el("tr");
@@ -79,7 +90,7 @@ function renderTokens() {
     if (SYSTEM.has(t.name) || t.watch) name.append(el("span", "muted", " · used by the VM"));
     tr.append(name, el("td", "", access), el("td", "", scopeText(t) + (t.redact ? " · secrets masked" : "")), skillsCell(t),
       el("td", "muted", t.created ? `${day(t.created)}${t.by ? " · " + t.by : ""}` : "before the admin page"),
-      el("td", t.last_used ? "muted" : "unused", t.last_used ? ago(t.last_used) : "never used"), pluginCell(t));
+      el("td", t.last_used ? "muted" : "unused", t.last_used ? ago(t.last_used) : "never used"), pluginCell(t), clientsCell(t));
     const td = el("td"), b = el("button", "ghost danger", "Revoke");
     b.setAttribute("aria-label", `Revoke ${t.name}`);
     b.onclick = () => {
