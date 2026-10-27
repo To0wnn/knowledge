@@ -19,7 +19,7 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   `codex queue --thread`, agy through its local language server (the agy session registers once by running
   `agent_hooks.py register` as a terminal command, the plugin asks it to), Claude Code through an `asyncRewake`
   waiter hook. The woken agent tells the user and waits for consent. The admin page lists per token the sessions
-  seen in the last week (agent, session id, project, wakeable).
+  seen in the last week (agent, session id, project, wakeable), each with a Forget button.
 - **Projects:** each project has a docs root and a memory root. A session picks its project from its working folder;
   a token can also be limited to one project (a guest).
 - **Lint:** deterministic checks in ~80 ms: dead links, index lines without a file and the reverse, missing frontmatter
