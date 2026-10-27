@@ -69,7 +69,9 @@ function pluginCell(t, open) {
   if (!rest.length) { td.textContent = "–"; return td; }
   rest.forEach((p, i) => {
     if (i) td.append(el("br"));
-    td.append(el("span", p.behind ? "unused" : "", `${p.agent} ${p.v}${p.behind ? " (behind)" : ""}`), ` · ${ago(p.at)}`);
+    const v = el("span", p.behind ? "plugin-v unused" : "plugin-v", `${p.agent} ${p.v}${p.behind ? " (behind)" : ""}`);
+    v.title = `session start ${ago(p.at)}`;  // the time is in Last used and the client rows; here it only wrapped
+    td.append(v);
   });
   return td;
 }
