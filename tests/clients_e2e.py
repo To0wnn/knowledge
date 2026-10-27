@@ -903,9 +903,9 @@ def installer(tok: str, tmp: Path):
               "install codex: the plugin is installed", out + err)
     have = [a for a in ("claude", "codex") if shutil.which(a)]
     if have:  # agy is not installed on the CI runners
-        code, out, err = run([sys.executable, str(agent), "update"], "", env, timeout=600)
-        check(code == 0 and all(f"== {a} ==" in out for a in have) and "== agy ==" not in out,
-              f"update: every agent with the plugin is updated ({', '.join(have)}), no questions", (out + err)[-1500:])
+        code, out, err = run([sys.executable, str(agent), "setup"], "", env, timeout=600)
+        check(code == 0 and "Already set up: updating" in out and all(f"== {a} ==" in out for a in have) and "== agy ==" not in out,
+              f"setup (the one-line installer), once set up: every agent with the plugin is updated ({', '.join(have)}), no questions", (out + err)[-1500:])
         code, out, err = run([sys.executable, str(agent), "install"], "", env)
         check(code != 0 and "Found" in (out + err) and "name one" in (out + err),
               "install without an agent and without a terminal names what it found and asks to choose", out + err)
@@ -1015,9 +1015,9 @@ def checkout_update(tmp: Path):
         else:
             argv = [shell, "-c", f"sh -s {cmd} < '{REPO / 'install.sh'}'"]
         return run(argv, env={**env, "KNOWLEDGE_REPO": str(origin), "KNOWLEDGE_DIR": str(fresh)}, timeout=180)
-    code, out, err = one_line("update")
+    code, out, err = one_line("")
     check(git(fresh, "rev-parse", "HEAD")[1].strip() == git(dev, "rev-parse", "HEAD")[1].strip() and "up to date with GitHub" in out
-          and "No stored token" in out + err, "one-line setup: clones the scripts, then runs the setup", (out + err)[-600:])
+          and "None of claude, codex or agy is on PATH" in out + err, "one-line setup: clones the scripts, then runs the setup", (out + err)[-600:])
     (dev / "x.txt").write_text("1\n", encoding="utf-8")
     git(dev, "add", "x.txt")
     git(dev, "commit", "-qm", "two")

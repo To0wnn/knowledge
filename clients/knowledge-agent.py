@@ -9,6 +9,7 @@ it in ~/.config/knowledge/url for the hooks and sets the Claude plugin option. O
 
   knowledge-agent.py install                       find Claude Code, Codex and agy on this computer, ask y/n for each,
                     then set up the chosen ones with one token
+  knowledge-agent.py setup                         install the first time, update after that (the one-line installer)
   knowledge-agent.py update                        update this checkout from GitHub, then the knowledge plugin in every
                     agent that has it, no questions
   knowledge-agent.py install <claude|codex|agy> [TOKEN]   set up or update; safe to run again. Claude Code: the plugin.
@@ -322,6 +323,14 @@ def install_found():
         install(agent, "-", tok)
 
 
+def setup():
+    """The one-line installer (install.sh, install.ps1): install the first time, update once this computer is set up."""
+    if token_store.token() and any(shutil.which(a) and has_plugin(a) for a in AGENTS):
+        print("Already set up: updating. To add an agent or change the token: install")
+        return update()
+    install_found()
+
+
 def update():
     """Every agent here that has the plugin gets the newest version; the stored token, no questions. A git checkout of
     this script is first brought to GitHub's main (self_update.sync), then the new script does the rest."""
@@ -501,6 +510,8 @@ def main(argv: list):
         install_found()
     elif cmd == "update" and len(argv) == 1:
         update()
+    elif cmd == "setup" and len(argv) == 1:
+        setup()
     elif cmd == "install" and len(argv) >= 2 and argv[1] in (*CONFIG, "claude"):
         if len(argv) == 2:  # a vault name (the machine that holds the files) keeps the URL it is given
             ensure_url()
@@ -513,7 +524,7 @@ def main(argv: list):
 
 
 if __name__ == "__main__":
-    if sys.argv[1:2] in (["install"], ["update"]):  # setup is run by a person: errors go to them, loudly
+    if sys.argv[1:2] in (["install"], ["update"], ["setup"]):  # setup is run by a person: errors go to them, loudly
         sys.stdout.reconfigure(errors="replace")  # agent CLIs print ✔ and such; a Windows pipe is cp1252
         main(sys.argv[1:])
     elif "--selftest" in sys.argv:

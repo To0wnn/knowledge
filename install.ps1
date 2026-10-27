@@ -1,11 +1,12 @@
 # Connect Claude Code, Codex and agy on this computer to a knowledge server, in one line (Windows PowerShell):
 #   irm https://raw.githubusercontent.com/To0wnn/knowledge/main/install.ps1 | iex
-# Update every agent that has the plugin, no questions:
-#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/To0wnn/knowledge/main/install.ps1))) update
-# One agent: the same with install codex instead of update.
+# The first time it installs; after that the same line updates every agent that has the plugin, no questions.
+# Add an agent or change the token:
+#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/To0wnn/knowledge/main/install.ps1))) install
+# (one agent: install codex).
 # Gets or updates the scripts in ~\knowledge (git), then runs clients\knowledge-agent.py. Same steps as install.sh.
 # No "exit": under iex it would close the PowerShell window; errors are thrown instead.
-$Command = if ($args.Count) { @($args) } else { @("install") }
+$Command = if ($args.Count) { @($args) } else { @("setup") }
 $Repo = if ($env:KNOWLEDGE_REPO) { $env:KNOWLEDGE_REPO } else { "https://github.com/To0wnn/knowledge" }
 $Dir = if ($env:KNOWLEDGE_DIR) { $env:KNOWLEDGE_DIR } else { Join-Path $HOME "knowledge" }
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
