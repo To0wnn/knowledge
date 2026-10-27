@@ -108,10 +108,9 @@ irm https://raw.githubusercontent.com/To0wnn/knowledge/main/install.ps1 | iex   
 ```
 
 Both need git and Python 3. They keep the scripts in `~/knowledge` (a git checkout, also brought back after a rewritten
-history) and run `clients/knowledge-agent.py setup`: the first time `install`, which finds Claude Code, Codex and agy
-and asks y/n for each; once this computer is set up, the same line runs `update` for every agent that has the plugin,
-no questions. To add an agent or change the token: `| sh -s install`, or on Windows
-`& ([scriptblock]::Create((irm .../install.ps1))) install`.
+history) and run `clients/knowledge-agent.py setup`. It is the same line every time: the first time it finds Claude
+Code, Codex and agy and asks y/n for each; after that it updates the agents that have the plugin, asks y/n only for an
+agent found without it, and asks for a token only when the server refuses the stored one.
 
 `install claude` (or `codex`, `agy`) sets up one agent without asking which ones. `install` asks for your server's
 address (or set `KNOWLEDGE_URL`, e.g. `KNOWLEDGE_URL=http://localhost:8766`, for one run); the installer has no default, so a

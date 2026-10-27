@@ -74,7 +74,7 @@ footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
     <li><b>Get the scripts and run the setup</b>
       <span data-os="linux">Needs <code>git</code> and <code>python3</code>.</span>
       <span data-os="windows" hidden>Needs <a href="https://git-scm.com/download/win" target="_blank" rel="noopener">Git for Windows</a> and <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">Python 3</a> (keep "py launcher" ticked); the commands are for PowerShell. Quit Codex and agy first: Windows does not replace files that are in use. The scripts are kept in <code>~/knowledge</code>, a copy of the repository that the same line keeps up to date.</span>
-      The setup finds Claude Code, Codex and agy on this computer and asks y/n for each (Enter = yes). It asks for the server address (enter <code class="server-url">this page's address</code>) and for the token once (paste it; it is not shown), checks it with the server, keeps it in the keyring, Keychain or Credential Manager, and installs the plugin in the agents you chose. One agent only: the <code>install</code> line under Update, with <code>install codex</code>.
+      The setup finds Claude Code, Codex and agy on this computer and asks y/n for each (Enter = yes). It asks for the server address (enter <code class="server-url">this page's address</code>) and for the token once (paste it; it is not shown), checks it with the server, keeps it in the keyring, Keychain or Credential Manager, and installs the plugin in the agents you chose.
       <div class="cmd" data-os="linux"><pre>curl -fsSL https://raw.githubusercontent.com/To0wnn/knowledge/main/install.sh | sh</pre><button class="copy" type="button">Copy</button></div>
       <div class="cmd" data-os="windows" hidden><pre>irm https://raw.githubusercontent.com/To0wnn/knowledge/main/install.ps1 | iex</pre><button class="copy" type="button">Copy</button></div></li>
     <li><b>Link your project folder</b>
@@ -86,9 +86,7 @@ footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
   </ol>
 
   <h2>Update</h2>
-  <p>The plugin keeps itself up to date: Claude Code through its marketplace, Codex and agy with a daily check. A new version loads at the next start. By hand: run the setup line again. Once this computer is set up it updates every agent that has the plugin, without questions. To add an agent or change the token, add <code>install</code>:</p>
-  <div class="cmd" data-os="linux"><pre>curl -fsSL https://raw.githubusercontent.com/To0wnn/knowledge/main/install.sh | sh -s install</pre><button class="copy" type="button">Copy</button></div>
-  <div class="cmd" data-os="windows" hidden><pre>&amp; ([scriptblock]::Create((irm https://raw.githubusercontent.com/To0wnn/knowledge/main/install.ps1))) install</pre><button class="copy" type="button">Copy</button></div>
+  <p>The plugin keeps itself up to date: Claude Code through its marketplace, Codex and agy with a daily check. A new version loads at the next start. By hand, or to add an agent you installed later: run the same setup line again. It updates the agents that have the plugin without questions, asks y/n only for an agent found without it, and asks for a token only when the server refuses the stored one.</p>
 
   <nav class="client-tabs" role="tablist" aria-label="Client">
     <button role="tab" id="tab-claude" aria-controls="claude" aria-selected="true">Claude Code</button>

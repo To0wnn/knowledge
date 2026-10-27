@@ -1,8 +1,8 @@
 #!/bin/sh
 # Connect Claude Code, Codex and agy on this computer to a knowledge server, in one line (Linux, macOS):
 #   curl -fsSL https://raw.githubusercontent.com/To0wnn/knowledge/main/install.sh | sh
-# The first time it installs; after that the same line updates every agent that has the plugin, no questions.
-# Add an agent or change the token: ... | sh -s install (one agent: sh -s install codex).
+# The same line every time: the first time it installs; after that it updates, offers agents found without the
+# plugin, and asks for a token only when the server refuses the stored one (clients/knowledge-agent.py setup).
 # Gets or updates the scripts in ~/knowledge (git), then runs clients/knowledge-agent.py. Same steps as install.ps1.
 set -eu
 REPO=${KNOWLEDGE_REPO:-https://github.com/To0wnn/knowledge}

@@ -1,12 +1,9 @@
 # Connect Claude Code, Codex and agy on this computer to a knowledge server, in one line (Windows PowerShell):
 #   irm https://raw.githubusercontent.com/To0wnn/knowledge/main/install.ps1 | iex
-# The first time it installs; after that the same line updates every agent that has the plugin, no questions.
-# Add an agent or change the token:
-#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/To0wnn/knowledge/main/install.ps1))) install
-# (one agent: install codex).
+# The same line every time: the first time it installs; after that it updates, offers agents found without the
+# plugin, and asks for a token only when the server refuses the stored one (clients/knowledge-agent.py setup).
 # Gets or updates the scripts in ~\knowledge (git), then runs clients\knowledge-agent.py. Same steps as install.sh.
 # No "exit": under iex it would close the PowerShell window; errors are thrown instead.
-$Command = if ($args.Count) { @($args) } else { @("setup") }
 $Repo = if ($env:KNOWLEDGE_REPO) { $env:KNOWLEDGE_REPO } else { "https://github.com/To0wnn/knowledge" }
 $Dir = if ($env:KNOWLEDGE_DIR) { $env:KNOWLEDGE_DIR } else { Join-Path $HOME "knowledge" }
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
@@ -37,5 +34,7 @@ if (Test-Path (Join-Path $Dir ".git")) {
     if ($LASTEXITCODE) { throw "git clone $Repo failed" }
 }
 Write-Host "${Dir}: up to date with GitHub"
-& $Py.Source (Join-Path $Dir "clients\knowledge-agent.py") @Command
-if ($LASTEXITCODE) { throw "knowledge-agent.py $($Command -join ' ') failed (exit $LASTEXITCODE)" }
+# $args splatted as is: a one-element array assigned to a variable becomes a plain string.
+$Agent = Join-Path $Dir "clients\knowledge-agent.py"
+if ($args.Count) { & $Py.Source $Agent @args } else { & $Py.Source $Agent setup }
+if ($LASTEXITCODE) { throw "knowledge-agent.py failed (exit $LASTEXITCODE)" }

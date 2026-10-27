@@ -904,7 +904,7 @@ def installer(tok: str, tmp: Path):
     have = [a for a in ("claude", "codex") if shutil.which(a)]
     if have:  # agy is not installed on the CI runners
         code, out, err = run([sys.executable, str(agent), "setup"], "", env, timeout=600)
-        check(code == 0 and "Already set up: updating" in out and all(f"== {a} ==" in out for a in have) and "== agy ==" not in out,
+        check(code == 0 and "Already set up (" in out and all(f"== {a} ==" in out for a in have) and "== agy ==" not in out,
               f"setup (the one-line installer), once set up: every agent with the plugin is updated ({', '.join(have)}), no questions", (out + err)[-1500:])
         code, out, err = run([sys.executable, str(agent), "install"], "", env)
         check(code != 0 and "Found" in (out + err) and "name one" in (out + err),
@@ -991,7 +991,8 @@ def checkout_update(tmp: Path):
         git(dev, "push", "-q", "--force", str(origin), "HEAD:main")
         return git(dev, "rev-parse", "HEAD")[1].strip()
     old, new = git(setup, "rev-parse", "HEAD")[1].strip(), rewrite("one, rewritten")
-    path = os.pathsep.join({str(Path(shutil.which("git")).parent), str(Path(sys.executable).parent)})  # no agent CLIs
+    path = os.pathsep.join({str(Path(shutil.which("git")).parent), str(Path(sys.executable).parent),
+                            *([] if WIN else ["/usr/bin", "/bin"])})  # sh and coreutils, no agent CLIs
     env = {**os.environ, "HOME": str(tmp), "USERPROFILE": str(tmp), "KNOWLEDGE_TOKEN": "", "KNOWLEDGE_URL": BASE, "PATH": path}
     code, out, err = run([sys.executable, str(setup / "clients" / "knowledge-agent.py"), "update"], env=env, timeout=120)
     check(git(setup, "rev-parse", "HEAD")[1].strip() == new and "up to date with GitHub" in out
@@ -1016,8 +1017,10 @@ def checkout_update(tmp: Path):
             argv = [shell, "-c", f"sh -s {cmd} < '{REPO / 'install.sh'}'"]
         return run(argv, env={**env, "KNOWLEDGE_REPO": str(origin), "KNOWLEDGE_DIR": str(fresh)}, timeout=180)
     code, out, err = one_line("")
+    if not check(fresh.exists(), "one-line setup: the checkout is cloned", (out + err)[-700:]):
+        return
     check(git(fresh, "rev-parse", "HEAD")[1].strip() == git(dev, "rev-parse", "HEAD")[1].strip() and "up to date with GitHub" in out
-          and "None of claude, codex or agy is on PATH" in out + err, "one-line setup: clones the scripts, then runs the setup", (out + err)[-600:])
+          and "None of claude, codex or agy is on PATH" in out + err, "one-line setup: clones the scripts, then runs the setup", (out + err)[-700:])
     (dev / "x.txt").write_text("1\n", encoding="utf-8")
     git(dev, "add", "x.txt")
     git(dev, "commit", "-qm", "two")

@@ -9,7 +9,8 @@ it in ~/.config/knowledge/url for the hooks and sets the Claude plugin option. O
 
   knowledge-agent.py install                       find Claude Code, Codex and agy on this computer, ask y/n for each,
                     then set up the chosen ones with one token
-  knowledge-agent.py setup                         install the first time, update after that (the one-line installer)
+  knowledge-agent.py setup                         the one-line installer: install the first time; after that update,
+                    offer agents found without the plugin, and ask for a token only when the stored one is refused
   knowledge-agent.py update                        update this checkout from GitHub, then the knowledge plugin in every
                     agent that has it, no questions
   knowledge-agent.py install <claude|codex|agy> [TOKEN]   set up or update; safe to run again. Claude Code: the plugin.
@@ -324,11 +325,23 @@ def install_found():
 
 
 def setup():
-    """The one-line installer (install.sh, install.ps1): install the first time, update once this computer is set up."""
-    if token_store.token() and any(shutil.which(a) and has_plugin(a) for a in AGENTS):
-        print("Already set up: updating. To add an agent or change the token: install")
-        return update()
-    install_found()
+    """The one-line installer (install.sh, install.ps1), the same line every time: the first time install; once set up,
+    update the agents that have the plugin, offer the ones found without it (y/n), and ask for a token again only when
+    the server refuses the stored one. The scripts already brought this checkout up to date."""
+    tok = token_store.token()
+    have = [a for a in AGENTS if shutil.which(a) and has_plugin(a)] if tok else []
+    if not have:
+        return install_found()
+    rules, err = check_token(tok)
+    if rules is None and "(401)" in err:
+        print(f"{err} Setting up again: answer y when asked to replace the token.")
+        return install_found()
+    print(f"Already set up ({', '.join(have)}): updating.")
+    new = [a for a in AGENTS if shutil.which(a) and a not in have]
+    add = choose(new, input) if new and sys.stdin.isatty() else []
+    for agent in have + add:
+        print(f"\n== {agent} ==")
+        install(agent, "-", tok)
 
 
 def update():
