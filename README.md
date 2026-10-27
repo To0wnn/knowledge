@@ -37,6 +37,9 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   `register`), and for Claude Code, which hands them only to its status line, a small tap that the plugin puts in front
   of your status line at session start (your line still shows; the old command is kept in
   `~/.knowledge/statusline-original.json`). Without numbers nothing is said or refused.
+- **Secret guard:** an edit that writes a known secret value into a file is refused (Claude Code Edit/Write, Codex
+  apply_patch, agy's file tools), where `token.py push-secrets` left the hash file. Only new text counts, so removing a
+  secret is allowed.
 - **Token use:** the session log also sends the tokens of each logged part (uncached input, cache writes, cache reads,
   output; Claude's per-block copies of one call counted once, Codex's running totals differenced). Lint reports
   `usage_outlier`: a session of the last week far above that agent's usual (modified z-score above 3.5 against the last

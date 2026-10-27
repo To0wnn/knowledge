@@ -183,6 +183,19 @@ def limits_e2e(tok: str, tmp: Path):
         sa = json.loads((home / ".gemini" / "config" / "hooks.json").read_text(encoding="utf-8"))["knowledge"]
         sets["agy script"] = (cx_env, "plain", {"conversationId": "lim-agy-s", "workspacePaths": [str(project)]},
                               sa["PostInvocation"][0]["command"], sa["PreToolUse"][0]["hooks"][0]["command"], {"toolCall": {"name": "invoke_subagent"}})
+        # secret-guard: the same refusal of a known secret value in each agent's own edit tool
+        hashes = home / ".config" / "knowledge-server" / "secret-hashes.json"
+        hashes.parent.mkdir(parents=True, exist_ok=True)
+        hashes.write_text(json.dumps([hashlib.sha256(b"gategategate").hexdigest()]), encoding="utf-8")
+        pick = lambda groups, word: next(g["hooks"][0] for g in groups if word in g["matcher"])
+        patch = lambda text: {"tool_name": "apply_patch", "tool_input": {"command": f"*** Begin Patch\n*** Add File: x.md\n+{text}\n*** End Patch"}}
+        agy_write = lambda text: {"toolCall": {"name": "write_file", "args": {"Path": "x.md", "Content": text}}}
+        guards = {"claude plugin": (next(h["command"] for g in hooks["PreToolUse"] for h in g["hooks"] if "secret-guard" in h["command"]),
+                                    lambda text: {"tool_name": "Write", "tool_input": {"file_path": "x.md", "content": text}}),
+                  "codex plugin": (pick(cx["PreToolUse"], "apply_patch"), patch),
+                  "agy plugin": (pick(ag["PreToolUse"], "write_file")["command"], agy_write),
+                  "codex script": (pick(sc["PreToolUse"], "apply_patch")["command"], patch),
+                  "agy script": (pick(sa["PreToolUse"], "write_file")["command"], agy_write)}
         for label, (e, how, hook, turn, gate, call) in sets.items():
             def go(cmd, payload):
                 if how is None:  # Codex plugin: as Codex starts a plugin hook
@@ -198,6 +211,11 @@ def limits_e2e(tok: str, tmp: Path):
             check(code == 0 and "usage limit" not in out, f"{label}: the rung is said once per session", out[:400])
             code, out, err = go(gate, {**hook, **call})
             check(code == 0 and '"deny"' in out, f"{label}: a new subagent is refused at 96%", out[:400] + err[-400:])
+            guard, edit = guards[label]
+            code, out, err = go(guard, {**hook, **edit("pw=gategategate")})
+            check(code == 0 and '"deny"' in out and "secret set NAME" in out, f"{label}: an edit with a known secret is refused", out[:400] + err[-400:])
+            code, out, err = go(guard, {**hook, **edit("pw=‹secret:X›")})
+            check(code == 0 and out.strip() == "", f"{label}: a clean edit gets no output (agy reads any as deny)", out[:400] + err[-400:])
     finally:
         ls.shutdown()
 
@@ -479,6 +497,9 @@ def agents(tok: str, home: Path, project: Path, garden: Path):
                     "tasks": {"hook_event_name": "UserPromptSubmit", "session_id": f"{name}-1", "cwd": str(project), "prompt": "hi"},
                     "gate": {"hook_event_name": "PreToolUse", "session_id": f"{name}-1", "cwd": str(project), "tool_name": "spawn_agent",
                              "toolCall": {"name": "invoke_subagent"}},
+                    "guard": {"hook_event_name": "PreToolUse", "cwd": str(project), "tool_name": "apply_patch",
+                              "tool_input": {"command": "*** Begin Patch\n*** Add File: a.md\n+clean text\n*** End Patch"},
+                              "toolCall": {"name": "write_file", "args": {"Path": "a.md", "Content": "clean text"}}},
                     "wake": {"hook_event_name": "PostToolUse", "session_id": f"{name}-1", "cwd": str(project),
                              "tool_name": "mcp__knowledge__knowledge_search"}}
         # How a program starts a hook command on Windows: PowerShell -Command, or cmd /d /s /c "<command>" as one
@@ -492,6 +513,8 @@ def agents(tok: str, home: Path, project: Path, garden: Path):
                 check(code == 0, f"{name} via {label}: {kind} hook runs", err[-600:])
                 if kind == "gate":
                     check(out.strip() == "", f"{name} via {label}: below the limit the subagent hook prints nothing", out[:300])
+                if kind == "guard":
+                    check(out.strip() == "", f"{name} via {label}: a clean edit gets no word from secret-guard", out[:300])
                 if kind == "context":
                     try:
                         msg = json.dumps(json.loads(out))
@@ -816,7 +839,7 @@ def codex_plugin(tok: str, home: Path, project: Path):
     data = reply.get("result", {}).get("data", [])
     listed = [h for e in data for h in e["hooks"] if h.get("pluginId") == "knowledge@knowledge"]
     problems = [w for e in data for w in e["warnings"] + [x["message"] for x in e["errors"]]]
-    check(len(listed) == 7 and not problems, "codex: hooks/list shows the plugin's seven hooks, no warnings",
+    check(len(listed) == 8 and not problems, "codex: hooks/list shows the plugin's eight hooks, no warnings",
           f"{len(listed)} hooks, problems {problems}: " + json.dumps(reply)[:800])
     # Codex itself starts the plugin's MCP server (on Windows with a python.org PATH: py, no python3) and lists its tools.
     reply = app_server(codex, env, "mcpServerStatus/list", {"detail": "full"}, timeout=90)
@@ -953,7 +976,8 @@ def agy_plugin(tok: str, home: Path, project: Path, garden: Path):
     payloads = {"context": common, "session-log": {**common, **usage_hook(home, "agy", "agy-plugin-usage")}, "hints": {**common, "invocationNum": 1},
                 "docs-sync": {**common, "toolCall": {"name": "write_file", "args": {"Path": json.dumps(str(project / "docs" / "agy.md"))}}},
                 "wake": {**common, "toolCall": {"name": "call_mcp_tool", "args": {"ToolName": "knowledge_search"}}},
-                "gate": {**common, "toolCall": {"name": "invoke_subagent"}}}
+                "gate": {**common, "toolCall": {"name": "invoke_subagent"}},
+                "guard": {**common, "toolCall": {"name": "write_file", "args": {"Path": "a.md", "Content": "clean text"}}}}
     (project / "docs" / "agy.md").write_text("agy plugin → ✅\n", encoding="utf-8")
     for cmd in cmds:
         kind = next(k for k in payloads if f" {k}" in cmd)
@@ -961,6 +985,8 @@ def agy_plugin(tok: str, home: Path, project: Path, garden: Path):
         check(code == 0 and "skipped" not in err, f"agy plugin: {kind} hook runs in the plugin folder", err[-600:])
         if kind == "gate":  # agy reads any output, even {}, as a verdict: {} denied every subagent (27 Oct 2026)
             check(out.strip() == "", "agy plugin: below the limit the subagent hook prints nothing", out[:300])
+        if kind == "guard":
+            check(out.strip() == "", "agy plugin: a clean edit gets no word from secret-guard", out[:300])
         if kind == "context":
             try:
                 msg = json.loads(out)["injectSteps"][0]["systemMessage"]["systemMessage"]

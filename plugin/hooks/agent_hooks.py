@@ -13,6 +13,7 @@ clients/knowledge-agent.py (the setup without a plugin) calls the same functions
   agent_hooks.py wake <claude|codex|agy> [TOKEN]  PostToolUse after knowledge_edit/write/new_memo: wake the newest
                                                session of each other agent here that got a new task from it
   agent_hooks.py gate <claude|codex|agy>        PreToolUse on the subagent tool: refused from 95% of the usage limit
+  agent_hooks.py guard <claude|codex|agy>       PreToolUse on the edit tools: a known secret value is refused
   agent_hooks.py wait claude [TOKEN]           UserPromptSubmit (asyncRewake): wait for a wake, then wake Claude
   agent_hooks.py register                      run by agy in its terminal: note where its language server listens
   agent_hooks.py header [TOKEN]                MCP header helper: the token as JSON, {} without one
@@ -553,6 +554,10 @@ def main(argv: list):
         out = limits.gate(rest[0], json.loads(sys.stdin.read() or "{}"), agy_status)
         if out:
             print(out)
+    elif cmd == "guard" and rest[:1] and rest[0] in ("claude", "codex", "agy") and len(rest) <= 2:
+        sys.stdout.write(subprocess.run([sys.executable, "-X", "utf8", str(HOOKS / "secret-guard.py"), rest[0]],
+                                        input=sys.stdin.read(), capture_output=True, text=True, encoding="utf-8",
+                                        errors="replace").stdout)
     elif cmd == "register" and not rest:
         register_agy()
     elif cmd == "mcp" and len(rest) <= 1:
