@@ -5,7 +5,7 @@ entry service=knowledge; macOS: Keychain, service "knowledge"; Windows: Credenti
 "knowledge"; one token per device), then the Claude plugin option (older installs). store() writes the keyring of the
 OS it runs on (clients/knowledge-agent.py install asks for the token and calls it).
 The MCP headersHelper sees no credential env vars (Claude Code strips them), so there the keyring comes first too.
-url() is the server address with the same idea: env, plugin option, the file the setup wrote, the default.
+url() is the server address the same way: the Claude plugin option, KNOWLEDGE_URL, the file the setup wrote, the default.
 `token_store.py header` prints the MCP Authorization header as JSON for Claude Code's headersHelper and Codex's
 http_headers_helper; `{}` when there is no token, so a static header still applies. Standard library only.
 """
@@ -109,13 +109,14 @@ def token() -> str:
 
 
 def url() -> str:
-    """The server: KNOWLEDGE_URL, the Claude plugin option, the URL the setup stored, else the default."""
+    """The server: the Claude plugin option (what Claude's MCP entry uses too), KNOWLEDGE_URL, the URL the setup
+    stored, else the default."""
     try:
         stored = URL_FILE.read_text(encoding="utf-8").strip()
     except OSError:
         stored = ""
-    return (os.environ.get("KNOWLEDGE_URL") or os.environ.get("CLAUDE_PLUGIN_OPTION_URL")
-            or os.environ.get("CLAUDE_PLUGIN_OPTION_url") or stored or DEFAULT_URL).rstrip("/")
+    return (os.environ.get("CLAUDE_PLUGIN_OPTION_URL") or os.environ.get("CLAUDE_PLUGIN_OPTION_url")
+            or os.environ.get("KNOWLEDGE_URL") or stored or DEFAULT_URL).rstrip("/")
 
 
 def store_url(u: str) -> None:
