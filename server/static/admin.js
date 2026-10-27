@@ -182,6 +182,18 @@ function renderUsers() {
 // What the knowledge holds of a project (its indexed files), as KB or MB.
 const size = (b) => b < 1e6 ? `${Math.max(1, Math.round(b / 1e3))} KB` : `${(b / 1e6).toFixed(1)} MB`;
 
+// The name the web UI shows for a project; saved when the field loses focus or on Enter. Empty = the project name.
+function labelCell(p) {
+  const td = el("td"), input = el("input");
+  input.type = "text"; input.value = p.label || p.name; input.setAttribute("aria-label", `Display name of ${p.name}`); input.maxLength = 40;
+  input.title = `Shown in the web UI; roots, tokens and linked folders keep the name ${p.name}`;
+  input.onkeydown = (e) => { if (e.key === "Enter") input.blur(); };
+  input.onchange = () => run(() => api("/ui/api/admin/project-label", { name: p.name, label: input.value.trim() }), input);
+  td.append(input);
+  if (p.label) td.append(el("div", "muted mono", p.name));
+  return td;
+}
+
 function renderProjects() {
   if (!state.admin) {
     $("projects").replaceChildren(...state.projects.map((p) => { const tr = el("tr");
@@ -196,7 +208,7 @@ function renderProjects() {
     const tr = el("tr"), mine = (roots) => !roots || !roots.length || roots.includes(p.docs) || roots.includes(p.memory);
     const tokens = state.tokens.filter((t) => mine(t.roots)).length;
     const people = state.admins.length + Object.values(state.users).filter((u) => (u.projects || {})[p.name] && u.projects[p.name] !== "none").length;
-    tr.append(el("td", "", p.name), el("td", "mono", p.docs + "/"), el("td", "mono", p.memory + "/"),
+    tr.append(labelCell(p), el("td", "mono", p.docs + "/"), el("td", "mono", p.memory + "/"),
       el("td", "num", `${files[p.memory] ?? 0} memory · ${files[p.docs] ?? 0} docs`),
       el("td", "num", size((bytes[p.memory] ?? 0) + (bytes[p.docs] ?? 0))),
       el("td", "", `${tokens} token${tokens === 1 ? "" : "s"} · ${people} ${people === 1 ? "person" : "people"}`),

@@ -320,9 +320,9 @@ async function loadGraph() {
 function renderProjects() {
   const box = $("projects"); box.replaceChildren();
   [...PROJECTS, ALL].forEach((p, i) => {
-    const b = el("button"); b.title = p === ALL ? "All projects on one map, with the links between them (0)" : `${p} (${i + 1})`;
+    const b = el("button"); b.title = p === ALL ? "All projects on one map, with the links between them (0)" : `${shown(p)} (${i + 1})`;
     b.setAttribute("aria-pressed", String(p === project));
-    b.append(p === ALL ? "All" : p, el("span", "n", String(p === ALL ? data.nodes.length : data.nodes.filter((x) => x.project === p).length)));
+    b.append(p === ALL ? "All" : shown(p), el("span", "n", String(p === ALL ? data.nodes.length : data.nodes.filter((x) => x.project === p).length)));
     b.onclick = () => switchProject(p);
     box.append(b);
   });
@@ -738,7 +738,7 @@ window.addEventListener("beforeunload", (e) => { if (editing) e.preventDefault()
 // ---------------------------------------------------------------- new memo
 $("new-memo").onclick = async () => {
   $("add-menu").open = false;
-  $("new-where").textContent = `In ${MEMORY_ROOT[project]}/ (project ${project}), with a line in its MEMORY.md under the heading you pick.`;
+  $("new-where").textContent = `In ${MEMORY_ROOT[project]}/ (project ${shown(project)}), with a line in its MEMORY.md under the heading you pick.`;
   $("new-error").hidden = true; $("new-form").reset();
   let headings = [];
   try { headings = (await api(`/ui/api/note?path=${encodeURIComponent(MEMORY_ROOT[project] + "/MEMORY.md")}`)).text.split("\n").filter((l) => l.startsWith("## ")).map((l) => l.slice(3).trim()); } catch { /* no index yet */ }
@@ -778,7 +778,7 @@ async function runSearch() {
   const titles = data.nodes.filter((n) => words.every((w) => `${n.label} ${n.id}`.toLowerCase().includes(w)))
     .sort((a, b) => (inProject(b.project) - inProject(a.project)) || (b.degree - a.degree)).slice(0, 6);
   $("titles-head").hidden = !titles.length;
-  $("titles").replaceChildren(...titles.map((n) => hitItem(n.label, `${n.project} · ${n.id}`, () => openNote(n.id))));
+  $("titles").replaceChildren(...titles.map((n) => hitItem(n.label, `${shown(n.project)} · ${n.id}`, () => openNote(n.id))));
   let res; try { res = await api(`/ui/api/search?q=${encodeURIComponent(q)}&project=${project}`); } catch (e) { $("hits").textContent = e.message; return; }
   if (seq !== searchSeq) return; // a newer search is on its way
   $("hits-empty").hidden = res.notes.length > 0;
@@ -1015,7 +1015,8 @@ function connectLive() {
   };
 }
 
-let me = { admin: false, writable: [] };
+let me = { admin: false, writable: [], labels: {} };
+const shown = (p) => (me.labels || {})[p] || p; // the display name the admin gave a project
 async function loadMe() {
   // Projects created in the admin page have roots <name> (docs) and <name>-memory, like the built-in ones.
   me = await api("/ui/api/me");

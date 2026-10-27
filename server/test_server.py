@@ -313,7 +313,7 @@ def main():
         assert raw("GET", "/ui/static/app.js")[0] == 200  # static is public (no data)
         assert raw("GET", "/", headers=ck)[1].get("location") == "/ui"
         assert raw("GET", "/ui", headers=ck)[0] == 200
-        assert json.loads(raw("GET", "/ui/api/me", headers=ck)[2]) == {"user": "alice", "admin": True, "projects": ["homelab", "trade"], "writable": ["homelab", "trade"]}  # anpitek is empty here: no tab
+        assert json.loads(raw("GET", "/ui/api/me", headers=ck)[2]) == {"user": "alice", "admin": True, "projects": ["homelab", "trade"], "writable": ["homelab", "trade"], "labels": {}}  # anpitek is empty here: no tab
         g = json.loads(raw("GET", "/ui/api/graph", headers=ck)[2])
         assert g["nodes"] and not any(n["id"].endswith("/MEMORY.md") for n in g["nodes"]), g["nodes"][:3]  # index not drawn, still readable below
         assert {n["project"] for n in g["nodes"] if n["id"].startswith("trade")} == {"trade"}
@@ -389,7 +389,16 @@ def main():
         assert admin("/ui/api/admin/user", {"username": "alice", "projects": {}})[0] == 400  # admins come from the config
         assert admin("/ui/api/admin/user", {"username": "bob", "projects": {"trade": "read", "homelab": "none"}})[0] == 200
         ro = user("bob")
-        assert json.loads(raw("GET", "/ui/api/me", headers=ro)[2]) == {"user": "bob", "admin": False, "projects": ["trade"], "writable": []}
+        assert json.loads(raw("GET", "/ui/api/me", headers=ro)[2]) == {"user": "bob", "admin": False, "projects": ["trade"], "writable": [], "labels": {}}
+        # A display name for a project: set by an admin, shown to everyone who sees the project; empty restores the name.
+        assert admin("/ui/api/admin/project-label", {"name": "trade", "label": "Trading"}, ro)[0] == 403
+        assert admin("/ui/api/admin/project-label", {"name": "nope", "label": "X"})[0] == 400
+        assert admin("/ui/api/admin/project-label", {"name": "trade", "label": "x" * 41})[0] == 400
+        assert admin("/ui/api/admin/project-label", {"name": "trade", "label": "  Trading   desk "})[0] == 200
+        assert json.loads(raw("GET", "/ui/api/me", headers=ro)[2])["labels"] == {"trade": "Trading desk"}
+        assert [p["label"] for p in json.loads(raw("GET", "/ui/api/admin", headers=ro)[2])["projects"]] == ["Trading desk"]
+        assert admin("/ui/api/admin/project-label", {"name": "trade", "label": ""})[0] == 200
+        assert json.loads(raw("GET", "/ui/api/me", headers=ro)[2])["labels"] == {}
         assert not json.loads(raw("GET", "/ui/api/note?path=trade-memory/plan.md", headers=ro)[2])["writable"]
         assert post({"path": "trade-memory/x.md", "text": "x"}, ro)[0] == 409
         assert raw("GET", "/ui/api/note?path=memory/MEMORY.md", headers=ro)[0] == 404

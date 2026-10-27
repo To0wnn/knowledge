@@ -32,7 +32,8 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   waiter hook. The woken agent tells the user and waits for consent. The admin page lists per token the sessions
   seen in the last week (agent, session id, project, wakeable), each with a Forget button.
 - **Projects:** each project has a docs root and a memory root. A session picks its project from its working folder;
-  a token can also be limited to one project (a guest).
+  a token can also be limited to one project (a guest). The admin page gives a project the name the web UI shows;
+  a built-in project with no notes on your installation gets no tab.
 - **Lint:** deterministic checks in ~80 ms: dead links, index lines without a file and the reverse, missing frontmatter
   or sections, oversized memos, overdue open items, probable secrets (never shown), raw sources not yet processed.
 - **Web UI:** a home view per topic, full search, a note preview with connected notes, an editor, change history, a

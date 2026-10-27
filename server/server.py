@@ -85,6 +85,7 @@ ADMIN_DIR = Path(os.environ.get("KNOWLEDGE_ADMIN_DIR", HOME / ".config/knowledge
 TOKENS_FILE = Path(os.environ.get("KNOWLEDGE_TOKENS", ADMIN_DIR / "tokens.json"))
 USERS_FILE = ADMIN_DIR / "users.json"
 PROJECTS_FILE = ADMIN_DIR / "projects.json"
+LABELS_FILE = ADMIN_DIR / "project_labels.json"  # project -> the name the UI shows (admin page)
 # Projects created in the UI live here (<name>/docs, <name>/memory), next to the built-in ones on the VM.
 PROJECTS_DIR = Path(os.environ.get("KNOWLEDGE_PROJECTS_DIR", HOME / ".local/share/knowledge-projects"))
 # The web UI trusts the Authentik user header only when Traefik also sends this shared secret, because the
@@ -2309,10 +2310,12 @@ async def ui_me(request: Request):
     roots = dev.get("roots")
     wr = dev.get("write_roots")
     used = {rel.split("/", 1)[0] for rel in list(index.files)}
-    # An empty built-in project (its folders absent on this installation) gets no tab; the first one always stays.
-    projects = [p for i, (p, (d, m)) in enumerate(list(PROJECTS.items())) if (not roots or d in roots)
-                and (i == 0 or p not in BUILTIN_PROJECTS or d in used or m in used)]
+    seen = [p for p, (d, m) in list(PROJECTS.items()) if not roots or d in roots]
+    # An empty built-in project (its folders absent on this installation) gets no tab, unless no tab would be left.
+    projects = [p for p in seen if p not in BUILTIN_PROJECTS or set(PROJECTS[p]) & used] or seen[:1]
+    labels = read_json(LABELS_FILE, {})
     return JSONResponse({"user": dev.get("user"), "admin": bool(dev.get("admin")), "projects": projects,
+                         "labels": {p: labels[p] for p in projects if p in labels},
                          "writable": [p for p in projects if wr is None or PROJECTS[p][1] in wr]})
 
 
@@ -2715,12 +2718,13 @@ server.custom_route("/ui/api/admin/external", methods=["POST"])(admin_only(ui_ad
 @signed_in
 async def ui_admin_state(request: Request, _):
     tokens = read_json(TOKENS_FILE, {})
+    labels = read_json(LABELS_FILE, {})
     dev = device.get()
     if not dev.get("admin"):
         me = read_json(USERS_FILE, {}).get(dev["user"], {})
         return JSONResponse({
             "admin": False, "user": dev["user"],
-            "projects": [{"name": p, "docs": d, "memory": m, "builtin": p in BUILTIN_PROJECTS,
+            "projects": [{"name": p, "docs": d, "memory": m, "builtin": p in BUILTIN_PROJECTS, "label": labels.get(p),
                           "mode": me.get("projects", {}).get(p)} for p, (d, m) in list(PROJECTS.items()) if d in dev["roots"]],
             "tokens": [{"name": n, **{k: v for k, v in cfg.items() if k != "sha256"}, "last_used": last_used(n), "plugin": plugin_seen(n),
                         "clients": clients_seen(n)}
@@ -2731,7 +2735,8 @@ async def ui_admin_state(request: Request, _):
     return JSONResponse({"admin": True,
         "admins": sorted(ADMINS),
         "users": read_json(USERS_FILE, {}),
-        "projects": [{"name": p, "docs": d, "memory": m, "builtin": p in BUILTIN_PROJECTS} for p, (d, m) in PROJECTS.items()],
+        "projects": [{"name": p, "docs": d, "memory": m, "builtin": p in BUILTIN_PROJECTS, "label": labels.get(p)}
+                     for p, (d, m) in PROJECTS.items()],
         "roots": sorted(ROOTS),
         "tokens": [{"name": n, **{k: v for k, v in cfg.items() if k != "sha256"}, "last_used": last_used(n), "plugin": plugin_seen(n),
                         "clients": clients_seen(n)}
@@ -2763,6 +2768,22 @@ async def ui_admin_user(request: Request, body: dict):
         users[name] = {**users.get(name, {}), "projects": perms}
     write_json(USERS_FILE, users)
     audit("admin-user", name)
+    return JSONResponse({"ok": True})
+
+
+@server.custom_route("/ui/api/admin/project-label", methods=["POST"])
+@admin_only
+async def ui_admin_project_label(request: Request, body: dict):
+    """{"name": "<project>", "label": "<shown name>"}; an empty label shows the project's own name again. Only the
+    display changes: roots, tokens and linked folders keep the project name."""
+    name, label = str(body.get("name", "")), " ".join(str(body.get("label", "")).split())
+    if name not in PROJECTS:
+        raise ToolError(f"unknown project: {name}")
+    if len(label) > 40 or not label.isprintable():
+        raise ToolError("a display name is at most 40 printable characters")
+    labels = {k: v for k, v in read_json(LABELS_FILE, {}).items() if k != name}
+    write_json(LABELS_FILE, {**labels, **({name: label} if label and label != name else {})})
+    audit("admin-project-label", name)
     return JSONResponse({"ok": True})
 
 
