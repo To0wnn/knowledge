@@ -79,9 +79,17 @@ def epoch(stamp) -> float | None:
         return None
 
 
-def agy_used(status: dict, now: float) -> tuple | None:
-    """The models whose quota is in use (remaining below 1): the one closest to its limit."""
+def plain(text) -> str:
+    return "".join(c for c in str(text).lower() if c.isalnum())
+
+
+def agy_used(status: dict, now: float, model: str = "") -> tuple | None:
+    """The quota of the model this session runs on (hook field modelName, e.g. gemini-3.8-flash-medium, against labels
+    such as "Gemini 3.8 Flash"); without a match the models whose quota is in use, the one closest to its limit."""
     configs = ((status.get("userStatus") or {}).get("cascadeModelConfigData") or {}).get("clientModelConfigs") or []
+    mine = sorted((c for c in configs if model and plain(c.get("label")) and plain(c.get("label")) in plain(model)),
+                  key=lambda c: len(plain(c.get("label"))))
+    configs = mine[-1:] if mine else configs  # shortcut: label format seen only in the docs, not from a live agy yet
     return worst([(c.get("label", "?"), round((1 - q["remainingFraction"]) * 100), epoch(q.get("resetTime")))
                   for c in configs if isinstance(q := c.get("quotaInfo"), dict)
                   and isinstance(q.get("remainingFraction"), (int, float)) and q["remainingFraction"] < 1], now)
@@ -94,7 +102,7 @@ def used(agent: str, hook: dict, agy_status=None, now: float | None = None) -> t
             return claude_used(now)
         if agent == "codex":
             return codex_used(hook["transcript_path"], now)
-        return agy_used(agy_status(), now) if agy_status else None
+        return agy_used(agy_status(), now, hook.get("modelName", "")) if agy_status else None
     except Exception:  # no status line yet, no rollout, agy not registered: no numbers, no verdict
         return None
 
@@ -127,7 +135,9 @@ def notice(agent: str, hook: dict, agy_status=None, now: float | None = None) ->
     said[key] = {"window": resets, "rung": rung, "at": now}
     try:
         STATE.mkdir(parents=True, exist_ok=True)
-        SAID.write_text(json.dumps(said), encoding="utf-8")
+        tmp = SAID.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(said), encoding="utf-8")
+        os.replace(tmp, SAID)  # a reader never sees half a file
     except OSError:  # unsaid next time would repeat it every turn: better to stay quiet
         return ""
     return (f"knowledge: {pct:.0f}% of your {agent} usage limit is used ({window} window{when(resets)}). "
@@ -150,7 +160,7 @@ def gate(agent: str, hook: dict, agy_status=None) -> str:
 
 def statusline():
     """Claude Code's status line command: keep rate_limits, then run the configured status line on the same input."""
-    raw = sys.stdin.read()
+    raw = sys.stdin.buffer.read()  # bytes: passed on as they came (a Windows pipe would decode as cp1252)
     try:
         rl = json.loads(raw).get("rate_limits")
         if rl:
@@ -167,7 +177,7 @@ def statusline():
     if cmd:  # Claude Code runs status line commands in a shell (Git Bash on Windows)
         shell = shutil.which("bash") or shutil.which("sh")
         argv = [shell, "-c", cmd] if shell else cmd
-        r = subprocess.run(argv, input=raw.encode("utf-8"), capture_output=True, shell=not shell, timeout=10)
+        r = subprocess.run(argv, input=raw, capture_output=True, shell=not shell, timeout=10)
         sys.stdout.buffer.write(r.stdout)
 
 
@@ -178,16 +188,22 @@ def install(config: Path) -> str:
     me = Path(__file__).resolve()
     if me != TAP.resolve() and (not TAP.exists() or TAP.read_bytes() != me.read_bytes()):
         shutil.copyfile(me, TAP)
-    settings = config / "settings.json"
+    settings = (config / "settings.json").resolve()  # a symlinked settings.json (dotfiles) stays a link
     data = json.loads(settings.read_text(encoding="utf-8-sig")) if settings.exists() else {}
     current = data.get("statusLine") or {}
-    if "limits.py\" statusline" in str(current.get("command", "")):
+    ours = f'"{sys.executable}" "{TAP}" statusline'
+    if current.get("command") == ours:
         return ""
-    ORIGINAL.write_text(json.dumps({"command": current.get("command"), "was": current or None}), encoding="utf-8")
-    data["statusLine"] = {**current, "type": "command", "command": f'"{sys.executable}" "{TAP}" statusline'}
+    wrapped = "limits.py\" statusline" in str(current.get("command", ""))
+    if not wrapped:  # shortcut: one saved original per user, not per CLAUDE_CONFIG_DIR; key it by config dir if needed
+        ORIGINAL.write_text(json.dumps({"command": current.get("command"), "was": current or None}), encoding="utf-8")
+    # already wrapped with another Python (an upgrade removed the old one): only the interpreter changes
+    data["statusLine"] = {**current, "type": "command", "command": ours}
     tmp = settings.with_name(settings.name + ".knowledge-tmp")
     tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     os.replace(tmp, settings)
+    if wrapped:
+        return ""
     return ("knowledge plugin: the status line now also hands the usage limit to the plugin (your own status line "
             "still shows); the way back is in ~/.knowledge/statusline-original.json.")
 
@@ -220,6 +236,7 @@ def self_test():
             {"label": "Flash", "quotaInfo": {"remainingFraction": 1}}, {"label": "None"}]}}}
         assert used("agy", {}, lambda: status, now=now) == (80, "Pro", epoch("2027-02-01T08:00:00Z"))
         assert used("agy", {}, lambda: 1 / 0, now=now) is None
+        assert used("agy", {"modelName": "gemini-3.8-flash-medium"}, lambda: {"userStatus": {"cascadeModelConfigData": {"clientModelConfigs": [{"label": "Gemini 3.8 Flash", "quotaInfo": {"remainingFraction": 0.9}}, {"label": "Gemini 3.8 Pro", "quotaInfo": {"remainingFraction": 0.01}}]}}}, now=now) == (10, "Gemini 3.8 Flash", None), "the session's own model counts"
         assert json.loads(gate("agy", {}, lambda: {**status, "userStatus": {"cascadeModelConfigData": {"clientModelConfigs": [
             {"label": "Pro", "quotaInfo": {"remainingFraction": 0.01, "resetTime": "2099-01-01T00:00:00Z"}}]}}}))["decision"] == "deny"
         assert gate("agy", {}, lambda: status) == "" and gate("codex", {"transcript_path": "missing"}) == ""
@@ -227,6 +244,11 @@ def self_test():
         config.mkdir()
         (config / "settings.json").write_text(json.dumps({"theme": "dark", "statusLine": {"type": "command", "command": "echo hi", "padding": 1}}))
         assert install(config) and install(config) == "", "wrapped once"
+        s = json.loads((config / "settings.json").read_text())
+        s["statusLine"]["command"] = f'"/gone/python3" "{TAP}" statusline'
+        (config / "settings.json").write_text(json.dumps(s))
+        assert install(config) == "" and sys.executable in json.loads((config / "settings.json").read_text())["statusLine"]["command"]
+        assert json.loads(ORIGINAL.read_text())["command"] == "echo hi", "a re-wrap keeps the user's original"
         sl = json.loads((config / "settings.json").read_text())["statusLine"]
         assert sl["padding"] == 1 and "statusline" in sl["command"] and json.loads(ORIGINAL.read_text())["command"] == "echo hi"
     print("ok")

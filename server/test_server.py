@@ -1079,6 +1079,13 @@ def main():
         assert [(r["agent"], r["session"], r["project"], r.get("in"), r.get("out"), "cache_read" in r) for r in rows] == \
             [("codex", "use1", "trade", 5, 2, False)], rows
         assert json.loads(http("GET", "/lint")[1])["usage_outlier"] == []
+        assert http("POST", "/sessions", {"prompts": ["huge"], "cwd": "/", "session_id": "use3", "agent": "codex",
+                                          "usage": {"in": -5, "out": 10 ** 400}})[0] == 200
+        row = json.loads((tmp / "usage.jsonl").read_text().splitlines()[-1])
+        assert (row["in"], row["out"]) == (0, 10 ** 12), row  # clamped: one bad post must not break the lint
+        with (tmp / "usage.jsonl").open("a") as f:
+            f.write('{"cut off')
+        assert json.loads(http("GET", "/lint")[1])["usage_outlier"] == []
         # The same script reads a Codex rollout and an agy transcript.
         (tmp / ".codex").mkdir(exist_ok=True)
         cx = tmp / ".codex" / "rollout.jsonl"

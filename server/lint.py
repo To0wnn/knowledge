@@ -342,6 +342,7 @@ def usage_outliers(rows: list[dict], now: float, history_days: int = 30, recent_
     for r in rows:
         if now - r.get("at", 0) < history_days * 86400:
             s = sessions.setdefault((r.get("agent", "?"), r.get("session", "")), {"tokens": 0, **r})
+            s["at"] = max(s["at"], r.get("at", 0))  # recent = its latest part: a long session counts this week too
             s["tokens"] += sum(int(r.get(k) or 0) for k in ("in", "cache_write", "cache_read", "out"))
     out = []
     for agent in sorted({a for a, _ in sessions}):
