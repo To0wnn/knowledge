@@ -1561,7 +1561,7 @@ def plugin_seen(name: str) -> list[dict]:
     seen = read_json(PLUGIN_SEEN_FILE, {})
     newest = plugin_version(seen.get("_latest", {}).get("v", ""))
     return [{"agent": a, "v": s["v"], "at": s["at"], "behind": bool(newest) and plugin_version(s["v"]) < newest,
-             "default_url": s.get("d", False)}
+             "default_url": s.get("d", False) if plugin_version(s["v"]) >= (0, 10, 7) else None}  # older: not reported
             for a, s in sorted(seen.get(name, {}).items())] if name != "_latest" else []
 
 

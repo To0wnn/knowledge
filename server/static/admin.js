@@ -61,8 +61,9 @@ function skillsCell(t) {
   l.append(c, " " + (t.skills ? "on" : "off")); td.append(l); return td;
 }
 
-// "behind" when older than the newest; "default URL" when the device names no server (that default will go).
-const pluginText = (p) => `${p.v}${p.behind ? " (behind)" : ""}${p.default_url ? " · default URL" : ""}`;
+// "behind" when older than the newest; "default URL" when the device names no server (that default will go);
+// plugins before 0.10.7 do not say, so they cannot count as safe yet.
+const pluginText = (p) => `${p.v}${p.behind ? " (behind)" : ""}${p.default_url ? " · default URL" : p.default_url === null ? " · URL not reported" : ""}`;
 
 // The plugin version per agent this token reported at its last session start.
 function pluginCell(t, open) {
