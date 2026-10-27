@@ -1094,6 +1094,8 @@ def lint_all() -> dict[str, list[str]]:
             report.setdefault(check, []).extend(f"claude/skills/{i}" for i in items)
     if in_scope("claude/"):  # the owner's report: a device whose auto-update stopped working
         report["plugin_behind"] = plugins_behind()
+        rows = [json.loads(x) for x in USAGE.read_text().splitlines() if x.strip()] if USAGE.exists() else []
+        report["usage_outlier"] = kb_lint.usage_outliers(rows, time.time())
     gaps = get_graph()["insights"]
     report["isolated_note"] = [f"{i['id']} ({i['degree']} link)" for i in gaps["isolated"]
                                if mem_of(i["id"]) or i["id"].startswith("claude/skills/")]
@@ -1963,6 +1965,13 @@ async def sessions_route(request: Request):
     except ToolError as e:
         return JSONResponse({"error": str(e)}, status_code=403)
     audit("session", rel)
+    u = b.get("usage") if isinstance(b.get("usage"), dict) else {}
+    if any(type(u.get(k)) is int and u[k] > 0 for k in USAGE_KEYS):  # not bool: True is an int too
+        row = {"at": int(time.time()), "device": device.get().get("name", "?"), "project": project,
+               "agent": str(b.get("agent", "?"))[:10], "session": str(b.get("session_id", ""))[:64],
+               **{k: u[k] for k in USAGE_KEYS if type(u.get(k)) is int}}
+        with USAGE.open("a") as f:  # shortcut: never trimmed (~100 B a row), cap it once it passes a few MB
+            f.write(json.dumps(row) + "\n")
     return JSONResponse({"logged": rel})
 
 
@@ -2086,6 +2095,8 @@ def sync_name(name: str) -> str | None:
     return "/".join(parts)
 
 
+USAGE = AUDIT.parent / "usage.jsonl"  # tokens per logged session part, for the weekly outlier check
+USAGE_KEYS = ("in", "cache_write", "cache_read", "out")
 NOTICES = AUDIT.parent / "notices.json"  # what a device's sessions must hear once, told at their next turn
 NOTICE_DAYS = 3  # a device not used this long misses it: by then a session start lint or review finds the same
 DOCS_SYNC_MINUTES = 30  # a turn asks for a full docs sync when the device's last one is older (admin page, Settings)

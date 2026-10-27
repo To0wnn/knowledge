@@ -83,6 +83,42 @@ def wait_for(cond, seconds=30.0) -> bool:
     return cond()
 
 
+def usage_hook(home: Path, agent: str, sid: str, prompt: str = "usage test") -> dict:
+    """A session-log hook payload whose transcript holds one prompt and one model call of 7 output tokens, in the
+    format of that agent (Claude repeats a call per content block; Codex logs running totals)."""
+    if agent == "codex":
+        path = home / ".codex" / "sessions" / f"rollout-{sid}.jsonl"
+        total = lambda n: {"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": {
+            "input_tokens": 100 * n, "cached_input_tokens": 60 * n, "output_tokens": 7 * n}}}}
+        rows = [total(1), {"type": "event_msg", "payload": {"type": "user_message", "message": prompt}}, total(2)]
+        hook, done = {"hook_event_name": "SessionEnd", "session_id": sid, "transcript_path": str(path)}, 1  # 1: logged before
+    elif agent == "agy":
+        path = home / f"agy-{sid}.jsonl"
+        rows = [{"type": "USER_INPUT", "content": f"<USER_REQUEST>{prompt}</USER_REQUEST>"},
+                {"type": "PLANNER_RESPONSE", "content": "ok", "input_tokens": 40, "cache_read_tokens": 60, "output_tokens": 7}]
+        hook, done = {"conversationId": sid, "transcriptPath": str(path)}, 0
+    else:
+        path = home / f"claude-{sid}.jsonl"
+        call = {"type": "assistant", "requestId": "r1", "message": {"id": "m1", "content": [{"type": "text", "text": "ok"}],
+                "usage": {"input_tokens": 40, "cache_read_input_tokens": 60, "output_tokens": 7}}}
+        rows = [{"type": "user", "message": {"content": prompt}}, call, call]
+        hook, done = {"hook_event_name": "SessionEnd", "session_id": sid, "transcript_path": str(path)}, 0
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    if done:  # the earlier log of this session read up to here (session-log's own state file)
+        state = home / ".cache" / "knowledge-session-log" / f"{sid}.json"
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_text(json.dumps({"lines": done}), encoding="utf-8")
+    return hook
+
+
+def usage_logged(home: Path, agent: str, sid: str) -> bool:
+    """The server stored that session's tokens once: 40 in, 60 cache read, 7 out."""
+    rows = [json.loads(x) for x in (home.parent / "usage.jsonl").read_text(encoding="utf-8").splitlines()] \
+        if (home.parent / "usage.jsonl").exists() else []
+    return [(r["agent"], r.get("in"), r.get("cache_read"), r.get("out")) for r in rows if r["session"] == sid] == [(agent, 40, 60, 7)]
+
+
 def start_server(tmp: Path):
     data = {n: tmp / "data" / n for n in ("memory", "homelab", "claude", "trade", "trade-memory", "anpitek", "anpitek-memory")}
     for d in data.values():
@@ -141,7 +177,8 @@ def user_env(home: Path, **extra) -> dict:
     """A clean user environment rooted at `home` (Path.home() reads USERPROFILE on Windows, HOME elsewhere)."""
     env = {k: v for k, v in os.environ.items() if not k.startswith(("KNOWLEDGE_", "CLAUDE_"))}
     # Codex on Windows finds its folder through Windows itself, not USERPROFILE: CODEX_HOME is its own override.
-    env.update(HOME=str(home), USERPROFILE=str(home), CODEX_HOME=str(home / ".codex"), PYTHONUTF8="0", **extra)  # PYTHONUTF8 off: like a fresh Windows
+    env.update(HOME=str(home), USERPROFILE=str(home), CODEX_HOME=str(home / ".codex"), PYTHONUTF8="0",
+               XDG_CACHE_HOME=str(home / ".cache"), **extra)  # PYTHONUTF8 off: like a fresh Windows
     if WIN:
         env.pop("PYTHONIOENCODING", None)
     return env
@@ -158,8 +195,7 @@ def claude_plugin(tok: str, home: Path, project: Path, garden: Path):
                               "tool_input": {"file_path": str(project / "notes.md"), "content": "db Sup3rSecret99"}},
                "PostToolUse": {"hook_event_name": "PostToolUse", "tool_name": "Write",
                                "tool_input": {"file_path": str(project / "docs" / "taxi.md")}},
-               "SessionEnd": {"hook_event_name": "SessionEnd", "session_id": "s1", "transcript_path": str(transcript),
-                              "cwd": str(project), "reason": "exit"},
+               "SessionEnd": {**usage_hook(home, "claude", "claude-usage", "fix the taxi speed → ✅"), "cwd": str(project), "reason": "exit"},
                "PreCompact": {"hook_event_name": "PreCompact", "session_id": "s2", "transcript_path": str(transcript), "cwd": str(project)},
                "UserPromptSubmit": {"hook_event_name": "UserPromptSubmit", "session_id": "s3", "cwd": str(project), "prompt": "hi"}}
     hashes = home / ".config" / "knowledge-server" / "secret-hashes.json"  # an owner device has them (token.py push-secrets)
@@ -198,6 +234,7 @@ def claude_plugin(tok: str, home: Path, project: Path, garden: Path):
               "".join(outs["UserPromptSubmit"]))
         check("deny" in "".join(outs["PreToolUse"]), f"[{mode}] PreToolUse: a known secret is refused", "".join(outs["PreToolUse"]))
         check((garden / "docs" / "docs" / "taxi.md").exists(), f"[{mode}] PostToolUse mirrors the edited file")
+        check(usage_logged(home, "claude", "claude-usage"), f"[{mode}] SessionEnd: the session's tokens reach the server once")
         logs = list((garden / "memory" / "sessions").glob("*.md"))
         check(any("fix the taxi speed" in p.read_text(encoding="utf-8") for p in logs), f"[{mode}] SessionEnd posts the session log")
         mirror = home / ".knowledge" / "mirror"
@@ -354,7 +391,7 @@ def agents(tok: str, home: Path, project: Path, garden: Path):
         cmds = [h["command"] for g in (cfg.get("hooks") or cfg["knowledge"]).values() for e in g for h in (e.get("hooks") or [e])]
         payloads = {"context": {"hook_event_name": "SessionStart", "cwd": str(project), "workspacePaths": [str(project)]},
                     "docs-sync": {"hook_event_name": "PostToolUse", "cwd": str(project), "tool_input": {"command": "*** Begin Patch\n*** Update File: docs/taxi.md\n*** End Patch"}},
-                    "session-log": {"hook_event_name": "SessionEnd", "session_id": f"{name}-1", "cwd": str(project), "transcript_path": ""},
+                    "session-log": {**usage_hook(home, name, f"{name}-usage"), "cwd": str(project), "workspacePaths": [str(project)]},
                     "hints": {"invocationNum": 1, "workspacePaths": [str(project)]},
                     "tasks": {"hook_event_name": "UserPromptSubmit", "session_id": f"{name}-1", "cwd": str(project), "prompt": "hi"},
                     "wake": {"hook_event_name": "PostToolUse", "session_id": f"{name}-1", "cwd": str(project),
@@ -383,6 +420,7 @@ def agents(tok: str, home: Path, project: Path, garden: Path):
                         check(json.loads(out) == {} or "injectSteps" in json.loads(out), f"{name} via {label}: hints prints agy JSON", out[:300])
                     except ValueError:
                         check(False, f"{name} via {label}: hints prints valid JSON", out[:300] + err[-300:])
+        check(usage_logged(home, name, f"{name}-usage"), f"{name}: session-log sends the session's tokens")
     new_task(agent, env, project, tok, home)
     resumed(home, project, garden)
     wake_e2e(tok, home.parent / "Wake Usér", project)
@@ -635,7 +673,7 @@ def codex_plugin(tok: str, home: Path, project: Path):
     payloads = {"SessionStart": {"hook_event_name": "SessionStart", "source": "startup", "cwd": str(project)},
                 "PostToolUse": {"hook_event_name": "PostToolUse", "cwd": str(project), "tool_input": {"command": "*** Begin Patch\n*** Update File: docs/taxi.md\n*** End Patch"}},
                 "PreCompact": {"hook_event_name": "PreCompact", "session_id": "cx-1", "cwd": str(project), "transcript_path": ""},
-                "SessionEnd": {"hook_event_name": "SessionEnd", "session_id": "cx-2", "cwd": str(project), "transcript_path": ""},
+                "SessionEnd": {**usage_hook(home, "codex", "cx-usage"), "cwd": str(project)},
                 "UserPromptSubmit": {"hook_event_name": "UserPromptSubmit", "session_id": "cx-3", "cwd": str(project), "prompt": "hi"}}
     check(set(hooks) == set(payloads) and len(hooks["SessionStart"][0]["hooks"]) == 1,
           "codex plugin: the five hook events, one SessionStart handler (openai/codex#45999)", str(list(hooks)))
@@ -651,6 +689,7 @@ def codex_plugin(tok: str, home: Path, project: Path):
                           f"codex plugin: its own task comes first ({shell})", ctx[:300])
                     if i == 0:  # said once, at the first start only
                         check("auto-update is on for codex" in ctx, "codex plugin: SessionStart says auto-update is on", ctx[-300:])
+    check(usage_logged(home, "codex", "cx-usage"), "codex plugin: SessionEnd sends the tokens since the last log, once")
     if WIN:  # python.org without py and without the PATH box: python on PATH is the Store stub, the install is only in the registry
         hk = hooks["SessionStart"][0]["hooks"][0]
         with registered_python():
@@ -822,7 +861,7 @@ def agy_plugin(tok: str, home: Path, project: Path, garden: Path):
     hooks = json.loads((root / "hooks.json").read_text(encoding="utf-8"))["knowledge"]
     cmds = [h["command"] for e in hooks.values() for g in e for h in (g.get("hooks") or [g])]
     common = {"conversationId": "agy-plugin", "workspacePaths": [str(project)]}
-    payloads = {"context": common, "session-log": {**common, "transcriptPath": ""}, "hints": {**common, "invocationNum": 1},
+    payloads = {"context": common, "session-log": {**common, **usage_hook(home, "agy", "agy-plugin-usage")}, "hints": {**common, "invocationNum": 1},
                 "docs-sync": {**common, "toolCall": {"name": "write_file", "args": {"Path": json.dumps(str(project / "docs" / "agy.md"))}}},
                 "wake": {**common, "toolCall": {"name": "call_mcp_tool", "args": {"ToolName": "knowledge_search"}}}}
     (project / "docs" / "agy.md").write_text("agy plugin → ✅\n", encoding="utf-8")
@@ -847,6 +886,7 @@ def agy_plugin(tok: str, home: Path, project: Path, garden: Path):
             except (ValueError, KeyError, IndexError):
                 check(False, "agy plugin: hints prints injectSteps JSON or {}", out[:300] + err[-300:])
     check((garden / "docs" / "docs" / "agy.md").exists(), "agy plugin: PostToolUse mirrors the written file")
+    check(usage_logged(home, "agy", "agy-plugin-usage"), "agy plugin: session-log sends the session's tokens")
     agy = shutil.which("agy")
     if not agy:
         print("skip agy plugin validate/install (agy not installed)")

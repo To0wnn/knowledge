@@ -1071,6 +1071,14 @@ def main():
         subprocess.run([sys.executable, script], input=hook, text=True, env=senv, check=True)  # nothing new: no entry
         assert (tmem / "sessions" / f"{time.strftime('%Y-%m')}.md").read_text() == log
         assert http("POST", "/sessions", {"prompts": ["x"], "cwd": "/"}, token="ro-token")[0] == 403
+        # Tokens per logged part go to usage.jsonl (weekly outlier check); anything but a positive int is dropped.
+        assert http("POST", "/sessions", {"prompts": ["count me"], "cwd": "/home/x/trade_bot", "session_id": "use1", "agent": "codex",
+                                          "usage": {"in": 5, "out": 2, "cache_read": "9", "cache_write": True}})[0] == 200
+        assert http("POST", "/sessions", {"prompts": ["no usage"], "cwd": "/", "session_id": "use2", "usage": "x"})[0] == 200
+        rows = [json.loads(x) for x in (tmp / "usage.jsonl").read_text().splitlines()]
+        assert [(r["agent"], r["session"], r["project"], r.get("in"), r.get("out"), "cache_read" in r) for r in rows] == \
+            [("codex", "use1", "trade", 5, 2, False)], rows
+        assert json.loads(http("GET", "/lint")[1])["usage_outlier"] == []
         # The same script reads a Codex rollout and an agy transcript.
         (tmp / ".codex").mkdir(exist_ok=True)
         cx = tmp / ".codex" / "rollout.jsonl"

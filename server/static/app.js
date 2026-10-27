@@ -913,6 +913,7 @@ async function loadLint(render = true) {
 }
 // Lint checks in plain words, with what to do about them (unknown checks fall back to their name).
 const LINT_INFO = {
+  usage_outlier: ["Session that used far more tokens than usual", "Look at that session's log: a loop, a huge file read or a runaway subagent? Nothing to fix when the work was simply big."],
   plugin_behind: ["Device with an old plugin", "Its auto-update did not fetch the newest version within two days: update it by hand on that device (the session start tells the agent how)."],
   skill_broken: ["Skill Claude cannot use", "Give SKILL.md frontmatter with name and a one-line description; without it the skill is never picked."],
   skill_name_mismatch: ["Skill name differs from its folder", "Set name: to the folder name (lowercase, digits, hyphens)."],

@@ -333,6 +333,32 @@ def lint(files: dict[str, str], today: date | None = None, mem: str = "memory") 
     return report
 
 
+def usage_outliers(rows: list[dict], now: float, history_days: int = 30, recent_days: int = 7) -> list[str]:
+    """Sessions of the last week that used far more tokens than that agent usually does: modified z-score
+    0.6745 * (x - median) / MAD above 3.5 (Iglewicz-Hoaglin), over the sessions of the last month, only with at least 10
+    of them. Rows are the session logs' usage parts; one session can log several parts (each compaction), so they are
+    summed. The text names no score, so the same session is reported once by the weekly diff."""
+    sessions: dict[tuple, dict] = {}
+    for r in rows:
+        if now - r.get("at", 0) < history_days * 86400:
+            s = sessions.setdefault((r.get("agent", "?"), r.get("session", "")), {"tokens": 0, **r})
+            s["tokens"] += sum(int(r.get(k) or 0) for k in ("in", "cache_write", "cache_read", "out"))
+    out = []
+    for agent in sorted({a for a, _ in sessions}):
+        mine = [s for (a, _), s in sessions.items() if a == agent]
+        xs = sorted(s["tokens"] for s in mine)
+        if len(xs) < 10:
+            continue
+        median = xs[len(xs) // 2] if len(xs) % 2 else (xs[len(xs) // 2 - 1] + xs[len(xs) // 2]) / 2
+        dev = sorted(abs(x - median) for x in xs)
+        mad = dev[len(dev) // 2] or 1
+        out += [f"{agent} session {s['session'][:8]} ({s.get('device', '?')}, {s.get('project', '?')}, "
+                f"{date.fromtimestamp(s['at']).isoformat()}): {s['tokens'] / 1e6:.1f}M tokens"
+                for s in sorted(mine, key=lambda s: -s["tokens"])
+                if now - s["at"] < recent_days * 86400 and 0.6745 * (s["tokens"] - median) / mad > 3.5]
+    return out
+
+
 def render(report: dict[str, list[str]]) -> str:
     lines = []
     for check, items in report.items():
@@ -419,4 +445,12 @@ if __name__ == "__main__":  # self-check
     assert query_coverage("hoe werkt de Nest thermostaat", "honeywell en hue") == 0.0 and query_coverage("hoe is het", "") == 1.0
     t = lint({**files, "trade-memory/MEMORY.md": "- [X](x.md) — y\n"}, today=date(2026, 10, 18), mem="trade-memory")
     assert t["index_points_to_missing_file"] == ["MEMORY.md → x.md"] and not t["unprocessed_source"], t
+    day, now = 86400, 1_800_000_000
+    rows = [{"agent": "codex", "session": f"s{i}", "at": now - i * day, "in": 1_000_000 + i * 10_000} for i in range(12)]
+    rows += [{"agent": "codex", "session": "big", "at": now - day, "in": 5_000_000},
+             {"agent": "codex", "session": "big", "at": now - day, "out": 4_000_000},  # second part of the same session
+             {"agent": "codex", "session": "old", "at": now - 20 * day, "in": 50_000_000},  # outside the last week
+             {"agent": "agy", "session": "few", "at": now, "in": 90_000_000}]  # fewer than 10 sessions: no verdict
+    hits = usage_outliers(rows, now)
+    assert len(hits) == 1 and hits[0].startswith("codex session big (?, ?, ") and hits[0].endswith(": 9.0M tokens"), hits
     print("ok")

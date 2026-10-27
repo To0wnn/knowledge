@@ -124,6 +124,49 @@ def collect(lines: list[str]) -> tuple[list[str], list[str], str]:
     return list(dict.fromkeys(prompts)), [f for f in map(short, files) if f], summary
 
 
+def codex_total(lines: list[str]) -> dict:
+    """The last running total in a Codex rollout, as in/cache_write/cache_read/out (its input includes the cached)."""
+    for line in reversed(lines):
+        if '"token_count"' in line:
+            try:
+                t = (json.loads(line).get("payload", {}).get("info") or {}).get("total_token_usage")
+            except ValueError:
+                continue
+            if t:
+                return {"in": t.get("input_tokens", 0) - t.get("cached_input_tokens", 0), "out": t.get("output_tokens", 0),
+                        "cache_write": t.get("cache_write_input_tokens", 0), "cache_read": t.get("cached_input_tokens", 0)}
+    return {}
+
+
+def usage(before: list[str], span: list[str]) -> dict:
+    """Tokens used in this span. Claude logs one model call once per content block (same message id + request id),
+    so each call counts once; Codex logs running totals, so the span is the last total minus the one before it; agy
+    logs each call once on its PLANNER_RESPONSE line."""
+    calls, total = {}, dict.fromkeys(("in", "cache_write", "cache_read", "out"), 0)
+    if any('"token_count"' in line for line in span):
+        end, start = codex_total(span), codex_total(before)
+        return {k: max(0, end.get(k, 0) - start.get(k, 0)) for k in total}
+    for line in span:
+        if "input_tokens" not in line:
+            continue
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        u = (d.get("message") or {}).get("usage") if d.get("type") == "assistant" else None
+        if u:
+            calls[(d["message"].get("id"), d.get("requestId"))] = {
+                "in": u.get("input_tokens", 0), "cache_write": u.get("cache_creation_input_tokens", 0),
+                "cache_read": u.get("cache_read_input_tokens", 0), "out": u.get("output_tokens", 0)}
+        elif d.get("type") == "PLANNER_RESPONSE":
+            calls[len(calls), None] = {"in": d.get("input_tokens", 0), "cache_read": d.get("cache_read_tokens", 0),
+                                       "out": d.get("output_tokens", 0)}
+    for c in calls.values():
+        for k, v in c.items():
+            total[k] += int(v or 0)
+    return total
+
+
 def main():
     hook = json.load(sys.stdin)
     if "conversationId" in hook:  # agy: camelCase fields, Stop after every turn, no event name
@@ -147,7 +190,9 @@ def main():
     url, token = config()
     body = {"session_id": sid, "cwd": hook.get("cwd") or os.getcwd(), "reason": hook.get("reason")
             or hook.get("hook_event_name", ""), "prompts": prompts[-8:], "files": list(dict.fromkeys(files))[-20:],
-            "summary": summary}  # the latest prompts and files: they belong with the closing summary
+            "summary": summary, "usage": usage(lines[:done], lines[done:]),
+            "agent": "agy" if hook.get("reason") == "agy" else "codex" if str(hook.get("reason", "")).startswith("codex") else "claude"}
+    # the latest prompts and files: they belong with the closing summary
     req = urllib.request.Request(f"{url}/sessions", data=json.dumps(body).encode(), method="POST",
                                  headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
     # Codex gives SessionEnd hooks at most 3 seconds, Python start-up included
