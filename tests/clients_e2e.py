@@ -375,19 +375,8 @@ def agents(tok: str, home: Path, project: Path, garden: Path):
                         check(json.loads(out) == {} or "injectSteps" in json.loads(out), f"{name} via {label}: hints prints agy JSON", out[:300])
                     except ValueError:
                         check(False, f"{name} via {label}: hints prints valid JSON", out[:300] + err[-300:])
-    # A doc moved into an archive folder at session end: the hint waits for the next session start, once
-    sync, parked = [sys.executable, str(REPO / "plugin" / "hooks" / "docs-sync.py")], home / ".knowledge" / "pending-start.txt"
-    plan = project / "docs" / "plan-e2e.md"
-    plan.write_text("# Plan\n\nstill true: the taxi speed is 20 kt\n", encoding="utf-8")
-    start = json.dumps({"hook_event_name": "SessionStart", "cwd": str(project)})
-    run(sync, start, env, cwd=str(project))
-    (project / "docs" / "old").mkdir(exist_ok=True)
-    plan.rename(project / "docs" / "old" / "plan-e2e.md")
-    code, out, err = run(sync, json.dumps({"hook_event_name": "SessionEnd", "cwd": str(project)}), env, cwd=str(project))
-    check(code == 0 and parked.exists() and "still true" in parked.read_text(encoding="utf-8"), "docs-sync: session end parks the archive hint", out + err)
-    code, out, err = run(sync, start, env, cwd=str(project))
-    check("plan-e2e.md" in out and not parked.exists(), "docs-sync: the next session start says it once", out + err)
     new_task(agent, env, project, tok, home)
+    resumed(home, project, garden)
     wake_e2e(tok, home.parent / "Wake Usér", project)
     st, body = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_write", "arguments":
                     {"path": "garden-memory/leak.md", "content": "---\nname: l\ndescription: d\nmetadata:\n  type: project\n---\n## Stand\nSup3rSecret99\n## Keuzes\n"}}},
@@ -395,6 +384,35 @@ def agents(tok: str, home: Path, project: Path, garden: Path):
     check("known secret" in body, "a guest (no local hashes): the server refuses a known secret", body[:300])
     code, out, err = run([sys.executable, str(agent), "install", "codex"], "", user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN="wrong"))
     check(code != 0 and "401" in (out + err), "install with a wrong token stops with a clear 401 message", out + err)
+
+
+def resumed(home: Path, project: Path, garden: Path):
+    """A resumed session (agy --continue) runs no start hook: the per-turn hook alone must bring the server's orders.
+    Each agent on its own device token, never synced: its first turn starts the full docs sync in the background, the
+    server sees the move into an archive folder, and the next turn tells the archive notice to one session only."""
+    hooks = CLIENT / "plugin" / "hooks" / "agent_hooks.py"
+    admin = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "anthony", "X-Knowledge-UI": "1"}
+    for agent, cmd in (("claude", ["tasks", "claude"]), ("codex", ["tasks", "codex"]), ("agy", ["hints"])):
+        st, body = http("POST", "/ui/api/admin/token", {"name": f"resume-{agent}", "write": True, "roots": ["garden", "garden-memory"]}, admin)
+        env = user_env(home / f"resume {agent}", KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=json.loads(body)["token"])
+        doc = project / "docs" / f"resume-{agent}.md"
+        doc.write_text("still true: pushback needs a clearance\n", encoding="utf-8")
+        http("POST", "/sync", {"files": {f"docs/{doc.name}": doc.read_text(encoding="utf-8")}},
+             {"Authorization": f"Bearer {env['KNOWLEDGE_TOKEN']}"})
+        (project / "docs" / "old").mkdir(exist_ok=True)
+        doc.rename(project / "docs" / "old" / doc.name)
+        turn = lambda sid: run([sys.executable, str(hooks), *cmd], json.dumps(
+            {"hook_event_name": "UserPromptSubmit", "session_id": sid, "conversationId": sid, "cwd": str(project),
+             "workspacePaths": [str(project)], "prompt": "go on"}), env, cwd=str(project))
+        code, out, err = turn(f"{agent}-r1")
+        check(code == 0 and wait_for(lambda: (garden / "docs" / "docs" / "old" / doc.name).exists(), 30),
+              f"{agent} resumed: a turn runs the full docs sync the server asked for", out + err)
+        code, out, err = turn(f"{agent}-r2")
+        check(code == 0 and "went into an archive folder" in out and doc.name in out,
+              f"{agent} resumed: the next turn tells the archive notice", out[-400:] + err[-300:])
+        check("need a topic" in out, f"{agent} resumed: what the background sync printed is said too", out[-400:])
+        code, out, err = turn(f"{agent}-r3")
+        check("went into an archive folder" not in out, f"{agent} resumed: another session of the device is not told too", out[-300:])
 
 
 def new_task(agent: Path, env: dict, project: Path, tok: str, home: Path):

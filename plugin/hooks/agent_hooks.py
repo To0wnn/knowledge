@@ -127,17 +127,31 @@ def new_tasks(agent: str, tok: str, hook: dict, now=None, wake: bool = False, de
         return ""
     cwd = hook.get("cwd") or (hook.get("workspacePaths") or [os.getcwd()])[0]
     # session and wake let the admin page show which sessions use a token and which can be woken
-    query = urllib.parse.urlencode({**project_query(cwd), "agent": agent, "session": str(sid)[:80], "wake": int(wake)})
+    version = ".".join(map(str, self_update.own()))
+    query = urllib.parse.urlencode({**project_query(cwd), "agent": agent, "session": str(sid)[:80], "wake": int(wake),
+                                    "v": 2, "claim": int(deliver is None), **({"plugin": version} if version else {})})
     req = urllib.request.Request(f"{URL}/tasks?{query}", headers={"Authorization": f"Bearer {tok}"})
     try:
         with urllib.request.urlopen(req, timeout=4) as r:
-            lines = [ln for ln in r.read().decode("utf-8", "replace").splitlines() if ln.strip()]
-        ids = {m.group(1).strip(): ln for ln in lines if (m := TASK_ID.search(ln))}
+            body = r.read().decode("utf-8", "replace")
+        try:
+            beat = json.loads(body)
+        except ValueError:  # a server from before v2 (or rolled back): its answer is the task lines
+            beat = {"tasks": [ln for ln in body.splitlines() if ln.strip()]}
+        ids = {m.group(1).strip(): ln for ln in beat.get("tasks", []) if (m := TASK_ID.search(ln))}
     except Exception:  # the next session start says so loudly; a prompt is no place to nag
-        ids = None  # still throttled: away from home every prompt would wait for the timeout
+        beat, ids = {}, None  # still throttled: away from home every prompt would wait for the timeout
     known = (seen or {}).get("ids")
     fresh = [] if ids is None or known is None else [ln for i, ln in ids.items() if i not in known]
     text = task_text(fresh, deliver is not None) if fresh else ""
+    # What the server wants this session to hear or do: said even on the first ask, since a resumed session (agy
+    # --continue) never ran its start hooks; a waking agent only passes tasks on.
+    told = (seen or {}).get("notices", [])
+    notices = [] if deliver is not None else [n for n in beat.get("notices", []) if n.get("id") not in told]
+    said = "\n\n".join([n["text"] for n in notices] + ([take_background()] if deliver is None else []))
+    text = "\n\n".join(t for t in (text, said) if t.strip())
+    if deliver is None and beat.get("sync"):
+        start_hook("docs-sync.py", tok, json.dumps({"hook_event_name": "SessionStart", "cwd": cwd}))
     if deliver is not None and (ids is None or (text and not deliver(text))):
         return ""  # not delivered: the next prompt or wake says it
     try:
@@ -145,9 +159,10 @@ def new_tasks(agent: str, tok: str, hook: dict, now=None, wake: bool = False, de
         for old in seen_dir.glob("*.json"):  # sessions end without telling: forget them after a week
             if now - old.stat().st_mtime > 7 * 86400:
                 old.unlink()
-        seen_file.write_text(json.dumps({"at": now, "ids": known if ids is None else sorted(ids)}), encoding="utf-8")
-    except OSError:
-        return ""  # without a memory of what was said, it would say it again every prompt
+        seen_file.write_text(json.dumps({"at": now, "ids": known if ids is None else sorted(ids),
+                                         "notices": (told + [n["id"] for n in notices])[-50:]}), encoding="utf-8")
+    except OSError:  # without a memory of what was said, the tasks would come again every prompt; the server's
+        return said.strip()  # notices are taken already, so they are said anyway
     return text
 
 
@@ -383,6 +398,35 @@ def run_hook(script: str, tok: str, stdin: str) -> str:
                           text=True, encoding="utf-8", errors="replace").stdout
 
 
+BACKGROUND = Path.home() / ".knowledge" / "background.txt"  # what a background hook printed, said at the next turn
+
+
+def start_hook(script: str, tok: str, stdin: str):
+    """run_hook without waiting: a full docs mirror can take seconds, a prompt should not. What it prints (a failure,
+    refused files, docs without a topic) is said at the next turn (take_background), so it never fails quietly."""
+    env = {**os.environ, "KNOWLEDGE_URL": URL, **({"KNOWLEDGE_TOKEN": tok} if tok else {})}
+    kw = {"creationflags": 0x00000008 | 0x00000200} if os.name == "nt" else {"start_new_session": True}  # as memory_mirror
+    try:
+        BACKGROUND.parent.mkdir(parents=True, exist_ok=True)
+        with BACKGROUND.open("ab") as out:
+            p = subprocess.Popen([sys.executable, "-X", "utf8", str(HOOKS / script)], stdin=subprocess.PIPE, env=env,
+                                 stdout=out, stderr=subprocess.STDOUT, **kw)
+        p.stdin.write(stdin.encode("utf-8"))
+        p.stdin.close()
+    except OSError as e:
+        print(f"knowledge: {script} not started: {e}", file=sys.stderr)
+
+
+def take_background() -> str:
+    try:
+        text = BACKGROUND.read_text(encoding="utf-8", errors="replace").strip()
+        if text:  # an empty file may still be written to: leave it
+            BACKGROUND.unlink()
+        return text
+    except OSError:
+        return ""
+
+
 def context(agent: str, tok: str):
     stdin = sys.stdin.read()
     hook = json.loads(stdin or "{}")
@@ -444,6 +488,10 @@ def hints(tok: str):
         conv = hook.get("conversationId") or ""
         registered = bool(conv) and agy_registered(conv)
         news = new_tasks("agy", tok, hook, wake=registered)
+    except Exception as e:  # never cost agy its pending hint or its JSON
+        hook, conv, registered, news = {}, "", False, ""
+        print(f"knowledge task check skipped: {e}", file=sys.stderr)
+    try:  # apart: a failure here must not cost the notices the server already handed to this session
         # "registered" once it was; a resumed agy listens on a new port and is then asked again
         asked = AGENTS_DIR / f"agy-asked-{short(conv)}"
         state = asked.read_text(encoding="utf-8") if asked.exists() else None
@@ -454,9 +502,8 @@ def hints(tok: str):
             private_dir()
             asked.write_text("asked", encoding="utf-8")
             news = "\n\n".join(t for t in (news, register_notice(again=state == "registered")) if t)
-    except Exception as e:  # never cost agy its pending hint or its JSON
-        news = ""
-        print(f"knowledge task check skipped: {e}", file=sys.stderr)
+    except Exception as e:
+        print(f"knowledge register check skipped: {e}", file=sys.stderr)
     try:
         text = pending.read_text(encoding="utf-8")
         pending.unlink()

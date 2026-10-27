@@ -23,7 +23,6 @@ from pathlib import Path
 
 SKIP = {"venv", "node_modules", "__pycache__", "dist", "build", "site-packages"}  # plus every dot-folder
 MAX_FILE, MAX_FILES = 300_000, 2000
-PARKED = Path.home() / ".knowledge" / "pending-start.txt"  # a hint from a session end, for the next session start
 PENDING = Path.home() / ".knowledge" / "pending-hints.txt"  # agy: shown by agent_hooks.py hints at the next turn
 PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update) File: (.+)$|^\*\*\* Move to: (.+)$", re.M)
 
@@ -70,25 +69,15 @@ def post(payload: dict) -> dict:
         return json.load(r)
 
 
-def archived_text(res: dict) -> str:
-    names = res.get("archived") or []
-    if not names:
-        return ""
-    more = f" and {res['more_archived']} more" if res.get("more_archived") else ""
-    return (f"Knowledge house rules: {len(names) + res.get('more_archived', 0)} doc(s) went into an archive folder "
-            f"({', '.join(names)}{more}), which searches skip. Check that what is still true in them (how it works, "
-            "decisions, open items) is in a doc or memo that stays; move it there if not.")
-
-
 def hint_text(res: dict) -> str:
     hints = res.get("hints") or []
     if not hints:
-        return archived_text(res)
+        return ""
     more = f" (and {res['more_hints']} more)" if res.get("more_hints") else ""
     return ("Knowledge house rules: these docs need a topic: in their frontmatter that is a heading of the project's "
             f"MEMORY.md, or the knowledge graph cannot place them: {'; '.join(hints)}{more}. Choose one of: "
             f"{' | '.join(res.get('headings') or [])}. Add at the very top '---' / 'topic: <heading>' / '---' "
-            "(or the topic line in frontmatter the doc already has)." + (" " + archived_text(res) if res.get("archived") else ""))
+            "(or the topic line in frontmatter the doc already has).")
 
 
 def main():
@@ -115,15 +104,11 @@ def main():
     if res.get("refused"):
         print(f"knowledge docs sync for {project}: refused {', '.join(res['refused'][:5])}",
               file=sys.stderr if event != "SessionStart" else sys.stdout)
-    if event == "SessionStart" and PARKED.exists():  # what the last session end could not say
-        print(PARKED.read_text(encoding="utf-8"))
-        PARKED.unlink(missing_ok=True)
     if not (text := hint_text(res)):
         return
-    if event == "SessionEnd":  # nobody reads it now: the next session start says it
-        PARKED.parent.mkdir(parents=True, exist_ok=True)
-        PARKED.write_text(archived_text(res) or text, encoding="utf-8")
-    elif event == "SessionStart":
+    if event == "SessionEnd":  # nobody reads it now; an archive move is told by the server at the next turn
+        return
+    if event == "SessionStart":
         print(text)  # becomes part of the startup context (Claude: SessionStart stdout; Codex/agy: agent_hooks context)
     elif "toolCall" in hook:  # agy: its PostToolUse output must be {}; the next PostInvocation shows it
         PENDING.parent.mkdir(parents=True, exist_ok=True)
@@ -136,7 +121,7 @@ if __name__ == "__main__":
     if "--selftest" in sys.argv:
         import tempfile
         assert hint_text({}) == "" and hint_text({"hints": []}) == ""
-        assert "2 doc(s) went into an archive folder (old/a.md and 1 more)" in hint_text({"archived": ["old/a.md"], "more_archived": 1})
+        assert hint_text({"archived": ["old/a.md"], "more_archived": 1}) == ""  # the server tells archive moves (/tasks notices)
         t = hint_text({"hints": ["a.md: no topic"], "more_hints": 2, "headings": ["Bot", "Reviews"]})
         assert "a.md: no topic" in t and "(and 2 more)" in t and "Bot | Reviews" in t, t
         with tempfile.TemporaryDirectory() as d:

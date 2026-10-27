@@ -13,6 +13,7 @@ Config: tokens.json with hashes only: {"<device>": {"sha256": "<hex of sha256(to
 Run:    uv run server.py   (systemd user unit knowledge-server.service)
 """
 import asyncio
+import contextlib
 import difflib
 import fnmatch
 import hashlib
@@ -25,6 +26,10 @@ from datetime import date, timedelta
 import secrets
 import tempfile
 import threading
+try:
+    import fcntl
+except ImportError:  # Windows (the e2e test server)
+    fcntl = None
 import time
 import urllib.parse
 import urllib.request
@@ -1973,6 +1978,70 @@ def sync_name(name: str) -> str | None:
     return "/".join(parts)
 
 
+NOTICES = AUDIT.parent / "notices.json"  # what a device's sessions must hear once, told at their next turn
+NOTICE_DAYS = 3  # a device not used this long misses it: by then a session start lint or review finds the same
+DOCS_SYNC_MINUTES = 30  # a turn asks for a full docs sync when the device's last one is older (admin page, Settings)
+_full_synced: dict[tuple[str, str], float] = {}  # (device, project) -> last full /sync; a restart asks each once more
+
+
+@contextlib.contextmanager
+def notices_locked():
+    """During a blue/green swap two servers share the file: read, change and write it under one lock (Linux; the
+    Windows test server runs alone). Copies, so a failed write leaves the cached list as it was on disk."""
+    with open(NOTICES.with_suffix(".lock"), "a") as f:
+        if fcntl:
+            fcntl.flock(f, fcntl.LOCK_EX)
+        yield [dict(n) for n in read_json(NOTICES, [])]
+
+
+def add_notice(dev: str, project: str, text: str):
+    now = time.time()
+    NOTICES.parent.mkdir(parents=True, exist_ok=True)
+    with notices_locked() as notes:
+        keep = [n for n in notes if now - n.get("at", 0) < NOTICE_DAYS * 86400]
+        mine = [n for n in keep if (n.get("device"), n.get("project")) == (dev, project)]
+        drop = {id(n) for n in mine[:-19]}  # each device and project its own 20: a guest cannot push out another's
+        keep = [n for n in keep if id(n) not in drop]
+        keep.append({"id": hashlib.sha256(f"{now}{text}".encode()).hexdigest()[:12], "device": dev, "project": project,
+                     "text": text, "at": now})
+        write_json(NOTICES, keep)
+
+
+NOTICE_LEASE = 3600  # seconds: a session that took a notice and never had another turn (closed at once) loses it
+
+
+def claim_notices(dev: str, project: str, by: str) -> list[dict]:
+    """First come, first served: the first session of this device that asks takes every open notice, so Codex and agy
+    never both act on it. Its next turn confirms it was alive to act; without one, the notice is offered again after
+    NOTICE_LEASE. No await in here: the read and the write cannot interleave with another request."""
+    if not NOTICES.exists():
+        return []
+    with notices_locked() as notes:
+        return _claim(notes, dev, project, by)
+
+
+def _claim(notes: list, dev: str, project: str, by: str) -> list[dict]:
+    now, out, changed = time.time(), [], False
+    for n in notes:
+        if n.get("device") != dev or n.get("project") != project or now - n.get("at", 0) >= NOTICE_DAYS * 86400:
+            continue
+        if n.get("by") == by and not n.get("kept"):
+            n["kept"], changed = now, True  # its taker asked again: it had a turn to act on it
+        elif not n.get("by") or (not n.get("kept") and now - n.get("taken", 0) > NOTICE_LEASE):
+            n.update(by=by, taken=now)
+            out.append({"id": n["id"], "text": n["text"]})
+    if out or changed:
+        write_json(NOTICES, notes)
+    return out
+
+
+def archived_notice(names: list[str]) -> str:
+    shown = ", ".join(names[:5]) + (f" and {len(names) - 5} more" if len(names) > 5 else "")
+    return (f"Knowledge house rules: {len(names)} doc(s) went into an archive folder ({shown}), which searches skip. "
+            "Check that what is still true in them (how it works, decisions, open items) is in a doc or memo that "
+            "stays; move it there if not. Only this session was told (other agents on this device were not).")
+
+
 @server.custom_route("/sync", methods=["POST"])
 async def sync_route(request: Request):
     """Mirror of the Markdown in a guest's project folder (plugin option sync_docs): {"files": {"a/b.md": "text"},
@@ -2047,8 +2116,11 @@ async def sync_route(request: Request):
     if b.get("full"):  # a full listing also brings an old archive to a new device: only a move counts (original gone)
         moved = {r.rsplit("/", 1)[-1] for r in gone} if keep else set()
         archived = [a for a in archived if a.rsplit("/", 1)[-1] in moved]
-    if archived:  # moved out of search: the plugin asks the agent to keep what is still true (house rule 2)
-        out.update(archived=archived[:5], more_archived=max(0, len(archived) - 5))
+    if b.get("full"):
+        _full_synced[(dev.get("name", ""), project)] = time.time()
+    if archived:  # moved out of search: every session of this device hears it at its next turn (house rule 2)
+        out.update(archived=archived[:5], more_archived=max(0, len(archived) - 5))  # plugins up to 0.9.26 say it themselves
+        add_notice(dev.get("name", ""), project, archived_notice(archived))
     if hints:  # docs the graph cannot place: the plugin tells the agent which headings to choose from
         out.update(hints=hints[:20], more_hints=max(0, len(hints) - 20), headings=headings)
     return JSONResponse(out)
@@ -2102,8 +2174,24 @@ async def tasks_route(request: Request):
     task handed over while a session runs reaches it without a new session."""
     project = session_project(request)[0]
     mem, q = PROJECTS[project][1], request.query_params
-    mark_client(device.get().get("name", ""), q.get("agent", ""), q.get("session", ""), project, q.get("wake") == "1")
-    return PlainTextResponse("\n".join(task_items(task_memos(mem), mem, AGENT_OWNERS.get(request.query_params.get("agent", ""), ()))[0]))
+    dev = device.get()
+    mark_client(dev.get("name", ""), q.get("agent", ""), q.get("session", ""), project, q.get("wake") == "1")
+    items = task_items(task_memos(mem), mem, AGENT_OWNERS.get(q.get("agent", ""), ()))[0]
+    if q.get("v") != "2":  # plugins up to 0.9.26: the task lines only
+        return PlainTextResponse("\n".join(items))
+    # v2: the server steers every turn, also of a resumed session that never ran its start hooks
+    # claim=0: another agent asks on this session's behalf (a wake) and passes on tasks only
+    claim, key = q.get("claim") != "0", (dev.get("name", ""), project)
+    behind = await asyncio.to_thread(plugin_notice, q.get("agent", ""), v) if (v := q.get("plugin", "")) else ""
+    # nothing awaited from here on: what is handed out below reaches the client in this answer
+    notices = claim_notices(*key, f"{q.get('agent', '')} {q.get('session', '')}"[:100]) if claim else []
+    if behind:  # each agent its own plugin, so not claimed
+        notices.append({"id": "plugin-" + (plugin_latest() or ("", 0))[0], "text": behind})
+    sync = claim and project not in BUILTIN_PROJECTS and bool(dev.get("write")) \
+        and time.time() - _full_synced.get(key, 0) > DOCS_SYNC_MINUTES * 60
+    if sync:  # handed to this session only; if its sync fails, the next turn after DOCS_SYNC_MINUTES asks again
+        _full_synced[key] = time.time()
+    return JSONResponse({"tasks": items, "notices": notices, "sync": sync})
 
 
 @server.custom_route("/context/{part}", methods=["GET"])
@@ -2303,6 +2391,7 @@ SETTINGS = {  # key: (type, min, max, label)
     "user_max_projects": (int, 0, 50, "People (not admins): projects each may create themselves"),
     "user_max_tokens": (int, 0, 50, "People (not admins): device tokens each may hold"),
     "project_max_mb": (int, 1, 1000, "Projects made in the UI: maximum size in MB, then writes are refused"),
+    "docs_sync_minutes": (int, 5, 1440, "Guest docs: a session turn asks for a full mirror sync when the last one is older (minutes)"),
 }
 
 
@@ -2310,7 +2399,8 @@ def current_settings() -> dict:
     return {"similar_hint": SIMILAR_HINT, "history_keep": HISTORY_KEEP, "stale_unchecked_days": kb_lint.STALE_UNCHECKED_DAYS,
             "review_after_days": kb_lint.REVIEW_AFTER_DAYS,
             "big_memo": kb_lint.BIG_MEMO, "rescan_seconds": RESCAN_SECONDS, "user_max_projects": USER_MAX_PROJECTS,
-            "user_max_tokens": USER_MAX_TOKENS, "project_max_mb": PROJECT_MAX_MB, "extra_admins": sorted(ADMINS - CONFIG_ADMINS)}
+            "user_max_tokens": USER_MAX_TOKENS, "project_max_mb": PROJECT_MAX_MB,
+            "docs_sync_minutes": DOCS_SYNC_MINUTES, "extra_admins": sorted(ADMINS - CONFIG_ADMINS)}
 
 
 def check_settings(values: dict) -> dict:
@@ -2337,7 +2427,8 @@ def check_settings(values: dict) -> dict:
 
 
 def apply_settings(values: dict):
-    global SIMILAR_HINT, HISTORY_KEEP, RESCAN_SECONDS, USER_MAX_PROJECTS, USER_MAX_TOKENS, PROJECT_MAX_MB
+    global SIMILAR_HINT, HISTORY_KEEP, RESCAN_SECONDS, USER_MAX_PROJECTS, USER_MAX_TOKENS, PROJECT_MAX_MB, DOCS_SYNC_MINUTES
+    DOCS_SYNC_MINUTES = values.get("docs_sync_minutes", DOCS_SYNC_MINUTES)
     USER_MAX_PROJECTS = values.get("user_max_projects", USER_MAX_PROJECTS)
     USER_MAX_TOKENS = values.get("user_max_tokens", USER_MAX_TOKENS)
     PROJECT_MAX_MB = values.get("project_max_mb", PROJECT_MAX_MB)

@@ -14,6 +14,10 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   project it works in, plus open items whose date has passed and hand-over tasks between agents.
 - **Hand-overs during a session:** before a prompt (at most every two minutes) Claude Code, Codex and agy ask
   `/tasks` for the tasks handed to them; a task added after the session started is told to the agent once.
+  The same per-turn call lets the server steer every session, also a resumed one that ran no start hook: notices
+  (such as docs moved into an archive folder) go to the first session of the device that asks, offered again after an
+  hour when that session had no further turn, and one session is asked to run a full docs mirror sync in the
+  background when the device's last one is older than `docs_sync_minutes` (admin page, Settings).
 - **Waking another agent (same machine):** after a `knowledge_edit`/`knowledge_write`/`knowledge_new_memo`, the
   plugin wakes the newest idle session per agent and project on that machine that has a new task: Codex through
   `codex queue --thread`, agy through its local language server (the agy session registers once by running

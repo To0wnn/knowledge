@@ -472,6 +472,12 @@ def main():
         t = http("GET", "/tasks?project=x&agent=codex", token=fr)[1]
         assert t.splitlines()[0].endswith("[Codex, CX-2]: VOORRANG mow") and "VS-1" not in t and "LOG-1" not in t, t
         assert http("GET", "/tasks?project=x&agent=nobody", token=fr)[1] == ""
+        # v2 (plugin 0.9.27): JSON the server steers each turn with; a guest that never full-synced is asked to.
+        beat = json.loads(http("GET", "/tasks?project=x&agent=codex&v=2", token=fr)[1])
+        assert json.loads(http("GET", "/tasks?project=x&agent=codex&v=2&claim=0", token=fr)[1])["sync"] is False  # a wake takes nothing
+        assert beat["tasks"][0].endswith("[Codex, CX-2]: VOORRANG mow") and beat["sync"] is True and beat["notices"] == [], beat
+        assert json.loads(http("GET", "/tasks?project=x&agent=agy&v=2", token=fr)[1])["sync"] is False  # one session syncs
+        assert json.loads(http("GET", "/tasks?agent=codex&v=2")[1])["sync"] is False  # the admin's own projects: no mirror
         # The plugin version: recorded per token and agent, a device behind the newest hears it at session start.
         parts = lambda q: "".join(http("GET", f"/context/{n}?project=x&{q}", token=fr)[1] for n in range(1, 6))
         assert "runs 0.9.10 for codex, the newest is 0.9.16" in parts("agent=codex&plugin=0.9.10"), parts("agent=codex&plugin=0.9.10")[-600:]
@@ -533,6 +539,21 @@ def main():
         http("POST", "/sync", {"files": {"docs/plan.md": "---\ntopic: General\n---\nplan\n"}}, token=fr)
         res = json.loads(http("POST", "/sync", {"files": {"README.md": "# Copilot\n", "old/plan.md": "plan\n"}, "full": True}, token=fr)[1])
         assert res.get("archived") == ["old/plan.md"] and res["deleted"] == 1, res
+        beat = json.loads(http("GET", "/tasks?project=x&agent=agy&v=2", token=fr)[1])  # any agent of this device, next turn
+        assert beat["sync"] is False and len(beat["notices"]) == 1 and "1 doc(s) went into an archive folder (old/plan.md)" \
+            in beat["notices"][0]["text"], beat
+        beat = json.loads(http("GET", "/tasks?project=x&agent=codex&session=c2&v=2", token=fr)[1])
+        assert beat["notices"] == [] and beat["sync"] is False, beat  # agy took it first: Codex does not do it too
+        notes = json.loads((tmp / "notices.json").read_text())  # lease: agy closed without another turn, an hour ago
+        notes[-1]["taken"] -= 3700
+        (tmp / "notices.json").write_text(json.dumps(notes))
+        beat = json.loads(http("GET", "/tasks?project=x&agent=codex&session=c2&v=2", token=fr)[1])
+        assert len(beat["notices"]) == 1, beat  # offered again, to the session that asks now
+        http("GET", "/tasks?project=x&agent=codex&session=c2&v=2", token=fr)  # its next turn keeps it
+        notes = json.loads((tmp / "notices.json").read_text())
+        notes[-1]["taken"] -= 3700
+        (tmp / "notices.json").write_text(json.dumps(notes))
+        assert json.loads(http("GET", "/tasks?project=x&agent=agy&v=2", token=fr)[1])["notices"] == []  # kept: not again
         res = json.loads(http("POST", "/sync", {"files": {"archief/notes.md": "x\n"}}, token=fr)[1])
         assert res.get("archived") == ["archief/notes.md"], res
         assert "carry over what is still true" in call("knowledge_write", {"path": "garden-memory/archief/project_old_archief.md", "content": "old\n"}, token=fr)[1]
