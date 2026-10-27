@@ -6,6 +6,13 @@ device the same live docs and memory, over MCP, plus a web UI with a graph of ho
 Notes are plain Markdown files on disk. The server indexes them, serves them to agents with a per-device token, and
 checks them against a few house rules, so a growing pile of agent memory stays findable and tidy.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="demo/map-dark.png">
+  <img alt="The web UI map: notes grouped into topics, links between them" src="demo/map-light.png">
+</picture>
+
+<sub>Made-up demo notes from <code>demo/</code>; regenerate with <code>uv run --project server --with playwright python demo/screenshot.py</code>.</sub>
+
 ## What it does
 
 - **MCP tools for agents:** search (regex and semantic), read, list, related notes, write and edit (with conflict
