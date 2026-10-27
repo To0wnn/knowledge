@@ -100,10 +100,17 @@ and run `./deploy.sh`, which runs the tests, copies `server/` to the Docker host
 The server's help page (`/ui/help`) has the exact steps per client and OS. In short:
 
 ```sh
-git clone https://github.com/To0wnn/knowledge ~/knowledge
-python3 ~/knowledge/clients/knowledge-agent.py install   # finds Claude Code, Codex and agy, asks y/n for each (Windows: py)
-python3 ~/knowledge/clients/knowledge-agent.py update    # later: update the plugin in every agent that has it
+curl -fsSL https://raw.githubusercontent.com/To0wnn/knowledge/main/install.sh | sh             # Linux, macOS
+curl -fsSL https://raw.githubusercontent.com/To0wnn/knowledge/main/install.sh | sh -s update   # later: update every agent
 ```
+
+```powershell
+irm https://raw.githubusercontent.com/To0wnn/knowledge/main/install.ps1 | iex                                  # Windows
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/To0wnn/knowledge/main/install.ps1))) update   # later
+```
+
+Both need git and Python 3. They keep the scripts in `~/knowledge` (a git checkout, also brought back after a rewritten
+history) and run `clients/knowledge-agent.py install`, which finds Claude Code, Codex and agy and asks y/n for each.
 
 `install claude` (or `codex`, `agy`) sets up one agent without asking which ones. `install` asks for your server's
 address (or set `KNOWLEDGE_URL`, e.g. `KNOWLEDGE_URL=http://localhost:8766`, for one run); the installer has no default, so a

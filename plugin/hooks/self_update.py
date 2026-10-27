@@ -46,11 +46,12 @@ def sync(repo: Path) -> None:
     def git(*args):
         return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, encoding="utf-8",
                               errors="replace", timeout=300, stdin=subprocess.DEVNULL)
+    if (repo / ".git" / "MERGE_HEAD").exists():  # a manual pull that stopped with conflicts: undo it first
+        git("merge", "--abort")
     if git("pull", "--ff-only", "-q").returncode == 0:
         return
     if git("status", "--porcelain", "--untracked-files=no").stdout.strip():
-        raise RuntimeError(f"{repo} has local changes or an unfinished merge; update it by hand: "
-                           f"git -C {repo} merge --abort; git -C {repo} reset --hard origin/main")
+        raise RuntimeError(f"{repo} has local changes: keep them elsewhere, then: git -C {repo} reset --hard origin/main")
     for step in (("fetch", "-q"), ("branch", "-f", "knowledge-before-update", "HEAD"), ("reset", "-q", "--hard", "@{u}")):
         p = git(*step)
         if p.returncode:

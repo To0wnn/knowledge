@@ -1004,6 +1004,35 @@ def checkout_update(tmp: Path):
     check(code != 0 and "local changes" in out + err and changed.read_text(encoding="utf-8").endswith("# mine\n"),
           "update: refuses a rewritten history when a tracked file is changed", (out + err)[-600:])
 
+    # The one-line setup (install.sh through a pipe, install.ps1 as a script block): first a clone, then a checkout
+    # where someone's git pull stopped with conflicts after a rewrite (25 Oct 2026 on a Windows client).
+    fresh = tmp / "one line"
+    shell = shutil.which("powershell") if WIN else shutil.which("sh")
+    def one_line(cmd):
+        if WIN:
+            argv = [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+                    f"& ([scriptblock]::Create((Get-Content -Raw '{REPO / 'install.ps1'}'))) {cmd}"]
+        else:
+            argv = [shell, "-c", f"sh -s {cmd} < '{REPO / 'install.sh'}'"]
+        return run(argv, env={**env, "KNOWLEDGE_REPO": str(origin), "KNOWLEDGE_DIR": str(fresh)}, timeout=180)
+    code, out, err = one_line("update")
+    check(git(fresh, "rev-parse", "HEAD")[1].strip() == git(dev, "rev-parse", "HEAD")[1].strip() and "up to date with GitHub" in out
+          and "No stored token" in out + err, "one-line setup: clones the scripts, then runs the setup", (out + err)[-600:])
+    (dev / "x.txt").write_text("1\n", encoding="utf-8")
+    git(dev, "add", "x.txt")
+    git(dev, "commit", "-qm", "two")
+    git(dev, "push", "-q", str(origin), "HEAD:main")
+    git(fresh, "pull", "-q")
+    (dev / "x.txt").write_text("2\n", encoding="utf-8")
+    git(dev, "add", "x.txt")
+    new = rewrite("two, rewritten")
+    git(fresh, "pull", "-q", "--no-rebase")
+    stuck = (fresh / ".git" / "MERGE_HEAD").exists()
+    code, out, err = one_line("update")
+    check(stuck and git(fresh, "rev-parse", "HEAD")[1].strip() == new and not (fresh / ".git" / "MERGE_HEAD").exists()
+          and (fresh / "x.txt").read_text(encoding="utf-8") == "2\n",
+          "one-line setup: repairs a pull that stopped with conflicts after a rewrite", f"stuck={stuck} " + (out + err)[-600:])
+
 
 def main():
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # this report only; the clients run as a stock Windows has them
