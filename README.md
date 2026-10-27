@@ -60,17 +60,34 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   small stdio relay, so the token never sits in a config file. `clients/knowledge-agent.py` sets everything up.
 - **Tokens:** one long random token per device, kept in the OS keyring (Linux Secret Service, macOS Keychain, Windows
   Credential Manager). Tokens can be read-only, masked, limited to one project, or allowed to sync shared skills.
-- **Web sign-in:** the UI expects a reverse proxy with forward auth (for example Authentik) that sets the user header.
+- **Web sign-in:** a password for one admin (`KNOWLEDGE_UI_PASSWORD`, a signed cookie for 30 days; at most five wrong
+  tries a minute), or, for several people, a reverse proxy with forward auth (for example Authentik) that sets the user
+  header and a shared secret (`KNOWLEDGE_PROXY_SECRET`).
 
 ## Run the server
 
-1. Copy `local.env.example` to `local.env` and fill in your hosts.
-2. Point the volumes in `server/compose.yaml` at your docs and memory folders (local paths or NFS).
-3. `./deploy.sh` runs the self-checks and the server tests, copies `server/` to the Docker host, builds and starts it,
-   and waits for `/health`.
-4. Create device tokens on the admin page (`/ui/admin`).
+With Docker, all notes in `./data` next to `compose.yaml`:
 
-Requirements: Docker, about 2 GB RAM (the embedding model is 1.2 GB), and a reverse proxy for HTTPS and sign-in.
+```sh
+git clone https://github.com/To0wnn/knowledge && cd knowledge
+mkdir data && echo "KNOWLEDGE_UI_PASSWORD=<a long password>" > .env
+docker compose up -d
+```
+
+Open `http://localhost:8766/ui`, sign in with the password and create a device token on the admin page. Notes live
+in `data/memory` (memos with their `MEMORY.md` index), `data/docs` and `data/shared` (`CLAUDE.md`, house rules and
+skills shared with every agent); more projects can be made on the admin page. Reached from other machines: add their
+`host:port` to `KNOWLEDGE_ALLOWED_HOSTS` in `.env`, and put a reverse proxy with HTTPS in front before it faces the
+internet. The image (`ghcr.io/to0wnn/knowledge`, about 1.5 GB with the embedding model) is built for every release;
+it is also listed in the MCP registry as `io.github.To0wnn/knowledge`.
+
+Requirements: Docker and about 2 GB RAM (the embedding model is 1.2 GB; it ships in the image, nothing is fetched at
+runtime).
+
+The original installation runs differently (`server/compose.yaml`: notes shared over NFS from the machine the agents
+run on, a zero-downtime switch on deploy): copy `local.env.example` to `local.env`, point the volumes at your folders
+and run `./deploy.sh`, which runs the tests, copies `server/` to the Docker host, builds, switches and waits for
+`/health`.
 
 ## Connect a client
 
@@ -82,7 +99,9 @@ python3 ~/knowledge/clients/knowledge-agent.py install   # finds Claude Code, Co
 python3 ~/knowledge/clients/knowledge-agent.py update    # later: update the plugin in every agent that has it
 ```
 
-`install claude` (or `codex`, `agy`) sets up one agent without asking.
+`install claude` (or `codex`, `agy`) sets up one agent without asking. For your own server: set `KNOWLEDGE_URL`
+(for example `http://localhost:8766`) in your shell profile before the install (Codex and agy read it), and in
+Claude Code set the plugin's "Knowledge server URL" option under `/plugin`.
 
 It asks for the token once, checks it with the server, stores it in the keyring and installs the plugin. The plugin
 keeps itself up to date in every agent, and says so once at session start: in Claude Code it turns on the marketplace's

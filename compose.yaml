@@ -1,0 +1,36 @@
+# The knowledge server on one machine, with all notes in ./data (no NFS, no reverse proxy needed).
+#   mkdir data && echo "KNOWLEDGE_UI_PASSWORD=<a long password>" > .env && docker compose up -d
+# Then open http://localhost:8766/ui, sign in with the password and create a device token on the admin page.
+# This installation's own setup (NFS from a VM, zero-downtime switch) is server/compose.yaml.
+services:
+  knowledge:
+    image: ghcr.io/to0wnn/knowledge:latest
+    container_name: knowledge
+    restart: unless-stopped
+    user: "${KNOWLEDGE_UID:-1000}:${KNOWLEDGE_GID:-1000}"  # the owner of ./data
+    ports: ["${KNOWLEDGE_PORT:-8766}:8766"]
+    mem_limit: 3g  # the embedding model uses ~1 GB
+    environment:
+      KNOWLEDGE_UI_PASSWORD: ${KNOWLEDGE_UI_PASSWORD:?set KNOWLEDGE_UI_PASSWORD in .env}
+      KNOWLEDGE_ALLOWED_HOSTS: ${KNOWLEDGE_ALLOWED_HOSTS:-localhost:8766,127.0.0.1:8766}  # host:port the clients use
+      KNOWLEDGE_MEMORY: /data/memory  # memos of the first project, with their MEMORY.md index
+      KNOWLEDGE_HOMELAB: /data/docs  # its docs
+      KNOWLEDGE_CLAUDE: /data/shared  # CLAUDE.md, house_rules.md and skills/ shared with every agent
+      # The other two built-in projects of the original installation stay empty here (no tab); make your own
+      # projects on the admin page.
+      KNOWLEDGE_ANPITEK: /data/unused/a
+      KNOWLEDGE_ANPITEK_MEMORY: /data/unused/b
+      KNOWLEDGE_TRADE: /data/unused/c
+      KNOWLEDGE_TRADE_MEMORY: /data/unused/d
+      KNOWLEDGE_PROJECTS_DIR: /data/projects
+      KNOWLEDGE_ADMIN_DIR: /data/admin
+      KNOWLEDGE_TOKENS: /data/admin/tokens.json
+      KNOWLEDGE_SECRETS: /data/admin/secrets.json
+      KNOWLEDGE_AUDIT: /data/state/audit.log
+      KNOWLEDGE_VECTORS: /data/state/vectors.npz
+      # Optional: sign in through a reverse proxy with forward auth instead (see README, Web sign-in).
+      KNOWLEDGE_PROXY_SECRET: ${KNOWLEDGE_PROXY_SECRET:-}
+      KNOWLEDGE_ADMINS: ${KNOWLEDGE_ADMINS:-}
+      KNOWLEDGE_PROXY_IPS: ${KNOWLEDGE_PROXY_IPS:-127.0.0.1}
+    volumes:
+      - ./data:/data

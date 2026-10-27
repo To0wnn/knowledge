@@ -19,5 +19,7 @@ COPY plugin_skills ./plugin_skills
 USER 1000:1000
 ENV HOME=/tmp PYTHONUNBUFFERED=1 HF_HUB_OFFLINE=1
 EXPOSE 8766
+# The MCP registry checks that this image belongs to the server.json name.
+LABEL io.modelcontextprotocol.server.name="io.github.To0wnn/knowledge"
 HEALTHCHECK --interval=60s --timeout=5s CMD python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8766/health',timeout=4)"
 CMD ["/app/.venv/bin/python", "server.py"]

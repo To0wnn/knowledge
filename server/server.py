@@ -91,7 +91,11 @@ PROJECTS_DIR = Path(os.environ.get("KNOWLEDGE_PROJECTS_DIR", HOME / ".local/shar
 # The web UI trusts the Authentik user header only when Traefik also sends this shared secret, because the
 # container port is reachable on the LAN without Traefik.
 PROXY_SECRET = os.environ.get("KNOWLEDGE_PROXY_SECRET", "")
-CONFIG_ADMINS = frozenset(u.strip() for u in os.environ.get("KNOWLEDGE_ADMINS", "").split(",") if u.strip())
+# Sign-in without a reverse proxy: one admin with a password (a small installation); a cookie keeps the session.
+UI_PASSWORD = os.environ.get("KNOWLEDGE_UI_PASSWORD", "")
+UI_USER = os.environ.get("KNOWLEDGE_UI_USER", "admin")
+CONFIG_ADMINS = frozenset([u.strip() for u in os.environ.get("KNOWLEDGE_ADMINS", "").split(",") if u.strip()]
+                          + ([UI_USER] if UI_PASSWORD else []))
 ADMINS = set(CONFIG_ADMINS)  # plus the extra admins of the admin page (settings.json); the config ones can't be removed
 SECRETS_FILE = Path(os.environ.get("KNOWLEDGE_SECRETS", HOME / ".config/knowledge-server/secrets.json"))
 AUDIT = Path(os.environ.get("KNOWLEDGE_AUDIT", HOME / ".local/state/knowledge-server/audit.log"))
@@ -1737,6 +1741,53 @@ def proxied_user(headers: dict) -> str:
     return headers.get(b"x-authentik-username", b"").decode().strip()
 
 
+SESSION_COOKIE, COOKIE_DAYS = "kn_session", 30
+_login_fails: list[float] = []  # times of recent wrong passwords, for every client together
+
+
+def session_key() -> bytes:
+    """Signs the session cookie: a random key kept in the admin dir (sessions survive a restart) plus the password,
+    so a new password signs everyone out."""
+    f = ADMIN_DIR / "session.key"
+    if not f.exists():
+        f.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as out:
+            out.write(secrets.token_hex(32))
+    return f.read_text().strip().encode() + hashlib.sha256(UI_PASSWORD.encode()).digest()
+
+
+def session_value(user: str, expires: int) -> str:
+    body = f"{user}.{expires}"
+    return f"{body}.{hmac.new(session_key(), body.encode(), hashlib.sha256).hexdigest()}"
+
+
+def cookie_user(headers: dict) -> str:
+    """The user of a valid session cookie, or ''. Only while a password is configured."""
+    if not UI_PASSWORD:
+        return ""
+    cookies = {k.strip(): v for k, _, v in (c.partition("=") for c in headers.get(b"cookie", b"").decode().split(";"))}
+    user, _, rest = cookies.get(SESSION_COOKIE, "").partition(".")
+    expires, _, _ = rest.partition(".")
+    if not (user == UI_USER and expires.isdigit() and int(expires) > time.time()):
+        return ""
+    return user if hmac.compare_digest(cookies[SESSION_COOKIE], session_value(user, int(expires))) else ""
+
+
+def login_allowed() -> bool:
+    """At most 5 wrong passwords a minute in total: guessing stays hopeless, a typo costs a few seconds."""
+    now = time.time()
+    _login_fails[:] = [t for t in _login_fails if now - t < 60]
+    return len(_login_fails) < 5
+
+
+LOGIN = """<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Knowledge</title><link rel="stylesheet" href="/ui/static/app.css"><body class="login"><main class="login-card">
+<h1>Knowledge</h1>{msg}<form method="post" action="/ui/login" class="admin-form">
+<label for="pw">Password</label> <input id="pw" name="password" type="password" autocomplete="current-password" required autofocus>
+<button type="submit">Sign in</button></form></main></body></html>"""
+
+
 MAX_BODY = 12 * 1024 * 1024  # ingest uploads go up to 10 MB (fetch.MAX_BYTES); everything else is far smaller
 
 NO_ACCESS = """<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -1794,11 +1845,41 @@ class BearerAuth:
         device.set(dev)
         return await self.app(scope, receive, send)
 
+    async def login(self, scope, receive, send, headers):
+        """POST /ui/login (a plain form, no script): the password gives a session cookie for UI_USER."""
+        body = b""
+        while True:
+            msg = await receive()
+            body += msg.get("body", b"")
+            if not msg.get("more_body"):
+                break
+        given = urllib.parse.parse_qs(body.decode(errors="replace")).get("password", [""])[0]
+        if not login_allowed():
+            return await HTMLResponse(LOGIN.format(msg="<p class='alert'>Too many wrong passwords: wait a minute.</p>"), 429)(scope, receive, send)
+        if not (UI_PASSWORD and hmac.compare_digest(given.encode(), UI_PASSWORD.encode())):
+            _login_fails.append(time.time())
+            await asyncio.sleep(1)
+            return await HTMLResponse(LOGIN.format(msg="<p class='alert'>Wrong password.</p>"), 401)(scope, receive, send)
+        audit("ui-login", UI_USER)
+        resp = RedirectResponse("/ui", status_code=303)
+        https = headers.get(b"x-forwarded-proto") == b"https" or scope.get("scheme") == "https"
+        resp.set_cookie(SESSION_COOKIE, session_value(UI_USER, int(time.time()) + COOKIE_DAYS * 86400),
+                        max_age=COOKIE_DAYS * 86400, path="/", httponly=True, samesite="strict", secure=https)
+        return await resp(scope, receive, send)
+
     async def ui(self, scope, receive, send, path, headers):
         api = path.startswith("/ui/api/")
-        user = proxied_user(headers)
+        if path == "/ui/logout":  # ends a password session; behind Authentik its own sign-out follows
+            resp = RedirectResponse("/outpost.goauthentik.io/sign_out" if proxied_user(headers) else "/ui", status_code=303)
+            resp.delete_cookie(SESSION_COOKIE, path="/")
+            return await resp(scope, receive, send)
+        if path == "/ui/login" and scope["method"] == "POST" and UI_PASSWORD:
+            return await self.login(scope, receive, send, headers)
+        user = proxied_user(headers) or cookie_user(headers)
+        if not user and UI_PASSWORD and not api:
+            return await HTMLResponse(LOGIN.format(msg=""), 401, headers={"Content-Security-Policy": CSP})(scope, receive, send)
         if not user:
-            msg = "Open the knowledge base via https://knowledge.to0wnn.com/ui (sign in with Authentik)."
+            msg = "Sign in through the reverse proxy in front of this server, or set KNOWLEDGE_UI_PASSWORD (see the README)."
             resp = JSONResponse({"error": msg}, status_code=401) if api else HTMLResponse(NO_ACCESS.format(msg=msg), 401)
             return await resp(scope, receive, send)
         if scope["method"] != "GET" and headers.get(b"x-knowledge-ui") != b"1":

@@ -4,3 +4,5 @@ __pycache__/
 tokens.json
 local.env
 server/.env
+/.env
+/data/

@@ -88,6 +88,7 @@ def main():
     (trade / "STATUS.md").write_text("# Status\nsee plan\n")  # a doc without topic: lint reports it
     (trade / "NOTES.md").write_text("---\ntopic: Bot\n---\nnotes\n")  # topic = a heading of trade-memory: fine
     (tmem / "plan.md").write_text("---\nname: plan\n---\nentry timing plan\n")
+    (tmem / "walrus.md").write_text("---\nname: walrus\n---\nwalrus feeding schedule\n")
     tokens = tmp / "tokens.json"
     h = lambda t: hashlib.sha256(t.encode()).hexdigest()
     tokens.write_text(json.dumps({"laptop": {"sha256": h("rw-token"), "write": True, "skills": True},
@@ -138,6 +139,7 @@ def main():
            "KNOWLEDGE_ANPITEK_MEMORY": str(tmp / "anpitek-memory"),
            "KNOWLEDGE_TOKENS": str(tokens), "KNOWLEDGE_PLUGIN_SKILLS": str(bundled), "KNOWLEDGE_ADMIN_DIR": str(tmp), "KNOWLEDGE_PROJECTS_DIR": str(tmp / "projects"),
            "KNOWLEDGE_PROXY_SECRET": "proxy-secret", "KNOWLEDGE_ADMINS": "alice", "KNOWLEDGE_AUDIT": str(tmp / "audit.log"), "KNOWLEDGE_PORT": str(PORT),
+           "KNOWLEDGE_UI_PASSWORD": "gategategate", "KNOWLEDGE_UI_USER": "pwadmin",
            "KNOWLEDGE_BIND": "127.0.0.1", "KNOWLEDGE_RESCAN": "3600",
            "KNOWLEDGE_GITHUB_API": ghurl, "KNOWLEDGE_GITHUB_RAW": ghurl + "/raw", "KNOWLEDGE_EXTERNAL_SLEEP": "3600", "KNOWLEDGE_INSTANCE": "blue", "KNOWLEDGE_PLUGIN_GRACE": "0",
            "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}"}
@@ -311,6 +313,25 @@ def main():
         assert raw("GET", "/ui", headers=user("alice", "wrong"))[0] == 401
         assert raw("GET", "/ui/api/graph", headers=user("alice", ""))[0] == 401
         assert raw("GET", "/ui/static/app.js")[0] == 200  # static is public (no data)
+        # Without a proxy: a password signs the one UI user in with a signed cookie.
+        st, _, page_ = raw("GET", "/ui")
+        assert st == 401 and b'name="password"' in page_
+        form = {"Content-Type": "application/x-www-form-urlencoded"}
+        assert raw("POST", "/ui/login", "password=wrong", form)[0] == 401
+        st, hdr, _ = raw("POST", "/ui/login", "password=gategategate", form)
+        cookie = hdr.get("set-cookie", "")
+        assert st == 303 and cookie.startswith("kn_session=pwadmin.") and "HttpOnly" in cookie and "SameSite=strict" in cookie, hdr
+        pw = {"Cookie": cookie.split(";")[0]}
+        assert json.loads(raw("GET", "/ui/api/me", headers=pw)[2])["user"] == "pwadmin"
+        assert raw("POST", "/ui/api/admin/project-label", json.dumps({"name": "trade", "label": "x"}), {**pw, "Content-Type": "application/json"})[0] == 403  # CSRF header still needed
+        forged = pw["Cookie"].rsplit(".", 1)[0] + "." + "0" * 64
+        assert raw("GET", "/ui/api/me", headers={"Cookie": forged})[0] == 401
+        later = pw["Cookie"].replace("pwadmin.", "pwadmin.9", 1)  # a longer life breaks the signature
+        assert raw("GET", "/ui/api/me", headers={"Cookie": later})[0] == 401
+        st, hdr, _ = raw("GET", "/ui/logout", headers=pw)
+        assert st == 303 and hdr["location"] == "/ui" and 'kn_session=""' in hdr.get("set-cookie", ""), hdr
+        assert [raw("POST", "/ui/login", "password=nope", form)[0] for _ in range(5)] == [401, 401, 401, 401, 429]  # 5 a minute
+        assert raw("POST", "/ui/login", "password=gategategate", form)[0] == 429  # also the right one, until the minute passed
         assert raw("GET", "/", headers=ck)[1].get("location") == "/ui"
         assert raw("GET", "/ui", headers=ck)[0] == 200
         assert json.loads(raw("GET", "/ui/api/me", headers=ck)[2]) == {"user": "alice", "admin": True, "projects": ["homelab", "trade"], "writable": ["homelab", "trade"], "labels": {}}  # anpitek is empty here: no tab
@@ -973,8 +994,9 @@ def main():
         assert "'aliases:'" not in call("knowledge_semantic_search", {"query": "entry timing plan", "root": "trade-memory"})[1]
         assert not call("knowledge_related", {"path": "trade-memory/plan.md"})[0]
         # A new memo that says the same as an existing one gets a merge hint (not a refusal); a different one does not.
-        err, text = call("knowledge_write", {"path": "trade-memory/plan_copy.md", "content": memo("entry timing plan\n", "plan copy")})
-        assert not err and "Similar existing memos" in text and "trade-memory/plan.md" in text, text
+        # Against a memo nothing else edits (plan.md was edited above; the semantic index re-syncs every 10 s).
+        err, text = call("knowledge_write", {"path": "trade-memory/plan_copy.md", "content": memo("walrus feeding schedule\n", "plan copy")})
+        assert not err and "Similar existing memos" in text and "trade-memory/walrus.md" in text, text
         err, text = call("knowledge_write", {"path": "trade-memory/other.md", "content": memo("volcano weather report\n", "other")})
         assert not err and "Similar existing memos" not in text, text
         # A decision that replaces an earlier one asks for the description, index line and old wording; once only.

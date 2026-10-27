@@ -1,0 +1,51 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.To0wnn/knowledge",
+  "title": "knowledge",
+  "description": "Self-hosted shared memory and docs for Claude Code, Codex and Antigravity agents, with a graph UI",
+  "repository": {
+    "url": "https://github.com/To0wnn/knowledge",
+    "source": "github"
+  },
+  "version": "0.9.28",
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/to0wnn/knowledge:0.9.28",
+      "transport": {
+        "type": "streamable-http",
+        "url": "http://localhost:8766/mcp",
+        "headers": [
+          {
+            "name": "Authorization",
+            "value": "Bearer {knowledge_token}",
+            "isRequired": true,
+            "isSecret": true,
+            "description": "A device token from the admin page (/ui/admin)",
+            "variables": {
+              "knowledge_token": {
+                "isRequired": true,
+                "isSecret": true,
+                "description": "Device token"
+              }
+            }
+          }
+        ]
+      },
+      "environmentVariables": [
+        {
+          "name": "KNOWLEDGE_UI_PASSWORD",
+          "isRequired": true,
+          "isSecret": true,
+          "description": "Password for the web UI (admin page, device tokens)"
+        },
+        {
+          "name": "KNOWLEDGE_ALLOWED_HOSTS",
+          "isRequired": false,
+          "default": "localhost:8766,127.0.0.1:8766",
+          "description": "host:port values clients may use"
+        }
+      ]
+    }
+  ]
+}
