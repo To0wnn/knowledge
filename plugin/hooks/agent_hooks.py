@@ -286,6 +286,7 @@ def codex_queue(entry: dict, text: str) -> bool:
     exe = entry.get("exe") or shutil.which("codex")
     if not exe:
         return False
+    text = " / ".join(t for t in text.splitlines() if t.strip())  # Windows' npm codex.cmd cuts an argument at a newline
     r = subprocess.run([exe, "queue", "--thread", entry["session"], "--message", text], capture_output=True, text=True,
                        encoding="utf-8", errors="replace", timeout=30, stdin=subprocess.DEVNULL)
     if r.returncode:
