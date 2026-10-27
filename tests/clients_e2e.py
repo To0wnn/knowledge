@@ -105,7 +105,7 @@ def start_server(tmp: Path):
            "KNOWLEDGE_TRADE_MEMORY": str(data["trade-memory"]), "KNOWLEDGE_ANPITEK": str(data["anpitek"]),
            "KNOWLEDGE_ANPITEK_MEMORY": str(data["anpitek-memory"]), "KNOWLEDGE_TOKENS": str(tmp / "tokens.json"),
            "KNOWLEDGE_ADMIN_DIR": str(tmp), "KNOWLEDGE_PROJECTS_DIR": str(tmp / "projects"),
-           "KNOWLEDGE_PROXY_SECRET": "proxy-secret", "KNOWLEDGE_ADMINS": "anthony", "KNOWLEDGE_AUDIT": str(tmp / "audit.log"),
+           "KNOWLEDGE_PROXY_SECRET": "proxy-secret", "KNOWLEDGE_ADMINS": "alice", "KNOWLEDGE_AUDIT": str(tmp / "audit.log"),
            "KNOWLEDGE_PORT": str(PORT), "KNOWLEDGE_BIND": "127.0.0.1", "KNOWLEDGE_RESCAN": "3600", "KNOWLEDGE_EMBED_MODEL": "hash",
            "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"),
            "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}", "PYTHONUTF8": "1",
@@ -115,7 +115,7 @@ def start_server(tmp: Path):
     if not wait_for(lambda: _health(), 60):
         proc.kill()
         raise SystemExit("server did not start:\n" + (tmp / "server.log").read_text(errors="replace")[-3000:])
-    admin = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "anthony", "X-Knowledge-UI": "1"}
+    admin = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice", "X-Knowledge-UI": "1"}
     assert http("POST", "/ui/api/admin/project", {"name": "garden"}, admin)[0] == 200
     st, body = http("POST", "/ui/api/admin/token", {"name": "friend-pc", "write": True, "redact": True,
                                                     "roots": ["garden", "garden-memory"]}, admin)
@@ -391,7 +391,7 @@ def resumed(home: Path, project: Path, garden: Path):
     Each agent on its own device token, never synced: its first turn starts the full docs sync in the background, the
     server sees the move into an archive folder, and the next turn tells the archive notice to one session only."""
     hooks = CLIENT / "plugin" / "hooks" / "agent_hooks.py"
-    admin = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "anthony", "X-Knowledge-UI": "1"}
+    admin = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice", "X-Knowledge-UI": "1"}
     for agent, cmd in (("claude", ["tasks", "claude"]), ("codex", ["tasks", "codex"]), ("agy", ["hints"])):
         st, body = http("POST", "/ui/api/admin/token", {"name": f"resume-{agent}", "write": True, "roots": ["garden", "garden-memory"]}, admin)
         env = user_env(home / f"resume {agent}", KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=json.loads(body)["token"])
@@ -491,7 +491,7 @@ def wake_e2e(tok: str, home: Path, project: Path):
         code, out, err = hook(["register"], {}, {"ANTIGRAVITY_LS_ADDRESS": f"127.0.0.1:{ls.server_address[1]}", "ANTIGRAVITY_CSRF_TOKEN": csrf,
                                                  "ANTIGRAVITY_CONVERSATION_ID": "conv-1"})
         check(code == 0 and "registered" in out, "wake: agy registers from its terminal", out + err)
-        admin = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "anthony"}
+        admin = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice"}
         st, body = http("GET", "/ui/api/admin", None, admin)
         early = {c["session"]: c for t in json.loads(body)["tokens"] if t["name"] == "friend-pc" for c in t.get("clients", [])}
         check(early.get("conv-1", {}).get("wake") is True, "wake: the admin page shows agy wakeable right after register, not a turn later", str(early)[:300])

@@ -4,7 +4,7 @@
 A loop of fresh `claude -p` passes, two memos each. The loop decides by what is in the files, never by what the agent
 says: a memo counts as done only when it carries a "(gecontroleerd <today>)" mark afterwards; the agent may report a
 memo as blocked (host off, hardware not bought) with a reason. It keeps going while passes make progress, with no time
-limit on the whole run (the owner, 25 Oct 2026: never cut off work that is on track), and stops when everything is done
+limit on the whole run (owner, 25 Oct 2026: never cut off work that is on track), and stops when everything is done
 or blocked, or when two passes in a row made none. It ends by itself: the list is finite and every counted pass
 handles at least one memo. PASS_TIMEOUT only ends one hung pass; what it finished still counts. One Matrix message at
 the end; a crash is reported too. Runs on the VM from review-loop.timer, after which Monday's lint report shows what is left.

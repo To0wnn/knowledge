@@ -107,3 +107,7 @@ broad job over subagents, have every finding refuted by a fresh verifier, report
   `plugin/.codex-plugin/plugin.json` (the test checks they match), or installed copies never update.
 
 Browser libraries are vendored with their licences in `server/static/vendor/` (force-graph, marked, DOMPurify); no CDN.
+
+## License
+
+MIT, see [LICENSE](LICENSE).

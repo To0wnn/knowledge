@@ -137,7 +137,7 @@ def main():
            "KNOWLEDGE_TRADE": str(trade), "KNOWLEDGE_TRADE_MEMORY": str(tmem), "KNOWLEDGE_ANPITEK": str(tmp / "anpitek"),
            "KNOWLEDGE_ANPITEK_MEMORY": str(tmp / "anpitek-memory"),
            "KNOWLEDGE_TOKENS": str(tokens), "KNOWLEDGE_PLUGIN_SKILLS": str(bundled), "KNOWLEDGE_ADMIN_DIR": str(tmp), "KNOWLEDGE_PROJECTS_DIR": str(tmp / "projects"),
-           "KNOWLEDGE_PROXY_SECRET": "proxy-secret", "KNOWLEDGE_ADMINS": "anthony", "KNOWLEDGE_AUDIT": str(tmp / "audit.log"), "KNOWLEDGE_PORT": str(PORT),
+           "KNOWLEDGE_PROXY_SECRET": "proxy-secret", "KNOWLEDGE_ADMINS": "alice", "KNOWLEDGE_AUDIT": str(tmp / "audit.log"), "KNOWLEDGE_PORT": str(PORT),
            "KNOWLEDGE_BIND": "127.0.0.1", "KNOWLEDGE_RESCAN": "3600",
            "KNOWLEDGE_GITHUB_API": ghurl, "KNOWLEDGE_GITHUB_RAW": ghurl + "/raw", "KNOWLEDGE_EXTERNAL_SLEEP": "3600", "KNOWLEDGE_INSTANCE": "blue", "KNOWLEDGE_PLUGIN_GRACE": "0",
            "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}"}
@@ -305,15 +305,15 @@ def main():
             r = c.getresponse()
             return r.status, dict(r.getheaders()), r.read()
         user = lambda name, secret="proxy-secret": {"X-Knowledge-Proxy": secret, "X-authentik-username": name}
-        ck = user("anthony")
+        ck = user("alice")
         assert raw("GET", "/ui")[0] == 401
-        assert raw("GET", "/ui", headers={"X-authentik-username": "anthony"})[0] == 401  # header without the secret: forged
-        assert raw("GET", "/ui", headers=user("anthony", "wrong"))[0] == 401
-        assert raw("GET", "/ui/api/graph", headers=user("anthony", ""))[0] == 401
+        assert raw("GET", "/ui", headers={"X-authentik-username": "alice"})[0] == 401  # header without the secret: forged
+        assert raw("GET", "/ui", headers=user("alice", "wrong"))[0] == 401
+        assert raw("GET", "/ui/api/graph", headers=user("alice", ""))[0] == 401
         assert raw("GET", "/ui/static/app.js")[0] == 200  # static is public (no data)
         assert raw("GET", "/", headers=ck)[1].get("location") == "/ui"
         assert raw("GET", "/ui", headers=ck)[0] == 200
-        assert json.loads(raw("GET", "/ui/api/me", headers=ck)[2]) == {"user": "anthony", "admin": True, "projects": ["homelab", "anpitek", "trade"], "writable": ["homelab", "anpitek", "trade"]}
+        assert json.loads(raw("GET", "/ui/api/me", headers=ck)[2]) == {"user": "alice", "admin": True, "projects": ["homelab", "anpitek", "trade"], "writable": ["homelab", "anpitek", "trade"]}
         g = json.loads(raw("GET", "/ui/api/graph", headers=ck)[2])
         assert g["nodes"] and not any(n["id"].endswith("/MEMORY.md") for n in g["nodes"]), g["nodes"][:3]  # index not drawn, still readable below
         assert {n["project"] for n in g["nodes"] if n["id"].startswith("trade")} == {"trade"}
@@ -353,7 +353,7 @@ def main():
         res = json.loads(res)
         assert st == 200 and res["path"].startswith("homelab/sources/") and res["path"].endswith("router-notes.md"), res
         src = lab / "sources" / res["path"].split("/")[-1]
-        assert "Router firmware notes" in src.read_text() and "by: user:anthony" in src.read_text()
+        assert "Router firmware notes" in src.read_text() and "by: user:alice" in src.read_text()
         assert "| Router notes |" in (lab / "sources" / "LOG.md").read_text()
         html = b"<html><head><title>Wolf guide</title></head><body><nav>menu</nav><article><h1>Wolf guide</h1>" + b"".join(f"<p>Paragraph {i}: Games on Whales streams game number {i} to player {i % 3}, with its own controller and audio.</p>".encode() for i in range(20)) + b"</article></body></html>"
         st, _, res = raw("POST", "/ui/api/ingest", html, {**ck, "X-Knowledge-UI": "1", "X-Filename": "wolf.html", "Content-Type": "application/octet-stream"})
@@ -386,7 +386,7 @@ def main():
         assert "bob" in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["users"]
         assert admin("/ui/api/admin/user", {"username": "bob", "projects": {"trade": "read"}}, user("bob"))[0] == 403  # only admins
         assert admin("/ui/api/admin/user", {"username": "bob", "projects": {"nope": "read"}})[0] == 400
-        assert admin("/ui/api/admin/user", {"username": "anthony", "projects": {}})[0] == 400  # admins come from the config
+        assert admin("/ui/api/admin/user", {"username": "alice", "projects": {}})[0] == 400  # admins come from the config
         assert admin("/ui/api/admin/user", {"username": "bob", "projects": {"trade": "read", "homelab": "none"}})[0] == 200
         ro = user("bob")
         assert json.loads(raw("GET", "/ui/api/me", headers=ro)[2]) == {"user": "bob", "admin": False, "projects": ["trade"], "writable": []}
@@ -940,7 +940,7 @@ def main():
         st, _, res = post({"path": "trade-memory/project_risk.md", "text": memo("risk\n", "project_risk"), "index_line": "- [Risk](project_risk.md) — r", "heading": "Plans"})
         assert st == 200 and "- [Bot plan](plan.md) — entry timing\n- [Risk](project_risk.md) — r\n\n## Other" in (tmem / "MEMORY.md").read_text(), (tmem / "MEMORY.md").read_text()
         files = json.loads(raw("GET", "/ui/api/recent?project=trade", headers=ck)[2])["files"]
-        assert files[0]["path"] in ("trade-memory/MEMORY.md", "trade-memory/project_new.md") and files[0]["by"] == "user:anthony", files[:3]
+        assert files[0]["path"] in ("trade-memory/MEMORY.md", "trade-memory/project_new.md") and files[0]["by"] == "user:alice", files[:3]
         assert all(f["path"].startswith("trade") for f in files)
         g = json.loads(raw("GET", "/ui/api/graph", headers=ck)[2])
         assert all("cluster" in n and "sources" in n for n in g["nodes"]) and {"isolated", "sparse_topics"} <= set(g["insights"])
