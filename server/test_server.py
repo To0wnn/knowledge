@@ -489,6 +489,11 @@ def main():
         got = {c["session"]: c for c in row["clients"]}
         assert got["cx-77"]["agent"] == "codex" and got["cx-77"]["wake"] is True and got["cx-77"]["project"] == "garden", got
         assert "b-1" not in got, got
+        forget = lambda s: raw("POST", "/ui/api/admin/client", json.dumps({"name": frname, "session": s}),
+                               {**ck, "Content-Type": "application/json", "X-Knowledge-UI": "1"})[0]
+        assert forget("cx-77") == 200 and forget("cx-77") == 400  # gone, and a second forget says so
+        row = next(t for t in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["tokens"] if t["name"] == frname)
+        assert "cx-77" not in {c["session"] for c in row["clients"]}, row
         assert "Development rules" in ctx and "2. Done means proven." in ctx, ctx  # a guest gets the development rules too
         assert "# Development rules" in http("GET", "/house-rules", token=fr)[1]  # and so does an agent's rules file
         assert b"<li>Done means proven.</li>" in raw("GET", "/ui/help", headers=ck)[2]  # and the help page

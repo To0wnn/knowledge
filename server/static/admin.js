@@ -86,7 +86,13 @@ function clientRows(t) {
     const p = plugin[c.agent];
     tr.append(el("td", "mono", `↳ ${c.agent}`), id, el("td", c.wake ? "" : "muted", c.wake ? "wakeable" : "not wakeable"),
       el("td", "", c.project || "–"), el("td", "", ago(c.at)),
-      el("td", p && p.behind ? "unused" : "", p ? `${p.v}${p.behind ? " (behind)" : ""}` : "–"), el("td"));
+      el("td", p && p.behind ? "unused" : "", p ? `${p.v}${p.behind ? " (behind)" : ""}` : "–"));
+    const td = el("td"), b = el("button", "ghost danger", "Forget");
+    b.setAttribute("aria-label", `Forget ${c.agent} session ${c.session}`);
+    b.title = "Remove from this list; a session still in use comes back at its next prompt";
+    b.onclick = () => run(() => api("/ui/api/admin/client", { name: t.name, session: c.session }), b);
+    td.append(b);
+    tr.append(td);
     return tr;
   });
 }

@@ -2692,6 +2692,21 @@ async def ui_admin_project(request: Request, body: dict):
     return JSONResponse({"ok": True, "project": name, "tokens_widened": widened})
 
 
+@server.custom_route("/ui/api/admin/client", methods=["POST"])
+@admin_only
+async def ui_admin_client(request: Request, body: dict):
+    """{"name", "session"}: forget one session from a token's client list (a session still in use reappears at its
+    next prompt)."""
+    clients = dict(read_json(CLIENTS_FILE, {}))
+    mine = dict(clients.get(str(body["name"]), {}))
+    if mine.pop(str(body["session"]), None) is None:
+        raise ToolError(f"no session {body['session']} on {body['name']}")
+    clients[str(body["name"])] = mine
+    write_json(CLIENTS_FILE, clients)
+    audit("admin-client-forget", str(body["name"]))
+    return JSONResponse({"ok": True})
+
+
 @server.custom_route("/ui/api/admin/token", methods=["POST"])
 @signed_in
 async def ui_admin_token(request: Request, body: dict):
