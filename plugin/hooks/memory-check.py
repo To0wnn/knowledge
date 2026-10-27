@@ -13,6 +13,8 @@ and its lint lists docs without one (36 trade docs piled up unseen before 25 Oct
 With --pre (PreToolUse Write): a NEW memo that misses its frontmatter or ## Stand / ## Keuzes (house rule 2) is
 refused before it is written, like the server refuses it; existing memos and all other files pass.
 """
+from __future__ import annotations  # X | None on Python 3.9 (macOS's /usr/bin/python3)
+
 import json
 import os
 import re

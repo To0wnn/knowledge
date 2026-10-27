@@ -13,6 +13,8 @@ The server picks the project from the working directory, redacts secrets and app
 Config: KNOWLEDGE_URL + KNOWLEDGE_TOKEN, or the plugin options (CLAUDE_PLUGIN_OPTION_URL/TOKEN), or
 ~/.config/knowledge-server/session.env on the VM.
 """
+from __future__ import annotations  # X | None on Python 3.9 (macOS's /usr/bin/python3)
+
 import json
 import token_store
 import os

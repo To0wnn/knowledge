@@ -107,7 +107,7 @@ curl -fsSL https://raw.githubusercontent.com/To0wnn/knowledge/main/install.sh | 
 irm https://raw.githubusercontent.com/To0wnn/knowledge/main/install.ps1 | iex        # Windows
 ```
 
-Both need git and Python 3. They keep the scripts in `~/knowledge` (a git checkout, also brought back after a rewritten
+Both need git and Python 3.9 or newer (macOS's own python3 is 3.9). They keep the scripts in `~/knowledge` (a git checkout, also brought back after a rewritten
 history) and run `clients/knowledge-agent.py setup`. It is the same line every time: the first time it finds Claude
 Code, Codex and agy and asks y/n for each; after that it updates the agents that have the plugin, asks y/n only for an
 agent found without it, and asks for a token only when the server refuses the stored one.

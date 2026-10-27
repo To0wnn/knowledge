@@ -11,6 +11,8 @@ after an update, and after a failed one. Off: KNOWLEDGE_AUTO_UPDATE=0.
   self_update.py --self-test       the checks of this file
 Standard library only.
 """
+from __future__ import annotations  # X | None on Python 3.9 (macOS's /usr/bin/python3)
+
 import json
 import os
 import shutil
