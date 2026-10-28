@@ -606,12 +606,11 @@ def log_gap(tool: str, query: str, score: float | None = None):
 
 
 def weak_answer(query: str, hits: list[dict]) -> bool:
-    best = max(hits, key=lambda h: h["score"]) if hits else None  # the hybrid ranking may put a lower cosine first
-    if not best or best["score"] < WEAK_SCORE:
+    if not hits or hits[0]["score"] < WEAK_SCORE:
         return True
-    entry = index.files.get(best["path"])
+    entry = index.files.get(hits[0]["path"])
     text = (entry[3] or entry[2].lower()) if entry else ""
-    return best["score"] < DOUBT_SCORE and kb_lint.query_coverage(query, text) < MIN_COVERAGE
+    return hits[0]["score"] < DOUBT_SCORE and kb_lint.query_coverage(query, text) < MIN_COVERAGE
 
 
 def gaps_summary(n: int = 30) -> list[dict]:
@@ -2542,7 +2541,6 @@ async def ui_admin_page(request: Request):
 SETTINGS_FILE = ADMIN_DIR / "settings.json"
 SETTINGS = {  # key: (type, min, max, label)
     "similar_hint": (float, 0.5, 0.95, "New memo: similarity from which 'similar existing memos' is shown (calibrated 18 Oct 2026: 0.72)"),
-    "hybrid_weight": (float, 0.0, 0.9, "Search by meaning: weight of exact words (BM25) in the ranking; 0 = meaning only"),
     "history_keep": (int, 10, 2000, "History: versions kept per file"),
     "stale_unchecked_days": (int, 7, 365, "Lint: days before a fact marked 'niet opnieuw gecontroleerd' is reported"),
     "review_after_days": (int, 7, 365, "Lint: days without a check before a memo with IPs/versions is due for review"),
@@ -2556,7 +2554,7 @@ SETTINGS = {  # key: (type, min, max, label)
 
 
 def current_settings() -> dict:
-    return {"similar_hint": SIMILAR_HINT, "hybrid_weight": vectors.HYBRID, "history_keep": HISTORY_KEEP, "stale_unchecked_days": kb_lint.STALE_UNCHECKED_DAYS,
+    return {"similar_hint": SIMILAR_HINT, "history_keep": HISTORY_KEEP, "stale_unchecked_days": kb_lint.STALE_UNCHECKED_DAYS,
             "review_after_days": kb_lint.REVIEW_AFTER_DAYS,
             "big_memo": kb_lint.BIG_MEMO, "rescan_seconds": RESCAN_SECONDS, "user_max_projects": USER_MAX_PROJECTS,
             "user_max_tokens": USER_MAX_TOKENS, "project_max_mb": PROJECT_MAX_MB,
@@ -2593,7 +2591,6 @@ def apply_settings(values: dict):
     USER_MAX_TOKENS = values.get("user_max_tokens", USER_MAX_TOKENS)
     PROJECT_MAX_MB = values.get("project_max_mb", PROJECT_MAX_MB)
     SIMILAR_HINT = values.get("similar_hint", SIMILAR_HINT)
-    vectors.HYBRID = values.get("hybrid_weight", vectors.HYBRID)
     HISTORY_KEEP = values.get("history_keep", HISTORY_KEEP)
     RESCAN_SECONDS = values.get("rescan_seconds", RESCAN_SECONDS)
     kb_lint.STALE_UNCHECKED_DAYS = values.get("stale_unchecked_days", kb_lint.STALE_UNCHECKED_DAYS)

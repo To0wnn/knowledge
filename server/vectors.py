@@ -9,12 +9,10 @@ kernel serves every other forge service first. Measured on forge (18 Oct): 6 thr
 2 threads 3.2/s; the Intel UHD 770 iGPU via OpenVINO only 1.2/s (and out of memory at batch 16), so no GPU.
 """
 import hashlib
-import math
 import os
 import re
 import threading
 import time
-from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -30,37 +28,6 @@ CHUNK_CHARS = 1200
 SOURCE_PENALTY = 0.1
 MAX_FILE = 300_000  # bigger files (generated logs such as trade/claude_insights.md) stay regex-only
 THREADS = int(os.environ.get("KNOWLEDGE_EMBED_THREADS", "6"))
-# Hybrid ranking (idea from MemPalace): the best POOL passages by meaning are re-ordered by
-# (1 - HYBRID) * cosine + HYBRID * BM25, both min-max scaled within the pool, so exact words (a host name, an error
-# text) count too. 0 = meaning only. "score" stays the cosine: the gap and similar-memo thresholds are calibrated on it.
-HYBRID = 0.0
-POOL = 200
-STOP = frozenset("welk welke wat hoe hoeveel waar waarom wanneer wie is de het een en van in op met voor door ik je mijn "
-                 "heeft hebben the a an of to how what where which why is are do does".split())
-
-
-def terms(text: str) -> list[str]:
-    """Lowercase words of 3+ letters without question words; a 5-letter prefix stands in for a Dutch stemmer."""
-    return [w[:5] if len(w) >= 6 else w for w in re.findall(r"[a-z0-9]+", text.lower()) if len(w) >= 3 and w not in STOP]
-
-
-def bm25(query: str, texts: list[str], k1: float = 1.5, b: float = 0.75) -> list[float]:
-    """Okapi BM25 of each text for the query, with document frequencies taken within `texts` (the candidate pool)."""
-    q, docs = set(terms(query)), [terms(t) for t in texts]
-    avg = sum(map(len, docs)) / max(len(docs), 1) or 1
-    df = Counter(w for d in docs for w in set(d) & q)
-    idf = {w: math.log(1 + (len(docs) - n + 0.5) / (n + 0.5)) for w, n in df.items()}
-    out = []
-    for d in docs:
-        tf = Counter(w for w in d if w in q)
-        out.append(sum(idf[w] * f * (k1 + 1) / (f + k1 * (1 - b + b * len(d) / avg)) for w, f in tf.items()))
-    return out
-
-
-def minmax(xs) -> np.ndarray:
-    xs = np.asarray(xs, dtype=float)
-    span = xs.max() - xs.min() if len(xs) else 0
-    return (xs - xs.min()) / span if span else np.zeros(len(xs))
 
 
 def title_of(rel: str, text: str) -> str:
@@ -220,14 +187,11 @@ class Vectors:
         if matrix is None:
             return []
         scores = matrix @ self.embed([QUERY_PREFIX + query])[0] - bias
-        order = (i for i in np.argsort(-scores) if not (roots and not rows[i][0].startswith(roots) or skip and skip(*rows[i][:2])))
-        if HYBRID:
-            pool = [i for _, i in zip(range(POOL), order)]
-            fused = (1 - HYBRID) * minmax(scores[pool]) + HYBRID * minmax(bm25(query, [rows[i][2] for i in pool]))
-            order = (pool[j] for j in np.argsort(-fused, kind="stable"))
         out, per_file = [], {}
-        for i in order:
+        for i in np.argsort(-scores):
             rel, line, chunk = rows[i]
+            if roots and not rel.startswith(roots) or skip and skip(rel, line):
+                continue
             if per_file.get(rel, 0) >= 2:  # at most two passages per file, so one long file cannot fill the list
                 continue
             per_file[rel] = per_file.get(rel, 0) + 1
@@ -247,10 +211,6 @@ class Vectors:
 
 
 if __name__ == "__main__":  # self-check of the chunker and the search ranking with the test embedder
-    assert terms("Wat is het IP van de gaming-pc nu?") == ["gamin"], terms("Wat is het IP van de gaming-pc nu?")
-    sc = bm25("ups shutdown", ["the ups shutdown logic", "ups", "nothing here"])
-    assert sc[0] > sc[1] > sc[2] == 0, sc
-    assert list(minmax([2, 4, 3])) == [0, 1, 0.5] and list(minmax([1, 1])) == [0, 0]
     text = "---\nname: x\n---\n\nIntro line.\n\n" + "\n\n".join(f"Paragraph {i} " + "word " * 60 for i in range(8))
     cs = chunks(text)
     assert cs[0][0] == 1 and all(len(c) <= 2 * CHUNK_CHARS for _, c in cs) and len(cs) >= 3, cs
