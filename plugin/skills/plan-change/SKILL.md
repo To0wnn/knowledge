@@ -6,7 +6,7 @@ effort: high
 
 # Plan a change
 
-1. Read the code involved, the project's AGENTS.md and the "## Keuzes" that concern it. Search the knowledge base for
+1. Read the code involved, the project's AGENTS.md and the "## Decisions" that concern it. Search the knowledge base for
    earlier decisions or pitfalls on the subject.
 2. Write the plan short, in the conversation (not a new file unless the user wants one):
    - **Goal**: one sentence, from the user's side.
