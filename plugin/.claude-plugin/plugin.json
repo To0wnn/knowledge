@@ -1,6 +1,6 @@
 {
   "name": "knowledge",
-  "version": "0.12.4",
+  "version": "0.12.5",
   "description": "Live shared knowledge (docs + Claude memory) through a knowledge server",
   "author": {
     "name": "To0wnn"
