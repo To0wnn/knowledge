@@ -1005,6 +1005,7 @@ def main():
         assert http("GET", "/health?ready=1", token=None) == (200, "ok")
         assert (tmp / "listening-blue").read_text().strip().isdigit()
         assert "trade-memory/" in call("knowledge_semantic_search", {"query": "entry timing", "root": "trade-memory"})[1]
+        assert re.search(r"trade-memory/\S+ \(\d\.\d+, \d+\.\d KB", call("knowledge_semantic_search", {"query": "entry timing", "root": "trade-memory"})[1])  # size per hit
         # A weak answer tells the agent, in the result, to add the search words as an alias where it finds the answer.
         weak = call("knowledge_semantic_search", {"query": "zzqx plumbing quantum walrus"})[1]
         assert "(no semantic results" in weak or "'aliases:' frontmatter line" in weak, weak[-300:]

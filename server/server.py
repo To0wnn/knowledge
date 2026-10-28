@@ -1300,7 +1300,15 @@ async def knowledge_semantic_search(query: str, root: str = "", limit: int = 10,
     # The agent sees hits even when they are weak, so say it here: the moment it can make the next search find it.
     tip = (f"\nThese matches are weak. If you find the answer in a memo, add '{' '.join(query.split())[:60]}' to that "
            "memo's 'aliases:' frontmatter line with knowledge_edit, so this search finds it next time.") if weak else ""
-    return "\n".join(f"{h['path']}:{h['line']} ({h['score']}): {shown(' '.join(h['text'].split())[:240])}" for h in hits) + tip
+    return "\n".join(f"{h['path']}:{h['line']} ({h['score']}, {hit_meta(h['path'])}): {shown(' '.join(h['text'].split())[:240])}"
+                     for h in hits) + tip
+
+
+def hit_meta(rel: str) -> str:
+    """Size and newest check mark of a hit's file: which hit is worth reading, and how fresh its facts are."""
+    text = text_of(rel)
+    checked = kb_lint.checked_mark(text, date.today())
+    return f"{len(text.encode()) / 1024:.1f} KB" + (f", checked {checked.isoformat()}" if checked else "")
 
 
 @server.tool(annotations=READ)

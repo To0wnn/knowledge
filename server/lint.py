@@ -131,8 +131,13 @@ def query_coverage(query: str, text: str) -> float:
 def last_checked(text: str, today: date) -> date | None:
     """Newest "(gecontroleerd <date>)" mark; without one the newest date in the memo.
     shortcut: the newest date is when something was written, not checked; good enough until most memos carry marks."""
+    return checked_mark(text, today) or latest_date(text, today)
+
+
+def checked_mark(text: str, today: date) -> date | None:
+    """Newest "(gecontroleerd <date>)" mark only."""
     marks = [latest_date(w + ("" if re.search(r"20\d\d", w) else f" {today.year}"), today) for w in CHECKED.findall(text)]
-    return max((m for m in marks if m), default=None) or latest_date(text, today)
+    return max((m for m in marks if m), default=None)
 
 
 def keuzes(text: str) -> list[str]:
@@ -376,6 +381,8 @@ if __name__ == "__main__":  # self-check
     assert replaced_decision("", m("")) == "" and replaced_decision("", m("- uitleg: vervangt niets, geen besluit")) == ""
     assert new_memo_lacks("plain") == ["frontmatter name", "frontmatter description", "frontmatter type", *STRUCTURE]
     assert new_memo_lacks("---\nname: a\ndescription: d\nmetadata:\n  type: project\n---\n## Status\nx\n## Decisions\n") == []
+    assert checked_mark("a (gecontroleerd 3 okt 2026) b (checked 12 oct)", date(2026, 10, 20)) == date(2026, 10, 12)
+    assert checked_mark("written 3 okt 2026", date(2026, 10, 20)) is None
     assert stale_unchecked("x (as of 1 jul 2026, not re-checked)", date(2026, 10, 20)) == 1
     assert OPEN_DUE.search("- open until 2026-10-30: later")
     assert skill_broken("# just text") and skill_broken("---\nname: a\n---\nx") and skill_broken("---\nname: a\ndescription: >\n  x\n---\n")
