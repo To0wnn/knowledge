@@ -904,6 +904,7 @@ async def knowledge_edit(path: str, old_string: str, new_string: str) -> str:
             raise ToolError(f"{rel} kept changing while editing; read it again and retry")
         index.refresh(rel)
     audit("edit", rel)
+    judge_soon(rel)
     replaced = kb_lint.replaced_decision(text, new.decode("utf-8")) if mem_of(rel) else ""
     return f"edited {rel} (version {version(new)})" + replaced + private_note(hidden) + await asyncio.to_thread(house_rules_hint, rel)
 
@@ -932,6 +933,7 @@ async def knowledge_write(path: str, content: str, base_version: str = "") -> st
             raise ToolError(f"{rel} changed while writing; read it again and redo your change")
         index.refresh(rel)
     audit("write", rel)
+    judge_soon(rel)
     hint = await asyncio.to_thread(similar_memos_hint, rel, content) if current is None else ""  # embeds: not on the loop
     hint += kb_lint.replaced_decision((current or b"").decode("utf-8", "replace"), content) if mem_of(rel) else ""
     hint += f"\n{ARCHIVE_HINT}" if current is None and is_archive(rel) else ""
@@ -1038,8 +1040,21 @@ def similar_memos_hint(rel: str, content: str) -> str:
 DUPES_FILE = vectors.CACHE.parent / "duplicates.json"
 DUPES_EVERY = int(os.environ.get("KNOWLEDGE_DUPES_EVERY", "3600"))  # seconds; the tests use 1
 DUPES_DELAY = int(os.environ.get("KNOWLEDGE_DUPES_DELAY", "300"))  # after the start: past a blue-green switch, so two servers never hold the model at once
+DUPES_DEBOUNCE = int(os.environ.get("KNOWLEDGE_DUPES_DEBOUNCE", "20"))  # seconds after the last write: a burst of edits is one pass
 DUPES_LOCK = threading.Lock()
 dupes: dict = {"pairs": {}, "searched": {}}
+JUDGE_SOON = threading.Event()
+_written: dict[str, str] = {}  # memo -> device that last wrote it; told at its next turn when the memo has a duplicate
+
+
+def judge_soon(rel: str):
+    """A memo was written: judge its pairs within a minute instead of the next hourly pass, so the agent that wrote it
+    hears about a duplicate while it still works on the subject (lint alone reaches nobody in time)."""
+    if kb_rerank.MODEL_DIR and mem_of(rel) and rel.count("/") == 1 and not rel.endswith("/MEMORY.md") \
+            and (dev := device.get().get("name")):
+        with DUPES_LOCK:
+            _written[rel] = dev
+        JUDGE_SOON.set()
 
 
 def duplicate_pass(rr: kb_rerank.Reranker) -> int:
@@ -1086,14 +1101,44 @@ def duplicates_loop():
             try:
                 n = duplicate_pass(rr)
                 BACKGROUND["duplicates"] = {"at": t0, "detail": f"{n} pair(s) judged in {time.time() - t0:.0f} s"}
+                tell_writers()
             except Exception as e:  # never let it die; lint reports the failure (weekly report, Matrix)
                 BACKGROUND["duplicates"] = {"at": t0, "error": f"duplicate check failed: {e}"}
                 print(BACKGROUND["duplicates"]["error"], flush=True)
-        time.sleep(DUPES_EVERY if "duplicates" in BACKGROUND else 60)
+            wait = DUPES_EVERY if "duplicates" in BACKGROUND else 60
+        else:
+            wait = 10 if _written else 60  # a written memo waits for its embedding, not for the hour
+        if JUDGE_SOON.wait(wait):
+            while JUDGE_SOON.is_set():  # debounce: run once the writes stop
+                JUDGE_SOON.clear()
+                time.sleep(DUPES_DEBOUNCE)
+
+
+def tell_writers():
+    """After a pass: the device that wrote a memo hears at its next turn which memo it duplicates (house rule 1)."""
+    with DUPES_LOCK:
+        written = dict(_written)
+        _written.clear()
+    pairs = duplicate_pairs()
+    for rel, dev in written.items():
+        project = next((p for p, (_, m) in PROJECTS.items() if m == rel.split("/", 1)[0]), "")
+        for a, b, s in pairs:
+            if rel in (a, b):
+                other = b if rel == a else a
+                add_notice(dev, project, f"Knowledge house rule 1: the memo you wrote, {rel}, looks like the same subject as "
+                           f"{other} (reranker {s:.2f}). Merge the two, or link them with [[{Path(other).stem}]] when they "
+                           "are deliberately separate (lint stops reporting linked memos).")
 
 
 def possible_duplicates() -> list[str]:
-    """Memo pairs the reranker calls the same subject (best of both directions), as lint items."""
+    """Memo pairs the reranker calls the same subject, as lint items."""
+    return [f"{a.removeprefix('memory/')} ↔ {b.split('/', 1)[1]} ({s:.2f})"
+            for a, b, s in duplicate_pairs() if in_scope(a) and in_scope(b)]
+
+
+def duplicate_pairs() -> list[tuple[str, str, float]]:
+    """(a, b, score) at or above the threshold, best of both directions (measured 28 Oct 2026 on 94 real pairs: max
+    AUC 0.955, mean 0.959, one direction 0.941), best first."""
     with DUPES_LOCK:
         items = list(dupes["pairs"].items())
     best: dict[tuple, float] = {}
@@ -1102,9 +1147,8 @@ def possible_duplicates() -> list[str]:
         best[pair] = max(best.get(pair, 0.0), p["score"])
     # Memos that link each other are kept apart on purpose (first live pass 28 Oct 2026: all 12 homelab pairs at
     # >= 0.5 were such siblings, e.g. the two PAs), so linking them is how a writer says "not a duplicate".
-    return [f"{a.removeprefix('memory/')} ↔ {b.split('/', 1)[1]} ({s:.2f})"
-            for (a, b), s in sorted(best.items(), key=lambda x: -x[1])
-            if s >= kb_rerank.THRESHOLD and in_scope(a) and in_scope(b) and not linked(a, b)]
+    return [(a, b, s) for (a, b), s in sorted(best.items(), key=lambda x: -x[1])
+            if s >= kb_rerank.THRESHOLD and not linked(a, b)]
 
 
 def linked(a: str, b: str) -> bool:
