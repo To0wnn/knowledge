@@ -194,9 +194,10 @@ def install_claude(tok: str):
     # Always written, also for the default: the plugin's MCP entry reads only its option, and the default will go.
     values = {"url": URL} if URL != token_store.claude_option("url") else {}
     keyring = bool(token_store.from_keyring())
-    # No keyring: Linux without a desktop, or Windows over SSH (CredWrite fails with 1312). Then Claude's own option is
-    # the only place a new session finds the token; with a keyring the option stays empty, so no refused old one wins.
-    if not keyring and tok != token_store.claude_option("token"):
+    # No keyring: Linux without a desktop, or Windows over SSH (CredWrite fails with 1312). Then Claude's own option
+    # (.credentials.json) is the only place a new session finds the token; with a keyring it stays empty, so no refused
+    # old one wins. macOS: Claude keeps that option in the Keychain too, so it cannot help there.
+    if not keyring and sys.platform != "darwin" and tok != token_store.claude_option("token"):
         values["token"] = tok
     if values:
         r = subprocess.run([claude, "plugin", "configure", "knowledge@knowledge", "--values-stdin"], input=json.dumps(values),
