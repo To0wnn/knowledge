@@ -214,6 +214,10 @@ def main():
             assert call("knowledge_write", {"path": "memory/leak.md", "content": memo(f"the key is Sup3rSecret99{end}\n", "leak")})[0], end
         assert not call("knowledge_write", {"path": "memory/leak.md", "content": memo("db password ‹secret:DB_PASSWORD›\n", "leak")})[0]
         assert call("knowledge_edit", {"path": "memory/leak.md", "old_string": "‹secret:DB_PASSWORD›", "new_string": "Sup3rSecret99"})[0]
+        # <private> spans are never stored, nested ones included; an unclosed tag is prose and stays.
+        err, text = call("knowledge_write", {"path": "memory/priv.md", "content": memo("a <private>x <PRIVATE>pin 4711</private> y</private>b, a <private> tag\n", "priv")})
+        assert not err and "Removed 2 <private>" in text and "4711" not in (mem / "priv.md").read_text() and "a b, a <private> tag" in (mem / "priv.md").read_text(), text
+        assert "4711" not in (call("knowledge_edit", {"path": "memory/priv.md", "old_string": "a b,", "new_string": "a<private>4711</private>b,"}), (mem / "priv.md").read_text())[1]
         # Project roots: only Markdown of the code repos, never venv; project memory is writable.
         err, text = call("knowledge_read", {"path": "trade/bot.py"})
         assert err and "only Markdown" in text, text
@@ -1057,7 +1061,7 @@ def main():
         assert fresh.get("added") == 3 and fresh.get("removed") == 0, fresh
         # Session log: the hook script posts prompts/files/summary; server redacts and appends per project and month.
         tr = tmp / "transcript.jsonl"
-        rows = [{"type": "user", "message": {"content": "fix the trade bot, password Sup3rSecret99"}},
+        rows = [{"type": "user", "message": {"content": "fix the trade bot, password Sup3rSecret99 <private>pin 4711</private>"}},
                 {"type": "user", "isMeta": True, "message": {"content": "<local-command-caveat>x"}},
                 {"type": "user", "message": {"content": [{"type": "tool_result", "content": "x"}]}},
                 {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Edit", "input": {"file_path": "/home/x/trade_bot/bot.py"}},
@@ -1069,7 +1073,7 @@ def main():
         subprocess.run([sys.executable, script], input=hook, text=True, env=senv, check=True)
         log = (tmem / "sessions" / f"{time.strftime('%Y-%m')}.md").read_text()
         assert "· trade · laptop · clear · session abcdef12" in log and "Asked: fix the trade bot" in log, log
-        assert "Sup3rSecret99" not in log and "bot.py" in log and "Outcome: Done" in log and "caveat" not in log, log
+        assert "Sup3rSecret99" not in log and "bot.py" in log and "Outcome: Done" in log and "caveat" not in log and "4711" not in log, log
         subprocess.run([sys.executable, script], input=hook, text=True, env=senv, check=True)  # nothing new: no entry
         assert (tmem / "sessions" / f"{time.strftime('%Y-%m')}.md").read_text() == log
         assert http("POST", "/sessions", {"prompts": ["x"], "cwd": "/"}, token="ro-token")[0] == 403

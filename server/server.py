@@ -233,6 +233,22 @@ def refuse_broken_skill(rel: str, text: str):
         raise ToolError(f"{rel}: {why}. Write it as ---\nname: {parts[2]}\ndescription: <when to use it, one line>\n---")
 
 
+PRIVATE = re.compile(r"<private>(?:(?!<private>).)*?</private>", re.I | re.S)
+
+
+def strip_private(text: str) -> tuple[str, int]:
+    """Drop <private>...</private> spans: the writer marked them never to be stored. Innermost first, so nesting leaks
+    nothing; an unclosed tag is kept (probably prose about the tag)."""
+    n = 0
+    while (new := PRIVATE.subn("", text))[1]:
+        text, n = new[0], n + new[1]
+    return text, n
+
+
+def private_note(n: int) -> str:
+    return f"\nRemoved {n} <private> block(s): they are never stored." if n else ""
+
+
 def refuse_secrets(text: str):
     if contains_secret(text):
         raise ToolError("this text contains a known secret value: store it with `secret set NAME` (value on stdin) "
@@ -869,6 +885,7 @@ async def knowledge_edit(path: str, old_string: str, new_string: str) -> str:
     full, rel = resolve(path)
     check_writable(rel)
     refuse_mirror(rel)
+    new_string, hidden = strip_private(new_string)
     refuse_secrets(new_string)
     refuse_mask(new_string, old_string)
     async with _locks.setdefault(rel, asyncio.Lock()):
@@ -887,7 +904,7 @@ async def knowledge_edit(path: str, old_string: str, new_string: str) -> str:
         index.refresh(rel)
     audit("edit", rel)
     replaced = kb_lint.replaced_decision(text, new.decode("utf-8")) if mem_of(rel) else ""
-    return f"edited {rel} (version {version(new)})" + replaced + await asyncio.to_thread(house_rules_hint, rel)
+    return f"edited {rel} (version {version(new)})" + replaced + private_note(hidden) + await asyncio.to_thread(house_rules_hint, rel)
 
 
 @server.tool(annotations=REPLACE)
@@ -897,6 +914,7 @@ async def knowledge_write(path: str, content: str, base_version: str = "") -> st
     full, rel = resolve(path)
     check_writable(rel)
     refuse_mirror(rel)
+    content, hidden = strip_private(content)
     refuse_secrets(content)
     refuse_broken_skill(rel, content)
     async with _locks.setdefault(rel, asyncio.Lock()):
@@ -916,7 +934,7 @@ async def knowledge_write(path: str, content: str, base_version: str = "") -> st
     hint = await asyncio.to_thread(similar_memos_hint, rel, content) if current is None else ""  # embeds: not on the loop
     hint += kb_lint.replaced_decision((current or b"").decode("utf-8", "replace"), content) if mem_of(rel) else ""
     hint += f"\n{ARCHIVE_HINT}" if current is None and is_archive(rel) else ""
-    return f"wrote {rel} (version {version(data)})" + hint + await asyncio.to_thread(house_rules_hint, rel)
+    return f"wrote {rel} (version {version(data)})" + hint + private_note(hidden) + await asyncio.to_thread(house_rules_hint, rel)
 
 
 # Not decision_without_date: old decisions with an unknown date would push an agent to invent one (lint still lists them).
@@ -1942,7 +1960,7 @@ async def sessions_route(request: Request):
     if not device.get().get("write"):
         return JSONResponse({"error": "token may not write"}, status_code=403)
     b = await request.json()
-    prompts = [" ".join(str(p).split())[:200] for p in b.get("prompts", [])][:8]
+    prompts = [" ".join(strip_private(str(p))[0].split())[:200] for p in b.get("prompts", [])][:8]
     if not prompts:
         return JSONResponse({"skipped": "no prompts"})
     project = token_project() or project_for(str(b.get("cwd", "")))
@@ -1954,7 +1972,7 @@ async def sessions_route(request: Request):
     files = sorted({str(f)[:160] for f in b.get("files", [])})[:20]
     if files:
         lines.append(f"- Changed: {', '.join(files)}")
-    summary = " ".join(str(b.get("summary", "")).split())[:700]
+    summary = " ".join(strip_private(str(b.get("summary", "")))[0].split())[:700]
     if summary:
         lines.append(f"- Outcome: {summary}")
     entry = redact("\n".join(lines))
