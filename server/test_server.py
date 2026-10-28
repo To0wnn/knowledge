@@ -144,7 +144,7 @@ def main():
            "KNOWLEDGE_LANGUAGE": "nl", "KNOWLEDGE_BUILTIN_PROJECTS": "homelab,anpitek,trade",
            "KNOWLEDGE_BIND": "127.0.0.1", "KNOWLEDGE_RESCAN": "3600",
            "KNOWLEDGE_GITHUB_API": ghurl, "KNOWLEDGE_GITHUB_RAW": ghurl + "/raw", "KNOWLEDGE_EXTERNAL_SLEEP": "3600", "KNOWLEDGE_INSTANCE": "blue", "KNOWLEDGE_PLUGIN_GRACE": "0",
-           "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_RERANK_MODEL": "test", "KNOWLEDGE_DUPES_EVERY": "1", "KNOWLEDGE_DUPES_DELAY": "0", "KNOWLEDGE_DUPES_DEBOUNCE": "0", "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}"}
+           "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_RERANK_MODEL": "test", "KNOWLEDGE_DUPES_EVERY": "1", "KNOWLEDGE_DUPES_DELAY": "0", "KNOWLEDGE_DUPES_DEBOUNCE": "0", "KNOWLEDGE_WATCH_DEVICE": "laptop", "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}"}
     proc = subprocess.Popen([sys.executable, str(Path(__file__).with_name("server.py"))], env=env)
     try:
         for _ in range(50):
@@ -280,6 +280,26 @@ def main():
         sys.path.insert(0, str(Path(__file__).parent))
         os.environ.update({k: v for k, v in env.items() if k.startswith("KNOWLEDGE_")})
         import server as srv
+        # Duplicate check units: a pair that is no longer a candidate loses its old score; a pair is told once.
+        class FakeIndex:
+            files = {}
+            def items(self): return [("memory/a.md", "a text", 0), ("memory/b.md", "b text", 0)]
+        old = (srv.index, srv.memo_candidates, srv.write_json, srv.add_notice, srv.linked, srv.dupes)
+        told = []
+        srv.index, srv.write_json, srv.linked = FakeIndex(), lambda *a: None, lambda a, b: False
+        srv.add_notice = lambda dev, project, text: told.append(text)
+        srv.dupes = {"pairs": {"memory/a.md\tmemory/b.md": {"v": ["x", "y"], "score": 0.9}}, "searched": {}}
+        srv.memo_candidates = lambda rel, text, floor: {}
+        srv.duplicate_pass(srv.kb_rerank.Reranker("test"))
+        assert not srv.dupes["pairs"], srv.dupes
+        srv.dupes = {"pairs": {"memory/a.md\tmemory/b.md": {"v": ["x", "y"], "score": 0.9}}, "searched": {}}
+        srv._written["memory/a.md"] = w = ("dev", 1.0)
+        srv.tell_writers({"memory/a.md": w})
+        srv._written["memory/a.md"] = w2 = ("dev", 2.0)  # written again during the next pass
+        srv.tell_writers({"memory/a.md": w})
+        assert len(told) == 1 and srv._written["memory/a.md"] == w2, (told, srv._written)
+        srv.index, srv.memo_candidates, srv.write_json, srv.add_notice, srv.linked, srv.dupes = old
+        srv._written.clear(); srv._told.clear()
         f = mem / "race.md"
         f.write_text("native\n")
         assert not srv.replace_if_unchanged(f, b"stale\n", b"server\n") and f.read_text() == "native\n"
@@ -302,6 +322,20 @@ def main():
         while not notes and time.time() < deadline:
             notes = json.loads(http("GET", "/tasks?project=homelab&agent=claude&v=2")[1])["notices"] or time.sleep(1) or []
         assert notes and "looks like the same subject as" in notes[0]["text"] and "[[dup_" in notes[0]["text"], notes
+        assert "it is about: d" in notes[0]["text"], notes
+        # One notice per pair: a later edit of a known duplicate does not repeat it.
+        assert not call("knowledge_edit", {"path": "memory/dup_a.md", "old_string": "closed state", "new_string": "closed state too"})[0]
+        time.sleep(6)
+        assert not json.loads(http("GET", "/tasks?project=homelab&agent=claude&v=2")[1])["notices"]
+        # A memo file written directly (a VM session, reported by the watcher) is judged and told too.
+        (mem / "dup_c.md").write_text(memo(body, "dup_c"))
+        http("POST", "/invalidate", {"paths": ["memory/dup_c.md"]}, token="watch-token")
+        deadline, notes = time.time() + 60, []
+        while not notes and time.time() < deadline:
+            notes = json.loads(http("GET", "/tasks?project=homelab&agent=claude&v=2")[1])["notices"] or time.sleep(1) or []
+        assert notes and "dup_c.md" in notes[0]["text"], notes
+        (mem / "dup_c.md").unlink()
+        http("POST", "/invalidate", {"paths": ["memory/dup_c.md"]}, token="watch-token")
         # Linked memos are kept apart on purpose: no longer reported.
         assert not call("knowledge_edit", {"path": "memory/dup_b.md", "old_string": "## Keuzes", "new_string": "See [[dup_a]].\n## Keuzes"})[0]
         assert "dup_a.md ↔ dup_b.md" not in call("knowledge_lint", {})[1]

@@ -23,7 +23,7 @@ PREFIX = ('<|im_start|>system\nJudge whether the Document meets the requirements
           'provided. Note that the answer can only be "yes" or "no".<|im_end|>\n<|im_start|>user\n')
 SUFFIX = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
 TASK = "Given a new note, decide whether the existing note covers the same subject, so the new note should be merged into it"
-FRONT = re.compile(r"\A﻿?---\n.*?\n---\n", re.S)
+FRONT = re.compile(r"\A﻿?---\r?\n.*?\r?\n---\r?\n", re.S)  # \r: files written on Windows
 
 
 def side(title: str, text: str, n: int) -> str:
@@ -73,6 +73,7 @@ class Reranker:
 
 if __name__ == "__main__":  # self-check without a model
     assert side("t: d", "---\nname: t\n---\n\n## Stand\n\nbody\n\n## Keuzes\n", 100) == "t: d\nbody"
+    assert side("t: d", "---\r\nname: t\r\n---\r\nbody\r\n", 100) == "t: d\nbody"
     r = Reranker("test")
     assert r.score("ups shutdown logic", "the ups shutdown logic") > r.score("ups shutdown", "garden hose") == 0
     print("ok")

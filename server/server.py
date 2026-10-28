@@ -1044,16 +1044,20 @@ DUPES_DEBOUNCE = int(os.environ.get("KNOWLEDGE_DUPES_DEBOUNCE", "20"))  # second
 DUPES_LOCK = threading.Lock()
 dupes: dict = {"pairs": {}, "searched": {}}
 JUDGE_SOON = threading.Event()
-_written: dict[str, str] = {}  # memo -> device that last wrote it; told at its next turn when the memo has a duplicate
+_written: dict[str, tuple[str, float]] = {}  # memo -> (device that last wrote it, when); told at its next turn
+_told: set[tuple[str, str, str]] = set()  # (device, memo, other) already told: one notice per pair, not one per edit
+WATCH_DEVICE = os.environ.get("KNOWLEDGE_WATCH_DEVICE", "")  # device whose sessions write the files the watcher reports
 
 
-def judge_soon(rel: str):
+def judge_soon(rel: str, dev: str = "", keep: bool = False):
     """A memo was written: judge its pairs within a minute instead of the next hourly pass, so the agent that wrote it
-    hears about a duplicate while it still works on the subject (lint alone reaches nobody in time)."""
+    hears about a duplicate while it still works on the subject (lint alone reaches nobody in time). keep: a watcher
+    report never overrides the device that wrote the file through the MCP tools."""
     if kb_rerank.MODEL_DIR and mem_of(rel) and rel.count("/") == 1 and not rel.endswith("/MEMORY.md") \
-            and (dev := device.get().get("name")):
+            and (dev := dev or device.get().get("name")):
         with DUPES_LOCK:
-            _written[rel] = dev
+            if not (keep and rel in _written):
+                _written[rel] = (dev, time.time())
         JUDGE_SOON.set()
 
 
@@ -1072,6 +1076,8 @@ def duplicate_pass(rr: kb_rerank.Reranker) -> int:
             key = f"{rel}\t{cand}"
             if cand in memos and pairs.get(key, {}).get("v") != [ver[rel], ver[cand]]:
                 todo.append((key, rel, cand))
+    # A pair whose memo changed so far that it is no longer a candidate would otherwise keep its old score for good.
+    pairs = {k: v for k, v in pairs.items() if k.split("\t")[1] in searched[k.split("\t")[0]]["cands"]}
     if todo:
         rr.load()
         try:
@@ -1098,10 +1104,12 @@ def duplicates_loop():
     while True:
         if vec.matrix is not None and vec.seen_gen == index.gen:  # candidates need the finished index
             t0 = time.time()
+            with DUPES_LOCK:
+                written = dict(_written)  # before the pass: a memo written during it waits for the next one
             try:
                 n = duplicate_pass(rr)
                 BACKGROUND["duplicates"] = {"at": t0, "detail": f"{n} pair(s) judged in {time.time() - t0:.0f} s"}
-                tell_writers()
+                tell_writers(written)
             except Exception as e:  # never let it die; lint reports the failure (weekly report, Matrix)
                 BACKGROUND["duplicates"] = {"at": t0, "error": f"duplicate check failed: {e}"}
                 print(BACKGROUND["duplicates"]["error"], flush=True)
@@ -1114,20 +1122,23 @@ def duplicates_loop():
                 time.sleep(DUPES_DEBOUNCE)
 
 
-def tell_writers():
+def tell_writers(written: dict[str, tuple[str, float]]):
     """After a pass: the device that wrote a memo hears at its next turn which memo it duplicates (house rule 1)."""
     with DUPES_LOCK:
-        written = dict(_written)
-        _written.clear()
+        for rel, w in written.items():
+            if _written.get(rel) == w:  # written again during the pass: keep it for the next one
+                del _written[rel]
     pairs = duplicate_pairs()
-    for rel, dev in written.items():
+    for rel, (dev, _) in written.items():
         project = next((p for p, (_, m) in PROJECTS.items() if m == rel.split("/", 1)[0]), "")
         for a, b, s in pairs:
-            if rel in (a, b):
+            if rel in (a, b) and (dev, a, b) not in _told:
+                _told.add((dev, a, b))
                 other = b if rel == a else a
+                about = kb_lint.frontmatter(text_of(other)).get("description", "").strip('"')[:200]
                 add_notice(dev, project, f"Knowledge house rule 1: the memo you wrote, {rel}, looks like the same subject as "
-                           f"{other} (reranker {s:.2f}). Merge the two, or link them with [[{Path(other).stem}]] when they "
-                           "are deliberately separate (lint stops reporting linked memos).")
+                           f"{other} (reranker {s:.2f}{'; it is about: ' + about if about else ''}). Merge the two, or link "
+                           f"them with [[{Path(other).stem}]] when they are deliberately separate (lint stops reporting linked memos).")
 
 
 def possible_duplicates() -> list[str]:
@@ -1257,7 +1268,7 @@ def lint_all() -> dict[str, list[str]]:
         report["usage_outlier"] = kb_lint.usage_outliers(rows, time.time())
     if kb_rerank.MODEL_DIR:
         report["possible_duplicate"] = possible_duplicates()
-        report["duplicate_check_failed"] = [BACKGROUND["duplicates"]["error"]] if "error" in BACKGROUND.get("duplicates", {}) else []
+        report["duplicate_check_failed"] = [BACKGROUND["duplicates"]["error"]] if "error" in BACKGROUND.get("duplicates", {}) and in_scope("claude/") else []
     gaps = get_graph()["insights"]
     report["isolated_note"] = [f"{i['id']} ({i['degree']} link)" for i in gaps["isolated"]
                                if mem_of(i["id"]) or i["id"].startswith("claude/skills/")]
@@ -2422,6 +2433,9 @@ async def invalidate_route(request: Request):
         return JSONResponse({"error": "token may not invalidate"}, status_code=403)
     paths = (await request.json()).get("paths", [])[:5000]
     await asyncio.to_thread(lambda: [index.refresh(p) for p in paths])
+    if WATCH_DEVICE:  # sessions that write memo files directly (not through knowledge_write) hear about duplicates too
+        for p in paths:
+            judge_soon(p, WATCH_DEVICE, keep=True)
     BACKGROUND["watcher"] = {"at": time.time(), "paths": len(paths)}
     if f"claude/{RULES_FILE}" in paths:  # new sessions get the edited rules
         server._lowlevel_server.instructions = instructions()
