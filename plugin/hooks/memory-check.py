@@ -16,14 +16,11 @@ refused before it is written, like the server refuses it; existing memos and all
 from __future__ import annotations  # X | None on Python 3.9 (macOS's /usr/bin/python3)
 
 import json
-import os
 import re
 import sys
 import urllib.parse
 import urllib.request
 from pathlib import Path
-
-os.environ.setdefault("KNOWLEDGE_LANGUAGE", "nl")  # this hook runs only on the original installation's VM (Dutch memos)
 
 PROJECTS = Path.home() / ".claude/projects"
 LINT_DIR = Path(__file__).resolve().parents[2] / "server"  # ~/knowledge/server/lint.py

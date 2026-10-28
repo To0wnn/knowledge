@@ -6,7 +6,8 @@ topic: General
 
 The default rules of a knowledge server. Your own version goes in house_rules.md of the shared folder (KNOWLEDGE_CLAUDE,
 /data/shared in the standalone setup): the server reads that file instead of this one, on every use. Section names follow KNOWLEDGE_LANGUAGE (Dutch:
-"## Stand", "## Keuzes", "open tot", archief/); both languages are always accepted.
+"## Stand", "## Keuzes", "open tot", archief/); both languages are always accepted, so memos in any
+language can keep the English names.
 
 1. Search first (knowledge_search / knowledge_semantic_search) and update the memo that already covers the subject; no near-duplicates. When knowledge_write answers "Similar existing memos", merge. Found nothing, then learned the answer elsewhere: write it down, in the memo that fits or a new one.
 2. One subject per memo; make a new one with knowledge_new_memo (it writes the frontmatter, both sections and the index line; a new memo without them is refused). Frontmatter: name, description (one line), metadata: type (project, feedback, reference or user). Body: "## Status" (what is true now: how it works, where things are, pitfalls, open items; an open item with a deadline is written "open until <date>: <what>", and once overdue it shows at session start) and "## Decisions". Feedback and user memos keep their rule with Why: and How to apply:. History is not kept in the memo but in <memory root>/archive/<name>_archive.md; searches skip archive folders unless you pass archive=true.
