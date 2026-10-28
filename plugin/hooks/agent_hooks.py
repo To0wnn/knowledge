@@ -384,7 +384,8 @@ def wait(agent: str, tok: str):
     and, with something new, exits 2: Claude Code then wakes the idle session with stderr as its message."""
     hook = json.loads(sys.stdin.read() or "{}")
     sid = hook.get("session_id")
-    if not sid:
+    # claude -p and the Agent SDK (entrypoint sdk-*) wait for this hook before they exit: nothing to wake there
+    if not sid or os.environ.get("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk"):
         return
     me = f"{os.getpid()}:{time.time()}"
     lock, poked = AGENTS_DIR / f"{agent}-{short(sid)}.waiter", AGENTS_DIR / f"{agent}-{short(sid)}.poke"

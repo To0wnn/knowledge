@@ -667,6 +667,9 @@ def wake_e2e(tok: str, home: Path, project: Path):
         hook(["hints", "-"], {"conversationId": "conv-1", "workspacePaths": [str(project)]})
         busy.clear()
         check(entry.exists(), "wake: a busy agy (HTTP 503) keeps its registration")
+        started = time.time()
+        code, out, err = hook(["wait", "claude", "-"], {"session_id": "cl-p", "cwd": str(project)}, {"CLAUDE_CODE_ENTRYPOINT": "sdk-cli"})
+        check(code == 0 and time.time() - started < 10, "wake: under claude -p the waiter exits at once (claude -p waits for it)", out + err)
         waiter = subprocess.Popen([sys.executable, str(hooks), "wait", "claude", "-"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE, env=env, cwd=str(project), text=True, encoding="utf-8")
         waiter.stdin.write(json.dumps({"session_id": "cl-1", "cwd": str(project)}))
