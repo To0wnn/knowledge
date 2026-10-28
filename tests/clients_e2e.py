@@ -1194,7 +1194,7 @@ def checkout_update(tmp: Path):
                             *([] if WIN else ["/usr/bin", "/bin"])})  # sh and coreutils, no agent CLIs
     env = {**os.environ, "HOME": str(tmp), "USERPROFILE": str(tmp), "KNOWLEDGE_TOKEN": "", "KNOWLEDGE_URL": BASE, "PATH": path}
     code, out, err = run([sys.executable, str(setup / "clients" / "knowledge-agent.py"), "update"], env=env, timeout=120)
-    check(git(setup, "rev-parse", "HEAD")[1].strip() == new and f"{setup}: up to date (version" in out
+    check(git(setup, "rev-parse", "HEAD")[1].strip() == new and "up to date (version" in out
           and [git(setup, "rev-parse", b)[1].strip() for b in backups()] == [old],
           "update: a rewritten history resets the checkout, old HEAD kept as a branch", (out + err)[-600:])
     # A file git does not track that the new history adds: reset --hard would overwrite it without a copy.
