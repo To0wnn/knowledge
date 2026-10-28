@@ -87,6 +87,24 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   tries a minute), or, for several people, a reverse proxy with forward auth (for example Authentik) that sets the user
   header and a shared secret (`KNOWLEDGE_PROXY_SECRET`).
 
+## Search quality
+
+Semantic search uses [EmbeddingGemma](https://huggingface.co/google/embeddinggemma-300m) (300M, runs on a CPU):
+multilingual (100+ languages) and made for prose as much as code, so notes in Dutch, German or English, docs, decisions
+and runbooks are found as well as code snippets. Measured with no LLM in the loop and nothing tuned on the test:
+
+| Benchmark | Result |
+|---|---|
+| [LongMemEval-S](https://github.com/xiaowu0162/LongMemEval), 500 questions, session R@5 | **98.8%** (R@10 99.4%, NDCG@10 0.945) |
+| Same harness with all-MiniLM-L6-v2 (the MemPalace "raw" setup) | 96.6%, MemPalace's published number |
+| The maintainer's 45 real questions over Dutch notes, right note in the top 5 | 88.9% (top 1: 73%) |
+
+LongMemEval per question type (R@5): knowledge update 100%, temporal reasoning 100%, multi-session 99.2%, user facts
+98.6%, preferences 96.7%, assistant facts 94.6% (documents hold the user turns only, as in the MemPalace setup).
+These are retrieval numbers (is the right session among the first five), not answer accuracy. Re-run with
+`tests/longmemeval.py` (data from the LongMemEval Hugging Face dataset). EmbeddingGemma 2 scored lower on both sets
+(97.8% R@5; 64% top 1 on the real questions), so the server stays on the first version.
+
 ## Run the server
 
 With Docker, all notes in `./data` next to `compose.yaml`:
@@ -177,3 +195,7 @@ Browser libraries are vendored with their licences in `server/static/vendor/` (f
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
+The server image includes the EmbeddingGemma model weights. Gemma is provided under and subject to the Gemma Terms of
+Use found at [ai.google.dev/gemma/terms](https://ai.google.dev/gemma/terms); its use is also subject to the
+[Gemma Prohibited Use Policy](https://ai.google.dev/gemma/prohibited_use_policy). The weights are not modified.
