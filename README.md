@@ -17,6 +17,7 @@ checks them against a few house rules, so a growing pile of agent memory stays f
 
 - **MCP tools for agents:** search (regex and semantic), read, list, related notes, write and edit (with conflict
   checks), new memo, delete (kept as a copy), history, lint, and ingest of a web page, PDF or text as a raw source.
+  Semantic hits show the file size and the newest "(checked <date>)" mark, so an agent can tell which hit to read.
 - **Session start context:** each agent gets the shared instructions, the house rules and the memory index of the
   project it works in, plus open items whose date has passed and hand-over tasks between agents.
 - **Hand-overs during a session:** before a prompt (at most every two minutes) Claude Code, Codex and agy ask
@@ -61,6 +62,8 @@ checks them against a few house rules, so a growing pile of agent memory stays f
 - **Offline copy:** a device with a write token keeps a copy of the memory and syncs only differences; when the server
   is down, the agent still gets a cached start context.
 - **Secrets:** known secret values are masked in every answer and refused in every write.
+- **Private spans:** text between `<private>` and `</private>` is dropped from writes, edits and the session log
+  before anything is stored.
 
 ## How it works
 
