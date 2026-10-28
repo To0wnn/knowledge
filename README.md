@@ -96,11 +96,10 @@ and runbooks are found as well as code snippets. Measured with no LLM in the loo
 | Benchmark | Result |
 |---|---|
 | [LongMemEval-S](https://github.com/xiaowu0162/LongMemEval), 500 questions, session R@5 | **98.8%** (R@10 99.4%, NDCG@10 0.945) |
-| Same harness with all-MiniLM-L6-v2 (the MemPalace "raw" setup) | 96.6%, MemPalace's published number |
 | The maintainer's 45 real questions over Dutch notes, right note in the top 5 | 88.9% (top 1: 73%) |
 
 LongMemEval per question type (R@5): knowledge update 100%, temporal reasoning 100%, multi-session 99.2%, user facts
-98.6%, preferences 96.7%, assistant facts 94.6% (documents hold the user turns only, as in the MemPalace setup).
+98.6%, preferences 96.7%, assistant facts 94.6% (documents hold the user turns only).
 These are retrieval numbers (is the right session among the first five), not answer accuracy. Re-run with
 `tests/longmemeval.py` (data from the LongMemEval Hugging Face dataset). EmbeddingGemma 2 scored lower on both sets
 (97.8% R@5; 64% top 1 on the real questions), so the server stays on the first version.

@@ -1,9 +1,8 @@
-"""LongMemEval-S retrieval (R@5/R@10/NDCG@10, 500 questions) for the knowledge server's search, comparable to MemPalace.
+"""LongMemEval-S retrieval (R@5/R@10/NDCG@10, 500 questions) for the knowledge server's search.
 
-MemPalace "raw" (96.6% R@5): one document per session = the user turns joined, all-MiniLM-L6-v2 (ChromaDB default,
-cut at 256 tokens), cosine, recall_any at session level over all 500 questions (benchmarks/longmemeval_bench.py).
+One document per session = the user turns joined; recall_any at session level over all 500 questions.
 Modes, same documents:
-  minilm  MemPalace raw re-run here: checks that this harness gives their number
+  minilm  all-MiniLM-L6-v2 on whole sessions (cut at 256 tokens): a well-known baseline to check the harness
   gemma   our search: vectors.chunks + "title: | text:" + embeddinggemma, a session ranks by its best chunk (server.py)
   qwen    gemma, then Qwen3-Reranker re-orders the top 10 (second stage; reordering inside the top 5 cannot change R@5)
 Embeddings are cached per mode in $LME_DATA (default ~/.cache/longmemeval/), so a crash only loses the current batch.
