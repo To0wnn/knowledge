@@ -891,8 +891,8 @@ async function loadLint(render = true) {
   const report = Object.fromEntries(Object.entries(full).map(([k, v]) => [k, v.filter((i) => allMode() || lintProject(i) === project)]));
   const here = Object.values(report).reduce((a, v) => a + v.length, 0);
   const all = Object.values(full).reduce((a, v) => a + v.length, 0);
-  // The badge counts every project, so findings elsewhere are not missed; the tab lists this project's.
-  $("lint-count").textContent = all || "";
+  // Badge and tab show this project's findings; the tab points to the rest so findings elsewhere are not missed.
+  $("lint-count").textContent = here || "";
   $("lint-count").title = `${here} in ${project}, ${all} in all projects`;
   if (!render) return;
   const box = $("lint"); box.replaceChildren();
@@ -910,6 +910,10 @@ async function loadLint(render = true) {
     box.append(h, ...(fix ? [el("p", "lint-fix muted", fix)] : []), ul);
   }
   if (!here) box.textContent = "No findings.";
+  if (all > here) {
+    const b = el("button", "ghost small", `${all - here} in other projects`); b.onclick = () => switchProject(ALL);
+    box.append(b);
+  }
 }
 // Lint checks in plain words, with what to do about them (unknown checks fall back to their name).
 const LINT_INFO = {
