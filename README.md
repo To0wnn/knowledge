@@ -1,7 +1,20 @@
 # knowledge
 
-A small self-hosted knowledge server for AI coding agents. It gives Claude Code, Codex and Antigravity (agy) on every
-device the same live docs and memory, over MCP, plus a web UI with a graph of how the notes connect.
+[![LongMemEval-S R@5](https://img.shields.io/badge/LongMemEval--S_R%405-98.8%25-brightgreen)](#search-quality)
+[![Real questions, top 5](https://img.shields.io/badge/real_questions_top_5-88.9%25-brightgreen)](#search-quality)
+[![Clients CI](https://github.com/To0wnn/knowledge/actions/workflows/clients.yml/badge.svg)](https://github.com/To0wnn/knowledge/actions/workflows/clients.yml)
+[![Release](https://img.shields.io/github/v/release/To0wnn/knowledge)](https://github.com/To0wnn/knowledge/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
+**One shared memory for your AI coding agents, on your own server.** Claude Code, Codex and Antigravity (agy) on every
+device get the same live docs and notes over MCP, plus a web UI with a graph of how the notes connect.
+
+- **Finds the right note.** 98.8% R@5 on LongMemEval-S (500 questions), with no LLM in the loop and nothing tuned on
+  the test; 88.9% top-5 on real questions over Dutch notes. Multilingual, and made for prose as much as code.
+- **Stays tidy as it grows.** House rules, lint, and a local reranker that tells the agent right after it writes a
+  near-duplicate, so agent memory does not pile up into contradictions.
+- **Shared, not per machine.** One server for all devices and agents, per-device tokens, per-project guests.
+- **Private.** Plain Markdown on your disk; embeddings and reranking run locally, nothing leaves the machine.
 
 Notes are plain Markdown files on disk. The server indexes them, serves them to agents with a per-device token, and
 checks them against a few house rules, so a growing pile of agent memory stays findable and tidy.
