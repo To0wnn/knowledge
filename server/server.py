@@ -1100,8 +1100,18 @@ def possible_duplicates() -> list[str]:
     for key, p in items:
         pair = tuple(sorted(key.split("\t")))
         best[pair] = max(best.get(pair, 0.0), p["score"])
+    # Memos that link each other are kept apart on purpose (first live pass 28 Oct 2026: all 12 homelab pairs at
+    # >= 0.5 were such siblings, e.g. the two PAs), so linking them is how a writer says "not a duplicate".
     return [f"{a.removeprefix('memory/')} ↔ {b.split('/', 1)[1]} ({s:.2f})"
-            for (a, b), s in sorted(best.items(), key=lambda x: -x[1]) if s >= kb_rerank.THRESHOLD and in_scope(a) and in_scope(b)]
+            for (a, b), s in sorted(best.items(), key=lambda x: -x[1])
+            if s >= kb_rerank.THRESHOLD and in_scope(a) and in_scope(b) and not linked(a, b)]
+
+
+def linked(a: str, b: str) -> bool:
+    """One memo [[links]] the other (by file name or frontmatter name)."""
+    def slugs(rel: str) -> set[str]:
+        return {rel.split("/", 1)[1][:-3].replace("-", "_"), kb_lint.frontmatter(text_of(rel)).get("name", "").replace("-", "_")} - {""}
+    return bool(slugs(b) & set(kb_lint.links(text_of(a))) or slugs(a) & set(kb_lint.links(text_of(b))))
 
 
 @server.tool(annotations=REPLACE)

@@ -297,6 +297,9 @@ def main():
         while "dup_a.md ↔ dup_b.md" not in (lint_out := call("knowledge_lint", {})[1]) and time.time() < deadline:
             time.sleep(1)
         assert "possible_duplicate" in lint_out and "dup_a.md ↔ dup_b.md (0." in lint_out, lint_out[-800:]
+        # Linked memos are kept apart on purpose: no longer reported.
+        assert not call("knowledge_edit", {"path": "memory/dup_b.md", "old_string": "## Keuzes", "new_string": "See [[dup_a]].\n## Keuzes"})[0]
+        assert "dup_a.md ↔ dup_b.md" not in call("knowledge_lint", {})[1]
         for n in ("dup_a", "dup_b"):
             (mem / f"{n}.md").unlink()
         # Case-insensitive fast path, uppercase-escape fallback, and a file whose lowercase form changes length.
