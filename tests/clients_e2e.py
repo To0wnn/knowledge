@@ -1194,7 +1194,7 @@ def checkout_update(tmp: Path):
                             *([] if WIN else ["/usr/bin", "/bin"])})  # sh and coreutils, no agent CLIs
     env = {**os.environ, "HOME": str(tmp), "USERPROFILE": str(tmp), "KNOWLEDGE_TOKEN": "", "KNOWLEDGE_URL": BASE, "PATH": path}
     code, out, err = run([sys.executable, str(setup / "clients" / "knowledge-agent.py"), "update"], env=env, timeout=120)
-    check(git(setup, "rev-parse", "HEAD")[1].strip() == new and "up to date with GitHub" in out
+    check(git(setup, "rev-parse", "HEAD")[1].strip() == new and f"{setup}: up to date (version" in out
           and [git(setup, "rev-parse", b)[1].strip() for b in backups()] == [old],
           "update: a rewritten history resets the checkout, old HEAD kept as a branch", (out + err)[-600:])
     # A file git does not track that the new history adds: reset --hard would overwrite it without a copy.
@@ -1208,7 +1208,7 @@ def checkout_update(tmp: Path):
     (setup / "notes.txt").unlink()
     code, out, err = run([sys.executable, str(setup / "clients" / "knowledge-agent.py"), "update"], env=env, timeout=120)
     branches = backups()
-    check(code == 0 or "up to date with GitHub" in out, "update: goes on once that file is moved away", (out + err)[-600:])
+    check(code == 0 or "up to date (version" in out, "update: goes on once that file is moved away", (out + err)[-600:])
     check(len(branches) == 2, "update: every reset keeps its own backup branch", " ".join(branches))
     changed = setup / "clients" / "knowledge-agent.py"
     changed.write_text(changed.read_text(encoding="utf-8") + "# mine\n", encoding="utf-8")
@@ -1237,7 +1237,7 @@ def checkout_update(tmp: Path):
     code, out, err = one_line("")
     if not check(fresh.exists(), "one-line setup: the checkout is cloned", (out + err)[-700:]):
         return
-    check(git(fresh, "rev-parse", "HEAD")[1].strip() == git(dev, "rev-parse", "HEAD")[1].strip() and "up to date with GitHub" in out
+    check(git(fresh, "rev-parse", "HEAD")[1].strip() == git(dev, "rev-parse", "HEAD")[1].strip() and "installed version" in out
           and "None of claude, codex or agy is on PATH" in out + err, "one-line setup: clones the scripts, then runs the setup", (out + err)[-700:])
     (dev / "x.txt").write_text("1\n", encoding="utf-8")
     git(dev, "add", "x.txt")
@@ -1251,7 +1251,7 @@ def checkout_update(tmp: Path):
     stuck = (fresh / ".git" / "MERGE_HEAD").exists()
     code, out, err = one_line("update")
     check(stuck and git(fresh, "rev-parse", "HEAD")[1].strip() == new and not (fresh / ".git" / "MERGE_HEAD").exists()
-          and (fresh / "x.txt").read_text(encoding="utf-8") == "2\n",
+          and (fresh / "x.txt").read_text(encoding="utf-8") == "2\n" and "up to date (version" in out,
           "one-line setup: repairs a pull that stopped with conflicts after a rewrite", f"stuck={stuck} " + (out + err)[-600:])
 
 

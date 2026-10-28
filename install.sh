@@ -13,7 +13,10 @@ command -v git >/dev/null 2>&1 || { echo "git is missing: install it (e.g. sudo 
 PY=$(command -v python3 || true)
 [ -n "$PY" ] || { echo "python3 is missing: install Python 3, then run this again" >&2; exit 1; }
 
+version() { sed -n 's/.*"version": *"\([0-9.]*\)".*/\1/p' "$DIR/plugin/.claude-plugin/plugin.json" 2>/dev/null | head -1; }
+old_version=
 if [ -d "$DIR/.git" ]; then
+  old_version=$(version)
   # Someone's own ~/knowledge (notes, another project) is never reset to our repository.
   have=$(git -C "$DIR" remote get-url origin 2>/dev/null || true)
   if [ "$(norm "$have")" != "$(norm "$REPO")" ]; then
@@ -34,7 +37,11 @@ elif [ -e "$DIR" ]; then
 else
   git clone -q "$REPO" "$DIR"
 fi
-echo "$DIR: up to date with GitHub"
+new_version=$(version)
+if [ -z "$old_version" ]; then echo "$DIR: installed version $new_version"
+elif [ "$old_version" = "$new_version" ]; then echo "$DIR: up to date (version $new_version)"
+else echo "$DIR: updated version $old_version -> $new_version"
+fi
 
 [ $# -gt 0 ] || set -- setup
 # Through a pipe stdin is this script, so the setup's questions read the terminal.

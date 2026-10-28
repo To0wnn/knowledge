@@ -17,7 +17,10 @@ if (-not $Py) { throw "Python 3 is missing: install it from https://www.python.o
 function Git-Step { git -C $Dir @args; if ($LASTEXITCODE) { throw "git $($args[0]) failed in $Dir" } }
 # A clone URL without case, trailing slash or .git.
 function Norm($u) { "$u".ToLower().Replace("\", "/").TrimEnd("/") -replace "\.git$", "" }
+$OldVersion = $null
+function Version { try { (Get-Content (Join-Path $Dir "plugin\.claude-plugin\plugin.json") -Raw | ConvertFrom-Json).version } catch { "?" } }
 if (Test-Path (Join-Path $Dir ".git")) {
+    $OldVersion = Version
     # Someone's own ~\knowledge (notes, another project) is never reset to our repository.
     $Have = git -C $Dir remote get-url origin 2>$null
     if ((Norm $Have) -ne (Norm $Repo)) { throw "$Dir is another repository (origin: $Have): move it away, or set KNOWLEDGE_DIR." }
@@ -38,7 +41,10 @@ if (Test-Path (Join-Path $Dir ".git")) {
     git clone -q $Repo $Dir
     if ($LASTEXITCODE) { throw "git clone $Repo failed" }
 }
-Write-Host "${Dir}: up to date with GitHub"
+$NewVersion = Version
+if (-not $OldVersion) { Write-Host "${Dir}: installed version $NewVersion" }
+elseif ($OldVersion -eq $NewVersion) { Write-Host "${Dir}: up to date (version $NewVersion)" }
+else { Write-Host "${Dir}: updated version $OldVersion -> $NewVersion" }
 # $args splatted as is: a one-element array assigned to a variable becomes a plain string.
 $Agent = Join-Path $Dir "clients\knowledge-agent.py"
 if ($args.Count) { & $Py.Source $Agent @args } else { & $Py.Source $Agent setup }

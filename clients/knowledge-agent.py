@@ -371,11 +371,14 @@ def update():
     repo = HOOKS.parent.parent
     if (repo / ".git").exists() and not os.environ.get("KNOWLEDGE_SYNCED"):
         import self_update
+        manifest = HOOKS.parent / ".claude-plugin" / "plugin.json"
+        old = json.loads(manifest.read_text(encoding="utf-8"))["version"]
         try:
             self_update.sync(repo)
         except RuntimeError as e:
             sys.exit(str(e))
-        print(f"{repo}: up to date with GitHub")
+        new = json.loads(manifest.read_text(encoding="utf-8"))["version"]
+        print(f"{repo}: " + (f"updated version {old} -> {new}" if new != old else f"up to date (version {new})"))
         sys.exit(subprocess.run([sys.executable, "-X", "utf8", __file__, "update"],
                                 env={**os.environ, "KNOWLEDGE_SYNCED": "1"}).returncode)
     if not token_store.token():
