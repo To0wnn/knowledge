@@ -10,8 +10,9 @@ x-server: &server
   # Local image: tells `docker compose pull` (Ansible docker_update) to skip it instead of failing on
   # "pull access denied"; `up` builds from the pinned Dockerfile/uv.lock (cached layers, deterministic).
   pull_policy: build
-  # Hard cap: the embedding model uses ~1 GB; a runaway can never squeeze the other forge services (measured 18 Oct).
-  mem_limit: 3g
+  # Hard cap: the embedding model uses ~1 GB, the optional reranker ~1.1 GB while it runs; a runaway can never
+  # squeeze the other forge services (measured 18 and 28 Oct 2026).
+  mem_limit: 3500m
   environment: &env
     KNOWLEDGE_MEMORY: /data/memory
     KNOWLEDGE_HOMELAB: /data/homelab
@@ -27,6 +28,7 @@ x-server: &server
     KNOWLEDGE_SECRETS: /config/secrets.json  # SHA-256 of known secrets (token.py push-secrets), for redaction
     KNOWLEDGE_AUDIT: /state/audit.log
     KNOWLEDGE_VECTORS: /state/vectors.npz  # embedding cache: a restart only embeds new text
+    KNOWLEDGE_RERANK_MODEL: ${KNOWLEDGE_RERANK_MODEL:-}  # optional duplicate check: a folder under /models (export_reranker.sh)
     TZ: Europe/Amsterdam  # local dates in source file names, LOG.md and the audit log (forge itself runs UTC)
     KNOWLEDGE_ALLOWED_HOSTS: ${KNOWLEDGE_ALLOWED_HOSTS}
     KNOWLEDGE_PUBLIC_URL: ${KNOWLEDGE_PUBLIC_URL:-}  # named in the agents' instructions (web UI link)
@@ -53,6 +55,7 @@ x-server: &server
     - /root/docker/knowledge/state:/state
     - /root/docker/knowledge/admin:/admin
     - /root/docker/knowledge/projects:/projects
+    - /root/docker/knowledge/models:/models:ro
 
 services:
   # Both servers use the host network and share :8766 with SO_REUSEPORT (server.py open_port): a new server opens the

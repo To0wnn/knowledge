@@ -48,6 +48,7 @@ import fetch
 import graph as kb_graph
 from graph import MD_ONLY, PROJECTS
 import lint as kb_lint
+import rerank as kb_rerank
 import vectors
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
@@ -1008,21 +1009,99 @@ ARCHIVE_HINT = ("This file is in an archive folder, which searches skip: carry o
 SIMILAR_HINT = 0.72  # calibrated 18 Oct 2026: a memo vs itself ~0.80-0.86, closely related memos ~0.78, loose docs ~0.70
 
 
+def memo_candidates(rel: str, content: str, floor: float) -> dict[str, float]:
+    """Other memos of the same memory root whose passages mean much the same as this memo: path -> best cosine, best first."""
+    root = rel.split("/", 1)[0]
+    body = re.sub(r"^## (Stand|Keuzes|Status|Decisions)\s*$", "", kb_lint.FRONT.sub("", content, count=1), flags=re.M).strip()  # the layout is the same in every memo
+    best: dict[str, float] = {}
+    for h in vec.search(body[:1500], roots=(root + "/",), limit=12):  # best first
+        if h["path"] != rel and h["path"].count("/") == 1 and not h["path"].endswith("/MEMORY.md") and h["score"] >= floor:
+            best.setdefault(h["path"], h["score"])
+    return best
+
+
 def similar_memos_hint(rel: str, content: str) -> str:
     """For a new memo: existing memos in the same memory root that mean much the same, so the writer can merge into
     one of them instead of keeping a near-duplicate (a hint, not a refusal)."""
-    root = rel.split("/", 1)[0]
     if not mem_of(rel) or rel.count("/") != 1 or rel.endswith("/MEMORY.md"):
         return ""
-    body = re.sub(r"^## (Stand|Keuzes|Status|Decisions)\s*$", "", kb_lint.FRONT.sub("", content, count=1), flags=re.M).strip()  # the layout is the same in every memo
-    hits = [h for h in vec.search(body[:1500], roots=(root + "/",), limit=12)
-            if h["path"] != rel and h["path"].count("/") == 1 and not h["path"].endswith("/MEMORY.md") and h["score"] >= SIMILAR_HINT]
-    seen = list(dict.fromkeys(h["path"] for h in hits))[:3]
+    best = memo_candidates(rel, content, SIMILAR_HINT)
+    seen = list(best)[:3]
     if not seen:
         return ""
-    best = {h["path"]: h["score"] for h in reversed(hits)}
     return ("\nSimilar existing memos (merge into one of these if it covers the same subject, then delete this one): "
             + ", ".join(f"{p} ({best[p]:.2f})" for p in seen))
+
+
+# Background duplicate check (rerank.py): every memo pair the cosine gate lets through is judged once per pair of
+# versions; lint lists the pairs the model calls the same subject. Kept in the state dir, so a restart judges nothing again.
+DUPES_FILE = vectors.CACHE.parent / "duplicates.json"
+DUPES_EVERY = int(os.environ.get("KNOWLEDGE_DUPES_EVERY", "3600"))  # seconds; the tests use 1
+DUPES_DELAY = int(os.environ.get("KNOWLEDGE_DUPES_DELAY", "300"))  # after the start: past a blue-green switch, so two servers never hold the model at once
+DUPES_LOCK = threading.Lock()
+dupes: dict = {"pairs": {}, "searched": {}}
+
+
+def duplicate_pass(rr: kb_rerank.Reranker) -> int:
+    """Judge the memo pairs that are new or changed since the last pass; returns how many."""
+    memos = {rel: text for rel, text, _ in index.items() if mem_of(rel) and rel.count("/") == 1 and not rel.endswith("/MEMORY.md")}
+    ver = {rel: version(text.encode()) for rel, text in memos.items()}
+    with DUPES_LOCK:
+        searched = {k: v for k, v in dupes["searched"].items() if k in memos}
+        pairs = {k: v for k, v in dupes["pairs"].items() if all(p in memos for p in k.split("\t"))}
+    todo = []
+    for rel, text in memos.items():
+        if searched.get(rel, {}).get("v") != ver[rel]:  # a memo is searched again only when it changed
+            searched[rel] = {"v": ver[rel], "cands": list(memo_candidates(rel, text, kb_rerank.CANDIDATE))}
+        for cand in searched[rel]["cands"]:
+            key = f"{rel}\t{cand}"
+            if cand in memos and pairs.get(key, {}).get("v") != [ver[rel], ver[cand]]:
+                todo.append((key, rel, cand))
+    if todo:
+        rr.load()
+        try:
+            for key, rel, cand in todo:
+                score = rr.score(kb_rerank.side(vectors.title_of(rel, memos[rel]), memos[rel], 1500),
+                                 kb_rerank.side(vectors.title_of(cand, memos[cand]), memos[cand], 3000))
+                pairs[key] = {"v": [ver[rel], ver[cand]], "score": round(score, 3)}
+        finally:
+            rr.unload()
+    with DUPES_LOCK:
+        dupes.update(pairs=pairs, searched=searched)
+        write_json(DUPES_FILE, dupes)
+    return len(todo)
+
+
+def duplicates_loop():
+    if not kb_rerank.MODEL_DIR:
+        return
+    global dupes
+    dupes = {"pairs": {}, "searched": {}, **read_json(DUPES_FILE, {})}
+    os.nice(10)  # yields to everything else on forge, like the embedding thread
+    rr = kb_rerank.Reranker()
+    time.sleep(DUPES_DELAY)
+    while True:
+        if vec.matrix is not None and vec.seen_gen == index.gen:  # candidates need the finished index
+            t0 = time.time()
+            try:
+                n = duplicate_pass(rr)
+                BACKGROUND["duplicates"] = {"at": t0, "detail": f"{n} pair(s) judged in {time.time() - t0:.0f} s"}
+            except Exception as e:  # never let it die; lint reports the failure (weekly report, Matrix)
+                BACKGROUND["duplicates"] = {"at": t0, "error": f"duplicate check failed: {e}"}
+                print(BACKGROUND["duplicates"]["error"], flush=True)
+        time.sleep(DUPES_EVERY if "duplicates" in BACKGROUND else 60)
+
+
+def possible_duplicates() -> list[str]:
+    """Memo pairs the reranker calls the same subject (best of both directions), as lint items."""
+    with DUPES_LOCK:
+        items = list(dupes["pairs"].items())
+    best: dict[tuple, float] = {}
+    for key, p in items:
+        pair = tuple(sorted(key.split("\t")))
+        best[pair] = max(best.get(pair, 0.0), p["score"])
+    return [f"{a.removeprefix('memory/')} ↔ {b.split('/', 1)[1]} ({s:.2f})"
+            for (a, b), s in sorted(best.items(), key=lambda x: -x[1]) if s >= kb_rerank.THRESHOLD and in_scope(a) and in_scope(b)]
 
 
 @server.tool(annotations=REPLACE)
@@ -1122,6 +1201,9 @@ def lint_all() -> dict[str, list[str]]:
             except ValueError:
                 pass
         report["usage_outlier"] = kb_lint.usage_outliers(rows, time.time())
+    if kb_rerank.MODEL_DIR:
+        report["possible_duplicate"] = possible_duplicates()
+        report["duplicate_check_failed"] = [BACKGROUND["duplicates"]["error"]] if "error" in BACKGROUND.get("duplicates", {}) else []
     gaps = get_graph()["insights"]
     report["isolated_note"] = [f"{i['id']} ({i['degree']} link)" for i in gaps["isolated"]
                                if mem_of(i["id"]) or i["id"].startswith("claude/skills/")]
@@ -2541,6 +2623,7 @@ async def ui_admin_page(request: Request):
 SETTINGS_FILE = ADMIN_DIR / "settings.json"
 SETTINGS = {  # key: (type, min, max, label)
     "similar_hint": (float, 0.5, 0.95, "New memo: similarity from which 'similar existing memos' is shown (calibrated 18 Oct 2026: 0.72)"),
+    "rerank_threshold": (float, 0.2, 0.99, "Lint possible_duplicate: reranker score from which two memos count as the same subject (measured 28 Oct 2026: 0.5)"),
     "history_keep": (int, 10, 2000, "History: versions kept per file"),
     "stale_unchecked_days": (int, 7, 365, "Lint: days before a fact marked 'niet opnieuw gecontroleerd' is reported"),
     "review_after_days": (int, 7, 365, "Lint: days without a check before a memo with IPs/versions is due for review"),
@@ -2554,7 +2637,7 @@ SETTINGS = {  # key: (type, min, max, label)
 
 
 def current_settings() -> dict:
-    return {"similar_hint": SIMILAR_HINT, "history_keep": HISTORY_KEEP, "stale_unchecked_days": kb_lint.STALE_UNCHECKED_DAYS,
+    return {"similar_hint": SIMILAR_HINT, "rerank_threshold": kb_rerank.THRESHOLD, "history_keep": HISTORY_KEEP, "stale_unchecked_days": kb_lint.STALE_UNCHECKED_DAYS,
             "review_after_days": kb_lint.REVIEW_AFTER_DAYS,
             "big_memo": kb_lint.BIG_MEMO, "rescan_seconds": RESCAN_SECONDS, "user_max_projects": USER_MAX_PROJECTS,
             "user_max_tokens": USER_MAX_TOKENS, "project_max_mb": PROJECT_MAX_MB,
@@ -2591,6 +2674,7 @@ def apply_settings(values: dict):
     USER_MAX_TOKENS = values.get("user_max_tokens", USER_MAX_TOKENS)
     PROJECT_MAX_MB = values.get("project_max_mb", PROJECT_MAX_MB)
     SIMILAR_HINT = values.get("similar_hint", SIMILAR_HINT)
+    kb_rerank.THRESHOLD = values.get("rerank_threshold", kb_rerank.THRESHOLD)
     HISTORY_KEEP = values.get("history_keep", HISTORY_KEEP)
     RESCAN_SECONDS = values.get("rescan_seconds", RESCAN_SECONDS)
     kb_lint.STALE_UNCHECKED_DAYS = values.get("stale_unchecked_days", kb_lint.STALE_UNCHECKED_DAYS)
@@ -2643,6 +2727,10 @@ def system_state() -> dict:
             # The optional jobs in watcher/ (machine that holds the files): shown once their token was used.
             *([{"name": "Weekly lint report", "what": "VM timer, Monday 08:00, posts new findings to Matrix", "last": used("vm-lint-report"), "detail": "last call of the vm-lint-report token"}] if used("vm-lint-report") else []),
             *([{"name": "Session logs", "what": "SessionEnd/PreCompact hooks of Claude Code, Stop of agy, SessionEnd of Codex", "last": used("vm-sessions"), "detail": "last call of the vm-sessions token (VM)"}] if used("vm-sessions") else []),
+            *([{"name": "Duplicate check", "what": f"judges similar memo pairs with a reranker every {DUPES_EVERY // 60} min (lint possible_duplicate)",
+                "last": BACKGROUND.get("duplicates", {}).get("at"),
+                "detail": BACKGROUND["duplicates"].get("error") or BACKGROUND["duplicates"]["detail"] if "duplicates" in BACKGROUND else f"first run {DUPES_DELAY // 60} min after the start"}]
+              if kb_rerank.MODEL_DIR else []),
             {"name": "History", "what": f"keeps up to {HISTORY_KEEP} versions per file", "last": None,
              "detail": f"{len(HISTORY_FAILED)} failed writes" if HISTORY_FAILED else "no failed writes"},
             {"name": "External skills", "what": f"compares each skill from GitHub with its source every {EXTERNAL_EVERY // 86400} days",
@@ -3441,6 +3529,7 @@ if __name__ == "__main__":
     threading.Thread(target=index.loop, daemon=True).start()
     threading.Thread(target=vec.loop, daemon=True).start()
     threading.Thread(target=external_loop, daemon=True).start()
+    threading.Thread(target=duplicates_loop, daemon=True).start()
     host, port = os.environ.get("KNOWLEDGE_BIND", "0.0.0.0"), int(os.environ.get("KNOWLEDGE_PORT", "8766"))
     sock = open_port(host, port)
     listening = AUDIT.parent / f"listening-{INSTANCE}" if INSTANCE else None

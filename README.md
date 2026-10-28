@@ -62,6 +62,9 @@ checks them against a few house rules, so a growing pile of agent memory stays f
 - **Offline copy:** a device with a write token keeps a copy of the memory and syncs only differences; when the server
   is down, the agent still gets a cached start context.
 - **Secrets:** known secret values are masked in every answer and refused in every write.
+- **Duplicate check (optional):** a local reranker (Qwen3-Reranker-0.6B, int8 ONNX, CPU) judges memo pairs whose
+  embeddings are close, in the background, and lint lists the pairs it calls the same subject (`possible_duplicate`).
+  Off unless `KNOWLEDGE_RERANK_MODEL` points to a model made with `server/export_reranker.sh`.
 - **Private spans:** text between `<private>` and `</private>` is dropped from writes, edits and the session log
   before anything is stored.
 

@@ -944,6 +944,8 @@ const LINT_INFO = {
   open_overdue: ["Open item overdue", "An item marked 'open tot <date>' passed its date: do it, or move the date with a reason."],
   review_due: ["Due for a check", "IPs or versions not checked for a while: check them on the live system, then mark (gecontroleerd <date>)."],
   isolated_note: ["Memo without links", "Link it to the memos it belongs with."],
+  possible_duplicate: ["Two memos that may cover the same subject", "A reranker judged them alike: merge them if they really are one subject, or link them and sharpen their descriptions if they are kept apart on purpose."],
+  duplicate_check_failed: ["Duplicate check failed", "The background reranker stopped with this error: see the admin page and the server log (docker logs knowledge)."],
   sparse_topic: ["Topic whose notes barely link", "Link its notes, or move them to a better topic."],
   history_failed: ["History not saved", "See the server log."],
   offline_conflict: ["Written offline while it changed here", "Merge it into the memo, then delete it."],

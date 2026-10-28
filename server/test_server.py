@@ -144,7 +144,7 @@ def main():
            "KNOWLEDGE_LANGUAGE": "nl", "KNOWLEDGE_BUILTIN_PROJECTS": "homelab,anpitek,trade",
            "KNOWLEDGE_BIND": "127.0.0.1", "KNOWLEDGE_RESCAN": "3600",
            "KNOWLEDGE_GITHUB_API": ghurl, "KNOWLEDGE_GITHUB_RAW": ghurl + "/raw", "KNOWLEDGE_EXTERNAL_SLEEP": "3600", "KNOWLEDGE_INSTANCE": "blue", "KNOWLEDGE_PLUGIN_GRACE": "0",
-           "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}"}
+           "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_RERANK_MODEL": "test", "KNOWLEDGE_DUPES_EVERY": "1", "KNOWLEDGE_DUPES_DELAY": "0", "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}"}
     proc = subprocess.Popen([sys.executable, str(Path(__file__).with_name("server.py"))], env=env)
     try:
         for _ in range(50):
@@ -289,6 +289,16 @@ def main():
         lint_out = call("knowledge_lint", {})[1]
         assert "trade/STATUS.md: no topic" in lint_out and "trade/NOTES.md" not in lint_out and "trade/CLAUDE.md" not in lint_out, lint_out
         assert "index_points_to_missing_file (120)" in lint_out, lint_out[:300]
+        # Background duplicate check (test reranker = word overlap): two memos with the same body end up in lint.
+        body = "the garage door opener runs on a relay with a reed contact for the closed state\n"
+        for n in ("dup_a", "dup_b"):
+            assert not call("knowledge_write", {"path": f"memory/{n}.md", "content": memo(body, n)})[0]
+        deadline = time.time() + 60
+        while "dup_a.md ↔ dup_b.md" not in (lint_out := call("knowledge_lint", {})[1]) and time.time() < deadline:
+            time.sleep(1)
+        assert "possible_duplicate" in lint_out and "dup_a.md ↔ dup_b.md (0." in lint_out, lint_out[-800:]
+        for n in ("dup_a", "dup_b"):
+            (mem / f"{n}.md").unlink()
         # Case-insensitive fast path, uppercase-escape fallback, and a file whose lowercase form changes length.
         (mem / "case.md").write_text("Mixed CASE Velux\nİstanbul Velux\n")
         http("POST", "/invalidate", {"paths": ["memory/case.md"]}, token="watch-token")
