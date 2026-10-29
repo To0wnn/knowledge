@@ -2,6 +2,7 @@
 edges for wikilinks, markdown links, doc/skill references and cited sources. On top of it: Louvain topic communities,
 graph insights (knowledge gaps for lint) and a relevance model for related notes.
 Pure functions over {rel: text}, tens of ms."""
+from collections import Counter
 import math
 import os
 import re
@@ -296,7 +297,9 @@ def insights(graph: dict) -> dict[str, list[dict]]:
     counted), skills included since 24 Oct 2026 (a skill no memo names is a loose dot on the map), and sparse topics (found from links, not a user's section: cohesion < 0.15, 3+ notes)."""
     nodes = {n["id"]: n for n in graph["nodes"]}
     g = topic_graph(nodes, [(l["source"], l["target"]) for l in graph["links"]])
-    isolated = [{"id": i, "project": nodes[i]["project"], "degree": g.degree(i)} for i in sorted(g) if g.degree(i) == 0]
+    size = Counter(n["project"] for n in nodes.values())  # a project's only note has nothing to link to
+    isolated = [{"id": i, "project": nodes[i]["project"], "degree": g.degree(i)} for i in sorted(g)
+                if g.degree(i) == 0 and size[nodes[i]["project"]] > 1]
     sparse = [c for c in graph["communities"] if c["size"] >= 3 and c["cohesion"] < 0.15 and c.get("kind") != "section"]
     return {"isolated": isolated, "sparse_topics": sparse}
 
@@ -416,4 +419,6 @@ if __name__ == "__main__":
     lone = build({"memory/a.md": "uses `forge-stack`", "claude/skills/forge-stack/SKILL.md": "s", "claude/skills/lone/SKILL.md": "s"})
     loose = {i["id"] for i in lone["insights"]["isolated"]}
     assert "claude/skills/lone/SKILL.md" in loose and "claude/skills/forge-stack/SKILL.md" not in loose, loose  # a loose skill
+    solo = build({"memory/a.md": "[[b]]", "memory/b.md": "x", "anpitek-memory/only.md": "no links"})
+    assert not solo["insights"]["isolated"], solo["insights"]  # the single note of a new project is not a gap
     print("ok", len(g["nodes"]), "nodes", len(g["links"]), "links")
