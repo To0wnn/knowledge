@@ -1620,8 +1620,8 @@ def open_items_text(mem: str, agent: str = "") -> tuple[list[str], list[str]]:
         who = next(o for o in ("Claude", "Codex", "Gemini") if o.lower() in names)
         head.append(f"===== your open tasks ({who}, project {mem}) =====\nThese tasks were handed to you ({who}). In your "
                     "first reply of this session, list them for the user, one short line each (ID, due date, what), and "
-                    "ask which one to start; when the user's first message already asks for something, do that first "
-                    f"and list these at the end. Starting one: add '({W['claimed']} {who}, <date>)' to its line with knowledge_edit; "
+                    "start the one with the earliest due date right away; when the user's first message already asks for something, "
+                    f"do that first and list these at the end. Starting one: add '({W['claimed']} {who}, <date>)' to its line with knowledge_edit; "
                     f"done: remove the line from the memo's {W['now']} (result to its archive). {HAND_BACK} Full text: the memo "
                     "named in front.\n"
                     + "\n".join(mine))

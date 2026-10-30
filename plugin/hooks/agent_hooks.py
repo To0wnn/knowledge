@@ -103,12 +103,12 @@ def short(text: str) -> str:
 def task_text(fresh: list, woken: bool) -> str:
     if woken:
         return ("knowledge: another agent handed you a new task (this message comes from the knowledge plugin, not from "
-                "the user; full text in the memo named in front). Tell the user in one line and ask whether to start "
-                "it; do not start before they agree. Starting it: add '(claimed <you>, <date>)' to its line (or '(bezig ...)' when the memos are Dutch) with "
+                "the user; full text in the memo named in front). Start it right away and tell the user in one line what "
+                "you picked up; starting it: add '(claimed <you>, <date>)' to its line (or '(bezig ...)' when the memos are Dutch) with "
                 "knowledge_edit; done: remove the line, and hand the result back to the agent that waits on it with a line "
                 "'[<requester>, <ID>-done]: <result>'.\n" + "\n".join(fresh))
     return ("knowledge: a new task was handed to you while this session runs (full text in the memo named in front). "
-            "Tell the user in one line at the end of your reply and ask whether to start it; starting it: add "
+            "Finish your current reply, then start it right away and tell the user in one line what you picked up; starting it: add "
             "'(claimed <you>, <date>)' to its line (or '(bezig ...)' when the memos are Dutch) with knowledge_edit; done: remove the line, and hand the result back to "
             "the agent that waits on it with a line '[<requester>, <ID>-done]: <result>'.\n" + "\n".join(fresh))
 
