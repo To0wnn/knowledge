@@ -335,8 +335,10 @@ def folder_links() -> dict:
             if root and name and under_home(root):
                 linked.setdefault(str(root), name)
             elif not root and p.is_dir() and under_home(p):
+                # git only for a folder inside a checkout: no .git up the tree, or .git right here, means the folder itself
+                git = next((q for q in (p, *p.parents) if (q / ".git").exists()), p) != p
                 top = subprocess.run(["git", "-C", str(p), "rev-parse", "--show-toplevel"], capture_output=True, text=True,  # git prints UTF-8, never the ANSI code page
-                                     encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL, timeout=10) if shutil.which("git") else None
+                                     encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL, timeout=10) if git and shutil.which("git") else None
                 # the checkout's root, as knowledge-init links it; git prints it with / on Windows too
                 top = Path(top.stdout.strip()) if top and top.returncode == 0 and top.stdout.strip() else None
                 # git prints the resolved path (macOS /private/var, a Windows long name): keep the spelling the agent used
@@ -1589,6 +1591,24 @@ def main(argv: list):
                 d = git_diff(sub)
                 assert "+changed" in d and "+two" not in d and "new1.txt" not in d and "b.txt" not in d, d
                 assert len(git_head(tmp, 5, "log", "--format=%s")) == 5, "a capped read stops at its limit"
+        # folder_links runs git only for a folder inside a checkout (its root found by git); others need no process.
+        if shutil.which("git"):
+            with tempfile.TemporaryDirectory() as tmp:
+                h, calls, real = Path(tmp).resolve(), [], (HOME, known_folders, git_repos, subprocess.run)
+                for d in ("repo/sub", "plain", "lk"):
+                    (h / d).mkdir(parents=True)
+                subprocess.run(["git", "init", "-q", str(h / "repo")], check=True)
+                (h / "lk" / project_marker.MARKER).write_text("p\n")
+                globals().update(HOME=h, known_folders=lambda: {str(h / d) for d in ("repo", "repo/sub", "plain", "lk")}, git_repos=lambda: [])
+                subprocess.run = lambda a, *k, **kw: calls.append(a) or real[3](a, *k, **kw)
+                try:
+                    f1 = folder_links()
+                    assert [c[2] for c in calls] == [str(h / "repo" / "sub")], calls
+                    assert f1["linked"] == [{"path": str(h / "lk"), "project": "p"}], f1
+                    assert [c["path"] for c in f1["candidates"]] == [str(h / "plain"), str(h / "repo")], f1
+                finally:
+                    globals().update(HOME=real[0], known_folders=real[1], git_repos=real[2])
+                    subprocess.run = real[3]
         # A diff that fails, and whose failure cannot be sent, never costs a chat turn handed out in the same poll.
         started, real = [], (globals()["server"], globals()["folder_links"], chat.start)
         def fake_server(method, path, tok, body=None):
