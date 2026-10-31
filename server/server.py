@@ -2537,7 +2537,7 @@ async def tasks_route(request: Request):
     return JSONResponse({"tasks": items, "notices": notices, "sync": sync})
 
 
-@server.custom_route("/context/{part}", methods=["GET"])
+@server.custom_route("/context/{part:int}", methods=["GET"])  # not a number: 404, not a crash
 async def context_route(request: Request):
     """?project= is the folder's project name from its .knowledge-project (with linked=1, sent by the plugin), else the
     session's directory. A folder linked to a project this device may not use gets one it may, and is told why."""
@@ -2545,13 +2545,13 @@ async def context_route(request: Request):
     agent = request.query_params.get("agent", "")  # claude, codex or agy: whose tasks go first
     parts = await asyncio.to_thread(context_parts, project, agent if agent in AGENT_OWNERS else "")  # lint + graph: off the loop
     if v := request.query_params.get("plugin", ""):  # every part asks, so all of them split the same way
-        if request.path_params["part"] == "1":
+        if request.path_params["part"] == 1:
             mark_plugin(device.get().get("name", ""), agent, v, request.query_params.get("url") == "default")
         if behind := await asyncio.to_thread(plugin_notice, agent, v):
             note = "\n\n".join(n for n in (note, behind) if n)
     if note:
         parts = parts[:-1] + split_parts(parts[-1] + "\n\n" + note)
-    n = int(request.path_params["part"])
+    n = request.path_params["part"]
     if not 1 <= n <= len(parts):
         return PlainTextResponse("")  # the plugin asks for a fixed number of parts; extra ones are empty
     head = f"[knowledge context part {n}/{len(parts)}]\n"

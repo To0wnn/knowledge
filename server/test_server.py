@@ -1233,6 +1233,7 @@ def main():
             parts.append(body)
             n += 1
         assert "overdue sample item" in "".join(parts), parts[-1][-500:]  # overdue open items at session start
+        assert http("GET", "/context/x")[0] == 404  # a part that is no number is not a server error
         assert len(parts) >= 2 and "Item 119" in parts[-1] and "global rules" in parts[0], len(parts)
         # CLAUDE.md's import line arrives expanded: a remote device has no ~/.claude/gedeeld/house_rules.md.
         assert "Memory is a hint, not the truth" in parts[0] and "@~/.claude/gedeeld" not in "".join(parts), parts[0][:800]
