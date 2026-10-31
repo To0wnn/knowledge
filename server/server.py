@@ -1003,7 +1003,11 @@ def house_rules_hint(rel: str) -> str:
     files = {r: t for r, t, _ in index.items() if r.count("/") == 1 and mem_of(r)}  # all roots: [[links]] may cross
     found = [f"{check}: {item}" for check, items in kb_lint.lint(files, mem=root).items() if check in MEMO_CHECKS
              for item in items if item == name or item.startswith((name + ":", name + " "))]
-    if any(i["id"] == rel for i in get_graph()["insights"]["isolated"]):
+    try:  # the write already happened: a failing graph must not make it look failed
+        isolated = any(i["id"] == rel for i in get_graph()["insights"]["isolated"])
+    except Exception:
+        isolated = False
+    if isolated:
         found.append(f"isolated_note: {name} links to no other note and none links to it; add [[name]] links to related memos")
     return ("\nHouse rules still open for this memo (fix them now): " + "; ".join(found)) if found else ""
 
@@ -1659,10 +1663,16 @@ def project_lint(mem: str) -> list[str]:
     if (hit := _project_lint_cache.get(key)) is not None:
         return hit
     roots = {mem} | {d for d, m in PROJECTS.values() if m == mem}
-    items = [f"{check}: {item}" for check, found in lint_all().items() if check in LINT_AT_START for item in found
+    try:  # a lint bug must not cost a session its context
+        report = lint_all()
+    except Exception as e:
+        print(f"project_lint {mem} failed: {type(e).__name__}: {e}", flush=True)
+        return []
+    items = [f"{check}: {item}" for check, found in report.items() if check in LINT_AT_START for item in found
              if (item.split(" ", 1)[0].split("/", 1)[0] if "/" in item.split(" ", 1)[0] else "memory") in roots]
     more = len(items) - LINT_AT_START_MAX
-    _project_lint_cache.clear()
+    if any(k[1] != index.gen for k in _project_lint_cache):
+        _project_lint_cache.clear()
     _project_lint_cache[key] = items[:LINT_AT_START_MAX] + ([f"... and {more} more: run knowledge_lint"] if more > 0 else [])
     return _project_lint_cache[key]
 
@@ -2533,7 +2543,7 @@ async def context_route(request: Request):
     session's directory. A folder linked to a project this device may not use gets one it may, and is told why."""
     project, note = session_project(request)
     agent = request.query_params.get("agent", "")  # claude, codex or agy: whose tasks go first
-    parts = context_parts(project, agent if agent in AGENT_OWNERS else "")
+    parts = await asyncio.to_thread(context_parts, project, agent if agent in AGENT_OWNERS else "")  # lint + graph: off the loop
     if v := request.query_params.get("plugin", ""):  # every part asks, so all of them split the same way
         if request.path_params["part"] == "1":
             mark_plugin(device.get().get("name", ""), agent, v, request.query_params.get("url") == "default")
