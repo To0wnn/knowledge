@@ -378,6 +378,7 @@ class Index:
                 # come after this (or never); its new task lines get their writer now
                 if WATCH_DEVICE and mem_of(rel) and (now := self.files.get(rel)):
                     note_task_authors(rel, hit[2] if hit else "", now[2], WATCH_DEVICE, keep=True)
+                    tell_task_problems(rel, hit[2] if hit else "", now[2])
         for rel in set(self.files) - seen:  # gone, or added while this walk ran: refresh decides
             self.refresh(rel)
 
@@ -916,6 +917,7 @@ async def knowledge_edit(path: str, old_string: str, new_string: str) -> str:
     audit("edit", rel)
     judge_soon(rel)
     replaced = kb_lint.replaced_decision(text, new.decode("utf-8")) if mem_of(rel) else ""
+    replaced += await asyncio.to_thread(approval_hint, rel, text, new.decode("utf-8"))
     return f"edited {rel} (version {version(new)})" + replaced + private_note(hidden) + await asyncio.to_thread(house_rules_hint, rel)
 
 
@@ -949,6 +951,7 @@ async def knowledge_write(path: str, content: str, base_version: str = "") -> st
     hint = await asyncio.to_thread(similar_memos_hint, rel, content) if current is None else ""  # embeds: not on the loop
     hint += kb_lint.replaced_decision((current or b"").decode("utf-8", "replace"), content) if mem_of(rel) else ""
     hint += f"\n{ARCHIVE_HINT}" if current is None and is_archive(rel) else ""
+    hint += await asyncio.to_thread(approval_hint, rel, (current or b"").decode("utf-8", "replace"), content)
     return f"wrote {rel} (version {version(data)})" + hint + private_note(hidden) + await asyncio.to_thread(house_rules_hint, rel)
 
 
@@ -1711,6 +1714,42 @@ assert WORKER_HANDBACK.search("- [Claude, K-1-done]: works; branch task/K-1; don
 assert not WORKER_HANDBACK.search("- [Claude, K-1-done]: works")
 
 
+TASK_LIKE = re.compile(r"^\s*(?:[-*+]\s+)?open (?:until|tot)\b.*?\[[^,\]]+,\s*[^\]]+\]", re.I)  # parse_task or a broken one
+
+
+def task_problems(rel: str, before: str, after: str) -> list[str]:
+    """What is wrong with the task lines a write adds, each a sentence for the writer: a date the server cannot read
+    (the line would silently be no task), or "start after <ID>" with an ID the project never had (it would start at
+    once, the opposite of what it says). An ID written in the same write counts: a chain may be added in one go."""
+    if not mem_of(rel) or rel.split("/", 2)[1:2] == ["sessions"] or is_archive(rel):
+        return []
+    old, out = set(before.splitlines()), []
+    for line in after.splitlines():
+        if line not in old and TASK_LIKE.match(line) and not parse_task(line):
+            out.append(f"task line '{line.strip()[:80]}' has no date the server can read, so it would be no task at all: write "
+                       "'open until <date>' as 2026-11-10 or 10 nov 2026 (always with the year). Format: " + TASK_FORMAT)
+    project = project_of(rel)
+    for t in added_tasks(rel, before, after) if project else []:
+        dep = t["start"][6:].strip() if t["start"].lower().startswith("after ") and t["start"].lower() != "after approval" else ""
+        if not dep:
+            continue
+        word = re.compile(rf"(?<![\w-]){re.escape(dep)}(?!\w)")
+        others = [x for r, x, _ in index.items(PROJECTS[project][1]) if r != rel] + [after.replace(t["body"], "")]
+        if not any(word.search(x) for x in others):
+            out.append(f"task line {t['id']} starts after {dep}, but project {project} has no task {dep} (open, handed back or "
+                       f"archived), and an unknown ID would let it start at once. Fix the ID, write {dep}'s line first (or in "
+                       "the same write), or use 'start now'.")
+    return out
+
+
+def tell_task_problems(rel: str, before: str, after: str):
+    """A session that wrote a memo file directly (the watcher or the rescan saw it) cannot be refused: it hears what is
+    wrong with its new task lines at its next turn."""
+    if WATCH_DEVICE and (problems := task_problems(rel, before, after)):
+        for p in problems:
+            add_notice(WATCH_DEVICE, project_of(rel), f"Knowledge: in {rel}, {p}")
+
+
 def refuse_bare_tasks(rel: str, before: str, after: str):
     """A new task line must say from whom and when it may start; lines already there stay as they are."""
     refuse_worker_handback(rel, before, after)
@@ -1718,12 +1757,24 @@ def refuse_bare_tasks(rel: str, before: str, after: str):
     if bare := [t["id"] for t in added if t["legacy"]]:
         raise ToolError(f"new task line {', '.join(bare)} must say from whom it is and when it may start: write it as "
                         f"{TASK_FORMAT}; 'start now' when it may start at once")
+    if problems := task_problems(rel, before, after):
+        raise ToolError(" ".join(problems))
     names = {n.lower() for n in read_json(TOKENS_FILE, {})}
     if bad := [t for t in added if t["device"] and t["device"].lower() not in names]:
         t = bad[0]
         raise ToolError(f"task line {t['id']} is pinned to device '{t['device']}' ({t['owner']}@{t['device']}), but no device "
                         "token has that name, so no device could ever start it. Use the exact token name of the device "
                         "(admin page, Tokens), or drop '@<device>' to let any device start it.")
+
+
+def approval_hint(rel: str, before: str, after: str) -> str:
+    """The answer to a write that added a task line which will not start by itself: tell the agent, so it does not
+    wait for a worker that never comes."""
+    new = {t["id"] for t in added_tasks(rel, before, after, changed=True)}
+    if not new or not (project := project_of(rel)):
+        return ""
+    return "".join(f"\nTask {t['id']} waits for the owner's approval in the Tasks tab ({t['waiting_reason']})."
+                   for t in project_tasks(project)[0] if t["id"] in new and t["path"] == rel and t["needs_approval"])
 
 
 def update_state(path: Path, change):
@@ -3116,6 +3167,7 @@ async def invalidate_route(request: Request):
         for p in paths:
             if mem_of(p) and (hit := index.files.get(p)):
                 note_task_authors(p, before.get(p, ""), hit[2], WATCH_DEVICE)
+                tell_task_problems(p, before.get(p, ""), hit[2])
     if WATCH_DEVICE:  # sessions that write memo files directly (not through knowledge_write) hear about duplicates too
         for p in paths:
             judge_soon(p, WATCH_DEVICE, keep=True)

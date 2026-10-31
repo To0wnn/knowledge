@@ -96,7 +96,28 @@ def tasks_contract(tmp, ck, fr, ver, raw):
     # Start conditions: after another task, a date, after approval. The writer (an admin-made token) is trusted.
     assert not add("- open until 2099-01-01 [Codex, DEP-1] from Gemini, start after CX-1: after the pruning")[0]
     assert not add("- open until 2099-01-01 [Codex, DAT-1] from Gemini, start 1 jan 2098: later")[0]
-    assert not add("- open until 2099-01-01 [Codex, APR-1] from Gemini, start after approval: risky")[0]
+    err, res = add("- open until 2099-01-01 [Codex, APR-1] from Gemini, start after approval: risky")
+    assert not err and "Task APR-1 waits for the owner's approval in the Tasks tab (waits for approval)" in res, res
+    # Refused, not silently wrong: an unknown "start after" ID would start at once; a date without year is no task.
+    err, res = add("- open until 2099-01-01 [Codex, DEP-9] from Gemini, start after NOPE-77: typo")
+    assert err and "no task NOPE-77" in res, res
+    err, res = add("- open until 10 nov [Codex, DAT-9] from Gemini, start now: no year")
+    assert err and "always with the year" in res, res
+    two = ("- open until 2099-01-01 [Codex, CH-1] from Gemini, start now: first\n"
+           "- open until 2099-01-01 [Codex, CH-2] from Gemini, start after CH-1: second")
+    assert not add(two)[0], "a chain written in one go"
+    call("knowledge_edit", {"path": path, "old_string": two + "\n", "new_string": ""})
+    # Written straight to disk (a VM session): not refusable, so the writer's device hears it at its next turn.
+    bad = tmp / "projects/garden/memory/project_bad.md"
+    bad.write_text(memo("- open until 10 nov [Codex, VMB-1] from Claude, start now: x\n"
+                        "- open until 2099-01-01 [Codex, VMB-2] from Claude, start after GHOST-1: y\n", "bad"))
+    http("POST", "/invalidate", {"paths": ["garden-memory/project_bad.md"]}, token="watch-token")
+    notes = [n for n in json.loads((tmp / "notices.json").read_text()) if "project_bad.md" in n["text"]]
+    assert {n["device"] for n in notes} == {"laptop"} and any("always with the year" in n["text"] for n in notes) \
+        and any("no task GHOST-1" in n["text"] for n in notes), notes
+    bad.unlink()
+    http("POST", "/invalidate", {"paths": ["garden-memory/project_bad.md"]}, token="watch-token")
+    (tmp / "notices.json").write_text(json.dumps([n for n in json.loads((tmp / "notices.json").read_text()) if "project_bad.md" not in n["text"]]))
     assert authors()["garden"]["DEP-1"]["by"] == next(n for n, c in json.loads((tmp / "tokens.json").read_text()).items()
                                                       if c.get("roots") == ["garden", "garden-memory"])
     r = rows()
