@@ -667,9 +667,8 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
     for name in ("codex", "claude", "agy", "tmux"):
         if WIN:
             if name != "tmux":
-                # chcp first: a new console (how agy is started) reads the rest of this UTF-8 file in the OEM code page
-                (bin_dir / f"{name}.cmd").write_text(f'@chcp 65001 >nul\r\n@"{sys.executable}" "{bin_dir / "fakeagent.py"}" {name} %*\r\n',
-                                                     encoding="utf-8")
+                # %~dp0, not the path: a new or no console (agy, a detached codex exec) reads this file in another code page
+                (bin_dir / f"{name}.cmd").write_text(f'@"{sys.executable}" "%~dp0fakeagent.py" {name} %*\r\n', encoding="utf-8")
         else:
             (bin_dir / name).write_text(f'#!/bin/sh\nexec "{sys.executable}" "{bin_dir / "fakeagent.py"}" {name} "$@"\n', encoding="utf-8")
             (bin_dir / name).chmod(0o755)
@@ -969,8 +968,8 @@ def wake_e2e(tok: str, home: Path, project: Path):
     calls = home / "codex-calls.jsonl"
     (bin_dir / "fakecodex.py").write_text(f"import json, sys\nimport os\nopen({str(calls)!r}, 'a', encoding='utf-8').write(json.dumps(sys.argv[1:] + [os.environ.get('CODEX_HOME', '')]) + '\\n')\n", encoding="utf-8")
     if WIN:
-        # chcp first: a console in the OEM code page (an SSH session, a new console) misreads the UTF-8 path below
-        (bin_dir / "codex.cmd").write_text(f'@chcp 65001 >nul\r\n@"{sys.executable}" "{bin_dir / "fakecodex.py"}" %*\r\n', encoding="utf-8")
+        # %~dp0, not the path: a console in another code page (an SSH session, a new console) misreads a non-ASCII path
+        (bin_dir / "codex.cmd").write_text(f'@"{sys.executable}" "%~dp0fakecodex.py" %*\r\n', encoding="utf-8")
     else:
         (bin_dir / "codex").write_text(f'#!/bin/sh\nexec "{sys.executable}" "{bin_dir / "fakecodex.py"}" "$@"\n', encoding="utf-8")
         (bin_dir / "codex").chmod(0o755)
@@ -1514,7 +1513,7 @@ def companion_setup(tmp: Path):
     if WIN:
         me = subprocess.run(["whoami"], capture_output=True, text=True).stdout.strip().lower()
         xml = (home / files[0]).read_text(encoding="utf-16")
-        check(f"<UserId>{me}</UserId>" in xml.lower() and "workgroup" not in xml.lower(),
+        check(f"<userid>{me}</userid>" in xml.lower() and "workgroup" not in xml.lower(),
               "install-companion on windows: the logon task names this account as Windows does, not %USERDOMAIN%", f"{me}\n{xml[:600]}")
     if system != "windows":
         key = (home / ".knowledge" / "companion" / "api-key").read_text(encoding="utf-8").strip()
