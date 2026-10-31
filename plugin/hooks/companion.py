@@ -1277,7 +1277,10 @@ class Handler(BaseHTTPRequestHandler):
         if not self.host_ok() or o is None:
             return self.send(403, {"error": "not allowed"})
         if path == "/local/api/hello":
-            return self.send(200, {"companion": version(), "host": socket.gethostname(), "machine": token_store.machine().get("id", "")}, origin=o)
+            # the machine id lets a token act as this pc: only with the key; the web UI finds its row by the hash
+            mid = token_store.machine().get("id", "")
+            return self.send(200, {"companion": version(), "host": socket.gethostname(), "machineHash": hashlib.sha256(mid.encode()).hexdigest(),
+                                   **({"machine": mid} if self.key_ok() else {})}, origin=o)
         if path == "/local/api/state":
             s = page_state()
             if not self.key_ok():  # the web UI's tab (and anyone else here): the agents, no tasks, folders or activity
@@ -1301,7 +1304,7 @@ class Handler(BaseHTTPRequestHandler):
         # a POST always carries Origin in a browser; JSON only, so a foreign page cannot send it without a preflight
         if not self.host_ok() or not o or not self.headers.get("Content-Type", "").startswith("application/json"):
             return self.send(403, {"error": "not allowed"})
-        if path != "/local/api/trust" and not self.key_ok():  # trusting the knowledge hooks is what the setup does anyway
+        if not self.key_ok():
             return self.send(403, {"error": "Open the companion from its shortcut: its link carries the key this change needs"}, origin=o)
         try:
             body = json.loads(raw or b"{}")

@@ -239,7 +239,7 @@ def start_server(tmp: Path):
                                              if (Path.home() / ".claude/gedeeld/dev_rules.md").exists() else "# Development rules\n\n1. Read first.\n", encoding="utf-8")
     (data["claude"] / "house_rules.md").write_text("# House rules\n\n1. Search first.\n2. A memo has \"## Stand\" and \"## Keuzes\".\n", encoding="utf-8")
     h = lambda t: hashlib.sha256(t.encode()).hexdigest()
-    (tmp / "tokens.json").write_text(json.dumps({"owner": {"sha256": h("owner-token"), "write": True, "skills": True},
+    (tmp / "tokens.json").write_text(json.dumps({"owner": {"sha256": h("owner-token"), "write": True, "skills": True, "self": True},
                                                  "watcher": {"sha256": h("watch-token"), "watch": True}}), encoding="utf-8")
     (data["claude"] / "skills" / "s1").mkdir(parents=True)
     (data["claude"] / "skills" / "s1" / "SKILL.md").write_text("---\nname: s1\n---\nshared skill → ✅\n", encoding="utf-8")
@@ -263,7 +263,8 @@ def start_server(tmp: Path):
         raise SystemExit("server did not start:\n" + (tmp / "server.log").read_text(errors="replace")[-3000:])
     admin = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice", "X-Knowledge-UI": "1"}
     assert http("POST", "/ui/api/admin/project", {"name": "garden"}, admin)[0] == 200
-    st, body = http("POST", "/ui/api/admin/token", {"name": "friend-pc", "write": True, "redact": True,
+    # the admin's own device ("self"): its task lines are trusted, its machines the admin's
+    st, body = http("POST", "/ui/api/admin/token", {"name": "friend-pc", "write": True, "redact": True, "self": True,
                                                     "roots": ["garden", "garden-memory"]}, admin)
     assert st == 200, body
     tok = json.loads(body)["token"]
@@ -572,7 +573,7 @@ def resumed(home: Path, project: Path, garden: Path):
     hooks = CLIENT / "plugin" / "hooks" / "agent_hooks.py"
     admin = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice", "X-Knowledge-UI": "1"}
     for agent, cmd in (("claude", ["tasks", "claude"]), ("codex", ["tasks", "codex"]), ("agy", ["hints"])):
-        st, body = http("POST", "/ui/api/admin/token", {"name": f"resume-{agent}", "write": True, "roots": ["garden", "garden-memory"]}, admin)
+        st, body = http("POST", "/ui/api/admin/token", {"name": f"resume-{agent}", "write": True, "self": True, "roots": ["garden", "garden-memory"]}, admin)
         env = user_env(home / f"resume {agent}", KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=json.loads(body)["token"])
         doc = project / "docs" / f"resume-{agent}.md"
         doc.write_text("still true: pushback needs a clearance\n", encoding="utf-8")
@@ -601,7 +602,7 @@ def hook_errors(tmp: Path, project: Path):
     admin = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice", "X-Knowledge-UI": "1"}
     sh = bash()
     for agent in ("claude", "codex", "agy"):
-        st, body = http("POST", "/ui/api/admin/token", {"name": f"status-{agent}", "write": True, "roots": ["garden", "garden-memory"]}, admin)
+        st, body = http("POST", "/ui/api/admin/token", {"name": f"status-{agent}", "write": True, "self": True, "roots": ["garden", "garden-memory"]}, admin)
         home = tmp / f"Status {agent} Usér"
         env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=json.loads(body)["token"])
         if agent == "claude":  # Claude Code starts every hook through py.sh: a crash of any script is recorded there
@@ -829,9 +830,11 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         # Only this pc's pages: a foreign origin, a rebound host name, a POST without Origin or not as JSON get nothing.
         check(call("GET", "/local/api/hello", origin="https://evil.example")[0] == 403, "companion: a foreign origin is refused")
         check(call("GET", "/local/api/hello", origin=None, host="evil.example:%d" % port)[0] == 403, "companion: a foreign Host (DNS rebinding) is refused")
-        st, hdr, body = call("GET", "/local/api/hello", origin=BASE)
-        check(st == 200 and hdr.get("Access-Control-Allow-Origin") == BASE and "companion" in json.loads(body),
-              "companion: hello answers the knowledge web UI's origin with CORS", f"{st} {hdr} {body}")
+        st, hdr, body = call("GET", "/local/api/hello", origin=BASE, key=False)
+        mid = json.loads(call("GET", "/local/api/hello")[2]).get("machine", "")  # with the local key
+        check(st == 200 and hdr.get("Access-Control-Allow-Origin") == BASE and "companion" in json.loads(body) and mid
+              and "machine" not in json.loads(body) and json.loads(body)["machineHash"] == hashlib.sha256(mid.encode()).hexdigest(),
+              "companion: hello answers the knowledge web UI's origin with CORS, the machine id only as a hash (the id with the key)", f"{st} {hdr} {body}")
         st, hdr, _ = call("OPTIONS", "/local/api/hello", origin=BASE, ctype=None)
         check(st == 204 and hdr.get("Access-Control-Allow-Private-Network") == "true" and hdr.get("Access-Control-Allow-Origin") == BASE,
               "companion: the preflight allows Private Network Access", f"{st} {hdr}")
@@ -844,6 +847,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
               and call("POST", "/local/api/settings", {"startWhenNone": {"codex": True}}, key=False)[0] == 403
               and codex_cfg.read_text(encoding="utf-8") == toml and not (home / ".knowledge" / "companion" / "settings.json").exists(),
               "companion: YOLO and settings without the local key are refused, also with the page's own Origin")
+        check(call("POST", "/local/api/trust", {}, origin=BASE, key=False)[0] == 403, "companion: trusting hooks needs the local key too")
         big = {"agent": "codex", "pad": "x" * 60000}  # a refusal sent before the body was read made Windows reset the connection (10053)
         check(all(_quiet(lambda: call("POST", "/local/api/yolo", big, key=False)[0] == 403) for _ in range(20)),
               "companion: a refused POST reads its body first (no connection reset)")

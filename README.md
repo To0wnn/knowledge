@@ -45,7 +45,7 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   (`open tot` also works). A new line without `from`/`start` is refused at write time; older lines keep working as
   "start now" and show as legacy. The server records who added each line; a task starts by itself only when its start
   condition is met and its writer is trusted (per project on the admin page; by default the project's owner and their
-  tokens, admins and tokens an admin made), otherwise the owner or an admin approves it in the Tasks tab. Only tasks
+  tokens, admins and the admins' own devices), otherwise the owner or an admin approves it in the Tasks tab. Only tasks
   that may start reach an agent as "start now" (`/tasks`, the wake, `GET /tasks/ready`); the others are listed with the
   reason. One task is started on one machine only: the first device to take it holds a 30-minute lease
   (`state/task_leases.json`). `POST /tasks/woken` takes the lease (200 `{"lease"}`, or 409 `{"held_by"}` when another
@@ -77,6 +77,12 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   "unknown"), last hook error, workers and recent sessions. A person sees the machines of their own tokens; an admin
   all. A machine id belongs to the person (or the admins) whose token first reported it; another
   person's token on the same pc gets a machine record of its own and never sees or steers the first one. Plugins before 0.15 show as one "old plugin" row per token.
+- **The admins' own devices:** a token an admin makes counts as the admins only when it is marked **"My own device"**
+  (`"self": true`, a checkbox on the admin page, also on existing tokens): its machines are the admins' to see and
+  steer, and its task lines are trusted. Mark the tokens of your own pcs, phone and the server's own jobs (watcher,
+  reports); never a token you made for a friend, a guest or a personal assistant. Unmarked, an admin-made token is
+  its own party: its machines get records of their own, its task lines wait for approval. Machine records bound to
+  the admins before this flag existed stay theirs and match marked tokens only.
 - **Workers, not chats:** a task never goes into someone's chat. The companion (below) starts a **worker** per ready
   task: a fresh headless session of the task's agent (Claude Code `claude -p --output-format stream-json`, Codex
   `codex exec --json`, agy `agy -p`) in its own git worktree on branch `task/<ID>` (`~/.knowledge/worktrees/`), or in

@@ -45,6 +45,16 @@ function skillsWhyNot(t) {
   if (t.roots && t.roots.length && !t.roots.includes("claude")) return "does not see the shared skills";
   return "";
 }
+// An admin-made token counts as the admin (its machines, its task lines) only when marked as the admin's own device.
+function accessCell(t, access) {
+  const td = el("td", "", access);
+  if (!state.admin || t.owner) return td;
+  const l = el("label", "check"), c = el("input"); c.type = "checkbox"; c.checked = !!t.self;
+  c.setAttribute("aria-label", `${t.name} is my own device`);
+  l.title = "My own device: counts as me for its machines and task lines. Never tick it for a friend's or a PA's token.";
+  c.onchange = () => run(() => api("/ui/api/admin/token", { name: t.name, update: true, self: c.checked }), c);
+  l.append(c, " own device"); td.append(el("br"), l); return td;
+}
 function skillsCell(t) {
   const td = el("td"), why = skillsWhyNot(t);
   if (why) { const x = el("span", "muted", "—"); x.title = `Not possible: ${why}`; td.append(x); return td; }
@@ -114,7 +124,7 @@ function renderTokens() {
       fold.onclick = () => { openClients.has(t.name) ? openClients.delete(t.name) : openClients.add(t.name); renderTokens(); };
       name.append(" ", fold);
     }
-    tr.append(name, el("td", "", access), el("td", "", scopeText(t) + (t.redact ? " · secrets masked" : "")), skillsCell(t),
+    tr.append(name, accessCell(t, access), el("td", "", scopeText(t) + (t.redact ? " · secrets masked" : "")), skillsCell(t),
       el("td", "muted", t.created ? `${day(t.created)}${t.by ? " · " + t.by : ""}` : "before the admin page"),
       el("td", t.last_used ? "muted" : "unused", t.last_used ? ago(t.last_used) : "never used"), pluginCell(t, open));
     const td = el("td"), b = el("button", "ghost danger", "Revoke");
@@ -307,7 +317,7 @@ async function load() {
     const l = state.limits;
     document.querySelector(".brand").textContent = `Knowledge · ${state.user}`;
     for (const sec of ["people", "external", "settings", "system"]) document.querySelector(`[data-sec=${sec}]`).hidden = true;
-    for (const id of ["t-watch", "t-skills"]) $(id).closest("label").style.display = "none"; // .check sets display, which beats [hidden]
+    for (const id of ["t-watch", "t-skills", "t-self"]) $(id).closest("label").style.display = "none"; // .check sets display, which beats [hidden]
     document.querySelectorAll(".admin-only").forEach((x) => (x.hidden = true));
     $("t-roots").previousElementSibling.textContent = "Projects (tick at least one)";
     $("limits-tokens").textContent = `You may hold ${l.tokens} tokens, for the projects you have access to. Revoke one you no longer use.`;
@@ -353,7 +363,7 @@ $("token-form").onsubmit = (e) => {
   run(async () => {
     res = await api("/ui/api/admin/token", {
       name: $("t-name").value.trim(), write: $("t-write").checked, redact: $("t-redact").checked, watch: $("t-watch").checked,
-      skills: $("t-skills").checked,
+      skills: $("t-skills").checked, self: $("t-self").checked,
       all: !!$("t-roots").querySelector('input[value="*"]:checked'),
       roots: [...$("t-roots").querySelectorAll("input:checked")].flatMap((c) => c.value.split(",")).filter((r) => r !== "*"),
     });
@@ -372,7 +382,7 @@ function applyKind() {
   const k = KINDS[document.querySelector('input[name="t-kind"]:checked')?.value];
   if (!k) return;
   $("t-write").checked = k.write; $("t-redact").checked = k.redact; $("t-watch").checked = false;
-  $("t-skills").checked = k.skills && state.admin;
+  $("t-skills").checked = k.skills && state.admin; $("t-self").checked = k.skills && state.admin; // "own" = my device
   const all = $("t-roots").querySelector('input[value="*"]');
   if (all) all.checked = k.all;
   checkRules();
@@ -387,7 +397,7 @@ function checkRules() {
   $("t-skills-why").textContent = why && state.admin ? `Shared skills are off: ${why}.` : "";
 }
 document.querySelectorAll('input[name="t-kind"]').forEach((r) => (r.onchange = applyKind));
-for (const id of ["t-write", "t-redact", "t-skills", "t-watch"]) {
+for (const id of ["t-write", "t-redact", "t-skills", "t-watch", "t-self"]) {
   $(id).addEventListener("change", () => { document.querySelectorAll('input[name="t-kind"]').forEach((r) => (r.checked = false)); checkRules(); });
 }
 $("t-roots").addEventListener("change", checkRules);
