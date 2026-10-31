@@ -86,7 +86,8 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   hand-over `<ID>-cont` goes on in the same worktree and branch, and the branch, the memo and the last hand-over line
   are all it knows. Workers are off on a new pc ("Workers allowed" in the companion's settings), at most one per
   agent unless its maximum says more, one while its usage limit is unknown, none while a Wolf game session runs (its
-  API socket, when readable; Sunshine is not detected). A worker that ended without finishing its task is not started
+  API socket, when readable; Sunshine is not detected). On macOS the companion's python may not read ~/Documents, ~/Desktop or
+  ~/Downloads (privacy consent): a task linked there waits with that reason until it gets Full Disk Access. A worker that ended without finishing its task is not started
   again for 6 hours unless asked. Its claim marker `(claimed <agent> worker, <date>)` holds only while its companion
   renews the task's lease, so such a task shows as startable again (and gets the idle notice) instead of staying stuck. The companion knows a worker by its pid and that process's start time,
   so after a reboot a recorded worker counts as ended and a stop never hits a reused pid. Once the requester merged the branch into main or master, the companion removes the

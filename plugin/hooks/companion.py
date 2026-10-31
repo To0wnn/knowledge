@@ -244,16 +244,23 @@ def project_folders() -> dict:
     """{project: folder} of the folders here linked to a project (.knowledge-project), never the home folder: from the
     known folders, read anew each time (a folder linked a moment ago counts at once)."""
     out = {}
+    DENIED.clear()
     for c in sorted(known_folders()):
         try:
             # the path as the agent wrote it, not resolve()d: a macOS /var or a Windows 8.3 name would not match its own key
             root, name = project_marker.project_root(Path(os.path.abspath(c)))
             if not (root and name) or root.resolve() == HOME.resolve():
                 continue
+        except PermissionError:  # macOS: ~/Documents, ~/Desktop, ~/Downloads need consent for the python launchd starts
+            DENIED.add(c)
+            continue
         except OSError:
             continue
         out.setdefault(name, str(root))
     return out
+
+
+DENIED: set = set()  # known folders the companion may not read (project_folders); why_not names them
 
 
 # ---------------------------------------------------------------- folders (the link to a project)
@@ -268,6 +275,8 @@ def git_repos(depth: int = 3) -> list:
     if time.time() - _scan["at"] < SCAN_EVERY:
         return _scan["repos"]
     found, skip = [], {"node_modules", "AppData", "Library", "snap", "venv", "__pycache__", "worktrees"}
+    if sys.platform == "darwin":  # protected (TCC): walking them at logon would ask "python3 would like to access ..."
+        skip |= {"Documents", "Desktop", "Downloads"}
 
     def walk(d: Path, left: int):
         try:
@@ -780,7 +789,9 @@ def why_not(t: dict, ws: dict, s: dict, lim: dict, game: str) -> str:
     if sum(1 for w in ws.values() if w["agent"] == a and w["status"] == "running") >= cap:
         return f"{AGENTS[a][0]} runs {cap} worker(s) already, its maximum here" + ("" if lim.get(a) is not None else " (limit unknown: 1)")
     if not project_folders().get(t["project"]):
-        return f"No folder linked to project {t['project']} on this pc"
+        return f"No folder linked to project {t['project']} on this pc" + (
+            f"; the companion may not read {', '.join(sorted(DENIED)[:3])}: give {sys.executable} Full Disk Access "
+            "(System Settings, Privacy & Security), or link a folder outside Documents, Desktop and Downloads" if DENIED else "")
     return ""
 
 
@@ -1257,6 +1268,9 @@ def main(argv: list):
         assert why_not(task, run, on, {"codex": None}, "").endswith("(limit unknown: 1)"), "unknown limit: one worker at most"
         assert why_not(task, run, on, {"codex": 40.0}, "") == "", "known limit: up to its max"
         assert why_not({**task, "project": "q"}, {}, on, {"codex": 10.0}, "").startswith("No folder linked")
+        DENIED.add("/Users/x/Documents/app")
+        assert "Full Disk Access" in why_not({**task, "project": "q"}, {}, on, {"codex": 10.0}, ""), "a folder macOS keeps from it is named"
+        DENIED.clear()
         # A failed start gives the task back at once.
         did = []
         g.update(claim=lambda t, tok, s, start="": did.append(("claim", s)) or "", release=lambda t, tok: did.append(("release",)))
