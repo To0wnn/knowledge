@@ -10,6 +10,7 @@ line: a new session every time, never a resumed one. YOLO workers get a git chec
   workers.py --self-test   the checks of this file (worktree, checkpoint, rollback, the argv per agent)
 Standard library only; Linux, macOS and Windows.
 """
+import hashlib
 import json
 import os
 import re
@@ -62,7 +63,9 @@ def worktree(folder: str, tid: str) -> dict:
     if top.returncode or not shutil.which("git"):
         return {"cwd": folder}
     repo, bid = Path(top.stdout.strip()), base_id(tid)
-    branch, wt = f"task/{safe(bid)}", WORKTREES / f"{safe(repo.name)}-{safe(bid)}"
+    # the repository's own hash in the name: two checkouts called "app" with a task KN-1 each never share a worktree
+    tag = hashlib.sha256(str(repo.resolve()).encode()).hexdigest()[:6]
+    branch, wt = f"task/{safe(bid)}", WORKTREES / f"{safe(repo.name)}-{tag}-{safe(bid)}"
     if not (wt / ".git").exists():
         WORKTREES.mkdir(parents=True, exist_ok=True)
         has = git(repo, "rev-parse", "-q", "--verify", f"refs/heads/{branch}").returncode == 0
@@ -94,7 +97,7 @@ def checkpoint(cwd: str, name: str) -> str:
         env = {"GIT_INDEX_FILE": str(Path(t) / "index"), "GIT_AUTHOR_NAME": "knowledge companion", "GIT_AUTHOR_EMAIL": "knowledge@localhost",
                "GIT_COMMITTER_NAME": "knowledge companion", "GIT_COMMITTER_EMAIL": "knowledge@localhost"}
         git(cwd, "read-tree", "HEAD", env=env, check=True)
-        git(cwd, "add", "-A", ".", env=env, check=True)
+        git(cwd, "add", "-A", ":/", env=env, check=True)  # the whole worktree, also when the agent works in a subfolder
         tree = git(cwd, "write-tree", env=env, check=True).stdout.strip()
         ref = CKPT + safe(name)
         prev = git(cwd, "rev-parse", "-q", "--verify", ref).stdout.strip()
@@ -113,10 +116,11 @@ def rollback(cwd: str, name: str) -> str:
         raise RuntimeError(f"no checkpoint for {name}")
     head = re.search(r"^HEAD ([0-9a-f]{40})$", git(cwd, "log", "-1", "--format=%B", ck).stdout, re.M)
     undo = checkpoint(cwd, name + "-undo")
-    git(cwd, "reset", "-q", "--hard", head.group(1) if head else "HEAD", check=True)
-    git(cwd, "clean", "-fdq", check=True)  # files made after the checkpoint: they are in the -undo checkpoint
-    git(cwd, "checkout", ck, "--", ".", check=True)
-    git(cwd, "reset", "-q", check=True)  # files that were untracked at the checkpoint stay untracked
+    top = git(cwd, "rev-parse", "--show-toplevel", check=True).stdout.strip()  # the whole worktree, as the checkpoint holds it
+    git(top, "reset", "-q", "--hard", head.group(1) if head else "HEAD", check=True)
+    git(top, "clean", "-fdq", check=True)  # files made after the checkpoint: they are in the -undo checkpoint
+    git(top, "checkout", ck, "--", ":/", check=True)
+    git(top, "reset", "-q", check=True)  # files that were untracked at the checkpoint stay untracked
     return f"rolled back to {ck[:10]}; the state before is checkpoint {name}-undo ({undo[:10]})"
 
 
@@ -173,12 +177,16 @@ def prompt(task: dict, agent: str, machine: str, where: dict) -> str:
 
 def kill(pid: int, hard: bool = False):
     """Stop a worker and the processes it started (its own process group / tree)."""
+    if os.name == "nt":  # a detached console process has no window to close: only /F stops it
+        r = subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True, text=True, timeout=30)
+        if r.returncode and "not found" not in (r.stdout + r.stderr):
+            raise RuntimeError(f"taskkill failed: {(r.stderr or r.stdout).strip()[:200]}")
+        return
     try:
-        if os.name == "nt":
-            subprocess.run(["taskkill", "/T", *(["/F"] if hard else []), "/PID", str(pid)], capture_output=True, timeout=30)
-        else:
-            os.killpg(os.getpgid(pid), signal.SIGKILL if hard else signal.SIGTERM)
-    except (OSError, subprocess.SubprocessError):
+        if os.getpgid(pid) != pid:  # not the session leader the companion started: a reused pid, leave it alone
+            return
+        os.killpg(pid, signal.SIGKILL if hard else signal.SIGTERM)
+    except ProcessLookupError:
         pass
 
 
@@ -297,13 +305,18 @@ def self_test():
         assert (Path(w["cwd"]) / project_marker.MARKER).read_text().strip() == "garden"
         assert not git(w["cwd"], "status", "--porcelain").stdout.strip(), "the marker stays out of commits"
         assert worktree(str(sub), "KN-1-cont")["worktree"] == w["worktree"], "a hand-over goes on in the same worktree"
+        top = Path(w["worktree"]) / "top.txt"  # outside the project's subfolder, never committed: in the checkpoint too
+        top.write_text("top\n")
         # checkpoint and rollback: the files of before the turn come back, the state before the rollback is kept
         assert checkpoint(w["cwd"], "KN-1")
         (Path(w["cwd"]) / "a.txt").write_text("broken\n")
+        top.write_text("changed\n")
         (Path(w["cwd"]) / "new.txt").write_text("new\n")
         git(w["cwd"], "commit", "-qam", "bad turn", check=True)
         assert "rolled back" in rollback(w["cwd"], "KN-1")
         assert (Path(w["cwd"]) / "a.txt").read_text() == "one\n" and not (Path(w["cwd"]) / "new.txt").exists()
+        assert top.read_text() == "top\n", "an uncommitted file outside the subfolder comes back too"
+        top.unlink()
         assert git(w["cwd"], "log", "-1", "--format=%s").stdout.strip() == "one"
         undo = git(w["cwd"], "show", f"{CKPT}KN-1-undo:app/new.txt")
         assert undo.returncode == 0 and undo.stdout == "new\n", "the rolled-back work is kept on the -undo checkpoint"

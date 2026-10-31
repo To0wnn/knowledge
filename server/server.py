@@ -1666,7 +1666,7 @@ def added_tasks(rel: str, before: str, after: str, changed: bool = False) -> lis
             and (t["id"] not in ids or changed and (t["id"], task_sig(t)) not in sigs)]
 
 
-WORKER_HANDBACK = re.compile(r"\bbranch\s+\S+.*\bdone:.*\bleft:", re.I | re.S)
+WORKER_HANDBACK = re.compile(r"\b(?:branch|folder)\s+\S+.*\bdone:.*\bleft:", re.I | re.S)  # folder: a project without git
 
 
 def refuse_worker_handback(rel: str, before: str, after: str):
@@ -2257,8 +2257,10 @@ def machine_rows() -> list[dict]:
         agents = {}
         for a in AGENT_OWNERS:
             mine = {**(m.get("agents") or {}).get(a, {}), **(comp.get("agents") or {}).get(a, {})}
-            errs = sorted((e for n in m.get("tokens", {}) for e in status_errors(f"{n}#{mid}").get(a, [])), key=lambda e: e["at"])
-            sessions = sorted((s for s in m.get("sessions", {}).values() if s["agent"] == a and now - s["at"] < SESSION_KEEP),
+            # only what this person's own tokens reported: a pc shared with someone else shows not their sessions or errors
+            errs = sorted((e for n in names for e in status_errors(f"{n}#{mid}").get(a, [])), key=lambda e: e["at"])
+            sessions = sorted((s for s in m.get("sessions", {}).values() if s["agent"] == a and now - s["at"] < SESSION_KEEP
+                               and s.get("token") in names),
                               key=lambda s: -s["at"])
             workers = [w for w in comp.get("workers", []) if w.get("agent") == a]
             if not (mine or sessions or workers or errs):
@@ -2596,8 +2598,9 @@ class BearerAuth:
         if re.fullmatch(r"[0-9a-f]{16}", mid := headers.get(b"x-knowledge-machine", b"").decode("latin-1")):
             # the pc this token runs on (plugin 0.15.0+): leases, sessions and the Machines list key on token + machine
             label = re.sub(r"[^\w.-]", "-", headers.get(b"x-knowledge-machine-label", b"").decode("latin-1"))[:60]
-            dev = {**dev, "machine": mid, "machine_label": label or mid,
-                   "worker": re.sub(r"[^\w.-]", "", headers.get(b"x-knowledge-worker", b"").decode("latin-1"))[:60]}
+            dev = {**dev, "machine": mid, "machine_label": label or mid}
+        if worker := re.sub(r"[^\w.-]", "", headers.get(b"x-knowledge-worker", b"").decode("latin-1"))[:60]:
+            dev = {**dev, "worker": worker}  # a session the companion started for this one task
         device.set(dev)
         return await self.app(scope, receive, send)
 
@@ -3054,7 +3057,7 @@ async def tasks_route(request: Request):
             return tasks, task_holders(project, tasks, dev_key())
         held = {}
         for t in tasks:
-            if t["startable"] and t["owner"].lower() in names:
+            if t["startable"] and t["owner"].lower() in names and (not dev.get("worker") or t["id"] == dev["worker"]):
                 ok, h = claim_task(project, t, agent, dev_key(), q.get("session", ""), start, told=seen is not None and t["id"] in seen)
                 if not ok:
                     held[t["id"]] = h
@@ -3094,8 +3097,8 @@ async def tasks_ready_route(request: Request):
         if in_scope(mem + "/") and may_lease(device.get(), p):  # a read-only token could take none of them
             tasks, leases = (await asyncio.to_thread(project_tasks, p))[0], read_json(TASK_LEASES, {}).get(p, {})
             out += [{"project": p, "path": t["path"], "id": t["id"], "owner": t["owner"], "device": t["device"], "agent": a,
-                     "from": t["from"], "start": t["start"], "author": t["author"],
-                     "text": t["text"] if t["trusted"] else untrusted_text(t["text"], t["author"]),
+                     "from": t["from"] if t["trusted"] else re.sub(r"[^\w .@-]", "", t["from"])[:40], "start": t["start"],
+                     "author": t["author"], "text": t["text"] if t["trusted"] else untrusted_text(t["text"], t["author"]),
                      "mine": bool(l := leases.get(t["id"])) and l.get("until", 0) >= now and l.get("device", "").lower() == dev.lower()}
                     for t in tasks if t["startable"] and (a := owner_agent(t["owner"]))
                     and not lease_holder(t, leases.get(t["id"]), dev, now)]
@@ -3221,7 +3224,8 @@ async def context_route(request: Request):
     session's directory. A folder linked to a project this device may not use gets one it may, and is told why."""
     project, note = session_project(request)
     agent = request.query_params.get("agent", "")  # claude, codex or agy: whose tasks go first
-    chat = plugin_version(request.query_params.get("plugin", "")) >= (0, 15, 0)  # tasks run in workers, not in chats
+    # tasks run in workers, not in chats; a worker itself knows its one task from its prompt
+    chat = plugin_version(request.query_params.get("plugin", "")) >= (0, 15, 0) and not device.get().get("worker")
     parts = await asyncio.to_thread(context_parts, project, agent if agent in AGENT_OWNERS else "", chat)  # lint + graph: off the loop
     if v := request.query_params.get("plugin", ""):  # every part asks, so all of them split the same way
         if request.path_params["part"] == 1:
@@ -4448,12 +4452,16 @@ async def machine_flag(request: Request):
         return JSONResponse({"error": str(e)}, status_code=400)
     if contains_secret(detail):
         detail = "(withheld: contains a known secret value)"
-    key, new = f"{agent}:{session}:{kind}", []
+    if not dev.get("machine"):
+        return JSONResponse({"error": "needs X-Knowledge-Machine"}, status_code=400)
+    key, new, now = f"{agent}:{session}:{kind}", [], time.time()
 
     def change(d):
-        m = d.setdefault(dev.get("machine") or f"token:{dev['name']}", {})
-        if key not in m.get("flags", []):
+        m = d.setdefault(dev["machine"], {})
+        recent = [t for t in m.get("flag_times", []) if now - t < 3600]
+        if key not in m.get("flags", []) and len(recent) < 10:  # one per session and kind, at most 10 an hour per pc
             m["flags"] = (m.get("flags", []) + [key])[-200:]
+            m["flag_times"] = recent + [now]
             new.append(key)
     await asyncio.to_thread(update_state, MACHINES_FILE, change)
     if new:
@@ -4477,7 +4485,7 @@ async def machine_report(request: Request):
                   "agents": {a: {"yolo": v.get("yolo") is True, "trusted": v.get("trusted") if isinstance(v.get("trusted"), bool) else None,
                                  "limit": float(v["limit"]) if isinstance(v.get("limit"), (int, float)) else None}
                              for a, v in (b.get("agents") or {}).items() if a in AGENT_OWNERS and isinstance(v, dict)},
-                  "workers": [{k: (w.get(k) if isinstance(w.get(k), (int, float, bool)) else str(w.get(k, ""))[:300])
+                  "workers": [{k: (w.get(k) if w.get(k) is None or isinstance(w.get(k), (int, float, bool)) else str(w[k])[:300])
                                for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open", "checkpoint", "merged")}
                               for w in (b.get("workers") or [])[:40] if isinstance(w, dict)],
                   "folders": {k: [{"path": str(f.get("path", ""))[:500], "project": str(f.get("project", ""))[:80]}

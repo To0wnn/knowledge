@@ -751,6 +751,14 @@ def usage(agent: str, ws: dict, now: float):
         return None
 
 
+RESTART_AFTER = 6 * 3600
+
+
+def shared_running(ws: dict, w: dict) -> bool:
+    """Another running worker uses the same worktree (a hand-over <ID>-cont goes on in it)."""
+    return any(o is not w and o["status"] == "running" and o.get("worktree") and o.get("worktree") == w.get("worktree") for o in ws.values())
+
+
 def worker_session(tid: str) -> str:
     return f"worker:{token_store.machine().get('id', '')}:{tid}"[:80]
 
@@ -758,6 +766,8 @@ def worker_session(tid: str) -> str:
 def why_not(t: dict, ws: dict, s: dict, lim: dict, game: str) -> str:
     """'' when this pc may start a worker for task t now, else why not (shown on the page and the Machines list)."""
     a = t["agent"]
+    if not re.fullmatch(r"[\w.-]{1,60}", t["id"]):  # it names a branch, a folder and a file
+        return f"Task id {t['id'][:40]!r} cannot name a branch; give it a short id (letters, digits, - . _)"
     if not s["workersAllowed"]:
         return "Workers are off on this pc (Settings)"
     if game:
@@ -814,7 +824,7 @@ def check_workers(ws: dict, tok: str, now: float, lim: dict):
             elif w.get("told") and now - w["told"] >= workers.GRACE:
                 workers.kill(w["pid"], hard=True)
                 log("worker", f"{AGENTS[w['agent']][0]}: the worker for {w['id']} was stopped (usage limit)", "")
-        elif w["status"] != "merged" and w.get("worktree") and workers.merged(w):
+        elif w["status"] != "merged" and w.get("worktree") and not shared_running(ws, w) and workers.merged(w):
             w["status"], w["result"] = "merged", workers.remove(w)
             log("worker", f"{w['id']}: merged by its requester", w["result"])
 
@@ -834,7 +844,12 @@ def run_workers(ready: list, tok: str, now: float, only: str = "") -> dict:
             continue
         if ws.get(key, {}).get("status") == "running":
             continue
-        why = why_not(t, ws, s, lim, game)
+        prev = ws.get(key, {})
+        # a worker that ended without taking the task off the list failed or stopped: no new one every minute (the
+        # owner can start one again from the Machines list)
+        why = (f"A worker for it ended {int((now - prev['ended']) // 60)} min ago ({prev['status']}); not started again "
+               f"for {RESTART_AFTER // 3600} h unless asked" if prev.get("ended") and now - prev["ended"] < RESTART_AFTER and not only
+               else why_not(t, ws, s, lim, game))
         if not why:
             try:
                 rec, why = start_worker(t, tok, now)
@@ -930,9 +945,12 @@ def run_action(a: dict) -> str:
         return f"stopped the worker for {args['id']}"
     if act == "rollback":
         with LOCK:
-            w = next((w for w in load("workers.json", {}).values() if w["id"] == args["id"]), None)
+            ws = load("workers.json", {})
+        w = next((w for w in ws.values() if w["id"] == args["id"]), None)
         if not w or w["status"] == "running" or not w.get("branch"):
             raise RuntimeError(f"no finished worker with a worktree for {args['id']}")
+        if shared_running(ws, w):
+            raise RuntimeError(f"another worker runs in the worktree of {args['id']} now; stop it first")
         return workers.rollback(w["cwd"], w["id"])
     if act == "trust_hooks":
         return trust(agent)

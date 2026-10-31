@@ -22,7 +22,9 @@ set -- "$@" --data-urlencode "agent=claude"  # the server puts this agent's own 
 version=$(sed -n 's/.*"version": *"\([0-9.]*\)".*/\1/p' "$(dirname "$0")/../.claude-plugin/plugin.json" 2>/dev/null | head -1)
 [ -n "$version" ] && set -- "$@" --data-urlencode "plugin=$version"
 [ -n "$(sh "$(dirname "$0")/py.sh" "$(dirname "$0")/token_store.py" url-default)" ] && set -- "$@" --data-urlencode "url=default"
-code=$(printf 'Authorization: Bearer %s\n' "$token" | curl -sS --max-time 8 -o /tmp/knowledge-context.$$ -w '%{http_code}' -H @- -G "$@" "$url/context/$part" 2>/dev/null)
+# A worker the companion started names its task, so its start context does not read like a chat's.
+worker=$(printf %s "${KNOWLEDGE_WORKER:-}" | tr -cd 'A-Za-z0-9._-')
+code=$({ printf 'Authorization: Bearer %s\n' "$token"; [ -n "$worker" ] && printf 'X-Knowledge-Worker: %s\n' "$worker"; } | curl -sS --max-time 8 -o /tmp/knowledge-context.$$ -w '%{http_code}' -H @- -G "$@" "$url/context/$part" 2>/dev/null)
 # Offline: the context of the last online session plus the offline copy of the memory (memory_mirror.py).
 cache=${KNOWLEDGE_MIRROR:-${KNOWLEDGE_HOME:-$HOME/.knowledge}/mirror}
 key=$(printf %s "${CLAUDE_PROJECT_DIR:-$PWD}" | cksum | cut -d' ' -f1)

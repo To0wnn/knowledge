@@ -419,8 +419,14 @@ def machines_contract(tmp, ck, fr, raw, er, et):
     ctx = http("GET", "/context/1?project=x&agent=codex&plugin=0.15.0", token=fr)[1]
     assert "never in this chat" in ctx and "'pak <ID>'" in ctx, ctx[:2000]
     assert "start the one under 'may start now'" in http("GET", "/context/1?project=x&agent=codex&plugin=0.14.0", token=fr)[1]
-    # A worker hands back through the memo and git only: its -done and -cont lines name the branch, what is done and what is left.
+    # A worker (X-Knowledge-Worker) leases its own task only, and its start context is not the chat's.
     wk = {**pc, "X-Knowledge-Worker": "MC-3"}
+    assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": "- open until 2099-01-01 [Codex, MC-5] from Claude, start now: not the worker's\n## Keuzes"}, fr)[0]
+    http("GET", "/tasks?project=x&agent=codex&v=2&session=w-9", token=fr, headers=wk)
+    leases = json.loads((tmp / "task_leases.json").read_text())["garden"]
+    assert leases.get("MC-3", {}).get("session") == "w-9" and "MC-5" not in leases, leases
+    assert "never in this chat" not in http("GET", "/context/1?project=x&agent=codex&plugin=0.15.0", token=fr, headers={"X-Knowledge-Worker": "MC-3"})[1]
+    # A worker hands back through the memo and git only: its -done and -cont lines name the branch, what is done and what is left.
     bad = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_edit", "arguments": {
         "path": path, "old_string": "## Keuzes", "new_string": "- [Claude, MC-3-done]: did it\n## Keuzes"}}}, token=fr, headers={**wk, "Accept": "application/json, text/event-stream"})
     assert "must name its branch" in bad[1], bad
@@ -432,7 +438,7 @@ def machines_contract(tmp, ck, fr, raw, er, et):
     # A result handed back never starts anything by itself: only task lines are ready.
     assert not any(t["id"].endswith("-done") for t in json.loads(http("GET", "/tasks/ready", token=fr, headers=pc)[1])["tasks"])
     text = (tmp / "projects/garden/memory/project_tasks.md").read_text()
-    for line in [ln for ln in text.splitlines() if any(i in ln for i in ("MC-1", "MC-3", "MC-4", "MC-9"))]:
+    for line in [ln for ln in text.splitlines() if any(i in ln for i in ("MC-1", "MC-3", "MC-4", "MC-5", "MC-9"))]:
         call("knowledge_edit", {"path": path, "old_string": line + "\n", "new_string": ""}, fr)
     (tmp / "task_leases.json").write_text("{}")
 

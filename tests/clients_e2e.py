@@ -901,7 +901,8 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         got = {c["env"]["KNOWLEDGE_WORKER"]: c for c in argvs(n)}
         cx_id = next((i for i in ("CMP-CODEX", "CMP-CX2") if i in got), "")
         cx = got.get(cx_id, {"argv": [], "cwd": ""})
-        wt = home / ".knowledge" / "worktrees" / f"Garden-repo-{cx_id}"
+        tag = hashlib.sha256(str(repo.resolve()).encode()).hexdigest()[:6]  # the repository's own hash: no two repos share one
+        wt = home / ".knowledge" / "worktrees" / f"Garden-repo-{tag}-{cx_id}"
         check(cx["argv"][:2] == ["codex", "exec"] and "workspace-write" in cx["argv"] and "--json" in cx["argv"] and cx["argv"][cx["argv"].index("--cd") + 1] == str(wt)
               and Path(cx["cwd"]).resolve() == wt.resolve() and cx_id in cx["argv"][-1] and f"task/{cx_id}" in cx["argv"][-1]
               and "CMP-GEMINI" not in cx["argv"][-1] and cx["env"]["KNOWLEDGE_START_NONCE"],
@@ -975,6 +976,10 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         check(all(w["status"] == "stopped" for w in ws.values() if w["agent"] == "codex") and not stop.exists(),
               "limit 90%: after the grace the codex workers are stopped hard", json.dumps({k: w["status"] for k, w in ws.items()}))
         write_rollout(20.0)
+        n = len(recorded())
+        st, _, body = call("POST", "/local/api/tick", {})
+        check(not [c for c in argvs(n) if c["env"]["KNOWLEDGE_WORKER"] == cx_id] and "not started again" in json.loads(body)["waiting"].get(f"garden/{cx_id}", ""),
+              "workers: a task whose worker ended without finishing it is not started again every minute", body[:500])
         # A knowledge write makes the companion look at once (the wake hook).
         code, out_w, err = run([sys.executable, str(hooks / "agent_hooks.py"), "wake", "claude"],
                                json.dumps({"session_id": "s", "cwd": str(repo), "tool_name": "mcp__knowledge__knowledge_edit"}), env)
@@ -997,7 +1002,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         wait_for(lambda: done()[-1]["status"] != "waiting", 20)
         # Roll back a YOLO worker's last turn; once its branch is merged, the companion removes the worktree.
         call("POST", "/local/api/tick", {})
-        gwt = home / ".knowledge" / "worktrees" / "Garden-repo-CMP-GEMINI"
+        gwt = home / ".knowledge" / "worktrees" / f"Garden-repo-{tag}-CMP-GEMINI"
         count = lambda: subprocess.run(["git", "-C", str(repo), "rev-list", "--count", "refs/knowledge/checkpoints/CMP-GEMINI"], capture_output=True, text=True).stdout.strip()
         before = count()
         run([sys.executable, str(hooks / "agent_hooks.py"), "hints"], json.dumps({"conversationId": "wk", "workspacePaths": [str(gwt)]}),
