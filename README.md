@@ -101,7 +101,7 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   (stream-json), else an interactive Claude's status line under 15 minutes old; Codex from its newest rollout of the
   last 15 minutes; agy from a registered agy's language server; else "unknown". From 90% no worker of that agent
   starts and the task waits ("waiting for limit", one Matrix notice); a running worker is told after its next tool call
-  to commit, write the hand-over line `[<agent with room>, <ID>-cont] ... done: ...; left: ...` and end, and is stopped
+  to commit, write the hand-over line `[<agent with room>, <ID>-cont] from <original requester> ... done: ...; left: ...` (the result still goes back to whoever asked first) and end, and is stopped
   after two minutes. A result handed back never starts anything by itself.
 - **Remote control:** the owner of a machine steers it from the Machines list with fixed actions only: start a worker
   for a ready task, stop a worker, roll a YOLO worker back, trust hooks, update the plugin, YOLO on or off per agent
