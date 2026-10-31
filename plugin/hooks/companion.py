@@ -769,6 +769,9 @@ def why_not(t: dict, ws: dict, s: dict, lim: dict, game: str) -> str:
         return f"Task id {t['id'][:40]!r} cannot name a branch; give it a short id (letters, digits, - . _)"
     if not s["workersAllowed"]:
         return "Workers are off on this pc (Settings)"
+    if busy := next((w["id"] for w in ws.values() if w["status"] == "running" and w.get("project") == t["project"]
+                     and workers.base_id(w["id"]) == workers.base_id(t["id"])), None):
+        return f"{busy} still runs in this task's worktree; the hand-over starts once it has ended"
     if game:
         return f"No workers while {game}"
     if (lim.get(a) or 0) >= 90:
@@ -1249,6 +1252,8 @@ def main(argv: list):
         assert why_not(task, {}, {**on, "workersAllowed": False}, {}, "").startswith("Workers are off")
         assert why_not(task, {}, on, {}, "a Wolf game session runs (1)").startswith("No workers while a Wolf")
         assert why_not(task, {}, on, {"codex": 90.0}, "").startswith("waiting for limit")
+        old = {"k": {"agent": "claude", "status": "running", "project": "p", "id": "T-1"}}
+        assert why_not({**task, "id": "T-1-cont"}, old, on, {"codex": 10.0}, "").startswith("T-1 still runs"), "a hand-over waits for the old worker"
         assert why_not(task, run, on, {"codex": None}, "").endswith("(limit unknown: 1)"), "unknown limit: one worker at most"
         assert why_not(task, run, on, {"codex": 40.0}, "") == "", "known limit: up to its max"
         assert why_not({**task, "project": "q"}, {}, on, {"codex": 10.0}, "").startswith("No folder linked")
