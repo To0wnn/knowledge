@@ -1,0 +1,289 @@
+/* Knowledge companion: the local "This pc" page.
+
+   Everything below the scope class .cmp is shared with the web UI tab: thispc.css is this file from
+   "COMPONENTS START" to "COMPONENTS END" with the scope class ".cmp" replaced by "#tab-thispc" (server/test_server.py checks it),
+   so change both together. The page shell after "COMPONENTS END" (body, dotted canvas, sticky top bar) is page only.
+
+   Class names (the backend renders these):
+   .cmp                 scope; carries the colour tokens (light, dark via prefers-color-scheme or [data-theme])
+   .cmp-top             top bar: .cmp-brand (.cmp-orb glowing logo, .cmp-brand-name, .cmp-brand-host),
+                        .cmp-chips > li.cmp-chip (+ --live --warn --bad --quiet; .cmp-dot = pulsing dot),
+                        .cmp-actions > button.cmp-iconbtn (+ --accent)
+   .cmp-menu            floating translucent menu, role=menu; rows are button.cmp-menu-item > svg + span (+ small)
+   .cmp-nav             section links (pills)
+   .cmp-sec             a section; h2 + .cmp-lede
+   .cmp-agents          grid of article.cmp-agent (+ --missing): .cmp-agent-head (.cmp-agent-mark, h3, .cmp-ver),
+                        dl.cmp-facts (dt/dd), .cmp-state (+ --ok --warn --bad), .cmp-sessions > li,
+                        .cmp-yolo (checkbox row) + .cmp-yolo-warn, .cmp-error (last hook error)
+   .cmp-lanes           three lanes .cmp-lane (+ --ready --waiting --stalled) > h3 + ol > li.cmp-task
+                        (.cmp-task-id, .cmp-task-text, .cmp-task-why)
+   .cmp-log             activity list > li (.cmp-log-time, .cmp-log-icon, .cmp-log-text)
+   .cmp-settings        form: .cmp-field (label + input/.cmp-token), .cmp-switch (checkbox row)
+   .cmp-btn             text button (+ --primary --small); .cmp-toast status line; .cmp-skip skip link
+*/
+
+/* COMPONENTS START */
+.cmp {
+  --canvas: #eef0f3; --dots: rgba(40, 44, 56, 0.13);
+  --panel: rgba(255, 255, 255, 0.78); --panel-solid: #ffffff; --panel-hi: rgba(255, 255, 255, 0.95);
+  --ink: #1c1a17; --muted: #6a645b; --line: rgba(28, 26, 23, 0.1); --line-hi: rgba(28, 26, 23, 0.18);
+  --amber: #c96a06; --amber-ink: #8f4a00; --amber-soft: rgba(232, 135, 30, 0.14); --glow: rgba(242, 140, 30, 0.35);
+  --ok: #1f8a4c; --ok-soft: rgba(31, 138, 76, 0.12);
+  --warn: #9a6a00; --warn-soft: rgba(214, 160, 20, 0.16);
+  --bad: #c2352a; --bad-soft: rgba(194, 53, 42, 0.1);
+  --shadow: 0 1px 2px rgba(20, 18, 14, 0.05), 0 8px 24px rgba(20, 18, 14, 0.06);
+  --menu-shadow: 0 18px 50px rgba(20, 18, 14, 0.18);
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+  --r-lg: 18px; --r-md: 12px;
+  color: var(--ink); font: 14px/1.5 var(--font); font-variant-numeric: tabular-nums;
+  background: var(--canvas) radial-gradient(var(--dots) 1px, transparent 1.4px) 0 0 / 22px 22px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .cmp {
+    --canvas: #15120f; --dots: rgba(255, 220, 180, 0.075);
+    --panel: rgba(35, 30, 25, 0.66); --panel-solid: #221d18; --panel-hi: rgba(48, 41, 34, 0.82);
+    --ink: #f4ece1; --muted: #a59a8b; --line: rgba(255, 236, 210, 0.08); --line-hi: rgba(255, 236, 210, 0.16);
+    --amber: #ffa53d; --amber-ink: #ffbf73; --amber-soft: rgba(255, 165, 61, 0.13); --glow: rgba(255, 150, 40, 0.55);
+    --ok: #7fd89c; --ok-soft: rgba(127, 216, 156, 0.12);
+    --warn: #f3c45a; --warn-soft: rgba(243, 196, 90, 0.12);
+    --bad: #ff8a7a; --bad-soft: rgba(255, 138, 122, 0.12);
+    --shadow: 0 1px 0 rgba(255, 236, 210, 0.04) inset, 0 10px 30px rgba(0, 0, 0, 0.35);
+    --menu-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+  }
+}
+:root[data-theme="dark"] .cmp {
+  --canvas: #15120f; --dots: rgba(255, 220, 180, 0.075);
+  --panel: rgba(35, 30, 25, 0.66); --panel-solid: #221d18; --panel-hi: rgba(48, 41, 34, 0.82);
+  --ink: #f4ece1; --muted: #a59a8b; --line: rgba(255, 236, 210, 0.08); --line-hi: rgba(255, 236, 210, 0.16);
+  --amber: #ffa53d; --amber-ink: #ffbf73; --amber-soft: rgba(255, 165, 61, 0.13); --glow: rgba(255, 150, 40, 0.55);
+  --ok: #7fd89c; --ok-soft: rgba(127, 216, 156, 0.12);
+  --warn: #f3c45a; --warn-soft: rgba(243, 196, 90, 0.12);
+  --bad: #ff8a7a; --bad-soft: rgba(255, 138, 122, 0.12);
+  --shadow: 0 1px 0 rgba(255, 236, 210, 0.04) inset, 0 10px 30px rgba(0, 0, 0, 0.35);
+  --menu-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+}
+.cmp *, .cmp *::before, .cmp *::after { box-sizing: border-box; }
+.cmp svg { width: 18px; height: 18px; flex: none; }
+.cmp h2 { margin: 0 0 4px; font-size: 22px; line-height: 1.2; font-weight: 650; letter-spacing: -0.015em; }
+.cmp h3 { margin: 0; font-size: 15px; font-weight: 620; }
+.cmp :focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+.cmp button, .cmp input { font: inherit; color: inherit; }
+
+/* Top bar */
+.cmp .cmp-top { position: relative; display: flex; align-items: center; gap: 14px 18px; flex-wrap: wrap; padding: 14px 0; }
+.cmp .cmp-brand { display: flex; align-items: center; gap: 12px; min-width: 0; margin-right: auto; }
+.cmp .cmp-orb {
+  position: relative; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; color: #fff7ec;
+  background: radial-gradient(circle at 35% 30%, #ffd59a, #ff9a2e 45%, #d95f00 100%);
+  box-shadow: 0 0 0 1px rgba(255, 190, 120, 0.35), 0 0 22px var(--glow), 0 0 60px var(--glow);
+}
+.cmp .cmp-orb svg { width: 22px; height: 22px; }
+.cmp .cmp-brand-name { font-weight: 650; font-size: 15px; letter-spacing: -0.01em; }
+.cmp .cmp-brand-host { color: var(--muted); font-size: 12.5px; }
+.cmp .cmp-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.cmp .cmp-chip {
+  display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 11px; border-radius: 999px;
+  border: 1px solid var(--line-hi); background: var(--panel); color: var(--muted); font-size: 12.5px; white-space: nowrap;
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+}
+.cmp .cmp-chip strong { color: var(--ink); font-weight: 620; }
+.cmp .cmp-chip--live { border-color: color-mix(in srgb, var(--amber) 45%, transparent); background: var(--amber-soft); color: var(--amber-ink); }
+.cmp .cmp-chip--live strong { color: var(--amber-ink); }
+.cmp .cmp-chip--warn { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
+.cmp .cmp-chip--bad { color: var(--bad); background: var(--bad-soft); border-color: transparent; }
+.cmp .cmp-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
+.cmp .cmp-chip--live .cmp-dot { background: var(--amber); animation: cmp-pulse 2.4s ease-in-out infinite; }
+@keyframes cmp-pulse { 50% { opacity: 0.35; box-shadow: none; } }
+.cmp .cmp-actions { display: flex; gap: 8px; }
+.cmp .cmp-iconbtn {
+  display: grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; cursor: pointer;
+  border: 1px solid var(--line-hi); background: var(--panel); color: var(--ink);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); transition: background 0.15s, border-color 0.15s;
+}
+.cmp .cmp-iconbtn:hover { background: var(--panel-hi); border-color: color-mix(in srgb, var(--amber) 40%, var(--line-hi)); }
+.cmp .cmp-iconbtn--accent { color: var(--amber); }
+.cmp .cmp-iconbtn[aria-expanded="true"] { background: var(--amber-soft); border-color: var(--amber); box-shadow: 0 0 18px var(--glow); }
+
+/* Floating tools menu */
+.cmp .cmp-menu {
+  position: absolute; right: 0; top: calc(100% - 4px); z-index: 20; width: min(300px, calc(100vw - 32px)); padding: 6px;
+  border-radius: var(--r-lg); border: 1px solid var(--line-hi);
+  /* Nearly opaque: inside a blurred top bar the menu's own backdrop blur sees nothing behind it. */
+  background: color-mix(in srgb, var(--panel-solid) 90%, transparent);
+  backdrop-filter: blur(22px) saturate(1.4); -webkit-backdrop-filter: blur(22px) saturate(1.4); box-shadow: var(--menu-shadow);
+  transform-origin: top right; animation: cmp-menu-in 0.16s ease-out;
+}
+@keyframes cmp-menu-in { from { opacity: 0; transform: scale(0.96) translateY(-4px); } }
+.cmp .cmp-menu[hidden] { display: none; }
+.cmp .cmp-menu-item {
+  display: flex; align-items: center; gap: 12px; width: 100%; padding: 9px 10px; border: 0; border-radius: var(--r-md);
+  background: none; text-align: left; cursor: pointer;
+}
+.cmp .cmp-menu-item svg { width: 32px; height: 32px; padding: 7px; border-radius: 10px; background: var(--amber-soft); color: var(--amber); }
+.cmp .cmp-menu-item span { display: grid; line-height: 1.3; }
+.cmp .cmp-menu-item small { color: var(--muted); font-size: 12px; }
+.cmp .cmp-menu-item:hover, .cmp .cmp-menu-item:focus-visible { background: var(--panel-hi); outline: none; }
+.cmp .cmp-menu-sep { height: 1px; margin: 5px 8px; background: var(--line); }
+
+/* Section links */
+.cmp .cmp-nav { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0 2px; scrollbar-width: none; }
+.cmp .cmp-nav a {
+  display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 999px; white-space: nowrap;
+  color: var(--muted); text-decoration: none; border: 1px solid transparent;
+}
+.cmp .cmp-nav a:hover { color: var(--ink); background: var(--panel); border-color: var(--line); }
+.cmp .cmp-nav a[aria-current="true"] { color: var(--ink); background: var(--panel); border-color: var(--line-hi); }
+.cmp .cmp-count { min-width: 18px; padding: 0 5px; border-radius: 999px; background: var(--amber-soft); color: var(--amber-ink); font-size: 11.5px; text-align: center; }
+.cmp .cmp-count:empty { display: none; }
+
+/* Sections */
+.cmp .cmp-sec { scroll-margin-top: 80px; }
+.cmp .cmp-lede { margin: 0 0 16px; color: var(--muted); max-width: 62ch; }
+.cmp .cmp-sec > h2 + :not(.cmp-lede) { margin-top: 14px; }
+
+/* Agent cards */
+.cmp .cmp-agents { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 14px; }
+.cmp .cmp-agent {
+  display: flex; flex-direction: column; gap: 14px; padding: 18px; border-radius: var(--r-lg);
+  border: 1px solid var(--line); background: var(--panel); box-shadow: var(--shadow);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+}
+.cmp .cmp-agent--missing { background: transparent; box-shadow: none; border-style: dashed; }
+.cmp .cmp-agent > .cmp-error { margin-top: auto; }
+.cmp .cmp-agent-head { display: flex; align-items: center; gap: 11px; }
+.cmp .cmp-agent-mark {
+  display: grid; place-items: center; width: 34px; height: 34px; border-radius: 11px; flex: none;
+  background: var(--amber-soft); color: var(--amber); font-weight: 700; font-size: 14px;
+}
+.cmp .cmp-agent--missing .cmp-agent-mark { background: var(--line); color: var(--muted); }
+.cmp .cmp-agent-head h3 { flex: 1; }
+.cmp .cmp-ver { color: var(--muted); font-size: 12.5px; }
+.cmp .cmp-facts { display: grid; grid-template-columns: auto 1fr; gap: 8px 14px; margin: 0; align-items: center; }
+.cmp .cmp-facts dt { color: var(--muted); }
+.cmp .cmp-facts dd { margin: 0; display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; text-align: right; }
+.cmp .cmp-state { display: inline-flex; align-items: center; gap: 5px; font-weight: 560; }
+.cmp .cmp-state svg { width: 15px; height: 15px; }
+.cmp .cmp-state--ok { color: var(--ok); }
+.cmp .cmp-state--warn { color: var(--warn); }
+.cmp .cmp-state--bad { color: var(--bad); }
+.cmp .cmp-sessions { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.cmp .cmp-sessions li {
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--panel-hi) 60%, transparent); border: 1px solid var(--line);
+}
+.cmp .cmp-sessions li > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmp .cmp-sessions small { color: var(--muted); }
+.cmp .cmp-sessions-empty { color: var(--muted); font-size: 13px; margin: 0; }
+.cmp .cmp-yolo { display: flex; align-items: center; gap: 9px; cursor: pointer; }
+.cmp .cmp-yolo input, .cmp .cmp-switch input { width: 17px; height: 17px; margin: 0; accent-color: var(--amber); flex: none; }
+.cmp .cmp-yolo-warn { margin: -8px 0 0 26px; color: var(--muted); font-size: 12.5px; }
+.cmp .cmp-yolo input:checked ~ * { color: var(--warn); }
+.cmp .cmp-error {
+  margin: 0; padding: 9px 11px; border-radius: var(--r-md); background: var(--bad-soft); color: var(--bad); font-size: 12.5px;
+  display: flex; gap: 8px; align-items: flex-start; overflow-wrap: anywhere;
+}
+.cmp .cmp-error svg { width: 16px; height: 16px; margin-top: 1px; }
+.cmp .cmp-error--none { background: transparent; color: var(--muted); padding: 0; }
+
+/* Buttons */
+.cmp .cmp-btn {
+  display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--line-hi); background: var(--panel-hi); font-weight: 560; white-space: nowrap;
+}
+.cmp .cmp-btn:hover { border-color: var(--amber); }
+.cmp .cmp-btn--primary { border-color: transparent; background: var(--amber); color: #1d1206; box-shadow: 0 0 18px var(--glow); }
+.cmp .cmp-btn--primary:hover { filter: brightness(1.07); }
+.cmp .cmp-btn--small { height: 28px; padding: 0 11px; font-size: 12.5px; }
+.cmp .cmp-btn svg { width: 14px; height: 14px; }
+
+/* Task lanes */
+.cmp .cmp-lanes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.cmp .cmp-lane { padding: 14px; border-radius: var(--r-lg); border: 1px solid var(--line); background: var(--panel); }
+.cmp .cmp-lane h3 { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 13.5px; }
+.cmp .cmp-lane h3 .cmp-dot { width: 8px; height: 8px; }
+.cmp .cmp-lane--ready h3 { color: var(--ok); }
+.cmp .cmp-lane--waiting h3 { color: var(--warn); }
+.cmp .cmp-lane--stalled h3 { color: var(--bad); }
+.cmp .cmp-lane h3 small { margin-left: auto; color: var(--muted); font-weight: 500; }
+.cmp .cmp-lane ol { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.cmp .cmp-task { padding: 10px 11px; border-radius: var(--r-md); background: color-mix(in srgb, var(--panel-hi) 70%, transparent); border: 1px solid var(--line); }
+.cmp .cmp-task-id { color: var(--muted); font-size: 12px; }
+.cmp .cmp-task-text { margin: 2px 0 0; }
+.cmp .cmp-task-why { margin: 6px 0 0; color: var(--muted); font-size: 12.5px; }
+.cmp .cmp-lane-empty { color: var(--muted); font-size: 13px; margin: 0; }
+
+/* Activity log */
+.cmp .cmp-log { margin: 0; padding: 0; list-style: none; border-radius: var(--r-lg); border: 1px solid var(--line); background: var(--panel); }
+.cmp .cmp-log li { display: grid; grid-template-columns: 52px 26px 1fr; gap: 10px; align-items: start; padding: 11px 14px; }
+.cmp .cmp-log li + li { border-top: 1px solid var(--line); }
+.cmp .cmp-log-time { color: var(--muted); font-size: 12.5px; padding-top: 2px; }
+.cmp .cmp-log-icon { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--amber-soft); color: var(--amber); }
+.cmp .cmp-log-icon svg { width: 14px; height: 14px; }
+.cmp .cmp-log-icon--bad { background: var(--bad-soft); color: var(--bad); }
+.cmp .cmp-log-text { padding-top: 2px; }
+.cmp .cmp-log-text small { display: block; color: var(--muted); font-size: 12.5px; }
+
+/* Settings */
+.cmp .cmp-settings { display: grid; gap: 18px; padding: 18px; border-radius: var(--r-lg); border: 1px solid var(--line); background: var(--panel); }
+.cmp .cmp-field { display: grid; gap: 6px; }
+.cmp .cmp-field > label, .cmp .cmp-field > legend { font-weight: 560; padding: 0; }
+.cmp .cmp-field small { color: var(--muted); font-size: 12.5px; }
+.cmp fieldset.cmp-field { margin: 0; padding: 0; border: 0; }
+.cmp .cmp-field input[type="url"] {
+  width: 100%; height: 38px; padding: 0 12px; border-radius: var(--r-md); border: 1px solid var(--line-hi);
+  background: var(--panel-hi);
+}
+.cmp .cmp-field input[type="url"]:focus-visible { outline-offset: 0; }
+.cmp .cmp-token { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cmp .cmp-switch { display: flex; align-items: center; gap: 9px; cursor: pointer; padding: 3px 0; }
+.cmp .cmp-settings-foot { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* Toast */
+.cmp .cmp-toast {
+  position: fixed; left: 50%; bottom: 20px; z-index: 30; max-width: calc(100vw - 32px); padding: 9px 16px; border-radius: 999px;
+  background: var(--panel-solid); border: 1px solid var(--line-hi); box-shadow: var(--menu-shadow);
+  transform: translate(-50%, 140%); opacity: 0; transition: transform 0.2s, opacity 0.2s; pointer-events: none;
+}
+.cmp .cmp-toast.cmp-toast--on { transform: translate(-50%, 0); opacity: 1; }
+.cmp .cmp-skip { position: absolute; left: 16px; top: -60px; padding: 8px 14px; border-radius: 999px; background: var(--amber); color: #1d1206; z-index: 40; }
+.cmp .cmp-skip:focus { top: 12px; }
+
+@media (max-width: 860px) {
+  .cmp .cmp-lanes { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
+  .cmp .cmp-top { gap: 10px; }
+  .cmp .cmp-brand { flex: 1 1 0; }
+  .cmp .cmp-brand > div { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cmp .cmp-actions { gap: 6px; }
+  .cmp .cmp-chips { order: 3; width: 100%; }
+  .cmp .cmp-agents { grid-template-columns: 1fr; }
+  .cmp .cmp-log li { grid-template-columns: 26px 1fr; }
+  .cmp .cmp-log-time { grid-column: 2; grid-row: 2; padding: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cmp *, .cmp *::before, .cmp *::after { animation: none !important; transition: none !important; }
+}
+/* COMPONENTS END */
+
+/* Page shell (companion.html only) */
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body.cmp-page {
+  --gutter: max(16px, calc((100vw - 1240px) / 2));
+  margin: 0; min-height: 100vh; padding: 0 var(--gutter) 64px;
+  background-color: var(--canvas);
+  background-image: radial-gradient(var(--dots) 1px, transparent 1.4px),
+    radial-gradient(ellipse 60% 40% at 12% -5%, var(--amber-soft), transparent 70%);
+  background-size: 22px 22px, 100% 100%; background-attachment: fixed;
+}
+body.cmp-page .cmp-top {
+  position: sticky; top: 0; z-index: 10; margin: 0 calc(-1 * var(--gutter)); padding: 14px var(--gutter);
+  background: color-mix(in srgb, var(--canvas) 72%, transparent);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+}
+body.cmp-page .cmp-menu { right: var(--gutter); }
+body.cmp-page .cmp-nav { margin-bottom: 22px; }
+.cmp-main { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 40px 28px; }
+.cmp-main .cmp-sec--agents, .cmp-main .cmp-sec--tasks { grid-column: 1 / -1; }
+@media (max-width: 860px) { .cmp-main { grid-template-columns: minmax(0, 1fr); gap: 36px; } }

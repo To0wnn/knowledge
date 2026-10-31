@@ -55,6 +55,12 @@ def main():
     versions = {json.loads((Path(__file__).parent.parent / "plugin" / d / "plugin.json").read_text())["version"]
                 for d in (".claude-plugin", ".codex-plugin")}
     assert len(versions) == 1, f"plugin versions differ: {versions}"
+    # The web UI tab wears the companion's look: thispc.css is companion.css's components with the scope renamed.
+    cstatic = Path(__file__).parent.parent / "plugin" / "companion" / "static"
+    comp = (cstatic / "companion.css").read_text().split("/* COMPONENTS START */\n")[1].split("/* COMPONENTS END */")[0]
+    tab = (cstatic / "thispc.css").read_text()
+    assert tab.endswith(re.sub(r"\.cmp(?![-\w])", "#tab-thispc", comp)), "thispc.css drifted from companion.css"
+    assert not re.search(r"\.cmp(?![-\w])", tab.split("*/", 1)[1]), "thispc.css: a rule outside #tab-thispc"
     tmp = Path(tempfile.mkdtemp())
     mem, lab, cla = tmp / "memory", tmp / "homelab", tmp / "claude"
     for d in (mem, lab, cla / "skills/x"):
