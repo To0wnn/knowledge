@@ -1295,7 +1295,7 @@ def lint_all() -> dict[str, list[str]]:
                       if now - (at := done_since(name, b)) > STALE_HANDBACK_DAYS * 86400]
     report["stale_handback"] = stale
     gaps = get_graph()["insights"]
-    # docs too since 31 Oct 2026: the map draws every one of them as a dot (Anthony: "losse bolletjes")
+    # docs too since 31 Oct 2026: the map draws every one of them as a dot
     report["isolated_note"] = [f"{i['id']} ({i['degree']} link)" for i in gaps["isolated"]
                                if i["id"] in files and not i["id"].startswith(SOURCES + "/") and not is_archive(i["id"], files[i["id"]])
                                and i["id"].rsplit("/", 1)[-1] not in ("CLAUDE.md", "AGENTS.md", "GEMINI.md")]

@@ -615,7 +615,7 @@ def board_contract(tmp, ck, fr, raw, er, et):
     path = "garden-memory/project_tasks.md"
     lines = ["- open until 2099-01-01 [Codex, BRD-1] from Claude, start now: board open task",
              "- open until 2099-01-01 [Codex, BRD-2] from Claude, start after approval: board approval task",
-             "- open until 2099-01-01 [Anthony, BRD-3] from Claude, start now: a person's task",
+             "- open until 2099-01-01 [Sam, BRD-3] from Claude, start now: a person's task",
              "- open until 2099-01-01 [Codex, BRD-4] from Claude, start now: runs in a worker",
              "- [Claude, BRD-9-done]: board result; branch task/BRD-9; done: it; left: nothing"]
     assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": "\n".join(lines) + "\n## Keuzes"}, fr)[0]
