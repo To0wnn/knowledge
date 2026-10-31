@@ -231,6 +231,11 @@ def kill(w: dict, hard: bool = False):
         pass
 
 
+# Windows: no console window at all (a .cmd shim's node.exe inherits the hidden one, so there is no window to close),
+# its own process group, and out of the scheduled task's job, so ending that task (an update) leaves the worker running
+WIN_FLAGS, BREAKAWAY = 0x08000000 | 0x00000200, 0x01000000  # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP, CREATE_BREAKAWAY_FROM_JOB
+
+
 def start(agent: str, task: dict, machine: str, where: dict, yolo: bool, nonce: str) -> dict:
     """Start the worker process; its record (what the companion keeps and the Machines list shows)."""
     exe = shutil.which(agent)
@@ -240,17 +245,24 @@ def start(agent: str, task: dict, machine: str, where: dict, yolo: bool, nonce: 
     log = DIR / f"{safe(task['project'])}-{safe(task['id'])}-{int(time.time())}.log"
     env = {**os.environ, "KNOWLEDGE_WORKER": task["id"], "KNOWLEDGE_START_NONCE": nonce, "KNOWLEDGE_YOLO": "1" if yolo else ""}
     ckpt = checkpoint(where["cwd"], task["id"]) if yolo and where.get("branch") else ""
-    kw = {"creationflags": 0x00000008 | 0x00000200} if os.name == "nt" else {"start_new_session": True}
+    cmd, note = argv(agent, exe, prompt(task, agent, machine, where), yolo, where), ""
     with open(log, "ab") as out:
-        p = subprocess.Popen(argv(agent, exe, prompt(task, agent, machine, where), yolo, where), cwd=where["cwd"],
-                             stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, env=env, **kw)
+        run = lambda **kw: subprocess.Popen(cmd, cwd=where["cwd"], stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, env=env, **kw)
+        if os.name != "nt":
+            p = run(start_new_session=True)  # its own session: a restart of the companion's unit leaves it running
+        else:
+            try:
+                p = run(creationflags=WIN_FLAGS | BREAKAWAY)
+            except OSError:  # the scheduled task's job forbids breaking away: the worker then ends with the task
+                p = run(creationflags=WIN_FLAGS)
+                note = " It runs inside the companion's scheduled task: an update or restart of the companion stops it."
     PROCS[p.pid] = p
     ident = identity(p.pid)
     follow = f"Get-Content -Wait '{log}'" if os.name == "nt" else f"tail -f '{log}'"
     return {"id": task["id"], "project": task["project"], "agent": agent, "pid": p.pid, "ident": ident, "started": time.time(), "status": "running",
             "nonce": nonce, "yolo": yolo, "log": str(log), "checkpoint": bool(ckpt), **where,
             "open": f"{agent} worker for {task['id']} (pid {p.pid}) in {where['cwd']}" + (f", branch {where['branch']}" if where.get("branch") else "")
-                    + f". It runs headless: follow its output with {follow}; when it is done, look at the branch with git log."}
+                    + f". It runs headless: follow its output with {follow}; when it is done, look at the branch with git log." + note}
 
 
 def stop_note(w: dict, target: str) -> Path:
