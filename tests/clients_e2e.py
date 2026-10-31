@@ -578,6 +578,51 @@ def resumed(home: Path, project: Path, garden: Path):
         check("went into an archive folder" not in out, f"{agent} resumed: another session of the device is not told too", out[-300:])
 
 
+def hook_errors(tmp: Path, project: Path):
+    """A failing hook of ours is kept locally and reaches the Tasks tab through the next turn's POST /status, at most
+    every two minutes; each agent on its own device token and home."""
+    hooks = CLIENT / "plugin" / "hooks"
+    admin = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice", "X-Knowledge-UI": "1"}
+    sh = bash()
+    for agent in ("claude", "codex", "agy"):
+        st, body = http("POST", "/ui/api/admin/token", {"name": f"status-{agent}", "write": True, "roots": ["garden", "garden-memory"]}, admin)
+        home = tmp / f"Status {agent} Usér"
+        env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=json.loads(body)["token"])
+        if agent == "claude":  # Claude Code starts every hook through py.sh: a crash of any script is recorded there
+            code, out, err = run([sh, str(hooks / "py.sh"), str(hooks / "token_store.py"), "bogus"], "{}", env, cwd=str(project))
+            fail, turn_cmd = "token_store.py bogus", [sh, str(hooks / "py.sh"), str(hooks / "agent_hooks.py"), "tasks", "claude"]
+        else:  # Codex and agy start agent_hooks.py themselves: a hook that raises is recorded there
+            code, out, err = run([sys.executable, str(hooks / "agent_hooks.py"), "context", agent], "not json", env, cwd=str(project))
+            fail = f"agent_hooks.py context {agent}"
+            turn_cmd = [sys.executable, str(hooks / "agent_hooks.py"), *(["tasks", "codex"] if agent == "codex" else ["hints"])]
+        log = home / ".knowledge" / "hook-errors.jsonl"
+        kept = [json.loads(ln) for ln in log.read_text(encoding="utf-8").splitlines()] if log.exists() else []
+        check(any(e["hook"] == fail and e["code"] != "0" for e in kept), f"{agent}: a failing hook is kept in hook-errors.jsonl", json.dumps(kept)[:400] + err[-300:])
+        if not WIN:
+            check(log.exists() and log.stat().st_mode & 0o077 == 0, f"{agent}: hook-errors.jsonl is private (0600)")
+        turn = lambda sid: run(turn_cmd, json.dumps({"hook_event_name": "UserPromptSubmit", "session_id": sid, "conversationId": sid,
+                                                     "cwd": str(project), "workspacePaths": [str(project)], "prompt": "go on"}), env, cwd=str(project))
+        code, out, err = turn(f"{agent}-st1")
+        sessions = json.loads(http("GET", "/ui/api/tasks", headers=admin)[1])["sessions"]
+        mine = [s for s in sessions if s["device"] == f"status-{agent}" and s["agent"] == agent]
+        check(code == 0 and mine and any(e["hook"] == fail and e["source"] == "knowledge" for e in mine[0]["errors"])
+              and mine[0]["plugin"] in ("", json.loads((CLIENT / "plugin" / ".claude-plugin" / "plugin.json").read_text())["version"]),
+              f"{agent}: the next turn reports it, the Tasks tab sessions carry it", json.dumps(mine)[:500] + err[-300:])
+        sent = (home / ".knowledge" / "hook-status.json").read_text(encoding="utf-8")
+        run([sys.executable, str(hooks / "agent_hooks.py"), "context", agent if agent != "claude" else "codex"], "not json", env, cwd=str(project))
+        turn(f"{agent}-st2")
+        check((home / ".knowledge" / "hook-status.json").read_text(encoding="utf-8") == sent,
+              f"{agent}: within two minutes the next failure waits for a later turn", sent)
+    # The server away: the send fails silently and the error is kept for the next try.
+    home = tmp / "Status away Usér"
+    env = user_env(home, KNOWLEDGE_URL="http://127.0.0.1:9", KNOWLEDGE_TOKEN="x")
+    run([sys.executable, str(hooks / "agent_hooks.py"), "context", "codex"], "not json", env, cwd=str(project))
+    code, out, err = run([sys.executable, str(hooks / "agent_hooks.py"), "tasks", "codex"],
+                         json.dumps({"session_id": "away-1", "cwd": str(project), "prompt": "hi"}), env, cwd=str(project))
+    state = json.loads((home / ".knowledge" / "hook-status.json").read_text(encoding="utf-8"))
+    check(code == 0 and state.get("sent", 0) == 0 and state.get("at"), "server away: the turn goes on, the error stays unsent", json.dumps(state) + err[-300:])
+
+
 def new_task(agent: Path, env: dict, project: Path, tok: str, home: Path):
     """A task handed to Codex while its session runs reaches the next prompt once; the first prompt only remembers."""
     ask = lambda: run([sys.executable, str(agent), "tasks", "codex", "-"],
@@ -1286,6 +1331,7 @@ def main():
         limits_e2e(tok, tmp)
         plugin_versions(tmp)
         relay_errors(home)
+        hook_errors(tmp, project)
         installer(tok, tmp)
         checkout_update(tmp)
         claude_stored_token(tmp)

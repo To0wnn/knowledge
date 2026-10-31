@@ -48,7 +48,10 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   tokens, admins and tokens an admin made), otherwise the owner or an admin approves it in the Tasks tab. Only tasks
   that may start reach an agent as "start now" (`/tasks`, the wake, `GET /tasks/ready`); the others are listed with the
   reason. `POST /tasks/woken` records a wake: a woken task nobody claims within 30 minutes shows as stalled and sends
-  one Matrix message. `POST /status` takes hook failures a device reports; the Tasks tab shows them per session.
+  one Matrix message.
+- **Hook failures:** when one of the plugin's own hooks crashes or exits with an error, the device keeps it in
+  `~/.knowledge/hook-errors.jsonl` and the per-turn hook reports new ones with `POST /status` (at most every two
+  minutes, never holding up the turn); the tasks tab shows the last failure per device and agent.
 - **Waking another agent (same machine):** after a `knowledge_edit`/`knowledge_write`/`knowledge_new_memo`, the
   plugin wakes the newest idle session per agent and project on that machine that has a new task: Codex through
   `codex queue --thread`, agy through its local language server (the agy session registers once by running

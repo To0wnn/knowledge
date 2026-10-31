@@ -976,12 +976,11 @@ async function loadTasks(render = true) {
       const li = el("li", "session");
       li.append(el("span", "hit-path", `${c.agent} · ${c.device}`),
         el("span", "hit-text", [c.wake ? "can be woken" : "not wakeable", c.plugin && `plugin ${c.plugin}`, ago(c.at), allMode() ? c.project : ""].filter(Boolean).join(" · ")));
-      const errs = c.errors || [];
-      if (errs.length) {  // hook failures the device reported (our hooks, or read from the agent's own log)
-        const last = errs[errs.length - 1], e = el("span", "hit-text warn",
-          `${errs.length} hook error${errs.length === 1 ? "" : "s"} · last: ${last.hook || last.event} ${last.code ?? ""} ${ago(last.at)}`);
-        e.title = errs.map((x) => `${new Date(x.at * 1000).toLocaleString()} ${x.source} ${x.hook} ${x.event} ${x.code ?? ""}\n${x.stderr}`).join("\n\n");
-        li.append(e);
+      const e = (c.errors || []).at(-1);  // the newest hook failure of this device's agent
+      if (e) {
+        const w = el("span", "hit-text session-error", `hook ${e.hook}${e.event ? ` (${e.event})` : ""} failed · ${e.code || "error"} · ${(e.stderr || "").split("\n")[0].slice(0, 160)} · ${ago(e.at)}`);
+        w.title = `${c.errors.length} failure(s) this week, source ${e.source}\n${e.stderr || ""}`;
+        li.append(w);
       }
       ol.append(li);
     }

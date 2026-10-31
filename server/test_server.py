@@ -116,13 +116,14 @@ def tasks_contract(tmp, ck, fr, ver, raw):
     assert rows()["CX-2"]["stalled"], rows()["CX-2"]
     matrix = next(b for b in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["system"]["background"] if b["name"] == "Matrix")
     assert "CX-2" in matrix["detail"] and "nobody claimed it" in matrix["detail"], matrix
-    # Hook errors a device reports: kept per token and agent, secrets masked, shown with its sessions.
+    # Hook errors a device reports: kept per token and agent, secrets masked, shown with its sessions (agy: the
+    # codex errors of this token are checked later in main()).
     st = lambda b: http("POST", "/status", b, token=fr)[0]
     err = {"hook": "SessionStart", "event": "start", "code": 1, "stderr": "boom Sup3rSecret99", "at": time.time(), "source": "agent-log"}
-    assert st({"agent": "codex", "plugin": "1.0.0", "errors": [err]}) == 200 and st({"agent": "codex", "errors": [err]}) == 200
+    assert st({"agent": "agy", "plugin": "1.0.0", "errors": [err]}) == 200 and st({"agent": "agy", "errors": [err]}) == 200
     assert st({"agent": "nobody", "errors": []}) == 400
-    http("GET", "/tasks?project=x&agent=codex&session=st-1", token=fr)
-    s = next(c for c in json.loads(raw("GET", "/ui/api/tasks", headers=ck)[2])["sessions"] if c["agent"] == "codex")
+    http("GET", "/tasks?project=x&agent=agy&session=st-1", token=fr)
+    s = next(c for c in json.loads(raw("GET", "/ui/api/tasks", headers=ck)[2])["sessions"] if c["agent"] == "agy")
     assert len(s["errors"]) == 1 and s["errors"][0]["source"] == "agent-log" and "Sup3rSecret99" not in s["errors"][0]["stderr"], s
     for tid in ("DEP-1", "DAT-1", "APR-1", "UNT-1"):  # leave the memo as the later checks expect it
         line = next(t["line"] for t in rows().values() if t["id"] == tid)
@@ -703,6 +704,20 @@ def main():
         got = {c["session"]: c for c in row["clients"]}
         assert got["cx-77"]["agent"] == "codex" and got["cx-77"]["wake"] is True and got["cx-77"]["project"] == "garden", got
         assert "b-1" not in got, got
+        # POST /status: hook failures per token and agent (last 20, a week), shown on the Tasks tab's sessions.
+        err = lambda i, **k: {"hook": "docs-sync.py", "event": "PostToolUse", "code": "1", "stderr": f"boom {i}\ntrace", "at": time.time() - 30 + i / 100, **k}
+        assert http("POST", "/status", {"agent": "codex", "plugin": "0.13.0", "errors": [err(i) for i in range(25)]}, token=fr) == (200, '{"stored":20}')
+        assert http("POST", "/status", {"agent": "codex", "errors": [err(99, stderr="db Sup3rSecret99"), err(98, at=time.time() - 8 * 86400),
+                                                                     err(97, source="other")]}, token=fr)[0] == 200
+        assert http("POST", "/status", {"agent": "codex", "errors": [err(99, stderr="db Sup3rSecret99")]}, token=fr)[0] == 200  # a resend: kept once
+        assert http("POST", "/status", {"agent": "bogus", "errors": []}, token=fr)[0] == 400
+        assert http("POST", "/status", {"agent": "codex", "errors": "x"}, token=fr)[0] == 400
+        assert http("POST", "/status", {"agent": "codex", "errors": []}, token=None)[0] == 401
+        ses = [s for s in json.loads(raw("GET", "/ui/api/tasks", headers=ck)[2])["sessions"] if s["device"] == frname and s["agent"] == "codex"]
+        errs = ses[0]["errors"]
+        assert len(errs) == 20 and errs[-1]["stderr"].startswith("(withheld") and "Sup3rSecret99" not in json.dumps(errs), errs[-3:]
+        assert not [e for e in errs if "boom 98" in e["stderr"]] and {e["source"] for e in errs} == {"knowledge"}, errs  # old: gone
+        assert "Sup3rSecret99" not in (tmp / "status.json").read_text()
         forget = lambda s: raw("POST", "/ui/api/admin/client", json.dumps({"name": frname, "session": s}),
                                {**ck, "Content-Type": "application/json", "X-Knowledge-UI": "1"})[0]
         assert forget("cx-77") == 200 and forget("cx-77") == 400  # gone, and a second forget says so
