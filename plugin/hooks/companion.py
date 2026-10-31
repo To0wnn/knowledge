@@ -632,6 +632,9 @@ def release(task: dict, tok: str):
     """Give the task's lease back after a failed start, so another pc may take it at once; never raises."""
     try:
         server("POST", "/tasks/release", tok, {"project": task["project"], "id": task["id"]})
+    except urllib.error.HTTPError as e:
+        if e.code != 409:  # 409: another pc holds it, nothing of ours to give back
+            log("error", f"Could not give {task['id']} back on the server", f"{e}"[:200])
     except Exception as e:
         log("error", f"Could not give {task['id']} back on the server", f"{e}"[:200])
 
@@ -806,6 +809,7 @@ def check_workers(ws: dict, tok: str, now: float, lim: dict):
             if code is not None:
                 workers.PROCS.pop(w["pid"], None)
                 w.update(status="stopped" if w.get("told") else "finished" if code == 0 else "failed", ended=now, code=code)
+                release(w, tok)  # a line it claimed but left open may start again at once (the server's idle notice)
                 (workers.DIR / f"{workers.safe(w['id'])}.stop").unlink(missing_ok=True)
                 log("worker", f"{AGENTS[w['agent']][0]}: the worker for {w['id']} ended ({w['status']})", w.get("open", ""))
                 continue

@@ -337,6 +337,17 @@ def lease_contract(tmp, ck, fr, raw):
     assert any("LM-1 is running in a worker on friend-pc on desk" in n["text"] for n in beat["notices"]), beat["notices"]
     assert http("POST", "/tasks/release", {"project": "garden", "id": "LM-1"}, token=fr, headers=pc_b)[0] == 409
     assert http("POST", "/tasks/release", {"project": "garden", "id": "LM-1"}, token=fr, headers=pc_a)[0] == 200
+    # A worker's claim marker holds only while its lease does: a worker that ended without finishing leaves the task
+    # startable again (and the background check keeps a worker's lease while it is claimed).
+    more = "- open until 2099-01-01 [Codex, LW-1] (claimed Codex worker, 2026-10-31) from Claude, start now: worker died\n"
+    assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": more + "## Keuzes"}, fr)[0]
+    assert http("POST", "/tasks/woken", {"project": "garden", "id": "LW-1", "agent": "codex", "session": "worker:w"}, token=fr)[0] == 200
+    lw = lambda: next(t for t in json.loads(raw("GET", "/ui/api/tasks", headers=ck)[2])["tasks"] if t["id"] == "LW-1")
+    assert lw()["claimed"] and not lw()["startable"], lw()
+    time.sleep(2.5)  # the background check runs every second: the lease of a worker-claimed task stays
+    assert "LW-1" in leases() and lw()["claimed"], leases()
+    l = json.loads((tmp / "task_leases.json").read_text()); l["garden"]["LW-1"]["until"] = 0; (tmp / "task_leases.json").write_text(json.dumps(l))
+    assert not lw()["claimed"] and lw()["startable"] and "LW-1" in ready(fr), lw()
     # A claim marker ends the lease (the background check drops it).
     assert not call("knowledge_edit", {"path": path, "old_string": "per turn", "new_string": "per turn (claimed Codex, 2026-10-31)"}, fr)[0]
     end = time.time() + 10
@@ -344,7 +355,7 @@ def lease_contract(tmp, ck, fr, raw):
         time.sleep(0.3)
     assert "LT-1" not in leases(), leases()
     text = (tmp / "projects/garden/memory/project_tasks.md").read_text()
-    for line in [ln for ln in text.splitlines() if any(i in ln for i in ("LM-1", "LS-1", "PIN-1", "LT-1", "LT-2", "LC-1", "LC-2", "LH-1", "LN-1", "LR-1"))]:
+    for line in [ln for ln in text.splitlines() if any(i in ln for i in ("LM-1", "LS-1", "PIN-1", "LT-1", "LT-2", "LC-1", "LC-2", "LH-1", "LN-1", "LR-1", "LW-1"))]:
         call("knowledge_edit", {"path": path, "old_string": line + "\n", "new_string": ""})
     (tmp / "task_leases.json").write_text("{}")  # the later checks start without leases
 

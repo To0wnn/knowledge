@@ -1631,6 +1631,7 @@ def parse_task(line: str) -> dict | None:
     return {"owner": owner.strip(), "device": pin.strip(), "id": o.group(2).strip(), "due": kb_lint.latest_date(m.group(1)),
             "from": f.group(1).strip() if f else "", "start": " ".join(f.group(2).split()) if f else "now",
             "legacy": not f, "claimed": bool(re.search(r"\((?:claimed|bezig)\b", line, re.I)),
+            "worker_claim": bool(re.search(r"\((?:claimed|bezig)\b[^)]*\bworker\b", line, re.I)),
             "text": (rest[f.end():] if f else rest).lstrip(": ").strip(), "body": line.strip().removeprefix("- ")}
 
 
@@ -1771,9 +1772,13 @@ def project_tasks(project: str) -> tuple[list[dict], list[dict]]:
                              "id": d.group(2).strip(), "text": d.group(3).strip()})
     # a hand-over <ID>-cont keeps <ID> open for "start after <ID>" until <ID>-done is there
     open_ids, done_ids = {t["id"] for t in tasks} | {CONT.sub("", t["id"]) for t in tasks}, {b["id"] for b in back}
-    authors, approvals, wakes = (read_json(f, {}).get(project, {}) for f in (TASK_AUTHORS, TASK_APPROVALS, TASK_WAKES))
+    authors, approvals, wakes, leases = (read_json(f, {}).get(project, {}) for f in (TASK_AUTHORS, TASK_APPROVALS, TASK_WAKES, TASK_LEASES))
     today, now = date.today(), time.time()
     for t in tasks:
+        # a worker's claim holds while its companion renews the lease (every minute while it runs): a worker that
+        # ended without finishing (crash, reboot, an early exit) leaves a task that may start again, not a stuck one
+        if t["worker_claim"] and not (leases.get(t["id"]) or {}).get("until", 0) >= now:
+            t["claimed"] = False
         # a record made for other words (a path that did not note the change) no longer counts: unknown writer
         sig, rec, ok = task_sig(t), authors.get(t["id"]), approvals.get(t["id"])
         fits = lambda r: r.get("sig") in (None, sig)  # None: recorded before 0.14.0
@@ -3206,7 +3211,7 @@ def stalled_check() -> int:
     wakes, told, gone = read_json(TASK_WAKES, {}), [], []
     now, drop, open_of = time.time(), [], {}  # leases of tasks that are gone, claimed (marker) or expired
     for project, ids in read_json(TASK_LEASES, {}).items():
-        open_of[project] = {t["id"] for t in project_tasks(project)[0] if not t["claimed"]} if project in PROJECTS else set()
+        open_of[project] = {t["id"] for t in project_tasks(project)[0] if not t["claimed"] or t["worker_claim"]} if project in PROJECTS else set()
         drop += [(project, tid) for tid, l in ids.items() if tid not in open_of[project] or l.get("until", 0) < now]
     if drop:  # an expired lease renewed meanwhile stays
         update_state(TASK_LEASES, lambda d: [d.get(p, {}).pop(tid, None) for p, tid in drop
