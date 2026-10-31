@@ -735,18 +735,17 @@ def save_settings(change: dict):
 
 
 def usage(agent: str, ws: dict, now: float):
-    """The agent's usage limit in percent, or None (unknown): Claude from its workers' own stream-json output, else
-    an interactive Claude's status line under 15 min old; Codex from its newest rollout of the last 15 min; agy from
+    """The agent's usage limit in percent, or None (unknown): Claude the higher of its workers' own stream-json output
+    (until that window resets) and an interactive Claude's status line under 15 min old; Codex from its newest rollout of the last 15 min; agy from
     a registered agy's language server."""
     try:
         if agent == "claude":
             logs = sorted((Path(w["log"]) for w in ws.values() if w.get("agent") == "claude" and w.get("log") and Path(w["log"]).exists()),
                           key=lambda f: f.stat().st_mtime)
-            for f in reversed(logs):
-                if now - f.stat().st_mtime < 900 and (got := workers.claude_usage(str(f), now)):
-                    return got[0]
-            got = agent_hooks.limits.claude_used(now)
-            return got[0] if got else None
+            # a worker's reading stays true until its window resets (claude_usage drops those), however old the log
+            got = next((g for f in reversed(logs) if (g := workers.claude_usage(str(f), now))), None)
+            line = agent_hooks.limits.claude_used(now)
+            return max((x[0] for x in (got, line) if x), default=None)
         if agent == "codex":
             days = [time.localtime(now - d * 86400) for d in (0, 1)]
             files = [f for d in days for f in CODEX.glob(f"sessions/{d.tm_year:04d}/{d.tm_mon:02d}/{d.tm_mday:02d}/rollout-*.jsonl")
@@ -1278,6 +1277,18 @@ def main(argv: list):
         DENIED.add("/Users/x/Documents/app")
         assert "Full Disk Access" in why_not({**task, "project": "q"}, {}, on, {"codex": 10.0}, ""), "a folder macOS keeps from it is named"
         DENIED.clear()
+        # A Claude worker's reading counts until its window resets, also when its log is older than 15 minutes.
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            f, now = Path(tmp) / "w.log", time.time()
+            f.write_text(json.dumps({"type": "rate_limit_event", "rate_limit_info": {"unifiedWindows": {
+                "five_hour": {"utilization": 0.93, "resetsAt": now + 4 * 3600}}}}) + "\n")
+            os.utime(f, (now - 3600, now - 3600))
+            real, agent_hooks.limits.claude_used = agent_hooks.limits.claude_used, lambda now: None
+            try:
+                assert usage("claude", {"k": {"agent": "claude", "log": str(f)}}, now) == 93.0
+            finally:
+                agent_hooks.limits.claude_used = real
         # A failed start gives the task back at once.
         did = []
         g.update(claim=lambda t, tok, s, start="": did.append(("claim", s)) or "", release=lambda t, tok: did.append(("release",)))

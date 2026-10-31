@@ -101,7 +101,7 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   may start but that nobody took for 30 minutes (`KNOWLEDGE_TASK_IDLE`) gives one Matrix notice. A knowledge write
   asks the local companion to look at once.
 - **Usage limit at 90%:** the companion reads each agent's usage: Claude from its workers' own `rate_limit_event`
-  (stream-json), else an interactive Claude's status line under 15 minutes old; Codex from its newest rollout of the
+  (stream-json, until that window resets) or an interactive Claude's status line under 15 minutes old, whichever is higher; Codex from its newest rollout of the
   last 15 minutes; agy from a registered agy's language server; else "unknown". From 90% no worker of that agent
   starts and the task waits ("waiting for limit", one Matrix notice); a running worker is told after its next tool call
   to commit, write the hand-over line `[<agent with room>, <ID>-cont] from <original requester> ... done: ...; left: ...` (the result still goes back to whoever asked first) and end, and is stopped
