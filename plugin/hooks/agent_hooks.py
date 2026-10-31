@@ -495,7 +495,9 @@ def context(agent: str, tok: str):
         worktree = project_marker.notice(Path(cwd).resolve())
     except OSError:
         worktree = ""
-    reg = register_notice() if agent == "agy" else ""  # agy hooks do not get its server's key; its terminal does
+    # agy hooks do not get its server's key; its terminal does. Not a worker: a headless run may not run that command,
+    # and a refused command ends agy's whole run
+    reg = register_notice() if agent == "agy" and not os.environ.get("KNOWLEDGE_WORKER") else ""
     if agent == "agy" and "'pak <ID>'" in ctx:  # its hooks never see the user's words: the take command does it
         ctx += ("\n\nagy: the plugin cannot see what the user types. When the user says 'pak <ID>' (or 'take <ID>'), run this "
                 f"in your terminal first; it takes that task for this conversation and says what to do: {take_command()}")
@@ -556,7 +558,7 @@ def hints(tok: str):
         if conv and registered and state != "registered":
             private_dir()
             asked.write_text("registered", encoding="utf-8")
-        elif conv and not registered and state != "asked":  # a resumed conversation never saw the start context
+        elif conv and not registered and state != "asked" and not os.environ.get("KNOWLEDGE_WORKER"):  # a resumed conversation never saw the start context
             private_dir()
             asked.write_text("asked", encoding="utf-8")
             news = "\n\n".join(t for t in (news, register_notice(again=state == "registered")) if t)

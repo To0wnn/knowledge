@@ -79,9 +79,16 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   person's token that names it gets 403. Plugins before 0.15 show as one "old plugin" row per token.
 - **Workers, not chats:** a task never goes into someone's chat. The companion (below) starts a **worker** per ready
   task: a fresh headless session of the task's agent (Claude Code `claude -p --output-format stream-json`, Codex
-  `codex exec --json`, agy `agy -p`; without YOLO they may still edit their own folder: `acceptEdits`,
-  `workspace-write`, `accept-edits`) in its own git worktree on branch `task/<ID>` (`~/.knowledge/worktrees/`), or in
-  the project folder when that is no git repository. Its prompt holds the task line and the rules: claim it, commit
+  `codex exec --json`, agy `agy -p`) in its own git worktree on branch `task/<ID>` (`~/.knowledge/worktrees/`), or in
+  the project folder when that is no git repository. Without YOLO a worker may do what its task needs and no more: edit
+  its own folder, use the knowledge tools, and run `git status/diff/log/add/commit` (no push, no other command; a
+  headless run cannot ask, so the rest is refused). Each agent the native way: Claude `--permission-mode acceptEdits`
+  plus `--allowedTools`; agy `--mode accept-edits` plus allow rules for that session only (`--settings`, never saved);
+  Codex `-s workspace-write` with only the worktree's git folder and the repository's objects, refs and logs writable
+  (not `.git/config` or hooks; the sandbox has no network) and the plugin's knowledge tools approved with
+  `-c plugins.knowledge@knowledge.mcp_servers.knowledge.default_tools_approval_mode=approve`. A worker that ends with exit 0
+  but left its task open (not claimed, not handed back) counts as failed: an error in the activity log and the
+  stalled lane, plus the server's idle notice. Its prompt holds the task line and the rules: claim it, commit
   on the branch, never merge or push, hand back with `[<requester>, <ID>-done]: <result>; branch <name>; done: ...;
   left: ...` (the server refuses a worker's hand-back without branch, done and left). Every worker is a new session; a
   hand-over `<ID>-cont` goes on in the same worktree and branch, and the branch, the memo and the last hand-over line
