@@ -82,6 +82,17 @@ def tasks_contract(tmp, ck, fr, ver, raw):
     assert rows()["LEG-1"]["startable"] and rows()["LEG-1"]["author"] == ""  # unknown legacy: starts as before
     a["garden"]["LEG-1"] = {"by": "stranger", "at": 0}; (tmp / "task_authors.json").write_text(json.dumps(a))
     assert not rows()["LEG-1"]["startable"] and "written by stranger" in rows()["LEG-1"]["waiting_reason"], rows()["LEG-1"]
+    # A VM session writes a task line straight into a memo and the rescan sees it before the watcher reports it (or
+    # without one): the line still gets its writer (the VM sessions' device), not "an unknown writer".
+    direct = tmp / "projects/garden/memory/project_direct.md"
+    direct.write_text(memo("- open until 2099-01-01 [Codex, VM-1] from Claude, start now: written on the vm\n", "direct"))
+    deadline = time.time() + 20
+    while "VM-1" not in rows() and time.time() < deadline:
+        time.sleep(0.5)
+    http("POST", "/invalidate", {"paths": ["garden-memory/project_direct.md"]}, token="watch-token")  # the late report
+    assert rows()["VM-1"]["author"] == "laptop" and rows()["VM-1"]["startable"], rows()["VM-1"]
+    direct.unlink()
+    http("POST", "/invalidate", {"paths": ["garden-memory/project_direct.md"]}, token="watch-token")
     # Start conditions: after another task, a date, after approval. The writer (an admin-made token) is trusted.
     assert not add("- open until 2099-01-01 [Codex, DEP-1] from Gemini, start after CX-1: after the pruning")[0]
     assert not add("- open until 2099-01-01 [Codex, DAT-1] from Gemini, start 1 jan 2098: later")[0]
@@ -645,7 +656,7 @@ def main():
            "KNOWLEDGE_LANGUAGE": "nl", "KNOWLEDGE_BUILTIN_PROJECTS": "homelab,anpitek,trade",
            "KNOWLEDGE_BIND": "127.0.0.1", "KNOWLEDGE_RESCAN": "3600",
            "KNOWLEDGE_GITHUB_API": ghurl, "KNOWLEDGE_GITHUB_RAW": ghurl + "/raw", "KNOWLEDGE_EXTERNAL_SLEEP": "3600", "KNOWLEDGE_INSTANCE": "blue", "KNOWLEDGE_PLUGIN_GRACE": "0",
-           "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_RERANK_MODEL": "test", "KNOWLEDGE_DUPES_EVERY": "1", "KNOWLEDGE_DUPES_DELAY": "0", "KNOWLEDGE_DUPES_DEBOUNCE": "0", "KNOWLEDGE_WATCH_DEVICE": "laptop", "KNOWLEDGE_TASK_STALLED": "1", "KNOWLEDGE_TASK_LEASE": "600", "KNOWLEDGE_TASK_CHECK": "1", "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}"}
+           "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_RERANK_MODEL": "test", "KNOWLEDGE_DUPES_EVERY": "1", "KNOWLEDGE_DUPES_DELAY": "0", "KNOWLEDGE_DUPES_DEBOUNCE": "0", "KNOWLEDGE_WATCH_DEVICE": "laptop", "KNOWLEDGE_TASK_STALLED": "1", "KNOWLEDGE_TASK_LEASE": "600", "KNOWLEDGE_TASK_CHECK": "1", "KNOWLEDGE_RESCAN": "2", "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}"}
     proc = subprocess.Popen([sys.executable, str(Path(__file__).with_name("server.py"))], env=env)
     try:
         for _ in range(50):

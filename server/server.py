@@ -369,7 +369,13 @@ class Index:
                 continue
             hit = self.files.get(rel)
             if not hit or hit[0] != st.st_mtime_ns or hit[1] != st.st_size:
+                if self.loaded and WATCH_DEVICE and mem_of(rel) and time.time() - st.st_mtime < 5:
+                    continue  # just written: the server that wrote it notes its task lines first (blue/green), or the watcher reports it
                 self.refresh(rel)
+                # a file changed on disk that no write here noted: a VM session wrote it, and the watcher's report may
+                # come after this (or never); its new task lines get their writer now
+                if WATCH_DEVICE and mem_of(rel) and (now := self.files.get(rel)):
+                    note_task_authors(rel, hit[2] if hit else "", now[2], WATCH_DEVICE, keep=True)
         for rel in set(self.files) - seen:  # gone, or added while this walk ran: refresh decides
             self.refresh(rel)
 
@@ -1721,10 +1727,12 @@ def update_state(path: Path, change):
         write_json(path, data)
 
 
-def note_task_authors(rel: str, before: str, after: str, by: str):
+def note_task_authors(rel: str, before: str, after: str, by: str, keep: bool = False):
     """Who added or changed a task line: a line from a writer the project trusts may start by itself, others wait for
     approval. A line added again (another memo, the same ID) or reworded gets its new writer and loses an earlier
-    approval, so reusing an ID or editing a trusted line never borrows trust. A result handed back gets its time."""
+    approval, so reusing an ID or editing a trusted line never borrows trust. A result handed back gets its time.
+    `keep` (the rescan, which may see a write after the server that made it noted it): only lines with no record for
+    these words get one; an approval stays (it holds for its own words only)."""
     old = {d.group(2).strip() for line in before.splitlines() if (d := DONE_LINE.match(line))}
     done = [i for line in after.splitlines() if (d := DONE_LINE.match(line)) and (i := d.group(2).strip()) not in old]
     if done and mem_of(rel) and not is_archive(rel) and (project := project_of(rel)):
@@ -1734,11 +1742,16 @@ def note_task_authors(rel: str, before: str, after: str, by: str):
             print(f"result time not saved: {e}", flush=True)
     if not (new := added_tasks(rel, before, after, changed=True)) or not (project := project_of(rel)):
         return
+    if keep:
+        known = read_json(TASK_AUTHORS, {}).get(project, {})
+        if not (new := [t for t in new if (known.get(t["id"]) or {}).get("sig") != task_sig(t)]):
+            return
     try:
         if by:
             update_state(TASK_AUTHORS, lambda d: d.setdefault(project, {}).update(
                 {t["id"]: {"by": by, "at": int(time.time()), "sig": task_sig(t)} for t in new}))
-        update_state(TASK_APPROVALS, lambda d: [d.get(project, {}).pop(t["id"], None) for t in new])
+        if not keep:
+            update_state(TASK_APPROVALS, lambda d: [d.get(project, {}).pop(t["id"], None) for t in new])
     except OSError as e:  # the write itself happened; project_tasks still compares the line with what was recorded
         print(f"task authors not saved: {e}", flush=True)
 
