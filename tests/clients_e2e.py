@@ -1489,8 +1489,15 @@ def companion_setup(tmp: Path):
         code, out, err = run([sys.executable, str(agent), "install-companion"], "", {**real, "KN_FAKE_NOBUS": "1"}, timeout=120)
         check(code == 0 and "no user session for an autostart here" in out and not (home / files[0]).exists(),
               "install-companion without a user systemd: skips the autostart, does not fail", out + err)
+    if WIN:  # an OpenSSH session on a workgroup pc says USERDOMAIN=WORKGROUP, which schtasks cannot map to an account
+        real["USERDOMAIN"] = "WORKGROUP"
     code, out, err = run([sys.executable, str(agent), "install-companion"], "", real, timeout=120)
     calls = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
+    if WIN:
+        me = subprocess.run(["whoami"], capture_output=True, text=True).stdout.strip().lower()
+        xml = (home / files[0]).read_text(encoding="utf-16")
+        check(f"<UserId>{me}</UserId>" in xml.lower() and "workgroup" not in xml.lower(),
+              "install-companion on windows: the logon task names this account as Windows does, not %USERDOMAIN%", f"{me}\n{xml[:600]}")
     if system != "windows":
         key = (home / ".knowledge" / "companion" / "api-key").read_text(encoding="utf-8").strip()
         link = home / files[1]

@@ -572,6 +572,18 @@ def companion_paths(system: str) -> dict:
     return {"unit": conf / "systemd" / "user" / UNIT, "desktop": data / "applications" / "knowledge-companion.desktop"}
 
 
+def windows_account() -> str:
+    """DOMAIN\\user of this logon as Windows itself names it. %USERDOMAIN% is no source: an OpenSSH session on a
+    workgroup pc says WORKGROUP, an account schtasks cannot map ("No mapping between account names and security IDs")."""
+    if os.name == "nt":
+        import ctypes
+        size = ctypes.c_ulong(512)
+        buf = ctypes.create_unicode_buffer(size.value)
+        if ctypes.windll.secur32.GetUserNameExW(2, buf, ctypes.byref(size)):  # 2 = NameSamCompatible
+            return buf.value
+    return getpass.getuser()
+
+
 def app_browser(system: str) -> str:
     """Edge or Chrome, whose --app= opens the page in a window of its own; '' means the default browser."""
     if system == "windows":
@@ -595,7 +607,7 @@ def companion_steps(system: str, key: str = "<key>") -> list:
         # which corporate EDRs flag.
         pyw = Path(sys.executable).with_name("pythonw.exe")
         exe = str(pyw) if os.name != "nt" or pyw.is_file() else sys.executable
-        user = f"{os.environ['USERDOMAIN']}\\{getpass.getuser()}" if os.environ.get("USERDOMAIN") else getpass.getuser()
+        user = windows_account()
         xml = f"""<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo><Description>{COMPANION_NAME} ({COMPANION_URL})</Description></RegistrationInfo>
