@@ -241,16 +241,45 @@ def install_claude(tok: str):
     print("done; start a new Claude Code session in your project folder")
 
 
+def toml_table_span(text: str, name: str):
+    """(start, end) of table [name] in a TOML text with its subtables ([name.x], [[name.x]]), or None. It ends at the
+    next other table header; comment lines above that header belong to that table. A header-like line inside a
+    multi-line string would count as a header: Codex's config.toml has none where this is used."""
+    head = re.compile(r"\s*\[\[?\s*([^\[\]]+?)\s*\]\]?\s*(#.*)?")
+    pos, start, comments = 0, None, None
+    for line in text.splitlines(keepends=True):
+        m = head.fullmatch(line.rstrip("\r\n"))
+        if start is None:
+            if m and not line.lstrip().startswith("[[") and m.group(1) == name:
+                start = pos
+        elif m:
+            if m.group(1) != name and not m.group(1).startswith(name + "."):
+                return start, pos if comments is None else comments
+            comments = None
+        elif line.lstrip().startswith("#"):
+            comments = pos if comments is None else comments
+        elif line.strip():
+            comments = None
+        pos += len(line)
+    return None if start is None else (start, len(text))
+
+
+def drop_toml_table(text: str, name: str):
+    """The text without table [name] and its subtables, or None when it has none."""
+    span = toml_table_span(text, name)
+    if span:
+        rest = (text[:span[0]].rstrip("\r\n") + "\n\n" + text[span[1]:].lstrip("\r\n")).strip("\r\n")
+        return rest + "\n" if rest else ""
+
+
 def remove_old_setup(agent: str):
     """What this script's own setup wrote (MCP server, hooks), so the plugin does not load it all twice."""
     if agent == "codex":
         conf, hooks = CODEX / "config.toml", CODEX / "hooks.json"
         text = conf.read_text(encoding="utf-8") if conf.exists() else ""
-        if "[mcp_servers.knowledge]" in text:
-            start = text.index("[mcp_servers.knowledge]")
-            end = text.find("\n[", start + 1)
-            end = len(text) if end < 0 else end + 1
-            conf.write_text((text[:start].rstrip("\n") + "\n\n" + text[end:]).strip("\n") + "\n", encoding="utf-8")
+        rest = drop_toml_table(text, "mcp_servers.knowledge")
+        if rest is not None:
+            conf.write_text(rest, encoding="utf-8")
             print(f"removed the old [mcp_servers.knowledge] from {conf}")
         data = load_json(hooks)
         ours = lambda g: any("knowledge-agent.py" in h.get("command", "") or "agent_hooks.py" in h.get("command", "")
@@ -454,13 +483,12 @@ def install_mcp(agent: str, name: str = "-"):
         path = CODEX / "config.toml"
         text = path.read_text(encoding="utf-8") if path.exists() else ""
         old = 'bearer_token_env_var = "KNOWLEDGE_TOKEN"'
-        if "[mcp_servers.knowledge]" in text:
-            start = text.index("[mcp_servers.knowledge]")
-            end = text.find("\n[", start + 1)  # the next table, or the end of the file
-            end = len(text) if end < 0 else end
+        span = toml_table_span(text, "mcp_servers.knowledge")
+        if span:
+            start, end = span
             block = text[start:end]
             if old in block:  # older setup that read KNOWLEDGE_TOKEN: replace this server's block only
-                path.write_text(text[:start] + codex_block(name).rstrip("\n") + text[end:], encoding="utf-8")
+                path.write_text(text[:start] + codex_block(name) + text[end:], encoding="utf-8")
                 print(f"MCP: {path} now gets the token without KNOWLEDGE_TOKEN in a config")
                 return True
             print(f"MCP: {path} already has [mcp_servers.knowledge], left as it is")
@@ -856,6 +884,22 @@ if __name__ == "__main__":
         assert choose(["claude", "codex", "agy"], lambda q: next(replies)) == ["claude", "agy"]
         assert locked_hint("unlinkat x: The process cannot access the file because it is being used by another process.")
         assert locked_hint("token ok") == ""
+        import tomllib
+        k = "[mcp_servers.knowledge]\nurl = \"u\"\n"
+        for before, after, want in (  # the knowledge table goes, everything else stays (review 31 Oct 2026)
+                ("", "", ""), ('model = "x"\n', "", 'model = "x"\n'),
+                ("", '[mcp_servers.knowledge.env]\nA = "1"\n[mcp_servers.knowledge.tools.t]\nb = 1\n[mcp_servers.other]\nurl = "o"\n',
+                 '[mcp_servers.other]\nurl = "o"\n'),
+                ("", '[[mcp_servers.knowledge.x]]\nn = 1\n[[profiles]]\nx = 1\n', '[[profiles]]\nx = 1\n'),
+                ("# [mcp_servers.knowledge] once\n[a]\n", '\n# my other server\n[mcp_servers.other] # here\nurl = "o"\n',
+                 '# [mcp_servers.knowledge] once\n[a]\n\n# my other server\n[mcp_servers.other] # here\nurl = "o"\n'),
+                ("[b]\r\n", '# note\r\nc = 1\r\n[mcp_servers.knowledgex]\r\n', "[b]\r\n\n[mcp_servers.knowledgex]\r\n")):
+            for t in (before + k + after, (before + k + after).replace("\n", "\r\n").replace("\r\r", "\r")):
+                rest = drop_toml_table(t, "mcp_servers.knowledge")
+                assert "knowledge" not in tomllib.loads(rest).get("mcp_servers", {}), t
+                assert tomllib.loads(rest) == tomllib.loads(want), (t, rest)
+                assert ("# my other" in rest) == ("# my other" in want) and ("once" in rest) == ("once" in want), (t, rest)
+        assert toml_table_span("[[mcp_servers.knowledge]]\n# [mcp_servers.knowledge]\n", "mcp_servers.knowledge") is None
         import tempfile
         with tempfile.TemporaryDirectory() as d:
             (Path(d) / "e.json").write_text("\ufeff \n", encoding="utf-8")

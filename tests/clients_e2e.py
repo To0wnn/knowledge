@@ -479,6 +479,8 @@ def agents(tok: str, home: Path, project: Path, garden: Path):
                    KNOWLEDGE_PLUGIN_LATEST=str(latest_file(home)))
     (home / ".gemini" / "config").mkdir(parents=True, exist_ok=True)
     (home / ".gemini" / "config" / "mcp_config.json").write_text("", encoding="utf-8")  # agy leaves it empty on Windows
+    code, out, err = run([sys.executable, str(agent), "--selftest"], "", env)
+    check(code == 0 and out.strip() == "ok", "knowledge-agent.py self-test (Codex config.toml: the old knowledge table goes with its subtables, nothing else)", out + err)
     for skill in sorted((REPO / "plugin" / "skills").glob("*/SKILL.md")):
         head = skill.read_text(encoding="utf-8").split("---")[1]
         meta = dict(l.split(": ", 1) for l in head.strip().splitlines() if ": " in l)
