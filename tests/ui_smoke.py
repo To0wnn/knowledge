@@ -332,10 +332,17 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
     if await pg.locator("#ck-history button").count():
         await pg.locator("#ck-history button").first.click()
         await pg.wait_for_selector("#ck-canvas .ck-card", timeout=10000)
-        check(await pg.evaluate("/^#\\/chats\\/[^/]+\\/[^/]+$/.test(location.hash) && !!document.querySelector('#ck-history [aria-current=true]')"), "a chat opens as its own route, marked in the list")
-        await pg.reload()
+        cid = await pg.evaluate("ck.cards.get(ck.view).meta.id")
+        check(await pg.evaluate("(id) => location.hash === '#/chats/' + encodeURIComponent(id) && !!document.querySelector('#ck-history [aria-current=true]')", cid),
+              "a chat opens as #/chats/<chat id>, marked in the list")
+        await pg.goto(f"{URL}/ui#/chats/{cid}")  # what the server's needs-you links build
         await pg.wait_for_selector("#ck-canvas .ck-card", timeout=15000)
-        check(True, "a chat's route survives a refresh")
+        check(await pg.evaluate("(id) => ck.cards.get(ck.view)?.meta.id === id", cid), "a #/chats/<chat id> link (and a refresh) opens that chat")
+        await pg.goto(f"{URL}/ui#/chats/no-such-chat")
+        await pg.wait_for_timeout(2500)
+        check(await pg.evaluate("location.hash === '#/chats' && !!$('ck-canvas').querySelector('.ck-pick')"), "a link to a missing chat falls back to #/chats")
+        await pg.locator("#ck-history button").first.click()
+        await pg.wait_for_selector("#ck-canvas .ck-card", timeout=10000)
         await pg.locator("#title").focus()
         await pg.keyboard.press("Escape")
         await pg.wait_for_timeout(300)
@@ -405,6 +412,21 @@ async def shell(browser, devices, secret: str) -> None:
     await pg.goto(f"{URL}/ui#{note}")
     await pg.wait_for_function("(id) => current && current.path === id", arg=note, timeout=15000)
     check(await pg.evaluate("(id) => location.hash === '#/notes/' + id && !$('kn').hidden", note), "an old #<path> link opens #/notes/<path>")
+    tricky = ["memory/q?z.md", "memory/p%41.md", "memory/sub dir/a b.md", "memory/ünï.md", "memory/x#y.md"]
+    check(await pg.evaluate("(ps) => typeof noteRoute === 'function' && ps.every(p => parseRoute(noteRoute(p)).arg === p)", tricky),
+          "note paths survive a route: ? # % spaces and accents are encoded")
+    odd = await pg.evaluate("Graph.graphData().nodes.map(n => n.id).find(id => /[ ?#%]|[^\\x00-\\x7f]/.test(id)) || null")
+    if odd:  # a real note with such a name: deep link, refresh, and opening it again adds no history entry
+        await pg.goto(f"{URL}/ui" + await pg.evaluate("(p) => noteRoute(p)", odd))
+        await pg.wait_for_function("(id) => current && current.path === id", arg=odd, timeout=15000)
+        await pg.reload()
+        await pg.wait_for_function("(id) => current && current.path === id", arg=odd, timeout=15000)
+        n0 = await pg.evaluate("history.length")
+        await pg.evaluate("(p) => openNote(p)", odd)
+        await pg.wait_for_timeout(600)
+        check(await pg.evaluate("(n) => history.length === n", n0), f"a note named {odd!r} opens by link, survives a refresh, no duplicate history entry")
+    else:
+        print("     no note with a space, ?, #, % or accent in its name: the live round trip is not checked")
     await pg.locator("#title").focus()
     await pg.keyboard.press("[")
     await pg.wait_for_timeout(300)

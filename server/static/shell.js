@@ -1,8 +1,8 @@
 // App shell: the sidebar (desktop; [ folds it to an icon rail, below 1000 px it is the rail unless opened), the
 // bottom tab bar and More sheet (phone), one page header per view, and a hash route per view: #/inbox, #/chats,
-// #/chats/<pc>/<chat>, #/tasks, #/tasks?view=flow, #/machines, #/notes, #/notes/<path>, #/map, #/map/<path>,
+// #/chats/<chat id>, #/tasks, #/tasks?view=flow, #/machines, #/notes, #/notes/<path>, #/map, #/map/<path>,
 // #/changes, #/health, #/thispc. The URL is the only record of the view (refresh, back and forward work); an old
-// #<note path> link becomes #/notes/<path>. The views themselves are app.js's and mission.js's; this file shows one
+// #<note path> link becomes #/notes/<path>. Paths in routes are encoded per part (encPath), decoded here. The views themselves are app.js's and mission.js's; this file shows one
 // at a time and asks it to load. Uses app.js globals ($, el, store, decode, pushHash, ck, Graph, mapOn, current, …).
 "use strict";
 
@@ -33,7 +33,7 @@ function goBack(fallback) { if (history.state?.n > 0) history.back(); else go(fa
 
 function applyRoute() {
   let r = parseRoute(location.hash);
-  if (!r) { history.replaceState(history.state, "", oldLink(location.hash) ? `#/notes/${oldLink(location.hash)}` : "#/inbox"); r = parseRoute(location.hash); }
+  if (!r) { history.replaceState(history.state, "", oldLink(location.hash) ? noteRoute(oldLink(location.hash)) : "#/inbox"); r = parseRoute(location.hash); }
   const [home] = VIEWS[r.view], changed = r.view !== shellRoute.view, first = !shellRoute.view;
   shellRoute = r;
   document.body.dataset.view = r.view;
@@ -48,7 +48,8 @@ function applyRoute() {
   // Agents: Inbox and Chats share the cockpit; polling runs only while one of them shows.
   const agents = home === "cockpit";
   $("cockpit").dataset.mode = r.view;
-  if (r.view === "chats") ck.view = r.arg; else if (r.view === "inbox") ck.view = "";
+  // a chat route carries the chat id; the card is keyed by pc and id (ckSummary resolves an id it does not know yet)
+  if (r.view === "chats") { const c = ck.chats.find((x) => x.id === r.arg || ckKey(x) === r.arg); ck.view = c ? ckKey(c) : r.arg; } else if (r.view === "inbox") ck.view = "";
   ckLayout();
   if (agents) {
     if (r.view === "inbox") ckBoard(); else ckHistory();
@@ -123,7 +124,7 @@ for (const b of $("tasks-mode").querySelectorAll("button")) b.onclick = () => go
 
 // Search: for now the knowledge search at the top of the Notes view.
 function openSearch() {
-  if (shellRoute.view !== "notes" && shellRoute.view !== "map") go(current ? `#/notes/${current.path}` : "#/notes");
+  if (shellRoute.view !== "notes" && shellRoute.view !== "map") go(current ? noteRoute(current.path) : "#/notes");
   $("q").focus(); $("q").select();
 }
 $("jump").onclick = openSearch;

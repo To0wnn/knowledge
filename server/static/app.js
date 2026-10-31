@@ -42,6 +42,10 @@ const renderMd = (text) => DOMPurify.sanitize(marked.parse(text, { gfm: true }),
 const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* blocked */ } } };
 // A new history entry for a route (shell.js); the count lets Back stay inside the app instead of leaving it.
 const pushHash = (h) => { if (location.hash !== h) history.pushState({ n: (history.state?.n || 0) + 1 }, "", h); };
+// A note path inside a route or link: each part encoded, so "?", "#", "%", spaces and accents survive a refresh and
+// match location.hash as the browser keeps it; parseRoute decodes it again.
+const encPath = (p) => p.split("/").map(encodeURIComponent).join("/");
+const noteRoute = (path, view = "notes") => `#/${view}/${encPath(path)}`;
 
 let data = { nodes: [], links: [] };
 let byId = new Map(), neighbors = new Map(), slugToId = new Map(), clusterColor = new Map();
@@ -284,7 +288,7 @@ async function loadGraph() {
       clearTimeout(hoverTimer);
       if (!selected) hoverTimer = setTimeout(() => (hover ? gather(hover, 0.3) : releaseFocus()), hover ? 150 : 250);
     })
-    .onNodeClick((n) => (selected === n.id ? go(`#/notes/${n.id}`) : openNote(n.id))) // a second click reads it
+    .onNodeClick((n) => (selected === n.id ? go(noteRoute(n.id)) : openNote(n.id))) // a second click reads it
     .onBackgroundClick(() => deselect())
     .onLinkClick(() => deselect()); // lines cross the empty space; a click on one is a click beside the nodes
   // More room than the force-graph defaults (-30 / 30) so labels do not pile up.
@@ -517,7 +521,7 @@ async function openNote(id, { push = true, find = null } = {}) {
   if (p !== "shared" && p !== project && !allMode()) switchProject(p, false); // the All map stays the All map
   current = note; document.body.classList.remove("home");
   if (push) { // its route; from another view (a task, a change, a lint finding) this shows the Notes view
-    pushHash(`#/${mapOn ? "map" : "notes"}/${note.path}`);
+    pushHash(noteRoute(note.path, mapOn ? "map" : "notes"));
     if (shellRoute.view !== (mapOn ? "map" : "notes")) applyRoute();
   }
   selected = byId.has(note.path) ? note.path : null; setFocus(selected); markActive(); if (Graph) animateHover(6000);
@@ -557,7 +561,7 @@ function renderNote() {
   // [[slug]] -> internal link to that memo, when it exists
   const linked = body.replace(/\[\[([a-z0-9][a-z0-9_-]*)\]\]/g, (all, slug) => {
     const target = slugToId.get(slug.replace(/-/g, "_"));
-    return target ? `[${slug}](#${target})` : all;
+    return target ? `[${slug}](#${encPath(target)})` : all;
   });
   const pane = $("note"); pane.replaceChildren();
   const head = el("div", "note-head");
@@ -565,7 +569,7 @@ function renderNote() {
   if (n) { const pill = el("span", "pill", n.cluster || n.group); pill.style.borderColor = nodeColor(n); head.append(pill); }
   const tools = el("div", "note-tools");
   const copy = el("button", "ghost small", "Copy link");
-  copy.onclick = () => navigator.clipboard?.writeText(`${location.origin}/ui#/notes/${note.path}`).then(() => { copy.textContent = "Copied"; setTimeout(() => (copy.textContent = "Copy link"), 1500); });
+  copy.onclick = () => navigator.clipboard?.writeText(`${location.origin}/ui${noteRoute(note.path)}`).then(() => { copy.textContent = "Copied"; setTimeout(() => (copy.textContent = "Copy link"), 1500); });
   tools.append(copy);
   if (note.writable) { const edit = el("button", "ghost small", touch ? "Edit" : "Edit (E)"); edit.onclick = startEdit; tools.append(edit); }
   const hist = el("button", "ghost small", "History"); hist.onclick = () => showHistory(); tools.append(hist);
@@ -586,7 +590,7 @@ function renderSide() {
     const card = el("div", "map-card");
     card.append(el("h2", null, n ? n.label : note.path.split("/").pop()));
     const desc = splitFront(note.text).meta.description; if (desc) card.append(el("p", "note-desc", desc));
-    const read = el("button", null, "Read note"); read.onclick = () => go(`#/notes/${note.path}`); card.append(read);
+    const read = el("button", null, "Read note"); read.onclick = () => go(noteRoute(note.path)); card.append(read);
     side.append(card);
   }
   const box = el("div", "connected"); side.append(box);
@@ -598,7 +602,7 @@ function renderSide() {
     const all = [...related, ...linked];
     box.replaceChildren(el("h3", null, all.length ? `Connected (${all.length})` : "Not connected to other notes yet"));
     for (const x of all) {
-      const a = el("a"); a.href = `#${x.id}`;
+      const a = el("a"); a.href = `#${encPath(x.id)}`;
       const why = x.why.replace("shared neighbours", "neighbours").replace(/similar meaning \(([\d.]+)\)/, "meaning $1").replace(/, /g, " · ");
       a.append(x.label, el("span", "why", `${x.project !== project && x.project !== "shared" ? x.project + " · " : ""}${why}`));
       box.append(a);
@@ -839,7 +843,7 @@ document.addEventListener("keydown", (e) => {
   const typing = /input|textarea|select/i.test(document.activeElement.tagName) || document.querySelector("dialog[open]");
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); openSearch(); return; }
   if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
-  const kn = shellRoute.view === "notes" || shellRoute.view === "map", at = current ? `/${current.path}` : "";
+  const kn = shellRoute.view === "notes" || shellRoute.view === "map", at = current ? `/${encPath(current.path)}` : "";
   if (e.key === "[") toggleRail();
   else if (e.key === "/") { e.preventDefault(); openSearch(); }
   else if (e.key.toLowerCase() === "a") go("#/inbox");
@@ -1205,7 +1209,7 @@ $("ingest-form").addEventListener("submit", async (e) => {
       res = await api("/ui/api/ingest", { method: "POST", body: JSON.stringify(body), headers: { "Content-Type": "application/json" } });
     }
     out.replaceChildren(el("p", null, `Saved ${res.path} (${res.chars} characters): ${res.title}`));
-    const link = (label, path) => { const a = el("a", null, label); a.href = `#${path}`; a.onclick = (ev) => { ev.preventDefault(); $("ingest-dialog").close(); openNote(path); }; return a; };
+    const link = (label, path) => { const a = el("a", null, label); a.href = `#${encPath(path)}`; a.onclick = (ev) => { ev.preventDefault(); $("ingest-dialog").close(); openNote(path); }; return a; };
     out.append(link("Open the source", res.path));
     if (res.related.length) {
       out.append(el("p", null, "Possibly related memos:"));
@@ -1265,7 +1269,14 @@ async function ckSummary() {
     $("ck-resets").title = `${AGENT_NAME[worst.agent] || worst.agent} on ${worst.label}: ${Math.round(worst.limit)}% of its usage limit used`;
   }
   for (const [k, card] of ck.cards) { const c = ck.chats.find((x) => ckKey(x) === k); if (!c) ckDrop(k); else card.meta = { ...card.meta, ...c }; }
-  if (ck.view && !ck.cards.has(ck.view)) { const c = ck.chats.find((x) => ckKey(x) === ck.view); if (c) ckCard(c); else ck.view = ""; }
+  if (ck.view && !ck.cards.has(ck.view)) { // a route's chat id (or an older pc/id key) once the chats are known
+    const c = ck.chats.find((x) => x.id === ck.view || ckKey(x) === ck.view);
+    if (c) ck.view = ckKey(ckCard(c).meta);
+    else { // gone or never there: the list, without a dead chat in the URL
+      ck.view = "";
+      if (shellRoute.view === "chats" && shellRoute.arg) { history.replaceState(history.state, "", "#/chats"); shellRoute = { ...shellRoute, arg: "" }; }
+    }
+  }
   ckHistory(); ckBoard(); ckLayout();
 }
 // The Chats view's list: newest first, the open one marked.
@@ -1283,7 +1294,7 @@ function ckHistory() {
 // Open one chat (its route), or go back from it when `meta` is empty.
 function ckShow(meta) {
   if (!meta) return goBack("#/chats");
-  go(`#/chats/${ckKey(ckCard(meta).meta)}`);
+  go(`#/chats/${encodeURIComponent(ckCard(meta).meta.id)}`);
 }
 // The open chat in the Chats view, or a line to pick one. The card's node is moved only when it changes: moving it
 // would drop the focus from its text box.
