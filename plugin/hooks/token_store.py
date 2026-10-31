@@ -18,7 +18,8 @@ import sys
 from pathlib import Path
 
 SERVICE = "knowledge"
-DEFAULT_URL = "https://knowledge.to0wnn.com"
+NO_URL = ("knowledge: no server address is set on this device, so the knowledge server is not used. Run "
+          "`knowledge-agent.py setup` (or set KNOWLEDGE_URL) to connect it.")
 URL_FILE = Path.home() / ".config" / "knowledge" / "url"  # written by knowledge-agent.py install; not a secret
 
 
@@ -125,18 +126,17 @@ def token() -> str:
 
 def url() -> str:
     """The server: the Claude plugin option (what Claude's MCP entry uses too), KNOWLEDGE_URL, the URL the setup
-    stored, else the default."""
+    stored; "" when none is set (there is no built-in server)."""
     try:
         stored = URL_FILE.read_text(encoding="utf-8").strip()
     except OSError:
         stored = ""
     return (os.environ.get("CLAUDE_PLUGIN_OPTION_URL") or os.environ.get("CLAUDE_PLUGIN_OPTION_url")
-            or os.environ.get("KNOWLEDGE_URL") or stored or claude_option("url") or DEFAULT_URL).rstrip("/")
+            or os.environ.get("KNOWLEDGE_URL") or stored or claude_option("url") or "").rstrip("/")
 
 
 def url_is_default(claude: bool = False) -> bool:
-    """Nothing names the server, so url() falls back to DEFAULT_URL. Claude's MCP entry reads only its plugin option.
-    Reported at session start so the admin page shows which devices still lean on the default before it is removed."""
+    """Nothing names the server on this device (url() is ""). Claude's MCP entry reads only its plugin option."""
     if claude:
         return not claude_option("url")
     return not (os.environ.get("KNOWLEDGE_URL") or URL_FILE.exists() or claude_option("url"))

@@ -1,6 +1,6 @@
 {
   "name": "knowledge",
-  "version": "0.14.1",
+  "version": "0.14.2",
   "description": "Live shared knowledge (docs + Claude memory) through a knowledge server",
   "author": {
     "name": "To0wnn"
@@ -9,8 +9,7 @@
     "url": {
       "type": "string",
       "title": "Knowledge server URL",
-      "description": "Base URL of the knowledge server, without /mcp",
-      "default": "https://knowledge.to0wnn.com"
+      "description": "Base URL of your knowledge server, without /mcp (e.g. https://knowledge.example.com)"
     },
     "token": {
       "type": "string",

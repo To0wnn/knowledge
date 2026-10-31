@@ -55,7 +55,7 @@ MEMORY = {  # root name on the server -> folder on this machine
 LOCAL = {"homelab": "memory", "anpitek": "anpitek-memory", "trade": "trade-memory"}  # projects with memory here
 SKILLS = HOME / ".claude/skills"
 REPO = Path(__file__).resolve().parent.parent  # plugin skills live here: changing them is a public commit, never
-SERVER = os.environ.get("KNOWLEDGE_URL", "https://knowledge.to0wnn.com")
+SERVER = os.environ["KNOWLEDGE_URL"]  # from local.env via the unit; missing = fail loudly
 TOKEN = "KNOWLEDGE_TOKEN_VM_SESSIONS"  # vault name: a write token for all projects (the queue routes need one)
 PUSH = "UPTIME_KUMA_PUSH_LESSON_LOOP"  # vault name of the heartbeat token (Uptime Kuma "Lesson loop")
 MODEL = "sonnet"  # judging rules is the hard part and the volume is tiny (<= MAX_PER_RUN a week); counting uses haiku

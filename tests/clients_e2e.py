@@ -1710,7 +1710,13 @@ def claude_stored_token(tmp: Path):
     code2, out2, err2 = run([sys.executable, "-c", probe], env=user_env(tmp / "Nothing Set", PATH=str(Path(sys.executable).parent)),
                             cwd=CLIENT / "plugin" / "hooks")
     check(out.split() == ["False", "False"] and out2.split() == ["True", "True"],
-          "url_is_default: false once a server is named, true when only the default is left", out + err + out2 + err2)
+          "url_is_default: false once a server is named, true when nothing names one", out + err + out2 + err2)
+    bare = user_env(tmp / "Nothing Set", PATH=str(Path(sys.executable).parent))
+    code, out, err = run([sys.executable, "-c", "import token_store as t; print(repr(t.url()))"], env=bare, cwd=CLIENT / "plugin" / "hooks")
+    check(out.strip() == "''", "no built-in server: url() is empty when nothing names one", out + err)
+    code, out, err = run([sys.executable, str(CLIENT / "plugin" / "hooks" / "agent_hooks.py"), "context", "codex"], "{}", bare)
+    check("no server address is set" in out and "knowledge-agent.py setup" in out,
+          "no server set: the session start says how to connect, and calls no server", out + err)
 
 
 def checkout_update(tmp: Path):

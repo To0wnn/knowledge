@@ -3,7 +3,7 @@
 
   ./token.py push-secrets
 
-Device tokens are created and revoked in the web UI (https://knowledge.to0wnn.com/ui/admin); the server stores only
+Device tokens are created and revoked in the web UI (<server>/ui/admin); the server stores only
 their hashes and treats them as secrets too. tokens-plain.json still holds the tokens made before the web UI, so
 push-secrets keeps masking those.
 """
@@ -72,7 +72,7 @@ def main(argv):
     if argv[:1] == ["push-secrets"]:
         push_secrets()
     elif argv[:1] in (["add"], ["revoke"], ["list"]):
-        sys.exit("Tokens are managed in the web UI now: https://knowledge.to0wnn.com/ui/admin")
+        sys.exit("Tokens are managed in the web UI now: <your server>/ui/admin")
     else:
         sys.exit(__doc__)
 

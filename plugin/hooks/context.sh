@@ -5,7 +5,10 @@
 # Never blocks a session: on failure it prints one short notice, or the offline context when this device has a copy.
 part=${1:-1}
 url=${CLAUDE_PLUGIN_OPTION_URL:-${CLAUDE_PLUGIN_OPTION_url:-$(sh "$(dirname "$0")/py.sh" "$(dirname "$0")/token_store.py" url)}}
-[ -n "$url" ] || url=https://knowledge.to0wnn.com  # no Python
+if [ -z "$url" ]; then  # no built-in server: say so once, never send the token somewhere by default
+  [ "$part" = 1 ] && echo "knowledge: no server address is set on this device, so the knowledge server is not used. Run \`knowledge-agent.py setup\` or set the plugin option url."
+  exit 0
+fi
 token=$(sh "$(dirname "$0")/py.sh" "$(dirname "$0")/token_store.py" token)
 [ -n "$token" ] || token=${CLAUDE_PLUGIN_OPTION_TOKEN:-${CLAUDE_PLUGIN_OPTION_token:-}}  # no Python: plugin setting
 # The header goes in over stdin (-H @-), so the token is not on the command line (ps).

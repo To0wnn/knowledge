@@ -518,6 +518,10 @@ def context(agent: str, tok: str):
     stdin = sys.stdin.read()
     hook = json.loads(stdin or "{}")
     cwd = hook.get("cwd") or (hook.get("workspacePaths") or [os.getcwd()])[0]
+    if not URL:
+        print(json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": token_store.NO_URL}}]} if agent == "agy" else
+                         {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": token_store.NO_URL}}))
+        return
     ctx = context_text(tok, cwd, agent)  # first: a slow mirror must not cost the session its context
     run_hook("memory_mirror.py", tok, "")  # returns at once: the sync runs in the background
     try:
@@ -558,7 +562,7 @@ def mcp(tok: str):
             except ValueError:
                 msg = None
             ids = [m["id"] for m in (msg if isinstance(msg, list) else [msg]) if isinstance(m, dict) and m.get("id") is not None]
-            reason = {401: "token invalid or revoked (KNOWLEDGE_TOKEN or the keyring)",
+            reason = token_store.NO_URL if not URL else {401: "token invalid or revoked (KNOWLEDGE_TOKEN or the keyring)",
                       403: "only reachable from the home network or WireGuard"}.get(getattr(e, "code", 0), str(e) or type(e).__name__)
             replies = [{"jsonrpc": "2.0", "id": i, "error": {"code": -32000, "message": f"knowledge server: {reason}"}} for i in ids]
         for reply in replies:

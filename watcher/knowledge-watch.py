@@ -33,7 +33,7 @@ TREES = [  # local path -> path prefix on the knowledge server (longest first)
     (f"{HOME}/trade_bot", "trade"),
 ]
 MD_ONLY = ("anpitek/", "trade/")  # code repos: only Markdown is shared, so logs and state files are not reported
-SERVER = os.environ.get("KNOWLEDGE_URL", "https://knowledge.to0wnn.com")  # LAN address from local.env (unit)
+SERVER = os.environ["KNOWLEDGE_URL"]  # from local.env via the unit; missing = fail loudly  # LAN address from local.env (unit)
 TOKEN = open(os.path.expanduser("~/.config/knowledge-server/watcher.token")).read().strip()
 SHARED = f"{HOME}/.claude/gedeeld"
 AGENT_FILES = [f"{HOME}/.gemini/GEMINI.md", f"{HOME}/.codex/AGENTS.md"]

@@ -16,6 +16,7 @@ refused before it is written, like the server refuses it; existing memos and all
 from __future__ import annotations  # X | None on Python 3.9 (macOS's /usr/bin/python3)
 
 import json
+import os
 import re
 import sys
 import urllib.parse
@@ -24,7 +25,8 @@ from pathlib import Path
 
 PROJECTS = Path.home() / ".claude/projects"
 LINT_DIR = Path(__file__).resolve().parents[2] / "server"  # ~/knowledge/server/lint.py
-SERVER = "https://knowledge.to0wnn.com"
+SERVER = os.environ.get("KNOWLEDGE_URL") or next((l.split("=", 1)[1].strip() for l in (LINT_DIR.parent / "local.env").read_text().splitlines()
+                                                   if l.startswith("KNOWLEDGE_URL=")), "")  # VM only: the repo's local.env
 TOKEN = Path.home() / ".config/knowledge-server/report.token"  # read-only device token
 # Claude Code memory dir -> knowledge server root and project (the semantic search filters on project)
 CC = lambda folder: re.sub(r"[^A-Za-z0-9]", "-", str(Path.home() / folder))  # Claude Code's memory folder name
