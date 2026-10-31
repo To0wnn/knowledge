@@ -1221,9 +1221,23 @@ def actions_loop():
         time.sleep(ACTIONS_EVERY)
 
 
+class LocalServer(ThreadingHTTPServer):
+    """One companion per pc: its port is the lock. On Windows SO_REUSEADDR would let a second one bind the same port
+    (and both start the same tasks), so there the port is taken exclusively instead."""
+    allow_reuse_address = os.name != "nt"
+
+    def server_bind(self):
+        if os.name == "nt":
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 def serve():
     token_store.machine()  # this pc's id, made once; the plugin hooks make it too when the companion never ran
-    httpd = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)  # never another interface: the API changes agent settings
+    try:
+        httpd = LocalServer(("127.0.0.1", PORT), Handler)  # never another interface: the API changes agent settings
+    except OSError as e:  # loudly, with a failing exit: the hooks' wrapper would otherwise call it skipped and exit 0
+        sys.exit(f"knowledge companion: {SELF} is taken, so another companion (or program) runs here: {e}")
     threading.Thread(target=loop, daemon=True).start()
     threading.Thread(target=actions_loop, daemon=True).start()
     print(f"knowledge companion on {SELF}", flush=True)

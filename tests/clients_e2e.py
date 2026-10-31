@@ -784,6 +784,10 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         check(up, "companion: serve answers on 127.0.0.1 and its first round reached the server", (home / "companion.log").read_text(errors="replace")[-600:])
         if not up:
             return
+        second = subprocess.run([sys.executable, str(hooks / "agent_hooks.py"), "serve"], env=env, stdin=subprocess.DEVNULL,
+                                capture_output=True, text=True, timeout=30)
+        check(second.returncode != 0, "companion: a second one on this pc cannot bind the port (one minute loop per pc, also on Windows)",
+              second.stdout[-300:] + second.stderr[-300:])
         # Only this pc's pages: a foreign origin, a rebound host name, a POST without Origin or not as JSON get nothing.
         check(call("GET", "/local/api/hello", origin="https://evil.example")[0] == 403, "companion: a foreign origin is refused")
         check(call("GET", "/local/api/hello", origin=None, host="evil.example:%d" % port)[0] == 403, "companion: a foreign Host (DNS rebinding) is refused")
