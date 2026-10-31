@@ -1256,6 +1256,10 @@ def wake_e2e(tok: str, home: Path, project: Path):
         check("WAKE-CODEX" in said and "run in workers" in said and "'pak <ID>'" in said and "WAKE-CLAUDE" not in said
               and mine.get("WAKE-CODEX", {}).get("mine") is False,
               "chat: a new task is said once as 'runs in workers, say pak', and the chat takes no lease", said[:500] + json.dumps(mine.get("WAKE-CODEX")))
+        code, out, err = hook(["context", "agy", "-"], {"conversationId": "conv-1", "workspacePaths": [str(project)]})
+        ctx = json.loads(out)["injectSteps"][0]["systemMessage"]["systemMessage"] if out.strip() else ""
+        check("WAKE-GEMINI" in ctx and "'pak <ID>'" in ctx and " take agy <ID>" in ctx,
+              "chat: agy's session start says how to take a task on 'pak <ID>' (the take command; its hooks never see the user's words)", ctx[-700:] + err[-300:])
         code, out, err = hook(["tasks", "claude", "-"], {"session_id": "cl-1", "cwd": str(project), "prompt": "pak WAKE-CLAUDE please"})
         said = json.loads(out)["hookSpecificOutput"]["additionalContext"] if out.strip() else ""
         check("took task WAKE-CLAUDE" in said and "(claimed Claude," in said and mine["WAKE-CLAUDE"]["mine"] is False

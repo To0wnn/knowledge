@@ -481,6 +481,9 @@ def context(agent: str, tok: str):
     except OSError:
         worktree = ""
     reg = register_notice() if agent == "agy" else ""  # agy hooks do not get its server's key; its terminal does
+    if agent == "agy" and "'pak <ID>'" in ctx:  # its hooks never see the user's words: the take command does it
+        ctx += ("\n\nagy: the plugin cannot see what the user types. When the user says 'pak <ID>' (or 'take <ID>'), run this "
+                f"in your terminal first; it takes that task for this conversation and says what to do: {take_command()}")
     text = "\n\n".join(t for t in (worktree, run_hook("docs-sync.py", tok, stdin).strip(), ctx, update, reg) if t)
     print(json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": text}}]} if agent == "agy" else
                      {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}}))
