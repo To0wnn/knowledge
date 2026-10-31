@@ -649,7 +649,8 @@ def approvals_contract(tmp, ck, fr, raw, er, et):
     ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "run the tests"})
     m("GET", "/machine/chats")
     assert m("POST", "/machine/chats/ask", {"chat": cid, "detail": "x"})[0] == 400
-    assert http("POST", "/machine/chats/ask", {"chat": cid, "tool": "Bash"}, token=et, headers=pc)[0] == 403
+    # another person's token naming this pc lands on its own machine record (per owner): this chat is not there
+    assert http("POST", "/machine/chats/ask", {"chat": cid, "tool": "Bash"}, token=et, headers=pc)[0] in (403, 404)
     st, b = ask()
     assert st == 200, b
     a1 = json.loads(b)
