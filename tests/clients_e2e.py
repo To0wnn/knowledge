@@ -1447,7 +1447,7 @@ def companion_setup(tmp: Path):
     agent = CLIENT / "clients" / "knowledge-agent.py"
     home = tmp / "Autostart Usér"
     env = user_env(home, APPDATA=str(home / "AppData" / "Roaming"), XDG_DATA_HOME="", XDG_CONFIG_HOME="")
-    want = {"linux": ["knowledge-companion.service", "Restart=on-failure", "Environment=", "systemctl --user enable",
+    want = {"linux": ["knowledge-companion.service", "Restart=on-failure", "KillMode=process", "Environment=", "systemctl --user enable",
                       "systemctl --user restart", "knowledge-companion.desktop", "Exec="],
             "darwin": ["LaunchAgents", "<key>RunAtLoad</key><true/>", "launchctl bootstrap", "Knowledge companion.app", "exec open"],
             "windows": ["<LogonTrigger>", "<LogonType>InteractiveToken</LogonType>", "pythonw.exe", "schtasks /Create",
@@ -1462,7 +1462,7 @@ def companion_setup(tmp: Path):
                   "install-companion windows: the logon task starts pythonw directly, no (hidden or encoded) PowerShell", task)
         check(not home.exists() or not any(home.rglob("*")), f"install-companion --dry-run --os {system}: writes nothing")
         code, out, err = run([sys.executable, str(agent), "uninstall-companion", "--dry-run", "--os", system], "", env)
-        check(code == 0, f"uninstall-companion --dry-run --os {system}", out + err)
+        check(code == 0 and re.search(r'companion\.py"? yolo-off', out), f"uninstall-companion --dry-run --os {system}: YOLO off first", out + err)
 
     fake, log = tmp / "fake tools", tmp / "fake tools.log"
     fake.mkdir(exist_ok=True)
@@ -1470,7 +1470,8 @@ def companion_setup(tmp: Path):
         if WIN:
             (fake / f"{tool}.cmd").write_text(f'@echo {tool} %*>>"%KN_FAKE_LOG%"\r\n', encoding="utf-8")
         else:
-            (fake / tool).write_text(f'#!/bin/sh\necho "{tool} $*" >> "$KN_FAKE_LOG"\n', encoding="utf-8")
+            (fake / tool).write_text(f'#!/bin/sh\necho "{tool} $*" >> "$KN_FAKE_LOG"\n'
+                                     '[ "$2" = show-environment ] && [ -n "$KN_FAKE_NOBUS" ] && exit 1\nexit 0\n', encoding="utf-8")
             (fake / tool).chmod(0o755)
     # only the fakes and Python: the trust step finds no agent CLI in this home, so it only says so
     real = {k: v for k, v in env.items() if k != "KNOWLEDGE_COMPANION_DRY_RUN"}
@@ -1480,8 +1481,17 @@ def companion_setup(tmp: Path):
              "darwin": ["Library/LaunchAgents/io.github.knowledge.companion.plist",
                         "Applications/Knowledge companion.app/Contents/MacOS/knowledge-companion"],
              "windows": [".knowledge/companion/autostart.xml"]}[system]
+    if system == "linux":  # SSH without lingering, a container: no user bus, the setup still succeeds
+        code, out, err = run([sys.executable, str(agent), "install-companion"], "", {**real, "KN_FAKE_NOBUS": "1"}, timeout=120)
+        check(code == 0 and "no user session for an autostart here" in out and not (home / files[0]).exists(),
+              "install-companion without a user systemd: skips the autostart, does not fail", out + err)
     code, out, err = run([sys.executable, str(agent), "install-companion"], "", real, timeout=120)
     calls = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
+    if system != "windows":
+        key = (home / ".knowledge" / "companion" / "api-key").read_text(encoding="utf-8").strip()
+        link = home / files[1]
+        check(f"#key={key}" in link.read_text(encoding="utf-8") and link.stat().st_mode & 0o077 == 0 and key not in out,
+              f"install-companion on {system}: the private shortcut opens the page with the local key", out[-600:])
     expect = {"linux": "systemctl --user enable knowledge-companion.service", "darwin": "launchctl bootstrap gui/",
               "windows": "schtasks /Create /F /TN"}[system]
     check(code == 0 and all((home / f).is_file() for f in files) and expect in calls and "runs at logon" in out,

@@ -203,9 +203,12 @@ it starts at logon (Linux: systemd `--user` unit `knowledge-companion.service`; 
 directly, no PowerShell), a menu entry "Knowledge companion" opens its page in an app window (Edge or Chrome
 `--app=`, else the default browser), and a first run trusts the knowledge hooks. On Windows the Start menu `.lnk` is
 made with one visible `powershell -NoProfile -Command` line (the shell's COM object). `--dry-run` (or
-`KNOWLEDGE_COMPANION_DRY_RUN=1`) lists the steps, also for another OS with `--os linux|darwin|windows`;
-`knowledge-agent.py uninstall-companion` removes the autostart and the menu entry (its settings in
-`~/.knowledge/companion` stay).
+`KNOWLEDGE_COMPANION_DRY_RUN=1`) lists the steps, also for another OS with `--os linux|darwin|windows`. Without a
+user session to start it in (no systemd user bus over SSH, a container, WSL; macOS without a GUI login) the autostart
+is skipped and the setup still succeeds; start it by hand with `knowledge-agent.py serve`. On Linux the unit has
+`KillMode=process`, so a restart never ends the tmux sessions and `codex exec` runs the companion started.
+`knowledge-agent.py uninstall-companion` first turns every YOLO switch off (the agents' own settings come back), then
+removes the autostart and the menu entry (its settings in `~/.knowledge/companion` stay).
 
 `install claude` (or `codex`, `agy`) sets up one agent without asking which ones. `install` asks for your server's
 address (or set `KNOWLEDGE_URL`, e.g. `KNOWLEDGE_URL=http://localhost:8766`, for one run); the installer has no default, so a

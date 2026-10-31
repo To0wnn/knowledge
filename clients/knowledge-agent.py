@@ -38,6 +38,7 @@ it in ~/.config/knowledge/url for the hooks and sets the Claude plugin option. O
 import getpass
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -583,10 +584,12 @@ def app_browser(system: str) -> str:
                                            "chromium", "chromium-browser") if shutil.which(n)), "")
 
 
-def companion_steps(system: str) -> list:
-    """What install-companion does, in order: ("write", path, text[, mode]) or ("run", argv, may_fail)."""
+def companion_steps(system: str, key: str = "<key>") -> list:
+    """What install-companion does, in order: ("write", path, text[, mode]) or ("run", argv, may_fail). The shortcut
+    opens the page with the local API's key, so its file is private."""
     from xml.sax.saxutils import escape
     me, p, browser = str(Path(__file__).resolve()), companion_paths(system), app_browser(system)
+    page = f"{COMPANION_URL}/#key={key}"
     if system == "windows":
         # pythonw.exe runs without a console; started directly, never through (hidden or encoded) PowerShell,
         # which corporate EDRs flag.
@@ -613,10 +616,10 @@ def companion_steps(system: str) -> list:
             steps.append(("run", ["powershell", "-NoProfile", "-NonInteractive", "-Command",
                                   "$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:KN_LNK); $s.TargetPath = $env:KN_TARGET; "
                                   "$s.Arguments = $env:KN_ARGS; $s.Description = $env:KN_DESC; $s.Save()"], False,
-                          {"KN_LNK": str(p["lnk"]), "KN_TARGET": browser, "KN_ARGS": f"--app={COMPANION_URL}", "KN_DESC": COMPANION_NAME}))
+                          {"KN_LNK": str(p["lnk"]), "KN_TARGET": browser, "KN_ARGS": f"--app={page}", "KN_DESC": COMPANION_NAME}))
             steps.append(("remove", p["url"]))
         else:
-            steps += [("write", p["url"], f"[InternetShortcut]\nURL={COMPANION_URL}/\n"), ("remove", p["lnk"])]
+            steps += [("write", p["url"], f"[InternetShortcut]\nURL={page}\n"), ("remove", p["lnk"])]
     elif system == "darwin":
         # systemd and launchd start with a bare PATH: the setup's PATH is passed so the companion finds claude, codex and agy.
         uid = getattr(os, "getuid", lambda: 501)()
@@ -632,7 +635,7 @@ def companion_steps(system: str) -> list:
   <key>StandardErrorPath</key>{arg(str(Path.home() / ".knowledge" / "companion" / "serve.log"))}
 </dict></plist>
 """
-        opener = f'exec open -na "{browser}" --args --app={COMPANION_URL}' if browser else f"exec open {COMPANION_URL}"
+        opener = f'exec open -na "{browser}" --args "--app={page}"' if browser else f'exec open "{page}"'
         info = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -645,7 +648,7 @@ def companion_steps(system: str) -> list:
         steps = [("write", p["plist"], plist),
                  ("run", ["launchctl", "bootout", f"gui/{uid}", str(p["plist"])], True),
                  ("run", ["launchctl", "bootstrap", f"gui/{uid}", str(p["plist"])], False),
-                 ("write", p["app_plist"], info), ("write", p["app_exe"], f"#!/bin/sh\n{opener}\n", 0o755)]
+                 ("write", p["app_plist"], info), ("write", p["app_exe"], f"#!/bin/sh\n{opener}\n", 0o700)]
     else:
         q = lambda s: '"' + s.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%") + '"'  # systemd and .desktop quoting
         unit = f"""[Unit]
@@ -657,6 +660,8 @@ Environment={q("PATH=" + os.environ.get("PATH", ""))}
 ExecStart={q(sys.executable)} {q(me)} serve
 Restart=on-failure
 RestartSec=10
+# only the companion itself: the tmux servers and codex exec runs it starts (where you work) live on
+KillMode=process
 
 [Install]
 WantedBy=default.target
@@ -665,7 +670,7 @@ WantedBy=default.target
 Type=Application
 Name={COMPANION_NAME}
 Comment=Wakes your agents for ready knowledge tasks
-Exec={q(browser) + f" --app={COMPANION_URL}" if browser else f"xdg-open {COMPANION_URL}"}
+Exec={q(browser) + " " + q(f"--app={page}") if browser else "xdg-open " + q(page)}
 Icon=applications-internet
 Terminal=false
 Categories=Network;Development;
@@ -674,20 +679,21 @@ Categories=Network;Development;
                  ("run", ["systemctl", "--user", "daemon-reload"], False),
                  ("run", ["systemctl", "--user", "enable", UNIT], False),
                  ("run", ["systemctl", "--user", "restart", UNIT], False),  # starts it, or loads new code after an update
-                 ("write", p["desktop"], desktop)]
+                 ("write", p["desktop"], desktop, 0o600)]
     return steps + [("run", [sys.executable, str(HOOKS / "companion.py"), "trust"], False)]
 
 
 def companion_undo_steps(system: str) -> list:
-    p = companion_paths(system)
+    """YOLO off first: once the companion is gone nothing could switch the agents' settings back."""
+    p, off = companion_paths(system), [("run", [sys.executable, str(HOOKS / "companion.py"), "yolo-off"], False)]
     if system == "windows":
-        return [("run", ["schtasks", "/End", "/TN", COMPANION_NAME], True),
+        return off + [("run", ["schtasks", "/End", "/TN", COMPANION_NAME], True),
                 ("run", ["schtasks", "/Delete", "/F", "/TN", COMPANION_NAME], True),
                 ("remove", p["task_xml"]), ("remove", p["lnk"]), ("remove", p["url"])]
     if system == "darwin":
         uid = getattr(os, "getuid", lambda: 501)()
-        return [("run", ["launchctl", "bootout", f"gui/{uid}", str(p["plist"])], True), ("remove", p["plist"]), ("remove", p["app"])]
-    return [("run", ["systemctl", "--user", "disable", "--now", UNIT], True), ("remove", p["unit"]),
+        return off + [("run", ["launchctl", "bootout", f"gui/{uid}", str(p["plist"])], True), ("remove", p["plist"]), ("remove", p["app"])]
+    return off + [("run", ["systemctl", "--user", "disable", "--now", UNIT], True), ("remove", p["unit"]),
             ("run", ["systemctl", "--user", "daemon-reload"], True), ("remove", p["desktop"])]
 
 
@@ -721,6 +727,7 @@ def run_steps(steps: list, dry: bool) -> list:
         else:
             may_fail, env = step[2], (step[3] if len(step) > 3 else {})
             shown = " ".join(f'"{a}"' if " " in a else a for a in what) + "".join(f"  ({k}={v})" for k, v in env.items())
+            shown = re.sub(r"#key=[\w-]+", "#key=...", shown)  # output gets pasted into bug reports
             if dry:
                 print(f"companion: would run {shown}")
                 continue
@@ -739,6 +746,14 @@ def run_steps(steps: list, dry: bool) -> list:
     return failed
 
 
+def run_quiet(argv: list) -> bool:
+    try:
+        return subprocess.run([shutil.which(argv[0]) or argv[0], *argv[1:]], capture_output=True, stdin=subprocess.DEVNULL,
+                              timeout=20).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def this_system() -> str:
     return "windows" if os.name == "nt" else "darwin" if sys.platform == "darwin" else "linux"
 
@@ -750,11 +765,24 @@ def install_companion(argv: list = (), undo: bool = False):
     if system not in ("linux", "darwin", "windows"):
         sys.exit("--os is linux, darwin or windows")
     print(f"\n== companion ({system}{', dry run' if dry else ''}) ==")
-    failed = run_steps(companion_undo_steps(system) if undo else companion_steps(system), dry)
+    skipped = False
+    if undo:
+        steps = companion_undo_steps(system)
+    else:
+        import companion  # the local API's key, made once; not in a dry run, which writes nothing
+        steps = companion_steps(system, "<key>" if dry else companion.api_key())
+        uid = getattr(os, "getuid", lambda: 501)()
+        probe = {"linux": ["systemctl", "--user", "show-environment"], "darwin": ["launchctl", "print", f"gui/{uid}"]}.get(system)
+        if probe and not dry and system == this_system() and not run_quiet(probe):
+            # SSH without lingering, a container, WSL: no user session to start it in; the agents work without it
+            print(f"companion: no user session for an autostart here ({' '.join(probe)} failed): skipped. "
+                  "Start it by hand with: knowledge-agent.py serve")
+            steps, skipped = steps[-1:], True  # still trust the hooks
+    failed = run_steps(steps, dry)
     if failed:
         sys.exit(f"companion: {len(failed)} step(s) failed (see above); the agents themselves are set up. "
                  f"Run again: knowledge-agent.py {'uninstall' if undo else 'install'}-companion")
-    if not dry:
+    if not dry and not skipped:
         print("companion: autostart and shortcut removed" if undo else f"companion: runs at logon; page on {COMPANION_URL}")
 
 
