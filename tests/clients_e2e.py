@@ -760,7 +760,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
     self_url = f"http://127.0.0.1:{port}"
     env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, PATH=str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
                    KNOWLEDGE_COMPANION_PORT=str(port), KNOWLEDGE_COMPANION_EVERY="3600", KN_FAKE_CALLS=str(calls),
-                   KNOWLEDGE_COMPANION_ACTIONS_EVERY="1", KNOWLEDGE_WORKER_GRACE="1",
+                   KNOWLEDGE_COMPANION_ACTIONS_EVERY="1", KNOWLEDGE_WORKER_GRACE="1", KNOWLEDGE_COMPANION_SCAN_EVERY="0",
                    KNOWLEDGE_AGY_PROCESS="knfakeagy" if fake_agy else Path(sys.executable).stem,
                    KNOWLEDGE_CODEX_PROCESS="knfakecodex" if fake_codex else Path(sys.executable).stem)
 
@@ -1087,6 +1087,42 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         activity = json.loads((home / ".knowledge" / "companion" / "activity.json").read_text(encoding="utf-8"))
         check(code == 0 and not argvs(n) and "Held by other-pc" in out and any("Held by other-pc" in a["text"] for a in activity),
               "workers: a 409 from /tasks/woken (another pc holds the task) starts nothing and logs who holds it", out[-400:] + err[-400:])
+        # Folders: link a folder to a project from the companion page or remotely, only folders from its own list.
+        app = home / "code" / "new app"
+        outside = tmp / "Outside repo"
+        for d in (app, outside):
+            d.mkdir(parents=True)
+            subprocess.run(["git", "-C", str(d), "init", "-q"], check=True, capture_output=True)
+        (app / "notes.md").write_text("keep me\n", encoding="utf-8")
+        call("POST", "/local/api/tick", {})  # fetches the projects this token may write
+        fs = json.loads(call("GET", "/local/api/state")[2])
+        cands = [c["path"] for c in fs.get("folders", {}).get("candidates", [])]
+        check(str(app) in cands and str(outside) not in cands and {"path": str(repo), "project": "garden"} in fs["folders"]["linked"]
+              and "garden" in fs.get("projects", []), "folders: the page lists linked folders and git checkouts under home as candidates", json.dumps(fs.get("folders"))[:600])
+        st, _, body = call("POST", "/local/api/link", {"path": str(outside), "project": "garden"})
+        check(st == 400 and not (outside / ".knowledge-project").exists(), "folders: a path outside the companion's own list is refused", body)
+        st, _, body = call("POST", "/local/api/link", {"path": str(app), "project": "homelab"})
+        check(st == 400 and "may not write" in body and not (app / ".knowledge-project").exists(), "folders: only a project this token may write", body)
+        st, _, body = call("POST", "/local/api/link", {"path": str(app), "project": "garden"})
+        fs = json.loads(call("GET", "/local/api/state")[2])["folders"]
+        check(st == 200 and (app / ".knowledge-project").read_text(encoding="utf-8") == "garden\n" and {"path": str(app), "project": "garden"} in fs["linked"]
+              and "git add .knowledge-project" in body, "folders: linking writes .knowledge-project as knowledge-init does, with the git note", body)
+        st, _, body = call("POST", "/local/api/link", {"path": str(app), "project": "garden"})
+        check(st == 200, "folders: change the project of a linked folder", body)
+        st, _, body = call("POST", "/local/api/unlink", {"path": str(app)})
+        check(st == 200 and not (app / ".knowledge-project").exists() and (app / "notes.md").exists(), "folders: unlink removes only the .knowledge-project file", body)
+        ui = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice", "X-Knowledge-UI": "1"}
+        for path in (str(outside), str(app)):
+            http("POST", "/ui/api/machines/action", {"machine": mid, "action": "link_folder", "args": {"path": path, "project": "garden"}}, ui)
+        acts = lambda: [a for a in next((r for r in machines() if r["id"] == mid), {}).get("actions", []) if a["action"] == "link_folder"]
+        wait_for(lambda: len(acts()) == 2 and all(a["status"] in ("done", "failed") for a in acts()), 30)
+        check([a["status"] for a in acts()] == ["failed", "done"] and "own list" in acts()[0].get("result", "")
+              and not (outside / ".knowledge-project").exists() and (app / ".knowledge-project").exists(),
+              "folders: a remote link refuses a path outside the candidate list and links one from it", json.dumps(acts())[:600])
+        call("POST", "/local/api/tick", {})
+        row = next((r for r in machines() if r["id"] == mid), {})
+        check({"path": str(app), "project": "garden"} in (row.get("companion") or {}).get("folders", {}).get("linked", []),
+              "folders: the Machines list shows the pc's linked folders", json.dumps((row.get("companion") or {}).get("folders"))[:400])
         # A plugin update (a new cache folder) makes the companion trust Codex's hooks again by itself.
         manifest = home / ".codex" / "plugins" / "cache" / "knowledge" / "knowledge" / "9.9.9" / ".codex-plugin" / "plugin.json"
         manifest.parent.mkdir(parents=True)
@@ -1502,12 +1538,15 @@ def agy_plugin(tok: str, home: Path, project: Path, garden: Path):
                 "docs-sync": {**common, "toolCall": {"name": "write_file", "args": {"Path": json.dumps(str(project / "docs" / "agy.md"))}}},
                 "wake": {**common, "toolCall": {"name": "call_mcp_tool", "args": {"ToolName": "knowledge_search"}}},
                 "gate": {**common, "toolCall": {"name": "invoke_subagent"}},
-                "guard": {**common, "toolCall": {"name": "write_file", "args": {"Path": "a.md", "Content": "clean text"}}}}
+                "guard": {**common, "toolCall": {"name": "write_file", "args": {"Path": "a.md", "Content": "clean text"}}},
+                "watch": {**common, "toolCall": {"name": "run_command", "args": {"CommandLine": "rm -rf ~/x"}}}}
     (project / "docs" / "agy.md").write_text("agy plugin → ✅\n", encoding="utf-8")
     for cmd in cmds:
         kind = next(k for k in payloads if f" {k}" in cmd)
         code, out, err = run(f'cmd /d /s /c "{cmd}"' if WIN else [shutil.which("sh"), "-c", cmd], json.dumps(payloads[kind]), env, cwd=str(root))
         check(code == 0 and "skipped" not in err, f"agy plugin: {kind} hook runs in the plugin folder", err[-600:])
+        if kind == "watch":  # agy's PostToolUse may only answer {}
+            check(out.strip() == "{}", "agy plugin: the watch hook answers {}", out[:300])
         if kind == "gate":  # agy reads any output, even {}, as a verdict: {} denied every subagent (27 Oct 2026)
             check(out.strip() == "", "agy plugin: below the limit the subagent hook prints nothing", out[:300])
         if kind == "guard":

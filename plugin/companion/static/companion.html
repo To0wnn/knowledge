@@ -48,6 +48,7 @@
 <nav class="cmp-nav" aria-label="Sections">
   <a href="#sec-agents">This pc</a>
   <a href="#sec-tasks">Tasks <span class="cmp-count" id="tasks-count"></span></a>
+  <a href="#sec-folders">Folders</a>
   <a href="#sec-activity">Activity</a>
   <a href="#sec-settings">Settings</a>
 </nav>
@@ -62,6 +63,12 @@
   <section id="sec-tasks" class="cmp-sec cmp-sec--tasks" aria-labelledby="h-tasks">
     <h2 id="h-tasks">Tasks for this pc</h2>
     <div class="cmp-lanes" id="tasks"></div>
+  </section>
+
+  <section id="sec-folders" class="cmp-sec cmp-sec--folders" aria-labelledby="h-folders">
+    <h2 id="h-folders">Folders</h2>
+    <p class="cmp-lede">Which folder belongs to which knowledge project: sessions and workers started there get that project. The link is one file, .knowledge-project, in the folder.</p>
+    <form class="cmp-settings" id="folders"></form>
   </section>
 
   <section id="sec-activity" class="cmp-sec cmp-sec--activity" aria-labelledby="h-activity">

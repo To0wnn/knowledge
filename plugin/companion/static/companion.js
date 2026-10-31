@@ -32,7 +32,29 @@ async function load() {
   try { const r = await api("/local/api/state"); S = { ...EMPTY, ...r, status: { ...EMPTY.status, ...r.status } }; }
   catch (e) { toast(`Could not read the companion: ${e.message}`); return; }
   if (S.locked) toast("Open the companion from its shortcut to see tasks and change settings");
-  renderChips(); renderAgents(); renderTasks(); renderActivity(); renderSettings();
+  renderChips(); renderAgents(); renderTasks(); renderFolders(); renderActivity(); renderSettings();
+}
+
+function renderFolders() {
+  const f = S.folders || { linked: [], candidates: [] }, projects = S.projects || [];
+  const pick = (name, current) => h("select", { name, "aria-label": "Project" },
+    projects.map((p) => h("option", { value: p, selected: p === current }, p)));
+  $("folders").replaceChildren(
+    f.linked.length
+      ? h("ul", { class: "cmp-sessions", "aria-label": "Linked folders" }, f.linked.map((x) => h("li", {},
+          h("span", { title: x.path }, x.path, h("br"), h("small", {}, `project ${x.project}`)),
+          projects.length ? pick(`p-${x.path}`, x.project) : null,
+          projects.length ? h("button", { class: "cmp-btn cmp-btn--small", type: "button", onclick: (e) =>
+            act("/local/api/link", { path: x.path, project: e.target.parentNode.querySelector("select").value }, (r) => r.result) }, "Change") : null,
+          h("button", { class: "cmp-btn cmp-btn--small", type: "button", onclick: () =>
+            confirm(`Unlink ${x.path}? Only its .knowledge-project file is removed.`) && act("/local/api/unlink", { path: x.path }, (r) => r.result) }, "Unlink"))))
+      : h("p", { class: "cmp-sessions-empty" }, "No folder is linked yet."),
+    h("div", { class: "cmp-field" },
+      h("label", { for: "link-path" }, "Link a folder"),
+      h("small", {}, "Git checkouts in your home folder and folders your agents worked in; the projects this pc's token may write."),
+      h("select", { id: "link-path", name: "path" }, f.candidates.map((x) => h("option", { value: x.path }, x.path))),
+      pick("project", ""),
+      h("div", { class: "cmp-settings-foot" }, h("button", { class: "cmp-btn cmp-btn--primary", type: "submit", disabled: !f.candidates.length || !projects.length }, "Link"))));
 }
 
 const $ = (id) => document.getElementById(id);
@@ -255,6 +277,10 @@ document.addEventListener("DOMContentLoaded", () => {
   load();
   setInterval(load, 30000);
   $("refresh-btn").addEventListener("click", () => load().then(() => toast("Refreshed")));
+  $("folders").addEventListener("submit", (e) => {
+    e.preventDefault();
+    act("/local/api/link", { path: e.target.elements.path.value, project: e.target.elements.project.value }, (r) => r.result);
+  });
   $("settings").addEventListener("submit", (e) => {
     e.preventDefault();
     const f = e.target.elements;

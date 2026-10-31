@@ -1113,6 +1113,25 @@ async function loadMachines(render = true) {
       }));
       card.append(ctl);
     }
+    const fl = c && c.folders;
+    if (fl && (fl.linked.length || (m.own && fl.candidates.length))) {
+      const d = el("details", "machine-sessions"), list = el("ul", "machine-list");
+      d.append(el("summary", null, `Folders (${fl.linked.length} linked)`));
+      for (const f of fl.linked) {
+        const li = el("li"); li.append(el("span", null, `${f.path} → ${f.project}`));
+        if (m.own) li.append(machineButton("unlink", "Remove its .knowledge-project file (nothing else)", () => confirm(`Unlink ${f.path}?`) && machineAction(m, "unlink_folder", { path: f.path })));
+        list.append(li);
+      }
+      d.append(list);
+      if (m.own && fl.candidates.length && (c.projects || []).length) {
+        const ctl = el("div", "machine-controls"), path = el("select"), proj = el("select");
+        for (const f of fl.candidates) { const o = el("option", null, f.path); o.value = f.path; path.append(o); }
+        for (const p of c.projects) { const o = el("option", null, p); o.value = p; proj.append(o); }
+        ctl.append(path, proj, machineButton("Link", "Write .knowledge-project in that folder", () => machineAction(m, "link_folder", { path: path.value, project: proj.value })));
+        d.append(ctl);
+      }
+      card.append(d);
+    }
     if (m.actions.length) {
       const d = el("details", "machine-sessions"), list = el("ul", "machine-list");
       d.append(el("summary", null, `Actions (${m.actions.length})`));

@@ -369,6 +369,8 @@ def machines_contract(tmp, ck, fr, raw, er, et):
     assert act({"action": "shell", "args": {"cmd": "rm -rf /"}})[0] == 400  # no free command, ever
     assert act({"action": "yolo", "args": {"agent": "codex", "on": True}})[0] == 400  # YOLO on needs the typed word
     assert act({"action": "max_workers", "args": {"agent": "codex", "n": 99}})[0] == 400
+    assert act({"action": "link_folder", "args": {"path": "/x", "project": "nope"}})[0] == 400  # a project the server knows
+    assert json.loads(http("GET", "/machine/projects", token=fr, headers=pc)[1])["projects"] == ["garden"]  # what it may write
     assert act({"action": "workers_allowed", "args": {"on": True}}, er)[0] == 403  # not her machine
     st, _, b = act({"action": "yolo", "args": {"agent": "codex", "on": True, "confirm": "YOLO"}})
     assert st == 200, b

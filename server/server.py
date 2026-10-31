@@ -2267,7 +2267,7 @@ def machine_rows() -> list[dict]:
                          "sessions": [{k: s.get(k, "") for k in ("project", "task", "at", "worker")} for s in sessions]}
         rows.append({"id": mid, "label": m.get("label", mid), "at": m.get("at", 0), "online": now - m.get("at", 0) < ONLINE,
                      "tokens": names, "own": any(own_token(tokens[n], dev) for n in names), "agents": agents,
-                     "companion": {k: comp.get(k) for k in ("version", "at", "workersAllowed", "game", "maxWorkers")} if comp else None,
+                     "companion": {k: comp.get(k) for k in ("version", "at", "workersAllowed", "game", "maxWorkers", "folders", "projects")} if comp else None,
                      "actions": queue.get(mid, [])[-10:]})
     for n, cfg in tokens.items():  # plugins before 0.15.0: one row per token, from clients.json
         old = [c for s, c in read_json(CLIENTS_FILE, {}).get(n, {}).items() if now - c.get("at", 0) < SESSION_KEEP]
@@ -4342,6 +4342,16 @@ def action_args(action: str, args: dict) -> dict:
         return {"agent": agent()}
     if action == "update_plugin":
         return {}
+    if action in ("link_folder", "unlink_folder"):
+        # the path is one the companion listed itself (its candidates or linked folders); it refuses any other
+        path = str(args.get("path", ""))
+        if not path or len(path) > 500 or "\n" in path:
+            raise ValueError("path must be a folder the companion listed")
+        if action == "unlink_folder":
+            return {"path": path}
+        if args.get("project") not in PROJECTS or not in_scope(PROJECTS[args["project"]][1] + "/"):
+            raise ValueError("unknown project")
+        return {"path": path, "project": args["project"]}
     if action == "yolo":
         if args.get("on") is True and args.get("confirm") != "YOLO":
             raise ValueError("YOLO on needs the word YOLO typed in the confirm dialog")
@@ -4374,6 +4384,13 @@ async def ui_machine_action(request: Request):
     await asyncio.to_thread(update_state, MACHINE_ACTIONS, lambda d: d.__setitem__(mid, (d.get(mid, []) + [item])[-50:]))
     audit("machine-action", f"{mid} {action} {json.dumps(args)}")
     return JSONResponse({"ok": True, "id": item["id"]})
+
+
+@server.custom_route("/machine/projects", methods=["GET"])
+async def machine_projects(request: Request):
+    """The projects this token may link a folder to (it may write their memory): the companion's Folders section."""
+    dev = device.get()
+    return JSONResponse({"projects": sorted(p for p, (_, mem) in list(PROJECTS.items()) if in_scope(mem + "/") and may_lease(dev, p))})
 
 
 @server.custom_route("/machine/actions", methods=["GET"])
@@ -4462,7 +4479,11 @@ async def machine_report(request: Request):
                              for a, v in (b.get("agents") or {}).items() if a in AGENT_OWNERS and isinstance(v, dict)},
                   "workers": [{k: (w.get(k) if isinstance(w.get(k), (int, float, bool)) else str(w.get(k, ""))[:300])
                                for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open", "checkpoint", "merged")}
-                              for w in (b.get("workers") or [])[:40] if isinstance(w, dict)]}
+                              for w in (b.get("workers") or [])[:40] if isinstance(w, dict)],
+                  "folders": {k: [{"path": str(f.get("path", ""))[:500], "project": str(f.get("project", ""))[:80]}
+                                  for f in ((b.get("folders") or {}).get(k) or [])[:200] if isinstance(f, dict)]
+                              for k in ("linked", "candidates")},
+                  "projects": [str(p)[:80] for p in (b.get("projects") or [])[:100]]}
         waits = [str(i)[:60] for i in (b.get("limitWait") or [])][:20]
     except (ValueError, AttributeError, TypeError) as e:
         return JSONResponse({"error": f"bad report: {e}"}, status_code=400)

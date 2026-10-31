@@ -225,10 +225,10 @@ def sessions(agent: str, now: float) -> list:
     return sorted(out, key=lambda s: -s["at"])
 
 
-def project_folders() -> dict:
-    """{project: folder} of the folders here linked to a project (.knowledge-project), never the home folder: from the
-    session registry and the folders the agents already know."""
-    cands = {e.get("cwd") for _, e in agent_hooks.read_entries("*.json")}
+def known_folders() -> set:
+    """Folders the agents worked in (session registry, Claude's projects, agy's trusted folders, Codex's projects) and
+    the folders linked on the companion page."""
+    cands = {e.get("cwd") for _, e in agent_hooks.read_entries("*.json")} | set(load("linked.json", []))
     try:
         cands |= set(json.loads(CLAUDE_JSON.read_text(encoding="utf-8")).get("projects") or {})
     except (OSError, ValueError, AttributeError):
@@ -241,8 +241,14 @@ def project_folders() -> dict:
         cands |= {json.loads(f'"{p}"') for p in re.findall(r'^\[projects\."((?:[^"\\]|\\.)*)"\]', (CODEX / "config.toml").read_text(encoding="utf-8"), re.M)}
     except (OSError, ValueError):
         pass
+    return {c for c in cands if c}
+
+
+def project_folders() -> dict:
+    """{project: folder} of the folders here linked to a project (.knowledge-project), never the home folder: from the
+    known folders, read anew each time (a folder linked a moment ago counts at once)."""
     out = {}
-    for c in sorted(c for c in cands if c):
+    for c in sorted(known_folders()):
         try:
             # the path as the agent wrote it, not resolve()d: a macOS /var or a Windows 8.3 name would not match its own key
             root, name = project_marker.project_root(Path(os.path.abspath(c)))
@@ -252,6 +258,95 @@ def project_folders() -> dict:
             continue
         out.setdefault(name, str(root))
     return out
+
+
+# ---------------------------------------------------------------- folders (the link to a project)
+
+_scan: dict = {"at": 0.0, "repos": []}
+SCAN_EVERY = float(os.environ.get("KNOWLEDGE_COMPANION_SCAN_EVERY") or 60)
+
+
+def git_repos(depth: int = 3) -> list:
+    """Git checkouts under the home folder, at most `depth` levels down, skipping hidden folders and heavy trees;
+    scanned at most once a minute (a link or unlink always looks again)."""
+    if time.time() - _scan["at"] < SCAN_EVERY:
+        return _scan["repos"]
+    found, skip = [], {"node_modules", "AppData", "Library", "snap", "venv", "__pycache__", "worktrees"}
+
+    def walk(d: Path, left: int):
+        try:
+            subs = [s for s in d.iterdir() if s.is_dir() and not s.is_symlink()]
+        except OSError:
+            return
+        if any(s.name == ".git" for s in subs) or (d / ".git").is_file():
+            found.append(str(d))
+            return
+        for s in subs:
+            if left and not s.name.startswith(".") and s.name not in skip:
+                walk(s, left - 1)
+    walk(HOME, depth)
+    _scan.update(at=time.time(), repos=sorted(found))
+    return _scan["repos"]
+
+
+def under_home(p: Path) -> bool:
+    try:
+        return p.resolve() != HOME.resolve() and p.resolve().is_relative_to(HOME.resolve())
+    except OSError:
+        return False
+
+
+def folder_links() -> dict:
+    """{linked: [{path, project}], candidates: [{path}]}: the folders linked here, and the folders that could be
+    (git checkouts under the home folder and folders agents worked in) that are not linked yet."""
+    linked, cands = {}, []
+    for c in sorted(known_folders() | set(git_repos())):
+        try:
+            p = Path(os.path.abspath(c))
+            root, name = project_marker.project_root(p)
+            if root and name and under_home(root):
+                linked.setdefault(str(root), name)
+            elif not root and p.is_dir() and under_home(p):
+                top = subprocess.run(["git", "-C", str(p), "rev-parse", "--show-toplevel"], capture_output=True, text=True,
+                                     stdin=subprocess.DEVNULL, timeout=10) if shutil.which("git") else None
+                # the checkout's root, as knowledge-init links it; git prints it with / on Windows too
+                cands.append(str(Path(top.stdout.strip())) if top and top.returncode == 0 and top.stdout.strip() else str(p))
+        except (OSError, subprocess.SubprocessError):
+            continue
+    cands = sorted({c for c in cands if c not in linked and under_home(Path(c))})
+    return {"linked": [{"path": k, "project": v} for k, v in sorted(linked.items())], "candidates": [{"path": c, "project": ""} for c in cands]}
+
+
+def link_folder(path: str, project: str) -> str:
+    """Link a folder the companion listed (candidate or already linked) to a project this token may write: the
+    .knowledge-project file, as the knowledge-init skill writes it. Never a path from elsewhere."""
+    _scan["at"] = 0
+    f = folder_links()
+    if path not in {x["path"] for x in f["linked"] + f["candidates"]}:
+        raise ValueError("only a folder from the companion's own list can be linked")
+    projects = server("GET", "/machine/projects", token_store.token()).get("projects", [])
+    if project not in projects:
+        raise ValueError(f"this token may not write project {project}; one of: {', '.join(projects) or 'none'}")
+    marker = Path(path) / project_marker.MARKER
+    marker.write_text(project + "\n", encoding="utf-8")
+    with LOCK:
+        save("linked.json", sorted(set(load("linked.json", [])) | {path}))
+    _scan["at"] = 0
+    note = (" The file holds only the name, so it may be committed (git add .knowledge-project), or kept out."
+            if (Path(path) / ".git").exists() else "")
+    log("folder", f"Linked {path} to project {project}", "Sessions started there from now on get this project." + note)
+    return f"linked {path} to {project}." + note
+
+
+def unlink_folder(path: str) -> str:
+    """Remove the link of a folder the companion lists as linked: only its .knowledge-project file."""
+    if path not in {x["path"] for x in folder_links()["linked"]}:
+        raise ValueError("only a linked folder from the companion's own list can be unlinked")
+    (Path(path) / project_marker.MARKER).unlink()
+    with LOCK:
+        save("linked.json", [p for p in load("linked.json", []) if p != path])
+    log("folder", f"Unlinked {path}", "Only its .knowledge-project file was removed")
+    return f"unlinked {path}"
 
 
 # ---------------------------------------------------------------- hook trust
@@ -769,7 +864,7 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float):
                        for a in AGENTS if installed(a)},
             "workers": [{**{k: w.get(k) for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open")},
                          "checkpoint": bool(w.get("checkpoint")), "merged": w["status"] == "merged"} for w in ws.values()],
-            "limitWait": wait}
+            "limitWait": wait, "folders": folder_links(), "projects": load("state.json", {}).get("projects", [])}
     server("POST", "/machine/report", tok, body)
 
 
@@ -792,7 +887,7 @@ def one_round(only: str = "") -> dict:
         ready = server("GET", "/tasks/ready", tok)["tasks"]
         if st.get("sync_error"):
             log("sync", "The knowledge server answers again")
-        st.update(synced=now, sync_error="", ready=ready)
+        st.update(synced=now, sync_error="", ready=ready, projects=server("GET", "/machine/projects", tok).get("projects", []))
     except Exception as e:
         if not st.get("sync_error"):
             log("error", "Could not reach the knowledge server", str(e)[:200])
@@ -841,6 +936,10 @@ def run_action(a: dict) -> str:
         return workers.rollback(w["cwd"], w["id"])
     if act == "trust_hooks":
         return trust(agent)
+    if act == "link_folder":
+        return link_folder(str(args.get("path", "")), str(args.get("project", "")))
+    if act == "unlink_folder":
+        return unlink_folder(str(args.get("path", "")))
     if act == "update_plugin":
         update_plugins()
         return "updated"
@@ -928,6 +1027,7 @@ def page_state() -> dict:
                        "stalled": len(lanes["stalled"]), "synced": st.get("synced"), "syncError": st.get("sync_error", "")},
             "agents": agents, "tasks": lanes, "activity": load("activity.json", [])[:50],
             "settings": {"serverUrl": token_store.url(), "token": {"present": bool(tok)}, **settings(), "game": workers.game_session()},
+            "folders": folder_links(), "projects": st.get("projects", []),
             "version": version()}
 
 
@@ -1030,6 +1130,10 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send(403, {"error": "Worker settings can only be changed on the companion page itself"}, origin=o)
                 save_settings({k: body[k] for k in ("workersAllowed", "maxWorkers") if k in body})
                 return self.send(200, {"ok": True, **settings()}, origin=o)
+            if path == "/local/api/link":
+                return self.send(200, {"result": link_folder(str(body.get("path", "")), str(body.get("project", "")))}, origin=o)
+            if path == "/local/api/unlink":
+                return self.send(200, {"result": unlink_folder(str(body.get("path", "")))}, origin=o)
             if path == "/local/api/tick":
                 return self.send(200, tick(), origin=o)
             if path == "/local/api/update":
