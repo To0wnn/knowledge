@@ -829,7 +829,10 @@ document.addEventListener("keydown", (e) => {
   const typing = /input|textarea|select/i.test(document.activeElement.tagName) || document.querySelector("dialog[open]");
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); $("q").focus(); $("q").select(); return; }
   if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
-  if (!$("cockpit").hidden) { if (e.key === "Escape" && !document.querySelector(".ck-menu[open]")) openCockpit(false); return; } // the cockpit has its own keys
+  if (!$("cockpit").hidden) { // the cockpit has its own keys: Esc leaves a chat for the board, then the board
+    if (e.key === "Escape" && !document.querySelector(".ck-menu[open], dialog[open]")) ck.view ? ckShow(null) : openCockpit(false);
+    return;
+  }
   if (e.key.toLowerCase() === "a") { e.preventDefault(); openCockpit(true); return; }
   if (e.key === "/") { e.preventDefault(); $("q").focus(); }
   else if (/^[1-9]$/.test(e.key) && PROJECTS[Number(e.key) - 1]) switchProject(PROJECTS[Number(e.key) - 1]);
@@ -1219,12 +1222,11 @@ $("ingest-form").addEventListener("submit", async (e) => {
 // server only relays: the pc's companion pulls each message and runs one turn of the agent (plugin/hooks/chat.py).
 // Everything is text (textContent): nothing an agent prints becomes markup. A phone shows one card and a switcher.
 const AGENT_MARK = { claude: "C", codex: "X", agy: "A" };
-const ck = { cards: new Map(), machines: [], chats: [], active: "", timer: 0, summaryAt: 0 };
+const ck = { cards: new Map(), machines: [], chats: [], board: [], view: store.get("kn_ck_view") || "", timer: 0, summaryAt: 0 };
 const ckKey = (c) => `${c.machine}/${c.id}`;
 const ckBusy = (s) => s === "running" || s === "queued";
 const ckShort = (path) => (path || "").split(/[\\/]/).filter(Boolean).pop() || path;
-function ckStored() { try { return JSON.parse(store.get("kn_ck_open") || "[]"); } catch { return []; } }
-function ckSave() { store.set("kn_ck_open", JSON.stringify([...ck.cards.keys()])); store.set("kn_ck_active", ck.active); }
+function ckSave() { store.set("kn_ck_view", ck.view); } // the chat on screen comes back after a reload
 
 function openCockpit(on) {
   $("cockpit").hidden = !on; document.body.classList.toggle("ck-on", on); store.set("kn_cockpit", on ? "1" : "0");
@@ -1244,21 +1246,22 @@ document.addEventListener("click", (e) => { // a popover closes on a click outsi
   for (const d of document.querySelectorAll(".ck-menu[open]")) if (!d.contains(e.target)) d.open = false;
 });
 
-// The bar and the canvas: every ~10 s the pcs and the chats; the open cards every 1.5 s while one runs, else 4 s.
+// The bar and the board: the pcs, the chats and the board every ~5 s on the board (10 s in a chat); the open chat
+// every 1.5 s while it runs, else 4 s. Only the chat on screen is polled: opening it is what marks it read.
 async function ckTick() {
   if ($("cockpit").hidden) return;
   try {
-    if (Date.now() - ck.summaryAt > 10000) await ckSummary();
-    await Promise.all([...ck.cards.values()].map(ckPoll));
-  } catch (e) { $("ck-canvas").title = e.message; }
+    if (Date.now() - ck.summaryAt > (ck.view ? 10000 : 5000)) await ckSummary();
+    await ckPoll(ck.cards.get(ck.view));
+  } catch (e) { $("ck-board").title = e.message; }
   clearTimeout(ck.timer);
-  ck.timer = setTimeout(ckTick, [...ck.cards.values()].some((c) => ckBusy(c.meta.status)) ? 1500 : 4000);
+  ck.timer = setTimeout(ckTick, ckBusy(ck.cards.get(ck.view)?.meta.status) ? 1500 : 4000);
 }
 async function ckSummary() {
   ck.summaryAt = Date.now();
-  const [ms, cs] = await Promise.all([api("/ui/api/machines"), api("/ui/api/chats")]);
+  const [ms, cs, bd] = await Promise.all([api("/ui/api/machines"), api("/ui/api/chats"), api("/ui/api/board").catch(() => ({ items: [] }))]);
   ck.machines = ms.machines.filter((m) => m.own && !m.old);
-  ck.chats = cs.chats;
+  ck.chats = cs.chats; ck.board = bd.items;
   const now = Date.now() / 1000;
   let live = ck.chats.filter((c) => ckBusy(c.status)).length, worst = null;
   for (const m of ck.machines) for (const [a, ag] of Object.entries(m.agents || {})) {
@@ -1272,57 +1275,144 @@ async function ckSummary() {
     $("ck-resets").textContent = `resets ${far ? at.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" }) : at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
     $("ck-resets").title = `${AGENT_NAME[worst.agent] || worst.agent} on ${worst.label}: ${Math.round(worst.limit)}% of its usage limit used`;
   }
-  // A running chat always has its card; the cards open before a reload come back.
-  const want = new Set(store.get("kn_ck_open") === null && ck.chats.length ? [ckKey(ck.chats[0])] : ckStored()); // first visit: the newest chat
-  for (const c of ck.chats) if (ckBusy(c.status) || want.has(ckKey(c))) ckCard(c);
   for (const [k, card] of ck.cards) { const c = ck.chats.find((x) => ckKey(x) === k); if (!c) ckDrop(k); else card.meta = { ...card.meta, ...c }; }
-  if (!ck.cards.has(ck.active)) ck.active = store.get("kn_ck_active") || "";
-  if (!ck.cards.has(ck.active)) ck.active = ck.cards.keys().next().value || "";
-  ckHistory(); ckLayout();
+  if (ck.view && !ck.cards.has(ck.view)) { const c = ck.chats.find((x) => ckKey(x) === ck.view); if (c) ckCard(c); else ck.view = ""; }
+  ckHistory(); ckBoard(); ckLayout();
 }
 function ckHistory() {
   const box = $("ck-history"); box.replaceChildren();
   for (const c of ck.chats.slice(0, 40)) {
     const li = el("li"), b = el("button", null, c.title || "(no message yet)"); b.type = "button";
     b.append(el("small", null, `${AGENT_NAME[c.agent] || c.agent} · ${c.label} · ${ckShort(c.folder)} · ${ago(c.updated)}${ckBusy(c.status) ? " · running" : ""}`));
-    b.onclick = () => { $("ck-history-menu").open = false; ckCard(c); ck.active = ckKey(c); ckLayout(); ckSave(); ckPoll(ck.cards.get(ck.active)); };
+    b.onclick = () => { $("ck-history-menu").open = false; ckShow(c); };
     li.append(b); box.append(li);
   }
   if (!ck.chats.length) box.append(el("li", "muted", "No chats yet."));
 }
+// One chat full screen (the board's card opened), or the board when `meta` is empty.
+function ckShow(meta) {
+  ck.view = meta ? ckKey(ckCard(meta).meta) : "";
+  ckLayout(); ckSave();
+  if (ck.view) { const card = ck.cards.get(ck.view); ckPoll(card); card.input.focus({ preventScroll: true }); }
+  else { ckBoard(); $("ck-board").querySelector(".ck-item-main")?.focus({ preventScroll: true }); }
+}
 function ckLayout() {
-  const canvas = $("ck-canvas"), sw = $("ck-switch");
-  if (!ck.cards.size) {
+  const card = ck.cards.get(ck.view);
+  $("ck-board").hidden = !!card; $("ck-canvas").hidden = !card; $("ck-back").hidden = !card;
+  $("ck-canvas").replaceChildren(...(card ? [card.root] : []));
+}
+$("ck-back").onclick = () => ckShow(null);
+
+// The attention board: what needs you first (a reply nobody read, a refused tool call, a failed worker, a task to
+// approve), then what runs, the open task lines and what finished in the last 24 h; grouped per project. A phone
+// shows the columns one under the other in that order.
+const CK_COLS = [["needs", "Needs you"], ["running", "Running"], ["open", "Open"], ["done", "Done (24 h)"]];
+function ckBoard() {
+  const items = ck.board || [], box = $("ck-board");
+  if (!items.length && !ck.chats.length) {
     const empty = el("div", "ck-empty");
     empty.append(el("h2", null, "Your agents, from anywhere"),
       el("p", null, ck.machines.some((m) => m.online && m.companion) ? "Start a chat with Claude Code, Codex or agy on one of your pcs, in a folder linked to a project there."
         : "None of your pcs is online with a companion right now. Chats run on a pc through its knowledge companion (plugin 0.16 or newer)."));
     const b = el("button", "ck-pill ck-primary", "+ New chat"); b.type = "button"; b.onclick = () => ckNewChat(); empty.append(b);
-    canvas.replaceChildren(empty);
-  } else canvas.replaceChildren(...[...ck.cards.values()].map((c) => c.root));
-  for (const [k, c] of ck.cards) c.root.classList.toggle("active", k === ck.active);
-  sw.replaceChildren(...[...ck.cards.values()].map((c) => { const o = el("option", null, `${ckBusy(c.meta.status) ? "● " : ""}${c.meta.title || "New chat"} · ${c.meta.label}`); o.value = ckKey(c.meta); o.selected = o.value === ck.active; return o; }));
-  sw.hidden = !ck.cards.size;
+    box.replaceChildren(empty);
+  } else box.replaceChildren(...CK_COLS.map(([id, name]) => {
+    const list = items.filter((i) => i.col === id), col = el("section", `ck-col ck-col-${id}`), head = el("h2", "ck-col-head");
+    col.setAttribute("aria-label", `${name}: ${list.length}`);
+    head.append(el("span", null, name), el("span", "ck-count", String(list.length)));
+    col.append(head);
+    if (!list.length) col.append(el("p", "ck-none", id === "needs" ? "Nothing waits for you." : "Nothing here."));
+    for (const p of [...new Set(list.map((i) => i.project || ""))]) {
+      const group = el("div", "ck-group");
+      group.append(el("h3", null, p ? shown(p) : "no project"), ...list.filter((i) => (i.project || "") === p).map(ckItem));
+      col.append(group);
+    }
+    return col;
+  }));
+  const n = items.filter((i) => i.col === "needs").length, said = n ? `${n} item${n > 1 ? "s" : ""} need${n > 1 ? "" : "s"} you` : "Nothing needs you";
+  if ($("ck-needs-live").textContent !== said) $("ck-needs-live").textContent = said;
 }
-$("ck-switch").onchange = () => { ck.active = $("ck-switch").value; ckLayout(); ckSave(); };
+async function ckDo(path, body) {
+  try { await api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); }
+  catch (e) { alert(e.message); }
+  ck.summaryAt = 0; ckTick();
+}
+function ckItem(i) {
+  const card = el("article", `ck-item ${i.col}`), main = el("button", "ck-item-main"), top = el("span", "ck-item-top");
+  main.type = "button";
+  top.append(el("span", "ck-mark", AGENT_MARK[i.agent] || "?"), el("strong", null, i.title));
+  const where = [i.kind === "worker" ? "worker" : i.kind === "task" ? `task for ${i.owner}` : "", i.label, ckShort(i.folder), i.at ? ago(i.at) : ""];
+  main.append(top, el("span", "ck-item-where", where.filter(Boolean).join(" · ")), el("span", "ck-item-line", i.line));
+  card.append(main);
+  main.title = i.kind === "chat" ? "Open this chat" : i.kind === "task" ? "Open its task line in the memo" : "How to look at this worker";
+  main.onclick = () => {
+    if (i.kind === "chat") return ckShow(ck.chats.find((c) => ckKey(c) === `${i.machine}/${i.id}`) || i);
+    if (i.kind === "task") { openCockpit(false); return openNote(i.path, { find: [i.id.toLowerCase()] }); }
+    const more = card.querySelector(".ck-item-open");
+    if (more) more.remove(); else card.append(el("p", "ck-item-open", i.open || "No details yet."));
+  };
+  const acts = el("div", "ck-item-acts"), act = (text, title, fn) => { const b = el("button", "ghost small", text); b.type = "button"; b.title = title; b.onclick = fn; acts.append(b); };
+  if (i.git) acts.append(ckGitPill(i));
+  if (i.approve) act("Approve", "Let this task start", () => ckDo("/ui/api/task/approve", { project: i.project, id: i.id }));
+  for (const h of i.hosts || []) act(`Start on ${h.label}`, "Start a worker for this task there now",
+    () => ckDo("/ui/api/machines/action", { machine: h.machine, action: "start_worker", args: { project: i.project, id: i.id } }));
+  if (i.kind === "worker" && i.status === "running") act("Stop", "Stop this worker",
+    () => confirm(`Stop the worker on ${i.id}?`) && ckDo("/ui/api/machines/action", { machine: i.machine, action: "stop_worker", args: { project: i.project, id: i.id } }));
+  if (i.col === "needs" && !i.approve) act("Dismiss", "Take it off the board until it changes again", () => ckDo("/ui/api/board/dismiss", { key: i.key, sig: i.sig }));
+  if (i.kind === "chat" && i.col === "running") act("Stop", "Stop this turn", () => ckDo("/ui/api/chat/stop", { machine: i.machine, id: i.id }));
+  if (acts.childNodes.length) card.append(acts);
+  return card;
+}
+
+// The git pill: branch · changed files · commits ahead/behind the branch it is compared with (the companion counts,
+// once a round). A tap asks that pc for the diff, read-only, through the chats' pull channel.
+function ckGitText(g) { return `${g.branch} · ●${g.changed}${g.base ? ` · ↑${g.ahead}↓${g.behind}` : ""}`; }
+function ckGitPill(i) {
+  const g = i.git, b = el("button", "ck-git", ckGitText(g)); b.type = "button";
+  b.setAttribute("aria-label", `Git: branch ${g.branch}, ${g.changed} changed files${g.base ? `, ${g.ahead} commits ahead and ${g.behind} behind ${g.base}` : ""}. Show the changes`);
+  b.title = g.base ? `Compared with ${g.base}. Show the changes` : "Show the changes";
+  b.onclick = (e) => { e.stopPropagation(); ckDiff(i); };
+  return b;
+}
+let ckDiffAsk = 0;
+async function ckDiff(i) {
+  const body = $("ck-diff-body"), ask = ++ckDiffAsk, say = (cls, text) => body.replaceChildren(el("p", cls, text));
+  $("ck-diff-title").textContent = `Changes · ${i.title}`;
+  $("ck-diff-where").textContent = `${i.label} · ${i.kind === "worker" ? `worker ${i.id}` : i.folder} · ${ckGitText(i.git)}`;
+  say("muted", `Asking ${i.label}…`);
+  if (!$("ck-diff-dialog").open) $("ck-diff-dialog").showModal();
+  try {
+    const { id } = await api("/ui/api/git/diff", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(i.kind === "worker" ? { machine: i.machine, worker: `${i.project}/${i.id}` } : { machine: i.machine, chat: i.id }) });
+    for (let n = 0; n < 40 && ask === ckDiffAsk && $("ck-diff-dialog").open; n++) {
+      await new Promise((r) => setTimeout(r, n ? 1000 : 300));
+      const d = await api(`/ui/api/git/diff?machine=${i.machine}&id=${id}`);
+      if (d.status !== "done") continue;
+      if (d.error) return say("error", d.error);
+      return body.replaceChildren(d.text.trim() ? diffView(d.text) : el("p", "muted", "No changes."));
+    }
+    if (ask === ckDiffAsk && $("ck-diff-dialog").open) say("error", `${i.label} did not answer: its companion may be older than 0.17 or busy.`);
+  } catch (e) { say("error", e.message); }
+}
+$("ck-diff-close").onclick = () => $("ck-diff-dialog").close();
 
 function ckCard(meta) {
   const k = ckKey(meta);
   if (ck.cards.has(k)) return ck.cards.get(k);
   const root = el("article", "ck-card"), head = el("header", "ck-head"), title = el("div", "ck-title");
   const name = el("strong"), where = el("span"), state = el("span", "ck-state"), x = el("button", "ck-x", "×");
-  x.type = "button"; x.title = "Close this card (the chat stays under Earlier chats)"; x.setAttribute("aria-label", "Close");
+  x.type = "button"; x.title = "Back to the board (the chat stays under Earlier chats)"; x.setAttribute("aria-label", "Back to the board");
   title.append(name, where);
-  head.append(el("span", "ck-mark", AGENT_MARK[meta.agent] || "?"), title, state, x);
+  const git = el("span", "ck-git-slot");
+  head.append(el("span", "ck-mark", AGENT_MARK[meta.agent] || "?"), title, git, state, x);
   const log = el("div", "ck-log"), form = el("form", "ck-form"), input = el("textarea"), btns = el("div", "ck-btns");
   log.setAttribute("aria-live", "polite"); log.setAttribute("role", "log");
   input.rows = 2; input.placeholder = "Message the agent… (Enter sends, Shift+Enter a new line)"; input.setAttribute("aria-label", "Message");
   const stop = el("button", "ck-stop", "Stop"), send = el("button", null, "Send"), note = el("p", "ck-note");
   stop.type = "button"; send.type = "submit"; btns.append(stop, send); form.append(input, btns, note);
   root.append(head, log, form);
-  const card = { meta: { ...meta }, root, name, where, state, log, input, stop, send, note, after: 0, online: meta.online !== false };
-  root.addEventListener("pointerdown", () => { if (ck.active !== k) { ck.active = k; ckLayout(); ckSave(); } });
-  x.onclick = () => { ckDrop(k); ckLayout(); ckSave(); };
+  const card = { meta: { ...meta }, root, name, where, git, state, log, input, stop, send, note, after: 0, online: meta.online !== false };
+  x.onclick = () => ckShow(null);
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing && !matchMedia("(hover: none)").matches) { e.preventDefault(); form.requestSubmit(); }
   });
@@ -1344,12 +1434,16 @@ function ckCard(meta) {
   ck.cards.set(k, card); ckPaint(card); ckSave();
   return card;
 }
-function ckDrop(k) { ck.cards.delete(k); if (ck.active === k) ck.active = ck.cards.keys().next().value || ""; }
+function ckDrop(k) { ck.cards.delete(k); if (ck.view === k) ck.view = ""; }
 function ckPaint(card) {
   const m = card.meta, busy = ckBusy(m.status);
   card.name.textContent = m.title || "New chat";
   card.where.textContent = `${AGENT_NAME[m.agent] || m.agent} · ${m.label} · ${ckShort(m.folder)}${m.project ? ` (${m.project})` : ""}`;
   card.where.title = m.folder || "";
+  const item = (ck.board || []).find((i) => i.kind === "chat" && `${i.machine}/${i.id}` === ckKey(m));
+  if (card.git.dataset.v !== JSON.stringify(item?.git || null)) {
+    card.git.dataset.v = JSON.stringify(item?.git || null); card.git.replaceChildren(...(item?.git ? [ckGitPill(item)] : []));
+  }
   card.state.className = `ck-state ${!card.online ? "offline" : busy ? "running" : ""}`;
   card.state.textContent = !card.online ? "pc offline" : m.status === "queued" ? "waiting for the pc" : busy ? "working" : "ready";
   card.root.classList.toggle("running", busy);
@@ -1411,8 +1505,7 @@ $("ck-new-form").addEventListener("submit", async (e) => {
   try {
     const res = await api("/ui/api/chats", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine, agent: $("ck-agent").value, folder: $("ck-folder").value }) });
     $("ck-new-dialog").close();
-    const card = ckCard({ ...res.chat, machine, label: m?.label || machine, online: m?.online });
-    ck.active = ckKey(card.meta); ckLayout(); ckSave(); card.input.focus(); ck.summaryAt = 0;
+    ckShow({ ...res.chat, machine, label: m?.label || machine, online: m?.online }); ck.summaryAt = 0;
   } catch (err) { $("ck-new-error").hidden = false; $("ck-new-error").textContent = err.message; }
   $("ck-new-start").disabled = false;
 });

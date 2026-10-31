@@ -48,11 +48,11 @@ def base_id(tid: str) -> str:
     return tid
 
 
-def git(cwd, *args, env=None, check=False) -> subprocess.CompletedProcess:
+def git(cwd, *args, env=None, check=False, timeout=60) -> subprocess.CompletedProcess:
     # GIT_DIR, GIT_INDEX_FILE and the like from a calling git hook would point every command at that other repository
     base = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     return subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, encoding="utf-8", errors="replace",
-                          env={**base, **(env or {})}, check=check, stdin=subprocess.DEVNULL, timeout=60)
+                          env={**base, **(env or {})}, check=check, stdin=subprocess.DEVNULL, timeout=timeout)
 
 
 def worktree(folder: str, tid: str, project: str = "") -> dict:

@@ -237,7 +237,16 @@ async def cockpit(browser, devices, secret: str) -> None:
     await pg.wait_for_function("!$('cockpit').hidden && $('ck-live-n').textContent !== ''", timeout=15000)
     check(await pg.locator("#cockpit").is_visible() and await pg.locator("#ck-live").is_visible(), "cockpit opens over the page with the live pill")
     await pg.wait_for_timeout(1500)
-    check(await pg.locator("#ck-canvas .ck-card, #ck-canvas .ck-empty").count() > 0, "cockpit shows chat cards or the empty canvas")
+    if await pg.locator("#ck-board").count():  # 0.17: the attention board is the start screen
+        check(await pg.locator("#ck-board .ck-col, #ck-board .ck-empty").count() > 0, "cockpit opens on the attention board (columns or the empty start)")
+        cols = await pg.locator("#ck-board .ck-col-head > span:first-child").all_text_contents()
+        check(cols in ([], ["Needs you", "Running", "Open", "Done (24 h)"]), f"board columns, Needs you first {cols}")
+        check(await pg.locator("#ck-needs-live[aria-live=polite]").count() == 1, "board: the Needs you count is announced (aria-live)")
+        if await pg.locator("#ck-board .ck-item").count():
+            card = pg.locator("#ck-board .ck-item-main").first
+            check(await card.evaluate("b => b.tagName === 'BUTTON'"), "board: a card opens with a button (keyboard)")
+    else:
+        check(await pg.locator("#ck-canvas .ck-card, #ck-canvas .ck-empty").count() > 0, "cockpit shows chat cards or the empty canvas")
     pill = await pg.evaluate("[getComputedStyle($('ck-resets')).display, $('ck-resets').textContent]")
     check(pill[0] == "none" and not pill[1] or pill[0] != "none" and pill[1].startswith("resets "), f"resets pill: a time from a companion's report, else hidden {pill}")
     await pg.click("#ck-tools-menu summary")
@@ -256,8 +265,11 @@ async def cockpit(browser, devices, secret: str) -> None:
     await pg.wait_for_selector("#cockpit-btn")
     await pg.tap("#cockpit-btn")
     await pg.wait_for_timeout(2500)
-    check(await pg.evaluate("document.documentElement.scrollWidth <= screen.width && [...document.querySelectorAll('.ck-card')].filter(c => c.offsetParent).length <= 1"),
-          "phone cockpit: one chat at a time, fits the screen")
+    check(await pg.evaluate("document.documentElement.scrollWidth <= screen.width && (!$('ck-board') || $('ck-board').scrollWidth <= $('ck-board').clientWidth)"
+                            " && [...document.querySelectorAll('.ck-card')].filter(c => c.offsetParent).length <= 1"),
+          "phone cockpit: fits the screen, at most one chat shown")
+    tops = await pg.evaluate("[...document.querySelectorAll('#ck-board .ck-col')].map(c => c.getBoundingClientRect().top)")
+    check(tops == sorted(tops) and len(set(tops)) == len(tops), f"phone board: one list, Needs you → Running → Open → Done {tops}")
     check(not errors, f"no page errors in the phone cockpit {errors[:2]}")
     await ctx.close()
 
@@ -280,7 +292,7 @@ async def csp(browser, secret: str) -> None:
 
 
 async def main() -> None:
-    secret = subprocess.run(["secret", "KNOWLEDGE_PROXY_SECRET"], check=True, capture_output=True, text=True).stdout.strip()
+    secret = os.environ.get("KNOWLEDGE_PROXY_SECRET") or subprocess.run(["secret", "KNOWLEDGE_PROXY_SECRET"], check=True, capture_output=True, text=True).stdout.strip()
     async with async_playwright() as p:
         browser = await p.chromium.launch(channel="chrome")
         await csp(browser, secret)

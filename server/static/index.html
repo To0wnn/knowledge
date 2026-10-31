@@ -86,10 +86,10 @@
 <section id="cockpit" class="ck" aria-label="Agents" hidden>
   <div class="ck-bar">
     <button type="button" class="ck-pill ck-brand" id="ck-close" title="Back to the knowledge (Esc)">Knowledge</button>
+    <button type="button" class="ck-pill" id="ck-back" title="Back to the board (Esc)" hidden>&larr;&nbsp;Board</button>
     <span class="ck-pill ck-live" id="ck-live" title="Running chats, workers and sessions active in the last 10 min on your pcs"><span class="ck-dot"></span><span id="ck-live-n">0</span>&nbsp;live</span>
     <span class="ck-pill" id="ck-resets" hidden></span>
     <span class="ck-gap"></span>
-    <select id="ck-switch" class="ck-switch" aria-label="Open chat"></select>
     <button type="button" class="ck-pill ck-primary" id="ck-new" aria-label="New chat">+<span class="ck-label">&nbsp;New chat</span></button>
     <details class="ck-menu" id="ck-history-menu">
       <summary class="ck-icon" title="Earlier chats" aria-label="Earlier chats"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7v5l3 2M3.5 12a8.5 8.5 0 1 0 2.5-6M3 4v4h4"/></svg></summary>
@@ -109,8 +109,17 @@
     </details>
     <a class="ck-icon" href="/ui/admin" title="Settings" aria-label="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8"/></svg></a>
   </div>
-  <div class="ck-canvas" id="ck-canvas"></div>
+  <div class="ck-board" id="ck-board" aria-label="Attention board"></div>
+  <div class="ck-canvas" id="ck-canvas" hidden></div>
+  <span class="sr-only" id="ck-needs-live" aria-live="polite"></span>
 </section>
+
+<dialog id="ck-diff-dialog" class="ck-diff" aria-labelledby="ck-diff-title">
+  <h2 id="ck-diff-title">Changes</h2>
+  <p class="muted" id="ck-diff-where"></p>
+  <div id="ck-diff-body" aria-live="polite"></div>
+  <div class="actions"><button type="button" id="ck-diff-close">Close</button></div>
+</dialog>
 
 <dialog id="ck-new-dialog" aria-label="New chat">
   <form id="ck-new-form" method="dialog">
