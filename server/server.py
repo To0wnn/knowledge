@@ -1813,6 +1813,41 @@ def clients_seen(name: str) -> list[dict]:
             if now - c.get("at", 0) < CLIENTS_KEEP[0]]
 
 
+STATUS_FILE = ADMIN_DIR / "status.json"
+STATUS_KEEP = (7 * 86400, 20)  # per token and agent: hook failures within a week, at most this many
+_status_lock = threading.Lock()
+
+
+def mark_status(name: str, agent: str, plugin: str, errors: list) -> int:
+    """Store the hook failures a plugin reports (POST /status), so the Tasks tab shows a device whose hooks break."""
+    keys = ("hook", "event", "code", "stderr", "at", "source")
+    new = []
+    for e in errors[:STATUS_KEEP[1]] if isinstance(errors, list) else []:
+        if not isinstance(e, dict):
+            continue
+        e = {k: str(e.get(k, ""))[:2000 if k == "stderr" else 80] for k in keys if k != "at"} | {"at": float(e.get("at") or 0)}
+        if contains_secret(e["stderr"]):
+            e["stderr"] = "(withheld: contains a known secret value)"
+        e["source"] = e["source"] if e["source"] in ("knowledge", "agent-log") else "knowledge"
+        new.append(e)
+    with _status_lock:
+        now, status = time.time(), dict(read_json(STATUS_FILE, {}))
+        mine = dict(status.get(name, {}))
+        kept = [e for e in mine.get(agent, {}).get("errors", []) + new if now - e["at"] < STATUS_KEEP[0]]
+        mine[agent] = {"plugin": plugin[:20], "at": now,
+                       "errors": sorted({json.dumps(e, sort_keys=True): e for e in kept}.values(), key=lambda e: e["at"])[-STATUS_KEEP[1]:]}
+        status[name] = mine
+        write_json(STATUS_FILE, status)
+    return len(new)
+
+
+def status_errors(name: str) -> dict:
+    """Per agent: the hook failures of the last week, newest last."""
+    now = time.time()
+    return {a: [e for e in s.get("errors", []) if now - e["at"] < STATUS_KEEP[0]]
+            for a, s in read_json(STATUS_FILE, {}).get(name, {}).items()}
+
+
 def plugins_behind() -> list[str]:
     """'<token> <agent>: plugin <v>, newest <latest>' for every device seen lately that is behind past the grace
     period. Uses the stored newest version only: the weekly lint must not wait on GitHub."""
@@ -2535,6 +2570,21 @@ async def tasks_route(request: Request):
     if sync:  # handed to this session only; if its sync fails, the next turn after DOCS_SYNC_MINUTES asks again
         _full_synced[key] = time.time()
     return JSONResponse({"tasks": items, "notices": notices, "sync": sync})
+
+
+@server.custom_route("/status", methods=["POST"])
+async def status_route(request: Request):
+    """Hook failures a plugin saw on its device: {agent, plugin, errors: [{hook, event, code, stderr, at, source}]}."""
+    name = device.get().get("name", "")
+    try:
+        b = await request.json()
+        agent = str(b.get("agent", ""))
+        if not name or agent not in AGENT_OWNERS or not isinstance(b.get("errors"), list):
+            raise ValueError("needs a known agent and an errors list")
+        n = await asyncio.to_thread(mark_status, name, agent, str(b.get("plugin", "")), b["errors"])
+    except (ValueError, TypeError, AttributeError) as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return JSONResponse({"stored": n})
 
 
 @server.custom_route("/context/{part:int}", methods=["GET"])  # not a number: 404, not a crash
@@ -3587,9 +3637,9 @@ def task_sessions() -> list[dict]:
     for n, cfg in read_json(TOKENS_FILE, {}).items():
         if not dev.get("admin") and cfg.get("owner") != dev.get("user"):
             continue
-        seen = {p["agent"]: p["v"] for p in plugin_seen(n)}
+        seen, errors = {p["agent"]: p["v"] for p in plugin_seen(n)}, status_errors(n)
         out += [{"device": n, "agent": c.get("agent", ""), "project": c.get("project", ""), "wake": bool(c.get("wake")),
-                 "at": c.get("at", 0), "plugin": seen.get(c.get("agent", ""), "")}
+                 "at": c.get("at", 0), "plugin": seen.get(c.get("agent", ""), ""), "errors": errors.get(c.get("agent", ""), [])}
                 for c in clients_seen(n) if c.get("project") in projects]
     return sorted(out, key=lambda c: -c["at"])
 

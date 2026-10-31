@@ -962,6 +962,12 @@ async function loadTasks(render = true) {
       const li = el("li", "session");
       li.append(el("span", "hit-path", `${c.agent} · ${c.device}`),
         el("span", "hit-text", [c.wake ? "can be woken" : "not wakeable", c.plugin && `plugin ${c.plugin}`, ago(c.at), allMode() ? c.project : ""].filter(Boolean).join(" · ")));
+      const e = (c.errors || []).at(-1);  // the newest hook failure of this device's agent
+      if (e) {
+        const w = el("span", "hit-text session-error", `hook ${e.hook}${e.event ? ` (${e.event})` : ""} failed · ${e.code || "error"} · ${(e.stderr || "").split("\n")[0].slice(0, 160)} · ${ago(e.at)}`);
+        w.title = `${c.errors.length} failure(s) this week, source ${e.source}\n${e.stderr || ""}`;
+        li.append(w);
+      }
       ol.append(li);
     }
     box.append(el("h3", null, `Agent sessions (${sessions.length})`), ol);

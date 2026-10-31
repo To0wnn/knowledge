@@ -134,6 +134,7 @@ dialog h2 { margin: 0 0 4px; font-size: 17px; }
 .hits li.task { display: flex; align-items: flex-start; gap: 4px; }
 .hits li.task > button.small { width: auto; flex: none; margin-top: 6px; }
 .hits li.session { display: grid; padding: 7px 8px; }
+.hits li.session .session-error { color: var(--g-incident); }
 .badge.warn { background: var(--g-incident); color: var(--panel); }
 .hit-path { display: block; font-size: 12px; color: var(--accent); }
 .hit-text { display: block; font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
