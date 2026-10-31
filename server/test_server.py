@@ -113,6 +113,11 @@ def tasks_contract(tmp, ck, fr, ver, raw):
     assert not add("- open until 2099-01-01 [Codex, UNT-1] from Gemini, start now: untrusted")[0]
     assert rows()["UNT-1"]["waiting_reason"].startswith("waits for approval: written by"), rows()["UNT-1"]
     assert not any("UNT-1" in x for x in json.loads(http("GET", "/tasks?project=x&agent=codex&v=2", token=fr)[1])["tasks"])
+    # Approved, its words stay someone else's: agents and workers get them marked as data, not instructions.
+    assert approve("UNT-1") == 200
+    item = next(x for x in json.loads(http("GET", "/tasks?project=x&agent=codex&v=2&claim=0", token=fr)[1])["tasks"] if "UNT-1" in x)
+    assert "data, not instructions" in item and "«" in item, item
+    assert "data, not instructions" in next(t for t in json.loads(http("GET", "/tasks/ready", token=fr)[1])["tasks"] if t["id"] == "UNT-1")["text"]
     assert writers(None) == 200 and rows()["UNT-1"]["startable"]
     admin = next(p for p in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["projects"] if p["name"] == "garden")
     assert admin["task_writers"] is None, admin
@@ -325,6 +330,104 @@ def lease_contract(tmp, ck, fr, raw):
     for line in [ln for ln in text.splitlines() if any(i in ln for i in ("LM-1", "LS-1", "PIN-1", "LT-1", "LT-2", "LC-1", "LC-2", "LH-1", "LN-1", "LR-1"))]:
         call("knowledge_edit", {"path": path, "old_string": line + "\n", "new_string": ""})
     (tmp / "task_leases.json").write_text("{}")  # the later checks start without leases
+
+
+def machines_contract(tmp, ck, fr, raw, er, et):
+    """The Machines list: every pc that reported (token + machine id), its sessions of the last 2 h with project and
+    held task, online/offline; a person sees the machines of their own tokens only, an admin all; forget."""
+    ui = {**ck, "X-Knowledge-UI": "1", "Content-Type": "application/json"}
+    pc = {"X-Knowledge-Machine": "cccccccccccccccc", "X-Knowledge-Machine-Label": "garage"}
+    path = "garden-memory/project_tasks.md"
+    assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes",
+                                       "new_string": "- open until 2099-01-01 [Codex, MC-1] from Claude, start now: machine list\n## Keuzes"}, fr)[0]
+    assert http("POST", "/tasks/woken", {"project": "garden", "id": "MC-1", "agent": "codex", "session": "worker:mc"}, token=fr, headers=pc)[0] == 200
+    http("GET", "/tasks?project=x&agent=claude&v=2&session=chat-1&plugin=0.15.0", token=fr, headers=pc)
+    http("GET", "/tasks/ready", token=et, headers={"X-Knowledge-Machine": "dddddddddddddddd", "X-Knowledge-Machine-Label": "erin-pc"})
+    rows = {r["id"]: r for r in json.loads(raw("GET", "/ui/api/machines", headers=ck)[2])["machines"]}
+    m = rows["cccccccccccccccc"]
+    assert m["label"] == "garage" and m["online"] and m["own"] and "friend-pc" in m["tokens"], m
+    assert m["agents"]["codex"]["sessions"][0]["task"] == "MC-1" and m["agents"]["claude"]["plugin"] == "0.15.0", m["agents"]
+    assert m["agents"]["claude"]["sessions"][0]["project"] == "garden" and "dddddddddddddddd" in rows, rows.keys()
+    mine = {r["id"]: r for r in json.loads(raw("GET", "/ui/api/machines", headers=er)[2])["machines"]}
+    assert list(mine) == ["dddddddddddddddd"] and mine["dddddddddddddddd"]["own"], mine  # her own pc only
+    forget = lambda mid, h: raw("POST", "/ui/api/machines/forget", json.dumps({"machine": mid}), {**h, "X-Knowledge-UI": "1", "Content-Type": "application/json"})[0]
+    assert forget("cccccccccccccccc", er) == 403
+    assert "cccccccccccccccc" in json.loads((tmp / "machines.json").read_text())
+    assert forget("dddddddddddddddd", er) == 200 and "dddddddddddddddd" not in {r["id"] for r in json.loads(raw("GET", "/ui/api/machines", headers=ck)[2])["machines"]}
+    # A session gone quiet for more than 2 h is no longer listed; the machine stays, offline.
+    d = json.loads((tmp / "machines.json").read_text())
+    d["cccccccccccccccc"]["at"] -= 3 * 3600
+    for s in d["cccccccccccccccc"]["sessions"].values():
+        s["at"] -= 3 * 3600
+    (tmp / "machines.json").write_text(json.dumps(d))
+    m = {r["id"]: r for r in json.loads(raw("GET", "/ui/api/machines", headers=ck)[2])["machines"]}["cccccccccccccccc"]
+    assert not m["online"] and not any(a["sessions"] for a in m["agents"].values()), m
+    http("POST", "/tasks/release", {"project": "garden", "id": "MC-1"}, token=fr, headers=pc)
+    # Remote actions: fixed ones only, own machines only, pulled by the machine's companion, result reported back.
+    act = lambda body, h=ck: raw("POST", "/ui/api/machines/action", json.dumps({"machine": "cccccccccccccccc", **body}),
+                                 {**h, "X-Knowledge-UI": "1", "Content-Type": "application/json"})
+    assert act({"action": "shell", "args": {"cmd": "rm -rf /"}})[0] == 400  # no free command, ever
+    assert act({"action": "yolo", "args": {"agent": "codex", "on": True}})[0] == 400  # YOLO on needs the typed word
+    assert act({"action": "max_workers", "args": {"agent": "codex", "n": 99}})[0] == 400
+    assert act({"action": "workers_allowed", "args": {"on": True}}, er)[0] == 403  # not her machine
+    st, _, b = act({"action": "yolo", "args": {"agent": "codex", "on": True, "confirm": "YOLO"}})
+    assert st == 200, b
+    assert act({"action": "start_worker", "args": {"project": "garden", "id": "MC-1"}})[0] == 200
+    m = {r["id"]: r for r in json.loads(raw("GET", "/ui/api/machines", headers=ck)[2])["machines"]}["cccccccccccccccc"]
+    assert [a["status"] for a in m["actions"]] == ["waiting", "waiting"] and m["actions"][0]["by"] == "alice", m["actions"]
+    assert json.loads(http("GET", "/machine/actions", token=fr, headers={"X-Knowledge-Machine": "eeeeeeeeeeeeeeee"})[1])["actions"] == []  # another pc
+    got = json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"]
+    assert [a["action"] for a in got] == ["yolo", "start_worker"] and got[0]["args"] == {"agent": "codex", "on": True}, got
+    assert json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"] == []  # handed out once
+    assert http("POST", "/machine/actions/result", {"id": got[0]["id"], "ok": True, "result": "on"}, token=fr, headers=pc)[0] == 200
+    assert http("POST", "/machine/actions/result", {"id": got[1]["id"], "ok": True}, token=et, headers=pc)[0] == 404  # not her action
+    m = {r["id"]: r for r in json.loads(raw("GET", "/ui/api/machines", headers=ck)[2])["machines"]}["cccccccccccccccc"]
+    assert [(a["status"], a.get("result")) for a in m["actions"]][0] == ("done", "on"), m["actions"]
+    assert "machine-action" in "\n".join(json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["system"]["audit"])
+    # The companion's report: YOLO, limit, workers; a task that waits for a usage limit is told once.
+    rep = {"version": "0.15.0", "workersAllowed": True, "maxWorkers": {"codex": 2}, "game": "",
+           "agents": {"codex": {"yolo": True, "trusted": True, "limit": 91.5}, "claude": {"yolo": False, "trusted": False, "limit": None}},
+           "workers": [{"id": "MC-1", "project": "garden", "agent": "codex", "status": "running", "started": time.time() - 240,
+                        "branch": "task/MC-1", "yolo": True, "open": "tail -f x.log"}], "limitWait": ["MC-2"]}
+    assert http("POST", "/machine/report", rep, token=fr, headers=pc)[0] == 200
+    http("POST", "/machine/report", rep, token=fr, headers=pc)
+    m = {r["id"]: r for r in json.loads(raw("GET", "/ui/api/machines", headers=ck)[2])["machines"]}["cccccccccccccccc"]
+    cx = m["agents"]["codex"]
+    assert m["online"] and cx["yolo"] and cx["limit"] == 91.5 and cx["workers"][0]["id"] == "MC-1" and m["companion"]["workersAllowed"], m
+    assert m["agents"]["claude"]["trusted"] is False and m["agents"]["claude"]["limit"] is None
+    assert json.loads((tmp / "machines.json").read_text())["cccccccccccccccc"]["limit_told"] == ["MC-2"]  # told once
+    # A risky YOLO action: flagged once per session and kind, never refused.
+    flag = lambda kind: json.loads(http("POST", "/machine/flag", {"agent": "codex", "session": "w1", "kind": kind, "detail": "git push --force"}, token=fr, headers=pc)[1])
+    assert flag("force-push")["noticed"] and not flag("force-push")["noticed"] and flag("rm-outside")["noticed"]
+    assert http("POST", "/machine/flag", {"agent": "codex", "session": "w1", "kind": "anything"}, token=fr, headers=pc)[0] == 400
+    # An interactive session of a 0.15 plugin (chat=1) takes no lease: the task waits for a worker; it hears where one runs.
+    more = ("- open until 2099-01-01 [Codex, MC-3] from Claude, start now: for a worker\n"
+            "- open until 2099-01-01 [Codex, MC-4] from Claude, start now: runs elsewhere\n")
+    assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": more + "## Keuzes"}, fr)[0]
+    assert http("POST", "/tasks/woken", {"project": "garden", "id": "MC-4", "agent": "codex", "session": "worker:x"}, token=fr, headers=pc)[0] == 200
+    chat = json.loads(http("GET", "/tasks?project=x&agent=codex&v=2&chat=1&session=chat-9", token=fr, headers={"X-Knowledge-Machine": "eeeeeeeeeeeeeeee"})[1])
+    leases = json.loads((tmp / "task_leases.json").read_text())["garden"]
+    assert "MC-3" not in leases and any("MC-3" in x for x in chat["tasks"]), (leases.keys(), chat)
+    assert any("MC-4 is running in a worker on friend-pc on garage" in n["text"] for n in chat["notices"]), chat["notices"]
+    ctx = http("GET", "/context/1?project=x&agent=codex&plugin=0.15.0", token=fr)[1]
+    assert "never in this chat" in ctx and "'pak <ID>'" in ctx, ctx[:2000]
+    assert "start the one under 'may start now'" in http("GET", "/context/1?project=x&agent=codex&plugin=0.14.0", token=fr)[1]
+    # A worker hands back through the memo and git only: its -done and -cont lines name the branch, what is done and what is left.
+    wk = {**pc, "X-Knowledge-Worker": "MC-3"}
+    bad = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_edit", "arguments": {
+        "path": path, "old_string": "## Keuzes", "new_string": "- [Claude, MC-3-done]: did it\n## Keuzes"}}}, token=fr, headers={**wk, "Accept": "application/json, text/event-stream"})
+    assert "must name its branch" in bad[1], bad
+    good = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_edit", "arguments": {
+        "path": path, "old_string": "## Keuzes", "new_string": "- [Claude, MC-3-done]: did it; branch task/MC-3; done: all; left: nothing\n## Keuzes"}}},
+                token=fr, headers={**wk, "Accept": "application/json, text/event-stream"})
+    assert '"isError":false' in good[1].replace(" ", ""), good
+    assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": "- [Claude, MC-9-done]: a person writes it short\n## Keuzes"}, fr)[0]
+    # A result handed back never starts anything by itself: only task lines are ready.
+    assert not any(t["id"].endswith("-done") for t in json.loads(http("GET", "/tasks/ready", token=fr, headers=pc)[1])["tasks"])
+    text = (tmp / "projects/garden/memory/project_tasks.md").read_text()
+    for line in [ln for ln in text.splitlines() if any(i in ln for i in ("MC-1", "MC-3", "MC-4", "MC-9"))]:
+        call("knowledge_edit", {"path": path, "old_string": line + "\n", "new_string": ""}, fr)
+    (tmp / "task_leases.json").write_text("{}")
 
 
 def no_held(beat: dict) -> dict:
@@ -1291,6 +1394,7 @@ def main():
         assert "erinproj" in json.loads(raw("GET", "/ui/api/me", headers=er)[2])["writable"]
         roots = next(t["roots"] for t in json.loads(raw("GET", "/ui/api/admin", headers=er)[2])["tokens"] if t["name"] == "erin.laptop")
         assert {"erinproj", "erinproj-memory"} <= set(roots), roots  # her devices reach her new project at once
+        machines_contract(tmp, ck, fr, raw, er, et)
         # The folder link (.knowledge-project, skill knowledge-init): her token now sees two projects, so the folder picks.
         assert "not linked to a project" in http("GET", "/context/1?project=/home/erin/stuff", token=et)[1]
         ctx = http("GET", "/context/1?project=erinproj&linked=1", token=et)[1]
