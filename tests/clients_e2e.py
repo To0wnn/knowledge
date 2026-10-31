@@ -1955,7 +1955,8 @@ self_update.start("codex"); memory_mirror.start_background(); agent_hooks.start_
 print(json.dumps(seen))"""
     home = tmp / "Flags Usér"
     home.mkdir(parents=True, exist_ok=True)
-    rc, out, err = run([sys.executable, "-c", code, str(CLIENT / "plugin" / "hooks")], "", user_env(home, KNOWLEDGE_HOME=str(home / ".knowledge")))
+    rc, out, err = run([sys.executable, "-c", code, str(CLIENT / "plugin" / "hooks")], "", user_env(home, KNOWLEDGE_HOME=str(home / ".knowledge")),
+                       cwd=str(home))  # not the repo root: its token.py would shadow the stdlib module
     seen = json.loads(out) if rc == 0 else []
     ok = len(seen) == 3 and all((f & 0x08000000 and not f & 0x00000008) if WIN else f == 1 for f in seen)
     check(ok, "self-update, offline copy and background hook start detached without a console window", out + err[-500:])
