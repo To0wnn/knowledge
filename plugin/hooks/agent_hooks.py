@@ -106,7 +106,10 @@ def short(text: str) -> str:
 
 
 NAMES = {"claude": "Claude", "codex": "Codex", "agy": "Gemini"}
-PAK = re.compile(r"(?i)(?:^|\s)(?:pak|take)\s+([A-Za-z][\w.]*-[\w.-]*\w)")  # "pak KN-12": do that task in this chat
+# "pak KN-12": do that task in this chat. A task ID starts with a capital (KN-12, ET-eval), so "pak e-mail van Linda" or
+# "take follow-up actions" asks the server nothing
+PAK = re.compile(r"(?:^|\s)(?i:pak|take)\s+([A-Z][A-Z0-9.]*-[\w.-]*\w)")
+assert [m.group(1) for m in PAK.finditer("Pak KN-12 en take ET-eval; pak e-mail, take follow-up, take built-in")] == ["KN-12", "ET-eval"]
 
 
 def take_command(tid: str = "<ID>") -> str:
