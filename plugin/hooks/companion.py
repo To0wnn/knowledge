@@ -871,15 +871,16 @@ def run_workers(ready: list, tok: str, now: float, only: str = "") -> dict:
     return out
 
 
-def report(tok: str, ws: dict, lim: dict, wait: list, now: float):
-    """The machine's state for the Machines list: settings, game, per agent YOLO, hooks and limit, the workers."""
+def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None):
+    """The machine's state for the Machines list: settings, game, per agent YOLO, hooks and limit, the workers, and
+    why each ready task waits here (the Tasks tab shows it)."""
     yolo, folders, s = load("yolo.json", {}), sorted(project_folders().values()), settings()
     body = {"version": version(), "workersAllowed": s["workersAllowed"], "maxWorkers": s["maxWorkers"], "game": workers.game_session(),
             "agents": {a: {"yolo": bool(yolo.get(a, {}).get("on")), "trusted": not untrusted(a, folders), "limit": lim.get(a)}
                        for a in AGENTS if installed(a)},
             "workers": [{**{k: w.get(k) for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open")},
                          "checkpoint": bool(w.get("checkpoint")), "merged": w["status"] == "merged"} for w in ws.values()],
-            "limitWait": wait, "folders": folder_links(), "projects": load("state.json", {}).get("projects", [])}
+            "limitWait": wait, "waiting": waiting or {}, "folders": folder_links(), "projects": load("state.json", {}).get("projects", [])}
     server("POST", "/machine/report", tok, body)
 
 
@@ -914,7 +915,7 @@ def one_round(only: str = "") -> dict:
     st["waiting"] = summary["waiting"]
     report_errors(st, tok, now)
     try:
-        report(tok, load("workers.json", {}), summary.pop("limits"), summary.pop("limitWait"), now)
+        report(tok, load("workers.json", {}), summary.pop("limits"), summary.pop("limitWait"), now, summary["waiting"])
     except Exception:  # the next round reports again; the server away is said above
         pass
     with LOCK:

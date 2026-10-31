@@ -88,10 +88,14 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   agent unless its maximum says more, one while its usage limit is unknown, none while a Wolf game session runs (its
   API socket, when readable; Sunshine is not detected). A worker that ended without finishing its task is not started
   again for 6 hours unless asked. Once the requester merged the branch into main or master, the companion removes the
-  worktree; unmerged a week after the worker ended: lint `worker_unmerged`. An interactive session (`chat=1`) takes no
-  lease: it hears a new task once as "runs in workers" and where one runs; when the user says `pak <ID>` (or `take
-  <ID>`) the plugin takes that task for the chat (agy, whose hooks never see the user's words, runs `agent_hooks.py take
-  agy <ID>`), and no worker starts it. A knowledge write asks the local companion to look at once.
+  worktree; unmerged a week after the worker ended: lint `worker_unmerged`. While an online pc runs an agent's workers
+  for the project (workers allowed, a maximum above 0, the agent installed, a folder linked), that agent's interactive
+  sessions (`chat=1`) take no lease: they hear a new task once as "runs in workers" and where one runs; when the user
+  says `pak <ID>` (or `take <ID>`) the plugin takes that task for the chat (agy, whose hooks never see the user's words,
+  runs `agent_hooks.py take agy <ID>`), and no worker starts it. With no such pc, that agent's chats take and start
+  its tasks themselves, as before 0.15. The Tasks tab says per task where it runs or why it waits there; a task that
+  may start but that nobody took for 30 minutes (`KNOWLEDGE_TASK_IDLE`) gives one Matrix notice. A knowledge write
+  asks the local companion to look at once.
 - **Usage limit at 90%:** the companion reads each agent's usage: Claude from its workers' own `rate_limit_event`
   (stream-json), else an interactive Claude's status line under 15 minutes old; Codex from its newest rollout of the
   last 15 minutes; agy from a registered agy's language server; else "unknown". From 90% no worker of that agent

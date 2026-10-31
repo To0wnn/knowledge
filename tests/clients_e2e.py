@@ -1226,6 +1226,10 @@ def wake_e2e(tok: str, home: Path, project: Path):
         hook(["hints", "-"], {"conversationId": "conv-1", "workspacePaths": [str(project)]})
         busy.clear()
         check(entry.exists(), "agy: a busy agy (HTTP 503) keeps its registration")
+        # this pc's companion runs Codex and agy workers for the project; no pc runs Claude's: Claude's chats take its tasks
+        http("POST", "/machine/report", {"version": "0.15.0", "workersAllowed": True, "maxWorkers": {"codex": 1, "agy": 1, "claude": 1},
+                                         "agents": {"codex": {}, "agy": {}}, "folders": {"linked": [{"path": str(project), "project": "garden"}]}},
+             {"Authorization": f"Bearer {tok}", "Content-Type": "application/json", **pc()})
         tasks = "".join(f"- open tot 1 jan 2099 [{o}, WAKE-{o.upper()}] from Claude, start now: chat test for {o} \"a & b > c %PATH%\n" for o in ("Codex", "Claude", "Gemini"))
         http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_write", "arguments":
              {"path": "garden-memory/project_wake.md", "content": "---\nname: w\ndescription: d\nmetadata:\n  type: project\n---\n"
@@ -1244,6 +1248,8 @@ def wake_e2e(tok: str, home: Path, project: Path):
         check("took task WAKE-CLAUDE" in said and "(claimed Claude," in said and mine["WAKE-CLAUDE"]["mine"] is False
               and next(t for t in leases() if t["id"] == "WAKE-CLAUDE")["mine"] is True,
               "chat: 'pak <ID>' in the user's words takes that task for this Claude session", said[:500])
+        check("start it right away" in said and "run in workers" not in said,
+              "chat: with no pc running Claude workers for the project, a new task is said as 'start it right away' (as 0.14)", said[:600])
         code, out, err = hook(["tasks", "claude", "-"], {"session_id": "cl-2", "cwd": str(project), "prompt": "pak WAKE-CLAUDE"})
         check("held by another session" in out, "chat: a second chat cannot take a task another session took", out[:400])
         code, out, err = hook(["take", "agy", "WAKE-GEMINI"], {}, {"ANTIGRAVITY_CONVERSATION_ID": "conv-1"})

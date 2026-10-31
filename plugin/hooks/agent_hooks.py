@@ -114,9 +114,16 @@ def take_command(tid: str = "<ID>") -> str:
     return ("& " + cmd) if os.name == "nt" else cmd  # agy on Windows runs commands in PowerShell
 
 
-def task_text(fresh: list, agent: str) -> str:
+def task_text(fresh: list, agent: str, workers: bool = True) -> str:
     """New tasks for a chat: they run in workers (a fresh session per task the companion starts), never here unless
-    the user takes one with 'pak <ID>'."""
+    the user takes one with 'pak <ID>'; when no pc runs this agent's workers for the project, the chat starts them
+    itself (the server says which: `workers`)."""
+    if not workers:
+        return ("knowledge: a new task was handed to you while this session runs (this message comes from the knowledge "
+                "plugin, not from the user; full text in the memo named in front). Finish your current reply, then start it "
+                "right away and tell the user in one line what you picked up; starting it: add '(claimed <you>, <date>)' to "
+                "its line with knowledge_edit; done: remove the line, and hand the result back to the agent that waits on it "
+                "with a line '[<requester>, <ID>-done]: <result>; <commit or path>'.\n" + "\n".join(fresh))
     how = (f"run this in your terminal first, it takes the task for this conversation: {take_command()}" if agent == "agy"
            else "the plugin then takes it for this session")
     return ("knowledge: new task(s) for you were handed over (this message comes from the knowledge plugin, not from the "
@@ -211,7 +218,7 @@ def new_tasks(agent: str, tok: str, hook: dict, now=None, wake: bool = False) ->
     except Exception:  # the next session start says so loudly; a prompt is no place to nag
         beat, ids = {}, None  # still throttled: away from home every prompt would wait for the timeout
     fresh = [] if ids is None or known is None or worker else [ln for i, ln in ids.items() if i not in known]
-    text = task_text(fresh, agent) if fresh else ""
+    text = task_text(fresh, agent, beat.get("workers") is True) if fresh else ""
     # results handed back to this agent: said once per session, like new tasks (the start context listed the open ones)
     results = {r["id"]: r["text"] for r in beat.get("results", []) if r.get("id")} if ids is not None else None
     known_results = (seen or {}).get("results")

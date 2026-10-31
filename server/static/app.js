@@ -975,7 +975,7 @@ async function loadTasks(render = true) {
   const row = (t) => {
     const n = byId.get(t.path), li = hitItem(`${t.id} · ${t.owner}`, t.text, () => openNote(t.path, { find: [t.id.toLowerCase()] }));
     const meta = el("span", "hit-text", [t.done ? "" : `${t.from || "?"} → ${t.owner}`, t.done ? "" : `start ${t.start}`,
-      t.due && `due ${t.due}`, t.done && t.since && `handed back ${ago(t.since)}`, t.claimed && "claimed", t.waiting_reason, n ? n.label : t.path.split("/").pop(),
+      t.due && `due ${t.due}`, t.done && t.since && `handed back ${ago(t.since)}`, t.claimed && "claimed", t.waiting_reason, t.runs, n ? n.label : t.path.split("/").pop(),
       allMode() ? t.project : ""].filter(Boolean).join(" · "));
     if (t.legacy) meta.prepend(el("span", "badge", "legacy"), " ");
     if (t.stalled) meta.prepend(el("span", "new", "stalled"), " ");

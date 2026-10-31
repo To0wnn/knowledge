@@ -1608,7 +1608,9 @@ HAND_BACK = ("When another agent handed it to you and waits on the result, hand 
 AGENT_OWNERS = {"claude": ("claude",), "codex": ("codex",), "agy": ("gemini", "agy", "antigravity")}  # names used in task lines
 TASK_CHARS = 240  # the memo holds the full text; the start context only has to make the agent look
 STALLED_AFTER = int(os.environ.get("KNOWLEDGE_TASK_STALLED", 30 * 60))  # a woken task nobody claimed this long is stalled
-TASK_AUTHORS, TASK_APPROVALS, TASK_WAKES, TASK_LEASES = (AUDIT.parent / f"task_{n}.json" for n in ("authors", "approvals", "wakes", "leases"))
+TASK_AUTHORS, TASK_APPROVALS, TASK_WAKES, TASK_LEASES, TASK_IDLE = (AUDIT.parent / f"task_{n}.json" for n in ("authors", "approvals", "wakes", "leases", "idle"))
+# a task that may start but that no worker and no session took this long gets one Matrix notice (where it waits and why)
+IDLE_AFTER = int(os.environ.get("KNOWLEDGE_TASK_IDLE", 30 * 60))
 LEASE = int(os.environ.get("KNOWLEDGE_TASK_LEASE", STALLED_AFTER))  # a device that took a task holds it this long without a claim marker
 # a lease the companion took for a session it starts waits this long for that session (its start nonce), then any
 # session of the device may take it
@@ -2225,6 +2227,33 @@ def mark_machine(dev: dict, agent: str = "", session: str = "", project: str = "
         update_state(MACHINES_FILE, change)
     except OSError as e:  # bookkeeping only
         print(f"machines not saved: {e}", flush=True)
+
+
+def worker_hosts(project: str, agent: str) -> list[str]:
+    """The online pcs whose companion runs workers of `agent` for `project` (workers allowed, a maximum above 0, the
+    agent installed, a folder linked to the project). None: that agent's chats take its tasks themselves (as 0.14)."""
+    now = time.time()
+    return sorted(m.get("label", mid) for mid, m in read_json(MACHINES_FILE, {}).items()
+                  if (c := m.get("companion")) and now - c.get("at", 0) < ONLINE and c.get("workersAllowed")
+                  and (c.get("maxWorkers") or {}).get(agent, 1) > 0 and agent in (c.get("agents") or {})
+                  and any(f.get("project") == project for f in (c.get("folders") or {}).get("linked", [])))
+
+
+def task_where(project: str, t: dict, lease: dict | None, now: float) -> str:
+    """Where a startable task will run, or why it waits there: the Tasks tab and the notice for a task nobody takes."""
+    if lease and lease.get("until", 0) >= now:
+        h = {k: lease.get(k) for k in ("device", "session", "label")}
+        return (f"running in a worker on {holder_name(h)}" if str(h.get("session", "")).startswith("worker:")
+                else f"taken by a session on {holder_name(h)}")
+    agent = owner_agent(t["owner"])
+    if not agent:
+        return ""
+    name = next(o for o in ("Claude", "Codex", "Gemini") if o.lower() in AGENT_OWNERS[agent])
+    if hosts := worker_hosts(project, agent):
+        why = sorted({w for m in read_json(MACHINES_FILE, {}).values()
+                      if (w := ((m.get("companion") or {}).get("waiting") or {}).get(f"{project}/{t['id']}"))})
+        return f"goes to a worker on {', '.join(hosts)}" + (f"; waits there: {'; '.join(why)}" if why else "")
+    return f"no pc runs {name} workers for this project: the next {name} chat in it starts the task"
 
 
 def workers_unmerged() -> list[str]:
@@ -3044,9 +3073,11 @@ async def tasks_route(request: Request):
     agent, names = q.get("agent", ""), AGENT_OWNERS.get(q.get("agent", ""), ())
     # seen: the tasks the plugin told this session before (absent on its first ask); start: the companion's nonce
     seen, start = {i for i in q.get("seen", "").split(",") if i} if "seen" in q else None, q.get("start", "")
-    # chat=1 (plugin 0.15.0+, an interactive session): tasks run in workers, so the session takes no lease; it hears
-    # which tasks wait and which run in a worker where; a worker (X-Knowledge-Worker) leases as before
-    chat = q.get("chat") == "1" and not dev.get("worker")
+    # chat=1 (plugin 0.15.0+, an interactive session): when an online pc runs this agent's workers for the project, its
+    # tasks run there, so the session takes no lease and hears which tasks wait and which run in a worker where; with
+    # no such pc the chat takes them itself (as 0.14). A worker (X-Knowledge-Worker) leases as before.
+    chat = q.get("chat") == "1" and not dev.get("worker") and agent in AGENT_OWNERS \
+        and bool(await asyncio.to_thread(worker_hosts, project, agent))
 
     def leased():
         """This session's startable tasks: each one it may take is leased to this device; the others are held. Only a
@@ -3084,7 +3115,8 @@ async def tasks_route(request: Request):
         and time.time() - _full_synced.get(key, 0) > DOCS_SYNC_MINUTES * 60
     if sync:  # handed to this session only; if its sync fails, the next turn after DOCS_SYNC_MINUTES asks again
         _full_synced[key] = time.time()
-    return JSONResponse({"tasks": items, "waiting": waiting, "notices": notices, "sync": sync, "results": results, "project": project})
+    return JSONResponse({"tasks": items, "waiting": waiting, "notices": notices, "sync": sync, "results": results, "project": project,
+                         "workers": chat})
 
 
 @server.custom_route("/tasks/ready", methods=["GET"])
@@ -3189,6 +3221,28 @@ def stalled_check() -> int:
                 if tid in d.get(project, {}):
                     d[project][tid]["noticed"] = True
         update_state(TASK_WAKES, change)
+    return len(told) + idle_check(now)
+
+
+def idle_check(now: float) -> int:
+    """Tasks that may start but that nobody took (no lease) for IDLE_AFTER: one Matrix notice each, saying where the
+    task waits. A task that waits for a usage limit was told by its pc already (machine_report)."""
+    leases, idle, limit = read_json(TASK_LEASES, {}), read_json(TASK_IDLE, {}), set()
+    for m in read_json(MACHINES_FILE, {}).values():
+        limit |= set(m.get("limit_told", []))
+    waiting, told = {}, []
+    for project in list(PROJECTS):
+        for t in project_tasks(project)[0]:
+            lease = leases.get(project, {}).get(t["id"])
+            if t["startable"] and owner_agent(t["owner"]) and not (lease and lease.get("until", 0) >= now) and t["id"] not in limit:
+                rec = waiting.setdefault(project, {})[t["id"]] = idle.get(project, {}).get(t["id"]) or {"at": int(now)}
+                if not rec.get("noticed") and now - rec["at"] >= IDLE_AFTER:
+                    notify(f"Knowledge: task {t['id']} ({project}, for {t['owner']}) may start but nobody took it for "
+                           f"{int((now - rec['at']) // 60)} min ({task_where(project, t, None, now)}): {t['text'][:120]}")
+                    rec["noticed"] = True
+                    told.append(t["id"])
+    if waiting != idle:
+        update_state(TASK_IDLE, lambda d: (d.clear(), d.update(waiting)))
     return len(told)
 
 
@@ -3224,8 +3278,10 @@ async def context_route(request: Request):
     session's directory. A folder linked to a project this device may not use gets one it may, and is told why."""
     project, note = session_project(request)
     agent = request.query_params.get("agent", "")  # claude, codex or agy: whose tasks go first
-    # tasks run in workers, not in chats; a worker itself knows its one task from its prompt
-    chat = plugin_version(request.query_params.get("plugin", "")) >= (0, 15, 0) and not device.get().get("worker")
+    # tasks run in workers when an online pc runs that agent's workers for the project, else in its chats (as 0.14); a
+    # worker itself knows its one task from its prompt
+    chat = plugin_version(request.query_params.get("plugin", "")) >= (0, 15, 0) and not device.get().get("worker") \
+        and agent in AGENT_OWNERS and bool(await asyncio.to_thread(worker_hosts, project, agent))
     parts = await asyncio.to_thread(context_parts, project, agent if agent in AGENT_OWNERS else "", chat)  # lint + graph: off the loop
     if v := request.query_params.get("plugin", ""):  # every part asks, so all of them split the same way
         if request.path_params["part"] == 1:
@@ -4265,14 +4321,15 @@ def may_approve(project: str) -> bool:
 def task_rows() -> list[dict]:
     """Every task line and handed-back result in the projects this device sees, for the UI's Tasks tab; the same
     lines the session start lists, parsed into fields, with whether each may start now."""
-    rows, today = [], date.today()
+    rows, today, now = [], date.today(), time.time()
     for name, (_, mem) in list(PROJECTS.items()):
         if not in_scope(mem + "/"):
             continue
         tasks, back = project_tasks(name)
-        approver = may_approve(name)
+        approver, leases = may_approve(name), read_json(TASK_LEASES, {}).get(name, {})
         rows += [{**{k: t[k] for k in ("project", "path", "line", "owner", "id", "claimed", "text", "from", "start", "legacy",
                                         "author", "startable", "waiting_reason", "stalled", "approved")},
+                  "runs": task_where(name, t, leases.get(t["id"]), now) if t["startable"] else "",
                   "due": t["due"].isoformat() if t["due"] else "", "overdue": bool(t["due"] and t["due"] < today),
                   "done": False, "can_approve": approver and t["needs_approval"]} for t in tasks]
         rows += [{**b, "due": "", "overdue": False, "done": True, "claimed": False, "since": done_since(name, b)} for b in back]
@@ -4491,7 +4548,8 @@ async def machine_report(request: Request):
                   "folders": {k: [{"path": str(f.get("path", ""))[:500], "project": str(f.get("project", ""))[:80]}
                                   for f in ((b.get("folders") or {}).get(k) or [])[:200] if isinstance(f, dict)]
                               for k in ("linked", "candidates")},
-                  "projects": [str(p)[:80] for p in (b.get("projects") or [])[:100]]}
+                  "projects": [str(p)[:80] for p in (b.get("projects") or [])[:100]],
+                  "waiting": {str(k)[:120]: str(v)[:200] for k, v in list((b.get("waiting") or {}).items())[:50]}}
         waits = [str(i)[:60] for i in (b.get("limitWait") or [])][:20]
     except (ValueError, AttributeError, TypeError) as e:
         return JSONResponse({"error": f"bad report: {e}"}, status_code=400)

@@ -390,7 +390,8 @@ def machines_contract(tmp, ck, fr, raw, er, et):
     rep = {"version": "0.15.0", "workersAllowed": True, "maxWorkers": {"codex": 2}, "game": "",
            "agents": {"codex": {"yolo": True, "trusted": True, "limit": 91.5}, "claude": {"yolo": False, "trusted": False, "limit": None}},
            "workers": [{"id": "MC-1", "project": "garden", "agent": "codex", "status": "running", "started": time.time() - 240,
-                        "branch": "task/MC-1", "yolo": True, "open": "tail -f x.log"}], "limitWait": ["MC-2"]}
+                        "branch": "task/MC-1", "yolo": True, "open": "tail -f x.log"}], "limitWait": ["MC-2"],
+           "folders": {"linked": [{"path": "/home/x/garden", "project": "garden"}]}, "waiting": {"garden/MC-3": "Codex runs 2 worker(s) already"}}
     assert http("POST", "/machine/report", rep, token=fr, headers=pc)[0] == 200
     http("POST", "/machine/report", rep, token=fr, headers=pc)
     m = {r["id"]: r for r in json.loads(raw("GET", "/ui/api/machines", headers=ck)[2])["machines"]}["cccccccccccccccc"]
@@ -419,6 +420,30 @@ def machines_contract(tmp, ck, fr, raw, er, et):
     ctx = http("GET", "/context/1?project=x&agent=codex&plugin=0.15.0", token=fr)[1]
     assert "never in this chat" in ctx and "'pak <ID>'" in ctx, ctx[:2000]
     assert "start the one under 'may start now'" in http("GET", "/context/1?project=x&agent=codex&plugin=0.14.0", token=fr)[1]
+    # No online pc runs Gemini (agy) workers for the project: agy's chats take its tasks as in 0.14 (lease, "start it").
+    assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": "- open until 2099-01-01 [Gemini, MC-6] from Claude, start now: no worker pc\n## Keuzes"}, fr)[0]
+    ctx = http("GET", "/context/1?project=x&agent=agy&plugin=0.15.0", token=fr)[1]
+    assert "never in this chat" not in ctx and "start the one under 'may start now'" in ctx, ctx[:2000]
+    beat = json.loads(http("GET", "/tasks?project=x&agent=agy&v=2&chat=1&session=agy-9", token=fr, headers={"X-Knowledge-Machine": "eeeeeeeeeeeeeeee"})[1])
+    assert beat["workers"] is False and json.loads((tmp / "task_leases.json").read_text())["garden"]["MC-6"]["session"] == "agy-9", beat
+    assert json.loads(http("GET", "/tasks?project=x&agent=codex&v=2&chat=1&session=chat-9", token=fr)[1])["workers"] is True
+    # The Tasks tab says where each startable task runs, or why it waits there.
+    runs = {t["id"]: t["runs"] for t in json.loads(raw("GET", "/ui/api/tasks", headers=ck)[2])["tasks"] if t["project"] == "garden" and not t["done"]}
+    assert runs["MC-3"] == "goes to a worker on garage; waits there: Codex runs 2 worker(s) already", runs
+    assert runs["MC-4"] == "running in a worker on friend-pc on garage" and runs["MC-6"].startswith("taken by a session on friend-pc"), runs
+    # A task nobody takes (no lease) for KNOWLEDGE_TASK_IDLE: one Matrix notice, saying where it waits.
+    (tmp / "task_leases.json").write_text(json.dumps({"garden": {k: v for k, v in json.loads((tmp / "task_leases.json").read_text())["garden"].items() if k != "MC-6"}}))
+    assert runs["MC-6"] and next(t for t in json.loads(raw("GET", "/ui/api/tasks", headers=ck)[2])["tasks"] if t["id"] == "MC-6")["runs"] \
+        == "no pc runs Gemini workers for this project: the next Gemini chat in it starts the task"
+    deadline = time.time() + 10
+    while "MC-6" not in json.loads((tmp / "task_idle.json").read_text() if (tmp / "task_idle.json").exists() else "{}").get("garden", {}) and time.time() < deadline:
+        time.sleep(0.3)
+    idle = json.loads((tmp / "task_idle.json").read_text()); idle["garden"]["MC-6"]["at"] -= 3600; (tmp / "task_idle.json").write_text(json.dumps(idle))
+    deadline = time.time() + 10
+    while not json.loads((tmp / "task_idle.json").read_text())["garden"]["MC-6"].get("noticed") and time.time() < deadline:
+        time.sleep(0.3)
+    matrix = next(b for b in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["system"]["background"] if b["name"] == "Matrix")
+    assert "MC-6" in matrix["detail"] and "nobody took it" in matrix["detail"] and "no pc runs Gemini workers" in matrix["detail"], matrix
     # A worker (X-Knowledge-Worker) leases its own task only, and its start context is not the chat's.
     wk = {**pc, "X-Knowledge-Worker": "MC-3"}
     assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": "- open until 2099-01-01 [Codex, MC-5] from Claude, start now: not the worker's\n## Keuzes"}, fr)[0]
@@ -438,7 +463,7 @@ def machines_contract(tmp, ck, fr, raw, er, et):
     # A result handed back never starts anything by itself: only task lines are ready.
     assert not any(t["id"].endswith("-done") for t in json.loads(http("GET", "/tasks/ready", token=fr, headers=pc)[1])["tasks"])
     text = (tmp / "projects/garden/memory/project_tasks.md").read_text()
-    for line in [ln for ln in text.splitlines() if any(i in ln for i in ("MC-1", "MC-3", "MC-4", "MC-5", "MC-9"))]:
+    for line in [ln for ln in text.splitlines() if any(i in ln for i in ("MC-1", "MC-3", "MC-4", "MC-5", "MC-6", "MC-9"))]:
         call("knowledge_edit", {"path": path, "old_string": line + "\n", "new_string": ""}, fr)
     (tmp / "task_leases.json").write_text("{}")
 
