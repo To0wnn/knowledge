@@ -844,6 +844,9 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
               and call("POST", "/local/api/settings", {"startWhenNone": {"codex": True}}, key=False)[0] == 403
               and codex_cfg.read_text(encoding="utf-8") == toml and not (home / ".knowledge" / "companion" / "settings.json").exists(),
               "companion: YOLO and settings without the local key are refused, also with the page's own Origin")
+        big = {"agent": "codex", "pad": "x" * 60000}  # a refusal sent before the body was read made Windows reset the connection (10053)
+        check(all(_quiet(lambda: call("POST", "/local/api/yolo", big, key=False)[0] == 403) for _ in range(20)),
+              "companion: a refused POST reads its body first (no connection reset)")
         st, _, body = call("GET", "/local/api/state", origin=None, key=False)
         check(st == 200 and json.loads(body).get("locked") and "tasks" not in json.loads(body) and "activity" not in json.loads(body)
               and json.loads(body)["agents"], "companion: without the key the state shows the agents only (the web UI's tab)", body[:300])
