@@ -919,6 +919,12 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
               "workers: a Codex task starts `codex exec` in its own worktree on branch task/<ID>, with only its own task", json.dumps(cx)[:900])
         branch = subprocess.run(["git", "-C", str(wt), "branch", "--show-current"], capture_output=True, text=True).stdout.strip()
         check(branch == f"task/{cx_id}" and (wt / "README.md").exists(), "workers: the worktree is on branch task/<ID>", branch)
+        dirs = [Path(cx["argv"][i + 1]).resolve() for i, a in enumerate(cx["argv"]) if a == "--add-dir"]
+        dot = (repo / ".git").resolve()
+        check(dot / "worktrees" in [d.parent for d in dirs] and dot / "objects" in dirs and dot not in dirs
+              and "plugins.knowledge@knowledge.mcp_servers.knowledge.default_tools_approval_mode=approve" in cx["argv"],
+              "workers: Codex without YOLO may write its worktree's git folder, objects, refs and logs (not .git's config or hooks), "
+              "and the knowledge tools are approved for that run", json.dumps(cx["argv"][2:-1]))
         check(len([i for i in got if i in ("CMP-CODEX", "CMP-CX2")]) == 1 and "(limit unknown: 1)" in json.dumps(out.get("waiting")),
               "workers: an agent whose usage limit is unknown runs one worker at most", body[:600])
         ag, cl = got.get("CMP-GEMINI", {"argv": []}), got.get("CMP-CLAUDE", {"argv": []})
@@ -1055,6 +1061,35 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         for w in json.loads(wfile.read_text(encoding="utf-8")).values():
             if w["status"] == "running":
                 subprocess.run(["taskkill", "/T", "/F", "/PID", str(w["pid"])], capture_output=True) if WIN else _quiet(lambda: os.killpg(w["pid"], 9))
+        # Without YOLO a worker gets exactly what its task needs, in each agent's own way; one that ends with exit 0 but
+        # left its task open (its tools refused, say) is a failure, said in the activity log, not a quiet "finished".
+        allowed = cl["argv"][cl["argv"].index("--allowedTools") + 1:] if "--allowedTools" in cl["argv"] else []
+        check(allowed == ["mcp__plugin_knowledge_knowledge", "mcp__knowledge", "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)",
+                          "Bash(git add:*)", "Bash(git commit:*)", "Bash(git branch --show-current)"],
+              "workers: Claude without YOLO may use the knowledge tools and git status/diff/log/add/commit, nothing else (no push, no git -C)", json.dumps(cl["argv"][3:]))
+        yolo_file.write_text(json.dumps({}), encoding="utf-8")
+        mcp({"path": "garden-memory/project_companion.md", "old_string": "## Keuzes",
+             "new_string": "- open tot 1 jan 2099 [Gemini, CMP-QUIT] from Claude, start now: a worker that does nothing\n## Keuzes"})
+        call("POST", "/local/api/settings", {"workersAllowed": True})
+        n = len(recorded())
+        call("POST", "/local/api/tick", {})
+        wait_for(lambda: [c for c in argvs(n) if c["env"]["KNOWLEDGE_WORKER"] == "CMP-QUIT"], 15)
+        ag = next((c for c in argvs(n) if c["env"]["KNOWLEDGE_WORKER"] == "CMP-QUIT"), {"argv": []})
+        rules = ag["argv"][ag["argv"].index("--settings") + 1] if "--settings" in ag["argv"] else ""
+        rules = json.loads(Path(rules).read_text(encoding="utf-8")) if rules and Path(rules).is_file() else {}
+        check(ag["argv"][:2] == ["agy", "-p"] and ag["argv"][3:5] == ["--mode", "accept-edits"] and "--dangerously-skip-permissions" not in ag["argv"]
+              and rules == {"permissions": {"allow": ["command(git status)", "command(git diff)", "command(git log)", "command(git add)",
+                                                      "command(git commit)", "command(git branch --show-current)", "mcp(knowledge_knowledge/*)", "mcp(knowledge/*)"]}},
+              "workers: agy without YOLO gets allow rules for this session only (--settings): knowledge tools and git status/diff/log/add/commit",
+              json.dumps(ag["argv"][3:]) + json.dumps(rules))
+        wait_for(lambda: (call("POST", "/local/api/tick", {}) and False) or json.loads(wfile.read_text(encoding="utf-8")).get("garden/CMP-QUIT", {}).get("status") != "running", 20)
+        quit_rec = json.loads(wfile.read_text(encoding="utf-8")).get("garden/CMP-QUIT", {})
+        act_log = json.loads(call("GET", "/local/api/state")[2])
+        check(quit_rec.get("status") == "failed" and quit_rec.get("code") == 0
+              and any(a["kind"] == "error" and "CMP-QUIT ended without claiming or handing back" in a["text"] for a in act_log["activity"])
+              and any(s["id"] == "CMP-QUIT" and "without claiming" in s["why"] for s in act_log["tasks"]["stalled"]),
+              "workers: exit 0 with the task left open is a failure (activity log error, stalled lane), not finished", json.dumps(quit_rec)[:400])
+        call("POST", "/local/api/settings", {"workersAllowed": False})
         # The trust command: an agent that fails (a Codex without hooks/list) does not keep the next one untrusted.
         Path(str(calls) + ".fail").write_text("", encoding="utf-8")
         ag_now = json.loads((agy_dir / "settings.json").read_text(encoding="utf-8"))
@@ -1239,6 +1274,10 @@ def wake_e2e(tok: str, home: Path, project: Path):
     try:
         hook(["tasks", "codex", "-"], {"session_id": "cx-1", "cwd": str(project)})
         hook(["tasks", "claude", "-"], {"session_id": "cl-1", "cwd": str(project)})
+        code, out, err = hook(["hints", "-"], {"conversationId": "conv-w", "workspacePaths": [str(project)]}, {"KNOWLEDGE_WORKER": "W-1"})
+        code2, out2, err2 = hook(["context", "agy", "-"], {"conversationId": "conv-w", "workspacePaths": [str(project)]}, {"KNOWLEDGE_WORKER": "W-1"})
+        check(" register" not in out and " register" not in out2,
+              "agy: a worker is never asked to register (headless it may not run that command, and a refusal ends its run)", out[:300] + out2[-300:])
         code, out, err = hook(["hints", "-"], {"conversationId": "conv-1", "workspacePaths": [str(project)]})
         check("agent_hooks.py" in out and " register" in out, "agy: an unregistered agy conversation is asked once to register", out[:300] + err[-300:])
         code, out, err = hook(["hints", "-"], {"conversationId": "conv-1", "workspacePaths": [str(project)]})

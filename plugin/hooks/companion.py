@@ -833,6 +833,15 @@ def start_worker(t: dict, tok: str, now: float, ws: dict = None) -> tuple:
     return rec, ""
 
 
+def left_open(w: dict, tok: str) -> bool:
+    """The worker's task may still start (its line is there, not claimed, not handed over): it ended without doing its
+    job. Asked fresh, after its lease went back; unknown (server away) counts as not open."""
+    try:
+        return any(t["project"] == w["project"] and t["id"] == w["id"] for t in server("GET", "/tasks/ready", tok)["tasks"])
+    except Exception:
+        return False
+
+
 def check_workers(ws: dict, tok: str, now: float, lim: dict):
     """Finished workers, leases of running ones, the 90% hand-over (note first, hard stop after the grace), and the
     worktrees of merged ones."""
@@ -849,6 +858,11 @@ def check_workers(ws: dict, tok: str, now: float, lim: dict):
                 if not w.get("owner_stopped"):  # stopped on purpose: no other pc may take it at once, only after the lease
                     release(w, tok)  # a line it claimed but left open may start again at once (the server's idle notice)
                 workers.stop_path(w).unlink(missing_ok=True)
+                if w["status"] == "finished" and left_open(w, tok):  # exit 0 is not done: e.g. its tools were refused
+                    w.update(status="failed", why="ended without claiming or handing back its task")
+                    log("error", f"{AGENTS[w['agent']][0]}: the worker for {w['id']} ended without claiming or handing back its task",
+                        f"Not started again for {RESTART_AFTER // 3600} h unless asked. " + w.get("open", ""))
+                    continue
                 log("worker", f"{AGENTS[w['agent']][0]}: the worker for {w['id']} ended ({w['status']})", w.get("open", ""))
                 continue
             try:  # a turn longer than the lease must not let another pc start the same task
@@ -1101,7 +1115,7 @@ def page_state() -> dict:
         else:
             lanes["ready"].append(item)
     lanes["stalled"] = [{"id": w["id"], "owner": w["agent"], "text": w.get("open", ""), "project": w["project"],
-                         "why": f"Worker {w['status']} {int((now - w.get('ended', now)) // 60)} min ago"}
+                         "why": f"Worker {w['status']} {int((now - w.get('ended', now)) // 60)} min ago" + (f": {w['why']}" if w.get("why") else "")}
                         for w in ws.values() if w["status"] in ("failed", "stopped")]
     tok = token_store.token()
     return {"status": {"host": socket.gethostname(), "live": sum(len(a["sessions"]) for a in agents),
