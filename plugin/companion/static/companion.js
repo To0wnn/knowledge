@@ -1,58 +1,27 @@
-// Knowledge companion page. Renders the state of this pc; MOCK stands in for the local API until the backend exists.
+// Knowledge companion page: the state of this pc from the companion's local API (/local/api/*, companion.py).
 "use strict";
 
 // Set before first paint so the page never flashes the wrong theme (same key as the web UI).
 try { const t = localStorage.getItem("kn_theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch { /* storage blocked: follow the system */ }
 
-// shortcut: static sample data; the backend replaces each field with fetch("/local/api/<name>") (status, agents, tasks, activity, settings).
-const MOCK = {
-  status: { host: "workstation", live: 3, stalled: 1, resets: "2:39pm", synced: "1 min ago" },
-  agents: [
-    {
-      id: "claude", name: "Claude Code", mark: "C", installed: true, version: "0.9.17", hooksTrusted: true, yolo: false,
-      sessions: [
-        { title: "homelab: traefik route for netbox", age: "idle 4 min", wakeable: true },
-        { title: "knowledge: companion backend", age: "working", wakeable: false },
-      ],
-      lastError: null,
-    },
-    {
-      id: "codex", name: "Codex", mark: "X", installed: true, version: "0.9.17", hooksTrusted: false, yolo: false,
-      sessions: [{ title: "trade: backtest window fix", age: "idle 22 min", wakeable: true }],
-      lastError: { at: "10:42", text: "SessionStart: hook not trusted, run Trust hooks" },
-    },
-    {
-      id: "agy", name: "agy", mark: "A", installed: true, version: "0.9.16", hooksTrusted: true, yolo: true,
-      sessions: [],
-      lastError: { at: "09:15", text: "PostInvocation: timed out after 10 s reaching the knowledge server" },
-    },
-  ],
-  tasks: {
-    ready: [
-      { id: "KN-41", owner: "claude", text: "Add the companion API routes under /local/api" },
-      { id: "HL-12", owner: "codex", text: "Rotate the backup token on the offsite target" },
-    ],
-    waiting: [
-      { id: "TR-7", owner: "codex", text: "Rerun the backtest on the October data", why: "Waiting for KN-41 to finish" },
-    ],
-    stalled: [
-      { id: "AN-3", owner: "agy", text: "Draft the invoice template in English", why: "Woken twice, no answer for 3 h" },
-    ],
-  },
-  activity: [
-    { at: "11:02", kind: "wake", text: "Woke Claude Code for KN-41", detail: "Session homelab: traefik route for netbox" },
-    { at: "10:48", kind: "trust", text: "Trusted the hooks of agy", detail: "Plugin 0.9.16" },
-    { at: "10:42", kind: "error", text: "Codex hook failed", detail: "SessionStart: hook not trusted" },
-    { at: "09:30", kind: "sync", text: "Plugin updated to 0.9.17", detail: "Claude Code and Codex" },
-    { at: "08:01", kind: "wake", text: "Started a Codex session for HL-12", detail: "No session was open" },
-  ],
-  settings: {
-    serverUrl: "https://knowledge.example.org",
-    token: { present: true, source: "system keyring", checked: "today 08:00" },
-    startWhenNone: { claude: true, codex: false, agy: false },
-    autostart: true,
-  },
-};
+// The state of this pc as the companion's local API reports it; filled by load().
+let S = { status: {}, agents: [], tasks: { ready: [], waiting: [], stalled: [] }, activity: [], settings: { token: {}, startWhenNone: {} } };
+
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+  return data;
+}
+
+const clock = (at) => { const d = new Date(at * 1000); return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
+const ago = (at) => { const m = Math.round((Date.now() / 1000 - at) / 60); return m < 1 ? "just now" : m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`; };
+
+async function load() {
+  try { S = await api("/local/api/state"); }
+  catch (e) { toast(`Could not read the companion: ${e.message}`); return; }
+  renderChips(); renderAgents(); renderTasks(); renderActivity(); renderSettings();
+}
 
 const $ = (id) => document.getElementById(id);
 const h = (tag, attrs = {}, ...kids) => {
@@ -83,20 +52,14 @@ function toast(text) {
   toastTimer = setTimeout(() => t.classList.remove("cmp-toast--on"), 2600);
 }
 
-function log(kind, text, detail) {
-  const now = new Date();
-  MOCK.activity.unshift({ at: `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`, kind, text, detail });
-  renderActivity();
-}
-
 function renderChips() {
-  const s = MOCK.status;
+  const s = S.status;
   $("host").textContent = `This pc: ${s.host}`;
   const chips = [
     h("li", { class: "cmp-chip cmp-chip--live" }, h("span", { class: "cmp-dot" }), h("strong", {}, String(s.live)), " live"),
     s.stalled ? h("li", { class: "cmp-chip cmp-chip--bad" }, h("strong", {}, String(s.stalled)), " stalled") : null,
-    h("li", { class: "cmp-chip" }, "resets ", h("strong", {}, s.resets)),
-    h("li", { class: "cmp-chip" }, "synced ", s.synced),
+    s.syncError ? h("li", { class: "cmp-chip cmp-chip--bad", title: s.syncError }, "server unreachable")
+      : h("li", { class: "cmp-chip" }, "synced ", s.synced ? ago(s.synced) : "not yet"),
   ];
   $("chips").replaceChildren(...chips.filter(Boolean));
 }
@@ -120,95 +83,90 @@ function agentCard(a) {
     h("div", { class: "cmp-agent-head" },
       h("span", { class: "cmp-agent-mark", "aria-hidden": "true" }, a.mark),
       h("h3", { id: `ag-${a.id}` }, a.name),
-      h("span", { class: "cmp-ver" }, `plugin ${a.version}`)),
+      h("span", { class: "cmp-ver" }, a.version ? `plugin ${a.version}` : "no plugin")),
     h("dl", { class: "cmp-facts" },
       h("dt", {}, "Installed"), h("dd", {}, state(true, "Yes")),
       h("dt", {}, "Hooks"), h("dd", {}, trustRow)),
     a.sessions.length
       ? h("ul", { class: "cmp-sessions", "aria-label": `${a.name} sessions` }, a.sessions.map((s) => h("li", {},
-          h("span", { title: s.title }, s.title, h("br"), h("small", {}, s.age)),
-          s.wakeable ? h("button", { class: "cmp-btn cmp-btn--small", type: "button", "aria-label": `Wake ${s.title}`, onclick: () => wake(a, s) }, icon("play"), "Wake") : null)))
+          h("span", { title: s.title }, s.title, h("br"), h("small", {}, `active ${ago(s.at)}${s.wakeable ? " · gets the next task" : ""}`)))))
       : h("p", { class: "cmp-sessions-empty" }, "No open sessions. A task starts one only when allowed in Settings."),
     h("label", { class: "cmp-yolo", for: yoloId },
       h("input", { type: "checkbox", id: yoloId, checked: a.yolo, "aria-describedby": `${yoloId}-warn`, onchange: (e) => setYolo(a, e.target.checked) }),
       h("span", {}, "YOLO: run woken tasks without asking")),
-    h("p", { class: "cmp-yolo-warn", id: `${yoloId}-warn` }, "The agent may then edit files and run commands with no approval."),
+    h("p", { class: "cmp-yolo-warn", id: `${yoloId}-warn` }, a.yoloPending != null
+      ? `Turning YOLO ${a.yoloPending ? "on" : "off"} applies when ${a.name} is closed.`
+      : "The agent may then edit files and run commands with no approval. Unchecking restores your previous settings."),
     a.lastError
-      ? h("p", { class: "cmp-error" }, icon("alert"), h("span", {}, h("strong", {}, `Last hook error ${a.lastError.at}: `), a.lastError.text))
+      ? h("p", { class: "cmp-error" }, icon("alert"), h("span", {}, h("strong", {}, `Last hook error ${clock(a.lastError.at)}: `), a.lastError.text))
       : h("p", { class: "cmp-error cmp-error--none" }, "No hook errors."));
 }
 
-function renderAgents() { $("agents").replaceChildren(...MOCK.agents.map(agentCard)); }
+function renderAgents() { $("agents").replaceChildren(...S.agents.map(agentCard)); }
 
 function renderTasks() {
   const lanes = [["ready", "Ready"], ["waiting", "Waiting"], ["stalled", "Stalled"]];
-  const name = (id) => MOCK.agents.find((a) => a.id === id)?.name || id;
+  const name = (id) => S.agents.find((a) => a.id === id)?.name || id;
   $("tasks").replaceChildren(...lanes.map(([key, label]) => {
-    const items = MOCK.tasks[key];
+    const items = S.tasks[key];
     return h("section", { class: `cmp-lane cmp-lane--${key}`, "aria-label": `${label} tasks` },
       h("h3", {}, h("span", { class: "cmp-dot" }), label, h("small", {}, String(items.length))),
       items.length
         ? h("ol", {}, items.map((t) => h("li", { class: "cmp-task" },
-            h("span", { class: "cmp-task-id" }, `${t.id} for ${name(t.owner)}`),
+            h("span", { class: "cmp-task-id" }, `${t.id} for ${name(t.owner)} · ${t.project}`),
             h("p", { class: "cmp-task-text" }, t.text),
             t.why ? h("p", { class: "cmp-task-why" }, t.why) : null)))
         : h("p", { class: "cmp-lane-empty" }, "Nothing here."));
   }));
-  const open = lanes.reduce((n, [k]) => n + MOCK.tasks[k].length, 0);
+  const open = lanes.reduce((n, [k]) => n + S.tasks[k].length, 0);
   $("tasks-count").textContent = open ? String(open) : "";
 }
 
 function renderActivity() {
   const icons = { wake: "bolt", trust: "shield", sync: "sync", error: "alert" };
-  $("activity").replaceChildren(...MOCK.activity.map((e) => h("li", {},
-    h("time", { class: "cmp-log-time" }, e.at),
+  $("activity").replaceChildren(...S.activity.map((e) => h("li", {},
+    h("time", { class: "cmp-log-time", datetime: new Date(e.at * 1000).toISOString() }, clock(e.at)),
     h("span", { class: `cmp-log-icon${e.kind === "error" ? " cmp-log-icon--bad" : ""}` }, icon(icons[e.kind] || "orb")),
     h("span", { class: "cmp-log-text" }, e.text, e.detail ? h("small", {}, e.detail) : null))));
 }
 
 function renderSettings() {
-  const s = MOCK.settings;
+  const s = S.settings;
   const tok = s.token.present
-    ? [state(true, `Token stored in the ${s.token.source}`), h("small", {}, `Checked ${s.token.checked}. The token itself is never shown.`)]
+    ? [state(true, "Token found (keyring or KNOWLEDGE_TOKEN)"), h("small", {}, "The token itself is never shown.")]
     : [state(false, "", "No token on this pc", "bad"), h("small", {}, "Add one with the plugin setup; it goes to the keyring, never to this page.")];
   $("settings").replaceChildren(
     h("div", { class: "cmp-field" },
       h("label", { for: "set-url" }, "Knowledge server URL"),
-      h("input", { type: "url", id: "set-url", value: s.serverUrl, required: true, autocomplete: "off", spellcheck: "false" })),
+      h("input", { type: "url", id: "set-url", value: s.serverUrl, readonly: true, autocomplete: "off", spellcheck: "false" }),
+      h("small", {}, "Set by the plugin setup (knowledge-agent.py install).")),
     h("div", { class: "cmp-field" }, h("span", { style: "font-weight:560" }, "Token"), h("div", { class: "cmp-token" }, tok)),
     h("fieldset", { class: "cmp-field" },
       h("legend", {}, "Start a session when none is open"),
-      h("small", {}, "When a task arrives for an agent with no session, open one."),
-      MOCK.agents.filter((a) => a.installed).map((a) => h("label", { class: "cmp-switch" },
+      h("small", {}, "When a task arrives for an agent with no session, open one in the project's folder."),
+      S.agents.filter((a) => a.installed).map((a) => h("label", { class: "cmp-switch" },
         h("input", { type: "checkbox", name: `start-${a.id}`, checked: !!s.startWhenNone[a.id] }), a.name))),
-    h("div", { class: "cmp-field" },
-      h("label", { class: "cmp-switch" }, h("input", { type: "checkbox", name: "autostart", checked: s.autostart }), "Start the companion when I log in")),
     h("div", { class: "cmp-settings-foot" }, h("button", { class: "cmp-btn cmp-btn--primary", type: "submit" }, "Save settings")));
 }
 
-function trustHooks(a) {
-  a.hooksTrusted = true;
-  if (a.lastError && /trust/i.test(a.lastError.text)) a.lastError = null;
-  log("trust", `Trusted the hooks of ${a.name}`, `Plugin ${a.version}`);
-  renderAgents();
-  toast(`Trusted the hooks of ${a.name}`);
+async function act(path, body, done) {
+  try { const r = await api(path, body); if (done) toast(typeof done === "function" ? done(r) : done); }
+  catch (e) { toast(e.message); }
+  await load();
 }
-function wake(a, s) {
-  log("wake", `Woke ${a.name}`, `Session ${s.title}`);
-  toast(`Woke ${a.name}`);
-}
-function setYolo(a, on) {
-  a.yolo = on;
-  log("trust", `YOLO ${on ? "on" : "off"} for ${a.name}`, on ? "Woken tasks run without asking" : "Woken tasks ask first");
-}
+const trustHooks = (a) => act("/local/api/trust", { agent: a.id }, (r) => `Trusted the hooks of ${a.name}: ${r.trusted[a.id]}`);
+const setYolo = (a, on) => act("/local/api/yolo", { agent: a.id, on }, (r) => r.yolo === "pending" ? `${a.name}: applies when it is closed` : `YOLO ${r.yolo} for ${a.name}`);
 
 const TOOLS = [
-  { icon: "shield", label: "Trust all hooks", hint: "For every agent on this pc", run: () => MOCK.agents.filter((a) => a.installed && !a.hooksTrusted).forEach(trustHooks) },
-  { icon: "bolt", label: "Wake the next ready task", hint: "Sends it to its owner's session", run: () => toast("Woke the next ready task") },
-  { icon: "sync", label: "Update the plugin", hint: "All agents, then restart them", run: () => toast("Checked for plugin updates") },
+  { icon: "shield", label: "Trust all hooks", hint: "For every agent on this pc", run: () => act("/local/api/trust", {}, "Trusted the knowledge hooks") },
+  { icon: "bolt", label: "Wake ready tasks now", hint: "Instead of waiting for the next minute", run: () => act("/local/api/tick", {}, (r) => `Woke ${r.woken.length} task(s)`) },
+  { icon: "sync", label: "Update the plugin", hint: "Codex and agy; Claude Code updates itself", run: () => act("/local/api/update", {}, "Updating in the background; see Activity") },
   null,
-  { icon: "globe", label: "Open the knowledge web UI", hint: "In your browser", run: () => toast("Opening the web UI") },
-  { icon: "copy", label: "Copy diagnostics", hint: "Versions and errors, no token", run: () => toast("Copied diagnostics") },
+  { icon: "globe", label: "Open the knowledge web UI", hint: "In your browser", run: () => window.open(`${S.settings.serverUrl}/ui`, "_blank", "noopener") },
+  { icon: "copy", label: "Copy diagnostics", hint: "Versions and errors, no token", run: async () => {
+    const d = { version: S.version, status: S.status, agents: S.agents.map(({ id, installed, version, hooksTrusted, yolo, lastError }) => ({ id, installed, version, hooksTrusted, yolo, lastError })) };
+    try { await navigator.clipboard.writeText(JSON.stringify(d, null, 2)); toast("Copied diagnostics"); } catch { toast("The browser did not allow copying"); }
+  } },
 ];
 
 function setupMenu() {
@@ -273,8 +231,13 @@ function setupNav() {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-  renderChips(); renderAgents(); renderTasks(); renderActivity(); renderSettings();
   setupMenu(); setupTheme(); setupNav();
-  $("refresh-btn").addEventListener("click", () => toast("Refreshed"));
-  $("settings").addEventListener("submit", (e) => { e.preventDefault(); toast("Saved settings"); });
+  load();
+  setInterval(load, 30000);
+  $("refresh-btn").addEventListener("click", () => load().then(() => toast("Refreshed")));
+  $("settings").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const startWhenNone = Object.fromEntries(S.agents.map((a) => [a.id, !!e.target.elements[`start-${a.id}`]?.checked]));
+    act("/local/api/settings", { startWhenNone }, "Saved settings");
+  });
 });

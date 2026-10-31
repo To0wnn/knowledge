@@ -26,6 +26,8 @@ it in ~/.config/knowledge/url for the hooks and sets the Claude plugin option. O
   knowledge-agent.py guard <codex|agy> TOKEN       PreToolUse on the edit tools: a known secret value is refused
   knowledge-agent.py wake <codex|agy> TOKEN        PostToolUse: wake the other agents here after a knowledge write
   knowledge-agent.py session-log TOKEN             SessionEnd/PreCompact (Codex), Stop (agy): post the session log
+  knowledge-agent.py serve                         the local companion (alias: companion): wakes agents for ready tasks,
+                    trusts the knowledge hooks, YOLO switches; page on http://127.0.0.1:47321
 """
 import json
 import os
@@ -556,7 +558,7 @@ def main(argv: list):
         if len(argv) == 2:  # a vault name (the machine that holds the files) keeps the URL it is given
             ensure_url()
         install(argv[1], argv[2] if len(argv) > 2 else "-")
-    elif cmd in ("context", "docs-sync", "session-log", "hints", "tasks", "wake", "gate", "guard", "register"):  # hooks written by the setup call this script
+    elif cmd in ("context", "docs-sync", "session-log", "hints", "tasks", "wake", "gate", "guard", "register", "serve", "companion"):  # hooks written by the setup call this script
         agent_hooks.SETUP = "script"  # its auto-update: git pull + install, not the plugin CLI
         agent_hooks.main(argv)
     else:
