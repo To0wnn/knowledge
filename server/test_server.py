@@ -107,6 +107,12 @@ def tasks_contract(tmp, ck, fr, ver, raw):
     assert approve("NOPE-1") == 404 and approve("APR-1") == 200
     r = rows()
     assert r["DEP-1"]["startable"] and r["APR-1"]["startable"] and r["APR-1"]["approved"], r
+    # A hand-over CX-1-cont keeps CX-1 open for "start after CX-1" until CX-1-done is there.
+    cont = "- open until 2099-01-01 [Claude, CX-1-cont] from Claude, start now: continue CX-1\n"
+    assert not add(cont.strip())[0] and rows()["DEP-1"]["waiting_reason"] == "waits for CX-1", rows()["DEP-1"]
+    assert not add("- [Gemini, CX-1-done]: pruned")[0] and rows()["DEP-1"]["startable"], rows()["DEP-1"]
+    for line in (cont, "- [Gemini, CX-1-done]: pruned\n"):
+        call("knowledge_edit", {"path": path, "old_string": line, "new_string": ""})
     # Trusted writers per project (admin page): a token not on the list needs an approval; null = the default again.
     writers = lambda w: raw("POST", "/ui/api/admin/task-writers", json.dumps({"name": "garden", "writers": w}), ui)[0]
     assert writers(["alice"]) == 200 and writers(["bad name!"]) == 400

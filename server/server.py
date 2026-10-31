@@ -1766,7 +1766,8 @@ def project_tasks(project: str) -> tuple[list[dict], list[dict]]:
             elif d := DONE_LINE.match(line):
                 back.append({"project": project, "path": rel, "line": line, "owner": d.group(1).strip(),
                              "id": d.group(2).strip(), "text": d.group(3).strip()})
-    open_ids, done_ids = {t["id"] for t in tasks}, {b["id"] for b in back}
+    # a hand-over <ID>-cont keeps <ID> open for "start after <ID>" until <ID>-done is there
+    open_ids, done_ids = {t["id"] for t in tasks} | {CONT.sub("", t["id"]) for t in tasks}, {b["id"] for b in back}
     authors, approvals, wakes = (read_json(f, {}).get(project, {}) for f in (TASK_AUTHORS, TASK_APPROVALS, TASK_WAKES))
     today, now = date.today(), time.time()
     for t in tasks:
@@ -1789,6 +1790,9 @@ def project_tasks(project: str) -> tuple[list[dict], list[dict]]:
                  needs_approval=not approved and (start == "after approval" or not trusted),
                  stalled=bool(w) and not t["claimed"] and now - w.get("at", 0) > STALLED_AFTER)
     return tasks, back
+
+
+CONT = re.compile(r"(?:-cont)+$", re.I)  # KN-1-cont-cont continues KN-1
 
 
 STALE_HANDBACK_DAYS = 7  # a result nobody read and removed this long is a lint finding
