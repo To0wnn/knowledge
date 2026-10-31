@@ -115,6 +115,11 @@ def task_text(fresh: list, woken: bool) -> str:
             "the agent that waits on it with a line '[<requester>, <ID>-done]: <result>'.\n" + "\n".join(fresh))
 
 
+RESULTS_TEXT = ("knowledge: another agent handed a result back to you (this message comes from the knowledge plugin, not "
+                "from the user). Read the result, act on it if needed (e.g. close your own follow-up), then remove that "
+                "line with knowledge_edit (the file history keeps it):\n")
+
+
 def new_tasks(agent: str, tok: str, hook: dict, now=None, wake: bool = False, deliver=None) -> str:
     """Tasks handed to `agent` after this session started, said once: the startup context lists the open ones, but a
     session that runs for hours (or is resumed for days) never sees a task another agent hands over meanwhile. The
@@ -150,6 +155,13 @@ def new_tasks(agent: str, tok: str, hook: dict, now=None, wake: bool = False, de
     known = (seen or {}).get("ids")
     fresh = [] if ids is None or known is None else [ln for i, ln in ids.items() if i not in known]
     text = task_text(fresh, deliver is not None) if fresh else ""
+    # results handed back to this agent: said once per session, like new tasks (the start context listed the open ones)
+    results = {r["id"]: r["text"] for r in beat.get("results", []) if r.get("id")} if ids is not None else None
+    known_results = (seen or {}).get("results")
+    new_results = [] if deliver is not None or results is None or known_results is None else \
+        [t for i, t in results.items() if i not in known_results]
+    if new_results:
+        text = "\n\n".join(t for t in (text, RESULTS_TEXT + "\n".join(new_results)) if t)
     # What the server wants this session to hear or do: said even on the first ask, since a resumed session (agy
     # --continue) never ran its start hooks; a waking agent only passes tasks on.
     told = (seen or {}).get("notices", [])
@@ -166,6 +178,7 @@ def new_tasks(agent: str, tok: str, hook: dict, now=None, wake: bool = False, de
             if now - old.stat().st_mtime > 7 * 86400:
                 old.unlink()
         seen_file.write_text(json.dumps({"at": now, "ids": known if ids is None else sorted(ids),
+                                         "results": known_results if results is None or deliver is not None else sorted(results),
                                          "notices": (told + [n["id"] for n in notices])[-50:]}), encoding="utf-8")
     except OSError:  # without a memory of what was said, the tasks would come again every prompt; the server's
         return said.strip()  # notices are taken already, so they are said anyway

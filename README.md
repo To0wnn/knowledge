@@ -54,6 +54,11 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   start it". A lease ends when it runs out or the line gets its claim marker. `[<Owner>@<device>, <ID>]` pins a task to
   one device (the token's name, any case); others see it as reserved. A woken task nobody claims within 30 minutes
   shows as stalled and sends one Matrix message.
+- **Results handed back:** a line `- [<Requester>, <ID>-done]: <result>` is listed for its requester only, at
+  session start ("Results handed back to you") and once per session at the next turn when it arrives later
+  (`results` in the `/tasks` v2 answer): read it, act on it, then remove the line. The Tasks tab groups them as
+  "Results waiting to be read by <requester>" with their age (a date in the line, else when the server saw it written,
+  else the memo's history). Unread for 7 days: lint `stale_handback`, which session starts list too.
 - **Hook failures:** when one of the plugin's own hooks crashes or exits with an error, the device keeps it in
   `~/.knowledge/hook-errors.jsonl` and the per-turn hook reports new ones with `POST /status` (at most every two
   minutes, never holding up the turn); the tasks tab shows the last failure per device and agent.

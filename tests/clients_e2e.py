@@ -983,6 +983,15 @@ def new_task(agent: Path, env: dict, project: Path, tok: str, home: Path):
           "tasks: a task handed over meanwhile reaches the next prompt", out[:300])
     rewind()
     check(ask() == "", "tasks: said once, not at every prompt")
+    http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_edit", "arguments":
+         {"path": "garden-memory/project_handover.md", "old_string": "## Keuzes", "new_string": "- [Codex, RES-1-done]: clips installed\n- [Claude, RES-2-done]: not yours\n## Keuzes"}}},
+         {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})
+    rewind()
+    out = ask()
+    check("RES-1-done: clips installed" in out and "remove that line with knowledge_edit" in out and "RES-2-done" not in out,
+          "tasks: a result handed back to this agent reaches the next prompt, another agent's does not", out[:400])
+    rewind()
+    check(ask() == "", "tasks: a result is said once per session")
 
 
 def wake_e2e(tok: str, home: Path, project: Path):

@@ -1279,6 +1279,13 @@ def lint_all() -> dict[str, list[str]]:
     if kb_rerank.MODEL_DIR:
         report["possible_duplicate"] = possible_duplicates()
         report["duplicate_check_failed"] = [BACKGROUND["duplicates"]["error"]] if "error" in BACKGROUND.get("duplicates", {}) and in_scope("claude/") else []
+    stale, now = [], time.time()
+    for name, (_, mem) in list(PROJECTS.items()):
+        if in_scope(mem + "/"):
+            stale += [f"{b['path']} {b['id']}: handed back to {b['owner']} {int((now - at) // 86400)} days ago and not read: "
+                      "read it and remove the line" for b in project_tasks(name)[1]
+                      if now - (at := done_since(name, b)) > STALE_HANDBACK_DAYS * 86400]
+    report["stale_handback"] = stale
     gaps = get_graph()["insights"]
     # docs too since 31 Oct 2026: the map draws every one of them as a dot (Anthony: "losse bolletjes")
     report["isolated_note"] = [f"{i['id']} ({i['degree']} link)" for i in gaps["isolated"]
@@ -1673,7 +1680,14 @@ def update_state(path: Path, change):
 def note_task_authors(rel: str, before: str, after: str, by: str):
     """Who added or changed a task line: a line from a writer the project trusts may start by itself, others wait for
     approval. A line added again (another memo, the same ID) or reworded gets its new writer and loses an earlier
-    approval, so reusing an ID or editing a trusted line never borrows trust."""
+    approval, so reusing an ID or editing a trusted line never borrows trust. A result handed back gets its time."""
+    old = {d.group(2).strip() for line in before.splitlines() if (d := DONE_LINE.match(line))}
+    done = [i for line in after.splitlines() if (d := DONE_LINE.match(line)) and (i := d.group(2).strip()) not in old]
+    if done and mem_of(rel) and not is_archive(rel) and (project := project_of(rel)):
+        try:
+            update_state(TASK_AUTHORS, lambda d: d.setdefault(project, {}).update({i: {"by": by, "at": int(time.time())} for i in done}))
+        except OSError as e:
+            print(f"result time not saved: {e}", flush=True)
     if not (new := added_tasks(rel, before, after, changed=True)) or not (project := project_of(rel)):
         return
     try:
@@ -1734,6 +1748,46 @@ def project_tasks(project: str) -> tuple[list[dict], list[dict]]:
                  needs_approval=not approved and (start == "after approval" or not trusted),
                  stalled=bool(w) and not t["claimed"] and now - w.get("at", 0) > STALLED_AFTER)
     return tasks, back
+
+
+STALE_HANDBACK_DAYS = 7  # a result nobody read and removed this long is a lint finding
+_done_since: dict = {}
+
+
+def done_since(project: str, b: dict) -> float:
+    """When a result line was handed back: the date in the line, else when the server saw it written, else the oldest
+    kept version of its memo that holds it, else the memo's last change (never older than the truth)."""
+    key = (project, b["path"], b["line"])
+    if key in _done_since:
+        return _done_since[key]
+    if d := kb_lint.latest_date(b["line"], date.today()):
+        at = time.mktime(d.timetuple())
+    elif rec := read_json(TASK_AUTHORS, {}).get(project, {}).get(b["id"]):
+        at = rec.get("at", 0)
+    else:
+        at, hist = 0.0, history_dir(b["path"])
+        for v in sorted(hist.iterdir(), key=lambda v: -v.stat().st_mtime_ns) if hist.is_dir() else []:
+            if b["line"] not in v.read_text(errors="replace"):
+                break
+            at = v.stat().st_mtime
+        if not at:
+            try:
+                return resolve(b["path"])[0].stat().st_mtime  # not cached: a later write records it
+            except (OSError, ToolError):
+                return time.time()
+    _done_since[key] = at
+    return at
+
+
+def results_for(back: list[dict], names: tuple, mem: str) -> list[dict]:
+    """The results handed back to the agent with these owner names: {id, text} with memo and the first 200 chars."""
+    return [{"id": b["id"], "text": f"- {b['path'].removeprefix(mem + '/')}: {b['id']}: "
+             + (b["text"] if len(b["text"]) <= 200 else b["text"][:200] + "…")}
+            for b in back if b["owner"].partition("@")[0].strip().lower() in names]
+
+
+RESULTS_HOW = ("Read each result, act on it if needed (e.g. close your own follow-up), then remove that line with "
+               "knowledge_edit (the file history keeps it).")
 
 
 def owner_agent(owner: str) -> str:
@@ -1834,8 +1888,13 @@ def open_items_text(mem: str, agent: str = "") -> tuple[list[str], list[str]]:
     memos = task_memos(mem)
     overdue = kb_lint.lint(memos, mem=mem)["open_overdue"]
     names = AGENT_OWNERS.get(agent, ())
-    mine, waiting, others = task_items(project_of(mem + "/"), names)
+    tasks, back = project_tasks(project_of(mem + "/"))
+    mine, waiting, others = task_items(project_of(mem + "/"), names, tasks=tasks)
     head, tail = [], []
+    if results := results_for(back, names, mem):
+        who = next(o for o in ("Claude", "Codex", "Gemini") if o.lower() in names)
+        head.append(f"===== Results handed back to you ({who}, project {mem}) =====\nOther agents finished these and handed "
+                    f"the result back to you. {RESULTS_HOW}\n" + "\n".join(r["text"] for r in results))
     if mine or waiting:
         who = next(o for o in ("Claude", "Codex", "Gemini") if o.lower() in names)
         head.append(f"===== your open tasks ({who}, project {mem}) =====\nThese tasks were handed to you ({who}); each line "
@@ -1865,7 +1924,7 @@ def open_items_text(mem: str, agent: str = "") -> tuple[list[str], list[str]]:
 
 LINT_AT_START = ("index_points_to_missing_file", "memo_not_in_index", "dead_wikilink", "missing_frontmatter",
                  "missing_structure", "big_memo_without_archive", "long_index_line", "index_line_without_heading",
-                 "relative_date", "doc_without_topic", "decision_without_date", "isolated_note")
+                 "relative_date", "doc_without_topic", "decision_without_date", "isolated_note", "stale_handback")
 LINT_AT_START_MAX = 12
 _project_lint_cache: dict = {}
 
@@ -2782,7 +2841,8 @@ async def tasks_route(request: Request):
 
     def leased():
         """This session's startable tasks: each one it may take is leased to this device; the others are held."""
-        tasks = project_tasks(project)[0]
+        tasks, back = project_tasks(project)
+        results[:] = results_for(back, names, mem)
         if not claim:
             return tasks, task_holders(project, tasks, key[0])
         held = {}
@@ -2792,6 +2852,7 @@ async def tasks_route(request: Request):
                 if not ok:
                     held[t["id"]] = h
         return tasks, held
+    results: list[dict] = []
     tasks, held = await asyncio.to_thread(leased)
     # only tasks that may start now: the plugin says each new one as "start it right away" and wakes sessions for it
     items, waiting, _ = await asyncio.to_thread(task_items, project, names, held, tasks)
@@ -2809,7 +2870,7 @@ async def tasks_route(request: Request):
         and time.time() - _full_synced.get(key, 0) > DOCS_SYNC_MINUTES * 60
     if sync:  # handed to this session only; if its sync fails, the next turn after DOCS_SYNC_MINUTES asks again
         _full_synced[key] = time.time()
-    return JSONResponse({"tasks": items, "waiting": waiting, "notices": notices, "sync": sync})
+    return JSONResponse({"tasks": items, "waiting": waiting, "notices": notices, "sync": sync, "results": results})
 
 
 @server.custom_route("/tasks/ready", methods=["GET"])
@@ -3964,7 +4025,7 @@ def task_rows() -> list[dict]:
                                         "author", "startable", "waiting_reason", "stalled", "approved")},
                   "due": t["due"].isoformat() if t["due"] else "", "overdue": bool(t["due"] and t["due"] < today),
                   "done": False, "can_approve": approver and t["needs_approval"]} for t in tasks]
-        rows += [{**b, "due": "", "overdue": False, "done": True, "claimed": False} for b in back]
+        rows += [{**b, "due": "", "overdue": False, "done": True, "claimed": False, "since": done_since(name, b)} for b in back]
     return rows
 
 

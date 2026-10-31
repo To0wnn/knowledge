@@ -223,6 +223,35 @@ def lease_contract(tmp, ck, fr, raw):
     (tmp / "task_leases.json").write_text("{}")  # the later checks start without leases
 
 
+def handback_contract(tmp, ck, fr, ver, raw):
+    """A result handed back reaches its requester (session start, each turn) and nobody else; unread for a week it is
+    a lint finding; the Tasks tab groups results by requester with their age."""
+    from datetime import date, timedelta
+    path = "garden-memory/project_results.md"
+    old = (date.today() - timedelta(days=10)).isoformat()
+    lines = (f"- [Claude, HB-1-done]: built the beds; commit abc\n- [Codex, HB-2-done]: for codex\n"
+             f"- [Claude, HB-3-done]: old result ({old})\n- [Claude, HB-4-done]: recorded long ago\n")
+    assert not call("knowledge_write", {"path": path, "content": memo(lines, "results")}, fr)[0]
+    a = json.loads((tmp / "task_authors.json").read_text())
+    assert a["garden"]["HB-1-done"]["at"] > time.time() - 60, a["garden"]  # the server noted when it was handed back
+    a["garden"]["HB-4-done"]["at"] = int(time.time()) - 8 * 86400
+    (tmp / "task_authors.json").write_text(json.dumps(a))
+    head = lambda agent: http("GET", f"/context/1?project=x&agent={agent}", token=fr)[1].split("=====", 3)[:3]
+    claude, codex = "=====".join(head("claude")), "=====".join(head("codex"))
+    assert "Results handed back to you (Claude, project garden-memory)" in claude and "HB-1-done: built the beds" in claude, claude[:1500]
+    assert "remove that line with knowledge_edit" in claude and "HB-2-done" not in claude, claude[:1500]
+    assert "HB-2-done: for codex" in codex and "HB-1-done" not in codex, codex[:1500]
+    res = lambda agent: {r["id"] for r in json.loads(http("GET", f"/tasks?project=x&agent={agent}&v=2&session=hb", token=fr)[1])["results"]}
+    assert res("claude") == {"HB-1-done", "HB-3-done", "HB-4-done"} and res("codex") == {"HB-2-done"} and res("agy") == set()
+    rows = {t["id"]: t for t in json.loads(raw("GET", "/ui/api/tasks", headers=ck)[2])["tasks"] if t["project"] == "garden"}
+    assert rows["HB-1-done"]["done"] and time.time() - rows["HB-1-done"]["since"] < 120 and time.time() - rows["HB-3-done"]["since"] > 9 * 86400, rows
+    ctx = "".join(http("GET", f"/context/{n}?project=x", token=fr)[1] for n in range(1, 5))
+    stale = [ln for ln in ctx.splitlines() if ln.startswith("- stale_handback:")]
+    assert any("HB-3-done" in x for x in stale) and any("HB-4-done" in x for x in stale), ctx[-1500:]
+    assert not any("HB-1-done" in x or "HB-2-done" in x for x in stale), stale
+    assert not call("knowledge_delete", {"path": path, "base_version": ver(path)}, fr)[0]
+
+
 def main():
     # Every command block on the help page must paste in one go: zsh runs a "# ..." line as a command (help 23 Oct 2026).
     import html as _html
@@ -784,6 +813,7 @@ def main():
         assert "CX-0-done" not in left and "CX-1] from Claude, start now: prune" in left, left
         tasks_contract(tmp, ck, fr, ver, raw)
         lease_contract(tmp, ck, fr, raw)
+        handback_contract(tmp, ck, fr, ver, raw)
         # The plugin version: recorded per token and agent, a device behind the newest hears it at session start.
         parts = lambda q: "".join(http("GET", f"/context/{n}?project=x&{q}", token=fr)[1] for n in range(1, 6))
         assert "runs 0.9.10 for codex, the newest is 0.9.16" in parts("agent=codex&plugin=0.9.10"), parts("agent=codex&plugin=0.9.10")[-600:]

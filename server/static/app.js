@@ -972,7 +972,7 @@ async function loadTasks(render = true) {
   const row = (t) => {
     const n = byId.get(t.path), li = hitItem(`${t.id} · ${t.owner}`, t.text, () => openNote(t.path, { find: [t.id.toLowerCase()] }));
     const meta = el("span", "hit-text", [t.done ? "" : `${t.from || "?"} → ${t.owner}`, t.done ? "" : `start ${t.start}`,
-      t.due && `due ${t.due}`, t.claimed && "claimed", t.waiting_reason, n ? n.label : t.path.split("/").pop(),
+      t.due && `due ${t.due}`, t.done && t.since && `handed back ${ago(t.since)}`, t.claimed && "claimed", t.waiting_reason, n ? n.label : t.path.split("/").pop(),
       allMode() ? t.project : ""].filter(Boolean).join(" · "));
     if (t.legacy) meta.prepend(el("span", "badge", "legacy"), " ");
     if (t.stalled) meta.prepend(el("span", "new", "stalled"), " ");
@@ -1008,7 +1008,7 @@ async function loadTasks(render = true) {
   };
   open.sort((a, b) => (b.overdue - a.overdue) || (a.due || "9").localeCompare(b.due || "9"));
   section("Open", open);
-  section("Handed back", back);
+  for (const who of [...new Set(back.map((t) => t.owner))].sort()) section(`Results waiting to be read by ${who}`, back.filter((t) => t.owner === who));
   if (!tasks.length) box.append(el("p", "muted", "No open tasks."));
   const sessions = res.sessions.filter(here);
   if (sessions.length) {
@@ -1056,6 +1056,7 @@ const LINT_INFO = {
   stale_unchecked_fact: ["Fact unchecked for long", "Check it on the live system, then mark it (gecontroleerd <date>)."],
   open_overdue: ["Open item overdue", "An item marked 'open tot <date>' passed its date: do it, or move the date with a reason."],
   review_due: ["Due for a check", "IPs or versions not checked for a while: check them on the live system, then mark (gecontroleerd <date>)."],
+  stale_handback: ["Result nobody read", "An agent handed a result back over a week ago and its requester never read it: read it, act on it, then remove the line."],
   isolated_note: ["Memo without links", "Link it to the memos it belongs with."],
   possible_duplicate: ["Two memos that may cover the same subject", "A reranker judged them alike: merge them if they really are one subject, or link them and sharpen their descriptions if they are kept apart on purpose."],
   duplicate_check_failed: ["Duplicate check failed", "The background reranker stopped with this error: see the admin page and the server log (docker logs knowledge)."],
