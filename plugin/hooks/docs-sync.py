@@ -23,7 +23,7 @@ from pathlib import Path
 
 SKIP = {"venv", "node_modules", "__pycache__", "dist", "build", "site-packages"}  # plus every dot-folder
 MAX_FILE, MAX_FILES = 300_000, 2000
-PENDING = Path.home() / ".knowledge" / "pending-hints.txt"  # agy: shown by agent_hooks.py hints at the next turn
+PENDING = Path(os.environ.get("KNOWLEDGE_HOME") or Path.home() / ".knowledge") / "pending-hints.txt"  # agy: shown by agent_hooks.py hints at the next turn
 PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update) File: (.+)$|^\*\*\* Move to: (.+)$", re.M)
 
 

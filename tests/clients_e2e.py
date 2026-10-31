@@ -662,6 +662,23 @@ else:
 """
 
 
+def knowledge_home(tok: str, tmp: Path, project: Path):
+    """KNOWLEDGE_HOME moves ~/.knowledge (the companion's state, the session registry, what a session was told) for
+    every agent's hooks and the companion alike."""
+    home, kh = tmp / "Home Usér", tmp / "Elsewhere Usér" / "kn state"
+    env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, KNOWLEDGE_HOME=str(kh))
+    hooks = CLIENT / "plugin" / "hooks"
+    for agent in ("claude", "codex"):
+        run([sys.executable, str(hooks / "agent_hooks.py"), "tasks", agent],
+            json.dumps({"session_id": f"kh-{agent}", "cwd": str(project), "prompt": "hi"}), env, cwd=str(project))
+    run([sys.executable, str(hooks / "agent_hooks.py"), "hints"], json.dumps({"conversationId": "kh-agy", "cwd": str(project)}), env, cwd=str(project))
+    run([sys.executable, str(hooks / "companion.py"), "tick"], "", env)
+    check((kh / "tasks-seen").is_dir() and len(list((kh / "tasks-seen").glob("*.json"))) >= 3 and (kh / "companion" / "state.json").exists()
+          and not (home / ".knowledge").exists(), "KNOWLEDGE_HOME: hooks of every agent and the companion keep their state there",
+          str(sorted(p.name for p in kh.rglob("*"))[:20]))
+    return env, kh
+
+
 def companion_e2e(tok: str, tmp: Path, project: Path):
     """The local companion (plugin/hooks/companion.py, started as `agent_hooks.py serve`) in a home of its own with fake
     agents: its local API answers only this pc's pages, it trusts the knowledge hooks the agents' own way (Codex through
@@ -1832,6 +1849,7 @@ def main():
         plugin_versions(tmp)
         relay_errors(home)
         hook_errors(tmp, project)
+        knowledge_home(tok, tmp, project)
         companion_e2e(tok, tmp, project)
         installer(tok, tmp)
         companion_setup(tmp)

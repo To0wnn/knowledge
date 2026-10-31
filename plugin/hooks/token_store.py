@@ -20,6 +20,7 @@ from pathlib import Path
 SERVICE = "knowledge"
 NO_URL = ("knowledge: no server address is set on this device, so the knowledge server is not used. Run "
           "`knowledge-agent.py setup` (or set KNOWLEDGE_URL) to connect it.")
+KN_HOME = Path(os.environ.get("KNOWLEDGE_HOME") or Path.home() / ".knowledge")  # KNOWLEDGE_HOME relocates ~/.knowledge (tests)
 URL_FILE = Path.home() / ".config" / "knowledge" / "url"  # written by knowledge-agent.py install; not a secret
 
 

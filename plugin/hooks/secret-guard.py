@@ -14,12 +14,13 @@ Replacement; app write_to_file CodeContent, replace_file_content ReplacementCont
 """
 import hashlib
 import json
+import os
 import re
 import sys
 from pathlib import Path
 
 HASHES = Path.home() / ".config/knowledge-server/secret-hashes.json"
-PENDING = Path.home() / ".knowledge" / "pending-hints.txt"  # agy: said at the next turn by agent_hooks.py hints
+PENDING = Path(os.environ.get("KNOWLEDGE_HOME") or Path.home() / ".knowledge") / "pending-hints.txt"  # agy: said at the next turn by agent_hooks.py hints
 TOKEN = re.compile(r"[^\s`'\"<>()\[\]{},;|*]+")
 # agy args that are not new file text: old text, paths, and prose about the edit ("remove the password x")
 OLD = {"Target", "TargetContent", "Path", "TargetFile", "AbsolutePath", "Instruction", "Description"}

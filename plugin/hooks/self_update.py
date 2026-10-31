@@ -23,7 +23,7 @@ import urllib.request
 from pathlib import Path
 
 PLUGIN = Path(__file__).resolve().parent.parent
-STATE = Path.home() / ".knowledge" / "auto-update.json"  # next to the offline copy (memory_mirror.py)
+STATE = Path(os.environ.get("KNOWLEDGE_HOME") or Path.home() / ".knowledge") / "auto-update.json"  # next to the offline copy (memory_mirror.py)
 LATEST = os.environ.get("KNOWLEDGE_PLUGIN_LATEST",
                         "https://raw.githubusercontent.com/To0wnn/knowledge/main/plugin/.claude-plugin/plugin.json")
 AGY_PLUGIN = os.environ.get("KNOWLEDGE_AGY_PLUGIN", "https://github.com/To0wnn/knowledge/tree/main/plugin")

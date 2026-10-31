@@ -15,8 +15,8 @@ import traceback
 import urllib.request
 from pathlib import Path
 
-ERRORS = Path.home() / ".knowledge" / "hook-errors.jsonl"
-SENT = Path.home() / ".knowledge" / "hook-status.json"  # {"at": last try, "sent": "at" of the newest error sent}
+ERRORS = Path(os.environ.get("KNOWLEDGE_HOME") or Path.home() / ".knowledge") / "hook-errors.jsonl"
+SENT = Path(os.environ.get("KNOWLEDGE_HOME") or Path.home() / ".knowledge") / "hook-status.json"  # {"at": last try, "sent": "at" of the newest error sent}
 SEND_EVERY = 120  # seconds between two sends: a turn costs one small request at most this often
 KEEP = 100  # lines kept in the local file
 

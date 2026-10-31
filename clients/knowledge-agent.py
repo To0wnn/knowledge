@@ -644,7 +644,7 @@ def companion_steps(system: str, key: str = "<key>") -> list:
   <key>EnvironmentVariables</key><dict><key>PATH</key>{arg(os.environ.get("PATH", ""))}</dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
-  <key>StandardErrorPath</key>{arg(str(Path.home() / ".knowledge" / "companion" / "serve.log"))}
+  <key>StandardErrorPath</key>{arg(str(Path(os.environ.get("KNOWLEDGE_HOME") or Path.home() / ".knowledge") / "companion" / "serve.log"))}
 </dict></plist>
 """
         opener = f'exec open -na "{browser}" --args "--app={page}"' if browser else f'exec open "{page}"'

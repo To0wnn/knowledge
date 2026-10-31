@@ -45,7 +45,8 @@ PORT = int(os.environ.get("KNOWLEDGE_COMPANION_PORT") or 47321)  # fixed: the we
 SELF = f"http://127.0.0.1:{PORT}"
 STATIC = HOOKS.parent / "companion" / "static"
 HOME = Path.home()
-STATE = HOME / ".knowledge" / "companion"
+KN_HOME = token_store.KN_HOME  # KNOWLEDGE_HOME relocates it (tests)
+STATE = KN_HOME / "companion"
 BACKUPS = HOME / "backups" / "knowledge-companion"
 WAKE_AGAIN = 30 * 60  # the server calls a woken task stalled after the same time
 START_DELAY = int(os.environ.get("KNOWLEDGE_COMPANION_START_DELAY") or 120)  # seconds a task is ready before this pc starts a new session for it: a pc with an open session wins
@@ -811,7 +812,7 @@ def one_round() -> dict:
 def own_errors(agent: str) -> list:
     out = []
     try:
-        for ln in (HOME / ".knowledge" / "hook-errors.jsonl").read_text(encoding="utf-8", errors="replace").splitlines()[-100:]:
+        for ln in (KN_HOME / "hook-errors.jsonl").read_text(encoding="utf-8", errors="replace").splitlines()[-100:]:
             e = json.loads(ln)
             if re.search(rf"\b{agent}\b", e.get("hook", "")):
                 out.append(e)

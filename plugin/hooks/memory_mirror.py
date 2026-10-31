@@ -26,7 +26,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-MIRROR = Path(os.environ.get("KNOWLEDGE_MIRROR") or Path.home() / ".knowledge" / "mirror")
+MIRROR = Path(os.environ.get("KNOWLEDGE_MIRROR") or Path(os.environ.get("KNOWLEDGE_HOME") or Path.home() / ".knowledge") / "mirror")
 STATE, LOCK = MIRROR / ".state.json", MIRROR / ".lock"
 SKILLS = Path(os.environ.get("KNOWLEDGE_SKILLS") or Path.home() / ".claude" / "skills")
 MAX_REMOVALS = 5  # more skills or memos gone from the server in one sync looks like an accident: hold and say so

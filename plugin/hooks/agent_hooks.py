@@ -45,6 +45,7 @@ import self_update  # noqa: E402  (auto-update of this plugin, the counterpart o
 import limits  # noqa: E402  (the usage-limit ladder, shared with the Claude plugin)
 import hook_status  # noqa: E402  (failures of these hooks, reported to the server)
 URL = token_store.url()
+KN_HOME = token_store.KN_HOME
 AGENTS = ("agy", "codex")
 SETUP = "plugin"  # clients/knowledge-agent.py sets "script": the setup without a plugin updates itself another way
 
@@ -94,7 +95,7 @@ def project_query(cwd: str) -> dict:
     return {"project": linked, "linked": "1"} if linked else {"project": cwd}
 
 
-AGENTS_DIR = Path.home() / ".knowledge" / "agents"  # who runs on this machine and how to wake it
+AGENTS_DIR = KN_HOME / "agents"  # who runs on this machine and how to wake it
 WAKE_WITHIN = 2 * 86400  # a session not seen this long is not woken
 WAKE_TOOLS = re.compile(r"knowledge_(edit|write|new_memo)")  # the tools that can add a task line
 
@@ -148,7 +149,7 @@ def new_tasks(agent: str, tok: str, hook: dict, now=None, wake: bool = False, de
     now = time.time() if now is None else now
     sid = hook.get("session_id") or hook.get("conversationId") or hook.get("cwd") or os.getcwd()
     # shortcut: two agy sessions without a conversationId in one folder share what they have seen.
-    seen_dir = Path.home() / ".knowledge" / "tasks-seen"
+    seen_dir = KN_HOME / "tasks-seen"
     seen_file = seen_dir / (hashlib.sha256(f"{agent}:{sid}".encode()).hexdigest()[:16] + ".json")
     try:
         seen = json.loads(seen_file.read_text(encoding="utf-8"))
@@ -486,7 +487,7 @@ def send_status(agent: str, tok: str):
         pass
 
 
-BACKGROUND = Path.home() / ".knowledge" / "background.txt"  # what a background hook printed, said at the next turn
+BACKGROUND = KN_HOME / "background.txt"  # what a background hook printed, said at the next turn
 
 
 def start_hook(script: str, tok: str, stdin: str):
@@ -574,7 +575,7 @@ def mcp(tok: str):
 def hints(tok: str):
     """agy: the hint docs-sync left behind and tasks handed to agy meanwhile, injected once before the next model turn;
     {} when there is none."""
-    pending = Path.home() / ".knowledge" / "pending-hints.txt"
+    pending = KN_HOME / "pending-hints.txt"
     try:
         hook = json.loads(sys.stdin.read() or "{}")
         conv = hook.get("conversationId") or ""
