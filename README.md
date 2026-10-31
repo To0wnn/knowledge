@@ -47,8 +47,13 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   condition is met and its writer is trusted (per project on the admin page; by default the project's owner and their
   tokens, admins and tokens an admin made), otherwise the owner or an admin approves it in the Tasks tab. Only tasks
   that may start reach an agent as "start now" (`/tasks`, the wake, `GET /tasks/ready`); the others are listed with the
-  reason. `POST /tasks/woken` records a wake: a woken task nobody claims within 30 minutes shows as stalled and sends
-  one Matrix message.
+  reason. One task is started on one machine only: the first device to take it holds a 30-minute lease
+  (`state/task_leases.json`). `POST /tasks/woken` takes the lease (200 `{"lease"}`, or 409 `{"held_by"}` when another
+  device holds it), `GET /tasks/ready` leaves out tasks another device holds, and the per-turn `/tasks` takes the
+  lease for the asking session: every other device's sessions hear "<ID> is already being handled by <device>; do not
+  start it". A lease ends when it runs out or the line gets its claim marker. `[<Owner>@<device>, <ID>]` pins a task to
+  one device (the token's name, any case); others see it as reserved. A woken task nobody claims within 30 minutes
+  shows as stalled and sends one Matrix message.
 - **Hook failures:** when one of the plugin's own hooks crashes or exits with an error, the device keeps it in
   `~/.knowledge/hook-errors.jsonl` and the per-turn hook reports new ones with `POST /status` (at most every two
   minutes, never holding up the turn); the tasks tab shows the last failure per device and agent.
@@ -61,8 +66,12 @@ checks them against a few house rules, so a growing pile of agent memory stays f
 - **Companion (this pc):** `knowledge-agent.py serve` (or `agent_hooks.py serve`, alias `companion`) runs a small
   local service on `127.0.0.1:47321` only. Every minute it asks `GET /tasks/ready` and wakes the newest open session of
   the task's agent and project with the same wake code, or, when allowed per agent in its settings, starts one in the
-  project's folder (Codex `codex exec`; Claude Code and agy in a new console on Windows, in tmux elsewhere); each wake is
-  reported with `POST /tasks/woken`, and a task is not woken twice within 30 minutes; a session is started for a task
+  project's folder (Codex `codex exec`; Claude Code and agy in a new console on Windows, in tmux elsewhere; with the
+  agent's YOLO switch on, also its own flag: `--dangerously-skip-permissions`, Codex
+  `--dangerously-bypass-approvals-and-sandbox`). Before each wake it takes the task with `POST /tasks/woken` and wakes
+  only on 200 (409: "held by <device>" in its activity log); it starts a new session only after the task has been ready
+  for two minutes, so a pc with an open session wins, and never for a project without a linked folder here. A task is
+  not woken twice within 30 minutes; a session is started for a task
   once, never again while it stays unclaimed (it shows as stalled). A Claude Code session counts as open only while its
   waiting hook runs. On request it trusts the
   knowledge hooks the agents' own way (Codex: `codex app-server` `hooks/list` + `config/batchWrite`, again after every

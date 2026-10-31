@@ -157,6 +157,72 @@ def tasks_contract(tmp, ck, fr, ver, raw):
     http("POST", "/invalidate", {"paths": ["garden-memory/project_legacy.md"]}, token="watch-token")
 
 
+def lease_contract(tmp, ck, fr, raw):
+    """Two devices never both start one task: the first to take it holds a lease; the other is told to leave it."""
+    import threading
+    path, ui = "garden-memory/project_tasks.md", {**ck, "X-Knowledge-UI": "1", "Content-Type": "application/json"}
+    fr2 = json.loads(raw("POST", "/ui/api/admin/token", json.dumps({"name": "friend-lap", "write": True,
+                                                                     "roots": ["garden", "garden-memory"]}), ui)[2])["token"]
+    lines = ("- open until 2099-01-01 [Codex, LS-1] from Claude, start now: lease me\n"
+             "- open until 2099-01-01 [Codex@FRIEND-PC, PIN-1] from Claude, start now: only on the pc\n"
+             "- open until 2099-01-01 [Codex, LT-1] from Claude, start now: per turn\n")
+    assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": lines + "## Keuzes"}, fr)[0]
+    leases = lambda: json.loads((tmp / "task_leases.json").read_text())["garden"]
+    ready = lambda tok: {t["id"]: t for t in json.loads(http("GET", "/tasks/ready", token=tok)[1])["tasks"]}
+    assert ready(fr)["PIN-1"]["agent"] == "codex" and "PIN-1" not in ready(fr2)  # Codex@<device> is still Codex's
+    # Both devices wake for LS-1 at the same moment: exactly one wins.
+    got = {}
+    woke = lambda tok, sid: got.__setitem__(tok, http("POST", "/tasks/woken", {"project": "garden", "id": "LS-1", "agent": "codex", "session": sid}, token=tok))
+    ts = [threading.Thread(target=woke, args=a) for a in ((fr, "pc-s"), (fr2, "lap-s"))]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    codes = sorted(st for st, _ in got.values())
+    assert codes == [200, 409], got
+    win, lose = (fr, fr2) if got[fr][0] == 200 else (fr2, fr)
+    held = json.loads(got[lose][1])["held_by"]
+    assert held["device"] == ("friend-pc" if win == fr else "friend-lap") and held["until"] > time.time(), held
+    assert "LS-1" not in ready(lose) and ready(win)["LS-1"]["mine"] is True, ready(win)
+    assert json.loads((tmp / "task_wakes.json").read_text())["garden"]["LS-1"]["device"] == held["device"]  # the winner's wake only
+    # The lease runs out: the other device gets it.
+    l = json.loads((tmp / "task_leases.json").read_text()); l["garden"]["LS-1"]["until"] = int(time.time()) - 5
+    (tmp / "task_leases.json").write_text(json.dumps(l))
+    assert http("POST", "/tasks/woken", {"project": "garden", "id": "LS-1", "agent": "codex", "session": "x"}, token=lose)[0] == 200
+    # A pinned line: only its device may take it.
+    st, body = http("POST", "/tasks/woken", {"project": "garden", "id": "PIN-1", "agent": "codex", "session": "y"}, token=fr2)
+    assert st == 409 and json.loads(body)["held_by"]["device"] == "FRIEND-PC", body
+    assert http("POST", "/tasks/woken", {"project": "garden", "id": "PIN-1", "agent": "codex", "session": "y"}, token=fr)[0] == 200
+    # Per turn: two sessions on two devices; a wake (claim=0) takes nothing.
+    assert "LT-1" not in leases() and http("GET", "/tasks?project=x&agent=codex&v=2&claim=0&session=w", token=fr2)[0] == 200
+    assert "LT-1" not in leases()
+    beats = {}
+    turn = lambda tok, sid: beats.__setitem__(tok, json.loads(http("GET", f"/tasks?project=x&agent=codex&v=2&session={sid}", token=tok)[1]))
+    ts = [threading.Thread(target=turn, args=a) for a in ((fr, "turn-pc"), (fr2, "turn-lap"))]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    has = {tok: any("LT-1" in x for x in b["tasks"]) for tok, b in beats.items()}
+    assert sorted(has.values()) == [False, True], beats
+    loser = beats[fr if not has[fr] else fr2]
+    note = [n["text"] for n in loser["notices"] if "LT-1" in n["text"]]
+    assert note and "LT-1 is already being handled by" in note[0] and "do not start it, leave it alone" in note[0], loser
+    assert any("LT-1" in x and "[not yet: already being handled by" in x for x in loser["waiting"]), loser["waiting"]
+    pinned = json.loads(http("GET", "/tasks?project=x&agent=codex&v=2&session=turn-lap", token=fr2)[1])
+    assert any("PIN-1 is reserved for FRIEND-PC" in n["text"] for n in pinned["notices"]), pinned
+    plain = http("GET", "/tasks?project=x&agent=codex&session=turn-lap", token=fr2)[1]
+    assert "PIN-1 is reserved for FRIEND-PC; do not start it" in plain and "[Codex@FRIEND-PC, PIN-1]" not in plain, plain
+    start = http("GET", "/context/1?project=x&agent=codex", token=fr2)[1]
+    assert "[not yet: reserved for FRIEND-PC]" in start, start[:1500]
+    # A claim marker ends the lease (the background check drops it).
+    assert not call("knowledge_edit", {"path": path, "old_string": "per turn", "new_string": "per turn (claimed Codex, 2026-10-31)"}, fr)[0]
+    end = time.time() + 10
+    while "LT-1" in leases() and time.time() < end:
+        time.sleep(0.3)
+    assert "LT-1" not in leases(), leases()
+    text = (tmp / "projects/garden/memory/project_tasks.md").read_text()
+    for line in [ln for ln in text.splitlines() if any(i in ln for i in ("LS-1", "PIN-1", "LT-1"))]:
+        call("knowledge_edit", {"path": path, "old_string": line + "\n", "new_string": ""})
+    (tmp / "task_leases.json").write_text("{}")  # the later checks start without leases
+
+
 def main():
     # Every command block on the help page must paste in one go: zsh runs a "# ..." line as a command (help 23 Oct 2026).
     import html as _html
@@ -261,7 +327,7 @@ def main():
            "KNOWLEDGE_LANGUAGE": "nl", "KNOWLEDGE_BUILTIN_PROJECTS": "homelab,anpitek,trade",
            "KNOWLEDGE_BIND": "127.0.0.1", "KNOWLEDGE_RESCAN": "3600",
            "KNOWLEDGE_GITHUB_API": ghurl, "KNOWLEDGE_GITHUB_RAW": ghurl + "/raw", "KNOWLEDGE_EXTERNAL_SLEEP": "3600", "KNOWLEDGE_INSTANCE": "blue", "KNOWLEDGE_PLUGIN_GRACE": "0",
-           "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_RERANK_MODEL": "test", "KNOWLEDGE_DUPES_EVERY": "1", "KNOWLEDGE_DUPES_DELAY": "0", "KNOWLEDGE_DUPES_DEBOUNCE": "0", "KNOWLEDGE_WATCH_DEVICE": "laptop", "KNOWLEDGE_TASK_STALLED": "1", "KNOWLEDGE_TASK_CHECK": "1", "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}"}
+           "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_RERANK_MODEL": "test", "KNOWLEDGE_DUPES_EVERY": "1", "KNOWLEDGE_DUPES_DELAY": "0", "KNOWLEDGE_DUPES_DEBOUNCE": "0", "KNOWLEDGE_WATCH_DEVICE": "laptop", "KNOWLEDGE_TASK_STALLED": "1", "KNOWLEDGE_TASK_LEASE": "600", "KNOWLEDGE_TASK_CHECK": "1", "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}"}
     proc = subprocess.Popen([sys.executable, str(Path(__file__).with_name("server.py"))], env=env)
     try:
         for _ in range(50):
@@ -717,6 +783,7 @@ def main():
         left = call("knowledge_read", {"path": "garden-memory/project_tasks.md"})[1]
         assert "CX-0-done" not in left and "CX-1] from Claude, start now: prune" in left, left
         tasks_contract(tmp, ck, fr, ver, raw)
+        lease_contract(tmp, ck, fr, raw)
         # The plugin version: recorded per token and agent, a device behind the newest hears it at session start.
         parts = lambda q: "".join(http("GET", f"/context/{n}?project=x&{q}", token=fr)[1] for n in range(1, 6))
         assert "runs 0.9.10 for codex, the newest is 0.9.16" in parts("agent=codex&plugin=0.9.10"), parts("agent=codex&plugin=0.9.10")[-600:]

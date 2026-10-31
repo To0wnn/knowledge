@@ -823,6 +823,18 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         check(len(queued) == 1 and queued[0][2:4] == ["--thread", "cmp-cx"] and "CMP-CODEX" in queued[0][-1] and "CMP-GEMINI" not in queued[0][-1],
               "companion: a ready Codex task wakes the open Codex session through codex queue", body[:400] + str(queued)[:400])
         started = lambda: [c for c in recorded() if c.get("argv", [""])[0] == ("agy" if WIN else "tmux")]
+        time.sleep(1)
+        check(not started() and "waiting 120 s" in out.get("waiting", {}).get("garden/CMP-GEMINI", ""),
+              "companion: no open agy session: it waits START_DELAY before starting one (a pc with a session wins)", body[:600])
+        stf = home / ".knowledge" / "companion" / "state.json"
+        sj = json.loads(stf.read_text(encoding="utf-8"))
+        sj["first_seen"]["garden/CMP-GEMINI"] = time.time() - 130
+        stf.write_text(json.dumps(sj), encoding="utf-8")
+        yolo_file = home / ".knowledge" / "companion" / "yolo.json"
+        yolo_before = yolo_file.read_text(encoding="utf-8") if yolo_file.exists() else None
+        yolo_file.write_text(json.dumps({"agy": {"on": True}}), encoding="utf-8")  # as the page leaves it, minus the restore data
+        call("POST", "/local/api/tick", {})
+        yolo_file.write_text(yolo_before, encoding="utf-8") if yolo_before is not None else yolo_file.unlink()
         wait_for(lambda: started(), 15)
         st_agy = started()
         argv = st_agy[0]["argv"] if st_agy else []
@@ -832,6 +844,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
               and (WIN and st_agy[0]["cwd"] == str(project) or not WIN and argv[1:3] == ["new-session", "-d"] and str(project) in argv),
               "companion: no agy session, start allowed: one new agy session in the project folder gets its ready tasks",
               json.dumps(st_agy)[:600] + " " + body[:600])
+        check("--dangerously-skip-permissions" in argv, "companion: YOLO on: the new agy session gets its own flag too", json.dumps(argv)[:400])
         check(out.get("waiting", {}).get("garden/CMP-CLAUDE", "").startswith("No open session; starting one is off"),
               "companion: no Claude session and starting is off: the task waits and says why", body[:600])
         wakes = json.loads((tmp / "task_wakes.json").read_text(encoding="utf-8")).get("garden", {})
@@ -858,7 +871,6 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         call("POST", "/local/api/tick", {})
         check((agents_dir / f"claude-{short('cl-1')}.poke").exists(), "companion: a Claude session whose hook waits is poked")
         # A session started for a task is not started again when the task stays unclaimed; it shows as stalled.
-        stf = home / ".knowledge" / "companion" / "state.json"
         sj = json.loads(stf.read_text(encoding="utf-8"))
         sj["woken"]["garden/CMP-GEMINI"].update(at=time.time() - 1900, since=time.time() - 1900)
         stf.write_text(json.dumps(sj), encoding="utf-8")
@@ -899,6 +911,39 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         call("POST", "/local/api/tick", {})
         sessions = json.loads(http("GET", "/ui/api/tasks", headers=admin)[1])["sessions"]
         check(json.dumps({s["agent"]: s.get("errors", []) for s in sessions if s["device"] == "friend-pc"}) == before, "companion: a logged failure is reported once")
+        # Another pc took the task between /tasks/ready and the wake (the server answers 409): no wake, said once.
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        class Held(BaseHTTPRequestHandler):
+            def answer(self, code, data):
+                body = json.dumps(data).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):
+                self.answer(200, {"tasks": [{"project": "garden", "path": "garden-memory/x.md", "id": "CMP-HELD", "owner": "Codex",
+                                             "device": "", "agent": "codex", "from": "Claude", "start": "now", "text": "held", "mine": False}]}
+                            if self.path.startswith("/tasks/ready") else {})
+
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                self.answer(409, {"held_by": {"device": "other-pc", "session": "s", "until": time.time() + 600}} if self.path == "/tasks/woken" else {})
+
+            def log_message(self, *a):
+                pass
+        fake = ThreadingHTTPServer(("127.0.0.1", 0), Held)
+        threading.Thread(target=fake.serve_forever, daemon=True).start()
+        n = len(recorded())
+        code, out, err = run([sys.executable, str(hooks / "companion.py"), "tick"], "",
+                             {**env, "KNOWLEDGE_URL": f"http://127.0.0.1:{fake.server_address[1]}"}, timeout=60)
+        fake.shutdown()
+        activity = json.loads((home / ".knowledge" / "companion" / "activity.json").read_text(encoding="utf-8"))
+        check(code == 0 and not [c for c in recorded()[n:] if c.get("argv", [""])[:2] == ["codex", "queue"]]
+              and "Held by other-pc" in out and any("held by other-pc" in a["text"] for a in activity),
+              "companion: a 409 from /tasks/woken (another pc holds the task) wakes nothing and logs who holds it", out[-400:] + err[-400:])
         # A plugin update (a new cache folder) makes the companion trust Codex's hooks again by itself.
         manifest = home / ".codex" / "plugins" / "cache" / "knowledge" / "knowledge" / "9.9.9" / ".codex-plugin" / "plugin.json"
         manifest.parent.mkdir(parents=True)

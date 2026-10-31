@@ -1594,13 +1594,14 @@ TASK_START = re.compile(r"\s*(?:\([^)]*\)\s*)*from\s+([^,:]+?)\s*,\s*start\s+(no
                         r"|20\d\d-\d\d-\d\d|\d{1,2} [a-z]+ 20\d\d)\s*(?:\([^)]*\)\s*)*:", re.I)
 DONE_LINE = re.compile(r"^\s*-\s*\[([^,\]]+),\s*([^\]]+-done)\]:?\s*(.*)$", re.I)  # a result handed back, no date
 TASK_FORMAT = ("'- open until <date> [<Owner>, <ID>] from <Requester>, start <now | after <ID> | <date> | after approval>: "
-               "<what>'")
+               "<what>' (<Owner>@<device> lets only that device start it)")
 HAND_BACK = ("When another agent handed it to you and waits on the result, hand it back with a line for that agent: "
              "'[<requester>, <ID>-done]: <result>; <commit or path>'. A new task for another agent: " + TASK_FORMAT + ".")
 AGENT_OWNERS = {"claude": ("claude",), "codex": ("codex",), "agy": ("gemini", "agy", "antigravity")}  # names used in task lines
 TASK_CHARS = 240  # the memo holds the full text; the start context only has to make the agent look
 STALLED_AFTER = int(os.environ.get("KNOWLEDGE_TASK_STALLED", 30 * 60))  # a woken task nobody claimed this long is stalled
-TASK_AUTHORS, TASK_APPROVALS, TASK_WAKES = (AUDIT.parent / f"task_{n}.json" for n in ("authors", "approvals", "wakes"))
+TASK_AUTHORS, TASK_APPROVALS, TASK_WAKES, TASK_LEASES = (AUDIT.parent / f"task_{n}.json" for n in ("authors", "approvals", "wakes", "leases"))
+LEASE = int(os.environ.get("KNOWLEDGE_TASK_LEASE", STALLED_AFTER))  # a device that took a task holds it this long without a claim marker; each ask of its session renews it
 TASK_WRITERS = ADMIN_DIR / "task_writers.json"  # project -> trusted writers (token names, users); absent = the default
 _task_lock = threading.Lock()
 
@@ -1610,9 +1611,9 @@ def parse_task(line: str) -> dict | None:
     other line. A line without from/start is legacy and starts now."""
     if not ((m := kb_lint.OPEN_DUE.search(line)) and (o := TASK_OWNER.match(m.group(2)))):
         return None
-    rest = m.group(2)[o.end():]
+    rest, (owner, _, pin) = m.group(2)[o.end():], o.group(1).partition("@")  # [Claude@<device>, ID]: only that device
     f = TASK_START.match(rest)
-    return {"owner": o.group(1).strip(), "id": o.group(2).strip(), "due": kb_lint.latest_date(m.group(1)),
+    return {"owner": owner.strip(), "device": pin.strip(), "id": o.group(2).strip(), "due": kb_lint.latest_date(m.group(1)),
             "from": f.group(1).strip() if f else "", "start": " ".join(f.group(2).split()) if f else "now",
             "legacy": not f, "claimed": bool(re.search(r"\((?:claimed|bezig)\b", line, re.I)),
             "text": (rest[f.end():] if f else rest).lstrip(": ").strip(), "body": line.strip().removeprefix("- ")}
@@ -1624,6 +1625,7 @@ assert parse_task("- open until 2099-01-01 [Codex, K-2] from Claude, start after
 assert parse_task("- open until 2099-01-01 [Codex, K-3] (claimed Codex, 2026-10-31) from Ann, start 2 nov 2026: x")["from"] == "Ann"
 assert parse_task("- open until 2099-01-01 [Codex, K-4] from Ann, start after approval: x")["start"] == "after approval"
 assert parse_task("- open until 2099-01-01: no owner") is None
+assert (lambda t: (t["owner"], t["device"]))(parse_task("- open until 2099-01-01 [Claude@Lap-1, P-1] from Ann, start now: x")) == ("Claude", "Lap-1")
 
 
 def project_of(rel: str) -> str:
@@ -1638,7 +1640,8 @@ def task_ids(text: str) -> set[str]:
 def task_sig(t: dict) -> str:
     """What a task asks, as a short hash: owner, requester, start and text. A claim marker or a new due date leave it."""
     what = re.sub(r"\((?:claimed|bezig)\b[^)]*\)", "", t["text"], flags=re.I)
-    return hashlib.sha256("\n".join((t["owner"].lower(), t["from"], t["start"].lower(), " ".join(what.split()))).encode()).hexdigest()[:16]
+    owner = t["owner"] + ("@" + t["device"] if t.get("device") else "")  # pinning to another device is another task
+    return hashlib.sha256("\n".join((owner.lower(), t["from"], t["start"].lower(), " ".join(what.split()))).encode()).hexdigest()[:16]
 
 
 def added_tasks(rel: str, before: str, after: str, changed: bool = False) -> list[dict]:
@@ -1734,7 +1737,56 @@ def project_tasks(project: str) -> tuple[list[dict], list[dict]]:
 
 
 def owner_agent(owner: str) -> str:
-    return next((a for a, names in AGENT_OWNERS.items() if owner.lower() in names), "")
+    owner = owner.partition("@")[0].strip().lower()
+    return next((a for a, names in AGENT_OWNERS.items() if owner in names), "")
+
+
+assert owner_agent("Claude@pc-2") == "claude" and owner_agent("Gemini") == "agy"
+
+
+def lease_holder(t: dict, lease: dict | None, dev: str, now: float) -> dict | None:
+    """Who keeps `dev` from taking task t: the device the line is pinned to, or another device with a valid lease."""
+    if t.get("device") and t["device"].lower() != dev.lower():
+        return {"device": t["device"], "reserved": True}
+    if lease and lease.get("until", 0) >= now and lease.get("device", "").lower() != dev.lower():
+        return {k: lease.get(k) for k in ("device", "session", "until")}
+    return None
+
+
+def held_reason(h: dict) -> str:
+    if h.get("reserved"):
+        return f"reserved for {h['device']}"
+    return f"already being handled by {h['device']} (until {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(h['until']))})"
+
+
+def held_text(tid: str, h: dict) -> str:
+    return f"{tid} is {held_reason(h)}; do not start it, leave it alone."
+
+
+def task_holders(project: str, tasks: list[dict], dev: str) -> dict:
+    """{id: holder} of the startable tasks `dev` may not take now (read only)."""
+    leases, now = read_json(TASK_LEASES, {}).get(project, {}), time.time()
+    return {t["id"]: h for t in tasks if t["startable"] and (h := lease_holder(t, leases.get(t["id"]), dev, now))}
+
+
+def claim_task(project: str, t: dict, agent: str, dev: str, session: str) -> tuple[bool, dict]:
+    """Take task t for this device: (True, lease) when there is no valid lease, or this device holds it already;
+    (False, holder) when another device does or the line is pinned to another one. The state lock makes it atomic,
+    so of two devices asking at once exactly one wins. A lease is renewed only by its own session (or when it has none)."""
+    out = []
+
+    def change(d):
+        leases, now = d.setdefault(project, {}), time.time()
+        cur = leases.get(t["id"])
+        if h := lease_holder(t, cur, dev, now):
+            return out.append((False, h))
+        if cur and cur.get("until", 0) >= now and cur.get("session") not in ("", session):
+            return out.append((True, cur))  # another session of this device holds it: this one may help, not renew
+        mine = cur if cur and cur.get("until", 0) >= now else {"at": int(now)}
+        leases[t["id"]] = new = {**mine, "device": dev, "session": session[:80], "agent": agent, "until": int(now + LEASE)}
+        out.append((True, new))
+    update_state(TASK_LEASES, change)
+    return out[0]
 
 
 def task_item(t: dict, mem: str) -> str:
@@ -1755,11 +1807,16 @@ def task_memos(mem: str) -> dict[str, str]:
             and not r.startswith(mem + "/sessions/") and not is_archive(r) and not OFFLINE_COPY.search(r)}
 
 
-def task_items(project: str, names: tuple) -> tuple[list[str], list[str], list[str]]:
+def task_items(project: str, names: tuple, held: dict | None = None, tasks: list | None = None) -> tuple[list[str], list[str], list[str]]:
     """Task lines as shortened items: (those of the owners in `names` that may start now, VOORRANG first, then due date;
-    theirs that may not start yet; all others)."""
+    theirs that may not start yet; all others). `held`: {id: holder} of tasks this device may not take (default: the
+    leases and pins as they are, for this request's device)."""
     mem, mine, waiting, others = PROJECTS[project][1], [], [], []
-    for t in project_tasks(project)[0]:
+    tasks = project_tasks(project)[0] if tasks is None else tasks
+    held = task_holders(project, tasks, device.get().get("name", "")) if held is None else held
+    for t in tasks:
+        if t["startable"] and (h := held.get(t["id"])):
+            t = {**t, "startable": False, "waiting_reason": held_reason(h)}
         item = task_item(t, mem)
         if t["owner"].lower() not in names:
             others.append(item)
@@ -2719,16 +2776,33 @@ async def tasks_route(request: Request):
     mem, q = PROJECTS[project][1], request.query_params
     dev = device.get()
     mark_client(dev.get("name", ""), q.get("agent", ""), q.get("session", ""), project, q.get("wake") == "1")
-    # only tasks that may start now: the plugin says each new one as "start it right away" and wakes sessions for it
-    items, waiting, _ = await asyncio.to_thread(task_items, project, AGENT_OWNERS.get(q.get("agent", ""), ()))
-    if q.get("v") != "2":  # plugins up to 0.9.26: the task lines only
-        return PlainTextResponse("\n".join(items))
-    # v2: the server steers every turn, also of a resumed session that never ran its start hooks
-    # claim=0: another agent asks on this session's behalf (a wake) and passes on tasks only
+    # claim=0: another agent asks on this session's behalf (a wake) and passes on tasks only, taking no lease
     claim, key = q.get("claim") != "0", (dev.get("name", ""), project)
+    agent, names = q.get("agent", ""), AGENT_OWNERS.get(q.get("agent", ""), ())
+
+    def leased():
+        """This session's startable tasks: each one it may take is leased to this device; the others are held."""
+        tasks = project_tasks(project)[0]
+        if not claim:
+            return tasks, task_holders(project, tasks, key[0])
+        held = {}
+        for t in tasks:
+            if t["startable"] and t["owner"].lower() in names:
+                ok, h = claim_task(project, t, agent, key[0], q.get("session", ""))
+                if not ok:
+                    held[t["id"]] = h
+        return tasks, held
+    tasks, held = await asyncio.to_thread(leased)
+    # only tasks that may start now: the plugin says each new one as "start it right away" and wakes sessions for it
+    items, waiting, _ = await asyncio.to_thread(task_items, project, names, held, tasks)
+    told = [{"id": f"held-{project}-{i}-{h['device']}", "text": "knowledge: " + held_text(i, h)}
+            for i, h in held.items() if any(t["id"] == i and t["owner"].lower() in names for t in tasks)]
+    if q.get("v") != "2":  # plugins up to 0.9.26: the task lines only
+        return PlainTextResponse("\n".join(items + [n["text"] for n in told]))
+    # v2: the server steers every turn, also of a resumed session that never ran its start hooks
     behind = await asyncio.to_thread(plugin_notice, q.get("agent", ""), v) if (v := q.get("plugin", "")) else ""
     # nothing awaited from here on: what is handed out below reaches the client in this answer
-    notices = claim_notices(*key, f"{q.get('agent', '')} {q.get('session', '')}"[:100]) if claim else []
+    notices = claim_notices(*key, f"{q.get('agent', '')} {q.get('session', '')}"[:100]) + told if claim else []
     if behind:  # each agent its own plugin, so not claimed
         notices.append({"id": "plugin-" + (plugin_latest() or ("", 0))[0], "text": behind})
     sync = claim and project not in BUILTIN_PROJECTS and bool(dev.get("write")) \
@@ -2740,20 +2814,25 @@ async def tasks_route(request: Request):
 
 @server.custom_route("/tasks/ready", methods=["GET"])
 async def tasks_ready_route(request: Request):
-    """Every task an agent may start now in this token's projects, for the companion that wakes agents."""
-    out = []
+    """Every task an agent may start now in this token's projects, for the companion that wakes agents; a task another
+    device holds (lease or pin) is left out, `mine` says this device holds its lease."""
+    out, dev, now = [], device.get().get("name", ""), time.time()
     for p, (_, mem) in list(PROJECTS.items()):
         if in_scope(mem + "/"):
-            out += [{"project": p, "path": t["path"], "id": t["id"], "owner": t["owner"], "agent": a, "from": t["from"],
-                     "start": t["start"], "text": t["text"]}
-                    for t in (await asyncio.to_thread(project_tasks, p))[0] if t["startable"] and (a := owner_agent(t["owner"]))]
+            tasks, leases = (await asyncio.to_thread(project_tasks, p))[0], read_json(TASK_LEASES, {}).get(p, {})
+            out += [{"project": p, "path": t["path"], "id": t["id"], "owner": t["owner"], "device": t["device"], "agent": a,
+                     "from": t["from"], "start": t["start"], "text": t["text"],
+                     "mine": bool(l := leases.get(t["id"])) and l.get("until", 0) >= now and l.get("device", "").lower() == dev.lower()}
+                    for t in tasks if t["startable"] and (a := owner_agent(t["owner"]))
+                    and not lease_holder(t, leases.get(t["id"]), dev, now)]
     return JSONResponse({"tasks": out})
 
 
 @server.custom_route("/tasks/woken", methods=["POST"])
 async def tasks_woken_route(request: Request):
-    """{"project", "id", "agent", "session"}: a session was woken for this task. Not claimed within STALLED_AFTER, it
-    shows as stalled in the Tasks tab and the admin hears it once."""
+    """{"project", "id", "agent", "session"}: this device wants to wake a session for this task. The first device takes
+    the task's lease (200 {"lease"}), any other gets 409 {"held_by": {device, session, until}} and must not wake.
+    Not claimed (marker) within STALLED_AFTER, it shows as stalled in the Tasks tab and the admin hears it once."""
     try:
         b = await request.json()
         project, tid, agent, session = (str(b.get(k, "")) for k in ("project", "id", "agent", "session"))
@@ -2763,18 +2842,28 @@ async def tasks_woken_route(request: Request):
         return JSONResponse({"error": f"unknown project {project}"}, status_code=404)
     if agent not in AGENT_OWNERS:
         return JSONResponse({"error": f"agent must be one of {sorted(AGENT_OWNERS)}"}, status_code=400)
-    if tid not in {t["id"] for t in (await asyncio.to_thread(project_tasks, project))[0]}:
+    if not (t := next((t for t in (await asyncio.to_thread(project_tasks, project))[0] if t["id"] == tid), None)):
         return JSONResponse({"error": f"no open task {tid} in {project}"}, status_code=404)
     wake = {"agent": agent, "session": session[:80], "device": device.get().get("name", "")}
+    ok, lease = await asyncio.to_thread(claim_task, project, t, agent, wake["device"], wake["session"])
+    if not ok:
+        return JSONResponse({"held_by": lease}, status_code=409)
     # a wake again keeps the first time and whether the admin heard it: else every new try hides the stall
     await asyncio.to_thread(update_state, TASK_WAKES, lambda d: d.setdefault(project, {}).setdefault(
         tid, {"at": int(time.time())}).update(wake))
-    return JSONResponse({"ok": True})
+    return JSONResponse({"ok": True, "lease": lease})
 
 
 def stalled_check() -> int:
     """Woken tasks nobody claimed in time: one Matrix notice each. Wakes of tasks that are gone are forgotten."""
     wakes, told, gone = read_json(TASK_WAKES, {}), [], []
+    now, drop, open_of = time.time(), [], {}  # leases of tasks that are gone, claimed (marker) or expired
+    for project, ids in read_json(TASK_LEASES, {}).items():
+        open_of[project] = {t["id"] for t in project_tasks(project)[0] if not t["claimed"]} if project in PROJECTS else set()
+        drop += [(project, tid) for tid, l in ids.items() if tid not in open_of[project] or l.get("until", 0) < now]
+    if drop:  # an expired lease renewed meanwhile stays
+        update_state(TASK_LEASES, lambda d: [d.get(p, {}).pop(tid, None) for p, tid in drop
+                                             if tid not in open_of.get(p, ()) or d.get(p, {}).get(tid, {}).get("until", 0) < now])
     for project, ids in wakes.items():
         tasks = {t["id"]: t for t in project_tasks(project)[0]} if project in PROJECTS else {}
         for tid, w in ids.items():
