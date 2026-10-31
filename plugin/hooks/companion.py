@@ -44,6 +44,22 @@ import self_update  # noqa: E402
 import token_store  # noqa: E402
 import workers  # noqa: E402  (a fresh agent session per task)
 
+CREATE_NO_WINDOW, DETACHED_PROCESS = 0x08000000, 0x00000008
+
+
+def no_window(flags: int) -> int:
+    """Windows creation flags for a child of the companion: under pythonw it has no console, so every console program
+    it starts (git, tasklist, codex, agy, a status line) would open a window of its own."""
+    return flags if flags & DETACHED_PROCESS else flags | CREATE_NO_WINDOW
+
+
+if os.name == "nt":  # every subprocess of this process, also those of the modules it imports (self_update, limits)
+    _popen_init = subprocess.Popen.__init__
+
+    def _popen_no_window(self, *args, creationflags=0, **kw):
+        _popen_init(self, *args, creationflags=no_window(creationflags), **kw)
+    subprocess.Popen.__init__ = _popen_no_window
+
 PORT = int(os.environ.get("KNOWLEDGE_COMPANION_PORT") or 47321)  # fixed: the web UI looks for exactly this port
 SELF = f"http://127.0.0.1:{PORT}"
 STATIC = HOOKS.parent / "companion" / "static"
@@ -1234,6 +1250,7 @@ def main(argv: list):
         d = {"a": 1}
         assert json_set(d, ("p", "m"), "b") == MISSING and d == {"a": 1, "p": {"m": "b"}}
         assert json_set(d, ("p", "m"), MISSING) == "b" and d == {"a": 1, "p": {}}
+        assert no_window(0) == CREATE_NO_WINDOW and no_window(0x200) == 0x200 | CREATE_NO_WINDOW and no_window(DETACHED_PROCESS) == DETACHED_PROCESS
         assert ours({"pluginId": "knowledge@knowledge"}) and not ours({"pluginId": "other@x", "command": "x.sh"})
         globals()["CLAUDE_JSON"] = HOME / ".knowledge-companion-self-test-missing.json"
         assert untrusted("claude", ["/x"]) == [], "Claude never ran here: nothing to trust, no trust round every minute"
