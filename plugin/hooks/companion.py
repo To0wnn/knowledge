@@ -16,6 +16,7 @@ the agents log themselves. Its page and local API listen on 127.0.0.1:47321 only
   companion.py yolo-off       put back the agents' own settings YOLO changed (uninstall-companion runs this)
 Standard library only; Linux, macOS and Windows.
 """
+import atexit
 import datetime
 import hashlib
 import hmac
@@ -1312,6 +1313,9 @@ def main(argv: list):
             sys.exit(f"YOLO stays on for {', '.join(waits)} until it is closed: close it and run this again")
         print("YOLO is off for every agent; their own settings are back")
     elif "--self-test" in argv:
+        tmp_state = tempfile.mkdtemp()  # the checks log and save: never into this pc's real activity log
+        atexit.register(shutil.rmtree, tmp_state, True)
+        globals()["STATE"] = Path(tmp_state)
         t = '# mine\napproval_policy = "on-request" # keep\n\n[notice]\nother = 1\n\n[projects."/x"]\ntrust_level = "trusted"\n'
         t2, old = toml_set(t, None, "approval_policy", '"never"')
         assert old == '"on-request" # keep' and 'approval_policy = "never"\n' in t2, t2
