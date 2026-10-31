@@ -121,13 +121,24 @@ def start(agent: str, mode: str = "plugin") -> None:
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **kw)
 
 
-def run(agent: str, mode: str = "plugin") -> str | None:
-    """Update when GitHub has a newer version; the line for the next session context, or None (nothing to say)."""
+def record(agent: str, error: str = "") -> None:
+    """The last check and its failure ('' = fine): the session start sends it with the plugin version, so the admin
+    page shows why a device stays behind."""
+    state = load()
+    state[f"{agent}:check"] = {"at": time.time(), "error": error[-200:]}
+    save(state)
+
+
+def run(agent: str, mode: str = "plugin", quiet: bool = False) -> str | None:
+    """Update when GitHub has a newer version; the line to tell, or None (up to date). quiet: a failed version check
+    (offline) says nothing, it is tried again tomorrow; the background run at session start uses that."""
     have = own()
     try:
         want = latest()
-    except Exception:  # offline: try again tomorrow, nothing to report
-        return None
+    except Exception as e:
+        record(agent, f"version check failed: {e}")
+        return None if quiet else f"knowledge plugin: could not check for a new {agent} plugin ({type(e).__name__}: {e})"
+    record(agent)
     if not have or want <= have:
         return None
     new = ".".join(map(str, want))
@@ -140,6 +151,7 @@ def run(agent: str, mode: str = "plugin") -> str | None:
         except (OSError, subprocess.TimeoutExpired) as e:
             ok, out = False, str(e)
         if not ok:
+            record(agent, f"{' '.join(cmd[1:])}: {out[-150:]}")
             return (f"knowledge plugin: the auto-update to {new} failed ({' '.join(cmd[1:])}: {out[-200:]}); "
                     f"update by hand: python3 knowledge-agent.py install {agent}")
     return f"knowledge plugin: updated to {new} for {agent}; it loads at the next start."
@@ -147,7 +159,7 @@ def run(agent: str, mode: str = "plugin") -> str | None:
 
 if __name__ == "__main__":
     if sys.argv[1:2] == ["run"] and sys.argv[2:3] and sys.argv[2] in ("codex", "agy"):
-        msg = run(sys.argv[2], (sys.argv[3:4] or ["plugin"])[0])
+        msg = run(sys.argv[2], (sys.argv[3:4] or ["plugin"])[0], quiet=True)
         if msg:
             state = load()
             state[f"{sys.argv[2]}:result"] = msg
@@ -175,6 +187,9 @@ if __name__ == "__main__":
         script = commands("agy", "script")
         assert script[0][-2] == "sync" and script[1][-2:] == ["install", "agy"], "script setup: sync, then install"
         assert commands("agy")[0][1:3] == ["plugin", "install"] and commands("codex")[1][-1] == "knowledge@knowledge"
+        LATEST = str(STATE.parent / "missing.json")  # the version check fails: said when asked, silent in the background
+        assert run("agy", quiet=True) is None and "version check failed" in load()["agy:check"]["error"]
+        assert "could not check" in run("agy"), "the companion's update says it failed, never 'up to date'"
         print("ok")
     else:
         sys.exit(__doc__)

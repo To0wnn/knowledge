@@ -62,7 +62,9 @@ def context_text(tok: str, cwd: str, agent: str = "") -> str:
     down, the context of the last online session and the offline copy of the memory."""
     key, out = hashlib.sha256(cwd.encode()).hexdigest()[:12], []
     version = ".".join(map(str, self_update.own()))  # the admin page shows who stays behind; the server says so here
-    query = urllib.parse.urlencode({**project_query(cwd), "agent": agent, **({"plugin": version} if version else {}),
+    check = self_update.load().get(f"{agent}:check") or {}  # and why: the last own update check and its failure
+    upd = {"upd_at": int(check.get("at", 0)), "upd_err": check.get("error", "")} if check else {}
+    query = urllib.parse.urlencode({**project_query(cwd), "agent": agent, **({"plugin": version} if version else {}), **upd,
                                     **({"url": "default"} if token_store.url_is_default() else {})})
     for n in range(1, 10):
         q = query
@@ -73,7 +75,7 @@ def context_text(tok: str, cwd: str, agent: str = "") -> str:
         except urllib.error.HTTPError as e:
             if e.code in (401, 403):
                 return {401: "knowledge server: token invalid or revoked (KNOWLEDGE_TOKEN). Shared memory and docs were not loaded.",
-                        403: "knowledge server: only reachable from the home network or WireGuard. Shared memory and docs were not loaded."}[e.code]
+                        403: f"knowledge server: {token_store.unreachable(URL, 'HTTP 403 Forbidden')}. Shared memory and docs were not loaded."}[e.code]
             return memory_mirror.offline_context(key)  # 5xx: the server (or its proxy) is down
         except OSError:
             return memory_mirror.offline_context(key)
@@ -537,8 +539,10 @@ def mcp(tok: str):
             except ValueError:
                 msg = None
             ids = [m["id"] for m in (msg if isinstance(msg, list) else [msg]) if isinstance(m, dict) and m.get("id") is not None]
-            reason = token_store.NO_URL if not URL else {401: "token invalid or revoked (KNOWLEDGE_TOKEN or the keyring)",
-                      403: "only reachable from the home network or WireGuard"}.get(getattr(e, "code", 0), str(e) or type(e).__name__)
+            code = getattr(e, "code", 0)
+            reason = token_store.NO_URL if not URL else "token invalid or revoked (KNOWLEDGE_TOKEN or the keyring)" if code == 401 \
+                else token_store.unreachable(URL, f"HTTP {code}" if code else e) if code == 403 or isinstance(e, OSError) and not code \
+                else f"HTTP {code}" if code else str(e) or type(e).__name__
             replies = [{"jsonrpc": "2.0", "id": i, "error": {"code": -32000, "message": f"knowledge server: {reason}"}} for i in ids]
         for reply in replies:
             out.write(json.dumps(reply).encode() + b"\n")  # one message per line, as stdio needs

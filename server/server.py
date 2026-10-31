@@ -2179,16 +2179,19 @@ def plugin_latest() -> tuple[str, float] | None:
     return (latest["v"], latest["since"]) if latest else None
 
 
-def mark_plugin(name: str, agent: str, v: str, default_url: bool = False):
+def mark_plugin(name: str, agent: str, v: str, default_url: bool = False, checked: float = 0, error: str = ""):
     """Which plugin version each token runs per agent, for the admin page and the weekly report; default_url: the
-    device names no server and leans on the plugin's default (shown so that default can be removed safely)."""
+    device names no server and leans on the plugin's default (shown so that default can be removed safely);
+    checked/error: the plugin's own last update check (Codex, agy) and why it failed, so a stuck device says why."""
     if not name or agent not in AGENT_OWNERS or not plugin_version(v):
         return
     seen = dict(read_json(PLUGIN_SEEN_FILE, {}))
     old = seen.get(name, {}).get(agent, {})
-    if old.get("v") == v and old.get("d", False) == default_url and time.time() - old.get("at", 0) < 600:
+    upd = {**({"c": checked} if checked else {}), **({"e": error[:200]} if error else {})}
+    if old.get("v") == v and old.get("d", False) == default_url and {k: old[k] for k in ("c", "e") if k in old} == upd \
+            and time.time() - old.get("at", 0) < 600:
         return
-    seen[name] = {**seen.get(name, {}), agent: {"v": v, "at": time.time(), **({"d": True} if default_url else {})}}
+    seen[name] = {**seen.get(name, {}), agent: {"v": v, "at": time.time(), **({"d": True} if default_url else {}), **upd}}
     try:
         write_json(PLUGIN_SEEN_FILE, seen)
     except OSError as e:  # bookkeeping only
@@ -2200,7 +2203,8 @@ def plugin_seen(name: str) -> list[dict]:
     seen = read_json(PLUGIN_SEEN_FILE, {})
     newest = plugin_version(seen.get("_latest", {}).get("v", ""))
     return [{"agent": a, "v": s["v"], "at": s["at"], "behind": bool(newest) and plugin_version(s["v"]) < newest,
-             "default_url": s.get("d", False) if plugin_version(s["v"]) >= (0, 10, 7) else None}  # older: not reported
+             "default_url": s.get("d", False) if plugin_version(s["v"]) >= (0, 10, 7) else None,  # older: not reported
+             "checked": s.get("c"), "update_error": s.get("e", "")}
             for a, s in sorted(seen.get(name, {}).items())] if name != "_latest" else []
 
 
@@ -2683,7 +2687,7 @@ class BearerAuth:
             if b"ready=1" in scope.get("query_string", b"") and not instance_ready():
                 return await PlainTextResponse("not ready", status_code=503)(scope, receive, send)
             return await PlainTextResponse("ok")(scope, receive, send)
-        if path.startswith("/ui/static/") or path == "/ui/manifest.webmanifest":  # no data in either
+        if path.startswith("/ui/static/") or path in ("/ui/manifest.webmanifest", "/setup"):  # no data in any of them
             return await self.app(scope, receive, send)
         headers = dict(scope["headers"])
         if scope["method"] not in ("GET", "HEAD"):
@@ -3369,7 +3373,9 @@ async def context_route(request: Request):
                                     bool(device.get().get("webchat")))  # lint + graph: off the loop
     if v := request.query_params.get("plugin", ""):  # every part asks, so all of them split the same way
         if request.path_params["part"] == 1:
-            mark_plugin(device.get().get("name", ""), agent, v, request.query_params.get("url") == "default")
+            q = request.query_params
+            checked = float(q["upd_at"]) if re.fullmatch(r"\d{1,12}(\.\d+)?", q.get("upd_at", "")) else 0
+            mark_plugin(device.get().get("name", ""), agent, v, q.get("url") == "default", checked, q.get("upd_err", ""))
         if behind := await asyncio.to_thread(plugin_notice, agent, v):
             note = "\n\n".join(n for n in (note, behind) if n)
     if note:
@@ -3544,6 +3550,22 @@ async def ui_help_page(request: Request):
     dev = "".join(f"<li>{html.escape(r)}</li>" for r in re.findall(r"^\d+\. (.+)$", dev_rules(), re.M))
     return HTMLResponse(resp.body.decode().replace("<!--HOUSE_RULES-->", rules).replace("<!--DEV_RULES-->", dev),
                         headers={"Cache-Control": "no-cache"})
+
+
+SETUP_CSP = ("default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; "
+             "frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+
+
+@server.custom_route("/setup", methods=["GET"])
+async def setup_page(request: Request):
+    """Public: the help page's setup steps for someone who holds a token but cannot sign in to the web UI. Not under
+    /ui, so a sign-in proxy that guards /ui leaves it alone; without the parts marked PRIVATE (links into the UI, the
+    house rules) and with app.css and theme.js inline, since /ui/static may sit behind that proxy too."""
+    text = re.sub(r"<!--PRIVATE-->.*?<!--/PRIVATE-->", "", (STATIC / "help.html").read_text(), flags=re.S)
+    text = text.replace('<link rel="stylesheet" href="/ui/static/app.css">', f"<style>{(STATIC / 'app.css').read_text()}</style>")
+    text = text.replace('<script src="/ui/static/theme.js"></script>', f"<script>{(STATIC / 'theme.js').read_text()}</script>")
+    return HTMLResponse(text.replace("Knowledge · help", "Knowledge · setup"),
+                        headers={"Cache-Control": "no-cache", "Content-Security-Policy": SETUP_CSP})
 
 
 @server.custom_route("/ui/admin", methods=["GET"])
@@ -4107,7 +4129,11 @@ async def ui_admin_token(request: Request, body: dict):
     audit("admin-token", name)
     if owner:  # a token outlives the sign-in: the admin hears about every new one
         notify(f"Knowledge: {owner} created token {name} ({'read + write' if body.get('write') else 'read'}: {', '.join(roots)}).")
-    return JSONResponse({"ok": True, "name": name, "token": token})
+    # the address the setup needs next to the token: the public one when configured, else the one this page came in on
+    url = PUBLIC_URL or str(request.base_url).rstrip("/")
+    # it goes into a copy-paste install command between quotes: only a plain URL, never what a Host header made up
+    ok = re.fullmatch(r"https?://[A-Za-z0-9.\-]+(:\d+)?(/[A-Za-z0-9._~/-]*)?", url)
+    return JSONResponse({"ok": True, "name": name, "token": token, **({"url": url} if ok else {})})
 
 
 # Installable web app. Colours are the app.css canvas (light; the page's theme-color metas switch per scheme). Public

@@ -51,8 +51,8 @@ footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
 <body class="admin-page">
 <header class="top">
   <h1 class="brand">Knowledge · help</h1>
-  <a class="logout" href="/ui">← Back to the graph</a>
-  <a class="logout" href="/ui/logout">Sign out</a>
+  <!--PRIVATE--><a class="logout" href="/ui">← Back to the graph</a>
+  <a class="logout" href="/ui/logout">Sign out</a><!--/PRIVATE-->
 </header>
 <div class="wrap">
   <div class="eyebrow">MCP · <span class="server-url">this server</span></div>
@@ -77,8 +77,10 @@ footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
       The setup finds Claude Code, Codex and agy on this computer and asks y/n for each (Enter = yes). It asks for the server address (enter <code class="server-url">this page's address</code>) and for the token once (paste it; it is not shown), checks it with the server, keeps it in the keyring, Keychain or Credential Manager, and installs the plugin in the agents you chose.
       <div class="cmd" data-os="linux"><pre>curl -fsSL https://raw.githubusercontent.com/To0wnn/knowledge/main/install.sh | sh</pre><button class="copy" type="button">Copy</button></div>
       <div class="cmd" data-os="windows" hidden><pre>irm https://raw.githubusercontent.com/To0wnn/knowledge/main/install.ps1 | iex</pre><button class="copy" type="button">Copy</button></div></li>
+    <li><b>The companion</b>
+      The setup also starts a small helper at logon, the companion: it listens on this computer only (<code>127.0.0.1:47321</code>), shows what your agents do (menu entry "Knowledge companion"), and runs tasks agents hand each other once you allow workers in its settings. Nothing to do now; <code>knowledge-agent.py uninstall-companion</code> removes it.</li>
     <li><b>Link your project folder</b>
-      In the root of your project, a file <code>.knowledge-project</code> with the project name (for example <code>garden</code>): every session started in that folder gets that project, and its <code>.md</code> files go to the server (code, <code>.venv</code> and hidden folders never). Easiest: ask your agent to link the folder (skill <code>knowledge-init</code>), or:
+      In the root of your project, a file <code>.knowledge-project</code> with the project name (for example <code>garden</code>): every session started in that folder gets that project, and its <code>.md</code> files are mirrored to that project's docs when your token may write it (code, <code>.venv</code> and hidden folders never). Easiest: ask your agent to link the folder (skill <code>knowledge-init</code>), or:
       <div class="cmd" data-os="linux"><pre>echo garden &gt; .knowledge-project</pre><button class="copy" type="button">Copy</button></div>
       <div class="cmd" data-os="windows" hidden><pre>Set-Content .knowledge-project garden</pre><button class="copy" type="button">Copy</button></div></li>
     <li><b>First start</b>
@@ -134,9 +136,10 @@ footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
   <p>A folder name counts only when it is exactly the name of a project (admin page, Projects): <code>~/garden</code> works,
     <code>~/GardenPlanner</code> does not. A new project of your own: create it under Projects, then start the agent in a folder
     with that name.</p>
-  <p><code>.knowledge-project</code> does something else: it marks a folder whose <code>.md</code> files are mirrored to the
-    server as the docs of that project. It only works with a token for one project, and the name in the file must be that
-    project. Your own devices do not need it.</p>
+  <p>The same <code>.knowledge-project</code> also mirrors the folder's <code>.md</code> files to the server as that
+    project's docs, when your token may write that project (a token for one project: the name in the file must be that
+    project). A built-in project, or a device that sees the shared skills (an admin's own), only gets the project picked:
+    there the server's files are the one source of the docs.</p>
 
   <h2>When it does not work</h2>
   <div class="table-wrap"><table>
@@ -156,7 +159,7 @@ footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
     </tbody>
   </table></div>
 
-  <details class="rules-box">
+  <!--PRIVATE--><details class="rules-box">
     <summary>Rules your agent follows</summary>
     <p>Your agent gets these automatically at every start; they are here to read. A project's own commands (check, run,
       deploy) go in its <code>AGENTS.md</code>: ask the agent to run the skill <code>project-setup</code>.</p>
@@ -164,9 +167,9 @@ footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
     <ol class="rules" id="rules"><!--HOUSE_RULES--></ol>
     <h3>Development rules (code)</h3>
     <ol class="rules"><!--DEV_RULES--></ol>
-  </details>
+  </details><!--/PRIVATE-->
 
-  <footer>Source and technical details: <a href="https://github.com/To0wnn/knowledge" target="_blank" rel="noopener">github.com/To0wnn/knowledge</a> (README, sections "A guest project" and "Other agents").</footer>
+  <footer>Source and technical details: <a href="https://github.com/To0wnn/knowledge" target="_blank" rel="noopener">github.com/To0wnn/knowledge</a> (README, section <a href="https://github.com/To0wnn/knowledge#connect-a-client" target="_blank" rel="noopener">Connect a client</a>).</footer>
 </div>
 <script>
 for (const e of document.querySelectorAll('.server-url')) e.textContent = location.origin;

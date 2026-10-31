@@ -335,7 +335,7 @@ def claude_plugin(tok: str, home: Path, project: Path, garden: Path):
         check("Development rules" in start, f"[{mode}] SessionStart: guest context with the development rules", start[:500])
         check("your open tasks (Claude" in start and "CLAUDE-1" in start.split("===== knowledge")[0],
               f"[{mode}] SessionStart: Claude's own task comes first", start[:500])
-        check("unreachable" not in start and "skipped" not in start, f"[{mode}] SessionStart: no error notice", start[:500])
+        check("cannot reach" not in start and "skipped" not in start, f"[{mode}] SessionStart: no error notice", start[:500])
         settings = json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8"))
         check(settings["extraKnownMarketplaces"]["knowledge"].get("autoUpdate") is True
               and ("auto-update is now on" in start) == (mode == "env"),
@@ -2166,6 +2166,66 @@ def relay_errors(home: Path):
     check(ids == [1, 2, 3] and "skipped" not in err, "relay: a non-JSON reply and a batch each get an error, the relay keeps serving", out + err)
 
 
+def honest_errors(tok: str, tmp: Path):
+    """A server that cannot be reached or a proxy that refuses: every client says so in the same generic words (no
+    "home network" hint a friend cannot act on). A failed update check is told when asked (never "up to date") and
+    reaches the admin page with the plugin report."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer  # not 'import http': that hides http() below
+
+    class Refuse(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(403)
+            self.end_headers()
+
+        do_POST = do_GET
+
+        def log_message(self, *a):
+            pass
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Refuse)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    bad, home, hooks = f"http://127.0.0.1:{srv.server_address[1]}", tmp / "Err Usér", CLIENT / "plugin" / "hooks"
+    (home / "proj").mkdir(parents=True)
+    want = f"cannot reach {bad}: HTTP 403"
+    try:
+        start = next(h["command"] for g in json.loads((hooks / "hooks.json").read_text(encoding="utf-8"))["hooks"]["SessionStart"]
+                     for h in g["hooks"] if "context.sh" in h["command"])
+        code, out, err = run([bash(), "-c", start], "{}", user_env(home, CLAUDE_PLUGIN_ROOT=str(CLIENT / "plugin"),
+                             CLAUDE_PLUGIN_OPTION_URL=bad, CLAUDE_PLUGIN_OPTION_TOKEN="x"), cwd=str(home / "proj"))
+        check(code == 0 and want in out and "check the address" in out and "home network" not in out, "claude: a refused server is named, generic words", out + err)
+        env = user_env(home, KNOWLEDGE_URL=bad, KNOWLEDGE_TOKEN="x", KNOWLEDGE_AUTO_UPDATE="0")
+        for agent in ("codex", "agy"):
+            code, out, err = run([sys.executable, "-X", "utf8", str(hooks / "agent_hooks.py"), "context", agent],
+                                 json.dumps({"cwd": str(home / "proj")}), env, cwd=str(home / "proj"))
+            check(code == 0 and want in out and "home network" not in out, f"{agent}: a refused server is named, generic words", out + err)
+        code, out, err = run([sys.executable, "-X", "utf8", str(hooks / "agent_hooks.py"), "mcp"],
+                             json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}) + "\n", env)
+        check(want in out and "home network" not in out, "relay: a refused server is named, generic words", out + err)
+        code, out, err = run([sys.executable, "-X", "utf8", str(CLIENT / "clients" / "knowledge-agent.py"), "install", "codex"], "", env)
+        check(code != 0 and want in out + err and "home network" not in out + err, "setup: a refused server is named, generic words", out + err)
+        code, out, err = run([sys.executable, "-X", "utf8", str(CLIENT / "clients" / "knowledge-agent.py"), "install", "codex"], "",
+                             {**env, "KNOWLEDGE_URL": "http://127.0.0.1:9"})
+        check(code != 0 and "cannot reach http://127.0.0.1:9:" in out + err, "setup: a server that does not answer is named", out + err)
+    finally:
+        srv.shutdown()
+    # The update check fails (GitHub away): the background run stays quiet, asking says so, the server hears why.
+    env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, KNOWLEDGE_PLUGIN_LATEST=str(home / "no-such.json"))
+    code, out, err = run([sys.executable, "-X", "utf8", str(hooks / "self_update.py"), "run", "codex"], "", env)
+    state = json.loads((home / ".knowledge" / "auto-update.json").read_text(encoding="utf-8"))
+    check(code == 0 and "version check failed" in state.get("codex:check", {}).get("error", "") and "codex:result" not in state,
+          "self_update: a failed check is recorded, not told as a result", json.dumps(state) + err)
+    code, out, err = run([sys.executable, "-X", "utf8", "-c", "import self_update; print(self_update.run('codex'))"], "", env, cwd=str(hooks))
+    check("could not check" in out and "up to date" not in out, "self_update: asked, it says the check failed", out + err)
+    for agent in ("codex", "agy"):
+        run([sys.executable, "-X", "utf8", str(hooks / "self_update.py"), "run", agent], "", env)
+        run([sys.executable, "-X", "utf8", str(hooks / "agent_hooks.py"), "context", agent], json.dumps({"cwd": str(home / "proj")}),
+            {**env, "KNOWLEDGE_AUTO_UPDATE": "0"}, cwd=str(home / "proj"))
+    admin = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice"}
+    row = next(t for t in json.loads(http("GET", "/ui/api/admin", headers=admin)[1])["tokens"] if t["name"] == "friend-pc")
+    got = {p["agent"]: p for p in row["plugin"]}
+    check(all("version check failed" in got.get(a, {}).get("update_error", "") and got[a].get("checked") for a in ("codex", "agy")),
+          "codex, agy: the admin page shows the last check and why it failed", json.dumps(row["plugin"])[:600])
+
+
 def real_clis(tok: str, home: Path):
     """The real Claude Code and Codex CLIs, when installed: they accept what we install."""
     claude, codex = shutil.which("claude"), shutil.which("codex")
@@ -2357,6 +2417,7 @@ def main():
         limits_e2e(tok, tmp)
         plugin_versions(tmp)
         relay_errors(home)
+        honest_errors(tok, tmp)
         hook_errors(tmp, project)
         knowledge_home(tok, tmp, project)
         companion_e2e(tok, tmp, project)

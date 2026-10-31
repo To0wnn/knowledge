@@ -125,9 +125,9 @@ def check_token(tok: str) -> tuple:
             return None, ("The server refuses the token in KNOWLEDGE_TOKEN (401): copied wrongly or revoked. If the token "
                           "is in the keyring now, run 'unset KNOWLEDGE_TOKEN' (or open a new terminal) and try again.")
         return None, {401: "The server refuses this token (401): copied wrongly or revoked.",
-                      403: "The server is only reachable from the home network or WireGuard (403)."}.get(e.code, f"Server answered HTTP {e.code}.")
+                      403: f"knowledge server: {token_store.unreachable(URL, 'HTTP 403 Forbidden')}."}.get(e.code, f"Server answered HTTP {e.code}.")
     except OSError as e:
-        return None, f"Cannot reach {URL}: {e}"
+        return None, f"knowledge server: {token_store.unreachable(URL, getattr(e, 'reason', e))}."
 
 
 def check(tok: str) -> str:
