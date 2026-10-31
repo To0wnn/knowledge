@@ -829,6 +829,8 @@ document.addEventListener("keydown", (e) => {
   const typing = /input|textarea|select/i.test(document.activeElement.tagName) || document.querySelector("dialog[open]");
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); $("q").focus(); $("q").select(); return; }
   if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (!$("cockpit").hidden) { if (e.key === "Escape" && !document.querySelector(".ck-menu[open]")) openCockpit(false); return; } // the cockpit has its own keys
+  if (e.key.toLowerCase() === "a") { e.preventDefault(); openCockpit(true); return; }
   if (e.key === "/") { e.preventDefault(); $("q").focus(); }
   else if (/^[1-9]$/.test(e.key) && PROJECTS[Number(e.key) - 1]) switchProject(PROJECTS[Number(e.key) - 1]);
   else if (e.key === "0") switchProject(ALL);
@@ -1102,6 +1104,7 @@ async function loadMachines() {
         pick.append(el("option", null, "Start a worker for…"));
         for (const t of tasks) { const o = el("option", null, `${t.id} · ${t.owner} · ${t.text.slice(0, 40)}`); o.value = `${t.project}/${t.id}`; pick.append(o); }
         pick.onchange = () => { const [project, id] = pick.value.split("/"); if (id) machineAction(m, "start_worker", { project, id }); };
+        if ((c.agents || []).length && (c.folders?.linked || []).length) ctl.append(machineButton("Chat", "Talk to an agent on this pc (Agents)", () => { openCockpit(true); ckNewChat(m.id); }));
         ctl.append(pick, machineButton("Update plugin", "Update the knowledge plugin of every agent there", () => machineAction(m, "update_plugin")));
       }
       ctl.append(machineButton("Forget", "Remove this pc from the list (it comes back when it reports again)", async () => {
@@ -1211,6 +1214,208 @@ $("ingest-form").addEventListener("submit", async (e) => {
   } catch (err) { out.className = "error"; out.textContent = err.message; }
 });
 
+// ---------------------------------------------------------------- Agents cockpit: chats with agents on your pcs
+// A full-screen canvas over the knowledge view: one card per chat (pc, agent, folder), the answer streaming in. The
+// server only relays: the pc's companion pulls each message and runs one turn of the agent (plugin/hooks/chat.py).
+// Everything is text (textContent): nothing an agent prints becomes markup. A phone shows one card and a switcher.
+const AGENT_MARK = { claude: "C", codex: "X", agy: "A" };
+const ck = { cards: new Map(), machines: [], chats: [], active: "", timer: 0, summaryAt: 0 };
+const ckKey = (c) => `${c.machine}/${c.id}`;
+const ckBusy = (s) => s === "running" || s === "queued";
+const ckShort = (path) => (path || "").split(/[\\/]/).filter(Boolean).pop() || path;
+function ckStored() { try { return JSON.parse(store.get("kn_ck_open") || "[]"); } catch { return []; } }
+function ckSave() { store.set("kn_ck_open", JSON.stringify([...ck.cards.keys()])); store.set("kn_ck_active", ck.active); }
+
+function openCockpit(on) {
+  $("cockpit").hidden = !on; document.body.classList.toggle("ck-on", on); store.set("kn_cockpit", on ? "1" : "0");
+  clearTimeout(ck.timer);
+  if (on) { ck.summaryAt = 0; ckTick(); }
+}
+$("cockpit-btn").onclick = () => openCockpit(true);
+$("ck-close").onclick = () => openCockpit(false);
+for (const b of document.querySelectorAll("#ck-tools-menu [data-go]")) b.addEventListener("click", (e) => {
+  const go = b.dataset.go; if (go === "settings") return; // a plain link
+  e.preventDefault(); $("ck-tools-menu").open = false; openCockpit(false);
+  if (go === "memory") { selectTab("notes"); homeView(); }
+  else if (go === "skills") { $("q").value = "SKILL.md"; $("q").dispatchEvent(new Event("input")); }
+  else { selectTab("tasks"); if (go !== "tasks") $("machines-head").scrollIntoView({ block: "start" }); }
+});
+document.addEventListener("click", (e) => { // a popover closes on a click outside it
+  for (const d of document.querySelectorAll(".ck-menu[open]")) if (!d.contains(e.target)) d.open = false;
+});
+
+// The bar and the canvas: every ~10 s the pcs and the chats; the open cards every 1.5 s while one runs, else 4 s.
+async function ckTick() {
+  if ($("cockpit").hidden) return;
+  try {
+    if (Date.now() - ck.summaryAt > 10000) await ckSummary();
+    await Promise.all([...ck.cards.values()].map(ckPoll));
+  } catch (e) { $("ck-canvas").title = e.message; }
+  clearTimeout(ck.timer);
+  ck.timer = setTimeout(ckTick, [...ck.cards.values()].some((c) => ckBusy(c.meta.status)) ? 1500 : 4000);
+}
+async function ckSummary() {
+  ck.summaryAt = Date.now();
+  const [ms, cs] = await Promise.all([api("/ui/api/machines"), api("/ui/api/chats")]);
+  ck.machines = ms.machines.filter((m) => m.own && !m.old);
+  ck.chats = cs.chats;
+  const now = Date.now() / 1000;
+  let live = ck.chats.filter((c) => ckBusy(c.status)).length, worst = null;
+  for (const m of ck.machines) for (const [a, ag] of Object.entries(m.agents || {})) {
+    live += (ag.workers || []).filter((w) => w.status === "running").length + (ag.sessions || []).filter((s) => !s.worker && now - s.at < 600).length;
+    if (ag.limit != null && ag.resets > now && (!worst || ag.limit > worst.limit)) worst = { ...ag, agent: a, label: m.label };
+  }
+  $("ck-live-n").textContent = live; $("ck-live").classList.toggle("on", live > 0);
+  $("ck-resets").hidden = !worst;
+  if (worst) {
+    $("ck-resets").textContent = `resets ${new Date(worst.resets * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+    $("ck-resets").title = `${AGENT_NAME[worst.agent] || worst.agent} on ${worst.label}: ${Math.round(worst.limit)}% of its usage limit used`;
+  }
+  // A running chat always has its card; the cards open before a reload come back.
+  const want = new Set(store.get("kn_ck_open") === null && ck.chats.length ? [ckKey(ck.chats[0])] : ckStored()); // first visit: the newest chat
+  for (const c of ck.chats) if (ckBusy(c.status) || want.has(ckKey(c))) ckCard(c);
+  for (const [k, card] of ck.cards) { const c = ck.chats.find((x) => ckKey(x) === k); if (!c) ckDrop(k); else card.meta = { ...card.meta, ...c }; }
+  if (!ck.cards.has(ck.active)) ck.active = store.get("kn_ck_active") || "";
+  if (!ck.cards.has(ck.active)) ck.active = ck.cards.keys().next().value || "";
+  ckHistory(); ckLayout();
+}
+function ckHistory() {
+  const box = $("ck-history"); box.replaceChildren();
+  for (const c of ck.chats.slice(0, 40)) {
+    const li = el("li"), b = el("button", null, c.title || "(no message yet)"); b.type = "button";
+    b.append(el("small", null, `${AGENT_NAME[c.agent] || c.agent} · ${c.label} · ${ckShort(c.folder)} · ${ago(c.updated)}${ckBusy(c.status) ? " · running" : ""}`));
+    b.onclick = () => { $("ck-history-menu").open = false; ckCard(c); ck.active = ckKey(c); ckLayout(); ckSave(); ckPoll(ck.cards.get(ck.active)); };
+    li.append(b); box.append(li);
+  }
+  if (!ck.chats.length) box.append(el("li", "muted", "No chats yet."));
+}
+function ckLayout() {
+  const canvas = $("ck-canvas"), sw = $("ck-switch");
+  if (!ck.cards.size) {
+    const empty = el("div", "ck-empty");
+    empty.append(el("h2", null, "Your agents, from anywhere"),
+      el("p", null, ck.machines.some((m) => m.online && m.companion) ? "Start a chat with Claude Code, Codex or agy on one of your pcs, in a folder linked to a project there."
+        : "None of your pcs is online with a companion right now. Chats run on a pc through its knowledge companion (plugin 0.16 or newer)."));
+    const b = el("button", "ck-pill ck-primary", "+ New chat"); b.type = "button"; b.onclick = () => ckNewChat(); empty.append(b);
+    canvas.replaceChildren(empty);
+  } else canvas.replaceChildren(...[...ck.cards.values()].map((c) => c.root));
+  for (const [k, c] of ck.cards) c.root.classList.toggle("active", k === ck.active);
+  sw.replaceChildren(...[...ck.cards.values()].map((c) => { const o = el("option", null, `${ckBusy(c.meta.status) ? "● " : ""}${c.meta.title || "New chat"} · ${c.meta.label}`); o.value = ckKey(c.meta); o.selected = o.value === ck.active; return o; }));
+  sw.hidden = !ck.cards.size;
+}
+$("ck-switch").onchange = () => { ck.active = $("ck-switch").value; ckLayout(); ckSave(); };
+
+function ckCard(meta) {
+  const k = ckKey(meta);
+  if (ck.cards.has(k)) return ck.cards.get(k);
+  const root = el("article", "ck-card"), head = el("header", "ck-head"), title = el("div", "ck-title");
+  const name = el("strong"), where = el("span"), state = el("span", "ck-state"), x = el("button", "ck-x", "×");
+  x.type = "button"; x.title = "Close this card (the chat stays under Earlier chats)"; x.setAttribute("aria-label", "Close");
+  title.append(name, where);
+  head.append(el("span", "ck-mark", AGENT_MARK[meta.agent] || "?"), title, state, x);
+  const log = el("div", "ck-log"), form = el("form", "ck-form"), input = el("textarea"), btns = el("div", "ck-btns");
+  log.setAttribute("aria-live", "polite"); log.setAttribute("role", "log");
+  input.rows = 2; input.placeholder = "Message the agent… (Enter sends, Shift+Enter a new line)"; input.setAttribute("aria-label", "Message");
+  const stop = el("button", "ck-stop", "Stop"), send = el("button", null, "Send"), note = el("p", "ck-note");
+  stop.type = "button"; send.type = "submit"; btns.append(stop, send); form.append(input, btns, note);
+  root.append(head, log, form);
+  const card = { meta: { ...meta }, root, name, where, state, log, input, stop, send, note, after: 0, online: meta.online !== false };
+  root.addEventListener("pointerdown", () => { if (ck.active !== k) { ck.active = k; ckLayout(); ckSave(); } });
+  x.onclick = () => { ckDrop(k); ckLayout(); ckSave(); };
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing && !matchMedia("(hover: none)").matches) { e.preventDefault(); form.requestSubmit(); }
+  });
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const text = input.value.trim(); if (!text || send.disabled) return;
+    send.disabled = true;
+    try {
+      await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, text }) });
+      input.value = ""; card.meta.status = "queued";
+    } catch (err) { note.className = "ck-note bad"; note.textContent = err.message; }
+    ckPaint(card); await ckPoll(card); clearTimeout(ck.timer); ck.timer = setTimeout(ckTick, 1500);
+  };
+  stop.onclick = async () => {
+    try { await api("/ui/api/chat/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id }) }); }
+    catch (err) { note.className = "ck-note bad"; note.textContent = err.message; }
+    ckPoll(card);
+  };
+  ck.cards.set(k, card); ckPaint(card); ckSave();
+  return card;
+}
+function ckDrop(k) { ck.cards.delete(k); if (ck.active === k) ck.active = ck.cards.keys().next().value || ""; }
+function ckPaint(card) {
+  const m = card.meta, busy = ckBusy(m.status);
+  card.name.textContent = m.title || "New chat";
+  card.where.textContent = `${AGENT_NAME[m.agent] || m.agent} · ${m.label} · ${ckShort(m.folder)}${m.project ? ` (${m.project})` : ""}`;
+  card.where.title = m.folder || "";
+  card.state.className = `ck-state ${!card.online ? "offline" : busy ? "running" : ""}`;
+  card.state.textContent = !card.online ? "pc offline" : m.status === "queued" ? "waiting for the pc" : busy ? "working" : "ready";
+  card.root.classList.toggle("running", busy);
+  card.stop.hidden = !busy; card.send.disabled = busy || !card.online;
+  if (!card.note.classList.contains("bad") || busy) {
+    card.note.className = "ck-note";
+    card.note.textContent = !card.online ? `${m.label} is offline${card.at ? ` since ${ago(card.at)}` : ""}: a chat needs its companion running.` : "";
+  }
+}
+async function ckPoll(card) {
+  if (!card) return;
+  let res;
+  try { res = await api(`/ui/api/chat?machine=${card.meta.machine}&id=${card.meta.id}&after=${card.after}`); }
+  catch (e) { card.note.className = "ck-note bad"; card.note.textContent = e.message; return; }
+  card.meta = { ...card.meta, ...res.chat, label: res.label }; card.online = res.online; card.at = res.at;
+  if (res.trimmed && !card.after && res.events.length) card.log.append(el("p", "ck-line info", "Older output was trimmed (the chat keeps its newest part)."));
+  const near = card.log.scrollHeight - card.log.scrollTop - card.log.clientHeight < 80;
+  for (const e of res.events) {
+    card.after = Math.max(card.after, e.n);
+    const last = card.log.lastElementChild;
+    if (e.kind === "text") { // Markdown, sanitized as a note is (DOMPurify): an agent's output never becomes script
+      const msg = last && last.classList.contains("agent") ? last : card.log.appendChild(el("div", "ck-msg agent md"));
+      msg.dataset.raw = (msg.dataset.raw || "") + e.text;
+      msg.innerHTML = renderMd(msg.dataset.raw.replace(/^\n+/, ""));
+    } else card.log.append(el("div", e.kind === "user" ? "ck-msg user" : `ck-line ${e.kind}`, e.text));
+  }
+  if (res.events.length && (near || res.events.some((e) => e.kind === "user"))) card.log.scrollTop = card.log.scrollHeight;
+  ckPaint(card);
+}
+
+// New chat: a pc of your own with a companion, an agent installed there, a folder linked there.
+function ckNewChat(machine = "") {
+  const pcs = ck.machines.filter((m) => m.companion && (m.companion.agents || []).length);
+  const pick = $("ck-machine");
+  pick.replaceChildren(...pcs.map((m) => { const o = el("option", null, `${m.label}${m.online ? "" : " (offline)"}`); o.value = m.id; return o; }));
+  if (machine) pick.value = machine;
+  else { const on = pcs.find((m) => m.online); if (on) pick.value = on.id; }
+  $("ck-new-error").hidden = true;
+  ckNewFill();
+  if (!pcs.length) { $("ck-new-error").hidden = false; $("ck-new-error").textContent = "No pc of yours reports a companion with an agent yet."; }
+  $("ck-new-dialog").showModal();
+}
+function ckNewFill() {
+  const m = ck.machines.find((x) => x.id === $("ck-machine").value), c = m?.companion || {};
+  $("ck-agent").replaceChildren(...(c.agents || []).map((a) => { const o = el("option", null, `${AGENT_NAME[a] || a}${m.agents?.[a]?.yolo ? " (YOLO)" : ""}`); o.value = a; return o; }));
+  $("ck-folder").replaceChildren(...(c.folders?.linked || []).map((f) => { const o = el("option", null, `${f.path} → ${f.project}`); o.value = f.path; return o; }));
+  const why = !m ? "" : !m.online ? `${m.label} is offline: a chat needs its companion running.` : !(c.folders?.linked || []).length ? `No folder on ${m.label} is linked to a project yet (Machines, Folders).` : "";
+  $("ck-new-error").hidden = !why; $("ck-new-error").textContent = why;
+  $("ck-new-start").disabled = !!why || !m;
+}
+$("ck-machine").onchange = ckNewFill;
+$("ck-new").onclick = async () => { if (!ck.machines.length) await ckSummary().catch(() => {}); ckNewChat(); };
+$("ck-new-cancel").onclick = () => $("ck-new-dialog").close();
+$("ck-new-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const machine = $("ck-machine").value, m = ck.machines.find((x) => x.id === machine);
+  if ($("ck-new-start").disabled) return;
+  $("ck-new-start").disabled = true; // one chat per click
+  try {
+    const res = await api("/ui/api/chats", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine, agent: $("ck-agent").value, folder: $("ck-folder").value }) });
+    $("ck-new-dialog").close();
+    const card = ckCard({ ...res.chat, machine, label: m?.label || machine, online: m?.online });
+    ck.active = ckKey(card.meta); ckLayout(); ckSave(); card.input.focus(); ck.summaryAt = 0;
+  } catch (err) { $("ck-new-error").hidden = false; $("ck-new-error").textContent = err.message; }
+  $("ck-new-start").disabled = false;
+});
+
 // ---------------------------------------------------------------- live updates (Server-Sent Events)
 let liveTimer;
 async function onChanged() {
@@ -1278,5 +1483,6 @@ loadMe().then(loadGraph).catch((e) => {
   if (store.get("kn_map") === "1") setMap(true); // the map stays open over a reload
   const tab = store.get("kn_tab");
   probeCompanion().then((up) => { if (up && tab === "thispc") selectTab("thispc"); });
+  if (store.get("kn_cockpit") === "1") openCockpit(true); // the cockpit stays open over a reload
   if (["changes", "tasks", "lint"].includes(tab) && !document.querySelector(`.tabs [data-tab="${tab}"]`).hidden) selectTab(tab); // Lint only for admins
 });
