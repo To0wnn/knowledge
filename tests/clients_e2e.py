@@ -682,7 +682,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
     codex_cfg.parent.mkdir()
     toml = (f'# my codex settings\nmodel = "gpt-5"\napproval_policy = "on-request" # asked\n\n[notice]\nhide_rate_limit_model_nudge = true\n\n'
             f'[projects.{json.dumps(str(project))}]\ntrust_level = "trusted"\n')
-    codex_cfg.write_text(toml, encoding="utf-8")
+    codex_cfg.write_bytes(toml.encode())  # LF, as Codex writes it also on Windows
     agy_dir = home / ".gemini" / "antigravity-cli"
     (agy_dir / "log").mkdir(parents=True)
     agy_settings = {"model": "Gemini", "trustedWorkspaces": [str(home)]}
@@ -786,7 +786,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         check(parsed["approval_policy"] == "never" and parsed["sandbox_mode"] == "danger-full-access" and parsed["notice"]["hide_full_access_warning"] is True
               and parsed["model"] == "gpt-5" and text.startswith("# my codex settings\n"), "companion: YOLO on for Codex edits config.toml minimally", text)
         call("POST", "/local/api/yolo", {"agent": "codex", "on": False})
-        check(codex_cfg.read_text(encoding="utf-8") == toml, "companion: YOLO off restores config.toml byte for byte", codex_cfg.read_text(encoding="utf-8"))
+        check(codex_cfg.read_bytes() == toml.encode(), "companion: YOLO off restores config.toml byte for byte (LF stays LF)", repr(codex_cfg.read_bytes()[:300]))
         call("POST", "/local/api/yolo", {"agent": "claude", "on": True})
         cs = json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8"))
         check(cs["permissions"] == {"allow": ["Bash(ls)"], "defaultMode": "bypassPermissions"} and cs["skipDangerousModePermissionPrompt"] is True,

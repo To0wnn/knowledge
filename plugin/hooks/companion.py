@@ -74,10 +74,18 @@ def load(name: str, default):
         return default
 
 
+def newline_of(path: Path) -> str:
+    """The file's own line ending: Python's text mode would turn an agent's LF file into CRLF on Windows."""
+    try:
+        return "\r\n" if b"\r\n" in path.read_bytes() else "\n"
+    except OSError:
+        return "\n"
+
+
 def write_json(path: Path, data, indent=2):
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".companion-tmp")
-    tmp.write_text(json.dumps(data, indent=indent, ensure_ascii=False) + "\n", encoding="utf-8")
+    tmp.write_text(json.dumps(data, indent=indent, ensure_ascii=False) + "\n", encoding="utf-8", newline=newline_of(path))
     if path.exists():  # ~/.claude.json is private: the new file keeps the old one's mode
         os.chmod(tmp, path.stat().st_mode & 0o777)
     os.replace(tmp, path)
@@ -467,7 +475,7 @@ def apply_values(agent: str, values: list) -> list:
             old.append(MISSING if prev is None else prev)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(path.name + ".companion-tmp")
-        tmp.write_text(text, encoding="utf-8")
+        tmp.write_text(text, encoding="utf-8", newline=newline_of(path))
         os.replace(tmp, path)
         return old
     return edit_json(path, lambda d: [json_set(d, where, v) for (_, where, _), v in zip(spec, values)])
