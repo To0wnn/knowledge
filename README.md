@@ -76,7 +76,7 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   "Machines": online or "offline since", per agent its plugin, a red YOLO pill, hooks trusted, usage limit (or
   "unknown"), last hook error, workers and recent sessions. A person sees the machines of their own tokens; an admin
   all. A machine id belongs to the person (or the admins) whose token first reported it; another
-  person's token that names it gets 403. Plugins before 0.15 show as one "old plugin" row per token.
+  person's token on the same pc gets a machine record of its own and never sees or steers the first one. Plugins before 0.15 show as one "old plugin" row per token.
 - **Workers, not chats:** a task never goes into someone's chat. The companion (below) starts a **worker** per ready
   task: a fresh headless session of the task's agent (Claude Code `claude -p --output-format stream-json`, Codex
   `codex exec --json`, agy `agy -p`) in its own git worktree on branch `task/<ID>` (`~/.knowledge/worktrees/`), or in

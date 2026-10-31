@@ -391,11 +391,22 @@ def machines_contract(tmp, ck, fr, raw, er, et):
     assert list(mine) == ["dddddddddddddddd"] and mine["dddddddddddddddd"]["own"], mine  # her own pc only
     forget = lambda mid, h: raw("POST", "/ui/api/machines/forget", json.dumps({"machine": mid}), {**h, "X-Knowledge-UI": "1", "Content-Type": "application/json"})[0]
     assert forget("cccccccccccccccc", er) == 403
-    # A machine id is bound to whoever first reported it: another person's token that names it gets 403 everywhere.
-    assert http("GET", "/tasks/ready", token=et, headers={"X-Knowledge-Machine": "cccccccccccccccc"})[0] == 403
-    assert http("POST", "/machine/report", {"version": "x"}, token=et, headers={"X-Knowledge-Machine": "cccccccccccccccc"})[0] == 403
-    assert "cccccccccccccccc" not in {r["id"] for r in json.loads(raw("GET", "/ui/api/machines", headers=er)[2])["machines"]}
-    assert "cccccccccccccccc" in json.loads((tmp / "machines.json").read_text())
+    # A machine id is bound to whoever first reported it. Another person's token on the same pc (two agents, two
+    # owners' tokens) works but gets its own record: it never sees, steers or overwrites the first owner's.
+    before = json.loads((tmp / "machines.json").read_text())["cccccccccccccccc"]
+    shared = {"X-Knowledge-Machine": "cccccccccccccccc", "X-Knowledge-Machine-Label": "garage"}
+    assert http("GET", "/tasks/ready", token=et, headers=shared)[0] == 200
+    assert http("POST", "/machine/report", {"version": "x"}, token=et, headers=shared)[0] == 200
+    assert json.loads((tmp / "machines.json").read_text())["cccccccccccccccc"] == before  # untouched
+    hers = {r["id"]: r for r in json.loads(raw("GET", "/ui/api/machines", headers=er)[2])["machines"]}
+    assert "cccccccccccccccc" not in hers and [r["label"] for r in hers.values()].count("garage") == 1, hers
+    erin_mid = next(i for i, r in hers.items() if r["label"] == "garage")
+    assert hers[erin_mid]["own"] and hers[erin_mid]["tokens"] == ["erin.laptop"] and forget("cccccccccccccccc", er) == 403, hers
+    # her record's id is no way into his either way: sent as a raw id it is hers, his token there gets a record of his own
+    assert http("GET", "/tasks/ready", token=et, headers={"X-Knowledge-Machine": erin_mid})[0] == 200
+    assert http("GET", "/tasks/ready", token=fr, headers={"X-Knowledge-Machine": erin_mid})[0] == 200
+    assert "friend-pc" not in json.loads((tmp / "machines.json").read_text())[erin_mid]["tokens"]
+    assert forget(erin_mid, er) == 200
     assert forget("dddddddddddddddd", er) == 200 and "dddddddddddddddd" not in {r["id"] for r in json.loads(raw("GET", "/ui/api/machines", headers=ck)[2])["machines"]}
     # A session gone quiet for more than 2 h is no longer listed; the machine stays, offline.
     d = json.loads((tmp / "machines.json").read_text())
@@ -426,7 +437,7 @@ def machines_contract(tmp, ck, fr, raw, er, et):
     assert [a["action"] for a in got] == ["yolo", "start_worker"] and got[0]["args"] == {"agent": "codex", "on": True}, got
     assert json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"] == []  # handed out once
     assert http("POST", "/machine/actions/result", {"id": got[0]["id"], "ok": True, "result": "on"}, token=fr, headers=pc)[0] == 200
-    assert http("POST", "/machine/actions/result", {"id": got[1]["id"], "ok": True}, token=et, headers=pc)[0] == 403  # not her machine
+    assert http("POST", "/machine/actions/result", {"id": got[1]["id"], "ok": True}, token=et, headers=pc)[0] == 404  # not her machine: her own record has no such action
     m = {r["id"]: r for r in json.loads(raw("GET", "/ui/api/machines", headers=ck)[2])["machines"]}["cccccccccccccccc"]
     assert [(a["status"], a.get("result")) for a in m["actions"]][0] == ("done", "on"), m["actions"]
     assert "machine-action" in "\n".join(json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["system"]["audit"])
@@ -540,8 +551,8 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     st, _, b = ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "hello <b>agent</b>"})
     assert st == 200, b
     assert ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "again"})[0] == 409  # one turn at a time
-    # Her token, even naming this machine id, gets nothing; the machine's own token gets the message once.
-    assert http("GET", "/machine/chats", token=et, headers=pc)[0] == 403
+    # Her token, even naming this machine id, gets nothing (its own record); the machine's own token gets the message once.
+    assert json.loads(http("GET", "/machine/chats", token=et, headers=pc)[1])["work"] == []
     got = json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])
     assert [(w["chat"], w["agent"], w["folder"], w["text"], w["session"]) for w in got["work"]] == [(cid, "codex", "/home/x/garden", "hello <b>agent</b>", "")], got
     again = json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])
@@ -655,7 +666,7 @@ def board_contract(tmp, ck, fr, raw, er, et):
     got = json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])
     assert got["diffs"] == [{"id": rid, "folder": "/home/x/garden"}], got
     assert "diffs" not in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1]), "handed out once"
-    assert http("POST", "/machine/chats/diff", {"id": rid, "text": "x"}, token=et, headers=pc)[0] == 403  # her token, his machine id
+    assert http("POST", "/machine/chats/diff", {"id": rid, "text": "x"}, token=et, headers=pc)[0] == 404  # her token, his machine id: her own record
     assert http("POST", "/machine/chats/diff", {"id": rid, "text": "<b>+two</b>"}, token=fr, headers=pc)[0] == 200
     d = json.loads(ui(f"/ui/api/git/diff?machine={mid}&id={rid}")[2])
     assert d["status"] == "done" and d["text"] == "<b>+two</b>", d

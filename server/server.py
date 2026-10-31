@@ -2251,6 +2251,16 @@ def machine_allowed(mid: str, name: str) -> bool:
     return not bound or machine_key(name) == bound
 
 
+def machine_record(mid: str, name: str) -> str:
+    """The machines.json key this token reports pc `mid` under. Whoever first reported the id keeps it; another person's
+    token on the same pc (Claude with a token an admin made, Codex with one the person made) gets its own record, keyed
+    by a hash of id + owner, so neither sees or steers the other's. "" when even that record is bound to someone else."""
+    if machine_allowed(mid, name):
+        return mid
+    own = hashlib.sha256(f"{mid}|{machine_key(name)}".encode()).hexdigest()[:16]
+    return own if machine_allowed(own, name) else ""
+
+
 def mark_machine(dev: dict, agent: str = "", session: str = "", project: str = "", task: str = "", plugin: str = "",
                  report: dict | None = None):
     """Note that this token's pc was seen: its sessions (per agent, with project and held task), the plugin version per
@@ -2680,7 +2690,7 @@ class BearerAuth:
         if re.fullmatch(r"[0-9a-f]{16}", mid := headers.get(b"x-knowledge-machine", b"").decode("latin-1")):
             # the pc this token runs on (plugin 0.15.0+): leases, sessions and the Machines list key on token + machine
             label = re.sub(r"[^\w.-]", "-", headers.get(b"x-knowledge-machine-label", b"").decode("latin-1"))[:60]
-            if not machine_allowed(mid, dev["name"]):  # a machine id is bound to whoever first reported it
+            if not (mid := machine_record(mid, dev["name"])):  # a machine id is bound to whoever first reported it
                 return await JSONResponse({"error": "this machine id belongs to another person's tokens"}, status_code=403)(scope, receive, send)
             dev = {**dev, "machine": mid, "machine_label": label or mid}
         if worker := re.sub(r"[^\w.-]", "", headers.get(b"x-knowledge-worker", b"").decode("latin-1"))[:60]:
