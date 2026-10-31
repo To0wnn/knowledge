@@ -616,7 +616,8 @@ def board_contract(tmp, ck, fr, raw, er, et):
     lines = ["- open until 2099-01-01 [Codex, BRD-1] from Claude, start now: board open task",
              "- open until 2099-01-01 [Codex, BRD-2] from Claude, start after approval: board approval task",
              "- open until 2099-01-01 [Anthony, BRD-3] from Claude, start now: a person's task",
-             "- open until 2099-01-01 [Codex, BRD-4] from Claude, start now: runs in a worker"]
+             "- open until 2099-01-01 [Codex, BRD-4] from Claude, start now: runs in a worker",
+             "- [Claude, BRD-9-done]: board result; branch task/BRD-9; done: it; left: nothing"]
     assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": "\n".join(lines) + "\n## Keuzes"}, fr)[0]
     # A chat with a reply nobody read needs you; one with a refused tool call says so; a running one runs.
     cids = [json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/x/garden"})[2])["chat"]["id"] for _ in range(3)]
@@ -636,6 +637,7 @@ def board_contract(tmp, ck, fr, raw, er, et):
     assert (col("worker", "BRD-5"), col("worker", "BRD-6"), col("worker", "BRD-7"), col("worker", "BRD-8")) == ("needs", "done", None, None), items.keys()
     assert col("task", "BRD-1") == "open" and items[("task", "BRD-1")]["hosts"] == [{"machine": mid, "label": "garage"}], items.get(("task", "BRD-1"))
     assert col("task", "BRD-2") == "needs" and items[("task", "BRD-2")]["approve"], items.get(("task", "BRD-2"))
+    assert col("task", "BRD-9-done") == "done", "a result handed back today is done"
     assert ("task", "BRD-3") not in items and ("task", "BRD-4") not in items, "a person's line and a task its worker shows"
     # Opening the chat reads it: off "Needs you", into "Done".
     ui(f"/ui/api/chat?machine={mid}&id={cids[0]}")
@@ -658,6 +660,44 @@ def board_contract(tmp, ck, fr, raw, er, et):
     d = json.loads(ui(f"/ui/api/git/diff?machine={mid}&id={rid}")[2])
     assert d["status"] == "done" and d["text"] == "<b>+two</b>", d
     assert ui(f"/ui/api/git/diff?machine={mid}&id={rid}", h=er)[0] == 403
+    # A known secret at the start of a diff line (+ or -) is withheld too.
+    for sign in "+-":
+        rid = json.loads(ui("/ui/api/git/diff", {"machine": mid, "chat": cids[0]})[2])["id"]
+        http("POST", "/machine/chats/diff", {"id": rid, "text": f"@@ -1 +1 @@\n{sign}Sup3rSecret99\n"}, token=fr, headers=pc)
+        d = json.loads(ui(f"/ui/api/git/diff?machine={mid}&id={rid}")[2])
+        assert d["text"] == "" and "withheld" in d["error"], (sign, d)
+    # Every companion poll reads diffs.json; it is written only when a request waits or expired.
+    dq = tmp / "chats" / mid / "diffs.json"
+    before = dq.stat().st_mtime_ns
+    time.sleep(0.02)
+    http("GET", "/machine/chats", token=fr, headers=pc)
+    assert dq.stat().st_mtime_ns == before, "a poll with nothing waiting rewrote diffs.json"
+    # Dismiss: a Needs-you item leaves this person's board until it changes; others' boards are their own.
+    item = next(i for i in board() if i["kind"] == "chat" and i["id"] == cids[1])
+    assert ui("/ui/api/board/dismiss", {"key": "../x", "sig": "1"})[0] == 400
+    assert ui("/ui/api/board/dismiss", {"key": item["key"], "sig": item["sig"]})[0] == 200
+    assert ("chat", cids[1]) not in {(i["kind"], i["id"]) for i in board()}
+    ui("/ui/api/chat/send", {"machine": mid, "id": cids[1], "text": "try again"})
+    http("GET", "/machine/chats", token=fr, headers=pc)
+    http("POST", "/machine/chats/events", {"chat": cids[1], "events": [{"kind": "refused", "text": "git push -f"}], "done": True}, token=fr, headers=pc)
+    back = {(i["kind"], i["id"]): i for i in board()}.get(("chat", cids[1]), {})
+    assert back.get("col") == "needs" and back["line"] == "refused: git push -f", back
+    # A turn the owner stopped is no reply to answer; a chat from before 0.17 (no "seen") is read; nor an old one.
+    ui("/ui/api/chat/send", {"machine": mid, "id": cids[1], "text": "slow"})
+    http("GET", "/machine/chats", token=fr, headers=pc)
+    ui("/ui/api/chat/stop", {"machine": mid, "id": cids[1]})
+    http("POST", "/machine/chats/events", {"chat": cids[1], "events": [{"kind": "text", "text": "half"}, {"kind": "info", "text": "Stopped."}], "done": True}, token=fr, headers=pc)
+    assert {(i["kind"], i["id"]): i["col"] for i in board()}[("chat", cids[1])] == "done"
+    f = tmp / "chats" / mid / f"{cids[1]}.json"
+    c = json.loads(f.read_text())
+    c["events"].append({"n": c["next"] + 1, "at": now, "kind": "text", "text": "late"})
+    c["next"] += 1
+    c.pop("seen")
+    f.write_text(json.dumps(c))
+    assert {(i["kind"], i["id"]): i["col"] for i in board()}[("chat", cids[1])] == "done", "a chat from before 0.17 counts as read"
+    c["seen"], c["updated"] = 0, now - 8 * 86400
+    f.write_text(json.dumps(c))
+    assert ("chat", cids[1]) not in {(i["kind"], i["id"]) for i in board()}, "an unread chat older than a week needs nobody"
     assert len(json.loads(ui(f"/ui/api/chats?machine={mid}")[2])["chats"]) == 50, "diffs.json is no chat"
     text = (tmp / "projects/garden/memory/project_tasks.md").read_text()
     for line in lines:

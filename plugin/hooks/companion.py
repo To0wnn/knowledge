@@ -958,7 +958,7 @@ DIFF_CHARS = 200_000
 
 def git_base(path: str, branch: str) -> str:
     """What a folder is compared with: the repo's main (or master) branch, or on that branch itself its upstream."""
-    run = lambda *a: workers.git(path, *a, env=GIT_RO)
+    run = lambda *a: workers.git(path, *a, env=GIT_RO, timeout=10)
     for b in ("main", "master"):
         if b != branch and run("rev-parse", "-q", "--verify", f"refs/heads/{b}").returncode == 0:
             return b
@@ -970,12 +970,13 @@ def git_state(path) -> dict | None:
     """{branch, base, changed, ahead, behind} of a chat folder or worker worktree; None outside git."""
     if not path or not shutil.which("git") or not Path(path).is_dir():
         return None
-    run = lambda *a: workers.git(path, *a, env=GIT_RO)
+    run = lambda *a: workers.git(path, *a, env=GIT_RO, timeout=10)
     try:
         if run("rev-parse", "--is-inside-work-tree").stdout.strip() != "true":
             return None
         branch = run("symbolic-ref", "--short", "-q", "HEAD").stdout.strip() or "detached"
-        changed = sum(1 for ln in run("status", "--porcelain").stdout.splitlines() if ln.strip())
+        # "-- .": this folder only, also when it sits inside a bigger repo (a home folder kept in git)
+        changed = sum(1 for ln in run("status", "--porcelain", "--", ".").stdout.splitlines() if ln.strip())
         base, ahead, behind = git_base(path, branch), 0, 0
         if base:
             n = run("rev-list", "--left-right", "--count", f"{base}...HEAD").stdout.split()
@@ -991,16 +992,30 @@ def git_diff(path: str) -> str:
     st = git_state(path)
     if not st:
         raise RuntimeError("not a git checkout")
-    run = lambda *a: workers.git(path, *a, env=GIT_RO)
+    run = lambda *a: workers.git(path, *a, env=GIT_RO, timeout=30)
     frm = run("merge-base", st["base"], "HEAD").stdout.strip() if st["base"] else ""
     frm = frm or ("HEAD" if run("rev-parse", "-q", "--verify", "HEAD").returncode == 0 else "")
     opts = ("--no-color", "--no-ext-diff", "--no-textconv")
-    stat = run("diff", "--stat", *opts, frm).stdout if frm else ""
-    new = [f for f in run("ls-files", "--others", "--exclude-standard").stdout.splitlines() if f]
+    stat = run("diff", "--stat", *opts, frm, "--", ".").stdout if frm else ""
+    new = [f for f in run("ls-files", "--others", "--exclude-standard", "--", ".").stdout.splitlines() if f]
     text = (f"{st['branch']}" + (f" against {st['base']}: {st['ahead']} ahead, {st['behind']} behind" if st["base"] else "")
-            + f", {st['changed']} changed\n\n{stat}" + ("".join(f" ?? {f}\n" for f in new[:200])) + "\n"
-            + (run("diff", *opts, frm).stdout if frm else ""))
+            + f", {st['changed']} changed\n\n{stat}" + ("".join(f" ?? {f}\n" for f in new[:200])) + "\n")
+    left = DIFF_CHARS - len(text)
+    if frm and left > 0:
+        text += git_head(path, left + 1, "diff", *opts, frm, "--", ".")
     return text if len(text) <= DIFF_CHARS else text[:DIFF_CHARS] + f"\n... cut: the diff is longer than {DIFF_CHARS} characters"
+
+
+def git_head(path: str, limit: int, *args) -> str:
+    """At most `limit` characters of a git command's output, read as it comes: a huge diff is never read whole."""
+    base = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    p = subprocess.Popen(["git", "-C", str(path), *args], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                         env={**base, **GIT_RO}, text=True, encoding="utf-8", errors="replace")
+    try:
+        return p.stdout.read(limit)
+    finally:
+        p.kill()
+        p.wait(timeout=10)
 
 
 def with_git(folders: dict, ws: dict, now: float) -> tuple:
@@ -1361,18 +1376,22 @@ def chats_round() -> bool:
             log("error", "A chat turn was lost (the companion restarted)", f"chat {cid}")
     linked = lambda: {f["path"] for f in folder_links()["linked"]}
     yolo = lambda agent: bool(load("yolo.json", {}).get(agent, {}).get("on"))
-    for d in r.get("diffs", []):  # read-only: a linked folder or a worker's worktree here, nothing else
+    for item in r.get("work", []):
+        log("remote", f"Chat message from {item.get('by') or '?'} for {AGENTS.get(item.get('agent'), ('?',))[0]}", f"chat {item.get('chat')} in {item.get('folder')}")
+        chat.start(item, post, log, linked, yolo)
+    for d in r.get("diffs", []):  # after the turns (handed out once: never lost to a diff); read-only, linked folders and workers only
         try:
             w = load("workers.json", {}).get(d.get("worker", ""), {})
             path = d["folder"] if d.get("folder") in linked() else w.get("worktree") if d.get("worker") else None
             if not path:
                 raise RuntimeError("not a folder linked on this pc, nor a worker here")
-            server("POST", "/machine/chats/diff", tok, {"id": d["id"], "text": git_diff(path)})
+            answer = {"id": d["id"], "text": git_diff(path)}
         except Exception as e:
-            server("POST", "/machine/chats/diff", tok, {"id": d.get("id"), "error": f"{e}"[:300]})
-    for item in r.get("work", []):
-        log("remote", f"Chat message from {item.get('by') or '?'} for {AGENTS.get(item.get('agent'), ('?',))[0]}", f"chat {item.get('chat')} in {item.get('folder')}")
-        chat.start(item, post, log, linked, yolo)
+            answer = {"id": d.get("id"), "error": f"{e}"[:300]}
+        try:
+            server("POST", "/machine/chats/diff", tok, answer)
+        except Exception as e:
+            log("error", "Could not send a diff to the web UI", f"{type(e).__name__}: {e}"[:300])
     return bool(r.get("active") or chat.RUNNING)
 
 
@@ -1550,6 +1569,31 @@ def main(argv: list):
                 d = git_diff(tmp)
                 assert "2 ahead, 0 behind" in d and "+two" in d and "+b" in d and "?? new1.txt" in d, d
                 assert git_state(Path(tmp) / "nope") is None
+                # A folder linked inside a bigger repo (a home folder kept in git): its own files only.
+                (Path(tmp) / "sub").mkdir()
+                (Path(tmp) / "sub" / "s.txt").write_text("s\n")
+                g("add", "sub/s.txt")
+                g("commit", "-qm", "sub")
+                (Path(tmp) / "sub" / "s.txt").write_text("changed\n")
+                sub = str(Path(tmp) / "sub")
+                assert git_state(sub)["changed"] == 1, git_state(sub)
+                d = git_diff(sub)
+                assert "+changed" in d and "+two" not in d and "new1.txt" not in d and "b.txt" not in d, d
+                assert len(git_head(tmp, 5, "log", "--format=%s")) == 5, "a capped read stops at its limit"
+        # A diff that fails, and whose failure cannot be sent, never costs a chat turn handed out in the same poll.
+        started, real = [], (globals()["server"], globals()["folder_links"], chat.start)
+        def fake_server(method, path, tok, body=None):
+            if path == "/machine/chats":
+                return {"work": [{"chat": "c1", "agent": "codex", "folder": "/x"}], "diffs": [{"id": "d1", "folder": "/not-linked"}]}
+            raise OSError("server away")
+        globals().update(server=fake_server, folder_links=lambda: {"linked": [{"path": "/x", "project": "p"}], "candidates": []})
+        chat.start = lambda item, *a: started.append(item["chat"])
+        try:
+            chats_round()
+        finally:
+            globals().update(server=real[0], folder_links=real[1])
+            chat.start = real[2]
+        assert started == ["c1"], started
         print("ok")
     else:
         sys.exit(__doc__)

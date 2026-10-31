@@ -4647,7 +4647,7 @@ async def ui_chats(request: Request):
     dev, tokens, now = device.get(), read_json(TOKENS_FILE, {}), time.time()
     cid = secrets.token_hex(6)
     c = {"id": cid, "agent": agent, "folder": folder, "project": project, "title": "", "by": dev.get("user", ""), "created": now,
-         "updated": now, "status": "idle", "session": "", "next": 0, "events": [],
+         "updated": now, "status": "idle", "session": "", "next": 0, "seen": 0, "events": [],
          "tokens": [n for n in row["tokens"] if n in tokens and own_token(tokens[n], dev)]}
 
     def create():
@@ -4663,7 +4663,8 @@ async def ui_chats(request: Request):
     return JSONResponse({"ok": True, "chat": chat_meta(c)})
 
 
-BOARD_DONE, BOARD_FAILED = 86400, 7 * 86400  # Done shows the last 24 h; a failed worker needs you for a week
+BOARD_DONE, BOARD_FAILED = 86400, 7 * 86400  # Done shows the last 24 h; a failed worker or an unread chat needs you for a week
+BOARD_DISMISSED = ADMIN_DIR / "board_dismissed.json"  # per user: {item key: its signature when dismissed}
 
 
 def chat_card(c: dict) -> tuple[str, str]:
@@ -4677,7 +4678,9 @@ def chat_card(c: dict) -> tuple[str, str]:
     if not turn:
         return "", ""
     first = lambda k: next((" ".join(e["text"].split())[:140] for e in turn if e["kind"] == k), "")
-    if c.get("seen", 0) < c.get("next", 0):
+    stopped = any(e["kind"] == "info" and e["text"].startswith("Stopped") for e in turn)  # the owner's own stop: nothing to answer
+    # no "seen": a chat from before 0.17, read as far as the board knows (else every old chat would need you after an update)
+    if c.get("seen", c.get("next", 0)) < c.get("next", 0) and not stopped and time.time() - (c.get("updated") or 0) < BOARD_FAILED:
         if refused := first("refused"):
             return "needs", f"refused: {refused}"
         if err := first("error"):
@@ -4701,6 +4704,7 @@ def board_items() -> list[dict]:
             col, line = chat_card(c)
             if col:
                 items.append({**base, "kind": "chat", "col": col, "id": c["id"], "agent": c.get("agent"), "project": c.get("project"),
+                              "key": f"chat:{r['id']}/{c['id']}", "sig": str(c.get("next", 0)),
                               "title": c.get("title") or "New chat", "folder": c.get("folder"), "at": c.get("updated") or 0,
                               "line": line, "git": git.get(c.get("folder"))})
         for a, ag in r["agents"].items():
@@ -4710,6 +4714,7 @@ def board_items() -> list[dict]:
                        else "done" if st in ("finished", "stopped", "merged", "failed") and now - ended < BOARD_DONE else "")
                 if col:
                     items.append({**base, "kind": "worker", "col": col, "id": w.get("id"), "agent": a, "project": w.get("project"),
+                                  "key": f"worker:{r['id']}/{w.get('project')}/{w.get('id')}", "sig": f"{st}:{ended}",
                                   "title": w.get("id"), "at": w.get("started") if st == "running" else ended,
                                   "line": f"worker {st}" + (f" · {w['branch']}" if w.get("branch") else ""), "git": w.get("git"),
                                   "status": st, "open": w.get("open") or "", "checkpoint": bool(w.get("checkpoint"))})
@@ -4719,7 +4724,8 @@ def board_items() -> list[dict]:
         if not agent or (t["project"], t["id"]) in working:  # a person's line is not an agent's work; a running worker shows it
             continue
         task = {"kind": "task", "id": t["id"], "agent": agent, "project": t["project"], "title": f"{t['id']} · {t['text'][:120]}",
-                "path": t["path"], "line": "", "at": 0, "owner": t["owner"]}
+                "path": t["path"], "line": "", "at": 0, "owner": t["owner"], "key": f"task:{t['project']}/{t['id']}",
+                "sig": hashlib.sha256(f"{t['line']}|{t.get('stalled')}|{t['done']}".encode()).hexdigest()[:16]}
         if t["done"]:
             if now - (t.get("since") or 0) < BOARD_DONE:
                 items.append({**task, "col": "done", "line": f"handed back to {t['owner']}", "at": t.get("since") or 0})
@@ -4734,12 +4740,35 @@ def board_items() -> list[dict]:
                      and any(f.get("project") == t["project"] for f in (c.get("folders") or {}).get("linked", []))]
             items.append({**task, "col": "running" if held else "open", "hosts": hosts,
                           "line": t["runs"] or t["waiting_reason"] or (f"due {t['due']}" if t["due"] else f"start {t['start']}")})
+    gone = read_json(BOARD_DISMISSED, {}).get(device.get().get("user", ""), {})  # dismissed until the item changes
+    items = [i for i in items if not (i["col"] == "needs" and gone.get(i["key"], {}).get("sig") == i["sig"])]
     return sorted(items, key=lambda i: -(i["at"] or 0))
 
 
 @server.custom_route("/ui/api/board", methods=["GET"])
 async def ui_board(request: Request):
     return JSONResponse({"items": await asyncio.to_thread(board_items), "now": time.time()})
+
+
+@server.custom_route("/ui/api/board/dismiss", methods=["POST"])
+async def ui_board_dismiss(request: Request):
+    """{key, sig}: take a Needs-you item off this person's board until it changes (a new signature brings it back)."""
+    user = device.get().get("user", "")
+    try:
+        b = await request.json()
+        key, sig = str(b.get("key", "")), str(b.get("sig", ""))
+        if not user or not re.fullmatch(r"(chat|worker|task):[\w./-]{1,200}", key) or not 0 < len(sig) <= 80:
+            raise ValueError("send JSON {key, sig} of a board item")
+    except (ValueError, AttributeError) as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+    def change(d):
+        mine = d.setdefault(user, {})
+        mine[key] = {"sig": sig, "at": time.time()}
+        for k in sorted(mine, key=lambda k: mine[k]["at"])[:max(0, len(mine) - 500)]:  # the oldest go: at most 500 per person
+            mine.pop(k)
+    await asyncio.to_thread(update_state, BOARD_DISMISSED, change)
+    return JSONResponse({"ok": True})
 
 
 @server.custom_route("/ui/api/chat", methods=["GET"])
@@ -4857,7 +4886,7 @@ async def machine_chat_diff(request: Request):
     except (ValueError, AttributeError, TypeError) as e:
         return JSONResponse({"error": str(e) or "send JSON {id, text}"}, status_code=400)
     text, err = str(b.get("text") or "")[:DIFF_BYTES], str(b.get("error") or "")[:300]
-    if contains_secret(text):
+    if contains_secret(re.sub(r"(?m)^[-+]", " ", text)):  # +/- count as part of a word: "+<secret>" would hide it
         text, err = "", "withheld: the diff contains a known secret value"
     found = []
 
@@ -4902,12 +4931,16 @@ async def machine_chats(request: Request):
     diffs = []
 
     def hand_out(d):
+        for k in [k for k, v in d.items() if time.time() - v.get("at", 0) > DIFF_KEEP]:
+            d.pop(k)
         for k, v in d.items():
             if v.get("status") == "waiting":
                 diffs.append({"id": k, **{x: v[x] for x in ("folder", "worker") if x in v}})
                 v["status"] = "sent"
-    if (q_path.parent / "diffs.json").exists():
-        await asyncio.to_thread(update_state, q_path.parent / "diffs.json", hand_out)
+    dq = q_path.parent / "diffs.json"
+    # every companion poll passes here: read only, and write (under the shared lock) when a request waits or expired
+    if any(v.get("status") == "waiting" or time.time() - v.get("at", 0) > DIFF_KEEP for v in read_json(dq, {}).values()):
+        await asyncio.to_thread(update_state, dq, hand_out)
     if diffs:  # only when there are: an older companion ignores the key
         out["diffs"] = diffs
     for w in out["work"]:  # after the queue's lock: update_state's lock is not reentrant

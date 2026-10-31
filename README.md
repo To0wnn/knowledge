@@ -129,11 +129,13 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   week, a task line waiting for your approval, a task woken that nobody took), **Running** (chat turns, workers, task
   lines a session holds), **Open** (task lines for an agent, with where they will run and a "Start on <pc>" button
   per pc that may take it) and **Done (24 h)** (chats read, workers ended, results handed back). Opening a chat marks
-  it read. A card opens its chat full screen (Esc or "Board" goes back), a task its memo line, a worker how to look
+  it read (chats from before 0.17 count as read; a turn you stopped yourself and replies older than a week do not
+  need you). Dismiss takes a Needs-you item off your own board until it changes (stored per person on the server,
+  `POST /ui/api/board/dismiss`). A card opens its chat full screen (Esc or "Board" goes back), a task its memo line, a worker how to look
   at it; Approve, Start and Stop act in place. A phone shows the columns one under the other. Chat cards and workers
   carry a **git pill** (`task/KN-12 · ●3 · ↑2↓0`: branch, changed files, commits ahead/behind `main`/`master`, or
   the upstream on main itself), which the companion counts once a round per folder with `GIT_OPTIONAL_LOCKS=0` and
-  sends in its report; a tap asks that pc for the diff (`POST /ui/api/git/diff`, handed to the companion with the chat
+  sends in its report (the linked folder only, `-- .`, also inside a bigger repo); a tap asks that pc for the diff (`POST /ui/api/git/diff`, handed to the companion with the chat
   messages, answered on `POST /machine/chats/diff`): the stat, untracked files by name and `git diff <merge-base>`,
   capped at 200 kB, shown as text. A
   chat is a conversation with Claude Code, Codex or agy on one of your own pcs, in a folder linked to a project there,
