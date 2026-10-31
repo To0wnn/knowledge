@@ -263,6 +263,8 @@ def start_server(tmp: Path):
         raise SystemExit("server did not start:\n" + (tmp / "server.log").read_text(errors="replace")[-3000:])
     admin = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice", "X-Knowledge-UI": "1"}
     assert http("POST", "/ui/api/admin/project", {"name": "garden"}, admin)[0] == 200
+    # a default (English) server hands "+ Add memo" its English sections; the Dutch ones are server/test_server.py's
+    assert json.loads(http("GET", "/ui/api/me", headers=admin)[1])["sections"] == ["## Status", "## Decisions"]
     # the admin's own device ("self"): its task lines are trusted, its machines the admin's
     st, body = http("POST", "/ui/api/admin/token", {"name": "friend-pc", "write": True, "redact": True, "self": True,
                                                     "roots": ["garden", "garden-memory"]}, admin)
@@ -956,7 +958,9 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         state = json.loads(call("GET", "/local/api/state")[2])
         check(all(a["hooksTrusted"] for a in state["agents"]), "companion: the page shows every agent trusted", json.dumps(state["agents"])[:600])
         # YOLO: the native settings, and unchecking puts back exactly what was there.
-        call("POST", "/local/api/yolo", {"agent": "codex", "on": True})
+        check(call("POST", "/local/api/yolo", {"agent": "codex", "on": True})[0] == 400 and codex_cfg.read_text(encoding="utf-8") == toml,
+              "companion: YOLO on without the typed word YOLO is refused, settings untouched")
+        call("POST", "/local/api/yolo", {"agent": "codex", "on": True, "confirm": "YOLO"})
         text = codex_cfg.read_text(encoding="utf-8")
         try:
             import tomllib
@@ -967,7 +971,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
               and parsed["model"] == "gpt-5" and text.startswith("# my codex settings\n"), "companion: YOLO on for Codex edits config.toml minimally", text)
         call("POST", "/local/api/yolo", {"agent": "codex", "on": False})
         check(codex_cfg.read_bytes() == toml.encode(), "companion: YOLO off restores config.toml byte for byte (LF stays LF)", repr(codex_cfg.read_bytes()[:300]))
-        call("POST", "/local/api/yolo", {"agent": "claude", "on": True})
+        call("POST", "/local/api/yolo", {"agent": "claude", "on": True, "confirm": "YOLO"})
         cs = json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8"))
         check(cs["permissions"] == {"allow": ["Bash(ls)"], "defaultMode": "bypassPermissions"} and cs["skipDangerousModePermissionPrompt"] is True,
               "companion: YOLO on for Claude Code (bypassPermissions)", json.dumps(cs))
@@ -975,7 +979,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         check(code == 0 and json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8")) == claude_settings
               and not json.loads(call("GET", "/local/api/state")[2])["agents"][0]["yolo"],
               "companion: yolo-off (uninstall) restores Claude's settings", out + err)
-        st, _, body = call("POST", "/local/api/yolo", {"agent": "agy", "on": True})
+        st, _, body = call("POST", "/local/api/yolo", {"agent": "agy", "on": True, "confirm": "YOLO"})
         check(json.loads(body).get("yolo") == "pending" and json.loads((agy_dir / "settings.json").read_text(encoding="utf-8")) == ag
               and next(a for a in json.loads(call("GET", "/local/api/state")[2])["agents"] if a["id"] == "agy")["yoloPending"] is True,
               "companion: YOLO for agy waits while agy runs, and the page says so", body)

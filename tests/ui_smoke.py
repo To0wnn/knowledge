@@ -501,6 +501,18 @@ async def shell(browser, devices, secret: str) -> None:
         st = await pg.evaluate("""(a) => ({shown: !$(a.el).hidden, only: [...document.querySelectorAll('#content > .view')].filter(e => !e.hidden).length === 1,
             current: document.querySelector('#sidebar [aria-current=page]')?.dataset.nav, title: $('title').textContent})""", {"el": VIEW_EL[v]})
         check(st["shown"] and st["only"] and st["current"] == v, f"route #/{v}: its view alone, its nav item current {st}")
+    await route(pg, "#/machines", ms=1500)
+    labels = await pg.eval_on_selector_all(".machine-controls button", "bs => bs.map(b => b.textContent)")
+    if any(t in ("YOLO on", "YOLO off") for t in labels):
+        print("skip YOLO state button (server older than fix/yolo-memo-health)")
+    elif labels:
+        check(any(t in ("YOLO: off · Turn on", "YOLO: ON · Turn off") for t in labels), "Machines: the YOLO button shows the state and the action")
+    lint2 = await pg.evaluate("api('/ui/api/lint?v=2')")
+    if "report" in lint2:
+        check(any("usage_outlier" in g["checks"] and g["collapsed"] for g in lint2["groups"]) and "missing_structure" in lint2["hints"],
+              "lint v2: usage findings in a collapsed group, hints from the server")
+    else:
+        print("skip lint v2 (server older than fix/yolo-memo-health)")
     await route(pg, "#/notes")
     await route(pg, "#/tasks")
     await pg.go_back()

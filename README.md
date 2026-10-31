@@ -212,7 +212,10 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   levels under your home folder and folders agents worked in) and links one to a project the token may write by
   writing `.knowledge-project`, as the knowledge-init skill does; unlink removes only that file. A YOLO switch per
   agent writes its native "run without asking" settings and unchecking restores the previous values (agy's only while
-  agy is closed); workers then get the agent's own flag too. Every changed file is first copied to
+  agy is closed); workers then get the agent's own flag too. These are the agent's global settings on that pc (Claude
+  Code `permissions.defaultMode: bypassPermissions`, Codex `approval_policy = "never"` + `danger-full-access`, agy
+  `always-proceed`), so YOLO covers every session of that agent there, your own interactive ones too, not only workers
+  and chats. Turning it on, here or from the Machines list, needs the word YOLO typed in a dialog that says so. Every changed file is first copied to
   `~/backups/knowledge-companion/<date>/` (last five days kept). Hook failures Codex and agy log themselves are reported
   with `POST /status` as `agent-log` (Codex: only failures of the knowledge hooks). Its page is at
   `http://127.0.0.1:47321/`; the web UI shows "This pc" in its sidebar when the companion answers there. The local API answers

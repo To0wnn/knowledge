@@ -3489,7 +3489,8 @@ async def ui_me(request: Request):
     labels = read_json(LABELS_FILE, {})
     return JSONResponse({"user": dev.get("user"), "admin": bool(dev.get("admin")), "projects": projects,
                          "labels": {p: labels[p] for p in projects if p in labels},
-                         "writable": [p for p in projects if wr is None or PROJECTS[p][1] in wr]})
+                         "writable": [p for p in projects if wr is None or PROJECTS[p][1] in wr],
+                         "sections": list(kb_lint.STRUCTURE)})  # a new memo's two sections in the server's language
 
 
 # ---------------------------------------------------------------- admin: users, projects, tokens (admins only)
@@ -4463,6 +4464,8 @@ async def ui_lint(request: Request):
     hit = _ui_lint_cache.get(scope)
     if not hit or hit[0] != gen or now - hit[1] > UI_LINT_MAX_AGE:
         hit = _ui_lint_cache[scope] = (gen, now, await asyncio.to_thread(lint_all))
+    if request.query_params.get("v") == "2":  # the plain {check: [items]} stays the default for older pages
+        return JSONResponse({"report": hit[2], "groups": kb_lint.GROUPS, "hints": kb_lint.HINTS})
     return JSONResponse(hit[2])
 
 

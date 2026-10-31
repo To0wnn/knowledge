@@ -1377,7 +1377,7 @@ def main():
         assert raw("POST", "/ui/login", "password=gategategate", form)[0] == 429  # also the right one, until the minute passed
         assert raw("GET", "/", headers=ck)[1].get("location") == "/ui"
         assert raw("GET", "/ui", headers=ck)[0] == 200
-        assert json.loads(raw("GET", "/ui/api/me", headers=ck)[2]) == {"user": "alice", "admin": True, "projects": ["homelab", "trade"], "writable": ["homelab", "trade"], "labels": {}}  # anpitek is empty here: no tab
+        assert json.loads(raw("GET", "/ui/api/me", headers=ck)[2]) == {"user": "alice", "admin": True, "projects": ["homelab", "trade"], "writable": ["homelab", "trade"], "labels": {}, "sections": ["## Stand", "## Keuzes"]}  # anpitek is empty here: no tab; the server's (nl) sections for "+ Add memo"
         g = json.loads(raw("GET", "/ui/api/graph", headers=ck)[2])
         assert g["nodes"] and not any(n["id"].endswith("/MEMORY.md") for n in g["nodes"]), g["nodes"][:3]  # index not drawn, still readable below
         assert {n["project"] for n in g["nodes"] if n["id"].startswith("trade")} == {"trade"}
@@ -1411,6 +1411,9 @@ def main():
         (mem / "redos.md").unlink()
         http("POST", "/invalidate", {"paths": ["memory/redos.md"]}, token="watch-token")
         assert isinstance(json.loads(raw("GET", "/ui/api/lint", headers=ck)[2]), dict)
+        v2 = json.loads(raw("GET", "/ui/api/lint?v=2", headers=ck)[2])  # report + groups (usage apart, collapsed) + hints in the server's language
+        assert isinstance(v2["report"], dict) and {"id": "usage", "title": "Token usage", "checks": ["usage_outlier"], "collapsed": True} in v2["groups"], v2["groups"]
+        assert v2["hints"]["open_overdue"][1].startswith("An item marked 'open tot <date>'") and "## Stand / ## Keuzes" in v2["hints"]["missing_structure"][0], v2["hints"]
         body = json.dumps({"text": "# Source\nRouter firmware notes", "title": "Router notes"})
         assert raw("POST", "/ui/api/ingest", body, {**ck, "Content-Type": "application/json"})[0] == 403  # no CSRF header
         st, _, res = raw("POST", "/ui/api/ingest", body, {**ck, "Content-Type": "application/json", "X-Knowledge-UI": "1"})
@@ -1462,7 +1465,7 @@ def main():
         assert admin("/ui/api/admin/user", {"username": "alice", "projects": {}})[0] == 400  # admins come from the config
         assert admin("/ui/api/admin/user", {"username": "bob", "projects": {"trade": "read", "homelab": "none"}})[0] == 200
         ro = user("bob")
-        assert json.loads(raw("GET", "/ui/api/me", headers=ro)[2]) == {"user": "bob", "admin": False, "projects": ["trade"], "writable": [], "labels": {}}
+        assert json.loads(raw("GET", "/ui/api/me", headers=ro)[2]) == {"user": "bob", "admin": False, "projects": ["trade"], "writable": [], "labels": {}, "sections": ["## Stand", "## Keuzes"]}
         # A display name for a project: set by an admin, shown to everyone who sees the project; empty restores the name.
         assert admin("/ui/api/admin/project-label", {"name": "trade", "label": "Trading"}, ro)[0] == 403
         assert admin("/ui/api/admin/project-label", {"name": "nope", "label": "X"})[0] == 400

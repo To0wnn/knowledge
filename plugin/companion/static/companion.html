@@ -82,6 +82,21 @@
   </section>
 </main>
 
+<dialog class="cmp-dialog" id="yolo-dialog" aria-labelledby="yolo-title">
+  <form method="dialog" class="cmp-settings">
+    <h2 id="yolo-title">Turn YOLO on?</h2>
+    <p class="cmp-error" id="yolo-text"></p>
+    <div class="cmp-field">
+      <label for="yolo-word">Type YOLO to turn it on</label>
+      <input id="yolo-word" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="cmp-settings-foot">
+      <button class="cmp-btn" type="button" id="yolo-cancel">Cancel</button>
+      <button class="cmp-btn cmp-btn--primary" id="yolo-ok" value="ok" disabled>Turn YOLO on</button>
+    </div>
+  </form>
+</dialog>
+
 <div class="cmp-toast" id="toast" role="status" aria-live="polite"></div>
 </body>
 </html>
