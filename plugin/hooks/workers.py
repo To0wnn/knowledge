@@ -232,8 +232,12 @@ def kill(w: dict, hard: bool = False):
     pid = w["pid"]
     if os.name == "nt":  # a detached console process has no window to close: only /F stops it
         r = subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True, text=True, timeout=30)
-        if r.returncode not in (0, 128):  # 128: no such process (it ended meanwhile), in every Windows language
-            raise RuntimeError(f"taskkill failed: {(r.stderr or r.stdout).strip()[:200]}")
+        # 128: no such process (it ended meanwhile), in every Windows language. Other codes also come when one process
+        # of the tree was already exiting ("could not be terminated ... not supported"): only a worker still running failed
+        if r.returncode not in (0, 128):
+            time.sleep(1)
+            if running(w):
+                raise RuntimeError(f"taskkill failed: {(r.stderr or r.stdout).strip()[:200]}")
         return
     try:
         if os.getpgid(pid) != pid:  # not the session leader the companion started: leave it alone
