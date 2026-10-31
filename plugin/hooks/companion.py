@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """The knowledge companion: a small local service on this pc that starts the tasks the server says may start now.
 
-Every minute it asks GET /tasks/ready and wakes the newest open session of the task's agent in that project with the
-plugin's own wake code (Codex: codex queue, agy: its language server, Claude: the waiting hook), or, when allowed in
-its settings, starts a session in the project's folder. It also trusts the knowledge hooks the agents' own way, turns
-the agents' native "run without asking" settings on and off (YOLO), and reports hook failures the agents log
-themselves. Its page and local API listen on 127.0.0.1:47321 only; the knowledge web UI shows a "This pc" tab when
-it answers.
+Every minute it asks GET /tasks/ready and, when this pc allows workers (off by default), starts a worker for each
+ready task: a fresh headless session of the task's agent in its own git worktree (workers.py), never a message into
+someone's chat. It hands a worker over at 90% of the agent's usage limit, removes a worktree once its branch is
+merged, and reports the machine's state (POST /machine/report) for the web UI's Machines list. About every 10 s it
+fetches the fixed remote actions its owner queued there (GET /machine/actions). It also trusts the knowledge hooks the
+agents' own way, turns the agents' native "run without asking" settings on and off (YOLO), and reports hook failures
+the agents log themselves. Its page and local API listen on 127.0.0.1:47321 only; the knowledge web UI shows a
+"This pc" tab when it answers.
 
   companion.py serve          the page, the local API and the minute loop (knowledge-agent.py serve runs this)
   companion.py tick           one round of the loop, its summary as JSON
@@ -26,6 +28,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -40,17 +43,31 @@ import agent_hooks  # noqa: E402  (the wake code and the session registry)
 import project_marker  # noqa: E402
 import self_update  # noqa: E402
 import token_store  # noqa: E402
+import workers  # noqa: E402  (a fresh agent session per task)
+
+CREATE_NO_WINDOW, DETACHED_PROCESS = 0x08000000, 0x00000008
+
+
+def no_window(flags: int) -> int:
+    """Windows creation flags for a child of the companion: under pythonw it has no console, so every console program
+    it starts (git, tasklist, codex, agy, a status line) would open a window of its own."""
+    return flags if flags & DETACHED_PROCESS else flags | CREATE_NO_WINDOW
+
+
+if os.name == "nt":  # every subprocess of this process, also those of the modules it imports (self_update, limits)
+    _popen_init = subprocess.Popen.__init__
+
+    def _popen_no_window(self, *args, creationflags=0, **kw):
+        _popen_init(self, *args, creationflags=no_window(creationflags), **kw)
+    subprocess.Popen.__init__ = _popen_no_window
 
 PORT = int(os.environ.get("KNOWLEDGE_COMPANION_PORT") or 47321)  # fixed: the web UI looks for exactly this port
 SELF = f"http://127.0.0.1:{PORT}"
 STATIC = HOOKS.parent / "companion" / "static"
 HOME = Path.home()
-STATE = HOME / ".knowledge" / "companion"
+KN_HOME = token_store.KN_HOME  # KNOWLEDGE_HOME relocates it (tests)
+STATE = KN_HOME / "companion"
 BACKUPS = HOME / "backups" / "knowledge-companion"
-WAKE_AGAIN = 30 * 60  # the server calls a woken task stalled after the same time
-START_DELAY = int(os.environ.get("KNOWLEDGE_COMPANION_START_DELAY") or 120)  # seconds a task is ready before this pc starts a new session for it: a pc with an open session wins
-YOLO_FLAGS = {"claude": ["--dangerously-skip-permissions"], "agy": ["--dangerously-skip-permissions"],
-              "codex": ["--dangerously-bypass-approvals-and-sandbox"]}  # a new session with YOLO on: its own flag as well
 EVERY = float(os.environ.get("KNOWLEDGE_COMPANION_EVERY") or 60)
 AGENTS = {"claude": ("Claude Code", "C"), "codex": ("Codex", "X"), "agy": ("agy", "A")}
 CLAUDE_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR") or HOME / ".claude")
@@ -87,13 +104,24 @@ def newline_of(path: Path) -> str:
         return "\n"
 
 
-def write_json(path: Path, data, indent=2):
+def write_text(path: Path, text: str):
+    """Replace a file at once through a temp file of its own: two writers (threads, or a hook process logging) never
+    write into one temp file, so neither can leave a torn mix of both."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".companion-tmp")
-    tmp.write_text(json.dumps(data, indent=indent, ensure_ascii=False) + "\n", encoding="utf-8", newline=newline_of(path))
-    if path.exists():  # ~/.claude.json is private: the new file keeps the old one's mode
-        os.chmod(tmp, path.stat().st_mode & 0o777)
-    os.replace(tmp, path)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".companion-tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline=newline_of(path)) as f:
+            f.write(text)
+        if path.exists():  # ~/.claude.json is private: the new file keeps the old one's mode
+            os.chmod(tmp, path.stat().st_mode & 0o777)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def write_json(path: Path, data, indent=2):
+    write_text(path, json.dumps(data, indent=indent, ensure_ascii=False) + "\n")
 
 
 def save(name: str, data):
@@ -117,12 +145,14 @@ def backup(path: Path):
 
 
 def edit_json(path: Path, change):
-    """Read, change, write back; a file that is not valid JSON is never overwritten."""
-    data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-    backup(path)
-    out = change(data)
-    write_json(path, data)
-    return out
+    """Read, change, write back; a file that is not valid JSON is never overwritten. One at a time in this process (the
+    minute loop, the remote actions and the page all trust and switch YOLO)."""
+    with LOCK:
+        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        backup(path)
+        out = change(data)
+        write_json(path, data)
+        return out
 
 
 def api_key() -> str:
@@ -182,37 +212,8 @@ def rfc3339(s: str) -> float:
         return 0.0
 
 
-def alive(pid: int) -> bool:
-    if os.name == "nt":  # os.kill on Windows terminates the process: ask with OpenProcess instead
-        import ctypes
-        k = ctypes.windll.kernel32
-        h = k.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
-        if not h:
-            return False
-        code = ctypes.c_ulong()
-        k.GetExitCodeProcess(h, ctypes.byref(code))
-        k.CloseHandle(h)
-        return code.value == 259  # STILL_ACTIVE
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
-def claude_waits(entry: dict) -> bool:
-    """A Claude session can be woken only while its waiting hook runs: the .waiter file names that hook's pid."""
-    try:
-        f = agent_hooks.AGENTS_DIR / f"claude-{agent_hooks.short(entry['session'])}.waiter"
-        return alive(int(f.read_text(encoding="utf-8").split(":")[0]))
-    except (OSError, ValueError, KeyError):
-        return False
-
-
 def sessions(agent: str, now: float) -> list:
-    """The open sessions of an agent here, newest first: what agent_hooks' wake code can reach."""
+    """The interactive sessions of an agent here, newest first (shown on the page; tasks never go into them)."""
     out = []
     if agent == "agy":
         try:
@@ -224,22 +225,20 @@ def sessions(agent: str, now: float) -> list:
             out.append({"session": conv, "cwd": cwd, "project": agent_hooks.project_query(cwd)["project"],
                         "at": rfc3339(changed), "entry": entry})
     elif agent == "codex" and not running("codex"):
-        # Codex leaves no mark when a session ends, and `codex queue` only queues for a session that runs again:
-        # with no Codex running at all, the newest registered session is closed and a wake would only wait there
+        # Codex leaves no mark when a session ends: with no Codex running at all, no registered session is open
         pass
     else:
         for _, e in agent_hooks.read_entries(f"{agent}-*.json"):
-            if e.get("agent") == agent and e.get("cwd") and now - e.get("at", 0) <= agent_hooks.WAKE_WITHIN \
-                    and (agent != "claude" or claude_waits(e)):
+            if e.get("agent") == agent and e.get("cwd") and now - e.get("at", 0) <= 2 * 3600:
                 out.append({"session": e["session"], "cwd": e["cwd"], "project": agent_hooks.project_query(e["cwd"])["project"],
                             "at": e["at"], "entry": e})
     return sorted(out, key=lambda s: -s["at"])
 
 
-def project_folders() -> dict:
-    """{project: folder} of the folders here linked to a project (.knowledge-project), never the home folder: from the
-    session registry and the folders the agents already know."""
-    cands = {e.get("cwd") for _, e in agent_hooks.read_entries("*.json")}
+def known_folders() -> set:
+    """Folders the agents worked in (session registry, Claude's projects, agy's trusted folders, Codex's projects) and
+    the folders linked on the companion page."""
+    cands = {e.get("cwd") for _, e in agent_hooks.read_entries("*.json")} | set(load("linked.json", []))
     try:
         cands |= set(json.loads(CLAUDE_JSON.read_text(encoding="utf-8")).get("projects") or {})
     except (OSError, ValueError, AttributeError):
@@ -252,17 +251,129 @@ def project_folders() -> dict:
         cands |= {json.loads(f'"{p}"') for p in re.findall(r'^\[projects\."((?:[^"\\]|\\.)*)"\]', (CODEX / "config.toml").read_text(encoding="utf-8"), re.M)}
     except (OSError, ValueError):
         pass
+    return {c for c in cands if c}
+
+
+def project_folders() -> dict:
+    """{project: folder} of the folders here linked to a project (.knowledge-project), never the home folder: from the
+    known folders, read anew each time (a folder linked a moment ago counts at once)."""
     out = {}
-    for c in sorted(c for c in cands if c):
+    DENIED.clear()
+    for c in sorted(known_folders()):
         try:
             # the path as the agent wrote it, not resolve()d: a macOS /var or a Windows 8.3 name would not match its own key
             root, name = project_marker.project_root(Path(os.path.abspath(c)))
             if not (root and name) or root.resolve() == HOME.resolve():
                 continue
+        except PermissionError:  # macOS: ~/Documents, ~/Desktop, ~/Downloads need consent for the python launchd starts
+            DENIED.add(c)
+            continue
         except OSError:
             continue
-        out.setdefault(name, str(root))
+        # a project linked in several folders: a worker needs a git checkout for its own worktree, so that one wins
+        if name not in out or (in_git(root) and not in_git(Path(out[name]))):
+            out[name] = str(root)
     return out
+
+
+def in_git(p: Path) -> bool:
+    return any((q / ".git").exists() for q in (p, *p.parents))
+
+
+DENIED: set = set()  # known folders the companion may not read (project_folders); why_not names them
+
+
+# ---------------------------------------------------------------- folders (the link to a project)
+
+_scan: dict = {"at": 0.0, "repos": []}
+SCAN_EVERY = float(os.environ.get("KNOWLEDGE_COMPANION_SCAN_EVERY") or 60)
+
+
+def git_repos(depth: int = 3) -> list:
+    """Git checkouts under the home folder, at most `depth` levels down, skipping hidden folders and heavy trees;
+    scanned at most once a minute (a link or unlink always looks again)."""
+    if time.time() - _scan["at"] < SCAN_EVERY:
+        return _scan["repos"]
+    found, skip = [], {"node_modules", "AppData", "Library", "snap", "venv", "__pycache__", "worktrees"}
+    if sys.platform == "darwin":  # protected (TCC): walking them at logon would ask "python3 would like to access ..."
+        skip |= {"Documents", "Desktop", "Downloads"}
+
+    def walk(d: Path, left: int):
+        try:
+            subs = [s for s in d.iterdir() if s.is_dir() and not s.is_symlink()]
+        except OSError:
+            return
+        if any(s.name == ".git" for s in subs) or (d / ".git").is_file():
+            found.append(str(d))
+            return
+        for s in subs:
+            if left and not s.name.startswith(".") and s.name not in skip:
+                walk(s, left - 1)
+    walk(HOME, depth)
+    _scan.update(at=time.time(), repos=sorted(found))
+    return _scan["repos"]
+
+
+def under_home(p: Path) -> bool:
+    try:
+        return p.resolve() != HOME.resolve() and p.resolve().is_relative_to(HOME.resolve())
+    except OSError:
+        return False
+
+
+def folder_links() -> dict:
+    """{linked: [{path, project}], candidates: [{path}]}: the folders linked here, and the folders that could be
+    (git checkouts under the home folder and folders agents worked in) that are not linked yet."""
+    linked, cands = {}, []
+    for c in sorted(known_folders() | set(git_repos())):
+        try:
+            p = Path(os.path.abspath(c))
+            root, name = project_marker.project_root(p)
+            if root and name and under_home(root):
+                linked.setdefault(str(root), name)
+            elif not root and p.is_dir() and under_home(p):
+                top = subprocess.run(["git", "-C", str(p), "rev-parse", "--show-toplevel"], capture_output=True, text=True,  # git prints UTF-8, never the ANSI code page
+                                     encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL, timeout=10) if shutil.which("git") else None
+                # the checkout's root, as knowledge-init links it; git prints it with / on Windows too
+                top = Path(top.stdout.strip()) if top and top.returncode == 0 and top.stdout.strip() else None
+                # git prints the resolved path (macOS /private/var, a Windows long name): keep the spelling the agent used
+                cands.append(next((str(q) for q in (p, *p.parents) if q.resolve() == top.resolve()), str(top)) if top else str(p))
+        except (OSError, subprocess.SubprocessError):
+            continue
+    cands = sorted({c for c in cands if c not in linked and under_home(Path(c))})
+    return {"linked": [{"path": k, "project": v} for k, v in sorted(linked.items())], "candidates": [{"path": c, "project": ""} for c in cands]}
+
+
+def link_folder(path: str, project: str) -> str:
+    """Link a folder the companion listed (candidate or already linked) to a project this token may write: the
+    .knowledge-project file, as the knowledge-init skill writes it. Never a path from elsewhere."""
+    _scan["at"] = 0
+    f = folder_links()
+    if path not in {x["path"] for x in f["linked"] + f["candidates"]}:
+        raise ValueError("only a folder from the companion's own list can be linked")
+    projects = server("GET", "/machine/projects", token_store.token()).get("projects", [])
+    if project not in projects:
+        raise ValueError(f"this token may not write project {project}; one of: {', '.join(projects) or 'none'}")
+    marker = Path(path) / project_marker.MARKER
+    marker.write_text(project + "\n", encoding="utf-8")
+    with LOCK:
+        save("linked.json", sorted(set(load("linked.json", [])) | {path}))
+    _scan["at"] = 0
+    note = (" The file holds only the name, so it may be committed (git add .knowledge-project), or kept out."
+            if (Path(path) / ".git").exists() else "")
+    log("folder", f"Linked {path} to project {project}", "Sessions started there from now on get this project." + note)
+    return f"linked {path} to {project}." + note
+
+
+def unlink_folder(path: str) -> str:
+    """Remove the link of a folder the companion lists as linked: only its .knowledge-project file."""
+    if path not in {x["path"] for x in folder_links()["linked"]}:
+        raise ValueError("only a linked folder from the companion's own list can be unlinked")
+    (Path(path) / project_marker.MARKER).unlink()
+    with LOCK:
+        save("linked.json", [p for p in load("linked.json", []) if p != path])
+    log("folder", f"Unlinked {path}", "Only its .knowledge-project file was removed")
+    return f"unlinked {path}"
 
 
 # ---------------------------------------------------------------- hook trust
@@ -483,10 +594,7 @@ def apply_values(agent: str, values: list) -> list:
         for (_, (table, key), _), v in zip(spec, values):
             text, prev = toml_set(text, table, key, None if v == MISSING else v)
             old.append(MISSING if prev is None else prev)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + ".companion-tmp")
-        tmp.write_text(text, encoding="utf-8", newline=newline_of(path))
-        os.replace(tmp, path)
+        write_text(path, text)
         return old
     return edit_json(path, lambda d: [json_set(d, where, v) for (_, where, _), v in zip(spec, values)])
 
@@ -530,55 +638,9 @@ def pending_yolo():
 
 def server(method: str, path: str, tok: str, body=None):
     req = urllib.request.Request(token_store.url() + path, method=method, data=None if body is None else json.dumps(body).encode(),
-                                 headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"})
+                                 headers={**token_store.headers(tok), "Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=15) as r:
         return json.loads(r.read().decode("utf-8") or "{}")
-
-
-def one_line(text: str, exe: str) -> str:
-    text = " / ".join(t for t in text.splitlines() if t.strip())  # Windows' npm .cmd shims cut an argument at a newline
-    return re.sub(r'["%^&|<>!]', " ", text) if exe.lower().endswith((".cmd", ".bat")) else text  # cmd.exe parses it
-
-
-def cannot_start(agent: str) -> str:
-    """Why this pc cannot start a session of `agent` ('' = it can): checked before the task is taken on the server."""
-    if not shutil.which(agent):
-        return f"{AGENTS[agent][0]} is not on PATH"
-    if agent != "codex" and os.name != "nt" and not shutil.which("tmux"):
-        return "No open session, and no tmux to start one in"
-    return ""
-
-
-def start_session(agent: str, folder: str, tasks: list, nonce: str = "") -> str:
-    """A new session in the project's folder for its ready tasks: Codex through codex exec, Claude and agy as their CLI in a
-    new terminal (a new console on Windows, tmux elsewhere). The session's label, or '' when there is no way. `nonce`
-    reaches the session's hooks as KNOWLEDGE_START_NONCE: with it the server gives the tasks to this new session only."""
-    exe = shutil.which(agent)
-    env = {**os.environ, "KNOWLEDGE_START_NONCE": nonce} if nonce else None
-    lines = [f"- {t['path']}: [{t['owner']}{'@' + t['device'] if t.get('device') else ''}, {t['id']}] from {t.get('from') or '?'}, start {t.get('start') or 'now'}: {t['text']}" for t in tasks]
-    prompt = one_line(agent_hooks.task_text(lines, True), exe)
-    kw = {"creationflags": 0x00000008 | 0x00000200} if os.name == "nt" else {"start_new_session": True}
-    yolo = YOLO_FLAGS[agent] if load("yolo.json", {}).get(agent, {}).get("on") else []
-    if agent == "codex":
-        STATE.mkdir(parents=True, exist_ok=True)
-        with open(STATE / "codex-exec.log", "ab") as out:
-            # a linked folder need not be a git repository; codex exec refuses one that is not, unless told
-            p = subprocess.Popen([exe, "exec", "--skip-git-repo-check", *yolo, "--cd", folder, prompt], cwd=folder,
-                                 stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, env=env, **kw)
-        return f"codex exec {p.pid}"
-    argv = [exe, *yolo, prompt] if agent == "claude" else [exe, *yolo, "-i", prompt]
-    if os.name == "nt":
-        p = subprocess.Popen(argv, cwd=folder, env=env, creationflags=0x00000010)  # CREATE_NEW_CONSOLE: a window to work in
-        return f"console {p.pid}"
-    tmux = shutil.which("tmux")
-    if not tmux:
-        return ""
-    name = re.sub(r"[^\w-]", "-", f"knowledge-{agent}-{tasks[0]['id']}")[:60]
-    # tmux 3+ runs a command given as several arguments without a shell: the task text stays text
-    # -e: a session started by a tmux server that already runs gets that server's environment, not ours
-    subprocess.run([tmux, "new-session", "-d", "-s", name, "-c", folder, *(["-e", f"KNOWLEDGE_START_NONCE={nonce}"] if nonce else []), *argv], check=True, timeout=15,
-                   stdin=subprocess.DEVNULL, capture_output=True)
-    return f"tmux {name}"
 
 
 def claim(task: dict, tok: str, session: str, start: str = "") -> str:
@@ -598,72 +660,11 @@ def release(task: dict, tok: str):
     """Give the task's lease back after a failed start, so another pc may take it at once; never raises."""
     try:
         server("POST", "/tasks/release", tok, {"project": task["project"], "id": task["id"]})
+    except urllib.error.HTTPError as e:
+        if e.code != 409:  # 409: another pc holds it, nothing of ours to give back
+            log("error", f"Could not give {task['id']} back on the server", f"{e}"[:200])
     except Exception as e:
         log("error", f"Could not give {task['id']} back on the server", f"{e}"[:200])
-
-
-def wake_task(task: dict, tok: str, now: float, told: dict, ready: list, may_start: bool = True, since: float = 0) -> tuple:
-    """(session, how) when a session has the task now, (None, why not) else; raises when a start or a delivery failed
-    (the task's lease is given back first). `told`: sessions reached this round; `may_start`: False once a session was
-    started for this task (it is not started again and again); `since`: when this pc first saw the task ready. A wake
-    takes the task on the server for that session first, so only one session on one pc starts it."""
-    agent, project = task["agent"], task["project"]
-    mine = [s for s in sessions(agent, now) if s["project"] == project]
-    if mine:
-        s = mine[0]
-        key = (agent, s["session"])
-        if key in told:  # one wake says every new task of the session
-            return s["session"], "with the same wake"
-        if agent == "claude":  # its waiting hook asks /tasks itself once poked, and takes the new tasks for its session
-            agent_hooks.poke(s["entry"])
-            told[key] = True
-            return s["session"], "poked its waiting hook"
-        hook, deliver = (({"session_id": s["session"], "cwd": s["cwd"]}, lambda text: agent_hooks.codex_queue(s["entry"], text))
-                         if agent == "codex" else
-                         ({"conversationId": s["session"], "cwd": s["cwd"]}, lambda text: agent_hooks.agy_send(s["entry"], s["session"], text)))
-        told[key], failed, held = True, [], {}
-
-        def tell(text):
-            ok = deliver(text)
-            failed.append(not ok)
-            return ok
-        # new_tasks takes each new task for this session first (409: held elsewhere) and gives it back when not delivered
-        text = agent_hooks.new_tasks(agent, tok, hook, now, wake=True, deliver=tell, held=held)
-        if any(failed):  # new_tasks answers '' for "told before" and for a refused delivery alike
-            raise RuntimeError(f"{AGENTS[agent][0]} did not take the message (session {s['session']})")
-        if not text and task["id"] in held:
-            return None, f"Held by {held[task['id']]}"
-        return s["session"], ("sent to the session" if text else "the session was told before")
-    if not load("settings.json", {}).get("startWhenNone", {}).get(agent):
-        return None, "No open session; starting one is off in Settings"
-    if not may_start:
-        return None, "No open session; one was started for it already, not again"
-    folder = project_folders().get(project)
-    if not folder:
-        return None, f"No folder linked to project {project} on this pc"
-    if now - since < START_DELAY:  # a pc with an open session takes it at once; give it the chance
-        return None, f"No open session; waiting {START_DELAY} s for a pc that has one before starting one here"
-    if why := cannot_start(agent):  # before taking the task: a pc that cannot start must not hold it
-        return None, why
-    key = (agent, f"start:{project}")
-    if told.get(key) == "":  # the start for this project failed this round
-        return None, "No open session; starting one failed this round"
-    # one nonce per new session: the server gives its tasks to the session that presents it, not an older one
-    nonce = told.setdefault((agent, f"nonce:{project}"), secrets.token_hex(8))
-    if held := claim(task, tok, "", nonce):
-        return None, f"Held by {held}"
-    if key in told:  # one new session gets all of its ready tasks
-        return told[key], "with the same new session"
-    try:
-        label = start_session(agent, folder, [t for t in ready if t["agent"] == agent and t["project"] == project], nonce)
-        if not label:
-            raise RuntimeError("no way to start a session here")
-    except Exception as e:
-        told[key] = ""
-        release(task, tok)
-        raise RuntimeError(f"could not start {AGENTS[agent][0]}: {e}") from e
-    told[key] = label
-    return label, "started a session"
 
 
 def agent_log_errors(st: dict, now: float) -> dict:
@@ -733,18 +734,224 @@ def report_errors(st: dict, tok: str, now: float):
         st[key] = mark
 
 
-def renew_busy(woken: dict, tok: str, now: float):
-    """Keep the lease of a task whose codex exec this pc started while that process still runs: a turn longer than
-    the lease must not let another pc start the same task. Only codex exec: a running process is a working session
-    there, while a Claude or agy terminal stays open when idle (those renew on their own turns)."""
-    for key, w in woken.items():
-        m = re.fullmatch(r"codex exec (\d+)", str(w.get("session", "")))
-        if w.get("start") and m and alive(int(m.group(1))):
-            project, _, tid = key.partition("/")
+def settings() -> dict:
+    """Workers: off on a new pc (a work laptop or the family's gaming pc must never run them by surprise); at most one
+    per agent unless the owner says more."""
+    s = load("settings.json", {})
+    return {"workersAllowed": s.get("workersAllowed") is True,
+            "maxWorkers": {a: max(0, min(8, int((s.get("maxWorkers") or {}).get(a, 1)))) for a in AGENTS}}
+
+
+def save_settings(change: dict):
+    with LOCK:
+        s = load("settings.json", {})
+        if "workersAllowed" in change:
+            s["workersAllowed"] = change["workersAllowed"] is True
+        for a, n in (change.get("maxWorkers") or {}).items():
+            if a in AGENTS:
+                s.setdefault("maxWorkers", {})[a] = max(0, min(8, int(n)))
+        save("settings.json", s)
+
+
+def usage(agent: str, ws: dict, now: float):
+    """The agent's usage limit in percent, or None (unknown): Claude the higher of its workers' own stream-json output
+    (until that window resets) and an interactive Claude's status line under 15 min old; Codex from its newest rollout of the last 15 min; agy from
+    a registered agy's language server."""
+    try:
+        if agent == "claude":
+            logs = sorted((Path(w["log"]) for w in ws.values() if w.get("agent") == "claude" and w.get("log") and Path(w["log"]).exists()),
+                          key=lambda f: f.stat().st_mtime)
+            # a worker's reading stays true until its window resets (claude_usage drops those), however old the log
+            got = next((g for f in reversed(logs) if (g := workers.claude_usage(str(f), now))), None)
+            line = agent_hooks.limits.claude_used(now)
+            return max((x[0] for x in (got, line) if x), default=None)
+        if agent == "codex":
+            days = [time.localtime(now - d * 86400) for d in (0, 1)]
+            files = [f for d in days for f in CODEX.glob(f"sessions/{d.tm_year:04d}/{d.tm_mon:02d}/{d.tm_mday:02d}/rollout-*.jsonl")
+                     if now - f.stat().st_mtime < 900]
+            got = agent_hooks.limits.codex_used(str(max(files, key=lambda f: f.stat().st_mtime)), now) if files else None
+            return got[0] if got else None
+        got = agent_hooks.limits.agy_used(agent_hooks.agy_status(), now)
+        return got[0] if got else None
+    except Exception:  # no numbers: unknown, which allows one worker
+        return None
+
+
+RESTART_AFTER = 6 * 3600
+
+
+def shared_running(ws: dict, w: dict) -> bool:
+    """Another running worker uses the same worktree (a hand-over <ID>-cont goes on in it)."""
+    return any(o is not w and o["status"] == "running" and o.get("worktree") and o.get("worktree") == w.get("worktree") for o in ws.values())
+
+
+def worker_session(tid: str) -> str:
+    return f"worker:{token_store.machine().get('id', '')}:{tid}"[:80]
+
+
+def why_not(t: dict, ws: dict, s: dict, lim: dict, game: str) -> str:
+    """'' when this pc may start a worker for task t now, else why not (shown on the page and the Machines list)."""
+    a = t["agent"]
+    if not re.fullmatch(r"[\w.-]{1,60}", t["id"]):  # it names a branch, a folder and a file
+        return f"Task id {t['id'][:40]!r} cannot name a branch; give it a short id (letters, digits, - . _)"
+    if not s["workersAllowed"]:
+        return "Workers are off on this pc (Settings)"
+    if busy := next((w["id"] for w in ws.values() if w["status"] == "running" and w.get("project") == t["project"]
+                     and workers.base_id(w["id"]) == workers.base_id(t["id"])), None):
+        return f"{busy} still runs in this task's worktree; the hand-over starts once it has ended"
+    if game:
+        return f"No workers while {game}"
+    if (lim.get(a) or 0) >= 90:
+        return f"waiting for limit: {AGENTS[a][0]} is at {lim[a]:.0f}% of its usage limit"
+    cap = s["maxWorkers"][a] if lim.get(a) is not None else min(1, s["maxWorkers"][a])  # unknown limit: one at most
+    if sum(1 for w in ws.values() if w["agent"] == a and w["status"] == "running") >= cap:
+        return f"{AGENTS[a][0]} runs {cap} worker(s) already, its maximum here" + ("" if lim.get(a) is not None else " (limit unknown: 1)")
+    if not project_folders().get(t["project"]):
+        return f"No folder linked to project {t['project']} on this pc" + (
+            f"; the companion may not read {', '.join(sorted(DENIED)[:3])}: give {sys.executable} Full Disk Access "
+            "(System Settings, Privacy & Security), or link a folder outside Documents, Desktop and Downloads" if DENIED else "")
+    return ""
+
+
+def start_worker(t: dict, tok: str, now: float, ws: dict = None) -> tuple:
+    """Take the task on the server for a new worker session, then start it: (record, '') or (None, why not)."""
+    nonce = secrets.token_hex(8)
+    if held := claim(t, tok, worker_session(t["id"]), nonce):
+        return None, f"Held by {held}"
+    try:
+        where = workers.worktree(project_folders()[t["project"]], t["id"], t["project"])
+        # a hand-over goes on in the worktree of the first session: its branch counts from where that one started, so
+        # a branch rolled back to that point is never taken for merged
+        first = min((w for w in (ws or {}).values() if where.get("worktree") and w.get("worktree") == where["worktree"] and w.get("base")),
+                    key=lambda w: w.get("started", 0), default=None)
+        where = {**where, "base": first["base"]} if first else where
+        yolo = bool(load("yolo.json", {}).get(t["agent"], {}).get("on"))
+        rec = workers.start(t["agent"], t, token_store.machine().get("label") or socket.gethostname(), where, yolo, nonce)
+    except Exception as e:
+        release(t, tok)
+        raise RuntimeError(f"could not start a {AGENTS[t['agent']][0]} worker: {e}") from e
+    return rec, ""
+
+
+def left_open(w: dict, tok: str) -> bool:
+    """The worker's task may still start (its line is there, not claimed, not handed over): it ended without doing its
+    job. Asked fresh, after its lease went back; unknown (server away) counts as not open."""
+    try:
+        return any(t["project"] == w["project"] and t["id"] == w["id"] for t in server("GET", "/tasks/ready", tok)["tasks"])
+    except Exception:
+        return False
+
+
+def check_workers(ws: dict, tok: str, now: float, lim: dict):
+    """Finished workers, leases of running ones, the 90% hand-over (note first, hard stop after the grace), and the
+    worktrees of merged ones."""
+    for w in ws.values():
+        if w["status"] == "running":
+            p = workers.PROCS.get(w["pid"])  # started by this companion: its exit code (and no zombie)
+            if p:
+                code = p.poll()
+            else:  # started before a restart of the companion or the pc: by its pid and start time, its exit code unknown
+                code = None if workers.running(w) else "unknown"
+            if code is not None:
+                workers.PROCS.pop(w["pid"], None)
+                w.update(status="stopped" if w.get("told") else "finished" if code == 0 else "failed", ended=now, code=code)
+                if not w.get("owner_stopped"):  # stopped on purpose: no other pc may take it at once, only after the lease
+                    release(w, tok)  # a line it claimed but left open may start again at once (the server's idle notice)
+                workers.stop_path(w).unlink(missing_ok=True)
+                if w["status"] == "finished" and left_open(w, tok):  # exit 0 is not done: e.g. its tools were refused
+                    w.update(status="failed", why="ended without claiming or handing back its task")
+                    log("error", f"{AGENTS[w['agent']][0]}: the worker for {w['id']} ended without claiming or handing back its task",
+                        f"Not started again for {RESTART_AFTER // 3600} h unless asked. " + w.get("open", ""))
+                    continue
+                log("worker", f"{AGENTS[w['agent']][0]}: the worker for {w['id']} ended ({w['status']})", w.get("open", ""))
+                continue
+            try:  # a turn longer than the lease must not let another pc start the same task
+                held = claim({"project": w["project"], "id": w["id"], "agent": w["agent"]}, tok, worker_session(w["id"]), w["nonce"])
+            except Exception as e:
+                held = ""
+                if not (isinstance(e, urllib.error.HTTPError) and e.code == 404):  # 404: the worker removed its line, it is ending
+                    log("error", f"Could not renew the lease of {w['id']}", f"{e}"[:200])
+            if held:  # this pc slept past its lease and another took the task over: two workers must not run one task
+                try:
+                    workers.kill(w, hard=True)
+                    log("worker", f"{AGENTS[w['agent']][0]}: the worker for {w['id']} was stopped", f"{held} took the task over while this pc slept")
+                except Exception as e:
+                    log("error", f"Could not stop the worker for {w['id']}", f"{e}"[:200])
+                continue
+            if (lim.get(w["agent"]) or 0) >= 90 and not w.get("told"):
+                room = [b for b, v in lim.items() if b != w["agent"] and v is not None and v < 90]
+                target = workers.NAMES[room[0] if room else w["agent"]]
+                workers.stop_note(w, target)
+                w["told"] = now
+                log("worker", f"{AGENTS[w['agent']][0]}: usage limit at 90%, the worker for {w['id']} hands over to {target}",
+                    f"Stopped in {workers.GRACE // 60} min if it has not ended")
+            elif w.get("told") and now - w["told"] >= workers.GRACE:
+                try:  # one worker that cannot be stopped must not cost the round (the save, the report)
+                    workers.kill(w, hard=True)
+                    log("worker", f"{AGENTS[w['agent']][0]}: the worker for {w['id']} was stopped (usage limit)", "")
+                except Exception as e:
+                    log("error", f"Could not stop the worker for {w['id']}", f"{e}"[:200])
+        elif w["status"] != "merged" and w.get("worktree") and not shared_running(ws, w) and workers.merged(w):
+            w["status"], w["result"] = "merged", workers.remove(w)
+            for o in ws.values():  # the sessions before or after it in that worktree (a hand-over) share its branch
+                if o is not w and o.get("worktree") == w["worktree"] and o["status"] != "running":
+                    o["status"], o["result"] = "merged", w["result"]
+            log("worker", f"{w['id']}: merged by its requester", w["result"])
+
+
+def run_workers(ready: list, tok: str, now: float, only: str = "") -> dict:
+    """The worker part of a round: check the running ones, then start one per ready task this pc may run; `only`
+    (project/id): just that task (a remote "start worker")."""
+    with LOCK:
+        ws = load("workers.json", {})
+    s, out = settings(), {"started": [], "waiting": {}, "limitWait": []}
+    lim = {a: usage(a, ws, now) for a in AGENTS if installed(a)}
+    check_workers(ws, tok, now, lim)
+    game = workers.game_session()
+    for t in ready:
+        key = f"{t['project']}/{t['id']}"
+        if t.get("agent") not in AGENTS or not installed(t["agent"]) or only and key != only:
+            continue
+        if ws.get(key, {}).get("status") == "running":
+            continue
+        prev = ws.get(key, {})
+        # a worker that ended without taking the task off the list failed or stopped: no new one every minute (the
+        # owner can start one again from the Machines list)
+        why = (f"A worker for it ended {int((now - prev['ended']) // 60)} min ago ({prev['status']}); not started again "
+               f"for {RESTART_AFTER // 3600} h unless asked" if prev.get("ended") and now - prev["ended"] < RESTART_AFTER and not only
+               else why_not(t, ws, s, lim, game))
+        if not why:
             try:
-                claim({"project": project, "id": tid, "agent": w["agent"]}, tok, "", w["start"])
-            except Exception as e:  # the next round tries again; the lease lasts longer than a round
-                log("error", f"Could not renew the lease of {tid}", f"{e}"[:200])
+                rec, why = start_worker(t, tok, now, ws)
+            except Exception as e:
+                rec, why = None, str(e)[:200]
+                log("error", f"{AGENTS[t['agent']][0]}: no worker for {t['id']}", why)
+            if rec:
+                ws[key] = rec
+                out["started"].append({"id": t["id"], "project": t["project"], "agent": t["agent"]})
+                log("worker", f"{AGENTS[t['agent']][0]}: started a worker for {t['id']}", rec["open"])
+                continue
+        out["waiting"][key] = why
+        if why.startswith("waiting for limit"):
+            out["limitWait"].append(t["id"])
+    ws = {k: w for k, w in ws.items() if w["status"] == "running" or now - w.get("ended", now) < 30 * 86400}
+    with LOCK:
+        save("workers.json", ws)
+    out["limits"] = lim
+    return out
+
+
+def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None):
+    """The machine's state for the Machines list: settings, game, per agent YOLO, hooks and limit, the workers, and
+    why each ready task waits here (the Tasks tab shows it)."""
+    yolo, folders, s = load("yolo.json", {}), sorted(project_folders().values()), settings()
+    body = {"version": version(), "workersAllowed": s["workersAllowed"], "maxWorkers": s["maxWorkers"], "game": workers.game_session(),
+            "agents": {a: {"yolo": bool(yolo.get(a, {}).get("on")), "trusted": not untrusted(a, folders), "limit": lim.get(a)}
+                       for a in AGENTS if installed(a)},
+            "workers": [{**{k: w.get(k) for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open")},
+                         "checkpoint": bool(w.get("checkpoint")), "merged": w["status"] == "merged"} for w in ws.values()],
+            "limitWait": wait, "waiting": waiting or {}, "folders": folder_links(), "projects": load("state.json", {}).get("projects", [])}
+    server("POST", "/machine/report", tok, body)
 
 
 def tick() -> dict:
@@ -753,7 +960,7 @@ def tick() -> dict:
         return one_round()
 
 
-def one_round() -> dict:
+def one_round(only: str = "") -> dict:
     now, tok = time.time(), token_store.token()
     try:
         pending_yolo()
@@ -762,48 +969,102 @@ def one_round() -> dict:
     keep_trusted()
     with LOCK:
         st = load("state.json", {})
-    summary = {"woken": [], "waiting": {}}
     try:
         ready = server("GET", "/tasks/ready", tok)["tasks"]
         if st.get("sync_error"):
             log("sync", "The knowledge server answers again")
-        st.update(synced=now, sync_error="", ready=ready)
+        st.update(synced=now, sync_error="", ready=ready, projects=server("GET", "/machine/projects", tok).get("projects", []))
     except Exception as e:
         if not st.get("sync_error"):
             log("error", "Could not reach the knowledge server", str(e)[:200])
         st["sync_error"], ready = str(e)[:200], []
-    woken = {k: w for k, w in st.get("woken", {}).items() if now - w.get("since", w["at"]) < 86400}
-    seen = {k: st.get("first_seen", {}).get(k, now) for k in (f"{t['project']}/{t['id']}" for t in ready)}
-    told = {}
-    renew_busy(woken, tok, now)
-    backoff = {k: at for k, at in st.get("backoff", {}).items() if now - at < WAKE_AGAIN}
-    for t in ready:
-        key = f"{t['project']}/{t['id']}"
-        prev = woken.get(key, {})
-        if t.get("agent") not in AGENTS or not installed(t["agent"]) or now - prev.get("at", 0) < WAKE_AGAIN or key in backoff:
-            continue
-        try:
-            session, how = wake_task(t, tok, now, told, ready, may_start=not prev.get("started"), since=seen[key])
-        except Exception as e:  # its lease is given back; not tried again here for WAKE_AGAIN, so another pc can
-            session, how = None, f"Wake failed: {e}"[:200]
-            backoff[key] = now
-            log("error", f"{AGENTS[t['agent']][0]}: could not wake {t['id']}", f"{how}. Given back to the server; "
-                f"this pc tries again in {WAKE_AGAIN // 60} min")
-        if session is None:
-            if how.startswith("Held by") and st.get("waiting", {}).get(key) != how:  # once, not every minute
-                log("wake", f"{AGENTS[t['agent']][0]}: {t['id']} {how[0].lower() + how[1:]}", "Another session or pc holds it; skipped")
-            summary["waiting"][key] = how
-            continue
-        nonce = told.get((t["agent"], f"nonce:{t['project']}")) if how in ("started a session", "with the same new session") else None
-        woken[key] = {"at": now, "since": prev.get("since", now), "session": session, "agent": t["agent"],
-                      "started": bool(prev.get("started")) or how == "started a session", **({"start": nonce} if nonce else {})}
-        summary["woken"].append({"id": t["id"], "project": t["project"], "agent": t["agent"], "session": session, "how": how})
-        log("wake", f"{AGENTS[t['agent']][0]}: {t['id']} ({how})", f"Session {session}")
-    st.update(woken=woken, waiting=summary["waiting"], first_seen=seen, backoff=backoff)
+    summary = run_workers(ready, tok, now, only)
+    for key, why in summary["waiting"].items():
+        if why != st.get("waiting", {}).get(key) and not why.startswith("Workers are off"):  # once, not every minute
+            log("wait", f"{key.split('/', 1)[1]}: {why}", "")
+    st["waiting"] = summary["waiting"]
     report_errors(st, tok, now)
+    try:
+        report(tok, load("workers.json", {}), summary.pop("limits"), summary.pop("limitWait"), now, summary["waiting"])
+    except Exception:  # the next round reports again; the server away is said above
+        pass
     with LOCK:
         save("state.json", {**load("state.json", {}), **{k: v for k, v in st.items() if k not in TRUST_KEYS}})  # trust() may have written meanwhile
     return summary
+
+
+# ---------------------------------------------------------------- remote actions (the Machines list)
+
+def run_action(a: dict) -> str:
+    """One action the owner queued in the web UI; only these, each with the companion's own code."""
+    act, args = a.get("action"), a.get("args") or {}
+    agent = args.get("agent")
+    if agent is not None and agent not in AGENTS:
+        raise ValueError(f"unknown agent {agent}")
+    if act == "start_worker":
+        with TICK:
+            out = one_round(only=f"{args['project']}/{args['id']}")
+        if out["started"]:
+            return f"started a worker for {args['id']}"
+        raise RuntimeError(out["waiting"].get(f"{args['project']}/{args['id']}") or f"{args['id']} is not ready for this pc")
+    if act == "stop_worker":
+        with LOCK:
+            w = load("workers.json", {}).get(f"{args.get('project')}/{args['id']}")
+        w = w if w and w["status"] == "running" else None
+        if not w:
+            raise RuntimeError(f"no running worker for {args['id']}")
+        with TICK, LOCK:  # between rounds: a round holds its own copy of workers.json and saves it back
+            ws = load("workers.json", {})
+            ws[f"{w['project']}/{w['id']}"]["owner_stopped"] = True
+            save("workers.json", ws)
+        workers.kill(w)
+        return (f"stopped the worker for {args['id']}; this pc keeps its lease until it runs out, then another pc may start the line again:"
+                " change it to 'start after approval' or remove it to stop it for good")
+    if act == "rollback":
+        with LOCK:
+            ws = load("workers.json", {})
+        w = ws.get(f"{args.get('project')}/{args['id']}")
+        if not w or w["status"] == "running" or not w.get("branch"):
+            raise RuntimeError(f"no finished worker with a worktree for {args['id']}")
+        if shared_running(ws, w):
+            raise RuntimeError(f"another worker runs in the worktree of {args['id']} now; stop it first")
+        if later := [o["id"] for o in ws.values() if o is not w and o.get("worktree") == w["worktree"] and o.get("started", 0) > w.get("started", 0)]:
+            raise RuntimeError(f"{', '.join(later)} went on in the worktree of {args['id']} after it: roll back {later[-1]} instead")
+        return workers.rollback(w["cwd"], w["id"])
+    if act == "trust_hooks":
+        return trust(agent)
+    if act == "link_folder":
+        return link_folder(str(args.get("path", "")), str(args.get("project", "")))
+    if act == "unlink_folder":
+        return unlink_folder(str(args.get("path", "")))
+    if act == "update_plugin":
+        update_plugins()
+        return "updated"
+    if act == "yolo":
+        return f"YOLO {set_yolo(agent, args.get('on') is True)}"
+    if act == "workers_allowed":
+        save_settings({"workersAllowed": args.get("on") is True})
+        return f"workers {'allowed' if args.get('on') is True else 'off'}"
+    if act == "max_workers":
+        save_settings({"maxWorkers": {agent: args["n"]}})
+        return f"at most {args['n']} {AGENTS[agent][0]} worker(s)"
+    raise ValueError(f"unknown action {act}")
+
+
+def actions_round():
+    """Fetch the waiting actions for this machine, run each, report how it went; all in the activity log."""
+    tok = token_store.token()
+    for a in server("GET", "/machine/actions", tok).get("actions", []):
+        log("remote", f"Remote action {a.get('action')} from {a.get('by') or '?'}", json.dumps(a.get("args") or {})[:200])
+        try:
+            ok, result = True, run_action(a)
+        except Exception as e:
+            ok, result = False, f"{type(e).__name__}: {e}"
+            log("error", f"Remote action {a.get('action')} failed", result[:300])
+        try:
+            server("POST", "/machine/actions/result", tok, {"id": a["id"], "ok": ok, "result": str(result)[:300]})
+        except Exception as e:
+            log("error", "Could not report a remote action's result", str(e)[:200])
 
 
 # ---------------------------------------------------------------- the page
@@ -811,7 +1072,7 @@ def one_round() -> dict:
 def own_errors(agent: str) -> list:
     out = []
     try:
-        for ln in (HOME / ".knowledge" / "hook-errors.jsonl").read_text(encoding="utf-8", errors="replace").splitlines()[-100:]:
+        for ln in (KN_HOME / "hook-errors.jsonl").read_text(encoding="utf-8", errors="replace").splitlines()[-100:]:
             e = json.loads(ln)
             if re.search(rf"\b{agent}\b", e.get("hook", "")):
                 out.append(e)
@@ -826,7 +1087,7 @@ def first_line(text) -> str:
 
 def page_state() -> dict:
     now = time.time()
-    st, yolo, settings = load("state.json", {}), load("yolo.json", {}), load("settings.json", {})
+    st, yolo, ws = load("state.json", {}), load("yolo.json", {}), load("workers.json", {})
     folders = sorted(project_folders().values())
     agents = []
     for a, (name, mark) in AGENTS.items():
@@ -838,25 +1099,32 @@ def page_state() -> dict:
                        "yoloPending": yolo.get(a, {}).get("pending"),
                        "sessions": [{"title": f"{s['project']}: {Path(s['cwd']).name}", "at": s["at"], "wakeable": i == 0}
                                     for i, s in enumerate(sessions(a, now)) if here][:6],
-                       "lastError": last and {"at": last.get("at", 0), "text": f"{last.get('hook', '')}: {first_line(last.get('stderr'))}"}})
+                       "lastError": last and {"at": last.get("at", 0), "text": f"{last.get('hook', '')}: {first_line(last.get('stderr'))}"},
+                       "workers": [{k: w.get(k) for k in ("id", "project", "status", "started", "ended", "branch", "yolo", "open")}
+                                   for w in ws.values() if w["agent"] == a]})
+    # ready: may start here now; waiting: why not (also "workers are off"); stalled: workers that failed or were stopped
     lanes = {"ready": [], "waiting": [], "stalled": []}
     for t in st.get("ready", []):
         if t.get("agent") not in AGENTS or not installed(t["agent"]):
             continue
-        key, w = f"{t['project']}/{t['id']}", st.get("woken", {}).get(f"{t['project']}/{t['id']}")
+        key, w = f"{t['project']}/{t['id']}", ws.get(f"{t['project']}/{t['id']}")
         item = {"id": t["id"], "owner": t["agent"], "text": t["text"], "project": t["project"]}
-        if w and now - w.get("since", w["at"]) >= WAKE_AGAIN:
-            lanes["stalled"].append({**item, "why": f"Woken {int((now - w.get('since', w['at'])) // 60)} min ago, not claimed"})
+        if w and w["status"] == "running":
+            lanes["ready"].append({**item, "why": f"Running in a worker for {int((now - w['started']) // 60)} min"})
         elif key in st.get("waiting", {}):
             lanes["waiting"].append({**item, "why": st["waiting"][key]})
         else:
-            lanes["ready"].append({**item, "why": f"Woken, session {w['session']}" if w else ""})
+            lanes["ready"].append(item)
+    lanes["stalled"] = [{"id": w["id"], "owner": w["agent"], "text": w.get("open", ""), "project": w["project"],
+                         "why": f"Worker {w['status']} {int((now - w.get('ended', now)) // 60)} min ago" + (f": {w['why']}" if w.get("why") else "")}
+                        for w in ws.values() if w["status"] in ("failed", "stopped")]
     tok = token_store.token()
     return {"status": {"host": socket.gethostname(), "live": sum(len(a["sessions"]) for a in agents),
+                       "workers": sum(1 for w in ws.values() if w["status"] == "running"),
                        "stalled": len(lanes["stalled"]), "synced": st.get("synced"), "syncError": st.get("sync_error", "")},
             "agents": agents, "tasks": lanes, "activity": load("activity.json", [])[:50],
-            "settings": {"serverUrl": token_store.url(), "token": {"present": bool(tok)},
-                         "startWhenNone": {a: bool(settings.get("startWhenNone", {}).get(a)) for a in AGENTS}},
+            "settings": {"serverUrl": token_store.url(), "token": {"present": bool(tok)}, **settings(), "game": workers.game_session()},
+            "folders": folder_links(), "projects": st.get("projects", []),
             "version": version()}
 
 
@@ -921,7 +1189,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self.host_ok() or o is None:
             return self.send(403, {"error": "not allowed"})
         if path == "/local/api/hello":
-            return self.send(200, {"companion": version(), "host": socket.gethostname()}, origin=o)
+            return self.send(200, {"companion": version(), "host": socket.gethostname(), "machine": token_store.machine().get("id", "")}, origin=o)
         if path == "/local/api/state":
             s = page_state()
             if not self.key_ok():  # the web UI's tab (and anyone else here): the agents, no tasks, folders or activity
@@ -955,12 +1223,14 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("send {agent, on}")
                 return self.send(200, {"yolo": set_yolo(agent, bool(body.get("on")))}, origin=o)
             if path == "/local/api/settings":
-                start = body.get("startWhenNone", {})
-                with LOCK:
-                    s = load("settings.json", {})
-                    s["startWhenNone"] = {a: bool(start.get(a)) for a in AGENTS}
-                    save("settings.json", s)
-                return self.send(200, {"ok": True}, origin=o)
+                if o != SELF:  # whether this pc runs workers is for this pc's own page (or its owner, remotely)
+                    return self.send(403, {"error": "Worker settings can only be changed on the companion page itself"}, origin=o)
+                save_settings({k: body[k] for k in ("workersAllowed", "maxWorkers") if k in body})
+                return self.send(200, {"ok": True, **settings()}, origin=o)
+            if path == "/local/api/link":
+                return self.send(200, {"result": link_folder(str(body.get("path", "")), str(body.get("project", "")))}, origin=o)
+            if path == "/local/api/unlink":
+                return self.send(200, {"result": unlink_folder(str(body.get("path", "")))}, origin=o)
             if path == "/local/api/tick":
                 return self.send(200, tick(), origin=o)
             if path == "/local/api/update":
@@ -986,9 +1256,42 @@ def loop():
         time.sleep(EVERY)
 
 
+ACTIONS_EVERY = float(os.environ.get("KNOWLEDGE_COMPANION_ACTIONS_EVERY") or 10)
+
+
+def actions_loop():
+    """Remote actions from the web UI: asked for about every 10 s (pull: the server never connects to this pc)."""
+    failed = False
+    while True:
+        try:
+            actions_round()
+            failed = False
+        except Exception as e:  # the server away: said once, the minute loop says it too
+            if not failed:
+                log("error", "Could not fetch remote actions", f"{type(e).__name__}: {e}"[:300])
+            failed = True
+        time.sleep(ACTIONS_EVERY)
+
+
+class LocalServer(ThreadingHTTPServer):
+    """One companion per pc: its port is the lock. On Windows SO_REUSEADDR would let a second one bind the same port
+    (and both start the same tasks), so there the port is taken exclusively instead."""
+    allow_reuse_address = os.name != "nt"
+
+    def server_bind(self):
+        if os.name == "nt":
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 def serve():
-    httpd = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)  # never another interface: the API changes agent settings
+    token_store.machine()  # this pc's id, made once; the plugin hooks make it too when the companion never ran
+    try:
+        httpd = LocalServer(("127.0.0.1", PORT), Handler)  # never another interface: the API changes agent settings
+    except OSError as e:  # loudly, with a failing exit: the hooks' wrapper would otherwise call it skipped and exit 0
+        sys.exit(f"knowledge companion: {SELF} is taken, so another companion (or program) runs here: {e}")
     threading.Thread(target=loop, daemon=True).start()
+    threading.Thread(target=actions_loop, daemon=True).start()
     print(f"knowledge companion on {SELF}", flush=True)
     httpd.serve_forever()
 
@@ -1023,24 +1326,83 @@ def main(argv: list):
         d = {"a": 1}
         assert json_set(d, ("p", "m"), "b") == MISSING and d == {"a": 1, "p": {"m": "b"}}
         assert json_set(d, ("p", "m"), MISSING) == "b" and d == {"a": 1, "p": {}}
+        assert no_window(0) == CREATE_NO_WINDOW and no_window(0x200) == 0x200 | CREATE_NO_WINDOW and no_window(DETACHED_PROCESS) == DETACHED_PROCESS
         assert ours({"pluginId": "knowledge@knowledge"}) and not ours({"pluginId": "other@x", "command": "x.sh"})
         globals()["CLAUDE_JSON"] = HOME / ".knowledge-companion-self-test-missing.json"
         assert untrusted("claude", ["/x"]) == [], "Claude never ran here: nothing to trust, no trust round every minute"
-        # A start: the cheap checks come before the task is taken on the server; a failed start gives it back.
-        did, g = [], globals()
-        g.update(sessions=lambda a, n: [], project_folders=lambda: {"p": "/x"}, load=lambda n, d: {"startWhenNone": {"agy": True}},
-                 claim=lambda t, tok, s, start="": did.append(("claim", start)) or "", release=lambda t, tok: did.append(("release",)),
-                 cannot_start=lambda a: "no tmux", start_session=lambda *a: "")
-        task = {"agent": "agy", "project": "p", "id": "T-1"}
-        assert wake_task(task, "", 1000, {}, [task]) == (None, "no tmux") and did == [], did
-        g["cannot_start"] = lambda a: ""
+        # Whether this pc may start a worker: off by default, game, limit (unknown: one), max, a linked folder.
+        g, task, workers_mod = globals(), {"agent": "codex", "project": "p", "id": "T-1"}, workers
+        g.update(project_folders=lambda: {"p": "/x"})
+        on = {"workersAllowed": True, "maxWorkers": {"claude": 1, "codex": 2, "agy": 1}}
+        run = {"k": {"agent": "codex", "status": "running"}}
+        assert why_not(task, {}, {**on, "workersAllowed": False}, {}, "").startswith("Workers are off")
+        assert why_not(task, {}, on, {}, "a Wolf game session runs (1)").startswith("No workers while a Wolf")
+        assert why_not(task, {}, on, {"codex": 90.0}, "").startswith("waiting for limit")
+        old = {"k": {"agent": "claude", "status": "running", "project": "p", "id": "T-1"}}
+        assert why_not({**task, "id": "T-1-cont"}, old, on, {"codex": 10.0}, "").startswith("T-1 still runs"), "a hand-over waits for the old worker"
+        assert why_not(task, run, on, {"codex": None}, "").endswith("(limit unknown: 1)"), "unknown limit: one worker at most"
+        assert why_not(task, run, on, {"codex": 40.0}, "") == "", "known limit: up to its max"
+        assert why_not({**task, "project": "q"}, {}, on, {"codex": 10.0}, "").startswith("No folder linked")
+        DENIED.add("/Users/x/Documents/app")
+        assert "Full Disk Access" in why_not({**task, "project": "q"}, {}, on, {"codex": 10.0}, ""), "a folder macOS keeps from it is named"
+        DENIED.clear()
+        # Two writers at once (threads here, a hook process logging): each through its own temp file, never a torn file.
+        with tempfile.TemporaryDirectory() as tmp:
+            f, errs = Path(tmp) / "x.json", []
+
+            def writer(n):
+                for _ in range(100):
+                    try:
+                        write_json(f, {"n": n, "pad": "x" * 200_000})
+                    except Exception as e:
+                        errs.append(e)
+            ts = [threading.Thread(target=writer, args=(n,)) for n in range(3)]
+            [t.start() for t in ts]
+            [t.join() for t in ts]
+            assert not errs and json.loads(f.read_text(encoding="utf-8"))["n"] in (0, 1, 2) and len(list(Path(tmp).iterdir())) == 1, errs[:1]
+        # A merged branch counts for every session that worked in its worktree (a hand-over shares it).
+        gone = []  # the branch is deleted with the first record's worktree: merged() of the other finds no branch
+        g["workers"] = type("W", (), {"merged": staticmethod(lambda w: not gone), "remove": staticmethod(lambda w: gone.append(1) or "removed"), "PROCS": {}})
+        pair = {"a": {"id": "M-1", "agent": "codex", "status": "finished", "worktree": "/wt"},
+                "b": {"id": "M-1-cont", "agent": "codex", "status": "finished", "worktree": "/wt"}}
+        check_workers(pair, "", 1000, {})
+        assert [w["status"] for w in pair.values()] == ["merged", "merged"], pair
+        g["workers"] = workers_mod
+        # A Claude worker's reading counts until its window resets, also when its log is older than 15 minutes.
+        with tempfile.TemporaryDirectory() as tmp:
+            f, now = Path(tmp) / "w.log", time.time()
+            f.write_text(json.dumps({"type": "rate_limit_event", "rate_limit_info": {"unifiedWindows": {
+                "five_hour": {"utilization": 0.93, "resetsAt": now + 4 * 3600}}}}) + "\n")
+            os.utime(f, (now - 3600, now - 3600))
+            real, agent_hooks.limits.claude_used = agent_hooks.limits.claude_used, lambda now: None
+            try:
+                assert usage("claude", {"k": {"agent": "claude", "log": str(f)}}, now) == 93.0
+            finally:
+                agent_hooks.limits.claude_used = real
+        # A failed start gives the task back at once.
+        did = []
+        g.update(claim=lambda t, tok, s, start="": did.append(("claim", s)) or "", release=lambda t, tok: did.append(("release",)))
+        g["workers"] = type("W", (), {"worktree": staticmethod(lambda f, i, p: (_ for _ in ()).throw(OSError("no git"))), "start": None})
         try:
-            wake_task(task, "", 1000, told := {}, [task])
+            start_worker(task, "", 1000)
             raise AssertionError("a failed start must raise")
         except RuntimeError:
             pass
-        assert did[0][0] == "claim" and did[0][1] and did[1:] == [("release",)], did
-        assert wake_task(task, "", 1000, told, [task])[0] is None and len(did) == 2, "not tried again in the same round"
+        assert did[0][0] == "claim" and did[0][1].startswith("worker:") and did[1:] == [("release",)], did
+        # A hand-over in the first session's worktree keeps that session's base; only the newest session rolls back.
+        g["workers"] = type("W", (), {"worktree": staticmethod(lambda f, i, p: {"cwd": "/wt", "worktree": "/wt", "branch": "task/T-1", "base": "Y"}),
+                                      "start": staticmethod(lambda a, t, m, where, y, n: {"id": t["id"], **where})})
+        first = {"id": "T-1", "worktree": "/wt", "base": "X", "started": 1, "status": "finished", "branch": "task/T-1", "cwd": "/wt"}
+        rec, _ = start_worker({**task, "id": "T-1-cont"}, "", 1000, {"p/T-1": first})
+        assert rec["base"] == "X", rec
+        with tempfile.TemporaryDirectory() as tmp:
+            g["STATE"] = Path(tmp)
+            save("workers.json", {"p/T-1": first, "p/T-1-cont": {**rec, "started": 2, "status": "finished"}})
+            try:
+                run_action({"action": "rollback", "args": {"project": "p", "id": "T-1"}})
+                raise AssertionError("an older session's rollback would drop the hand-over's commits")
+            except RuntimeError as e:
+                assert "roll back T-1-cont instead" in str(e), e
         print("ok")
     else:
         sys.exit(__doc__)

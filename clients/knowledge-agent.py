@@ -87,7 +87,8 @@ def hook_config(agent: str, name: str) -> dict:
             "SessionStart": [{"type": "command", "command": cmd("context", "agy"), "timeout": 30}],
             "PostToolUse": [{"matcher": "write_file|edit_file|write_to_file|replace_file_content|multi_replace_file_content",
                              "hooks": [{"type": "command", "command": cmd("docs-sync"), "timeout": 20}]},
-                            {"matcher": "call_mcp_tool", "hooks": [{"type": "command", "command": cmd("wake", "agy"), "timeout": 40}]}],
+                            {"matcher": "call_mcp_tool", "hooks": [{"type": "command", "command": cmd("wake", "agy"), "timeout": 40}]},
+                            {"matcher": ".*", "hooks": [{"type": "command", "command": cmd("watch", "agy"), "timeout": 10}]}],
             "PreToolUse": [{"matcher": "invoke_subagent", "hooks": [{"type": "command", "command": cmd("gate", "agy"), "timeout": 10}]},
                            {"matcher": "write_file|edit_file|write_to_file|replace_file_content|multi_replace_file_content",
                             "hooks": [{"type": "command", "command": cmd("guard", "agy"), "timeout": 10}]}],
@@ -100,7 +101,8 @@ def hook_config(agent: str, name: str) -> dict:
             {"type": "command", "command": cmd("context", "codex"), "timeout": 30, "additionalContextLimit": 60000}]}],
         "PostToolUse": [{"matcher": "apply_patch", "hooks": [{"type": "command", "command": cmd("docs-sync"), "timeout": 20}]},
                         {"matcher": "mcp__.*knowledge_(edit|write|new_memo)",
-                         "hooks": [{"type": "command", "command": cmd("wake", "codex"), "timeout": 40}]}],
+                         "hooks": [{"type": "command", "command": cmd("wake", "codex"), "timeout": 40}]},
+                        {"matcher": ".*", "hooks": [{"type": "command", "command": cmd("watch", "codex"), "timeout": 10}]}],
         "UserPromptSubmit": [{"hooks": [{"type": "command", "command": cmd("tasks", "codex"), "timeout": 8}]}],
         "PreToolUse": [{"matcher": ".*spawn_agent", "hooks": [{"type": "command", "command": cmd("gate", "codex"), "timeout": 10}]},
                        {"matcher": "apply_patch", "hooks": [{"type": "command", "command": cmd("guard", "codex"), "timeout": 10}]}],
@@ -269,6 +271,10 @@ def remove_old_setup(agent: str):
             print(f"removed the old knowledge entry from {path}")
 
 
+CODEX_TRUST = ("the knowledge companion trusts the Codex hooks for you (install-companion; again after each plugin "
+               "update); without the companion, open codex and type /hooks once")
+
+
 def install_plugin(agent: str):
     remove_old_setup(agent)
     if agent == "codex":
@@ -277,7 +283,7 @@ def install_plugin(agent: str):
         run_cli([codex, "plugin", "marketplace", "upgrade", "knowledge"], ok_if=("not configured as a git",))  # a local checkout
         run_cli([codex, "plugin", "add", "knowledge@knowledge"])
         restart_codex()
-        return print("done; open codex and type /hooks once to trust the knowledge hooks")
+        return print(f"done; {CODEX_TRUST}")
     run_cli([cli("agy"), "plugin", "install", AGY_PLUGIN])
     if not has_plugin("agy"):  # a failed copy can leave agy without the plugin at all
         sys.exit("agy plugin list does not show the knowledge plugin after the install: quit agy completely and run this again.")
@@ -423,7 +429,7 @@ def install(agent: str, name: str, tok: str = ""):
     install_hooks(agent, name)
     install_rules(agent, rules)
     install_skills()
-    print("done" + ("; open codex and type /hooks once to trust the hooks" if agent == "codex" else "; start agy and ask it to search the knowledge"))
+    print("done" + (f"; {CODEX_TRUST}" if agent == "codex" else "; start agy and ask it to search the knowledge"))
 
 
 def codex_block(name: str) -> str:
@@ -559,17 +565,19 @@ AGENT_LABEL = "io.github.knowledge.companion"
 
 def companion_paths(system: str) -> dict:
     home = Path.home()
+    # the page that hands the companion page its key: a private file, so the key is never on a browser's command line
+    opener = {"opener": Path(os.environ.get("KNOWLEDGE_HOME") or home / ".knowledge") / "companion" / "open.html"}
     if system == "windows":
         start = Path(os.environ.get("APPDATA") or home / "AppData" / "Roaming") / "Microsoft" / "Windows" / "Start Menu" / "Programs"
         return {"task_xml": home / ".knowledge" / "companion" / "autostart.xml",
-                "lnk": start / f"{COMPANION_NAME}.lnk", "url": start / f"{COMPANION_NAME}.url"}
+                "lnk": start / f"{COMPANION_NAME}.lnk", "url": start / f"{COMPANION_NAME}.url", **opener}
     if system == "darwin":
         app = home / "Applications" / f"{COMPANION_NAME}.app" / "Contents"
         return {"plist": home / "Library" / "LaunchAgents" / f"{AGENT_LABEL}.plist", "app": app.parent,
-                "app_plist": app / "Info.plist", "app_exe": app / "MacOS" / "knowledge-companion"}
+                "app_plist": app / "Info.plist", "app_exe": app / "MacOS" / "knowledge-companion", **opener}
     data = Path(os.environ.get("XDG_DATA_HOME") or home / ".local" / "share")
     conf = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config")
-    return {"unit": conf / "systemd" / "user" / UNIT, "desktop": data / "applications" / "knowledge-companion.desktop"}
+    return {"unit": conf / "systemd" / "user" / UNIT, "desktop": data / "applications" / "knowledge-companion.desktop", **opener}
 
 
 def windows_account() -> str:
@@ -598,10 +606,15 @@ def app_browser(system: str) -> str:
 
 def companion_steps(system: str, key: str = "<key>") -> list:
     """What install-companion does, in order: ("write", path, text[, mode]) or ("run", argv, may_fail). The shortcut
-    opens the page with the local API's key, so its file is private."""
+    opens a private file that forwards to the page with the local API's key: a key on the browser's command line
+    could be read by every other account on the pc (/proc, ps), and the companion's port is open to them."""
     from xml.sax.saxutils import escape
     me, p, browser = str(Path(__file__).resolve()), companion_paths(system), app_browser(system)
-    page = f"{COMPANION_URL}/#key={key}"
+    target = escape(f"{COMPANION_URL}/#key={key}", {'"': "&quot;"})
+    forward = ("<!doctype html>\n<meta charset=\"utf-8\">\n<title>Knowledge companion</title>\n"
+               f"<meta http-equiv=\"refresh\" content=\"0;url={target}\">\n<a href=\"{target}\">Open the knowledge companion</a>\n")
+    page = p["opener"].as_uri()
+    first = [("write", p["opener"], forward, 0o600)]
     if system == "windows":
         # pythonw.exe runs without a console; started directly, never through (hidden or encoded) PowerShell,
         # which corporate EDRs flag.
@@ -620,7 +633,7 @@ def companion_steps(system: str, key: str = "<key>") -> list:
     <WorkingDirectory>{escape(str(Path.home()))}</WorkingDirectory></Exec></Actions>
 </Task>
 """
-        steps = [("write", p["task_xml"], xml),
+        steps = first + [("write", p["task_xml"], xml),
                  ("run", ["schtasks", "/Create", "/F", "/TN", COMPANION_NAME, "/XML", str(p["task_xml"])], False),
                  ("run", ["schtasks", "/End", "/TN", COMPANION_NAME], True),  # an update: the running one has old code
                  ("run", ["schtasks", "/Run", "/TN", COMPANION_NAME], False)]
@@ -644,7 +657,7 @@ def companion_steps(system: str, key: str = "<key>") -> list:
   <key>EnvironmentVariables</key><dict><key>PATH</key>{arg(os.environ.get("PATH", ""))}</dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
-  <key>StandardErrorPath</key>{arg(str(Path.home() / ".knowledge" / "companion" / "serve.log"))}
+  <key>StandardErrorPath</key>{arg(str(Path(os.environ.get("KNOWLEDGE_HOME") or Path.home() / ".knowledge") / "companion" / "serve.log"))}
 </dict></plist>
 """
         opener = f'exec open -na "{browser}" --args "--app={page}"' if browser else f'exec open "{page}"'
@@ -657,7 +670,7 @@ def companion_steps(system: str, key: str = "<key>") -> list:
   <key>CFBundlePackageType</key><string>APPL</string>
 </dict></plist>
 """
-        steps = [("write", p["plist"], plist),
+        steps = first + [("write", p["plist"], plist),
                  ("run", ["launchctl", "bootout", f"gui/{uid}", str(p["plist"])], True),
                  ("run", ["launchctl", "bootstrap", f"gui/{uid}", str(p["plist"])], False),
                  ("write", p["app_plist"], info), ("write", p["app_exe"], f"#!/bin/sh\n{opener}\n", 0o700)]
@@ -687,7 +700,7 @@ Icon=applications-internet
 Terminal=false
 Categories=Network;Development;
 """
-        steps = [("write", p["unit"], unit),
+        steps = first + [("write", p["unit"], unit),
                  ("run", ["systemctl", "--user", "daemon-reload"], False),
                  ("run", ["systemctl", "--user", "enable", UNIT], False),
                  ("run", ["systemctl", "--user", "restart", UNIT], False),  # starts it, or loads new code after an update
@@ -701,12 +714,13 @@ def companion_undo_steps(system: str) -> list:
     if system == "windows":
         return off + [("run", ["schtasks", "/End", "/TN", COMPANION_NAME], True),
                 ("run", ["schtasks", "/Delete", "/F", "/TN", COMPANION_NAME], True),
-                ("remove", p["task_xml"]), ("remove", p["lnk"]), ("remove", p["url"])]
+                ("remove", p["task_xml"]), ("remove", p["lnk"]), ("remove", p["url"]), ("remove", p["opener"])]
     if system == "darwin":
         uid = getattr(os, "getuid", lambda: 501)()
-        return off + [("run", ["launchctl", "bootout", f"gui/{uid}", str(p["plist"])], True), ("remove", p["plist"]), ("remove", p["app"])]
+        return off + [("run", ["launchctl", "bootout", f"gui/{uid}", str(p["plist"])], True), ("remove", p["plist"]), ("remove", p["app"]),
+                      ("remove", p["opener"])]
     return off + [("run", ["systemctl", "--user", "disable", "--now", UNIT], True), ("remove", p["unit"]),
-            ("run", ["systemctl", "--user", "daemon-reload"], True), ("remove", p["desktop"])]
+            ("run", ["systemctl", "--user", "daemon-reload"], True), ("remove", p["desktop"]), ("remove", p["opener"])]
 
 
 def run_steps(steps: list, dry: bool) -> list:
@@ -724,9 +738,12 @@ def run_steps(steps: list, dry: bool) -> list:
                 print(f"companion: would write {what}:\n" + "".join(f"    {ln}\n" for ln in new.splitlines()), end="")
             else:
                 what.parent.mkdir(parents=True, exist_ok=True)
-                what.write_text(new, encoding=enc, newline="\n" if enc == "utf-8" else None)
-                if len(step) > 3:
-                    os.chmod(what, step[3])
+                if len(step) > 3:  # private from its first byte (the opener holds the key), also when it was there before
+                    with os.fdopen(os.open(what, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, step[3]), "w", encoding=enc, newline="\n") as f:
+                        os.chmod(what, step[3])
+                        f.write(new)
+                else:
+                    what.write_text(new, encoding=enc, newline="\n" if enc == "utf-8" else None)
                 print(f"companion: {'updated' if old is not None else 'wrote'} {what}")
         elif kind == "remove":
             if not what.exists():
@@ -802,7 +819,7 @@ def main(argv: list):
     cmd = argv[0] if argv else ""
     if cmd == "header" and len(argv) <= 2:
         tok = token(argv[1] if len(argv) == 2 else "-")
-        print(json.dumps({"Authorization": f"Bearer {tok}"} if tok else {}))
+        print(json.dumps(token_store.headers(tok) if tok else {}))
     elif cmd == "install" and len(argv) == 1:
         install_found()
         install_companion()
@@ -818,7 +835,7 @@ def main(argv: list):
         if len(argv) == 2:  # a vault name (the machine that holds the files) keeps the URL it is given
             ensure_url()
         install(argv[1], argv[2] if len(argv) > 2 else "-")
-    elif cmd in ("context", "docs-sync", "session-log", "hints", "tasks", "wake", "gate", "guard", "register", "serve", "companion"):  # hooks written by the setup call this script
+    elif cmd in ("context", "docs-sync", "session-log", "hints", "tasks", "wake", "gate", "guard", "watch", "take", "register", "serve", "companion"):  # hooks written by the setup call this script
         agent_hooks.SETUP = "script"  # its auto-update: git pull + install, not the plugin CLI
         agent_hooks.main(argv)
     else:

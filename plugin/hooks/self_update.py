@@ -23,7 +23,7 @@ import urllib.request
 from pathlib import Path
 
 PLUGIN = Path(__file__).resolve().parent.parent
-STATE = Path.home() / ".knowledge" / "auto-update.json"  # next to the offline copy (memory_mirror.py)
+STATE = Path(os.environ.get("KNOWLEDGE_HOME") or Path.home() / ".knowledge") / "auto-update.json"  # next to the offline copy (memory_mirror.py)
 LATEST = os.environ.get("KNOWLEDGE_PLUGIN_LATEST",
                         "https://raw.githubusercontent.com/To0wnn/knowledge/main/plugin/.claude-plugin/plugin.json")
 AGY_PLUGIN = os.environ.get("KNOWLEDGE_AGY_PLUGIN", "https://github.com/To0wnn/knowledge/tree/main/plugin")
@@ -116,7 +116,7 @@ def notice(agent: str, now: float | None = None, spawn=None, mode: str = "plugin
 
 
 def start(agent: str, mode: str = "plugin") -> None:
-    kw = {"creationflags": 0x00000008 | 0x00000200} if os.name == "nt" else {"start_new_session": True}  # detached
+    kw = {"creationflags": 0x08000000 | 0x00000200} if os.name == "nt" else {"start_new_session": True}  # CREATE_NO_WINDOW | NEW_PROCESS_GROUP (as workers.WIN_FLAGS): DETACHED gave git and the agent CLIs a window each
     subprocess.Popen([sys.executable, "-X", "utf8", __file__, "run", agent, mode], stdin=subprocess.DEVNULL,
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **kw)
 

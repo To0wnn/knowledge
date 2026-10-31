@@ -10,11 +10,12 @@ clients/knowledge-agent.py (the setup without a plugin) calls the same functions
                                                may only answer {}), once; and tasks handed to agy since its last turn
   agent_hooks.py tasks <claude|codex> [TOKEN]  UserPromptSubmit: tasks handed to this agent since the session started;
                                                also notes the session so another agent on this machine can wake it
-  agent_hooks.py wake <claude|codex|agy> [TOKEN]  PostToolUse after knowledge_edit/write/new_memo: wake the newest
-                                               session of each other agent here that got a new task from it
+  agent_hooks.py wake <claude|codex|agy> [TOKEN]  PostToolUse after knowledge_edit/write/new_memo: the companion here
+                                               looks for new tasks now (a worker starts where workers are allowed)
   agent_hooks.py gate <claude|codex|agy>        PreToolUse on the subagent tool: refused from 95% of the usage limit
   agent_hooks.py guard <claude|codex|agy>       PreToolUse on the edit tools: a known secret value is refused
-  agent_hooks.py wait claude [TOKEN]           UserPromptSubmit (asyncRewake): wait for a wake, then wake Claude
+  agent_hooks.py take <agent> <ID>             run by agy in its terminal when the user says 'pak <ID>': take that task
+                                               into this conversation (Claude and Codex do it from the user's words)
   agent_hooks.py register                      run by agy in its terminal: note where its language server listens
   agent_hooks.py header [TOKEN]                MCP header helper: the token as JSON, {} without one
   agent_hooks.py mcp [TOKEN]                   stdio MCP server of the Codex and agy plugins: relays to /mcp
@@ -45,6 +46,7 @@ import self_update  # noqa: E402  (auto-update of this plugin, the counterpart o
 import limits  # noqa: E402  (the usage-limit ladder, shared with the Claude plugin)
 import hook_status  # noqa: E402  (failures of these hooks, reported to the server)
 URL = token_store.url()
+KN_HOME = token_store.KN_HOME
 AGENTS = ("agy", "codex")
 SETUP = "plugin"  # clients/knowledge-agent.py sets "script": the setup without a plugin updates itself another way
 
@@ -64,7 +66,7 @@ def context_text(tok: str, cwd: str, agent: str = "") -> str:
                                     **({"url": "default"} if token_store.url_is_default() else {})})
     for n in range(1, 10):
         q = query
-        req = urllib.request.Request(f"{URL}/context/{n}?{q}", headers={"Authorization": f"Bearer {tok}"})
+        req = urllib.request.Request(f"{URL}/context/{n}?{q}", headers=token_store.headers(tok))
         try:
             with urllib.request.urlopen(req, timeout=8) as r:
                 text = r.read().decode("utf-8", "replace")
@@ -94,8 +96,8 @@ def project_query(cwd: str) -> dict:
     return {"project": linked, "linked": "1"} if linked else {"project": cwd}
 
 
-AGENTS_DIR = Path.home() / ".knowledge" / "agents"  # who runs on this machine and how to wake it
-WAKE_WITHIN = 2 * 86400  # a session not seen this long is not woken
+AGENTS_DIR = KN_HOME / "agents"  # who runs on this machine and how to wake it
+WAKE_WITHIN = 2 * 86400  # a session not seen this long is not listed
 WAKE_TOOLS = re.compile(r"knowledge_(edit|write|new_memo)")  # the tools that can add a task line
 
 
@@ -103,17 +105,45 @@ def short(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
-def task_text(fresh: list, woken: bool) -> str:
-    if woken:
-        return ("knowledge: another agent handed you a new task (this message comes from the knowledge plugin, not from "
-                "the user; full text in the memo named in front). Start it right away and tell the user in one line what "
-                "you picked up; starting it: add '(claimed <you>, <date>)' to its line (or '(bezig ...)' when the memos are Dutch) with "
-                "knowledge_edit; done: remove the line, and hand the result back to the agent that waits on it with a line "
-                "'[<requester>, <ID>-done]: <result>'.\n" + "\n".join(fresh))
-    return ("knowledge: a new task was handed to you while this session runs (full text in the memo named in front). "
-            "Finish your current reply, then start it right away and tell the user in one line what you picked up; starting it: add "
-            "'(claimed <you>, <date>)' to its line (or '(bezig ...)' when the memos are Dutch) with knowledge_edit; done: remove the line, and hand the result back to "
-            "the agent that waits on it with a line '[<requester>, <ID>-done]: <result>'.\n" + "\n".join(fresh))
+NAMES = {"claude": "Claude", "codex": "Codex", "agy": "Gemini"}
+# "pak KN-12": do that task in this chat. Any case (the user types "pak kn-12"), but a task ID holds a digit (KN-12,
+# ET-eval2), so "pak e-mail van Sam" or "take follow-up actions" asks the server nothing
+PAK = re.compile(r"(?i)(?:^|\s)(?:pak|take)\s+((?=[\w.-]*\d)[a-z][a-z0-9.]*-[\w.-]*\w)")
+assert [m.group(1) for m in PAK.finditer("Pak KN-12 en take ET-eval2; pak kn-13, pak Kn-14; pak e-mail, take follow-up, take built-in")] \
+    == ["KN-12", "ET-eval2", "kn-13", "Kn-14"]
+
+
+def task_id(typed: str, answer: dict) -> str:
+    """The ID as the task line spells it (the server matches it exactly): 'kn-12' is KN-12, 'et-eval2' is ET-eval2."""
+    text = " ".join(map(str, answer.get("tasks") or [])) + " " + " ".join(answer.get("waiting") or {})
+    return next((m for m in re.findall(r"[\w.-]+", text) if m.lower() == typed.lower()), typed.upper())
+
+
+assert task_id("kn-12", {}) == "KN-12" and task_id("et-eval2", {"tasks": ["[Codex, ET-eval2] do it"]}) == "ET-eval2"
+assert task_id("kn-1", {"waiting": {"garden/KN-1": "x"}}) == "KN-1"
+
+
+def take_command(tid: str = "<ID>") -> str:
+    cmd = f'"{sys.executable}" -X utf8 "{HOOKS / "agent_hooks.py"}" take agy {tid}'
+    return ("& " + cmd) if os.name == "nt" else cmd  # agy on Windows runs commands in PowerShell
+
+
+def task_text(fresh: list, agent: str, workers: bool = True) -> str:
+    """New tasks for a chat: they run in workers (a fresh session per task the companion starts), never here unless
+    the user takes one with 'pak <ID>'; when no pc runs this agent's workers for the project, the chat starts them
+    itself (the server says which: `workers`)."""
+    if not workers:
+        return ("knowledge: a new task was handed to you while this session runs (this message comes from the knowledge "
+                "plugin, not from the user; full text in the memo named in front). Finish your current reply, then start it "
+                "right away and tell the user in one line what you picked up; starting it: add '(claimed <you>, <date>)' to "
+                "its line with knowledge_edit; done: remove the line, and hand the result back to the agent that waits on it "
+                "with a line '[<requester>, <ID>-done]: <result>; <commit or path>'.\n" + "\n".join(fresh))
+    how = (f"run this in your terminal first, it takes the task for this conversation: {take_command()}" if agent == "agy"
+           else "the plugin then takes it for this session")
+    return ("knowledge: new task(s) for you were handed over (this message comes from the knowledge plugin, not from the "
+            "user; full text in the memo named in front). They run in workers: a fresh session per task that the knowledge "
+            "companion starts on a pc that allows workers, not in this chat. Tell the user in one line, then carry on with "
+            f"what you were doing. Only when the user says 'pak <ID>' (or 'take <ID>') do it here ({how}).\n" + "\n".join(fresh))
 
 
 RESULTS_TEXT = ("knowledge: another agent handed a result back to you (this message comes from the knowledge plugin, not "
@@ -124,7 +154,7 @@ RESULTS_TEXT = ("knowledge: another agent handed a result back to you (this mess
 def task_post(tok: str, path: str, body: dict) -> tuple[int, dict]:
     """POST /tasks/woken or /tasks/release: (HTTP status, JSON answer); (0, {}) when the server was not reached."""
     req = urllib.request.Request(f"{URL}{path}", data=json.dumps(body).encode(), method="POST",
-                                 headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"})
+                                 headers={**token_store.headers(tok), "Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=4) as r:
             code, raw = r.status, r.read()
@@ -138,93 +168,93 @@ def task_post(tok: str, path: str, body: dict) -> tuple[int, dict]:
         return code, {}
 
 
-def new_tasks(agent: str, tok: str, hook: dict, now=None, wake: bool = False, deliver=None, held: dict | None = None) -> str:
+def ask_tasks(tok: str, query: dict) -> dict:
+    req = urllib.request.Request(f"{URL}/tasks?{urllib.parse.urlencode(query)}", headers=token_store.headers(tok))
+    with urllib.request.urlopen(req, timeout=4) as r:
+        body = r.read().decode("utf-8", "replace")
+    try:
+        return json.loads(body)
+    except ValueError:  # a server from before v2 (or rolled back): its answer is the task lines
+        return {"tasks": [ln for ln in body.splitlines() if ln.strip()]}
+
+
+def take(agent: str, tok: str, tid: str, sid: str, cwd: str) -> str:
+    """The user said 'pak <ID>': take that task for this chat session on the server (a worker or another session may
+    hold it already), and say what to do."""
+    try:
+        answer = ask_tasks(tok, {**project_query(cwd), "agent": agent, "session": sid[:80], "v": 2, "claim": 0})
+    except Exception as e:
+        return f"knowledge: could not take {tid}: the server did not answer ({type(e).__name__})."
+    project, tid = answer.get("project", ""), task_id(tid, answer)
+    code, answer = task_post(tok, "/tasks/woken", {"project": project, "id": tid, "agent": agent, "session": sid[:80]})
+    if code == 200:
+        return (f"knowledge: the user took task {tid} into this chat ('pak {tid}'); the server gave it to this session, so no "
+                f"worker starts it. Claim it now: add '(claimed {NAMES[agent]}, {time.strftime('%Y-%m-%d')})' to its line with "
+                "knowledge_edit, then do it here. Done: remove the line, and hand the result back to the agent that waits on it "
+                f"with a line '[<requester>, {tid}-done]: <result>; <commit or path>'.")
+    if code == 409:
+        h = answer.get("held_by") or {}
+        where = f"{h.get('device', '?').partition('#')[0]}" + (f" on {h['label']}" if h.get("label") else "")
+        what = "runs in a worker" if str(h.get("session", "")).startswith("worker:") else "is held by another session"
+        return f"knowledge: {tid} {what} on {where}; tell the user it cannot be taken here now."
+    return f"knowledge: no open task {tid} for {NAMES[agent]} in project {project or '?'} (HTTP {code}); tell the user."
+
+
+def new_tasks(agent: str, tok: str, hook: dict, now=None, wake: bool = False) -> str:
     """Tasks handed to `agent` after this session started, said once: the startup context lists the open ones, but a
     session that runs for hours (or is resumed for days) never sees a task another agent hands over meanwhile. The
     first ask of a session only remembers what is open; '' when nothing is new, the server is away or it is too soon.
-    With `deliver` (waking another session) it asks at once, takes each new task for that session on the server first
-    (a task another session or pc holds is left out, {id: holding device} in `held`), and remembers the tasks only if
-    deliver(text) succeeded; a failed delivery gives the leases back."""
+    A chat takes no task (chat=1: tasks run in workers); a worker (KNOWLEDGE_WORKER) hears no other tasks, but its ask
+    with the companion's start nonce keeps its own task's lease."""
     now = time.time() if now is None else now
+    worker = bool(os.environ.get("KNOWLEDGE_WORKER"))
     sid = hook.get("session_id") or hook.get("conversationId") or hook.get("cwd") or os.getcwd()
     # shortcut: two agy sessions without a conversationId in one folder share what they have seen.
-    seen_dir = Path.home() / ".knowledge" / "tasks-seen"
+    seen_dir = KN_HOME / "tasks-seen"
     seen_file = seen_dir / (hashlib.sha256(f"{agent}:{sid}".encode()).hexdigest()[:16] + ".json")
     try:
         seen = json.loads(seen_file.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         seen = None
-    if deliver is None and seen and now - seen.get("at", 0) < TASKS_EVERY:
+    if seen and now - seen.get("at", 0) < TASKS_EVERY:
         return ""
     cwd = hook.get("cwd") or (hook.get("workspacePaths") or [os.getcwd()])[0]
-    # session and wake let the admin page show which sessions use a token and which can be woken
+    # session and wake let the Machines list show the sessions per machine
     version = ".".join(map(str, self_update.own()))
     known = (seen or {}).get("ids")
-    # seen: what this session was told before, so the server leases only what it hears now; start: the nonce the
-    # companion gave the session it started, so this session (not an older one) gets that task
-    extra = {"seen": ",".join(known)} if deliver is None and known is not None else {}
-    if deliver is None and (nonce := os.environ.get("KNOWLEDGE_START_NONCE")):
+    # seen: what this session was told before; start: the nonce the companion gave the worker it started
+    extra = {"seen": ",".join(known)} if known is not None else {}
+    if nonce := os.environ.get("KNOWLEDGE_START_NONCE"):
         extra["start"] = nonce
-    query = urllib.parse.urlencode({**project_query(cwd), "agent": agent, "session": str(sid)[:80], "wake": int(wake),
-                                    "v": 2, "claim": int(deliver is None), **extra, **({"plugin": version} if version else {})})
-    req = urllib.request.Request(f"{URL}/tasks?{query}", headers={"Authorization": f"Bearer {tok}"})
     try:
-        with urllib.request.urlopen(req, timeout=4) as r:
-            body = r.read().decode("utf-8", "replace")
-        try:
-            beat = json.loads(body)
-        except ValueError:  # a server from before v2 (or rolled back): its answer is the task lines
-            beat = {"tasks": [ln for ln in body.splitlines() if ln.strip()]}
+        beat = ask_tasks(tok, {**project_query(cwd), "agent": agent, "session": str(sid)[:80], "wake": int(wake), "v": 2,
+                               **({} if worker else {"chat": 1}), **extra, **({"plugin": version} if version else {})})
         ids = {m.group(1).strip(): ln for ln in beat.get("tasks", []) if (m := TASK_ID.search(ln))}
     except Exception:  # the next session start says so loudly; a prompt is no place to nag
         beat, ids = {}, None  # still throttled: away from home every prompt would wait for the timeout
-    fresh = {} if ids is None or known is None else {i: ln for i, ln in ids.items() if i not in known}
-    taken = []
-    if deliver is not None and fresh and beat.get("project"):  # a server before the lease has no project here
-        for i in list(fresh):  # same machine or not: only one session starts it
-            code, answer = task_post(tok, "/tasks/woken", {"project": beat["project"], "id": i, "agent": agent, "session": str(sid)[:80]})
-            if code == 409:
-                del fresh[i], ids[i]  # not remembered: said once it is free again
-                if held is not None:
-                    held[i] = (answer.get("held_by") or {}).get("device") or "another device"
-            elif code == 200:
-                taken.append(i)
-    fresh = list(fresh.values())
-    text = task_text(fresh, deliver is not None) if fresh else ""
+    fresh = [] if ids is None or known is None or worker else [ln for i, ln in ids.items() if i not in known]
+    text = task_text(fresh, agent, beat.get("workers") is True) if fresh else ""
     # results handed back to this agent: said once per session, like new tasks (the start context listed the open ones)
     results = {r["id"]: r["text"] for r in beat.get("results", []) if r.get("id")} if ids is not None else None
     known_results = (seen or {}).get("results")
-    new_results = [] if deliver is not None or results is None or known_results is None else \
-        [t for i, t in results.items() if i not in known_results]
+    new_results = [] if worker or results is None or known_results is None else [t for i, t in results.items() if i not in known_results]
     if new_results:
         text = "\n\n".join(t for t in (text, RESULTS_TEXT + "\n".join(new_results)) if t)
     # What the server wants this session to hear or do: said even on the first ask, since a resumed session (agy
-    # --continue) never ran its start hooks; a waking agent only passes tasks on.
+    # --continue) never ran its start hooks.
     told = (seen or {}).get("notices", [])
-    notices = [] if deliver is not None else [n for n in beat.get("notices", []) if n.get("id") not in told]
-    said = "\n\n".join([n["text"] for n in notices] + ([take_background()] if deliver is None else []))
+    notices = [n for n in beat.get("notices", []) if n.get("id") not in told]
+    said = "\n\n".join([n["text"] for n in notices] + [take_background()])
     text = "\n\n".join(t for t in (text, said) if t.strip())
-    if deliver is None and beat.get("sync"):
+    if beat.get("sync"):
         start_hook("docs-sync.py", tok, json.dumps({"hook_event_name": "SessionStart", "cwd": cwd}))
-    if deliver is not None and ids is None:
-        return ""
-    if deliver is not None and text:
-        ok = False
-        try:
-            ok = deliver(text)
-        finally:  # refused or raised: free for another session or pc at once
-            if not ok:
-                for i in taken:
-                    task_post(tok, "/tasks/release", {"project": beat["project"], "id": i})
-        if not ok:
-            return ""  # not delivered: the next prompt or wake says it
     try:
         seen_dir.mkdir(parents=True, exist_ok=True)
         for old in seen_dir.glob("*.json"):  # sessions end without telling: forget them after a week
             if now - old.stat().st_mtime > 7 * 86400:
                 old.unlink()
         seen_file.write_text(json.dumps({"at": now, "ids": known if ids is None else sorted(ids),
-                                         "results": known_results if results is None or deliver is not None else sorted(results),
+                                         "results": known_results if results is None else sorted(results),
                                          "notices": (told + [n["id"] for n in notices])[-50:]}), encoding="utf-8")
     except OSError:  # without a memory of what was said, the tasks would come again every prompt; the server's
         return said.strip()  # notices are taken already, so they are said anyway
@@ -274,11 +304,27 @@ def register_session(agent: str, hook: dict):
         print(f"knowledge: session not registered: {e}", file=sys.stderr)
 
 
+def worker_turn(hook: dict):
+    """A YOLO worker's turn starts: a git checkpoint of its folder on refs/knowledge/checkpoints/<ID>, so its owner can
+    roll back to before this turn (Machines list). Never fails the turn."""
+    tid = os.environ.get("KNOWLEDGE_WORKER")
+    if not (tid and os.environ.get("KNOWLEDGE_YOLO") == "1"):
+        return
+    try:
+        import workers
+        workers.checkpoint(hook.get("cwd") or (hook.get("workspacePaths") or [os.getcwd()])[0], tid)
+    except Exception as e:
+        hook_status.record_exception("agent_hooks.py checkpoint", e)
+
+
 def tasks(agent: str, tok: str):
     stdin = sys.stdin.read()
     hook = json.loads(stdin or "{}")
     register_session(agent, hook)
-    text = "\n\n".join(t for t in (new_tasks(agent, tok, hook, wake=True), limits.notice(agent, hook)) if t)
+    worker_turn(hook)
+    took = [take(agent, tok, m.group(1), str(hook.get("session_id") or ""), hook.get("cwd") or os.getcwd())
+            for m in PAK.finditer(str(hook.get("prompt") or ""))][:3] if not os.environ.get("KNOWLEDGE_WORKER") else []
+    text = "\n\n".join(t for t in (*took, new_tasks(agent, tok, hook, wake=True), limits.notice(agent, hook)) if t)
     if text:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": text}}), flush=True)
     send_status(agent, tok)
@@ -327,7 +373,7 @@ def agy_conversations() -> list:
 
 def register_agy():
     """Run by agy in its own terminal: only commands agy runs get the address and key of its language server (hooks
-    and MCP servers do not), and with both another agent can put a message into this agy session."""
+    and MCP servers do not); with both the companion reads agy's usage limit (GetUserStatus) for its workers."""
     address, csrf = os.environ.get("ANTIGRAVITY_LS_ADDRESS", ""), os.environ.get("ANTIGRAVITY_CSRF_TOKEN", "")
     if not address or not csrf:
         sys.exit("knowledge: not run by agy (no ANTIGRAVITY_LS_ADDRESS), nothing registered")
@@ -339,12 +385,12 @@ def register_agy():
     write_private(AGENTS_DIR / f"agy-ls-{short(address)}.json", entry)
     conv = os.environ.get("ANTIGRAVITY_CONVERSATION_ID", "")
     try:  # the hooks only see the registration at the next turn: tell the admin page now
-        query = urllib.parse.urlencode({**project_query(os.getcwd()), "agent": "agy", "session": conv[:80], "wake": 1})
-        urllib.request.urlopen(urllib.request.Request(f"{URL}/tasks?{query}", headers={"Authorization": f"Bearer {token('-')}"}),
+        query = urllib.parse.urlencode({**project_query(os.getcwd()), "agent": "agy", "session": conv[:80], "chat": 1, "claim": 0})
+        urllib.request.urlopen(urllib.request.Request(f"{URL}/tasks?{query}", headers=token_store.headers(token("-"))),
                                timeout=4).close()
     except Exception:  # the next turn's hook says it to the server anyway
         pass
-    print("knowledge: registered; other agents on this machine can now hand you tasks directly")
+    print("knowledge: registered; the knowledge companion on this machine can now read agy's usage limit")
 
 
 def register_command() -> str:
@@ -354,9 +400,9 @@ def register_command() -> str:
 
 def register_notice(again: bool = False) -> str:
     if again:  # agy otherwise reasons that it already ran it earlier in the conversation
-        return ("knowledge: agy was restarted, so this conversation's earlier registration is gone and other agents can no "
-                f"longer hand you tasks directly. Run this command again now in your terminal: {register_command()}")
-    return ("knowledge: so other agents on this machine can hand you tasks directly, run this command once now in "
+        return ("knowledge: agy was restarted, so this conversation's earlier registration is gone and the companion can no "
+                f"longer read agy's usage limit. Run this command again now in your terminal: {register_command()}")
+    return ("knowledge: so the knowledge companion on this machine can read agy's usage limit, run this command once now in "
             f"your terminal (it only stores where this session listens; no need to tell the user): {register_command()}")
 
 
@@ -364,109 +410,25 @@ def agy_registered(conv: str) -> bool:
     return any(c == conv for _, c, _, _ in agy_conversations())
 
 
-def wake_targets(me: str, my_sid: str, now: float) -> list:
-    """The newest session of each other agent per project on this machine: (agent, hook dict or None, deliver)."""
-    best = {}
-    for f, e in read_entries("*.json"):
-        if e.get("agent") not in ("claude", "codex") or e.get("session") == my_sid:
-            continue
-        if now - e.get("at", 0) > WAKE_WITHIN:
-            f.unlink(missing_ok=True)
-            continue
-        key = (e["agent"], project_query(e["cwd"])["project"])
-        if key not in best or e["at"] > best[key]["at"]:
-            best[key] = e
-    out = []
-    for (agent, _), e in best.items():
-        if agent == "codex":
-            out.append((agent, {"session_id": e["session"], "cwd": e["cwd"]}, lambda text, e=e: codex_queue(e, text)))
-        else:  # Claude: its waiting hook (wait claude) sees the poke, asks /tasks itself and wakes the session
-            out.append((agent, None, lambda text, e=e: poke(e)))
-    newest = {}
-    for entry, conv, changed, folder in agy_conversations():
-        key = project_query(folder or entry.get("cwd", ""))["project"]
-        if conv != my_sid and (key not in newest or changed > newest[key][2]):
-            newest[key] = (entry, conv, changed, folder)
-    for entry, conv, _, folder in newest.values():
-        out.append(("agy", {"conversationId": conv, "cwd": folder or entry.get("cwd", "")},
-                    lambda text, entry=entry, conv=conv: agy_send(entry, conv, text)))
-    return out
-
-
-def agy_send(entry: dict, conv: str, text: str) -> bool:
-    agy_call(entry, "SendUserCascadeMessage", {"cascadeId": conv, "items": [{"text": text}]}, 10)  # raises when refused
-    return True
-
-
-def codex_queue(entry: dict, text: str) -> bool:
-    exe = entry.get("exe") or shutil.which("codex")
-    if not exe:
-        return False
-    text = " / ".join(t for t in text.splitlines() if t.strip())  # Windows' npm codex.cmd cuts an argument at a newline
-    if exe.lower().endswith((".cmd", ".bat")):  # cmd.exe parses the line itself: a quote or & in a task would run commands
-        text = re.sub(r'["%^&|<>!]', " ", text)
-    env = {**os.environ, "CODEX_HOME": entry["codex_home"]} if entry.get("codex_home") else None
-    r = subprocess.run([exe, "queue", "--thread", entry["session"], "--message", text], capture_output=True, text=True,
-                       encoding="utf-8", errors="replace", timeout=30, stdin=subprocess.DEVNULL, env=env)
-    if r.returncode:
-        print(f"knowledge: codex queue failed: {(r.stderr or r.stdout).strip()[:200]}", file=sys.stderr)
-    return r.returncode == 0
-
-
-def poke(entry: dict) -> bool:
-    (AGENTS_DIR / f"claude-{short(entry['session'])}.poke").write_text("", encoding="utf-8")
-    return True
-
-
 def wake(me: str, tok: str):
-    """PostToolUse after a knowledge write: wake the other agents on this machine that got a new task from it."""
+    """PostToolUse after a knowledge write: a new task line may be in it, so the companion on this pc looks at once
+    (one round) instead of within a minute; a worker starts there when this pc allows workers. Chats are never told."""
     hook = json.loads(sys.stdin.read() or "{}")
     tool = str(hook.get("tool_name") or (hook.get("toolCall") or {}).get("args", {}).get("ToolName") or hook.get("toolCall") or "")
     if not WAKE_TOOLS.search(tool):
         print("{}")
         return
-    now, woke = time.time(), []
-    my_sid = hook.get("session_id") or hook.get("conversationId") or ""
-    for agent, target, deliver in wake_targets(me, my_sid, now):
-        try:
-            if target is None:  # Claude asks for itself once poked
-                deliver("")
-                woke.append(f"{agent} (asked to check)")
-            elif new_tasks(agent, tok, target, now, wake=True, deliver=deliver):
-                woke.append(agent)
-        except Exception as e:  # one dead target must not keep the others asleep
-            print(f"knowledge: could not wake {agent}: {e}", file=sys.stderr)
-    note = f"knowledge: told {', '.join(woke)} on this machine about the new task." if woke else ""
+    port = os.environ.get("KNOWLEDGE_COMPANION_PORT") or "47321"
+    try:
+        key = (KN_HOME / "companion" / "api-key").read_text(encoding="utf-8").strip()
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/local/api/tick", b"{}", method="POST", headers={
+            "Content-Type": "application/json", "Origin": f"http://127.0.0.1:{port}", "X-Companion-Key": key})
+        urllib.request.urlopen(req, timeout=3).close()
+        note = "knowledge: asked the companion on this pc to look for new tasks now (a worker starts where workers are allowed)."
+    except Exception:  # no companion here, or it is busy: its minute round finds the task anyway
+        note = ""
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": note}}
                      if note and me != "agy" else {}))  # agy's PostToolUse may only answer {}
-
-
-def wait(agent: str, tok: str):
-    """Claude: an asyncRewake hook started at each prompt. It waits for a poke from another agent's wake, asks /tasks
-    and, with something new, exits 2: Claude Code then wakes the idle session with stderr as its message."""
-    hook = json.loads(sys.stdin.read() or "{}")
-    sid = hook.get("session_id")
-    # claude -p and the Agent SDK (entrypoint sdk-*) wait for this hook before they exit: nothing to wake there
-    if not sid or os.environ.get("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk"):
-        return
-    me = f"{os.getpid()}:{time.time()}"
-    lock, poked = AGENTS_DIR / f"{agent}-{short(sid)}.waiter", AGENTS_DIR / f"{agent}-{short(sid)}.poke"
-    private_dir()
-    lock.write_text(me, encoding="utf-8")
-    end = time.time() + WAKE_WITHIN
-    while time.time() < end:
-        time.sleep(1)
-        try:
-            if lock.read_text(encoding="utf-8") != me:
-                return  # a newer prompt started a newer waiter
-        except OSError:
-            return
-        if poked.exists():
-            poked.unlink(missing_ok=True)
-            text = new_tasks(agent, tok, hook, wake=True, deliver=lambda text: True)
-            if text:
-                print(text, file=sys.stderr)
-                sys.exit(2)
 
 
 def run_hook(script: str, tok: str, stdin: str) -> str:
@@ -486,14 +448,14 @@ def send_status(agent: str, tok: str):
         pass
 
 
-BACKGROUND = Path.home() / ".knowledge" / "background.txt"  # what a background hook printed, said at the next turn
+BACKGROUND = KN_HOME / "background.txt"  # what a background hook printed, said at the next turn
 
 
 def start_hook(script: str, tok: str, stdin: str):
     """run_hook without waiting: a full docs mirror can take seconds, a prompt should not. What it prints (a failure,
     refused files, docs without a topic) is said at the next turn (take_background), so it never fails quietly."""
     env = {**os.environ, "KNOWLEDGE_URL": URL, **({"KNOWLEDGE_TOKEN": tok} if tok else {})}
-    kw = {"creationflags": 0x00000008 | 0x00000200} if os.name == "nt" else {"start_new_session": True}  # as memory_mirror
+    kw = {"creationflags": 0x08000000 | 0x00000200} if os.name == "nt" else {"start_new_session": True}  # as memory_mirror: CREATE_NO_WINDOW | NEW_PROCESS_GROUP
     try:
         BACKGROUND.parent.mkdir(parents=True, exist_ok=True)
         with BACKGROUND.open("ab") as out:
@@ -533,7 +495,12 @@ def context(agent: str, tok: str):
         worktree = project_marker.notice(Path(cwd).resolve())
     except OSError:
         worktree = ""
-    reg = register_notice() if agent == "agy" else ""  # agy hooks do not get its server's key; its terminal does
+    # agy hooks do not get its server's key; its terminal does. Not a worker: a headless run may not run that command,
+    # and a refused command ends agy's whole run
+    reg = register_notice() if agent == "agy" and not os.environ.get("KNOWLEDGE_WORKER") else ""
+    if agent == "agy" and "'pak <ID>'" in ctx:  # its hooks never see the user's words: the take command does it
+        ctx += ("\n\nagy: the plugin cannot see what the user types. When the user says 'pak <ID>' (or 'take <ID>'), run this "
+                f"in your terminal first; it takes that task for this conversation and says what to do: {take_command()}")
     text = "\n\n".join(t for t in (worktree, run_hook("docs-sync.py", tok, stdin).strip(), ctx, update, reg) if t)
     print(json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": text}}]} if agent == "agy" else
                      {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}}))
@@ -550,7 +517,7 @@ def mcp(tok: str):
         if not raw.strip():
             continue
         headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream",
-                   **({"Authorization": f"Bearer {tok}"} if tok else {}), **({"Mcp-Session-Id": session} if session else {})}
+                   **token_store.headers(tok), **({"Mcp-Session-Id": session} if session else {})}
         try:
             with urllib.request.urlopen(urllib.request.Request(f"{URL}/mcp", raw, headers), timeout=120) as r:
                 session = r.headers.get("Mcp-Session-Id") or session
@@ -574,11 +541,12 @@ def mcp(tok: str):
 def hints(tok: str):
     """agy: the hint docs-sync left behind and tasks handed to agy meanwhile, injected once before the next model turn;
     {} when there is none."""
-    pending = Path.home() / ".knowledge" / "pending-hints.txt"
+    pending = KN_HOME / "pending-hints.txt"
     try:
         hook = json.loads(sys.stdin.read() or "{}")
         conv = hook.get("conversationId") or ""
         registered = bool(conv) and agy_registered(conv)
+        worker_turn(hook)
         news = new_tasks("agy", tok, hook, wake=registered)
     except Exception as e:  # never cost agy its pending hint or its JSON
         hook, conv, registered, news = {}, "", False, ""
@@ -590,7 +558,7 @@ def hints(tok: str):
         if conv and registered and state != "registered":
             private_dir()
             asked.write_text("registered", encoding="utf-8")
-        elif conv and not registered and state != "asked":  # a resumed conversation never saw the start context
+        elif conv and not registered and state != "asked" and not os.environ.get("KNOWLEDGE_WORKER"):  # a resumed conversation never saw the start context
             private_dir()
             asked.write_text("asked", encoding="utf-8")
             news = "\n\n".join(t for t in (news, register_notice(again=state == "registered")) if t)
@@ -628,7 +596,10 @@ def main(argv: list):
             tok = ""
         wake(rest[0], tok)
     elif cmd == "wait" and rest[:1] == ["claude"] and len(rest) <= 2:
-        wait("claude", token(rest[1] if len(rest) == 2 else "-") or os.environ.get("CLAUDE_PLUGIN_OPTION_TOKEN", ""))
+        pass  # plugins up to 0.14 ran a waiting hook here; a session started before an update may still call it
+    elif cmd == "take" and len(rest) == 2 and rest[0] in ("claude", "codex", "agy"):
+        # run by agy in its terminal on 'pak <ID>' (agy's hooks never see the user's words); the others take it themselves
+        print(take(rest[0], token("-"), rest[1], os.environ.get("ANTIGRAVITY_CONVERSATION_ID") or os.environ.get("KNOWLEDGE_SESSION", ""), os.getcwd()))
     elif cmd == "gate" and rest[:1] and rest[0] in ("claude", "codex", "agy") and len(rest) <= 2:
         out = limits.gate(rest[0], json.loads(sys.stdin.read() or "{}"), agy_status)
         if out:
@@ -637,6 +608,9 @@ def main(argv: list):
         sys.stdout.write(subprocess.run([sys.executable, "-X", "utf8", str(HOOKS / "secret-guard.py"), rest[0]],
                                         input=sys.stdin.read(), stdout=subprocess.PIPE, text=True, encoding="utf-8",
                                         errors="replace").stdout)  # its stderr passes on: agy only reads stdout
+    elif cmd == "watch" and rest[:1] and rest[0] in ("claude", "codex", "agy") and len(rest) <= 2:
+        import watch  # the script setup's hooks come through here; the plugins start watch.py directly (faster)
+        watch.main(rest[0])
     elif cmd == "register" and not rest:
         register_agy()
     elif cmd == "mcp" and len(rest) <= 1:
@@ -646,7 +620,7 @@ def main(argv: list):
         companion.main(["serve"])
     elif cmd == "header" and len(rest) <= 1:
         tok = token(rest[0] if rest else "-")
-        print(json.dumps({"Authorization": f"Bearer {tok}"} if tok else {}))
+        print(json.dumps(token_store.headers(tok) if tok else {}))
     else:
         sys.exit(__doc__)
 

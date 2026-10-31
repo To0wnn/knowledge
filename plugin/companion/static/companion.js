@@ -5,7 +5,7 @@
 try { const t = localStorage.getItem("kn_theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch { /* storage blocked: follow the system */ }
 
 // The state of this pc as the companion's local API reports it; filled by load().
-const EMPTY = { status: {}, agents: [], tasks: { ready: [], waiting: [], stalled: [] }, activity: [], settings: { token: {}, startWhenNone: {} } };
+const EMPTY = { status: {}, agents: [], tasks: { ready: [], waiting: [], stalled: [] }, activity: [], settings: { token: {}, workersAllowed: false, maxWorkers: {} } };
 let S = EMPTY;
 
 // The key the local API wants for changes: the shortcut opens this page with #key=..., kept for the next visit.
@@ -32,7 +32,29 @@ async function load() {
   try { const r = await api("/local/api/state"); S = { ...EMPTY, ...r, status: { ...EMPTY.status, ...r.status } }; }
   catch (e) { toast(`Could not read the companion: ${e.message}`); return; }
   if (S.locked) toast("Open the companion from its shortcut to see tasks and change settings");
-  renderChips(); renderAgents(); renderTasks(); renderActivity(); renderSettings();
+  renderChips(); renderAgents(); renderTasks(); renderFolders(); renderActivity(); renderSettings();
+}
+
+function renderFolders() {
+  const f = S.folders || { linked: [], candidates: [] }, projects = S.projects || [];
+  const pick = (name, current) => h("select", { name, "aria-label": "Project" },
+    projects.map((p) => h("option", { value: p, selected: p === current }, p)));
+  $("folders").replaceChildren(
+    f.linked.length
+      ? h("ul", { class: "cmp-sessions", "aria-label": "Linked folders" }, f.linked.map((x) => h("li", {},
+          h("span", { title: x.path }, x.path, h("br"), h("small", {}, `project ${x.project}`)),
+          projects.length ? pick(`p-${x.path}`, x.project) : null,
+          projects.length ? h("button", { class: "cmp-btn cmp-btn--small", type: "button", onclick: (e) =>
+            act("/local/api/link", { path: x.path, project: e.target.parentNode.querySelector("select").value }, (r) => r.result) }, "Change") : null,
+          h("button", { class: "cmp-btn cmp-btn--small", type: "button", onclick: () =>
+            confirm(`Unlink ${x.path}? Only its .knowledge-project file is removed.`) && act("/local/api/unlink", { path: x.path }, (r) => r.result) }, "Unlink"))))
+      : h("p", { class: "cmp-sessions-empty" }, "No folder is linked yet."),
+    h("div", { class: "cmp-field" },
+      h("label", { for: "link-path" }, "Link a folder"),
+      h("small", {}, "Git checkouts in your home folder and folders your agents worked in; the projects this pc's token may write."),
+      h("select", { id: "link-path", name: "path" }, f.candidates.map((x) => h("option", { value: x.path }, x.path))),
+      pick("project", ""),
+      h("div", { class: "cmp-settings-foot" }, h("button", { class: "cmp-btn cmp-btn--primary", type: "submit", disabled: !f.candidates.length || !projects.length }, "Link"))));
 }
 
 const $ = (id) => document.getElementById(id);
@@ -69,6 +91,7 @@ function renderChips() {
   $("host").textContent = `This pc: ${s.host}`;
   const chips = [
     h("li", { class: "cmp-chip cmp-chip--live" }, h("span", { class: "cmp-dot" }), h("strong", {}, String(s.live)), " live"),
+    s.workers ? h("li", { class: "cmp-chip cmp-chip--live" }, h("strong", {}, String(s.workers)), " working") : null,
     s.stalled ? h("li", { class: "cmp-chip cmp-chip--bad" }, h("strong", {}, String(s.stalled)), " stalled") : null,
     s.syncError ? h("li", { class: "cmp-chip cmp-chip--bad", title: s.syncError }, "server unreachable")
       : h("li", { class: "cmp-chip" }, "synced ", s.synced ? ago(s.synced) : "not yet"),
@@ -95,6 +118,7 @@ function agentCard(a) {
     h("div", { class: "cmp-agent-head" },
       h("span", { class: "cmp-agent-mark", "aria-hidden": "true" }, a.mark),
       h("h3", { id: `ag-${a.id}` }, a.name),
+      a.yolo ? h("span", { class: "cmp-chip cmp-chip--bad", title: "Runs without asking" }, "YOLO") : null,
       h("span", { class: "cmp-ver" }, a.version ? `plugin ${a.version}` : "no plugin")),
     h("dl", { class: "cmp-facts" },
       h("dt", {}, "Installed"), h("dd", {}, state(true, "Yes")),
@@ -102,10 +126,15 @@ function agentCard(a) {
     a.sessions.length
       ? h("ul", { class: "cmp-sessions", "aria-label": `${a.name} sessions` }, a.sessions.map((s) => h("li", {},
           h("span", { title: s.title }, s.title, h("br"), h("small", {}, `active ${ago(s.at)}${s.wakeable ? " · gets the next task" : ""}`)))))
-      : h("p", { class: "cmp-sessions-empty" }, "No open sessions. A task starts one only when allowed in Settings."),
+      : h("p", { class: "cmp-sessions-empty" }, "No open sessions."),
+    (a.workers || []).length
+      ? h("ul", { class: "cmp-sessions", "aria-label": `${a.name} workers` }, a.workers.map((w) => h("li", {},
+          h("span", { title: w.open || "" }, `${a.name} · ${w.id} · ${w.status === "running" ? `running ${ago(w.started).replace(" ago", "")}` : `${w.status} ${ago(w.ended || w.started)}`}`,
+            h("br"), h("small", {}, w.branch ? `branch ${w.branch}${w.yolo ? " · YOLO" : ""}` : w.project)))))
+      : h("p", { class: "cmp-sessions-empty" }, "No workers. A worker is a fresh session per task, when this pc allows workers (Settings)."),
     h("label", { class: "cmp-yolo", for: yoloId },
       h("input", { type: "checkbox", id: yoloId, checked: a.yolo, "aria-describedby": `${yoloId}-warn`, onchange: (e) => setYolo(a, e.target.checked) }),
-      h("span", {}, "YOLO: run woken tasks without asking")),
+      h("span", {}, "YOLO: run without asking (workers too)")),
     h("p", { class: "cmp-yolo-warn", id: `${yoloId}-warn` }, a.yoloPending != null
       ? `Turning YOLO ${a.yoloPending ? "on" : "off"} applies when ${a.name} is closed.`
       : "The agent may then edit files and run commands with no approval. Unchecking restores your previous settings."),
@@ -135,7 +164,7 @@ function renderTasks() {
 }
 
 function renderActivity() {
-  const icons = { wake: "bolt", trust: "shield", sync: "sync", error: "alert" };
+  const icons = { wake: "bolt", worker: "bolt", remote: "globe", trust: "shield", sync: "sync", error: "alert", risk: "alert", wait: "sync" };
   $("activity").replaceChildren(...S.activity.map((e) => h("li", {},
     h("time", { class: "cmp-log-time", datetime: new Date(e.at * 1000).toISOString() }, clock(e.at)),
     h("span", { class: `cmp-log-icon${e.kind === "error" ? " cmp-log-icon--bad" : ""}` }, icon(icons[e.kind] || "orb")),
@@ -154,10 +183,11 @@ function renderSettings() {
       h("small", {}, "Set by the plugin setup (knowledge-agent.py install).")),
     h("div", { class: "cmp-field" }, h("span", { style: "font-weight:560" }, "Token"), h("div", { class: "cmp-token" }, tok)),
     h("fieldset", { class: "cmp-field" },
-      h("legend", {}, "Start a session when none is open"),
-      h("small", {}, "When a task arrives for an agent with no session, open one in the project's folder."),
+      h("legend", {}, "Workers"),
+      h("small", {}, "A worker is a fresh session per ready task, in its own git worktree, started here. Off by default: turn it on only on a pc that may work on its own (not a work laptop or a shared family pc)." + (s.game ? ` Now: no workers while ${s.game}.` : "")),
+      h("label", { class: "cmp-switch" }, h("input", { type: "checkbox", name: "workersAllowed", checked: !!s.workersAllowed }), "Workers allowed on this pc"),
       S.agents.filter((a) => a.installed).map((a) => h("label", { class: "cmp-switch" },
-        h("input", { type: "checkbox", name: `start-${a.id}`, checked: !!s.startWhenNone[a.id] }), a.name))),
+        h("input", { type: "number", name: `max-${a.id}`, min: 0, max: 8, value: s.maxWorkers[a.id] ?? 1, style: "width:4em" }), `at most this many ${a.name} workers at once`))),
     h("div", { class: "cmp-settings-foot" }, h("button", { class: "cmp-btn cmp-btn--primary", type: "submit" }, "Save settings")));
 }
 
@@ -171,7 +201,7 @@ const setYolo = (a, on) => act("/local/api/yolo", { agent: a.id, on }, (r) => r.
 
 const TOOLS = [
   { icon: "shield", label: "Trust all hooks", hint: "For every agent on this pc", run: () => act("/local/api/trust", {}, "Trusted the knowledge hooks") },
-  { icon: "bolt", label: "Wake ready tasks now", hint: "Instead of waiting for the next minute", run: () => act("/local/api/tick", {}, (r) => `Woke ${r.woken.length} task(s)`) },
+  { icon: "bolt", label: "Start ready tasks now", hint: "Workers, instead of waiting for the next minute", run: () => act("/local/api/tick", {}, (r) => `Started ${r.started.length} worker(s)`) },
   { icon: "sync", label: "Update the plugin", hint: "Codex and agy; Claude Code updates itself", run: () => act("/local/api/update", {}, "Updating in the background; see Activity") },
   null,
   { icon: "globe", label: "Open the knowledge web UI", hint: "In your browser", run: () => window.open(`${S.settings.serverUrl}/ui`, "_blank", "noopener") },
@@ -247,9 +277,14 @@ document.addEventListener("DOMContentLoaded", () => {
   load();
   setInterval(load, 30000);
   $("refresh-btn").addEventListener("click", () => load().then(() => toast("Refreshed")));
+  $("folders").addEventListener("submit", (e) => {
+    e.preventDefault();
+    act("/local/api/link", { path: e.target.elements.path.value, project: e.target.elements.project.value }, (r) => r.result);
+  });
   $("settings").addEventListener("submit", (e) => {
     e.preventDefault();
-    const startWhenNone = Object.fromEntries(S.agents.map((a) => [a.id, !!e.target.elements[`start-${a.id}`]?.checked]));
-    act("/local/api/settings", { startWhenNone }, "Saved settings");
+    const f = e.target.elements;
+    const maxWorkers = Object.fromEntries(S.agents.filter((a) => f[`max-${a.id}`]).map((a) => [a.id, Number(f[`max-${a.id}`].value)]));
+    act("/local/api/settings", { workersAllowed: !!f.workersAllowed?.checked, maxWorkers }, "Saved settings");
   });
 });

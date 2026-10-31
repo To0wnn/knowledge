@@ -24,7 +24,7 @@ from pathlib import Path
 
 RUNGS = (50, 75, 90, 95)
 GATE = 95  # from here on new subagents are refused
-STATE = Path.home() / ".knowledge"
+STATE = Path(os.environ.get("KNOWLEDGE_HOME") or Path.home() / ".knowledge")
 CLAUDE_FILE = STATE / "limits-claude.json"
 SAID = STATE / "limits-said.json"
 ORIGINAL = STATE / "statusline-original.json"  # the status line command the tap runs (and the way back)

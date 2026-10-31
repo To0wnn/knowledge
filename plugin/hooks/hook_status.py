@@ -15,8 +15,11 @@ import traceback
 import urllib.request
 from pathlib import Path
 
-ERRORS = Path.home() / ".knowledge" / "hook-errors.jsonl"
-SENT = Path.home() / ".knowledge" / "hook-status.json"  # {"at": last try, "sent": "at" of the newest error sent}
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import token_store  # noqa: E402  (this pc's identity in every request)
+
+ERRORS = Path(os.environ.get("KNOWLEDGE_HOME") or Path.home() / ".knowledge") / "hook-errors.jsonl"
+SENT = Path(os.environ.get("KNOWLEDGE_HOME") or Path.home() / ".knowledge") / "hook-status.json"  # {"at": last try, "sent": "at" of the newest error sent}
 SEND_EVERY = 120  # seconds between two sends: a turn costs one small request at most this often
 KEEP = 100  # lines kept in the local file
 
@@ -70,7 +73,7 @@ def send(url: str, tok: str, agent: str, plugin: str, now=None) -> bool:
     ok = False
     try:
         req = urllib.request.Request(f"{url}/status", json.dumps({"agent": agent, "plugin": plugin, "errors": errors}).encode(),
-                                     {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"})
+                                     {**token_store.headers(tok), "Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=2) as r:  # the tasks hook already may wait 4 s of its 8
             ok = r.status == 200
     except Exception:  # away from home or a server without /status: silent, the next turn after SEND_EVERY tries again

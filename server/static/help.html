@@ -114,7 +114,7 @@ footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
   </section>
 
   <h2>Agents hand each other tasks</h2>
-  <p>When one agent writes a task line for another (<code>open tot &lt;date&gt; [Codex, ID]: …</code>), that agent's open, idle session on the same computer is woken, starts on it right away and tells you what it picked up, and hands the result back the same way. The admin page shows per token which sessions are connected and whether they can be woken.</p>
+  <p>When one agent writes a task line for another (<code>open until &lt;date&gt; [Codex, ID] from Claude, start now: …</code>), a pc whose companion runs that agent's workers for the project starts a fresh worker session for it; with no such pc, that agent's next chat in the project starts it. The result comes back as a line <code>[Claude, ID-done]: …</code>. The Tasks tab shows per task where it runs or why it waits.</p>
 
   <h2>Which project does my session get?</h2>
   <p>At every start the server picks the project whose memory and context the session gets:</p>

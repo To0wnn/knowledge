@@ -55,12 +55,9 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   "<ID> is already being handled by <device | another session on this pc>; do not start it". Later turns (the plugin
   sends the ids it told the session before as `seen`) renew the session's own lease only within 30 minutes of the
   tell and never take a free one again, so a session that heard a task and did other work lets it go. Only a token
-  that may write the project's memos takes leases. A wake on the same machine takes the lease for the session it
-  tells, and gives it back when the message is refused. The companion checks it can start an agent before it takes
-  a task, gives the lease back when a start or delivery fails and leaves that task to other pcs for 30 minutes; a
-  session it starts gets a nonce (`KNOWLEDGE_START_NONCE`) and only the session presenting it takes its tasks (after
-  2 minutes without it, any session of that device may); it keeps renewing the lease of a `codex exec` it started
-  while that runs. A lease ends when it runs out or the line gets its claim marker, which also makes the task not
+  that may write the project's memos takes leases. A worker the companion starts gets a nonce
+  (`KNOWLEDGE_START_NONCE`) and only the session presenting it takes its task (after 2 minutes without it, any session
+  of that machine may); the companion renews the lease while the worker runs. A lease ends when it runs out or the line gets its claim marker, which also makes the task not
   startable. `[<Owner>@<device>, <ID>]` pins a task to one device (the token's name, any case; token names are unique
   ignoring case, and a new line pinned to an unknown device is refused); others see it as reserved. A woken task nobody claims within 30 minutes
   shows as stalled and sends one Matrix message.
@@ -72,33 +69,81 @@ checks them against a few house rules, so a growing pile of agent memory stays f
 - **Hook failures:** when one of the plugin's own hooks crashes or exits with an error, the device keeps it in
   `~/.knowledge/hook-errors.jsonl` and the per-turn hook reports new ones with `POST /status` (at most every two
   minutes, never holding up the turn); the tasks tab shows the last failure per device and agent.
-- **Waking another agent (same machine):** after a `knowledge_edit`/`knowledge_write`/`knowledge_new_memo`, the
-  plugin wakes the newest idle session per agent and project on that machine that has a new task: Codex through
-  `codex queue --thread`, agy through its local language server (the agy session registers once by running
-  `agent_hooks.py register` as a terminal command, the plugin asks it to), Claude Code through an `asyncRewake`
-  waiter hook. The woken agent tells the user and waits for consent. The admin page lists per token the sessions
-  seen in the last week (agent, session id, project, wakeable), each with a Forget button.
+- **Machines:** every request of plugin 0.15+ names its pc (`X-Knowledge-Machine`, a random id made once in
+  `~/.knowledge/machine.json` with the host name as label; `KNOWLEDGE_HOME` moves `~/.knowledge`). Leases and wakes key
+  on token + machine, so one token on two pcs is two holders. The server keeps per machine and agent the sessions of
+  the last two hours (project, held task) and what the machine's companion reports; the Tasks tab lists them under
+  "Machines": online or "offline since", per agent its plugin, a red YOLO pill, hooks trusted, usage limit (or
+  "unknown"), last hook error, workers and recent sessions. A person sees the machines of their own tokens; an admin
+  all. A machine id belongs to the person (or the admins) whose token first reported it; another
+  person's token that names it gets 403. Plugins before 0.15 show as one "old plugin" row per token.
+- **Workers, not chats:** a task never goes into someone's chat. The companion (below) starts a **worker** per ready
+  task: a fresh headless session of the task's agent (Claude Code `claude -p --output-format stream-json`, Codex
+  `codex exec --json`, agy `agy -p`) in its own git worktree on branch `task/<ID>` (`~/.knowledge/worktrees/`), or in
+  the project folder when that is no git repository. Without YOLO a worker may do what its task needs and no more: edit
+  its own folder, use the knowledge tools, and run `git status/diff/log/add/commit` (no push, no other command; a
+  headless run cannot ask, so the rest is refused). Each agent the native way: Claude `--permission-mode acceptEdits`
+  plus `--allowedTools`; agy `--mode accept-edits` plus allow rules for that session only (`--settings`, never saved);
+  Codex `-s workspace-write` with only the worktree's git folder and the repository's objects, refs and logs writable
+  (not `.git/config` or hooks; the sandbox has no network) and the plugin's knowledge tools approved with
+  `-c plugins.knowledge@knowledge.mcp_servers.knowledge.default_tools_approval_mode=approve`. A worker that ends with exit 0
+  but left its task open (not claimed, not handed back) counts as failed: an error in the activity log and the
+  stalled lane, plus the server's idle notice. Its prompt holds the task line and the rules: claim it, commit
+  on the branch, never merge or push, hand back with `[<requester>, <ID>-done]: <result>; branch <name>; done: ...;
+  left: ...` (the server refuses a worker's hand-back without branch, done and left). Every worker is a new session; a
+  hand-over `<ID>-cont` goes on in the same worktree and branch, and the branch, the memo and the last hand-over line
+  are all it knows. Workers are off on a new pc ("Workers allowed" in the companion's settings), at most one per
+  agent unless its maximum says more, one while its usage limit is unknown, none while a Wolf game session runs (its
+  API socket, when readable; Sunshine is not detected). On macOS the companion's python may not read ~/Documents, ~/Desktop or
+  ~/Downloads (privacy consent): a task linked there waits with that reason until it gets Full Disk Access. A worker that ended without finishing its task is not started
+  again for 6 hours unless asked. Its claim marker `(claimed <agent> worker, <date>)` holds only while its companion
+  renews the task's lease, so such a task shows as startable again (and gets the idle notice) instead of staying stuck. The companion knows a worker by its pid and that process's start time,
+  so after a reboot a recorded worker counts as ended and a stop never hits a reused pid. Once the requester merged the branch into main or master, the companion removes the
+  worktree; unmerged a week after the worker ended: lint `worker_unmerged`. While an online pc runs an agent's workers
+  for the project (workers allowed, a maximum above 0, the agent installed, a folder linked), that agent's interactive
+  sessions (`chat=1`) take no lease: they hear a new task once as "runs in workers" and where one runs; when the user
+  says `pak <ID>` (or `take <ID>`) the plugin takes that task for the chat (agy, whose hooks never see the user's words,
+  runs `agent_hooks.py take agy <ID>`), and no worker starts it. With no such pc, that agent's chats take and start
+  its tasks themselves, as before 0.15. The Tasks tab says per task where it runs or why it waits there; a task that
+  may start but that nobody took for 30 minutes (`KNOWLEDGE_TASK_IDLE`) gives one Matrix notice. A knowledge write
+  asks the local companion to look at once.
+- **Usage limit at 90%:** the companion reads each agent's usage: Claude from its workers' own `rate_limit_event`
+  (stream-json, until that window resets) or an interactive Claude's status line under 15 minutes old, whichever is higher; Codex from its newest rollout of the
+  last 15 minutes; agy from a registered agy's language server; else "unknown". From 90% no worker of that agent
+  starts and the task waits ("waiting for limit", one Matrix notice); a running worker is told after its next tool call
+  to commit, write the hand-over line `[<agent with room>, <ID>-cont] from <original requester> ... done: ...; left: ...` (the result still goes back to whoever asked first) and end, and is stopped
+  after two minutes. A result handed back never starts anything by itself.
+- **Remote control:** the owner of a machine steers it from the Machines list with fixed actions only: start a worker
+  for a ready task, stop a worker, roll a YOLO worker back, trust hooks, update the plugin, YOLO on or off per agent
+  (on needs the word YOLO typed in a dialog), workers allowed, max workers, link or unlink a folder (only folders the
+  companion listed itself). The server queues them per machine (`POST /ui/api/machines/action`); the companion pulls
+  them about every 10 seconds (`GET /machine/actions`), runs them with its own code and reports the result; an
+  offline machine's action shows "waiting for machine". Every action is logged with who and when, and shows in the
+  companion's activity log. There is no free-text command anywhere.
+- **YOLO safety without blocking:** task text by a writer the project does not trust reaches agents and workers marked
+  as data, not instructions. A watch hook after every tool flags what a YOLO session does that is risky (force push,
+  `rm -rf` outside the project, `curl | sh`, reading key or token files, reading the vault) in the companion's activity
+  log and once per session and kind as a Matrix notice; it never refuses. A YOLO worker gets a git checkpoint of its
+  whole worktree per turn on `refs/knowledge/checkpoints/<ID>`; "roll back" puts it back as before its last turn and
+  keeps the state before as `<ID>-undo`.
 - **Companion (this pc):** `knowledge-agent.py serve` (or `agent_hooks.py serve`, alias `companion`) runs a small
-  local service on `127.0.0.1:47321` only. Every minute it asks `GET /tasks/ready` and wakes the newest open session of
-  the task's agent and project with the same wake code, or, when allowed per agent in its settings, starts one in the
-  project's folder (Codex `codex exec`; Claude Code and agy in a new console on Windows, in tmux elsewhere; with the
-  agent's YOLO switch on, also its own flag: `--dangerously-skip-permissions`, Codex
-  `--dangerously-bypass-approvals-and-sandbox`). Before each wake it takes the task with `POST /tasks/woken` and wakes
-  only on 200 (409: "held by <device>" in its activity log); it starts a new session only after the task has been ready
-  for two minutes, so a pc with an open session wins, and never for a project without a linked folder here. A task is
-  not woken twice within 30 minutes; a session is started for a task
-  once, never again while it stays unclaimed (it shows as stalled). A Claude Code session counts as open only while its
-  waiting hook runs. On request it trusts the
+  local service on `127.0.0.1:47321` only. Every minute it asks `GET /tasks/ready`, starts workers as above (it takes
+  each task with `POST /tasks/woken` for its worker session first and gives it back when the start fails), keeps
+  their leases while they run and reports the machine's state (`POST /machine/report`). On request it trusts the
   knowledge hooks the agents' own way (Codex: `codex app-server` `hooks/list` + `config/batchWrite`, again after every
   plugin update; Claude Code: `hasTrustDialogAccepted` in `~/.claude.json`; agy: `trustedWorkspaces`), only for folders
-  with a `.knowledge-project`. A YOLO switch per agent writes its native "run without asking" settings and unchecking
-  restores the previous values (agy's only while agy is closed). Every changed file is first copied to
+  with a `.knowledge-project`. Its Folders section lists the linked folders and candidates (git checkouts up to three
+  levels under your home folder and folders agents worked in) and links one to a project the token may write by
+  writing `.knowledge-project`, as the knowledge-init skill does; unlink removes only that file. A YOLO switch per
+  agent writes its native "run without asking" settings and unchecking restores the previous values (agy's only while
+  agy is closed); workers then get the agent's own flag too. Every changed file is first copied to
   `~/backups/knowledge-companion/<date>/` (last five days kept). Hook failures Codex and agy log themselves are reported
   with `POST /status` as `agent-log` (Codex: only failures of the knowledge hooks). Its page is at
   `http://127.0.0.1:47321/`; the web UI shows a "This pc" tab when the companion answers there. The local API answers
   only that page and the knowledge web UI's origin; every change except trusting the knowledge hooks, and the tasks
   and activity, also need the key in `~/.knowledge/companion/api-key` (readable by you only), which the menu entry
-  passes to the page (`#key=`).
+  passes to the page through the private file `~/.knowledge/companion/open.html` (`#key=`; never on a browser's
+  command line, where other accounts on the pc could read it). YOLO and the worker settings change only on its own page (or remotely by the owner).
 - **Usage limits:** each prompt checks how much of the agent's own usage limit is used and says it once per session
   and limit window at 50, 75 and 90%; from 95% a new subagent is refused (Claude Code `Agent`, Codex `spawn_agent`, agy
   `invoke_subagent`). The numbers are the agent's own: Codex's rollout, agy's language server (after its one-time
@@ -119,8 +164,8 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   or sections, oversized memos, overdue open items, probable secrets (never shown), raw sources not yet processed.
 - **Web UI:** a home view per topic, full search, a note preview with connected notes, an editor, change history, a
   lint tab, a tasks tab (the task lines between agents with from whom and when they may start, waiting ones greyed
-  with the reason, stalled wakes, an Approve button for the owner, results handed back, and which agent sessions can
-  be woken with their reported hook errors; Done removes a line) and an admin page for tokens, people and projects. Light or dark, your pick.
+  with the reason, stalled wakes, an Approve button for the owner, results handed back, and the Machines list with
+  workers, sessions, hook errors and remote actions; Done removes a line) and an admin page for tokens, people and projects. Light or dark, your pick.
 - **Graph:** notes as nodes, links as lines, one island per topic. A line's thickness and pull follow how related two
   notes are (direct link, shared source, shared neighbours, same type); weak links between topics show on hover.
 - **External skills:** an admin adds a skill folder from GitHub by its link; it is pinned to a commit, taken in only as

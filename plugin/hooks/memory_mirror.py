@@ -26,7 +26,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-MIRROR = Path(os.environ.get("KNOWLEDGE_MIRROR") or Path.home() / ".knowledge" / "mirror")
+MIRROR = Path(os.environ.get("KNOWLEDGE_MIRROR") or Path(os.environ.get("KNOWLEDGE_HOME") or Path.home() / ".knowledge") / "mirror")
 STATE, LOCK = MIRROR / ".state.json", MIRROR / ".lock"
 SKILLS = Path(os.environ.get("KNOWLEDGE_SKILLS") or Path.home() / ".claude" / "skills")
 MAX_REMOVALS = 5  # more skills or memos gone from the server in one sync looks like an accident: hold and say so
@@ -185,7 +185,7 @@ def sync_locked():
 
 def start_background():
     """Never slows a session start: the sync runs detached, with the same environment (URL and token)."""
-    kw = {"creationflags": 0x00000008 | 0x00000200} if os.name == "nt" else {"start_new_session": True}  # DETACHED_PROCESS | NEW_PROCESS_GROUP
+    kw = {"creationflags": 0x08000000 | 0x00000200} if os.name == "nt" else {"start_new_session": True}  # CREATE_NO_WINDOW | NEW_PROCESS_GROUP (as workers.WIN_FLAGS): DETACHED gives console children a window each
     subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--now"], stdin=subprocess.DEVNULL,
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **kw)
 
