@@ -133,7 +133,10 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   a new conversation and every later one the agent's own continuation (`claude -p --resume <session>`,
   `codex exec resume <thread>`, `agy --conversation <id>`), and posts the output back in small batches
   (`POST /machine/chats/events`). Permissions are a worker's on that pc: the agent's YOLO flag where YOLO is on, else
-  the same narrow sets (approvals inside a chat are not there yet). Only the machine's owner sees or posts (admins
+  the same narrow sets (approvals inside a chat are not there yet). Codex without YOLO cannot commit in a chat: the
+  folder is a main checkout, and Codex keeps its `.git` read-only (opening it would let a sandboxed run change git
+  hooks and config). A chat turn says it is one (`KNOWLEDGE_CHAT`, header `X-Knowledge-Chat`): like a worker it
+  hears no task lists or "start your tasks", takes no lease, task or notice, and agy is not asked to register. Only the machine's owner sees or posts (admins
   too only on their own machines); a chat needs its pc online and says so. One file per chat under the state
   directory (`chats/<machine>/`), at most 50 chats per machine (the oldest go) and 1 MB per chat (the oldest output
   goes). Every turn, stop and failure is in the companion's activity log; a failure also shows in the chat.
