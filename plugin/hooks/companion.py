@@ -1038,7 +1038,7 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
             "agents": {a: {"yolo": bool(yolo.get(a, {}).get("on")), "trusted": not untrusted(a, folders), "limit": lim.get(a),
                      "resets": (resets or {}).get(a)}
                        for a in AGENTS if installed(a)},
-            "workers": [{**{k: w.get(k) for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open")},
+            "workers": [{**{k: w.get(k) for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open", "why")},
                          "checkpoint": bool(w.get("checkpoint")), "merged": w["status"] == "merged", "git": gits.get(k)} for k, w in ws.items()],
             "limitWait": wait, "waiting": waiting or {}, "folders": links, "projects": load("state.json", {}).get("projects", [])}
     server("POST", "/machine/report", tok, body)

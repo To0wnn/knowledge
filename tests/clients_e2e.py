@@ -1212,6 +1212,8 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
               and any(a["kind"] == "error" and "CMP-QUIT ended without claiming or handing back" in a["text"] for a in act_log["activity"])
               and any(s["id"] == "CMP-QUIT" and "without claiming" in s["why"] for s in act_log["tasks"]["stalled"]),
               "workers: exit 0 with the task left open is a failure (activity log error, stalled lane), not finished", json.dumps(quit_rec)[:400])
+        quit_srv = next((w for r in machines() if r["id"] == mid for w in r["agents"].get("agy", {}).get("workers", []) if w["id"] == "CMP-QUIT"), {})
+        check("without claiming" in (quit_srv.get("why") or ""), "workers: a failed worker's reason reaches the server's Machines list", json.dumps(quit_srv)[:400])
         call("POST", "/local/api/settings", {"workersAllowed": False})
         # The trust command: an agent that fails (a Codex without hooks/list) does not keep the next one untrusted.
         Path(str(calls) + ".fail").write_text("", encoding="utf-8")

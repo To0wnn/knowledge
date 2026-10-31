@@ -767,7 +767,7 @@ def board_contract(tmp, ck, fr, raw, er, et):
                                              "branch": f"task/{i}", **k}
     rep = {"version": "0.17.0", "workersAllowed": True, "agents": {"codex": {}, "claude": {}},
            "folders": {"linked": [{"path": "/home/x/garden", "project": "garden", "git": {**pill, "changed": "3; rm -rf"}}]},
-           "workers": [worker("BRD-4", "running", git=pill), worker("BRD-5", "failed", now - 60), worker("BRD-6", "finished", now - 60),
+           "workers": [worker("BRD-4", "running", git=pill), worker("BRD-5", "failed", now - 60, why="ended without claiming or handing back its task"), worker("BRD-6", "finished", now - 60),
                        worker("BRD-7", "failed", now - 8 * 86400), worker("BRD-8", "finished", now - 2 * 86400)]}
     assert http("POST", "/machine/report", rep, token=fr, headers=pc)[0] == 200
     path = "garden-memory/project_tasks.md"
@@ -793,6 +793,17 @@ def board_contract(tmp, ck, fr, raw, er, et):
     assert col("chat", cids[2]) == "running"
     assert col("worker", "BRD-4") == "running" and items[("worker", "BRD-4")]["git"] == pill
     assert (col("worker", "BRD-5"), col("worker", "BRD-6"), col("worker", "BRD-7"), col("worker", "BRD-8")) == ("needs", "done", None, None), items.keys()
+    failed = items[("worker", "BRD-5")]
+    assert failed["why"] == "ended without claiming or handing back its task" and "ended without claiming" in failed["line"], failed
+    m = json.loads((tmp / "machines.json").read_text())[mid]["companion"]["workers"]
+    assert next(w for w in m if w["id"] == "BRD-5")["why"].startswith("ended without"), "the machine report keeps why"
+    # Restart: only a worker that ended, queued as the companion's own start (any companion version knows it).
+    act = lambda tid: ui("/ui/api/machines/action", {"machine": mid, "action": "restart", "args": {"project": "garden", "id": tid}})
+    assert act("BRD-4")[0] == 409 and act("NOPE")[0] == 409 and act("BRD-5")[0] == 200
+    got = json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"]
+    assert [(a["action"], a["args"]) for a in got] == [("start_worker", {"project": "garden", "id": "BRD-5"})], got
+    for a in got:
+        http("POST", "/machine/actions/result", {"id": a["id"], "ok": True}, token=fr, headers=pc)
     assert col("task", "BRD-1") == "open" and items[("task", "BRD-1")]["hosts"] == [{"machine": mid, "label": "garage"}], items.get(("task", "BRD-1"))
     assert col("task", "BRD-2") == "needs" and items[("task", "BRD-2")]["approve"], items.get(("task", "BRD-2"))
     assert col("task", "BRD-9-done") == "done", "a result handed back today is done"

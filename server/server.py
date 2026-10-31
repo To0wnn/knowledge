@@ -4620,7 +4620,7 @@ def action_args(action: str, args: dict) -> dict:
         if not re.fullmatch(r"[\w.-]{1,60}", str(args.get("id", ""))):
             raise ValueError("id must be a task id")
         return str(args["id"])
-    if action in ("start_worker", "stop_worker", "rollback"):  # a task id is unique per project only
+    if action in ("start_worker", "stop_worker", "rollback", "restart"):  # a task id is unique per project only
         if args.get("project") not in PROJECTS or not in_scope(PROJECTS[args["project"]][1] + "/"):
             raise ValueError("unknown project")
         return {"project": args["project"], "id": tid()}
@@ -4664,6 +4664,11 @@ async def ui_machine_action(request: Request):
     row = next((r for r in await asyncio.to_thread(machine_rows) if r["id"] == mid), None)
     if not row or not row["own"] or row.get("old"):
         return JSONResponse({"error": "not a machine of your own tokens (with plugin 0.15.0 or newer)"}, status_code=403)
+    if action == "restart":  # a worker that ended: start it again now, past the companion's RESTART_AFTER hold
+        if not any(w.get("project") == args["project"] and w.get("id") == args["id"] and w.get("status") in ("failed", "stopped", "finished")
+                   for a in row["agents"].values() for w in a.get("workers", [])):
+            return JSONResponse({"error": f"no ended worker for {args['id']} on this machine"}, status_code=409)
+        action = "start_worker"  # the companion's own start (any version): `only` skips the hold
     dev, tokens = device.get(), read_json(TOKENS_FILE, {})
     item = {"id": secrets.token_hex(6), "action": action, "args": args, "by": dev.get("user", ""), "at": time.time(),
             "status": "waiting", "tokens": [n for n in row["tokens"] if n in tokens and own_token(tokens[n], dev)]}
@@ -4922,8 +4927,9 @@ def board_items() -> list[dict]:
                     items.append({**base, "kind": "worker", "col": col, "id": w.get("id"), "agent": a, "project": w.get("project"),
                                   "key": f"worker:{r['id']}/{w.get('project')}/{w.get('id')}", "sig": f"{st}:{ended}",
                                   "title": w.get("id"), "at": w.get("started") if st == "running" else ended,
-                                  "line": f"worker {st}" + (f" · {w['branch']}" if w.get("branch") else ""), "git": w.get("git"),
-                                  "status": st, "open": w.get("open") or "", "checkpoint": bool(w.get("checkpoint"))})
+                                  "line": f"worker {st}" + (f": {w['why']}" if w.get("why") else "") + (f" · {w['branch']}" if w.get("branch") else ""),
+                                  "git": w.get("git"), "status": st, "open": w.get("open") or "", "checkpoint": bool(w.get("checkpoint")),
+                                  "why": w.get("why") or ""})
     working = {(i["project"], i["id"]) for i in items if i["kind"] == "worker" and i["col"] == "running"}
     for t in task_rows():
         agent = owner_agent(t["owner"])
@@ -5408,7 +5414,7 @@ async def machine_report(request: Request):
                                  "resets": float(v["resets"]) if isinstance(v.get("resets"), (int, float)) else None}
                              for a, v in (b.get("agents") or {}).items() if a in AGENT_OWNERS and isinstance(v, dict)},
                   "workers": [{k: (w.get(k) if w.get(k) is None or isinstance(w.get(k), (int, float, bool)) else str(w[k])[:300])
-                               for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open", "checkpoint", "merged")}
+                               for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open", "checkpoint", "merged", "why")}
                               | {"git": git_pill(w.get("git"))}
                               for w in (b.get("workers") or [])[:40] if isinstance(w, dict)],
                   "folders": {k: [{"path": str(f.get("path", ""))[:500], "project": str(f.get("project", ""))[:80]}
