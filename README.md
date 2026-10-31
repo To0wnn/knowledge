@@ -65,7 +65,8 @@ checks them against a few house rules, so a growing pile of agent memory stays f
 - **Lint:** deterministic checks in ~80 ms: dead links, index lines without a file and the reverse, missing frontmatter
   or sections, oversized memos, overdue open items, probable secrets (never shown), raw sources not yet processed.
 - **Web UI:** a home view per topic, full search, a note preview with connected notes, an editor, change history, a
-  lint tab and an admin page for tokens, people and projects. Light or dark, your pick.
+  lint tab, a tasks tab (the task lines between agents, results handed back, and which agent sessions can be woken;
+  Done removes a line) and an admin page for tokens, people and projects. Light or dark, your pick.
 - **Graph:** notes as nodes, links as lines, one island per topic. A line's thickness and pull follow how related two
   notes are (direct link, shared source, shared neighbours, same type); weak links between topics show on hover.
 - **External skills:** an admin adds a skill folder from GitHub by its link; it is pinned to a commit, taken in only as
