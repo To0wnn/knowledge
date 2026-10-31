@@ -45,7 +45,7 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   (`open tot` also works). A new line without `from`/`start` is refused at write time; older lines keep working as
   "start now" and show as legacy. The server records who added each line; a task starts by itself only when its start
   condition is met and its writer is trusted (per project on the admin page; by default the project's owner and their
-  tokens, admins and tokens an admin made), otherwise the owner or an admin approves it in the Tasks tab. Only tasks
+  tokens, admins and the admins' own devices), otherwise the owner or an admin approves it in the Tasks tab. Only tasks
   that may start reach an agent as "start now" (`/tasks`, the wake, `GET /tasks/ready`); the others are listed with the
   reason. One task is started on one machine only: the first device to take it holds a 30-minute lease
   (`state/task_leases.json`). `POST /tasks/woken` takes the lease (200 `{"lease"}`, or 409 `{"held_by"}` when another
@@ -76,7 +76,13 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   "Machines": online or "offline since", per agent its plugin, a red YOLO pill, hooks trusted, usage limit (or
   "unknown"), last hook error, workers and recent sessions. A person sees the machines of their own tokens; an admin
   all. A machine id belongs to the person (or the admins) whose token first reported it; another
-  person's token that names it gets 403. Plugins before 0.15 show as one "old plugin" row per token.
+  person's token on the same pc gets a machine record of its own and never sees or steers the first one. Plugins before 0.15 show as one "old plugin" row per token.
+- **The admins' own devices:** a token an admin makes counts as the admins only when it is marked **"My own device"**
+  (`"self": true`, a checkbox on the admin page, also on existing tokens): its machines are the admins' to see and
+  steer, and its task lines are trusted. Mark the tokens of your own pcs, phone and the server's own jobs (watcher,
+  reports); never a token you made for a friend, a guest or a personal assistant. Unmarked, an admin-made token is
+  its own party: its machines get records of their own, its task lines wait for approval. Machine records bound to
+  the admins before this flag existed stay theirs and match marked tokens only.
 - **Workers, not chats:** a task never goes into someone's chat. The companion (below) starts a **worker** per ready
   task: a fresh headless session of the task's agent (Claude Code `claude -p --output-format stream-json`, Codex
   `codex exec --json`, agy `agy -p`) in its own git worktree on branch `task/<ID>` (`~/.knowledge/worktrees/`), or in
@@ -131,7 +137,12 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   per pc that may take it) and **Done (24 h)** (chats read, workers ended, results handed back). Opening a chat marks
   it read (chats from before 0.17 count as read; a turn you stopped yourself and replies older than a week do not
   need you). Dismiss takes a Needs-you item off your own board until it changes (stored per person on the server,
-  `POST /ui/api/board/dismiss`). A card opens its chat (Esc or Back returns), a task its memo line, a worker how to look
+  `POST /ui/api/board/dismiss`). With Matrix configured (`KNOWLEDGE_MATRIX_URL/ROOM/TOKEN`), a new Needs-you item on
+  an admin's board gives one Matrix message in that room, with a link to `<KNOWLEDGE_PUBLIC_URL>/ui#/inbox` (a chat:
+  `#/chats/<chat id>`): once per item and version (the key and signature Dismiss uses), at most
+  `needs_per_hour` an hour (admin page, Settings; 0 = off, default 6; more at once give one summary, the rest wait
+  for room), and none while an admin has the board open (polled in the last 2 minutes: they see it there). A woken
+  task nobody took keeps its own notice, now with the same link. Non-admins get none: the room is the admin's. A card opens its chat (Esc or Back returns), a task its memo line, a worker how to look
   at it; Approve, Start and Stop act in place. A phone shows the columns one under the other, Done folded to one line. Chat cards and workers
   carry a **git pill** (`task/KN-12 · ●3 · ↑2↓0`: branch, changed files, commits ahead/behind `main`/`master`, or
   the upstream on main itself), which the companion counts once a round per folder with `GIT_OPTIONAL_LOCKS=0` and
@@ -286,6 +297,23 @@ Settings in `.env` (all optional): `KNOWLEDGE_PUBLIC_URL` (the address people us
 `KNOWLEDGE_LANGUAGE` (`en` or `nl`: a memo's sections are `## Status` and `## Decisions`, or `## Stand` and
 `## Keuzes`; both are always accepted), `TZ`. The house rules every agent gets are `default_house_rules.md` until you
 put your own `house_rules.md` in `data/shared`.
+
+The web UI installs as an app (Chrome or Edge menu, "Install app"; Safari, "Add to Home Screen"): a manifest at
+`/ui/manifest.webmanifest` (start page `/ui#/inbox`, scope `/ui`, standalone) with 192/512 px and maskable icons.
+There is no service worker: Chrome needs none for "Install app" since version 108 on Android and 112 on desktop,
+only its automatic install banner still wants a fetch handler
+([Chrome blog](https://developer.chrome.com/blog/update-install-criteria)). The manifest and icons carry no data and
+are served without sign-in; the page links the manifest with `crossorigin="use-credentials"`, because browsers fetch
+a manifest without cookies otherwise, and a sign-in proxy in front (forward auth) would answer with a redirect to its
+login page instead of the manifest. Behind a sign-in proxy on another origin (`auth.<domain>`): in the installed app
+on Android, a redirect to the login page leaves the app's scope, so Chrome shows it in the app window with a
+custom-tab style bar (the login page's address and a close button) and, as reported, returns to the app view once
+the redirect lands inside `/ui` again
+([w3c/manifest discussion](https://lists.w3.org/Archives/Public/public-webapps-github/2018Jun/0728.html); not yet
+tried on a phone with this server). The installed app shares Chrome's cookies, so someone signed in in Chrome is
+usually never sent there. A manifest cannot put another origin in scope (`scope` must be on the app's own origin), so
+the fix is a long proxy session, not the manifest. iOS home-screen apps keep their own cookies: the first start signs
+in once.
 
 Requirements: Docker and about 2 GB RAM (the embedding model is 1.2 GB; it ships in the image, nothing is fetched at
 runtime).

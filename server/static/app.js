@@ -869,9 +869,9 @@ async function companion(path, body) {
   if (!r.ok) throw new Error(data.error || `companion: HTTP ${r.status}`);
   return data;
 }
-let localMachine = ""; // the machine id of the companion on this pc: its row in Machines says "This pc"
+let localMachine = ""; // SHA-256 of the companion's machine id on this pc (never the id itself): its row says "This pc"
 async function probeCompanion() {
-  try { localMachine = (await companion("/local/api/hello")).machine || ""; } catch { return false; } // no companion on this pc: no tab
+  try { localMachine = (await companion("/local/api/hello")).machineHash || ""; } catch { return false; } // no companion on this pc: no tab
   for (const a of document.querySelectorAll(".nav-thispc")) a.hidden = false;
   return true;
 }
@@ -1046,11 +1046,13 @@ async function loadMachines() {
   const tasks = (await api("/ui/api/tasks")).tasks.filter((t) => !t.done && t.startable);
   const box = $("machines"); box.replaceChildren();
   const narrow = matchMedia("(max-width: 699.98px)").matches;
+  const sha = async (t) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t)))].map((b) => b.toString(16).padStart(2, "0")).join("");
+  const here = localMachine && crypto.subtle ? (await Promise.all(res.machines.map(async (m) => (await sha(m.id)) === localMachine ? m.id : ""))).find(Boolean) : "";
   for (const m of res.machines) {
     const card = el("article", "machine" + (m.online ? "" : " offline")), head = el("div", "machine-head");
     head.append(el("h3", null, m.label));
     head.append(el("span", `pill ${m.online ? "ok" : ""}`, m.old ? "old plugin" : m.online ? "online" : `offline since ${ago(m.at)}`));
-    if (localMachine && m.id === localMachine) head.append(el("span", "pill this", "This pc"));
+    if (here && m.id === here) head.append(el("span", "pill this", "This pc"));
     card.append(head, el("p", "machine-meta", [m.tokens.join(", "), m.companion ? `companion ${m.companion.version || "?"}` : !m.old && "no companion"].filter(Boolean).join(" · ")));
     const c = m.companion;
     if (c) {
@@ -1224,8 +1226,8 @@ $("ingest-form").addEventListener("submit", async (e) => {
 // ---------------------------------------------------------------- Agents: Inbox (the attention board) and Chats
 // Chats with agents on your pcs: one card per chat (pc, agent, folder), the answer streaming in. The server only
 // relays: the pc's companion pulls each message and runs one turn of the agent (plugin/hooks/chat.py). Everything is
-// text (textContent): nothing an agent prints becomes markup. Inbox and Chats are routes (shell.js): #/chats/<key>
-// is one chat, its key the pc and chat id.
+// text (textContent): nothing an agent prints becomes markup. Inbox and Chats are routes (shell.js): #/chats/<chat id>
+// is one chat (its card is keyed by pc and chat id).
 const AGENT_MARK = { claude: "C", codex: "X", agy: "A" };
 const ck = { cards: new Map(), machines: [], chats: [], board: [], view: "", timer: 0, summaryAt: 0, doneOpen: false };
 const ckKey = (c) => `${c.machine}/${c.id}`;
