@@ -951,7 +951,8 @@ def wake_e2e(tok: str, home: Path, project: Path):
     calls = home / "codex-calls.jsonl"
     (bin_dir / "fakecodex.py").write_text(f"import json, sys\nimport os\nopen({str(calls)!r}, 'a', encoding='utf-8').write(json.dumps(sys.argv[1:] + [os.environ.get('CODEX_HOME', '')]) + '\\n')\n", encoding="utf-8")
     if WIN:
-        (bin_dir / "codex.cmd").write_text(f'@"{sys.executable}" "{bin_dir / "fakecodex.py"}" %*\r\n', encoding="utf-8")
+        # chcp first: a console in the OEM code page (an SSH session, a new console) misreads the UTF-8 path below
+        (bin_dir / "codex.cmd").write_text(f'@chcp 65001 >nul\r\n@"{sys.executable}" "{bin_dir / "fakecodex.py"}" %*\r\n', encoding="utf-8")
     else:
         (bin_dir / "codex").write_text(f'#!/bin/sh\nexec "{sys.executable}" "{bin_dir / "fakecodex.py"}" "$@"\n', encoding="utf-8")
         (bin_dir / "codex").chmod(0o755)
