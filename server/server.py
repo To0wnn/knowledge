@@ -1597,6 +1597,7 @@ def context_parts(project: str = "homelab", agent: str = "", chat: bool = False)
 
 
 TASK_OWNER = re.compile(r"^\[([^,\]]+),\s*([^\]]+)\]")
+TASK_ITEM = re.compile(r"^\s*(?:[-*+]\s+)?")  # a task line is a list item, or a bare line, that starts with "open until"
 # "from <requester>, start <condition>:" right after the owner bracket; a "(claimed ...)" marker may sit around it.
 TASK_START = re.compile(r"\s*(?:\([^)]*\)\s*)*from\s+([^,:]+?)\s*,\s*start\s+(now|after approval|after\s+[^\s:,()]+"
                         r"|20\d\d-\d\d-\d\d|\d{1,2} [a-z]+ 20\d\d)\s*(?:\([^)]*\)\s*)*:", re.I)
@@ -1621,8 +1622,9 @@ _task_lock = threading.Lock()
 
 def parse_task(line: str) -> dict | None:
     """A task line "open until <date> [<owner>, <ID>] from <requester>, start <when>: <what>" as fields, None for any
-    other line. A line without from/start is legacy and starts now."""
-    if not ((m := kb_lint.OPEN_DUE.search(line)) and (o := TASK_OWNER.match(m.group(2)))):
+    other line. A line without from/start is legacy and starts now. Only a line (list item) that starts with "open
+    until": an index line "- [<title>](memo.md)" quoting one is a link, never a task."""
+    if not ((m := kb_lint.OPEN_DUE.match(TASK_ITEM.sub("", line, 1))) and (o := TASK_OWNER.match(m.group(2)))):
         return None
     rest, (owner, _, pin) = m.group(2)[o.end():], o.group(1).partition("@")  # [Claude@<device>, ID]: only that device
     f = TASK_START.match(rest)
@@ -1638,6 +1640,7 @@ assert parse_task("- open until 2099-01-01 [Codex, K-2] from Claude, start after
 assert parse_task("- open until 2099-01-01 [Codex, K-3] (claimed Codex, 2026-10-31) from Ann, start 2 nov 2026: x")["from"] == "Ann"
 assert parse_task("- open until 2099-01-01 [Codex, K-4] from Ann, start after approval: x")["start"] == "after approval"
 assert parse_task("- open until 2099-01-01: no owner") is None
+assert parse_task("- [open until 2099-01-01 [Codex, I-1] from A, start now: x](f.md) — d") is None  # an index line
 assert (lambda t: (t["owner"], t["device"]))(parse_task("- open until 2099-01-01 [Claude@Lap-1, P-1] from Ann, start now: x")) == ("Claude", "Lap-1")
 
 
@@ -4141,6 +4144,8 @@ async def ui_save(request: Request):
         if line and (root not in {mem for _, mem in PROJECTS.values()} or rel.count("/") != 1):
             raise ToolError("an index line is only for a memo directly in a memory root")  # checked before writing
         refuse_secrets(line)
+        if line:
+            refuse_bare_tasks(f"{root}/MEMORY.md", "", line)  # before the memo is written, as append_line checks it again
         written = await knowledge_write(rel, body.get("text", ""), body.get("base_version", ""))
         if line:
             await append_line(f"{root}/MEMORY.md", line, " ".join(str(body.get("heading", "")).split()))
@@ -4176,12 +4181,15 @@ async def append_line(path: str, line: str, heading: str = ""):
     async with _locks.setdefault(rel, asyncio.Lock()):
         for _ in range(5):
             current = full.read_bytes() if full.exists() else None
-            new = insert_index_line((current or b"").decode("utf-8"), line, heading).encode()
+            before = (current or b"").decode("utf-8")
+            new = insert_index_line(before, line, heading).encode()
+            refuse_bare_tasks(rel, before, new.decode("utf-8"))  # the same task checks as every other write
             if replace_if_unchanged(full, current, new):
                 break
         else:
             raise ToolError(f"{rel} kept changing; try again")
         index.refresh(rel)
+    note_task_authors(rel, before, new.decode("utf-8"), device.get().get("name", ""))
     audit("edit", rel)
 
 
