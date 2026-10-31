@@ -565,17 +565,19 @@ AGENT_LABEL = "io.github.knowledge.companion"
 
 def companion_paths(system: str) -> dict:
     home = Path.home()
+    # the page that hands the companion page its key: a private file, so the key is never on a browser's command line
+    opener = {"opener": Path(os.environ.get("KNOWLEDGE_HOME") or home / ".knowledge") / "companion" / "open.html"}
     if system == "windows":
         start = Path(os.environ.get("APPDATA") or home / "AppData" / "Roaming") / "Microsoft" / "Windows" / "Start Menu" / "Programs"
         return {"task_xml": home / ".knowledge" / "companion" / "autostart.xml",
-                "lnk": start / f"{COMPANION_NAME}.lnk", "url": start / f"{COMPANION_NAME}.url"}
+                "lnk": start / f"{COMPANION_NAME}.lnk", "url": start / f"{COMPANION_NAME}.url", **opener}
     if system == "darwin":
         app = home / "Applications" / f"{COMPANION_NAME}.app" / "Contents"
         return {"plist": home / "Library" / "LaunchAgents" / f"{AGENT_LABEL}.plist", "app": app.parent,
-                "app_plist": app / "Info.plist", "app_exe": app / "MacOS" / "knowledge-companion"}
+                "app_plist": app / "Info.plist", "app_exe": app / "MacOS" / "knowledge-companion", **opener}
     data = Path(os.environ.get("XDG_DATA_HOME") or home / ".local" / "share")
     conf = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config")
-    return {"unit": conf / "systemd" / "user" / UNIT, "desktop": data / "applications" / "knowledge-companion.desktop"}
+    return {"unit": conf / "systemd" / "user" / UNIT, "desktop": data / "applications" / "knowledge-companion.desktop", **opener}
 
 
 def windows_account() -> str:
@@ -604,10 +606,15 @@ def app_browser(system: str) -> str:
 
 def companion_steps(system: str, key: str = "<key>") -> list:
     """What install-companion does, in order: ("write", path, text[, mode]) or ("run", argv, may_fail). The shortcut
-    opens the page with the local API's key, so its file is private."""
+    opens a private file that forwards to the page with the local API's key: a key on the browser's command line
+    could be read by every other account on the pc (/proc, ps), and the companion's port is open to them."""
     from xml.sax.saxutils import escape
     me, p, browser = str(Path(__file__).resolve()), companion_paths(system), app_browser(system)
-    page = f"{COMPANION_URL}/#key={key}"
+    target = escape(f"{COMPANION_URL}/#key={key}", {'"': "&quot;"})
+    forward = ("<!doctype html>\n<meta charset=\"utf-8\">\n<title>Knowledge companion</title>\n"
+               f"<meta http-equiv=\"refresh\" content=\"0;url={target}\">\n<a href=\"{target}\">Open the knowledge companion</a>\n")
+    page = p["opener"].as_uri()
+    first = [("write", p["opener"], forward, 0o600)]
     if system == "windows":
         # pythonw.exe runs without a console; started directly, never through (hidden or encoded) PowerShell,
         # which corporate EDRs flag.
@@ -626,7 +633,7 @@ def companion_steps(system: str, key: str = "<key>") -> list:
     <WorkingDirectory>{escape(str(Path.home()))}</WorkingDirectory></Exec></Actions>
 </Task>
 """
-        steps = [("write", p["task_xml"], xml),
+        steps = first + [("write", p["task_xml"], xml),
                  ("run", ["schtasks", "/Create", "/F", "/TN", COMPANION_NAME, "/XML", str(p["task_xml"])], False),
                  ("run", ["schtasks", "/End", "/TN", COMPANION_NAME], True),  # an update: the running one has old code
                  ("run", ["schtasks", "/Run", "/TN", COMPANION_NAME], False)]
@@ -663,7 +670,7 @@ def companion_steps(system: str, key: str = "<key>") -> list:
   <key>CFBundlePackageType</key><string>APPL</string>
 </dict></plist>
 """
-        steps = [("write", p["plist"], plist),
+        steps = first + [("write", p["plist"], plist),
                  ("run", ["launchctl", "bootout", f"gui/{uid}", str(p["plist"])], True),
                  ("run", ["launchctl", "bootstrap", f"gui/{uid}", str(p["plist"])], False),
                  ("write", p["app_plist"], info), ("write", p["app_exe"], f"#!/bin/sh\n{opener}\n", 0o700)]
@@ -693,7 +700,7 @@ Icon=applications-internet
 Terminal=false
 Categories=Network;Development;
 """
-        steps = [("write", p["unit"], unit),
+        steps = first + [("write", p["unit"], unit),
                  ("run", ["systemctl", "--user", "daemon-reload"], False),
                  ("run", ["systemctl", "--user", "enable", UNIT], False),
                  ("run", ["systemctl", "--user", "restart", UNIT], False),  # starts it, or loads new code after an update
@@ -707,12 +714,13 @@ def companion_undo_steps(system: str) -> list:
     if system == "windows":
         return off + [("run", ["schtasks", "/End", "/TN", COMPANION_NAME], True),
                 ("run", ["schtasks", "/Delete", "/F", "/TN", COMPANION_NAME], True),
-                ("remove", p["task_xml"]), ("remove", p["lnk"]), ("remove", p["url"])]
+                ("remove", p["task_xml"]), ("remove", p["lnk"]), ("remove", p["url"]), ("remove", p["opener"])]
     if system == "darwin":
         uid = getattr(os, "getuid", lambda: 501)()
-        return off + [("run", ["launchctl", "bootout", f"gui/{uid}", str(p["plist"])], True), ("remove", p["plist"]), ("remove", p["app"])]
+        return off + [("run", ["launchctl", "bootout", f"gui/{uid}", str(p["plist"])], True), ("remove", p["plist"]), ("remove", p["app"]),
+                      ("remove", p["opener"])]
     return off + [("run", ["systemctl", "--user", "disable", "--now", UNIT], True), ("remove", p["unit"]),
-            ("run", ["systemctl", "--user", "daemon-reload"], True), ("remove", p["desktop"])]
+            ("run", ["systemctl", "--user", "daemon-reload"], True), ("remove", p["desktop"]), ("remove", p["opener"])]
 
 
 def run_steps(steps: list, dry: bool) -> list:
@@ -730,9 +738,12 @@ def run_steps(steps: list, dry: bool) -> list:
                 print(f"companion: would write {what}:\n" + "".join(f"    {ln}\n" for ln in new.splitlines()), end="")
             else:
                 what.parent.mkdir(parents=True, exist_ok=True)
-                what.write_text(new, encoding=enc, newline="\n" if enc == "utf-8" else None)
-                if len(step) > 3:
-                    os.chmod(what, step[3])
+                if len(step) > 3:  # private from its first byte (the opener holds the key), also when it was there before
+                    with os.fdopen(os.open(what, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, step[3]), "w", encoding=enc, newline="\n") as f:
+                        os.chmod(what, step[3])
+                        f.write(new)
+                else:
+                    what.write_text(new, encoding=enc, newline="\n" if enc == "utf-8" else None)
                 print(f"companion: {'updated' if old is not None else 'wrote'} {what}")
         elif kind == "remove":
             if not what.exists():

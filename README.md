@@ -135,7 +135,8 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   `http://127.0.0.1:47321/`; the web UI shows a "This pc" tab when the companion answers there. The local API answers
   only that page and the knowledge web UI's origin; every change except trusting the knowledge hooks, and the tasks
   and activity, also need the key in `~/.knowledge/companion/api-key` (readable by you only), which the menu entry
-  passes to the page (`#key=`). YOLO and the worker settings change only on its own page (or remotely by the owner).
+  passes to the page through the private file `~/.knowledge/companion/open.html` (`#key=`; never on a browser's
+  command line, where other accounts on the pc could read it). YOLO and the worker settings change only on its own page (or remotely by the owner).
 - **Usage limits:** each prompt checks how much of the agent's own usage limit is used and says it once per session
   and limit window at 50, 75 and 90%; from 95% a new subagent is refused (Claude Code `Agent`, Codex `spawn_agent`, agy
   `invoke_subagent`). The numbers are the agent's own: Codex's rollout, agy's language server (after its one-time

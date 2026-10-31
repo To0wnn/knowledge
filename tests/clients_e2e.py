@@ -1740,8 +1740,11 @@ def companion_setup(tmp: Path):
     if system != "windows":
         key = (home / ".knowledge" / "companion" / "api-key").read_text(encoding="utf-8").strip()
         link = home / files[1]
-        check(f"#key={key}" in link.read_text(encoding="utf-8") and link.stat().st_mode & 0o077 == 0 and key not in out,
-              f"install-companion on {system}: the private shortcut opens the page with the local key", out[-600:])
+        opener = home / ".knowledge" / "companion" / "open.html"
+        check(f"#key={key}" in opener.read_text(encoding="utf-8") and opener.stat().st_mode & 0o077 == 0 and key not in out
+              and key not in link.read_text(encoding="utf-8")
+              and any(u in link.read_text(encoding="utf-8") for u in (opener.as_uri(), opener.as_uri().replace("%", "%%"))),  # .desktop doubles %
+              f"install-companion on {system}: the shortcut opens a private file that forwards with the local key (never the key on a command line)", out[-600:])
     expect = {"linux": "systemctl --user enable knowledge-companion.service", "darwin": "launchctl bootstrap gui/",
               "windows": "schtasks /Create /F /TN"}[system]
     check(code == 0 and all((home / f).is_file() for f in files) and expect in calls and "runs at logon" in out,
