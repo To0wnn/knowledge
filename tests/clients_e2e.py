@@ -511,7 +511,9 @@ def agents(tok: str, home: Path, project: Path, garden: Path):
                               "tool_input": {"command": "*** Begin Patch\n*** Add File: a.md\n+clean text\n*** End Patch"},
                               "toolCall": {"name": "write_file", "args": {"Path": "a.md", "Content": "clean text"}}},
                     "wake": {"hook_event_name": "PostToolUse", "session_id": f"{name}-1", "cwd": str(project),
-                             "tool_name": "mcp__knowledge__knowledge_search"}}
+                             "tool_name": "mcp__knowledge__knowledge_search"},
+                    "watch": {"hook_event_name": "PostToolUse", "session_id": f"{name}-1", "cwd": str(project), "tool_name": "Bash",
+                              "tool_input": {"command": "rm -rf ~/x"}}}
         # How a program starts a hook command on Windows: PowerShell -Command, or cmd /d /s /c "<command>" as one
         # string (a list would make Python add its own quoting, which cmd reads differently).
         shells = [("powershell", lambda c: ["powershell", "-NoProfile", "-Command", c]), ("cmd", lambda c: f'cmd /d /s /c "{c}"')] \
@@ -523,6 +525,8 @@ def agents(tok: str, home: Path, project: Path, garden: Path):
                 check(code == 0, f"{name} via {label}: {kind} hook runs", err[-600:])
                 if kind == "gate":
                     check(out.strip() == "", f"{name} via {label}: below the limit the subagent hook prints nothing", out[:300])
+                if kind == "watch":
+                    check(out.strip() == "{}", f"{name} via {label}: no YOLO, no worker: the watch hook says nothing", out[:300])
                 if kind == "guard":
                     check(out.strip() == "", f"{name} via {label}: a clean edit gets no word from secret-guard", out[:300])
                 if kind == "context":
@@ -613,11 +617,10 @@ def hook_errors(tmp: Path, project: Path):
         turn = lambda sid: run(turn_cmd, json.dumps({"hook_event_name": "UserPromptSubmit", "session_id": sid, "conversationId": sid,
                                                      "cwd": str(project), "workspacePaths": [str(project)], "prompt": "go on"}), env, cwd=str(project))
         code, out, err = turn(f"{agent}-st1")
-        sessions = json.loads(http("GET", "/ui/api/tasks", headers=admin)[1])["sessions"]
-        mine = [s for s in sessions if s["device"] == f"status-{agent}" and s["agent"] == agent]
+        mine = [a for r in machines() if f"status-{agent}" in r["tokens"] for n, a in r["agents"].items() if n == agent]
         check(code == 0 and mine and any(e["hook"] == fail and e["source"] == "knowledge" for e in mine[0]["errors"])
-              and mine[0]["plugin"] in ("", json.loads((CLIENT / "plugin" / ".claude-plugin" / "plugin.json").read_text())["version"]),
-              f"{agent}: the next turn reports it, the Tasks tab sessions carry it", json.dumps(mine)[:500] + err[-300:])
+              and mine[0].get("plugin", "") in ("", json.loads((CLIENT / "plugin" / ".claude-plugin" / "plugin.json").read_text())["version"]),
+              f"{agent}: the next turn reports it, the Machines list carries it", json.dumps(mine)[:500] + err[-300:])
         sent = (home / ".knowledge" / "hook-status.json").read_text(encoding="utf-8")
         run([sys.executable, str(hooks / "agent_hooks.py"), "context", agent if agent != "claude" else "codex"], "not json", env, cwd=str(project))
         turn(f"{agent}-st2")
@@ -656,10 +659,26 @@ if name == "codex" and args[:1] == ["app-server"]:  # codex-rs app-server, as fa
                  "trustStatus": "untrusted", "handlerType": "command", "command": "./evil.sh"}]}]}
         print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": res}), flush=True)
 else:
-    rec({"argv": [name] + args, "cwd": os.getcwd()})
-    if args[:1] == ["queue"] and os.path.exists(calls + ".fail"):  # the thread is gone
-        sys.exit("no such thread")
+    rec({"argv": [name] + args, "cwd": os.getcwd(), "env": {k: os.environ.get(k, "") for k in ("KNOWLEDGE_WORKER", "KNOWLEDGE_YOLO", "KNOWLEDGE_START_NONCE")}})
+    if os.path.exists(calls + ".sleep"):  # a worker that keeps working
+        import time
+        time.sleep(120)
 """
+
+
+def machines() -> list:
+    """The Machines list as the admin sees it."""
+    return json.loads(http("GET", "/ui/api/machines", headers={"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice"})[1])["machines"]
+
+
+def machine_errors(token: str) -> dict:
+    """{agent: hook failures} over every machine of a token."""
+    out = {}
+    for r in machines():
+        if token in r["tokens"]:
+            for a, ag in r["agents"].items():
+                out.setdefault(a, []).extend(ag.get("errors") or [])
+    return {a: sorted(e, key=lambda x: x["at"]) for a, e in sorted(out.items())}
 
 
 def knowledge_home(tok: str, tmp: Path, project: Path):
@@ -689,8 +708,9 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
     """The local companion (plugin/hooks/companion.py, started as `agent_hooks.py serve`) in a home of its own with fake
     agents: its local API answers only this pc's pages, it trusts the knowledge hooks the agents' own way (Codex through
     app-server hooks/list + config/batchWrite, again after a plugin update), YOLO writes each agent's native settings and
-    unchecking restores them byte for byte (agy only while agy is closed), a ready task wakes the open Codex session
-    once and starts an agy session where allowed, and hook failures the agents log themselves reach the Tasks tab."""
+    unchecking restores them byte for byte (agy only while agy is closed), workers (a fresh headless session per ready
+    task in its own worktree; off by default, limits, the 90% hand-over, remote actions, roll back, merged cleanup), and
+    hook failures the agents log themselves reach the Machines list."""
     hooks = CLIENT / "plugin" / "hooks"
     home = tmp / "Companion Usér"
     bin_dir, calls = home / "bin", home / "calls.jsonl"
@@ -740,6 +760,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
     self_url = f"http://127.0.0.1:{port}"
     env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, PATH=str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
                    KNOWLEDGE_COMPANION_PORT=str(port), KNOWLEDGE_COMPANION_EVERY="3600", KN_FAKE_CALLS=str(calls),
+                   KNOWLEDGE_COMPANION_ACTIONS_EVERY="1", KNOWLEDGE_WORKER_GRACE="1",
                    KNOWLEDGE_AGY_PROCESS="knfakeagy" if fake_agy else Path(sys.executable).stem,
                    KNOWLEDGE_CODEX_PROCESS="knfakecodex" if fake_codex else Path(sys.executable).stem)
 
@@ -844,109 +865,168 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
             check(json.loads((agy_dir / "settings.json").read_text(encoding="utf-8")) == ag, "companion: YOLO off restores agy's settings")
         else:
             print("skip agy YOLO after closing agy (no stand-in process on Windows)")
-        # Tasks: the open Codex session is woken once; agy has none and may start one; Claude may not.
-        run([sys.executable, str(hooks / "agent_hooks.py"), "tasks", "codex"], json.dumps({"session_id": "cmp-cx", "cwd": str(project)}), env, cwd=str(project))
-        tasks = "".join(f"- open tot 1 jan 2099 [{o}, CMP-{o.upper()}] from Claude, start now: companion test for {o}\n" for o in ("Codex", "Gemini", "Claude"))
-        http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_write", "arguments":
-             {"path": "garden-memory/project_companion.md", "content": "---\nname: c\ndescription: d\nmetadata:\n  type: project\n---\n"
-              f"## Stand\n{tasks}\n## Keuzes\n"}}}, {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})
-        call("POST", "/local/api/settings", {"startWhenNone": {"agy": True}})
+        # Workers: a fresh headless session per ready task, in its own git worktree; off until the owner allows them.
+        repo = home / "Garden repo"
+        repo.mkdir()
+        (repo / ".knowledge-project").write_text("garden\n", encoding="utf-8")
+        (repo / "README.md").write_text("garden\n", encoding="utf-8")
+        for args in (["init", "-q", "-b", "main"], ["config", "user.name", "t"], ["config", "user.email", "t@x"], ["add", "-A"], ["commit", "-qm", "one"]):
+            subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+        run([sys.executable, str(hooks / "agent_hooks.py"), "tasks", "codex"], json.dumps({"session_id": "cmp-cx", "cwd": str(repo)}), env, cwd=str(repo))
+        mid = json.loads((home / ".knowledge" / "machine.json").read_text(encoding="utf-8"))["id"]
+        pc = {"Authorization": f"Bearer {tok}", "X-Knowledge-Machine": mid}
+        mcp = lambda args: http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_edit" if "old_string" in args else "knowledge_write",
+                                "arguments": args}}, {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})
+        tasks = "".join(f"- open tot 1 jan 2099 [{o}, {i}] from Claude, start now: worker test {i} \"a & b > c\n"
+                        for o, i in (("Codex", "CMP-CODEX"), ("Codex", "CMP-CX2"), ("Gemini", "CMP-GEMINI"), ("Claude", "CMP-CLAUDE")))
+        mcp({"path": "garden-memory/project_companion.md", "content": "---\nname: c\ndescription: d\nmetadata:\n  type: project\n---\n"
+             f"## Stand\n{tasks}\n## Keuzes\n"})
+        argvs = lambda n=0: [c for c in recorded()[n:] if "argv" in c and c["argv"][0] in ("codex", "claude", "agy") and c["argv"][1:2] != ["app-server"]]
         st, _, body = call("POST", "/local/api/tick", {})
         out = json.loads(body) if st == 200 else {}
-        queued = [c["argv"] for c in recorded() if c.get("argv", [""])[:2] == ["codex", "queue"]]
-        check(len(queued) == 1 and queued[0][2:4] == ["--thread", "cmp-cx"] and "CMP-CODEX" in queued[0][-1] and "CMP-GEMINI" not in queued[0][-1],
-              "companion: a ready Codex task wakes the open Codex session through codex queue", body[:400] + str(queued)[:400])
-        started = lambda: [c for c in recorded() if c.get("argv", [""])[0] == ("agy" if WIN else "tmux")]
-        time.sleep(1)
-        check(not started() and "waiting 120 s" in out.get("waiting", {}).get("garden/CMP-GEMINI", ""),
-              "companion: no open agy session: it waits START_DELAY before starting one (a pc with a session wins)", body[:600])
-        stf = home / ".knowledge" / "companion" / "state.json"
-        sj = json.loads(stf.read_text(encoding="utf-8"))
-        sj["first_seen"]["garden/CMP-GEMINI"] = time.time() - 130
-        stf.write_text(json.dumps(sj), encoding="utf-8")
+        check(not argvs() and all(w.startswith("Workers are off") for k, w in out.get("waiting", {}).items() if k.startswith("garden/CMP-")) and out.get("waiting"),
+              "workers: off by default, every ready task waits and says why", body[:600])
+        check(call("POST", "/local/api/settings", {"workersAllowed": True}, origin=BASE)[0] == 403,
+              "workers: the web UI cannot switch workers on through the local API (the owner does it on the page or remotely)")
+        st, _, body = call("POST", "/local/api/settings", {"workersAllowed": True, "maxWorkers": {"codex": 2}})
+        check(st == 200 and json.loads(body)["workersAllowed"] is True and json.loads(body)["maxWorkers"]["codex"] == 2,
+              "workers: allowed on the companion page, max workers per agent", body)
+        Path(str(calls) + ".sleep").write_text("", encoding="utf-8")
         yolo_file = home / ".knowledge" / "companion" / "yolo.json"
-        yolo_before = yolo_file.read_text(encoding="utf-8") if yolo_file.exists() else None
         yolo_file.write_text(json.dumps({"agy": {"on": True}}), encoding="utf-8")  # as the page leaves it, minus the restore data
+        n = len(recorded())
+        st, _, body = call("POST", "/local/api/tick", {})
+        out = json.loads(body) if st == 200 else {}
+        wait_for(lambda: len(argvs(n)) >= 3, 20)
+        got = {c["env"]["KNOWLEDGE_WORKER"]: c for c in argvs(n)}
+        cx_id = next((i for i in ("CMP-CODEX", "CMP-CX2") if i in got), "")
+        cx = got.get(cx_id, {"argv": [], "cwd": ""})
+        wt = home / ".knowledge" / "worktrees" / f"Garden-repo-{cx_id}"
+        check(cx["argv"][:2] == ["codex", "exec"] and "workspace-write" in cx["argv"] and "--json" in cx["argv"] and cx["argv"][cx["argv"].index("--cd") + 1] == str(wt)
+              and Path(cx["cwd"]).resolve() == wt.resolve() and cx_id in cx["argv"][-1] and f"task/{cx_id}" in cx["argv"][-1]
+              and "CMP-GEMINI" not in cx["argv"][-1] and cx["env"]["KNOWLEDGE_START_NONCE"],
+              "workers: a Codex task starts `codex exec` in its own worktree on branch task/<ID>, with only its own task", json.dumps(cx)[:900])
+        branch = subprocess.run(["git", "-C", str(wt), "branch", "--show-current"], capture_output=True, text=True).stdout.strip()
+        check(branch == f"task/{cx_id}" and (wt / "README.md").exists(), "workers: the worktree is on branch task/<ID>", branch)
+        check(len([i for i in got if i in ("CMP-CODEX", "CMP-CX2")]) == 1 and "(limit unknown: 1)" in json.dumps(out.get("waiting")),
+              "workers: an agent whose usage limit is unknown runs one worker at most", body[:600])
+        ag, cl = got.get("CMP-GEMINI", {"argv": []}), got.get("CMP-CLAUDE", {"argv": []})
+        check(ag["argv"][:2] == ["agy", "-p"] and "--dangerously-skip-permissions" in ag["argv"] and ag["env"]["KNOWLEDGE_YOLO"] == "1",
+              "workers: agy runs `agy -p`; with YOLO on its own flag and KNOWLEDGE_YOLO", json.dumps(ag)[:500])
+        check(cl["argv"][:2] == ["claude", "-p"] and "stream-json" in cl["argv"] and "acceptEdits" in cl["argv"] and "--dangerously-skip-permissions" not in cl["argv"],
+              "workers: Claude runs `claude -p` with stream-json (its usage limit) and acceptEdits without YOLO", json.dumps(cl)[:500])
+        ck = subprocess.run(["git", "-C", str(repo), "rev-parse", "-q", "--verify", "refs/knowledge/checkpoints/CMP-GEMINI"], capture_output=True, text=True)
+        check(ck.returncode == 0, "workers: a YOLO worker gets a git checkpoint on refs/knowledge/checkpoints/<ID> before it starts", ck.stderr)
+        leases = json.loads((tmp / "task_leases.json").read_text(encoding="utf-8"))["garden"]
+        check(all(leases.get(i, {}).get("session", "").startswith(f"worker:{mid}:") and leases[i]["device"].endswith("#" + mid) for i in got),
+              "workers: each worker holds its task's lease for this machine and its worker session", json.dumps(leases)[:600])
+        # Usage known (Codex rollout at 40%): up to its max; the Machines list shows workers, limit and settings.
+        d = time.localtime()
+        rollout = home / ".codex" / "sessions" / f"{d.tm_year:04d}" / f"{d.tm_mon:02d}" / f"{d.tm_mday:02d}" / "rollout-x.jsonl"
+        rollout.parent.mkdir(parents=True, exist_ok=True)
+        write_rollout = lambda pct: rollout.write_text(json.dumps({"payload": {"type": "token_count", "rate_limits": {
+            "primary": {"used_percent": pct, "window_minutes": 300, "resets_at": time.time() + 3600}}}}) + "\n", encoding="utf-8")
+        write_rollout(40.0)
+        n = len(recorded())
         call("POST", "/local/api/tick", {})
-        yolo_file.write_text(yolo_before, encoding="utf-8") if yolo_before is not None else yolo_file.unlink()
-        wait_for(lambda: started(), 15)
-        st_agy = started()
-        argv = st_agy[0]["argv"] if st_agy else []
-        ready = json.loads(http("GET", "/tasks/ready", headers={"Authorization": f"Bearer {tok}"})[1])["tasks"]
-        agy_ids = [t["id"] for t in ready if t["agent"] == "agy" and t["project"] == "garden"]
-        check(len(st_agy) == 1 and "-i" in argv and "CMP-GEMINI" in agy_ids and all(i in argv[-1] for i in agy_ids)
-              and (WIN and st_agy[0]["cwd"] == str(project) or not WIN and argv[1:3] == ["new-session", "-d"] and str(project) in argv),
-              "companion: no agy session, start allowed: one new agy session in the project folder gets its ready tasks",
-              json.dumps(st_agy)[:600] + " " + body[:600])
-        check("--dangerously-skip-permissions" in argv, "companion: YOLO on: the new agy session gets its own flag too", json.dumps(argv)[:400])
-        if not WIN:  # the fake console on Windows does not record its environment
-            nonce = next((a.split("=", 1)[1] for a in argv if a.startswith("KNOWLEDGE_START_NONCE=")), "")
-            lease = lambda: json.loads((tmp / "task_leases.json").read_text(encoding="utf-8"))["garden"].get("CMP-GEMINI", {})
-            hint = lambda conv, extra: run([sys.executable, str(hooks / "agent_hooks.py"), "hints", "-"],
-                                           json.dumps({"conversationId": conv, "workspacePaths": [str(project)]}), {**env, **extra}, cwd=str(project))
-            hint("older-agy", {})
-            check(bool(nonce) and lease().get("session") == "" and lease().get("start") == nonce,
-                  "companion: an older agy session does not take the task meant for the session the companion started", json.dumps(lease()))
-            hint("new-agy", {"KNOWLEDGE_START_NONCE": nonce})
-            check(lease().get("session") == "new-agy", "companion: the started session (its start nonce) takes its task", json.dumps(lease()))
-        check(out.get("waiting", {}).get("garden/CMP-CLAUDE", "").startswith("No open session; starting one is off"),
-              "companion: no Claude session and starting is off: the task waits and says why", body[:600])
-        wakes = json.loads((tmp / "task_wakes.json").read_text(encoding="utf-8")).get("garden", {})
-        check(wakes.get("CMP-CODEX", {}).get("session") == "cmp-cx" and wakes.get("CMP-CODEX", {}).get("agent") == "codex" and "CMP-GEMINI" in wakes,
-              "companion: each wake is reported with POST /tasks/woken", json.dumps(wakes)[:400])
-        # A Claude session whose waiting hook is gone (closed) cannot be woken: the task keeps waiting.
-        agents_dir = home / ".knowledge" / "agents"
-        short = lambda sid: hashlib.sha256(sid.encode()).hexdigest()[:16]
-        (agents_dir / f"claude-{short('cl-1')}.json").write_text(json.dumps({"agent": "claude", "session": "cl-1", "cwd": str(project),
-                                                                           "at": time.time()}), encoding="utf-8")
-        gone = subprocess.Popen([sys.executable, "-c", "pass"])
-        gone.wait()
-        (agents_dir / f"claude-{short('cl-1')}.waiter").write_text(f"{gone.pid}:1", encoding="utf-8")
+        wait_for(lambda: argvs(n), 15)
+        check([c["env"]["KNOWLEDGE_WORKER"] for c in argvs(n)] == [next(i for i in ("CMP-CODEX", "CMP-CX2") if i != cx_id)],
+              "workers: a known limit below 90% allows up to the agent's max (2)", json.dumps(argvs(n))[:400])
+        row = next((r for r in machines() if r["id"] == mid), {})
+        cxa = row.get("agents", {}).get("codex", {})
+        check(row.get("companion", {}).get("workersAllowed") is True and cxa.get("limit") == 40.0
+              and sum(1 for w in cxa.get("workers", []) if w["status"] == "running") == 2 and row["agents"]["agy"]["yolo"] is True,
+              "workers: the Machines list shows the pc's workers, limit, YOLO and settings", json.dumps(row)[:900])
+        # YOLO watch: a risky action is flagged (activity log, once to the server), never refused.
+        code, out_w, err = run([sys.executable, str(hooks / "watch.py"), "codex"], json.dumps({"session_id": "yolo-1", "cwd": str(repo),
+                               "tool_name": "Bash", "tool_input": {"command": "git push --force origin main"}}), {**env, "KNOWLEDGE_YOLO": "1"})
+        act = json.loads(call("GET", "/local/api/state")[2])["activity"]
+        flags = json.loads((tmp / "machines.json").read_text(encoding="utf-8")).get(mid, {}).get("flags", [])
+        check(code == 0 and out_w.strip() == "{}" and any(a["kind"] == "risk" and "force-push" in a["text"] for a in act) and "codex:yolo-1:force-push" in flags,
+              "YOLO watch: a force push is flagged in the activity log and to the server, never refused", out_w + err + json.dumps(flags))
+        # 90%: no new worker, the running ones are told to hand over to an agent with room, then stopped.
+        (home / ".knowledge" / "limits-claude.json").write_text(json.dumps({"at": time.time(), "rate_limits": {"five_hour": {
+            "used_percentage": 30, "resets_at": time.time() + 3600}}}), encoding="utf-8")
+        mcp({"path": "garden-memory/project_companion.md", "old_string": "## Keuzes",
+             "new_string": "- open tot 1 jan 2099 [Codex, CMP-CX3] from Claude, start now: after the limit\n## Keuzes"})
+        write_rollout(95.0)
         n = len(recorded())
         st, _, body = call("POST", "/local/api/tick", {})
-        check(len([c for c in recorded()[n:] if "argv" in c]) == 0, "companion: the same task is not woken again within 30 minutes", json.dumps(recorded()[n:])[:400])
-        check(json.loads(body)["waiting"].get("garden/CMP-CLAUDE", "").startswith("No open session")
-              and not (agents_dir / f"claude-{short('cl-1')}.poke").exists(),
-              "companion: a Claude session without a running waiting hook is not counted as open", body[:400])
-        state = json.loads(call("GET", "/local/api/state")[2])
-        check(any(t["id"] == "CMP-CLAUDE" for t in state["tasks"]["waiting"]) and any(t["id"] == "CMP-CODEX" for t in state["tasks"]["ready"])
-              and state["agents"][1]["sessions"], "companion: the page lists ready and waiting tasks and the open session", json.dumps(state["tasks"])[:600])
-        (agents_dir / f"claude-{short('cl-1')}.waiter").write_text(f"{os.getpid()}:1", encoding="utf-8")
+        stop = home / ".knowledge" / "companion" / "workers" / f"{cx_id}.stop"
+        check(not argvs(n) and json.loads(body)["waiting"].get("garden/CMP-CX3", "").startswith("waiting for limit") and stop.exists()
+              and "for Claude" in stop.read_text(encoding="utf-8"),
+              "limit 90%: no new worker, a running one is told to hand over to an agent with room", body[:500])
+        code, out_w, err = run([sys.executable, str(hooks / "watch.py"), "codex"], json.dumps({"session_id": "w", "cwd": str(wt), "tool_name": "Bash",
+                               "tool_input": {"command": "ls"}}), {**env, "KNOWLEDGE_WORKER": cx_id})
+        said = json.loads(out_w)["hookSpecificOutput"]["additionalContext"] if out_w.strip().startswith('{"hook') else ""
+        check(f"{cx_id}-cont" in said and "left:" in said, "limit 90%: the worker hears it after its next tool call (Claude, Codex: additionalContext)", out_w[:400])
+        code, out_w, err = run([sys.executable, str(hooks / "watch.py"), "agy"], json.dumps({"conversationId": "w", "workspacePaths": [str(wt)]}),
+                               {**env, "KNOWLEDGE_WORKER": cx_id})
+        check(out_w.strip() == "{}" and "-cont" in (home / ".knowledge" / "pending-hints.txt").read_text(encoding="utf-8"),
+              "limit 90%: agy's PostToolUse answers {} and the note waits for its next turn (PostInvocation)", out_w)
+        check("CMP-CX3" in json.loads((tmp / "machines.json").read_text(encoding="utf-8")).get(mid, {}).get("limit_told", []),
+              "limit 90%: a task that waits for the limit gets one notice")
+        time.sleep(1.5)  # KNOWLEDGE_WORKER_GRACE=1
         call("POST", "/local/api/tick", {})
-        check((agents_dir / f"claude-{short('cl-1')}.poke").exists(), "companion: a Claude session whose hook waits is poked")
-        # A session started for a task is not started again when the task stays unclaimed; it shows as stalled.
-        sj = json.loads(stf.read_text(encoding="utf-8"))
-        sj["woken"]["garden/CMP-GEMINI"].update(at=time.time() - 1900, since=time.time() - 1900)
-        stf.write_text(json.dumps(sj), encoding="utf-8")
-        n = len(recorded())
-        st, _, body = call("POST", "/local/api/tick", {})
-        state = json.loads(call("GET", "/local/api/state")[2])
-        check(not [c for c in recorded()[n:] if c.get("argv", [""])[0] in ("agy", "tmux")]
-              and "started for it already" in json.loads(body)["waiting"].get("garden/CMP-GEMINI", "")
-              and any(t["id"] == "CMP-GEMINI" for t in state["tasks"]["stalled"]),
-              "companion: no second session for an unclaimed task after 30 minutes; it shows as stalled", body[:400] + json.dumps(state["tasks"])[:400])
-        # A Codex session that does not take the message (thread gone): reported as failed, not as woken.
-        Path(str(calls) + ".fail").write_text("", encoding="utf-8")
-        http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_edit", "arguments":
-             {"path": "garden-memory/project_companion.md", "old_string": "## Keuzes",
-              "new_string": "- open tot 1 jan 2099 [Codex, CMP-CX2] from Claude, start now: second codex task\n## Keuzes"}}},
-             {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})
-        st, _, body = call("POST", "/local/api/tick", {})
-        state = json.loads(call("GET", "/local/api/state")[2])
-        check(json.loads(body)["waiting"].get("garden/CMP-CX2", "").startswith("Wake failed") and "CMP-CX2" not in json.dumps(json.loads(body)["woken"])
-              and any("could not wake CMP-CX2" in a["text"] and "Given back" in a["detail"] for a in state["activity"]),
-              "companion: a refused codex queue is a failed wake, said on the page", body[:400])
-        ready = {t["id"]: t for t in json.loads(http("GET", "/tasks/ready", headers={"Authorization": f"Bearer {tok}"})[1])["tasks"]}
-        check(ready.get("CMP-CX2", {}).get("mine") is False, "companion: a failed delivery gives the task's lease back at once", json.dumps(ready.get("CMP-CX2")))
-        n = len(recorded())
-        st, _, body = call("POST", "/local/api/tick", {})
-        check(not [c for c in recorded()[n:] if c.get("argv", [""])[:2] == ["codex", "queue"]],
-              "companion: a failed task is not tried again on this pc for 30 minutes (no re-claim every minute)", json.dumps(recorded()[n:])[:300])
+        wfile = home / ".knowledge" / "companion" / "workers.json"
+        wait_for(lambda: (call("POST", "/local/api/tick", {}) and False) or all(
+            w["status"] == "stopped" for w in json.loads(wfile.read_text(encoding="utf-8")).values() if w["agent"] == "codex"), 20)
+        ws = json.loads(wfile.read_text(encoding="utf-8"))
+        check(all(w["status"] == "stopped" for w in ws.values() if w["agent"] == "codex") and not stop.exists(),
+              "limit 90%: after the grace the codex workers are stopped hard", json.dumps({k: w["status"] for k, w in ws.items()}))
+        write_rollout(20.0)
+        # A knowledge write makes the companion look at once (the wake hook).
+        code, out_w, err = run([sys.executable, str(hooks / "agent_hooks.py"), "wake", "claude"],
+                               json.dumps({"session_id": "s", "cwd": str(repo), "tool_name": "mcp__knowledge__knowledge_edit"}), env)
+        check("asked the companion" in out_w, "workers: a knowledge write asks the companion here to look now", out_w + err)
+        # Remote actions (Machines list): pulled every few seconds, run with the companion's own code, result reported.
+        ui = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice", "X-Knowledge-UI": "1"}
+        act = lambda action, args: http("POST", "/ui/api/machines/action", {"machine": mid, "action": action, "args": args}, ui)
+        done = lambda: [a for a in next((r for r in machines() if r["id"] == mid), {}).get("actions", [])]
+        act("stop_worker", {"id": "CMP-GEMINI"})
+        act("yolo", {"agent": "claude", "on": True, "confirm": "YOLO"})
+        act("workers_allowed", {"on": False})
+        wait_for(lambda: all(a["status"] in ("done", "failed") for a in done()), 30)
+        check([(a["action"], a["status"]) for a in done()] == [("stop_worker", "done"), ("yolo", "done"), ("workers_allowed", "done")]
+              and json.loads(yolo_file.read_text(encoding="utf-8"))["claude"]["on"] is True
+              and json.loads((home / ".knowledge" / "companion" / "settings.json").read_text(encoding="utf-8"))["workersAllowed"] is False,
+              "remote: stop worker, YOLO on (typed word) and workers off run on the pc and report back", json.dumps(done())[:800])
+        act_log = json.loads(call("GET", "/local/api/state")[2])["activity"]
+        check(any(a["kind"] == "remote" and "yolo" in a["text"] and "alice" in a["text"] for a in act_log), "remote: every action is in the activity log, with who asked")
+        act("yolo", {"agent": "claude", "on": False})
+        wait_for(lambda: done()[-1]["status"] != "waiting", 20)
+        # Roll back a YOLO worker's last turn; once its branch is merged, the companion removes the worktree.
+        call("POST", "/local/api/tick", {})
+        gwt = home / ".knowledge" / "worktrees" / "Garden-repo-CMP-GEMINI"
+        count = lambda: subprocess.run(["git", "-C", str(repo), "rev-list", "--count", "refs/knowledge/checkpoints/CMP-GEMINI"], capture_output=True, text=True).stdout.strip()
+        before = count()
+        run([sys.executable, str(hooks / "agent_hooks.py"), "hints"], json.dumps({"conversationId": "wk", "workspacePaths": [str(gwt)]}),
+            {**env, "KNOWLEDGE_WORKER": "CMP-GEMINI", "KNOWLEDGE_YOLO": "1"}, cwd=str(gwt))
+        check(before and count() == str(int(before) + 1), "workers: each turn of a YOLO worker adds a checkpoint (here agy's turn hook)", f"{before} -> {count()}")
+        (gwt / "README.md").write_text("broken by a turn\n", encoding="utf-8")
+        (gwt / "junk.txt").write_text("junk\n", encoding="utf-8")
+        act("rollback", {"id": "CMP-GEMINI"})
+        wait_for(lambda: done()[-1]["status"] != "waiting" and done()[-1]["status"] != "running", 20)
+        check(done()[-1]["status"] == "done" and (gwt / "README.md").read_text(encoding="utf-8") == "garden\n" and not (gwt / "junk.txt").exists(),
+              "remote: roll back puts a YOLO worker's worktree back as before its turn", json.dumps(done()[-1]))
+        (gwt / "work.txt").write_text("done\n", encoding="utf-8")
+        for args in (["add", "work.txt"], ["commit", "-qm", "feat: work"]):
+            subprocess.run(["git", "-C", str(gwt), *args], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(repo), "merge", "-q", "--ff-only", "task/CMP-GEMINI"], check=True, capture_output=True)
+        call("POST", "/local/api/tick", {})
+        ws = json.loads(wfile.read_text(encoding="utf-8"))
+        check(ws.get("garden/CMP-GEMINI", {}).get("status") == "merged" and not gwt.exists(),
+              "workers: once the requester merged the branch, the companion removes the worktree", json.dumps(ws.get("garden/CMP-GEMINI"))[:400])
+        Path(str(calls) + ".sleep").unlink()
+        for w in json.loads(wfile.read_text(encoding="utf-8")).values():
+            if w["status"] == "running":
+                subprocess.run(["taskkill", "/T", "/F", "/PID", str(w["pid"])], capture_output=True) if WIN else _quiet(lambda: os.killpg(w["pid"], 9))
         # The trust command: an agent that fails (a Codex without hooks/list) does not keep the next one untrusted.
+        Path(str(calls) + ".fail").write_text("", encoding="utf-8")
         ag_now = json.loads((agy_dir / "settings.json").read_text(encoding="utf-8"))
         (agy_dir / "settings.json").write_text(json.dumps({**ag_now, "trustedWorkspaces": [str(home)]}), encoding="utf-8")
         code, out, err = run([sys.executable, str(hooks / "companion.py"), "trust"], "", env, timeout=120)
-        check(code != 0 and "codex" in err and str(project) in json.loads((agy_dir / "settings.json").read_text(encoding="utf-8"))["trustedWorkspaces"],
+        check(code != 0 and "codex" in err and str(repo) in json.loads((agy_dir / "settings.json").read_text(encoding="utf-8"))["trustedWorkspaces"],
               "companion: trust goes on with agy after Codex failed, and says so", out + err)
         Path(str(calls) + ".fail").unlink()
         # No Codex running: its registered session is closed (codex queue would only wait there), so a new one starts.
@@ -965,17 +1045,15 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
               "companion: no Codex running: a new codex exec in the project folder, not a queue into a closed session", out[-400:] + err[-400:] + str(execs)[:300])
         # Hook failures the agents log themselves: reported once, marked as agent-log.
         admin = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice"}
-        sessions = json.loads(http("GET", "/ui/api/tasks", headers=admin)[1])["sessions"]
-        errs = {s["agent"]: s.get("errors", []) for s in sessions if s["device"] == "friend-pc"}
+        errs = machine_errors("friend-pc")
         check(any(e["source"] == "agent-log" and e["hook"] == "knowledge-stop" and "codex-kaput" in e["stderr"] for e in errs.get("codex", []))
               and any(e["source"] == "agent-log" and "agy-boom" in e["stderr"] and e["event"] == "PostToolUse" for e in errs.get("agy", [])),
               "companion: hook failures from Codex's and agy's own logs reach the Tasks tab as agent-log", json.dumps(errs)[:800])
         check("private-work-text" not in json.dumps(errs), "companion: another hook's logged failure stays on this pc", json.dumps(errs)[:800])
         before = json.dumps(errs)
         call("POST", "/local/api/tick", {})
-        sessions = json.loads(http("GET", "/ui/api/tasks", headers=admin)[1])["sessions"]
-        check(json.dumps({s["agent"]: s.get("errors", []) for s in sessions if s["device"] == "friend-pc"}) == before, "companion: a logged failure is reported once")
-        # Another pc took the task between /tasks/ready and the wake (the server answers 409): no wake, said once.
+        check(json.dumps(machine_errors("friend-pc")) == before, "companion: a logged failure is reported once")
+        # Another pc took the task between /tasks/ready and the start (the server answers 409): no worker, said once.
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
         class Held(BaseHTTPRequestHandler):
@@ -987,12 +1065,10 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
                 self.end_headers()
                 self.wfile.write(body)
 
-            def do_GET(self):  # the session's own ask (wake) lists the task; taking it for that session gets 409
+            def do_GET(self):
                 self.answer(200, {"tasks": [{"project": "garden", "path": "garden-memory/x.md", "id": "CMP-HELD", "owner": "Codex",
                                              "device": "", "agent": "codex", "from": "Claude", "start": "now", "text": "held", "mine": False}]}
-                            if self.path.startswith("/tasks/ready") else
-                            {"tasks": ["- garden-memory/x.md: open until 2099-01-01 [Codex, CMP-HELD] from Claude, start now: held"],
-                             "project": "garden"} if self.path.startswith("/tasks?") else {})
+                            if self.path.startswith("/tasks/ready") else {"actions": []})
 
             def do_POST(self):
                 self.rfile.read(int(self.headers.get("Content-Length", 0)))
@@ -1002,14 +1078,15 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
                 pass
         fake = ThreadingHTTPServer(("127.0.0.1", 0), Held)
         threading.Thread(target=fake.serve_forever, daemon=True).start()
+        call("POST", "/local/api/settings", {"workersAllowed": True})
         n = len(recorded())
         code, out, err = run([sys.executable, str(hooks / "companion.py"), "tick"], "",
                              {**env, "KNOWLEDGE_URL": f"http://127.0.0.1:{fake.server_address[1]}"}, timeout=60)
         fake.shutdown()
+        call("POST", "/local/api/settings", {"workersAllowed": False})
         activity = json.loads((home / ".knowledge" / "companion" / "activity.json").read_text(encoding="utf-8"))
-        check(code == 0 and not [c for c in recorded()[n:] if c.get("argv", [""])[:2] == ["codex", "queue"]]
-              and "Held by other-pc" in out and any("held by other-pc" in a["text"] for a in activity),
-              "companion: a 409 from /tasks/woken (another pc holds the task) wakes nothing and logs who holds it", out[-400:] + err[-400:])
+        check(code == 0 and not argvs(n) and "Held by other-pc" in out and any("Held by other-pc" in a["text"] for a in activity),
+              "workers: a 409 from /tasks/woken (another pc holds the task) starts nothing and logs who holds it", out[-400:] + err[-400:])
         # A plugin update (a new cache folder) makes the companion trust Codex's hooks again by itself.
         manifest = home / ".codex" / "plugins" / "cache" / "knowledge" / "knowledge" / "9.9.9" / ".codex-plugin" / "plugin.json"
         manifest.parent.mkdir(parents=True)
@@ -1066,26 +1143,17 @@ def new_task(agent: Path, env: dict, project: Path, tok: str, home: Path):
 
 
 def wake_e2e(tok: str, home: Path, project: Path):
-    """Agents on one machine wake each other: a knowledge write by one agent puts a new task in front of the newest
-    session of each other agent (Codex through `codex queue`, agy through its language server, Claude through its
-    asyncRewake waiter), once, and the admin page lists those sessions as wakeable."""
+    """Tasks never go into a chat (they run in workers): a chat hears a new task once as "runs in workers, say 'pak
+    <ID>'" and takes no lease; 'pak <ID>' in the user's words takes that task for the chat (Claude and Codex from the
+    prompt, agy with the take command in its terminal); a knowledge write without a companion here says nothing. agy
+    still registers its language server (its usage limit comes from there)."""
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     hooks = CLIENT / "plugin" / "hooks" / "agent_hooks.py"
-    bin_dir = home / "bin"
-    bin_dir.mkdir(parents=True)
-    calls = home / "codex-calls.jsonl"
-    (bin_dir / "fakecodex.py").write_text(f"import json, sys\nimport os\nopen({str(calls)!r}, 'a', encoding='utf-8').write(json.dumps(sys.argv[1:] + [os.environ.get('CODEX_HOME', '')]) + '\\n')\n", encoding="utf-8")
-    if WIN:
-        # %~dp0, not the path: a console in another code page (an SSH session, a new console) misreads a non-ASCII path
-        (bin_dir / "codex.cmd").write_text(f'@"{sys.executable}" "%~dp0fakecodex.py" %*\r\n', encoding="utf-8")
-    else:
-        (bin_dir / "codex").write_text(f'#!/bin/sh\nexec "{sys.executable}" "{bin_dir / "fakecodex.py"}" "$@"\n', encoding="utf-8")
-        (bin_dir / "codex").chmod(0o755)
-    sent, csrf, busy = [], "gategategate", threading.Event()
+    csrf, busy = "gategategate", threading.Event()
 
     class LS(BaseHTTPRequestHandler):  # agy's language server, as far as the plugin uses it
         def do_POST(self):
-            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+            self.rfile.read(int(self.headers.get("Content-Length", 0)))
             if busy.is_set():
                 reply, code = {}, 503
             elif self.headers.get("x-codeium-csrf-token") != csrf:
@@ -1093,9 +1161,6 @@ def wake_e2e(tok: str, home: Path, project: Path):
             elif self.path.endswith("/GetAllCascadeTrajectories"):
                 reply, code = {"trajectorySummaries": {"conv-1": {"lastModifiedTime": "2026-10-27T08:00:00Z",
                                "workspaces": [{"workspaceFolderAbsoluteUri": project.as_uri()}]}}}, 200
-            elif self.path.endswith("/SendUserCascadeMessage"):
-                sent.append(body)
-                reply, code = {}, 200
             else:
                 reply, code = {}, 404
             data = json.dumps(reply).encode()
@@ -1110,87 +1175,61 @@ def wake_e2e(tok: str, home: Path, project: Path):
 
     ls = ThreadingHTTPServer(("127.0.0.1", 0), LS)
     threading.Thread(target=ls.serve_forever, daemon=True).start()
-    env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, PATH=str(bin_dir) + os.pathsep + os.environ.get("PATH", ""))
+    env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, KNOWLEDGE_COMPANION_PORT=str(free_port()))
     hook = lambda args, payload, extra=None: run([sys.executable, str(hooks), *args], json.dumps(payload), {**env, **(extra or {})}, cwd=str(project))
+    rewind = lambda: [f.write_text(json.dumps({**json.loads(f.read_text()), "at": 0})) for f in (home / ".knowledge" / "tasks-seen").glob("*.json")]
+    pc = lambda: {"X-Knowledge-Machine": json.loads((home / ".knowledge" / "machine.json").read_text(encoding="utf-8"))["id"]}
+    leases = lambda: json.loads(http("GET", "/tasks/ready", headers={"Authorization": f"Bearer {tok}", **pc()})[1])["tasks"]  # "mine": this pc holds it
     try:
-        # each agent's session: its first prompt (Claude, Codex) or turn (agy) only remembers the open tasks
-        hook(["tasks", "codex", "-"], {"session_id": "cx-1", "cwd": str(project)}, {"CODEX_HOME": str(home / "codex-b")})
+        hook(["tasks", "codex", "-"], {"session_id": "cx-1", "cwd": str(project)})
         hook(["tasks", "claude", "-"], {"session_id": "cl-1", "cwd": str(project)})
         code, out, err = hook(["hints", "-"], {"conversationId": "conv-1", "workspacePaths": [str(project)]})
-        check("agent_hooks.py" in out and " register" in out, "wake: an unregistered agy conversation is asked once to register", out[:300] + err[-300:])
+        check("agent_hooks.py" in out and " register" in out, "agy: an unregistered agy conversation is asked once to register", out[:300] + err[-300:])
         code, out, err = hook(["hints", "-"], {"conversationId": "conv-1", "workspacePaths": [str(project)]})
-        check("register" not in out, "wake: the register request is not repeated", out[:300])
+        check("register" not in out, "agy: the register request is not repeated", out[:300])
         code, out, err = hook(["register"], {}, {"ANTIGRAVITY_LS_ADDRESS": f"127.0.0.1:{ls.server_address[1]}", "ANTIGRAVITY_CSRF_TOKEN": csrf,
                                                  "ANTIGRAVITY_CONVERSATION_ID": "conv-1"})
-        check(code == 0 and "registered" in out, "wake: agy registers from its terminal", out + err)
-        admin = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice"}
-        st, body = http("GET", "/ui/api/admin", None, admin)
-        early = {c["session"]: c for t in json.loads(body)["tokens"] if t["name"] == "friend-pc" for c in t.get("clients", [])}
-        check(early.get("conv-1", {}).get("wake") is True, "wake: the admin page shows agy wakeable right after register, not a turn later", str(early)[:300])
+        check(code == 0 and "registered" in out, "agy: registers from its terminal", out + err)
         code, out, err = hook(["register"], {})
-        check(code != 0 and "not run by agy" in (out + err), "wake: register outside agy says so", out + err)
+        check(code != 0 and "not run by agy" in (out + err), "agy: register outside agy says so", out + err)
         entry = next((home / ".knowledge" / "agents").glob("agy-ls-*.json"))
         check(WIN or (entry.stat().st_mode & 0o077 == 0 and entry.parent.stat().st_mode & 0o077 == 0),
-              "wake: agy's entry (its key) and the registry folder are private to the user")
+              "agy: its entry (its key) and the registry folder are private to the user")
         busy.set()
         hook(["hints", "-"], {"conversationId": "conv-1", "workspacePaths": [str(project)]})
         busy.clear()
-        check(entry.exists(), "wake: a busy agy (HTTP 503) keeps its registration")
-        started = time.time()
-        code, out, err = hook(["wait", "claude", "-"], {"session_id": "cl-p", "cwd": str(project)}, {"CLAUDE_CODE_ENTRYPOINT": "sdk-cli"})
-        check(code == 0 and time.time() - started < 10, "wake: under claude -p the waiter exits at once (claude -p waits for it)", out + err)
-        waiter = subprocess.Popen([sys.executable, str(hooks), "wait", "claude", "-"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                  stderr=subprocess.PIPE, env=env, cwd=str(project), text=True, encoding="utf-8")
-        waiter.stdin.write(json.dumps({"session_id": "cl-1", "cwd": str(project)}))
-        waiter.stdin.close()
-        tasks = "".join(f"- open tot 1 jan 2099 [{o}, WAKE-{o.upper()}] from Claude, start now: wake test for {o} \"a & b > c %PATH%\n" for o in ("Codex", "Claude", "Gemini"))
-        tasks += "- open tot 1 jan 2099 [Codex, WAKE-HELD] from Claude, start now: another session has it\n"
+        check(entry.exists(), "agy: a busy agy (HTTP 503) keeps its registration")
+        tasks = "".join(f"- open tot 1 jan 2099 [{o}, WAKE-{o.upper()}] from Claude, start now: chat test for {o} \"a & b > c %PATH%\n" for o in ("Codex", "Claude", "Gemini"))
         http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_write", "arguments":
              {"path": "garden-memory/project_wake.md", "content": "---\nname: w\ndescription: d\nmetadata:\n  type: project\n---\n"
               f"## Stand\n{tasks}\n## Keuzes\n"}}}, {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})
-        auth = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
-        woken = lambda tid, sid: http("POST", "/tasks/woken", {"project": "garden", "id": tid, "agent": "codex", "session": sid}, auth)[0]
-        check(woken("WAKE-HELD", "elsewhere") == 200, "wake: another session takes WAKE-HELD first")
-        code, out, err = hook(["wake", "codex", "-"], {"session_id": "sender", "cwd": str(project), "tool_name": "mcp__knowledge__knowledge_search"})
-        check(out.strip() == "{}" and not calls.exists() and not sent, "wake: a read-only knowledge tool wakes nobody", out + err)
-        code, out, err = hook(["wake", "codex", "-"], {"session_id": "sender", "cwd": str(project), "tool_name": "mcp__knowledge__knowledge_write"},
-                              {"CODEX_HOME": ""})  # the waker's shell lacks the session's CODEX_HOME
-        check(code == 0 and "told" in out and "codex" in out and "agy" in out, "wake: the sender hears whom it told", out + err)
-        queued = [json.loads(l) for l in calls.read_text(encoding="utf-8").splitlines()] if calls.exists() else []
-        check(len(queued) == 1 and queued[0][:3] == ["queue", "--thread", "cx-1"] and "WAKE-CODEX" in queued[0][-2]
-              and "WAKE-GEMINI" not in queued[0][-2] and queued[0][-1] == str(home / "codex-b"),
-              "wake: Codex gets its own new task through codex queue, in the session's CODEX_HOME", str(queued)[:400])
-        check(bool(queued) and "WAKE-HELD" not in queued[0][-2], "wake: a task another session holds (409) is not passed on", str(queued)[:400])
-        check(woken("WAKE-CODEX", "intruder") == 409, "wake: the woken Codex session holds its task's lease (same machine too)")
-        check(bool(queued) and {"c", "PATH"} <= set(re.findall(r"\w+", queued[0][-2])) and not (project / "c").exists(),
-              "wake: a quote, & or > in a task reaches Codex as text, never as a command (Windows codex.cmd)", str(queued)[:400])
-        check(len(sent) == 1 and sent[0]["cascadeId"] == "conv-1" and "WAKE-GEMINI" in sent[0]["items"][0]["text"],
-              "wake: agy gets its own new task in its open conversation", str(sent)[:400])
-        try:
-            werr = waiter.communicate(timeout=20)[1]
-        except subprocess.TimeoutExpired:
-            waiter.kill()
-            werr = "still waiting after 20 s"
-        check(waiter.returncode == 2 and "WAKE-CLAUDE" in werr and "not from the user" in werr and "-done]" in werr,
-              "wake: Claude's waiter wakes the session (exit 2) with its own new task", werr[-400:])
-        check(woken("WAKE-CLAUDE", "intruder") == 409 and woken("WAKE-GEMINI", "intruder") == 409,
-              "wake: Claude's waiter and the agy wake take the task's lease for their session before telling it")
-        code, out, err = hook(["wake", "agy", "-"], {"conversationId": "other", "workspacePaths": [str(project)],
-                                                    "toolCall": {"name": "call_mcp_tool", "args": {"ToolName": "knowledge_edit"}}})
-        check(out.strip() == "{}" and len(sent) == 1 and len(calls.read_text(encoding="utf-8").splitlines()) == 1,
-              "wake: said once (a second write wakes nobody again); agy's PostToolUse answers {}", out + err)
-        st, body = http("GET", "/ui/api/admin", None, admin)
-        clients = {c["session"]: c for t in json.loads(body)["tokens"] if t["name"] == "friend-pc" for c in t.get("clients", [])}
-        check(all(clients.get(s, {}).get("wake") for s in ("cx-1", "cl-1", "conv-1")) and clients["cx-1"]["agent"] == "codex"
-              and clients["conv-1"]["project"] == "garden", "wake: the admin page lists the sessions, their agent, project and wakeable",
-              json.dumps(clients)[:600])
+        code, out, err = hook(["wake", "codex", "-"], {"session_id": "sender", "cwd": str(project), "tool_name": "mcp__knowledge__knowledge_write"})
+        check(code == 0 and out.strip() == "{}", "chat: a knowledge write with no companion on this pc says nothing and starts nothing", out + err)
+        rewind()
+        code, out, err = hook(["tasks", "codex", "-"], {"session_id": "cx-1", "cwd": str(project), "prompt": "go on"})
+        said = json.loads(out)["hookSpecificOutput"]["additionalContext"] if out.strip() else ""
+        mine = {t["id"]: t for t in leases()}
+        check("WAKE-CODEX" in said and "run in workers" in said and "'pak <ID>'" in said and "WAKE-CLAUDE" not in said
+              and mine.get("WAKE-CODEX", {}).get("mine") is False,
+              "chat: a new task is said once as 'runs in workers, say pak', and the chat takes no lease", said[:500] + json.dumps(mine.get("WAKE-CODEX")))
+        code, out, err = hook(["tasks", "claude", "-"], {"session_id": "cl-1", "cwd": str(project), "prompt": "pak WAKE-CLAUDE please"})
+        said = json.loads(out)["hookSpecificOutput"]["additionalContext"] if out.strip() else ""
+        check("took task WAKE-CLAUDE" in said and "(claimed Claude," in said and mine["WAKE-CLAUDE"]["mine"] is False
+              and next(t for t in leases() if t["id"] == "WAKE-CLAUDE")["mine"] is True,
+              "chat: 'pak <ID>' in the user's words takes that task for this Claude session", said[:500])
+        code, out, err = hook(["tasks", "claude", "-"], {"session_id": "cl-2", "cwd": str(project), "prompt": "pak WAKE-CLAUDE"})
+        check("held by another session" in out, "chat: a second chat cannot take a task another session took", out[:400])
+        code, out, err = hook(["take", "agy", "WAKE-GEMINI"], {}, {"ANTIGRAVITY_CONVERSATION_ID": "conv-1"})
+        check(code == 0 and "took task WAKE-GEMINI" in out, "chat: agy takes a task with the take command in its terminal (its hooks never see the user's words)", out + err)
+        code, out, err = hook(["hints", "-"], {"conversationId": "conv-2", "workspacePaths": [str(project)]})
+        hook(["hints", "-"], {"conversationId": "conv-2", "workspacePaths": [str(project)]})
         hook(["hints", "-"], {"conversationId": "conv-1", "workspacePaths": [str(project)]})  # registered: the ask is reset
         ls.shutdown(); ls.server_close()  # agy resumed: its old port is gone
         code, out, err = hook(["hints", "-"], {"conversationId": "conv-1", "workspacePaths": [str(project)]})
-        check(" register" in out and "restarted" in out, "wake: a resumed agy (its registration gone) is told so and asked again",
+        check(" register" in out and "restarted" in out, "agy: a resumed agy (its registration gone) is told so and asked again",
               out[:300] + err[-300:])
-        code, out, err = hook(["hints", "-"], {"conversationId": "conv-1", "workspacePaths": [str(project)]})
-        check("register" not in out, "wake: the renewed request is said once", out[:300])
+        for tid in ("WAKE-CLAUDE", "WAKE-GEMINI"):
+            http("POST", "/tasks/release", {"project": "garden", "id": tid}, {"Authorization": f"Bearer {tok}", "Content-Type": "application/json", **pc()})
     finally:
         ls.shutdown()
 

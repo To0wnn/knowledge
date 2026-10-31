@@ -87,7 +87,8 @@ def hook_config(agent: str, name: str) -> dict:
             "SessionStart": [{"type": "command", "command": cmd("context", "agy"), "timeout": 30}],
             "PostToolUse": [{"matcher": "write_file|edit_file|write_to_file|replace_file_content|multi_replace_file_content",
                              "hooks": [{"type": "command", "command": cmd("docs-sync"), "timeout": 20}]},
-                            {"matcher": "call_mcp_tool", "hooks": [{"type": "command", "command": cmd("wake", "agy"), "timeout": 40}]}],
+                            {"matcher": "call_mcp_tool", "hooks": [{"type": "command", "command": cmd("wake", "agy"), "timeout": 40}]},
+                            {"matcher": ".*", "hooks": [{"type": "command", "command": cmd("watch", "agy"), "timeout": 10}]}],
             "PreToolUse": [{"matcher": "invoke_subagent", "hooks": [{"type": "command", "command": cmd("gate", "agy"), "timeout": 10}]},
                            {"matcher": "write_file|edit_file|write_to_file|replace_file_content|multi_replace_file_content",
                             "hooks": [{"type": "command", "command": cmd("guard", "agy"), "timeout": 10}]}],
@@ -100,7 +101,8 @@ def hook_config(agent: str, name: str) -> dict:
             {"type": "command", "command": cmd("context", "codex"), "timeout": 30, "additionalContextLimit": 60000}]}],
         "PostToolUse": [{"matcher": "apply_patch", "hooks": [{"type": "command", "command": cmd("docs-sync"), "timeout": 20}]},
                         {"matcher": "mcp__.*knowledge_(edit|write|new_memo)",
-                         "hooks": [{"type": "command", "command": cmd("wake", "codex"), "timeout": 40}]}],
+                         "hooks": [{"type": "command", "command": cmd("wake", "codex"), "timeout": 40}]},
+                        {"matcher": ".*", "hooks": [{"type": "command", "command": cmd("watch", "codex"), "timeout": 10}]}],
         "UserPromptSubmit": [{"hooks": [{"type": "command", "command": cmd("tasks", "codex"), "timeout": 8}]}],
         "PreToolUse": [{"matcher": ".*spawn_agent", "hooks": [{"type": "command", "command": cmd("gate", "codex"), "timeout": 10}]},
                        {"matcher": "apply_patch", "hooks": [{"type": "command", "command": cmd("guard", "codex"), "timeout": 10}]}],
@@ -269,6 +271,10 @@ def remove_old_setup(agent: str):
             print(f"removed the old knowledge entry from {path}")
 
 
+CODEX_TRUST = ("the knowledge companion trusts the Codex hooks for you (install-companion; again after each plugin "
+               "update); without the companion, open codex and type /hooks once")
+
+
 def install_plugin(agent: str):
     remove_old_setup(agent)
     if agent == "codex":
@@ -277,7 +283,7 @@ def install_plugin(agent: str):
         run_cli([codex, "plugin", "marketplace", "upgrade", "knowledge"], ok_if=("not configured as a git",))  # a local checkout
         run_cli([codex, "plugin", "add", "knowledge@knowledge"])
         restart_codex()
-        return print("done; open codex and type /hooks once to trust the knowledge hooks")
+        return print(f"done; {CODEX_TRUST}")
     run_cli([cli("agy"), "plugin", "install", AGY_PLUGIN])
     if not has_plugin("agy"):  # a failed copy can leave agy without the plugin at all
         sys.exit("agy plugin list does not show the knowledge plugin after the install: quit agy completely and run this again.")
@@ -423,7 +429,7 @@ def install(agent: str, name: str, tok: str = ""):
     install_hooks(agent, name)
     install_rules(agent, rules)
     install_skills()
-    print("done" + ("; open codex and type /hooks once to trust the hooks" if agent == "codex" else "; start agy and ask it to search the knowledge"))
+    print("done" + (f"; {CODEX_TRUST}" if agent == "codex" else "; start agy and ask it to search the knowledge"))
 
 
 def codex_block(name: str) -> str:
@@ -818,7 +824,7 @@ def main(argv: list):
         if len(argv) == 2:  # a vault name (the machine that holds the files) keeps the URL it is given
             ensure_url()
         install(argv[1], argv[2] if len(argv) > 2 else "-")
-    elif cmd in ("context", "docs-sync", "session-log", "hints", "tasks", "wake", "gate", "guard", "register", "serve", "companion"):  # hooks written by the setup call this script
+    elif cmd in ("context", "docs-sync", "session-log", "hints", "tasks", "wake", "gate", "guard", "watch", "take", "register", "serve", "companion"):  # hooks written by the setup call this script
         agent_hooks.SETUP = "script"  # its auto-update: git pull + install, not the plugin CLI
         agent_hooks.main(argv)
     else:
