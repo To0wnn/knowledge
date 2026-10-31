@@ -157,9 +157,13 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   the board, answered there or in the chat (`POST /ui/api/chat/approve`, only the machine's owner). The answer goes back
   with the companion's next poll (`answers` in `GET /machine/chats`) and the agent continues; denied, it is told so
   and goes on without. No answer within 30 minutes (admin page, Settings, `chat_approval_minutes`) counts as denied
-  and the chat says so; a turn that ends or is stopped withdraws what still waits. "Allow for this chat" allows the
-  same call again for the rest of the chat without asking; `git push` and anything that names a path outside the
-  chat's folder can only be allowed once. Every question and answer, with who answered, is in the companion's
+  and the chat says so; a turn that ends or is stopped withdraws what still waits. The card shows the whole request (a long one folded,
+  up to 4000 characters; longer can only be allowed once). "Allow for this chat" allows exactly the same call (the
+  same full input, compared by hash) again for the rest of the chat without asking; `git push`, anything that names a
+  path outside the chat's folder (relative, `~` and `$HOME` paths resolved), Codex's file changes outside the folder or
+  without named paths, and Codex's requests for wider sandbox rights can only be allowed once. Codex is judged on the
+  command it will run, never on its parsed summary of it; a Codex file change and fetching a URL are never allowed
+  without asking. The machine's token is checked against today's token rules on every question and answer. Every question and answer, with who answered, is in the companion's
   activity log and the server's audit log (`chat-ask`, `chat-approve`). Codex without YOLO still cannot commit in a
   chat unless you allow it: the folder is a main checkout, and Codex keeps its `.git` read-only (opening it would let
   a sandboxed run change git hooks and config). A chat turn says it is one (`KNOWLEDGE_CHAT`, header `X-Knowledge-Chat`): like a worker it

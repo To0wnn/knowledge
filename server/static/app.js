@@ -1493,7 +1493,11 @@ function ckAsks(card, asks, skew) {
   card.asks.replaceChildren(...asks.map((a) => {
     const box = el("section", "ck-ask"), acts = el("div", "ck-ask-acts"), left = Math.max(0, Math.round((a.expires - skew - Date.now() / 1000) / 60));
     box.setAttribute("aria-label", `Approval: ${a.tool}`);
-    box.append(el("p", "ck-ask-head", `The agent asks to use ${a.tool}`), el("code", "ck-ask-what", a.detail));
+    box.append(el("p", "ck-ask-head", `The agent asks to use ${a.tool}`));
+    if (a.detail.length > 300 || a.detail.split("\n").length > 4) { // long: the whole text, folded open on a tap
+      const more = el("details", "ck-ask-more"), sum = el("summary", null, `${a.detail.slice(0, 120).split("\n")[0]}… (${a.detail.length} characters: show all)`);
+      more.append(sum, el("code", "ck-ask-what", a.detail)); box.append(more);
+    } else box.append(el("code", "ck-ask-what", a.detail));
     if (a.reason) box.append(el("p", "ck-ask-why", a.reason));
     box.append(el("p", "ck-ask-when", `${a.once_only ? "git push or outside the folder: once at most. " : ""}Denied by itself in ${left} min.`));
     for (const [d, text, title] of ckAskButtons(a)) {

@@ -484,6 +484,8 @@ button.ck-pill:hover { border-color: var(--amber); }
 .ck-ask p { margin: 0; }
 .ck-ask-head { font-weight: 600; }
 .ck-ask-what { font: 12px/1.45 var(--mono); overflow-wrap: anywhere; white-space: pre-wrap; }
+.ck-ask-more summary { cursor: pointer; font: 12px/1.45 var(--mono); overflow-wrap: anywhere; }
+.ck-ask-more[open] summary { margin-bottom: 4px; }
 .ck-ask-why, .ck-ask-when { font-size: 12px; color: var(--muted); }
 .ck-ask-acts { display: flex; flex-wrap: wrap; gap: 6px; }
 .ck-ask-acts button { min-height: 36px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--line-hi); background: var(--panel); font-weight: 600; }

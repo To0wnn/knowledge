@@ -1419,7 +1419,7 @@ def chat_e2e(tok: str, tmp: Path):
                 waiting = wait_for(lambda: approvals(cid), 30)
                 a = (approvals(cid) or [{}])[0]
                 item = next((i for i in board() if i["kind"] == "ask" and i.get("chat") == cid), {})
-                check(waiting and a.get("tool") in ("Bash", "shell", "run_command") and a.get("detail") == "npm test" and item.get("col") == "needs"
+                check(waiting and a.get("tool") in ("Bash", "shell", "run_command") and (a.get("detail") or "").replace("/bin/sh -lc ", "").strip("'") == "npm test" and item.get("col") == "needs"
                       and chat(cid)["chat"]["status"] == "running",
                       f"chat {agent}: the turn waits for its owner, the approval is in the chat and under Needs you ({decision})", json.dumps([a, item])[:500])
                 st, body = http("POST", "/ui/api/chat/approve", {"machine": mid, "id": cid, "ask": a.get("id"), "decision": decision},

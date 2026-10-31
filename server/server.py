@@ -4634,6 +4634,7 @@ async def machine_action_result(request: Request):
 CHATS_DIR = ADMIN_DIR / "chats"
 CHAT_KEEP, CHAT_EVENTS, CHAT_BYTES, CHAT_TEXT = 50, 4000, 1_000_000, 20_000  # chats per machine, events and bytes per chat, chars per message
 CHAT_KINDS = ("text", "tool", "refused", "error", "info")
+ASK_DETAIL = 4000  # characters of a tool call the owner sees whole; a longer one can only be allowed once
 CHAT_ASK_MINUTES = 30  # a tool approval waits this long for its owner, then counts as denied (admin page, Settings)
 ASK_DECISIONS = ("once", "chat", "deny")
 CHAT_GLOB = "[0-9a-f]" * 12 + ".json"  # a chat's own file; queue.json and diffs.json sit next to them
@@ -4652,6 +4653,14 @@ def chat_meta(c: dict) -> dict:
 # Approvals: a turn without YOLO wants a tool its allowed set does not hold. The companion asks here (POST
 # /machine/chats/ask), the owner answers in the chat or on the board (POST /ui/api/chat/approve), the companion gets the
 # answer with its next poll (GET /machine/chats, "answers"). No answer within CHAT_ASK_MINUTES: denied, said in the chat.
+def chat_token_ok(c: dict, dev: dict) -> bool:
+    """The machine's token may act for this chat now: it was one of the chat's tokens when the chat began, and it is
+    still one its owner may steer machines with (own_token today, not only the snapshot taken then)."""
+    cfg = read_json(TOKENS_FILE, {}).get(dev.get("name", ""))
+    by = c.get("by", "")
+    return dev.get("name") in c.get("tokens", []) and bool(cfg) and own_token(cfg, {"user": by, "admin": by in ADMINS})
+
+
 def asks_open(c: dict, now: float) -> list:
     return [a for a in c.get("asks", []) if a["status"] == "pending" and now < a["expires"]]
 
@@ -4801,7 +4810,7 @@ def board_items() -> list[dict]:
             for a in asks_open(c, now):  # one Needs-you item per open approval, answered right there
                 items.append({**base, "kind": "ask", "col": "needs", "id": a["id"], "chat": c["id"], "agent": c.get("agent"),
                               "project": c.get("project"), "key": f"ask:{r['id']}/{c['id']}/{a['id']}", "sig": a["id"],
-                              "title": f"{a['tool']}: {a['detail']}"[:160], "folder": c.get("folder"), "at": a["at"],
+                              "title": (lambda t: t if len(t) <= 160 else t[:159] + "…")(f"{a['tool']}: {' '.join(a['detail'].split())}"), "folder": c.get("folder"), "at": a["at"],
                               "line": f"asks to run this ({c.get('title') or 'New chat'})" + (f": {a['reason']}" if a.get("reason") else ""),
                               "expires": a["expires"], "once_only": bool(a.get("once_only"))})
         for a, ag in r["agents"].items():
@@ -4963,7 +4972,7 @@ async def ui_chat_approve(request: Request):
         if decision == "chat" and a.get("key"):
             rules = [x for x in c.get("allow", []) if x != {"tool": a["tool"], "key": a["key"]}]
             c["allow"] = (rules + [{"tool": a["tool"], "key": a["key"]}])[-50:]
-        chat_add(c, "info", f"{ASK_SAID[decision]} by {user or '?'}: {a['tool']}: {a['detail']}"[:600])
+        chat_add(c, "info", f"{ASK_SAID[decision]} by {user or '?'}: {a['tool']}: {' '.join(a['detail'].split())}"[:600])
         done.append(a)
     await asyncio.to_thread(update_state, f, change)
     if err:
@@ -5094,7 +5103,7 @@ async def machine_chats(request: Request):
                 answers.append({"chat": cid, "ask": a["id"], "decision": a["status"], "by": a.get("by") or "", "expired": bool(a.get("expired"))})
     for cid in out["busy"]:
         c, now = read_json(chat_file(mid, cid), None) or {}, time.time()
-        if any(not a.get("sent") and (a["status"] != "pending" or now >= a["expires"]) for a in c.get("asks", [])):
+        if c and chat_token_ok(c, dev) and any(not a.get("sent") and (a["status"] != "pending" or now >= a["expires"]) for a in c.get("asks", [])):
             await asyncio.to_thread(update_state, chat_file(mid, cid), lambda c, cid=cid: answer(c, cid))
     if answers:  # only when there are: an older companion ignores the key
         out["answers"] = answers
@@ -5112,16 +5121,19 @@ async def machine_chat_ask(request: Request):
     try:
         b = await request.json()
         f = chat_file(dev.get("machine", ""), str(b.get("chat", "")))
-        tool, detail, reason, key = (" ".join(str(b.get(k) or "").split())[:n] for k, n in (("tool", 80), ("detail", 500), ("reason", 300), ("key", 500)))
+        tool, reason, key = (" ".join(str(b.get(k) or "").split())[:n] for k, n in (("tool", 80), ("reason", 300), ("key", 200)))
+        detail = str(b.get("detail") or "").strip()  # whole and as written: the owner decides on exactly this text
+        once = b.get("once_only") is True or len(detail) > ASK_DETAIL
+        detail = detail[:ASK_DETAIL]
         if not tool:
             raise ValueError("name the tool")
     except (ValueError, AttributeError, TypeError) as e:
         return JSONResponse({"error": str(e) or "send JSON {chat, tool, detail}"}, status_code=400)
     c = await asyncio.to_thread(read_json, f, None)
-    if not c or dev["name"] not in c.get("tokens", []):
+    if not c or not chat_token_ok(c, dev):
         return JSONResponse({"error": "not a chat of this machine"}, status_code=404)
-    if contains_secret(f"{detail} {reason}"):
-        detail, reason = "(withheld: contains a known secret value)", ""
+    if contains_secret(f"{detail} {reason} {key}"):  # nor kept as a rule: a withheld call can only be allowed once
+        detail, reason, key, once = "(withheld: contains a known secret value)", "", "", True
     out, err = {}, []
 
     def change(c):
@@ -5131,11 +5143,11 @@ async def machine_chat_ask(request: Request):
             return err.append((409, "no turn runs in this chat"))
         if len(asks_open(c, now)) >= 5:
             return err.append((429, "5 approvals wait in this chat already"))
-        a = {"id": secrets.token_hex(4), "tool": tool, "detail": detail, "reason": reason, "key": key, "once_only": b.get("once_only") is True,
+        a = {"id": secrets.token_hex(4), "tool": tool, "detail": detail, "reason": reason, "key": key, "once_only": once,
              "at": now, "expires": now + CHAT_ASK_MINUTES * 60, "minutes": CHAT_ASK_MINUTES, "status": "pending"}
         keep = [x for x in c.get("asks", []) if x["status"] == "pending" or not x.get("sent") or now - x["at"] < 86400]
         c["asks"] = (keep + [a])[-50:]
-        chat_add(c, "ask", f"asks: {tool}: {detail}" + (f" ({reason})" if reason else ""))
+        chat_add(c, "ask", f"asks: {tool}: {' '.join(detail.split())[:300]}" + (f" ({reason})" if reason else ""))
         out.update(id=a["id"], timeout=CHAT_ASK_MINUTES * 60)
     await asyncio.to_thread(update_state, f, change)
     if err:
