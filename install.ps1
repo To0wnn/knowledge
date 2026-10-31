@@ -2,6 +2,7 @@
 #   irm https://raw.githubusercontent.com/To0wnn/knowledge/main/install.ps1 | iex
 # The same line every time: the first time it installs; after that it updates, offers agents found without the
 # plugin, and asks for a token only when the server refuses the stored one (clients/knowledge-agent.py setup).
+# It also sets up the local companion: autostart at logon, a menu entry for its page, a first hook-trust run.
 # Gets or updates the scripts in ~\knowledge (git), then runs clients\knowledge-agent.py. Same steps as install.sh.
 # No "exit": under iex it would close the PowerShell window; errors are thrown instead.
 $Repo = if ($env:KNOWLEDGE_REPO) { $env:KNOWLEDGE_REPO } else { "https://github.com/To0wnn/knowledge" }

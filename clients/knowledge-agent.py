@@ -28,7 +28,14 @@ it in ~/.config/knowledge/url for the hooks and sets the Claude plugin option. O
   knowledge-agent.py session-log TOKEN             SessionEnd/PreCompact (Codex), Stop (agy): post the session log
   knowledge-agent.py serve                         the local companion (alias: companion): wakes agents for ready tasks,
                     trusts the knowledge hooks, YOLO switches; page on http://127.0.0.1:47321
+  knowledge-agent.py install-companion [--dry-run] [--os linux|darwin|windows]
+                    start the companion at logon (systemd --user unit, LaunchAgent, or a per-user Scheduled Task that
+                    runs pythonw.exe directly), a menu shortcut that opens its page in an app window, a first hook-trust
+                    run; setup, install and update do this at the end. --dry-run (or KNOWLEDGE_COMPANION_DRY_RUN=1) only
+                    lists the steps, for this or another OS
+  knowledge-agent.py uninstall-companion [--dry-run] [--os ...]   remove that autostart and shortcut again
 """
+import getpass
 import json
 import os
 import shutil
@@ -543,6 +550,214 @@ def install_hooks(agent: str, name: str):
     print(f"hooks: context at start, session log and docs mirror in {path}")
 
 
+COMPANION_URL = "http://127.0.0.1:47321"
+COMPANION_NAME = "Knowledge companion"
+UNIT = "knowledge-companion.service"
+AGENT_LABEL = "io.github.knowledge.companion"
+
+
+def companion_paths(system: str) -> dict:
+    home = Path.home()
+    if system == "windows":
+        start = Path(os.environ.get("APPDATA") or home / "AppData" / "Roaming") / "Microsoft" / "Windows" / "Start Menu" / "Programs"
+        return {"task_xml": home / ".knowledge" / "companion" / "autostart.xml",
+                "lnk": start / f"{COMPANION_NAME}.lnk", "url": start / f"{COMPANION_NAME}.url"}
+    if system == "darwin":
+        app = home / "Applications" / f"{COMPANION_NAME}.app" / "Contents"
+        return {"plist": home / "Library" / "LaunchAgents" / f"{AGENT_LABEL}.plist", "app": app.parent,
+                "app_plist": app / "Info.plist", "app_exe": app / "MacOS" / "knowledge-companion"}
+    data = Path(os.environ.get("XDG_DATA_HOME") or home / ".local" / "share")
+    conf = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config")
+    return {"unit": conf / "systemd" / "user" / UNIT, "desktop": data / "applications" / "knowledge-companion.desktop"}
+
+
+def app_browser(system: str) -> str:
+    """Edge or Chrome, whose --app= opens the page in a window of its own; '' means the default browser."""
+    if system == "windows":
+        roots = [os.environ.get(v) for v in ("ProgramFiles(x86)", "ProgramFiles", "LOCALAPPDATA")]
+        cands = [Path(r) / sub for r in roots if r for sub in (r"Microsoft\Edge\Application\msedge.exe", r"Google\Chrome\Application\chrome.exe")]
+        return next((str(c) for c in cands if c.is_file()), "")
+    if system == "darwin":
+        return next((n for n in ("Microsoft Edge", "Google Chrome") if Path(f"/Applications/{n}.app").is_dir()), "")
+    return next((shutil.which(n) for n in ("microsoft-edge", "microsoft-edge-stable", "google-chrome", "google-chrome-stable",
+                                           "chromium", "chromium-browser") if shutil.which(n)), "")
+
+
+def companion_steps(system: str) -> list:
+    """What install-companion does, in order: ("write", path, text[, mode]) or ("run", argv, may_fail)."""
+    from xml.sax.saxutils import escape
+    me, p, browser = str(Path(__file__).resolve()), companion_paths(system), app_browser(system)
+    if system == "windows":
+        # pythonw.exe runs without a console; started directly, never through (hidden or encoded) PowerShell,
+        # which corporate EDRs flag.
+        pyw = Path(sys.executable).with_name("pythonw.exe")
+        exe = str(pyw) if os.name != "nt" or pyw.is_file() else sys.executable
+        user = f"{os.environ['USERDOMAIN']}\\{getpass.getuser()}" if os.environ.get("USERDOMAIN") else getpass.getuser()
+        xml = f"""<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>{COMPANION_NAME} ({COMPANION_URL})</Description></RegistrationInfo>
+  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>{escape(user)}</UserId></LogonTrigger></Triggers>
+  <Principals><Principal id="Author"><UserId>{escape(user)}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
+  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure></Settings>
+  <Actions Context="Author"><Exec><Command>{escape(exe)}</Command><Arguments>{escape(f'"{me}" serve')}</Arguments>
+    <WorkingDirectory>{escape(str(Path.home()))}</WorkingDirectory></Exec></Actions>
+</Task>
+"""
+        steps = [("write", p["task_xml"], xml),
+                 ("run", ["schtasks", "/Create", "/F", "/TN", COMPANION_NAME, "/XML", str(p["task_xml"])], False),
+                 ("run", ["schtasks", "/End", "/TN", COMPANION_NAME], True),  # an update: the running one has old code
+                 ("run", ["schtasks", "/Run", "/TN", COMPANION_NAME], False)]
+        if browser:  # a .lnk needs the shell's COM object: a plain, visible PowerShell line, values passed as env vars
+            steps.append(("run", ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                                  "$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:KN_LNK); $s.TargetPath = $env:KN_TARGET; "
+                                  "$s.Arguments = $env:KN_ARGS; $s.Description = $env:KN_DESC; $s.Save()"], False,
+                          {"KN_LNK": str(p["lnk"]), "KN_TARGET": browser, "KN_ARGS": f"--app={COMPANION_URL}", "KN_DESC": COMPANION_NAME}))
+            steps.append(("remove", p["url"]))
+        else:
+            steps += [("write", p["url"], f"[InternetShortcut]\nURL={COMPANION_URL}/\n"), ("remove", p["lnk"])]
+    elif system == "darwin":
+        # systemd and launchd start with a bare PATH: the setup's PATH is passed so the companion finds claude, codex and agy.
+        uid = getattr(os, "getuid", lambda: 501)()
+        arg = lambda s: f"<string>{escape(s)}</string>"
+        plist = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>{AGENT_LABEL}</string>
+  <key>ProgramArguments</key><array>{arg(sys.executable)}{arg(me)}<string>serve</string></array>
+  <key>EnvironmentVariables</key><dict><key>PATH</key>{arg(os.environ.get("PATH", ""))}</dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>StandardErrorPath</key>{arg(str(Path.home() / ".knowledge" / "companion" / "serve.log"))}
+</dict></plist>
+"""
+        opener = f'exec open -na "{browser}" --args --app={COMPANION_URL}' if browser else f"exec open {COMPANION_URL}"
+        info = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleName</key><string>{COMPANION_NAME}</string>
+  <key>CFBundleIdentifier</key><string>{AGENT_LABEL}.page</string>
+  <key>CFBundleExecutable</key><string>knowledge-companion</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+</dict></plist>
+"""
+        steps = [("write", p["plist"], plist),
+                 ("run", ["launchctl", "bootout", f"gui/{uid}", str(p["plist"])], True),
+                 ("run", ["launchctl", "bootstrap", f"gui/{uid}", str(p["plist"])], False),
+                 ("write", p["app_plist"], info), ("write", p["app_exe"], f"#!/bin/sh\n{opener}\n", 0o755)]
+    else:
+        q = lambda s: '"' + s.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%") + '"'  # systemd and .desktop quoting
+        unit = f"""[Unit]
+Description={COMPANION_NAME} ({COMPANION_URL})
+After=network-online.target
+
+[Service]
+Environment={q("PATH=" + os.environ.get("PATH", ""))}
+ExecStart={q(sys.executable)} {q(me)} serve
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+"""
+        desktop = f"""[Desktop Entry]
+Type=Application
+Name={COMPANION_NAME}
+Comment=Wakes your agents for ready knowledge tasks
+Exec={q(browser) + f" --app={COMPANION_URL}" if browser else f"xdg-open {COMPANION_URL}"}
+Icon=applications-internet
+Terminal=false
+Categories=Network;Development;
+"""
+        steps = [("write", p["unit"], unit),
+                 ("run", ["systemctl", "--user", "daemon-reload"], False),
+                 ("run", ["systemctl", "--user", "enable", UNIT], False),
+                 ("run", ["systemctl", "--user", "restart", UNIT], False),  # starts it, or loads new code after an update
+                 ("write", p["desktop"], desktop)]
+    return steps + [("run", [sys.executable, str(HOOKS / "companion.py"), "trust"], False)]
+
+
+def companion_undo_steps(system: str) -> list:
+    p = companion_paths(system)
+    if system == "windows":
+        return [("run", ["schtasks", "/End", "/TN", COMPANION_NAME], True),
+                ("run", ["schtasks", "/Delete", "/F", "/TN", COMPANION_NAME], True),
+                ("remove", p["task_xml"]), ("remove", p["lnk"]), ("remove", p["url"])]
+    if system == "darwin":
+        uid = getattr(os, "getuid", lambda: 501)()
+        return [("run", ["launchctl", "bootout", f"gui/{uid}", str(p["plist"])], True), ("remove", p["plist"]), ("remove", p["app"])]
+    return [("run", ["systemctl", "--user", "disable", "--now", UNIT], True), ("remove", p["unit"]),
+            ("run", ["systemctl", "--user", "daemon-reload"], True), ("remove", p["desktop"])]
+
+
+def run_steps(steps: list, dry: bool) -> list:
+    """Every step says what it did; returns the steps that failed (a may-fail step never does)."""
+    failed = []
+    for step in steps:
+        kind, what = step[0], step[1]
+        if kind == "write":
+            new = step[2]
+            enc = "utf-16" if what.suffix == ".xml" else "utf-8"  # schtasks /XML reads UTF-16
+            old = what.read_text(encoding=enc) if what.is_file() else None
+            if old == new:
+                print(f"companion: {what} unchanged")
+            elif dry:
+                print(f"companion: would write {what}:\n" + "".join(f"    {ln}\n" for ln in new.splitlines()), end="")
+            else:
+                what.parent.mkdir(parents=True, exist_ok=True)
+                what.write_text(new, encoding=enc, newline="\n" if enc == "utf-8" else None)
+                if len(step) > 3:
+                    os.chmod(what, step[3])
+                print(f"companion: {'updated' if old is not None else 'wrote'} {what}")
+        elif kind == "remove":
+            if not what.exists():
+                continue
+            if dry:
+                print(f"companion: would remove {what}")
+            else:
+                shutil.rmtree(what) if what.is_dir() else what.unlink()
+                print(f"companion: removed {what}")
+        else:
+            may_fail, env = step[2], (step[3] if len(step) > 3 else {})
+            shown = " ".join(f'"{a}"' if " " in a else a for a in what) + "".join(f"  ({k}={v})" for k, v in env.items())
+            if dry:
+                print(f"companion: would run {shown}")
+                continue
+            exe = shutil.which(what[0]) or what[0]
+            try:
+                r = subprocess.run([exe, *what[1:]], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                   env={**os.environ, **env}, stdin=subprocess.DEVNULL, timeout=180)
+                ok, out = r.returncode == 0, (r.stdout + r.stderr).strip()
+            except (OSError, subprocess.TimeoutExpired) as e:
+                ok, out = False, str(e)
+            if ok or may_fail:
+                print(f"companion: ran {shown}" + ("" if ok else " (nothing to do)"))
+            else:
+                print(f"companion: FAILED {shown}: {out[-500:]}")
+                failed.append(shown)
+    return failed
+
+
+def this_system() -> str:
+    return "windows" if os.name == "nt" else "darwin" if sys.platform == "darwin" else "linux"
+
+
+def install_companion(argv: list = (), undo: bool = False):
+    """The companion at logon, its menu shortcut and a first hook-trust run; again only updates. Fails loudly."""
+    dry = "--dry-run" in argv or os.environ.get("KNOWLEDGE_COMPANION_DRY_RUN") == "1"
+    system = argv[argv.index("--os") + 1] if "--os" in argv[:-1] else this_system()
+    if system not in ("linux", "darwin", "windows"):
+        sys.exit("--os is linux, darwin or windows")
+    print(f"\n== companion ({system}{', dry run' if dry else ''}) ==")
+    failed = run_steps(companion_undo_steps(system) if undo else companion_steps(system), dry)
+    if failed:
+        sys.exit(f"companion: {len(failed)} step(s) failed (see above); the agents themselves are set up. "
+                 f"Run again: knowledge-agent.py {'uninstall' if undo else 'install'}-companion")
+    if not dry:
+        print("companion: autostart and shortcut removed" if undo else f"companion: runs at logon; page on {COMPANION_URL}")
+
+
 def main(argv: list):
     cmd = argv[0] if argv else ""
     if cmd == "header" and len(argv) <= 2:
@@ -550,10 +765,15 @@ def main(argv: list):
         print(json.dumps({"Authorization": f"Bearer {tok}"} if tok else {}))
     elif cmd == "install" and len(argv) == 1:
         install_found()
+        install_companion()
     elif cmd == "update" and len(argv) == 1:
         update()
+        install_companion()
     elif cmd == "setup" and len(argv) == 1:
         setup()
+        install_companion()
+    elif cmd in ("install-companion", "uninstall-companion"):
+        install_companion(argv[1:], undo=cmd.startswith("un"))
     elif cmd == "install" and len(argv) >= 2 and argv[1] in (*CONFIG, "claude"):
         if len(argv) == 2:  # a vault name (the machine that holds the files) keeps the URL it is given
             ensure_url()
@@ -566,7 +786,7 @@ def main(argv: list):
 
 
 if __name__ == "__main__":
-    if sys.argv[1:2] in (["install"], ["update"], ["setup"]):  # setup is run by a person: errors go to them, loudly
+    if sys.argv[1:2] in (["install"], ["update"], ["setup"], ["install-companion"], ["uninstall-companion"]):  # setup is run by a person: errors go to them, loudly
         sys.stdout.reconfigure(errors="replace")  # agent CLIs print ✔ and such; a Windows pipe is cp1252
         main(sys.argv[1:])
     elif "--selftest" in sys.argv:

@@ -279,7 +279,8 @@ def user_env(home: Path, **extra) -> dict:
     env = {k: v for k, v in os.environ.items() if not k.startswith(("KNOWLEDGE_", "CLAUDE_"))}
     # Codex on Windows finds its folder through Windows itself, not USERPROFILE: CODEX_HOME is its own override.
     env.update(HOME=str(home), USERPROFILE=str(home), CODEX_HOME=str(home / ".codex"), PYTHONUTF8="0",
-               XDG_CACHE_HOME=str(home / ".cache"), **extra)  # PYTHONUTF8 off: like a fresh Windows
+               XDG_CACHE_HOME=str(home / ".cache"),
+               KNOWLEDGE_COMPANION_DRY_RUN="1", **extra)  # never this machine's own systemd, launchd or Task Scheduler  # PYTHONUTF8 off: like a fresh Windows
     if WIN:
         env.pop("PYTHONIOENCODING", None)
     return env
@@ -1347,7 +1348,8 @@ def installer(tok: str, tmp: Path):
     have = [a for a in ("claude", "codex") if shutil.which(a)]
     if have:  # agy is not installed on the CI runners
         code, out, err = run([sys.executable, str(agent), "setup"], "", env, timeout=600)
-        check(code == 0 and "Already set up (" in out and all(f"== {a} ==" in out for a in have) and "== agy ==" not in out,
+        check(code == 0 and "Already set up (" in out and all(f"== {a} ==" in out for a in have) and "== agy ==" not in out
+              and "== companion (" in out and re.search(r'companion\.py"? trust', out),
               f"setup (the one-line installer), once set up: every agent with the plugin is updated ({', '.join(have)}), no questions", (out + err)[-1500:])
         # Set up before the URL was stored (review 27 Oct 2026): the token must not go to the default server.
         url_file, settings_path = home / ".config" / "knowledge" / "url", home / ".claude" / "settings.json"
@@ -1368,6 +1370,67 @@ def installer(tok: str, tmp: Path):
         code, out, err = run([sys.executable, str(agent), "install"], "", env)
         check(code != 0 and "Found" in (out + err) and "name one" in (out + err),
               "install without an agent and without a terminal names what it found and asks to choose", out + err)
+
+
+def companion_setup(tmp: Path):
+    """install-companion: autostart at logon, a menu shortcut to the page and a first hook-trust run. The dry run lists
+    each OS's steps; on this OS it runs for real against fake systemctl/launchctl/schtasks/powershell, a rerun only
+    finds everything unchanged, and uninstall-companion removes it again."""
+    agent = CLIENT / "clients" / "knowledge-agent.py"
+    home = tmp / "Autostart Usér"
+    env = user_env(home, APPDATA=str(home / "AppData" / "Roaming"), XDG_DATA_HOME="", XDG_CONFIG_HOME="")
+    want = {"linux": ["knowledge-companion.service", "Restart=on-failure", "Environment=", "systemctl --user enable",
+                      "systemctl --user restart", "knowledge-companion.desktop", "Exec="],
+            "darwin": ["LaunchAgents", "<key>RunAtLoad</key><true/>", "launchctl bootstrap", "Knowledge companion.app", "exec open"],
+            "windows": ["<LogonTrigger>", "<LogonType>InteractiveToken</LogonType>", "pythonw.exe", "schtasks /Create",
+                        "schtasks /Run", "Start Menu"]}
+    for system, parts in want.items():
+        code, out, err = run([sys.executable, str(agent), "install-companion", "--dry-run", "--os", system], "", env)
+        missing = [p for p in parts + ["127.0.0.1:47321"] if p not in out] + ([] if re.search(r'companion\.py"? trust', out) else ["trust"])
+        check(code == 0 and not missing, f"install-companion --dry-run --os {system}: lists autostart, shortcut and trust", f"missing {missing}\n{out[-1500:]}{err}")
+        if system == "windows":
+            task = out.split("schtasks")[0]
+            check(not any(w in task.lower() for w in ("powershell", "-encodedcommand", "hidden")),
+                  "install-companion windows: the logon task starts pythonw directly, no (hidden or encoded) PowerShell", task)
+        check(not home.exists() or not any(home.rglob("*")), f"install-companion --dry-run --os {system}: writes nothing")
+        code, out, err = run([sys.executable, str(agent), "uninstall-companion", "--dry-run", "--os", system], "", env)
+        check(code == 0, f"uninstall-companion --dry-run --os {system}", out + err)
+
+    fake, log = tmp / "fake tools", tmp / "fake tools.log"
+    fake.mkdir(exist_ok=True)
+    for tool in ("systemctl", "launchctl", "schtasks", "powershell"):
+        if WIN:
+            (fake / f"{tool}.cmd").write_text(f'@echo {tool} %*>>"%KN_FAKE_LOG%"\r\n', encoding="utf-8")
+        else:
+            (fake / tool).write_text(f'#!/bin/sh\necho "{tool} $*" >> "$KN_FAKE_LOG"\n', encoding="utf-8")
+            (fake / tool).chmod(0o755)
+    # only the fakes and Python: the trust step finds no agent CLI in this home, so it only says so
+    real = {k: v for k, v in env.items() if k != "KNOWLEDGE_COMPANION_DRY_RUN"}
+    real.update(PATH=os.pathsep.join([str(fake), str(Path(sys.executable).parent)]), KN_FAKE_LOG=str(log))
+    system = "windows" if WIN else "darwin" if sys.platform == "darwin" else "linux"
+    files = {"linux": [".config/systemd/user/knowledge-companion.service", ".local/share/applications/knowledge-companion.desktop"],
+             "darwin": ["Library/LaunchAgents/io.github.knowledge.companion.plist",
+                        "Applications/Knowledge companion.app/Contents/MacOS/knowledge-companion"],
+             "windows": [".knowledge/companion/autostart.xml"]}[system]
+    code, out, err = run([sys.executable, str(agent), "install-companion"], "", real, timeout=120)
+    calls = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
+    expect = {"linux": "systemctl --user enable knowledge-companion.service", "darwin": "launchctl bootstrap gui/",
+              "windows": "schtasks /Create /F /TN"}[system]
+    check(code == 0 and all((home / f).is_file() for f in files) and expect in calls and "runs at logon" in out,
+          f"install-companion on {system}: writes the autostart and shortcut and registers it", out + err + calls)
+    if WIN:
+        check("CreateShortcut" in calls or (home / "AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Knowledge companion.url").is_file(),
+              "install-companion on windows: a Start menu shortcut (Edge/Chrome app window, else a .url)", calls)
+    code, out, err = run([sys.executable, str(agent), "install-companion"], "", real, timeout=120)
+    check(code == 0 and "unchanged" in out and "wrote" not in out and "updated " not in out,
+          f"install-companion on {system}: a rerun only finds its files unchanged", out + err)
+    log.unlink(missing_ok=True)
+    code, out, err = run([sys.executable, str(agent), "uninstall-companion"], "", real, timeout=120)
+    calls = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
+    undo = {"linux": "systemctl --user disable --now", "darwin": "launchctl bootout", "windows": "schtasks /Delete /F /TN"}[system]
+    check(code == 0 and not any((home / f).exists() for f in files) and undo in calls
+          and not (home / "Applications" / "Knowledge companion.app").exists(),
+          f"uninstall-companion on {system}: autostart and shortcut are gone", out + err + calls)
 
 
 def relay_errors(home: Path):
@@ -1566,6 +1629,7 @@ def main():
         hook_errors(tmp, project)
         companion_e2e(tok, tmp, project)
         installer(tok, tmp)
+        companion_setup(tmp)
         checkout_update(tmp)
         claude_stored_token(tmp)
         real_clis(tok, home)
