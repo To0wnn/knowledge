@@ -630,6 +630,43 @@ def handback_contract(tmp, ck, fr, ver, raw):
     (tmp / "task_leases.json").write_text("{}")  # the turns above (session hb) took leases the later checks must not meet
 
 
+def mission_contract(tmp, ck, fr, raw, er):
+    """The mission map: the Tasks tab's rows as nodes, lanes and edges, only from projects the viewer sees; results
+    older than a day only with all=1; a project filter."""
+    from datetime import date, timedelta
+    path, old = "garden-memory/project_mission.md", (date.today() - timedelta(days=10)).isoformat()
+    lines = ("- open until 2099-01-01 [Codex, MM-1] from Claude, start now: build the beds\n"
+             "- open until 2099-01-01 [Claude, MM-2] from Codex, start after MM-1: plant\n"
+             "- open until 2099-01-01 [Gemini, MM-3] from Claude, start after approval: water\n"
+             "- open until 2099-01-01 [Claude, MM-1-cont] from Codex, start now: finish the beds\n"
+             "- open until 2099-01-01 [Codex, MM-6] from Ann, start now: weed\n"
+             f"- [Claude, MM-4-done]: fence built\n- [Claude, MM-5-done]: old result ({old})\n")
+    assert not call("knowledge_write", {"path": path, "content": memo(lines, "mission")}, fr)[0]
+    leases = json.loads((tmp / "task_leases.json").read_text() or "{}")
+    leases.setdefault("garden", {})["MM-6"] = {"device": "laptop", "session": "worker:w1", "until": int(time.time()) + 300, "label": "garage"}
+    (tmp / "task_leases.json").write_text(json.dumps(leases))
+    get = lambda q="", h=ck: json.loads(raw("GET", "/ui/api/mission" + q, headers=h)[2])
+    g = get("?project=garden")
+    n = {x["id"]: x for x in g["nodes"] if x["id"].startswith("MM-")}
+    assert set(n) == {"MM-1", "MM-2", "MM-3", "MM-1-cont", "MM-6", "MM-4-done"}, sorted(n)  # MM-5-done is older than a day
+    assert {k: v["status"] for k, v in n.items()} == {"MM-1": "open", "MM-2": "waiting", "MM-3": "approval", "MM-1-cont": "open",
+                                                      "MM-6": "running", "MM-4-done": "done"}, n
+    assert "running in a worker on laptop on garage" == n["MM-6"]["where"] and n["MM-3"]["can_approve"], n["MM-6"]
+    assert (n["MM-1"]["lane"], n["MM-3"]["lane"], n["MM-6"]["lane"], n["MM-4-done"]["lane"]) == ("codex", "agy", "codex", "claude")
+    e = {(x["from"], x["to"], x["kind"]) for x in g["edges"]}
+    assert {("lane:claude", "garden/MM-1", "handover"), ("garden/MM-1", "garden/MM-2", "dep"), ("garden/MM-1", "garden/MM-1-cont", "cont"),
+            ("lane:ann", "garden/MM-6", "handover")} <= e, e
+    assert not any(t == "garden/MM-2" and k == "handover" for _, t, k in e)  # the dependency already shows the hand-over
+    lanes = [l["id"] for l in g["lanes"]]
+    assert lanes[:3] == ["claude", "codex", "agy"] and "ann" in lanes and not next(l for l in g["lanes"] if l["id"] == "ann")["agent"], g["lanes"]
+    assert "MM-5-done" in {x["id"] for x in get("?project=garden&all=1")["nodes"]}
+    assert not any(x["project"] == "garden" for x in get("?project=trade")["nodes"])
+    assert not any(x["project"] == "garden" for x in get(h=er)["nodes"])  # erin does not see garden
+    leases["garden"].pop("MM-6"); (tmp / "task_leases.json").write_text(json.dumps(leases))
+    ver = re.search(r"version ([0-9a-f]+)", call("knowledge_read", {"path": path}, fr)[1]).group(1)
+    assert not call("knowledge_delete", {"path": path, "base_version": ver}, fr)[0]
+
+
 def main():
     # Every command block on the help page must paste in one go: zsh runs a "# ..." line as a command (help 23 Oct 2026).
     import html as _html
@@ -1561,6 +1598,7 @@ def main():
         assert {"erinproj", "erinproj-memory"} <= set(roots), roots  # her devices reach her new project at once
         machines_contract(tmp, ck, fr, raw, er, et)
         chats_contract(tmp, ck, fr, raw, er, et)
+        mission_contract(tmp, ck, fr, raw, er)
         # The folder link (.knowledge-project, skill knowledge-init): her token now sees two projects, so the folder picks.
         assert "not linked to a project" in http("GET", "/context/1?project=/home/erin/stuff", token=et)[1]
         ctx = http("GET", "/context/1?project=erinproj&linked=1", token=et)[1]

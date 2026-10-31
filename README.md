@@ -123,7 +123,7 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   to an agent (below), which runs with that agent's own permissions.
 - **Agents cockpit (chat with your agents):** the web UI's "Agents" button (key `A`) opens a full-screen canvas: a
   bar with pills (how many chats, workers and sessions are live on your pcs, when the fullest usage window resets), a
-  tools menu (mission map = Tasks, memory, skills, machines, loops = workers, settings) and one card per chat. A
+  tools menu (mission map, memory, skills, machines, loops = workers, settings) and one card per chat. A
   chat is a conversation with Claude Code, Codex or agy on one of your own pcs, in a folder linked to a project there,
   as in a terminal: the answer streams in (text, plus one line per tool call or refused call), the next message
   continues the same conversation, Stop ends a running turn, earlier chats reopen from the clock menu. A phone shows
@@ -140,6 +140,14 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   too only on their own machines); a chat needs its pc online and says so. One file per chat under the state
   directory (`chats/<machine>/`), at most 50 chats per machine (the oldest go) and 1 MB per chat (the oldest output
   goes). Every turn, stop and failure is in the companion's activity log; a failure also shows in the chat.
+- **Mission map:** Agents > Tools > Mission map shows the task lines between agents as a graph, always laid out by
+  itself (no dragging boxes around): one lane per owner (Claude, Codex, Gemini/agy, people), tasks as boxes coloured by
+  status (open, waiting on a task or date, needs approval, claimed, running in a worker, done in the last 24 h,
+  stalled), left to right by "start after <ID>", with hand-overs (requester to owner), `-cont` continuations and
+  `-done` results drawn in their own line styles. Pan and zoom with wheel, drag or pinch, `F` fits; a task opens a panel
+  with its full line, where it runs, Approve and its memo. "Show all" adds older results; a project filter narrows it.
+  A phone shows the chains per lane as a list. Data: `GET /ui/api/mission?project=&all=1` (same visibility as the
+  Tasks tab); the layout is a small layered (Sugiyama-style) pass in `static/mission.js`.
 - **YOLO safety without blocking:** task text by a writer the project does not trust reaches agents and workers marked
   as data, not instructions. A watch hook after every tool flags what a YOLO session does that is risky (force push,
   `rm -rf` outside the project, `curl | sh`, reading key or token files, reading the vault) in the companion's activity
