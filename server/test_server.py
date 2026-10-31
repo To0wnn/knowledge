@@ -380,6 +380,10 @@ def machines_contract(tmp, ck, fr, raw, er, et):
     assert list(mine) == ["dddddddddddddddd"] and mine["dddddddddddddddd"]["own"], mine  # her own pc only
     forget = lambda mid, h: raw("POST", "/ui/api/machines/forget", json.dumps({"machine": mid}), {**h, "X-Knowledge-UI": "1", "Content-Type": "application/json"})[0]
     assert forget("cccccccccccccccc", er) == 403
+    # A machine id is bound to whoever first reported it: another person's token that names it gets 403 everywhere.
+    assert http("GET", "/tasks/ready", token=et, headers={"X-Knowledge-Machine": "cccccccccccccccc"})[0] == 403
+    assert http("POST", "/machine/report", {"version": "x"}, token=et, headers={"X-Knowledge-Machine": "cccccccccccccccc"})[0] == 403
+    assert "cccccccccccccccc" not in {r["id"] for r in json.loads(raw("GET", "/ui/api/machines", headers=er)[2])["machines"]}
     assert "cccccccccccccccc" in json.loads((tmp / "machines.json").read_text())
     assert forget("dddddddddddddddd", er) == 200 and "dddddddddddddddd" not in {r["id"] for r in json.loads(raw("GET", "/ui/api/machines", headers=ck)[2])["machines"]}
     # A session gone quiet for more than 2 h is no longer listed; the machine stays, offline.
@@ -410,7 +414,7 @@ def machines_contract(tmp, ck, fr, raw, er, et):
     assert [a["action"] for a in got] == ["yolo", "start_worker"] and got[0]["args"] == {"agent": "codex", "on": True}, got
     assert json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"] == []  # handed out once
     assert http("POST", "/machine/actions/result", {"id": got[0]["id"], "ok": True, "result": "on"}, token=fr, headers=pc)[0] == 200
-    assert http("POST", "/machine/actions/result", {"id": got[1]["id"], "ok": True}, token=et, headers=pc)[0] == 404  # not her action
+    assert http("POST", "/machine/actions/result", {"id": got[1]["id"], "ok": True}, token=et, headers=pc)[0] == 403  # not her machine
     m = {r["id"]: r for r in json.loads(raw("GET", "/ui/api/machines", headers=ck)[2])["machines"]}["cccccccccccccccc"]
     assert [(a["status"], a.get("result")) for a in m["actions"]][0] == ("done", "on"), m["actions"]
     assert "machine-action" in "\n".join(json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["system"]["audit"])

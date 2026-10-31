@@ -2213,6 +2213,25 @@ MACHINE_ACTIONS = ADMIN_DIR / "machine_actions.json"  # the remote actions queue
 ONLINE = 120  # seconds: a machine seen this recently is online (the companion reports every minute)
 
 
+def machine_key(name: str) -> str:
+    """Whose a token is, for binding a machine id: "user:<owner>", "admin" for a token an admin made (no owner), ""
+    for a name that is no token (any more)."""
+    cfg = read_json(TOKENS_FILE, {}).get(name)
+    return "" if cfg is None else f"user:{cfg['owner']}" if cfg.get("owner") else "admin"
+
+
+def machine_bound(m: dict) -> str:
+    """Whom a machine record belongs to: set when it was first reported, else (records from before) its first token."""
+    return m.get("bound") or next((k for n in m.get("tokens", {}) if (k := machine_key(n))), "")
+
+
+def machine_allowed(mid: str, name: str) -> bool:
+    """Only tokens of the person (or the admins) who first reported machine id `mid` may act as that machine: an id seen
+    elsewhere (a lease holder, a notice) never lets another person see, steer, forget or overwrite it."""
+    bound = machine_bound(read_json(MACHINES_FILE, {}).get(mid) or {})
+    return not bound or machine_key(name) == bound
+
+
 def mark_machine(dev: dict, agent: str = "", session: str = "", project: str = "", task: str = "", plugin: str = "",
                  report: dict | None = None):
     """Note that this token's pc was seen: its sessions (per agent, with project and held task), the plugin version per
@@ -2224,6 +2243,8 @@ def mark_machine(dev: dict, agent: str = "", session: str = "", project: str = "
 
     def change(d):
         m = d.setdefault(mid, {"first": int(now)})
+        if not machine_bound(m) and (key := machine_key(dev["name"])):
+            m["bound"] = key
         m.update(label=dev.get("machine_label") or mid, at=now)
         m.setdefault("tokens", {})[dev["name"]] = now
         if agent in AGENT_OWNERS and plugin:
@@ -2639,6 +2660,8 @@ class BearerAuth:
         if re.fullmatch(r"[0-9a-f]{16}", mid := headers.get(b"x-knowledge-machine", b"").decode("latin-1")):
             # the pc this token runs on (plugin 0.15.0+): leases, sessions and the Machines list key on token + machine
             label = re.sub(r"[^\w.-]", "-", headers.get(b"x-knowledge-machine-label", b"").decode("latin-1"))[:60]
+            if not machine_allowed(mid, dev["name"]):  # a machine id is bound to whoever first reported it
+                return await JSONResponse({"error": "this machine id belongs to another person's tokens"}, status_code=403)(scope, receive, send)
             dev = {**dev, "machine": mid, "machine_label": label or mid}
         if worker := re.sub(r"[^\w.-]", "", headers.get(b"x-knowledge-worker", b"").decode("latin-1"))[:60]:
             dev = {**dev, "worker": worker}  # a session the companion started for this one task
