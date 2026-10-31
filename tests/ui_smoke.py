@@ -7,7 +7,7 @@ and its neighbours (after the layout settled); the neighbours gather in a ring; 
 lands on a link) deselects, puts every node back exactly and zooms out; a second click on a note reads it. On a phone
 the lists come first (on the home view the topic cards instead of the topic list) and opening a note scrolls to it. The
 Agents cockpit opens with its pills, tools and new chat dialog (skipped on a server older than 0.16); the mission map
-lays out a seeded graph cleanly and opens from the tools menu (skipped on a server without it). Read-only: it
+lays out a seeded graph cleanly (lone tasks in the first column) and opens from the tools menu (skipped on a server without it). Read-only: it
 opens notes, it never edits or sends.
 
   systemd-run --user --scope -q -p MemoryMax=3G ~/.local/bin/uv run -q --with playwright python tests/ui_smoke.py
@@ -269,7 +269,7 @@ MISSION_LAYOUT_CHECK = """() => {
   const graph = (n, seed) => {
     const nodes = [], edges = [{from: "lane:claude", to: "p/T-1", kind: "handover"}];
     let r = seed; const rnd = () => (r = (r * 16807) % 2147483647) / 2147483647;
-    for (let i = 0; i < n; i++) nodes.push({key: `p/T-${i}`, id: `T-${i}`, lane: lanes[i % 3].id, status: st[i % st.length]});
+    for (let i = 0; i < n + 6; i++) nodes.push({key: `p/T-${i}`, id: `T-${i}`, lane: lanes[i % 3].id, status: st[i % st.length]});
     for (let i = 3; i < n; i++) {
       if (i % 4) edges.push({from: `p/T-${i - 3}`, to: `p/T-${i}`, kind: "dep"});
       if (rnd() < 0.3) edges.push({from: `p/T-${Math.floor(rnd() * i)}`, to: `p/T-${i}`, kind: "cont"});
@@ -290,6 +290,7 @@ MISSION_LAYOUT_CHECK = """() => {
     }
     for (const n of g.nodes) {
       const p = L.pos.get(n.key), l = L.lanes.find((x) => x.id === n.lane);
+      if (p.layer && !g.edges.some((e) => e.from === n.key || e.to === n.key)) bad.push(`lone ${n.key} not in column 0`);
       if (p.y < l.y || p.y + p.h > l.y + l.h) bad.push(`lane ${n.key}`);
     }
     if (L.lanes.map((l) => l.id).join() !== g.lanes.map((l) => l.id).join()) bad.push("lane order");

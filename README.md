@@ -143,10 +143,10 @@ checks them against a few house rules, so a growing pile of agent memory stays f
 - **Mission map:** Agents > Tools > Mission map shows the task lines between agents as a graph, always laid out by
   itself (no dragging boxes around): one lane per owner (Claude, Codex, Gemini/agy, people), tasks as boxes coloured by
   status (open, waiting on a task or date, needs approval, claimed, running in a worker, done in the last 24 h,
-  stalled), left to right by "start after <ID>", with hand-overs (requester to owner), `-cont` continuations and
-  `-done` results drawn in their own line styles. Pan and zoom with wheel, drag or pinch, `F` fits; a task opens a panel
+  stalled), left to right by "start after <ID>", with `-cont` continuations and `-done` results in their own line styles; hand-overs
+  (requester to owner) show for the task you point at or pick. Tasks that wait on nothing stack in the first column. Pan and zoom with wheel, drag or pinch, `F` fits; a task opens a panel
   with its full line, where it runs, Approve and its memo. "Show all" adds older results; a project filter narrows it.
-  A phone shows the chains per lane as a list. Data: `GET /ui/api/mission?project=&all=1` (same visibility as the
+  A phone shows the chains per lane as a list of full-width cards. Data: `GET /ui/api/mission?project=&all=1` (same visibility as the
   Tasks tab); the layout is a small layered (Sugiyama-style) pass in `static/mission.js`.
 - **YOLO safety without blocking:** task text by a writer the project does not trust reaches agents and workers marked
   as data, not instructions. A watch hook after every tool flags what a YOLO session does that is risky (force push,

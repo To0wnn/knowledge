@@ -13,7 +13,7 @@ const ms = { root: null, data: null, lay: null, all: false, project: "", view: {
   timer: 0, sel: "", dragged: false, pointers: new Map(), pinch: null };
 
 // The layout: layer = longest path over the task-to-task edges (a cycle, which only bad data makes, is cut where the
-// walk meets itself); tasks without any edge fill the emptiest columns of their lane so a lane stays low; then 4
+// walk meets itself); tasks without any edge stack in the first column of their lane (no order implied); then 4
 // barycentre sweeps order the tasks inside each lane column by the rows of their neighbours. Returns positions in
 // px: {pos: Map(key -> {x, y, w, h, layer, lane}), lanes: [{id, name, y, h}], width, height}.
 function missionLayout(g, s = MS_SIZE) {
@@ -38,19 +38,8 @@ function missionLayout(g, s = MS_SIZE) {
   const rank = (n) => Object.keys(MS_STATUS).indexOf(n.status);
   const sorted = [...g.nodes].sort((a, b) => rank(a) - rank(b) || a.id.localeCompare(b.id));
   for (const n of sorted) if (!lone(n.key)) put(n.key, n.lane, layer.get(n.key));
-  // a task without links goes to the first column (it can start without waiting on anything); only when that
-  // column would grow higher than the lane already is (at least 3) the rest fill the emptiest columns
-  const maxLayer = Math.max(0, ...layer.values());
-  for (const lane of laneIds) {
-    const alone = sorted.filter((n) => n.lane === lane && lone(n.key)), c = cells.get(lane);
-    const high = Math.max(3, ...[...c.values()].map((x) => x.length));
-    const cols = Math.max(maxLayer + 1, Math.ceil(alone.length / high));
-    for (const n of alone) {
-      let best = 0;
-      if ((c.get(0) || []).length >= high) for (let d = 1; d < cols; d++) if ((c.get(d) || []).length < (c.get(best) || []).length) best = d;
-      put(n.key, lane, best);
-    }
-  }
+  // a task without links can start without waiting on anything: all of them stack in the first column of their lane
+  for (const n of sorted) if (lone(n.key)) put(n.key, n.lane, 0);
   // lane bands: as high as their fullest column
   const lanes = [], laneTop = new Map(); let y = 0;
   for (const id of laneIds) {
@@ -218,12 +207,12 @@ function msGraph() {
   if (!ms.fitted) { msFit(); ms.fitted = true; } else msApply();
 }
 
-// The links of one task stand out (hand-overs are faint otherwise: nearly every task has one).
+// The links of one task stand out; its hand-overs show only then (nearly every task has one: always drawn they bundle).
 function msHot(key) {
   for (const p of ms.root.querySelectorAll(".ms-e[data-to]")) p.classList.toggle("hot", !!key && (p.dataset.to === key || p.dataset.from === key));
 }
 
-// Phone: per lane the chains of tasks linked inside that lane, "A → B → C", wrapping (no sideways scroll).
+// Phone: per lane the chains of tasks linked inside that lane, one full-width card under the other (no sideways scroll).
 function msList() {
   const g = ms.data, L = ms.lay, box = $("ms-list"); box.replaceChildren();
   const parent = new Map(g.nodes.map((n) => [n.key, n.key]));
@@ -242,7 +231,7 @@ function msList() {
     for (const c of [...chains.values()].sort((a, b) => Math.min(...a.map((n) => at(n.key))) - Math.min(...b.map((n) => at(n.key))))) {
       const row = el("div", "ms-chain");
       c.sort((a, b) => at(a.key) - at(b.key)).forEach((n, i) => {
-        if (i) row.append(el("span", "ms-arrow", "→"));
+        if (i) row.append(el("span", "ms-arrow", "↓"));
         const from = g.edges.find((e) => e.to === n.key && (e.from.startsWith("lane:") ? e.from.slice(5) !== n.lane : msNode(e.from)?.lane !== n.lane));
         const b = msButton(n, "ms-c");
         const lane = (id) => (L.lanes.find((x) => x.id === id) || { name: id }).name;

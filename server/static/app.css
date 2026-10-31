@@ -491,7 +491,7 @@ body.ck-on { overflow: hidden; }
 }
 
 /* ---------------------------------------------------------------- Mission map (static/mission.js)
-   Over the Agents cockpit: tasks as buttons in one lane per owner, edges in one SVG, the world pans and zooms as one
+   Over the Agents cockpit: tasks as buttons in one lane per owner, edges in one SVG (hand-overs only for the hovered or chosen task), the world pans and zooms as one
    layer. Status colours come from the shared tokens; the status is also written in each node (not colour alone). */
 .ms { position: fixed; inset: 0; z-index: 41; display: grid; grid-template: auto auto minmax(0, 1fr) / minmax(0, 1fr); background: var(--canvas) var(--dot-grid); color: var(--ink); }
 .ms[hidden], .ms [hidden] { display: none !important; }
@@ -531,7 +531,8 @@ body.ck-on { overflow: hidden; }
 .ms-tx { grid-column: 1 / -1; font-size: 12px; line-height: 1.3; color: var(--muted); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .ms-e { fill: none; stroke-width: 1.6; }
 .ms-e.k-dep { stroke: var(--muted); }
-.ms-e.k-handover { stroke: var(--amber); stroke-dasharray: 1.5 4; stroke-linecap: round; stroke-width: 1.8; opacity: .4; }
+.ms-e.k-handover { stroke: var(--amber); stroke-dasharray: 1.5 4; stroke-linecap: round; stroke-width: 1.8; display: none; }
+.ms-e.k-handover.hot, .ms-edge-key .ms-e.k-handover { display: inline; }
 .ms-e.hot { opacity: 1; stroke-width: 2.6; }
 .ms-e.k-cont { stroke: var(--g-infra); stroke-dasharray: 7 4; }
 .ms-e.k-done { stroke: var(--g-reference); stroke-dasharray: 9 3 2 3; }
@@ -551,10 +552,10 @@ body.ck-on { overflow: hidden; }
 .ms-list { overflow-y: auto; padding: 4px 16px 24px; border-top: 1px solid var(--line); }
 .ms-lane-list h3 { margin: 14px 0 6px; font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .ms-chain { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
-.ms-c { padding: 6px 9px; max-width: 100%; min-width: 0; }
+.ms-c { padding: 6px 9px; width: 100%; min-width: 0; }
 .ms-c .ms-tx { -webkit-line-clamp: 1; }
 .ms-from { grid-column: 1 / -1; font-size: 11px; color: var(--amber-ink); }
-.ms-arrow { color: var(--muted); }
+.ms-arrow { color: var(--muted); width: 100%; text-align: center; line-height: 1; }
 .ms-empty { padding: 24px 16px; }
 @media (max-width: 640px) {
   .ms-bar { padding: 8px 12px; gap: 6px; }
