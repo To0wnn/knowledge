@@ -131,7 +131,12 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   per pc that may take it) and **Done (24 h)** (chats read, workers ended, results handed back). Opening a chat marks
   it read (chats from before 0.17 count as read; a turn you stopped yourself and replies older than a week do not
   need you). Dismiss takes a Needs-you item off your own board until it changes (stored per person on the server,
-  `POST /ui/api/board/dismiss`). A card opens its chat full screen (Esc or "Board" goes back), a task its memo line, a worker how to look
+  `POST /ui/api/board/dismiss`). With Matrix configured (`KNOWLEDGE_MATRIX_URL/ROOM/TOKEN`), a new Needs-you item on
+  an admin's board gives one Matrix message in that room, with a link to `<KNOWLEDGE_PUBLIC_URL>/ui#/inbox` (a chat:
+  `#/chat/<machine>/<chat>`): once per item and version (the key and signature Dismiss uses), at most
+  `needs_per_hour` an hour (admin page, Settings; 0 = off, default 6; more at once give one summary, the rest wait
+  for room), and none while an admin has the board open (polled in the last 2 minutes: they see it there). A woken
+  task nobody took keeps its own notice, now with the same link. Non-admins get none: the room is the admin's. A card opens its chat full screen (Esc or "Board" goes back), a task its memo line, a worker how to look
   at it; Approve, Start and Stop act in place. A phone shows the columns one under the other. Chat cards and workers
   carry a **git pill** (`task/KN-12 · ●3 · ↑2↓0`: branch, changed files, commits ahead/behind `main`/`master`, or
   the upstream on main itself), which the companion counts once a round per folder with `GIT_OPTIONAL_LOCKS=0` and

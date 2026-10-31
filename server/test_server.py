@@ -708,6 +708,51 @@ def board_contract(tmp, ck, fr, raw, er, et):
     http("POST", "/machine/report", {"version": "0.16.0"}, token=fr, headers=pc)
 
 
+def needs_contract(tmp, ck, fr, raw, heard):
+    """'Needs you' on Matrix: off until switched on (no deploy), then one message per new item with a link, never the
+    same item twice, none while an admin has the board open, a summary over the hourly limit, nothing over it."""
+    admin = lambda b: raw("POST", "/ui/api/admin/settings", json.dumps(b), {**ck, "X-Knowledge-UI": "1", "Content-Type": "application/json"})
+    state = tmp / "needs_notified.json"
+    assert not state.exists(), "off (settings.json): no state"
+    assert admin({"needs_per_hour": 2})[0] == 200
+    deadline = time.time() + 10
+    while not state.exists() and time.time() < deadline:  # the first run only notes what is there
+        time.sleep(0.2)
+    assert state.exists()
+    path = "garden-memory/project_tasks.md"
+    line = lambda i: f"- open until 2099-01-01 [Codex, NT-{i}] from Claude, start after approval: needs test {i}\n"
+    add = lambda *ids: call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": "".join(map(line, ids)) + "## Keuzes"}, fr)
+    about = lambda tid: [m for m in heard if m.startswith(f"Knowledge needs you: NT-{tid} ")]
+    wait = lambda cond, t=8: next((True for _ in range(int(t / 0.2)) if cond() or time.sleep(0.2)), cond())
+    time.sleep(2.5)  # past the quiet window of the polls before
+    add(1)
+    assert wait(lambda: about(1)), heard
+    assert "waits for your approval" in about(1)[0] and about(1)[0].endswith("https://kn.example/ui#/inbox"), about(1)
+    time.sleep(2.5)
+    assert len(about(1)) == 1, "one message per item"
+    # The board is open (polled): the item shows there, so no message, also not after the board closes.
+    end = time.time() + 3
+    add(2)
+    while time.time() < end:
+        raw("GET", "/ui/api/board", headers=ck); time.sleep(0.4)
+    time.sleep(3)
+    assert not about(2), heard
+    # One slot left this hour: three at once give one summary; then the hour is full and the next waits.
+    add(3, 4, 5)
+    assert wait(lambda: any("3 new items need you" in m for m in heard)), heard
+    assert not about(3) and not about(4), heard
+    add(6)
+    time.sleep(3)
+    assert not about(6) and not any("NT-6" in m for m in heard), heard
+    assert json.loads(state.read_text())["items"].get("task:garden/NT-6") is None, "held back, still to tell"
+    assert admin({"needs_per_hour": 0})[0] == 200
+    assert wait(lambda: not state.exists()), "off forgets, so on again does not replay a backlog"
+    text = (tmp / "projects/garden/memory/project_tasks.md").read_text()
+    for i in range(1, 7):
+        assert line(i) in text
+        call("knowledge_edit", {"path": path, "old_string": line(i), "new_string": ""}, fr)
+
+
 def no_held(beat: dict) -> dict:
     """A turn's answer without the lease notices (tasks other sessions hold): for checks about other notices."""
     return {**beat, "notices": [n for n in beat["notices"] if not n["id"].startswith("held-")]}
@@ -876,6 +921,12 @@ def main():
             else:
                 body = json.dumps({"license": {"spdx_id": gh["license"]}}).encode()
             self.send_response(200); self.end_headers(); self.wfile.write(body)
+
+        def do_PUT(self):  # Matrix: /_matrix/client/v3/rooms/<room>/send/m.room.message/<txn>
+            heard.append(json.loads(self.rfile.read(int(self.headers["Content-Length"])))["body"])
+            self.send_response(200); self.end_headers(); self.wfile.write(b"{}")
+    heard = []
+    (tmp / "settings.json").write_text(json.dumps({"needs_per_hour": 0}))  # needs_contract switches it on
     ghs = ThreadingHTTPServer(("127.0.0.1", 0), FakeGitHub)
     thr.Thread(target=ghs.serve_forever, daemon=True).start()
     ghurl = f"http://127.0.0.1:{ghs.server_port}"
@@ -889,7 +940,9 @@ def main():
            "KNOWLEDGE_LANGUAGE": "nl", "KNOWLEDGE_BUILTIN_PROJECTS": "homelab,anpitek,trade",
            "KNOWLEDGE_BIND": "127.0.0.1", "KNOWLEDGE_RESCAN": "3600",
            "KNOWLEDGE_GITHUB_API": ghurl, "KNOWLEDGE_GITHUB_RAW": ghurl + "/raw", "KNOWLEDGE_EXTERNAL_SLEEP": "3600", "KNOWLEDGE_INSTANCE": "blue", "KNOWLEDGE_PLUGIN_GRACE": "0",
-           "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_RERANK_MODEL": "test", "KNOWLEDGE_DUPES_EVERY": "1", "KNOWLEDGE_DUPES_DELAY": "0", "KNOWLEDGE_DUPES_DEBOUNCE": "0", "KNOWLEDGE_WATCH_DEVICE": "laptop", "KNOWLEDGE_TASK_STALLED": "1", "KNOWLEDGE_TASK_LEASE": "600", "KNOWLEDGE_TASK_CHECK": "1", "KNOWLEDGE_RESCAN": "2", "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}"}
+           "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_RERANK_MODEL": "test", "KNOWLEDGE_DUPES_EVERY": "1", "KNOWLEDGE_DUPES_DELAY": "0", "KNOWLEDGE_DUPES_DEBOUNCE": "0", "KNOWLEDGE_WATCH_DEVICE": "laptop", "KNOWLEDGE_TASK_STALLED": "1", "KNOWLEDGE_TASK_LEASE": "600", "KNOWLEDGE_TASK_CHECK": "1", "KNOWLEDGE_RESCAN": "2", "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}",
+           "KNOWLEDGE_MATRIX_URL": ghurl, "KNOWLEDGE_MATRIX_ROOM": "!room:example", "KNOWLEDGE_MATRIX_TOKEN": "mx",
+           "KNOWLEDGE_NEEDS_QUIET": "2", "KNOWLEDGE_PUBLIC_URL": "https://kn.example"}
     proc = subprocess.Popen([sys.executable, str(Path(__file__).with_name("server.py"))], env=env)
     try:
         for _ in range(50):
@@ -1724,6 +1777,7 @@ def main():
         machines_contract(tmp, ck, fr, raw, er, et)
         chats_contract(tmp, ck, fr, raw, er, et)
         board_contract(tmp, ck, fr, raw, er, et)
+        needs_contract(tmp, ck, fr, raw, heard)
         mission_contract(tmp, ck, fr, raw, er)
         # The folder link (.knowledge-project, skill knowledge-init): her token now sees two projects, so the folder picks.
         assert "not linked to a project" in http("GET", "/context/1?project=/home/erin/stuff", token=et)[1]

@@ -3269,7 +3269,8 @@ def stalled_check() -> int:
                 gone.append((project, tid))
             elif t["stalled"] and not w.get("noticed"):
                 notify(f"Knowledge: task {tid} ({project}, for {t['owner']}) was woken on {holder_name(w) or '?'} "
-                       f"{int((time.time() - w.get('at', 0)) // 60)} min ago, but nobody claimed it: {t['text'][:120]}")
+                       f"{int((time.time() - w.get('at', 0)) // 60)} min ago, but nobody claimed it: {t['text'][:120]}"
+                       + (f" {PUBLIC_URL}/ui#/inbox" if PUBLIC_URL else ""))
                 told.append((project, tid))
     if told or gone:
         def change(d):
@@ -3311,6 +3312,11 @@ def stalled_loop():
         except Exception as e:  # never kill the thread; show it on the admin page
             BACKGROUND["tasks"] = {"at": time.time(), "error": f"stalled-task check failed: {e}"}
             print(f"stalled-task check failed: {e}", flush=True)
+        try:
+            needs_check(time.time())
+        except Exception as e:
+            BACKGROUND["needs"] = {"at": time.time(), "error": f"'Needs you' check failed: {e}"}
+            print(BACKGROUND["needs"]["error"], flush=True)
         time.sleep(float(os.environ.get("KNOWLEDGE_TASK_CHECK", 60)))
 
 
@@ -3540,6 +3546,7 @@ SETTINGS = {  # key: (type, min, max, label)
     "user_max_tokens": (int, 0, 50, "People (not admins): device tokens each may hold"),
     "project_max_mb": (int, 1, 1000, "Projects made in the UI: maximum size in MB, then writes are refused"),
     "docs_sync_minutes": (int, 5, 1440, "Guest docs: a session turn asks for a full mirror sync when the last one is older (minutes)"),
+    "needs_per_hour": (int, 0, 60, "Matrix: messages per hour about new 'Needs you' items of the admins (0 = off)"),
 }
 
 
@@ -3548,7 +3555,7 @@ def current_settings() -> dict:
             "review_after_days": kb_lint.REVIEW_AFTER_DAYS,
             "big_memo": kb_lint.BIG_MEMO, "rescan_seconds": RESCAN_SECONDS, "user_max_projects": USER_MAX_PROJECTS,
             "user_max_tokens": USER_MAX_TOKENS, "project_max_mb": PROJECT_MAX_MB,
-            "docs_sync_minutes": DOCS_SYNC_MINUTES, "extra_admins": sorted(ADMINS - CONFIG_ADMINS)}
+            "docs_sync_minutes": DOCS_SYNC_MINUTES, "needs_per_hour": NEEDS_PER_HOUR, "extra_admins": sorted(ADMINS - CONFIG_ADMINS)}
 
 
 def check_settings(values: dict) -> dict:
@@ -3575,7 +3582,8 @@ def check_settings(values: dict) -> dict:
 
 
 def apply_settings(values: dict):
-    global SIMILAR_HINT, HISTORY_KEEP, RESCAN_SECONDS, USER_MAX_PROJECTS, USER_MAX_TOKENS, PROJECT_MAX_MB, DOCS_SYNC_MINUTES
+    global SIMILAR_HINT, HISTORY_KEEP, RESCAN_SECONDS, USER_MAX_PROJECTS, USER_MAX_TOKENS, PROJECT_MAX_MB, DOCS_SYNC_MINUTES, NEEDS_PER_HOUR
+    NEEDS_PER_HOUR = values.get("needs_per_hour", NEEDS_PER_HOUR)
     DOCS_SYNC_MINUTES = values.get("docs_sync_minutes", DOCS_SYNC_MINUTES)
     USER_MAX_PROJECTS = values.get("user_max_projects", USER_MAX_PROJECTS)
     USER_MAX_TOKENS = values.get("user_max_tokens", USER_MAX_TOKENS)
@@ -3643,6 +3651,9 @@ def system_state() -> dict:
             {"name": "External skills", "what": f"compares each skill from GitHub with its source every {EXTERNAL_EVERY // 86400} days",
              "last": BACKGROUND["external"]["at"] if "external" in BACKGROUND else None,
              "detail": (BACKGROUND["external"].get("error") or BACKGROUND["external"]["detail"]) if "external" in BACKGROUND else "not run since this start"},
+            *([{"name": "Needs you", "what": "Matrix message per new 'Needs you' item of an admin (Settings: needs_per_hour)",
+                "last": BACKGROUND["needs"]["at"], "detail": BACKGROUND["needs"].get("error") or BACKGROUND["needs"]["detail"]}]
+              if "needs" in BACKGROUND else []),
             *([{"name": "Settings", "what": "settings.json", "last": BACKGROUND["settings"]["at"], "detail": BACKGROUND["settings"]["error"]}] if "settings" in BACKGROUND else []),
             *([{"name": "Matrix", "what": "tells the admin about projects and tokens people made", "last": BACKGROUND["matrix"]["at"],
                 "detail": BACKGROUND["matrix"].get("error") or BACKGROUND["matrix"]["detail"]}] if "matrix" in BACKGROUND else []),
@@ -4830,6 +4841,7 @@ def board_items() -> list[dict]:
 
 @server.custom_route("/ui/api/board", methods=["GET"])
 async def ui_board(request: Request):
+    BOARD_SEEN[device.get().get("user", "")] = time.time()  # the board is open: no Matrix message for what it shows
     return JSONResponse({"items": await asyncio.to_thread(board_items), "now": time.time()})
 
 
@@ -4852,6 +4864,63 @@ async def ui_board_dismiss(request: Request):
             mine.pop(k)
     await asyncio.to_thread(update_state, BOARD_DISMISSED, change)
     return JSONResponse({"ok": True})
+
+
+# ---------------------------------------------------------------- "Needs you" -> Matrix (admins only: it is their room)
+NEEDS_NOTIFIED = ADMIN_DIR / "needs_notified.json"  # {"items": {board key: sig told or seen}, "sent": [times]}
+NEEDS_PER_HOUR = 6  # admin Settings; 0 = off
+NEEDS_QUIET = float(os.environ.get("KNOWLEDGE_NEEDS_QUIET", 120))  # an admin who polled the board this recently sees it
+BOARD_SEEN: dict[str, float] = {}  # user -> last /ui/api/board poll (this process; a restart only means one message too many)
+
+
+def needs_link(i: dict) -> str:
+    if not PUBLIC_URL:
+        return ""
+    return f" {PUBLIC_URL}/ui#/" + (f"chat/{i['machine']}/{i['id']}" if i["kind"] == "chat" else "inbox")
+
+
+def needs_check(now: float) -> int:
+    """New items under Needs you on an admin's board: one Matrix message each, once per item version (key + sig, as
+    Dismiss), at most NEEDS_PER_HOUR an hour (one summary when more come at once), none while an admin has the board
+    open. The first run (or the first after "off") only notes what is there. Off unless Matrix is configured."""
+    if not all(os.environ.get(k) for k in ("KNOWLEDGE_MATRIX_URL", "KNOWLEDGE_MATRIX_ROOM", "KNOWLEDGE_MATRIX_TOKEN")):
+        return 0
+    if not NEEDS_PER_HOUR:
+        if NEEDS_NOTIFIED.exists():
+            NEEDS_NOTIFIED.unlink()  # switched off: on again starts from what is there then, not a backlog
+        return 0
+    needs, quiet = {}, set()
+    for user in sorted(ADMINS):
+        tok = device.set(user_device(user))
+        try:
+            mine = [i for i in board_items() if i["col"] == "needs"
+                    and not (i["kind"] == "task" and not i.get("approve"))]  # a stalled task has its own notice (stalled_check)
+        finally:
+            device.reset(tok)
+        needs.update((i["key"], i) for i in mine)
+        if now - BOARD_SEEN.get(user, 0) < NEEDS_QUIET:
+            quiet |= {i["key"] for i in mine}
+    state = read_json(NEEDS_NOTIFIED, None)
+    told = (state or {}).get("items", {})
+    sent = [t for t in (state or {}).get("sent", []) if now - t < 3600]
+    new = [i for k, i in needs.items() if told.get(k) != i["sig"]] if state is not None else []
+    fresh = [i for i in new if i["key"] not in quiet]
+    budget, held = NEEDS_PER_HOUR - len(sent), set()
+    if len(fresh) <= budget:
+        for i in fresh:
+            notify(f"Knowledge needs you: {i['title']} ({i.get('label') or i['project']}): {i['line'][:160]}{needs_link(i)}")
+            sent.append(now)
+    elif budget > 0:
+        notify(f"Knowledge: {len(fresh)} new items need you: " + "; ".join(i["title"][:60] for i in fresh[:5])
+               + (" …" if len(fresh) > 5 else "") + (f" {PUBLIC_URL}/ui#/inbox" if PUBLIC_URL else ""))
+        sent.append(now)
+    else:
+        held = {i["key"] for i in fresh}  # over the limit: told once the hour has room
+    items = {k: (told[k] if k in held and k in told else i["sig"]) for k, i in needs.items() if k not in held or k in told}
+    if state is None or items != told or len(sent) != len(state.get("sent", [])):
+        write_json(NEEDS_NOTIFIED, {"items": items, "sent": sent})
+    BACKGROUND["needs"] = {"at": now, "detail": f"{len(needs)} item(s) need an admin, {len(sent)} message(s) this hour"}
+    return len(fresh) if len(fresh) <= budget else int(budget > 0)
 
 
 @server.custom_route("/ui/api/chat", methods=["GET"])
