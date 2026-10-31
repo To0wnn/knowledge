@@ -676,9 +676,8 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
     for name in ("codex", "claude", "agy", "tmux"):
         if WIN:
             if name != "tmux":
-                # chcp first: a new console (how agy is started) reads the rest of this UTF-8 file in the OEM code page
-                (bin_dir / f"{name}.cmd").write_text(f'@chcp 65001 >nul\r\n@"{sys.executable}" "{bin_dir / "fakeagent.py"}" {name} %*\r\n',
-                                                     encoding="utf-8")
+                # %~dp0, not the path: a new or no console (agy, a detached codex exec) reads this file in another code page
+                (bin_dir / f"{name}.cmd").write_text(f'@"{sys.executable}" "%~dp0fakeagent.py" {name} %*\r\n', encoding="utf-8")
         else:
             (bin_dir / name).write_text(f'#!/bin/sh\nexec "{sys.executable}" "{bin_dir / "fakeagent.py"}" {name} "$@"\n', encoding="utf-8")
             (bin_dir / name).chmod(0o755)
@@ -691,7 +690,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
     codex_cfg.parent.mkdir()
     toml = (f'# my codex settings\nmodel = "gpt-5"\napproval_policy = "on-request" # asked\n\n[notice]\nhide_rate_limit_model_nudge = true\n\n'
             f'[projects.{json.dumps(str(project))}]\ntrust_level = "trusted"\n')
-    codex_cfg.write_text(toml, encoding="utf-8")
+    codex_cfg.write_bytes(toml.encode())  # LF, as Codex writes it also on Windows
     agy_dir = home / ".gemini" / "antigravity-cli"
     (agy_dir / "log").mkdir(parents=True)
     agy_settings = {"model": "Gemini", "trustedWorkspaces": [str(home)]}
@@ -708,15 +707,18 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
                 (int(time.time()), "pre_tool_use hook failed; hook_name=work-lint error=exit code 1: private-work-text"))
     con.commit()
     con.close()
-    fake_agy = None
+    fake_agy = fake_codex = None
     if not WIN:  # a process named like agy, ended later: YOLO for agy waits for it
         shutil.copy(shutil.which("sleep"), bin_dir / "knfakeagy")
         fake_agy = subprocess.Popen([str(bin_dir / "knfakeagy"), "300"])
+        shutil.copy(shutil.which("sleep"), bin_dir / "knfakecodex")  # a running Codex: its registered sessions count as open
+        fake_codex = subprocess.Popen([str(bin_dir / "knfakecodex"), "300"])
     port = free_port()
     self_url = f"http://127.0.0.1:{port}"
     env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, PATH=str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
                    KNOWLEDGE_COMPANION_PORT=str(port), KNOWLEDGE_COMPANION_EVERY="3600", KN_FAKE_CALLS=str(calls),
-                   KNOWLEDGE_AGY_PROCESS="knfakeagy" if fake_agy else Path(sys.executable).stem)
+                   KNOWLEDGE_AGY_PROCESS="knfakeagy" if fake_agy else Path(sys.executable).stem,
+                   KNOWLEDGE_CODEX_PROCESS="knfakecodex" if fake_codex else Path(sys.executable).stem)
 
     key_file = home / ".knowledge" / "companion" / "api-key"
 
@@ -795,7 +797,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         check(parsed["approval_policy"] == "never" and parsed["sandbox_mode"] == "danger-full-access" and parsed["notice"]["hide_full_access_warning"] is True
               and parsed["model"] == "gpt-5" and text.startswith("# my codex settings\n"), "companion: YOLO on for Codex edits config.toml minimally", text)
         call("POST", "/local/api/yolo", {"agent": "codex", "on": False})
-        check(codex_cfg.read_text(encoding="utf-8") == toml, "companion: YOLO off restores config.toml byte for byte", codex_cfg.read_text(encoding="utf-8"))
+        check(codex_cfg.read_bytes() == toml.encode(), "companion: YOLO off restores config.toml byte for byte (LF stays LF)", repr(codex_cfg.read_bytes()[:300]))
         call("POST", "/local/api/yolo", {"agent": "claude", "on": True})
         cs = json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8"))
         check(cs["permissions"] == {"allow": ["Bash(ls)"], "defaultMode": "bypassPermissions"} and cs["skipDangerousModePermissionPrompt"] is True,
@@ -924,6 +926,20 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         check(code != 0 and "codex" in err and str(project) in json.loads((agy_dir / "settings.json").read_text(encoding="utf-8"))["trustedWorkspaces"],
               "companion: trust goes on with agy after Codex failed, and says so", out + err)
         Path(str(calls) + ".fail").unlink()
+        # No Codex running: its registered session is closed (codex queue would only wait there), so a new one starts.
+        http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_edit", "arguments":
+             {"path": "garden-memory/project_companion.md", "old_string": "## Keuzes",
+              "new_string": "- open tot 1 jan 2099 [Codex, CMP-CX3] from Claude, start now: third codex task\n## Keuzes"}}},
+             {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})
+        call("POST", "/local/api/settings", {"startWhenNone": {"agy": True, "codex": True}})
+        n = len(recorded())
+        code, out, err = run([sys.executable, str(hooks / "companion.py"), "tick"], "", {**env, "KNOWLEDGE_CODEX_PROCESS": "knnocodex"}, timeout=120)
+        wait_for(lambda: any(c.get("argv", [""])[:2] == ["codex", "exec"] for c in recorded()[n:]), 15)
+        execs = [c["argv"] for c in recorded()[n:] if c.get("argv", [""])[:2] == ["codex", "exec"]]
+        queued = [c for c in recorded()[n:] if c.get("argv", [""])[:2] == ["codex", "queue"]]
+        check(code == 0 and len(execs) == 1 and "CMP-CX3" in execs[0][-1] and str(project) in execs[0] and not queued
+              and "--skip-git-repo-check" in execs[0],
+              "companion: no Codex running: a new codex exec in the project folder, not a queue into a closed session", out[-400:] + err[-400:] + str(execs)[:300])
         # Hook failures the agents log themselves: reported once, marked as agent-log.
         admin = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice"}
         sessions = json.loads(http("GET", "/ui/api/tasks", headers=admin)[1])["sessions"]
@@ -982,6 +998,8 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
               "companion: after a Codex plugin update the hooks are trusted again automatically", json.dumps(codex_state)[:300])
     finally:
         proc.kill()
+        if fake_codex:
+            fake_codex.kill()
         if fake_agy:
             fake_agy.kill()
 
@@ -1035,8 +1053,8 @@ def wake_e2e(tok: str, home: Path, project: Path):
     calls = home / "codex-calls.jsonl"
     (bin_dir / "fakecodex.py").write_text(f"import json, sys\nimport os\nopen({str(calls)!r}, 'a', encoding='utf-8').write(json.dumps(sys.argv[1:] + [os.environ.get('CODEX_HOME', '')]) + '\\n')\n", encoding="utf-8")
     if WIN:
-        # chcp first: a console in the OEM code page (an SSH session, a new console) misreads the UTF-8 path below
-        (bin_dir / "codex.cmd").write_text(f'@chcp 65001 >nul\r\n@"{sys.executable}" "{bin_dir / "fakecodex.py"}" %*\r\n', encoding="utf-8")
+        # %~dp0, not the path: a console in another code page (an SSH session, a new console) misreads a non-ASCII path
+        (bin_dir / "codex.cmd").write_text(f'@"{sys.executable}" "%~dp0fakecodex.py" %*\r\n', encoding="utf-8")
     else:
         (bin_dir / "codex").write_text(f'#!/bin/sh\nexec "{sys.executable}" "{bin_dir / "fakecodex.py"}" "$@"\n', encoding="utf-8")
         (bin_dir / "codex").chmod(0o755)
@@ -1581,8 +1599,15 @@ def companion_setup(tmp: Path):
         code, out, err = run([sys.executable, str(agent), "install-companion"], "", {**real, "KN_FAKE_NOBUS": "1"}, timeout=120)
         check(code == 0 and "no user session for an autostart here" in out and not (home / files[0]).exists(),
               "install-companion without a user systemd: skips the autostart, does not fail", out + err)
+    if WIN:  # an OpenSSH session on a workgroup pc says USERDOMAIN=WORKGROUP, which schtasks cannot map to an account
+        real["USERDOMAIN"] = "WORKGROUP"
     code, out, err = run([sys.executable, str(agent), "install-companion"], "", real, timeout=120)
     calls = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
+    if WIN:
+        me = subprocess.run(["whoami"], capture_output=True, text=True).stdout.strip().lower()
+        xml = (home / files[0]).read_text(encoding="utf-16")
+        check(f"<userid>{me}</userid>" in xml.lower() and "workgroup" not in xml.lower(),
+              "install-companion on windows: the logon task names this account as Windows does, not %USERDOMAIN%", f"{me}\n{xml[:600]}")
     if system != "windows":
         key = (home / ".knowledge" / "companion" / "api-key").read_text(encoding="utf-8").strip()
         link = home / files[1]
