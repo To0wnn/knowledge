@@ -839,8 +839,7 @@ document.addEventListener("keydown", (e) => {
 function selectTab(name) {
   store.set("kn_tab", name); // kept over a reload, like the map
   for (const b of document.querySelectorAll(".tabs button")) b.setAttribute("aria-selected", String(b.dataset.tab === name));
-  for (const t of ["notes", "changes", "tasks", "machines", "lint", "thispc"]) $(`tab-${t}`).hidden = t !== name;
-  if (name === "machines") loadMachines(true);
+  for (const t of ["notes", "changes", "tasks", "lint", "thispc"]) $(`tab-${t}`).hidden = t !== name;
   if (name === "lint") loadLint(true);
   if (name === "thispc") loadThisPc();
   if (name === "tasks") loadTasks(true);
@@ -1012,9 +1011,7 @@ async function loadTasks(render = true) {
   section("Open", open);
   for (const who of [...new Set(back.map((t) => t.owner))].sort()) section(`Results waiting to be read by ${who}`, back.filter((t) => t.owner === who));
   if (!tasks.length) box.append(el("p", "muted", "No open tasks."));
-  const link = el("button", "ghost small", "Machines and workers →");
-  link.onclick = () => selectTab("machines");
-  box.append(link);
+  loadMachines().catch((e) => $("machines").replaceChildren(el("p", "error", `Machines: ${e.message}`)));
 }
 
 // Machines: every pc of the viewer's tokens (an admin sees all) with its agents, workers and recent sessions. The
@@ -1026,16 +1023,15 @@ async function machineAction(m, action, args = {}) {
   try {
     await api("/ui/api/machines/action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: m.id, action, args }) });
   } catch (e) { alert(e.message); }
-  loadMachines(true);
+  loadMachines();
 }
 function machineButton(text, title, onclick) {
   const b = el("button", "ghost small", text); b.type = "button"; b.title = title; b.onclick = onclick; return b;
 }
-async function loadMachines(render = true) {
+// Shown under the tasks in the Tasks tab (the left column is narrow: no tab of its own).
+async function loadMachines() {
   const res = await api("/ui/api/machines");
-  const running = res.machines.reduce((n, m) => n + Object.values(m.agents).reduce((k, a) => k + a.workers.filter((w) => w.status === "running").length, 0), 0);
-  $("machines-count").textContent = running || "";
-  if (!render) return;
+  if (!localMachine) await probeCompanion();
   const tasks = (await api("/ui/api/tasks")).tasks.filter((t) => !t.done && t.startable);
   const box = $("machines"); box.replaceChildren();
   const narrow = matchMedia("(max-width: 720px)").matches;
@@ -1109,7 +1105,7 @@ async function loadMachines(render = true) {
       ctl.append(machineButton("Forget", "Remove this pc from the list (it comes back when it reports again)", async () => {
         if (!confirm(`Forget ${m.label}?`)) return;
         try { await api("/ui/api/machines/forget", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: m.id }) }); } catch (e) { alert(e.message); }
-        loadMachines(true);
+        loadMachines();
       }));
       card.append(ctl);
     }
@@ -1280,6 +1276,5 @@ loadMe().then(loadGraph).catch((e) => {
   if (store.get("kn_map") === "1") setMap(true); // the map stays open over a reload
   const tab = store.get("kn_tab");
   probeCompanion().then((up) => { if (up && tab === "thispc") selectTab("thispc"); });
-  loadMachines(false).catch(() => {});
-  if (["changes", "tasks", "machines", "lint"].includes(tab) && !document.querySelector(`.tabs [data-tab="${tab}"]`).hidden) selectTab(tab); // Lint only for admins
+  if (["changes", "tasks", "lint"].includes(tab) && !document.querySelector(`.tabs [data-tab="${tab}"]`).hidden) selectTab(tab); // Lint only for admins
 });

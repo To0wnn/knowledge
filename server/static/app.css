@@ -390,7 +390,7 @@ button.ghost.danger:hover { border-color: var(--bad); }
 #t-advanced .check { display: flex; margin: 4px 0; }
 #t-skills-why { margin: 2px 0 6px 30px; font-size: 12px; }
 
-/* Machines tab: one card per pc, agents as rows, sessions folded on narrow screens */
+/* Machines (Tasks tab): one card per pc, agents as rows, sessions folded on narrow screens */
 .machine { margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
 .machine.offline { opacity: .75; }
 .machine-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
@@ -407,7 +407,7 @@ button.ghost.danger:hover { border-color: var(--bad); }
 .machine-error { margin: 4px 0; color: var(--bad); font-size: 12px; overflow-wrap: anywhere; }
 .machine-list { margin: 4px 0; padding: 0; list-style: none; font-size: 12.5px; }
 .machine-list li { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 2px 0; overflow-wrap: anywhere; }
-.machine-list li.worker > span:first-child { flex: 1; min-width: 0; }
+.machine-list li.worker > span:first-child { flex: 1 1 100%; min-width: 0; } /* the buttons go under the text in the narrow column */
 .machine-sessions summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 .machine-controls { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
 .machine-controls select { max-width: 100%; font: inherit; font-size: 12px; padding: 2px 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); }
