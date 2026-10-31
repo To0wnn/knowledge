@@ -251,6 +251,22 @@ async def admin(browser, secret: str) -> None:
     f = await pg.evaluate(flags)
     kind = await pg.evaluate("document.querySelector('input[name=\"t-kind\"]:checked')")
     check(kind is None and f["sd"] and "write" in f["why"], f"a hand-changed switch clears the kind and explains skills {f}")
+    # The token screen (filled in the page, no token is made): server address, a setup line per OS, hide asks first.
+    if await pg.locator("#new-token-url").count():
+        await pg.evaluate("showNewToken({name: 'smoke', token: 'not-a-token', url: 'https://kn.example'})")
+        lines = await pg.locator("#new-token-sh").inner_text() + await pg.locator("#new-token-ps").inner_text()
+        check(await pg.locator("#new-token-url").inner_text() == "https://kn.example" and lines.count("KNOWLEDGE_URL='https://kn.example'") == 2,
+              f"token screen: the server address and a ready setup line per OS {lines[:160]}")
+        asked = []
+        pg.once("dialog", lambda d: (asked.append(d.message), asyncio.ensure_future(d.dismiss())))
+        await pg.click("#hide-token")
+        check(asked and await pg.locator("#new-token").is_visible(), f"token screen: 'Done, hide it' asks while nothing was copied {asked}")
+        await pg.evaluate("tokenCopied = true; $('hide-token').click()")
+        check(not await pg.locator("#new-token").is_visible(), "token screen: hides once copied")
+        st = await pg.evaluate("fetch('/setup', {credentials: 'omit'}).then((r) => r.status)")
+        check(st == 200, f"the setup page answers without a sign-in ({st})")
+    else:
+        print("skip token screen checks (server older than the onboarding change)")
     check(not await pg.locator("#error").is_visible(), "admin page shows no error")
     check(not errors, f"no page errors on the admin page {errors[:2]}")
     await ctx.close()

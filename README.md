@@ -325,7 +325,7 @@ and run `./deploy.sh`, which runs the tests, copies `server/` to the Docker host
 
 ## Connect a client
 
-The server's help page (`/ui/help`) has the exact steps per client and OS. In short:
+The server's setup page (`/setup`, readable without signing in, so a new person with only a token can follow it; the same steps as the help page `/ui/help` without the house rules) has the exact steps per client and OS. The admin page shows a new token together with the server address and these lines with `KNOWLEDGE_URL` filled in. In short:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/To0wnn/knowledge/main/install.sh | sh   # Linux, macOS
@@ -365,7 +365,7 @@ auto-update (off under `/plugin` > Marketplaces); Codex and agy have no plugin a
 GitHub at most once a day and updates itself with the agent's own CLI (the setup without a plugin: its git checkout is brought to
 GitHub's main, also after a rewritten history when nothing in it is changed, then the setup runs again;
 `knowledge-agent.py update` does the same by hand). Off: `KNOWLEDGE_AUTO_UPDATE=0`. A new version loads at the next start. Each session start
-reports the plugin version: the admin page shows it per device and agent, and a device still behind the newest
+reports the plugin version (Codex and agy also their last update check and why it failed): the admin page shows it per device and agent, and a device still behind the newest
 version after two days hears how to update by hand (also listed in lint as `plugin_behind`).
 
 Link a project folder to its project once: ask your agent (skill `knowledge-init`), which writes a file

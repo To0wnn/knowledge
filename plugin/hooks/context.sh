@@ -35,12 +35,12 @@ if [ "$code" = 200 ]; then
     [ "$part" = 1 ] && [ -s "$cache/last-sync.log" ] && { echo; sh "$(dirname "$0")/py.sh" "$(dirname "$0")/memory_mirror.py" notice; echo; }
 elif [ "$part" = 1 ] && [ "$code" = 401 ]; then
     echo "knowledge server: token invalid or revoked (keyring or plugin setting 'token'). Shared memory and docs were not loaded."
-elif [ "$part" = 1 ] && [ "$code" = 403 ]; then
-    echo "knowledge server: only reachable from the home network or WireGuard. Shared memory and docs were not loaded."
 elif [ -f "$cache/.state.json" ] && { [ "$code" = 000 ] || [ "${code#5}" != "$code" ]; }; then  # down, not refused
     sh "$(dirname "$0")/py.sh" "$(dirname "$0")/memory_mirror.py" offline "$key" "$part"
 elif [ "$part" = 1 ]; then
-    echo "knowledge server ($url) unreachable (HTTP $code): shared memory and docs were not loaded for this session."
+    # the same words as token_store.unreachable()
+    [ "$code" = 000 ] && reason="no connection" || reason="HTTP $code"
+    echo "knowledge server: cannot reach $url: $reason; check the address and your connection. Shared memory and docs were not loaded."
 fi
 rm -f /tmp/knowledge-context.$$
 exit 0

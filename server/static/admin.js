@@ -73,7 +73,9 @@ function skillsCell(t) {
 
 // "behind" when older than the newest; "default URL" when the device names no server (that default will go);
 // plugins before 0.10.7 do not say, so they cannot count as safe yet.
-const pluginText = (p) => `${p.v}${p.behind ? " (behind)" : ""}${p.default_url ? " · default URL" : p.default_url === null ? " · URL not reported" : ""}`;
+// Codex and agy also report their own daily update check, so a device stuck behind says why.
+const pluginText = (p) => `${p.v}${p.behind ? " · behind" : ""}${p.checked ? ` · last check ${ago(p.checked)}` : ""}`
+  + `${p.update_error ? ` · update failed: ${p.update_error}` : ""}${p.default_url ? " · default URL" : p.default_url === null ? " · URL not reported" : ""}`;
 
 // The plugin version per agent this token reported at its last session start.
 function pluginCell(t, open) {
@@ -83,7 +85,7 @@ function pluginCell(t, open) {
   if (!rest.length) { td.textContent = "–"; return td; }
   rest.forEach((p, i) => {
     if (i) td.append(el("br"));
-    const v = el("span", p.behind ? "plugin-v unused" : "plugin-v", `${p.agent} ${pluginText(p)}`);
+    const v = el("span", p.behind || p.update_error ? "plugin-v unused" : "plugin-v", `${p.agent} ${pluginText(p)}`);
     v.title = `session start ${ago(p.at)}`;  // the time is in Last used and the client rows; here it only wrapped
     td.append(v);
   });
@@ -351,8 +353,15 @@ function showNewToken(res) {
   const label = `KNOWLEDGE_TOKEN_${res.name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
   $("new-token-setup").textContent = ["read -rs TOKEN", `printf %s "$TOKEN" | secret set ${label}`].join("\n");
   $("new-token-agent").textContent = `/usr/bin/python3 ~/knowledge/clients/knowledge-agent.py install codex ${label}`;
+  // The setup asks for the server address; with KNOWLEDGE_URL set it offers this one (install.sh/.ps1 pass the env on).
+  const url = res.url || location.origin, raw = "https://raw.githubusercontent.com/To0wnn/knowledge/main";
+  $("new-token-url").textContent = url;
+  $("new-token-sh").textContent = `curl -fsSL ${raw}/install.sh | KNOWLEDGE_URL='${url}' sh`;
+  $("new-token-ps").textContent = `$env:KNOWLEDGE_URL='${url}'; irm ${raw}/install.ps1 | iex`;
+  tokenCopied = false;
   $("new-token").hidden = false;
   $("copy-token").textContent = "Copy token";
+  document.querySelectorAll(".copy-line").forEach((b) => (b.textContent = "Copy"));
   $("new-token").scrollIntoView({ block: "center" });
 }
 
@@ -369,11 +378,18 @@ $("token-form").onsubmit = (e) => {
     });
   }, button).then(() => { if (res) { e.target.reset(); applyKind(); $("new-token-box").open = false; showNewToken(res); } }); // shown once: even if the reload after it failed
 };
-$("copy-token").onclick = async () => {
-  try { await navigator.clipboard.writeText($("new-token-value").textContent); $("copy-token").textContent = "Copied"; }
-  catch { getSelection().selectAllChildren($("new-token-value")); } // no clipboard access: select it for Ctrl+C
+let tokenCopied = false; // "Done, hide it" asks first while the token was never copied: it is shown only once
+async function copyFrom(src, button) {
+  try { await navigator.clipboard.writeText(src.textContent); button.textContent = "Copied"; return true; }
+  catch { getSelection().selectAllChildren(src); button.textContent = "Selected: press Ctrl+C"; return false; } // no clipboard access
+}
+$("copy-token").onclick = async () => { tokenCopied = await copyFrom($("new-token-value"), $("copy-token")) || tokenCopied; };
+document.addEventListener("copy", () => { if (getSelection().toString().includes($("new-token-value").textContent || "\0")) tokenCopied = true; });
+document.querySelectorAll(".copy-line").forEach((b) => (b.onclick = () => copyFrom($(b.dataset.src), b)));
+$("hide-token").onclick = () => {
+  if (!tokenCopied && !confirm("The token was not copied, and it is not shown again. Hide it anyway?")) return;
+  $("new-token").hidden = true; $("new-token-value").textContent = ""; $("new-token-setup").textContent = "";
 };
-$("hide-token").onclick = () => { $("new-token").hidden = true; $("new-token-value").textContent = ""; $("new-token-setup").textContent = ""; };
 
 // "What is this token for?" sets the switches under Fine-tune; changing a switch there by hand clears the choice.
 const KINDS = { own: { write: true, redact: false, skills: true, all: true }, guest: { write: true, redact: true, skills: false, all: false },
