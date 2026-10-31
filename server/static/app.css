@@ -133,6 +133,8 @@ dialog h2 { margin: 0 0 4px; font-size: 17px; }
 .hits li button:hover { background: var(--hover); }
 .hits li.task { display: flex; align-items: flex-start; gap: 4px; }
 .hits li.task > button.small { width: auto; flex: none; margin-top: 6px; }
+.hits li.task.waiting > :first-child { opacity: 0.6; } /* may not start yet: the line says why */
+.hits .hit-text.warn { color: var(--g-incident); }
 .hits li.session { display: grid; padding: 7px 8px; }
 .badge.warn { background: var(--g-incident); color: var(--panel); }
 .hit-path { display: block; font-size: 12px; color: var(--accent); }

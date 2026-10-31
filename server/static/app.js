@@ -930,10 +930,24 @@ async function loadTasks(render = true) {
   const box = $("tasks"); box.replaceChildren();
   const row = (t) => {
     const n = byId.get(t.path), li = hitItem(`${t.id} · ${t.owner}`, t.text, () => openNote(t.path, { find: [t.id.toLowerCase()] }));
-    const meta = el("span", "hit-text", [t.due && `due ${t.due}`, t.claimed && "claimed", n ? n.label : t.path.split("/").pop(),
+    const meta = el("span", "hit-text", [t.done ? "" : `${t.from || "?"} → ${t.owner}`, t.done ? "" : `start ${t.start}`,
+      t.due && `due ${t.due}`, t.claimed && "claimed", t.waiting_reason, n ? n.label : t.path.split("/").pop(),
       allMode() ? t.project : ""].filter(Boolean).join(" · "));
+    if (t.legacy) meta.prepend(el("span", "badge", "legacy"), " ");
+    if (t.stalled) meta.prepend(el("span", "new", "stalled"), " ");
     if (t.overdue) meta.prepend(el("span", "new", "overdue"), " ");
-    li.className = "task"; li.firstChild.append(meta); li.firstChild.title = t.line;
+    li.className = t.waiting_reason ? "task waiting" : "task"; li.firstChild.append(meta);
+    li.firstChild.title = t.line + (t.legacy ? "\nLegacy line: no from/start, so it may start now." : "") +
+      (t.author ? `\nWritten by ${t.author}` : "") + (t.stalled ? "\nWoken, but nobody claimed it within 30 minutes." : "");
+    if (t.can_approve) {
+      const ok = el("button", "ghost small", "Approve");
+      ok.title = "Let this task start (it waits for the project owner's or an admin's approval)";
+      ok.onclick = async () => {
+        try { await api("/ui/api/task/approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project: t.project, id: t.id }) }); loadTasks(true); }
+        catch (e) { alert(e.message); }
+      };
+      li.append(ok);
+    }
     if (me.writable?.includes(t.project)) {
       const done = el("button", "ghost small", "Done");
       done.title = "Remove this line from the memo (its history keeps it)";
@@ -962,6 +976,13 @@ async function loadTasks(render = true) {
       const li = el("li", "session");
       li.append(el("span", "hit-path", `${c.agent} · ${c.device}`),
         el("span", "hit-text", [c.wake ? "can be woken" : "not wakeable", c.plugin && `plugin ${c.plugin}`, ago(c.at), allMode() ? c.project : ""].filter(Boolean).join(" · ")));
+      const errs = c.errors || [];
+      if (errs.length) {  // hook failures the device reported (our hooks, or read from the agent's own log)
+        const last = errs[errs.length - 1], e = el("span", "hit-text warn",
+          `${errs.length} hook error${errs.length === 1 ? "" : "s"} · last: ${last.hook || last.event} ${last.code ?? ""} ${ago(last.at)}`);
+        e.title = errs.map((x) => `${new Date(x.at * 1000).toLocaleString()} ${x.source} ${x.hook} ${x.event} ${x.code ?? ""}\n${x.stderr}`).join("\n\n");
+        li.append(e);
+      }
       ol.append(li);
     }
     box.append(el("h3", null, `Agent sessions (${sessions.length})`), ol);
