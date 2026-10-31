@@ -22,22 +22,22 @@
 .wrap :not(pre) > code { background: var(--hover); padding: 1px 5px; border-radius: 4px; font-size: .88em; }
 .wrap a { color: var(--accent); }
 .client-tabs { position: sticky; top: 0; z-index: 5; display: flex; gap: 4px; flex-wrap: wrap; align-items: center;
-  background: var(--bg); padding: 10px 0; margin-top: 28px; border-bottom: 1px solid var(--line); }
-.client-tabs > button { padding: 6px 12px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 14px; }
-.client-tabs > button[aria-selected="true"] { background: var(--hover); color: var(--ink); font-weight: 600; }
+  background: color-mix(in srgb, var(--canvas) 80%, transparent); backdrop-filter: blur(14px); padding: 10px 0; margin-top: 28px; border-bottom: 1px solid var(--line); }
+.client-tabs > button { padding: 6px 14px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: var(--muted); font-size: 14px; }
+.client-tabs > button[aria-selected="true"] { background: var(--panel-hi); border-color: var(--line-hi); color: var(--ink); font-weight: 600; box-shadow: var(--shadow); }
 .osbar { display: flex; gap: 10px; align-items: center; margin-top: 18px; color: var(--muted); font-size: 14px; }
 ol.steps { list-style: none; counter-reset: s; padding: 0; margin: 16px 0 0; display: grid; gap: 18px; }
 ol.steps > li { counter-increment: s; position: relative; padding-left: 38px; min-width: 0; }
 ol.steps > li::before { content: counter(s); position: absolute; left: 0; top: 1px; width: 24px; height: 24px; border-radius: 50%;
   display: grid; place-items: center; font: 600 12px var(--mono); background: var(--hover); color: var(--accent); }
 ol.steps > li > b { display: block; }
-.cmd { position: relative; margin-top: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; min-width: 0; }
+.cmd { position: relative; margin-top: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); min-width: 0; }
 .cmd pre { margin: 0; padding: 10px 76px 10px 12px; overflow-x: auto; font: 13px/1.55 var(--mono); white-space: pre; }
-.copy { position: absolute; top: 7px; right: 7px; padding: 3px 9px; font-size: 12px; color: var(--ink); background: var(--bg);
-  border: 1px solid var(--line); border-radius: 6px; }
+.copy { position: absolute; top: 7px; right: 7px; padding: 3px 9px; font-size: 12px; color: var(--ink); background: var(--panel-hi);
+  border: 1px solid var(--line-hi); border-radius: 999px; }
 .copy:hover { background: var(--hover); }
 .note { margin-top: 12px; padding: 10px 14px; border: 1px solid color-mix(in srgb, var(--g-feedback) 45%, var(--line));
-  background: color-mix(in srgb, var(--g-feedback) 10%, var(--panel)); border-radius: 8px; font-size: 14px; }
+  background: color-mix(in srgb, var(--g-feedback) 10%, var(--panel)); border-radius: var(--r-md); font-size: 14px; }
 .wrap .table-wrap { margin-top: 14px; }
 .wrap table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
 .wrap th, .wrap td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }

@@ -362,6 +362,11 @@ def main():
     tab = (Path(__file__).parent / "static" / "thispc.css").read_text()
     assert tab.endswith(re.sub(r"\.cmp(?![-\w])", "#tab-thispc", comp)), "thispc.css drifted from companion.css"
     assert not re.search(r"\.cmp(?![-\w])", tab.split("*/", 1)[1]), "thispc.css: a rule outside #tab-thispc"
+    # The web UI and the companion share one token set, kept as two copies (light, dark, forced dark): same values.
+    decls = lambda css: re.findall(r"--[\w-]+:\s*[^;]+;", css)
+    app_css = (Path(__file__).parent / "static" / "app.css").read_text()
+    shared = app_css.split("SHARED TOKENS START */")[1].split("/* SHARED TOKENS END */")[0]
+    assert decls(shared) == decls(comp.split(".cmp *, ")[0]) != [], "app.css shared tokens drifted from companion.css"
     tmp = Path(tempfile.mkdtemp())
     mem, lab, cla = tmp / "memory", tmp / "homelab", tmp / "claude"
     for d in (mem, lab, cla / "skills/x"):
