@@ -55,7 +55,7 @@ def git(cwd, *args, env=None, check=False) -> subprocess.CompletedProcess:
                           env={**base, **(env or {})}, check=check, stdin=subprocess.DEVNULL, timeout=60)
 
 
-def worktree(folder: str, tid: str) -> dict:
+def worktree(folder: str, tid: str, project: str = "") -> dict:
     """Where a worker for task `tid` works: {cwd, worktree, branch, repo, base} with its own worktree on branch
     task/<base ID> when the project folder is in a git repository (an existing one is reused: a hand-over goes on
     there), else {cwd: folder}."""
@@ -63,8 +63,10 @@ def worktree(folder: str, tid: str) -> dict:
     if top.returncode or not shutil.which("git"):
         return {"cwd": folder}
     repo, bid = Path(top.stdout.strip()), base_id(tid)
-    # the repository's own hash in the name: two checkouts called "app" with a task KN-1 each never share a worktree
-    tag = hashlib.sha256(str(repo.resolve()).encode()).hexdigest()[:6]
+    # the repository's and project's hash in the name: two checkouts called "app" with a task KN-1 each never share a
+    # worktree; two projects in one repository with the same ID get two worktrees, and git refuses the second one's
+    # branch (checked out already) instead of letting both commit on it
+    tag = hashlib.sha256(f"{repo.resolve()}\n{project}".encode()).hexdigest()[:6]
     branch, wt = f"task/{safe(bid)}", WORKTREES / f"{safe(repo.name)}-{tag}-{safe(bid)}"
     if not (wt / ".git").exists():
         WORKTREES.mkdir(parents=True, exist_ok=True)
@@ -265,10 +267,16 @@ def start(agent: str, task: dict, machine: str, where: dict, yolo: bool, nonce: 
                     + f". It runs headless: follow its output with {follow}; when it is done, look at the branch with git log." + note}
 
 
+def stop_path(w: dict) -> Path:
+    """The stop note of one worker: named by its start nonce, so a worker of another project with the same task id
+    never reads it (watch.py finds it by KNOWLEDGE_START_NONCE)."""
+    return DIR / f"{safe(w['nonce'])}.stop"
+
+
 def stop_note(w: dict, target: str) -> Path:
     """Tell a running worker to hand over (its watch hook reads this after its next tool call)."""
     DIR.mkdir(parents=True, exist_ok=True)
-    f = DIR / f"{safe(w['id'])}.stop"
+    f = stop_path(w)
     f.write_text(f"knowledge: the usage limit of this agent is at 90%. Stop now: commit what you have on {w.get('branch') or 'your folder'}, "
                  f"replace the task line with the hand-over line for {target} (rule 4 of your task: "
                  f"'[{target}, {base_id(w['id'])}-cont] ... done: ...; left: ...'), then end. You will be stopped in "

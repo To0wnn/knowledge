@@ -800,7 +800,7 @@ def start_worker(t: dict, tok: str, now: float, ws: dict = None) -> tuple:
     if held := claim(t, tok, worker_session(t["id"]), nonce):
         return None, f"Held by {held}"
     try:
-        where = workers.worktree(project_folders()[t["project"]], t["id"])
+        where = workers.worktree(project_folders()[t["project"]], t["id"], t["project"])
         # a hand-over goes on in the worktree of the first session: its branch counts from where that one started, so
         # a branch rolled back to that point is never taken for merged
         first = min((w for w in (ws or {}).values() if where.get("worktree") and w.get("worktree") == where["worktree"] and w.get("base")),
@@ -828,7 +828,7 @@ def check_workers(ws: dict, tok: str, now: float, lim: dict):
                 workers.PROCS.pop(w["pid"], None)
                 w.update(status="stopped" if w.get("told") else "finished" if code == 0 else "failed", ended=now, code=code)
                 release(w, tok)  # a line it claimed but left open may start again at once (the server's idle notice)
-                (workers.DIR / f"{workers.safe(w['id'])}.stop").unlink(missing_ok=True)
+                workers.stop_path(w).unlink(missing_ok=True)
                 log("worker", f"{AGENTS[w['agent']][0]}: the worker for {w['id']} ended ({w['status']})", w.get("open", ""))
                 continue
             try:  # a turn longer than the lease must not let another pc start the same task
@@ -966,7 +966,8 @@ def run_action(a: dict) -> str:
         raise RuntimeError(out["waiting"].get(f"{args['project']}/{args['id']}") or f"{args['id']} is not ready for this pc")
     if act == "stop_worker":
         with LOCK:
-            w = next((w for w in load("workers.json", {}).values() if w["id"] == args["id"] and w["status"] == "running"), None)
+            w = load("workers.json", {}).get(f"{args.get('project')}/{args['id']}")
+        w = w if w and w["status"] == "running" else None
         if not w:
             raise RuntimeError(f"no running worker for {args['id']}")
         workers.kill(w)
@@ -974,7 +975,7 @@ def run_action(a: dict) -> str:
     if act == "rollback":
         with LOCK:
             ws = load("workers.json", {})
-        w = next((w for w in ws.values() if w["id"] == args["id"]), None)
+        w = ws.get(f"{args.get('project')}/{args['id']}")
         if not w or w["status"] == "running" or not w.get("branch"):
             raise RuntimeError(f"no finished worker with a worktree for {args['id']}")
         if shared_running(ws, w):
@@ -1320,7 +1321,7 @@ def main(argv: list):
         # A failed start gives the task back at once.
         did = []
         g.update(claim=lambda t, tok, s, start="": did.append(("claim", s)) or "", release=lambda t, tok: did.append(("release",)))
-        g["workers"] = type("W", (), {"worktree": staticmethod(lambda f, i: (_ for _ in ()).throw(OSError("no git"))), "start": None})
+        g["workers"] = type("W", (), {"worktree": staticmethod(lambda f, i, p: (_ for _ in ()).throw(OSError("no git"))), "start": None})
         try:
             start_worker(task, "", 1000)
             raise AssertionError("a failed start must raise")
@@ -1328,7 +1329,7 @@ def main(argv: list):
             pass
         assert did[0][0] == "claim" and did[0][1].startswith("worker:") and did[1:] == [("release",)], did
         # A hand-over in the first session's worktree keeps that session's base; only the newest session rolls back.
-        g["workers"] = type("W", (), {"worktree": staticmethod(lambda f, i: {"cwd": "/wt", "worktree": "/wt", "branch": "task/T-1", "base": "Y"}),
+        g["workers"] = type("W", (), {"worktree": staticmethod(lambda f, i, p: {"cwd": "/wt", "worktree": "/wt", "branch": "task/T-1", "base": "Y"}),
                                       "start": staticmethod(lambda a, t, m, where, y, n: {"id": t["id"], **where})})
         first = {"id": "T-1", "worktree": "/wt", "base": "X", "started": 1, "status": "finished", "branch": "task/T-1", "cwd": "/wt"}
         rec, _ = start_worker({**task, "id": "T-1-cont"}, "", 1000, {"p/T-1": first})
@@ -1338,7 +1339,7 @@ def main(argv: list):
             g["STATE"] = Path(tmp)
             save("workers.json", {"p/T-1": first, "p/T-1-cont": {**rec, "started": 2, "status": "finished"}})
             try:
-                run_action({"action": "rollback", "args": {"id": "T-1"}})
+                run_action({"action": "rollback", "args": {"project": "p", "id": "T-1"}})
                 raise AssertionError("an older session's rollback would drop the hand-over's commits")
             except RuntimeError as e:
                 assert "roll back T-1-cont instead" in str(e), e

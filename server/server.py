@@ -4433,12 +4433,10 @@ def action_args(action: str, args: dict) -> dict:
         if not re.fullmatch(r"[\w.-]{1,60}", str(args.get("id", ""))):
             raise ValueError("id must be a task id")
         return str(args["id"])
-    if action == "start_worker":
+    if action in ("start_worker", "stop_worker", "rollback"):  # a task id is unique per project only
         if args.get("project") not in PROJECTS or not in_scope(PROJECTS[args["project"]][1] + "/"):
             raise ValueError("unknown project")
         return {"project": args["project"], "id": tid()}
-    if action in ("stop_worker", "rollback"):
-        return {"id": tid()}
     if action == "trust_hooks":
         return {"agent": agent()}
     if action == "update_plugin":

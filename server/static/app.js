@@ -1067,9 +1067,9 @@ async function loadMachines() {
         li.append(el("span", null, `${AGENT_NAME[a] || a} · ${w.id} · ${w.status === "running" ? `running ${mins(w.started)}` : `${w.status} ${ago(w.ended || w.started)}`}`));
         if (w.yolo) li.append(el("span", "pill yolo", "YOLO"));
         li.append(machineButton("open", "How to look at this worker", () => alert(w.open || "No details yet.")));
-        if (m.own && w.status === "running") li.append(machineButton("stop", "Stop this worker", () => confirm(`Stop the worker on ${w.id}?`) && machineAction(m, "stop_worker", { id: w.id })));
+        if (m.own && w.status === "running") li.append(machineButton("stop", "Stop this worker", () => confirm(`Stop the worker on ${w.id}?`) && machineAction(m, "stop_worker", { project: w.project, id: w.id })));
         if (m.own && w.status !== "running" && w.checkpoint) li.append(machineButton("roll back", "Put its worktree back as it was before its last turn (a checkpoint of now is kept)",
-          () => confirm(`Roll ${w.id} back to before its last turn?`) && machineAction(m, "rollback", { id: w.id })));
+          () => confirm(`Roll ${w.id} back to before its last turn?`) && machineAction(m, "rollback", { project: w.project, id: w.id })));
         ws.append(li);
       }
       if (ag.workers.length) row.append(ws);

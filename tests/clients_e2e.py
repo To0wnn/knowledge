@@ -911,7 +911,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         got = {c["env"]["KNOWLEDGE_WORKER"]: c for c in argvs(n)}
         cx_id = next((i for i in ("CMP-CODEX", "CMP-CX2") if i in got), "")
         cx = got.get(cx_id, {"argv": [], "cwd": ""})
-        tag = hashlib.sha256(str(repo.resolve()).encode()).hexdigest()[:6]  # the repository's own hash: no two repos share one
+        tag = hashlib.sha256(f"{repo.resolve()}\ngarden".encode()).hexdigest()[:6]  # repository and project: no two share one
         wt = home / ".knowledge" / "worktrees" / f"Garden-repo-{tag}-{cx_id}"
         check(cx["argv"][:2] == ["codex", "exec"] and "workspace-write" in cx["argv"] and "--json" in cx["argv"] and cx["argv"][cx["argv"].index("--cd") + 1] == str(wt)
               and Path(cx["cwd"]).resolve() == wt.resolve() and cx_id in cx["argv"][-1] and f"task/{cx_id}" in cx["argv"][-1]
@@ -963,16 +963,20 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         write_rollout(95.0)
         n = len(recorded())
         st, _, body = call("POST", "/local/api/tick", {})
-        stop = home / ".knowledge" / "companion" / "workers" / f"{cx_id}.stop"
+        cx_nonce = json.loads((home / ".knowledge" / "companion" / "workers.json").read_text(encoding="utf-8"))[f"garden/{cx_id}"]["nonce"]
+        stop = home / ".knowledge" / "companion" / "workers" / f"{cx_nonce}.stop"  # by its start nonce: never a namesake's
         check(not argvs(n) and json.loads(body)["waiting"].get("garden/CMP-CX3", "").startswith("waiting for limit") and stop.exists()
               and "for Claude" in stop.read_text(encoding="utf-8"),
               "limit 90%: no new worker, a running one is told to hand over to an agent with room", body[:500])
         code, out_w, err = run([sys.executable, str(hooks / "watch.py"), "codex"], json.dumps({"session_id": "w", "cwd": str(wt), "tool_name": "Bash",
-                               "tool_input": {"command": "ls"}}), {**env, "KNOWLEDGE_WORKER": cx_id})
+                               "tool_input": {"command": "ls"}}), {**env, "KNOWLEDGE_WORKER": cx_id, "KNOWLEDGE_START_NONCE": cx_nonce})
         said = json.loads(out_w)["hookSpecificOutput"]["additionalContext"] if out_w.strip().startswith('{"hook') else ""
         check(f"{cx_id}-cont" in said and "left:" in said, "limit 90%: the worker hears it after its next tool call (Claude, Codex: additionalContext)", out_w[:400])
+        code, out_w, err = run([sys.executable, str(hooks / "watch.py"), "codex"], json.dumps({"session_id": "w2", "cwd": str(wt), "tool_name": "Bash",
+                               "tool_input": {"command": "ls"}}), {**env, "KNOWLEDGE_WORKER": cx_id, "KNOWLEDGE_START_NONCE": "another-project"})
+        check(out_w.strip() == "{}", "limit 90%: a worker of another project with the same task id does not read that stop note", out_w[:300])
         code, out_w, err = run([sys.executable, str(hooks / "watch.py"), "agy"], json.dumps({"conversationId": "w", "workspacePaths": [str(wt)]}),
-                               {**env, "KNOWLEDGE_WORKER": cx_id})
+                               {**env, "KNOWLEDGE_WORKER": cx_id, "KNOWLEDGE_START_NONCE": cx_nonce})
         check(out_w.strip() == "{}" and "-cont" in (home / ".knowledge" / "pending-hints.txt").read_text(encoding="utf-8"),
               "limit 90%: agy's PostToolUse answers {} and the note waits for its next turn (PostInvocation)", out_w)
         check("CMP-CX3" in json.loads((tmp / "machines.json").read_text(encoding="utf-8")).get(mid, {}).get("limit_told", []),
@@ -1011,7 +1015,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         ui = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice", "X-Knowledge-UI": "1"}
         act = lambda action, args: http("POST", "/ui/api/machines/action", {"machine": mid, "action": action, "args": args}, ui)
         done = lambda: [a for a in next((r for r in machines() if r["id"] == mid), {}).get("actions", [])]
-        act("stop_worker", {"id": "CMP-GEMINI"})
+        act("stop_worker", {"project": "garden", "id": "CMP-GEMINI"})
         act("yolo", {"agent": "claude", "on": True, "confirm": "YOLO"})
         act("workers_allowed", {"on": False})
         wait_for(lambda: all(a["status"] in ("done", "failed") for a in done()), 30)
@@ -1033,7 +1037,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         check(before and count() == str(int(before) + 1), "workers: each turn of a YOLO worker adds a checkpoint (here agy's turn hook)", f"{before} -> {count()}")
         (gwt / "README.md").write_text("broken by a turn\n", encoding="utf-8")
         (gwt / "junk.txt").write_text("junk\n", encoding="utf-8")
-        act("rollback", {"id": "CMP-GEMINI"})
+        act("rollback", {"project": "garden", "id": "CMP-GEMINI"})
         wait_for(lambda: done()[-1]["status"] != "waiting" and done()[-1]["status"] != "running", 20)
         check(done()[-1]["status"] == "done" and (gwt / "README.md").read_text(encoding="utf-8") == "garden\n" and not (gwt / "junk.txt").exists(),
               "remote: roll back puts a YOLO worker's worktree back as before its turn", json.dumps(done()[-1]))

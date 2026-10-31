@@ -102,8 +102,8 @@ def main(agent: str):
         for kind, detail in risky(text, cwd):
             flag(agent, sid, kind, detail)
     note = ""
-    if worker:
-        stop = KN_HOME / "companion" / "workers" / (re.sub(r"[^\w.-]", "-", worker)[:60] + ".stop")
+    if worker and (nonce := os.environ.get("KNOWLEDGE_START_NONCE", "")):  # its own note, not one of a namesake task
+        stop = KN_HOME / "companion" / "workers" / (re.sub(r"[^\w.-]", "-", nonce)[:60] + ".stop")
         try:
             note = stop.read_text(encoding="utf-8")
         except OSError:
