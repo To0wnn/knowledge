@@ -1204,7 +1204,7 @@ async def knowledge_delete(path: str, base_version: str) -> str:
         data = full.read_bytes()
         if base_version != version(data):
             raise ToolError(f"{rel} changed since you read it (now {version(data)}); read it again first")
-        keep = AUDIT.parent / "deleted" / f"{time.strftime('%Y%m%d-%H%M%S')}_{rel.replace('/', '__')}"
+        keep = TRASH / f"{time.strftime('%Y%m%d-%H%M%S')}_{rel.replace('/', '__')}"
         keep.parent.mkdir(parents=True, exist_ok=True)
         keep.write_bytes(data)
         full.unlink()
@@ -3825,7 +3825,7 @@ def external_write(rel: str, text: str):
 def external_delete(rel: str):
     full, rel = resolve(rel, scoped=False)
     if full.is_file():
-        keep = AUDIT.parent / "deleted" / f"{time.strftime('%Y%m%d-%H%M%S')}_{rel.replace('/', '__')}"
+        keep = TRASH / f"{time.strftime('%Y%m%d-%H%M%S')}_{rel.replace('/', '__')}"
         keep.parent.mkdir(parents=True, exist_ok=True)
         keep.write_bytes(full.read_bytes())
         full.unlink()
@@ -5610,6 +5610,76 @@ async def ui_task_done(request: Request):
     except (ToolError, OSError, ValueError, AttributeError) as e:  # a bad body or a gone file: no 500
         return JSONResponse({"error": str(e)}, status_code=409)
     return JSONResponse({"ok": True})
+
+
+# ---------------------------------------------------------------- Trash: the copies knowledge_delete keeps
+TRASH = AUDIT.parent / "deleted"
+TRASH_NAME = re.compile(r"(\d{8}-\d{6})_([^/\\]+)")
+
+
+def trash_rel(name: str) -> str:
+    """The shared path a delete copy came from: "20261101-120000_memory__archive__x.md" -> "memory/archive/x.md". A
+    "__" stays in the name where no folder of that name exists ("memory/a__b.md"). "" for anything else."""
+    m = TRASH_NAME.fullmatch(name)
+    parts = m.group(2).split("__") if m else []
+    if len(parts) < 2 or parts[0] not in ROOTS:
+        return ""
+    sub = parts[1]
+    for p in parts[2:]:
+        sub += ("/" if (ROOTS[parts[0]] / sub).is_dir() else "__") + p
+    return f"{parts[0]}/{sub}"
+
+
+def may_restore(rel: str) -> bool:
+    """Owner or admin only: an admin anything, a project's owner the files of their own project."""
+    return bool(device.get().get("admin")) or bool(project := project_of(rel)) and may_approve(project)
+
+
+def trash_rows() -> list[dict]:
+    """The deleted memos and docs this person sees, newest first: name (the restore key), path, when, size, whether a
+    file is at that path again, and whether this person may restore it."""
+    rows = []
+    for f in sorted(TRASH.iterdir(), reverse=True) if TRASH.is_dir() else []:
+        if not (rel := trash_rel(f.name)) or not in_scope(rel):
+            continue
+        try:
+            exists, size = resolve(rel)[0].exists(), f.stat().st_size
+        except (ToolError, OSError):
+            continue
+        at = time.mktime(time.strptime(f.name[:15], "%Y%m%d-%H%M%S"))
+        rows.append({"name": f.name, "path": rel, "project": project_of(rel), "deleted": at, "size": size, "exists": exists,
+                     "can_restore": not exists and may_restore(rel)})
+    return rows[:500]
+
+
+@server.custom_route("/ui/api/trash", methods=["GET"])
+async def ui_trash(request: Request):
+    return JSONResponse({"items": await asyncio.to_thread(trash_rows)})
+
+
+@server.custom_route("/ui/api/trash/restore", methods=["POST"])
+async def ui_trash_restore(request: Request):
+    """{"name"}: put a deleted file back where it was, as it was; never over a file that is there again."""
+    try:
+        name = str((await request.json()).get("name", ""))
+    except (ValueError, AttributeError):
+        return JSONResponse({"error": "send JSON {name}"}, status_code=400)
+    src = TRASH / name
+    if not (rel := trash_rel(name)) or not in_scope(rel) or not src.is_file():
+        return JSONResponse({"error": f"no deleted file {name}"}, status_code=404)
+    if not may_restore(rel):
+        return JSONResponse({"error": "only the project's owner or an admin may restore a file"}, status_code=403)
+    try:
+        full, rel = resolve(rel)
+        check_writable(rel)
+        async with _locks.setdefault(rel, asyncio.Lock()):
+            if full.exists() or not replace_if_unchanged(full, None, src.read_bytes()):
+                return JSONResponse({"error": f"{rel} exists again: restoring would overwrite it; open both and merge by hand"}, status_code=409)
+            index.refresh(rel)
+    except (ToolError, OSError) as e:
+        return JSONResponse({"error": str(e)}, status_code=409)
+    audit("restore", rel)
+    return JSONResponse({"ok": True, "path": rel})
 
 
 @server.custom_route("/ui/api/ingest", methods=["POST"])

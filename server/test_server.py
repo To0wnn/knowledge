@@ -1066,6 +1066,17 @@ def handback_contract(tmp, ck, fr, ver, raw):
     assert any("HB-3-done" in x for x in stale) and any("HB-4-done" in x for x in stale), ctx[-1500:]
     assert not any("HB-1-done" in x or "HB-2-done" in x for x in stale), stale
     assert not call("knowledge_delete", {"path": path, "base_version": ver(path)}, fr)[0]
+    # Trash: the delete copy is listed and goes back (owner or admin), never over a file that is there again.
+    ui = {**ck, "X-Knowledge-UI": "1", "Content-Type": "application/json"}
+    item = next(i for i in json.loads(raw("GET", "/ui/api/trash", headers=ck)[2])["items"] if i["path"] == path)
+    assert item["can_restore"] and not item["exists"] and item["project"] == "garden" and time.time() - item["deleted"] < 120, item
+    restore = lambda n, h=ui: raw("POST", "/ui/api/trash/restore", json.dumps({"name": n}), h)[0]
+    assert restore("../tokens.json") == 404 and restore("20261101-120000_garden-memory__nope.md") == 404
+    assert restore(item["name"]) == 200 and "HB-1-done" in call("knowledge_read", {"path": path}, fr)[1]
+    assert restore(item["name"]) == 409, "never over a file that is there again"
+    assert not next(i for i in json.loads(raw("GET", "/ui/api/trash", headers=ck)[2])["items"] if i["name"] == item["name"])["can_restore"]
+    assert "restore " + path in (tmp / "audit.log").read_text()
+    assert not call("knowledge_delete", {"path": path, "base_version": ver(path)}, fr)[0]
     (tmp / "task_leases.json").write_text("{}")  # the turns above (session hb) took leases the later checks must not meet
 
 
