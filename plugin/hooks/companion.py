@@ -546,7 +546,8 @@ def start_session(agent: str, folder: str, tasks: list) -> str:
     if agent == "codex":
         STATE.mkdir(parents=True, exist_ok=True)
         with open(STATE / "codex-exec.log", "ab") as out:
-            p = subprocess.Popen([exe, "exec", "--cd", folder, prompt], cwd=folder, stdin=subprocess.DEVNULL, stdout=out,
+            # a linked folder need not be a git repository; codex exec refuses one that is not, unless told
+            p = subprocess.Popen([exe, "exec", "--skip-git-repo-check", "--cd", folder, prompt], cwd=folder, stdin=subprocess.DEVNULL, stdout=out,
                                  stderr=subprocess.STDOUT, **kw)
         return f"codex exec {p.pid}"
     argv = [exe, prompt] if agent == "claude" else [exe, "-i", prompt]

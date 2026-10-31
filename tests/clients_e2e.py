@@ -900,7 +900,8 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         wait_for(lambda: any(c.get("argv", [""])[:2] == ["codex", "exec"] for c in recorded()[n:]), 15)
         execs = [c["argv"] for c in recorded()[n:] if c.get("argv", [""])[:2] == ["codex", "exec"]]
         queued = [c for c in recorded()[n:] if c.get("argv", [""])[:2] == ["codex", "queue"]]
-        check(code == 0 and len(execs) == 1 and "CMP-CX3" in execs[0][-1] and str(project) in execs[0] and not queued,
+        check(code == 0 and len(execs) == 1 and "CMP-CX3" in execs[0][-1] and str(project) in execs[0] and not queued
+              and "--skip-git-repo-check" in execs[0],
               "companion: no Codex running: a new codex exec in the project folder, not a queue into a closed session", out[-400:] + err[-400:] + str(execs)[:300])
         # Hook failures the agents log themselves: reported once, marked as agent-log.
         admin = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice"}
