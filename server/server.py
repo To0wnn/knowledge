@@ -2304,14 +2304,25 @@ def mark_machine(dev: dict, agent: str = "", session: str = "", project: str = "
         print(f"machines not saved: {e}", flush=True)
 
 
-def worker_hosts(project: str, agent: str) -> list[str]:
-    """The online pcs whose companion runs workers of `agent` for `project` (workers allowed, a maximum above 0, the
-    agent installed, a folder linked to the project). None: that agent's chats take its tasks themselves (as 0.14)."""
-    now = time.time()
-    return sorted(m.get("label", mid) for mid, m in read_json(MACHINES_FILE, {}).items()
-                  if (c := m.get("companion")) and now - c.get("at", 0) < ONLINE and c.get("workersAllowed")
+def worker_machines(project: str, agent: str) -> list[tuple[str, float]]:
+    """(label, last report) of every pc whose companion last said it runs workers of `agent` for `project` (workers
+    allowed, a maximum above 0, the agent installed, a folder linked to the project), online or not."""
+    return sorted((m.get("label", mid), c.get("at", 0)) for mid, m in read_json(MACHINES_FILE, {}).items()
+                  if (c := m.get("companion")) and c.get("workersAllowed")
                   and (c.get("maxWorkers") or {}).get(agent, 1) > 0 and agent in (c.get("agents") or {})
                   and any(f.get("project") == project for f in (c.get("folders") or {}).get("linked", [])))
+
+
+def worker_hosts(project: str, agent: str) -> list[str]:
+    """The online pcs of worker_machines. None: that agent's chats take its tasks themselves (as 0.14)."""
+    now = time.time()
+    return [label for label, at in worker_machines(project, agent) if now - at < ONLINE]
+
+
+def since(at: float) -> str:
+    """A past time as the UI and Matrix say it: the hour today, else the date and hour."""
+    fmt = "%H:%M" if time.strftime("%Y-%m-%d", time.localtime(at)) == time.strftime("%Y-%m-%d") else "%Y-%m-%d %H:%M"
+    return time.strftime(fmt, time.localtime(at))
 
 
 def task_where(project: str, t: dict, lease: dict | None, now: float) -> str:
@@ -2328,6 +2339,9 @@ def task_where(project: str, t: dict, lease: dict | None, now: float) -> str:
         why = sorted({w for mid, m in read_json(MACHINES_FILE, {}).items() if m.get("label", mid) in hosts  # not an offline pc's old reason
                       if (w := ((m.get("companion") or {}).get("waiting") or {}).get(f"{project}/{t['id']}"))})
         return f"goes to a worker on {', '.join(hosts)}" + (f"; waits there: {'; '.join(why)}" if why else "")
+    if gone := worker_machines(project, agent):  # its worker pcs are all offline: say which, not "none"
+        return (", ".join(f"{label} offline since {since(at)}" for label, at in gone)
+                + f": until one is back, the next {name} chat in this project starts the task")
     return f"no pc runs {name} workers for this project: the next {name} chat in it starts the task"
 
 
@@ -2383,7 +2397,8 @@ def machine_rows() -> list[dict]:
             agents = {a: {"plugin": plug.get(a, ""), "error": (status_errors(n).get(a) or [None])[-1], "workers": [],
                           "sessions": [{"project": c.get("project", ""), "task": "", "at": c["at"]} for c in old if c.get("agent") == a]}
                       for a in AGENT_OWNERS if any(c.get("agent") == a for c in old)}
-            rows.append({"id": f"token:{n}", "label": n, "old": True, "at": max(c["at"] for c in old), "online": True,
+            last = max(c["at"] for c in old)  # an old plugin reports only on a turn: online while it has turns
+            rows.append({"id": f"token:{n}", "label": n, "old": True, "at": last, "online": now - last < ONLINE,
                          "tokens": [n], "own": own_token(cfg, dev), "agents": agents, "companion": None, "actions": []})
     return sorted(rows, key=lambda r: -r["at"])
 
@@ -4921,13 +4936,17 @@ def board_items() -> list[dict]:
         for a, ag in r["agents"].items():
             for w in ag.get("workers", []):
                 st, ended = w.get("status"), w.get("ended") or w.get("started") or 0
-                col = ("running" if st == "running" else "needs" if st == "failed" and now - ended < BOARD_FAILED
+                lost = st == "running" and not r["online"]  # its pc went offline: nobody knows whether it still runs
+                col = ("needs" if lost else "running" if st == "running" else "needs" if st == "failed" and now - ended < BOARD_FAILED
                        else "done" if st in ("finished", "stopped", "merged", "failed") and now - ended < BOARD_DONE else "")
                 if col:
                     items.append({**base, "kind": "worker", "col": col, "id": w.get("id"), "agent": a, "project": w.get("project"),
-                                  "key": f"worker:{r['id']}/{w.get('project')}/{w.get('id')}", "sig": f"{st}:{ended}",
+                                  "key": f"worker:{r['id']}/{w.get('project')}/{w.get('id')}", "sig": f"{st}:{ended}" + (":offline" if lost else ""),
                                   "title": w.get("id"), "at": w.get("started") if st == "running" else ended,
-                                  "line": f"worker {st}" + (f": {w['why']}" if w.get("why") else "") + (f" · {w['branch']}" if w.get("branch") else ""),
+                                  "line": (f"pc offline since {since(r['at'])}" if lost else f"worker {st}" + (f": {w['why']}" if w.get("why") else ""))
+                                          + (f" · {w['branch']}" if w.get("branch") else ""),
+                                  "offline_since": r["at"] if lost else None, "can_stop": st == "running" and r["online"],
+                                  "can_restart": st in ("failed", "stopped", "finished") and r["online"],
                                   "git": w.get("git"), "status": st, "open": w.get("open") or "", "checkpoint": bool(w.get("checkpoint")),
                                   "why": w.get("why") or ""})
     working = {(i["project"], i["id"]) for i in items if i["kind"] == "worker" and i["col"] == "running"}

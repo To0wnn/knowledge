@@ -804,6 +804,21 @@ def board_contract(tmp, ck, fr, raw, er, et):
     assert [(a["action"], a["args"]) for a in got] == [("start_worker", {"project": "garden", "id": "BRD-5"})], got
     for a in got:
         http("POST", "/machine/actions/result", {"id": a["id"], "ok": True}, token=fr, headers=pc)
+    # The pc went offline with a worker running: Needs you ("pc offline since"), no Stop; a task whose only worker pc
+    # is offline says so instead of "no pc runs workers".
+    d = json.loads((tmp / "machines.json").read_text())
+    d[mid]["at"] -= 3600
+    d[mid]["companion"]["at"] -= 3600
+    (tmp / "machines.json").write_text(json.dumps(d))
+    lost = {(i["kind"], i["id"]): i for i in board()}[("worker", "BRD-4")]
+    assert lost["col"] == "needs" and lost["line"].startswith("pc offline since ") and not lost["can_stop"] and lost["offline_since"], lost
+    runs = next(t for t in json.loads(raw("GET", "/ui/api/tasks", headers=ck)[2])["tasks"] if t["id"] == "BRD-1")["runs"]
+    assert "garage offline since " in runs and "no pc runs" not in runs, runs
+    d[mid]["at"] += 3600
+    d[mid]["companion"]["at"] += 3600
+    (tmp / "machines.json").write_text(json.dumps(d))
+    back = {(i["kind"], i["id"]): i for i in board()}
+    assert back[("worker", "BRD-4")]["col"] == "running" and back[("worker", "BRD-4")]["can_stop"] and back[("worker", "BRD-5")]["can_restart"], back
     assert col("task", "BRD-1") == "open" and items[("task", "BRD-1")]["hosts"] == [{"machine": mid, "label": "garage"}], items.get(("task", "BRD-1"))
     assert col("task", "BRD-2") == "needs" and items[("task", "BRD-2")]["approve"], items.get(("task", "BRD-2"))
     assert col("task", "BRD-9-done") == "done", "a result handed back today is done"
@@ -1628,6 +1643,14 @@ def main():
         got = {c["session"]: c for c in row["clients"]}
         assert got["cx-77"]["agent"] == "codex" and got["cx-77"]["wake"] is True and got["cx-77"]["project"] == "garden", got
         assert "b-1" not in got, got
+        # A plugin before 0.15 (no machine id) is online while it has turns, not for the 2 h its session is kept.
+        old_row = lambda: next(r for r in json.loads(raw("GET", "/ui/api/machines", headers=ck)[2])["machines"] if r["id"] == f"token:{frname}")
+        assert old_row()["online"]
+        cl = json.loads((tmp / "clients.json").read_text())
+        for c in cl[frname].values():
+            c["at"] -= 600
+        (tmp / "clients.json").write_text(json.dumps(cl))
+        assert not old_row()["online"], old_row()
         # POST /status: hook failures per token and agent (last 20, a week), shown on the Tasks tab's sessions.
         err = lambda i, **k: {"hook": "docs-sync.py", "event": "PostToolUse", "code": "1", "stderr": f"boom {i}\ntrace", "at": time.time() - 30 + i / 100, **k}
         assert http("POST", "/status", {"agent": "codex", "plugin": "0.13.0", "errors": [err(i) for i in range(25)]}, token=fr) == (200, '{"stored":20}')
