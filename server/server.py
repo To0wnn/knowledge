@@ -2296,7 +2296,7 @@ def task_where(project: str, t: dict, lease: dict | None, now: float) -> str:
         return ""
     name = next(o for o in ("Claude", "Codex", "Gemini") if o.lower() in AGENT_OWNERS[agent])
     if hosts := worker_hosts(project, agent):
-        why = sorted({w for m in read_json(MACHINES_FILE, {}).values()
+        why = sorted({w for mid, m in read_json(MACHINES_FILE, {}).items() if m.get("label", mid) in hosts  # not an offline pc's old reason
                       if (w := ((m.get("companion") or {}).get("waiting") or {}).get(f"{project}/{t['id']}"))})
         return f"goes to a worker on {', '.join(hosts)}" + (f"; waits there: {'; '.join(why)}" if why else "")
     return f"no pc runs {name} workers for this project: the next {name} chat in it starts the task"

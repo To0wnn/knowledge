@@ -332,8 +332,8 @@ def folder_links() -> dict:
             if root and name and under_home(root):
                 linked.setdefault(str(root), name)
             elif not root and p.is_dir() and under_home(p):
-                top = subprocess.run(["git", "-C", str(p), "rev-parse", "--show-toplevel"], capture_output=True, text=True,
-                                     encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL, timeout=10)  # git prints UTF-8, never the ANSI code page if shutil.which("git") else None
+                top = subprocess.run(["git", "-C", str(p), "rev-parse", "--show-toplevel"], capture_output=True, text=True,  # git prints UTF-8, never the ANSI code page
+                                     encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL, timeout=10) if shutil.which("git") else None
                 # the checkout's root, as knowledge-init links it; git prints it with / on Windows too
                 top = Path(top.stdout.strip()) if top and top.returncode == 0 and top.stdout.strip() else None
                 # git prints the resolved path (macOS /private/var, a Windows long name): keep the spelling the agent used
@@ -846,14 +846,23 @@ def check_workers(ws: dict, tok: str, now: float, lim: dict):
             if code is not None:
                 workers.PROCS.pop(w["pid"], None)
                 w.update(status="stopped" if w.get("told") else "finished" if code == 0 else "failed", ended=now, code=code)
-                release(w, tok)  # a line it claimed but left open may start again at once (the server's idle notice)
+                if not w.get("owner_stopped"):  # stopped on purpose: no other pc may take it at once, only after the lease
+                    release(w, tok)  # a line it claimed but left open may start again at once (the server's idle notice)
                 workers.stop_path(w).unlink(missing_ok=True)
                 log("worker", f"{AGENTS[w['agent']][0]}: the worker for {w['id']} ended ({w['status']})", w.get("open", ""))
                 continue
             try:  # a turn longer than the lease must not let another pc start the same task
-                claim({"project": w["project"], "id": w["id"], "agent": w["agent"]}, tok, worker_session(w["id"]), w["nonce"])
+                held = claim({"project": w["project"], "id": w["id"], "agent": w["agent"]}, tok, worker_session(w["id"]), w["nonce"])
             except Exception as e:
+                held = ""
                 log("error", f"Could not renew the lease of {w['id']}", f"{e}"[:200])
+            if held:  # this pc slept past its lease and another took the task over: two workers must not run one task
+                try:
+                    workers.kill(w, hard=True)
+                    log("worker", f"{AGENTS[w['agent']][0]}: the worker for {w['id']} was stopped", f"{held} took the task over while this pc slept")
+                except Exception as e:
+                    log("error", f"Could not stop the worker for {w['id']}", f"{e}"[:200])
+                continue
             if (lim.get(w["agent"]) or 0) >= 90 and not w.get("told"):
                 room = [b for b, v in lim.items() if b != w["agent"] and v is not None and v < 90]
                 target = workers.NAMES[room[0] if room else w["agent"]]
@@ -989,8 +998,13 @@ def run_action(a: dict) -> str:
         w = w if w and w["status"] == "running" else None
         if not w:
             raise RuntimeError(f"no running worker for {args['id']}")
+        with TICK, LOCK:  # between rounds: a round holds its own copy of workers.json and saves it back
+            ws = load("workers.json", {})
+            ws[f"{w['project']}/{w['id']}"]["owner_stopped"] = True
+            save("workers.json", ws)
         workers.kill(w)
-        return f"stopped the worker for {args['id']}"
+        return (f"stopped the worker for {args['id']}; this pc keeps its lease until it runs out, then another pc may start the line again:"
+                " change it to 'start after approval' or remove it to stop it for good")
     if act == "rollback":
         with LOCK:
             ws = load("workers.json", {})
