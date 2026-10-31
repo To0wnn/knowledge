@@ -573,6 +573,18 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     for _ in range(50):
         assert ui("/ui/api/chats", {"machine": mid, "agent": "claude", "folder": "/home/x/garden"})[0] == 200
     assert len(json.loads(ui(f"/ui/api/chats?machine={mid}")[2])["chats"]) == 50 and not (tmp / "chats" / mid / f"{cid}.json").exists()
+    # A chat turn (X-Knowledge-Chat, set by the companion) gets no task list in its start context, takes no lease and
+    # no notice: tasks run in workers, never in a web UI chat.
+    path = "garden-memory/project_tasks.md"
+    assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": "- open until 2099-01-01 [Codex, CH-1] from Claude, start now: chat test\n## Keuzes"}, fr)[0]
+    plain = http("GET", "/context/1?project=garden&linked=1&agent=codex&plugin=0.16.0", token=fr, headers=pc)[1]
+    webc = http("GET", "/context/1?project=garden&linked=1&agent=codex&plugin=0.16.0", token=fr, headers={**pc, "X-Knowledge-Chat": "1"})[1]
+    assert "CH-1" in plain and "CH-1" not in webc and "a chat from the web UI" in webc, webc[:800]
+    beat = json.loads(http("GET", "/tasks?project=garden&linked=1&agent=codex&v=2&chat=1&session=wc-1", token=fr, headers={**pc, "X-Knowledge-Chat": "1"})[1])
+    leases = json.loads((tmp / "task_leases.json").read_text()).get("garden", {}) if (tmp / "task_leases.json").exists() else {}
+    assert "CH-1" not in leases and beat["notices"] == [] and not beat["sync"], (leases, beat)
+    line = next(ln for ln in (tmp / "projects/garden/memory/project_tasks.md").read_text().splitlines() if "CH-1" in ln)
+    call("knowledge_edit", {"path": path, "old_string": line + "\n", "new_string": ""}, fr)
     # Offline: no new message (it would run whenever the pc comes back).
     d = json.loads((tmp / "machines.json").read_text())
     d[mid]["at"] -= 3600

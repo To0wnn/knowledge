@@ -1547,12 +1547,17 @@ def token_project() -> str | None:
 
 
 
-def context_parts(project: str = "homelab", agent: str = "", chat: bool = False) -> list[str]:
+WEBCHAT_NOTE = ("===== knowledge: a chat from the web UI =====\nThe user talks to you from the knowledge web UI; each message "
+                "is one turn. Answer what they ask. Tasks between agents run in workers: do not list, take or start them here.")
+
+
+def context_parts(project: str = "homelab", agent: str = "", chat: bool = False, webchat: bool = False) -> list[str]:
     """Startup context for the plugin's SessionStart hooks: what a VM session in that project gets loaded natively,
     split on line boundaries into parts that each fit one hook output, so nothing is cut off. The tasks handed to
-    `agent` come first, so they sit in part 1 instead of after the memory index."""
+    `agent` come first, so they sit in part 1 instead of after the memory index. A chat turn from the web UI (webchat)
+    gets no task lists, only a note what it is."""
     docs, mem = PROJECTS[project]
-    mine, rest = open_items_text(mem, agent, chat)
+    mine, rest = ([WEBCHAT_NOTE], []) if webchat else open_items_text(mem, agent, chat)
     if not in_scope("claude/"):  # a guest: only this project, no word about the owner's other projects or vault
         text = [f"===== knowledge (project {project}) =====\nThis project's memory and docs live on the knowledge server"
                 f"{f' ({PUBLIC_URL})' if PUBLIC_URL else ''}; other sessions and the web UI see the same files live. Docs: "
@@ -2680,6 +2685,8 @@ class BearerAuth:
             dev = {**dev, "machine": mid, "machine_label": label or mid}
         if worker := re.sub(r"[^\w.-]", "", headers.get(b"x-knowledge-worker", b"").decode("latin-1"))[:60]:
             dev = {**dev, "worker": worker}  # a session the companion started for this one task
+        if headers.get(b"x-knowledge-chat") == b"1":
+            dev = {**dev, "webchat": True}  # a chat turn from the web UI: no tasks in its context, no lease, no notices
         device.set(dev)
         return await self.app(scope, receive, send)
 
@@ -3119,7 +3126,8 @@ async def tasks_route(request: Request):
     if not dev.get("machine"):  # plugins before 0.15.0
         mark_client(dev.get("name", ""), q.get("agent", ""), q.get("session", ""), project, q.get("wake") == "1")
     # claim=0: another agent asks on this session's behalf (a wake) and passes on tasks only, taking no lease
-    claim, key = q.get("claim") != "0", (dev.get("name", ""), project)
+    # a chat turn from the web UI (X-Knowledge-Chat) is the same: it takes no lease and no notice meant for a session
+    claim, key = q.get("claim") != "0" and not dev.get("webchat"), (dev.get("name", ""), project)
     agent, names = q.get("agent", ""), AGENT_OWNERS.get(q.get("agent", ""), ())
     # seen: the tasks the plugin told this session before (absent on its first ask); start: the companion's nonce
     seen, start = {i for i in q.get("seen", "").split(",") if i} if "seen" in q else None, q.get("start", "")
@@ -3332,7 +3340,8 @@ async def context_route(request: Request):
     # worker itself knows its one task from its prompt
     chat = plugin_version(request.query_params.get("plugin", "")) >= (0, 15, 0) and not device.get().get("worker") \
         and agent in AGENT_OWNERS and bool(await asyncio.to_thread(worker_hosts, project, agent))
-    parts = await asyncio.to_thread(context_parts, project, agent if agent in AGENT_OWNERS else "", chat)  # lint + graph: off the loop
+    parts = await asyncio.to_thread(context_parts, project, agent if agent in AGENT_OWNERS else "", chat,
+                                    bool(device.get().get("webchat")))  # lint + graph: off the loop
     if v := request.query_params.get("plugin", ""):  # every part asks, so all of them split the same way
         if request.path_params["part"] == 1:
             mark_plugin(device.get().get("name", ""), agent, v, request.query_params.get("url") == "default")

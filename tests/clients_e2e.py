@@ -1295,10 +1295,29 @@ def chat_e2e(tok: str, tmp: Path):
             check(f"echo: {msg1}" in texts and "echo: second (resumed)" in texts and any(e["kind"] == "tool" and "git status" in e["text"] for e in events)
                   and [e["kind"] for e in events if e["kind"] == "user"] == ["user", "user"] and chat(cid)["chat"]["session"] == "sess-" + agent,
                   f"chat {agent}: the streamed text and tool lines reach the server", json.dumps(events)[:900])
+            if agent == "codex":
+                check("sandbox_mode=workspace-write" in first["argv"] and not any("writable_roots" in a for a in first["argv"]),
+                      "chat codex: without YOLO the workspace-write sandbox, .git stays read-only as Codex keeps it", json.dumps(first["argv"]))
             if agent == "claude":
                 check(any(e["kind"] == "refused" and "git push" in e["text"] for e in events), "chat claude: a refused tool call shows as a line", json.dumps(events)[:600])
                 check("acceptEdits" in first["argv"] and "--dangerously-skip-permissions" not in first["argv"],
                       "chat claude: without YOLO the worker permission set (acceptEdits + allowed tools)", json.dumps(first["argv"]))
+        # A chat turn's own hooks: no task list, no 'start your tasks', no agy register request, no lease (tasks run in workers).
+        hooks_env = {**env, "KNOWLEDGE_CHAT": "c1", "CLAUDE_PLUGIN_OPTION_URL": BASE, "CLAUDE_PLUGIN_OPTION_TOKEN": tok}
+        outs = {"claude": run([bash(), "-c", f'sh "{(hooks / "context.sh").as_posix()}" 1'], "", {**hooks_env, "CLAUDE_PROJECT_DIR": str(repo)})[1]}
+        for agent in ("codex", "agy"):
+            outs[agent] = run([sys.executable, str(hooks / "agent_hooks.py"), "context", agent], json.dumps({"cwd": str(repo), "workspacePaths": [str(repo)]}),
+                              hooks_env, cwd=str(repo))[1]
+        plain = run([sys.executable, str(hooks / "agent_hooks.py"), "context", "codex"], json.dumps({"cwd": str(repo)}), env, cwd=str(repo))[1]
+        for agent, out in outs.items():
+            check("a chat from the web UI" in out and not re.search(r"(CLAUDE|CODEX|GEMINI)-1", out) and " register" not in out,
+                  f"chat {agent}: a chat turn's start context lists no tasks and asks nothing to register", out[:600])
+        check("CODEX-1" in plain, "chat: the same folder outside a chat still lists its tasks", plain[:300])
+        hints = run([sys.executable, str(hooks / "agent_hooks.py"), "hints"], json.dumps({"conversationId": "chat-conv", "workspacePaths": [str(repo)]}), hooks_env, cwd=str(repo))[1]
+        run([sys.executable, str(hooks / "agent_hooks.py"), "tasks", "codex"], json.dumps({"session_id": "chat-s1", "cwd": str(repo), "prompt": "pak CODEX-1"}), hooks_env, cwd=str(repo))
+        ready = json.loads(http("GET", "/tasks/ready", headers={"Authorization": f"Bearer {tok}", "X-Knowledge-Machine": mid})[1])["tasks"]
+        check(" register" not in hints and not any(t["id"] == "CODEX-1" and t.get("mine") for t in ready),
+              "chat: a chat turn's per-turn hooks take no task (not even 'pak') and ask agy nothing", hints[:300] + json.dumps(ready)[:300])
         # Stop: a turn that keeps working ends at once, the chat says so and is ready again.
         cid = new("codex", repo)
         send(cid, "SLOW please")
