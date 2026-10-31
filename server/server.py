@@ -1608,7 +1608,10 @@ AGENT_OWNERS = {"claude": ("claude",), "codex": ("codex",), "agy": ("gemini", "a
 TASK_CHARS = 240  # the memo holds the full text; the start context only has to make the agent look
 STALLED_AFTER = int(os.environ.get("KNOWLEDGE_TASK_STALLED", 30 * 60))  # a woken task nobody claimed this long is stalled
 TASK_AUTHORS, TASK_APPROVALS, TASK_WAKES, TASK_LEASES = (AUDIT.parent / f"task_{n}.json" for n in ("authors", "approvals", "wakes", "leases"))
-LEASE = int(os.environ.get("KNOWLEDGE_TASK_LEASE", STALLED_AFTER))  # a device that took a task holds it this long without a claim marker; each ask of its session renews it
+LEASE = int(os.environ.get("KNOWLEDGE_TASK_LEASE", STALLED_AFTER))  # a device that took a task holds it this long without a claim marker
+# a lease the companion took for a session it starts waits this long for that session (its start nonce), then any
+# session of the device may take it
+START_GRACE = int(os.environ.get("KNOWLEDGE_TASK_START_GRACE", 120))
 TASK_WRITERS = ADMIN_DIR / "task_writers.json"  # project -> trusted writers (token names, users); absent = the default
 _task_lock = threading.Lock()
 
@@ -1664,9 +1667,16 @@ def added_tasks(rel: str, before: str, after: str, changed: bool = False) -> lis
 
 def refuse_bare_tasks(rel: str, before: str, after: str):
     """A new task line must say from whom and when it may start; lines already there stay as they are."""
-    if bare := [t["id"] for t in added_tasks(rel, before, after) if t["legacy"]]:
+    added = added_tasks(rel, before, after)
+    if bare := [t["id"] for t in added if t["legacy"]]:
         raise ToolError(f"new task line {', '.join(bare)} must say from whom it is and when it may start: write it as "
                         f"{TASK_FORMAT}; 'start now' when it may start at once")
+    names = {n.lower() for n in read_json(TOKENS_FILE, {})}
+    if bad := [t for t in added if t["device"] and t["device"].lower() not in names]:
+        t = bad[0]
+        raise ToolError(f"task line {t['id']} is pinned to device '{t['device']}' ({t['owner']}@{t['device']}), but no device "
+                        "token has that name, so no device could ever start it. Use the exact token name of the device "
+                        "(admin page, Tokens), or drop '@<device>' to let any device start it.")
 
 
 def update_state(path: Path, change):
@@ -1823,22 +1833,50 @@ def task_holders(project: str, tasks: list[dict], dev: str) -> dict:
     return {t["id"]: h for t in tasks if t["startable"] and (h := lease_holder(t, leases.get(t["id"]), dev, now))}
 
 
-def claim_task(project: str, t: dict, agent: str, dev: str, session: str) -> tuple[bool, dict]:
-    """Take task t for this device and session: (True, lease) when there is no valid lease, or this session holds it;
-    (False, holder) when another device or another session of this device does, or the line is pinned to another
-    device. A lease without a session (the companion starting a new one) goes to the first session of its device that
-    asks. The state lock makes it atomic, so of two asking at once exactly one wins."""
+def may_lease(dev: dict, project: str) -> bool:
+    """Only a token that may write the project's memos takes a task's lease: a read-only one gets the task list."""
+    wr = dev.get("write_roots")
+    return bool(dev.get("write")) and (wr is None or PROJECTS[project][1] in wr)
+
+
+def lease_taker(cur: dict, session: str, start: str, now: float) -> bool:
+    """Whether this session of the lease's own device may hold lease `cur`: it is that session, it presents the start
+    nonce the companion gave the session it started, or the lease waits for a new session (session "") without a
+    nonce, or with one nobody presented within START_GRACE."""
+    if start and cur.get("start") == start:
+        return True
+    if cur.get("session"):
+        return bool(session) and cur["session"] == session
+    return not cur.get("start") or now - cur.get("at", now) >= START_GRACE
+
+
+def claim_task(project: str, t: dict, agent: str, dev: str, session: str, start: str = "", told: bool = False) -> tuple[bool, dict | None]:
+    """Take task t for this device and session: (True, lease) when there is no valid lease, or this session may hold it
+    (lease_taker); (False, holder) when another device or another session of this device does, or the line is pinned
+    to another device. `told`: a per-turn ask about a task this session was told before (the plugin says which): it
+    takes no new lease and renews its own only within LEASE of the tell, so a session that heard a task and went on
+    with other work does not keep it from the others; (True, None) when it holds nothing. A claim marker in the line
+    makes the task not startable at all, so a session working on it needs no lease. The state lock makes it atomic,
+    so of two asking at once exactly one wins."""
     out = []
 
     def change(d):
         leases, now = d.setdefault(project, {}), time.time()
         cur = leases.get(t["id"])
+        cur = cur if cur and cur.get("until", 0) >= now else None
         if h := lease_holder(t, cur, dev, now):
             return out.append((False, h))
-        if cur and cur.get("until", 0) >= now and cur.get("session") not in ("", session):
+        if cur and not lease_taker(cur, session, start, now):
             return out.append((False, {**{k: cur.get(k) for k in ("device", "session", "until")}, "here": True}))
-        mine = cur if cur and cur.get("until", 0) >= now else {"at": int(now)}
-        leases[t["id"]] = new = {**mine, "device": dev, "session": session[:80], "agent": agent, "until": int(now + LEASE)}
+        if told and (not cur or not cur.get("session")):
+            return out.append((True, None))  # told before and not kept: no new lease from an ordinary turn
+        if told and cur.get("session") == session and now - cur.get("told", cur.get("at", now)) >= LEASE:
+            return out.append((True, cur))  # its own, but no longer renewed: it runs out
+        new_holder = session and (not cur or cur.get("session") != session)
+        base = cur or {"at": int(now)}
+        leases[t["id"]] = new = {**base, "device": dev, "session": (session or base.get("session", ""))[:80], "agent": agent,
+                                 "until": int(now + LEASE), **({"told": int(now)} if new_holder or not cur else {}),
+                                 **({"start": start[:40]} if start and not base.get("start") else {})}
         out.append((True, new))
     update_state(TASK_LEASES, change)
     return out[0]
@@ -2839,17 +2877,20 @@ async def tasks_route(request: Request):
     # claim=0: another agent asks on this session's behalf (a wake) and passes on tasks only, taking no lease
     claim, key = q.get("claim") != "0", (dev.get("name", ""), project)
     agent, names = q.get("agent", ""), AGENT_OWNERS.get(q.get("agent", ""), ())
+    # seen: the tasks the plugin told this session before (absent on its first ask); start: the companion's nonce
+    seen, start = {i for i in q.get("seen", "").split(",") if i} if "seen" in q else None, q.get("start", "")
 
     def leased():
-        """This session's startable tasks: each one it may take is leased to this device; the others are held."""
+        """This session's startable tasks: each one it may take is leased to this device; the others are held. Only a
+        token that may write the project's memos takes leases (a read-only one cannot mark a task claimed either)."""
         tasks, back = project_tasks(project)
         results[:] = results_for(back, names, mem)
-        if not claim:
+        if not (claim and may_lease(dev, project)):
             return tasks, task_holders(project, tasks, key[0])
         held = {}
         for t in tasks:
             if t["startable"] and t["owner"].lower() in names:
-                ok, h = claim_task(project, t, agent, key[0], q.get("session", ""))
+                ok, h = claim_task(project, t, agent, key[0], q.get("session", ""), start, told=seen is not None and t["id"] in seen)
                 if not ok:
                     held[t["id"]] = h
         return tasks, held
@@ -2871,7 +2912,7 @@ async def tasks_route(request: Request):
         and time.time() - _full_synced.get(key, 0) > DOCS_SYNC_MINUTES * 60
     if sync:  # handed to this session only; if its sync fails, the next turn after DOCS_SYNC_MINUTES asks again
         _full_synced[key] = time.time()
-    return JSONResponse({"tasks": items, "waiting": waiting, "notices": notices, "sync": sync, "results": results})
+    return JSONResponse({"tasks": items, "waiting": waiting, "notices": notices, "sync": sync, "results": results, "project": project})
 
 
 @server.custom_route("/tasks/ready", methods=["GET"])
@@ -2880,7 +2921,7 @@ async def tasks_ready_route(request: Request):
     device holds (lease or pin) is left out, `mine` says this device holds its lease."""
     out, dev, now = [], device.get().get("name", ""), time.time()
     for p, (_, mem) in list(PROJECTS.items()):
-        if in_scope(mem + "/"):
+        if in_scope(mem + "/") and may_lease(device.get(), p):  # a read-only token could take none of them
             tasks, leases = (await asyncio.to_thread(project_tasks, p))[0], read_json(TASK_LEASES, {}).get(p, {})
             out += [{"project": p, "path": t["path"], "id": t["id"], "owner": t["owner"], "device": t["device"], "agent": a,
                      "from": t["from"], "start": t["start"], "text": t["text"],
@@ -2897,23 +2938,52 @@ async def tasks_woken_route(request: Request):
     Not claimed (marker) within STALLED_AFTER, it shows as stalled in the Tasks tab and the admin hears it once."""
     try:
         b = await request.json()
-        project, tid, agent, session = (str(b.get(k, "")) for k in ("project", "id", "agent", "session"))
+        project, tid, agent, session, start = (str(b.get(k, "")) for k in ("project", "id", "agent", "session", "start"))
     except (ValueError, AttributeError):
         return JSONResponse({"error": "send JSON {project, id, agent, session}"}, status_code=400)
     if project not in PROJECTS or not in_scope(PROJECTS[project][1] + "/"):
         return JSONResponse({"error": f"unknown project {project}"}, status_code=404)
+    if not may_lease(device.get(), project):
+        return JSONResponse({"error": "taking a task needs a token that may write this project's memos"}, status_code=403)
     if agent not in AGENT_OWNERS:
         return JSONResponse({"error": f"agent must be one of {sorted(AGENT_OWNERS)}"}, status_code=400)
     if not (t := next((t for t in (await asyncio.to_thread(project_tasks, project))[0] if t["id"] == tid), None)):
         return JSONResponse({"error": f"no open task {tid} in {project}"}, status_code=404)
     wake = {"agent": agent, "session": session[:80], "device": device.get().get("name", "")}
-    ok, lease = await asyncio.to_thread(claim_task, project, t, agent, wake["device"], wake["session"])
+    ok, lease = await asyncio.to_thread(claim_task, project, t, agent, wake["device"], wake["session"], start)
     if not ok:
         return JSONResponse({"held_by": lease}, status_code=409)
     # a wake again keeps the first time and whether the admin heard it: else every new try hides the stall
     await asyncio.to_thread(update_state, TASK_WAKES, lambda d: d.setdefault(project, {}).setdefault(
         tid, {"at": int(time.time())}).update(wake))
     return JSONResponse({"ok": True, "lease": lease})
+
+
+@server.custom_route("/tasks/release", methods=["POST"])
+async def tasks_release_route(request: Request):
+    """{"project", "id"}: give a task's lease back (a start or a delivery failed), so another device may take it at
+    once. Only the device holding the lease may; {"released": false} when there was none."""
+    try:
+        b = await request.json()
+        project, tid = str(b.get("project", "")), str(b.get("id", ""))
+    except (ValueError, AttributeError):
+        return JSONResponse({"error": "send JSON {project, id}"}, status_code=400)
+    if project not in PROJECTS or not in_scope(PROJECTS[project][1] + "/"):
+        return JSONResponse({"error": f"unknown project {project}"}, status_code=404)
+    dev, out = device.get().get("name", ""), []
+
+    def change(d):
+        cur = d.get(project, {}).get(tid)
+        if cur and cur.get("device", "").lower() != dev.lower():
+            return out.append(cur)
+        out.append(None)
+        if cur:
+            d[project].pop(tid)
+    had = bool(read_json(TASK_LEASES, {}).get(project, {}).get(tid))
+    await asyncio.to_thread(update_state, TASK_LEASES, change)
+    if out[0]:
+        return JSONResponse({"held_by": {k: out[0].get(k) for k in ("device", "session", "until")}}, status_code=409)
+    return JSONResponse({"released": had})
 
 
 def stalled_check() -> int:
@@ -3686,7 +3756,7 @@ async def ui_admin_token(request: Request, body: dict):
         write_json(TOKENS_FILE, tokens)
         audit("admin-token-revoke", name)
         return JSONResponse({"ok": True})
-    if not TOKEN_NAME.match(name) or name in tokens:
+    if not TOKEN_NAME.match(name) or name.lower() in {n.lower() for n in tokens}:  # leases and pins match names ignoring case
         raise ToolError("token name: letters, digits, . _ - (max 40), and not in use yet")
     roots = [str(r) for r in body.get("roots", [])]
     if not roots and not body.get("all"):  # empty roots mean every project: only when asked for explicitly

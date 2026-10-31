@@ -239,6 +239,58 @@ def lease_contract(tmp, ck, fr, raw):
     assert lc("LC-1", "woken-s") and not lc("LC-1", "other-s") and not lc("LC-1", "started-s") and lc("LC-1", "woken-s")
     assert not lc("LC-2", "woken-s")
     assert leases()["LC-2"]["session"] == "started-s", leases()
+    # A session that heard a task and did not start it does not keep it: a later turn (seen) renews only within LEASE
+    # of the tell and never takes a free task again.
+    more = "- open until 2099-01-01 [Codex, LH-1] from Claude, start now: heard\n"
+    assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": more + "## Keuzes"}, fr)[0]
+    seen_turn = lambda sid, seen, tok=fr, extra="": json.loads(http("GET", f"/tasks?project=x&agent=codex&v=2&session={sid}&seen={seen}{extra}", token=tok)[1])
+    assert lc("LH-1", "heard-s") and leases()["LH-1"]["session"] == "heard-s"  # first tell: leased
+    l = json.loads((tmp / "task_leases.json").read_text()); first = l["garden"]["LH-1"]["until"]
+    l["garden"]["LH-1"]["until"] -= 100; (tmp / "task_leases.json").write_text(json.dumps(l))
+    seen_turn("heard-s", "LH-1")
+    assert leases()["LH-1"]["until"] >= first, leases()["LH-1"]  # still within LEASE of the tell: renewed
+    l = json.loads((tmp / "task_leases.json").read_text())
+    l["garden"]["LH-1"].update(told=int(time.time()) - 700, until=int(time.time()) + 50); (tmp / "task_leases.json").write_text(json.dumps(l))
+    seen_turn("heard-s", "LH-1")
+    assert leases()["LH-1"]["until"] <= int(time.time()) + 50, leases()["LH-1"]  # past LEASE since the tell: not renewed
+    l = json.loads((tmp / "task_leases.json").read_text()); l["garden"]["LH-1"]["until"] = 0; (tmp / "task_leases.json").write_text(json.dumps(l))
+    beat = seen_turn("heard-s", "LH-1")
+    assert leases().get("LH-1", {}).get("until", 0) == 0 and any("LH-1" in x for x in beat["tasks"]), leases()  # told before: no new lease
+    assert http("POST", "/tasks/woken", {"project": "garden", "id": "LH-1", "agent": "codex", "session": "lap-s"}, token=fr2)[0] == 200
+    # A new session the companion starts: only the session with its start nonce takes the task, not an older one;
+    # nobody presents it within START_GRACE, any session of the pc may.
+    more = "- open until 2099-01-01 [Codex, LN-1] from Claude, start now: nonce\n"
+    assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": more + "## Keuzes"}, fr)[0]
+    assert http("POST", "/tasks/woken", {"project": "garden", "id": "LN-1", "agent": "codex", "session": "", "start": "n0nce"}, token=fr)[0] == 200
+    assert not lc("LN-1", "older-s") and leases()["LN-1"]["session"] == ""
+    assert any("LN-1" in x for x in seen_turn("new-s", "", extra="&start=n0nce")["tasks"]) and leases()["LN-1"]["session"] == "new-s"
+    assert not lc("LN-1", "older-s")
+    assert http("POST", "/tasks/woken", {"project": "garden", "id": "LN-1", "agent": "codex", "session": "", "start": "n0nce"}, token=fr)[0] == 200
+    assert leases()["LN-1"]["session"] == "new-s", leases()["LN-1"]  # the companion renews a busy one with its nonce
+    l = json.loads((tmp / "task_leases.json").read_text())
+    l["garden"]["LN-1"].update(session="", at=int(time.time()) - 60); (tmp / "task_leases.json").write_text(json.dumps(l))
+    assert not lc("LN-1", "older-s")
+    l["garden"]["LN-1"]["at"] = int(time.time()) - 200; (tmp / "task_leases.json").write_text(json.dumps(l))
+    assert lc("LN-1", "older-s") and leases()["LN-1"]["session"] == "older-s"
+    # Release: only the holding device gives a lease back; then another device takes it at once.
+    rel = lambda tok: http("POST", "/tasks/release", {"project": "garden", "id": "LN-1"}, token=tok)
+    assert rel(fr2)[0] == 409 and "LN-1" in leases()
+    r = rel(fr)
+    assert r[0] == 200 and json.loads(r[1]) == {"released": True} and "LN-1" not in leases(), r
+    assert http("POST", "/tasks/woken", {"project": "garden", "id": "LN-1", "agent": "codex", "session": "lap-s"}, token=fr2)[0] == 200
+    # A read-only token gets the task list but never a lease.
+    ro = json.loads(raw("POST", "/ui/api/admin/token", json.dumps({"name": "friend-ro", "write": False,
+                                                                     "roots": ["garden", "garden-memory"]}), ui)[2])["token"]
+    more = "- open until 2099-01-01 [Codex, LR-1] from Claude, start now: read only\n"
+    assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": more + "## Keuzes"}, fr)[0]
+    assert any("LR-1" in x for x in seen_turn("ro-s", "", tok=ro).get("tasks", [])) and "LR-1" not in leases()
+    assert http("POST", "/tasks/woken", {"project": "garden", "id": "LR-1", "agent": "codex", "session": "ro-s"}, token=ro)[0] == 403
+    assert json.loads(http("GET", "/tasks/ready", token=ro)[1])["tasks"] == []
+    # Token names are unique ignoring case (leases and pins match them so); a pin to an unknown device is refused.
+    assert raw("POST", "/ui/api/admin/token", json.dumps({"name": "FRIEND-RO", "write": False, "roots": ["garden"]}), ui)[0] == 400
+    err = call("knowledge_edit", {"path": path, "old_string": "## Keuzes",
+                                  "new_string": "- open until 2099-01-01 [Codex@nopc, PX-1] from Claude, start now: x\n## Keuzes"}, fr)
+    assert err[0] and "pinned to device 'nopc'" in str(err) and "no device token has that name" in str(err), err
     # A claim marker ends the lease (the background check drops it).
     assert not call("knowledge_edit", {"path": path, "old_string": "per turn", "new_string": "per turn (claimed Codex, 2026-10-31)"}, fr)[0]
     end = time.time() + 10
@@ -246,7 +298,7 @@ def lease_contract(tmp, ck, fr, raw):
         time.sleep(0.3)
     assert "LT-1" not in leases(), leases()
     text = (tmp / "projects/garden/memory/project_tasks.md").read_text()
-    for line in [ln for ln in text.splitlines() if any(i in ln for i in ("LS-1", "PIN-1", "LT-1", "LT-2", "LC-1", "LC-2"))]:
+    for line in [ln for ln in text.splitlines() if any(i in ln for i in ("LS-1", "PIN-1", "LT-1", "LT-2", "LC-1", "LC-2", "LH-1", "LN-1", "LR-1"))]:
         call("knowledge_edit", {"path": path, "old_string": line + "\n", "new_string": ""})
     (tmp / "task_leases.json").write_text("{}")  # the later checks start without leases
 

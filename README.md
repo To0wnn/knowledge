@@ -49,12 +49,20 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   that may start reach an agent as "start now" (`/tasks`, the wake, `GET /tasks/ready`); the others are listed with the
   reason. One task is started on one machine only: the first device to take it holds a 30-minute lease
   (`state/task_leases.json`). `POST /tasks/woken` takes the lease (200 `{"lease"}`, or 409 `{"held_by"}` when another
-  device or another session holds it), `GET /tasks/ready` leaves out tasks another device holds, and the per-turn
-  `/tasks` takes the lease for the asking session: every other session, on another device or on the same one, hears
-  "<ID> is already being handled by <device | another session on this pc>; do not start it". A lease the companion
-  takes for a session it wakes belongs to that session; one taken for a session it starts (no id yet) goes to the
-  first session of that device that asks. A lease ends when it runs out or the line gets its claim marker. `[<Owner>@<device>, <ID>]` pins a task to
-  one device (the token's name, any case); others see it as reserved. A woken task nobody claims within 30 minutes
+  device or another session holds it), `POST /tasks/release` gives it back (holder device only; a failed start or
+  delivery), `GET /tasks/ready` leaves out tasks another device holds, and the per-turn `/tasks` takes the lease for
+  the asking session when it first hears the task: every other session, on another device or on the same one, hears
+  "<ID> is already being handled by <device | another session on this pc>; do not start it". Later turns (the plugin
+  sends the ids it told the session before as `seen`) renew the session's own lease only within 30 minutes of the
+  tell and never take a free one again, so a session that heard a task and did other work lets it go. Only a token
+  that may write the project's memos takes leases. A wake on the same machine takes the lease for the session it
+  tells, and gives it back when the message is refused. The companion checks it can start an agent before it takes
+  a task, gives the lease back when a start or delivery fails and leaves that task to other pcs for 30 minutes; a
+  session it starts gets a nonce (`KNOWLEDGE_START_NONCE`) and only the session presenting it takes its tasks (after
+  2 minutes without it, any session of that device may); it keeps renewing the lease of a `codex exec` it started
+  while that runs. A lease ends when it runs out or the line gets its claim marker, which also makes the task not
+  startable. `[<Owner>@<device>, <ID>]` pins a task to one device (the token's name, any case; token names are unique
+  ignoring case, and a new line pinned to an unknown device is refused); others see it as reserved. A woken task nobody claims within 30 minutes
   shows as stalled and sends one Matrix message.
 - **Results handed back:** a line `- [<Requester>, <ID>-done]: <result>` is listed for its requester only, at
   session start ("Results handed back to you") and once per session at the next turn when it arrives later
