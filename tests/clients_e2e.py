@@ -701,6 +701,12 @@ def knowledge_home(tok: str, tmp: Path, project: Path):
         check((kh / "machine.json").stat().st_mode & 0o077 == 0, "machine id: machine.json is private (0600)")
     code, out, err = run([sys.executable, str(hooks / "token_store.py"), "header"], "", env)
     check(code == 0 and json.loads(out).get("X-Knowledge-Machine") == m.get("id"), "machine id: the MCP header helper sends it too", out + err)
+    (kh / "machine.json").write_text(json.dumps({**m, "label": "Компьютер-7"}), encoding="utf-8")  # a Unicode computer name
+    code, out, err = run([sys.executable, str(hooks / "token_store.py"), "header"], "", env)
+    label = json.loads(out).get("X-Knowledge-Machine-Label", "") if code == 0 else ""
+    check(label.isascii() and label.endswith("-7") and http("GET", "/tasks/ready", headers=json.loads(out))[0] == 200,
+          "machine id: a non-Latin host name becomes an ASCII label, so every request still goes out", out + err)
+    (kh / "machine.json").write_text(json.dumps(m), encoding="utf-8")
     return env, kh
 
 

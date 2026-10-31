@@ -157,7 +157,9 @@ def machine() -> dict:
         try:
             d = json.loads(f.read_text(encoding="utf-8"))
             if isinstance(d, dict) and re.fullmatch(r"[0-9a-f]{16}", str(d.get("id", ""))):
-                return {"id": d["id"], "label": re.sub(r"[^\w.-]", "-", str(d.get("label") or ""))[:60] or d["id"]}
+                # ASCII only: it goes into an HTTP header, which http.client and Node encode as Latin-1
+                label = re.sub(r"[^\w.-]", "-", str(d.get("label") or ""), flags=re.ASCII)[:60]
+                return {"id": d["id"], "label": label if label.strip("-") else d["id"]}
         except (OSError, ValueError):
             pass
         try:
@@ -177,7 +179,7 @@ def headers(tok: str) -> dict:
     m = machine()
     return {**({"Authorization": f"Bearer {tok}"} if tok else {}),
             **({"X-Knowledge-Machine": m["id"], "X-Knowledge-Machine-Label": m["label"]} if m else {}),
-            **({"X-Knowledge-Worker": w} if (w := re.sub(r"[^\w.-]", "", os.environ.get("KNOWLEDGE_WORKER", ""))[:60]) else {})}
+            **({"X-Knowledge-Worker": w} if (w := re.sub(r"[^\w.-]", "", os.environ.get("KNOWLEDGE_WORKER", ""), flags=re.ASCII)[:60]) else {})}
 
 
 def store_url(u: str) -> None:
