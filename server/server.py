@@ -5026,7 +5026,7 @@ def board_items() -> list[dict]:
                                   "offline_since": r["at"] if lost else None, "can_stop": st == "running" and r["online"],
                                   "can_restart": st in ("failed", "stopped", "finished") and r["online"],
                                   "git": w.get("git"), "status": st, "open": w.get("open") or "", "checkpoint": bool(w.get("checkpoint")),
-                                  "why": w.get("why") or ""})
+                                  "why": w.get("why") or "", "progress": w.get("progress") if st == "running" else None})
     working = {(i["project"], i["id"]) for i in items if i["kind"] == "worker" and i["col"] == "running"}
     for t in task_rows():
         agent = owner_agent(t["owner"])
@@ -5505,6 +5505,17 @@ def git_pill(g) -> dict | None:
             "changed": num("changed"), "ahead": num("ahead"), "behind": num("behind")}
 
 
+def worker_progress(p) -> dict | None:
+    """A running worker's progress snapshot from its companion: newest commit subject, commits and changed files, the
+    last 3 log lines; known secrets masked again here and every string capped. None when it sent none."""
+    if not isinstance(p, dict):
+        return None
+    num = lambda k: max(0, min(int(p[k]), 10**6)) if type(p.get(k)) is int else 0
+    log = p.get("log") if isinstance(p.get("log"), list) else []
+    return {"commit": redact(str(p.get("commit") or "")[:200]), "commits": num("commits"), "changed": num("changed"),
+            "log": [redact(str(x)[:300]) for x in log[-3:]]}
+
+
 @server.custom_route("/machine/report", methods=["POST"])
 async def machine_report(request: Request):
     """The companion's state every round: version, workers allowed, max workers, game session, per agent YOLO, hooks
@@ -5524,7 +5535,7 @@ async def machine_report(request: Request):
                              for a, v in (b.get("agents") or {}).items() if a in AGENT_OWNERS and isinstance(v, dict)},
                   "workers": [{k: (w.get(k) if w.get(k) is None or isinstance(w.get(k), (int, float, bool)) else str(w[k])[:300])
                                for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open", "checkpoint", "merged", "why")}
-                              | {"git": git_pill(w.get("git"))}
+                              | {"git": git_pill(w.get("git")), "progress": worker_progress(w.get("progress"))}
                               for w in (b.get("workers") or [])[:40] if isinstance(w, dict)],
                   "folders": {k: [{"path": str(f.get("path", ""))[:500], "project": str(f.get("project", ""))[:80]}
                                   | ({"git": git_pill(f.get("git"))} if k == "linked" else {})

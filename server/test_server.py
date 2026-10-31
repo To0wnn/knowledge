@@ -788,7 +788,8 @@ def board_contract(tmp, ck, fr, raw, er, et):
                                              "branch": f"task/{i}", **k}
     rep = {"version": "0.17.0", "workersAllowed": True, "agents": {"codex": {}, "claude": {}},
            "folders": {"linked": [{"path": "/home/x/garden", "project": "garden", "git": {**pill, "changed": "3; rm -rf"}}]},
-           "workers": [worker("BRD-4", "running", git=pill), worker("BRD-5", "failed", now - 60, why="ended without claiming or handing back its task"), worker("BRD-6", "finished", now - 60),
+           "workers": [worker("BRD-4", "running", git=pill, progress={"commit": "feat: beds", "commits": 2, "changed": "3", "log": [
+               "one", "two Sup3rSecret99", "three", "four " + "y" * 400]}), worker("BRD-5", "failed", now - 60, why="ended without claiming or handing back its task"), worker("BRD-6", "finished", now - 60),
                        worker("BRD-7", "failed", now - 8 * 86400), worker("BRD-8", "finished", now - 2 * 86400)]}
     assert http("POST", "/machine/report", rep, token=fr, headers=pc)[0] == 200
     path = "garden-memory/project_tasks.md"
@@ -813,6 +814,10 @@ def board_contract(tmp, ck, fr, raw, er, et):
     assert col("chat", cids[1]) == "needs" and items[("chat", cids[1])]["line"] == "refused: git push", items[("chat", cids[1])]
     assert col("chat", cids[2]) == "running"
     assert col("worker", "BRD-4") == "running" and items[("worker", "BRD-4")]["git"] == pill
+    prog = items[("worker", "BRD-4")]["progress"]
+    assert prog["commit"] == "feat: beds" and prog["commits"] == 2 and prog["changed"] == 0, prog
+    assert prog["log"][:2] == ["two ‹secret›", "three"] and len(prog["log"][2]) == 300, prog
+    assert items[("worker", "BRD-5")]["progress"] is None
     assert (col("worker", "BRD-5"), col("worker", "BRD-6"), col("worker", "BRD-7"), col("worker", "BRD-8")) == ("needs", "done", None, None), items.keys()
     failed = items[("worker", "BRD-5")]
     assert failed["why"] == "ended without claiming or handing back its task" and "ended without claiming" in failed["line"], failed

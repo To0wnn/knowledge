@@ -1073,6 +1073,10 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         check(row.get("companion", {}).get("workersAllowed") is True and cxa.get("limit") == 40.0
               and sum(1 for w in cxa.get("workers", []) if w["status"] == "running") == 2 and row["agents"]["agy"]["yolo"] is True,
               "workers: the Machines list shows the pc's workers, limit, YOLO and settings", json.dumps(row)[:900])
+        running = [w for w in cxa.get("workers", []) if w["status"] == "running"]
+        check(running and all(isinstance(w.get("progress"), dict) and isinstance(w["progress"].get("log"), list)
+                              and isinstance(w["progress"].get("commits"), int) for w in running),
+              "workers: each running worker reports a progress snapshot (commit, commits, changed files, log tail)", json.dumps(running)[:900])
         # YOLO watch: a risky action is flagged (activity log, once to the server), never refused.
         code, out_w, err = run([sys.executable, str(hooks / "watch.py"), "codex"], json.dumps({"session_id": "yolo-1", "cwd": str(repo),
                                "tool_name": "Bash", "tool_input": {"command": "git push --force origin main"}}), {**env, "KNOWLEDGE_YOLO": "1"})

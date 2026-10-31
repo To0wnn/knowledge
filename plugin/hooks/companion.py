@@ -1029,6 +1029,66 @@ def with_git(folders: dict, ws: dict, now: float) -> tuple:
     return {**folders, "linked": linked}, {k: once(w.get("worktree")) if recent(w) else None for k, w in ws.items()}
 
 
+# a labelled value (password: x, token=x, Bearer x) or a long key-like run; the server masks its known secrets as well
+SECRETISH = re.compile(r"((?:password|passwd|token|api[-_ ]?key|secret|authorization|bearer)[\"']?\s*[:=]?\s*[\"']?)[^\s\"',}]{6,}"
+                       r"|(?<![\w-])[A-Za-z0-9_+=-]{32,}(?![\w-])", re.I)
+TAIL_LINES, TAIL_WIDTH = 3, 200
+
+
+def mask(text: str) -> str:
+    return SECRETISH.sub(lambda m: (m.group(1) or "") + "‹masked›", text)
+
+
+def event_text(line: str) -> str:
+    """The words of one JSON event line (Claude's stream-json, Codex --json): its last text, result or message string;
+    "" for an event without words (a tool call's bookkeeping). Any other line as it is."""
+    try:
+        ev = json.loads(line)
+    except ValueError:
+        return line
+    found = []
+
+    def walk(x):
+        if isinstance(x, dict):
+            for k, v in x.items():
+                found.append(v) if k in ("text", "result", "message") and isinstance(v, str) else walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+    walk(ev)
+    return found[-1] if found else ""
+
+
+def log_tail(path) -> list:
+    """The last lines with words of a worker's log, secrets masked, each cut to TAIL_WIDTH; at most 16 kB read."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(max(0, f.seek(0, 2) - 16_000))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+    except (OSError, TypeError):
+        return []
+    out = []
+    for line in reversed(lines):
+        if text := " ".join(event_text(line.strip()).split()):
+            out.append(mask(text)[:TAIL_WIDTH])
+            if len(out) == TAIL_LINES:
+                break
+    return out[::-1]
+
+
+def progress(w: dict, g) -> dict:
+    """What a running worker did so far, for its board card: the subject of its newest commit (when its branch has one
+    of its own), its commits and changed files (the git numbers), the last lines of its log."""
+    commit = ""
+    if g and g.get("ahead") and w.get("worktree"):
+        try:
+            commit = workers.git(w["worktree"], "log", "-1", "--format=%s", env=GIT_RO, timeout=10).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return {"commit": mask(commit)[:TAIL_WIDTH], "commits": (g or {}).get("ahead", 0), "changed": (g or {}).get("changed", 0),
+            "log": log_tail(w.get("log"))}
+
+
 def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, resets=None):
     """The machine's state for the Machines list: settings, game, per agent YOLO, hooks and limit, the workers, and
     why each ready task waits here (the Tasks tab shows it)."""
@@ -1039,7 +1099,8 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
                      "resets": (resets or {}).get(a)}
                        for a in AGENTS if installed(a)},
             "workers": [{**{k: w.get(k) for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open", "why")},
-                         "checkpoint": bool(w.get("checkpoint")), "merged": w["status"] == "merged", "git": gits.get(k)} for k, w in ws.items()],
+                         "checkpoint": bool(w.get("checkpoint")), "merged": w["status"] == "merged", "git": gits.get(k),
+                         **({"progress": progress(w, gits.get(k))} if w["status"] == "running" else {})} for k, w in ws.items()],
             "limitWait": wait, "waiting": waiting or {}, "folders": links, "projects": load("state.json", {}).get("projects", [])}
     server("POST", "/machine/report", tok, body)
 
@@ -1508,6 +1569,16 @@ def main(argv: list):
         on = {"workersAllowed": True, "maxWorkers": {"claude": 1, "codex": 2, "agy": 1}}
         run = {"k": {"agent": "codex", "status": "running"}}
         assert why_not(task, {}, {**on, "workersAllowed": False}, {}, "").startswith("Workers are off")
+        assert mask("export API_KEY=gategategate and token: gategate") == "export API_KEY=‹masked› and token: ‹masked›", mask("export API_KEY=gategategate and token: gategate")
+        assert mask("sk-" + "a1" * 20) == "‹masked›" and mask("ran the tests: 12 passed") == "ran the tests: 12 passed"
+        with tempfile.NamedTemporaryFile("w", suffix=".log", delete=False, encoding="utf-8") as f:
+            f.write("\n".join(["old line", json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "Reading   the memo"}]}}),
+                                json.dumps({"type": "system", "subtype": "hook"}), "plain " + "word " * 80,
+                                json.dumps({"type": "result", "result": "done, password=hunter2hunter2"})]) + "\n")
+        tail = log_tail(f.name)
+        os.unlink(f.name)
+        assert tail == ["Reading the memo", ("plain" + " word" * 80)[:TAIL_WIDTH], "done, password=‹masked›"], tail
+        assert log_tail("/nonexistent/x.log") == [] and log_tail(None) == []
         assert why_not(task, {}, on, {}, "a Wolf game session runs (1)").startswith("No workers while a Wolf")
         assert why_not(task, {}, on, {"codex": 90.0}, "").startswith("waiting for limit")
         old = {"k": {"agent": "claude", "status": "running", "project": "p", "id": "T-1"}}
