@@ -856,7 +856,7 @@ $("q").addEventListener("keydown", (e) => { // Enter opens the first result
 // edits and Esc closes it; in a chat Esc goes back.
 document.addEventListener("keydown", (e) => {
   const typing = /input|textarea|select/i.test(document.activeElement.tagName) || document.querySelector("dialog[open]");
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); openPalette(); return; }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); if (!document.querySelector("dialog[open]:not(#palette)")) openPalette(); return; }
   if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
   const kn = shellRoute.view === "notes" || shellRoute.view === "map", at = current ? `/${encPath(current.path)}` : "";
   if (e.key === "[") toggleRail();

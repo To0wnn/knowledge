@@ -69,9 +69,9 @@ function palGroups(q) {
     ["Go to", views.filter((v) => has(v.label))], ["Actions", actions.filter((a) => has(a.label))], ["", [all]]];
 }
 
-// keep = keep the highlighted item where it is when the list grows (server results, tasks arriving)
+// keep = keep the item the user moved to when the list grows (server results arriving); else the best match leads
 function palRender(keep = false) {
-  const q = $("pal-q").value.trim(), was = keep && pal.items[pal.sel] ? palKey(pal.items[pal.sel]) : "";
+  const q = $("pal-q").value.trim(), was = keep && pal.moved && pal.items[pal.sel] ? palKey(pal.items[pal.sel]) : "";
   const list = $("pal-list"); list.replaceChildren(); pal.items = [];
   for (const [head, items] of palGroups(q)) {
     if (!items.length) continue;
@@ -80,7 +80,7 @@ function palRender(keep = false) {
       const i = pal.items.length, li = el("li", "pal-opt");
       li.id = `pal-o-${i}`; li.setAttribute("role", "option");
       li.append(el("span", "pal-label", it.label)); if (it.hint) li.append(el("small", null, it.hint));
-      li.onmousemove = () => { if (pal.sel !== i) palSelect(i); };
+      li.onmousemove = () => { if (pal.sel !== i) { pal.moved = true; palSelect(i); } };
       li.onclick = () => palGo(it);
       list.append(li); pal.items.push(it);
     }
@@ -99,6 +99,7 @@ function palSelect(i) {
 }
 
 $("pal-q").addEventListener("input", () => {
+  pal.moved = false;
   palRender();
   clearTimeout(pal.timer);
   const q = $("pal-q").value.trim();
@@ -116,7 +117,7 @@ $("pal-q").addEventListener("input", () => {
 });
 $("pal-q").addEventListener("keydown", (e) => {
   const n = pal.items.length;
-  if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); if (n) palSelect((pal.sel + (e.key === "ArrowDown" ? 1 : n - 1)) % n); }
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); if (n) pal.moved = true, palSelect((pal.sel + (e.key === "ArrowDown" ? 1 : n - 1)) % n); }
   else if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); if (pal.items[pal.sel]) palGo(pal.items[pal.sel]); }
 });
 $("pal-close").onclick = () => $("palette").close();
