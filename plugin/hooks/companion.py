@@ -847,6 +847,9 @@ def check_workers(ws: dict, tok: str, now: float, lim: dict):
                 log("worker", f"{AGENTS[w['agent']][0]}: the worker for {w['id']} was stopped (usage limit)", "")
         elif w["status"] != "merged" and w.get("worktree") and not shared_running(ws, w) and workers.merged(w):
             w["status"], w["result"] = "merged", workers.remove(w)
+            for o in ws.values():  # the sessions before or after it in that worktree (a hand-over) share its branch
+                if o is not w and o.get("worktree") == w["worktree"] and o["status"] != "running":
+                    o["status"], o["result"] = "merged", w["result"]
             log("worker", f"{w['id']}: merged by its requester", w["result"])
 
 
@@ -1262,7 +1265,7 @@ def main(argv: list):
         globals()["CLAUDE_JSON"] = HOME / ".knowledge-companion-self-test-missing.json"
         assert untrusted("claude", ["/x"]) == [], "Claude never ran here: nothing to trust, no trust round every minute"
         # Whether this pc may start a worker: off by default, game, limit (unknown: one), max, a linked folder.
-        g, task = globals(), {"agent": "codex", "project": "p", "id": "T-1"}
+        g, task, workers_mod = globals(), {"agent": "codex", "project": "p", "id": "T-1"}, workers
         g.update(project_folders=lambda: {"p": "/x"})
         on = {"workersAllowed": True, "maxWorkers": {"claude": 1, "codex": 2, "agy": 1}}
         run = {"k": {"agent": "codex", "status": "running"}}
@@ -1277,6 +1280,14 @@ def main(argv: list):
         DENIED.add("/Users/x/Documents/app")
         assert "Full Disk Access" in why_not({**task, "project": "q"}, {}, on, {"codex": 10.0}, ""), "a folder macOS keeps from it is named"
         DENIED.clear()
+        # A merged branch counts for every session that worked in its worktree (a hand-over shares it).
+        gone = []  # the branch is deleted with the first record's worktree: merged() of the other finds no branch
+        g["workers"] = type("W", (), {"merged": staticmethod(lambda w: not gone), "remove": staticmethod(lambda w: gone.append(1) or "removed"), "PROCS": {}})
+        pair = {"a": {"id": "M-1", "agent": "codex", "status": "finished", "worktree": "/wt"},
+                "b": {"id": "M-1-cont", "agent": "codex", "status": "finished", "worktree": "/wt"}}
+        check_workers(pair, "", 1000, {})
+        assert [w["status"] for w in pair.values()] == ["merged", "merged"], pair
+        g["workers"] = workers_mod
         # A Claude worker's reading counts until its window resets, also when its log is older than 15 minutes.
         import tempfile
         with tempfile.TemporaryDirectory() as tmp:
