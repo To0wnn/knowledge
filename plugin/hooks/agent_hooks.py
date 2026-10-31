@@ -41,6 +41,7 @@ import token_store  # noqa: E402  (KNOWLEDGE_TOKEN or the keyring, shared with t
 import project_marker  # noqa: E402  (the folder-to-project link, shared with the Claude plugin)
 import self_update  # noqa: E402  (auto-update of this plugin, the counterpart of Claude Code's own)
 import limits  # noqa: E402  (the usage-limit ladder, shared with the Claude plugin)
+import hook_status  # noqa: E402  (failures of these hooks, reported to the server)
 URL = token_store.url()
 AGENTS = ("agy", "codex")
 SETUP = "plugin"  # clients/knowledge-agent.py sets "script": the setup without a plugin updates itself another way
@@ -219,7 +220,8 @@ def tasks(agent: str, tok: str):
     register_session(agent, hook)
     text = "\n\n".join(t for t in (new_tasks(agent, tok, hook, wake=True), limits.notice(agent, hook)) if t)
     if text:
-        print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": text}}))
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": text}}), flush=True)
+    send_status(agent, tok)
 
 
 def agy_call(entry: dict, method: str, body: dict, timeout: float = 3) -> dict:
@@ -409,8 +411,19 @@ def wait(agent: str, tok: str):
 
 def run_hook(script: str, tok: str, stdin: str) -> str:
     env = {**os.environ, "KNOWLEDGE_URL": URL, **({"KNOWLEDGE_TOKEN": tok} if tok else {})}
-    return subprocess.run([sys.executable, "-X", "utf8", str(HOOKS / script)], input=stdin, env=env, capture_output=True,
-                          text=True, encoding="utf-8", errors="replace").stdout
+    r = subprocess.run([sys.executable, "-X", "utf8", str(HOOKS / script)], input=stdin, env=env, capture_output=True,
+                       text=True, encoding="utf-8", errors="replace")
+    if r.returncode not in (0, 2):
+        hook_status.record(script, r.returncode, r.stderr)
+    return r.stdout
+
+
+def send_status(agent: str, tok: str):
+    """From the per-turn hook: hook failures not reported yet, at most every two minutes; never fails the turn."""
+    try:
+        hook_status.send(URL, tok, agent, ".".join(map(str, self_update.own())))
+    except Exception:
+        pass
 
 
 BACKGROUND = Path.home() / ".knowledge" / "background.txt"  # what a background hook printed, said at the next turn
@@ -525,7 +538,8 @@ def hints(tok: str):
     except OSError:
         text = ""
     text = "\n\n".join(t for t in (text.strip(), news, limits.notice("agy", hook, agy_status)) if t)
-    print(json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": text}}]} if text.strip() else {}))
+    print(json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": text}}]} if text.strip() else {}), flush=True)
+    send_status("agy", tok)
 
 
 def main(argv: list):
@@ -576,4 +590,5 @@ if __name__ == "__main__":
     except SystemExit:
         raise
     except Exception as e:  # locked vault, bad stdin, network: say so, never fail the session
+        hook_status.record_exception(" ".join(["agent_hooks.py"] + sys.argv[1:3]), e)
         print(f"knowledge hook skipped: {e}", file=sys.stderr)

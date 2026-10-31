@@ -40,6 +40,9 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   (such as docs moved into an archive folder) go to the first session of the device that asks, offered again after an
   hour when that session had no further turn, and one session is asked to run a full docs mirror sync in the
   background when the device's last one is older than `docs_sync_minutes` (admin page, Settings).
+- **Hook failures:** when one of the plugin's own hooks crashes or exits with an error, the device keeps it in
+  `~/.knowledge/hook-errors.jsonl` and the per-turn hook reports new ones with `POST /status` (at most every two
+  minutes, never holding up the turn); the tasks tab shows the last failure per device and agent.
 - **Waking another agent (same machine):** after a `knowledge_edit`/`knowledge_write`/`knowledge_new_memo`, the
   plugin wakes the newest idle session per agent and project on that machine that has a new task: Codex through
   `codex queue --thread`, agy through its local language server (the agy session registers once by running
