@@ -1,5 +1,5 @@
 {
-  "description": "Codex (Windows: hooks run in the session shell, usually PowerShell, so no %VAR%; Codex fills in ${PLUGIN_ROOT} itself): the knowledge context at session start (one handler: with several Codex drops the context, openai/codex#45999), the docs mirror after apply_patch, tasks handed over during the session before each prompt, waking the other agents on this machine after a knowledge write, the session log (SessionEnd may take at most 3 s), and the usage-limit ladder (a notice at 50/75/90% with each prompt, no new subagents from 95%), and refusing a known secret value in apply_patch.",
+  "description": "Codex (Windows: hooks run in the session shell, usually PowerShell, so no %VAR%; Codex fills in ${PLUGIN_ROOT} itself): the knowledge context at session start (one handler: with several Codex drops the context, openai/codex#45999), the docs mirror after apply_patch, tasks handed over during the session before each prompt, asking the companion on this machine to start a worker after a knowledge write, telling a worker to hand over at 90% of the usage limit and watching YOLO sessions for risky actions after every tool (never blocking), the session log (SessionEnd may take at most 3 s), and the usage-limit ladder (a notice at 50/75/90% with each prompt, no new subagents from 95%), and refusing a known secret value in apply_patch.",
   "hooks": {
     "SessionStart": [
       {
@@ -35,6 +35,17 @@
             "command": "python3 -X utf8 \"${PLUGIN_ROOT}/hooks/agent_hooks.py\" wake codex",
             "commandWindows": "cmd /d /c call \"${PLUGIN_ROOT}\\python3.cmd\" -X utf8 \"${PLUGIN_ROOT}\\hooks\\agent_hooks.py\" wake codex",
             "timeout": 40
+          }
+        ]
+      },
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -X utf8 \"${PLUGIN_ROOT}/hooks/watch.py\" codex",
+            "commandWindows": "cmd /d /c call \"${PLUGIN_ROOT}\\python3.cmd\" -X utf8 \"${PLUGIN_ROOT}\\hooks\\watch.py\" codex",
+            "timeout": 10
           }
         ]
       }

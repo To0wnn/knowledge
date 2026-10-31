@@ -1,5 +1,5 @@
 {
-  "description": "Load the shared knowledge context at session start, turn on auto-update for this plugin once, log each session, tell a running session about tasks handed to it meanwhile, wake the other agents on this machine when it hands them a task, warn at 50/75/90% of the usage limit and refuse new subagents from 95%, guard secrets, and mirror a guest project's Markdown (folders with .knowledge-project) and keep an offline copy of the memory and the shared skills that syncs both ways",
+  "description": "Load the shared knowledge context at session start, turn on auto-update for this plugin once, log each session, tell a running session about tasks handed to it meanwhile, let the companion on this machine start a worker when a task is handed over, tell a worker to hand over at 90% of the usage limit, watch YOLO sessions for risky actions (never blocking), warn at 50/75/90% of the usage limit and refuse new subagents from 95%, guard secrets, and mirror a guest project's Markdown (folders with .knowledge-project) and keep an offline copy of the memory and the shared skills that syncs both ways",
   "hooks": {
     "SessionStart": [
       {
@@ -97,12 +97,6 @@
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/py.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/agent_hooks.py\" tasks claude",
             "timeout": 8
-          },
-          {
-            "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/py.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/agent_hooks.py\" wait claude",
-            "asyncRewake": true,
-            "timeout": 172800
           }
         ]
       }
@@ -152,6 +146,16 @@
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/py.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/agent_hooks.py\" wake claude",
             "timeout": 40
+          }
+        ]
+      },
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/py.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/watch.py\" claude",
+            "timeout": 10
           }
         ]
       }
