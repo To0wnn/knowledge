@@ -4876,7 +4876,7 @@ BOARD_SEEN: dict[str, float] = {}  # user -> last /ui/api/board poll (this proce
 def needs_link(i: dict) -> str:
     if not PUBLIC_URL:
         return ""
-    return f" {PUBLIC_URL}/ui#/" + (f"chat/{i['machine']}/{i['id']}" if i["kind"] == "chat" else "inbox")
+    return f" {PUBLIC_URL}/ui#/" + (f"chats/{i['id']}" if i["kind"] == "chat" else "inbox")
 
 
 def needs_check(now: float) -> int:

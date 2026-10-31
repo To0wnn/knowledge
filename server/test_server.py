@@ -714,7 +714,7 @@ def needs_contract(tmp, ck, fr, raw, heard):
     admin = lambda b: raw("POST", "/ui/api/admin/settings", json.dumps(b), {**ck, "X-Knowledge-UI": "1", "Content-Type": "application/json"})
     state = tmp / "needs_notified.json"
     assert not state.exists(), "off (settings.json): no state"
-    assert admin({"needs_per_hour": 2})[0] == 200
+    assert admin({"needs_per_hour": 3})[0] == 200
     deadline = time.time() + 10
     while not state.exists() and time.time() < deadline:  # the first run only notes what is there
         time.sleep(0.2)
@@ -730,6 +730,16 @@ def needs_contract(tmp, ck, fr, raw, heard):
     assert "waits for your approval" in about(1)[0] and about(1)[0].endswith("https://kn.example/ui#/inbox"), about(1)
     time.sleep(2.5)
     assert len(about(1)) == 1, "one message per item"
+    # A chat reply links to the chat itself.
+    pc = {"X-Knowledge-Machine": "cccccccccccccccc", "X-Knowledge-Machine-Label": "garage"}
+    ui = lambda path, body: raw("POST", path, json.dumps(body), {**ck, "X-Knowledge-UI": "1", "Content-Type": "application/json"})
+    http("POST", "/machine/report", {"version": "0.17.0", "agents": {"codex": {}},
+                                     "folders": {"linked": [{"path": "/home/x/garden", "project": "garden"}]}}, token=fr, headers=pc)
+    cid = json.loads(ui("/ui/api/chats", {"machine": "cccccccccccccccc", "agent": "codex", "folder": "/home/x/garden"})[2])["chat"]["id"]
+    ui("/ui/api/chat/send", {"machine": "cccccccccccccccc", "id": cid, "text": "ping"})
+    http("GET", "/machine/chats", token=fr, headers=pc)
+    http("POST", "/machine/chats/events", {"chat": cid, "events": [{"kind": "text", "text": "pong"}], "done": True}, token=fr, headers=pc)
+    assert wait(lambda: any(m.endswith(f"https://kn.example/ui#/chats/{cid}") and "replied: pong" in m for m in heard)), heard
     # The board is open (polled): the item shows there, so no message, also not after the board closes.
     end = time.time() + 3
     add(2)
@@ -745,6 +755,7 @@ def needs_contract(tmp, ck, fr, raw, heard):
     time.sleep(3)
     assert not about(6) and not any("NT-6" in m for m in heard), heard
     assert json.loads(state.read_text())["items"].get("task:garden/NT-6") is None, "held back, still to tell"
+    http("POST", "/machine/report", {"version": "0.16.0"}, token=fr, headers=pc)
     assert admin({"needs_per_hour": 0})[0] == 200
     assert wait(lambda: not state.exists()), "off forgets, so on again does not replay a backlog"
     text = (tmp / "projects/garden/memory/project_tasks.md").read_text()

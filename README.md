@@ -133,7 +133,7 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   need you). Dismiss takes a Needs-you item off your own board until it changes (stored per person on the server,
   `POST /ui/api/board/dismiss`). With Matrix configured (`KNOWLEDGE_MATRIX_URL/ROOM/TOKEN`), a new Needs-you item on
   an admin's board gives one Matrix message in that room, with a link to `<KNOWLEDGE_PUBLIC_URL>/ui#/inbox` (a chat:
-  `#/chat/<machine>/<chat>`): once per item and version (the key and signature Dismiss uses), at most
+  `#/chats/<chat id>`): once per item and version (the key and signature Dismiss uses), at most
   `needs_per_hour` an hour (admin page, Settings; 0 = off, default 6; more at once give one summary, the rest wait
   for room), and none while an admin has the board open (polled in the last 2 minutes: they see it there). A woken
   task nobody took keeps its own notice, now with the same link. Non-admins get none: the room is the admin's. A card opens its chat full screen (Esc or "Board" goes back), a task its memo line, a worker how to look
