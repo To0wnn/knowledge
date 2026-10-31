@@ -7,7 +7,8 @@ and its neighbours (after the layout settled); the neighbours gather in a ring; 
 lands on a link) deselects, puts every node back exactly and zooms out; a second click on a note reads it. On a phone
 the lists come first (on the home view the topic cards instead of the topic list) and opening a note scrolls to it. The
 Agents cockpit opens with its pills, tools and new chat dialog (skipped on a server older than 0.16); the mission map
-lays out a seeded graph cleanly (lone tasks in the first column) and opens from the tools menu (skipped on a server without it). Read-only: it
+lays out a seeded graph cleanly (lone tasks in the first column) and opens from the tools menu (skipped on a server without it);
+tool approvals show on the board and in their chat with fake data (skipped before 0.18). Read-only: it
 opens notes, it never edits or sends.
 
   systemd-run --user --scope -q -p MemoryMax=3G ~/.local/bin/uv run -q --with playwright python tests/ui_smoke.py
@@ -275,6 +276,67 @@ async def cockpit(browser, devices, secret: str) -> None:
     await ctx.close()
 
 
+async def approvals(browser, devices, secret: str) -> None:
+    """Tool approvals (0.18): a waiting approval is a Needs-you item with Allow once / Allow for this chat / Deny, and a
+    block inside its chat card; a once-only one (git push, outside the folder) has no "for this chat". The board, the
+    chat list and the chat come from intercepted requests, and the answer is intercepted too: nothing reaches a pc.
+    Skipped on a server without approvals."""
+    import json
+    import time
+    from urllib.parse import urlsplit
+    now, sent = time.time(), []
+    ask = {"id": "a1b2c3d4", "tool": "Bash", "detail": "npm test", "reason": "", "once_only": False, "at": now, "expires": now + 1500}
+    push = {**ask, "id": "e5f6a7b8", "detail": "git push origin main", "once_only": True}
+    chat = {"id": "0123456789ab", "agent": "claude", "folder": "/home/x/garden", "project": "garden", "title": "Run the tests",
+            "status": "running", "machine": "f" * 16, "label": "smoke-pc", "online": True, "updated": now}
+    item = lambda a: {"kind": "ask", "col": "needs", "id": a["id"], "chat": chat["id"], "agent": "claude", "project": "garden",
+                      "machine": chat["machine"], "label": "smoke-pc", "online": True, "key": f"ask:{chat['machine']}/{chat['id']}/{a['id']}",
+                      "sig": a["id"], "title": f"Bash: {a['detail']}", "folder": chat["folder"], "at": now, "line": "asks to run this (Run the tests)",
+                      "expires": a["expires"], "once_only": a["once_only"]}
+    routes = {"/ui/api/board": {"items": [item(ask), item(push)], "now": now}, "/ui/api/chats": {"chats": [chat]},
+              "/ui/api/chat": {"chat": chat, "events": [{"n": 1, "at": now, "kind": "user", "text": "Run the tests"},
+                                                        {"n": 2, "at": now, "kind": "ask", "text": "asks: Bash: npm test"}],
+                               "trimmed": False, "online": True, "at": now, "label": "smoke-pc", "asks": [ask, push], "now": now}}
+
+    async def fake(route):
+        path = urlsplit(route.request.url).path
+        if path == "/ui/api/chat/approve":
+            sent.append(json.loads(route.request.post_data or "{}"))
+            return await route.fulfill(json={"ok": True})
+        if path in routes and route.request.method == "GET":
+            return await route.fulfill(json=routes[path])
+        await route.continue_()
+    for dev in ({"viewport": {"width": 1440, "height": 900}}, devices["iPhone 14"]):
+        ctx = await browser.new_context(ignore_https_errors=True, bypass_csp=True, **dev,
+                                        extra_http_headers={"X-Knowledge-Proxy": secret, "X-authentik-username": USER})
+        await ctx.route("**/ui/api/**", fake)
+        pg = await ctx.new_page()
+        errors = []
+        pg.on("pageerror", lambda e: errors.append(str(e)))
+        await pg.goto(URL + "/ui")
+        await pg.wait_for_selector("#cockpit-btn")
+        if not await pg.evaluate("typeof ckAsks === 'function'"):
+            print("skip approvals (server older than 0.18)")
+            return await ctx.close()
+        await pg.click("#cockpit-btn")
+        await pg.wait_for_selector("#ck-board .ck-col-needs .ck-item", timeout=15000)
+        acts = await pg.locator("#ck-board .ck-col-needs .ck-item").first.locator(".ck-item-acts button").all_inner_texts()
+        check(acts == ["Allow once", "Allow for this chat", "Deny"], f"board: an approval is a Needs-you item with its answers {acts}")
+        acts = await pg.locator("#ck-board .ck-col-needs .ck-item").nth(1).locator(".ck-item-acts button").all_inner_texts()
+        check(acts == ["Allow once", "Deny"], f"board: git push is allowed once at most {acts}")
+        check("2 approvals waiting" in await pg.locator("#ck-needs-live").text_content(), "board: the approvals are counted")
+        await pg.locator("#ck-board .ck-col-needs .ck-item-main").first.click()
+        await pg.wait_for_selector("#ck-canvas .ck-ask")
+        check(await pg.locator("#ck-canvas .ck-ask").count() == 2 and await pg.locator("#ck-canvas .ck-ask-what").first.text_content() == "npm test",
+              "chat card: one approval block per waiting approval, the command as text")
+        check(await pg.evaluate("document.documentElement.scrollWidth <= innerWidth"), "approvals fit the screen")
+        await pg.locator("#ck-canvas .ck-ask").first.get_by_role("button", name="Allow once").click()
+        await pg.wait_for_timeout(500)
+        check(sent and sent[-1] == {"machine": chat["machine"], "id": chat["id"], "ask": ask["id"], "decision": "once"}, f"Allow once answers that approval {sent[-1:]}")
+        check(not errors, f"no page errors with approvals {errors[:2]}")
+        await ctx.close()
+
+
 MISSION_LAYOUT_CHECK = """() => {
   // A seeded graph: 3 lanes, every status, chains inside lanes and links across them, a hand-over, lone tasks.
   const lanes = [{id: "claude", name: "Claude"}, {id: "codex", name: "Codex"}, {id: "agy", name: "Gemini"}], st = Object.keys(MS_STATUS);
@@ -383,6 +445,7 @@ async def main() -> None:
         await phone(browser, p.devices, secret)
         await admin(browser, secret)
         await cockpit(browser, p.devices, secret)
+        await approvals(browser, p.devices, secret)
         await mission(browser, p.devices, secret)
         await browser.close()
     print("ok" if not failures else f"{len(failures)} failed")

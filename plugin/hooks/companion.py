@@ -1292,6 +1292,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         o, path = self.origin(), urllib.parse.urlsplit(self.path).path
+        if path == "/local/api/ask":  # a chat turn's permission prompt (approval_mcp.py): no browser, the key file only
+            if not self.host_ok() or o != "" or not self.key_ok():
+                return self.send(403, {"error": "not allowed"})
+            try:
+                b = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 65536)) or b"{}")
+                inp = b.get("input") if isinstance(b.get("input"), dict) else {}
+                decision, message = chat.ask(str(b.get("chat", "")), str(b.get("tool", "")), inp, str(inp.get("description") or "")[:300])
+            except Exception as e:  # never an allow by accident
+                decision, message = "deny", f"the companion could not ask: {type(e).__name__}: {e}"[:300]
+            return self.send(200, {"decision": decision, "message": message})
         # a POST always carries Origin in a browser; JSON only, so a foreign page cannot send it without a preflight
         if not self.host_ok() or not o or not self.headers.get("Content-Type", "").startswith("application/json"):
             return self.send(403, {"error": "not allowed"})
@@ -1367,6 +1377,9 @@ def chats_round() -> bool:
     tok = token_store.token()
     post = lambda body: server("POST", "/machine/chats/events", tok, body)
     r = server("GET", "/machine/chats", tok)
+    chat.ASK_SERVER, chat.LOG = (lambda body: server("POST", "/machine/chats/ask", tok, body)), log
+    for a in r.get("answers", []):  # the owner's answers to tool approvals (before the stops: a stop denies the rest)
+        chat.answer(a)
     for cid in r.get("stop", []):
         if not chat.stop(cid):
             post({"chat": cid, "events": [{"kind": "info", "text": "Stopped (no turn ran here any more)."}], "done": True})
@@ -1427,6 +1440,7 @@ class LocalServer(ThreadingHTTPServer):
 
 def serve():
     token_store.machine()  # this pc's id, made once; the plugin hooks make it too when the companion never ran
+    api_key()  # made now: a chat turn's permission prompt (approval_mcp.py) reads it before any page opened
     try:
         httpd = LocalServer(("127.0.0.1", PORT), Handler)  # never another interface: the API changes agent settings
     except OSError as e:  # loudly, with a failing exit: the hooks' wrapper would otherwise call it skipped and exit 0

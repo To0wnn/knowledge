@@ -595,6 +595,85 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     http("POST", "/machine/report", {"version": "0.16.0"}, token=fr, headers=pc)
 
 
+def approvals_contract(tmp, ck, fr, raw, er, et):
+    """Tool approvals in a chat: the machine asks while a turn runs, only the owner answers (once, for the chat, deny),
+    the answer reaches the companion once, a once-only ask cannot be allowed for the chat, an unanswered one times out
+    as denied and says so, the end of the turn withdraws what is still open; each open one is a Needs-you item."""
+    pc = {"X-Knowledge-Machine": "cccccccccccccccc", "X-Knowledge-Machine-Label": "garage"}
+    mid = "cccccccccccccccc"
+    ui = lambda path, body=None, h=ck: raw("POST" if body is not None else "GET", path, None if body is None else json.dumps(body),
+                                          {**h, "X-Knowledge-UI": "1", "Content-Type": "application/json"})
+    m = lambda method, path, body=None, tok=fr: http(method, path, body, token=tok, headers=pc)
+    http("POST", "/machine/report", {"version": "0.18.0", "agents": {"claude": {}}, "folders": {"linked": [{"path": "/home/x/garden", "project": "garden"}]}},
+         token=fr, headers=pc)
+    cid = json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "claude", "folder": "/home/x/garden"})[2])["chat"]["id"]
+    ask = lambda **k: m("POST", "/machine/chats/ask", {"chat": cid, "tool": "Bash", "detail": "npm test", "reason": "run the tests", "key": "npm test", **k})
+    assert ask()[0] == 409, "no turn runs: nothing to ask for"
+    ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "run the tests"})
+    m("GET", "/machine/chats")
+    assert m("POST", "/machine/chats/ask", {"chat": cid, "detail": "x"})[0] == 400
+    assert http("POST", "/machine/chats/ask", {"chat": cid, "tool": "Bash"}, token=et, headers=pc)[0] == 403
+    st, b = ask()
+    assert st == 200, b
+    a1 = json.loads(b)
+    assert a1["timeout"] == 1800 and re.fullmatch(r"[0-9a-f]{8}", a1["id"]), a1
+    c = json.loads(ui(f"/ui/api/chat?machine={mid}&id={cid}")[2])
+    assert [(x["id"], x["tool"], x["detail"], x["once_only"]) for x in c["asks"]] == [(a1["id"], "Bash", "npm test", False)], c["asks"]
+    assert c["events"][-1]["kind"] == "ask" and "npm test" in c["events"][-1]["text"], c["events"][-1]
+    board = lambda h=ck: json.loads(ui("/ui/api/board", h=h)[2])["items"]
+    item = next(i for i in board() if i["kind"] == "ask")
+    assert item["col"] == "needs" and item["chat"] == cid and item["id"] == a1["id"] and "npm test" in item["title"], item
+    assert next(i for i in board() if i["kind"] == "chat" and i["id"] == cid)["line"] == "waits for your approval"
+    assert not [i for i in board(er) if i["kind"] == "ask"], "another person's board shows none"
+    # Only the owner answers; a bad decision or an unknown ask is refused.
+    assert ui("/ui/api/chat/approve", {"machine": mid, "id": cid, "ask": a1["id"], "decision": "once"}, er)[0] == 403
+    assert ui("/ui/api/chat/approve", {"machine": mid, "id": cid, "ask": a1["id"], "decision": "always"})[0] == 400
+    assert ui("/ui/api/chat/approve", {"machine": mid, "id": cid, "ask": "deadbeef", "decision": "once"})[0] == 404
+    assert "answers" not in json.loads(m("GET", "/machine/chats")[1]), "nothing decided yet"
+    assert ui("/ui/api/chat/approve", {"machine": mid, "id": cid, "ask": a1["id"], "decision": "chat"})[0] == 200
+    assert ui("/ui/api/chat/approve", {"machine": mid, "id": cid, "ask": a1["id"], "decision": "deny"})[0] == 409, "answered once"
+    got = json.loads(m("GET", "/machine/chats")[1])
+    assert got["answers"] == [{"chat": cid, "ask": a1["id"], "decision": "chat", "by": "alice", "expired": False}], got
+    assert "answers" not in json.loads(m("GET", "/machine/chats")[1]), "handed out once"
+    assert not [i for i in board() if i["kind"] == "ask"], "answered: off the board"
+    c = json.loads(ui(f"/ui/api/chat?machine={mid}&id={cid}")[2])
+    assert c["asks"] == [] and c["events"][-1]["text"] == "Allowed for this chat by alice: Bash: npm test", c["events"][-1]
+    # Once-only (git push, outside the folder): never for the whole chat; denied is denied.
+    a2 = json.loads(ask(detail="git push", key="git push", once_only=True)[1])
+    assert ui("/ui/api/chat/approve", {"machine": mid, "id": cid, "ask": a2["id"], "decision": "chat"})[0] == 400
+    assert ui("/ui/api/chat/approve", {"machine": mid, "id": cid, "ask": a2["id"], "decision": "deny"})[0] == 200
+    assert json.loads(m("GET", "/machine/chats")[1])["answers"][0]["decision"] == "deny"
+    # Timeout: an ask older than its limit goes out as denied, and the chat says so.
+    a3 = json.loads(ask(detail="make")[1])
+    f = tmp / "chats" / mid / f"{cid}.json"
+    d = json.loads(f.read_text())
+    next(x for x in d["asks"] if x["id"] == a3["id"])["expires"] = time.time() - 1
+    f.write_text(json.dumps(d))
+    assert not [i for i in board() if i["kind"] == "ask"], "expired: off the board"
+    got = json.loads(m("GET", "/machine/chats")[1])
+    assert got["answers"] == [{"chat": cid, "ask": a3["id"], "decision": "deny", "by": "", "expired": True}], got
+    assert ui("/ui/api/chat/approve", {"machine": mid, "id": cid, "ask": a3["id"], "decision": "once"})[0] == 409
+    assert "No answer within 30 min: denied Bash." in [e["text"] for e in json.loads(ui(f"/ui/api/chat?machine={mid}&id={cid}")[2])["events"]]
+    # At most 5 open at once; the end of the turn withdraws them, and the next turn carries the chat's allow rules.
+    for n in range(5):
+        assert ask(detail=f"cmd {n}")[0] == 200
+    assert ask(detail="cmd 6")[0] == 429
+    m("POST", "/machine/chats/events", {"chat": cid, "events": [], "done": True})
+    assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={cid}")[2])["asks"] == [] and "answers" not in json.loads(m("GET", "/machine/chats")[1])
+    ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "again"})
+    assert json.loads(m("GET", "/machine/chats")[1])["work"][0]["allow"] == [{"tool": "Bash", "key": "npm test"}]
+    m("POST", "/machine/chats/events", {"chat": cid, "events": [], "done": True})
+    # The limit is a setting of the admin page.
+    admin = lambda body: raw("POST", "/ui/api/admin/settings", json.dumps(body), {**ck, "X-Knowledge-UI": "1", "Content-Type": "application/json"})
+    assert admin({"chat_approval_minutes": 0})[0] == 400
+    assert admin({"chat_approval_minutes": 5})[0] == 200
+    ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "once more"})
+    m("GET", "/machine/chats")
+    assert json.loads(ask()[1])["timeout"] == 300
+    m("POST", "/machine/chats/events", {"chat": cid, "events": [], "done": True})
+    assert admin({"chat_approval_minutes": 30})[0] == 200
+
+
 def board_contract(tmp, ck, fr, raw, er, et):
     """The Agents board: chats and workers of the owner's own pcs and task lines of the projects they see, each in one
     column (needs you, running, open, done), with the companion's git numbers; another person sees none of it; a diff
@@ -1712,6 +1791,7 @@ def main():
         machines_contract(tmp, ck, fr, raw, er, et)
         chats_contract(tmp, ck, fr, raw, er, et)
         board_contract(tmp, ck, fr, raw, er, et)
+        approvals_contract(tmp, ck, fr, raw, er, et)
         mission_contract(tmp, ck, fr, raw, er)
         # The folder link (.knowledge-project, skill knowledge-init): her token now sees two projects, so the folder picks.
         assert "not linked to a project" in http("GET", "/context/1?project=/home/erin/stuff", token=et)[1]
