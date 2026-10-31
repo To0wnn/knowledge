@@ -3483,7 +3483,8 @@ async def ui_me(request: Request):
     labels = read_json(LABELS_FILE, {})
     return JSONResponse({"user": dev.get("user"), "admin": bool(dev.get("admin")), "projects": projects,
                          "labels": {p: labels[p] for p in projects if p in labels},
-                         "writable": [p for p in projects if wr is None or PROJECTS[p][1] in wr]})
+                         "writable": [p for p in projects if wr is None or PROJECTS[p][1] in wr],
+                         "sections": list(kb_lint.STRUCTURE)})  # a new memo's two sections in the server's language
 
 
 # ---------------------------------------------------------------- admin: users, projects, tokens (admins only)

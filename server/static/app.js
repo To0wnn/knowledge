@@ -769,7 +769,7 @@ $("new-form").addEventListener("submit", async (e) => {
   const fail = (msg) => { $("new-error").hidden = false; $("new-error").textContent = msg; };
   if (!slug) return fail("The title needs letters or digits: they make the file name.");
   if (byId.has(path)) return fail(`${file} already exists: open it and update it instead, or pick another title.`);
-  const text = `---\nname: ${type}_${slug}\ndescription: ${JSON.stringify(desc)}\nmetadata:\n  type: ${type}\n---\n\n${desc}\n\n## Stand\n\n## Keuzes\n`; // the house-rules layout
+  const text = `---\nname: ${type}_${slug}\ndescription: ${JSON.stringify(desc)}\nmetadata:\n  type: ${type}\n---\n\n${desc}\n\n${(me.sections || ["## Status", "## Decisions"]).join("\n\n")}\n`; // the house-rules layout, in the server's language
   const heading = $("new-heading").selectedIndex < $("new-heading").options.length - 1 ? $("new-heading").value : "";
   try {
     const res = await api("/ui/api/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path, text, base_version: "", index_line: `- [${title}](${file}) — ${desc}`, heading }) });

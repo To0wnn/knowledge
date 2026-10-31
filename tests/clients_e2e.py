@@ -263,6 +263,8 @@ def start_server(tmp: Path):
         raise SystemExit("server did not start:\n" + (tmp / "server.log").read_text(errors="replace")[-3000:])
     admin = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice", "X-Knowledge-UI": "1"}
     assert http("POST", "/ui/api/admin/project", {"name": "garden"}, admin)[0] == 200
+    # a default (English) server hands "+ Add memo" its English sections; the Dutch ones are server/test_server.py's
+    assert json.loads(http("GET", "/ui/api/me", headers=admin)[1])["sections"] == ["## Status", "## Decisions"]
     # the admin's own device ("self"): its task lines are trusted, its machines the admin's
     st, body = http("POST", "/ui/api/admin/token", {"name": "friend-pc", "write": True, "redact": True, "self": True,
                                                     "roots": ["garden", "garden-memory"]}, admin)
