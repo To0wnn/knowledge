@@ -963,18 +963,22 @@ function highlight(ids) {
 async function loadLint(render = true) {
   if (!me.admin) return; // lint spans every project: admins only
   if (render && !$("lint").childNodes.length) $("lint").replaceChildren(loadingState());
-  const full = await api("/ui/api/lint");
+  const res = await api("/ui/api/lint?v=2"), full = res.report || res, hints = res.hints || {};
+  // checks in a group (token usage) are context, not problems: folded at the end and left out of the badge
+  const grouped = new Map((res.groups || []).flatMap((g) => g.checks.map((c) => [c, g])));
   const report = Object.fromEntries(Object.entries(full).map(([k, v]) => [k, v.filter((i) => allMode() || lintProject(i) === project)]));
-  const here = Object.values(report).reduce((a, v) => a + v.length, 0);
-  const all = Object.values(full).reduce((a, v) => a + v.length, 0);
+  const count = (r) => Object.entries(r).reduce((a, [c, v]) => a + (grouped.has(c) ? 0 : v.length), 0);
+  const here = count(report), all = count(full);
   // Badge and tab show this project's findings; the tab points to the rest so findings elsewhere are not missed.
   $("lint-count").textContent = here || "";
   $("lint-count").title = `${here} in ${project}, ${all} in all projects`;
   if (!render) return;
   const box = $("lint"); box.replaceChildren();
+  const folds = new Map();
   for (const [check, items] of Object.entries(report)) {
     if (!items.length) continue;
-    const ul = el("ol", "hits"), [title, fix] = LINT_INFO[check] || [check.replace(/_/g, " "), ""];
+    const [title, fix] = hints[check] || LINT_INFO[check] || [check.replace(/_/g, " "), ""];
+    const ul = el("ol", "hits");
     for (const item of items) { // "file.md: detail" -> the note's title, the detail under it
       const m = item.match(/^([\w./-]+\.md)(?::\s*|\s+)?(.*)$/);
       if (!m) { ul.append(el("li", "hit-text", item)); continue; }
@@ -985,8 +989,12 @@ async function loadLint(render = true) {
     const card = el("section", "card"), h = el("h3", "sub", title);
     h.append(el("span", "badge", String(items.length)));
     card.append(h, ...(fix ? [el("p", "lint-fix muted", fix)] : []), ul);
-    box.append(card);
+    const g = grouped.get(check);
+    if (!g) { box.append(card); continue; }
+    if (!folds.has(g.id)) { const d = el("details", "card lint-group"); d.open = !g.collapsed; d.append(el("summary", null, g.title)); folds.set(g.id, d); }
+    folds.get(g.id).append(card);
   }
+  box.append(...folds.values());
   if (!here) box.append(emptyState(`No findings in ${project === ALL ? "any project" : shown(project)}.`));
   if (all > here) {
     const b = el("button", "ghost small", `${all - here} in other projects`); b.onclick = () => switchProject(ALL);
