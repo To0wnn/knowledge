@@ -54,7 +54,8 @@ CLAUDE_JSON = (CLAUDE_DIR if os.environ.get("CLAUDE_CONFIG_DIR") else HOME) / ".
 CODEX = Path(os.environ.get("CODEX_HOME") or HOME / ".codex")
 AGY_DIR = HOME / ".gemini" / "antigravity-cli"
 AGY_SETTINGS = AGY_DIR / "settings.json"
-AGY_PROCESS = os.environ.get("KNOWLEDGE_AGY_PROCESS") or "agy"  # another name in the tests
+PROCESS = {"agy": os.environ.get("KNOWLEDGE_AGY_PROCESS") or "agy",  # other names in the tests
+           "codex": os.environ.get("KNOWLEDGE_CODEX_PROCESS") or "codex"}
 MISSING = {"missing": True}  # a setting that was not there: unchecking YOLO removes it again
 LOCK = threading.RLock()
 TICK = threading.Lock()  # one round at a time: the minute loop and the page's "Wake ready tasks now"
@@ -162,11 +163,12 @@ def plugin_version(agent: str) -> str:
         return ""
 
 
-def agy_running() -> bool:
+def running(agent: str) -> bool:
+    name = PROCESS[agent]
     if os.name == "nt":
-        r = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {AGY_PROCESS}.exe", "/NH"], capture_output=True, text=True)
-        return f"{AGY_PROCESS}.exe".lower() in r.stdout.lower()
-    return subprocess.run(["pgrep", "-x", AGY_PROCESS[:15]], capture_output=True).returncode == 0
+        r = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {name}.exe", "/NH"], capture_output=True, text=True)
+        return f"{name}.exe".lower() in r.stdout.lower()
+    return subprocess.run(["pgrep", "-x", name[:15]], capture_output=True).returncode == 0
 
 
 def rfc3339(s: str) -> float:
@@ -217,6 +219,10 @@ def sessions(agent: str, now: float) -> list:
             cwd = folder or entry.get("cwd", "")
             out.append({"session": conv, "cwd": cwd, "project": agent_hooks.project_query(cwd)["project"],
                         "at": rfc3339(changed), "entry": entry})
+    elif agent == "codex" and not running("codex"):
+        # Codex leaves no mark when a session ends, and `codex queue` only queues for a session that runs again:
+        # with no Codex running at all, the newest registered session is closed and a wake would only wait there
+        pass
     else:
         for _, e in agent_hooks.read_entries(f"{agent}-*.json"):
             if e.get("agent") == agent and e.get("cwd") and now - e.get("at", 0) <= agent_hooks.WAKE_WITHIN \
@@ -485,7 +491,7 @@ def set_yolo(agent: str, on: bool) -> str:
     with LOCK:
         yolo = load("yolo.json", {})
         mine = yolo.get(agent, {})
-        if agent == "agy" and agy_running():  # agy rewrites its settings.json on exit: change it only while it is closed
+        if agent == "agy" and running("agy"):  # agy rewrites its settings.json on exit: change it only while it is closed
             mine["pending"] = on
             yolo[agent] = mine
             save("yolo.json", yolo)
@@ -512,7 +518,7 @@ def yolo_off() -> list:
 
 def pending_yolo():
     p = load("yolo.json", {}).get("agy", {}).get("pending")
-    if p is not None and not agy_running():
+    if p is not None and not running("agy"):
         set_yolo("agy", p)
 
 

@@ -699,15 +699,18 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
                 (int(time.time()), "pre_tool_use hook failed; hook_name=work-lint error=exit code 1: private-work-text"))
     con.commit()
     con.close()
-    fake_agy = None
+    fake_agy = fake_codex = None
     if not WIN:  # a process named like agy, ended later: YOLO for agy waits for it
         shutil.copy(shutil.which("sleep"), bin_dir / "knfakeagy")
         fake_agy = subprocess.Popen([str(bin_dir / "knfakeagy"), "300"])
+        shutil.copy(shutil.which("sleep"), bin_dir / "knfakecodex")  # a running Codex: its registered sessions count as open
+        fake_codex = subprocess.Popen([str(bin_dir / "knfakecodex"), "300"])
     port = PORT + 7
     self_url = f"http://127.0.0.1:{port}"
     env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, PATH=str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
                    KNOWLEDGE_COMPANION_PORT=str(port), KNOWLEDGE_COMPANION_EVERY="3600", KN_FAKE_CALLS=str(calls),
-                   KNOWLEDGE_AGY_PROCESS="knfakeagy" if fake_agy else Path(sys.executable).stem)
+                   KNOWLEDGE_AGY_PROCESS="knfakeagy" if fake_agy else Path(sys.executable).stem,
+                   KNOWLEDGE_CODEX_PROCESS="knfakecodex" if fake_codex else Path(sys.executable).stem)
 
     key_file = home / ".knowledge" / "companion" / "api-key"
 
@@ -887,6 +890,19 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         check(code != 0 and "codex" in err and str(project) in json.loads((agy_dir / "settings.json").read_text(encoding="utf-8"))["trustedWorkspaces"],
               "companion: trust goes on with agy after Codex failed, and says so", out + err)
         Path(str(calls) + ".fail").unlink()
+        # No Codex running: its registered session is closed (codex queue would only wait there), so a new one starts.
+        http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_edit", "arguments":
+             {"path": "garden-memory/project_companion.md", "old_string": "## Keuzes",
+              "new_string": "- open tot 1 jan 2099 [Codex, CMP-CX3] from Claude, start now: third codex task\n## Keuzes"}}},
+             {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})
+        call("POST", "/local/api/settings", {"startWhenNone": {"agy": True, "codex": True}})
+        n = len(recorded())
+        code, out, err = run([sys.executable, str(hooks / "companion.py"), "tick"], "", {**env, "KNOWLEDGE_CODEX_PROCESS": "knnocodex"}, timeout=120)
+        wait_for(lambda: any(c.get("argv", [""])[:2] == ["codex", "exec"] for c in recorded()[n:]), 15)
+        execs = [c["argv"] for c in recorded()[n:] if c.get("argv", [""])[:2] == ["codex", "exec"]]
+        queued = [c for c in recorded()[n:] if c.get("argv", [""])[:2] == ["codex", "queue"]]
+        check(code == 0 and len(execs) == 1 and "CMP-CX3" in execs[0][-1] and str(project) in execs[0] and not queued,
+              "companion: no Codex running: a new codex exec in the project folder, not a queue into a closed session", out[-400:] + err[-400:] + str(execs)[:300])
         # Hook failures the agents log themselves: reported once, marked as agent-log.
         admin = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice"}
         sessions = json.loads(http("GET", "/ui/api/tasks", headers=admin)[1])["sessions"]
@@ -910,6 +926,8 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
               "companion: after a Codex plugin update the hooks are trusted again automatically", json.dumps(codex_state)[:300])
     finally:
         proc.kill()
+        if fake_codex:
+            fake_codex.kill()
         if fake_agy:
             fake_agy.kill()
 
