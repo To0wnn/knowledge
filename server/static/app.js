@@ -1268,7 +1268,8 @@ async function ckSummary() {
   $("ck-live-n").textContent = live; $("ck-live").classList.toggle("on", live > 0);
   $("ck-resets").hidden = !worst;
   if (worst) {
-    $("ck-resets").textContent = `resets ${new Date(worst.resets * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+    const at = new Date(worst.resets * 1000), far = worst.resets - now > 86400; // a weekly window: say the day too
+    $("ck-resets").textContent = `resets ${far ? at.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" }) : at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
     $("ck-resets").title = `${AGENT_NAME[worst.agent] || worst.agent} on ${worst.label}: ${Math.round(worst.limit)}% of its usage limit used`;
   }
   // A running chat always has its card; the cards open before a reload come back.

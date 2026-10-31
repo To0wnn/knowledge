@@ -238,6 +238,8 @@ async def cockpit(browser, devices, secret: str) -> None:
     check(await pg.locator("#cockpit").is_visible() and await pg.locator("#ck-live").is_visible(), "cockpit opens over the page with the live pill")
     await pg.wait_for_timeout(1500)
     check(await pg.locator("#ck-canvas .ck-card, #ck-canvas .ck-empty").count() > 0, "cockpit shows chat cards or the empty canvas")
+    pill = await pg.evaluate("[getComputedStyle($('ck-resets')).display, $('ck-resets').textContent]")
+    check(pill[0] == "none" and not pill[1] or pill[0] != "none" and pill[1].startswith("resets "), f"resets pill: a time from a companion's report, else hidden {pill}")
     await pg.click("#ck-tools-menu summary")
     labels = await pg.locator("#ck-tools-menu .ck-tools [data-go]").all_inner_texts()
     check(len(labels) == 6 and "Mission map" in labels[0], f"cockpit tools menu lists its tools {labels}")
