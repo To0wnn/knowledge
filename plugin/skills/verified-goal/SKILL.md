@@ -20,7 +20,8 @@ Stop on a check that a command runs, never on your own claim.
 4. **While looping:** one small step per turn and the check after each. Never edit, skip or delete a test or a check to
    make it pass (the usual way loops cheat). Commit after each passing step when the project uses git.
 5. **Stuck** (no progress for 3 turns): stop, write the blocker as an open item in the
-   project's memo (`open until <date> [<agent>, <ID>]: ...`) and tell the user. Never report "almost done" as done.
+   project's memo (`open until <date> [<agent>, <ID>] from <you>, start now: ...`; the server refuses a task line without
+   `from` and `start`) and tell the user. Never report "almost done" as done.
 6. Finish with skill verify-done.
 
 ## Unattended (no session open)
