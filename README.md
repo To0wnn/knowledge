@@ -154,12 +154,36 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   continues the same conversation, Stop ends a running turn; **Chats** lists them beside the open one (`#/chats/<pc>/<chat>`). The server only relays, pull only like the actions: the UI posts a message
   (`POST /ui/api/chat/send`), the pc's companion fetches it (`GET /machine/chats`, every ~2 s while a chat is active,
   else ~10 s), runs one headless turn of the agent with the message on stdin (never on a command line), the first turn
-  a new conversation and every later one the agent's own continuation (`claude -p --resume <session>`,
-  `codex exec resume <thread>`, `agy --conversation <id>`), and posts the output back in small batches
-  (`POST /machine/chats/events`). Permissions are a worker's on that pc: the agent's YOLO flag where YOLO is on, else
-  the same narrow sets (approvals inside a chat are not there yet). Codex without YOLO cannot commit in a chat: the
-  folder is a main checkout, and Codex keeps its `.git` read-only (opening it would let a sandboxed run change git
-  hooks and config). A chat turn says it is one (`KNOWLEDGE_CHAT`, header `X-Knowledge-Chat`): like a worker it
+  a new conversation and every later one the agent's own continuation, and posts the output back in small batches
+  (`POST /machine/chats/events`). With YOLO on for that agent there, the turn runs with the agent's own YOLO flag
+  (`claude -p --resume <session>`, `codex exec resume <thread>`, `agy --conversation <id>`). Without YOLO it starts
+  with the same narrow set a worker has (edits in the folder, the knowledge tools, `git status/diff/log/add/commit`)
+  and **asks you for anything else**, each agent its own native way: Claude through its permission prompt tool
+  (`--permission-prompt-tool`, a small stdio MCP server of the plugin, `approval_mcp.py`, that asks the companion on
+  127.0.0.1 with its local key), Codex over `codex app-server` (workspace-write sandbox, approval policy on-request,
+  `thread/resume` continues the thread; `codex exec` never asks), agy over `agy acp` (`session/load` continues the
+  conversation; `agy -p` denies by itself). The turn pauses; the companion asks the server
+  (`POST /machine/chats/ask`), and the chat card shows the request (tool, command or path, the agent's reason) with
+  **Allow once**, **Allow for this chat** and **Deny**; each waiting approval is also an item under **Needs you** on
+  the board, answered there or in the chat (`POST /ui/api/chat/approve`, only the machine's owner). The answer goes back
+  with the companion's next poll (`answers` in `GET /machine/chats`) and the agent continues; denied, it is told so
+  and goes on without. No answer within 30 minutes (admin page, Settings, `chat_approval_minutes`) counts as denied
+  and the chat says so; a turn that ends or is stopped withdraws what still waits. The card shows the whole request (a long one folded,
+  up to 4000 characters; longer can only be allowed once). "Allow for this chat" allows exactly the same call (the
+  same full input, compared by hash) again for the rest of the chat without asking; `git push`, anything that names a
+  path outside the chat's folder (relative, `~` and `$HOME` paths resolved), Codex's file changes outside the folder or
+  without named paths, and Codex's requests for wider sandbox rights can only be allowed once. Codex is judged on the
+  command it will run, never on its parsed summary of it; a Codex file change and fetching a URL are never allowed
+  without asking. git's own files (`.git/`, `.gitattributes`, `.gitmodules`) are never written without asking, and
+  only once (agy workers get a deny rule for them; Claude protects them itself); agy and Codex chats run no shell
+  command, git included, without asking; and every git a chat turn or worker without YOLO starts runs with
+  `core.fsmonitor=false` and `core.hooksPath=/dev/null` (`GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_NOSYSTEM=1`), so a
+  config an agent wrote cannot run with an allowed git command. On the board an approval whose request is longer than
+  its one-line title can only be denied there (Allow is in its chat, where it shows whole); bidi control characters in
+  an approval show as `<U+202E>`. The machine's token is checked against today's token rules on every question and answer. Every question and answer, with who answered, is in the companion's
+  activity log and the server's audit log (`chat-ask`, `chat-approve`). Codex without YOLO still cannot commit in a
+  chat unless you allow it: the folder is a main checkout, and Codex keeps its `.git` read-only (opening it would let
+  a sandboxed run change git hooks and config). A chat turn says it is one (`KNOWLEDGE_CHAT`, header `X-Knowledge-Chat`): like a worker it
   hears no task lists or "start your tasks", takes no lease, task or notice, and agy is not asked to register. Only the machine's owner sees or posts (admins
   too only on their own machines); a chat needs its pc online and says so. One file per chat under the state
   directory (`chats/<machine>/`), at most 50 chats per machine (the oldest go) and 1 MB per chat (the oldest output

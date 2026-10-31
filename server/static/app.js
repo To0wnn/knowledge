@@ -1346,7 +1346,8 @@ function ckBoard() {
     const b = el("button", "ghost small ck-elsewhere", `${elsewhere} more need${elsewhere > 1 ? "" : "s"} you in other projects: show all`);
     b.type = "button"; b.onclick = () => setAgentProject(""); box.prepend(b);
   }
-  const n = items.filter((i) => i.col === "needs").length, said = n ? `${n} item${n > 1 ? "s" : ""} need${n > 1 ? "" : "s"} you` : "Nothing needs you";
+  const n = items.filter((i) => i.col === "needs").length, asks = items.filter((i) => i.kind === "ask").length;
+  const said = (n ? `${n} item${n > 1 ? "s" : ""} need${n > 1 ? "" : "s"} you` : "Nothing needs you") + (asks ? `, ${asks} approval${asks > 1 ? "s" : ""} waiting` : "");
   if ($("ck-needs-live").textContent !== said) $("ck-needs-live").textContent = said;
 }
 async function ckDo(path, body) {
@@ -1357,13 +1358,14 @@ async function ckDo(path, body) {
 function ckItem(i) {
   const card = el("article", `ck-item ${i.col}`), main = el("button", "ck-item-main"), top = el("span", "ck-item-top");
   main.type = "button";
-  top.append(el("span", "ck-mark", AGENT_MARK[i.agent] || "?"), el("strong", null, i.title));
-  const where = [i.kind === "worker" ? "worker" : i.kind === "task" ? `task for ${i.owner}` : "", i.label, ckShort(i.folder), i.at ? ago(i.at) : ""];
+  top.append(el("span", "ck-mark", AGENT_MARK[i.agent] || "?"), el("strong", null, i.kind === "ask" ? ckUnbidi(i.title) : i.title));
+  const where = [i.kind === "worker" ? "worker" : i.kind === "task" ? `task for ${i.owner}` : i.kind === "ask" ? "approval" : "", i.label, ckShort(i.folder), i.at ? ago(i.at) : ""];
   main.append(top, el("span", "ck-item-where", where.filter(Boolean).join(" · ")), el("span", "ck-item-line", i.line));
   card.append(main);
-  main.title = i.kind === "chat" ? "Open this chat" : i.kind === "task" ? "Open its task line in the memo" : "How to look at this worker";
+  main.title = i.kind === "chat" || i.kind === "ask" ? "Open this chat" : i.kind === "task" ? "Open its task line in the memo" : "How to look at this worker";
   main.onclick = () => {
     if (i.kind === "chat") return ckShow(ck.chats.find((c) => ckKey(c) === `${i.machine}/${i.id}`) || i);
+    if (i.kind === "ask") return ckShow(ck.chats.find((c) => ckKey(c) === `${i.machine}/${i.chat}`));
     if (i.kind === "task") { openCockpit(false); return openNote(i.path, { find: [i.id.toLowerCase()] }); }
     const more = card.querySelector(".ck-item-open");
     if (more) more.remove(); else card.append(el("p", "ck-item-open", i.open || "No details yet."));
@@ -1371,11 +1373,15 @@ function ckItem(i) {
   const acts = el("div", "ck-item-acts"), act = (text, title, fn) => { const b = el("button", "ghost small", text); b.type = "button"; b.title = title; b.onclick = fn; acts.append(b); };
   if (i.git) acts.append(ckGitPill(i));
   if (i.approve) act("Approve", "Let this task start", () => ckDo("/ui/api/task/approve", { project: i.project, id: i.id }));
+  if (i.kind === "ask") { // the board shows a short title: Allow only when that title is the whole request
+    for (const [d, text, title] of ckAskButtons(i).filter(([d]) => i.full !== false || d === "deny")) act(text, title, () => ckDo("/ui/api/chat/approve", { machine: i.machine, id: i.chat, ask: i.id, decision: d }));
+    if (i.full === false) act("Open chat", "The request is longer than the board shows: read it whole in its chat", () => main.click());
+  }
   for (const h of i.hosts || []) act(`Start on ${h.label}`, "Start a worker for this task there now",
     () => ckDo("/ui/api/machines/action", { machine: h.machine, action: "start_worker", args: { project: i.project, id: i.id } }));
   if (i.kind === "worker" && i.status === "running") act("Stop", "Stop this worker",
     () => confirm(`Stop the worker on ${i.id}?`) && ckDo("/ui/api/machines/action", { machine: i.machine, action: "stop_worker", args: { project: i.project, id: i.id } }));
-  if (i.col === "needs" && !i.approve) act("Dismiss", "Take it off the board until it changes again", () => ckDo("/ui/api/board/dismiss", { key: i.key, sig: i.sig }));
+  if (i.col === "needs" && !i.approve && i.kind !== "ask") act("Dismiss", "Take it off the board until it changes again", () => ckDo("/ui/api/board/dismiss", { key: i.key, sig: i.sig }));
   if (i.kind === "chat" && i.col === "running") act("Stop", "Stop this turn", () => ckDo("/ui/api/chat/stop", { machine: i.machine, id: i.id }));
   if (acts.childNodes.length) card.append(acts);
   return card;
@@ -1427,8 +1433,9 @@ function ckCard(meta) {
   input.rows = 2; input.placeholder = "Message the agent… (Enter sends, Shift+Enter a new line)"; input.setAttribute("aria-label", "Message");
   const stop = el("button", "ck-stop", "Stop"), send = el("button", null, "Send"), note = el("p", "ck-note");
   stop.type = "button"; send.type = "submit"; btns.append(stop, send); form.append(input, btns, note);
-  root.append(head, log, form);
-  const card = { meta: { ...meta }, root, name, where, git, state, log, input, stop, send, note, after: 0, online: meta.online !== false };
+  const asks = el("div", "ck-asks"); asks.hidden = true; asks.setAttribute("aria-live", "assertive");
+  root.append(head, log, asks, form);
+  const card = { meta: { ...meta }, root, name, where, git, state, log, asks, input, stop, send, note, after: 0, online: meta.online !== false };
   x.onclick = () => ckShow(null);
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing && !matchMedia("(hover: none)").matches) { e.preventDefault(); form.requestSubmit(); }
@@ -1488,7 +1495,46 @@ async function ckPoll(card) {
     } else card.log.append(el("div", e.kind === "user" ? "ck-msg user" : `ck-line ${e.kind}`, e.text));
   }
   if (res.events.length && (near || res.events.some((e) => e.kind === "user"))) card.log.scrollTop = card.log.scrollHeight;
+  ckAsks(card, res.asks || [], (res.now || Date.now() / 1000) - Date.now() / 1000);
   ckPaint(card);
+}
+
+// Approvals: the turn waits while the agent wants a tool its allowed set does not hold. One block per open approval
+// inside the chat card (also a Needs-you item on the board); the answer goes to the pc with its next poll.
+function ckAskButtons(a) {
+  return [["once", "Allow once", "Allow this one call"],
+    ...(a.once_only ? [] : [["chat", "Allow for this chat", "Allow this same call for the rest of this chat"]]),
+    ["deny", "Deny", "Refuse it; the agent is told and goes on without it"]];
+}
+const ckUnbidi = (t) => String(t || "").replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, (c) => `<U+${c.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}>`);
+function ckAsks(card, asks, skew) {
+  asks = asks.map((a) => ({ ...a, tool: ckUnbidi(a.tool), detail: ckUnbidi(a.detail), reason: ckUnbidi(a.reason) }));
+  const sig = JSON.stringify(asks.map((a) => a.id));
+  if (card.asks.dataset.sig === sig) return;
+  card.asks.dataset.sig = sig; card.asks.hidden = !asks.length;
+  card.asks.replaceChildren(...asks.map((a) => {
+    const box = el("section", "ck-ask"), acts = el("div", "ck-ask-acts"), left = Math.max(0, Math.round((a.expires - skew - Date.now() / 1000) / 60));
+    box.setAttribute("aria-label", `Approval: ${a.tool}`);
+    box.append(el("p", "ck-ask-head", `The agent asks to use ${a.tool}`));
+    if (a.detail.length > 300 || a.detail.split("\n").length > 4) { // long: the whole text, folded open on a tap
+      const more = el("details", "ck-ask-more"), sum = el("summary", null, `${a.detail.slice(0, 120).split("\n")[0]}… (${a.detail.length} characters: show all)`);
+      more.append(sum, el("code", "ck-ask-what", a.detail)); box.append(more);
+    } else box.append(el("code", "ck-ask-what", a.detail));
+    if (a.reason) box.append(el("p", "ck-ask-why", a.reason));
+    box.append(el("p", "ck-ask-when", `${a.once_only ? "git push or outside the folder: once at most. " : ""}Denied by itself in ${left} min.`));
+    for (const [d, text, title] of ckAskButtons(a)) {
+      const b = el("button", `ck-ask-${d}`, text); b.type = "button"; b.title = title;
+      b.onclick = async () => {
+        for (const x of acts.querySelectorAll("button")) x.disabled = true;
+        try { await api("/ui/api/chat/approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, ask: a.id, decision: d }) }); }
+        catch (err) { card.note.className = "ck-note bad"; card.note.textContent = err.message; }
+        card.asks.dataset.sig = ""; ck.summaryAt = 0; ckPoll(card);
+      };
+      acts.append(b);
+    }
+    box.append(acts);
+    return box;
+  }));
 }
 
 // New chat: a pc of your own with a companion, an agent installed there, a folder linked there.

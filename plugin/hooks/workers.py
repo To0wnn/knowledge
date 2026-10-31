@@ -182,15 +182,31 @@ def argv(agent: str, exe: str, prompt: str, yolo: bool, where: dict) -> list:
                 "--skip-git-repo-check", "--cd", where["cwd"], "--json", prompt]
     if yolo:
         return [exe, "-p", prompt, "--dangerously-skip-permissions"]
-    return [exe, "-p", prompt, *agy_rules()]
+    return [exe, "-p", prompt, *agy_rules(where["cwd"])]
 
 
-def agy_rules() -> list:
-    """agy without YOLO: accept-edits plus the allow rules, for this session only (never saved)."""
+def agy_rules(cwd: str) -> list:
+    """agy without YOLO: accept-edits plus the allow rules, for this session only (never saved). Its edits may never
+    reach git's own files (.git, .gitattributes, .gitmodules): a git config or hook written there would run with the
+    next allowed git command (core.fsmonitor, diff.external, a filter or a hook)."""
     DIR.mkdir(parents=True, exist_ok=True)
-    rules = DIR / "agy-worker-settings.json"  # a file, not inline JSON: an argument with quotes cannot pass a .cmd shim
-    rules.write_text(json.dumps({"permissions": {"allow": AGY_ALLOWED}}), encoding="utf-8")
+    rules = DIR / f"agy-worker-settings-{hashlib.sha256(cwd.encode()).hexdigest()[:12]}.json"  # a file: quotes cannot pass a .cmd shim
+    roots = dict.fromkeys([cwd, os.path.realpath(cwd)])  # both spellings (macOS /var is /private/var): whichever agy matches
+    deny = [f"write_file({os.path.join(r, n)})" for r in roots for n in GIT_FILES]
+    rules.write_text(json.dumps({"permissions": {"allow": AGY_ALLOWED, "deny": deny}}), encoding="utf-8")
     return ["--mode", "accept-edits", "--settings", str(rules)]
+
+
+GIT_FILES = (".git", ".gitattributes", ".gitmodules")
+# Every git a worker or chat turn starts (also the allowed git commands) runs without a config's fsmonitor or hooks:
+# git -c for every child (GIT_CONFIG_PARAMETERS, which Codex's environment filter keeps: no KEY in its name).
+GIT_SAFE = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_PARAMETERS": "'core.fsmonitor'='false' 'core.hooksPath'='/dev/null'"}
+
+
+def git_safe_env(env: dict) -> dict:
+    """`env` with the git overrides of GIT_SAFE added (after any the caller had)."""
+    have = env.get("GIT_CONFIG_PARAMETERS", "")
+    return {**env, **GIT_SAFE, "GIT_CONFIG_PARAMETERS": (have + " " if have else "") + GIT_SAFE["GIT_CONFIG_PARAMETERS"]}
 
 
 CODEX_APPROVE = "plugins.knowledge@knowledge.mcp_servers.knowledge.default_tools_approval_mode=approve"
@@ -301,6 +317,7 @@ def start(agent: str, task: dict, machine: str, where: dict, yolo: bool, nonce: 
     DIR.mkdir(parents=True, exist_ok=True)
     log = DIR / f"{safe(task['project'])}-{safe(task['id'])}-{int(time.time())}.log"
     env = {**os.environ, "KNOWLEDGE_WORKER": task["id"], "KNOWLEDGE_START_NONCE": nonce, "KNOWLEDGE_YOLO": "1" if yolo else ""}
+    env = env if yolo else git_safe_env(env)
     ckpt = checkpoint(where["cwd"], task["id"]) if yolo and where.get("branch") else ""
     cmd, note = argv(agent, exe, prompt(task, agent, machine, where, yolo), yolo, where), ""
     with open(log, "ab") as out:
@@ -481,6 +498,19 @@ def self_test():
         assert g[3:6] == ["--mode", "accept-edits", "--settings"], g
         rules = json.loads(Path(g[6]).read_text(encoding="utf-8"))["permissions"]["allow"]
         assert "command(git commit)" in rules and "mcp(knowledge/*)" in rules and not [r for r in rules if "push" in r or "*)" in r and "mcp(" not in r]
+        deny = json.loads(Path(g[6]).read_text(encoding="utf-8"))["permissions"]["deny"]
+        assert deny == [f"write_file({os.path.join('/x', n)})" for n in (".git", ".gitattributes", ".gitmodules")], deny
+    # Every git a worker starts runs without a repository's fsmonitor or hooks (a config an agent wrote would run).
+    e = git_safe_env({"GIT_CONFIG_PARAMETERS": "'a.b'='c'"})
+    assert e["GIT_CONFIG_NOSYSTEM"] == "1" and e["GIT_CONFIG_PARAMETERS"].startswith("'a.b'='c' ") and "'core.fsmonitor'='false'" in e["GIT_CONFIG_PARAMETERS"]
+    if shutil.which("git"):
+        with tempfile.TemporaryDirectory() as t:
+            git(t, "init", "-q", check=True)
+            mark = Path(t) / "ran"
+            git(t, "config", "core.fsmonitor", f"touch '{mark}'; false", check=True)
+            (Path(t) / "a").write_text("x")
+            subprocess.run(["git", "status"], cwd=t, env=git_safe_env(dict(os.environ)), capture_output=True)
+            assert not mark.exists(), "core.fsmonitor ran under the safe git environment"
     line = shim_line(["C:\\npm\\codex.cmd", "exec", "--cd", "C:\\Users\\a\\R&D\\shop\\", "do it"])
     assert line.endswith(' /d /s /c ""C:\\npm\\codex.cmd" "exec" "--cd" "C:\\Users\\a\\R&D\\shop\\\\" "do it""'), line
     try:
