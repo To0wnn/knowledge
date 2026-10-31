@@ -5078,9 +5078,10 @@ BOARD_SEEN: dict[str, float] = {}  # user -> last /ui/api/board poll (this proce
 
 
 def needs_link(i: dict) -> str:
+    """The item itself in the inbox (#/inbox/<key>: the UI opens it; an older UI shows the inbox)."""
     if not PUBLIC_URL:
         return ""
-    return f" {PUBLIC_URL}/ui#/" + (f"chats/{i['id']}" if i["kind"] == "chat" else "inbox")
+    return f" {PUBLIC_URL}/ui#/inbox/" + urllib.parse.quote(i["key"], safe=":/")
 
 
 def needs_check(now: float) -> int:

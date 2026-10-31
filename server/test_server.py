@@ -933,10 +933,10 @@ def needs_contract(tmp, ck, fr, raw, heard):
     time.sleep(2.5)  # past the quiet window of the polls before
     add(1)
     assert wait(lambda: about(1)), heard
-    assert "waits for your approval" in about(1)[0] and about(1)[0].endswith("https://kn.example/ui#/inbox"), about(1)
+    assert "waits for your approval" in about(1)[0] and about(1)[0].endswith("https://kn.example/ui#/inbox/task:garden/NT-1"), about(1)
     time.sleep(2.5)
     assert len(about(1)) == 1, "one message per item"
-    # A chat reply links to the chat itself.
+    # A chat reply links to its own item in the inbox too.
     pc = {"X-Knowledge-Machine": "cccccccccccccccc", "X-Knowledge-Machine-Label": "garage"}
     ui = lambda path, body: raw("POST", path, json.dumps(body), {**ck, "X-Knowledge-UI": "1", "Content-Type": "application/json"})
     http("POST", "/machine/report", {"version": "0.17.0", "agents": {"codex": {}},
@@ -945,7 +945,7 @@ def needs_contract(tmp, ck, fr, raw, heard):
     ui("/ui/api/chat/send", {"machine": "cccccccccccccccc", "id": cid, "text": "ping"})
     http("GET", "/machine/chats", token=fr, headers=pc)
     http("POST", "/machine/chats/events", {"chat": cid, "events": [{"kind": "text", "text": "pong"}], "done": True}, token=fr, headers=pc)
-    assert wait(lambda: any(m.endswith(f"https://kn.example/ui#/chats/{cid}") and "replied: pong" in m for m in heard)), heard
+    assert wait(lambda: any(m.endswith(f"https://kn.example/ui#/inbox/chat:cccccccccccccccc/{cid}") and "replied: pong" in m for m in heard)), heard
     # The board is open (polled): the item shows there, so no message, also not after the board closes.
     end = time.time() + 3
     add(2)
@@ -991,7 +991,7 @@ def flow_contract(tmp, ck, fr, raw, heard):
     assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": "\n".join(lines) + "\n## Keuzes"}, fr)[0]
     said = lambda tid: [m for m in heard if m.startswith(f"Knowledge needs you: {tid} ")]
     assert wait(lambda: said("FL-1-done")), heard
-    assert said("FL-1-done")[0].endswith("https://kn.example/ui#/inbox"), said("FL-1-done")
+    assert said("FL-1-done")[0].endswith("https://kn.example/ui#/inbox/task:garden/FL-1-done"), said("FL-1-done")
     assert wait(lambda: said("FL-5-cont")) and not said("FL-2-done"), heard
     b = board()
     r = b["task:garden/FL-1-done"]
