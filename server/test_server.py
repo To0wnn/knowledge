@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import sys
+import socket
 import tempfile
 import time
 import urllib.error
@@ -15,7 +16,15 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-PORT = 18766
+def free_port() -> int:
+    """A port nobody uses now, so several checks can run at once (parallel agents, a commit hook)."""
+    # shortcut: another process could take the port between close() and the server binding it; retry if that ever bites.
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+PORT = free_port()
 BASE = f"http://127.0.0.1:{PORT}"
 
 

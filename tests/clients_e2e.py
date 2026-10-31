@@ -27,6 +27,7 @@ import re
 import shutil
 import subprocess
 import sys
+import socket
 import tempfile
 import threading
 import time
@@ -35,7 +36,15 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 CLIENT = REPO  # replaced in main() by a copy under a path with a space, like C:\Users\Test Usér\...
-PORT = 18799
+def free_port() -> int:
+    """A port nobody uses now, so several checks can run at once (parallel agents, a commit hook)."""
+    # shortcut: another process could take the port between close() and the server binding it; retry if that ever bites.
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+PORT = free_port()
 BASE = f"http://127.0.0.1:{PORT}"
 WIN = os.name == "nt"
 failures = []
@@ -703,7 +712,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
     if not WIN:  # a process named like agy, ended later: YOLO for agy waits for it
         shutil.copy(shutil.which("sleep"), bin_dir / "knfakeagy")
         fake_agy = subprocess.Popen([str(bin_dir / "knfakeagy"), "300"])
-    port = PORT + 7
+    port = free_port()
     self_url = f"http://127.0.0.1:{port}"
     env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, PATH=str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
                    KNOWLEDGE_COMPANION_PORT=str(port), KNOWLEDGE_COMPANION_EVERY="3600", KN_FAKE_CALLS=str(calls),
