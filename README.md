@@ -62,14 +62,19 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   local service on `127.0.0.1:47321` only. Every minute it asks `GET /tasks/ready` and wakes the newest open session of
   the task's agent and project with the same wake code, or, when allowed per agent in its settings, starts one in the
   project's folder (Codex `codex exec`; Claude Code and agy in a new console on Windows, in tmux elsewhere); each wake is
-  reported with `POST /tasks/woken`, and a task is not woken twice within 30 minutes. On request it trusts the
+  reported with `POST /tasks/woken`, and a task is not woken twice within 30 minutes; a session is started for a task
+  once, never again while it stays unclaimed (it shows as stalled). A Claude Code session counts as open only while its
+  waiting hook runs. On request it trusts the
   knowledge hooks the agents' own way (Codex: `codex app-server` `hooks/list` + `config/batchWrite`, again after every
   plugin update; Claude Code: `hasTrustDialogAccepted` in `~/.claude.json`; agy: `trustedWorkspaces`), only for folders
   with a `.knowledge-project`. A YOLO switch per agent writes its native "run without asking" settings and unchecking
   restores the previous values (agy's only while agy is closed). Every changed file is first copied to
   `~/backups/knowledge-companion/<date>/` (last five days kept). Hook failures Codex and agy log themselves are reported
-  with `POST /status` as `agent-log`. Its page is at `http://127.0.0.1:47321/`; the web UI shows a "This pc" tab when
-  the companion answers there. The local API answers only that page and the knowledge web UI's origin.
+  with `POST /status` as `agent-log` (Codex: only failures of the knowledge hooks). Its page is at
+  `http://127.0.0.1:47321/`; the web UI shows a "This pc" tab when the companion answers there. The local API answers
+  only that page and the knowledge web UI's origin; every change except trusting the knowledge hooks, and the tasks
+  and activity, also need the key in `~/.knowledge/companion/api-key` (readable by you only), which the menu entry
+  passes to the page (`#key=`).
 - **Usage limits:** each prompt checks how much of the agent's own usage limit is used and says it once per session
   and limit window at 50, 75 and 90%; from 95% a new subagent is refused (Claude Code `Agent`, Codex `spawn_agent`, agy
   `invoke_subagent`). The numbers are the agent's own: Codex's rollout, agy's language server (after its one-time

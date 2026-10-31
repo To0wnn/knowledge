@@ -11,13 +11,16 @@ it answers.
   companion.py serve          the page, the local API and the minute loop (knowledge-agent.py serve runs this)
   companion.py tick           one round of the loop, its summary as JSON
   companion.py trust [AGENT]  trust the knowledge hooks of every agent here (or one), then keep them trusted
+  companion.py yolo-off       put back the agents' own settings YOLO changed (uninstall-companion runs this)
 Standard library only; Linux, macOS and Windows.
 """
 import datetime
 import hashlib
+import hmac
 import json
 import os
 import re
+import secrets
 import shutil
 import socket
 import sqlite3
@@ -54,6 +57,8 @@ AGY_SETTINGS = AGY_DIR / "settings.json"
 AGY_PROCESS = os.environ.get("KNOWLEDGE_AGY_PROCESS") or "agy"  # another name in the tests
 MISSING = {"missing": True}  # a setting that was not there: unchecking YOLO removes it again
 LOCK = threading.RLock()
+TICK = threading.Lock()  # one round at a time: the minute loop and the page's "Wake ready tasks now"
+TRUST_KEYS = ("keep_trusted", "codex_trusted")  # what trust() keeps in state.json; a round never writes them
 
 
 def version() -> str:
@@ -107,6 +112,22 @@ def edit_json(path: Path, change):
     return out
 
 
+def api_key() -> str:
+    """The local API's secret, readable by this user only: any process here can reach 127.0.0.1 and set Origin, so a
+    change needs the key. The companion's shortcut opens the page with it (#key=), the page keeps it."""
+    f = STATE / "api-key"
+    try:
+        return f.read_text(encoding="utf-8").strip()
+    except OSError:
+        STATE.mkdir(parents=True, exist_ok=True)
+    try:
+        with os.fdopen(os.open(f, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as fh:
+            fh.write(key := secrets.token_urlsafe(24))
+        return key
+    except FileExistsError:  # made by the other thread meanwhile
+        return f.read_text(encoding="utf-8").strip()
+
+
 def log(kind: str, text: str, detail: str = ""):
     with LOCK:
         items = load("activity.json", [])
@@ -147,6 +168,35 @@ def rfc3339(s: str) -> float:
         return 0.0
 
 
+def alive(pid: int) -> bool:
+    if os.name == "nt":  # os.kill on Windows terminates the process: ask with OpenProcess instead
+        import ctypes
+        k = ctypes.windll.kernel32
+        h = k.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return False
+        code = ctypes.c_ulong()
+        k.GetExitCodeProcess(h, ctypes.byref(code))
+        k.CloseHandle(h)
+        return code.value == 259  # STILL_ACTIVE
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def claude_waits(entry: dict) -> bool:
+    """A Claude session can be woken only while its waiting hook runs: the .waiter file names that hook's pid."""
+    try:
+        f = agent_hooks.AGENTS_DIR / f"claude-{agent_hooks.short(entry['session'])}.waiter"
+        return alive(int(f.read_text(encoding="utf-8").split(":")[0]))
+    except (OSError, ValueError, KeyError):
+        return False
+
+
 def sessions(agent: str, now: float) -> list:
     """The open sessions of an agent here, newest first: what agent_hooks' wake code can reach."""
     out = []
@@ -161,7 +211,8 @@ def sessions(agent: str, now: float) -> list:
                         "at": rfc3339(changed), "entry": entry})
     else:
         for _, e in agent_hooks.read_entries(f"{agent}-*.json"):
-            if e.get("agent") == agent and e.get("cwd") and now - e.get("at", 0) <= agent_hooks.WAKE_WITHIN:
+            if e.get("agent") == agent and e.get("cwd") and now - e.get("at", 0) <= agent_hooks.WAKE_WITHIN \
+                    and (agent != "claude" or claude_waits(e)):
                 out.append({"session": e["session"], "cwd": e["cwd"], "project": agent_hooks.project_query(e["cwd"])["project"],
                             "at": e["at"], "entry": e})
     return sorted(out, key=lambda s: -s["at"])
@@ -274,6 +325,8 @@ def untrusted(agent: str, folders: list) -> list:
     """The knowledge folders this agent does not trust yet (Claude, agy); Codex: [] once trusted for this plugin."""
     try:
         if agent == "claude":
+            if not CLAUDE_JSON.exists():  # Claude never ran here: nothing to trust yet, Claude asks itself
+                return []
             known = json.loads(CLAUDE_JSON.read_text(encoding="utf-8")).get("projects") or {}
             return [f for f in folders if not (known.get(claude_key(f)) or {}).get("hasTrustDialogAccepted")]
         if agent == "agy":
@@ -288,7 +341,7 @@ def untrusted(agent: str, folders: list) -> list:
 def trust(agent: str) -> str:
     folders = sorted(project_folders().values())
     if agent == "claude":
-        todo = untrusted("claude", folders) if CLAUDE_JSON.exists() else []  # Claude never ran here: nothing to trust yet
+        todo = untrusted("claude", folders)
         if todo:  # one write: Claude itself rewrites the file often
             edit_json(CLAUDE_JSON, lambda d: [d.setdefault("projects", {}).setdefault(claude_key(f), {}).update(hasTrustDialogAccepted=True) for f in todo])
         n = len(todo)
@@ -310,6 +363,18 @@ def trust(agent: str) -> str:
     what = f"{n} hook(s)" if agent == "codex" else f"{n} project folder(s)"
     log("trust", f"Trusted the knowledge hooks of {AGENTS[agent][0]}", f"{what} newly trusted")
     return what
+
+
+def trust_all(agents) -> dict:
+    """trust() for each agent; one agent's failure never leaves the others untrusted."""
+    done = {}
+    for a in agents:
+        try:
+            done[a] = trust(a)
+        except Exception as e:
+            log("error", f"Could not trust the hooks of {AGENTS[a][0]}", str(e)[:300])
+            done[a] = f"failed: {e}"[:200]
+    return done
 
 
 def keep_trusted():
@@ -429,6 +494,12 @@ def set_yolo(agent: str, on: bool) -> str:
     return "on" if on else "off"
 
 
+def yolo_off() -> list:
+    """Every YOLO this companion turned on, off again; the agents that wait until they are closed (agy)."""
+    return [a for a, mine in load("yolo.json", {}).items() if a in AGENTS and (mine.get("on") or mine.get("pending"))
+            and set_yolo(a, False) == "pending"]
+
+
 def pending_yolo():
     p = load("yolo.json", {}).get("agy", {}).get("pending")
     if p is not None and not agy_running():
@@ -476,8 +547,9 @@ def start_session(agent: str, folder: str, tasks: list) -> str:
     return f"tmux {name}"
 
 
-def wake_task(task: dict, tok: str, now: float, told: dict, ready: list) -> tuple:
-    """(session, how) when a session has the task now, (None, why not) else. `told`: sessions reached this round."""
+def wake_task(task: dict, tok: str, now: float, told: dict, ready: list, may_start: bool = True) -> tuple:
+    """(session, how) when a session has the task now, (None, why not) else. `told`: sessions reached this round;
+    `may_start`: False once a session was started for this task (it is not started again and again)."""
     agent, project = task["agent"], task["project"]
     mine = [s for s in sessions(agent, now) if s["project"] == project]
     if mine:
@@ -492,11 +564,20 @@ def wake_task(task: dict, tok: str, now: float, told: dict, ready: list) -> tupl
         hook, deliver = (({"session_id": s["session"], "cwd": s["cwd"]}, lambda text: agent_hooks.codex_queue(s["entry"], text))
                          if agent == "codex" else
                          ({"conversationId": s["session"], "cwd": s["cwd"]}, lambda text: agent_hooks.agy_send(s["entry"], s["session"], text)))
-        told[key] = True
-        text = agent_hooks.new_tasks(agent, tok, hook, now, wake=True, deliver=deliver)
+        told[key], failed = True, []
+
+        def tell(text):
+            ok = deliver(text)
+            failed.append(not ok)
+            return ok
+        text = agent_hooks.new_tasks(agent, tok, hook, now, wake=True, deliver=tell)
+        if any(failed):  # new_tasks answers '' for "told before" and for a refused delivery alike
+            raise RuntimeError(f"{AGENTS[agent][0]} did not take the message (session {s['session']})")
         return s["session"], ("sent to the session" if text else "the session was told before")
     if not load("settings.json", {}).get("startWhenNone", {}).get(agent):
         return None, "No open session; starting one is off in Settings"
+    if not may_start:
+        return None, "No open session; one was started for it already, not again"
     folder = project_folders().get(project)
     if not folder:
         return None, f"No folder linked to project {project} on this pc"
@@ -532,6 +613,8 @@ def agent_log_errors(st: dict, now: float) -> dict:
             for _, ts, body in rows:
                 body = body or ""
                 name = re.search(r"\bhook_name=(\S+)", body)
+                if not ("knowledge" in (name.group(1) if name else "").lower() or ours({"command": body})):
+                    continue  # another hook's failure, maybe with its own output: it stays on this pc
                 err = re.search(r"\berror=(.*)$", body, re.S)
                 event = re.search(r"(\w+) hook failed", body)
                 errs.append({"hook": name.group(1) if name else "codex hook", "event": event.group(1) if event else "",
@@ -577,6 +660,11 @@ def report_errors(st: dict, tok: str, now: float):
 
 def tick() -> dict:
     """One round: queued YOLO, trust after an update, the ready tasks, the agents' own hook errors."""
+    with TICK:
+        return one_round()
+
+
+def one_round() -> dict:
     now, tok = time.time(), token_store.token()
     try:
         pending_yolo()
@@ -595,20 +683,24 @@ def tick() -> dict:
         if not st.get("sync_error"):
             log("error", "Could not reach the knowledge server", str(e)[:200])
         st["sync_error"], ready = str(e)[:200], []
-    woken = {k: w for k, w in st.get("woken", {}).items() if now - w["at"] < 86400}
+    woken = {k: w for k, w in st.get("woken", {}).items() if now - w.get("since", w["at"]) < 86400}
     told = {}
     for t in ready:
         key = f"{t['project']}/{t['id']}"
-        if t.get("agent") not in AGENTS or not installed(t["agent"]) or now - woken.get(key, {}).get("at", 0) < WAKE_AGAIN:
+        prev = woken.get(key, {})
+        if t.get("agent") not in AGENTS or not installed(t["agent"]) or now - prev.get("at", 0) < WAKE_AGAIN:
             continue
         try:
-            session, how = wake_task(t, tok, now, told, ready)
+            session, how = wake_task(t, tok, now, told, ready, may_start=not prev.get("started"))
         except Exception as e:
             session, how = None, f"Wake failed: {e}"[:200]
+            if st.get("waiting", {}).get(key) != how:  # once, not every minute while it keeps failing
+                log("error", f"{AGENTS[t['agent']][0]}: could not wake {t['id']}", how)
         if session is None:
             summary["waiting"][key] = how
             continue
-        woken[key] = {"at": now, "session": session, "agent": t["agent"]}
+        woken[key] = {"at": now, "since": prev.get("since", now), "session": session, "agent": t["agent"],
+                      "started": bool(prev.get("started")) or how == "started a session"}
         summary["woken"].append({"id": t["id"], "project": t["project"], "agent": t["agent"], "session": session, "how": how})
         try:
             server("POST", "/tasks/woken", tok, {"project": t["project"], "id": t["id"], "agent": t["agent"], "session": session[:80]})
@@ -618,7 +710,7 @@ def tick() -> dict:
     st.update(woken=woken, waiting=summary["waiting"])
     report_errors(st, tok, now)
     with LOCK:
-        save("state.json", {**load("state.json", {}), **st})  # trust() may have written meanwhile
+        save("state.json", {**load("state.json", {}), **{k: v for k, v in st.items() if k not in TRUST_KEYS}})  # trust() may have written meanwhile
     return summary
 
 
@@ -661,8 +753,8 @@ def page_state() -> dict:
             continue
         key, w = f"{t['project']}/{t['id']}", st.get("woken", {}).get(f"{t['project']}/{t['id']}")
         item = {"id": t["id"], "owner": t["agent"], "text": t["text"], "project": t["project"]}
-        if w and now - w["at"] >= WAKE_AGAIN:
-            lanes["stalled"].append({**item, "why": f"Woken {int((now - w['at']) // 60)} min ago, not claimed"})
+        if w and now - w.get("since", w["at"]) >= WAKE_AGAIN:
+            lanes["stalled"].append({**item, "why": f"Woken {int((now - w.get('since', w['at'])) // 60)} min ago, not claimed"})
         elif key in st.get("waiting", {}):
             lanes["waiting"].append({**item, "why": st["waiting"][key]})
         else:
@@ -699,6 +791,9 @@ class Handler(BaseHTTPRequestHandler):
         o = self.headers.get("Origin", "")
         return o if o in (SELF, origin_of(token_store.url())) else (None if o else "")
 
+    def key_ok(self) -> bool:
+        return hmac.compare_digest(self.headers.get("X-Companion-Key", ""), api_key())
+
     def host_ok(self) -> bool:  # DNS rebinding: a foreign name that resolves to 127.0.0.1 gets nothing
         return self.headers.get("Host", "") in (f"127.0.0.1:{PORT}", f"localhost:{PORT}")
 
@@ -724,7 +819,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(403, {"error": "not allowed"})
         self.send_response(204)
         for k, v in (("Access-Control-Allow-Origin", o), ("Access-Control-Allow-Methods", "GET, POST"),
-                     ("Access-Control-Allow-Headers", "Content-Type"), ("Access-Control-Allow-Private-Network", "true"),
+                     ("Access-Control-Allow-Headers", "Content-Type, X-Companion-Key"), ("Access-Control-Allow-Private-Network", "true"),
                      ("Access-Control-Max-Age", "600"), ("Vary", "Origin"), ("Content-Length", "0")):
             self.send_header(k, v)
         self.end_headers()
@@ -736,7 +831,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/local/api/hello":
             return self.send(200, {"companion": version(), "host": socket.gethostname()}, origin=o)
         if path == "/local/api/state":
-            return self.send(200, page_state(), origin=o)
+            s = page_state()
+            if not self.key_ok():  # the web UI's tab (and anyone else here): the agents, no tasks, folders or activity
+                s = {"agents": s["agents"], "status": {"host": s["status"]["host"]}, "version": s["version"], "locked": True}
+            return self.send(200, s, origin=o)
         name = "companion.html" if path in ("/", "/index.html") else path.lstrip("/")
         files = {f.name: f for f in STATIC.iterdir() if f.is_file()}
         if name not in files:
@@ -749,20 +847,15 @@ class Handler(BaseHTTPRequestHandler):
         # a POST always carries Origin in a browser; JSON only, so a foreign page cannot send it without a preflight
         if not self.host_ok() or not o or not self.headers.get("Content-Type", "").startswith("application/json"):
             return self.send(403, {"error": "not allowed"})
+        if path != "/local/api/trust" and not self.key_ok():  # trusting the knowledge hooks is what the setup does anyway
+            return self.send(403, {"error": "Open the companion from its shortcut: its link carries the key this change needs"}, origin=o)
         try:
             body = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 65536)) or b"{}")
             agent = body.get("agent")
             if agent is not None and agent not in AGENTS:
                 raise ValueError(f"agent must be one of {', '.join(AGENTS)}")
             if path == "/local/api/trust":
-                done = {}
-                for a in [agent] if agent else [a for a in AGENTS if installed(a)]:
-                    try:  # one agent's failure must not leave the others untrusted
-                        done[a] = trust(a)
-                    except Exception as e:
-                        log("error", f"Could not trust the hooks of {AGENTS[a][0]}", str(e)[:300])
-                        done[a] = f"failed: {e}"[:200]
-                return self.send(200, {"trusted": done}, origin=o)
+                return self.send(200, {"trusted": trust_all([agent] if agent else [a for a in AGENTS if installed(a)])}, origin=o)
             if path == "/local/api/yolo":
                 if o != SELF:  # switching approvals off is for this pc's own page, not for a web page elsewhere
                     return self.send(403, {"error": "YOLO can only be changed on the companion page itself"}, origin=o)
@@ -815,7 +908,14 @@ def main(argv: list):
     elif cmd == "tick" and not rest:
         print(json.dumps(tick()))
     elif cmd == "trust" and len(rest) <= 1 and (not rest or rest[0] in AGENTS):
-        print(json.dumps({a: trust(a) for a in (rest or [a for a in AGENTS if installed(a)])}))
+        done = trust_all(rest or [a for a in AGENTS if installed(a)])
+        print(json.dumps(done))
+        if failed := [a for a, r in done.items() if r.startswith("failed")]:
+            sys.exit(f"could not trust the hooks of {', '.join(failed)}; the others are trusted")
+    elif cmd == "yolo-off" and not rest:
+        if waits := yolo_off():
+            sys.exit(f"YOLO stays on for {', '.join(waits)} until it is closed: close it and run this again")
+        print("YOLO is off for every agent; their own settings are back")
     elif "--self-test" in argv:
         t = '# mine\napproval_policy = "on-request" # keep\n\n[notice]\nother = 1\n\n[projects."/x"]\ntrust_level = "trusted"\n'
         t2, old = toml_set(t, None, "approval_policy", '"never"')
@@ -832,6 +932,8 @@ def main(argv: list):
         assert json_set(d, ("p", "m"), "b") == MISSING and d == {"a": 1, "p": {"m": "b"}}
         assert json_set(d, ("p", "m"), MISSING) == "b" and d == {"a": 1, "p": {}}
         assert ours({"pluginId": "knowledge@knowledge"}) and not ours({"pluginId": "other@x", "command": "x.sh"})
+        globals()["CLAUDE_JSON"] = HOME / ".knowledge-companion-self-test-missing.json"
+        assert untrusted("claude", ["/x"]) == [], "Claude never ran here: nothing to trust, no trust round every minute"
         print("ok")
     else:
         sys.exit(__doc__)

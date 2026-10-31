@@ -5,10 +5,21 @@
 try { const t = localStorage.getItem("kn_theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch { /* storage blocked: follow the system */ }
 
 // The state of this pc as the companion's local API reports it; filled by load().
-let S = { status: {}, agents: [], tasks: { ready: [], waiting: [], stalled: [] }, activity: [], settings: { token: {}, startWhenNone: {} } };
+const EMPTY = { status: {}, agents: [], tasks: { ready: [], waiting: [], stalled: [] }, activity: [], settings: { token: {}, startWhenNone: {} } };
+let S = EMPTY;
+
+// The key the local API wants for changes: the shortcut opens this page with #key=..., kept for the next visit.
+const KEY = (() => {
+  const k = new URLSearchParams(location.hash.slice(1)).get("key");
+  try {
+    if (k) { localStorage.setItem("kn_companion_key", k); history.replaceState(null, "", location.pathname); }
+    return k || localStorage.getItem("kn_companion_key") || "";
+  } catch { return k || ""; }
+})();
 
 async function api(path, body) {
-  const r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const headers = { "X-Companion-Key": KEY, ...(body === undefined ? {} : { "Content-Type": "application/json" }) };
+  const r = await fetch(path, body === undefined ? { headers } : { method: "POST", headers, body: JSON.stringify(body) });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
   return data;
@@ -18,8 +29,9 @@ const clock = (at) => { const d = new Date(at * 1000); return `${String(d.getHou
 const ago = (at) => { const m = Math.round((Date.now() / 1000 - at) / 60); return m < 1 ? "just now" : m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`; };
 
 async function load() {
-  try { S = await api("/local/api/state"); }
+  try { const r = await api("/local/api/state"); S = { ...EMPTY, ...r, status: { ...EMPTY.status, ...r.status } }; }
   catch (e) { toast(`Could not read the companion: ${e.message}`); return; }
+  if (S.locked) toast("Open the companion from its shortcut to see tasks and change settings");
   renderChips(); renderAgents(); renderTasks(); renderActivity(); renderSettings();
 }
 

@@ -634,6 +634,9 @@ if name == "codex" and args[:1] == ["app-server"]:  # codex-rs app-server, as fa
         if "id" not in m:
             continue
         res = {}
+        if m["method"] == "hooks/list" and os.path.exists(calls + ".fail"):  # a Codex without hooks/list
+            print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "error": {"code": -32601, "message": "unknown method"}}), flush=True)
+            continue
         if m["method"] == "hooks/list":
             res = {"data": [{"cwd": m["params"]["cwds"][0], "warnings": [], "errors": [], "hooks": [
                 {"key": "knowledge@knowledge:.codex-plugin/hooks.json:session_start:0:0", "pluginId": "knowledge@knowledge",
@@ -645,6 +648,8 @@ if name == "codex" and args[:1] == ["app-server"]:  # codex-rs app-server, as fa
         print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": res}), flush=True)
 else:
     rec({"argv": [name] + args, "cwd": os.getcwd()})
+    if args[:1] == ["queue"] and os.path.exists(calls + ".fail"):  # the thread is gone
+        sys.exit("no such thread")
 """
 
 
@@ -688,6 +693,8 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
     con.execute("INSERT INTO logs (ts, level, feedback_log_body) VALUES (?, 'INFO', 'turn started')", (int(time.time()),))
     con.execute("INSERT INTO logs (ts, level, feedback_log_body) VALUES (?, 'WARN', ?)",
                 (int(time.time()), "after_agent hook failed; continuing turn_id=t1 hook_name=knowledge-stop error=exit code 1: codex-kaput"))
+    con.execute("INSERT INTO logs (ts, level, feedback_log_body) VALUES (?, 'WARN', ?)",  # another hook: stays on this pc
+                (int(time.time()), "pre_tool_use hook failed; hook_name=work-lint error=exit code 1: private-work-text"))
     con.commit()
     con.close()
     fake_agy = None
@@ -700,8 +707,12 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
                    KNOWLEDGE_COMPANION_PORT=str(port), KNOWLEDGE_COMPANION_EVERY="3600", KN_FAKE_CALLS=str(calls),
                    KNOWLEDGE_AGY_PROCESS="knfakeagy" if fake_agy else Path(sys.executable).stem)
 
-    def call(method, path, body=None, origin=self_url, host=None, ctype="application/json"):
-        headers = {**({"Origin": origin} if origin else {}), **({"Host": host} if host else {}), **({"Content-Type": ctype} if ctype else {})}
+    key_file = home / ".knowledge" / "companion" / "api-key"
+
+    def call(method, path, body=None, origin=self_url, host=None, ctype="application/json", key=True):
+        key = key_file.read_text(encoding="utf-8").strip() if key and key_file.exists() else ""
+        headers = {**({"Origin": origin} if origin else {}), **({"Host": host} if host else {}), **({"Content-Type": ctype} if ctype else {}),
+                   **({"X-Companion-Key": key} if key else {})}
         req = urllib.request.Request(self_url + path, method=method, data=None if body is None else json.dumps(body).encode(), headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=60) as r:
@@ -712,7 +723,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
     log = open(home / "companion.log", "wb")
     proc = subprocess.Popen([sys.executable, str(hooks / "agent_hooks.py"), "serve"], env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
     try:
-        up = wait_for(lambda: _quiet(lambda: call("GET", "/local/api/state")[0] == 200 and json.loads(call("GET", "/local/api/state")[2])["status"]["synced"]), 30)
+        up = wait_for(lambda: _quiet(lambda: call("GET", "/local/api/state")[0] == 200 and json.loads(call("GET", "/local/api/state")[2])["status"].get("synced")), 30)
         check(up, "companion: serve answers on 127.0.0.1 and its first round reached the server", (home / "companion.log").read_text(errors="replace")[-600:])
         if not up:
             return
@@ -729,6 +740,16 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
               "companion: a POST without Origin or not as JSON is refused")
         check(call("POST", "/local/api/yolo", {"agent": "codex", "on": True}, origin=BASE)[0] == 403 and codex_cfg.read_text(encoding="utf-8") == toml,
               "companion: YOLO only from the companion's own page, not from the web UI")
+        # Any process here can set Origin: a change needs the key only this user can read (the shortcut carries it).
+        check(call("POST", "/local/api/yolo", {"agent": "codex", "on": True}, key=False)[0] == 403
+              and call("POST", "/local/api/settings", {"startWhenNone": {"codex": True}}, key=False)[0] == 403
+              and codex_cfg.read_text(encoding="utf-8") == toml and not (home / ".knowledge" / "companion" / "settings.json").exists(),
+              "companion: YOLO and settings without the local key are refused, also with the page's own Origin")
+        st, _, body = call("GET", "/local/api/state", origin=None, key=False)
+        check(st == 200 and json.loads(body).get("locked") and "tasks" not in json.loads(body) and "activity" not in json.loads(body)
+              and json.loads(body)["agents"], "companion: without the key the state shows the agents only (the web UI's tab)", body[:300])
+        if not WIN:
+            check(key_file.stat().st_mode & 0o077 == 0, "companion: the local key file is private (0600)")
         st, hdr, body = call("GET", "/", origin=None)
         check(st == 200 and "Knowledge companion" in body and "default-src 'self'" in hdr.get("Content-Security-Policy", ""),
               "companion: serves its page with a CSP", f"{st} {hdr}")
@@ -768,8 +789,10 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         cs = json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8"))
         check(cs["permissions"] == {"allow": ["Bash(ls)"], "defaultMode": "bypassPermissions"} and cs["skipDangerousModePermissionPrompt"] is True,
               "companion: YOLO on for Claude Code (bypassPermissions)", json.dumps(cs))
-        call("POST", "/local/api/yolo", {"agent": "claude", "on": False})
-        check(json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8")) == claude_settings, "companion: YOLO off restores Claude's settings")
+        code, out, err = run([sys.executable, str(hooks / "companion.py"), "yolo-off"], "", env)
+        check(code == 0 and json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8")) == claude_settings
+              and not json.loads(call("GET", "/local/api/state")[2])["agents"][0]["yolo"],
+              "companion: yolo-off (uninstall) restores Claude's settings", out + err)
         st, _, body = call("POST", "/local/api/yolo", {"agent": "agy", "on": True})
         check(json.loads(body).get("yolo") == "pending" and json.loads((agy_dir / "settings.json").read_text(encoding="utf-8")) == ag
               and next(a for a in json.loads(call("GET", "/local/api/state")[2])["agents"] if a["id"] == "agy")["yoloPending"] is True,
@@ -811,12 +834,56 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         wakes = json.loads((tmp / "task_wakes.json").read_text(encoding="utf-8")).get("garden", {})
         check(wakes.get("CMP-CODEX", {}).get("session") == "cmp-cx" and wakes.get("CMP-CODEX", {}).get("agent") == "codex" and "CMP-GEMINI" in wakes,
               "companion: each wake is reported with POST /tasks/woken", json.dumps(wakes)[:400])
+        # A Claude session whose waiting hook is gone (closed) cannot be woken: the task keeps waiting.
+        agents_dir = home / ".knowledge" / "agents"
+        short = lambda sid: hashlib.sha256(sid.encode()).hexdigest()[:16]
+        (agents_dir / f"claude-{short('cl-1')}.json").write_text(json.dumps({"agent": "claude", "session": "cl-1", "cwd": str(project),
+                                                                           "at": time.time()}), encoding="utf-8")
+        gone = subprocess.Popen([sys.executable, "-c", "pass"])
+        gone.wait()
+        (agents_dir / f"claude-{short('cl-1')}.waiter").write_text(f"{gone.pid}:1", encoding="utf-8")
         n = len(recorded())
-        call("POST", "/local/api/tick", {})
+        st, _, body = call("POST", "/local/api/tick", {})
         check(len([c for c in recorded()[n:] if "argv" in c]) == 0, "companion: the same task is not woken again within 30 minutes", json.dumps(recorded()[n:])[:400])
+        check(json.loads(body)["waiting"].get("garden/CMP-CLAUDE", "").startswith("No open session")
+              and not (agents_dir / f"claude-{short('cl-1')}.poke").exists(),
+              "companion: a Claude session without a running waiting hook is not counted as open", body[:400])
         state = json.loads(call("GET", "/local/api/state")[2])
         check(any(t["id"] == "CMP-CLAUDE" for t in state["tasks"]["waiting"]) and any(t["id"] == "CMP-CODEX" for t in state["tasks"]["ready"])
               and state["agents"][1]["sessions"], "companion: the page lists ready and waiting tasks and the open session", json.dumps(state["tasks"])[:600])
+        (agents_dir / f"claude-{short('cl-1')}.waiter").write_text(f"{os.getpid()}:1", encoding="utf-8")
+        call("POST", "/local/api/tick", {})
+        check((agents_dir / f"claude-{short('cl-1')}.poke").exists(), "companion: a Claude session whose hook waits is poked")
+        # A session started for a task is not started again when the task stays unclaimed; it shows as stalled.
+        stf = home / ".knowledge" / "companion" / "state.json"
+        sj = json.loads(stf.read_text(encoding="utf-8"))
+        sj["woken"]["garden/CMP-GEMINI"].update(at=time.time() - 1900, since=time.time() - 1900)
+        stf.write_text(json.dumps(sj), encoding="utf-8")
+        n = len(recorded())
+        st, _, body = call("POST", "/local/api/tick", {})
+        state = json.loads(call("GET", "/local/api/state")[2])
+        check(not [c for c in recorded()[n:] if c.get("argv", [""])[0] in ("agy", "tmux")]
+              and "started for it already" in json.loads(body)["waiting"].get("garden/CMP-GEMINI", "")
+              and any(t["id"] == "CMP-GEMINI" for t in state["tasks"]["stalled"]),
+              "companion: no second session for an unclaimed task after 30 minutes; it shows as stalled", body[:400] + json.dumps(state["tasks"])[:400])
+        # A Codex session that does not take the message (thread gone): reported as failed, not as woken.
+        Path(str(calls) + ".fail").write_text("", encoding="utf-8")
+        http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_edit", "arguments":
+             {"path": "garden-memory/project_companion.md", "old_string": "## Keuzes",
+              "new_string": "- open tot 1 jan 2099 [Codex, CMP-CX2] from Claude, start now: second codex task\n## Keuzes"}}},
+             {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})
+        st, _, body = call("POST", "/local/api/tick", {})
+        state = json.loads(call("GET", "/local/api/state")[2])
+        check(json.loads(body)["waiting"].get("garden/CMP-CX2", "").startswith("Wake failed") and "CMP-CX2" not in json.dumps(json.loads(body)["woken"])
+              and any("could not wake CMP-CX2" in a["text"] for a in state["activity"]),
+              "companion: a refused codex queue is a failed wake, said on the page", body[:400])
+        # The trust command: an agent that fails (a Codex without hooks/list) does not keep the next one untrusted.
+        ag_now = json.loads((agy_dir / "settings.json").read_text(encoding="utf-8"))
+        (agy_dir / "settings.json").write_text(json.dumps({**ag_now, "trustedWorkspaces": [str(home)]}), encoding="utf-8")
+        code, out, err = run([sys.executable, str(hooks / "companion.py"), "trust"], "", env, timeout=120)
+        check(code != 0 and "codex" in err and str(project) in json.loads((agy_dir / "settings.json").read_text(encoding="utf-8"))["trustedWorkspaces"],
+              "companion: trust goes on with agy after Codex failed, and says so", out + err)
+        Path(str(calls) + ".fail").unlink()
         # Hook failures the agents log themselves: reported once, marked as agent-log.
         admin = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice"}
         sessions = json.loads(http("GET", "/ui/api/tasks", headers=admin)[1])["sessions"]
@@ -824,6 +891,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         check(any(e["source"] == "agent-log" and e["hook"] == "knowledge-stop" and "codex-kaput" in e["stderr"] for e in errs.get("codex", []))
               and any(e["source"] == "agent-log" and "agy-boom" in e["stderr"] and e["event"] == "PostToolUse" for e in errs.get("agy", [])),
               "companion: hook failures from Codex's and agy's own logs reach the Tasks tab as agent-log", json.dumps(errs)[:800])
+        check("private-work-text" not in json.dumps(errs), "companion: another hook's logged failure stays on this pc", json.dumps(errs)[:800])
         before = json.dumps(errs)
         call("POST", "/local/api/tick", {})
         sessions = json.loads(http("GET", "/ui/api/tasks", headers=admin)[1])["sessions"]
