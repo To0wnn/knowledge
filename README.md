@@ -40,6 +40,15 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   (such as docs moved into an archive folder) go to the first session of the device that asks, offered again after an
   hour when that session had no further turn, and one session is asked to run a full docs mirror sync in the
   background when the device's last one is older than `docs_sync_minutes` (admin page, Settings).
+- **Task lines:** a hand-over is one line in a memo,
+  `- open until <date> [<Owner>, <ID>] from <Requester>, start <now | after <ID> | <date> | after approval>: <what>`
+  (`open tot` also works). A new line without `from`/`start` is refused at write time; older lines keep working as
+  "start now" and show as legacy. The server records who added each line; a task starts by itself only when its start
+  condition is met and its writer is trusted (per project on the admin page; by default the project's owner and their
+  tokens, admins and tokens an admin made), otherwise the owner or an admin approves it in the Tasks tab. Only tasks
+  that may start reach an agent as "start now" (`/tasks`, the wake, `GET /tasks/ready`); the others are listed with the
+  reason. `POST /tasks/woken` records a wake: a woken task nobody claims within 30 minutes shows as stalled and sends
+  one Matrix message. `POST /status` takes hook failures a device reports; the Tasks tab shows them per session.
 - **Waking another agent (same machine):** after a `knowledge_edit`/`knowledge_write`/`knowledge_new_memo`, the
   plugin wakes the newest idle session per agent and project on that machine that has a new task: Codex through
   `codex queue --thread`, agy through its local language server (the agy session registers once by running
@@ -65,8 +74,9 @@ checks them against a few house rules, so a growing pile of agent memory stays f
 - **Lint:** deterministic checks in ~80 ms: dead links, index lines without a file and the reverse, missing frontmatter
   or sections, oversized memos, overdue open items, probable secrets (never shown), raw sources not yet processed.
 - **Web UI:** a home view per topic, full search, a note preview with connected notes, an editor, change history, a
-  lint tab, a tasks tab (the task lines between agents, results handed back, and which agent sessions can be woken;
-  Done removes a line) and an admin page for tokens, people and projects. Light or dark, your pick.
+  lint tab, a tasks tab (the task lines between agents with from whom and when they may start, waiting ones greyed
+  with the reason, stalled wakes, an Approve button for the owner, results handed back, and which agent sessions can
+  be woken with their reported hook errors; Done removes a line) and an admin page for tokens, people and projects. Light or dark, your pick.
 - **Graph:** notes as nodes, links as lines, one island per topic. A line's thickness and pull follow how related two
   notes are (direct link, shared source, shared neighbours, same type); weak links between topics show on hover.
 - **External skills:** an admin adds a skill folder from GitHub by its link; it is pinned to a commit, taken in only as

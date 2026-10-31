@@ -198,11 +198,25 @@ function labelCell(p) {
   return td;
 }
 
+// Whose new task lines may start without approval; empty = the default (the project's owner and their tokens, admins
+// and tokens an admin made). Saved like the display name.
+function writersCell(p) {
+  const td = el("td"), input = el("input");
+  input.type = "text"; input.value = (p.task_writers || []).join(", "); input.placeholder = "default";
+  input.setAttribute("aria-label", `Trusted task writers of ${p.name}`);
+  input.title = "Token names or users, comma-separated. Empty: the project's owner" + (p.owner ? ` (${p.owner})` : "") + " and their tokens, admins and tokens an admin made";
+  input.onkeydown = (e) => { if (e.key === "Enter") input.blur(); };
+  input.onchange = () => { const w = input.value.split(",").map((x) => x.trim()).filter(Boolean);
+    run(() => api("/ui/api/admin/task-writers", { name: p.name, writers: w.length ? w : null }), input); };
+  td.append(input);
+  return td;
+}
+
 function renderProjects() {
   if (!state.admin) {
     $("projects").replaceChildren(...state.projects.map((p) => { const tr = el("tr");
       tr.append(el("td", "", p.name), el("td", "mono", p.docs + "/"), el("td", "mono", p.memory + "/"), el("td", "num", "—"), el("td", "num", "—"),
-        el("td", "", p.mode === "write" ? "you: read + write" : "you: read"), el("td", "muted", p.builtin ? "VM (built in)" : "server"));
+        el("td", "", p.mode === "write" ? "you: read + write" : "you: read"), el("td", "muted", "—"), el("td", "muted", p.builtin ? "VM (built in)" : "server"));
       return tr; }));
     return;
   }
@@ -216,7 +230,7 @@ function renderProjects() {
       el("td", "num", `${files[p.memory] ?? 0} memory · ${files[p.docs] ?? 0} docs`),
       el("td", "num", size((bytes[p.memory] ?? 0) + (bytes[p.docs] ?? 0))),
       el("td", "", `${tokens} token${tokens === 1 ? "" : "s"} · ${people} ${people === 1 ? "person" : "people"}`),
-      el("td", "muted", p.builtin ? "VM (built in)" : "server"));
+      writersCell(p), el("td", "muted", p.builtin ? "VM (built in)" : "server"));
     return tr;
   }));
 }
