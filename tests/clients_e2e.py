@@ -667,7 +667,9 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
     for name in ("codex", "claude", "agy", "tmux"):
         if WIN:
             if name != "tmux":
-                (bin_dir / f"{name}.cmd").write_text(f'@"{sys.executable}" "{bin_dir / "fakeagent.py"}" {name} %*\r\n', encoding="utf-8")
+                # chcp first: a new console (how agy is started) reads the rest of this UTF-8 file in the OEM code page
+                (bin_dir / f"{name}.cmd").write_text(f'@chcp 65001 >nul\r\n@"{sys.executable}" "{bin_dir / "fakeagent.py"}" {name} %*\r\n',
+                                                     encoding="utf-8")
         else:
             (bin_dir / name).write_text(f'#!/bin/sh\nexec "{sys.executable}" "{bin_dir / "fakeagent.py"}" {name} "$@"\n', encoding="utf-8")
             (bin_dir / name).chmod(0o755)
