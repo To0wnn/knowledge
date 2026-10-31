@@ -6,9 +6,11 @@ connected notes on the right; Changes lists lines added/removed. On the map (Map
 and its neighbours (after the layout settled); the neighbours gather in a ring; a click beside the nodes (which usually
 lands on a link) deselects, puts every node back exactly and zooms out; a second click on a note reads it. On a phone
 the lists come first (on the home view the topic cards instead of the topic list) and opening a note scrolls to it. The
-Agents cockpit opens with its pills, tools and new chat dialog (skipped on a server older than 0.16); the mission map
-lays out a seeded graph cleanly (lone tasks in the first column) and opens from the tools menu (skipped on a server without it). Read-only: it
-opens notes, it never edits or sends.
+Agents views open with the board and the new chat dialog (skipped on a server older than 0.16); the mission map lays
+out a seeded graph cleanly (lone tasks in the first column) and opens as Tasks > Flow (skipped on a server without
+it). The app shell (0.18): hash routes per view, sidebar and rail, back/forward, refresh, old deep links, Ctrl+K, the
+phone's tab bar and More sheet, no sideways scroll at 390 px, the map resizing with its box; an older server gets the
+old checks instead. Read-only: it opens notes, it never edits or sends.
 
   systemd-run --user --scope -q -p MemoryMax=3G ~/.local/bin/uv run -q --with playwright python tests/ui_smoke.py
 (talks to the container port directly and sends what Traefik sends after the Authentik sign-in: the proxy secret
@@ -36,6 +38,7 @@ local_env()
 
 URL = os.environ["KNOWLEDGE_URL"]  # the server on the LAN, from local.env
 USER = os.environ["KNOWLEDGE_TEST_USER"]  # an admin user name, from local.env
+WORD = os.environ.get("KNOWLEDGE_SMOKE_SEARCH", "velux")  # a word one memo's file name holds (a seeded test server has others)
 failures = []
 
 
@@ -65,6 +68,19 @@ async def click_node(pg, box, sc):
     await pg.mouse.click(box["x"] + sc["x"], box["y"] + sc["y"])
 
 
+async def is_shell(pg) -> bool:
+    """The app shell (sidebar, routes) arrived in 0.18; older servers get the old checks."""
+    await pg.wait_for_selector("#note", state="attached")
+    return await pg.locator("#sidebar").count() > 0
+
+
+async def route(pg, hash_: str, wait: str = "", ms: int = 300) -> None:
+    await pg.evaluate("(h) => go(h)", hash_)
+    if wait:
+        await pg.wait_for_selector(wait, timeout=10000)
+    await pg.wait_for_timeout(ms)
+
+
 EMPTY_POINT = """() => { const w = Graph.width(), h = Graph.height(), ns = Graph.graphData().nodes.map(n => Graph.graph2ScreenCoords(n.x, n.y));
   for (let y = 20; y < h; y += 20) for (let x = 20; x < w; x += 20) if (ns.every(c => Math.hypot(c.x - x, c.y - y) > 60)) return {x, y};
   return null; }"""
@@ -73,6 +89,9 @@ EMPTY_POINT = """() => { const w = Graph.width(), h = Graph.height(), ns = Graph
 async def desktop(browser, secret: str) -> None:
     ctx, pg, errors = await page(browser, secret, viewport={"width": 1500, "height": 900})
     await pg.wait_for_function("typeof Graph !== 'undefined' && Graph && Graph.graphData().nodes.length > 10", timeout=20000)
+    shell = await is_shell(pg)
+    if shell:
+        await route(pg, "#/notes", "#topics summary")
     # Reading: a note from the topic list opens in the middle, connected notes on the right.
     await pg.locator("#topics summary").first.click()
     await pg.locator("#topics details[open] .hits button").first.click()
@@ -84,7 +103,7 @@ async def desktop(browser, secret: str) -> None:
     if other:
         await pg.evaluate("(p) => switchProject(p)", other)
         await pg.wait_for_timeout(300)
-        check(await pg.evaluate("!location.hash && !current"), "switching project drops the open note from the URL")
+        check(await pg.evaluate("(shell) => (shell ? location.hash === '#/notes' : !location.hash) && !current", shell), "switching project drops the open note from the URL")
         await pg.reload()
         await pg.wait_for_function("typeof Graph !== 'undefined' && Graph && Graph.graphData().nodes.length > 0", timeout=20000)
         check(await pg.evaluate("(p) => !current && project === p", other), "after a refresh the new project's home shows, not the old note")
@@ -92,15 +111,17 @@ async def desktop(browser, secret: str) -> None:
         await pg.locator("#topics summary").first.click()
         await pg.locator("#topics details[open] .hits button").first.click()
         await pg.wait_for_selector("#side .connected a", timeout=5000)
-    await pg.click('[data-tab="changes"]')
+    def nav(v):
+        return f'#sidebar [data-nav="{v}"]' if shell else f'[data-tab="{v}"]'
+    await pg.click(nav("changes"))
     await pg.wait_for_selector("#recent li button", timeout=5000)
     check(await pg.locator("#recent .plus").count() > 0, "Changes shows lines added/removed")
-    await pg.click('[data-tab="tasks"]')
+    await pg.click(nav("tasks"))
     await pg.wait_for_selector("#tasks h3, #tasks p", timeout=5000)
     check(await pg.evaluate("!$('tab-tasks').hidden && $('tab-lint').hidden"), "Tasks tab shows task lines and agent sessions")
     # The map.
     await pg.keyboard.press("Escape")
-    await pg.click("#map-btn")
+    await pg.click(nav("map") if shell else "#map-btn")
     await pg.wait_for_timeout(500)
     check(await pg.evaluate("!$('graph').hidden && $('note').hidden"), "Map swaps the middle column to the map")
     nid = await pg.evaluate("Graph.graphData().nodes.find(n => (neighbors.get(n.id) || new Set()).size >= 4).id")
@@ -143,10 +164,14 @@ async def desktop(browser, secret: str) -> None:
 async def search(browser, secret: str) -> None:
     ctx, pg, errors = await page(browser, secret, viewport={"width": 1500, "height": 900})
     await pg.wait_for_function("typeof Graph !== 'undefined' && Graph && Graph.graphData().nodes.length > 10", timeout=20000)
-    await pg.fill("#q", "velux")
+    if await is_shell(pg):
+        await pg.keyboard.press("Control+k")  # from the Inbox: Ctrl+K opens the search in the Notes view
+        await pg.wait_for_timeout(300)
+        check(await pg.evaluate("location.hash.startsWith('#/notes') && document.activeElement === $('q')"), "Ctrl+K opens the search")
+    await pg.fill("#q", WORD)
     await pg.wait_for_selector("#hits li", timeout=5000)
     paths = await pg.locator("#hits .hit-sub").all_inner_texts()
-    check(len(paths) == len(set(paths)) and any("velux" in p for p in paths[:3]), f"search: one row per note, the memo near the top {paths[:3]}")
+    check(len(paths) == len(set(paths)) and any(WORD in p for p in paths[:3]), f"search: one row per note, the memo near the top {paths[:3]}")
     check(await pg.locator("#hits mark").count() > 0, "search marks the words")
     await pg.locator("#hits li button").first.click()
     await pg.wait_for_timeout(1200)
@@ -171,6 +196,9 @@ async def search(browser, secret: str) -> None:
 async def phone(browser, devices, secret: str) -> None:
     ctx, pg, errors = await page(browser, secret, **devices["iPhone 14"])
     await pg.wait_for_function("typeof Graph !== 'undefined' && Graph && Graph.graphData().nodes.length > 10", timeout=20000)
+    shell = await is_shell(pg)
+    if shell:
+        await route(pg, "#/notes")
     # Phone layout: search and lists first, then the note; the map only on request.
     check(await pg.evaluate("$('tab-notes').getBoundingClientRect().top < $('note').getBoundingClientRect().top && $('graph').hidden"),
           "phone shows the lists above the note, no map")
@@ -178,10 +206,14 @@ async def phone(browser, devices, secret: str) -> None:
     check(await pg.evaluate("!$('topics').offsetParent"), "phone home: the topic cards replace the topic list")
     await pg.locator(".home-card .hits button").first.tap()
     await pg.wait_for_timeout(1500)
-    check(await pg.evaluate("Math.abs($('note').getBoundingClientRect().top) < 5"), "opening a note scrolls to it")
+    # under the shell's sticky page header (about 52 px) instead of at the very top
+    check(await pg.evaluate("(shell) => { const t = $('note').getBoundingClientRect().top; return shell ? t >= 0 && t < 80 : Math.abs(t) < 5; }", shell), "opening a note scrolls to it")
     # A phone widens its layout viewport to fit content that is too wide (and zooms out), so compare with the screen.
     check(await pg.evaluate("document.documentElement.scrollWidth <= screen.width"), "phone page fits the screen with a note open")
-    await pg.tap("#map-btn")
+    if shell:
+        await route(pg, "#/map")
+    else:
+        await pg.tap("#map-btn")
     await pg.wait_for_timeout(8000)
     await pg.evaluate("$('graph').scrollIntoView()")
     t = await pg.evaluate("""() => { const r = $('g2d').getBoundingClientRect(), n = Graph.graphData().nodes.find(n => n.id !== selected && (neighbors.get(n.id) || new Set()).size >= 4),
@@ -229,6 +261,9 @@ async def cockpit(browser, devices, secret: str) -> None:
     chat dialog; on a phone one card and a switcher. Read-only: the dialog is cancelled, nothing is sent. Skipped on a
     server older than 0.16 (no cockpit yet)."""
     ctx, pg, errors = await page(browser, secret, viewport={"width": 1440, "height": 900})
+    if await is_shell(pg):
+        await ctx.close()
+        return await cockpit_shell(browser, devices, secret)
     await pg.wait_for_selector("#map-btn")
     if not await pg.locator("#cockpit-btn").count():
         print("skip cockpit (server older than 0.16)")
@@ -272,6 +307,145 @@ async def cockpit(browser, devices, secret: str) -> None:
     tops = await pg.evaluate("[...document.querySelectorAll('#ck-board .ck-col')].map(c => c.getBoundingClientRect().top)")
     check(tops == sorted(tops) and len(set(tops)) == len(tops), f"phone board: one list, Needs you → Running → Open → Done {tops}")
     check(not errors, f"no page errors in the phone cockpit {errors[:2]}")
+    await ctx.close()
+
+
+async def cockpit_shell(browser, devices, secret: str) -> None:
+    """Inbox and Chats as views of the shell: the board, a chat as its own route (Esc goes back), the new chat dialog;
+    on a phone one list, Done folded to one line, the tab bar gone inside a chat."""
+    ctx, pg, errors = await page(browser, secret, "/ui#/inbox", viewport={"width": 1440, "height": 900})
+    await pg.wait_for_selector("#ck-board .ck-col, #ck-board .ck-empty", timeout=15000)
+    check(await pg.locator("#cockpit").is_visible(), "Inbox shows the attention board")
+    cols = await pg.locator("#ck-board .ck-col-head > span:first-child").all_text_contents()
+    check(cols in ([], ["Needs you", "Running", "Open", "Done (24 h)"]), f"board columns, Needs you first {cols}")
+    check(await pg.locator("#ck-needs-live[aria-live=polite]").count() == 1, "board: the Needs you count is announced (aria-live)")
+    needs = await pg.locator("#ck-board .ck-col-needs .ck-item").count()
+    badge = await pg.locator("#sidebar .inbox-count").inner_text()
+    check(badge == (str(needs) if needs else ""), f"the Inbox badge counts Needs you ({badge!r} vs {needs})")
+    hot = await pg.evaluate("[...document.querySelectorAll('#sidebar .badge')].filter(b => b.textContent && getComputedStyle(b).backgroundColor === getComputedStyle(document.querySelector('.ck-col-needs .ck-count') || document.body).backgroundColor).map(b => b.className)")
+    check(all("inbox-count" in c for c in hot), f"only the Inbox badge wears the accent {hot}")
+    await pg.click("#ck-new")
+    await pg.wait_for_selector("#ck-new-dialog[open]")
+    check(await pg.locator("#ck-agent").is_visible(), "new chat dialog: pc, agent, folder")
+    await pg.click("#ck-new-cancel")
+    await route(pg, "#/chats", "#ck-history li")
+    if await pg.locator("#ck-history button").count():
+        await pg.locator("#ck-history button").first.click()
+        await pg.wait_for_selector("#ck-canvas .ck-card", timeout=10000)
+        check(await pg.evaluate("/^#\\/chats\\/[^/]+\\/[^/]+$/.test(location.hash) && !!document.querySelector('#ck-history [aria-current=true]')"), "a chat opens as its own route, marked in the list")
+        await pg.reload()
+        await pg.wait_for_selector("#ck-canvas .ck-card", timeout=15000)
+        check(True, "a chat's route survives a refresh")
+        await pg.locator("#title").focus()
+        await pg.keyboard.press("Escape")
+        await pg.wait_for_timeout(300)
+        check(await pg.evaluate("location.hash === '#/chats' && !!$('ck-canvas').querySelector('.ck-pick')"), "Esc goes back from a chat to the list")
+    check(not errors, f"no page errors in Inbox and Chats {errors[:2]}")
+    await ctx.close()
+    ctx, pg, errors = await page(browser, secret, "/ui#/inbox", **devices["iPhone 14"])
+    await pg.wait_for_selector("#ck-board .ck-col, #ck-board .ck-empty", timeout=15000)
+    await pg.wait_for_timeout(500)
+    tops = await pg.evaluate("[...document.querySelectorAll('#ck-board .ck-col')].map(c => c.getBoundingClientRect().top)")
+    check(tops == sorted(tops) and len(set(tops)) == len(tops), f"phone board: one list, Needs you → Running → Open → Done {tops}")
+    if await pg.locator(".ck-col-done").count():
+        folded = await pg.evaluate("[$('ck-board').querySelector('.ck-col-done .ck-group')?.offsetParent === null, !!$('ck-board').querySelector('.ck-done-toggle').offsetParent]")
+        await pg.tap(".ck-done-toggle")
+        open_ = await pg.evaluate("$('ck-board').querySelector('.ck-done-toggle').getAttribute('aria-expanded') === 'true'")
+        check(folded == [True, True] and open_, f"phone board: Done is one line that unfolds {folded} {open_}")
+    await pg.tap('#tabbar [data-nav="chats"]')
+    await pg.wait_for_selector("#ck-history li")
+    if await pg.locator("#ck-history button").count():
+        await pg.locator("#ck-history button").first.tap()
+        await pg.wait_for_selector("#ck-canvas .ck-card", timeout=10000)
+        check(await pg.evaluate("getComputedStyle($('tabbar')).display === 'none' && !!$('back').offsetParent && document.documentElement.scrollWidth <= innerWidth"), "phone chat: tab bar hidden, back button shown, fits")
+        await pg.tap("#back")
+        await pg.wait_for_timeout(400)
+        check(await pg.evaluate("location.hash === '#/chats' && getComputedStyle($('tabbar')).display !== 'none'"), "phone chat: back returns to the list and the tab bar")
+    check(not errors, f"no page errors in the phone Inbox and Chats {errors[:2]}")
+    await ctx.close()
+
+
+VIEW_EL = {"inbox": "cockpit", "chats": "cockpit", "tasks": "tab-tasks", "machines": "tab-machines", "notes": "kn", "map": "kn",
+           "changes": "tab-changes", "health": "tab-lint", "thispc": "tab-thispc"}
+
+
+async def shell(browser, devices, secret: str) -> None:
+    """The app shell: a route per view (its element shown, the nav item current, one title), back/forward/refresh,
+    old #<path> links, the rail, the map following its box; on a phone the tab bar, More sheet and no sideways
+    scroll. Skipped on a server before the shell."""
+    ctx, pg, errors = await page(browser, secret, viewport={"width": 1440, "height": 900})
+    if not await is_shell(pg):
+        print("skip shell (server older than 0.18)")
+        await ctx.close()
+        return
+    await pg.wait_for_function("typeof Graph !== 'undefined' && Graph && Graph.graphData().nodes.length > 0", timeout=20000)
+    await pg.wait_for_timeout(500)
+    check(await pg.evaluate("location.hash === '#/inbox' && !$('cockpit').hidden"), "the default route is the Inbox")
+    for v in ("inbox", "chats", "tasks", "machines", "notes", "map", "changes", "health"):
+        await route(pg, f"#/{v}")
+        st = await pg.evaluate("""(a) => ({shown: !$(a.el).hidden, only: [...document.querySelectorAll('#content > .view')].filter(e => !e.hidden).length === 1,
+            current: document.querySelector('#sidebar [aria-current=page]')?.dataset.nav, title: $('title').textContent})""", {"el": VIEW_EL[v]})
+        check(st["shown"] and st["only"] and st["current"] == v, f"route #/{v}: its view alone, its nav item current {st}")
+    await route(pg, "#/notes")
+    await route(pg, "#/tasks")
+    await pg.go_back()
+    await pg.wait_for_timeout(400)
+    check(await pg.evaluate("location.hash === '#/notes' && !$('kn').hidden"), "Back returns to the previous view")
+    await pg.go_forward()
+    await pg.wait_for_timeout(400)
+    check(await pg.evaluate("location.hash === '#/tasks' && !$('tab-tasks').hidden"), "Forward goes to the next view")
+    await route(pg, "#/tasks?view=flow", "#mission .ms-n, #mission .ms-empty")
+    check(await pg.evaluate("!$('mission').hidden && $('tab-tasks').contains($('mission')) && $('tasks-list').offsetParent === null && $('tasks-mode').querySelector('[data-mode=flow]').getAttribute('aria-pressed') === 'true'"),
+          "Tasks > Flow shows the mission map in place of the list")
+    await route(pg, "#/changes")
+    await pg.reload()
+    await pg.wait_for_selector("#recent li", timeout=15000)
+    check(await pg.evaluate("location.hash === '#/changes' && !$('tab-changes').hidden"), "a refresh keeps the view")
+    note = await pg.evaluate("Graph.graphData().nodes.find(n => n.id.endsWith('.md') && !n.id.endsWith('MEMORY.md')).id")
+    await pg.goto(f"{URL}/ui#{note}")
+    await pg.wait_for_function("(id) => current && current.path === id", arg=note, timeout=15000)
+    check(await pg.evaluate("(id) => location.hash === '#/notes/' + id && !$('kn').hidden", note), "an old #<path> link opens #/notes/<path>")
+    await pg.locator("#title").focus()
+    await pg.keyboard.press("[")
+    await pg.wait_for_timeout(300)
+    rail = await pg.evaluate("[document.body.classList.contains('rail'), $('sidebar').getBoundingClientRect().width, localStorage.getItem('kn_rail')]")
+    await pg.keyboard.press("[")
+    await pg.wait_for_timeout(300)
+    check(rail[0] and rail[1] < 80 and rail[2] == "1" and not await pg.evaluate("document.body.classList.contains('rail')"), f"[ folds the sidebar to a rail and back {rail}")
+    size = "Graph.width() === $('graph').clientWidth && Graph.height() === $('graph').clientHeight && $('graph').clientWidth > 0"
+    await route(pg, "#/map", ms=800)
+    ok1 = await pg.evaluate(size)
+    await pg.keyboard.press("[")
+    await pg.wait_for_timeout(800)
+    ok2 = await pg.evaluate(size)
+    await pg.keyboard.press("[")
+    await route(pg, "#/notes")
+    await route(pg, "#/map", ms=800)
+    check(ok1 and ok2 and await pg.evaluate(size), f"the map follows its box on every route and rail change {[ok1, ok2]}")
+    check(not await pg.evaluate("['kn_tab', 'kn_cockpit', 'kn_map', 'kn_ck_view'].some(k => localStorage.getItem(k) !== null)"), "the view is not kept in localStorage")
+    check(not errors, f"no page errors in the shell {errors[:2]}")
+    await ctx.close()
+    ctx, pg, errors = await page(browser, secret, **devices["iPhone 14"])
+    await pg.wait_for_function("typeof Graph !== 'undefined' && Graph && Graph.graphData().nodes.length > 0", timeout=20000)
+    check(await pg.evaluate("getComputedStyle($('tabbar')).display !== 'none' && getComputedStyle($('sidebar')).display === 'none'"), "phone: a tab bar instead of the sidebar")
+    small = await pg.evaluate("[...document.querySelectorAll('#tabbar a, #tabbar button')].map(b => b.getBoundingClientRect().height).filter(h => h < 44)")
+    check(not small, f"phone: tab bar targets are at least 44 px {small}")
+    wide = []
+    for v in ("inbox", "chats", "tasks", "tasks?view=flow", "machines", "notes", "map", "changes", "health"):
+        await route(pg, f"#/{v}", ms=900)
+        if await pg.evaluate("document.documentElement.scrollWidth > innerWidth"):
+            wide.append(v)
+    check(not wide, f"phone: no sideways scroll at 390 px {wide}")
+    await route(pg, "#/inbox")
+    await pg.tap("#more-btn")
+    await pg.wait_for_selector("#more-sheet[open]")
+    await pg.tap('#more-sheet [data-nav="machines"]')
+    await pg.wait_for_timeout(400)
+    check(await pg.evaluate("location.hash === '#/machines' && !$('more-sheet').open && $('more-btn').getAttribute('aria-current') === 'page'"), "phone: More opens a sheet whose links go to their view")
+    await pg.go_back()
+    await pg.wait_for_timeout(400)
+    check(await pg.evaluate("location.hash === '#/inbox'"), "phone: back goes to the previous view")
+    check(not errors, f"no page errors in the phone shell {errors[:2]}")
     await ctx.close()
 
 
@@ -323,7 +497,8 @@ async def mission(browser, devices, secret: str) -> None:
     tasks in their lane; the view opens from the tools menu, a task opens its panel, Esc goes back; on a phone the
     chains list fits the screen. Read-only (nothing is approved). Skipped on a server without it."""
     ctx, pg, errors = await page(browser, secret, viewport={"width": 1440, "height": 900})
-    await pg.wait_for_selector("#map-btn")
+    await pg.wait_for_selector("#note", state="attached")
+    await pg.wait_for_timeout(500)
     if await pg.evaluate("typeof missionLayout") != "function":
         print("skip mission map (server without it)")
         await ctx.close()
@@ -331,6 +506,22 @@ async def mission(browser, devices, secret: str) -> None:
     res = await pg.evaluate(MISSION_LAYOUT_CHECK)
     check(not res["small"]["bad"] and not res["big"]["bad"], f"mission layout: no overlaps, edges left to right, lanes kept {res['small']['bad'][:3]} {res['big']['bad'][:3]}")
     print(f"     mission layout crossings: {res['small']['crossings']}/{res['small']['edges']} edges at 24 tasks, {res['big']['crossings']}/{res['big']['edges']} at 60")
+    if await is_shell(pg):  # Tasks > Flow
+        await route(pg, "#/tasks?view=flow", "#mission .ms-n, #mission .ms-empty")
+        if await pg.locator("#mission .ms-n").count():
+            await pg.locator("#mission .ms-n").first.click()
+            check(await pg.locator("#ms-panel").is_visible() and bool(await pg.locator("#ms-panel .ms-line").inner_text()), "a task opens its panel with the full line")
+            await pg.keyboard.press("Escape")
+            check(not await pg.locator("#ms-panel").is_visible() and await pg.evaluate("location.hash === '#/tasks?view=flow'"), "Esc closes the panel, the view stays")
+        check(not errors, f"no page errors in the mission map {errors[:2]}")
+        await ctx.close()
+        ctx, pg, errors = await page(browser, secret, "/ui#/tasks?view=flow", **devices["iPhone 14"])
+        await pg.wait_for_selector("#mission .ms-c, #mission .ms-empty", timeout=10000)
+        check(await pg.evaluate("document.documentElement.scrollWidth <= innerWidth && $('ms-stage').hidden && !$('ms-list').hidden"),
+              "phone mission map: chains as a list, fits the screen")
+        check(not errors, f"no page errors in the phone mission map {errors[:2]}")
+        await ctx.close()
+        return
     await pg.click("#cockpit-btn")
     await pg.click("#ck-tools-menu summary")
     await pg.click('#ck-tools-menu [data-go="mission"]')
@@ -366,7 +557,10 @@ async def csp(browser, secret: str) -> None:
         pg.on("pageerror", lambda e: blocked.append(str(e)))
         await pg.goto(URL + path)
         await pg.wait_for_timeout(2500)
-        if path == "/ui":
+        if path == "/ui" and await pg.locator("#sidebar").count():
+            await pg.click('#sidebar [data-nav="map"]')
+            await pg.wait_for_timeout(1500)
+        elif path == "/ui":
             await pg.click("#map-btn")
             await pg.wait_for_timeout(1500)
         check(not blocked, f"nothing blocked by the CSP on {path} {blocked[:2]}")
@@ -384,6 +578,7 @@ async def main() -> None:
         await admin(browser, secret)
         await cockpit(browser, p.devices, secret)
         await mission(browser, p.devices, secret)
+        await shell(browser, p.devices, secret)
         await browser.close()
     print("ok" if not failures else f"{len(failures)} failed")
     sys.exit(1 if failures else 0)

@@ -2,117 +2,145 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- interactive-widget: the on-screen keyboard shrinks the layout, so a chat's composer stays above it -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>Knowledge</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/ui/static/app.css">
 <link rel="stylesheet" href="/ui/static/thispc.css">
 <script src="/ui/static/theme.js"></script>
 </head>
-<body>
-<header class="top">
-  <div class="brand">Knowledge <span id="live" title="Live: updates as sessions change notes"></span></div>
-  <div id="projects" class="seg" role="group" aria-label="Project"></div>
-  <input id="q" type="search" placeholder="Search titles, text and meaning…  ( / )" autocomplete="off" aria-label="Search">
-  <div class="actionsbar">
-    <button id="cockpit-btn" class="ghost" title="Chat with your agents on your pcs (A)">Agents</button>
-    <button id="map-btn" class="ghost" aria-pressed="false" title="Map of this project (M)">Map</button>
-    <details id="add-menu" class="menu">
-      <summary class="ghost">+ Add</summary>
-      <div class="menu-list">
-        <button id="new-memo" type="button">New memo</button>
-        <button id="ingest-open" type="button">Add a source (web page, PDF, text)</button>
-      </div>
+<body class="app">
+<nav class="sidebar" id="sidebar" aria-label="Main">
+  <div class="brand"><span class="label">Knowledge</span> <span id="live" title="Live: updates as sessions change notes"></span>
+    <button type="button" class="icon-btn flat collapse" id="collapse" title="Collapse the sidebar ( [ )" aria-label="Collapse the sidebar" aria-expanded="true"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M9.5 4.5v15"/></svg></button></div>
+  <button type="button" class="jump" id="jump" title="Search (Ctrl K or /)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg><span class="label">Search or jump</span><kbd>Ctrl K</kbd></button>
+  <div class="sec">Agents</div>
+  <a class="nav" href="#/inbox" data-nav="inbox" title="Inbox (A)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13l2.5-7.5h11L20 13v5.5H4z"/><path d="M4 13h4.5l1 2h5l1-2H20"/></svg><span class="label">Inbox</span><span class="badge hot inbox-count" title="Needs you"></span></a>
+  <a class="nav" href="#/chats" data-nav="chats" title="Chats"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 5.5h15v10h-9l-4 3.5v-3.5h-2z"/></svg><span class="label">Chats</span><span class="badge" id="ck-live" title="Running chats, workers and sessions active in the last 10 min on your pcs"><span id="ck-live-n">0</span> live</span></a>
+  <a class="nav" href="#/tasks" data-nav="tasks" title="Tasks"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6.5h11M9 12h11M9 17.5h11"/><path d="M4 6.5l1 1 2-2M4 12l1 1 2-2M4 17.5l1 1 2-2"/></svg><span class="label">Tasks</span><span id="tasks-count" class="badge" title="Open tasks between agents"></span></a>
+  <a class="nav" href="#/machines" data-nav="machines" title="Machines"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="11" rx="2"/><path d="M9 19.5h6M12 15.5v4"/></svg><span class="label">Machines</span></a>
+  <div class="sec">Knowledge</div>
+  <label class="proj" title="Project of the knowledge views (keys 1-9, 0 = all)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5h6l2 2h9v9h-17z"/></svg><span class="sr-only">Project</span><select class="project-pick" id="projects"></select></label>
+  <a class="nav" href="#/notes" data-nav="notes" title="Notes"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5h10l4 4v11H5z"/><path d="M8.5 12h7M8.5 15.5h7"/></svg><span class="label">Notes</span></a>
+  <a class="nav" href="#/map" data-nav="map" title="Map (M)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="11" cy="18" r="2.5"/><path d="M8.3 7l7.4.7M7 8.3l3 7.4M16.6 10l-4 6"/></svg><span class="label">Map</span></a>
+  <a class="nav" href="#/changes" data-nav="changes" title="Changes"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7v5l3 2M3.5 12a8.5 8.5 0 1 0 2.5-6M3 4v4h4"/></svg><span class="label">Changes</span><span id="changes-count" class="badge" title="New since your last look"></span></a>
+  <a class="nav nav-health" href="#/health" data-nav="health" title="Health (lint)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l2-5 4 10 2-5h6"/></svg><span class="label">Health</span><span id="lint-count" class="badge"></span></a>
+  <div class="grow"></div>
+  <a class="nav nav-thispc" id="nav-thispc" href="#/thispc" data-nav="thispc" title="This pc" hidden><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="10" rx="1.5"/><path d="M2.5 19h19"/></svg><span class="label">This pc</span></a>
+  <a class="nav admin-link" id="admin-link" href="/ui/admin" title="Admin"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8"/></svg><span class="label">Admin</span></a>
+  <a class="nav" href="/ui/help" title="Help: connect a client"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .8-1 1.5v.7M12 17h.01"/></svg><span class="label">Help</span></a>
+  <div class="me">
+    <details id="user-menu" class="menu up">
+      <summary id="who">…</summary>
+      <div class="menu-list"><a href="/ui/logout">Sign out</a></div>
     </details>
-    <details id="user-menu" class="menu">
-      <summary class="ghost" id="who">…</summary>
-      <div class="menu-list">
-        <button id="theme-btn" type="button">Theme: Auto</button>
-        <a href="/ui/help">Connect a client</a>
-        <a id="admin-link" href="/ui/admin" hidden>Admin</a>
-        <a href="/ui/logout">Sign out</a>
-      </div>
-    </details>
+    <button type="button" class="icon-btn theme-btn" title="Theme: Auto" aria-label="Theme: Auto"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5a8.5 8.5 0 1 0 8.5 8.5A6.5 6.5 0 0 1 12 3.5z"/></svg></button>
   </div>
-</header>
+</nav>
 
-<aside class="left">
-  <nav class="tabs" role="tablist">
-    <button role="tab" data-tab="notes" id="tabbtn-notes" aria-controls="tab-notes" aria-selected="true">Notes</button>
-    <button role="tab" data-tab="changes" id="tabbtn-changes" aria-controls="tab-changes">Changes <span id="changes-count" class="badge" title="New since your last look"></span></button>
-    <button role="tab" data-tab="tasks" id="tabbtn-tasks" aria-controls="tab-tasks">Tasks <span id="tasks-count" class="badge" title="Open tasks between agents"></span></button>
-    <button role="tab" data-tab="lint" id="tabbtn-lint" aria-controls="tab-lint">Lint <span id="lint-count" class="badge"></span></button>
-    <button role="tab" data-tab="thispc" id="tabbtn-thispc" aria-controls="tab-thispc" hidden>This pc</button>
-  </nav>
-  <section id="tab-notes" class="tab" role="tabpanel" aria-labelledby="tabbtn-notes">
-    <div id="results" hidden>
-      <h3 id="titles-head" class="sub">Titles</h3>
-      <ol id="titles" class="hits"></ol>
-      <h3 class="sub">Text</h3>
-      <ol id="hits" class="hits"></ol>
-      <p id="hits-empty" class="muted" hidden></p>
-      <h3 id="sem-head" class="sub" hidden>By meaning</h3>
-      <ol id="sem" class="hits"></ol>
+<div class="main">
+  <header class="head" id="page-head">
+    <button type="button" class="icon-btn back" id="back" aria-label="Back"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>
+    <div class="head-title"><div class="crumb" id="crumb"></div><h1 id="title" tabindex="-1">Knowledge</h1></div>
+    <span class="gap"></span>
+    <div class="head-actions" id="head-actions">
+      <label class="filter" data-views="inbox chats tasks" title="Only this project's items (the Inbox badge still counts all)"><span class="sr-only">Show project</span><select id="agent-project"><option value="">All projects</option></select></label>
+      <span class="ck-pill" id="ck-resets" data-views="inbox chats" hidden></span>
+      <div class="seg" id="tasks-mode" role="group" aria-label="Tasks as" data-views="tasks"><button type="button" data-mode="list" aria-pressed="true">List</button><button type="button" data-mode="flow" aria-pressed="false">Flow</button></div>
+      <span data-views="notes map"><details id="add-menu" class="menu">
+        <summary class="ghost">+ Add</summary>
+        <div class="menu-list">
+          <button id="new-memo" type="button">New memo</button>
+          <button id="ingest-open" type="button">Add a source (web page, PDF, text)</button>
+        </div>
+      </details></span>
+      <button type="button" class="primary" id="ck-new" data-views="inbox chats" aria-label="New chat">+<span class="wide-only">&nbsp;New chat</span></button>
+      <button type="button" class="icon-btn phone-only" id="head-search" aria-label="Search" title="Search"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg></button>
     </div>
-    <div id="topics"></div>
-  </section>
-  <section id="tab-changes" class="tab" role="tabpanel" aria-labelledby="tabbtn-changes" hidden>
-    <ol id="recent" class="hits"></ol>
-  </section>
-  <section id="tab-tasks" class="tab" role="tabpanel" aria-labelledby="tabbtn-tasks" hidden>
-    <p class="muted">Task lines in the memos and who can pick them up. A task goes to an agent as a line "open until &lt;date&gt; [&lt;owner&gt;, &lt;ID&gt;] from &lt;requester&gt;, start &lt;now | after &lt;ID&gt; | &lt;date&gt; | after approval&gt;: …".</p>
-    <div id="tasks"></div>
-    <h3 id="machines-head">Machines</h3>
-    <p class="muted">Every pc that runs your agents: its workers (a fresh session per task), YOLO, hooks, usage limit and the sessions of the last two hours. Actions reach a pc when its companion next asks (about every 10 s).</p>
-    <div id="machines"></div>
-  </section>
-  <section id="tab-thispc" class="tab" role="tabpanel" aria-labelledby="tabbtn-thispc" hidden>
-    <p class="cmp-lede">The agents on this pc, as the knowledge companion running here sees them. <a id="thispc-open" href="http://127.0.0.1:47321/" target="_blank" rel="noopener">Open the companion</a> for YOLO, settings and activity.</p>
-    <div class="cmp-agents" id="thispc-agents"></div>
-  </section>
-  <section id="tab-lint" class="tab" role="tabpanel" aria-labelledby="tabbtn-lint" hidden>
-    <p class="muted">Facts only: fix what is clearly wrong, ask Claude to judge the rest.</p>
-    <div id="lint"></div>
-  </section>
-</aside>
+  </header>
 
-<main class="center">
-  <article id="note" aria-label="Note"></article>
-  <div id="graph" aria-label="Map of the project" hidden><div id="g2d"></div></div>
-</main>
-
-<aside class="right" id="side" aria-label="Connected notes"></aside>
-
-<section id="cockpit" class="ck" aria-label="Agents" hidden>
-  <div class="ck-bar">
-    <button type="button" class="ck-pill ck-brand" id="ck-close" title="Back to the knowledge (Esc)">Knowledge</button>
-    <button type="button" class="ck-pill" id="ck-back" title="Back to the board (Esc)" hidden>&larr;&nbsp;Board</button>
-    <span class="ck-pill ck-live" id="ck-live" title="Running chats, workers and sessions active in the last 10 min on your pcs"><span class="ck-dot"></span><span id="ck-live-n">0</span>&nbsp;live</span>
-    <span class="ck-pill" id="ck-resets" hidden></span>
-    <span class="ck-gap"></span>
-    <button type="button" class="ck-pill ck-primary" id="ck-new" aria-label="New chat">+<span class="ck-label">&nbsp;New chat</span></button>
-    <details class="ck-menu" id="ck-history-menu">
-      <summary class="ck-icon" title="Earlier chats" aria-label="Earlier chats"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7v5l3 2M3.5 12a8.5 8.5 0 1 0 2.5-6M3 4v4h4"/></svg></summary>
-      <div class="ck-pop"><h3>Earlier chats</h3><ol id="ck-history" class="ck-history"></ol></div>
-    </details>
-    <details class="ck-menu" id="ck-tools-menu">
-      <summary class="ck-icon" title="Tools" aria-label="Tools"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="7" width="17" height="12" rx="2.5"/><path d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7M3.5 12.5h17"/></svg></summary>
-      <div class="ck-pop ck-tools">
-        <h3>Tools</h3>
-        <button type="button" data-go="mission"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7.5l3 8M16 7.5l-3 8"/></svg>Mission map</button>
-        <button type="button" data-go="memory"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5h10l4 4v11H5z"/><path d="M8.5 12h7M8.5 15.5h7"/></svg>Memory</button>
-        <button type="button" data-go="skills"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3L5 13h6l-1 8 8-10h-6z"/></svg>Skills</button>
-        <button type="button" data-go="machines"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="11" rx="2"/><path d="M9 19.5h6M12 15.5v4"/></svg>Machines</button>
-        <button type="button" data-go="loops"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 0 1 13.7-5.7L20 8.5M20 4v4.5h-4.5M20 12a8 8 0 0 1-13.7 5.7L4 15.5M4 20v-4.5h4.5"/></svg>Loops (workers)</button>
-        <a href="/ui/admin" data-go="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8"/></svg>Settings</a>
+  <main id="content">
+    <section id="cockpit" class="view ck" aria-label="Agents" hidden>
+      <div class="ck-board" id="ck-board" aria-label="Attention board"></div>
+      <div class="ck-chats" id="ck-chats">
+        <ol id="ck-history" class="ck-history" aria-label="Chats"></ol>
+        <div class="ck-canvas" id="ck-canvas"></div>
       </div>
-    </details>
-    <a class="ck-icon" href="/ui/admin" title="Settings" aria-label="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8"/></svg></a>
+      <span class="sr-only" id="ck-needs-live" aria-live="polite"></span>
+    </section>
+
+    <section id="tab-tasks" class="view pad" aria-label="Tasks" hidden>
+      <div id="tasks-list">
+        <p class="muted">Task lines in the memos and who can pick them up. A task goes to an agent as a line "open until &lt;date&gt; [&lt;owner&gt;, &lt;ID&gt;] from &lt;requester&gt;, start &lt;now | after &lt;ID&gt; | &lt;date&gt; | after approval&gt;: …".</p>
+        <div id="tasks"></div>
+      </div>
+    </section>
+
+    <section id="tab-machines" class="view pad" aria-label="Machines" hidden>
+      <p class="muted">Every pc that runs your agents: its workers (a fresh session per task), YOLO, hooks, usage limit and the sessions of the last two hours. Actions reach a pc when its companion next asks (about every 10 s).</p>
+      <div id="machines"></div>
+    </section>
+
+    <div id="kn" class="view kn" hidden>
+      <aside class="left" aria-label="Search and topics">
+        <section id="tab-notes">
+          <input id="q" type="search" placeholder="Search titles, text and meaning…  ( / )" autocomplete="off" aria-label="Search">
+          <div id="results" hidden>
+            <h3 id="titles-head" class="sub">Titles</h3>
+            <ol id="titles" class="hits"></ol>
+            <h3 class="sub">Text</h3>
+            <ol id="hits" class="hits"></ol>
+            <p id="hits-empty" class="muted" hidden></p>
+            <h3 id="sem-head" class="sub" hidden>By meaning</h3>
+            <ol id="sem" class="hits"></ol>
+          </div>
+          <div id="topics"></div>
+        </section>
+      </aside>
+      <div class="center">
+        <article id="note" aria-label="Note"></article>
+        <div id="graph" aria-label="Map of the project" hidden><div id="g2d"></div></div>
+      </div>
+      <aside class="right" id="side" aria-label="Connected notes"></aside>
+    </div>
+
+    <section id="tab-changes" class="view pad" aria-label="Changes" hidden>
+      <ol id="recent" class="hits"></ol>
+    </section>
+    <section id="tab-lint" class="view pad" aria-label="Health" hidden>
+      <p class="muted">Facts only: fix what is clearly wrong, ask Claude to judge the rest.</p>
+      <div id="lint"></div>
+    </section>
+    <section id="tab-thispc" class="view pad" aria-label="This pc" hidden>
+      <p class="cmp-lede">The agents on this pc, as the knowledge companion running here sees them. <a id="thispc-open" href="http://127.0.0.1:47321/" target="_blank" rel="noopener">Open the companion</a> for YOLO, settings and activity.</p>
+      <div class="cmp-agents" id="thispc-agents"></div>
+    </section>
+  </main>
+</div>
+
+<nav class="tabbar" id="tabbar" aria-label="Main (phone)">
+  <a href="#/inbox" data-nav="inbox"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13l2.5-7.5h11L20 13v5.5H4z"/><path d="M4 13h4.5l1 2h5l1-2H20"/></svg><span>Inbox</span><span class="badge hot inbox-count" title="Needs you"></span></a>
+  <a href="#/chats" data-nav="chats"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 5.5h15v10h-9l-4 3.5v-3.5h-2z"/></svg><span>Chats</span></a>
+  <a href="#/tasks" data-nav="tasks"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6.5h11M9 12h11M9 17.5h11"/><path d="M4 6.5l1 1 2-2M4 12l1 1 2-2M4 17.5l1 1 2-2"/></svg><span>Tasks</span></a>
+  <a href="#/notes" data-nav="notes"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5h10l4 4v11H5z"/><path d="M8.5 12h7M8.5 15.5h7"/></svg><span>Notes</span></a>
+  <button type="button" id="more-btn" aria-haspopup="dialog" aria-controls="more-sheet"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="18" cy="12" r="1.2"/></svg><span>More</span></button>
+</nav>
+
+<dialog id="more-sheet" class="sheet" aria-label="More">
+  <div class="sheet-body">
+    <div class="grab" aria-hidden="true"></div>
+    <a class="nav" href="#/machines" data-nav="machines">Machines</a>
+    <a class="nav" href="#/map" data-nav="map">Map</a>
+    <a class="nav" href="#/changes" data-nav="changes">Changes</a>
+    <a class="nav nav-health" href="#/health" data-nav="health">Health</a>
+    <a class="nav nav-thispc" href="#/thispc" data-nav="thispc" hidden>This pc</a>
+    <a class="nav admin-link" href="/ui/admin">Admin</a>
+    <a class="nav" href="/ui/help">Help</a>
+    <label class="nav sheet-row">Project<select class="project-pick" aria-label="Project"></select></label>
+    <div class="sheet-row"><span id="who-more"></span><button type="button" class="ghost small theme-btn">Theme: Auto</button><a class="ghost-link" href="/ui/logout">Sign out</a></div>
   </div>
-  <div class="ck-board" id="ck-board" aria-label="Attention board"></div>
-  <div class="ck-canvas" id="ck-canvas" hidden></div>
-  <span class="sr-only" id="ck-needs-live" aria-live="polite"></span>
-</section>
+</dialog>
 
 <dialog id="ck-diff-dialog" class="ck-diff" aria-labelledby="ck-diff-title">
   <h2 id="ck-diff-title">Changes</h2>
@@ -174,5 +202,6 @@
 <script src="/ui/static/vendor/dompurify-3.4.17.js"></script>
 <script src="/ui/static/app.js"></script>
 <script src="/ui/static/mission.js"></script>
+<script src="/ui/static/shell.js"></script>
 </body>
 </html>
