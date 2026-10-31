@@ -845,6 +845,16 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
               "companion: no agy session, start allowed: one new agy session in the project folder gets its ready tasks",
               json.dumps(st_agy)[:600] + " " + body[:600])
         check("--dangerously-skip-permissions" in argv, "companion: YOLO on: the new agy session gets its own flag too", json.dumps(argv)[:400])
+        if not WIN:  # the fake console on Windows does not record its environment
+            nonce = next((a.split("=", 1)[1] for a in argv if a.startswith("KNOWLEDGE_START_NONCE=")), "")
+            lease = lambda: json.loads((tmp / "task_leases.json").read_text(encoding="utf-8"))["garden"].get("CMP-GEMINI", {})
+            hint = lambda conv, extra: run([sys.executable, str(hooks / "agent_hooks.py"), "hints", "-"],
+                                           json.dumps({"conversationId": conv, "workspacePaths": [str(project)]}), {**env, **extra}, cwd=str(project))
+            hint("older-agy", {})
+            check(bool(nonce) and lease().get("session") == "" and lease().get("start") == nonce,
+                  "companion: an older agy session does not take the task meant for the session the companion started", json.dumps(lease()))
+            hint("new-agy", {"KNOWLEDGE_START_NONCE": nonce})
+            check(lease().get("session") == "new-agy", "companion: the started session (its start nonce) takes its task", json.dumps(lease()))
         check(out.get("waiting", {}).get("garden/CMP-CLAUDE", "").startswith("No open session; starting one is off"),
               "companion: no Claude session and starting is off: the task waits and says why", body[:600])
         wakes = json.loads((tmp / "task_wakes.json").read_text(encoding="utf-8")).get("garden", {})
@@ -890,8 +900,14 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         st, _, body = call("POST", "/local/api/tick", {})
         state = json.loads(call("GET", "/local/api/state")[2])
         check(json.loads(body)["waiting"].get("garden/CMP-CX2", "").startswith("Wake failed") and "CMP-CX2" not in json.dumps(json.loads(body)["woken"])
-              and any("could not wake CMP-CX2" in a["text"] for a in state["activity"]),
+              and any("could not wake CMP-CX2" in a["text"] and "Given back" in a["detail"] for a in state["activity"]),
               "companion: a refused codex queue is a failed wake, said on the page", body[:400])
+        ready = {t["id"]: t for t in json.loads(http("GET", "/tasks/ready", headers={"Authorization": f"Bearer {tok}"})[1])["tasks"]}
+        check(ready.get("CMP-CX2", {}).get("mine") is False, "companion: a failed delivery gives the task's lease back at once", json.dumps(ready.get("CMP-CX2")))
+        n = len(recorded())
+        st, _, body = call("POST", "/local/api/tick", {})
+        check(not [c for c in recorded()[n:] if c.get("argv", [""])[:2] == ["codex", "queue"]],
+              "companion: a failed task is not tried again on this pc for 30 minutes (no re-claim every minute)", json.dumps(recorded()[n:])[:300])
         # The trust command: an agent that fails (a Codex without hooks/list) does not keep the next one untrusted.
         ag_now = json.loads((agy_dir / "settings.json").read_text(encoding="utf-8"))
         (agy_dir / "settings.json").write_text(json.dumps({**ag_now, "trustedWorkspaces": [str(home)]}), encoding="utf-8")
@@ -923,10 +939,12 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
                 self.end_headers()
                 self.wfile.write(body)
 
-            def do_GET(self):
+            def do_GET(self):  # the session's own ask (wake) lists the task; taking it for that session gets 409
                 self.answer(200, {"tasks": [{"project": "garden", "path": "garden-memory/x.md", "id": "CMP-HELD", "owner": "Codex",
                                              "device": "", "agent": "codex", "from": "Claude", "start": "now", "text": "held", "mine": False}]}
-                            if self.path.startswith("/tasks/ready") else {})
+                            if self.path.startswith("/tasks/ready") else
+                            {"tasks": ["- garden-memory/x.md: open until 2099-01-01 [Codex, CMP-HELD] from Claude, start now: held"],
+                             "project": "garden"} if self.path.startswith("/tasks?") else {})
 
             def do_POST(self):
                 self.rfile.read(int(self.headers.get("Content-Length", 0)))
@@ -1076,9 +1094,13 @@ def wake_e2e(tok: str, home: Path, project: Path):
         waiter.stdin.write(json.dumps({"session_id": "cl-1", "cwd": str(project)}))
         waiter.stdin.close()
         tasks = "".join(f"- open tot 1 jan 2099 [{o}, WAKE-{o.upper()}] from Claude, start now: wake test for {o} \"a & b > c %PATH%\n" for o in ("Codex", "Claude", "Gemini"))
+        tasks += "- open tot 1 jan 2099 [Codex, WAKE-HELD] from Claude, start now: another session has it\n"
         http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_write", "arguments":
              {"path": "garden-memory/project_wake.md", "content": "---\nname: w\ndescription: d\nmetadata:\n  type: project\n---\n"
               f"## Stand\n{tasks}\n## Keuzes\n"}}}, {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})
+        auth = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+        woken = lambda tid, sid: http("POST", "/tasks/woken", {"project": "garden", "id": tid, "agent": "codex", "session": sid}, auth)[0]
+        check(woken("WAKE-HELD", "elsewhere") == 200, "wake: another session takes WAKE-HELD first")
         code, out, err = hook(["wake", "codex", "-"], {"session_id": "sender", "cwd": str(project), "tool_name": "mcp__knowledge__knowledge_search"})
         check(out.strip() == "{}" and not calls.exists() and not sent, "wake: a read-only knowledge tool wakes nobody", out + err)
         code, out, err = hook(["wake", "codex", "-"], {"session_id": "sender", "cwd": str(project), "tool_name": "mcp__knowledge__knowledge_write"},
@@ -1088,6 +1110,8 @@ def wake_e2e(tok: str, home: Path, project: Path):
         check(len(queued) == 1 and queued[0][:3] == ["queue", "--thread", "cx-1"] and "WAKE-CODEX" in queued[0][-2]
               and "WAKE-GEMINI" not in queued[0][-2] and queued[0][-1] == str(home / "codex-b"),
               "wake: Codex gets its own new task through codex queue, in the session's CODEX_HOME", str(queued)[:400])
+        check(bool(queued) and "WAKE-HELD" not in queued[0][-2], "wake: a task another session holds (409) is not passed on", str(queued)[:400])
+        check(woken("WAKE-CODEX", "intruder") == 409, "wake: the woken Codex session holds its task's lease (same machine too)")
         check(bool(queued) and {"c", "PATH"} <= set(re.findall(r"\w+", queued[0][-2])) and not (project / "c").exists(),
               "wake: a quote, & or > in a task reaches Codex as text, never as a command (Windows codex.cmd)", str(queued)[:400])
         check(len(sent) == 1 and sent[0]["cascadeId"] == "conv-1" and "WAKE-GEMINI" in sent[0]["items"][0]["text"],
@@ -1099,6 +1123,8 @@ def wake_e2e(tok: str, home: Path, project: Path):
             werr = "still waiting after 20 s"
         check(waiter.returncode == 2 and "WAKE-CLAUDE" in werr and "not from the user" in werr and "-done]" in werr,
               "wake: Claude's waiter wakes the session (exit 2) with its own new task", werr[-400:])
+        check(woken("WAKE-CLAUDE", "intruder") == 409 and woken("WAKE-GEMINI", "intruder") == 409,
+              "wake: Claude's waiter and the agy wake take the task's lease for their session before telling it")
         code, out, err = hook(["wake", "agy", "-"], {"conversationId": "other", "workspacePaths": [str(project)],
                                                     "toolCall": {"name": "call_mcp_tool", "args": {"ToolName": "knowledge_edit"}}})
         check(out.strip() == "{}" and len(sent) == 1 and len(calls.read_text(encoding="utf-8").splitlines()) == 1,

@@ -526,10 +526,21 @@ def one_line(text: str, exe: str) -> str:
     return re.sub(r'["%^&|<>!]', " ", text) if exe.lower().endswith((".cmd", ".bat")) else text  # cmd.exe parses it
 
 
-def start_session(agent: str, folder: str, tasks: list) -> str:
+def cannot_start(agent: str) -> str:
+    """Why this pc cannot start a session of `agent` ('' = it can): checked before the task is taken on the server."""
+    if not shutil.which(agent):
+        return f"{AGENTS[agent][0]} is not on PATH"
+    if agent != "codex" and os.name != "nt" and not shutil.which("tmux"):
+        return "No open session, and no tmux to start one in"
+    return ""
+
+
+def start_session(agent: str, folder: str, tasks: list, nonce: str = "") -> str:
     """A new session in the project's folder for its ready tasks: Codex through codex exec, Claude and agy as their CLI in a
-    new terminal (a new console on Windows, tmux elsewhere). The session's label, or '' when there is no way."""
+    new terminal (a new console on Windows, tmux elsewhere). The session's label, or '' when there is no way. `nonce`
+    reaches the session's hooks as KNOWLEDGE_START_NONCE: with it the server gives the tasks to this new session only."""
     exe = shutil.which(agent)
+    env = {**os.environ, "KNOWLEDGE_START_NONCE": nonce} if nonce else None
     lines = [f"- {t['path']}: [{t['owner']}{'@' + t['device'] if t.get('device') else ''}, {t['id']}] from {t.get('from') or '?'}, start {t.get('start') or 'now'}: {t['text']}" for t in tasks]
     prompt = one_line(agent_hooks.task_text(lines, True), exe)
     kw = {"creationflags": 0x00000008 | 0x00000200} if os.name == "nt" else {"start_new_session": True}
@@ -538,28 +549,29 @@ def start_session(agent: str, folder: str, tasks: list) -> str:
         STATE.mkdir(parents=True, exist_ok=True)
         with open(STATE / "codex-exec.log", "ab") as out:
             p = subprocess.Popen([exe, "exec", *yolo, "--cd", folder, prompt], cwd=folder, stdin=subprocess.DEVNULL, stdout=out,
-                                 stderr=subprocess.STDOUT, **kw)
+                                 stderr=subprocess.STDOUT, env=env, **kw)
         return f"codex exec {p.pid}"
     argv = [exe, *yolo, prompt] if agent == "claude" else [exe, *yolo, "-i", prompt]
     if os.name == "nt":
-        p = subprocess.Popen(argv, cwd=folder, creationflags=0x00000010)  # CREATE_NEW_CONSOLE: a window to work in
+        p = subprocess.Popen(argv, cwd=folder, env=env, creationflags=0x00000010)  # CREATE_NEW_CONSOLE: a window to work in
         return f"console {p.pid}"
     tmux = shutil.which("tmux")
     if not tmux:
         return ""
     name = re.sub(r"[^\w-]", "-", f"knowledge-{agent}-{tasks[0]['id']}")[:60]
     # tmux 3+ runs a command given as several arguments without a shell: the task text stays text
-    subprocess.run([tmux, "new-session", "-d", "-s", name, "-c", folder, *argv], check=True, timeout=15,
+    # -e: a session started by a tmux server that already runs gets that server's environment, not ours
+    subprocess.run([tmux, "new-session", "-d", "-s", name, "-c", folder, *(["-e", f"KNOWLEDGE_START_NONCE={nonce}"] if nonce else []), *argv], check=True, timeout=15,
                    stdin=subprocess.DEVNULL, capture_output=True)
     return f"tmux {name}"
 
 
-def claim(task: dict, tok: str, session: str) -> str:
+def claim(task: dict, tok: str, session: str, start: str = "") -> str:
     """Take the task for this pc on the server before waking anything: '' when this pc holds it now, else the device
     that does (another pc already woke a session for it, or the line is pinned to another device)."""
     try:
         server("POST", "/tasks/woken", tok, {"project": task["project"], "id": task["id"], "agent": task["agent"],
-                                             "session": session[:80]})
+                                             "session": session[:80], **({"start": start} if start else {})})
     except urllib.error.HTTPError as e:
         if e.code != 409:
             raise
@@ -567,35 +579,45 @@ def claim(task: dict, tok: str, session: str) -> str:
     return ""
 
 
+def release(task: dict, tok: str):
+    """Give the task's lease back after a failed start, so another pc may take it at once; never raises."""
+    try:
+        server("POST", "/tasks/release", tok, {"project": task["project"], "id": task["id"]})
+    except Exception as e:
+        log("error", f"Could not give {task['id']} back on the server", f"{e}"[:200])
+
+
 def wake_task(task: dict, tok: str, now: float, told: dict, ready: list, may_start: bool = True, since: float = 0) -> tuple:
-    """(session, how) when a session has the task now, (None, why not) else. `told`: sessions reached this round;
-    `may_start`: False once a session was started for this task (it is not started again and again); `since`: when
-    this pc first saw the task ready. Each wake first takes the task on the server, so only one pc wakes for it."""
+    """(session, how) when a session has the task now, (None, why not) else; raises when a start or a delivery failed
+    (the task's lease is given back first). `told`: sessions reached this round; `may_start`: False once a session was
+    started for this task (it is not started again and again); `since`: when this pc first saw the task ready. A wake
+    takes the task on the server for that session first, so only one session on one pc starts it."""
     agent, project = task["agent"], task["project"]
     mine = [s for s in sessions(agent, now) if s["project"] == project]
     if mine:
         s = mine[0]
-        if held := claim(task, tok, s["session"]):
-            return None, f"Held by {held}"
         key = (agent, s["session"])
         if key in told:  # one wake says every new task of the session
             return s["session"], "with the same wake"
-        if agent == "claude":  # its waiting hook asks /tasks itself once poked
+        if agent == "claude":  # its waiting hook asks /tasks itself once poked, and takes the new tasks for its session
             agent_hooks.poke(s["entry"])
             told[key] = True
             return s["session"], "poked its waiting hook"
         hook, deliver = (({"session_id": s["session"], "cwd": s["cwd"]}, lambda text: agent_hooks.codex_queue(s["entry"], text))
                          if agent == "codex" else
                          ({"conversationId": s["session"], "cwd": s["cwd"]}, lambda text: agent_hooks.agy_send(s["entry"], s["session"], text)))
-        told[key], failed = True, []
+        told[key], failed, held = True, [], {}
 
         def tell(text):
             ok = deliver(text)
             failed.append(not ok)
             return ok
-        text = agent_hooks.new_tasks(agent, tok, hook, now, wake=True, deliver=tell)
+        # new_tasks takes each new task for this session first (409: held elsewhere) and gives it back when not delivered
+        text = agent_hooks.new_tasks(agent, tok, hook, now, wake=True, deliver=tell, held=held)
         if any(failed):  # new_tasks answers '' for "told before" and for a refused delivery alike
             raise RuntimeError(f"{AGENTS[agent][0]} did not take the message (session {s['session']})")
+        if not text and task["id"] in held:
+            return None, f"Held by {held[task['id']]}"
         return s["session"], ("sent to the session" if text else "the session was told before")
     if not load("settings.json", {}).get("startWhenNone", {}).get(agent):
         return None, "No open session; starting one is off in Settings"
@@ -606,14 +628,25 @@ def wake_task(task: dict, tok: str, now: float, told: dict, ready: list, may_sta
         return None, f"No folder linked to project {project} on this pc"
     if now - since < START_DELAY:  # a pc with an open session takes it at once; give it the chance
         return None, f"No open session; waiting {START_DELAY} s for a pc that has one before starting one here"
-    if held := claim(task, tok, ""):
-        return None, f"Held by {held}"
+    if why := cannot_start(agent):  # before taking the task: a pc that cannot start must not hold it
+        return None, why
     key = (agent, f"start:{project}")
+    if told.get(key) == "":  # the start for this project failed this round
+        return None, "No open session; starting one failed this round"
+    # one nonce per new session: the server gives its tasks to the session that presents it, not an older one
+    nonce = told.setdefault((agent, f"nonce:{project}"), secrets.token_hex(8))
+    if held := claim(task, tok, "", nonce):
+        return None, f"Held by {held}"
     if key in told:  # one new session gets all of its ready tasks
         return told[key], "with the same new session"
-    label = start_session(agent, folder, [t for t in ready if t["agent"] == agent and t["project"] == project])
-    if not label:
-        return None, "No open session, and no tmux to start one in"
+    try:
+        label = start_session(agent, folder, [t for t in ready if t["agent"] == agent and t["project"] == project], nonce)
+        if not label:
+            raise RuntimeError("no way to start a session here")
+    except Exception as e:
+        told[key] = ""
+        release(task, tok)
+        raise RuntimeError(f"could not start {AGENTS[agent][0]}: {e}") from e
     told[key] = label
     return label, "started a session"
 
@@ -685,6 +718,20 @@ def report_errors(st: dict, tok: str, now: float):
         st[key] = mark
 
 
+def renew_busy(woken: dict, tok: str, now: float):
+    """Keep the lease of a task whose codex exec this pc started while that process still runs: a turn longer than
+    the lease must not let another pc start the same task. Only codex exec: a running process is a working session
+    there, while a Claude or agy terminal stays open when idle (those renew on their own turns)."""
+    for key, w in woken.items():
+        m = re.fullmatch(r"codex exec (\d+)", str(w.get("session", "")))
+        if w.get("start") and m and alive(int(m.group(1))):
+            project, _, tid = key.partition("/")
+            try:
+                claim({"project": project, "id": tid, "agent": w["agent"]}, tok, "", w["start"])
+            except Exception as e:  # the next round tries again; the lease lasts longer than a round
+                log("error", f"Could not renew the lease of {tid}", f"{e}"[:200])
+
+
 def tick() -> dict:
     """One round: queued YOLO, trust after an update, the ready tasks, the agents' own hook errors."""
     with TICK:
@@ -713,27 +760,31 @@ def one_round() -> dict:
     woken = {k: w for k, w in st.get("woken", {}).items() if now - w.get("since", w["at"]) < 86400}
     seen = {k: st.get("first_seen", {}).get(k, now) for k in (f"{t['project']}/{t['id']}" for t in ready)}
     told = {}
+    renew_busy(woken, tok, now)
+    backoff = {k: at for k, at in st.get("backoff", {}).items() if now - at < WAKE_AGAIN}
     for t in ready:
         key = f"{t['project']}/{t['id']}"
         prev = woken.get(key, {})
-        if t.get("agent") not in AGENTS or not installed(t["agent"]) or now - prev.get("at", 0) < WAKE_AGAIN:
+        if t.get("agent") not in AGENTS or not installed(t["agent"]) or now - prev.get("at", 0) < WAKE_AGAIN or key in backoff:
             continue
         try:
             session, how = wake_task(t, tok, now, told, ready, may_start=not prev.get("started"), since=seen[key])
-        except Exception as e:
+        except Exception as e:  # its lease is given back; not tried again here for WAKE_AGAIN, so another pc can
             session, how = None, f"Wake failed: {e}"[:200]
-            if st.get("waiting", {}).get(key) != how:  # once, not every minute while it keeps failing
-                log("error", f"{AGENTS[t['agent']][0]}: could not wake {t['id']}", how)
+            backoff[key] = now
+            log("error", f"{AGENTS[t['agent']][0]}: could not wake {t['id']}", f"{how}. Given back to the server; "
+                f"this pc tries again in {WAKE_AGAIN // 60} min")
         if session is None:
             if how.startswith("Held by") and st.get("waiting", {}).get(key) != how:  # once, not every minute
-                log("wake", f"{AGENTS[t['agent']][0]}: {t['id']} {how[0].lower() + how[1:]}", "Another pc woke a session for it; skipped")
+                log("wake", f"{AGENTS[t['agent']][0]}: {t['id']} {how[0].lower() + how[1:]}", "Another session or pc holds it; skipped")
             summary["waiting"][key] = how
             continue
+        nonce = told.get((t["agent"], f"nonce:{t['project']}")) if how in ("started a session", "with the same new session") else None
         woken[key] = {"at": now, "since": prev.get("since", now), "session": session, "agent": t["agent"],
-                      "started": bool(prev.get("started")) or how == "started a session"}
+                      "started": bool(prev.get("started")) or how == "started a session", **({"start": nonce} if nonce else {})}
         summary["woken"].append({"id": t["id"], "project": t["project"], "agent": t["agent"], "session": session, "how": how})
         log("wake", f"{AGENTS[t['agent']][0]}: {t['id']} ({how})", f"Session {session}")
-    st.update(woken=woken, waiting=summary["waiting"], first_seen=seen)
+    st.update(woken=woken, waiting=summary["waiting"], first_seen=seen, backoff=backoff)
     report_errors(st, tok, now)
     with LOCK:
         save("state.json", {**load("state.json", {}), **{k: v for k, v in st.items() if k not in TRUST_KEYS}})  # trust() may have written meanwhile
@@ -960,6 +1011,21 @@ def main(argv: list):
         assert ours({"pluginId": "knowledge@knowledge"}) and not ours({"pluginId": "other@x", "command": "x.sh"})
         globals()["CLAUDE_JSON"] = HOME / ".knowledge-companion-self-test-missing.json"
         assert untrusted("claude", ["/x"]) == [], "Claude never ran here: nothing to trust, no trust round every minute"
+        # A start: the cheap checks come before the task is taken on the server; a failed start gives it back.
+        did, g = [], globals()
+        g.update(sessions=lambda a, n: [], project_folders=lambda: {"p": "/x"}, load=lambda n, d: {"startWhenNone": {"agy": True}},
+                 claim=lambda t, tok, s, start="": did.append(("claim", start)) or "", release=lambda t, tok: did.append(("release",)),
+                 cannot_start=lambda a: "no tmux", start_session=lambda *a: "")
+        task = {"agent": "agy", "project": "p", "id": "T-1"}
+        assert wake_task(task, "", 1000, {}, [task]) == (None, "no tmux") and did == [], did
+        g["cannot_start"] = lambda a: ""
+        try:
+            wake_task(task, "", 1000, told := {}, [task])
+            raise AssertionError("a failed start must raise")
+        except RuntimeError:
+            pass
+        assert did[0][0] == "claim" and did[0][1] and did[1:] == [("release",)], did
+        assert wake_task(task, "", 1000, told, [task])[0] is None and len(did) == 2, "not tried again in the same round"
         print("ok")
     else:
         sys.exit(__doc__)

@@ -120,11 +120,30 @@ RESULTS_TEXT = ("knowledge: another agent handed a result back to you (this mess
                 "line with knowledge_edit (the file history keeps it):\n")
 
 
-def new_tasks(agent: str, tok: str, hook: dict, now=None, wake: bool = False, deliver=None) -> str:
+def task_post(tok: str, path: str, body: dict) -> tuple[int, dict]:
+    """POST /tasks/woken or /tasks/release: (HTTP status, JSON answer); (0, {}) when the server was not reached."""
+    req = urllib.request.Request(f"{URL}{path}", data=json.dumps(body).encode(), method="POST",
+                                 headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=4) as r:
+            code, raw = r.status, r.read()
+    except urllib.error.HTTPError as e:
+        code, raw = e.code, e.read()
+    except Exception:
+        return 0, {}
+    try:
+        return code, json.loads(raw.decode("utf-8") or "{}")
+    except ValueError:
+        return code, {}
+
+
+def new_tasks(agent: str, tok: str, hook: dict, now=None, wake: bool = False, deliver=None, held: dict | None = None) -> str:
     """Tasks handed to `agent` after this session started, said once: the startup context lists the open ones, but a
     session that runs for hours (or is resumed for days) never sees a task another agent hands over meanwhile. The
     first ask of a session only remembers what is open; '' when nothing is new, the server is away or it is too soon.
-    With `deliver` (waking another session) it asks at once and remembers the tasks only if deliver(text) succeeded."""
+    With `deliver` (waking another session) it asks at once, takes each new task for that session on the server first
+    (a task another session or pc holds is left out, {id: holding device} in `held`), and remembers the tasks only if
+    deliver(text) succeeded; a failed delivery gives the leases back."""
     now = time.time() if now is None else now
     sid = hook.get("session_id") or hook.get("conversationId") or hook.get("cwd") or os.getcwd()
     # shortcut: two agy sessions without a conversationId in one folder share what they have seen.
@@ -139,8 +158,14 @@ def new_tasks(agent: str, tok: str, hook: dict, now=None, wake: bool = False, de
     cwd = hook.get("cwd") or (hook.get("workspacePaths") or [os.getcwd()])[0]
     # session and wake let the admin page show which sessions use a token and which can be woken
     version = ".".join(map(str, self_update.own()))
+    known = (seen or {}).get("ids")
+    # seen: what this session was told before, so the server leases only what it hears now; start: the nonce the
+    # companion gave the session it started, so this session (not an older one) gets that task
+    extra = {"seen": ",".join(known)} if deliver is None and known is not None else {}
+    if deliver is None and (nonce := os.environ.get("KNOWLEDGE_START_NONCE")):
+        extra["start"] = nonce
     query = urllib.parse.urlencode({**project_query(cwd), "agent": agent, "session": str(sid)[:80], "wake": int(wake),
-                                    "v": 2, "claim": int(deliver is None), **({"plugin": version} if version else {})})
+                                    "v": 2, "claim": int(deliver is None), **extra, **({"plugin": version} if version else {})})
     req = urllib.request.Request(f"{URL}/tasks?{query}", headers={"Authorization": f"Bearer {tok}"})
     try:
         with urllib.request.urlopen(req, timeout=4) as r:
@@ -152,8 +177,18 @@ def new_tasks(agent: str, tok: str, hook: dict, now=None, wake: bool = False, de
         ids = {m.group(1).strip(): ln for ln in beat.get("tasks", []) if (m := TASK_ID.search(ln))}
     except Exception:  # the next session start says so loudly; a prompt is no place to nag
         beat, ids = {}, None  # still throttled: away from home every prompt would wait for the timeout
-    known = (seen or {}).get("ids")
-    fresh = [] if ids is None or known is None else [ln for i, ln in ids.items() if i not in known]
+    fresh = {} if ids is None or known is None else {i: ln for i, ln in ids.items() if i not in known}
+    taken = []
+    if deliver is not None and fresh and beat.get("project"):  # a server before the lease has no project here
+        for i in list(fresh):  # same machine or not: only one session starts it
+            code, answer = task_post(tok, "/tasks/woken", {"project": beat["project"], "id": i, "agent": agent, "session": str(sid)[:80]})
+            if code == 409:
+                del fresh[i], ids[i]  # not remembered: said once it is free again
+                if held is not None:
+                    held[i] = (answer.get("held_by") or {}).get("device") or "another device"
+            elif code == 200:
+                taken.append(i)
+    fresh = list(fresh.values())
     text = task_text(fresh, deliver is not None) if fresh else ""
     # results handed back to this agent: said once per session, like new tasks (the start context listed the open ones)
     results = {r["id"]: r["text"] for r in beat.get("results", []) if r.get("id")} if ids is not None else None
@@ -170,8 +205,18 @@ def new_tasks(agent: str, tok: str, hook: dict, now=None, wake: bool = False, de
     text = "\n\n".join(t for t in (text, said) if t.strip())
     if deliver is None and beat.get("sync"):
         start_hook("docs-sync.py", tok, json.dumps({"hook_event_name": "SessionStart", "cwd": cwd}))
-    if deliver is not None and (ids is None or (text and not deliver(text))):
-        return ""  # not delivered: the next prompt or wake says it
+    if deliver is not None and ids is None:
+        return ""
+    if deliver is not None and text:
+        ok = False
+        try:
+            ok = deliver(text)
+        finally:  # refused or raised: free for another session or pc at once
+            if not ok:
+                for i in taken:
+                    task_post(tok, "/tasks/release", {"project": beat["project"], "id": i})
+        if not ok:
+            return ""  # not delivered: the next prompt or wake says it
     try:
         seen_dir.mkdir(parents=True, exist_ok=True)
         for old in seen_dir.glob("*.json"):  # sessions end without telling: forget them after a week
