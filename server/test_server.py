@@ -512,6 +512,77 @@ def machines_contract(tmp, ck, fr, raw, er, et):
     (tmp / "task_leases.json").write_text("{}")
 
 
+def chats_contract(tmp, ck, fr, raw, er, et):
+    """Chats with an agent on a pc: only the machine's owner sees or posts, only installed agents and linked folders;
+    the companion pulls a message once, posts events back, a stop reaches it; caps per chat and per machine."""
+    pc = {"X-Knowledge-Machine": "cccccccccccccccc", "X-Knowledge-Machine-Label": "garage"}
+    mid = "cccccccccccccccc"
+    ui = lambda path, body=None, h=ck: raw("POST" if body is not None else "GET", path, None if body is None else json.dumps(body),
+                                          {**h, "X-Knowledge-UI": "1", "Content-Type": "application/json"})
+    http("POST", "/machine/report", {"version": "0.16.0", "agents": {"codex": {}, "claude": {}},
+                                     "folders": {"linked": [{"path": "/home/x/garden", "project": "garden"}]}}, token=fr, headers=pc)
+    assert ui("/ui/api/chats", {"machine": mid, "agent": "agy", "folder": "/home/x/garden"})[0] == 400  # not installed there
+    assert ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/etc"})[0] == 400  # not a linked folder
+    assert ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/x/garden"}, er)[0] == 403  # not her machine
+    st, _, b = ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/x/garden"})
+    assert st == 200, b
+    cid = json.loads(b)["chat"]["id"]
+    assert json.loads(ui(f"/ui/api/chats?machine={mid}")[2])["chats"][0]["id"] == cid
+    every = json.loads(ui("/ui/api/chats")[2])["chats"]  # the cockpit: all own machines at once
+    assert [(c["id"], c["machine"], c["label"]) for c in every] == [(cid, mid, "garage")], every
+    assert json.loads(ui("/ui/api/chats", h=er)[2])["chats"] == []
+    for h in (er,):  # another person: neither the list, nor the chat, nor a message, nor a stop
+        assert ui(f"/ui/api/chats?machine={mid}", h=h)[0] == 403 and ui(f"/ui/api/chat?machine={mid}&id={cid}", h=h)[0] == 403
+        assert ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "hi"}, h)[0] == 403
+        assert ui("/ui/api/chat/stop", {"machine": mid, "id": cid}, h)[0] == 403
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "x" * 20_001})[0] == 400
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": "../../tokens", "text": "hi"})[0] == 400
+    st, _, b = ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "hello <b>agent</b>"})
+    assert st == 200, b
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "again"})[0] == 409  # one turn at a time
+    # Her token, even naming this machine id, gets nothing; the machine's own token gets the message once.
+    assert http("GET", "/machine/chats", token=et, headers=pc)[0] == 403
+    got = json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])
+    assert [(w["chat"], w["agent"], w["folder"], w["text"], w["session"]) for w in got["work"]] == [(cid, "codex", "/home/x/garden", "hello <b>agent</b>", "")], got
+    again = json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])
+    assert again["work"] == [] and again["busy"] == [cid] and again["active"], again
+    assert json.loads(http("GET", "/machine/chats", token=fr, headers={"X-Knowledge-Machine": "eeeeeeeeeeeeeeee"})[1])["work"] == []
+    assert http("POST", "/machine/chats/events", {"chat": cid, "events": [{"kind": "shell", "text": "x"}]}, token=fr, headers=pc)[0] == 400
+    assert http("POST", "/machine/chats/events", {"chat": cid, "events": [{"kind": "text", "text": "x"}]}, token=fr,
+                headers={"X-Knowledge-Machine": "eeeeeeeeeeeeeeee"})[0] == 404  # not that machine's chat
+    assert http("POST", "/machine/chats/events", {"chat": cid, "session": "th-1", "events": [{"kind": "text", "text": "Hel"}, {"kind": "tool", "text": "$ ls"}]},
+                token=fr, headers=pc)[0] == 200
+    c = json.loads(ui(f"/ui/api/chat?machine={mid}&id={cid}&after=1")[2])
+    assert [(e["kind"], e["text"]) for e in c["events"]] == [("text", "Hel"), ("tool", "$ ls")] and c["chat"]["status"] == "running" and c["online"], c
+    assert c["chat"]["session"] == "th-1" and c["chat"]["title"] == "hello <b>agent</b>"
+    # Stop: the companion hears it on its next poll and ends the turn with done.
+    assert ui("/ui/api/chat/stop", {"machine": mid, "id": cid})[0] == 200
+    assert json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["stop"] == [cid]
+    http("POST", "/machine/chats/events", {"chat": cid, "events": [{"kind": "info", "text": "Stopped."}], "done": True}, token=fr, headers=pc)
+    c = json.loads(ui(f"/ui/api/chat?machine={mid}&id={cid}")[2])
+    assert c["chat"]["status"] == "idle" and c["events"][-1]["text"] == "Stopped." and [e["n"] for e in c["events"]] == [1, 2, 3, 4], c
+    assert json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1]) == {"work": [], "stop": [], "busy": [], "active": False}
+    # The second turn goes out with the session of the first (the agent continues its own conversation).
+    ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "next"})
+    assert json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"][0]["session"] == "th-1"
+    # Caps: a chat keeps its newest events within its size; a machine keeps CHAT_KEEP chats (the busy one stays).
+    big = [{"kind": "text", "text": "y" * 19_000}] * 60
+    http("POST", "/machine/chats/events", {"chat": cid, "events": big, "done": True}, token=fr, headers=pc)
+    data = json.loads((tmp / "chats" / mid / f"{cid}.json").read_text())
+    assert data["trimmed"] and sum(len(e["text"]) for e in data["events"]) < 1_000_000 and data["events"][-1]["n"] == 65, len(data["events"])
+    for _ in range(50):
+        assert ui("/ui/api/chats", {"machine": mid, "agent": "claude", "folder": "/home/x/garden"})[0] == 200
+    assert len(json.loads(ui(f"/ui/api/chats?machine={mid}")[2])["chats"]) == 50 and not (tmp / "chats" / mid / f"{cid}.json").exists()
+    # Offline: no new message (it would run whenever the pc comes back).
+    d = json.loads((tmp / "machines.json").read_text())
+    d[mid]["at"] -= 3600
+    (tmp / "machines.json").write_text(json.dumps(d))
+    other = json.loads(ui(f"/ui/api/chats?machine={mid}")[2])["chats"][0]["id"]
+    st, _, b = ui("/ui/api/chat/send", {"machine": mid, "id": other, "text": "hi"})
+    assert st == 409 and b"offline" in b, b
+    http("POST", "/machine/report", {"version": "0.16.0"}, token=fr, headers=pc)
+
+
 def no_held(beat: dict) -> dict:
     """A turn's answer without the lease notices (tasks other sessions hold): for checks about other notices."""
     return {**beat, "notices": [n for n in beat["notices"] if not n["id"].startswith("held-")]}
@@ -1477,6 +1548,7 @@ def main():
         roots = next(t["roots"] for t in json.loads(raw("GET", "/ui/api/admin", headers=er)[2])["tokens"] if t["name"] == "erin.laptop")
         assert {"erinproj", "erinproj-memory"} <= set(roots), roots  # her devices reach her new project at once
         machines_contract(tmp, ck, fr, raw, er, et)
+        chats_contract(tmp, ck, fr, raw, er, et)
         # The folder link (.knowledge-project, skill knowledge-init): her token now sees two projects, so the folder picks.
         assert "not linked to a project" in http("GET", "/context/1?project=/home/erin/stuff", token=et)[1]
         ctx = http("GET", "/context/1?project=erinproj&linked=1", token=et)[1]
