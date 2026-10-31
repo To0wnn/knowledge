@@ -443,7 +443,7 @@ def start_hook(script: str, tok: str, stdin: str):
     """run_hook without waiting: a full docs mirror can take seconds, a prompt should not. What it prints (a failure,
     refused files, docs without a topic) is said at the next turn (take_background), so it never fails quietly."""
     env = {**os.environ, "KNOWLEDGE_URL": URL, **({"KNOWLEDGE_TOKEN": tok} if tok else {})}
-    kw = {"creationflags": 0x00000008 | 0x00000200} if os.name == "nt" else {"start_new_session": True}  # as memory_mirror
+    kw = {"creationflags": 0x08000000 | 0x00000200} if os.name == "nt" else {"start_new_session": True}  # as memory_mirror: CREATE_NO_WINDOW | NEW_PROCESS_GROUP
     try:
         BACKGROUND.parent.mkdir(parents=True, exist_ok=True)
         with BACKGROUND.open("ab") as out:

@@ -1937,6 +1937,28 @@ def checkout_update(tmp: Path):
           "one-line setup: repairs a pull that stopped with conflicts after a rewrite", f"stuck={stuck} " + (out + err)[-600:])
 
 
+def background_flags(tmp: Path):
+    """The detached starts of the hooks (self-update, offline copy, background hook) open no console window on Windows:
+    CREATE_NO_WINDOW, never DETACHED_PROCESS, whose console children (git, the agent CLIs) each got a window."""
+    code = """import json, os, subprocess, sys
+sys.path.insert(0, sys.argv[1])
+import self_update, memory_mirror, agent_hooks
+seen = []
+class P:
+    def __init__(self, *a, **kw):
+        seen.append(kw.get("creationflags", 0) if os.name == "nt" else int(bool(kw.get("start_new_session"))))
+        self.stdin = open(os.devnull, "wb")
+subprocess.Popen = P
+self_update.start("codex"); memory_mirror.start_background(); agent_hooks.start_hook("docs-sync.py", "", "{}")
+print(json.dumps(seen))"""
+    home = tmp / "Flags Usér"
+    home.mkdir(parents=True, exist_ok=True)
+    rc, out, err = run([sys.executable, "-c", code, str(CLIENT / "plugin" / "hooks")], "", user_env(home, KNOWLEDGE_HOME=str(home / ".knowledge")))
+    seen = json.loads(out) if rc == 0 else []
+    ok = len(seen) == 3 and all((f & 0x08000000 and not f & 0x00000008) if WIN else f == 1 for f in seen)
+    check(ok, "self-update, offline copy and background hook start detached without a console window", out + err[-500:])
+
+
 def main():
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # this report only; the clients run as a stock Windows has them
     tmp = Path(tempfile.mkdtemp(prefix="kn e2e "))
@@ -1967,6 +1989,7 @@ def main():
         hook_errors(tmp, project)
         knowledge_home(tok, tmp, project)
         companion_e2e(tok, tmp, project)
+        background_flags(tmp)
         installer(tok, tmp)
         companion_setup(tmp)
         checkout_update(tmp)
