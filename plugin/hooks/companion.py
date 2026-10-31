@@ -28,6 +28,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -103,13 +104,24 @@ def newline_of(path: Path) -> str:
         return "\n"
 
 
-def write_json(path: Path, data, indent=2):
+def write_text(path: Path, text: str):
+    """Replace a file at once through a temp file of its own: two writers (threads, or a hook process logging) never
+    write into one temp file, so neither can leave a torn mix of both."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".companion-tmp")
-    tmp.write_text(json.dumps(data, indent=indent, ensure_ascii=False) + "\n", encoding="utf-8", newline=newline_of(path))
-    if path.exists():  # ~/.claude.json is private: the new file keeps the old one's mode
-        os.chmod(tmp, path.stat().st_mode & 0o777)
-    os.replace(tmp, path)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".companion-tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline=newline_of(path)) as f:
+            f.write(text)
+        if path.exists():  # ~/.claude.json is private: the new file keeps the old one's mode
+            os.chmod(tmp, path.stat().st_mode & 0o777)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def write_json(path: Path, data, indent=2):
+    write_text(path, json.dumps(data, indent=indent, ensure_ascii=False) + "\n")
 
 
 def save(name: str, data):
@@ -133,12 +145,14 @@ def backup(path: Path):
 
 
 def edit_json(path: Path, change):
-    """Read, change, write back; a file that is not valid JSON is never overwritten."""
-    data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-    backup(path)
-    out = change(data)
-    write_json(path, data)
-    return out
+    """Read, change, write back; a file that is not valid JSON is never overwritten. One at a time in this process (the
+    minute loop, the remote actions and the page all trust and switch YOLO)."""
+    with LOCK:
+        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        backup(path)
+        out = change(data)
+        write_json(path, data)
+        return out
 
 
 def api_key() -> str:
@@ -572,10 +586,7 @@ def apply_values(agent: str, values: list) -> list:
         for (_, (table, key), _), v in zip(spec, values):
             text, prev = toml_set(text, table, key, None if v == MISSING else v)
             old.append(MISSING if prev is None else prev)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(path.name + ".companion-tmp")
-        tmp.write_text(text, encoding="utf-8", newline=newline_of(path))
-        os.replace(tmp, path)
+        write_text(path, text)
         return old
     return edit_json(path, lambda d: [json_set(d, where, v) for (_, where, _), v in zip(spec, values)])
 
@@ -1298,6 +1309,20 @@ def main(argv: list):
         DENIED.add("/Users/x/Documents/app")
         assert "Full Disk Access" in why_not({**task, "project": "q"}, {}, on, {"codex": 10.0}, ""), "a folder macOS keeps from it is named"
         DENIED.clear()
+        # Two writers at once (threads here, a hook process logging): each through its own temp file, never a torn file.
+        with tempfile.TemporaryDirectory() as tmp:
+            f, errs = Path(tmp) / "x.json", []
+
+            def writer(n):
+                for _ in range(100):
+                    try:
+                        write_json(f, {"n": n, "pad": "x" * 200_000})
+                    except Exception as e:
+                        errs.append(e)
+            ts = [threading.Thread(target=writer, args=(n,)) for n in range(3)]
+            [t.start() for t in ts]
+            [t.join() for t in ts]
+            assert not errs and json.loads(f.read_text(encoding="utf-8"))["n"] in (0, 1, 2) and len(list(Path(tmp).iterdir())) == 1, errs[:1]
         # A merged branch counts for every session that worked in its worktree (a hand-over shares it).
         gone = []  # the branch is deleted with the first record's worktree: merged() of the other finds no branch
         g["workers"] = type("W", (), {"merged": staticmethod(lambda w: not gone), "remove": staticmethod(lambda w: gone.append(1) or "removed"), "PROCS": {}})
@@ -1307,7 +1332,6 @@ def main(argv: list):
         assert [w["status"] for w in pair.values()] == ["merged", "merged"], pair
         g["workers"] = workers_mod
         # A Claude worker's reading counts until its window resets, also when its log is older than 15 minutes.
-        import tempfile
         with tempfile.TemporaryDirectory() as tmp:
             f, now = Path(tmp) / "w.log", time.time()
             f.write_text(json.dumps({"type": "rate_limit_event", "rate_limit_info": {"unifiedWindows": {
@@ -1334,7 +1358,6 @@ def main(argv: list):
         first = {"id": "T-1", "worktree": "/wt", "base": "X", "started": 1, "status": "finished", "branch": "task/T-1", "cwd": "/wt"}
         rec, _ = start_worker({**task, "id": "T-1-cont"}, "", 1000, {"p/T-1": first})
         assert rec["base"] == "X", rec
-        import tempfile
         with tempfile.TemporaryDirectory() as tmp:
             g["STATE"] = Path(tmp)
             save("workers.json", {"p/T-1": first, "p/T-1-cont": {**rec, "started": 2, "status": "finished"}})
