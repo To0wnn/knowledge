@@ -3,7 +3,7 @@
 set -eu
 # The server tests use a fixed port: two checks at once (parallel agents, a commit hook) break each other.
 if [ -z "${KNOWLEDGE_CHECK_LOCKED:-}" ] && command -v flock >/dev/null; then
-  KNOWLEDGE_CHECK_LOCKED=1 exec flock /tmp/knowledge-check.lock "$0" "$@"
+  KNOWLEDGE_CHECK_LOCKED=1 exec flock /tmp/knowledge-check.lock sh "$0" "$@"  # sh: "sh check.sh" has no exec bit
 fi
 cd "$(dirname "$0")/server"
 PATH="$HOME/.local/bin:$PATH"  # uv lives there; shells started at boot may lack it
