@@ -304,7 +304,7 @@ def folder_links() -> dict:
                 linked.setdefault(str(root), name)
             elif not root and p.is_dir() and under_home(p):
                 top = subprocess.run(["git", "-C", str(p), "rev-parse", "--show-toplevel"], capture_output=True, text=True,
-                                     stdin=subprocess.DEVNULL, timeout=10) if shutil.which("git") else None
+                                     encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL, timeout=10)  # git prints UTF-8, never the ANSI code page if shutil.which("git") else None
                 # the checkout's root, as knowledge-init links it; git prints it with / on Windows too
                 cands.append(str(Path(top.stdout.strip())) if top and top.returncode == 0 and top.stdout.strip() else str(p))
         except (OSError, subprocess.SubprocessError):
