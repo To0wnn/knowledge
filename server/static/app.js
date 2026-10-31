@@ -1028,7 +1028,8 @@ async function loadTasks(render = true) {
 // Machines: every pc of the viewer's tokens (an admin sees all) with its agents, workers and recent sessions. The
 // owner steers a pc with fixed actions only; the server queues them and the pc's companion fetches them.
 const AGENT_NAME = { claude: "Claude Code", codex: "Codex", agy: "agy" };
-const YOLO_WARNING = "YOLO lets this agent run every command and edit every file on that pc without asking, also for tasks other people wrote. Risky actions are flagged, never stopped.";
+const YOLO_WARNING = "YOLO changes this agent's own global setting on that pc (Claude Code: bypassPermissions, Codex: approval never + no sandbox, agy: always-proceed), so EVERY session of it there runs every command and edits every file without asking: the owner's own sessions too, not only workers and chats, also for tasks other people wrote. Risky actions are flagged, never stopped. Turning it off puts the previous settings back.";
+const WORKERS_WARNING = "Allow workers on this pc? For every ready task in a linked project it may then start a fresh agent session on its own, in a git worktree of its own, without anyone watching (at most the max per agent). Only for a pc that may work by itself: not a work laptop or a shared family pc.";
 const mins = (sec) => `${Math.max(1, Math.round((Date.now() / 1000 - sec) / 60))} min`;
 async function machineAction(m, action, args = {}) {
   try {
@@ -1058,7 +1059,7 @@ async function loadMachines() {
     if (c) {
       const line = el("p", "machine-meta", `Workers ${c.workersAllowed ? "allowed" : "off"}${c.game ? ` · ${c.game}` : ""}`);
       if (m.own) line.append(" ", machineButton(c.workersAllowed ? "Turn off" : "Allow workers", "Whether this pc may run workers at all",
-        () => machineAction(m, "workers_allowed", { on: !c.workersAllowed })));
+        () => (c.workersAllowed || confirm(`${WORKERS_WARNING}\n\n${m.label}`)) && machineAction(m, "workers_allowed", { on: !c.workersAllowed })));
       card.append(line);
     }
     for (const [a, ag] of Object.entries(m.agents)) {
@@ -1094,7 +1095,7 @@ async function loadMachines() {
       if (m.own && c && !m.old) {
         const ctl = el("div", "machine-controls");
         if (ag.trusted === false) ctl.append(machineButton("Trust hooks", "Trust the knowledge hooks the agent's own way", () => machineAction(m, "trust_hooks", { agent: a })));
-        ctl.append(machineButton(ag.yolo ? "YOLO off" : "YOLO on", "Run without asking on this pc", () => {
+        ctl.append(machineButton(ag.yolo ? "YOLO: ON · Turn off" : "YOLO: off · Turn on", "Run without asking: the agent's global setting on that pc", () => {
           if (ag.yolo) return machineAction(m, "yolo", { agent: a, on: false });
           if (prompt(`${YOLO_WARNING}\n\nType YOLO to turn it on for ${AGENT_NAME[a] || a} on ${m.label}.`) === "YOLO") machineAction(m, "yolo", { agent: a, on: true, confirm: "YOLO" });
         }));

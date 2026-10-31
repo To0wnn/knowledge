@@ -28,11 +28,17 @@ async function api(path, body) {
 const clock = (at) => { const d = new Date(at * 1000); return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
 const ago = (at) => { const m = Math.round((Date.now() / 1000 - at) / 60); return m < 1 ? "just now" : m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`; };
 
-async function load() {
+// The forms the minute refresh leaves alone while someone fills them in (focus inside, or changed and not saved yet).
+const busy = (id) => $(id).contains(document.activeElement) || $(id).dataset.dirty === "1";
+
+async function load(force = false) {
   try { const r = await api("/local/api/state"); S = { ...EMPTY, ...r, status: { ...EMPTY.status, ...r.status } }; }
   catch (e) { toast(`Could not read the companion: ${e.message}`); return; }
   if (S.locked) toast("Open the companion from its shortcut to see tasks and change settings");
-  renderChips(); renderAgents(); renderTasks(); renderFolders(); renderActivity(); renderSettings();
+  renderChips(); renderAgents(); renderTasks(); renderActivity();
+  for (const [id, render] of [["folders", renderFolders], ["settings", renderSettings]]) {
+    if (force || !busy(id)) { render(); delete $(id).dataset.dirty; }
+  }
 }
 
 function renderFolders() {
@@ -134,10 +140,10 @@ function agentCard(a) {
       : h("p", { class: "cmp-sessions-empty" }, "No workers. A worker is a fresh session per task, when this pc allows workers (Settings)."),
     h("label", { class: "cmp-yolo", for: yoloId },
       h("input", { type: "checkbox", id: yoloId, checked: a.yolo, "aria-describedby": `${yoloId}-warn`, onchange: (e) => setYolo(a, e.target.checked) }),
-      h("span", {}, "YOLO: run without asking (workers too)")),
+      h("span", {}, `YOLO: every ${a.name} session on this pc runs without asking`)),
     h("p", { class: "cmp-yolo-warn", id: `${yoloId}-warn` }, a.yoloPending != null
       ? `Turning YOLO ${a.yoloPending ? "on" : "off"} applies when ${a.name} is closed.`
-      : "The agent may then edit files and run commands with no approval. Unchecking restores your previous settings."),
+      : `It changes ${a.name}'s own global setting, so your own sessions too, not only workers and chats. Unchecking restores your previous settings.`),
     a.lastError
       ? h("p", { class: "cmp-error" }, icon("alert"), h("span", {}, h("strong", {}, `Last hook error ${clock(a.lastError.at)}: `), a.lastError.text))
       : h("p", { class: "cmp-error cmp-error--none" }, "No hook errors."));
@@ -194,10 +200,25 @@ function renderSettings() {
 async function act(path, body, done) {
   try { const r = await api(path, body); if (done) toast(typeof done === "function" ? done(r) : done); }
   catch (e) { toast(e.message); }
-  await load();
+  await load(true);
 }
 const trustHooks = (a) => act("/local/api/trust", { agent: a.id }, (r) => `Trusted the hooks of ${a.name}: ${r.trusted[a.id]}`);
-const setYolo = (a, on) => act("/local/api/yolo", { agent: a.id, on }, (r) => r.yolo === "pending" ? `${a.name}: applies when it is closed` : `YOLO ${r.yolo} for ${a.name}`);
+// What YOLO writes per agent: their global settings, not a per-session flag (companion.py yolo_settings).
+const YOLO_WHERE = { claude: "~/.claude/settings.json: permissions bypassPermissions", codex: "~/.codex/config.toml: approval_policy never, sandbox danger-full-access",
+  agy: "agy's settings.json: always-proceed, no terminal sandbox" };
+const yoloWarning = (a) => `This changes ${a.name}'s own global setting on this pc (${YOLO_WHERE[a.id] || "its settings file"}). `
+  + `Every ${a.name} session here then runs every command and edits every file without asking: your own sessions too, not only workers and chats, `
+  + "also for tasks other people wrote. Risky actions are flagged, never stopped. Turning it off puts your previous settings back.";
+function setYolo(a, on) {
+  const send = (body) => act("/local/api/yolo", body, (r) => r.yolo === "pending" ? `${a.name}: applies when it is closed` : `YOLO ${r.yolo} for ${a.name}`);
+  if (!on) return send({ agent: a.id, on: false });
+  const d = $("yolo-dialog"), word = $("yolo-word");
+  $("yolo-title").textContent = `Turn YOLO on for ${a.name}?`;
+  $("yolo-text").textContent = yoloWarning(a);
+  word.value = ""; $("yolo-ok").disabled = true; d.returnValue = "";
+  d.onclose = () => (d.returnValue === "ok" && word.value === "YOLO" ? send({ agent: a.id, on: true, confirm: "YOLO" }) : load(true));
+  d.showModal(); word.focus();
+}
 
 const TOOLS = [
   { icon: "shield", label: "Trust all hooks", hint: "For every agent on this pc", run: () => act("/local/api/trust", {}, "Trusted the knowledge hooks") },
@@ -274,9 +295,12 @@ function setupNav() {
 
 document.addEventListener("DOMContentLoaded", () => {
   setupMenu(); setupTheme(); setupNav();
-  load();
+  load(true);
   setInterval(load, 30000);
-  $("refresh-btn").addEventListener("click", () => load().then(() => toast("Refreshed")));
+  $("refresh-btn").addEventListener("click", () => load(true).then(() => toast("Refreshed")));
+  for (const id of ["folders", "settings"]) $(id).addEventListener("input", () => { $(id).dataset.dirty = "1"; });
+  $("yolo-word").addEventListener("input", (e) => { $("yolo-ok").disabled = e.target.value !== "YOLO"; });
+  $("yolo-cancel").addEventListener("click", () => $("yolo-dialog").close("cancel"));
   $("folders").addEventListener("submit", (e) => {
     e.preventDefault();
     act("/local/api/link", { path: e.target.elements.path.value, project: e.target.elements.project.value }, (r) => r.result);

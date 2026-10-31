@@ -289,3 +289,9 @@ body.cmp-page .cmp-nav { margin-bottom: 22px; }
 .cmp-main { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 40px 28px; }
 .cmp-main .cmp-sec--agents, .cmp-main .cmp-sec--tasks { grid-column: 1 / -1; }
 @media (max-width: 860px) { .cmp-main { grid-template-columns: minmax(0, 1fr); gap: 36px; } }
+
+/* the typed YOLO confirmation */
+.cmp .cmp-dialog { max-width: min(460px, calc(100vw - 32px)); padding: 20px; border: 1px solid var(--line-hi); border-radius: var(--r-lg); background: var(--panel-solid); color: var(--ink); }
+.cmp .cmp-dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
+.cmp .cmp-dialog .cmp-settings { padding: 0; border: 0; background: none; }
+.cmp .cmp-dialog h2 { margin: 0 0 4px; font-size: 18px; }

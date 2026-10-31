@@ -1320,6 +1320,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send(403, {"error": "YOLO can only be changed on the companion page itself"}, origin=o)
                 if not agent:
                     raise ValueError("send {agent, on}")
+                if body.get("on") and body.get("confirm") != "YOLO":  # as the web UI's remote action: typed, never one click
+                    raise ValueError("YOLO on needs the word YOLO typed in the confirm dialog")
                 return self.send(200, {"yolo": set_yolo(agent, bool(body.get("on")))}, origin=o)
             if path == "/local/api/settings":
                 if o != SELF:  # whether this pc runs workers is for this pc's own page (or its owner, remotely)
