@@ -279,7 +279,8 @@ def user_env(home: Path, **extra) -> dict:
     env = {k: v for k, v in os.environ.items() if not k.startswith(("KNOWLEDGE_", "CLAUDE_"))}
     # Codex on Windows finds its folder through Windows itself, not USERPROFILE: CODEX_HOME is its own override.
     env.update(HOME=str(home), USERPROFILE=str(home), CODEX_HOME=str(home / ".codex"), PYTHONUTF8="0",
-               XDG_CACHE_HOME=str(home / ".cache"), **extra)  # PYTHONUTF8 off: like a fresh Windows
+               XDG_CACHE_HOME=str(home / ".cache"),
+               KNOWLEDGE_COMPANION_DRY_RUN="1", **extra)  # never this machine's own systemd, launchd or Task Scheduler  # PYTHONUTF8 off: like a fresh Windows
     if WIN:
         env.pop("PYTHONIOENCODING", None)
     return env
@@ -623,6 +624,321 @@ def hook_errors(tmp: Path, project: Path):
     check(code == 0 and state.get("sent", 0) == 0 and state.get("at"), "server away: the turn goes on, the error stays unsent", json.dumps(state) + err[-300:])
 
 
+FAKE_AGENT = """import json, os, sys
+calls, name, args = os.environ["KN_FAKE_CALLS"], sys.argv[1], sys.argv[2:]
+rec = lambda x: open(calls, "a", encoding="utf-8").write(json.dumps(x) + "\\n")
+if name == "codex" and args[:1] == ["app-server"]:  # codex-rs app-server, as far as the companion uses it
+    for line in sys.stdin:
+        m = json.loads(line)
+        rec({"rpc": m})
+        if "id" not in m:
+            continue
+        res = {}
+        if m["method"] == "hooks/list" and os.path.exists(calls + ".fail"):  # a Codex without hooks/list
+            print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "error": {"code": -32601, "message": "unknown method"}}), flush=True)
+            continue
+        if m["method"] == "hooks/list":
+            res = {"data": [{"cwd": m["params"]["cwds"][0], "warnings": [], "errors": [], "hooks": [
+                {"key": "knowledge@knowledge:.codex-plugin/hooks.json:session_start:0:0", "pluginId": "knowledge@knowledge",
+                 "currentHash": "sha256:aa", "trustStatus": "untrusted", "handlerType": "command", "command": "x"},
+                {"key": "knowledge@knowledge:.codex-plugin/hooks.json:stop:0:0", "pluginId": "knowledge@knowledge",
+                 "currentHash": "sha256:bb", "trustStatus": "trusted", "handlerType": "command", "command": "x"},
+                {"key": "/repo/.codex/hooks.json:stop:0:0", "pluginId": None, "currentHash": "sha256:cc",
+                 "trustStatus": "untrusted", "handlerType": "command", "command": "./evil.sh"}]}]}
+        print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": res}), flush=True)
+else:
+    rec({"argv": [name] + args, "cwd": os.getcwd()})
+    if args[:1] == ["queue"] and os.path.exists(calls + ".fail"):  # the thread is gone
+        sys.exit("no such thread")
+"""
+
+
+def companion_e2e(tok: str, tmp: Path, project: Path):
+    """The local companion (plugin/hooks/companion.py, started as `agent_hooks.py serve`) in a home of its own with fake
+    agents: its local API answers only this pc's pages, it trusts the knowledge hooks the agents' own way (Codex through
+    app-server hooks/list + config/batchWrite, again after a plugin update), YOLO writes each agent's native settings and
+    unchecking restores them byte for byte (agy only while agy is closed), a ready task wakes the open Codex session
+    once and starts an agy session where allowed, and hook failures the agents log themselves reach the Tasks tab."""
+    hooks = CLIENT / "plugin" / "hooks"
+    home = tmp / "Companion Usér"
+    bin_dir, calls = home / "bin", home / "calls.jsonl"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "fakeagent.py").write_text(FAKE_AGENT, encoding="utf-8")
+    for name in ("codex", "claude", "agy", "tmux"):
+        if WIN:
+            if name != "tmux":
+                # %~dp0, not the path: a new or no console (agy, a detached codex exec) reads this file in another code page
+                (bin_dir / f"{name}.cmd").write_text(f'@"{sys.executable}" "%~dp0fakeagent.py" {name} %*\r\n', encoding="utf-8")
+        else:
+            (bin_dir / name).write_text(f'#!/bin/sh\nexec "{sys.executable}" "{bin_dir / "fakeagent.py"}" {name} "$@"\n', encoding="utf-8")
+            (bin_dir / name).chmod(0o755)
+    claude_json = home / ".claude.json"
+    claude_json.write_text(json.dumps({"numStartups": 3, "projects": {}}), encoding="utf-8")
+    (home / ".claude").mkdir()
+    claude_settings = {"permissions": {"allow": ["Bash(ls)"]}, "theme": "dark"}
+    (home / ".claude" / "settings.json").write_text(json.dumps(claude_settings), encoding="utf-8")
+    codex_cfg = home / ".codex" / "config.toml"
+    codex_cfg.parent.mkdir()
+    toml = (f'# my codex settings\nmodel = "gpt-5"\napproval_policy = "on-request" # asked\n\n[notice]\nhide_rate_limit_model_nudge = true\n\n'
+            f'[projects.{json.dumps(str(project))}]\ntrust_level = "trusted"\n')
+    codex_cfg.write_bytes(toml.encode())  # LF, as Codex writes it also on Windows
+    agy_dir = home / ".gemini" / "antigravity-cli"
+    (agy_dir / "log").mkdir(parents=True)
+    agy_settings = {"model": "Gemini", "trustedWorkspaces": [str(home)]}
+    (agy_dir / "settings.json").write_text(json.dumps(agy_settings), encoding="utf-8")
+    (agy_dir / "log" / "cli-1.log").write_text("I1031 10:00:00.100000       1 hooks_manager.go:53] loaded 2 named hooks\n"
+                                               "E1031 10:00:01.200000       1 hooks.go:90] post-tool hook failed: exit status 1: agy-boom\n", encoding="utf-8")
+    import sqlite3
+    con = sqlite3.connect(str(home / ".codex" / "logs_2.sqlite"))
+    con.execute("CREATE TABLE logs (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, level TEXT, feedback_log_body TEXT)")
+    con.execute("INSERT INTO logs (ts, level, feedback_log_body) VALUES (?, 'INFO', 'turn started')", (int(time.time()),))
+    con.execute("INSERT INTO logs (ts, level, feedback_log_body) VALUES (?, 'WARN', ?)",
+                (int(time.time()), "after_agent hook failed; continuing turn_id=t1 hook_name=knowledge-stop error=exit code 1: codex-kaput"))
+    con.execute("INSERT INTO logs (ts, level, feedback_log_body) VALUES (?, 'WARN', ?)",  # another hook: stays on this pc
+                (int(time.time()), "pre_tool_use hook failed; hook_name=work-lint error=exit code 1: private-work-text"))
+    con.commit()
+    con.close()
+    fake_agy = fake_codex = None
+    if not WIN:  # a process named like agy, ended later: YOLO for agy waits for it
+        shutil.copy(shutil.which("sleep"), bin_dir / "knfakeagy")
+        fake_agy = subprocess.Popen([str(bin_dir / "knfakeagy"), "300"])
+        shutil.copy(shutil.which("sleep"), bin_dir / "knfakecodex")  # a running Codex: its registered sessions count as open
+        fake_codex = subprocess.Popen([str(bin_dir / "knfakecodex"), "300"])
+    port = PORT + 7
+    self_url = f"http://127.0.0.1:{port}"
+    env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, PATH=str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
+                   KNOWLEDGE_COMPANION_PORT=str(port), KNOWLEDGE_COMPANION_EVERY="3600", KN_FAKE_CALLS=str(calls),
+                   KNOWLEDGE_AGY_PROCESS="knfakeagy" if fake_agy else Path(sys.executable).stem,
+                   KNOWLEDGE_CODEX_PROCESS="knfakecodex" if fake_codex else Path(sys.executable).stem)
+
+    key_file = home / ".knowledge" / "companion" / "api-key"
+
+    def call(method, path, body=None, origin=self_url, host=None, ctype="application/json", key=True):
+        key = key_file.read_text(encoding="utf-8").strip() if key and key_file.exists() else ""
+        headers = {**({"Origin": origin} if origin else {}), **({"Host": host} if host else {}), **({"Content-Type": ctype} if ctype else {}),
+                   **({"X-Companion-Key": key} if key else {})}
+        req = urllib.request.Request(self_url + path, method=method, data=None if body is None else json.dumps(body).encode(), headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return r.status, dict(r.headers), r.read().decode("utf-8")
+        except urllib.error.HTTPError as e:
+            return e.code, dict(e.headers), e.read().decode("utf-8")
+    recorded = lambda: [json.loads(ln) for ln in calls.read_text(encoding="utf-8").splitlines()] if calls.exists() else []
+    log = open(home / "companion.log", "wb")
+    proc = subprocess.Popen([sys.executable, str(hooks / "agent_hooks.py"), "serve"], env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
+    try:
+        up = wait_for(lambda: _quiet(lambda: call("GET", "/local/api/state")[0] == 200 and json.loads(call("GET", "/local/api/state")[2])["status"].get("synced")), 30)
+        check(up, "companion: serve answers on 127.0.0.1 and its first round reached the server", (home / "companion.log").read_text(errors="replace")[-600:])
+        if not up:
+            return
+        # Only this pc's pages: a foreign origin, a rebound host name, a POST without Origin or not as JSON get nothing.
+        check(call("GET", "/local/api/hello", origin="https://evil.example")[0] == 403, "companion: a foreign origin is refused")
+        check(call("GET", "/local/api/hello", origin=None, host="evil.example:%d" % port)[0] == 403, "companion: a foreign Host (DNS rebinding) is refused")
+        st, hdr, body = call("GET", "/local/api/hello", origin=BASE)
+        check(st == 200 and hdr.get("Access-Control-Allow-Origin") == BASE and "companion" in json.loads(body),
+              "companion: hello answers the knowledge web UI's origin with CORS", f"{st} {hdr} {body}")
+        st, hdr, _ = call("OPTIONS", "/local/api/hello", origin=BASE, ctype=None)
+        check(st == 204 and hdr.get("Access-Control-Allow-Private-Network") == "true" and hdr.get("Access-Control-Allow-Origin") == BASE,
+              "companion: the preflight allows Private Network Access", f"{st} {hdr}")
+        check(call("POST", "/local/api/trust", {}, origin=None)[0] == 403 and call("POST", "/local/api/trust", {}, ctype="text/plain")[0] == 403,
+              "companion: a POST without Origin or not as JSON is refused")
+        check(call("POST", "/local/api/yolo", {"agent": "codex", "on": True}, origin=BASE)[0] == 403 and codex_cfg.read_text(encoding="utf-8") == toml,
+              "companion: YOLO only from the companion's own page, not from the web UI")
+        # Any process here can set Origin: a change needs the key only this user can read (the shortcut carries it).
+        check(call("POST", "/local/api/yolo", {"agent": "codex", "on": True}, key=False)[0] == 403
+              and call("POST", "/local/api/settings", {"startWhenNone": {"codex": True}}, key=False)[0] == 403
+              and codex_cfg.read_text(encoding="utf-8") == toml and not (home / ".knowledge" / "companion" / "settings.json").exists(),
+              "companion: YOLO and settings without the local key are refused, also with the page's own Origin")
+        st, _, body = call("GET", "/local/api/state", origin=None, key=False)
+        check(st == 200 and json.loads(body).get("locked") and "tasks" not in json.loads(body) and "activity" not in json.loads(body)
+              and json.loads(body)["agents"], "companion: without the key the state shows the agents only (the web UI's tab)", body[:300])
+        if not WIN:
+            check(key_file.stat().st_mode & 0o077 == 0, "companion: the local key file is private (0600)")
+        st, hdr, body = call("GET", "/", origin=None)
+        check(st == 200 and "Knowledge companion" in body and "default-src 'self'" in hdr.get("Content-Security-Policy", ""),
+              "companion: serves its page with a CSP", f"{st} {hdr}")
+        # Hook trust, each agent its own native way; never the home folder, never a foreign hook.
+        st, _, body = call("POST", "/local/api/trust", {})
+        key = project.as_posix() if WIN else str(project)
+        cj = json.loads(claude_json.read_text(encoding="utf-8"))
+        check(st == 200 and cj["projects"].get(key, {}).get("hasTrustDialogAccepted") is True and cj["numStartups"] == 3
+              and str(home) not in cj["projects"], "companion: Claude trusts the knowledge folder in ~/.claude.json, the rest kept", body + json.dumps(cj)[:300])
+        ag = json.loads((agy_dir / "settings.json").read_text(encoding="utf-8"))
+        check(ag["trustedWorkspaces"] == [str(home), str(project)] and ag["model"] == "Gemini", "companion: agy trusts the knowledge folder (trustedWorkspaces)", json.dumps(ag))
+        writes = [c["rpc"] for c in recorded() if c.get("rpc", {}).get("method") == "config/batchWrite"]
+        methods = [c["rpc"].get("method") for c in recorded() if "rpc" in c]
+        check(methods[:3] == ["initialize", "initialized", "hooks/list"] and len(writes) == 1
+              and writes[0]["params"]["edits"] == [{"keyPath": "hooks.state", "mergeStrategy": "upsert",
+                                                     "value": {"knowledge@knowledge:.codex-plugin/hooks.json:session_start:0:0": {"trusted_hash": "sha256:aa"}}}]
+              and writes[0]["params"]["reloadUserConfig"] is True,
+              "companion: Codex trusts only the untrusted knowledge hooks via app-server, as codex-rs hooks_rpc.rs does", json.dumps(recorded())[:900])
+        backups = list((home / "backups" / "knowledge-companion").glob("*/*"))
+        check({".claude.json", ".gemini__antigravity-cli__settings.json"} <= {b.name.replace("\\", "__") for b in backups},
+              "companion: a backup of each changed file first", str(backups))
+        state = json.loads(call("GET", "/local/api/state")[2])
+        check(all(a["hooksTrusted"] for a in state["agents"]), "companion: the page shows every agent trusted", json.dumps(state["agents"])[:600])
+        # YOLO: the native settings, and unchecking puts back exactly what was there.
+        call("POST", "/local/api/yolo", {"agent": "codex", "on": True})
+        text = codex_cfg.read_text(encoding="utf-8")
+        try:
+            import tomllib
+            parsed = tomllib.loads(text)
+        except ImportError:
+            parsed = {"approval_policy": "never", "sandbox_mode": "danger-full-access", "notice": {"hide_full_access_warning": True}, "model": "gpt-5"}
+        check(parsed["approval_policy"] == "never" and parsed["sandbox_mode"] == "danger-full-access" and parsed["notice"]["hide_full_access_warning"] is True
+              and parsed["model"] == "gpt-5" and text.startswith("# my codex settings\n"), "companion: YOLO on for Codex edits config.toml minimally", text)
+        call("POST", "/local/api/yolo", {"agent": "codex", "on": False})
+        check(codex_cfg.read_bytes() == toml.encode(), "companion: YOLO off restores config.toml byte for byte (LF stays LF)", repr(codex_cfg.read_bytes()[:300]))
+        call("POST", "/local/api/yolo", {"agent": "claude", "on": True})
+        cs = json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8"))
+        check(cs["permissions"] == {"allow": ["Bash(ls)"], "defaultMode": "bypassPermissions"} and cs["skipDangerousModePermissionPrompt"] is True,
+              "companion: YOLO on for Claude Code (bypassPermissions)", json.dumps(cs))
+        code, out, err = run([sys.executable, str(hooks / "companion.py"), "yolo-off"], "", env)
+        check(code == 0 and json.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8")) == claude_settings
+              and not json.loads(call("GET", "/local/api/state")[2])["agents"][0]["yolo"],
+              "companion: yolo-off (uninstall) restores Claude's settings", out + err)
+        st, _, body = call("POST", "/local/api/yolo", {"agent": "agy", "on": True})
+        check(json.loads(body).get("yolo") == "pending" and json.loads((agy_dir / "settings.json").read_text(encoding="utf-8")) == ag
+              and next(a for a in json.loads(call("GET", "/local/api/state")[2])["agents"] if a["id"] == "agy")["yoloPending"] is True,
+              "companion: YOLO for agy waits while agy runs, and the page says so", body)
+        if fake_agy:
+            fake_agy.kill()
+            fake_agy.wait()
+            call("POST", "/local/api/tick", {})
+            on = json.loads((agy_dir / "settings.json").read_text(encoding="utf-8"))
+            check(on.get("toolPermission") == "always-proceed" and on.get("agentMode") == "accept-edits" and on.get("enableTerminalSandbox") is False,
+                  "companion: the queued YOLO for agy applies once agy is closed", json.dumps(on))
+            call("POST", "/local/api/yolo", {"agent": "agy", "on": False})
+            check(json.loads((agy_dir / "settings.json").read_text(encoding="utf-8")) == ag, "companion: YOLO off restores agy's settings")
+        else:
+            print("skip agy YOLO after closing agy (no stand-in process on Windows)")
+        # Tasks: the open Codex session is woken once; agy has none and may start one; Claude may not.
+        run([sys.executable, str(hooks / "agent_hooks.py"), "tasks", "codex"], json.dumps({"session_id": "cmp-cx", "cwd": str(project)}), env, cwd=str(project))
+        tasks = "".join(f"- open tot 1 jan 2099 [{o}, CMP-{o.upper()}] from Claude, start now: companion test for {o}\n" for o in ("Codex", "Gemini", "Claude"))
+        http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_write", "arguments":
+             {"path": "garden-memory/project_companion.md", "content": "---\nname: c\ndescription: d\nmetadata:\n  type: project\n---\n"
+              f"## Stand\n{tasks}\n## Keuzes\n"}}}, {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})
+        call("POST", "/local/api/settings", {"startWhenNone": {"agy": True}})
+        st, _, body = call("POST", "/local/api/tick", {})
+        out = json.loads(body) if st == 200 else {}
+        queued = [c["argv"] for c in recorded() if c.get("argv", [""])[:2] == ["codex", "queue"]]
+        check(len(queued) == 1 and queued[0][2:4] == ["--thread", "cmp-cx"] and "CMP-CODEX" in queued[0][-1] and "CMP-GEMINI" not in queued[0][-1],
+              "companion: a ready Codex task wakes the open Codex session through codex queue", body[:400] + str(queued)[:400])
+        started = lambda: [c for c in recorded() if c.get("argv", [""])[0] == ("agy" if WIN else "tmux")]
+        wait_for(lambda: started(), 15)
+        st_agy = started()
+        argv = st_agy[0]["argv"] if st_agy else []
+        ready = json.loads(http("GET", "/tasks/ready", headers={"Authorization": f"Bearer {tok}"})[1])["tasks"]
+        agy_ids = [t["id"] for t in ready if t["agent"] == "agy" and t["project"] == "garden"]
+        check(len(st_agy) == 1 and "-i" in argv and "CMP-GEMINI" in agy_ids and all(i in argv[-1] for i in agy_ids)
+              and (WIN and st_agy[0]["cwd"] == str(project) or not WIN and argv[1:3] == ["new-session", "-d"] and str(project) in argv),
+              "companion: no agy session, start allowed: one new agy session in the project folder gets its ready tasks",
+              json.dumps(st_agy)[:600] + " " + body[:600])
+        check(out.get("waiting", {}).get("garden/CMP-CLAUDE", "").startswith("No open session; starting one is off"),
+              "companion: no Claude session and starting is off: the task waits and says why", body[:600])
+        wakes = json.loads((tmp / "task_wakes.json").read_text(encoding="utf-8")).get("garden", {})
+        check(wakes.get("CMP-CODEX", {}).get("session") == "cmp-cx" and wakes.get("CMP-CODEX", {}).get("agent") == "codex" and "CMP-GEMINI" in wakes,
+              "companion: each wake is reported with POST /tasks/woken", json.dumps(wakes)[:400])
+        # A Claude session whose waiting hook is gone (closed) cannot be woken: the task keeps waiting.
+        agents_dir = home / ".knowledge" / "agents"
+        short = lambda sid: hashlib.sha256(sid.encode()).hexdigest()[:16]
+        (agents_dir / f"claude-{short('cl-1')}.json").write_text(json.dumps({"agent": "claude", "session": "cl-1", "cwd": str(project),
+                                                                           "at": time.time()}), encoding="utf-8")
+        gone = subprocess.Popen([sys.executable, "-c", "pass"])
+        gone.wait()
+        (agents_dir / f"claude-{short('cl-1')}.waiter").write_text(f"{gone.pid}:1", encoding="utf-8")
+        n = len(recorded())
+        st, _, body = call("POST", "/local/api/tick", {})
+        check(len([c for c in recorded()[n:] if "argv" in c]) == 0, "companion: the same task is not woken again within 30 minutes", json.dumps(recorded()[n:])[:400])
+        check(json.loads(body)["waiting"].get("garden/CMP-CLAUDE", "").startswith("No open session")
+              and not (agents_dir / f"claude-{short('cl-1')}.poke").exists(),
+              "companion: a Claude session without a running waiting hook is not counted as open", body[:400])
+        state = json.loads(call("GET", "/local/api/state")[2])
+        check(any(t["id"] == "CMP-CLAUDE" for t in state["tasks"]["waiting"]) and any(t["id"] == "CMP-CODEX" for t in state["tasks"]["ready"])
+              and state["agents"][1]["sessions"], "companion: the page lists ready and waiting tasks and the open session", json.dumps(state["tasks"])[:600])
+        (agents_dir / f"claude-{short('cl-1')}.waiter").write_text(f"{os.getpid()}:1", encoding="utf-8")
+        call("POST", "/local/api/tick", {})
+        check((agents_dir / f"claude-{short('cl-1')}.poke").exists(), "companion: a Claude session whose hook waits is poked")
+        # A session started for a task is not started again when the task stays unclaimed; it shows as stalled.
+        stf = home / ".knowledge" / "companion" / "state.json"
+        sj = json.loads(stf.read_text(encoding="utf-8"))
+        sj["woken"]["garden/CMP-GEMINI"].update(at=time.time() - 1900, since=time.time() - 1900)
+        stf.write_text(json.dumps(sj), encoding="utf-8")
+        n = len(recorded())
+        st, _, body = call("POST", "/local/api/tick", {})
+        state = json.loads(call("GET", "/local/api/state")[2])
+        check(not [c for c in recorded()[n:] if c.get("argv", [""])[0] in ("agy", "tmux")]
+              and "started for it already" in json.loads(body)["waiting"].get("garden/CMP-GEMINI", "")
+              and any(t["id"] == "CMP-GEMINI" for t in state["tasks"]["stalled"]),
+              "companion: no second session for an unclaimed task after 30 minutes; it shows as stalled", body[:400] + json.dumps(state["tasks"])[:400])
+        # A Codex session that does not take the message (thread gone): reported as failed, not as woken.
+        Path(str(calls) + ".fail").write_text("", encoding="utf-8")
+        http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_edit", "arguments":
+             {"path": "garden-memory/project_companion.md", "old_string": "## Keuzes",
+              "new_string": "- open tot 1 jan 2099 [Codex, CMP-CX2] from Claude, start now: second codex task\n## Keuzes"}}},
+             {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})
+        st, _, body = call("POST", "/local/api/tick", {})
+        state = json.loads(call("GET", "/local/api/state")[2])
+        check(json.loads(body)["waiting"].get("garden/CMP-CX2", "").startswith("Wake failed") and "CMP-CX2" not in json.dumps(json.loads(body)["woken"])
+              and any("could not wake CMP-CX2" in a["text"] for a in state["activity"]),
+              "companion: a refused codex queue is a failed wake, said on the page", body[:400])
+        # The trust command: an agent that fails (a Codex without hooks/list) does not keep the next one untrusted.
+        ag_now = json.loads((agy_dir / "settings.json").read_text(encoding="utf-8"))
+        (agy_dir / "settings.json").write_text(json.dumps({**ag_now, "trustedWorkspaces": [str(home)]}), encoding="utf-8")
+        code, out, err = run([sys.executable, str(hooks / "companion.py"), "trust"], "", env, timeout=120)
+        check(code != 0 and "codex" in err and str(project) in json.loads((agy_dir / "settings.json").read_text(encoding="utf-8"))["trustedWorkspaces"],
+              "companion: trust goes on with agy after Codex failed, and says so", out + err)
+        Path(str(calls) + ".fail").unlink()
+        # No Codex running: its registered session is closed (codex queue would only wait there), so a new one starts.
+        http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_edit", "arguments":
+             {"path": "garden-memory/project_companion.md", "old_string": "## Keuzes",
+              "new_string": "- open tot 1 jan 2099 [Codex, CMP-CX3] from Claude, start now: third codex task\n## Keuzes"}}},
+             {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})
+        call("POST", "/local/api/settings", {"startWhenNone": {"agy": True, "codex": True}})
+        n = len(recorded())
+        code, out, err = run([sys.executable, str(hooks / "companion.py"), "tick"], "", {**env, "KNOWLEDGE_CODEX_PROCESS": "knnocodex"}, timeout=120)
+        wait_for(lambda: any(c.get("argv", [""])[:2] == ["codex", "exec"] for c in recorded()[n:]), 15)
+        execs = [c["argv"] for c in recorded()[n:] if c.get("argv", [""])[:2] == ["codex", "exec"]]
+        queued = [c for c in recorded()[n:] if c.get("argv", [""])[:2] == ["codex", "queue"]]
+        check(code == 0 and len(execs) == 1 and "CMP-CX3" in execs[0][-1] and str(project) in execs[0] and not queued
+              and "--skip-git-repo-check" in execs[0],
+              "companion: no Codex running: a new codex exec in the project folder, not a queue into a closed session", out[-400:] + err[-400:] + str(execs)[:300])
+        # Hook failures the agents log themselves: reported once, marked as agent-log.
+        admin = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice"}
+        sessions = json.loads(http("GET", "/ui/api/tasks", headers=admin)[1])["sessions"]
+        errs = {s["agent"]: s.get("errors", []) for s in sessions if s["device"] == "friend-pc"}
+        check(any(e["source"] == "agent-log" and e["hook"] == "knowledge-stop" and "codex-kaput" in e["stderr"] for e in errs.get("codex", []))
+              and any(e["source"] == "agent-log" and "agy-boom" in e["stderr"] and e["event"] == "PostToolUse" for e in errs.get("agy", [])),
+              "companion: hook failures from Codex's and agy's own logs reach the Tasks tab as agent-log", json.dumps(errs)[:800])
+        check("private-work-text" not in json.dumps(errs), "companion: another hook's logged failure stays on this pc", json.dumps(errs)[:800])
+        before = json.dumps(errs)
+        call("POST", "/local/api/tick", {})
+        sessions = json.loads(http("GET", "/ui/api/tasks", headers=admin)[1])["sessions"]
+        check(json.dumps({s["agent"]: s.get("errors", []) for s in sessions if s["device"] == "friend-pc"}) == before, "companion: a logged failure is reported once")
+        # A plugin update (a new cache folder) makes the companion trust Codex's hooks again by itself.
+        manifest = home / ".codex" / "plugins" / "cache" / "knowledge" / "knowledge" / "9.9.9" / ".codex-plugin" / "plugin.json"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text('{"name": "knowledge", "version": "9.9.9"}', encoding="utf-8")
+        call("POST", "/local/api/tick", {})
+        writes = [c for c in recorded() if c.get("rpc", {}).get("method") == "config/batchWrite"]
+        codex_state = next(a for a in json.loads(call("GET", "/local/api/state")[2])["agents"] if a["id"] == "codex")
+        check(len(writes) == 2 and codex_state["version"] == "9.9.9" and codex_state["hooksTrusted"],
+              "companion: after a Codex plugin update the hooks are trusted again automatically", json.dumps(codex_state)[:300])
+    finally:
+        proc.kill()
+        if fake_codex:
+            fake_codex.kill()
+        if fake_agy:
+            fake_agy.kill()
+
+
+def _quiet(f):
+    try:
+        return f()
+    except OSError:
+        return False
+
+
 def new_task(agent: Path, env: dict, project: Path, tok: str, home: Path):
     """A task handed to Codex while its session runs reaches the next prompt once; the first prompt only remembers."""
     ask = lambda: run([sys.executable, str(agent), "tasks", "codex", "-"],
@@ -653,7 +969,8 @@ def wake_e2e(tok: str, home: Path, project: Path):
     calls = home / "codex-calls.jsonl"
     (bin_dir / "fakecodex.py").write_text(f"import json, sys\nimport os\nopen({str(calls)!r}, 'a', encoding='utf-8').write(json.dumps(sys.argv[1:] + [os.environ.get('CODEX_HOME', '')]) + '\\n')\n", encoding="utf-8")
     if WIN:
-        (bin_dir / "codex.cmd").write_text(f'@"{sys.executable}" "{bin_dir / "fakecodex.py"}" %*\r\n', encoding="utf-8")
+        # %~dp0, not the path: a console in another code page (an SSH session, a new console) misreads a non-ASCII path
+        (bin_dir / "codex.cmd").write_text(f'@"{sys.executable}" "%~dp0fakecodex.py" %*\r\n', encoding="utf-8")
     else:
         (bin_dir / "codex").write_text(f'#!/bin/sh\nexec "{sys.executable}" "{bin_dir / "fakecodex.py"}" "$@"\n', encoding="utf-8")
         (bin_dir / "codex").chmod(0o755)
@@ -889,6 +1206,12 @@ def codex_plugin(tok: str, home: Path, project: Path):
     problems = [w for e in data for w in e["warnings"] + [x["message"] for x in e["errors"]]]
     check(len(listed) == 8 and not problems, "codex: hooks/list shows the plugin's eight hooks, no warnings",
           f"{len(listed)} hooks, problems {problems}: " + json.dumps(reply)[:800])
+    # The companion trusts them the way Codex's own /hooks screen does, and Codex then reports them trusted.
+    code, out, err = run([sys.executable, str(root / "hooks" / "companion.py"), "trust", "codex"], "", env, timeout=120)
+    reply = app_server(codex, env, "hooks/list", {"cwds": [str(project)]})
+    mine = [h for e in reply.get("result", {}).get("data", []) for h in e["hooks"] if h.get("pluginId") == "knowledge@knowledge"]
+    check(code == 0 and mine and all(h["trustStatus"] == "trusted" for h in mine), "codex: the companion trusts the plugin's hooks through app-server",
+          out + err[-400:] + json.dumps([(h["key"], h["trustStatus"]) for h in mine])[:600])
     # Codex itself starts the plugin's MCP server (on Windows with a python.org PATH: py, no python3) and lists its tools.
     reply = app_server(codex, env, "mcpServerStatus/list", {"detail": "full"}, timeout=90)
     entry = next((e for e in reply.get("result", {}).get("data", []) if "knowledge" in e.get("name", "")), {})
@@ -1115,7 +1438,8 @@ def installer(tok: str, tmp: Path):
     have = [a for a in ("claude", "codex") if shutil.which(a)]
     if have:  # agy is not installed on the CI runners
         code, out, err = run([sys.executable, str(agent), "setup"], "", env, timeout=600)
-        check(code == 0 and "Already set up (" in out and all(f"== {a} ==" in out for a in have) and "== agy ==" not in out,
+        check(code == 0 and "Already set up (" in out and all(f"== {a} ==" in out for a in have) and "== agy ==" not in out
+              and "== companion (" in out and re.search(r'companion\.py"? trust', out),
               f"setup (the one-line installer), once set up: every agent with the plugin is updated ({', '.join(have)}), no questions", (out + err)[-1500:])
         # Set up before the URL was stored (review 27 Oct 2026): the token must not go to the default server.
         url_file, settings_path = home / ".config" / "knowledge" / "url", home / ".claude" / "settings.json"
@@ -1136,6 +1460,84 @@ def installer(tok: str, tmp: Path):
         code, out, err = run([sys.executable, str(agent), "install"], "", env)
         check(code != 0 and "Found" in (out + err) and "name one" in (out + err),
               "install without an agent and without a terminal names what it found and asks to choose", out + err)
+
+
+def companion_setup(tmp: Path):
+    """install-companion: autostart at logon, a menu shortcut to the page and a first hook-trust run. The dry run lists
+    each OS's steps; on this OS it runs for real against fake systemctl/launchctl/schtasks/powershell, a rerun only
+    finds everything unchanged, and uninstall-companion removes it again."""
+    agent = CLIENT / "clients" / "knowledge-agent.py"
+    home = tmp / "Autostart Usér"
+    env = user_env(home, APPDATA=str(home / "AppData" / "Roaming"), XDG_DATA_HOME="", XDG_CONFIG_HOME="")
+    want = {"linux": ["knowledge-companion.service", "Restart=on-failure", "KillMode=process", "Environment=", "systemctl --user enable",
+                      "systemctl --user restart", "knowledge-companion.desktop", "Exec="],
+            "darwin": ["LaunchAgents", "<key>RunAtLoad</key><true/>", "launchctl bootstrap", "Knowledge companion.app", "exec open"],
+            "windows": ["<LogonTrigger>", "<LogonType>InteractiveToken</LogonType>", "pythonw.exe", "schtasks /Create",
+                        "schtasks /Run", "Start Menu"]}
+    for system, parts in want.items():
+        code, out, err = run([sys.executable, str(agent), "install-companion", "--dry-run", "--os", system], "", env)
+        missing = [p for p in parts + ["127.0.0.1:47321"] if p not in out] + ([] if re.search(r'companion\.py"? trust', out) else ["trust"])
+        check(code == 0 and not missing, f"install-companion --dry-run --os {system}: lists autostart, shortcut and trust", f"missing {missing}\n{out[-1500:]}{err}")
+        if system == "windows":
+            task = out.split("schtasks")[0]
+            check(not any(w in task.lower() for w in ("powershell", "-encodedcommand", "hidden")),
+                  "install-companion windows: the logon task starts pythonw directly, no (hidden or encoded) PowerShell", task)
+        check(not home.exists() or not any(home.rglob("*")), f"install-companion --dry-run --os {system}: writes nothing")
+        code, out, err = run([sys.executable, str(agent), "uninstall-companion", "--dry-run", "--os", system], "", env)
+        check(code == 0 and re.search(r'companion\.py"? yolo-off', out), f"uninstall-companion --dry-run --os {system}: YOLO off first", out + err)
+
+    fake, log = tmp / "fake tools", tmp / "fake tools.log"
+    fake.mkdir(exist_ok=True)
+    for tool in ("systemctl", "launchctl", "schtasks", "powershell"):
+        if WIN:
+            (fake / f"{tool}.cmd").write_text(f'@echo {tool} %*>>"%KN_FAKE_LOG%"\r\n', encoding="utf-8")
+        else:
+            (fake / tool).write_text(f'#!/bin/sh\necho "{tool} $*" >> "$KN_FAKE_LOG"\n'
+                                     '[ "$2" = show-environment ] && [ -n "$KN_FAKE_NOBUS" ] && exit 1\nexit 0\n', encoding="utf-8")
+            (fake / tool).chmod(0o755)
+    # only the fakes and Python: the trust step finds no agent CLI in this home, so it only says so
+    real = {k: v for k, v in env.items() if k != "KNOWLEDGE_COMPANION_DRY_RUN"}
+    real.update(PATH=os.pathsep.join([str(fake), str(Path(sys.executable).parent)]), KN_FAKE_LOG=str(log))
+    system = "windows" if WIN else "darwin" if sys.platform == "darwin" else "linux"
+    files = {"linux": [".config/systemd/user/knowledge-companion.service", ".local/share/applications/knowledge-companion.desktop"],
+             "darwin": ["Library/LaunchAgents/io.github.knowledge.companion.plist",
+                        "Applications/Knowledge companion.app/Contents/MacOS/knowledge-companion"],
+             "windows": [".knowledge/companion/autostart.xml"]}[system]
+    if system == "linux":  # SSH without lingering, a container: no user bus, the setup still succeeds
+        code, out, err = run([sys.executable, str(agent), "install-companion"], "", {**real, "KN_FAKE_NOBUS": "1"}, timeout=120)
+        check(code == 0 and "no user session for an autostart here" in out and not (home / files[0]).exists(),
+              "install-companion without a user systemd: skips the autostart, does not fail", out + err)
+    if WIN:  # an OpenSSH session on a workgroup pc says USERDOMAIN=WORKGROUP, which schtasks cannot map to an account
+        real["USERDOMAIN"] = "WORKGROUP"
+    code, out, err = run([sys.executable, str(agent), "install-companion"], "", real, timeout=120)
+    calls = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
+    if WIN:
+        me = subprocess.run(["whoami"], capture_output=True, text=True).stdout.strip().lower()
+        xml = (home / files[0]).read_text(encoding="utf-16")
+        check(f"<userid>{me}</userid>" in xml.lower() and "workgroup" not in xml.lower(),
+              "install-companion on windows: the logon task names this account as Windows does, not %USERDOMAIN%", f"{me}\n{xml[:600]}")
+    if system != "windows":
+        key = (home / ".knowledge" / "companion" / "api-key").read_text(encoding="utf-8").strip()
+        link = home / files[1]
+        check(f"#key={key}" in link.read_text(encoding="utf-8") and link.stat().st_mode & 0o077 == 0 and key not in out,
+              f"install-companion on {system}: the private shortcut opens the page with the local key", out[-600:])
+    expect = {"linux": "systemctl --user enable knowledge-companion.service", "darwin": "launchctl bootstrap gui/",
+              "windows": "schtasks /Create /F /TN"}[system]
+    check(code == 0 and all((home / f).is_file() for f in files) and expect in calls and "runs at logon" in out,
+          f"install-companion on {system}: writes the autostart and shortcut and registers it", out + err + calls)
+    if WIN:
+        check("CreateShortcut" in calls or (home / "AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Knowledge companion.url").is_file(),
+              "install-companion on windows: a Start menu shortcut (Edge/Chrome app window, else a .url)", calls)
+    code, out, err = run([sys.executable, str(agent), "install-companion"], "", real, timeout=120)
+    check(code == 0 and "unchanged" in out and "wrote" not in out and "updated " not in out,
+          f"install-companion on {system}: a rerun only finds its files unchanged", out + err)
+    log.unlink(missing_ok=True)
+    code, out, err = run([sys.executable, str(agent), "uninstall-companion"], "", real, timeout=120)
+    calls = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
+    undo = {"linux": "systemctl --user disable --now", "darwin": "launchctl bootout", "windows": "schtasks /Delete /F /TN"}[system]
+    check(code == 0 and not any((home / f).exists() for f in files) and undo in calls
+          and not (home / "Applications" / "Knowledge companion.app").exists(),
+          f"uninstall-companion on {system}: autostart and shortcut are gone", out + err + calls)
 
 
 def relay_errors(home: Path):
@@ -1332,7 +1734,9 @@ def main():
         plugin_versions(tmp)
         relay_errors(home)
         hook_errors(tmp, project)
+        companion_e2e(tok, tmp, project)
         installer(tok, tmp)
+        companion_setup(tmp)
         checkout_update(tmp)
         claude_stored_token(tmp)
         real_clis(tok, home)

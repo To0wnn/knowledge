@@ -58,6 +58,23 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   `agent_hooks.py register` as a terminal command, the plugin asks it to), Claude Code through an `asyncRewake`
   waiter hook. The woken agent tells the user and waits for consent. The admin page lists per token the sessions
   seen in the last week (agent, session id, project, wakeable), each with a Forget button.
+- **Companion (this pc):** `knowledge-agent.py serve` (or `agent_hooks.py serve`, alias `companion`) runs a small
+  local service on `127.0.0.1:47321` only. Every minute it asks `GET /tasks/ready` and wakes the newest open session of
+  the task's agent and project with the same wake code, or, when allowed per agent in its settings, starts one in the
+  project's folder (Codex `codex exec`; Claude Code and agy in a new console on Windows, in tmux elsewhere); each wake is
+  reported with `POST /tasks/woken`, and a task is not woken twice within 30 minutes; a session is started for a task
+  once, never again while it stays unclaimed (it shows as stalled). A Claude Code session counts as open only while its
+  waiting hook runs. On request it trusts the
+  knowledge hooks the agents' own way (Codex: `codex app-server` `hooks/list` + `config/batchWrite`, again after every
+  plugin update; Claude Code: `hasTrustDialogAccepted` in `~/.claude.json`; agy: `trustedWorkspaces`), only for folders
+  with a `.knowledge-project`. A YOLO switch per agent writes its native "run without asking" settings and unchecking
+  restores the previous values (agy's only while agy is closed). Every changed file is first copied to
+  `~/backups/knowledge-companion/<date>/` (last five days kept). Hook failures Codex and agy log themselves are reported
+  with `POST /status` as `agent-log` (Codex: only failures of the knowledge hooks). Its page is at
+  `http://127.0.0.1:47321/`; the web UI shows a "This pc" tab when the companion answers there. The local API answers
+  only that page and the knowledge web UI's origin; every change except trusting the knowledge hooks, and the tasks
+  and activity, also need the key in `~/.knowledge/companion/api-key` (readable by you only), which the menu entry
+  passes to the page (`#key=`).
 - **Usage limits:** each prompt checks how much of the agent's own usage limit is used and says it once per session
   and limit window at 50, 75 and 90%; from 95% a new subagent is refused (Claude Code `Agent`, Codex `spawn_agent`, agy
   `invoke_subagent`). The numbers are the agent's own: Codex's rollout, agy's language server (after its one-time
@@ -179,6 +196,19 @@ Both need git and Python 3.9 or newer (macOS's own python3 is 3.9). They keep th
 history) and run `clients/knowledge-agent.py setup`. It is the same line every time: the first time it finds Claude
 Code, Codex and agy and asks y/n for each; after that it updates the agents that have the plugin, asks y/n only for an
 agent found without it, and asks for a token only when the server refuses the stored one.
+
+`setup`, `install` and `update` end by setting up the companion (again only updates; `install-companion` alone):
+it starts at logon (Linux: systemd `--user` unit `knowledge-companion.service`; macOS: LaunchAgent
+`io.github.knowledge.companion`; Windows: a per-user Scheduled Task "Knowledge companion" that runs `pythonw.exe`
+directly, no PowerShell), a menu entry "Knowledge companion" opens its page in an app window (Edge or Chrome
+`--app=`, else the default browser), and a first run trusts the knowledge hooks. On Windows the Start menu `.lnk` is
+made with one visible `powershell -NoProfile -Command` line (the shell's COM object). `--dry-run` (or
+`KNOWLEDGE_COMPANION_DRY_RUN=1`) lists the steps, also for another OS with `--os linux|darwin|windows`. Without a
+user session to start it in (no systemd user bus over SSH, a container, WSL; macOS without a GUI login) the autostart
+is skipped and the setup still succeeds; start it by hand with `knowledge-agent.py serve`. On Linux the unit has
+`KillMode=process`, so a restart never ends the tmux sessions and `codex exec` runs the companion started.
+`knowledge-agent.py uninstall-companion` first turns every YOLO switch off (the agents' own settings come back), then
+removes the autostart and the menu entry (its settings in `~/.knowledge/companion` stay).
 
 `install claude` (or `codex`, `agy`) sets up one agent without asking which ones. `install` asks for your server's
 address (or set `KNOWLEDGE_URL`, e.g. `KNOWLEDGE_URL=http://localhost:8766`, for one run); the installer has no default, so a

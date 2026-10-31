@@ -3,6 +3,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/To0wnn/knowledge/main/install.sh | sh
 # The same line every time: the first time it installs; after that it updates, offers agents found without the
 # plugin, and asks for a token only when the server refuses the stored one (clients/knowledge-agent.py setup).
+# It also sets up the local companion: autostart at logon, a menu entry for its page, a first hook-trust run.
 # Gets or updates the scripts in ~/knowledge (git), then runs clients/knowledge-agent.py. Same steps as install.ps1.
 set -eu
 # Everything inside main, called on the last line: a download cut off half-way runs nothing.

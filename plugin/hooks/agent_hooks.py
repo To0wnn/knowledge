@@ -18,6 +18,7 @@ clients/knowledge-agent.py (the setup without a plugin) calls the same functions
   agent_hooks.py register                      run by agy in its terminal: note where its language server listens
   agent_hooks.py header [TOKEN]                MCP header helper: the token as JSON, {} without one
   agent_hooks.py mcp [TOKEN]                   stdio MCP server of the Codex and agy plugins: relays to /mcp
+  agent_hooks.py serve                         the local companion on 127.0.0.1:47321 (alias: companion; companion.py)
 TOKEN: "-" (default) = KNOWLEDGE_TOKEN or the keyring (token_store.py); on the machine that holds the files, a vault name.
 Never fails a session: errors go to stderr. Linux, macOS and Windows; standard library only.
 """
@@ -577,6 +578,9 @@ def main(argv: list):
         register_agy()
     elif cmd == "mcp" and len(rest) <= 1:
         mcp(token(rest[0] if rest else "-"))
+    elif cmd in ("serve", "companion") and not rest:
+        import companion
+        companion.main(["serve"])
     elif cmd == "header" and len(rest) <= 1:
         tok = token(rest[0] if rest else "-")
         print(json.dumps({"Authorization": f"Bearer {tok}"} if tok else {}))
