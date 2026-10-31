@@ -79,6 +79,9 @@ async def desktop(browser, secret: str) -> None:
     await pg.click('[data-tab="changes"]')
     await pg.wait_for_selector("#recent li button", timeout=5000)
     check(await pg.locator("#recent .plus").count() > 0, "Changes shows lines added/removed")
+    await pg.click('[data-tab="tasks"]')
+    await pg.wait_for_selector("#tasks h3, #tasks p", timeout=5000)
+    check(await pg.evaluate("!$('tab-tasks').hidden && $('tab-lint').hidden"), "Tasks tab shows task lines and agent sessions")
     # The map.
     await pg.keyboard.press("Escape")
     await pg.click("#map-btn")

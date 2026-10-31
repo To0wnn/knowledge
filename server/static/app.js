@@ -340,6 +340,7 @@ function switchProject(p, refit = true) {
   if (!current) homeView();
   if ($("q").value.trim()) runSearch();
   loadLint(!$("tab-lint").hidden);
+  loadTasks(!$("tab-tasks").hidden);
   loadRecent();
 }
 
@@ -838,8 +839,9 @@ document.addEventListener("keydown", (e) => {
 function selectTab(name) {
   store.set("kn_tab", name); // kept over a reload, like the map
   for (const b of document.querySelectorAll(".tabs button")) b.setAttribute("aria-selected", String(b.dataset.tab === name));
-  for (const t of ["notes", "changes", "lint"]) $(`tab-${t}`).hidden = t !== name;
+  for (const t of ["notes", "changes", "tasks", "lint"]) $(`tab-${t}`).hidden = t !== name;
   if (name === "lint") loadLint(true);
+  if (name === "tasks") loadTasks(true);
   if (name === "changes") loadRecent(true);
 }
 for (const b of document.querySelectorAll(".tabs button")) b.onclick = () => selectTab(b.dataset.tab);
@@ -913,6 +915,56 @@ async function loadLint(render = true) {
   if (all > here) {
     const b = el("button", "ghost small", `${all - here} in other projects`); b.onclick = () => switchProject(ALL);
     box.append(b);
+  }
+}
+// Tasks: the task lines between agents in this project (all projects on the All map), overdue first, then by due
+// date; results handed back; and which agent sessions can pick work up. "Done" removes the line (history keeps it).
+async function loadTasks(render = true) {
+  const p = project, res = await api("/ui/api/tasks");
+  if (p !== project) return;
+  const here = (x) => allMode() || x.project === project;
+  const tasks = res.tasks.filter(here), open = tasks.filter((t) => !t.done), back = tasks.filter((t) => t.done);
+  $("tasks-count").textContent = open.length || "";
+  $("tasks-count").className = open.some((t) => t.overdue) ? "badge warn" : "badge";
+  if (!render) return;
+  const box = $("tasks"); box.replaceChildren();
+  const row = (t) => {
+    const n = byId.get(t.path), li = hitItem(`${t.id} · ${t.owner}`, t.text, () => openNote(t.path, { find: t.id }));
+    const meta = el("span", "hit-text", [t.due && `due ${t.due}`, t.claimed && "claimed", n ? n.label : t.path.split("/").pop(),
+      allMode() ? t.project : ""].filter(Boolean).join(" · "));
+    if (t.overdue) meta.prepend(el("span", "new", "overdue"), " ");
+    li.className = "task"; li.firstChild.append(meta); li.firstChild.title = t.line;
+    if (me.writable?.includes(t.project)) {
+      const done = el("button", "ghost small", "Done");
+      done.title = "Remove this line from the memo (its history keeps it)";
+      done.onclick = async () => {
+        if (!confirm(`Remove ${t.id} from ${t.path}?`)) return;
+        try { await api("/ui/api/task/done", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: t.path, line: t.line }) }); loadTasks(true); }
+        catch (e) { alert(e.message); }
+      };
+      li.append(done);
+    }
+    return li;
+  };
+  const section = (title, items) => {
+    if (!items.length) return;
+    const ol = el("ol", "hits"); items.forEach((t) => ol.append(row(t)));
+    box.append(el("h3", null, `${title} (${items.length})`), ol);
+  };
+  open.sort((a, b) => (b.overdue - a.overdue) || (a.due || "9").localeCompare(b.due || "9"));
+  section("Open", open);
+  section("Handed back", back);
+  if (!tasks.length) box.append(el("p", "muted", "No open tasks."));
+  const sessions = res.sessions.filter(here);
+  if (sessions.length) {
+    const ol = el("ol", "hits");
+    for (const c of sessions) {
+      const li = el("li", "session");
+      li.append(el("span", "hit-path", `${c.agent} · ${c.device}`),
+        el("span", "hit-text", [c.wake ? "can be woken" : "not wakeable", c.plugin && `plugin ${c.plugin}`, ago(c.at), allMode() ? c.project : ""].filter(Boolean).join(" · ")));
+      ol.append(li);
+    }
+    box.append(el("h3", null, `Agent sessions (${sessions.length})`), ol);
   }
 }
 // Lint checks in plain words, with what to do about them (unknown checks fall back to their name).
@@ -989,6 +1041,7 @@ async function onChanged() {
   await refreshData();
   loadRecent();
   loadLint(!$("tab-lint").hidden);
+  loadTasks(!$("tab-tasks").hidden);
   const note = current;
   if (!note || historyOpen) return;
   let fresh; try { fresh = await api(`/ui/api/note?path=${encodeURIComponent(note.path)}`); } catch { return; }
@@ -1043,10 +1096,10 @@ loadMe().then(loadGraph).catch((e) => {
   throw e;
 }).then(() => {
   connectLive();
-  loadLint(false); loadRecent();
+  loadLint(false); loadTasks(false); loadRecent();
   const id = decode(location.hash.slice(1));
   if (id) openNote(id, { push: false }); else homeView();
   if (store.get("kn_map") === "1") setMap(true); // the map stays open over a reload
   const tab = store.get("kn_tab");
-  if (["changes", "lint"].includes(tab) && !document.querySelector(`.tabs [data-tab="${tab}"]`).hidden) selectTab(tab); // Lint only for admins
+  if (["changes", "tasks", "lint"].includes(tab) && !document.querySelector(`.tabs [data-tab="${tab}"]`).hidden) selectTab(tab); // Lint only for admins
 });

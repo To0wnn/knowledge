@@ -38,6 +38,7 @@
   <nav class="tabs" role="tablist">
     <button role="tab" data-tab="notes" id="tabbtn-notes" aria-controls="tab-notes" aria-selected="true">Notes</button>
     <button role="tab" data-tab="changes" id="tabbtn-changes" aria-controls="tab-changes">Changes <span id="changes-count" class="badge" title="New since your last look"></span></button>
+    <button role="tab" data-tab="tasks" id="tabbtn-tasks" aria-controls="tab-tasks">Tasks <span id="tasks-count" class="badge" title="Open tasks between agents"></span></button>
     <button role="tab" data-tab="lint" id="tabbtn-lint" aria-controls="tab-lint">Lint <span id="lint-count" class="badge"></span></button>
   </nav>
   <section id="tab-notes" class="tab" role="tabpanel" aria-labelledby="tabbtn-notes">
@@ -54,6 +55,10 @@
   </section>
   <section id="tab-changes" class="tab" role="tabpanel" aria-labelledby="tabbtn-changes" hidden>
     <ol id="recent" class="hits"></ol>
+  </section>
+  <section id="tab-tasks" class="tab" role="tabpanel" aria-labelledby="tabbtn-tasks" hidden>
+    <p class="muted">Task lines in the memos and who can pick them up. A task goes to an agent as a line "open until &lt;date&gt; [&lt;owner&gt;, &lt;ID&gt;]: …".</p>
+    <div id="tasks"></div>
   </section>
   <section id="tab-lint" class="tab" role="tabpanel" aria-labelledby="tabbtn-lint" hidden>
     <p class="muted">Facts only: fix what is clearly wrong, ask Claude to judge the rest.</p>

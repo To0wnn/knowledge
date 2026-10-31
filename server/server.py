@@ -3554,6 +3554,66 @@ async def ui_lint(request: Request):
     return JSONResponse(await asyncio.to_thread(lint_all) if device.get().get("admin") else {})  # lint spans every project
 
 
+DONE_LINE = re.compile(r"^\s*-\s*\[([^,\]]+),\s*([^\]]+-done)\]:?\s*(.*)$", re.I)  # a result handed back, no date
+
+
+def task_rows() -> list[dict]:
+    """Every task line and handed-back result in the projects this device sees, for the UI's Tasks tab; the same
+    lines the session start lists, parsed into fields."""
+    rows, today = [], date.today()
+    for name, (_, mem) in PROJECTS.items():
+        if not in_scope(mem + "/"):
+            continue
+        for rel, text in sorted(task_memos(mem).items()):
+            for line in text.splitlines():
+                if (m := kb_lint.OPEN_DUE.search(line)) and (o := TASK_OWNER.match(m.group(2))):
+                    due = kb_lint.latest_date(m.group(1))
+                    rows.append({"project": name, "path": rel, "line": line, "owner": o.group(1).strip(), "id": o.group(2).strip(),
+                                 "due": due.isoformat() if due else "", "overdue": bool(due and due < today), "done": False,
+                                 "claimed": bool(re.search(r"\((?:claimed|bezig)\b", line, re.I)),
+                                 "text": m.group(2)[o.end():].lstrip(": ").strip()})
+                elif d := DONE_LINE.match(line):
+                    rows.append({"project": name, "path": rel, "line": line, "owner": d.group(1).strip(), "id": d.group(2).strip(),
+                                 "due": "", "overdue": False, "done": True, "claimed": False, "text": d.group(3).strip()})
+    return rows
+
+
+def task_sessions() -> list[dict]:
+    """Agent sessions in the projects this device sees: an admin sees every token's, a user only those of their own
+    tokens (as on the admin page)."""
+    dev = device.get()
+    projects = {name for name, (_, mem) in PROJECTS.items() if in_scope(mem + "/")}
+    out = []
+    for n, cfg in read_json(TOKENS_FILE, {}).items():
+        if not dev.get("admin") and cfg.get("owner") != dev.get("user"):
+            continue
+        seen = {p["agent"]: p["v"] for p in plugin_seen(n)}
+        out += [{"device": n, "agent": c.get("agent", ""), "project": c.get("project", ""), "wake": bool(c.get("wake")),
+                 "at": c.get("at", 0), "plugin": seen.get(c.get("agent", ""), "")}
+                for c in clients_seen(n) if c.get("project") in projects]
+    return sorted(out, key=lambda c: -c["at"])
+
+
+@server.custom_route("/ui/api/tasks", methods=["GET"])
+async def ui_tasks(request: Request):
+    return JSONResponse({"tasks": await asyncio.to_thread(task_rows), "sessions": task_sessions()})
+
+
+@server.custom_route("/ui/api/task/done", methods=["POST"])
+async def ui_task_done(request: Request):
+    """Remove one task line (finished) from its memo; the file history keeps it."""
+    body = await request.json()
+    line = str(body.get("line", ""))
+    try:
+        if "\n" in line or not ((kb_lint.OPEN_DUE.search(line) and "[" in line) or DONE_LINE.match(line)):
+            raise ToolError("not a task line")
+        _, rel = resolve(body.get("path", ""))
+        await knowledge_edit(rel, line + "\n", "")
+    except ToolError as e:
+        return JSONResponse({"error": str(e)}, status_code=409)
+    return JSONResponse({"ok": True})
+
+
 @server.custom_route("/ui/api/ingest", methods=["POST"])
 async def ui_ingest(request: Request):
     if not device.get().get("admin"):  # sources go to homelab/sources

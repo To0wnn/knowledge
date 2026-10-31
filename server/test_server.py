@@ -577,6 +577,19 @@ def main():
         assert beat["tasks"][0].endswith("[Codex, CX-2]: VOORRANG mow") and beat["sync"] is True and beat["notices"] == [], beat
         assert json.loads(http("GET", "/tasks?project=x&agent=agy&v=2", token=fr)[1])["sync"] is False  # one session syncs
         assert json.loads(http("GET", "/tasks?agent=codex&v=2")[1])["sync"] is False  # the admin's own projects: no mirror
+        # UI Tasks tab: the same task lines parsed into fields, plus a result handed back; Done removes just that line.
+        call("knowledge_edit", {"path": "garden-memory/project_tasks.md", "old_string": "[Codex, CX-1]: prune\n",
+                                "new_string": "[Codex, CX-1]: prune\n- [Claude, CX-0-done]: pruned already\n"})
+        ui = json.loads(raw("GET", "/ui/api/tasks", headers=ck)[2])
+        g = {t["id"]: t for t in ui["tasks"] if t["project"] == "garden"}
+        assert g["CX-2"]["owner"] == "Codex" and g["CX-2"]["due"] == "2099-03-03" and not g["CX-2"]["done"], g
+        assert g["CX-0-done"]["done"] and "OLD-1" not in g and "LOG-1" not in g and isinstance(ui["sessions"], list), g
+        done = lambda t: raw("POST", "/ui/api/task/done", json.dumps({"path": t["path"], "line": t["line"]}),
+                             {**ck, "X-Knowledge-UI": "1", "Content-Type": "application/json"})[0]
+        assert done({"path": "garden-memory/project_tasks.md", "line": "## Stand"}) == 409  # only a task line
+        assert done(g["CX-0-done"]) == 200
+        left = call("knowledge_read", {"path": "garden-memory/project_tasks.md"})[1]
+        assert "CX-0-done" not in left and "CX-1]: prune" in left, left
         # The plugin version: recorded per token and agent, a device behind the newest hears it at session start.
         parts = lambda q: "".join(http("GET", f"/context/{n}?project=x&{q}", token=fr)[1] for n in range(1, 6))
         assert "runs 0.9.10 for codex, the newest is 0.9.16" in parts("agent=codex&plugin=0.9.10"), parts("agent=codex&plugin=0.9.10")[-600:]
