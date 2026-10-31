@@ -22,6 +22,7 @@ clients/knowledge-agent.py (the setup without a plugin) calls the same functions
 TOKEN: "-" (default) = KNOWLEDGE_TOKEN or the keyring (token_store.py); on the machine that holds the files, a vault name.
 Never fails a session: errors go to stderr. Linux, macOS and Windows; standard library only.
 """
+from __future__ import annotations  # X | None on Python 3.9 (macOS's /usr/bin/python3)
 import hashlib
 import json
 import os
