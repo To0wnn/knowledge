@@ -128,7 +128,9 @@ def rollback(cwd: str, name: str) -> str:
 
 def one_line(text: str, exe: str) -> str:
     text = " / ".join(t for t in text.splitlines() if t.strip())  # Windows' npm .cmd shims cut an argument at a newline
-    return re.sub(r'["%^&|<>!]', " ", text) if exe.lower().endswith((".cmd", ".bat")) else text  # cmd.exe parses it
+    # cmd.exe parses it: shim_line quotes every argument, so & | < > ^ ( ) stay text (a folder R&D keeps its name); a quote
+    # or % would still break out or expand, ! too under delayed expansion
+    return re.sub(r'["%!]', " ", text) if exe.lower().endswith((".cmd", ".bat")) else text
 
 
 def shim_line(args: list) -> str:
@@ -436,7 +438,8 @@ def self_test():
     except RuntimeError:
         pass
     c = argv("codex", "codex.cmd", 'say "hi" & go', False, {"cwd": "/x"})
-    assert c[:2] == ["codex.cmd", "exec"] and "workspace-write" in c and '"' not in c[-1] and "&" not in c[-1], c
+    assert c[:2] == ["codex.cmd", "exec"] and "workspace-write" in c and '"' not in c[-1] and "& go" in c[-1], c
+    assert one_line('R&D <x> | ^y "q" 100% !z', "codex.cmd") == "R&D <x> | ^y  q  100   z"
     p = prompt({"id": "KN-4-cont", "project": "p", "path": "m/x.md", "owner": "Codex", "text": "go"}, "codex", "pc",
                {"cwd": "/w", "branch": "task/KN-4"})
     assert "already has commits" in p and "KN-4-cont" in p and "[<requester>, KN-4-done]" in p and "left:" in p, p
