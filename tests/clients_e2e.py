@@ -639,10 +639,38 @@ def hook_errors(tmp: Path, project: Path):
     check(code == 0 and state.get("sent", 0) == 0 and state.get("at"), "server away: the turn goes on, the error stays unsent", json.dumps(state) + err[-300:])
 
 
-FAKE_AGENT = """import json, os, sys
+FAKE_AGENT = """import json, os, sys, time
 calls, name, args = os.environ["KN_FAKE_CALLS"], sys.argv[1], sys.argv[2:]
 rec = lambda x: open(calls, "a", encoding="utf-8").write(json.dumps(x) + "\\n")
-if name == "codex" and args[:1] == ["app-server"]:  # codex-rs app-server, as far as the companion uses it
+if name == "codex" and args[:1] == ["app-server"] and os.environ.get("KNOWLEDGE_CHAT"):  # a chat turn without YOLO: app-server v2
+    send = lambda x: print(json.dumps({"jsonrpc": "2.0", **x}), flush=True)
+    note = lambda method, params: send({"method": method, "params": params})
+    loaded, perms = "", {}
+    for line in sys.stdin:
+        m = json.loads(line)
+        if m.get("method") == "initialize":
+            send({"id": m["id"], "result": {"userAgent": "fake"}})
+        elif m.get("method") in ("thread/start", "thread/resume"):
+            loaded, perms = m["params"].get("threadId", ""), m["params"]
+            send({"id": m["id"], "result": {"thread": {"id": "sess-codex"}}})
+        elif m.get("method") == "turn/start":
+            text = m["params"]["input"][0]["text"]
+            rec({"chat": os.environ["KNOWLEDGE_CHAT"], "argv": [name] + args, "cwd": os.getcwd(), "stdin": text, "load": loaded, "perms": perms, "pid": os.getpid()})
+            send({"id": m["id"], "result": {"turn": {"id": "t1", "status": "inProgress"}}})
+            note("item/started", {"item": {"type": "commandExecution", "command": "git status"}})
+            said = "echo: " + text + (" (resumed)" if loaded == "sess-codex" else "")
+            if "ASK" in text:
+                send({"id": 0, "method": "item/commandExecution/requestApproval", "params": {"reason": "run the tests", "command": "/bin/sh -lc 'npm test'",
+                      "commandActions": [{"type": "unknown", "command": "npm test"}], "availableDecisions": ["accept", "acceptForSession", "decline", "cancel"]}})
+                got = json.loads(sys.stdin.readline())["result"]["decision"]
+                said += " | npm test ran" if got == "accept" else " | npm test denied"
+            if "SLOW" in text:
+                time.sleep(90)
+                open(calls + ".slow-done", "w").write("not stopped")
+            note("item/agentMessage/delta", {"delta": said})
+            note("item/completed", {"item": {"type": "agentMessage", "text": said}})
+            note("turn/completed", {"turn": {"id": "t1", "status": "completed"}})
+elif name == "codex" and args[:1] == ["app-server"]:  # codex-rs app-server, as far as the companion uses it
     for line in sys.stdin:
         m = json.loads(line)
         rec({"rpc": m})
@@ -661,6 +689,38 @@ if name == "codex" and args[:1] == ["app-server"]:  # codex-rs app-server, as fa
                 {"key": "/repo/.codex/hooks.json:stop:0:0", "pluginId": None, "currentHash": "sha256:cc",
                  "trustStatus": "untrusted", "handlerType": "command", "command": "./evil.sh"}]}]}
         print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": res}), flush=True)
+elif os.environ.get("KNOWLEDGE_CHAT") and name == "agy" and args[:1] == ["acp"]:  # agy without YOLO: ACP over stdio
+    import time
+    send = lambda x: print(json.dumps({"jsonrpc": "2.0", **x}), flush=True)
+    upd = lambda u: send({"method": "session/update", "params": {"sessionId": "sess-agy", "update": u}})
+    loaded = ""
+    for line in sys.stdin:
+        m = json.loads(line)
+        if m.get("method") == "initialize":
+            send({"id": m["id"], "result": {"protocolVersion": 1}})
+        elif m.get("method") == "session/new":
+            send({"id": m["id"], "result": {"sessionId": "sess-agy"}})
+        elif m.get("method") == "session/load":
+            loaded = m["params"]["sessionId"]
+            upd({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "OLD HISTORY"}})  # a replay: never output
+            send({"id": m["id"], "result": {}})
+        elif m.get("method") == "session/prompt":
+            text = m["params"]["prompt"][0]["text"]
+            rec({"chat": os.environ["KNOWLEDGE_CHAT"], "argv": [name] + args, "cwd": os.getcwd(), "stdin": text, "load": loaded, "pid": os.getpid()})
+            upd({"sessionUpdate": "tool_call", "toolCallId": "c1", "name": "run_command", "kind": "execute", "rawInput": {"CommandLine": "git status"}})
+            send({"id": "p1", "method": "session/request_permission", "params": {"sessionId": "sess-agy", "toolCall": {
+                "toolCallId": "c1", "name": "run_command", "kind": "execute", "rawInput": {"CommandLine": "git status"}},
+                "options": [{"optionId": "allow", "kind": "allow_once"}, {"optionId": "deny", "kind": "reject_once"}]}})
+            pre = json.loads(sys.stdin.readline())["result"]["outcome"]["optionId"]  # git status: in the allowed set, never asked
+            said = "echo: " + text + (" (resumed)" if loaded == "sess-agy" else "") + ("" if pre == "allow" else " PRE-DENIED")
+            if "ASK" in text:
+                send({"id": "p2", "method": "session/request_permission", "params": {"sessionId": "sess-agy", "toolCall": {
+                    "toolCallId": "c2", "name": "run_command", "kind": "execute", "title": "npm test", "rawInput": {"CommandLine": "npm test", "toolSummary": "run the tests"}},
+                    "options": [{"optionId": "allow", "kind": "allow_once"}, {"optionId": "deny", "kind": "reject_once"}]}})
+                got = json.loads(sys.stdin.readline())["result"]["outcome"]["optionId"]
+                said += " | npm test ran" if got == "allow" else " | npm test denied"
+            upd({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": said}})
+            send({"id": m["id"], "result": {"stopReason": "end_turn"}})
 elif os.environ.get("KNOWLEDGE_CHAT"):  # one chat turn: the message on stdin, the agent's own JSON stream out
     import time
     msg = sys.stdin.buffer.read().decode("utf-8")
@@ -669,6 +729,22 @@ elif os.environ.get("KNOWLEDGE_CHAT"):  # one chat turn: the message on stdin, t
     sid = "sess-" + name
     said = "echo: " + text + (" (resumed)" if sid in args else "")
     out = lambda x: print(json.dumps(x), flush=True)
+    if name == "claude" and "ASK" in text and "--permission-prompt-tool" in args:  # its permission prompt tool, as Claude calls it
+        import subprocess
+        cfg = json.load(open(args[args.index("--mcp-config") + 1], encoding="utf-8"))["mcpServers"]["knowledge_approval"]
+        tool = args[args.index("--permission-prompt-tool") + 1].split("__")[-1]
+        srv = subprocess.Popen([cfg["command"], *cfg["args"]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env={**os.environ, **cfg["env"]})
+        srv.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}}) + "\\n")
+        srv.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": tool, "arguments": {
+            "tool_name": "Bash", "input": {"command": "npm test", "description": "run the tests"}, "tool_use_id": "t1"}, "_meta": {"progressToken": 7}}}) + "\\n")
+        srv.stdin.flush()
+        for line in srv.stdout:
+            r = json.loads(line)
+            if r.get("id") == 2:
+                verdict = json.loads(r["result"]["content"][0]["text"])
+                break
+        srv.kill()
+        said += " | npm test ran" if verdict["behavior"] == "allow" else " | npm test denied: " + verdict.get("message", "")
     if name == "claude":
         out({"type": "system", "subtype": "init", "session_id": sid})
         out({"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": said}}})
@@ -1316,23 +1392,75 @@ def chat_e2e(tok: str, tmp: Path):
             events = chat(cid)["events"]
             texts = "".join(e["text"] for e in events if e["kind"] == "text")
             first, second = (turns + [{}, {}])[:2]
-            sent = (lambda x: json.loads(x)["message"]["content"]) if agent == "agy" else (lambda x: x)
+            sent = lambda x: x  # agy without YOLO runs over ACP: the prompt is a session/prompt, not stream-json
             check(got1 and got2 and len(turns) == 2 and sent(first.get("stdin", "{}")) == msg1 and sent(second.get("stdin", "{}")) == "second"
                   and Path(first["cwd"]).resolve() == repo.resolve() and not any(msg1[:5] in a for a in first["argv"]),
                   f"chat {agent}: two turns, each message on stdin (never on the command line), in the linked folder", json.dumps(turns)[:900])
-            resume = {"claude": ["--resume", "sess-claude"], "codex": ["resume"], "agy": ["--conversation", "sess-agy"]}[agent]
-            check(not any(a in first["argv"] for a in resume) and all(a in second["argv"] for a in resume) and "sess-" + agent in second["argv"],
+            resume = {"claude": ["--resume", "sess-claude"], "codex": [], "agy": []}[agent]
+            check(not any(a in first["argv"] for a in resume) and all(a in second["argv"] for a in resume)
+                  and ("sess-" + agent in second["argv"] or agent != "claude" and not first.get("load") and second.get("load") == "sess-" + agent),
                   f"chat {agent}: the first turn starts a conversation, the second continues it with the agent's own id", json.dumps([first.get("argv"), second.get("argv")]))
-            check(f"echo: {msg1}" in texts and "echo: second (resumed)" in texts and any(e["kind"] == "tool" and "git status" in e["text"] for e in events)
+            check(f"echo: {msg1}" in texts and "echo: second (resumed)" in texts and "OLD HISTORY" not in texts and "PRE-DENIED" not in texts and any(e["kind"] == "tool" and "git status" in e["text"] for e in events)
                   and [e["kind"] for e in events if e["kind"] == "user"] == ["user", "user"] and chat(cid)["chat"]["session"] == "sess-" + agent,
                   f"chat {agent}: the streamed text and tool lines reach the server", json.dumps(events)[:900])
             if agent == "codex":
-                check("sandbox_mode=workspace-write" in first["argv"] and not any("writable_roots" in a for a in first["argv"]),
-                      "chat codex: without YOLO the workspace-write sandbox, .git stays read-only as Codex keeps it", json.dumps(first["argv"]))
+                check(first["argv"][:2] == ["codex", "app-server"] and first.get("perms", {}).get("sandbox") == "workspace-write"
+                      and first["perms"].get("approvalPolicy") == "on-request" and not any("writable_roots" in a for a in first["argv"]),
+                      "chat codex: without YOLO app-server, the workspace-write sandbox and on-request approvals, .git stays read-only", json.dumps(first))
             if agent == "claude":
                 check(any(e["kind"] == "refused" and "git push" in e["text"] for e in events), "chat claude: a refused tool call shows as a line", json.dumps(events)[:600])
-                check("acceptEdits" in first["argv"] and "--dangerously-skip-permissions" not in first["argv"],
-                      "chat claude: without YOLO the worker permission set (acceptEdits + allowed tools)", json.dumps(first["argv"]))
+                check("acceptEdits" in first["argv"] and "--dangerously-skip-permissions" not in first["argv"] and "--permission-prompt-tool" in first["argv"],
+                      "chat claude: without YOLO the worker permission set (acceptEdits + allowed tools) and the approval prompt tool", json.dumps(first["argv"]))
+            if agent == "agy":
+                check(first["argv"] == ["agy", "acp"], "chat agy: without YOLO it runs over ACP (the headless agy that can ask)", json.dumps(first["argv"]))
+        # Approvals: a turn asks for a tool its allowed set lacks; the owner allows once, for the chat, or denies, from
+        # the web UI; the agent goes on. One chat waits without an answer and times out (1 minute, the shortest setting).
+        admin_ui = {**ui, "Content-Type": "application/json"}
+        approvals = lambda cid: chat(cid).get("asks") or []
+        board = lambda: json.loads(http("GET", "/ui/api/board", headers=ui)[1])["items"]
+        http("POST", "/ui/api/admin/settings", {"chat_approval_minutes": 1}, admin_ui)
+        late = new("claude", repo)
+        send(late, "ASK and nobody answers")
+        for agent in ("claude", "codex", "agy"):
+            cid = new(agent, repo)
+            for n, (decision, said) in enumerate((("once", "npm test ran"), ("deny", "npm test denied"), ("chat", "npm test ran"))):
+                send(cid, f"ASK {n}")
+                waiting = wait_for(lambda: approvals(cid), 30)
+                a = (approvals(cid) or [{}])[0]
+                item = next((i for i in board() if i["kind"] == "ask" and i.get("chat") == cid), {})
+                check(waiting and a.get("tool") in ("Bash", "shell", "run_command") and (a.get("detail") or "").replace("/bin/sh -lc ", "").strip("'") == "npm test" and item.get("col") == "needs"
+                      and chat(cid)["chat"]["status"] == "running",
+                      f"chat {agent}: the turn waits for its owner, the approval is in the chat and under Needs you ({decision})", json.dumps([a, item])[:500])
+                st, body = http("POST", "/ui/api/chat/approve", {"machine": mid, "id": cid, "ask": a.get("id"), "decision": decision},
+                                {**ui, "X-authentik-username": "bob"})
+                check(st == 403, f"chat {agent}: another person cannot answer it", body)
+                http("POST", "/ui/api/chat/approve", {"machine": mid, "id": cid, "ask": a.get("id"), "decision": decision}, ui)
+                done = wait_for(lambda: chat(cid)["chat"]["status"] == "idle", 30)
+                texts = "".join(e["text"] for e in chat(cid)["events"] if e["kind"] == "text").split(f"echo: ASK {n}")[-1]
+                check(done and said in texts and (decision != "deny" or "denied this tool call" in texts or agent != "claude"),
+                      f"chat {agent}: {decision} reaches the agent and it goes on", texts[-300:])
+            send(cid, "ASK again")
+            done = wait_for(lambda: chat(cid)["chat"]["status"] == "idle", 30)
+            texts = "".join(e["text"] for e in chat(cid)["events"] if e["kind"] == "text")
+            check(done and texts.split("echo: ASK again")[-1].strip().endswith("npm test ran") and len([e for e in chat(cid)["events"] if e["kind"] == "ask"]) == 3,
+                  f"chat {agent}: allowed for this chat, the same call is not asked again in a later turn", texts[-200:])
+        cid = new("claude", repo)
+        send(cid, "ASK about a push")
+        wait_for(lambda: approvals(cid), 30)
+        st, body = http("POST", "/ui/api/chat/approve", {"machine": mid, "id": cid, "ask": (approvals(cid) or [{}])[0].get("id"), "decision": "deny"}, ui)
+        wait_for(lambda: chat(cid)["chat"]["status"] == "idle", 30)
+        timed = wait_for(lambda: chat(late)["chat"]["status"] == "idle", 150)
+        events = chat(late)["events"]
+        texts = "".join(e["text"] for e in events if e["kind"] == "text")
+        check(timed and any(e["text"] == "No answer within 1 min: denied Bash." for e in events) and "npm test denied" in texts and "in time" in texts,
+              "chat claude: an approval nobody answers is denied after its time, the chat says so and the agent is told", json.dumps(events)[-600:])
+        http("POST", "/ui/api/admin/settings", {"chat_approval_minutes": 30}, admin_ui)
+        activity = json.loads((home / ".knowledge" / "companion" / "activity.json").read_text(encoding="utf-8"))
+        check(any("Approval asked" in a["text"] for a in activity) and any("allowed once" in a["text"] and "by alice" in a["text"] for a in activity)
+              and any("denied (no answer in time)" in a["text"] for a in activity),
+              "chat: every approval and who decided it is in the companion's activity log", json.dumps([a["text"] for a in activity[:12]]))
+        audit = (tmp / "audit.log").read_text(encoding="utf-8") if (tmp / "audit.log").exists() else ""
+        check("chat-approve" in audit and "chat-ask" in audit, "chat: every approval and its answer is in the server's audit log", audit[-400:])
         # The pill on the board's chat card, and its diff: asked through the chat channel, read-only, answered by the pc.
         cid = new("codex", pill)
         send(cid, "pill")
