@@ -145,7 +145,7 @@ def main():
     # The web UI tab wears the companion's look: thispc.css is companion.css's components with the scope renamed.
     cstatic = Path(__file__).parent.parent / "plugin" / "companion" / "static"
     comp = (cstatic / "companion.css").read_text().split("/* COMPONENTS START */\n")[1].split("/* COMPONENTS END */")[0]
-    tab = (cstatic / "thispc.css").read_text()
+    tab = (Path(__file__).parent / "static" / "thispc.css").read_text()
     assert tab.endswith(re.sub(r"\.cmp(?![-\w])", "#tab-thispc", comp)), "thispc.css drifted from companion.css"
     assert not re.search(r"\.cmp(?![-\w])", tab.split("*/", 1)[1]), "thispc.css: a rule outside #tab-thispc"
     tmp = Path(tempfile.mkdtemp())
@@ -557,6 +557,14 @@ def main():
         st, _, res = post({"path": "trade-memory/project_leak.md", "text": "x\n", "index_line": "- [Pi Sup3rSecret99](project_leak.md) — x"})
         assert st == 409 and b"known secret" in res and not (tmem / "project_leak.md").exists(), res
         assert "form-action 'self'" in raw("GET", "/ui", headers=ck)[1]["content-security-policy"]
+        # This pc: the page may reach the local companion and nothing else outside; the tab stays hidden until it answers.
+        st, hdr, page_ = raw("GET", "/ui", headers=ck)
+        assert "connect-src 'self' http://127.0.0.1:47321;" in hdr["content-security-policy"], hdr["content-security-policy"]
+        assert re.search(rb'<button role="tab" data-tab="thispc" id="tabbtn-thispc"[^>]* hidden>', page_), "This pc tab not hidden by default"
+        assert b'/ui/static/thispc.css' in page_ and raw("GET", "/ui/static/thispc.css", headers=ck)[0] == 200
+        app_js = (Path(__file__).parent / "static" / "app.js").read_text()
+        probe = app_js.split("async function probeCompanion()")[1].split("\n}")[0]
+        assert probe.index('companion("/local/api/hello")') < probe.index('$("tabbtn-thispc").hidden = false'), probe
         # People: unknown users get no access but show up for the admin; access per project, read or write.
         admin = lambda path, body, hdr=ck: raw("POST", path, json.dumps(body), {**hdr, "Content-Type": "application/json", "X-Knowledge-UI": "1"})
         assert raw("GET", "/ui", headers=user("bob"))[0] == 403

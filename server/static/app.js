@@ -839,12 +839,53 @@ document.addEventListener("keydown", (e) => {
 function selectTab(name) {
   store.set("kn_tab", name); // kept over a reload, like the map
   for (const b of document.querySelectorAll(".tabs button")) b.setAttribute("aria-selected", String(b.dataset.tab === name));
-  for (const t of ["notes", "changes", "tasks", "lint"]) $(`tab-${t}`).hidden = t !== name;
+  for (const t of ["notes", "changes", "tasks", "lint", "thispc"]) $(`tab-${t}`).hidden = t !== name;
   if (name === "lint") loadLint(true);
+  if (name === "thispc") loadThisPc();
   if (name === "tasks") loadTasks(true);
   if (name === "changes") loadRecent(true);
 }
 for (const b of document.querySelectorAll(".tabs button")) b.onclick = () => selectTab(b.dataset.tab);
+
+// This pc: the knowledge companion on the viewer's own machine (plugin/hooks/companion.py). The tab shows only when it
+// answers on 127.0.0.1; the page's CSP allows exactly that origin, and the companion allows this page's origin.
+const COMPANION = "http://127.0.0.1:47321";
+async function companion(path, body) {
+  const r = await fetch(COMPANION + path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || `companion: HTTP ${r.status}`);
+  return data;
+}
+async function probeCompanion() {
+  try { await companion("/local/api/hello"); } catch { return false; } // no companion on this pc: no tab
+  $("tabbtn-thispc").hidden = false;
+  return true;
+}
+async function loadThisPc() {
+  const box = $("thispc-agents");
+  let s;
+  try { s = await companion("/local/api/state"); }
+  catch (e) { box.replaceChildren(el("p", "error", `The companion did not answer: ${e.message}`)); return; }
+  const state = (ok, text) => el("span", `cmp-state cmp-state--${ok ? "ok" : "warn"}`, text);
+  box.replaceChildren(...s.agents.filter((a) => a.installed).map((a) => {
+    const card = el("article", "cmp-agent"), head = el("div", "cmp-agent-head");
+    head.append(el("span", "cmp-agent-mark", a.mark), el("h3", null, a.name), el("span", "cmp-ver", a.version ? `plugin ${a.version}` : "no plugin"));
+    const facts = el("dl", "cmp-facts"), hooks = el("dd");
+    hooks.append(state(a.hooksTrusted, a.hooksTrusted ? "Trusted" : "Not trusted"));
+    if (!a.hooksTrusted) {
+      const b = el("button", "cmp-btn cmp-btn--primary cmp-btn--small", "Trust hooks");
+      b.type = "button";
+      b.onclick = async () => { try { await companion("/local/api/trust", { agent: a.id }); } catch (e) { alert(e.message); } loadThisPc(); };
+      hooks.append(" ", b);
+    }
+    facts.append(el("dt", null, "Hooks"), hooks, el("dt", null, "YOLO"), el("dd", null, a.yolo ? "on: woken tasks run without asking" : "off"));
+    const list = el("ul", "cmp-sessions");
+    for (const x of a.sessions) list.append(el("li", null, x.title));
+    card.append(head, facts, a.sessions.length ? list : el("p", "cmp-sessions-empty", "No open sessions."),
+      a.lastError ? el("p", "cmp-error", `Last hook error: ${a.lastError.text}`) : el("p", "cmp-error cmp-error--none", "No hook errors."));
+    return card;
+  }));
+}
 
 // Changes: newest first, per day; lines added/removed, who, and the question of the session that made the change.
 // A click opens the diff. Changes since the last look at this tab are marked; the badge counts them meanwhile.
@@ -1121,5 +1162,6 @@ loadMe().then(loadGraph).catch((e) => {
   if (id) openNote(id, { push: false }); else homeView();
   if (store.get("kn_map") === "1") setMap(true); // the map stays open over a reload
   const tab = store.get("kn_tab");
+  probeCompanion().then((up) => { if (up && tab === "thispc") selectTab("thispc"); });
   if (["changes", "tasks", "lint"].includes(tab) && !document.querySelector(`.tabs [data-tab="${tab}"]`).hidden) selectTab(tab); // Lint only for admins
 });

@@ -2889,10 +2889,11 @@ BOOT = secrets.token_hex(4)  # changes on every start, so ETags from before a re
 RELEASE = hashlib.sha256(b"".join((STATIC / f).read_bytes() for f in ("index.html", "admin.html", "app.js", "admin.js", "app.css"))).hexdigest()[:12]
 
 
+COMPANION = "http://127.0.0.1:47321"  # the local companion (plugin/hooks/companion.py): the "This pc" tab asks it
 # Note HTML is sanitized, and this is the second wall: no foreign images (tracking), no forms posting elsewhere, no
 # framing. force-graph adds a <style> at runtime, hence 'unsafe-inline' for styles only.
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
-       "connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'")
+       f"connect-src 'self' {COMPANION}; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'")
 
 
 def page(name: str) -> HTMLResponse:

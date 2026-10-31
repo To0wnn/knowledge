@@ -6,6 +6,7 @@
 <title>Knowledge</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/ui/static/app.css">
+<link rel="stylesheet" href="/ui/static/thispc.css">
 <script src="/ui/static/theme.js"></script>
 </head>
 <body>
@@ -40,6 +41,7 @@
     <button role="tab" data-tab="changes" id="tabbtn-changes" aria-controls="tab-changes">Changes <span id="changes-count" class="badge" title="New since your last look"></span></button>
     <button role="tab" data-tab="tasks" id="tabbtn-tasks" aria-controls="tab-tasks">Tasks <span id="tasks-count" class="badge" title="Open tasks between agents"></span></button>
     <button role="tab" data-tab="lint" id="tabbtn-lint" aria-controls="tab-lint">Lint <span id="lint-count" class="badge"></span></button>
+    <button role="tab" data-tab="thispc" id="tabbtn-thispc" aria-controls="tab-thispc" hidden>This pc</button>
   </nav>
   <section id="tab-notes" class="tab" role="tabpanel" aria-labelledby="tabbtn-notes">
     <div id="results" hidden>
@@ -59,6 +61,10 @@
   <section id="tab-tasks" class="tab" role="tabpanel" aria-labelledby="tabbtn-tasks" hidden>
     <p class="muted">Task lines in the memos and who can pick them up. A task goes to an agent as a line "open until &lt;date&gt; [&lt;owner&gt;, &lt;ID&gt;]: …".</p>
     <div id="tasks"></div>
+  </section>
+  <section id="tab-thispc" class="tab" role="tabpanel" aria-labelledby="tabbtn-thispc" hidden>
+    <p class="cmp-lede">The agents on this pc, as the knowledge companion running here sees them. <a id="thispc-open" href="http://127.0.0.1:47321/" target="_blank" rel="noopener">Open the companion</a> for YOLO, settings and activity.</p>
+    <div class="cmp-agents" id="thispc-agents"></div>
   </section>
   <section id="tab-lint" class="tab" role="tabpanel" aria-labelledby="tabbtn-lint" hidden>
     <p class="muted">Facts only: fix what is clearly wrong, ask Claude to judge the rest.</p>
