@@ -587,6 +587,7 @@ def main():
         done = lambda t: raw("POST", "/ui/api/task/done", json.dumps({"path": t["path"], "line": t["line"]}),
                              {**ck, "X-Knowledge-UI": "1", "Content-Type": "application/json"})[0]
         assert done({"path": "garden-memory/project_tasks.md", "line": "## Stand"}) == 409  # only a task line
+        assert done({"path": "garden-memory/gone.md", "line": "- open tot 1 jan 2099 [Codex, X-1]: x"}) == 409  # no 500
         assert done(g["CX-0-done"]) == 200
         left = call("knowledge_read", {"path": "garden-memory/project_tasks.md"})[1]
         assert "CX-0-done" not in left and "CX-1]: prune" in left, left

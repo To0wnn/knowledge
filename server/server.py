@@ -3602,14 +3602,14 @@ async def ui_tasks(request: Request):
 @server.custom_route("/ui/api/task/done", methods=["POST"])
 async def ui_task_done(request: Request):
     """Remove one task line (finished) from its memo; the file history keeps it."""
-    body = await request.json()
-    line = str(body.get("line", ""))
     try:
+        body = await request.json()
+        line = str(body.get("line", ""))
         if "\n" in line or not ((kb_lint.OPEN_DUE.search(line) and "[" in line) or DONE_LINE.match(line)):
             raise ToolError("not a task line")
         _, rel = resolve(body.get("path", ""))
         await knowledge_edit(rel, line + "\n", "")
-    except ToolError as e:
+    except (ToolError, OSError, ValueError, AttributeError) as e:  # a bad body or a gone file: no 500
         return JSONResponse({"error": str(e)}, status_code=409)
     return JSONResponse({"ok": True})
 

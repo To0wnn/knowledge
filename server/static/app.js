@@ -929,7 +929,7 @@ async function loadTasks(render = true) {
   if (!render) return;
   const box = $("tasks"); box.replaceChildren();
   const row = (t) => {
-    const n = byId.get(t.path), li = hitItem(`${t.id} · ${t.owner}`, t.text, () => openNote(t.path, { find: t.id }));
+    const n = byId.get(t.path), li = hitItem(`${t.id} · ${t.owner}`, t.text, () => openNote(t.path, { find: [t.id.toLowerCase()] }));
     const meta = el("span", "hit-text", [t.due && `due ${t.due}`, t.claimed && "claimed", n ? n.label : t.path.split("/").pop(),
       allMode() ? t.project : ""].filter(Boolean).join(" · "));
     if (t.overdue) meta.prepend(el("span", "new", "overdue"), " ");
