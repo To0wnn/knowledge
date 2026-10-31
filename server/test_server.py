@@ -1020,6 +1020,20 @@ def flow_contract(tmp, ck, fr, raw, heard):
     assert wait(lambda: not state.exists())
 
 
+def ui_gap_contract(tmp, ck, raw):
+    """A web UI search that finds nothing (exact and by meaning) is a gap like an agent's, logged once the person stopped
+    typing: the queries on the way there are not; one that finds notes is not."""
+    ask = lambda q: [raw("GET", f"/ui/api/{kind}?q={urllib.parse.quote(q)}&project=garden", headers=ck) for kind in ("search", "semantic")]
+    gaps = lambda: [ln.split("\t") for ln in (tmp / "gaps.log").read_text().splitlines()] if (tmp / "gaps.log").exists() else []
+    ask("qwzx")
+    ask("qwzxvb plorkt")
+    time.sleep(1.2)
+    ask("garden")  # finds notes
+    time.sleep(1.2)
+    ui = [g for g in gaps() if g[2] == "ui"]
+    assert [g[4] for g in ui] == ["qwzxvb plorkt"] and ui[0][1] == "user:alice", ui
+
+
 def no_held(beat: dict) -> dict:
     """A turn's answer without the lease notices (tasks other sessions hold): for checks about other notices."""
     return {**beat, "notices": [n for n in beat["notices"] if not n["id"].startswith("held-")]}
@@ -1209,7 +1223,7 @@ def main():
            "KNOWLEDGE_GITHUB_API": ghurl, "KNOWLEDGE_GITHUB_RAW": ghurl + "/raw", "KNOWLEDGE_EXTERNAL_SLEEP": "3600", "KNOWLEDGE_INSTANCE": "blue", "KNOWLEDGE_PLUGIN_GRACE": "0",
            "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_RERANK_MODEL": "test", "KNOWLEDGE_DUPES_EVERY": "1", "KNOWLEDGE_DUPES_DELAY": "0", "KNOWLEDGE_DUPES_DEBOUNCE": "0", "KNOWLEDGE_WATCH_DEVICE": "laptop", "KNOWLEDGE_TASK_STALLED": "1", "KNOWLEDGE_TASK_LEASE": "600", "KNOWLEDGE_TASK_CHECK": "1", "KNOWLEDGE_RESCAN": "2", "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}",
            "KNOWLEDGE_MATRIX_URL": ghurl, "KNOWLEDGE_MATRIX_ROOM": "!room:example", "KNOWLEDGE_MATRIX_TOKEN": "mx",
-           "KNOWLEDGE_NEEDS_QUIET": "2", "KNOWLEDGE_PUBLIC_URL": "https://kn.example"}
+           "KNOWLEDGE_NEEDS_QUIET": "2", "KNOWLEDGE_UI_GAP_WAIT": "0.5", "KNOWLEDGE_PUBLIC_URL": "https://kn.example"}
     proc = subprocess.Popen([sys.executable, str(Path(__file__).with_name("server.py"))], env=env)
     try:
         for _ in range(50):
@@ -2065,6 +2079,7 @@ def main():
         needs_contract(tmp, ck, fr, raw, heard)
         approvals_contract(tmp, ck, fr, raw, er, et)
         flow_contract(tmp, ck, fr, raw, heard)
+        ui_gap_contract(tmp, ck, raw)
         mission_contract(tmp, ck, fr, raw, er)
         # The folder link (.knowledge-project, skill knowledge-init): her token now sees two projects, so the folder picks.
         assert "not linked to a project" in http("GET", "/context/1?project=/home/erin/stuff", token=et)[1]

@@ -4298,7 +4298,28 @@ async def ui_semantic(request: Request):
     roots = tuple(r + "/" for r in PROJECTS[project] + ("claude",)) if project in PROJECTS else ()
     q = request.query_params.get("q", "").strip()[:500]
     hits = [h for h in await asyncio.to_thread(vec.search, q, roots, 30) if in_scope(h["path"])][:15] if q else []
+    # the UI asks this after the exact search, for every pause in typing: a query that found nothing either way is a
+    # gap like an MCP search's, once the person stopped typing it (UI_GAP_WAIT without a newer query)
+    if q and vec.matrix is not None and weak_answer(q, hits) and not await asyncio.to_thread(search_notes, q, tuple(r[:-1] for r in roots), 1):
+        ui_gap_later(q, hits[0]["score"] if hits else None)
     return JSONResponse({"hits": hits, "status": vec.status()})
+
+
+UI_GAP_WAIT = float(os.environ.get("KNOWLEDGE_UI_GAP_WAIT", 5))
+_ui_gap_last: dict[str, str] = {}  # device -> its newest web UI search that found nothing
+
+
+def ui_gap_later(q: str, score: float | None):
+    """Log a web UI search that found nothing once no newer search of the same person followed within UI_GAP_WAIT
+    seconds: "netw", "netwo" while typing are no gaps, the query they stopped at is."""
+    dev = device.get().get("name", "?")
+    _ui_gap_last[dev] = q
+
+    def still_last():
+        if _ui_gap_last.get(dev) == q:
+            _ui_gap_last.pop(dev)
+            log_gap("ui", q, score)
+    asyncio.get_running_loop().call_later(UI_GAP_WAIT, still_last)  # runs in a copy of this request's context: same device
 
 
 @server.custom_route("/ui/api/related", methods=["GET"])
@@ -4517,6 +4538,7 @@ def search_notes(q: str, roots: tuple, limit: int = 40) -> list[dict]:
 @server.custom_route("/ui/api/search", methods=["GET"])
 async def ui_search(request: Request):
     q = request.query_params.get("q", "").strip()[:200]
+    _ui_gap_last.pop(device.get().get("name", "?"), None)  # typing on: the earlier query was not where they stopped
     project = request.query_params.get("project", "")
     roots = PROJECTS[project] + ("claude",) if project in PROJECTS else ()
     return JSONResponse({"notes": await asyncio.to_thread(search_notes, q, roots) if q else []})
