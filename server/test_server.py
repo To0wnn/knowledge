@@ -128,6 +128,11 @@ def tasks_contract(tmp, ck, fr, ver, raw):
     # Woken but not claimed in time (1 s in this test): stalled in the Tasks tab, one Matrix notice.
     woken = lambda b: http("POST", "/tasks/woken", b, token=fr)[0]
     assert woken({"project": "garden", "id": "CX-2", "agent": "codex", "session": "s-9"}) == 200
+    first = json.loads((tmp / "task_wakes.json").read_text())["garden"]["CX-2"]["at"]
+    time.sleep(1.1)
+    assert woken({"project": "garden", "id": "CX-2", "agent": "codex", "session": "s-10"}) == 200
+    again = json.loads((tmp / "task_wakes.json").read_text())["garden"]["CX-2"]
+    assert again["at"] == first and again["session"] == "s-10", again  # a wake again never resets the stall timer
     assert woken({"project": "garden", "id": "GONE", "agent": "codex"}) == 404 and woken({"project": "garden", "id": "CX-2", "agent": "x"}) == 400
     deadline = time.time() + 10
     while not json.loads((tmp / "task_wakes.json").read_text())["garden"]["CX-2"].get("noticed") and time.time() < deadline:

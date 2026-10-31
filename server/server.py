@@ -2765,8 +2765,10 @@ async def tasks_woken_route(request: Request):
         return JSONResponse({"error": f"agent must be one of {sorted(AGENT_OWNERS)}"}, status_code=400)
     if tid not in {t["id"] for t in (await asyncio.to_thread(project_tasks, project))[0]}:
         return JSONResponse({"error": f"no open task {tid} in {project}"}, status_code=404)
-    wake = {"agent": agent, "session": session[:80], "device": device.get().get("name", ""), "at": int(time.time())}
-    await asyncio.to_thread(update_state, TASK_WAKES, lambda d: d.setdefault(project, {}).update({tid: wake}))
+    wake = {"agent": agent, "session": session[:80], "device": device.get().get("name", "")}
+    # a wake again keeps the first time and whether the admin heard it: else every new try hides the stall
+    await asyncio.to_thread(update_state, TASK_WAKES, lambda d: d.setdefault(project, {}).setdefault(
+        tid, {"at": int(time.time())}).update(wake))
     return JSONResponse({"ok": True})
 
 
