@@ -2005,6 +2005,12 @@ def main():
         rel = json.loads(raw("GET", "/ui/api/related?path=trade-memory/plan.md", headers=ck)[2])["related"]
         assert isinstance(rel, list)
         assert "isolated_note" in json.loads(raw("GET", "/ui/api/lint", headers=ck)[2])
+        # The UI lint is cached per index generation: a write shows in the next answer.
+        assert "nope_lintcache" not in raw("GET", "/ui/api/lint", headers=ck)[2].decode()
+        assert not call("knowledge_write", {"path": "memory/lintcache_probe.md", "content": memo("see [[nope_lintcache]]\n", "lintcache_probe")})[0]
+        assert "nope_lintcache" in raw("GET", "/ui/api/lint", headers=ck)[2].decode()
+        (mem / "lintcache_probe.md").unlink()
+        http("POST", "/invalidate", {"paths": ["memory/lintcache_probe.md"]}, token="watch-token")
         assert (tmp / "vectors.npz").exists()
         # History: every version with who changed it; native VM edits show as VM; diff + restore via the UI.
         (tmem / "hist.md").write_text("v1\n")
@@ -2095,7 +2101,9 @@ def main():
         assert not any("/sessions/" in f["path"] for f in files)
         # Caching: vendor files immutable, app files revalidated, graph 304 on an unchanged ETag.
         assert "immutable" in raw("GET", "/ui/static/vendor/force-graph-1.52.0.js")[1]["cache-control"]
-        assert raw("GET", "/ui/static/app.js")[1]["cache-control"] == "no-cache"
+        st, hd, _ = raw("GET", "/ui/static/app.js")
+        assert st == 200 and hd["cache-control"] == "no-cache"
+        assert raw("GET", "/ui/static/app.js", headers={"If-None-Match": hd["etag"]})[0] == 304
         st, _, body = raw("GET", "/ui/help", headers=ck)
         assert st == 200 and b"Connect a client" in body and b"fonts.googleapis" not in body  # no external requests
         # One source for the house rules: the help page, the MCP instructions and a guest's context show the same rules.
@@ -2118,6 +2126,7 @@ def main():
         st, hd, body = raw("GET", "/ui", headers=ck)
         rel = re.search(rb'app\.js\?v=([0-9a-f]{12})"', body).group(1).decode()
         assert hd["cache-control"] == "no-cache" and f'data-release="{rel}"'.encode() in body and b"app.css?v=" + rel.encode() in body
+        assert b"thispc.css?v=" + rel.encode() in body  # every own file versioned, so none is fetched again per load
         assert "immutable" in raw("GET", f"/ui/static/app.js?v={rel}")[1]["cache-control"]
         assert raw("GET", "/ui/static/app.js?v=old")[1]["cache-control"] == "no-cache"
         st, hd, _ = raw("GET", "/ui/api/graph", headers=ck)
