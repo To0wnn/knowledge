@@ -396,6 +396,11 @@ def machines_contract(tmp, ck, fr, raw, er, et):
     assert m["online"] and cx["yolo"] and cx["limit"] == 91.5 and cx["workers"][0]["id"] == "MC-1" and m["companion"]["workersAllowed"], m
     assert m["agents"]["claude"]["trusted"] is False and m["agents"]["claude"]["limit"] is None
     assert json.loads((tmp / "machines.json").read_text())["cccccccccccccccc"]["limit_told"] == ["MC-2"]  # told once
+    old = {**rep, "limitWait": [], "workers": [{"id": "MC-0", "project": "garden", "agent": "codex", "status": "finished",
+                                                  "started": time.time() - 9 * 86400, "ended": time.time() - 8 * 86400, "branch": "task/MC-0"}]}
+    assert http("POST", "/machine/report", old, token=fr, headers=pc)[0] == 200
+    assert any("MC-0" in i and "task/MC-0 not merged" in i for i in json.loads(http("GET", "/lint")[1]).get("worker_unmerged", [])), http("GET", "/lint")[1][:500]
+    http("POST", "/machine/report", rep, token=fr, headers=pc)
     # A risky YOLO action: flagged once per session and kind, never refused.
     flag = lambda kind: json.loads(http("POST", "/machine/flag", {"agent": "codex", "session": "w1", "kind": kind, "detail": "git push --force"}, token=fr, headers=pc)[1])
     assert flag("force-push")["noticed"] and not flag("force-push")["noticed"] and flag("rm-outside")["noticed"]

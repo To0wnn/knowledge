@@ -1269,6 +1269,7 @@ def lint_all() -> dict[str, list[str]]:
             report.setdefault(check, []).extend(f"claude/skills/{i}" for i in items)
     if in_scope("claude/"):  # the owner's report: a device whose auto-update stopped working
         report["plugin_behind"] = plugins_behind()
+        report["worker_unmerged"] = workers_unmerged()
         rows = []
         for x in USAGE.read_text().splitlines() if USAGE.exists() else []:
             try:  # a line cut off by a crash or a full disk must not cost the whole lint
@@ -2224,6 +2225,16 @@ def mark_machine(dev: dict, agent: str = "", session: str = "", project: str = "
         update_state(MACHINES_FILE, change)
     except OSError as e:  # bookkeeping only
         print(f"machines not saved: {e}", flush=True)
+
+
+def workers_unmerged() -> list[str]:
+    """Workers that ended over a week ago and whose branch nobody merged: their worktree stays on that pc until then."""
+    now = time.time()
+    return [f"{m.get('label', mid)}: {w.get('id')} ({w.get('agent')}) ended {time.strftime('%Y-%m-%d', time.localtime(w['ended']))}, "
+            f"{w.get('branch')} not merged" for mid, m in read_json(MACHINES_FILE, {}).items()
+            for w in (m.get("companion") or {}).get("workers", []) if w.get("branch") and not w.get("merged")
+            and w.get("status") in ("finished", "failed", "stopped") and isinstance(w.get("ended"), (int, float))
+            and now - w["ended"] > 7 * 86400]
 
 
 def own_token(cfg: dict, dev: dict) -> bool:
