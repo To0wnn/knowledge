@@ -259,7 +259,7 @@ def start_server(tmp: Path):
     assert st == 200, body
     tok = json.loads(body)["token"]
     # One hand-over per agent: each plugin must say which agent it is, so its own task opens the session context.
-    tasks = "".join(f"- open tot 1 jan 2099 [{o}, {o.upper()}-1]: task for {o}\n" for o in ("Claude", "Codex", "Gemini"))
+    tasks = "".join(f"- open tot 1 jan 2099 [{o}, {o.upper()}-1] from Claude, start now: task for {o}\n" for o in ("Claude", "Codex", "Gemini"))
     st, body = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_write", "arguments":
                     {"path": "garden-memory/project_tasks.md", "content": "---\nname: tasks\ndescription: d\nmetadata:\n  type: project\n---\n"
                      f"## Stand\n{tasks}\n## Keuzes\n"}}}, {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})
@@ -586,7 +586,7 @@ def new_task(agent: Path, env: dict, project: Path, tok: str, home: Path):
     check(ask() == "", "tasks: the first prompt of a session says nothing (the start context listed the open tasks)")
     http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_write", "arguments":
          {"path": "garden-memory/project_handover.md", "content": "---\nname: h\ndescription: d\nmetadata:\n  type: project\n---\n"
-          "## Stand\n- open tot 1 jan 2099 [Codex, NEW-1-int]: install the clips\n## Keuzes\n"}}},
+          "## Stand\n- open tot 1 jan 2099 [Codex, NEW-1-int] from Claude, start now: install the clips\n## Keuzes\n"}}},
          {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})
     check(ask() == "", "tasks: within two minutes of the last ask it does not ask again")
     rewind()
@@ -674,7 +674,7 @@ def wake_e2e(tok: str, home: Path, project: Path):
                                   stderr=subprocess.PIPE, env=env, cwd=str(project), text=True, encoding="utf-8")
         waiter.stdin.write(json.dumps({"session_id": "cl-1", "cwd": str(project)}))
         waiter.stdin.close()
-        tasks = "".join(f"- open tot 1 jan 2099 [{o}, WAKE-{o.upper()}]: wake test for {o} \"a & b > c %PATH%\n" for o in ("Codex", "Claude", "Gemini"))
+        tasks = "".join(f"- open tot 1 jan 2099 [{o}, WAKE-{o.upper()}] from Claude, start now: wake test for {o} \"a & b > c %PATH%\n" for o in ("Codex", "Claude", "Gemini"))
         http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_write", "arguments":
              {"path": "garden-memory/project_wake.md", "content": "---\nname: w\ndescription: d\nmetadata:\n  type: project\n---\n"
               f"## Stand\n{tasks}\n## Keuzes\n"}}}, {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})

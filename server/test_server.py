@@ -46,6 +46,92 @@ def call(tool, args, token="rw-token"):
     return res.get("isError", False), text
 
 
+def tasks_contract(tmp, ck, fr, ver, raw):
+    """Task lines say from whom and when they may start; only startable ones reach an agent as "start now"."""
+    path, ui = "garden-memory/project_tasks.md", {**ck, "X-Knowledge-UI": "1", "Content-Type": "application/json"}
+    rows = lambda: {t["id"]: t for t in json.loads(raw("GET", "/ui/api/tasks", headers=ck)[2])["tasks"] if t["project"] == "garden"}
+    add = lambda line, token=fr: call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": line + "\n## Keuzes"}, token)
+    # A new line without from/start is refused (edit, write and the UI editor), with the format in the answer.
+    err, res = add("- open until 2099-01-01 [Codex, BARE-1]: no requester")
+    assert err and "from <Requester>, start <now | after <ID>" in res, res
+    text = (tmp / "projects/garden/memory/project_tasks.md").read_text()
+    err, res = call("knowledge_write", {"path": path, "content": text + "- open until 2099-01-01 [Codex, BARE-2]: x\n", "base_version": ver(path)})
+    assert err and "BARE-2" in res, res
+    st, _, body = raw("POST", "/ui/api/save", json.dumps({"path": path, "text": text + "- open until 2099-01-01 [Codex, BARE-3]: x\n",
+                                                          "base_version": ver(path)}), ui)
+    assert st == 409 and b"BARE-3" in body, body
+    # A legacy line already there stays editable (only lines with a new ID must say from/start).
+    legacy = tmp / "projects/garden/memory/project_legacy.md"
+    legacy.write_text(memo("- open until 2099-01-01 [Codex, LEG-1]: old style\n", "legacy"))
+    http("POST", "/invalidate", {"paths": ["garden-memory/project_legacy.md"]}, token="watch-token")
+    assert not call("knowledge_edit", {"path": "garden-memory/project_legacy.md", "old_string": "old style", "new_string": "old style, edited"})[0]
+    authors = lambda: json.loads((tmp / "task_authors.json").read_text())
+    assert authors()["garden"]["LEG-1"]["by"] == "laptop", authors()  # the VM watcher's device wrote it straight to disk
+    assert rows()["LEG-1"]["legacy"] and rows()["LEG-1"]["startable"], rows()["LEG-1"]
+    a = authors(); a["garden"].pop("LEG-1"); (tmp / "task_authors.json").write_text(json.dumps(a))
+    assert rows()["LEG-1"]["startable"] and rows()["LEG-1"]["author"] == ""  # unknown legacy: starts as before
+    a["garden"]["LEG-1"] = {"by": "stranger", "at": 0}; (tmp / "task_authors.json").write_text(json.dumps(a))
+    assert not rows()["LEG-1"]["startable"] and "written by stranger" in rows()["LEG-1"]["waiting_reason"], rows()["LEG-1"]
+    # Start conditions: after another task, a date, after approval. The writer (an admin-made token) is trusted.
+    assert not add("- open until 2099-01-01 [Codex, DEP-1] from Gemini, start after CX-1: after the pruning")[0]
+    assert not add("- open until 2099-01-01 [Codex, DAT-1] from Gemini, start 1 jan 2098: later")[0]
+    assert not add("- open until 2099-01-01 [Codex, APR-1] from Gemini, start after approval: risky")[0]
+    assert authors()["garden"]["DEP-1"]["by"] == next(n for n, c in json.loads((tmp / "tokens.json").read_text()).items()
+                                                      if c.get("roots") == ["garden", "garden-memory"])
+    r = rows()
+    assert r["DEP-1"]["waiting_reason"] == "waits for CX-1" and r["DEP-1"]["from"] == "Gemini" and r["DEP-1"]["start"] == "after CX-1", r["DEP-1"]
+    assert r["DAT-1"]["waiting_reason"] == "starts 2098-01-01" and r["APR-1"]["waiting_reason"] == "waits for approval", r
+    assert r["APR-1"]["can_approve"] and not r["DEP-1"]["can_approve"] and not r["CX-2"]["legacy"], r
+    beat = json.loads(http("GET", "/tasks?project=x&agent=codex&v=2", token=fr)[1])
+    assert not any(i in x for x in beat["tasks"] for i in ("DEP-1", "DAT-1", "APR-1", "LEG-1")), beat["tasks"]
+    assert any("DEP-1" in x and "[not yet: waits for CX-1]" in x for x in beat["waiting"]), beat["waiting"]
+    first = http("GET", "/context/1?project=x&agent=codex", token=fr)[1]
+    assert "Not yet (the bracket says why)" in first and "[not yet: waits for approval]" in first, first[:2000]
+    ready = json.loads(http("GET", "/tasks/ready", token=fr)[1])["tasks"]
+    got = {t["id"]: t for t in ready}
+    assert got["CX-2"]["agent"] == "codex" and got["VS-1"]["agent"] == "agy" and got["CX-2"]["from"] == "Claude", ready
+    assert "DEP-1" not in got and "APR-1" not in got and all(t["project"] == "garden" for t in ready), ready
+    # The dependency is done once its line is gone; an approval lets APR-1 start; only owner/admin may approve.
+    call("knowledge_edit", {"path": path, "old_string": "- open tot 2 feb 2098 [Codex, CX-1] from Claude, start now: prune\n", "new_string": ""})
+    approve = lambda tid, h=ui: raw("POST", "/ui/api/task/approve", json.dumps({"project": "garden", "id": tid}), h)[0]
+    assert approve("NOPE-1") == 404 and approve("APR-1") == 200
+    r = rows()
+    assert r["DEP-1"]["startable"] and r["APR-1"]["startable"] and r["APR-1"]["approved"], r
+    # Trusted writers per project (admin page): a token not on the list needs an approval; null = the default again.
+    writers = lambda w: raw("POST", "/ui/api/admin/task-writers", json.dumps({"name": "garden", "writers": w}), ui)[0]
+    assert writers(["alice"]) == 200 and writers(["bad name!"]) == 400
+    assert not add("- open until 2099-01-01 [Codex, UNT-1] from Gemini, start now: untrusted")[0]
+    assert rows()["UNT-1"]["waiting_reason"].startswith("waits for approval: written by"), rows()["UNT-1"]
+    assert not any("UNT-1" in x for x in json.loads(http("GET", "/tasks?project=x&agent=codex&v=2", token=fr)[1])["tasks"])
+    assert writers(None) == 200 and rows()["UNT-1"]["startable"]
+    admin = next(p for p in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["projects"] if p["name"] == "garden")
+    assert admin["task_writers"] is None, admin
+    # Woken but not claimed in time (1 s in this test): stalled in the Tasks tab, one Matrix notice.
+    woken = lambda b: http("POST", "/tasks/woken", b, token=fr)[0]
+    assert woken({"project": "garden", "id": "CX-2", "agent": "codex", "session": "s-9"}) == 200
+    assert woken({"project": "garden", "id": "GONE", "agent": "codex"}) == 404 and woken({"project": "garden", "id": "CX-2", "agent": "x"}) == 400
+    deadline = time.time() + 10
+    while not json.loads((tmp / "task_wakes.json").read_text())["garden"]["CX-2"].get("noticed") and time.time() < deadline:
+        time.sleep(0.3)
+    assert rows()["CX-2"]["stalled"], rows()["CX-2"]
+    matrix = next(b for b in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["system"]["background"] if b["name"] == "Matrix")
+    assert "CX-2" in matrix["detail"] and "nobody claimed it" in matrix["detail"], matrix
+    # Hook errors a device reports: kept per token and agent, secrets masked, shown with its sessions.
+    st = lambda b: http("POST", "/status", b, token=fr)[0]
+    err = {"hook": "SessionStart", "event": "start", "code": 1, "stderr": "boom Sup3rSecret99", "at": time.time(), "source": "agent-log"}
+    assert st({"agent": "codex", "plugin": "1.0.0", "errors": [err]}) == 200 and st({"agent": "codex", "errors": [err]}) == 200
+    assert st({"agent": "nobody", "errors": []}) == 400
+    http("GET", "/tasks?project=x&agent=codex&session=st-1", token=fr)
+    s = next(c for c in json.loads(raw("GET", "/ui/api/tasks", headers=ck)[2])["sessions"] if c["agent"] == "codex")
+    assert len(s["errors"]) == 1 and s["errors"][0]["source"] == "agent-log" and "Sup3rSecret99" not in s["errors"][0]["stderr"], s
+    for tid in ("DEP-1", "DAT-1", "APR-1", "UNT-1"):  # leave the memo as the later checks expect it
+        line = next(t["line"] for t in rows().values() if t["id"] == tid)
+        call("knowledge_edit", {"path": path, "old_string": line + "\n", "new_string": ""})
+    call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": "- open tot 2 feb 2098 [Codex, CX-1] from Claude, start now: prune\n## Keuzes"})
+    legacy.unlink()
+    http("POST", "/invalidate", {"paths": ["garden-memory/project_legacy.md"]}, token="watch-token")
+
+
 def main():
     # Every command block on the help page must paste in one go: zsh runs a "# ..." line as a command (help 23 Oct 2026).
     import html as _html
@@ -144,7 +230,7 @@ def main():
            "KNOWLEDGE_LANGUAGE": "nl", "KNOWLEDGE_BUILTIN_PROJECTS": "homelab,anpitek,trade",
            "KNOWLEDGE_BIND": "127.0.0.1", "KNOWLEDGE_RESCAN": "3600",
            "KNOWLEDGE_GITHUB_API": ghurl, "KNOWLEDGE_GITHUB_RAW": ghurl + "/raw", "KNOWLEDGE_EXTERNAL_SLEEP": "3600", "KNOWLEDGE_INSTANCE": "blue", "KNOWLEDGE_PLUGIN_GRACE": "0",
-           "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_RERANK_MODEL": "test", "KNOWLEDGE_DUPES_EVERY": "1", "KNOWLEDGE_DUPES_DELAY": "0", "KNOWLEDGE_DUPES_DEBOUNCE": "0", "KNOWLEDGE_WATCH_DEVICE": "laptop", "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}"}
+           "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_RERANK_MODEL": "test", "KNOWLEDGE_DUPES_EVERY": "1", "KNOWLEDGE_DUPES_DELAY": "0", "KNOWLEDGE_DUPES_DEBOUNCE": "0", "KNOWLEDGE_WATCH_DEVICE": "laptop", "KNOWLEDGE_TASK_STALLED": "1", "KNOWLEDGE_TASK_CHECK": "1", "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}"}
     proc = subprocess.Popen([sys.executable, str(Path(__file__).with_name("server.py"))], env=env)
     try:
         for _ in range(50):
@@ -545,15 +631,15 @@ def main():
         assert "First session" not in ctx  # garden-memory has a memo now
         # Hand-overs between agents reach a guest's session start: task lines (future too) and overdue items; not the archive.
         call("knowledge_write", {"path": "garden-memory/project_tasks.md", "content": memo(
-            "- open tot 1 jan 2099 [Gemini, VS-1]: water the beds\n- open tot 1 jan 2026: overdue chore\n", "tasks")})
+            "- open tot 1 jan 2099 [Gemini, VS-1] from Claude, start now: water the beds\n- open tot 1 jan 2026: overdue chore\n", "tasks")})
         call("knowledge_write", {"path": "garden-memory/archief/project_tasks_archief.md", "content": "- open tot 1 jan 2099 [Codex, OLD-1]: done\n"})
         ctx = "".join(http("GET", f"/context/{n}?project=x", token=fr)[1] for n in range(1, 5))
-        assert "project_tasks.md: open tot 1 jan 2099 [Gemini, VS-1]: water the beds" in ctx, ctx[-800:]
+        assert "project_tasks.md: open tot 1 jan 2099 [Gemini, VS-1] from Claude, start now: water the beds" in ctx, ctx[-800:]
         assert "overdue chore" in ctx and "OLD-1" not in ctx, ctx[-800:]
         # With ?agent= the agent's own tasks open part 1, VOORRANG first; a session log quoting a task line is no task.
         call("knowledge_write", {"path": "garden-memory/project_tasks.md", "content": memo(
-            "- open tot 1 jan 2099 [Gemini, VS-1]: water the beds\n- open tot 1 jan 2026: overdue chore\n"
-            "- open tot 2 feb 2098 [Codex, CX-1]: prune\n- open tot 3 mar 2099 [Codex, CX-2]: VOORRANG mow\n", "tasks"),
+            "- open tot 1 jan 2099 [Gemini, VS-1] from Claude, start now: water the beds\n- open tot 1 jan 2026: overdue chore\n"
+            "- open tot 2 feb 2098 [Codex, CX-1] from Claude, start now: prune\n- open tot 3 mar 2099 [Codex, CX-2] from Claude, start now: VOORRANG mow\n", "tasks"),
             "base_version": ver("garden-memory/project_tasks.md")})
         call("knowledge_write", {"path": "garden-memory/sessions/2026-10.md", "content": "- open tot 1 jan 2099 [Codex, LOG-1]: quoted\n"})
         first = http("GET", "/context/1?project=x&agent=codex", token=fr)[1]
@@ -569,17 +655,17 @@ def main():
         assert "your open tasks" not in http("GET", "/context/1?project=x", token=fr)[1]  # older plugins: as before
         # /tasks: only the asking agent's task lines, for the per-prompt check of a running session.
         t = http("GET", "/tasks?project=x&agent=codex", token=fr)[1]
-        assert t.splitlines()[0].endswith("[Codex, CX-2]: VOORRANG mow") and "VS-1" not in t and "LOG-1" not in t, t
+        assert t.splitlines()[0].endswith("[Codex, CX-2] from Claude, start now: VOORRANG mow") and "VS-1" not in t and "LOG-1" not in t, t
         assert http("GET", "/tasks?project=x&agent=nobody", token=fr)[1] == ""
         # v2 (plugin 0.9.27): JSON the server steers each turn with; a guest that never full-synced is asked to.
         beat = json.loads(http("GET", "/tasks?project=x&agent=codex&v=2", token=fr)[1])
         assert json.loads(http("GET", "/tasks?project=x&agent=codex&v=2&claim=0", token=fr)[1])["sync"] is False  # a wake takes nothing
-        assert beat["tasks"][0].endswith("[Codex, CX-2]: VOORRANG mow") and beat["sync"] is True and beat["notices"] == [], beat
+        assert beat["tasks"][0].endswith("[Codex, CX-2] from Claude, start now: VOORRANG mow") and beat["sync"] is True and beat["notices"] == [], beat
         assert json.loads(http("GET", "/tasks?project=x&agent=agy&v=2", token=fr)[1])["sync"] is False  # one session syncs
         assert json.loads(http("GET", "/tasks?agent=codex&v=2")[1])["sync"] is False  # the admin's own projects: no mirror
         # UI Tasks tab: the same task lines parsed into fields, plus a result handed back; Done removes just that line.
-        call("knowledge_edit", {"path": "garden-memory/project_tasks.md", "old_string": "[Codex, CX-1]: prune\n",
-                                "new_string": "[Codex, CX-1]: prune\n- [Claude, CX-0-done]: pruned already\n"})
+        call("knowledge_edit", {"path": "garden-memory/project_tasks.md", "old_string": "[Codex, CX-1] from Claude, start now: prune\n",
+                                "new_string": "[Codex, CX-1] from Claude, start now: prune\n- [Claude, CX-0-done]: pruned already\n"})
         ui = json.loads(raw("GET", "/ui/api/tasks", headers=ck)[2])
         g = {t["id"]: t for t in ui["tasks"] if t["project"] == "garden"}
         assert g["CX-2"]["owner"] == "Codex" and g["CX-2"]["due"] == "2099-03-03" and not g["CX-2"]["done"], g
@@ -590,7 +676,8 @@ def main():
         assert done({"path": "garden-memory/gone.md", "line": "- open tot 1 jan 2099 [Codex, X-1]: x"}) == 409  # no 500
         assert done(g["CX-0-done"]) == 200
         left = call("knowledge_read", {"path": "garden-memory/project_tasks.md"})[1]
-        assert "CX-0-done" not in left and "CX-1]: prune" in left, left
+        assert "CX-0-done" not in left and "CX-1] from Claude, start now: prune" in left, left
+        tasks_contract(tmp, ck, fr, ver, raw)
         # The plugin version: recorded per token and agent, a device behind the newest hears it at session start.
         parts = lambda q: "".join(http("GET", f"/context/{n}?project=x&{q}", token=fr)[1] for n in range(1, 6))
         assert "runs 0.9.10 for codex, the newest is 0.9.16" in parts("agent=codex&plugin=0.9.10"), parts("agent=codex&plugin=0.9.10")[-600:]

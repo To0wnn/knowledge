@@ -898,11 +898,13 @@ async def knowledge_edit(path: str, old_string: str, new_string: str) -> str:
                 raise ToolError(f"old_string found {count} times in {rel}; it must occur exactly once (re-read the file)")
             new = text.replace(old_string, new_string, 1).encode()
             refuse_broken_skill(rel, new.decode("utf-8"))
+            refuse_bare_tasks(rel, text, new.decode("utf-8"))
             if replace_if_unchanged(full, data, new):
                 break
         else:
             raise ToolError(f"{rel} kept changing while editing; read it again and retry")
         index.refresh(rel)
+    note_task_authors(rel, text, new.decode("utf-8"), device.get().get("name", ""))
     audit("edit", rel)
     judge_soon(rel)
     replaced = kb_lint.replaced_decision(text, new.decode("utf-8")) if mem_of(rel) else ""
@@ -928,10 +930,12 @@ async def knowledge_write(path: str, content: str, base_version: str = "") -> st
         if current is None and (why := new_memo_refusal(rel, content)):
             raise ToolError(why)
         refuse_mask(content, (current or b"").decode("utf-8", "replace"))
+        refuse_bare_tasks(rel, (current or b"").decode("utf-8", "replace"), content)
         data = content.encode()
         if not replace_if_unchanged(full, current, data):
             raise ToolError(f"{rel} changed while writing; read it again and redo your change")
         index.refresh(rel)
+    note_task_authors(rel, (current or b"").decode("utf-8", "replace"), content, device.get().get("name", ""))
     audit("write", rel)
     judge_soon(rel)
     hint = await asyncio.to_thread(similar_memos_hint, rel, content) if current is None else ""  # embeds: not on the loop
@@ -1585,10 +1589,146 @@ def context_parts(project: str = "homelab", agent: str = "") -> list[str]:
 
 
 TASK_OWNER = re.compile(r"^\[([^,\]]+),\s*([^\]]+)\]")
+# "from <requester>, start <condition>:" right after the owner bracket; a "(claimed ...)" marker may sit around it.
+TASK_START = re.compile(r"\s*(?:\([^)]*\)\s*)*from\s+([^,:]+?)\s*,\s*start\s+(now|after approval|after\s+[^\s:,()]+"
+                        r"|20\d\d-\d\d-\d\d|\d{1,2} [a-z]+ 20\d\d)\s*(?:\([^)]*\)\s*)*:", re.I)
+DONE_LINE = re.compile(r"^\s*-\s*\[([^,\]]+),\s*([^\]]+-done)\]:?\s*(.*)$", re.I)  # a result handed back, no date
+TASK_FORMAT = ("'- open until <date> [<Owner>, <ID>] from <Requester>, start <now | after <ID> | <date> | after approval>: "
+               "<what>'")
 HAND_BACK = ("When another agent handed it to you and waits on the result, hand it back with a line for that agent: "
-             "'[<requester>, <ID>-done]: <result>; <commit or path>'.")
+             "'[<requester>, <ID>-done]: <result>; <commit or path>'. A new task for another agent: " + TASK_FORMAT + ".")
 AGENT_OWNERS = {"claude": ("claude",), "codex": ("codex",), "agy": ("gemini", "agy", "antigravity")}  # names used in task lines
 TASK_CHARS = 240  # the memo holds the full text; the start context only has to make the agent look
+STALLED_AFTER = int(os.environ.get("KNOWLEDGE_TASK_STALLED", 30 * 60))  # a woken task nobody claimed this long is stalled
+TASK_AUTHORS, TASK_APPROVALS, TASK_WAKES = (AUDIT.parent / f"task_{n}.json" for n in ("authors", "approvals", "wakes"))
+TASK_WRITERS = ADMIN_DIR / "task_writers.json"  # project -> trusted writers (token names, users); absent = the default
+_task_lock = threading.Lock()
+
+
+def parse_task(line: str) -> dict | None:
+    """A task line "open until <date> [<owner>, <ID>] from <requester>, start <when>: <what>" as fields, None for any
+    other line. A line without from/start is legacy and starts now."""
+    if not ((m := kb_lint.OPEN_DUE.search(line)) and (o := TASK_OWNER.match(m.group(2)))):
+        return None
+    rest = m.group(2)[o.end():]
+    f = TASK_START.match(rest)
+    return {"owner": o.group(1).strip(), "id": o.group(2).strip(), "due": kb_lint.latest_date(m.group(1)),
+            "from": f.group(1).strip() if f else "", "start": " ".join(f.group(2).split()) if f else "now",
+            "legacy": not f, "claimed": bool(re.search(r"\((?:claimed|bezig)\b", line, re.I)),
+            "text": (rest[f.end():] if f else rest).lstrip(": ").strip(), "body": line.strip().removeprefix("- ")}
+
+
+assert parse_task("- open tot 1 jan 2099 [Gemini, VS-1]: water")["legacy"]
+assert parse_task("- open until 2099-01-01 [Codex, K-2] from Claude, start after K-1: build: it")["start"] == "after K-1"
+assert parse_task("- open until 2099-01-01 [Codex, K-2] from Claude, start after K-1: build: it")["text"] == "build: it"
+assert parse_task("- open until 2099-01-01 [Codex, K-3] (claimed Codex, 2026-10-31) from Ann, start 2 nov 2026: x")["from"] == "Ann"
+assert parse_task("- open until 2099-01-01 [Codex, K-4] from Ann, start after approval: x")["start"] == "after approval"
+assert parse_task("- open until 2099-01-01: no owner") is None
+
+
+def project_of(rel: str) -> str:
+    root = rel.split("/", 1)[0]
+    return next((p for p, roots in list(PROJECTS.items()) if root in roots), "")
+
+
+def task_ids(text: str) -> set[str]:
+    return {t["id"] for line in text.splitlines() if (t := parse_task(line))}
+
+
+def added_tasks(rel: str, before: str, after: str) -> list[dict]:
+    """The task lines `after` has whose ID `before` had not: what a write hands over. Session logs only quote task lines
+    and archives hold finished ones."""
+    if not mem_of(rel) or rel.split("/", 2)[1:2] == ["sessions"] or is_archive(rel):
+        return []
+    old = task_ids(before)
+    return [t for line in after.splitlines() if (t := parse_task(line)) and t["id"] not in old]
+
+
+def refuse_bare_tasks(rel: str, before: str, after: str):
+    """A new task line must say from whom and when it may start; lines already there stay as they are."""
+    if bare := [t["id"] for t in added_tasks(rel, before, after) if t["legacy"]]:
+        raise ToolError(f"new task line {', '.join(bare)} must say from whom it is and when it may start: write it as "
+                        f"{TASK_FORMAT}; 'start now' when it may start at once")
+
+
+def update_state(path: Path, change):
+    """Read, change and write one of the task state files; the background check writes them too."""
+    with _task_lock:
+        data = json.loads(json.dumps(read_json(path, {})))  # read_json hands out its cached object
+        change(data)
+        write_json(path, data)
+
+
+def note_task_authors(rel: str, before: str, after: str, by: str):
+    """Who added a task line: a line from a writer the project trusts may start by itself, others wait for approval.
+    A line added again (another memo, the same ID) gets its new writer, so reusing an ID never borrows trust."""
+    if not by or not (new := added_tasks(rel, before, after)) or not (project := project_of(rel)):
+        return
+    try:
+        update_state(TASK_AUTHORS, lambda d: d.setdefault(project, {}).update(
+            {t["id"]: {"by": by, "at": int(time.time())} for t in new}))
+    except OSError as e:  # the write itself happened; without an author the line waits for approval
+        print(f"task authors not saved: {e}", flush=True)
+
+
+def project_owner(project: str) -> str:
+    """The person who made the project in the UI ("" for built-in ones and those an admin made)."""
+    return next((u for u, c in read_json(USERS_FILE, {}).items() if project in c.get("created", [])), "")
+
+
+def trusted_writer(project: str, by: str) -> bool:
+    """Whether a task line `by` wrote may start without approval. The admin page may list the writers per project;
+    by default: admins, tokens an admin made (they have no owner), the project's owner and that person's tokens."""
+    tokens = read_json(TOKENS_FILE, {})
+    user = by.removeprefix("user:") if by.startswith("user:") else (tokens.get(by) or {}).get("owner", "")
+    if (writers := read_json(TASK_WRITERS, {}).get(project)) is not None:
+        return by in writers or bool(user) and user in writers
+    if not by.startswith("user:") and by not in tokens:
+        return False  # revoked, or never a token
+    return user in ADMINS or user == project_owner(project) if user else True
+
+
+def project_tasks(project: str) -> tuple[list[dict], list[dict]]:
+    """The open task lines of a project, each with whether it may start now and why not, and the results handed back."""
+    tasks, back = [], []
+    for rel, text in sorted(task_memos(PROJECTS[project][1]).items()):
+        for line in text.splitlines():
+            if t := parse_task(line):
+                tasks.append({**t, "project": project, "path": rel, "line": line})
+            elif d := DONE_LINE.match(line):
+                back.append({"project": project, "path": rel, "line": line, "owner": d.group(1).strip(),
+                             "id": d.group(2).strip(), "text": d.group(3).strip()})
+    open_ids, done_ids = {t["id"] for t in tasks}, {b["id"] for b in back}
+    authors, approvals, wakes = (read_json(f, {}).get(project, {}) for f in (TASK_AUTHORS, TASK_APPROVALS, TASK_WAKES))
+    today, now = date.today(), time.time()
+    for t in tasks:
+        start, by, approved = t["start"].lower(), authors.get(t["id"], {}).get("by", ""), t["id"] in approvals
+        after = t["start"][6:].strip() if start.startswith("after ") and start != "after approval" else ""
+        when = kb_lint.latest_date(t["start"]) if not after and start not in ("now", "after approval") else None
+        trusted = (t["legacy"] and not by) or bool(by) and trusted_writer(project, by)  # unknown legacy: as before
+        why = [r for r, waits in (
+            ("waits for approval", start == "after approval" and not approved),
+            (f"waits for {after}", after and after in open_ids and f"{after}-done" not in done_ids),
+            (f"starts {when.isoformat() if when else ''}", when and when > today),
+            (f"waits for approval: written by {by or 'an unknown writer'}", start != "after approval" and not approved and not trusted),
+        ) if waits]
+        w = wakes.get(t["id"])
+        t.update(author=by, approved=approved, startable=not t["claimed"] and not why, waiting_reason="; ".join(why),
+                 needs_approval=not approved and (start == "after approval" or not trusted),
+                 stalled=bool(w) and not t["claimed"] and now - w.get("at", 0) > STALLED_AFTER)
+    return tasks, back
+
+
+def owner_agent(owner: str) -> str:
+    return next((a for a, names in AGENT_OWNERS.items() if owner.lower() in names), "")
+
+
+def task_item(t: dict, mem: str) -> str:
+    """One task for an agent's context: the line itself says from whom and when; a legacy or waiting line says it too."""
+    body = t["body"] if len(t["body"]) <= TASK_CHARS else t["body"][:TASK_CHARS] + "…"
+    note = (" [not yet: " + (t["waiting_reason"] or "claimed, in progress") + "]" if not t["startable"]
+            else " [legacy line without from/start: may start now]" if t["legacy"] else "")
+    return f"- {t['path'].removeprefix(mem + '/')}: {body}{note}"
 
 
 def task_memos(mem: str) -> dict[str, str]:
@@ -1597,45 +1737,44 @@ def task_memos(mem: str) -> dict[str, str]:
             and not r.startswith(mem + "/sessions/") and not is_archive(r)}
 
 
-def task_items(memos: dict[str, str], mem: str, names: tuple) -> tuple[list[str], list[str]]:
-    """Task lines "open tot <date> [<owner>, <ID>]: ..." as shortened items: (those of the owners in `names`, VOORRANG
-    first, then due date; all others)."""
-    mine, others = [], []
-    for r, t in sorted(memos.items()):
-        for line in t.splitlines():
-            if not ((m := kb_lint.OPEN_DUE.search(line)) and (o := TASK_OWNER.match(m.group(2)))):
-                continue
-            body = line.strip().removeprefix("- ")
-            item = f"- {r.removeprefix(mem + '/')}: {body if len(body) <= TASK_CHARS else body[:TASK_CHARS] + '…'}"
-            if o.group(1).strip().lower() in names:
-                mine.append(("VOORRANG" not in body.upper() and "PRIORITY" not in body.upper(), kb_lint.latest_date(m.group(1)) or date.max, item))
-            else:
-                others.append(item)
-    return [i for *_, i in sorted(mine)], others
+def task_items(project: str, names: tuple) -> tuple[list[str], list[str], list[str]]:
+    """Task lines as shortened items: (those of the owners in `names` that may start now, VOORRANG first, then due date;
+    theirs that may not start yet; all others)."""
+    mem, mine, waiting, others = PROJECTS[project][1], [], [], []
+    for t in project_tasks(project)[0]:
+        item = task_item(t, mem)
+        if t["owner"].lower() not in names:
+            others.append(item)
+            continue
+        key = ("VOORRANG" not in t["body"].upper() and "PRIORITY" not in t["body"].upper(), t["due"] or date.max, item)
+        (mine if t["startable"] else waiting).append(key)
+    return [i for *_, i in sorted(mine)], [i for *_, i in sorted(waiting)], others
 
 
 def open_items_text(mem: str, agent: str = "") -> tuple[list[str], list[str]]:
     """Hand-overs between agents and overdue items, for every session start (guests too): a task line
-    "open tot <date> [<owner>, <ID>]: ..." in any memo of this project is listed until someone removes it.
-    Returns (the tasks of `agent`, to go first; everything else, for the tail). Session logs only quote task lines."""
+    "open until <date> [<owner>, <ID>] from <requester>, start <when>: ..." in any memo of this project is listed until
+    someone removes it. Returns (the tasks of `agent`, to go first; everything else, for the tail)."""
     W = kb_lint.W
     memos = task_memos(mem)
     overdue = kb_lint.lint(memos, mem=mem)["open_overdue"]
     names = AGENT_OWNERS.get(agent, ())
-    mine, others = task_items(memos, mem, names)
+    mine, waiting, others = task_items(project_of(mem + "/"), names)
     head, tail = [], []
-    if mine:
+    if mine or waiting:
         who = next(o for o in ("Claude", "Codex", "Gemini") if o.lower() in names)
-        head.append(f"===== your open tasks ({who}, project {mem}) =====\nThese tasks were handed to you ({who}). In your "
-                    "first reply of this session, list them for the user, one short line each (ID, due date, what), and "
-                    "start the one with the earliest due date right away; when the user's first message already asks for something, "
-                    f"do that first and list these at the end. Starting one: add '({W['claimed']} {who}, <date>)' to its line with knowledge_edit; "
+        head.append(f"===== your open tasks ({who}, project {mem}) =====\nThese tasks were handed to you ({who}); each line "
+                    "says from whom ('from <requester>') and when it may start ('start <condition>'). In your "
+                    "first reply of this session, list them for the user, one short line each (ID, from whom, due date, what), and "
+                    "start the one under 'may start now' with the earliest due date right away; when the user's first message already asks for something, "
+                    f"do that first and list these at the end. Never start one under 'not yet'. Starting one: add '({W['claimed']} {who}, <date>)' to its line with knowledge_edit; "
                     f"done: remove the line from the memo's {W['now']} (result to its archive). {HAND_BACK} Full text: the memo "
-                    "named in front.\n"
-                    + "\n".join(mine))
+                    "named in front."
+                    + ("\nMay start now:\n" + "\n".join(mine) if mine else "")
+                    + ("\nNot yet (the bracket says why):\n" + "\n".join(waiting) if waiting else ""))
     if others:
-        tail.append(f"===== open tasks between agents ({mem}) =====\nEach line names its owner. Yours: acknowledge it by adding "
-                    f"'({W['claimed']} <owner>, <date>)' to that line with knowledge_edit, and when done remove the line from the "
+        tail.append(f"===== open tasks between agents ({mem}) =====\nEach line names its owner, from whom it is and when it may start. Yours: acknowledge it by adding "
+                    f"'({W['claimed']} <owner>, <date>)' to that line with knowledge_edit once it may start, and when done remove the line from the "
                     f"memo's {W['now']} (result to its archive). {HAND_BACK} Others': leave them, but say so if one blocks you:\n"
                     + "\n".join(others))
     if overdue:
@@ -2281,6 +2420,7 @@ async def mirror_push(request: Request):
             if (current is None and not base) or (current is not None and plain and base == version(current)):
                 if replace_if_unchanged(full, current, data):
                     index.refresh(rel)
+                    note_task_authors(rel, (current or b"").decode("utf-8", "replace"), f["text"], device.get().get("name", ""))
                     audit("mirror", rel)
                     out["written"][rel] = version(data)
                     continue
@@ -2472,7 +2612,13 @@ async def invalidate_route(request: Request):
     if not device.get().get("watch"):
         return JSONResponse({"error": "token may not invalidate"}, status_code=403)
     paths = (await request.json()).get("paths", [])[:5000]
+    with index.lock:  # what a task line was before, so a line a VM session wrote straight into a memo gets its author
+        before = {p: index.files[p][2] for p in paths if p in index.files and mem_of(p)}
     await asyncio.to_thread(lambda: [index.refresh(p) for p in paths])
+    if WATCH_DEVICE:
+        for p in paths:
+            if mem_of(p) and (hit := index.files.get(p)):
+                note_task_authors(p, before.get(p, ""), hit[2], WATCH_DEVICE)
     if WATCH_DEVICE:  # sessions that write memo files directly (not through knowledge_write) hear about duplicates too
         for p in paths:
             judge_soon(p, WATCH_DEVICE, keep=True)
@@ -2519,7 +2665,8 @@ async def tasks_route(request: Request):
     mem, q = PROJECTS[project][1], request.query_params
     dev = device.get()
     mark_client(dev.get("name", ""), q.get("agent", ""), q.get("session", ""), project, q.get("wake") == "1")
-    items = task_items(task_memos(mem), mem, AGENT_OWNERS.get(q.get("agent", ""), ()))[0]
+    # only tasks that may start now: the plugin says each new one as "start it right away" and wakes sessions for it
+    items, waiting, _ = await asyncio.to_thread(task_items, project, AGENT_OWNERS.get(q.get("agent", ""), ()))
     if q.get("v") != "2":  # plugins up to 0.9.26: the task lines only
         return PlainTextResponse("\n".join(items))
     # v2: the server steers every turn, also of a resumed session that never ran its start hooks
@@ -2534,7 +2681,109 @@ async def tasks_route(request: Request):
         and time.time() - _full_synced.get(key, 0) > DOCS_SYNC_MINUTES * 60
     if sync:  # handed to this session only; if its sync fails, the next turn after DOCS_SYNC_MINUTES asks again
         _full_synced[key] = time.time()
-    return JSONResponse({"tasks": items, "notices": notices, "sync": sync})
+    return JSONResponse({"tasks": items, "waiting": waiting, "notices": notices, "sync": sync})
+
+
+@server.custom_route("/tasks/ready", methods=["GET"])
+async def tasks_ready_route(request: Request):
+    """Every task an agent may start now in this token's projects, for the companion that wakes agents."""
+    out = []
+    for p, (_, mem) in list(PROJECTS.items()):
+        if in_scope(mem + "/"):
+            out += [{"project": p, "path": t["path"], "id": t["id"], "owner": t["owner"], "agent": a, "from": t["from"],
+                     "start": t["start"], "text": t["text"]}
+                    for t in (await asyncio.to_thread(project_tasks, p))[0] if t["startable"] and (a := owner_agent(t["owner"]))]
+    return JSONResponse({"tasks": out})
+
+
+@server.custom_route("/tasks/woken", methods=["POST"])
+async def tasks_woken_route(request: Request):
+    """{"project", "id", "agent", "session"}: a session was woken for this task. Not claimed within STALLED_AFTER, it
+    shows as stalled in the Tasks tab and the admin hears it once."""
+    try:
+        b = await request.json()
+        project, tid, agent, session = (str(b.get(k, "")) for k in ("project", "id", "agent", "session"))
+    except (ValueError, AttributeError):
+        return JSONResponse({"error": "send JSON {project, id, agent, session}"}, status_code=400)
+    if project not in PROJECTS or not in_scope(PROJECTS[project][1] + "/"):
+        return JSONResponse({"error": f"unknown project {project}"}, status_code=404)
+    if agent not in AGENT_OWNERS:
+        return JSONResponse({"error": f"agent must be one of {sorted(AGENT_OWNERS)}"}, status_code=400)
+    if tid not in {t["id"] for t in (await asyncio.to_thread(project_tasks, project))[0]}:
+        return JSONResponse({"error": f"no open task {tid} in {project}"}, status_code=404)
+    wake = {"agent": agent, "session": session[:80], "device": device.get().get("name", ""), "at": int(time.time())}
+    await asyncio.to_thread(update_state, TASK_WAKES, lambda d: d.setdefault(project, {}).update({tid: wake}))
+    return JSONResponse({"ok": True})
+
+
+def stalled_check() -> int:
+    """Woken tasks nobody claimed in time: one Matrix notice each. Wakes of tasks that are gone are forgotten."""
+    wakes, told, gone = read_json(TASK_WAKES, {}), [], []
+    for project, ids in wakes.items():
+        tasks = {t["id"]: t for t in project_tasks(project)[0]} if project in PROJECTS else {}
+        for tid, w in ids.items():
+            if (t := tasks.get(tid)) is None:
+                gone.append((project, tid))
+            elif t["stalled"] and not w.get("noticed"):
+                notify(f"Knowledge: task {tid} ({project}, for {t['owner']}) was woken on {w.get('device') or '?'} "
+                       f"{int((time.time() - w.get('at', 0)) // 60)} min ago, but nobody claimed it: {t['text'][:120]}")
+                told.append((project, tid))
+    if told or gone:
+        def change(d):
+            for project, tid in gone:
+                d.get(project, {}).pop(tid, None)
+            for project, tid in told:
+                if tid in d.get(project, {}):
+                    d[project][tid]["noticed"] = True
+        update_state(TASK_WAKES, change)
+    return len(told)
+
+
+def stalled_loop():
+    while True:
+        try:
+            BACKGROUND["tasks"] = {"at": time.time(), "detail": f"{stalled_check()} stalled task(s) reported"}
+        except Exception as e:  # never kill the thread; show it on the admin page
+            BACKGROUND["tasks"] = {"at": time.time(), "error": f"stalled-task check failed: {e}"}
+            print(f"stalled-task check failed: {e}", flush=True)
+        time.sleep(float(os.environ.get("KNOWLEDGE_TASK_CHECK", 60)))
+
+
+STATUS_FILE = AUDIT.parent / "agent_status.json"
+STATUS_KEEP = (7 * 86400, 20)  # per token and agent: hook errors of the last week, at most this many
+
+
+@server.custom_route("/status", methods=["POST"])
+async def status_route(request: Request):
+    """{"agent", "plugin", "errors": [{"hook", "event", "code", "stderr", "at", "source"}]}: hook failures a device
+    reports (source "knowledge" for our hooks, "agent-log" for what the companion reads from an agent's own log),
+    shown per session in the Tasks tab."""
+    name = device.get().get("name", "")
+    try:
+        b = await request.json()
+        agent, errors = b.get("agent"), b.get("errors") or []
+        assert agent in AGENT_OWNERS and isinstance(errors, list)
+    except (ValueError, AttributeError, AssertionError):
+        return JSONResponse({"error": f"send JSON {{agent: one of {sorted(AGENT_OWNERS)}, plugin, errors: [...]}}"}, status_code=400)
+    now = time.time()
+
+    def when(e):
+        try:
+            return float(e.get("at"))
+        except (TypeError, ValueError):
+            return now
+    new = [{"hook": str(e.get("hook", ""))[:80], "event": str(e.get("event", ""))[:80],
+            "code": e.get("code") if isinstance(e.get("code"), int) else None,
+            "stderr": redact(str(e.get("stderr", ""))[-2000:]), "at": when(e),
+            "source": "agent-log" if e.get("source") == "agent-log" else "knowledge"} for e in errors[:50] if isinstance(e, dict)]
+
+    def put(d):
+        old = d.setdefault(name, {}).get(agent, {}).get("errors", [])
+        keep = {(e["hook"], e["event"], e["at"]): e for e in old + new if now - e["at"] < STATUS_KEEP[0]}  # a resend adds nothing
+        d[name][agent] = {"plugin": str(b.get("plugin", ""))[:20], "at": now,
+                          "errors": sorted(keep.values(), key=lambda e: e["at"])[-STATUS_KEEP[1]:]}
+    await asyncio.to_thread(update_state, STATUS_FILE, put)
+    return JSONResponse({"ok": True, "stored": len(new)})
 
 
 @server.custom_route("/context/{part:int}", methods=["GET"])  # not a number: 404, not a crash
@@ -3084,7 +3333,8 @@ async def ui_admin_state(request: Request, _):
     return JSONResponse({"admin": True,
         "admins": sorted(ADMINS),
         "users": read_json(USERS_FILE, {}),
-        "projects": [{"name": p, "docs": d, "memory": m, "builtin": p in BUILTIN_PROJECTS, "label": labels.get(p)}
+        "projects": [{"name": p, "docs": d, "memory": m, "builtin": p in BUILTIN_PROJECTS, "label": labels.get(p),
+                      "task_writers": read_json(TASK_WRITERS, {}).get(p), "owner": project_owner(p)}
                      for p, (d, m) in PROJECTS.items()],
         "roots": sorted(ROOTS),
         "tokens": [{"name": n, **{k: v for k, v in cfg.items() if k != "sha256"}, "last_used": last_used(n), "plugin": plugin_seen(n),
@@ -3133,6 +3383,24 @@ async def ui_admin_project_label(request: Request, body: dict):
     labels = {k: v for k, v in read_json(LABELS_FILE, {}).items() if k != name}
     write_json(LABELS_FILE, {**labels, **({name: label} if label and label != name else {})})
     audit("admin-project-label", name)
+    return JSONResponse({"ok": True})
+
+
+@server.custom_route("/ui/api/admin/task-writers", methods=["POST"])
+@admin_only
+async def ui_admin_task_writers(request: Request, body: dict):
+    """{"name": "<project>", "writers": ["<token or user>", ...] | null}: whose new task lines may start without
+    approval; null goes back to the default (the project's owner and their tokens, admins and their tokens)."""
+    name, writers = str(body.get("name", "")), body.get("writers")
+    if name not in PROJECTS:
+        raise ToolError(f"unknown project: {name}")
+    if writers is not None:
+        writers = sorted({str(w).strip() for w in writers if str(w).strip()})
+        if bad := [w for w in writers if not re.fullmatch(r"[\w.@+:-]{1,150}", w)]:
+            raise ToolError(f"not a token or user name: {', '.join(bad)}")
+    current = {k: v for k, v in read_json(TASK_WRITERS, {}).items() if k != name}
+    write_json(TASK_WRITERS, {**current, **({name: writers} if writers is not None else {})})
+    audit("admin-task-writers", name)
     return JSONResponse({"ok": True})
 
 
@@ -3554,27 +3822,25 @@ async def ui_lint(request: Request):
     return JSONResponse(await asyncio.to_thread(lint_all) if device.get().get("admin") else {})  # lint spans every project
 
 
-DONE_LINE = re.compile(r"^\s*-\s*\[([^,\]]+),\s*([^\]]+-done)\]:?\s*(.*)$", re.I)  # a result handed back, no date
+def may_approve(project: str) -> bool:
+    dev = device.get()
+    return bool(dev.get("admin")) or bool(dev.get("user")) and dev.get("user") == project_owner(project)
 
 
 def task_rows() -> list[dict]:
     """Every task line and handed-back result in the projects this device sees, for the UI's Tasks tab; the same
-    lines the session start lists, parsed into fields."""
+    lines the session start lists, parsed into fields, with whether each may start now."""
     rows, today = [], date.today()
-    for name, (_, mem) in PROJECTS.items():
+    for name, (_, mem) in list(PROJECTS.items()):
         if not in_scope(mem + "/"):
             continue
-        for rel, text in sorted(task_memos(mem).items()):
-            for line in text.splitlines():
-                if (m := kb_lint.OPEN_DUE.search(line)) and (o := TASK_OWNER.match(m.group(2))):
-                    due = kb_lint.latest_date(m.group(1))
-                    rows.append({"project": name, "path": rel, "line": line, "owner": o.group(1).strip(), "id": o.group(2).strip(),
-                                 "due": due.isoformat() if due else "", "overdue": bool(due and due < today), "done": False,
-                                 "claimed": bool(re.search(r"\((?:claimed|bezig)\b", line, re.I)),
-                                 "text": m.group(2)[o.end():].lstrip(": ").strip()})
-                elif d := DONE_LINE.match(line):
-                    rows.append({"project": name, "path": rel, "line": line, "owner": d.group(1).strip(), "id": d.group(2).strip(),
-                                 "due": "", "overdue": False, "done": True, "claimed": False, "text": d.group(3).strip()})
+        tasks, back = project_tasks(name)
+        approver = may_approve(name)
+        rows += [{**{k: t[k] for k in ("project", "path", "line", "owner", "id", "claimed", "text", "from", "start", "legacy",
+                                        "author", "startable", "waiting_reason", "stalled", "approved")},
+                  "due": t["due"].isoformat() if t["due"] else "", "overdue": bool(t["due"] and t["due"] < today),
+                  "done": False, "can_approve": approver and t["needs_approval"]} for t in tasks]
+        rows += [{**b, "due": "", "overdue": False, "done": True, "claimed": False} for b in back]
     return rows
 
 
@@ -3588,8 +3854,10 @@ def task_sessions() -> list[dict]:
         if not dev.get("admin") and cfg.get("owner") != dev.get("user"):
             continue
         seen = {p["agent"]: p["v"] for p in plugin_seen(n)}
+        status = read_json(STATUS_FILE, {}).get(n, {})
         out += [{"device": n, "agent": c.get("agent", ""), "project": c.get("project", ""), "wake": bool(c.get("wake")),
-                 "at": c.get("at", 0), "plugin": seen.get(c.get("agent", ""), "")}
+                 "at": c.get("at", 0), "plugin": seen.get(c.get("agent", ""), ""),
+                 "errors": [e for e in status.get(c.get("agent", ""), {}).get("errors", []) if time.time() - e["at"] < STATUS_KEEP[0]]}
                 for c in clients_seen(n) if c.get("project") in projects]
     return sorted(out, key=lambda c: -c["at"])
 
@@ -3597,6 +3865,27 @@ def task_sessions() -> list[dict]:
 @server.custom_route("/ui/api/tasks", methods=["GET"])
 async def ui_tasks(request: Request):
     return JSONResponse({"tasks": await asyncio.to_thread(task_rows), "sessions": task_sessions()})
+
+
+@server.custom_route("/ui/api/task/approve", methods=["POST"])
+async def ui_task_approve(request: Request):
+    """{"project", "id"}: the project's owner or an admin lets a task start that waits for approval (start after
+    approval, or written by someone the project does not trust)."""
+    try:
+        body = await request.json()
+        project, tid = str(body.get("project", "")), str(body.get("id", ""))
+    except (ValueError, AttributeError):
+        return JSONResponse({"error": "send JSON {project, id}"}, status_code=400)
+    if project not in PROJECTS or not in_scope(PROJECTS[project][1] + "/"):
+        return JSONResponse({"error": f"unknown project {project}"}, status_code=404)
+    if not may_approve(project):
+        return JSONResponse({"error": "only the project's owner or an admin may approve a task"}, status_code=403)
+    if tid not in {t["id"] for t in (await asyncio.to_thread(project_tasks, project))[0]}:
+        return JSONResponse({"error": f"no open task {tid} in {project}"}, status_code=404)
+    approval = {"by": device.get().get("user", ""), "at": int(time.time())}
+    await asyncio.to_thread(update_state, TASK_APPROVALS, lambda d: d.setdefault(project, {}).update({tid: approval}))
+    audit("task-approve", f"{project}/{tid}")
+    return JSONResponse({"ok": True})
 
 
 @server.custom_route("/ui/api/task/done", methods=["POST"])
@@ -3698,6 +3987,7 @@ if __name__ == "__main__":
     threading.Thread(target=vec.loop, daemon=True).start()
     threading.Thread(target=external_loop, daemon=True).start()
     threading.Thread(target=duplicates_loop, daemon=True).start()
+    threading.Thread(target=stalled_loop, daemon=True).start()
     host, port = os.environ.get("KNOWLEDGE_BIND", "0.0.0.0"), int(os.environ.get("KNOWLEDGE_PORT", "8766"))
     sock = open_port(host, port)
     listening = AUDIT.parent / f"listening-{INSTANCE}" if INSTANCE else None
