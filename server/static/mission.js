@@ -313,7 +313,7 @@ function msOpenPanel(key) {
     ok.onclick = async () => {
       ok.disabled = true;
       try { await api("/ui/api/task/approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project: n.project, id: n.id }) }); msLoad(); }
-      catch (e) { ok.disabled = false; alert(e.message); }
+      catch (e) { ok.disabled = false; toast(e.message); }
     };
     acts.append(ok);
   }

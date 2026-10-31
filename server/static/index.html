@@ -87,30 +87,29 @@
     </section>
 
     <div id="kn" class="view kn" hidden>
-      <aside class="left" aria-label="Search and topics">
-        <section id="tab-notes">
-          <input id="q" type="search" placeholder="Search titles, text and meaning…  ( / )" autocomplete="off" aria-label="Search">
-          <div id="results" hidden>
-            <h3 id="titles-head" class="sub">Titles</h3>
-            <ol id="titles" class="hits"></ol>
-            <h3 class="sub">Text</h3>
-            <ol id="hits" class="hits"></ol>
-            <p id="hits-empty" class="muted" hidden></p>
-            <h3 id="sem-head" class="sub" hidden>By meaning</h3>
-            <ol id="sem" class="hits"></ol>
-          </div>
-          <div id="topics"></div>
-        </section>
+      <aside class="left" id="topics-pane" aria-label="Topics">
+        <div id="topics"></div>
       </aside>
       <div class="center">
         <article id="note" aria-label="Note"></article>
+        <section id="results" aria-label="Search results" hidden>
+          <input id="q" type="search" placeholder="Search titles, text and meaning…" autocomplete="off" aria-label="Search notes">
+          <h3 id="titles-head" class="sub">Titles</h3>
+          <ol id="titles" class="hits"></ol>
+          <h3 class="sub">Text</h3>
+          <ol id="hits" class="hits"></ol>
+          <p id="hits-empty" class="empty" hidden></p>
+          <h3 id="sem-head" class="sub" hidden>By meaning</h3>
+          <ol id="sem" class="hits"></ol>
+        </section>
         <div id="graph" aria-label="Map of the project" hidden><div id="g2d"></div></div>
       </div>
       <aside class="right" id="side" aria-label="Connected notes"></aside>
     </div>
 
     <section id="tab-changes" class="view pad" aria-label="Changes" hidden>
-      <ol id="recent" class="hits"></ol>
+      <p class="muted">Newest first. A click opens what changed; marked: new since your last look.</p>
+      <div id="recent"></div>
     </section>
     <section id="tab-lint" class="view pad" aria-label="Health" hidden>
       <p class="muted">Facts only: fix what is clearly wrong, ask Claude to judge the rest.</p>
@@ -201,11 +200,23 @@
   </form>
 </dialog>
 
+<dialog id="palette" class="palette" aria-label="Search or jump">
+  <div class="pal-box">
+    <input id="pal-q" type="text" role="combobox" aria-expanded="true" aria-controls="pal-list" aria-autocomplete="list" autocomplete="off" spellcheck="false" placeholder="Search notes, chats, tasks, or type a command…">
+    <button type="button" class="ghost small phone-only" id="pal-close">Close</button>
+  </div>
+  <ul id="pal-list" role="listbox" aria-label="Results"></ul>
+  <p class="pal-foot muted"><kbd>↑</kbd><kbd>↓</kbd> move · <kbd>Enter</kbd> open · <kbd>Esc</kbd> close</p>
+</dialog>
+
+<div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+
 <script src="/ui/static/vendor/force-graph-1.52.0.js"></script>
 <script src="/ui/static/vendor/marked-18.1.1.js"></script>
 <script src="/ui/static/vendor/dompurify-3.4.17.js"></script>
 <script src="/ui/static/app.js"></script>
 <script src="/ui/static/mission.js"></script>
 <script src="/ui/static/shell.js"></script>
+<script src="/ui/static/palette.js"></script>
 </body>
 </html>

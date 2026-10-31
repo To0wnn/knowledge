@@ -1327,7 +1327,7 @@ def main():
         st, hdr, page_ = raw("GET", "/ui", headers=ck)
         assert "connect-src 'self' http://127.0.0.1:47321;" in hdr["content-security-policy"], hdr["content-security-policy"]
         assert re.search(rb'<a class="nav nav-thispc" id="nav-thispc"[^>]* hidden>', page_), "This pc not hidden by default"
-        assert b"/ui/static/shell.js?v=" in page_ and b'id="tab-thispc"' in page_  # the shell is versioned like app.js; thispc.css needs the id
+        assert b"/ui/static/shell.js?v=" in page_ and b"/ui/static/palette.js?v=" in page_ and b'id="tab-thispc"' in page_  # the shell is versioned like app.js; thispc.css needs the id
         assert b'/ui/static/thispc.css' in page_ and raw("GET", "/ui/static/thispc.css", headers=ck)[0] == 200
         app_js = (Path(__file__).parent / "static" / "app.js").read_text()
         probe = app_js.split("async function probeCompanion()")[1].split("\n}")[0]

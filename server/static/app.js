@@ -24,6 +24,15 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener("change", themeChang
 const decode = (s) => { try { return decodeURIComponent(s); } catch { return s; } }; // a literal % is not an escape
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+// One empty state and one loading state for every list; a toast instead of alert() (errors stay longer, a click
+// dismisses), announced by the #toasts live region.
+const emptyState = (text) => el("p", "empty", text);
+const loadingState = () => el("p", "empty loading", "Loading…");
+function toast(text, bad = true) {
+  const t = el("div", `toast${bad ? " bad" : ""}`, text);
+  t.onclick = () => t.remove(); $("toasts").append(t);
+  setTimeout(() => t.remove(), bad ? 8000 : 4000);
+}
 const projectOf = (path) => ROOT_PROJECT[path.split("/")[0]] || "homelab";
 const api = (path, opts = {}) => fetch(path, { credentials: "same-origin", ...opts, headers: { "X-Knowledge-UI": "1", ...(opts.headers || {}) } })
   .then(async (r) => {
@@ -346,7 +355,7 @@ function switchProject(p, refit = true) {
   // a note of the old project would stay in the URL, so a refresh would jump back to it: show the new project's home
   if (current && p !== ALL && projectOf(current.path) !== p) deselect();
   else if (!current) homeView();
-  if ($("q").value.trim()) runSearch();
+  if (!$("results").hidden) runSearch();
   loadLint(!$("tab-lint").hidden);
   loadRecent();
   paintHead();
@@ -384,6 +393,7 @@ function renderTopics() {
     s.onclick = () => { if (!d.open && mapOn) highlight(ns.map((n) => n.id)); }; // fires before the toggle: about to open
     d.append(s, list); return d;
   }));
+  if (!$("topics").childNodes.length) $("topics").append(emptyState("No notes in this project yet."));
 }
 
 // The middle column shows the note, or the map of the project instead.
@@ -429,7 +439,8 @@ const ago = (sec) => { const d = Date.now() / 1000 - sec; return d < 90 ? "just 
 function deselect({ push = true } = {}) {
   if (editing) return; // keep unsaved edits on screen
   selected = null; current = null; setFocus(null); animateHover();
-  if (push && (shellRoute.view === "notes" || shellRoute.view === "map")) pushHash(mapOn ? "#/map" : "#/notes"); // other views have no note in their route
+  // other views have no note in their route; go() so a phone's note page and the search page give way to the list
+  if (push && (shellRoute.view === "notes" || shellRoute.view === "map") && location.hash !== (mapOn ? "#/map" : "#/notes")) go(mapOn ? "#/map" : "#/notes");
   $("note").replaceChildren(el("div", "note-empty muted", "Pick a note from the list or search."));
   $("side").replaceChildren(); markActive();
   homeView();
@@ -488,7 +499,7 @@ async function homeSide() {
     const n = byId.get(f.path);
     list.append(hitItem(n ? n.label : f.path.split("/").pop(), `${ago(f.mtime)} · ${f.session ? f.session.device : f.by === "VM" ? "on the VM" : writer(f.by)}`, () => openNote(f.path)));
   }
-  if (!res.files.length) list.append(el("li", "muted", "No changes yet."));
+  if (!res.files.length) list.append(el("li", null, emptyState("No changes yet.")));
   const all = el("button", "ghost small", "All changes"); all.onclick = () => selectTab("changes");
   box.append(el("h3", null, "Recently changed"), list, all);
   const lint = $("lint-count").textContent;
@@ -522,7 +533,7 @@ async function openNote(id, { push = true, find = null } = {}) {
   current = note; document.body.classList.remove("home");
   if (push) { // its route; from another view (a task, a change, a lint finding) this shows the Notes view
     pushHash(noteRoute(note.path, mapOn ? "map" : "notes"));
-    if (shellRoute.view !== (mapOn ? "map" : "notes")) applyRoute();
+    applyRoute(); // also within Notes: a phone swaps the list for the note
   }
   selected = byId.has(note.path) ? note.path : null; setFocus(selected); markActive(); if (Graph) animateHover(6000);
   const n = byId.get(note.path);
@@ -534,7 +545,7 @@ async function openNote(id, { push = true, find = null } = {}) {
   } else if (Graph) releaseFocus({ instant: !mapOn }); // no ring of the previous note
   renderNote();
   if (find) markInNote(find);
-  else if (matchMedia("(max-width: 699.98px)").matches && push) $(mapOn ? "side" : "note").scrollIntoView({ behavior: calm ? "auto" : "smooth" }); // phone: below the list
+  else if (matchMedia("(max-width: 699.98px)").matches && push) window.scrollTo(0, 0); // phone: the note replaced the list
   return true;
 }
 
@@ -566,7 +577,7 @@ function renderNote() {
   const pane = $("note"); pane.replaceChildren();
   const head = el("div", "note-head");
   head.append(el("h2", null, n ? n.label : note.path.split("/").pop()));
-  if (n) { const pill = el("span", "pill", n.cluster || n.group); pill.style.borderColor = nodeColor(n); head.append(pill); }
+  if (n) { const pill = el("span", "pill topic", n.cluster || n.group); pill.style.setProperty("--c", nodeColor(n)); head.append(pill); }
   const tools = el("div", "note-tools");
   const copy = el("button", "ghost small", "Copy link");
   copy.onclick = () => navigator.clipboard?.writeText(`${location.origin}/ui${noteRoute(note.path)}`).then(() => { copy.textContent = "Copied"; setTimeout(() => (copy.textContent = "Copy link"), 1500); });
@@ -692,7 +703,7 @@ async function showHistory(open = null) {
           try {
             await api("/ui/api/save", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: note.path, text: ver.text, base_version: note.version }) });
             await openNote(note.path, { push: false }); refreshData();
-          } catch (e) { alert(e.message); }
+          } catch (e) { toast(e.message); }
         };
         view.append(restore);
       }
@@ -782,13 +793,14 @@ $("new-form").addEventListener("submit", async (e) => {
 });
 
 // ---------------------------------------------------------------- search and shortcuts
-// One search box: note titles of every project (instant, from the graph), then full text and meaning in this project.
+// The search page (#/notes?q=…, shell.js shows it in the middle): note titles of every project (instant, from the
+// graph), then full text and meaning in this project. The palette (palette.js) searches the same way.
 let searchTimer, searchSeq = 0;
 async function runSearch() {
   const q = $("q").value.trim(), seq = ++searchSeq;
-  $("results").hidden = !q; $("topics").hidden = !!q;
-  if (!q) { $("hits").replaceChildren(); $("sem").replaceChildren(); $("titles").replaceChildren(); return; }
+  if (!q) { $("hits").replaceChildren(); $("sem").replaceChildren(); $("titles").replaceChildren(); $("hits-empty").hidden = true; return; }
   $("sem").replaceChildren(); $("sem-head").hidden = true;
+  if (!$("hits").childNodes.length) $("hits").replaceChildren(el("li", null, loadingState()));
   const words = q.toLowerCase().split(/\s+/).filter(Boolean);
   const titles = data.nodes.filter((n) => words.every((w) => `${n.label} ${n.id}`.toLowerCase().includes(w)))
     .sort((a, b) => (inProject(b.project) - inProject(a.project)) || (b.degree - a.degree)).slice(0, 6);
@@ -832,20 +844,23 @@ function hitItem(top, sub, onclick) {
   b.append(el("span", "hit-path", top)); if (sub) b.append(el("span", "hit-text", sub));
   b.onclick = onclick; li.append(b); return li;
 }
-$("q").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 150); });
+$("q").addEventListener("input", () => { // the query lives in the route, so a refresh or Back keeps it
+  history.replaceState(history.state, "", `#/notes?q=${encodeURIComponent($("q").value)}`);
+  clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 150);
+});
 $("q").addEventListener("keydown", (e) => { // Enter opens the first result
   if (e.key === "Enter") { e.preventDefault(); clearTimeout(searchTimer); runSearch().then(() => $("results").querySelector("button")?.click()); }
 });
 
-// Keys: Ctrl/Cmd+K and / search, [ folds the sidebar, A the Inbox, M map or notes, 1-9/0 the project; in a note E
+// Keys: Ctrl/Cmd+K the palette (/ the same, for notes only), [ folds the sidebar, A the Inbox, M map or notes, 1-9/0 the project; in a note E
 // edits and Esc closes it; in a chat Esc goes back.
 document.addEventListener("keydown", (e) => {
   const typing = /input|textarea|select/i.test(document.activeElement.tagName) || document.querySelector("dialog[open]");
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); openSearch(); return; }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); openPalette(); return; }
   if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
   const kn = shellRoute.view === "notes" || shellRoute.view === "map", at = current ? `/${encPath(current.path)}` : "";
   if (e.key === "[") toggleRail();
-  else if (e.key === "/") { e.preventDefault(); openSearch(); }
+  else if (e.key === "/") { e.preventDefault(); openPalette(true); }
   else if (e.key.toLowerCase() === "a") go("#/inbox");
   else if (/^[1-9]$/.test(e.key) && PROJECTS[Number(e.key) - 1]) switchProject(PROJECTS[Number(e.key) - 1]);
   else if (e.key === "0") switchProject(ALL);
@@ -889,7 +904,7 @@ async function loadThisPc() {
     if (!a.hooksTrusted) {
       const b = el("button", "cmp-btn cmp-btn--primary cmp-btn--small", "Trust hooks");
       b.type = "button";
-      b.onclick = async () => { try { await companion("/local/api/trust", { agent: a.id }); } catch (e) { alert(e.message); } loadThisPc(); };
+      b.onclick = async () => { try { await companion("/local/api/trust", { agent: a.id }); } catch (e) { toast(e.message); } loadThisPc(); };
       hooks.append(" ", b);
     }
     facts.append(el("dt", null, "Hooks"), hooks, el("dt", null, "YOLO"), el("dd", null, a.yolo ? "on: woken tasks run without asking" : "off"));
@@ -904,6 +919,7 @@ async function loadThisPc() {
 // Changes: newest first, per day; lines added/removed, who, and the question of the session that made the change.
 // A click opens the diff. Changes since the last look at this tab are marked; the badge counts them meanwhile.
 async function loadRecent(look = false) {
+  if (look && !$("recent").childNodes.length) $("recent").replaceChildren(loadingState());
   const p = project, res = await api(`/ui/api/recent?project=${p}`);
   if (p !== project) return; // switched meanwhile: that project's own call follows
   const key = `kn_seen_${p}`, seen = Number(store.get(key)) || Date.now() / 1000;
@@ -911,13 +927,15 @@ async function loadRecent(look = false) {
   $("changes-count").textContent = fresh && !look ? fresh : "";
   if (!look && $("tab-changes").hidden) { if (!store.get(key)) store.set(key, String(seen)); return; }
   const box = $("recent"); box.replaceChildren();
-  let day = "";
+  let day = "", list;
   for (const f of res.files) {
     const d = new Date(f.mtime * 1000).toDateString();
-    if (d !== day) {
+    if (d !== day) { // one card per day
       day = d;
       const today = new Date().toDateString(), yesterday = new Date(Date.now() - 864e5).toDateString();
-      box.append(el("li", "day", d === today ? "Today" : d === yesterday ? "Yesterday" : new Date(f.mtime * 1000).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })));
+      const card = el("section", "card"); list = el("ol", "hits");
+      card.append(el("h3", "sub", d === today ? "Today" : d === yesterday ? "Yesterday" : new Date(f.mtime * 1000).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })), list);
+      box.append(card);
     }
     const n = byId.get(f.path), li = el("li"), b = el("button");
     const top = el("span", "hit-path", n ? n.label : f.path.split("/").pop());
@@ -929,9 +947,9 @@ async function loadRecent(look = false) {
     if (f.session?.asked) b.append(el("span", "hit-text why", `“${f.session.asked}”`));
     b.title = f.path;
     b.onclick = async () => { if (await openNote(f.path) && f.version) { setMap(false); showHistory(f.version); } };
-    li.append(b); box.append(li);
+    li.append(b); list.append(li);
   }
-  if (!res.files.length) box.append(el("li", "muted", "No changes yet."));
+  if (!res.files.length) box.append(emptyState("No changes yet."));
   store.set(key, String(Math.max(seen, ...res.files.map((f) => f.mtime))));
 }
 
@@ -944,6 +962,7 @@ function highlight(ids) {
 
 async function loadLint(render = true) {
   if (!me.admin) return; // lint spans every project: admins only
+  if (render && !$("lint").childNodes.length) $("lint").replaceChildren(loadingState());
   const full = await api("/ui/api/lint");
   const report = Object.fromEntries(Object.entries(full).map(([k, v]) => [k, v.filter((i) => allMode() || lintProject(i) === project)]));
   const here = Object.values(report).reduce((a, v) => a + v.length, 0);
@@ -963,10 +982,12 @@ async function loadLint(render = true) {
       const li = hitItem(byId.get(id)?.label || m[1].split("/").pop(), m[2].replace(/\*\*/g, ""), () => openNote(id));
       li.firstChild.title = item; ul.append(li);
     }
-    const h = el("h3", null, `${title} (${items.length})`);
-    box.append(h, ...(fix ? [el("p", "lint-fix muted", fix)] : []), ul);
+    const card = el("section", "card"), h = el("h3", "sub", title);
+    h.append(el("span", "badge", String(items.length)));
+    card.append(h, ...(fix ? [el("p", "lint-fix muted", fix)] : []), ul);
+    box.append(card);
   }
-  if (!here) box.textContent = "No findings.";
+  if (!here) box.append(emptyState(`No findings in ${project === ALL ? "any project" : shown(project)}.`));
   if (all > here) {
     const b = el("button", "ghost small", `${all - here} in other projects`); b.onclick = () => switchProject(ALL);
     box.append(b);
@@ -998,7 +1019,7 @@ async function loadTasks(render = true) {
       ok.title = "Let this task start (it waits for the project owner's or an admin's approval)";
       ok.onclick = async () => {
         try { await api("/ui/api/task/approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project: t.project, id: t.id }) }); loadTasks(true); }
-        catch (e) { alert(e.message); }
+        catch (e) { toast(e.message); }
       };
       li.append(ok);
     }
@@ -1008,7 +1029,7 @@ async function loadTasks(render = true) {
       done.onclick = async () => {
         if (!confirm(`Remove ${t.id} from ${t.path}?`)) return;
         try { await api("/ui/api/task/done", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: t.path, line: t.line }) }); loadTasks(true); }
-        catch (e) { alert(e.message); }
+        catch (e) { toast(e.message); }
       };
       li.append(done);
     }
@@ -1033,7 +1054,7 @@ const mins = (sec) => `${Math.max(1, Math.round((Date.now() / 1000 - sec) / 60))
 async function machineAction(m, action, args = {}) {
   try {
     await api("/ui/api/machines/action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: m.id, action, args }) });
-  } catch (e) { alert(e.message); }
+  } catch (e) { toast(e.message); }
   loadMachines();
 }
 function machineButton(text, title, onclick) {
@@ -1077,7 +1098,7 @@ async function loadMachines() {
         const li = el("li", "worker");
         li.append(el("span", null, `${AGENT_NAME[a] || a} · ${w.id} · ${w.status === "running" ? `running ${mins(w.started)}` : `${w.status} ${ago(w.ended || w.started)}`}`));
         if (w.yolo) li.append(el("span", "pill yolo", "YOLO"));
-        li.append(machineButton("open", "How to look at this worker", () => alert(w.open || "No details yet.")));
+        li.append(machineButton("open", "How to look at this worker", () => toast(w.open || "No details yet.", false)));
         if (m.own && w.status === "running") li.append(machineButton("stop", "Stop this worker", () => confirm(`Stop the worker on ${w.id}?`) && machineAction(m, "stop_worker", { project: w.project, id: w.id })));
         if (m.own && w.status !== "running" && w.checkpoint) li.append(machineButton("roll back", "Put its worktree back as it was before its last turn (a checkpoint of now is kept)",
           () => confirm(`Roll ${w.id} back to before its last turn?`) && machineAction(m, "rollback", { project: w.project, id: w.id })));
@@ -1118,7 +1139,7 @@ async function loadMachines() {
       }
       ctl.append(machineButton("Forget", "Remove this pc from the list (it comes back when it reports again)", async () => {
         if (!confirm(`Forget ${m.label}?`)) return;
-        try { await api("/ui/api/machines/forget", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: m.id }) }); } catch (e) { alert(e.message); }
+        try { await api("/ui/api/machines/forget", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: m.id }) }); } catch (e) { toast(e.message); }
         loadMachines();
       }));
       card.append(ctl);

@@ -111,7 +111,7 @@ button { cursor: pointer; }
 #live.on { background: var(--amber); box-shadow: 0 0 8px var(--amber); animation: kn-pulse 2.4s ease-in-out infinite; }
 @keyframes kn-pulse { 50% { opacity: 0.35; box-shadow: none; } }
 #q {
-  flex: 1; max-width: 560px; height: 38px; padding: 0 16px; border: 1px solid var(--line-hi); border-radius: 999px;
+  width: 100%; max-width: 560px; height: 38px; margin-bottom: 6px; padding: 0 16px; border: 1px solid var(--line-hi); border-radius: 999px;
   background: var(--panel); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); transition: border-color 0.15s, box-shadow 0.15s;
 }
 #q:focus-visible { outline: none; border-color: var(--amber); box-shadow: 0 0 0 3px var(--amber-soft), 0 0 18px var(--glow); }
@@ -150,19 +150,19 @@ button { cursor: pointer; }
 .menu-list button:hover, .menu-list a:hover { background: var(--hover); }
 .menu-list [hidden] { display: none; }
 
-/* Notes and Map (#kn): search and topics on the left, the note or the map in the middle, connected notes on the right;
-   frosted panels over the dotted canvas. */
+/* Notes and Map (#kn): the topic list on the left, the note, the search results or the map in the middle, connected
+   notes on the right; frosted panels over the dotted canvas. */
 .kn { display: grid; grid-template: "left center right" minmax(0, 1fr) / 280px minmax(0, 1fr) 300px; overflow: hidden; }
 .left, .right { background: var(--panel); overflow-y: auto; min-height: 0; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
 .left { grid-area: left; border-right: 1px solid var(--line); padding: 12px; overflow-x: hidden; }
-.left #q { width: 100%; max-width: none; margin-bottom: 12px; }
 .right { grid-area: right; border-left: 1px solid var(--line); padding: 18px; }
 .center { grid-area: center; min-width: 0; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); } /* else a long line widens the column */
-#note { overflow-y: auto; min-height: 0; padding: 26px clamp(18px, 4vw, 48px) 48px; }
+#note, #results { overflow-y: auto; min-height: 0; padding: 26px clamp(18px, 4vw, 48px) 48px; }
+#results > .hits, #results > .empty { max-width: 80ch; }
 #graph { background: var(--canvas); min-height: 0; position: relative; overflow: hidden; }
 /* force-graph paints the canvas background inline (--canvas); the dotted grid goes on top of that colour. */
 #g2d canvas { background-image: radial-gradient(var(--dots) 1px, transparent 1.4px) !important; background-size: 22px 22px !important; }
-#graph[hidden], #note[hidden] { display: none; }
+#graph[hidden], #note[hidden], #results[hidden] { display: none; }
 #g2d { position: absolute; inset: 0; }
 .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .check { display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: 12.5px; color: var(--ink); cursor: pointer; }
@@ -197,7 +197,6 @@ kbd { font-family: var(--mono); font-size: 11px; padding: 0 5px; border: 1px sol
 .new { margin-left: 6px; padding: 0 6px; border-radius: 999px; background: var(--amber-soft); color: var(--amber-ink); font-size: 10.5px; font-weight: 620; vertical-align: 1px; }
 .plus { color: var(--ok); font-variant-numeric: tabular-nums; } .minus { color: var(--bad); font-variant-numeric: tabular-nums; }
 .hit-text.why { font-style: italic; }
-.hits li.day { padding: 12px 9px 2px; font-size: 12px; font-weight: 620; color: var(--muted); }
 .hits li button.active { background: var(--amber-soft); }
 .note-tools { display: flex; gap: 6px; margin: 10px 0; flex-wrap: wrap; }
 pre.diff { max-width: 100%; box-sizing: border-box; background: var(--panel); border: 1px solid var(--line); padding: 12px; border-radius: var(--r-md); font: 12px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; } /* wrapped: a long line and its marked words are seen at once */
@@ -219,9 +218,7 @@ dialog h2 { margin: 0 0 4px; font-size: 18px; font-weight: 650; letter-spacing: 
 .hits li button { width: 100%; min-width: 0; overflow: hidden; text-align: left; padding: 7px 9px; border: 0; border-radius: var(--r-md); background: transparent; }
 .hits li button:hover { background: var(--hover); }
 .hits li.task { display: flex; align-items: flex-start; gap: 4px; }
-.hits li.task > button.small { width: auto; flex: none; margin-top: 6px; padding: 0 11px; border: 1px solid var(--line-hi); background: var(--panel-hi); }
-.hits li.task > button.small:hover { border-color: var(--amber); }
-#tasks h3 { margin: 18px 0 6px; font-size: 15px; font-weight: 620; }
+.hits li.task > button.small { width: auto; flex: none; margin-top: 6px; }
 .hits li.task.waiting > :first-child { opacity: 0.6; } /* may not start yet: the line says why */
 .hits .hit-text.warn { color: var(--bad); }
 .hits li.session { display: grid; padding: 7px 9px; }
@@ -232,8 +229,7 @@ dialog h2 { margin: 0 0 4px; font-size: 18px; font-weight: 650; letter-spacing: 
 .hit-sub { display: block; font: 11px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 mark { background: color-mix(in srgb, var(--amber) 32%, transparent); color: inherit; border-radius: 3px; }
 
-#lint h3 { font-size: 12.5px; font-weight: 620; color: var(--muted); margin: 18px 0 6px; }
-#lint .lint-fix { margin: -2px 0 4px; font-size: 12px; }
+#lint .lint-fix { margin: 0 9px 6px; font-size: 12px; }
 #lint .hit-path { color: var(--ink); font-size: 13px; }
 #lint li.hit-text { padding: 4px 9px; }
 
@@ -246,8 +242,6 @@ form button[type=submit] { margin-top: 10px; }
 
 .note-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
 .note-head h2 { margin: 0; font-size: 24px; line-height: 1.2; font-weight: 650; letter-spacing: -0.015em; text-wrap: balance; overflow-wrap: anywhere; min-width: 0; }
-/* the note's topic: a companion status chip */
-.pill { display: inline-flex; align-items: center; height: 24px; font-size: 12px; padding: 0 10px; border-radius: 999px; color: var(--ink); background: var(--panel); border: 1.5px solid var(--line-hi); white-space: nowrap; }
 .note-path { font-family: var(--mono); font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .note-desc { color: var(--muted); margin: 8px 0 14px; max-width: 72ch; }
 .md { max-width: 72ch; font-size: 15px; line-height: 1.6; overflow-wrap: break-word; } /* "anywhere" let table columns shrink to one letter */
@@ -259,9 +253,19 @@ form button[type=submit] { margin-top: 10px; }
 .md a { color: var(--accent); text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent); text-underline-offset: 2px; }
 .md a:hover { text-decoration-color: currentColor; }
 .md blockquote { margin: 12px 0; padding: 2px 14px; border-left: 3px solid var(--amber); background: var(--amber-soft); border-radius: 0 var(--r-md) var(--r-md) 0; }
-h3.sub { font-size: 12.5px; font-weight: 620; color: var(--muted); margin: 18px 0 6px; }
+/* One section heading: small capitals in the muted ink (sidebar sections, search groups, Changes days, Health checks,
+   connected notes, task projects, mission lanes). */
+.sec, h3.sub, .connected h3, #tasks h3, .ms-lane-list h3, .pal-grp {
+  display: flex; align-items: center; gap: 8px; margin: 18px 0 6px; font-size: 11px; font-weight: 650; letter-spacing: .1em; text-transform: uppercase; color: var(--muted);
+}
+.connected h3 { margin-top: 0; }
+/* One card (Changes days, Health checks) and one empty or loading state for every list. */
+.card { padding: 12px 12px 8px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--panel); box-shadow: var(--shadow); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+.card + .card { margin-top: 14px; }
+.card > h3.sub:first-child { margin: 2px 9px 8px; }
+.empty { margin: 0; padding: 18px 12px; color: var(--muted); font-size: 13.5px; text-align: center; }
+.empty.loading { animation: kn-pulse 1.6s ease-in-out infinite; }
 /* right column: connected notes; on the map also the selected note's card */
-.connected h3, .map-card + .connected h3 { font-size: 12.5px; font-weight: 620; color: var(--muted); margin: 0 0 8px; }
 .connected a { display: block; color: var(--accent); cursor: pointer; font-size: 13px; padding: 5px 0; text-decoration: none; }
 .connected a:hover { text-decoration: underline; }
 .connected .why { display: block; color: var(--muted); font-size: 12px; }
@@ -292,17 +296,20 @@ h3.sub { font-size: 12.5px; font-weight: 620; color: var(--muted); margin: 18px 
   .right { border-left: 0; border-top: 1px solid var(--line); max-height: 32vh; }
 }
 @media (max-width: 699.98px) {
-  /* The page scrolls as one column; panels grow with their content. Search and the lists first, then the note (or
-     the map), then what it connects to. */
+  /* The page scrolls as one column. Notes is two pages: the topic list, or the note (or search results) with what it
+     connects to under it and a Back arrow in the header. The map leaves the list out. */
   .kn { display: block; overflow: visible; }
-  .left, .right, #note { overflow: visible; }
+  .left, .right, #note, #results { overflow: visible; }
   .right { max-height: none; }
   #graph { height: 65svh; }
-  .left { border-right: 0; border-bottom: 1px solid var(--line); padding: 12px 16px; }
-  .right { padding: 18px 16px; }
-  #note { padding: 20px 16px; border-bottom: 1px solid var(--line); }
-  #note, #side, #graph { scroll-margin-top: 60px; } /* below the sticky page header */
-  body.home:has(#note:not([hidden])) #topics { display: none; } /* the home cards show the same topics (not on the map) */
+  .left { border-right: 0; padding: 8px 12px; background: transparent; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .left .topic summary { min-height: 44px; font-size: 14.5px; }
+  .left .topic .hits li button { min-height: 40px; }
+  body[data-view="notes"]:not(.kn-detail) .kn > :not(.left), body.kn-detail .kn > .left, body[data-view="map"] .kn > .left, body.kn-search .kn > .right { display: none; }
+  body.kn-detail .head .back { display: inline-grid; }
+  .right { padding: 18px 16px; border-top: 1px solid var(--line); }
+  #note, #results { padding: 18px 16px; }
+  #side, #graph { scroll-margin-top: 60px; } /* below the sticky page header */
 }
 @media (hover: none) { kbd { display: none; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
@@ -385,7 +392,7 @@ button.ghost.danger:hover { border-color: var(--bad); }
 /* Machines: one card per pc, agents as rows, sessions folded on narrow screens */
 #machines { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(380px, 100%), 1fr)); gap: 12px; align-items: start; }
 #machines > p { grid-column: 1 / -1; }
-.machine { margin: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.machine { margin: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel); }
 .machine.offline { opacity: .75; }
 .machine-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .machine-head h3 { margin: 0; font-size: 14px; flex: 1; min-width: 0; overflow-wrap: anywhere; }
@@ -393,7 +400,10 @@ button.ghost.danger:hover { border-color: var(--bad); }
 .machine-agent { padding: 6px 0; border-top: 1px solid var(--line); }
 .machine-agent-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; }
 .machine-agent-head .muted { font-size: 12px; }
-.pill { display: inline-block; padding: 0 7px; border-radius: 9px; background: var(--hover); color: var(--muted); font-size: 11px; line-height: 18px; white-space: nowrap; }
+/* One pill: a quiet status chip (machines, the note's topic with its map colour as a dot). */
+.pill { display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; border-radius: 999px; background: var(--hover); color: var(--muted); font-size: 11.5px; line-height: 20px; white-space: nowrap; }
+.pill.topic { color: var(--ink); }
+.pill.topic::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--c, var(--muted)); }
 .pill.ok { color: var(--ok); }
 .pill.this { background: var(--amber-soft); color: var(--amber-ink); }
 .pill.warn { background: var(--warn-soft); color: var(--warn); }
@@ -404,7 +414,7 @@ button.ghost.danger:hover { border-color: var(--bad); }
 .machine-list li.worker > span:first-child { flex: 1 1 100%; min-width: 0; } /* the buttons go under the text in the narrow column */
 .machine-sessions summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 .machine-controls { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
-.machine-controls select { max-width: 100%; font: inherit; font-size: 12px; padding: 2px 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); }
+.machine-controls select { max-width: 100%; font: inherit; font-size: 12px; padding: 2px 4px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg); color: var(--ink); }
 
 /* ---------------------------------------------------------------- Agents: Inbox (the attention board) and Chats
    (a list of chats beside the open one), both in #cockpit; data-mode says which. */
@@ -586,7 +596,6 @@ dialog.ck-diff { width: min(980px, calc(100vw - 32px)); }
 .ms-actions .ck-pill { cursor: pointer; }
 .ms-worker { font-size: 13px; overflow-wrap: anywhere; }
 .ms-list { overflow-y: auto; padding: 4px 16px 24px; border-top: 1px solid var(--line); }
-.ms-lane-list h3 { margin: 14px 0 6px; font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 .ms-chain { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
 .ms-c { padding: 6px 9px; width: 100%; min-width: 0; }
 .ms-c .ms-tx { -webkit-line-clamp: 1; }
@@ -621,7 +630,7 @@ svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor;
 .jump { display: flex; align-items: center; gap: 10px; min-height: 36px; margin: 0 0 4px; padding: 0 10px; border: 1px solid var(--line-hi); border-radius: var(--r-md); background: transparent; color: var(--muted); text-align: left; }
 .jump:hover { border-color: var(--amber); color: var(--ink); }
 .jump kbd { margin-left: auto; white-space: nowrap; }
-.sec { margin: 14px 10px 4px; font-size: 11px; font-weight: 650; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.sidebar .sec { margin: 14px 10px 4px; }
 .nav { display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 0 10px; border-radius: var(--r-md); color: var(--ink); text-decoration: none; font-size: 13.5px; white-space: nowrap; }
 .nav svg { color: var(--muted); }
 .nav:hover { background: var(--hover); }
@@ -714,3 +723,33 @@ dialog.sheet { position: fixed; inset: auto 0 0 0; width: 100%; max-width: none;
 .ghost-link { color: var(--muted); font-size: 13px; padding: 8px; }
 @media (prefers-reduced-motion: no-preference) { .view:not([hidden]) { animation: kn-view-in .16s ease-out; } }
 @keyframes kn-view-in { from { opacity: 0; transform: translateY(4px); } }
+
+/* Toasts (app.js toast()): short messages at the bottom, errors in red; a click dismisses one. */
+.toasts { position: fixed; z-index: 60; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom)); transform: translateX(-50%); display: grid; gap: 8px; width: min(440px, calc(100vw - 32px)); pointer-events: none; }
+.toast { pointer-events: auto; padding: 10px 14px; border: 1px solid var(--line-hi); border-radius: var(--r-md); background: var(--panel-solid); color: var(--ink); box-shadow: var(--menu-shadow); font-size: 13.5px; overflow-wrap: anywhere; cursor: pointer; animation: kn-menu-in .16s ease-out; }
+.toast.bad { border-color: var(--bad); border-left-width: 4px; }
+@media (max-width: 699.98px) { .toasts { bottom: calc(72px + env(safe-area-inset-bottom)); } }
+
+/* Command palette (static/palette.js): a dialog near the top; on a phone a full-screen sheet. */
+dialog.palette { width: min(640px, calc(100vw - 24px)); margin: 12vh auto auto; padding: 0; overflow: hidden; }
+.pal-box { display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--line); padding-right: 10px; }
+#pal-q { flex: 1; min-width: 0; height: 54px; padding: 0 18px; border: 0; background: transparent; font-size: 16px; outline: none; }
+#pal-list { list-style: none; margin: 0; padding: 6px; max-height: min(52vh, 480px); overflow-y: auto; }
+.pal-grp { margin: 10px 12px 4px; }
+.pal-grp:first-child { margin-top: 4px; }
+.pal-opt { display: flex; align-items: baseline; gap: 12px; min-height: 40px; padding: 9px 12px; border-radius: var(--r-md); cursor: pointer; font-size: 14px; }
+.pal-label { min-width: 0; flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pal-opt small { min-width: 0; margin-left: auto; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pal-opt[aria-selected="true"] { background: var(--amber-soft); color: var(--amber-ink); }
+.pal-opt[aria-selected="true"] small { color: var(--amber-ink); opacity: .8; }
+.pal-foot { margin: 0; padding: 8px 16px; border-top: 1px solid var(--line); font-size: 12px; }
+.pal-foot kbd { margin-right: 2px; }
+@media (max-width: 699.98px) {
+  dialog.palette { width: 100%; max-width: none; height: 100dvh; max-height: none; margin: 0; border: 0; border-radius: 0; display: none; }
+  dialog.palette[open] { display: grid; grid-template-rows: auto minmax(0, 1fr); }
+  #pal-list { max-height: none; }
+  .pal-opt { flex-wrap: wrap; row-gap: 0; min-height: 48px; }
+  .pal-label { max-width: 100%; }
+  .pal-opt small { margin-left: 0; flex-basis: 100%; }
+  .pal-foot { display: none; }
+}
