@@ -106,10 +106,21 @@ def short(text: str) -> str:
 
 
 NAMES = {"claude": "Claude", "codex": "Codex", "agy": "Gemini"}
-# "pak KN-12": do that task in this chat. A task ID starts with a capital (KN-12, ET-eval), so "pak e-mail van Linda" or
-# "take follow-up actions" asks the server nothing
-PAK = re.compile(r"(?:^|\s)(?i:pak|take)\s+([A-Z][A-Z0-9.]*-[\w.-]*\w)")
-assert [m.group(1) for m in PAK.finditer("Pak KN-12 en take ET-eval; pak e-mail, take follow-up, take built-in")] == ["KN-12", "ET-eval"]
+# "pak KN-12": do that task in this chat. Any case (the user types "pak kn-12"), but a task ID holds a digit (KN-12,
+# ET-eval2), so "pak e-mail van Linda" or "take follow-up actions" asks the server nothing
+PAK = re.compile(r"(?i)(?:^|\s)(?:pak|take)\s+((?=[\w.-]*\d)[a-z][a-z0-9.]*-[\w.-]*\w)")
+assert [m.group(1) for m in PAK.finditer("Pak KN-12 en take ET-eval2; pak kn-13, pak Kn-14; pak e-mail, take follow-up, take built-in")] \
+    == ["KN-12", "ET-eval2", "kn-13", "Kn-14"]
+
+
+def task_id(typed: str, answer: dict) -> str:
+    """The ID as the task line spells it (the server matches it exactly): 'kn-12' is KN-12, 'et-eval2' is ET-eval2."""
+    text = " ".join(map(str, answer.get("tasks") or [])) + " " + " ".join(answer.get("waiting") or {})
+    return next((m for m in re.findall(r"[\w.-]+", text) if m.lower() == typed.lower()), typed.upper())
+
+
+assert task_id("kn-12", {}) == "KN-12" and task_id("et-eval2", {"tasks": ["[Codex, ET-eval2] do it"]}) == "ET-eval2"
+assert task_id("kn-1", {"waiting": {"garden/KN-1": "x"}}) == "KN-1"
 
 
 def take_command(tid: str = "<ID>") -> str:
@@ -171,9 +182,10 @@ def take(agent: str, tok: str, tid: str, sid: str, cwd: str) -> str:
     """The user said 'pak <ID>': take that task for this chat session on the server (a worker or another session may
     hold it already), and say what to do."""
     try:
-        project = ask_tasks(tok, {**project_query(cwd), "agent": agent, "session": sid[:80], "v": 2, "claim": 0}).get("project", "")
+        answer = ask_tasks(tok, {**project_query(cwd), "agent": agent, "session": sid[:80], "v": 2, "claim": 0})
     except Exception as e:
         return f"knowledge: could not take {tid}: the server did not answer ({type(e).__name__})."
+    project, tid = answer.get("project", ""), task_id(tid, answer)
     code, answer = task_post(tok, "/tasks/woken", {"project": project, "id": tid, "agent": agent, "session": sid[:80]})
     if code == 200:
         return (f"knowledge: the user took task {tid} into this chat ('pak {tid}'); the server gave it to this session, so no "

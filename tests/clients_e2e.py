@@ -1023,6 +1023,8 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
               and json.loads(yolo_file.read_text(encoding="utf-8"))["claude"]["on"] is True
               and json.loads((home / ".knowledge" / "companion" / "settings.json").read_text(encoding="utf-8"))["workersAllowed"] is False,
               "remote: stop worker, YOLO on (typed word) and workers off run on the pc and report back", json.dumps(done())[:800])
+        stopped = json.loads((home / ".knowledge" / "companion" / "workers.json").read_text(encoding="utf-8")).get("garden/CMP-GEMINI", {})
+        check(stopped.get("owner_stopped") is True, "remote: a worker the owner stopped keeps its lease (no other pc restarts it at once)", json.dumps(stopped)[:300])
         act_log = json.loads(call("GET", "/local/api/state")[2])["activity"]
         check(any(a["kind"] == "remote" and "yolo" in a["text"] and "alice" in a["text"] for a in act_log), "remote: every action is in the activity log, with who asked")
         act("yolo", {"agent": "claude", "on": False})
@@ -1257,7 +1259,7 @@ def wake_e2e(tok: str, home: Path, project: Path):
         http("POST", "/machine/report", {"version": "0.15.0", "workersAllowed": True, "maxWorkers": {"codex": 1, "agy": 1, "claude": 1},
                                          "agents": {"codex": {}, "agy": {}}, "folders": {"linked": [{"path": str(project), "project": "garden"}]}},
              {"Authorization": f"Bearer {tok}", "Content-Type": "application/json", **pc()})
-        tasks = "".join(f"- open tot 1 jan 2099 [{o}, WAKE-{o.upper()}] from Claude, start now: chat test for {o} \"a & b > c %PATH%\n" for o in ("Codex", "Claude", "Gemini"))
+        tasks = "".join(f"- open tot 1 jan 2099 [{o}, WAKE-{o.upper()}1] from Claude, start now: chat test for {o} \"a & b > c %PATH%\n" for o in ("Codex", "Claude", "Gemini"))
         http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_write", "arguments":
              {"path": "garden-memory/project_wake.md", "content": "---\nname: w\ndescription: d\nmetadata:\n  type: project\n---\n"
               f"## Stand\n{tasks}\n## Keuzes\n"}}}, {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})
@@ -1267,24 +1269,24 @@ def wake_e2e(tok: str, home: Path, project: Path):
         code, out, err = hook(["tasks", "codex", "-"], {"session_id": "cx-1", "cwd": str(project), "prompt": "go on"})
         said = json.loads(out)["hookSpecificOutput"]["additionalContext"] if out.strip() else ""
         mine = {t["id"]: t for t in leases()}
-        check("WAKE-CODEX" in said and "run in workers" in said and "'pak <ID>'" in said and "WAKE-CLAUDE" not in said
-              and mine.get("WAKE-CODEX", {}).get("mine") is False,
-              "chat: a new task is said once as 'runs in workers, say pak', and the chat takes no lease", said[:500] + json.dumps(mine.get("WAKE-CODEX")))
+        check("WAKE-CODEX1" in said and "run in workers" in said and "'pak <ID>'" in said and "WAKE-CLAUDE1" not in said
+              and mine.get("WAKE-CODEX1", {}).get("mine") is False,
+              "chat: a new task is said once as 'runs in workers, say pak', and the chat takes no lease", said[:500] + json.dumps(mine.get("WAKE-CODEX1")))
         code, out, err = hook(["context", "agy", "-"], {"conversationId": "conv-1", "workspacePaths": [str(project)]})
         ctx = json.loads(out)["injectSteps"][0]["systemMessage"]["systemMessage"] if out.strip() else ""
-        check("WAKE-GEMINI" in ctx and "'pak <ID>'" in ctx and " take agy <ID>" in ctx,
+        check("WAKE-GEMINI1" in ctx and "'pak <ID>'" in ctx and " take agy <ID>" in ctx,
               "chat: agy's session start says how to take a task on 'pak <ID>' (the take command; its hooks never see the user's words)", ctx[-700:] + err[-300:])
-        code, out, err = hook(["tasks", "claude", "-"], {"session_id": "cl-1", "cwd": str(project), "prompt": "pak WAKE-CLAUDE please"})
+        code, out, err = hook(["tasks", "claude", "-"], {"session_id": "cl-1", "cwd": str(project), "prompt": "pak wake-claude1 please"})
         said = json.loads(out)["hookSpecificOutput"]["additionalContext"] if out.strip() else ""
-        check("took task WAKE-CLAUDE" in said and "(claimed Claude," in said and mine["WAKE-CLAUDE"]["mine"] is False
-              and next(t for t in leases() if t["id"] == "WAKE-CLAUDE")["mine"] is True,
-              "chat: 'pak <ID>' in the user's words takes that task for this Claude session", said[:500])
+        check("took task WAKE-CLAUDE1" in said and "(claimed Claude," in said and mine["WAKE-CLAUDE1"]["mine"] is False
+              and next(t for t in leases() if t["id"] == "WAKE-CLAUDE1")["mine"] is True,
+              "chat: 'pak <id>' in the user's words, typed in lowercase, takes that task for this Claude session", said[:500])
         check("start it right away" in said and "run in workers" not in said,
               "chat: with no pc running Claude workers for the project, a new task is said as 'start it right away' (as 0.14)", said[:600])
-        code, out, err = hook(["tasks", "claude", "-"], {"session_id": "cl-2", "cwd": str(project), "prompt": "pak WAKE-CLAUDE"})
+        code, out, err = hook(["tasks", "claude", "-"], {"session_id": "cl-2", "cwd": str(project), "prompt": "pak Wake-Claude1"})
         check("held by another session" in out, "chat: a second chat cannot take a task another session took", out[:400])
-        code, out, err = hook(["take", "agy", "WAKE-GEMINI"], {}, {"ANTIGRAVITY_CONVERSATION_ID": "conv-1"})
-        check(code == 0 and "took task WAKE-GEMINI" in out, "chat: agy takes a task with the take command in its terminal (its hooks never see the user's words)", out + err)
+        code, out, err = hook(["take", "agy", "WAKE-GEMINI1"], {}, {"ANTIGRAVITY_CONVERSATION_ID": "conv-1"})
+        check(code == 0 and "took task WAKE-GEMINI1" in out, "chat: agy takes a task with the take command in its terminal (its hooks never see the user's words)", out + err)
         code, out, err = hook(["hints", "-"], {"conversationId": "conv-2", "workspacePaths": [str(project)]})
         hook(["hints", "-"], {"conversationId": "conv-2", "workspacePaths": [str(project)]})
         hook(["hints", "-"], {"conversationId": "conv-1", "workspacePaths": [str(project)]})  # registered: the ask is reset
@@ -1292,7 +1294,7 @@ def wake_e2e(tok: str, home: Path, project: Path):
         code, out, err = hook(["hints", "-"], {"conversationId": "conv-1", "workspacePaths": [str(project)]})
         check(" register" in out and "restarted" in out, "agy: a resumed agy (its registration gone) is told so and asked again",
               out[:300] + err[-300:])
-        for tid in ("WAKE-CLAUDE", "WAKE-GEMINI"):
+        for tid in ("WAKE-CLAUDE1", "WAKE-GEMINI1"):
             http("POST", "/tasks/release", {"project": "garden", "id": tid}, {"Authorization": f"Bearer {tok}", "Content-Type": "application/json", **pc()})
     finally:
         ls.shutdown()
