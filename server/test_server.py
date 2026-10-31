@@ -1119,6 +1119,18 @@ def main():
         assert raw("GET", "/ui", headers=user("alice", "wrong"))[0] == 401
         assert raw("GET", "/ui/api/graph", headers=user("alice", ""))[0] == 401
         assert raw("GET", "/ui/static/app.js")[0] == 200  # static is public (no data)
+        # Installable app: the manifest and its icons are public too (no data); the page links it and its CSP allows it.
+        st, hd, body = raw("GET", "/ui/manifest.webmanifest")
+        man = json.loads(body)
+        assert st == 200 and hd["content-type"] == "application/manifest+json", hd
+        assert (man["start_url"], man["scope"], man["display"]) == ("/ui#/inbox", "/ui", "standalone"), man
+        assert {i["sizes"] for i in man["icons"] if i["purpose"] == "maskable"} == {"192x192", "512x512"} == {i["sizes"] for i in man["icons"] if i["purpose"] == "any"}
+        for i in man["icons"]:
+            st, hd, png = raw("GET", i["src"])
+            assert st == 200 and hd["content-type"] == "image/png" and png[:8] == b"\x89PNG\r\n\x1a\n", i
+            assert png[16:24] == bytes.fromhex(f"{int(i['sizes'].split('x')[0]):08x}") * 2, i  # IHDR width, height
+        st, hd, body = raw("GET", "/ui", headers=ck)
+        assert "manifest-src 'self'" in hd["content-security-policy"] and b'rel="manifest" href="/ui/manifest.webmanifest" crossorigin="use-credentials"' in body
         # Without a proxy: a password signs the one UI user in with a signed cookie.
         st, _, page_ = raw("GET", "/ui")
         assert st == 401 and b'name="password"' in page_

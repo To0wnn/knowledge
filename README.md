@@ -282,6 +282,23 @@ Settings in `.env` (all optional): `KNOWLEDGE_PUBLIC_URL` (the address people us
 `## Keuzes`; both are always accepted), `TZ`. The house rules every agent gets are `default_house_rules.md` until you
 put your own `house_rules.md` in `data/shared`.
 
+The web UI installs as an app (Chrome or Edge menu, "Install app"; Safari, "Add to Home Screen"): a manifest at
+`/ui/manifest.webmanifest` (start page `/ui#/inbox`, scope `/ui`, standalone) with 192/512 px and maskable icons.
+There is no service worker: Chrome needs none for "Install app" since version 108 on Android and 112 on desktop,
+only its automatic install banner still wants a fetch handler
+([Chrome blog](https://developer.chrome.com/blog/update-install-criteria)). The manifest and icons carry no data and
+are served without sign-in; the page links the manifest with `crossorigin="use-credentials"`, because browsers fetch
+a manifest without cookies otherwise, and a sign-in proxy in front (forward auth) would answer with a redirect to its
+login page instead of the manifest. Behind a sign-in proxy on another origin (`auth.<domain>`): in the installed app
+on Android, a redirect to the login page leaves the app's scope, so Chrome shows it in the app window with a
+custom-tab style bar (the login page's address and a close button) and, as reported, returns to the app view once
+the redirect lands inside `/ui` again
+([w3c/manifest discussion](https://lists.w3.org/Archives/Public/public-webapps-github/2018Jun/0728.html); not yet
+tried on a phone with this server). The installed app shares Chrome's cookies, so someone signed in in Chrome is
+usually never sent there. A manifest cannot put another origin in scope (`scope` must be on the app's own origin), so
+the fix is a long proxy session, not the manifest. iOS home-screen apps keep their own cookies: the first start signs
+in once.
+
 Requirements: Docker and about 2 GB RAM (the embedding model is 1.2 GB; it ships in the image, nothing is fetched at
 runtime).
 

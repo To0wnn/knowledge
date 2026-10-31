@@ -2664,7 +2664,7 @@ class BearerAuth:
             if b"ready=1" in scope.get("query_string", b"") and not instance_ready():
                 return await PlainTextResponse("not ready", status_code=503)(scope, receive, send)
             return await PlainTextResponse("ok")(scope, receive, send)
-        if path.startswith("/ui/static/"):
+        if path.startswith("/ui/static/") or path == "/ui/manifest.webmanifest":  # no data in either
             return await self.app(scope, receive, send)
         headers = dict(scope["headers"])
         if scope["method"] not in ("GET", "HEAD"):
@@ -3429,7 +3429,7 @@ COMPANION = "http://127.0.0.1:47321"  # the local companion (plugin/hooks/compan
 # Note HTML is sanitized, and this is the second wall: no foreign images (tracking), no forms posting elsewhere, no
 # framing. force-graph adds a <style> at runtime, hence 'unsafe-inline' for styles only.
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
-       f"connect-src 'self' {COMPANION}; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'")
+       f"connect-src 'self' {COMPANION}; manifest-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'")
 
 
 def page(name: str) -> HTMLResponse:
@@ -4072,6 +4072,20 @@ async def ui_admin_token(request: Request, body: dict):
     if owner:  # a token outlives the sign-in: the admin hears about every new one
         notify(f"Knowledge: {owner} created token {name} ({'read + write' if body.get('write') else 'read'}: {', '.join(roots)}).")
     return JSONResponse({"ok": True, "name": name, "token": token})
+
+
+# Installable web app. Colours are the app.css canvas (light; the page's theme-color metas switch per scheme). Public
+# like /ui/static (index.html links it with crossorigin="use-credentials" so a sign-in proxy in front lets it through).
+MANIFEST = json.dumps({
+    "name": "Knowledge", "short_name": "Knowledge", "id": "/ui", "start_url": "/ui#/inbox", "scope": "/ui",
+    "display": "standalone", "theme_color": "#eef0f3", "background_color": "#eef0f3",
+    "icons": [{"src": f"/ui/static/icons/{n}-{s}.png", "sizes": f"{s}x{s}", "type": "image/png", "purpose": p}
+              for n, p in (("icon", "any"), ("maskable", "maskable")) for s in (192, 512)]})
+
+
+@server.custom_route("/ui/manifest.webmanifest", methods=["GET"])
+async def ui_manifest(request: Request):
+    return Response(MANIFEST, media_type="application/manifest+json", headers={"Cache-Control": "no-cache"})
 
 
 @server.custom_route("/ui/static/{name:path}", methods=["GET"])
