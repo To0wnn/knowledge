@@ -1236,7 +1236,7 @@ function openCockpit(on) {
 $("cockpit-btn").onclick = () => openCockpit(true);
 $("ck-close").onclick = () => openCockpit(false);
 for (const b of document.querySelectorAll("#ck-tools-menu [data-go]")) b.addEventListener("click", (e) => {
-  const go = b.dataset.go; if (go === "settings") return; // a plain link
+  const go = b.dataset.go; if (go === "settings" || go === "mission") return; // a plain link; mission.js
   e.preventDefault(); $("ck-tools-menu").open = false; openCockpit(false);
   if (go === "memory") { selectTab("notes"); homeView(); }
   else if (go === "skills") { $("q").value = "SKILL.md"; $("q").dispatchEvent(new Event("input")); }

@@ -6,7 +6,8 @@ connected notes on the right; Changes lists lines added/removed. On the map (Map
 and its neighbours (after the layout settled); the neighbours gather in a ring; a click beside the nodes (which usually
 lands on a link) deselects, puts every node back exactly and zooms out; a second click on a note reads it. On a phone
 the lists come first (on the home view the topic cards instead of the topic list) and opening a note scrolls to it. The
-Agents cockpit opens with its pills, tools and new chat dialog (skipped on a server older than 0.16). Read-only: it
+Agents cockpit opens with its pills, tools and new chat dialog (skipped on a server older than 0.16); the mission map
+lays out a seeded graph cleanly (lone tasks in the first column) and opens from the tools menu (skipped on a server without it). Read-only: it
 opens notes, it never edits or sends.
 
   systemd-run --user --scope -q -p MemoryMax=3G ~/.local/bin/uv run -q --with playwright python tests/ui_smoke.py
@@ -274,6 +275,87 @@ async def cockpit(browser, devices, secret: str) -> None:
     await ctx.close()
 
 
+MISSION_LAYOUT_CHECK = """() => {
+  // A seeded graph: 3 lanes, every status, chains inside lanes and links across them, a hand-over, lone tasks.
+  const lanes = [{id: "claude", name: "Claude"}, {id: "codex", name: "Codex"}, {id: "agy", name: "Gemini"}], st = Object.keys(MS_STATUS);
+  const graph = (n, seed) => {
+    const nodes = [], edges = [{from: "lane:claude", to: "p/T-1", kind: "handover"}];
+    let r = seed; const rnd = () => (r = (r * 16807) % 2147483647) / 2147483647;
+    for (let i = 0; i < n + 6; i++) nodes.push({key: `p/T-${i}`, id: `T-${i}`, lane: lanes[i % 3].id, status: st[i % st.length]});
+    for (let i = 3; i < n; i++) {
+      if (i % 4) edges.push({from: `p/T-${i - 3}`, to: `p/T-${i}`, kind: "dep"});
+      if (rnd() < 0.3) edges.push({from: `p/T-${Math.floor(rnd() * i)}`, to: `p/T-${i}`, kind: "cont"});
+    }
+    return {nodes, edges, lanes};
+  };
+  const check = (g) => {
+    const L = missionLayout(g), P = [...L.pos.values()], bad = [];
+    for (let i = 0; i < P.length; i++) for (let j = i + 1; j < P.length; j++) {
+      const a = P[i], b = P[j];
+      if (a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h) bad.push("overlap");
+    }
+    const seg = [];
+    for (const e of g.edges) {
+      const f = L.pos.get(e.from), t = L.pos.get(e.to); if (!f || !t) continue;
+      if (t.x < f.x + f.w) bad.push(`backwards ${e.from}->${e.to}`);
+      seg.push([f.x + f.w, f.y + f.h / 2, t.x, t.y + t.h / 2]);
+    }
+    for (const n of g.nodes) {
+      const p = L.pos.get(n.key), l = L.lanes.find((x) => x.id === n.lane);
+      if (p.layer && !g.edges.some((e) => e.from === n.key || e.to === n.key)) bad.push(`lone ${n.key} not in column 0`);
+      if (p.y < l.y || p.y + p.h > l.y + l.h) bad.push(`lane ${n.key}`);
+    }
+    if (L.lanes.map((l) => l.id).join() !== g.lanes.map((l) => l.id).join()) bad.push("lane order");
+    const side = (ax, ay, bx, by, cx, cy) => Math.sign((bx - ax) * (cy - ay) - (by - ay) * (cx - ax));
+    let crossings = 0;
+    for (let i = 0; i < seg.length; i++) for (let j = i + 1; j < seg.length; j++) {
+      const [a, b] = [seg[i], seg[j]];
+      if (side(...a, b[0], b[1]) * side(...a, b[2], b[3]) < 0 && side(...b, a[0], a[1]) * side(...b, a[2], a[3]) < 0) crossings++;
+    }
+    return {bad, crossings, edges: seg.length};
+  };
+  return {small: check(graph(24, 7)), big: check(graph(60, 11))};
+}"""
+
+
+async def mission(browser, devices, secret: str) -> None:
+    """The mission map (Agents > Tools): the layout of a seeded graph keeps tasks apart, edges left to right and
+    tasks in their lane; the view opens from the tools menu, a task opens its panel, Esc goes back; on a phone the
+    chains list fits the screen. Read-only (nothing is approved). Skipped on a server without it."""
+    ctx, pg, errors = await page(browser, secret, viewport={"width": 1440, "height": 900})
+    await pg.wait_for_selector("#map-btn")
+    if await pg.evaluate("typeof missionLayout") != "function":
+        print("skip mission map (server without it)")
+        await ctx.close()
+        return
+    res = await pg.evaluate(MISSION_LAYOUT_CHECK)
+    check(not res["small"]["bad"] and not res["big"]["bad"], f"mission layout: no overlaps, edges left to right, lanes kept {res['small']['bad'][:3]} {res['big']['bad'][:3]}")
+    print(f"     mission layout crossings: {res['small']['crossings']}/{res['small']['edges']} edges at 24 tasks, {res['big']['crossings']}/{res['big']['edges']} at 60")
+    await pg.click("#cockpit-btn")
+    await pg.click("#ck-tools-menu summary")
+    await pg.click('#ck-tools-menu [data-go="mission"]')
+    await pg.wait_for_selector("#mission .ms-n, #mission .ms-empty", timeout=10000)
+    check(await pg.evaluate("!$('mission').hidden && !$('cockpit').hidden"), "Tools > Mission map opens the map over the cockpit")
+    if await pg.locator("#mission .ms-n").count():
+        await pg.locator("#mission .ms-n").first.click()
+        check(await pg.locator("#ms-panel").is_visible() and bool(await pg.locator("#ms-panel .ms-line").inner_text()), "a task opens its panel with the full line")
+        await pg.keyboard.press("Escape")
+        check(not await pg.locator("#ms-panel").is_visible(), "Esc closes the panel first")
+    await pg.keyboard.press("f")
+    await pg.keyboard.press("Escape")
+    check(await pg.evaluate("$('mission').hidden && !$('cockpit').hidden"), "Esc goes back to the cockpit")
+    check(not errors, f"no page errors in the mission map {errors[:2]}")
+    await ctx.close()
+    ctx, pg, errors = await page(browser, secret, **devices["iPhone 14"])
+    await pg.wait_for_selector("#cockpit-btn")
+    await pg.evaluate("openCockpit(true); openMission(true)")
+    await pg.wait_for_selector("#mission .ms-c, #mission .ms-empty", timeout=10000)
+    check(await pg.evaluate("document.documentElement.scrollWidth <= screen.width && $('ms-stage').hidden && !$('ms-list').hidden"),
+          "phone mission map: chains as a list, fits the screen")
+    check(not errors, f"no page errors in the phone mission map {errors[:2]}")
+    await ctx.close()
+
+
 async def csp(browser, secret: str) -> None:
     """The app under its real Content-Security-Policy: the map and a note render, nothing is blocked."""
     for path in ("/ui", "/ui/admin"):
@@ -301,6 +383,7 @@ async def main() -> None:
         await phone(browser, p.devices, secret)
         await admin(browser, secret)
         await cockpit(browser, p.devices, secret)
+        await mission(browser, p.devices, secret)
         await browser.close()
     print("ok" if not failures else f"{len(failures)} failed")
     sys.exit(1 if failures else 0)
