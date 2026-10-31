@@ -48,7 +48,7 @@ HOME = Path.home()
 STATE = HOME / ".knowledge" / "companion"
 BACKUPS = HOME / "backups" / "knowledge-companion"
 WAKE_AGAIN = 30 * 60  # the server calls a woken task stalled after the same time
-START_DELAY = 120  # seconds a task is ready before this pc starts a new session for it: a pc with an open session wins
+START_DELAY = int(os.environ.get("KNOWLEDGE_COMPANION_START_DELAY") or 120)  # seconds a task is ready before this pc starts a new session for it: a pc with an open session wins
 YOLO_FLAGS = {"claude": ["--dangerously-skip-permissions"], "agy": ["--dangerously-skip-permissions"],
               "codex": ["--dangerously-bypass-approvals-and-sandbox"]}  # a new session with YOLO on: its own flag as well
 EVERY = float(os.environ.get("KNOWLEDGE_COMPANION_EVERY") or 60)

@@ -933,7 +933,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
              {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})
         call("POST", "/local/api/settings", {"startWhenNone": {"agy": True, "codex": True}})
         n = len(recorded())
-        code, out, err = run([sys.executable, str(hooks / "companion.py"), "tick"], "", {**env, "KNOWLEDGE_CODEX_PROCESS": "knnocodex"}, timeout=120)
+        code, out, err = run([sys.executable, str(hooks / "companion.py"), "tick"], "", {**env, "KNOWLEDGE_CODEX_PROCESS": "knnocodex", "KNOWLEDGE_COMPANION_START_DELAY": "0"}, timeout=120)
         wait_for(lambda: any(c.get("argv", [""])[:2] == ["codex", "exec"] for c in recorded()[n:]), 15)
         execs = [c["argv"] for c in recorded()[n:] if c.get("argv", [""])[:2] == ["codex", "exec"]]
         queued = [c for c in recorded()[n:] if c.get("argv", [""])[:2] == ["codex", "queue"]]
