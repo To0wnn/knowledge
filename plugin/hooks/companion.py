@@ -270,8 +270,14 @@ def project_folders() -> dict:
             continue
         except OSError:
             continue
-        out.setdefault(name, str(root))
+        # a project linked in several folders: a worker needs a git checkout for its own worktree, so that one wins
+        if name not in out or (in_git(root) and not in_git(Path(out[name]))):
+            out[name] = str(root)
     return out
+
+
+def in_git(p: Path) -> bool:
+    return any((q / ".git").exists() for q in (p, *p.parents))
 
 
 DENIED: set = set()  # known folders the companion may not read (project_folders); why_not names them
@@ -329,7 +335,9 @@ def folder_links() -> dict:
                 top = subprocess.run(["git", "-C", str(p), "rev-parse", "--show-toplevel"], capture_output=True, text=True,
                                      encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL, timeout=10)  # git prints UTF-8, never the ANSI code page if shutil.which("git") else None
                 # the checkout's root, as knowledge-init links it; git prints it with / on Windows too
-                cands.append(str(Path(top.stdout.strip())) if top and top.returncode == 0 and top.stdout.strip() else str(p))
+                top = Path(top.stdout.strip()) if top and top.returncode == 0 and top.stdout.strip() else None
+                # git prints the resolved path (macOS /private/var, a Windows long name): keep the spelling the agent used
+                cands.append(next((str(q) for q in (p, *p.parents) if q.resolve() == top.resolve()), str(top)) if top else str(p))
         except (OSError, subprocess.SubprocessError):
             continue
     cands = sorted({c for c in cands if c not in linked and under_home(Path(c))})

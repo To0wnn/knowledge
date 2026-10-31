@@ -1422,7 +1422,8 @@ def codex_plugin(tok: str, home: Path, project: Path):
     data = reply.get("result", {}).get("data", [])
     listed = [h for e in data for h in e["hooks"] if h.get("pluginId") == "knowledge@knowledge"]
     problems = [w for e in data for w in e["warnings"] + [x["message"] for x in e["errors"]]]
-    check(len(listed) == 8 and not problems, "codex: hooks/list shows the plugin's eight hooks, no warnings",
+    want = sum(len(m["hooks"]) for ms in json.loads((root / ".codex-plugin" / "hooks.json").read_text(encoding="utf-8"))["hooks"].values() for m in ms)
+    check(len(listed) == want and not problems, "codex: hooks/list shows all of the plugin's hooks, no warnings",
           f"{len(listed)} hooks, problems {problems}: " + json.dumps(reply)[:800])
     # The companion trusts them the way Codex's own /hooks screen does, and Codex then reports them trusted.
     code, out, err = run([sys.executable, str(root / "hooks" / "companion.py"), "trust", "codex"], "", env, timeout=120)
