@@ -839,7 +839,8 @@ document.addEventListener("keydown", (e) => {
 function selectTab(name) {
   store.set("kn_tab", name); // kept over a reload, like the map
   for (const b of document.querySelectorAll(".tabs button")) b.setAttribute("aria-selected", String(b.dataset.tab === name));
-  for (const t of ["notes", "changes", "tasks", "lint", "thispc"]) $(`tab-${t}`).hidden = t !== name;
+  for (const t of ["notes", "changes", "tasks", "machines", "lint", "thispc"]) $(`tab-${t}`).hidden = t !== name;
+  if (name === "machines") loadMachines(true);
   if (name === "lint") loadLint(true);
   if (name === "thispc") loadThisPc();
   if (name === "tasks") loadTasks(true);
@@ -856,8 +857,9 @@ async function companion(path, body) {
   if (!r.ok) throw new Error(data.error || `companion: HTTP ${r.status}`);
   return data;
 }
+let localMachine = ""; // the machine id of the companion on this pc: its row in Machines says "This pc"
 async function probeCompanion() {
-  try { await companion("/local/api/hello"); } catch { return false; } // no companion on this pc: no tab
+  try { localMachine = (await companion("/local/api/hello")).machine || ""; } catch { return false; } // no companion on this pc: no tab
   $("tabbtn-thispc").hidden = false;
   return true;
 }
@@ -1010,27 +1012,122 @@ async function loadTasks(render = true) {
   section("Open", open);
   for (const who of [...new Set(back.map((t) => t.owner))].sort()) section(`Results waiting to be read by ${who}`, back.filter((t) => t.owner === who));
   if (!tasks.length) box.append(el("p", "muted", "No open tasks."));
-  const sessions = res.sessions.filter(here);
-  if (sessions.length) {
-    const ol = el("ol", "hits");
-    for (const c of sessions) {
-      const li = el("li", "session");
-      li.append(el("span", "hit-path", `${c.agent} · ${c.device}`),
-        el("span", "hit-text", [c.wake ? "can be woken" : "not wakeable", c.plugin && `plugin ${c.plugin}`, ago(c.at), allMode() ? c.project : ""].filter(Boolean).join(" · ")));
-      const e = (c.errors || []).at(-1);  // the newest hook failure of this device's agent
-      if (e) {
-        const w = el("span", "hit-text session-error", `hook ${e.hook}${e.event ? ` (${e.event})` : ""} failed · ${e.code || "error"} · ${(e.stderr || "").split("\n")[0].slice(0, 160)} · ${ago(e.at)}`);
-        w.title = `${c.errors.length} failure(s) this week, source ${e.source}\n${e.stderr || ""}`;
-        li.append(w);
-      }
-      ol.append(li);
+  const link = el("button", "ghost small", "Machines and workers →");
+  link.onclick = () => selectTab("machines");
+  box.append(link);
+}
+
+// Machines: every pc of the viewer's tokens (an admin sees all) with its agents, workers and recent sessions. The
+// owner steers a pc with fixed actions only; the server queues them and the pc's companion fetches them.
+const AGENT_NAME = { claude: "Claude Code", codex: "Codex", agy: "agy" };
+const YOLO_WARNING = "YOLO lets this agent run every command and edit every file on that pc without asking, also for tasks other people wrote. Risky actions are flagged, never stopped.";
+const mins = (sec) => `${Math.max(1, Math.round((Date.now() / 1000 - sec) / 60))} min`;
+async function machineAction(m, action, args = {}) {
+  try {
+    await api("/ui/api/machines/action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: m.id, action, args }) });
+  } catch (e) { alert(e.message); }
+  loadMachines(true);
+}
+function machineButton(text, title, onclick) {
+  const b = el("button", "ghost small", text); b.type = "button"; b.title = title; b.onclick = onclick; return b;
+}
+async function loadMachines(render = true) {
+  const res = await api("/ui/api/machines");
+  const running = res.machines.reduce((n, m) => n + Object.values(m.agents).reduce((k, a) => k + a.workers.filter((w) => w.status === "running").length, 0), 0);
+  $("machines-count").textContent = running || "";
+  if (!render) return;
+  const tasks = (await api("/ui/api/tasks")).tasks.filter((t) => !t.done && t.startable);
+  const box = $("machines"); box.replaceChildren();
+  const narrow = matchMedia("(max-width: 720px)").matches;
+  for (const m of res.machines) {
+    const card = el("article", "machine" + (m.online ? "" : " offline")), head = el("div", "machine-head");
+    head.append(el("h3", null, m.label));
+    head.append(el("span", `pill ${m.online ? "ok" : ""}`, m.old ? "old plugin" : m.online ? "online" : `offline since ${ago(m.at)}`));
+    if (localMachine && m.id === localMachine) head.append(el("span", "pill this", "This pc"));
+    card.append(head, el("p", "machine-meta", [m.tokens.join(", "), m.companion ? `companion ${m.companion.version || "?"}` : !m.old && "no companion"].filter(Boolean).join(" · ")));
+    const c = m.companion;
+    if (c) {
+      const line = el("p", "machine-meta", `Workers ${c.workersAllowed ? "allowed" : "off"}${c.game ? ` · ${c.game}` : ""}`);
+      if (m.own) line.append(" ", machineButton(c.workersAllowed ? "Turn off" : "Allow workers", "Whether this pc may run workers at all",
+        () => machineAction(m, "workers_allowed", { on: !c.workersAllowed })));
+      card.append(line);
     }
-    box.append(el("h3", null, `Agent sessions (${sessions.length})`), ol);
+    for (const [a, ag] of Object.entries(m.agents)) {
+      const row = el("div", "machine-agent"), top = el("div", "machine-agent-head");
+      top.append(el("strong", null, AGENT_NAME[a] || a), el("span", "muted", ag.plugin ? `plugin ${ag.plugin}` : "plugin ?"));
+      if (ag.yolo) top.append(el("span", "pill yolo", "YOLO"));
+      if (ag.trusted === false) top.append(el("span", "pill warn", "hooks not trusted"));
+      if (c) top.append(el("span", `pill ${ag.limit >= 90 ? "warn" : ""}`, ag.limit == null ? "limit unknown" : `limit ${Math.round(ag.limit)}%`));
+      row.append(top);
+      if (ag.error) {
+        const e = ag.error, w = el("p", "machine-error", `hook ${e.hook || "?"}${e.event ? ` (${e.event})` : ""} failed · ${(e.stderr || e.text || "").split("\n")[0].slice(0, 160)} · ${ago(e.at)}`);
+        w.title = e.stderr || ""; row.append(w);
+      }
+      const ws = el("ul", "machine-list");
+      for (const w of ag.workers) {
+        const li = el("li", "worker");
+        li.append(el("span", null, `${AGENT_NAME[a] || a} · ${w.id} · ${w.status === "running" ? `running ${mins(w.started)}` : `${w.status} ${ago(w.ended || w.started)}`}`));
+        if (w.yolo) li.append(el("span", "pill yolo", "YOLO"));
+        li.append(machineButton("open", "How to look at this worker", () => alert(w.open || "No details yet.")));
+        if (m.own && w.status === "running") li.append(machineButton("stop", "Stop this worker", () => confirm(`Stop the worker on ${w.id}?`) && machineAction(m, "stop_worker", { id: w.id })));
+        if (m.own && w.status !== "running" && w.checkpoint) li.append(machineButton("roll back", "Put its worktree back as it was before its last turn (a checkpoint of now is kept)",
+          () => confirm(`Roll ${w.id} back to before its last turn?`) && machineAction(m, "rollback", { id: w.id })));
+        ws.append(li);
+      }
+      if (ag.workers.length) row.append(ws);
+      if (ag.sessions.length) {
+        const d = el("details", "machine-sessions"), list = el("ul", "machine-list");
+        d.open = !narrow && ag.sessions.length <= 3;
+        d.append(el("summary", null, `${ag.sessions.length} session${ag.sessions.length > 1 ? "s" : ""} in the last 2 h`));
+        for (const s of ag.sessions) list.append(el("li", null, `${s.project || "?"} · ${s.task || "free"}${s.worker ? " (worker)" : ""} · ${ago(s.at)}`));
+        d.append(list); row.append(d);
+      }
+      if (m.own && c && !m.old) {
+        const ctl = el("div", "machine-controls");
+        if (ag.trusted === false) ctl.append(machineButton("Trust hooks", "Trust the knowledge hooks the agent's own way", () => machineAction(m, "trust_hooks", { agent: a })));
+        ctl.append(machineButton(ag.yolo ? "YOLO off" : "YOLO on", "Run without asking on this pc", () => {
+          if (ag.yolo) return machineAction(m, "yolo", { agent: a, on: false });
+          if (prompt(`${YOLO_WARNING}\n\nType YOLO to turn it on for ${AGENT_NAME[a] || a} on ${m.label}.`) === "YOLO") machineAction(m, "yolo", { agent: a, on: true, confirm: "YOLO" });
+        }));
+        const max = el("select"); max.title = "At most this many workers of this agent at once";
+        for (const n of [0, 1, 2, 3, 4]) { const o = el("option", null, `max ${n} worker${n === 1 ? "" : "s"}`); o.value = n; o.selected = n === ((c.maxWorkers || {})[a] ?? 1); max.append(o); }
+        max.onchange = () => machineAction(m, "max_workers", { agent: a, n: Number(max.value) });
+        ctl.append(max);
+        row.append(ctl);
+      }
+      card.append(row);
+    }
+    if (m.own && !m.old) {
+      const ctl = el("div", "machine-controls");
+      if (c) {
+        const pick = el("select"); pick.title = "A task that may start now";
+        pick.append(el("option", null, "Start a worker for…"));
+        for (const t of tasks) { const o = el("option", null, `${t.id} · ${t.owner} · ${t.text.slice(0, 40)}`); o.value = `${t.project}/${t.id}`; pick.append(o); }
+        pick.onchange = () => { const [project, id] = pick.value.split("/"); if (id) machineAction(m, "start_worker", { project, id }); };
+        ctl.append(pick, machineButton("Update plugin", "Update the knowledge plugin of every agent there", () => machineAction(m, "update_plugin")));
+      }
+      ctl.append(machineButton("Forget", "Remove this pc from the list (it comes back when it reports again)", async () => {
+        if (!confirm(`Forget ${m.label}?`)) return;
+        try { await api("/ui/api/machines/forget", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: m.id }) }); } catch (e) { alert(e.message); }
+        loadMachines(true);
+      }));
+      card.append(ctl);
+    }
+    if (m.actions.length) {
+      const d = el("details", "machine-sessions"), list = el("ul", "machine-list");
+      d.append(el("summary", null, `Actions (${m.actions.length})`));
+      for (const x of m.actions.slice().reverse()) list.append(el("li", x.status === "failed" ? "machine-error" : null,
+        `${x.action}${x.args && Object.keys(x.args).length ? ` ${Object.values(x.args).join(" ")}` : ""} · ${x.status === "waiting" ? "waiting for machine" : x.status}${x.result ? `: ${x.result}` : ""} · ${x.by} ${ago(x.at)}`));
+      d.append(list); card.append(d);
+    }
+    box.append(card);
   }
+  if (!res.machines.length) box.append(el("p", "muted", "No machine has reported yet. Machines appear once a plugin 0.15.0 or newer asks the server."));
 }
 // Lint checks in plain words, with what to do about them (unknown checks fall back to their name).
 const LINT_INFO = {
   usage_outlier: ["Session that used far more tokens than usual", "Look at that session's log: a loop, a huge file read or a runaway subagent? Nothing to fix when the work was simply big."],
+  worker_unmerged: ["Worker branch not merged after a week", "A worker finished its task on a branch nobody merged: review the branch on that pc and merge it (the companion then removes the worktree), or delete the branch and worktree by hand."],
   plugin_behind: ["Device with an old plugin", "Its auto-update did not fetch the newest version within two days: update it by hand on that device (the session start tells the agent how)."],
   skill_broken: ["Skill Claude cannot use", "Give SKILL.md frontmatter with name and a one-line description; without it the skill is never picked."],
   skill_name_mismatch: ["Skill name differs from its folder", "Set name: to the folder name (lowercase, digits, hyphens)."],
@@ -1164,5 +1261,6 @@ loadMe().then(loadGraph).catch((e) => {
   if (store.get("kn_map") === "1") setMap(true); // the map stays open over a reload
   const tab = store.get("kn_tab");
   probeCompanion().then((up) => { if (up && tab === "thispc") selectTab("thispc"); });
-  if (["changes", "tasks", "lint"].includes(tab) && !document.querySelector(`.tabs [data-tab="${tab}"]`).hidden) selectTab(tab); // Lint only for admins
+  loadMachines(false).catch(() => {});
+  if (["changes", "tasks", "machines", "lint"].includes(tab) && !document.querySelector(`.tabs [data-tab="${tab}"]`).hidden) selectTab(tab); // Lint only for admins
 });

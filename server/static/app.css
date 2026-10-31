@@ -389,3 +389,25 @@ button.ghost.danger:hover { border-color: var(--bad); }
 #t-advanced { margin: 8px 0; }
 #t-advanced .check { display: flex; margin: 4px 0; }
 #t-skills-why { margin: 2px 0 6px 30px; font-size: 12px; }
+
+/* Machines tab: one card per pc, agents as rows, sessions folded on narrow screens */
+.machine { margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.machine.offline { opacity: .75; }
+.machine-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.machine-head h3 { margin: 0; font-size: 14px; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.machine-meta { margin: 2px 0 6px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.machine-agent { padding: 6px 0; border-top: 1px solid var(--line); }
+.machine-agent-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; }
+.machine-agent-head .muted { font-size: 12px; }
+.pill { display: inline-block; padding: 0 7px; border-radius: 9px; background: var(--hover); color: var(--muted); font-size: 11px; line-height: 18px; white-space: nowrap; }
+.pill.ok { color: var(--ok); }
+.pill.this { background: var(--amber-soft); color: var(--amber-ink); }
+.pill.warn { background: var(--warn-soft); color: var(--warn); }
+.pill.yolo { background: var(--bad); color: var(--panel-solid); font-weight: 650; letter-spacing: .04em; }
+.machine-error { margin: 4px 0; color: var(--bad); font-size: 12px; overflow-wrap: anywhere; }
+.machine-list { margin: 4px 0; padding: 0; list-style: none; font-size: 12.5px; }
+.machine-list li { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 2px 0; overflow-wrap: anywhere; }
+.machine-list li.worker > span:first-child { flex: 1; min-width: 0; }
+.machine-sessions summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.machine-controls { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.machine-controls select { max-width: 100%; font: inherit; font-size: 12px; padding: 2px 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); }
