@@ -843,8 +843,11 @@ def check_workers(ws: dict, tok: str, now: float, lim: dict):
                 log("worker", f"{AGENTS[w['agent']][0]}: usage limit at 90%, the worker for {w['id']} hands over to {target}",
                     f"Stopped in {workers.GRACE // 60} min if it has not ended")
             elif w.get("told") and now - w["told"] >= workers.GRACE:
-                workers.kill(w, hard=True)
-                log("worker", f"{AGENTS[w['agent']][0]}: the worker for {w['id']} was stopped (usage limit)", "")
+                try:  # one worker that cannot be stopped must not cost the round (the save, the report)
+                    workers.kill(w, hard=True)
+                    log("worker", f"{AGENTS[w['agent']][0]}: the worker for {w['id']} was stopped (usage limit)", "")
+                except Exception as e:
+                    log("error", f"Could not stop the worker for {w['id']}", f"{e}"[:200])
         elif w["status"] != "merged" and w.get("worktree") and not shared_running(ws, w) and workers.merged(w):
             w["status"], w["result"] = "merged", workers.remove(w)
             for o in ws.values():  # the sessions before or after it in that worktree (a hand-over) share its branch
