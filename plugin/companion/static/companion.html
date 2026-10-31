@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Knowledge companion</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="companion.css">
+<script src="companion.js"></script>
+</head>
+<body class="cmp cmp-page">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-orb" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.2" fill="currentColor"/><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-dasharray="2 3.2"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4L6 18M18 6l1.4-1.4"/></g></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 0 0-14.6-4.5L4 8"/><path d="M4 3.5V8h4.5"/><path d="M4 13a8 8 0 0 0 14.6 4.5L20 16"/><path d="M20 20.5V16h-4.5"/></g></symbol>
+  <symbol id="i-tools" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 6.5a4 4 0 0 0 5 5L21 13l-8 8-3-3 8-8"/><path d="M14.5 6.5L13 5a4 4 0 0 0-5.5 5.5L3 15l3 3"/></g></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3l7.5 3v5.5c0 4.6-3.2 8-7.5 9.5-4.3-1.5-7.5-4.9-7.5-9.5V6z"/><path d="M8.8 12.2l2.2 2.2 4.3-4.6" stroke-linecap="round"/></g></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2.5L4.5 13.5H11l-1 8 8.5-11H12z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M4.5 12.5l4.5 4.5 10.5-11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-sync" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 0 1 13.7-5.6L20 8.5"/><path d="M20 4v4.5h-4.5"/><path d="M20 12a8 8 0 0 1-13.7 5.6L4 15.5"/><path d="M4 20v-4.5h4.5"/></g></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 2.6 3.8 5.6 3.8 9s-1.2 6.4-3.8 9c-2.6-2.6-3.8-5.6-3.8-9S9.4 5.6 12 3z"/></g></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></g></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5z" fill="currentColor"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5l9.5 16.5h-19z"/><path d="M12 10v4.5M12 17.4v.1"/></g></symbol>
+</svg>
+
+<a class="cmp-skip" href="#main">Skip to content</a>
+
+<header class="cmp-top">
+  <div class="cmp-brand">
+    <span class="cmp-orb" aria-hidden="true"><svg><use href="#i-orb"/></svg></span>
+    <div>
+      <div class="cmp-brand-name">Knowledge companion</div>
+      <div class="cmp-brand-host" id="host"></div>
+    </div>
+  </div>
+  <ul class="cmp-chips" id="chips" aria-label="Status"></ul>
+  <div class="cmp-actions">
+    <button class="cmp-iconbtn" id="theme-btn" type="button" aria-label="Switch theme"><svg><use href="#i-moon"/></svg></button>
+    <button class="cmp-iconbtn" id="refresh-btn" type="button" aria-label="Refresh"><svg><use href="#i-refresh"/></svg></button>
+    <button class="cmp-iconbtn cmp-iconbtn--accent" id="tools-btn" type="button" aria-label="Tools" aria-haspopup="menu" aria-expanded="false" aria-controls="tools-menu"><svg><use href="#i-tools"/></svg></button>
+  </div>
+  <div class="cmp-menu" id="tools-menu" role="menu" aria-label="Tools" hidden></div>
+</header>
+
+<nav class="cmp-nav" aria-label="Sections">
+  <a href="#sec-agents">This pc</a>
+  <a href="#sec-tasks">Tasks <span class="cmp-count" id="tasks-count"></span></a>
+  <a href="#sec-activity">Activity</a>
+  <a href="#sec-settings">Settings</a>
+</nav>
+
+<main id="main" class="cmp-main">
+  <section id="sec-agents" class="cmp-sec cmp-sec--agents" aria-labelledby="h-agents">
+    <h2 id="h-agents">This pc</h2>
+    <p class="cmp-lede">The agents on this machine, their plugin and the sessions a task can wake.</p>
+    <div class="cmp-agents" id="agents"></div>
+  </section>
+
+  <section id="sec-tasks" class="cmp-sec cmp-sec--tasks" aria-labelledby="h-tasks">
+    <h2 id="h-tasks">Tasks for this pc</h2>
+    <div class="cmp-lanes" id="tasks"></div>
+  </section>
+
+  <section id="sec-activity" class="cmp-sec cmp-sec--activity" aria-labelledby="h-activity">
+    <h2 id="h-activity">Activity</h2>
+    <ol class="cmp-log" id="activity"></ol>
+  </section>
+
+  <section id="sec-settings" class="cmp-sec cmp-sec--settings" aria-labelledby="h-settings">
+    <h2 id="h-settings">Settings</h2>
+    <form class="cmp-settings" id="settings"></form>
+  </section>
+</main>
+
+<div class="cmp-toast" id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
