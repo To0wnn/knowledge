@@ -1299,7 +1299,7 @@ def lint_all() -> dict[str, list[str]]:
             report.setdefault("doc_without_topic", []).append(f"{n['id']}: {why} of {docs_root[root]}/MEMORY.md")
     report["offline_conflict"] = [f"{rel}: written offline while {re.sub(r'[.]offline-[0-9-]+[.]md$', '.md', rel)} changed "
                                   "here; merge it into that memo, then delete it" for rel in sorted(files)
-                                  if re.search(r"[.]offline-[0-9-]+[.]md$", rel)]
+                                  if OFFLINE_COPY.search(rel)]
     report["history_failed"] = [f"{rel}: {err}" for rel, err in sorted(HISTORY_FAILED.items()) if in_scope(rel)]
     return report
 
@@ -1635,13 +1635,21 @@ def task_ids(text: str) -> set[str]:
     return {t["id"] for line in text.splitlines() if (t := parse_task(line))}
 
 
-def added_tasks(rel: str, before: str, after: str) -> list[dict]:
-    """The task lines `after` has whose ID `before` had not: what a write hands over. Session logs only quote task lines
-    and archives hold finished ones."""
+def task_sig(t: dict) -> str:
+    """What a task asks, as a short hash: owner, requester, start and text. A claim marker or a new due date leave it."""
+    what = re.sub(r"\((?:claimed|bezig)\b[^)]*\)", "", t["text"], flags=re.I)
+    return hashlib.sha256("\n".join((t["owner"].lower(), t["from"], t["start"].lower(), " ".join(what.split()))).encode()).hexdigest()[:16]
+
+
+def added_tasks(rel: str, before: str, after: str, changed: bool = False) -> list[dict]:
+    """The task lines `after` has whose ID `before` had not: what a write hands over; with `changed` also the lines
+    whose ID stays but whose task (task_sig) is new. Session logs only quote task lines and archives hold finished ones."""
     if not mem_of(rel) or rel.split("/", 2)[1:2] == ["sessions"] or is_archive(rel):
         return []
-    old = task_ids(before)
-    return [t for line in after.splitlines() if (t := parse_task(line)) and t["id"] not in old]
+    old = [t for line in before.splitlines() if (t := parse_task(line))]
+    ids, sigs = {t["id"] for t in old}, {(t["id"], task_sig(t)) for t in old}
+    return [t for line in after.splitlines() if (t := parse_task(line))
+            and (t["id"] not in ids or changed and (t["id"], task_sig(t)) not in sigs)]
 
 
 def refuse_bare_tasks(rel: str, before: str, after: str):
@@ -1660,14 +1668,17 @@ def update_state(path: Path, change):
 
 
 def note_task_authors(rel: str, before: str, after: str, by: str):
-    """Who added a task line: a line from a writer the project trusts may start by itself, others wait for approval.
-    A line added again (another memo, the same ID) gets its new writer, so reusing an ID never borrows trust."""
-    if not by or not (new := added_tasks(rel, before, after)) or not (project := project_of(rel)):
+    """Who added or changed a task line: a line from a writer the project trusts may start by itself, others wait for
+    approval. A line added again (another memo, the same ID) or reworded gets its new writer and loses an earlier
+    approval, so reusing an ID or editing a trusted line never borrows trust."""
+    if not (new := added_tasks(rel, before, after, changed=True)) or not (project := project_of(rel)):
         return
     try:
-        update_state(TASK_AUTHORS, lambda d: d.setdefault(project, {}).update(
-            {t["id"]: {"by": by, "at": int(time.time())} for t in new}))
-    except OSError as e:  # the write itself happened; without an author the line waits for approval
+        if by:
+            update_state(TASK_AUTHORS, lambda d: d.setdefault(project, {}).update(
+                {t["id"]: {"by": by, "at": int(time.time()), "sig": task_sig(t)} for t in new}))
+        update_state(TASK_APPROVALS, lambda d: [d.get(project, {}).pop(t["id"], None) for t in new])
+    except OSError as e:  # the write itself happened; project_tasks still compares the line with what was recorded
         print(f"task authors not saved: {e}", flush=True)
 
 
@@ -1702,10 +1713,13 @@ def project_tasks(project: str) -> tuple[list[dict], list[dict]]:
     authors, approvals, wakes = (read_json(f, {}).get(project, {}) for f in (TASK_AUTHORS, TASK_APPROVALS, TASK_WAKES))
     today, now = date.today(), time.time()
     for t in tasks:
-        start, by, approved = t["start"].lower(), authors.get(t["id"], {}).get("by", ""), t["id"] in approvals
+        # a record made for other words (a path that did not note the change) no longer counts: unknown writer
+        sig, rec, ok = task_sig(t), authors.get(t["id"]), approvals.get(t["id"])
+        fits = lambda r: r.get("sig") in (None, sig)  # None: recorded before 0.14.0
+        start, by, approved = t["start"].lower(), rec["by"] if rec and fits(rec) else "", bool(ok) and fits(ok)
         after = t["start"][6:].strip() if start.startswith("after ") and start != "after approval" else ""
         when = kb_lint.latest_date(t["start"]) if not after and start not in ("now", "after approval") else None
-        trusted = (t["legacy"] and not by) or bool(by) and trusted_writer(project, by)  # unknown legacy: as before
+        trusted = (t["legacy"] and not rec) or bool(by) and trusted_writer(project, by)  # unknown legacy: as before
         why = [r for r, waits in (
             ("waits for approval", start == "after approval" and not approved),
             (f"waits for {after}", after and after in open_ids and f"{after}-done" not in done_ids),
@@ -1731,10 +1745,14 @@ def task_item(t: dict, mem: str) -> str:
     return f"- {t['path'].removeprefix(mem + '/')}: {body}{note}"
 
 
+OFFLINE_COPY = re.compile(r"[.]offline-[0-9-]+[.]md$")  # mirror_push's conflict copy, to be merged by a person
+
+
 def task_memos(mem: str) -> dict[str, str]:
-    """The memos of `mem` that can hold task lines: session logs only quote them, archives hold finished ones."""
+    """The memos of `mem` that can hold task lines: session logs only quote them, archives hold finished ones, and a
+    conflict copy is a draft nobody vetted (it skips the checks a write does)."""
     return {r: t for r, t, _ in index.items() if in_scope(r) and r.startswith(mem + "/")
-            and not r.startswith(mem + "/sessions/") and not is_archive(r)}
+            and not r.startswith(mem + "/sessions/") and not is_archive(r) and not OFFLINE_COPY.search(r)}
 
 
 def task_items(project: str, names: tuple) -> tuple[list[str], list[str], list[str]]:
@@ -2466,6 +2484,7 @@ async def mirror_push(request: Request):
                 refuse_secrets(merged)
                 if replace_if_unchanged(full, current, merged.encode()):
                     index.refresh(rel)
+                    note_task_authors(rel, current.decode("utf-8", "replace"), merged, device.get().get("name", ""))
                     audit("mirror-merge", rel)
                     out.setdefault("merged", []).append(rel)  # not in "written": the device fetches the merged text
                     continue
@@ -3892,9 +3911,9 @@ async def ui_task_approve(request: Request):
         return JSONResponse({"error": f"unknown project {project}"}, status_code=404)
     if not may_approve(project):
         return JSONResponse({"error": "only the project's owner or an admin may approve a task"}, status_code=403)
-    if tid not in {t["id"] for t in (await asyncio.to_thread(project_tasks, project))[0]}:
+    if not (t := next((t for t in (await asyncio.to_thread(project_tasks, project))[0] if t["id"] == tid), None)):
         return JSONResponse({"error": f"no open task {tid} in {project}"}, status_code=404)
-    approval = {"by": device.get().get("user", ""), "at": int(time.time())}
+    approval = {"by": device.get().get("user", ""), "at": int(time.time()), "sig": task_sig(t)}  # these words only
     await asyncio.to_thread(update_state, TASK_APPROVALS, lambda d: d.setdefault(project, {}).update({tid: approval}))
     audit("task-approve", f"{project}/{tid}")
     return JSONResponse({"ok": True})
