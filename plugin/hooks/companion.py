@@ -869,7 +869,8 @@ def check_workers(ws: dict, tok: str, now: float, lim: dict):
                 held = claim({"project": w["project"], "id": w["id"], "agent": w["agent"]}, tok, worker_session(w["id"]), w["nonce"])
             except Exception as e:
                 held = ""
-                log("error", f"Could not renew the lease of {w['id']}", f"{e}"[:200])
+                if not (isinstance(e, urllib.error.HTTPError) and e.code == 404):  # 404: the worker removed its line, it is ending
+                    log("error", f"Could not renew the lease of {w['id']}", f"{e}"[:200])
             if held:  # this pc slept past its lease and another took the task over: two workers must not run one task
                 try:
                     workers.kill(w, hard=True)
