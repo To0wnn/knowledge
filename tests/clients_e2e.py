@@ -828,7 +828,8 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         agy_ids = [t["id"] for t in ready if t["agent"] == "agy" and t["project"] == "garden"]
         check(len(st_agy) == 1 and "-i" in argv and "CMP-GEMINI" in agy_ids and all(i in argv[-1] for i in agy_ids)
               and (WIN and st_agy[0]["cwd"] == str(project) or not WIN and argv[1:3] == ["new-session", "-d"] and str(project) in argv),
-              "companion: no agy session, start allowed: one new agy session in the project folder gets its ready tasks", json.dumps(st_agy)[:600])
+              "companion: no agy session, start allowed: one new agy session in the project folder gets its ready tasks",
+              json.dumps(st_agy)[:600] + " " + body[:600])
         check(out.get("waiting", {}).get("garden/CMP-CLAUDE", "").startswith("No open session; starting one is off"),
               "companion: no Claude session and starting is off: the task waits and says why", body[:600])
         wakes = json.loads((tmp / "task_wakes.json").read_text(encoding="utf-8")).get("garden", {})

@@ -237,11 +237,13 @@ def project_folders() -> dict:
     out = {}
     for c in sorted(c for c in cands if c):
         try:
-            root, name = project_marker.project_root(Path(c).resolve())
+            # the path as the agent wrote it, not resolve()d: a macOS /var or a Windows 8.3 name would not match its own key
+            root, name = project_marker.project_root(Path(os.path.abspath(c)))
+            if not (root and name) or root.resolve() == HOME.resolve():
+                continue
         except OSError:
             continue
-        if root and name and root != HOME.resolve():
-            out.setdefault(name, str(root))
+        out.setdefault(name, str(root))
     return out
 
 
