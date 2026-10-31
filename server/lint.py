@@ -11,8 +11,8 @@ from datetime import date
 
 # The words of the memo layout. Both languages are always read; KNOWLEDGE_LANGUAGE picks what the server writes
 # (new memos, refusals, instructions). Sections "## Status"/"## Stand", "## Decisions"/"## Keuzes".
-WORDS = {"en": {"now": "Status", "decisions": "Decisions", "open": "open until", "claimed": "claimed", "archive": "archive"},
-         "nl": {"now": "Stand", "decisions": "Keuzes", "open": "open tot", "claimed": "bezig", "archive": "archief"}}
+WORDS = {"en": {"now": "Status", "decisions": "Decisions", "open": "open until", "claimed": "claimed", "archive": "archive", "checked": "checked"},
+         "nl": {"now": "Stand", "decisions": "Keuzes", "open": "open tot", "claimed": "bezig", "archive": "archief", "checked": "gecontroleerd"}}
 LANG = os.environ.get("KNOWLEDGE_LANGUAGE", "en") if os.environ.get("KNOWLEDGE_LANGUAGE") in WORDS else "en"
 W = WORDS[LANG]
 NOW_H, DEC_H = r"## (?:Status|Stand)", r"## (?:Decisions|Keuzes)"
@@ -87,6 +87,17 @@ def latest_date(text: str, until: date | None = None) -> date | None:
 # deliberate choices with their reasons; history goes to archief/<name>_archief.md.
 STRUCTURE = (f"## {W['now']}", f"## {W['decisions']}")  # what a report asks for; both languages count as present
 STRUCTURE_RE = (NOW_H, DEC_H)
+# Title and fix of the checks whose advice names a layout word, in the server's language (the web UI's Health page,
+# /ui/api/lint?v=2); the other checks' wording is language-free and stays in app.js LINT_INFO.
+HINTS = {
+    "missing_structure": [f"Missing {' / '.join(STRUCTURE)}", "Add the two sections."],
+    "big_memo_without_archive": ["Big memo without archive", f"Move the history to {W['archive']}/<name>_{W['archive']}.md."],
+    "stale_unchecked_fact": ["Fact unchecked for long", f"Check it on the live system, then mark it ({W['checked']} <date>)."],
+    "open_overdue": ["Open item overdue", f"An item marked '{W['open']} <date>' passed its date: do it, or move the date with a reason."],
+    "review_due": ["Due for a check", f"IPs or versions not checked for a while: check them on the live system, then mark ({W['checked']} <date>)."],
+}
+# Findings that are notes, not problems: the Health page shows each group apart and collapsed, so they never bury the rest.
+GROUPS = [{"id": "usage", "title": "Token usage", "checks": ["usage_outlier"], "collapsed": True}]
 NOT_DOCS = {"CLAUDE.md", "README.md"}
 
 
@@ -461,4 +472,6 @@ if __name__ == "__main__":  # self-check
              {"agent": "agy", "session": "few", "at": now, "in": 90_000_000}]  # fewer than 10 sessions: no verdict
     hits = usage_outliers(rows, now)
     assert len(hits) == 1 and hits[0].startswith("codex session big (?, ?, ") and hits[0].endswith(": 9.0M tokens"), hits
+    assert HINTS["missing_structure"][0] == f"Missing ## {W['now']} / ## {W['decisions']}" and all(len(v) == 2 for v in HINTS.values())
+    assert LANG != "en" or not any(w in str(HINTS) for w in ("Stand", "Keuzes", "archief", "gecontroleerd", "open tot"))
     print("ok")

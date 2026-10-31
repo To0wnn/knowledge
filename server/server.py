@@ -4436,6 +4436,8 @@ async def ui_lint(request: Request):
     hit = _ui_lint_cache.get(scope)
     if not hit or hit[0] != gen or now - hit[1] > UI_LINT_MAX_AGE:
         hit = _ui_lint_cache[scope] = (gen, now, await asyncio.to_thread(lint_all))
+    if request.query_params.get("v") == "2":  # the plain {check: [items]} stays the default for older pages
+        return JSONResponse({"report": hit[2], "groups": kb_lint.GROUPS, "hints": kb_lint.HINTS})
     return JSONResponse(hit[2])
 
 

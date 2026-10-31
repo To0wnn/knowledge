@@ -1290,6 +1290,9 @@ def main():
         (mem / "redos.md").unlink()
         http("POST", "/invalidate", {"paths": ["memory/redos.md"]}, token="watch-token")
         assert isinstance(json.loads(raw("GET", "/ui/api/lint", headers=ck)[2]), dict)
+        v2 = json.loads(raw("GET", "/ui/api/lint?v=2", headers=ck)[2])  # report + groups (usage apart, collapsed) + hints in the server's language
+        assert isinstance(v2["report"], dict) and {"id": "usage", "title": "Token usage", "checks": ["usage_outlier"], "collapsed": True} in v2["groups"], v2["groups"]
+        assert v2["hints"]["open_overdue"][1].startswith("An item marked 'open tot <date>'") and "## Stand / ## Keuzes" in v2["hints"]["missing_structure"][0], v2["hints"]
         body = json.dumps({"text": "# Source\nRouter firmware notes", "title": "Router notes"})
         assert raw("POST", "/ui/api/ingest", body, {**ck, "Content-Type": "application/json"})[0] == 403  # no CSRF header
         st, _, res = raw("POST", "/ui/api/ingest", body, {**ck, "Content-Type": "application/json", "X-Knowledge-UI": "1"})
