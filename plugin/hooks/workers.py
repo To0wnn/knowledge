@@ -131,6 +131,16 @@ def one_line(text: str, exe: str) -> str:
     return re.sub(r'["%^&|<>!]', " ", text) if exe.lower().endswith((".cmd", ".bat")) else text  # cmd.exe parses it
 
 
+def shim_line(args: list) -> str:
+    """The command line for an npm .cmd shim (codex.cmd, claude.cmd), which only cmd.exe runs: cmd.exe started by us
+    with /d /s /c and every argument in double quotes, where & | < > ^ ( ) are plain text; Python's own quoting adds
+    quotes only for spaces, so a folder named R&D would split the command. A % would still expand: refused."""
+    if bad := [a for a in args if "%" in a or '"' in a]:
+        raise RuntimeError(f"cannot pass {bad[0][:80]!r} through cmd.exe (a % or a quote); rename that folder")
+    quote = lambda a: '"' + re.sub(r"(\\+)$", r"\1\1", a) + '"'  # a trailing backslash must not escape the closing quote
+    return f'"{os.environ.get("COMSPEC") or "cmd.exe"}" /d /s /c "' + " ".join(map(quote, args)) + '"'
+
+
 def argv(agent: str, exe: str, prompt: str, yolo: bool, where: dict) -> list:
     """The headless command line per agent (flags checked against claude 2.1, codex-cli 0.164, agy 1.4.8). Without
     YOLO a worker may still edit its own folder: Claude acceptEdits, Codex workspace-write (plus the repository's
@@ -249,6 +259,8 @@ def start(agent: str, task: dict, machine: str, where: dict, yolo: bool, nonce: 
     ckpt = checkpoint(where["cwd"], task["id"]) if yolo and where.get("branch") else ""
     cmd, note = argv(agent, exe, prompt(task, agent, machine, where), yolo, where), ""
     with open(log, "ab") as out:
+        if os.name == "nt" and exe.lower().endswith((".cmd", ".bat")):
+            cmd = shim_line(cmd)
         run = lambda **kw: subprocess.Popen(cmd, cwd=where["cwd"], stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, env=env, **kw)
         if os.name != "nt":
             p = run(start_new_session=True)  # its own session: a restart of the companion's unit leaves it running
@@ -412,6 +424,13 @@ def self_test():
     a = argv("claude", "claude", "do\nit", False, {"cwd": "/x"})
     assert a[:3] == ["claude", "-p", "do / it"] and "acceptEdits" in a and "stream-json" in a
     assert "--dangerously-skip-permissions" in argv("agy", "agy", "x", True, {"cwd": "/x"})
+    line = shim_line(["C:\\npm\\codex.cmd", "exec", "--cd", "C:\\Users\\a\\R&D\\shop\\", "do it"])
+    assert line.endswith(' /d /s /c ""C:\\npm\\codex.cmd" "exec" "--cd" "C:\\Users\\a\\R&D\\shop\\\\" "do it""'), line
+    try:
+        shim_line(["codex.cmd", "C:\\100%\\x"])
+        raise AssertionError("a % would expand in cmd.exe")
+    except RuntimeError:
+        pass
     c = argv("codex", "codex.cmd", 'say "hi" & go', False, {"cwd": "/x"})
     assert c[:2] == ["codex.cmd", "exec"] and "workspace-write" in c and '"' not in c[-1] and "&" not in c[-1], c
     p = prompt({"id": "KN-4-cont", "project": "p", "path": "m/x.md", "owner": "Codex", "text": "go"}, "codex", "pc",
