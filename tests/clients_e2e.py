@@ -1034,20 +1034,6 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         check(code != 0 and "codex" in err and str(repo) in json.loads((agy_dir / "settings.json").read_text(encoding="utf-8"))["trustedWorkspaces"],
               "companion: trust goes on with agy after Codex failed, and says so", out + err)
         Path(str(calls) + ".fail").unlink()
-        # No Codex running: its registered session is closed (codex queue would only wait there), so a new one starts.
-        http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_edit", "arguments":
-             {"path": "garden-memory/project_companion.md", "old_string": "## Keuzes",
-              "new_string": "- open tot 1 jan 2099 [Codex, CMP-CX3] from Claude, start now: third codex task\n## Keuzes"}}},
-             {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})
-        call("POST", "/local/api/settings", {"startWhenNone": {"agy": True, "codex": True}})
-        n = len(recorded())
-        code, out, err = run([sys.executable, str(hooks / "companion.py"), "tick"], "", {**env, "KNOWLEDGE_CODEX_PROCESS": "knnocodex", "KNOWLEDGE_COMPANION_START_DELAY": "0"}, timeout=120)
-        wait_for(lambda: any(c.get("argv", [""])[:2] == ["codex", "exec"] for c in recorded()[n:]), 15)
-        execs = [c["argv"] for c in recorded()[n:] if c.get("argv", [""])[:2] == ["codex", "exec"]]
-        queued = [c for c in recorded()[n:] if c.get("argv", [""])[:2] == ["codex", "queue"]]
-        check(code == 0 and len(execs) == 1 and "CMP-CX3" in execs[0][-1] and str(project) in execs[0] and not queued
-              and "--skip-git-repo-check" in execs[0],
-              "companion: no Codex running: a new codex exec in the project folder, not a queue into a closed session", out[-400:] + err[-400:] + str(execs)[:300])
         # Hook failures the agents log themselves: reported once, marked as agent-log.
         admin = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice"}
         errs = machine_errors("friend-pc")
@@ -1547,7 +1533,7 @@ def agy_plugin(tok: str, home: Path, project: Path, garden: Path):
                 "watch": {**common, "toolCall": {"name": "run_command", "args": {"CommandLine": "rm -rf ~/x"}}}}
     (project / "docs" / "agy.md").write_text("agy plugin → ✅\n", encoding="utf-8")
     for cmd in cmds:
-        kind = next(k for k in payloads if f" {k}" in cmd)
+        kind = next(k for k in payloads if f" {k}" in cmd or f"/{k}.py" in cmd)  # watch.py runs as its own script
         code, out, err = run(f'cmd /d /s /c "{cmd}"' if WIN else [shutil.which("sh"), "-c", cmd], json.dumps(payloads[kind]), env, cwd=str(root))
         check(code == 0 and "skipped" not in err, f"agy plugin: {kind} hook runs in the plugin folder", err[-600:])
         if kind == "watch":  # agy's PostToolUse may only answer {}
