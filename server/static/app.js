@@ -863,9 +863,9 @@ async function companion(path, body) {
   if (!r.ok) throw new Error(data.error || `companion: HTTP ${r.status}`);
   return data;
 }
-let localMachine = ""; // the machine id of the companion on this pc: its row in Machines says "This pc"
+let localMachine = ""; // SHA-256 of the companion's machine id on this pc (never the id itself): its row says "This pc"
 async function probeCompanion() {
-  try { localMachine = (await companion("/local/api/hello")).machine || ""; } catch { return false; } // no companion on this pc: no tab
+  try { localMachine = (await companion("/local/api/hello")).machineHash || ""; } catch { return false; } // no companion on this pc: no tab
   $("tabbtn-thispc").hidden = false;
   return true;
 }
@@ -1042,11 +1042,13 @@ async function loadMachines() {
   const tasks = (await api("/ui/api/tasks")).tasks.filter((t) => !t.done && t.startable);
   const box = $("machines"); box.replaceChildren();
   const narrow = matchMedia("(max-width: 720px)").matches;
+  const sha = async (t) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t)))].map((b) => b.toString(16).padStart(2, "0")).join("");
+  const here = localMachine && crypto.subtle ? (await Promise.all(res.machines.map(async (m) => (await sha(m.id)) === localMachine ? m.id : ""))).find(Boolean) : "";
   for (const m of res.machines) {
     const card = el("article", "machine" + (m.online ? "" : " offline")), head = el("div", "machine-head");
     head.append(el("h3", null, m.label));
     head.append(el("span", `pill ${m.online ? "ok" : ""}`, m.old ? "old plugin" : m.online ? "online" : `offline since ${ago(m.at)}`));
-    if (localMachine && m.id === localMachine) head.append(el("span", "pill this", "This pc"));
+    if (here && m.id === here) head.append(el("span", "pill this", "This pc"));
     card.append(head, el("p", "machine-meta", [m.tokens.join(", "), m.companion ? `companion ${m.companion.version || "?"}` : !m.old && "no companion"].filter(Boolean).join(" · ")));
     const c = m.companion;
     if (c) {

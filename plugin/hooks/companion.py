@@ -1277,7 +1277,10 @@ class Handler(BaseHTTPRequestHandler):
         if not self.host_ok() or o is None:
             return self.send(403, {"error": "not allowed"})
         if path == "/local/api/hello":
-            return self.send(200, {"companion": version(), "host": socket.gethostname(), "machine": token_store.machine().get("id", "")}, origin=o)
+            # the machine id lets a token act as this pc: only with the key; the web UI finds its row by the hash
+            mid = token_store.machine().get("id", "")
+            return self.send(200, {"companion": version(), "host": socket.gethostname(), "machineHash": hashlib.sha256(mid.encode()).hexdigest(),
+                                   **({"machine": mid} if self.key_ok() else {})}, origin=o)
         if path == "/local/api/state":
             s = page_state()
             if not self.key_ok():  # the web UI's tab (and anyone else here): the agents, no tasks, folders or activity
@@ -1292,13 +1295,19 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         o, path = self.origin(), urllib.parse.urlsplit(self.path).path
+        # read the body before any answer, also a refusal: unread bytes make Windows reset the connection (10053)
+        size = self.headers.get("Content-Length") or "0"
+        raw = self.rfile.read(min(int(size), 65536)) if size.isdigit() else b""
+        if size.isdigit() and int(size) > 65536:
+            self.close_connection = True  # the rest stays unread: do not keep the connection for a next request
+            return self.send(413, {"error": "request body too large"}, origin=o or "")
         # a POST always carries Origin in a browser; JSON only, so a foreign page cannot send it without a preflight
         if not self.host_ok() or not o or not self.headers.get("Content-Type", "").startswith("application/json"):
             return self.send(403, {"error": "not allowed"})
-        if path != "/local/api/trust" and not self.key_ok():  # trusting the knowledge hooks is what the setup does anyway
+        if not self.key_ok():
             return self.send(403, {"error": "Open the companion from its shortcut: its link carries the key this change needs"}, origin=o)
         try:
-            body = json.loads(self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 65536)) or b"{}")
+            body = json.loads(raw or b"{}")
             agent = body.get("agent")
             if agent is not None and agent not in AGENTS:
                 raise ValueError(f"agent must be one of {', '.join(AGENTS)}")
