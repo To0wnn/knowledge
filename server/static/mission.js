@@ -1,8 +1,8 @@
-// Mission map (Agents cockpit > Tools): the task lines between agents as a graph, always laid out automatically.
+// Mission map (Tasks > Flow, #/tasks?view=flow): the task lines between agents as a graph, always laid out automatically.
 // Nodes = tasks (real <button>s), one horizontal lane per owner (agent or person), edges = "start after <ID>",
 // hand-overs, -cont continuations and -done results (SVG). Left to right by dependency: a small layered (Sugiyama)
 // layout, missionLayout(), a pure function the UI smoke test checks. A phone gets the chains per lane as a list.
-// Uses app.js globals: $, el, api, project, PROJECTS, ALL, shown, openNote, openCockpit, selectTab.
+// Uses app.js globals: $, el, api, agentProject, shown, openNote; go from shell.js.
 "use strict";
 
 const MS_STATUS = { open: "open", waiting: "waiting", approval: "needs approval", claimed: "claimed", running: "running",
@@ -76,9 +76,6 @@ function missionLayout(g, s = MS_SIZE) {
 function msBuild() {
   const root = el("section", "ms"); root.id = "mission"; root.hidden = true; root.setAttribute("aria-label", "Mission map");
   root.innerHTML = `<div class="ms-bar">
-      <button type="button" class="ck-pill" id="ms-close" title="Back to the agents (Esc)">&larr;&nbsp;Agents</button>
-      <h2 class="ms-title">Mission map</h2>
-      <select id="ms-project" aria-label="Project"></select>
       <button type="button" class="ck-pill" id="ms-all" aria-pressed="false" title="Also results handed back more than a day ago">Show all</button>
       <span class="ck-gap"></span>
       <span class="ms-count muted" id="ms-count" aria-live="polite"></span>
@@ -88,7 +85,7 @@ function msBuild() {
     <div class="ms-stage" id="ms-stage"><div class="ms-world" id="ms-world"></div></div>
     <div class="ms-list" id="ms-list"></div>
     <aside class="ms-panel" id="ms-panel" hidden aria-label="Task"></aside>`;
-  document.body.append(root);
+  $("tab-tasks").append(root); // the Flow half of the Tasks view; the page header holds the title and project filter
   ms.root = root;
   const legend = $("ms-legend");
   for (const [k, v] of Object.entries(MS_STATUS)) legend.append(el("span", `ms-chip s-${k}`, v));
@@ -97,14 +94,12 @@ function msBuild() {
     s.innerHTML = `<svg viewBox="0 0 28 8" aria-hidden="true"><path class="ms-e k-${k}" d="M1 4H27"/></svg>`;
     s.append(v); legend.append(s);
   }
-  $("ms-close").onclick = () => openMission(false);
   $("ms-fit").onclick = msFit;
   $("ms-all").onclick = () => { ms.all = !ms.all; $("ms-all").setAttribute("aria-pressed", ms.all); ms.fitted = false; ms.data = null; msLoad(); };
-  $("ms-project").onchange = () => { ms.project = $("ms-project").value; ms.fitted = false; msLoad(); };
   msPanZoom($("ms-stage"));
-  window.addEventListener("keydown", (e) => { // capture: before the cockpit's own Escape
+  window.addEventListener("keydown", (e) => { // capture: before the page's own keys
     if (root.hidden || e.ctrlKey || e.metaKey || e.altKey || /input|textarea|select/i.test(document.activeElement.tagName)) return;
-    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); if (!$("ms-panel").hidden) msClosePanel(); else openMission(false); }
+    if (e.key === "Escape" && !$("ms-panel").hidden) { e.preventDefault(); e.stopPropagation(); msClosePanel(); }
     else if (e.key.toLowerCase() === "f") { e.preventDefault(); e.stopPropagation(); msFit(); }
   }, true);
   matchMedia("(max-width: 640px)").addEventListener("change", () => msRender());
@@ -114,12 +109,8 @@ function openMission(on) {
   if (!ms.root) msBuild();
   ms.root.hidden = !on; clearTimeout(ms.timer);
   if (!on) return;
-  const sel = $("ms-project"); sel.replaceChildren();
-  sel.append(new Option("All projects", ""));
-  for (const p of PROJECTS) sel.append(new Option(shown(p), p));
-  ms.project = project === ALL ? "" : project; sel.value = ms.project; ms.fitted = false; ms.data = null;
+  ms.project = agentProject; ms.fitted = false; ms.data = null;
   msLoad();
-  $("ms-close").focus();
 }
 
 async function msLoad() {
@@ -314,7 +305,7 @@ function msOpenPanel(key) {
   box.append(dl);
   const acts = el("div", "ms-actions");
   const memo = el("button", "ck-pill", "Open memo"); memo.type = "button";
-  memo.onclick = () => { openMission(false); openCockpit(false); openNote(n.path, { find: [n.id.toLowerCase()] }); };
+  memo.onclick = () => openNote(n.path, { find: [n.id.toLowerCase()] });
   acts.append(memo);
   if (n.can_approve) {
     const ok = el("button", "ck-pill ck-primary", "Approve"); ok.type = "button";
@@ -335,13 +326,10 @@ function msOpenPanel(key) {
         .find(({ wk }) => wk.id === n.id && wk.project === n.project);
       if (!hit) { w.textContent = "No worker of yours reports this task."; return; }
       w.textContent = `Worker on ${hit.m.label}: ${hit.wk.status}. ${hit.wk.open || ""}`;
-      const go = el("button", "ck-pill", "Machines"); go.type = "button"; go.title = "Stop, roll back or chat on that pc";
-      go.onclick = () => { openMission(false); openCockpit(false); selectTab("tasks"); $("machines-head").scrollIntoView({ block: "start" }); };
-      acts.append(go);
+      const pc = el("button", "ck-pill", "Machines"); pc.type = "button"; pc.title = "Stop, roll back or chat on that pc";
+      pc.onclick = () => go("#/machines");
+      acts.append(pc);
     }).catch(() => { w.textContent = ""; });
   }
 }
 
-document.querySelector('#ck-tools-menu [data-go="mission"]')?.addEventListener("click", (e) => {
-  e.preventDefault(); $("ck-tools-menu").open = false; openMission(true);
-});

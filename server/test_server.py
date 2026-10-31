@@ -1439,11 +1439,12 @@ def main():
         # This pc: the page may reach the local companion and nothing else outside; the tab stays hidden until it answers.
         st, hdr, page_ = raw("GET", "/ui", headers=ck)
         assert "connect-src 'self' http://127.0.0.1:47321;" in hdr["content-security-policy"], hdr["content-security-policy"]
-        assert re.search(rb'<button role="tab" data-tab="thispc" id="tabbtn-thispc"[^>]* hidden>', page_), "This pc tab not hidden by default"
+        assert re.search(rb'<a class="nav nav-thispc" id="nav-thispc"[^>]* hidden>', page_), "This pc not hidden by default"
+        assert b"/ui/static/shell.js?v=" in page_ and b'id="tab-thispc"' in page_  # the shell is versioned like app.js; thispc.css needs the id
         assert b'/ui/static/thispc.css' in page_ and raw("GET", "/ui/static/thispc.css", headers=ck)[0] == 200
         app_js = (Path(__file__).parent / "static" / "app.js").read_text()
         probe = app_js.split("async function probeCompanion()")[1].split("\n}")[0]
-        assert probe.index('companion("/local/api/hello")') < probe.index('$("tabbtn-thispc").hidden = false'), probe
+        assert probe.index('companion("/local/api/hello")') < probe.index('.nav-thispc")) a.hidden = false'), probe
         # People: unknown users get no access but show up for the admin; access per project, read or write.
         admin = lambda path, body, hdr=ck: raw("POST", path, json.dumps(body), {**hdr, "Content-Type": "application/json", "X-Knowledge-UI": "1"})
         assert raw("GET", "/ui", headers=user("bob"))[0] == 403

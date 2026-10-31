@@ -50,7 +50,7 @@ async def shoot() -> None:
             pg = await ctx.new_page()
             await pg.goto(URL + "/ui")
             await pg.wait_for_function("typeof Graph !== 'undefined' && Graph && Graph.graphData().nodes.length > 10", timeout=20000)
-            await pg.click("#map-btn")
+            await pg.evaluate("go('#/map')")  # the Map view of the app shell
             await pg.wait_for_timeout(8000)  # let the layout settle
             await pg.screenshot(path=str(DEMO / f"map-{scheme}.png"))
             await ctx.close()

@@ -127,10 +127,10 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   offline machine's action shows "waiting for machine". Every action is logged with who and when, and shows in the
   companion's activity log. There is no free-text command anywhere; free text reaches a pc only as a chat message
   to an agent (below), which runs with that agent's own permissions.
-- **Agents cockpit (chat with your agents):** the web UI's "Agents" button (key `A`) opens a full-screen view: a
-  bar with pills (how many chats, workers and sessions are live on your pcs, when the fullest usage window resets), a
-  tools menu (mission map, memory, skills, machines, loops = workers, settings) and the **attention board**
-  (`GET /ui/api/board`). Its columns, each grouped per project with a count: **Needs you** (a chat whose agent
+- **Agents: Inbox and Chats (chat with your agents):** the web UI's **Inbox** (key `A`, the start page) is the
+  **attention board** (`GET /ui/api/board`); its sidebar badge counts what needs you, on every view and in every
+  project. The header filters Inbox, Chats and Tasks to one project ("show all" says how many Needs-you items the
+  filter hides) and shows when the fullest usage window resets. Its columns, each grouped per project with a count: **Needs you** (a chat whose agent
   answered and you have not opened since, a refused tool call or error in its last turn, a failed worker of the last
   week, a task line waiting for your approval, a task woken that nobody took), **Running** (chat turns, workers, task
   lines a session holds), **Open** (task lines for an agent, with where they will run and a "Start on <pc>" button
@@ -142,8 +142,8 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   `#/chats/<chat id>`): once per item and version (the key and signature Dismiss uses), at most
   `needs_per_hour` an hour (admin page, Settings; 0 = off, default 6; more at once give one summary, the rest wait
   for room), and none while an admin has the board open (polled in the last 2 minutes: they see it there). A woken
-  task nobody took keeps its own notice, now with the same link. Non-admins get none: the room is the admin's. A card opens its chat full screen (Esc or "Board" goes back), a task its memo line, a worker how to look
-  at it; Approve, Start and Stop act in place. A phone shows the columns one under the other. Chat cards and workers
+  task nobody took keeps its own notice, now with the same link. Non-admins get none: the room is the admin's. A card opens its chat (Esc or Back returns), a task its memo line, a worker how to look
+  at it; Approve, Start and Stop act in place. A phone shows the columns one under the other, Done folded to one line. Chat cards and workers
   carry a **git pill** (`task/KN-12 · ●3 · ↑2↓0`: branch, changed files, commits ahead/behind `main`/`master`, or
   the upstream on main itself), which the companion counts once a round per folder with `GIT_OPTIONAL_LOCKS=0` and
   sends in its report (the linked folder only, `-- .`, also inside a bigger repo); a tap asks that pc for the diff (`POST /ui/api/git/diff`, handed to the companion with the chat
@@ -151,7 +151,7 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   capped at 200 kB, shown as text. A
   chat is a conversation with Claude Code, Codex or agy on one of your own pcs, in a folder linked to a project there,
   as in a terminal: the answer streams in (text, plus one line per tool call or refused call), the next message
-  continues the same conversation, Stop ends a running turn, earlier chats reopen from the clock menu. The server only relays, pull only like the actions: the UI posts a message
+  continues the same conversation, Stop ends a running turn; **Chats** lists them beside the open one (`#/chats/<pc>/<chat>`). The server only relays, pull only like the actions: the UI posts a message
   (`POST /ui/api/chat/send`), the pc's companion fetches it (`GET /machine/chats`, every ~2 s while a chat is active,
   else ~10 s), runs one headless turn of the agent with the message on stdin (never on a command line), the first turn
   a new conversation and every later one the agent's own continuation, and posts the output back in small batches
@@ -182,7 +182,7 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   too only on their own machines); a chat needs its pc online and says so. One file per chat under the state
   directory (`chats/<machine>/`), at most 50 chats per machine (the oldest go) and 1 MB per chat (the oldest output
   goes). Every turn, stop and failure is in the companion's activity log; a failure also shows in the chat.
-- **Mission map:** Agents > Tools > Mission map shows the task lines between agents as a graph, always laid out by
+- **Mission map:** Tasks > Flow (`#/tasks?view=flow`) shows the task lines between agents as a graph, always laid out by
   itself (no dragging boxes around): one lane per owner (Claude, Codex, Gemini/agy, people), tasks as boxes coloured by
   status (open, waiting on a task or date, needs approval, claimed, running in a worker, done in the last 24 h,
   stalled), left to right by "start after <ID>", with `-cont` continuations and `-done` results in their own line styles; hand-overs
@@ -209,7 +209,7 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   agy is closed); workers then get the agent's own flag too. Every changed file is first copied to
   `~/backups/knowledge-companion/<date>/` (last five days kept). Hook failures Codex and agy log themselves are reported
   with `POST /status` as `agent-log` (Codex: only failures of the knowledge hooks). Its page is at
-  `http://127.0.0.1:47321/`; the web UI shows a "This pc" tab when the companion answers there. The local API answers
+  `http://127.0.0.1:47321/`; the web UI shows "This pc" in its sidebar when the companion answers there. The local API answers
   only that page and the knowledge web UI's origin; every change except trusting the knowledge hooks, and the tasks
   and activity, also need the key in `~/.knowledge/companion/api-key` (readable by you only), which the menu entry
   passes to the page through the private file `~/.knowledge/companion/open.html` (`#key=`; never on a browser's
@@ -232,10 +232,15 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   `data/docs`, memory in `data/memory`); the admin page makes more and gives a project the name the web UI shows.
 - **Lint:** deterministic checks in ~80 ms: dead links, index lines without a file and the reverse, missing frontmatter
   or sections, oversized memos, overdue open items, probable secrets (never shown), raw sources not yet processed.
-- **Web UI:** a home view per topic, full search, a note preview with connected notes, an editor, change history, a
-  lint tab, a tasks tab (the task lines between agents with from whom and when they may start, waiting ones greyed
-  with the reason, stalled wakes, an Approve button for the owner, results handed back, and the Machines list with
-  workers, sessions, hook errors and remote actions; Done removes a line) and an admin page for tokens, people and projects. Light or dark, your pick.
+- **Web UI:** one app shell: a sidebar (`[` folds it to an icon rail; below 1000 px it is the rail) with **Agents**
+  (Inbox, Chats, Tasks, Machines) and **Knowledge** (Notes, Map, Changes, Health = lint), This pc, Admin and Help;
+  on a phone a bottom tab bar (Inbox, Chats, Tasks, Notes, More). Every view has its own URL (`#/inbox`, `#/notes/<path>`,
+  `#/map`, `#/tasks?view=flow`, …), so refresh, back and forward work; an old `#<path>` link opens the note.
+  Ctrl/Cmd+K or `/` searches. Notes: a home view per topic, full search, a note preview with connected notes, an
+  editor, change history. Tasks: the task lines between agents with from whom and when they may start, waiting ones
+  greyed with the reason, stalled wakes, an Approve button for the owner, results handed back (Done removes a line),
+  as a list or as the mission map. Machines: workers, sessions, hook errors and remote actions per pc. The project
+  picker scopes only the knowledge views. An admin page for tokens, people and projects. Light or dark, your pick.
 - **Graph:** notes as nodes, links as lines, one island per topic. A line's thickness and pull follow how related two
   notes are (direct link, shared source, shared neighbours, same type); weak links between topics show on hover.
 - **External skills:** an admin adds a skill folder from GitHub by its link; it is pinned to a commit, taken in only as

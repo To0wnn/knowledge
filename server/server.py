@@ -3446,7 +3446,7 @@ STATIC = Path(__file__).with_name("static")
 # is a new URL (no stale script after a refresh), and the live stream tells open tabs to reload on a new release.
 STARTED = time.time()
 BOOT = secrets.token_hex(4)  # changes on every start, so ETags from before a restart never match
-RELEASE = hashlib.sha256(b"".join((STATIC / f).read_bytes() for f in ("index.html", "admin.html", "app.js", "admin.js", "app.css", "mission.js"))).hexdigest()[:12]
+RELEASE = hashlib.sha256(b"".join((STATIC / f).read_bytes() for f in ("index.html", "admin.html", "app.js", "admin.js", "app.css", "mission.js", "shell.js"))).hexdigest()[:12]
 
 
 COMPANION = "http://127.0.0.1:47321"  # the local companion (plugin/hooks/companion.py): the "This pc" tab asks it
@@ -3458,7 +3458,7 @@ CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
 
 def page(name: str) -> HTMLResponse:
     text = (STATIC / name).read_text()
-    for f in ("app.js", "admin.js", "app.css", "theme.js", "mission.js"):
+    for f in ("app.js", "admin.js", "app.css", "theme.js", "mission.js", "shell.js"):
         text = text.replace(f"/ui/static/{f}\"", f"/ui/static/{f}?v={RELEASE}\"")
     return HTMLResponse(text.replace("<html lang=\"en\">", f"<html lang=\"en\" data-release=\"{RELEASE}\">"),
                         headers={"Cache-Control": "no-cache", **({"Content-Security-Policy": CSP} if name != "help.html" else {})})
