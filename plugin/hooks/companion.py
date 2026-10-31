@@ -795,13 +795,18 @@ def why_not(t: dict, ws: dict, s: dict, lim: dict, game: str) -> str:
     return ""
 
 
-def start_worker(t: dict, tok: str, now: float) -> tuple:
+def start_worker(t: dict, tok: str, now: float, ws: dict = None) -> tuple:
     """Take the task on the server for a new worker session, then start it: (record, '') or (None, why not)."""
     nonce = secrets.token_hex(8)
     if held := claim(t, tok, worker_session(t["id"]), nonce):
         return None, f"Held by {held}"
     try:
         where = workers.worktree(project_folders()[t["project"]], t["id"])
+        # a hand-over goes on in the worktree of the first session: its branch counts from where that one started, so
+        # a branch rolled back to that point is never taken for merged
+        first = min((w for w in (ws or {}).values() if where.get("worktree") and w.get("worktree") == where["worktree"] and w.get("base")),
+                    key=lambda w: w.get("started", 0), default=None)
+        where = {**where, "base": first["base"]} if first else where
         yolo = bool(load("yolo.json", {}).get(t["agent"], {}).get("on"))
         rec = workers.start(t["agent"], t, token_store.machine().get("label") or socket.gethostname(), where, yolo, nonce)
     except Exception as e:
@@ -869,7 +874,7 @@ def run_workers(ready: list, tok: str, now: float, only: str = "") -> dict:
                else why_not(t, ws, s, lim, game))
         if not why:
             try:
-                rec, why = start_worker(t, tok, now)
+                rec, why = start_worker(t, tok, now, ws)
             except Exception as e:
                 rec, why = None, str(e)[:200]
                 log("error", f"{AGENTS[t['agent']][0]}: no worker for {t['id']}", why)
@@ -969,6 +974,8 @@ def run_action(a: dict) -> str:
             raise RuntimeError(f"no finished worker with a worktree for {args['id']}")
         if shared_running(ws, w):
             raise RuntimeError(f"another worker runs in the worktree of {args['id']} now; stop it first")
+        if later := [o["id"] for o in ws.values() if o is not w and o.get("worktree") == w["worktree"] and o.get("started", 0) > w.get("started", 0)]:
+            raise RuntimeError(f"{', '.join(later)} went on in the worktree of {args['id']} after it: roll back {later[-1]} instead")
         return workers.rollback(w["cwd"], w["id"])
     if act == "trust_hooks":
         return trust(agent)
@@ -1281,6 +1288,21 @@ def main(argv: list):
         except RuntimeError:
             pass
         assert did[0][0] == "claim" and did[0][1].startswith("worker:") and did[1:] == [("release",)], did
+        # A hand-over in the first session's worktree keeps that session's base; only the newest session rolls back.
+        g["workers"] = type("W", (), {"worktree": staticmethod(lambda f, i: {"cwd": "/wt", "worktree": "/wt", "branch": "task/T-1", "base": "Y"}),
+                                      "start": staticmethod(lambda a, t, m, where, y, n: {"id": t["id"], **where})})
+        first = {"id": "T-1", "worktree": "/wt", "base": "X", "started": 1, "status": "finished", "branch": "task/T-1", "cwd": "/wt"}
+        rec, _ = start_worker({**task, "id": "T-1-cont"}, "", 1000, {"p/T-1": first})
+        assert rec["base"] == "X", rec
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            g["STATE"] = Path(tmp)
+            save("workers.json", {"p/T-1": first, "p/T-1-cont": {**rec, "started": 2, "status": "finished"}})
+            try:
+                run_action({"action": "rollback", "args": {"id": "T-1"}})
+                raise AssertionError("an older session's rollback would drop the hand-over's commits")
+            except RuntimeError as e:
+                assert "roll back T-1-cont instead" in str(e), e
         print("ok")
     else:
         sys.exit(__doc__)
