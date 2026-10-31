@@ -950,17 +950,80 @@ def run_workers(ready: list, tok: str, now: float, only: str = "") -> dict:
     return out
 
 
+# ---------------------------------------------------------------- git: the board's pill and its diff (read-only)
+
+GIT_RO = {"GIT_OPTIONAL_LOCKS": "0"}  # status and diff never take the index lock or rewrite the index
+DIFF_CHARS = 200_000
+
+
+def git_base(path: str, branch: str) -> str:
+    """What a folder is compared with: the repo's main (or master) branch, or on that branch itself its upstream."""
+    run = lambda *a: workers.git(path, *a, env=GIT_RO)
+    for b in ("main", "master"):
+        if b != branch and run("rev-parse", "-q", "--verify", f"refs/heads/{b}").returncode == 0:
+            return b
+    up = run("rev-parse", "--abbrev-ref", "-q", "@{upstream}")
+    return up.stdout.strip() if up.returncode == 0 else ""
+
+
+def git_state(path) -> dict | None:
+    """{branch, base, changed, ahead, behind} of a chat folder or worker worktree; None outside git."""
+    if not path or not shutil.which("git") or not Path(path).is_dir():
+        return None
+    run = lambda *a: workers.git(path, *a, env=GIT_RO)
+    try:
+        if run("rev-parse", "--is-inside-work-tree").stdout.strip() != "true":
+            return None
+        branch = run("symbolic-ref", "--short", "-q", "HEAD").stdout.strip() or "detached"
+        changed = sum(1 for ln in run("status", "--porcelain").stdout.splitlines() if ln.strip())
+        base, ahead, behind = git_base(path, branch), 0, 0
+        if base:
+            n = run("rev-list", "--left-right", "--count", f"{base}...HEAD").stdout.split()
+            behind, ahead = (int(n[0]), int(n[1])) if len(n) == 2 else (0, 0)
+        return {"branch": branch, "base": base, "changed": changed, "ahead": ahead, "behind": behind}
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+def git_diff(path: str) -> str:
+    """What changed in a folder against where it started: its commits ahead of the base plus the uncommitted edits
+    (git diff <merge-base>), the stat first, untracked files by name; capped."""
+    st = git_state(path)
+    if not st:
+        raise RuntimeError("not a git checkout")
+    run = lambda *a: workers.git(path, *a, env=GIT_RO)
+    frm = run("merge-base", st["base"], "HEAD").stdout.strip() if st["base"] else ""
+    frm = frm or ("HEAD" if run("rev-parse", "-q", "--verify", "HEAD").returncode == 0 else "")
+    opts = ("--no-color", "--no-ext-diff", "--no-textconv")
+    stat = run("diff", "--stat", *opts, frm).stdout if frm else ""
+    new = [f for f in run("ls-files", "--others", "--exclude-standard").stdout.splitlines() if f]
+    text = (f"{st['branch']}" + (f" against {st['base']}: {st['ahead']} ahead, {st['behind']} behind" if st["base"] else "")
+            + f", {st['changed']} changed\n\n{stat}" + ("".join(f" ?? {f}\n" for f in new[:200])) + "\n"
+            + (run("diff", *opts, frm).stdout if frm else ""))
+    return text if len(text) <= DIFF_CHARS else text[:DIFF_CHARS] + f"\n... cut: the diff is longer than {DIFF_CHARS} characters"
+
+
+def with_git(folders: dict, ws: dict, now: float) -> tuple:
+    """The linked folders and the recent workers with their git numbers, each folder once per round."""
+    seen = {}
+    once = lambda p: seen[p] if p in seen else seen.setdefault(p, git_state(p))
+    linked = [{**f, "git": once(f["path"])} for f in folders["linked"][:40]] + folders["linked"][40:]
+    recent = lambda w: w["status"] == "running" or now - (w.get("ended") or now) < 7 * 86400
+    return {**folders, "linked": linked}, {k: once(w.get("worktree")) if recent(w) else None for k, w in ws.items()}
+
+
 def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, resets=None):
     """The machine's state for the Machines list: settings, game, per agent YOLO, hooks and limit, the workers, and
     why each ready task waits here (the Tasks tab shows it)."""
     yolo, folders, s = load("yolo.json", {}), sorted(project_folders().values()), settings()
+    links, gits = with_git(folder_links(), ws, now)
     body = {"version": version(), "workersAllowed": s["workersAllowed"], "maxWorkers": s["maxWorkers"], "game": workers.game_session(),
             "agents": {a: {"yolo": bool(yolo.get(a, {}).get("on")), "trusted": not untrusted(a, folders), "limit": lim.get(a),
                      "resets": (resets or {}).get(a)}
                        for a in AGENTS if installed(a)},
             "workers": [{**{k: w.get(k) for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open")},
-                         "checkpoint": bool(w.get("checkpoint")), "merged": w["status"] == "merged"} for w in ws.values()],
-            "limitWait": wait, "waiting": waiting or {}, "folders": folder_links(), "projects": load("state.json", {}).get("projects", [])}
+                         "checkpoint": bool(w.get("checkpoint")), "merged": w["status"] == "merged", "git": gits.get(k)} for k, w in ws.items()],
+            "limitWait": wait, "waiting": waiting or {}, "folders": links, "projects": load("state.json", {}).get("projects", [])}
     server("POST", "/machine/report", tok, body)
 
 
@@ -1298,6 +1361,15 @@ def chats_round() -> bool:
             log("error", "A chat turn was lost (the companion restarted)", f"chat {cid}")
     linked = lambda: {f["path"] for f in folder_links()["linked"]}
     yolo = lambda agent: bool(load("yolo.json", {}).get(agent, {}).get("on"))
+    for d in r.get("diffs", []):  # read-only: a linked folder or a worker's worktree here, nothing else
+        try:
+            w = load("workers.json", {}).get(d.get("worker", ""), {})
+            path = d["folder"] if d.get("folder") in linked() else w.get("worktree") if d.get("worker") else None
+            if not path:
+                raise RuntimeError("not a folder linked on this pc, nor a worker here")
+            server("POST", "/machine/chats/diff", tok, {"id": d["id"], "text": git_diff(path)})
+        except Exception as e:
+            server("POST", "/machine/chats/diff", tok, {"id": d.get("id"), "error": f"{e}"[:300]})
     for item in r.get("work", []):
         log("remote", f"Chat message from {item.get('by') or '?'} for {AGENTS.get(item.get('agent'), ('?',))[0]}", f"chat {item.get('chat')} in {item.get('folder')}")
         chat.start(item, post, log, linked, yolo)
@@ -1457,6 +1529,27 @@ def main(argv: list):
                 raise AssertionError("an older session's rollback would drop the hand-over's commits")
             except RuntimeError as e:
                 assert "roll back T-1-cont instead" in str(e), e
+        # The board's git pill: a branch 2 commits ahead of main, 3 changed files; the diff shows commits and edits.
+        globals()["workers"] = workers_mod
+        if shutil.which("git"):
+            with tempfile.TemporaryDirectory() as tmp:
+                g = lambda *a: workers.git(tmp, "-c", "user.name=t", "-c", "user.email=t@example.invalid", *a, check=True)
+                g("init", "-q", "-b", "main")
+                (Path(tmp) / "a.txt").write_text("one\n")
+                g("add", "a.txt")
+                g("commit", "-qm", "one")
+                g("checkout", "-qb", "task/KN-12")
+                for n in ("b", "c"):
+                    (Path(tmp) / f"{n}.txt").write_text(n + "\n")
+                    g("add", f"{n}.txt")
+                    g("commit", "-qm", n)
+                (Path(tmp) / "a.txt").write_text("two\n")
+                (Path(tmp) / "new1.txt").write_text("x")
+                (Path(tmp) / "new2.txt").write_text("y")
+                assert git_state(tmp) == {"branch": "task/KN-12", "base": "main", "changed": 3, "ahead": 2, "behind": 0}, git_state(tmp)
+                d = git_diff(tmp)
+                assert "2 ahead, 0 behind" in d and "+two" in d and "+b" in d and "?? new1.txt" in d, d
+                assert git_state(Path(tmp) / "nope") is None
         print("ok")
     else:
         sys.exit(__doc__)

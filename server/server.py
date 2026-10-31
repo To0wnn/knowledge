@@ -4563,6 +4563,7 @@ async def machine_action_result(request: Request):
 CHATS_DIR = ADMIN_DIR / "chats"
 CHAT_KEEP, CHAT_EVENTS, CHAT_BYTES, CHAT_TEXT = 50, 4000, 1_000_000, 20_000  # chats per machine, events and bytes per chat, chars per message
 CHAT_KINDS = ("text", "tool", "refused", "error", "info")
+CHAT_GLOB = "[0-9a-f]" * 12 + ".json"  # a chat's own file; queue.json and diffs.json sit next to them
 
 
 def chat_file(mid: str, cid: str) -> Path:
@@ -4621,8 +4622,8 @@ async def ui_chats(request: Request):
     if request.method == "GET" and "machine" not in request.query_params:
         rows = [r for r in await asyncio.to_thread(machine_rows) if r["own"] and not r.get("old")]
         chats = [{**chat_meta(c), "machine": r["id"], "label": r["label"], "online": r["online"]} for r in rows
-                 for f in ((CHATS_DIR / r["id"]).glob("*.json") if (CHATS_DIR / r["id"]).is_dir() else [])
-                 if f.name != "queue.json" and (c := read_json(f, None))]
+                 for f in ((CHATS_DIR / r["id"]).glob(CHAT_GLOB) if (CHATS_DIR / r["id"]).is_dir() else [])
+                 if (c := read_json(f, None))]
         return JSONResponse({"chats": sorted(chats, key=lambda c: -(c.get("updated") or 0))})
     try:
         b = await request.json() if request.method == "POST" else dict(request.query_params)
@@ -4634,7 +4635,7 @@ async def ui_chats(request: Request):
     except (ValueError, AttributeError, TypeError, PermissionError) as e:
         return chat_error(e)
     if request.method == "GET":
-        chats = [chat_meta(c) for f in (d.glob("*.json") if d.is_dir() else []) if f.name != "queue.json" and (c := read_json(f, None))]
+        chats = [chat_meta(c) for f in (d.glob(CHAT_GLOB) if d.is_dir() else []) if (c := read_json(f, None))]
         return JSONResponse({"chats": sorted(chats, key=lambda c: -(c.get("updated") or 0)), "online": row["online"]})
     comp = row.get("companion") or {}
     agent, folder = str(b.get("agent", "")), str(b.get("folder", ""))
@@ -4652,7 +4653,7 @@ async def ui_chats(request: Request):
     def create():
         d.mkdir(parents=True, exist_ok=True)
         q = read_json(d / "queue.json", {})
-        old = sorted((f for f in d.glob("*.json") if f.name != "queue.json" and not q.get(f.stem, {}).get("busy")), key=lambda f: f.stat().st_mtime)
+        old = sorted((f for f in d.glob(CHAT_GLOB) if not q.get(f.stem, {}).get("busy")), key=lambda f: f.stat().st_mtime)
         for f in old[:max(0, len(old) - CHAT_KEEP + 1)]:  # the oldest go: at most CHAT_KEEP per machine
             f.unlink(missing_ok=True)
             update_state(d / "queue.json", lambda q, k=f.stem: q.pop(k, None))
@@ -4662,14 +4663,95 @@ async def ui_chats(request: Request):
     return JSONResponse({"ok": True, "chat": chat_meta(c)})
 
 
+BOARD_DONE, BOARD_FAILED = 86400, 7 * 86400  # Done shows the last 24 h; a failed worker needs you for a week
+
+
+def chat_card(c: dict) -> tuple[str, str]:
+    """(column, status line) of one chat on the board: running while a turn runs or waits; needs you once a turn
+    ended with output its owner has not opened yet (a reply, a refused tool call, an error); done once read."""
+    if c.get("status") in ("queued", "running"):
+        return "running", "waiting for the pc" if c["status"] == "queued" else "working"
+    events = c.get("events") or []
+    last = len(events) - next((i for i, e in enumerate(reversed(events)) if e["kind"] == "user"), len(events))
+    turn = events[last:]
+    if not turn:
+        return "", ""
+    first = lambda k: next((" ".join(e["text"].split())[:140] for e in turn if e["kind"] == k), "")
+    if c.get("seen", 0) < c.get("next", 0):
+        if refused := first("refused"):
+            return "needs", f"refused: {refused}"
+        if err := first("error"):
+            return "needs", f"failed: {err}"
+        return "needs", "replied: " + (" ".join("".join(e["text"] for e in turn if e["kind"] == "text").split())[-140:] or first("info") or "done")
+    return ("done", "read") if time.time() - (c.get("updated") or 0) < BOARD_DONE else ("", "")
+
+
+def board_items() -> list[dict]:
+    """The Agents cockpit's start screen: chats and workers on this person's own pcs, task lines in the projects they
+    see, each in a column: needs (needs you), running, open, done (last 24 h)."""
+    now, items = time.time(), []
+    rows = [r for r in machine_rows() if r["own"] and not r.get("old")]
+    for r in rows:
+        comp, base = r.get("companion") or {}, {"machine": r["id"], "label": r["label"], "online": r["online"]}
+        git = {f["path"]: f.get("git") for f in (comp.get("folders") or {}).get("linked", [])}
+        d = CHATS_DIR / r["id"]
+        for f in (d.glob(CHAT_GLOB) if d.is_dir() else []):
+            if not (c := read_json(f, None)):
+                continue
+            col, line = chat_card(c)
+            if col:
+                items.append({**base, "kind": "chat", "col": col, "id": c["id"], "agent": c.get("agent"), "project": c.get("project"),
+                              "title": c.get("title") or "New chat", "folder": c.get("folder"), "at": c.get("updated") or 0,
+                              "line": line, "git": git.get(c.get("folder"))})
+        for a, ag in r["agents"].items():
+            for w in ag.get("workers", []):
+                st, ended = w.get("status"), w.get("ended") or w.get("started") or 0
+                col = ("running" if st == "running" else "needs" if st == "failed" and now - ended < BOARD_FAILED
+                       else "done" if st in ("finished", "stopped", "merged", "failed") and now - ended < BOARD_DONE else "")
+                if col:
+                    items.append({**base, "kind": "worker", "col": col, "id": w.get("id"), "agent": a, "project": w.get("project"),
+                                  "title": w.get("id"), "at": w.get("started") if st == "running" else ended,
+                                  "line": f"worker {st}" + (f" · {w['branch']}" if w.get("branch") else ""), "git": w.get("git"),
+                                  "status": st, "open": w.get("open") or "", "checkpoint": bool(w.get("checkpoint"))})
+    working = {(i["project"], i["id"]) for i in items if i["kind"] == "worker" and i["col"] == "running"}
+    for t in task_rows():
+        agent = owner_agent(t["owner"])
+        if not agent or (t["project"], t["id"]) in working:  # a person's line is not an agent's work; a running worker shows it
+            continue
+        task = {"kind": "task", "id": t["id"], "agent": agent, "project": t["project"], "title": f"{t['id']} · {t['text'][:120]}",
+                "path": t["path"], "line": "", "at": 0, "owner": t["owner"]}
+        if t["done"]:
+            if now - (t.get("since") or 0) < BOARD_DONE:
+                items.append({**task, "col": "done", "line": f"handed back to {t['owner']}", "at": t.get("since") or 0})
+        elif t["can_approve"]:
+            items.append({**task, "col": "needs", "line": "waits for your approval", "approve": True})
+        elif t["stalled"]:
+            items.append({**task, "col": "needs", "line": "woken, but nobody took it within 30 minutes"})
+        else:
+            held = t["runs"].startswith(("running in", "taken by"))
+            hosts = [{"machine": r["id"], "label": r["label"]} for r in rows if t["startable"] and not held and r["online"]
+                     and (c := r.get("companion")) and c.get("workersAllowed") and agent in (c.get("agents") or [])
+                     and any(f.get("project") == t["project"] for f in (c.get("folders") or {}).get("linked", []))]
+            items.append({**task, "col": "running" if held else "open", "hosts": hosts,
+                          "line": t["runs"] or t["waiting_reason"] or (f"due {t['due']}" if t["due"] else f"start {t['start']}")})
+    return sorted(items, key=lambda i: -(i["at"] or 0))
+
+
+@server.custom_route("/ui/api/board", methods=["GET"])
+async def ui_board(request: Request):
+    return JSONResponse({"items": await asyncio.to_thread(board_items), "now": time.time()})
+
+
 @server.custom_route("/ui/api/chat", methods=["GET"])
 async def ui_chat(request: Request):
     """?machine=&id=&after=<n>: one chat, its events after n, and whether its pc is online."""
     try:
-        row, b, _, c = await chat_request(request, False)
+        row, b, f, c = await chat_request(request, False)
         after = int(b.get("after") or 0)
     except (ValueError, AttributeError, TypeError, PermissionError) as e:
         return chat_error(e)
+    if c.get("next", 0) > c.get("seen", 0):  # the owner has now seen its newest output: off the board's "Needs you"
+        await asyncio.to_thread(update_state, f, lambda d: d.update(seen=max(d.get("seen", 0), c.get("next", 0))))
     return JSONResponse({"chat": chat_meta(c), "events": [e for e in c.get("events", []) if e["n"] > after], "trimmed": bool(c.get("trimmed")),
                          "online": row["online"], "at": row["at"], "label": row["label"]})
 
@@ -4723,6 +4805,70 @@ async def ui_chat_stop(request: Request):
     return JSONResponse({"ok": True})
 
 
+DIFF_KEEP, DIFF_BYTES = 600, 200_000  # seconds a diff request lives; characters of a diff
+
+
+@server.custom_route("/ui/api/git/diff", methods=["GET", "POST"])
+async def ui_git_diff(request: Request):
+    """POST {machine, chat} or {machine, worker: "<project>/<id>"}: ask that pc's companion for the diff of the chat's
+    folder or the worker's worktree (read-only, pulled with the chats). GET ?machine=&id=: the answer once it came."""
+    try:
+        b = (await request.json()) if request.method == "POST" else dict(request.query_params)
+        mid = str(b.get("machine", ""))
+        row = await asyncio.to_thread(own_machine, mid)
+        if not row:
+            raise PermissionError("not a machine of your own tokens (with plugin 0.15.0 or newer)")
+        q = chat_file(mid, "0" * 12).parent / "diffs.json"
+        if request.method == "GET":
+            d = read_json(q, {}).get(str(b.get("id", "")))
+            if not d:
+                raise ValueError("unknown diff request")
+            return JSONResponse({k: d.get(k) for k in ("status", "text", "error")})
+        if b.get("chat"):
+            target = {"folder": (read_json(chat_file(mid, str(b["chat"])), None) or {}).get("folder")}
+        elif re.fullmatch(r"\w[\w.-]{0,79}/\w[\w.-]{0,79}", str(b.get("worker", ""))):
+            target = {"worker": b["worker"]}
+        else:
+            raise ValueError("name a chat or a worker")
+        if not target.get("folder", 1):
+            raise ValueError("unknown chat")
+    except (ValueError, AttributeError, TypeError, PermissionError) as e:
+        return chat_error(e)
+    if not row["online"]:
+        return JSONResponse({"error": f"{row['label']} is offline"}, status_code=409)
+    rid, now = secrets.token_hex(6), time.time()
+
+    def add(d):
+        for k in [k for k, v in d.items() if now - v.get("at", 0) > DIFF_KEEP]:
+            d.pop(k)
+        d[rid] = {**target, "status": "waiting", "at": now}
+    q.parent.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(update_state, q, add)
+    return JSONResponse({"ok": True, "id": rid})
+
+
+@server.custom_route("/machine/chats/diff", methods=["POST"])
+async def machine_chat_diff(request: Request):
+    """{id, text, error}: the companion's answer to a diff request of this machine."""
+    dev = device.get()
+    try:
+        b = await request.json()
+        rid, q = str(b.get("id", "")), CHATS_DIR / chat_file(dev.get("machine", ""), "0" * 12).parent.name / "diffs.json"
+    except (ValueError, AttributeError, TypeError) as e:
+        return JSONResponse({"error": str(e) or "send JSON {id, text}"}, status_code=400)
+    text, err = str(b.get("text") or "")[:DIFF_BYTES], str(b.get("error") or "")[:300]
+    if contains_secret(text):
+        text, err = "", "withheld: the diff contains a known secret value"
+    found = []
+
+    def change(d):
+        if rid in d:
+            d[rid].update(status="done", text=text, error=err)
+            found.append(1)
+    await asyncio.to_thread(update_state, q, change)
+    return JSONResponse({"ok": True}) if found else JSONResponse({"error": "unknown diff request"}, status_code=404)
+
+
 @server.custom_route("/machine/chats", methods=["GET"])
 async def machine_chats(request: Request):
     """The companion asks every ~2 s while a chat is active (else ~10 s): new messages for it to run (handed out
@@ -4753,6 +4899,17 @@ async def machine_chats(request: Request):
                 e["busy"] = True
     if q_path.exists():
         await asyncio.to_thread(update_state, q_path, change)
+    diffs = []
+
+    def hand_out(d):
+        for k, v in d.items():
+            if v.get("status") == "waiting":
+                diffs.append({"id": k, **{x: v[x] for x in ("folder", "worker") if x in v}})
+                v["status"] = "sent"
+    if (q_path.parent / "diffs.json").exists():
+        await asyncio.to_thread(update_state, q_path.parent / "diffs.json", hand_out)
+    if diffs:  # only when there are: an older companion ignores the key
+        out["diffs"] = diffs
     for w in out["work"]:  # after the queue's lock: update_state's lock is not reentrant
         await asyncio.to_thread(update_state, chat_file(mid, w["chat"]), lambda c: c.update(status="running"))
     out["active"] = bool(out["busy"] or out["work"])
@@ -4826,6 +4983,16 @@ async def machine_flag(request: Request):
     return JSONResponse({"noticed": bool(new)})
 
 
+def git_pill(g) -> dict | None:
+    """The companion's git numbers of a chat folder or worker worktree (the board's pill): branch, the branch it is
+    compared with, changed files, commits ahead and behind. None when it sent none (not a git checkout, older plugin)."""
+    if not isinstance(g, dict):
+        return None
+    num = lambda k: max(0, min(int(g[k]), 10**6)) if type(g.get(k)) is int else 0
+    return {"branch": str(g.get("branch") or "")[:120], "base": str(g.get("base") or "")[:120],
+            "changed": num("changed"), "ahead": num("ahead"), "behind": num("behind")}
+
+
 @server.custom_route("/machine/report", methods=["POST"])
 async def machine_report(request: Request):
     """The companion's state every round: version, workers allowed, max workers, game session, per agent YOLO, hooks
@@ -4845,8 +5012,10 @@ async def machine_report(request: Request):
                              for a, v in (b.get("agents") or {}).items() if a in AGENT_OWNERS and isinstance(v, dict)},
                   "workers": [{k: (w.get(k) if w.get(k) is None or isinstance(w.get(k), (int, float, bool)) else str(w[k])[:300])
                                for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open", "checkpoint", "merged")}
+                              | {"git": git_pill(w.get("git"))}
                               for w in (b.get("workers") or [])[:40] if isinstance(w, dict)],
                   "folders": {k: [{"path": str(f.get("path", ""))[:500], "project": str(f.get("project", ""))[:80]}
+                                  | ({"git": git_pill(f.get("git"))} if k == "linked" else {})
                                   for f in ((b.get("folders") or {}).get(k) or [])[:200] if isinstance(f, dict)]
                               for k in ("linked", "candidates")},
                   "projects": [str(p)[:80] for p in (b.get("projects") or [])[:100]],

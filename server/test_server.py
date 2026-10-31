@@ -595,6 +595,79 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     http("POST", "/machine/report", {"version": "0.16.0"}, token=fr, headers=pc)
 
 
+def board_contract(tmp, ck, fr, raw, er, et):
+    """The Agents board: chats and workers of the owner's own pcs and task lines of the projects they see, each in one
+    column (needs you, running, open, done), with the companion's git numbers; another person sees none of it; a diff
+    goes to the pc's companion and back through the chat channel."""
+    pc = {"X-Knowledge-Machine": "cccccccccccccccc", "X-Knowledge-Machine-Label": "garage"}
+    mid, now = "cccccccccccccccc", time.time()
+    ui = lambda path, body=None, h=ck: raw("POST" if body is not None else "GET", path, None if body is None else json.dumps(body),
+                                          {**h, "X-Knowledge-UI": "1", "Content-Type": "application/json"})
+    board = lambda h=ck: json.loads(ui("/ui/api/board", h=h)[2])["items"]
+    pill = {"branch": "task/KN-12", "base": "main", "changed": 3, "ahead": 2, "behind": 0}
+    worker = lambda i, st, ended=None, **k: {"id": i, "project": "garden", "agent": "codex", "status": st, "started": now - 600, "ended": ended,
+                                             "branch": f"task/{i}", **k}
+    rep = {"version": "0.17.0", "workersAllowed": True, "agents": {"codex": {}, "claude": {}},
+           "folders": {"linked": [{"path": "/home/x/garden", "project": "garden", "git": {**pill, "changed": "3; rm -rf"}}]},
+           "workers": [worker("BRD-4", "running", git=pill), worker("BRD-5", "failed", now - 60), worker("BRD-6", "finished", now - 60),
+                       worker("BRD-7", "failed", now - 8 * 86400), worker("BRD-8", "finished", now - 2 * 86400)]}
+    assert http("POST", "/machine/report", rep, token=fr, headers=pc)[0] == 200
+    path = "garden-memory/project_tasks.md"
+    lines = ["- open until 2099-01-01 [Codex, BRD-1] from Claude, start now: board open task",
+             "- open until 2099-01-01 [Codex, BRD-2] from Claude, start after approval: board approval task",
+             "- open until 2099-01-01 [Anthony, BRD-3] from Claude, start now: a person's task",
+             "- open until 2099-01-01 [Codex, BRD-4] from Claude, start now: runs in a worker"]
+    assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": "\n".join(lines) + "\n## Keuzes"}, fr)[0]
+    # A chat with a reply nobody read needs you; one with a refused tool call says so; a running one runs.
+    cids = [json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/x/garden"})[2])["chat"]["id"] for _ in range(3)]
+    for cid in cids:
+        assert ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": f"hello {cid}"})[0] == 200
+    http("GET", "/machine/chats", token=fr, headers=pc)
+    http("POST", "/machine/chats/events", {"chat": cids[0], "events": [{"kind": "text", "text": "All done, merge?"}], "done": True}, token=fr, headers=pc)
+    http("POST", "/machine/chats/events", {"chat": cids[1], "events": [{"kind": "refused", "text": "git push"}], "done": True}, token=fr, headers=pc)
+    items = {(i["kind"], i["id"]): i for i in board()}
+    col = lambda kind, i: items.get((kind, i), {}).get("col")
+    reply = items[("chat", cids[0])]
+    assert reply["col"] == "needs" and "merge?" in reply["line"] and reply["label"] == "garage" and reply["git"]["ahead"] == 2, reply
+    assert reply["git"]["changed"] == 0, "a number the companion sent as text is no number"
+    assert col("chat", cids[1]) == "needs" and items[("chat", cids[1])]["line"] == "refused: git push", items[("chat", cids[1])]
+    assert col("chat", cids[2]) == "running"
+    assert col("worker", "BRD-4") == "running" and items[("worker", "BRD-4")]["git"] == pill
+    assert (col("worker", "BRD-5"), col("worker", "BRD-6"), col("worker", "BRD-7"), col("worker", "BRD-8")) == ("needs", "done", None, None), items.keys()
+    assert col("task", "BRD-1") == "open" and items[("task", "BRD-1")]["hosts"] == [{"machine": mid, "label": "garage"}], items.get(("task", "BRD-1"))
+    assert col("task", "BRD-2") == "needs" and items[("task", "BRD-2")]["approve"], items.get(("task", "BRD-2"))
+    assert ("task", "BRD-3") not in items and ("task", "BRD-4") not in items, "a person's line and a task its worker shows"
+    # Opening the chat reads it: off "Needs you", into "Done".
+    ui(f"/ui/api/chat?machine={mid}&id={cids[0]}")
+    assert {(i["kind"], i["id"]): i["col"] for i in board()}[("chat", cids[0])] == "done"
+    # Another person: none of his pcs' chats or workers, none of a project she does not see.
+    hers = board(er)
+    assert not [i for i in hers if i.get("machine") == mid or i["project"] == "garden"], hers
+    # The diff: only the owner asks; the machine's companion gets it once through the chat channel and answers.
+    assert ui("/ui/api/git/diff", {"machine": mid, "chat": cids[0]}, er)[0] == 403
+    assert ui("/ui/api/git/diff", {"machine": mid, "worker": "../x"})[0] == 400
+    st, _, b = ui("/ui/api/git/diff", {"machine": mid, "chat": cids[0]})
+    assert st == 200, b
+    rid = json.loads(b)["id"]
+    assert json.loads(ui(f"/ui/api/git/diff?machine={mid}&id={rid}")[2])["status"] == "waiting"
+    got = json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])
+    assert got["diffs"] == [{"id": rid, "folder": "/home/x/garden"}], got
+    assert "diffs" not in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1]), "handed out once"
+    assert http("POST", "/machine/chats/diff", {"id": rid, "text": "x"}, token=et, headers=pc)[0] == 403  # her token, his machine id
+    assert http("POST", "/machine/chats/diff", {"id": rid, "text": "<b>+two</b>"}, token=fr, headers=pc)[0] == 200
+    d = json.loads(ui(f"/ui/api/git/diff?machine={mid}&id={rid}")[2])
+    assert d["status"] == "done" and d["text"] == "<b>+two</b>", d
+    assert ui(f"/ui/api/git/diff?machine={mid}&id={rid}", h=er)[0] == 403
+    assert len(json.loads(ui(f"/ui/api/chats?machine={mid}")[2])["chats"]) == 50, "diffs.json is no chat"
+    text = (tmp / "projects/garden/memory/project_tasks.md").read_text()
+    for line in lines:
+        assert line in text
+        call("knowledge_edit", {"path": path, "old_string": line + "\n", "new_string": ""}, fr)
+    for cid in cids[2:]:
+        http("POST", "/machine/chats/events", {"chat": cid, "events": [], "done": True}, token=fr, headers=pc)
+    http("POST", "/machine/report", {"version": "0.16.0"}, token=fr, headers=pc)
+
+
 def no_held(beat: dict) -> dict:
     """A turn's answer without the lease notices (tasks other sessions hold): for checks about other notices."""
     return {**beat, "notices": [n for n in beat["notices"] if not n["id"].startswith("held-")]}
@@ -1561,6 +1634,7 @@ def main():
         assert {"erinproj", "erinproj-memory"} <= set(roots), roots  # her devices reach her new project at once
         machines_contract(tmp, ck, fr, raw, er, et)
         chats_contract(tmp, ck, fr, raw, er, et)
+        board_contract(tmp, ck, fr, raw, er, et)
         # The folder link (.knowledge-project, skill knowledge-init): her token now sees two projects, so the folder picks.
         assert "not linked to a project" in http("GET", "/context/1?project=/home/erin/stuff", token=et)[1]
         ctx = http("GET", "/context/1?project=erinproj&linked=1", token=et)[1]

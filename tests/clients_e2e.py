@@ -1206,7 +1206,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
               "folders: a remote link refuses a path outside the candidate list and links one from it", json.dumps(acts())[:600])
         call("POST", "/local/api/tick", {})
         row = next((r for r in machines() if r["id"] == mid), {})
-        check({"path": str(app), "project": "garden"} in (row.get("companion") or {}).get("folders", {}).get("linked", []),
+        check({"path": str(app), "project": "garden"} in [{k: f[k] for k in ("path", "project")} for f in (row.get("companion") or {}).get("folders", {}).get("linked", [])],
               "folders: the Machines list shows the pc's linked folders", json.dumps((row.get("companion") or {}).get("folders"))[:400])
         # A plugin update (a new cache folder) makes the companion trust Codex's hooks again by itself.
         manifest = home / ".codex" / "plugins" / "cache" / "knowledge" / "knowledge" / "9.9.9" / ".codex-plugin" / "plugin.json"
@@ -1246,6 +1246,24 @@ def chat_e2e(tok: str, tmp: Path):
         r.mkdir(parents=True)
         subprocess.run(["git", "-C", str(r), "init", "-q"], check=True, capture_output=True)
         (r / ".knowledge-project").write_text("garden\n", encoding="utf-8")
+    # The board's git pill: a branch 2 commits ahead of main with 3 changed files (one edited, two new; the link file
+    # is committed so it does not count).
+    pill = repos["Pill repo"] = home / "code" / "Pill repo"
+    pill.mkdir(parents=True)
+    g = lambda *a: subprocess.run(["git", "-C", str(pill), "-c", "user.name=t", "-c", "user.email=t@example.invalid", *a], check=True, capture_output=True)
+    g("init", "-q", "-b", "main")
+    (pill / ".knowledge-project").write_text("garden\n", encoding="utf-8")
+    (pill / "a.txt").write_text("one\n", encoding="utf-8")
+    g("add", "-A")
+    g("commit", "-qm", "one")
+    g("checkout", "-qb", "task/KN-12")
+    for n in ("b", "c"):
+        (pill / f"{n}.txt").write_text(n + "\n", encoding="utf-8")
+        g("add", f"{n}.txt")
+        g("commit", "-qm", n)
+    (pill / "a.txt").write_text("two\n", encoding="utf-8")
+    (pill / "new 1.txt").write_text("x", encoding="utf-8")
+    (pill / "new2.txt").write_text("y", encoding="utf-8")
     env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, PATH=str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
                    KNOWLEDGE_COMPANION_PORT=str(free_port()), KNOWLEDGE_COMPANION_EVERY="3600", KN_FAKE_CALLS=str(calls),
                    KNOWLEDGE_COMPANION_ACTIONS_EVERY="1", KNOWLEDGE_COMPANION_SCAN_EVERY="0")
@@ -1267,6 +1285,10 @@ def chat_e2e(tok: str, tmp: Path):
         check(ok, "chat: the companion reports its agents and linked folders (what a new chat may pick)", (home / "companion.log").read_text(errors="replace")[-600:])
         if not ok:
             return
+        row = next(r for r in machines() if r["id"] == mid)
+        got = next((f.get("git") for f in row["companion"]["folders"]["linked"] if Path(f["path"]).resolve() == pill.resolve()), None)
+        check(got == {"branch": "task/KN-12", "base": "main", "changed": 3, "ahead": 2, "behind": 0},
+              "board: the companion reports a folder's git pill (branch, 3 changed, 2 ahead of main, 0 behind)", json.dumps(got))
         new = lambda agent, folder: json.loads(http("POST", "/ui/api/chats", {"machine": mid, "agent": agent, "folder": str(folder)}, ui)[1]).get("chat", {}).get("id")
         chat = lambda cid: json.loads(http("GET", f"/ui/api/chat?machine={mid}&id={cid}", headers=ui)[1])
         send = lambda cid, text: http("POST", "/ui/api/chat/send", {"machine": mid, "id": cid, "text": text}, ui)[0]
@@ -1302,6 +1324,22 @@ def chat_e2e(tok: str, tmp: Path):
                 check(any(e["kind"] == "refused" and "git push" in e["text"] for e in events), "chat claude: a refused tool call shows as a line", json.dumps(events)[:600])
                 check("acceptEdits" in first["argv"] and "--dangerously-skip-permissions" not in first["argv"],
                       "chat claude: without YOLO the worker permission set (acceptEdits + allowed tools)", json.dumps(first["argv"]))
+        # The pill on the board's chat card, and its diff: asked through the chat channel, read-only, answered by the pc.
+        cid = new("codex", pill)
+        send(cid, "pill")
+        board = lambda: json.loads(http("GET", "/ui/api/board", headers=ui)[1])["items"]
+        item = {}  # waited for on the board, not by opening the chat: opening it would mark the reply read
+        wait_for(lambda: item.update(next((i for i in board() if i["kind"] == "chat" and i["id"] == cid and i["col"] != "running"), {})) or item, 30)
+        check(item.get("col") == "needs" and (item.get("git") or {}).get("ahead") == 2 and item["git"]["changed"] == 3,
+              "board: the chat waits for its owner, with the git pill of its folder", json.dumps(item)[:500])
+        before = g("status", "--porcelain").stdout
+        rid = json.loads(http("POST", "/ui/api/git/diff", {"machine": mid, "chat": cid}, ui)[1]).get("id")
+        diff = {}
+        wait_for(lambda: (diff.update(json.loads(http("GET", f"/ui/api/git/diff?machine={mid}&id={rid}", headers=ui)[1])) or diff.get("status") == "done"), 30)
+        text = diff.get("text") or ""
+        check(diff.get("status") == "done" and "2 ahead, 0 behind" in text and "+two" in text and "+b" in text and "?? new 1.txt" in text
+              and "b.txt" in text.split("\n\n")[1], "board: the diff (stat, commits ahead, edits, new files) comes back through the chat channel", json.dumps(diff)[:600])
+        check(g("status", "--porcelain").stdout == before, "board: the diff changed nothing in the folder")
         # A chat turn's own hooks: no task list, no 'start your tasks', no agy register request, no lease (tasks run in workers).
         hooks_env = {**env, "KNOWLEDGE_CHAT": "c1", "CLAUDE_PLUGIN_OPTION_URL": BASE, "CLAUDE_PLUGIN_OPTION_TOKEN": tok}
         outs = {"claude": run([bash(), "-c", f'sh "{(hooks / "context.sh").as_posix()}" 1'], "", {**hooks_env, "CLAUDE_PROJECT_DIR": str(repo)})[1]}
