@@ -337,7 +337,9 @@ function switchProject(p, refit = true) {
   $("add-menu").hidden = $("new-memo").hidden && $("ingest-open").hidden;
   selected = null; setFocus(null);
   indexGraph(); renderProjects(); renderTopics(); applyView(refit);
-  if (!current) homeView();
+  // a note of the old project would stay in the URL, so a refresh would jump back to it: show the new project's home
+  if (current && p !== ALL && projectOf(current.path) !== p) deselect();
+  else if (!current) homeView();
   if ($("q").value.trim()) runSearch();
   loadLint(!$("tab-lint").hidden);
   loadTasks(!$("tab-tasks").hidden);
