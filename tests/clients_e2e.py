@@ -658,6 +658,36 @@ if name == "codex" and args[:1] == ["app-server"]:  # codex-rs app-server, as fa
                 {"key": "/repo/.codex/hooks.json:stop:0:0", "pluginId": None, "currentHash": "sha256:cc",
                  "trustStatus": "untrusted", "handlerType": "command", "command": "./evil.sh"}]}]}
         print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": res}), flush=True)
+elif os.environ.get("KNOWLEDGE_CHAT"):  # one chat turn: the message on stdin, the agent's own JSON stream out
+    import time
+    msg = sys.stdin.buffer.read().decode("utf-8")
+    rec({"chat": os.environ["KNOWLEDGE_CHAT"], "argv": [name] + args, "cwd": os.getcwd(), "stdin": msg, "pid": os.getpid()})
+    text = json.loads(msg)["message"]["content"] if name == "agy" else msg
+    sid = "sess-" + name
+    said = "echo: " + text + (" (resumed)" if sid in args else "")
+    out = lambda x: print(json.dumps(x), flush=True)
+    if name == "claude":
+        out({"type": "system", "subtype": "init", "session_id": sid})
+        out({"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": said}}})
+        out({"type": "assistant", "message": {"content": [{"type": "text", "text": said}, {"type": "tool_use", "name": "Bash", "input": {"command": "git status"}}]}})
+    elif name == "codex":
+        out({"type": "thread.started", "thread_id": sid})
+        out({"type": "item.started", "item": {"type": "command_execution", "command": "git status"}})
+        out({"type": "item.completed", "item": {"type": "agent_message", "text": said}})
+    else:
+        out({"event": "init", "conversation_id": sid})
+        out({"event": "step_update", "step_update": {"conversation_id": sid, "step_type": "tool", "state": "ACTIVE", "tool_name": "run_command",
+                                                     "tool_info": {"parameters": {"CommandLine": "git status"}}}})
+        out({"event": "step_update", "step_update": {"conversation_id": sid, "step_type": "agent_response", "text_delta": said}})
+    if "SLOW" in text:  # a turn that keeps working until it is stopped
+        time.sleep(90)
+        open(calls + ".slow-done", "w").write("not stopped")
+    if name == "claude":
+        out({"type": "result", "is_error": False, "session_id": sid, "permission_denials": [{"tool_name": "Bash", "tool_input": {"command": "git push"}}]})
+    elif name == "codex":
+        out({"type": "turn.completed"})
+    else:
+        out({"event": "result", "result": {"conversation_id": sid, "status": "SUCCESS"}})
 else:
     rec({"argv": [name] + args, "cwd": os.getcwd(), "env": {k: os.environ.get(k, "") for k in ("KNOWLEDGE_WORKER", "KNOWLEDGE_YOLO", "KNOWLEDGE_START_NONCE")}})
     if os.path.exists(calls + ".sleep"):  # a worker that keeps working
@@ -1193,6 +1223,107 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
             fake_codex.kill()
         if fake_agy:
             fake_agy.kill()
+
+
+def chat_e2e(tok: str, tmp: Path):
+    """Chats from the web UI (plugin/hooks/chat.py): the owner starts a chat with an agent on a pc, its companion pulls
+    each message, runs one turn of that agent in the linked folder (message on stdin, the agent's own resume id from
+    the second turn on) and posts the output back; stop ends a running turn; only linked folders."""
+    hooks = CLIENT / "plugin" / "hooks"
+    home = tmp / "Chat Usér"
+    bin_dir, calls = home / "bin", home / "calls.jsonl"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "fakeagent.py").write_text(FAKE_AGENT, encoding="utf-8")
+    for name in ("codex", "claude", "agy"):
+        if WIN:
+            (bin_dir / f"{name}.cmd").write_text(f'@"{sys.executable}" "%~dp0fakeagent.py" {name} %*\r\n', encoding="utf-8")
+        else:
+            (bin_dir / name).write_text(f'#!/bin/sh\nexec "{sys.executable}" "{bin_dir / "fakeagent.py"}" {name} "$@"\n', encoding="utf-8")
+            (bin_dir / name).chmod(0o755)
+    repos = {}
+    for n in ("Chat repo", "Second repo"):  # a space and R&D-like names: never on a command line anyway
+        r = repos[n] = home / "code" / n
+        r.mkdir(parents=True)
+        subprocess.run(["git", "-C", str(r), "init", "-q"], check=True, capture_output=True)
+        (r / ".knowledge-project").write_text("garden\n", encoding="utf-8")
+    env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, PATH=str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
+                   KNOWLEDGE_COMPANION_PORT=str(free_port()), KNOWLEDGE_COMPANION_EVERY="3600", KN_FAKE_CALLS=str(calls),
+                   KNOWLEDGE_COMPANION_ACTIONS_EVERY="1", KNOWLEDGE_COMPANION_SCAN_EVERY="0")
+    ui = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice", "X-Knowledge-UI": "1"}
+    recorded = lambda: [json.loads(ln) for ln in calls.read_text(encoding="utf-8").splitlines() if '"chat"' in ln] if calls.exists() else []
+    log = open(home / "companion.log", "wb")
+    proc = subprocess.Popen([sys.executable, str(hooks / "agent_hooks.py"), "serve"], env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
+    try:
+        mid = ""
+
+        def reported():
+            nonlocal mid
+            if not mid and (home / ".knowledge" / "machine.json").exists():
+                mid = json.loads((home / ".knowledge" / "machine.json").read_text(encoding="utf-8"))["id"]
+            row = next((r for r in machines() if r["id"] == mid), {})
+            linked = {f["path"] for f in ((row.get("companion") or {}).get("folders") or {}).get("linked", [])}
+            return {str(r) for r in repos.values()} <= linked and set((row.get("companion") or {}).get("agents") or []) == {"claude", "codex", "agy"}
+        ok = wait_for(lambda: _quiet(reported), 60)
+        check(ok, "chat: the companion reports its agents and linked folders (what a new chat may pick)", (home / "companion.log").read_text(errors="replace")[-600:])
+        if not ok:
+            return
+        new = lambda agent, folder: json.loads(http("POST", "/ui/api/chats", {"machine": mid, "agent": agent, "folder": str(folder)}, ui)[1]).get("chat", {}).get("id")
+        chat = lambda cid: json.loads(http("GET", f"/ui/api/chat?machine={mid}&id={cid}", headers=ui)[1])
+        send = lambda cid, text: http("POST", "/ui/api/chat/send", {"machine": mid, "id": cid, "text": text}, ui)[0]
+        idle = lambda cid, n: wait_for(lambda: (c := chat(cid))["chat"]["status"] == "idle" and len(c["events"]) >= n, 30)
+        st, body = http("POST", "/ui/api/chats", {"machine": mid, "agent": "claude", "folder": str(home / "elsewhere")}, ui)
+        check(st == 400, "chat: a folder not linked on that pc is refused", body)
+        repo = repos["Chat repo"]
+        for agent in ("claude", "codex", "agy"):
+            cid = new(agent, repo)
+            msg1 = f'hello {agent} "R&D" 100% <b>x</b> → ✅\nline two'
+            send(cid, msg1)
+            got1 = idle(cid, 3)
+            send(cid, "second")
+            got2 = idle(cid, 6)
+            turns = [c for c in recorded() if c["chat"] == cid]
+            events = chat(cid)["events"]
+            texts = "".join(e["text"] for e in events if e["kind"] == "text")
+            first, second = (turns + [{}, {}])[:2]
+            sent = (lambda x: json.loads(x)["message"]["content"]) if agent == "agy" else (lambda x: x)
+            check(got1 and got2 and len(turns) == 2 and sent(first.get("stdin", "{}")) == msg1 and sent(second.get("stdin", "{}")) == "second"
+                  and Path(first["cwd"]).resolve() == repo.resolve() and not any(msg1[:5] in a for a in first["argv"]),
+                  f"chat {agent}: two turns, each message on stdin (never on the command line), in the linked folder", json.dumps(turns)[:900])
+            resume = {"claude": ["--resume", "sess-claude"], "codex": ["resume"], "agy": ["--conversation", "sess-agy"]}[agent]
+            check(not any(a in first["argv"] for a in resume) and all(a in second["argv"] for a in resume) and "sess-" + agent in second["argv"],
+                  f"chat {agent}: the first turn starts a conversation, the second continues it with the agent's own id", json.dumps([first.get("argv"), second.get("argv")]))
+            check(f"echo: {msg1}" in texts and "echo: second (resumed)" in texts and any(e["kind"] == "tool" and "git status" in e["text"] for e in events)
+                  and [e["kind"] for e in events if e["kind"] == "user"] == ["user", "user"] and chat(cid)["chat"]["session"] == "sess-" + agent,
+                  f"chat {agent}: the streamed text and tool lines reach the server", json.dumps(events)[:900])
+            if agent == "claude":
+                check(any(e["kind"] == "refused" and "git push" in e["text"] for e in events), "chat claude: a refused tool call shows as a line", json.dumps(events)[:600])
+                check("acceptEdits" in first["argv"] and "--dangerously-skip-permissions" not in first["argv"],
+                      "chat claude: without YOLO the worker permission set (acceptEdits + allowed tools)", json.dumps(first["argv"]))
+        # Stop: a turn that keeps working ends at once, the chat says so and is ready again.
+        cid = new("codex", repo)
+        send(cid, "SLOW please")
+        started = wait_for(lambda: any(c["chat"] == cid for c in recorded()) and chat(cid)["chat"]["status"] == "running", 30)
+        t0 = time.time()
+        http("POST", "/ui/api/chat/stop", {"machine": mid, "id": cid}, ui)
+        stopped = idle(cid, 3)
+        events = chat(cid)["events"]
+        check(started and stopped and time.time() - t0 < 30 and events[-1]["text"] == "Stopped." and not Path(str(calls) + ".slow-done").exists(),
+              "chat: stop ends a running turn (the agent's process tree) and the chat says so", json.dumps(events)[-400:])
+        # A folder unlinked after the chat began: the companion refuses the turn, loudly (chat and activity log).
+        second = repos["Second repo"]
+        cid = new("agy", second)
+        (second / ".knowledge-project").unlink()
+        send(cid, "still there?")
+        idle(cid, 2)
+        events = chat(cid)["events"]
+        activity = json.loads((home / ".knowledge" / "companion" / "activity.json").read_text(encoding="utf-8"))
+        check(any(e["kind"] == "error" and "not a folder linked" in e["text"] for e in events) and not any(c["chat"] == cid for c in recorded()),
+              "chat: a folder no longer linked on this pc is refused, the agent never starts", json.dumps(events)[-400:])
+        check(any(a["kind"] == "chat" and "turn started" in a["text"] for a in activity) and any(a["kind"] == "chat" and "stopped" in a["text"] for a in activity)
+              and any(a["kind"] == "error" and "chat turn failed" in a["text"] for a in activity),
+              "chat: turns, stops and failures are in the companion's activity log", json.dumps(activity[:8])[:800])
+    finally:
+        proc.kill()
 
 
 def _quiet(f):
@@ -2031,6 +2162,7 @@ def main():
         hook_errors(tmp, project)
         knowledge_home(tok, tmp, project)
         companion_e2e(tok, tmp, project)
+        chat_e2e(tok, tmp)
         background_flags(tmp)
         installer(tok, tmp)
         companion_setup(tmp)
