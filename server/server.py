@@ -991,7 +991,7 @@ def new_memo_refusal(rel: str, content: str) -> str:
 
 
 MEMO_CHECKS = ("missing_frontmatter", "memo_not_in_index", "missing_structure", "dead_wikilink", "relative_date",
-               "possible_secret_in_memo")
+               "possible_secret_in_memo", "big_memo_without_archive", "long_index_line")
 
 
 def house_rules_hint(rel: str) -> str:
@@ -1002,7 +1002,9 @@ def house_rules_hint(rel: str) -> str:
         return ""
     files = {r: t for r, t, _ in index.items() if r.count("/") == 1 and mem_of(r)}  # all roots: [[links]] may cross
     found = [f"{check}: {item}" for check, items in kb_lint.lint(files, mem=root).items() if check in MEMO_CHECKS
-             for item in items if item == name or item.startswith(name + ":")]
+             for item in items if item == name or item.startswith((name + ":", name + " "))]
+    if any(i["id"] == rel for i in get_graph()["insights"]["isolated"]):
+        found.append(f"isolated_note: {name} links to no other note and none links to it; add [[name]] links to related memos")
     return ("\nHouse rules still open for this memo (fix them now): " + "; ".join(found)) if found else ""
 
 
@@ -1270,8 +1272,10 @@ def lint_all() -> dict[str, list[str]]:
         report["possible_duplicate"] = possible_duplicates()
         report["duplicate_check_failed"] = [BACKGROUND["duplicates"]["error"]] if "error" in BACKGROUND.get("duplicates", {}) and in_scope("claude/") else []
     gaps = get_graph()["insights"]
+    # docs too since 31 Oct 2026: the map draws every one of them as a dot (Anthony: "losse bolletjes")
     report["isolated_note"] = [f"{i['id']} ({i['degree']} link)" for i in gaps["isolated"]
-                               if mem_of(i["id"]) or i["id"].startswith("claude/skills/")]
+                               if i["id"] in files and not i["id"].startswith(SOURCES + "/") and not is_archive(i["id"], files[i["id"]])
+                               and i["id"].rsplit("/", 1)[-1] not in ("CLAUDE.md", "AGENTS.md", "GEMINI.md")]
     report["sparse_topic"] = [f"{c['project']}: topic '{c['name']}' ({c['size']} notes, cohesion {c['cohesion']})"
                               for c in gaps["sparse_topics"]]
     # The docs of every other project (house rule 2; lint did homelab's): the notes the graph draws, each with a topic
@@ -1634,7 +1638,33 @@ def open_items_text(mem: str, agent: str = "") -> tuple[list[str], list[str]]:
         tail.append(f"===== overdue open items ({mem}) =====\nThese items passed their '{W['open']} <date>'. Mention them to the "
                     "user once at the start, do them when asked, or move the date with a reason:\n"
                     + "\n".join(f"- {o}" for o in overdue))
+    if issues := project_lint(mem):
+        tail.append(f"===== house-rule issues ({mem}) =====\nknowledge_lint finds these in this project. Once the user's "
+                    "request is done (or at once when there is none), fix them without asking and say in one line what you "
+                    "fixed; skip one you cannot judge and say why:\n" + "\n".join(f"- {i}" for i in issues))
     return head, tail
+
+
+LINT_AT_START = ("index_points_to_missing_file", "memo_not_in_index", "dead_wikilink", "missing_frontmatter",
+                 "missing_structure", "big_memo_without_archive", "long_index_line", "index_line_without_heading",
+                 "relative_date", "doc_without_topic", "decision_without_date", "isolated_note")
+LINT_AT_START_MAX = 12
+_project_lint_cache: dict = {}
+
+
+def project_lint(mem: str) -> list[str]:
+    """The fixable lint findings of the project whose memory root is `mem` (its docs included), at most
+    LINT_AT_START_MAX plus a count; lint_all prefixes items with their root, homelab's memory root excepted."""
+    key = (mem, index.gen, tuple(device.get().get("roots") or ()))  # every context part asks: lint once per change
+    if (hit := _project_lint_cache.get(key)) is not None:
+        return hit
+    roots = {mem} | {d for d, m in PROJECTS.values() if m == mem}
+    items = [f"{check}: {item}" for check, found in lint_all().items() if check in LINT_AT_START for item in found
+             if (item.split(" ", 1)[0].split("/", 1)[0] if "/" in item.split(" ", 1)[0] else "memory") in roots]
+    more = len(items) - LINT_AT_START_MAX
+    _project_lint_cache.clear()
+    _project_lint_cache[key] = items[:LINT_AT_START_MAX] + ([f"... and {more} more: run knowledge_lint"] if more > 0 else [])
+    return _project_lint_cache[key]
 
 
 def split_parts(text: str) -> list[str]:

@@ -32,7 +32,8 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   checks), new memo, delete (kept as a copy), history, lint, and ingest of a web page, PDF or text as a raw source.
   Semantic hits show the file size and the newest "(checked <date>)" mark, so an agent can tell which hit to read.
 - **Session start context:** each agent gets the shared instructions, the house rules and the memory index of the
-  project it works in, plus open items whose date has passed and hand-over tasks between agents.
+  project it works in, plus open items whose date has passed, hand-over tasks between agents and the project's
+  fixable lint findings (at most 12), which the agent clears once the user's request is done.
 - **Hand-overs during a session:** before a prompt (at most every two minutes) Claude Code, Codex and agy ask
   `/tasks` for the tasks handed to them; a task added after the session started is told to the agent once.
   The same per-turn call lets the server steer every session, also a resumed one that ran no start hook: notices

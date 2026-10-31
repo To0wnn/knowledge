@@ -307,7 +307,8 @@ def main():
         assert not list(mem.glob(".knowledge-*")), "temp files must not be left behind"
         # Lint runs on the in-memory index (the temp MEMORY.md points to 120 files that do not exist).
         lint_out = call("knowledge_lint", {})[1]
-        assert "trade/STATUS.md: no topic" in lint_out and "trade/NOTES.md" not in lint_out and "trade/CLAUDE.md" not in lint_out, lint_out
+        assert "trade/STATUS.md: no topic" in lint_out and "trade/NOTES.md:" not in lint_out and "trade/CLAUDE.md" not in lint_out, lint_out
+        assert "trade/NOTES.md (0 link)" in lint_out, lint_out  # a loose doc is a loose dot on the map too
         assert "index_points_to_missing_file (120)" in lint_out, lint_out[:300]
         # Background duplicate check (test reranker = word overlap): two memos with the same body end up in lint.
         body = "the garage door opener runs on a relay with a reed contact for the closed state\n"
@@ -526,6 +527,12 @@ def main():
         err, res = call("knowledge_write", {"path": "garden-memory/project_beds.md", "content": good,
                                             "base_version": ver("garden-memory/project_beds.md")})
         assert not err and "House rules still open" not in res, res  # a memo by the rules: no hint
+        # A second memo that links nowhere: the writer hears it at once, and every session start of the project lists it.
+        err, res = call("knowledge_write", {"path": "garden-memory/project_lone.md", "content": good.replace("raised", "lone")})
+        assert not err and "isolated_note: project_lone.md" in res, res
+        ctx = http("GET", "/context/1?project=x", token=fr)[1] + http("GET", "/context/2?project=x", token=fr)[1]
+        assert "house-rule issues (garden-memory)" in ctx and "project_lone.md" in ctx, ctx[-800:]
+        assert not call("knowledge_delete", {"path": "garden-memory/project_lone.md", "base_version": ver("garden-memory/project_lone.md")})[0]
         assert "raised" in call("knowledge_read", {"path": "garden-memory/project_beds.md"})[1]
         assert "garden" in json.loads(raw("GET", "/ui/api/me", headers=ck)[2])["projects"]
         assert "project garden" in http("GET", "/context/1?project=/home/x/garden")[1]
