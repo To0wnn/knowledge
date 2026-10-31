@@ -15,6 +15,7 @@
   <div id="projects" class="seg" role="group" aria-label="Project"></div>
   <input id="q" type="search" placeholder="Search titles, text and meaning…  ( / )" autocomplete="off" aria-label="Search">
   <div class="actionsbar">
+    <button id="cockpit-btn" class="ghost" title="Chat with your agents on your pcs (A)">Agents</button>
     <button id="map-btn" class="ghost" aria-pressed="false" title="Map of this project (M)">Map</button>
     <details id="add-menu" class="menu">
       <summary class="ghost">+ Add</summary>
@@ -81,6 +82,50 @@
 </main>
 
 <aside class="right" id="side" aria-label="Connected notes"></aside>
+
+<section id="cockpit" class="ck" aria-label="Agents" hidden>
+  <div class="ck-bar">
+    <button type="button" class="ck-pill ck-brand" id="ck-close" title="Back to the knowledge (Esc)">Knowledge</button>
+    <span class="ck-pill ck-live" id="ck-live" title="Running chats, workers and sessions active in the last 10 min on your pcs"><span class="ck-dot"></span><span id="ck-live-n">0</span>&nbsp;live</span>
+    <span class="ck-pill" id="ck-resets" hidden></span>
+    <span class="ck-gap"></span>
+    <select id="ck-switch" class="ck-switch" aria-label="Open chat"></select>
+    <button type="button" class="ck-pill ck-primary" id="ck-new" aria-label="New chat">+<span class="ck-label">&nbsp;New chat</span></button>
+    <details class="ck-menu" id="ck-history-menu">
+      <summary class="ck-icon" title="Earlier chats" aria-label="Earlier chats"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7v5l3 2M3.5 12a8.5 8.5 0 1 0 2.5-6M3 4v4h4"/></svg></summary>
+      <div class="ck-pop"><h3>Earlier chats</h3><ol id="ck-history" class="ck-history"></ol></div>
+    </details>
+    <details class="ck-menu" id="ck-tools-menu">
+      <summary class="ck-icon" title="Tools" aria-label="Tools"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="7" width="17" height="12" rx="2.5"/><path d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7M3.5 12.5h17"/></svg></summary>
+      <div class="ck-pop ck-tools">
+        <h3>Tools</h3>
+        <button type="button" data-go="tasks"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7.5l3 8M16 7.5l-3 8"/></svg>Mission map</button>
+        <button type="button" data-go="memory"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5h10l4 4v11H5z"/><path d="M8.5 12h7M8.5 15.5h7"/></svg>Memory</button>
+        <button type="button" data-go="skills"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3L5 13h6l-1 8 8-10h-6z"/></svg>Skills</button>
+        <button type="button" data-go="machines"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="11" rx="2"/><path d="M9 19.5h6M12 15.5v4"/></svg>Machines</button>
+        <button type="button" data-go="loops"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 0 1 13.7-5.7L20 8.5M20 4v4.5h-4.5M20 12a8 8 0 0 1-13.7 5.7L4 15.5M4 20v-4.5h4.5"/></svg>Loops (workers)</button>
+        <a href="/ui/admin" data-go="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8"/></svg>Settings</a>
+      </div>
+    </details>
+    <a class="ck-icon" href="/ui/admin" title="Settings" aria-label="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8"/></svg></a>
+  </div>
+  <div class="ck-canvas" id="ck-canvas"></div>
+</section>
+
+<dialog id="ck-new-dialog" aria-label="New chat">
+  <form id="ck-new-form" method="dialog">
+    <h2>New chat</h2>
+    <p class="muted">An agent on one of your pcs, in a folder linked to a project there. Its companion runs each turn; the pc must be online. Permissions are those of a worker there (YOLO only where you turned it on).</p>
+    <label for="ck-machine">Pc</label>
+    <select id="ck-machine" required></select>
+    <label for="ck-agent">Agent</label>
+    <select id="ck-agent" required></select>
+    <label for="ck-folder">Folder</label>
+    <select id="ck-folder" required></select>
+    <p id="ck-new-error" class="error" role="alert" hidden></p>
+    <div class="actions"><button type="button" class="ghost" id="ck-new-cancel">Cancel</button><button type="submit" id="ck-new-start">Start chat</button></div>
+  </form>
+</dialog>
 
 <dialog id="new-dialog" aria-label="New memo">
   <form id="new-form" method="dialog">

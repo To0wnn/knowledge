@@ -178,14 +178,22 @@ def argv(agent: str, exe: str, prompt: str, yolo: bool, where: dict) -> list:
     if agent == "codex":
         return [exe, "exec", *(["--dangerously-bypass-approvals-and-sandbox"] if yolo else ["-s", "workspace-write", *codex_git_dirs(where),
                 # exec never asks, so a tool that needs approval is refused: the plugin's knowledge tools are approved for this run only
-                "-c", "plugins.knowledge@knowledge.mcp_servers.knowledge.default_tools_approval_mode=approve"]),
+                "-c", CODEX_APPROVE]),
                 "--skip-git-repo-check", "--cd", where["cwd"], "--json", prompt]
     if yolo:
         return [exe, "-p", prompt, "--dangerously-skip-permissions"]
+    return [exe, "-p", prompt, *agy_rules()]
+
+
+def agy_rules() -> list:
+    """agy without YOLO: accept-edits plus the allow rules, for this session only (never saved)."""
     DIR.mkdir(parents=True, exist_ok=True)
     rules = DIR / "agy-worker-settings.json"  # a file, not inline JSON: an argument with quotes cannot pass a .cmd shim
     rules.write_text(json.dumps({"permissions": {"allow": AGY_ALLOWED}}), encoding="utf-8")
-    return [exe, "-p", prompt, "--mode", "accept-edits", "--settings", str(rules)]
+    return ["--mode", "accept-edits", "--settings", str(rules)]
+
+
+CODEX_APPROVE = "plugins.knowledge@knowledge.mcp_servers.knowledge.default_tools_approval_mode=approve"
 
 
 def prompt(task: dict, agent: str, machine: str, where: dict, yolo: bool = False) -> str:

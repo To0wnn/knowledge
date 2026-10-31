@@ -119,7 +119,27 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   companion listed itself). The server queues them per machine (`POST /ui/api/machines/action`); the companion pulls
   them about every 10 seconds (`GET /machine/actions`), runs them with its own code and reports the result; an
   offline machine's action shows "waiting for machine". Every action is logged with who and when, and shows in the
-  companion's activity log. There is no free-text command anywhere.
+  companion's activity log. There is no free-text command anywhere; free text reaches a pc only as a chat message
+  to an agent (below), which runs with that agent's own permissions.
+- **Agents cockpit (chat with your agents):** the web UI's "Agents" button (key `A`) opens a full-screen canvas: a
+  bar with pills (how many chats, workers and sessions are live on your pcs, when the fullest usage window resets), a
+  tools menu (mission map = Tasks, memory, skills, machines, loops = workers, settings) and one card per chat. A
+  chat is a conversation with Claude Code, Codex or agy on one of your own pcs, in a folder linked to a project there,
+  as in a terminal: the answer streams in (text, plus one line per tool call or refused call), the next message
+  continues the same conversation, Stop ends a running turn, earlier chats reopen from the clock menu. A phone shows
+  one chat with a switcher. The server only relays, pull only like the actions: the UI posts a message
+  (`POST /ui/api/chat/send`), the pc's companion fetches it (`GET /machine/chats`, every ~2 s while a chat is active,
+  else ~10 s), runs one headless turn of the agent with the message on stdin (never on a command line), the first turn
+  a new conversation and every later one the agent's own continuation (`claude -p --resume <session>`,
+  `codex exec resume <thread>`, `agy --conversation <id>`), and posts the output back in small batches
+  (`POST /machine/chats/events`). Permissions are a worker's on that pc: the agent's YOLO flag where YOLO is on, else
+  the same narrow sets (approvals inside a chat are not there yet). Codex without YOLO cannot commit in a chat: the
+  folder is a main checkout, and Codex keeps its `.git` read-only (opening it would let a sandboxed run change git
+  hooks and config). A chat turn says it is one (`KNOWLEDGE_CHAT`, header `X-Knowledge-Chat`): like a worker it
+  hears no task lists or "start your tasks", takes no lease, task or notice, and agy is not asked to register. Only the machine's owner sees or posts (admins
+  too only on their own machines); a chat needs its pc online and says so. One file per chat under the state
+  directory (`chats/<machine>/`), at most 50 chats per machine (the oldest go) and 1 MB per chat (the oldest output
+  goes). Every turn, stop and failure is in the companion's activity log; a failure also shows in the chat.
 - **YOLO safety without blocking:** task text by a writer the project does not trust reaches agents and workers marked
   as data, not instructions. A watch hook after every tool flags what a YOLO session does that is risky (force push,
   `rm -rf` outside the project, `curl | sh`, reading key or token files, reading the vault) in the companion's activity

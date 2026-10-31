@@ -175,11 +175,13 @@ def machine() -> dict:
 
 def headers(tok: str) -> dict:
     """What every request to the server carries: the token and this pc's identity; a worker the companion started
-    also names its task (KNOWLEDGE_WORKER), so the server can hold its hand-back lines to the worker rules."""
+    also names its task (KNOWLEDGE_WORKER), so the server can hold its hand-back lines to the worker rules; a chat turn
+    from the web UI (KNOWLEDGE_CHAT) says so, and its start context then lists no tasks."""
     m = machine()
     return {**({"Authorization": f"Bearer {tok}"} if tok else {}),
             **({"X-Knowledge-Machine": m["id"], "X-Knowledge-Machine-Label": m["label"]} if m else {}),
-            **({"X-Knowledge-Worker": w} if (w := re.sub(r"[^\w.-]", "", os.environ.get("KNOWLEDGE_WORKER", ""), flags=re.ASCII)[:60]) else {})}
+            **({"X-Knowledge-Worker": w} if (w := re.sub(r"[^\w.-]", "", os.environ.get("KNOWLEDGE_WORKER", ""), flags=re.ASCII)[:60]) else {}),
+            **({"X-Knowledge-Chat": "1"} if os.environ.get("KNOWLEDGE_CHAT") else {})}
 
 
 def store_url(u: str) -> None:

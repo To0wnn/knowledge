@@ -24,6 +24,7 @@ import os
 import re
 from datetime import date, timedelta
 import secrets
+import shutil
 import tempfile
 import threading
 try:
@@ -1546,12 +1547,17 @@ def token_project() -> str | None:
 
 
 
-def context_parts(project: str = "homelab", agent: str = "", chat: bool = False) -> list[str]:
+WEBCHAT_NOTE = ("===== knowledge: a chat from the web UI =====\nThe user talks to you from the knowledge web UI; each message "
+                "is one turn. Answer what they ask. Tasks between agents run in workers: do not list, take or start them here.")
+
+
+def context_parts(project: str = "homelab", agent: str = "", chat: bool = False, webchat: bool = False) -> list[str]:
     """Startup context for the plugin's SessionStart hooks: what a VM session in that project gets loaded natively,
     split on line boundaries into parts that each fit one hook output, so nothing is cut off. The tasks handed to
-    `agent` come first, so they sit in part 1 instead of after the memory index."""
+    `agent` come first, so they sit in part 1 instead of after the memory index. A chat turn from the web UI (webchat)
+    gets no task lists, only a note what it is."""
     docs, mem = PROJECTS[project]
-    mine, rest = open_items_text(mem, agent, chat)
+    mine, rest = ([WEBCHAT_NOTE], []) if webchat else open_items_text(mem, agent, chat)
     if not in_scope("claude/"):  # a guest: only this project, no word about the owner's other projects or vault
         text = [f"===== knowledge (project {project}) =====\nThis project's memory and docs live on the knowledge server"
                 f"{f' ({PUBLIC_URL})' if PUBLIC_URL else ''}; other sessions and the web UI see the same files live. Docs: "
@@ -2344,7 +2350,8 @@ def machine_rows() -> list[dict]:
                          "sessions": [{k: s.get(k, "") for k in ("project", "task", "at", "worker")} for s in sessions]}
         rows.append({"id": mid, "label": m.get("label", mid), "at": m.get("at", 0), "online": now - m.get("at", 0) < ONLINE,
                      "tokens": names, "own": any(own_token(tokens[n], dev) for n in names), "agents": agents,
-                     "companion": {k: comp.get(k) for k in ("version", "at", "workersAllowed", "game", "maxWorkers", "folders", "projects")} if comp else None,
+                     "companion": {**{k: comp.get(k) for k in ("version", "at", "workersAllowed", "game", "maxWorkers", "folders", "projects")},
+                                   "agents": sorted(comp.get("agents") or {})} if comp else None,
                      "actions": queue.get(mid, [])[-10:]})
     for n, cfg in tokens.items():  # plugins before 0.15.0: one row per token, from clients.json
         old = [c for s, c in read_json(CLIENTS_FILE, {}).get(n, {}).items() if now - c.get("at", 0) < SESSION_KEEP]
@@ -2678,6 +2685,8 @@ class BearerAuth:
             dev = {**dev, "machine": mid, "machine_label": label or mid}
         if worker := re.sub(r"[^\w.-]", "", headers.get(b"x-knowledge-worker", b"").decode("latin-1"))[:60]:
             dev = {**dev, "worker": worker}  # a session the companion started for this one task
+        if headers.get(b"x-knowledge-chat") == b"1":
+            dev = {**dev, "webchat": True}  # a chat turn from the web UI: no tasks in its context, no lease, no notices
         device.set(dev)
         return await self.app(scope, receive, send)
 
@@ -3117,7 +3126,8 @@ async def tasks_route(request: Request):
     if not dev.get("machine"):  # plugins before 0.15.0
         mark_client(dev.get("name", ""), q.get("agent", ""), q.get("session", ""), project, q.get("wake") == "1")
     # claim=0: another agent asks on this session's behalf (a wake) and passes on tasks only, taking no lease
-    claim, key = q.get("claim") != "0", (dev.get("name", ""), project)
+    # a chat turn from the web UI (X-Knowledge-Chat) is the same: it takes no lease and no notice meant for a session
+    claim, key = q.get("claim") != "0" and not dev.get("webchat"), (dev.get("name", ""), project)
     agent, names = q.get("agent", ""), AGENT_OWNERS.get(q.get("agent", ""), ())
     # seen: the tasks the plugin told this session before (absent on its first ask); start: the companion's nonce
     seen, start = {i for i in q.get("seen", "").split(",") if i} if "seen" in q else None, q.get("start", "")
@@ -3330,7 +3340,8 @@ async def context_route(request: Request):
     # worker itself knows its one task from its prompt
     chat = plugin_version(request.query_params.get("plugin", "")) >= (0, 15, 0) and not device.get().get("worker") \
         and agent in AGENT_OWNERS and bool(await asyncio.to_thread(worker_hosts, project, agent))
-    parts = await asyncio.to_thread(context_parts, project, agent if agent in AGENT_OWNERS else "", chat)  # lint + graph: off the loop
+    parts = await asyncio.to_thread(context_parts, project, agent if agent in AGENT_OWNERS else "", chat,
+                                    bool(device.get().get("webchat")))  # lint + graph: off the loop
     if v := request.query_params.get("plugin", ""):  # every part asks, so all of them split the same way
         if request.path_params["part"] == 1:
             mark_plugin(device.get().get("name", ""), agent, v, request.query_params.get("url") == "default")
@@ -4430,6 +4441,8 @@ async def ui_machine_forget(request: Request):
     else:
         await asyncio.to_thread(update_state, MACHINES_FILE, lambda d: d.pop(mid, None))
         await asyncio.to_thread(update_state, MACHINE_ACTIONS, lambda d: d.pop(mid, None))
+        if re.fullmatch(r"[0-9a-f]{16}", mid):  # its chats go with it
+            await asyncio.to_thread(shutil.rmtree, CHATS_DIR / mid, True)
     audit("machine-forget", mid)
     return JSONResponse({"ok": True})
 
@@ -4543,6 +4556,242 @@ async def machine_action_result(request: Request):
     return JSONResponse({"ok": bool(found)}, status_code=200 if found else 404)
 
 
+# Chats: the owner talks to an agent on one of their pcs from the web UI. The server only stores and relays: the UI
+# posts a message, the pc's companion pulls it (GET /machine/chats), runs one turn of the agent in a folder linked
+# there and posts the output back (POST /machine/chats/events); the UI polls for new events. One file per chat under
+# chats/<machine>/, plus a small queue.json per machine that the companion's poll reads.
+CHATS_DIR = ADMIN_DIR / "chats"
+CHAT_KEEP, CHAT_EVENTS, CHAT_BYTES, CHAT_TEXT = 50, 4000, 1_000_000, 20_000  # chats per machine, events and bytes per chat, chars per message
+CHAT_KINDS = ("text", "tool", "refused", "error", "info")
+
+
+def chat_file(mid: str, cid: str) -> Path:
+    if not re.fullmatch(r"[0-9a-f]{16}", mid) or not re.fullmatch(r"[0-9a-f]{12}", cid):
+        raise ValueError("unknown chat")
+    return CHATS_DIR / mid / f"{cid}.json"
+
+
+def chat_meta(c: dict) -> dict:
+    return {k: c.get(k) for k in ("id", "agent", "folder", "project", "title", "by", "created", "updated", "status", "session")}
+
+
+def chat_add(c: dict, kind: str, text: str):
+    """One event, within the caps: the oldest events go first (the chat says so)."""
+    c["next"] = c.get("next", 0) + 1
+    c.setdefault("events", []).append({"n": c["next"], "at": time.time(), "kind": kind, "text": text[:CHAT_TEXT]})
+    size = sum(len(e["text"]) + 60 for e in c["events"])
+    while len(c["events"]) > CHAT_EVENTS or size > CHAT_BYTES:
+        size -= len(c["events"].pop(0)["text"]) + 60
+        c["trimmed"] = True
+    c["updated"] = time.time()
+
+
+def own_machine(mid: str) -> dict | None:
+    """The Machines row of `mid` when this person may steer it (as for remote actions), else None."""
+    row = next((r for r in machine_rows() if r["id"] == mid), None)
+    return row if row and row["own"] and not row.get("old") else None
+
+
+async def chat_request(request: Request, need_body: bool) -> tuple:
+    """(row, body, chat file, chat) for a UI chat route on one of this person's own machines; raises PermissionError
+    or ValueError."""
+    b = (await request.json()) if need_body else dict(request.query_params)
+    if not isinstance(b, dict):
+        raise ValueError("send JSON")
+    mid, cid = str(b.get("machine", "")), str(b.get("id", ""))
+    row = await asyncio.to_thread(own_machine, mid)
+    if not row:
+        raise PermissionError("not a machine of your own tokens (with plugin 0.15.0 or newer)")
+    f = chat_file(mid, cid)
+    c = await asyncio.to_thread(read_json, f, None)
+    if not c:
+        raise ValueError("unknown chat")
+    return row, b, f, c
+
+
+def chat_error(e: Exception) -> JSONResponse:
+    return JSONResponse({"error": str(e) or "bad request"}, status_code=403 if isinstance(e, PermissionError) else 400)
+
+
+@server.custom_route("/ui/api/chats", methods=["GET", "POST"])
+async def ui_chats(request: Request):
+    """GET ?machine=: the chats on one of this person's own machines, newest first (without machine: on all of them,
+    each with its machine). POST {machine, agent, folder}: a new chat with an agent installed there, in a folder linked
+    there (as the companion reports them)."""
+    if request.method == "GET" and "machine" not in request.query_params:
+        rows = [r for r in await asyncio.to_thread(machine_rows) if r["own"] and not r.get("old")]
+        chats = [{**chat_meta(c), "machine": r["id"], "label": r["label"], "online": r["online"]} for r in rows
+                 for f in ((CHATS_DIR / r["id"]).glob("*.json") if (CHATS_DIR / r["id"]).is_dir() else [])
+                 if f.name != "queue.json" and (c := read_json(f, None))]
+        return JSONResponse({"chats": sorted(chats, key=lambda c: -(c.get("updated") or 0))})
+    try:
+        b = await request.json() if request.method == "POST" else dict(request.query_params)
+        mid = str(b.get("machine", ""))
+        row = await asyncio.to_thread(own_machine, mid)
+        if not row:
+            raise PermissionError("not a machine of your own tokens (with plugin 0.15.0 or newer)")
+        d = CHATS_DIR / chat_file(mid, "0" * 12).parent.name
+    except (ValueError, AttributeError, TypeError, PermissionError) as e:
+        return chat_error(e)
+    if request.method == "GET":
+        chats = [chat_meta(c) for f in (d.glob("*.json") if d.is_dir() else []) if f.name != "queue.json" and (c := read_json(f, None))]
+        return JSONResponse({"chats": sorted(chats, key=lambda c: -(c.get("updated") or 0)), "online": row["online"]})
+    comp = row.get("companion") or {}
+    agent, folder = str(b.get("agent", "")), str(b.get("folder", ""))
+    if agent not in (comp.get("agents") or []):
+        return JSONResponse({"error": f"{agent or 'that agent'} is not installed on {row['label']}"}, status_code=400)
+    project = next((x["project"] for x in (comp.get("folders") or {}).get("linked", []) if x["path"] == folder), None)
+    if not project:
+        return JSONResponse({"error": "pick a folder linked to a project on that pc"}, status_code=400)
+    dev, tokens, now = device.get(), read_json(TOKENS_FILE, {}), time.time()
+    cid = secrets.token_hex(6)
+    c = {"id": cid, "agent": agent, "folder": folder, "project": project, "title": "", "by": dev.get("user", ""), "created": now,
+         "updated": now, "status": "idle", "session": "", "next": 0, "events": [],
+         "tokens": [n for n in row["tokens"] if n in tokens and own_token(tokens[n], dev)]}
+
+    def create():
+        d.mkdir(parents=True, exist_ok=True)
+        q = read_json(d / "queue.json", {})
+        old = sorted((f for f in d.glob("*.json") if f.name != "queue.json" and not q.get(f.stem, {}).get("busy")), key=lambda f: f.stat().st_mtime)
+        for f in old[:max(0, len(old) - CHAT_KEEP + 1)]:  # the oldest go: at most CHAT_KEEP per machine
+            f.unlink(missing_ok=True)
+            update_state(d / "queue.json", lambda q, k=f.stem: q.pop(k, None))
+        write_json(chat_file(mid, cid), c)
+    await asyncio.to_thread(create)
+    audit("chat-new", f"{mid} {agent} {folder}")
+    return JSONResponse({"ok": True, "chat": chat_meta(c)})
+
+
+@server.custom_route("/ui/api/chat", methods=["GET"])
+async def ui_chat(request: Request):
+    """?machine=&id=&after=<n>: one chat, its events after n, and whether its pc is online."""
+    try:
+        row, b, _, c = await chat_request(request, False)
+        after = int(b.get("after") or 0)
+    except (ValueError, AttributeError, TypeError, PermissionError) as e:
+        return chat_error(e)
+    return JSONResponse({"chat": chat_meta(c), "events": [e for e in c.get("events", []) if e["n"] > after], "trimmed": bool(c.get("trimmed")),
+                         "online": row["online"], "at": row["at"], "label": row["label"]})
+
+
+@server.custom_route("/ui/api/chat/send", methods=["POST"])
+async def ui_chat_send(request: Request):
+    """{machine, id, text}: the next message; its pc's companion runs it as the chat's next turn. Refused while a
+    turn runs or waits, and while the pc is offline (it would run whenever the pc comes back)."""
+    try:
+        row, b, f, c = await chat_request(request, True)
+        text = str(b.get("text", "")).strip()
+        if not text or len(text) > CHAT_TEXT:
+            raise ValueError(f"a message is 1 to {CHAT_TEXT} characters")
+    except (ValueError, AttributeError, TypeError, PermissionError) as e:
+        return chat_error(e)
+    if not row["online"]:
+        return JSONResponse({"error": f"{row['label']} is offline: a chat needs its companion running"}, status_code=409)
+    busy = []
+
+    def change(c):
+        if c.get("status") in ("queued", "running"):
+            busy.append(1)
+            return
+        chat_add(c, "user", text)
+        c.update(status="queued", title=c.get("title") or " ".join(text.split())[:80])
+    await asyncio.to_thread(update_state, f, change)
+    if busy:
+        return JSONResponse({"error": "the agent is still answering: wait, or stop it"}, status_code=409)
+    msg = {"text": text, "by": device.get().get("user", ""), "at": time.time()}
+    await asyncio.to_thread(update_state, f.parent / "queue.json", lambda q: q.setdefault(c["id"], {}).update(msg=msg, stop=False))
+    return JSONResponse({"ok": True})
+
+
+@server.custom_route("/ui/api/chat/stop", methods=["POST"])
+async def ui_chat_stop(request: Request):
+    """{machine, id}: stop the running turn (the companion kills it) or drop the waiting message. A pc offline cannot
+    be reached: the chat is set idle at once and says so."""
+    try:
+        row, _, f, c = await chat_request(request, True)
+    except (ValueError, AttributeError, TypeError, PermissionError) as e:
+        return chat_error(e)
+    q = f.parent / "queue.json"
+    waiting = "msg" in read_json(q, {}).get(c["id"], {})
+    if waiting or not row["online"]:
+        await asyncio.to_thread(update_state, q, lambda q: q.pop(c["id"], None))
+        await asyncio.to_thread(update_state, f, lambda c: (chat_add(c, "info", "Stopped before it started." if waiting else
+                                                                     f"Stopped here; {row['label']} is offline, so a turn there may still end by itself."),
+                                                            c.update(status="idle")))
+    else:
+        await asyncio.to_thread(update_state, q, lambda q: q.setdefault(c["id"], {}).update(stop=True))
+    return JSONResponse({"ok": True})
+
+
+@server.custom_route("/machine/chats", methods=["GET"])
+async def machine_chats(request: Request):
+    """The companion asks every ~2 s while a chat is active (else ~10 s): new messages for it to run (handed out
+    once), turns to stop, the turns the server thinks run there (a companion that restarted calls them lost), and
+    whether any chat is active."""
+    dev = device.get()
+    mid = dev.get("machine", "")
+    if not mid:
+        return JSONResponse({"work": [], "stop": [], "busy": [], "active": False})
+    q_path, out = CHATS_DIR / mid / "queue.json", {"work": [], "stop": [], "busy": []}
+
+    def change(q):
+        for cid, e in list(q.items()):
+            try:
+                c = read_json(chat_file(mid, cid), None)
+            except ValueError:
+                c = None
+            if not c or dev["name"] not in c.get("tokens", []):
+                if not c:
+                    q.pop(cid)
+                continue
+            if e.get("busy"):
+                out["busy"].append(cid)
+                if e.get("stop"):
+                    out["stop"].append(cid)
+            elif "msg" in e:
+                out["work"].append({"chat": cid, "agent": c["agent"], "folder": c["folder"], "session": c.get("session", ""), **e.pop("msg")})
+                e["busy"] = True
+    if q_path.exists():
+        await asyncio.to_thread(update_state, q_path, change)
+    for w in out["work"]:  # after the queue's lock: update_state's lock is not reentrant
+        await asyncio.to_thread(update_state, chat_file(mid, w["chat"]), lambda c: c.update(status="running"))
+    out["active"] = bool(out["busy"] or out["work"])
+    if time.time() - (read_json(MACHINES_FILE, {}).get(mid) or {}).get("at", 0) > 30:  # online in the Machines list
+        await asyncio.to_thread(mark_machine, dev)
+    return JSONResponse(out)
+
+
+@server.custom_route("/machine/chats/events", methods=["POST"])
+async def machine_chat_events(request: Request):
+    """{chat, events: [{kind, text}], session, done, error}: a turn's output, in small batches; done ends the turn."""
+    dev = device.get()
+    try:
+        b = await request.json()
+        f = chat_file(dev.get("machine", ""), str(b.get("chat", "")))
+        events = [(str(e.get("kind")), str(e.get("text", ""))) for e in (b.get("events") or [])[:500]]
+        if bad := [k for k, _ in events if k not in CHAT_KINDS]:
+            raise ValueError(f"kind must be one of {', '.join(CHAT_KINDS)}, not {bad[0][:20]}")
+    except (ValueError, AttributeError, TypeError) as e:
+        return JSONResponse({"error": str(e) or "send JSON {chat, events}"}, status_code=400)
+    c = await asyncio.to_thread(read_json, f, None)
+    if not c or dev["name"] not in c.get("tokens", []):
+        return JSONResponse({"error": "not a chat of this machine"}, status_code=404)
+
+    def change(c):
+        for k, t in events:
+            if contains_secret(t):
+                t = "(withheld: contains a known secret value)"
+            chat_add(c, k, t)
+        if isinstance(b.get("session"), str) and re.fullmatch(r"[\w.:-]{1,120}", b["session"]):
+            c["session"] = b["session"]
+        if b.get("done") is True:
+            c["status"] = "idle"
+    await asyncio.to_thread(update_state, f, change)
+    if b.get("done") is True:
+        await asyncio.to_thread(update_state, f.parent / "queue.json", lambda q: q.pop(c["id"], None))
+    return JSONResponse({"ok": True})
+
+
 FLAG_KINDS = ("force-push", "rm-outside", "pipe-to-shell", "key-read", "vault-read")
 
 
@@ -4591,7 +4840,8 @@ async def machine_report(request: Request):
                   "maxWorkers": {a: int(n) for a, n in (b.get("maxWorkers") or {}).items() if a in AGENT_OWNERS},
                   "game": str(b.get("game") or "")[:80],
                   "agents": {a: {"yolo": v.get("yolo") is True, "trusted": v.get("trusted") if isinstance(v.get("trusted"), bool) else None,
-                                 "limit": float(v["limit"]) if isinstance(v.get("limit"), (int, float)) else None}
+                                 "limit": float(v["limit"]) if isinstance(v.get("limit"), (int, float)) else None,
+                                 "resets": float(v["resets"]) if isinstance(v.get("resets"), (int, float)) else None}
                              for a, v in (b.get("agents") or {}).items() if a in AGENT_OWNERS and isinstance(v, dict)},
                   "workers": [{k: (w.get(k) if w.get(k) is None or isinstance(w.get(k), (int, float, bool)) else str(w[k])[:300])
                                for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open", "checkpoint", "merged")}

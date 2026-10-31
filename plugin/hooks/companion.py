@@ -5,7 +5,8 @@ Every minute it asks GET /tasks/ready and, when this pc allows workers (off by d
 ready task: a fresh headless session of the task's agent in its own git worktree (workers.py), never a message into
 someone's chat. It hands a worker over at 90% of the agent's usage limit, removes a worktree once its branch is
 merged, and reports the machine's state (POST /machine/report) for the web UI's Machines list. About every 10 s it
-fetches the fixed remote actions its owner queued there (GET /machine/actions). It also trusts the knowledge hooks the
+fetches the fixed remote actions its owner queued there (GET /machine/actions), and the messages of the owner's chats
+with an agent here (GET /machine/chats, every ~2 s while a chat is active; chat.py runs each turn). It also trusts the knowledge hooks the
 agents' own way, turns the agents' native "run without asking" settings on and off (YOLO), and reports hook failures
 the agents log themselves. Its page and local API listen on 127.0.0.1:47321 only; the knowledge web UI shows a
 "This pc" tab when it answers.
@@ -41,6 +42,7 @@ from pathlib import Path
 HOOKS = Path(__file__).resolve().parent
 sys.path.insert(0, str(HOOKS))
 import agent_hooks  # noqa: E402  (the wake code and the session registry)
+import chat  # noqa: E402  (chats from the web UI)
 import project_marker  # noqa: E402
 import self_update  # noqa: E402
 import token_store  # noqa: E402
@@ -755,9 +757,15 @@ def save_settings(change: dict):
 
 
 def usage(agent: str, ws: dict, now: float):
-    """The agent's usage limit in percent, or None (unknown): Claude the higher of its workers' own stream-json output
-    (until that window resets) and an interactive Claude's status line under 15 min old; Codex from its newest rollout of the last 15 min; agy from
-    a registered agy's language server."""
+    """The agent's usage limit in percent, or None (unknown)."""
+    got = usage_info(agent, ws, now)
+    return got[0] if got else None
+
+
+def usage_info(agent: str, ws: dict, now: float):
+    """(percent, window, resets_at) of the agent's fullest usage window, or None (unknown): Claude the higher of its
+    workers' own stream-json output (until that window resets) and an interactive Claude's status line under 15 min
+    old; Codex from its newest rollout of the last 15 min; agy from a registered agy's language server."""
     try:
         if agent == "claude":
             logs = sorted((Path(w["log"]) for w in ws.values() if w.get("agent") == "claude" and w.get("log") and Path(w["log"]).exists()),
@@ -765,15 +773,13 @@ def usage(agent: str, ws: dict, now: float):
             # a worker's reading stays true until its window resets (claude_usage drops those), however old the log
             got = next((g for f in reversed(logs) if (g := workers.claude_usage(str(f), now))), None)
             line = agent_hooks.limits.claude_used(now)
-            return max((x[0] for x in (got, line) if x), default=None)
+            return max((x for x in (got, line) if x), key=lambda x: x[0], default=None)
         if agent == "codex":
             days = [time.localtime(now - d * 86400) for d in (0, 1)]
             files = [f for d in days for f in CODEX.glob(f"sessions/{d.tm_year:04d}/{d.tm_mon:02d}/{d.tm_mday:02d}/rollout-*.jsonl")
                      if now - f.stat().st_mtime < 900]
-            got = agent_hooks.limits.codex_used(str(max(files, key=lambda f: f.stat().st_mtime)), now) if files else None
-            return got[0] if got else None
-        got = agent_hooks.limits.agy_used(agent_hooks.agy_status(), now)
-        return got[0] if got else None
+            return agent_hooks.limits.codex_used(str(max(files, key=lambda f: f.stat().st_mtime)), now) if files else None
+        return agent_hooks.limits.agy_used(agent_hooks.agy_status(), now)
     except Exception:  # no numbers: unknown, which allows one worker
         return None
 
@@ -906,7 +912,8 @@ def run_workers(ready: list, tok: str, now: float, only: str = "") -> dict:
     with LOCK:
         ws = load("workers.json", {})
     s, out = settings(), {"started": [], "waiting": {}, "limitWait": []}
-    lim = {a: usage(a, ws, now) for a in AGENTS if installed(a)}
+    info = {a: usage_info(a, ws, now) for a in AGENTS if installed(a)}
+    lim = {a: (i[0] if i else None) for a, i in info.items()}
     check_workers(ws, tok, now, lim)
     game = workers.game_session()
     for t in ready:
@@ -939,15 +946,17 @@ def run_workers(ready: list, tok: str, now: float, only: str = "") -> dict:
     with LOCK:
         save("workers.json", ws)
     out["limits"] = lim
+    out["resets"] = {a: i[2] for a, i in info.items() if i and isinstance(i[2], (int, float))}
     return out
 
 
-def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None):
+def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, resets=None):
     """The machine's state for the Machines list: settings, game, per agent YOLO, hooks and limit, the workers, and
     why each ready task waits here (the Tasks tab shows it)."""
     yolo, folders, s = load("yolo.json", {}), sorted(project_folders().values()), settings()
     body = {"version": version(), "workersAllowed": s["workersAllowed"], "maxWorkers": s["maxWorkers"], "game": workers.game_session(),
-            "agents": {a: {"yolo": bool(yolo.get(a, {}).get("on")), "trusted": not untrusted(a, folders), "limit": lim.get(a)}
+            "agents": {a: {"yolo": bool(yolo.get(a, {}).get("on")), "trusted": not untrusted(a, folders), "limit": lim.get(a),
+                     "resets": (resets or {}).get(a)}
                        for a in AGENTS if installed(a)},
             "workers": [{**{k: w.get(k) for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open")},
                          "checkpoint": bool(w.get("checkpoint")), "merged": w["status"] == "merged"} for w in ws.values()],
@@ -986,7 +995,7 @@ def one_round(only: str = "") -> dict:
     st["waiting"] = summary["waiting"]
     report_errors(st, tok, now)
     try:
-        report(tok, load("workers.json", {}), summary.pop("limits"), summary.pop("limitWait"), now, summary["waiting"])
+        report(tok, load("workers.json", {}), summary.pop("limits"), summary.pop("limitWait"), now, summary["waiting"], summary.pop("resets"))
     except Exception:  # the next round reports again; the server away is said above
         pass
     with LOCK:
@@ -1274,6 +1283,46 @@ def actions_loop():
         time.sleep(ACTIONS_EVERY)
 
 
+def chats_round() -> bool:
+    """The owner's chats with an agent here: stop what was stopped, call a turn the server thinks runs but this
+    companion does not (it restarted) lost, start a turn per new message. True while a chat is active."""
+    tok = token_store.token()
+    post = lambda body: server("POST", "/machine/chats/events", tok, body)
+    r = server("GET", "/machine/chats", tok)
+    for cid in r.get("stop", []):
+        if not chat.stop(cid):
+            post({"chat": cid, "events": [{"kind": "info", "text": "Stopped (no turn ran here any more)."}], "done": True})
+    for cid in r.get("busy", []):
+        if cid not in chat.RUNNING:
+            post({"chat": cid, "events": [{"kind": "error", "text": "The turn was lost: the companion on this pc restarted."}], "done": True, "error": "lost"})
+            log("error", "A chat turn was lost (the companion restarted)", f"chat {cid}")
+    linked = lambda: {f["path"] for f in folder_links()["linked"]}
+    yolo = lambda agent: bool(load("yolo.json", {}).get(agent, {}).get("on"))
+    for item in r.get("work", []):
+        log("remote", f"Chat message from {item.get('by') or '?'} for {AGENTS.get(item.get('agent'), ('?',))[0]}", f"chat {item.get('chat')} in {item.get('folder')}")
+        chat.start(item, post, log, linked, yolo)
+    return bool(r.get("active") or chat.RUNNING)
+
+
+def chats_loop():
+    """Chats from the web UI, pulled like the actions: every ~2 s while one is active, else every ~10 s."""
+    failed = False
+    while True:
+        active = False
+        try:
+            active = chats_round()
+            failed = False
+        except urllib.error.HTTPError as e:
+            if e.code != 404 and not failed:  # 404: a server older than chats
+                log("error", "Could not fetch chat messages", f"{e}"[:300])
+            failed = True
+        except Exception as e:
+            if not failed:
+                log("error", "Could not fetch chat messages", f"{type(e).__name__}: {e}"[:300])
+            failed = True
+        time.sleep(min(2.0, ACTIONS_EVERY) if active else ACTIONS_EVERY)
+
+
 class LocalServer(ThreadingHTTPServer):
     """One companion per pc: its port is the lock. On Windows SO_REUSEADDR would let a second one bind the same port
     (and both start the same tasks), so there the port is taken exclusively instead."""
@@ -1293,6 +1342,7 @@ def serve():
         sys.exit(f"knowledge companion: {SELF} is taken, so another companion (or program) runs here: {e}")
     threading.Thread(target=loop, daemon=True).start()
     threading.Thread(target=actions_loop, daemon=True).start()
+    threading.Thread(target=chats_loop, daemon=True).start()
     print(f"knowledge companion on {SELF}", flush=True)
     httpd.serve_forever()
 

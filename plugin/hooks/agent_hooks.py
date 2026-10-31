@@ -200,6 +200,12 @@ def take(agent: str, tok: str, tid: str, sid: str, cwd: str) -> str:
     return f"knowledge: no open task {tid} for {NAMES[agent]} in project {project or '?'} (HTTP {code}); tell the user."
 
 
+def quiet() -> bool:
+    """A headless session the companion started (a worker, or a chat turn from the web UI): it may not run the
+    register command (a refused command ends agy's run) and takes no task by 'pak'."""
+    return bool(os.environ.get("KNOWLEDGE_WORKER") or os.environ.get("KNOWLEDGE_CHAT"))
+
+
 def new_tasks(agent: str, tok: str, hook: dict, now=None, wake: bool = False) -> str:
     """Tasks handed to `agent` after this session started, said once: the startup context lists the open ones, but a
     session that runs for hours (or is resumed for days) never sees a task another agent hands over meanwhile. The
@@ -208,6 +214,7 @@ def new_tasks(agent: str, tok: str, hook: dict, now=None, wake: bool = False) ->
     with the companion's start nonce keeps its own task's lease."""
     now = time.time() if now is None else now
     worker = bool(os.environ.get("KNOWLEDGE_WORKER"))
+    webchat = bool(os.environ.get("KNOWLEDGE_CHAT"))  # a chat turn from the web UI: no tasks, no lease (chat=1)
     sid = hook.get("session_id") or hook.get("conversationId") or hook.get("cwd") or os.getcwd()
     # shortcut: two agy sessions without a conversationId in one folder share what they have seen.
     seen_dir = KN_HOME / "tasks-seen"
@@ -228,16 +235,16 @@ def new_tasks(agent: str, tok: str, hook: dict, now=None, wake: bool = False) ->
         extra["start"] = nonce
     try:
         beat = ask_tasks(tok, {**project_query(cwd), "agent": agent, "session": str(sid)[:80], "wake": int(wake), "v": 2,
-                               **({} if worker else {"chat": 1}), **extra, **({"plugin": version} if version else {})})
+                               **({} if worker else {"chat": 1}), **({"claim": 0} if webchat else {}), **extra, **({"plugin": version} if version else {})})
         ids = {m.group(1).strip(): ln for ln in beat.get("tasks", []) if (m := TASK_ID.search(ln))}
     except Exception:  # the next session start says so loudly; a prompt is no place to nag
         beat, ids = {}, None  # still throttled: away from home every prompt would wait for the timeout
-    fresh = [] if ids is None or known is None or worker else [ln for i, ln in ids.items() if i not in known]
+    fresh = [] if ids is None or known is None or worker or webchat else [ln for i, ln in ids.items() if i not in known]
     text = task_text(fresh, agent, beat.get("workers") is True) if fresh else ""
     # results handed back to this agent: said once per session, like new tasks (the start context listed the open ones)
     results = {r["id"]: r["text"] for r in beat.get("results", []) if r.get("id")} if ids is not None else None
     known_results = (seen or {}).get("results")
-    new_results = [] if worker or results is None or known_results is None else [t for i, t in results.items() if i not in known_results]
+    new_results = [] if worker or webchat or results is None or known_results is None else [t for i, t in results.items() if i not in known_results]
     if new_results:
         text = "\n\n".join(t for t in (text, RESULTS_TEXT + "\n".join(new_results)) if t)
     # What the server wants this session to hear or do: said even on the first ask, since a resumed session (agy
@@ -323,7 +330,7 @@ def tasks(agent: str, tok: str):
     register_session(agent, hook)
     worker_turn(hook)
     took = [take(agent, tok, m.group(1), str(hook.get("session_id") or ""), hook.get("cwd") or os.getcwd())
-            for m in PAK.finditer(str(hook.get("prompt") or ""))][:3] if not os.environ.get("KNOWLEDGE_WORKER") else []
+            for m in PAK.finditer(str(hook.get("prompt") or ""))][:3] if not quiet() else []
     text = "\n\n".join(t for t in (*took, new_tasks(agent, tok, hook, wake=True), limits.notice(agent, hook)) if t)
     if text:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": text}}), flush=True)
@@ -497,7 +504,7 @@ def context(agent: str, tok: str):
         worktree = ""
     # agy hooks do not get its server's key; its terminal does. Not a worker: a headless run may not run that command,
     # and a refused command ends agy's whole run
-    reg = register_notice() if agent == "agy" and not os.environ.get("KNOWLEDGE_WORKER") else ""
+    reg = register_notice() if agent == "agy" and not quiet() else ""
     if agent == "agy" and "'pak <ID>'" in ctx:  # its hooks never see the user's words: the take command does it
         ctx += ("\n\nagy: the plugin cannot see what the user types. When the user says 'pak <ID>' (or 'take <ID>'), run this "
                 f"in your terminal first; it takes that task for this conversation and says what to do: {take_command()}")
@@ -558,7 +565,7 @@ def hints(tok: str):
         if conv and registered and state != "registered":
             private_dir()
             asked.write_text("registered", encoding="utf-8")
-        elif conv and not registered and state != "asked" and not os.environ.get("KNOWLEDGE_WORKER"):  # a resumed conversation never saw the start context
+        elif conv and not registered and state != "asked" and not quiet():  # a resumed conversation never saw the start context
             private_dir()
             asked.write_text("asked", encoding="utf-8")
             news = "\n\n".join(t for t in (news, register_notice(again=state == "registered")) if t)

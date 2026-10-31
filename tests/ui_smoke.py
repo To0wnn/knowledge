@@ -5,7 +5,9 @@ Checks what broke before: the page loads without errors; the topic list opens a 
 connected notes on the right; Changes lists lines added/removed. On the map (Map button) a click on a note zooms to it
 and its neighbours (after the layout settled); the neighbours gather in a ring; a click beside the nodes (which usually
 lands on a link) deselects, puts every node back exactly and zooms out; a second click on a note reads it. On a phone
-the lists come first (on the home view the topic cards instead of the topic list) and opening a note scrolls to it. Read-only: it opens notes, it never edits.
+the lists come first (on the home view the topic cards instead of the topic list) and opening a note scrolls to it. The
+Agents cockpit opens with its pills, tools and new chat dialog (skipped on a server older than 0.16). Read-only: it
+opens notes, it never edits or sends.
 
   systemd-run --user --scope -q -p MemoryMax=3G ~/.local/bin/uv run -q --with playwright python tests/ui_smoke.py
 (talks to the container port directly and sends what Traefik sends after the Authentik sign-in: the proxy secret
@@ -221,6 +223,45 @@ async def admin(browser, secret: str) -> None:
     await ctx.close()
 
 
+async def cockpit(browser, devices, secret: str) -> None:
+    """The Agents cockpit (chats with agents on your pcs): opens over the page, its pills, the tools menu and the new
+    chat dialog; on a phone one card and a switcher. Read-only: the dialog is cancelled, nothing is sent. Skipped on a
+    server older than 0.16 (no cockpit yet)."""
+    ctx, pg, errors = await page(browser, secret, viewport={"width": 1440, "height": 900})
+    await pg.wait_for_selector("#map-btn")
+    if not await pg.locator("#cockpit-btn").count():
+        print("skip cockpit (server older than 0.16)")
+        await ctx.close()
+        return
+    await pg.click("#cockpit-btn")
+    await pg.wait_for_function("!$('cockpit').hidden && $('ck-live-n').textContent !== ''", timeout=15000)
+    check(await pg.locator("#cockpit").is_visible() and await pg.locator("#ck-live").is_visible(), "cockpit opens over the page with the live pill")
+    await pg.wait_for_timeout(1500)
+    check(await pg.locator("#ck-canvas .ck-card, #ck-canvas .ck-empty").count() > 0, "cockpit shows chat cards or the empty canvas")
+    pill = await pg.evaluate("[getComputedStyle($('ck-resets')).display, $('ck-resets').textContent]")
+    check(pill[0] == "none" and not pill[1] or pill[0] != "none" and pill[1].startswith("resets "), f"resets pill: a time from a companion's report, else hidden {pill}")
+    await pg.click("#ck-tools-menu summary")
+    labels = await pg.locator("#ck-tools-menu .ck-tools [data-go]").all_inner_texts()
+    check(len(labels) == 6 and "Mission map" in labels[0], f"cockpit tools menu lists its tools {labels}")
+    await pg.click("#ck-tools-menu summary")
+    await pg.click("#ck-new")
+    await pg.wait_for_selector("#ck-new-dialog[open]")
+    check(await pg.locator("#ck-machine option").count() >= 0 and await pg.locator("#ck-agent").is_visible(), "new chat dialog: pc, agent, folder")
+    await pg.click("#ck-new-cancel")
+    await pg.keyboard.press("Escape")
+    check(await pg.evaluate("$('cockpit').hidden"), "Esc closes the cockpit")
+    check(not errors, f"no page errors in the cockpit {errors[:2]}")
+    await ctx.close()
+    ctx, pg, errors = await page(browser, secret, **devices["iPhone 14"])
+    await pg.wait_for_selector("#cockpit-btn")
+    await pg.tap("#cockpit-btn")
+    await pg.wait_for_timeout(2500)
+    check(await pg.evaluate("document.documentElement.scrollWidth <= screen.width && [...document.querySelectorAll('.ck-card')].filter(c => c.offsetParent).length <= 1"),
+          "phone cockpit: one chat at a time, fits the screen")
+    check(not errors, f"no page errors in the phone cockpit {errors[:2]}")
+    await ctx.close()
+
+
 async def csp(browser, secret: str) -> None:
     """The app under its real Content-Security-Policy: the map and a note render, nothing is blocked."""
     for path in ("/ui", "/ui/admin"):
@@ -247,6 +288,7 @@ async def main() -> None:
         await search(browser, secret)
         await phone(browser, p.devices, secret)
         await admin(browser, secret)
+        await cockpit(browser, p.devices, secret)
         await browser.close()
     print("ok" if not failures else f"{len(failures)} failed")
     sys.exit(1 if failures else 0)
