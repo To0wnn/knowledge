@@ -970,6 +970,56 @@ def needs_contract(tmp, ck, fr, raw, heard):
         call("knowledge_edit", {"path": path, "old_string": line(i), "new_string": ""}, fr)
 
 
+def flow_contract(tmp, ck, fr, raw, heard):
+    """A result handed back (or a hand-over) to a person needs them: on the board and on Matrix, never started by
+    itself. Cancel turns a task into a result for its requester, and what starts after it waits instead of starting."""
+    ui = lambda path, body=None, h=ck: raw("POST" if body is not None else "GET", path, None if body is None else json.dumps(body),
+                                          {**h, "X-Knowledge-UI": "1", "Content-Type": "application/json"})
+    board = lambda: {i["key"]: i for i in json.loads(ui("/ui/api/board")[2])["items"]}
+    rows = lambda: {t["id"]: t for t in json.loads(ui("/ui/api/tasks")[2])["tasks"] if t["project"] == "garden"}
+    wait = lambda cond, t=8: next((True for _ in range(int(t / 0.2)) if cond() or time.sleep(0.2)), cond())
+    state = tmp / "needs_notified.json"
+    assert ui("/ui/api/admin/settings", {"needs_per_hour": 6})[0] == 200
+    assert wait(state.exists)
+    time.sleep(2.5)  # past the quiet window of the board polls before
+    path = "garden-memory/project_tasks.md"
+    lines = ["- [Sam, FL-1-done]: the beds are built",
+             "- [Claude, FL-2-done]: for an agent",
+             "- open until 2099-01-01 [Codex, FL-3] from Sam, start now: build the fence",
+             "- open until 2099-01-01 [Codex, FL-4] from Sam, start after FL-3: paint the fence",
+             "- open until 2099-01-01 [Codex, FL-5-cont] from Sam, start after approval: go on with FL-5"]
+    assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": "\n".join(lines) + "\n## Keuzes"}, fr)[0]
+    said = lambda tid: [m for m in heard if m.startswith(f"Knowledge needs you: {tid} ")]
+    assert wait(lambda: said("FL-1-done")), heard
+    assert said("FL-1-done")[0].endswith("https://kn.example/ui#/inbox"), said("FL-1-done")
+    assert wait(lambda: said("FL-5-cont")) and not said("FL-2-done"), heard
+    b = board()
+    r = b["task:garden/FL-1-done"]
+    assert r["col"] == "needs" and r["result"] and r["line"] == "result for Sam: the beds are built", r
+    assert b["task:garden/FL-2-done"]["col"] == "done", "a result for an agent reaches it at its next turn"
+    assert b["handover:garden/FL-5-cont"]["line"].startswith("handed over to Codex for Sam"), b["handover:garden/FL-5-cont"]
+    ready = {t["id"] for t in json.loads(http("GET", "/tasks/ready", token=fr)[1])["tasks"]}
+    assert not {"FL-1-done", "FL-2-done"} & ready and "FL-3" in ready, ready
+    # Cancel: owner or admin only; the line becomes a result for its requester in the same place.
+    assert ui("/ui/api/task/cancel", {"project": "garden", "id": "NOPE"})[0] == 404
+    assert b["task:garden/FL-3"]["can_cancel"] and rows()["FL-3"]["can_cancel"]
+    st, _, body = ui("/ui/api/task/cancel", {"project": "garden", "id": "FL-3", "reason": "no fence\nafter all"})
+    assert st == 200, body
+    text = (tmp / "projects/garden/memory/project_tasks.md").read_text()
+    assert "- [Sam, FL-3-done]: cancelled by alice: no fence after all\n" in text and "[Codex, FL-3]" not in text, text
+    r = rows()
+    assert not r["FL-4"]["startable"] and r["FL-4"]["waiting_reason"].startswith("FL-3 was cancelled"), r["FL-4"]
+    b = board()
+    assert b["task:garden/FL-4"]["col"] == "needs" and b["task:garden/FL-4"]["blocked"], b["task:garden/FL-4"]
+    assert b["task:garden/FL-3-done"]["line"].startswith("result for Sam: cancelled by alice"), b["task:garden/FL-3-done"]
+    assert "task-cancel" in (tmp / "audit.log").read_text()
+    for line in ("- [Sam, FL-1-done]: the beds are built", "- [Claude, FL-2-done]: for an agent", "- [Sam, FL-3-done]: cancelled by alice: no fence after all",
+                 lines[3], lines[4]):
+        assert not call("knowledge_edit", {"path": path, "old_string": line + "\n", "new_string": ""}, fr)[0], line
+    assert ui("/ui/api/admin/settings", {"needs_per_hour": 0})[0] == 200
+    assert wait(lambda: not state.exists())
+
+
 def no_held(beat: dict) -> dict:
     """A turn's answer without the lease notices (tasks other sessions hold): for checks about other notices."""
     return {**beat, "notices": [n for n in beat["notices"] if not n["id"].startswith("held-")]}
@@ -2014,6 +2064,7 @@ def main():
         board_contract(tmp, ck, fr, raw, er, et)
         needs_contract(tmp, ck, fr, raw, heard)
         approvals_contract(tmp, ck, fr, raw, er, et)
+        flow_contract(tmp, ck, fr, raw, heard)
         mission_contract(tmp, ck, fr, raw, er)
         # The folder link (.knowledge-project, skill knowledge-init): her token now sees two projects, so the folder picks.
         assert "not linked to a project" in http("GET", "/context/1?project=/home/erin/stuff", token=et)[1]

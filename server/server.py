@@ -1844,6 +1844,7 @@ def project_tasks(project: str) -> tuple[list[dict], list[dict]]:
                              "id": d.group(2).strip(), "text": d.group(3).strip()})
     # a hand-over <ID>-cont keeps <ID> open for "start after <ID>" until <ID>-done is there
     open_ids, done_ids = {t["id"] for t in tasks} | {CONT.sub("", t["id"]) for t in tasks}, {b["id"] for b in back}
+    cancelled = {b["id"] for b in back if CANCELLED.match(b["text"])}  # cancel_task's result: what waits on it must not start
     authors, approvals, wakes, leases = (read_json(f, {}).get(project, {}) for f in (TASK_AUTHORS, TASK_APPROVALS, TASK_WAKES, TASK_LEASES))
     today, now = date.today(), time.time()
     for t in tasks:
@@ -1862,6 +1863,7 @@ def project_tasks(project: str) -> tuple[list[dict], list[dict]]:
         why = [r for r, waits in (
             ("waits for approval", start == "after approval" and not approved),
             (f"waits for {after}", after and after in open_ids and f"{after}-done" not in done_ids),
+            (f"{after} was cancelled: change or remove this line", after and f"{after}-done" in cancelled),
             (f"starts {when.isoformat() if when else ''}", when and when > today),
             (f"waits for approval: written by {by or 'an unknown writer'}", start != "after approval" and not approved and not trusted),
         ) if waits]
@@ -1873,6 +1875,7 @@ def project_tasks(project: str) -> tuple[list[dict], list[dict]]:
 
 
 CONT = re.compile(r"(?:-cont)+$", re.I)  # KN-1-cont-cont continues KN-1
+CANCELLED = re.compile(r"cancelled by ", re.I)  # the text of a result line cancel_task writes
 
 
 STALE_HANDBACK_DAYS = 7  # a result nobody read and removed this long is a lint finding
@@ -4552,6 +4555,7 @@ def task_rows() -> list[dict]:
         approver, leases = may_approve(name), read_json(TASK_LEASES, {}).get(name, {})
         rows += [{**{k: t[k] for k in ("project", "path", "line", "owner", "id", "claimed", "text", "from", "start", "legacy",
                                         "author", "startable", "waiting_reason", "stalled", "approved")},
+                  "can_cancel": approver,
                   "runs": task_where(name, t, leases.get(t["id"]), now) if t["startable"] else "",
                   "due": t["due"].isoformat() if t["due"] else "", "overdue": bool(t["due"] and t["due"] < today),
                   "done": False, "can_approve": approver and t["needs_approval"]} for t in tasks]
@@ -5004,11 +5008,20 @@ def board_items() -> list[dict]:
     working = {(i["project"], i["id"]) for i in items if i["kind"] == "worker" and i["col"] == "running"}
     for t in task_rows():
         agent = owner_agent(t["owner"])
+        key = f"task:{t['project']}/{t['id']}"
+        sig = hashlib.sha256(f"{t['line']}|{t.get('stalled')}|{t['done']}".encode()).hexdigest()[:16]
+        to_person = t["done"] and not agent or not t["done"] and CONT.search(t["id"]) and t["from"] and not owner_agent(t["from"])
+        if to_person:  # handed back (or over) to a person: they read it, then remove the line; it never starts anything
+            what = (f"result for {t['owner']}: " if t["done"] else f"handed over to {t['owner']} for {t['from']}: ") + t["text"][:140]
+            items.append({"kind": "task", "col": "needs", "id": t["id"], "agent": agent, "project": t["project"], "path": t["path"],
+                          "title": f"{t['id']} · {t['text'][:120]}", "line": what, "at": t.get("since") or 0, "owner": t["owner"],
+                          "key": key if t["done"] else f"handover:{t['project']}/{t['id']}", "sig": sig, "result": True})
+            if t["done"]:
+                continue
         if not agent or (t["project"], t["id"]) in working:  # a person's line is not an agent's work; a running worker shows it
             continue
         task = {"kind": "task", "id": t["id"], "agent": agent, "project": t["project"], "title": f"{t['id']} · {t['text'][:120]}",
-                "path": t["path"], "line": "", "at": 0, "owner": t["owner"], "key": f"task:{t['project']}/{t['id']}",
-                "sig": hashlib.sha256(f"{t['line']}|{t.get('stalled')}|{t['done']}".encode()).hexdigest()[:16]}
+                "path": t["path"], "line": "", "at": 0, "owner": t["owner"], "key": key, "sig": sig, "can_cancel": t.get("can_cancel", False)}
         if t["done"]:
             if now - (t.get("since") or 0) < BOARD_DONE:
                 items.append({**task, "col": "done", "line": f"handed back to {t['owner']}", "at": t.get("since") or 0})
@@ -5016,6 +5029,8 @@ def board_items() -> list[dict]:
             items.append({**task, "col": "needs", "line": "waits for your approval", "approve": True})
         elif t["stalled"]:
             items.append({**task, "col": "needs", "line": "woken, but nobody took it within 30 minutes"})
+        elif "was cancelled" in t["waiting_reason"]:
+            items.append({**task, "col": "needs", "line": t["waiting_reason"], "blocked": True})
         else:
             held = t["runs"].startswith(("running in", "taken by"))
             hosts = [{"machine": r["id"], "label": r["label"]} for r in rows if t["startable"] and not held and r["online"]
@@ -5041,7 +5056,7 @@ async def ui_board_dismiss(request: Request):
     try:
         b = await request.json()
         key, sig = str(b.get("key", "")), str(b.get("sig", ""))
-        if not user or not re.fullmatch(r"(chat|worker|task):[\w./-]{1,200}", key) or not 0 < len(sig) <= 80:
+        if not user or not re.fullmatch(r"(chat|worker|task|handover):[\w./-]{1,200}", key) or not 0 < len(sig) <= 80:
             raise ValueError("send JSON {key, sig} of a board item")
     except (ValueError, AttributeError) as e:
         return JSONResponse({"error": str(e)}, status_code=400)
@@ -5083,7 +5098,7 @@ def needs_check(now: float) -> int:
         tok = device.set(user_device(user))
         try:
             mine = [i for i in board_items() if i["col"] == "needs"
-                    and not (i["kind"] == "task" and not i.get("approve"))]  # a stalled task has its own notice (stalled_check)
+                    and not (i["kind"] == "task" and not (i.get("approve") or i.get("result") or i.get("blocked")))]  # a stalled task has its own notice (stalled_check)
         finally:
             device.reset(tok)
         needs.update((i["key"], i) for i in mine)
@@ -5530,6 +5545,33 @@ async def ui_task_approve(request: Request):
     await asyncio.to_thread(update_state, TASK_APPROVALS, lambda d: d.setdefault(project, {}).update({tid: approval}))
     audit("task-approve", f"{project}/{tid}")
     return JSONResponse({"ok": True})
+
+
+@server.custom_route("/ui/api/task/cancel", methods=["POST"])
+async def ui_task_cancel(request: Request):
+    """{"project", "id", "reason"}: the project's owner or an admin cancels an open task. Its line becomes a result for
+    its requester, "[<requester>, <ID>-done]: cancelled by <user>: <reason>", in one edit: the requester hears it like
+    any result, and a task that starts after <ID> waits for a decision instead of starting as on a plain removal."""
+    try:
+        body = await request.json()
+        project, tid, reason = str(body.get("project", "")), str(body.get("id", "")), " ".join(str(body.get("reason", "")).split())[:300]
+    except (ValueError, AttributeError):
+        return JSONResponse({"error": "send JSON {project, id, reason}"}, status_code=400)
+    if project not in PROJECTS or not in_scope(PROJECTS[project][1] + "/"):
+        return JSONResponse({"error": f"unknown project {project}"}, status_code=404)
+    if not may_approve(project):
+        return JSONResponse({"error": "only the project's owner or an admin may cancel a task"}, status_code=403)
+    if not (t := next((t for t in (await asyncio.to_thread(project_tasks, project))[0] if t["id"] == tid), None)):
+        return JSONResponse({"error": f"no open task {tid} in {project}"}, status_code=404)
+    user = device.get().get("user", "") or "?"
+    lead = t["line"][:len(t["line"]) - len(t["line"].lstrip())]
+    done = f"{lead}- [{t['from'] or t['owner']}, {tid}-done]: cancelled by {user}" + (f": {reason}" if reason else "")
+    try:
+        await knowledge_edit(t["path"], t["line"], done)
+    except (ToolError, OSError) as e:
+        return JSONResponse({"error": str(e)}, status_code=409)
+    audit("task-cancel", f"{project}/{tid}")
+    return JSONResponse({"ok": True, "line": done})
 
 
 @server.custom_route("/ui/api/task/done", methods=["POST"])
