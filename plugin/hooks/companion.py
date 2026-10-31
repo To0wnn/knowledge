@@ -198,26 +198,6 @@ def rfc3339(s: str) -> float:
         return 0.0
 
 
-def alive(pid: int) -> bool:
-    if os.name == "nt":  # os.kill on Windows terminates the process: ask with OpenProcess instead
-        import ctypes
-        k = ctypes.windll.kernel32
-        h = k.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
-        if not h:
-            return False
-        code = ctypes.c_ulong()
-        k.GetExitCodeProcess(h, ctypes.byref(code))
-        k.CloseHandle(h)
-        return code.value == 259  # STILL_ACTIVE
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
 def sessions(agent: str, now: float) -> list:
     """The interactive sessions of an agent here, newest first (shown on the page; tasks never go into them)."""
     out = []
@@ -818,8 +798,11 @@ def check_workers(ws: dict, tok: str, now: float, lim: dict):
     worktrees of merged ones."""
     for w in ws.values():
         if w["status"] == "running":
-            p = workers.PROCS.get(w["pid"])  # started by this companion: its exit code (and no zombie); else by pid
-            code = p.poll() if p else (None if alive(w["pid"]) else 0)
+            p = workers.PROCS.get(w["pid"])  # started by this companion: its exit code (and no zombie)
+            if p:
+                code = p.poll()
+            else:  # started before a restart of the companion or the pc: by its pid and start time, its exit code unknown
+                code = None if workers.running(w) else "unknown"
             if code is not None:
                 workers.PROCS.pop(w["pid"], None)
                 w.update(status="stopped" if w.get("told") else "finished" if code == 0 else "failed", ended=now, code=code)
@@ -838,7 +821,7 @@ def check_workers(ws: dict, tok: str, now: float, lim: dict):
                 log("worker", f"{AGENTS[w['agent']][0]}: usage limit at 90%, the worker for {w['id']} hands over to {target}",
                     f"Stopped in {workers.GRACE // 60} min if it has not ended")
             elif w.get("told") and now - w["told"] >= workers.GRACE:
-                workers.kill(w["pid"], hard=True)
+                workers.kill(w, hard=True)
                 log("worker", f"{AGENTS[w['agent']][0]}: the worker for {w['id']} was stopped (usage limit)", "")
         elif w["status"] != "merged" and w.get("worktree") and not shared_running(ws, w) and workers.merged(w):
             w["status"], w["result"] = "merged", workers.remove(w)
@@ -958,7 +941,7 @@ def run_action(a: dict) -> str:
             w = next((w for w in load("workers.json", {}).values() if w["id"] == args["id"] and w["status"] == "running"), None)
         if not w:
             raise RuntimeError(f"no running worker for {args['id']}")
-        workers.kill(w["pid"])
+        workers.kill(w)
         return f"stopped the worker for {args['id']}"
     if act == "rollback":
         with LOCK:

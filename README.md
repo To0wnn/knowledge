@@ -87,7 +87,8 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   are all it knows. Workers are off on a new pc ("Workers allowed" in the companion's settings), at most one per
   agent unless its maximum says more, one while its usage limit is unknown, none while a Wolf game session runs (its
   API socket, when readable; Sunshine is not detected). A worker that ended without finishing its task is not started
-  again for 6 hours unless asked. Once the requester merged the branch into main or master, the companion removes the
+  again for 6 hours unless asked. The companion knows a worker by its pid and that process's start time,
+  so after a reboot a recorded worker counts as ended and a stop never hits a reused pid. Once the requester merged the branch into main or master, the companion removes the
   worktree; unmerged a week after the worker ended: lint `worker_unmerged`. While an online pc runs an agent's workers
   for the project (workers allowed, a maximum above 0, the agent installed, a folder linked), that agent's interactive
   sessions (`chat=1`) take no lease: they hear a new task once as "runs in workers" and where one runs; when the user

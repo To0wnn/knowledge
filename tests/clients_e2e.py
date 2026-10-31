@@ -980,6 +980,19 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         st, _, body = call("POST", "/local/api/tick", {})
         check(not [c for c in argvs(n) if c["env"]["KNOWLEDGE_WORKER"] == cx_id] and "not started again" in json.loads(body)["waiting"].get(f"garden/{cx_id}", ""),
               "workers: a task whose worker ended without finishing it is not started again every minute", body[:500])
+        # A worker recorded before a reboot: its pid now names another process, which is never counted as it nor killed.
+        other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        try:
+            ws = json.loads(wfile.read_text(encoding="utf-8"))
+            ws["garden/REBOOT-1"] = {**ws[f"garden/{cx_id}"], "id": "REBOOT-1", "status": "running", "pid": other.pid, "ident": "before the reboot",
+                                     "told": time.time() - 600, "worktree": "", "branch": ""}
+            wfile.write_text(json.dumps(ws), encoding="utf-8")
+            call("POST", "/local/api/tick", {})
+            rec = json.loads(wfile.read_text(encoding="utf-8"))["garden/REBOOT-1"]
+            check(rec["status"] == "stopped" and rec["code"] == "unknown" and other.poll() is None,
+                  "workers: a record whose pid now names another process (a reboot) ends, and that process is never killed", json.dumps(rec)[:300])
+        finally:
+            other.kill()
         # A knowledge write makes the companion look at once (the wake hook).
         code, out_w, err = run([sys.executable, str(hooks / "agent_hooks.py"), "wake", "claude"],
                                json.dumps({"session_id": "s", "cwd": str(repo), "tool_name": "mcp__knowledge__knowledge_edit"}), env)

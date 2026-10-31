@@ -175,15 +175,55 @@ def prompt(task: dict, agent: str, machine: str, where: dict) -> str:
             "beyond that work.")
 
 
-def kill(pid: int, hard: bool = False):
-    """Stop a worker and the processes it started (its own process group / tree)."""
+def identity(pid: int) -> str:
+    """Who process `pid` is: its start time (on Linux with the boot id), '' when there is no such live process. A worker
+    record keeps it, so a pid reused after a reboot, or by another process, never counts as the worker."""
+    try:
+        if os.name == "nt":
+            import ctypes
+            from ctypes import wintypes
+            k = ctypes.windll.kernel32
+            h = k.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+            if not h:
+                return ""
+            try:
+                code, times = wintypes.DWORD(), [wintypes.FILETIME() for _ in range(4)]
+                if not k.GetExitCodeProcess(h, ctypes.byref(code)) or code.value != 259:  # STILL_ACTIVE
+                    return ""
+                if not k.GetProcessTimes(h, *(ctypes.byref(t) for t in times)):
+                    return ""
+                return str(times[0].dwHighDateTime << 32 | times[0].dwLowDateTime)  # its creation time
+            finally:
+                k.CloseHandle(h)
+        if sys.platform.startswith("linux"):
+            fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+            if fields[0] in ("Z", "X"):  # ended, not yet reaped
+                return ""
+            return Path("/proc/sys/kernel/random/boot_id").read_text().strip() + ":" + fields[19]  # starttime, field 22
+        r = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL)
+        return " ".join(r.stdout.split())
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        return ""
+
+
+def running(w: dict) -> bool:
+    """The worker of record `w` still runs: its pid is the same process it was at the start (never a bare pid)."""
+    return bool(w.get("ident")) and identity(w["pid"]) == w["ident"]
+
+
+def kill(w: dict, hard: bool = False):
+    """Stop the worker of record `w` and the processes it started (its own process group / tree); nothing when that
+    process is gone, so a reused pid is never hit."""
+    if not running(w):
+        return
+    pid = w["pid"]
     if os.name == "nt":  # a detached console process has no window to close: only /F stops it
         r = subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True, text=True, timeout=30)
         if r.returncode and "not found" not in (r.stdout + r.stderr):
             raise RuntimeError(f"taskkill failed: {(r.stderr or r.stdout).strip()[:200]}")
         return
     try:
-        if os.getpgid(pid) != pid:  # not the session leader the companion started: a reused pid, leave it alone
+        if os.getpgid(pid) != pid:  # not the session leader the companion started: leave it alone
             return
         os.killpg(pid, signal.SIGKILL if hard else signal.SIGTERM)
     except ProcessLookupError:
@@ -204,8 +244,9 @@ def start(agent: str, task: dict, machine: str, where: dict, yolo: bool, nonce: 
         p = subprocess.Popen(argv(agent, exe, prompt(task, agent, machine, where), yolo, where), cwd=where["cwd"],
                              stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, env=env, **kw)
     PROCS[p.pid] = p
+    ident = identity(p.pid)
     follow = f"Get-Content -Wait '{log}'" if os.name == "nt" else f"tail -f '{log}'"
-    return {"id": task["id"], "project": task["project"], "agent": agent, "pid": p.pid, "started": time.time(), "status": "running",
+    return {"id": task["id"], "project": task["project"], "agent": agent, "pid": p.pid, "ident": ident, "started": time.time(), "status": "running",
             "nonce": nonce, "yolo": yolo, "log": str(log), "checkpoint": bool(ckpt), **where,
             "open": f"{agent} worker for {task['id']} (pid {p.pid}) in {where['cwd']}" + (f", branch {where['branch']}" if where.get("branch") else "")
                     + f". It runs headless: follow its output with {follow}; when it is done, look at the branch with git log."}
@@ -333,6 +374,20 @@ def self_test():
         assert not Path(outer).exists(), "a calling git hook's index is never touched"
         del os.environ["GIT_INDEX_FILE"]
     assert base_id("KN-3-cont-cont") == "KN-3"
+    # A worker is its pid plus that process's start: a pid that now names another process is never it, never killed.
+    sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=os.name != "nt")
+    try:
+        rec = {"pid": sleeper.pid, "ident": identity(sleeper.pid)}
+        assert rec["ident"] and running(rec), rec
+        other = {**rec, "ident": "another process"}
+        assert not running(other) and not running({"pid": sleeper.pid})
+        kill(other, hard=True)
+        assert sleeper.poll() is None, "a record whose process is gone never kills what now has its pid"
+        kill(rec, hard=True)
+        sleeper.wait(10)
+        assert not running(rec) and identity(sleeper.pid) == ""
+    finally:
+        sleeper.kill()
     a = argv("claude", "claude", "do\nit", False, {"cwd": "/x"})
     assert a[:3] == ["claude", "-p", "do / it"] and "acceptEdits" in a and "stream-json" in a
     assert "--dangerously-skip-permissions" in argv("agy", "agy", "x", True, {"cwd": "/x"})
