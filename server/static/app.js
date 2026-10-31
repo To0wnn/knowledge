@@ -40,6 +40,12 @@ DOMPurify.addHook("afterSanitizeAttributes", (n) => {
 });
 const renderMd = (text) => DOMPurify.sanitize(marked.parse(text, { gfm: true }), PURIFY);
 const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* blocked */ } } };
+// A new history entry for a route (shell.js); the count lets Back stay inside the app instead of leaving it.
+const pushHash = (h) => { if (location.hash !== h) history.pushState({ n: (history.state?.n || 0) + 1 }, "", h); };
+// A note path inside a route or link: each part encoded, so "?", "#", "%", spaces and accents survive a refresh and
+// match location.hash as the browser keeps it; parseRoute decodes it again.
+const encPath = (p) => p.split("/").map(encodeURIComponent).join("/");
+const noteRoute = (path, view = "notes") => `#/${view}/${encPath(path)}`;
 
 let data = { nodes: [], links: [] };
 let byId = new Map(), neighbors = new Map(), slugToId = new Map(), clusterColor = new Map();
@@ -282,7 +288,7 @@ async function loadGraph() {
       clearTimeout(hoverTimer);
       if (!selected) hoverTimer = setTimeout(() => (hover ? gather(hover, 0.3) : releaseFocus()), hover ? 150 : 250);
     })
-    .onNodeClick((n) => (selected === n.id ? setMap(false) : openNote(n.id))) // a second click reads it
+    .onNodeClick((n) => (selected === n.id ? go(noteRoute(n.id)) : openNote(n.id))) // a second click reads it
     .onBackgroundClick(() => deselect())
     .onLinkClick(() => deselect()); // lines cross the empty space; a click on one is a click beside the nodes
   // More room than the force-graph defaults (-30 / 30) so labels do not pile up.
@@ -317,16 +323,16 @@ async function loadGraph() {
 }
 
 // ---------------------------------------------------------------- side panel controls
+// The project of the knowledge views: a picker in the sidebar and in the phone's More sheet, with its note count.
 function renderProjects() {
-  const box = $("projects"); box.replaceChildren();
-  [...PROJECTS, ALL].forEach((p, i) => {
-    const b = el("button"); b.title = p === ALL ? "All projects on one map, with the links between them (0)" : `${shown(p)} (${i + 1})`;
-    b.setAttribute("aria-pressed", String(p === project));
-    b.append(p === ALL ? "All" : shown(p), el("span", "n", String(p === ALL ? data.nodes.length : data.nodes.filter((x) => x.project === p).length)));
-    b.onclick = () => switchProject(p);
-    box.append(b);
-  });
-  box.querySelector('[aria-pressed="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" }); // in sight when scrolled
+  for (const box of document.querySelectorAll(".project-pick")) {
+    box.replaceChildren(...[...PROJECTS, ALL].map((p) => {
+      const o = el("option", null, `${p === ALL ? "All projects" : shown(p)} · ${p === ALL ? data.nodes.length : data.nodes.filter((x) => x.project === p).length}`);
+      o.value = p; return o;
+    }));
+    box.value = project;
+    box.onchange = () => switchProject(box.value);
+  }
 }
 
 function switchProject(p, refit = true) {
@@ -342,8 +348,8 @@ function switchProject(p, refit = true) {
   else if (!current) homeView();
   if ($("q").value.trim()) runSearch();
   loadLint(!$("tab-lint").hidden);
-  loadTasks(!$("tab-tasks").hidden);
   loadRecent();
+  paintHead();
 }
 
 // Every topic of the project with its notes, biggest first; the topic of the open note is unfolded. On the map,
@@ -381,23 +387,27 @@ function renderTopics() {
 }
 
 // The middle column shows the note, or the map of the project instead.
+// The Map view (#/map) and the Notes view share the lists and the right column; shell.js switches between them.
 function setMap(on) {
-  mapOn = on; $("map-btn").setAttribute("aria-pressed", String(on)); store.set("kn_map", on ? "1" : "0"); // kept over a reload
+  mapOn = on;
   $("graph").hidden = !on; $("note").hidden = on;
   if (current) renderSide();
   if (Graph) { Graph.linkDirectionalParticles(Graph.linkDirectionalParticles()); on ? Graph.resumeAnimation() : Graph.pauseAnimation(); }
   if (!on) return;
   requestAnimationFrame(() => { // once the map has its size
+    if (!Graph) return; // the map data is still loading: loadGraph sizes it
     Graph.width($("graph").clientWidth).height($("graph").clientHeight);
     if (selected) { gather(selected, 1).then(zoomToFocus); if (settling) zoomToFocus.again = true; } else Graph.zoomToFit(400, 40);
   });
 }
-$("map-btn").onclick = () => setMap(!mapOn);
-
 // Theme: Auto (the system's), Light or Dark; theme.js applies the stored pick before the page paints.
+// The sidebar has it as an icon, the phone's More sheet as a labelled button.
 const THEMES = ["auto", "light", "dark"];
-const showTheme = () => { $("theme-btn").textContent = `Theme: ${{ auto: "Auto", light: "Light", dark: "Dark" }[document.documentElement.dataset.theme || "auto"]}`; };
-$("theme-btn").onclick = () => {
+const showTheme = () => {
+  const name = `Theme: ${{ auto: "Auto", light: "Light", dark: "Dark" }[document.documentElement.dataset.theme || "auto"]}`;
+  for (const b of document.querySelectorAll(".theme-btn")) { b.title = name; b.setAttribute("aria-label", name); if (!b.querySelector("svg")) b.textContent = name; }
+};
+for (const b of document.querySelectorAll(".theme-btn")) b.onclick = () => {
   const next = THEMES[(THEMES.indexOf(document.documentElement.dataset.theme || "auto") + 1) % THEMES.length];
   if (next === "auto") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = next;
   store.set("kn_theme", next); showTheme(); themeChanged();
@@ -415,11 +425,11 @@ function splitFront(text) {
 
 const ago = (sec) => { const d = Date.now() / 1000 - sec; return d < 90 ? "just now" : d < 3600 ? `${Math.round(d / 60)} min ago` : d < 86400 ? `${Math.round(d / 3600)} h ago` : new Date(sec * 1000).toLocaleDateString(); };
 
-// Clicking empty canvas clears the selection and the #note in the URL, so a refresh opens nothing.
+// Clicking empty canvas clears the selection and the note in the URL, so a refresh opens nothing.
 function deselect({ push = true } = {}) {
   if (editing) return; // keep unsaved edits on screen
   selected = null; current = null; setFocus(null); animateHover();
-  if (push && location.hash) history.pushState(null, "", location.pathname + location.search);
+  if (push && (shellRoute.view === "notes" || shellRoute.view === "map")) pushHash(mapOn ? "#/map" : "#/notes"); // other views have no note in their route
   $("note").replaceChildren(el("div", "note-empty muted", "Pick a note from the list or search."));
   $("side").replaceChildren(); markActive();
   homeView();
@@ -509,8 +519,11 @@ async function openNote(id, { push = true, find = null } = {}) {
   try { note = await api(`/ui/api/note?path=${encodeURIComponent(id)}`); } catch (e) { $("note").textContent = e.message; return false; }
   const p = projectOf(note.path);
   if (p !== "shared" && p !== project && !allMode()) switchProject(p, false); // the All map stays the All map
-  if (push && decode(location.hash.slice(1)) !== note.path) history.pushState(null, "", `#${note.path}`);
   current = note; document.body.classList.remove("home");
+  if (push) { // its route; from another view (a task, a change, a lint finding) this shows the Notes view
+    pushHash(noteRoute(note.path, mapOn ? "map" : "notes"));
+    if (shellRoute.view !== (mapOn ? "map" : "notes")) applyRoute();
+  }
   selected = byId.has(note.path) ? note.path : null; setFocus(selected); markActive(); if (Graph) animateHover(6000);
   const n = byId.get(note.path);
   if (mapOn && n && n.x != null) {
@@ -521,7 +534,7 @@ async function openNote(id, { push = true, find = null } = {}) {
   } else if (Graph) releaseFocus({ instant: !mapOn }); // no ring of the previous note
   renderNote();
   if (find) markInNote(find);
-  else if (matchMedia("(max-width: 720px)").matches && push) $(mapOn ? "side" : "note").scrollIntoView({ behavior: calm ? "auto" : "smooth" }); // phone: below the list
+  else if (matchMedia("(max-width: 699.98px)").matches && push) $(mapOn ? "side" : "note").scrollIntoView({ behavior: calm ? "auto" : "smooth" }); // phone: below the list
   return true;
 }
 
@@ -548,7 +561,7 @@ function renderNote() {
   // [[slug]] -> internal link to that memo, when it exists
   const linked = body.replace(/\[\[([a-z0-9][a-z0-9_-]*)\]\]/g, (all, slug) => {
     const target = slugToId.get(slug.replace(/-/g, "_"));
-    return target ? `[${slug}](#${target})` : all;
+    return target ? `[${slug}](#${encPath(target)})` : all;
   });
   const pane = $("note"); pane.replaceChildren();
   const head = el("div", "note-head");
@@ -556,7 +569,7 @@ function renderNote() {
   if (n) { const pill = el("span", "pill", n.cluster || n.group); pill.style.borderColor = nodeColor(n); head.append(pill); }
   const tools = el("div", "note-tools");
   const copy = el("button", "ghost small", "Copy link");
-  copy.onclick = () => navigator.clipboard?.writeText(`${location.origin}/ui#${note.path}`).then(() => { copy.textContent = "Copied"; setTimeout(() => (copy.textContent = "Copy link"), 1500); });
+  copy.onclick = () => navigator.clipboard?.writeText(`${location.origin}/ui${noteRoute(note.path)}`).then(() => { copy.textContent = "Copied"; setTimeout(() => (copy.textContent = "Copy link"), 1500); });
   tools.append(copy);
   if (note.writable) { const edit = el("button", "ghost small", touch ? "Edit" : "Edit (E)"); edit.onclick = startEdit; tools.append(edit); }
   const hist = el("button", "ghost small", "History"); hist.onclick = () => showHistory(); tools.append(hist);
@@ -577,7 +590,7 @@ function renderSide() {
     const card = el("div", "map-card");
     card.append(el("h2", null, n ? n.label : note.path.split("/").pop()));
     const desc = splitFront(note.text).meta.description; if (desc) card.append(el("p", "note-desc", desc));
-    const read = el("button", null, "Read note"); read.onclick = () => setMap(false); card.append(read);
+    const read = el("button", null, "Read note"); read.onclick = () => go(noteRoute(note.path)); card.append(read);
     side.append(card);
   }
   const box = el("div", "connected"); side.append(box);
@@ -589,7 +602,7 @@ function renderSide() {
     const all = [...related, ...linked];
     box.replaceChildren(el("h3", null, all.length ? `Connected (${all.length})` : "Not connected to other notes yet"));
     for (const x of all) {
-      const a = el("a"); a.href = `#${x.id}`;
+      const a = el("a"); a.href = `#${encPath(x.id)}`;
       const why = x.why.replace("shared neighbours", "neighbours").replace(/similar meaning \(([\d.]+)\)/, "meaning $1").replace(/, /g, " · ");
       a.append(x.label, el("span", "why", `${x.project !== project && x.project !== "shared" ? x.project + " · " : ""}${why}`));
       box.append(a);
@@ -735,7 +748,6 @@ $("note").addEventListener("click", (e) => {
   }
   if (/^https?:/.test(href)) { a.target = "_blank"; a.rel = "noopener noreferrer"; }
 });
-window.addEventListener("popstate", () => { const id = decode(location.hash.slice(1)); if (id) openNote(id, { push: false }); else deselect({ push: false }); });
 window.addEventListener("beforeunload", (e) => { if (editing) e.preventDefault(); });
 
 // ---------------------------------------------------------------- new memo
@@ -820,39 +832,33 @@ function hitItem(top, sub, onclick) {
   b.append(el("span", "hit-path", top)); if (sub) b.append(el("span", "hit-text", sub));
   b.onclick = onclick; li.append(b); return li;
 }
-$("q").addEventListener("input", () => { clearTimeout(searchTimer); selectTab("notes"); searchTimer = setTimeout(runSearch, 150); });
+$("q").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 150); });
 $("q").addEventListener("keydown", (e) => { // Enter opens the first result
   if (e.key === "Enter") { e.preventDefault(); clearTimeout(searchTimer); runSearch().then(() => $("results").querySelector("button")?.click()); }
 });
 
+// Keys: Ctrl/Cmd+K and / search, [ folds the sidebar, A the Inbox, M map or notes, 1-9/0 the project; in a note E
+// edits and Esc closes it; in a chat Esc goes back.
 document.addEventListener("keydown", (e) => {
   const typing = /input|textarea|select/i.test(document.activeElement.tagName) || document.querySelector("dialog[open]");
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); $("q").focus(); $("q").select(); return; }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); openSearch(); return; }
   if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
-  if (!$("cockpit").hidden) { // the cockpit has its own keys: Esc leaves a chat for the board, then the board
-    if (e.key === "Escape" && !document.querySelector(".ck-menu[open], dialog[open]")) ck.view ? ckShow(null) : openCockpit(false);
-    return;
-  }
-  if (e.key.toLowerCase() === "a") { e.preventDefault(); openCockpit(true); return; }
-  if (e.key === "/") { e.preventDefault(); $("q").focus(); }
+  const kn = shellRoute.view === "notes" || shellRoute.view === "map", at = current ? `/${encPath(current.path)}` : "";
+  if (e.key === "[") toggleRail();
+  else if (e.key === "/") { e.preventDefault(); openSearch(); }
+  else if (e.key.toLowerCase() === "a") go("#/inbox");
   else if (/^[1-9]$/.test(e.key) && PROJECTS[Number(e.key) - 1]) switchProject(PROJECTS[Number(e.key) - 1]);
   else if (e.key === "0") switchProject(ALL);
+  else if (e.key.toLowerCase() === "m") go(mapOn ? `#/notes${at}` : `#/map${at}`);
+  else if (e.key === "Escape" && shellRoute.view === "chats" && ck.view) ckShow(null);
+  else if (!kn) return;
   else if (e.key.toLowerCase() === "e" && current?.writable) { e.preventDefault(); startEdit(); }
-  else if (e.key.toLowerCase() === "m") setMap(!mapOn);
   else if (e.key === "Escape") deselect();
 });
 
-// ---------------------------------------------------------------- tabs, changes, lint, ingest
-function selectTab(name) {
-  store.set("kn_tab", name); // kept over a reload, like the map
-  for (const b of document.querySelectorAll(".tabs button")) b.setAttribute("aria-selected", String(b.dataset.tab === name));
-  for (const t of ["notes", "changes", "tasks", "lint", "thispc"]) $(`tab-${t}`).hidden = t !== name;
-  if (name === "lint") loadLint(true);
-  if (name === "thispc") loadThisPc();
-  if (name === "tasks") loadTasks(true);
-  if (name === "changes") loadRecent(true);
-}
-for (const b of document.querySelectorAll(".tabs button")) b.onclick = () => selectTab(b.dataset.tab);
+// ---------------------------------------------------------------- views: changes, lint, tasks, machines, ingest
+// The old tab names, kept for callers (home view, mission map): each is a view of its own now (shell.js loads it).
+function selectTab(name) { go(`#/${{ lint: "health" }[name] || name}`); }
 
 // This pc: the knowledge companion on the viewer's own machine (plugin/hooks/companion.py). The tab shows only when it
 // answers on 127.0.0.1; the page's CSP allows exactly that origin, and the companion allows this page's origin.
@@ -866,7 +872,7 @@ async function companion(path, body) {
 let localMachine = ""; // SHA-256 of the companion's machine id on this pc (never the id itself): its row says "This pc"
 async function probeCompanion() {
   try { localMachine = (await companion("/local/api/hello")).machineHash || ""; } catch { return false; } // no companion on this pc: no tab
-  $("tabbtn-thispc").hidden = false;
+  for (const a of document.querySelectorAll(".nav-thispc")) a.hidden = false;
   return true;
 }
 async function loadThisPc() {
@@ -966,22 +972,21 @@ async function loadLint(render = true) {
     box.append(b);
   }
 }
-// Tasks: the task lines between agents in this project (all projects on the All map), overdue first, then by due
-// date; results handed back; and which agent sessions can pick work up. "Done" removes the line (history keeps it).
+// Tasks: the task lines between agents in every project (or the one picked in the header), overdue first, then by due
+// date; results handed back. "Done" removes the line (history keeps it). The badge counts every project.
+let agentProject = ""; // the Agents views' project filter (shell.js): "" = all projects
 async function loadTasks(render = true) {
-  const p = project, res = await api("/ui/api/tasks");
-  if (p !== project) return;
-  const here = (x) => allMode() || x.project === project;
-  const tasks = res.tasks.filter(here), open = tasks.filter((t) => !t.done), back = tasks.filter((t) => t.done);
-  $("tasks-count").textContent = open.length || "";
-  $("tasks-count").className = open.some((t) => t.overdue) ? "badge warn" : "badge";
+  const res = await api("/ui/api/tasks"), all = res.tasks.filter((t) => !t.done);
+  $("tasks-count").textContent = all.length || "";
+  $("tasks-count").className = all.some((t) => t.overdue) ? "badge warn" : "badge";
+  const tasks = res.tasks.filter((t) => !agentProject || t.project === agentProject), open = tasks.filter((t) => !t.done), back = tasks.filter((t) => t.done);
   if (!render) return;
   const box = $("tasks"); box.replaceChildren();
   const row = (t) => {
     const n = byId.get(t.path), li = hitItem(`${t.id} · ${t.owner}`, t.text, () => openNote(t.path, { find: [t.id.toLowerCase()] }));
     const meta = el("span", "hit-text", [t.done ? "" : `${t.from || "?"} → ${t.owner}`, t.done ? "" : `start ${t.start}`,
       t.due && `due ${t.due}`, t.done && t.since && `handed back ${ago(t.since)}`, t.claimed && "claimed", t.waiting_reason, t.runs, n ? n.label : t.path.split("/").pop(),
-      allMode() ? t.project : ""].filter(Boolean).join(" · "));
+      agentProject ? "" : shown(t.project)].filter(Boolean).join(" · "));
     if (t.legacy) meta.prepend(el("span", "badge", "legacy"), " ");
     if (t.stalled) meta.prepend(el("span", "new", "stalled"), " ");
     if (t.overdue) meta.prepend(el("span", "new", "overdue"), " ");
@@ -1018,7 +1023,6 @@ async function loadTasks(render = true) {
   section("Open", open);
   for (const who of [...new Set(back.map((t) => t.owner))].sort()) section(`Results waiting to be read by ${who}`, back.filter((t) => t.owner === who));
   if (!tasks.length) box.append(el("p", "muted", "No open tasks."));
-  loadMachines().catch((e) => $("machines").replaceChildren(el("p", "error", `Machines: ${e.message}`)));
 }
 
 // Machines: every pc of the viewer's tokens (an admin sees all) with its agents, workers and recent sessions. The
@@ -1035,13 +1039,13 @@ async function machineAction(m, action, args = {}) {
 function machineButton(text, title, onclick) {
   const b = el("button", "ghost small", text); b.type = "button"; b.title = title; b.onclick = onclick; return b;
 }
-// Shown under the tasks in the Tasks tab (the left column is narrow: no tab of its own).
+// The Machines view: one card per pc.
 async function loadMachines() {
   const res = await api("/ui/api/machines");
   if (!localMachine) await probeCompanion();
   const tasks = (await api("/ui/api/tasks")).tasks.filter((t) => !t.done && t.startable);
   const box = $("machines"); box.replaceChildren();
-  const narrow = matchMedia("(max-width: 720px)").matches;
+  const narrow = matchMedia("(max-width: 699.98px)").matches;
   const sha = async (t) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t)))].map((b) => b.toString(16).padStart(2, "0")).join("");
   const here = localMachine && crypto.subtle ? (await Promise.all(res.machines.map(async (m) => (await sha(m.id)) === localMachine ? m.id : ""))).find(Boolean) : "";
   for (const m of res.machines) {
@@ -1109,7 +1113,7 @@ async function loadMachines() {
         pick.append(el("option", null, "Start a worker for…"));
         for (const t of tasks) { const o = el("option", null, `${t.id} · ${t.owner} · ${t.text.slice(0, 40)}`); o.value = `${t.project}/${t.id}`; pick.append(o); }
         pick.onchange = () => { const [project, id] = pick.value.split("/"); if (id) machineAction(m, "start_worker", { project, id }); };
-        if ((c.agents || []).length && (c.folders?.linked || []).length) ctl.append(machineButton("Chat", "Talk to an agent on this pc (Agents)", () => { openCockpit(true); ckNewChat(m.id); }));
+        if ((c.agents || []).length && (c.folders?.linked || []).length) ctl.append(machineButton("Chat", "Talk to an agent on this pc (Chats)", async () => { go("#/chats"); if (!ck.machines.length) await ckSummary().catch(() => {}); ckNewChat(m.id); }));
         ctl.append(pick, machineButton("Update plugin", "Update the knowledge plugin of every agent there", () => machineAction(m, "update_plugin")));
       }
       ctl.append(machineButton("Forget", "Remove this pc from the list (it comes back when it reports again)", async () => {
@@ -1207,7 +1211,7 @@ $("ingest-form").addEventListener("submit", async (e) => {
       res = await api("/ui/api/ingest", { method: "POST", body: JSON.stringify(body), headers: { "Content-Type": "application/json" } });
     }
     out.replaceChildren(el("p", null, `Saved ${res.path} (${res.chars} characters): ${res.title}`));
-    const link = (label, path) => { const a = el("a", null, label); a.href = `#${path}`; a.onclick = (ev) => { ev.preventDefault(); $("ingest-dialog").close(); openNote(path); }; return a; };
+    const link = (label, path) => { const a = el("a", null, label); a.href = `#${encPath(path)}`; a.onclick = (ev) => { ev.preventDefault(); $("ingest-dialog").close(); openNote(path); }; return a; };
     out.append(link("Open the source", res.path));
     if (res.related.length) {
       out.append(el("p", null, "Possibly related memos:"));
@@ -1219,34 +1223,23 @@ $("ingest-form").addEventListener("submit", async (e) => {
   } catch (err) { out.className = "error"; out.textContent = err.message; }
 });
 
-// ---------------------------------------------------------------- Agents cockpit: chats with agents on your pcs
-// A full-screen canvas over the knowledge view: one card per chat (pc, agent, folder), the answer streaming in. The
-// server only relays: the pc's companion pulls each message and runs one turn of the agent (plugin/hooks/chat.py).
-// Everything is text (textContent): nothing an agent prints becomes markup. A phone shows one card and a switcher.
+// ---------------------------------------------------------------- Agents: Inbox (the attention board) and Chats
+// Chats with agents on your pcs: one card per chat (pc, agent, folder), the answer streaming in. The server only
+// relays: the pc's companion pulls each message and runs one turn of the agent (plugin/hooks/chat.py). Everything is
+// text (textContent): nothing an agent prints becomes markup. Inbox and Chats are routes (shell.js): #/chats/<chat id>
+// is one chat (its card is keyed by pc and chat id).
 const AGENT_MARK = { claude: "C", codex: "X", agy: "A" };
-const ck = { cards: new Map(), machines: [], chats: [], board: [], view: store.get("kn_ck_view") || "", timer: 0, summaryAt: 0 };
+const ck = { cards: new Map(), machines: [], chats: [], board: [], view: "", timer: 0, summaryAt: 0, doneOpen: false };
 const ckKey = (c) => `${c.machine}/${c.id}`;
 const ckBusy = (s) => s === "running" || s === "queued";
 const ckShort = (path) => (path || "").split(/[\\/]/).filter(Boolean).pop() || path;
-function ckSave() { store.set("kn_ck_view", ck.view); } // the chat on screen comes back after a reload
+const ckScope = (x) => !agentProject || x.project === agentProject; // the header's project filter
 
-function openCockpit(on) {
-  $("cockpit").hidden = !on; document.body.classList.toggle("ck-on", on); store.set("kn_cockpit", on ? "1" : "0");
-  clearTimeout(ck.timer);
-  if (on) { ck.summaryAt = 0; ckTick(); }
-}
-$("cockpit-btn").onclick = () => openCockpit(true);
-$("ck-close").onclick = () => openCockpit(false);
-for (const b of document.querySelectorAll("#ck-tools-menu [data-go]")) b.addEventListener("click", (e) => {
-  const go = b.dataset.go; if (go === "settings" || go === "mission") return; // a plain link; mission.js
-  e.preventDefault(); $("ck-tools-menu").open = false; openCockpit(false);
-  if (go === "memory") { selectTab("notes"); homeView(); }
-  else if (go === "skills") { $("q").value = "SKILL.md"; $("q").dispatchEvent(new Event("input")); }
-  else { selectTab("tasks"); if (go !== "tasks") $("machines-head").scrollIntoView({ block: "start" }); }
-});
-document.addEventListener("click", (e) => { // a popover closes on a click outside it
-  for (const d of document.querySelectorAll(".ck-menu[open]")) if (!d.contains(e.target)) d.open = false;
-});
+// Kept for callers (a board card, the mission map): true goes to the Inbox; false does nothing, whoever leaves the
+// Agents views navigates (openNote shows the note).
+function openCockpit(on) { if (on) go("#/inbox"); }
+// Polling of the pcs, chats and board runs while an Agents view shows; the router turns it on and off.
+function ckRun(on) { clearTimeout(ck.timer); if (on) { ck.summaryAt = 0; ckTick(); } }
 
 // The bar and the board: the pcs, the chats and the board every ~5 s on the board (10 s in a chat); the open chat
 // every 1.5 s while it runs, else 4 s. Only the chat on screen is polled: opening it is what marks it read.
@@ -1263,7 +1256,7 @@ async function ckSummary() {
   ck.summaryAt = Date.now();
   const [ms, cs, bd] = await Promise.all([api("/ui/api/machines"), api("/ui/api/chats"), api("/ui/api/board").catch(() => ({ items: [] }))]);
   ck.machines = ms.machines.filter((m) => m.own && !m.old);
-  ck.chats = cs.chats; ck.board = bd.items;
+  ck.chats = cs.chats; ck.board = bd.items; inboxCount(ck.board);
   const now = Date.now() / 1000;
   let live = ck.chats.filter((c) => ckBusy(c.status)).length, worst = null;
   for (const m of ck.machines) for (const [a, ag] of Object.entries(m.agents || {})) {
@@ -1278,39 +1271,49 @@ async function ckSummary() {
     $("ck-resets").title = `${AGENT_NAME[worst.agent] || worst.agent} on ${worst.label}: ${Math.round(worst.limit)}% of its usage limit used`;
   }
   for (const [k, card] of ck.cards) { const c = ck.chats.find((x) => ckKey(x) === k); if (!c) ckDrop(k); else card.meta = { ...card.meta, ...c }; }
-  if (ck.view && !ck.cards.has(ck.view)) { const c = ck.chats.find((x) => ckKey(x) === ck.view); if (c) ckCard(c); else ck.view = ""; }
+  if (ck.view && !ck.cards.has(ck.view)) { // a route's chat id (or an older pc/id key) once the chats are known
+    const c = ck.chats.find((x) => x.id === ck.view || ckKey(x) === ck.view);
+    if (c) ck.view = ckKey(ckCard(c).meta);
+    else { // gone or never there: the list, without a dead chat in the URL
+      ck.view = "";
+      if (shellRoute.view === "chats" && shellRoute.arg) { history.replaceState(history.state, "", "#/chats"); shellRoute = { ...shellRoute, arg: "" }; }
+    }
+  }
   ckHistory(); ckBoard(); ckLayout();
 }
+// The Chats view's list: newest first, the open one marked.
 function ckHistory() {
   const box = $("ck-history"); box.replaceChildren();
-  for (const c of ck.chats.slice(0, 40)) {
+  for (const c of ck.chats.filter(ckScope).slice(0, 40)) {
     const li = el("li"), b = el("button", null, c.title || "(no message yet)"); b.type = "button";
     b.append(el("small", null, `${AGENT_NAME[c.agent] || c.agent} · ${c.label} · ${ckShort(c.folder)} · ${ago(c.updated)}${ckBusy(c.status) ? " · running" : ""}`));
-    b.onclick = () => { $("ck-history-menu").open = false; ckShow(c); };
+    if (ckKey(c) === ck.view) b.setAttribute("aria-current", "true");
+    b.onclick = () => ckShow(c);
     li.append(b); box.append(li);
   }
-  if (!ck.chats.length) box.append(el("li", "muted", "No chats yet."));
+  if (!box.childNodes.length) box.append(el("li", "muted", ck.chats.length ? "No chats in this project." : "No chats yet."));
 }
-// One chat full screen (the board's card opened), or the board when `meta` is empty.
+// Open one chat (its route), or go back from it when `meta` is empty.
 function ckShow(meta) {
-  ck.view = meta ? ckKey(ckCard(meta).meta) : "";
-  ckLayout(); ckSave();
-  if (ck.view) { const card = ck.cards.get(ck.view); ckPoll(card); card.input.focus({ preventScroll: true }); }
-  else { ckBoard(); $("ck-board").querySelector(".ck-item-main")?.focus({ preventScroll: true }); }
+  if (!meta) return goBack("#/chats");
+  go(`#/chats/${encodeURIComponent(ckCard(meta).meta.id)}`);
 }
+// The open chat in the Chats view, or a line to pick one. The card's node is moved only when it changes: moving it
+// would drop the focus from its text box.
+const ckPick = el("p", "ck-none ck-pick");
 function ckLayout() {
-  const card = ck.cards.get(ck.view);
-  $("ck-board").hidden = !!card; $("ck-canvas").hidden = !card; $("ck-back").hidden = !card;
-  $("ck-canvas").replaceChildren(...(card ? [card.root] : []));
+  const card = ck.cards.get(ck.view), show = card ? card.root : ckPick;
+  ckPick.textContent = ck.chats.length ? "Pick a chat on the left, or start a new one." : "No chats yet: start one with + New chat.";
+  if ($("ck-canvas").firstChild !== show || $("ck-canvas").childNodes.length !== 1) $("ck-canvas").replaceChildren(show);
+  document.body.classList.toggle("in-chat", !!card && !$("cockpit").hidden && $("cockpit").dataset.mode === "chats");
 }
-$("ck-back").onclick = () => ckShow(null);
 
 // The attention board: what needs you first (a reply nobody read, a refused tool call, a failed worker, a task to
 // approve), then what runs, the open task lines and what finished in the last 24 h; grouped per project. A phone
 // shows the columns one under the other in that order.
 const CK_COLS = [["needs", "Needs you"], ["running", "Running"], ["open", "Open"], ["done", "Done (24 h)"]];
 function ckBoard() {
-  const items = ck.board || [], box = $("ck-board");
+  const items = (ck.board || []).filter(ckScope), box = $("ck-board");
   if (!items.length && !ck.chats.length) {
     const empty = el("div", "ck-empty");
     empty.append(el("h2", null, "Your agents, from anywhere"),
@@ -1323,6 +1326,12 @@ function ckBoard() {
     col.setAttribute("aria-label", `${name}: ${list.length}`);
     head.append(el("span", null, name), el("span", "ck-count", String(list.length)));
     col.append(head);
+    if (id === "done") { // a phone folds it to one line ("9 done") that unfolds; a desktop hides this button
+      const fold = el("button", "ck-done-toggle", `${list.length} done${ck.doneOpen ? " · hide" : ""}`); fold.type = "button";
+      fold.setAttribute("aria-expanded", String(ck.doneOpen));
+      fold.onclick = () => { ck.doneOpen = !ck.doneOpen; ckBoard(); box.querySelector(".ck-done-toggle")?.focus(); };
+      col.classList.toggle("open", ck.doneOpen); col.append(fold);
+    }
     if (!list.length) col.append(el("p", "ck-none", id === "needs" ? "Nothing waits for you." : "Nothing here."));
     for (const p of [...new Set(list.map((i) => i.project || ""))]) {
       const group = el("div", "ck-group");
@@ -1331,6 +1340,12 @@ function ckBoard() {
     }
     return col;
   }));
+  // A project filter never hides what needs you without saying so.
+  const elsewhere = (ck.board || []).filter((i) => i.col === "needs" && !ckScope(i)).length;
+  if (elsewhere) {
+    const b = el("button", "ghost small ck-elsewhere", `${elsewhere} more need${elsewhere > 1 ? "" : "s"} you in other projects: show all`);
+    b.type = "button"; b.onclick = () => setAgentProject(""); box.prepend(b);
+  }
   const n = items.filter((i) => i.col === "needs").length, said = n ? `${n} item${n > 1 ? "s" : ""} need${n > 1 ? "" : "s"} you` : "Nothing needs you";
   if ($("ck-needs-live").textContent !== said) $("ck-needs-live").textContent = said;
 }
@@ -1433,7 +1448,7 @@ function ckCard(meta) {
     catch (err) { note.className = "ck-note bad"; note.textContent = err.message; }
     ckPoll(card);
   };
-  ck.cards.set(k, card); ckPaint(card); ckSave();
+  ck.cards.set(k, card); ckPaint(card);
   return card;
 }
 function ckDrop(k) { ck.cards.delete(k); if (ck.view === k) ck.view = ""; }
@@ -1560,25 +1575,29 @@ async function loadMe() {
   PROJECTS = me.projects;
   for (const p of PROJECTS) if (!MEMORY_ROOT[p]) { MEMORY_ROOT[p] = `${p}-memory`; ROOT_PROJECT[p] = p; ROOT_PROJECT[`${p}-memory`] = p; }
   if (!PROJECTS.includes(project) && project !== ALL) project = PROJECTS[0];
-  $("admin-link").hidden = false;
-  $("admin-link").textContent = me.admin ? "Admin" : "My tokens & projects"; // non-admins manage their own there
-  $("who").textContent = me.user;
-  if (!me.admin) document.querySelector('[data-tab="lint"]').hidden = $("ingest-open").hidden = true;
+  for (const a of document.querySelectorAll(".admin-link")) { // non-admins manage their own tokens there
+    (a.querySelector(".label") || a).textContent = me.admin ? "Admin" : "My tokens & projects"; a.title = me.admin ? "Admin" : "My tokens & projects";
+  }
+  $("who").replaceChildren(el("span", "avatar", (me.user || "?")[0].toUpperCase()), el("span", "label", me.user));
+  $("who").title = `Signed in as ${me.user}`; $("who-more").textContent = me.user;
+  if (!me.admin) { for (const a of document.querySelectorAll(".nav-health")) a.hidden = true; $("ingest-open").hidden = true; }
   $("new-memo").hidden = !me.writable.includes(project);
   $("add-menu").hidden = $("new-memo").hidden && $("ingest-open").hidden;
 }
 
-loadMe().then(loadGraph).catch((e) => {
-  $("note").replaceChildren(el("p", "error", `Could not load the knowledge base: ${e.message}. Reload the page; if it stays, the server may be restarting.`));
+// The URL says which view shows (shell.js). The Agents views need no map data, so they show as soon as the user is
+// known; the knowledge views once the map data is in.
+let routedEarly = false;
+loadMe().then(() => {
+  if (!["notes", "map", "changes", "health"].includes(routeView())) { applyRoute(); routedEarly = true; }
+  return loadGraph();
+}).catch((e) => {
+  $("content").prepend(el("p", "error load-error", `Could not load the knowledge base: ${e.message}. Reload the page; if it stays, the server may be restarting.`));
   throw e;
 }).then(() => {
   connectLive();
   loadLint(false); loadTasks(false); loadRecent();
-  const id = decode(location.hash.slice(1));
-  if (id) openNote(id, { push: false }); else homeView();
-  if (store.get("kn_map") === "1") setMap(true); // the map stays open over a reload
-  const tab = store.get("kn_tab");
-  probeCompanion().then((up) => { if (up && tab === "thispc") selectTab("thispc"); });
-  if (store.get("kn_cockpit") === "1") openCockpit(true); // the cockpit stays open over a reload
-  if (["changes", "tasks", "lint"].includes(tab) && !document.querySelector(`.tabs [data-tab="${tab}"]`).hidden) selectTab(tab); // Lint only for admins
+  if (!routedEarly) applyRoute();
+  if ($("cockpit").hidden) ckSummary().catch(() => {}); // the Inbox badge, on every view
+  probeCompanion();
 });
