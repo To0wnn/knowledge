@@ -4128,7 +4128,10 @@ async def ui_admin_token(request: Request, body: dict):
     if owner:  # a token outlives the sign-in: the admin hears about every new one
         notify(f"Knowledge: {owner} created token {name} ({'read + write' if body.get('write') else 'read'}: {', '.join(roots)}).")
     # the address the setup needs next to the token: the public one when configured, else the one this page came in on
-    return JSONResponse({"ok": True, "name": name, "token": token, "url": PUBLIC_URL or str(request.base_url).rstrip("/")})
+    url = PUBLIC_URL or str(request.base_url).rstrip("/")
+    # it goes into a copy-paste install command between quotes: only a plain URL, never what a Host header made up
+    ok = re.fullmatch(r"https?://[A-Za-z0-9.\-]+(:\d+)?(/[A-Za-z0-9._~/-]*)?", url)
+    return JSONResponse({"ok": True, "name": name, "token": token, **({"url": url} if ok else {})})
 
 
 # Installable web app. Colours are the app.css canvas (light; the page's theme-color metas switch per scheme). Public

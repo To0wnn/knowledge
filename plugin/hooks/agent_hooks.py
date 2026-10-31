@@ -541,8 +541,8 @@ def mcp(tok: str):
             ids = [m["id"] for m in (msg if isinstance(msg, list) else [msg]) if isinstance(m, dict) and m.get("id") is not None]
             code = getattr(e, "code", 0)
             reason = token_store.NO_URL if not URL else "token invalid or revoked (KNOWLEDGE_TOKEN or the keyring)" if code == 401 \
-                else token_store.unreachable(URL, f"HTTP {code}" if code else e) if code == 403 or isinstance(e, OSError) \
-                else str(e) or type(e).__name__
+                else token_store.unreachable(URL, f"HTTP {code}" if code else e) if code == 403 or isinstance(e, OSError) and not code \
+                else f"HTTP {code}" if code else str(e) or type(e).__name__
             replies = [{"jsonrpc": "2.0", "id": i, "error": {"code": -32000, "message": f"knowledge server: {reason}"}} for i in ids]
         for reply in replies:
             out.write(json.dumps(reply).encode() + b"\n")  # one message per line, as stdio needs
