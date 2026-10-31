@@ -4699,6 +4699,14 @@ def chat_meta(c: dict) -> dict:
 # Approvals: a turn without YOLO wants a tool its allowed set does not hold. The companion asks here (POST
 # /machine/chats/ask), the owner answers in the chat or on the board (POST /ui/api/chat/approve), the companion gets the
 # answer with its next poll (GET /machine/chats, "answers"). No answer within CHAT_ASK_MINUTES: denied, said in the chat.
+BIDI = re.compile("[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]")
+
+
+def unbidi(text: str) -> str:
+    """Bidi control characters shown as text (<U+202E>): what an approval shows is what it runs (Trojan Source)."""
+    return BIDI.sub(lambda m: f"<U+{ord(m.group()):04X}>", text)
+
+
 def chat_token_ok(c: dict, dev: dict) -> bool:
     """The machine's token may act for this chat now: it was one of the chat's tokens when the chat began, and it is
     still one its owner may steer machines with (own_token today, not only the snapshot taken then)."""
@@ -4856,7 +4864,9 @@ def board_items() -> list[dict]:
             for a in asks_open(c, now):  # one Needs-you item per open approval, answered right there
                 items.append({**base, "kind": "ask", "col": "needs", "id": a["id"], "chat": c["id"], "agent": c.get("agent"),
                               "project": c.get("project"), "key": f"ask:{r['id']}/{c['id']}/{a['id']}", "sig": a["id"],
+                              # whole (one line, 160 characters at most): answerable on the board; else only Deny there
                               "title": (lambda t: t if len(t) <= 160 else t[:159] + "…")(f"{a['tool']}: {' '.join(a['detail'].split())}"), "folder": c.get("folder"), "at": a["at"],
+                              "full": "\n" not in a["detail"] and len(f"{a['tool']}: {a['detail']}") <= 160 and a["detail"] == " ".join(a["detail"].split()),
                               "line": f"asks to run this ({c.get('title') or 'New chat'})" + (f": {a['reason']}" if a.get("reason") else ""),
                               "expires": a["expires"], "once_only": bool(a.get("once_only"))})
         for a, ag in r["agents"].items():
@@ -5225,8 +5235,8 @@ async def machine_chat_ask(request: Request):
     try:
         b = await request.json()
         f = chat_file(dev.get("machine", ""), str(b.get("chat", "")))
-        tool, reason, key = (" ".join(str(b.get(k) or "").split())[:n] for k, n in (("tool", 80), ("reason", 300), ("key", 200)))
-        detail = str(b.get("detail") or "").strip()  # whole and as written: the owner decides on exactly this text
+        tool, reason, key = (unbidi(" ".join(str(b.get(k) or "").split()))[:n] for k, n in (("tool", 80), ("reason", 300), ("key", 200)))
+        detail = unbidi(str(b.get("detail") or "").strip())  # whole and as written: the owner decides on exactly this text
         once = b.get("once_only") is True or len(detail) > ASK_DETAIL
         detail = detail[:ASK_DETAIL]
         if not tool:

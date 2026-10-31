@@ -709,9 +709,9 @@ elif os.environ.get("KNOWLEDGE_CHAT") and name == "agy" and args[:1] == ["acp"]:
             rec({"chat": os.environ["KNOWLEDGE_CHAT"], "argv": [name] + args, "cwd": os.getcwd(), "stdin": text, "load": loaded, "pid": os.getpid()})
             upd({"sessionUpdate": "tool_call", "toolCallId": "c1", "name": "run_command", "kind": "execute", "rawInput": {"CommandLine": "git status"}})
             send({"id": "p1", "method": "session/request_permission", "params": {"sessionId": "sess-agy", "toolCall": {
-                "toolCallId": "c1", "name": "run_command", "kind": "execute", "rawInput": {"CommandLine": "git status"}},
+                "toolCallId": "c1", "name": "view_file", "kind": "read", "rawInput": {"AbsolutePath": os.path.join(os.getcwd(), "README.md")}},
                 "options": [{"optionId": "allow", "kind": "allow_once"}, {"optionId": "deny", "kind": "reject_once"}]}})
-            pre = json.loads(sys.stdin.readline())["result"]["outcome"]["optionId"]  # git status: in the allowed set, never asked
+            pre = json.loads(sys.stdin.readline())["result"]["outcome"]["optionId"]  # a read in its folder: allowed, never asked
             said = "echo: " + text + (" (resumed)" if loaded == "sess-agy" else "") + ("" if pre == "allow" else " PRE-DENIED")
             if "ASK" in text:
                 send({"id": "p2", "method": "session/request_permission", "params": {"sessionId": "sess-agy", "toolCall": {
@@ -768,7 +768,7 @@ elif os.environ.get("KNOWLEDGE_CHAT"):  # one chat turn: the message on stdin, t
     else:
         out({"event": "result", "result": {"conversation_id": sid, "status": "SUCCESS"}})
 else:
-    rec({"argv": [name] + args, "cwd": os.getcwd(), "env": {k: os.environ.get(k, "") for k in ("KNOWLEDGE_WORKER", "KNOWLEDGE_YOLO", "KNOWLEDGE_START_NONCE")}})
+    rec({"argv": [name] + args, "cwd": os.getcwd(), "env": {k: os.environ.get(k, "") for k in ("KNOWLEDGE_WORKER", "KNOWLEDGE_YOLO", "KNOWLEDGE_START_NONCE", "GIT_CONFIG_PARAMETERS")}})
     if os.path.exists(calls + ".sleep"):  # a worker that keeps working
         import time
         time.sleep(120)
@@ -1193,9 +1193,13 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         rules = ag["argv"][ag["argv"].index("--settings") + 1] if "--settings" in ag["argv"] else ""
         rules = json.loads(Path(rules).read_text(encoding="utf-8")) if rules and Path(rules).is_file() else {}
         check(ag["argv"][:2] == ["agy", "-p"] and ag["argv"][3:5] == ["--mode", "accept-edits"] and "--dangerously-skip-permissions" not in ag["argv"]
-              and rules == {"permissions": {"allow": ["command(git status)", "command(git diff)", "command(git log)", "command(git add)",
-                                                      "command(git commit)", "command(git branch --show-current)", "mcp(knowledge_knowledge/*)", "mcp(knowledge/*)"]}},
-              "workers: agy without YOLO gets allow rules for this session only (--settings): knowledge tools and git status/diff/log/add/commit",
+              and rules.get("permissions", {}).get("allow") == ["command(git status)", "command(git diff)", "command(git log)", "command(git add)",
+                                                                 "command(git commit)", "command(git branch --show-current)", "mcp(knowledge_knowledge/*)", "mcp(knowledge/*)"]
+              and [Path(d[11:-1]).name for d in rules["permissions"].get("deny", [])] == [".git", ".gitattributes", ".gitmodules"]
+              and all(Path(d[11:-1]).parent == Path(ag["cwd"]) for d in rules["permissions"]["deny"])
+              and "'core.fsmonitor'='false'" in ag["env"].get("GIT_CONFIG_PARAMETERS", ""),
+              "workers: agy without YOLO gets allow rules for this session only (--settings): knowledge tools and git status/diff/log/add/commit, "
+              "and may never write git's own files in its worktree; its git runs without fsmonitor or hooks",
               json.dumps(ag["argv"][3:]) + json.dumps(rules))
         wait_for(lambda: (call("POST", "/local/api/tick", {}) and False) or json.loads(wfile.read_text(encoding="utf-8")).get("garden/CMP-QUIT", {}).get("status") != "running", 20)
         quit_rec = json.loads(wfile.read_text(encoding="utf-8")).get("garden/CMP-QUIT", {})

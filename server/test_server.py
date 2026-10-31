@@ -660,7 +660,7 @@ def approvals_contract(tmp, ck, fr, raw, er, et):
     assert c["events"][-1]["kind"] == "ask" and "npm test" in c["events"][-1]["text"], c["events"][-1]
     board = lambda h=ck: json.loads(ui("/ui/api/board", h=h)[2])["items"]
     item = next(i for i in board() if i["kind"] == "ask")
-    assert item["col"] == "needs" and item["chat"] == cid and item["id"] == a1["id"] and "npm test" in item["title"], item
+    assert item["col"] == "needs" and item["chat"] == cid and item["id"] == a1["id"] and "npm test" in item["title"] and item["full"], item
     assert next(i for i in board() if i["kind"] == "chat" and i["id"] == cid)["line"] == "waits for your approval"
     assert not [i for i in board(er) if i["kind"] == "ask"], "another person's board shows none"
     # Only the owner answers; a bad decision or an unknown ask is refused.
@@ -709,6 +709,12 @@ def approvals_contract(tmp, ck, fr, raw, er, et):
     a5 = json.loads(ask(detail=multi, key="k" * 64)[1])
     got = next(x for x in json.loads(ui(f"/ui/api/chat?machine={mid}&id={cid}")[2])["asks"] if x["id"] == a5["id"])
     assert got["detail"] == multi and not got["once_only"], got
+    items = {i["id"]: i for i in board() if i["kind"] == "ask"}
+    assert items[a5["id"]]["full"] is False and items[a5["id"]]["title"].endswith("…"), "cut on the board: only Deny there"
+    a8 = json.loads(ask(detail="cat notes\u202e.txt", reason="see \u2066x")[1])
+    got = next(x for x in json.loads(ui(f"/ui/api/chat?machine={mid}&id={cid}")[2])["asks"] if x["id"] == a8["id"])
+    assert got["detail"] == "cat notes<U+202E>.txt" and got["reason"] == "see <U+2066>x", got
+    assert {i["id"]: i for i in board() if i["kind"] == "ask"}[a8["id"]]["full"] is True
     a6 = json.loads(ask(detail="x" * 4100)[1])
     got = next(x for x in json.loads(ui(f"/ui/api/chat?machine={mid}&id={cid}")[2])["asks"] if x["id"] == a6["id"])
     assert len(got["detail"]) == 4000 and got["once_only"], "too long to show whole: once at most"

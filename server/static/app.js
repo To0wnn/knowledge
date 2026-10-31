@@ -1358,7 +1358,7 @@ async function ckDo(path, body) {
 function ckItem(i) {
   const card = el("article", `ck-item ${i.col}`), main = el("button", "ck-item-main"), top = el("span", "ck-item-top");
   main.type = "button";
-  top.append(el("span", "ck-mark", AGENT_MARK[i.agent] || "?"), el("strong", null, i.title));
+  top.append(el("span", "ck-mark", AGENT_MARK[i.agent] || "?"), el("strong", null, i.kind === "ask" ? ckUnbidi(i.title) : i.title));
   const where = [i.kind === "worker" ? "worker" : i.kind === "task" ? `task for ${i.owner}` : i.kind === "ask" ? "approval" : "", i.label, ckShort(i.folder), i.at ? ago(i.at) : ""];
   main.append(top, el("span", "ck-item-where", where.filter(Boolean).join(" · ")), el("span", "ck-item-line", i.line));
   card.append(main);
@@ -1373,7 +1373,10 @@ function ckItem(i) {
   const acts = el("div", "ck-item-acts"), act = (text, title, fn) => { const b = el("button", "ghost small", text); b.type = "button"; b.title = title; b.onclick = fn; acts.append(b); };
   if (i.git) acts.append(ckGitPill(i));
   if (i.approve) act("Approve", "Let this task start", () => ckDo("/ui/api/task/approve", { project: i.project, id: i.id }));
-  if (i.kind === "ask") for (const [d, text, title] of ckAskButtons(i)) act(text, title, () => ckDo("/ui/api/chat/approve", { machine: i.machine, id: i.chat, ask: i.id, decision: d }));
+  if (i.kind === "ask") { // the board shows a short title: Allow only when that title is the whole request
+    for (const [d, text, title] of ckAskButtons(i).filter(([d]) => i.full !== false || d === "deny")) act(text, title, () => ckDo("/ui/api/chat/approve", { machine: i.machine, id: i.chat, ask: i.id, decision: d }));
+    if (i.full === false) act("Open chat", "The request is longer than the board shows: read it whole in its chat", () => main.click());
+  }
   for (const h of i.hosts || []) act(`Start on ${h.label}`, "Start a worker for this task there now",
     () => ckDo("/ui/api/machines/action", { machine: h.machine, action: "start_worker", args: { project: i.project, id: i.id } }));
   if (i.kind === "worker" && i.status === "running") act("Stop", "Stop this worker",
@@ -1503,7 +1506,9 @@ function ckAskButtons(a) {
     ...(a.once_only ? [] : [["chat", "Allow for this chat", "Allow this same call for the rest of this chat"]]),
     ["deny", "Deny", "Refuse it; the agent is told and goes on without it"]];
 }
+const ckUnbidi = (t) => String(t || "").replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, (c) => `<U+${c.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}>`);
 function ckAsks(card, asks, skew) {
+  asks = asks.map((a) => ({ ...a, tool: ckUnbidi(a.tool), detail: ckUnbidi(a.detail), reason: ckUnbidi(a.reason) }));
   const sig = JSON.stringify(asks.map((a) => a.id));
   if (card.asks.dataset.sig === sig) return;
   card.asks.dataset.sig = sig; card.asks.hidden = !asks.length;

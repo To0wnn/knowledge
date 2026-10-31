@@ -327,7 +327,7 @@ async def approvals(browser, devices, secret: str) -> None:
     item = lambda a: {"kind": "ask", "col": "needs", "id": a["id"], "chat": chat["id"], "agent": "claude", "project": "garden",
                       "machine": chat["machine"], "label": "smoke-pc", "online": True, "key": f"ask:{chat['machine']}/{chat['id']}/{a['id']}",
                       "sig": a["id"], "title": f"Bash: {a['detail']}", "folder": chat["folder"], "at": now, "line": "asks to run this (Run the tests)",
-                      "expires": a["expires"], "once_only": a["once_only"]}
+                      "expires": a["expires"], "once_only": a["once_only"], "full": len(a["detail"]) < 150}
     routes = {"/ui/api/board": {"items": [item(ask), item(push)], "now": now}, "/ui/api/chats": {"chats": [chat]},
               "/ui/api/chat": {"chat": chat, "events": [{"n": 1, "at": now, "kind": "user", "text": "Run the tests"},
                                                         {"n": 2, "at": now, "kind": "ask", "text": "asks: Bash: npm test"}],
@@ -361,7 +361,7 @@ async def approvals(browser, devices, secret: str) -> None:
         acts = await pg.locator("#ck-board .ck-col-needs .ck-item").first.locator(".ck-item-acts button").all_inner_texts()
         check(acts == ["Allow once", "Allow for this chat", "Deny"], f"board: an approval is a Needs-you item with its answers {acts}")
         acts = await pg.locator("#ck-board .ck-col-needs .ck-item").nth(1).locator(".ck-item-acts button").all_inner_texts()
-        check(acts == ["Allow once", "Deny"], f"board: git push is allowed once at most {acts}")
+        check(acts == ["Deny", "Open chat"], f"board: a request longer than its title can only be denied there {acts}")
         check("2 approvals waiting" in await pg.locator("#ck-needs-live").text_content(), "board: the approvals are counted")
         await pg.locator("#ck-board .ck-col-needs .ck-item-main").first.click()
         await pg.wait_for_selector("#ck-canvas .ck-ask")

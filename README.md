@@ -174,7 +174,13 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   path outside the chat's folder (relative, `~` and `$HOME` paths resolved), Codex's file changes outside the folder or
   without named paths, and Codex's requests for wider sandbox rights can only be allowed once. Codex is judged on the
   command it will run, never on its parsed summary of it; a Codex file change and fetching a URL are never allowed
-  without asking. The machine's token is checked against today's token rules on every question and answer. Every question and answer, with who answered, is in the companion's
+  without asking. git's own files (`.git/`, `.gitattributes`, `.gitmodules`) are never written without asking, and
+  only once (agy workers get a deny rule for them; Claude protects them itself); agy and Codex chats run no shell
+  command, git included, without asking; and every git a chat turn or worker without YOLO starts runs with
+  `core.fsmonitor=false` and `core.hooksPath=/dev/null` (`GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_NOSYSTEM=1`), so a
+  config an agent wrote cannot run with an allowed git command. On the board an approval whose request is longer than
+  its one-line title can only be denied there (Allow is in its chat, where it shows whole); bidi control characters in
+  an approval show as `<U+202E>`. The machine's token is checked against today's token rules on every question and answer. Every question and answer, with who answered, is in the companion's
   activity log and the server's audit log (`chat-ask`, `chat-approve`). Codex without YOLO still cannot commit in a
   chat unless you allow it: the folder is a main checkout, and Codex keeps its `.git` read-only (opening it would let
   a sandboxed run change git hooks and config). A chat turn says it is one (`KNOWLEDGE_CHAT`, header `X-Knowledge-Chat`): like a worker it

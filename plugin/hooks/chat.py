@@ -174,6 +174,7 @@ def parse(agent: str, line: str, st: dict) -> list:
 
 DETAIL_MAX = 4000  # characters of a request the owner sees in full; a longer one can only be allowed once
 CMD_KEYS = ("command", "CommandLine", "cmd")
+PATH_KEYS_LOWER = {k.lower() for k in PATH_KEYS}
 
 
 def inside(path: str, folder: str) -> bool:
@@ -207,10 +208,21 @@ def paths_in(value, key: str = "") -> list:
     if key in CMD_KEYS:
         value = re.sub(r"^\s*(?:/[\w./-]*/)?(?:ba|z|da|k)?sh\s+-l?c\s+", "", value)  # Codex's shell wrapper is no path the call touches
         words = [w for t in re.split(r"[\s'\";|&<>()`=]+", value) for w in [t.strip()] if w]
-        return [w for w in words if not re.match(r"^[a-z][\w+.-]*://", w) and (w[0] in "/~$" or ".." in w or "/" in w or "\\" in w or re.match(r"^[A-Za-z]:", w))]
-    if key in PATH_KEYS or key.lower().endswith(("path", "file", "dir", "directory", "root")) or value[0] in "/~" or value.startswith(("$HOME", "${HOME}")):
+        # a path glued to an option (-F/x, -O/x, --file/x): the part after the option letters counts too
+        words += [r for w in words if w.startswith("-") and (r := re.sub(r"^-+[A-Za-z0-9-]*?(?=[/~.$\\]|[A-Za-z]:[\\/])", "", w)) != w]
+        return [w for w in words if not w.startswith("-") and not re.match(r"^[a-z][\w+.-]*://", w)
+                and (w[0] in "/~$" or ".." in w or "/" in w or "\\" in w or re.match(r"^[A-Za-z]:", w))]
+    k = key.lower()
+    if k in PATH_KEYS_LOWER or k.endswith(("path", "file", "dir", "directory", "root", "cwd", "destination", "target", "source")) \
+            or value[0] in "/~" or value.startswith(("$HOME", "${HOME}", "./")) or ".." in value:
         return [value]
     return []
+
+
+def git_meta(path: str) -> bool:
+    """A path into git's own files (.git, .gitattributes, .gitmodules, any .git*): a config or hook written there runs
+    with the next git command, so it is never allowed without asking, and only once."""
+    return any(part == ".git" or part.startswith(".git") for part in re.split(r"[\\/]+", path))
 
 
 def once_only(inp, folder: str) -> bool:
@@ -220,7 +232,7 @@ def once_only(inp, folder: str) -> bool:
         return True
     if not isinstance(inp, dict):
         inp = {"command": command_of(inp)}
-    return any(not inside(p, folder) for p in paths_in(inp) if p not in ("/dev/null", "/dev/stdout", "/dev/stderr"))
+    return any(git_meta(p) or not inside(p, folder) for p in paths_in(inp) if p not in ("/dev/null", "/dev/stdout", "/dev/stderr"))
 
 
 def shown(inp) -> str:
@@ -337,15 +349,13 @@ KNOWLEDGE_NAMES = {f"{srv}/{t}" for srv in ("knowledge_knowledge", "knowledge") 
 
 
 def auto_allowed(kind: str, name: str, inp, folder: str) -> bool:
-    """What a chat turn without YOLO may do without asking, as its -p sets allowed it: the knowledge tools (by their
-    exact names), reading, searching and editing inside its folder (every path the call names), and the read-only or
-    committing git commands (GIT_ALLOWED), nothing chained to them. Fetching a URL always asks."""
+    """What an agy or Codex chat turn without YOLO may do without asking: the knowledge tools (by their exact names),
+    and reading, searching and editing inside its folder (every path the call names, never git's own files). No shell
+    command, git included: agy edits files in its workspace without asking, so a git config it wrote would run with an
+    allowed `git status` (core.fsmonitor, diff.external), and over ACP no git override can be forced on it. Fetching a
+    URL always asks."""
     if kind in ("other", "mcp", "") and name in KNOWLEDGE_NAMES:
         return True
-    if kind == "execute":
-        cmd = " ".join(command_of(inp).split())
-        return not re.search(r"[;&|<>`$()\\\n]", cmd) and any(cmd == g or cmd.startswith(g + " ") for g in workers.GIT_ALLOWED) \
-            and not once_only(inp, folder)
     return kind in ("read", "search", "edit", "delete", "move", "think") and bool(paths_in(inp)) and not once_only(inp, folder)
 
 
@@ -460,7 +470,8 @@ def codex_app(p, item: dict, st: dict):
             inp = {"command": " ".join(map(str, cmd)) if isinstance(cmd, list) else str(cmd or ""), "cwd": str(params.get("cwd") or folder)}
             acts = "; ".join(str(a.get("command")) for a in params.get("commandActions") or [] if isinstance(a, dict) and a.get("command"))
             why = reason + (f" (Codex reads it as: {acts})" if acts and acts != inp["command"] else "")
-            ok = auto_allowed("execute", "shell", inp, folder) or decide(cid, "shell", inp, why.strip()) != "deny"
+            elsewhere = os.path.realpath(inp["cwd"]) != os.path.realpath(folder)
+            ok = decide(cid, "shell", inp, why.strip(), detail=(f"(in {inp['cwd']}) " if elsewhere else "") + inp["command"]) != "deny"
             return {"decision": pick(params, ok)}
         if method == "item/fileChange/requestApproval":  # never by itself: Codex asks only for a patch its sandbox refuses
             paths = changes.get(str(params.get("itemId") or "")) or []
@@ -525,7 +536,7 @@ def run_turn(item: dict, post, log, linked, yolo):
         with tempfile.TemporaryFile() as errf:
             kw = {"start_new_session": True} if os.name != "nt" else {"creationflags": workers.WIN_FLAGS}  # its own group: stop ends its children too
             p = subprocess.Popen(cmd, cwd=folder, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errf,
-                                 env={**os.environ, "KNOWLEDGE_CHAT": cid}, **kw)
+                                 env=workers.git_safe_env({**os.environ, "KNOWLEDGE_CHAT": cid}) if not yolo(agent) else {**os.environ, "KNOWLEDGE_CHAT": cid}, **kw)
             rec = RUNNING.setdefault(cid, {"stop": False})  # start() put it there: a stop that came meanwhile holds
             rec.update(pid=p.pid, ident=workers.identity(p.pid))
             if rec["stop"]:
@@ -652,7 +663,18 @@ def self_test():
                      ({"File": "/etc/shadow"}, True), ({"locations": [{"path": "/etc/shadow"}]}, True),
                      ({"network": {"enabled": True}, "fileSystem": {"write": ["/home/x"]}}, True), ({"command": "cat sub/./a"}, False)]:
         assert once_only(inp, f) == exp, (inp, exp)
-    assert auto_allowed("execute", "run_command", {"CommandLine": "git status"}, f)
+    assert not auto_allowed("execute", "run_command", {"CommandLine": "git status"}, f), "no shell command is allowed without asking"
+    # git's own files: never by themselves, once at most (a config written there runs with the next git command)
+    for inp in ({"file_path": f + "/.git/config"}, {"Path": f + "/sub/.git/hooks/pre-commit"}, {"file_path": f + "/.gitattributes"},
+                {"command": "echo x >> .git/config"}, {"locations": [{"path": f + "/.gitmodules"}]}):
+        assert once_only(inp, f), inp
+    assert not auto_allowed("edit", "write_file", {"Path": f + "/.git/config"}, f) and not auto_allowed("read", "view_file", {"File": f + "/.git/config"}, f)
+    # a path glued to an option, other key spellings, relative escapes whatever the key
+    for inp in ({"command": "git commit -F/home/x/.ssh/id_rsa"}, {"command": "cp -t/etc/passwd a"}, {"command": "git diff -O/etc/x"},
+                {"command": "x --file=/etc/x"}, {"command": "x --file/etc/x"}, {"Cwd": "../.."}, {"Destination": "../../.bashrc"},
+                {"CommandLine": "ls", "Cwd": "/etc"}, {"whatever": "../../x"}, {"whatever": "./../x"}):
+        assert once_only(inp, f), inp
+    assert not once_only({"command": "ls -la", "Cwd": f}, f) and not once_only({"command": "git commit -m fix"}, f)
     assert not auto_allowed("execute", "run_command", {"CommandLine": "git status; rm -rf x"}, f)
     assert not auto_allowed("execute", "run_command", {"CommandLine": "git push"}, f)
     assert not auto_allowed("execute", "run_command", {"CommandLine": "git diff /etc/passwd"}, f)
@@ -697,7 +719,7 @@ def self_test():
     # itself and shows the paths from item/started; wider permissions are once at most and spelled out.
     import io
     msgs = [{"id": 1, "result": {}}, {"id": 2, "result": {"thread": {"id": "T"}}}, {"id": 3, "result": {}},
-            {"method": "item/commandExecution/requestApproval", "id": 10, "params": {"command": "/bin/sh -lc 'cat README.md | tee ~/.ssh/authorized_keys'",
+            {"method": "item/commandExecution/requestApproval", "id": 10, "params": {"command": "/bin/sh -lc 'cat README.md | tee ~/.ssh/authorized_keys'", "cwd": "/tmp/other",
              "commandActions": [{"command": "cat README.md"}], "availableDecisions": ["accept", "decline"]}},
             {"method": "item/started", "params": {"item": {"type": "fileChange", "id": "fc1", "changes": [{"path": "/home/x/.bashrc"}]}}},
             {"method": "item/fileChange/requestApproval", "id": 11, "params": {"itemId": "fc1", "grantRoot": None}},
@@ -713,6 +735,7 @@ def self_test():
     finally:
         globals()["decide"] = real_decide
     assert seen[0][1]["command"].endswith("tee ~/.ssh/authorized_keys'") and "cat README.md" in seen[0][2], seen[0]
+    assert seen[0][4].startswith("(in /tmp/other) /bin/sh -lc"), "a command run elsewhere says where"
     assert seen[1][0] == "edit" and seen[1][1]["paths"] == ["/home/x/.bashrc"] and seen[1][3] and ".bashrc" in seen[1][4], seen[1]
     assert seen[2][3], "a file change Codex named no paths for: once at most"
     assert seen[3][0] == "permissions" and seen[3][3] and "network.enabled: True" in seen[3][4] and "fileSystem.write" in seen[3][4], seen[3]
