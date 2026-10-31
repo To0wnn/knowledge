@@ -49,9 +49,11 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   that may start reach an agent as "start now" (`/tasks`, the wake, `GET /tasks/ready`); the others are listed with the
   reason. One task is started on one machine only: the first device to take it holds a 30-minute lease
   (`state/task_leases.json`). `POST /tasks/woken` takes the lease (200 `{"lease"}`, or 409 `{"held_by"}` when another
-  device holds it), `GET /tasks/ready` leaves out tasks another device holds, and the per-turn `/tasks` takes the
-  lease for the asking session: every other device's sessions hear "<ID> is already being handled by <device>; do not
-  start it". A lease ends when it runs out or the line gets its claim marker. `[<Owner>@<device>, <ID>]` pins a task to
+  device or another session holds it), `GET /tasks/ready` leaves out tasks another device holds, and the per-turn
+  `/tasks` takes the lease for the asking session: every other session, on another device or on the same one, hears
+  "<ID> is already being handled by <device | another session on this pc>; do not start it". A lease the companion
+  takes for a session it wakes belongs to that session; one taken for a session it starts (no id yet) goes to the
+  first session of that device that asks. A lease ends when it runs out or the line gets its claim marker. `[<Owner>@<device>, <ID>]` pins a task to
   one device (the token's name, any case); others see it as reserved. A woken task nobody claims within 30 minutes
   shows as stalled and sends one Matrix message.
 - **Results handed back:** a line `- [<Requester>, <ID>-done]: <result>` is listed for its requester only, at

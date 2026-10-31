@@ -130,6 +130,9 @@ def tasks_contract(tmp, ck, fr, ver, raw):
     assert woken({"project": "garden", "id": "CX-2", "agent": "codex", "session": "s-9"}) == 200
     first = json.loads((tmp / "task_wakes.json").read_text())["garden"]["CX-2"]["at"]
     time.sleep(1.1)
+    assert woken({"project": "garden", "id": "CX-2", "agent": "codex", "session": "s-10"}) == 409  # s-9 holds it
+    l = json.loads((tmp / "task_leases.json").read_text()); l["garden"]["CX-2"]["until"] = 0
+    (tmp / "task_leases.json").write_text(json.dumps(l))  # s-9 is gone: its lease ran out
     assert woken({"project": "garden", "id": "CX-2", "agent": "codex", "session": "s-10"}) == 200
     again = json.loads((tmp / "task_wakes.json").read_text())["garden"]["CX-2"]
     assert again["at"] == first and again["session"] == "s-10", again  # a wake again never resets the stall timer
@@ -211,6 +214,31 @@ def lease_contract(tmp, ck, fr, raw):
     assert "PIN-1 is reserved for FRIEND-PC; do not start it" in plain and "[Codex@FRIEND-PC, PIN-1]" not in plain, plain
     start = http("GET", "/context/1?project=x&agent=codex", token=fr2)[1]
     assert "[not yet: reserved for FRIEND-PC]" in start, start[:1500]
+    # One device, two sessions: only one starts it.
+    more = "- open until 2099-01-01 [Codex, LT-2] from Claude, start now: two sessions\n"
+    assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": more + "## Keuzes"}, fr)[0]
+    beats = {}
+    turn = lambda sid: beats.__setitem__(sid, json.loads(http("GET", f"/tasks?project=x&agent=codex&v=2&session={sid}", token=fr)[1]))
+    ts = [threading.Thread(target=turn, args=(sid,)) for sid in ("same-a", "same-b")]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    has = {sid: any("LT-2" in x for x in b["tasks"]) for sid, b in beats.items()}
+    assert sorted(has.values()) == [False, True], beats
+    other = beats["same-a" if not has["same-a"] else "same-b"]
+    assert any("LT-2 is already being handled by another session on this pc" in n["text"] and "do not start it" in n["text"]
+               for n in other["notices"]), other
+    # The companion takes it for the session it wakes: that session holds it, another one on the pc does not.
+    more = ("- open until 2099-01-01 [Codex, LC-1] from Claude, start now: woken session\n"
+            "- open until 2099-01-01 [Codex, LC-2] from Claude, start now: new session\n")
+    assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": more + "## Keuzes"}, fr)[0]
+    lc = lambda tid, sid: any(tid in x for x in json.loads(http("GET", f"/tasks?project=x&agent=codex&v=2&session={sid}", token=fr)[1])["tasks"])
+    assert http("POST", "/tasks/woken", {"project": "garden", "id": "LC-1", "agent": "codex", "session": "woken-s"}, token=fr)[0] == 200
+    assert http("POST", "/tasks/woken", {"project": "garden", "id": "LC-2", "agent": "codex", "session": ""}, token=fr)[0] == 200
+    # LC-2 stands for a new session it starts (no id yet): the first session of the pc that asks becomes the holder.
+    assert lc("LC-2", "started-s") and not lc("LC-2", "other-s")
+    assert lc("LC-1", "woken-s") and not lc("LC-1", "other-s") and not lc("LC-1", "started-s") and lc("LC-1", "woken-s")
+    assert not lc("LC-2", "woken-s")
+    assert leases()["LC-2"]["session"] == "started-s", leases()
     # A claim marker ends the lease (the background check drops it).
     assert not call("knowledge_edit", {"path": path, "old_string": "per turn", "new_string": "per turn (claimed Codex, 2026-10-31)"}, fr)[0]
     end = time.time() + 10
@@ -218,9 +246,14 @@ def lease_contract(tmp, ck, fr, raw):
         time.sleep(0.3)
     assert "LT-1" not in leases(), leases()
     text = (tmp / "projects/garden/memory/project_tasks.md").read_text()
-    for line in [ln for ln in text.splitlines() if any(i in ln for i in ("LS-1", "PIN-1", "LT-1"))]:
+    for line in [ln for ln in text.splitlines() if any(i in ln for i in ("LS-1", "PIN-1", "LT-1", "LT-2", "LC-1", "LC-2"))]:
         call("knowledge_edit", {"path": path, "old_string": line + "\n", "new_string": ""})
     (tmp / "task_leases.json").write_text("{}")  # the later checks start without leases
+
+
+def no_held(beat: dict) -> dict:
+    """A turn's answer without the lease notices (tasks other sessions hold): for checks about other notices."""
+    return {**beat, "notices": [n for n in beat["notices"] if not n["id"].startswith("held-")]}
 
 
 def handback_contract(tmp, ck, fr, ver, raw):
@@ -250,6 +283,7 @@ def handback_contract(tmp, ck, fr, ver, raw):
     assert any("HB-3-done" in x for x in stale) and any("HB-4-done" in x for x in stale), ctx[-1500:]
     assert not any("HB-1-done" in x or "HB-2-done" in x for x in stale), stale
     assert not call("knowledge_delete", {"path": path, "base_version": ver(path)}, fr)[0]
+    (tmp / "task_leases.json").write_text("{}")  # the turns above (session hb) took leases the later checks must not meet
 
 
 def main():
@@ -896,15 +930,15 @@ def main():
         http("POST", "/sync", {"files": {"docs/plan.md": "---\ntopic: General\n---\nplan\n"}}, token=fr)
         res = json.loads(http("POST", "/sync", {"files": {"README.md": "# Copilot\n", "old/plan.md": "plan\n"}, "full": True}, token=fr)[1])
         assert res.get("archived") == ["old/plan.md"] and res["deleted"] == 1, res
-        beat = json.loads(http("GET", "/tasks?project=x&agent=agy&v=2", token=fr)[1])  # any agent of this device, next turn
+        beat = no_held(json.loads(http("GET", "/tasks?project=x&agent=agy&v=2", token=fr)[1]))  # any agent of this device, next turn
         assert beat["sync"] is False and len(beat["notices"]) == 1 and "1 doc(s) went into an archive folder (old/plan.md)" \
             in beat["notices"][0]["text"], beat
-        beat = json.loads(http("GET", "/tasks?project=x&agent=codex&session=c2&v=2", token=fr)[1])
+        beat = no_held(json.loads(http("GET", "/tasks?project=x&agent=codex&session=c2&v=2", token=fr)[1]))
         assert beat["notices"] == [] and beat["sync"] is False, beat  # agy took it first: Codex does not do it too
         notes = json.loads((tmp / "notices.json").read_text())  # lease: agy closed without another turn, an hour ago
         notes[-1]["taken"] -= 3700
         (tmp / "notices.json").write_text(json.dumps(notes))
-        beat = json.loads(http("GET", "/tasks?project=x&agent=codex&session=c2&v=2", token=fr)[1])
+        beat = no_held(json.loads(http("GET", "/tasks?project=x&agent=codex&session=c2&v=2", token=fr)[1]))
         assert len(beat["notices"]) == 1, beat  # offered again, to the session that asks now
         http("GET", "/tasks?project=x&agent=codex&session=c2&v=2", token=fr)  # its next turn keeps it
         notes = json.loads((tmp / "notices.json").read_text())

@@ -1810,7 +1810,7 @@ def lease_holder(t: dict, lease: dict | None, dev: str, now: float) -> dict | No
 def held_reason(h: dict) -> str:
     if h.get("reserved"):
         return f"reserved for {h['device']}"
-    return f"already being handled by {h['device']} (until {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(h['until']))})"
+    return f"already being handled by {'another session on this pc' if h.get('here') else h['device']} (until {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(h['until']))})"
 
 
 def held_text(tid: str, h: dict) -> str:
@@ -1824,9 +1824,10 @@ def task_holders(project: str, tasks: list[dict], dev: str) -> dict:
 
 
 def claim_task(project: str, t: dict, agent: str, dev: str, session: str) -> tuple[bool, dict]:
-    """Take task t for this device: (True, lease) when there is no valid lease, or this device holds it already;
-    (False, holder) when another device does or the line is pinned to another one. The state lock makes it atomic,
-    so of two devices asking at once exactly one wins. A lease is renewed only by its own session (or when it has none)."""
+    """Take task t for this device and session: (True, lease) when there is no valid lease, or this session holds it;
+    (False, holder) when another device or another session of this device does, or the line is pinned to another
+    device. A lease without a session (the companion starting a new one) goes to the first session of its device that
+    asks. The state lock makes it atomic, so of two asking at once exactly one wins."""
     out = []
 
     def change(d):
@@ -1835,7 +1836,7 @@ def claim_task(project: str, t: dict, agent: str, dev: str, session: str) -> tup
         if h := lease_holder(t, cur, dev, now):
             return out.append((False, h))
         if cur and cur.get("until", 0) >= now and cur.get("session") not in ("", session):
-            return out.append((True, cur))  # another session of this device holds it: this one may help, not renew
+            return out.append((False, {**{k: cur.get(k) for k in ("device", "session", "until")}, "here": True}))
         mine = cur if cur and cur.get("until", 0) >= now else {"at": int(now)}
         leases[t["id"]] = new = {**mine, "device": dev, "session": session[:80], "agent": agent, "until": int(now + LEASE)}
         out.append((True, new))
@@ -2856,7 +2857,7 @@ async def tasks_route(request: Request):
     tasks, held = await asyncio.to_thread(leased)
     # only tasks that may start now: the plugin says each new one as "start it right away" and wakes sessions for it
     items, waiting, _ = await asyncio.to_thread(task_items, project, names, held, tasks)
-    told = [{"id": f"held-{project}-{i}-{h['device']}", "text": "knowledge: " + held_text(i, h)}
+    told = [{"id": f"held-{project}-{i}-{h['device']}-{h.get('session') or ''}", "text": "knowledge: " + held_text(i, h)}
             for i, h in held.items() if any(t["id"] == i and t["owner"].lower() in names for t in tasks)]
     if q.get("v") != "2":  # plugins up to 0.9.26: the task lines only
         return PlainTextResponse("\n".join(items + [n["text"] for n in told]))

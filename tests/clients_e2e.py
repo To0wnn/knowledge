@@ -971,7 +971,10 @@ def new_task(agent: Path, env: dict, project: Path, tok: str, home: Path):
     ask = lambda: run([sys.executable, str(agent), "tasks", "codex", "-"],
                       json.dumps({"session_id": "long-1", "cwd": str(project), "prompt": "go on"}), env, cwd=str(project))[1]
     rewind = lambda: [f.write_text(json.dumps({**json.loads(f.read_text()), "at": 0})) for f in (home / ".knowledge" / "tasks-seen").glob("*.json")]
-    check(ask() == "", "tasks: the first prompt of a session says nothing (the start context listed the open tasks)")
+    first = ask()  # other sessions of this device took the open tasks in earlier checks: it hears to leave those alone
+    said = json.loads(first)["hookSpecificOutput"]["additionalContext"] if first else ""
+    check(all("is already being handled by" in p for p in said.split("\n\n") if p.strip()) and "new task" not in said,
+          "tasks: the first prompt of a session says no task (the start context listed the open tasks), only which ones others hold", first[:600])
     http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_write", "arguments":
          {"path": "garden-memory/project_handover.md", "content": "---\nname: h\ndescription: d\nmetadata:\n  type: project\n---\n"
           "## Stand\n- open tot 1 jan 2099 [Codex, NEW-1-int] from Claude, start now: install the clips\n## Keuzes\n"}}},
