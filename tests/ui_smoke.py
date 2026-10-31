@@ -11,7 +11,9 @@ out a seeded graph cleanly (lone tasks in the first column) and opens as Tasks >
 it). The app shell (0.18): hash routes per view, sidebar and rail, back/forward, refresh, old deep links, Ctrl+K, the
 phone's tab bar and More sheet, no sideways scroll at 390 px, the map resizing with its box; an older server gets the
 old checks instead. Tool approvals show on the board and in their chat with fake data (skipped without them).
-Read-only: it opens notes, it never edits or sends.
+Knowledge pages and the palette (0.19): Notes as list and note (two panes; on a phone two pages with a Back arrow),
+Changes and Health as full pages, the search page, the command palette (search, jump, actions, keys, recent, roles),
+a toast instead of alert(); skipped on an older server. Read-only: it opens notes, it never edits or sends.
 
   systemd-run --user --scope -q -p MemoryMax=3G ~/.local/bin/uv run -q --with playwright python tests/ui_smoke.py
 (talks to the container port directly and sends what Traefik sends after the Authentik sign-in: the proxy secret
@@ -67,6 +69,12 @@ async def click_node(pg, box, sc):
     await pg.mouse.move(box["x"] + sc["x"], box["y"] + sc["y"])
     await pg.wait_for_timeout(300)
     await pg.mouse.click(box["x"] + sc["x"], box["y"] + sc["y"])
+
+
+async def has_palette(pg) -> bool:
+    """Knowledge pages and the command palette arrived in 0.19."""
+    await pg.wait_for_selector("#note", state="attached")
+    return await pg.locator("#palette").count() > 0
 
 
 async def is_shell(pg) -> bool:
@@ -165,11 +173,14 @@ async def desktop(browser, secret: str) -> None:
 async def search(browser, secret: str) -> None:
     ctx, pg, errors = await page(browser, secret, viewport={"width": 1500, "height": 900})
     await pg.wait_for_function("typeof Graph !== 'undefined' && Graph && Graph.graphData().nodes.length > 10", timeout=20000)
-    if await is_shell(pg):
+    if await has_palette(pg):  # the search page; the palette has its own test
+        await route(pg, f"#/notes?q={WORD}")
+    elif await is_shell(pg):
         await pg.keyboard.press("Control+k")  # from the Inbox: Ctrl+K opens the search in the Notes view
         await pg.wait_for_timeout(300)
         check(await pg.evaluate("location.hash.startsWith('#/notes') && document.activeElement === $('q')"), "Ctrl+K opens the search")
-    await pg.fill("#q", WORD)
+    if not await has_palette(pg):
+        await pg.fill("#q", WORD)
     await pg.wait_for_selector("#hits li", timeout=5000)
     paths = await pg.locator("#hits .hit-sub").all_inner_texts()
     check(len(paths) == len(set(paths)) and any(WORD in p for p in paths[:3]), f"search: one row per note, the memo near the top {paths[:3]}")
@@ -200,15 +211,28 @@ async def phone(browser, devices, secret: str) -> None:
     shell = await is_shell(pg)
     if shell:
         await route(pg, "#/notes")
-    # Phone layout: search and lists first, then the note; the map only on request.
-    check(await pg.evaluate("$('tab-notes').getBoundingClientRect().top < $('note').getBoundingClientRect().top && $('graph').hidden"),
-          "phone shows the lists above the note, no map")
-    await pg.wait_for_selector(".home-card .hits button")
-    check(await pg.evaluate("!$('topics').offsetParent"), "phone home: the topic cards replace the topic list")
-    await pg.locator(".home-card .hits button").first.tap()
-    await pg.wait_for_timeout(1500)
-    # under the shell's sticky page header (about 52 px) instead of at the very top
-    check(await pg.evaluate("(shell) => { const t = $('note').getBoundingClientRect().top; return shell ? t >= 0 && t < 80 : Math.abs(t) < 5; }", shell), "opening a note scrolls to it")
+    if await has_palette(pg):  # two pages: the topic list, then the note with a Back arrow
+        check(await pg.evaluate("!!$('topics').offsetParent && !$('note').offsetParent && $('graph').hidden"), "phone Notes: the topic list alone, no note, no map")
+        await pg.locator("#topics summary").first.tap()
+        await pg.locator("#topics details[open] .hits button").first.tap()
+        await pg.wait_for_timeout(1500)
+        check(await pg.evaluate("!!current && !!$('note').offsetParent && !$('topics').offsetParent && getComputedStyle($('back')).display !== 'none' && $('note').getBoundingClientRect().top < 80"),
+              "phone: a note replaces the list, at the top, with a Back arrow")
+        await pg.tap("#back")
+        await pg.wait_for_timeout(600)
+        check(await pg.evaluate("location.hash === '#/notes' && !!$('topics').offsetParent && !$('note').offsetParent"), "phone: Back returns to the topic list")
+        await pg.locator("#topics details[open] .hits button").first.tap()
+        await pg.wait_for_timeout(1200)
+    else:
+        # Phone layout: search and lists first, then the note; the map only on request.
+        check(await pg.evaluate("$('tab-notes').getBoundingClientRect().top < $('note').getBoundingClientRect().top && $('graph').hidden"),
+              "phone shows the lists above the note, no map")
+        await pg.wait_for_selector(".home-card .hits button")
+        check(await pg.evaluate("!$('topics').offsetParent"), "phone home: the topic cards replace the topic list")
+        await pg.locator(".home-card .hits button").first.tap()
+        await pg.wait_for_timeout(1500)
+        # under the shell's sticky page header (about 52 px) instead of at the very top
+        check(await pg.evaluate("(shell) => { const t = $('note').getBoundingClientRect().top; return shell ? t >= 0 && t < 80 : Math.abs(t) < 5; }", shell), "opening a note scrolls to it")
     # A phone widens its layout viewport to fit content that is too wide (and zooms out), so compare with the screen.
     check(await pg.evaluate("document.documentElement.scrollWidth <= screen.width"), "phone page fits the screen with a note open")
     if shell:
@@ -539,6 +563,100 @@ async def shell(browser, devices, secret: str) -> None:
     await ctx.close()
 
 
+async def knowledge(browser, devices, secret: str) -> None:
+    """Knowledge pages and the command palette (0.19): Notes two panes, Changes and Health full width, the search page,
+    the palette (notes, views, actions, keys, recent, roles), toasts instead of alert(); the phone's full-screen
+    palette. Read-only: the one action run is the theme, in this browser only. Skipped on an older server."""
+    ctx, pg, errors = await page(browser, secret, viewport={"width": 1440, "height": 900})
+    if not await has_palette(pg):
+        print("skip knowledge pages and palette (server older than 0.19)")
+        await ctx.close()
+        return
+    dialogs = []
+    pg.on("dialog", lambda d: (dialogs.append(d.message), asyncio.ensure_future(d.dismiss())))
+    await pg.wait_for_function("typeof Graph !== 'undefined' && Graph && Graph.graphData().nodes.length > 0", timeout=20000)
+    await route(pg, "#/notes", "#topics summary")
+    await pg.locator("#topics summary").first.click()
+    await pg.locator("#topics details[open] .hits button").first.click()
+    await pg.wait_for_timeout(800)
+    check(await pg.evaluate("(() => { const l = $('topics-pane').getBoundingClientRect(), n = $('note').getBoundingClientRect(); return l.width > 200 && n.left >= l.right - 1 && !!current; })()"),
+          "Notes: the topic list and the note side by side")
+    await route(pg, "#/changes", "#recent .card, #recent .empty", 500)
+    check(await pg.evaluate("$('recent').getBoundingClientRect().width > 600 && $('topics-pane').offsetParent === null"), "Changes is a full-width page")
+    if await pg.evaluate("me.admin"):
+        await route(pg, "#/health", "#lint .card, #lint .empty", 500)
+        check(await pg.evaluate("$('lint').getBoundingClientRect().width > 600"), "Health is a full-width page")
+    await route(pg, f"#/notes?q={WORD}", "#hits li button, #hits-empty:not([hidden])", 500)
+    check(await pg.evaluate("(w) => !$('results').hidden && $('note').hidden && $('q').value === w && $('results').getBoundingClientRect().width > 400", WORD),
+          "the search page shows in the middle, in place of the note")
+    # The palette: Ctrl+K from anywhere, roles, typing finds notes, arrows move, Enter opens.
+    await route(pg, "#/inbox")
+    await pg.keyboard.press("Control+k")
+    await pg.wait_for_selector("#palette[open]")
+    roles = await pg.evaluate("({focus: document.activeElement === $('pal-q'), combo: $('pal-q').getAttribute('role'), list: $('pal-list').getAttribute('role'), act: $('pal-q').getAttribute('aria-activedescendant'), views: [...document.querySelectorAll('.pal-opt')].length})")
+    check(roles["focus"] and roles["combo"] == "combobox" and roles["list"] == "listbox" and roles["act"] and roles["views"] >= 8, f"Ctrl+K opens the palette: combobox, listbox, active item, views and actions {roles}")
+    await pg.keyboard.type(WORD)
+    await pg.wait_for_selector("#pal-list .pal-opt", timeout=5000)
+    await pg.wait_for_timeout(700)
+    first = await pg.evaluate("$('pal-q').getAttribute('aria-activedescendant')")
+    await pg.keyboard.press("ArrowDown")
+    second = await pg.evaluate("$('pal-q').getAttribute('aria-activedescendant')")
+    check(first == "pal-o-0" and second == "pal-o-1" and await pg.evaluate("$('pal-o-1').getAttribute('aria-selected') === 'true'"), f"arrows move the active item {first} -> {second}")
+    await pg.keyboard.press("ArrowUp")
+    target = await pg.evaluate("pal.items[0]")
+    await pg.keyboard.press("Enter")
+    await pg.wait_for_timeout(1200)
+    check(target["kind"] == "note" and await pg.evaluate("(id) => !$('palette').open && current && current.path === id && location.hash.startsWith('#/notes/')", target["id"]),
+          f"typing finds the note and Enter opens it {target.get('id')}")
+    await pg.locator("#title").focus()
+    await pg.keyboard.press("Control+k")
+    await pg.wait_for_selector("#palette[open]")
+    check(await pg.evaluate("(id) => pal.items[0] && pal.items[0].id === id && $('pal-list').textContent.includes('Recent')", target["id"]), "the empty palette lists recent picks first")
+    await pg.keyboard.type("changes")
+    await pg.wait_for_timeout(200)
+    await pg.evaluate("palSelect(pal.items.findIndex(i => i.kind === 'view' && i.id === 'changes'))")
+    await pg.keyboard.press("Enter")
+    await pg.wait_for_timeout(500)
+    check(await pg.evaluate("location.hash === '#/changes' && !$('palette').open"), "the palette jumps to a view")
+    theme = await pg.evaluate("document.documentElement.dataset.theme || 'auto'")
+    await pg.keyboard.press("Control+k")
+    await pg.keyboard.type("toggle theme")
+    await pg.wait_for_timeout(200)
+    await pg.keyboard.press("Enter")
+    await pg.wait_for_timeout(300)
+    check(await pg.evaluate("(t) => (document.documentElement.dataset.theme || 'auto') !== t", theme), "the palette runs an action (theme)")
+    await pg.keyboard.press("Control+k")
+    await pg.keyboard.press("Escape")
+    await pg.wait_for_timeout(200)
+    check(not await pg.evaluate("$('palette').open"), "Esc closes the palette")
+    await pg.locator("#title").focus()
+    await pg.keyboard.press("/")
+    await pg.wait_for_selector("#palette[open]")
+    check(await pg.evaluate("pal.notesOnly && $('pal-q').placeholder.startsWith('Search notes')"), "/ opens the palette for notes")
+    await pg.keyboard.press("Escape")
+    await pg.click("#jump")
+    check(await pg.evaluate("$('palette').open"), "the sidebar's Search or jump opens the palette")
+    await pg.keyboard.press("Escape")
+    # alert() is gone from the knowledge views and the mission map: errors are toasts.
+    src = await pg.evaluate("Promise.all(['app.js', 'mission.js'].map(f => fetch('/ui/static/' + f).then(r => r.text())))")
+    left = [ln.strip() for f in src for ln in f.split("\n") if "alert(" in ln and not ln.strip().startswith("//")]
+    check(not left, f"no alert() left {left}")
+    await pg.evaluate("toast('smoke toast')")
+    check(await pg.evaluate("(() => { const t = $('toasts').querySelector('.toast'); return !!t && t.offsetParent !== null && $('toasts').getAttribute('role') === 'status'; })()"), "toast() shows a message in a live region")
+    check(not dialogs, f"no browser dialogs {dialogs[:2]}")
+    check(not errors, f"no page errors in the knowledge pages and palette {errors[:2]}")
+    await ctx.close()
+    ctx, pg, errors = await page(browser, secret, **devices["iPhone 14"])
+    await pg.wait_for_function("typeof Graph !== 'undefined' && Graph && Graph.graphData().nodes.length > 0", timeout=20000)
+    await pg.tap("#head-search")
+    await pg.wait_for_selector("#palette[open]")
+    check(await pg.evaluate("(() => { const r = $('palette').getBoundingClientRect(); return Math.abs(r.width - innerWidth) < 2 && r.height >= innerHeight - 2; })()"), "phone: the palette is a full-screen sheet")
+    await pg.tap("#pal-close")
+    check(not await pg.evaluate("$('palette').open"), "phone: Close shuts the palette")
+    check(not errors, f"no page errors in the phone palette {errors[:2]}")
+    await ctx.close()
+
+
 MISSION_LAYOUT_CHECK = """() => {
   // A seeded graph: 3 lanes, every status, chains inside lanes and links across them, a hand-over, lone tasks.
   const lanes = [{id: "claude", name: "Claude"}, {id: "codex", name: "Codex"}, {id: "agy", name: "Gemini"}], st = Object.keys(MS_STATUS);
@@ -670,6 +788,7 @@ async def main() -> None:
         await approvals(browser, p.devices, secret)
         await mission(browser, p.devices, secret)
         await shell(browser, p.devices, secret)
+        await knowledge(browser, p.devices, secret)
         await browser.close()
     print("ok" if not failures else f"{len(failures)} failed")
     sys.exit(1 if failures else 0)

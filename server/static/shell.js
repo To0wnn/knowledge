@@ -1,6 +1,6 @@
 // App shell: the sidebar (desktop; [ folds it to an icon rail, below 1000 px it is the rail unless opened), the
 // bottom tab bar and More sheet (phone), one page header per view, and a hash route per view: #/inbox, #/chats,
-// #/chats/<chat id>, #/tasks, #/tasks?view=flow, #/machines, #/notes, #/notes/<path>, #/map, #/map/<path>,
+// #/chats/<chat id>, #/tasks, #/tasks?view=flow, #/machines, #/notes, #/notes/<path>, #/notes?q=<search>, #/map, #/map/<path>,
 // #/changes, #/health, #/thispc. The URL is the only record of the view (refresh, back and forward work); an old
 // #<note path> link becomes #/notes/<path>. Paths in routes are encoded per part (encPath), decoded here. The views themselves are app.js's and mission.js's; this file shows one
 // at a time and asks it to load. Uses app.js globals ($, el, store, decode, pushHash, ck, Graph, mapOn, current, …).
@@ -64,12 +64,18 @@ function applyRoute() {
   if (flow) openMission(true); else if (ms.root) openMission(false);
   if (r.view === "tasks" && !flow) loadTasks(true).catch((e) => $("tasks").replaceChildren(el("p", "error", e.message)));
   if (r.view === "machines") loadMachines().catch((e) => $("machines").replaceChildren(el("p", "error", `Machines: ${e.message}`)));
-  // Notes and Map: the same lists and right column, the note or the map in the middle.
+  // Notes and Map: the topic list and right column, the note, the search results or the map in the middle. On a
+  // phone the list and the note are two pages: a note or a search hides the list and shows the Back arrow.
+  const q = r.view === "notes" ? r.q.get("q") : null; // null: no search; "" an empty search page
+  document.body.classList.toggle("kn-detail", r.view === "notes" && (!!r.arg || q !== null));
+  document.body.classList.toggle("kn-search", q !== null);
   if (home === "kn") {
     if ((r.view === "map") !== mapOn) setMap(r.view === "map");
+    $("results").hidden = q === null; if (!mapOn) $("note").hidden = q !== null;
     if (r.arg) { if (current?.path !== r.arg) openNote(r.arg, { push: false }); }
     else if (current) deselect({ push: false });
     else if (changed) homeView();
+    if (q !== null && $("q").value !== q) { $("q").value = q; runSearch(); }
   } else if (mapOn) setMap(false);
   if (r.view === "changes") loadRecent(true);
   if (r.view === "health") loadLint(true);
@@ -101,7 +107,7 @@ function paintHead() {
   if (pick.options.length !== PROJECTS.length + 1) pick.replaceChildren(new Option("All projects", ""), ...PROJECTS.map((p) => new Option(shown(p), p)));
   pick.value = agentProject;
 }
-$("back").onclick = () => (shellRoute.view === "chats" && ck.view ? ckShow(null) : goBack("#/inbox"));
+$("back").onclick = () => (shellRoute.view === "chats" && ck.view ? ckShow(null) : goBack(shellRoute.view === "notes" ? "#/notes" : "#/inbox"));
 
 // The Agents views' project filter: all projects unless one is picked; the Inbox badge always counts all.
 function setAgentProject(p) {
@@ -122,13 +128,9 @@ setInterval(() => { if ($("cockpit").hidden && !document.hidden && me.user) ckSu
 
 for (const b of $("tasks-mode").querySelectorAll("button")) b.onclick = () => go(b.dataset.mode === "flow" ? "#/tasks?view=flow" : "#/tasks");
 
-// Search: for now the knowledge search at the top of the Notes view.
-function openSearch() {
-  if (shellRoute.view !== "notes" && shellRoute.view !== "map") go(current ? noteRoute(current.path) : "#/notes");
-  $("q").focus(); $("q").select();
-}
-$("jump").onclick = openSearch;
-$("head-search").onclick = openSearch;
+// Search or jump: the command palette (palette.js).
+$("jump").onclick = () => openPalette();
+$("head-search").onclick = () => openPalette();
 
 // The sidebar: wide screens keep the viewer's choice (stored); narrow ones show the rail and open it over the page.
 const wide = matchMedia("(min-width: 1000px)");
