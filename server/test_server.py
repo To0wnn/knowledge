@@ -2004,6 +2004,12 @@ def main():
         rel = json.loads(raw("GET", "/ui/api/related?path=trade-memory/plan.md", headers=ck)[2])["related"]
         assert isinstance(rel, list)
         assert "isolated_note" in json.loads(raw("GET", "/ui/api/lint", headers=ck)[2])
+        # The UI lint is cached per index generation: a write shows in the next answer.
+        assert "nope_lintcache" not in raw("GET", "/ui/api/lint", headers=ck)[2].decode()
+        assert not call("knowledge_write", {"path": "memory/lintcache_probe.md", "content": memo("see [[nope_lintcache]]\n", "lintcache_probe")})[0]
+        assert "nope_lintcache" in raw("GET", "/ui/api/lint", headers=ck)[2].decode()
+        (mem / "lintcache_probe.md").unlink()
+        http("POST", "/invalidate", {"paths": ["memory/lintcache_probe.md"]}, token="watch-token")
         assert (tmp / "vectors.npz").exists()
         # History: every version with who changed it; native VM edits show as VM; diff + restore via the UI.
         (tmem / "hist.md").write_text("v1\n")

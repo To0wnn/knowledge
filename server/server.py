@@ -4418,9 +4418,19 @@ async def ui_search(request: Request):
     return JSONResponse({"notes": await asyncio.to_thread(search_notes, q, roots) if q else []})
 
 
+_ui_lint_cache: dict = {}  # scope -> (index gen, time, report): every page load and change asked for a ~0.5 s lint
+UI_LINT_MAX_AGE = 60  # device reports, usage and hand-back ages change without an index change
+
+
 @server.custom_route("/ui/api/lint", methods=["GET"])
 async def ui_lint(request: Request):
-    return JSONResponse(await asyncio.to_thread(lint_all) if device.get().get("admin") else {})  # lint spans every project
+    if not device.get().get("admin"):  # lint spans every project
+        return JSONResponse({})
+    scope, gen, now = tuple(device.get().get("roots") or ()), index.gen, time.time()
+    hit = _ui_lint_cache.get(scope)
+    if not hit or hit[0] != gen or now - hit[1] > UI_LINT_MAX_AGE:
+        hit = _ui_lint_cache[scope] = (gen, now, await asyncio.to_thread(lint_all))
+    return JSONResponse(hit[2])
 
 
 def may_approve(project: str) -> bool:
