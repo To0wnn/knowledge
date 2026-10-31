@@ -1195,8 +1195,8 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         check(ag["argv"][:2] == ["agy", "-p"] and ag["argv"][3:5] == ["--mode", "accept-edits"] and "--dangerously-skip-permissions" not in ag["argv"]
               and rules.get("permissions", {}).get("allow") == ["command(git status)", "command(git diff)", "command(git log)", "command(git add)",
                                                                  "command(git commit)", "command(git branch --show-current)", "mcp(knowledge_knowledge/*)", "mcp(knowledge/*)"]
-              and [Path(d[11:-1]).name for d in rules["permissions"].get("deny", [])] == [".git", ".gitattributes", ".gitmodules"]
-              and all(Path(d[11:-1]).parent == Path(ag["cwd"]) for d in rules["permissions"]["deny"])
+              and {Path(d[11:-1]).name for d in rules["permissions"].get("deny", [])} == {".git", ".gitattributes", ".gitmodules"}
+              and all(Path(d[11:-1]).parent.resolve() == Path(ag["cwd"]).resolve() for d in rules["permissions"]["deny"])
               and "'core.fsmonitor'='false'" in ag["env"].get("GIT_CONFIG_PARAMETERS", ""),
               "workers: agy without YOLO gets allow rules for this session only (--settings): knowledge tools and git status/diff/log/add/commit, "
               "and may never write git's own files in its worktree; its git runs without fsmonitor or hooks",

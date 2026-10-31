@@ -191,7 +191,8 @@ def agy_rules(cwd: str) -> list:
     next allowed git command (core.fsmonitor, diff.external, a filter or a hook)."""
     DIR.mkdir(parents=True, exist_ok=True)
     rules = DIR / f"agy-worker-settings-{hashlib.sha256(cwd.encode()).hexdigest()[:12]}.json"  # a file: quotes cannot pass a .cmd shim
-    deny = [f"write_file({os.path.join(cwd, n)})" for n in GIT_FILES]
+    roots = dict.fromkeys([cwd, os.path.realpath(cwd)])  # both spellings (macOS /var is /private/var): whichever agy matches
+    deny = [f"write_file({os.path.join(r, n)})" for r in roots for n in GIT_FILES]
     rules.write_text(json.dumps({"permissions": {"allow": AGY_ALLOWED, "deny": deny}}), encoding="utf-8")
     return ["--mode", "accept-edits", "--settings", str(rules)]
 
