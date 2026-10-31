@@ -802,7 +802,7 @@ def main(argv: list):
     cmd = argv[0] if argv else ""
     if cmd == "header" and len(argv) <= 2:
         tok = token(argv[1] if len(argv) == 2 else "-")
-        print(json.dumps({"Authorization": f"Bearer {tok}"} if tok else {}))
+        print(json.dumps(token_store.headers(tok) if tok else {}))
     elif cmd == "install" and len(argv) == 1:
         install_found()
         install_companion()

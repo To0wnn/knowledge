@@ -65,7 +65,7 @@ def context_text(tok: str, cwd: str, agent: str = "") -> str:
                                     **({"url": "default"} if token_store.url_is_default() else {})})
     for n in range(1, 10):
         q = query
-        req = urllib.request.Request(f"{URL}/context/{n}?{q}", headers={"Authorization": f"Bearer {tok}"})
+        req = urllib.request.Request(f"{URL}/context/{n}?{q}", headers=token_store.headers(tok))
         try:
             with urllib.request.urlopen(req, timeout=8) as r:
                 text = r.read().decode("utf-8", "replace")
@@ -125,7 +125,7 @@ RESULTS_TEXT = ("knowledge: another agent handed a result back to you (this mess
 def task_post(tok: str, path: str, body: dict) -> tuple[int, dict]:
     """POST /tasks/woken or /tasks/release: (HTTP status, JSON answer); (0, {}) when the server was not reached."""
     req = urllib.request.Request(f"{URL}{path}", data=json.dumps(body).encode(), method="POST",
-                                 headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"})
+                                 headers={**token_store.headers(tok), "Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=4) as r:
             code, raw = r.status, r.read()
@@ -168,7 +168,7 @@ def new_tasks(agent: str, tok: str, hook: dict, now=None, wake: bool = False, de
         extra["start"] = nonce
     query = urllib.parse.urlencode({**project_query(cwd), "agent": agent, "session": str(sid)[:80], "wake": int(wake),
                                     "v": 2, "claim": int(deliver is None), **extra, **({"plugin": version} if version else {})})
-    req = urllib.request.Request(f"{URL}/tasks?{query}", headers={"Authorization": f"Bearer {tok}"})
+    req = urllib.request.Request(f"{URL}/tasks?{query}", headers=token_store.headers(tok))
     try:
         with urllib.request.urlopen(req, timeout=4) as r:
             body = r.read().decode("utf-8", "replace")
@@ -341,7 +341,7 @@ def register_agy():
     conv = os.environ.get("ANTIGRAVITY_CONVERSATION_ID", "")
     try:  # the hooks only see the registration at the next turn: tell the admin page now
         query = urllib.parse.urlencode({**project_query(os.getcwd()), "agent": "agy", "session": conv[:80], "wake": 1})
-        urllib.request.urlopen(urllib.request.Request(f"{URL}/tasks?{query}", headers={"Authorization": f"Bearer {token('-')}"}),
+        urllib.request.urlopen(urllib.request.Request(f"{URL}/tasks?{query}", headers=token_store.headers(token("-"))),
                                timeout=4).close()
     except Exception:  # the next turn's hook says it to the server anyway
         pass
@@ -551,7 +551,7 @@ def mcp(tok: str):
         if not raw.strip():
             continue
         headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream",
-                   **({"Authorization": f"Bearer {tok}"} if tok else {}), **({"Mcp-Session-Id": session} if session else {})}
+                   **token_store.headers(tok), **({"Mcp-Session-Id": session} if session else {})}
         try:
             with urllib.request.urlopen(urllib.request.Request(f"{URL}/mcp", raw, headers), timeout=120) as r:
                 session = r.headers.get("Mcp-Session-Id") or session
@@ -647,7 +647,7 @@ def main(argv: list):
         companion.main(["serve"])
     elif cmd == "header" and len(rest) <= 1:
         tok = token(rest[0] if rest else "-")
-        print(json.dumps({"Authorization": f"Bearer {tok}"} if tok else {}))
+        print(json.dumps(token_store.headers(tok) if tok else {}))
     else:
         sys.exit(__doc__)
 

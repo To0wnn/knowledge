@@ -28,8 +28,9 @@ PORT = free_port()
 BASE = f"http://127.0.0.1:{PORT}"
 
 
-def http(method, path, body=None, token="rw-token"):
-    req = urllib.request.Request(BASE + path, method=method, data=json.dumps(body).encode() if body else None)
+def http(method, path, body=None, token="rw-token", headers=None):
+    req = urllib.request.Request(BASE + path, method=method, data=json.dumps(body).encode() if body else None,
+                                 headers=headers or {})
     req.add_header("Content-Type", "application/json")
     req.add_header("Accept", "application/json, text/event-stream")
     if token:
@@ -300,6 +301,20 @@ def lease_contract(tmp, ck, fr, raw):
     err = call("knowledge_edit", {"path": path, "old_string": "## Keuzes",
                                   "new_string": "- open until 2099-01-01 [Codex@nopc, PX-1] from Claude, start now: x\n## Keuzes"}, fr)
     assert err[0] and "pinned to device 'nopc'" in str(err) and "no device token has that name" in str(err), err
+    # One token on two pcs (plugin 0.15.0 names its machine): two holders, and the other is told which pc has it.
+    more = "- open until 2099-01-01 [Codex, LM-1] from Claude, start now: two pcs one token\n"
+    assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": more + "## Keuzes"}, fr)[0]
+    pc_a, pc_b = ({"X-Knowledge-Machine": m, "X-Knowledge-Machine-Label": n} for m, n in (("aaaaaaaaaaaaaaaa", "desk"), ("bbbbbbbbbbbbbbbb", "attic")))
+    woke_m = lambda h, sid: http("POST", "/tasks/woken", {"project": "garden", "id": "LM-1", "agent": "codex", "session": sid}, token=fr, headers=h)
+    assert woke_m(pc_a, "worker:a")[0] == 200 and leases()["LM-1"]["device"] == "friend-pc#aaaaaaaaaaaaaaaa"
+    st, body = woke_m(pc_b, "s-b")
+    assert st == 409 and json.loads(body)["held_by"]["label"] == "desk", body
+    assert "LM-1" not in {t["id"] for t in json.loads(http("GET", "/tasks/ready", token=fr, headers=pc_b)[1])["tasks"]}
+    assert json.loads(http("GET", "/tasks/ready", token=fr, headers=pc_a)[1])["tasks"] and woke_m(pc_a, "worker:a")[0] == 200
+    beat = json.loads(http("GET", "/tasks?project=x&agent=codex&v=2&session=s-b", token=fr, headers=pc_b)[1])
+    assert any("LM-1 is running in a worker on friend-pc on desk" in n["text"] for n in beat["notices"]), beat["notices"]
+    assert http("POST", "/tasks/release", {"project": "garden", "id": "LM-1"}, token=fr, headers=pc_b)[0] == 409
+    assert http("POST", "/tasks/release", {"project": "garden", "id": "LM-1"}, token=fr, headers=pc_a)[0] == 200
     # A claim marker ends the lease (the background check drops it).
     assert not call("knowledge_edit", {"path": path, "old_string": "per turn", "new_string": "per turn (claimed Codex, 2026-10-31)"}, fr)[0]
     end = time.time() + 10
@@ -307,7 +322,7 @@ def lease_contract(tmp, ck, fr, raw):
         time.sleep(0.3)
     assert "LT-1" not in leases(), leases()
     text = (tmp / "projects/garden/memory/project_tasks.md").read_text()
-    for line in [ln for ln in text.splitlines() if any(i in ln for i in ("LS-1", "PIN-1", "LT-1", "LT-2", "LC-1", "LC-2", "LH-1", "LN-1", "LR-1"))]:
+    for line in [ln for ln in text.splitlines() if any(i in ln for i in ("LM-1", "LS-1", "PIN-1", "LT-1", "LT-2", "LC-1", "LC-2", "LH-1", "LN-1", "LR-1"))]:
         call("knowledge_edit", {"path": path, "old_string": line + "\n", "new_string": ""})
     (tmp / "task_leases.json").write_text("{}")  # the later checks start without leases
 

@@ -1808,19 +1808,35 @@ def owner_agent(owner: str) -> str:
 assert owner_agent("Claude@pc-2") == "claude" and owner_agent("Gemini") == "agy"
 
 
+def dev_key(dev: dict | None = None) -> str:
+    """Who holds a lease: the token name, plus "#<machine id>" when the plugin names its pc (0.15.0+), so one token on
+    two pcs is two holders. A line pinned to a device ([Codex@<token>, ID]) still names the token."""
+    dev = device.get() if dev is None else dev
+    return dev.get("name", "") + (f"#{dev['machine']}" if dev.get("machine") else "")
+
+
 def lease_holder(t: dict, lease: dict | None, dev: str, now: float) -> dict | None:
-    """Who keeps `dev` from taking task t: the device the line is pinned to, or another device with a valid lease."""
-    if t.get("device") and t["device"].lower() != dev.lower():
+    """Who keeps `dev` (a dev_key) from taking task t: the device the line is pinned to, or another holder with a
+    valid lease."""
+    if t.get("device") and t["device"].lower() != dev.partition("#")[0].lower():
         return {"device": t["device"], "reserved": True}
     if lease and lease.get("until", 0) >= now and lease.get("device", "").lower() != dev.lower():
-        return {k: lease.get(k) for k in ("device", "session", "until")}
+        return {k: lease.get(k) for k in ("device", "session", "until", "label")}
     return None
+
+
+def holder_name(h: dict) -> str:
+    """A lease holder for people: the token, and the pc when the plugin named it."""
+    name = h.get("device", "").partition("#")[0]
+    return f"{name} on {h['label']}" if h.get("label") else name
 
 
 def held_reason(h: dict) -> str:
     if h.get("reserved"):
         return f"reserved for {h['device']}"
-    return f"already being handled by {'another session on this pc' if h.get('here') else h['device']} (until {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(h['until']))})"
+    if str(h.get("session", "")).startswith("worker:") and not h.get("here"):
+        return f"running in a worker on {holder_name(h)}"
+    return f"already being handled by {'another session on this pc' if h.get('here') else holder_name(h)} (until {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(h['until']))})"
 
 
 def held_text(tid: str, h: dict) -> str:
@@ -1867,14 +1883,16 @@ def claim_task(project: str, t: dict, agent: str, dev: str, session: str, start:
         if h := lease_holder(t, cur, dev, now):
             return out.append((False, h))
         if cur and not lease_taker(cur, session, start, now):
-            return out.append((False, {**{k: cur.get(k) for k in ("device", "session", "until")}, "here": True}))
+            return out.append((False, {**{k: cur.get(k) for k in ("device", "session", "until", "label")}, "here": True}))
         if told and (not cur or not cur.get("session")):
             return out.append((True, None))  # told before and not kept: no new lease from an ordinary turn
         if told and cur.get("session") == session and now - cur.get("told", cur.get("at", now)) >= LEASE:
             return out.append((True, cur))  # its own, but no longer renewed: it runs out
         new_holder = session and (not cur or cur.get("session") != session)
         base = cur or {"at": int(now)}
+        label = device.get().get("machine_label", "") if dev == dev_key() else base.get("label", "")
         leases[t["id"]] = new = {**base, "device": dev, "session": (session or base.get("session", ""))[:80], "agent": agent,
+                                 **({"label": label} if label else {}),
                                  "until": int(now + LEASE), **({"told": int(now)} if new_holder or not cur else {}),
                                  **({"start": start[:40]} if start and not base.get("start") else {})}
         out.append((True, new))
@@ -1906,7 +1924,7 @@ def task_items(project: str, names: tuple, held: dict | None = None, tasks: list
     leases and pins as they are, for this request's device)."""
     mem, mine, waiting, others = PROJECTS[project][1], [], [], []
     tasks = project_tasks(project)[0] if tasks is None else tasks
-    held = task_holders(project, tasks, device.get().get("name", "")) if held is None else held
+    held = task_holders(project, tasks, dev_key()) if held is None else held
     for t in tasks:
         if t["startable"] and (h := held.get(t["id"])):
             t = {**t, "startable": False, "waiting_reason": held_reason(h)}
@@ -2437,6 +2455,11 @@ class BearerAuth:
         dev = token_device(auth[7:] if auth.lower().startswith("bearer ") else "")
         if not dev:
             return await JSONResponse({"error": "invalid or missing token"}, status_code=401)(scope, receive, send)
+        if re.fullmatch(r"[0-9a-f]{16}", mid := headers.get(b"x-knowledge-machine", b"").decode("latin-1")):
+            # the pc this token runs on (plugin 0.15.0+): leases, sessions and the Machines list key on token + machine
+            label = re.sub(r"[^\w.-]", "-", headers.get(b"x-knowledge-machine-label", b"").decode("latin-1"))[:60]
+            dev = {**dev, "machine": mid, "machine_label": label or mid,
+                   "worker": re.sub(r"[^\w.-]", "", headers.get(b"x-knowledge-worker", b"").decode("latin-1"))[:60]}
         device.set(dev)
         return await self.app(scope, receive, send)
 
@@ -2886,11 +2909,11 @@ async def tasks_route(request: Request):
         tasks, back = project_tasks(project)
         results[:] = results_for(back, names, mem)
         if not (claim and may_lease(dev, project)):
-            return tasks, task_holders(project, tasks, key[0])
+            return tasks, task_holders(project, tasks, dev_key())
         held = {}
         for t in tasks:
             if t["startable"] and t["owner"].lower() in names:
-                ok, h = claim_task(project, t, agent, key[0], q.get("session", ""), start, told=seen is not None and t["id"] in seen)
+                ok, h = claim_task(project, t, agent, dev_key(), q.get("session", ""), start, told=seen is not None and t["id"] in seen)
                 if not ok:
                     held[t["id"]] = h
         return tasks, held
@@ -2919,7 +2942,7 @@ async def tasks_route(request: Request):
 async def tasks_ready_route(request: Request):
     """Every task an agent may start now in this token's projects, for the companion that wakes agents; a task another
     device holds (lease or pin) is left out, `mine` says this device holds its lease."""
-    out, dev, now = [], device.get().get("name", ""), time.time()
+    out, dev, now = [], dev_key(), time.time()
     for p, (_, mem) in list(PROJECTS.items()):
         if in_scope(mem + "/") and may_lease(device.get(), p):  # a read-only token could take none of them
             tasks, leases = (await asyncio.to_thread(project_tasks, p))[0], read_json(TASK_LEASES, {}).get(p, {})
@@ -2949,7 +2972,7 @@ async def tasks_woken_route(request: Request):
         return JSONResponse({"error": f"agent must be one of {sorted(AGENT_OWNERS)}"}, status_code=400)
     if not (t := next((t for t in (await asyncio.to_thread(project_tasks, project))[0] if t["id"] == tid), None)):
         return JSONResponse({"error": f"no open task {tid} in {project}"}, status_code=404)
-    wake = {"agent": agent, "session": session[:80], "device": device.get().get("name", "")}
+    wake = {"agent": agent, "session": session[:80], "device": dev_key(), "label": device.get().get("machine_label", "")}
     ok, lease = await asyncio.to_thread(claim_task, project, t, agent, wake["device"], wake["session"], start)
     if not ok:
         return JSONResponse({"held_by": lease}, status_code=409)
@@ -2970,7 +2993,7 @@ async def tasks_release_route(request: Request):
         return JSONResponse({"error": "send JSON {project, id}"}, status_code=400)
     if project not in PROJECTS or not in_scope(PROJECTS[project][1] + "/"):
         return JSONResponse({"error": f"unknown project {project}"}, status_code=404)
-    dev, out = device.get().get("name", ""), []
+    dev, out = dev_key(), []
 
     def change(d):
         cur = d.get(project, {}).get(tid)
@@ -2982,7 +3005,7 @@ async def tasks_release_route(request: Request):
     had = bool(read_json(TASK_LEASES, {}).get(project, {}).get(tid))
     await asyncio.to_thread(update_state, TASK_LEASES, change)
     if out[0]:
-        return JSONResponse({"held_by": {k: out[0].get(k) for k in ("device", "session", "until")}}, status_code=409)
+        return JSONResponse({"held_by": {k: out[0].get(k) for k in ("device", "session", "until", "label")}}, status_code=409)
     return JSONResponse({"released": had})
 
 
@@ -3002,7 +3025,7 @@ def stalled_check() -> int:
             if (t := tasks.get(tid)) is None:
                 gone.append((project, tid))
             elif t["stalled"] and not w.get("noticed"):
-                notify(f"Knowledge: task {tid} ({project}, for {t['owner']}) was woken on {w.get('device') or '?'} "
+                notify(f"Knowledge: task {tid} ({project}, for {t['owner']}) was woken on {holder_name(w) or '?'} "
                        f"{int((time.time() - w.get('at', 0)) // 60)} min ago, but nobody claimed it: {t['text'][:120]}")
                 told.append((project, tid))
     if told or gone:

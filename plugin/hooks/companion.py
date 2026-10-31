@@ -531,7 +531,7 @@ def pending_yolo():
 
 def server(method: str, path: str, tok: str, body=None):
     req = urllib.request.Request(token_store.url() + path, method=method, data=None if body is None else json.dumps(body).encode(),
-                                 headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"})
+                                 headers={**token_store.headers(tok), "Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=15) as r:
         return json.loads(r.read().decode("utf-8") or "{}")
 
@@ -922,7 +922,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self.host_ok() or o is None:
             return self.send(403, {"error": "not allowed"})
         if path == "/local/api/hello":
-            return self.send(200, {"companion": version(), "host": socket.gethostname()}, origin=o)
+            return self.send(200, {"companion": version(), "host": socket.gethostname(), "machine": token_store.machine().get("id", "")}, origin=o)
         if path == "/local/api/state":
             s = page_state()
             if not self.key_ok():  # the web UI's tab (and anyone else here): the agents, no tasks, folders or activity
@@ -988,6 +988,7 @@ def loop():
 
 
 def serve():
+    token_store.machine()  # this pc's id, made once; the plugin hooks make it too when the companion never ran
     httpd = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)  # never another interface: the API changes agent settings
     threading.Thread(target=loop, daemon=True).start()
     print(f"knowledge companion on {SELF}", flush=True)

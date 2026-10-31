@@ -13,8 +13,12 @@ http_headers_helper; `{}` when there is no token, so a static header still appli
 """
 import json
 import os
+import re
+import secrets
+import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 SERVICE = "knowledge"
@@ -143,6 +147,39 @@ def url_is_default(claude: bool = False) -> bool:
     return not (os.environ.get("KNOWLEDGE_URL") or URL_FILE.exists() or claude_option("url"))
 
 
+def machine() -> dict:
+    """This pc's identity, {"id", "label"}: a random id made once in KNOWLEDGE_HOME/machine.json with the host name as
+    label (the companion makes it, a hook makes it when missing). The server keys task leases on token + machine, so
+    one token used on two pcs is two machines. {} when the file cannot be read or written (the server then falls back
+    to the token alone)."""
+    f = KN_HOME / "machine.json"
+    for _ in range(2):
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+            if isinstance(d, dict) and re.fullmatch(r"[0-9a-f]{16}", str(d.get("id", ""))):
+                return {"id": d["id"], "label": re.sub(r"[^\w.-]", "-", str(d.get("label") or ""))[:60] or d["id"]}
+        except (OSError, ValueError):
+            pass
+        try:
+            KN_HOME.mkdir(parents=True, exist_ok=True)
+            with os.fdopen(os.open(f, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as fh:
+                fh.write(json.dumps({"id": secrets.token_hex(8), "label": socket.gethostname(), "created": time.time()}))
+        except FileExistsError:  # made by another hook meanwhile, or not valid: read it (again)
+            continue
+        except OSError:
+            return {}
+    return {}
+
+
+def headers(tok: str) -> dict:
+    """What every request to the server carries: the token and this pc's identity; a worker the companion started
+    also names its task (KNOWLEDGE_WORKER), so the server can hold its hand-back lines to the worker rules."""
+    m = machine()
+    return {**({"Authorization": f"Bearer {tok}"} if tok else {}),
+            **({"X-Knowledge-Machine": m["id"], "X-Knowledge-Machine-Label": m["label"]} if m else {}),
+            **({"X-Knowledge-Worker": w} if (w := re.sub(r"[^\w.-]", "", os.environ.get("KNOWLEDGE_WORKER", ""))[:60]) else {})}
+
+
 def store_url(u: str) -> None:
     URL_FILE.parent.mkdir(parents=True, exist_ok=True)
     URL_FILE.write_text(u.rstrip("/") + "\n", encoding="utf-8")
@@ -152,7 +189,7 @@ if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "token"
     tok = token()
     if cmd == "header":
-        print(json.dumps({"Authorization": f"Bearer {tok}"} if tok else {}))
+        print(json.dumps(headers(tok) if tok else {}))
     elif cmd == "url":  # for context.sh
         print(url())
     elif cmd == "url-default":  # for context.sh: "1" when Claude's url option is not set
