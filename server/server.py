@@ -55,6 +55,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
 from starlette.responses import (FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response,
                                  StreamingResponse)
+from starlette.staticfiles import NotModifiedResponse
 
 HOME = Path.home()
 cc_memory = lambda folder: HOME / ".claude/projects" / re.sub(r"[^A-Za-z0-9]", "-", str(HOME / folder)) / "memory"  # Claude Code's naming
@@ -3446,7 +3447,8 @@ STATIC = Path(__file__).with_name("static")
 # is a new URL (no stale script after a refresh), and the live stream tells open tabs to reload on a new release.
 STARTED = time.time()
 BOOT = secrets.token_hex(4)  # changes on every start, so ETags from before a restart never match
-RELEASE = hashlib.sha256(b"".join((STATIC / f).read_bytes() for f in ("index.html", "admin.html", "app.js", "admin.js", "app.css", "mission.js"))).hexdigest()[:12]
+UI_FILES = ("app.js", "admin.js", "app.css", "theme.js", "mission.js", "thispc.css")  # linked with ?v=<release>: in the hash too
+RELEASE = hashlib.sha256(b"".join((STATIC / f).read_bytes() for f in ("index.html", "admin.html", *UI_FILES))).hexdigest()[:12]
 
 
 COMPANION = "http://127.0.0.1:47321"  # the local companion (plugin/hooks/companion.py): the "This pc" tab asks it
@@ -3458,7 +3460,7 @@ CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
 
 def page(name: str) -> HTMLResponse:
     text = (STATIC / name).read_text()
-    for f in ("app.js", "admin.js", "app.css", "theme.js", "mission.js"):
+    for f in UI_FILES:
         text = text.replace(f"/ui/static/{f}\"", f"/ui/static/{f}?v={RELEASE}\"")
     return HTMLResponse(text.replace("<html lang=\"en\">", f"<html lang=\"en\" data-release=\"{RELEASE}\">"),
                         headers={"Cache-Control": "no-cache", **({"Content-Security-Policy": CSP} if name != "help.html" else {})})
@@ -4128,7 +4130,10 @@ async def ui_static(request: Request):
     # vendor/ files carry their version in the name, so the browser keeps them for good; the app's own files are
     # revalidated via ETag (a 304 on the LAN), so a deploy shows up at the next reload.
     versioned = request.path_params["name"].startswith("vendor/") or request.query_params.get("v") == RELEASE
-    return FileResponse(full, headers={"Cache-Control": "public, max-age=31536000, immutable" if versioned else "no-cache"})
+    resp = FileResponse(full, stat_result=full.stat(), headers={"Cache-Control": "public, max-age=31536000, immutable" if versioned else "no-cache"})
+    if resp.headers["etag"] in [t.strip().removeprefix("W/") for t in request.headers.get("if-none-match", "").split(",")]:
+        return NotModifiedResponse(resp.headers)  # FileResponse itself never answers 304
+    return resp
 
 
 def scoped_gen() -> int:
