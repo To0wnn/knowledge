@@ -15,5 +15,8 @@ effort: high
    - **Verify**: the check command plus the one end-to-end test that proves the goal (on the OS it runs on).
    - **Measure** (when the change should improve something): the number before, and how you get it after.
    - **Roll back**: the backup or command that undoes it.
+   - **Slices**: more than ~3 independent parts, or more than about an hour of work: cut it into slices that each
+     ship on their own (tests, release), the one the user notices first going first. A wish that comes up while a
+     slice is being built becomes the next slice, not extra work for the running one.
 3. Ask only about a real choice (one recommendation with its reason); otherwise go.
 4. Build in small steps; after each, run the check.
