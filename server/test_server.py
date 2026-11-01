@@ -854,6 +854,9 @@ def board_contract(tmp, ck, fr, raw, er, et):
     back = {(i["kind"], i["id"]): i for i in board()}
     assert back[("worker", "BRD-4")]["col"] == "running" and back[("worker", "BRD-4")]["can_stop"] and back[("worker", "BRD-5")]["can_restart"], back
     assert col("task", "BRD-1") == "open" and items[("task", "BRD-1")]["hosts"] == [{"machine": mid, "label": "garage"}], items.get(("task", "BRD-1"))
+    assert (items[("task", "BRD-1")]["due"], items[("task", "BRD-1")]["overdue"]) == ("2099-01-01", False), items[("task", "BRD-1")]
+    hosts = {t["id"]: t.get("hosts") for t in json.loads(raw("GET", "/ui/api/tasks?hosts=1", headers=ck)[2])["tasks"]}
+    assert hosts["BRD-1"] == [{"machine": mid, "label": "garage"}] and hosts["BRD-2"] == [], hosts
     assert col("task", "BRD-2") == "needs" and items[("task", "BRD-2")]["approve"], items.get(("task", "BRD-2"))
     assert col("task", "BRD-9-done") == "done", "a result handed back today is done"
     assert ("task", "BRD-3") not in items and ("task", "BRD-4") not in items, "a person's line and a task its worker shows"
