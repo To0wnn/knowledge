@@ -221,8 +221,10 @@ def limits_e2e(tok: str, tmp: Path):
             code, out, err = go(gate, {**hook, **call})
             check(code == 0 and '"deny"' in out, f"{label}: a new subagent is refused at 96%", out[:400] + err[-400:])
             guard, edit = guards[label]
-            code, out, err = go(guard, {**hook, **edit("pw=gategategate")})
-            check(code == 0 and '"deny"' in out and "secret set NAME" in out, f"{label}: an edit with a known secret is refused", out[:400] + err[-400:])
+            # the last three were missed until 1 Nov 2026: & ? # and a literal \n did not split the word
+            for text in "pw=gategategate", "https://x/api?token=gategategate&page=2", "pw=gategategate&x=1", '"pw": "gategategate\\n"':
+                code, out, err = go(guard, {**hook, **edit(text)})
+                check(code == 0 and '"deny"' in out and "secret set NAME" in out, f"{label}: an edit with a known secret is refused ({text})", out[:400] + err[-400:])
             code, out, err = go(guard, {**hook, **edit("pw=‹secret:X›")})
             check(code == 0 and out.strip() == "", f"{label}: a clean edit gets no output (agy reads any as deny)", out[:400] + err[-400:])
     finally:
