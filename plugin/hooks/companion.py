@@ -1029,9 +1029,12 @@ def with_git(folders: dict, ws: dict, now: float) -> tuple:
     return {**folders, "linked": linked}, {k: once(w.get("worktree")) if recent(w) else None for k, w in ws.items()}
 
 
-# a labelled value (password: x, token=x, Bearer x) or a long key-like run; the server masks its known secrets as well
-SECRETISH = re.compile(r"((?:password|passwd|token|api[-_ ]?key|secret|authorization|bearer)[\"']?\s*[:=]?\s*[\"']?)[^\s\"',}]{6,}"
-                       r"|(?<![\w-])[A-Za-z0-9_+=-]{32,}(?![\w-])", re.I)
+# a labelled value (password: x, token=x, Bearer x), `sshpass -p x`, the password in https://user:x@host, and keys with a
+# known prefix (sk-, ghp_, xoxb-); hashes and file names stay (a commit id is no secret). The server masks its known
+# secret values as well.
+SECRETISH = re.compile(r"((?:password|passwd|token|api[-_ ]?key|secret)[\"']?\s*[:=]\s*[\"']?|(?:bearer|authorization:)\s+|sshpass\s+-p\s*"
+                       r"|://[^/\s:@]+:)[^\s\"',}@]+"
+                       r"|(?<![\w-])(?:sk|ghp|gho|ghs|ghu|github_pat|xox[abpr])[-_][A-Za-z0-9_-]{16,}", re.I)
 TAIL_LINES, TAIL_WIDTH = 3, 200
 
 
@@ -1571,6 +1574,10 @@ def main(argv: list):
         assert why_not(task, {}, {**on, "workersAllowed": False}, {}, "").startswith("Workers are off")
         assert mask("export API_KEY=gategategate and token: gategate") == "export API_KEY=‹masked› and token: ‹masked›", mask("export API_KEY=gategategate and token: gategate")
         assert mask("sk-" + "a1" * 20) == "‹masked›" and mask("ran the tests: 12 passed") == "ran the tests: 12 passed"
+        assert mask("sshpass -p gategate ssh pi@h") == "sshpass -p ‹masked› ssh pi@h", mask("sshpass -p gategate ssh pi@h")
+        assert mask("git clone https://bob:gategate@host/x") == "git clone https://bob:‹masked›@host/x", mask("git clone https://bob:gategate@host/x")
+        keep = "commit " + "0123456789abcdef" * 2 + "01234567 by secret-guard.py, see ab12" * 1
+        assert mask(keep) == keep, mask(keep)
         with tempfile.NamedTemporaryFile("w", suffix=".log", delete=False, encoding="utf-8") as f:
             f.write("\n".join(["old line", json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "Reading   the memo"}]}}),
                                 json.dumps({"type": "system", "subtype": "hook"}), "plain " + "word " * 80,
