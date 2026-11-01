@@ -678,7 +678,7 @@ async def knowledge(browser, devices, secret: str) -> None:
     await pg.wait_for_function("typeof Graph !== 'undefined' && Graph && Graph.graphData().nodes.length > 0", timeout=20000)
     await pg.tap("#head-search")
     await pg.wait_for_selector("#palette[open]")
-    check(await pg.evaluate("(() => { const r = $('palette').getBoundingClientRect(); return Math.abs(r.width - innerWidth) < 2 && r.height >= innerHeight - 2; })()"), "phone: the palette is a full-screen sheet")
+    check(await pg.evaluate("(() => { const r = $('palette').getBoundingClientRect(); return Math.abs(r.width - innerWidth) < 2 && r.height >= document.documentElement.clientHeight - 2; })()"), "phone: the palette is a full-screen sheet")  # 100dvh: innerHeight also counts the browser bar
     await pg.tap("#pal-close")
     check(not await pg.evaluate("$('palette').open"), "phone: Close shuts the palette")
     check(not errors, f"no page errors in the phone palette {errors[:2]}")
