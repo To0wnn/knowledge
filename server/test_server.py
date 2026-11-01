@@ -136,6 +136,13 @@ def tasks_contract(tmp, ck, fr, ver, raw):
     assert not any(i in x for x in beat["tasks"] for i in ("DEP-1", "DAT-1", "APR-1", "LEG-1")), beat["tasks"]
     assert any("DEP-1" in x and "[not yet: waits for CX-1]" in x for x in beat["waiting"]), beat["waiting"]
     first = http("GET", "/context/1?project=x&agent=codex", token=fr)[1]
+    # A session start asks for every part at once: they share one build, and the cache never crosses tokens.
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(6) as pool:
+        mine = list(pool.map(lambda n: http("GET", f"/context/{n}?project=x&agent=codex", token=fr), range(1, 7)))
+        owner = list(pool.map(lambda n: http("GET", f"/context/{n}?project=x&agent=codex"), range(1, 7)))
+    assert all(c == 200 for c, _ in mine + owner) and mine[0][1] == first, mine[0][1][:300]
+    assert "knowledge plugin (project" not in "".join(b for _, b in mine) and "knowledge plugin (project" in owner[0][1], owner[0][1][:300]
     assert "Not yet (the bracket says why)" in first and "[not yet: waits for approval]" in first, first[:2000]
     ready = json.loads(http("GET", "/tasks/ready", token=fr)[1])["tasks"]
     got = {t["id"]: t for t in ready}

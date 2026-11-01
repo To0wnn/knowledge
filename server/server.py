@@ -3454,6 +3454,31 @@ async def status_route(request: Request):
     return JSONResponse({"stored": n})
 
 
+CONTEXT_TTL = 10  # seconds: one session start asks for all its parts within this
+_context_cache: dict[tuple, tuple[float, list[str]]] = {}
+_context_locks: dict[tuple, threading.Lock] = {}
+_context_guard = threading.Lock()
+
+
+def shared_context_parts(project: str, agent: str, chat: bool, webchat: bool) -> list[str]:
+    """context_parts once per session start: the plugin asks for every part at the same moment, and building the whole
+    context (lint, tasks) for each part made them queue for seconds, past the hook's 8 s limit (offline mode)."""
+    # the token's scope decides what it may see; index.gen makes any memo or doc change rebuild it at once
+    key = (device.get().get("name", ""), project, agent, chat, webchat, index.gen)
+    with _context_guard:
+        lock = _context_locks.setdefault(key, threading.Lock())
+    with lock:  # the parts that arrive meanwhile wait for this one build instead of each building their own
+        now = time.time()
+        if (hit := _context_cache.get(key)) and now - hit[0] < CONTEXT_TTL:
+            return hit[1]
+        parts = context_parts(project, agent, chat, webchat)
+        with _context_guard:
+            for k in [k for k, (at, _) in _context_cache.items() if now - at >= CONTEXT_TTL]:
+                del _context_cache[k]
+            _context_cache[key] = (now, parts)
+        return parts
+
+
 @server.custom_route("/context/{part:int}", methods=["GET"])  # not a number: 404, not a crash
 async def context_route(request: Request):
     """?project= is the folder's project name from its .knowledge-project (with linked=1, sent by the plugin), else the
@@ -3464,7 +3489,7 @@ async def context_route(request: Request):
     # worker itself knows its one task from its prompt
     chat = plugin_version(request.query_params.get("plugin", "")) >= (0, 15, 0) and not device.get().get("worker") \
         and agent in AGENT_OWNERS and bool(await asyncio.to_thread(worker_hosts, project, agent))
-    parts = await asyncio.to_thread(context_parts, project, agent if agent in AGENT_OWNERS else "", chat,
+    parts = await asyncio.to_thread(shared_context_parts, project, agent if agent in AGENT_OWNERS else "", chat,
                                     bool(device.get().get("webchat")))  # lint + graph: off the loop
     if v := request.query_params.get("plugin", ""):  # every part asks, so all of them split the same way
         if request.path_params["part"] == 1:
