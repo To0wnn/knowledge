@@ -5683,7 +5683,9 @@ async def machine_report(request: Request):
                   "game": str(b.get("game") or "")[:80],
                   "agents": {a: {"yolo": v.get("yolo") is True, "trusted": v.get("trusted") if isinstance(v.get("trusted"), bool) else None,
                                  "limit": float(v["limit"]) if isinstance(v.get("limit"), (int, float)) else None,
-                                 "resets": float(v["resets"]) if isinstance(v.get("resets"), (int, float)) else None}
+                                 "resets": float(v["resets"]) if isinstance(v.get("resets"), (int, float)) else None,
+                                 # the installed plugin, read from disk by the companion: shown before the agent's first session
+                                 **({"plugin": v["plugin"][:20]} if isinstance(v.get("plugin"), str) and re.fullmatch(r"[\w.+-]{1,20}", v["plugin"]) else {})}
                              for a, v in (b.get("agents") or {}).items() if a in AGENT_OWNERS and isinstance(v, dict)},
                   "workers": [{k: (w.get(k) if w.get(k) is None or isinstance(w.get(k), (int, float, bool)) else str(w[k])[:300])
                                for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open", "checkpoint", "merged", "why")}

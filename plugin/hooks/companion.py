@@ -68,6 +68,14 @@ PORT = int(os.environ.get("KNOWLEDGE_COMPANION_PORT") or 47321)  # fixed: the we
 SELF = f"http://127.0.0.1:{PORT}"
 STATIC = HOOKS.parent / "companion" / "static"
 HOME = Path.home()
+# A login service gets the PATH of whoever installed it, not the one a shell profile builds, so agents installed with
+# npm/mise/bun/volta (~/.zshrc adds their bin folder) stay invisible: add the usual user install folders that exist.
+AGENT_DIRS = [HOME / d for d in (".npm-global/bin", ".local/bin", ".local/share/mise/shims", ".bun/bin", ".volta/bin",
+                                 ".cargo/bin", "bin")] + [Path(d) for d in ("/opt/homebrew/bin", "/usr/local/bin")]
+if os.name == "nt" and os.environ.get("APPDATA"):
+    AGENT_DIRS.append(Path(os.environ["APPDATA"]) / "npm")
+_have = os.environ.get("PATH", "").split(os.pathsep)
+os.environ["PATH"] = os.pathsep.join(_have + [str(d) for d in AGENT_DIRS if str(d) not in _have and d.is_dir()])
 KN_HOME = token_store.KN_HOME  # KNOWLEDGE_HOME relocates it (tests)
 STATE = KN_HOME / "companion"
 BACKUPS = HOME / "backups" / "knowledge-companion"
@@ -1119,7 +1127,7 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
     links, gits = with_git(folder_links(), ws, now)
     body = {"version": version(), "workersAllowed": s["workersAllowed"], "maxWorkers": s["maxWorkers"], "game": workers.game_session(),
             "agents": {a: {"yolo": bool(yolo.get(a, {}).get("on")), "trusted": not untrusted(a, folders), "limit": lim.get(a),
-                     "resets": (resets or {}).get(a)}
+                     "resets": (resets or {}).get(a), **({"plugin": v} if (v := plugin_version(a)) else {})}  # known before a session
                        for a in AGENTS if installed(a)},
             "workers": [{**{k: w.get(k) for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open", "why")},
                          "checkpoint": bool(w.get("checkpoint")), "merged": w["status"] == "merged", "git": gits.get(k),
