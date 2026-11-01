@@ -102,7 +102,15 @@ def tasks_contract(tmp, ck, fr, ver, raw):
     err, res = add("- open until 2099-01-01 [Codex, DEP-9] from Gemini, start after NOPE-77: typo")
     assert err and "no task NOPE-77" in res, res
     err, res = add("- open until 10 nov [Codex, DAT-9] from Gemini, start now: no year")
-    assert err and "always with the year" in res, res
+    assert err and "always with the year" in res and "is no task line the server can read" in res, res
+    # A plain open item that links or quotes "[a, b]" after its colon is no task line: allowed as before.
+    plain = ("- open until 10 nov 2026: zie [Kalico, issue #12](https://example.org/12)\n"
+             "- open until 10 nov: the format is [Owner, ID] from X, start now")
+    err, res = add(plain)
+    assert not err, res
+    call("knowledge_edit", {"path": path, "old_string": plain + "\n", "new_string": ""})
+    # A memo that was there before the start is no new write: the startup scan tells nobody.
+    assert not [n for n in json.loads((tmp / "notices.json").read_text() if (tmp / "notices.json").exists() else "[]") if "BOOT-1" in n["text"]]
     two = ("- open until 2099-01-01 [Codex, CH-1] from Gemini, start now: first\n"
            "- open until 2099-01-01 [Codex, CH-2] from Gemini, start after CH-1: second")
     assert not add(two)[0], "a chain written in one go"
@@ -984,7 +992,7 @@ def flow_contract(tmp, ck, fr, raw, heard):
     rows = lambda: {t["id"]: t for t in json.loads(ui("/ui/api/tasks")[2])["tasks"] if t["project"] == "garden"}
     wait = lambda cond, t=8: next((True for _ in range(int(t / 0.2)) if cond() or time.sleep(0.2)), cond())
     state = tmp / "needs_notified.json"
-    assert ui("/ui/api/admin/settings", {"needs_per_hour": 6})[0] == 200
+    assert ui("/ui/api/admin/settings", {"needs_per_hour": 60})[0] == 200
     assert wait(state.exists)
     time.sleep(2.5)  # past the quiet window of the board polls before
     path = "garden-memory/project_tasks.md"
@@ -992,7 +1000,11 @@ def flow_contract(tmp, ck, fr, raw, heard):
              "- [Claude, FL-2-done]: for an agent",
              "- open until 2099-01-01 [Codex, FL-3] from Sam, start now: build the fence",
              "- open until 2099-01-01 [Codex, FL-4] from Sam, start after FL-3: paint the fence",
-             "- open until 2099-01-01 [Codex, FL-5-cont] from Sam, start after approval: go on with FL-5"]
+             "- open until 2099-01-01 [Codex, FL-5-cont] from Sam, start after approval: go on with FL-5",
+             "- [homelab Claude, FL-8-done]: for an agent named with its project",
+             "- [laptop, FL-9-done]: for a device token",
+             "- open until 2099-01-01 [Codex, FL-6-cont] from Sam, start now: go on with FL-6",
+             "- open until 2099-01-01 [Codex, FL-7] from Sam, start after FL-6: after six"]
     assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": "\n".join(lines) + "\n## Keuzes"}, fr)[0]
     said = lambda tid: [m for m in heard if m.startswith(f"Knowledge needs you: {tid} ")]
     assert wait(lambda: said("FL-1-done")), heard
@@ -1002,12 +1014,21 @@ def flow_contract(tmp, ck, fr, raw, heard):
     r = b["task:garden/FL-1-done"]
     assert r["col"] == "needs" and r["result"] and r["line"] == "result for Sam: the beds are built", r
     assert b["task:garden/FL-2-done"]["col"] == "done", "a result for an agent reaches it at its next turn"
+    assert b["task:garden/FL-8-done"]["col"] == "done" and "task:garden/FL-9-done" not in b, "agents and devices by another name need nobody"
+    assert not said("FL-8-done") and not said("FL-9-done"), heard
     assert b["handover:garden/FL-5-cont"]["line"].startswith("handed over to Codex for Sam"), b["handover:garden/FL-5-cont"]
     ready = {t["id"] for t in json.loads(http("GET", "/tasks/ready", token=fr)[1])["tasks"]}
     assert not {"FL-1-done", "FL-2-done"} & ready and "FL-3" in ready, ready
     # Cancel: owner or admin only; the line becomes a result for its requester in the same place.
     assert ui("/ui/api/task/cancel", {"project": "garden", "id": "NOPE"})[0] == 404
     assert b["task:garden/FL-3"]["can_cancel"] and rows()["FL-3"]["can_cancel"]
+    # A task a worker holds is not cancelled under it (it would go on and hand back a second result): stop it first.
+    leases = json.loads((tmp / "task_leases.json").read_text() or "{}")
+    leases.setdefault("garden", {})["FL-3"] = {"device": "laptop", "session": "worker:w9", "until": int(time.time()) + 300}
+    (tmp / "task_leases.json").write_text(json.dumps(leases))
+    st, _, body = ui("/ui/api/task/cancel", {"project": "garden", "id": "FL-3"})
+    assert st == 409 and b"stop the worker first" in body and not rows()["FL-3"]["can_cancel"], body
+    leases["garden"].pop("FL-3"); (tmp / "task_leases.json").write_text(json.dumps(leases))
     st, _, body = ui("/ui/api/task/cancel", {"project": "garden", "id": "FL-3", "reason": "no fence\nafter all"})
     assert st == 200, body
     text = (tmp / "projects/garden/memory/project_tasks.md").read_text()
@@ -1018,8 +1039,30 @@ def flow_contract(tmp, ck, fr, raw, heard):
     assert b["task:garden/FL-4"]["col"] == "needs" and b["task:garden/FL-4"]["blocked"], b["task:garden/FL-4"]
     assert b["task:garden/FL-3-done"]["line"].startswith("result for Sam: cancelled by alice"), b["task:garden/FL-3-done"]
     assert "task-cancel" in (tmp / "audit.log").read_text()
-    for line in ("- [Sam, FL-1-done]: the beds are built", "- [Claude, FL-2-done]: for an agent", "- [Sam, FL-3-done]: cancelled by alice: no fence after all",
-                 lines[3], lines[4]):
+    # The requester reads the result and removes it: what waited on FL-3 still waits, until the owner approves it.
+    assert not call("knowledge_edit", {"path": path, "old_string": "- [Sam, FL-3-done]: cancelled by alice: no fence after all\n", "new_string": ""}, fr)[0]
+    assert rows()["FL-4"]["waiting_reason"].startswith("FL-3 was cancelled"), rows()["FL-4"]
+    assert ui("/ui/api/task/approve", {"project": "garden", "id": "FL-4"})[0] == 200 and rows()["FL-4"]["startable"], rows()["FL-4"]
+    # Cancelling a hand-over cancels the task it continues: what starts after FL-6 waits.
+    assert ui("/ui/api/task/cancel", {"project": "garden", "id": "FL-6-cont"})[0] == 200
+    assert "- [Sam, FL-6-done]: cancelled by alice\n" in (tmp / "projects/garden/memory/project_tasks.md").read_text()
+    assert rows()["FL-7"]["waiting_reason"].startswith("FL-6 was cancelled"), rows()["FL-7"]
+    # A pc that sleeps and wakes with a worker running is one message per worker run, not one per nap.
+    pc = {"X-Knowledge-Machine": "ffffffffffffffff", "X-Knowledge-Machine-Label": "sleepy"}
+    nap = lambda: http("POST", "/machine/report", {"version": "0.18.1", "workersAllowed": True, "agents": {"codex": {}}, "workers": [
+        {"id": "FL-W1", "project": "garden", "agent": "codex", "status": "running", "started": 1000.0}]}, token=fr, headers=pc)
+    def sleep_pc():
+        d = json.loads((tmp / "machines.json").read_text())
+        d["ffffffffffffffff"]["at"] -= 3600; d["ffffffffffffffff"]["companion"]["at"] -= 3600
+        (tmp / "machines.json").write_text(json.dumps(d))
+    time.sleep(2.5)  # past the quiet window of the board polls above
+    nap(); sleep_pc()
+    assert wait(lambda: said("FL-W1")), heard
+    nap(); time.sleep(2.5); sleep_pc(); time.sleep(3)
+    assert len(said("FL-W1")) == 1, said("FL-W1")
+    http("POST", "/machine/report", {"version": "0.18.1"}, token=fr, headers=pc)
+    for line in ("- [Sam, FL-1-done]: the beds are built", "- [Claude, FL-2-done]: for an agent", "- [Sam, FL-6-done]: cancelled by alice",
+                 lines[3], lines[4], lines[5], lines[6], lines[8]):
         assert not call("knowledge_edit", {"path": path, "old_string": line + "\n", "new_string": ""}, fr)[0], line
     assert ui("/ui/api/admin/settings", {"needs_per_hour": 0})[0] == 200
     assert wait(lambda: not state.exists())
@@ -1149,6 +1192,7 @@ def main():
     (mem / "MEMORY.md").write_text("# Index\n" + "".join(f"- [Item {i}](f{i}.md) — {'x' * 120}\n" for i in range(120)))
     (mem / "fact.md").write_text("line one\nline two\n")
     (mem / "due.md").write_text("- open tot 1 jan 2026: overdue sample item\n")
+    (mem / "boot.md").write_text("- open until 10 nov [Codex, BOOT-1] from Claude, start now: there before the start\n")
     (lab / "overzicht.md").write_text("overview\n")
     (lab / "secret.env").write_text("nope")
     (lab / "opnsense-config.xml").write_text("<opnsense><wireguard>privkey</wireguard></opnsense>")

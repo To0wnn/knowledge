@@ -378,7 +378,8 @@ class Index:
                 # come after this (or never); its new task lines get their writer now
                 if WATCH_DEVICE and mem_of(rel) and (now := self.files.get(rel)):
                     note_task_authors(rel, hit[2] if hit else "", now[2], WATCH_DEVICE, keep=True)
-                    tell_task_problems(rel, hit[2] if hit else "", now[2])
+                    if self.loaded:  # the startup scan sees every memo as new: nobody wrote anything
+                        tell_task_problems(rel, hit[2] if hit else "", now[2])
         for rel in set(self.files) - seen:  # gone, or added while this walk ran: refresh decides
             self.refresh(rel)
 
@@ -1626,6 +1627,7 @@ AGENT_OWNERS = {"claude": ("claude",), "codex": ("codex",), "agy": ("gemini", "a
 TASK_CHARS = 240  # the memo holds the full text; the start context only has to make the agent look
 STALLED_AFTER = int(os.environ.get("KNOWLEDGE_TASK_STALLED", 30 * 60))  # a woken task nobody claimed this long is stalled
 TASK_AUTHORS, TASK_APPROVALS, TASK_WAKES, TASK_LEASES, TASK_IDLE = (AUDIT.parent / f"task_{n}.json" for n in ("authors", "approvals", "wakes", "leases", "idle"))
+TASK_CANCELLED = AUDIT.parent / "task_cancelled.json"  # project -> {ID: {by, at}}: kept after its result line is read and removed
 # a task that may start but that no worker and no session took this long gets one Matrix notice (where it waits and why)
 IDLE_AFTER = int(os.environ.get("KNOWLEDGE_TASK_IDLE", 30 * 60))
 LEASE = int(os.environ.get("KNOWLEDGE_TASK_LEASE", STALLED_AFTER))  # a device that took a task holds it this long without a claim marker
@@ -1714,7 +1716,8 @@ assert WORKER_HANDBACK.search("- [Claude, K-1-done]: works; branch task/K-1; don
 assert not WORKER_HANDBACK.search("- [Claude, K-1-done]: works")
 
 
-TASK_LIKE = re.compile(r"^\s*(?:[-*+]\s+)?open (?:until|tot)\b.*?\[[^,\]]+,\s*[^\]]+\]", re.I)  # parse_task or a broken one
+# what is meant as a task line: the owner bracket before any ':' (a plain open item may link "[a, b](...)" after its colon)
+TASK_LIKE = re.compile(r"^\s*(?:[-*+]\s+)?open (?:until|tot)\b[^:\[]*\[[^,\]]+,[^\]]+\]", re.I)
 
 
 def task_problems(rel: str, before: str, after: str) -> list[str]:
@@ -1726,7 +1729,7 @@ def task_problems(rel: str, before: str, after: str) -> list[str]:
     old, out = set(before.splitlines()), []
     for line in after.splitlines():
         if line not in old and TASK_LIKE.match(line) and not parse_task(line):
-            out.append(f"task line '{line.strip()[:80]}' has no date the server can read, so it would be no task at all: write "
+            out.append(f"task line '{line.strip()[:80]}' is no task line the server can read (its date), so it would be no task at all: write "
                        "'open until <date>' as 2026-11-10 or 10 nov 2026 (always with the year). Format: " + TASK_FORMAT)
     project = project_of(rel)
     for t in added_tasks(rel, before, after) if project else []:
@@ -1747,7 +1750,7 @@ def tell_task_problems(rel: str, before: str, after: str):
     wrong with its new task lines at its next turn."""
     if WATCH_DEVICE and (problems := task_problems(rel, before, after)):
         for p in problems:
-            add_notice(WATCH_DEVICE, project_of(rel), f"Knowledge: in {rel}, {p}")
+            add_notice(WATCH_DEVICE, project_of(rel), f"Knowledge: in {rel}, {p}", once=True)
 
 
 def refuse_bare_tasks(rel: str, before: str, after: str):
@@ -1810,6 +1813,8 @@ def note_task_authors(rel: str, before: str, after: str, by: str, keep: bool = F
                 {t["id"]: {"by": by, "at": int(time.time()), "sig": task_sig(t)} for t in new}))
         if not keep:
             update_state(TASK_APPROVALS, lambda d: [d.get(project, {}).pop(t["id"], None) for t in new])
+        if any(t["id"] in read_json(TASK_CANCELLED, {}).get(project, {}) for t in new):  # written again: no longer cancelled
+            update_state(TASK_CANCELLED, lambda d: [d.get(project, {}).pop(t["id"], None) for t in new])
     except OSError as e:  # the write itself happened; project_tasks still compares the line with what was recorded
         print(f"task authors not saved: {e}", flush=True)
 
@@ -1844,7 +1849,8 @@ def project_tasks(project: str) -> tuple[list[dict], list[dict]]:
                              "id": d.group(2).strip(), "text": d.group(3).strip()})
     # a hand-over <ID>-cont keeps <ID> open for "start after <ID>" until <ID>-done is there
     open_ids, done_ids = {t["id"] for t in tasks} | {CONT.sub("", t["id"]) for t in tasks}, {b["id"] for b in back}
-    cancelled = {b["id"] for b in back if CANCELLED.match(b["text"])}  # cancel_task's result: what waits on it must not start
+    # cancelled (ui_task_cancel): what starts after it waits for a decision, also once its result line was read and removed
+    cancelled = {b["id"].removesuffix("-done") for b in back if CANCELLED.match(b["text"])} | set(read_json(TASK_CANCELLED, {}).get(project, {}))
     authors, approvals, wakes, leases = (read_json(f, {}).get(project, {}) for f in (TASK_AUTHORS, TASK_APPROVALS, TASK_WAKES, TASK_LEASES))
     today, now = date.today(), time.time()
     for t in tasks:
@@ -1863,7 +1869,7 @@ def project_tasks(project: str) -> tuple[list[dict], list[dict]]:
         why = [r for r, waits in (
             ("waits for approval", start == "after approval" and not approved),
             (f"waits for {after}", after and after in open_ids and f"{after}-done" not in done_ids),
-            (f"{after} was cancelled: change or remove this line", after and f"{after}-done" in cancelled),
+            (f"{after} was cancelled: change or remove this line, or approve it to start anyway", after and after in cancelled and not approved),
             (f"starts {when.isoformat() if when else ''}", when and when > today),
             (f"waits for approval: written by {by or 'an unknown writer'}", start != "after approval" and not approved and not trusted),
         ) if waits]
@@ -1919,8 +1925,18 @@ RESULTS_HOW = ("Read each result, act on it if needed (e.g. close your own follo
 
 
 def owner_agent(owner: str) -> str:
-    owner = owner.partition("@")[0].strip().lower()
-    return next((a for a, names in AGENT_OWNERS.items() if owner in names), "")
+    """The agent an owner name means: the name itself or one of its words ("homelab Claude", "codex-2")."""
+    words = re.split(r"[\s_./-]+", owner.partition("@")[0].strip().lower())
+    return next((a for a, names in AGENT_OWNERS.items() if any(w in names for w in words)), "")
+
+
+def agent_owner(owner: str) -> bool:
+    """An owner that is an agent or a device, not a person: an agent's name, or a device token's, project's or pc's
+    name ("anpitek_c", "trade"). A result for it reaches it at its next turn; only a person's needs someone."""
+    o = owner.partition("@")[0].strip().lower()
+    names = {n.lower() for n in read_json(TOKENS_FILE, {})} | set(PROJECTS) \
+        | {str(m.get("label", "")).lower() for m in read_json(MACHINES_FILE, {}).values()}
+    return bool(owner_agent(owner)) or o in names
 
 
 assert owner_agent("Claude@pc-2") == "claude" and owner_agent("Gemini") == "agy"
@@ -3025,10 +3041,14 @@ def notices_locked():
         yield [dict(n) for n in read_json(NOTICES, [])]
 
 
-def add_notice(dev: str, project: str, text: str):
+def add_notice(dev: str, project: str, text: str, once: bool = False):
+    """`once`: not when the same text waits for that device already (the rescan and the watcher, or blue and green,
+    may both see one write)."""
     now = time.time()
     NOTICES.parent.mkdir(parents=True, exist_ok=True)
     with notices_locked() as notes:
+        if once and any((n.get("device"), n.get("project"), n.get("text")) == (dev, project, text) for n in notes):
+            return
         keep = [n for n in notes if now - n.get("at", 0) < NOTICE_DAYS * 86400]
         mine = [n for n in keep if (n.get("device"), n.get("project")) == (dev, project)]
         drop = {id(n) for n in mine[:-19]}  # each device and project its own 20: a guest cannot push out another's
@@ -4566,6 +4586,11 @@ def may_approve(project: str) -> bool:
     return bool(dev.get("admin")) or bool(dev.get("user")) and dev.get("user") == project_owner(project)
 
 
+def held_now(t: dict, lease: dict | None, now: float) -> bool:
+    """A worker or session has the task: claimed in its line, or a lease that has not run out."""
+    return t["claimed"] or bool(lease) and lease.get("until", 0) >= now
+
+
 def task_rows() -> list[dict]:
     """Every task line and handed-back result in the projects this device sees, for the UI's Tasks tab; the same
     lines the session start lists, parsed into fields, with whether each may start now."""
@@ -4577,7 +4602,7 @@ def task_rows() -> list[dict]:
         approver, leases = may_approve(name), read_json(TASK_LEASES, {}).get(name, {})
         rows += [{**{k: t[k] for k in ("project", "path", "line", "owner", "id", "claimed", "text", "from", "start", "legacy",
                                         "author", "startable", "waiting_reason", "stalled", "approved")},
-                  "can_cancel": approver,
+                  "can_cancel": approver and not held_now(t, leases.get(t["id"]), now),
                   "runs": task_where(name, t, leases.get(t["id"]), now) if t["startable"] else "",
                   "due": t["due"].isoformat() if t["due"] else "", "overdue": bool(t["due"] and t["due"] < today),
                   "done": False, "can_approve": approver and t["needs_approval"]} for t in tasks]
@@ -5032,7 +5057,7 @@ def board_items() -> list[dict]:
         agent = owner_agent(t["owner"])
         key = f"task:{t['project']}/{t['id']}"
         sig = hashlib.sha256(f"{t['line']}|{t.get('stalled')}|{t['done']}".encode()).hexdigest()[:16]
-        to_person = t["done"] and not agent or not t["done"] and CONT.search(t["id"]) and t["from"] and not owner_agent(t["from"])
+        to_person = t["done"] and not agent_owner(t["owner"]) or not t["done"] and CONT.search(t["id"]) and t["from"] and not agent_owner(t["from"])
         if to_person:  # handed back (or over) to a person: they read it, then remove the line; it never starts anything
             what = (f"result for {t['owner']}: " if t["done"] else f"handed over to {t['owner']} for {t['from']}: ") + t["text"][:140]
             items.append({"kind": "task", "col": "needs", "id": t["id"], "agent": agent, "project": t["project"], "path": t["path"],
@@ -5047,12 +5072,12 @@ def board_items() -> list[dict]:
         if t["done"]:
             if now - (t.get("since") or 0) < BOARD_DONE:
                 items.append({**task, "col": "done", "line": f"handed back to {t['owner']}", "at": t.get("since") or 0})
+        elif "was cancelled" in t["waiting_reason"]:
+            items.append({**task, "col": "needs", "line": t["waiting_reason"], "blocked": True, "approve": may_approve(t["project"])})
         elif t["can_approve"]:
             items.append({**task, "col": "needs", "line": "waits for your approval", "approve": True})
         elif t["stalled"]:
             items.append({**task, "col": "needs", "line": "woken, but nobody took it within 30 minutes"})
-        elif "was cancelled" in t["waiting_reason"]:
-            items.append({**task, "col": "needs", "line": t["waiting_reason"], "blocked": True})
         else:
             held = t["runs"].startswith(("running in", "taken by"))
             hosts = [{"machine": r["id"], "label": r["label"]} for r in rows if t["startable"] and not held and r["online"]
@@ -5144,6 +5169,9 @@ def needs_check(now: float) -> int:
     else:
         held = {i["key"] for i in fresh}  # over the limit: told once the hour has room
     items = {k: (told[k] if k in held and k in told else i["sig"]) for k, i in needs.items() if k not in held or k in told}
+    # a pc that sleeps and wakes leaves Needs you and comes back with the same worker run: told once per run
+    naps = sorted(k for k, v in told.items() if k not in items and str(v).endswith(":offline"))
+    items.update({k: told[k] for k in naps[-200:]})
     if state is None or items != told or len(sent) != len(state.get("sent", [])):
         write_json(NEEDS_NOTIFIED, {"items": items, "sent": sent})
     BACKGROUND["needs"] = {"at": now, "detail": f"{len(needs)} item(s) need an admin, {len(sent)} message(s) this hour"}
@@ -5597,13 +5625,16 @@ async def ui_task_cancel(request: Request):
         return JSONResponse({"error": "only the project's owner or an admin may cancel a task"}, status_code=403)
     if not (t := next((t for t in (await asyncio.to_thread(project_tasks, project))[0] if t["id"] == tid), None)):
         return JSONResponse({"error": f"no open task {tid} in {project}"}, status_code=404)
-    user = device.get().get("user", "") or "?"
+    if held_now(t, read_json(TASK_LEASES, {}).get(project, {}).get(tid), time.time()):
+        return JSONResponse({"error": f"{tid} is being worked on: stop the worker first (Machines), then cancel"}, status_code=409)
+    user, base = device.get().get("user", "") or "?", CONT.sub("", tid)  # a hand-over X-cont cancels X: its result is X-done
     lead = t["line"][:len(t["line"]) - len(t["line"].lstrip())]
-    done = f"{lead}- [{t['from'] or t['owner']}, {tid}-done]: cancelled by {user}" + (f": {reason}" if reason else "")
+    done = f"{lead}- [{t['from'] or t['owner']}, {base}-done]: cancelled by {user}" + (f": {reason}" if reason else "")
     try:
         await knowledge_edit(t["path"], t["line"], done)
     except (ToolError, OSError) as e:
         return JSONResponse({"error": str(e)}, status_code=409)
+    await asyncio.to_thread(update_state, TASK_CANCELLED, lambda d: d.setdefault(project, {}).update({base: {"by": user, "at": int(time.time())}}))
     audit("task-cancel", f"{project}/{tid}")
     return JSONResponse({"ok": True, "line": done})
 

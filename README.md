@@ -259,8 +259,10 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   check) are full pages. Errors show as a short message at the bottom instead of a browser dialog. Tasks: the task lines between agents with from whom and when they may start, waiting ones
   greyed with the reason, stalled wakes, an Approve button for the owner, results handed back (Done removes a line),
   as a list or as the mission map. Cancel (`POST /ui/api/task/cancel`, owner or admin) turns a line into the result
-  `[<requester>, <ID>-done]: cancelled by <user>: <reason>`, so its requester hears it and a task that starts after it
-  waits for a decision instead of starting. A write refuses a new task line whose date has no year (it would be no
+  `[<requester>, <ID>-done]: cancelled by <user>: <reason>` (a hand-over `<ID>-cont` cancels `<ID>`), so its requester
+  hears it and a task that starts after it waits for a decision instead of starting, also after the result line is
+  read and removed (the server keeps the cancellation; approving the waiting task lets it start, a new line with that ID
+  reopens it). A task a worker or session holds is not cancelled: stop the worker first. A write refuses a new task line whose date has no year (it would be no
   task) or whose "start after <ID>" names an ID the project never had (it would start at once); a file written
   straight to disk gets the same message as a notice at that device's next turn. A line that waits for approval
   says so in the write's answer. Searches in the web UI that find nothing (exact and by meaning, where the person
