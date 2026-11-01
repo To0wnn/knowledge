@@ -3543,8 +3543,8 @@ STATIC = Path(__file__).with_name("static")
 # is a new URL (no stale script after a refresh), and the live stream tells open tabs to reload on a new release.
 STARTED = time.time()
 BOOT = secrets.token_hex(4)  # changes on every start, so ETags from before a restart never match
-UI_FILES = ("app.js", "admin.js", "app.css", "theme.js", "mission.js", "shell.js", "palette.js", "thispc.css")  # linked with ?v=<release>: in the hash too
-RELEASE = hashlib.sha256(b"".join((STATIC / f).read_bytes() for f in ("index.html", "admin.html", *UI_FILES))).hexdigest()[:12]
+UI_FILES = ("app.js", "admin.js", "app.css", "theme.js", "mission.js", "shell.js", "palette.js", "thispc.css", "nav.js", "help.js")  # linked with ?v=<release>: in the hash too
+RELEASE = hashlib.sha256(b"".join((STATIC / f).read_bytes() for f in ("index.html", "admin.html", "help.html", "nav.html", *UI_FILES))).hexdigest()[:12]
 
 
 COMPANION = "http://127.0.0.1:47321"  # the local companion (plugin/hooks/companion.py): the "This pc" tab asks it
@@ -3555,11 +3555,15 @@ CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
 
 
 def page(name: str) -> HTMLResponse:
-    text = (STATIC / name).read_text()
+    """A signed-in page: the shared navigation (nav.html) where the page has <!--NAV--> (the admin and help pages reach
+    the app's views at /ui#/...), the public-only parts (<!--PUBLIC-->, for /setup) left out, files linked by release."""
+    nav = (STATIC / "nav.html").read_text()
+    text = (STATIC / name).read_text().replace("<!--NAV-->", nav if name == "index.html" else nav.replace('href="#/', 'href="/ui#/'))
+    text = re.sub(r"<!--PUBLIC-->.*?<!--/PUBLIC-->", "", text, flags=re.S)
     for f in UI_FILES:
         text = text.replace(f"/ui/static/{f}\"", f"/ui/static/{f}?v={RELEASE}\"")
     return HTMLResponse(text.replace("<html lang=\"en\">", f"<html lang=\"en\" data-release=\"{RELEASE}\">"),
-                        headers={"Cache-Control": "no-cache", **({"Content-Security-Policy": CSP} if name != "help.html" else {})})
+                        headers={"Cache-Control": "no-cache", "Content-Security-Policy": CSP})
 
 
 @server.custom_route("/ui", methods=["GET"])
@@ -3640,7 +3644,7 @@ async def ui_help_page(request: Request):
     rules = "".join(f"<li>{html.escape(r)}</li>" for r in house_rule_items())
     dev = "".join(f"<li>{html.escape(r)}</li>" for r in re.findall(r"^\d+\. (.+)$", dev_rules(), re.M))
     return HTMLResponse(resp.body.decode().replace("<!--HOUSE_RULES-->", rules).replace("<!--DEV_RULES-->", dev),
-                        headers={"Cache-Control": "no-cache"})
+                        headers={"Cache-Control": "no-cache", "Content-Security-Policy": CSP})
 
 
 SETUP_CSP = ("default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; "
@@ -3654,8 +3658,10 @@ async def setup_page(request: Request):
     house rules) and with app.css and theme.js inline, since /ui/static may sit behind that proxy too."""
     text = re.sub(r"<!--PRIVATE-->.*?<!--/PRIVATE-->", "", (STATIC / "help.html").read_text(), flags=re.S)
     text = text.replace('<link rel="stylesheet" href="/ui/static/app.css">', f"<style>{(STATIC / 'app.css').read_text()}</style>")
-    text = text.replace('<script src="/ui/static/theme.js"></script>', f"<script>{(STATIC / 'theme.js').read_text()}</script>")
-    return HTMLResponse(text.replace("Knowledge · help", "Knowledge · setup"),
+    for js in ("theme.js", "help.js"):
+        text = text.replace(f'<script src="/ui/static/{js}"></script>', f"<script>{(STATIC / js).read_text()}</script>")
+    text = text.replace("<!--PUBLIC-->", "").replace("<!--/PUBLIC-->", "").replace('<body class="app" data-page="help">', '<body class="admin-page">')
+    return HTMLResponse(text,
                         headers={"Cache-Control": "no-cache", "Content-Security-Policy": SETUP_CSP})
 
 
@@ -3667,20 +3673,20 @@ async def ui_admin_page(request: Request):
 # Settings the admin page may change: policy, not infrastructure. Paths, hosts, proxy IPs and the port stay in
 # compose.yaml / local.env (infra as code) and are only shown. Defaults are the calibrated values in the code.
 SETTINGS_FILE = ADMIN_DIR / "settings.json"
-SETTINGS = {  # key: (type, min, max, label)
-    "similar_hint": (float, 0.5, 0.95, "New memo: similarity from which 'similar existing memos' is shown (calibrated 18 Oct 2026: 0.72)"),
-    "rerank_threshold": (float, 0.2, 0.99, "Lint possible_duplicate: reranker score from which two memos count as the same subject (measured 28 Oct 2026: 0.5)"),
-    "history_keep": (int, 10, 2000, "History: versions kept per file"),
-    "stale_unchecked_days": (int, 7, 365, "Lint: days before a fact marked 'niet opnieuw gecontroleerd' is reported"),
-    "review_after_days": (int, 7, 365, "Lint: days without a check before a memo with IPs/versions is due for review"),
-    "big_memo": (int, 5000, 100000, "Lint: memo size in bytes from which history should move to the archive"),
-    "rescan_seconds": (int, 15, 3600, "Safety-net rescan of all files, in seconds (the VM watcher reports changes at once)"),
-    "user_max_projects": (int, 0, 50, "People (not admins): projects each may create themselves"),
-    "user_max_tokens": (int, 0, 50, "People (not admins): device tokens each may hold"),
-    "project_max_mb": (int, 1, 1000, "Projects made in the UI: maximum size in MB, then writes are refused"),
-    "docs_sync_minutes": (int, 5, 1440, "Guest docs: a session turn asks for a full mirror sync when the last one is older (minutes)"),
-    "needs_per_hour": (int, 0, 60, "Matrix: messages per hour about new 'Needs you' items of the admins (0 = off)"),
-    "chat_approval_minutes": (int, 1, 1440, "Chats: minutes a tool approval waits for an answer, then it is denied"),
+SETTINGS = {  # key: (type, min, max, label, help); the label is short, the help says what it does and how it was set
+    "similar_hint": (float, 0.5, 0.95, "Similar memo hint", "Similarity from which a new memo shows 'similar existing memos'. Calibrated on 18 Oct 2026: 0.72."),
+    "rerank_threshold": (float, 0.2, 0.99, "Duplicate memo score", "Reranker score from which lint reports two memos as possible_duplicate. Measured on 28 Oct 2026: 0.5."),
+    "history_keep": (int, 10, 2000, "Versions kept per file", "History: older versions of a file beyond this number are removed."),
+    "stale_unchecked_days": (int, 7, 365, "Unchecked fact age (days)", "Lint reports a fact marked 'not re-checked' after this many days."),
+    "review_after_days": (int, 7, 365, "Review after (days)", "Lint: a memo with addresses or versions is due for a check after this many days without one."),
+    "big_memo": (int, 5000, 100000, "Big memo (bytes)", "Lint: from this size a memo should move its history to the archive."),
+    "rescan_seconds": (int, 15, 3600, "Rescan interval (seconds)", "Safety-net rescan of all files; the file watcher reports changes at once."),
+    "user_max_projects": (int, 0, 50, "Projects per person", "Projects a person who is not an admin may create."),
+    "user_max_tokens": (int, 0, 50, "Tokens per person", "Device tokens a person who is not an admin may hold."),
+    "project_max_mb": (int, 1, 1000, "Project size limit (MB)", "Projects made in the UI: writes are refused above this size."),
+    "docs_sync_minutes": (int, 5, 1440, "Guest docs sync (minutes)", "A guest's session asks for a full docs mirror sync when the last one is older than this."),
+    "needs_per_hour": (int, 0, 60, "Needs-you messages per hour", "Matrix messages per hour about new 'Needs you' items of the admins; 0 turns them off."),
+    "chat_approval_minutes": (int, 1, 1440, "Chat approval wait (minutes)", "How long a tool approval in a chat waits for an answer before it is denied."),
 }
 
 
@@ -3704,7 +3710,7 @@ def check_settings(values: dict) -> dict:
             continue
         if k not in SETTINGS:
             raise ToolError(f"unknown setting {k}")
-        kind, lo, hi, _ = SETTINGS[k]
+        kind, lo, hi, *_ = SETTINGS[k]
         try:
             n = kind(v)
         except (TypeError, ValueError):
@@ -4037,8 +4043,8 @@ async def ui_admin_state(request: Request, _):
                         "clients": clients_seen(n)}
                    for n, cfg in sorted(tokens.items())],
         "config_admins": sorted(CONFIG_ADMINS),
-        "settings": current_settings(), "setting_info": {k: {"min": lo, "max": hi, "label": label, "float": kind is float}
-                                                         for k, (kind, lo, hi, label) in SETTINGS.items()},
+        "settings": current_settings(), "setting_info": {k: {"min": lo, "max": hi, "label": label, "help": hlp, "float": kind is float}
+                                                         for k, (kind, lo, hi, label, hlp) in SETTINGS.items()},
         "system": await asyncio.to_thread(system_state),
         "external": read_json(EXTERNAL_FILE, {}),
     })

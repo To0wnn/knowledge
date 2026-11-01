@@ -37,8 +37,10 @@ const projectOf = (path) => ROOT_PROJECT[path.split("/")[0]] || "homelab";
 const api = (path, opts = {}) => fetch(path, { credentials: "same-origin", ...opts, headers: { "X-Knowledge-UI": "1", ...(opts.headers || {}) } })
   .then(async (r) => {
     if (r.status === 401) location.reload();
-    const j = await r.json().catch(() => ({ error: `${r.status} ${r.statusText || "no answer"}: the server may be restarting` })); // a proxy error page is no JSON
-    if (!r.ok) throw new Error(j.error || r.statusText); return j;
+    const text = await r.text(), t = text.trim();
+    let j; // a proxy error page is no JSON: its own short plain-text message, else the status
+    try { j = JSON.parse(text); } catch { j = { error: t && t.length < 300 && !t.startsWith("<") ? `${r.status}: ${t}` : `${r.status} ${r.statusText || "no answer"}${r.status >= 502 || !r.status ? ": the server may be restarting" : ""}` }; }
+    if (!r.ok) throw new Error(j.error || `${r.status} ${r.statusText}`); return j;
   });
 // Note text can come from guests, write tokens and ingested sources: no forms, inputs, styles or ids (an id could
 // shadow the app's own elements), and images only from this server.
@@ -411,19 +413,7 @@ function setMap(on) {
     if (selected) { gather(selected, 1).then(zoomToFocus); if (settling) zoomToFocus.again = true; } else Graph.zoomToFit(400, 40);
   });
 }
-// Theme: Auto (the system's), Light or Dark; theme.js applies the stored pick before the page paints.
-// The sidebar has it as an icon, the phone's More sheet as a labelled button.
-const THEMES = ["auto", "light", "dark"];
-const showTheme = () => {
-  const name = `Theme: ${{ auto: "Auto", light: "Light", dark: "Dark" }[document.documentElement.dataset.theme || "auto"]}`;
-  for (const b of document.querySelectorAll(".theme-btn")) { b.title = name; b.setAttribute("aria-label", name); if (!b.querySelector("svg")) b.textContent = name; }
-};
-for (const b of document.querySelectorAll(".theme-btn")) b.onclick = () => {
-  const next = THEMES[(THEMES.indexOf(document.documentElement.dataset.theme || "auto") + 1) % THEMES.length];
-  if (next === "auto") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = next;
-  store.set("kn_theme", next); showTheme(); themeChanged();
-};
-showTheme();
+addEventListener("kn-theme", themeChanged); // the viewer switched the theme (nav.js)
 
 // ---------------------------------------------------------------- note preview, deep links and editor
 function splitFront(text) {
@@ -501,11 +491,11 @@ async function homeSide() {
     list.append(hitItem(n ? n.label : f.path.split("/").pop(), `${ago(f.mtime)} · ${f.session ? f.session.device : f.by === "VM" ? "on the VM" : writer(f.by)}`, () => openNote(f.path)));
   }
   if (!res.files.length) list.append(el("li", null, emptyState("No changes yet.")));
-  const all = el("button", "ghost small", "All changes"); all.onclick = () => selectTab("changes");
+  const all = el("button", "ghost small", "All changes"); all.onclick = () => go("#/changes");
   box.append(el("h3", null, "Recently changed"), list, all);
   const lint = $("lint-count").textContent;
   if (lint) {
-    const b = el("button", "ghost small", `${lint} lint findings`); b.onclick = () => selectTab("lint");
+    const b = el("button", "ghost small", `${lint} lint findings`); b.onclick = () => go("#/health");
     box.append(el("h3", "home-lint", "Housekeeping"), b);
   }
   $("side").replaceChildren(box);
@@ -873,8 +863,6 @@ document.addEventListener("keydown", (e) => {
 });
 
 // ---------------------------------------------------------------- views: changes, lint, tasks, machines, ingest
-// The old tab names, kept for callers (home view, mission map): each is a view of its own now (shell.js loads it).
-function selectTab(name) { go(`#/${{ lint: "health" }[name] || name}`); }
 
 // This pc: the knowledge companion on the viewer's own machine (plugin/hooks/companion.py). The tab shows only when it
 // answers on 127.0.0.1; the page's CSP allows exactly that origin, and the companion allows this page's origin.
@@ -1309,9 +1297,6 @@ const ckBusy = (s) => s === "running" || s === "queued";
 const ckShort = (path) => (path || "").split(/[\\/]/).filter(Boolean).pop() || path;
 const ckScope = (x) => !agentProject || x.project === agentProject; // the header's project filter
 
-// Kept for callers (a board card, the mission map): true goes to the Inbox; false does nothing, whoever leaves the
-// Agents views navigates (openNote shows the note).
-function openCockpit(on) { if (on) go("#/inbox"); }
 // Polling of the pcs, chats and board runs while an Agents view shows; the router turns it on and off.
 function ckRun(on) { clearTimeout(ck.timer); if (on) { ck.summaryAt = 0; ckTick(); } }
 
@@ -1426,7 +1411,7 @@ function ckBoard() {
     empty.append(el("h2", null, "Your agents, from anywhere"),
       el("p", null, ck.machines.some((m) => m.online && m.companion) ? "Start a chat with Claude Code, Codex or agy on one of your pcs, in a folder linked to a project there."
         : "None of your pcs is online with a companion right now. Chats run on a pc through its knowledge companion (plugin 0.16 or newer)."));
-    const b = el("button", "ck-pill ck-primary", "+ New chat"); b.type = "button"; b.onclick = () => ckNewChat(); empty.append(b);
+    const b = el("button", "primary", "+ New chat"); b.type = "button"; b.onclick = () => ckNewChat(); empty.append(b);
     box.replaceChildren(empty);
   } else box.replaceChildren(...CK_COLS.map(([id, name]) => {
     const list = items.filter((i) => i.col === id), col = el("section", `ck-col ck-col-${id}`), head = el("h2", "ck-col-head");
@@ -1507,7 +1492,7 @@ function ckItem(i) {
   main.onclick = () => {
     if (i.kind === "chat") return ckShow(ck.chats.find((c) => ckKey(c) === `${i.machine}/${i.id}`) || i);
     if (i.kind === "ask") return ckShow(ck.chats.find((c) => ckKey(c) === `${i.machine}/${i.chat}`));
-    if (i.kind === "task") { openCockpit(false); return openNote(i.path, { find: [i.id.toLowerCase()] }); }
+    if (i.kind === "task") { return openNote(i.path, { find: [i.id.toLowerCase()] }); }
     const more = card.querySelector(".ck-item-open");
     if (more) more.remove(); else card.append(el("p", "ck-item-open", i.open || "No details yet."));
   };
@@ -1765,12 +1750,8 @@ async function loadMe() {
   PROJECTS = me.projects;
   for (const p of PROJECTS) if (!MEMORY_ROOT[p]) { MEMORY_ROOT[p] = `${p}-memory`; ROOT_PROJECT[p] = p; ROOT_PROJECT[`${p}-memory`] = p; }
   if (!PROJECTS.includes(project) && project !== ALL) project = PROJECTS[0];
-  for (const a of document.querySelectorAll(".admin-link")) { // non-admins manage their own tokens there
-    (a.querySelector(".label") || a).textContent = me.admin ? "Admin" : "My tokens & projects"; a.title = me.admin ? "Admin" : "My tokens & projects";
-  }
-  $("who").replaceChildren(el("span", "avatar", (me.user || "?")[0].toUpperCase()), el("span", "label", me.user));
-  $("who").title = `Signed in as ${me.user}`; $("who-more").textContent = me.user;
-  if (!me.admin) { for (const a of document.querySelectorAll(".nav-health")) a.hidden = true; $("ingest-open").hidden = true; }
+  navMe(me);
+  if (!me.admin) $("ingest-open").hidden = true;
   $("new-memo").hidden = !me.writable.includes(project);
   $("add-menu").hidden = $("new-memo").hidden && $("ingest-open").hidden;
 }

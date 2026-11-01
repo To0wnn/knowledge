@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Connect a client · Knowledge</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/ui/static/app.css">
@@ -23,7 +23,7 @@
 .wrap a { color: var(--accent); }
 .client-tabs { position: sticky; top: 0; z-index: 5; display: flex; gap: 4px; flex-wrap: wrap; align-items: center;
   background: color-mix(in srgb, var(--canvas) 80%, transparent); backdrop-filter: blur(14px); padding: 10px 0; margin-top: 28px; border-bottom: 1px solid var(--line); }
-.client-tabs > button { padding: 6px 14px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: var(--muted); font-size: 14px; }
+.client-tabs > button { min-height: 34px; padding: 6px 14px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: var(--muted); font-size: 14px; }
 .client-tabs > button[aria-selected="true"] { background: var(--panel-hi); border-color: var(--line-hi); color: var(--ink); font-weight: 600; box-shadow: var(--shadow); }
 .osbar { display: flex; gap: 10px; align-items: center; margin-top: 18px; color: var(--muted); font-size: 14px; }
 ol.steps { list-style: none; counter-reset: s; padding: 0; margin: 16px 0 0; display: grid; gap: 18px; }
@@ -33,9 +33,7 @@ ol.steps > li::before { content: counter(s); position: absolute; left: 0; top: 1
 ol.steps > li > b { display: block; }
 .cmd { position: relative; margin-top: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); min-width: 0; }
 .cmd pre { margin: 0; padding: 10px 76px 10px 12px; overflow-x: auto; font: 13px/1.55 var(--mono); white-space: pre; }
-.copy { position: absolute; top: 7px; right: 7px; padding: 3px 9px; font-size: 12px; color: var(--ink); background: var(--panel-hi);
-  border: 1px solid var(--line-hi); border-radius: 999px; }
-.copy:hover { background: var(--hover); }
+.copy { position: absolute; top: 7px; right: 7px; background: var(--panel-solid) !important; } /* solid: the command scrolls under it */
 .note { margin-top: 12px; padding: 10px 14px; border: 1px solid color-mix(in srgb, var(--g-feedback) 45%, var(--line));
   background: color-mix(in srgb, var(--g-feedback) 10%, var(--panel)); border-radius: var(--r-md); font-size: 14px; }
 .wrap .table-wrap { margin-top: 14px; }
@@ -46,17 +44,25 @@ ol.steps > li > b { display: block; }
 ol.rules { margin: 12px 0 0; padding-left: 22px; } ol.rules li { margin: 6px 0; max-width: 68ch; }
 .rules-box { margin-top: 36px; } .rules-box summary { cursor: pointer; font-weight: 600; }
 footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
+@media (max-width: 699.98px) {
+  .client-tabs { top: 52px; } /* under the app's sticky page header */
+  .client-tabs > button, .os button { min-height: 44px; }
+  .cmd pre { min-height: 58px; padding-top: 18px; padding-bottom: 18px; }
+}
+body.admin-page .client-tabs { top: 0; } /* /setup has no page header */
 </style>
 </head>
-<body class="admin-page">
-<header class="top">
-  <h1 class="brand">Knowledge · help</h1>
-  <!--PRIVATE--><a class="logout" href="/ui">← Back to the graph</a>
-  <a class="logout" href="/ui/logout">Sign out</a><!--/PRIVATE-->
-</header>
+<body class="app" data-page="help">
+<!--PRIVATE--><!--NAV-->
+<div class="main">
+  <header class="head" id="page-head">
+    <div class="head-title"><div class="crumb">Help</div><h1 id="title">Connect a client</h1></div>
+  </header>
+  <main id="content"><div class="view"><!--/PRIVATE-->
+<!--PUBLIC--><header class="top"><span class="brand">Knowledge · setup</span></header><!--/PUBLIC-->
 <div class="wrap">
   <div class="eyebrow">MCP · <span class="server-url">this server</span></div>
-  <h1>Connect a client</h1>
+  <!--PUBLIC--><h1>Connect a client</h1><!--/PUBLIC-->
   <p class="lede">How to connect Claude Code, agy (Antigravity) or Codex to the shared knowledge: the docs and memory of your project, live on every machine, with the same house rules.</p>
 
 
@@ -171,44 +177,9 @@ footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
 
   <footer>Source and technical details: <a href="https://github.com/To0wnn/knowledge" target="_blank" rel="noopener">github.com/To0wnn/knowledge</a> (README, section <a href="https://github.com/To0wnn/knowledge#connect-a-client" target="_blank" rel="noopener">Connect a client</a>).</footer>
 </div>
-<script>
-for (const e of document.querySelectorAll('.server-url')) e.textContent = location.origin;
-const tabs = [...document.querySelectorAll('[role="tab"]')], oses = [...document.querySelectorAll('.os [role="radio"]')];
-let client = 'claude', os = /Windows/.test(navigator.userAgent) ? 'windows' : 'linux';
-try { os = localStorage.getItem('kn_help_os') || os; } catch (e) {}
-function render(push) {
-  for (const t of tabs) {
-    const on = t.getAttribute('aria-controls') === client;
-    t.setAttribute('aria-selected', String(on));
-    document.getElementById(t.getAttribute('aria-controls')).hidden = !on;
-  }
-  for (const b of oses) b.setAttribute('aria-checked', String(b.dataset.os === os));
-  for (const e of document.querySelectorAll('.wrap [data-os]:not([role])')) e.hidden = e.dataset.os !== os;
-  if (push) { try { history.replaceState(null, '', '#' + client + '-' + os); localStorage.setItem('kn_help_os', os); } catch (e) {} }
-}
-tabs.forEach((t, i) => {
-  t.addEventListener('click', () => { client = t.getAttribute('aria-controls'); render(true); });
-  t.addEventListener('keydown', (e) => {
-    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
-    const n = tabs[(i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
-    n.focus(); n.click();
-  });
-});
-oses.forEach((b) => b.addEventListener('click', () => { os = b.dataset.os; render(true); }));
-function fromHash() { // #codex-windows, also #codex; a link from the admin page may change it while the page is open
-  const [c, o] = location.hash.slice(1).split('-');
-  if (['claude', 'agy', 'codex'].includes(c)) client = c;
-  if (['linux', 'windows'].includes(o)) os = o;
-  render(false);
-}
-window.addEventListener('hashchange', fromHash);
-fromHash();
-document.querySelectorAll('.copy').forEach((b) => b.addEventListener('click', async () => {
-  const pre = b.parentElement.querySelector('pre');
-  try { await navigator.clipboard.writeText(pre.textContent); b.textContent = 'Copied'; }
-  catch (e) { const r = document.createRange(); r.selectNodeContents(pre); const s = getSelection(); s.removeAllRanges(); s.addRange(r); b.textContent = 'Selected'; }
-  setTimeout(() => (b.textContent = 'Copy'), 1500);
-}));
-</script>
+<!--PRIVATE--></div></main>
+</div>
+<script src="/ui/static/nav.js"></script><!--/PRIVATE-->
+<script src="/ui/static/help.js"></script>
 </body>
 </html>
