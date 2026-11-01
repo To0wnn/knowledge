@@ -650,6 +650,15 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     http("POST", "/machine/chats/events", {"chat": cid, "events": [{"kind": "text", "text": "ok"}], "done": True}, token=fr, headers=pc)
     nxt = json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"]
     assert [w["text"] for w in nxt] == ["after that"], nxt
+    # Force: the message goes first in line and the running turn is stopped; its end hands that message out next.
+    ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "later"})
+    st, _, b = ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "urgent", "force": True})
+    assert st == 200 and json.loads(b).get("queued"), b
+    assert json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["stop"] == [cid]
+    http("POST", "/machine/chats/events", {"chat": cid, "events": [{"kind": "info", "text": "Stopped."}], "done": True}, token=fr, headers=pc)
+    assert [w["text"] for w in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"]] == ["urgent"]
+    http("POST", "/machine/chats/events", {"chat": cid, "events": [], "done": True}, token=fr, headers=pc)
+    assert [w["text"] for w in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"]] == ["later"]
     for i in range(5):
         assert ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": f"q{i}"})[0] == 200
     assert ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "one too many"})[0] == 409

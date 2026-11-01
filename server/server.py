@@ -5363,9 +5363,9 @@ async def ui_chat(request: Request):
 
 @server.custom_route("/ui/api/chat/send", methods=["POST"])
 async def ui_chat_send(request: Request):
-    """{machine, id, text}: the next message; its pc's companion runs it as the chat's next turn. While a turn runs or
-    waits the message joins the chat's line (at most CHAT_PENDING): each goes to the agent when the turn before it
-    ends, in order. Refused while the pc is offline (it would run whenever the pc comes back)."""
+    """{machine, id, text, force?}: the next message; its pc's companion runs it as the chat's next turn. While a turn
+    runs or waits the message joins the chat's line (at most CHAT_PENDING): each goes to the agent when the turn before
+    it ends, in order; force puts it first in line and stops the running turn. Refused while the pc is offline (it would run whenever the pc comes back)."""
     try:
         row, b, f, c = await chat_request(request, True)
         text = str(b.get("text", "")).strip()
@@ -5375,7 +5375,7 @@ async def ui_chat_send(request: Request):
         return chat_error(e)
     if not row["online"]:
         return JSONResponse({"error": f"{row['label']} is offline: a chat needs its companion running"}, status_code=409)
-    busy, msg = [], {"text": text, "by": device.get().get("user", ""), "at": time.time()}
+    busy, msg, force = [], {"text": text, "by": device.get().get("user", ""), "at": time.time()}, b.get("force") is True
 
     def change(c):
         if c.get("status") in ("queued", "running"):
@@ -5383,10 +5383,11 @@ async def ui_chat_send(request: Request):
             if len(line) >= CHAT_PENDING:
                 busy.append("full")
                 return
-            line.append(msg)
+            line.insert(0, msg) if force else line.append(msg)
             busy.append("queued")
             chat_add(c, "user", text)
-            chat_add(c, "info", "Queued: the agent gets this when its current turn ends.")
+            chat_add(c, "info", "Forced: the current turn stops and the agent gets this next." if force else
+                     "Queued: the agent gets this when its current turn ends.")
             return
         chat_add(c, "user", text)
         c.update(status="queued", title=c.get("title") or " ".join(text.split())[:80])
@@ -5394,6 +5395,11 @@ async def ui_chat_send(request: Request):
     if busy == ["full"]:
         return JSONResponse({"error": f"{CHAT_PENDING} messages wait already: wait for the agent, or stop it"}, status_code=409)
     if busy:
+        # force: stop the turn the pc runs; its end (done) hands out the line's first message, this one. A message
+        # the pc has not picked up yet cannot be stopped: this one simply goes right after it.
+        if force:
+            await asyncio.to_thread(update_state, f.parent / "queue.json",
+                                    lambda q: q[c["id"]].update(stop=True) if q.get(c["id"], {}).get("busy") else None)
         return JSONResponse({"ok": True, "queued": True})
     await asyncio.to_thread(update_state, f.parent / "queue.json", lambda q: q.setdefault(c["id"], {}).update(msg=msg, stop=False))
     return JSONResponse({"ok": True})
