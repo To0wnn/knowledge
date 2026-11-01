@@ -328,14 +328,15 @@ function msOpenPanel(key) {
     acts.append(ok);
   }
   box.append(acts);
-  if (["running", "claimed", "stalled"].includes(n.status)) { // the worker on its pc, as the Machines list shows it
-    const w = el("p", "muted ms-worker", "Looking for its worker…"); box.append(w);
+  { // the worker on its pc, as the Machines list shows it (a running or ended one: Follow reads its transcript)
+    const busy = ["running", "claimed", "stalled"].includes(n.status), w = el("p", "muted ms-worker", busy ? "Looking for its worker…" : ""); box.append(w);
     api("/ui/api/machines").then((res) => {
       if (ms.sel !== key) return;
       const hit = res.machines.flatMap((m) => Object.values(m.agents).flatMap((a) => a.workers.map((wk) => ({ m, wk }))))
         .find(({ wk }) => wk.id === n.id && wk.project === n.project);
-      if (!hit) { w.textContent = "No worker of yours reports this task."; return; }
+      if (!hit) { w.textContent = busy ? "No worker of yours reports this task." : ""; return; }
       w.textContent = `Worker on ${hit.m.label}: ${hit.wk.status}. ${hit.wk.open || ""}`;
+      if (hit.m.own) acts.append(ckFollowButton(hit.wk, "ck-pill"));
       const pc = el("button", "ck-pill", "Machines"); pc.type = "button"; pc.title = "Stop, roll back or chat on that pc";
       pc.onclick = () => go("#/machines");
       acts.append(pc);

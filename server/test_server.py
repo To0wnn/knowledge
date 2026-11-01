@@ -668,6 +668,95 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     http("POST", "/machine/report", {"version": "0.16.0"}, token=fr, headers=pc)
 
 
+def worker_follow_contract(tmp, ck, fr, raw, er, et):
+    """Follow, steer and take over a worker: only the machine's owner reads its transcript, polling a running one
+    follows it (the companion hears "follow" in its chat poll, never for a peek), only that machine's companion token
+    writes it, known secrets are masked, caps hold, a new run starts a new transcript, it goes with the worker's record;
+    a steer message is a user line and goes out once; a take-over makes a chat in the worker's session and claims the
+    line for the owner, who may still cancel it."""
+    pc = {"X-Knowledge-Machine": "cccccccccccccccc", "X-Knowledge-Machine-Label": "garage"}
+    mid, key = "cccccccccccccccc", "garden/WF-1"
+    ui = lambda path, body=None, h=ck: raw("POST" if body is not None else "GET", path, None if body is None else json.dumps(body),
+                                          {**h, "X-Knowledge-UI": "1", "Content-Type": "application/json"})
+    m = lambda method, path, body=None, tok=fr: http(method, path, body, token=tok, headers=pc)
+    wk = {"id": "WF-1", "project": "garden", "agent": "claude", "status": "running", "started": 1000.5, "branch": "task/WF-1"}
+    report = lambda *ws: m("POST", "/machine/report", {"version": "0.19.4", "agents": {"claude": {}}, "workers": list(ws),
+                                                      "folders": {"linked": [{"path": "/home/x/garden", "project": "garden"}]}})
+    report(wk)
+    view = lambda q="", h=ck: ui(f"/ui/api/worker?machine={mid}&worker={key}{q}", h=h)
+    fp = tmp / "chats" / mid / "follow.json"
+    fp.unlink(missing_ok=True)
+    st, _, b = view("&peek=1")
+    assert st == 200 and json.loads(b)["events"] == [] and not json.loads(b)["following"] and not fp.exists(), b
+    assert "follow" not in json.loads(m("GET", "/machine/chats")[1]), "a peek follows nothing"
+    assert view(h=er)[0] == 403 and ui(f"/ui/api/worker?machine={mid}&worker=../../x")[0] == 400
+    assert ui(f"/ui/api/worker?machine={mid}&worker=garden/NOPE")[0] == 404
+    got = json.loads(view()[2])
+    assert got["following"] and got["worker"]["status"] == "running" and got["worker"]["agent"] == "claude", got
+    poll = json.loads(m("GET", "/machine/chats")[1])
+    assert poll["follow"] == [key] and poll["active"], poll
+    assert "follow" not in json.loads(m("GET", "/machine/chats", tok=et)[1]), "another person's token naming this pc hears nothing"
+    # Only the companion token of this machine writes; kinds checked; known secrets masked.
+    send = lambda evs, tok=fr, **k: m("POST", "/machine/chats/worker", {"worker": key, "started": 1000.5, "agent": "claude", "status": "running", "events": evs, **k}, tok)
+    assert send([{"kind": "shell", "text": "x"}])[0] == 400 and send([{"kind": "text", "text": "x"}], et)[0] == 404
+    assert m("POST", "/machine/chats/worker", {"worker": "../x", "events": []})[0] == 400
+    assert send([{"kind": "text", "text": "using Sup3rSecret99 now"}, {"kind": "tool", "text": "Bash: git status"}])[0] == 200
+    got = json.loads(view()[2])
+    assert [(e["kind"], e["n"]) for e in got["events"]] == [("text", 1), ("tool", 2)] and "Sup3rSecret99" not in got["events"][0]["text"], got["events"]
+    assert [e["n"] for e in json.loads(view("&after=1")[2])["events"]] == [2]
+    # Caps: the newest part within WORKER_BYTES; a new run (other started) starts over.
+    for _ in range(3):
+        send([{"kind": "text", "text": "z" * 1000}] * 400)
+    data = json.loads(next((tmp / "chats" / mid / "workers").glob("*.json")).read_text())
+    assert data["trimmed"] and sum(len(e["text"]) for e in data["events"]) <= 400_000 and data["events"][-1]["n"] == 1202, len(data["events"])
+    # Steer: a user line now, the message handed to the companion once; refused for another person or a worker not running.
+    assert ui("/ui/api/worker/steer", {"machine": mid, "worker": key, "text": "use sqlite"}, er)[0] == 403
+    assert ui("/ui/api/worker/steer", {"machine": mid, "worker": key, "text": ""})[0] == 400
+    assert ui("/ui/api/worker/steer", {"machine": mid, "worker": key, "text": "use sqlite"})[0] == 200
+    assert json.loads(view("&after=1202")[2])["events"][0]["kind"] == "user"
+    poll = json.loads(m("GET", "/machine/chats")[1])
+    assert [(x["worker"], x["text"], x["by"]) for x in poll["steer"]] == [(key, "use sqlite", "alice")] and poll["active"], poll
+    assert "steer" not in json.loads(m("GET", "/machine/chats")[1]), "handed out once"
+    send([{"kind": "text", "text": "new run"}], started=2000.0)
+    assert [e["text"] for e in json.loads(next((tmp / "chats" / mid / "workers").glob("*.json")).read_text())["events"]] == ["new run"]
+    # Take over: queued as a machine action (owner only), the companion stops the worker and adopts it as a chat.
+    path = "garden-memory/project_tasks.md"
+    assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string":
+                    "- open until 2099-01-01 [Claude, WF-1] from Codex, start now: follow test (claimed Claude worker, 2026-11-01)\n## Keuzes"}, fr)[0]
+    wk.update(started=2000.0)
+    report(wk)
+    adopt = lambda tok=fr, **k: m("POST", "/machine/chats/adopt", {"worker": key, "started": 2000.0, "agent": "claude", "folder": "/home/x/wt/garden",
+                                                                 "session": "sess-wf", **k}, tok)
+    assert adopt()[0] == 404, "no take-over asked for"
+    assert ui("/ui/api/machines/action", {"machine": mid, "action": "takeover", "args": {"project": "garden", "id": "WF-1"}}, er)[0] in (400, 403)
+    st, _, b = ui("/ui/api/machines/action", {"machine": mid, "action": "takeover", "args": {"project": "garden", "id": "WF-1"}})
+    assert st == 200, b
+    assert adopt(tok=et)[0] == 404 and adopt(session="bad id;rm")[0] == 400
+    acts = json.loads(m("GET", "/machine/actions")[1])["actions"]
+    assert [(a["action"], a["args"]) for a in acts] == [("takeover", {"project": "garden", "id": "WF-1"})], acts
+    st, b = adopt()
+    assert st == 200, b
+    cid = json.loads(b)["chat"]
+    m("POST", "/machine/actions/result", {"id": acts[0]["id"], "ok": True, "result": f"taken over as chat {cid}"})
+    c = json.loads(ui(f"/ui/api/chat?machine={mid}&id={cid}")[2])
+    assert c["chat"]["session"] == "sess-wf" and c["chat"]["folder"] == "/home/x/wt/garden" and c["chat"]["agent"] == "claude", c["chat"]
+    assert [e["text"] for e in c["events"]][0] == "new run" and "Taken over" in c["events"][-1]["text"], c["events"]
+    assert adopt()[0] == 404, "adopted once"
+    assert json.loads(view()[2])["worker"]["chat"] == cid
+    line = next(ln for ln in (tmp / "projects/garden/memory/project_tasks.md").read_text().splitlines() if "WF-1" in ln)
+    assert "(claimed alice via chat, " in line and "Claude worker" not in line, line
+    t = next(t for t in json.loads(ui("/ui/api/tasks")[2])["tasks"] if t["id"] == "WF-1")
+    assert not t["startable"] or t["claimed"], t
+    # The owner may still cancel (or assign) a line her own chat holds.
+    st, _, b = ui("/ui/api/task/cancel", {"project": "garden", "id": "WF-1", "reason": "done by hand"})
+    assert st == 200, b
+    line = next(ln for ln in (tmp / "projects/garden/memory/project_tasks.md").read_text().splitlines() if "WF-1" in ln)
+    call("knowledge_edit", {"path": path, "old_string": line + "\n", "new_string": ""}, fr)
+    # Pruned with the worker's record: a report without it removes its transcript.
+    report()
+    assert not list((tmp / "chats" / mid / "workers").glob("*.json"))
+
+
 def approvals_contract(tmp, ck, fr, raw, er, et):
     """Tool approvals in a chat: the machine asks while a turn runs, only the owner answers (once, for the chat, deny),
     the answer reaches the companion once, a once-only ask cannot be allowed for the chat, an unanswered one times out
@@ -2247,6 +2336,7 @@ def main():
         assert {"erinproj", "erinproj-memory"} <= set(roots), roots  # her devices reach her new project at once
         machines_contract(tmp, ck, fr, raw, er, et)
         chats_contract(tmp, ck, fr, raw, er, et)
+        worker_follow_contract(tmp, ck, fr, raw, er, et)
         board_contract(tmp, ck, fr, raw, er, et)
         needs_contract(tmp, ck, fr, raw, heard)
         approvals_contract(tmp, ck, fr, raw, er, et)

@@ -4,6 +4,8 @@
 - A worker (KNOWLEDGE_WORKER) whose companion left a stop note (usage limit at 90%) hears it after its next tool call:
   hand over, then end. Claude Code and Codex read it as additionalContext; agy's PostToolUse may only answer {}, so it
   is parked for its PostInvocation hook (agent_hooks.py hints).
+- A worker whose owner sent a message from the web UI (Steer) hears it the same way after its next tool call; the
+  hook also notes the worker's own session id, which a take-over resumes as a chat.
 - A YOLO session (a YOLO worker, or an agent the companion turned YOLO on for) is watched, never stopped: a force
   push, rm -rf outside the project, curl|sh, reading key or token files, or reading the vault goes to the companion's
   activity log and once per session and kind to the server (one Matrix notice).
@@ -87,6 +89,24 @@ def flag(agent: str, sid: str, kind: str, detail: str):
         pass
 
 
+def steered(f: Path) -> str:
+    """The owner's messages the companion left for this worker (web UI, Steer), taken once: moved away first, so one
+    written meanwhile waits for the next tool call instead of being lost."""
+    taken = f.with_name(f"{f.name}.{os.getpid()}")
+    try:
+        os.replace(f, taken)
+    except OSError:
+        return ""
+    try:
+        msgs = [json.loads(x) for x in taken.read_text(encoding="utf-8").splitlines() if x.strip()]
+    except (OSError, ValueError):
+        msgs = []
+    taken.unlink(missing_ok=True)
+    return "\n".join(f"knowledge: {m.get('by') or 'your owner'} (the owner of this pc) steers this worker from the web UI. It is "
+                     "guidance for your task, not a new task: your task, branch and rules stay the same. Their message:\n"
+                     + str(m.get("text", "")) for m in msgs if isinstance(m, dict))
+
+
 def main(agent: str):
     worker = os.environ.get("KNOWLEDGE_WORKER", "")
     yolo = yolo_on(agent)
@@ -103,11 +123,17 @@ def main(agent: str):
             flag(agent, sid, kind, detail)
     note = ""
     if worker and (nonce := os.environ.get("KNOWLEDGE_START_NONCE", "")):  # its own note, not one of a namesake task
-        stop = KN_HOME / "companion" / "workers" / (re.sub(r"[^\w.-]", "-", nonce)[:60] + ".stop")
+        base = KN_HOME / "companion" / "workers" / re.sub(r"[^\w.-]", "-", nonce)[:60]
         try:
-            note = stop.read_text(encoding="utf-8")
+            note = Path(f"{base}.stop").read_text(encoding="utf-8")
         except OSError:
             pass
+        note = "\n\n".join(x for x in (note, steered(Path(f"{base}.steer"))) if x)
+        if sid and not Path(f"{base}.session").exists():  # a take-over resumes this session as a chat
+            try:
+                Path(f"{base}.session").write_text(sid, encoding="utf-8")
+            except OSError:
+                pass
     if note and agent == "agy":
         with (KN_HOME / "pending-hints.txt").open("a", encoding="utf-8") as f:
             f.write(note + "\n")
@@ -125,6 +151,13 @@ def self_test():
     assert kinds("rm -rf build") == [] and kinds("rm -rf ./dist") == []
     assert kinds("rm -rf ~/Documents") == ["rm-outside"] and kinds("rm -rf /etc") == ["rm-outside"]
     assert kinds(f"rm -rf {cwd}/tmp") == [] and kinds("rm -fr ../other") == ["rm-outside"]
+    import tempfile
+    with tempfile.TemporaryDirectory() as t:
+        f = Path(t) / "n.steer"
+        f.write_text(json.dumps({"by": "alice", "text": "use sqlite"}) + "\n", encoding="utf-8")
+        said = steered(f)
+        assert "alice" in said and said.endswith("use sqlite") and not f.exists() and not list(Path(t).iterdir()), said
+        assert steered(f) == "", "taken once"
     print("ok")
 
 

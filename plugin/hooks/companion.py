@@ -893,7 +893,7 @@ def check_workers(ws: dict, tok: str, now: float, lim: dict):
                 workers.PROCS.pop(w["pid"], None)
                 # exit code unknown (the companion restarted while it ran): its outcome decides, below: a task handed
                 # back or gone is finished, one still open failed
-                w.update(status="stopped" if w.get("told") else "finished" if code in (0, "unknown") else "failed", ended=now, code=code)
+                w.update(status="stopped" if w.get("told") or w.get("chat") else "finished" if code in (0, "unknown") else "failed", ended=now, code=code)
                 if not w.get("owner_stopped"):  # stopped on purpose: no other pc may take it at once, only after the lease
                     release(w, tok)  # a line it claimed but left open may start again at once (the server's idle notice)
                 workers.stop_path(w).unlink(missing_ok=True)
@@ -902,8 +902,9 @@ def check_workers(ws: dict, tok: str, now: float, lim: dict):
                              "the companion restarted while it ran; its task is still open")
                     log("error", f"{AGENTS[w['agent']][0]}: the worker for {w['id']} ended without claiming or handing back its task",
                         f"Not started again for {RESTART_AFTER // 3600} h unless asked. " + w.get("open", ""))
-                    continue
-                log("worker", f"{AGENTS[w['agent']][0]}: the worker for {w['id']} ended ({w['status']})", w.get("open", ""))
+                else:
+                    log("worker", f"{AGENTS[w['agent']][0]}: the worker for {w['id']} ended ({w['status']})", w.get("open", ""))
+                send_final(tok, w)
                 continue
             try:  # a turn longer than the lease must not let another pc start the same task
                 held = claim({"project": w["project"], "id": w["id"], "agent": w["agent"]}, tok, worker_session(w["id"]), w["nonce"])
@@ -1151,7 +1152,7 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
             "agents": {a: {"yolo": bool(yolo.get(a, {}).get("on")), "trusted": not untrusted(a, folders), "limit": lim.get(a),
                      "resets": (resets or {}).get(a), **({"plugin": v} if (v := plugin_version(a)) else {})}  # known before a session
                        for a in AGENTS if installed(a)},
-            "workers": [{**{k: w.get(k) for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open", "why")},
+            "workers": [{**{k: w.get(k) for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open", "why", "chat")},
                          "checkpoint": bool(w.get("checkpoint")), "merged": w["status"] == "merged", "git": gits.get(k),
                          **({"progress": progress(w, gits.get(k))} if w["status"] == "running" else {}),
                          **({"review": r} if (r := review(w, now)) else {})} for k, w in ws.items()],
@@ -1225,6 +1226,8 @@ def run_action(a: dict) -> str:
         workers.kill(w)
         return (f"stopped the worker for {args['id']}; this pc keeps its lease until it runs out, then another pc may start the line again:"
                 " change it to 'start after approval' or remove it to stop it for good")
+    if act == "takeover":
+        return take_over(args, token_store.token())
     if act == "rollback":
         with LOCK:
             ws = load("workers.json", {})
@@ -1287,7 +1290,7 @@ def actions_round():
     return "waited" in got  # a server before the long poll answers at once: then the loop waits itself
 
 
-STATE_ACTIONS = {"yolo", "workers_allowed", "max_workers", "link_folder", "unlink_folder", "trust_hooks", "stop_worker", "restart", "merge"}
+STATE_ACTIONS = {"yolo", "workers_allowed", "max_workers", "link_folder", "unlink_folder", "trust_hooks", "stop_worker", "restart", "merge", "takeover"}
 
 
 # ---------------------------------------------------------------- the page
@@ -1535,7 +1538,8 @@ def chats_round() -> bool:
         if cid not in chat.RUNNING:
             post({"chat": cid, "events": [{"kind": "error", "text": "The turn was lost: the companion on this pc restarted."}], "done": True, "error": "lost"})
             log("error", "A chat turn was lost (the companion restarted)", f"chat {cid}")
-    linked = lambda: {f["path"] for f in folder_links()["linked"]}
+    # a worker taken over goes on as a chat in its worktree
+    linked = lambda: {f["path"] for f in folder_links()["linked"]} | {w["cwd"] for w in load("workers.json", {}).values() if w.get("chat") and w.get("cwd")}
     yolo = lambda agent: bool(load("yolo.json", {}).get(agent, {}).get("on"))
     for item in r.get("work", []):
         log("remote", f"Chat message from {item.get('by') or '?'} for {AGENTS.get(item.get('agent'), ('?',))[0]}", f"chat {item.get('chat')} in {item.get('folder')}")
@@ -1553,7 +1557,169 @@ def chats_round() -> bool:
             server("POST", "/machine/chats/diff", tok, answer)
         except Exception as e:
             log("error", "Could not send a diff to the web UI", f"{type(e).__name__}: {e}"[:300])
+    follow_round(tok, r)
     return bool(r.get("active") or chat.RUNNING)
+
+
+# ---------------------------------------------------------------- follow and steer a worker from the web UI
+
+FOLLOW_READ, FOLLOW_TAIL = 256_000, 200  # bytes of a worker's log read per send; events sent once when an unwatched worker ends
+FOLLOW_LOCK = threading.Lock()  # the chat poll (followed workers) and the minute round (ended ones) share follow.json
+FOLLOW_FAILED: set = set()  # workers whose send failed: said once in the activity log
+
+
+def worker_events(w: dict, frm: int, final: bool) -> tuple:
+    """(events, next offset): the chat events in a worker's log from byte `frm` on, complete lines only (at its end all
+    of it), parsed as the chats parse each agent's stream; agy -p prints plain text, its lines are its answer. More
+    than 4 reads behind (or at the end): only the newest part, said so. Secrets masked."""
+    try:
+        with open(w["log"], "rb") as fh:
+            size = fh.seek(0, 2)
+            frm = 0 if frm > size else frm  # a new log
+            start = max(frm, size - FOLLOW_READ) if final or size - frm > 4 * FOLLOW_READ else frm
+            fh.seek(start)
+            data = fh.read(FOLLOW_READ)
+    except (OSError, KeyError, TypeError):
+        return [], frm
+    end = len(data) if final and start + len(data) >= size else data.rfind(b"\n") + 1
+    if not end and len(data) == FOLLOW_READ:  # one line longer than a read: sent cut, never stuck on it
+        end = len(data)
+    lines = data[:end].decode("utf-8", "replace").splitlines()
+    if start > frm:
+        lines = lines[1:]  # the read began inside a line
+    st, out = {}, [("info", "Earlier output skipped: only the newest part is shown.")] if start > frm else []
+    for line in lines:
+        if w["agent"] == "agy" and not line.lstrip().startswith("{"):
+            out += [("text", line + "\n")] if line.strip() else []
+        else:
+            out += chat.parse(w["agent"], line, st)
+    return [(k, mask(t)) for k, t in out], start + end
+
+
+def send_worker(tok: str, key: str, w: dict, final: bool = False, extra: list = ()):
+    """Send what the worker printed since the last send (followed), or its last FOLLOW_TAIL events once when it ended;
+    `extra` events go first. Remembers how far it got per run in follow.json."""
+    with FOLLOW_LOCK:
+        sent = load("follow.json", {})
+        s = sent.get(key) if (sent.get(key) or {}).get("started") == w.get("started") else {}
+        if final and s.get("final"):
+            return
+        evs, off = worker_events(w, s.get("offset", 0), final)
+        if s.get("steer") and not workers.steer_path(w).exists():  # the watch hook took it
+            evs, s["steer"] = [("info", "Delivered: the worker read your message after its last step.")] + evs, False
+        if final and workers.steer_path(w).exists():
+            workers.steer_path(w).unlink(missing_ok=True)
+            evs.append(("info", "Not delivered: the worker ended before its next step. Take it over to go on as a chat."))
+        evs = chat.merged([*extra, *evs])
+        evs = evs[-FOLLOW_TAIL:] if final else evs
+        parts = [evs[i:i + 400] for i in range(0, len(evs), 400)] or ([[]] if final else [])  # the server takes 500 at a time
+        for i, part in enumerate(parts):
+            server("POST", "/machine/chats/worker", tok, {"worker": key, "started": w.get("started"), "agent": w["agent"],
+                                                         "status": w["status"], "events": part, "done": final and i == len(parts) - 1})
+        sent.pop(key, None)
+        sent[key] = {**s, "started": w.get("started"), "offset": off, "final": final}
+        save("follow.json", dict(list(sent.items())[-100:]))
+
+
+def send_final(tok: str, w: dict):
+    """An ended worker's last events, once; a server without the route (404) is skipped quietly."""
+    try:
+        send_worker(tok, f"{w['project']}/{w['id']}", w, final=True)
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            log("error", f"Could not send the last output of the worker for {w['id']}", f"{e}"[:200])
+    except Exception as e:
+        log("error", f"Could not send the last output of the worker for {w['id']}", f"{type(e).__name__}: {e}"[:200])
+
+
+def steer(tok: str, ws: dict, item: dict):
+    """The owner's message for a running worker: a note its watch hook hands the agent after its next tool call (the
+    way the 90% hand-over reaches it), so it carries on in its own session, worktree and permissions."""
+    key, w = str(item.get("worker", "")), ws.get(str(item.get("worker", "")))
+    if not w or w["status"] != "running" or not workers.running(w):
+        if w:
+            send_worker(tok, key, w, extra=[("info", "Not delivered: the worker does not run on this pc any more.")])
+        return
+    workers.steer_note(w, str(item.get("by") or "the owner"), str(item.get("text", "")))
+    with FOLLOW_LOCK:
+        sent = load("follow.json", {})
+        if (sent.get(key) or {}).get("started") != w.get("started"):
+            sent[key] = {"started": w.get("started"), "offset": 0}
+        sent[key]["steer"] = True
+        save("follow.json", sent)
+    log("remote", f"Message from {item.get('by') or '?'} for the worker of {w['id']}", "handed over after its next tool call")
+
+
+def follow_round(tok: str, r: dict):
+    """The poll's part for workers: steer messages, then new output of the followed ones."""
+    if not (r.get("steer") or r.get("follow")):
+        return
+    with LOCK:
+        ws = load("workers.json", {})
+    for item in r.get("steer", []):
+        try:
+            steer(tok, ws, item)
+        except Exception as e:
+            log("error", "Could not hand a message to a worker", f"{type(e).__name__}: {e}"[:300])
+    for key in r.get("follow", []):
+        if key not in ws:
+            continue
+        try:
+            send_worker(tok, key, ws[key])
+            FOLLOW_FAILED.discard(key)
+        except Exception as e:
+            if key not in FOLLOW_FAILED:
+                log("error", f"Could not send the output of the worker for {key}", f"{type(e).__name__}: {e}"[:300])
+            FOLLOW_FAILED.add(key)
+
+
+def worker_session_id(w: dict) -> str:
+    """The agent's own session id of a worker: from its log (Claude's init, Codex's thread.started), else what its
+    watch hook noted (agy -p prints none)."""
+    st = {}
+    try:
+        with open(w["log"], "rb") as fh:
+            for raw in fh.read(256_000).splitlines():
+                chat.parse(w["agent"], raw.decode("utf-8", "replace"), st)
+                if st.get("session"):
+                    return st["session"]
+    except (OSError, KeyError, TypeError):
+        pass
+    try:
+        return workers.session_path(w).read_text(encoding="utf-8").strip()[:120]
+    except OSError:
+        return ""
+
+
+def take_over(args: dict, tok: str) -> str:
+    """The owner takes a worker over: it is stopped (its lease kept, as Stop) and its conversation becomes a chat on
+    this pc in its worktree, which resumes the worker's own session; the server claims the line for the owner."""
+    key = f"{args.get('project')}/{args['id']}"
+    with TICK:  # between rounds: a round must not count it failed, nor save its own copy of workers.json over this
+        with LOCK:
+            ws = load("workers.json", {})
+            w = ws.get(key)
+            if not w or w["status"] == "merged" or w.get("chat"):
+                raise RuntimeError(f"no worker for {args['id']} to take over here" + (" (taken over already)" if w and w.get("chat") else ""))
+            if w["status"] == "running":
+                w["owner_stopped"] = True
+                save("workers.json", ws)
+        if w["status"] == "running":
+            workers.kill(w)
+            for _ in range(20):  # its session file is complete once it has ended
+                if not workers.running(w):
+                    break
+                time.sleep(0.5)
+        session = worker_session_id(w)
+        if not session:
+            raise RuntimeError("its session id is unknown (it made no step yet); it was stopped: start it again or chat in its folder")
+        r = server("POST", "/machine/chats/adopt", tok, {"worker": key, "started": w.get("started"), "agent": w["agent"], "folder": w["cwd"], "session": session})
+        with LOCK:
+            ws = load("workers.json", {})
+            if key in ws:
+                ws[key]["chat"] = r["chat"]
+                save("workers.json", ws)
+    return f"taken over as chat {r['chat']} in {w['cwd']}"
 
 
 def chats_loop():

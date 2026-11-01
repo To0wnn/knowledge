@@ -4598,6 +4598,12 @@ def may_approve(project: str) -> bool:
     return bool(dev.get("admin")) or bool(dev.get("user")) and dev.get("user") == project_owner(project)
 
 
+def chat_held(t: dict, project: str) -> bool:
+    """The line is held only by a take-over chat ("claimed <owner> via chat"), no lease: its owner may cancel or assign it."""
+    lease = read_json(TASK_LEASES, {}).get(project, {}).get(t["id"])
+    return bool(CHAT_CLAIM.search(t["line"])) and not (lease and lease.get("until", 0) >= time.time())
+
+
 def held_now(t: dict, lease: dict | None, now: float) -> bool:
     """A worker or session has the task: claimed in its line, or a lease that has not run out."""
     return t["claimed"] or bool(lease) and lease.get("until", 0) >= now
@@ -4757,7 +4763,7 @@ def action_args(action: str, args: dict) -> dict:
         if not re.fullmatch(r"[\w.-]{1,60}", str(args.get("id", ""))):
             raise ValueError("id must be a task id")
         return str(args["id"])
-    if action in ("start_worker", "stop_worker", "rollback", "restart", "merge"):  # a task id is unique per project only
+    if action in ("start_worker", "stop_worker", "rollback", "restart", "merge", "takeover"):  # a task id is unique per project only
         if args.get("project") not in PROJECTS or not in_scope(PROJECTS[args["project"]][1] + "/"):
             raise ValueError("unknown project")
         return {"project": args["project"], "id": tid()}
@@ -4807,6 +4813,18 @@ async def ui_machine_action(request: Request):
             return JSONResponse({"error": f"no ended worker for {args['id']} on this machine"}, status_code=409)
         action = "start_worker"  # the companion's own start (any version): `only` skips the hold
     dev, tokens = device.get(), read_json(TOKENS_FILE, {})
+    if action == "takeover":  # the owner goes on with a worker as a chat: its companion stops it and asks /machine/chats/adopt
+        key = f"{args['project']}/{args['id']}"
+        w = reported_worker(row, key)
+        if not w or w.get("status") == "merged" or w.get("chat"):
+            return JSONResponse({"error": f"no worker for {args['id']} to take over on this machine"}, status_code=409)
+        if not row["online"]:
+            return JSONResponse({"error": f"{row['label']} is offline"}, status_code=409)
+        pending = {"by": dev.get("user", ""), "at": time.time(), "started": w.get("started"),
+                   "tokens": [n for n in row["tokens"] if n in tokens and own_token(tokens[n], dev)]}
+        tf = CHATS_DIR / mid / "takeover.json"
+        tf.parent.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(update_state, tf, lambda d: d.__setitem__(key, pending))
     item = {"id": secrets.token_hex(6), "action": action, "args": args, "by": dev.get("user", ""), "at": time.time(),
             "status": "waiting", "tokens": [n for n in row["tokens"] if n in tokens and own_token(tokens[n], dev)]}
     await asyncio.to_thread(update_state, MACHINE_ACTIONS, lambda d: d.__setitem__(mid, (d.get(mid, []) + [item])[-50:]))
@@ -4927,12 +4945,12 @@ def asks_settle(c: dict, now: float, why: str = ""):
                      f"Approval for {a['tool']} withdrawn: {why}.")
 
 
-def chat_add(c: dict, kind: str, text: str):
+def chat_add(c: dict, kind: str, text: str, events: int = CHAT_EVENTS, size_cap: int = CHAT_BYTES):
     """One event, within the caps: the oldest events go first (the chat says so)."""
     c["next"] = c.get("next", 0) + 1
     c.setdefault("events", []).append({"n": c["next"], "at": time.time(), "kind": kind, "text": text[:CHAT_TEXT]})
     size = sum(len(e["text"]) + 60 for e in c["events"])
-    while len(c["events"]) > CHAT_EVENTS or size > CHAT_BYTES:
+    while len(c["events"]) > events or size > size_cap:
         size -= len(c["events"].pop(0)["text"]) + 60
         c["trimmed"] = True
     c["updated"] = time.time()
@@ -5532,7 +5550,23 @@ async def machine_chats(request: Request):
             await asyncio.to_thread(update_state, chat_file(mid, cid), lambda c, cid=cid: answer(c, cid))
     if answers:  # only when there are: an older companion ignores the key
         out["answers"] = answers
-    out["active"] = bool(out["busy"] or out["work"])
+    steer = []
+
+    def steer_out(d):
+        for k, v in d.items():
+            if v.get("status") == "waiting" and dev["name"] in v.get("tokens", []):
+                steer.append({"id": k, **{x: v[x] for x in ("worker", "text", "by")}})
+                v["status"] = "sent"
+    sq = q_path.parent / "steer.json"
+    if any(v.get("status") == "waiting" for v in read_json(sq, {}).values()):
+        await asyncio.to_thread(update_state, sq, steer_out)
+    if steer:
+        out["steer"] = steer
+    now = time.time()
+    follow = [k for k, v in read_json(q_path.parent / "follow.json", {}).items() if v.get("until", 0) > now and dev["name"] in v.get("tokens", [])]
+    if follow:  # workers someone watches in the web UI now: their companion sends their new output (an older one ignores it)
+        out["follow"] = follow
+    out["active"] = bool(out["busy"] or out["work"] or follow or steer)
     if time.time() - (read_json(MACHINES_FILE, {}).get(mid) or {}).get("at", 0) > 30:  # online in the Machines list
         await asyncio.to_thread(mark_machine, dev)
     return JSONResponse(out)
@@ -5611,6 +5645,213 @@ async def machine_chat_events(request: Request):
     if b.get("done") is True:
         await asyncio.to_thread(update_state, f.parent / "queue.json", lambda q: q.pop(c["id"], None))
     return JSONResponse({"ok": True})
+
+
+# Follow a worker: a worker is a chat nobody types in. Its companion turns the worker's log into chat events (text,
+# tool, refused, info) and sends them here only while someone follows it in the web UI (GET /ui/api/worker marks it
+# followed for WORKER_FOLLOW seconds; the companion's fast chat poll hears "follow"), plus its last events once when it
+# ends. One capped transcript per worker under chats/<machine>/workers/, pruned with the worker's record (report).
+WORKER_EVENTS, WORKER_BYTES, WORKER_KEEP = 2000, 400_000, 40  # per transcript; transcripts per machine
+WORKER_FOLLOW = float(os.environ.get("KNOWLEDGE_WORKER_FOLLOW_SECONDS") or 30)  # a follow lasts this long after the viewer's last poll
+WORKER_KEY = re.compile(r"\w[\w.-]{0,79}/\w[\w.-]{0,79}")  # <project>/<task id>, as the companion keys its workers
+
+
+def worker_file(mid: str, key: str) -> Path:
+    if not re.fullmatch(r"[0-9a-f]{16}", mid) or not WORKER_KEY.fullmatch(key):
+        raise ValueError("unknown worker")
+    return CHATS_DIR / mid / "workers" / (hashlib.sha256(key.encode()).hexdigest()[:24] + ".json")
+
+
+def reported_worker(row: dict, key: str) -> dict | None:
+    """The worker `key` as the machine's companion last reported it (the newest when a task ran more than once)."""
+    ws = [w for a in (row.get("agents") or {}).values() for w in a.get("workers", []) if f"{w.get('project')}/{w.get('id')}" == key]
+    return max(ws, key=lambda w: w.get("started") or 0, default=None)
+
+
+@server.custom_route("/ui/api/worker", methods=["GET"])
+async def ui_worker(request: Request):
+    """?machine=&worker=<project>/<id>&after=<n>: a worker's transcript after event n, read-only, on one of this
+    person's own machines. Polling a running worker follows it (its companion sends output while someone does);
+    peek=1 only reads."""
+    try:
+        b = dict(request.query_params)
+        mid, key, after = str(b.get("machine", "")), str(b.get("worker", "")), int(b.get("after") or 0)
+        f = worker_file(mid, key)
+        row = await asyncio.to_thread(own_machine, mid)
+        if not row:
+            raise PermissionError("not a machine of your own tokens (with plugin 0.15.0 or newer)")
+    except (ValueError, TypeError, PermissionError) as e:
+        return chat_error(e)
+    w, t = reported_worker(row, key), await asyncio.to_thread(read_json, f, None)
+    if not w and not t:
+        return JSONResponse({"error": "no such worker on that pc"}, status_code=404)
+    now, following = time.time(), False
+    if w and w.get("status") == "running" and row["online"] and not b.get("peek"):
+        dev, tokens = device.get(), read_json(TOKENS_FILE, {})
+        mine = [n for n in row["tokens"] if n in tokens and own_token(tokens[n], dev)]
+        fp = f.parent.parent / "follow.json"
+        if (read_json(fp, {}).get(key) or {}).get("until", 0) - now < WORKER_FOLLOW / 2:  # not a write per poll
+
+            def mark(d):
+                for k in [k for k, v in d.items() if v.get("until", 0) < now]:
+                    d.pop(k)
+                d[key] = {"until": now + WORKER_FOLLOW, "tokens": mine}
+            fp.parent.mkdir(parents=True, exist_ok=True)
+            await asyncio.to_thread(update_state, fp, mark)
+        following = True
+    if t and w and t.get("started") != w.get("started"):  # an earlier run's transcript: not this worker's
+        t = None
+    t = t or {}
+    info = {k: (w or t).get(k) for k in ("id", "project", "agent", "status", "started", "ended", "branch", "why", "open", "yolo")}
+    info.update(id=info["id"] or key.split("/", 1)[1], project=info["project"] or key.split("/", 1)[0], agent=info["agent"] or t.get("agent"),
+                review=bool(w and w.get("review")), git=bool(w and w.get("git")))
+    taken = read_json(f.parent.parent / "takeover.json", {}).get(key) or {}
+    info["chat"] = taken.get("chat") if taken.get("started") == info.get("started") else None
+    return JSONResponse({"worker": info, "events": [e for e in t.get("events", []) if e["n"] > after], "trimmed": bool(t.get("trimmed")),
+                         "following": following, "online": row["online"], "at": row["at"], "label": row["label"], "machine": mid, "now": now})
+
+
+@server.custom_route("/machine/chats/worker", methods=["POST"])
+async def machine_chat_worker(request: Request):
+    """{worker: <project>/<id>, started, agent, status, events: [{kind, text}], done}: a worker's output, from the
+    companion that reports it; a new `started` begins a new transcript. Known secrets are masked again here."""
+    dev = device.get()
+    try:
+        b = await request.json()
+        key, mid = str(b.get("worker", "")), dev.get("machine", "")
+        f = worker_file(mid, key)
+        started = b.get("started") if isinstance(b.get("started"), (int, float)) else 0
+        events = [(str(e.get("kind")), str(e.get("text", ""))) for e in (b.get("events") or [])[:500]]
+        if bad := [k for k, _ in events if k not in CHAT_KINDS]:
+            raise ValueError(f"kind must be one of {', '.join(CHAT_KINDS)}, not {bad[0][:20]}")
+    except (ValueError, AttributeError, TypeError) as e:
+        return JSONResponse({"error": str(e) or "send JSON {worker, events}"}, status_code=400)
+    # only the token this machine's companion reports with (the one whose workers the Machines list shows)
+    if ((read_json(MACHINES_FILE, {}).get(mid) or {}).get("companion") or {}).get("token") != dev["name"]:
+        return JSONResponse({"error": "not the companion of this machine"}, status_code=404)
+
+    def change(c):
+        if c.get("started") != started:
+            c.clear()
+            c.update(key=key, started=started, next=0, events=[])
+        c.update(agent=str(b.get("agent") or "")[:20], status=str(b.get("status") or "")[:20])
+        for k, t in events:
+            chat_add(c, k, redact(t), WORKER_EVENTS, WORKER_BYTES)
+        if b.get("done") is True:
+            c["ended"] = time.time()
+
+    def save():
+        f.parent.mkdir(parents=True, exist_ok=True)
+        new = not f.exists()
+        update_state(f, change)
+        if new:  # at most WORKER_KEEP per machine: the oldest go
+            old = sorted(f.parent.glob("*.json"), key=lambda x: x.stat().st_mtime)
+            for x in old[:max(0, len(old) - WORKER_KEEP)]:
+                x.unlink(missing_ok=True)
+    await asyncio.to_thread(save)
+    return JSONResponse({"ok": True})
+
+
+@server.custom_route("/ui/api/worker/steer", methods=["POST"])
+async def ui_worker_steer(request: Request):
+    """{machine, worker, text}: a message from the machine's owner for its running worker. The companion hands it to
+    the agent after its next tool call (watch hook), in the worker's own session: the worker keeps its task, lease,
+    worktree and permissions. The transcript shows it as a user line."""
+    try:
+        b = await request.json()
+        mid, key, text = str(b.get("machine", "")), str(b.get("worker", "")), str(b.get("text", "")).strip()
+        f = worker_file(mid, key)
+        if not text or len(text) > CHAT_TEXT:
+            raise ValueError(f"a message is 1 to {CHAT_TEXT} characters")
+        row = await asyncio.to_thread(own_machine, mid)
+        if not row:
+            raise PermissionError("not a machine of your own tokens (with plugin 0.15.0 or newer)")
+    except (ValueError, AttributeError, TypeError, PermissionError) as e:
+        return chat_error(e)
+    w = reported_worker(row, key)
+    if not w or w.get("status") != "running":
+        return JSONResponse({"error": "that worker does not run (take it over to go on as a chat)"}, status_code=409)
+    if not row["online"]:
+        return JSONResponse({"error": f"{row['label']} is offline"}, status_code=409)
+    dev, tokens, now = device.get(), read_json(TOKENS_FILE, {}), time.time()
+    user = dev.get("user", "")
+
+    def note(c):
+        if c.get("started") != w.get("started"):
+            c.clear()
+            c.update(key=key, started=w.get("started"), next=0, events=[], agent=w.get("agent"), status="running")
+        chat_add(c, "user", text, WORKER_EVENTS, WORKER_BYTES)
+
+    def queue(d):
+        for k in [k for k, v in d.items() if now - v.get("at", 0) > DIFF_KEEP]:
+            d.pop(k)
+        d[secrets.token_hex(6)] = {"worker": key, "text": text, "by": user, "at": now, "status": "waiting",
+                                   "tokens": [n for n in row["tokens"] if n in tokens and own_token(tokens[n], dev)]}
+    f.parent.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(update_state, f, note)
+    await asyncio.to_thread(update_state, f.parent.parent / "steer.json", queue)
+    audit("worker-steer", f"{mid} {key}")
+    return JSONResponse({"ok": True})
+
+
+CHAT_CLAIM = re.compile(r"\(claimed\b[^)]*\bvia chat\b[^)]*\)", re.I)  # a worker taken over: its owner holds the line in a chat
+
+
+@server.custom_route("/machine/chats/adopt", methods=["POST"])
+async def machine_chat_adopt(request: Request):
+    """{worker, started, agent, folder, session}: the companion stopped a worker its owner takes over (a queued
+    takeover action); its conversation becomes a chat in the worker's folder that resumes the worker's session, with
+    the transcript so far. The task line is claimed '<owner> via chat' until the chat hands back or the owner cancels
+    or assigns it. Answers {chat}."""
+    dev = device.get()
+    try:
+        b = await request.json()
+        key, mid = str(b.get("worker", "")), dev.get("machine", "")
+        f = worker_file(mid, key)
+        folder, session, agent = str(b.get("folder", ""))[:500], str(b.get("session", "")), str(b.get("agent", ""))
+        if not re.fullmatch(r"[\w.:-]{1,120}", session) or agent not in AGENT_OWNERS or not folder or "\n" in folder:
+            raise ValueError("send the worker's agent, folder and session id")
+    except (ValueError, AttributeError, TypeError) as e:
+        return JSONResponse({"error": str(e) or "send JSON {worker, folder, session}"}, status_code=400)
+    tf = f.parent.parent / "takeover.json"
+    p = read_json(tf, {}).get(key) or {}
+    if dev["name"] not in p.get("tokens", []) or p.get("chat") or time.time() - p.get("at", 0) > DIFF_KEEP or p.get("started") != b.get("started"):
+        return JSONResponse({"error": "no take-over of this worker was asked for"}, status_code=404)
+    project, tid = key.split("/", 1)
+    t = await asyncio.to_thread(read_json, f, None) or {}
+    cid, now = secrets.token_hex(6), time.time()
+    c = {"id": cid, "agent": agent, "folder": folder, "project": project, "title": f"{tid} (taken over from its worker)", "by": p["by"],
+         "created": now, "updated": now, "status": "idle", "session": session, "next": 0, "seen": 0, "events": [], "tokens": p["tokens"],
+         "worker": key}
+    for e in (t.get("events") or [])[-200:] if t.get("started") == p.get("started") else []:
+        chat_add(c, e["kind"], e["text"])
+    chat_add(c, "info", f"Taken over from the worker by {p['by'] or '?'}: this chat goes on in its session, in {folder}.")
+    c["seen"] = c["next"]
+    await asyncio.to_thread(write_json, chat_file(mid, cid), c)
+    await asyncio.to_thread(update_state, tf, lambda d: d.get(key, {}).update(chat=cid))
+    # the line: claimed by the owner in a chat (no worker restarts it), the worker's lease gone
+    line = next((x for x in (await asyncio.to_thread(project_tasks, project))[0] if x["id"] == tid), None) if project in PROJECTS else None
+    if line:
+        marker = f"(claimed {p['by'] or 'owner'} via chat, {time.strftime('%Y-%m-%d')})"
+        new = re.sub(r"\s*\((?:claimed|bezig)[^)]*\)", "", line["line"], flags=re.I).rstrip() + f" {marker}"
+        try:
+            await knowledge_edit(line["path"], line["line"], new)
+        except (ToolError, OSError) as e:
+            await asyncio.to_thread(update_state, chat_file(mid, cid), lambda c: chat_add(c, "error", f"Could not claim {tid} for this chat: {e}"[:300]))
+    await asyncio.to_thread(update_state, TASK_LEASES, lambda d: d.get(project, {}).pop(tid, None))
+    audit("worker-takeover", f"{mid} {key} -> chat {cid}")
+    return JSONResponse({"chat": cid})
+
+
+def prune_worker_transcripts(mid: str, workers: list):
+    """Transcripts of workers the companion no longer reports (it keeps a record 30 days) go with them."""
+    d = CHATS_DIR / mid / "workers"
+    if not re.fullmatch(r"[0-9a-f]{16}", mid) or not d.is_dir():
+        return
+    keep = {worker_file(mid, k).name for w in workers if WORKER_KEY.fullmatch(k := f"{w.get('project')}/{w.get('id')}")}
+    for x in d.glob("*.json"):
+        if x.name not in keep:
+            x.unlink(missing_ok=True)
 
 
 FLAG_KINDS = ("force-push", "rm-outside", "pipe-to-shell", "key-read", "vault-read")
@@ -5699,7 +5940,7 @@ async def machine_report(request: Request):
                                  **({"plugin": v["plugin"][:20]} if isinstance(v.get("plugin"), str) and re.fullmatch(r"[\w.+-]{1,20}", v["plugin"]) else {})}
                              for a, v in (b.get("agents") or {}).items() if a in AGENT_OWNERS and isinstance(v, dict)},
                   "workers": [{k: (w.get(k) if w.get(k) is None or isinstance(w.get(k), (int, float, bool)) else str(w[k])[:300])
-                               for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open", "checkpoint", "merged", "why")}
+                               for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open", "checkpoint", "merged", "why", "chat")}
                               | {"git": git_pill(w.get("git")), "progress": worker_progress(w.get("progress")), "review": worker_review(w.get("review"))}
                               for w in (b.get("workers") or [])[:40] if isinstance(w, dict)],
                   "folders": {k: [{"path": str(f.get("path", ""))[:500], "project": str(f.get("project", ""))[:80]}
@@ -5712,6 +5953,8 @@ async def machine_report(request: Request):
     except (ValueError, AttributeError, TypeError) as e:
         return JSONResponse({"error": f"bad report: {e}"}, status_code=400)
     await asyncio.to_thread(mark_machine, dev, report=report)
+    if "workers" in b:  # an older companion that sends none keeps its transcripts
+        await asyncio.to_thread(prune_worker_transcripts, dev["machine"], report["workers"])
     told = []
 
     def change(d):
@@ -5762,7 +6005,7 @@ async def ui_task_cancel(request: Request):
         return JSONResponse({"error": "only the project's owner or an admin may cancel a task"}, status_code=403)
     if not (t := next((t for t in (await asyncio.to_thread(project_tasks, project))[0] if t["id"] == tid), None)):
         return JSONResponse({"error": f"no open task {tid} in {project}"}, status_code=404)
-    if held_now(t, read_json(TASK_LEASES, {}).get(project, {}).get(tid), time.time()):
+    if held_now(t, read_json(TASK_LEASES, {}).get(project, {}).get(tid), time.time()) and not chat_held(t, project):
         return JSONResponse({"error": f"{tid} is being worked on: stop the worker first (Machines), then cancel"}, status_code=409)
     user, base = device.get().get("user", "") or "?", CONT.sub("", tid)  # a hand-over X-cont cancels X: its result is X-done
     lead = t["line"][:len(t["line"]) - len(t["line"].lstrip())]
@@ -5798,7 +6041,7 @@ async def ui_task_assign(request: Request):
         return JSONResponse({"error": f"no device token is called {dev_pin}: use the exact token name (admin page, Tokens)"}, status_code=409)
     if not (t := next((t for t in (await asyncio.to_thread(project_tasks, project))[0] if t["id"] == tid), None)):
         return JSONResponse({"error": f"no open task {tid} in {project}"}, status_code=404)
-    if held_now(t, read_json(TASK_LEASES, {}).get(project, {}).get(tid), time.time()):
+    if held_now(t, read_json(TASK_LEASES, {}).get(project, {}).get(tid), time.time()) and not chat_held(t, project):
         return JSONResponse({"error": f"{tid} is being worked on: stop the worker first (Machines), then assign it"}, status_code=409)
     line = t["line"]
     m = re.search(r"\[[^,\]]+,\s*" + re.escape(tid) + r"\]", line)
