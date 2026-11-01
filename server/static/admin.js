@@ -244,7 +244,7 @@ function writersCell(p) {
 
 function renderProjects() {
   if (!state.admin) {
-    $("projects").replaceChildren(...state.projects.map((p) => { const tr = el("tr");
+    $("project-rows").replaceChildren(...state.projects.map((p) => { const tr = el("tr");
       tr.append(el("td", "", p.name), el("td", "mono", p.docs + "/"), el("td", "mono", p.memory + "/"), el("td", "num", "—"), el("td", "num", "—"),
         el("td", "", p.mode === "write" ? "you: read + write" : "you: read"), el("td", "muted", "—"), el("td", "muted", p.builtin ? "VM (built in)" : "server"));
       return tr; }));
@@ -252,7 +252,7 @@ function renderProjects() {
   }
   const files = Object.fromEntries(state.system.index.map((r) => [r.root, r.files]));
   const bytes = Object.fromEntries(state.system.index.map((r) => [r.root, r.bytes || 0]));
-  $("projects").replaceChildren(...state.projects.map((p) => {
+  $("project-rows").replaceChildren(...state.projects.map((p) => {
     const tr = el("tr"), mine = (roots) => !roots || !roots.length || roots.includes(p.docs) || roots.includes(p.memory);
     const tokens = state.tokens.filter((t) => mine(t.roots)).length;
     const people = state.admins.length + Object.values(state.users).filter((u) => (u.projects || {})[p.name] && u.projects[p.name] !== "none").length;

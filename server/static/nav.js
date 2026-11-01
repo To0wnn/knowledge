@@ -70,6 +70,8 @@ if (navPage) {
   navEl("more-btn").setAttribute("aria-current", "page");
   navEl("jump").onclick = () => { location.href = "/ui#/notes?q="; };
   document.addEventListener("keydown", (e) => {
+    // on admin/help (no palette there) Ctrl/Cmd+K goes to the app's search, as the button says
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k" && typeof openPalette !== "function") { e.preventDefault(); location.href = "/ui#/notes?q="; return; }
     if (e.target.closest("input, textarea, select, [contenteditable]") || e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.key === "[") toggleRail();
   });
