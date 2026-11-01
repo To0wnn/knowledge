@@ -30,7 +30,7 @@ REASON = ("This text contains a known secret value. Store it with `secret set NA
 
 def leaks(text: str, hashes: set) -> bool:
     for tok in TOKEN.findall(text):
-        for part in [tok, *re.split(r"[=:@/]", tok)]:
+        for part in [tok, *re.split(r"[=:@/&?#]|\\[nrt]", tok)]:
             # a sentence may end right after the value: "the key is abc123."
             for p in {part, part.rstrip(".!?")}:
                 if p and hashlib.sha256(p.encode()).hexdigest() in hashes:
@@ -96,6 +96,8 @@ def self_test():
     assert check("claude", {"tool_input": {"command": f"+k={secret}"}}, hashes), "Claude with a Codex-style patch"
     for end in ".", "?", "!", "...":  # missed live with Codex on 27 Oct 2026: "the cat says <secret>."
         assert check("claude", {"tool_input": {"content": f"it is {secret}{end}"}}, hashes), f"a secret before {end!r}"
+    for text in f"https://x/api?token={secret}&page=2", f"pw={secret}&x=1", f'"pw": "{secret}\\n"':  # & ? # and a literal \n split the word too
+        assert check("claude", {"tool_input": {"content": text}}, hashes), f"a secret in {text!r}"
     removed = {"claude": {"tool_input": {"old_string": secret, "new_string": "‹secret:X›"}},
                "codex": {"tool_input": {"command": f"*** Update File: a\n@@\n-{secret}\n+‹secret:X›"}},
                "agy": {"toolCall": {"args": {"Path": "a", "Target": secret, "Replacement": "‹secret:X›"}}}}
