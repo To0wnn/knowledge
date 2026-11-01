@@ -1177,6 +1177,9 @@ def main():
     versions = {json.loads((Path(__file__).parent.parent / "plugin" / d / "plugin.json").read_text())["version"]
                 for d in (".claude-plugin", ".codex-plugin")}
     assert len(versions) == 1, f"plugin versions differ: {versions}"
+    # The MCP registry entry names the released version and its image (image.yml rewrites it again on publish).
+    reg = json.loads((Path(__file__).parent.parent / "server.json").read_text())
+    assert {reg["version"], reg["packages"][0]["identifier"].rsplit(":", 1)[1]} == versions, f"server.json: bump to {versions}"
     # The web UI tab wears the companion's look: thispc.css is companion.css's components with the scope renamed.
     cstatic = Path(__file__).parent.parent / "plugin" / "companion" / "static"
     comp = (cstatic / "companion.css").read_text().split("/* COMPONENTS START */\n")[1].split("/* COMPONENTS END */")[0]
