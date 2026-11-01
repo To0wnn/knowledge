@@ -649,10 +649,10 @@ def pending_yolo():
 
 # ---------------------------------------------------------------- the server
 
-def server(method: str, path: str, tok: str, body=None):
+def server(method: str, path: str, tok: str, body=None, timeout: float = 15):
     req = urllib.request.Request(token_store.url() + path, method=method, data=None if body is None else json.dumps(body).encode(),
                                  headers={**token_store.headers(tok), "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=15) as r:
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8") or "{}")
 
 
@@ -1246,7 +1246,9 @@ def run_action(a: dict) -> str:
 def actions_round():
     """Fetch the waiting actions for this machine, run each, report how it went; all in the activity log."""
     tok, changed = token_store.token(), False
-    for a in server("GET", "/machine/actions", tok).get("actions", []):
+    # a long poll: the server answers as soon as an action waits, or after ACTIONS_WAIT s with none
+    got = server("GET", f"/machine/actions?wait={ACTIONS_WAIT:g}", tok, timeout=ACTIONS_WAIT + 15)
+    for a in got.get("actions", []):
         changed = changed or a.get("action") in STATE_ACTIONS
         log("remote", f"Remote action {a.get('action')} from {a.get('by') or '?'}", json.dumps(a.get("args") or {})[:200])
         try:
@@ -1260,6 +1262,7 @@ def actions_round():
             log("error", "Could not report a remote action's result", str(e)[:200])
     if changed:  # the page shows the new state at once, not at the next minute's report
         threading.Thread(target=tick, daemon=True).start()
+    return "waited" in got  # a server before the long poll answers at once: then the loop waits itself
 
 
 STATE_ACTIONS = {"yolo", "workers_allowed", "max_workers", "link_folder", "unlink_folder", "trust_hooks", "stop_worker", "restart", "merge"}
@@ -1476,20 +1479,22 @@ def loop():
 
 
 ACTIONS_EVERY = float(os.environ.get("KNOWLEDGE_COMPANION_ACTIONS_EVERY") or 10)
+ACTIONS_WAIT = float(os.environ.get("KNOWLEDGE_COMPANION_ACTIONS_WAIT") or 25)  # how long the server may hold the ask
 
 
 def actions_loop():
-    """Remote actions from the web UI: asked for about every 10 s (pull: the server never connects to this pc)."""
+    """Remote actions from the web UI, pulled with a long poll (the server never connects to this pc)."""
     failed = False
     while True:
         try:
-            actions_round()
+            held = actions_round()
             failed = False
         except Exception as e:  # the server away: said once, the minute loop says it too
             if not failed:
                 log("error", "Could not fetch remote actions", f"{type(e).__name__}: {e}"[:300])
-            failed = True
-        time.sleep(ACTIONS_EVERY)
+            failed, held = True, False
+        if not held:  # the server held nothing (old server, or away): do not ask again at once
+            time.sleep(ACTIONS_EVERY)
 
 
 def chats_round() -> bool:

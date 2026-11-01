@@ -4823,20 +4823,31 @@ async def machine_projects(request: Request):
 
 @server.custom_route("/machine/actions", methods=["GET"])
 async def machine_actions_route(request: Request):
-    """The companion asks every ~10 s: the waiting actions for its machine that one of its own tokens may run; they
-    are handed out once (status "running") and reported back with POST /machine/actions/result."""
+    """The waiting actions for the companion's machine that one of its own tokens may run; they are handed out once
+    (status "running") and reported back with POST /machine/actions/result. ?wait=<s> (at most 25) holds the request
+    until an action is there (a long poll: a click in the web UI reaches the pc in about a second, with fewer requests
+    than asking every 10 s); the file is read once a second, so it works across the two servers of a switch-over."""
     dev, out = device.get(), []
     if not dev.get("machine"):
         return JSONResponse({"actions": []})
+    try:
+        wait = max(0.0, min(float(request.query_params.get("wait") or 0), 25.0))
+    except ValueError:
+        wait = 0.0
+    mine = lambda d: [a for a in d.get(dev["machine"], []) if a["status"] == "waiting" and dev["name"] in a.get("tokens", [])]
 
     def change(d):
-        for a in d.get(dev["machine"], []):
-            if a["status"] == "waiting" and dev["name"] in a.get("tokens", []):
-                a["status"] = "running"
-                out.append({k: a[k] for k in ("id", "action", "args", "by", "at")})
-    await asyncio.to_thread(update_state, MACHINE_ACTIONS, change)
+        for a in mine(d):
+            a["status"] = "running"
+            out.append({k: a[k] for k in ("id", "action", "args", "by", "at")})
     await asyncio.to_thread(mark_machine, dev)
-    return JSONResponse({"actions": out})
+    end = time.time() + wait
+    while True:
+        if mine(read_json(MACHINE_ACTIONS, {})):  # read first: no write (and no lock) while nothing waits
+            await asyncio.to_thread(update_state, MACHINE_ACTIONS, change)
+        if out or time.time() >= end or await request.is_disconnected():
+            return JSONResponse({"actions": out, "waited": wait})
+        await asyncio.sleep(1)
 
 
 @server.custom_route("/machine/actions/result", methods=["POST"])

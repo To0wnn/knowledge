@@ -493,6 +493,11 @@ def machines_contract(tmp, ck, fr, raw, er, et):
     got = json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"]
     assert [a["action"] for a in got] == ["yolo", "start_worker"] and got[0]["args"] == {"agent": "codex", "on": True}, got
     assert json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"] == []  # handed out once
+    # A long poll: with nothing waiting the server holds the ask for ?wait= seconds and says it did; an old-style ask
+    # (no wait) answers at once.
+    t0 = time.time(); held = json.loads(http("GET", "/machine/actions?wait=2", token=fr, headers=pc)[1])
+    assert held == {"actions": [], "waited": 2.0} and 1.5 <= time.time() - t0 < 6, (held, time.time() - t0)
+    t0 = time.time(); json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1]); assert time.time() - t0 < 1.5
     assert http("POST", "/machine/actions/result", {"id": got[0]["id"], "ok": True, "result": "on"}, token=fr, headers=pc)[0] == 200
     assert http("POST", "/machine/actions/result", {"id": got[1]["id"], "ok": True}, token=et, headers=pc)[0] == 404  # not her machine: her own record has no such action
     m = {r["id"]: r for r in json.loads(raw("GET", "/ui/api/machines", headers=ck)[2])["machines"]}["cccccccccccccccc"]

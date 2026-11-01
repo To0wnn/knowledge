@@ -831,3 +831,10 @@ dialog.palette { width: min(640px, calc(100vw - 24px)); margin: 12vh auto auto; 
   .pal-opt small { margin-left: 0; flex-basis: 100%; }
   .pal-foot { display: none; }
 }
+
+/* a machine action on its way to the pc: a small spinner before the label */
+button.busy { cursor: progress; opacity: .85; }
+button.busy::before { content: ""; display: inline-block; width: .9em; height: .9em; margin-right: .45em; vertical-align: -.12em;
+  border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { button.busy::before { animation-duration: 2.4s; } }

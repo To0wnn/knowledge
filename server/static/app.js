@@ -1098,7 +1098,16 @@ async function machineAction(m, action, args = {}) {
   setTimeout(loadMachines, 4000); // the report that follows the action
 }
 function machineButton(text, title, onclick) {
-  const b = el("button", "ghost small", text); b.type = "button"; b.title = title; b.onclick = onclick; return b;
+  const b = el("button", "ghost small", text); b.type = "button"; b.title = title;
+  // the pc carries the action out a moment later: a spinner and "…ing" until it reports back (machineAction waits)
+  const busy = /Turn on/.test(text) ? "Turning on…" : /Turn off/.test(text) ? "Turning off…" : "Working…";
+  b.onclick = async () => {
+    const run = onclick();
+    if (!run || typeof run.then !== "function") return; // cancelled (a prompt answered no): nothing to wait for
+    b.disabled = true; b.classList.add("busy"); b.textContent = busy; b.setAttribute("aria-busy", "true");
+    try { await run; } finally { b.disabled = false; b.classList.remove("busy"); b.removeAttribute("aria-busy"); b.textContent = text; }
+  };
+  return b;
 }
 // The Machines view: one card per pc.
 let machinesCache = []; // the last /ui/api/machines rows (machineAction waits on their actions)
@@ -1167,7 +1176,7 @@ async function loadMachines() {
         if (ag.trusted === false) ctl.append(machineButton("Trust hooks", "Trust the knowledge hooks the agent's own way", () => machineAction(m, "trust_hooks", { agent: a })));
         ctl.append(machineButton(ag.yolo ? "YOLO: ON · Turn off" : "YOLO: off · Turn on", "Run without asking: the agent's global setting on that pc", () => {
           if (ag.yolo) return machineAction(m, "yolo", { agent: a, on: false });
-          if (prompt(`${YOLO_WARNING}\n\nType YOLO to turn it on for ${AGENT_NAME[a] || a} on ${m.label}.`) === "YOLO") machineAction(m, "yolo", { agent: a, on: true, confirm: "YOLO" });
+          if (prompt(`${YOLO_WARNING}\n\nType YOLO to turn it on for ${AGENT_NAME[a] || a} on ${m.label}.`) === "YOLO") return machineAction(m, "yolo", { agent: a, on: true, confirm: "YOLO" });
         }));
         const max = el("select"); max.title = "At most this many workers of this agent at once";
         for (const n of [0, 1, 2, 3, 4]) { const o = el("option", null, `max ${n} worker${n === 1 ? "" : "s"}`); o.value = n; o.selected = n === ((c.maxWorkers || {})[a] ?? 1); max.append(o); }
