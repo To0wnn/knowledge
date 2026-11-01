@@ -41,8 +41,11 @@ The one-machine `compose.yaml` reads these from `.env` (checked against `compose
 | `KNOWLEDGE_PORT` | `8766` | The port on the Docker host |
 | `KNOWLEDGE_UID`, `KNOWLEDGE_GID` | `1000` | The owner of `./data` |
 | `TZ` | `UTC` | Dates in source file names and the audit log |
+| `KNOWLEDGE_UI_USER` | `admin` | The user name of the password sign-in |
 | `KNOWLEDGE_PROXY_SECRET`, `KNOWLEDGE_ADMINS`, `KNOWLEDGE_PROXY_IPS` | empty, empty, `127.0.0.1` | Sign-in through a reverse proxy (below) |
 | `KNOWLEDGE_PROXY_USER_HEADER` | `X-Authentik-Username` | The header the proxy puts the user name in (below) |
+| `KNOWLEDGE_MATRIX_URL`, `KNOWLEDGE_MATRIX_ROOM`, `KNOWLEDGE_MATRIX_TOKEN` | empty | Notices to one Matrix room (below) |
+| `KNOWLEDGE_RERANK_MODEL` | empty | Duplicate check: a reranker folder under `./data` (`server/export_reranker.sh`), e.g. `/data/models/reranker` |
 
 Sign-in through a reverse proxy: the proxy sends the shared secret in the header `X-Knowledge-Proxy` and the user name
 in `KNOWLEDGE_PROXY_USER_HEADER`: `X-Authentik-Username` (Authentik's forward auth, the default), `Remote-User`
@@ -70,7 +73,6 @@ the admin page to be given projects. `KNOWLEDGE_PROXY_IPS` are the addresses tru
 
 Notices (a Needs-you item, a stalled or idle task, a worker waiting for its usage limit, a risky YOLO action) go to
 one Matrix room when `KNOWLEDGE_MATRIX_URL`, `KNOWLEDGE_MATRIX_ROOM` and `KNOWLEDGE_MATRIX_TOKEN` are set; Matrix is
-the only channel. The one-machine `compose.yaml` does not pass these variables yet: add them under `environment:`
-(see [ROADMAP.md](ROADMAP.md)). Details of the Needs-you notices: [chats.md](chats.md).
+the only channel; set them in `.env`. Details of the Needs-you notices: [chats.md](chats.md).
 
 The trust model in one place: [security.md](security.md).

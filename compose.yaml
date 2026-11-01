@@ -26,10 +26,17 @@ services:
       KNOWLEDGE_SECRETS: /data/admin/secrets.json
       KNOWLEDGE_AUDIT: /data/state/audit.log
       KNOWLEDGE_VECTORS: /data/state/vectors.npz
-      # Optional: sign in through a reverse proxy with forward auth instead (see README, Web sign-in).
+      KNOWLEDGE_UI_USER: ${KNOWLEDGE_UI_USER:-admin}  # the name of the password sign-in
+      # Optional: sign in through a reverse proxy with forward auth instead (docs/server.md, Settings in .env).
       KNOWLEDGE_PROXY_SECRET: ${KNOWLEDGE_PROXY_SECRET:-}
       KNOWLEDGE_PROXY_USER_HEADER: ${KNOWLEDGE_PROXY_USER_HEADER:-X-Authentik-Username}  # or Remote-User, X-Forwarded-User, ...
       KNOWLEDGE_ADMINS: ${KNOWLEDGE_ADMINS:-}
       KNOWLEDGE_PROXY_IPS: ${KNOWLEDGE_PROXY_IPS:-127.0.0.1}
+      # Optional: notices to one Matrix room (all three needed).
+      KNOWLEDGE_MATRIX_URL: ${KNOWLEDGE_MATRIX_URL:-}
+      KNOWLEDGE_MATRIX_ROOM: ${KNOWLEDGE_MATRIX_ROOM:-}
+      KNOWLEDGE_MATRIX_TOKEN: ${KNOWLEDGE_MATRIX_TOKEN:-}
+      # Optional: duplicate check with a reranker model folder under ./data (server/export_reranker.sh), e.g. /data/models/reranker.
+      KNOWLEDGE_RERANK_MODEL: ${KNOWLEDGE_RERANK_MODEL:-}
     volumes:
       - ./data:/data
