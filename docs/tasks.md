@@ -1,0 +1,98 @@
+# Tasks: hand-overs, leases and workers
+
+Moved from the README; [back to the README](../README.md). How one agent hands work to another, how a task is started on exactly one machine, and how workers run it.
+The companion that starts workers is described in [companion.md](companion.md); chats in [chats.md](chats.md).
+
+## Hand-overs during a session
+
+- **Hand-overs during a session:** before a prompt (at most every two minutes) Claude Code, Codex and agy ask
+  `/tasks` for the tasks handed to them; a task added after the session started is told to the agent once.
+  The same per-turn call lets the server steer every session, also a resumed one that ran no start hook: notices
+  (such as docs moved into an archive folder) go to the first session of the device that asks, offered again after an
+  hour when that session had no further turn, and one session is asked to run a full docs mirror sync in the
+  background when the device's last one is older than `docs_sync_minutes` (admin page, Settings).
+
+## Task lines and leases
+
+- **Task lines:** a hand-over is one line in a memo,
+  `- open until <date> [<Owner>, <ID>] from <Requester>, start <now | after <ID> | <date> | after approval>: <what>`
+  (`open tot` also works). A new line without `from`/`start` is refused at write time; older lines keep working as
+  "start now" and show as legacy. The server records who added each line; a task starts by itself only when its start
+  condition is met and its writer is trusted (per project on the admin page; by default the project's owner and their
+  tokens, admins and the admins' own devices), otherwise the owner or an admin approves it in the Tasks tab. Only tasks
+  that may start reach an agent as "start now" (`/tasks`, the wake, `GET /tasks/ready`); the others are listed with the
+  reason. One task is started on one machine only: the first device to take it holds a 30-minute lease
+  (`state/task_leases.json`). `POST /tasks/woken` takes the lease (200 `{"lease"}`, or 409 `{"held_by"}` when another
+  device or another session holds it), `POST /tasks/release` gives it back (holder device only; a failed start or
+  delivery), `GET /tasks/ready` leaves out tasks another device holds, and the per-turn `/tasks` takes the lease for
+  the asking session when it first hears the task: every other session, on another device or on the same one, hears
+  "<ID> is already being handled by <device | another session on this pc>; do not start it". Later turns (the plugin
+  sends the ids it told the session before as `seen`) renew the session's own lease only within 30 minutes of the
+  tell and never take a free one again, so a session that heard a task and did other work lets it go. Only a token
+  that may write the project's memos takes leases. A worker the companion starts gets a nonce
+  (`KNOWLEDGE_START_NONCE`) and only the session presenting it takes its task (after 2 minutes without it, any session
+  of that machine may); the companion renews the lease while the worker runs. A lease ends when it runs out or the line gets its claim marker, which also makes the task not
+  startable. `[<Owner>@<device>, <ID>]` pins a task to one device (the token's name, any case; token names are unique
+  ignoring case, and a new line pinned to an unknown device is refused); others see it as reserved. A woken task nobody claims within 30 minutes
+  shows as stalled and sends one Matrix message.
+
+## Results handed back
+
+- **Results handed back:** a line `- [<Requester>, <ID>-done]: <result>` is listed for its requester only, at
+  session start ("Results handed back to you") and once per session at the next turn when it arrives later
+  (`results` in the `/tasks` v2 answer): read it, act on it, then remove the line. The Tasks tab groups them as
+  "Results waiting to be read by <requester>" with their age (a date in the line, else when the server saw it written,
+  else the memo's history). Unread for 7 days: lint `stale_handback`, which session starts list too.
+
+## Workers
+
+- **Workers, not chats:** a task never goes into someone's chat. The companion (below) starts a **worker** per ready
+  task: a fresh headless session of the task's agent (Claude Code `claude -p --output-format stream-json`, Codex
+  `codex exec --json`, agy `agy -p`) in its own git worktree on branch `task/<ID>` (`~/.knowledge/worktrees/`), or in
+  the project folder when that is no git repository. Without YOLO a worker may do what its task needs and no more: edit
+  its own folder, use the knowledge tools, and run `git status/diff/log/add/commit` (no push, no other command; a
+  headless run cannot ask, so the rest is refused). Each agent the native way: Claude `--permission-mode acceptEdits`
+  plus `--allowedTools`; agy `--mode accept-edits` plus allow rules for that session only (`--settings`, never saved);
+  Codex `-s workspace-write` with only the worktree's git folder and the repository's objects, refs and logs writable
+  (not `.git/config` or hooks; the sandbox has no network) and the plugin's knowledge tools approved with
+  `-c plugins.knowledge@knowledge.mcp_servers.knowledge.default_tools_approval_mode=approve`. A worker that ends with exit 0
+  but left its task open (not claimed, not handed back) counts as failed: an error in the activity log and the
+  stalled lane, plus the server's idle notice. Its prompt holds the task line and the rules: claim it, commit
+  on the branch, never merge or push, hand back with `[<requester>, <ID>-done]: <result>; branch <name>; done: ...;
+  left: ...` (the server refuses a worker's hand-back without branch, done and left). Every worker is a new session; a
+  hand-over `<ID>-cont` goes on in the same worktree and branch, and the branch, the memo and the last hand-over line
+  are all it knows. Workers are off on a new pc ("Workers allowed" in the companion's settings), at most one per
+  agent unless its maximum says more, one while its usage limit is unknown, none while a Wolf game session runs (its
+  API socket, when readable; Sunshine is not detected). On macOS the companion's python may not read ~/Documents, ~/Desktop or
+  ~/Downloads (privacy consent): a task linked there waits with that reason until it gets Full Disk Access. A worker that ended without finishing its task is not started
+  again for 6 hours unless asked. Its claim marker `(claimed <agent> worker, <date>)` holds only while its companion
+  renews the task's lease, so such a task shows as startable again (and gets the idle notice) instead of staying stuck. The companion knows a worker by its pid and that process's start time,
+  so after a reboot a recorded worker counts as ended and a stop never hits a reused pid. Once the requester merged the branch into main or master, the companion removes the
+  worktree; unmerged a week after the worker ended: lint `worker_unmerged`. While an online pc runs an agent's workers
+  for the project (workers allowed, a maximum above 0, the agent installed, a folder linked), that agent's interactive
+  sessions (`chat=1`) take no lease: they hear a new task once as "runs in workers" and where one runs; when the user
+  says `pak <ID>` (or `take <ID>`) the plugin takes that task for the chat (agy, whose hooks never see the user's words,
+  runs `agent_hooks.py take agy <ID>`), and no worker starts it. With no such pc, that agent's chats take and start
+  its tasks themselves, as before 0.15. The Tasks tab says per task where it runs or why it waits there; a task that
+  may start but that nobody took for 30 minutes (`KNOWLEDGE_TASK_IDLE`) gives one Matrix notice. A knowledge write
+  asks the local companion to look at once.
+
+## Usage limit at 90%
+
+- **Usage limit at 90%:** the companion reads each agent's usage: Claude from its workers' own `rate_limit_event`
+  (stream-json, until that window resets) or an interactive Claude's status line under 15 minutes old, whichever is higher; Codex from its newest rollout of the
+  last 15 minutes; agy from a registered agy's language server; else "unknown". From 90% no worker of that agent
+  starts and the task waits ("waiting for limit", one Matrix notice); a running worker is told after its next tool call
+  to commit, write the hand-over line `[<agent with room>, <ID>-cont] from <original requester> ... done: ...; left: ...` (the result still goes back to whoever asked first) and end, and is stopped
+  after two minutes. A result handed back never starts anything by itself.
+
+## Mission map
+
+- **Mission map:** Tasks > Flow (`#/tasks?view=flow`) shows the task lines between agents as a graph, always laid out by
+  itself (no dragging boxes around): one lane per owner (Claude, Codex, Gemini/agy, people), tasks as boxes coloured by
+  status (open, waiting on a task or date, needs approval, claimed, running in a worker, done in the last 24 h,
+  stalled), left to right by "start after <ID>", with `-cont` continuations and `-done` results in their own line styles; hand-overs
+  (requester to owner) show for the task you point at or pick. Tasks that wait on nothing stack in the first column. Pan and zoom with wheel, drag or pinch, `F` fits; a task opens a panel
+  with its full line, where it runs, Approve and its memo. "Show all" adds older results; a project filter narrows it.
+  A phone shows the chains per lane as a list of full-width cards. Data: `GET /ui/api/mission?project=&all=1` (same visibility as the
+  Tasks tab); the layout is a small layered (Sugiyama-style) pass in `static/mission.js`.
