@@ -60,6 +60,16 @@ function navMe(me) {
   navEl("who").replaceChildren(avatar, name);
   navEl("who").title = `Signed in as ${me.user}`; navEl("who-more").textContent = me.user;
   if (!me.admin) for (const a of document.querySelectorAll(".nav-health")) a.hidden = true;
+  if (me.projects && me.projects.length) {
+    for (const s of document.querySelectorAll(".project-pick")) {
+      s.replaceChildren(...me.projects.map((p) => {
+        const opt = document.createElement("option");
+        opt.value = p; opt.textContent = me.labels?.[p] || p;
+        return opt;
+      }));
+      s.onchange = () => { location.href = `/ui#/notes?project=${encodeURIComponent(s.value)}`; };
+    }
+  }
 }
 
 // The admin and help pages: their own entry is the current one (on a phone it sits behind More); search and the
@@ -69,6 +79,7 @@ if (navPage) {
   for (const a of document.querySelectorAll(`[data-nav="${navPage}"]`)) a.setAttribute("aria-current", "page");
   navEl("more-btn").setAttribute("aria-current", "page");
   navEl("jump").onclick = () => { location.href = "/ui#/notes?q="; };
+  navEl("live")?.classList.add("on");
   document.addEventListener("keydown", (e) => {
     // on admin/help (no palette there) Ctrl/Cmd+K goes to the app's search, as the button says
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k" && typeof openPalette !== "function") { e.preventDefault(); location.href = "/ui#/notes?q="; return; }
@@ -77,4 +88,22 @@ if (navPage) {
   });
   fetch("/ui/api/me", { credentials: "same-origin" }).then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.status))))
     .then(navMe).catch(() => { navEl("who").textContent = "Signed in"; });
+  fetch("/ui/api/board", { credentials: "same-origin" }).then((r) => r.ok && r.json()).then((bd) => {
+    const n = (bd.items || []).filter((i) => i.col === "needs").length;
+    for (const b of document.querySelectorAll(".inbox-count")) b.textContent = n || "";
+  }).catch(() => {});
+  fetch("/ui/api/chats", { credentials: "same-origin" }).then((r) => r.ok && r.json()).then((cs) => {
+    const live = (cs.chats || []).filter((c) => ["queued", "running"].includes(c.status)).length;
+    const elLive = navEl("ck-live"), elN = navEl("ck-live-n");
+    if (elN) elN.textContent = live;
+    if (elLive) elLive.classList.toggle("on", live > 0);
+  }).catch(() => {});
+  fetch("/ui/api/tasks", { credentials: "same-origin" }).then((r) => r.ok && r.json()).then((ts) => {
+    const el = navEl("tasks-count");
+    if (el && (ts.tasks || []).length) el.textContent = ts.tasks.length;
+  }).catch(() => {});
+  fetch("/ui/api/lint", { credentials: "same-origin" }).then((r) => r.ok && r.json()).then((lt) => {
+    const el = navEl("lint-count");
+    if (el && (lt.findings || []).length) el.textContent = lt.findings.length;
+  }).catch(() => {});
 }

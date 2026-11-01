@@ -342,12 +342,10 @@ input[type=url], input[type=text], input[type=password], input[type=search], tex
 
 /* The public /setup page: one column, no shell. */
 body.admin-page { display: block; overflow-y: auto; }
-/* The admin and help pages sit in the shell (nav.html) with the app's page header; they have no project picker. */
-body[data-page] .proj, body[data-page] .proj-row { display: none; }
 /* admin page: tokens, people, projects */
-.admin { max-width: 1100px; padding: 0 24px 40px; display: grid; gap: 20px; }
+.admin { max-width: 1100px; padding: 20px 24px 40px; display: grid; gap: 20px; }
 .admin-nav {
-  position: sticky; top: 0; z-index: 3; display: flex; gap: 4px; flex-wrap: wrap; padding: 10px 0;
+  position: sticky; top: 0; z-index: 3; display: flex; gap: 4px; flex-wrap: wrap; padding: 8px 24px;
   background: color-mix(in srgb, var(--canvas) 80%, transparent); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
   border-bottom: 1px solid var(--line);
 }
@@ -819,8 +817,8 @@ svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor;
 @media (max-width: 699.98px) {
   :root { --h-btn: 44px; --h-btn-sm: 44px; } /* every button, field, tab and toggle */
   summary { display: flex; align-items: center; min-height: 44px; }
-  .admin { padding: 0 12px 24px; }
-  .admin-nav { top: 52px; }
+  .admin { padding: 14px 12px 24px; }
+  .admin-nav { top: 52px; padding: 8px 12px; }
 }
 /* The More sheet (phone): a dialog that rises from the bottom. */
 dialog.sheet { position: fixed; inset: auto 0 0 0; width: 100%; max-width: none; margin: 0; padding: 0; border-radius: 20px 20px 0 0; border-bottom: 0; }
