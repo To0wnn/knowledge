@@ -1087,15 +1087,24 @@ function workerProgress(p) {
 async function machineAction(m, action, args = {}) {
   try {
     await api("/ui/api/machines/action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: m.id, action, args }) });
-  } catch (e) { toast(e.message); }
-  loadMachines();
+  } catch (e) { toast(e.message); return loadMachines(); }
+  // the pc fetches the action within ~10 s and reports its new state right after: refresh until nothing waits
+  for (let i = 0; i < 20; i++) {
+    await loadMachines();
+    const row = (machinesCache || []).find((x) => x.id === m.id);
+    if (!row || !(row.actions || []).some((x) => x.status === "waiting")) break;
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+  setTimeout(loadMachines, 4000); // the report that follows the action
 }
 function machineButton(text, title, onclick) {
   const b = el("button", "ghost small", text); b.type = "button"; b.title = title; b.onclick = onclick; return b;
 }
 // The Machines view: one card per pc.
+let machinesCache = []; // the last /ui/api/machines rows (machineAction waits on their actions)
 async function loadMachines() {
   const res = await api("/ui/api/machines");
+  machinesCache = Array.isArray(res) ? res : res.machines || [];
   if (!localMachine) await probeCompanion();
   const tasks = (await api("/ui/api/tasks")).tasks.filter((t) => !t.done && t.startable);
   const box = $("machines"); box.replaceChildren();

@@ -816,7 +816,8 @@ def why_not(t: dict, ws: dict, s: dict, lim: dict, game: str) -> str:
     if sum(1 for w in ws.values() if w["agent"] == a and w["status"] == "running") >= cap:
         return f"{AGENTS[a][0]} runs {cap} worker(s) already, its maximum here" + ("" if lim.get(a) is not None else " (limit unknown: 1)")
     if not project_folders().get(t["project"]):
-        return f"No folder linked to project {t['project']} on this pc" + (
+        return (f"No folder linked to project {t['project']} on this pc: link one under Machines → this pc → Folders "
+                "(or the companion page), then a worker knows where to work") + (
             f"; the companion may not read {', '.join(sorted(DENIED)[:3])}: give {sys.executable} Full Disk Access "
             "(System Settings, Privacy & Security), or link a folder outside Documents, Desktop and Downloads" if DENIED else "")
     return ""
@@ -1236,8 +1237,9 @@ def run_action(a: dict) -> str:
 
 def actions_round():
     """Fetch the waiting actions for this machine, run each, report how it went; all in the activity log."""
-    tok = token_store.token()
+    tok, changed = token_store.token(), False
     for a in server("GET", "/machine/actions", tok).get("actions", []):
+        changed = changed or a.get("action") in STATE_ACTIONS
         log("remote", f"Remote action {a.get('action')} from {a.get('by') or '?'}", json.dumps(a.get("args") or {})[:200])
         try:
             ok, result = True, run_action(a)
@@ -1248,6 +1250,11 @@ def actions_round():
             server("POST", "/machine/actions/result", tok, {"id": a["id"], "ok": ok, "result": str(result)[:300]})
         except Exception as e:
             log("error", "Could not report a remote action's result", str(e)[:200])
+    if changed:  # the page shows the new state at once, not at the next minute's report
+        threading.Thread(target=tick, daemon=True).start()
+
+
+STATE_ACTIONS = {"yolo", "workers_allowed", "max_workers", "link_folder", "unlink_folder", "trust_hooks", "stop_worker", "restart", "merge"}
 
 
 # ---------------------------------------------------------------- the page
