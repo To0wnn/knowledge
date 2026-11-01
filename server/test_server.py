@@ -860,7 +860,9 @@ def board_contract(tmp, ck, fr, raw, er, et):
     assert col("task", "BRD-2") == "needs" and items[("task", "BRD-2")]["approve"], items.get(("task", "BRD-2"))
     assert col("task", "BRD-9-done") == "done", "a result handed back today is done"
     assert ("task", "BRD-3") not in items and ("task", "BRD-4") not in items, "a person's line and a task its worker shows"
-    # Opening the chat reads it: off "Needs you", into "Done".
+    # A glance on the board (peek) leaves it under "Needs you"; opening the chat reads it: off "Needs you", into "Done".
+    ui(f"/ui/api/chat?machine={mid}&id={cids[0]}&peek=1")
+    assert {(i["kind"], i["id"]): i["col"] for i in board()}[("chat", cids[0])] == "needs"
     ui(f"/ui/api/chat?machine={mid}&id={cids[0]}")
     assert {(i["kind"], i["id"]): i["col"] for i in board()}[("chat", cids[0])] == "done"
     # Another person: none of his pcs' chats or workers, none of a project she does not see.

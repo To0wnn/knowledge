@@ -1615,7 +1615,9 @@ function ckPaint(card) {
 async function ckPoll(card) {
   if (!card) return;
   let res;
-  try { res = await api(`/ui/api/chat?machine=${card.meta.machine}&id=${card.meta.id}&after=${card.after}`); }
+  // only the chat opened full counts as read; a card glanced at on the board stays under Needs you
+  const peek = ck.view !== ckKey(card.meta) ? "&peek=1" : "";
+  try { res = await api(`/ui/api/chat?machine=${card.meta.machine}&id=${card.meta.id}&after=${card.after}${peek}`); }
   catch (e) { card.note.className = "ck-note bad"; card.note.textContent = e.message; return; }
   card.meta = { ...card.meta, ...res.chat, label: res.label }; card.online = res.online; card.at = res.at;
   if (res.trimmed && !card.after && res.events.length) card.log.append(el("p", "ck-line info", "Older output was trimmed (the chat keeps its newest part)."));

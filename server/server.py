@@ -5208,7 +5208,7 @@ async def ui_chat(request: Request):
         after = int(b.get("after") or 0)
     except (ValueError, AttributeError, TypeError, PermissionError) as e:
         return chat_error(e)
-    if c.get("next", 0) > c.get("seen", 0):  # the owner has now seen its newest output: off the board's "Needs you"
+    if c.get("next", 0) > c.get("seen", 0) and not b.get("peek"):  # opened: its newest output is seen, off "Needs you"
         await asyncio.to_thread(update_state, f, lambda d: d.update(seen=max(d.get("seen", 0), c.get("next", 0))))
     asks = [{k: a.get(k) for k in ("id", "tool", "detail", "reason", "once_only", "at", "expires")} for a in asks_open(c, time.time())]
     return JSONResponse({"chat": chat_meta(c), "events": [e for e in c.get("events", []) if e["n"] > after], "trimmed": bool(c.get("trimmed")),
