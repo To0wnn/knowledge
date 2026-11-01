@@ -436,11 +436,11 @@ body[data-page] .proj, body[data-page] .proj-row { display: none; }
   border: 1.8px solid currentColor;
   border-right-color: transparent;
   border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+  animation: spin 2.2s linear infinite;
   flex: none;
 }
 @media (prefers-reduced-motion: reduce) {
-  .ck-state.running::before { animation-duration: 2.4s; }
+  .ck-state.running::before { animation-duration: 4.5s; }
 }
 .pill.warn { background: var(--warn-soft); color: var(--warn); }
 .chip.bad, .ck-state.offline { background: var(--bad-soft); color: var(--bad); }
