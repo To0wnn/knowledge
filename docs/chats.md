@@ -34,7 +34,7 @@ from a phone. The pc side runs in the companion ([companion.md](companion.md)).
   server). A
   chat is a conversation with Claude Code, Codex or agy on one of your own pcs, in a folder linked to a project there,
   as in a terminal: the answer streams in (text, plus one line per tool call or refused call), the next message
-  continues the same conversation, Stop ends a running turn; **Chats** lists them beside the open one (`#/chats/<pc>/<chat>`). The server only relays, pull only like the actions: the UI posts a message
+  continues the same conversation, Stop ends a running turn and drops the waiting line. A message sent while the agent answers waits in line (up to 5 per chat, button "Queue") and goes in when the turn ends; with messages waiting and an empty box the button turns red "Force": it stops the turn but keeps the line, so the first waiting message goes in at once. Enter is a new line, Ctrl/Cmd+Enter presses the button; **Chats** lists them beside the open one (`#/chats/<pc>/<chat>`). The server only relays, pull only like the actions: the UI posts a message
   (`POST /ui/api/chat/send`), the pc's companion fetches it (`GET /machine/chats`, every ~2 s while a chat is active,
   else ~10 s), runs one headless turn of the agent with the message on stdin (never on a command line), the first turn
   a new conversation and every later one the agent's own continuation, and posts the output back in small batches
