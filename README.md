@@ -65,7 +65,8 @@ irm https://raw.githubusercontent.com/To0wnn/knowledge/main/install.ps1 | iex   
 It finds Claude Code, Codex and agy, asks y/n for each, and asks for the server address
 (`http://localhost:8766`) and the token. Run the same line again later to update.
 
-**4. Try it.** Tell Claude Code: *"remember: we deploy with ./deploy.sh"*. Then start Codex (or agy) and ask
+**4. Try it.** Tell Claude Code: *"save to knowledge: we deploy with ./deploy.sh"* (the installer turns Claude's own
+local auto-memory off, so it writes a memo on the server). Then start Codex (or agy), on this pc or another, and ask
 *"how do we deploy?"*. It answers from the shared memory.
 
 **More than one PC?** Put the server behind HTTPS (a reverse proxy) and add its `host:port` to
