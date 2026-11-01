@@ -19,7 +19,8 @@ described in full on the linked page.
   reaches a pc only as a chat message to an agent, which runs with that agent's own permissions.
   [companion.md](companion.md#remote-control)
 - **Narrow by default.** Without YOLO, workers and chats may edit their folder, use the knowledge tools and run
-  `git status/diff/log/add/commit`; a chat asks for anything else (Allow once, Allow for this chat, Deny), git runs
+  `git status/add/commit` and (Claude) `git diff`/`git log` in fixed forms only, never with free arguments
+  (`--output=<file>` writes anywhere); a chat asks for anything else (Allow once, Allow for this chat, Deny), git runs
   without hooks or fsmonitor. YOLO is per agent and pc, needs the word YOLO typed, and is watched, never blocked.
   [tasks.md](tasks.md#workers), [chats.md](chats.md), [companion.md](companion.md#yolo-safety-without-blocking)
 - **The local companion.** Listens on `127.0.0.1:47321` only, answers only its own page and the web UI's origin, and

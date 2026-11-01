@@ -40,7 +40,7 @@ from a phone. The pc side runs in the companion ([companion.md](companion.md)).
   a new conversation and every later one the agent's own continuation, and posts the output back in small batches
   (`POST /machine/chats/events`). With YOLO on for that agent there, the turn runs with the agent's own YOLO flag
   (`claude -p --resume <session>`, `codex exec resume <thread>`, `agy --conversation <id>`). Without YOLO it starts
-  with the same narrow set a worker has (edits in the folder, the knowledge tools, `git status/diff/log/add/commit`)
+  with the same narrow set a worker has (edits in the folder, the knowledge tools, `git status/add/commit`, Claude also fixed `git diff`/`git log` forms)
   and **asks you for anything else**, each agent its own native way: Claude through its permission prompt tool
   (`--permission-prompt-tool`, a small stdio MCP server of the plugin, `approval_mcp.py`, that asks the companion on
   127.0.0.1 with its local key), Codex over `codex app-server` (workspace-write sandbox, approval policy on-request,

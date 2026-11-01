@@ -782,6 +782,76 @@ def approvals_contract(tmp, ck, fr, raw, er, et):
     assert admin({"chat_approval_minutes": 30})[0] == 200
 
 
+def review_contract(tmp, ck, fr, raw, er):
+    """A finished worker whose result line names its branch is one Review card under Needs you (branch, commits,
+    files, done/left, tests said); Merge is a fixed action for the pc's owner only; Reject keeps the branch, takes the
+    card off with a reason and, when asked, turns the result line into a -fix task for the agent."""
+    pc, mid, now = {"X-Knowledge-Machine": "cccccccccccccccc", "X-Knowledge-Machine-Label": "garage"}, "cccccccccccccccc", time.time()
+    ui = lambda path, body=None, h=ck: raw("POST" if body is not None else "GET", path, None if body is None else json.dumps(body),
+                                          {**h, "X-Knowledge-UI": "1", "Content-Type": "application/json"})
+    board = lambda h=ck: {(i["kind"], i["id"]): i for i in json.loads(ui("/ui/api/board", h=h)[2])["items"]}
+    rv = {"into": "main", "ahead": 2, "nfiles": 3, "files": ["a.py", "b.py", "c.py"], "commit": "feat: beds Sup3rSecret99"}
+    w = lambda i, **k: {"id": i, "project": "garden", "agent": "claude", "status": "finished", "started": now - 900, "ended": now - 60,
+                        "branch": f"task/{i}", "git": {"branch": f"task/{i}", "base": "main", "changed": 0, "ahead": 2, "behind": 0}, "review": rv, **k}
+    rep = {"version": "0.19.1", "workersAllowed": True, "agents": {"claude": {}},
+           "workers": [w("REV-1"), w("REV-2"), w("REV-3", review={**rv, "ahead": 0}), w("REV-4", status="running"), w("REV-5"),
+                       w("REV-6", review={**rv, "blocked": "the branch changes .gitattributes"})]}
+    assert http("POST", "/machine/report", rep, token=fr, headers=pc)[0] == 200
+    path = "garden-memory/project_review.md"
+    lines = ["- [Sam, REV-1-done]: beds work; branch task/REV-1; done: beds, tests pass (check.sh); left: nothing",
+             "- [Sam, REV-2-done]: no branch named; done: x; left: y",
+             "- [Sam, REV-3-done]: nothing new; branch task/REV-3; done: x; left: y",
+             "- [Sam, REV-4-done]: still runs; branch task/REV-4; done: x; left: y",
+             "- [Sam, REV-5-done]: other branch; branch task/REV-55; done: x; left: y",
+             "- [Sam, REV-6-done]: attrs; branch task/REV-6; done: x; left: y",
+             "- open until 2099-01-01 [Codex, REV-7] from Sam, start after REV-1: after the beds"]
+    assert not call("knowledge_write", {"path": path, "content": memo("\n".join(lines) + "\n", "review")}, fr)[0]
+    items = board()
+    card = items.get(("review", "REV-1"))
+    assert card and card["col"] == "needs" and card["branch"] == "task/REV-1" and card["into"] == "main" and card["commits"] == 2, card
+    assert card["files"] == ["a.py", "b.py", "c.py"] and card["done"] == "beds, tests pass (check.sh)" and card["left"] == "nothing", card
+    assert card["tests"] == "tests pass (check.sh)" and "Sup3rSecret99" not in card["commit"] and card["can_merge"], card
+    assert sorted(k for k in items if k[0] == "review") == [("review", "REV-1"), ("review", "REV-6")], "no branch named, nothing ahead, still running, another branch: no card"
+    blocked = items[("review", "REV-6")]
+    assert blocked["blocked"] == "the branch changes .gitattributes" and not blocked["can_merge"] and card["blocked"] == "", blocked
+    assert ("worker", "REV-1") not in items and ("task", "REV-1-done") not in items, "the card is the worker and its result"
+    assert ("worker", "REV-2") in items and not [i for k, i in items.items() if k[0] == "review" and i["machine"] != mid]
+    assert ("review", "REV-1") not in board(er), "another person never sees his pc's review"
+    # Merge: a fixed action with a task id, the pc's owner only; the companion gets exactly that.
+    act = lambda args, h=ck: ui("/ui/api/machines/action", {"machine": mid, "action": "merge", "args": args}, h)
+    assert act({"project": "garden", "id": "../x"})[0] == 400 and act({"project": "nope", "id": "REV-1"})[0] == 400
+    assert act({"project": "garden", "id": "REV-1", "cmd": "rm"}, er)[0] in (400, 403), "not her pc (nor her project)"
+    assert act({"project": "garden", "id": "REV-1", "cmd": "rm"})[0] == 200
+    got = json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"]
+    assert [(a["action"], a["args"]) for a in got] == [("merge", {"project": "garden", "id": "REV-1"})], got
+    for a in got:
+        http("POST", "/machine/actions/result", {"id": a["id"], "ok": False, "result": "conflict: merge by hand"}, token=fr, headers=pc)
+    # Reject: another person cannot; send back needs a reason; with one the result line becomes a -fix task line.
+    rej = lambda body, h=ck: ui("/ui/api/review/reject", body, h)
+    assert rej({"key": card["key"], "reason": "no"}, er)[0] == 404
+    assert rej({"key": card["key"], "send_back": True})[0] == 400
+    st, _, b = rej({"key": card["key"], "reason": "the beds\nare  crooked (claimed Codex, 2026-11-01)", "send_back": True})
+    assert st == 200, b
+    fix = json.loads(b)["line"]
+    assert re.fullmatch(r"- open until 20\d\d-\d\d-\d\d \[Claude@friend-pc, REV-1-fix\] from alice, start now: review of task/REV-1 rejected, fix it on that branch: "
+                        r"the beds are crooked claimed Codex, 2026-11-01\)", fix), "pinned to the pc with the branch, no claim marker: " + fix
+    text = call("knowledge_read", {"path": path}, fr)[1]
+    assert fix in text and "REV-1-done" not in text, text
+    tasks = {t["id"]: t for t in json.loads(raw("GET", "/ui/api/tasks", headers=ck)[2])["tasks"]}
+    assert tasks["REV-1-fix"]["owner"] == "Claude" and not tasks["REV-1-fix"]["claimed"], tasks["REV-1-fix"]
+    assert tasks["REV-7"]["waiting_reason"] == "waits for REV-1", "a -fix keeps REV-1 open for what starts after it: " + tasks["REV-7"]["waiting_reason"]
+    assert not [i for i in board().values() if i["key"].startswith("handover:") and "REV-1" in i["id"]], "a -fix is no hand-over to a person"
+    assert ("review", "REV-1") not in board()
+    assert json.loads((tmp / "board_dismissed.json").read_text())["alice"][card["key"]]["reason"].startswith("the beds are crooked")
+    # The worker's next result (a new line) brings a new card; a plain reject keeps the line and shows the result again.
+    assert not call("knowledge_edit", {"path": path, "old_string": fix, "new_string": lines[0].replace("beds work", "beds straight")}, fr)[0]
+    card = board().get(("review", "REV-1"))
+    assert card, "a new result line is a new review"
+    assert rej({"key": card["key"], "reason": "later"})[0] == 200
+    after = board()
+    assert ("review", "REV-1") not in after and ("task", "REV-1-done") in after and "REV-1-done" in call("knowledge_read", {"path": path}, fr)[1]
+
+
 def board_contract(tmp, ck, fr, raw, er, et):
     """The Agents board: chats and workers of the owner's own pcs and task lines of the projects they see, each in one
     column (needs you, running, open, done), with the companion's git numbers; another person sees none of it; a diff
@@ -2171,6 +2241,7 @@ def main():
         flow_contract(tmp, ck, fr, raw, heard)
         ui_gap_contract(tmp, ck, raw)
         mission_contract(tmp, ck, fr, raw, er)
+        review_contract(tmp, ck, fr, raw, er)
         # The folder link (.knowledge-project, skill knowledge-init): her token now sees two projects, so the folder picks.
         assert "not linked to a project" in http("GET", "/context/1?project=/home/erin/stuff", token=et)[1]
         ctx = http("GET", "/context/1?project=erinproj&linked=1", token=et)[1]

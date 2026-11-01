@@ -18,7 +18,8 @@ chat list's states and filter, Tasks' Cancel and counts, Machines full width, Ch
 older server). Admin and Help in the shell (0.20): sidebar, header, tab bar, settings labels, "Saved" and the server's
 message on a refusal (faked; skipped on an older server). Chats > Board (desktop): toggle and route, frames per
 project, Fit, folding, a dragged card kept across a reload, Tidy up; a phone keeps the list (skipped without it).
-Read-only: it opens notes, it never edits or sends.
+The Review card with faked data: Merge asks first and queues the pc's action, Reject sends reason and send back
+(intercepted; skipped on an older server). Read-only: it opens notes, it never edits or sends.
 
   systemd-run --user --scope -q -p MemoryMax=3G ~/.local/bin/uv run -q --with playwright python tests/ui_smoke.py
 (talks to the container port directly and sends what Traefik sends after the Authentik sign-in: the proxy secret
@@ -1031,6 +1032,74 @@ async def board(browser, devices, secret: str) -> None:
     await ctx.close()
 
 
+async def review(browser, devices, secret: str) -> None:
+    """The Review card (0.19.1): a finished worker's branch under Needs you with its commits, files, done/left and
+    tests, and View diff / Merge / Reject. Board and answers are intercepted (nothing reaches a pc or a memo); Merge
+    asks first and names branch and target; Reject sends the reason and "send back". KNOWLEDGE_SMOKE_SHOTS=<dir> saves
+    review-desktop.png and review-phone.png there. Skipped on a server without it."""
+    import json
+    import time
+    from urllib.parse import urlsplit
+    now, sent, asked = time.time(), [], []
+    item = {"kind": "review", "col": "needs", "id": "KN-42", "task": "KN-42", "agent": "codex", "project": "garden", "machine": "f" * 16,
+            "label": "smoke-pc", "online": True, "key": "review:" + "f" * 16 + "/garden/KN-42", "sig": "s1", "path": "garden-memory/project_beds.md",
+            "title": "Review KN-42 · raised beds watering schedule", "at": now - 300, "owner": "Sam", "branch": "task/KN-42", "into": "main",
+            "line": "3 commits on task/KN-42 for main, 4 files changed", "commits": 3, "nfiles": 4,
+            "files": ["beds/schedule.py", "beds/test_schedule.py", "README.md"], "commit": "feat(beds): water by soil moisture",
+            "done": "schedule reads the soil sensor, tests pass (pytest)", "left": "nothing", "tests": "tests pass (pytest)",
+            "git": {"branch": "task/KN-42", "base": "main", "changed": 0, "ahead": 3, "behind": 0}, "can_merge": True}
+
+    async def fake(route):
+        path = urlsplit(route.request.url).path
+        if route.request.method == "POST" and path in ("/ui/api/machines/action", "/ui/api/review/reject"):
+            sent.append((path, json.loads(route.request.post_data or "{}")))
+            return await route.fulfill(json={"ok": True, "id": "abc123", "line": ""})
+        if path == "/ui/api/board" and route.request.method == "GET":
+            return await route.fulfill(json={"items": [item], "now": now})
+        await route.continue_()
+    shots = os.environ.get("KNOWLEDGE_SMOKE_SHOTS", "")
+    for name, dev in (("desktop", {"viewport": {"width": 1440, "height": 900}}), ("phone", devices["iPhone 14"])):
+        ctx = await browser.new_context(ignore_https_errors=True, bypass_csp=True, **dev,
+                                        extra_http_headers={"X-Knowledge-Proxy": secret, "X-authentik-username": USER})
+        await ctx.route("**/ui/api/**", fake)
+        pg = await ctx.new_page()
+        errors = []
+        pg.on("pageerror", lambda e: errors.append(str(e)))
+        pg.on("dialog", lambda d: (asked.append(d.message), asyncio.ensure_future(d.accept())))
+        await pg.goto(URL + "/ui#/inbox")
+        await pg.wait_for_selector("#ck-board", state="attached")
+        if not await pg.evaluate("typeof ckReview === 'function'"):
+            print("skip review card (server older than 0.19.1)")
+            return await ctx.close()
+        card = pg.locator(f'#ck-board .ck-col-needs .ck-item[data-key="{item["key"]}"]')
+        await card.wait_for(timeout=15000)
+        acts = await card.locator(".ck-item-acts button.ghost").all_inner_texts()
+        check(acts == ["View diff", "Merge", "Reject"], f"{name}: a review card has View diff, Merge and Reject {acts}")
+        text = await card.inner_text()
+        check(all(x in text for x in ("task/KN-42", "feat(beds): water by soil moisture", "beds/schedule.py", "tests pass (pytest)", "nothing")),
+              f"{name}: the card shows branch, last commit, files, tests and what is left")
+        check(await pg.evaluate("document.documentElement.scrollWidth <= innerWidth"), f"{name}: the review card fits the screen")
+        if shots:
+            await card.scroll_into_view_if_needed()
+            await pg.screenshot(path=os.path.join(shots, f"review-{name}.png"), full_page=name == "phone")
+        await card.get_by_role("button", name="Merge").click()
+        await pg.wait_for_timeout(400)
+        check(asked and "task/KN-42" in asked[-1] and "into main" in asked[-1] and "smoke-pc" in asked[-1], f"{name}: Merge asks first, naming branch, target and pc")
+        check(sent and sent[-1] == ("/ui/api/machines/action", {"machine": item["machine"], "action": "merge", "args": {"project": "garden", "id": "KN-42"}}),
+              f"{name}: Merge queues the pc's merge action {sent[-1:]}")
+        await card.get_by_role("button", name="Reject").click()
+        await card.locator(".ck-reject input:not([type])").fill("water less often")
+        await card.locator(".ck-reject input[type=checkbox]").check()
+        if shots and name == "desktop":
+            await pg.screenshot(path=os.path.join(shots, "review-reject-desktop.png"))
+        await card.locator(".ck-reject button").click()
+        await pg.wait_for_timeout(400)
+        check(sent[-1] == ("/ui/api/review/reject", {"key": item["key"], "reason": "water less often", "send_back": True}),
+              f"{name}: Reject sends the reason and send back {sent[-1:]}")
+        check(not errors, f"{name}: no page errors on the review card {errors[:2]}")
+        await ctx.close()
+
+
 async def main() -> None:
     secret = os.environ.get("KNOWLEDGE_PROXY_SECRET") or subprocess.run(["secret", "KNOWLEDGE_PROXY_SECRET"], check=True, capture_output=True, text=True).stdout.strip()
     async with async_playwright() as p:
@@ -1042,6 +1111,7 @@ async def main() -> None:
         await admin(browser, secret)
         await cockpit(browser, p.devices, secret)
         await approvals(browser, p.devices, secret)
+        await review(browser, p.devices, secret)
         await mission(browser, p.devices, secret)
         await shell(browser, p.devices, secret)
         await knowledge(browser, p.devices, secret)
