@@ -2,7 +2,8 @@
 // Nodes = tasks (real <button>s), one horizontal lane per owner (agent or person), edges = "start after <ID>",
 // hand-overs, -cont continuations and -done results (SVG). Left to right by dependency: a small layered (Sugiyama)
 // layout, missionLayout(), a pure function the UI smoke test checks. A phone gets the chains per lane as a list.
-// Uses app.js globals: $, el, api, agentProject, shown, openNote; go from shell.js.
+// The chat board (Chats > Board) at the end shares its pan and zoom.
+// Uses app.js globals: $, el, api, agentProject, shown, openNote, store, ck*; go and shellRoute from shell.js.
 "use strict";
 
 const MS_STATUS = { open: "open", waiting: "waiting", approval: "needs approval", claimed: "claimed", running: "running",
@@ -10,7 +11,7 @@ const MS_STATUS = { open: "open", waiting: "waiting", approval: "needs approval"
 const MS_EDGE = { dep: "start after", handover: "hand-over", cont: "continued", done: "result back" };
 const MS_SIZE = { w: 200, h: 74, gx: 70, gy: 12, lane: 148, pad: 14 };
 const ms = { root: null, data: null, lay: null, all: false, project: "", view: { x: 0, y: 0, k: 1 }, fitted: false,
-  timer: 0, sel: "", dragged: false, pointers: new Map(), pinch: null };
+  timer: 0, sel: "", dragged: false, pointers: new Map(), pinch: null, world: () => $("ms-world") };
 
 // The layout: layer = longest path over the task-to-task edges (a cycle, which only bad data makes, is cut where the
 // walk meets itself); tasks without any edge stack in the first column of their lane (no order implied); then 4
@@ -96,7 +97,7 @@ function msBuild() {
   }
   $("ms-fit").onclick = msFit;
   $("ms-all").onclick = () => { ms.all = !ms.all; $("ms-all").setAttribute("aria-pressed", ms.all); ms.fitted = false; ms.data = null; msLoad(); };
-  msPanZoom($("ms-stage"));
+  panInit($("ms-stage"), ms);
   window.addEventListener("keydown", (e) => { // capture: before the page's own keys
     if (root.hidden || e.ctrlKey || e.metaKey || e.altKey || /input|textarea|select/i.test(document.activeElement.tagName)) return;
     if (e.key === "Escape" && !$("ms-panel").hidden) { e.preventDefault(); e.stopPropagation(); msClosePanel(); }
@@ -235,52 +236,61 @@ function msList() {
   }
 }
 
-// Pan and zoom: wheel zooms at the pointer, a drag pans (also when it starts on a task; then it is no click), two
-// fingers pinch. The world is one transformed layer, so nodes stay real buttons.
-function msApply() { const v = ms.view; $("ms-world").style.transform = `translate(${v.x}px, ${v.y}px) scale(${v.k})`; }
-function msZoom(k, cx, cy) {
-  const v = ms.view, n = Math.min(2.5, Math.max(0.15, k));
-  v.x = cx - (cx - v.x) * (n / v.k); v.y = cy - (cy - v.y) * (n / v.k); v.k = n; msApply();
+// Pan and zoom, shared by the mission map and the chat board: wheel zooms at the pointer (a touchpad pinch arrives as a
+// wheel with ctrlKey), a drag pans, two fingers pinch. The world is one transformed layer, so nodes stay real
+// elements. `s` holds view {x, y, k}, pointers, dragged, pinch and apply(); `skip(e)` leaves a pointer to its target.
+function panApply(s) { const v = s.view; s.world().style.transform = `translate(${v.x}px, ${v.y}px) scale(${v.k})`; s.moved?.(); }
+function panZoom(s, k, cx, cy) {
+  const v = s.view, n = Math.min(2.5, Math.max(0.15, k));
+  v.x = cx - (cx - v.x) * (n / v.k); v.y = cy - (cy - v.y) * (n / v.k); v.k = n; panApply(s);
 }
-function msFit() {
-  const st = $("ms-stage"), L = ms.lay; if (!L || st.hidden) return;
-  const W = st.clientWidth, H = st.clientHeight, k = Math.min(1.2, Math.max(0.15, Math.min((W - 32) / L.width, (H - 32) / L.height)));
-  ms.view = { k, x: (W - L.width * k) / 2, y: Math.max(16, (H - L.height * k) / 2) }; msApply();
+// The view that shows a box {x, y, w, h} whole, centred, at most at scale `max`.
+function panFit(s, st, b, max = 1.2) {
+  const W = st.clientWidth, H = st.clientHeight, k = Math.min(max, Math.max(0.15, Math.min((W - 32) / b.w, (H - 32) / b.h)));
+  s.view = { k, x: (W - b.w * k) / 2 - b.x * k, y: Math.max(16, (H - b.h * k) / 2) - b.y * k }; panApply(s);
 }
-function msShow(p) { // keyboard focus on a task outside the screen brings it in
-  const st = $("ms-stage"), v = ms.view, x = v.x + p.x * v.k, y = v.y + p.y * v.k;
+function panShow(s, st, p) { // keyboard focus on something outside the screen brings it in
+  const v = s.view, x = v.x + p.x * v.k, y = v.y + p.y * v.k;
   if (x < 0 || y < 0 || x + p.w * v.k > st.clientWidth || y + p.h * v.k > st.clientHeight) {
-    v.x = st.clientWidth / 2 - (p.x + p.w / 2) * v.k; v.y = st.clientHeight / 2 - (p.y + p.h / 2) * v.k; msApply();
+    v.x = st.clientWidth / 2 - (p.x + p.w / 2) * v.k; v.y = st.clientHeight / 2 - (p.y + p.h / 2) * v.k; panApply(s);
   }
 }
-function msPanZoom(st) {
+function panInit(st, s, skip = () => false) {
   st.addEventListener("wheel", (e) => {
+    if (skip(e, "wheel")) return;
     e.preventDefault(); const r = st.getBoundingClientRect();
-    msZoom(ms.view.k * Math.exp(-e.deltaY * (e.deltaMode ? 0.05 : 0.0015)), e.clientX - r.left, e.clientY - r.top);
+    panZoom(s, s.view.k * Math.exp(-e.deltaY * (e.deltaMode ? 0.05 : e.ctrlKey ? 0.01 : 0.0015)), e.clientX - r.left, e.clientY - r.top);
   }, { passive: false });
   st.addEventListener("pointerdown", (e) => {
-    ms.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY });
-    ms.dragged = false; ms.pinch = null;
+    if (skip(e)) return;
+    s.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY });
+    s.dragged = false; s.pinch = null;
   });
   st.addEventListener("pointermove", (e) => {
-    const p = ms.pointers.get(e.pointerId); if (!p) return;
+    const p = s.pointers.get(e.pointerId); if (!p) return;
     const r = st.getBoundingClientRect();
-    if (ms.pointers.size === 2) {
-      const [a, b] = [...ms.pointers.values()]; p.x = e.clientX; p.y = e.clientY;
+    if (s.pointers.size === 2) {
+      const [a, b] = [...s.pointers.values()]; p.x = e.clientX; p.y = e.clientY;
       const d = Math.hypot(a.x - b.x, a.y - b.y), mx = (a.x + b.x) / 2 - r.left, my = (a.y + b.y) / 2 - r.top;
-      if (ms.pinch) { msZoom(ms.view.k * d / ms.pinch.d, mx, my); ms.view.x += mx - ms.pinch.mx; ms.view.y += my - ms.pinch.my; msApply(); }
-      ms.pinch = { d, mx, my }; ms.dragged = true; return;
+      if (s.pinch) { panZoom(s, s.view.k * d / s.pinch.d, mx, my); s.view.x += mx - s.pinch.mx; s.view.y += my - s.pinch.my; panApply(s); }
+      s.pinch = { d, mx, my }; s.dragged = true; return;
     }
-    if (!ms.dragged && Math.hypot(e.clientX - p.sx, e.clientY - p.sy) < 5) return;
-    if (!ms.dragged) { ms.dragged = true; st.setPointerCapture(e.pointerId); st.classList.add("panning"); }
-    ms.view.x += e.clientX - p.x; ms.view.y += e.clientY - p.y; p.x = e.clientX; p.y = e.clientY; msApply();
+    if (!s.dragged && Math.hypot(e.clientX - p.sx, e.clientY - p.sy) < 5) return;
+    if (!s.dragged) { s.dragged = true; st.setPointerCapture(e.pointerId); st.classList.add("panning"); }
+    s.view.x += e.clientX - p.x; s.view.y += e.clientY - p.y; p.x = e.clientX; p.y = e.clientY; panApply(s);
   });
   const up = (e) => {
-    ms.pointers.delete(e.pointerId); st.classList.remove("panning");
-    if (ms.dragged) setTimeout(() => { ms.dragged = false; }, 0); // the click that ends a drag is no click on a task
+    s.pointers.delete(e.pointerId); st.classList.remove("panning");
+    if (s.dragged) setTimeout(() => { s.dragged = false; }, 0); // the click that ends a drag is no click on a task
   };
   st.addEventListener("pointerup", up); st.addEventListener("pointercancel", up);
 }
+function msApply() { panApply(ms); }
+function msFit() {
+  const st = $("ms-stage"), L = ms.lay; if (!L || st.hidden) return;
+  panFit(ms, st, { x: 0, y: 0, w: L.width, h: L.height });
+}
+function msShow(p) { panShow(ms, $("ms-stage"), p); }
 
 // The side panel (a bottom sheet on a phone): the full line, the memo, where it runs, and the existing actions.
 function msClosePanel() {
@@ -333,3 +343,216 @@ function msOpenPanel(key) {
   }
 }
 
+
+// ---------------------------------------------------------------- Chat board (Chats > Board, #/chats?view=board)
+// Desktop only (1000 px and up; a phone keeps the list). One card per chat on an endless canvas, placed automatically
+// in a grid inside one frame per project (folding a frame hides its cards). A card the user drags keeps its place
+// (localStorage per chat id, "Tidy up" forgets them). Zoomed in a card is the chat itself (ckCard: log, approvals,
+// composer); zoomed out a summary (title, state, last line). Only cards on screen and zoomed in are polled (ckTick).
+const BD = { w: 380, h: 330, gap: 20, pad: 20, head: 46, fgap: 56, far: 0.55 };
+const bd = { view: { x: 0, y: 0, k: 1 }, pointers: new Map(), dragged: false, pinch: null, world: () => $("bd-world"),
+  lay: null, fitted: false, wraps: new Map(), frames: new Map(), moved: () => bdMoved() };
+const bdWide = matchMedia("(min-width: 1000px)");
+bdWide.addEventListener("change", () => ckLayout());
+const bdOn = () => shellRoute.view === "chats" && !shellRoute.arg && shellRoute.q.get("view") === "board" && bdWide.matches;
+function bdSaved() { try { return { pos: {}, shut: [], ...JSON.parse(store.get("kn_board") || "{}") }; } catch { return { pos: {}, shut: [] }; } }
+const bdSave = (b) => store.set("kn_board", JSON.stringify(b));
+
+// The layout, pure (ui_smoke checks it): projects left to right in name order, each a frame with its chats in a
+// near-square grid (in the order given), dragged chats where they were put (the frame grows around them). Returns
+// {frames: [{project, x, y, w, h, n, shut}], pos: Map(chat id -> {x, y, pinned}), bounds: {x, y, w, h}}.
+// shortcut: frames sit in one row; many projects make it wide (Fit zooms out), wrap them into rows if that bites.
+function boardLayout(chats, pinned = {}, shut = [], s = BD) {
+  const frames = [], pos = new Map();
+  const projects = [...new Set(chats.map((c) => c.project || ""))].sort((a, b) => (a || "￿").localeCompare(b || "￿"));
+  let x0 = 0;
+  for (const p of projects) {
+    const mine = chats.filter((c) => (c.project || "") === p), auto = mine.filter((c) => !pinned[c.id]), closed = shut.includes(p);
+    const cols = Math.max(1, Math.ceil(Math.sqrt(auto.length))), rows = Math.ceil(auto.length / cols);
+    const f = { project: p, x: x0, y: 0, w: s.pad * 2 + cols * s.w + (cols - 1) * s.gap, h: closed || !rows ? s.head : s.head + rows * (s.h + s.gap) - s.gap + s.pad, n: mine.length, shut: closed };
+    auto.forEach((c, i) => pos.set(c.id, { x: x0 + s.pad + (i % cols) * (s.w + s.gap), y: s.head + Math.floor(i / cols) * (s.h + s.gap), pinned: false }));
+    x0 += f.w + s.fgap; // the next frame follows this grid, not where dragged cards went
+    for (const c of mine) {
+      if (!pinned[c.id]) continue;
+      const [x, y] = pinned[c.id]; pos.set(c.id, { x, y, pinned: true });
+      if (closed) continue;
+      const r = Math.max(f.x + f.w, x + s.w + s.pad), b = Math.max(f.y + f.h, y + s.h + s.pad);
+      f.x = Math.min(f.x, x - s.pad); f.y = Math.min(f.y, y - s.head); f.w = r - f.x; f.h = b - f.y;
+    }
+    frames.push(f);
+  }
+  const x = Math.min(0, ...frames.map((f) => f.x)), y = Math.min(0, ...frames.map((f) => f.y));
+  const r = Math.max(x + 1, ...frames.map((f) => f.x + f.w)), b = Math.max(y + 1, ...frames.map((f) => f.y + f.h));
+  return { frames, pos, bounds: { x, y, w: r - x, h: b - y } };
+}
+
+function bdBuild() {
+  const root = el("section", "bd"); root.id = "bd"; root.hidden = true; root.setAttribute("aria-label", "Chat board");
+  root.innerHTML = `<div class="bd-stage" id="bd-stage" tabindex="0" aria-label="Chat board. Drag or use the arrow keys to move around, the wheel or + and − to zoom, F fits all, Tab goes through the chats"><div class="bd-world" id="bd-world"></div></div>
+    <div class="bd-tools"><button type="button" class="ck-pill" id="bd-tidy" title="Put the cards you dragged back into their project's grid">Tidy up</button><button type="button" class="ck-pill" id="bd-fit" title="Show all chats (F)">Fit</button></div>
+    <div class="bd-mini" id="bd-mini" title="Overview: click to go there"><div class="bd-mini-in" id="bd-mini-in"></div><div class="bd-mini-view" id="bd-mini-view"></div></div>`;
+  $("cockpit").append(root);
+  const st = $("bd-stage");
+  // cards handle their own pointer (drag by the header) and wheel (a log scrolls; a pinch still zooms)
+  panInit(st, bd, (e, kind) => !!e.target.closest(".bd-card") && (kind !== "wheel" || (!e.ctrlKey && !$("bd").classList.contains("far") && !!e.target.closest(".ck-log, .ck-asks, textarea"))));
+  $("bd-fit").onclick = bdFit;
+  $("bd-tidy").onclick = () => { const b = bdSaved(); b.pos = {}; bdSave(b); bdRender(); bdFit(); };
+  st.addEventListener("keydown", (e) => { // arrows pan, + and − zoom, while the canvas itself has the focus
+    if (e.target !== st || e.ctrlKey || e.metaKey || e.altKey) return;
+    const d = { ArrowLeft: [80, 0], ArrowRight: [-80, 0], ArrowUp: [0, 80], ArrowDown: [0, -80] }[e.key];
+    if (d) { e.preventDefault(); bd.view.x += d[0]; bd.view.y += d[1]; panApply(bd); }
+    else if (e.key === "+" || e.key === "=" || e.key === "-" || e.key === "−") { e.preventDefault(); panZoom(bd, bd.view.k * (e.key === "-" || e.key === "−" ? 0.8 : 1.25), st.clientWidth / 2, st.clientHeight / 2); }
+  });
+  root.addEventListener("keydown", (e) => { // Esc leaves a card (also its text box) for the canvas
+    if (e.key === "Escape" && !e.isComposing && document.activeElement.closest(".bd-card")) { e.preventDefault(); e.stopPropagation(); st.focus(); }
+  });
+  window.addEventListener("keydown", (e) => { // F fits, like the mission map (capture: before the page's own keys)
+    if (root.hidden || e.ctrlKey || e.metaKey || e.altKey || e.key.toLowerCase() !== "f" || /input|textarea|select/i.test(document.activeElement.tagName) || document.querySelector("dialog[open]")) return;
+    e.preventDefault(); e.stopPropagation(); bdFit();
+  }, true);
+  const mini = $("bd-mini"), jump = (e) => { // the overview: a click or drag centres the view there
+    const L = bd.lay; if (!L) return;
+    const r = mini.getBoundingClientRect(), m = bd.mini, x = L.bounds.x + (e.clientX - r.left - m.ox) / m.k, y = L.bounds.y + (e.clientY - r.top - m.oy) / m.k;
+    bd.view.x = st.clientWidth / 2 - x * bd.view.k; bd.view.y = st.clientHeight / 2 - y * bd.view.k; panApply(bd);
+  };
+  mini.addEventListener("pointerdown", (e) => { mini.setPointerCapture(e.pointerId); jump(e); mini.onpointermove = jump; });
+  mini.addEventListener("pointerup", () => { mini.onpointermove = null; });
+}
+
+// Shown or hidden by the route (ckLayout); the cockpit hides the list while it shows.
+function bdShow() {
+  const on = bdOn();
+  for (const b of $("chats-mode").querySelectorAll("button")) b.setAttribute("aria-pressed", String((b.dataset.mode === "board") === (shellRoute.q.get("view") === "board")));
+  if (!on && !$("bd")) return;
+  if (!$("bd")) bdBuild();
+  $("bd").hidden = !on; $("cockpit").classList.toggle("board", on);
+  if (!on) return;
+  bdRender();
+  if (!bd.fitted && bd.lay.frames.length) { bdFit(); bd.fitted = true; } // once the chats are in
+}
+
+// The chats in board order: per project the ones waiting on you first, then the running ones, then the newest.
+function bdChats() {
+  const rank = { needs: 0, running: 1, idle: 2 };
+  return ck.chats.filter(ckScope).map((c) => ({ c, st: ckState(c) }))
+    .sort((a, b) => rank[a.st] - rank[b.st] || (b.c.updated || 0) - (a.c.updated || 0));
+}
+// What a zoomed-out card says: the last thing in its log once loaded, else the board's line for it ("replied: …").
+function bdLine(c, card) {
+  const i = (ck.board || []).find((x) => x.kind === "chat" && x.machine === c.machine && x.id === c.id);
+  return card.log.lastElementChild?.textContent.trim().slice(-200) || (i?.line !== "read" && i?.line) || (c.title ? "" : "No message yet.");
+}
+
+// Frames and cards are kept per project and per chat: a re-render (every summary) moves them, never rebuilds them, so
+// the focus and a half-typed message stay.
+function bdRender() {
+  if (!$("bd") || $("bd").hidden) return;
+  const rows = bdChats(), saved = bdSaved(), world = $("bd-world");
+  const L = bd.lay = boardLayout(rows.map(({ c }) => ({ id: c.id, project: c.project })), saved.pos, saved.shut);
+  const keep = new Set();
+  for (const f of L.frames) {
+    let box = bd.frames.get(f.project);
+    if (!box) {
+      box = el("section", "bd-frame"); const t = el("button", "bd-frame-title"); t.type = "button";
+      t.append(el("span", "bd-chev", "▾"), el("strong"), el("span", "ck-count"));
+      t.onclick = () => { const b = bdSaved(); b.shut = b.shut.includes(f.project) ? b.shut.filter((x) => x !== f.project) : [...b.shut, f.project]; bdSave(b); bdRender(); };
+      box.append(t); bd.frames.set(f.project, box);
+    }
+    const t = box.firstChild, name = f.project ? shown(f.project) : "no project";
+    t.children[1].textContent = name; t.children[2].textContent = String(f.n);
+    t.setAttribute("aria-expanded", String(!f.shut)); t.title = f.shut ? `Show the chats of ${name}` : `Fold ${name} away`;
+    box.setAttribute("aria-label", `${name}: ${f.n} chat${f.n === 1 ? "" : "s"}`);
+    box.classList.toggle("shut", f.shut);
+    Object.assign(box.style, { left: `${f.x}px`, top: `${f.y}px`, width: `${f.w}px`, height: `${f.h}px` });
+    keep.add(box);
+  }
+  for (const [p, box] of bd.frames) if (!keep.has(box)) { box.remove(); bd.frames.delete(p); }
+  const order = [];
+  for (const f of L.frames) {
+    order.push(bd.frames.get(f.project));
+    for (const { c, st } of rows.filter(({ c }) => (c.project || "") === f.project)) {
+      const card = ckCard(c), k = ckKey(c), p = L.pos.get(c.id);
+      let w = bd.wraps.get(k);
+      if (!w) {
+        w = el("article", "bd-card"); w.tabIndex = 0; w.dataset.id = c.id;
+        w.append(el("div", "bd-sum")); bdDrag(w, c.id); bd.wraps.set(k, w);
+        w.addEventListener("focusin", () => { const q = bd.lay?.pos.get(c.id); if (q) panShow(bd, $("bd-stage"), { ...q, w: BD.w, h: BD.h }); });
+        w.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === w) { e.preventDefault(); ckShow(card.meta); } });
+      }
+      if (card.root.parentNode !== w) w.append(card.root); // back from the full chat (ckLayout moved it there)
+      w.className = `bd-card ${st}${p.pinned ? " pinned" : ""}${w.classList.contains("dragging") ? " dragging" : ""}`; w.hidden = saved.shut.includes(f.project);
+      w.setAttribute("aria-label", `${c.title || "New chat"}: ${CK_STATE[st]}, ${AGENT_NAME[c.agent] || c.agent} on ${c.label}, ${ckShort(c.folder)}. Enter opens the full chat, Esc goes back to the board`);
+      if (!w.classList.contains("dragging")) Object.assign(w.style, { left: `${p.x}px`, top: `${p.y}px`, width: `${BD.w}px`, height: `${BD.h}px` });
+      const sum = w.firstChild, top = el("div", "bd-sum-top");
+      top.append(el("span", "ck-dot"), el("span", "ck-mark", AGENT_MARK[c.agent] || "?"), el("span", "bd-sum-state", CK_STATE[st]));
+      sum.replaceChildren(top, el("strong", "bd-sum-title", c.title || "New chat"), el("p", "bd-sum-line", bdLine(c, card)),
+        el("small", null, `${AGENT_NAME[c.agent] || c.agent} · ${c.label} · ${ckShort(c.folder)} · ${ago(c.updated)}`));
+      order.push(w);
+    }
+  }
+  for (const [k, w] of bd.wraps) if (!ck.cards.has(k) || !order.includes(w)) { w.remove(); bd.wraps.delete(k); }
+  // DOM order = layout order, so Tab walks project by project; only moved nodes are touched (a move drops the focus)
+  order.forEach((n, i) => { if (world.children[i] !== n) world.insertBefore(n, world.children[i] || null); });
+  if (!rows.length) world.replaceChildren(el("p", "bd-none muted", ck.chats.length ? "No chats in this project." : "No chats yet: start one with + New chat."));
+  else world.querySelector(".bd-none")?.remove();
+  bdMini();
+}
+
+// Drag a card by its header (zoomed out: anywhere on it); where it lands is kept for that chat.
+function bdDrag(w, id) {
+  w.addEventListener("pointerdown", (e) => {
+    if (e.button || !(e.target.closest(".ck-head") || $("bd").classList.contains("far")) || e.target.closest("button, a, textarea, select")) return;
+    const p = bd.lay.pos.get(id), s = { x: e.clientX, y: e.clientY, px: p.x, py: p.y, on: false };
+    const move = (ev) => {
+      if (!s.on && Math.hypot(ev.clientX - s.x, ev.clientY - s.y) < 4) return;
+      if (!s.on) { s.on = true; w.setPointerCapture(ev.pointerId); w.classList.add("dragging"); }
+      p.x = s.px + (ev.clientX - s.x) / bd.view.k; p.y = s.py + (ev.clientY - s.y) / bd.view.k;
+      w.style.left = `${p.x}px`; w.style.top = `${p.y}px`;
+    };
+    const up = () => {
+      w.removeEventListener("pointermove", move); w.removeEventListener("pointerup", up); w.removeEventListener("pointercancel", up);
+      if (!s.on) return;
+      w.classList.remove("dragging");
+      const b = bdSaved(); b.pos[id] = [Math.round(p.x), Math.round(p.y)]; bdSave(b); bdRender();
+    };
+    w.addEventListener("pointermove", move); w.addEventListener("pointerup", up); w.addEventListener("pointercancel", up);
+  });
+}
+
+function bdFit() { if (bd.lay && !$("bd").hidden) panFit(bd, $("bd-stage"), bd.lay.bounds, 1); }
+// After every pan or zoom: zoomed-out cards show their summary, the overview follows, and cards that came on screen
+// load their log now instead of at the next poll.
+let bdLoadTimer = 0;
+function bdMoved() {
+  $("bd").classList.toggle("far", bd.view.k < BD.far);
+  bdMiniView();
+  clearTimeout(bdLoadTimer);
+  bdLoadTimer = setTimeout(() => { for (const c of bdLive()) if (!c.loaded) { c.loaded = true; ckPoll(c); } }, 250);
+}
+// The cards ckTick polls: on screen, zoomed in, in an open frame.
+function bdLive() {
+  if (!$("bd") || $("bd").hidden || bd.view.k < BD.far) return [];
+  const st = $("bd-stage"), v = bd.view, W = st.clientWidth, H = st.clientHeight;
+  return [...bd.wraps].filter(([, w]) => {
+    if (w.hidden) return false;
+    const x = v.x + parseFloat(w.style.left) * v.k, y = v.y + parseFloat(w.style.top) * v.k;
+    return x < W && y < H && x + BD.w * v.k > 0 && y + BD.h * v.k > 0;
+  }).map(([k]) => ck.cards.get(k)).filter(Boolean);
+}
+
+// The overview in the corner: frames and cards as small boxes, the screen as a frame.
+function bdMini() {
+  const L = bd.lay, box = $("bd-mini-in"), W = 180, H = 120;
+  const k = Math.min(W / L.bounds.w, H / L.bounds.h);
+  bd.mini = { k, ox: (W - L.bounds.w * k) / 2, oy: (H - L.bounds.h * k) / 2 };
+  const at = (x, y, w, h, cls) => { const d = el("div", cls); Object.assign(d.style, { left: `${bd.mini.ox + (x - L.bounds.x) * k}px`, top: `${bd.mini.oy + (y - L.bounds.y) * k}px`, width: `${Math.max(2, w * k)}px`, height: `${Math.max(2, h * k)}px` }); return d; };
+  box.replaceChildren(...L.frames.map((f) => at(f.x, f.y, f.w, f.h, "bd-mini-frame")),
+    ...[...bd.wraps.values()].filter((w) => !w.hidden).map((w) => at(parseFloat(w.style.left), parseFloat(w.style.top), BD.w, BD.h, `bd-mini-card ${w.classList.contains("needs") ? "needs" : w.classList.contains("running") ? "running" : ""}`)));
+  bdMiniView();
+}
+function bdMiniView() {
+  const L = bd.lay, m = bd.mini, st = $("bd-stage"), v = bd.view, r = $("bd-mini-view"); if (!L || !m) return;
+  const x = (-v.x / v.k - L.bounds.x) * m.k + m.ox, y = (-v.y / v.k - L.bounds.y) * m.k + m.oy;
+  Object.assign(r.style, { left: `${x}px`, top: `${y}px`, width: `${st.clientWidth / v.k * m.k}px`, height: `${st.clientHeight / v.k * m.k}px` });
+}
+for (const b of $("chats-mode").querySelectorAll("button")) b.onclick = () => go(b.dataset.mode === "board" ? "#/chats?view=board" : "#/chats");

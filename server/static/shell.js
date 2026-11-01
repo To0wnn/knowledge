@@ -1,6 +1,6 @@
 // App shell: the sidebar (desktop; [ folds it to an icon rail, below 1000 px it is the rail unless opened), the
 // bottom tab bar and More sheet (phone), one page header per view, and a hash route per view: #/inbox, #/inbox/<item key>, #/chats,
-// #/chats/<chat id>, #/tasks, #/tasks?view=flow, #/machines, #/notes, #/notes/<path>, #/notes?q=<search>, #/map, #/map/<path>,
+// #/chats/<chat id>, #/chats?view=board, #/tasks, #/tasks?view=flow, #/machines, #/notes, #/notes/<path>, #/notes?q=<search>, #/map, #/map/<path>,
 // #/changes, #/health, #/thispc. The URL is the only record of the view (refresh, back and forward work); an old
 // #<note path> link becomes #/notes/<path>. Paths in routes are encoded per part (encPath), decoded here. The views themselves are app.js's and mission.js's; this file shows one
 // at a time and asks it to load. The sidebar, More sheet and theme are nav.js's. Uses app.js globals ($, el, store, decode, pushHash, ck, Graph, mapOn, current, …).
@@ -112,7 +112,7 @@ $("back").onclick = () => (shellRoute.view === "chats" && ck.view ? ckShow(null)
 function setAgentProject(p) {
   agentProject = p; $("agent-project").value = p;
   if (shellRoute.view === "inbox") ckBoard();
-  else if (shellRoute.view === "chats") ckHistory();
+  else if (shellRoute.view === "chats") { ckHistory(); bdRender(); }
   else if (shellRoute.view === "tasks") {
     if ($("tab-tasks").classList.contains("flow")) { ms.project = p; ms.fitted = false; msLoad(); } else loadTasks(true);
   }
