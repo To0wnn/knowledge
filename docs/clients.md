@@ -20,6 +20,19 @@ Code, Codex and agy and asks y/n for each; after that it updates the agents that
 agent found without it, and asks for a token only when the server refuses the stored one.
 
 
+## Import what your agents already know
+
+A new server starts empty. The first `setup` (or `install`) in a terminal offers once to import what the agents on
+this computer already know, after listing it (file, size, target memo): `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`,
+`~/.gemini/GEMINI.md` (agy), Claude Code's local auto memory (`~/.claude/projects/*/memory/*.md`, not its index) and
+`CLAUDE.md`/`AGENTS.md` in the root of folders linked to a project. No other files are read. Without a terminal the
+answer is no. Each file becomes one memo under the heading "Imported" in the token's project (a linked folder's files
+in its own project) through the server's `knowledge_new_memo`, so the frontmatter, both sections and the index line are
+made, similar memos are named, a file with a known secret value is refused (and reported, until it holds
+`‹secret:NAME›` instead), and an existing memo is never replaced. The house-rules block the setup wrote into
+`AGENTS.md`/`GEMINI.md` is left out. `~/.knowledge/imported.json` records what was imported, so a rerun imports nothing
+twice. Later: `knowledge-agent.py import` (`--dry-run` only lists).
+
 ## The companion's autostart
 
 `setup`, `install` and `update` end by setting up the companion (again only updates; `install-companion` alone):
