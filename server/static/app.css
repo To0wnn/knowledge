@@ -238,7 +238,7 @@ pre.diff .del mark { background: color-mix(in srgb, var(--bad) 30%, transparent)
 .version { margin-top: 12px; display: grid; gap: 8px; justify-items: start; }
 .editor { width: 100%; min-height: 60vh; padding: 12px; border: 1px solid var(--line-hi); border-radius: var(--r-md); background: var(--panel-hi); color: var(--ink); font: 12.5px/1.5 var(--mono); resize: vertical; tab-size: 2; }
 .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
-dialog { width: min(560px, calc(100vw - 32px)); padding: 20px; border: 1px solid var(--line-hi); border-radius: var(--r-lg); background: var(--panel-solid); color: var(--ink); box-shadow: var(--menu-shadow); }
+dialog { width: min(560px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; padding: 20px; border: 1px solid var(--line-hi); border-radius: var(--r-lg); background: var(--panel-solid); color: var(--ink); box-shadow: var(--menu-shadow); }
 dialog::backdrop { background: rgb(0 0 0 / .35); backdrop-filter: blur(3px); }
 dialog h2 { margin: 0 0 4px; font-size: 18px; font-weight: 650; letter-spacing: -0.01em; }
 
@@ -603,7 +603,7 @@ dialog.ck-diff { width: min(980px, calc(100vw - 32px)); }
 .bd-mini-card.needs { background: var(--amber); opacity: 1; }
 .bd-mini-card.running { background: var(--ok); opacity: .9; }
 .bd-mini-view { border: 1.5px solid var(--amber); border-radius: 3px; background: var(--amber-soft); pointer-events: none; }
-@media (max-width: 999.98px) { #chats-mode, .bd { display: none !important; } } /* the board is desktop only: the list stays */
+@media (max-width: 999.98px) { #chats-mode, #tasks-mode, .bd { display: none !important; } } /* the board and flow are desktop only: the list stays */
 #ck-diff-body { max-height: 65vh; overflow: auto; }
 @media (max-width: 699.98px) {
   .ck { overflow: visible; }
@@ -689,7 +689,7 @@ dialog.ck-diff { width: min(980px, calc(100vw - 32px)); }
 .ms-from { grid-column: 1 / -1; font-size: 11px; color: var(--amber-ink); }
 .ms-arrow { color: var(--muted); width: 100%; text-align: center; line-height: 1; }
 .ms-empty { padding: 24px 16px; }
-@media (max-width: 640px) {
+@media (max-width: 699.98px) {
   .ms-bar { padding: 8px 12px; gap: 6px; }
   .ms-legend { padding: 0 12px 6px; }
   .ms-legend .ms-edge-key { display: none; }
@@ -741,6 +741,7 @@ svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor;
 .rail .sidebar .sec { width: 32px; height: 1px; margin: 8px 0; padding: 0; overflow: hidden; background: var(--line); font-size: 0; }
 .rail .sidebar .me { flex-direction: column; }
 .rail .sidebar .me .menu summary { padding: 0; justify-content: center; }
+.rail .me .menu.up .menu-list { position: fixed; left: 68px; bottom: 12px; top: auto; }
 @media (max-width: 999.98px) {
   body.app:not(.rail) { --side-w: 64px; }
   body.app:not(.rail) .sidebar { position: fixed; z-index: 30; inset: 0 auto 0 0; width: 248px; background: var(--panel-solid); box-shadow: var(--menu-shadow); }
@@ -771,7 +772,7 @@ svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor;
 /* Phone: no sidebar; the page scrolls under a sticky header, the tab bar sits at the bottom. */
 @media (max-width: 699.98px) {
   #ck-resets { display: none; } /* no room next to filter, New chat and search; the reset time shows on Machines */
-  .head-actions { flex-wrap: nowrap; overflow: hidden; }
+  .head-actions { flex-wrap: nowrap; }
   html, body { height: auto; }
   body.app { display: block; overflow: visible; padding-bottom: calc(60px + env(safe-area-inset-bottom)); }
   body.app.in-chat { padding-bottom: 0; }

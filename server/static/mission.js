@@ -125,7 +125,7 @@ async function msLoad() {
   if (!document.hidden) ms.timer = setTimeout(msLoad, 20000); // tasks change when agents write memos
 }
 
-const msNarrow = () => matchMedia("(max-width: 640px)").matches;
+const msNarrow = () => matchMedia("(max-width: 699.98px)").matches;
 const msNode = (k) => ms.data.nodes.find((n) => n.key === k);
 
 function msRender() {

@@ -62,6 +62,7 @@ const noteRoute = (path, view = "notes") => `#/${view}/${encPath(path)}`;
 let data = { nodes: [], links: [] };
 let byId = new Map(), neighbors = new Map(), slugToId = new Map(), clusterColor = new Map();
 let selected = null, hover = null, focusSet = new Set();
+let machinesCache = []; // the last /ui/api/machines rows (declared early for loadTasks/loadMachines)
 let project = store.get("kn_project") || "homelab";
 let labelMin = 0, current = null, editing = false, Graph, mapOn = false;
 
@@ -513,12 +514,18 @@ function markActive() {
 const dirty = () => editing && $("note").querySelector("textarea.editor")?.value !== current?.text;
 const keepEdits = () => dirty() && !confirm("Discard your unsaved changes?");
 
+let openNoteSeq = 0;
 // Returns false when nothing was opened (the user kept their edits, or the note could not be read).
 async function openNote(id, { push = true, find = null } = {}) {
   if (keepEdits()) return false;
   editing = false; historyOpen = false;
+  const seq = ++openNoteSeq;
   let note;
-  try { note = await api(`/ui/api/note?path=${encodeURIComponent(id)}`); } catch (e) { $("note").textContent = e.message; return false; }
+  try { note = await api(`/ui/api/note?path=${encodeURIComponent(id)}`); } catch (e) {
+    if (seq !== openNoteSeq) return false;
+    $("note").textContent = e.message; return false;
+  }
+  if (seq !== openNoteSeq) return false;
   const p = projectOf(note.path);
   if (p !== "shared" && p !== project && !allMode()) switchProject(p, false); // the All map stays the All map
   current = note; document.body.classList.remove("home");
@@ -1143,7 +1150,6 @@ function machineButton(text, title, onclick) {
   return b;
 }
 // The Machines view: one card per pc.
-let machinesCache = []; // the last /ui/api/machines rows (machineAction waits on their actions)
 async function loadMachines() {
   const res = await api("/ui/api/machines");
   machinesCache = Array.isArray(res) ? res : res.machines || [];
@@ -1382,7 +1388,17 @@ async function ckSummary() {
     $("ck-resets").textContent = `resets ${far ? at.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" }) : at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
     $("ck-resets").title = `${AGENT_NAME[worst.agent] || worst.agent} on ${worst.label}: ${Math.round(worst.limit)}% of its usage limit used`;
   }
-  for (const [k, card] of ck.cards) { if (card.worker) continue; const c = ck.chats.find((x) => ckKey(x) === k); if (!c) ckDrop(k); else card.meta = { ...card.meta, ...c }; }
+  for (const [k, card] of ck.cards) {
+    if (card.worker) {
+      const hit = ckFindWorker(`worker/${card.worker}`);
+      if (!hit) ckDrop(k);
+      else { card.m = hit.m; card.w = hit.w; card.meta = { ...card.meta, online: hit.m.online, status: hit.w.status }; }
+      continue;
+    }
+    const c = ck.chats.find((x) => ckKey(x) === k);
+    if (!c) ckDrop(k);
+    else card.meta = { ...card.meta, ...c };
+  }
   if (ck.view && !ck.cards.has(ck.view)) { // a route's chat id (or an older pc/id key) once the chats are known
     const c = ck.chats.find((x) => x.id === ck.view || ckKey(x) === ck.view), hit = ckFindWorker(ck.view);
     if (c) ck.view = ckKey(ckCard(c).meta);
@@ -1422,7 +1438,8 @@ function ckHistory() {
     x.setAttribute("aria-pressed", String(x.dataset.only === only)); x.lastChild.textContent = n ? ` ${n}` : "";
   }
 }
-$("ck-filter").oninput = () => { ck.filter = $("ck-filter").value; ckHistory(); };
+let ckFilterTimer;
+$("ck-filter").oninput = () => { clearTimeout(ckFilterTimer); ckFilterTimer = setTimeout(() => { ck.filter = $("ck-filter").value; ckHistory(); }, 120); };
 for (const x of $("ck-only").querySelectorAll("button")) x.onclick = () => { $("ck-only").dataset.only = x.dataset.only; ckHistory(); };
 // Open one chat (its route), or go back from it when `meta` is empty.
 function ckShow(meta) {
@@ -1666,6 +1683,11 @@ function ckCard(meta) {
   head.append(el("span", "ck-dot bd-only"), el("span", "ck-mark", AGENT_MARK[meta.agent] || "?"), title, git, state, open, x);
   const log = el("div", "ck-log"), form = el("form", "ck-form"), input = el("textarea"), btns = el("div", "ck-btns");
   log.setAttribute("aria-live", "polite"); log.setAttribute("role", "log");
+  log.addEventListener("click", (e) => {
+    const a = e.target.closest("a"); if (!a) return;
+    const href = a.getAttribute("href") || "";
+    if (/^https?:/.test(href)) { a.target = "_blank"; a.rel = "noopener noreferrer"; }
+  });
   input.rows = 2; input.placeholder = "Message the agent… (Enter sends, Shift+Enter a new line)"; input.setAttribute("aria-label", "Message");
   const stop = el("button", "btn ck-stop", "Stop"), send = el("button", "btn primary", "Send"), note = el("p", "ck-note");
   stop.type = "button"; send.type = "submit"; btns.append(stop, send); form.append(input, btns, note);
