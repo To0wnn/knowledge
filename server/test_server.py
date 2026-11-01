@@ -96,7 +96,36 @@ def tasks_contract(tmp, ck, fr, ver, raw):
     # Start conditions: after another task, a date, after approval. The writer (an admin-made token) is trusted.
     assert not add("- open until 2099-01-01 [Codex, DEP-1] from Gemini, start after CX-1: after the pruning")[0]
     assert not add("- open until 2099-01-01 [Codex, DAT-1] from Gemini, start 1 jan 2098: later")[0]
-    assert not add("- open until 2099-01-01 [Codex, APR-1] from Gemini, start after approval: risky")[0]
+    err, res = add("- open until 2099-01-01 [Codex, APR-1] from Gemini, start after approval: risky")
+    assert not err and "Task APR-1 waits for the owner's approval in the Tasks tab (waits for approval)" in res, res
+    # Refused, not silently wrong: an unknown "start after" ID would start at once; a date without year is no task.
+    err, res = add("- open until 2099-01-01 [Codex, DEP-9] from Gemini, start after NOPE-77: typo")
+    assert err and "no task NOPE-77" in res, res
+    err, res = add("- open until 10 nov [Codex, DAT-9] from Gemini, start now: no year")
+    assert err and "always with the year" in res and "is no task line the server can read" in res, res
+    # A plain open item that links or quotes "[a, b]" after its colon is no task line: allowed as before.
+    plain = ("- open until 10 nov 2026: zie [Kalico, issue #12](https://example.org/12)\n"
+             "- open until 10 nov: the format is [Owner, ID] from X, start now")
+    err, res = add(plain)
+    assert not err, res
+    call("knowledge_edit", {"path": path, "old_string": plain + "\n", "new_string": ""})
+    # A memo that was there before the start is no new write: the startup scan tells nobody.
+    assert not [n for n in json.loads((tmp / "notices.json").read_text() if (tmp / "notices.json").exists() else "[]") if "BOOT-1" in n["text"]]
+    two = ("- open until 2099-01-01 [Codex, CH-1] from Gemini, start now: first\n"
+           "- open until 2099-01-01 [Codex, CH-2] from Gemini, start after CH-1: second")
+    assert not add(two)[0], "a chain written in one go"
+    call("knowledge_edit", {"path": path, "old_string": two + "\n", "new_string": ""})
+    # Written straight to disk (a VM session): not refusable, so the writer's device hears it at its next turn.
+    bad = tmp / "projects/garden/memory/project_bad.md"
+    bad.write_text(memo("- open until 10 nov [Codex, VMB-1] from Claude, start now: x\n"
+                        "- open until 2099-01-01 [Codex, VMB-2] from Claude, start after GHOST-1: y\n", "bad"))
+    http("POST", "/invalidate", {"paths": ["garden-memory/project_bad.md"]}, token="watch-token")
+    notes = [n for n in json.loads((tmp / "notices.json").read_text()) if "project_bad.md" in n["text"]]
+    assert {n["device"] for n in notes} == {"laptop"} and any("always with the year" in n["text"] for n in notes) \
+        and any("no task GHOST-1" in n["text"] for n in notes), notes
+    bad.unlink()
+    http("POST", "/invalidate", {"paths": ["garden-memory/project_bad.md"]}, token="watch-token")
+    (tmp / "notices.json").write_text(json.dumps([n for n in json.loads((tmp / "notices.json").read_text()) if "project_bad.md" not in n["text"]]))
     assert authors()["garden"]["DEP-1"]["by"] == next(n for n, c in json.loads((tmp / "tokens.json").read_text()).items()
                                                       if c.get("roots") == ["garden", "garden-memory"])
     r = rows()
@@ -767,7 +796,8 @@ def board_contract(tmp, ck, fr, raw, er, et):
                                              "branch": f"task/{i}", **k}
     rep = {"version": "0.17.0", "workersAllowed": True, "agents": {"codex": {}, "claude": {}},
            "folders": {"linked": [{"path": "/home/x/garden", "project": "garden", "git": {**pill, "changed": "3; rm -rf"}}]},
-           "workers": [worker("BRD-4", "running", git=pill), worker("BRD-5", "failed", now - 60), worker("BRD-6", "finished", now - 60),
+           "workers": [worker("BRD-4", "running", git=pill, progress={"commit": "feat: beds", "commits": 2, "changed": "3", "log": [
+               "one", "two Sup3rSecret99", "three", "four " + "y" * 400]}), worker("BRD-5", "failed", now - 60, why="ended without claiming or handing back its task"), worker("BRD-6", "finished", now - 60),
                        worker("BRD-7", "failed", now - 8 * 86400), worker("BRD-8", "finished", now - 2 * 86400)]}
     assert http("POST", "/machine/report", rep, token=fr, headers=pc)[0] == 200
     path = "garden-memory/project_tasks.md"
@@ -792,7 +822,37 @@ def board_contract(tmp, ck, fr, raw, er, et):
     assert col("chat", cids[1]) == "needs" and items[("chat", cids[1])]["line"] == "refused: git push", items[("chat", cids[1])]
     assert col("chat", cids[2]) == "running"
     assert col("worker", "BRD-4") == "running" and items[("worker", "BRD-4")]["git"] == pill
+    prog = items[("worker", "BRD-4")]["progress"]
+    assert prog["commit"] == "feat: beds" and prog["commits"] == 2 and prog["changed"] == 0, prog
+    assert prog["log"][:2] == ["two ‹secret›", "three"] and len(prog["log"][2]) == 300, prog
+    assert items[("worker", "BRD-5")]["progress"] is None
     assert (col("worker", "BRD-5"), col("worker", "BRD-6"), col("worker", "BRD-7"), col("worker", "BRD-8")) == ("needs", "done", None, None), items.keys()
+    failed = items[("worker", "BRD-5")]
+    assert failed["why"] == "ended without claiming or handing back its task" and "ended without claiming" in failed["line"], failed
+    m = json.loads((tmp / "machines.json").read_text())[mid]["companion"]["workers"]
+    assert next(w for w in m if w["id"] == "BRD-5")["why"].startswith("ended without"), "the machine report keeps why"
+    # Restart: only a worker that ended, queued as the companion's own start (any companion version knows it).
+    act = lambda tid: ui("/ui/api/machines/action", {"machine": mid, "action": "restart", "args": {"project": "garden", "id": tid}})
+    assert act("BRD-4")[0] == 409 and act("NOPE")[0] == 409 and act("BRD-5")[0] == 200
+    got = json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"]
+    assert [(a["action"], a["args"]) for a in got] == [("start_worker", {"project": "garden", "id": "BRD-5"})], got
+    for a in got:
+        http("POST", "/machine/actions/result", {"id": a["id"], "ok": True}, token=fr, headers=pc)
+    # The pc went offline with a worker running: Needs you ("pc offline since"), no Stop; a task whose only worker pc
+    # is offline says so instead of "no pc runs workers".
+    d = json.loads((tmp / "machines.json").read_text())
+    d[mid]["at"] -= 3600
+    d[mid]["companion"]["at"] -= 3600
+    (tmp / "machines.json").write_text(json.dumps(d))
+    lost = {(i["kind"], i["id"]): i for i in board()}[("worker", "BRD-4")]
+    assert lost["col"] == "needs" and lost["line"].startswith("pc offline since ") and not lost["can_stop"] and lost["offline_since"], lost
+    runs = next(t for t in json.loads(raw("GET", "/ui/api/tasks", headers=ck)[2])["tasks"] if t["id"] == "BRD-1")["runs"]
+    assert "garage offline since " in runs and "no pc runs" not in runs, runs
+    d[mid]["at"] += 3600
+    d[mid]["companion"]["at"] += 3600
+    (tmp / "machines.json").write_text(json.dumps(d))
+    back = {(i["kind"], i["id"]): i for i in board()}
+    assert back[("worker", "BRD-4")]["col"] == "running" and back[("worker", "BRD-4")]["can_stop"] and back[("worker", "BRD-5")]["can_restart"], back
     assert col("task", "BRD-1") == "open" and items[("task", "BRD-1")]["hosts"] == [{"machine": mid, "label": "garage"}], items.get(("task", "BRD-1"))
     assert col("task", "BRD-2") == "needs" and items[("task", "BRD-2")]["approve"], items.get(("task", "BRD-2"))
     assert col("task", "BRD-9-done") == "done", "a result handed back today is done"
@@ -886,10 +946,10 @@ def needs_contract(tmp, ck, fr, raw, heard):
     time.sleep(2.5)  # past the quiet window of the polls before
     add(1)
     assert wait(lambda: about(1)), heard
-    assert "waits for your approval" in about(1)[0] and about(1)[0].endswith("https://kn.example/ui#/inbox"), about(1)
+    assert "waits for your approval" in about(1)[0] and about(1)[0].endswith("https://kn.example/ui#/inbox/task:garden/NT-1"), about(1)
     time.sleep(2.5)
     assert len(about(1)) == 1, "one message per item"
-    # A chat reply links to the chat itself.
+    # A chat reply links to its own item in the inbox too.
     pc = {"X-Knowledge-Machine": "cccccccccccccccc", "X-Knowledge-Machine-Label": "garage"}
     ui = lambda path, body: raw("POST", path, json.dumps(body), {**ck, "X-Knowledge-UI": "1", "Content-Type": "application/json"})
     http("POST", "/machine/report", {"version": "0.17.0", "agents": {"codex": {}},
@@ -898,7 +958,7 @@ def needs_contract(tmp, ck, fr, raw, heard):
     ui("/ui/api/chat/send", {"machine": "cccccccccccccccc", "id": cid, "text": "ping"})
     http("GET", "/machine/chats", token=fr, headers=pc)
     http("POST", "/machine/chats/events", {"chat": cid, "events": [{"kind": "text", "text": "pong"}], "done": True}, token=fr, headers=pc)
-    assert wait(lambda: any(m.endswith(f"https://kn.example/ui#/chats/{cid}") and "replied: pong" in m for m in heard)), heard
+    assert wait(lambda: any(m.endswith(f"https://kn.example/ui#/inbox/chat:cccccccccccccccc/{cid}") and "replied: pong" in m for m in heard)), heard
     # The board is open (polled): the item shows there, so no message, also not after the board closes.
     end = time.time() + 3
     add(2)
@@ -921,6 +981,105 @@ def needs_contract(tmp, ck, fr, raw, heard):
     for i in range(1, 7):
         assert line(i) in text
         call("knowledge_edit", {"path": path, "old_string": line(i), "new_string": ""}, fr)
+
+
+def flow_contract(tmp, ck, fr, raw, heard):
+    """A result handed back (or a hand-over) to a person needs them: on the board and on Matrix, never started by
+    itself. Cancel turns a task into a result for its requester, and what starts after it waits instead of starting."""
+    ui = lambda path, body=None, h=ck: raw("POST" if body is not None else "GET", path, None if body is None else json.dumps(body),
+                                          {**h, "X-Knowledge-UI": "1", "Content-Type": "application/json"})
+    board = lambda: {i["key"]: i for i in json.loads(ui("/ui/api/board")[2])["items"]}
+    rows = lambda: {t["id"]: t for t in json.loads(ui("/ui/api/tasks")[2])["tasks"] if t["project"] == "garden"}
+    wait = lambda cond, t=8: next((True for _ in range(int(t / 0.2)) if cond() or time.sleep(0.2)), cond())
+    state = tmp / "needs_notified.json"
+    assert ui("/ui/api/admin/settings", {"needs_per_hour": 60})[0] == 200
+    assert wait(state.exists)
+    time.sleep(2.5)  # past the quiet window of the board polls before
+    path = "garden-memory/project_tasks.md"
+    lines = ["- [Sam, FL-1-done]: the beds are built",
+             "- [Claude, FL-2-done]: for an agent",
+             "- open until 2099-01-01 [Codex, FL-3] from Sam, start now: build the fence",
+             "- open until 2099-01-01 [Codex, FL-4] from Sam, start after FL-3: paint the fence",
+             "- open until 2099-01-01 [Codex, FL-5-cont] from Sam, start after approval: go on with FL-5",
+             "- [homelab Claude, FL-8-done]: for an agent named with its project",
+             "- [laptop, FL-9-done]: for a device token",
+             "- open until 2099-01-01 [Codex, FL-6-cont] from Sam, start now: go on with FL-6",
+             "- open until 2099-01-01 [Codex, FL-7] from Sam, start after FL-6: after six"]
+    assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": "\n".join(lines) + "\n## Keuzes"}, fr)[0]
+    said = lambda tid: [m for m in heard if m.startswith(f"Knowledge needs you: {tid} ")]
+    assert wait(lambda: said("FL-1-done")), heard
+    assert said("FL-1-done")[0].endswith("https://kn.example/ui#/inbox/task:garden/FL-1-done"), said("FL-1-done")
+    assert wait(lambda: said("FL-5-cont")) and not said("FL-2-done"), heard
+    b = board()
+    r = b["task:garden/FL-1-done"]
+    assert r["col"] == "needs" and r["result"] and r["line"] == "result for Sam: the beds are built", r
+    assert b["task:garden/FL-2-done"]["col"] == "done", "a result for an agent reaches it at its next turn"
+    assert b["task:garden/FL-8-done"]["col"] == "done" and "task:garden/FL-9-done" not in b, "agents and devices by another name need nobody"
+    assert not said("FL-8-done") and not said("FL-9-done"), heard
+    assert b["handover:garden/FL-5-cont"]["line"].startswith("handed over to Codex for Sam"), b["handover:garden/FL-5-cont"]
+    ready = {t["id"] for t in json.loads(http("GET", "/tasks/ready", token=fr)[1])["tasks"]}
+    assert not {"FL-1-done", "FL-2-done"} & ready and "FL-3" in ready, ready
+    # Cancel: owner or admin only; the line becomes a result for its requester in the same place.
+    assert ui("/ui/api/task/cancel", {"project": "garden", "id": "NOPE"})[0] == 404
+    assert b["task:garden/FL-3"]["can_cancel"] and rows()["FL-3"]["can_cancel"]
+    # A task a worker holds is not cancelled under it (it would go on and hand back a second result): stop it first.
+    leases = json.loads((tmp / "task_leases.json").read_text() or "{}")
+    leases.setdefault("garden", {})["FL-3"] = {"device": "laptop", "session": "worker:w9", "until": int(time.time()) + 300}
+    (tmp / "task_leases.json").write_text(json.dumps(leases))
+    st, _, body = ui("/ui/api/task/cancel", {"project": "garden", "id": "FL-3"})
+    assert st == 409 and b"stop the worker first" in body and not rows()["FL-3"]["can_cancel"], body
+    leases["garden"].pop("FL-3"); (tmp / "task_leases.json").write_text(json.dumps(leases))
+    st, _, body = ui("/ui/api/task/cancel", {"project": "garden", "id": "FL-3", "reason": "no fence\nafter all"})
+    assert st == 200, body
+    text = (tmp / "projects/garden/memory/project_tasks.md").read_text()
+    assert "- [Sam, FL-3-done]: cancelled by alice: no fence after all\n" in text and "[Codex, FL-3]" not in text, text
+    r = rows()
+    assert not r["FL-4"]["startable"] and r["FL-4"]["waiting_reason"].startswith("FL-3 was cancelled"), r["FL-4"]
+    b = board()
+    assert b["task:garden/FL-4"]["col"] == "needs" and b["task:garden/FL-4"]["blocked"], b["task:garden/FL-4"]
+    assert b["task:garden/FL-3-done"]["line"].startswith("result for Sam: cancelled by alice"), b["task:garden/FL-3-done"]
+    assert "task-cancel" in (tmp / "audit.log").read_text()
+    # The requester reads the result and removes it: what waited on FL-3 still waits, until the owner approves it.
+    assert not call("knowledge_edit", {"path": path, "old_string": "- [Sam, FL-3-done]: cancelled by alice: no fence after all\n", "new_string": ""}, fr)[0]
+    assert rows()["FL-4"]["waiting_reason"].startswith("FL-3 was cancelled"), rows()["FL-4"]
+    assert ui("/ui/api/task/approve", {"project": "garden", "id": "FL-4"})[0] == 200 and rows()["FL-4"]["startable"], rows()["FL-4"]
+    # Cancelling a hand-over cancels the task it continues: what starts after FL-6 waits.
+    assert ui("/ui/api/task/cancel", {"project": "garden", "id": "FL-6-cont"})[0] == 200
+    assert "- [Sam, FL-6-done]: cancelled by alice\n" in (tmp / "projects/garden/memory/project_tasks.md").read_text()
+    assert rows()["FL-7"]["waiting_reason"].startswith("FL-6 was cancelled"), rows()["FL-7"]
+    # A pc that sleeps and wakes with a worker running is one message per worker run, not one per nap.
+    pc = {"X-Knowledge-Machine": "ffffffffffffffff", "X-Knowledge-Machine-Label": "sleepy"}
+    nap = lambda: http("POST", "/machine/report", {"version": "0.18.1", "workersAllowed": True, "agents": {"codex": {}}, "workers": [
+        {"id": "FL-W1", "project": "garden", "agent": "codex", "status": "running", "started": 1000.0}]}, token=fr, headers=pc)
+    def sleep_pc():
+        d = json.loads((tmp / "machines.json").read_text())
+        d["ffffffffffffffff"]["at"] -= 3600; d["ffffffffffffffff"]["companion"]["at"] -= 3600
+        (tmp / "machines.json").write_text(json.dumps(d))
+    time.sleep(2.5)  # past the quiet window of the board polls above
+    nap(); sleep_pc()
+    assert wait(lambda: said("FL-W1")), heard
+    nap(); time.sleep(2.5); sleep_pc(); time.sleep(3)
+    assert len(said("FL-W1")) == 1, said("FL-W1")
+    http("POST", "/machine/report", {"version": "0.18.1"}, token=fr, headers=pc)
+    for line in ("- [Sam, FL-1-done]: the beds are built", "- [Claude, FL-2-done]: for an agent", "- [Sam, FL-6-done]: cancelled by alice",
+                 lines[3], lines[4], lines[5], lines[6], lines[8]):
+        assert not call("knowledge_edit", {"path": path, "old_string": line + "\n", "new_string": ""}, fr)[0], line
+    assert ui("/ui/api/admin/settings", {"needs_per_hour": 0})[0] == 200
+    assert wait(lambda: not state.exists())
+
+
+def ui_gap_contract(tmp, ck, raw):
+    """A web UI search that finds nothing (exact and by meaning) is a gap like an agent's, logged once the person stopped
+    typing: the queries on the way there are not; one that finds notes is not."""
+    ask = lambda q: [raw("GET", f"/ui/api/{kind}?q={urllib.parse.quote(q)}&project=garden", headers=ck) for kind in ("search", "semantic")]
+    gaps = lambda: [ln.split("\t") for ln in (tmp / "gaps.log").read_text().splitlines()] if (tmp / "gaps.log").exists() else []
+    ask("qwzx")
+    ask("qwzxvb plorkt")
+    time.sleep(1.2)
+    ask("garden")  # finds notes
+    time.sleep(1.2)
+    ui = [g for g in gaps() if g[2] == "ui"]
+    assert [g[4] for g in ui] == ["qwzxvb plorkt"] and ui[0][1] == "user:alice", ui
 
 
 def no_held(beat: dict) -> dict:
@@ -954,6 +1113,17 @@ def handback_contract(tmp, ck, fr, ver, raw):
     stale = [ln for ln in ctx.splitlines() if ln.startswith("- stale_handback:")]
     assert any("HB-3-done" in x for x in stale) and any("HB-4-done" in x for x in stale), ctx[-1500:]
     assert not any("HB-1-done" in x or "HB-2-done" in x for x in stale), stale
+    assert not call("knowledge_delete", {"path": path, "base_version": ver(path)}, fr)[0]
+    # Trash: the delete copy is listed and goes back (owner or admin), never over a file that is there again.
+    ui = {**ck, "X-Knowledge-UI": "1", "Content-Type": "application/json"}
+    item = next(i for i in json.loads(raw("GET", "/ui/api/trash", headers=ck)[2])["items"] if i["path"] == path)
+    assert item["can_restore"] and not item["exists"] and item["project"] == "garden" and time.time() - item["deleted"] < 120, item
+    restore = lambda n, h=ui: raw("POST", "/ui/api/trash/restore", json.dumps({"name": n}), h)[0]
+    assert restore("../tokens.json") == 404 and restore("20261101-120000_garden-memory__nope.md") == 404
+    assert restore(item["name"]) == 200 and "HB-1-done" in call("knowledge_read", {"path": path}, fr)[1]
+    assert restore(item["name"]) == 409, "never over a file that is there again"
+    assert not next(i for i in json.loads(raw("GET", "/ui/api/trash", headers=ck)[2])["items"] if i["name"] == item["name"])["can_restore"]
+    assert "restore " + path in (tmp / "audit.log").read_text()
     assert not call("knowledge_delete", {"path": path, "base_version": ver(path)}, fr)[0]
     (tmp / "task_leases.json").write_text("{}")  # the turns above (session hb) took leases the later checks must not meet
 
@@ -1022,6 +1192,7 @@ def main():
     (mem / "MEMORY.md").write_text("# Index\n" + "".join(f"- [Item {i}](f{i}.md) — {'x' * 120}\n" for i in range(120)))
     (mem / "fact.md").write_text("line one\nline two\n")
     (mem / "due.md").write_text("- open tot 1 jan 2026: overdue sample item\n")
+    (mem / "boot.md").write_text("- open until 10 nov [Codex, BOOT-1] from Claude, start now: there before the start\n")
     (lab / "overzicht.md").write_text("overview\n")
     (lab / "secret.env").write_text("nope")
     (lab / "opnsense-config.xml").write_text("<opnsense><wireguard>privkey</wireguard></opnsense>")
@@ -1112,7 +1283,7 @@ def main():
            "KNOWLEDGE_GITHUB_API": ghurl, "KNOWLEDGE_GITHUB_RAW": ghurl + "/raw", "KNOWLEDGE_EXTERNAL_SLEEP": "3600", "KNOWLEDGE_INSTANCE": "blue", "KNOWLEDGE_PLUGIN_GRACE": "0",
            "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_RERANK_MODEL": "test", "KNOWLEDGE_DUPES_EVERY": "1", "KNOWLEDGE_DUPES_DELAY": "0", "KNOWLEDGE_DUPES_DEBOUNCE": "0", "KNOWLEDGE_WATCH_DEVICE": "laptop", "KNOWLEDGE_TASK_STALLED": "1", "KNOWLEDGE_TASK_LEASE": "600", "KNOWLEDGE_TASK_CHECK": "1", "KNOWLEDGE_RESCAN": "2", "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}",
            "KNOWLEDGE_MATRIX_URL": ghurl, "KNOWLEDGE_MATRIX_ROOM": "!room:example", "KNOWLEDGE_MATRIX_TOKEN": "mx",
-           "KNOWLEDGE_NEEDS_QUIET": "2", "KNOWLEDGE_PUBLIC_URL": "https://kn.example"}
+           "KNOWLEDGE_NEEDS_QUIET": "2", "KNOWLEDGE_UI_GAP_WAIT": "0.5", "KNOWLEDGE_PUBLIC_URL": "https://kn.example"}
     proc = subprocess.Popen([sys.executable, str(Path(__file__).with_name("server.py"))], env=env)
     try:
         for _ in range(50):
@@ -1617,6 +1788,14 @@ def main():
         got = {c["session"]: c for c in row["clients"]}
         assert got["cx-77"]["agent"] == "codex" and got["cx-77"]["wake"] is True and got["cx-77"]["project"] == "garden", got
         assert "b-1" not in got, got
+        # A plugin before 0.15 (no machine id) is online while it has turns, not for the 2 h its session is kept.
+        old_row = lambda: next(r for r in json.loads(raw("GET", "/ui/api/machines", headers=ck)[2])["machines"] if r["id"] == f"token:{frname}")
+        assert old_row()["online"]
+        cl = json.loads((tmp / "clients.json").read_text())
+        for c in cl[frname].values():
+            c["at"] -= 600
+        (tmp / "clients.json").write_text(json.dumps(cl))
+        assert not old_row()["online"], old_row()
         # POST /status: hook failures per token and agent (last 20, a week), shown on the Tasks tab's sessions.
         err = lambda i, **k: {"hook": "docs-sync.py", "event": "PostToolUse", "code": "1", "stderr": f"boom {i}\ntrace", "at": time.time() - 30 + i / 100, **k}
         assert http("POST", "/status", {"agent": "codex", "plugin": "0.13.0", "errors": [err(i) for i in range(25)]}, token=fr) == (200, '{"stored":20}')
@@ -1959,6 +2138,8 @@ def main():
         board_contract(tmp, ck, fr, raw, er, et)
         needs_contract(tmp, ck, fr, raw, heard)
         approvals_contract(tmp, ck, fr, raw, er, et)
+        flow_contract(tmp, ck, fr, raw, heard)
+        ui_gap_contract(tmp, ck, raw)
         mission_contract(tmp, ck, fr, raw, er)
         # The folder link (.knowledge-project, skill knowledge-init): her token now sees two projects, so the folder picks.
         assert "not linked to a project" in http("GET", "/context/1?project=/home/erin/stuff", token=et)[1]

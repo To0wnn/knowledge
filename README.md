@@ -120,7 +120,8 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   to commit, write the hand-over line `[<agent with room>, <ID>-cont] from <original requester> ... done: ...; left: ...` (the result still goes back to whoever asked first) and end, and is stopped
   after two minutes. A result handed back never starts anything by itself.
 - **Remote control:** the owner of a machine steers it from the Machines list with fixed actions only: start a worker
-  for a ready task, stop a worker, roll a YOLO worker back, trust hooks, update the plugin, YOLO on or off per agent
+  for a ready task, stop a worker, restart a worker that ended (`restart`: at once, past the companion's 6 h hold;
+  queued as its own start), roll a YOLO worker back, trust hooks, update the plugin, YOLO on or off per agent
   (on needs the word YOLO typed in a dialog), workers allowed, max workers, link or unlink a folder (only folders the
   companion listed itself). The server queues them per machine (`POST /ui/api/machines/action`); the companion pulls
   them about every 10 seconds (`GET /machine/actions`), runs them with its own code and reports the result; an
@@ -132,14 +133,17 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   project. The header filters Inbox, Chats and Tasks to one project ("show all" says how many Needs-you items the
   filter hides) and shows when the fullest usage window resets. Its columns, each grouped per project with a count: **Needs you** (a chat whose agent
   answered and you have not opened since, a refused tool call or error in its last turn, a failed worker of the last
-  week, a task line waiting for your approval, a task woken that nobody took), **Running** (chat turns, workers, task
+  week with the companion's reason (`why`), a worker whose pc went offline ("pc offline since <time>", no Stop), a
+  task line waiting for your approval, a task woken that nobody took, a result or hand-over to a person (`result`:
+  read it, then remove the line; it never starts anything), a task whose "start after" task was cancelled
+  (`blocked`)), **Running** (chat turns, workers, task
   lines a session holds), **Open** (task lines for an agent, with where they will run and a "Start on <pc>" button
   per pc that may take it) and **Done (24 h)** (chats read, workers ended, results handed back). Opening a chat marks
   it read (chats from before 0.17 count as read; a turn you stopped yourself and replies older than a week do not
   need you). Dismiss takes a Needs-you item off your own board until it changes (stored per person on the server,
   `POST /ui/api/board/dismiss`). With Matrix configured (`KNOWLEDGE_MATRIX_URL/ROOM/TOKEN`), a new Needs-you item on
-  an admin's board gives one Matrix message in that room, with a link to `<KNOWLEDGE_PUBLIC_URL>/ui#/inbox` (a chat:
-  `#/chats/<chat id>`): once per item and version (the key and signature Dismiss uses), at most
+  an admin's board gives one Matrix message in that room, with a link to the item itself,
+  `<KNOWLEDGE_PUBLIC_URL>/ui#/inbox/<key>` (every board item has a stable `key`): once per item and version (the key and signature Dismiss uses), at most
   `needs_per_hour` an hour (admin page, Settings; 0 = off, default 6; more at once give one summary, the rest wait
   for room), and none while an admin has the board open (polled in the last 2 minutes: they see it there). A woken
   task nobody took keeps its own notice, now with the same link. Non-admins get none: the room is the admin's. A card opens its chat (Esc or Back returns), a task its memo line, a worker how to look
@@ -148,7 +152,9 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   the upstream on main itself), which the companion counts once a round per folder with `GIT_OPTIONAL_LOCKS=0` and
   sends in its report (the linked folder only, `-- .`, also inside a bigger repo); a tap asks that pc for the diff (`POST /ui/api/git/diff`, handed to the companion with the chat
   messages, answered on `POST /machine/chats/diff`): the stat, untracked files by name and `git diff <merge-base>`,
-  capped at 200 kB, shown as text. A
+  capped at 200 kB, shown as text. A running worker's card also gets its `progress` from the companion's report:
+  newest commit subject, commits, changed files and the last 3 log lines (secrets masked on the pc and again on the
+  server). A
   chat is a conversation with Claude Code, Codex or agy on one of your own pcs, in a folder linked to a project there,
   as in a terminal: the answer streams in (text, plus one line per tool call or refused call), the next message
   continues the same conversation, Stop ends a running turn; **Chats** lists them beside the open one (`#/chats/<pc>/<chat>`). The server only relays, pull only like the actions: the UI posts a message
@@ -252,7 +258,16 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   topic, a note preview with connected notes, an editor, change history. Changes (per day) and Health (lint, per
   check) are full pages. Errors show as a short message at the bottom instead of a browser dialog. Tasks: the task lines between agents with from whom and when they may start, waiting ones
   greyed with the reason, stalled wakes, an Approve button for the owner, results handed back (Done removes a line),
-  as a list or as the mission map. Machines: workers, sessions, hook errors and remote actions per pc. The project
+  as a list or as the mission map. Cancel (`POST /ui/api/task/cancel`, owner or admin) turns a line into the result
+  `[<requester>, <ID>-done]: cancelled by <user>: <reason>` (a hand-over `<ID>-cont` cancels `<ID>`), so its requester
+  hears it and a task that starts after it waits for a decision instead of starting, also after the result line is
+  read and removed (the server keeps the cancellation; approving the waiting task lets it start, a new line with that ID
+  reopens it). A task a worker or session holds is not cancelled: stop the worker first. A write refuses a new task line whose date has no year (it would be no
+  task) or whose "start after <ID>" names an ID the project never had (it would start at once); a file written
+  straight to disk gets the same message as a notice at that device's next turn. A line that waits for approval
+  says so in the write's answer. Searches in the web UI that find nothing (exact and by meaning, where the person
+  stopped typing) are logged as gaps like the agents' searches. Deleted memos and docs are listed with
+  `GET /ui/api/trash` and go back with `POST /ui/api/trash/restore` (owner or admin, never over a file that exists). Machines: workers, sessions, hook errors and remote actions per pc. The project
   picker scopes only the knowledge views. An admin page for tokens, people and projects. Light or dark, your pick.
 - **Graph:** notes as nodes, links as lines, one island per topic. A line's thickness and pull follow how related two
   notes are (direct link, shared source, shared neighbours, same type); weak links between topics show on hover.

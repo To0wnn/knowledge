@@ -378,6 +378,8 @@ class Index:
                 # come after this (or never); its new task lines get their writer now
                 if WATCH_DEVICE and mem_of(rel) and (now := self.files.get(rel)):
                     note_task_authors(rel, hit[2] if hit else "", now[2], WATCH_DEVICE, keep=True)
+                    if self.loaded:  # the startup scan sees every memo as new: nobody wrote anything
+                        tell_task_problems(rel, hit[2] if hit else "", now[2])
         for rel in set(self.files) - seen:  # gone, or added while this walk ran: refresh decides
             self.refresh(rel)
 
@@ -916,6 +918,7 @@ async def knowledge_edit(path: str, old_string: str, new_string: str) -> str:
     audit("edit", rel)
     judge_soon(rel)
     replaced = kb_lint.replaced_decision(text, new.decode("utf-8")) if mem_of(rel) else ""
+    replaced += await asyncio.to_thread(approval_hint, rel, text, new.decode("utf-8"))
     return f"edited {rel} (version {version(new)})" + replaced + private_note(hidden) + await asyncio.to_thread(house_rules_hint, rel)
 
 
@@ -949,6 +952,7 @@ async def knowledge_write(path: str, content: str, base_version: str = "") -> st
     hint = await asyncio.to_thread(similar_memos_hint, rel, content) if current is None else ""  # embeds: not on the loop
     hint += kb_lint.replaced_decision((current or b"").decode("utf-8", "replace"), content) if mem_of(rel) else ""
     hint += f"\n{ARCHIVE_HINT}" if current is None and is_archive(rel) else ""
+    hint += await asyncio.to_thread(approval_hint, rel, (current or b"").decode("utf-8", "replace"), content)
     return f"wrote {rel} (version {version(data)})" + hint + private_note(hidden) + await asyncio.to_thread(house_rules_hint, rel)
 
 
@@ -1201,7 +1205,7 @@ async def knowledge_delete(path: str, base_version: str) -> str:
         data = full.read_bytes()
         if base_version != version(data):
             raise ToolError(f"{rel} changed since you read it (now {version(data)}); read it again first")
-        keep = AUDIT.parent / "deleted" / f"{time.strftime('%Y%m%d-%H%M%S')}_{rel.replace('/', '__')}"
+        keep = TRASH / f"{time.strftime('%Y%m%d-%H%M%S')}_{rel.replace('/', '__')}"
         keep.parent.mkdir(parents=True, exist_ok=True)
         keep.write_bytes(data)
         full.unlink()
@@ -1623,6 +1627,7 @@ AGENT_OWNERS = {"claude": ("claude",), "codex": ("codex",), "agy": ("gemini", "a
 TASK_CHARS = 240  # the memo holds the full text; the start context only has to make the agent look
 STALLED_AFTER = int(os.environ.get("KNOWLEDGE_TASK_STALLED", 30 * 60))  # a woken task nobody claimed this long is stalled
 TASK_AUTHORS, TASK_APPROVALS, TASK_WAKES, TASK_LEASES, TASK_IDLE = (AUDIT.parent / f"task_{n}.json" for n in ("authors", "approvals", "wakes", "leases", "idle"))
+TASK_CANCELLED = AUDIT.parent / "task_cancelled.json"  # project -> {ID: {by, at}}: kept after its result line is read and removed
 # a task that may start but that no worker and no session took this long gets one Matrix notice (where it waits and why)
 IDLE_AFTER = int(os.environ.get("KNOWLEDGE_TASK_IDLE", 30 * 60))
 LEASE = int(os.environ.get("KNOWLEDGE_TASK_LEASE", STALLED_AFTER))  # a device that took a task holds it this long without a claim marker
@@ -1711,6 +1716,43 @@ assert WORKER_HANDBACK.search("- [Claude, K-1-done]: works; branch task/K-1; don
 assert not WORKER_HANDBACK.search("- [Claude, K-1-done]: works")
 
 
+# what is meant as a task line: the owner bracket before any ':' (a plain open item may link "[a, b](...)" after its colon)
+TASK_LIKE = re.compile(r"^\s*(?:[-*+]\s+)?open (?:until|tot)\b[^:\[]*\[[^,\]]+,[^\]]+\]", re.I)
+
+
+def task_problems(rel: str, before: str, after: str) -> list[str]:
+    """What is wrong with the task lines a write adds, each a sentence for the writer: a date the server cannot read
+    (the line would silently be no task), or "start after <ID>" with an ID the project never had (it would start at
+    once, the opposite of what it says). An ID written in the same write counts: a chain may be added in one go."""
+    if not mem_of(rel) or rel.split("/", 2)[1:2] == ["sessions"] or is_archive(rel):
+        return []
+    old, out = set(before.splitlines()), []
+    for line in after.splitlines():
+        if line not in old and TASK_LIKE.match(line) and not parse_task(line):
+            out.append(f"task line '{line.strip()[:80]}' is no task line the server can read (its date), so it would be no task at all: write "
+                       "'open until <date>' as 2026-11-10 or 10 nov 2026 (always with the year). Format: " + TASK_FORMAT)
+    project = project_of(rel)
+    for t in added_tasks(rel, before, after) if project else []:
+        dep = t["start"][6:].strip() if t["start"].lower().startswith("after ") and t["start"].lower() != "after approval" else ""
+        if not dep:
+            continue
+        word = re.compile(rf"(?<![\w-]){re.escape(dep)}(?!\w)")
+        others = [x for r, x, _ in index.items(PROJECTS[project][1]) if r != rel] + [after.replace(t["body"], "")]
+        if not any(word.search(x) for x in others):
+            out.append(f"task line {t['id']} starts after {dep}, but project {project} has no task {dep} (open, handed back or "
+                       f"archived), and an unknown ID would let it start at once. Fix the ID, write {dep}'s line first (or in "
+                       "the same write), or use 'start now'.")
+    return out
+
+
+def tell_task_problems(rel: str, before: str, after: str):
+    """A session that wrote a memo file directly (the watcher or the rescan saw it) cannot be refused: it hears what is
+    wrong with its new task lines at its next turn."""
+    if WATCH_DEVICE and (problems := task_problems(rel, before, after)):
+        for p in problems:
+            add_notice(WATCH_DEVICE, project_of(rel), f"Knowledge: in {rel}, {p}", once=True)
+
+
 def refuse_bare_tasks(rel: str, before: str, after: str):
     """A new task line must say from whom and when it may start; lines already there stay as they are."""
     refuse_worker_handback(rel, before, after)
@@ -1718,12 +1760,24 @@ def refuse_bare_tasks(rel: str, before: str, after: str):
     if bare := [t["id"] for t in added if t["legacy"]]:
         raise ToolError(f"new task line {', '.join(bare)} must say from whom it is and when it may start: write it as "
                         f"{TASK_FORMAT}; 'start now' when it may start at once")
+    if problems := task_problems(rel, before, after):
+        raise ToolError(" ".join(problems))
     names = {n.lower() for n in read_json(TOKENS_FILE, {})}
     if bad := [t for t in added if t["device"] and t["device"].lower() not in names]:
         t = bad[0]
         raise ToolError(f"task line {t['id']} is pinned to device '{t['device']}' ({t['owner']}@{t['device']}), but no device "
                         "token has that name, so no device could ever start it. Use the exact token name of the device "
                         "(admin page, Tokens), or drop '@<device>' to let any device start it.")
+
+
+def approval_hint(rel: str, before: str, after: str) -> str:
+    """The answer to a write that added a task line which will not start by itself: tell the agent, so it does not
+    wait for a worker that never comes."""
+    new = {t["id"] for t in added_tasks(rel, before, after, changed=True)}
+    if not new or not (project := project_of(rel)):
+        return ""
+    return "".join(f"\nTask {t['id']} waits for the owner's approval in the Tasks tab ({t['waiting_reason']})."
+                   for t in project_tasks(project)[0] if t["id"] in new and t["path"] == rel and t["needs_approval"])
 
 
 def update_state(path: Path, change):
@@ -1759,6 +1813,8 @@ def note_task_authors(rel: str, before: str, after: str, by: str, keep: bool = F
                 {t["id"]: {"by": by, "at": int(time.time()), "sig": task_sig(t)} for t in new}))
         if not keep:
             update_state(TASK_APPROVALS, lambda d: [d.get(project, {}).pop(t["id"], None) for t in new])
+        if any(t["id"] in read_json(TASK_CANCELLED, {}).get(project, {}) for t in new):  # written again: no longer cancelled
+            update_state(TASK_CANCELLED, lambda d: [d.get(project, {}).pop(t["id"], None) for t in new])
     except OSError as e:  # the write itself happened; project_tasks still compares the line with what was recorded
         print(f"task authors not saved: {e}", flush=True)
 
@@ -1793,6 +1849,8 @@ def project_tasks(project: str) -> tuple[list[dict], list[dict]]:
                              "id": d.group(2).strip(), "text": d.group(3).strip()})
     # a hand-over <ID>-cont keeps <ID> open for "start after <ID>" until <ID>-done is there
     open_ids, done_ids = {t["id"] for t in tasks} | {CONT.sub("", t["id"]) for t in tasks}, {b["id"] for b in back}
+    # cancelled (ui_task_cancel): what starts after it waits for a decision, also once its result line was read and removed
+    cancelled = {b["id"].removesuffix("-done") for b in back if CANCELLED.match(b["text"])} | set(read_json(TASK_CANCELLED, {}).get(project, {}))
     authors, approvals, wakes, leases = (read_json(f, {}).get(project, {}) for f in (TASK_AUTHORS, TASK_APPROVALS, TASK_WAKES, TASK_LEASES))
     today, now = date.today(), time.time()
     for t in tasks:
@@ -1811,6 +1869,7 @@ def project_tasks(project: str) -> tuple[list[dict], list[dict]]:
         why = [r for r, waits in (
             ("waits for approval", start == "after approval" and not approved),
             (f"waits for {after}", after and after in open_ids and f"{after}-done" not in done_ids),
+            (f"{after} was cancelled: change or remove this line, or approve it to start anyway", after and after in cancelled and not approved),
             (f"starts {when.isoformat() if when else ''}", when and when > today),
             (f"waits for approval: written by {by or 'an unknown writer'}", start != "after approval" and not approved and not trusted),
         ) if waits]
@@ -1822,6 +1881,7 @@ def project_tasks(project: str) -> tuple[list[dict], list[dict]]:
 
 
 CONT = re.compile(r"(?:-cont)+$", re.I)  # KN-1-cont-cont continues KN-1
+CANCELLED = re.compile(r"cancelled by ", re.I)  # the text of a result line cancel_task writes
 
 
 STALE_HANDBACK_DAYS = 7  # a result nobody read and removed this long is a lint finding
@@ -1865,8 +1925,18 @@ RESULTS_HOW = ("Read each result, act on it if needed (e.g. close your own follo
 
 
 def owner_agent(owner: str) -> str:
-    owner = owner.partition("@")[0].strip().lower()
-    return next((a for a, names in AGENT_OWNERS.items() if owner in names), "")
+    """The agent an owner name means: the name itself or one of its words ("homelab Claude", "codex-2")."""
+    words = re.split(r"[\s_./-]+", owner.partition("@")[0].strip().lower())
+    return next((a for a, names in AGENT_OWNERS.items() if any(w in names for w in words)), "")
+
+
+def agent_owner(owner: str) -> bool:
+    """An owner that is an agent or a device, not a person: an agent's name, or a device token's, project's or pc's
+    name ("anpitek_c", "trade"). A result for it reaches it at its next turn; only a person's needs someone."""
+    o = owner.partition("@")[0].strip().lower()
+    names = {n.lower() for n in read_json(TOKENS_FILE, {})} | set(PROJECTS) \
+        | {str(m.get("label", "")).lower() for m in read_json(MACHINES_FILE, {}).values()}
+    return bool(owner_agent(owner)) or o in names
 
 
 assert owner_agent("Claude@pc-2") == "claude" and owner_agent("Gemini") == "agy"
@@ -2304,14 +2374,25 @@ def mark_machine(dev: dict, agent: str = "", session: str = "", project: str = "
         print(f"machines not saved: {e}", flush=True)
 
 
-def worker_hosts(project: str, agent: str) -> list[str]:
-    """The online pcs whose companion runs workers of `agent` for `project` (workers allowed, a maximum above 0, the
-    agent installed, a folder linked to the project). None: that agent's chats take its tasks themselves (as 0.14)."""
-    now = time.time()
-    return sorted(m.get("label", mid) for mid, m in read_json(MACHINES_FILE, {}).items()
-                  if (c := m.get("companion")) and now - c.get("at", 0) < ONLINE and c.get("workersAllowed")
+def worker_machines(project: str, agent: str) -> list[tuple[str, float]]:
+    """(label, last report) of every pc whose companion last said it runs workers of `agent` for `project` (workers
+    allowed, a maximum above 0, the agent installed, a folder linked to the project), online or not."""
+    return sorted((m.get("label", mid), c.get("at", 0)) for mid, m in read_json(MACHINES_FILE, {}).items()
+                  if (c := m.get("companion")) and c.get("workersAllowed")
                   and (c.get("maxWorkers") or {}).get(agent, 1) > 0 and agent in (c.get("agents") or {})
                   and any(f.get("project") == project for f in (c.get("folders") or {}).get("linked", [])))
+
+
+def worker_hosts(project: str, agent: str) -> list[str]:
+    """The online pcs of worker_machines. None: that agent's chats take its tasks themselves (as 0.14)."""
+    now = time.time()
+    return [label for label, at in worker_machines(project, agent) if now - at < ONLINE]
+
+
+def since(at: float) -> str:
+    """A past time as the UI and Matrix say it: the hour today, else the date and hour."""
+    fmt = "%H:%M" if time.strftime("%Y-%m-%d", time.localtime(at)) == time.strftime("%Y-%m-%d") else "%Y-%m-%d %H:%M"
+    return time.strftime(fmt, time.localtime(at))
 
 
 def task_where(project: str, t: dict, lease: dict | None, now: float) -> str:
@@ -2328,6 +2409,9 @@ def task_where(project: str, t: dict, lease: dict | None, now: float) -> str:
         why = sorted({w for mid, m in read_json(MACHINES_FILE, {}).items() if m.get("label", mid) in hosts  # not an offline pc's old reason
                       if (w := ((m.get("companion") or {}).get("waiting") or {}).get(f"{project}/{t['id']}"))})
         return f"goes to a worker on {', '.join(hosts)}" + (f"; waits there: {'; '.join(why)}" if why else "")
+    if gone := worker_machines(project, agent):  # its worker pcs are all offline: say which, not "none"
+        return (", ".join(f"{label} offline since {since(at)}" for label, at in gone)
+                + f": until one is back, the next {name} chat in this project starts the task")
     return f"no pc runs {name} workers for this project: the next {name} chat in it starts the task"
 
 
@@ -2383,7 +2467,8 @@ def machine_rows() -> list[dict]:
             agents = {a: {"plugin": plug.get(a, ""), "error": (status_errors(n).get(a) or [None])[-1], "workers": [],
                           "sessions": [{"project": c.get("project", ""), "task": "", "at": c["at"]} for c in old if c.get("agent") == a]}
                       for a in AGENT_OWNERS if any(c.get("agent") == a for c in old)}
-            rows.append({"id": f"token:{n}", "label": n, "old": True, "at": max(c["at"] for c in old), "online": True,
+            last = max(c["at"] for c in old)  # an old plugin reports only on a turn: online while it has turns
+            rows.append({"id": f"token:{n}", "label": n, "old": True, "at": last, "online": now - last < ONLINE,
                          "tokens": [n], "own": own_token(cfg, dev), "agents": agents, "companion": None, "actions": []})
     return sorted(rows, key=lambda r: -r["at"])
 
@@ -2956,10 +3041,14 @@ def notices_locked():
         yield [dict(n) for n in read_json(NOTICES, [])]
 
 
-def add_notice(dev: str, project: str, text: str):
+def add_notice(dev: str, project: str, text: str, once: bool = False):
+    """`once`: not when the same text waits for that device already (the rescan and the watcher, or blue and green,
+    may both see one write)."""
     now = time.time()
     NOTICES.parent.mkdir(parents=True, exist_ok=True)
     with notices_locked() as notes:
+        if once and any((n.get("device"), n.get("project"), n.get("text")) == (dev, project, text) for n in notes):
+            return
         keep = [n for n in notes if now - n.get("at", 0) < NOTICE_DAYS * 86400]
         mine = [n for n in keep if (n.get("device"), n.get("project")) == (dev, project)]
         drop = {id(n) for n in mine[:-19]}  # each device and project its own 20: a guest cannot push out another's
@@ -3101,6 +3190,7 @@ async def invalidate_route(request: Request):
         for p in paths:
             if mem_of(p) and (hit := index.files.get(p)):
                 note_task_authors(p, before.get(p, ""), hit[2], WATCH_DEVICE)
+                tell_task_problems(p, before.get(p, ""), hit[2])
     if WATCH_DEVICE:  # sessions that write memo files directly (not through knowledge_write) hear about duplicates too
         for p in paths:
             judge_soon(p, WATCH_DEVICE, keep=True)
@@ -3755,7 +3845,7 @@ def external_write(rel: str, text: str):
 def external_delete(rel: str):
     full, rel = resolve(rel, scoped=False)
     if full.is_file():
-        keep = AUDIT.parent / "deleted" / f"{time.strftime('%Y%m%d-%H%M%S')}_{rel.replace('/', '__')}"
+        keep = TRASH / f"{time.strftime('%Y%m%d-%H%M%S')}_{rel.replace('/', '__')}"
         keep.parent.mkdir(parents=True, exist_ok=True)
         keep.write_bytes(full.read_bytes())
         full.unlink()
@@ -4228,7 +4318,28 @@ async def ui_semantic(request: Request):
     roots = tuple(r + "/" for r in PROJECTS[project] + ("claude",)) if project in PROJECTS else ()
     q = request.query_params.get("q", "").strip()[:500]
     hits = [h for h in await asyncio.to_thread(vec.search, q, roots, 30) if in_scope(h["path"])][:15] if q else []
+    # the UI asks this after the exact search, for every pause in typing: a query that found nothing either way is a
+    # gap like an MCP search's, once the person stopped typing it (UI_GAP_WAIT without a newer query)
+    if q and vec.matrix is not None and weak_answer(q, hits) and not await asyncio.to_thread(search_notes, q, tuple(r[:-1] for r in roots), 1):
+        ui_gap_later(q, hits[0]["score"] if hits else None)
     return JSONResponse({"hits": hits, "status": vec.status()})
+
+
+UI_GAP_WAIT = float(os.environ.get("KNOWLEDGE_UI_GAP_WAIT", 5))
+_ui_gap_last: dict[str, str] = {}  # device -> its newest web UI search that found nothing
+
+
+def ui_gap_later(q: str, score: float | None):
+    """Log a web UI search that found nothing once no newer search of the same person followed within UI_GAP_WAIT
+    seconds: "netw", "netwo" while typing are no gaps, the query they stopped at is."""
+    dev = device.get().get("name", "?")
+    _ui_gap_last[dev] = q
+
+    def still_last():
+        if _ui_gap_last.get(dev) == q:
+            _ui_gap_last.pop(dev)
+            log_gap("ui", q, score)
+    asyncio.get_running_loop().call_later(UI_GAP_WAIT, still_last)  # runs in a copy of this request's context: same device
 
 
 @server.custom_route("/ui/api/related", methods=["GET"])
@@ -4447,6 +4558,7 @@ def search_notes(q: str, roots: tuple, limit: int = 40) -> list[dict]:
 @server.custom_route("/ui/api/search", methods=["GET"])
 async def ui_search(request: Request):
     q = request.query_params.get("q", "").strip()[:200]
+    _ui_gap_last.pop(device.get().get("name", "?"), None)  # typing on: the earlier query was not where they stopped
     project = request.query_params.get("project", "")
     roots = PROJECTS[project] + ("claude",) if project in PROJECTS else ()
     return JSONResponse({"notes": await asyncio.to_thread(search_notes, q, roots) if q else []})
@@ -4474,6 +4586,11 @@ def may_approve(project: str) -> bool:
     return bool(dev.get("admin")) or bool(dev.get("user")) and dev.get("user") == project_owner(project)
 
 
+def held_now(t: dict, lease: dict | None, now: float) -> bool:
+    """A worker or session has the task: claimed in its line, or a lease that has not run out."""
+    return t["claimed"] or bool(lease) and lease.get("until", 0) >= now
+
+
 def task_rows() -> list[dict]:
     """Every task line and handed-back result in the projects this device sees, for the UI's Tasks tab; the same
     lines the session start lists, parsed into fields, with whether each may start now."""
@@ -4485,6 +4602,7 @@ def task_rows() -> list[dict]:
         approver, leases = may_approve(name), read_json(TASK_LEASES, {}).get(name, {})
         rows += [{**{k: t[k] for k in ("project", "path", "line", "owner", "id", "claimed", "text", "from", "start", "legacy",
                                         "author", "startable", "waiting_reason", "stalled", "approved")},
+                  "can_cancel": approver and not held_now(t, leases.get(t["id"]), now),
                   "runs": task_where(name, t, leases.get(t["id"]), now) if t["startable"] else "",
                   "due": t["due"].isoformat() if t["due"] else "", "overdue": bool(t["due"] and t["due"] < today),
                   "done": False, "can_approve": approver and t["needs_approval"]} for t in tasks]
@@ -4620,7 +4738,7 @@ def action_args(action: str, args: dict) -> dict:
         if not re.fullmatch(r"[\w.-]{1,60}", str(args.get("id", ""))):
             raise ValueError("id must be a task id")
         return str(args["id"])
-    if action in ("start_worker", "stop_worker", "rollback"):  # a task id is unique per project only
+    if action in ("start_worker", "stop_worker", "rollback", "restart"):  # a task id is unique per project only
         if args.get("project") not in PROJECTS or not in_scope(PROJECTS[args["project"]][1] + "/"):
             raise ValueError("unknown project")
         return {"project": args["project"], "id": tid()}
@@ -4664,6 +4782,11 @@ async def ui_machine_action(request: Request):
     row = next((r for r in await asyncio.to_thread(machine_rows) if r["id"] == mid), None)
     if not row or not row["own"] or row.get("old"):
         return JSONResponse({"error": "not a machine of your own tokens (with plugin 0.15.0 or newer)"}, status_code=403)
+    if action == "restart":  # a worker that ended: start it again now, past the companion's RESTART_AFTER hold
+        if not any(w.get("project") == args["project"] and w.get("id") == args["id"] and w.get("status") in ("failed", "stopped", "finished")
+                   for a in row["agents"].values() for w in a.get("workers", [])):
+            return JSONResponse({"error": f"no ended worker for {args['id']} on this machine"}, status_code=409)
+        action = "start_worker"  # the companion's own start (any version): `only` skips the hold
     dev, tokens = device.get(), read_json(TOKENS_FILE, {})
     item = {"id": secrets.token_hex(6), "action": action, "args": args, "by": dev.get("user", ""), "at": time.time(),
             "status": "waiting", "tokens": [n for n in row["tokens"] if n in tokens and own_token(tokens[n], dev)]}
@@ -4916,25 +5039,41 @@ def board_items() -> list[dict]:
         for a, ag in r["agents"].items():
             for w in ag.get("workers", []):
                 st, ended = w.get("status"), w.get("ended") or w.get("started") or 0
-                col = ("running" if st == "running" else "needs" if st == "failed" and now - ended < BOARD_FAILED
+                lost = st == "running" and not r["online"]  # its pc went offline: nobody knows whether it still runs
+                col = ("needs" if lost else "running" if st == "running" else "needs" if st == "failed" and now - ended < BOARD_FAILED
                        else "done" if st in ("finished", "stopped", "merged", "failed") and now - ended < BOARD_DONE else "")
                 if col:
                     items.append({**base, "kind": "worker", "col": col, "id": w.get("id"), "agent": a, "project": w.get("project"),
-                                  "key": f"worker:{r['id']}/{w.get('project')}/{w.get('id')}", "sig": f"{st}:{ended}",
+                                  "key": f"worker:{r['id']}/{w.get('project')}/{w.get('id')}", "sig": f"{st}:{ended}" + (":offline" if lost else ""),
                                   "title": w.get("id"), "at": w.get("started") if st == "running" else ended,
-                                  "line": f"worker {st}" + (f" · {w['branch']}" if w.get("branch") else ""), "git": w.get("git"),
-                                  "status": st, "open": w.get("open") or "", "checkpoint": bool(w.get("checkpoint"))})
+                                  "line": (f"pc offline since {since(r['at'])}" if lost else f"worker {st}" + (f": {w['why']}" if w.get("why") else ""))
+                                          + (f" · {w['branch']}" if w.get("branch") else ""),
+                                  "offline_since": r["at"] if lost else None, "can_stop": st == "running" and r["online"],
+                                  "can_restart": st in ("failed", "stopped", "finished") and r["online"],
+                                  "git": w.get("git"), "status": st, "open": w.get("open") or "", "checkpoint": bool(w.get("checkpoint")),
+                                  "why": w.get("why") or "", "progress": w.get("progress") if st == "running" else None})
     working = {(i["project"], i["id"]) for i in items if i["kind"] == "worker" and i["col"] == "running"}
     for t in task_rows():
         agent = owner_agent(t["owner"])
+        key = f"task:{t['project']}/{t['id']}"
+        sig = hashlib.sha256(f"{t['line']}|{t.get('stalled')}|{t['done']}".encode()).hexdigest()[:16]
+        to_person = t["done"] and not agent_owner(t["owner"]) or not t["done"] and CONT.search(t["id"]) and t["from"] and not agent_owner(t["from"])
+        if to_person:  # handed back (or over) to a person: they read it, then remove the line; it never starts anything
+            what = (f"result for {t['owner']}: " if t["done"] else f"handed over to {t['owner']} for {t['from']}: ") + t["text"][:140]
+            items.append({"kind": "task", "col": "needs", "id": t["id"], "agent": agent, "project": t["project"], "path": t["path"],
+                          "title": f"{t['id']} · {t['text'][:120]}", "line": what, "at": t.get("since") or 0, "owner": t["owner"],
+                          "key": key if t["done"] else f"handover:{t['project']}/{t['id']}", "sig": sig, "result": True})
+            if t["done"]:
+                continue
         if not agent or (t["project"], t["id"]) in working:  # a person's line is not an agent's work; a running worker shows it
             continue
         task = {"kind": "task", "id": t["id"], "agent": agent, "project": t["project"], "title": f"{t['id']} · {t['text'][:120]}",
-                "path": t["path"], "line": "", "at": 0, "owner": t["owner"], "key": f"task:{t['project']}/{t['id']}",
-                "sig": hashlib.sha256(f"{t['line']}|{t.get('stalled')}|{t['done']}".encode()).hexdigest()[:16]}
+                "path": t["path"], "line": "", "at": 0, "owner": t["owner"], "key": key, "sig": sig, "can_cancel": t.get("can_cancel", False)}
         if t["done"]:
             if now - (t.get("since") or 0) < BOARD_DONE:
                 items.append({**task, "col": "done", "line": f"handed back to {t['owner']}", "at": t.get("since") or 0})
+        elif "was cancelled" in t["waiting_reason"]:
+            items.append({**task, "col": "needs", "line": t["waiting_reason"], "blocked": True, "approve": may_approve(t["project"])})
         elif t["can_approve"]:
             items.append({**task, "col": "needs", "line": "waits for your approval", "approve": True})
         elif t["stalled"]:
@@ -4964,7 +5103,7 @@ async def ui_board_dismiss(request: Request):
     try:
         b = await request.json()
         key, sig = str(b.get("key", "")), str(b.get("sig", ""))
-        if not user or not re.fullmatch(r"(chat|worker|task):[\w./-]{1,200}", key) or not 0 < len(sig) <= 80:
+        if not user or not re.fullmatch(r"(chat|worker|task|handover):[\w./-]{1,200}", key) or not 0 < len(sig) <= 80:
             raise ValueError("send JSON {key, sig} of a board item")
     except (ValueError, AttributeError) as e:
         return JSONResponse({"error": str(e)}, status_code=400)
@@ -4986,9 +5125,10 @@ BOARD_SEEN: dict[str, float] = {}  # user -> last /ui/api/board poll (this proce
 
 
 def needs_link(i: dict) -> str:
+    """The item itself in the inbox (#/inbox/<key>: the UI opens it; an older UI shows the inbox)."""
     if not PUBLIC_URL:
         return ""
-    return f" {PUBLIC_URL}/ui#/" + (f"chats/{i['id']}" if i["kind"] == "chat" else "inbox")
+    return f" {PUBLIC_URL}/ui#/inbox/" + urllib.parse.quote(i["key"], safe=":/")
 
 
 def needs_check(now: float) -> int:
@@ -5006,7 +5146,7 @@ def needs_check(now: float) -> int:
         tok = device.set(user_device(user))
         try:
             mine = [i for i in board_items() if i["col"] == "needs"
-                    and not (i["kind"] == "task" and not i.get("approve"))]  # a stalled task has its own notice (stalled_check)
+                    and not (i["kind"] == "task" and not (i.get("approve") or i.get("result") or i.get("blocked")))]  # a stalled task has its own notice (stalled_check)
         finally:
             device.reset(tok)
         needs.update((i["key"], i) for i in mine)
@@ -5029,6 +5169,9 @@ def needs_check(now: float) -> int:
     else:
         held = {i["key"] for i in fresh}  # over the limit: told once the hour has room
     items = {k: (told[k] if k in held and k in told else i["sig"]) for k, i in needs.items() if k not in held or k in told}
+    # a pc that sleeps and wakes leaves Needs you and comes back with the same worker run: told once per run
+    naps = sorted(k for k, v in told.items() if k not in items and str(v).endswith(":offline"))
+    items.update({k: told[k] for k in naps[-200:]})
     if state is None or items != told or len(sent) != len(state.get("sent", [])):
         write_json(NEEDS_NOTIFIED, {"items": items, "sent": sent})
     BACKGROUND["needs"] = {"at": now, "detail": f"{len(needs)} item(s) need an admin, {len(sent)} message(s) this hour"}
@@ -5390,6 +5533,17 @@ def git_pill(g) -> dict | None:
             "changed": num("changed"), "ahead": num("ahead"), "behind": num("behind")}
 
 
+def worker_progress(p) -> dict | None:
+    """A running worker's progress snapshot from its companion: newest commit subject, commits and changed files, the
+    last 3 log lines; known secrets masked again here and every string capped. None when it sent none."""
+    if not isinstance(p, dict):
+        return None
+    num = lambda k: max(0, min(int(p[k]), 10**6)) if type(p.get(k)) is int else 0
+    log = p.get("log") if isinstance(p.get("log"), list) else []
+    return {"commit": redact(str(p.get("commit") or "")[:200]), "commits": num("commits"), "changed": num("changed"),
+            "log": [redact(str(x)[:300]) for x in log[-3:]]}
+
+
 @server.custom_route("/machine/report", methods=["POST"])
 async def machine_report(request: Request):
     """The companion's state every round: version, workers allowed, max workers, game session, per agent YOLO, hooks
@@ -5408,8 +5562,8 @@ async def machine_report(request: Request):
                                  "resets": float(v["resets"]) if isinstance(v.get("resets"), (int, float)) else None}
                              for a, v in (b.get("agents") or {}).items() if a in AGENT_OWNERS and isinstance(v, dict)},
                   "workers": [{k: (w.get(k) if w.get(k) is None or isinstance(w.get(k), (int, float, bool)) else str(w[k])[:300])
-                               for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open", "checkpoint", "merged")}
-                              | {"git": git_pill(w.get("git"))}
+                               for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open", "checkpoint", "merged", "why")}
+                              | {"git": git_pill(w.get("git")), "progress": worker_progress(w.get("progress"))}
                               for w in (b.get("workers") or [])[:40] if isinstance(w, dict)],
                   "folders": {k: [{"path": str(f.get("path", ""))[:500], "project": str(f.get("project", ""))[:80]}
                                   | ({"git": git_pill(f.get("git"))} if k == "linked" else {})
@@ -5455,6 +5609,36 @@ async def ui_task_approve(request: Request):
     return JSONResponse({"ok": True})
 
 
+@server.custom_route("/ui/api/task/cancel", methods=["POST"])
+async def ui_task_cancel(request: Request):
+    """{"project", "id", "reason"}: the project's owner or an admin cancels an open task. Its line becomes a result for
+    its requester, "[<requester>, <ID>-done]: cancelled by <user>: <reason>", in one edit: the requester hears it like
+    any result, and a task that starts after <ID> waits for a decision instead of starting as on a plain removal."""
+    try:
+        body = await request.json()
+        project, tid, reason = str(body.get("project", "")), str(body.get("id", "")), " ".join(str(body.get("reason", "")).split())[:300]
+    except (ValueError, AttributeError):
+        return JSONResponse({"error": "send JSON {project, id, reason}"}, status_code=400)
+    if project not in PROJECTS or not in_scope(PROJECTS[project][1] + "/"):
+        return JSONResponse({"error": f"unknown project {project}"}, status_code=404)
+    if not may_approve(project):
+        return JSONResponse({"error": "only the project's owner or an admin may cancel a task"}, status_code=403)
+    if not (t := next((t for t in (await asyncio.to_thread(project_tasks, project))[0] if t["id"] == tid), None)):
+        return JSONResponse({"error": f"no open task {tid} in {project}"}, status_code=404)
+    if held_now(t, read_json(TASK_LEASES, {}).get(project, {}).get(tid), time.time()):
+        return JSONResponse({"error": f"{tid} is being worked on: stop the worker first (Machines), then cancel"}, status_code=409)
+    user, base = device.get().get("user", "") or "?", CONT.sub("", tid)  # a hand-over X-cont cancels X: its result is X-done
+    lead = t["line"][:len(t["line"]) - len(t["line"].lstrip())]
+    done = f"{lead}- [{t['from'] or t['owner']}, {base}-done]: cancelled by {user}" + (f": {reason}" if reason else "")
+    try:
+        await knowledge_edit(t["path"], t["line"], done)
+    except (ToolError, OSError) as e:
+        return JSONResponse({"error": str(e)}, status_code=409)
+    await asyncio.to_thread(update_state, TASK_CANCELLED, lambda d: d.setdefault(project, {}).update({base: {"by": user, "at": int(time.time())}}))
+    audit("task-cancel", f"{project}/{tid}")
+    return JSONResponse({"ok": True, "line": done})
+
+
 @server.custom_route("/ui/api/task/done", methods=["POST"])
 async def ui_task_done(request: Request):
     """Remove one task line (finished) from its memo; the file history keeps it."""
@@ -5468,6 +5652,76 @@ async def ui_task_done(request: Request):
     except (ToolError, OSError, ValueError, AttributeError) as e:  # a bad body or a gone file: no 500
         return JSONResponse({"error": str(e)}, status_code=409)
     return JSONResponse({"ok": True})
+
+
+# ---------------------------------------------------------------- Trash: the copies knowledge_delete keeps
+TRASH = AUDIT.parent / "deleted"
+TRASH_NAME = re.compile(r"(\d{8}-\d{6})_([^/\\]+)")
+
+
+def trash_rel(name: str) -> str:
+    """The shared path a delete copy came from: "20261101-120000_memory__archive__x.md" -> "memory/archive/x.md". A
+    "__" stays in the name where no folder of that name exists ("memory/a__b.md"). "" for anything else."""
+    m = TRASH_NAME.fullmatch(name)
+    parts = m.group(2).split("__") if m else []
+    if len(parts) < 2 or parts[0] not in ROOTS:
+        return ""
+    sub = parts[1]
+    for p in parts[2:]:
+        sub += ("/" if (ROOTS[parts[0]] / sub).is_dir() else "__") + p
+    return f"{parts[0]}/{sub}"
+
+
+def may_restore(rel: str) -> bool:
+    """Owner or admin only: an admin anything, a project's owner the files of their own project."""
+    return bool(device.get().get("admin")) or bool(project := project_of(rel)) and may_approve(project)
+
+
+def trash_rows() -> list[dict]:
+    """The deleted memos and docs this person sees, newest first: name (the restore key), path, when, size, whether a
+    file is at that path again, and whether this person may restore it."""
+    rows = []
+    for f in sorted(TRASH.iterdir(), reverse=True) if TRASH.is_dir() else []:
+        if not (rel := trash_rel(f.name)) or not in_scope(rel):
+            continue
+        try:
+            exists, size = resolve(rel)[0].exists(), f.stat().st_size
+        except (ToolError, OSError):
+            continue
+        at = time.mktime(time.strptime(f.name[:15], "%Y%m%d-%H%M%S"))
+        rows.append({"name": f.name, "path": rel, "project": project_of(rel), "deleted": at, "size": size, "exists": exists,
+                     "can_restore": not exists and may_restore(rel)})
+    return rows[:500]
+
+
+@server.custom_route("/ui/api/trash", methods=["GET"])
+async def ui_trash(request: Request):
+    return JSONResponse({"items": await asyncio.to_thread(trash_rows)})
+
+
+@server.custom_route("/ui/api/trash/restore", methods=["POST"])
+async def ui_trash_restore(request: Request):
+    """{"name"}: put a deleted file back where it was, as it was; never over a file that is there again."""
+    try:
+        name = str((await request.json()).get("name", ""))
+    except (ValueError, AttributeError):
+        return JSONResponse({"error": "send JSON {name}"}, status_code=400)
+    src = TRASH / name
+    if not (rel := trash_rel(name)) or not in_scope(rel) or not src.is_file():
+        return JSONResponse({"error": f"no deleted file {name}"}, status_code=404)
+    if not may_restore(rel):
+        return JSONResponse({"error": "only the project's owner or an admin may restore a file"}, status_code=403)
+    try:
+        full, rel = resolve(rel)
+        check_writable(rel)
+        async with _locks.setdefault(rel, asyncio.Lock()):
+            if full.exists() or not replace_if_unchanged(full, None, src.read_bytes()):
+                return JSONResponse({"error": f"{rel} exists again: restoring would overwrite it; open both and merge by hand"}, status_code=409)
+            index.refresh(rel)
+    except (ToolError, OSError) as e:
+        return JSONResponse({"error": str(e)}, status_code=409)
+    audit("restore", rel)
+    return JSONResponse({"ok": True, "path": rel})
 
 
 @server.custom_route("/ui/api/ingest", methods=["POST"])
