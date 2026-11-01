@@ -355,7 +355,12 @@ const bd = { view: { x: 0, y: 0, k: 1 }, pointers: new Map(), dragged: false, pi
 const bdWide = matchMedia("(min-width: 1000px)");
 bdWide.addEventListener("change", () => ckLayout());
 const bdOn = () => shellRoute.view === "chats" && !shellRoute.arg && shellRoute.q.get("view") === "board" && bdWide.matches;
-function bdSaved() { try { return { pos: {}, shut: [], ...JSON.parse(store.get("kn_board") || "{}") }; } catch { return { pos: {}, shut: [] }; } }
+function bdSaved() {
+  try {
+    const b = JSON.parse(store.get("kn_board") || "{}") || {}; // a damaged entry must not break every render
+    return { pos: b.pos && typeof b.pos === "object" && !Array.isArray(b.pos) ? b.pos : {}, shut: Array.isArray(b.shut) ? b.shut : [] };
+  } catch { return { pos: {}, shut: [] }; }
+}
 const bdSave = (b) => store.set("kn_board", JSON.stringify(b));
 
 // The layout, pure (ui_smoke checks it): projects left to right in name order, each a frame with its chats in a

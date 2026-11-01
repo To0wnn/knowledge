@@ -1623,6 +1623,7 @@ async function ckPoll(card) {
   if (res.trimmed && !card.after && res.events.length) card.log.append(el("p", "ck-line info", "Older output was trimmed (the chat keeps its newest part)."));
   const near = card.log.scrollHeight - card.log.scrollTop - card.log.clientHeight < 80;
   for (const e of res.events) {
+    if (e.n <= card.after) continue; // two polls crossed (board + chat): never append an event twice
     card.after = Math.max(card.after, e.n);
     const last = card.log.lastElementChild;
     if (e.kind === "text") { // Markdown, sanitized as a note is (DOMPurify): an agent's output never becomes script
