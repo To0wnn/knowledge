@@ -1201,9 +1201,10 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         # Without YOLO a worker gets exactly what its task needs, in each agent's own way; one that ends with exit 0 but
         # left its task open (its tools refused, say) is a failure, said in the activity log, not a quiet "finished".
         allowed = cl["argv"][cl["argv"].index("--allowedTools") + 1:] if "--allowedTools" in cl["argv"] else []
-        check(allowed == ["mcp__plugin_knowledge_knowledge", "mcp__knowledge", "Bash(git status:*)", "Bash(git diff:*)", "Bash(git log:*)",
-                          "Bash(git add:*)", "Bash(git commit:*)", "Bash(git branch --show-current)"],
-              "workers: Claude without YOLO may use the knowledge tools and git status/diff/log/add/commit, nothing else (no push, no git -C)", json.dumps(cl["argv"][3:]))
+        check(allowed == ["mcp__plugin_knowledge_knowledge", "mcp__knowledge", "Bash(git status:*)", "Bash(git add:*)", "Bash(git commit:*)",
+                          "Bash(git branch --show-current)", "Bash(git diff)", "Bash(git diff --stat)", "Bash(git diff --cached)", "Bash(git log)",
+                          "Bash(git log --oneline)", "Bash(git log -1)", "Bash(git log --stat -1)"],
+              "workers: Claude without YOLO may use the knowledge tools, git status/add/commit and diff/log only in fixed forms (no --output), nothing else (no push, no git -C)", json.dumps(cl["argv"][3:]))
         yolo_file.write_text(json.dumps({}), encoding="utf-8")
         mcp({"path": "garden-memory/project_companion.md", "old_string": "## Keuzes",
              "new_string": "- open tot 1 jan 2099 [Gemini, CMP-QUIT] from Claude, start now: a worker that does nothing\n## Keuzes"})
@@ -1215,12 +1216,12 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         rules = ag["argv"][ag["argv"].index("--settings") + 1] if "--settings" in ag["argv"] else ""
         rules = json.loads(Path(rules).read_text(encoding="utf-8")) if rules and Path(rules).is_file() else {}
         check(ag["argv"][:2] == ["agy", "-p"] and ag["argv"][3:5] == ["--mode", "accept-edits"] and "--dangerously-skip-permissions" not in ag["argv"]
-              and rules.get("permissions", {}).get("allow") == ["command(git status)", "command(git diff)", "command(git log)", "command(git add)",
+              and rules.get("permissions", {}).get("allow") == ["command(git status)", "command(git add)",
                                                                  "command(git commit)", "command(git branch --show-current)", "mcp(knowledge_knowledge/*)", "mcp(knowledge/*)"]
               and {Path(d[11:-1]).name for d in rules["permissions"].get("deny", [])} == {".git", ".gitattributes", ".gitmodules"}
               and all(Path(d[11:-1]).parent.resolve() == Path(ag["cwd"]).resolve() for d in rules["permissions"]["deny"])
               and "'core.fsmonitor'='false'" in ag["env"].get("GIT_CONFIG_PARAMETERS", ""),
-              "workers: agy without YOLO gets allow rules for this session only (--settings): knowledge tools and git status/diff/log/add/commit, "
+              "workers: agy without YOLO gets allow rules for this session only (--settings): knowledge tools and git status/add/commit (no diff/log: --output), "
               "and may never write git's own files in its worktree; its git runs without fsmonitor or hooks",
               json.dumps(ag["argv"][3:]) + json.dumps(rules))
         wait_for(lambda: (call("POST", "/local/api/tick", {}) and False) or json.loads(wfile.read_text(encoding="utf-8")).get("garden/CMP-QUIT", {}).get("status") != "running", 20)

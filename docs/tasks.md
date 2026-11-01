@@ -50,7 +50,8 @@ The companion that starts workers is described in [companion.md](companion.md); 
   task: a fresh headless session of the task's agent (Claude Code `claude -p --output-format stream-json`, Codex
   `codex exec --json`, agy `agy -p`) in its own git worktree on branch `task/<ID>` (`~/.knowledge/worktrees/`), or in
   the project folder when that is no git repository. Without YOLO a worker may do what its task needs and no more: edit
-  its own folder, use the knowledge tools, and run `git status/diff/log/add/commit` (no push, no other command; a
+  its own folder, use the knowledge tools, and run `git status/add/commit`, plus `git diff`/`git log` in fixed forms for Claude only
+  (`--output=<file>` would write anywhere, .git/config included; agy rules are prefixes, so agy gets none) (no push, no other command; a
   headless run cannot ask, so the rest is refused). Each agent the native way: Claude `--permission-mode acceptEdits`
   plus `--allowedTools`; agy `--mode accept-edits` plus allow rules for that session only (`--settings`, never saved);
   Codex `-s workspace-write` with only the worktree's git folder and the repository's objects, refs and logs writable
@@ -71,12 +72,15 @@ The companion that starts workers is described in [companion.md](companion.md); 
   worktree was made from (`base_branch`). When it ended and its result line `[<requester>, <ID>-done]` names its branch,
   the Inbox shows a **Review** card under Needs you (`kind: review`): commits ahead of that branch, changed files, the
   newest commit, the worker's done/left and the clause of its done text about tests (the server runs nothing).
-  **Merge** is the machine action `merge` (owner only): in the main checkout, only when it is on that branch with no
-  uncommitted changes, `git merge --no-ff --no-edit task/<ID>` without hooks or fsmonitor; a conflict is aborted and
-  reported as "conflict: merge by hand"; never pushed. **Reject** (`POST /ui/api/review/reject {key, reason,
+  **Merge** is the machine action `merge` (owner only): in the main checkout `git merge --no-ff -m "Merge task/<ID>"`
+  without hooks, fsmonitor or signing, only when that checkout is on that branch, has no uncommitted changes and no
+  merge, cherry-pick, revert or rebase of its own going on, and no file the branch adds is already on disk (an ignored
+  `.env` would be replaced). Never when the branch changes `.gitattributes`, `.gitmodules` or `.lfsconfig` or
+  `.git/config` changed since the worker started (hash recorded at start): the card says why, merge by hand. A conflict
+  is aborted and reported as "conflict: merge by hand"; never pushed. **Reject** (`POST /ui/api/review/reject {key, reason,
   send_back}`) keeps the branch and takes the card off with its reason; with "send back" and a reason the result line
-  becomes `- open until <date> [<agent>, <ID>-fix] from <user>, start now: ...`, which a worker continues on the same
-  branch. Once the requester merged the branch into main, master or that base branch, the companion removes the
+  becomes `- open until <date> [<agent>@<that pc's token>, <ID>-fix] from <user>, start now: ...`, which a worker on
+  that pc continues on the same branch (`<ID>-fix` keeps `start after <ID>` waiting, like `-cont`). Once the requester merged the branch into main, master or that base branch, the companion removes the
   worktree; unmerged a week after the worker ended: lint `worker_unmerged`. While an online pc runs an agent's workers
   for the project (workers allowed, a maximum above 0, the agent installed, a folder linked), that agent's interactive
   sessions (`chat=1`) take no lease: they hear a new task once as "runs in workers" and where one runs; when the user

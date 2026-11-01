@@ -833,7 +833,7 @@ def start_worker(t: dict, tok: str, now: float, ws: dict = None) -> tuple:
         # a branch rolled back to that point is never taken for merged
         first = min((w for w in (ws or {}).values() if where.get("worktree") and w.get("worktree") == where["worktree"] and w.get("base")),
                     key=lambda w: w.get("started", 0), default=None)
-        where = {**where, **{k: first[k] for k in ("base", "base_branch") if first.get(k)}} if first else where
+        where = {**where, **{k: first[k] for k in ("base", "base_branch", "config") if first.get(k)}} if first else where
         yolo = bool(load("yolo.json", {}).get(t["agent"], {}).get("on"))
         rec = workers.start(t["agent"], t, token_store.machine().get("label") or socket.gethostname(), where, yolo, nonce)
     except Exception as e:
@@ -1100,12 +1100,13 @@ def review(w: dict, now: float):
         return None
     run = lambda *a: workers.git(w["repo"], *a, env=GIT_RO, timeout=10)
     try:
-        n = run("rev-list", "--count", f"{into}..refs/heads/{b}")
+        n = run("rev-list", "--count", f"refs/heads/{into}..refs/heads/{b}")
         if n.returncode:
             return None
-        files = run("diff", "--name-only", "--no-color", f"{into}...refs/heads/{b}").stdout.splitlines()
+        files = run("diff", "--name-only", "--no-color", f"refs/heads/{into}...refs/heads/{b}").stdout.splitlines()
         return {"into": into, "ahead": int(n.stdout.strip() or 0), "files": files[:15], "nfiles": len(files),
-                "commit": mask(run("log", "-1", "--format=%s", f"refs/heads/{b}").stdout.strip())[:TAIL_WIDTH]}
+                "commit": mask(run("log", "-1", "--format=%s", f"refs/heads/{b}").stdout.strip())[:TAIL_WIDTH],
+                "blocked": workers.merge_block(w)}  # why Merge may not run here: the card says so instead of offering it
     except (OSError, subprocess.SubprocessError, ValueError):
         return None
 
