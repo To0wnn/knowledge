@@ -773,9 +773,28 @@ def usage(agent: str, ws: dict, now: float):
 
 
 def usage_info(agent: str, ws: dict, now: float):
-    """(percent, window, resets_at) of the agent's fullest usage window, or None (unknown): Claude the higher of its
-    workers' own stream-json output (until that window resets) and an interactive Claude's status line under 15 min
-    old; Codex from its newest rollout of the last 15 min; agy from a registered agy's language server."""
+    """(percent, window, resets_at) of the agent's fullest usage window, or None (unknown). Codex and agy only tell it
+    while a session runs, so the last reading is kept until its window resets: usage does not go down before that."""
+    got = usage_live(agent, ws, now)
+    f = STATE / f"usage-{agent}.json"
+    if got:
+        try:
+            write_json(f, {"got": list(got), "at": now})
+        except OSError:
+            pass
+        return got
+    try:
+        old = json.loads(f.read_text(encoding="utf-8"))
+        pct, window, resets = old["got"]
+        return (pct, window, resets) if resets and resets > now else None  # shortcut: another pc may have used more since
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def usage_live(agent: str, ws: dict, now: float):
+    """Claude the higher of its workers' own stream-json output (until that window resets) and an interactive Claude's
+    status line under 15 min old; Codex from its newest rollout of the last 15 min; agy from a registered agy's
+    language server."""
     try:
         if agent == "claude":
             logs = sorted((Path(w["log"]) for w in ws.values() if w.get("agent") == "claude" and w.get("log") and Path(w["log"]).exists()),
@@ -1597,6 +1616,12 @@ def main(argv: list):
         tmp_state = tempfile.mkdtemp()  # the checks log and save: never into this pc's real activity log
         atexit.register(shutil.rmtree, tmp_state, True)
         globals()["STATE"] = Path(tmp_state)
+        live = {"v": (42.0, "7d", 2000.0)}  # the last reading lasts until its window resets
+        real_live, globals()["usage_live"] = usage_live, lambda a, ws, now: live["v"]
+        assert usage_info("agy", {}, 1000) == (42.0, "7d", 2000.0)
+        live["v"] = None
+        assert usage_info("agy", {}, 1500) == (42.0, "7d", 2000.0) and usage_info("agy", {}, 2500) is None
+        globals()["usage_live"] = real_live
         t = '# mine\napproval_policy = "on-request" # keep\n\n[notice]\nother = 1\n\n[projects."/x"]\ntrust_level = "trusted"\n'
         t2, old = toml_set(t, None, "approval_policy", '"never"')
         assert old == '"on-request" # keep' and 'approval_policy = "never"\n' in t2, t2
