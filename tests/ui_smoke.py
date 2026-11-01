@@ -438,7 +438,7 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
     needs = await pg.locator("#ck-board .ck-col-needs .ck-item").count()  # also the ones folded into a group
     badge = await pg.locator("#sidebar .inbox-count").inner_text()
     check(badge == (str(needs) if needs else ""), f"the Inbox badge counts Needs you ({badge!r} vs {needs})")
-    hot = await pg.evaluate("[...document.querySelectorAll('#sidebar .badge')].filter(b => b.textContent && getComputedStyle(b).backgroundColor === getComputedStyle(document.querySelector('.ck-col-needs .ck-count') || document.body).backgroundColor).map(b => b.className)")
+    hot = await pg.evaluate("[...document.querySelectorAll('#sidebar .badge')].filter(b => b.textContent && b.classList.contains('hot')).map(b => b.className)")
     check(all("inbox-count" in c for c in hot), f"only the Inbox badge wears the accent {hot}")
     await pg.click("#ck-new")
     await pg.wait_for_selector("#ck-new-dialog[open]")

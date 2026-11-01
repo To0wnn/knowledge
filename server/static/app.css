@@ -529,11 +529,11 @@ body.admin-page { display: block; overflow-y: auto; }
 .ck-board > .ck-elsewhere { grid-column: 1 / -1; justify-self: start; }
 .ck-done-toggle { display: none; }
 .ck-col { min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: var(--r-lg); background: color-mix(in srgb, var(--panel) 70%, transparent); }
-.ck-col-needs { border-color: var(--amber); background: color-mix(in srgb, var(--amber-soft) 70%, var(--panel)); box-shadow: 0 0 0 1px var(--amber-soft), 0 10px 40px var(--glow); }
+.ck-col-needs.has-items { border-color: var(--amber); background: color-mix(in srgb, var(--amber-soft) 70%, var(--panel)); box-shadow: 0 0 0 1px var(--amber-soft), 0 10px 40px var(--glow); }
 .ck-col .ck-col-head { justify-content: space-between; margin: 2px 4px 8px; }
-.ck-col-needs .ck-col-head { color: var(--amber-ink); }
+.ck-col-needs.has-items .ck-col-head { color: var(--amber-ink); }
 .ck-count { display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 7px; border-radius: 999px; cursor: default; background: var(--hover); color: var(--ink); font-size: 12px; letter-spacing: 0; }
-.ck-col-needs .ck-count { background: var(--amber); color: #1d1206; }
+.ck-col-needs.has-items .ck-count { background: var(--amber); color: #1d1206; font-weight: 650; }
 .ck-none { margin: 4px 6px 6px; font-size: 12.5px; color: var(--muted); }
 .ck-group h3 { margin: 10px 4px 6px; font-size: 12px; font-weight: 600; color: var(--muted); overflow-wrap: anywhere; }
 .ck-item { margin-bottom: 8px; border: 1px solid var(--line-hi); border-radius: var(--r-md); background: var(--panel-solid); box-shadow: var(--shadow); }

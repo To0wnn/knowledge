@@ -1500,7 +1500,7 @@ function ckBoard() {
     const b = el("button", "btn primary", "+ New chat"); b.type = "button"; b.onclick = () => ckNewChat(); empty.append(b);
     box.replaceChildren(empty);
   } else box.replaceChildren(...CK_COLS.map(([id, name]) => {
-    const list = items.filter((i) => i.col === id), col = el("section", `ck-col ck-col-${id}`), head = el("h2", "ck-col-head");
+    const list = items.filter((i) => i.col === id), col = el("section", `ck-col ck-col-${id}${list.length ? " has-items" : ""}`), head = el("h2", "ck-col-head");
     col.setAttribute("aria-label", `${name}: ${list.length}`);
     head.append(el("span", null, name), el("span", "ck-count", String(list.length)));
     col.append(head);
