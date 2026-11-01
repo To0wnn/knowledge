@@ -5776,6 +5776,46 @@ async def ui_task_cancel(request: Request):
     return JSONResponse({"ok": True, "line": done})
 
 
+@server.custom_route("/ui/api/task/assign", methods=["POST"])
+async def ui_task_assign(request: Request):
+    """{"project", "id", "owner", "device"?}: the project's owner or an admin gives an open task to another agent or
+    person, optionally pinned to one device ("<Owner>@<device>"). The owner bracket is rewritten and an earlier claim
+    marker dropped; refused while a worker or session holds it. The edit goes through the normal write path, so an
+    unknown device pin is refused as on any write, and the line counts as written by this user."""
+    try:
+        body = await request.json()
+        project, tid = str(body.get("project", "")), str(body.get("id", ""))
+        owner, dev_pin = " ".join(str(body.get("owner", "")).split()), str(body.get("device", "") or "").strip()
+    except (ValueError, AttributeError):
+        return JSONResponse({"error": "send JSON {project, id, owner, device?}"}, status_code=400)
+    if not re.fullmatch(r"[\w .-]{1,40}", owner) or dev_pin and not re.fullmatch(r"[\w.-]{1,60}", dev_pin):
+        return JSONResponse({"error": "owner: a name (letters, digits, space, . -); device: a token name"}, status_code=400)
+    if project not in PROJECTS or not in_scope(PROJECTS[project][1] + "/"):
+        return JSONResponse({"error": f"unknown project {project}"}, status_code=404)
+    if not may_approve(project):
+        return JSONResponse({"error": "only the project's owner or an admin may assign a task"}, status_code=403)
+    if dev_pin and dev_pin.lower() not in {n.lower() for n in read_json(TOKENS_FILE, {})}:  # the write check covers new IDs only
+        return JSONResponse({"error": f"no device token is called {dev_pin}: use the exact token name (admin page, Tokens)"}, status_code=409)
+    if not (t := next((t for t in (await asyncio.to_thread(project_tasks, project))[0] if t["id"] == tid), None)):
+        return JSONResponse({"error": f"no open task {tid} in {project}"}, status_code=404)
+    if held_now(t, read_json(TASK_LEASES, {}).get(project, {}).get(tid), time.time()):
+        return JSONResponse({"error": f"{tid} is being worked on: stop the worker first (Machines), then assign it"}, status_code=409)
+    line = t["line"]
+    m = re.search(r"\[[^,\]]+,\s*" + re.escape(tid) + r"\]", line)
+    if not m:
+        return JSONResponse({"error": f"could not find the owner of {tid} in its line"}, status_code=409)
+    new = line[:m.start()] + f"[{owner}{'@' + dev_pin if dev_pin else ''}, {tid}]" + line[m.end():]
+    new = re.sub(r"\s*\((?:claimed|bezig)[^)]*\)", "", new, flags=re.I)  # the old owner's claim is not the new one's
+    if new == line:
+        return JSONResponse({"ok": True, "line": line})
+    try:
+        await knowledge_edit(t["path"], line, new)
+    except (ToolError, OSError) as e:
+        return JSONResponse({"error": str(e)}, status_code=409)
+    audit("task-assign", f"{project}/{tid} -> {owner}{'@' + dev_pin if dev_pin else ''}")
+    return JSONResponse({"ok": True, "line": new})
+
+
 @server.custom_route("/ui/api/task/done", methods=["POST"])
 async def ui_task_done(request: Request):
     """Remove one task line (finished) from its memo; the file history keeps it."""

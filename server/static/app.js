@@ -1029,6 +1029,12 @@ async function loadTasks(render = true) {
   const tasks = res.tasks.filter((t) => !agentProject || t.project === agentProject), open = tasks.filter((t) => !t.done), back = tasks.filter((t) => t.done);
   if (!render) return;
   const box = $("tasks"); box.replaceChildren();
+  // the workers of these tasks, from the Machines list: progress and Stop/Restart live with the task, not the pc
+  const machines = await api("/ui/api/machines").then((r) => (Array.isArray(r) ? r : r.machines || [])).catch(() => []);
+  machinesCache = machines;
+  const workersOf = (t) => machines.flatMap((m) => Object.values(m.agents || {}).flatMap((ag) => (ag.workers || []).map((w) => ({ w, m }))))
+    .filter(({ w }) => w.project === t.project && (w.id === t.id || w.id === t.id.replace(/-(cont|fix)$/i, "")));
+  const devices = [...new Set(machines.filter((m) => m.own).flatMap((m) => m.tokens || []))].sort();
   const row = (t) => {
     const n = byId.get(t.path), li = hitItem(`${t.id} · ${t.owner}`, t.text, () => openNote(t.path, { find: [t.id.toLowerCase()] }));
     const meta = el("span", "hit-text", [t.done ? "" : `${t.from || "?"} → ${t.owner}`, t.done ? "" : `start ${t.start}`,
@@ -1045,6 +1051,32 @@ async function loadTasks(render = true) {
     if (t.can_approve) act("Approve", "Let this task start (it waits for the project owner's or an admin's approval)", run(() => post("/ui/api/task/approve", { project: t.project, id: t.id })));
     for (const h of t.hosts || []) act(`Start on ${h.label}`, "Start a worker for this task there now",
       run(async () => { await post("/ui/api/machines/action", { machine: h.machine, action: "start_worker", args: { project: t.project, id: t.id } }); toast(`Asked ${h.label} to start ${t.id}`, false); }));
+    for (const { w, m } of workersOf(t)) { // its worker: where, how far, and Stop / Restart right here
+      const p = w.progress || {}, line = el("div", "task-worker");
+      line.append(el("span", "chip", `worker on ${m.label}: ${m.online ? "" : "pc offline · "}${w.status}`),
+        " ", [p.commit && `last commit: ${p.commit}`, p.commits && `${p.commits} commit${p.commits > 1 ? "s" : ""}`, p.changed && `${p.changed} changed`, w.why]
+          .filter(Boolean).join(" · "));
+      if ((p.log || []).length) { const d = el("details"); d.append(el("summary", null, "last output"), el("pre", "mono", p.log.join("\n"))); line.append(d); }
+      if (m.own && m.online && w.status === "running") line.append(" ", machineButton("Stop", "Stop this worker", () => confirm(`Stop the worker on ${t.id}?`) && machineAction(m, "stop_worker", { project: w.project, id: w.id })));
+      if (m.own && m.online && w.status === "failed") line.append(" ", machineButton("Restart", "Start this worker again now (past the 6 h hold)", () => machineAction(m, "restart", { project: w.project, id: w.id }).then(() => loadTasks(true))));
+      li.append(line);
+    }
+    if (!t.done && t.can_cancel !== undefined) { // Assign: another agent or person, optionally pinned to one pc
+      const form = el("span", "task-assign"); form.hidden = true;
+      const who = el("select"), where = el("select"), save = el("button", "small", "Save"); save.type = "button";
+      for (const o of ["Claude", "Codex", "Gemini", "Someone else…"]) { const x = el("option", null, o); x.selected = t.owner.toLowerCase().startsWith(o.toLowerCase()); who.append(x); }
+      where.append(el("option", null, "any pc"));
+      for (const d of devices) { const x = el("option", null, d); x.value = d; where.append(x); }
+      where.firstChild.value = "";
+      save.onclick = run(async () => {
+        const owner = who.value === "Someone else…" ? (prompt("Who gets it? A person's name, as task lines write it:", "") || "").trim() : who.value;
+        if (!owner) return;
+        await post("/ui/api/task/assign", { project: t.project, id: t.id, owner, device: where.value }); toast(`${t.id} → ${owner}${where.value ? "@" + where.value : ""}`, false); });
+      form.append(who, where, save);
+      const b = act("Assign…", "Give this task to another agent or person, optionally on one pc", () => { form.hidden = !form.hidden; });
+      if (!t.can_cancel) { b.disabled = true; b.title = "Only the project's owner or an admin, and not while it is being worked on"; }
+      acts.append(form);
+    }
     if (!t.done) {
       const held = t.claimed || /^(running in|taken by)/.test(t.runs || "");
       const b = act("Cancel", "Turn this line into a result for its requester: they hear it, and a task that starts after it waits", run(async () => {
@@ -1053,7 +1085,7 @@ async function loadTasks(render = true) {
         await post("/ui/api/task/cancel", { project: t.project, id: t.id, reason: why });
         toast(`${t.id} cancelled`, false);
       }));
-      if (!t.can_cancel) { b.disabled = true; b.title = held ? "Being worked on: stop the worker first (Machines), then cancel" : "Only the project's owner or an admin may cancel a task"; }
+      if (!t.can_cancel) { b.disabled = true; b.title = held ? "Being worked on: stop its worker first (here, under the task), then cancel" : "Only the project's owner or an admin may cancel a task"; }
     } else if (t.done && me.writable?.includes(t.project)) act("Remove", "Read it? Remove the line from the memo (its history keeps it)", run(async () => {
       if (confirm(`Remove ${t.id} from ${t.path}?`)) await post("/ui/api/task/done", { path: t.path, line: t.line });
     }));
@@ -1115,7 +1147,6 @@ async function loadMachines() {
   const res = await api("/ui/api/machines");
   machinesCache = Array.isArray(res) ? res : res.machines || [];
   if (!localMachine) await probeCompanion();
-  const tasks = (await api("/ui/api/tasks")).tasks.filter((t) => !t.done && t.startable);
   const box = $("machines"); box.replaceChildren();
   const narrow = matchMedia("(max-width: 699.98px)").matches;
   const sha = async (t) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t)))].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -1189,12 +1220,8 @@ async function loadMachines() {
     if (m.own && !m.old) {
       const ctl = el("div", "machine-controls");
       if (c) {
-        const pick = el("select"); pick.title = "A task that may start now";
-        pick.append(el("option", null, "Start a worker for…"));
-        for (const t of tasks) { const o = el("option", null, `${t.id} · ${t.owner} · ${t.text.slice(0, 40)}`); o.value = `${t.project}/${t.id}`; pick.append(o); }
-        pick.onchange = () => { const [project, id] = pick.value.split("/"); if (id) machineAction(m, "start_worker", { project, id }); };
         if ((c.agents || []).length && (c.folders?.linked || []).length) ctl.append(machineButton("Chat", "Talk to an agent on this pc (Chats)", async () => { go("#/chats"); if (!ck.machines.length) await ckSummary().catch(() => {}); ckNewChat(m.id); }));
-        ctl.append(pick, machineButton("Update plugin", "Update the knowledge plugin of every agent there", () => machineAction(m, "update_plugin")));
+        ctl.append(machineButton("Update plugin", "Update the knowledge plugin of every agent there", () => machineAction(m, "update_plugin")));
       }
       ctl.append(machineButton("Forget", "Remove this pc from the list (it comes back when it reports again)", async () => {
         if (!confirm(`Forget ${m.label}?`)) return;

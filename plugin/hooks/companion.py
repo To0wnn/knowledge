@@ -891,12 +891,15 @@ def check_workers(ws: dict, tok: str, now: float, lim: dict):
                 code = None if workers.running(w) else "unknown"
             if code is not None:
                 workers.PROCS.pop(w["pid"], None)
-                w.update(status="stopped" if w.get("told") else "finished" if code == 0 else "failed", ended=now, code=code)
+                # exit code unknown (the companion restarted while it ran): its outcome decides, below: a task handed
+                # back or gone is finished, one still open failed
+                w.update(status="stopped" if w.get("told") else "finished" if code in (0, "unknown") else "failed", ended=now, code=code)
                 if not w.get("owner_stopped"):  # stopped on purpose: no other pc may take it at once, only after the lease
                     release(w, tok)  # a line it claimed but left open may start again at once (the server's idle notice)
                 workers.stop_path(w).unlink(missing_ok=True)
                 if w["status"] == "finished" and left_open(w, tok):  # exit 0 is not done: e.g. its tools were refused
-                    w.update(status="failed", why="ended without claiming or handing back its task")
+                    w.update(status="failed", why="ended without claiming or handing back its task" if code == 0 else
+                             "the companion restarted while it ran; its task is still open")
                     log("error", f"{AGENTS[w['agent']][0]}: the worker for {w['id']} ended without claiming or handing back its task",
                         f"Not started again for {RESTART_AFTER // 3600} h unless asked. " + w.get("open", ""))
                     continue

@@ -1109,6 +1109,13 @@ def flow_contract(tmp, ck, fr, raw, heard):
     st, _, body = ui("/ui/api/task/cancel", {"project": "garden", "id": "FL-3"})
     assert st == 409 and b"stop the worker first" in body and not rows()["FL-3"]["can_cancel"], body
     leases["garden"].pop("FL-3"); (tmp / "task_leases.json").write_text(json.dumps(leases))
+    # Assign: the owner bracket is rewritten (pinned or not); a device no token has is refused like on any write;
+    # someone who may not approve in the project may not reassign either.
+    st, _, body = ui("/ui/api/task/assign", {"project": "garden", "id": "FL-3", "owner": "Codex"})
+    assert st == 200 and "[Codex, FL-3]" in json.loads(body)["line"] and "(claimed" not in json.loads(body)["line"], body
+    st, _, body = ui("/ui/api/task/assign", {"project": "garden", "id": "FL-3", "owner": "Codex", "device": "nopc"})
+    assert st == 409 and b"nopc" in body, body
+    assert ui("/ui/api/task/assign", {"project": "garden", "id": "FL-3", "owner": "Co]dex"})[0] == 400
     st, _, body = ui("/ui/api/task/cancel", {"project": "garden", "id": "FL-3", "reason": "no fence\nafter all"})
     assert st == 200, body
     text = (tmp / "projects/garden/memory/project_tasks.md").read_text()
