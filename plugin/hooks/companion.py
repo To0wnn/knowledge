@@ -1716,6 +1716,8 @@ def take_over(args: dict, tok: str) -> str:
             for hard in (False, True):
                 workers.kill(w, hard=hard)
                 for _ in range(20):  # its session file is complete once it has ended
+                    if (p := workers.PROCS.get(w["pid"])) is not None:
+                        p.poll()  # our own child: reaped, so macOS's ps no longer lists it as a zombie
                     if not workers.running(w):
                         break
                     time.sleep(0.5)
