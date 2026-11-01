@@ -377,7 +377,9 @@ def merge(w: dict) -> str:
     repo, branch, into = w.get("repo"), w.get("branch"), w.get("base_branch")
     if not (repo and branch and into):
         raise RuntimeError("no base branch was recorded for this worker (started before plugin 0.19.1, or on a detached HEAD): merge by hand")
-    env = git_safe_env({})  # no fsmonitor or hooks: a YOLO worker could have written the repository's config
+    # no fsmonitor or hooks (a YOLO worker could have written the repository's config); the system config stays: Git for
+    # Windows keeps core.autocrlf there, without it a clean checkout looks changed
+    env = {"GIT_CONFIG_PARAMETERS": GIT_SAFE["GIT_CONFIG_PARAMETERS"]}
     on = git(repo, "symbolic-ref", "--short", "-q", "HEAD").stdout.strip()
     if on != into:
         raise RuntimeError(f"refused: {repo} is on {on or 'a detached HEAD'}, not {into}; switch it to {into} first")
