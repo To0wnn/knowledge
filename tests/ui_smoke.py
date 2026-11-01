@@ -16,7 +16,9 @@ Changes and Health as full pages, the search page, the command palette (search, 
 a toast instead of alert(); skipped on an older server. The agents pages: the board's groups and #/inbox/<key> links, the
 chat list's states and filter, Tasks' Cancel and counts, Machines full width, Changes' Deleted section (skipped on an
 older server). Admin and Help in the shell (0.20): sidebar, header, tab bar, settings labels, "Saved" and the server's
-message on a refusal (faked; skipped on an older server). Read-only: it opens notes, it never edits or sends.
+message on a refusal (faked; skipped on an older server). Chats > Board (desktop): toggle and route, frames per
+project, Fit, folding, a dragged card kept across a reload, Tidy up; a phone keeps the list (skipped without it).
+Read-only: it opens notes, it never edits or sends.
 
   systemd-run --user --scope -q -p MemoryMax=3G ~/.local/bin/uv run -q --with playwright python tests/ui_smoke.py
 (talks to the container port directly and sends what Traefik sends after the Authentik sign-in: the proxy secret
@@ -927,6 +929,106 @@ async def shell_pages(browser, devices, secret: str) -> None:
     await ctx.close()
 
 
+BOARD_LAYOUT = """(() => {
+  const S = BD, bad = [], chats = [...Array(7)].map((_, i) => ({ id: 'c' + i, project: i < 4 ? 'b' : 'a' })).concat([{ id: 'n', project: '' }]);
+  const inside = (p, f) => p.x >= f.x && p.y >= f.y && p.x + S.w <= f.x + f.w && p.y + S.h <= f.y + f.h;
+  const L = boardLayout(chats, { c1: [-900, 40] }, []), autos = [...L.pos].filter(([, p]) => !p.pinned);
+  for (const [a, p] of autos) for (const [b, q] of autos) if (a < b && p.x < q.x + S.w && q.x < p.x + S.w && p.y < q.y + S.h && q.y < p.y + S.h) bad.push('overlap ' + a + ' ' + b);
+  for (const c of chats) if (!inside(L.pos.get(c.id), L.frames.find((f) => f.project === c.project))) bad.push('outside its frame ' + c.id);
+  if (L.pos.get('c1').x !== -900 || L.pos.get('c1').y !== 40 || !L.pos.get('c1').pinned) bad.push('a dragged card moved');
+  if (L.frames.map((f) => f.project).join() !== 'a,b,') bad.push('frame order ' + L.frames.map((f) => f.project));
+  for (const f of L.frames) if (f.x < L.bounds.x || f.y < L.bounds.y || f.x + f.w > L.bounds.x + L.bounds.w || f.y + f.h > L.bounds.y + L.bounds.h) bad.push('outside the bounds ' + f.project);
+  const F = boardLayout(chats, {}, ['a']); if (F.frames[0].h !== S.head || F.frames[1].x !== boardLayout(chats).frames[1].x) bad.push('a folded frame');
+  return bad; })()"""
+
+
+async def board(browser, devices, secret: str) -> None:
+    """Chats > Board (desktop): the List|Board toggle and its route, a frame per project with each card inside it,
+    F fits all on screen, arrows pan, Esc leaves a card, folding a frame, a dragged card keeping its place across a
+    reload and Tidy up putting it back; the layout as a pure function; a phone keeps the list. The board's own chat
+    polls are blocked here (showing a chat marks it read), so the live chats stay as they were; positions live in
+    this browser context's localStorage. Skipped on a server without the board."""
+    ctx, pg, errors = await page(browser, secret, "/ui#/chats", viewport={"width": 1440, "height": 900})
+    if not await is_shell(pg) or await pg.evaluate("typeof boardLayout") != "function":
+        print("skip chat board (server without it)")
+        await ctx.close()
+        return
+    await pg.route("**/ui/api/chat?*", lambda r: r.abort())
+    bad = await pg.evaluate(BOARD_LAYOUT)
+    check(not bad, f"board layout: no overlaps, cards in their frame, dragged cards kept, frames in name order {bad[:3]}")
+    await pg.wait_for_function("ck.summaryAt > 0", timeout=15000)
+    await pg.click('#chats-mode [data-mode="board"]')
+    await pg.wait_for_function("location.hash === '#/chats?view=board' && $('bd') && !$('bd').hidden", timeout=5000)
+    check(await pg.evaluate("getComputedStyle($('ck-chats')).display === 'none' && $('chats-mode').querySelector('[data-mode=board]').getAttribute('aria-pressed') === 'true'"),
+          "Chats > Board: the toggle sets #/chats?view=board and the board replaces the list")
+    n = await pg.evaluate("ck.chats.filter(ckScope).length")
+    if not n:
+        print("     no chats: the board's cards are not checked")
+    else:
+        await pg.wait_for_selector("#bd .bd-card", timeout=5000)
+        frames = await pg.evaluate("""(() => { const ps = [...new Set(ck.chats.filter(ckScope).map((c) => c.project || ''))];
+          const fs = [...document.querySelectorAll('#bd .bd-frame')];
+          const inFrame = [...bd.wraps.values()].every((w) => { const c = ck.chats.find((x) => x.id === w.dataset.id), f = bd.frames.get(c.project || '').getBoundingClientRect(), r = w.getBoundingClientRect();
+            return w.classList.contains('pinned') || (r.left >= f.left - 1 && r.top >= f.top - 1 && r.right <= f.right + 1 && r.bottom <= f.bottom + 1); });
+          return [fs.length, ps.length, document.querySelectorAll('#bd .bd-card').length, inFrame]; })()""")
+        check(frames[0] == frames[1] and frames[2] == n and frames[3], f"board: one frame per project, one card per chat, each inside its frame {frames} ({n} chats)")
+        await pg.evaluate("panZoom(bd, 2.5, 0, 0)")
+        await pg.focus("#bd-stage")
+        await pg.keyboard.press("f")
+        await pg.wait_for_timeout(200)
+        fit = await pg.evaluate("""(() => { const s = $('bd-stage').getBoundingClientRect();
+          return [...bd.wraps.values()].filter((w) => !w.hidden).every((w) => { const r = w.getBoundingClientRect(); return r.left >= s.left - 1 && r.top >= s.top - 1 && r.right <= s.right + 1 && r.bottom <= s.bottom + 1; }); })()""")
+        check(fit, "board: F fits every card on screen")
+        x0 = await pg.evaluate("bd.view.x")
+        await pg.keyboard.press("ArrowRight")
+        check(await pg.evaluate("(x) => Math.abs(bd.view.x - (x - 80)) < 0.5", x0), "board: an arrow key pans the focused canvas")
+        await pg.keyboard.press("f")
+        await pg.evaluate("[...bd.wraps.values()][0].focus()")
+        await pg.keyboard.press("Escape")
+        check(await pg.evaluate("document.activeElement === $('bd-stage') && !ck.view"), "board: Esc leaves a focused card for the canvas")
+        title = pg.locator("#bd .bd-frame-title").first
+        await title.click()
+        shut = await pg.evaluate("(() => { const f = document.querySelector('#bd .bd-frame'), p = [...bd.frames].find(([, b]) => b === f)[0]; return [f.firstChild.getAttribute('aria-expanded'), [...bd.wraps.values()].filter((w) => ck.chats.find((c) => c.id === w.dataset.id)?.project === p || (!p && !ck.chats.find((c) => c.id === w.dataset.id)?.project)).every((w) => w.hidden)]; })()")
+        await title.click()
+        check(shut == ["false", True] and await pg.evaluate("document.querySelector('#bd .bd-frame-title').getAttribute('aria-expanded') === 'true'"),
+              f"board: a frame folds its cards away and opens again {shut}")
+        # drag a card by its header (zoomed out: anywhere on it); it keeps that place after a reload
+        w = pg.locator("#bd .bd-card").first
+        cid = await w.get_attribute("data-id")
+        box = await w.bounding_box()
+        before = await pg.evaluate("(id) => bd.lay.pos.get(id)", cid)
+        await pg.mouse.move(box["x"] + box["width"] / 2, box["y"] + 6)
+        await pg.mouse.down()
+        await pg.mouse.move(box["x"] + box["width"] / 2 + 150, box["y"] + 96, steps=8)
+        await pg.mouse.up()
+        saved = await pg.evaluate("(id) => bdSaved().pos[id]", cid)
+        moved = saved and abs(saved[0] - before["x"]) > 20
+        await pg.reload()
+        await pg.wait_for_selector(f'#bd .bd-card[data-id="{cid}"]', timeout=15000)
+        after = await pg.evaluate("(id) => [bd.lay.pos.get(id), document.querySelector(`#bd .bd-card[data-id='${id}']`).classList.contains('pinned')]", cid)
+        check(bool(moved) and after[1] and [after[0]["x"], after[0]["y"]] == saved, f"board: a dragged card keeps its place across a reload {before} -> {saved} -> {after}")
+        await pg.click("#bd-tidy")
+        check(await pg.evaluate("(id) => !bdSaved().pos[id] && !bd.lay.pos.get(id).pinned", cid), "board: Tidy up puts dragged cards back in the grid")
+        await pg.evaluate("document.querySelector('#bd .bd-card .ck-x.bd-only').click()")  # the card's "open the full chat"
+        await pg.wait_for_function("location.hash.startsWith('#/chats/') && $('bd').hidden && $('ck-canvas').querySelector('.ck-card')", timeout=5000)
+        await pg.go_back()
+        await pg.wait_for_function("location.hash === '#/chats?view=board' && !$('bd').hidden", timeout=5000)
+        check(await pg.evaluate("[...bd.wraps.values()].every((w) => w.querySelector('.ck-card')) && !$('ck-canvas').querySelector('.ck-card')"),
+              "board: a card opens its full chat and Back returns to the board with the card in place")
+        await pg.click('#chats-mode [data-mode="list"]')
+        check(await pg.evaluate("location.hash === '#/chats' && $('bd').hidden && getComputedStyle($('ck-chats')).display !== 'none'"), "board: List goes back to #/chats and the list")
+    check(not errors, f"no page errors on the chat board {errors[:2]}")
+    await ctx.close()
+    ctx, pg, errors = await page(browser, secret, "/ui#/chats?view=board", **devices["iPhone 14"])
+    await pg.route("**/ui/api/chat?*", lambda r: r.abort())
+    await pg.wait_for_selector("#ck-history", state="attached")
+    await pg.wait_for_timeout(800)
+    check(await pg.evaluate("(!$('bd') || !$('bd').offsetParent) && !!$('ck-history').offsetParent && !$('chats-mode').offsetParent"),
+          "phone: #/chats?view=board shows the list, no board and no toggle")
+    check(not errors, f"no page errors on the phone chat board {errors[:2]}")
+    await ctx.close()
+
+
 async def main() -> None:
     secret = os.environ.get("KNOWLEDGE_PROXY_SECRET") or subprocess.run(["secret", "KNOWLEDGE_PROXY_SECRET"], check=True, capture_output=True, text=True).stdout.strip()
     async with async_playwright() as p:
@@ -943,6 +1045,7 @@ async def main() -> None:
         await knowledge(browser, p.devices, secret)
         await agents_pages(browser, p.devices, secret)
         await shell_pages(browser, p.devices, secret)
+        await board(browser, p.devices, secret)
         await browser.close()
     print("ok" if not failures else f"{len(failures)} failed")
     sys.exit(1 if failures else 0)

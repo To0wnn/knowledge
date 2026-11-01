@@ -1301,15 +1301,18 @@ const ckScope = (x) => !agentProject || x.project === agentProject; // the heade
 function ckRun(on) { clearTimeout(ck.timer); if (on) { ck.summaryAt = 0; ckTick(); } }
 
 // The bar and the board: the pcs, the chats and the board every ~5 s on the board (10 s in a chat); the open chat
-// every 1.5 s while it runs, else 4 s. Only the chat on screen is polled: opening it is what marks it read.
+// every 1.5 s while it runs, else 4 s. Only the chats on screen are polled (the open one, or the board's cards on
+// screen and zoomed in, mission.js bdLive): showing a chat's log is what marks it read.
 async function ckTick() {
   if ($("cockpit").hidden) return;
+  let live = [];
   try {
     if (Date.now() - ck.summaryAt > (ck.view ? 10000 : 5000)) await ckSummary();
-    await ckPoll(ck.cards.get(ck.view));
+    live = [ck.cards.get(ck.view), ...bdLive()].filter(Boolean);
+    await Promise.all(live.map(ckPoll));
   } catch (e) { $("ck-board").title = e.message; }
   clearTimeout(ck.timer);
-  ck.timer = setTimeout(ckTick, ckBusy(ck.cards.get(ck.view)?.meta.status) ? 1500 : 4000);
+  ck.timer = setTimeout(ckTick, live.some((c) => ckBusy(c.meta.status)) ? 1500 : 4000);
 }
 async function ckSummary() {
   ck.summaryAt = Date.now();
@@ -1383,6 +1386,7 @@ function ckLayout() {
   ckPick.textContent = ck.chats.length ? "Pick a chat on the left, or start a new one." : "No chats yet: start one with + New chat.";
   if ($("ck-canvas").firstChild !== show || $("ck-canvas").childNodes.length !== 1) $("ck-canvas").replaceChildren(show);
   document.body.classList.toggle("in-chat", !!card && !$("cockpit").hidden && $("cockpit").dataset.mode === "chats");
+  bdShow(); // the board (mission.js) instead of the list, on #/chats?view=board
 }
 
 // The attention board: what needs you first (a reply nobody read, a refused tool call, a failed worker, a task to
@@ -1555,8 +1559,9 @@ function ckCard(meta) {
   const name = el("strong"), where = el("span"), state = el("span", "ck-state"), x = el("button", "ck-x", "×");
   x.type = "button"; x.title = "Back to the board (the chat stays under Earlier chats)"; x.setAttribute("aria-label", "Back to the board");
   title.append(name, where);
-  const git = el("span", "ck-git-slot");
-  head.append(el("span", "ck-mark", AGENT_MARK[meta.agent] || "?"), title, git, state, x);
+  const git = el("span", "ck-git-slot"), open = el("button", "ck-x bd-only", "↗"); // on the board: the full chat
+  open.type = "button"; open.title = "Open the full chat"; open.setAttribute("aria-label", "Open the full chat");
+  head.append(el("span", "ck-dot bd-only"), el("span", "ck-mark", AGENT_MARK[meta.agent] || "?"), title, git, state, open, x);
   const log = el("div", "ck-log"), form = el("form", "ck-form"), input = el("textarea"), btns = el("div", "ck-btns");
   log.setAttribute("aria-live", "polite"); log.setAttribute("role", "log");
   input.rows = 2; input.placeholder = "Message the agent… (Enter sends, Shift+Enter a new line)"; input.setAttribute("aria-label", "Message");
@@ -1566,6 +1571,7 @@ function ckCard(meta) {
   root.append(head, log, asks, form);
   const card = { meta: { ...meta }, root, name, where, git, state, log, asks, input, stop, send, note, after: 0, online: meta.online !== false };
   x.onclick = () => ckShow(null);
+  open.onclick = () => ckShow(card.meta);
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing && !matchMedia("(hover: none)").matches) { e.preventDefault(); form.requestSubmit(); }
   });
@@ -1609,12 +1615,15 @@ function ckPaint(card) {
 async function ckPoll(card) {
   if (!card) return;
   let res;
-  try { res = await api(`/ui/api/chat?machine=${card.meta.machine}&id=${card.meta.id}&after=${card.after}`); }
+  // only the chat opened full counts as read; a card glanced at on the board stays under Needs you
+  const peek = ck.view !== ckKey(card.meta) ? "&peek=1" : "";
+  try { res = await api(`/ui/api/chat?machine=${card.meta.machine}&id=${card.meta.id}&after=${card.after}${peek}`); }
   catch (e) { card.note.className = "ck-note bad"; card.note.textContent = e.message; return; }
   card.meta = { ...card.meta, ...res.chat, label: res.label }; card.online = res.online; card.at = res.at;
   if (res.trimmed && !card.after && res.events.length) card.log.append(el("p", "ck-line info", "Older output was trimmed (the chat keeps its newest part)."));
   const near = card.log.scrollHeight - card.log.scrollTop - card.log.clientHeight < 80;
   for (const e of res.events) {
+    if (e.n <= card.after) continue; // two polls crossed (board + chat): never append an event twice
     card.after = Math.max(card.after, e.n);
     const last = card.log.lastElementChild;
     if (e.kind === "text") { // Markdown, sanitized as a note is (DOMPurify): an agent's output never becomes script
