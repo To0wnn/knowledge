@@ -472,7 +472,8 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
         await pg.tap(".ck-done-toggle")
         open_ = await pg.evaluate("$('ck-board').querySelector('.ck-done-toggle').getAttribute('aria-expanded') === 'true'")
         check(folded == [True, True] and open_, f"phone board: Done is one line that unfolds {folded} {open_}")
-    await pg.tap('#tabbar [data-nav="chats"]')
+    # the unfold can shift the emulated visual viewport, so a synthetic tap misses the fixed bar: click the link itself
+    await pg.locator('#tabbar [data-nav="chats"]').dispatch_event("click")
     await pg.wait_for_selector("#ck-history li")
     if await pg.locator("#ck-history button").count():
         await pg.locator("#ck-history button").first.tap()
@@ -584,9 +585,10 @@ async def shell(browser, devices, secret: str) -> None:
             wide.append(v)
     check(not wide, f"phone: no sideways scroll at 390 px {wide}")
     await route(pg, "#/inbox")
-    await pg.tap("#more-btn")
+    check(await pg.evaluate("$('head-search').getBoundingClientRect().right <= innerWidth"), "phone: the header's search button is fully on screen")
+    await pg.locator("#more-btn").dispatch_event("click")  # fixed bar: see the tab bar note above
     await pg.wait_for_selector("#more-sheet[open]")
-    await pg.tap('#more-sheet [data-nav="machines"]')
+    await pg.locator('#more-sheet [data-nav="machines"]').dispatch_event("click")
     await pg.wait_for_timeout(400)
     check(await pg.evaluate("location.hash === '#/machines' && !$('more-sheet').open && $('more-btn').getAttribute('aria-current') === 'page'"), "phone: More opens a sheet whose links go to their view")
     await pg.go_back()

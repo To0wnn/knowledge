@@ -751,6 +751,8 @@ svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor;
 
 /* Phone: no sidebar; the page scrolls under a sticky header, the tab bar sits at the bottom. */
 @media (max-width: 699.98px) {
+  #ck-resets { display: none; } /* no room next to filter, New chat and search; the reset time shows on Machines */
+  .head-actions { flex-wrap: nowrap; overflow: hidden; }
   html, body { height: auto; }
   body.app { display: block; overflow: visible; padding-bottom: calc(60px + env(safe-area-inset-bottom)); }
   body.app.in-chat { padding-bottom: 0; }
