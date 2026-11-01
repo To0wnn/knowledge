@@ -1709,10 +1709,14 @@ function ckCard(meta) {
   }, { passive: true });
   input.rows = 2; input.placeholder = "Message the agent… (Enter a new line, Ctrl+Enter sends)"; input.setAttribute("aria-label", "Message");
   const stop = el("button", "btn ck-stop", "Stop"), send = el("button", "btn primary", "Send"), note = el("p", "ck-note");
-  stop.type = "button"; send.type = "submit"; btns.append(stop, send); form.append(input, btns, note);
+  // model and effort for the next turns, from what the pc reports for this agent (hidden when it reports none)
+  const picks = el("div", "ck-picks"), model = el("select", "small"), effort = el("select", "small");
+  model.setAttribute("aria-label", "Model"); effort.setAttribute("aria-label", "Effort"); picks.hidden = true;
+  model.title = "Model from the next turn on"; effort.title = "Effort from the next turn on"; picks.append(model, effort);
+  stop.type = "button"; send.type = "submit"; btns.append(stop, send); form.append(input, btns, picks, note);
   const asks = el("div", "ck-asks"); asks.hidden = true; asks.setAttribute("aria-live", "assertive");
   root.append(head, log, asks, form);
-  const card = { meta: { ...meta }, root, name, where, git, state, log, asks, form, input, stop, send, note, after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
+  const card = { meta: { ...meta }, root, name, where, git, state, log, asks, form, input, stop, send, note, picks, model, effort, models: "[]", after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
   x.onclick = () => ckShow(null);
   open.onclick = () => ckShow(card.meta);
   input.addEventListener("keydown", (e) => {
@@ -1721,6 +1725,8 @@ function ckCard(meta) {
     e.preventDefault(); form.requestSubmit();
   });
   input.addEventListener("input", () => ckPaint(card)); // typing turns Force back into Queue
+  model.onchange = () => { picks.dataset.touched = "1"; ckEfforts(card); };
+  effort.onchange = () => { picks.dataset.touched = "1"; };
   form.onsubmit = async (e) => {
     e.preventDefault();
     const text = input.value.trim();
@@ -1736,7 +1742,11 @@ function ckCard(meta) {
     ckScrollBottom(card, true);
     try {
       if (card.worker) await api("/ui/api/worker/steer", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, worker: card.worker, text }) });
-      else await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, text }) });
+      else {
+        const pick = picks.hidden ? {} : { model: model.value, effort: effort.value };
+        await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, text, ...pick }) });
+        Object.assign(card.meta, pick); delete picks.dataset.touched;
+      }
       input.value = ""; if (!card.worker) card.meta.status = "queued";
     } catch (err) { note.className = "ck-note bad"; note.textContent = err.message; }
     ckPaint(card); await ckPoll(card); clearTimeout(ck.timer); ck.timer = setTimeout(ckTick, 1500);
@@ -1751,6 +1761,28 @@ function ckCard(meta) {
   return card;
 }
 function ckDrop(k) { ck.cards.delete(k); if (ck.view === k) ck.view = ""; }
+const CK_EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"]; // the server's EFFORTS, in order
+function ckPicks(card, list) { // the pc's models for this chat's agent; a choice not yet sent stays as picked
+  const key = JSON.stringify(list || []);
+  if (card.models !== key) {
+    card.models = key;
+    card.model.replaceChildren(new Option("Default model", ""), ...(list || []).map((m) => new Option(m.name || m.id, m.id)));
+  }
+  card.picks.hidden = !(list || []).length;
+  if (!card.picks.dataset.touched && card.model.value !== (card.meta.model || "")) card.model.value = card.meta.model || "";
+  ckEfforts(card);
+}
+function ckEfforts(card) { // the levels of the chosen model; with the default model, every level this agent knows
+  const list = JSON.parse(card.models), m = list.find((x) => x.id === card.model.value);
+  const levels = CK_EFFORTS.filter((e) => (m ? [m] : list).some((x) => (x.efforts || []).includes(e)));
+  const want = card.picks.dataset.touched ? card.effort.value : card.meta.effort || "";
+  if (card.effort.dataset.levels !== levels.join()) { // rebuilt only on a change: a poll must not close an open list
+    card.effort.dataset.levels = levels.join();
+    card.effort.replaceChildren(new Option("Default effort", ""), ...levels.map((e) => new Option(e, e)));
+  }
+  card.effort.value = levels.includes(want) ? want : "";
+  card.effort.hidden = !levels.length; // agy: the model name carries the level
+}
 function ckPaint(card) {
   if (card.worker) return ckWorkerPaint(card);
   const m = card.meta, busy = ckBusy(m.status);
@@ -1784,6 +1816,7 @@ async function ckPoll(card) {
   try { res = await api(`/ui/api/chat?machine=${card.meta.machine}&id=${card.meta.id}&after=${card.after}${peek}`); }
   catch (e) { card.note.className = "ck-note bad"; card.note.textContent = e.message; return; }
   card.meta = { ...card.meta, ...res.chat, label: res.label }; card.online = res.online; card.at = res.at;
+  ckPicks(card, res.models);
   ckEvents(card, res);
   ckAsks(card, res.asks || [], (res.now || Date.now() / 1000) - Date.now() / 1000);
   ckPaint(card);

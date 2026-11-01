@@ -2462,7 +2462,8 @@ def machine_rows() -> list[dict]:
         rows.append({"id": mid, "label": m.get("label", mid), "at": m.get("at", 0), "online": now - m.get("at", 0) < ONLINE,
                      "tokens": names, "own": any(own_token(tokens[n], dev) for n in names), "agents": agents,
                      "companion": {**{k: comp.get(k) for k in ("version", "at", "workersAllowed", "game", "maxWorkers", "folders", "projects", "token")},
-                                   "agents": sorted(comp.get("agents") or {})} if comp else None,
+                                   "agents": sorted(comp.get("agents") or {}),
+                                   "models": {a: v.get("models", []) for a, v in (comp.get("agents") or {}).items()}} if comp else None,
                      "actions": queue.get(mid, [])[-10:]})
     for n, cfg in tokens.items():  # plugins before 0.15.0: one row per token, from clients.json
         old = [c for s, c in read_json(CLIENTS_FILE, {}).get(n, {}).items() if now - c.get("at", 0) < SESSION_KEEP]
@@ -4920,6 +4921,25 @@ async def machine_action_result(request: Request):
 CHATS_DIR = ADMIN_DIR / "chats"
 CHAT_KEEP, CHAT_EVENTS, CHAT_BYTES, CHAT_TEXT = 50, 4000, 1_000_000, 20_000  # chats per machine, events and bytes per chat, chars per message
 CHAT_PENDING = 5  # messages a chat keeps in line while its agent answers
+EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")  # the levels the agents know (plugin chat.py EFFORTS)
+MODEL_ID = re.compile(r"[A-Za-z0-9][\w.:/-]{0,79}")  # as plugin chat.py MODEL_ID
+
+
+def report_models(v) -> list:
+    """An agent's models as its pc reported them (chat.py models()): [{id, name, efforts}], checked, at most 40."""
+    return [{"id": m["id"], "name": str(m.get("name") or m["id"])[:80], "efforts": [e for e in m.get("efforts") or [] if e in EFFORTS]}
+            for m in (v if isinstance(v, list) else [])[:40] if isinstance(m, dict) and MODEL_ID.fullmatch(str(m.get("id", "")))]
+
+
+def chat_choice(row: dict, agent: str, model: str, effort: str) -> tuple:
+    """(model, effort) for a chat, "" = the agent's own default; only what that pc reported for the agent."""
+    found = ((row.get("companion") or {}).get("models") or {}).get(agent) or []
+    if model and not (m := next((x for x in found if x["id"] == model), None)):
+        raise ValueError(f"{model} is not a model {agent} offers on {row['label']}")
+    levels = m["efforts"] if model else sorted({e for x in found for e in x["efforts"]}, key=EFFORTS.index)
+    if effort and effort not in levels:
+        raise ValueError(f"effort {effort} is not one {agent} offers here" + (f" for {model}" if model else ""))
+    return model, effort
 CHAT_KINDS = ("text", "tool", "refused", "error", "info")
 ASK_DETAIL = 4000  # characters of a tool call the owner sees whole; a longer one can only be allowed once
 CHAT_ASK_MINUTES = 30  # a tool approval waits this long for its owner, then counts as denied (admin page, Settings)
@@ -4935,6 +4955,7 @@ def chat_file(mid: str, cid: str) -> Path:
 
 def chat_meta(c: dict) -> dict:
     return {**{k: c.get(k) for k in ("id", "agent", "folder", "project", "title", "by", "created", "updated", "status", "session")},
+            "model": c.get("model", ""), "effort": c.get("effort", ""),
             "waiting": len(c.get("pending") or [])}
 
 
@@ -5359,12 +5380,14 @@ async def ui_chat(request: Request):
         await asyncio.to_thread(update_state, f, lambda d: d.update(seen=max(d.get("seen", 0), c.get("next", 0))))
     asks = [{k: a.get(k) for k in ("id", "tool", "detail", "reason", "once_only", "at", "expires")} for a in asks_open(c, time.time())]
     return JSONResponse({"chat": chat_meta(c), "events": [e for e in c.get("events", []) if e["n"] > after], "trimmed": bool(c.get("trimmed")),
-                         "online": row["online"], "at": row["at"], "label": row["label"], "asks": asks, "now": time.time()})
+                         "online": row["online"], "at": row["at"], "label": row["label"], "asks": asks, "now": time.time(),
+                         "models": ((row.get("companion") or {}).get("models") or {}).get(c.get("agent"), [])})
 
 
 @server.custom_route("/ui/api/chat/send", methods=["POST"])
 async def ui_chat_send(request: Request):
-    """{machine, id, text}: the next message; its pc's companion runs it as the chat's next turn. While a turn runs or
+    """{machine, id, text[, model, effort]}: the next message; its pc's companion runs it as the chat's next turn, with
+    the chat's model and effort ("" = the agent's default; sent, they hold from this turn on). While a turn runs or
     waits the message joins the chat's line (at most CHAT_PENDING): each goes to the agent when the turn before it
     ends, in order. Refused while the pc is offline (it would run whenever the pc comes back)."""
     try:
@@ -5372,6 +5395,9 @@ async def ui_chat_send(request: Request):
         text = str(b.get("text", "")).strip()
         if not text or len(text) > CHAT_TEXT:
             raise ValueError(f"a message is 1 to {CHAT_TEXT} characters")
+        pick = {}
+        if "model" in b or "effort" in b:  # an older page sends neither: the chat keeps what it had
+            pick = dict(zip(("model", "effort"), chat_choice(row, c["agent"], str(b.get("model") or ""), str(b.get("effort") or ""))))
     except (ValueError, AttributeError, TypeError, PermissionError) as e:
         return chat_error(e)
     if not row["online"]:
@@ -5384,11 +5410,13 @@ async def ui_chat_send(request: Request):
             if len(line) >= CHAT_PENDING:
                 busy.append("full")
                 return
+            c.update(pick)
             line.append(msg)
             busy.append("queued")
             chat_add(c, "user", text)
             chat_add(c, "info", "Queued: the agent gets this when its current turn ends.")
             return
+        c.update(pick)
         chat_add(c, "user", text)
         c.update(status="queued", title=c.get("title") or " ".join(text.split())[:80])
     await asyncio.to_thread(update_state, f, change)
@@ -5559,6 +5587,7 @@ async def machine_chats(request: Request):
                     out["stop"].append(cid)
             elif "msg" in e:
                 out["work"].append({"chat": cid, "agent": c["agent"], "folder": c["folder"], "session": c.get("session", ""),
+                                    "model": c.get("model", ""), "effort": c.get("effort", ""),
                                     "allow": c.get("allow", []), **e.pop("msg")})
                 e["busy"] = True
     if q_path.exists():
@@ -5987,7 +6016,8 @@ async def machine_report(request: Request):
                                  "limit": float(v["limit"]) if isinstance(v.get("limit"), (int, float)) else None,
                                  "resets": float(v["resets"]) if isinstance(v.get("resets"), (int, float)) else None,
                                  # the installed plugin, read from disk by the companion: shown before the agent's first session
-                                 **({"plugin": v["plugin"][:20]} if isinstance(v.get("plugin"), str) and re.fullmatch(r"[\w.+-]{1,20}", v["plugin"]) else {})}
+                                 **({"plugin": v["plugin"][:20]} if isinstance(v.get("plugin"), str) and re.fullmatch(r"[\w.+-]{1,20}", v["plugin"]) else {}),
+                                 **({"models": report_models(v["models"])} if "models" in v else {})}
                              for a, v in (b.get("agents") or {}).items() if a in AGENT_OWNERS and isinstance(v, dict)},
                   "workers": [{k: (w.get(k) if w.get(k) is None or isinstance(w.get(k), (int, float, bool)) else str(w[k])[:300])
                                for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open", "checkpoint", "merged", "why", "chat")}

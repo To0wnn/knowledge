@@ -647,6 +647,13 @@ def hook_errors(tmp: Path, project: Path):
 FAKE_AGENT = """import json, os, sys, time
 calls, name, args = os.environ["KN_FAKE_CALLS"], sys.argv[1], sys.argv[2:]
 rec = lambda x: open(calls, "a", encoding="utf-8").write(json.dumps(x) + "\\n")
+if name == "codex" and args == ["debug", "models"]:  # what a chat may pick: one listed model, one hidden
+    print(json.dumps({"models": [{"slug": "fake-big", "display_name": "Fake Big", "visibility": "list", "supported_reasoning_levels": [{"effort": "high"}, {"effort": "ultra"}]},
+                                 {"slug": "fake-hidden", "visibility": "hide", "supported_reasoning_levels": []}]}))
+    sys.exit(0)
+if name == "agy" and args == ["models"]:
+    print("Fetching available models...\\nfake-gem\\tFake Gem")
+    sys.exit(0)
 if name == "codex" and args[:1] == ["app-server"] and os.environ.get("KNOWLEDGE_CHAT"):  # a chat turn without YOLO: app-server v2
     send = lambda x: print(json.dumps({"jsonrpc": "2.0", **x}), flush=True)
     note = lambda method, params: send({"method": method, "params": params})
@@ -660,7 +667,8 @@ if name == "codex" and args[:1] == ["app-server"] and os.environ.get("KNOWLEDGE_
             send({"id": m["id"], "result": {"thread": {"id": "sess-codex"}}})
         elif m.get("method") == "turn/start":
             text = m["params"]["input"][0]["text"]
-            rec({"chat": os.environ["KNOWLEDGE_CHAT"], "argv": [name] + args, "cwd": os.getcwd(), "stdin": text, "load": loaded, "perms": perms, "pid": os.getpid()})
+            rec({"chat": os.environ["KNOWLEDGE_CHAT"], "argv": [name] + args, "cwd": os.getcwd(), "stdin": text, "load": loaded, "perms": perms, "pid": os.getpid(),
+                 "pick": [m["params"].get("model"), m["params"].get("effort")]})
             send({"id": m["id"], "result": {"turn": {"id": "t1", "status": "inProgress"}}})
             note("item/started", {"item": {"type": "commandExecution", "command": "git status"}})
             said = "echo: " + text + (" (resumed)" if loaded == "sess-codex" else "")
@@ -698,20 +706,23 @@ elif os.environ.get("KNOWLEDGE_CHAT") and name == "agy" and args[:1] == ["acp"]:
     import time
     send = lambda x: print(json.dumps({"jsonrpc": "2.0", **x}), flush=True)
     upd = lambda u: send({"method": "session/update", "params": {"sessionId": "sess-agy", "update": u}})
-    loaded = ""
+    loaded, pick = "", [None, None]
     for line in sys.stdin:
         m = json.loads(line)
         if m.get("method") == "initialize":
             send({"id": m["id"], "result": {"protocolVersion": 1}})
+        elif m.get("method") == "session/set_model":
+            pick[0] = m["params"]["modelId"]
+            send({"id": m["id"], "result": {}})
         elif m.get("method") == "session/new":
-            send({"id": m["id"], "result": {"sessionId": "sess-agy"}})
+            send({"id": m["id"], "result": {"sessionId": "sess-agy", "models": {"availableModels": [{"modelId": "fake-acp", "name": "Fake ACP"}]}}})
         elif m.get("method") == "session/load":
             loaded = m["params"]["sessionId"]
             upd({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "OLD HISTORY"}})  # a replay: never output
             send({"id": m["id"], "result": {}})
         elif m.get("method") == "session/prompt":
             text = m["params"]["prompt"][0]["text"]
-            rec({"chat": os.environ["KNOWLEDGE_CHAT"], "argv": [name] + args, "cwd": os.getcwd(), "stdin": text, "load": loaded, "pid": os.getpid()})
+            rec({"chat": os.environ["KNOWLEDGE_CHAT"], "argv": [name] + args, "cwd": os.getcwd(), "stdin": text, "load": loaded, "pid": os.getpid(), "pick": pick})
             upd({"sessionUpdate": "tool_call", "toolCallId": "c1", "name": "run_command", "kind": "execute", "rawInput": {"CommandLine": "git status"}})
             send({"id": "p1", "method": "session/request_permission", "params": {"sessionId": "sess-agy", "toolCall": {
                 "toolCallId": "c1", "name": "view_file", "kind": "read", "rawInput": {"AbsolutePath": os.path.join(os.getcwd(), "README.md")}},
@@ -1484,6 +1495,21 @@ def chat_e2e(tok: str, tmp: Path):
                       "chat claude: without YOLO the worker permission set (acceptEdits + allowed tools) and the approval prompt tool", json.dumps(first["argv"]))
             if agent == "agy":
                 check(first["argv"] == ["agy", "acp"], "chat agy: without YOLO it runs over ACP (the headless agy that can ask)", json.dumps(first["argv"]))
+        # Model and effort: the pc reports what each agent offers; a chat's choice reaches the turn the agent's own way
+        # (Claude flags, Codex turn/start, agy session/set_model + thought_level).
+        models = {a: [(m["id"], m["efforts"]) for m in v] for a, v in (next(r for r in machines() if r["id"] == mid)["companion"].get("models") or {}).items()}
+        check(models.get("codex") == [("fake-big", ["high", "ultra"])] and models.get("agy") in ([("fake-gem", [])], [("fake-acp", [])])
+              and [m for m, _ in models.get("claude", [])] == ["fable", "opus", "sonnet", "haiku"],
+              "chat: the companion reports each agent's models and effort levels (hidden Codex models left out)", json.dumps(models))
+        agy_model = models["agy"][0][0]  # agy models at first; once an ACP session ran, the list ACP offers
+        for agent, model, effort in (("claude", "opus", "max"), ("codex", "fake-big", "ultra"), ("agy", agy_model, "")):
+            cid = new(agent, repo)
+            st = http("POST", "/ui/api/chat/send", {"machine": mid, "id": cid, "text": "pick", "model": model, "effort": effort}, ui)[0]
+            done = st == 200 and idle(cid, 2)
+            turn = next((c for c in recorded() if c["chat"] == cid), {})
+            av = turn.get("argv", [])
+            got = (av[av.index("--model") + 1], av[av.index("--effort") + 1]) if agent == "claude" and "--model" in av and "--effort" in av else tuple(turn.get("pick") or ())
+            check(done and got == (model, effort or None), f"chat {agent}: the chosen model and effort reach the turn", json.dumps(turn)[:600])
         # Approvals: a turn asks for a tool its allowed set lacks; the owner allows once, for the chat, or denies, from
         # the web UI; the agent goes on. One chat waits without an answer and times out (1 minute, the shortest setting).
         admin_ui = {**ui, "Content-Type": "application/json"}

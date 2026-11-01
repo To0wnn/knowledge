@@ -1151,7 +1151,8 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
     links, gits = with_git(folder_links(), ws, now)
     body = {"version": version(), "workersAllowed": s["workersAllowed"], "maxWorkers": s["maxWorkers"], "game": workers.game_session(),
             "agents": {a: {"yolo": bool(yolo.get(a, {}).get("on")), "trusted": not untrusted(a, folders), "limit": lim.get(a),
-                     "resets": (resets or {}).get(a), **({"plugin": v} if (v := plugin_version(a)) else {})}  # known before a session
+                     "resets": (resets or {}).get(a), **({"plugin": v} if (v := plugin_version(a)) else {}),  # known before a session
+                     "models": chat.models(a)}  # what a chat may pick (cached for hours)
                        for a in AGENTS if installed(a)},
             "workers": [{**{k: w.get(k) for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open", "why", "chat")},
                          "checkpoint": bool(w.get("checkpoint")), "merged": w["status"] == "merged", "git": gits.get(k),

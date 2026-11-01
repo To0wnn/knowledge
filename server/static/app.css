@@ -508,6 +508,9 @@ body.admin-page { display: block; overflow-y: auto; }
 .ck-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); align-items: end; }
 .ck-form textarea { resize: none; min-height: 42px; max-height: 160px; font-size: 14px; }
 .ck-form .ck-btns { display: flex; gap: 6px; }
+.ck-form .ck-picks { grid-column: 1 / -1; display: flex; gap: 6px; flex-wrap: wrap; }
+.ck-form .ck-picks[hidden] { display: none; }
+.ck-form .ck-picks select { max-width: 50%; }
 .ck-form .ck-stop[hidden] { display: none; }
 .ck-form .btn.primary.force { border-color: var(--bad); background: var(--bad); color: #fff; }
 .ck-note { grid-column: 1 / -1; margin: 0; font-size: 12px; color: var(--muted); }

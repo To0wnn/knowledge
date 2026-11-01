@@ -36,6 +36,51 @@ LOG = lambda *a: None  # the companion's activity log
 PATH_KEYS = ("file_path", "path", "Path", "notebook_path", "AbsolutePath", "TargetFile", "DirectoryPath", "cwd")
 MAX_TURNS = 4  # turns at once on one pc
 FLUSH = 0.7  # seconds: output is posted in batches at most this often
+EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")  # every agent's levels together; each model lists its own
+MODEL_ID = re.compile(r"[A-Za-z0-9][\w.:/-]{0,79}")  # a model name as the CLIs take it; nothing a .cmd shim would mangle
+CLAUDE_MODELS = ("fable", "opus", "sonnet", "haiku")  # Claude Code's aliases for the newest of each; it has no list command
+MODELS_TTL = 6 * 3600
+_MODELS: dict = {}  # agent -> (at, [{id, name, efforts}])
+
+
+def models(agent: str, wait: bool = False) -> list:
+    """The models a chat may pick for `agent` on this pc, each with its effort levels: Claude's aliases, Codex's listed
+    models (codex debug models), agy's (agy models). Asked at most every MODELS_TTL, in the background (a CLI can take
+    seconds and the companion's report round must not wait long: the first time up to 5 s); until then the last list."""
+    at, found = _MODELS.get(agent, (0, None))
+    if time.time() - at >= MODELS_TTL:
+        _MODELS[agent] = (time.time(), found)  # one refresh at a time
+        th = threading.Thread(target=_ask_models, args=(agent,), daemon=True)
+        th.start()
+        th.join(None if wait else 5 if found is None else 0)  # the first time: a fast CLI makes the first report
+    return _MODELS[agent][1] or []
+
+
+def _ask_models(agent: str):
+    found = []
+    try:
+        if agent == "claude":
+            found = [{"id": m, "name": m.capitalize(), "efforts": list(EFFORTS[:5])} for m in CLAUDE_MODELS]
+        elif (exe := shutil.which(agent)) and agent == "codex":
+            out = subprocess.run(workers.shim_line([exe, "debug", "models"]) if exe.lower().endswith((".cmd", ".bat")) else [exe, "debug", "models"],
+                                 capture_output=True, text=True, timeout=30).stdout
+            found = [{"id": m["slug"], "name": str(m.get("display_name") or m["slug"])[:80],
+                      "efforts": [e["effort"] for e in m.get("supported_reasoning_levels") or [] if e.get("effort") in EFFORTS]}
+                     for m in json.loads(out).get("models", []) if m.get("visibility") == "list" and MODEL_ID.fullmatch(str(m.get("slug", "")))]
+        elif exe and agent == "agy":
+            out = subprocess.run([exe, "models"], capture_output=True, text=True, timeout=30).stdout
+            # no effort of its own: Gemini's names carry the level (-low/-high), the others refuse --effort
+            found = [{"id": i, "name": n.strip()[:80], "efforts": []} for i, _, n in (ln.partition("\t") for ln in out.splitlines()) if n and MODEL_ID.fullmatch(i)]
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError, AttributeError):
+        found = []
+    # an empty answer (offline, a CLI error) is asked again in 10 minutes, not after hours
+    _MODELS[agent] = (time.time() - (MODELS_TTL - 600 if not found else 0), found[:40])
+
+
+def choice(item: dict) -> tuple:
+    """The (model, effort) a chat asked for, "" for the agent's own default; the server checked them, this again."""
+    m, e = str(item.get("model") or ""), str(item.get("effort") or "")
+    return (m if MODEL_ID.fullmatch(m) else ""), (e if e in EFFORTS else "")
 
 
 def approval_config(cid: str) -> str:
@@ -51,13 +96,14 @@ def approval_config(cid: str) -> str:
     return str(f)
 
 
-def argv(agent: str, exe: str, yolo: bool, session: str, chat: str = "") -> list:
+def argv(agent: str, exe: str, yolo: bool, session: str, chat: str = "", model: str = "", effort: str = "") -> list:
     """One turn's command line (flags checked against claude 2.1, codex-cli 0.164, agy 1.4.12); the message is stdin.
     Without YOLO, Claude asks the owner through its documented permission prompt tool (approval_mcp.py) for what its
-    allowed set does not hold."""
+    allowed set does not hold. A chosen model and effort go in as flags; over JSON-RPC (Codex app-server, agy acp) the
+    driver sets them per turn instead."""
     if agent == "claude":
         return [exe, "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-                *(["--resume", session] if session else []),
+                *(["--resume", session] if session else []), *(["--model", model] if model else []), *(["--effort", effort] if effort else []),
                 *(["--dangerously-skip-permissions"] if yolo else [
                     "--mcp-config", approval_config(chat), "--permission-prompt-tool", "mcp__knowledge_approval__ask",
                     "--permission-mode", "acceptEdits", "--allowedTools", *workers.CLAUDE_ALLOWED])]
@@ -65,10 +111,12 @@ def argv(agent: str, exe: str, yolo: bool, session: str, chat: str = "") -> list
         if not yolo:  # app-server (JSON-RPC): the Codex that asks its client (`codex exec` never asks); sandbox and policy per thread
             return [exe, "app-server", "-c", workers.CODEX_APPROVE]
         return [exe, "exec", *(["resume"] if session else []), "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "--json",
+                *(["-m", model] if model else []), *(["-c", f"model_reasoning_effort={effort}"] if effort else []),
                 *([session] if session else []), "-"]
     if not yolo:  # ACP (agy acp): the only headless agy that asks its client for a permission (-p denies by itself)
         return [exe, "acp"]
     return [exe, "--input-format", "stream-json", "--output-format", "stream-json", "--dangerously-skip-permissions",
+            *(["--model", model] if model else []),  # no --effort: the model name carries it (models())
             *(["--conversation", session] if session else []), "-p", ""]
 
 
@@ -397,6 +445,13 @@ def agy_acp(p, item: dict, st: dict):
     else:
         yield from rpc.call("session/new", {"cwd": folder, "mcpServers": []}, out)
         st["session"] = out[-1].get("sessionId") or ""
+    offered = [{"id": m["modelId"], "name": str(m.get("name") or m["modelId"])[:80], "efforts": []}
+               for m in ((out[-1].get("models") or {}).get("availableModels") or []) if MODEL_ID.fullmatch(str(m.get("modelId", "")))]
+    if offered:  # ACP's own list is the one both ways accept (agy models also names models ACP refuses)
+        _MODELS["agy"] = (time.time(), offered[:40])
+    model = choice(item)[0]
+    if model:  # per session in ACP; set again every turn, as the chat's choice may have changed
+        yield from rpc.call("session/set_model", {"sessionId": st["session"], "modelId": model}, out)
     live[0] = True
     yield from rpc.call("session/prompt", {"sessionId": st["session"], "prompt": [{"type": "text", "text": item.get("text", "")}]}, out)
     st["result"] = True
@@ -495,7 +550,9 @@ def codex_app(p, item: dict, st: dict):
     else:
         yield from rpc.call("thread/start", perms, out)
     st["session"] = ((out[-1].get("thread") or {}).get("id")) or st["session"]
-    yield from rpc.call("turn/start", {"threadId": st["session"], "input": [{"type": "text", "text": item.get("text", "")}]}, out, until="turn/completed")
+    model, effort = choice(item)
+    yield from rpc.call("turn/start", {"threadId": st["session"], "input": [{"type": "text", "text": item.get("text", "")}],
+                                       **({"model": model} if model else {}), **({"effort": effort} if effort else {})}, out, until="turn/completed")
     turn = out[-1].get("turn") or {}
     st["result"] = True
     if turn.get("status") == "failed":
@@ -529,7 +586,7 @@ def run_turn(item: dict, post, log, linked, yolo):
         if not exe:
             raise RuntimeError(f"{agent} is not on PATH")
         cmd_rpc = agent in RPC and not yolo(agent)
-        cmd = argv(agent, exe, yolo(agent), st["session"], cid)
+        cmd = argv(agent, exe, yolo(agent), st["session"], cid, *choice(item))
         if os.name == "nt" and exe.lower().endswith((".cmd", ".bat")):
             cmd = workers.shim_line(cmd)
         log("chat", f"{name}: chat turn started in {folder}", f"chat {cid}" + (f", continues {st['session']}" if st["session"] else ", a new conversation"))
@@ -626,6 +683,17 @@ def self_test():
         assert g[-2:] == ["-p", ""] and g[g.index("--conversation") + 1] == "cv-1" and "--dangerously-skip-permissions" in g, g
         assert argv("agy", "agy", False, "cv-1") == ["agy", "acp"], "without YOLO agy runs over ACP, where it can ask"
         assert not [a for a in c + x + g if "\n" in a or "%" in a or '"' in a], "nothing a .cmd shim would refuse"
+        c = argv("claude", "claude", True, "s-1", "", "opus", "max")
+        assert c[c.index("--model") + 1] == "opus" and c[c.index("--effort") + 1] == "max", c
+        x = argv("codex", "codex", True, "th-1", "", "gpt-x", "high")
+        assert x[x.index("-m") + 1] == "gpt-x" and "model_reasoning_effort=high" in x and x[-2:] == ["th-1", "-"], x
+        g = argv("agy", "agy", True, "cv-1", "", "gemini-y", "low")
+        assert g[g.index("--model") + 1] == "gemini-y" and "--effort" not in g and g[-2:] == ["-p", ""], g
+        assert "--model" not in argv("claude", "claude", True, "") and argv("codex", "codex", False, "", "", "m", "high")[1] == "app-server"
+        assert choice({"model": "opus", "effort": "max"}) == ("opus", "max")
+        assert choice({"model": "a b", "effort": "huge"}) == ("", ""), "anything else falls back to the agent's default"
+        assert choice({"model": "-rf", "effort": ""}) == ("", ""), "no model name that reads as a flag"
+        assert [m["id"] for m in models("claude", wait=True)] == list(CLAUDE_MODELS)
     workers.DIR = w
     assert json.loads(stdin_for("agy", 'a "b"\nc')) == {"event": "user", "message": {"role": "user", "content": 'a "b"\nc'}}
     st = {}

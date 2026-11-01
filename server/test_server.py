@@ -688,6 +688,30 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert "CH-1" not in leases and beat["notices"] == [] and not beat["sync"], (leases, beat)
     line = next(ln for ln in (tmp / "projects/garden/memory/project_tasks.md").read_text().splitlines() if "CH-1" in ln)
     call("knowledge_edit", {"path": path, "old_string": line + "\n", "new_string": ""}, fr)
+    # Model and effort: only what the pc reported for that agent; they hold for the chat until changed; an older page
+    # that sends neither keeps them.
+    http("POST", "/machine/report", {"version": "0.21.1", "agents": {"codex": {}, "claude": {"models": [
+        {"id": "opus", "name": "Opus", "efforts": ["low", "max", "huge"]}, {"id": "-rf", "efforts": []}]}},
+        "folders": {"linked": [{"path": "/home/x/garden", "project": "garden"}]}}, token=fr, headers=pc)
+    mc = json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "claude", "folder": "/home/x/garden"})[2])["chat"]["id"]
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": mc, "text": "a", "model": "sonnet"})[0] == 400  # not reported
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": mc, "text": "a", "model": "-rf"})[0] == 400  # dropped from the report
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": mc, "text": "a", "model": "opus", "effort": "huge"})[0] == 400
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": mc, "text": "a", "model": "opus", "effort": "max"})[0] == 200
+    w = [w for w in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"] if w["chat"] == mc]
+    assert [(x["model"], x["effort"]) for x in w] == [("opus", "max")], w
+    meta = json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["chat"]
+    assert (meta["model"], meta["effort"]) == ("opus", "max"), meta
+    http("POST", "/machine/chats/events", {"chat": mc, "events": [], "done": True}, token=fr, headers=pc)
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": mc, "text": "b"})[0] == 200  # an older page: keeps opus/max
+    w = [w for w in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"] if w["chat"] == mc]
+    assert [(x["model"], x["effort"]) for x in w] == [("opus", "max")], w
+    http("POST", "/machine/chats/events", {"chat": mc, "events": [], "done": True}, token=fr, headers=pc)
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": mc, "text": "c", "model": "", "effort": "low"})[0] == 200  # default model, any listed level
+    w = [w for w in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"] if w["chat"] == mc]
+    assert [(x["model"], x["effort"]) for x in w] == [("", "low")], w
+    http("POST", "/machine/chats/events", {"chat": mc, "events": [], "done": True}, token=fr, headers=pc)
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": mc, "text": "d", "effort": "max"}, er)[0] == 403
     # Offline: no new message (it would run whenever the pc comes back).
     d = json.loads((tmp / "machines.json").read_text())
     d[mid]["at"] -= 3600
