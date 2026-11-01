@@ -662,6 +662,8 @@ if name == "codex" and args[:1] == ["app-server"] and os.environ.get("KNOWLEDGE_
         m = json.loads(line)
         if m.get("method") == "initialize":
             send({"id": m["id"], "result": {"userAgent": "fake"}})
+        elif m.get("method") == "config/read":  # Default named: the configured model and effort
+            send({"id": m["id"], "result": {"config": {"model": "fake-default", "model_reasoning_effort": "medium"}}})
         elif m.get("method") in ("thread/start", "thread/resume"):
             loaded, perms = m["params"].get("threadId", ""), m["params"]
             send({"id": m["id"], "result": {"thread": {"id": "sess-codex"}}})
@@ -1510,6 +1512,11 @@ def chat_e2e(tok: str, tmp: Path):
             av = turn.get("argv", [])
             got = (av[av.index("--model") + 1], av[av.index("--effort") + 1]) if agent == "claude" and "--model" in av and "--effort" in av else tuple(turn.get("pick") or ())
             check(done and got == (model, effort or None), f"chat {agent}: the chosen model and effort reach the turn", json.dumps(turn)[:600])
+            if agent == "codex":  # back to Default: Codex keeps a turn/start override for the thread, so Default is named
+                st = http("POST", "/ui/api/chat/send", {"machine": mid, "id": cid, "text": "default", "model": "", "effort": ""}, ui)[0]
+                back = st == 200 and idle(cid, 4)
+                turn = ([c for c in recorded() if c["chat"] == cid] + [{}, {}])[1]
+                check(back and turn.get("pick") == ["fake-default", "medium"], "chat codex: Default after a choice names the configured model and effort", json.dumps(turn)[:600])
         # Approvals: a turn asks for a tool its allowed set lacks; the owner allows once, for the chat, or denies, from
         # the web UI; the agent goes on. One chat waits without an answer and times out (1 minute, the shortest setting).
         admin_ui = {**ui, "Content-Type": "application/json"}

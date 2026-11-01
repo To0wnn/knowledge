@@ -4922,7 +4922,7 @@ CHATS_DIR = ADMIN_DIR / "chats"
 CHAT_KEEP, CHAT_EVENTS, CHAT_BYTES, CHAT_TEXT = 50, 4000, 1_000_000, 20_000  # chats per machine, events and bytes per chat, chars per message
 CHAT_PENDING = 5  # messages a chat keeps in line while its agent answers
 EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")  # the levels the agents know (plugin chat.py EFFORTS)
-MODEL_ID = re.compile(r"[A-Za-z0-9][\w.:/-]{0,79}")  # as plugin chat.py MODEL_ID
+MODEL_ID = re.compile(r"[A-Za-z0-9][\w.:/-]{0,79}", re.ASCII)  # as plugin chat.py MODEL_ID
 
 
 def report_models(v) -> list:

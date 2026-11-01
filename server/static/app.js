@@ -1743,7 +1743,8 @@ function ckCard(meta) {
     try {
       if (card.worker) await api("/ui/api/worker/steer", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, worker: card.worker, text }) });
       else {
-        const pick = picks.hidden ? {} : { model: model.value, effort: effort.value };
+        // only a choice made here: a saved model the pc no longer lists must not turn into Default unasked
+        const pick = picks.hidden || !picks.dataset.touched ? {} : { model: model.value, effort: effort.value };
         await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, text, ...pick }) });
         Object.assign(card.meta, pick); delete picks.dataset.touched;
       }

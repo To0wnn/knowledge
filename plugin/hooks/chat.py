@@ -37,10 +37,11 @@ PATH_KEYS = ("file_path", "path", "Path", "notebook_path", "AbsolutePath", "Targ
 MAX_TURNS = 4  # turns at once on one pc
 FLUSH = 0.7  # seconds: output is posted in batches at most this often
 EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")  # every agent's levels together; each model lists its own
-MODEL_ID = re.compile(r"[A-Za-z0-9][\w.:/-]{0,79}")  # a model name as the CLIs take it; nothing a .cmd shim would mangle
+MODEL_ID = re.compile(r"[A-Za-z0-9][\w.:/-]{0,79}", re.ASCII)  # a model name as the CLIs take it; nothing a .cmd shim would mangle
 CLAUDE_MODELS = ("fable", "opus", "sonnet", "haiku")  # Claude Code's aliases for the newest of each; it has no list command
 MODELS_TTL = 6 * 3600
 _MODELS: dict = {}  # agent -> (at, [{id, name, efforts}])
+_AGY_ACP: list = []  # the models agy's ACP offered in a session here: once known, the list for agy
 
 
 def models(agent: str, wait: bool = False) -> list:
@@ -67,6 +68,8 @@ def _ask_models(agent: str):
             found = [{"id": m["slug"], "name": str(m.get("display_name") or m["slug"])[:80],
                       "efforts": [e["effort"] for e in m.get("supported_reasoning_levels") or [] if e.get("effort") in EFFORTS]}
                      for m in json.loads(out).get("models", []) if m.get("visibility") == "list" and MODEL_ID.fullmatch(str(m.get("slug", "")))]
+        elif agent == "agy" and _AGY_ACP:
+            found = list(_AGY_ACP)
         elif exe and agent == "agy":
             out = subprocess.run([exe, "models"], capture_output=True, text=True, timeout=30).stdout
             # no effort of its own: Gemini's names carry the level (-low/-high), the others refuse --effort
@@ -448,6 +451,7 @@ def agy_acp(p, item: dict, st: dict):
     offered = [{"id": m["modelId"], "name": str(m.get("name") or m["modelId"])[:80], "efforts": []}
                for m in ((out[-1].get("models") or {}).get("availableModels") or []) if MODEL_ID.fullmatch(str(m.get("modelId", "")))]
     if offered:  # ACP's own list is the one both ways accept (agy models also names models ACP refuses)
+        _AGY_ACP[:] = offered[:40]
         _MODELS["agy"] = (time.time(), offered[:40])
     model = choice(item)[0]
     if model:  # per session in ACP; set again every turn, as the chat's choice may have changed
@@ -551,6 +555,18 @@ def codex_app(p, item: dict, st: dict):
         yield from rpc.call("thread/start", perms, out)
     st["session"] = ((out[-1].get("thread") or {}).get("id")) or st["session"]
     model, effort = choice(item)
+    if not (model and effort):  # Default: name it, as a turn/start override holds for the thread's later turns
+        try:
+            yield from rpc.call("config/read", {"cwd": folder}, out)
+            cfg = out[-1].get("config") or {}
+            model, effort = model or str(cfg.get("model") or ""), effort or str(cfg.get("model_reasoning_effort") or "")
+            if not (model and effort):
+                yield from rpc.call("model/list", {}, out)
+                found = out[-1].get("data") or []
+                m = next((x for x in found if model and model in (x.get("id"), x.get("model"))), None) or next((x for x in found if x.get("isDefault")), {})
+                model, effort = model or str(m.get("model") or m.get("id") or ""), effort or str(m.get("defaultReasoningEffort") or "")
+        except RuntimeError:  # an older Codex without these methods: its own default, as before
+            pass
     yield from rpc.call("turn/start", {"threadId": st["session"], "input": [{"type": "text", "text": item.get("text", "")}],
                                        **({"model": model} if model else {}), **({"effort": effort} if effort else {})}, out, until="turn/completed")
     turn = out[-1].get("turn") or {}
@@ -786,7 +802,8 @@ def self_test():
     # Codex: decided and shown on the command it runs (not its parsed commandActions); a file change is never allowed by
     # itself and shows the paths from item/started; wider permissions are once at most and spelled out.
     import io
-    msgs = [{"id": 1, "result": {}}, {"id": 2, "result": {"thread": {"id": "T"}}}, {"id": 3, "result": {}},
+    msgs = [{"id": 1, "result": {}}, {"id": 2, "result": {"thread": {"id": "T"}}}, {"id": 3, "result": {"config": {"model": "cfg-m", "model_reasoning_effort": "low"}}},
+            {"id": 4, "result": {}},
             {"method": "item/commandExecution/requestApproval", "id": 10, "params": {"command": "/bin/sh -lc 'cat README.md | tee ~/.ssh/authorized_keys'", "cwd": "/tmp/other",
              "commandActions": [{"command": "cat README.md"}], "availableDecisions": ["accept", "decline"]}},
             {"method": "item/started", "params": {"item": {"type": "fileChange", "id": "fc1", "changes": [{"path": "/home/x/.bashrc"}]}}},
@@ -802,6 +819,9 @@ def self_test():
         list(codex_app(fake, {"chat": "c1", "folder": f, "text": "hi"}, {"session": ""}))
     finally:
         globals()["decide"] = real_decide
+    sent = [json.loads(ln) for ln in fake.stdin.getvalue().splitlines()]
+    turn = next(m for m in sent if m.get("method") == "turn/start")["params"]
+    assert (turn.get("model"), turn.get("effort")) == ("cfg-m", "low"), "Default names the configured model: an earlier override would hold"
     assert seen[0][1]["command"].endswith("tee ~/.ssh/authorized_keys'") and "cat README.md" in seen[0][2], seen[0]
     assert seen[0][4].startswith("(in /tmp/other) /bin/sh -lc"), "a command run elsewhere says where"
     assert seen[1][0] == "edit" and seen[1][1]["paths"] == ["/home/x/.bashrc"] and seen[1][3] and ".bashrc" in seen[1][4], seen[1]
