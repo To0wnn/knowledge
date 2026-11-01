@@ -1446,6 +1446,19 @@ function ckShow(meta) {
   if (!meta) return goBack("#/chats");
   go(`#/chats/${encodeURIComponent(ckCard(meta).meta.id)}`);
 }
+function ckScrollBottom(card, force = false) {
+  if (!card?.log) return;
+  requestAnimationFrame(() => {
+    if (force || card.stickToBottom !== false) {
+      card.log.scrollTop = card.log.scrollHeight;
+      card.stickToBottom = true;
+      card.savedScrollTop = card.log.scrollTop;
+    } else if (card.savedScrollTop != null) {
+      card.log.scrollTop = card.savedScrollTop;
+    }
+  });
+}
+
 // The open chat in the Chats view, or a line to pick one. The card's node is moved only when it changes: moving it
 // would drop the focus from its text box.
 const ckPick = el("p", "ck-none ck-pick");
@@ -1454,6 +1467,7 @@ function ckLayout() {
   ckPick.textContent = ck.chats.length ? "Pick a chat on the left, or start a new one." : "No chats yet: start one with + New chat.";
   if ($("ck-canvas").firstChild !== show || $("ck-canvas").childNodes.length !== 1) $("ck-canvas").replaceChildren(show);
   document.body.classList.toggle("in-chat", !!card && !$("cockpit").hidden && $("cockpit").dataset.mode === "chats");
+  if (card) ckScrollBottom(card, card.savedScrollTop == null);
   bdShow(); // the board (mission.js) instead of the list, on #/chats?view=board
 }
 
@@ -1688,12 +1702,17 @@ function ckCard(meta) {
     const href = a.getAttribute("href") || "";
     if (/^https?:/.test(href)) { a.target = "_blank"; a.rel = "noopener noreferrer"; }
   });
+  log.addEventListener("scroll", () => {
+    const dist = log.scrollHeight - log.scrollTop - log.clientHeight;
+    card.stickToBottom = dist < 80;
+    card.savedScrollTop = log.scrollTop;
+  }, { passive: true });
   input.rows = 2; input.placeholder = "Message the agent… (Enter sends, Shift+Enter a new line)"; input.setAttribute("aria-label", "Message");
   const stop = el("button", "btn ck-stop", "Stop"), send = el("button", "btn primary", "Send"), note = el("p", "ck-note");
   stop.type = "button"; send.type = "submit"; btns.append(stop, send); form.append(input, btns, note);
   const asks = el("div", "ck-asks"); asks.hidden = true; asks.setAttribute("aria-live", "assertive");
   root.append(head, log, asks, form);
-  const card = { meta: { ...meta }, root, name, where, git, state, log, asks, form, input, stop, send, note, after: 0, online: meta.online !== false };
+  const card = { meta: { ...meta }, root, name, where, git, state, log, asks, form, input, stop, send, note, after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
   x.onclick = () => ckShow(null);
   open.onclick = () => ckShow(card.meta);
   input.addEventListener("keydown", (e) => {
@@ -1703,6 +1722,8 @@ function ckCard(meta) {
     e.preventDefault();
     const text = input.value.trim(); if (!text || send.disabled) return;
     send.disabled = true;
+    card.stickToBottom = true;
+    ckScrollBottom(card, true);
     try {
       if (card.worker) await api("/ui/api/worker/steer", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, worker: card.worker, text }) });
       else await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, text }) });
@@ -1757,7 +1778,7 @@ async function ckPoll(card) {
 // New events into a card's log: text as sanitized Markdown, the rest as lines; never one twice.
 function ckEvents(card, res) {
   if (res.trimmed && !card.after && res.events.length) card.log.append(el("p", "ck-line info", "Older output was trimmed (the chat keeps its newest part)."));
-  const near = card.log.scrollHeight - card.log.scrollTop - card.log.clientHeight < 80;
+  const near = card.stickToBottom !== false || (card.log.scrollHeight - card.log.scrollTop - card.log.clientHeight < 120);
   for (const e of res.events) {
     if (e.n <= card.after) continue; // two polls crossed (board + chat): never append an event twice
     card.after = Math.max(card.after, e.n);
@@ -1768,7 +1789,10 @@ function ckEvents(card, res) {
       msg.innerHTML = renderMd(msg.dataset.raw.replace(/^\n+/, ""));
     } else card.log.append(el("div", e.kind === "user" ? "ck-msg user" : `ck-line ${e.kind}`, e.text));
   }
-  if (res.events.length && (near || res.events.some((e) => e.kind === "user"))) card.log.scrollTop = card.log.scrollHeight;
+  if (res.events.length) {
+    const hasUser = res.events.some((e) => e.kind === "user");
+    if (near || hasUser) ckScrollBottom(card, hasUser);
+  }
 }
 
 // Follow a worker (#/chats/worker/<project>/<ID>): a worker is a chat nobody types in. Its card is a chat card whose
