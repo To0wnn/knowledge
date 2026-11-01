@@ -4934,7 +4934,8 @@ def chat_file(mid: str, cid: str) -> Path:
 
 
 def chat_meta(c: dict) -> dict:
-    return {k: c.get(k) for k in ("id", "agent", "folder", "project", "title", "by", "created", "updated", "status", "session")}
+    return {**{k: c.get(k) for k in ("id", "agent", "folder", "project", "title", "by", "created", "updated", "status", "session")},
+            "waiting": len(c.get("pending") or [])}
 
 
 # Approvals: a turn without YOLO wants a tool its allowed set does not hold. The companion asks here (POST
@@ -5363,9 +5364,9 @@ async def ui_chat(request: Request):
 
 @server.custom_route("/ui/api/chat/send", methods=["POST"])
 async def ui_chat_send(request: Request):
-    """{machine, id, text, force?}: the next message; its pc's companion runs it as the chat's next turn. While a turn
-    runs or waits the message joins the chat's line (at most CHAT_PENDING): each goes to the agent when the turn before
-    it ends, in order; force puts it first in line and stops the running turn. Refused while the pc is offline (it would run whenever the pc comes back)."""
+    """{machine, id, text}: the next message; its pc's companion runs it as the chat's next turn. While a turn runs or
+    waits the message joins the chat's line (at most CHAT_PENDING): each goes to the agent when the turn before it
+    ends, in order. Refused while the pc is offline (it would run whenever the pc comes back)."""
     try:
         row, b, f, c = await chat_request(request, True)
         text = str(b.get("text", "")).strip()
@@ -5375,7 +5376,7 @@ async def ui_chat_send(request: Request):
         return chat_error(e)
     if not row["online"]:
         return JSONResponse({"error": f"{row['label']} is offline: a chat needs its companion running"}, status_code=409)
-    busy, msg, force = [], {"text": text, "by": device.get().get("user", ""), "at": time.time()}, b.get("force") is True
+    busy, msg = [], {"text": text, "by": device.get().get("user", ""), "at": time.time()}
 
     def change(c):
         if c.get("status") in ("queued", "running"):
@@ -5383,11 +5384,10 @@ async def ui_chat_send(request: Request):
             if len(line) >= CHAT_PENDING:
                 busy.append("full")
                 return
-            line.insert(0, msg) if force else line.append(msg)
+            line.append(msg)
             busy.append("queued")
             chat_add(c, "user", text)
-            chat_add(c, "info", "Forced: the current turn stops and the agent gets this next." if force else
-                     "Queued: the agent gets this when its current turn ends.")
+            chat_add(c, "info", "Queued: the agent gets this when its current turn ends.")
             return
         chat_add(c, "user", text)
         c.update(status="queued", title=c.get("title") or " ".join(text.split())[:80])
@@ -5395,11 +5395,6 @@ async def ui_chat_send(request: Request):
     if busy == ["full"]:
         return JSONResponse({"error": f"{CHAT_PENDING} messages wait already: wait for the agent, or stop it"}, status_code=409)
     if busy:
-        # force: stop the turn the pc runs; its end (done) hands out the line's first message, this one. A message
-        # the pc has not picked up yet cannot be stopped: this one simply goes right after it.
-        if force:
-            await asyncio.to_thread(update_state, f.parent / "queue.json",
-                                    lambda q: q[c["id"]].update(stop=True) if q.get(c["id"], {}).get("busy") else None)
         return JSONResponse({"ok": True, "queued": True})
     await asyncio.to_thread(update_state, f.parent / "queue.json", lambda q: q.setdefault(c["id"], {}).update(msg=msg, stop=False))
     return JSONResponse({"ok": True})
@@ -5407,13 +5402,20 @@ async def ui_chat_send(request: Request):
 
 @server.custom_route("/ui/api/chat/stop", methods=["POST"])
 async def ui_chat_stop(request: Request):
-    """{machine, id}: stop the running turn (the companion kills it) or drop the waiting message. A pc offline cannot
-    be reached: the chat is set idle at once and says so."""
+    """{machine, id, force?}: stop the running turn (the companion kills it) or drop the waiting message. A pc offline
+    cannot be reached: the chat is set idle at once and says so. force: stop only a turn the pc runs and keep the line,
+    so its end (done) hands out the first queued message at once."""
     try:
-        row, _, f, c = await chat_request(request, True)
+        row, b, f, c = await chat_request(request, True)
     except (ValueError, AttributeError, TypeError, PermissionError) as e:
         return chat_error(e)
     q = f.parent / "queue.json"
+    if b.get("force") is True:
+        if not row["online"] or not c.get("pending") or not read_json(q, {}).get(c["id"], {}).get("busy"):
+            return JSONResponse({"error": "nothing to force: no queued message behind a running turn"}, status_code=409)
+        await asyncio.to_thread(update_state, f, lambda c: chat_add(c, "info", "Forced: the current turn stops; the next queued message goes in now."))
+        await asyncio.to_thread(update_state, q, lambda q: q.setdefault(c["id"], {}).update(stop=True))
+        return JSONResponse({"ok": True})
     waiting = "msg" in read_json(q, {}).get(c["id"], {})
     await asyncio.to_thread(update_state, f, lambda c: c.pop("pending", None))  # Stop also drops what waited behind it
     if waiting or not row["online"]:

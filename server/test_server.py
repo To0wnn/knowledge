@@ -650,10 +650,12 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     http("POST", "/machine/chats/events", {"chat": cid, "events": [{"kind": "text", "text": "ok"}], "done": True}, token=fr, headers=pc)
     nxt = json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"]
     assert [w["text"] for w in nxt] == ["after that"], nxt
-    # Force: the message goes first in line and the running turn is stopped; its end hands that message out next.
+    # Force: only with a queued message; it stops the running turn but keeps the line, so its end hands out the next.
+    assert ui("/ui/api/chat/stop", {"machine": mid, "id": cid, "force": True})[0] == 409  # nothing queued
+    ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "urgent"})
     ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "later"})
-    st, _, b = ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "urgent", "force": True})
-    assert st == 200 and json.loads(b).get("queued"), b
+    assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={cid}")[2])["chat"]["waiting"] == 2
+    assert ui("/ui/api/chat/stop", {"machine": mid, "id": cid, "force": True})[0] == 200
     assert json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["stop"] == [cid]
     http("POST", "/machine/chats/events", {"chat": cid, "events": [{"kind": "info", "text": "Stopped."}], "done": True}, token=fr, headers=pc)
     assert [w["text"] for w in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"]] == ["urgent"]

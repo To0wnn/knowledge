@@ -1707,31 +1707,36 @@ function ckCard(meta) {
     card.stickToBottom = dist < 80;
     card.savedScrollTop = log.scrollTop;
   }, { passive: true });
-  input.rows = 2; input.placeholder = "Message the agent… (Ctrl+Enter sends, Ctrl+Shift+Enter forces it in while the agent works)"; input.setAttribute("aria-label", "Message");
-  const stop = el("button", "btn ck-stop", "Stop"), force = el("button", "btn", "Force"), send = el("button", "btn primary", "Send"), note = el("p", "ck-note");
-  stop.type = "button"; force.type = "button"; send.type = "submit"; btns.append(stop, force, send);
-  force.title = "Stop the current turn and give the agent this message now (Ctrl+Shift+Enter)"; form.append(input, btns, note);
+  input.rows = 2; input.placeholder = "Message the agent… (Enter a new line, Ctrl+Enter sends)"; input.setAttribute("aria-label", "Message");
+  const stop = el("button", "btn ck-stop", "Stop"), send = el("button", "btn primary", "Send"), note = el("p", "ck-note");
+  stop.type = "button"; send.type = "submit"; btns.append(stop, send); form.append(input, btns, note);
   const asks = el("div", "ck-asks"); asks.hidden = true; asks.setAttribute("aria-live", "assertive");
   root.append(head, log, asks, form);
-  const card = { meta: { ...meta }, root, name, where, git, state, log, asks, form, input, stop, force, send, note, after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
+  const card = { meta: { ...meta }, root, name, where, git, state, log, asks, form, input, stop, send, note, after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
   x.onclick = () => ckShow(null);
   open.onclick = () => ckShow(card.meta);
   input.addEventListener("keydown", (e) => {
-    // Enter is a new line; Ctrl/Cmd+Enter sends (queues while busy), with Shift it forces the message in
+    // Enter is a new line; Ctrl/Cmd+Enter presses the button (Send, Queue or Force)
     if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey) || e.isComposing) return;
-    e.preventDefault(); card.forceNext = e.shiftKey && !force.hidden; form.requestSubmit();
+    e.preventDefault(); form.requestSubmit();
   });
-  force.onclick = () => { card.forceNext = true; form.requestSubmit(); };
+  input.addEventListener("input", () => ckPaint(card)); // typing turns Force back into Queue
   form.onsubmit = async (e) => {
     e.preventDefault();
-    const forced = card.forceNext; card.forceNext = false;
-    const text = input.value.trim(); if (!text || send.disabled) return;
+    const text = input.value.trim();
+    if (!text && card.send.classList.contains("force")) { // empty box with messages waiting: the next one goes in now
+      send.disabled = true;
+      try { await api("/ui/api/chat/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, force: true }) }); }
+      catch (err) { note.className = "ck-note bad"; note.textContent = err.message; }
+      return ckPoll(card);
+    }
+    if (!text || send.disabled) return;
     send.disabled = true;
     card.stickToBottom = true;
     ckScrollBottom(card, true);
     try {
       if (card.worker) await api("/ui/api/worker/steer", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, worker: card.worker, text }) });
-      else await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, text, force: forced }) });
+      else await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, text }) });
       input.value = ""; if (!card.worker) card.meta.status = "queued";
     } catch (err) { note.className = "ck-note bad"; note.textContent = err.message; }
     ckPaint(card); await ckPoll(card); clearTimeout(ck.timer); ck.timer = setTimeout(ckTick, 1500);
@@ -1760,8 +1765,11 @@ function ckPaint(card) {
   card.state.textContent = !card.online ? "pc offline" : m.status === "queued" ? "waiting for the pc" : busy ? "working" : "ready";
   card.root.classList.toggle("running", busy);
   // while the agent answers, a message waits in line (the server keeps up to 5) and goes in when this turn ends
-  card.stop.hidden = card.force.hidden = !busy; card.force.disabled = !card.online; card.send.disabled = !card.online; card.send.textContent = busy ? "Queue" : "Send";
-  card.send.title = busy ? "The agent gets this when its current turn ends" : "";
+  // with messages waiting and nothing typed the button forces: the turn stops and the first waiting message goes in
+  const force = busy && m.status === "running" && m.waiting > 0 && !card.input.value.trim();
+  card.stop.hidden = !busy; card.send.disabled = !card.online; card.send.classList.toggle("force", force);
+  card.send.textContent = force ? "Force" : busy ? "Queue" : "Send";
+  card.send.title = force ? `Stop the current turn; the next of ${m.waiting} waiting message${m.waiting > 1 ? "s" : ""} goes in now` : busy ? "The agent gets this when its current turn ends" : "";
   if (!card.note.classList.contains("bad") || busy) {
     card.note.className = "ck-note";
     card.note.textContent = !card.online ? `${m.label} is offline${card.at ? ` since ${ago(card.at)}` : ""}: a chat needs its companion running.` : "";
@@ -1877,7 +1885,7 @@ function ckWorkerPaint(card) {
     if (w.chat) act("Open chat", "The chat this worker became", () => go(`#/chats/${encodeURIComponent(w.chat)}`));
   }
   card.form.hidden = !live;
-  card.stop.hidden = card.force.hidden = true; card.send.disabled = !live;
+  card.stop.hidden = true; card.send.disabled = !live;
   card.input.placeholder = "Steer the worker… (it reads this after its next step; Ctrl+Enter sends)";
   if (!card.note.classList.contains("bad")) { card.note.className = "ck-note"; card.note.textContent = !card.online ? `${m.label} is offline${card.at ? ` since ${ago(card.at)}` : ""}.` : ""; }
 }
