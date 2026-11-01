@@ -612,7 +612,6 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert ui("/ui/api/chat/send", {"machine": mid, "id": "../../tokens", "text": "hi"})[0] == 400
     st, _, b = ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "hello <b>agent</b>"})
     assert st == 200, b
-    assert ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "again"})[0] == 409  # one turn at a time
     # Her token, even naming this machine id, gets nothing (its own record); the machine's own token gets the message once.
     assert json.loads(http("GET", "/machine/chats", token=et, headers=pc)[1])["work"] == []
     got = json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])
@@ -638,11 +637,24 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     # The second turn goes out with the session of the first (the agent continues its own conversation).
     ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "next"})
     assert json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"][0]["session"] == "th-1"
+    # Messages sent while it answers wait in line and go in one by one as turns end; at most CHAT_PENDING wait; Stop clears them.
+    st, _, b = ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "after that"})
+    assert st == 200 and json.loads(b).get("queued"), b
+    http("POST", "/machine/chats/events", {"chat": cid, "events": [{"kind": "text", "text": "ok"}], "done": True}, token=fr, headers=pc)
+    nxt = json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"]
+    assert [w["text"] for w in nxt] == ["after that"], nxt
+    for i in range(5):
+        assert ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": f"q{i}"})[0] == 200
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "one too many"})[0] == 409
+    assert ui("/ui/api/chat/stop", {"machine": mid, "id": cid})[0] == 200
+    http("POST", "/machine/chats/events", {"chat": cid, "events": [{"kind": "info", "text": "Stopped."}], "done": True}, token=fr, headers=pc)
+    assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={cid}")[2])["chat"]["status"] == "idle"  # the line went with the stop
     # Caps: a chat keeps its newest events within its size; a machine keeps CHAT_KEEP chats (the busy one stays).
     big = [{"kind": "text", "text": "y" * 19_000}] * 60
+    before = json.loads((tmp / "chats" / mid / f"{cid}.json").read_text())["events"][-1]["n"]
     http("POST", "/machine/chats/events", {"chat": cid, "events": big, "done": True}, token=fr, headers=pc)
     data = json.loads((tmp / "chats" / mid / f"{cid}.json").read_text())
-    assert data["trimmed"] and sum(len(e["text"]) for e in data["events"]) < 1_000_000 and data["events"][-1]["n"] == 65, len(data["events"])
+    assert data["trimmed"] and sum(len(e["text"]) for e in data["events"]) < 1_000_000 and data["events"][-1]["n"] == before + 60, len(data["events"])
     for _ in range(50):
         assert ui("/ui/api/chats", {"machine": mid, "agent": "claude", "folder": "/home/x/garden"})[0] == 200
     assert len(json.loads(ui(f"/ui/api/chats?machine={mid}")[2])["chats"]) == 50 and not (tmp / "chats" / mid / f"{cid}.json").exists()

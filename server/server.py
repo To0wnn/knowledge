@@ -4894,6 +4894,7 @@ async def machine_action_result(request: Request):
 # chats/<machine>/, plus a small queue.json per machine that the companion's poll reads.
 CHATS_DIR = ADMIN_DIR / "chats"
 CHAT_KEEP, CHAT_EVENTS, CHAT_BYTES, CHAT_TEXT = 50, 4000, 1_000_000, 20_000  # chats per machine, events and bytes per chat, chars per message
+CHAT_PENDING = 5  # messages a chat keeps in line while its agent answers
 CHAT_KINDS = ("text", "tool", "refused", "error", "info")
 ASK_DETAIL = 4000  # characters of a tool call the owner sees whole; a longer one can only be allowed once
 CHAT_ASK_MINUTES = 30  # a tool approval waits this long for its owner, then counts as denied (admin page, Settings)
@@ -5337,8 +5338,9 @@ async def ui_chat(request: Request):
 
 @server.custom_route("/ui/api/chat/send", methods=["POST"])
 async def ui_chat_send(request: Request):
-    """{machine, id, text}: the next message; its pc's companion runs it as the chat's next turn. Refused while a
-    turn runs or waits, and while the pc is offline (it would run whenever the pc comes back)."""
+    """{machine, id, text}: the next message; its pc's companion runs it as the chat's next turn. While a turn runs or
+    waits the message joins the chat's line (at most CHAT_PENDING): each goes to the agent when the turn before it
+    ends, in order. Refused while the pc is offline (it would run whenever the pc comes back)."""
     try:
         row, b, f, c = await chat_request(request, True)
         text = str(b.get("text", "")).strip()
@@ -5348,18 +5350,26 @@ async def ui_chat_send(request: Request):
         return chat_error(e)
     if not row["online"]:
         return JSONResponse({"error": f"{row['label']} is offline: a chat needs its companion running"}, status_code=409)
-    busy = []
+    busy, msg = [], {"text": text, "by": device.get().get("user", ""), "at": time.time()}
 
     def change(c):
         if c.get("status") in ("queued", "running"):
-            busy.append(1)
+            line = c.setdefault("pending", [])
+            if len(line) >= CHAT_PENDING:
+                busy.append("full")
+                return
+            line.append(msg)
+            busy.append("queued")
+            chat_add(c, "user", text)
+            chat_add(c, "info", "Queued: the agent gets this when its current turn ends.")
             return
         chat_add(c, "user", text)
         c.update(status="queued", title=c.get("title") or " ".join(text.split())[:80])
     await asyncio.to_thread(update_state, f, change)
+    if busy == ["full"]:
+        return JSONResponse({"error": f"{CHAT_PENDING} messages wait already: wait for the agent, or stop it"}, status_code=409)
     if busy:
-        return JSONResponse({"error": "the agent is still answering: wait, or stop it"}, status_code=409)
-    msg = {"text": text, "by": device.get().get("user", ""), "at": time.time()}
+        return JSONResponse({"ok": True, "queued": True})
     await asyncio.to_thread(update_state, f.parent / "queue.json", lambda q: q.setdefault(c["id"], {}).update(msg=msg, stop=False))
     return JSONResponse({"ok": True})
 
@@ -5374,6 +5384,7 @@ async def ui_chat_stop(request: Request):
         return chat_error(e)
     q = f.parent / "queue.json"
     waiting = "msg" in read_json(q, {}).get(c["id"], {})
+    await asyncio.to_thread(update_state, f, lambda c: c.pop("pending", None))  # Stop also drops what waited behind it
     if waiting or not row["online"]:
         await asyncio.to_thread(update_state, q, lambda q: q.pop(c["id"], None))
         await asyncio.to_thread(update_state, f, lambda c: (chat_add(c, "info", "Stopped before it started." if waiting else
@@ -5639,11 +5650,17 @@ async def machine_chat_events(request: Request):
         if isinstance(b.get("session"), str) and re.fullmatch(r"[\w.:-]{1,120}", b["session"]):
             c["session"] = b["session"]
         if b.get("done") is True:
-            c["status"] = "idle"
             asks_settle(c, time.time(), "the turn ended")
+            if c.get("pending"):  # the next message the owner sent meanwhile: its turn now
+                nxt.append(c["pending"].pop(0))
+                c["status"] = "queued"
+            else:
+                c["status"] = "idle"
+    nxt: list = []
     await asyncio.to_thread(update_state, f, change)
     if b.get("done") is True:
-        await asyncio.to_thread(update_state, f.parent / "queue.json", lambda q: q.pop(c["id"], None))
+        await asyncio.to_thread(update_state, f.parent / "queue.json", lambda q: q.__setitem__(c["id"], {"msg": nxt[0], "stop": False})
+                                if nxt else q.pop(c["id"], None))
     return JSONResponse({"ok": True})
 
 

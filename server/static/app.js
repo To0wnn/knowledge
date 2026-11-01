@@ -1711,7 +1711,9 @@ function ckPaint(card) {
   card.state.className = `ck-state ${!card.online ? "offline" : busy ? "running" : ""}`;
   card.state.textContent = !card.online ? "pc offline" : m.status === "queued" ? "waiting for the pc" : busy ? "working" : "ready";
   card.root.classList.toggle("running", busy);
-  card.stop.hidden = !busy; card.send.disabled = busy || !card.online;
+  // while the agent answers, a message waits in line (the server keeps up to 5) and goes in when this turn ends
+  card.stop.hidden = !busy; card.send.disabled = !card.online; card.send.textContent = busy ? "Queue" : "Send";
+  card.send.title = busy ? "The agent gets this when its current turn ends" : "";
   if (!card.note.classList.contains("bad") || busy) {
     card.note.className = "ck-note";
     card.note.textContent = !card.online ? `${m.label} is offline${card.at ? ` since ${ago(card.at)}` : ""}: a chat needs its companion running.` : "";
