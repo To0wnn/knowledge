@@ -564,7 +564,8 @@ def self_test():
         rules = json.loads(Path(g[6]).read_text(encoding="utf-8"))["permissions"]["allow"]
         assert "command(git commit)" in rules and "mcp(knowledge/*)" in rules and not [r for r in rules if "push" in r or "*)" in r and "mcp(" not in r]
         deny = json.loads(Path(g[6]).read_text(encoding="utf-8"))["permissions"]["deny"]
-        assert deny == [f"write_file({os.path.join('/x', n)})" for n in (".git", ".gitattributes", ".gitmodules")], deny
+        roots = dict.fromkeys(["/x", os.path.realpath("/x")])  # Windows: /x and D:\\x, both spellings
+        assert deny == [f"write_file({os.path.join(r, n)})" for r in roots for n in (".git", ".gitattributes", ".gitmodules")], deny
     # Every git a worker starts runs without a repository's fsmonitor or hooks (a config an agent wrote would run).
     e = git_safe_env({"GIT_CONFIG_PARAMETERS": "'a.b'='c'"})
     assert e["GIT_CONFIG_NOSYSTEM"] == "1" and e["GIT_CONFIG_PARAMETERS"].startswith("'a.b'='c' ") and "'core.fsmonitor'='false'" in e["GIT_CONFIG_PARAMETERS"]
