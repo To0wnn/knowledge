@@ -28,6 +28,7 @@ services:
       KNOWLEDGE_VECTORS: /data/state/vectors.npz
       # Optional: sign in through a reverse proxy with forward auth instead (see README, Web sign-in).
       KNOWLEDGE_PROXY_SECRET: ${KNOWLEDGE_PROXY_SECRET:-}
+      KNOWLEDGE_PROXY_USER_HEADER: ${KNOWLEDGE_PROXY_USER_HEADER:-X-Authentik-Username}  # or Remote-User, X-Forwarded-User, ...
       KNOWLEDGE_ADMINS: ${KNOWLEDGE_ADMINS:-}
       KNOWLEDGE_PROXY_IPS: ${KNOWLEDGE_PROXY_IPS:-127.0.0.1}
     volumes:

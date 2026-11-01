@@ -98,6 +98,10 @@ PROJECTS_DIR = Path(os.environ.get("KNOWLEDGE_PROJECTS_DIR", HOME / ".local/shar
 # The web UI trusts the Authentik user header only when Traefik also sends this shared secret, because the
 # container port is reachable on the LAN without Traefik.
 PROXY_SECRET = os.environ.get("KNOWLEDGE_PROXY_SECRET", "")
+# The one header that carries the user name: Authentik's by default; oauth2-proxy sends X-Auth-Request-User or
+# X-Forwarded-User, Authelia and Caddy Remote-User. One name only, never a list: a proxy overwrites only its own header,
+# so a second accepted name would let a signed-in user pass any other name in a header the proxy forwards untouched.
+PROXY_USER_HEADER = os.environ.get("KNOWLEDGE_PROXY_USER_HEADER", "X-Authentik-Username").strip().lower()
 # Sign-in without a reverse proxy: one admin with a password (a small installation); a cookie keeps the session.
 UI_PASSWORD = os.environ.get("KNOWLEDGE_UI_PASSWORD", "")
 UI_USER = os.environ.get("KNOWLEDGE_UI_USER", "admin")
@@ -2675,11 +2679,12 @@ def note_user(username: str):
 
 
 def proxied_user(headers: dict) -> str:
-    """The Authentik username, but only on requests that really came through Traefik (shared secret header)."""
+    """The proxy's user name (KNOWLEDGE_PROXY_USER_HEADER), but only on requests that really came through the proxy
+    (shared secret header): never trust the user header on its own."""
     given = headers.get(b"x-knowledge-proxy", b"").decode()
     if not (PROXY_SECRET and given and hmac.compare_digest(given, PROXY_SECRET)):
         return ""
-    return headers.get(b"x-authentik-username", b"").decode().strip()
+    return headers.get(PROXY_USER_HEADER.encode(), b"").decode().strip()
 
 
 SESSION_COOKIE, COOKIE_DAYS = "kn_session", 30
@@ -2824,7 +2829,7 @@ class BearerAuth:
     async def ui(self, scope, receive, send, path, headers):
         api = path.startswith("/ui/api/")
         if path == "/ui/logout":  # ends a password session; behind Authentik its own sign-out follows
-            resp = RedirectResponse("/outpost.goauthentik.io/sign_out" if proxied_user(headers) else "/ui", status_code=303)
+            resp = RedirectResponse("/outpost.goauthentik.io/sign_out" if proxied_user(headers) and PROXY_USER_HEADER == "x-authentik-username" else "/ui", status_code=303)
             resp.delete_cookie(SESSION_COOKIE, path="/")
             return await resp(scope, receive, send)
         if path == "/ui/login" and scope["method"] == "POST" and UI_PASSWORD:
@@ -3804,6 +3809,7 @@ def system_state() -> dict:
             {"name": "Admins (config)", "value": ", ".join(sorted(CONFIG_ADMINS)) or "(none)", "where": "compose.yaml KNOWLEDGE_ADMINS"},
             {"name": "Allowed hosts", "value": os.environ.get("KNOWLEDGE_ALLOWED_HOSTS", ""), "where": "local.env KNOWLEDGE_ALLOWED_HOSTS"},
             {"name": "Trusted proxy IPs", "value": os.environ.get("KNOWLEDGE_PROXY_IPS", ""), "where": "local.env KNOWLEDGE_PROXY_IPS"},
+            {"name": "Proxy user header", "value": PROXY_USER_HEADER, "where": "KNOWLEDGE_PROXY_USER_HEADER"},
             {"name": "Proxy secret", "value": "set" if PROXY_SECRET else "not set (password sign-in only)" if UI_PASSWORD else "MISSING: the web UI cannot sign anyone in", "where": "KNOWLEDGE_PROXY_SECRET"},
             {"name": "Known secrets (hashes)", "value": "unreadable" if known is None else str(known), "where": "token.py push-secrets → /config/secrets.json"},
             {"name": "Device tokens", "value": str(len(tokens)), "where": "this page → /admin/tokens.json"},

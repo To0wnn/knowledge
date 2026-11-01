@@ -42,11 +42,14 @@ The one-machine `compose.yaml` reads these from `.env` (checked against `compose
 | `KNOWLEDGE_UID`, `KNOWLEDGE_GID` | `1000` | The owner of `./data` |
 | `TZ` | `UTC` | Dates in source file names and the audit log |
 | `KNOWLEDGE_PROXY_SECRET`, `KNOWLEDGE_ADMINS`, `KNOWLEDGE_PROXY_IPS` | empty, empty, `127.0.0.1` | Sign-in through a reverse proxy (below) |
+| `KNOWLEDGE_PROXY_USER_HEADER` | `X-Authentik-Username` | The header the proxy puts the user name in (below) |
 
 Sign-in through a reverse proxy: the proxy sends the shared secret in the header `X-Knowledge-Proxy` and the user name
-in `X-Authentik-Username` (the header Authentik's forward auth sets); `KNOWLEDGE_ADMINS` names the users with full
-access, other users who sign in are listed on the admin page to be given projects. `KNOWLEDGE_PROXY_IPS` are the
-addresses trusted for `X-Forwarded-*` headers.
+in `KNOWLEDGE_PROXY_USER_HEADER`: `X-Authentik-Username` (Authentik's forward auth, the default), `Remote-User`
+(Authelia, Caddy), `X-Auth-Request-User` or `X-Forwarded-User` (oauth2-proxy). The user header counts only together
+with the secret, and only the one configured name: a proxy overwrites its own header, but passes others from the
+browser through untouched. `KNOWLEDGE_ADMINS` names the users with full access, other users who sign in are listed on
+the admin page to be given projects. `KNOWLEDGE_PROXY_IPS` are the addresses trusted for `X-Forwarded-*` headers.
 
 ## How it works
 
