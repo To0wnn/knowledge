@@ -833,7 +833,7 @@ def start_worker(t: dict, tok: str, now: float, ws: dict = None) -> tuple:
         # a branch rolled back to that point is never taken for merged
         first = min((w for w in (ws or {}).values() if where.get("worktree") and w.get("worktree") == where["worktree"] and w.get("base")),
                     key=lambda w: w.get("started", 0), default=None)
-        where = {**where, "base": first["base"]} if first else where
+        where = {**where, **{k: first[k] for k in ("base", "base_branch") if first.get(k)}} if first else where
         yolo = bool(load("yolo.json", {}).get(t["agent"], {}).get("on"))
         rec = workers.start(t["agent"], t, token_store.machine().get("label") or socket.gethostname(), where, yolo, nonce)
     except Exception as e:
@@ -1092,6 +1092,24 @@ def progress(w: dict, g) -> dict:
             "log": log_tail(w.get("log"))}
 
 
+def review(w: dict, now: float):
+    """For the review card of an ended worker (last 7 days, not merged): its branch against the branch its worktree
+    was made from: commits ahead, changed files, the newest commit's subject. None without a recorded base branch."""
+    b, into = w.get("branch"), w.get("base_branch")
+    if not b or not into or w["status"] in ("running", "merged") or now - (w.get("ended") or now) > 7 * 86400:
+        return None
+    run = lambda *a: workers.git(w["repo"], *a, env=GIT_RO, timeout=10)
+    try:
+        n = run("rev-list", "--count", f"{into}..refs/heads/{b}")
+        if n.returncode:
+            return None
+        files = run("diff", "--name-only", "--no-color", f"{into}...refs/heads/{b}").stdout.splitlines()
+        return {"into": into, "ahead": int(n.stdout.strip() or 0), "files": files[:15], "nfiles": len(files),
+                "commit": mask(run("log", "-1", "--format=%s", f"refs/heads/{b}").stdout.strip())[:TAIL_WIDTH]}
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
 def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, resets=None):
     """The machine's state for the Machines list: settings, game, per agent YOLO, hooks and limit, the workers, and
     why each ready task waits here (the Tasks tab shows it)."""
@@ -1103,7 +1121,8 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
                        for a in AGENTS if installed(a)},
             "workers": [{**{k: w.get(k) for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open", "why")},
                          "checkpoint": bool(w.get("checkpoint")), "merged": w["status"] == "merged", "git": gits.get(k),
-                         **({"progress": progress(w, gits.get(k))} if w["status"] == "running" else {})} for k, w in ws.items()],
+                         **({"progress": progress(w, gits.get(k))} if w["status"] == "running" else {}),
+                         **({"review": r} if (r := review(w, now)) else {})} for k, w in ws.items()],
             "limitWait": wait, "waiting": waiting or {}, "folders": links, "projects": load("state.json", {}).get("projects", [])}
     server("POST", "/machine/report", tok, body)
 
@@ -1185,6 +1204,15 @@ def run_action(a: dict) -> str:
         if later := [o["id"] for o in ws.values() if o is not w and o.get("worktree") == w["worktree"] and o.get("started", 0) > w.get("started", 0)]:
             raise RuntimeError(f"{', '.join(later)} went on in the worktree of {args['id']} after it: roll back {later[-1]} instead")
         return workers.rollback(w["cwd"], w["id"])
+    if act == "merge":  # the review card's Merge: into the branch the worktree was made from, in the main checkout
+        with TICK, LOCK:  # between rounds: a round's merged() cleanup must not remove the worktree halfway
+            ws = load("workers.json", {})
+            w = ws.get(f"{args.get('project')}/{args['id']}")
+            if not w or w["status"] in ("running", "merged") or not w.get("branch"):
+                raise RuntimeError(f"no finished worker with a branch for {args['id']}")
+            if shared_running(ws, w):
+                raise RuntimeError(f"another worker runs in the worktree of {args['id']} now; stop it first")
+            return workers.merge(w)
     if act == "trust_hooks":
         return trust(agent)
     if act == "link_folder":

@@ -67,7 +67,16 @@ The companion that starts workers is described in [companion.md](companion.md); 
   ~/Downloads (privacy consent): a task linked there waits with that reason until it gets Full Disk Access. A worker that ended without finishing its task is not started
   again for 6 hours unless asked. Its claim marker `(claimed <agent> worker, <date>)` holds only while its companion
   renews the task's lease, so such a task shows as startable again (and gets the idle notice) instead of staying stuck. The companion knows a worker by its pid and that process's start time,
-  so after a reboot a recorded worker counts as ended and a stop never hits a reused pid. Once the requester merged the branch into main or master, the companion removes the
+  so after a reboot a recorded worker counts as ended and a stop never hits a reused pid. A worker records the branch its
+  worktree was made from (`base_branch`). When it ended and its result line `[<requester>, <ID>-done]` names its branch,
+  the Inbox shows a **Review** card under Needs you (`kind: review`): commits ahead of that branch, changed files, the
+  newest commit, the worker's done/left and the clause of its done text about tests (the server runs nothing).
+  **Merge** is the machine action `merge` (owner only): in the main checkout, only when it is on that branch with no
+  uncommitted changes, `git merge --no-ff --no-edit task/<ID>` without hooks or fsmonitor; a conflict is aborted and
+  reported as "conflict: merge by hand"; never pushed. **Reject** (`POST /ui/api/review/reject {key, reason,
+  send_back}`) keeps the branch and takes the card off with its reason; with "send back" and a reason the result line
+  becomes `- open until <date> [<agent>, <ID>-fix] from <user>, start now: ...`, which a worker continues on the same
+  branch. Once the requester merged the branch into main, master or that base branch, the companion removes the
   worktree; unmerged a week after the worker ended: lint `worker_unmerged`. While an online pc runs an agent's workers
   for the project (workers allowed, a maximum above 0, the agent installed, a folder linked), that agent's interactive
   sessions (`chat=1`) take no lease: they hear a new task once as "runs in workers" and where one runs; when the user

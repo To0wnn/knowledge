@@ -42,10 +42,8 @@ def safe(text: str) -> str:
 
 
 def base_id(tid: str) -> str:
-    """KN-12-cont-cont -> KN-12: a hand-over continues the task's branch."""
-    while tid.lower().endswith("-cont"):
-        tid = tid[:-5]
-    return tid
+    """KN-12-cont-cont -> KN-12: a hand-over (-cont) or a review sent back (-fix) continues the task's branch."""
+    return re.sub(r"(?:-cont|-fix)+$", "", tid, flags=re.I)
 
 
 def git(cwd, *args, env=None, check=False, timeout=60) -> subprocess.CompletedProcess:
@@ -56,7 +54,7 @@ def git(cwd, *args, env=None, check=False, timeout=60) -> subprocess.CompletedPr
 
 
 def worktree(folder: str, tid: str, project: str = "") -> dict:
-    """Where a worker for task `tid` works: {cwd, worktree, branch, repo, base} with its own worktree on branch
+    """Where a worker for task `tid` works: {cwd, worktree, branch, repo, base, base_branch} with its own worktree on branch
     task/<base ID> when the project folder is in a git repository (an existing one is reused: a hand-over goes on
     there), else {cwd: folder}."""
     top = git(folder, "rev-parse", "--show-toplevel")
@@ -68,6 +66,7 @@ def worktree(folder: str, tid: str, project: str = "") -> dict:
     # branch (checked out already) instead of letting both commit on it
     tag = hashlib.sha256(f"{repo.resolve()}\n{project}".encode()).hexdigest()[:6]
     branch, wt = f"task/{safe(bid)}", WORKTREES / f"{safe(repo.name)}-{tag}-{safe(bid)}"
+    on = git(repo, "symbolic-ref", "--short", "-q", "HEAD").stdout.strip()  # what a review merges into (a new worktree starts from it)
     if not (wt / ".git").exists():
         WORKTREES.mkdir(parents=True, exist_ok=True)
         has = git(repo, "rev-parse", "-q", "--verify", f"refs/heads/{branch}").returncode == 0
@@ -86,7 +85,8 @@ def worktree(folder: str, tid: str, project: str = "") -> dict:
         if project_marker.MARKER not in (exclude.read_text(encoding="utf-8") if exclude.exists() else ""):
             with exclude.open("a", encoding="utf-8") as f:
                 f.write(f"\n{project_marker.MARKER}\n")
-    return {"cwd": str(cwd), "worktree": str(wt), "branch": branch, "repo": str(repo), "base": git(wt, "rev-parse", "HEAD").stdout.strip()}
+    return {"cwd": str(cwd), "worktree": str(wt), "branch": branch, "repo": str(repo), "base": git(wt, "rev-parse", "HEAD").stdout.strip(),
+            "base_branch": on}
 
 
 def checkpoint(cwd: str, name: str) -> str:
@@ -359,14 +359,41 @@ def stop_note(w: dict, target: str) -> Path:
 
 
 def merged(w: dict) -> bool:
-    """The worker's branch has commits and they are in the repository's main branch (main or master)."""
+    """The worker's branch has commits and they are in the repository's main branch (main or master) or the branch its
+    worktree was made from."""
     if not w.get("branch"):
         return False
     tip = git(w["repo"], "rev-parse", "-q", "--verify", f"refs/heads/{w['branch']}").stdout.strip()
     if not tip or tip == w.get("base"):
         return False
-    return any(git(w["repo"], "merge-base", "--is-ancestor", tip, b).returncode == 0 for b in ("main", "master")
-               if git(w["repo"], "rev-parse", "-q", "--verify", f"refs/heads/{b}").returncode == 0)
+    return any(git(w["repo"], "merge-base", "--is-ancestor", tip, b).returncode == 0 for b in dict.fromkeys(("main", "master", w.get("base_branch")))
+               if b and git(w["repo"], "rev-parse", "-q", "--verify", f"refs/heads/{b}").returncode == 0)
+
+
+def merge(w: dict) -> str:
+    """The review's Merge: the worker's branch into the branch its worktree was made from, in the main checkout, with
+    `git merge --no-ff`; only when that checkout is on that branch and has no uncommitted changes. A conflict is
+    aborted (never a half merge); nothing is pushed. merged() then lets the companion remove the worktree."""
+    repo, branch, into = w.get("repo"), w.get("branch"), w.get("base_branch")
+    if not (repo and branch and into):
+        raise RuntimeError("no base branch was recorded for this worker (started before plugin 0.19.1, or on a detached HEAD): merge by hand")
+    env = git_safe_env({})  # no fsmonitor or hooks: a YOLO worker could have written the repository's config
+    on = git(repo, "symbolic-ref", "--short", "-q", "HEAD").stdout.strip()
+    if on != into:
+        raise RuntimeError(f"refused: {repo} is on {on or 'a detached HEAD'}, not {into}; switch it to {into} first")
+    if git(repo, "status", "--porcelain", "--untracked-files=no", env=env).stdout.strip():
+        raise RuntimeError(f"refused: {repo} has uncommitted changes; commit or stash them first")
+    n = git(repo, "rev-list", "--count", f"{into}..refs/heads/{branch}")
+    if n.returncode or n.stdout.strip() == "0":
+        raise RuntimeError(f"nothing to merge: {branch} has no commits that {into} lacks" if not n.returncode else f"no branch {branch}")
+    r = git(repo, "merge", "--no-ff", "--no-edit", f"refs/heads/{branch}", env=env, timeout=300)
+    if r.returncode:
+        if git(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD").returncode == 0:
+            a = git(repo, "merge", "--abort", env=env)
+            raise RuntimeError(f"conflict: merge by hand ({branch} into {into})"
+                               + ("; the merge was aborted, nothing changed" if not a.returncode else f"; git merge --abort failed too: {a.stderr.strip()[:160]}"))
+        raise RuntimeError(f"git merge refused, nothing changed: {(r.stderr or r.stdout).strip()[:200]}")
+    return f"merged {branch} into {into} ({git(repo, 'rev-parse', '--short', 'HEAD').stdout.strip()}), not pushed; the worktree goes at the next round"
 
 
 def remove(w: dict) -> str:
@@ -421,6 +448,40 @@ def game_session() -> str:
     return f"a Wolf game session runs ({len(sessions)})" if sessions else ""
 
 
+def merge_test(repo: Path, w: dict):
+    """The review's Merge on a real repository: refused on another branch or with changes, a conflict aborted and said,
+    a clean merge a --no-ff merge commit."""
+    def work(name, text, msg, where=w["worktree"]):
+        (Path(where) / name).write_text(text)
+        git(where, "add", name, check=True)
+        git(where, "commit", "-qm", msg, check=True)
+
+    def refused(why):
+        try:
+            merge(w)
+        except RuntimeError as e:
+            assert why in str(e), e
+            return str(e)
+        raise AssertionError(f"merged although {why}")
+    refused("nothing to merge")
+    work("c.txt", "worker\n", "feat: c")
+    git(repo, "checkout", "-q", "-b", "other", check=True)
+    refused("not main")
+    git(repo, "checkout", "-q", "main", check=True)
+    (repo / "app" / "a.txt").write_text("dirty\n")
+    refused("uncommitted changes")
+    git(repo, "checkout", "-q", "--", ".", check=True)
+    work("c.txt", "main\n", "feat: c on main", where=repo)
+    head = git(repo, "rev-parse", "HEAD").stdout.strip()
+    refused("conflict: merge by hand")
+    assert git(repo, "rev-parse", "-q", "--verify", "MERGE_HEAD").returncode and not git(repo, "status", "--porcelain").stdout.strip() \
+        and git(repo, "rev-parse", "HEAD").stdout.strip() == head, "a conflict leaves no half merge"
+    git(repo, "reset", "-q", "--hard", "HEAD~1", check=True)
+    assert merge(w).startswith("merged task/KN-6 into main")
+    assert git(repo, "log", "-1", "--format=%P").stdout.count(" ") == 1, "a merge commit (--no-ff)"
+    assert (repo / "c.txt").read_text() == "worker\n" and merged(w) and remove(w) == "worktree and branch removed"
+
+
 def self_test():
     global WORKTREES, DIR
     with tempfile.TemporaryDirectory() as t:
@@ -468,12 +529,14 @@ def self_test():
         assert not merged(w)
         git(repo, "merge", "-q", "--ff-only", w["branch"], check=True)
         assert merged(w) and remove(w) == "worktree and branch removed" and not Path(w["worktree"]).exists()
+        assert w["base_branch"] == "main"
+        merge_test(repo, worktree(str(sub), "KN-6"))
         plain = Path(t) / "plain"
         plain.mkdir()
         assert worktree(str(plain), "KN-2") == {"cwd": str(plain)}
         assert not Path(outer).exists(), "a calling git hook's index is never touched"
         del os.environ["GIT_INDEX_FILE"]
-    assert base_id("KN-3-cont-cont") == "KN-3"
+    assert base_id("KN-3-cont-cont") == "KN-3" and base_id("KN-3-fix") == "KN-3" and base_id("KN-3-cont-FIX") == "KN-3"
     # A worker is its pid plus that process's start: a pid that now names another process is never it, never killed.
     sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=os.name != "nt")
     try:

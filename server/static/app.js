@@ -1291,7 +1291,7 @@ $("ingest-form").addEventListener("submit", async (e) => {
 // text (textContent): nothing an agent prints becomes markup. Inbox and Chats are routes (shell.js): #/chats/<chat id>
 // is one chat (its card is keyed by pc and chat id).
 const AGENT_MARK = { claude: "C", codex: "X", agy: "A" };
-const ck = { cards: new Map(), machines: [], chats: [], board: [], view: "", timer: 0, summaryAt: 0, doneOpen: false, focus: "", hit: "", boardAt: 0, filter: "" };
+const ck = { cards: new Map(), machines: [], chats: [], board: [], view: "", timer: 0, summaryAt: 0, doneOpen: false, focus: "", hit: "", boardAt: 0, filter: "", waits: new Map() };
 const ckKey = (c) => `${c.machine}/${c.id}`;
 const ckBusy = (s) => s === "running" || s === "queued";
 const ckShort = (path) => (path || "").split(/[\\/]/).filter(Boolean).pop() || path;
@@ -1318,6 +1318,10 @@ async function ckSummary() {
   ck.summaryAt = Date.now();
   const [ms, cs, bd] = await Promise.all([api("/ui/api/machines"), api("/ui/api/chats"), api("/ui/api/board").catch(() => ({ items: [] }))]);
   ck.machines = ms.machines.filter((m) => m.own && !m.old);
+  for (const m of ck.machines) for (const x of m.actions || []) { // a Merge queued from a card: say how it went on the pc
+    const what = ck.waits.get(x.id);
+    if (what && (x.status === "done" || x.status === "failed")) { ck.waits.delete(x.id); toast(`${what}: ${x.result || x.status}`, x.status === "failed"); }
+  }
   ck.chats = cs.chats; ck.board = bd.items; ck.boardAt = Date.now(); inboxCount(ck.board);
   const now = Date.now() / 1000;
   let live = ck.chats.filter((c) => ckBusy(c.status)).length, worst = null;
@@ -1486,17 +1490,19 @@ function ckItem(i) {
   main.type = "button"; card.dataset.key = i.key || "";
   top.append(el("span", "ck-mark", AGENT_MARK[i.agent] || (i.owner || "?")[0].toUpperCase()), el("strong", null, i.kind === "ask" ? ckUnbidi(i.title) : i.title));
   if (i.overdue) top.append(el("span", "chip bad", "overdue"));
-  const where = [i.kind === "worker" ? "worker" : i.kind === "task" ? (i.result ? "result" : `task for ${i.owner}`) : i.kind === "ask" ? "approval" : "", i.label, ckShort(i.folder),
+  const where = [i.kind === "review" ? `review · ${AGENT_NAME[i.agent] || i.agent}` : i.kind === "worker" ? "worker" : i.kind === "task" ? (i.result ? "result" : `task for ${i.owner}`) : i.kind === "ask" ? "approval" : "", i.label, ckShort(i.folder),
     i.due && !i.result ? `due ${i.due}` : "", i.at ? ago(i.at) : ""];
   main.append(top, el("span", "ck-item-where", where.filter(Boolean).join(" · ")), el("span", "ck-item-line", i.line));
   if (i.kind === "worker" && i.why && !i.line.includes(i.why)) main.append(el("span", "ck-item-why", i.why)); // the line says why and "pc offline since"
   if (i.progress) main.append(workerProgress(i.progress));
+  if (i.kind === "review") main.append(ckReview(i));
   card.append(main);
-  main.title = i.kind === "chat" || i.kind === "ask" ? "Open this chat" : i.kind === "task" ? "Open its line in the memo" : "How to look at this worker";
+  main.title = i.kind === "chat" || i.kind === "ask" ? "Open this chat" : i.kind === "task" || i.kind === "review" ? "Open its line in the memo" : "How to look at this worker";
   main.onclick = () => {
     if (i.kind === "chat") return ckShow(ck.chats.find((c) => ckKey(c) === `${i.machine}/${i.id}`) || i);
     if (i.kind === "ask") return ckShow(ck.chats.find((c) => ckKey(c) === `${i.machine}/${i.chat}`));
     if (i.kind === "task") { return openNote(i.path, { find: [i.id.toLowerCase()] }); }
+    if (i.kind === "review") return openNote(i.path, { find: [`${i.task.toLowerCase()}-done`] });
     const more = card.querySelector(".ck-item-open");
     if (more) more.remove(); else card.append(el("p", "ck-item-open", i.open || "No details yet."));
   };
@@ -1513,11 +1519,58 @@ function ckItem(i) {
     () => confirm(`Stop the worker on ${i.id}?`) && ckDo("/ui/api/machines/action", { machine: i.machine, action: "stop_worker", args: { project: i.project, id: i.id } }));
   if (i.kind === "worker" && i.status === "failed" && i.can_restart) act("Restart", "Start this worker again now",
     () => ckDo("/ui/api/machines/action", { machine: i.machine, action: "restart", args: { project: i.project, id: i.id } }));
+  if (i.kind === "review") {
+    act("View diff", `The changes on ${i.branch}, read on ${i.label}`, () => ckDiff(i));
+    if (i.can_merge) act("Merge", `git merge --no-ff ${i.branch} into ${i.into} on ${i.label}`, () => ckMerge(i));
+    act("Reject", "Keep the branch, take the card off the board; optionally send it back to the agent", () => ckReject(card, i));
+  }
   if (i.result) act("Open memo", "Read the whole line in its memo; remove it there (or under Tasks) once read", () => main.click());
-  if (i.col === "needs" && !i.approve && i.kind !== "ask") act("Dismiss", "Take it off the board until it changes again", () => ckDo("/ui/api/board/dismiss", { key: i.key, sig: i.sig }));
+  if (i.col === "needs" && !i.approve && i.kind !== "ask" && i.kind !== "review") act("Dismiss", "Take it off the board until it changes again", () => ckDo("/ui/api/board/dismiss", { key: i.key, sig: i.sig }));
   if (i.kind === "chat" && i.col === "running") act("Stop", "Stop this turn", () => ckDo("/ui/api/chat/stop", { machine: i.machine, id: i.id }));
   if (acts.childNodes.length) card.append(acts);
   return card;
+}
+
+// A finished worker's branch, for review: what the pc counted, what the worker said it did, left and tested. The
+// server runs nothing of it; Merge is a fixed action of that pc's companion, which refuses a dirty or other checkout.
+function ckReview(i) {
+  const box = el("span", "progress ck-review"), row = (k, v) => { const r = el("span", "ck-review-row"); r.append(el("b", null, k), " ", v); box.append(r); };
+  if (i.commit) row("last commit", i.commit);
+  if (i.done) row("done", i.done);
+  if (i.left) row("left", i.left);
+  row("tests", i.tests || "not reported by the worker");
+  if (i.files.length) box.append(el("code", "progress-log", i.files.join("\n") + (i.nfiles > i.files.length ? `\n… ${i.nfiles - i.files.length} more` : "")));
+  return box;
+}
+async function ckMerge(i) {
+  if (!confirm(`Merge ${i.branch} into ${i.into} on ${i.label}?\n\nIts companion runs git merge --no-ff in the main checkout, only when that is on ${i.into} and has no uncommitted changes. A conflict is aborted, nothing is pushed.`)) return;
+  try {
+    const { id } = await api("/ui/api/machines/action", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ machine: i.machine, action: "merge", args: { project: i.project, id: i.id } }) });
+    ck.waits.set(id, `Merge ${i.branch} on ${i.label}`);
+    toast(`Asked ${i.label} to merge ${i.branch} into ${i.into}`, false);
+  } catch (e) { toast(e.message); }
+  ck.summaryAt = 0; ckTick();
+}
+function ckReject(card, i) {
+  const old = card.querySelector(".ck-reject");
+  if (old) return old.remove();
+  const form = el("form", "ck-reject"), reason = el("input"), lab = el("label", "ck-reject-back"), back = el("input"), go = el("button", "small", "Reject");
+  reason.placeholder = "Why (optional; needed to send it back)"; reason.maxLength = 300; reason.setAttribute("aria-label", "Reason");
+  back.type = "checkbox"; lab.append(back, ` send back to ${AGENT_NAME[i.agent] || i.agent} as ${i.task}-fix`);
+  go.type = "submit";
+  form.append(reason, lab, go);
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    if (back.checked && !reason.value.trim()) return toast("Sending it back needs a reason: the agent only gets that line.");
+    go.disabled = true;
+    try {
+      await api("/ui/api/review/reject", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: i.key, reason: reason.value, send_back: back.checked }) });
+      toast(back.checked ? `Sent ${i.task} back to ${AGENT_NAME[i.agent] || i.agent}` : `Review of ${i.task} rejected; the branch stays`, false);
+    } catch (err) { toast(err.message); go.disabled = false; return; }
+    ck.summaryAt = 0; ckTick();
+  };
+  card.append(form); reason.focus();
 }
 
 // The git pill: branch · changed files · commits ahead/behind the branch it is compared with (the companion counts,
@@ -1534,12 +1587,12 @@ let ckDiffAsk = 0;
 async function ckDiff(i) {
   const body = $("ck-diff-body"), ask = ++ckDiffAsk, say = (cls, text) => body.replaceChildren(el("p", cls, text));
   $("ck-diff-title").textContent = `Changes · ${i.title}`;
-  $("ck-diff-where").textContent = `${i.label} · ${i.kind === "worker" ? `worker ${i.id}` : i.folder} · ${ckGitText(i.git)}`;
+  $("ck-diff-where").textContent = `${i.label} · ${i.kind === "worker" || i.kind === "review" ? `worker ${i.id}` : i.folder}${i.git ? ` · ${ckGitText(i.git)}` : ""}`;
   say("muted", `Asking ${i.label}…`);
   if (!$("ck-diff-dialog").open) $("ck-diff-dialog").showModal();
   try {
     const { id } = await api("/ui/api/git/diff", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(i.kind === "worker" ? { machine: i.machine, worker: `${i.project}/${i.id}` } : { machine: i.machine, chat: i.id }) });
+      body: JSON.stringify(i.kind === "worker" || i.kind === "review" ? { machine: i.machine, worker: `${i.project}/${i.id}` } : { machine: i.machine, chat: i.id }) });
     for (let n = 0; n < 40 && ask === ckDiffAsk && $("ck-diff-dialog").open; n++) {
       await new Promise((r) => setTimeout(r, n ? 1000 : 300));
       const d = await api(`/ui/api/git/diff?machine=${i.machine}&id=${id}`);

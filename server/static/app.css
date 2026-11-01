@@ -523,6 +523,11 @@ span.ck-pill { height: 32px; padding: 0 14px; font-size: 13px; color: var(--ink)
 .ck-bunch[open] > summary { padding-left: 4px; padding-right: 4px; }
 .ck-board > .ck-foot { grid-column: 1 / -1; margin: 0 4px; font-size: 13px; }
 .ck-item-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0 12px 10px; }
+.ck-review-row { overflow-wrap: anywhere; }
+.ck-review-row b { color: var(--ink); font-weight: 600; }
+.ck-reject { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 12px 10px; font-size: 12.5px; }
+.ck-reject input:not([type]) { flex: 1 1 220px; min-width: 0; }
+.ck-reject-back { display: flex; align-items: center; gap: 6px; }
 .ck-item-open { margin: 0 12px 10px; font: 12px/1.45 var(--mono); color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 .ck-git { max-width: 100%; padding: 2px 9px; border: 1px solid var(--line-hi); border-radius: 999px; background: var(--hover); color: var(--ink); font: 12px/1.5 var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .ck-git:hover { border-color: var(--amber); }

@@ -1175,11 +1175,25 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         (gwt / "work.txt").write_text("done\n", encoding="utf-8")
         for args in (["add", "work.txt"], ["commit", "-qm", "feat: work"]):
             subprocess.run(["git", "-C", str(gwt), *args], check=True, capture_output=True)
-        subprocess.run(["git", "-C", str(repo), "merge", "-q", "--ff-only", "task/CMP-GEMINI"], check=True, capture_output=True)
+        # The review card's Merge: a remote action; the companion merges --no-ff into the branch the worktree came from.
+        (repo / "README.md").write_text("dirty\n", encoding="utf-8")
+        act("merge", {"project": "garden", "id": "CMP-GEMINI"})
+        wait_for(lambda: done()[-1]["status"] not in ("waiting", "running"), 20)
+        check(done()[-1]["status"] == "failed" and "uncommitted changes" in done()[-1]["result"] and gwt.exists(),
+              "review: Merge refuses a main checkout with uncommitted changes", json.dumps(done()[-1]))
+        subprocess.run(["git", "-C", str(repo), "checkout", "-q", "--", "README.md"], check=True, capture_output=True)
+        act("merge", {"project": "garden", "id": "CMP-GEMINI"})
+        wait_for(lambda: done()[-1]["status"] not in ("waiting", "running"), 20)
+        parents = subprocess.run(["git", "-C", str(repo), "log", "-1", "--format=%P"], capture_output=True, text=True).stdout.split()
+        check(done()[-1]["status"] == "done" and "merged task/CMP-GEMINI into main" in done()[-1]["result"] and len(parents) == 2
+              and (repo / "work.txt").exists(), "review: Merge runs git merge --no-ff into the worktree's base branch on the pc", json.dumps(done()[-1]))
         call("POST", "/local/api/tick", {})
         ws = json.loads(wfile.read_text(encoding="utf-8"))
         check(ws.get("garden/CMP-GEMINI", {}).get("status") == "merged" and not gwt.exists(),
               "workers: once the requester merged the branch, the companion removes the worktree", json.dumps(ws.get("garden/CMP-GEMINI"))[:400])
+        code, out, err = run([sys.executable, str(hooks / "workers.py"), "--self-test"], "", env)
+        check(code == 0 and out.strip() == "ok", "review: workers.py self-test on a real repository (clean merge, conflict aborted and said, "
+              "dirty or other branch refused)", out[-400:] + err[-800:])
         Path(str(calls) + ".sleep").unlink()
         for w in json.loads(wfile.read_text(encoding="utf-8")).values():
             if w["status"] == "running":
