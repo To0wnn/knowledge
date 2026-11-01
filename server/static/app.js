@@ -470,7 +470,7 @@ async function homeView() {
     const show = (k) => list.replaceChildren(...ranked.slice(0, k).map((n) => hitItem(n.label, hooks.get(n.id) || n.desc || "", () => openNote(n.id))));
     show(5); card.append(h, list);
     if (ns.length > 5) {
-      const more = el("button", "ghost small", `All ${ns.length}`);
+      const more = el("button", "btn small", `All ${ns.length}`);
       more.onclick = () => { show(ns.length); more.remove(); }; // unfold in place: works on a phone too, where the list is hidden
       card.append(more);
     }
@@ -491,11 +491,11 @@ async function homeSide() {
     list.append(hitItem(n ? n.label : f.path.split("/").pop(), `${ago(f.mtime)} · ${f.session ? f.session.device : f.by === "VM" ? "on the VM" : writer(f.by)}`, () => openNote(f.path)));
   }
   if (!res.files.length) list.append(el("li", null, emptyState("No changes yet.")));
-  const all = el("button", "ghost small", "All changes"); all.onclick = () => go("#/changes");
+  const all = el("button", "btn small", "All changes"); all.onclick = () => go("#/changes");
   box.append(el("h3", null, "Recently changed"), list, all);
   const lint = $("lint-count").textContent;
   if (lint) {
-    const b = el("button", "ghost small", `${lint} lint findings`); b.onclick = () => go("#/health");
+    const b = el("button", "btn small", `${lint} lint findings`); b.onclick = () => go("#/health");
     box.append(el("h3", "home-lint", "Housekeeping"), b);
   }
   $("side").replaceChildren(box);
@@ -570,11 +570,11 @@ function renderNote() {
   head.append(el("h2", null, n ? n.label : note.path.split("/").pop()));
   if (n) { const pill = el("span", "pill topic", n.cluster || n.group); pill.style.setProperty("--c", nodeColor(n)); head.append(pill); }
   const tools = el("div", "note-tools");
-  const copy = el("button", "ghost small", "Copy link");
+  const copy = el("button", "btn small", "Copy link");
   copy.onclick = () => navigator.clipboard?.writeText(`${location.origin}/ui${noteRoute(note.path)}`).then(() => { copy.textContent = "Copied"; setTimeout(() => (copy.textContent = "Copy link"), 1500); });
   tools.append(copy);
-  if (note.writable) { const edit = el("button", "ghost small", touch ? "Edit" : "Edit (E)"); edit.onclick = startEdit; tools.append(edit); }
-  const hist = el("button", "ghost small", "History"); hist.onclick = () => showHistory(); tools.append(hist);
+  if (note.writable) { const edit = el("button", "btn small", touch ? "Edit" : "Edit (E)"); edit.onclick = startEdit; tools.append(edit); }
+  const hist = el("button", "btn small", "History"); hist.onclick = () => showHistory(); tools.append(hist);
   pane.append(head, tools, el("div", "note-path", `${note.path} · version ${note.version}`));
   if (meta.description) pane.append(el("p", "note-desc", meta.description));
   const md = el("div", "md"); md.innerHTML = renderMd(linked); pane.append(md);
@@ -592,7 +592,7 @@ function renderSide() {
     const card = el("div", "map-card");
     card.append(el("h2", null, n ? n.label : note.path.split("/").pop()));
     const desc = splitFront(note.text).meta.description; if (desc) card.append(el("p", "note-desc", desc));
-    const read = el("button", null, "Read note"); read.onclick = () => go(noteRoute(note.path)); card.append(read);
+    const read = el("button", "btn small primary", "Read note"); read.onclick = () => go(noteRoute(note.path)); card.append(read);
     side.append(card);
   }
   const box = el("div", "connected"); side.append(box);
@@ -672,7 +672,7 @@ async function showHistory(open = null) {
   historyOpen = true;
   pane.replaceChildren();
   const head = el("div", "note-head"); head.append(el("h2", null, `History of ${note.path.split("/").pop()}`));
-  const back = el("button", "ghost small", "Back to the note"); back.onclick = renderNote;
+  const back = el("button", "btn small", "Back to the note"); back.onclick = renderNote;
   pane.append(head, el("div", "note-tools"), el("div", "note-path", note.path));
   pane.querySelector(".note-tools").append(back);
   if (!res.versions.length) { pane.append(el("p", "muted", "No earlier versions yet: history starts at the first change.")); return; }
@@ -688,7 +688,7 @@ async function showHistory(open = null) {
       view.append(diffView(ver.diff || "(first version)"));
       view.scrollIntoView({ block: "start", behavior: calm ? "auto" : "smooth" });
       if (note.writable && i > 0) {
-        const restore = el("button", "ghost small", "Restore this version");
+        const restore = el("button", "btn small", "Restore this version");
         restore.onclick = async () => {
           if (!confirm("Replace the current note with this version? The current text stays in the history.")) return;
           try {
@@ -712,7 +712,7 @@ function startEdit() {
   const area = el("textarea", "editor"); area.value = current.text; area.spellcheck = false;
   area.setAttribute("aria-label", `Text of ${current.path}`);
   const err = el("p", "error"); err.hidden = true; err.setAttribute("role", "alert");
-  const save = el("button", null, "Save (Ctrl+S)"), cancel = el("button", "ghost", "Cancel");
+  const save = el("button", "btn primary", "Save (Ctrl+S)"), cancel = el("button", "btn", "Cancel");
   const actions = el("div", "actions"); actions.append(cancel, save);
   pane.append(head, el("div", "note-path", `${current.path} · based on version ${current.version}`), area, err, actions);
   area.focus(); area.setSelectionRange(0, 0); area.scrollTop = 0;
@@ -802,7 +802,7 @@ async function runSearch() {
   $("hits-empty").hidden = res.notes.length > 0;
   if (!res.notes.length) $("hits-empty").textContent = "No note contains all of these words.";
   $("hits").replaceChildren(...res.notes.map((h) => {
-    const li = el("li"), b = el("button");
+    const li = el("li"), b = el("button", "row-link");
     b.append(el("span", "hit-path", `${(byId.get(h.path) || {}).label || h.path.split("/").pop()}${h.count > h.hits.length ? `  +${h.count - h.hits.length}` : ""}`));
     b.append(el("span", "hit-sub muted", h.path));
     for (const x of h.hits) b.append(marked_(x.text, words));
@@ -831,7 +831,7 @@ function marked_(text, words) {
   return span;
 }
 function hitItem(top, sub, onclick) {
-  const li = el("li"), b = el("button");
+  const li = el("li"), b = el("button", "row-link");
   b.append(el("span", "hit-path", top)); if (sub) b.append(el("span", "hit-text", sub));
   b.onclick = onclick; li.append(b); return li;
 }
@@ -926,7 +926,7 @@ async function loadRecent(look = false) {
       card.append(el("h3", "sub", d === today ? "Today" : d === yesterday ? "Yesterday" : new Date(f.mtime * 1000).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })), list);
       box.append(card);
     }
-    const n = byId.get(f.path), li = el("li"), b = el("button");
+    const n = byId.get(f.path), li = el("li"), b = el("button", "row-link");
     const top = el("span", "hit-path", n ? n.label : f.path.split("/").pop());
     if (f.mtime > seen) top.append(el("span", "new", "new"));
     const meta = el("span", "hit-text");
@@ -955,7 +955,7 @@ async function loadTrash(p) {
   for (const i of items.slice(0, 100)) {
     const li = el("li", "task"), info = el("span", "trash-info");
     info.append(el("span", "hit-path", i.path.split("/").pop()), el("span", "hit-text", `${i.path} · deleted ${ago(i.deleted)} · ${(i.size / 1024).toFixed(1)} kB`));
-    const b = el("button", "ghost small", "Restore"); b.type = "button";
+    const b = el("button", "btn small", "Restore"); b.type = "button";
     b.disabled = !i.can_restore;
     b.title = i.can_restore ? `Put ${i.path} back as it was` : i.exists ? "A file is at that path again: open both and merge by hand" : "Only the project's owner or an admin may restore a file";
     b.onclick = async () => {
@@ -1013,7 +1013,7 @@ async function loadLint(render = true) {
   box.append(...folds.values());
   if (!here) box.append(emptyState(`No findings in ${project === ALL ? "any project" : shown(project)}.`));
   if (all > here) {
-    const b = el("button", "ghost small", `${all - here} in other projects`); b.onclick = () => switchProject(ALL);
+    const b = el("button", "btn small", `${all - here} in other projects`); b.onclick = () => switchProject(ALL);
     box.append(b);
   }
 }
@@ -1046,7 +1046,7 @@ async function loadTasks(render = true) {
     li.className = t.waiting_reason ? "task waiting" : "task"; li.firstChild.append(meta);
     li.firstChild.title = t.line + (t.legacy ? "\nLegacy line: no from/start, so it may start now." : "") +
       (t.author ? `\nWritten by ${t.author}` : "") + (t.stalled ? "\nWoken, but nobody claimed it within 30 minutes." : "");
-    const acts = el("div", "task-acts"), act = (text, title, fn, cls = "ghost small") => { const b = el("button", cls, text); b.type = "button"; b.title = title; b.onclick = fn; acts.append(b); return b; };
+    const acts = el("div", "task-acts"), act = (text, title, fn, cls = "btn small") => { const b = el("button", cls, text); b.type = "button"; b.title = title; b.onclick = fn; acts.append(b); return b; };
     const run = (fn) => async () => { try { await fn(); loadTasks(true); } catch (e) { toast(e.message); } };
     if (t.can_approve) act("Approve", "Let this task start (it waits for the project owner's or an admin's approval)", run(() => post("/ui/api/task/approve", { project: t.project, id: t.id })));
     for (const h of t.hosts || []) act(`Start on ${h.label}`, "Start a worker for this task there now",
@@ -1064,7 +1064,7 @@ async function loadTasks(render = true) {
     }
     if (!t.done && t.can_cancel !== undefined) { // Assign: another agent or person, optionally pinned to one pc
       const form = el("span", "task-assign"); form.hidden = true;
-      const who = el("select"), where = el("select"), save = el("button", "small", "Save"); save.type = "button";
+      const who = el("select", "small"), where = el("select", "small"), save = el("button", "btn small primary", "Save"); save.type = "button";
       for (const o of ["Claude", "Codex", "Gemini", "Someone else…"]) { const x = el("option", null, o); x.selected = o === "Gemini" ? /gemini|agy|antigravity/i.test(t.owner) : t.owner.toLowerCase().startsWith(o.toLowerCase()); who.append(x); }
       where.append(el("option", null, "any pc"));
       for (const d of devices) { const x = el("option", null, d); x.value = d; where.append(x); }
@@ -1131,7 +1131,7 @@ async function machineAction(m, action, args = {}) {
   setTimeout(loadMachines, 4000); // the report that follows the action
 }
 function machineButton(text, title, onclick) {
-  const b = el("button", "ghost small", text); b.type = "button"; b.title = title;
+  const b = el("button", "btn small", text); b.type = "button"; b.title = title;
   // the pc carries the action out a moment later: a spinner and "…ing" until it reports back (machineAction waits)
   const busy = /Turn on/.test(text) ? "Turning on…" : /Turn off/.test(text) ? "Turning off…" : "Working…";
   b.onclick = async () => {
@@ -1210,7 +1210,7 @@ async function loadMachines() {
           if (ag.yolo) return machineAction(m, "yolo", { agent: a, on: false });
           if (prompt(`${YOLO_WARNING}\n\nType YOLO to turn it on for ${AGENT_NAME[a] || a} on ${m.label}.`) === "YOLO") return machineAction(m, "yolo", { agent: a, on: true, confirm: "YOLO" });
         }));
-        const max = el("select"); max.title = "At most this many workers of this agent at once";
+        const max = el("select", "small"); max.title = "At most this many workers of this agent at once";
         for (const n of [0, 1, 2, 3, 4]) { const o = el("option", null, `max ${n} worker${n === 1 ? "" : "s"}`); o.value = n; o.selected = n === ((c.maxWorkers || {})[a] ?? 1); max.append(o); }
         max.onchange = () => machineAction(m, "max_workers", { agent: a, n: Number(max.value) });
         ctl.append(max);
@@ -1242,7 +1242,7 @@ async function loadMachines() {
       }
       d.append(list);
       if (m.own && fl.candidates.length && (c.projects || []).length) {
-        const ctl = el("div", "machine-controls"), path = el("select"), proj = el("select");
+        const ctl = el("div", "machine-controls"), path = el("select", "small"), proj = el("select", "small");
         for (const f of fl.candidates) { const o = el("option", null, f.path); o.value = f.path; path.append(o); }
         for (const p of c.projects) { const o = el("option", null, p); o.value = p; proj.append(o); }
         ctl.append(path, proj, machineButton("Link", "Write .knowledge-project in that folder", () => machineAction(m, "link_folder", { path: path.value, project: proj.value })));
@@ -1466,7 +1466,7 @@ function ckBoard() {
     empty.append(el("h2", null, "Your agents, from anywhere"),
       el("p", null, ck.machines.some((m) => m.online && m.companion) ? "Start a chat with Claude Code, Codex or agy on one of your pcs, in a folder linked to a project there."
         : "None of your pcs is online with a companion right now. Chats run on a pc through its knowledge companion (plugin 0.16 or newer)."));
-    const b = el("button", "primary", "+ New chat"); b.type = "button"; b.onclick = () => ckNewChat(); empty.append(b);
+    const b = el("button", "btn primary", "+ New chat"); b.type = "button"; b.onclick = () => ckNewChat(); empty.append(b);
     box.replaceChildren(empty);
   } else box.replaceChildren(...CK_COLS.map(([id, name]) => {
     const list = items.filter((i) => i.col === id), col = el("section", `ck-col ck-col-${id}`), head = el("h2", "ck-col-head");
@@ -1494,7 +1494,7 @@ function ckBoard() {
   // A project filter never hides what needs you without saying so.
   const elsewhere = (ck.board || []).filter((i) => i.col === "needs" && !ckScope(i)).length;
   if (elsewhere) {
-    const b = el("button", "ghost small ck-elsewhere", `${elsewhere} more need${elsewhere > 1 ? "" : "s"} you in other projects: show all`);
+    const b = el("button", "btn small ck-elsewhere", `${elsewhere} more need${elsewhere > 1 ? "" : "s"} you in other projects: show all`);
     b.type = "button"; b.onclick = () => setAgentProject(""); box.prepend(b);
   }
   const n = items.filter((i) => i.col === "needs").length, asks = items.filter((i) => i.kind === "ask").length;
@@ -1553,7 +1553,7 @@ function ckItem(i) {
     const more = card.querySelector(".ck-item-open");
     if (more) more.remove(); else card.append(el("p", "ck-item-open", i.open || "No details yet."));
   };
-  const acts = el("div", "ck-item-acts"), act = (text, title, fn) => { const b = el("button", "ghost small", text); b.type = "button"; b.title = title; b.onclick = fn; acts.append(b); };
+  const acts = el("div", "ck-item-acts"), act = (text, title, fn) => { const b = el("button", "btn small", text); b.type = "button"; b.title = title; b.onclick = fn; acts.append(b); };
   if (i.git) acts.append(ckGitPill(i));
   if (i.approve) act("Approve", "Let this task start", () => ckDo("/ui/api/task/approve", { project: i.project, id: i.id }));
   if (i.kind === "ask") { // the board shows a short title: Allow only when that title is the whole request
@@ -1604,7 +1604,7 @@ async function ckMerge(i) {
 function ckReject(card, i) {
   const old = card.querySelector(".ck-reject");
   if (old) return old.remove();
-  const form = el("form", "ck-reject"), reason = el("input"), lab = el("label", "ck-reject-back"), back = el("input"), go = el("button", "small", "Reject");
+  const form = el("form", "ck-reject"), reason = el("input", "small"), lab = el("label", "ck-reject-back"), back = el("input"), go = el("button", "btn small danger", "Reject");
   reason.placeholder = "Why (optional; needed to send it back)"; reason.maxLength = 300; reason.setAttribute("aria-label", "Reason");
   back.type = "checkbox"; lab.append(back, ` send back to ${AGENT_NAME[i.agent] || i.agent} as ${i.task}-fix`);
   go.type = "submit";
@@ -1626,7 +1626,7 @@ function ckReject(card, i) {
 // once a round). A tap asks that pc for the diff, read-only, through the chats' pull channel.
 function ckGitText(g) { return `${g.branch} · ●${g.changed}${g.base ? ` · ↑${g.ahead}↓${g.behind}` : ""}`; }
 function ckGitPill(i) {
-  const g = i.git, b = el("button", "ck-git", ckGitText(g)); b.type = "button";
+  const g = i.git, b = el("button", "btn small ck-git", ckGitText(g)); b.type = "button";
   b.setAttribute("aria-label", `Git: branch ${g.branch}, ${g.changed} changed files${g.base ? `, ${g.ahead} commits ahead and ${g.behind} behind ${g.base}` : ""}. Show the changes`);
   b.title = g.base ? `Compared with ${g.base}. Show the changes` : "Show the changes";
   b.onclick = (e) => { e.stopPropagation(); ckDiff(i); };
@@ -1658,16 +1658,16 @@ function ckCard(meta) {
   const k = ckKey(meta);
   if (ck.cards.has(k)) return ck.cards.get(k);
   const root = el("article", "ck-card"), head = el("header", "ck-head"), title = el("div", "ck-title");
-  const name = el("strong"), where = el("span"), state = el("span", "ck-state"), x = el("button", "ck-x", "×");
+  const name = el("strong"), where = el("span"), state = el("span", "ck-state"), x = el("button", "btn icon small quiet ck-x", "×");
   x.type = "button"; x.title = "Back to the board (the chat stays under Earlier chats)"; x.setAttribute("aria-label", "Back to the board");
   title.append(name, where);
-  const git = el("span", "ck-git-slot"), open = el("button", "ck-x bd-only", "↗"); // on the board: the full chat
+  const git = el("span", "ck-git-slot"), open = el("button", "btn icon small quiet ck-x bd-only", "↗"); // on the board: the full chat
   open.type = "button"; open.title = "Open the full chat"; open.setAttribute("aria-label", "Open the full chat");
   head.append(el("span", "ck-dot bd-only"), el("span", "ck-mark", AGENT_MARK[meta.agent] || "?"), title, git, state, open, x);
   const log = el("div", "ck-log"), form = el("form", "ck-form"), input = el("textarea"), btns = el("div", "ck-btns");
   log.setAttribute("aria-live", "polite"); log.setAttribute("role", "log");
   input.rows = 2; input.placeholder = "Message the agent… (Enter sends, Shift+Enter a new line)"; input.setAttribute("aria-label", "Message");
-  const stop = el("button", "ck-stop", "Stop"), send = el("button", null, "Send"), note = el("p", "ck-note");
+  const stop = el("button", "btn ck-stop", "Stop"), send = el("button", "btn primary", "Send"), note = el("p", "ck-note");
   stop.type = "button"; send.type = "submit"; btns.append(stop, send); form.append(input, btns, note);
   const asks = el("div", "ck-asks"); asks.hidden = true; asks.setAttribute("aria-live", "assertive");
   root.append(head, log, asks, form);
@@ -1759,7 +1759,7 @@ function ckFindWorker(arg) { // "worker/<project>/<id>" -> the newest run of tha
     .filter(({ w }) => w.project === m[1] && w.id === m[2]).sort((a, b) => (b.w.started || 0) - (a.w.started || 0))[0] || null;
 }
 function ckFollow(w) { go(ckWorkerRoute(w)); }
-function ckFollowButton(w, cls = "ghost small") {
+function ckFollowButton(w, cls = "btn small") {
   const b = el("button", cls, "Follow"); b.type = "button";
   b.title = w.status === "running" ? "Watch this worker live, steer it or take it over" : "Read what this worker did";
   b.onclick = (e) => { e.stopPropagation(); ckFollow(w); };
@@ -1816,7 +1816,7 @@ function ckWorkerPaint(card) {
   const sig = JSON.stringify([w.status, w.chat, !!w.review, !!w.git, card.online]);
   if (card.acts.dataset.sig !== sig) {
     card.acts.dataset.sig = sig; card.acts.replaceChildren();
-    const act = (text, title, fn) => { const b = el("button", "ghost small", text); b.type = "button"; b.title = title; b.onclick = fn; card.acts.append(b); };
+    const act = (text, title, fn) => { const b = el("button", "btn small", text); b.type = "button"; b.title = title; b.onclick = fn; card.acts.append(b); };
     if (card.online && run) act("Stop", "Stop this worker (this pc keeps its lease until it runs out)", () => ckWorkerAct(card, "stop_worker"));
     if (card.online && w.status === "failed") act("Restart", "Start this worker again now", () => ckWorkerAct(card, "restart"));
     if (w.review || w.git) act("Review", "The changes on its branch, read on that pc", () => ckDiff({ kind: "worker", machine: m.machine, project: w.project, id: w.id, title: w.id, label: m.label }));
@@ -1853,7 +1853,7 @@ function ckAsks(card, asks, skew) {
     if (a.reason) box.append(el("p", "ck-ask-why", a.reason));
     box.append(el("p", "ck-ask-when", `${a.once_only ? "git push or outside the folder: once at most. " : ""}Denied by itself in ${left} min.`));
     for (const [d, text, title] of ckAskButtons(a)) {
-      const b = el("button", `ck-ask-${d}`, text); b.type = "button"; b.title = title;
+      const b = el("button", `btn small${d === "once" ? " primary" : d === "deny" ? " danger" : ""} ck-ask-${d}`, text); b.type = "button"; b.title = title;
       b.onclick = async () => {
         for (const x of acts.querySelectorAll("button")) x.disabled = true;
         try { await api("/ui/api/chat/approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, ask: a.id, decision: d }) }); }

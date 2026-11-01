@@ -20,11 +20,8 @@
 .lede { color: var(--muted); font-size: 16px; }
 .eyebrow { font: 12px var(--mono); color: var(--muted); margin-bottom: 6px; }
 .wrap :not(pre) > code { background: var(--hover); padding: 1px 5px; border-radius: 4px; font-size: .88em; }
-.wrap a { color: var(--accent); }
 .client-tabs { position: sticky; top: 0; z-index: 5; display: flex; gap: 4px; flex-wrap: wrap; align-items: center;
   background: color-mix(in srgb, var(--canvas) 80%, transparent); backdrop-filter: blur(14px); padding: 10px 0; margin-top: 28px; border-bottom: 1px solid var(--line); }
-.client-tabs > button { min-height: 34px; padding: 6px 14px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: var(--muted); font-size: 14px; }
-.client-tabs > button[aria-selected="true"] { background: var(--panel-hi); border-color: var(--line-hi); color: var(--ink); font-weight: 600; box-shadow: var(--shadow); }
 .osbar { display: flex; gap: 10px; align-items: center; margin-top: 18px; color: var(--muted); font-size: 14px; }
 ol.steps { list-style: none; counter-reset: s; padding: 0; margin: 16px 0 0; display: grid; gap: 18px; }
 ol.steps > li { counter-increment: s; position: relative; padding-left: 38px; min-width: 0; }
@@ -33,7 +30,7 @@ ol.steps > li::before { content: counter(s); position: absolute; left: 0; top: 1
 ol.steps > li > b { display: block; }
 .cmd { position: relative; margin-top: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); min-width: 0; }
 .cmd pre { margin: 0; padding: 10px 76px 10px 12px; overflow-x: auto; font: 13px/1.55 var(--mono); white-space: pre; }
-.copy { position: absolute; top: 7px; right: 7px; background: var(--panel-solid) !important; } /* solid: the command scrolls under it */
+.copy { position: absolute; top: 7px; right: 7px; }
 .note { margin-top: 12px; padding: 10px 14px; border: 1px solid color-mix(in srgb, var(--g-feedback) 45%, var(--line));
   background: color-mix(in srgb, var(--g-feedback) 10%, var(--panel)); border-radius: var(--r-md); font-size: 14px; }
 .wrap .table-wrap { margin-top: 14px; }
@@ -42,11 +39,10 @@ ol.steps > li > b { display: block; }
 .wrap th { color: var(--muted); font-weight: 600; font-size: 12px; }
 .wrap tr:last-child td { border-bottom: 0; }
 ol.rules { margin: 12px 0 0; padding-left: 22px; } ol.rules li { margin: 6px 0; max-width: 68ch; }
-.rules-box { margin-top: 36px; } .rules-box summary { cursor: pointer; font-weight: 600; }
+.rules-box { margin-top: 36px; } .rules-box summary { font-weight: 600; }
 footer { margin-top: 44px; color: var(--muted); font-size: 13px; }
 @media (max-width: 699.98px) {
   .client-tabs { top: 52px; } /* under the app's sticky page header */
-  .client-tabs > button, .os button { min-height: 44px; }
   .cmd pre { min-height: 58px; padding-top: 18px; padding-bottom: 18px; }
 }
 body.admin-page .client-tabs { top: 0; } /* /setup has no page header */
@@ -81,14 +77,14 @@ body.admin-page .client-tabs { top: 0; } /* /setup has no page header */
       <span data-os="linux">Needs <code>git</code> and <code>python3</code>.</span>
       <span data-os="windows" hidden>Needs <a href="https://git-scm.com/download/win" target="_blank" rel="noopener">Git for Windows</a> and <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">Python 3</a> (keep "py launcher" ticked); the commands are for PowerShell. Quit Codex and agy first: Windows does not replace files that are in use. The scripts are kept in <code>~/knowledge</code>, a copy of the repository that the same line keeps up to date.</span>
       The setup finds Claude Code, Codex and agy on this computer and asks y/n for each (Enter = yes). It asks for the server address (enter <code class="server-url">this page's address</code>) and for the token once (paste it; it is not shown), checks it with the server, keeps it in the keyring, Keychain or Credential Manager, and installs the plugin in the agents you chose.
-      <div class="cmd" data-os="linux"><pre>curl -fsSL https://raw.githubusercontent.com/To0wnn/knowledge/main/install.sh | sh</pre><button class="copy" type="button">Copy</button></div>
-      <div class="cmd" data-os="windows" hidden><pre>irm https://raw.githubusercontent.com/To0wnn/knowledge/main/install.ps1 | iex</pre><button class="copy" type="button">Copy</button></div></li>
+      <div class="cmd" data-os="linux"><pre>curl -fsSL https://raw.githubusercontent.com/To0wnn/knowledge/main/install.sh | sh</pre><button class="btn small copy" type="button">Copy</button></div>
+      <div class="cmd" data-os="windows" hidden><pre>irm https://raw.githubusercontent.com/To0wnn/knowledge/main/install.ps1 | iex</pre><button class="btn small copy" type="button">Copy</button></div></li>
     <li><b>The companion</b>
       The setup also starts a small helper at logon, the companion: it listens on this computer only (<code>127.0.0.1:47321</code>), shows what your agents do (menu entry "Knowledge companion"), and runs tasks agents hand each other once you allow workers in its settings. Nothing to do now; <code>knowledge-agent.py uninstall-companion</code> removes it.</li>
     <li><b>Link your project folder</b>
       In the root of your project, a file <code>.knowledge-project</code> with the project name (for example <code>garden</code>): every session started in that folder gets that project, and its <code>.md</code> files are mirrored to that project's docs when your token may write it (code, <code>.venv</code> and hidden folders never). Easiest: ask your agent to link the folder (skill <code>knowledge-init</code>), or:
-      <div class="cmd" data-os="linux"><pre>echo garden &gt; .knowledge-project</pre><button class="copy" type="button">Copy</button></div>
-      <div class="cmd" data-os="windows" hidden><pre>Set-Content .knowledge-project garden</pre><button class="copy" type="button">Copy</button></div></li>
+      <div class="cmd" data-os="linux"><pre>echo garden &gt; .knowledge-project</pre><button class="btn small copy" type="button">Copy</button></div>
+      <div class="cmd" data-os="windows" hidden><pre>Set-Content .knowledge-project garden</pre><button class="btn small copy" type="button">Copy</button></div></li>
     <li><b>First start</b>
       Start a new session in your project folder; each agent has one thing to do the first time, see its tab below. Then ask: "search the knowledge for …".</li>
   </ol>

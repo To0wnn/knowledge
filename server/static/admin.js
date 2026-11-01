@@ -120,7 +120,7 @@ function clientRows(t) {
     tr.append(el("td", "mono", `↳ ${c.agent}`), id, el("td", c.wake ? "" : "muted", c.wake ? "wakeable" : "not wakeable"),
       el("td", "", c.project || "–"), el("td", "", ago(c.at)),
       el("td", p && p.behind ? "unused" : "", p ? pluginText(p) : "–"));
-    const td = el("td"), b = el("button", "ghost danger", "Forget");
+    const td = el("td"), b = el("button", "btn small danger", "Forget");
     b.setAttribute("aria-label", `Forget ${c.agent} session ${c.session}`);
     b.title = "Remove from this list; a session still in use comes back at its next prompt";
     b.onclick = () => run(() => api("/ui/api/admin/client", { name: t.name, session: c.session }), b);
@@ -138,7 +138,7 @@ function renderTokens() {
     const name = el("td", "mono", t.name);
     if (SYSTEM.has(t.name) || t.watch) name.append(el("span", "muted", " · used by the VM"));
     if (n) {
-      const fold = el("button", "ghost fold", `${open ? "▾" : "▸"} ${n} client${n === 1 ? "" : "s"}`);
+      const fold = el("button", "btn small quiet fold", `${open ? "▾" : "▸"} ${n} client${n === 1 ? "" : "s"}`);
       fold.setAttribute("aria-expanded", String(Boolean(open)));
       fold.onclick = () => { openClients.has(t.name) ? openClients.delete(t.name) : openClients.add(t.name); renderTokens(); };
       name.append(" ", fold);
@@ -146,7 +146,7 @@ function renderTokens() {
     tr.append(name, accessCell(t, access), el("td", "", scopeText(t) + (t.redact ? " · secrets masked" : "")), skillsCell(t),
       el("td", "muted", t.created ? `${day(t.created)}${t.by ? " · " + t.by : ""}` : "before the admin page"),
       el("td", t.last_used ? "muted" : "unused", t.last_used ? ago(t.last_used) : "never used"), pluginCell(t, open));
-    const td = el("td"), b = el("button", "ghost danger", "Revoke");
+    const td = el("td"), b = el("button", "btn small danger", "Revoke");
     b.setAttribute("aria-label", `Revoke ${t.name}`);
     b.onclick = () => {
       const warn = SYSTEM.has(t.name) || t.watch ? " The VM uses this token: live updates, the weekly report or the VM sessions stop." : "";
@@ -204,7 +204,7 @@ function renderUsers() {
         }, 700);
       };
     }
-    const td = el("td", "actions"), del = el("button", "ghost danger", "Remove");
+    const td = el("td", "actions"), del = el("button", "btn small danger", "Remove");
     del.setAttribute("aria-label", `Remove ${name}`);
     del.onclick = () => confirm(`Remove ${name}? They lose access right away.`) && run(() => api("/ui/api/admin/user", { username: name, delete: true }), del);
     td.append(del); tr.append(td);
@@ -272,12 +272,12 @@ function renderExternal() {
     const tr = el("tr"), src = el("a", "mono", `${x.owner}/${x.repo}/${x.path}`), act = el("td", "actions");
     src.href = x.url; src.rel = "noopener noreferrer"; src.target = "_blank";
     const status = el("td", x.status === "ok" ? "" : "alert", x.status + (x.note ? `: ${x.note}` : ""));
-    const button = (label, action, cls) => { const b = el("button", cls || "ghost", label); b.type = "button";
+    const button = (label, action, cls) => { const b = el("button", cls || "btn small", label); b.type = "button";
       b.setAttribute("aria-label", `${label} ${name}`);
       b.onclick = () => (action !== "remove" || confirm(`Remove the skill ${name} from every device?`)) &&
         run(() => api("/ui/api/admin/external", { name, action }), b);
       return b; };
-    act.append(button("Check now", "check"), ...(x.status === "waiting" ? [button("Approve", "approve", "")] : []), button("Remove", "remove", "ghost danger"));
+    act.append(button("Check now", "check"), ...(x.status === "waiting" ? [button("Approve", "approve", "btn small primary")] : []), button("Remove", "remove", "btn small danger"));
     const srcTd = el("td"); srcTd.append(src);
     tr.append(el("td", "", name), srcTd, el("td", "mono", x.commit.slice(0, 7) + (x.pending ? ` → ${x.pending.slice(0, 7)}` : "")),
       el("td", "", x.licence), status, el("td", "", ago(x.checked)), act);

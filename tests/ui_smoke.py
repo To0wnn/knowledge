@@ -20,7 +20,8 @@ message on a refusal (faked; skipped on an older server). Chats > Board (desktop
 project, Fit, folding, a dragged card kept across a reload, Tidy up; a phone keeps the list (skipped without it).
 The Review card with faked data: Merge asks first and queues the pc's action, Reject sends reason and send back
 (intercepted; skipped on an older server). Follow a worker: its transcript read only when it ended, the Steer composer
-and Take over when it runs (intercepted; skipped on an older server). Read-only: it opens notes, it never edits or sends.
+and Take over when it runs (intercepted; skipped on an older server). The design system (0.21): button heights and radii, quiet chips, one link colour on several views.
+Read-only: it opens notes, it never edits or sends.
 
   systemd-run --user --scope -q -p MemoryMax=3G ~/.local/bin/uv run -q --with playwright python tests/ui_smoke.py
 (talks to the container port directly and sends what Traefik sends after the Authentik sign-in: the proxy secret
@@ -1074,7 +1075,7 @@ async def review(browser, devices, secret: str) -> None:
             return await ctx.close()
         card = pg.locator(f'#ck-board .ck-col-needs .ck-item[data-key="{item["key"]}"]')
         await card.wait_for(timeout=15000)
-        acts = await card.locator(".ck-item-acts button.ghost").all_inner_texts()
+        acts = await card.locator(".ck-item-acts button.btn:not(.ck-git)").all_inner_texts()
         check(acts == ["View diff", "Merge", "Reject"], f"{name}: a review card has View diff, Merge and Reject {acts}")
         text = await card.inner_text()
         check(all(x in text for x in ("task/KN-42", "feat(beds): water by soil moisture", "beds/schedule.py", "tests pass (pytest)", "nothing")),
@@ -1186,6 +1187,59 @@ async def follow(browser, devices, secret: str) -> None:
         await ctx.close()
 
 
+# The design system (0.21): buttons are .btn rectangles of 36 or 28 px with an 8 px radius, fields as high as buttons,
+# status chips pill-shaped but never clickable-looking, no browser-blue link, the reset chip only where it belongs;
+# on a phone every button is a 44 px touch target. Skipped on a server without it.
+DS_JS = """() => {
+  const vis = (e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && e.checkVisibility({checkVisibilityCSS: true}); };
+  const tag = (e) => (e.id || e.className || e.tagName) + '';
+  const out = {bad: [], n: 0};
+  for (const b of document.querySelectorAll('.btn, .cmp-btn, .cmp-iconbtn')) {
+    if (!vis(b)) continue; out.n++;
+    const c = getComputedStyle(b), h = Math.round(b.getBoundingClientRect().height);
+    if (![36, 28, 44].includes(h) || c.borderTopLeftRadius !== '8px') out.bad.push(`button ${tag(b)} ${h}px r=${c.borderTopLeftRadius}`);
+  }
+  for (const f of document.querySelectorAll('select, input:not([type=checkbox]):not([type=radio]):not([type=file])')) {
+    if (!vis(f) || f.id === 'pal-q' || f.closest('.proj')) continue;
+    const h = Math.round(f.getBoundingClientRect().height);
+    if (![36, 28, 44].includes(h)) out.bad.push(`field ${tag(f)} ${h}px`);
+  }
+  for (const c of document.querySelectorAll('.chip, .pill, .badge, .ck-count, .ms-chip, .cmp-chip')) {
+    if (!vis(c)) continue; const s = getComputedStyle(c);
+    if (s.cursor === 'pointer' || parseFloat(s.borderTopWidth) > 0) out.bad.push(`chip ${tag(c)} looks clickable`);
+  }
+  for (const a of document.querySelectorAll('a[href]')) if (vis(a) && getComputedStyle(a).color === 'rgb(0, 0, 238)') out.bad.push(`blue link ${a.textContent.trim().slice(0, 30)}`);
+  return out;
+}"""
+
+
+async def design_system(browser, devices, secret: str) -> None:
+    ctx, pg, errors = await page(browser, secret, "/ui#/inbox", viewport={"width": 1280, "height": 860})
+    await pg.wait_for_selector("#ck-board", state="attached")
+    if not await pg.locator("#page-head .btn").count():
+        print("skip design system (server older than 0.21)")
+        return await ctx.close()
+    views = ["#/inbox", "#/chats", "#/tasks", "#/machines", "#/notes", "#/changes", "#/health"]
+    for v in views:
+        await route(pg, v, "", 900)
+        r = await pg.evaluate(DS_JS)
+        check(r["n"] > 0 and not r["bad"], f"design system {v}: {r['n']} buttons, all 36/28 px with an 8 px radius, fields alike, chips quiet {r['bad'][:4]}")
+    check(not await pg.locator("#ck-resets").is_visible(), "the usage-limit reset chip stays off a view outside Inbox and Chats")
+    for path in ("/ui/admin", "/ui/help"):
+        await pg.goto(URL + path); await pg.wait_for_timeout(1200)
+        r = await pg.evaluate(DS_JS)
+        check(r["n"] > 0 and not r["bad"], f"design system {path}: {r['n']} buttons in the system {r['bad'][:4]}")
+    await ctx.close()
+    ctx, pg, errors = await page(browser, secret, "/ui#/notes", **{**devices["iPhone 14"], "viewport": {"width": 390, "height": 844}})
+    await pg.wait_for_timeout(1500)
+    for v in ("#/inbox", "#/notes", "#/tasks"):
+        await route(pg, v, "", 900)
+        small = await pg.evaluate("() => [...document.querySelectorAll('.btn')].filter((b) => b.offsetParent && b.getBoundingClientRect().height && b.getBoundingClientRect().height < 43.5).map((b) => b.id || b.textContent.trim().slice(0, 20))")
+        check(not small, f"phone design system {v}: every button a 44 px touch target {small[:4]}")
+    check(not errors, f"no page errors on the design-system views {errors[:2]}")
+    await ctx.close()
+
+
 async def main() -> None:
     secret = os.environ.get("KNOWLEDGE_PROXY_SECRET") or subprocess.run(["secret", "KNOWLEDGE_PROXY_SECRET"], check=True, capture_output=True, text=True).stdout.strip()
     async with async_playwright() as p:
@@ -1205,6 +1259,7 @@ async def main() -> None:
         await shell_pages(browser, p.devices, secret)
         await board(browser, p.devices, secret)
         await follow(browser, p.devices, secret)
+        await design_system(browser, p.devices, secret)
         await browser.close()
     print("ok" if not failures else f"{len(failures)} failed")
     sys.exit(1 if failures else 0)

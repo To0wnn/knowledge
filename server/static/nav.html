@@ -2,7 +2,7 @@
      has the NAV marker comment; on the admin and help pages it points the #/ routes at /ui. -->
 <nav class="sidebar" id="sidebar" aria-label="Main">
   <div class="brand"><span class="label">Knowledge</span> <span id="live" title="Live: updates as sessions change notes"></span>
-    <button type="button" class="icon-btn flat collapse" id="collapse" title="Collapse the sidebar ( [ )" aria-label="Collapse the sidebar" aria-expanded="true"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M9.5 4.5v15"/></svg></button></div>
+    <button type="button" class="btn icon quiet collapse" id="collapse" title="Collapse the sidebar ( [ )" aria-label="Collapse the sidebar" aria-expanded="true"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M9.5 4.5v15"/></svg></button></div>
   <button type="button" class="jump" id="jump" title="Search (Ctrl K or /)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg><span class="label">Search or jump</span><kbd>Ctrl K</kbd></button>
   <div class="sec">Agents</div>
   <a class="nav" href="#/inbox" data-nav="inbox" title="Inbox (A)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13l2.5-7.5h11L20 13v5.5H4z"/><path d="M4 13h4.5l1 2h5l1-2H20"/></svg><span class="label">Inbox</span><span class="badge hot inbox-count" title="Needs you"></span></a>
@@ -21,10 +21,10 @@
   <a class="nav" href="/ui/help" data-nav="help" title="Help: connect a client"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .8-1 1.5v.7M12 17h.01"/></svg><span class="label">Help</span></a>
   <div class="me">
     <details id="user-menu" class="menu up">
-      <summary id="who">…</summary>
+      <summary class="btn quiet" id="who">…</summary>
       <div class="menu-list"><a href="/ui/logout">Sign out</a></div>
     </details>
-    <button type="button" class="icon-btn theme-btn" title="Theme: Auto" aria-label="Theme: Auto"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5a8.5 8.5 0 1 0 8.5 8.5A6.5 6.5 0 0 1 12 3.5z"/></svg></button>
+    <button type="button" class="btn icon quiet theme-btn" title="Theme: Auto" aria-label="Theme: Auto"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5a8.5 8.5 0 1 0 8.5 8.5A6.5 6.5 0 0 1 12 3.5z"/></svg></button>
   </div>
 </nav>
 
@@ -47,6 +47,6 @@
     <a class="nav admin-link" href="/ui/admin" data-nav="admin">Admin</a>
     <a class="nav" href="/ui/help" data-nav="help">Help</a>
     <label class="nav sheet-row proj-row">Project<select class="project-pick" aria-label="Project"></select></label>
-    <div class="sheet-row"><span id="who-more"></span><button type="button" class="ghost small theme-btn">Theme: Auto</button><a class="ghost-link" href="/ui/logout">Sign out</a></div>
+    <div class="sheet-row"><span id="who-more"></span><button type="button" class="btn small theme-btn">Theme: Auto</button><a class="btn small quiet" href="/ui/logout">Sign out</a></div>
   </div>
 </dialog>
