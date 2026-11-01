@@ -15,6 +15,7 @@ from playwright.async_api import async_playwright
 STATIC = Path(__file__).resolve().parents[1] / "plugin" / "companion" / "static"
 OUT = Path(sys.argv[1]) if len(sys.argv) > 1 else None
 posts = []
+LOCKED = None  # set: the answer without the shortcut's key (companion.py strips the counts)
 STATE = {"version": "0.18", "status": {"host": "testpc", "live": 1, "synced": 0}, "projects": ["homelab"],
          "folders": {"linked": [], "candidates": [{"path": "/home/x/repo"}]},
          "agents": [{"id": "claude", "name": "Claude Code", "mark": "C", "installed": True, "version": "0.18.1", "hooksTrusted": True,
@@ -29,7 +30,7 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def do_GET(self):
         if self.path.startswith("/local/api/state"):
-            b, ct = json.dumps(STATE).encode(), "application/json"
+            b, ct = json.dumps(LOCKED or STATE).encode(), "application/json"
         else:
             f = STATIC / (self.path.split("?")[0].lstrip("/") or "companion.html")
             b, ct = f.read_bytes(), {"js": "text/javascript", "css": "text/css"}.get(f.suffix[1:], "text/html")
@@ -79,6 +80,13 @@ async def companion(browser):
     check(await pg.input_value('input[name="max-claude"]') == "5", "companion: refresh keeps an unsaved settings edit")
     await pg.evaluate("load(true)"); await pg.wait_for_timeout(200)
     check(await pg.input_value('input[name="max-claude"]') == "1", "companion: explicit refresh (force) redraws")
+    # opened without the key: the companion sends no counts, so no chip may read "undefined live"
+    global LOCKED
+    LOCKED = {"agents": STATE["agents"], "status": {"host": "testpc"}, "version": "0.18", "locked": True}
+    await pg.evaluate("load(true)"); await pg.wait_for_timeout(200)
+    chips = await pg.inner_text("#chips")
+    check("undefined" not in chips and "not yet" not in chips, f"companion: a locked page shows no made-up counts {chips!r}")
+    LOCKED = None
     check(not errs, f"companion: no page errors {errs}")
     await ctx.close(); srv.shutdown()
 

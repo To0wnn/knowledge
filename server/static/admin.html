@@ -30,7 +30,7 @@
     <p class="muted">For Claude Code (the knowledge plugin), agents and assistants. A token is shown once; only its hash is kept. Lost it? Revoke it and create a new one.</p>
     <p class="muted" id="limits-tokens"></p>
     <details id="new-token-box" class="admin-new">
-      <summary class="ghost">+ New token</summary>
+      <summary class="btn">+ New token</summary>
       <form id="token-form" class="admin-form">
         <label for="t-name">Device or agent name</label>
         <input id="t-name" required pattern="[A-Za-z0-9][A-Za-z0-9._\-]{0,39}" placeholder="e.g. work-laptop">
@@ -48,7 +48,7 @@
           <div id="t-roots" class="checks"></div>
         </fieldset>
         <details id="t-advanced">
-          <summary class="ghost">Fine-tune (what the choice above set)</summary>
+          <summary class="btn small quiet">Fine-tune (what the choice above set)</summary>
           <label class="check"><input id="t-write" type="checkbox"> May write memos</label>
           <label class="check"><input id="t-redact" type="checkbox"> Mask known secrets in everything it reads</label>
           <label class="check"><input id="t-skills" type="checkbox"> Shared skills on the device, and may change them</label>
@@ -56,18 +56,18 @@
           <label class="check"><input id="t-watch" type="checkbox"> VM file watcher (only for the watcher on the VM itself)</label>
           <label class="check"><input id="t-self" type="checkbox"> My own device: counts as me for its machines and task lines (never for a friend's or a PA's token)</label>
         </details>
-        <button type="submit">Create token</button>
+        <button type="submit" class="btn primary">Create token</button>
       </form>
     </details>
     <div id="new-token" class="new-token" hidden>
       <p><strong>Copy this token now</strong>, it is not shown again: <span id="new-token-name"></span></p>
-      <div class="row"><code id="new-token-value"></code><button type="button" id="copy-token" class="ghost">Copy token</button></div>
+      <div class="row"><code id="new-token-value"></code><button type="button" id="copy-token" class="btn">Copy token</button></div>
       <p>Give it to the person with a one-time Bitwarden Send link, never by chat or e-mail. Then send them the server address and the setup line for their computer; it asks for the token:</p>
       <p>Server: <code id="new-token-url"></code></p>
       <p>Linux &amp; macOS (Terminal):</p>
-      <div class="row"><code id="new-token-sh"></code><button type="button" class="ghost copy-line" data-src="new-token-sh">Copy</button></div>
+      <div class="row"><code id="new-token-sh"></code><button type="button" class="btn small copy-line" data-src="new-token-sh">Copy</button></div>
       <p>Windows (PowerShell):</p>
-      <div class="row"><code id="new-token-ps"></code><button type="button" class="ghost copy-line" data-src="new-token-ps">Copy</button></div>
+      <div class="row"><code id="new-token-ps"></code><button type="button" class="btn small copy-line" data-src="new-token-ps">Copy</button></div>
       <p>The steps per client, readable without signing in:</p>
       <div class="table-wrap"><table class="setup-links">
         <thead><tr><th>Client</th><th>Linux &amp; macOS</th><th>Windows</th></tr></thead>
@@ -81,7 +81,7 @@
         <p class="muted">Paste the token after the first line (it is not shown and stays out of the shell history).</p>
         <pre id="new-token-setup" class="setup"></pre>
         <p class="muted">agy or Codex on the VM, afterwards: <code id="new-token-agent"></code></p></details>
-      <button type="button" id="hide-token" class="ghost">Done, hide it</button>
+      <button type="button" id="hide-token" class="btn">Done, hide it</button>
     </div>
     <div class="table-wrap"><table>
       <thead><tr><th>Name</th><th>Access</th><th>Scope</th><th title="On: the device keeps the shared skills as real skills and may add or change them">Shared skills</th><th>Created</th><th title="Recorded since 20 Oct 2026, to the nearest 10 minutes">Last used</th><th title="Plugin version per agent at its last session start, recorded since 26 Oct 2026">Plugin</th><th><span class="sr-only">Actions</span></th></tr></thead>
@@ -99,7 +99,7 @@
     <form id="user-form" class="admin-form inline">
       <label for="u-name">Add by username</label>
       <input id="u-name" required pattern="[\w.@+\-]{1,150}">
-      <button type="submit">Add</button>
+      <button type="submit" class="btn primary">Add</button>
     </form>
   </section>
 
@@ -114,7 +114,7 @@
     <form id="project-form" class="admin-form inline">
       <label for="p-name">New project</label>
       <input id="p-name" required pattern="[a-z][a-z0-9]{1,23}" placeholder="lowercase, e.g. garden">
-      <button type="submit">Create</button>
+      <button type="submit" class="btn primary">Create</button>
     </form>
   </section>
   <section id="sec-external" role="tabpanel" aria-labelledby="h-external" hidden>
@@ -127,7 +127,7 @@
     <form id="external-form" class="admin-form inline">
       <label for="x-url">GitHub link of the skill folder</label>
       <input id="x-url" required type="url" pattern="https://github\.com/.+/(tree|blob)/.+" placeholder="https://github.com/owner/repo/tree/main/skills/name">
-      <button type="submit">Add</button>
+      <button type="submit" class="btn primary">Add</button>
     </form>
   </section>
 
@@ -139,7 +139,7 @@
       <label for="s-admins">Extra admins (usernames, one per line)</label>
       <textarea id="s-admins" rows="3" spellcheck="false"></textarea>
       <p class="muted" id="s-config-admins"></p>
-      <button type="submit">Save settings</button>
+      <button type="submit" class="btn primary">Save settings</button>
     </form>
   </section>
 

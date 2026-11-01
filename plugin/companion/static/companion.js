@@ -95,7 +95,8 @@ function toast(text) {
 function renderChips() {
   const s = S.status;
   $("host").textContent = `This pc: ${s.host}`;
-  const chips = [
+  // Locked (opened without the shortcut's key): the companion leaves the counts out, so there is nothing to show.
+  const chips = S.locked ? [] : [
     h("li", { class: "cmp-chip cmp-chip--live" }, h("span", { class: "cmp-dot" }), h("strong", {}, String(s.live)), " live"),
     s.workers ? h("li", { class: "cmp-chip cmp-chip--live" }, h("strong", {}, String(s.workers)), " working") : null,
     s.stalled ? h("li", { class: "cmp-chip cmp-chip--bad" }, h("strong", {}, String(s.stalled)), " stalled") : null,

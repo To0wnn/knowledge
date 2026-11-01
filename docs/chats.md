@@ -25,7 +25,7 @@ from a phone. The pc side runs in the companion ([companion.md](companion.md)).
   for room), and none while an admin has the board open (polled in the last 2 minutes: they see it there). A woken
   task nobody took keeps its own notice, now with the same link. Non-admins get none: the room is the admin's. A card opens its chat (Esc or Back returns), a task its memo line, a worker how to look
   at it; Approve, Start and Stop act in place. A phone shows the columns one under the other, Done folded to one line. Chat cards and workers
-  carry a **git pill** (`task/KN-12 · ●3 · ↑2↓0`: branch, changed files, commits ahead/behind `main`/`master`, or
+  carry a **git button** (`task/KN-12 · ●3 · ↑2↓0`: branch, changed files, commits ahead/behind `main`/`master`, or
   the upstream on main itself), which the companion counts once a round per folder with `GIT_OPTIONAL_LOCKS=0` and
   sends in its report (the linked folder only, `-- .`, also inside a bigger repo); a tap asks that pc for the diff (`POST /ui/api/git/diff`, handed to the companion with the chat
   messages, answered on `POST /machine/chats/diff`): the stat, untracked files by name and `git diff <merge-base>`,

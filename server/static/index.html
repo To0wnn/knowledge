@@ -19,23 +19,23 @@
 
 <div class="main">
   <header class="head" id="page-head">
-    <button type="button" class="icon-btn back" id="back" aria-label="Back"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>
+    <button type="button" class="btn icon quiet back" id="back" aria-label="Back"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>
     <div class="head-title"><div class="crumb" id="crumb"></div><h1 id="title" tabindex="-1">Knowledge</h1></div>
     <span class="gap"></span>
     <div class="head-actions" id="head-actions">
       <label class="filter" data-views="inbox chats tasks" title="Only this project's items (the Inbox badge still counts all)"><span class="sr-only">Show project</span><select id="agent-project"><option value="">All projects</option></select></label>
-      <span class="ck-pill" id="ck-resets" data-views="inbox chats" hidden></span>
+      <span data-views="inbox chats"><span class="chip" id="ck-resets" hidden></span></span>
       <div class="seg" id="chats-mode" role="group" aria-label="Chats as" data-views="chats"><button type="button" data-mode="list" aria-pressed="true">List</button><button type="button" data-mode="board" aria-pressed="false">Board</button></div>
       <div class="seg" id="tasks-mode" role="group" aria-label="Tasks as" data-views="tasks"><button type="button" data-mode="list" aria-pressed="true">List</button><button type="button" data-mode="flow" aria-pressed="false">Flow</button></div>
       <span data-views="notes map"><details id="add-menu" class="menu">
-        <summary class="ghost">+ Add</summary>
+        <summary class="btn">+ Add</summary>
         <div class="menu-list">
           <button id="new-memo" type="button">New memo</button>
           <button id="ingest-open" type="button">Add a source (web page, PDF, text)</button>
         </div>
       </details></span>
-      <button type="button" class="primary" id="ck-new" data-views="inbox chats" aria-label="New chat">+<span class="wide-only">&nbsp;New chat</span></button>
-      <button type="button" class="icon-btn phone-only" id="head-search" aria-label="Search" title="Search"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg></button>
+      <button type="button" class="btn primary" id="ck-new" data-views="inbox chats" aria-label="New chat">+<span class="wide-only">&nbsp;New chat</span></button>
+      <button type="button" class="btn icon phone-only" id="head-search" aria-label="Search" title="Search"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg></button>
     </div>
   </header>
 
@@ -106,7 +106,7 @@
   <h2 id="ck-diff-title">Changes</h2>
   <p class="muted" id="ck-diff-where"></p>
   <div id="ck-diff-body" aria-live="polite"></div>
-  <div class="actions"><button type="button" id="ck-diff-close">Close</button></div>
+  <div class="actions"><button type="button" class="btn" id="ck-diff-close">Close</button></div>
 </dialog>
 
 <dialog id="ck-new-dialog" aria-label="New chat">
@@ -120,7 +120,7 @@
     <label for="ck-folder">Folder</label>
     <select id="ck-folder" required></select>
     <p id="ck-new-error" class="error" role="alert" hidden></p>
-    <div class="actions"><button type="button" class="ghost" id="ck-new-cancel">Cancel</button><button type="submit" id="ck-new-start">Start chat</button></div>
+    <div class="actions"><button type="button" class="btn" id="ck-new-cancel">Cancel</button><button type="submit" class="btn primary" id="ck-new-start">Start chat</button></div>
   </form>
 </dialog>
 
@@ -137,7 +137,7 @@
     <label for="new-heading">Index heading (topic)</label>
     <select id="new-heading"></select>
     <p id="new-error" class="error" role="alert" hidden></p>
-    <div class="actions"><button type="button" class="ghost" id="new-cancel">Cancel</button><button type="submit">Create</button></div>
+    <div class="actions"><button type="button" class="btn" id="new-cancel">Cancel</button><button type="submit" class="btn primary">Create</button></div>
   </form>
 </dialog>
 
@@ -153,14 +153,14 @@
     <label for="in-title">Title (optional)</label>
     <input id="in-title" type="text">
     <div id="ingest-result" class="muted" aria-live="polite">Sources are stored unchanged in <code>homelab/sources/</code>. Ask Claude to turn a new source into memos; lint lists unprocessed sources.</div>
-    <div class="actions"><button type="button" class="ghost" id="ingest-cancel">Close</button><button type="submit">Add source</button></div>
+    <div class="actions"><button type="button" class="btn" id="ingest-cancel">Close</button><button type="submit" class="btn primary">Add source</button></div>
   </form>
 </dialog>
 
 <dialog id="palette" class="palette" aria-label="Search or jump">
   <div class="pal-box">
     <input id="pal-q" type="text" role="combobox" aria-expanded="true" aria-controls="pal-list" aria-autocomplete="list" autocomplete="off" spellcheck="false" placeholder="Search notes, chats, tasks, or type a command…">
-    <button type="button" class="ghost small phone-only" id="pal-close">Close</button>
+    <button type="button" class="btn small phone-only" id="pal-close">Close</button>
   </div>
   <ul id="pal-list" role="listbox" aria-label="Results"></ul>
   <p class="pal-foot muted"><kbd>↑</kbd><kbd>↓</kbd> move · <kbd>Enter</kbd> open · <kbd>Esc</kbd> close</p>

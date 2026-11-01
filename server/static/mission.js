@@ -77,10 +77,10 @@ function missionLayout(g, s = MS_SIZE) {
 function msBuild() {
   const root = el("section", "ms"); root.id = "mission"; root.hidden = true; root.setAttribute("aria-label", "Mission map");
   root.innerHTML = `<div class="ms-bar">
-      <button type="button" class="ck-pill" id="ms-all" aria-pressed="false" title="Also results handed back more than a day ago">Show all</button>
+      <button type="button" class="btn small" id="ms-all" aria-pressed="false" title="Also results handed back more than a day ago">Show all</button>
       <span class="ck-gap"></span>
       <span class="ms-count muted" id="ms-count" aria-live="polite"></span>
-      <button type="button" class="ck-pill" id="ms-fit" title="Fit the map to the screen (F)">Fit</button>
+      <button type="button" class="btn small" id="ms-fit" title="Fit the map to the screen (F)">Fit</button>
     </div>
     <div class="ms-legend" id="ms-legend"></div>
     <div class="ms-stage" id="ms-stage"><div class="ms-world" id="ms-world"></div></div>
@@ -303,7 +303,7 @@ function msOpenPanel(key) {
   for (const b of ms.root.querySelectorAll("[data-key]")) b.classList.toggle("sel", b.dataset.key === key);
   const head = el("div", "ms-panel-head");
   head.append(el("h3", null, n.id), el("span", `ms-chip s-${n.status}`, MS_STATUS[n.status]));
-  const x = el("button", "ck-icon ms-x", "×"); x.type = "button"; x.title = "Close (Esc)"; x.setAttribute("aria-label", "Close"); x.onclick = msClosePanel;
+  const x = el("button", "btn icon small quiet ms-x", "×"); x.type = "button"; x.title = "Close (Esc)"; x.setAttribute("aria-label", "Close"); x.onclick = msClosePanel;
   head.append(x);
   box.append(head, el("p", "ms-line", n.line));
   const dl = el("dl", "ms-facts");
@@ -314,11 +314,11 @@ function msOpenPanel(key) {
   if (n.status === "done" && n.since) fact("Handed back", new Date(n.since * 1000).toLocaleString());
   box.append(dl);
   const acts = el("div", "ms-actions");
-  const memo = el("button", "ck-pill", "Open memo"); memo.type = "button";
+  const memo = el("button", "btn small", "Open memo"); memo.type = "button";
   memo.onclick = () => openNote(n.path, { find: [n.id.toLowerCase()] });
   acts.append(memo);
   if (n.can_approve) {
-    const ok = el("button", "primary", "Approve"); ok.type = "button";
+    const ok = el("button", "btn small primary", "Approve"); ok.type = "button";
     ok.title = "Let this task start (it waits for the project owner's or an admin's approval)";
     ok.onclick = async () => {
       ok.disabled = true;
@@ -336,8 +336,8 @@ function msOpenPanel(key) {
         .find(({ wk }) => wk.id === n.id && wk.project === n.project);
       if (!hit) { w.textContent = busy ? "No worker of yours reports this task." : ""; return; }
       w.textContent = `Worker on ${hit.m.label}: ${hit.wk.status}. ${hit.wk.open || ""}`;
-      if (hit.m.own) acts.append(ckFollowButton(hit.wk, "ck-pill"));
-      const pc = el("button", "ck-pill", "Machines"); pc.type = "button"; pc.title = "Stop, roll back or chat on that pc";
+      if (hit.m.own) acts.append(ckFollowButton(hit.wk));
+      const pc = el("button", "btn small", "Machines"); pc.type = "button"; pc.title = "Stop, roll back or chat on that pc";
       pc.onclick = () => go("#/machines");
       acts.append(pc);
     }).catch(() => { w.textContent = ""; });
@@ -395,8 +395,8 @@ function boardLayout(chats, pinned = {}, shut = [], s = BD) {
 function bdBuild() {
   const root = el("section", "bd"); root.id = "bd"; root.hidden = true; root.setAttribute("aria-label", "Chat board");
   root.innerHTML = `<div class="bd-stage" id="bd-stage" tabindex="0" aria-label="Chat board. Drag or use the arrow keys to move around, the wheel or + and − to zoom, F fits all, Tab goes through the chats"><div class="bd-world" id="bd-world"></div></div>
-    <div class="bd-tools"><button type="button" class="ck-pill" id="bd-tidy" title="Put the cards you dragged back into their project's grid">Tidy up</button><button type="button" class="ck-pill" id="bd-fit" title="Show all chats (F)">Fit</button></div>
-    <div class="bd-mini" id="bd-mini" title="Overview: click to go there"><div class="bd-mini-in" id="bd-mini-in"></div><div class="bd-mini-view" id="bd-mini-view"></div></div>`;
+    <div class="bd-tools"><button type="button" class="btn small" id="bd-tidy" title="Put the cards you dragged back into their project's grid">Tidy up</button><button type="button" class="btn small" id="bd-fit" title="Show all chats (F)">Fit</button></div>
+    <div class="bd-mini" id="bd-mini" title="Overview: click to go there" aria-hidden="true"><div class="bd-mini-in" id="bd-mini-in"></div><div class="bd-mini-view" id="bd-mini-view"></div></div>`;
   $("cockpit").append(root);
   const st = $("bd-stage");
   // cards handle their own pointer (drag by the header) and wheel (a log scrolls; a pinch still zooms)
@@ -416,6 +416,8 @@ function bdBuild() {
     if (root.hidden || e.ctrlKey || e.metaKey || e.altKey || e.key.toLowerCase() !== "f" || /input|textarea|select/i.test(document.activeElement.tagName) || document.querySelector("dialog[open]")) return;
     e.preventDefault(); e.stopPropagation(); bdFit();
   }, true);
+  // Pointer-only on purpose: the keyboard pans with the arrows and fits with F on the stage, so the minimap adds
+  // nothing for it (aria-hidden, not focusable).
   const mini = $("bd-mini"), jump = (e) => { // the overview: a click or drag centres the view there
     const L = bd.lay; if (!L) return;
     const r = mini.getBoundingClientRect(), m = bd.mini, x = L.bounds.x + (e.clientX - r.left - m.ox) / m.k, y = L.bounds.y + (e.clientY - r.top - m.oy) / m.k;

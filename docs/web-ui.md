@@ -27,6 +27,20 @@ Moved from the README; [back to the README](../README.md).
   `GET /ui/api/trash` and go back with `POST /ui/api/trash/restore` (owner or admin, never over a file that exists). Machines: workers, sessions, hook errors and remote actions per pc. The project
   picker scopes only the knowledge views. An admin page for tokens, people and projects. Light or dark, your pick.
 
+## Design system
+
+One small set of controls in `server/static/app.css` ("Controls"), shared by the companion page (`.cmp-btn`,
+`.cmp-iconbtn`, same sizes) through the token block both files carry (`--r-sm`, `--h-btn`, `--h-btn-sm`):
+
+- **Buttons** are 8 px rectangles in two sizes, 36 px and `.small` 28 px (44 px on a phone), chosen by class, never by
+  where they sit: `.btn` (secondary), `.btn.primary`, `.btn.quiet`, `.btn.danger`, `.btn.icon`. A pressed toggle or an
+  open `<details>` button wears the amber tint. Inputs and selects are as high as the buttons beside them.
+- **Clickable rows and cards** (`.row-link`, a chat in the list, an Inbox card) tint on hover, underline their title and
+  end in a `›`. **Disclosures** always show `▸`/`▾`, also on a phone; a menu shows `▾`.
+- **Links** have one look: the accent ink with a soft underline (never the browser's blue).
+- **Status chips** (`.chip`, `.pill`, `.badge`, counts) are the only pills and never look clickable: no border, the
+  default cursor. One focus ring everywhere: 2 px amber, outside the element (inside only where a box clips it).
+
 ## Graph
 
 - **Graph:** notes as nodes, links as lines, one island per topic. A line's thickness and pull follow how related two
