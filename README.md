@@ -1,329 +1,46 @@
 # knowledge
 
-[![LongMemEval-S R@5](https://img.shields.io/badge/LongMemEval--S_R%405-98.8%25-brightgreen)](#search-quality)
-[![Real questions, top 5](https://img.shields.io/badge/real_questions_top_5-88.9%25-brightgreen)](#search-quality)
+[![LongMemEval-S R@5](https://img.shields.io/badge/LongMemEval--S_R%405-98.8%25-brightgreen)](docs/memory.md#search-quality)
+[![Real questions, top 5](https://img.shields.io/badge/real_questions_top_5-88.9%25-brightgreen)](docs/memory.md#search-quality)
 [![Clients CI](https://github.com/To0wnn/knowledge/actions/workflows/clients.yml/badge.svg)](https://github.com/To0wnn/knowledge/actions/workflows/clients.yml)
 [![Release](https://img.shields.io/github/v/release/To0wnn/knowledge)](https://github.com/To0wnn/knowledge/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-**One shared memory for your AI coding agents, on your own server.** Claude Code, Codex and Antigravity (agy) on every
-device get the same live docs and notes over MCP, plus a web UI with a graph of how the notes connect.
+**Your coding agents share one memory and hand work to each other across your own PCs — and you steer them from
+your phone. Self-hosted, plain Markdown.**
 
-- **Finds the right note.** 98.8% R@5 on LongMemEval-S (500 questions), with no LLM in the loop and nothing tuned on
-  the test; 88.9% top-5 on real questions over Dutch notes. Multilingual, and made for prose as much as code.
-- **Stays tidy as it grows.** House rules, lint, and a local reranker that tells the agent right after it writes a
-  near-duplicate, so agent memory does not pile up into contradictions.
-- **Shared, not per machine.** One server for all devices and agents, per-device tokens, per-project guests.
-- **Private.** Plain Markdown on your disk; embeddings and reranking run locally, nothing leaves the machine.
+Works with Claude Code, Codex and Antigravity (agy, Gemini) on Linux, macOS and Windows. Made for solo developers and
+homelabbers with two or more PCs and two or more agents who want their notes to stay on their own server.
 
-Notes are plain Markdown files on disk. The server indexes them, serves them to agents with a per-device token, and
-checks them against a few house rules, so a growing pile of agent memory stays findable and tidy.
+- **One memory, every agent.** Tell Claude Code something on your laptop; Codex on your desktop knows it. Notes are
+  plain Markdown files on your disk, found by meaning (98.8% R@5 on LongMemEval-S, embeddings run locally).
+- **Agents hand work to each other.** One line in a note hands a task to another agent; it runs once, on one of your
+  PCs, in its own git branch, and the result comes back to whoever asked.
+- **You steer from your phone.** An inbox of what needs you, chats with the agents on your PCs, and Allow/Deny for
+  each risky step, in a web app you install on your phone.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="demo/map-dark.png">
   <img alt="The web UI map: notes grouped into topics, links between them" src="demo/map-light.png">
 </picture>
 
-<sub>Made-up demo notes from <code>demo/</code>; regenerate with <code>uv run --project server --with playwright python demo/screenshot.py</code>.</sub>
+<sub>Made-up demo notes from <code>demo/</code>.</sub>
 
-## What it does
+<!-- Screenshots to add (demo/screenshot.py, made-up data only):
+     1. phone Inbox with the "Needs you" column
+     2. a chat on the phone with an approval (Allow once / Allow for this chat / Deny)
+     3. the mission map (Tasks > Flow)
+     4. the memory graph (above)
+     5. the Machines list -->
 
-- **MCP tools for agents:** search (regex and semantic), read, list, related notes, write and edit (with conflict
-  checks), new memo, delete (kept as a copy), history, lint, and ingest of a web page, PDF or text as a raw source.
-  Semantic hits show the file size and the newest "(checked <date>)" mark, so an agent can tell which hit to read.
-- **Session start context:** each agent gets the shared instructions, the house rules and the memory index of the
-  project it works in, plus open items whose date has passed, hand-over tasks between agents and the project's
-  fixable lint findings (at most 12), which the agent clears once the user's request is done.
-- **Hand-overs during a session:** before a prompt (at most every two minutes) Claude Code, Codex and agy ask
-  `/tasks` for the tasks handed to them; a task added after the session started is told to the agent once.
-  The same per-turn call lets the server steer every session, also a resumed one that ran no start hook: notices
-  (such as docs moved into an archive folder) go to the first session of the device that asks, offered again after an
-  hour when that session had no further turn, and one session is asked to run a full docs mirror sync in the
-  background when the device's last one is older than `docs_sync_minutes` (admin page, Settings).
-- **Task lines:** a hand-over is one line in a memo,
-  `- open until <date> [<Owner>, <ID>] from <Requester>, start <now | after <ID> | <date> | after approval>: <what>`
-  (`open tot` also works). A new line without `from`/`start` is refused at write time; older lines keep working as
-  "start now" and show as legacy. The server records who added each line; a task starts by itself only when its start
-  condition is met and its writer is trusted (per project on the admin page; by default the project's owner and their
-  tokens, admins and the admins' own devices), otherwise the owner or an admin approves it in the Tasks tab. Only tasks
-  that may start reach an agent as "start now" (`/tasks`, the wake, `GET /tasks/ready`); the others are listed with the
-  reason. One task is started on one machine only: the first device to take it holds a 30-minute lease
-  (`state/task_leases.json`). `POST /tasks/woken` takes the lease (200 `{"lease"}`, or 409 `{"held_by"}` when another
-  device or another session holds it), `POST /tasks/release` gives it back (holder device only; a failed start or
-  delivery), `GET /tasks/ready` leaves out tasks another device holds, and the per-turn `/tasks` takes the lease for
-  the asking session when it first hears the task: every other session, on another device or on the same one, hears
-  "<ID> is already being handled by <device | another session on this pc>; do not start it". Later turns (the plugin
-  sends the ids it told the session before as `seen`) renew the session's own lease only within 30 minutes of the
-  tell and never take a free one again, so a session that heard a task and did other work lets it go. Only a token
-  that may write the project's memos takes leases. A worker the companion starts gets a nonce
-  (`KNOWLEDGE_START_NONCE`) and only the session presenting it takes its task (after 2 minutes without it, any session
-  of that machine may); the companion renews the lease while the worker runs. A lease ends when it runs out or the line gets its claim marker, which also makes the task not
-  startable. `[<Owner>@<device>, <ID>]` pins a task to one device (the token's name, any case; token names are unique
-  ignoring case, and a new line pinned to an unknown device is refused); others see it as reserved. A woken task nobody claims within 30 minutes
-  shows as stalled and sends one Matrix message.
-- **Results handed back:** a line `- [<Requester>, <ID>-done]: <result>` is listed for its requester only, at
-  session start ("Results handed back to you") and once per session at the next turn when it arrives later
-  (`results` in the `/tasks` v2 answer): read it, act on it, then remove the line. The Tasks tab groups them as
-  "Results waiting to be read by <requester>" with their age (a date in the line, else when the server saw it written,
-  else the memo's history). Unread for 7 days: lint `stale_handback`, which session starts list too.
-- **Hook failures:** when one of the plugin's own hooks crashes or exits with an error, the device keeps it in
-  `~/.knowledge/hook-errors.jsonl` and the per-turn hook reports new ones with `POST /status` (at most every two
-  minutes, never holding up the turn); the tasks tab shows the last failure per device and agent.
-- **Machines:** every request of plugin 0.15+ names its pc (`X-Knowledge-Machine`, a random id made once in
-  `~/.knowledge/machine.json` with the host name as label; `KNOWLEDGE_HOME` moves `~/.knowledge`). Leases and wakes key
-  on token + machine, so one token on two pcs is two holders. The server keeps per machine and agent the sessions of
-  the last two hours (project, held task) and what the machine's companion reports; the Tasks tab lists them under
-  "Machines": online or "offline since", per agent its plugin, a red YOLO pill, hooks trusted, usage limit (or
-  "unknown"), last hook error, workers and recent sessions. A person sees the machines of their own tokens; an admin
-  all. A machine id belongs to the person (or the admins) whose token first reported it; another
-  person's token on the same pc gets a machine record of its own and never sees or steers the first one. Plugins before 0.15 show as one "old plugin" row per token.
-- **The admins' own devices:** a token an admin makes counts as the admins only when it is marked **"My own device"**
-  (`"self": true`, a checkbox on the admin page, also on existing tokens): its machines are the admins' to see and
-  steer, and its task lines are trusted. Mark the tokens of your own pcs, phone and the server's own jobs (watcher,
-  reports); never a token you made for a friend, a guest or a personal assistant. Unmarked, an admin-made token is
-  its own party: its machines get records of their own, its task lines wait for approval. Machine records bound to
-  the admins before this flag existed stay theirs and match marked tokens only.
-- **Workers, not chats:** a task never goes into someone's chat. The companion (below) starts a **worker** per ready
-  task: a fresh headless session of the task's agent (Claude Code `claude -p --output-format stream-json`, Codex
-  `codex exec --json`, agy `agy -p`) in its own git worktree on branch `task/<ID>` (`~/.knowledge/worktrees/`), or in
-  the project folder when that is no git repository. Without YOLO a worker may do what its task needs and no more: edit
-  its own folder, use the knowledge tools, and run `git status/diff/log/add/commit` (no push, no other command; a
-  headless run cannot ask, so the rest is refused). Each agent the native way: Claude `--permission-mode acceptEdits`
-  plus `--allowedTools`; agy `--mode accept-edits` plus allow rules for that session only (`--settings`, never saved);
-  Codex `-s workspace-write` with only the worktree's git folder and the repository's objects, refs and logs writable
-  (not `.git/config` or hooks; the sandbox has no network) and the plugin's knowledge tools approved with
-  `-c plugins.knowledge@knowledge.mcp_servers.knowledge.default_tools_approval_mode=approve`. A worker that ends with exit 0
-  but left its task open (not claimed, not handed back) counts as failed: an error in the activity log and the
-  stalled lane, plus the server's idle notice. Its prompt holds the task line and the rules: claim it, commit
-  on the branch, never merge or push, hand back with `[<requester>, <ID>-done]: <result>; branch <name>; done: ...;
-  left: ...` (the server refuses a worker's hand-back without branch, done and left). Every worker is a new session; a
-  hand-over `<ID>-cont` goes on in the same worktree and branch, and the branch, the memo and the last hand-over line
-  are all it knows. Workers are off on a new pc ("Workers allowed" in the companion's settings), at most one per
-  agent unless its maximum says more, one while its usage limit is unknown, none while a Wolf game session runs (its
-  API socket, when readable; Sunshine is not detected). On macOS the companion's python may not read ~/Documents, ~/Desktop or
-  ~/Downloads (privacy consent): a task linked there waits with that reason until it gets Full Disk Access. A worker that ended without finishing its task is not started
-  again for 6 hours unless asked. Its claim marker `(claimed <agent> worker, <date>)` holds only while its companion
-  renews the task's lease, so such a task shows as startable again (and gets the idle notice) instead of staying stuck. The companion knows a worker by its pid and that process's start time,
-  so after a reboot a recorded worker counts as ended and a stop never hits a reused pid. Once the requester merged the branch into main or master, the companion removes the
-  worktree; unmerged a week after the worker ended: lint `worker_unmerged`. While an online pc runs an agent's workers
-  for the project (workers allowed, a maximum above 0, the agent installed, a folder linked), that agent's interactive
-  sessions (`chat=1`) take no lease: they hear a new task once as "runs in workers" and where one runs; when the user
-  says `pak <ID>` (or `take <ID>`) the plugin takes that task for the chat (agy, whose hooks never see the user's words,
-  runs `agent_hooks.py take agy <ID>`), and no worker starts it. With no such pc, that agent's chats take and start
-  its tasks themselves, as before 0.15. The Tasks tab says per task where it runs or why it waits there; a task that
-  may start but that nobody took for 30 minutes (`KNOWLEDGE_TASK_IDLE`) gives one Matrix notice. A knowledge write
-  asks the local companion to look at once.
-- **Usage limit at 90%:** the companion reads each agent's usage: Claude from its workers' own `rate_limit_event`
-  (stream-json, until that window resets) or an interactive Claude's status line under 15 minutes old, whichever is higher; Codex from its newest rollout of the
-  last 15 minutes; agy from a registered agy's language server; else "unknown". From 90% no worker of that agent
-  starts and the task waits ("waiting for limit", one Matrix notice); a running worker is told after its next tool call
-  to commit, write the hand-over line `[<agent with room>, <ID>-cont] from <original requester> ... done: ...; left: ...` (the result still goes back to whoever asked first) and end, and is stopped
-  after two minutes. A result handed back never starts anything by itself.
-- **Remote control:** the owner of a machine steers it from the Machines list with fixed actions only: start a worker
-  for a ready task, stop a worker, restart a worker that ended (`restart`: at once, past the companion's 6 h hold;
-  queued as its own start), roll a YOLO worker back, trust hooks, update the plugin, YOLO on or off per agent
-  (on needs the word YOLO typed in a dialog), workers allowed, max workers, link or unlink a folder (only folders the
-  companion listed itself). The server queues them per machine (`POST /ui/api/machines/action`); the companion pulls
-  them about every 10 seconds (`GET /machine/actions`), runs them with its own code and reports the result; an
-  offline machine's action shows "waiting for machine". Every action is logged with who and when, and shows in the
-  companion's activity log. There is no free-text command anywhere; free text reaches a pc only as a chat message
-  to an agent (below), which runs with that agent's own permissions.
-- **Agents: Inbox and Chats (chat with your agents):** the web UI's **Inbox** (key `A`, the start page) is the
-  **attention board** (`GET /ui/api/board`); its sidebar badge counts what needs you, on every view and in every
-  project. The header filters Inbox, Chats and Tasks to one project ("show all" says how many Needs-you items the
-  filter hides) and shows when the fullest usage window resets. Its columns, each grouped per project with a count: **Needs you** (a chat whose agent
-  answered and you have not opened since, a refused tool call or error in its last turn, a failed worker of the last
-  week with the companion's reason (`why`), a worker whose pc went offline ("pc offline since <time>", no Stop), a
-  task line waiting for your approval, a task woken that nobody took, a result or hand-over to a person (`result`:
-  read it, then remove the line; it never starts anything), a task whose "start after" task was cancelled
-  (`blocked`)), **Running** (chat turns, workers, task
-  lines a session holds), **Open** (task lines for an agent, with where they will run and a "Start on <pc>" button
-  per pc that may take it) and **Done (24 h)** (chats read, workers ended, results handed back). Opening a chat marks
-  it read (chats from before 0.17 count as read; a turn you stopped yourself and replies older than a week do not
-  need you). Dismiss takes a Needs-you item off your own board until it changes (stored per person on the server,
-  `POST /ui/api/board/dismiss`). With Matrix configured (`KNOWLEDGE_MATRIX_URL/ROOM/TOKEN`), a new Needs-you item on
-  an admin's board gives one Matrix message in that room, with a link to the item itself,
-  `<KNOWLEDGE_PUBLIC_URL>/ui#/inbox/<key>` (every board item has a stable `key`): once per item and version (the key and signature Dismiss uses), at most
-  `needs_per_hour` an hour (admin page, Settings; 0 = off, default 6; more at once give one summary, the rest wait
-  for room), and none while an admin has the board open (polled in the last 2 minutes: they see it there). A woken
-  task nobody took keeps its own notice, now with the same link. Non-admins get none: the room is the admin's. A card opens its chat (Esc or Back returns), a task its memo line, a worker how to look
-  at it; Approve, Start and Stop act in place. A phone shows the columns one under the other, Done folded to one line. Chat cards and workers
-  carry a **git pill** (`task/KN-12 · ●3 · ↑2↓0`: branch, changed files, commits ahead/behind `main`/`master`, or
-  the upstream on main itself), which the companion counts once a round per folder with `GIT_OPTIONAL_LOCKS=0` and
-  sends in its report (the linked folder only, `-- .`, also inside a bigger repo); a tap asks that pc for the diff (`POST /ui/api/git/diff`, handed to the companion with the chat
-  messages, answered on `POST /machine/chats/diff`): the stat, untracked files by name and `git diff <merge-base>`,
-  capped at 200 kB, shown as text. A running worker's card also gets its `progress` from the companion's report:
-  newest commit subject, commits, changed files and the last 3 log lines (secrets masked on the pc and again on the
-  server). A
-  chat is a conversation with Claude Code, Codex or agy on one of your own pcs, in a folder linked to a project there,
-  as in a terminal: the answer streams in (text, plus one line per tool call or refused call), the next message
-  continues the same conversation, Stop ends a running turn; **Chats** lists them beside the open one (`#/chats/<pc>/<chat>`). The server only relays, pull only like the actions: the UI posts a message
-  (`POST /ui/api/chat/send`), the pc's companion fetches it (`GET /machine/chats`, every ~2 s while a chat is active,
-  else ~10 s), runs one headless turn of the agent with the message on stdin (never on a command line), the first turn
-  a new conversation and every later one the agent's own continuation, and posts the output back in small batches
-  (`POST /machine/chats/events`). With YOLO on for that agent there, the turn runs with the agent's own YOLO flag
-  (`claude -p --resume <session>`, `codex exec resume <thread>`, `agy --conversation <id>`). Without YOLO it starts
-  with the same narrow set a worker has (edits in the folder, the knowledge tools, `git status/diff/log/add/commit`)
-  and **asks you for anything else**, each agent its own native way: Claude through its permission prompt tool
-  (`--permission-prompt-tool`, a small stdio MCP server of the plugin, `approval_mcp.py`, that asks the companion on
-  127.0.0.1 with its local key), Codex over `codex app-server` (workspace-write sandbox, approval policy on-request,
-  `thread/resume` continues the thread; `codex exec` never asks), agy over `agy acp` (`session/load` continues the
-  conversation; `agy -p` denies by itself). The turn pauses; the companion asks the server
-  (`POST /machine/chats/ask`), and the chat card shows the request (tool, command or path, the agent's reason) with
-  **Allow once**, **Allow for this chat** and **Deny**; each waiting approval is also an item under **Needs you** on
-  the board, answered there or in the chat (`POST /ui/api/chat/approve`, only the machine's owner). The answer goes back
-  with the companion's next poll (`answers` in `GET /machine/chats`) and the agent continues; denied, it is told so
-  and goes on without. No answer within 30 minutes (admin page, Settings, `chat_approval_minutes`) counts as denied
-  and the chat says so; a turn that ends or is stopped withdraws what still waits. The card shows the whole request (a long one folded,
-  up to 4000 characters; longer can only be allowed once). "Allow for this chat" allows exactly the same call (the
-  same full input, compared by hash) again for the rest of the chat without asking; `git push`, anything that names a
-  path outside the chat's folder (relative, `~` and `$HOME` paths resolved), Codex's file changes outside the folder or
-  without named paths, and Codex's requests for wider sandbox rights can only be allowed once. Codex is judged on the
-  command it will run, never on its parsed summary of it; a Codex file change and fetching a URL are never allowed
-  without asking. git's own files (`.git/`, `.gitattributes`, `.gitmodules`) are never written without asking, and
-  only once (agy workers get a deny rule for them; Claude protects them itself); agy and Codex chats run no shell
-  command, git included, without asking; and every git a chat turn or worker without YOLO starts runs with
-  `core.fsmonitor=false` and `core.hooksPath=/dev/null` (`GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_NOSYSTEM=1`), so a
-  config an agent wrote cannot run with an allowed git command. On the board an approval whose request is longer than
-  its one-line title can only be denied there (Allow is in its chat, where it shows whole); bidi control characters in
-  an approval show as `<U+202E>`. The machine's token is checked against today's token rules on every question and answer. Every question and answer, with who answered, is in the companion's
-  activity log and the server's audit log (`chat-ask`, `chat-approve`). Codex without YOLO still cannot commit in a
-  chat unless you allow it: the folder is a main checkout, and Codex keeps its `.git` read-only (opening it would let
-  a sandboxed run change git hooks and config). A chat turn says it is one (`KNOWLEDGE_CHAT`, header `X-Knowledge-Chat`): like a worker it
-  hears no task lists or "start your tasks", takes no lease, task or notice, and agy is not asked to register. Only the machine's owner sees or posts (admins
-  too only on their own machines); a chat needs its pc online and says so. One file per chat under the state
-  directory (`chats/<machine>/`), at most 50 chats per machine (the oldest go) and 1 MB per chat (the oldest output
-  goes). Every turn, stop and failure is in the companion's activity log; a failure also shows in the chat.
-- **Mission map:** Tasks > Flow (`#/tasks?view=flow`) shows the task lines between agents as a graph, always laid out by
-  itself (no dragging boxes around): one lane per owner (Claude, Codex, Gemini/agy, people), tasks as boxes coloured by
-  status (open, waiting on a task or date, needs approval, claimed, running in a worker, done in the last 24 h,
-  stalled), left to right by "start after <ID>", with `-cont` continuations and `-done` results in their own line styles; hand-overs
-  (requester to owner) show for the task you point at or pick. Tasks that wait on nothing stack in the first column. Pan and zoom with wheel, drag or pinch, `F` fits; a task opens a panel
-  with its full line, where it runs, Approve and its memo. "Show all" adds older results; a project filter narrows it.
-  A phone shows the chains per lane as a list of full-width cards. Data: `GET /ui/api/mission?project=&all=1` (same visibility as the
-  Tasks tab); the layout is a small layered (Sugiyama-style) pass in `static/mission.js`.
-- **YOLO safety without blocking:** task text by a writer the project does not trust reaches agents and workers marked
-  as data, not instructions. A watch hook after every tool flags what a YOLO session does that is risky (force push,
-  `rm -rf` outside the project, `curl | sh`, reading key or token files, reading the vault) in the companion's activity
-  log and once per session and kind as a Matrix notice; it never refuses. A YOLO worker gets a git checkpoint of its
-  whole worktree per turn on `refs/knowledge/checkpoints/<ID>`; "roll back" puts it back as before its last turn and
-  keeps the state before as `<ID>-undo`.
-- **Companion (this pc):** `knowledge-agent.py serve` (or `agent_hooks.py serve`, alias `companion`) runs a small
-  local service on `127.0.0.1:47321` only. Every minute it asks `GET /tasks/ready`, starts workers as above (it takes
-  each task with `POST /tasks/woken` for its worker session first and gives it back when the start fails), keeps
-  their leases while they run and reports the machine's state (`POST /machine/report`). On request it trusts the
-  knowledge hooks the agents' own way (Codex: `codex app-server` `hooks/list` + `config/batchWrite`, again after every
-  plugin update; Claude Code: `hasTrustDialogAccepted` in `~/.claude.json`; agy: `trustedWorkspaces`), only for folders
-  with a `.knowledge-project`. Its Folders section lists the linked folders and candidates (git checkouts up to three
-  levels under your home folder and folders agents worked in) and links one to a project the token may write by
-  writing `.knowledge-project`, as the knowledge-init skill does; unlink removes only that file. A YOLO switch per
-  agent writes its native "run without asking" settings and unchecking restores the previous values (agy's only while
-  agy is closed); workers then get the agent's own flag too. These are the agent's global settings on that pc (Claude
-  Code `permissions.defaultMode: bypassPermissions`, Codex `approval_policy = "never"` + `danger-full-access`, agy
-  `always-proceed`), so YOLO covers every session of that agent there, your own interactive ones too, not only workers
-  and chats. Turning it on, here or from the Machines list, needs the word YOLO typed in a dialog that says so. Every changed file is first copied to
-  `~/backups/knowledge-companion/<date>/` (last five days kept). Hook failures Codex and agy log themselves are reported
-  with `POST /status` as `agent-log` (Codex: only failures of the knowledge hooks). Its page is at
-  `http://127.0.0.1:47321/`; the web UI shows "This pc" in its sidebar when the companion answers there. The local API answers
-  only that page and the knowledge web UI's origin; every change except trusting the knowledge hooks, and the tasks
-  and activity, also need the key in `~/.knowledge/companion/api-key` (readable by you only), which the menu entry
-  passes to the page through the private file `~/.knowledge/companion/open.html` (`#key=`; never on a browser's
-  command line, where other accounts on the pc could read it). YOLO and the worker settings change only on its own page (or remotely by the owner).
-- **Usage limits:** each prompt checks how much of the agent's own usage limit is used and says it once per session
-  and limit window at 50, 75 and 90%; from 95% a new subagent is refused (Claude Code `Agent`, Codex `spawn_agent`, agy
-  `invoke_subagent`). The numbers are the agent's own: Codex's rollout, agy's language server (after its one-time
-  `register`), and for Claude Code, which hands them only to its status line, a small tap that the plugin puts in front
-  of your status line at session start (your line still shows; the old command is kept in
-  `~/.knowledge/statusline-original.json`). Without numbers nothing is said or refused.
-- **Secret guard:** an edit that writes a known secret value into a file is refused (Claude Code Edit/Write, Codex
-  apply_patch, agy's file tools), where `token.py push-secrets` left the hash file (`secret set` and `secret rm` run it themselves; a value
-  added in the Vaultwarden web UI needs a manual push). Only new text counts, so removing a secret is allowed.
-- **Token use:** the session log also sends the tokens of each logged part (uncached input, cache writes, cache reads,
-  output; Claude's per-block copies of one call counted once, Codex's running totals differenced). Lint reports
-  `usage_outlier`: a session of the last week far above that agent's usual (modified z-score above 3.5 against the last
-  month, from 10 sessions on).
-- **Projects:** each project has a docs root and a memory root. A session picks its project from its working folder;
-  a token can also be limited to one project (a guest). A new server has one project (`homelab`, docs in
-  `data/docs`, memory in `data/memory`); the admin page makes more and gives a project the name the web UI shows.
-- **Lint:** deterministic checks in ~80 ms: dead links, index lines without a file and the reverse, missing frontmatter
-  or sections, oversized memos, overdue open items, probable secrets (never shown), raw sources not yet processed.
-- **Web UI:** one app shell: a sidebar (`[` folds it to an icon rail; below 1000 px it is the rail) with **Agents**
-  (Inbox, Chats, Tasks, Machines) and **Knowledge** (Notes, Map, Changes, Health = lint), This pc, Admin and Help;
-  on a phone a bottom tab bar (Inbox, Chats, Tasks, Notes, More). Every view has its own URL (`#/inbox`, `#/notes/<path>`,
-  `#/map`, `#/tasks?view=flow`, …), so refresh, back and forward work; an old `#<path>` link opens the note.
-  Ctrl/Cmd+K (or "Search or jump", or the phone's search icon) opens a command palette: notes by title, text and
-  meaning, chats, tasks, every view and a few actions (new chat, theme, sidebar, mission flow), with arrow keys, Enter,
-  Esc and your recent picks; `/` opens it for notes only, and "Search all notes" opens the search page
-  (`#/notes?q=…`). Notes: the topic list beside the note (on a phone two pages with a Back arrow), a home view per
-  topic, a note preview with connected notes, an editor, change history. Changes (per day) and Health (lint, per
-  check) are full pages. Errors show as a short message at the bottom instead of a browser dialog. Tasks: the task lines between agents with from whom and when they may start, waiting ones
-  greyed with the reason, stalled wakes, an Approve button for the owner, results handed back (Done removes a line),
-  as a list or as the mission map. Cancel (`POST /ui/api/task/cancel`, owner or admin) turns a line into the result
-  `[<requester>, <ID>-done]: cancelled by <user>: <reason>` (a hand-over `<ID>-cont` cancels `<ID>`), so its requester
-  hears it and a task that starts after it waits for a decision instead of starting, also after the result line is
-  read and removed (the server keeps the cancellation; approving the waiting task lets it start, a new line with that ID
-  reopens it). A task a worker or session holds is not cancelled: stop the worker first. A write refuses a new task line whose date has no year (it would be no
-  task) or whose "start after <ID>" names an ID the project never had (it would start at once); a file written
-  straight to disk gets the same message as a notice at that device's next turn. A line that waits for approval
-  says so in the write's answer. Searches in the web UI that find nothing (exact and by meaning, where the person
-  stopped typing) are logged as gaps like the agents' searches. Deleted memos and docs are listed with
-  `GET /ui/api/trash` and go back with `POST /ui/api/trash/restore` (owner or admin, never over a file that exists). Machines: workers, sessions, hook errors and remote actions per pc. The project
-  picker scopes only the knowledge views. An admin page for tokens, people and projects. Light or dark, your pick.
-- **Graph:** notes as nodes, links as lines, one island per topic. A line's thickness and pull follow how related two
-  notes are (direct link, shared source, shared neighbours, same type); weak links between topics show on hover.
-- **External skills:** an admin adds a skill folder from GitHub by its link; it is pinned to a commit, taken in only as
-  plain text (no tools, hooks or load-time commands, a licence that allows copying) and shared like your own skills.
-  A weekly check takes small updates in by itself and holds big or unsafe ones for the admin; local additions below
-  `<!-- local -->` survive updates.
-- **Archive:** folders such as `archief/`, `archive/`, `old/` or `history/` are skipped by search unless asked for.
-- **Offline copy:** a device with a write token keeps a copy of the memory and syncs only differences; when the server
-  is down, the agent still gets a cached start context.
-- **Secrets:** known secret values are masked in every answer and refused in every write.
-- **Duplicate check (optional):** a local reranker (Qwen3-Reranker-0.6B, int8 ONNX, CPU) judges memo pairs whose
-  embeddings are close, in the background, and lint lists the pairs it calls the same subject (`possible_duplicate`).
-  A written memo is judged within a minute, and the device that wrote it hears at its next turn which memo it
-  duplicates (once per pair, with the other memo's description). Memos that link each other count as deliberately
-  separate. Memo files written outside the MCP tools and reported by the watcher notify the device named in
-  `KNOWLEDGE_WATCH_DEVICE`.
-  Off unless `KNOWLEDGE_RERANK_MODEL` points to a model made with `server/export_reranker.sh`.
-- **Private spans:** text between `<private>` and `</private>` is dropped from writes, edits and the session log
-  before anything is stored.
+You can use it in two layers. **Memory** is the server plus one agent: five minutes, nothing else on your PCs.
+**Cockpit** adds the companion on each PC, so tasks run as workers and you can chat and approve from your phone.
 
-## How it works
+## Quickstart: Memory
 
-- **Server** (`server/`): Python, stateless streamable-HTTP MCP plus the web UI, in one Docker container. All text sits
-  in memory, so search over a few thousand files takes tens of milliseconds. A watcher posts changed paths for instant
-  updates; a stat-only rescan every 60 s is the safety net. Embeddings (for semantic search and related notes) run
-  locally with ONNX; no data leaves the machine.
-- **Clients** (`plugin/`): one folder that installs as a plugin in Claude Code, Codex and agy. It adds the MCP server,
-  the session-start hook, a session log and a docs mirror for guest projects. Codex and agy reach the server through a
-  small stdio relay, so the token never sits in a config file. `clients/knowledge-agent.py` sets everything up.
-- **Tokens:** one long random token per device, kept in the OS keyring (Linux Secret Service, macOS Keychain, Windows
-  Credential Manager). Tokens can be read-only, masked, limited to one project, or allowed to sync shared skills.
-- **Web sign-in:** a password for one admin (`KNOWLEDGE_UI_PASSWORD`, a signed cookie for 30 days; at most five wrong
-  tries a minute), or, for several people, a reverse proxy with forward auth (for example Authentik) that sets the user
-  header and a shared secret (`KNOWLEDGE_PROXY_SECRET`).
+You need Docker and about 2 GB RAM on the server, and git plus Python 3.9 or newer on each PC.
 
-## Search quality
-
-Semantic search uses [EmbeddingGemma](https://huggingface.co/google/embeddinggemma-300m) (300M, runs on a CPU):
-multilingual (100+ languages) and made for prose as much as code, so notes in Dutch, German or English, docs, decisions
-and runbooks are found as well as code snippets. Measured with no LLM in the loop and nothing tuned on the test:
-
-| Benchmark | Result |
-|---|---|
-| [LongMemEval-S](https://github.com/xiaowu0162/LongMemEval), 500 questions, session R@5 | **98.8%** (R@10 99.4%, NDCG@10 0.945) |
-| The maintainer's 45 real questions over Dutch notes, right note in the top 5 | 88.9% (top 1: 73%) |
-
-LongMemEval per question type (R@5): knowledge update 100%, temporal reasoning 100%, multi-session 99.2%, user facts
-98.6%, preferences 96.7%, assistant facts 94.6% (documents hold the user turns only).
-These are retrieval numbers (is the right session among the first five), not answer accuracy. Re-run with
-`tests/longmemeval.py` (data from the LongMemEval Hugging Face dataset). EmbeddingGemma 2 scored lower on both sets
-(97.8% R@5; 64% top 1 on the real questions), so the server stays on the first version.
-
-## Run the server
-
-With Docker, all notes in `./data` next to `compose.yaml`:
+**1. Run the server.**
 
 ```sh
 git clone https://github.com/To0wnn/knowledge && cd knowledge
@@ -331,47 +48,11 @@ mkdir data && echo "KNOWLEDGE_UI_PASSWORD=<a long password>" > .env
 docker compose up -d
 ```
 
-Open `http://localhost:8766/ui`, sign in with the password and create a device token on the admin page. Notes live
-in `data/memory` (memos with their `MEMORY.md` index), `data/docs` and `data/shared` (`CLAUDE.md`, house rules and
-skills shared with every agent); more projects can be made on the admin page. Reached from other machines: add their
-`host:port` to `KNOWLEDGE_ALLOWED_HOSTS` in `.env` (also when you change `KNOWLEDGE_PORT`), and put a reverse proxy
-with HTTPS in front: over plain HTTP the password and tokens cross the network readable. The container runs as uid
-1000; if `./data` belongs to another user, set `KNOWLEDGE_UID` and `KNOWLEDGE_GID` in `.env`. The image (`ghcr.io/to0wnn/knowledge`, about 1.5 GB with the embedding model) is built for every release;
-it is also listed in the MCP registry as `io.github.To0wnn/knowledge`.
+**2. Make a token.** Open `http://localhost:8766/ui`, sign in with the password and create a device token on the
+admin page (Admin). This is the only way to make the first token today, there is no command for it yet.
+The admin page shows the install line with your server address filled in.
 
-Settings in `.env` (all optional): `KNOWLEDGE_PUBLIC_URL` (the address people use, named in the agents' instructions),
-`KNOWLEDGE_LANGUAGE` (`en` or `nl`: a memo's sections are `## Status` and `## Decisions`, or `## Stand` and
-`## Keuzes`; both are always accepted), `TZ`. The house rules every agent gets are `default_house_rules.md` until you
-put your own `house_rules.md` in `data/shared`.
-
-The web UI installs as an app (Chrome or Edge menu, "Install app"; Safari, "Add to Home Screen"): a manifest at
-`/ui/manifest.webmanifest` (start page `/ui#/inbox`, scope `/ui`, standalone) with 192/512 px and maskable icons.
-There is no service worker: Chrome needs none for "Install app" since version 108 on Android and 112 on desktop,
-only its automatic install banner still wants a fetch handler
-([Chrome blog](https://developer.chrome.com/blog/update-install-criteria)). The manifest and icons carry no data and
-are served without sign-in; the page links the manifest with `crossorigin="use-credentials"`, because browsers fetch
-a manifest without cookies otherwise, and a sign-in proxy in front (forward auth) would answer with a redirect to its
-login page instead of the manifest. Behind a sign-in proxy on another origin (`auth.<domain>`): in the installed app
-on Android, a redirect to the login page leaves the app's scope, so Chrome shows it in the app window with a
-custom-tab style bar (the login page's address and a close button) and, as reported, returns to the app view once
-the redirect lands inside `/ui` again
-([w3c/manifest discussion](https://lists.w3.org/Archives/Public/public-webapps-github/2018Jun/0728.html); not yet
-tried on a phone with this server). The installed app shares Chrome's cookies, so someone signed in in Chrome is
-usually never sent there. A manifest cannot put another origin in scope (`scope` must be on the app's own origin), so
-the fix is a long proxy session, not the manifest. iOS home-screen apps keep their own cookies: the first start signs
-in once.
-
-Requirements: Docker and about 2 GB RAM (the embedding model is 1.2 GB; it ships in the image, nothing is fetched at
-runtime).
-
-The original installation runs differently (`server/compose.yaml`: notes shared over NFS from the machine the agents
-run on, a zero-downtime switch on deploy, `KNOWLEDGE_BUILTIN_PROJECTS=homelab,anpitek,trade`): copy `local.env.example` to `local.env`, point the volumes at your folders
-and run `./deploy.sh`, which runs the tests, copies `server/` to the Docker host, builds, switches and waits for
-`/health`.
-
-## Connect a client
-
-The server's setup page (`/setup`, readable without signing in, so a new person with only a token can follow it; the same steps as the help page `/ui/help` without the house rules) has the exact steps per client and OS. The admin page shows a new token together with the server address and these lines with `KNOWLEDGE_URL` filled in. In short:
+**3. Connect an agent** on the same PC:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/To0wnn/knowledge/main/install.sh | sh   # Linux, macOS
@@ -381,62 +62,88 @@ curl -fsSL https://raw.githubusercontent.com/To0wnn/knowledge/main/install.sh | 
 irm https://raw.githubusercontent.com/To0wnn/knowledge/main/install.ps1 | iex        # Windows
 ```
 
-Both need git and Python 3.9 or newer (macOS's own python3 is 3.9). They keep the scripts in `~/knowledge` (a git checkout, also brought back after a rewritten
-history) and run `clients/knowledge-agent.py setup`. It is the same line every time: the first time it finds Claude
-Code, Codex and agy and asks y/n for each; after that it updates the agents that have the plugin, asks y/n only for an
-agent found without it, and asks for a token only when the server refuses the stored one.
+It finds Claude Code, Codex and agy, asks y/n for each, and asks for the server address
+(`http://localhost:8766`) and the token. Run the same line again later to update.
 
-`setup`, `install` and `update` end by setting up the companion (again only updates; `install-companion` alone):
-it starts at logon (Linux: systemd `--user` unit `knowledge-companion.service`; macOS: LaunchAgent
-`io.github.knowledge.companion`; Windows: a per-user Scheduled Task "Knowledge companion" that runs `pythonw.exe`
-directly, no PowerShell), a menu entry "Knowledge companion" opens its page in an app window (Edge or Chrome
-`--app=`, else the default browser), and a first run trusts the knowledge hooks. On Windows the Start menu `.lnk` is
-made with one visible `powershell -NoProfile -Command` line (the shell's COM object). `--dry-run` (or
-`KNOWLEDGE_COMPANION_DRY_RUN=1`) lists the steps, also for another OS with `--os linux|darwin|windows`. Without a
-user session to start it in (no systemd user bus over SSH, a container, WSL; macOS without a GUI login) the autostart
-is skipped and the setup still succeeds; start it by hand with `knowledge-agent.py serve`. On Linux the unit has
-`KillMode=process`, so a restart never ends the tmux sessions and `codex exec` runs the companion started.
-`knowledge-agent.py uninstall-companion` first turns every YOLO switch off (the agents' own settings come back), then
-removes the autostart and the menu entry (its settings in `~/.knowledge/companion` stay).
+**4. Try it.** Tell Claude Code: *"remember: we deploy with ./deploy.sh"*. Then start Codex (or agy) and ask
+*"how do we deploy?"*. It answers from the shared memory.
 
-`install claude` (or `codex`, `agy`) sets up one agent without asking which ones. `install` asks for your server's
-address (or set `KNOWLEDGE_URL`, e.g. `KNOWLEDGE_URL=http://localhost:8766`, for one run); the installer has no default, so a
-token never goes to a server you did not name.
-The address that answered is stored in `~/.config/knowledge/url` for the hooks of every agent and set as the Claude
-plugin's "Knowledge server URL" option, so later sessions and `update` need nothing else.
+**More than one PC?** Put the server behind HTTPS (a reverse proxy) and add its `host:port` to
+`KNOWLEDGE_ALLOWED_HOSTS` in `.env`; then run the install line on every PC with a token per device. Over plain HTTP
+the password and tokens cross the network readable. All settings: [docs/server.md](docs/server.md).
 
-It asks for the token once, checks it with the server, stores it in the keyring and installs the plugin. The plugin
-keeps itself up to date in every agent, and says so once at session start: in Claude Code it turns on the marketplace's
-auto-update (off under `/plugin` > Marketplaces); Codex and agy have no plugin auto-update, so there the plugin checks
-GitHub at most once a day and updates itself with the agent's own CLI (the setup without a plugin: its git checkout is brought to
-GitHub's main, also after a rewritten history when nothing in it is changed, then the setup runs again;
-`knowledge-agent.py update` does the same by hand). Off: `KNOWLEDGE_AUTO_UPDATE=0`. A new version loads at the next start. Each session start
-reports the plugin version (Codex and agy also their last update check and why it failed): the admin page shows it per device and agent, and a device still behind the newest
-version after two days hears how to update by hand (also listed in lint as `plugin_behind`).
+## Add the Cockpit
 
-Link a project folder to its project once: ask your agent (skill `knowledge-init`), which writes a file
-`.knowledge-project` with the project name in the folder's root. Every session started there gets that project. A linked git worktree (Codex and agy make one per chat) counts as its main checkout: same project, docs mirrored from the main checkout only (the folder is the source: knowledge_write/edit/delete refuse the mirror, as the UI does, since the next sync would undo them), and the session is told it runs in a separate checkout. On Windows, agy needs a `python3` command on PATH (Python from the python.org install manager or the
-Microsoft Store has one); without it the setup configures agy without the plugin. Codex and the agy hooks on Windows start Python through
-`plugin/python3.cmd`: the py launcher, then Python on PATH, then any install in the registry (PEP 514), each one
-test-run first, so the Microsoft Store stub is skipped and a python.org install without py or PATH still works.
+The install line also sets up the **companion**, a small local service on each PC (`127.0.0.1:47321`, starts at
+logon). With it:
 
-The plugin also ships development skills, the same in every agent: `plan-change`, `debug-root-cause`, `verify-done`,
-`review-diff`, `project-setup`, `efficiency-pass`, `knowledge-init`, `verified-goal` (keep working until a check command
-proves the task is done, with a hard cap and an unattended loop recipe for each agent) and `fan-out-verify` (split a
-broad job over subagents, have every finding refuted by a fresh verifier, report only what survives).
+- **Workers.** A task handed to an agent runs as a fresh headless session in its own git worktree and branch, at most
+  one per agent by default, paused at 90% of the agent's usage limit. Workers are off until you tick "Workers
+  allowed" on the companion's page. [docs/tasks.md](docs/tasks.md)
+- **Chats from your phone.** Open the web UI on your phone and install it as an app; start a chat with Claude Code,
+  Codex or agy in a project folder on one of your PCs. The answer streams in as in a terminal.
+  [docs/chats.md](docs/chats.md)
+- **Approvals.** Without YOLO, an agent in a chat may edit files in its folder and asks you for anything else:
+  **Allow once**, **Allow for this chat** or **Deny**, on the phone or in the Inbox. [docs/chats.md](docs/chats.md)
+- **Inbox and Machines.** One board of what needs you, what runs and what is done; per PC its agents, workers,
+  usage and a fixed set of remote actions (no remote shell). [docs/companion.md](docs/companion.md)
 
-## Development
+To use it from your phone, the server must be reachable from the phone over HTTPS. Link a project folder once by
+asking your agent to run the skill `knowledge-init`.
 
-- `server/graph.py`, `server/lint.py` and `server/vectors.py` have self-checks under `__main__`; `server/test_server.py`
-  tests the server. `deploy.sh` runs all of them first.
-- `tests/clients_e2e.py` runs the client side against a real server: plugin hooks, the installers, Codex's own start
-  of the MCP server, the offline copy and the skills sync. CI runs it on Windows, macOS and Linux for every push
-  (`.github/workflows/clients.yml`).
-- `tests/ui_smoke.py` checks the web UI with Playwright.
-- A change to the plugin needs a version bump in `plugin/.claude-plugin/plugin.json` and
-  `plugin/.codex-plugin/plugin.json` (the test checks they match), or installed copies never update.
+## Compared with
 
-Browser libraries are vendored with their licences in `server/static/vendor/` (force-graph, marked, DOMPurify); no CDN.
+Each of these is good at its own part; knowledge is the one that combines shared memory, hand-overs and a phone
+cockpit across several agents and PCs.
+
+| Tool | What it does well | Where knowledge differs |
+|---|---|---|
+| [claude-mem](https://github.com/thedotmack/claude-mem) | Automatic session memory for Claude Code, local | One server for Claude Code, Codex and agy on all your PCs; plain Markdown you edit |
+| [basic-memory](https://github.com/basicmachines-co/basic-memory) | Local Markdown knowledge base over MCP | Adds shared multi-PC serving, house-rule lint, duplicate checks and agent hand-overs |
+| Happy, Omnara, Claude Code Remote Control | Steer a running agent session from your phone | Also memory and tasks between agents; self-hosted, no third-party relay |
+| Conductor, Superset | Run parallel agents in worktrees on one Mac or desktop | Workers on any of your PCs (Linux, macOS, Windows), started from a shared task list |
+| [Vibe Kanban](https://github.com/BloopAI/vibe-kanban) | Kanban board that runs coding agents in worktrees | Tasks are lines in your notes, agents hand them to each other, steered from the phone |
+
+## Honest limits
+
+- **A server to run:** Docker, about 2 GB RAM, an image of about 1.5 GB (the embedding model ships in it).
+- **HTTPS for more than one PC** or the phone: you put a reverse proxy in front.
+- **Agents:** Claude Code, Codex and Antigravity (agy) only.
+- **Notifications:** Matrix only, and the one-machine `compose.yaml` needs a small edit for it
+  ([docs/server.md](docs/server.md#notifications)).
+- **One admin:** password sign-in is for one person; several people need a reverse proxy with forward auth.
+- **First token** is made in the web UI, not by a command.
+- **One maintainer**, built for their own use first. Issues and pull requests welcome.
+
+Known gaps: [docs/ROADMAP.md](docs/ROADMAP.md).
+
+## How it works
+
+- **Server** (`server/`): Python in one Docker container, MCP over streamable HTTP plus the web UI. All notes sit in
+  memory; search and embeddings (EmbeddingGemma, ONNX) run locally, nothing leaves the machine.
+- **Notes:** plain Markdown in `data/`, with a `MEMORY.md` index per project, a few house rules and a lint that keeps
+  agent memory findable and free of duplicates.
+- **Plugin** (`plugin/`): one folder that installs in Claude Code, Codex and agy: the MCP server, session-start
+  context, hand-over checks each turn, and development skills. Tokens live in the OS keyring.
+- **Tasks:** a hand-over is a line in a note (`- open until <date> [<Owner>, <ID>] from <Requester>, start ...: <what>`);
+  the server decides when it may start and gives it to one machine only.
+- **Companion** (`clients/`, `plugin/companion`): pulls tasks, actions and chat messages from the server; the server
+  never connects to your PCs.
+
+## Documentation
+
+| Page | Contents |
+|---|---|
+| [server.md](docs/server.md) | Running the server, `.env` settings, proxy sign-in, notifications |
+| [clients.md](docs/clients.md) | The installer, updates, linking folders, Windows, skills, usage limits, secret guard |
+| [memory.md](docs/memory.md) | MCP tools, session start, projects, lint, duplicates, secrets, search quality |
+| [tasks.md](docs/tasks.md) | Task lines, leases and nonces, results, workers, usage limit, mission map |
+| [companion.md](docs/companion.md) | The companion, machines, own devices, remote control, YOLO safety |
+| [chats.md](docs/chats.md) | Inbox, chats and approvals |
+| [web-ui.md](docs/web-ui.md) | Views, routes, graph, installing as an app (PWA, cookies) |
+| [security.md](docs/security.md) | The security model in one page |
+| [development.md](docs/development.md) | Tests, CI, plugin versions, screenshots |
+| [ROADMAP.md](docs/ROADMAP.md) | Known gaps |
 
 ## License
 
