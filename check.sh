@@ -7,4 +7,6 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GIT_COMMON_DIR GIT_OBJECT_
 cd "$(dirname "$0")/server"
 PATH="$HOME/.local/bin:$PATH"  # uv lives there; shells started at boot may lack it
 python3 ../plugin/hooks/limits.py --self-test && python3 ../plugin/hooks/secret-guard.py --self-test && python3 ../plugin/hooks/companion.py --self-test && python3 ../plugin/hooks/workers.py --self-test && python3 ../plugin/hooks/chat.py --self-test && python3 ../plugin/hooks/watch.py --self-test
+# client code also runs on macOS's /usr/bin/python3 (3.9): an f-string with a backslash in {} once broke the setup there
+uv run --quiet --no-project --python 3.9 python -I -c "import py_compile, sys; [py_compile.compile(f, doraise=True) for f in sys.argv[1:]]" ../clients/*.py ../plugin/hooks/*.py
 uv run --quiet graph.py && uv run --quiet lint.py && uv run --quiet external_skills.py && uv run --quiet test_server.py

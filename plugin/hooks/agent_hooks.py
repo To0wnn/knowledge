@@ -577,7 +577,7 @@ def hints(tok: str):
         print(f"knowledge register check skipped: {e}", file=sys.stderr)
     text = ""
     # the shared hints, then this conversation's own (a worker's stop or steer note, watch.py)
-    for f in (pending, *([KN_HOME / f"pending-hints-{re.sub(r'[^\w.-]', '-', conv)[:80]}.txt"] if conv else [])):
+    for f in (pending, *([KN_HOME / "pending-hints-" + re.sub(r"[^\w.-]", "-", conv)[:80] + ".txt"] if conv else [])):
         try:
             text += f.read_text(encoding="utf-8")
             f.unlink()

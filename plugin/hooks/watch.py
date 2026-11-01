@@ -135,7 +135,7 @@ def main(agent: str):
             except OSError:
                 pass
     if note and agent == "agy":  # parked for this conversation only: another agy session never reads a worker's note
-        with (KN_HOME / (f"pending-hints-{re.sub(r'[^\w.-]', '-', sid)[:80]}.txt" if sid else "pending-hints.txt")).open("a", encoding="utf-8") as f:
+        with (KN_HOME / ("pending-hints-" + re.sub(r"[^\w.-]", "-", sid)[:80] + ".txt" if sid else "pending-hints.txt")).open("a", encoding="utf-8") as f:
             f.write(note + "\n")
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": note}} if note and agent != "agy" else {}))
 
