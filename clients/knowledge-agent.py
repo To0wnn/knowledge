@@ -40,6 +40,7 @@ it in ~/.config/knowledge/url for the hooks and sets the Claude plugin option. O
   knowledge-agent.py uninstall-companion [--dry-run] [--os ...]   remove that autostart and shortcut again
 """
 import getpass
+import hashlib
 import json
 import os
 import re
@@ -594,28 +595,61 @@ def install_hooks(agent: str, name: str):
 IMPORTED = token_store.KN_HOME / "imported.json"  # what an import did, per file: a rerun imports nothing twice
 FRONT = re.compile(r"\A---\r?\n(.*?)\r?\n---\r?\n", re.S)
 TYPES = ("project", "reference", "feedback", "user")
+# Secrets the server cannot know (not in the vault): never uploaded. Values must look random, so prose passes.
+LIKELY_SECRET = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(?:sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|"
+                           r"github_pat_\w{20,}|xox[abposr]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16})")
+KEY_VALUE = re.compile(r"(?i)(?:api[-_]?key|key|token|secret|passw(?:or)?d|pwd)[\"']?\s*[:=]\s*[\"']?([^\s\"'`<>‹›]{16,})")
 
 
-def import_sources() -> list:
-    """(file, title, project) of what the agents here already know, from these known places only: the user-level
-    instruction files, Claude Code's local auto memory and CLAUDE.md/AGENTS.md at the root of folders linked to a
-    project. project "" is the token's own."""
+def high_entropy(value: str) -> bool:
+    """Random-looking: at least 3 bits per character and letters mixed with digits (no word or path is)."""
+    import math
+    n = len(value)
+    bits = -sum(c / n * math.log2(c / n) for c in (value.count(ch) for ch in set(value)))
+    return bits >= 3.0 and bool(re.search(r"\d", value)) and bool(re.search(r"[A-Za-z]", value)) and "/" not in value
+
+
+def likely_secret(text: str) -> bool:
+    return bool(LIKELY_SECRET.search(text)) or any(high_entropy(v) for v in KEY_VALUE.findall(text))
+
+
+def claude_folder(encoded: str, folders: set) -> str:
+    """The working folder of ~/.claude/projects/<encoded>: Claude Code names it after the folder's path with every
+    character other than a letter or digit as '-'. That is not reversible, so it is matched against the known folders."""
+    return next((f for f in sorted(folders) if re.sub(r"[^A-Za-z0-9]", "-", f) == encoded), "")
+
+
+def import_sources() -> tuple:
+    """([(file, title, project)], [skip reasons]) of what the agents here already know, from these known places only:
+    the user-level instruction files, Claude Code's local auto memory and CLAUDE.md/AGENTS.md at the root of folders
+    linked to a project. project "" is the token's own; None: no project known. A file whose real path is outside its
+    expected folder (a symlink to elsewhere) is never read."""
+    import companion, project_marker  # the folders the agents worked in, and their .knowledge-project links
     claude = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
-    out = [(claude / "CLAUDE.md", "Claude Code user instructions", ""), (CODEX / "AGENTS.md", "Codex user instructions", ""),
-           (RULES["agy"], "agy user instructions", "")]  # agy (Antigravity) reads ~/.gemini/GEMINI.md, as install_rules writes it
-    for f in sorted(claude.glob("projects/*/memory/*.md")):
-        if f.name != "MEMORY.md":  # the index: the server writes its own lines
-            out.append((f, "", ""))
+    cands = [(claude / "CLAUDE.md", claude, "Claude Code user instructions", ""), (CODEX / "AGENTS.md", CODEX, "Codex user instructions", ""),
+             (RULES["agy"], RULES["agy"].parent, "agy user instructions", "")]  # agy (Antigravity) reads ~/.gemini/GEMINI.md
     try:
-        import companion  # its list of linked folders (sessions, agent configs, the companion page)
-        linked = companion.project_folders()
+        folders, linked = companion.known_folders(), companion.project_folders()
     except Exception as e:  # an unreadable agent config must not stop the rest
-        print(f"import: could not list the linked folders ({e})")
-        linked = {}
+        print(f"import: could not list the known folders ({e})")
+        folders, linked = set(), {}
+    home = Path.home().resolve()
+    for mem in sorted(claude.glob("projects/*/memory")):
+        folder = claude_folder(mem.parent.name, folders)
+        root, name = project_marker.project_root(Path(folder)) if folder else (None, None)
+        project = name if root and name and root.resolve() != home else None
+        cands += [(f, mem, "", project) for f in sorted(mem.glob("*.md")) if f.name != "MEMORY.md"]  # the index: the server writes its own
     for project, folder in sorted(linked.items()):
-        for name in ("CLAUDE.md", "AGENTS.md"):
-            out.append((Path(folder) / name, f"{Path(folder).name} {name}", project))
-    return [s for s in out if s[0].is_file()]
+        cands += [(Path(folder) / n, Path(folder), f"{Path(folder).name} {n}", project) for n in ("CLAUDE.md", "AGENTS.md")]
+    out, skipped = [], []
+    for f, base, title, project in cands:
+        if not (f.is_file() or f.is_symlink()):
+            continue
+        if not f.resolve().is_relative_to(base.resolve()):
+            skipped.append(f"{f}: a link to a file elsewhere, not read")
+        elif f.is_file():
+            out.append((f, title, project))
+    return out, skipped
 
 
 def import_memo(path: Path, title: str, project: str) -> dict:
@@ -670,16 +704,71 @@ def save_record(rec: dict):
     IMPORTED.write_text(json.dumps(rec, indent=1) + "\n", encoding="utf-8")
 
 
-def import_todo() -> list:
-    """(file, memo arguments) not imported before; prints the dry-run list (file, size, target)."""
+def server_view(tok: str) -> tuple:
+    """({project: memory root} this token may write, True when this device holds the server's own files): the server's
+    MEMORY.md or CLAUDE.md is byte for byte a local one, as on the machine the server reads its files from."""
+    ok, text = call_tool(tok, "knowledge_projects", {})
+    if not ok:
+        sys.exit(f"import: the server did not list this token's projects: {text[:300]}")
+    rows = re.findall(r"^(\S+): docs \S+/, memory (\S+)/, (write|read)$", text, re.M)
+    writable = {p: m for p, m, w in rows if w == "write"}
+    claude = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    local = {hashlib.sha256(f.read_bytes()).hexdigest()[:16] for f in [claude / "CLAUDE.md", *claude.glob("projects/*/memory/MEMORY.md")]
+             if f.is_file()}
+    for rel in ["claude/CLAUDE.md", *(f"{m}/MEMORY.md" for _, m, _ in rows)]:
+        ok, text = call_tool(tok, "knowledge_read", {"path": rel, "limit": 1})
+        if ok and (v := re.search(r"\(version (\w+),", text)) and v.group(1) in local:
+            return writable, True
+    return writable, False
+
+
+def import_todo(tok: str) -> list:
+    """(file, memo arguments) not imported before, numbered as a dry-run list (file, size, target); says what is
+    skipped and why. Nothing at all on the device that holds the server's own files."""
+    writable, source = server_view(tok)
+    if source:
+        print("import: this device holds the server's own files (its memory or CLAUDE.md is the server's copy): nothing to import")
+        return []
     done = load_record().get("files", {})
-    todo = [(p, a) for p, t, pr in import_sources() if str(p) not in done and (a := import_memo(p, t, pr))]
-    for p, a in todo:
-        print(f"  {p}  ({p.stat().st_size} bytes) -> {a['type']} memo \"{a['title']}\" in "
+    sources, skipped = import_sources()
+    todo = []
+    for p, title, project in sources:
+        if str(p) in done:
+            continue
+        if project is None:  # Claude memory of a folder not linked: only a one-project token says where it belongs
+            if len(writable) != 1:
+                skipped.append(f"{p}: its folder is not linked to a project: link the folder first (skill knowledge-init)")
+                continue
+            project = next(iter(writable))
+        if project and project not in writable:
+            skipped.append(f"{p}: this token may not write project {project}")
+            continue
+        try:
+            text = p.read_text(encoding="utf-8-sig", errors="replace")
+        except OSError as e:
+            skipped.append(f"{p}: unreadable ({e})")
+            continue
+        if likely_secret(text):
+            skipped.append(f"{p}: looks like it holds a secret (a key, token or password): not uploaded; put it in your vault, "
+                           "write ‹secret:NAME› instead")
+        elif a := import_memo(p, title, project):
+            todo.append((p, a))
+    for i, (p, a) in enumerate(todo, 1):
+        print(f"  {i}. {p}  ({p.stat().st_size} bytes) -> {a['type']} memo \"{a['title']}\" in "
               + (f"project {a['project']}" if "project" in a else "this token's project"))
-    skipped = len(done)
-    print(f"import: {len(todo)} file(s) to import" + (f", {skipped} imported before" if skipped else ""))
+    for s in skipped:
+        print(f"  skipped: {s}")
+    print(f"import: {len(todo)} file(s) to import" + (f", {len(done)} imported before" if done else ""))
     return todo
+
+
+def pick(todo: list, answer: str) -> list:
+    """The files chosen: 'all', 'none' (or Enter), or numbers such as '1,3,5'."""
+    a = answer.strip().lower()
+    if a in ("all", "a", *YES):
+        return todo
+    nums = {int(n) for n in re.findall(r"\d+", a)}
+    return [t for i, t in enumerate(todo, 1) if i in nums]
 
 
 def run_import(tok: str, todo: list) -> int:
@@ -705,14 +794,19 @@ def run_import(tok: str, todo: list) -> int:
     return failed
 
 
+CHOOSE = "Import which? all, none, or numbers like 1,3,5 [none]: "
+
+
 def import_cmd(argv: list):
-    """knowledge-agent.py import [--dry-run]."""
+    """knowledge-agent.py import [--dry-run]: in a terminal the person picks the files; without one, all of them."""
     tok = token_store.token()
     if not tok or not url_known():
         sys.exit("No token or server address stored: run install first.")
-    todo = import_todo()
+    todo = import_todo(tok)
     if "--dry-run" in argv or not todo:
         return
+    if sys.stdin.isatty() and not (todo := pick(todo, input(CHOOSE))):
+        return print("nothing imported")
     if failed := run_import(tok, todo):
         sys.exit(f"import: {failed} file(s) failed (see above); run knowledge-agent.py import again")
 
@@ -724,16 +818,16 @@ def offer_import():
     if rec.get("asked") or not sys.stdin.isatty() or not (tok := token_store.token()):
         return
     print("\n== import ==\nWhat your agents here already know (instruction files, Claude Code's local memory, linked folders):")
-    todo = import_todo()
+    todo = import_todo(tok)
     if not todo:
         return
     rec["asked"] = True
     save_record(rec)
-    if input("Import these as memos (a file with a known secret is skipped, an existing memo is never replaced)? [y/N] ").strip().lower() in YES:
-        if failed := run_import(tok, todo):
-            print(f"import: {failed} file(s) failed; run knowledge-agent.py import again")
-    else:
-        print("not imported; later: knowledge-agent.py import (--dry-run lists first)")
+    chosen = pick(todo, input("A file with a known secret is refused, an existing memo never replaced. " + CHOOSE))
+    if not chosen:
+        return print("not imported; later: knowledge-agent.py import (--dry-run lists first)")
+    if failed := run_import(tok, chosen):
+        print(f"import: {failed} file(s) failed; run knowledge-agent.py import again")
 
 
 COMPANION_URL = "http://127.0.0.1:47321"
@@ -1068,6 +1162,15 @@ if __name__ == "__main__":
             assert a["decisions"] == "- **x** (1 Jan 2026, me): y" and "project" not in a
             f.write_text(f"{BEGIN}\nhouse\n{END}\n", encoding="utf-8")
             assert import_memo(f, "t", "garden") == {}
+        rnd = hashlib.sha256(b"selftest").hexdigest()[:24]  # built at run time: no secret-looking literal in the repo
+        for text in (f"api_key = {rnd}", f"TOKEN: '{rnd}'", "-----BEGIN OPENSSH " + "PRIVATE KEY-----", "sk-" + rnd, "AKIA" + "Q7" * 8):
+            assert likely_secret(text), text
+        for text in ("password: ‹secret:HOMELAB_ROOT_PASSWORD›", "token=see_the_vault_for_this", "key: /home/user/.ssh/id_ed25519.pub",
+                     "the token is refused", "secret_hashes() of every known value"):
+            assert not likely_secret(text), text
+        assert [n for n, _ in pick([(1, 0), (2, 0), (3, 0)], "1, 3")] == [1, 3] and pick([(1, 0)], "") == [] and pick([(1, 0)], "all") == [(1, 0)]
+        assert claude_folder("-home-u-My-Proj", {"/home/u/My Proj", "/home/u/My"}) == "/home/u/My Proj"
+        assert claude_folder("C--Users-u-x", {"C:\\Users\\u\\x"}) == "C:\\Users\\u\\x" and claude_folder("-y", {"/x"}) == ""
         print("ok")
     else:
         try:

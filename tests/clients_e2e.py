@@ -2009,14 +2009,27 @@ def import_e2e(tok: str, tmp: Path, garden: Path):
         (home / rel).parent.mkdir(parents=True, exist_ok=True)
         (home / rel).write_text(text, encoding="utf-8")
     (home / ".claude.json").write_text(json.dumps({"projects": {str(home / "Linked Proj"): {}, str(home / "Other"): {}}}), encoding="utf-8")
+    local_mem = home / ".claude/projects/-x-proj/memory"
+    rnd = hashlib.sha256(b"e2e").hexdigest()[:24]  # built at run time: no secret-looking literal for the pre-push scan
+    (local_mem / "reference_keys.md").write_text(f"deploy key\napi_key = {rnd}\n", encoding="utf-8")
+    (home / "Elsewhere").mkdir()
+    (home / "Elsewhere" / "private.md").write_text("private elsewhere\n", encoding="utf-8")
+    try:
+        os.symlink(home / "Elsewhere" / "private.md", local_mem / "reference_link.md")
+        linked_file = True
+    except OSError:  # Windows without the symlink privilege
+        linked_file = False
     mem = garden / "memory"
     imported = lambda: sorted(f.name for f in mem.glob("*.md") if "knowledge-agent.py import" in f.read_text(encoding="utf-8"))
     code, out, err = run([sys.executable, str(agent), "import", "--dry-run"], "", env)
-    listed = [ln for ln in out.splitlines() if ln.startswith("  ")]
+    listed = [ln for ln in out.splitlines() if re.match(r"  \d+\. ", ln)]
     want = ("CLAUDE.md", "AGENTS.md", "GEMINI.md", "feedback_short.md", "Linked Proj")
     check(code == 0 and len(listed) == 5 and all(any(w in ln for ln in listed) for w in want) and "bytes) -> " in out
           and "MEMORY.md" not in out and "Other" not in out and "notes.md" not in out and imported() == [],
           "import --dry-run: lists the five known files (file, size, target), nothing else, writes nothing", out + err)
+    check("reference_keys.md: looks like it holds a secret" in out, "import: a file that looks like it holds an unknown secret is skipped", out)
+    check(not linked_file or ("reference_link.md: a link to a file elsewhere" in out and "private elsewhere" not in out),
+          f"import: a symlink out of its folder is not read ({'tested' if linked_file else 'no symlink privilege'})", out)
     code, out, err = run([sys.executable, str(agent), "import"], "", env)
     names = imported()
     texts = {n: (mem / n).read_text(encoding="utf-8") for n in names}
@@ -2036,6 +2049,28 @@ def import_e2e(tok: str, tmp: Path, garden: Path):
     code, out, err = run([sys.executable, str(agent), "import"], "", env)
     check(code == 0 and out.count("exists, left as it is") == 4 and before == {n: (mem / n).read_text(encoding="utf-8") for n in names},
           "import without its record: existing memos are never replaced", out + err)
+    # a token for several projects: Claude memory goes to its folder's linked project; an unlinked folder's is skipped
+    own = tmp / "Import Owner"
+    for folder, linked in (("Linked Proj", True), ("Other", False)):
+        (own / folder).mkdir(parents=True)
+        if linked:
+            (own / folder / ".knowledge-project").write_text("garden\n", encoding="utf-8")
+        m = own / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(own / folder)) / "memory"
+        m.mkdir(parents=True)
+        (m / f"project_{folder[:5].lower().strip()}_note.md").write_text(f"note of {folder}\n", encoding="utf-8")
+    (own / ".claude.json").write_text(json.dumps({"projects": {str(own / "Linked Proj"): {}, str(own / "Other"): {}}}), encoding="utf-8")
+    code, out, err = run([sys.executable, str(agent), "import"], "", user_env(own, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN="owner-token"))
+    check(code == 0 and (mem / "reference_project_linke_note.md").is_file() and "project_other_note.md: its folder is not linked" in out
+          and not list(tmp.glob("**/reference_project_other_note.md")),
+          "import with a multi-project token: memory goes to its folder's linked project, an unlinked folder's is skipped", out + err)
+    # the machine the server reads its files from: its local memory is the server's copy, so nothing is imported
+    src = tmp / "Import Source" / ".claude" / "projects" / "-s" / "memory"
+    src.mkdir(parents=True)
+    (src / "MEMORY.md").write_bytes((mem / "MEMORY.md").read_bytes())
+    (src / "project_source_note.md").write_text("from the source\n", encoding="utf-8")
+    code, out, err = run([sys.executable, str(agent), "import"], "", user_env(tmp / "Import Source", KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok))
+    check(code == 0 and "holds the server's own files" in out and not (mem / "project_source_note.md").exists(),
+          "import on the device that holds the server's files: nothing imported, and it says so", out + err)
 
 
 def installer(tok: str, tmp: Path):
