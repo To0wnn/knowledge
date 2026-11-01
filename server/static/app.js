@@ -1057,6 +1057,7 @@ async function loadTasks(render = true) {
         " ", [p.commit && `last commit: ${p.commit}`, p.commits && `${p.commits} commit${p.commits > 1 ? "s" : ""}`, p.changed && `${p.changed} changed`, w.why]
           .filter(Boolean).join(" · "));
       if ((p.log || []).length) { const d = el("details"); d.append(el("summary", null, "last output"), el("pre", "mono", p.log.join("\n"))); line.append(d); }
+      if (m.own) line.append(" ", ckFollowButton(w));
       if (m.own && m.online && w.status === "running") line.append(" ", machineButton("Stop", "Stop this worker", () => confirm(`Stop the worker on ${t.id}?`) && machineAction(m, "stop_worker", { project: w.project, id: w.id })));
       if (m.own && m.online && w.status === "failed") line.append(" ", machineButton("Restart", "Start this worker again now (past the 6 h hold)", () => machineAction(m, "restart", { project: w.project, id: w.id }).then(() => loadTasks(true))));
       li.append(line);
@@ -1381,10 +1382,11 @@ async function ckSummary() {
     $("ck-resets").textContent = `resets ${far ? at.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" }) : at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
     $("ck-resets").title = `${AGENT_NAME[worst.agent] || worst.agent} on ${worst.label}: ${Math.round(worst.limit)}% of its usage limit used`;
   }
-  for (const [k, card] of ck.cards) { const c = ck.chats.find((x) => ckKey(x) === k); if (!c) ckDrop(k); else card.meta = { ...card.meta, ...c }; }
+  for (const [k, card] of ck.cards) { if (card.worker) continue; const c = ck.chats.find((x) => ckKey(x) === k); if (!c) ckDrop(k); else card.meta = { ...card.meta, ...c }; }
   if (ck.view && !ck.cards.has(ck.view)) { // a route's chat id (or an older pc/id key) once the chats are known
-    const c = ck.chats.find((x) => x.id === ck.view || ckKey(x) === ck.view);
+    const c = ck.chats.find((x) => x.id === ck.view || ckKey(x) === ck.view), hit = ckFindWorker(ck.view);
     if (c) ck.view = ckKey(ckCard(c).meta);
+    else if (hit) ck.view = ckKey(ckWorkerCard(hit.m, hit.w).meta);
     else { // gone or never there: the list, without a dead chat in the URL
       ck.view = "";
       if (shellRoute.view === "chats" && shellRoute.arg) { history.replaceState(history.state, "", "#/chats"); shellRoute = { ...shellRoute, arg: "" }; }
@@ -1560,6 +1562,7 @@ function ckItem(i) {
   }
   for (const h of i.hosts || []) act(`Start on ${h.label}`, "Start a worker for this task there now",
     () => ckDo("/ui/api/machines/action", { machine: h.machine, action: "start_worker", args: { project: i.project, id: i.id } }));
+  if (i.kind === "worker") act("Follow", "Watch this worker, steer it or take it over", () => ckFollow(i));
   if (i.kind === "worker" && (i.can_stop ?? i.status === "running")) act("Stop", "Stop this worker",
     () => confirm(`Stop the worker on ${i.id}?`) && ckDo("/ui/api/machines/action", { machine: i.machine, action: "stop_worker", args: { project: i.project, id: i.id } }));
   if (i.kind === "worker" && i.status === "failed" && i.can_restart) act("Restart", "Start this worker again now",
@@ -1668,7 +1671,7 @@ function ckCard(meta) {
   stop.type = "button"; send.type = "submit"; btns.append(stop, send); form.append(input, btns, note);
   const asks = el("div", "ck-asks"); asks.hidden = true; asks.setAttribute("aria-live", "assertive");
   root.append(head, log, asks, form);
-  const card = { meta: { ...meta }, root, name, where, git, state, log, asks, input, stop, send, note, after: 0, online: meta.online !== false };
+  const card = { meta: { ...meta }, root, name, where, git, state, log, asks, form, input, stop, send, note, after: 0, online: meta.online !== false };
   x.onclick = () => ckShow(null);
   open.onclick = () => ckShow(card.meta);
   input.addEventListener("keydown", (e) => {
@@ -1679,12 +1682,14 @@ function ckCard(meta) {
     const text = input.value.trim(); if (!text || send.disabled) return;
     send.disabled = true;
     try {
-      await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, text }) });
-      input.value = ""; card.meta.status = "queued";
+      if (card.worker) await api("/ui/api/worker/steer", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, worker: card.worker, text }) });
+      else await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, text }) });
+      input.value = ""; if (!card.worker) card.meta.status = "queued";
     } catch (err) { note.className = "ck-note bad"; note.textContent = err.message; }
     ckPaint(card); await ckPoll(card); clearTimeout(ck.timer); ck.timer = setTimeout(ckTick, 1500);
   };
   stop.onclick = async () => {
+    if (card.worker) return ckWorkerAct(card, "stop_worker");
     try { await api("/ui/api/chat/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id }) }); }
     catch (err) { note.className = "ck-note bad"; note.textContent = err.message; }
     ckPoll(card);
@@ -1694,6 +1699,7 @@ function ckCard(meta) {
 }
 function ckDrop(k) { ck.cards.delete(k); if (ck.view === k) ck.view = ""; }
 function ckPaint(card) {
+  if (card.worker) return ckWorkerPaint(card);
   const m = card.meta, busy = ckBusy(m.status);
   card.name.textContent = m.title || "New chat";
   card.where.textContent = `${AGENT_NAME[m.agent] || m.agent} · ${m.label} · ${ckShort(m.folder)}${m.project ? ` (${m.project})` : ""}`;
@@ -1713,12 +1719,19 @@ function ckPaint(card) {
 }
 async function ckPoll(card) {
   if (!card) return;
+  if (card.worker) return ckWorkerPoll(card);
   let res;
   // only the chat opened full counts as read; a card glanced at on the board stays under Needs you
   const peek = ck.view !== ckKey(card.meta) ? "&peek=1" : "";
   try { res = await api(`/ui/api/chat?machine=${card.meta.machine}&id=${card.meta.id}&after=${card.after}${peek}`); }
   catch (e) { card.note.className = "ck-note bad"; card.note.textContent = e.message; return; }
   card.meta = { ...card.meta, ...res.chat, label: res.label }; card.online = res.online; card.at = res.at;
+  ckEvents(card, res);
+  ckAsks(card, res.asks || [], (res.now || Date.now() / 1000) - Date.now() / 1000);
+  ckPaint(card);
+}
+// New events into a card's log: text as sanitized Markdown, the rest as lines; never one twice.
+function ckEvents(card, res) {
   if (res.trimmed && !card.after && res.events.length) card.log.append(el("p", "ck-line info", "Older output was trimmed (the chat keeps its newest part)."));
   const near = card.log.scrollHeight - card.log.scrollTop - card.log.clientHeight < 80;
   for (const e of res.events) {
@@ -1732,8 +1745,88 @@ async function ckPoll(card) {
     } else card.log.append(el("div", e.kind === "user" ? "ck-msg user" : `ck-line ${e.kind}`, e.text));
   }
   if (res.events.length && (near || res.events.some((e) => e.kind === "user"))) card.log.scrollTop = card.log.scrollHeight;
-  ckAsks(card, res.asks || [], (res.now || Date.now() / 1000) - Date.now() / 1000);
+}
+
+// Follow a worker (#/chats/worker/<project>/<ID>): a worker is a chat nobody types in. Its card is a chat card whose
+// log is the worker's transcript (its companion sends output only while someone follows it), with a banner and the
+// worker's own actions. Its owner may steer it (the message reaches the agent after its next step, in its own
+// session) or take it over (stopped, and its conversation goes on as an ordinary chat on that pc).
+const ckWorkerRoute = (w) => `#/chats/worker/${encodeURIComponent(w.project)}/${encodeURIComponent(w.id)}`;
+function ckFindWorker(arg) { // "worker/<project>/<id>" -> the newest run of that task on your own pcs
+  const m = /^worker\/([^/]+)\/([^/]+)$/.exec(arg || "");
+  if (!m) return null;
+  return ck.machines.flatMap((pc) => Object.values(pc.agents || {}).flatMap((a) => (a.workers || []).map((w) => ({ m: pc, w }))))
+    .filter(({ w }) => w.project === m[1] && w.id === m[2]).sort((a, b) => (b.w.started || 0) - (a.w.started || 0))[0] || null;
+}
+function ckFollow(w) { go(ckWorkerRoute(w)); }
+function ckFollowButton(w, cls = "ghost small") {
+  const b = el("button", cls, "Follow"); b.type = "button";
+  b.title = w.status === "running" ? "Watch this worker live, steer it or take it over" : "Read what this worker did";
+  b.onclick = (e) => { e.stopPropagation(); ckFollow(w); };
+  return b;
+}
+function ckWorkerCard(m, w) {
+  const card = ckCard({ machine: m.id, id: `worker/${w.project}/${w.id}`, agent: w.agent, title: `Worker ${w.id}`, label: m.label,
+    folder: w.branch || "", project: w.project, status: w.status, online: m.online });
+  if (card.worker) return card;
+  card.worker = `${w.project}/${w.id}`; card.w = w; card.m = m;
+  card.root.classList.add("worker");
+  card.banner = el("div", "ck-banner"); card.bannerText = el("p", "ck-banner-text"); card.acts = el("div", "ck-banner-acts");
+  card.banner.append(card.bannerText, card.acts);
+  card.root.insertBefore(card.banner, card.log);
+  card.send.textContent = "Steer";
+  card.input.setAttribute("aria-label", "Message for the worker");
+  return card;
+}
+async function ckWorkerAct(card, action) {
+  const w = card.w;
+  if (action === "stop_worker" && !confirm(`Stop the worker on ${w.id}?`)) return;
+  if (action === "takeover" && !confirm(`Take over ${w.id}?\n\nIts worker is stopped (the line stays yours) and its conversation goes on as a chat on ${card.meta.label}, in its worktree.`)) return;
+  try {
+    await api("/ui/api/machines/action", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ machine: card.meta.machine, action, args: { project: w.project, id: w.id } }) });
+    if (action === "takeover") { card.taking = true; toast(`Asked ${card.meta.label} to hand ${w.id} over to a chat`, false); }
+  } catch (e) { toast(e.message); }
+  ck.summaryAt = 0; ckTick();
+}
+async function ckWorkerPoll(card) {
+  let res;
+  try { res = await api(`/ui/api/worker?machine=${card.meta.machine}&worker=${encodeURIComponent(card.worker)}&after=${card.after}${ck.view === ckKey(card.meta) ? "" : "&peek=1"}`); }
+  catch (e) { card.note.className = "ck-note bad"; card.note.textContent = e.message; return; }
+  if (card.started !== undefined && res.worker.started !== card.started) { card.log.replaceChildren(); card.after = 0; } // a new run of the task
+  card.started = res.worker.started; card.w = { ...card.w, ...res.worker };
+  card.meta = { ...card.meta, status: res.worker.status, label: res.label }; card.online = res.online; card.at = res.at;
+  ckEvents(card, res);
+  if (!card.log.childNodes.length) card.log.append(el("p", "ck-line info ck-wait", res.worker.status === "running" ? "Following: new output shows here as the worker prints it." : "No output was kept for this worker."));
+  else card.log.querySelector(".ck-wait")?.remove();
+  if (card.taking && res.worker.chat) { // taken over: on to its chat once the list knows it
+    card.taking = false; await ckSummary(); return go(`#/chats/${encodeURIComponent(res.worker.chat)}`);
+  }
   ckPaint(card);
+}
+function ckWorkerPaint(card) {
+  const m = card.meta, w = card.w, run = w.status === "running", live = run && card.online;
+  card.name.textContent = `Worker ${w.id}`;
+  card.where.textContent = `${AGENT_NAME[w.agent] || w.agent} · ${m.label}${w.branch ? ` · ${w.branch}` : ""}${w.project ? ` (${w.project})` : ""}`;
+  card.state.className = `ck-state ${!card.online ? "offline" : run ? "running" : ""}`;
+  card.state.textContent = !card.online ? "pc offline" : run ? "working" : w.chat ? "taken over" : w.status;
+  card.root.classList.toggle("running", run);
+  card.bannerText.textContent = `Worker for ${w.id} on ${m.label} · ${w.chat ? "taken over as a chat" : run ? "running" : w.status}` +
+    (live ? ". Steer: your message reaches it after its next step. Take over: stop it and go on as a chat." : w.chat ? "." : ". Read only.");
+  const sig = JSON.stringify([w.status, w.chat, !!w.review, !!w.git, card.online]);
+  if (card.acts.dataset.sig !== sig) {
+    card.acts.dataset.sig = sig; card.acts.replaceChildren();
+    const act = (text, title, fn) => { const b = el("button", "ghost small", text); b.type = "button"; b.title = title; b.onclick = fn; card.acts.append(b); };
+    if (card.online && run) act("Stop", "Stop this worker (this pc keeps its lease until it runs out)", () => ckWorkerAct(card, "stop_worker"));
+    if (card.online && w.status === "failed") act("Restart", "Start this worker again now", () => ckWorkerAct(card, "restart"));
+    if (w.review || w.git) act("Review", "The changes on its branch, read on that pc", () => ckDiff({ kind: "worker", machine: m.machine, project: w.project, id: w.id, title: w.id, label: m.label }));
+    if (card.online && !w.chat && w.status !== "merged") act("Take over", "Stop the worker and go on with its conversation as a chat on that pc", () => ckWorkerAct(card, "takeover"));
+    if (w.chat) act("Open chat", "The chat this worker became", () => go(`#/chats/${encodeURIComponent(w.chat)}`));
+  }
+  card.form.hidden = !live;
+  card.stop.hidden = true; card.send.disabled = !live;
+  card.input.placeholder = "Steer the worker… (it reads this after its next step; Enter sends)";
+  if (!card.note.classList.contains("bad")) { card.note.className = "ck-note"; card.note.textContent = !card.online ? `${m.label} is offline${card.at ? ` since ${ago(card.at)}` : ""}.` : ""; }
 }
 
 // Approvals: the turn waits while the agent wants a tool its allowed set does not hold. One block per open approval

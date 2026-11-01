@@ -466,6 +466,11 @@ span.ck-pill { height: 32px; padding: 0 14px; font-size: 13px; color: var(--ink)
 .ck-line.refused { color: var(--warn); border-left-color: var(--warn); }
 .ck-line.error { color: var(--bad); border-left-color: var(--bad); }
 .ck-line.info { font-family: var(--font); font-style: italic; }
+.ck-card.worker { grid-template-rows: auto auto minmax(0, 1fr) auto auto; }
+.ck-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel-hi); font-size: 12.5px; }
+.ck-banner-text { margin: 0; flex: 1 1 240px; color: var(--muted); }
+.ck-banner-acts { display: flex; flex-wrap: wrap; gap: 6px; }
+.ck-form[hidden] { display: none; }
 .ck-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); align-items: end; }
 .ck-form textarea { resize: none; min-height: 42px; max-height: 160px; font-size: 14px; }
 .ck-form .ck-btns { display: flex; gap: 6px; }

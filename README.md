@@ -85,7 +85,8 @@ logon). With it:
 
 - **Workers.** A task handed to an agent runs as a fresh headless session in its own git worktree and branch, at most
   one per agent by default, paused at 90% of the agent's usage limit. Workers are off until you tick "Workers
-  allowed" on the companion's page. [docs/tasks.md](docs/tasks.md)
+  allowed" on the companion's page. **Follow** a worker to watch it live in the chat view, steer it between steps, or
+  take it over as a chat. [docs/tasks.md](docs/tasks.md)
 - **Chats from your phone.** Open the web UI on your phone and install it as an app; start a chat with Claude Code,
   Codex or agy in a project folder on one of your PCs. The answer streams in as in a terminal.
   [docs/chats.md](docs/chats.md)

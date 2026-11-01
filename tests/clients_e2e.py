@@ -256,7 +256,7 @@ def start_server(tmp: Path):
            "KNOWLEDGE_PROXY_SECRET": "proxy-secret", "KNOWLEDGE_ADMINS": "alice", "KNOWLEDGE_AUDIT": str(tmp / "audit.log"),
            "KNOWLEDGE_PORT": str(PORT), "KNOWLEDGE_BIND": "127.0.0.1", "KNOWLEDGE_RESCAN": "3600", "KNOWLEDGE_EMBED_MODEL": "hash",
            "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"),
-           "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}", "PYTHONUTF8": "1",
+           "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}", "PYTHONUTF8": "1", "KNOWLEDGE_WORKER_FOLLOW_SECONDS": "3",
            "KNOWLEDGE_GITHUB_RAW": "http://127.0.0.1:9"}  # no newest-version lookup on GitHub from a test
     log = open(tmp / "server.log", "wb")
     proc = subprocess.Popen([sys.executable, str(REPO / "server" / "server.py")], env=env, stdout=log, stderr=subprocess.STDOUT)
@@ -771,6 +771,41 @@ elif os.environ.get("KNOWLEDGE_CHAT"):  # one chat turn: the message on stdin, t
         out({"type": "turn.completed"})
     else:
         out({"event": "result", "result": {"conversation_id": sid, "status": "SUCCESS"}})
+elif os.environ.get("KN_FAKE_FOLLOW") and os.environ.get("KNOWLEDGE_WORKER"):  # a worker someone follows and steers
+    import subprocess
+    tid, sid = os.environ["KNOWLEDGE_WORKER"], "sess-" + name
+    rec({"worker": tid, "argv": [name] + args, "cwd": os.getcwd(), "pid": os.getpid()})
+    out = lambda x: print(json.dumps(x), flush=True)
+
+    def say(text, tool):  # each agent's own headless output: Claude stream-json, Codex --json, agy -p plain text
+        if name == "claude":
+            out({"type": "assistant", "message": {"content": [{"type": "text", "text": text}, {"type": "tool_use", "name": "Bash", "input": {"command": tool}}]}})
+        elif name == "codex":
+            out({"type": "item.started", "item": {"type": "command_execution", "command": tool}})
+            out({"type": "item.completed", "item": {"type": "agent_message", "text": text}})
+        else:
+            print(text, flush=True)
+
+    def step():  # after a tool call the agent runs the plugin's PostToolUse hook (watch.py), as the real ones do
+        hook = {"conversationId": sid, "cwd": os.getcwd()} if name == "agy" else {"session_id": sid, "cwd": os.getcwd(), "tool_input": {"command": "git status"}}
+        r = subprocess.run([sys.executable, os.environ["KN_FAKE_FOLLOW"], name], input=json.dumps(hook), capture_output=True, text=True)
+        got = ((json.loads(r.stdout or "{}").get("hookSpecificOutput") or {}).get("additionalContext") or "") if r.stdout.strip() else ""
+        parked = os.path.join(os.environ.get("KNOWLEDGE_HOME") or os.path.join(os.path.expanduser("~"), ".knowledge"), "pending-hints-" + sid + ".txt")
+        if name == "agy" and os.path.exists(parked):  # agy: parked for its PostInvocation hook, injected before the next model turn
+            got = open(parked, encoding="utf-8").read()
+            os.remove(parked)
+        if "steers this worker" in got:
+            say("heard: " + got.strip().splitlines()[-1], "git status")
+    if name == "claude":
+        out({"type": "system", "subtype": "init", "session_id": sid})
+    elif name == "codex":
+        out({"type": "thread.started", "thread_id": sid})
+    say(f"{name} starts {tid}", "git status")
+    for stage in ("go", "end"):
+        while not os.path.exists(f"{calls}.{tid}.{stage}"):
+            step()
+            time.sleep(0.4)
+        say(f"{name} {stage} {tid} password=hunter22hunter Sup3rSecret99", "git add -A")
 else:
     rec({"argv": [name] + args, "cwd": os.getcwd(), "env": {k: os.environ.get(k, "") for k in ("KNOWLEDGE_WORKER", "KNOWLEDGE_YOLO", "KNOWLEDGE_START_NONCE", "GIT_CONFIG_PARAMETERS")}})
     if os.path.exists(calls + ".sleep"):  # a worker that keeps working
@@ -1108,8 +1143,12 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         check(out_w.strip() == "{}", "limit 90%: a worker of another project with the same task id does not read that stop note", out_w[:300])
         code, out_w, err = run([sys.executable, str(hooks / "watch.py"), "agy"], json.dumps({"conversationId": "w", "workspacePaths": [str(wt)]}),
                                {**env, "KNOWLEDGE_WORKER": cx_id, "KNOWLEDGE_START_NONCE": cx_nonce})
-        check(out_w.strip() == "{}" and "-cont" in (home / ".knowledge" / "pending-hints.txt").read_text(encoding="utf-8"),
-              "limit 90%: agy's PostToolUse answers {} and the note waits for its next turn (PostInvocation)", out_w)
+        parked = home / ".knowledge" / "pending-hints-w.txt"  # this conversation's own: another agy session never reads it
+        check(out_w.strip() == "{}" and "-cont" in parked.read_text(encoding="utf-8") and "-cont" not in
+              ((home / ".knowledge" / "pending-hints.txt").read_text(encoding="utf-8") if (home / ".knowledge" / "pending-hints.txt").exists() else ""),
+              "limit 90%: agy's PostToolUse answers {} and the note waits for that conversation's next turn (PostInvocation)", out_w)
+        code, out_h, err = run([sys.executable, str(hooks / "agent_hooks.py"), "hints"], json.dumps({"conversationId": "other"}), env)
+        check("-cont" not in out_h and parked.exists(), "limit 90%: another agy conversation's next turn does not get that note", out_h[:300])
         check("CMP-CX3" in json.loads((tmp / "machines.json").read_text(encoding="utf-8")).get(mid, {}).get("limit_told", []),
               "limit 90%: a task that waits for the limit gets one notice")
         time.sleep(1.5)  # KNOWLEDGE_WORKER_GRACE=1
@@ -1549,6 +1588,146 @@ def chat_e2e(tok: str, tmp: Path):
               "chat: turns, stops and failures are in the companion's activity log", json.dumps(activity[:8])[:800])
     finally:
         proc.kill()
+
+
+def follow_e2e(tok: str, tmp: Path):
+    """Follow, steer and take over a worker from the web UI, for each agent (fake agents that print their real
+    headless formats and run the plugin's watch hook after each tool call): a running worker nobody follows sends
+    nothing; followed, its text and tool lines arrive (secrets masked); a steer message reaches the agent after its next
+    step in its own session; one that ends unwatched leaves its last events; a take-over stops it and its conversation
+    goes on as a chat in its worktree that resumes the worker's session, the line claimed for the owner."""
+    hooks = CLIENT / "plugin" / "hooks"
+    home = tmp / "Follow Usér"
+    bin_dir, calls = home / "bin", home / "calls.jsonl"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "fakeagent.py").write_text(FAKE_AGENT, encoding="utf-8")
+    for name in ("codex", "claude", "agy"):
+        if WIN:
+            (bin_dir / f"{name}.cmd").write_text(f'@"{sys.executable}" "%~dp0fakeagent.py" {name} %*\r\n', encoding="utf-8")
+        else:
+            (bin_dir / name).write_text(f'#!/bin/sh\nexec "{sys.executable}" "{bin_dir / "fakeagent.py"}" {name} "$@"\n', encoding="utf-8")
+            (bin_dir / name).chmod(0o755)
+    repo = home / "code" / "Follow repo"
+    repo.mkdir(parents=True)
+    (repo / ".knowledge-project").write_text("garden\n", encoding="utf-8")
+    (repo / "README.md").write_text("follow\n", encoding="utf-8")
+    for args in (["init", "-q", "-b", "main"], ["config", "user.name", "t"], ["config", "user.email", "t@x"], ["add", "-A"], ["commit", "-qm", "one"]):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+    port = free_port()
+    env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, PATH=str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
+                   KNOWLEDGE_COMPANION_PORT=str(port), KNOWLEDGE_COMPANION_EVERY="3600", KN_FAKE_CALLS=str(calls),
+                   KNOWLEDGE_COMPANION_ACTIONS_EVERY="1", KNOWLEDGE_COMPANION_SCAN_EVERY="0", KN_FAKE_FOLLOW=str(hooks / "watch.py"))
+    ui = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice", "X-Knowledge-UI": "1"}
+    key_file = home / ".knowledge" / "companion" / "api-key"
+
+    def local(path, body):
+        req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", method="POST", data=json.dumps(body).encode(), headers={
+            "Origin": f"http://127.0.0.1:{port}", "Content-Type": "application/json", "X-Companion-Key": key_file.read_text(encoding="utf-8").strip()})
+        with urllib.request.urlopen(req, timeout=120) as r:
+            return json.loads(r.read().decode("utf-8"))
+    # a session in the folder makes it known here (before the lines exist: it must not take one of them)
+    run([sys.executable, str(hooks / "agent_hooks.py"), "tasks", "codex"], json.dumps({"session_id": "fol-cx", "cwd": str(repo)}), env, cwd=str(repo))
+    ids = {"claude": "FOL-CLAUDE", "codex": "FOL-CODEX", "agy": "FOL-GEMINI"}
+    owners = {"claude": "Claude", "codex": "Codex", "agy": "Gemini"}
+    lines = "".join(f"- open tot 1 jan 2099 [{owners[a]}, {i}] from Claude, start now: follow test {i}\n" for a, i in ids.items())
+    http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_write", "arguments": {
+        "path": "garden-memory/project_follow.md", "content": f"---\nname: f\ndescription: d\nmetadata:\n  type: project\n---\n## Stand\n{lines}\n## Keuzes\n"}}},
+         {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})
+    log = open(home / "companion.log", "wb")
+    proc = subprocess.Popen([sys.executable, str(hooks / "agent_hooks.py"), "serve"], env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
+    started = lambda: [json.loads(x) for x in calls.read_text(encoding="utf-8").splitlines() if '"worker"' in x] if calls.exists() else []
+    try:
+        if not check(wait_for(lambda: key_file.exists(), 30), "follow: the companion runs", (home / "companion.log").read_text(errors="replace")[-600:]):
+            return
+        mid = json.loads((home / ".knowledge" / "machine.json").read_text(encoding="utf-8"))["id"]
+        local("/local/api/settings", {"workersAllowed": True})
+        for i in ids.values():  # only these (other tests' lines stay alone); off again after, so a later round starts nothing
+            http("POST", "/ui/api/machines/action", {"machine": mid, "action": "start_worker", "args": {"project": "garden", "id": i}}, ui)
+        wait_for(lambda: len(started()) == 3, 60)
+        local("/local/api/settings", {"workersAllowed": False})
+        row = lambda: next((r for r in machines() if r["id"] == mid), {})
+        workers_of = lambda: {w["id"]: w for a in row().get("agents", {}).values() for w in a.get("workers", [])}
+        ok = wait_for(lambda: len(started()) == 3 and all(workers_of().get(i, {}).get("status") == "running" for i in ids.values()), 60)
+        if not check(ok, "follow: one worker per agent runs and is reported", json.dumps(workers_of())[:600] + (home / "companion.log").read_text(errors="replace")[-600:]):
+            return
+        view = lambda a, peek=False, after=0: json.loads(http("GET", f"/ui/api/worker?machine={mid}&worker=garden/{ids[a]}&after={after}" + ("&peek=1" if peek else ""), headers=ui)[1])
+        texts = lambda a, peek=False: "".join(e["text"] for e in view(a, peek)["events"])
+        time.sleep(4)
+        check(all(not view(a, peek=True)["events"] for a in ids), "follow: running workers nobody follows upload nothing",
+              json.dumps({a: view(a, peek=True)["events"][:3] for a in ids})[:600])
+        for a in ids:
+            got = wait_for(lambda: f"{a} starts {ids[a]}" in texts(a) and (a == "agy" or any(e["kind"] == "tool" and "git status" in e["text"] for e in view(a)["events"])), 30)
+            check(got and view(a)["following"], f"follow {a}: followed, its text and tool lines arrive", json.dumps(view(a))[:600])
+        # Steer: a user line now; the agent hears it after its next step (its PostToolUse hook), in its own session.
+        for a in ids:
+            st, body = http("POST", "/ui/api/worker/steer", {"machine": mid, "worker": f"garden/{ids[a]}", "text": f"use sqlite {a}"}, ui)
+            check(st == 200, f"steer {a}: the owner's message is taken", body)
+        for a in ids:
+            got = wait_for(lambda: f"use sqlite {a}" in texts(a).split("heard:")[-1] and "Delivered" in texts(a), 40)
+            ev = view(a)["events"]
+            check(got and any(e["kind"] == "user" and e["text"] == f"use sqlite {a}" for e in ev),
+                  f"steer {a}: a user line, then the worker heard it after its next tool call and the transcript says delivered", json.dumps(ev)[-700:])
+        for a in ids:
+            (Path(f"{calls}.{ids[a]}.go")).write_text("", encoding="utf-8")
+        for a in ids:
+            got = wait_for(lambda: f"{a} go {ids[a]}" in texts(a), 30)
+            t = texts(a)
+            check(got and "hunter22hunter" not in t and "Sup3rSecret99" not in t, f"follow {a}: new output streams in, secrets masked", t[-300:])
+        # Codex and agy end while nobody follows: nothing until the companion's round sees them end, then their last events.
+        time.sleep(5)  # the follow runs out (3 s in this test)
+        for a in ("codex", "agy"):
+            (Path(f"{calls}.{ids[a]}.end")).write_text("", encoding="utf-8")
+        time.sleep(4)
+        check(all(f"end {ids[a]}" not in texts(a, peek=True) for a in ("codex", "agy")), "follow: output of a worker nobody follows is not sent while it runs")
+        local("/local/api/tick", {})
+        for a in ("codex", "agy"):
+            v = view(a, peek=True)
+            check(f"{a} end {ids[a]}" in "".join(e["text"] for e in v["events"]) and v["worker"]["status"] != "running",
+                  f"follow {a}: a worker that ended unwatched keeps its last events", json.dumps(v)[-500:])
+        # Take over: Claude still runs (stopped now), Codex and agy ended; each becomes a chat that resumes its session.
+        recorded = lambda: [json.loads(x) for x in calls.read_text(encoding="utf-8").splitlines() if '"chat"' in x]
+        for a in ids:
+            st, body = http("POST", "/ui/api/machines/action", {"machine": mid, "action": "takeover", "args": {"project": "garden", "id": ids[a]}}, ui)
+            cid = ""
+            if st == 200 and wait_for(lambda: bool(view(a, peek=True)["worker"].get("chat")), 40):
+                cid = view(a, peek=True)["worker"]["chat"]
+            wt = next((w for w in started() if w["worker"] == ids[a]), {}).get("cwd", "")
+            if not check(bool(cid), f"take over {a}: the worker becomes a chat", body + (home / "companion.log").read_text(errors="replace")[-600:]):
+                continue
+            chat = lambda: json.loads(http("GET", f"/ui/api/chat?machine={mid}&id={cid}", headers=ui)[1])
+            c = chat()
+            check(c["chat"]["session"] == f"sess-{a}" and Path(c["chat"]["folder"]).resolve() == Path(wt).resolve() and any("Taken over" in e["text"] for e in c["events"]),
+                  f"take over {a}: the chat holds the worker's session, worktree and transcript", json.dumps(c["chat"]) + wt)
+            http("POST", "/ui/api/chat/send", {"machine": mid, "id": cid, "text": f"carry on {a}"}, ui)
+            got = wait_for(lambda: (x := chat())["chat"]["status"] == "idle" and f"echo: carry on {a} (resumed)" in "".join(e["text"] for e in x["events"]), 40)
+            turn = next((r for r in recorded() if r["chat"] == cid), {})
+            check(got and Path(turn.get("cwd", ".")).resolve() == Path(wt).resolve(), f"take over {a}: the chat's turn resumes the worker's own session in its worktree",
+                  json.dumps(chat()["events"][-3:]) + json.dumps(turn)[:300])
+            if a == "claude":
+                check(wait_for(lambda: all(r.get("pid") is None or r["worker"] != ids[a] or not _alive(r["pid"]) for r in started()), 20),
+                      "take over claude: the running worker is stopped")
+        memo = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_read", "arguments": {"path": "garden-memory/project_follow.md"}}},
+                    {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})[1]
+        check(all(re.search(rf"{i}\] from Claude, start now: follow test {i} \(claimed alice via chat, ", memo) for i in ids.values()),
+              "take over: each line is claimed by the owner via chat (no worker starts it again)", memo[-600:])
+    finally:
+        for a in ids:
+            for stage in ("go", "end"):
+                Path(f"{calls}.{ids[a]}.{stage}").write_text("", encoding="utf-8")
+        proc.terminate()
+        try:
+            proc.wait(10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        log.close()
+
+
+def _alive(pid: int) -> bool:
+    if WIN:
+        r = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True)
+        return str(pid) in r.stdout
+    r = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+    return bool(r.stdout.strip()) and not r.stdout.strip().startswith("Z")  # a zombie has ended
 
 
 def _quiet(f):
@@ -2529,6 +2708,7 @@ def main():
         knowledge_home(tok, tmp, project)
         companion_e2e(tok, tmp, project)
         chat_e2e(tok, tmp)
+        follow_e2e(tok, tmp)
         background_flags(tmp)
         import_e2e(tok, tmp, garden)
         installer(tok, tmp)

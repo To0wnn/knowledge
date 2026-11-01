@@ -366,6 +366,25 @@ def stop_note(w: dict, target: str) -> Path:
     return f
 
 
+def steer_path(w: dict) -> Path:
+    """The owner's messages for one running worker (JSON lines), read and removed by its watch hook after its next
+    tool call; named by its start nonce like the stop note."""
+    return DIR / f"{safe(w['nonce'])}.steer"
+
+
+def session_path(w: dict) -> Path:
+    """The agent's own session id of a worker, as its watch hook saw it (agy -p prints none): a take-over resumes it."""
+    return DIR / f"{safe(w['nonce'])}.session"
+
+
+def steer_note(w: dict, by: str, text: str) -> Path:
+    DIR.mkdir(parents=True, exist_ok=True)
+    f = steer_path(w)
+    with f.open("a", encoding="utf-8") as out:
+        out.write(json.dumps({"by": by[:80], "text": text[:20_000], "at": time.time()}) + "\n")
+    return f
+
+
 def merged(w: dict) -> bool:
     """The worker's branch has commits and they are in the repository's main branch (main or master) or the branch its
     worktree was made from."""

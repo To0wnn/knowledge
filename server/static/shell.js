@@ -1,6 +1,6 @@
 // App shell: the sidebar (desktop; [ folds it to an icon rail, below 1000 px it is the rail unless opened), the
 // bottom tab bar and More sheet (phone), one page header per view, and a hash route per view: #/inbox, #/inbox/<item key>, #/chats,
-// #/chats/<chat id>, #/chats?view=board, #/tasks, #/tasks?view=flow, #/machines, #/notes, #/notes/<path>, #/notes?q=<search>, #/map, #/map/<path>,
+// #/chats/<chat id>, #/chats/worker/<project>/<ID> (follow a worker), #/chats?view=board, #/tasks, #/tasks?view=flow, #/machines, #/notes, #/notes/<path>, #/notes?q=<search>, #/map, #/map/<path>,
 // #/changes, #/health, #/thispc. The URL is the only record of the view (refresh, back and forward work); an old
 // #<note path> link becomes #/notes/<path>. Paths in routes are encoded per part (encPath), decoded here. The views themselves are app.js's and mission.js's; this file shows one
 // at a time and asks it to load. The sidebar, More sheet and theme are nav.js's. Uses app.js globals ($, el, store, decode, pushHash, ck, Graph, mapOn, current, …).
@@ -48,7 +48,7 @@ function applyRoute() {
   const agents = home === "cockpit";
   $("cockpit").dataset.mode = r.view;
   // a chat route carries the chat id; the card is keyed by pc and id (ckSummary resolves an id it does not know yet)
-  if (r.view === "chats") { const c = ck.chats.find((x) => x.id === r.arg || ckKey(x) === r.arg); ck.view = c ? ckKey(c) : r.arg; } else if (r.view === "inbox") { ck.view = ""; ck.focus = r.arg; ck.focusAt = Date.now(); if (!r.arg) ck.hit = ""; }
+  if (r.view === "chats") { const c = ck.chats.find((x) => x.id === r.arg || ckKey(x) === r.arg), hit = !c && ckFindWorker(r.arg); ck.view = c ? ckKey(c) : hit ? ckKey(ckWorkerCard(hit.m, hit.w).meta) : r.arg; } else if (r.view === "inbox") { ck.view = ""; ck.focus = r.arg; ck.focusAt = Date.now(); if (!r.arg) ck.hit = ""; }
   ckLayout();
   if (agents) {
     if (r.view === "inbox") ckBoard(); else ckHistory();

@@ -90,6 +90,38 @@ The companion that starts workers is described in [companion.md](companion.md); 
   may start but that nobody took for 30 minutes (`KNOWLEDGE_TASK_IDLE`) gives one Matrix notice. A knowledge write
   asks the local companion to look at once.
 
+## Follow, steer and take over a worker
+
+A worker is a chat nobody types in. Its row in Tasks, its board card and its Flow panel have **Follow**, which opens
+its transcript in the chat view (`#/chats/worker/<project>/<ID>`, also a link for Matrix or the Inbox) with a banner
+"Worker for <ID> on <pc>" and its actions (Stop, Restart, Review, Take over, Open chat). Only the machine's owner sees
+it (`GET /ui/api/worker?machine=&worker=<project>/<ID>&after=<n>`), as for chats.
+
+- **Pull only, and only while someone watches.** Polling a running worker's transcript follows it for 30 s
+  (`KNOWLEDGE_WORKER_FOLLOW_SECONDS`; `peek=1` reads without following). The companion's fast chat poll gets the
+  followed workers (`follow` in `GET /machine/chats`), reads the new complete lines of the worker's own log and turns
+  them into chat events with the chats' own parsers (Claude stream-json, Codex `--json`; agy `-p` prints plain text,
+  its lines are its answer): text, one line per tool call or refused call, info. It posts them on
+  `POST /machine/chats/worker` (masked on the pc, known secrets masked again on the server). A worker nobody follows
+  sends nothing while it runs; when it ends, its companion sends its last 200 events once. Only the token that
+  machine's companion reports with may write. One transcript per worker under `chats/<machine>/workers/`, at most
+  2000 events and 400 kB (the oldest go), 40 per machine, removed with the worker's record (30 days) or the machine.
+  A new run of the same task starts a new transcript.
+- **Steer** (running worker, owner only): `POST /ui/api/worker/steer {machine, worker, text}` adds a user line and
+  hands the message to the companion with its next poll (`steer`). The companion leaves it as a note next to the
+  worker's stop note; the plugin's PostToolUse hook (`watch.py`) gives it to the agent after its next tool call, the
+  same way the 90% hand-over reaches a worker: Claude Code and Codex as `additionalContext`, agy at its next
+  PostInvocation (`injectSteps`). So the worker carries on in its own session, worktree, lease, nonce, permissions and
+  YOLO setting; nothing widens. The transcript says "Delivered" once the hook took it; a worker that ends without
+  another tool call never reads it, and its transcript says so.
+- **Take over** (machine action `takeover`, owner only): the companion stops the worker (its lease kept, as Stop),
+  finds the agent's own session id (Claude's `init` event, Codex's `thread.started`, else the id the watch hook noted:
+  agy), and asks `POST /machine/chats/adopt`. The server makes an ordinary chat on that pc in the worker's worktree,
+  with the transcript so far, that resumes that session (`claude -p --resume`, Codex `thread/resume`, agy
+  `session/load`), with the chats' approval rules. The task line gets `(claimed <owner> via chat, <date>)` instead of
+  the worker's claim, so no worker starts it again; it stays the owner's until the chat hands it back (removes the
+  line) or the owner cancels or assigns it (allowed for a line only a take-over chat holds).
+
 ## Usage limit at 90%
 
 - **Usage limit at 90%:** the companion reads each agent's usage: Claude from its workers' own `rate_limit_event`

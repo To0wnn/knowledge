@@ -19,7 +19,8 @@ older server). Admin and Help in the shell (0.20): sidebar, header, tab bar, set
 message on a refusal (faked; skipped on an older server). Chats > Board (desktop): toggle and route, frames per
 project, Fit, folding, a dragged card kept across a reload, Tidy up; a phone keeps the list (skipped without it).
 The Review card with faked data: Merge asks first and queues the pc's action, Reject sends reason and send back
-(intercepted; skipped on an older server). Read-only: it opens notes, it never edits or sends.
+(intercepted; skipped on an older server). Follow a worker: its transcript read only when it ended, the Steer composer
+and Take over when it runs (intercepted; skipped on an older server). Read-only: it opens notes, it never edits or sends.
 
   systemd-run --user --scope -q -p MemoryMax=3G ~/.local/bin/uv run -q --with playwright python tests/ui_smoke.py
 (talks to the container port directly and sends what Traefik sends after the Authentik sign-in: the proxy secret
@@ -1100,6 +1101,91 @@ async def review(browser, devices, secret: str) -> None:
         await ctx.close()
 
 
+async def follow(browser, devices, secret: str) -> None:
+    """Follow a worker: #/chats/worker/<project>/<ID> opens its transcript in the chat view with a banner. An ended
+    worker is read only (no composer; Take over offered); a running one has the Steer composer, which posts to
+    /ui/api/worker/steer. Machines, transcript and the posts are intercepted (nothing reaches a pc).
+    KNOWLEDGE_SMOKE_SHOTS=<dir> saves follow-<name>.png there. Skipped on a server without it."""
+    import json
+    import time
+    from urllib.parse import urlsplit, parse_qs
+    now, sent, mid = time.time(), [], "e" * 16
+    ws = {"KN-7": {"id": "KN-7", "project": "garden", "agent": "claude", "status": "failed", "started": now - 900, "ended": now - 60, "branch": "task/KN-7",
+                   "why": "ended without claiming or handing back its task", "review": {"into": "main"}},
+          "KN-8": {"id": "KN-8", "project": "garden", "agent": "codex", "status": "running", "started": now - 120, "branch": "task/KN-8"}}
+    pc = {"id": mid, "label": "smoke-pc", "online": True, "own": True, "at": now, "tokens": ["smoke"], "actions": [],
+          "companion": {"agents": ["claude", "codex"], "folders": {"linked": []}},
+          "agents": {"claude": {"workers": [ws["KN-7"]]}, "codex": {"workers": [ws["KN-8"]]}}}
+    events = [{"n": 1, "kind": "text", "text": "Reading the **watering** schedule first.\n\n"}, {"n": 2, "kind": "tool", "text": "Bash: git status"},
+              {"n": 3, "kind": "refused", "text": "refused: Bash npm test"}, {"n": 4, "kind": "user", "text": "use the soil sensor"},
+              {"n": 5, "kind": "info", "text": "Delivered: the worker read your message after its last step."},
+              {"n": 6, "kind": "text", "text": "Switching to the soil sensor as asked."}]
+
+    async def fake(route):
+        u = urlsplit(route.request.url)
+        if route.request.method == "POST" and u.path in ("/ui/api/worker/steer", "/ui/api/machines/action"):
+            sent.append((u.path, json.loads(route.request.post_data or "{}")))
+            return await route.fulfill(json={"ok": True, "id": "abc"})
+        if u.path == "/ui/api/machines":
+            return await route.fulfill(json={"machines": [pc]})
+        if u.path == "/ui/api/chats":
+            return await route.fulfill(json={"chats": []})
+        if u.path == "/ui/api/board":
+            return await route.fulfill(json={"items": [], "now": now})
+        if u.path == "/ui/api/worker":
+            w = ws[parse_qs(u.query)["worker"][0].split("/")[1]]
+            after = int(parse_qs(u.query).get("after", ["0"])[0])
+            return await route.fulfill(json={"worker": {**w, "review": bool(w.get("review")), "git": False, "chat": None}, "events": [e for e in events if e["n"] > after],
+                                             "trimmed": False, "following": w["status"] == "running", "online": True, "at": now, "label": "smoke-pc", "machine": mid, "now": now})
+        await route.continue_()
+    shots = os.environ.get("KNOWLEDGE_SMOKE_SHOTS", "")
+    for name, dev in (("desktop", {"viewport": {"width": 1440, "height": 900}}), ("phone", devices["iPhone 14"])):
+        ctx = await browser.new_context(ignore_https_errors=True, bypass_csp=True, **dev,
+                                        extra_http_headers={"X-Knowledge-Proxy": secret, "X-authentik-username": USER})
+        await ctx.route("**/ui/api/**", fake)
+        pg = await ctx.new_page()
+        errors = []
+        pg.on("pageerror", lambda e: errors.append(str(e)))
+        pg.on("dialog", lambda d: asyncio.ensure_future(d.accept()))
+        await pg.goto(URL + "/ui#/chats")
+        await pg.wait_for_selector("#ck-canvas", state="attached")
+        if not await pg.evaluate("typeof ckFollowButton === 'function'"):
+            print("skip follow (server without it)")
+            return await ctx.close()
+        await route(pg, "#/chats/worker/garden/KN-7")
+        card = pg.locator("#ck-canvas .ck-card.worker")
+        await card.wait_for(timeout=15000)
+        await pg.wait_for_function("document.querySelectorAll('#ck-canvas .ck-log > *').length >= 6", timeout=15000)
+        banner = await card.locator(".ck-banner-text").inner_text()
+        acts = await card.locator(".ck-banner-acts button").all_inner_texts()
+        check("KN-7" in banner and "smoke-pc" in banner and "Read only" in banner, f"{name}: an ended worker opens read only with its banner ({banner})")
+        check(not await card.locator(".ck-form").is_visible() and acts == ["Restart", "Review", "Take over"], f"{name}: no composer; Restart, Review, Take over {acts}")
+        log = await card.locator(".ck-log").inner_text()
+        check(all(x in log for x in ("watering", "Bash: git status", "refused: Bash npm test", "use the soil sensor", "Delivered")),
+              f"{name}: text, tool, refused, user and info lines show like a chat")
+        check(await pg.evaluate("document.documentElement.scrollWidth <= innerWidth"), f"{name}: the worker view fits the screen")
+        if shots:
+            await pg.screenshot(path=os.path.join(shots, f"follow-{name}-ended.png"))
+        await route(pg, "#/chats/worker/garden/KN-8")
+        card = pg.locator("#ck-canvas .ck-card.worker:not([hidden])").last
+        await pg.wait_for_function("[...document.querySelectorAll('#ck-canvas .ck-card.worker strong')].some((s) => s.textContent.includes('KN-8'))", timeout=15000)
+        await pg.wait_for_selector("#ck-canvas .ck-card.worker .ck-form:not([hidden])", timeout=15000)
+        acts = await pg.locator("#ck-canvas .ck-banner-acts button").all_inner_texts()
+        check(acts == ["Stop", "Take over"], f"{name}: a running worker offers Stop and Take over {acts}")
+        await pg.locator("#ck-canvas .ck-form textarea").fill("prefer the soil sensor")
+        await pg.locator("#ck-canvas .ck-form button[type=submit]").click()
+        await pg.wait_for_timeout(500)
+        check(("/ui/api/worker/steer", {"machine": mid, "worker": "garden/KN-8", "text": "prefer the soil sensor"}) in sent, f"{name}: Steer posts the message {sent[-1:]}")
+        if shots:
+            await pg.screenshot(path=os.path.join(shots, f"follow-{name}-running.png"))
+        await pg.get_by_role("button", name="Take over").click()
+        await pg.wait_for_timeout(400)
+        check(sent[-1] == ("/ui/api/machines/action", {"machine": mid, "action": "takeover", "args": {"project": "garden", "id": "KN-8"}}),
+              f"{name}: Take over asks first and queues the pc's takeover {sent[-1:]}")
+        check(not errors, f"{name}: no page errors on the worker view {errors[:2]}")
+        await ctx.close()
+
+
 async def main() -> None:
     secret = os.environ.get("KNOWLEDGE_PROXY_SECRET") or subprocess.run(["secret", "KNOWLEDGE_PROXY_SECRET"], check=True, capture_output=True, text=True).stdout.strip()
     async with async_playwright() as p:
@@ -1118,6 +1204,7 @@ async def main() -> None:
         await agents_pages(browser, p.devices, secret)
         await shell_pages(browser, p.devices, secret)
         await board(browser, p.devices, secret)
+        await follow(browser, p.devices, secret)
         await browser.close()
     print("ok" if not failures else f"{len(failures)} failed")
     sys.exit(1 if failures else 0)
