@@ -15,7 +15,8 @@ Knowledge pages and the palette (0.19): Notes as list and note (two panes; on a 
 Changes and Health as full pages, the search page, the command palette (search, jump, actions, keys, recent, roles),
 a toast instead of alert(); skipped on an older server. The agents pages: the board's groups and #/inbox/<key> links, the
 chat list's states and filter, Tasks' Cancel and counts, Machines full width, Changes' Deleted section (skipped on an
-older server). Read-only: it opens notes, it never edits or sends.
+older server). Admin and Help in the shell (0.20): sidebar, header, tab bar, settings labels, "Saved" and the server's
+message on a refusal (faked; skipped on an older server). Read-only: it opens notes, it never edits or sends.
 
   systemd-run --user --scope -q -p MemoryMax=3G ~/.local/bin/uv run -q --with playwright python tests/ui_smoke.py
 (talks to the container port directly and sends what Traefik sends after the Authentik sign-in: the proxy secret
@@ -254,7 +255,7 @@ async def phone(browser, devices, secret: str) -> None:
 
 async def admin(browser, secret: str) -> None:
     ctx, pg, errors = await page(browser, secret, "/ui/admin", viewport={"width": 1300, "height": 900})
-    await pg.wait_for_selector("#tokens tr")
+    await pg.wait_for_selector("#tokens td.mono")  # a token row, not the loading row
     check(await pg.locator("#tokens tr").count() > 0, "admin page lists the device tokens")
     check("ago" in await pg.locator("#tokens").inner_text() or "last 15 min" in await pg.locator("#tokens").inner_text(),
           "admin page shows when tokens were last used")
@@ -851,7 +852,7 @@ async def mission(browser, devices, secret: str) -> None:
 
 async def csp(browser, secret: str) -> None:
     """The app under its real Content-Security-Policy: the map and a note render, nothing is blocked."""
-    for path in ("/ui", "/ui/admin"):
+    for path in ("/ui", "/ui/admin", "/ui/help"):
         ctx = await browser.new_context(ignore_https_errors=True,
                                         extra_http_headers={"X-Knowledge-Proxy": secret, "X-authentik-username": USER})
         pg, blocked = await ctx.new_page(), []
@@ -869,6 +870,63 @@ async def csp(browser, secret: str) -> None:
         await ctx.close()
 
 
+async def shell_pages(browser, devices, secret: str) -> None:
+    """Admin and Help inside the app shell (0.20): the sidebar, page header and phone tab bar as in the app, no "Back
+    to the graph" link, admin settings with short labels and their details as help text, "Saved" after a change and
+    the server's own message on a refusal (both faked with page.route: nothing is written). Skipped on an older server."""
+    ctx, pg, errors = await page(browser, secret, "/ui/help", viewport={"width": 1300, "height": 900})
+    await pg.wait_for_selector("body")
+    if not await pg.locator("#sidebar").count():
+        print("skip admin and help in the shell (server older than 0.20)")
+        return await ctx.close()
+    for path, current in (("/ui/help", "help"), ("/ui/admin", "admin")):
+        await pg.goto(URL + path)
+        await pg.wait_for_selector("#who .avatar", timeout=10000, state="attached")
+        check(await pg.locator(f'#sidebar [data-nav="{current}"][aria-current="page"]').count() == 1,
+              f"{path}: in the shell with its own sidebar entry marked")
+        check(await pg.evaluate("!!document.querySelector('.head h1#title')?.textContent.trim()"), f"{path}: the app's page header")
+        check("Back to the graph" not in await pg.content(), f"{path}: no 'Back to the graph' link")
+        check(await pg.evaluate("document.querySelector('#sidebar a[data-nav=\"inbox\"]').getAttribute('href')") == "/ui#/inbox",
+              f"{path}: the app's views link to /ui")
+    # Admin settings: short labels in plain English, the measured values in the help text under each.
+    await pg.click('[data-sec="settings"]')
+    labels = await pg.locator("#settings-fields label").all_inner_texts()
+    helps = await pg.locator("#settings-fields .setting-help").count()
+    check(bool(labels) and all(len(t) <= 40 and "calibrated" not in t.lower() and "measured" not in t.lower() for t in labels) and helps == len(labels),
+          f"admin settings: short labels, details as help text {labels[:3]}")
+    check(await pg.locator("#title").inner_text() == "Settings", "admin: the page header names the section")
+    await pg.route("**/ui/api/admin/settings", lambda r: r.fulfill(status=200, json={"ok": True}))
+    await pg.click("#settings-form button[type=submit]")
+    await pg.wait_for_selector("#toasts .toast", timeout=5000)
+    check("Saved" in await pg.locator("#toasts").inner_text(), "admin settings: 'Saved' after a save")
+    await pg.unroute("**/ui/api/admin/settings")
+    await pg.route("**/ui/api/admin/settings", lambda r: r.fulfill(status=403, json={"error": "admins only (smoke test)"}))
+    await pg.click("#settings-form button[type=submit]")
+    await pg.wait_for_selector("#error:not([hidden])", timeout=5000)
+    check("admins only (smoke test)" in await pg.locator("#error").inner_text(), "admin: a refusal shows the server's own message")
+    await pg.route("**/ui/api/admin/settings", lambda r: r.fulfill(status=400, content_type="text/plain", body="bad value (smoke test)"))
+    await pg.click("#settings-form button[type=submit]")
+    await pg.wait_for_timeout(500)
+    check("bad value (smoke test)" in await pg.locator("#error").inner_text(), "admin: a plain-text refusal shows its text")
+    check(not errors, f"no page errors on admin and help {errors[:2]}")
+    await ctx.close()
+    # Phone: the tab bar, no sideways scroll, 44 px touch targets for buttons and tabs.
+    ctx, pg, errors = await page(browser, secret, "/ui/admin", **{**devices["iPhone 14"], "viewport": {"width": 390, "height": 844}})
+    for path in ("/ui/admin", "/ui/admin#settings", "/ui/help"):
+        await pg.goto(URL + path)
+        await pg.wait_for_selector("#who .avatar", timeout=10000, state="attached")
+        await pg.wait_for_timeout(500)
+        small = await pg.evaluate("""() => [...document.querySelectorAll('button, summary, select, .tabbar a')].filter((b) => {
+            const r = b.getBoundingClientRect(); return r.width && r.height && b.offsetParent !== null && getComputedStyle(b).visibility !== 'hidden' && r.height < 43.5;
+          }).map((b) => (b.id || b.className || b.tagName) + ':' + Math.round(b.getBoundingClientRect().height)).slice(0, 5)""")
+        check(await pg.locator("#tabbar").is_visible() and await pg.evaluate("document.documentElement.scrollWidth <= innerWidth")
+              and await pg.locator('#more-btn[aria-current="page"]').count() == 1,
+              f"phone {path}: tab bar, More marked, no sideways scroll")
+        check(not small, f"phone {path}: buttons and tabs are 44 px touch targets {small}")
+    check(not errors, f"no page errors on the phone admin and help {errors[:2]}")
+    await ctx.close()
+
+
 async def main() -> None:
     secret = os.environ.get("KNOWLEDGE_PROXY_SECRET") or subprocess.run(["secret", "KNOWLEDGE_PROXY_SECRET"], check=True, capture_output=True, text=True).stdout.strip()
     async with async_playwright() as p:
@@ -884,6 +942,7 @@ async def main() -> None:
         await shell(browser, p.devices, secret)
         await knowledge(browser, p.devices, secret)
         await agents_pages(browser, p.devices, secret)
+        await shell_pages(browser, p.devices, secret)
         await browser.close()
     print("ok" if not failures else f"{len(failures)} failed")
     sys.exit(1 if failures else 0)

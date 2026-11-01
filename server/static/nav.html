@@ -1,0 +1,52 @@
+<!-- The shared navigation (sidebar, phone tab bar, More sheet) of every signed-in page: the server puts it where a page
+     has the NAV marker comment; on the admin and help pages it points the #/ routes at /ui. -->
+<nav class="sidebar" id="sidebar" aria-label="Main">
+  <div class="brand"><span class="label">Knowledge</span> <span id="live" title="Live: updates as sessions change notes"></span>
+    <button type="button" class="icon-btn flat collapse" id="collapse" title="Collapse the sidebar ( [ )" aria-label="Collapse the sidebar" aria-expanded="true"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M9.5 4.5v15"/></svg></button></div>
+  <button type="button" class="jump" id="jump" title="Search (Ctrl K or /)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg><span class="label">Search or jump</span><kbd>Ctrl K</kbd></button>
+  <div class="sec">Agents</div>
+  <a class="nav" href="#/inbox" data-nav="inbox" title="Inbox (A)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13l2.5-7.5h11L20 13v5.5H4z"/><path d="M4 13h4.5l1 2h5l1-2H20"/></svg><span class="label">Inbox</span><span class="badge hot inbox-count" title="Needs you"></span></a>
+  <a class="nav" href="#/chats" data-nav="chats" title="Chats"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 5.5h15v10h-9l-4 3.5v-3.5h-2z"/></svg><span class="label">Chats</span><span class="badge" id="ck-live" title="Running chats, workers and sessions active in the last 10 min on your pcs"><span id="ck-live-n">0</span> live</span></a>
+  <a class="nav" href="#/tasks" data-nav="tasks" title="Tasks"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6.5h11M9 12h11M9 17.5h11"/><path d="M4 6.5l1 1 2-2M4 12l1 1 2-2M4 17.5l1 1 2-2"/></svg><span class="label">Tasks</span><span id="tasks-count" class="badge" title="Open tasks between agents"></span></a>
+  <a class="nav" href="#/machines" data-nav="machines" title="Machines"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="11" rx="2"/><path d="M9 19.5h6M12 15.5v4"/></svg><span class="label">Machines</span></a>
+  <div class="sec">Knowledge</div>
+  <label class="proj" title="Project of the knowledge views (keys 1-9, 0 = all)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5h6l2 2h9v9h-17z"/></svg><span class="sr-only">Project</span><select class="project-pick" id="projects"></select></label>
+  <a class="nav" href="#/notes" data-nav="notes" title="Notes"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5h10l4 4v11H5z"/><path d="M8.5 12h7M8.5 15.5h7"/></svg><span class="label">Notes</span></a>
+  <a class="nav" href="#/map" data-nav="map" title="Map (M)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="11" cy="18" r="2.5"/><path d="M8.3 7l7.4.7M7 8.3l3 7.4M16.6 10l-4 6"/></svg><span class="label">Map</span></a>
+  <a class="nav" href="#/changes" data-nav="changes" title="Changes"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7v5l3 2M3.5 12a8.5 8.5 0 1 0 2.5-6M3 4v4h4"/></svg><span class="label">Changes</span><span id="changes-count" class="badge" title="New since your last look"></span></a>
+  <a class="nav nav-health" href="#/health" data-nav="health" title="Health (lint)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l2-5 4 10 2-5h6"/></svg><span class="label">Health</span><span id="lint-count" class="badge"></span></a>
+  <div class="grow"></div>
+  <a class="nav nav-thispc" id="nav-thispc" href="#/thispc" data-nav="thispc" title="This pc" hidden><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="10" rx="1.5"/><path d="M2.5 19h19"/></svg><span class="label">This pc</span></a>
+  <a class="nav admin-link" id="admin-link" href="/ui/admin" data-nav="admin" title="Admin"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8"/></svg><span class="label">Admin</span></a>
+  <a class="nav" href="/ui/help" data-nav="help" title="Help: connect a client"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .8-1 1.5v.7M12 17h.01"/></svg><span class="label">Help</span></a>
+  <div class="me">
+    <details id="user-menu" class="menu up">
+      <summary id="who">…</summary>
+      <div class="menu-list"><a href="/ui/logout">Sign out</a></div>
+    </details>
+    <button type="button" class="icon-btn theme-btn" title="Theme: Auto" aria-label="Theme: Auto"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5a8.5 8.5 0 1 0 8.5 8.5A6.5 6.5 0 0 1 12 3.5z"/></svg></button>
+  </div>
+</nav>
+
+<nav class="tabbar" id="tabbar" aria-label="Main (phone)">
+  <a href="#/inbox" data-nav="inbox"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13l2.5-7.5h11L20 13v5.5H4z"/><path d="M4 13h4.5l1 2h5l1-2H20"/></svg><span>Inbox</span><span class="badge hot inbox-count" title="Needs you"></span></a>
+  <a href="#/chats" data-nav="chats"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 5.5h15v10h-9l-4 3.5v-3.5h-2z"/></svg><span>Chats</span></a>
+  <a href="#/tasks" data-nav="tasks"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6.5h11M9 12h11M9 17.5h11"/><path d="M4 6.5l1 1 2-2M4 12l1 1 2-2M4 17.5l1 1 2-2"/></svg><span>Tasks</span></a>
+  <a href="#/notes" data-nav="notes"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5h10l4 4v11H5z"/><path d="M8.5 12h7M8.5 15.5h7"/></svg><span>Notes</span></a>
+  <button type="button" id="more-btn" aria-haspopup="dialog" aria-controls="more-sheet"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="18" cy="12" r="1.2"/></svg><span>More</span></button>
+</nav>
+
+<dialog id="more-sheet" class="sheet" aria-label="More">
+  <div class="sheet-body">
+    <div class="grab" aria-hidden="true"></div>
+    <a class="nav" href="#/machines" data-nav="machines">Machines</a>
+    <a class="nav" href="#/map" data-nav="map">Map</a>
+    <a class="nav" href="#/changes" data-nav="changes">Changes</a>
+    <a class="nav nav-health" href="#/health" data-nav="health">Health</a>
+    <a class="nav nav-thispc" href="#/thispc" data-nav="thispc" hidden>This pc</a>
+    <a class="nav admin-link" href="/ui/admin" data-nav="admin">Admin</a>
+    <a class="nav" href="/ui/help" data-nav="help">Help</a>
+    <label class="nav sheet-row proj-row">Project<select class="project-pick" aria-label="Project"></select></label>
+    <div class="sheet-row"><span id="who-more"></span><button type="button" class="ghost small theme-btn">Theme: Auto</button><a class="ghost-link" href="/ui/logout">Sign out</a></div>
+  </div>
+</dialog>

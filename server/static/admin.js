@@ -9,10 +9,23 @@ const api = (path, body) => fetch(path, {
   headers: { "X-Knowledge-UI": "1", ...(body ? { "Content-Type": "application/json" } : {}) },
   body: body ? JSON.stringify(body) : undefined,
 }).then(async (r) => {
-  const j = await r.json().catch(() => ({ error: `${r.status} ${r.statusText}` })); // a proxy error page is no JSON
-  if (!r.ok) throw new Error(j.error || r.statusText);
+  const text = await r.text();
+  let j;
+  try { j = JSON.parse(text); } catch { j = { error: serverText(r, text) }; } // a proxy error page is no JSON
+  if (!r.ok) throw new Error(j.error || serverText(r, ""));
   return j;
 });
+// What the server said when its answer is no JSON: its own short plain-text message, else the HTTP status.
+function serverText(r, text) {
+  const t = text.trim();
+  return t && t.length < 300 && !t.startsWith("<") ? `${r.status}: ${t}` : `${r.status} ${r.statusText || "no answer"}${r.status >= 502 ? ": the server may be restarting" : ""}`;
+}
+// A short message at the bottom ("Saved"); errors stay in the bar at the top (#error).
+function toast(text) {
+  const t = el("div", "toast", text);
+  t.onclick = () => t.remove(); $("toasts").append(t);
+  setTimeout(() => t.remove(), 3000);
+}
 // Tokens the VM itself uses: revoking one breaks the live sync, the weekly report or the VM sessions.
 const SYSTEM = new Set(["vm-watcher", "vm-sessions", "vm-lint-report"]);
 const openClients = new Set();  // tokens whose client rows are unfolded; kept across re-renders
@@ -21,13 +34,17 @@ let state = null;
 const ago = (sec) => { if (!sec) return "never"; const d = Date.now() / 1000 - sec;
   return d < 900 ? "in the last 15 min" : d < 3600 ? `${Math.round(d / 60)} min ago` : d < 86400 ? `${Math.round(d / 3600)} h ago` : `${Math.round(d / 86400)} days ago`; };
 
+// One empty state for every table (the app's .empty): a single cell over all columns.
+const emptyRow = (cols, text) => { const tr = el("tr"), td = el("td", "empty", text); td.colSpan = cols; tr.append(td); return tr; };
+
 function showError(e) { $("error").textContent = e ? String(e.message || e) : ""; $("error").hidden = !e; }
 
 // One action at a time: the clicked control is disabled until the server answered, then the page reloads its state.
-async function run(fn, control) {
+// A change of access or a setting says "Saved" once the server took it.
+async function run(fn, control, saved) {
   showError(null);
   if (control) control.disabled = true;
-  try { await fn(); await load(); return true; } catch (e) { showError(e); return false; } finally { if (control) control.disabled = false; }
+  try { await fn(); if (saved) toast(saved); await load(); return true; } catch (e) { showError(e); return false; } finally { if (control) control.disabled = false; }
 }
 
 function scopeText(t) {
@@ -52,7 +69,7 @@ function accessCell(t, access) {
   const l = el("label", "check"), c = el("input"); c.type = "checkbox"; c.checked = !!t.self;
   c.setAttribute("aria-label", `${t.name} is my own device`);
   l.title = "My own device: counts as me for its machines and task lines. Never tick it for a friend's or a PA's token.";
-  c.onchange = () => run(() => api("/ui/api/admin/token", { name: t.name, update: true, self: c.checked }), c);
+  c.onchange = () => run(() => api("/ui/api/admin/token", { name: t.name, update: true, self: c.checked }), c, `Saved: ${t.name} ${c.checked ? "is" : "is not"} your own device`);
   l.append(c, " own device"); td.append(el("br"), l); return td;
 }
 function skillsCell(t) {
@@ -66,7 +83,7 @@ function skillsCell(t) {
     if (!c.checked && !confirm(`Switch shared skills off for ${t.name}? At its next sync the device removes the skills it got from here; skills it made itself and did not send yet stay.`)) {
       c.checked = true; return;
     }
-    run(() => api("/ui/api/admin/token", { name: t.name, update: true, skills: c.checked }), c);
+    run(() => api("/ui/api/admin/token", { name: t.name, update: true, skills: c.checked }), c, `Saved: shared skills ${c.checked ? "on" : "off"} for ${t.name}`);
   };
   l.append(c, " " + (t.skills ? "on" : "off")); td.append(l); return td;
 }
@@ -182,6 +199,7 @@ function renderUsers() {
           try {
             await api("/ui/api/admin/user", { username: name, projects: Object.fromEntries(selects.map(([p, x]) => [p, x.value])) });
             tr.classList.toggle("pending", selects.every(([, x]) => x.value === "none"));
+            toast(`Saved: access of ${name}`);
           } catch (e) { showError(e); load().catch(showError); }
         }, 700);
       };
@@ -204,7 +222,7 @@ function labelCell(p) {
   input.type = "text"; input.value = p.label || p.name; input.setAttribute("aria-label", `Display name of ${p.name}`); input.maxLength = 40;
   input.title = `Shown in the web UI; roots, tokens and linked folders keep the name ${p.name}`;
   input.onkeydown = (e) => { if (e.key === "Enter") input.blur(); };
-  input.onchange = () => run(() => api("/ui/api/admin/project-label", { name: p.name, label: input.value.trim() }), input);
+  input.onchange = () => run(() => api("/ui/api/admin/project-label", { name: p.name, label: input.value.trim() }), input, `Saved: display name of ${p.name}`);
   td.append(input);
   if (p.label) td.append(el("div", "muted mono", p.name));
   return td;
@@ -219,7 +237,7 @@ function writersCell(p) {
   input.title = "Token names or users, comma-separated. Empty: the project's owner" + (p.owner ? ` (${p.owner})` : "") + " and their tokens, admins and tokens an admin made";
   input.onkeydown = (e) => { if (e.key === "Enter") input.blur(); };
   input.onchange = () => { const w = input.value.split(",").map((x) => x.trim()).filter(Boolean);
-    run(() => api("/ui/api/admin/task-writers", { name: p.name, writers: w.length ? w : null }), input); };
+    run(() => api("/ui/api/admin/task-writers", { name: p.name, writers: w.length ? w : null }), input, `Saved: task writers of ${p.name}`); };
   td.append(input);
   return td;
 }
@@ -264,7 +282,7 @@ function renderExternal() {
     tr.append(el("td", "", name), srcTd, el("td", "mono", x.commit.slice(0, 7) + (x.pending ? ` → ${x.pending.slice(0, 7)}` : "")),
       el("td", "", x.licence), status, el("td", "", ago(x.checked)), act);
     return tr;
-  }) : [(() => { const tr = el("tr"), td = el("td", "muted", "No external skills yet."); td.colSpan = 7; tr.append(td); return tr; })()]));
+  }) : [emptyRow(7, "No external skills yet.")]));
   const waiting = rows.filter(([, x]) => x.status !== "ok").length;
   $("n-external").textContent = waiting ? `${waiting} !` : rows.length || "";
   $("n-external").classList.toggle("alert", !!waiting);
@@ -282,7 +300,9 @@ function renderSettings() {
     const wrap = el("div", "setting"), id = `s-${k}`, label = el("label", "", i.label), input = el("input");
     label.htmlFor = id; input.id = id; input.name = k; input.type = "number"; input.required = true;
     input.min = i.min; input.max = i.max; input.step = i.float ? "0.01" : "1"; input.value = cur[k];
-    wrap.append(label, input); return wrap;
+    wrap.append(label, input);
+    if (i.help) { const h = el("p", "muted setting-help", `${i.help} Range ${i.min}–${i.max}.`); h.id = `${id}-help`; input.setAttribute("aria-describedby", h.id); wrap.append(h); }
+    return wrap;
   }));
   $("s-admins").value = cur.extra_admins.join("\n");
   $("s-config-admins").textContent = `Always admin (server config): ${state.config_admins.join(", ") || "nobody"}.`;
@@ -302,14 +322,14 @@ function renderSystem() {
   $("audit").replaceChildren(...(sys.audit.length ? sys.audit.map((line) => { // "2026-10-21T08:56:45 device action path"
     const [t, who, action, ...rest] = line.split(" "), tr = row(stamp(new Date(t)), who, action, rest.join(" "));
     tr.children[3].className = "mono"; return tr;
-  }) : [row("—", "", "", "")]));
+  }) : [emptyRow(4, "No activity yet.")]));
   $("gaps").replaceChildren(...(sys.gaps.length ? sys.gaps.map((g) => {
     const tr = row(stamp(new Date(g.last)), String(g.count), g.who.join(", "), `${g.query} (${g.tool}${g.score ? ` ${g.score}` : ""})`);
     tr.children[3].className = "mono"; return tr;
-  }) : [row("—", "", "", "")]));
+  }) : [emptyRow(4, "No searches without a result.")]));
   $("lessons").replaceChildren(...(sys.lessons.length ? sys.lessons.map((l) =>
     row(stamp(new Date(l.at)), `${l.device} (${l.project})`, l.status, `${l.what} — prevent: ${l.prevent}${l.note ? ` [${l.note}]` : ""}`)
-  ) : [row("—", "", "", "")]));
+  ) : [emptyRow(4, "No lessons yet.")]));
 }
 
 let loaded = false;
@@ -317,7 +337,7 @@ async function load() {
   state = await api("/ui/api/admin");
   if (!state.admin) { // a person: own tokens and projects, within the limits the admin set
     const l = state.limits;
-    document.querySelector(".brand").textContent = `Knowledge · ${state.user}`;
+    $("crumb").textContent = "My tokens & projects"; document.title = "My tokens & projects · Knowledge";
     for (const sec of ["people", "external", "settings", "system"]) document.querySelector(`[data-sec=${sec}]`).hidden = true;
     for (const id of ["t-watch", "t-skills", "t-self"]) $(id).closest("label").style.display = "none"; // .check sets display, which beats [hidden]
     document.querySelectorAll(".admin-only").forEach((x) => (x.hidden = true));
@@ -341,9 +361,7 @@ $("settings-form").onsubmit = (e) => {
   e.preventDefault();
   const body = Object.fromEntries([...$("settings-fields").querySelectorAll("input")].map((i) => [i.name, Number(i.value)]));
   body.extra_admins = $("s-admins").value.split("\n").map((x) => x.trim()).filter(Boolean);
-  run(() => api("/ui/api/admin/settings", body), e.target.querySelector("button")).then((ok) => {
-    if (ok) { renderSettings(); $("settings-saved").textContent = "Saved."; setTimeout(() => ($("settings-saved").textContent = ""), 3000); }
-  });
+  run(() => api("/ui/api/admin/settings", body), e.target.querySelector("button"), "Saved: settings").then((ok) => ok && renderSettings());
 };
 
 function showNewToken(res) {
@@ -435,6 +453,7 @@ function showSection() {
   for (const t of tabs) {
     t.setAttribute("aria-selected", String(t.dataset.sec === sec));
     $(`sec-${t.dataset.sec}`).hidden = t.dataset.sec !== sec;
+    if (t.dataset.sec === sec) $("title").textContent = t.firstChild.textContent.trim(); // the page header names the section
   }
 }
 for (const t of tabs) t.onclick = () => { history.replaceState(null, "", `#${t.dataset.sec}`); showSection(); };

@@ -308,7 +308,7 @@ function msOpenPanel(key) {
   memo.onclick = () => openNote(n.path, { find: [n.id.toLowerCase()] });
   acts.append(memo);
   if (n.can_approve) {
-    const ok = el("button", "ck-pill ck-primary", "Approve"); ok.type = "button";
+    const ok = el("button", "primary", "Approve"); ok.type = "button";
     ok.title = "Let this task start (it waits for the project owner's or an admin's approval)";
     ok.onclick = async () => {
       ok.disabled = true;

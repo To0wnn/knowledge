@@ -3,7 +3,7 @@
 // #/chats/<chat id>, #/tasks, #/tasks?view=flow, #/machines, #/notes, #/notes/<path>, #/notes?q=<search>, #/map, #/map/<path>,
 // #/changes, #/health, #/thispc. The URL is the only record of the view (refresh, back and forward work); an old
 // #<note path> link becomes #/notes/<path>. Paths in routes are encoded per part (encPath), decoded here. The views themselves are app.js's and mission.js's; this file shows one
-// at a time and asks it to load. Uses app.js globals ($, el, store, decode, pushHash, ck, Graph, mapOn, current, …).
+// at a time and asks it to load. The sidebar, More sheet and theme are nav.js's. Uses app.js globals ($, el, store, decode, pushHash, ck, Graph, mapOn, current, …).
 "use strict";
 
 // view -> where it lives (element id), its section label and title
@@ -38,8 +38,7 @@ function applyRoute() {
   shellRoute = r;
   document.body.dataset.view = r.view;
   for (const id of new Set(Object.values(VIEWS).map((v) => v[0]))) $(id).hidden = id !== home;
-  if (sideOpen) { sideOpen = false; paintRail(); }
-  if ($("more-sheet").open) $("more-sheet").close();
+  closeSide();
   paintHead();
   if (changed && !first) {
     window.scrollTo(0, 0); // a phone scrolls the page, not the view
@@ -131,26 +130,3 @@ for (const b of $("tasks-mode").querySelectorAll("button")) b.onclick = () => go
 // Search or jump: the command palette (palette.js).
 $("jump").onclick = () => openPalette();
 $("head-search").onclick = () => openPalette();
-
-// The sidebar: wide screens keep the viewer's choice (stored); narrow ones show the rail and open it over the page.
-const wide = matchMedia("(min-width: 1000px)");
-let sideOpen = false;
-function paintRail() {
-  const rail = wide.matches ? store.get("kn_rail") === "1" : !sideOpen;
-  document.body.classList.toggle("rail", rail);
-  $("collapse").setAttribute("aria-expanded", String(!rail));
-  $("collapse").setAttribute("aria-label", rail ? "Expand the sidebar" : "Collapse the sidebar");
-  $("collapse").title = `${rail ? "Expand" : "Collapse"} the sidebar ( [ )`;
-}
-function toggleRail() {
-  if (wide.matches) store.set("kn_rail", document.body.classList.contains("rail") ? "0" : "1"); else sideOpen = !sideOpen;
-  paintRail();
-}
-$("collapse").onclick = toggleRail;
-wide.addEventListener("change", () => { sideOpen = false; paintRail(); });
-document.addEventListener("click", (e) => { if (sideOpen && !$("sidebar").contains(e.target)) { sideOpen = false; paintRail(); } });
-paintRail();
-
-// Phone: More opens a sheet with the other views, the project, theme and sign out.
-$("more-btn").onclick = () => $("more-sheet").showModal();
-$("more-sheet").addEventListener("click", (e) => { if (e.target === $("more-sheet") || e.target.closest("a")) $("more-sheet").close(); });
