@@ -844,3 +844,4 @@ button.busy::before { content: ""; display: inline-block; width: .9em; height: .
 .task-worker details { margin-top: 4px; }
 .task-worker pre { margin: 4px 0 0; padding: 8px; max-height: 12em; overflow: auto; background: var(--panel); border-radius: var(--r-md); white-space: pre-wrap; }
 .task-assign { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.task-assign[hidden] { display: none; }

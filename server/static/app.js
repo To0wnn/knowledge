@@ -1064,7 +1064,7 @@ async function loadTasks(render = true) {
     if (!t.done && t.can_cancel !== undefined) { // Assign: another agent or person, optionally pinned to one pc
       const form = el("span", "task-assign"); form.hidden = true;
       const who = el("select"), where = el("select"), save = el("button", "small", "Save"); save.type = "button";
-      for (const o of ["Claude", "Codex", "Gemini", "Someone else…"]) { const x = el("option", null, o); x.selected = t.owner.toLowerCase().startsWith(o.toLowerCase()); who.append(x); }
+      for (const o of ["Claude", "Codex", "Gemini", "Someone else…"]) { const x = el("option", null, o); x.selected = o === "Gemini" ? /gemini|agy|antigravity/i.test(t.owner) : t.owner.toLowerCase().startsWith(o.toLowerCase()); who.append(x); }
       where.append(el("option", null, "any pc"));
       for (const d of devices) { const x = el("option", null, d); x.value = d; where.append(x); }
       where.firstChild.value = "";
