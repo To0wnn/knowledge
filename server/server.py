@@ -5798,6 +5798,19 @@ def build_app():
     return BearerAuth(GZipMiddleware(app, minimum_size=1024))
 
 
+def first_token(path: Path = TOKENS_FILE) -> str | None:
+    """A fresh installation (no tokens file yet) gets one admin token, so the first agent connects without the web UI.
+    Never on a server that ever had tokens (the file stays, also when every token was revoked), and never an existing
+    token: the file holds hashes only. The caller prints it once."""
+    if path.exists():
+        return None
+    token = secrets.token_urlsafe(32)
+    write_json(path, {"admin": {"sha256": hashlib.sha256(token.encode()).hexdigest(), "write": True, "watch": False,
+                                "skills": False, "self": True, "roots": [], "redact": False,
+                                "created": time.strftime("%Y-%m-%d"), "by": "first start"}})
+    return token
+
+
 def open_port(host: str, port: int):
     """The listening socket, shared with SO_REUSEPORT so a new server can take over :8766 while the old one still
     serves (swap.sh). When another server already listens, open it only once this one is ready (index and semantic
@@ -5832,6 +5845,14 @@ if __name__ == "__main__":
     threading.Thread(target=duplicates_loop, daemon=True).start()
     threading.Thread(target=stalled_loop, daemon=True).start()
     host, port = os.environ.get("KNOWLEDGE_BIND", "0.0.0.0"), int(os.environ.get("KNOWLEDGE_PORT", "8766"))
+    if token := first_token():
+        audit("first-token", "admin")
+        url = PUBLIC_URL or f"http://localhost:{port}"
+        print(f"\nFirst start: made the admin token \"admin\" (all projects, may write). It is shown only this once:\n\n"
+              f"    {token}\n\nNext: on this PC run the installer and give it {url} and this token:\n"
+              "    curl -fsSL https://raw.githubusercontent.com/To0wnn/knowledge/main/install.sh | sh   # Linux, macOS\n"
+              "    irm https://raw.githubusercontent.com/To0wnn/knowledge/main/install.ps1 | iex        # Windows\n"
+              f"Tokens for more devices: the admin page, {url}/ui/admin.\n", flush=True)
     sock = open_port(host, port)
     listening = AUDIT.parent / f"listening-{INSTANCE}" if INSTANCE else None
     if listening:

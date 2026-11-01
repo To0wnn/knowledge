@@ -48,9 +48,14 @@ mkdir data && echo "KNOWLEDGE_UI_PASSWORD=<a long password>" > .env
 docker compose up -d
 ```
 
-**2. Make a token.** Open `http://localhost:8766/ui`, sign in with the password and create a device token on the
-admin page (Admin). This is the only way to make the first token today, there is no command for it yet.
-The admin page shows the install line with your server address filled in.
+**2. Get the first token.** The first start makes one admin token and prints it once, with the next steps:
+
+```sh
+docker compose logs knowledge
+```
+
+Tokens for more devices: open `http://localhost:8766/ui`, sign in with the password and use the admin page (Admin);
+it shows the install line with your server address filled in.
 
 **3. Connect an agent** on the same PC:
 

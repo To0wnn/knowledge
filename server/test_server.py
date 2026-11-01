@@ -1384,6 +1384,15 @@ def main():
         import server as srv
         assert srv.is_archive("a350/docs/history/x.md") and srv.is_archive("a/requests/archief-2026-10-23/x.md")
         assert not srv.is_archive("a350/old.md") and not srv.is_archive("memory/project_old.md")
+        # First start: one admin token on a fresh installation only; never again, never over existing tokens.
+        fresh = tmp / "fresh" / "tokens.json"
+        first = srv.first_token(fresh)
+        cfg = json.loads(fresh.read_text())["admin"]
+        assert first and first not in fresh.read_text() and cfg["sha256"] == h(first), cfg
+        assert cfg["self"] and cfg["write"] and cfg["roots"] == [] and not cfg["redact"], cfg
+        assert srv.first_token(fresh) is None and srv.first_token(tokens) is None
+        fresh.write_text("{}")  # every token revoked: still no new one
+        assert srv.first_token(fresh) is None
         assert not call("knowledge_write", {"path": "trade-memory/new.md", "content": memo("x\n", "new")})[0]
         assert call("knowledge_write", {"path": "trade/bot2.py", "content": "x"})[0]
         err, text = call("knowledge_edit", {"path": "memory/fact.md", "old_string": "line", "new_string": "l"}, token="ro-token")
