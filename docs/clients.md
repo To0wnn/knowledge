@@ -20,6 +20,29 @@ Code, Codex and agy and asks y/n for each; after that it updates the agents that
 agent found without it, and asks for a token only when the server refuses the stored one.
 
 
+## Import what your agents already know
+
+A new server starts empty. The first `setup` (or `install`) in a terminal offers once to import what the agents on
+this computer already know. It reads only `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md` (agy),
+Claude Code's local auto memory (`~/.claude/projects/*/memory/*.md`, not its index) and `CLAUDE.md`/`AGENTS.md` in
+the root of folders linked to a project; a file that is a link to somewhere else is not read. It lists the files
+(number, file, size, target memo) and what it skips with the reason, and you pick `all`, `none` (the default; also
+without a terminal) or numbers such as `1,3,5`.
+
+- Where it goes: a linked folder's files and the Claude memory of a linked folder go to that folder's project; the
+  instruction files to the token's project. Claude memory of a folder that is not linked goes nowhere unless the token
+  has exactly one project: link the folder first (skill `knowledge-init`).
+- Secrets: known secrets are refused by the server; files that look like they contain other secrets (a private key,
+  `sk-`/`ghp_`/`xoxb-`/`AKIA` keys, a random-looking `key=`, `token=` or `password=` value) are skipped and never
+  uploaded. Neither check can find every secret: look at the list before you choose.
+- Each file becomes one memo under the heading "Imported" through the server's `knowledge_new_memo` (frontmatter,
+  both sections, index line, similar memos named); an existing memo is never replaced. The house-rules block the setup
+  wrote into `AGENTS.md`/`GEMINI.md` is left out.
+- On the machine the server reads its files from (its memory or `CLAUDE.md` is byte for byte the server's copy)
+  nothing is imported.
+- `~/.knowledge/imported.json` records what was imported, so a rerun imports nothing twice. Later:
+  `knowledge-agent.py import` (`--dry-run` only lists; without a terminal it imports all listed files).
+
 ## The companion's autostart
 
 `setup`, `install` and `update` end by setting up the companion (again only updates; `install-companion` alone):

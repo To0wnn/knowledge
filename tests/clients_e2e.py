@@ -1993,6 +1993,86 @@ def agy_plugin(tok: str, home: Path, project: Path, garden: Path):
           "agy: plugin listed and enabled, with its MCP server and hooks", out + err)
 
 
+def import_e2e(tok: str, tmp: Path, garden: Path):
+    """knowledge-agent.py import: a dry run lists only the known places, the import goes through knowledge_new_memo
+    (sections, index line, a known secret refused), a rerun imports nothing new and an existing memo is never replaced.
+    The home has a space and an "é" (on Windows a real C:\\ path)."""
+    agent, home = CLIENT / "clients" / "knowledge-agent.py", tmp / "Import Usér"
+    env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok)
+    house = "<!-- knowledge:house-rules (written by knowledge-agent.py install) -->\nHOUSE-BLOCK\n<!-- /knowledge:house-rules -->\n"
+    files = {".claude/CLAUDE.md": "# Mine\n\nanswer short\n", ".codex/AGENTS.md": "codex rule one\n\n" + house,
+             ".gemini/GEMINI.md": "deploy with Sup3rSecret99\n", ".claude/projects/-x-proj/memory/MEMORY.md": "# Index\n",
+             ".claude/projects/-x-proj/memory/feedback_short.md": "---\nname: feedback_short\ndescription: Keep answers short\n"
+             "metadata:\n  type: feedback\n---\n\n## Status\nshort answers\n\n## Decisions\n", "Linked Proj/CLAUDE.md": "linked rules\n",
+             "Linked Proj/.knowledge-project": "garden\n", "Other/CLAUDE.md": "not linked\n", "notes.md": "elsewhere\n"}
+    for rel, text in files.items():
+        (home / rel).parent.mkdir(parents=True, exist_ok=True)
+        (home / rel).write_text(text, encoding="utf-8")
+    (home / ".claude.json").write_text(json.dumps({"projects": {str(home / "Linked Proj"): {}, str(home / "Other"): {}}}), encoding="utf-8")
+    local_mem = home / ".claude/projects/-x-proj/memory"
+    rnd = hashlib.sha256(b"e2e").hexdigest()[:24]  # built at run time: no secret-looking literal for the pre-push scan
+    (local_mem / "reference_keys.md").write_text(f"deploy key\napi_key = {rnd}\n", encoding="utf-8")
+    (home / "Elsewhere").mkdir()
+    (home / "Elsewhere" / "private.md").write_text("private elsewhere\n", encoding="utf-8")
+    try:
+        os.symlink(home / "Elsewhere" / "private.md", local_mem / "reference_link.md")
+        linked_file = True
+    except OSError:  # Windows without the symlink privilege
+        linked_file = False
+    mem = garden / "memory"
+    imported = lambda: sorted(f.name for f in mem.glob("*.md") if "knowledge-agent.py import" in f.read_text(encoding="utf-8"))
+    code, out, err = run([sys.executable, str(agent), "import", "--dry-run"], "", env)
+    listed = [ln for ln in out.splitlines() if re.match(r"  \d+\. ", ln)]
+    want = ("CLAUDE.md", "AGENTS.md", "GEMINI.md", "feedback_short.md", "Linked Proj")
+    check(code == 0 and len(listed) == 5 and all(any(w in ln for ln in listed) for w in want) and "bytes) -> " in out
+          and "MEMORY.md" not in out and "Other" not in out and "notes.md" not in out and imported() == [],
+          "import --dry-run: lists the five known files (file, size, target), nothing else, writes nothing", out + err)
+    check("reference_keys.md: looks like it holds a secret" in out, "import: a file that looks like it holds an unknown secret is skipped", out)
+    check(not linked_file or ("reference_link.md: a link to a file elsewhere" in out and "private elsewhere" not in out),
+          f"import: a symlink out of its folder is not read ({'tested' if linked_file else 'no symlink privilege'})", out)
+    code, out, err = run([sys.executable, str(agent), "import"], "", env)
+    names = imported()
+    texts = {n: (mem / n).read_text(encoding="utf-8") for n in names}
+    index = (mem / "MEMORY.md").read_text(encoding="utf-8") if (mem / "MEMORY.md").exists() else ""
+    check(code == 0 and len(names) == 4 and out.count(": imported") == 4, "import: four memos through knowledge_new_memo", out + err)
+    check("SKIPPED" in out and "known secret" in out and not any("Sup3rSecret99" in t for t in texts.values()),
+          "import: a file with a known secret is refused and reported", out + err)
+    check(all("## Status" in t and "## Decisions" in t and t.startswith("---") for t in texts.values())
+          and "## Imported" in index and all(f"]({n})" in index for n in names) and not any("HOUSE-BLOCK" in t for t in texts.values())
+          and any(n.startswith("feedback_") for n in names), "import: frontmatter, both sections, index lines; the house-rules block left out",
+          json.dumps(texts)[:800] + index[-400:])
+    code, out, err = run([sys.executable, str(agent), "import"], "", env)
+    check(code == 0 and imported() == names and "imported before" in out and ": imported" not in out,
+          "import again: nothing new is imported (local record)", out + err)
+    (home / ".knowledge" / "imported.json").unlink()
+    before = {n: (mem / n).read_text(encoding="utf-8") for n in names}
+    code, out, err = run([sys.executable, str(agent), "import"], "", env)
+    check(code == 0 and out.count("exists, left as it is") == 4 and before == {n: (mem / n).read_text(encoding="utf-8") for n in names},
+          "import without its record: existing memos are never replaced", out + err)
+    # a token for several projects: Claude memory goes to its folder's linked project; an unlinked folder's is skipped
+    own = tmp / "Import Owner"
+    for folder, linked in (("Linked Proj", True), ("Other", False)):
+        (own / folder).mkdir(parents=True)
+        if linked:
+            (own / folder / ".knowledge-project").write_text("garden\n", encoding="utf-8")
+        m = own / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(own / folder)) / "memory"
+        m.mkdir(parents=True)
+        (m / f"project_{folder[:5].lower().strip()}_note.md").write_text(f"note of {folder}\n", encoding="utf-8")
+    (own / ".claude.json").write_text(json.dumps({"projects": {str(own / "Linked Proj"): {}, str(own / "Other"): {}}}), encoding="utf-8")
+    code, out, err = run([sys.executable, str(agent), "import"], "", user_env(own, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN="owner-token"))
+    check(code == 0 and (mem / "reference_project_linke_note.md").is_file() and "project_other_note.md: its folder is not linked" in out
+          and not list(tmp.glob("**/reference_project_other_note.md")),
+          "import with a multi-project token: memory goes to its folder's linked project, an unlinked folder's is skipped", out + err)
+    # the machine the server reads its files from: its local memory is the server's copy, so nothing is imported
+    src = tmp / "Import Source" / ".claude" / "projects" / "-s" / "memory"
+    src.mkdir(parents=True)
+    (src / "MEMORY.md").write_bytes((mem / "MEMORY.md").read_bytes())
+    (src / "project_source_note.md").write_text("from the source\n", encoding="utf-8")
+    code, out, err = run([sys.executable, str(agent), "import"], "", user_env(tmp / "Import Source", KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok))
+    check(code == 0 and "holds the server's own files" in out and not (mem / "project_source_note.md").exists(),
+          "import on the device that holds the server's files: nothing imported, and it says so", out + err)
+
+
 def installer(tok: str, tmp: Path):
     """knowledge-agent.py install as a person runs it: the keyring of the OS stores and returns a token (macOS Keychain,
     Windows Credential Manager; CI's Linux has no keyring), and with the CLIs installed, install claude/codex set up the
@@ -2433,6 +2513,7 @@ def main():
         companion_e2e(tok, tmp, project)
         chat_e2e(tok, tmp)
         background_flags(tmp)
+        import_e2e(tok, tmp, garden)
         installer(tok, tmp)
         companion_setup(tmp)
         checkout_update(tmp)
