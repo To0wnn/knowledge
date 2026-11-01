@@ -220,7 +220,7 @@ def offline_context(key: str, part: str = "all") -> str:
     return ("===== knowledge server unreachable: offline mode =====\n"
             f"The memory is the offline copy in {where} (last synced {state.get('synced', '?')}); the knowledge_* tools do "
             "not work now. Read memos there with your file tools, and save new or changed memos there by the house rules "
-            "(frontmatter, ## Stand / ## Keuzes, one index line in that MEMORY.md). They are uploaded at the next session "
+            "(frontmatter, ## Status / ## Decisions, one index line in that MEMORY.md). They are uploaded at the next session "
             "start once the server is back. Do not delete files there." + (f" {sync_notice()}" if sync_notice() else "")
             + " Context of the last online session:\n\n" + text)
 

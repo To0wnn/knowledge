@@ -93,7 +93,7 @@ def pre_check(hook: dict) -> str:
     import lint
     lacks = lint.new_memo_lacks(inp.get("content", ""))
     return (f"A new memo needs {', '.join(lacks)} (house rule 2): frontmatter name, description, metadata.type, then "
-            "## Stand and ## Keuzes (feedback/user memos: frontmatter only). Write it with those, or create it with the "
+            f"## {lint.W['now']} and ## {lint.W['decisions']} (feedback/user memos: frontmatter only). Write it with those, or create it with the "
             "MCP tool knowledge_new_memo, which also adds the index line.") if lacks else ""
 
 
@@ -183,7 +183,7 @@ if __name__ == "__main__":
         assert memo_of(str(PROJECTS / CC("homelab") / "memory/archief/x.md")) is None
         assert memo_of(str(Path.home() / "homelab/diensten.md")) is None
         new = str(PROJECTS / CC("homelab") / "memory/zz_selftest_new.md")
-        assert "## Stand" in pre_check({"tool_input": {"file_path": new, "content": "plain"}})
+        assert "## Status" in pre_check({"tool_input": {"file_path": new, "content": "plain"}})
         good = "---\nname: z\ndescription: d\nmetadata:\n  type: project\n---\n## Stand\nx\n## Keuzes\n"
         assert pre_check({"tool_input": {"file_path": new, "content": good}}) == ""
         assert pre_check({"tool_input": {"file_path": str(PROJECTS / CC("homelab") / "memory/MEMORY.md"), "content": "x"}}) == ""

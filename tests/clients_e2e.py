@@ -409,6 +409,7 @@ def offline(tok: str, home: Path, project: Path, garden: Path, mirror: Path):
                    CLAUDE_PROJECT_DIR=str(project))
     code, out, err = run([sh, "-c", 'sh "${CLAUDE_PLUGIN_ROOT}/hooks/context.sh" 1'], "{}", env, cwd=str(project))
     check(code == 0 and "offline mode" in out and "garden-memory" in out, "server down: part 1 is the offline context", out[:400] + err)
+    check("## Status / ## Decisions" in out, "offline context names the English memo sections", out[:400])
     check(len(out) <= 10000, f"offline part 1 fits Claude Code's 10,000 characters ({len(out)})")
     check("→" in out or "project garden" in out, "offline part 1 carries the cached context")
     env["CLAUDE_PLUGIN_OPTION_URL"] = BASE
