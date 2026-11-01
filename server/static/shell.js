@@ -49,7 +49,7 @@ function applyRoute() {
   const agents = home === "cockpit";
   $("cockpit").dataset.mode = r.view;
   // a chat route carries the chat id; the card is keyed by pc and id (ckSummary resolves an id it does not know yet)
-  if (r.view === "chats") { const c = ck.chats.find((x) => x.id === r.arg || ckKey(x) === r.arg); ck.view = c ? ckKey(c) : r.arg; } else if (r.view === "inbox") { ck.view = ""; ck.focus = r.arg; if (!r.arg) ck.hit = ""; }
+  if (r.view === "chats") { const c = ck.chats.find((x) => x.id === r.arg || ckKey(x) === r.arg); ck.view = c ? ckKey(c) : r.arg; } else if (r.view === "inbox") { ck.view = ""; ck.focus = r.arg; ck.focusAt = Date.now(); if (!r.arg) ck.hit = ""; }
   ckLayout();
   if (agents) {
     if (r.view === "inbox") ckBoard(); else ckHistory();

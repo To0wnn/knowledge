@@ -1466,7 +1466,7 @@ function ckBoard() {
 // chat. An unknown key leaves the plain inbox. ck.hit keeps the mark across the board's refreshes.
 function ckFocus() {
   const key = ck.focus;
-  if (!key || !ck.boardAt) return;
+  if (!key || !ck.boardAt || ck.boardAt < (ck.focusAt || 0)) return; // a board older than the link: wait for the fresh one
   ck.focus = "";
   const i = (ck.board || []).find((x) => x.key === key);
   if (i && (i.kind === "chat" || i.kind === "ask")) return go(`#/chats/${encodeURIComponent(i.kind === "ask" ? i.chat : i.id)}`, true);
