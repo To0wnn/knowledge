@@ -76,13 +76,13 @@ body.admin-page .client-tabs { top: 0; } /* /setup has no page header */
     <li><b>Get the scripts and run the setup</b>
       <span data-os="linux">Needs <code>git</code> and <code>python3</code>.</span>
       <span data-os="windows" hidden>Needs <a href="https://git-scm.com/download/win" target="_blank" rel="noopener">Git for Windows</a> and <a href="https://www.python.org/downloads/" target="_blank" rel="noopener">Python 3</a> (keep "py launcher" ticked); the commands are for PowerShell. Quit Codex and agy first: Windows does not replace files that are in use. The scripts are kept in <code>~/knowledge</code>, a copy of the repository that the same line keeps up to date.</span>
-      The setup finds Claude Code, Codex and agy on this computer and asks y/n for each (Enter = yes). It asks for the server address (enter <code class="server-url">this page's address</code>) and for the token once (paste it; it is not shown), checks it with the server, keeps it in the keyring, Keychain or Credential Manager, and installs the plugin in the agents you chose.
+      The setup finds Claude Code, Codex and agy on this computer and asks y/n for each (Enter = yes). It asks for the server address (enter <code class="server-url">this page's address</code>) and for the token once (paste it; it is not shown), checks it with the server, keeps it in the keyring, Keychain or Credential Manager, and installs the plugin in the agents you chose. The first time it also offers to import what your agents here already know (instruction files such as <code>CLAUDE.md</code>, Claude Code's local memory); pick what you want, or nothing (later: <code>knowledge-agent.py import --dry-run</code>).
       <div class="cmd" data-os="linux"><pre>curl -fsSL https://raw.githubusercontent.com/To0wnn/knowledge/main/install.sh | sh</pre><button class="btn small copy" type="button">Copy</button></div>
       <div class="cmd" data-os="windows" hidden><pre>irm https://raw.githubusercontent.com/To0wnn/knowledge/main/install.ps1 | iex</pre><button class="btn small copy" type="button">Copy</button></div></li>
     <li><b>The companion</b>
       The setup also starts a small helper at logon, the companion: it listens on this computer only (<code>127.0.0.1:47321</code>), shows what your agents do (menu entry "Knowledge companion"), and runs tasks agents hand each other once you allow workers in its settings. Nothing to do now; <code>knowledge-agent.py uninstall-companion</code> removes it.</li>
     <li><b>Link your project folder</b>
-      In the root of your project, a file <code>.knowledge-project</code> with the project name (for example <code>garden</code>): every session started in that folder gets that project, and its <code>.md</code> files are mirrored to that project's docs when your token may write it (code, <code>.venv</code> and hidden folders never). Easiest: ask your agent to link the folder (skill <code>knowledge-init</code>), or:
+      In the root of your project, a file <code>.knowledge-project</code> with the project name (for example <code>garden</code>): every session started in that folder gets that project, and its <code>.md</code> files are mirrored to that project's docs when your token may write it (code, <code>.venv</code> and hidden folders never). Easiest: on the companion page (Folders: pick the folder and the project, Link)<!--PRIVATE--> or in the web UI under Machines, your pc, Folders<!--/PRIVATE-->; or ask your agent to link the folder (skill <code>knowledge-init</code>); or by hand:
       <div class="cmd" data-os="linux"><pre>echo garden &gt; .knowledge-project</pre><button class="btn small copy" type="button">Copy</button></div>
       <div class="cmd" data-os="windows" hidden><pre>Set-Content .knowledge-project garden</pre><button class="btn small copy" type="button">Copy</button></div></li>
     <li><b>First start</b>
@@ -90,7 +90,7 @@ body.admin-page .client-tabs { top: 0; } /* /setup has no page header */
   </ol>
 
   <h2>Update</h2>
-  <p>The plugin keeps itself up to date: Claude Code through its marketplace, Codex and agy with a daily check. A new version loads at the next start. By hand, or to add an agent you installed later: run the same setup line again. It updates the agents that have the plugin without questions, asks y/n only for an agent found without it, and asks for a token only when the server refuses the stored one.</p>
+  <p>The plugin keeps itself up to date: Claude Code through its marketplace, Codex and agy with a daily check. A new version loads at the next start. By hand, or to add an agent you installed later: run the same setup line again. It updates the agents that have the plugin without questions (on Linux and macOS it may offer to stop a running Codex so the new settings apply; Enter = no), asks y/n only for an agent found without it, and asks for a token only when the server refuses the stored one.</p>
 
   <nav class="client-tabs" role="tablist" aria-label="Client">
     <button role="tab" id="tab-claude" aria-controls="claude" aria-selected="true">Claude Code</button>
@@ -114,14 +114,14 @@ body.admin-page .client-tabs { top: 0; } /* /setup has no page header */
   <section id="codex" role="tabpanel" aria-labelledby="tab-codex" hidden>
     <h2>Codex (OpenAI)</h2>
     <p>The plugin gives Codex the tools, the context at every start (with the house rules), the session log, the docs mirror and the shared development skills. Install or update Codex with <code>npm i -g @openai/codex@latest</code>.</p>
-    <p><b>First start:</b> type <code>/hooks</code> once and trust the knowledge hooks; Codex skips new hooks until then (the tools work right away). After an update with new hooks it asks again.</p>
+    <p><b>First start:</b> the companion trusts the knowledge hooks for you, again after each plugin update. Without the companion, type <code>/hooks</code> once and trust them; Codex skips new hooks until then, and asks again after an update with new hooks.</p>
   </section>
 
   <h2>Agents hand each other tasks</h2>
   <p>When one agent writes a task line for another (<code>open until &lt;date&gt; [Codex, ID] from Claude, start now: …</code>), a pc whose companion runs that agent's workers for the project starts a fresh worker session for it; with no such pc, that agent's next chat in the project starts it. The result comes back as a line <code>[Claude, ID-done]: …</code>. The Tasks tab shows per task where it runs or why it waits.</p>
 
   <!--PRIVATE--><h2>Chats in the web UI</h2>
-  <p>Chats runs Claude Code, Codex or agy on one of your own pcs (its companion must be online), as in a terminal. Enter is a new line; Ctrl+Enter (Cmd+Enter on a Mac) sends. While the agent answers, the button reads Queue: up to 5 messages wait in line and go in one by one when the turn ends. With messages waiting and the box empty, the button turns red Force: it stops the running turn and the first waiting message goes in at once. Stop ends the turn and drops the line. Ctrl+K searches notes, chats and tasks from any page.</p><!--/PRIVATE-->
+  <p>Chats runs Claude Code, Codex or agy on one of your own pcs (its companion must be online), as in a terminal. Enter is a new line; Ctrl+Enter (Cmd+Enter on a Mac) sends. While the agent answers, the button reads Queue: up to 5 messages wait in line and go in one by one when the turn ends. With messages waiting and the box empty, the button turns red Force: it stops the running turn and the first waiting message goes in at once. Stop ends the turn and drops the line. Ctrl+K (Cmd+K) searches notes, chats and tasks.</p><!--/PRIVATE-->
 
   <h2>Which project does my session get?</h2>
   <p>At every start the server picks the project whose memory and context the session gets:</p>
@@ -135,10 +135,10 @@ body.admin-page .client-tabs { top: 0; } /* /setup has no page header */
     <thead><tr><th>Folder (example)</th><th>Project</th></tr></thead>
     <tbody>
       <tr><td><code>~/&lt;project name&gt;/…</code>, e.g. <code>~/garden</code></td><td>that project</td></tr>
-      <tr><td>anything else, e.g. <code>~/Work</code></td><td>the first project (homelab)</td></tr>
+      <tr><td>anything else, e.g. <code>~/Work</code></td><td>the default project (homelab)</td></tr>
     </tbody>
   </table></div>
-  <p>A folder name counts only when it is exactly the name of a project (admin page, Projects): <code>~/garden</code> works,
+  <p>The folder name of a project you created counts only when it is exactly that name (admin page, Projects): <code>~/garden</code> works,
     <code>~/GardenPlanner</code> does not. A new project of your own: create it under Projects, then start the agent in a folder
     with that name.</p>
   <p>The same <code>.knowledge-project</code> also mirrors the folder's <code>.md</code> files to the server as that
@@ -157,10 +157,14 @@ body.admin-page .client-tabs { top: 0; } /* /setup has no page header */
       <tr><td>The session gets the wrong project</td><td>The folder is not linked: ask your agent to link it (skill <code>knowledge-init</code>), or see "Which project does my session get?".</td></tr>
       <tr><td>Docs do not reach the server</td><td>No <code>.knowledge-project</code> in the project root, or its name does not match your token's project.</td></tr>
       <tr><td>"used by another process" or "Access is denied" (Windows)</td><td>An agent or a terminal still has the plugin folder open. Quit Codex and agy, <code>cd $HOME</code>, and run the setup again.</td></tr>
-      <tr><td>agy: no context, never asks to register</td><td><code>agy plugin list</code> shows no knowledge plugin: an install was cut off. Quit agy and run <code>install agy</code> again.</td></tr>
+      <tr><td>agy: no context, never asks to register</td><td><code>agy plugin list</code> shows no knowledge plugin: an install was cut off. Quit agy and run <code>knowledge-agent.py install agy</code> again.</td></tr>
       <tr><td>Codex ignores the context hook</td><td>More than one SessionStart hook, or the hook is not trusted yet: open <code>/hooks</code> in Codex.</td></tr>
-      <tr><td>"writes are allowed only for …"</td><td>Your token may not write that path: only the memory of your own project.</td></tr>
-      <tr><td>"knowledge server unreachable: offline mode"</td><td>The server is down. The agent works in your offline copy (<code>~/.knowledge/mirror/</code>); what it writes goes up at the next start. A memo changed on both sides is kept as <code>&lt;name&gt;.offline-&lt;time&gt;.md</code> to merge.</td></tr>
+      <tr><td>"writes are allowed only for …"</td><td>That path is never written through the tools (for example outside a project's docs or memory). Write the note in the project's memory folder.</td></tr>
+      <tr><td>"this device token is read-only" or "you may only read this project"</td><td>Your token may read but not write there. Ask the admin for a write token for that project.</td></tr>
+      <tr><td>"knowledge server unreachable: offline mode"</td><td>The server is down. The agent works in your offline copy (<code>~/.knowledge/mirror/</code>); what it writes goes up at the next start. A memo changed on both sides (or deleted on the server meanwhile) is kept as <code>&lt;name&gt;.offline-&lt;time&gt;.md</code> to merge.</td></tr>
+      <tr><td>"knowledge server unreachable and no offline copy on this device"</td><td>The server is down and this device was never online with it, so there is no copy yet. Check the server address and your network; the copy is made at the first start that reaches the server.</td></tr>
+      <tr><td>"… is not on PATH: install it first"</td><td>The setup cannot find that agent or tool. Install it, open a new terminal and run the setup again.</td></tr>
+      <!--PRIVATE--><tr><td>"5 messages wait already" (Chats)</td><td>The line is full. Wait for the agent, press Force to go first, or Stop.</td></tr><!--/PRIVATE-->
     </tbody>
   </table></div>
 
