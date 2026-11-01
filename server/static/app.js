@@ -1539,6 +1539,7 @@ function ckReview(i) {
   if (i.done) row("done", i.done);
   if (i.left) row("left", i.left);
   row("tests", i.tests || "not reported by the worker");
+  if (i.blocked) { const r = el("span", "ck-review-row ck-item-why"); r.append(el("b", null, "merge by hand"), " ", i.blocked); box.append(r); }
   if (i.files.length) box.append(el("code", "progress-log", i.files.join("\n") + (i.nfiles > i.files.length ? `\n… ${i.nfiles - i.files.length} more` : "")));
   return box;
 }

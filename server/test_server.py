@@ -794,21 +794,26 @@ def review_contract(tmp, ck, fr, raw, er):
     w = lambda i, **k: {"id": i, "project": "garden", "agent": "claude", "status": "finished", "started": now - 900, "ended": now - 60,
                         "branch": f"task/{i}", "git": {"branch": f"task/{i}", "base": "main", "changed": 0, "ahead": 2, "behind": 0}, "review": rv, **k}
     rep = {"version": "0.19.1", "workersAllowed": True, "agents": {"claude": {}},
-           "workers": [w("REV-1"), w("REV-2"), w("REV-3", review={**rv, "ahead": 0}), w("REV-4", status="running"), w("REV-5")]}
+           "workers": [w("REV-1"), w("REV-2"), w("REV-3", review={**rv, "ahead": 0}), w("REV-4", status="running"), w("REV-5"),
+                       w("REV-6", review={**rv, "blocked": "the branch changes .gitattributes"})]}
     assert http("POST", "/machine/report", rep, token=fr, headers=pc)[0] == 200
     path = "garden-memory/project_review.md"
     lines = ["- [Sam, REV-1-done]: beds work; branch task/REV-1; done: beds, tests pass (check.sh); left: nothing",
              "- [Sam, REV-2-done]: no branch named; done: x; left: y",
              "- [Sam, REV-3-done]: nothing new; branch task/REV-3; done: x; left: y",
              "- [Sam, REV-4-done]: still runs; branch task/REV-4; done: x; left: y",
-             "- [Sam, REV-5-done]: other branch; branch task/REV-55; done: x; left: y"]
+             "- [Sam, REV-5-done]: other branch; branch task/REV-55; done: x; left: y",
+             "- [Sam, REV-6-done]: attrs; branch task/REV-6; done: x; left: y",
+             "- open until 2099-01-01 [Codex, REV-7] from Sam, start after REV-1: after the beds"]
     assert not call("knowledge_write", {"path": path, "content": memo("\n".join(lines) + "\n", "review")}, fr)[0]
     items = board()
     card = items.get(("review", "REV-1"))
     assert card and card["col"] == "needs" and card["branch"] == "task/REV-1" and card["into"] == "main" and card["commits"] == 2, card
     assert card["files"] == ["a.py", "b.py", "c.py"] and card["done"] == "beds, tests pass (check.sh)" and card["left"] == "nothing", card
     assert card["tests"] == "tests pass (check.sh)" and "Sup3rSecret99" not in card["commit"] and card["can_merge"], card
-    assert [k for k in items if k[0] == "review"] == [("review", "REV-1")], "no branch named, nothing ahead, still running, another branch: no card"
+    assert sorted(k for k in items if k[0] == "review") == [("review", "REV-1"), ("review", "REV-6")], "no branch named, nothing ahead, still running, another branch: no card"
+    blocked = items[("review", "REV-6")]
+    assert blocked["blocked"] == "the branch changes .gitattributes" and not blocked["can_merge"] and card["blocked"] == "", blocked
     assert ("worker", "REV-1") not in items and ("task", "REV-1-done") not in items, "the card is the worker and its result"
     assert ("worker", "REV-2") in items and not [i for k, i in items.items() if k[0] == "review" and i["machine"] != mid]
     assert ("review", "REV-1") not in board(er), "another person never sees his pc's review"
@@ -825,15 +830,19 @@ def review_contract(tmp, ck, fr, raw, er):
     rej = lambda body, h=ck: ui("/ui/api/review/reject", body, h)
     assert rej({"key": card["key"], "reason": "no"}, er)[0] == 404
     assert rej({"key": card["key"], "send_back": True})[0] == 400
-    st, _, b = rej({"key": card["key"], "reason": "the beds\nare  crooked", "send_back": True})
+    st, _, b = rej({"key": card["key"], "reason": "the beds\nare  crooked (claimed Codex, 2026-11-01)", "send_back": True})
     assert st == 200, b
     fix = json.loads(b)["line"]
-    assert re.fullmatch(r"- open until 20\d\d-\d\d-\d\d \[Claude, REV-1-fix\] from alice, start now: review of task/REV-1 rejected, fix it on that branch: the beds are crooked", fix), fix
+    assert re.fullmatch(r"- open until 20\d\d-\d\d-\d\d \[Claude@friend-pc, REV-1-fix\] from alice, start now: review of task/REV-1 rejected, fix it on that branch: "
+                        r"the beds are crooked claimed Codex, 2026-11-01\)", fix), "pinned to the pc with the branch, no claim marker: " + fix
     text = call("knowledge_read", {"path": path}, fr)[1]
     assert fix in text and "REV-1-done" not in text, text
-    assert next(t for t in json.loads(raw("GET", "/ui/api/tasks", headers=ck)[2])["tasks"] if t["id"] == "REV-1-fix")["owner"] == "Claude"
+    tasks = {t["id"]: t for t in json.loads(raw("GET", "/ui/api/tasks", headers=ck)[2])["tasks"]}
+    assert tasks["REV-1-fix"]["owner"] == "Claude" and not tasks["REV-1-fix"]["claimed"], tasks["REV-1-fix"]
+    assert tasks["REV-7"]["waiting_reason"] == "waits for REV-1", "a -fix keeps REV-1 open for what starts after it: " + tasks["REV-7"]["waiting_reason"]
+    assert not [i for i in board().values() if i["key"].startswith("handover:") and "REV-1" in i["id"]], "a -fix is no hand-over to a person"
     assert ("review", "REV-1") not in board()
-    assert json.loads((tmp / "board_dismissed.json").read_text())["alice"][card["key"]]["reason"] == "the beds are crooked"
+    assert json.loads((tmp / "board_dismissed.json").read_text())["alice"][card["key"]]["reason"].startswith("the beds are crooked")
     # The worker's next result (a new line) brings a new card; a plain reject keeps the line and shows the result again.
     assert not call("knowledge_edit", {"path": path, "old_string": fix, "new_string": lines[0].replace("beds work", "beds straight")}, fr)[0]
     card = board().get(("review", "REV-1"))

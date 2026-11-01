@@ -1884,7 +1884,7 @@ def project_tasks(project: str) -> tuple[list[dict], list[dict]]:
     return tasks, back
 
 
-CONT = re.compile(r"(?:-cont)+$", re.I)  # KN-1-cont-cont continues KN-1
+CONT = re.compile(r"(?:-cont|-fix)+$", re.I)  # KN-1-cont-cont (a hand-over) and KN-1-fix (a review sent back) continue KN-1
 CANCELLED = re.compile(r"cancelled by ", re.I)  # the text of a result line cancel_task writes
 
 
@@ -2370,7 +2370,7 @@ def mark_machine(dev: dict, agent: str = "", session: str = "", project: str = "
                 "agent": agent, "session": session[:80], "project": project, "task": task, "at": now, "token": dev["name"],
                 **({"worker": dev["worker"]} if dev.get("worker") else {})}
         if report is not None:
-            m["companion"] = {**report, "at": now}
+            m["companion"] = {**report, "at": now, "token": dev["name"]}  # the token its companion claims tasks with
         m["sessions"] = {k: s for k, s in m.get("sessions", {}).items() if now - s.get("at", 0) < SESSION_KEEP}
     try:
         update_state(MACHINES_FILE, change)
@@ -2461,7 +2461,7 @@ def machine_rows() -> list[dict]:
                          "sessions": [{k: s.get(k, "") for k in ("project", "task", "at", "worker")} for s in sessions]}
         rows.append({"id": mid, "label": m.get("label", mid), "at": m.get("at", 0), "online": now - m.get("at", 0) < ONLINE,
                      "tokens": names, "own": any(own_token(tokens[n], dev) for n in names), "agents": agents,
-                     "companion": {**{k: comp.get(k) for k in ("version", "at", "workersAllowed", "game", "maxWorkers", "folders", "projects")},
+                     "companion": {**{k: comp.get(k) for k in ("version", "at", "workersAllowed", "game", "maxWorkers", "folders", "projects", "token")},
                                    "agents": sorted(comp.get("agents") or {})} if comp else None,
                      "actions": queue.get(mid, [])[-10:]})
     for n, cfg in tokens.items():  # plugins before 0.15.0: one row per token, from clients.json
@@ -5089,7 +5089,7 @@ def board_items() -> list[dict]:
         agent = owner_agent(t["owner"])
         key = f"task:{t['project']}/{t['id']}"
         sig = hashlib.sha256(f"{t['line']}|{t.get('stalled')}|{t['done']}".encode()).hexdigest()[:16]
-        to_person = t["done"] and not agent_owner(t["owner"]) or not t["done"] and CONT.search(t["id"]) and t["from"] and not agent_owner(t["from"])
+        to_person = t["done"] and not agent_owner(t["owner"]) or not t["done"] and re.search(r"-cont$", t["id"], re.I) and t["from"] and not agent_owner(t["from"])
         if to_person:  # handed back (or over) to a person: they read it, then remove the line; it never starts anything
             what = (f"result for {t['owner']}: " if t["done"] else f"handed over to {t['owner']} for {t['from']}: ") + t["text"][:140]
             items.append({"kind": "task", "col": "needs", "id": t["id"], "agent": agent, "project": t["project"], "path": t["path"],
@@ -5155,7 +5155,10 @@ def review_items(rows: list[dict], tasks: list[dict]) -> list[dict]:
                             "line": f"{rv['ahead']} commit{'s' * (rv['ahead'] != 1)} on {w['branch']} for {rv['into']}, {rv['nfiles']} file{'s' * (rv['nfiles'] != 1)} changed",
                             "branch": w["branch"], "into": rv["into"], "commits": rv["ahead"], "files": rv["files"], "nfiles": rv["nfiles"],
                             "commit": rv["commit"], "done": part("done")[:300], "left": part("left")[:300],
-                            "tests": tests.group(0).strip()[:200] if tests else "", "git": w.get("git"), "can_merge": r["online"]}
+                            "tests": tests.group(0).strip()[:200] if tests else "", "git": w.get("git"),
+                            "blocked": rv.get("blocked", ""), "can_merge": r["online"] and not rv.get("blocked"),
+                            # the -fix line goes to this pc only: the branch is here (the token its companion claims with)
+                            "pin": (r.get("companion") or {}).get("token") if (r.get("companion") or {}).get("token") in r["tokens"] else r["tokens"][0]}
     return list(out.values())
 
 
@@ -5193,12 +5196,14 @@ REVIEW_OWNERS = {"claude": "Claude", "codex": "Codex", "agy": "Gemini"}  # the o
 async def ui_review_reject(request: Request):
     """{key, reason, send_back}: the owner of the pc rejects a Review card. The branch stays; the card leaves the board
     with the reason (until the branch or its result line changes). With send_back and a reason, the result line becomes
-    a task line for the agent that did it, "[<agent>, <ID>-fix] from <user>, start now: ...", which a worker picks up on
-    the same branch."""
+    a task line for the agent that did it on that pc, "[<agent>@<its token>, <ID>-fix] from <user>, start now: ...",
+    which a worker there picks up on the same branch."""
     user = device.get().get("user", "")
     try:
         b = await request.json()
-        key, reason, back = str(b.get("key", "")), " ".join(str(b.get("reason", "")).split())[:300], b.get("send_back") is True
+        key, back = str(b.get("key", "")), b.get("send_back") is True
+        # one line, and no "(claimed" that would mark the new task line taken
+        reason = re.sub(r"\(\s*(claimed|bezig)", r"\1", " ".join(str(b.get("reason", "")).split()), flags=re.I)[:300]
     except (ValueError, AttributeError):
         return JSONResponse({"error": "send JSON {key, reason, send_back}"}, status_code=400)
     if back and not reason:
@@ -5211,7 +5216,7 @@ async def ui_review_reject(request: Request):
         if not may_approve(item["project"]):
             return JSONResponse({"error": "only the project's owner or an admin may write it a task line"}, status_code=403)
         lead = item["done_line"][:len(item["done_line"]) - len(item["done_line"].lstrip())]
-        line = (f"{lead}- open until {(date.today() + timedelta(days=7)).isoformat()} [{REVIEW_OWNERS[item['agent']]}, {item['task']}-fix] "
+        line = (f"{lead}- open until {(date.today() + timedelta(days=7)).isoformat()} [{REVIEW_OWNERS[item['agent']]}@{item['pin']}, {item['task']}-fix] "
                 f"from {user or '?'}, start now: review of {item['branch']} rejected, fix it on that branch: {reason}")
         try:
             await knowledge_edit(item["path"], item["done_line"], line)
@@ -5660,7 +5665,7 @@ def worker_review(r) -> dict | None:
     num = lambda k: max(0, min(int(r[k]), 10**6)) if type(r.get(k)) is int else 0
     files = r.get("files") if isinstance(r.get("files"), list) else []
     return {"into": str(r["into"])[:120], "ahead": num("ahead"), "nfiles": num("nfiles"), "files": [str(f)[:200] for f in files[:15]],
-            "commit": redact(str(r.get("commit") or "")[:200])}
+            "commit": redact(str(r.get("commit") or "")[:200]), "blocked": str(r.get("blocked") or "")[:300]}
 
 
 @server.custom_route("/machine/report", methods=["POST"])
