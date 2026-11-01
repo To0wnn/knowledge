@@ -788,7 +788,7 @@ elif os.environ.get("KN_FAKE_FOLLOW") and os.environ.get("KNOWLEDGE_WORKER"):  #
         hook = {"conversationId": sid, "cwd": os.getcwd()} if name == "agy" else {"session_id": sid, "cwd": os.getcwd(), "tool_input": {"command": "git status"}}
         r = subprocess.run([sys.executable, os.environ["KN_FAKE_FOLLOW"], name], input=json.dumps(hook), capture_output=True, text=True)
         got = ((json.loads(r.stdout or "{}").get("hookSpecificOutput") or {}).get("additionalContext") or "") if r.stdout.strip() else ""
-        parked = os.path.join(os.environ.get("KNOWLEDGE_HOME") or os.path.join(os.path.expanduser("~"), ".knowledge"), "pending-hints.txt")
+        parked = os.path.join(os.environ.get("KNOWLEDGE_HOME") or os.path.join(os.path.expanduser("~"), ".knowledge"), "pending-hints-" + sid + ".txt")
         if name == "agy" and os.path.exists(parked):  # agy: parked for its PostInvocation hook, injected before the next model turn
             got = open(parked, encoding="utf-8").read()
             os.remove(parked)
@@ -1141,8 +1141,12 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         check(out_w.strip() == "{}", "limit 90%: a worker of another project with the same task id does not read that stop note", out_w[:300])
         code, out_w, err = run([sys.executable, str(hooks / "watch.py"), "agy"], json.dumps({"conversationId": "w", "workspacePaths": [str(wt)]}),
                                {**env, "KNOWLEDGE_WORKER": cx_id, "KNOWLEDGE_START_NONCE": cx_nonce})
-        check(out_w.strip() == "{}" and "-cont" in (home / ".knowledge" / "pending-hints.txt").read_text(encoding="utf-8"),
-              "limit 90%: agy's PostToolUse answers {} and the note waits for its next turn (PostInvocation)", out_w)
+        parked = home / ".knowledge" / "pending-hints-w.txt"  # this conversation's own: another agy session never reads it
+        check(out_w.strip() == "{}" and "-cont" in parked.read_text(encoding="utf-8") and "-cont" not in
+              ((home / ".knowledge" / "pending-hints.txt").read_text(encoding="utf-8") if (home / ".knowledge" / "pending-hints.txt").exists() else ""),
+              "limit 90%: agy's PostToolUse answers {} and the note waits for that conversation's next turn (PostInvocation)", out_w)
+        code, out_h, err = run([sys.executable, str(hooks / "agent_hooks.py"), "hints"], json.dumps({"conversationId": "other"}), env)
+        check("-cont" not in out_h and parked.exists(), "limit 90%: another agy conversation's next turn does not get that note", out_h[:300])
         check("CMP-CX3" in json.loads((tmp / "machines.json").read_text(encoding="utf-8")).get(mid, {}).get("limit_told", []),
               "limit 90%: a task that waits for the limit gets one notice")
         time.sleep(1.5)  # KNOWLEDGE_WORKER_GRACE=1

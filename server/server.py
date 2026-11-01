@@ -5836,9 +5836,9 @@ async def machine_chat_adopt(request: Request):
         new = re.sub(r"\s*\((?:claimed|bezig)[^)]*\)", "", line["line"], flags=re.I).rstrip() + f" {marker}"
         try:
             await knowledge_edit(line["path"], line["line"], new)
-        except (ToolError, OSError) as e:
+            await asyncio.to_thread(update_state, TASK_LEASES, lambda d: d.get(project, {}).pop(tid, None))  # the marker holds it now
+        except (ToolError, OSError) as e:  # the worker's lease stays until it runs out: no other pc starts it meanwhile
             await asyncio.to_thread(update_state, chat_file(mid, cid), lambda c: chat_add(c, "error", f"Could not claim {tid} for this chat: {e}"[:300]))
-    await asyncio.to_thread(update_state, TASK_LEASES, lambda d: d.get(project, {}).pop(tid, None))
     audit("worker-takeover", f"{mid} {key} -> chat {cid}")
     return JSONResponse({"chat": cid})
 
@@ -5953,8 +5953,8 @@ async def machine_report(request: Request):
     except (ValueError, AttributeError, TypeError) as e:
         return JSONResponse({"error": f"bad report: {e}"}, status_code=400)
     await asyncio.to_thread(mark_machine, dev, report=report)
-    if "workers" in b:  # an older companion that sends none keeps its transcripts
-        await asyncio.to_thread(prune_worker_transcripts, dev["machine"], report["workers"])
+    if isinstance(b.get("workers"), list):  # an older companion that sends none keeps its transcripts; all it sent, not only the 40 kept
+        await asyncio.to_thread(prune_worker_transcripts, dev["machine"], [w for w in b["workers"][:1000] if isinstance(w, dict)])
     told = []
 
     def change(d):

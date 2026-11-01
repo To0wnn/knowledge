@@ -18,6 +18,7 @@ the agents log themselves. Its page and local API listen on 127.0.0.1:47321 only
 Standard library only; Linux, macOS and Windows.
 """
 import atexit
+import contextlib
 import datetime
 import hashlib
 import hmac
@@ -1155,7 +1156,7 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
             "workers": [{**{k: w.get(k) for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open", "why", "chat")},
                          "checkpoint": bool(w.get("checkpoint")), "merged": w["status"] == "merged", "git": gits.get(k),
                          **({"progress": progress(w, gits.get(k))} if w["status"] == "running" else {}),
-                         **({"review": r} if (r := review(w, now)) else {})} for k, w in ws.items()],
+                         **({"review": r} if (r := review(w, now)) else {})} for k, w in sorted(ws.items(), key=lambda kw: -(kw[1].get("started") or 0))],  # newest first: the server keeps 40
             "limitWait": wait, "waiting": waiting or {}, "folders": links, "projects": load("state.json", {}).get("projects", [])}
     server("POST", "/machine/report", tok, body)
 
@@ -1616,6 +1617,9 @@ def send_worker(tok: str, key: str, w: dict, final: bool = False, extra: list = 
         for i, part in enumerate(parts):
             server("POST", "/machine/chats/worker", tok, {"worker": key, "started": w.get("started"), "agent": w["agent"],
                                                          "status": w["status"], "events": part, "done": final and i == len(parts) - 1})
+            if i == 0 and len(parts) > 1:  # a failure after the first part must not send it again: the rest is skipped
+                sent[key] = {**s, "started": w.get("started"), "offset": off}
+                save("follow.json", sent)
         sent.pop(key, None)
         sent[key] = {**s, "started": w.get("started"), "offset": off, "final": final}
         save("follow.json", dict(list(sent.items())[-100:]))
@@ -1661,6 +1665,10 @@ def follow_round(tok: str, r: dict):
             steer(tok, ws, item)
         except Exception as e:
             log("error", "Could not hand a message to a worker", f"{type(e).__name__}: {e}"[:300])
+            if (w := ws.get(item.get("worker"))):  # the owner sees it in the transcript, not only on this pc
+                with contextlib.suppress(Exception):
+                    server("POST", "/machine/chats/worker", tok, {"worker": item["worker"], "started": w.get("started"), "agent": w["agent"],
+                                                                 "status": w["status"], "events": [{"kind": "error", "text": f"Not delivered: {e}"[:300]}]})
     for key in r.get("follow", []):
         if key not in ws:
             continue
@@ -1705,11 +1713,14 @@ def take_over(args: dict, tok: str) -> str:
                 w["owner_stopped"] = True
                 save("workers.json", ws)
         if w["status"] == "running":
-            workers.kill(w)
-            for _ in range(20):  # its session file is complete once it has ended
-                if not workers.running(w):
-                    break
-                time.sleep(0.5)
+            for hard in (False, True):
+                workers.kill(w, hard=hard)
+                for _ in range(20):  # its session file is complete once it has ended
+                    if not workers.running(w):
+                        break
+                    time.sleep(0.5)
+            if workers.running(w):  # never two agents in one session and worktree
+                raise RuntimeError("the worker did not stop; nothing was taken over")
         session = worker_session_id(w)
         if not session:
             raise RuntimeError("its session id is unknown (it made no step yet); it was stopped: start it again or chat in its folder")

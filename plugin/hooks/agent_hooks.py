@@ -575,11 +575,14 @@ def hints(tok: str):
             news = "\n\n".join(t for t in (news, register_notice(again=state == "registered")) if t)
     except Exception as e:
         print(f"knowledge register check skipped: {e}", file=sys.stderr)
-    try:
-        text = pending.read_text(encoding="utf-8")
-        pending.unlink()
-    except OSError:
-        text = ""
+    text = ""
+    # the shared hints, then this conversation's own (a worker's stop or steer note, watch.py)
+    for f in (pending, *([KN_HOME / f"pending-hints-{re.sub(r'[^\w.-]', '-', conv)[:80]}.txt"] if conv else [])):
+        try:
+            text += f.read_text(encoding="utf-8")
+            f.unlink()
+        except OSError:
+            pass
     text = "\n\n".join(t for t in (text.strip(), news, limits.notice("agy", hook, agy_status)) if t)
     print(json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": text}}]} if text.strip() else {}), flush=True)
     send_status("agy", tok)
