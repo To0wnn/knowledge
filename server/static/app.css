@@ -217,8 +217,15 @@ dialog h2 { margin: 0 0 4px; font-size: 18px; font-weight: 650; letter-spacing: 
 .hits li { min-width: 0; }
 .hits li button { width: 100%; min-width: 0; overflow: hidden; text-align: left; padding: 7px 9px; border: 0; border-radius: var(--r-md); background: transparent; }
 .hits li button:hover { background: var(--hover); }
-.hits li.task { display: flex; align-items: flex-start; gap: 4px; }
-.hits li.task > button.small { width: auto; flex: none; margin-top: 6px; }
+.hits li.task { display: flex; align-items: flex-start; gap: 4px 8px; flex-wrap: wrap; }
+.hits li.task > :first-child { flex: 1 1 360px; min-width: 0; }
+.hits li.task > button.small { flex: none; margin-top: 6px; }
+.task-acts { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.hits li .task-acts button, .hits li.task > button.small { width: auto; padding: 4px 12px; border: 1px solid var(--line-hi); border-radius: 999px; background: var(--panel); text-align: center; white-space: nowrap; }
+.hits li .task-acts button:hover:not(:disabled), .hits li.task > button.small:hover:not(:disabled) { border-color: var(--amber); background: var(--panel); }
+.task-acts button:disabled { opacity: .5; cursor: not-allowed; }
+.trash summary { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.trash-info { display: grid; padding: 6px 10px; }
 .hits li.task.waiting > :first-child { opacity: 0.6; } /* may not start yet: the line says why */
 .hits .hit-text.warn { color: var(--bad); }
 .hits li.session { display: grid; padding: 7px 9px; }
@@ -235,7 +242,7 @@ mark { background: color-mix(in srgb, var(--amber) 32%, transparent); color: inh
 
 form { display: grid; gap: 6px; }
 label { font-size: 12.5px; color: var(--muted); margin-top: 6px; }
-input[type=url], input[type=text], input[type=password], textarea { width: 100%; padding: 8px 12px; border: 1px solid var(--line-hi); border-radius: var(--r-md); background: var(--panel-hi); }
+input[type=url], input[type=text], input[type=password], textarea, #ck-filter { width: 100%; padding: 8px 12px; border: 1px solid var(--line-hi); border-radius: var(--r-md); background: var(--panel-hi); }
 form button[type=submit] { margin-top: 10px; }
 #ingest-result { margin-top: 10px; font-size: 13px; }
 .error { color: var(--bad); }
@@ -390,7 +397,9 @@ button.ghost.danger:hover { border-color: var(--bad); }
 #t-skills-why { margin: 2px 0 6px 30px; font-size: 12px; }
 
 /* Machines: one card per pc, agents as rows, sessions folded on narrow screens */
-#machines { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(380px, 100%), 1fr)); gap: 12px; align-items: start; }
+#machines { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
+.machine-agents { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); column-gap: 16px; border-top: 1px solid var(--line); }
+.machine-agents > .machine-agent { border-top: 0; }
 #machines > p { grid-column: 1 / -1; }
 .machine { margin: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel); }
 .machine.offline { opacity: .75; }
@@ -411,7 +420,10 @@ button.ghost.danger:hover { border-color: var(--bad); }
 .machine-error { margin: 4px 0; color: var(--bad); font-size: 12px; overflow-wrap: anywhere; }
 .machine-list { margin: 4px 0; padding: 0; list-style: none; font-size: 12.5px; }
 .machine-list li { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 2px 0; overflow-wrap: anywhere; }
-.machine-list li.worker > span:first-child { flex: 1 1 100%; min-width: 0; } /* the buttons go under the text in the narrow column */
+.machine-list li.worker { padding: 6px 0; border-top: 1px dashed var(--line); }
+.machine-list li.worker > .worker-text { flex: 1 1 100%; min-width: 0; display: grid; gap: 3px; } /* the buttons go under the text in the narrow column */
+.worker-why { font-size: 12px; color: var(--muted); }
+.worker.failed .worker-why { color: var(--bad); }
 .machine-sessions summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 .machine-controls { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
 .machine-controls select { max-width: 100%; font: inherit; font-size: 12px; padding: 2px 4px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg); color: var(--ink); }
@@ -422,7 +434,17 @@ button.ghost.danger:hover { border-color: var(--bad); }
 .ck[hidden], .ck [hidden] { display: none !important; }
 .ck[data-mode="inbox"] .ck-chats, .ck[data-mode="chats"] .ck-board { display: none; }
 .ck-chats { display: grid; grid-template-columns: 300px minmax(0, 1fr); min-height: 0; }
-.ck-chats > .ck-history { overflow-y: auto; padding: 10px; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 50%, transparent); display: grid; gap: 2px; align-content: start; }
+.ck-side { overflow-y: auto; padding: 10px; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 50%, transparent); display: grid; gap: 8px; align-content: start; }
+#ck-filter:focus-visible { outline: none; border-color: var(--amber); box-shadow: 0 0 0 3px var(--amber-soft); }
+.ck-side > .seg { justify-self: start; max-width: 100%; flex-wrap: wrap; }
+.ck-history { display: grid; gap: 2px; padding: 0; }
+.ck-history .ck-chat { display: grid; grid-template-columns: 10px minmax(0, 1fr); column-gap: 8px; align-items: baseline; }
+.ck-chat .ck-dot { align-self: center; }
+.ck-chat small { grid-column: 2; }
+.ck-chat.needs .ck-dot { background: var(--amber); box-shadow: 0 0 8px var(--glow); }
+.ck-chat.needs .ck-chat-title { font-weight: 650; }
+.ck-chat.running .ck-dot { background: var(--ok); }
+.ck-chat.idle .ck-dot { background: transparent; border: 1.5px solid var(--muted); }
 .ck-history button[aria-current="true"] { background: var(--amber-soft); color: var(--amber-ink); }
 .ck-pick { align-self: center; justify-self: center; text-align: center; }
 .ck-gap { flex: 1; }
@@ -502,7 +524,7 @@ button.ck-pill:hover { border-color: var(--amber); }
 .ck-ask-acts button:disabled { opacity: .5; }
 .ck-note.bad { color: var(--bad); }
 /* The attention board: four columns (Needs you first, with the accent), one under the other on a phone. */
-.ck-board { overflow: auto; padding: 20px 24px 32px; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 14px; align-items: start; align-content: start; }
+.ck-board { overflow: auto; padding: 20px 24px 32px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; align-items: start; align-content: start; }
 .ck-board > .ck-empty { grid-column: 1 / -1; margin-top: 12vh; }
 .ck-board > .ck-elsewhere { grid-column: 1 / -1; justify-self: start; }
 .ck-done-toggle { display: none; }
@@ -525,7 +547,22 @@ button.ck-pill:hover { border-color: var(--amber); }
 .ck-item-top .ck-mark { width: 22px; height: 22px; border-radius: 7px; font-size: 12px; }
 .ck-item-where { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .ck-item-line { font-size: 12.5px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
-.ck-item.needs .ck-item-line { color: var(--amber-ink); }
+.ck-item.needs .ck-item-line { color: var(--amber-ink); -webkit-line-clamp: 6; }
+.ck-item.result .ck-item-line { -webkit-line-clamp: unset; display: block; }
+.ck-item.hit { outline: 2px solid var(--amber); outline-offset: 2px; box-shadow: 0 0 0 4px var(--amber-soft), 0 10px 40px var(--glow); }
+.ck-item-why { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.chip { flex: none; padding: 0 7px; border-radius: 999px; font-size: 11px; font-weight: 650; line-height: 18px; white-space: nowrap; }
+.chip.bad { background: var(--bad-soft); color: var(--bad); }
+.progress { display: grid; gap: 3px; font-size: 12px; color: var(--muted); min-width: 0; }
+.progress-sum { overflow-wrap: anywhere; }
+.progress-log { display: block; padding: 4px 8px; border-radius: var(--r-md); background: var(--hover); font: 11.5px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.ck-bunch { margin-bottom: 8px; border: 1px dashed var(--line-hi); border-radius: var(--r-md); }
+.ck-bunch > summary { display: flex; align-items: center; gap: 8px; padding: 8px 10px; cursor: pointer; font-size: 12.5px; }
+.ck-bunch > summary .ck-count { flex: none; }
+.ck-bunch-line { min-width: 0; overflow-wrap: anywhere; }
+.ck-bunch[open] { padding: 0 6px 2px; }
+.ck-bunch[open] > summary { padding-left: 4px; padding-right: 4px; }
+.ck-board > .ck-foot { grid-column: 1 / -1; margin: 0 4px; font-size: 13px; }
 .ck-item-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0 12px 10px; }
 .ck-item-open { margin: 0 12px 10px; font: 12px/1.45 var(--mono); color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 .ck-git { max-width: 100%; padding: 2px 9px; border: 1px solid var(--line-hi); border-radius: 999px; background: var(--hover); color: var(--ink); font: 12px/1.5 var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
@@ -536,7 +573,9 @@ dialog.ck-diff { width: min(980px, calc(100vw - 32px)); }
 @media (max-width: 699.98px) {
   .ck { overflow: visible; }
   .ck-pill { height: 30px; padding: 0 10px; font-size: 12.5px; }
-  .ck-board { overflow: visible; padding: 14px 12px 16px; gap: 10px; }
+  .ck-board { overflow: visible; padding: 14px 12px 16px; gap: 10px; grid-template-columns: minmax(0, 1fr); }
+  .ck-head { flex-wrap: wrap; }
+  .ck-git-slot { order: 5; flex-basis: 100%; max-width: 100%; }
   /* Done (24 h) is one line ("9 done") until it is unfolded. */
   .ck-col-done:not(.open) > :not(.ck-done-toggle) { display: none; }
   .ck-col-done:not(.open) { padding: 0; }
@@ -544,8 +583,8 @@ dialog.ck-diff { width: min(980px, calc(100vw - 32px)); }
   .ck-col-done.open .ck-done-toggle { min-height: 36px; padding: 0 4px; }
   /* Chats: the list, or the open chat filling the screen with its composer above the keyboard and the home bar. */
   .ck-chats { display: block; }
-  .ck-chats > .ck-history { border-right: 0; padding: 10px 12px; }
-  body:not(.in-chat) .ck-canvas, body.in-chat .ck-chats > .ck-history { display: none; }
+  .ck-side { border-right: 0; padding: 10px 12px; }
+  body:not(.in-chat) .ck-canvas, body.in-chat .ck-side { display: none; }
   body.in-chat .ck-canvas { height: calc(100dvh - 53px); padding: 0; grid-template-columns: 100%; }
   body.in-chat .ck-card { border: 0; border-radius: 0; }
   body.in-chat .ck-form { padding-bottom: calc(10px + env(safe-area-inset-bottom)); }

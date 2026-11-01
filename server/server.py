@@ -4628,7 +4628,14 @@ def task_sessions() -> list[dict]:
 
 @server.custom_route("/ui/api/tasks", methods=["GET"])
 async def ui_tasks(request: Request):
-    return JSONResponse({"tasks": await asyncio.to_thread(task_rows), "sessions": task_sessions()})
+    """?hosts=1 adds per task the pcs that may start it now (the Tasks page's "Start on <pc>")."""
+    def rows():
+        tasks = task_rows()
+        if request.query_params.get("hosts") == "1":
+            pcs = machine_rows()
+            tasks = [{**t, "hosts": task_hosts(t, pcs)} for t in tasks]
+        return tasks
+    return JSONResponse({"tasks": await asyncio.to_thread(rows), "sessions": task_sessions()})
 
 
 # ---------------------------------------------------------------- Mission map (Agents cockpit, static/mission.js)
@@ -5010,6 +5017,17 @@ def chat_card(c: dict) -> tuple[str, str]:
     return ("done", "read") if time.time() - (c.get("updated") or 0) < BOARD_DONE else ("", "")
 
 
+def task_hosts(t: dict, rows: list[dict]) -> list[dict]:
+    """The viewer's own online pcs that may start a worker for this task now ("Start on <pc>"): workers allowed, the
+    owner's agent there, a folder linked to its project; none while it is not startable or already held."""
+    agent = owner_agent(t["owner"])
+    if not agent or t["done"] or not t["startable"] or t["runs"].startswith(("running in", "taken by")):
+        return []
+    return [{"machine": r["id"], "label": r["label"]} for r in rows if r["own"] and not r.get("old") and r["online"]
+            and (c := r.get("companion")) and c.get("workersAllowed") and agent in (c.get("agents") or [])
+            and any(f.get("project") == t["project"] for f in (c.get("folders") or {}).get("linked", []))]
+
+
 def board_items() -> list[dict]:
     """The Agents cockpit's start screen: chats and workers on this person's own pcs, task lines in the projects they
     see, each in a column: needs (needs you), running, open, done (last 24 h)."""
@@ -5068,7 +5086,8 @@ def board_items() -> list[dict]:
         if not agent or (t["project"], t["id"]) in working:  # a person's line is not an agent's work; a running worker shows it
             continue
         task = {"kind": "task", "id": t["id"], "agent": agent, "project": t["project"], "title": f"{t['id']} · {t['text'][:120]}",
-                "path": t["path"], "line": "", "at": 0, "owner": t["owner"], "key": key, "sig": sig, "can_cancel": t.get("can_cancel", False)}
+                "path": t["path"], "line": "", "at": 0, "owner": t["owner"], "key": key, "sig": sig, "can_cancel": t.get("can_cancel", False),
+                "due": t["due"], "overdue": t["overdue"]}
         if t["done"]:
             if now - (t.get("since") or 0) < BOARD_DONE:
                 items.append({**task, "col": "done", "line": f"handed back to {t['owner']}", "at": t.get("since") or 0})
@@ -5080,10 +5099,7 @@ def board_items() -> list[dict]:
             items.append({**task, "col": "needs", "line": "woken, but nobody took it within 30 minutes"})
         else:
             held = t["runs"].startswith(("running in", "taken by"))
-            hosts = [{"machine": r["id"], "label": r["label"]} for r in rows if t["startable"] and not held and r["online"]
-                     and (c := r.get("companion")) and c.get("workersAllowed") and agent in (c.get("agents") or [])
-                     and any(f.get("project") == t["project"] for f in (c.get("folders") or {}).get("linked", []))]
-            items.append({**task, "col": "running" if held else "open", "hosts": hosts,
+            items.append({**task, "col": "running" if held else "open", "hosts": task_hosts(t, rows),
                           "line": t["runs"] or t["waiting_reason"] or (f"due {t['due']}" if t["due"] else f"start {t['start']}")})
     gone = read_json(BOARD_DISMISSED, {}).get(device.get().get("user", ""), {})  # dismissed until the item changes
     items = [i for i in items if not (i["col"] == "needs" and gone.get(i["key"], {}).get("sig") == i["sig"])]

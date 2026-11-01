@@ -13,7 +13,9 @@ phone's tab bar and More sheet, no sideways scroll at 390 px, the map resizing w
 old checks instead. Tool approvals show on the board and in their chat with fake data (skipped without them).
 Knowledge pages and the palette (0.19): Notes as list and note (two panes; on a phone two pages with a Back arrow),
 Changes and Health as full pages, the search page, the command palette (search, jump, actions, keys, recent, roles),
-a toast instead of alert(); skipped on an older server. Read-only: it opens notes, it never edits or sends.
+a toast instead of alert(); skipped on an older server. The agents pages: the board's groups and #/inbox/<key> links, the
+chat list's states and filter, Tasks' Cancel and counts, Machines full width, Changes' Deleted section (skipped on an
+older server). Read-only: it opens notes, it never edits or sends.
 
   systemd-run --user --scope -q -p MemoryMax=3G ~/.local/bin/uv run -q --with playwright python tests/ui_smoke.py
 (talks to the container port directly and sends what Traefik sends after the Authentik sign-in: the proxy secret
@@ -123,7 +125,7 @@ async def desktop(browser, secret: str) -> None:
     def nav(v):
         return f'#sidebar [data-nav="{v}"]' if shell else f'[data-tab="{v}"]'
     await pg.click(nav("changes"))
-    await pg.wait_for_selector("#recent li button", timeout=5000)
+    await pg.wait_for_selector("#recent section li button", timeout=5000)
     check(await pg.locator("#recent .plus").count() > 0, "Changes shows lines added/removed")
     await pg.click(nav("tasks"))
     await pg.wait_for_selector("#tasks h3, #tasks p", timeout=5000)
@@ -425,9 +427,9 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
     await pg.wait_for_selector("#ck-board .ck-col, #ck-board .ck-empty", timeout=15000)
     check(await pg.locator("#cockpit").is_visible(), "Inbox shows the attention board")
     cols = await pg.locator("#ck-board .ck-col-head > span:first-child").all_text_contents()
-    check(cols in ([], ["Needs you", "Running", "Open", "Done (24 h)"]), f"board columns, Needs you first {cols}")
+    check(cols in ([], ["Needs you", "Running", "Open", "Done (24 h)"], ["Needs you", "Running", "Done (24 h)"]), f"board columns, Needs you first {cols}")
     check(await pg.locator("#ck-needs-live[aria-live=polite]").count() == 1, "board: the Needs you count is announced (aria-live)")
-    needs = await pg.locator("#ck-board .ck-col-needs .ck-item").count()
+    needs = await pg.locator("#ck-board .ck-col-needs .ck-item").count()  # also the ones folded into a group
     badge = await pg.locator("#sidebar .inbox-count").inner_text()
     check(badge == (str(needs) if needs else ""), f"the Inbox badge counts Needs you ({badge!r} vs {needs})")
     hot = await pg.evaluate("[...document.querySelectorAll('#sidebar .badge')].filter(b => b.textContent && getComputedStyle(b).backgroundColor === getComputedStyle(document.querySelector('.ck-col-needs .ck-count') || document.body).backgroundColor).map(b => b.className)")
@@ -461,7 +463,7 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
     await pg.wait_for_selector("#ck-board .ck-col, #ck-board .ck-empty", timeout=15000)
     await pg.wait_for_timeout(500)
     tops = await pg.evaluate("[...document.querySelectorAll('#ck-board .ck-col')].map(c => c.getBoundingClientRect().top)")
-    check(tops == sorted(tops) and len(set(tops)) == len(tops), f"phone board: one list, Needs you → Running → Open → Done {tops}")
+    check(tops == sorted(tops) and len(set(tops)) == len(tops), f"phone board: one list, Needs you → Running → Done {tops}")
     if await pg.locator(".ck-col-done").count():
         folded = await pg.evaluate("[$('ck-board').querySelector('.ck-col-done .ck-group')?.offsetParent === null, !!$('ck-board').querySelector('.ck-done-toggle').offsetParent]")
         await pg.tap(".ck-done-toggle")
@@ -526,7 +528,7 @@ async def shell(browser, devices, secret: str) -> None:
           "Tasks > Flow shows the mission map in place of the list")
     await route(pg, "#/changes")
     await pg.reload()
-    await pg.wait_for_selector("#recent li", timeout=15000)
+    await pg.wait_for_selector("#recent section li", timeout=15000)
     check(await pg.evaluate("location.hash === '#/changes' && !$('tab-changes').hidden"), "a refresh keeps the view")
     note = await pg.evaluate("Graph.graphData().nodes.find(n => n.id.endsWith('.md') && !n.id.endsWith('MEMORY.md')).id")
     await pg.goto(f"{URL}/ui#{note}")
@@ -591,6 +593,70 @@ async def shell(browser, devices, secret: str) -> None:
     await ctx.close()
 
 
+async def agents_pages(browser, devices, secret: str) -> None:
+    """Inbox, Chats, Tasks, Machines and Changes as full pages (shell steps 2+3): the board without an Open column,
+    identical items folded into a counted group, #/inbox/<key> marking its item (an unknown key: the plain inbox), the
+    chat list with a state per chat (waiting on you first) and a filter, Tasks with Cancel instead of Done and the same
+    count as its badge, Machines one pc per row, Changes with a Deleted section. Read-only: nothing is clicked that
+    acts. Skipped on a server before it."""
+    ctx, pg, errors = await page(browser, secret, "/ui#/inbox", viewport={"width": 1440, "height": 900})
+    if not await is_shell(pg) or not await pg.evaluate("typeof ckFocus === 'function'"):
+        print("skip agents pages (server older than the shell's Inbox/Tasks/Machines pages)")
+        await ctx.close()
+        return
+    await pg.wait_for_function("ck.boardAt > 0", timeout=15000)
+    await pg.wait_for_timeout(300)
+    check(not await pg.locator("#ck-board .ck-col-open").count(), "Inbox: no Open column (open task lines live under Tasks)")
+    bunches = await pg.evaluate("[...document.querySelectorAll('#ck-board .ck-bunch')].map(d => [parseInt(d.querySelector('summary .ck-count').textContent), d.querySelectorAll('.ck-item').length])")
+    check(all(a == b and b > 1 for a, b in bunches), f"Inbox: a group's count is the number of items in it {bunches}")
+    loose = await pg.evaluate("""(() => { const items = ck.board.filter(x => x.col !== 'open' && ckScope(x)), id = (x) => [x.col, x.project || '', ckSame(x)].join('|');
+      const twice = new Set(items.filter((x, n) => ckSame(x) && items.findIndex(y => id(y) === id(x)) !== n).map(id));
+      return [...document.querySelectorAll('#ck-board .ck-item')].filter(c => !c.closest('.ck-bunch')).map(c => items.find(x => x.key === c.dataset.key)).filter(x => x && twice.has(id(x))).length; })()""")
+    check(loose == 0, f"Inbox: identical items are grouped ({loose} left loose)")
+    key = await pg.evaluate("(ck.board.find(i => i.col !== 'open' && i.kind !== 'chat' && i.kind !== 'ask') || {}).key || ''")
+    if key:
+        await pg.goto(f"{URL}/ui#/inbox/{key}")
+        await pg.wait_for_selector("#ck-board .ck-item.hit", timeout=15000)
+        hit = await pg.evaluate("(k) => { const c = document.querySelector('#ck-board .ck-item.hit'); const r = c.getBoundingClientRect(); return c.dataset.key === k && r.bottom > 0 && r.top < innerHeight; }", key)
+        check(hit, f"#/inbox/<key> scrolls to and marks that item ({key})")
+    else:
+        print("     no board item to deep-link: #/inbox/<key> is not checked")
+    await pg.goto(f"{URL}/ui#/inbox/task:nowhere/NOPE-1")
+    await pg.wait_for_function("ck.boardAt > 0", timeout=15000)
+    await pg.wait_for_timeout(500)
+    check(await pg.evaluate("location.hash === '#/inbox' && !document.querySelector('.ck-item.hit')"), "an unknown #/inbox/<key> leaves the plain inbox")
+    await route(pg, "#/chats", "#ck-history li", 500)
+    st = await pg.evaluate("[...document.querySelectorAll('#ck-history .ck-chat')].map(b => ['needs', 'running', 'idle'].findIndex(c => b.classList.contains(c)))")
+    check(-1 not in st and st == sorted(st), f"Chats: a state per chat, waiting on you first {st}")
+    if st:
+        await pg.fill("#ck-filter", "zzz-no-such-chat")
+        await pg.wait_for_timeout(200)
+        check(await pg.locator("#ck-history .ck-chat").count() == 0, "Chats: the filter narrows the list")
+        await pg.fill("#ck-filter", "")
+    await route(pg, "#/tasks", "#tasks h3, #tasks p", 800)
+    await pg.select_option("#agent-project", "")
+    await pg.wait_for_timeout(800)
+    t = await pg.evaluate("""[$('tasks-count').textContent, ([...document.querySelectorAll('#tasks h3')].find(h => h.textContent.startsWith('Open')) || {textContent: ''}).textContent,
+      [...document.querySelectorAll('#tasks .task-acts button')].map(b => b.textContent), [...document.querySelectorAll('#tasks .task-acts button:disabled')].every(b => b.title)]""")
+    check(t[1] == (f"Open ({t[0]})" if t[0] else ""), f"Tasks: the badge and the Open heading agree {t[:2]}")
+    check("Done" not in t[2] and t[3], f"Tasks: Cancel (with the reason when disabled) instead of Done {sorted(set(t[2]))}")
+    await route(pg, "#/machines", "#machines .machine, #machines p", 800)
+    check(await pg.evaluate("getComputedStyle($('machines')).gridTemplateColumns.split(' ').length === 1"), "Machines: one pc per row, full width")
+    await route(pg, "#/changes", "#trash", 500)
+    check(await pg.evaluate("$('trash').tagName === 'DETAILS' && $('trash').querySelector('summary').textContent.startsWith('Deleted')"), "Changes: a Deleted section")
+    check(not errors, f"no page errors on the agents pages {errors[:2]}")
+    await ctx.close()
+    ctx, pg, errors = await page(browser, secret, "/ui#/inbox", **devices["iPhone 14"])
+    wide = []
+    for v in ("inbox", "chats", "tasks", "machines", "changes"):
+        await route(pg, f"#/{v}", ms=900)
+        if await pg.evaluate("document.documentElement.scrollWidth > innerWidth"):
+            wide.append(v)
+    check(not wide, f"phone: the agents pages fit 390 px {wide}")
+    check(not errors, f"no page errors on the phone agents pages {errors[:2]}")
+    await ctx.close()
+
+
 async def knowledge(browser, devices, secret: str) -> None:
     """Knowledge pages and the command palette (0.19): Notes two panes, Changes and Health full width, the search page,
     the palette (notes, views, actions, keys, recent, roles), toasts instead of alert(); the phone's full-screen
@@ -641,7 +707,7 @@ async def knowledge(browser, devices, secret: str) -> None:
     await pg.wait_for_selector("#palette[open]")
     check(await pg.evaluate("(id) => pal.items[0] && pal.items[0].id === id && $('pal-list').textContent.includes('Recent')", target["id"]), "the empty palette lists recent picks first")
     await pg.keyboard.type("changes")
-    await pg.wait_for_timeout(200)
+    await pg.wait_for_timeout(1000)  # the note search answers late and redraws the list: select after it
     await pg.evaluate("palSelect(pal.items.findIndex(i => i.kind === 'view' && i.id === 'changes'))")
     await pg.keyboard.press("Enter")
     await pg.wait_for_timeout(500)
@@ -817,6 +883,7 @@ async def main() -> None:
         await mission(browser, p.devices, secret)
         await shell(browser, p.devices, secret)
         await knowledge(browser, p.devices, secret)
+        await agents_pages(browser, p.devices, secret)
         await browser.close()
     print("ok" if not failures else f"{len(failures)} failed")
     sys.exit(1 if failures else 0)

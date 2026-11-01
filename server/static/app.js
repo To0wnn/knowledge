@@ -48,6 +48,7 @@ DOMPurify.addHook("afterSanitizeAttributes", (n) => {
   if (n.tagName === "IMG" && !/^(\/(?!\/)|data:image\/)/.test(n.getAttribute("src") || "")) n.removeAttribute("src");
 });
 const renderMd = (text) => DOMPurify.sanitize(marked.parse(text, { gfm: true }), PURIFY);
+const post = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* blocked */ } } };
 // A new history entry for a route (shell.js); the count lets Back stay inside the app instead of leaving it.
 const pushHash = (h) => { if (location.hash !== h) history.pushState({ n: (history.state?.n || 0) + 1 }, "", h); };
@@ -951,6 +952,33 @@ async function loadRecent(look = false) {
   }
   if (!res.files.length) box.append(emptyState("No changes yet."));
   store.set(key, String(Math.max(seen, ...res.files.map((f) => f.mtime))));
+  loadTrash(p).catch((e) => box.append(el("p", "error", `Deleted: ${e.message}`)));
+}
+// Deleted: the copies knowledge_delete keeps, newest first; Restore puts one back where it was (never over a file
+// that is there again: the server answers 409 with the reason).
+let trashOpen = false;
+async function loadTrash(p) {
+  const res = await api("/ui/api/trash");
+  if (p !== project || $("tab-changes").hidden) return;
+  const items = res.items.filter((i) => allMode() || i.project === p), card = el("details", "card trash");
+  card.id = "trash"; card.open = trashOpen; card.ontoggle = () => { trashOpen = card.open; };
+  const sum = el("summary", "sub", "Deleted"); sum.append(el("span", "badge", String(items.length)));
+  const list = el("ol", "hits");
+  for (const i of items.slice(0, 100)) {
+    const li = el("li", "task"), info = el("span", "trash-info");
+    info.append(el("span", "hit-path", i.path.split("/").pop()), el("span", "hit-text", `${i.path} · deleted ${ago(i.deleted)} · ${(i.size / 1024).toFixed(1)} kB`));
+    const b = el("button", "ghost small", "Restore"); b.type = "button";
+    b.disabled = !i.can_restore;
+    b.title = i.can_restore ? `Put ${i.path} back as it was` : i.exists ? "A file is at that path again: open both and merge by hand" : "Only the project's owner or an admin may restore a file";
+    b.onclick = async () => {
+      b.disabled = true;
+      try { await post("/ui/api/trash/restore", { name: i.name }); toast(`Restored ${i.path}`, false); refreshData(); loadRecent(true); }
+      catch (e) { toast(e.message); b.disabled = false; }
+    };
+    li.append(info, b); list.append(li);
+  }
+  card.append(sum, items.length ? list : emptyState("Nothing deleted."));
+  $("trash")?.remove(); $("recent").prepend(card); // first and folded: found without scrolling past every day
 }
 
 function highlight(ids) {
@@ -1002,10 +1030,12 @@ async function loadLint(render = true) {
   }
 }
 // Tasks: the task lines between agents in every project (or the one picked in the header), overdue first, then by due
-// date; results handed back. "Done" removes the line (history keeps it). The badge counts every project.
+// date, with where each runs and a "Start on <pc>" per pc that may take it; results handed back. Cancel turns an open
+// line into a result for its requester; Remove takes a read result away (history keeps both). The badge counts every
+// project's open lines, the same number as the list's Open heading without a project filter.
 let agentProject = ""; // the Agents views' project filter (shell.js): "" = all projects
 async function loadTasks(render = true) {
-  const res = await api("/ui/api/tasks"), all = res.tasks.filter((t) => !t.done);
+  const res = await api(render ? "/ui/api/tasks?hosts=1" : "/ui/api/tasks"), all = res.tasks.filter((t) => !t.done);
   $("tasks-count").textContent = all.length || "";
   $("tasks-count").className = all.some((t) => t.overdue) ? "badge warn" : "badge";
   const tasks = res.tasks.filter((t) => !agentProject || t.project === agentProject), open = tasks.filter((t) => !t.done), back = tasks.filter((t) => t.done);
@@ -1018,29 +1048,28 @@ async function loadTasks(render = true) {
       agentProject ? "" : shown(t.project)].filter(Boolean).join(" · "));
     if (t.legacy) meta.prepend(el("span", "badge", "legacy"), " ");
     if (t.stalled) meta.prepend(el("span", "new", "stalled"), " ");
-    if (t.overdue) meta.prepend(el("span", "new", "overdue"), " ");
+    if (t.overdue) meta.prepend(el("span", "chip bad", "overdue"), " ");
     li.className = t.waiting_reason ? "task waiting" : "task"; li.firstChild.append(meta);
     li.firstChild.title = t.line + (t.legacy ? "\nLegacy line: no from/start, so it may start now." : "") +
       (t.author ? `\nWritten by ${t.author}` : "") + (t.stalled ? "\nWoken, but nobody claimed it within 30 minutes." : "");
-    if (t.can_approve) {
-      const ok = el("button", "ghost small", "Approve");
-      ok.title = "Let this task start (it waits for the project owner's or an admin's approval)";
-      ok.onclick = async () => {
-        try { await api("/ui/api/task/approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project: t.project, id: t.id }) }); loadTasks(true); }
-        catch (e) { toast(e.message); }
-      };
-      li.append(ok);
-    }
-    if (me.writable?.includes(t.project)) {
-      const done = el("button", "ghost small", "Done");
-      done.title = "Remove this line from the memo (its history keeps it)";
-      done.onclick = async () => {
-        if (!confirm(`Remove ${t.id} from ${t.path}?`)) return;
-        try { await api("/ui/api/task/done", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: t.path, line: t.line }) }); loadTasks(true); }
-        catch (e) { toast(e.message); }
-      };
-      li.append(done);
-    }
+    const acts = el("div", "task-acts"), act = (text, title, fn, cls = "ghost small") => { const b = el("button", cls, text); b.type = "button"; b.title = title; b.onclick = fn; acts.append(b); return b; };
+    const run = (fn) => async () => { try { await fn(); loadTasks(true); } catch (e) { toast(e.message); } };
+    if (t.can_approve) act("Approve", "Let this task start (it waits for the project owner's or an admin's approval)", run(() => post("/ui/api/task/approve", { project: t.project, id: t.id })));
+    for (const h of t.hosts || []) act(`Start on ${h.label}`, "Start a worker for this task there now",
+      run(async () => { await post("/ui/api/machines/action", { machine: h.machine, action: "start_worker", args: { project: t.project, id: t.id } }); toast(`Asked ${h.label} to start ${t.id}`, false); }));
+    if (!t.done) {
+      const held = t.claimed || /^(running in|taken by)/.test(t.runs || "");
+      const b = act("Cancel", "Turn this line into a result for its requester: they hear it, and a task that starts after it waits", run(async () => {
+        const why = prompt(`Cancel ${t.id}? Its requester (${t.from || t.owner}) gets it back as a result. Why?`, "");
+        if (why === null) return;
+        await post("/ui/api/task/cancel", { project: t.project, id: t.id, reason: why });
+        toast(`${t.id} cancelled`, false);
+      }));
+      if (!t.can_cancel) { b.disabled = true; b.title = held ? "Being worked on: stop the worker first (Machines), then cancel" : "Only the project's owner or an admin may cancel a task"; }
+    } else if (t.done && me.writable?.includes(t.project)) act("Remove", "Read it? Remove the line from the memo (its history keeps it)", run(async () => {
+      if (confirm(`Remove ${t.id} from ${t.path}?`)) await post("/ui/api/task/done", { path: t.path, line: t.line });
+    }));
+    if (acts.childNodes.length) li.append(acts);
     return li;
   };
   const section = (title, items) => {
@@ -1060,6 +1089,13 @@ const AGENT_NAME = { claude: "Claude Code", codex: "Codex", agy: "agy" };
 const YOLO_WARNING = "YOLO changes this agent's own global setting on that pc (Claude Code: bypassPermissions, Codex: approval never + no sandbox, agy: always-proceed), so EVERY session of it there runs every command and edits every file without asking: the owner's own sessions too, not only workers and chats, also for tasks other people wrote. Risky actions are flagged, never stopped. Turning it off puts the previous settings back.";
 const WORKERS_WARNING = "Allow workers on this pc? For every ready task in a linked project it may then start a fresh agent session on its own, in a git worktree of its own, without anyone watching (at most the max per agent). Only for a pc that may work by itself: not a work laptop or a shared family pc.";
 const mins = (sec) => `${Math.max(1, Math.round((Date.now() / 1000 - sec) / 60))} min`;
+// A running worker's progress from its companion: newest commit, commits, changed files, the last log lines.
+function workerProgress(p) {
+  const box = el("span", "progress");
+  box.append(el("span", "progress-sum", [p.commits ? `${p.commits} commit${p.commits > 1 ? "s" : ""}` : "no commits yet", `${p.changed} changed`, p.commit && `last: ${p.commit}`].filter(Boolean).join(" · ")));
+  if ((p.log || []).length) box.append(el("code", "progress-log", p.log.join("\n")));
+  return box;
+}
 async function machineAction(m, action, args = {}) {
   try {
     await api("/ui/api/machines/action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: m.id, action, args }) });
@@ -1091,6 +1127,8 @@ async function loadMachines() {
         () => (c.workersAllowed || confirm(`${WORKERS_WARNING}\n\n${m.label}`)) && machineAction(m, "workers_allowed", { on: !c.workersAllowed })));
       card.append(line);
     }
+    const agents = el("div", "machine-agents");
+    card.append(agents);
     for (const [a, ag] of Object.entries(m.agents)) {
       const row = el("div", "machine-agent"), top = el("div", "machine-agent-head");
       top.append(el("strong", null, AGENT_NAME[a] || a), el("span", "muted", ag.plugin ? `plugin ${ag.plugin}` : "plugin ?"));
@@ -1104,11 +1142,17 @@ async function loadMachines() {
       }
       const ws = el("ul", "machine-list");
       for (const w of ag.workers) {
-        const li = el("li", "worker");
-        li.append(el("span", null, `${AGENT_NAME[a] || a} · ${w.id} · ${w.status === "running" ? `running ${mins(w.started)}` : `${w.status} ${ago(w.ended || w.started)}`}`));
+        const li = el("li", `worker ${w.status}`), text = el("span", "worker-text");
+        const head = el("span"); text.append(head);
+        head.append(el("strong", null, w.id), ` · ${w.project || "?"} · ${w.status === "running" ? `running ${mins(w.started)}` : `${w.status} ${ago(w.ended || w.started)}`}${w.branch ? ` · ${w.branch}` : ""}`);
+        if (w.why) text.append(el("span", "worker-why", w.why));
+        if (w.status === "running" && !m.online) text.append(el("span", "worker-why", `pc offline since ${ago(m.at)}: nobody knows whether it still runs`));
+        if (w.status === "running" && w.progress) text.append(workerProgress(w.progress));
+        li.append(text);
         if (w.yolo) li.append(el("span", "pill yolo", "YOLO"));
         li.append(machineButton("open", "How to look at this worker", () => toast(w.open || "No details yet.", false)));
-        if (m.own && w.status === "running") li.append(machineButton("stop", "Stop this worker", () => confirm(`Stop the worker on ${w.id}?`) && machineAction(m, "stop_worker", { project: w.project, id: w.id })));
+        if (m.own && m.online && w.status === "running") li.append(machineButton("stop", "Stop this worker", () => confirm(`Stop the worker on ${w.id}?`) && machineAction(m, "stop_worker", { project: w.project, id: w.id })));
+        if (m.own && m.online && w.status === "failed") li.append(machineButton("restart", "Start this worker again now (past the 6 h hold)", () => machineAction(m, "restart", { project: w.project, id: w.id })));
         if (m.own && w.status !== "running" && w.checkpoint) li.append(machineButton("roll back", "Put its worktree back as it was before its last turn (a checkpoint of now is kept)",
           () => confirm(`Roll ${w.id} back to before its last turn?`) && machineAction(m, "rollback", { project: w.project, id: w.id })));
         ws.append(li);
@@ -1134,7 +1178,7 @@ async function loadMachines() {
         ctl.append(max);
         row.append(ctl);
       }
-      card.append(row);
+      agents.append(row);
     }
     if (m.own && !m.old) {
       const ctl = el("div", "machine-controls");
@@ -1259,7 +1303,7 @@ $("ingest-form").addEventListener("submit", async (e) => {
 // text (textContent): nothing an agent prints becomes markup. Inbox and Chats are routes (shell.js): #/chats/<chat id>
 // is one chat (its card is keyed by pc and chat id).
 const AGENT_MARK = { claude: "C", codex: "X", agy: "A" };
-const ck = { cards: new Map(), machines: [], chats: [], board: [], view: "", timer: 0, summaryAt: 0, doneOpen: false };
+const ck = { cards: new Map(), machines: [], chats: [], board: [], view: "", timer: 0, summaryAt: 0, doneOpen: false, focus: "", hit: "", boardAt: 0, filter: "" };
 const ckKey = (c) => `${c.machine}/${c.id}`;
 const ckBusy = (s) => s === "running" || s === "queued";
 const ckShort = (path) => (path || "").split(/[\\/]/).filter(Boolean).pop() || path;
@@ -1286,7 +1330,7 @@ async function ckSummary() {
   ck.summaryAt = Date.now();
   const [ms, cs, bd] = await Promise.all([api("/ui/api/machines"), api("/ui/api/chats"), api("/ui/api/board").catch(() => ({ items: [] }))]);
   ck.machines = ms.machines.filter((m) => m.own && !m.old);
-  ck.chats = cs.chats; ck.board = bd.items; inboxCount(ck.board);
+  ck.chats = cs.chats; ck.board = bd.items; ck.boardAt = Date.now(); inboxCount(ck.board);
   const now = Date.now() / 1000;
   let live = ck.chats.filter((c) => ckBusy(c.status)).length, worst = null;
   for (const m of ck.machines) for (const [a, ag] of Object.entries(m.agents || {})) {
@@ -1311,18 +1355,36 @@ async function ckSummary() {
   }
   ckHistory(); ckBoard(); ckLayout();
 }
-// The Chats view's list: newest first, the open one marked.
+// The Chats view's list: the chats waiting on you first, then the running ones, then the newest; a dot and a word
+// say which (not colour alone). The filter matches title, pc, agent and folder; the buttons narrow to one state.
+const CK_STATE = { needs: "needs you", running: "running", idle: "idle" };
+function ckState(c) { // an approval waiting in a running turn needs you too
+  const needs = (ck.board || []).some((i) => i.col === "needs" && i.machine === c.machine && (i.kind === "chat" ? i.id : i.kind === "ask" ? i.chat : "") === c.id);
+  return needs ? "needs" : ckBusy(c.status) ? "running" : "idle";
+}
 function ckHistory() {
-  const box = $("ck-history"); box.replaceChildren();
-  for (const c of ck.chats.filter(ckScope).slice(0, 40)) {
-    const li = el("li"), b = el("button", null, c.title || "(no message yet)"); b.type = "button";
-    b.append(el("small", null, `${AGENT_NAME[c.agent] || c.agent} · ${c.label} · ${ckShort(c.folder)} · ${ago(c.updated)}${ckBusy(c.status) ? " · running" : ""}`));
+  const box = $("ck-history"), words = ck.filter.toLowerCase().split(/\s+/).filter(Boolean), only = $("ck-only").dataset.only || "";
+  const rank = { needs: 0, running: 1, idle: 2 };
+  const rows = ck.chats.filter(ckScope).map((c) => [c, ckState(c)])
+    .filter(([c, st]) => (!only || st === only) && words.every((w) => [c.title, c.label, c.folder, AGENT_NAME[c.agent] || c.agent].join(" ").toLowerCase().includes(w)))
+    .sort((a, b) => rank[a[1]] - rank[b[1]] || (b[0].updated || 0) - (a[0].updated || 0));
+  box.replaceChildren();
+  for (const [c, st] of rows.slice(0, 60)) {
+    const li = el("li"), b = el("button", `ck-chat ${st}`); b.type = "button";
+    b.append(el("span", "ck-dot", ""), el("span", "ck-chat-title", c.title || "(no message yet)"),
+      el("small", null, `${CK_STATE[st]} · ${AGENT_NAME[c.agent] || c.agent} · ${c.label} · ${ckShort(c.folder)} · ${ago(c.updated)}`));
     if (ckKey(c) === ck.view) b.setAttribute("aria-current", "true");
     b.onclick = () => ckShow(c);
     li.append(b); box.append(li);
   }
-  if (!box.childNodes.length) box.append(el("li", "muted", ck.chats.length ? "No chats in this project." : "No chats yet."));
+  if (!box.childNodes.length) box.append(el("li", "muted ck-none", !ck.chats.length ? "No chats yet." : words.length || only ? "No chat matches." : "No chats in this project."));
+  for (const x of $("ck-only").querySelectorAll("button")) {
+    const n = x.dataset.only ? ck.chats.filter((c) => ckScope(c) && ckState(c) === x.dataset.only).length : 0;
+    x.setAttribute("aria-pressed", String(x.dataset.only === only)); x.lastChild.textContent = n ? ` ${n}` : "";
+  }
 }
+$("ck-filter").oninput = () => { ck.filter = $("ck-filter").value; ckHistory(); };
+for (const x of $("ck-only").querySelectorAll("button")) x.onclick = () => { $("ck-only").dataset.only = x.dataset.only; ckHistory(); };
 // Open one chat (its route), or go back from it when `meta` is empty.
 function ckShow(meta) {
   if (!meta) return goBack("#/chats");
@@ -1339,11 +1401,26 @@ function ckLayout() {
 }
 
 // The attention board: what needs you first (a reply nobody read, a refused tool call, a failed worker, a task to
-// approve), then what runs, the open task lines and what finished in the last 24 h; grouped per project. A phone
-// shows the columns one under the other in that order.
-const CK_COLS = [["needs", "Needs you"], ["running", "Running"], ["open", "Open"], ["done", "Done (24 h)"]];
+// approve, a result for you), then what runs and what finished in the last 24 h; grouped per project. Open task lines
+// live under Tasks (one place for them). A phone shows the columns one under the other in that order.
+const CK_COLS = [["needs", "Needs you"], ["running", "Running"], ["done", "Done (24 h)"]];
+// Items that say the same thing (eleven tasks waiting for the same missing pc) fold into one group with a count.
+const ckSame = (i) => (i.kind === "ask" || i.kind === "chat" ? "" : `${i.kind}|${i.col}|${i.kind === "worker" ? `${i.status}|${i.why || (i.offline_since ? "offline" : "")}` : i.line}`);
+function ckBunches(list) {
+  const by = new Map();
+  for (const i of list) { const k = ckSame(i) || `one|${i.key}`; by.set(k, [...(by.get(k) || []), i]); }
+  return [...by.values()].map((g) => {
+    if (g.length < 2) return ckItem(g[0]);
+    const d = el("details", "ck-bunch"), sum = el("summary"), first = g[0];
+    d.open = g.some((i) => i.key === ck.hit); // a deep link into the group opens it
+    sum.append(el("span", "ck-count", `${g.length}×`), el("span", "ck-bunch-line", first.kind === "worker" ? `workers ${first.status}${first.why ? `: ${first.why}` : first.offline_since ? ": pc offline" : ""}` : first.line || first.title));
+    if (g.some((i) => i.overdue)) sum.append(el("span", "chip bad", "overdue"));
+    d.append(sum, ...g.map(ckItem));
+    return d;
+  });
+}
 function ckBoard() {
-  const items = (ck.board || []).filter(ckScope), box = $("ck-board");
+  const items = (ck.board || []).filter((i) => i.col !== "open" && ckScope(i)), box = $("ck-board");
   if (!items.length && !ck.chats.length) {
     const empty = el("div", "ck-empty");
     empty.append(el("h2", null, "Your agents, from anywhere"),
@@ -1365,11 +1442,15 @@ function ckBoard() {
     if (!list.length) col.append(el("p", "ck-none", id === "needs" ? "Nothing waits for you." : "Nothing here."));
     for (const p of [...new Set(list.map((i) => i.project || ""))]) {
       const group = el("div", "ck-group");
-      group.append(el("h3", null, p ? shown(p) : "no project"), ...list.filter((i) => (i.project || "") === p).map(ckItem));
+      group.append(el("h3", null, p ? shown(p) : "no project"), ...ckBunches(list.filter((i) => (i.project || "") === p)));
       col.append(group);
     }
     return col;
   }));
+  if (items.length || ck.chats.length) {
+    const more = el("p", "ck-foot muted", "Open task lines live under "), a = el("a", null, "Tasks"); a.href = "#/tasks";
+    more.append(a, "; the board shows only what needs you, runs or just finished."); box.append(more);
+  }
   // A project filter never hides what needs you without saying so.
   const elsewhere = (ck.board || []).filter((i) => i.col === "needs" && !ckScope(i)).length;
   if (elsewhere) {
@@ -1379,6 +1460,32 @@ function ckBoard() {
   const n = items.filter((i) => i.col === "needs").length, asks = items.filter((i) => i.kind === "ask").length;
   const said = (n ? `${n} item${n > 1 ? "s" : ""} need${n > 1 ? "" : "s"} you` : "Nothing needs you") + (asks ? `, ${asks} approval${asks > 1 ? "s" : ""} waiting` : "");
   if ($("ck-needs-live").textContent !== said) $("ck-needs-live").textContent = said;
+  ckFocus();
+}
+// #/inbox/<key> (the Matrix links): once the board is in, scroll to that item and mark it; a chat's item opens its
+// chat. An unknown key leaves the plain inbox. ck.hit keeps the mark across the board's refreshes.
+function ckFocus() {
+  const key = ck.focus;
+  if (!key || !ck.boardAt || ck.boardAt < (ck.focusAt || 0)) return; // a board older than the link: wait for the fresh one
+  ck.focus = "";
+  const i = (ck.board || []).find((x) => x.key === key);
+  if (i && (i.kind === "chat" || i.kind === "ask")) return go(`#/chats/${encodeURIComponent(i.kind === "ask" ? i.chat : i.id)}`, true);
+  if (i && i.col === "open") { history.replaceState(history.state, "", "#/tasks"); return applyRoute(); } // Tasks has open lines
+  if (!i) { // gone or dismissed: the plain inbox
+    history.replaceState(history.state, "", "#/inbox"); shellRoute = { ...shellRoute, arg: "" }; ck.hit = "";
+    for (const c of $("ck-board").querySelectorAll(".ck-item.hit")) c.classList.remove("hit");
+    return;
+  }
+  ck.hit = key;
+  if (!ckScope(i)) { ck.focus = key; return setAgentProject(""); } // filtered away: show all, then find it
+  if (i.col === "done" && !ck.doneOpen) { ck.doneOpen = true; ck.focus = key; return ckBoard(); }
+  const card = [...$("ck-board").querySelectorAll(".ck-item")].find((c) => c.dataset.key === key);
+  if (!card) return;
+  card.closest("details")?.setAttribute("open", "");
+  for (const c of $("ck-board").querySelectorAll(".ck-item.hit")) c.classList.remove("hit");
+  card.classList.add("hit");
+  card.scrollIntoView({ block: "center", behavior: calm ? "auto" : "smooth" });
+  card.querySelector(".ck-item-main").focus({ preventScroll: true });
 }
 async function ckDo(path, body) {
   try { await api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); }
@@ -1386,13 +1493,17 @@ async function ckDo(path, body) {
   ck.summaryAt = 0; ckTick();
 }
 function ckItem(i) {
-  const card = el("article", `ck-item ${i.col}`), main = el("button", "ck-item-main"), top = el("span", "ck-item-top");
-  main.type = "button";
-  top.append(el("span", "ck-mark", AGENT_MARK[i.agent] || "?"), el("strong", null, i.kind === "ask" ? ckUnbidi(i.title) : i.title));
-  const where = [i.kind === "worker" ? "worker" : i.kind === "task" ? `task for ${i.owner}` : i.kind === "ask" ? "approval" : "", i.label, ckShort(i.folder), i.at ? ago(i.at) : ""];
+  const card = el("article", `ck-item ${i.col}${i.key && i.key === ck.hit ? " hit" : ""}${i.result ? " result" : ""}`), main = el("button", "ck-item-main"), top = el("span", "ck-item-top");
+  main.type = "button"; card.dataset.key = i.key || "";
+  top.append(el("span", "ck-mark", AGENT_MARK[i.agent] || (i.owner || "?")[0].toUpperCase()), el("strong", null, i.kind === "ask" ? ckUnbidi(i.title) : i.title));
+  if (i.overdue) top.append(el("span", "chip bad", "overdue"));
+  const where = [i.kind === "worker" ? "worker" : i.kind === "task" ? (i.result ? "result" : `task for ${i.owner}`) : i.kind === "ask" ? "approval" : "", i.label, ckShort(i.folder),
+    i.due && !i.result ? `due ${i.due}` : "", i.at ? ago(i.at) : ""];
   main.append(top, el("span", "ck-item-where", where.filter(Boolean).join(" · ")), el("span", "ck-item-line", i.line));
+  if (i.kind === "worker" && i.why && !i.line.includes(i.why)) main.append(el("span", "ck-item-why", i.why)); // the line says why and "pc offline since"
+  if (i.progress) main.append(workerProgress(i.progress));
   card.append(main);
-  main.title = i.kind === "chat" || i.kind === "ask" ? "Open this chat" : i.kind === "task" ? "Open its task line in the memo" : "How to look at this worker";
+  main.title = i.kind === "chat" || i.kind === "ask" ? "Open this chat" : i.kind === "task" ? "Open its line in the memo" : "How to look at this worker";
   main.onclick = () => {
     if (i.kind === "chat") return ckShow(ck.chats.find((c) => ckKey(c) === `${i.machine}/${i.id}`) || i);
     if (i.kind === "ask") return ckShow(ck.chats.find((c) => ckKey(c) === `${i.machine}/${i.chat}`));
@@ -1409,8 +1520,11 @@ function ckItem(i) {
   }
   for (const h of i.hosts || []) act(`Start on ${h.label}`, "Start a worker for this task there now",
     () => ckDo("/ui/api/machines/action", { machine: h.machine, action: "start_worker", args: { project: i.project, id: i.id } }));
-  if (i.kind === "worker" && i.status === "running") act("Stop", "Stop this worker",
+  if (i.kind === "worker" && (i.can_stop ?? i.status === "running")) act("Stop", "Stop this worker",
     () => confirm(`Stop the worker on ${i.id}?`) && ckDo("/ui/api/machines/action", { machine: i.machine, action: "stop_worker", args: { project: i.project, id: i.id } }));
+  if (i.kind === "worker" && i.status === "failed" && i.can_restart) act("Restart", "Start this worker again now",
+    () => ckDo("/ui/api/machines/action", { machine: i.machine, action: "restart", args: { project: i.project, id: i.id } }));
+  if (i.result) act("Open memo", "Read the whole line in its memo; remove it there (or under Tasks) once read", () => main.click());
   if (i.col === "needs" && !i.approve && i.kind !== "ask") act("Dismiss", "Take it off the board until it changes again", () => ckDo("/ui/api/board/dismiss", { key: i.key, sig: i.sig }));
   if (i.kind === "chat" && i.col === "running") act("Stop", "Stop this turn", () => ckDo("/ui/api/chat/stop", { machine: i.machine, id: i.id }));
   if (acts.childNodes.length) card.append(acts);
