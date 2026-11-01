@@ -1177,6 +1177,9 @@ def main():
     versions = {json.loads((Path(__file__).parent.parent / "plugin" / d / "plugin.json").read_text())["version"]
                 for d in (".claude-plugin", ".codex-plugin")}
     assert len(versions) == 1, f"plugin versions differ: {versions}"
+    # The MCP registry entry names the released version and its image (image.yml rewrites it again on publish).
+    reg = json.loads((Path(__file__).parent.parent / "server.json").read_text())
+    assert {reg["version"], reg["packages"][0]["identifier"].rsplit(":", 1)[1]} == versions, f"server.json: bump to {versions}"
     # The web UI tab wears the companion's look: thispc.css is companion.css's components with the scope renamed.
     cstatic = Path(__file__).parent.parent / "plugin" / "companion" / "static"
     comp = (cstatic / "companion.css").read_text().split("/* COMPONENTS START */\n")[1].split("/* COMPONENTS END */")[0]
@@ -1384,6 +1387,27 @@ def main():
         import server as srv
         assert srv.is_archive("a350/docs/history/x.md") and srv.is_archive("a/requests/archief-2026-10-23/x.md")
         assert not srv.is_archive("a350/old.md") and not srv.is_archive("memory/project_old.md")
+        # First start: one admin token on a fresh installation only; never again, never over existing tokens.
+        fresh = tmp / "fresh" / "tokens.json"
+        first = srv.first_token(fresh)
+        cfg = json.loads(fresh.read_text())["admin"]
+        assert first and first not in fresh.read_text() and cfg["sha256"] == h(first), cfg
+        assert cfg["self"] and cfg["write"] and cfg["roots"] == [] and not cfg["redact"], cfg
+        assert srv.first_token(fresh) is None and srv.first_token(tokens) is None
+        fresh.write_text("{}")  # every token revoked: still no new one
+        assert srv.first_token(fresh) is None
+        # Proxy sign-in: only the configured user header, and only together with the shared secret.
+        saved = srv.PROXY_SECRET, srv.PROXY_USER_HEADER
+        try:
+            srv.PROXY_SECRET, srv.PROXY_USER_HEADER = "proxy-secret", "remote-user"
+            assert srv.proxied_user({b"x-knowledge-proxy": b"proxy-secret", b"remote-user": b" bob "}) == "bob"
+            assert srv.proxied_user({b"remote-user": b"bob"}) == ""  # no secret: forged
+            assert srv.proxied_user({b"x-knowledge-proxy": b"wrong", b"remote-user": b"bob"}) == ""
+            assert srv.proxied_user({b"x-knowledge-proxy": b"proxy-secret", b"x-authentik-username": b"alice"}) == ""  # other header
+            srv.PROXY_SECRET = ""
+            assert srv.proxied_user({b"x-knowledge-proxy": b"", b"remote-user": b"bob"}) == ""  # no secret configured
+        finally:
+            srv.PROXY_SECRET, srv.PROXY_USER_HEADER = saved
         assert not call("knowledge_write", {"path": "trade-memory/new.md", "content": memo("x\n", "new")})[0]
         assert call("knowledge_write", {"path": "trade/bot2.py", "content": "x"})[0]
         err, text = call("knowledge_edit", {"path": "memory/fact.md", "old_string": "line", "new_string": "l"}, token="ro-token")
@@ -1514,6 +1538,7 @@ def main():
         assert raw("GET", "/ui")[0] == 401
         assert raw("GET", "/ui", headers={"X-authentik-username": "alice"})[0] == 401  # header without the secret: forged
         assert raw("GET", "/ui", headers=user("alice", "wrong"))[0] == 401
+        assert raw("GET", "/ui", headers={"X-Knowledge-Proxy": "proxy-secret", "Remote-User": "alice"})[0] == 401  # not the configured header
         assert raw("GET", "/ui/api/graph", headers=user("alice", ""))[0] == 401
         assert raw("GET", "/ui/static/app.js")[0] == 200  # static is public (no data)
         # Installable app: the manifest and its icons are public too (no data); the page links it and its CSP allows it.
