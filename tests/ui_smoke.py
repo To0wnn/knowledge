@@ -546,8 +546,9 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
     if await pg.locator("#ck-history button").count():
         await pg.locator("#ck-history button").first.tap()
         await pg.wait_for_selector("#ck-canvas .ck-card", timeout=10000)
-        check(await pg.evaluate("getComputedStyle($('tabbar')).display === 'none' && !!$('back').offsetParent && document.documentElement.scrollWidth <= innerWidth"), "phone chat: tab bar hidden, back button shown, fits")
-        await pg.tap("#back")
+        check(await pg.evaluate("getComputedStyle($('tabbar')).display === 'none' && !!document.querySelector('#ck-canvas .ck-head > .ck-x:not(.bd-only)')?.offsetParent && document.documentElement.scrollWidth <= innerWidth"),
+              "phone chat: tab bar and page header hidden, the chat's own back button shown, fits")
+        await pg.tap("#ck-canvas .ck-head > .ck-x:not(.bd-only)")
         await pg.wait_for_timeout(400)
         check(await pg.evaluate("location.hash === '#/chats' && getComputedStyle($('tabbar')).display !== 'none'"), "phone chat: back returns to the list and the tab bar")
     check(not errors, f"no page errors in the phone Inbox and Chats {errors[:2]}")
