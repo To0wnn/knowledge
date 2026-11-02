@@ -1000,7 +1000,9 @@ class HostOut:
     waits for more until the host has ended."""
 
     def __init__(self, proc, offset: int):
-        self.proc, self.offset, self.stopped = proc, offset, False
+        # offset: the start of the line being handled (it moves on when the reader asks for the next one); end: that
+        # line's end while it is handled (a save from the reader itself may count the line as done)
+        self.proc, self.offset, self.end, self.stopped = proc, offset, 0, False
 
     def __iter__(self):
         with open(self.proc.d / "out", "rb") as f:
@@ -1012,13 +1014,15 @@ class HostOut:
                     buf += chunk
                     if buf.endswith(b"\n"):
                         line, buf = buf, b""
-                        self.offset += len(line)
+                        self.end = self.offset + len(line)
                         yield line
+                        self.offset, self.end = self.offset + len(line), 0
                     continue
                 if last:
                     if buf:
-                        self.offset += len(buf)
+                        self.end = self.offset + len(buf)
                         yield buf
+                        self.offset, self.end = self.offset + len(buf), 0
                     return
                 if self.proc.poll() is not None:
                     last = True  # one more read: what it wrote just before it ended
@@ -1064,9 +1068,15 @@ class Hosted:
         try:
             return int((self.d / "exit").read_text(encoding="utf-8") or 0)
         except FileNotFoundError:
-            return None if workers.running({"pid": self.pid, "ident": self.ident}) else -1
+            pass
         except ValueError:
             return -1
+        # the host writes exit when it ends; that it died without (killed) is looked for at most every 2 s: on macOS
+        # identity() runs ps
+        if time.time() - getattr(self, "checked", 0) < 2:
+            return None
+        self.checked = time.time()
+        return None if workers.running({"pid": self.pid, "ident": self.ident}) else -1
 
     def wait(self, timeout: float | None = None) -> int:
         end = None if timeout is None else time.time() + timeout
@@ -1128,24 +1138,36 @@ class Live:
         self.turn_open = self.busy = False  # the agent works on a turn; the server counts the chat running
         self.after_interrupt, self.closing, self.stop_asked = [], False, False
         self.subs = set()  # its subagents running now: not idle while one works
+        self.snap, self.save_lock, self.asking = None, threading.Lock(), {}  # asking: approval request id -> where its line starts
 
     def command(self, exe: str) -> list:
         return live_argv(exe, self.yolo, self.st["session"], self.cid, *self.pick)
 
     # A companion restart: what a new one needs to read on (kept at every flush, with how far the output was read)
-    def state(self) -> dict:
-        return {"chat": self.cid, "agent": self.agent, "folder": self.folder, "yolo": self.yolo, "pick": list(self.pick),
-                "asked": list(self.asked), "session": self.st["session"], "allow": self.rec.get("allow", []),
-                "offset": self.p.stdout.offset, "in": in_size(self.p.d), "written": self.written, "taken": self.taken,
-                "turn_open": self.turn_open, "busy": self.busy, "subs": sorted(self.subs)}
+    def turn_state(self) -> dict:
+        """What the output read so far made of the turn, with where that reading stands: taken at a flush (all it made
+        is posted then), so a new companion reads on from there and nothing is lost or counted twice. An approval
+        still unanswered holds the place: the new companion reads its request again and asks again."""
+        o = self.p.stdout
+        at = o.end if o.end and threading.get_ident() == getattr(self, "reader", None) else o.offset
+        return {"offset": min([at, *self.asking.values()]), "taken": self.taken, "subs": sorted(self.subs)}
 
-    def save(self):
-        try:
-            tmp = self.p.d / "state.part"
-            tmp.write_text(json.dumps(self.state()), encoding="utf-8")
-            tmp.replace(self.p.d / "state.json")
-        except OSError:  # its folder went with it (it ended)
-            pass
+    def live_state(self) -> dict:
+        """What was written to the agent, kept at every write."""
+        return {"chat": self.cid, "agent": self.agent, "folder": self.folder, "yolo": self.yolo, "pick": list(self.pick),
+                "asked": list(self.asked), "session": self.st["session"], "allow": list(self.rec.get("allow", [])),
+                "in": in_size(self.p.d), "written": self.written, "turn_open": self.turn_open, "busy": self.busy}  # a send sets them
+
+    def save(self, turn: bool = False):
+        with self.save_lock:  # several threads write; one file at a time
+            try:
+                if turn or self.snap is None:
+                    self.snap = self.turn_state()
+                tmp = self.p.d / "state.part"
+                tmp.write_text(json.dumps({**self.snap, **self.live_state()}), encoding="utf-8")
+                tmp.replace(self.p.d / "state.json")
+            except Exception:  # its folder went with it (it ended); never fail the write or flush that saved
+                pass
 
     @classmethod
     def adopt(cls, d: Path, s: dict, post, log):
@@ -1229,9 +1251,10 @@ class Live:
                 self.post(body)
             except Exception as e:  # the server away: it calls the turn lost when it next hands out work
                 self.log("error", "Could not send a chat's output to the server", f"chat {self.cid}: {e}"[:300])
-        self.save()
+        self.save(turn=True)
 
     def read(self):
+        self.reader = threading.get_ident()
         try:
             for raw in self.p.stdout:
                 line = raw.decode("utf-8", "replace")
@@ -1362,13 +1385,17 @@ class CodexLive(Live):
     def rpc(self, msg: dict):
         self.write((json.dumps({"jsonrpc": "2.0", **msg}) + "\n").encode("utf-8"))
 
-    def state(self) -> dict:
-        # ids go on well past the last one used: an answer still on its way to an old request matches nothing new
-        return {**super().state(), "turn_id": self.turn_id, "ended": sorted(self.ended)[-50:],
-                "next_id": max(self.calls.values(), default=0) + 1000, "calls": self.calls}
+    def turn_state(self) -> dict:
+        return {**super().turn_state(), "turn_id": self.turn_id, "ended": sorted(self.ended)[-50:]}
+
+    def live_state(self) -> dict:
+        # ids go on well past the last one used (also over several restarts): an answer still on its way to an old
+        # request matches nothing new
+        return {**super().live_state(), "next_id": max([*dict(self.calls).values(), getattr(self, "base_id", 0)]) + 1000}
 
     def resumed(self, s: dict, new_in: list):
         self.res, self.ids, self.turn_id, self.ended, self.calls = {}, itertools.count(s["next_id"]), s["turn_id"], set(s["ended"]), {}
+        self.base_id = s["next_id"]
         self.note, self.request = codex_handlers(self.cid, self.folder, self.st)
         threading.Thread(target=self.read, daemon=True).start()
 
@@ -1387,12 +1414,16 @@ class CodexLive(Live):
         return box.get("result") or {}
 
     def answer(self, m: dict):  # its own request (an approval): the owner may take minutes, off the reader thread
+        key = str(m["id"])  # in asking until answered: a restart reads this request again (and asks again)
         try:
             self.rpc({"id": m["id"], "result": self.request(m["method"], m.get("params") or {})})
         except Exception as e:
             self.log("error", "Codex: an approval could not be answered", f"chat {self.cid}: {e}"[:300])
+        finally:
+            self.asking.pop(key, None)
 
     def read(self):
+        self.reader = threading.get_ident()
         try:
             for raw in self.p.stdout:
                 try:
@@ -1407,6 +1438,7 @@ class CodexLive(Live):
                         box.update(result=m.get("result"), error=m.get("error"))
                         box["done"].set()
                 elif "id" in m:
+                    self.asking[str(m["id"])] = self.p.stdout.offset  # its line's start, until it is answered
                     threading.Thread(target=self.answer, args=(m,), daemon=True).start()
                 elif m.get("method"):
                     with self.lock:
@@ -1543,12 +1575,19 @@ class AgyLive(CodexLive):
             self.call("session/set_model", {"sessionId": self.st["session"], "modelId": self.pick[0]})
         self.replayed[0] = True
 
-    def state(self) -> dict:
-        return {**super().state(), "answered": self.answered, "wtexts": self.wtexts[-20:], "wbase": max(0, len(self.wtexts) - 20),
-                "lines": self.lines, "prompt": self.calls.get("session/prompt") if self.turn_open and not self.yolo else None}
+    def turn_state(self) -> dict:
+        return {**super().turn_state(), "answered": self.answered}
+
+    def live_state(self) -> dict:
+        w = list(self.wtexts)
+        return {**super().live_state(), "wtexts": w[-20:], "wbase": max(0, len(w) - 20), "lines": list(self.lines),
+                "prompt": self.calls.get("session/prompt") if self.turn_open and not self.yolo else None}
 
     def resumed(self, s: dict, new_in: list):
         self.res, self.ids, self.turn_id, self.ended, self.calls = {}, itertools.count(s["next_id"]), "", set(), {}
+        self.base_id = s["next_id"]
+        if s.get("prompt") is not None:  # still running: a second restart must know it too
+            self.calls["session/prompt"] = s["prompt"]
         self.lines, self.answered, self.carry, self.force_text, self.restarting, self.replayed = s["lines"], s["answered"], [], None, False, [True]
         # only the last texts are kept: earlier slots stay empty (a Force carries what was not answered, never those)
         self.wtexts = [""] * s["wbase"] + s["wtexts"]
@@ -1568,6 +1607,7 @@ class AgyLive(CodexLive):
 
     # YOLO: agy's stream-json, one result per message written
     def read_stream(self):
+        self.reader = threading.get_ident()
         try:
             for raw in self.p.stdout:
                 line = raw.decode("utf-8", "replace")
@@ -1670,6 +1710,7 @@ class AgyLive(CodexLive):
         if text is None:  # no Force: an idle close, a Stop, a crash
             return super().gone()
         code = self.p.wait()
+        shutil.rmtree(self.p.d, True)
         with self.lock:
             self.buf.append(("info", "Stopped this step; your message goes in now (agy has no interrupt: a new agy takes the conversation on)."))
             self.flush()
@@ -2013,11 +2054,12 @@ def self_test():
             it = iter(h.stdout)
             assert next(it) == b"got:a\n" and h.poll() is None and workers.running({"pid": h.pid, "ident": h.ident})
             h.stdout.stopped = True  # the old companion is gone
-            h2 = Hosted(LIVE_DIR / "c1-ab", offset=h.stdout.offset)
+            assert h.stdout.offset == 0 and h.stdout.end == 6, "a line counts as read once it was handled"
+            h2 = Hosted(LIVE_DIR / "c1-ab", offset=h.stdout.end)
             h2.stdin.write(b"b\n")
             assert next(iter(h2.stdout)) == b"got:b\n", "read on, not from the start"
             h2.stdin.close()
-            assert list(Hosted(LIVE_DIR / "c1-ab", offset=h2.stdout.offset + 0).stdout)[-1:] in ([b"bye"], []) and h2.wait(10) == 0
+            assert list(Hosted(LIVE_DIR / "c1-ab", offset=h2.stdout.end).stdout)[-1:] in ([b"bye"], []) and h2.wait(10) == 0
             (LIVE_DIR / "c2-cd").mkdir()  # a host that never got going
             (LIVE_DIR / "c2-cd" / "host.json").write_text('{"pid": 1, "ident": "x"}')
             assert adopt(lambda b: None, lambda *a: None) == 0 and sorted(x.name for x in LIVE_DIR.iterdir()) == []

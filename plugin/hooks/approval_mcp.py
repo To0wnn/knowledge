@@ -38,17 +38,20 @@ def ask(args: dict) -> dict:
                            "input": args.get("input") or {}}).encode()
         req = urllib.request.Request(f"http://127.0.0.1:{PORT}/local/api/ask", data=body, method="POST",
                                      headers={"Content-Type": "application/json", "X-Companion-Key": key})
-        end = time.time() + RESTART_WAIT
+        end = None  # set at the first failure: a restart may come after the owner thought for an hour
         while True:
             try:
                 with urllib.request.urlopen(req, timeout=24 * 3600) as r:  # the companion ends the wait (the approval's timeout)
                     d = json.loads(r.read().decode("utf-8"))
-                break
+                # a new companion that has not picked this chat up yet knows no turn of it: ask it again shortly
+                if end is None or d.get("decision") != "deny" or "no turn of this chat" not in str(d.get("message")) or time.time() > end:
+                    break
             except (ConnectionError, http.client.RemoteDisconnected, urllib.error.URLError) as e:
                 # the companion restarted (this agent runs on in its chat host): ask the new one
+                end = end or time.time() + RESTART_WAIT
                 if isinstance(e, urllib.error.HTTPError) or time.time() > end:
                     raise
-                time.sleep(2)
+            time.sleep(2)
     except Exception as e:
         return {"behavior": "deny", "message": f"Could not ask the chat's owner ({type(e).__name__}: {e}); denied."}
     if d.get("decision") in ("once", "chat"):
