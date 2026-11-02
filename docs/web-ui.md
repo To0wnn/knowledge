@@ -4,8 +4,10 @@ Moved from the README; [back to the README](../README.md).
 
 ## Views
 
-- **Web UI:** one app shell: a sidebar (`[` folds it to an icon rail; below 1000 px it is the rail) with **Agents**
-  (Inbox, Chats, Tasks, Machines) and **Knowledge** (Notes, Map, Changes, Health = lint), This pc, Admin and Help;
+- **Web UI:** one app shell: a sidebar (`[` folds it to an icon rail; below 1000 px it is the rail) with one project
+  picker on top (keys 1-9, 0 = all; it scopes every view: Notes, Map, Inbox, Chats, Tasks and a new chat's folder; the
+  Inbox badge still counts all), **Agents** (Inbox, Chats, Tasks, Machines) and **Knowledge** (Notes, Map, Changes,
+  Health = lint), This pc, Admin and Help;
   on a phone a bottom tab bar (Inbox, Chats, Tasks, Notes, More). Every view has its own URL (`#/inbox`, `#/notes/<path>`,
   `#/map`, `#/tasks?view=flow`, …), so refresh, back and forward work; an old `#<path>` link opens the note.
   Ctrl/Cmd+K (or "Search or jump", or the phone's search icon) opens a command palette: notes by title, text and

@@ -66,7 +66,8 @@ def _ask_models(agent: str):
             out = subprocess.run(workers.shim_line([exe, "debug", "models"]) if exe.lower().endswith((".cmd", ".bat")) else [exe, "debug", "models"],
                                  capture_output=True, text=True, timeout=30).stdout
             found = [{"id": m["slug"], "name": str(m.get("display_name") or m["slug"])[:80],
-                      "efforts": [e["effort"] for e in m.get("supported_reasoning_levels") or [] if e.get("effort") in EFFORTS]}
+                      "efforts": [e["effort"] for e in m.get("supported_reasoning_levels") or [] if e.get("effort") in EFFORTS],
+                      **({"default": m["default_reasoning_level"]} if m.get("default_reasoning_level") in EFFORTS else {})}
                      for m in json.loads(out).get("models", []) if m.get("visibility") == "list" and MODEL_ID.fullmatch(str(m.get("slug", "")))]
         elif agent == "agy" and _AGY_ACP:
             found = list(_AGY_ACP)

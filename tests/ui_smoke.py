@@ -339,9 +339,8 @@ async def cockpit(browser, devices, secret: str) -> None:
     check(len(labels) == 6 and "Mission map" in labels[0], f"cockpit tools menu lists its tools {labels}")
     await pg.click("#ck-tools-menu summary")
     await pg.click("#ck-new")
-    await pg.wait_for_selector("#ck-new-dialog[open]")
-    check(await pg.locator("#ck-machine option").count() >= 0 and await pg.locator("#ck-agent").is_visible(), "new chat dialog: pc, agent, folder")
-    await pg.click("#ck-new-cancel")
+    await pg.wait_for_selector("#ck-canvas .ck-card textarea")
+    check(await pg.locator("#ck-canvas .ck-card .ck-title strong").inner_text() == "New chat", "new chat: a draft with an empty box, no dialog")
     await pg.keyboard.press("Escape")
     check(await pg.evaluate("$('cockpit').hidden"), "Esc closes the cockpit")
     check(not errors, f"no page errors in the cockpit {errors[:2]}")
@@ -393,6 +392,7 @@ async def approvals(browser, devices, secret: str) -> None:
         ctx = await browser.new_context(ignore_https_errors=True, bypass_csp=True, **dev,
                                         extra_http_headers={"X-Knowledge-Proxy": secret, "X-authentik-username": USER})
         await ctx.route("**/ui/api/**", fake)
+        await ctx.add_init_script("localStorage.setItem('kn_project', 'all')")  # the fake items' project: the one picker scopes the Inbox too
         pg = await ctx.new_page()
         errors = []
         pg.on("pageerror", lambda e: errors.append(str(e)))
@@ -440,10 +440,25 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
     check(badge == (str(needs) if needs else ""), f"the Inbox badge counts Needs you ({badge!r} vs {needs})")
     hot = await pg.evaluate("[...document.querySelectorAll('#sidebar .badge')].filter(b => b.textContent && b.classList.contains('hot')).map(b => b.className)")
     check(all("inbox-count" in c for c in hot), f"only the Inbox badge wears the accent {hot}")
+    # New chat: a draft in the chat pane (#/chats/new) with an empty box; one chip picks the model, its effort inside
     await pg.click("#ck-new")
-    await pg.wait_for_selector("#ck-new-dialog[open]")
-    check(await pg.locator("#ck-agent").is_visible(), "new chat dialog: pc, agent, folder")
-    await pg.click("#ck-new-cancel")
+    await pg.wait_for_selector("#ck-canvas .ck-card textarea")
+    draft = await pg.evaluate("""[location.hash, document.querySelector('#ck-canvas .ck-title strong').textContent, document.activeElement?.tagName,
+      !!document.querySelector('#ck-new-dialog'), document.querySelector('#ck-canvas .ck-model summary')?.textContent || '']""")
+    check(draft[0] == "#/chats/new" and draft[1] == "New chat" and not draft[3], f"new chat: a draft at #/chats/new, no dialog {draft}")
+    if draft[4]:  # a pc online that reports its models
+        await pg.click("#ck-canvas .ck-model summary")
+        got = await pg.evaluate("""[[...document.querySelectorAll('#ck-canvas .ck-model .ck-mfam')].map(x => x.textContent),
+          [...document.querySelectorAll('#ck-canvas .ck-mopt')].length, document.querySelectorAll('#ck-canvas .ck-mopt[aria-pressed=true]').length]""")
+        check(len(got[0]) >= 1 and got[1] >= 1 and got[2] == 1, f"model chip: families, models, one picked {got}")
+        pick = pg.locator("#ck-canvas .ck-mopt:not([aria-pressed=true]):not(.ck-own)").first
+        if await pick.count():
+            await pick.click()
+            label = await pg.locator("#ck-canvas .ck-model summary").inner_text()
+            effort = await pg.evaluate("[...document.querySelectorAll('#ck-canvas .ck-effort button[aria-pressed=true]')].map(b => b.textContent)")
+            check(label.split(" · ")[0].strip(" ▾") and len(effort) <= 1, f"model chip: another model sets its own effort {label!r} {effort}")
+        await pg.mouse.click(5, 5)
+        check(not await pg.locator("#ck-canvas details.ck-model[open]").count(), "model chip: a click outside closes the panel")
     await route(pg, "#/chats", "#ck-history li")
     if await pg.locator("#ck-history button").count():
         await pg.locator("#ck-history button").first.click()
@@ -642,7 +657,7 @@ async def agents_pages(browser, devices, secret: str) -> None:
         check(await pg.locator("#ck-history .ck-chat").count() == 0, "Chats: the filter narrows the list")
         await pg.fill("#ck-filter", "")
     await route(pg, "#/tasks", "#tasks h3, #tasks p", 800)
-    await pg.select_option("#agent-project", "")
+    await pg.select_option("#projects", "all")  # the one project picker (sidebar) also scopes the agents views
     await pg.wait_for_timeout(800)
     t = await pg.evaluate("""[$('tasks-count').textContent, ([...document.querySelectorAll('#tasks h3')].find(h => h.textContent.startsWith('Open')) || {textContent: ''}).textContent,
       [...document.querySelectorAll('#tasks .task-acts button')].map(b => b.textContent), [...document.querySelectorAll('#tasks .task-acts button:disabled')].every(b => b.title)]""")
@@ -1064,6 +1079,7 @@ async def review(browser, devices, secret: str) -> None:
         ctx = await browser.new_context(ignore_https_errors=True, bypass_csp=True, **dev,
                                         extra_http_headers={"X-Knowledge-Proxy": secret, "X-authentik-username": USER})
         await ctx.route("**/ui/api/**", fake)
+        await ctx.add_init_script("localStorage.setItem('kn_project', 'all')")  # the fake items' project: the one picker scopes the Inbox too
         pg = await ctx.new_page()
         errors = []
         pg.on("pageerror", lambda e: errors.append(str(e)))
@@ -1144,6 +1160,7 @@ async def follow(browser, devices, secret: str) -> None:
         ctx = await browser.new_context(ignore_https_errors=True, bypass_csp=True, **dev,
                                         extra_http_headers={"X-Knowledge-Proxy": secret, "X-authentik-username": USER})
         await ctx.route("**/ui/api/**", fake)
+        await ctx.add_init_script("localStorage.setItem('kn_project', 'all')")  # the fake items' project: the one picker scopes the Inbox too
         pg = await ctx.new_page()
         errors = []
         pg.on("pageerror", lambda e: errors.append(str(e)))

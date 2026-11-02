@@ -508,9 +508,23 @@ body.admin-page { display: block; overflow-y: auto; }
 .ck-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); align-items: end; }
 .ck-form textarea { resize: none; min-height: 42px; max-height: 160px; font-size: 14px; }
 .ck-form .ck-btns { display: flex; gap: 6px; }
-.ck-form .ck-picks { grid-column: 1 / -1; display: flex; gap: 6px; flex-wrap: wrap; }
-.ck-form .ck-picks[hidden] { display: none; }
-.ck-form .ck-picks select { max-width: 50%; }
+.ck-form .ck-picks { grid-column: 1 / -1; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.ck-form .ck-picks[hidden], .ck-form .ck-picks select[hidden] { display: none; }
+.ck-form .ck-picks select { max-width: 60%; }
+/* the model panel opens upward from its chip; on a phone it takes the width of the box */
+.ck-model > summary { list-style: none; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ck-model > summary::-webkit-details-marker { display: none; }
+.ck-picks .ck-model > summary::before { content: none; } /* the chip has its ▾ after the name only */
+.ck-form .ck-model.menu.up .ck-model-list { width: 440px; min-width: 0; max-width: min(460px, calc(100vw - 32px)); max-height: 60vh; overflow-y: auto; padding: 8px; gap: 8px; }
+.ck-mrow { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; align-items: start; }
+.ck-mfam { color: var(--muted); font-size: 12px; padding-top: 8px; }
+.ck-mopts { display: flex; flex-wrap: wrap; gap: 4px; }
+.menu-list .ck-mopt { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 0; min-height: 0; padding: 6px 10px; line-height: 1.25; white-space: normal; }
+.menu-list .ck-mopt small { color: var(--muted); font-size: 11px; }
+.menu-list .ck-mopt[aria-pressed="true"] { background: var(--hover); box-shadow: inset 0 0 0 1px var(--accent); }
+.menu-list .ck-mopt:disabled { opacity: .45; cursor: not-allowed; }
+.ck-effort .seg { flex-wrap: wrap; }
+@media (max-width: 699.98px) { .ck-form .ck-model.menu.up .ck-model-list { width: calc(100vw - 32px); } }
 .ck-form .ck-stop[hidden] { display: none; }
 .ck-form .btn.primary.force { border-color: var(--bad); background: var(--bad); color: #fff; }
 .ck-note { grid-column: 1 / -1; margin: 0; font-size: 12px; color: var(--muted); }

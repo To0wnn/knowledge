@@ -4926,9 +4926,15 @@ MODEL_ID = re.compile(r"[A-Za-z0-9][\w.:/-]{0,79}", re.ASCII)  # as plugin chat.
 
 
 def report_models(v) -> list:
-    """An agent's models as its pc reported them (chat.py models()): [{id, name, efforts}], checked, at most 40."""
-    return [{"id": m["id"], "name": str(m.get("name") or m["id"])[:80], "efforts": [e for e in m.get("efforts") or [] if e in EFFORTS]}
-            for m in (v if isinstance(v, list) else [])[:40] if isinstance(m, dict) and MODEL_ID.fullmatch(str(m.get("id", "")))]
+    """An agent's models as its pc reported them (chat.py models()): [{id, name, efforts[, default]}], checked, at most
+    40; default is the model's own effort level (Codex says it), the one the page picks with the model."""
+    out = []
+    for m in (v if isinstance(v, list) else [])[:40]:
+        if isinstance(m, dict) and MODEL_ID.fullmatch(str(m.get("id", ""))):
+            efforts = [e for e in m.get("efforts") or [] if e in EFFORTS]
+            out.append({"id": m["id"], "name": str(m.get("name") or m["id"])[:80], "efforts": efforts,
+                        **({"default": m["default"]} if m.get("default") in efforts else {})})
+    return out
 
 
 def chat_choice(row: dict, agent: str, model: str, effort: str) -> tuple:

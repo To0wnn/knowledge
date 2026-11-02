@@ -48,7 +48,11 @@ function applyRoute() {
   const agents = home === "cockpit";
   $("cockpit").dataset.mode = r.view;
   // a chat route carries the chat id; the card is keyed by pc and id (ckSummary resolves an id it does not know yet)
-  if (r.view === "chats") { const c = ck.chats.find((x) => x.id === r.arg || ckKey(x) === r.arg), hit = !c && ckFindWorker(r.arg); ck.view = c ? ckKey(c) : hit ? ckKey(ckWorkerCard(hit.m, hit.w).meta) : r.arg; } else if (r.view === "inbox") { ck.view = ""; ck.focus = r.arg; ck.focusAt = Date.now(); if (!r.arg) ck.hit = ""; }
+  if (r.view === "chats" && r.arg === "new") { // #/chats/new: the draft (kept with what is typed, unless a pc asks for a new one)
+    const d = ck.cards.get(ckKey(CK_DRAFT));
+    ck.view = ckKey(d && !ck.draftFor ? d.meta : ckDraft(ck.draftFor || "").meta); ck.draftFor = "";
+  }
+  else if (r.view === "chats") { const c = ck.chats.find((x) => x.id === r.arg || ckKey(x) === r.arg), hit = !c && ckFindWorker(r.arg); ck.view = c ? ckKey(c) : hit ? ckKey(ckWorkerCard(hit.m, hit.w).meta) : r.arg; } else if (r.view === "inbox") { ck.view = ""; ck.focus = r.arg; ck.focusAt = Date.now(); if (!r.arg) ck.hit = ""; }
   ckLayout();
   if (agents) {
     if (r.view === "inbox") ckBoard(); else ckHistory();
@@ -102,22 +106,19 @@ function paintHead() {
     if (a.dataset.nav === r.view) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   }
   if (PHONE_TABS.includes(r.view)) $("more-btn").removeAttribute("aria-current"); else $("more-btn").setAttribute("aria-current", "page");
-  const pick = $("agent-project");
-  if (pick.options.length !== PROJECTS.length + 1) pick.replaceChildren(new Option("All projects", ""), ...PROJECTS.map((p) => new Option(shown(p), p)));
-  pick.value = agentProject;
 }
 $("back").onclick = () => (shellRoute.view === "chats" && ck.view ? ckShow(null) : goBack(shellRoute.view === "notes" ? "#/notes" : "#/inbox"));
 
-// The Agents views' project filter: all projects unless one is picked; the Inbox badge always counts all.
+// The Agents views follow the one project picker (sidebar, More sheet; "" = all projects); the Inbox badge counts all.
 function setAgentProject(p) {
-  agentProject = p; $("agent-project").value = p;
+  if (p === agentProject) return;
+  agentProject = p;
   if (shellRoute.view === "inbox") ckBoard();
-  else if (shellRoute.view === "chats") { ckHistory(); bdRender(); }
+  else if (shellRoute.view === "chats") { ckHistory(); bdRender(); const d = ck.cards.get(ckKey(CK_DRAFT)); if (d) ckPoll(d); }
   else if (shellRoute.view === "tasks") {
     if ($("tab-tasks").classList.contains("flow")) { ms.project = p; ms.fitted = false; msLoad(); } else loadTasks(true);
   }
 }
-$("agent-project").onchange = () => setAgentProject($("agent-project").value);
 function inboxCount(items) {
   const n = items.filter((i) => i.col === "needs").length;
   for (const b of document.querySelectorAll(".inbox-count")) b.textContent = n || "";

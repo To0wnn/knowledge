@@ -648,7 +648,7 @@ FAKE_AGENT = """import json, os, sys, time
 calls, name, args = os.environ["KN_FAKE_CALLS"], sys.argv[1], sys.argv[2:]
 rec = lambda x: open(calls, "a", encoding="utf-8").write(json.dumps(x) + "\\n")
 if name == "codex" and args == ["debug", "models"]:  # what a chat may pick: one listed model, one hidden
-    print(json.dumps({"models": [{"slug": "fake-big", "display_name": "Fake Big", "visibility": "list", "supported_reasoning_levels": [{"effort": "high"}, {"effort": "ultra"}]},
+    print(json.dumps({"models": [{"slug": "fake-big", "display_name": "Fake Big", "visibility": "list", "default_reasoning_level": "high", "supported_reasoning_levels": [{"effort": "high"}, {"effort": "ultra"}]},
                                  {"slug": "fake-hidden", "visibility": "hide", "supported_reasoning_levels": []}]}))
     sys.exit(0)
 if name == "agy" and args == ["models"]:
@@ -1499,7 +1499,9 @@ def chat_e2e(tok: str, tmp: Path):
                 check(first["argv"] == ["agy", "acp"], "chat agy: without YOLO it runs over ACP (the headless agy that can ask)", json.dumps(first["argv"]))
         # Model and effort: the pc reports what each agent offers; a chat's choice reaches the turn the agent's own way
         # (Claude flags, Codex turn/start, agy session/set_model + thought_level).
-        models = {a: [(m["id"], m["efforts"]) for m in v] for a, v in (next(r for r in machines() if r["id"] == mid)["companion"].get("models") or {}).items()}
+        reported = next(r for r in machines() if r["id"] == mid)["companion"].get("models") or {}
+        models = {a: [(m["id"], m["efforts"]) for m in v] for a, v in reported.items()}
+        check([m.get("default") for m in reported.get("codex", [])] == ["high"], "chat: Codex's own default effort per model is reported", json.dumps(reported.get("codex")))
         check(models.get("codex") == [("fake-big", ["high", "ultra"])] and models.get("agy") in ([("fake-gem", [])], [("fake-acp", [])])
               and [m for m, _ in models.get("claude", [])] == ["fable", "opus", "sonnet", "haiku"],
               "chat: the companion reports each agent's models and effort levels (hidden Codex models left out)", json.dumps(models))

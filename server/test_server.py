@@ -691,9 +691,12 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     # Model and effort: only what the pc reported for that agent; they hold for the chat until changed; an older page
     # that sends neither keeps them.
     http("POST", "/machine/report", {"version": "0.21.1", "agents": {"codex": {}, "claude": {"models": [
-        {"id": "opus", "name": "Opus", "efforts": ["low", "max", "huge"]}, {"id": "-rf", "efforts": []}]}},
+        {"id": "opus", "name": "Opus", "efforts": ["low", "max", "huge"], "default": "max"}, {"id": "-rf", "efforts": []},
+        {"id": "sonnet-x", "efforts": ["low"], "default": "max"}]}},
         "folders": {"linked": [{"path": "/home/x/garden", "project": "garden"}]}}, token=fr, headers=pc)
     mc = json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "claude", "folder": "/home/x/garden"})[2])["chat"]["id"]
+    told = json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["models"]
+    assert [(m["id"], m.get("default")) for m in told] == [("opus", "max"), ("sonnet-x", None)], told  # a default it does not offer is dropped
     assert ui("/ui/api/chat/send", {"machine": mid, "id": mc, "text": "a", "model": "sonnet"})[0] == 400  # not reported
     assert ui("/ui/api/chat/send", {"machine": mid, "id": mc, "text": "a", "model": "-rf"})[0] == 400  # dropped from the report
     assert ui("/ui/api/chat/send", {"machine": mid, "id": mc, "text": "a", "model": "opus", "effort": "huge"})[0] == 400

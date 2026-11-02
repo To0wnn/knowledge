@@ -352,6 +352,7 @@ function switchProject(p, refit = true) {
   releaseFocus({ instant: true });
   if (p === project || (p !== ALL && !PROJECTS.includes(p))) return;
   project = p; store.set("kn_project", p);
+  setAgentProject(p === ALL ? "" : p); // one project picker for every view
   $("new-memo").hidden = !me.writable.includes(p);
   $("add-menu").hidden = $("new-memo").hidden && $("ingest-open").hidden;
   selected = null; setFocus(null);
@@ -1028,7 +1029,7 @@ async function loadLint(render = true) {
 // date, with where each runs and a "Start on <pc>" per pc that may take it; results handed back. Cancel turns an open
 // line into a result for its requester; Remove takes a read result away (history keeps both). The badge counts every
 // project's open lines, the same number as the list's Open heading without a project filter.
-let agentProject = ""; // the Agents views' project filter (shell.js): "" = all projects
+let agentProject = project === ALL ? "" : project; // the Agents views' project: the sidebar's, "" = all (shell.js setAgentProject)
 async function loadTasks(render = true) {
   const res = await api(render ? "/ui/api/tasks?hosts=1" : "/ui/api/tasks"), all = res.tasks.filter((t) => !t.done);
   $("tasks-count").textContent = all.length || "";
@@ -1395,6 +1396,7 @@ async function ckSummary() {
       else { card.m = hit.m; card.w = hit.w; card.meta = { ...card.meta, online: hit.m.online, status: hit.w.status }; }
       continue;
     }
+    if (card.meta.draft) continue; // a new chat before its first message: no chat on the server yet
     const c = ck.chats.find((x) => ckKey(x) === k);
     if (!c) ckDrop(k);
     else card.meta = { ...card.meta, ...c };
@@ -1694,7 +1696,8 @@ function ckCard(meta) {
   title.append(name, where);
   const git = el("span", "ck-git-slot"), open = el("button", "btn icon small quiet ck-x bd-only", "↗"); // on the board: the full chat
   open.type = "button"; open.title = "Open the full chat"; open.setAttribute("aria-label", "Open the full chat");
-  head.append(el("span", "ck-dot bd-only"), el("span", "ck-mark", AGENT_MARK[meta.agent] || "?"), title, git, state, open, x);
+  const mark = el("span", "ck-mark", AGENT_MARK[meta.agent] || "+");
+  head.append(el("span", "ck-dot bd-only"), mark, title, git, state, open, x);
   const log = el("div", "ck-log"), form = el("form", "ck-form"), input = el("textarea"), btns = el("div", "ck-btns");
   log.setAttribute("aria-live", "polite"); log.setAttribute("role", "log");
   log.addEventListener("click", (e) => {
@@ -1709,14 +1712,12 @@ function ckCard(meta) {
   }, { passive: true });
   input.rows = 2; input.placeholder = "Message the agent… (Enter a new line, Ctrl+Enter sends)"; input.setAttribute("aria-label", "Message");
   const stop = el("button", "btn ck-stop", "Stop"), send = el("button", "btn primary", "Send"), note = el("p", "ck-note");
-  // model and effort for the next turns, from what the pc reports for this agent (hidden when it reports none)
-  const picks = el("div", "ck-picks"), model = el("select", "small"), effort = el("select", "small");
-  model.setAttribute("aria-label", "Model"); effort.setAttribute("aria-label", "Effort"); picks.hidden = true;
-  model.title = "Model from the next turn on"; effort.title = "Effort from the next turn on"; picks.append(model, effort);
+  // under the box: the model (one chip, its effort inside) and, in a new chat, where it runs (ckPicker)
+  const picks = el("div", "ck-picks"); picks.hidden = true;
   stop.type = "button"; send.type = "submit"; btns.append(stop, send); form.append(input, btns, picks, note);
   const asks = el("div", "ck-asks"); asks.hidden = true; asks.setAttribute("aria-live", "assertive");
   root.append(head, log, asks, form);
-  const card = { meta: { ...meta }, root, name, where, git, state, log, asks, form, input, stop, send, note, picks, model, effort, models: "[]", after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
+  const card = { meta: { ...meta }, root, name, where, git, state, log, asks, form, input, stop, send, note, picks, mark, pick: null, after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
   x.onclick = () => ckShow(null);
   open.onclick = () => ckShow(card.meta);
   input.addEventListener("keydown", (e) => {
@@ -1725,8 +1726,6 @@ function ckCard(meta) {
     e.preventDefault(); form.requestSubmit();
   });
   input.addEventListener("input", () => ckPaint(card)); // typing turns Force back into Queue
-  model.onchange = () => { picks.dataset.touched = "1"; ckEfforts(card); };
-  effort.onchange = () => { picks.dataset.touched = "1"; };
   form.onsubmit = async (e) => {
     e.preventDefault();
     const text = input.value.trim();
@@ -1742,11 +1741,12 @@ function ckCard(meta) {
     ckScrollBottom(card, true);
     try {
       if (card.worker) await api("/ui/api/worker/steer", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, worker: card.worker, text }) });
+      else if (card.meta.draft) return await ckStart(card, text);
       else {
         // only a choice made here: a saved model the pc no longer lists must not turn into Default unasked
-        const pick = picks.hidden || !picks.dataset.touched ? {} : { model: model.value, effort: effort.value };
+        const pick = card.pick?.touched ? { model: card.pick.id, effort: card.pick.effort } : {};
         await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, text, ...pick }) });
-        Object.assign(card.meta, pick); delete picks.dataset.touched;
+        Object.assign(card.meta, pick); card.pick = null;
       }
       input.value = ""; if (!card.worker) card.meta.status = "queued";
     } catch (err) { note.className = "ck-note bad"; note.textContent = err.message; }
@@ -1763,30 +1763,150 @@ function ckCard(meta) {
 }
 function ckDrop(k) { ck.cards.delete(k); if (ck.view === k) ck.view = ""; }
 const CK_EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"]; // the server's EFFORTS, in order
-function ckPicks(card, list) { // the pc's models for this chat's agent; a choice not yet sent stays as picked
-  const key = JSON.stringify(list || []);
-  if (card.models !== key) {
-    card.models = key;
-    card.model.replaceChildren(new Option("Default model", ""), ...(list || []).map((m) => new Option(m.name || m.id, m.id)));
+// The model picker: one chip under the box ("Opus · high ▾"), a panel with the models grouped by family and the chosen
+// model's effort levels. Picking a model sets its own default effort; the agent (Claude Code, Codex, agy) follows from
+// the model. In a running chat only its agent's models are open: a conversation cannot move to another agent.
+const CK_FAMILY = [[/^(claude|fable|opus|sonnet|haiku)/i, "Claude", "claude"], [/^(gpt|o\d|codex)/i, "GPT", "codex"], [/^gemini/i, "Gemini", "agy"]];
+const ckFamily = (id) => (CK_FAMILY.find(([re]) => re.test(id)) || [0, "Other"])[1];
+function ckCatalog(pcs) { // one entry per agent and model: [{agent, id, name, efforts, default, pcs}]
+  const by = new Map();
+  for (const m of pcs) for (const agent of m.companion?.agents || []) for (const x of (m.companion.models || {})[agent]?.length
+    ? m.companion.models[agent] : [{ id: "", name: `${AGENT_NAME[agent] || agent} (its own model)`, efforts: [] }]) { // a companion before 0.22 lists none
+    let e = by.get(`${agent}/${x.id}`);
+    if (!e) by.set(`${agent}/${x.id}`, e = { agent, ...x, pcs: [] });
+    e.pcs.push(m.id);
   }
-  card.picks.hidden = !(list || []).length;
-  if (!card.picks.dataset.touched && card.model.value !== (card.meta.model || "")) card.model.value = card.meta.model || "";
-  ckEfforts(card);
+  // Claude, GPT, Gemini, the rest; in a family its own agent's models first (Claude Code's Opus before agy's)
+  const fam = (x) => { const i = CK_FAMILY.findIndex(([re]) => re.test(x.id)); return i < 0 ? CK_FAMILY.length : i; };
+  const home = (x) => (CK_FAMILY[fam(x)]?.[2] === x.agent ? 0 : 1);
+  return [...by.values()].map((x, n) => [x, n]).sort(([a, i], [b, j]) => fam(a) - fam(b) || home(a) - home(b) || i - j).map(([x]) => x);
 }
-function ckEfforts(card) { // the levels of the chosen model; with the default model, every level this agent knows
-  const list = JSON.parse(card.models), m = list.find((x) => x.id === card.model.value);
-  const levels = CK_EFFORTS.filter((e) => (m ? [m] : list).some((x) => (x.efforts || []).includes(e)));
-  const want = card.picks.dataset.touched ? card.effort.value : card.meta.effort || "";
-  if (card.effort.dataset.levels !== levels.join()) { // rebuilt only on a change: a poll must not close an open list
-    card.effort.dataset.levels = levels.join();
-    card.effort.replaceChildren(new Option("Default effort", ""), ...levels.map((e) => new Option(e, e)));
+const levels = (m) => CK_EFFORTS.filter((e) => (m.efforts || []).includes(e));
+const ckModelOf = (card) => (card.catalog || []).find((x) => x.agent === card.pick?.agent && x.id === card.pick?.id);
+function ckPicker(card) {
+  const draft = card.meta.draft, mine = ck.machines.find((m) => m.id === card.meta.machine);
+  card.catalog = ckCatalog(draft ? ckDraftPcs() : mine ? [mine] : []);
+  if (!draft && !card.catalog.some((x) => x.agent === card.meta.agent)) { card.picks.hidden = true; return; }
+  if (!card.pick?.touched) {
+    const saved = draft ? JSON.parse(store.get("kn_chat_pick") || "null") : { agent: card.meta.agent, id: card.meta.model || "", effort: card.meta.effort || "" };
+    const ok = saved && card.catalog.some((x) => x.agent === saved.agent && x.id === saved.id) || (!draft && saved.id === "");
+    const first = card.catalog.find((x) => x.agent === "claude") || card.catalog[0];
+    card.pick = ok ? { ...saved } : first ? { agent: first.agent, id: first.id, effort: first.default || "" } : null;
   }
-  card.effort.value = levels.includes(want) ? want : "";
-  card.effort.hidden = !levels.length; // agy: the model name carries the level
+  const sig = JSON.stringify([card.catalog.map((x) => [x.agent, x.id, x.efforts, x.default, x.pcs]), card.pick, card.meta.agent, draft && agentProject]);
+  if (card.picks.dataset.sig === sig) return; // unchanged: a poll must not close an open panel
+  card.picks.dataset.sig = sig;
+  card.picks.hidden = !card.pick;
+  if (!card.pick) return card.picks.replaceChildren();
+  const x = ckModelOf(card), menu = el("details", "menu up ck-model"), sum = el("summary", "btn small");
+  sum.textContent = `${x ? x.name : `${AGENT_NAME[card.pick.agent] || card.pick.agent} default`}${card.pick.effort ? ` · ${card.pick.effort}` : ""}`; // ▾ from .menu
+  sum.title = `Model and effort from the next turn on (${AGENT_NAME[card.pick.agent] || card.pick.agent})`;
+  const panel = el("div", "menu-list ck-model-list");
+  if (card.catalog.some((m) => m.agent === card.pick.agent && m.id)) { // back to what the agent itself would pick
+    const own = el("button", "ck-mopt ck-own", `${AGENT_NAME[card.pick.agent] || card.pick.agent}'s own model`); own.type = "button";
+    own.setAttribute("aria-pressed", String(!card.pick.id));
+    own.onclick = () => { card.pick = { agent: card.pick.agent, id: "", effort: "", touched: true }; ckPicker(card); ckDraftWhere(card); };
+    panel.append(own);
+  }
+  const fams = [...new Set(card.catalog.map((m) => ckFamily(m.id)))];
+  for (const fam of fams) {
+    const row = el("div", "ck-mrow"), opts = el("div", "ck-mopts");
+    row.append(el("span", "ck-mfam", fam), opts);
+    for (const m of card.catalog.filter((y) => ckFamily(y.id) === fam)) {
+      const b = el("button", "ck-mopt"), other = !draft && m.agent !== card.meta.agent;
+      b.type = "button"; b.append(document.createTextNode(m.name), el("small", null, AGENT_NAME[m.agent] || m.agent));
+      b.setAttribute("aria-pressed", String(m === x)); b.disabled = other;
+      b.title = other ? `${AGENT_NAME[m.agent] || m.agent}: start a new chat for this model` : m.id;
+      b.onclick = () => {
+        card.pick = { agent: m.agent, id: m.id, effort: m.default || "", touched: true }; ckPicker(card); ckDraftWhere(card);
+        const again = card.picks.querySelector("details.ck-model"); if (again && levels(m).length) again.open = true; // then the effort
+      };
+      opts.append(b);
+    }
+    panel.append(row);
+  }
+  if (x && levels(x).length) { // agy has none: the model name carries the level
+    const row = el("div", "ck-mrow ck-effort"), seg = el("div", "seg");
+    row.append(el("span", "ck-mfam", "Effort"), seg);
+    for (const e of ["", ...levels(x)]) {
+      const b = el("button", null, e || "auto"); b.type = "button";
+      b.title = e ? `${e}${e === x.default ? " (this model's default)" : ""}` : "The agent's own setting";
+      b.setAttribute("aria-pressed", String(card.pick.effort === e));
+      b.onclick = () => { card.pick = { ...card.pick, effort: e, touched: true }; menu.open = false; ckPicker(card); card.input.focus(); };
+      seg.append(b);
+    }
+    panel.append(row);
+  }
+  menu.append(sum, panel);
+  card.picks.replaceChildren(menu, ...(draft ? [ckDraftFolder(card)] : []));
+}
+document.addEventListener("click", (e) => { // a click outside closes the model panel
+  for (const d of document.querySelectorAll("details.ck-model[open]")) if (!d.contains(e.target)) d.open = false;
+});
+
+// A new chat is a draft in the chat pane (#/chats/new): an empty box with the model chip and the folder; the chat is
+// made on the first message. The project is the sidebar's; the pc follows from the model and the folder.
+const CK_DRAFT = { machine: "draft", id: "new", draft: true, agent: "", title: "", folder: "", label: "", status: "idle" };
+function ckDraftPcs() { // own pcs online with a companion that reports models and has a linked folder in the project
+  return ck.machines.filter((m) => m.own !== false && m.online && (m.companion?.agents || []).length
+    && (m.companion?.folders?.linked || []).some((f) => !agentProject || f.project === agentProject));
+}
+function ckDraftFolders(card) { // [{machine, label, path, project}] that can run the chosen model
+  const x = ckModelOf(card), pcs = ckDraftPcs().filter((m) => x ? x.pcs.includes(m.id) : (m.companion.agents || []).includes(card.pick?.agent));
+  return pcs.flatMap((m) => (m.companion.folders.linked || []).filter((f) => !agentProject || f.project === agentProject)
+    .map((f) => ({ machine: m.id, label: m.label, path: f.path, project: f.project })));
+}
+function ckDraftFolder(card) {
+  const list = ckDraftFolders(card), sel = el("select", "small"), many = new Set(list.map((f) => f.machine)).size > 1;
+  sel.setAttribute("aria-label", "Folder"); sel.title = "Where it runs: a folder linked to the project on that pc";
+  for (const f of list) sel.append(new Option(`${f.project} · ${ckShort(f.path)}${many ? ` · ${f.label}` : ""}`, `${f.machine}\n${f.path}`));
+  const want = card.where_ || (card.pick?.folder ? `${card.pick.machine}\n${card.pick.folder}` : "");
+  if ([...sel.options].some((o) => o.value === want)) sel.value = want;
+  card.where_ = sel.value;
+  sel.onchange = () => { card.where_ = sel.value; ckDraftWhere(card); };
+  sel.hidden = list.length < 2; // one place: nothing to pick, the header says where
+  return sel;
+}
+function ckDraftWhere(card) {
+  if (!card.meta.draft) return;
+  const [machine, folder] = (card.where_ || "").split("\n"), m = ck.machines.find((y) => y.id === machine);
+  card.meta = { ...card.meta, machine: "draft", agent: card.pick?.agent || "", folder: folder || "", label: m?.label || "", target: machine || "" };
+  ckPaint(card);
+}
+function ckDraft(machine = "") {
+  ckDrop(ckKey(CK_DRAFT));
+  const card = ckCard({ ...CK_DRAFT, online: true });
+  ckPicker(card);
+  const f = machine && ckDraftFolders(card).find((y) => y.machine === machine); // Machines → Chat: that pc first
+  if (f) { card.where_ = `${f.machine}\n${f.path}`; delete card.picks.dataset.sig; ckPicker(card); }
+  ckDraftWhere(card);
+  return card;
+}
+async function ckStart(card, text) { // the draft's first message: make the chat there, send it, open it
+  const [machine, folder] = (card.where_ || "").split("\n"), p = card.pick;
+  if (!machine || !p) throw new Error(ck.machines.some((m) => m.online && m.companion) ? "No folder in this project on a pc that runs this model: link one under Machines, Folders." : "None of your pcs is online with a companion.");
+  const res = await api("/ui/api/chats", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine, agent: p.agent, folder }) });
+  await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine, id: res.chat.id, text, model: p.id, effort: p.effort }) });
+  store.set("kn_chat_pick", JSON.stringify({ agent: p.agent, id: p.id, effort: p.effort, machine, folder }));
+  const m = ck.machines.find((y) => y.id === machine);
+  ckDrop(ckKey(CK_DRAFT)); ck.summaryAt = 0;
+  ckShow({ ...res.chat, model: p.id, effort: p.effort, status: "queued", machine, label: m?.label || machine, online: true });
+  ckTick();
 }
 function ckPaint(card) {
   if (card.worker) return ckWorkerPaint(card);
   const m = card.meta, busy = ckBusy(m.status);
+  card.mark.textContent = AGENT_MARK[m.agent] || "+";
+  if (m.draft) {
+    card.name.textContent = "New chat";
+    card.where.textContent = m.folder ? `${AGENT_NAME[m.agent] || m.agent} · ${m.label} · ${ckShort(m.folder)}` : "";
+    card.where.title = m.folder || ""; card.state.hidden = true; card.stop.hidden = true; card.send.textContent = "Send"; card.send.disabled = false;
+    if (!card.note.classList.contains("bad")) card.note.textContent = !ckDraftPcs().length
+      ? (agentProject ? `No pc of yours is online with a folder linked to ${shown(agentProject)}.` : "None of your pcs is online with a companion and a linked folder.")
+      : "Runs on your pc in the project's folder, with a worker's permissions there (YOLO only where you turned it on).";
+    return;
+  }
+  card.state.hidden = false;
   card.name.textContent = m.title || "New chat";
   card.where.textContent = `${AGENT_NAME[m.agent] || m.agent} · ${m.label} · ${ckShort(m.folder)}${m.project ? ` (${m.project})` : ""}`;
   card.where.title = m.folder || "";
@@ -1811,13 +1931,14 @@ function ckPaint(card) {
 async function ckPoll(card) {
   if (!card) return;
   if (card.worker) return ckWorkerPoll(card);
+  if (card.meta.draft) return ckPicker(card), ckDraftWhere(card);
   let res;
   // only the chat opened full counts as read; a card glanced at on the board stays under Needs you
   const peek = ck.view !== ckKey(card.meta) ? "&peek=1" : "";
   try { res = await api(`/ui/api/chat?machine=${card.meta.machine}&id=${card.meta.id}&after=${card.after}${peek}`); }
   catch (e) { card.note.className = "ck-note bad"; card.note.textContent = e.message; return; }
   card.meta = { ...card.meta, ...res.chat, label: res.label }; card.online = res.online; card.at = res.at;
-  ckPicks(card, res.models);
+  ckPicker(card);
   ckEvents(card, res);
   ckAsks(card, res.asks || [], (res.now || Date.now() / 1000) - Date.now() / 1000);
   ckPaint(card);
@@ -1963,40 +2084,8 @@ function ckAsks(card, asks, skew) {
 }
 
 // New chat: a pc of your own with a companion, an agent installed there, a folder linked there.
-function ckNewChat(machine = "") {
-  const pcs = ck.machines.filter((m) => m.companion && (m.companion.agents || []).length);
-  const pick = $("ck-machine");
-  pick.replaceChildren(...pcs.map((m) => { const o = el("option", null, `${m.label}${m.online ? "" : " (offline)"}`); o.value = m.id; return o; }));
-  if (machine) pick.value = machine;
-  else { const on = pcs.find((m) => m.online); if (on) pick.value = on.id; }
-  $("ck-new-error").hidden = true;
-  ckNewFill();
-  if (!pcs.length) { $("ck-new-error").hidden = false; $("ck-new-error").textContent = "No pc of yours reports a companion with an agent yet."; }
-  $("ck-new-dialog").showModal();
-}
-function ckNewFill() {
-  const m = ck.machines.find((x) => x.id === $("ck-machine").value), c = m?.companion || {};
-  $("ck-agent").replaceChildren(...(c.agents || []).map((a) => { const o = el("option", null, `${AGENT_NAME[a] || a}${m.agents?.[a]?.yolo ? " (YOLO)" : ""}`); o.value = a; return o; }));
-  $("ck-folder").replaceChildren(...(c.folders?.linked || []).map((f) => { const o = el("option", null, `${f.path} → ${f.project}`); o.value = f.path; return o; }));
-  const why = !m ? "" : !m.online ? `${m.label} is offline: a chat needs its companion running.` : !(c.folders?.linked || []).length ? `No folder on ${m.label} is linked to a project yet (Machines, Folders).` : "";
-  $("ck-new-error").hidden = !why; $("ck-new-error").textContent = why;
-  $("ck-new-start").disabled = !!why || !m;
-}
-$("ck-machine").onchange = ckNewFill;
+function ckNewChat(machine = "") { ck.draftFor = machine; go("#/chats/new"); } // a draft in the chat pane (ckDraft)
 $("ck-new").onclick = async () => { if (!ck.machines.length) await ckSummary().catch(() => {}); ckNewChat(); };
-$("ck-new-cancel").onclick = () => $("ck-new-dialog").close();
-$("ck-new-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const machine = $("ck-machine").value, m = ck.machines.find((x) => x.id === machine);
-  if ($("ck-new-start").disabled) return;
-  $("ck-new-start").disabled = true; // one chat per click
-  try {
-    const res = await api("/ui/api/chats", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine, agent: $("ck-agent").value, folder: $("ck-folder").value }) });
-    $("ck-new-dialog").close();
-    ckShow({ ...res.chat, machine, label: m?.label || machine, online: m?.online }); ck.summaryAt = 0;
-  } catch (err) { $("ck-new-error").hidden = false; $("ck-new-error").textContent = err.message; }
-  $("ck-new-start").disabled = false;
-});
 
 // ---------------------------------------------------------------- live updates (Server-Sent Events)
 let liveTimer;
@@ -2046,6 +2135,7 @@ async function loadMe() {
   PROJECTS = me.projects;
   for (const p of PROJECTS) if (!MEMORY_ROOT[p]) { MEMORY_ROOT[p] = `${p}-memory`; ROOT_PROJECT[p] = p; ROOT_PROJECT[`${p}-memory`] = p; }
   if (!PROJECTS.includes(project) && project !== ALL) project = PROJECTS[0];
+  agentProject = project === ALL ? "" : project;
   navMe(me);
   if (!me.admin) $("ingest-open").hidden = true;
   $("new-memo").hidden = !me.writable.includes(project);

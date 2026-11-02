@@ -23,7 +23,6 @@
     <div class="head-title"><div class="crumb" id="crumb"></div><h1 id="title" tabindex="-1">Knowledge</h1></div>
     <span class="gap"></span>
     <div class="head-actions" id="head-actions">
-      <label class="filter" data-views="inbox chats tasks" title="Only this project's items (the Inbox badge still counts all)"><span class="sr-only">Show project</span><select id="agent-project"><option value="">All projects</option></select></label>
       <span data-views="inbox chats"><span class="chip" id="ck-resets" hidden></span></span>
       <div class="seg" id="chats-mode" role="group" aria-label="Chats as" data-views="chats"><button type="button" data-mode="list" aria-pressed="true">List</button><button type="button" data-mode="board" aria-pressed="false">Board</button></div>
       <div class="seg" id="tasks-mode" role="group" aria-label="Tasks as" data-views="tasks"><button type="button" data-mode="list" aria-pressed="true">List</button><button type="button" data-mode="flow" aria-pressed="false">Flow</button></div>
@@ -107,21 +106,6 @@
   <p class="muted" id="ck-diff-where"></p>
   <div id="ck-diff-body" aria-live="polite"></div>
   <div class="actions"><button type="button" class="btn" id="ck-diff-close">Close</button></div>
-</dialog>
-
-<dialog id="ck-new-dialog" aria-label="New chat">
-  <form id="ck-new-form" method="dialog">
-    <h2>New chat</h2>
-    <p class="muted">An agent on one of your pcs, in a folder linked to a project there. Its companion runs each turn; the pc must be online. Permissions are those of a worker there (YOLO only where you turned it on).</p>
-    <label for="ck-machine">Pc</label>
-    <select id="ck-machine" required></select>
-    <label for="ck-agent">Agent</label>
-    <select id="ck-agent" required></select>
-    <label for="ck-folder">Folder</label>
-    <select id="ck-folder" required></select>
-    <p id="ck-new-error" class="error" role="alert" hidden></p>
-    <div class="actions"><button type="button" class="btn" id="ck-new-cancel">Cancel</button><button type="submit" class="btn primary" id="ck-new-start">Start chat</button></div>
-  </form>
 </dialog>
 
 <dialog id="new-dialog" aria-label="New memo">
