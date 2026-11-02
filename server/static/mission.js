@@ -136,6 +136,7 @@ function msRender() {
   $("ms-stage").hidden = msNarrow(); $("ms-list").hidden = !msNarrow();
   if (!g.nodes.length) {
     $("ms-world").replaceChildren(); $("ms-list").replaceChildren(el("p", "muted ms-empty", "No task lines here."));
+    $("ms-stage").hidden = true; $("ms-list").hidden = false; // the list holds the empty line: also on a desktop
     return;
   }
   if (msNarrow()) msList(); else msGraph();
