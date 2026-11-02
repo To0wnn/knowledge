@@ -1523,7 +1523,8 @@ def chat_e2e(tok: str, tmp: Path):
         tokf = home / ".gemini" / "antigravity-cli" / "antigravity-oauth-token"
         tokf.parent.mkdir(parents=True, exist_ok=True)
         tokf.write_text(json.dumps({"token": {"access_token": "gategate", "expiry": "2099-01-01T00:00:00Z"}}), encoding="utf-8")
-        probe = ("import companion, json, threading, time, http.server\n"
+        probe = ("import faulthandler, sys; faulthandler.dump_traceback_later(40, exit=True, file=sys.stderr)\n"  # a hang shows where (macOS CI)
+                 "import companion, json, threading, time, http.server\n"
                  "class H(http.server.BaseHTTPRequestHandler):\n"
                  "    def do_POST(self):\n"
                  "        ok = self.headers.get('Authorization') == 'Bearer gategate' and self.headers.get('User-Agent') == 'antigravity-cli'\n"
