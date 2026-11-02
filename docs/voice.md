@@ -19,16 +19,15 @@ Pick one, then restart the server.
 
 | Option | Setting | Note |
 |---|---|---|
-| The bundled one | `KNOWLEDGE_STT_URL=http://voice:8000/v1` | CPU, local |
+| The bundled one | `KNOWLEDGE_STT_URL=http://voice:8000/v1` | whisper.cpp, CPU, local |
 | A server you run | its `/v1` base URL | any OpenAI-compatible one |
 | OpenAI | `https://api.openai.com/v1` | audio leaves your network |
 
-- **The bundled one** (speaches, faster-whisper on the CPU): `mkdir -p data/voice`, put
+- **The bundled one** (whisper.cpp's server on the CPU): `mkdir -p data/voice`, put
   `KNOWLEDGE_STT_URL=http://voice:8000/v1` in `.env`, then `docker compose --profile voice up -d`. The first start
-  fetches the model (`Systran/faster-whisper-small`, ~500 MB) into `data/voice`; it then needs ~1 GB RAM and answers a
-  sentence in a few seconds on 4 cores. For better accuracy, a bigger model:
-  `KNOWLEDGE_STT_MODEL=deepdml/faster-whisper-large-v3-turbo-ct2` (slower on a CPU; with an NVIDIA GPU use the
-  `latest-cuda` image).
+  fetches the model (`small`, ~470 MB) into `data/voice`; it then needs ~1 GB RAM and answers a sentence in ~2.5 s
+  on 8 cores (measured 2 Nov 2026, Dutch). Another model: `KNOWLEDGE_VOICE_MODEL=large-v3-turbo` (most accurate,
+  ~1.6 GB, slower on a CPU), `base` or `tiny` (faster, more mistakes).
 - **A server you already run** (whisper.cpp's `whisper-server` started with `--inference-path /v1/audio/transcriptions`
   and `--convert`, LocalAI, speaches, …): its `/v1` base in `KNOWLEDGE_STT_URL`, its model name in
   `KNOWLEDGE_STT_MODEL` when it needs one.
