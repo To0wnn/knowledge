@@ -1872,6 +1872,7 @@ const ckSubInfo = (card) => (ck.chats.find((x) => x.id === card.meta.parent && x
 function ckSubWrap(card, text) {
   const s = ckSubInfo(card), name = s.label || "your subagent";
   if (card.meta.agent === "codex") return `Pass this on to your subagent "${name}" with send_input (thread ${s.aid || card.meta.sub}), then tell me what it answers:\n\n${text}`;
+  if (card.meta.agent === "agy") return `Pass this on to your subagent "${name}" with send_message (Recipient: ${s.aid || "its conversation"}), then tell me what it answers:\n\n${text}`;
   return `Pass this on to your subagent "${name}" with SendMessage (to: ${s.aid || card.meta.sub}) so it goes on with it, then tell me what it answers:\n\n${text}`;
 }
 async function ckSubPoll(card) {
@@ -1888,10 +1889,10 @@ async function ckSubPoll(card) {
   card.name.textContent = s.label || "Subagent";
   card.where.textContent = `Subagent of “${parent.title || "a chat"}” · ${AGENT_NAME[card.meta.agent] || card.meta.agent} · ${res.label}`;
   card.state.hidden = false; card.state.className = `ck-state ${s.status === "running" ? "running" : ""}`; card.state.textContent = s.status || "done";
-  const readOnly = card.meta.agent === "agy";
+  const readOnly = card.meta.agent === "agy" && !s.aid; // agy: its conversation id comes with the subagent's end
   card.input.disabled = card.send.disabled = readOnly || !res.online;
   card.stop.hidden = card.queueBtn.hidden = card.forceBtn.hidden = true; card.send.textContent = "Send";
-  if (!card.note.classList.contains("bad")) card.note.textContent = readOnly ? "agy offers no way to talk to its subagents: this chat is to read along." : "Your message goes to the main agent, which passes it on to this subagent.";
+  if (!card.note.classList.contains("bad")) card.note.textContent = readOnly ? "agy names this subagent's conversation once it has ended: then you can write to it here." : "Your message goes to the main agent, which passes it on to this subagent.";
 }
 function ckDrop(k) { ck.cards.delete(k); if (ck.view === k) ck.view = ""; }
 const CK_EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"]; // the server's EFFORTS, in order

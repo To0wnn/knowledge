@@ -279,7 +279,8 @@ def parse(agent: str, line: str, st: dict) -> list:
                 elif s.get("state") in ("DONE", "ERROR"):
                     subs = info.get("subagents") or [{}]
                     what = "; ".join(" ".join(str(x.get("initial_prompt") or x.get("role") or "").split()) for x in subs)
-                    out.append(("sub", what[:600] or "done", key, "failed" if s.get("state") == "ERROR" else "done"))
+                    conv = next((str(x["conversation_id"]) for x in subs if x.get("conversation_id")), "")  # send_message reaches it there
+                    out.append(("sub", what[:600] or "done", key, "failed" if s.get("state") == "ERROR" else "done", *([{"aid": conv}] if conv else [])))
             elif s.get("step_type") == "tool":
                 info = s.get("tool_info") or {}
                 if s.get("state") == "ACTIVE":
@@ -1594,6 +1595,8 @@ def self_test():
              '{"event":"step_update","step_update":{"step_index":3,"state":"DONE","step_type":"subagent","tool_name":"invoke_subagent","subagent_info":{"subagents":[{"role":"File Lister","initial_prompt":"List all files"}]}}}']
     ev = [e for ln in lines for e in parse("agy", ln, {})]
     assert ev == [("sub", "File Lister", "agy-step-3", "running"), ("sub", "List all files", "agy-step-3", "done")], ev
+    ev = parse("agy", '{"event":"step_update","step_update":{"step_index":4,"state":"DONE","step_type":"subagent","tool_name":"invoke_subagent","subagent_info":{"subagents":[{"role":"R","initial_prompt":"p","conversation_id":"8c48f0ff-fcfc"}]}}}', {})
+    assert ev == [("sub", "p", "agy-step-4", "done", {"aid": "8c48f0ff-fcfc"})], ev  # its own conversation: send_message reaches it
     assert merged([("text", "a"), ("sub", "s", "x", "running"), ("tool", "t", "x"), ("text", "b"), ("text", "c")]) == [
         {"kind": "text", "text": "a"}, {"kind": "sub", "text": "s", "sub": "x", "status": "running"}, {"kind": "tool", "text": "t", "sub": "x"}, {"kind": "text", "text": "bc"}]
     st = {}
