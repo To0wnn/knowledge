@@ -763,6 +763,8 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["chat"]["used"] == 50000, "a total (Codex app-server) replaces"
     http("POST", "/machine/chats/events", {"chat": mc, "events": [{"kind": "sub", "text": "found a.txt", "sub": "tu1", "status": "done"}]}, token=fr, headers=pc)
     assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["chat"]["subs"] == 1
+    http("POST", "/machine/chats/events", {"chat": mc, "events": [], "done": True, "running_subs": ["tu2"]}, token=fr, headers=pc)
+    assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["chat"]["subs"] == 1, "a background subagent the pc says still runs stays running"
     http("POST", "/machine/chats/events", {"chat": mc, "events": [], "done": True}, token=fr, headers=pc)
     assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["chat"]["subs"] == 0, "no subagent outlives its turn"
     # Close: off the board (and, in the page, the list), kept under Closed; not while a turn runs; a message opens it.
@@ -807,6 +809,11 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     # the agent starts by itself sets the chat running.
     http("POST", "/machine/report", {"version": "0.24.0", "live": ["claude", "bash"], "agents": {"codex": {}, "claude": {"models": [
         {"id": "opus", "name": "Opus", "efforts": ["low", "max"]}]}}, "folders": {"linked": [{"path": "/home/x/garden", "project": "garden"}]}}, token=fr, headers=pc)
+    wc = json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "claude", "folder": "/home/x/garden", "worktree": True})[2])["chat"]
+    assert wc["worktree"] is True and ui("/ui/api/chat/send", {"machine": mid, "id": wc["id"], "text": "own branch"})[0] == 200
+    item = next(w for w in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"] if w["chat"] == wc["id"])
+    assert item.get("worktree") is True, "the pc learns it works in its own worktree"
+    http("POST", "/machine/chats/events", {"chat": wc["id"], "events": [], "done": True}, token=fr, headers=pc)
     lc = json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "claude", "folder": "/home/x/garden"})[2])["chat"]["id"]
     assert ui("/ui/api/chat/send", {"machine": mid, "id": lc, "text": "work"})[0] == 200
     http("GET", "/machine/chats", token=fr, headers=pc)  # handed out: busy

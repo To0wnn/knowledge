@@ -5137,7 +5137,7 @@ def chat_meta(c: dict) -> dict:
             "sub_list": [{"id": k, "label": v.get("label", "subagent"), "status": (c.get("subs") or {}).get(k, "done"), **({"aid": v["aid"]} if v.get("aid") else {})}
                          for k, v in list((c.get("sub_info") or {}).items())[-20:]],
             "used": c.get("used", 0), "ctx": c.get("ctx", 0),  # the conversation's tokens so far, its context now
-            "model": c.get("model", ""), "effort": c.get("effort", ""),
+            "model": c.get("model", ""), "effort": c.get("effort", ""), "worktree": bool(c.get("worktree")),
             "waiting": len(c.get("pending") or [])}
 
 
@@ -5273,7 +5273,8 @@ async def ui_chats(request: Request):
     cid = secrets.token_hex(6)
     c = {"id": cid, "agent": agent, "folder": folder, "project": project, "title": "", "by": dev.get("user", ""), "created": now,
          "updated": now, "status": "idle", "session": "", "next": 0, "seen": 0, "events": [],
-         "tokens": [n for n in row["tokens"] if n in tokens and own_token(tokens[n], dev)]}
+         "tokens": [n for n in row["tokens"] if n in tokens and own_token(tokens[n], dev)],
+         **({"worktree": True} if b.get("worktree") is True else {})}  # its own git worktree and branch (chat/<id>) on the pc
 
     def create():
         d.mkdir(parents=True, exist_ok=True)
@@ -5921,14 +5922,15 @@ async def machine_chats(request: Request):
                     out["stop"].append(cid)
                 for m in e.pop("live", []):  # a live chat's message while it works: into its running agent (now or force)
                     out["work"].append({"chat": cid, "agent": c["agent"], "folder": c["folder"], "session": c.get("session", ""),
-                                        "model": c.get("model", ""), "effort": c.get("effort", ""), "allow": c.get("allow", []), **m})
+                                        "model": c.get("model", ""), "effort": c.get("effort", ""), "allow": c.get("allow", []),
+                                        **({"worktree": True} if c.get("worktree") else {}), **m})
                 if e.get("steer"):  # Force: once to the companion, which parks it for the running turn's hook
                     s = e.pop("steer")
                     out.setdefault("steer", []).extend({"chat": cid, **x} for x in (s if isinstance(s, list) else [s]))
             elif "msg" in e:
                 out["work"].append({"chat": cid, "agent": c["agent"], "folder": c["folder"], "session": c.get("session", ""),
                                     "model": c.get("model", ""), "effort": c.get("effort", ""),
-                                    "allow": c.get("allow", []), **e.pop("msg")})
+                                    "allow": c.get("allow", []), **({"worktree": True} if c.get("worktree") else {}), **e.pop("msg")})
                 e["busy"] = True
     if q_path.exists():
         await asyncio.to_thread(update_state, q_path, change)
@@ -6067,7 +6069,9 @@ async def machine_chat_events(request: Request):
                 c["pending"] = s[len(s) - left:] + c.get("pending", [])
         if b.get("done") is True:
             asks_settle(c, time.time(), "the turn ended")
-            c["subs"] = {k: ("done" if v == "running" else v) for k, v in (c.get("subs") or {}).items()}  # none outlives its turn
+            # none outlives its turn, but for those the companion says still run (a background subagent of a live chat)
+            keep = {x for x in b.get("running_subs") or [] if isinstance(x, str)} if isinstance(b.get("running_subs"), list) else set()
+            c["subs"] = {k: ("done" if v == "running" and k not in keep else v) for k, v in (c.get("subs") or {}).items()}
             if c.get("pending"):  # the next message the owner sent meanwhile: its turn now
                 nxt.append(c["pending"].pop(0))
                 c["status"] = "queued"

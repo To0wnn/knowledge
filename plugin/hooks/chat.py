@@ -1302,7 +1302,8 @@ class Live:
         self.taken = self.written  # a stop drops what was not taken: nothing more is owed
         if err:
             self.buf.append(("error", err))
-        self.flush(done=True, **({"error": err} if err else {}))
+        # a background subagent goes on after the turn: the server keeps it running
+        self.flush(done=True, **({"error": err} if err else {}), **({"running_subs": sorted(self.subs)} if self.subs and not err else {}))
 
     def gone(self):
         """The process ended (idle close, a crash, a kill): a turn that ran ends with it."""
@@ -1760,6 +1761,14 @@ def _start_live(item: dict, post, log, linked, yolo):
         with START_LOCK:
             if item.get("folder", "") not in linked():
                 raise RuntimeError(f"{item.get('folder', '')} is not a folder linked to a project on this pc")
+            if item.get("worktree"):  # its own git worktree and branch, made at its first message, reused after
+                where = workers.worktree(item["folder"], cid, prefix="chat")
+                if where.get("worktree") and not item.get("session") and cid not in LIVE:
+                    post({"chat": cid, "events": [{"kind": "info", "text": f"Works on branch {where['branch']} in its own worktree {where['worktree']}. "
+                                                   "Merge it yourself when it is done; Close leaves the branch and the worktree."}]})
+                elif not where.get("worktree") and not item.get("session") and cid not in LIVE:
+                    post({"chat": cid, "events": [{"kind": "info", "text": "The folder is not in a git repository: it works in the folder itself."}]})
+                item = {**item, "folder": where["cwd"]}
             lv = LIVE.get(cid)
             if lv and getattr(lv, "restarting", False):  # agy restarting for a Force: this goes along to the new one
                 lv.send(item, "")
