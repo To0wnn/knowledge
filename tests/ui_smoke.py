@@ -28,6 +28,7 @@ Read-only: it opens notes, it never edits or sends.
 from the vault plus the username; systemd-run does not see ~/.local/bin on PATH, hence the full path)
 """
 import asyncio
+import re
 import os
 import subprocess
 import sys
@@ -333,7 +334,7 @@ async def cockpit(browser, devices, secret: str) -> None:
     else:
         check(await pg.locator("#ck-canvas .ck-card, #ck-canvas .ck-empty").count() > 0, "cockpit shows chat cards or the empty canvas")
     pill = await pg.evaluate("[getComputedStyle($('ck-resets')).display, $('ck-resets').textContent]")
-    check(pill[0] == "none" and not pill[1] or pill[0] != "none" and pill[1].startswith("resets "), f"resets pill: a time from a companion's report, else hidden {pill}")
+    check(pill[0] == "none" and not pill[1] or pill[0] != "none" and re.search(r"\d+% · ", pill[1]), f"usage chips: per agent its % and reset time from a companion's report, else hidden {pill}")
     await pg.click("#ck-tools-menu summary")
     labels = await pg.locator("#ck-tools-menu .ck-tools [data-go]").all_inner_texts()
     check(len(labels) == 6 and "Mission map" in labels[0], f"cockpit tools menu lists its tools {labels}")
@@ -377,7 +378,11 @@ async def approvals(browser, devices, secret: str) -> None:
                       "expires": a["expires"], "once_only": a["once_only"], "full": len(a["detail"]) < 150}
     routes = {"/ui/api/board": {"items": [item(ask), item(push)], "now": now}, "/ui/api/chats": {"chats": [chat]},
               "/ui/api/chat": {"chat": chat, "events": [{"n": 1, "at": now, "kind": "user", "text": "Run the tests"},
-                                                        {"n": 2, "at": now, "kind": "ask", "text": "asks: Bash: npm test"}],
+                                                        {"n": 2, "at": now, "kind": "ask", "text": "asks: Bash: npm test"},
+                                                        {"n": 3, "at": now, "kind": "sub", "text": "Explore · find the tests", "sub": "tu1", "status": "running"},
+                                                        {"n": 4, "at": now, "kind": "tool", "text": "Bash: ls tests", "sub": "tu1"},
+                                                        {"n": 5, "at": now, "kind": "sub", "text": "Found **3** test files", "sub": "tu1", "status": "done"},
+                                                        {"n": 6, "at": now, "kind": "text", "text": "Running them now."}],
                                "trimmed": False, "online": True, "at": now, "label": "smoke-pc", "asks": [ask, push], "now": now}}
 
     async def fake(route):
@@ -416,6 +421,10 @@ async def approvals(browser, devices, secret: str) -> None:
         check(await pg.locator("#ck-canvas .ck-ask").count() == 2 and await pg.locator("#ck-canvas .ck-ask-what").first.text_content() == "npm test",
               "chat card: one approval block per waiting approval, the command as text")
         check(await pg.evaluate("document.documentElement.scrollWidth <= innerWidth"), "approvals fit the screen")
+        sub = await pg.evaluate("""(() => { const d = document.querySelector('#ck-canvas .ck-sub'); return d && [document.querySelectorAll('#ck-canvas .ck-sub').length,
+          d.querySelector('.ck-sub-label').textContent, d.querySelector('.ck-sub-tools').textContent, d.querySelector('.ck-sub-report strong')?.textContent,
+          d.querySelector('summary .chip').textContent, [...document.querySelectorAll('#ck-canvas .ck-msg.agent')].some(m => m.textContent.includes('Running them'))]; })()""")
+        check(sub and sub[:5] == [1, "Explore · find the tests", "Bash: ls tests", "3", "done"] and sub[5], f"chat: a subagent is one folded block with its tool line and report, apart from the answer {sub}")
         more = pg.locator("#ck-canvas .ck-ask").nth(1).locator("details.ck-ask-more")
         check(await more.count() == 1 and (await more.locator("code").text_content()).endswith("| sh"),
               "chat card: a long request is shown whole (folded), its end included")

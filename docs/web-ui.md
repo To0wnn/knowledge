@@ -7,9 +7,9 @@ Moved from the README; [back to the README](../README.md).
 - **Web UI:** one app shell: a sidebar (`[` folds it to an icon rail; below 1000 px it is the rail) with one project
   picker on top (keys 1-9, 0 = all; it scopes every view: Notes, Map, Inbox, Chats, Tasks and a new chat's folder; the
   Inbox badge still counts all), **Agents** (Inbox, Chats, Tasks, Machines) and **Knowledge** (Notes, Map, Changes,
-  Health = lint), This pc, Admin and Help;
+  Health = lint), This pc, Admin, Help and Settings (user menu: a new chat's default model);
   on a phone a bottom tab bar (Inbox, Chats, Tasks, Notes, More). Every view has its own URL (`#/inbox`, `#/notes/<path>`,
-  `#/map`, `#/tasks?view=flow`, …), so refresh, back and forward work; an old `#<path>` link opens the note.
+  `#/map`, `#/tasks?view=flow`, …), so refresh, back and forward work; an old `#<path>` link opens the note. The sidebar goes back to where you were in a view (its last route and scroll, per tab: sessionStorage `kn_routes`); clicking the view you are on goes to its start. Usage chips (Inbox, Chats) show each agent's fullest limit and reset time (Claude from its sessions and workers, Codex from its rollout or, without a session, `codex app-server` `account/rateLimits/read` every 15 min, agy from a running session).
   Ctrl/Cmd+K (or "Search or jump", or the phone's search icon) opens a command palette: notes by title, text and
   meaning, chats, tasks, every view and a few actions (new chat, theme, sidebar, mission flow), with arrow keys, Enter,
   Esc and your recent picks; `/` opens it for notes only, and "Search all notes" opens the search page

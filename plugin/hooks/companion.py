@@ -792,10 +792,72 @@ def usage_info(agent: str, ws: dict, now: float):
         return None
 
 
+CODEX_READ_EVERY = 900  # seconds between asking Codex for its limits without a session
+
+
+def codex_rate_read(now: float):
+    """Codex's limits when no session ran lately: `codex app-server`, then account/rateLimits/read (no prompt, no
+    tokens), in the background at most every CODEX_READ_EVERY; the last answer until then, None when unknown."""
+    f = STATE / "codex-rate.json"
+    try:
+        old = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        old = {}
+    if now - old.get("at", 0) >= CODEX_READ_EVERY:
+        write_json(f, {**old, "at": now})  # one read at a time
+        threading.Thread(target=_codex_rate_ask, args=(f,), daemon=True).start()
+    got = old.get("got")
+    return tuple(got) if got and got[2] and got[2] > now else None
+
+
+def _codex_rate_ask(f):
+    exe, got = shutil.which("codex"), None
+    if exe:
+        cmd = [exe, "app-server"]
+        if os.name == "nt" and exe.lower().endswith((".cmd", ".bat")):
+            cmd = workers.shim_line(cmd)
+        try:
+            p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8",
+                                 **({"creationflags": workers.WIN_FLAGS} if os.name == "nt" else {"start_new_session": True}))
+            lines = []
+            reader = threading.Thread(target=lambda: lines.extend(iter(p.stdout.readline, "")), daemon=True)
+            reader.start()
+            for m in ({"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "knowledge-companion-limits", "version": "1"}}},
+                      {"method": "initialized"}, {"id": 2, "method": "account/rateLimits/read"}):
+                p.stdin.write(json.dumps({"jsonrpc": "2.0", **m}) + "\n")
+            p.stdin.flush()
+            end = time.time() + 20
+            while time.time() < end and not any('"id": 2' in ln or '"id":2' in ln for ln in lines):
+                time.sleep(0.2)
+            with contextlib.suppress(OSError, ValueError):
+                p.stdin.close()  # EOF: the app-server ends by itself
+            try:
+                p.wait(timeout=5)
+            except subprocess.TimeoutExpired:  # else its whole tree (cmd.exe → node → codex on Windows), as a worker's stop does
+                workers.kill({"pid": p.pid, "ident": workers.identity(p.pid)}, hard=True)
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    p.wait(timeout=5)
+            for ln in lines:
+                try:
+                    m = json.loads(ln)
+                except ValueError:
+                    continue
+                if m.get("id") == 2:
+                    rl = (m.get("result") or {}).get("rateLimits") or {}
+                    got = agent_hooks.limits.worst([(agent_hooks.limits.label(v.get("windowDurationMins")), v.get("usedPercent"), v.get("resetsAt"))
+                                                    for v in (rl.get("primary"), rl.get("secondary")) if isinstance(v, dict)], time.time())
+        except (OSError, ValueError, TypeError):
+            got = None
+    try:
+        write_json(f, {"at": time.time(), "got": list(got) if got else None})
+    except OSError:
+        pass
+
+
 def usage_live(agent: str, ws: dict, now: float):
     """Claude the higher of its workers' own stream-json output (until that window resets) and an interactive Claude's
-    status line under 15 min old; Codex from its newest rollout of the last 15 min; agy from a registered agy's
-    language server."""
+    status line under 15 min old; Codex from its newest rollout of the last 15 min, else asked without a session
+    (codex_rate_read); agy from a registered agy's language server."""
     try:
         if agent == "claude":
             logs = sorted((Path(w["log"]) for w in ws.values() if w.get("agent") == "claude" and w.get("log") and Path(w["log"]).exists()),
@@ -808,7 +870,7 @@ def usage_live(agent: str, ws: dict, now: float):
             days = [time.localtime(now - d * 86400) for d in (0, 1)]
             files = [f for d in days for f in CODEX.glob(f"sessions/{d.tm_year:04d}/{d.tm_mon:02d}/{d.tm_mday:02d}/rollout-*.jsonl")
                      if now - f.stat().st_mtime < 900]
-            return agent_hooks.limits.codex_used(str(max(files, key=lambda f: f.stat().st_mtime)), now) if files else None
+            return (agent_hooks.limits.codex_used(str(max(files, key=lambda f: f.stat().st_mtime)), now) if files else None) or codex_rate_read(now)
         return agent_hooks.limits.agy_used(agent_hooks.agy_status(), now)
     except Exception:  # no numbers: unknown, which allows one worker
         return None
@@ -1589,13 +1651,18 @@ def worker_events(w: dict, frm: int, final: bool) -> tuple:
     lines = data[:end].decode("utf-8", "replace").splitlines()
     if start > frm:
         lines = lines[1:]  # the read began inside a line
-    st, out = {}, [("info", "Earlier output skipped: only the newest part is shown.")] if start > frm else []
+    # parse state per log, across reads: a subagent's hand-back in a later read still closes its block
+    st = PARSE_STATE.setdefault(str(w.get("log") or ""), {})
+    out = [("info", "Earlier output skipped: only the newest part is shown.")] if start > frm else []
     for line in lines:
         if w["agent"] == "agy" and not line.lstrip().startswith("{"):
             out += [("text", line + "\n")] if line.strip() else []
         else:
             out += chat.parse(w["agent"], line, st)
-    return [(k, mask(t)) for k, t in out], start + end
+    return [(k, mask(t), *rest) for k, t, *rest in out], start + end  # a subagent's id and state stay
+
+
+PARSE_STATE: dict = {}  # worker log -> chat.parse state (the subagents it opened)
 
 
 def send_worker(tok: str, key: str, w: dict, final: bool = False, extra: list = ()):

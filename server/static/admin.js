@@ -96,7 +96,7 @@ const pluginText = (p) => `${p.v}${p.behind ? " · behind" : ""}${p.checked ? ` 
 
 // The plugin version per agent this token reported at its last session start.
 function pluginCell(t, open) {
-  const td = el("td", "muted");
+  const td = el("td", "muted wrap");
   const own = new Set(open ? t.clients.map((c) => c.agent) : []);  // unfolded, those show it in their own rows
   const rest = (t.plugin || []).filter((p) => !own.has(p.agent));
   if (!rest.length) { td.textContent = "–"; return td; }
@@ -143,7 +143,7 @@ function renderTokens() {
       fold.onclick = () => { openClients.has(t.name) ? openClients.delete(t.name) : openClients.add(t.name); renderTokens(); };
       name.append(" ", fold);
     }
-    tr.append(name, accessCell(t, access), el("td", "", scopeText(t) + (t.redact ? " · secrets masked" : "")), skillsCell(t),
+    tr.append(name, accessCell(t, access), el("td", "wrap", scopeText(t) + (t.redact ? " · secrets masked" : "")), skillsCell(t),
       el("td", "muted", t.created ? `${day(t.created)}${t.by ? " · " + t.by : ""}` : "before the admin page"),
       el("td", t.last_used ? "muted" : "unused", t.last_used ? ago(t.last_used) : "never used"), pluginCell(t, open));
     const td = el("td"), b = el("button", "btn small danger", "Revoke");

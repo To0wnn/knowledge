@@ -1382,18 +1382,22 @@ async function ckSummary() {
   }
   ck.chats = cs.chats; ck.board = bd.items; ck.boardAt = Date.now(); inboxCount(ck.board);
   const now = Date.now() / 1000;
-  let live = ck.chats.filter((c) => ckBusy(c.status)).length, worst = null;
+  let live = ck.chats.filter((c) => ckBusy(c.status)).length;
+  const worst = {}; // per agent its fullest usage window over the pcs
   for (const m of ck.machines) for (const [a, ag] of Object.entries(m.agents || {})) {
     live += (ag.workers || []).filter((w) => w.status === "running").length + (ag.sessions || []).filter((s) => !s.worker && now - s.at < 600).length;
-    if (ag.limit != null && ag.resets > now && (!worst || ag.limit > worst.limit)) worst = { ...ag, agent: a, label: m.label };
+    if (ag.limit != null && ag.resets > now && (!worst[a] || ag.limit > worst[a].limit)) worst[a] = { ...ag, agent: a, label: m.label };
   }
   $("ck-live-n").textContent = live; $("ck-live").classList.toggle("on", live > 0);
-  $("ck-resets").hidden = !worst;
-  if (worst) {
-    const at = new Date(worst.resets * 1000), far = worst.resets - now > 86400; // a weekly window: say the day too
-    $("ck-resets").textContent = `resets ${far ? at.toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" }) : at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
-    $("ck-resets").title = `${AGENT_NAME[worst.agent] || worst.agent} on ${worst.label}: ${Math.round(worst.limit)}% of its usage limit used`;
-  }
+  // one chip per agent with a known limit: "Claude 82% · Mon 12:00"; amber from 80%, red from 95%
+  const chips = Object.values(worst).sort((a, b) => b.limit - a.limit).map((w) => {
+    const at = new Date(w.resets * 1000), far = w.resets - now > 86400; // a weekly or monthly window: say the day too
+    const when = far ? at.toLocaleString([], { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const c = el("span", `chip${w.limit >= 95 ? " bad" : w.limit >= 80 ? " warn" : ""}`, `${(AGENT_NAME[w.agent] || w.agent).replace(" Code", "")} ${Math.round(w.limit)}% · ${when}`);
+    c.title = `${AGENT_NAME[w.agent] || w.agent} on ${w.label}: ${Math.round(w.limit)}% of its usage limit used; resets ${at.toLocaleString()}`;
+    return c;
+  });
+  $("ck-resets").replaceChildren(...chips); $("ck-resets").hidden = !chips.length;
   for (const [k, card] of ck.cards) {
     if (card.worker) {
       const hit = ckFindWorker(`worker/${card.worker}`);
@@ -1412,7 +1416,7 @@ async function ckSummary() {
     else if (hit) ck.view = ckKey(ckWorkerCard(hit.m, hit.w).meta);
     else { // gone or never there: the list, without a dead chat in the URL
       ck.view = "";
-      if (shellRoute.view === "chats" && shellRoute.arg) { history.replaceState(history.state, "", "#/chats"); shellRoute = { ...shellRoute, arg: "" }; }
+      if (shellRoute.view === "chats" && shellRoute.arg) { history.replaceState(history.state, "", "#/chats"); shellRoute = { ...shellRoute, arg: "" }; lastRoute.chats = "#/chats"; }
     }
   }
   ckHistory(); ckBoard(); ckLayout();
@@ -1575,6 +1579,7 @@ function ckItem(i) {
   main.type = "button"; card.dataset.key = i.key || "";
   top.append(el("span", "ck-mark", AGENT_MARK[i.agent] || (i.owner || "?")[0].toUpperCase()), el("strong", null, i.kind === "ask" ? ckUnbidi(i.title) : i.title));
   if (i.overdue) top.append(el("span", "chip bad", "overdue"));
+  if (i.subs) { const s = el("span", "chip live", `${i.subs} subagent${i.subs > 1 ? "s" : ""}`); s.title = "Subagents of this chat running now"; top.append(s); }
   const where = [i.kind === "review" ? `review · ${AGENT_NAME[i.agent] || i.agent}` : i.kind === "worker" ? "worker" : i.kind === "task" ? (i.result ? "result" : `task for ${i.owner}`) : i.kind === "ask" ? "approval" : "", i.label, ckShort(i.folder),
     i.due && !i.result ? `due ${i.due}` : "", i.at ? ago(i.at) : ""];
   main.append(top, el("span", "ck-item-where", where.filter(Boolean).join(" · ")), el("span", "ck-item-line", i.line));
@@ -1766,6 +1771,58 @@ function ckCard(meta) {
   ck.cards.set(k, card); ckPaint(card);
   return card;
 }
+// The chat list's width: drag its edge (or arrow keys on it); kept in the browser.
+{
+  const box = $("ck-chats"), bar = $("ck-resize"), clamp = (w) => Math.max(200, Math.min(640, Math.round(w)));
+  const set = (w, keep = true) => { box.style.setProperty("--ck-list", `${w}px`); bar.setAttribute("aria-valuenow", w); if (keep) store.set("kn_ck_list", w); };
+  set(clamp(+store.get("kn_ck_list") || 300), false);
+  bar.setAttribute("aria-valuemin", 200); bar.setAttribute("aria-valuemax", 640);
+  bar.addEventListener("pointerdown", (e) => {
+    e.preventDefault(); bar.setPointerCapture(e.pointerId); bar.classList.add("drag");
+    const left = box.getBoundingClientRect().left;
+    const move = (m) => set(clamp(m.clientX - left));
+    const stop = () => { bar.removeEventListener("pointermove", move); bar.classList.remove("drag"); };
+    bar.addEventListener("pointermove", move);
+    bar.addEventListener("pointerup", stop, { once: true });
+    bar.addEventListener("pointercancel", stop, { once: true }); // a touch the browser took over: no move left behind
+  });
+  bar.addEventListener("keydown", (e) => {
+    const w = +bar.getAttribute("aria-valuenow");
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") { e.preventDefault(); set(clamp(w + (e.key === "ArrowRight" ? 20 : -20))); }
+  });
+  bar.addEventListener("dblclick", () => set(300));
+}
+// Settings (#/settings): the person's own choices, kept on the server (/ui/api/me/prefs). Now: the model a new chat
+// starts with ("" = the one used last), from the models the pcs online now offer.
+async function loadSettings() {
+  if (!ck.machines.length) await ckSummary().catch(() => {});
+  const cat = ckCatalog(ck.machines.filter((m) => m.online)), sel = $("set-model"), eff = $("set-effort");
+  const now = me.prefs?.chat_default, key = (x) => `${x.agent}/${x.id}`;
+  sel.replaceChildren(new Option("The one I used last", ""));
+  for (const fam of [...new Set(cat.map((m) => ckFamily(m.id)))]) {
+    const g = document.createElement("optgroup"); g.label = fam;
+    for (const m of cat.filter((y) => ckFamily(y.id) === fam)) g.append(new Option(`${m.name} · ${AGENT_NAME[m.agent] || m.agent}`, key(m)));
+    sel.append(g);
+  }
+  if (now && !cat.some((m) => key(m) === key(now))) sel.append(new Option(`${now.id || "own model"} · ${AGENT_NAME[now.agent] || now.agent} (no pc online offers it now)`, key(now)));
+  sel.value = now ? key(now) : "";
+  const fill = (want) => {
+    const m = cat.find((y) => key(y) === sel.value), lv = m ? levels(m) : [];
+    eff.replaceChildren(new Option("auto (the agent's setting)", ""), ...lv.map((e) => new Option(e === m.default ? `${e} (this model's default)` : e, e)));
+    eff.value = lv.includes(want) ? want : m?.default || "";
+    eff.disabled = !lv.length;
+  };
+  fill(now?.effort || "");
+  sel.onchange = () => fill("");
+  $("set-chat").onsubmit = async (e) => {
+    e.preventDefault();
+    const [agent, ...id] = sel.value.split("/"), chat_default = sel.value ? { agent, id: id.join("/"), effort: eff.value } : null;
+    try {
+      const res = await api("/ui/api/me/prefs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chat_default }) });
+      me.prefs = res.prefs; toast("Saved", false);
+    } catch (err) { toast(err.message, true); }
+  };
+}
 function ckDrop(k) { ck.cards.delete(k); if (ck.view === k) ck.view = ""; }
 const CK_EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"]; // the server's EFFORTS, in order
 // The model picker: one chip under the box ("Opus · high ▾"), a panel with the models grouped by family and the chosen
@@ -1793,7 +1850,10 @@ function ckPicker(card) {
   card.catalog = ckCatalog(draft ? ckDraftPcs() : mine ? [mine] : []);
   if (!draft && !card.catalog.some((x) => x.agent === card.meta.agent)) { card.picks.hidden = true; return; }
   if (!card.pick?.touched) {
-    const saved = draft ? JSON.parse(store.get("kn_chat_pick") || "null") : { agent: card.meta.agent, id: card.meta.model || "", effort: card.meta.effort || "" };
+    const last = JSON.parse(store.get("kn_chat_pick") || "null"), pref = me.prefs?.chat_default;
+    const offered = (x) => x && card.catalog.some((y) => y.agent === x.agent && y.id === x.id);
+    const saved = draft ? (offered(pref) ? pref : last) // Settings, else (or when no pc online runs it) the last one used
+      : { agent: card.meta.agent, id: card.meta.model || "", effort: card.meta.effort || "" };
     const hit = saved && card.catalog.find((x) => x.agent === saved.agent && x.id === saved.id);
     const ok = hit || (!draft && saved.id === ""), first = draft ? card.catalog.find((x) => x.agent === "claude") || card.catalog[0] : null;
     card.pick = ok ? { ...saved, effort: !hit || levels(hit).includes(saved.effort) ? saved.effort : hit.default || "" }
@@ -1976,6 +2036,7 @@ function ckEvents(card, res) {
     if (e.n <= card.after) continue; // two polls crossed (board + chat): never append an event twice
     card.after = Math.max(card.after, e.n);
     const last = card.log.lastElementChild;
+    if (e.sub) { ckSub(card, e); continue; }
     if (e.kind === "text") { // Markdown, sanitized as a note is (DOMPurify): an agent's output never becomes script
       const msg = last && last.classList.contains("agent") ? last : card.log.appendChild(el("div", "ck-msg agent md"));
       msg.dataset.raw = (msg.dataset.raw || "") + e.text;
@@ -1986,6 +2047,30 @@ function ckEvents(card, res) {
     const hasUser = res.events.some((e) => e.kind === "user");
     if (near || hasUser) ckScrollBottom(card, hasUser);
   }
+}
+
+// A subagent in the log: one folded block per subagent (its task, running/done, its tool calls, its report), so its
+// work never mixes into the agent's own answer. Text only (textContent); its report is Markdown like any answer.
+function ckSub(card, e) {
+  card.subs = card.subs || new Map();
+  let b = card.subs.get(e.sub);
+  if (!b) {
+    const d = el("details", "ck-sub"), sum = el("summary"), label = el("span", "ck-sub-label", e.kind === "sub" ? e.text : "subagent"), st = el("span", "chip");
+    sum.append(el("span", "ck-sub-tag", "Subagent"), label, st);
+    const tools = el("div", "ck-sub-tools"), report = el("div", "ck-sub-report md");
+    d.append(sum, tools, report);
+    card.log.append(d);
+    b = { d, label, st, tools, report };
+    card.subs.set(e.sub, b);
+  }
+  if (e.kind === "sub" && e.status === "running") b.label.textContent = e.text;
+  else if (e.kind === "sub") report(b, e);
+  else b.tools.append(el("div", `ck-line ${e.kind}`, e.text));
+  const status = e.kind === "sub" ? e.status || "running" : b.status || "running";
+  b.status = status; b.d.classList.toggle("running", status === "running");
+  b.st.className = `chip${status === "failed" ? " bad" : status === "done" ? "" : " live"}`;
+  b.st.textContent = status === "running" ? "running" : status;
+  function report(x, ev) { x.report.innerHTML = renderMd(ev.text); }
 }
 
 // Follow a worker (#/chats/worker/<project>/<ID>): a worker is a chat nobody types in. Its card is a chat card whose
@@ -2034,7 +2119,7 @@ async function ckWorkerPoll(card) {
   let res;
   try { res = await api(`/ui/api/worker?machine=${card.meta.machine}&worker=${encodeURIComponent(card.worker)}&after=${card.after}${ck.view === ckKey(card.meta) ? "" : "&peek=1"}`); }
   catch (e) { card.note.className = "ck-note bad"; card.note.textContent = e.message; return; }
-  if (card.started !== undefined && res.worker.started !== card.started) { card.log.replaceChildren(); card.after = 0; } // a new run of the task
+  if (card.started !== undefined && res.worker.started !== card.started) { card.log.replaceChildren(); card.after = 0; card.subs = null; } // a new run of the task
   card.started = res.worker.started; card.w = { ...card.w, ...res.worker };
   card.meta = { ...card.meta, status: res.worker.status, label: res.label }; card.online = res.online; card.at = res.at;
   ckEvents(card, res);

@@ -3615,7 +3615,38 @@ async def ui_me(request: Request):
     return JSONResponse({"user": dev.get("user"), "admin": bool(dev.get("admin")), "projects": projects,
                          "labels": {p: labels[p] for p in projects if p in labels},
                          "writable": [p for p in projects if wr is None or PROJECTS[p][1] in wr],
-                         "sections": list(kb_lint.STRUCTURE)})  # a new memo's two sections in the server's language
+                         "sections": list(kb_lint.STRUCTURE),  # a new memo's two sections in the server's language
+                         "prefs": read_json(PREFS_FILE, {}).get(dev.get("user") or "", {})})
+
+
+PREFS_FILE = ADMIN_DIR / "user_prefs.json"  # per person, set on the Settings page: {user: {chat_default: {agent, id, effort}}}
+
+
+@server.custom_route("/ui/api/me/prefs", methods=["POST"])
+async def ui_me_prefs(request: Request):
+    """{chat_default: {agent, id, effort} | null}: the model a new chat starts with, for this person on every device
+    ("" id or effort = the agent's own). Checked for shape only: a pc that does not run it falls back in the page."""
+    user = device.get().get("user") or ""
+    try:
+        b = await request.json()
+        d = b.get("chat_default")
+        if d is not None and not (isinstance(d, dict) and d.get("agent") in AGENT_OWNERS
+                                  and (d.get("id") == "" or MODEL_ID.fullmatch(str(d.get("id", ""))))
+                                  and d.get("effort", "") in ("", *EFFORTS)):
+            raise ValueError("chat_default is {agent, id, effort}")
+    except (ValueError, AttributeError, TypeError) as e:
+        return JSONResponse({"error": str(e) or "bad request"}, status_code=400)
+    if not user:
+        return JSONResponse({"error": "sign in first"}, status_code=403)
+
+    def change(all_prefs):
+        mine = all_prefs.setdefault(user, {})
+        if d is None:
+            mine.pop("chat_default", None)
+        else:
+            mine["chat_default"] = {"agent": d["agent"], "id": d.get("id", ""), "effort": d.get("effort", "")}
+    await asyncio.to_thread(update_state, PREFS_FILE, change)
+    return JSONResponse({"ok": True, "prefs": read_json(PREFS_FILE, {}).get(user, {})})
 
 
 # ---------------------------------------------------------------- admin: users, projects, tokens (admins only)
@@ -4946,7 +4977,31 @@ def chat_choice(row: dict, agent: str, model: str, effort: str) -> tuple:
     if effort and effort not in levels:
         raise ValueError(f"effort {effort} is not one {agent} offers here" + (f" for {model}" if model else ""))
     return model, effort
-CHAT_KINDS = ("text", "tool", "refused", "error", "info")
+CHAT_KINDS = ("text", "tool", "refused", "error", "info", "sub")  # sub: a subagent opens or ends (its id in "sub")
+SUB_ID = re.compile(r"[\w.:-]{1,120}")
+SUB_STATES = ("running", "done", "failed")
+
+
+def chat_events(b: dict) -> list:
+    """A batch's events as (kind, text, extra): extra keeps a subagent's id ("sub") and, on a sub event, its status.
+    Raises ValueError on an unknown kind."""
+    out = [(str(e.get("kind")), str(e.get("text", "")),
+            {**({"sub": str(e["sub"])} if SUB_ID.fullmatch(str(e.get("sub") or "")) else {}),
+             **({"status": e["status"]} if e.get("kind") == "sub" and e.get("status") in SUB_STATES else {})})
+           for e in (b.get("events") or [])[:500] if isinstance(e, dict)]
+    if bad := [k for k, _, _ in out if k not in CHAT_KINDS]:
+        raise ValueError(f"kind must be one of {', '.join(CHAT_KINDS)}, not {bad[0][:20]}")
+    return out
+
+
+def note_subs(c: dict, kind: str, extra: dict):
+    """Keep which subagents of a chat or worker run now (the board counts them), the last 50."""
+    if kind == "sub" and extra.get("sub") and extra.get("status"):
+        subs = c.setdefault("subs", {})
+        subs.pop(extra["sub"], None)
+        subs[extra["sub"]] = extra["status"]
+        for old in list(subs)[:-50]:
+            subs.pop(old)
 ASK_DETAIL = 4000  # characters of a tool call the owner sees whole; a longer one can only be allowed once
 CHAT_ASK_MINUTES = 30  # a tool approval waits this long for its owner, then counts as denied (admin page, Settings)
 ASK_DECISIONS = ("once", "chat", "deny")
@@ -4961,6 +5016,7 @@ def chat_file(mid: str, cid: str) -> Path:
 
 def chat_meta(c: dict) -> dict:
     return {**{k: c.get(k) for k in ("id", "agent", "folder", "project", "title", "by", "created", "updated", "status", "session")},
+            "subs": sum(1 for s in (c.get("subs") or {}).values() if s == "running"),  # subagents running now
             "model": c.get("model", ""), "effort": c.get("effort", ""),
             "waiting": len(c.get("pending") or [])}
 
@@ -4999,10 +5055,10 @@ def asks_settle(c: dict, now: float, why: str = ""):
                      f"Approval for {a['tool']} withdrawn: {why}.")
 
 
-def chat_add(c: dict, kind: str, text: str, events: int = CHAT_EVENTS, size_cap: int = CHAT_BYTES):
-    """One event, within the caps: the oldest events go first (the chat says so)."""
+def chat_add(c: dict, kind: str, text: str, events: int = CHAT_EVENTS, size_cap: int = CHAT_BYTES, extra: dict | None = None):
+    """One event, within the caps: the oldest events go first (the chat says so). extra: a subagent's {sub, status}."""
     c["next"] = c.get("next", 0) + 1
-    c.setdefault("events", []).append({"n": c["next"], "at": time.time(), "kind": kind, "text": text[:CHAT_TEXT]})
+    c.setdefault("events", []).append({"n": c["next"], "at": time.time(), "kind": kind, "text": text[:CHAT_TEXT], **(extra or {})})
     size = sum(len(e["text"]) + 60 for e in c["events"])
     while len(c["events"]) > events or size > size_cap:
         size -= len(c["events"].pop(0)["text"]) + 60
@@ -5140,7 +5196,8 @@ def board_items() -> list[dict]:
                 items.append({**base, "kind": "chat", "col": col, "id": c["id"], "agent": c.get("agent"), "project": c.get("project"),
                               "key": f"chat:{r['id']}/{c['id']}", "sig": str(c.get("next", 0)),
                               "title": c.get("title") or "New chat", "folder": c.get("folder"), "at": c.get("updated") or 0,
-                              "line": line, "git": git.get(c.get("folder"))})
+                              "line": line, "git": git.get(c.get("folder")),
+                              "subs": sum(1 for s in (c.get("subs") or {}).values() if s == "running")})
             for a in asks_open(c, now):  # one Needs-you item per open approval, answered right there
                 items.append({**base, "kind": "ask", "col": "needs", "id": a["id"], "chat": c["id"], "agent": c.get("agent"),
                               "project": c.get("project"), "key": f"ask:{r['id']}/{c['id']}/{a['id']}", "sig": a["id"],
@@ -5701,9 +5758,7 @@ async def machine_chat_events(request: Request):
     try:
         b = await request.json()
         f = chat_file(dev.get("machine", ""), str(b.get("chat", "")))
-        events = [(str(e.get("kind")), str(e.get("text", ""))) for e in (b.get("events") or [])[:500]]
-        if bad := [k for k, _ in events if k not in CHAT_KINDS]:
-            raise ValueError(f"kind must be one of {', '.join(CHAT_KINDS)}, not {bad[0][:20]}")
+        events = chat_events(b)
     except (ValueError, AttributeError, TypeError) as e:
         return JSONResponse({"error": str(e) or "send JSON {chat, events}"}, status_code=400)
     c = await asyncio.to_thread(read_json, f, None)
@@ -5711,14 +5766,16 @@ async def machine_chat_events(request: Request):
         return JSONResponse({"error": "not a chat of this machine"}, status_code=404)
 
     def change(c):
-        for k, t in events:
+        for k, t, extra in events:
             if contains_secret(t):
                 t = "(withheld: contains a known secret value)"
-            chat_add(c, k, t)
+            note_subs(c, k, extra)
+            chat_add(c, k, t, extra=extra)
         if isinstance(b.get("session"), str) and re.fullmatch(r"[\w.:-]{1,120}", b["session"]):
             c["session"] = b["session"]
         if b.get("done") is True:
             asks_settle(c, time.time(), "the turn ended")
+            c["subs"] = {k: ("done" if v == "running" else v) for k, v in (c.get("subs") or {}).items()}  # none outlives its turn
             if c.get("pending"):  # the next message the owner sent meanwhile: its turn now
                 nxt.append(c["pending"].pop(0))
                 c["status"] = "queued"
@@ -5806,9 +5863,7 @@ async def machine_chat_worker(request: Request):
         key, mid = str(b.get("worker", "")), dev.get("machine", "")
         f = worker_file(mid, key)
         started = b.get("started") if isinstance(b.get("started"), (int, float)) else 0
-        events = [(str(e.get("kind")), str(e.get("text", ""))) for e in (b.get("events") or [])[:500]]
-        if bad := [k for k, _ in events if k not in CHAT_KINDS]:
-            raise ValueError(f"kind must be one of {', '.join(CHAT_KINDS)}, not {bad[0][:20]}")
+        events = chat_events(b)
     except (ValueError, AttributeError, TypeError) as e:
         return JSONResponse({"error": str(e) or "send JSON {worker, events}"}, status_code=400)
     # only the token this machine's companion reports with (the one whose workers the Machines list shows)
@@ -5820,10 +5875,12 @@ async def machine_chat_worker(request: Request):
             c.clear()
             c.update(key=key, started=started, next=0, events=[])
         c.update(agent=str(b.get("agent") or "")[:20], status=str(b.get("status") or "")[:20])
-        for k, t in events:
-            chat_add(c, k, redact(t), WORKER_EVENTS, WORKER_BYTES)
+        for k, t, extra in events:
+            note_subs(c, k, extra)
+            chat_add(c, k, redact(t), WORKER_EVENTS, WORKER_BYTES, extra=extra)
         if b.get("done") is True:
             c["ended"] = time.time()
+            c["subs"] = {k: ("done" if v == "running" else v) for k, v in (c.get("subs") or {}).items()}
 
     def save():
         f.parent.mkdir(parents=True, exist_ok=True)

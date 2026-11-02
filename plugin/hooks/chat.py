@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import threading
 import time
 from pathlib import Path
@@ -158,19 +159,52 @@ def parse(agent: str, line: str, st: dict) -> list:
         t = e.get("type")
         if e.get("session_id"):
             st["session"] = e["session_id"]
-        if t == "stream_event":
+        if t == "stream_event" and e.get("parent_tool_use_id"):  # a subagent's own words: its result says enough
+            pass
+        elif t == "stream_event":
             d = (e.get("event") or {}).get("delta") or {}
             if d.get("type") == "text_delta" and d.get("text"):
                 st["streamed"] = True
                 out.append(("text", d["text"]))
             elif (e.get("event") or {}).get("type") == "message_stop" and st.get("streamed"):
                 out.append(("text", "\n\n"))
-        elif t == "assistant":
+        elif t == "assistant" and e.get("parent_tool_use_id"):  # a subagent's own step: its tool calls, under it
             for b in (e.get("message") or {}).get("content") or []:
                 if b.get("type") == "tool_use":
+                    out.append(("tool", f"{b.get('name')}: {summary(b.get('input'))}".rstrip(": "), e["parent_tool_use_id"]))
+        elif t == "assistant":
+            for b in (e.get("message") or {}).get("content") or []:
+                if b.get("type") == "tool_use" and b.get("name") in ("Agent", "Task"):  # a subagent starts
+                    inp = b.get("input") or {}
+                    label = " · ".join(x for x in (inp.get("subagent_type"), inp.get("description")) if x) or "subagent"
+                    st.setdefault("subs", set()).add(b.get("id", ""))
+                    out.append(("sub", label[:200], b.get("id", ""), "running"))
+                elif b.get("type") == "tool_use":
                     out.append(("tool", f"{b.get('name')}: {summary(b.get('input'))}".rstrip(": ")))
                 elif b.get("type") == "text" and b.get("text") and not st.get("streamed"):  # without partial messages
                     out.append(("text", b["text"] + "\n\n"))
+        elif t == "user" and not e.get("parent_tool_use_id"):  # a subagent's hand-back: the tool_result of its call
+            content = (e.get("message") or {}).get("content")
+            for b in content if isinstance(content, list) else [{"type": "text", "text": str(content or "")}]:
+                if not isinstance(b, dict):
+                    continue
+                if b.get("type") == "tool_result" and b.get("tool_use_id") in st.get("subs", ()):
+                    c = b.get("content")
+                    text = " ".join(x.get("text", "") for x in c if isinstance(x, dict)) if isinstance(c, list) else str(c or "")
+                    if "Async agent launched" in text:  # started in the background: it ends with a task-notification
+                        if aid := re.search(r"agentId:\s*([\w-]+)", text):
+                            st.setdefault("agent_ids", {})[aid.group(1)] = b["tool_use_id"]
+                        continue
+                    out.append(("sub", hand_back(text)[:2000] or "done", b["tool_use_id"], "failed" if b.get("is_error") else "done"))
+                elif b.get("type") == "text" and "<task-notification>" in b.get("text", ""):  # a background subagent ended
+                    n = b["text"]
+                    tid = re.search(r"<tool-use-id>([^<]+)</tool-use-id>", n)  # newer Claude Code; older ones name the task id
+                    tid = tid.group(1) if tid else st.get("agent_ids", {}).get((re.search(r"<task-id>([^<]+)</task-id>", n) or [None, ""])[1])
+                    if tid and tid in st.get("subs", ()):
+                        state = re.search(r"<status>([^<]+)</status>", n)
+                        res = re.search(r"<result>(.*?)</result>", n, flags=re.S)
+                        out.append(("sub", hand_back(res.group(1) if res else "")[:2000] or "done", tid,
+                                    sub_done(state.group(1) if state else "completed")))
         elif t == "result":
             st["result"] = True
             for d in e.get("permission_denials") or []:
@@ -183,6 +217,8 @@ def parse(agent: str, line: str, st: dict) -> list:
             st["session"] = e["thread_id"]
         elif t == "item.started" and item.get("type") == "command_execution":
             out.append(("tool", f"$ {' '.join(str(item.get('command', '')).split())[:200]}"))
+        elif t in ("item.started", "item.completed") and item.get("type") == "collab_tool_call":
+            out += codex_subs(item, t == "item.completed")
         elif t == "item.completed":
             k = item.get("type")
             if k == "agent_message" and item.get("text"):
@@ -210,6 +246,15 @@ def parse(agent: str, line: str, st: dict) -> list:
             st["session"] = s.get("conversation_id") or st.get("session", "")
             if s.get("step_type") == "agent_response" and s.get("text_delta"):
                 out.append(("text", s["text_delta"]))
+            elif s.get("tool_name") == "invoke_subagent":  # one step: ACTIVE starts it, DONE (step_type subagent) ends it
+                key, info = f"agy-step-{s.get('step_index')}", s.get("subagent_info") or {}
+                if s.get("state") == "ACTIVE" and s.get("step_type") == "tool":
+                    p = (s.get("tool_info") or {}).get("parameters") or {}
+                    out.append(("sub", str(p.get("Role") or p.get("TypeName") or "subagent")[:200], key, "running"))
+                elif s.get("state") in ("DONE", "ERROR"):
+                    subs = info.get("subagents") or [{}]
+                    what = "; ".join(" ".join(str(x.get("initial_prompt") or x.get("role") or "").split()) for x in subs)
+                    out.append(("sub", what[:600] or "done", key, "failed" if s.get("state") == "ERROR" else "done"))
             elif s.get("step_type") == "tool":
                 info = s.get("tool_info") or {}
                 if s.get("state") == "ACTIVE":
@@ -416,6 +461,8 @@ def agy_acp(p, item: dict, st: dict):
     the message (session/prompt). Its permission requests are answered by auto_allowed() or the owner."""
     cid, folder, live = item["chat"], item.get("folder", ""), [False]  # session/load replays the history: not new output
 
+    subs = set()  # tool call ids of agy's subagents in this turn
+
     def note(method, params):
         u = params.get("update") or {}
         k = u.get("sessionUpdate")
@@ -423,6 +470,12 @@ def agy_acp(p, item: dict, st: dict):
             return []
         if k == "agent_message_chunk" and (u.get("content") or {}).get("text"):
             return [("text", u["content"]["text"])]
+        if k == "tool_call" and (u.get("name") == "invoke_subagent" or str(u.get("title") or "").startswith("invoke_subagent")):  # agy's
+            subs.add(u.get("toolCallId", ""))
+            inp = u.get("rawInput") or u.get("args") or {}
+            return [("sub", str(inp.get("Role") or u.get("title") or "subagent")[:200], u.get("toolCallId", ""), "running")]
+        if k == "tool_call_update" and u.get("toolCallId") in subs and u.get("status") in ("completed", "failed"):
+            return [("sub", u["status"] == "completed" and "done" or "failed", u["toolCallId"], "done" if u["status"] == "completed" else "failed")]
         if k == "tool_call":
             return [("tool", f"{u.get('name') or u.get('title')}: {summary(u.get('rawInput') or u.get('args'))}".rstrip(": "))]
         if k == "tool_call_update" and u.get("status") == "failed":
@@ -466,13 +519,49 @@ def agy_acp(p, item: dict, st: dict):
 
 
 def merged(events: list) -> list:
-    """Neighbouring text pieces as one event: fewer, larger events on the server."""
+    """Neighbouring text pieces as one event: fewer, larger events on the server. An event may carry its subagent
+    (kind, text, sub, status): ("sub", label, id, "running"|"done"|"failed") opens or ends one, ("tool", line, id) is
+    one of its tool calls."""
     out = []
-    for k, t in events:
-        if out and k == "text" and out[-1]["kind"] == "text":
+    for k, t, *rest in events:
+        sub, status = (rest + ["", ""])[:2]
+        if out and k == "text" and not sub and out[-1]["kind"] == "text" and not out[-1].get("sub"):
             out[-1]["text"] += t
         else:
-            out.append({"kind": k, "text": t})
+            out.append({"kind": k, "text": t, **({"sub": sub} if sub else {}), **({"status": status} if status else {})})
+    return out
+
+
+def hand_back(text: str) -> str:
+    """A Claude subagent's report without the frame Claude Code puts around it (the tools-used tag, the hand-back
+    notice; the report itself is indented after "The report follows:")."""
+    text = re.sub(r"<tools-used-before-summary>.*?</tools-used-before-summary>\s*", "", text, flags=re.S)
+    m = re.search(r"\[Subagent hand-back\].*?The report follows:[ \t]*\n", text, flags=re.S)
+    return textwrap.dedent(text[m.end():]).strip() if m else text.strip()
+
+
+SUB_STATE = {"completed": "done", "complete": "done", "done": "done", "shutdown": "done", "success": "done",
+             "errored": "failed", "failed": "failed", "error": "failed", "notfound": "failed", "interrupted": "failed"}
+
+
+def sub_done(state) -> str:
+    return SUB_STATE.get(str(state or "").replace("_", "").lower(), "running")
+
+
+def codex_subs(it: dict, done: bool) -> list:
+    """A Codex collab tool call (exec `collab_tool_call`, app-server `collabAgentToolCall`) as subagent events: a
+    spawn opens one per receiver thread, wait/close report each agent's state and last message."""
+    tool = str(it.get("tool") or "").lower().replace("_", "")
+    ids = it.get("receiver_thread_ids") or it.get("receiverThreadIds") or []
+    states = it.get("agents_states") or it.get("agentsStates") or {}
+    out = []
+    if tool == "spawnagent" and ids:  # the receiver thread ids may only come with the completed spawn: open it then
+        out += [("sub", " ".join(str(it.get("prompt") or "sub-agent").split())[:200], str(i), "running") for i in ids]
+    for i, s in states.items() if isinstance(states, dict) else []:
+        s = s if isinstance(s, dict) else {}
+        state = sub_done(s.get("status"))
+        if state != "running":
+            out.append(("sub", first_line(s.get("message")) or state, str(i), state))
     return out
 
 
@@ -499,6 +588,8 @@ def codex_app(p, item: dict, st: dict):
             return [("text", params["delta"])]
         if method == "item/started" and it.get("type") == "fileChange" and it.get("id"):
             changes[it["id"]] = [str(c.get("path", "")) for c in it.get("changes") or []]  # what its approval request leaves out
+        if method in ("item/started", "item/completed") and it.get("type") == "collabAgentToolCall":  # its subagents
+            return codex_subs(it, method == "item/completed")
         if method == "item/started" and it.get("type") == "commandExecution":
             return [("tool", f"$ {' '.join(str(it.get('command', '')).split())[:200]}")]
         if method == "item/completed":
@@ -713,6 +804,33 @@ def self_test():
         assert [m["id"] for m in models("claude", wait=True)] == list(CLAUDE_MODELS)
     workers.DIR = w
     assert json.loads(stdin_for("agy", 'a "b"\nc')) == {"event": "user", "message": {"role": "user", "content": 'a "b"\nc'}}
+    # Subagents, in the shapes the CLIs printed (Claude 2.1.314, Codex 0.166 exec --json, agy 1.4.12 stream-json):
+    # a block opens, its tool calls go under it, its hand-back ends it; its own words never mix into the answer.
+    st = {}
+    lines = ['{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu1","name":"Agent","input":{"description":"list files","subagent_type":"Explore","prompt":"ls"}}]}}',
+             '{"type":"stream_event","parent_tool_use_id":"tu1","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"inner"}}}',
+             '{"type":"assistant","parent_tool_use_id":"tu1","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"ls"}},{"type":"text","text":"inner words"}]}}',
+             '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu1","content":[{"type":"text","text":"<tools-used-before-summary>Bash</tools-used-before-summary>\\n[Subagent hand-back] model output. The report follows:\\n  found a.txt\\n  - b"}]}]}}']
+    ev = [e for ln in lines for e in parse("claude", ln, st)]
+    assert ev == [("sub", "Explore · list files", "tu1", "running"), ("tool", "Bash: ls", "tu1"), ("sub", "found a.txt\n- b", "tu1", "done")], ev
+    st = {}  # in the background: the launch keeps it running, the task-notification (tool-use-id, or task-id) ends it
+    for tu, note in (("tu7", "<tool-use-id>tu7</tool-use-id>"), ("tu8", "<task-id>ag8</task-id>")):
+        lines = ['{"type":"assistant","message":{"content":[{"type":"tool_use","id":"%s","name":"Agent","input":{"description":"bg"}}]}}' % tu,
+                 '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"%s","content":"Async agent launched successfully. agentId: ag%s (internal)"}]}}' % (tu, tu[-1]),
+                 json.dumps({"type": "user", "message": {"content": f"<task-notification> {note} <status>completed</status> <result>all good</result></task-notification>"}})]
+        ev = [e for ln in lines for e in parse("claude", ln, st)]
+        assert ev == [("sub", "bg", tu, "running"), ("sub", "all good", tu, "done")], ev
+    spawn = {"id": "i0", "type": "collab_tool_call", "tool": "spawn_agent", "receiver_thread_ids": ["T2"], "prompt": "list files", "agents_states": {}, "status": "in_progress"}
+    wait = {"id": "i1", "type": "collab_tool_call", "tool": "wait", "receiver_thread_ids": ["T2"], "agents_states": {"T2": {"status": "completed", "message": "a.txt"}}, "status": "completed"}
+    ev = [e for x in ({"type": "item.started", "item": spawn}, {"type": "item.completed", "item": wait}) for e in parse("codex", json.dumps(x), {})]
+    assert ev == [("sub", "list files", "T2", "running"), ("sub", "a.txt", "T2", "done")], ev
+    assert codex_subs({"type": "collabAgentToolCall", "tool": "spawnAgent", "receiverThreadIds": ["T3"], "prompt": "p"}, False) == [("sub", "p", "T3", "running")]
+    lines = ['{"event":"step_update","step_update":{"step_index":3,"state":"ACTIVE","step_type":"tool","tool_name":"invoke_subagent","tool_info":{"name":"invoke_subagent","parameters":{"Role":"File Lister","TypeName":"self"}}}}',
+             '{"event":"step_update","step_update":{"step_index":3,"state":"DONE","step_type":"subagent","tool_name":"invoke_subagent","subagent_info":{"subagents":[{"role":"File Lister","initial_prompt":"List all files"}]}}}']
+    ev = [e for ln in lines for e in parse("agy", ln, {})]
+    assert ev == [("sub", "File Lister", "agy-step-3", "running"), ("sub", "List all files", "agy-step-3", "done")], ev
+    assert merged([("text", "a"), ("sub", "s", "x", "running"), ("tool", "t", "x"), ("text", "b"), ("text", "c")]) == [
+        {"kind": "text", "text": "a"}, {"kind": "sub", "text": "s", "sub": "x", "status": "running"}, {"kind": "tool", "text": "t", "sub": "x"}, {"kind": "text", "text": "bc"}]
     st = {}
     lines = ['{"type":"system","subtype":"init","session_id":"S1"}',
              '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}}',

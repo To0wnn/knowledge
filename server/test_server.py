@@ -715,6 +715,30 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert [(x["model"], x["effort"]) for x in w] == [("", "low")], w
     http("POST", "/machine/chats/events", {"chat": mc, "events": [], "done": True}, token=fr, headers=pc)
     assert ui("/ui/api/chat/send", {"machine": mid, "id": mc, "text": "d", "effort": "max"}, er)[0] == 403
+    # Subagents: a "sub" event opens one (the chat and its board card count it while it runs), its tool lines carry
+    # its id, its end closes it; an id with odd characters is dropped; the turn's end closes what is left.
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": mc, "text": "use a subagent"})[0] == 200
+    http("GET", "/machine/chats", token=fr, headers=pc)
+    http("POST", "/machine/chats/events", {"chat": mc, "events": [
+        {"kind": "sub", "text": "Explore · list", "sub": "tu1", "status": "running"}, {"kind": "tool", "text": "Bash: ls", "sub": "tu1"},
+        {"kind": "sub", "text": "other", "sub": "tu2", "status": "running"}, {"kind": "tool", "text": "x", "sub": "bad id!", "status": "done"}]}, token=fr, headers=pc)
+    got = json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])
+    tail = got["events"][-4:]
+    assert got["chat"]["subs"] == 2 and tail[1] == {**tail[1], "kind": "tool", "sub": "tu1"} and "sub" not in tail[3] and "status" not in tail[3], tail
+    card = next(i for i in json.loads(ui("/ui/api/board")[2])["items"] if i["kind"] == "chat" and i["id"] == mc)
+    assert card["subs"] == 2, card
+    http("POST", "/machine/chats/events", {"chat": mc, "events": [{"kind": "sub", "text": "found a.txt", "sub": "tu1", "status": "done"}]}, token=fr, headers=pc)
+    assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["chat"]["subs"] == 1
+    http("POST", "/machine/chats/events", {"chat": mc, "events": [], "done": True}, token=fr, headers=pc)
+    assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["chat"]["subs"] == 0, "no subagent outlives its turn"
+    # The person's default model for a new chat (Settings page): checked for shape, per person, cleared with null.
+    assert ui("/ui/api/me/prefs", {"chat_default": {"agent": "claude", "id": "-rf", "effort": ""}})[0] == 400
+    assert ui("/ui/api/me/prefs", {"chat_default": {"agent": "bash", "id": "x", "effort": ""}})[0] == 400
+    assert ui("/ui/api/me/prefs", {"chat_default": {"agent": "codex", "id": "gpt-x", "effort": "huge"}})[0] == 400
+    assert ui("/ui/api/me/prefs", {"chat_default": {"agent": "claude", "id": "opus", "effort": "max"}})[0] == 200
+    assert json.loads(ui("/ui/api/me")[2])["prefs"] == {"chat_default": {"agent": "claude", "id": "opus", "effort": "max"}}
+    assert json.loads(ui("/ui/api/me", h=er)[2])["prefs"] == {}, "another person's default is theirs alone"
+    assert ui("/ui/api/me/prefs", {"chat_default": None})[0] == 200 and json.loads(ui("/ui/api/me")[2])["prefs"] == {}
     # Offline: no new message (it would run whenever the pc comes back).
     d = json.loads((tmp / "machines.json").read_text())
     d[mid]["at"] -= 3600
@@ -1806,7 +1830,7 @@ def main():
         assert raw("POST", "/ui/login", "password=gategategate", form)[0] == 429  # also the right one, until the minute passed
         assert raw("GET", "/", headers=ck)[1].get("location") == "/ui"
         assert raw("GET", "/ui", headers=ck)[0] == 200
-        assert json.loads(raw("GET", "/ui/api/me", headers=ck)[2]) == {"user": "alice", "admin": True, "projects": ["homelab", "trade"], "writable": ["homelab", "trade"], "labels": {}, "sections": ["## Stand", "## Keuzes"]}  # anpitek is empty here: no tab; the server's (nl) sections for "+ Add memo"
+        assert json.loads(raw("GET", "/ui/api/me", headers=ck)[2]) == {"user": "alice", "admin": True, "projects": ["homelab", "trade"], "writable": ["homelab", "trade"], "labels": {}, "sections": ["## Stand", "## Keuzes"], "prefs": {}}  # anpitek is empty here: no tab; the server's (nl) sections for "+ Add memo"
         g = json.loads(raw("GET", "/ui/api/graph", headers=ck)[2])
         assert g["nodes"] and not any(n["id"].endswith("/MEMORY.md") for n in g["nodes"]), g["nodes"][:3]  # index not drawn, still readable below
         assert {n["project"] for n in g["nodes"] if n["id"].startswith("trade")} == {"trade"}
@@ -1894,7 +1918,7 @@ def main():
         assert admin("/ui/api/admin/user", {"username": "alice", "projects": {}})[0] == 400  # admins come from the config
         assert admin("/ui/api/admin/user", {"username": "bob", "projects": {"trade": "read", "homelab": "none"}})[0] == 200
         ro = user("bob")
-        assert json.loads(raw("GET", "/ui/api/me", headers=ro)[2]) == {"user": "bob", "admin": False, "projects": ["trade"], "writable": [], "labels": {}, "sections": ["## Stand", "## Keuzes"]}
+        assert json.loads(raw("GET", "/ui/api/me", headers=ro)[2]) == {"user": "bob", "admin": False, "projects": ["trade"], "writable": [], "labels": {}, "sections": ["## Stand", "## Keuzes"], "prefs": {}}
         # A display name for a project: set by an admin, shown to everyone who sees the project; empty restores the name.
         assert admin("/ui/api/admin/project-label", {"name": "trade", "label": "Trading"}, ro)[0] == 403
         assert admin("/ui/api/admin/project-label", {"name": "nope", "label": "X"})[0] == 400

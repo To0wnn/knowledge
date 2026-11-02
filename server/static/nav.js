@@ -3,6 +3,7 @@
 // are pages of their own, so here they mark their own entry and fetch who is signed in. Globals: toggleRail,
 // closeSide, navMe (app.js, shell.js and palette.js call them).
 "use strict";
+let navProjects = null; // the signed-in person's projects (/ui/api/me): the lint badge counts as the app does
 
 const navEl = (id) => document.getElementById(id);
 const navStore = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
@@ -86,24 +87,35 @@ if (navPage) {
     if (e.target.closest("input, textarea, select, [contenteditable]") || e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.key === "[") toggleRail();
   });
-  fetch("/ui/api/me", { credentials: "same-origin" }).then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.status))))
-    .then(navMe).catch(() => { navEl("who").textContent = "Signed in"; });
+  const meReady = fetch("/ui/api/me", { credentials: "same-origin" }).then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.status))))
+    .then((me) => { navProjects = me.projects; return navMe(me); }).catch(() => { navEl("who").textContent = "Signed in"; });
   fetch("/ui/api/board", { credentials: "same-origin" }).then((r) => r.ok && r.json()).then((bd) => {
     const n = (bd.items || []).filter((i) => i.col === "needs").length;
     for (const b of document.querySelectorAll(".inbox-count")) b.textContent = n || "";
   }).catch(() => {});
-  fetch("/ui/api/chats", { credentials: "same-origin" }).then((r) => r.ok && r.json()).then((cs) => {
-    const live = (cs.chats || []).filter((c) => ["queued", "running"].includes(c.status)).length;
+  // the badges count as the app does (app.js ckSummary, loadTasks, loadLint), so they do not change on this page
+  const get = (u) => fetch(u, { credentials: "same-origin" }).then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.status))));
+  Promise.all([get("/ui/api/chats"), get("/ui/api/machines")]).then(([cs, ms]) => {
+    const now = Date.now() / 1000;
+    let live = (cs.chats || []).filter((c) => ["queued", "running"].includes(c.status)).length;
+    for (const m of (ms.machines || []).filter((x) => x.own && !x.old)) for (const ag of Object.values(m.agents || {}))
+      live += (ag.workers || []).filter((w) => w.status === "running").length + (ag.sessions || []).filter((s) => !s.worker && now - s.at < 600).length;
     const elLive = navEl("ck-live"), elN = navEl("ck-live-n");
     if (elN) elN.textContent = live;
     if (elLive) elLive.classList.toggle("on", live > 0);
   }).catch(() => {});
-  fetch("/ui/api/tasks", { credentials: "same-origin" }).then((r) => r.ok && r.json()).then((ts) => {
-    const el = navEl("tasks-count");
-    if (el && (ts.tasks || []).length) el.textContent = ts.tasks.length;
+  get("/ui/api/tasks").then((ts) => {
+    const el = navEl("tasks-count"), open = (ts.tasks || []).filter((t) => !t.done);
+    if (el) { el.textContent = open.length || ""; el.className = open.some((t) => t.overdue) ? "badge warn" : "badge"; }
   }).catch(() => {});
-  fetch("/ui/api/lint", { credentials: "same-origin" }).then((r) => r.ok && r.json()).then((lt) => {
-    const el = navEl("lint-count");
-    if (el && (lt.findings || []).length) el.textContent = lt.findings.length;
+  meReady.then(() => get("/ui/api/lint?v=2")).then((res) => { // this project's findings, as the app's Health badge (project from the app's picker)
+    const el = navEl("lint-count"), project = localStorage.getItem("kn_project") || "homelab", full = res.report || res;
+    const grouped = new Set((res.groups || []).flatMap((g) => g.checks));
+    const of = (item) => { // as app.js lintProject: a project's root or its -memory root, claude/ shared, the rest homelab
+      const r = item.split(/[/:]/)[0], p = r.replace(/-memory$/, "");
+      return r === "claude" ? "shared" : (navProjects || []).includes(p) ? p : "homelab";
+    };
+    const n = Object.entries(full).reduce((a, [c, v]) => a + (grouped.has(c) ? 0 : v.filter((i) => project === "all" || of(i) === project).length), 0);
+    if (el) el.textContent = n || "";
   }).catch(() => {});
 }

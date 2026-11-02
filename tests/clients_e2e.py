@@ -654,6 +654,14 @@ if name == "codex" and args == ["debug", "models"]:  # what a chat may pick: one
 if name == "agy" and args == ["models"]:
     print("Fetching available models...\\nfake-gem\\tFake Gem")
     sys.exit(0)
+if name == "codex" and args[:1] == ["app-server"] and os.environ.get("KN_FAKE_RATE"):  # the companion asks for the limits (that check only)
+    for line in sys.stdin:
+        m = json.loads(line)
+        if m.get("method") == "initialize":
+            print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": {}}), flush=True)
+        elif m.get("method") == "account/rateLimits/read":
+            print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": {"rateLimits": {"primary": {"usedPercent": 42, "windowDurationMins": 300, "resetsAt": int(time.time()) + 3600}}}}), flush=True)
+    sys.exit(0)
 if name == "codex" and args[:1] == ["app-server"] and os.environ.get("KNOWLEDGE_CHAT"):  # a chat turn without YOLO: app-server v2
     send = lambda x: print(json.dumps({"jsonrpc": "2.0", **x}), flush=True)
     note = lambda method, params: send({"method": method, "params": params})
@@ -997,7 +1005,13 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         ag = json.loads((agy_dir / "settings.json").read_text(encoding="utf-8"))
         check(ag["trustedWorkspaces"] == [str(home), str(project)] and ag["model"] == "Gemini", "companion: agy trusts the knowledge folder (trustedWorkspaces)", json.dumps(ag))
         writes = [c["rpc"] for c in recorded() if c.get("rpc", {}).get("method") == "config/batchWrite"]
-        methods = [c["rpc"].get("method") for c in recorded() if "rpc" in c]
+        rpcs, skip = [], False  # the companion's own limits read (codex_rate_read) is a separate app-server session: left out
+        for c in (c["rpc"] for c in recorded() if "rpc" in c):
+            if c.get("method") == "initialize":
+                skip = ((c.get("params") or {}).get("clientInfo") or {}).get("name") == "knowledge-companion-limits"
+            if not skip:
+                rpcs.append(c)
+        methods = [c.get("method") for c in rpcs]
         check(methods[:3] == ["initialize", "initialized", "hooks/list"] and len(writes) == 1
               and writes[0]["params"]["edits"] == [{"keyPath": "hooks.state", "mergeStrategy": "upsert",
                                                      "value": {"knowledge@knowledge:.codex-plugin/hooks.json:session_start:0:0": {"trusted_hash": "sha256:aa"}}}]
@@ -1497,6 +1511,13 @@ def chat_e2e(tok: str, tmp: Path):
                       "chat claude: without YOLO the worker permission set (acceptEdits + allowed tools) and the approval prompt tool", json.dumps(first["argv"]))
             if agent == "agy":
                 check(first["argv"] == ["agy", "acp"], "chat agy: without YOLO it runs over ACP (the headless agy that can ask)", json.dumps(first["argv"]))
+        # Codex's usage limit without a session: the companion asks `codex app-server` (account/rateLimits/read, no
+        # prompt) in the background and reports the answer; here no rollout exists.
+        probe = ("import companion, time; (companion.STATE / 'codex-rate.json').unlink(missing_ok=True); companion.codex_rate_read(time.time())\n"
+                 "for _ in range(100):\n    got = companion.codex_rate_read(time.time())\n    if got: break\n    time.sleep(0.2)\n"
+                 "print(got)")
+        code, out, err = run([sys.executable, "-c", probe], "", {**env, "PYTHONPATH": str(hooks), "KN_FAKE_RATE": "1"}, cwd=str(hooks))
+        check(code == 0 and "42" in out and "5h" in out, "companion: Codex's limit asked without a session (app-server account/rateLimits/read)", out + err[-400:])
         # Model and effort: the pc reports what each agent offers; a chat's choice reaches the turn the agent's own way
         # (Claude flags, Codex turn/start, agy session/set_model + thought_level).
         reported = next(r for r in machines() if r["id"] == mid)["companion"].get("models") or {}

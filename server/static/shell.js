@@ -11,6 +11,7 @@ const VIEWS = {
   inbox: ["cockpit", "Agents", "Inbox"], chats: ["cockpit", "Agents", "Chats"], tasks: ["tab-tasks", "Agents", "Tasks"],
   machines: ["tab-machines", "Agents", "Machines"], notes: ["kn", "Knowledge", "Notes"], map: ["kn", "Knowledge", "Map"],
   changes: ["tab-changes", "Knowledge", "Changes"], health: ["tab-lint", "Knowledge", "Health"], thispc: ["tab-thispc", "This pc", "This pc"],
+  settings: ["tab-settings", "You", "Settings"],
 };
 const PHONE_TABS = ["inbox", "chats", "tasks", "notes"]; // the rest sit behind More
 let shellRoute = { view: "", arg: "", q: new URLSearchParams() };
@@ -31,9 +32,26 @@ function go(hash, replace = false) {
 // Back inside the app (a phone's back button does the same); the fallback when this page was the first.
 function goBack(fallback) { if (history.state?.n > 0) history.back(); else go(fallback, true); }
 
+// Where you were per view (its last route, and how far its lists were scrolled), for this tab: the sidebar goes back
+// there, not to the view's start. Clicking the view you are on goes to its start.
+const lastRoute = (() => { try { return JSON.parse(sessionStorage.getItem("kn_routes") || "{}"); } catch { return {}; } })();
+const scrolled = new Map(); // route -> {element id: scrollTop}
+function keepScroll() {
+  const r = shellRoute; if (!r.view) return;
+  const home = $(VIEWS[r.view][0]), at = {};
+  for (const e of [home, ...home.querySelectorAll("[id]")]) if (e.scrollTop > 0) at[e.id] = e.scrollTop;
+  if (window.scrollY > 0) at["@window"] = window.scrollY; // a phone scrolls the page
+  scrolled.set(location.hash, at);
+}
+function restoreScroll(hash) {
+  const at = scrolled.get(hash); if (!at) return;
+  const put = () => { for (const [id, top] of Object.entries(at)) if (id === "@window") window.scrollTo(0, top); else if ($(id)) $(id).scrollTop = top; };
+  requestAnimationFrame(put); setTimeout(put, 400); setTimeout(put, 1200); // lists render after their data comes
+}
 function applyRoute() {
   let r = parseRoute(location.hash);
   if (!r) { history.replaceState(history.state, "", oldLink(location.hash) ? noteRoute(oldLink(location.hash)) : "#/inbox"); r = parseRoute(location.hash); }
+  if (r.arg !== "new") { lastRoute[r.view] = location.hash; try { sessionStorage.setItem("kn_routes", JSON.stringify(lastRoute)); } catch { /* blocked */ } }
   const [home] = VIEWS[r.view], changed = r.view !== shellRoute.view, first = !shellRoute.view;
   shellRoute = r;
   document.body.dataset.view = r.view;
@@ -83,15 +101,20 @@ function applyRoute() {
   if (r.view === "changes") loadRecent(true);
   if (r.view === "health") loadLint(true);
   if (r.view === "thispc") loadThisPc();
+  if (r.view === "settings") loadSettings();
   // The map's canvas follows its box: the sidebar or the view may have changed its size.
   if (Graph && mapOn) requestAnimationFrame(() => Graph.width($("graph").clientWidth).height($("graph").clientHeight));
+  if (changed && !first) restoreScroll(location.hash);
 }
 window.addEventListener("popstate", applyRoute);
 // A plain click on a route link goes through go(), so its history entry counts for Back (a new tab still works).
 document.addEventListener("click", (e) => {
   const a = e.target.closest('a[href^="#/"]');
   if (!a || e.defaultPrevented || e.button || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
-  e.preventDefault(); go(a.getAttribute("href"));
+  e.preventDefault();
+  keepScroll();
+  const view = a.dataset.nav, back = view && view !== shellRoute.view && lastRoute[view];
+  go(back && a.getAttribute("href") === `#/${view}` ? back : a.getAttribute("href")); // the sidebar: where you were in that view
 });
 
 // One header for every view: section label and title, the view's own actions on the right.

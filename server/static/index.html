@@ -23,7 +23,7 @@
     <div class="head-title"><div class="crumb" id="crumb"></div><h1 id="title" tabindex="-1">Knowledge</h1></div>
     <span class="gap"></span>
     <div class="head-actions" id="head-actions">
-      <span data-views="inbox chats"><span class="chip" id="ck-resets" hidden></span></span>
+      <span data-views="inbox chats"><span class="ck-resets" id="ck-resets" hidden></span></span>
       <div class="seg" id="chats-mode" role="group" aria-label="Chats as" data-views="chats"><button type="button" data-mode="list" aria-pressed="true">List</button><button type="button" data-mode="board" aria-pressed="false">Board</button></div>
       <div class="seg" id="tasks-mode" role="group" aria-label="Tasks as" data-views="tasks"><button type="button" data-mode="list" aria-pressed="true">List</button><button type="button" data-mode="flow" aria-pressed="false">Flow</button></div>
       <span data-views="notes map"><details id="add-menu" class="menu">
@@ -42,11 +42,12 @@
     <section id="cockpit" class="view ck" aria-label="Agents" hidden>
       <div class="ck-board" id="ck-board" aria-label="Attention board"></div>
       <div class="ck-chats" id="ck-chats">
-        <div class="ck-side">
+        <div class="ck-side" id="ck-side">
           <input id="ck-filter" type="search" placeholder="Filter chats…" autocomplete="off" aria-label="Filter chats">
           <div class="seg" id="ck-only" role="group" aria-label="Show" data-only=""><button type="button" data-only="" aria-pressed="true">All<span class="n"></span></button><button type="button" data-only="needs" aria-pressed="false">Needs you<span class="n"></span></button><button type="button" data-only="running" aria-pressed="false">Running<span class="n"></span></button></div>
           <ol id="ck-history" class="ck-history" aria-label="Chats"></ol>
         </div>
+        <div class="ck-resize" id="ck-resize" role="separator" aria-orientation="vertical" aria-label="Width of the chat list" tabindex="0" title="Drag to widen or narrow the list (double-click: back to 300 px)"></div>
         <div class="ck-canvas" id="ck-canvas"></div>
       </div>
       <span class="sr-only" id="ck-needs-live" aria-live="polite"></span>
@@ -92,6 +93,19 @@
     <section id="tab-lint" class="view pad" aria-label="Health" hidden>
       <p class="muted">Facts only: fix what is clearly wrong, ask Claude to judge the rest.</p>
       <div id="lint"></div>
+    </section>
+    <section id="tab-settings" class="view pad" aria-label="Settings" hidden>
+      <h2>Settings</h2>
+      <p class="muted">Yours, on every device you sign in with.</p>
+      <form id="set-chat" class="admin-form">
+        <h3>New chats start with</h3>
+        <label for="set-model">Model</label>
+        <select id="set-model"></select>
+        <label for="set-effort">Effort</label>
+        <select id="set-effort"></select>
+        <p class="muted" id="set-chat-note">The models your pcs that are online now offer.</p>
+        <div class="actions"><button type="submit" class="btn primary">Save</button></div>
+      </form>
     </section>
     <section id="tab-thispc" class="view pad" aria-label="This pc" hidden>
       <p class="cmp-lede">The agents on this pc, as the knowledge companion running here sees them. <a id="thispc-open" href="http://127.0.0.1:47321/" target="_blank" rel="noopener">Open the companion</a> for YOLO, settings and activity.</p>
