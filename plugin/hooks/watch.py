@@ -89,9 +89,9 @@ def flag(agent: str, sid: str, kind: str, detail: str):
         pass
 
 
-def steered(f: Path) -> str:
-    """The owner's messages the companion left for this worker (web UI, Steer), taken once: moved away first, so one
-    written meanwhile waits for the next tool call instead of being lost."""
+def steered(f: Path, chat: bool = False) -> str:
+    """The owner's messages the companion left for this worker (web UI, Steer) or this chat turn (Force), taken once:
+    moved away first, so one written meanwhile waits for the next tool call instead of being lost."""
     taken = f.with_name(f"{f.name}.{os.getpid()}")
     try:
         os.replace(f, taken)
@@ -102,15 +102,19 @@ def steered(f: Path) -> str:
     except (OSError, ValueError):
         msgs = []
     taken.unlink(missing_ok=True)
+    if chat:
+        return "\n".join(f"knowledge: {m.get('by') or 'the user'} sent this in the web UI chat while you were working (they "
+                         "pressed Force, so you get it now instead of after this turn). Read it now and act on it:\n"
+                         + str(m.get("text", "")) for m in msgs if isinstance(m, dict))
     return "\n".join(f"knowledge: {m.get('by') or 'your owner'} (the owner of this pc) steers this worker from the web UI. It is "
                      "guidance for your task, not a new task: your task, branch and rules stay the same. Their message:\n"
                      + str(m.get("text", "")) for m in msgs if isinstance(m, dict))
 
 
 def main(agent: str):
-    worker = os.environ.get("KNOWLEDGE_WORKER", "")
+    worker, chat = os.environ.get("KNOWLEDGE_WORKER", ""), re.sub(r"[^0-9a-f]", "", os.environ.get("KNOWLEDGE_CHAT", ""))[:12]
     yolo = yolo_on(agent)
-    if not (worker or yolo):
+    if not (worker or yolo or chat):
         print("{}")
         return
     hook = json.loads(sys.stdin.read() or "{}")
@@ -122,6 +126,9 @@ def main(agent: str):
         for kind, detail in risky(text, cwd):
             flag(agent, sid, kind, detail)
     note = ""
+    # a chat turn's Force message, after a tool call of the main agent (a subagent's hook names its agent_id: not for it)
+    if chat and not worker and not hook.get("agent_id"):
+        note = steered(KN_HOME / "companion" / "chats" / f"{chat}.steer", chat=True)
     if worker and (nonce := os.environ.get("KNOWLEDGE_START_NONCE", "")):  # its own note, not one of a namesake task
         base = KN_HOME / "companion" / "workers" / re.sub(r"[^\w.-]", "-", nonce)[:60]
         try:
@@ -158,6 +165,20 @@ def self_test():
         said = steered(f)
         assert "alice" in said and said.endswith("use sqlite") and not f.exists() and not list(Path(t).iterdir()), said
         assert steered(f) == "", "taken once"
+        f.write_text(json.dumps({"by": "alice", "text": "stop and test"}) + "\n", encoding="utf-8")
+        said = steered(f, chat=True)
+        assert "pressed Force" in said and said.endswith("stop and test") and not f.exists(), said
+    import subprocess  # a chat turn: the main agent's hook hands it over, a subagent's (agent_id) leaves it
+    with tempfile.TemporaryDirectory() as t:
+        box = Path(t) / "companion" / "chats"
+        box.mkdir(parents=True)
+        (box / "0123456789ab.steer").write_text(json.dumps({"by": "alice", "text": "use sqlite"}) + "\n", encoding="utf-8")
+        env = {**os.environ, "KNOWLEDGE_HOME": t, "KNOWLEDGE_CHAT": "0123456789ab"}
+        env.pop("KNOWLEDGE_WORKER", None)
+        run = lambda hook: subprocess.run([sys.executable, __file__, "claude"], input=json.dumps(hook), capture_output=True, text=True, env=env, timeout=30).stdout
+        assert run({"session_id": "s", "agent_id": "sub-1", "tool_input": {}}).strip() in ("", "{}"), "not to a subagent"
+        out = json.loads(run({"session_id": "s", "tool_input": {}}))
+        assert out["hookSpecificOutput"]["additionalContext"].endswith("use sqlite") and not (box / "0123456789ab.steer").exists(), out
     print("ok")
 
 

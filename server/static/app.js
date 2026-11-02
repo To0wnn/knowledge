@@ -2021,7 +2021,7 @@ function ckPaint(card) {
   const force = busy && m.status === "running" && m.waiting > 0 && !card.input.value.trim();
   card.stop.hidden = !busy; card.send.disabled = !card.online; card.send.classList.toggle("force", force);
   card.send.textContent = force ? "Force" : busy ? "Queue" : "Send";
-  card.send.title = force ? `Stop the current turn; the next of ${m.waiting} waiting message${m.waiting > 1 ? "s" : ""} goes in now` : busy ? "The agent gets this when its current turn ends" : "";
+  card.send.title = force ? `Send the first of ${m.waiting} waiting message${m.waiting > 1 ? "s" : ""} into this turn: the agent reads it after its next step, nothing is stopped (Stop ends the turn)` : busy ? "The agent gets this when its current turn ends" : "";
   if (!card.note.classList.contains("bad") || busy) {
     card.note.className = "ck-note";
     card.note.textContent = !card.online ? `${m.label} is offline${card.at ? ` since ${ago(card.at)}` : ""}: a chat needs its companion running.` : "";

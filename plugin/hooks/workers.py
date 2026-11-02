@@ -478,14 +478,20 @@ def claude_usage(log: str, now: float):
     for line in reversed(lines):
         if '"rate_limit_event"' in line:
             try:
-                info = json.loads(line).get("rate_limit_info") or {}
+                return claude_rate(json.loads(line), now)
             except ValueError:
                 continue
-            wins = [(n.replace("five_hour", "5h").replace("seven_day", "7d"), w.get("utilization"), w.get("resetsAt"))
-                    for n, w in (info.get("unifiedWindows") or {}).items() if isinstance(w, dict)]
-            live = [(float(u) * 100, n, r) for n, u, r in wins if isinstance(u, (int, float)) and (not r or r > now)]
-            return max(live, default=None)
     return None
+
+
+def claude_rate(event: dict, now: float):
+    """One stream-json rate_limit_event: (percent, window, resets_at) of its fullest window not reset yet, or None.
+    Workers' logs and chat turns (chat.py) both carry it."""
+    info = event.get("rate_limit_info") or {}
+    wins = [(n.replace("five_hour", "5h").replace("seven_day", "7d"), w.get("utilization"), w.get("resetsAt"))
+            for n, w in (info.get("unifiedWindows") or {}).items() if isinstance(w, dict)]
+    live = [(float(u) * 100, n, r) for n, u, r in wins if isinstance(u, (int, float)) and (not r or r > now)]
+    return max(live, default=None)
 
 
 def game_session() -> str:

@@ -865,7 +865,13 @@ def usage_live(agent: str, ws: dict, now: float):
             # a worker's reading stays true until its window resets (claude_usage drops those), however old the log
             got = next((g for f in reversed(logs) if (g := workers.claude_usage(str(f), now))), None)
             line = agent_hooks.limits.claude_used(now)
-            return max((x for x in (got, line) if x), key=lambda x: x[0], default=None)
+            try:  # a web chat's turn (chat.py keep_usage): fresh while the person only chats
+                chat_got = tuple(json.loads((STATE / "usage-claude-chat.json").read_text(encoding="utf-8"))["got"])
+                chat_got = chat_got if chat_got[2] and chat_got[2] > now else None
+            except (OSError, ValueError, KeyError, TypeError, IndexError):
+                chat_got = None
+            # usage never drops inside a window and expired ones are left out: the fullest reading is the true one
+            return max((x for x in (got, line, chat_got) if x), key=lambda x: x[0], default=None)
         if agent == "codex":
             days = [time.localtime(now - d * 86400) for d in (0, 1)]
             files = [f for d in days for f in CODEX.glob(f"sessions/{d.tm_year:04d}/{d.tm_mon:02d}/{d.tm_mday:02d}/rollout-*.jsonl")
@@ -1598,6 +1604,9 @@ def chats_round() -> bool:
     for cid in r.get("stop", []):
         if not chat.stop(cid):
             post({"chat": cid, "events": [{"kind": "info", "text": "Stopped (no turn ran here any more)."}], "done": True})
+    for s in r.get("steer", []):  # Force: for the running turn, read by the agent's hook after its next step
+        if chat.steer(str(s.get("chat", "")), str(s.get("by") or ""), str(s.get("text", ""))):
+            log("remote", f"Chat message sent into a running turn by {s.get('by') or '?'}", f"chat {s.get('chat')}")
     for cid in r.get("busy", []):
         if cid not in chat.RUNNING:
             post({"chat": cid, "events": [{"kind": "error", "text": "The turn was lost: the companion on this pc restarted."}], "done": True, "error": "lost"})

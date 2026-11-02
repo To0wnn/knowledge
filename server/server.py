@@ -5513,8 +5513,9 @@ async def ui_chat_close(request: Request):
 @server.custom_route("/ui/api/chat/stop", methods=["POST"])
 async def ui_chat_stop(request: Request):
     """{machine, id, force?}: stop the running turn (the companion kills it) or drop the waiting message. A pc offline
-    cannot be reached: the chat is set idle at once and says so. force: stop only a turn the pc runs and keep the line,
-    so its end (done) hands out the first queued message at once."""
+    cannot be reached: the chat is set idle at once and says so. force: the first queued message goes to the running
+    turn now, without stopping it (its subagents keep working): the companion parks it and the agent's hook hands it
+    over after its next step; a turn that ends before that leaves it first in line, so it goes in next."""
     try:
         row, b, f, c = await chat_request(request, True)
     except (ValueError, AttributeError, TypeError, PermissionError) as e:
@@ -5523,11 +5524,20 @@ async def ui_chat_stop(request: Request):
     if b.get("force") is True:
         if not row["online"] or not c.get("pending") or not read_json(q, {}).get(c["id"], {}).get("busy"):
             return JSONResponse({"error": "nothing to force: no queued message behind a running turn"}, status_code=409)
-        await asyncio.to_thread(update_state, f, lambda c: chat_add(c, "info", "Forced: the current turn stops; the next queued message goes in now."))
-        await asyncio.to_thread(update_state, q, lambda q: q.setdefault(c["id"], {}).update(stop=True))
+        msg = []
+
+        def steer(c):
+            if c.get("pending") and not c.get("steering"):
+                msg.append(c["pending"].pop(0))
+                c["steering"] = msg[0]
+                chat_add(c, "info", "Sent now: the agent reads it after its next step; its subagents keep running. If the turn ends first, it goes in next.")
+        await asyncio.to_thread(update_state, f, steer)
+        if not msg:
+            return JSONResponse({"error": "a message is on its way to the agent already: wait for it, or stop the turn"}, status_code=409)
+        await asyncio.to_thread(update_state, q, lambda q: q.setdefault(c["id"], {}).update(steer={"text": msg[0]["text"], "by": msg[0].get("by", "")}))
         return JSONResponse({"ok": True})
     waiting = "msg" in read_json(q, {}).get(c["id"], {})
-    await asyncio.to_thread(update_state, f, lambda c: c.pop("pending", None))  # Stop also drops what waited behind it
+    await asyncio.to_thread(update_state, f, lambda c: (c.pop("pending", None), c.pop("steering", None)))  # Stop also drops what waited behind it
     if waiting or not row["online"]:
         await asyncio.to_thread(update_state, q, lambda q: q.pop(c["id"], None))
         await asyncio.to_thread(update_state, f, lambda c: (chat_add(c, "info", "Stopped before it started." if waiting else
@@ -5667,6 +5677,8 @@ async def machine_chats(request: Request):
                 out["busy"].append(cid)
                 if e.get("stop"):
                     out["stop"].append(cid)
+                if e.get("steer"):  # Force: once to the companion, which parks it for the running turn's hook
+                    out.setdefault("steer", []).append({"chat": cid, **e.pop("steer")})
             elif "msg" in e:
                 out["work"].append({"chat": cid, "agent": c["agent"], "folder": c["folder"], "session": c.get("session", ""),
                                     "model": c.get("model", ""), "effort": c.get("effort", ""),
@@ -5792,6 +5804,11 @@ async def machine_chat_events(request: Request):
             chat_add(c, k, t, extra=extra)
         if isinstance(b.get("session"), str) and re.fullmatch(r"[\w.:-]{1,120}", b["session"]):
             c["session"] = b["session"]
+        if b.get("done") is True and (s := c.pop("steering", None)):
+            if b.get("steered") == "delivered":
+                chat_add(c, "info", "Delivered: the agent read your message during its turn.")
+            else:  # not read before the turn ended (or a companion without Force-by-steering): it goes in next
+                c.setdefault("pending", []).insert(0, s)
         if b.get("done") is True:
             asks_settle(c, time.time(), "the turn ended")
             c["subs"] = {k: ("done" if v == "running" else v) for k, v in (c.get("subs") or {}).items()}  # none outlives its turn

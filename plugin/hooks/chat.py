@@ -159,6 +159,9 @@ def parse(agent: str, line: str, st: dict) -> list:
         t = e.get("type")
         if e.get("session_id"):
             st["session"] = e["session_id"]
+        if t == "rate_limit_event":  # the account's usage as of this turn: the companion's limit chip and worker cap
+            if got := workers.claude_rate(e, time.time()):
+                keep_usage("claude", got)
         if t == "stream_event" and e.get("parent_tool_use_id"):  # a subagent's own words: its result says enough
             pass
         elif t == "stream_event":
@@ -532,6 +535,33 @@ def merged(events: list) -> list:
     return out
 
 
+def steer_path(cid: str) -> Path:
+    """A message for a running chat turn (Force in the web UI), JSON lines; the agent's watch hook (watch.py) reads and
+    removes it after the main agent's next tool call."""
+    return workers.DIR.parent / "chats" / f"{re.sub(r'[^0-9a-f]', '', cid)[:12]}.steer"
+
+
+def steer(cid: str, by: str, text: str) -> bool:
+    """Park a Force message for chat `cid` if a turn runs here; False (nothing parked) when none does."""
+    if cid not in RUNNING or not text:
+        return False
+    f = steer_path(cid)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    with f.open("a", encoding="utf-8") as out:
+        out.write(json.dumps({"by": by[:80], "text": text[:20_000], "at": time.time()}) + "\n")
+    RUNNING[cid]["steered"] = True
+    return True
+
+
+def keep_usage(agent: str, got: tuple):
+    """A chat turn's own usage reading, for the companion (usage_live): newer than a worker's log or a stale status
+    line when the person works in web chats only."""
+    try:
+        (workers.DIR.parent / f"usage-{agent}-chat.json").write_text(json.dumps({"got": list(got), "at": time.time()}), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def hand_back(text: str) -> str:
     """A Claude subagent's report without the frame Claude Code puts around it (the tools-used tag, the hand-back
     notice; the report itself is indented after "The report follows:")."""
@@ -740,8 +770,13 @@ def run_turn(item: dict, post, log, linked, yolo):
     if err:
         buf.append(("error", err))
         log("error", f"{name}: chat turn failed", f"chat {cid}: {err}")
+    steered = {}
+    if (rec or RUNNING.get(cid) or {}).get("steered") or steer_path(cid).exists():  # a Force message: read by the hook, or not (it goes in next)
+        left = steer_path(cid).exists()
+        steer_path(cid).unlink(missing_ok=True)
+        steered = {"steered": "pending" if left else "delivered"}
     try:
-        flush(done=True, **({"error": err} if err else {}))
+        flush(done=True, **({"error": err} if err else {}), **steered)
     except Exception as e:  # the server away: it says the turn was lost when it next hands out work
         log("error", "Could not send a chat's last output to the server", f"chat {cid}: {e}"[:300])
     finally:
@@ -804,6 +839,15 @@ def self_test():
         assert [m["id"] for m in models("claude", wait=True)] == list(CLAUDE_MODELS)
     workers.DIR = w
     assert json.loads(stdin_for("agy", 'a "b"\nc')) == {"event": "user", "message": {"role": "user", "content": 'a "b"\nc'}}
+    w0 = workers.DIR  # a chat turn's rate_limit_event is kept for the companion's limit (usage-claude-chat.json)
+    with tempfile.TemporaryDirectory() as t:
+        workers.DIR = Path(t) / "workers"
+        later = int(time.time()) + 3600
+        parse("claude", json.dumps({"type": "rate_limit_event", "rate_limit_info": {"unifiedWindows": {
+            "seven_day": {"utilization": 0.91, "resetsAt": later}, "five_hour": {"utilization": 0.2, "resetsAt": later}}}}), {})
+        kept = json.loads((Path(t) / "usage-claude-chat.json").read_text(encoding="utf-8"))["got"]
+        assert round(kept[0]) == 91 and kept[1] == "7d" and kept[2] == later, kept
+    workers.DIR = w0
     # Subagents, in the shapes the CLIs printed (Claude 2.1.314, Codex 0.166 exec --json, agy 1.4.12 stream-json):
     # a block opens, its tool calls go under it, its hand-back ends it; its own words never mix into the answer.
     st = {}

@@ -650,17 +650,25 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     http("POST", "/machine/chats/events", {"chat": cid, "events": [{"kind": "text", "text": "ok"}], "done": True}, token=fr, headers=pc)
     nxt = json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"]
     assert [w["text"] for w in nxt] == ["after that"], nxt
-    # Force: only with a queued message; it stops the running turn but keeps the line, so its end hands out the next.
+    # Force: only with a queued message; it goes into the running turn without stopping it (the companion parks it for
+    # the agent's hook); one at a time; read during the turn it is done, not read before the end it goes in next.
     assert ui("/ui/api/chat/stop", {"machine": mid, "id": cid, "force": True})[0] == 409  # nothing queued
     ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "urgent"})
     ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "later"})
     assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={cid}")[2])["chat"]["waiting"] == 2
     assert ui("/ui/api/chat/stop", {"machine": mid, "id": cid, "force": True})[0] == 200
-    assert json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["stop"] == [cid]
-    http("POST", "/machine/chats/events", {"chat": cid, "events": [{"kind": "info", "text": "Stopped."}], "done": True}, token=fr, headers=pc)
-    assert [w["text"] for w in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"]] == ["urgent"]
-    http("POST", "/machine/chats/events", {"chat": cid, "events": [], "done": True}, token=fr, headers=pc)
-    assert [w["text"] for w in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"]] == ["later"]
+    assert ui("/ui/api/chat/stop", {"machine": mid, "id": cid, "force": True})[0] == 409, "one on its way at a time"
+    got = json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])
+    assert got["stop"] == [] and got["steer"] == [{"chat": cid, "text": "urgent", "by": "alice"}], got
+    assert "steer" not in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1]), "handed out once"
+    http("POST", "/machine/chats/events", {"chat": cid, "events": [], "done": True, "steered": "delivered"}, token=fr, headers=pc)
+    assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={cid}")[2])["events"][-1]["text"].startswith("Delivered")
+    assert [w["text"] for w in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"]] == ["later"], "urgent was read: not again"
+    ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "late"})
+    assert ui("/ui/api/chat/stop", {"machine": mid, "id": cid, "force": True})[0] == 200
+    http("GET", "/machine/chats", token=fr, headers=pc)
+    http("POST", "/machine/chats/events", {"chat": cid, "events": [], "done": True, "steered": "pending"}, token=fr, headers=pc)
+    assert [w["text"] for w in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"]] == ["late"], "not read in time: it goes in next"
     for i in range(5):
         assert ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": f"q{i}"})[0] == 200
     assert ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "one too many"})[0] == 409
