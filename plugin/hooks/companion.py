@@ -906,6 +906,9 @@ def _agy_rate_ask(f, last_error: str):
         if not configs:
             raise ValueError("no model with a quota in the answer (the API changed?)")
         got = agent_hooks.limits.agy_used({"userStatus": {"cascadeModelConfigData": {"clientModelConfigs": configs}}}, time.time())
+        if not got:  # nothing used yet in any window: 0%, known (the chip shows it), with the first reset
+            resets = [(x, r) for x in configs if (r := agent_hooks.limits.epoch(x["quotaInfo"].get("resetTime"))) and r > time.time()]
+            got = (0.0, min(resets, key=lambda xr: xr[1])[0]["label"], min(r for _, r in resets)) if resets else None
     except (OSError, ValueError, LookupError, KeyError, TypeError, subprocess.SubprocessError) as e:
         err = f"{type(e).__name__}: {e}"[:300]
         if err != last_error:
