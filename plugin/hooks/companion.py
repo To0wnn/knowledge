@@ -897,7 +897,9 @@ def _agy_rate_ask(f, last_error: str):
         req = urllib.request.Request(AGY_QUOTA_URL, data=b"{}", method="POST",
                                      headers={"Authorization": f"Bearer {access}", "Content-Type": "application/json",
                                               "User-Agent": "antigravity-cli"})  # Python's own agent gets 403 PERMISSION_DENIED
-        with urllib.request.urlopen(req, timeout=15) as r:
+        # proxies from the environment only: macOS's system proxy lookup can hang in a background thread (CI, 2 Nov 2026)
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler(urllib.request.getproxies_environment()))
+        with opener.open(req, timeout=15) as r:
             models = json.loads(r.read().decode("utf-8") or "{}").get("models") or {}
         configs = [{"label": m["displayName"], "quotaInfo": m["quotaInfo"]} for m in models.values()
                    if isinstance(m, dict) and m.get("displayName") and isinstance(m.get("quotaInfo"), dict)]
