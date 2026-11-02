@@ -190,7 +190,7 @@ async def search(browser, secret: str) -> None:
         check(await pg.evaluate("location.hash.startsWith('#/notes') && document.activeElement === $('q')"), "Ctrl+K opens the search")
     if not await has_palette(pg):
         await pg.fill("#q", WORD)
-    await pg.wait_for_selector("#hits li", timeout=5000)
+    await pg.wait_for_selector("#hits .hit-sub", timeout=10000)  # a hit, not the "searching" line (it raced a slower search)
     paths = await pg.locator("#hits .hit-sub").all_inner_texts()
     check(len(paths) == len(set(paths)) and any(WORD in p for p in paths[:3]), f"search: one row per note, the memo near the top {paths[:3]}")
     check(await pg.locator("#hits mark").count() > 0, "search marks the words")
@@ -442,6 +442,8 @@ async def approvals(browser, devices, secret: str) -> None:
             sub = await pg.evaluate("""[document.querySelector('#ck-canvas .ck-card .ck-title span').textContent, [...document.querySelectorAll('#ck-canvas .ck-card .ck-line.tool')].map(x => x.textContent),
               document.querySelector('#ck-canvas .ck-card .ck-msg.agent')?.textContent.includes('Found'), !document.querySelector('#ck-canvas .ck-card textarea').disabled]""")
             check(sub[0].startswith("Subagent of") and sub[1] == ["Bash: ls tests"] and sub[2] and sub[3], f"subagent chat: its own output only, and you can write to it {sub}")
+            await pg.evaluate("location.hash = '#/chats/0123456789ab'")  # back to the main chat for the checks below
+            await pg.wait_for_selector("#ck-canvas .ck-ask", timeout=10000)
         more = pg.locator("#ck-canvas .ck-ask").nth(1).locator("details.ck-ask-more")
         check(await more.count() == 1 and (await more.locator("code").text_content()).endswith("| sh"),
               "chat card: a long request is shown whole (folded), its end included")
@@ -515,7 +517,8 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
     tops = await pg.evaluate("[...document.querySelectorAll('#ck-board .ck-col')].map(c => c.getBoundingClientRect().top)")
     check(tops == sorted(tops) and len(set(tops)) == len(tops), f"phone board: one list, Needs you → Running → Done {tops}")
     if await pg.locator(".ck-col-done").count():
-        folded = await pg.evaluate("[$('ck-board').querySelector('.ck-col-done .ck-group')?.offsetParent === null, !!$('ck-board').querySelector('.ck-done-toggle').offsetParent]")
+        # an empty Done (nothing finished in 24 h, closed chats are off the board) has nothing to fold: that counts as folded
+        folded = await pg.evaluate("[($('ck-board').querySelector('.ck-col-done .ck-group')?.offsetParent ?? null) === null, !!$('ck-board').querySelector('.ck-done-toggle').offsetParent]")
         await pg.tap(".ck-done-toggle")
         open_ = await pg.evaluate("$('ck-board').querySelector('.ck-done-toggle').getAttribute('aria-expanded') === 'true'")
         check(folded == [True, True] and open_, f"phone board: Done is one line that unfolds {folded} {open_}")
