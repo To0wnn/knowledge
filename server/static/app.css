@@ -543,6 +543,7 @@ body.admin-page { display: block; overflow-y: auto; }
 .ck-form .ck-files { grid-column: 1 / -1; display: flex; gap: 6px; flex-wrap: wrap; }
 .ck-form .ck-files[hidden] { display: none; }
 .ck-filechip { display: inline-flex; align-items: center; gap: 4px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ck-mic.rec { color: var(--bad, #c33); font-variant-numeric: tabular-nums; }
 .ck-form.drop { outline: 2px dashed var(--accent, #6aa0ff); outline-offset: -4px; }
 .ck-msg.user .ck-file { display: block; margin: 6px 0 0; }
 .ck-msg.user .ck-img { display: block; max-width: min(360px, 100%); max-height: 260px; border-radius: 6px; border: 1px solid var(--line); }

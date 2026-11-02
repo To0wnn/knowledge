@@ -88,8 +88,9 @@ logon). With it:
   allowed" on the companion's page. **Follow** a worker to watch it live in the chat view, steer it between steps, or
   take it over as a chat. [docs/tasks.md](docs/tasks.md)
 - **Chats from your phone.** Open the web UI on your phone and install it as an app; start a chat with Claude Code,
-  Codex or agy in a project folder on one of your PCs. The answer streams in as in a terminal.
-  [docs/chats.md](docs/chats.md)
+  Codex or agy in a project folder on one of your PCs. The answer streams in as in a terminal. Attach files or
+  screenshots, or speak your message (any OpenAI-compatible speech-to-text server, one is bundled).
+  [docs/chats.md](docs/chats.md), [docs/voice.md](docs/voice.md)
 - **Approvals.** Without YOLO, an agent in a chat may edit files in its folder and asks you for anything else:
   **Allow once**, **Allow for this chat** or **Deny**, on the phone or in the Inbox. [docs/chats.md](docs/chats.md)
 - **Inbox and Machines.** One board of what needs you, what runs and what is done; per PC its agents, workers,
@@ -147,6 +148,7 @@ Known gaps: [docs/ROADMAP.md](docs/ROADMAP.md).
 | [tasks.md](docs/tasks.md) | Task lines, leases and nonces, results, workers, usage limit, mission map |
 | [companion.md](docs/companion.md) | The companion, machines, own devices, remote control, YOLO safety |
 | [chats.md](docs/chats.md) | Inbox, chats and approvals |
+| [voice.md](docs/voice.md) | Speaking chat messages: set up speech to text |
 | [web-ui.md](docs/web-ui.md) | Views, routes, graph, installing as an app (PWA, cookies) |
 | [security.md](docs/security.md) | The security model in one page |
 | [development.md](docs/development.md) | Tests, CI, plugin versions, screenshots |

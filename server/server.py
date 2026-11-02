@@ -3616,7 +3616,42 @@ async def ui_me(request: Request):
                          "labels": {p: labels[p] for p in projects if p in labels},
                          "writable": [p for p in projects if wr is None or PROJECTS[p][1] in wr],
                          "sections": list(kb_lint.STRUCTURE),  # a new memo's two sections in the server's language
-                         "prefs": read_json(PREFS_FILE, {}).get(dev.get("user") or "", {})})
+                         "prefs": read_json(PREFS_FILE, {}).get(dev.get("user") or "", {}),
+                         "stt": bool(os.environ.get("KNOWLEDGE_STT_URL"))})  # the page shows the microphone only then
+
+
+STT_TYPES = {"audio/webm": "webm", "audio/ogg": "ogg", "audio/mp4": "m4a", "audio/mpeg": "mp3", "audio/wav": "wav", "audio/x-wav": "wav"}
+
+
+def transcribe(data: bytes, kind: str) -> str:
+    """Speech to text by the OpenAI-compatible server in KNOWLEDGE_STT_URL (its /v1 base: speaches, whisper.cpp's
+    server, LocalAI, OpenAI itself; docs/voice.md). The recording is passed on, never stored."""
+    env = lambda k, d="": os.environ.get(f"KNOWLEDGE_STT_{k}", d).strip()
+    fields = {"model": env("MODEL", "whisper-1"), "response_format": "json", "language": env("LANGUAGE"), "prompt": env("PROMPT")}
+    b = secrets.token_hex(16)
+    body = b"".join(f'--{b}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode() for k, v in fields.items() if v)
+    body += (f'--{b}\r\nContent-Disposition: form-data; name="file"; filename="speech.{STT_TYPES.get(kind, "webm")}"\r\n'
+             f"Content-Type: {kind}\r\n\r\n").encode() + data + f"\r\n--{b}--\r\n".encode()
+    req = urllib.request.Request(env("URL").rstrip("/") + "/audio/transcriptions", data=body, method="POST",
+                                 headers={"Content-Type": f"multipart/form-data; boundary={b}",
+                                          **({"Authorization": f"Bearer {env('KEY')}"} if env("KEY") else {})})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        return str(json.loads(r.read().decode("utf-8")).get("text", "")).strip()
+
+
+@server.custom_route("/ui/api/transcribe", methods=["POST"])
+async def ui_transcribe(request: Request):
+    """Body: a recording from the page's microphone (Content-Type its audio type); answers {text} for the chat box."""
+    if not os.environ.get("KNOWLEDGE_STT_URL"):
+        return JSONResponse({"error": "speech to text is not set up on this server (KNOWLEDGE_STT_URL, see docs/voice.md)"}, status_code=404)
+    data = await request.body()
+    if not data or len(data) > CHAT_FILE_MAX:
+        return JSONResponse({"error": "a recording is 1 byte to 10 MB"}, status_code=413)
+    try:
+        text = await asyncio.to_thread(transcribe, data, request.headers.get("content-type", "audio/webm").split(";")[0].strip().lower())
+    except (OSError, ValueError, AttributeError) as e:  # OSError: refused, timeout, HTTP errors
+        return JSONResponse({"error": f"the speech server failed: {e}"[:300]}, status_code=502)
+    return JSONResponse({"text": text})
 
 
 PREFS_FILE = ADMIN_DIR / "user_prefs.json"  # per person, set on the Settings page: {user: {chat_default: {agent, id, effort}}}

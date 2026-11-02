@@ -1744,7 +1744,9 @@ function ckCard(meta) {
   const attachBtn = el("button", "btn icon quiet ck-attach", "+"), filePick = el("input"), files = el("div", "ck-files");
   attachBtn.type = "button"; attachBtn.title = "Attach files or a screenshot (or paste or drop them here)"; attachBtn.setAttribute("aria-label", "Attach files");
   filePick.type = "file"; filePick.multiple = true; filePick.hidden = true; files.hidden = true;
-  stop.type = "button"; send.type = "submit"; btns.append(attachBtn, filePick, stop, queueBtn, forceBtn, send); form.append(files, input, btns, picks, note);
+  const mic = el("button", "btn icon quiet ck-mic", "🎙"); // speech to text into the box (server's KNOWLEDGE_STT_URL)
+  mic.type = "button"; mic.hidden = !ckMicOk(); mic.title = "Speak (click to start and stop, or hold; Ctrl+Space). The text lands in the box; you send it."; mic.setAttribute("aria-label", "Speak a message");
+  stop.type = "button"; send.type = "submit"; btns.append(attachBtn, mic, filePick, stop, queueBtn, forceBtn, send); form.append(files, input, btns, picks, note);
   const asks = el("div", "ck-asks"); asks.hidden = true; asks.setAttribute("aria-live", "assertive");
   const subbar = el("div", "ck-subbar"); subbar.hidden = true; subbar.setAttribute("aria-label", "Subagents running now");
   root.append(head, log, subbar, asks, form);
@@ -1753,6 +1755,7 @@ function ckCard(meta) {
   open.onclick = () => ckShow(card.meta);
   input.addEventListener("keydown", (e) => {
     // Enter is a new line; Ctrl/Cmd+Enter presses the button (Send, Queue or Force)
+    if (e.key === " " && e.ctrlKey && !mic.hidden) { e.preventDefault(); return mic.toggle(); }
     if (e.key === "Enter" && e.altKey && !e.isComposing && !queueBtn.hidden) { e.preventDefault(); return queueBtn.click(); } // queue
     if (e.key === "Enter" && e.shiftKey && (e.ctrlKey || e.metaKey) && !e.isComposing && !forceBtn.hidden) { e.preventDefault(); return forceBtn.click(); }
     if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey) || e.isComposing) return;
@@ -1760,6 +1763,7 @@ function ckCard(meta) {
   });
   input.addEventListener("input", () => ckPaint(card)); // typing turns Force back into Queue
   attachBtn.onclick = () => filePick.click();
+  ckMic(card, mic);
   filePick.onchange = () => { ckAddFiles(card, filePick.files); filePick.value = ""; };
   input.addEventListener("paste", (e) => { const fs = e.clipboardData?.files; if (fs?.length) { e.preventDefault(); ckAddFiles(card, fs); } });
   form.addEventListener("dragover", (e) => { if ([...(e.dataTransfer?.types || [])].includes("Files")) { e.preventDefault(); form.classList.add("drop"); } });
@@ -2154,6 +2158,43 @@ async function ckUpload(machine, files) {
     refs.push(res.ref);
   }
   return refs;
+}
+// Speaking a message: the browser records (MediaRecorder; needs https), the server passes it to its speech-to-text
+// server and the text goes into the box at the cursor; nothing is sent by itself. Click starts and stops; held down
+// longer than a moment, letting go stops (push to talk).
+const ckMicOk = () => !!(me.stt && window.MediaRecorder && navigator.mediaDevices?.getUserMedia);
+function ckMic(card, btn) {
+  let rec = null, held = 0, timer = null;
+  const label = () => { const s = Math.round((Date.now() - rec.t0) / 1000); btn.textContent = `● ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; if (s >= 300) stop(); };
+  const say = (msg) => { card.note.className = "ck-note bad"; card.note.textContent = msg; };
+  async function start() {
+    let stream;
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+    catch (e) { return say(`Microphone: ${e.name === "NotAllowedError" ? "not allowed in this browser" : e.message}`); }
+    rec = new MediaRecorder(stream); rec.t0 = Date.now(); const parts = [];
+    rec.ondataavailable = (e) => e.data.size && parts.push(e.data);
+    rec.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop()); clearInterval(timer); rec = null;
+      btn.classList.remove("rec"); btn.textContent = "…"; btn.disabled = true;
+      const blob = new Blob(parts, { type: parts[0]?.type || "audio/webm" });
+      try {
+        const { text } = await api("/ui/api/transcribe", { method: "POST", headers: { "Content-Type": blob.type }, body: blob });
+        if (text) {
+          const i = card.input, a = i.selectionStart ?? i.value.length, b = i.selectionEnd ?? a;
+          const pre = i.value.slice(0, a), add = (pre && !/\s$/.test(pre) ? " " : "") + text;
+          i.value = pre + add + i.value.slice(b); i.selectionStart = i.selectionEnd = a + add.length;
+          i.dispatchEvent(new Event("input"));
+        } else say("Nothing heard");
+      } catch (e) { say(e.message); }
+      btn.textContent = "🎙"; btn.disabled = false; card.input.focus();
+    };
+    rec.start(); btn.classList.add("rec"); label(); timer = setInterval(label, 500);
+  }
+  const stop = () => rec && rec.state === "recording" && rec.stop();
+  btn.toggle = () => (rec ? stop() : start());
+  btn.addEventListener("pointerdown", (e) => { e.preventDefault(); if (rec) return stop(); held = Date.now(); start(); });
+  btn.addEventListener("pointerup", () => { if (rec && held && Date.now() - held > 700) stop(); held = 0; });
+  btn.addEventListener("click", (e) => { if (e.detail === 0) btn.toggle(); }); // the keyboard (Enter/Space on the button)
 }
 // A message of the owner: its text, each attachment a thumbnail (images) or a download link.
 function ckUserMsg(card, text) {

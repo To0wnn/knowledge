@@ -36,7 +36,28 @@ services:
       KNOWLEDGE_MATRIX_URL: ${KNOWLEDGE_MATRIX_URL:-}
       KNOWLEDGE_MATRIX_ROOM: ${KNOWLEDGE_MATRIX_ROOM:-}
       KNOWLEDGE_MATRIX_TOKEN: ${KNOWLEDGE_MATRIX_TOKEN:-}
+      # Optional: speak chat messages (docs/voice.md). Any OpenAI-compatible speech-to-text server: the "voice" profile
+      # below (docker compose --profile voice up -d, then KNOWLEDGE_STT_URL=http://voice:8000/v1), one you run already,
+      # or OpenAI (https://api.openai.com/v1 with KNOWLEDGE_STT_KEY; then the audio leaves your network).
+      KNOWLEDGE_STT_URL: ${KNOWLEDGE_STT_URL:-}
+      KNOWLEDGE_STT_MODEL: ${KNOWLEDGE_STT_MODEL:-Systran/faster-whisper-small}  # the speech server's model name (OpenAI: whisper-1)
+      KNOWLEDGE_STT_LANGUAGE: ${KNOWLEDGE_STT_LANGUAGE:-}  # e.g. en or nl; empty = detect (slower)
+      KNOWLEDGE_STT_PROMPT: ${KNOWLEDGE_STT_PROMPT:-}  # names and terms it should spell right, comma-separated
+      KNOWLEDGE_STT_KEY: ${KNOWLEDGE_STT_KEY:-}
       # Optional: duplicate check with a reranker model folder under ./data (server/export_reranker.sh), e.g. /data/models/reranker.
       KNOWLEDGE_RERANK_MODEL: ${KNOWLEDGE_RERANK_MODEL:-}
     volumes:
       - ./data:/data
+
+  # Optional speech to text for the chat microphone, on the CPU (speaches: faster-whisper behind the OpenAI API).
+  # Started only with `--profile voice`; the model is fetched on first start (~500 MB for small) and kept in ./data.
+  voice:
+    image: ghcr.io/speaches-ai/speaches:latest-cpu
+    profiles: [voice]
+    container_name: knowledge-voice
+    restart: unless-stopped
+    environment:
+      PRELOAD_MODELS: '["${KNOWLEDGE_STT_MODEL:-Systran/faster-whisper-small}"]'
+      STT_MODEL_TTL: -1  # keep the model in RAM: the first word after a pause is not slow
+    volumes:
+      - ./data/voice:/home/ubuntu/.cache/huggingface/hub

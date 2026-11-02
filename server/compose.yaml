@@ -39,6 +39,9 @@ x-server: &server
     # A new project or token made by a person (not an admin) is reported here; the bot token is in proxy.env.
     KNOWLEDGE_MATRIX_URL: ${KNOWLEDGE_MATRIX_URL}
     KNOWLEDGE_MATRIX_ROOM: ${KNOWLEDGE_MATRIX_ROOM}
+    KNOWLEDGE_STT_URL: ${KNOWLEDGE_STT_URL:-}  # speaking in chats (docs/voice.md)
+    KNOWLEDGE_STT_LANGUAGE: ${KNOWLEDGE_STT_LANGUAGE:-}
+    KNOWLEDGE_STT_PROMPT: ${KNOWLEDGE_STT_PROMPT:-}
   # KNOWLEDGE_PROXY_SECRET (Vaultwarden KNOWLEDGE_PROXY_SECRET): Traefik sends it with the Authentik user header.
   # KNOWLEDGE_MATRIX_TOKEN (Vaultwarden MATRIX_BOT_TOKEN): the bot that posts to KNOWLEDGE_MATRIX_ROOM.
   env_file: /root/docker/knowledge/config/proxy.env

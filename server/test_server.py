@@ -1634,10 +1634,15 @@ def main():
                 body = json.dumps({"license": {"spdx_id": gh["license"]}}).encode()
             self.send_response(200); self.end_headers(); self.wfile.write(body)
 
+        def do_POST(self):  # speech to text: /v1/audio/transcriptions, multipart (the server passes the page's recording on)
+            body = self.rfile.read(int(self.headers["Content-Length"]))
+            heard_stt.append((self.path, self.headers.get("Authorization"), body))
+            self.send_response(200); self.end_headers(); self.wfile.write(json.dumps({"text": " back up forge \n"}).encode())
+
         def do_PUT(self):  # Matrix: /_matrix/client/v3/rooms/<room>/send/m.room.message/<txn>
             heard.append(json.loads(self.rfile.read(int(self.headers["Content-Length"])))["body"])
             self.send_response(200); self.end_headers(); self.wfile.write(b"{}")
-    heard = []
+    heard, heard_stt = [], []
     (tmp / "settings.json").write_text(json.dumps({"needs_per_hour": 0}))  # needs_contract switches it on
     ghs = ThreadingHTTPServer(("127.0.0.1", 0), FakeGitHub)
     thr.Thread(target=ghs.serve_forever, daemon=True).start()
@@ -1654,6 +1659,7 @@ def main():
            "KNOWLEDGE_GITHUB_API": ghurl, "KNOWLEDGE_GITHUB_RAW": ghurl + "/raw", "KNOWLEDGE_EXTERNAL_SLEEP": "3600", "KNOWLEDGE_INSTANCE": "blue", "KNOWLEDGE_PLUGIN_GRACE": "0",
            "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_RERANK_MODEL": "test", "KNOWLEDGE_DUPES_EVERY": "1", "KNOWLEDGE_DUPES_DELAY": "0", "KNOWLEDGE_DUPES_DEBOUNCE": "0", "KNOWLEDGE_WATCH_DEVICE": "laptop", "KNOWLEDGE_TASK_STALLED": "1", "KNOWLEDGE_TASK_LEASE": "600", "KNOWLEDGE_TASK_CHECK": "1", "KNOWLEDGE_RESCAN": "2", "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}",
            "KNOWLEDGE_MATRIX_URL": ghurl, "KNOWLEDGE_MATRIX_ROOM": "!room:example", "KNOWLEDGE_MATRIX_TOKEN": "mx",
+           "KNOWLEDGE_STT_URL": ghurl + "/v1/", "KNOWLEDGE_STT_LANGUAGE": "nl", "KNOWLEDGE_STT_PROMPT": "forge, Proxmox", "KNOWLEDGE_STT_KEY": "sk-1",
            "KNOWLEDGE_NEEDS_QUIET": "2", "KNOWLEDGE_UI_GAP_WAIT": "0.5", "KNOWLEDGE_PUBLIC_URL": "https://kn.example"}
     proc = subprocess.Popen([sys.executable, str(Path(__file__).with_name("server.py"))], env=env)
     try:
@@ -1941,7 +1947,7 @@ def main():
         assert raw("POST", "/ui/login", "password=gategategate", form)[0] == 429  # also the right one, until the minute passed
         assert raw("GET", "/", headers=ck)[1].get("location") == "/ui"
         assert raw("GET", "/ui", headers=ck)[0] == 200
-        assert json.loads(raw("GET", "/ui/api/me", headers=ck)[2]) == {"user": "alice", "admin": True, "projects": ["homelab", "trade"], "writable": ["homelab", "trade"], "labels": {}, "sections": ["## Stand", "## Keuzes"], "prefs": {}}  # anpitek is empty here: no tab; the server's (nl) sections for "+ Add memo"
+        assert json.loads(raw("GET", "/ui/api/me", headers=ck)[2]) == {"user": "alice", "admin": True, "projects": ["homelab", "trade"], "writable": ["homelab", "trade"], "labels": {}, "sections": ["## Stand", "## Keuzes"], "prefs": {}, "stt": True}  # anpitek is empty here: no tab; the server's (nl) sections for "+ Add memo"
         g = json.loads(raw("GET", "/ui/api/graph", headers=ck)[2])
         assert g["nodes"] and not any(n["id"].endswith("/MEMORY.md") for n in g["nodes"]), g["nodes"][:3]  # index not drawn, still readable below
         assert {n["project"] for n in g["nodes"] if n["id"].startswith("trade")} == {"trade"}
@@ -2029,7 +2035,7 @@ def main():
         assert admin("/ui/api/admin/user", {"username": "alice", "projects": {}})[0] == 400  # admins come from the config
         assert admin("/ui/api/admin/user", {"username": "bob", "projects": {"trade": "read", "homelab": "none"}})[0] == 200
         ro = user("bob")
-        assert json.loads(raw("GET", "/ui/api/me", headers=ro)[2]) == {"user": "bob", "admin": False, "projects": ["trade"], "writable": [], "labels": {}, "sections": ["## Stand", "## Keuzes"], "prefs": {}}
+        assert json.loads(raw("GET", "/ui/api/me", headers=ro)[2]) == {"user": "bob", "admin": False, "projects": ["trade"], "writable": [], "labels": {}, "sections": ["## Stand", "## Keuzes"], "prefs": {}, "stt": True}
         # A display name for a project: set by an admin, shown to everyone who sees the project; empty restores the name.
         assert admin("/ui/api/admin/project-label", {"name": "trade", "label": "Trading"}, ro)[0] == 403
         assert admin("/ui/api/admin/project-label", {"name": "nope", "label": "X"})[0] == 400
@@ -2528,6 +2534,16 @@ def main():
         assert {"erinproj", "erinproj-memory"} <= set(roots), roots  # her devices reach her new project at once
         machines_contract(tmp, ck, fr, raw, er, et)
         chats_contract(tmp, ck, fr, raw, er, et)
+        # Speech to text: the page's recording goes on to the configured server with model, language, prompt and key;
+        # its text comes back trimmed; the microphone shows only when it is set up (me.stt).
+        st, _, b = raw("POST", "/ui/api/transcribe", b"OggS-audio", {**ck, "X-Knowledge-UI": "1", "Content-Type": "audio/ogg;codecs=opus"})
+        path, auth, sent = heard_stt[-1]
+        assert st == 200 and json.loads(b) == {"text": "back up forge"}, b
+        assert path == "/v1/audio/transcriptions" and auth == "Bearer sk-1" and b'filename="speech.ogg"' in sent and b"OggS-audio" in sent, sent[:300]
+        assert b'name="language"\r\n\r\nnl' in sent and b'name="prompt"\r\n\r\nforge, Proxmox' in sent and b'name="model"\r\n\r\nwhisper-1' in sent, sent[:400]
+        assert raw("POST", "/ui/api/transcribe", b"", {**ck, "X-Knowledge-UI": "1"})[0] == 413
+        assert raw("POST", "/ui/api/transcribe", b"x", {**ck})[0] == 403, "a UI write needs its header"
+        assert json.loads(raw("GET", "/ui/api/me", None, ck)[2])["stt"] is True
         worker_follow_contract(tmp, ck, fr, raw, er, et)
         board_contract(tmp, ck, fr, raw, er, et)
         needs_contract(tmp, ck, fr, raw, heard)

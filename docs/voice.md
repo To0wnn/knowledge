@@ -1,0 +1,46 @@
+# Speaking in chats
+
+[Back to the README](../README.md). The chat box has a microphone button when the server knows a speech-to-text
+server: click to start and again to stop, or hold it while you talk (Ctrl+Space in the box does the same). The text
+lands in the box at the cursor; you read it and send it yourself.
+
+## How it works
+
+The browser records (MediaRecorder: webm/opus in Chrome and Firefox, mp4 in Safari) and posts the recording to the
+knowledge server (`POST /ui/api/transcribe`), which passes it on to an **OpenAI-compatible** speech-to-text server
+(`<KNOWLEDGE_STT_URL>/audio/transcriptions`, multipart, `response_format=json`) and answers `{text}`. The recording is
+never stored. The microphone shows only when `KNOWLEDGE_STT_URL` is set (`stt` in `GET /ui/api/me`).
+
+Browsers allow a microphone only on **https** (or `localhost`): open the web UI through its https address.
+
+## Set it up
+
+Pick one, then restart the server.
+
+| Option | Setting | Note |
+|---|---|---|
+| The bundled one | `KNOWLEDGE_STT_URL=http://voice:8000/v1` | CPU, local |
+| A server you run | its `/v1` base URL | any OpenAI-compatible one |
+| OpenAI | `https://api.openai.com/v1` | audio leaves your network |
+
+- **The bundled one** (speaches, faster-whisper on the CPU): `mkdir -p data/voice`, put
+  `KNOWLEDGE_STT_URL=http://voice:8000/v1` in `.env`, then `docker compose --profile voice up -d`. The first start
+  fetches the model (`Systran/faster-whisper-small`, ~500 MB) into `data/voice`; it then needs ~1 GB RAM and answers a
+  sentence in a few seconds on 4 cores. For better accuracy, a bigger model:
+  `KNOWLEDGE_STT_MODEL=deepdml/faster-whisper-large-v3-turbo-ct2` (slower on a CPU; with an NVIDIA GPU use the
+  `latest-cuda` image).
+- **A server you already run** (whisper.cpp's `whisper-server` started with `--inference-path /v1/audio/transcriptions`
+  and `--convert`, LocalAI, speaches, …): its `/v1` base in `KNOWLEDGE_STT_URL`, its model name in
+  `KNOWLEDGE_STT_MODEL` when it needs one.
+- **OpenAI**: `KNOWLEDGE_STT_URL=https://api.openai.com/v1`, `KNOWLEDGE_STT_KEY=<key>`, `KNOWLEDGE_STT_MODEL=whisper-1`.
+
+Optional for all: `KNOWLEDGE_STT_LANGUAGE` (`en`, `nl`, …; empty = detect, slower and sometimes the wrong language)
+and `KNOWLEDGE_STT_PROMPT` (names and terms it should spell right, comma-separated).
+
+## When it does not work
+
+| You see | Cause |
+|---|---|
+| No microphone button | `KNOWLEDGE_STT_URL` not set, or the page is on http |
+| "Microphone: not allowed" | the browser blocked it: allow it in the site settings |
+| "the speech server failed: …" | the server cannot reach the speech server, or it refused the model name |
