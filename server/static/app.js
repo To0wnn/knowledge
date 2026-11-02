@@ -1732,25 +1732,35 @@ function ckCard(meta) {
     card.stickToBottom = dist < 80;
     card.savedScrollTop = log.scrollTop;
   }, { passive: true });
-  input.rows = 2; input.placeholder = "Message the agent… (Enter a new line, Ctrl+Enter sends)"; input.setAttribute("aria-label", "Message");
-  const stop = el("button", "btn ck-stop", "Stop"), send = el("button", "btn primary", "Send"), note = el("p", "ck-note");
-  // a live agent at work: Queue (after this turn) and Force (stop the step, then this) next to Send (into this turn)
-  const queueBtn = el("button", "btn ck-queue", "Queue"), forceBtn = el("button", "btn ck-forcebtn", "Force");
-  queueBtn.type = forceBtn.type = "button"; queueBtn.hidden = forceBtn.hidden = true;
-  queueBtn.title = "After this turn (Alt+Enter)"; forceBtn.title = "Stop the step it is on, then this (Ctrl+Shift+Enter)";
+  input.rows = 1; input.placeholder = "Message the agent…"; input.setAttribute("aria-label", "Message (Enter a new line, Ctrl+Enter sends)");
+  const stop = el("button", "btn small ck-stop", "Stop"), send = el("button", "btn small primary ck-send", "Send"), note = el("p", "ck-note");
+  // a live agent at work: Queue (after this turn) and Force (stop the step, then this) in a small menu beside Send
+  const more = el("details", "menu up ck-more"), moreSum = el("summary", "btn small ck-send-more", "▾"), moreList = el("div", "menu-list");
+  moreSum.title = "Queue or Force"; moreSum.setAttribute("aria-label", "Queue or Force this message");
+  const queueBtn = el("button", "ck-queue"), forceBtn = el("button", "ck-forcebtn");
+  queueBtn.append("Queue", el("span", "muted", "after this turn · Alt+Enter")); forceBtn.append("Force", el("span", "muted", "stop the step, then this · Ctrl+Shift+Enter"));
+  queueBtn.type = forceBtn.type = "button"; queueBtn.hidden = forceBtn.hidden = more.hidden = true;
+  moreList.append(queueBtn, forceBtn); more.append(moreSum, moreList);
   // under the box: the model (one chip, its effort inside) and, in a new chat, where it runs (ckPicker)
   const picks = el("div", "ck-picks"); picks.hidden = true;
   // files for the next message: picked, pasted (a screenshot) or dropped; they go up when it is sent
-  const attachBtn = el("button", "btn icon quiet ck-attach", "+"), filePick = el("input"), files = el("div", "ck-files");
+  const attachBtn = el("button", "btn icon small quiet ck-attach"), filePick = el("input"), files = el("div", "ck-files");
+  attachBtn.innerHTML = CK_ICON.clip;
   attachBtn.type = "button"; attachBtn.title = "Attach files or a screenshot (or paste or drop them here)"; attachBtn.setAttribute("aria-label", "Attach files");
   filePick.type = "file"; filePick.multiple = true; filePick.hidden = true; files.hidden = true;
-  const mic = el("button", "btn icon quiet ck-mic", "🎙"); // speech to text into the box (server's KNOWLEDGE_STT_URL)
+  const mic = el("button", "btn icon small quiet ck-mic"); // speech to text into the box (server's KNOWLEDGE_STT_URL)
+  mic.innerHTML = CK_ICON.mic;
   mic.type = "button"; mic.hidden = !ckMicOk(); mic.title = "Speak (click to start and stop, or hold; Ctrl+Space). The text lands in the box; you send it."; mic.setAttribute("aria-label", "Speak a message");
-  stop.type = "button"; send.type = "submit"; btns.append(attachBtn, mic, filePick, stop, queueBtn, forceBtn, send); form.append(files, input, btns, picks, note);
+  // one box: the files, the text, and a bar under it (attach and model left; microphone, Stop and Send right)
+  const box = el("div", "ck-box"), bar = el("div", "ck-bar"), barL = el("div", "ck-bar-l"), sendGroup = el("span", "ck-sendgroup");
+  stop.type = "button"; send.type = "submit"; sendGroup.append(send, more);
+  barL.append(attachBtn, filePick, picks); btns.append(mic, stop, sendGroup); bar.append(barL, btns);
+  box.append(files, input, bar); form.append(box, note);
+  box.addEventListener("click", (e) => { if (e.target === box || e.target === bar || e.target === barL) input.focus(); });
   const asks = el("div", "ck-asks"); asks.hidden = true; asks.setAttribute("aria-live", "assertive");
   const subbar = el("div", "ck-subbar"); subbar.hidden = true; subbar.setAttribute("aria-label", "Subagents running now");
   root.append(head, log, subbar, asks, form);
-  const card = { meta: { ...meta }, root, name, where, git, state, log, asks, form, input, stop, send, note, picks, mark, close, tok, subbar, queueBtn, forceBtn, filesBox: files, files: [], mode: "", pick: null, after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
+  const card = { meta: { ...meta }, root, name, where, git, state, log, asks, form, input, stop, send, note, picks, mark, close, tok, subbar, queueBtn, forceBtn, more, filesBox: files, files: [], mode: "", pick: null, after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
   x.onclick = () => ckShow(null);
   open.onclick = () => ckShow(card.meta);
   input.addEventListener("keydown", (e) => {
@@ -1761,7 +1771,8 @@ function ckCard(meta) {
     if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey) || e.isComposing) return;
     e.preventDefault(); form.requestSubmit();
   });
-  input.addEventListener("input", () => ckPaint(card)); // typing turns Force back into Queue
+  const grow = () => { input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 220)}px`; }; // the box grows with the text
+  input.addEventListener("input", () => { grow(); ckPaint(card); }); // typing turns Force back into Queue
   attachBtn.onclick = () => filePick.click();
   ckMic(card, mic);
   filePick.onchange = () => { ckAddFiles(card, filePick.files); filePick.value = ""; };
@@ -1804,7 +1815,7 @@ function ckCard(meta) {
         await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, text, mode, ...pick }) });
         Object.assign(card.meta, pick); card.pick = null;
       }
-      input.value = ""; card.files = []; ckFilesPaint(card); if (!card.worker) card.meta.status = "queued";
+      input.value = ""; input.style.height = ""; card.files = []; ckFilesPaint(card); if (!card.worker) card.meta.status = "queued";
     } catch (err) { note.className = "ck-note bad"; note.textContent = err.message; }
     ckPaint(card); await ckPoll(card); clearTimeout(ck.timer); ck.timer = setTimeout(ckTick, 1500);
   };
@@ -1817,8 +1828,8 @@ function ckCard(meta) {
       ckTick();
     } catch (err) { note.className = "ck-note bad"; note.textContent = err.message; }
   };
-  queueBtn.onclick = () => { card.mode = "queue"; form.requestSubmit(); };
-  forceBtn.onclick = () => { card.mode = "force"; form.requestSubmit(); };
+  queueBtn.onclick = () => { more.open = false; card.mode = "queue"; form.requestSubmit(); };
+  forceBtn.onclick = () => { more.open = false; card.mode = "force"; form.requestSubmit(); };
   stop.onclick = async () => {
     if (card.worker) return ckWorkerAct(card, "stop_worker");
     try { await api("/ui/api/chat/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id }) }); }
@@ -2113,7 +2124,8 @@ function ckPaint(card) {
   const force = busy && m.status === "running" && m.waiting > 0 && !card.input.value.trim();
   const live = ckLive(m), typed = !!card.input.value.trim();
   card.stop.hidden = !busy; card.send.disabled = !card.online; card.send.classList.toggle("force", force);
-  card.queueBtn.hidden = card.forceBtn.hidden = !(live && busy && typed); // a live agent at work: three ways in
+  card.queueBtn.hidden = card.forceBtn.hidden = card.more.hidden = !(live && busy && typed); // a live agent at work: three ways in
+  card.send.classList.toggle("split", !card.more.hidden);
   card.send.textContent = force ? "Force" : busy && !live ? "Queue" : "Send";
   card.send.title = force ? `Send the first of ${m.waiting} waiting message${m.waiting > 1 ? "s" : ""} into the turn${live ? ": its step stops and it goes in" : ": the agent reads it after its next step"} (Stop ends the turn)`
     : busy && live ? (m.agent === "agy" ? "Right after this turn, in the same agy (it takes no message mid-turn) (Ctrl+Enter)" : "Into this turn: the agent takes it in as it works (Ctrl+Enter)")
@@ -2140,6 +2152,10 @@ async function ckPoll(card) {
   ckAsks(card, res.asks || [], (res.now || Date.now() / 1000) - Date.now() / 1000);
   ckPaint(card);
 }
+const CK_ICON = { // inline, in the text colour
+  clip: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5l-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.6-8.6a3.7 3.7 0 0 1 5.2 5.2l-8.6 8.6a1.8 1.8 0 0 1-2.6-2.6l7.9-7.9"/></svg>',
+  mic: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>',
+};
 // Attachments: at most CK_FILES of 10 MB each per message, shown as chips until it is sent.
 const CK_FILES = 5, CK_FILE_MB = 10, CK_REF = /⟦file:([0-9a-f]{12})\/([^⟧]+)⟧/g, CK_IMG = /\.(png|jpe?g|gif|webp)$/i;
 function ckAddFiles(card, list) {
@@ -2194,7 +2210,7 @@ function ckMic(card, btn) {
           i.dispatchEvent(new Event("input"));
         } else say("Nothing heard");
       } catch (e) { say(e.message); }
-      btn.textContent = "🎙"; btn.disabled = false; card.input.focus();
+      btn.innerHTML = CK_ICON.mic; btn.disabled = false; card.input.focus();
     };
     rec.start(); btn.classList.add("rec"); label(); timer = setInterval(label, 500);
   }

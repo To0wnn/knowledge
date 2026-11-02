@@ -516,9 +516,27 @@ body.admin-page { display: block; overflow-y: auto; }
 .ck-banner-text { margin: 0; flex: 1 1 240px; color: var(--muted); }
 .ck-banner-acts { display: flex; flex-wrap: wrap; gap: 6px; }
 .ck-form[hidden] { display: none; }
-.ck-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); align-items: end; }
-.ck-form textarea { resize: none; min-height: 42px; max-height: 160px; font-size: 14px; }
-.ck-form .ck-btns { display: flex; gap: 6px; }
+/* The composer: one rounded box (files, the text, a bar under it); the box, not the text field, shows focus. */
+.ck-form { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px 10px; }
+.ck-box { display: flex; flex-direction: column; gap: 4px; padding: 8px 8px 6px 10px; border: 1px solid var(--line-hi); border-radius: 14px;
+  background: var(--panel-hi); cursor: text; transition: border-color .12s, box-shadow .12s; }
+.ck-box:focus-within { border-color: var(--amber); box-shadow: 0 0 0 3px color-mix(in srgb, var(--amber) 16%, transparent); }
+.ck-bar { display: flex; align-items: center; gap: 6px; cursor: default; }
+.ck-bar-l { display: flex; align-items: center; gap: 2px; flex: 1; min-width: 0; }
+.ck-sendgroup { display: inline-flex; }
+.ck-send.split { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.ck-more > summary.ck-send-more { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 1px solid color-mix(in srgb, #000 18%, transparent);
+  background: var(--accent); border-color: var(--accent); color: #fff; padding: 0 7px; list-style: none; }
+.ck-more > summary::-webkit-details-marker { display: none; }
+.ck-more[hidden] { display: none; }
+.ck-more.menu.up .menu-list { right: 0; left: auto; min-width: 260px; transform-origin: bottom right; }
+.ck-more .menu-list button { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; padding: 6px 10px; border: 0; background: none; text-align: left; cursor: pointer; border-radius: var(--r-sm); }
+.ck-more .menu-list button:hover { background: var(--hover); }
+.ck-more .menu-list .muted { font-size: 11.5px; }
+.ck-box textarea { resize: none; min-height: 24px; max-height: 220px; padding: 2px 2px; border: 0; border-radius: 0; background: transparent;
+  font-size: 14px; line-height: 1.45; box-shadow: none; outline: none; }
+.ck-box textarea:hover:not(:focus) { border-color: transparent; }
+.ck-form .ck-btns { display: flex; gap: 4px; align-items: center; }
 #set-chat { max-width: 520px; } #set-chat h3 { margin: 8px 0 4px; } #set-chat .actions { justify-content: flex-start; }
 .ck-resets { display: inline-flex; gap: 6px; } .ck-resets[hidden] { display: none; }
 .ck-history .ck-subrow .ck-chat { padding-left: 22px; font-size: 13px; } /* a subagent's chat, under its chat */
@@ -540,14 +558,16 @@ body.admin-page { display: block; overflow-y: auto; }
 .ck-sub-report:empty, .ck-sub-tools:empty { display: none; }
 .ck-sub.running > summary .chip { animation: kn-pulse 1.6s ease-in-out infinite; }
 .chip.live { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
-.ck-form .ck-files { grid-column: 1 / -1; display: flex; gap: 6px; flex-wrap: wrap; }
+.ck-form .ck-files { display: flex; gap: 6px; flex-wrap: wrap; }
 .ck-form .ck-files[hidden] { display: none; }
 .ck-filechip { display: inline-flex; align-items: center; gap: 4px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ck-mic.rec { color: var(--bad, #c33); font-variant-numeric: tabular-nums; }
-.ck-form.drop { outline: 2px dashed var(--accent, #6aa0ff); outline-offset: -4px; }
+.ck-form.drop .ck-box { border-style: dashed; border-color: var(--accent); }
 .ck-msg.user .ck-file { display: block; margin: 6px 0 0; }
 .ck-msg.user .ck-img { display: block; max-width: min(360px, 100%); max-height: 260px; border-radius: 6px; border: 1px solid var(--line); }
-.ck-form .ck-picks { grid-column: 1 / -1; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.ck-form .ck-picks { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; min-width: 0; }
+.ck-form .ck-picks .ck-model > summary { border-color: transparent; background: transparent; color: var(--muted); }
+.ck-form .ck-picks .ck-model > summary:hover, .ck-form .ck-picks .ck-model[open] > summary { background: var(--hover); color: var(--ink); }
 .ck-form .ck-picks[hidden], .ck-form .ck-picks select[hidden] { display: none; }
 .ck-form .ck-picks select { max-width: 60%; }
 /* the model panel opens upward from its chip; on a phone it takes the width of the box */
@@ -566,7 +586,8 @@ body.admin-page { display: block; overflow-y: auto; }
 @media (max-width: 699.98px) { .ck-form .ck-model.menu.up .ck-model-list { width: calc(100vw - 32px); } }
 .ck-form .ck-stop[hidden] { display: none; }
 .ck-form .btn.primary.force { border-color: var(--bad); background: var(--bad); color: #fff; }
-.ck-note { grid-column: 1 / -1; margin: 0; font-size: 12px; color: var(--muted); }
+.ck-note { margin: 0 4px; font-size: 11.5px; color: var(--muted); }
+.ck-note:empty { display: none; }
 .ck-line.ask { color: var(--amber-ink); border-left-color: var(--amber); }
 .ck-asks { display: grid; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); max-height: 45vh; overflow: auto; }
 .ck-asks[hidden] { display: none; }
@@ -653,7 +674,7 @@ dialog.ck-diff { width: min(980px, calc(100vw - 32px)); }
 .bd-card .ck-x:not(.bd-only), .bd-only { display: none; }
 .bd-card .bd-only { display: inline-grid; }
 .bd-card .ck-dot.bd-only { display: block; flex: none; }
-.bd-card .ck-form textarea { min-height: 38px; }
+.bd-card .ck-box textarea { min-height: 22px; }
 .bd-sum { display: none; }
 .bd.far .bd-card > .ck-card { display: none; }
 .bd.far .bd-card { cursor: move; }
