@@ -1749,7 +1749,8 @@ function ckCard(meta) {
   input.addEventListener("input", () => ckPaint(card)); // typing turns Force back into Queue
   form.onsubmit = async (e) => {
     e.preventDefault();
-    const text = input.value.trim();
+    const text = input.value.trim(), mode = card.mode || "now";
+    card.mode = ""; // Queue or Force counts for this press only, also when it goes no further
     if (!text && card.send.classList.contains("force")) { // empty box with messages waiting: the next one goes in now
       send.disabled = true;
       try { await api("/ui/api/chat/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, force: true }) }); }
@@ -1766,7 +1767,7 @@ function ckCard(meta) {
       else {
         // only a choice made here: a saved model the pc no longer lists must not turn into Default unasked
         const pick = card.pick?.touched ? { model: card.pick.id, effort: card.pick.effort } : {};
-        const mode = card.mode || "now"; card.mode = ""; // Send: into the turn (a live agent) or after it (others)
+        // mode: Send into the turn (a live agent) or after it (others); Queue or Force from their buttons
         await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, text, mode, ...pick }) });
         Object.assign(card.meta, pick); card.pick = null;
       }

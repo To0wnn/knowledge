@@ -829,12 +829,14 @@ def run_turn(item: dict, post, log, linked, yolo):
 LIVE: dict = {}  # chat id -> Live
 LIVE_AGENTS = ("claude",)
 IDLE_CLOSE = 15 * 60
-TURN_GRACE = 3.0  # seconds after a result to see whether a message sent during the turn starts one more
+MAX_LIVE = 6  # agents kept running on one pc; the oldest idle one ends first (a few hundred MB each)
+START_LOCK = threading.Lock()  # one process per chat, also when two messages for it come in one poll
 
 
 def live_argv(exe: str, yolo: bool, session: str, cid: str, model: str, effort: str) -> list:
     one = argv("claude", exe, yolo, session, cid, model, effort)
-    return [one[0], "-p", "--input-format", "stream-json", *one[2:]]  # the same flags, the input a stream of messages
+    # the same flags; the input a stream of messages; each one echoed back when the agent takes it (its turn count)
+    return [one[0], "-p", "--input-format", "stream-json", "--replay-user-messages", *one[2:]]
 
 
 def user_line(text: str) -> bytes:
@@ -842,15 +844,19 @@ def user_line(text: str) -> bytes:
 
 
 class Live:
-    """One chat's running agent: write messages in, read its stream out, tell the server where each turn ends."""
+    """One chat's running agent: messages in, its stream out, and where each turn ends, counted, not guessed: every
+    message written is echoed back (isReplay) when the agent takes it, so a turn is over at a result once every
+    message written has been taken (measured on Claude Code 2.1.314: a message sent mid-step is taken after the step
+    and answered in the same turn; an interrupt while idle gives no result)."""
 
     def __init__(self, item: dict, post, log, yolo: bool):
         self.cid, self.agent, self.folder = item["chat"], item["agent"], item.get("folder", "")
         self.post, self.log, self.yolo, self.pick = post, log, yolo, choice(item)
         self.st = {"session": item.get("session") or ""}
         self.lock, self.buf, self.flushed, self.last = threading.Lock(), [], time.time(), time.time()
-        self.busy = self.extra = False  # a turn runs; a message went in during it (one more turn may follow)
-        self.after_interrupt, self.ended_at, self.closing, self.stop_asked = [], 0.0, False, False
+        self.written = self.taken = 0  # messages written in, and echoed back as taken
+        self.turn_open = self.busy = False  # the agent works on a turn; the server counts the chat running
+        self.after_interrupt, self.closing, self.stop_asked = [], False, False
         self.subs = set()  # its subagents running now: not idle while one works
         exe = shutil.which(self.agent)
         if not exe:
@@ -863,8 +869,9 @@ class Live:
         env = {**os.environ, "KNOWLEDGE_CHAT": self.cid}
         self.p = subprocess.Popen(cmd, cwd=self.folder, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.errf,
                                   env=env if yolo else workers.git_safe_env(env), **kw)
-        self.rec = {"pid": self.p.pid, "ident": workers.identity(self.p.pid), "stop": False, "folder": self.folder, "st": self.st,
-                    "allow": [x for x in item.get("allow") or [] if isinstance(x, dict)], "live": self}
+        # known to the companion for its whole life: its approvals (also a background subagent's between turns)
+        self.rec = RUNNING[self.cid] = {"pid": self.p.pid, "ident": workers.identity(self.p.pid), "stop": False, "folder": self.folder,
+                                        "st": self.st, "allow": [x for x in item.get("allow") or [] if isinstance(x, dict)], "live": True}
         threading.Thread(target=self.read, daemon=True).start()
         log("chat", f"Claude Code: live chat started in {self.folder}", f"chat {self.cid}" + (f", continues {self.st['session']}" if self.st["session"] else ""))
 
@@ -875,25 +882,26 @@ class Live:
         self.p.stdin.write(data)
         self.p.stdin.flush()
 
-    def begin(self):  # a turn runs: the server's busy list must find it here
-        self.busy, self.stop_asked = True, False
-        RUNNING[self.cid] = self.rec
-        self.rec["stop"] = False
+    def begin(self, auto: str = ""):
+        """The chat runs (for the server too: auto tells it a turn began that it did not hand out)."""
+        if not self.busy:
+            self.busy, self.stop_asked = True, False
+            if auto:
+                self.buf.append(("info", auto))
+                self.flush(auto=True)
 
     def send(self, item: dict, mode: str = ""):
-        """A message: into the turn that runs ("now", the default while busy), after interrupting its step ("force"),
-        or as a new turn when none runs."""
+        """A message: into the turn that runs (the agent takes it after its step), after interrupting the step ("force",
+        only while a turn is open), or a new turn."""
         with self.lock:
             self.last = time.time()
             text = item.get("text", "")
-            if self.busy and mode == "force":
+            if mode == "force" and self.turn_open:
                 self.after_interrupt.append(text)
                 self.interrupt()
                 return
-            if self.busy:
-                self.extra = True
-            else:
-                self.begin()
+            self.begin("" if not mode else "Your message started a turn.")
+            self.written += 1
             self.write(user_line(text))
 
     def interrupt(self):
@@ -901,17 +909,22 @@ class Live:
         try:
             self.write((json.dumps({"type": "control_request", "request_id": secrets.token_hex(6), "request": {"subtype": "interrupt"}}) + "\n").encode())
         except OSError:
-            pass
-        threading.Timer(15, self.kill_if_stuck, args=(time.time(),)).start()
+            return
+        threading.Timer(15, self.kill_if_stuck, args=(self.taken, time.time())).start()
 
-    def kill_if_stuck(self, asked: float):
-        if self.busy and self.ended_at < asked and self.alive():  # no result 15 s after an interrupt: end it the hard way
+    def kill_if_stuck(self, taken: int, asked: float):
+        with self.lock:
+            stuck = self.turn_open and self.last <= asked and self.alive()
+        if stuck:  # no sign of life 15 s after an interrupt of an open turn: end it the hard way
             workers.kill(self.rec, hard=True)
 
     def stop(self):
         with self.lock:
             self.stop_asked, self.after_interrupt = True, []
-            self.interrupt()
+            if self.turn_open:
+                self.interrupt()
+            elif self.busy:  # nothing runs (messages not taken yet): the turn is over now
+                self.done()
 
     def flush(self, **end):
         body = {"chat": self.cid, "events": merged(self.buf), "session": self.st["session"], **end}
@@ -923,76 +936,94 @@ class Live:
                 self.log("error", "Could not send a chat's output to the server", f"chat {self.cid}: {e}"[:300])
 
     def read(self):
-        for raw in self.p.stdout:
-            line = raw.decode("utf-8", "replace")
-            try:
-                kind = json.loads(line).get("type")
-            except ValueError:
-                kind = ""
-            evs = parse(self.agent, line, self.st)
-            with self.lock:
-                self.last = time.time()
-                if evs and not self.busy:  # it goes on by itself (a background subagent ended): a turn of its own
-                    self.begin()
-                    self.buf.append(("info", "The agent goes on by itself (a subagent it started has ended)."))
-                    self.flush(auto=True)
-                self.buf += evs
-                for e in evs:
-                    if e[0] == "sub" and len(e) > 3:
-                        (self.subs.add if e[3] == "running" else self.subs.discard)(e[2])
-                if kind == "result":
-                    self.ended_at = time.time()
-                    self.turn_end()
-                elif time.time() - self.flushed >= FLUSH:
-                    self.flush()
-        self.gone()
+        try:
+            for raw in self.p.stdout:
+                line = raw.decode("utf-8", "replace")
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    ev = None
+                ev = ev if isinstance(ev, dict) else {}
+                with self.lock:
+                    self.on_line(ev, line)
+        except Exception as e:  # never leave the chat "running" behind a dead reader
+            self.log("error", "Claude Code: reading a live chat failed", f"chat {self.cid}: {e}"[:300])
+        finally:
+            self.gone()
+
+    def on_line(self, ev: dict, line: str):
+        kind = ev.get("type")
+        self.last = time.time()
+        if kind == "user" and ev.get("isReplay") and not ev.get("parent_tool_use_id"):  # one of ours, taken now
+            self.taken += 1
+            self.turn_open = True
+            return
+        if kind == "control_response":
+            return
+        evs = parse(self.agent, line, self.st)
+        if kind in ("assistant", "stream_event") and not ev.get("parent_tool_use_id"):  # the main agent at work
+            if not self.turn_open:  # it goes on by itself (a subagent of an earlier turn reported back)
+                self.begin("The agent goes on by itself.")
+            self.turn_open = True
+        self.buf += evs
+        for e in evs:
+            if e[0] == "sub" and len(e) > 3:
+                (self.subs.add if e[3] == "running" else self.subs.discard)(e[2])
+        if kind == "result":
+            self.turn_open = False
+            self.turn_end()
+        elif time.time() - self.flushed >= FLUSH:
+            self.flush()
 
     def turn_end(self):
-        """A result: the turn ended, unless a message sent during it starts one more (it does at once) or a Force waits."""
-        if self.after_interrupt:  # Force: the interrupted step's result; the message goes in now, the same turn for the server
+        """A result: a Force waits for it, then goes in (the same turn for the server); messages written but not taken
+        yet start one more turn at once; else the turn is over."""
+        if self.after_interrupt:
             texts, self.after_interrupt = self.after_interrupt, []
             self.buf.append(("info", "Stopped this step; your message goes in now."))
             self.flush()
             for text in texts:
+                self.written += 1
                 self.write(user_line(text))
-            self.extra = True
             return
-        if self.extra:
-            self.extra = False
-            threading.Timer(TURN_GRACE, self.maybe_done, args=(self.ended_at,)).start()
+        if self.taken < self.written and not self.stop_asked:
             self.flush()
             return
         self.done()
 
-    def maybe_done(self, at: float):
-        with self.lock:
-            if self.busy and self.ended_at == at and self.last <= at + 0.05:  # nothing came after that result: the turn is over
-                self.done()
-
     def done(self, err: str = ""):
+        if not self.busy and not err:
+            self.flush()
+            return
         if self.stop_asked:
             self.buf.append(("info", "Stopped."))
         self.busy, self.stop_asked = False, False
+        self.taken = self.written  # a stop drops what was not taken: nothing more is owed
         if err:
             self.buf.append(("error", err))
         self.flush(done=True, **({"error": err} if err else {}))
-        RUNNING.pop(self.cid, None)
 
     def gone(self):
         """The process ended (idle close, a crash, a kill): a turn that ran ends with it."""
         code = self.p.wait()
-        self.errf.seek(0)
-        tail = self.errf.read()[-2000:].decode("utf-8", "replace").strip()
+        try:
+            self.errf.seek(0)
+            tail = self.errf.read()[-2000:].decode("utf-8", "replace").strip()
+            self.errf.close()
+        except (OSError, ValueError):
+            tail = ""
         with self.lock:
             if self.busy:
                 self.done("" if self.closing or self.stop_asked else
                           f"{self.agent} ended with exit code {code}" + (f": {first_line(tail.splitlines()[-1])}" if tail else ""))
             if LIVE.get(self.cid) is self:
                 LIVE.pop(self.cid, None)
+            if RUNNING.get(self.cid) is self.rec:
+                RUNNING.pop(self.cid, None)
         self.log("chat", f"Claude Code: live chat ended (exit {code})", f"chat {self.cid}")
 
     def close(self):
-        """End the process between turns (idle, or another model or effort): stdin closes, it exits by itself."""
+        """End the process between turns (idle, too many, or another model or effort): stdin closes, it exits."""
         self.closing = True
         try:
             self.p.stdin.close()
@@ -1001,25 +1032,34 @@ class Live:
         try:
             self.p.wait(timeout=10)
         except subprocess.TimeoutExpired:
-            workers.kill(self.rec, hard=True)
+            try:
+                workers.kill(self.rec, hard=True)
+            except Exception:
+                pass
 
     def idle(self) -> bool:
-        return not self.busy and not self.subs and time.time() - self.last > IDLE_CLOSE
+        return not self.busy and not self.turn_open and not self.subs and time.time() - self.last > IDLE_CLOSE
 
 
 def reap():
-    """Close live chats idle for IDLE_CLOSE (the companion's loop calls it)."""
+    """End live chats idle for IDLE_CLOSE, and the oldest idle ones over MAX_LIVE (the companion's loop calls it)."""
     for cid, lv in list(LIVE.items()):
         if lv.idle() or not lv.alive():
             LIVE.pop(cid, None)
             if lv.alive():
                 threading.Thread(target=lv.close, daemon=True).start()
+    spare = sorted((lv for lv in LIVE.values() if not lv.busy and not lv.turn_open and not lv.subs), key=lambda lv: lv.last)
+    for lv in spare[:max(0, len(LIVE) - MAX_LIVE)]:
+        LIVE.pop(lv.cid, None)
+        threading.Thread(target=lv.close, daemon=True).start()
 
 
 def stop(cid: str) -> bool:
     """Stop a running turn (the agent and what it started); False when none runs here. A live chat: its step is
     interrupted and the process stays."""
-    if (lv := LIVE.get(cid)) and lv.busy:
+    if lv := LIVE.get(cid):  # a live chat: its step is interrupted, the process stays (never killed for a Stop)
+        if not lv.busy:
+            return False
         for w in [w for w in WAITS.values() if w["chat"] == cid]:  # nobody answers a stopped turn's approvals
             w.update(decision="deny", stopped=True)
             w["done"].set()
@@ -1040,7 +1080,7 @@ def start(item: dict, post, log, linked, yolo):
     cid, agent = item["chat"], item.get("agent")
     if agent in LIVE_AGENTS:
         return start_live(item, post, log, linked, yolo)
-    if len(RUNNING) >= MAX_TURNS:
+    if sum(1 for r in RUNNING.values() if not r.get("live")) >= MAX_TURNS:  # live chats count in their own limit
         post({"chat": item["chat"], "events": [{"kind": "error", "text": f"{MAX_TURNS} chat turns run on this pc already; send again later"}],
               "done": True, "error": "busy"})
         return
@@ -1052,28 +1092,38 @@ def start(item: dict, post, log, linked, yolo):
 
 
 def start_live(item: dict, post, log, linked, yolo):
-    """A message for a live chat: into its running agent, or a new one (resumed) when none runs, its model or effort
-    changed, or the YOLO setting did."""
-    cid = item["chat"]
+    """A message for a live chat, handled off the poll thread (a model change waits for the old process to end)."""
+    threading.Thread(target=_start_live, args=(item, post, log, linked, yolo), daemon=True).start()
+
+
+def _start_live(item: dict, post, log, linked, yolo):
+    """Into its running agent, or a new one (resumed) when none runs, or its model, effort or YOLO setting changed."""
+    cid, lv = item["chat"], None
     try:
-        if item.get("folder", "") not in linked():
-            raise RuntimeError(f"{item.get('folder', '')} is not a folder linked to a project on this pc")
-        lv = LIVE.get(cid)
-        if lv and lv.alive() and (lv.pick != choice(item) or lv.yolo != yolo(item["agent"])) and not lv.busy:
-            LIVE.pop(cid, None)
-            lv.close()  # another model, effort or YOLO: the next process starts with it, the conversation resumes
-            item = {**item, "session": lv.st["session"] or item.get("session", "")}
-            lv = None
-        if not (lv and lv.alive()):
-            if sum(1 for x in LIVE.values() if x.busy) >= MAX_TURNS:
-                raise RuntimeError(f"{MAX_TURNS} chat turns run on this pc already; send again later")
-            steer_path(cid).unlink(missing_ok=True)
-            lv = LIVE[cid] = Live(item, post, log, yolo(item["agent"]))
+        with START_LOCK:
+            if item.get("folder", "") not in linked():
+                raise RuntimeError(f"{item.get('folder', '')} is not a folder linked to a project on this pc")
+            lv = LIVE.get(cid)
+            if lv and lv.alive() and (lv.pick != choice(item) or lv.yolo != yolo(item["agent"])) and not lv.busy and not lv.turn_open:
+                LIVE.pop(cid, None)
+                lv.close()  # another model, effort or YOLO: the next process starts with it, the conversation resumes
+                item = {**item, "session": lv.st["session"] or item.get("session", "")}
+                lv = None
+            if not (lv and lv.alive()):
+                if sum(1 for x in LIVE.values() if x.busy) >= MAX_TURNS:
+                    raise RuntimeError(f"{MAX_TURNS} chat turns run on this pc already; send again later")
+                steer_path(cid).unlink(missing_ok=True)
+                lv = LIVE[cid] = Live(item, post, log, yolo(item["agent"]))
         lv.send(item, item.get("mode", ""))
     except Exception as e:
         log("error", "Claude Code: chat turn failed", f"chat {cid}: {e}"[:300])
+        if lv and lv.busy:  # it had begun: its process going away posts the end (gone), once
+            try:
+                workers.kill(lv.rec, hard=True)
+            except Exception:
+                pass
+            return
         post({"chat": cid, "events": [{"kind": "error", "text": f"{type(e).__name__}: {e}"[:300]}], "done": True, "error": str(e)[:200]})
-        RUNNING.pop(cid, None)
 
 
 def self_test():

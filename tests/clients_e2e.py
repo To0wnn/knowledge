@@ -775,6 +775,7 @@ elif name == "claude" and "--input-format" in args and os.environ.get("KNOWLEDGE
             out({"type": "control_response", "response": {"subtype": "success", "request_id": m.get("request_id")}})
             continue
         texts = [m["message"]["content"]]
+        out({"type": "user", "isReplay": True, "message": m["message"]})  # --replay-user-messages: taken now
         rec({"chat": os.environ["KNOWLEDGE_CHAT"], "argv": [name] + args, "cwd": os.getcwd(), "stdin": texts[0], "pid": os.getpid()})
         stopped = False
         if "SLOW" in texts[0]:  # a turn that keeps working: messages sent meanwhile go into it; an interrupt ends it
@@ -792,6 +793,7 @@ elif name == "claude" and "--input-format" in args and os.environ.get("KNOWLEDGE
                     stopped = True
                     break
                 texts.append(x["message"]["content"])
+                out({"type": "user", "isReplay": True, "message": x["message"]})
                 rec({"chat": os.environ["KNOWLEDGE_CHAT"], "argv": [name] + args, "cwd": os.getcwd(), "stdin": texts[-1], "pid": os.getpid(), "into": True})
                 if "DONE" in texts[-1]:
                     break

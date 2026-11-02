@@ -802,6 +802,17 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={lc}")[2])["chat"]["status"] == "running", "its own turn"
     assert lc in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["busy"]
     http("POST", "/machine/chats/events", {"chat": lc, "events": [], "done": True}, token=fr, headers=pc)
+    # Races: a "now" message whose turn ended meanwhile becomes the next message (not stuck in a live list); an own turn of
+    # the agent never hides a message still to be handed out.
+    d = tmp / "chats" / mid / f"{lc}.json"
+    j = json.loads(d.read_text()); j["status"] = "running"; d.write_text(json.dumps(j))  # the page saw it running
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": lc, "text": "raced", "mode": "now"})[0] == 200
+    assert [w["text"] for w in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"] if w["chat"] == lc] == ["raced"]
+    http("POST", "/machine/chats/events", {"chat": lc, "events": [], "done": True}, token=fr, headers=pc)
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": lc, "text": "to hand out"})[0] == 200
+    http("POST", "/machine/chats/events", {"chat": lc, "events": [{"kind": "info", "text": "on by itself"}], "auto": True}, token=fr, headers=pc)
+    assert [w["text"] for w in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"] if w["chat"] == lc] == ["to hand out"]
+    http("POST", "/machine/chats/events", {"chat": lc, "events": [], "done": True}, token=fr, headers=pc)
     # Codex is not live on this pc: Send while it works still waits in line
     cc = json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/x/garden"})[2])["chat"]["id"]
     ui("/ui/api/chat/send", {"machine": mid, "id": cc, "text": "go"}); http("GET", "/machine/chats", token=fr, headers=pc)

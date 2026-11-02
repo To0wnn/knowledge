@@ -1000,12 +1000,12 @@ async def board(browser, devices, secret: str) -> None:
     await pg.wait_for_function("location.hash === '#/chats?view=board' && $('bd') && !$('bd').hidden", timeout=5000)
     check(await pg.evaluate("getComputedStyle($('ck-chats')).display === 'none' && $('chats-mode').querySelector('[data-mode=board]').getAttribute('aria-pressed') === 'true'"),
           "Chats > Board: the toggle sets #/chats?view=board and the board replaces the list")
-    n = await pg.evaluate("ck.chats.filter(ckScope).length")
+    n = await pg.evaluate("ck.chats.filter((c) => ckScope(c) && !c.closed).length")  # a closed chat is off the board
     if not n:
         print("     no chats: the board's cards are not checked")
     else:
         await pg.wait_for_selector("#bd .bd-card", timeout=5000)
-        frames = await pg.evaluate("""(() => { const ps = [...new Set(ck.chats.filter(ckScope).map((c) => c.project || ''))];
+        frames = await pg.evaluate("""(() => { const ps = [...new Set(ck.chats.filter((c) => ckScope(c) && !c.closed).map((c) => c.project || ''))];
           const fs = [...document.querySelectorAll('#bd .bd-frame')];
           const inFrame = [...bd.wraps.values()].every((w) => { const c = ck.chats.find((x) => x.id === w.dataset.id), f = bd.frames.get(c.project || '').getBoundingClientRect(), r = w.getBoundingClientRect();
             return w.classList.contains('pinned') || (r.left >= f.left - 1 && r.top >= f.top - 1 && r.right <= f.right + 1 && r.bottom <= f.bottom + 1); });

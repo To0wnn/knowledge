@@ -5089,8 +5089,20 @@ async def chat_live_message(f: Path, c: dict, msg: dict, mode: str, text: str, a
             chat_add(c, "user", text)
         chat_add(c, "info", "Sent into the running turn." if mode == "now" else "Force: this step stops and your message goes in.")
     await asyncio.to_thread(update_state, f, note)
-    await asyncio.to_thread(update_state, f.parent / "queue.json",
-                            lambda q: q.setdefault(c["id"], {}).setdefault("live", []).append({**msg, "mode": mode}))
+    as_next = []
+
+    def hand(q):  # into the running turn; a turn that ended meanwhile (entry gone or not busy): the next message instead
+        e = q.setdefault(c["id"], {})
+        if e.get("busy"):
+            e.setdefault("live", []).append({**msg, "mode": mode})
+        elif "msg" not in e:
+            e.update(msg=msg, stop=False)
+        else:
+            as_next.append(msg)
+    await asyncio.to_thread(update_state, f.parent / "queue.json", hand)
+    if as_next:
+        await asyncio.to_thread(update_state, f, lambda c: c.setdefault("pending", []).extend(as_next))
+    await asyncio.to_thread(update_state, f, lambda c: c.update(status="queued") if c.get("status") not in ("queued", "running") else None)
     return JSONResponse({"ok": True, "live": mode})
 
 
@@ -5908,8 +5920,9 @@ async def machine_chat_events(request: Request):
         await asyncio.to_thread(update_state, f.parent / "queue.json", turn_over)
         if left or any(started):
             await asyncio.to_thread(update_state, f, lambda c: c.update(pending=left + c.get("pending", []), status="queued"))
-    elif auto:  # its own turn runs on the pc: the busy list and live messages need its entry
-        await asyncio.to_thread(update_state, f.parent / "queue.json", lambda q: q.setdefault(c["id"], {}).update(busy=True, stop=False))
+    elif auto:  # its own turn runs on the pc: the busy list and live messages need its entry (not over a message still to hand out)
+        await asyncio.to_thread(update_state, f.parent / "queue.json",
+                                lambda q: None if "msg" in q.get(c["id"], {}) else q.setdefault(c["id"], {}).update(busy=True, stop=False))
     return JSONResponse({"ok": True})
 
 
