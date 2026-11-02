@@ -1037,6 +1037,11 @@ async function loadTasks(render = true) {
   const tasks = res.tasks.filter((t) => !agentProject || t.project === agentProject), open = tasks.filter((t) => !t.done), back = tasks.filter((t) => t.done);
   if (!render) return;
   const box = $("tasks"); box.replaceChildren();
+  const elsewhere = all.length - open.length; // the badge counts every project: say what the picker hides
+  if (elsewhere) {
+    const b = el("button", "btn small ck-elsewhere", `${elsewhere} open task${elsewhere > 1 ? "s" : ""} in other projects: show all`);
+    b.type = "button"; b.onclick = () => switchProject(ALL); box.append(b);
+  }
   // the workers of these tasks, from the Machines list: progress and Stop/Restart live with the task, not the pc
   const machines = await api("/ui/api/machines").then((r) => (Array.isArray(r) ? r : r.machines || [])).catch(() => []);
   machinesCache = machines;

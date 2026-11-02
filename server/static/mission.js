@@ -135,7 +135,8 @@ function msRender() {
   ms.lay = missionLayout(g);
   $("ms-stage").hidden = msNarrow(); $("ms-list").hidden = !msNarrow();
   if (!g.nodes.length) {
-    $("ms-world").replaceChildren(); $("ms-list").replaceChildren(el("p", "muted ms-empty", "No task lines here."));
+    const all = el("button", "btn small ck-elsewhere", "Show all projects"); all.type = "button"; all.onclick = () => switchProject(ALL);
+    $("ms-world").replaceChildren(); $("ms-list").replaceChildren(el("p", "muted ms-empty", ms.project ? `No task lines in ${shown(ms.project)}.` : "No task lines here."), ...(ms.project ? [all] : []));
     $("ms-stage").hidden = true; $("ms-list").hidden = false; // the list holds the empty line: also on a desktop
     return;
   }
