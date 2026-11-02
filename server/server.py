@@ -4977,7 +4977,7 @@ def chat_choice(row: dict, agent: str, model: str, effort: str) -> tuple:
     if effort and effort not in levels:
         raise ValueError(f"effort {effort} is not one {agent} offers here" + (f" for {model}" if model else ""))
     return model, effort
-CHAT_KINDS = ("text", "tool", "refused", "error", "info", "sub")  # sub: a subagent opens or ends (its id in "sub")
+CHAT_KINDS = ("text", "tool", "refused", "error", "info", "sub", "usage")  # sub: a subagent opens or ends (its id in "sub"); usage: tokens
 SUB_ID = re.compile(r"[\w.:-]{1,120}")
 SUB_STATES = ("running", "done", "failed")
 
@@ -4987,11 +4987,28 @@ def chat_events(b: dict) -> list:
     Raises ValueError on an unknown kind."""
     out = [(str(e.get("kind")), str(e.get("text", "")),
             {**({"sub": str(e["sub"])} if SUB_ID.fullmatch(str(e.get("sub") or "")) else {}),
-             **({"status": e["status"]} if e.get("kind") == "sub" and e.get("status") in SUB_STATES else {})})
+             **({"status": e["status"]} if e.get("kind") == "sub" and e.get("status") in SUB_STATES else {}),
+             **({k: e[k] for k in ("tokens", "total", "ctx") if type(e.get(k)) is int and 0 <= e[k] < 10**12} if e.get("kind") == "usage" else {})})
            for e in (b.get("events") or [])[:500] if isinstance(e, dict)]
     if bad := [k for k, _, _ in out if k not in CHAT_KINDS]:
         raise ValueError(f"kind must be one of {', '.join(CHAT_KINDS)}, not {bad[0][:20]}")
     return out
+
+
+def note_usage(c: dict, kind: str, extra: dict):
+    """Tokens of a chat: the conversation's (tokens added per turn, or a total that replaces), the context in use now,
+    and each subagent's so far (sub_tokens, the last 50)."""
+    if kind != "usage":
+        return
+    if extra.get("sub"):
+        st = c.setdefault("sub_tokens", {})
+        st[extra["sub"]] = extra.get("total", st.get(extra["sub"], 0) + extra.get("tokens", 0))
+        for old in list(st)[:-50]:
+            st.pop(old)
+        return
+    c["used"] = extra["total"] if "total" in extra else c.get("used", 0) + extra.get("tokens", 0)  # not "tokens": the chat's device tokens
+    if extra.get("ctx"):
+        c["ctx"] = extra["ctx"]
 
 
 def note_subs(c: dict, kind: str, extra: dict):
@@ -5018,6 +5035,7 @@ def chat_meta(c: dict) -> dict:
     return {**{k: c.get(k) for k in ("id", "agent", "folder", "project", "title", "by", "created", "updated", "status", "session")},
             "subs": sum(1 for s in (c.get("subs") or {}).values() if s == "running"),  # subagents running now
             "closed": bool(c.get("closed")),
+            "used": c.get("used", 0), "ctx": c.get("ctx", 0),  # the conversation's tokens so far, its context now
             "model": c.get("model", ""), "effort": c.get("effort", ""),
             "waiting": len(c.get("pending") or [])}
 
@@ -5801,7 +5819,9 @@ async def machine_chat_events(request: Request):
             if contains_secret(t):
                 t = "(withheld: contains a known secret value)"
             note_subs(c, k, extra)
-            chat_add(c, k, t, extra=extra)
+            note_usage(c, k, extra)
+            if k != "usage" or extra.get("sub"):  # a subagent's count lives in its block; the chat's in its meta
+                chat_add(c, k, t, extra=extra)
         if isinstance(b.get("session"), str) and re.fullmatch(r"[\w.:-]{1,120}", b["session"]):
             c["session"] = b["session"]
         if b.get("done") is True and (s := c.pop("steering", None)):
@@ -5913,7 +5933,9 @@ async def machine_chat_worker(request: Request):
         c.update(agent=str(b.get("agent") or "")[:20], status=str(b.get("status") or "")[:20])
         for k, t, extra in events:
             note_subs(c, k, extra)
-            chat_add(c, k, redact(t), WORKER_EVENTS, WORKER_BYTES, extra=extra)
+            note_usage(c, k, extra)
+            if k != "usage" or extra.get("sub"):
+                chat_add(c, k, redact(t), WORKER_EVENTS, WORKER_BYTES, extra=extra)
         if b.get("done") is True:
             c["ended"] = time.time()
             c["subs"] = {k: ("done" if v == "running" else v) for k, v in (c.get("subs") or {}).items()}

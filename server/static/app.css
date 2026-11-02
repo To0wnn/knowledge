@@ -521,6 +521,14 @@ body.admin-page { display: block; overflow-y: auto; }
 .ck-form .ck-btns { display: flex; gap: 6px; }
 #set-chat { max-width: 520px; } #set-chat h3 { margin: 8px 0 4px; } #set-chat .actions { justify-content: flex-start; }
 .ck-resets { display: inline-flex; gap: 6px; } .ck-resets[hidden] { display: none; }
+/* the subagents running now, pinned between the log and the box */
+.ck-subbar { display: flex; gap: 6px; flex-wrap: wrap; padding: 6px 12px; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 85%, transparent); }
+.ck-subbar[hidden] { display: none; }
+.ck-subpin { display: inline-flex; gap: 6px; align-items: center; max-width: 100%; padding: 3px 10px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--r-md); background: var(--panel); color: var(--ink); font-size: 12.5px; cursor: pointer; }
+.ck-subpin small, .ck-sub-tok { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+.ck-subpin .ck-dot.live { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: kn-pulse 1.6s ease-in-out infinite; flex: none; }
+.ck-tok { font-variant-numeric: tabular-nums; }
+.ck-tok[hidden] { display: none; }
 /* a subagent in the chat: a folded block with its task and state; its tool lines and report inside */
 .ck-sub { margin: 6px 0; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--r-md); background: color-mix(in srgb, var(--panel) 70%, transparent); }
 .ck-sub > summary { display: flex; gap: 8px; align-items: center; padding: 6px 10px; cursor: pointer; font-size: 13px; }

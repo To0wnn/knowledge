@@ -1709,8 +1709,9 @@ function ckCard(meta) {
   const git = el("span", "ck-git-slot"), open = el("button", "btn icon small quiet ck-x bd-only", "↗"); // on the board: the full chat
   open.type = "button"; open.title = "Open the full chat"; open.setAttribute("aria-label", "Open the full chat");
   const mark = el("span", "ck-mark", AGENT_MARK[meta.agent] || "+"), close = el("button", "btn small quiet ck-close", "Close");
+  const tok = el("span", "chip ck-tok"); tok.hidden = true;
   close.type = "button"; close.hidden = true;
-  head.append(el("span", "ck-dot bd-only"), mark, title, git, state, close, open, x);
+  head.append(el("span", "ck-dot bd-only"), mark, title, git, tok, state, close, open, x);
   const log = el("div", "ck-log"), form = el("form", "ck-form"), input = el("textarea"), btns = el("div", "ck-btns");
   log.setAttribute("aria-live", "polite"); log.setAttribute("role", "log");
   log.addEventListener("click", (e) => {
@@ -1729,8 +1730,9 @@ function ckCard(meta) {
   const picks = el("div", "ck-picks"); picks.hidden = true;
   stop.type = "button"; send.type = "submit"; btns.append(stop, send); form.append(input, btns, picks, note);
   const asks = el("div", "ck-asks"); asks.hidden = true; asks.setAttribute("aria-live", "assertive");
-  root.append(head, log, asks, form);
-  const card = { meta: { ...meta }, root, name, where, git, state, log, asks, form, input, stop, send, note, picks, mark, close, pick: null, after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
+  const subbar = el("div", "ck-subbar"); subbar.hidden = true; subbar.setAttribute("aria-label", "Subagents running now");
+  root.append(head, log, subbar, asks, form);
+  const card = { meta: { ...meta }, root, name, where, git, state, log, asks, form, input, stop, send, note, picks, mark, close, tok, subbar, pick: null, after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
   x.onclick = () => ckShow(null);
   open.onclick = () => ckShow(card.meta);
   input.addEventListener("keydown", (e) => {
@@ -2004,6 +2006,9 @@ function ckPaint(card) {
     return;
   }
   card.state.hidden = false;
+  card.tok.hidden = !m.used && !m.ctx; // the conversation's tokens: its context now and all it used
+  card.tok.textContent = [m.ctx && `${ckNum(m.ctx)} context`, m.used && `${ckNum(m.used)} used`].filter(Boolean).join(" · ");
+  card.tok.title = "Context: what the agent sent for its last step. Used: every token of this chat so far, cache reads included.";
   card.close.hidden = busy; card.close.textContent = m.closed ? "Open again" : "Close";
   card.close.title = m.closed ? "Back on the board and in the list" : "Off the board and the chat list (under Closed); a new message opens it again";
   card.name.textContent = m.title || "New chat";
@@ -2070,13 +2075,15 @@ function ckSub(card, e) {
   let b = card.subs.get(e.sub);
   if (!b) {
     const d = el("details", "ck-sub"), sum = el("summary"), label = el("span", "ck-sub-label", e.kind === "sub" ? e.text : "subagent"), st = el("span", "chip");
-    sum.append(el("span", "ck-sub-tag", "Subagent"), label, st);
+    const tk = el("span", "ck-sub-tok");
+    sum.append(el("span", "ck-sub-tag", "Subagent"), label, tk, st);
     const tools = el("div", "ck-sub-tools"), report = el("div", "ck-sub-report md");
     d.append(sum, tools, report);
     card.log.append(d);
-    b = { d, label, st, tools, report };
+    b = { d, label, st, tools, report, tk };
     card.subs.set(e.sub, b);
   }
+  if (e.kind === "usage") { b.tokens = e.total ?? (b.tokens || 0) + (e.tokens || 0); b.tk.textContent = `${ckNum(b.tokens)} tokens`; return ckSubbar(card); }
   if (e.kind === "sub" && e.status === "running") b.label.textContent = e.text;
   else if (e.kind === "sub") report(b, e);
   else b.tools.append(el("div", `ck-line ${e.kind}`, e.text));
@@ -2084,7 +2091,21 @@ function ckSub(card, e) {
   b.status = status; b.d.classList.toggle("running", status === "running");
   b.st.className = `chip${status === "failed" ? " bad" : status === "done" ? "" : " live"}`;
   b.st.textContent = status === "running" ? "running" : status;
+  ckSubbar(card);
   function report(x, ev) { x.report.innerHTML = renderMd(ev.text); }
+}
+const ckNum = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e4 ? `${Math.round(n / 1e3)}k` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n));
+// The subagents running now, pinned above the box: the log scrolls on, these stay; a click opens its block.
+function ckSubbar(card) {
+  const run = [...(card.subs || new Map()).values()].filter((b) => b.status === "running");
+  card.subbar.hidden = !run.length;
+  card.subbar.replaceChildren(...run.map((b) => {
+    const x = el("button", "ck-subpin"); x.type = "button";
+    x.append(el("span", "ck-dot live"), el("span", "ck-sub-label", b.label.textContent), ...(b.tokens ? [el("small", null, `${ckNum(b.tokens)} tokens`)] : []));
+    x.title = "Open this subagent's block";
+    x.onclick = () => { b.d.open = true; b.d.scrollIntoView({ block: "nearest", behavior: "smooth" }); };
+    return x;
+  }));
 }
 
 // Follow a worker (#/chats/worker/<project>/<ID>): a worker is a chat nobody types in. Its card is a chat card whose

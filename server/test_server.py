@@ -735,6 +735,17 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert got["chat"]["subs"] == 2 and tail[1] == {**tail[1], "kind": "tool", "sub": "tu1"} and "sub" not in tail[3] and "status" not in tail[3], tail
     card = next(i for i in json.loads(ui("/ui/api/board")[2])["items"] if i["kind"] == "chat" and i["id"] == mc)
     assert card["subs"] == 2, card
+    # Tokens: a subagent's so far stays in its block; the conversation's add up per turn (or a total replaces them), with
+    # the context in use now; odd values are dropped.
+    http("POST", "/machine/chats/events", {"chat": mc, "events": [
+        {"kind": "usage", "text": "", "sub": "tu1", "total": 5949}, {"kind": "usage", "text": "", "tokens": 70871, "ctx": 34812},
+        {"kind": "usage", "text": "", "tokens": 100, "ctx": "big"}, {"kind": "usage", "text": "", "tokens": True}]}, token=fr, headers=pc)
+    got = json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])
+    assert (got["chat"]["used"], got["chat"]["ctx"]) == (70971, 34812), got["chat"]
+    ev = [e for e in got["events"] if e["kind"] == "usage"]
+    assert ev == [{**ev[0], "sub": "tu1", "total": 5949}] and len(ev) == 1, ev  # the chat's own usage is in its meta, not the log
+    http("POST", "/machine/chats/events", {"chat": mc, "events": [{"kind": "usage", "text": "", "total": 50000, "ctx": 9000}]}, token=fr, headers=pc)
+    assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["chat"]["used"] == 50000, "a total (Codex app-server) replaces"
     http("POST", "/machine/chats/events", {"chat": mc, "events": [{"kind": "sub", "text": "found a.txt", "sub": "tu1", "status": "done"}]}, token=fr, headers=pc)
     assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["chat"]["subs"] == 1
     http("POST", "/machine/chats/events", {"chat": mc, "events": [], "done": True}, token=fr, headers=pc)

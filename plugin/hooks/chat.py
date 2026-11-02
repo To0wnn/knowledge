@@ -159,6 +159,14 @@ def parse(agent: str, line: str, st: dict) -> list:
         t = e.get("type")
         if e.get("session_id"):
             st["session"] = e["session_id"]
+        if t == "system" and e.get("subtype") in ("task_progress", "task_notification") and e.get("tool_use_id") in st.get("subs", ()):
+            if isinstance((e.get("usage") or {}).get("total_tokens"), int):  # a subagent's tokens so far (live while it runs)
+                out.append(usage(e["tool_use_id"], total=e["usage"]["total_tokens"]))
+        if t == "assistant" and not e.get("parent_tool_use_id") and isinstance((e.get("message") or {}).get("usage"), dict):
+            u = e["message"]["usage"]  # the main agent's context now: what it sent for this step
+            st["ctx"] = tokens(u) - int(u.get("output_tokens") or 0)
+        if t == "result" and isinstance(e.get("usage"), dict):
+            out.append(usage(tokens=tokens(e["usage"]), **({"ctx": st["ctx"]} if st.get("ctx") else {})))
         if t == "rate_limit_event":  # the account's usage as of this turn: the companion's limit chip and worker cap
             if got := workers.claude_rate(e, time.time()):
                 keep_usage("claude", got)
@@ -238,6 +246,8 @@ def parse(agent: str, line: str, st: dict) -> list:
                 out.append(("error", first_line(item.get("message"))))
         elif t == "turn.completed":
             st["result"] = True
+            if isinstance(u := e.get("usage"), dict):
+                out.append(usage(tokens=int(u.get("input_tokens") or 0) + int(u.get("output_tokens") or 0), ctx=int(u.get("input_tokens") or 0)))
         elif t in ("turn.failed", "error"):
             out.append(("error", first_line((e.get("error") or {}).get("message") or e.get("message")) or t))
     else:  # agy
@@ -266,6 +276,9 @@ def parse(agent: str, line: str, st: dict) -> list:
                     out.append(("refused", f"{s.get('tool_name')}: {first_line((info.get('error') or {}).get('message'))}"))
         elif ev == "result":
             r = e.get("result") or {}
+            if isinstance(r.get("usage"), dict):
+                u = r["usage"]
+                out.append(usage(tokens=int(u.get("input_tokens") or 0) + int(u.get("output_tokens") or 0), ctx=int(u.get("input_tokens") or 0)))
             st["session"], st["result"] = r.get("conversation_id") or st.get("session", ""), True
             if r.get("status") == "ERROR":
                 out.append(("error", first_line(r.get("error")) or "the turn failed"))
@@ -527,12 +540,23 @@ def merged(events: list) -> list:
     one of its tool calls."""
     out = []
     for k, t, *rest in events:
-        sub, status = (rest + ["", ""])[:2]
+        sub, status, nums = (rest + ["", "", {}])[:3]
         if out and k == "text" and not sub and out[-1]["kind"] == "text" and not out[-1].get("sub"):
             out[-1]["text"] += t
         else:
-            out.append({"kind": k, "text": t, **({"sub": sub} if sub else {}), **({"status": status} if status else {})})
+            out.append({"kind": k, "text": t, **({"sub": sub} if sub else {}), **({"status": status} if status else {}), **(nums or {})})
     return out
+
+
+def usage(sub: str = "", **nums) -> tuple:
+    """A usage event: ("usage", "", sub, "", {tokens: this turn's | total: the conversation's or subagent's so far, ctx:
+    the context in use}); the server adds tokens and sets total and ctx."""
+    return ("usage", "", sub, "", {k: int(v) for k, v in nums.items() if isinstance(v, (int, float)) and v >= 0})
+
+
+def tokens(u: dict) -> int:
+    """Every token a Claude usage block counts: new input, cache reads and writes, output."""
+    return sum(int(u.get(k) or 0) for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens"))
 
 
 def steer_path(cid: str) -> Path:
@@ -618,6 +642,9 @@ def codex_app(p, item: dict, st: dict):
             return [("text", params["delta"])]
         if method == "item/started" and it.get("type") == "fileChange" and it.get("id"):
             changes[it["id"]] = [str(c.get("path", "")) for c in it.get("changes") or []]  # what its approval request leaves out
+        if method == "thread/tokenUsage/updated":  # the conversation's tokens so far and the last request's context
+            tu = params.get("tokenUsage") or {}
+            return [usage(total=(tu.get("total") or {}).get("totalTokens") or 0, ctx=(tu.get("last") or {}).get("inputTokens") or 0)]
         if method in ("item/started", "item/completed") and it.get("type") == "collabAgentToolCall":  # its subagents
             return codex_subs(it, method == "item/completed")
         if method == "item/started" and it.get("type") == "commandExecution":
@@ -857,6 +884,14 @@ def self_test():
              '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu1","content":[{"type":"text","text":"<tools-used-before-summary>Bash</tools-used-before-summary>\\n[Subagent hand-back] model output. The report follows:\\n  found a.txt\\n  - b"}]}]}}']
     ev = [e for ln in lines for e in parse("claude", ln, st)]
     assert ev == [("sub", "Explore · list files", "tu1", "running"), ("tool", "Bash: ls", "tu1"), ("sub", "found a.txt\n- b", "tu1", "done")], ev
+    st = {}  # tokens: a subagent's so far, the main agent's context, the turn's total
+    lines = ['{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu5","name":"Agent","input":{"description":"d"}}],"usage":{"input_tokens":2,"cache_read_input_tokens":13946,"cache_creation_input_tokens":20864,"output_tokens":5}}}',
+             '{"type":"system","subtype":"task_progress","tool_use_id":"tu5","usage":{"total_tokens":5949}}',
+             '{"type":"result","usage":{"input_tokens":4,"cache_read_input_tokens":48756,"cache_creation_input_tokens":21535,"output_tokens":576}}']
+    ev = [e for ln in lines for e in parse("claude", ln, st)]
+    assert ev[1:] == [usage("tu5", total=5949), usage(tokens=70871, ctx=34812)] and merged([ev[2]]) == [{"kind": "usage", "text": "", "tokens": 70871, "ctx": 34812}], ev
+    cst = {}
+    assert parse("codex", '{"type":"turn.completed","usage":{"input_tokens":900,"cached_input_tokens":800,"output_tokens":50}}', cst) == [usage(tokens=950, ctx=900)] and cst["result"]
     st = {}  # in the background: the launch keeps it running, the task-notification (tool-use-id, or task-id) ends it
     for tu, note in (("tu7", "<tool-use-id>tu7</tool-use-id>"), ("tu8", "<task-id>ag8</task-id>")):
         lines = ['{"type":"assistant","message":{"content":[{"type":"tool_use","id":"%s","name":"Agent","input":{"description":"bg"}}]}}' % tu,
