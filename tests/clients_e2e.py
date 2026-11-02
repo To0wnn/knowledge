@@ -1518,6 +1518,27 @@ def chat_e2e(tok: str, tmp: Path):
                  "print(got)")
         code, out, err = run([sys.executable, "-c", probe], "", {**env, "PYTHONPATH": str(hooks), "KN_FAKE_RATE": "1"}, cwd=str(hooks))
         check(code == 0 and "42" in out and "5h" in out, "companion: Codex's limit asked without a session (app-server account/rateLimits/read)", out + err[-400:])
+        # agy's usage limit without a running agy: its cloud quota call with the OAuth token agy keeps (a local stand-in
+        # here; it must send agy's User-Agent, Google refuses Python's).
+        tokf = home / ".gemini" / "antigravity-cli" / "antigravity-oauth-token"
+        tokf.parent.mkdir(parents=True, exist_ok=True)
+        tokf.write_text(json.dumps({"token": {"access_token": "gategate", "expiry": "2099-01-01T00:00:00Z"}}), encoding="utf-8")
+        probe = ("import companion, json, threading, time, http.server\n"
+                 "class H(http.server.BaseHTTPRequestHandler):\n"
+                 "    def do_POST(self):\n"
+                 "        ok = self.headers.get('Authorization') == 'Bearer gategate' and self.headers.get('User-Agent') == 'antigravity-cli'\n"
+                 "        body = json.dumps({'models': {'g': {'displayName': 'Gemini X', 'quotaInfo': {'remainingFraction': 0.25, 'resetTime': '2099-01-01T00:00:00Z'}}, 'tab': {'quotaInfo': {'remainingFraction': 1}}}}).encode()\n"
+                 "        self.send_response(200 if ok else 403); self.end_headers(); self.wfile.write(body if ok else b'{}')\n"
+                 "    def log_message(self, *a): pass\n"
+                 "s = http.server.HTTPServer(('127.0.0.1', 0), H); threading.Thread(target=s.serve_forever, daemon=True).start()\n"
+                 "companion.AGY_QUOTA_URL = f'http://127.0.0.1:{s.server_port}/q'\n"
+                 "(companion.STATE / 'agy-rate.json').unlink(missing_ok=True)\n"
+                 "companion.agy_rate_read(time.time())\n"
+                 "for _ in range(100):\n    got = companion.agy_rate_read(time.time())\n    if got: break\n    time.sleep(0.2)\n"
+                 "print(got)")
+        code, out, err = run([sys.executable, "-c", probe], "", {**env, "PYTHONPATH": str(hooks)}, cwd=str(hooks))
+        check(code == 0 and "75" in out and "Gemini X" in out, "companion: agy's limit from its cloud quota with agy's own token (no running agy)", out + err[-400:])
+        tokf.unlink()  # the running companion must never send a test token to Google
         # Model and effort: the pc reports what each agent offers; a chat's choice reaches the turn the agent's own way
         # (Claude flags, Codex turn/start, agy session/set_model + thought_level).
         reported = next(r for r in machines() if r["id"] == mid)["companion"].get("models") or {}

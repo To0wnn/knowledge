@@ -854,6 +854,66 @@ def _codex_rate_ask(f):
         pass
 
 
+AGY_TOKEN = HOME / ".gemini" / "antigravity-cli" / "antigravity-oauth-token"
+AGY_QUOTA_URL = "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"  # agy's own --cloud_code_endpoint
+
+
+def agy_rate_read(now: float):
+    """agy's quota without a running agy: the cloud call agy itself makes (fetchAvailableModels, no prompt, no tokens)
+    with the OAuth token agy keeps; when that token expired, `agy models` (no prompt, no conversation) renews it first.
+    In the background at most every CODEX_READ_EVERY; the last answer until then, None when unknown. Undocumented API:
+    a failure goes to the activity log once per new error."""
+    f = STATE / "agy-rate.json"
+    try:
+        old = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        old = {}
+    if now - old.get("at", 0) >= CODEX_READ_EVERY and AGY_TOKEN.exists():
+        write_json(f, {**old, "at": now})
+        threading.Thread(target=_agy_rate_ask, args=(f, old.get("error", "")), daemon=True).start()
+    got = old.get("got")
+    return tuple(got) if got and got[2] and got[2] > now else None
+
+
+def _agy_token() -> tuple:
+    """(access token, its expiry as epoch) from agy's token file."""
+    tok = json.loads(AGY_TOKEN.read_text(encoding="utf-8")).get("token") or {}
+    return str(tok.get("access_token") or ""), agent_hooks.limits.epoch(tok.get("expiry")) or 0
+
+
+def _agy_rate_ask(f, last_error: str):
+    got, err = None, ""
+    try:
+        access, expiry = _agy_token()
+        if (not access or expiry < time.time() + 60) and (exe := shutil.which("agy")):
+            cmd = [exe, "models"]
+            if os.name == "nt" and exe.lower().endswith((".cmd", ".bat")):
+                cmd = workers.shim_line(cmd)
+            subprocess.run(cmd, capture_output=True, timeout=60, stdin=subprocess.DEVNULL,
+                           **({"creationflags": workers.WIN_FLAGS} if os.name == "nt" else {}))  # renews the token, asks no model
+            access, expiry = _agy_token()
+        if not access:
+            raise LookupError("agy has no access token (signed out?)")
+        req = urllib.request.Request(AGY_QUOTA_URL, data=b"{}", method="POST",
+                                     headers={"Authorization": f"Bearer {access}", "Content-Type": "application/json",
+                                              "User-Agent": "antigravity-cli"})  # Python's own agent gets 403 PERMISSION_DENIED
+        with urllib.request.urlopen(req, timeout=15) as r:
+            models = json.loads(r.read().decode("utf-8") or "{}").get("models") or {}
+        configs = [{"label": m["displayName"], "quotaInfo": m["quotaInfo"]} for m in models.values()
+                   if isinstance(m, dict) and m.get("displayName") and isinstance(m.get("quotaInfo"), dict)]
+        if not configs:
+            raise ValueError("no model with a quota in the answer (the API changed?)")
+        got = agent_hooks.limits.agy_used({"userStatus": {"cascadeModelConfigData": {"clientModelConfigs": configs}}}, time.time())
+    except (OSError, ValueError, LookupError, KeyError, TypeError, subprocess.SubprocessError) as e:
+        err = f"{type(e).__name__}: {e}"[:300]
+        if err != last_error:
+            log("error", "Could not read agy's usage limit", err)
+    try:
+        write_json(f, {"at": time.time(), "got": list(got) if got else None, "error": err})
+    except OSError:
+        pass
+
+
 def usage_live(agent: str, ws: dict, now: float):
     """Claude the higher of its workers' own stream-json output (until that window resets) and an interactive Claude's
     status line under 15 min old; Codex from its newest rollout of the last 15 min, else asked without a session
@@ -877,7 +937,10 @@ def usage_live(agent: str, ws: dict, now: float):
             files = [f for d in days for f in CODEX.glob(f"sessions/{d.tm_year:04d}/{d.tm_mon:02d}/{d.tm_mday:02d}/rollout-*.jsonl")
                      if now - f.stat().st_mtime < 900]
             return (agent_hooks.limits.codex_used(str(max(files, key=lambda f: f.stat().st_mtime)), now) if files else None) or codex_rate_read(now)
-        return agent_hooks.limits.agy_used(agent_hooks.agy_status(), now)
+        try:  # a running agy's own language server first; else agy's cloud quota (agy_rate_read)
+            return agent_hooks.limits.agy_used(agent_hooks.agy_status(), now) or agy_rate_read(now)
+        except LookupError:
+            return agy_rate_read(now)
     except Exception:  # no numbers: unknown, which allows one worker
         return None
 
