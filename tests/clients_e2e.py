@@ -1523,10 +1523,11 @@ def chat_e2e(tok: str, tmp: Path):
         tokf = home / ".gemini" / "antigravity-cli" / "antigravity-oauth-token"
         tokf.parent.mkdir(parents=True, exist_ok=True)
         tokf.write_text(json.dumps({"token": {"access_token": "gategate", "expiry": "2099-01-01T00:00:00Z"}}), encoding="utf-8")
-        probe = ("import faulthandler, sys; faulthandler.dump_traceback_later(40, exit=True, file=sys.stderr)\n"  # a hang shows where (macOS CI)
+        probe = ("import faulthandler, sys; faulthandler.dump_traceback_later(100, exit=True, file=sys.stderr)\n"  # a hang shows where (macOS CI)
                  "import companion, json, threading, time, http.server\n"
                  "class H(http.server.BaseHTTPRequestHandler):\n"
                  "    def do_POST(self):\n"
+                 "        self.rfile.read(int(self.headers.get('Content-Length') or 0))\n"  # read the body first: an unread one can reset the socket (macOS)
                  "        ok = self.headers.get('Authorization') == 'Bearer gategate' and self.headers.get('User-Agent') == 'antigravity-cli'\n"
                  "        body = json.dumps({'models': {'g': {'displayName': 'Gemini X', 'quotaInfo': {'remainingFraction': 0.25, 'resetTime': '2099-01-01T00:00:00Z'}}, 'tab': {'quotaInfo': {'remainingFraction': 1}}}}).encode()\n"
                  "        self.send_response(200 if ok else 403); self.end_headers(); self.wfile.write(body if ok else b'{}')\n"
@@ -1535,9 +1536,9 @@ def chat_e2e(tok: str, tmp: Path):
                  "companion.AGY_QUOTA_URL = f'http://127.0.0.1:{s.server_port}/q'\n"
                  "(companion.STATE / 'agy-rate.json').unlink(missing_ok=True)\n"
                  "companion.agy_rate_read(time.time())\n"
-                 "for _ in range(100):\n    got = companion.agy_rate_read(time.time())\n    if got: break\n    time.sleep(0.2)\n"
+                 "for _ in range(300):\n    got = companion.agy_rate_read(time.time())\n    if got: break\n    time.sleep(0.2)\n"
                  "print(got)")
-        code, out, err = run([sys.executable, "-c", probe], "", {**env, "PYTHONPATH": str(hooks)}, cwd=str(hooks))
+        code, out, err = run([sys.executable, "-c", probe], "", {**env, "PYTHONPATH": str(hooks)}, cwd=str(hooks), timeout=150)
         check(code == 0 and "75" in out and "Gemini X" in out, "companion: agy's limit from its cloud quota with agy's own token (no running agy)", out + err[-6000:])
         tokf.unlink()  # the running companion must never send a test token to Google
         # Model and effort: the pc reports what each agent offers; a chat's choice reaches the turn the agent's own way
