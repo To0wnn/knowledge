@@ -1726,17 +1726,23 @@ function ckCard(meta) {
   }, { passive: true });
   input.rows = 2; input.placeholder = "Message the agent… (Enter a new line, Ctrl+Enter sends)"; input.setAttribute("aria-label", "Message");
   const stop = el("button", "btn ck-stop", "Stop"), send = el("button", "btn primary", "Send"), note = el("p", "ck-note");
+  // a live agent at work: Queue (after this turn) and Force (stop the step, then this) next to Send (into this turn)
+  const queueBtn = el("button", "btn ck-queue", "Queue"), forceBtn = el("button", "btn ck-forcebtn", "Force");
+  queueBtn.type = forceBtn.type = "button"; queueBtn.hidden = forceBtn.hidden = true;
+  queueBtn.title = "After this turn (Alt+Enter)"; forceBtn.title = "Stop the step it is on, then this (Ctrl+Shift+Enter)";
   // under the box: the model (one chip, its effort inside) and, in a new chat, where it runs (ckPicker)
   const picks = el("div", "ck-picks"); picks.hidden = true;
-  stop.type = "button"; send.type = "submit"; btns.append(stop, send); form.append(input, btns, picks, note);
+  stop.type = "button"; send.type = "submit"; btns.append(stop, queueBtn, forceBtn, send); form.append(input, btns, picks, note);
   const asks = el("div", "ck-asks"); asks.hidden = true; asks.setAttribute("aria-live", "assertive");
   const subbar = el("div", "ck-subbar"); subbar.hidden = true; subbar.setAttribute("aria-label", "Subagents running now");
   root.append(head, log, subbar, asks, form);
-  const card = { meta: { ...meta }, root, name, where, git, state, log, asks, form, input, stop, send, note, picks, mark, close, tok, subbar, pick: null, after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
+  const card = { meta: { ...meta }, root, name, where, git, state, log, asks, form, input, stop, send, note, picks, mark, close, tok, subbar, queueBtn, forceBtn, mode: "", pick: null, after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
   x.onclick = () => ckShow(null);
   open.onclick = () => ckShow(card.meta);
   input.addEventListener("keydown", (e) => {
     // Enter is a new line; Ctrl/Cmd+Enter presses the button (Send, Queue or Force)
+    if (e.key === "Enter" && e.altKey && !e.isComposing && !queueBtn.hidden) { e.preventDefault(); return queueBtn.click(); } // queue
+    if (e.key === "Enter" && e.shiftKey && (e.ctrlKey || e.metaKey) && !e.isComposing && !forceBtn.hidden) { e.preventDefault(); return forceBtn.click(); }
     if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey) || e.isComposing) return;
     e.preventDefault(); form.requestSubmit();
   });
@@ -1760,7 +1766,8 @@ function ckCard(meta) {
       else {
         // only a choice made here: a saved model the pc no longer lists must not turn into Default unasked
         const pick = card.pick?.touched ? { model: card.pick.id, effort: card.pick.effort } : {};
-        await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, text, ...pick }) });
+        const mode = card.mode || "now"; card.mode = ""; // Send: into the turn (a live agent) or after it (others)
+        await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, text, mode, ...pick }) });
         Object.assign(card.meta, pick); card.pick = null;
       }
       input.value = ""; if (!card.worker) card.meta.status = "queued";
@@ -1776,6 +1783,8 @@ function ckCard(meta) {
       ckTick();
     } catch (err) { note.className = "ck-note bad"; note.textContent = err.message; }
   };
+  queueBtn.onclick = () => { card.mode = "queue"; form.requestSubmit(); };
+  forceBtn.onclick = () => { card.mode = "force"; form.requestSubmit(); };
   stop.onclick = async () => {
     if (card.worker) return ckWorkerAct(card, "stop_worker");
     try { await api("/ui/api/chat/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id }) }); }
@@ -2024,9 +2033,12 @@ function ckPaint(card) {
   // while the agent answers, a message waits in line (the server keeps up to 5) and goes in when this turn ends
   // with messages waiting and nothing typed the button forces: the turn stops and the first waiting message goes in
   const force = busy && m.status === "running" && m.waiting > 0 && !card.input.value.trim();
+  const live = ckLive(m), typed = !!card.input.value.trim();
   card.stop.hidden = !busy; card.send.disabled = !card.online; card.send.classList.toggle("force", force);
-  card.send.textContent = force ? "Force" : busy ? "Queue" : "Send";
-  card.send.title = force ? `Send the first of ${m.waiting} waiting message${m.waiting > 1 ? "s" : ""} into this turn: the agent reads it after its next step, nothing is stopped (Stop ends the turn)` : busy ? "The agent gets this when its current turn ends" : "";
+  card.queueBtn.hidden = card.forceBtn.hidden = !(live && busy && typed); // a live agent at work: three ways in
+  card.send.textContent = force ? "Force" : busy && !live ? "Queue" : "Send";
+  card.send.title = force ? `Send the first of ${m.waiting} waiting message${m.waiting > 1 ? "s" : ""} into the turn${live ? ": its step stops and it goes in" : ": the agent reads it after its next step"} (Stop ends the turn)`
+    : busy && live ? "Into this turn: the agent takes it in as it works (Ctrl+Enter)" : busy ? "The agent gets this when its current turn ends" : "";
   if (!card.note.classList.contains("bad") || busy) {
     card.note.className = "ck-note";
     card.note.textContent = !card.online ? `${m.label} is offline${card.at ? ` since ${ago(card.at)}` : ""}: a chat needs its companion running.` : "";
@@ -2095,6 +2107,7 @@ function ckSub(card, e) {
   ckSubbar(card);
   function report(x, ev) { x.report.innerHTML = renderMd(ev.text); }
 }
+const ckLive = (m) => (ck.machines.find((x) => x.id === m.machine)?.companion?.live || []).includes(m.agent); // its pc runs this agent live
 function ckSubsEnded(card) {
   for (const b of (card.subs || new Map()).values()) {
     if (b.status !== "running") continue;

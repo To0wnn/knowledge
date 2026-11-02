@@ -1283,6 +1283,7 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
     yolo, folders, s = load("yolo.json", {}), sorted(project_folders().values()), settings()
     links, gits = with_git(folder_links(), ws, now)
     body = {"version": version(), "workersAllowed": s["workersAllowed"], "maxWorkers": s["maxWorkers"], "game": workers.game_session(),
+            "live": list(chat.LIVE_AGENTS),  # agents whose chats run live: a message while they work goes in at once
             "agents": {a: {"yolo": bool(yolo.get(a, {}).get("on")), "trusted": not untrusted(a, folders), "limit": lim.get(a),
                      "resets": (resets or {}).get(a), **({"plugin": v} if (v := plugin_version(a)) else {}),  # known before a session
                      "models": chat.models(a)}  # what a chat may pick (cached for hours)
@@ -1669,6 +1670,7 @@ def chats_round() -> bool:
     for cid in r.get("stop", []):
         if not chat.stop(cid):
             post({"chat": cid, "events": [{"kind": "info", "text": "Stopped (no turn ran here any more)."}], "done": True})
+    chat.reap()  # live chats idle for a while end (the next message resumes them)
     for s in r.get("steer", []):  # Force: for the running turn, read by the agent's hook after its next step
         if chat.steer(str(s.get("chat", "")), str(s.get("by") or ""), str(s.get("text", ""))):
             log("remote", f"Chat message sent into a running turn by {s.get('by') or '?'}", f"chat {s.get('chat')}")

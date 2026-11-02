@@ -773,6 +773,42 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert ui("/ui/api/chat/close", {"machine": mid, "id": mc})[0] == 409, "not while the agent works"
     http("GET", "/machine/chats", token=fr, headers=pc)
     http("POST", "/machine/chats/events", {"chat": mc, "events": [], "done": True}, token=fr, headers=pc)
+    # A live chat (the pc says its Claude runs live): while it works, Send goes into the running agent at once (now),
+    # Force too (its step stops first); Queue waits; a live message not handed out when the turn ends goes next; a turn
+    # the agent starts by itself sets the chat running.
+    http("POST", "/machine/report", {"version": "0.24.0", "live": ["claude", "bash"], "agents": {"codex": {}, "claude": {"models": [
+        {"id": "opus", "name": "Opus", "efforts": ["low", "max"]}]}}, "folders": {"linked": [{"path": "/home/x/garden", "project": "garden"}]}}, token=fr, headers=pc)
+    lc = json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "claude", "folder": "/home/x/garden"})[2])["chat"]["id"]
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": lc, "text": "work"})[0] == 200
+    http("GET", "/machine/chats", token=fr, headers=pc)  # handed out: busy
+    st, _, b = ui("/ui/api/chat/send", {"machine": mid, "id": lc, "text": "also this", "mode": "now"})
+    assert st == 200 and json.loads(b).get("live") == "now", b
+    st, _, b = ui("/ui/api/chat/send", {"machine": mid, "id": lc, "text": "later", "mode": "queue"})
+    assert st == 200 and json.loads(b).get("queued"), b
+    st, _, b = ui("/ui/api/chat/send", {"machine": mid, "id": lc, "text": "stop that", "mode": "force"})
+    assert st == 200 and json.loads(b).get("live") == "force", b
+    got = [w for w in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"] if w["chat"] == lc]
+    assert [(w["text"], w["mode"]) for w in got] == [("also this", "now"), ("stop that", "force")], got
+    assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={lc}")[2])["chat"]["waiting"] == 1, "only the queued one waits"
+    ui("/ui/api/chat/send", {"machine": mid, "id": lc, "text": "racing the end", "mode": "now"})  # not handed out before the end
+    http("POST", "/machine/chats/events", {"chat": lc, "events": [{"kind": "text", "text": "ok"}], "done": True}, token=fr, headers=pc)
+    nxt = [w["text"] for w in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"] if w["chat"] == lc]
+    assert nxt == ["later"], nxt  # the queued one first (it waited longer); the racing one waits behind it, not lost
+    http("POST", "/machine/chats/events", {"chat": lc, "events": [], "done": True}, token=fr, headers=pc)
+    assert [w["text"] for w in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"] if w["chat"] == lc] == ["racing the end"]
+    http("POST", "/machine/chats/events", {"chat": lc, "events": [], "done": True}, token=fr, headers=pc)
+    assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={lc}")[2])["chat"]["status"] == "idle"
+    http("POST", "/machine/chats/events", {"chat": lc, "events": [{"kind": "info", "text": "goes on"}], "auto": True}, token=fr, headers=pc)
+    assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={lc}")[2])["chat"]["status"] == "running", "its own turn"
+    assert lc in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["busy"]
+    http("POST", "/machine/chats/events", {"chat": lc, "events": [], "done": True}, token=fr, headers=pc)
+    # Codex is not live on this pc: Send while it works still waits in line
+    cc = json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/x/garden"})[2])["chat"]["id"]
+    ui("/ui/api/chat/send", {"machine": mid, "id": cc, "text": "go"}); http("GET", "/machine/chats", token=fr, headers=pc)
+    st, _, b = ui("/ui/api/chat/send", {"machine": mid, "id": cc, "text": "more", "mode": "now"})
+    assert st == 200 and json.loads(b).get("queued"), b
+    http("POST", "/machine/chats/events", {"chat": cc, "events": [], "done": True}, token=fr, headers=pc)
+    http("GET", "/machine/chats", token=fr, headers=pc); http("POST", "/machine/chats/events", {"chat": cc, "events": [], "done": True}, token=fr, headers=pc)
     # The person's default model for a new chat (Settings page): checked for shape, per person, cleared with null.
     assert ui("/ui/api/me/prefs", {"chat_default": {"agent": "claude", "id": "-rf", "effort": ""}})[0] == 400
     assert ui("/ui/api/me/prefs", {"chat_default": {"agent": "bash", "id": "x", "effort": ""}})[0] == 400

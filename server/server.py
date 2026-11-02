@@ -2461,7 +2461,7 @@ def machine_rows() -> list[dict]:
                          "sessions": [{k: s.get(k, "") for k in ("project", "task", "at", "worker")} for s in sessions]}
         rows.append({"id": mid, "label": m.get("label", mid), "at": m.get("at", 0), "online": now - m.get("at", 0) < ONLINE,
                      "tokens": names, "own": any(own_token(tokens[n], dev) for n in names), "agents": agents,
-                     "companion": {**{k: comp.get(k) for k in ("version", "at", "workersAllowed", "game", "maxWorkers", "folders", "projects", "token")},
+                     "companion": {**{k: comp.get(k) for k in ("version", "at", "workersAllowed", "game", "maxWorkers", "folders", "projects", "token", "live")},
                                    "agents": sorted(comp.get("agents") or {}),
                                    "models": {a: v.get("models", []) for a, v in (comp.get("agents") or {}).items()}} if comp else None,
                      "actions": queue.get(mid, [])[-10:]})
@@ -5080,6 +5080,20 @@ def asks_settle(c: dict, now: float, why: str = ""):
                      f"Approval for {a['tool']} withdrawn: {why}.")
 
 
+async def chat_live_message(f: Path, c: dict, msg: dict, mode: str, text: str, added: bool = False):
+    """A message for a live chat while its agent works: handed to the companion at once (its next poll), which writes it
+    into the running agent ("now": the agent takes it into this turn) or interrupts the step first ("force")."""
+    def note(c):
+        c["closed"] = False
+        if not added:
+            chat_add(c, "user", text)
+        chat_add(c, "info", "Sent into the running turn." if mode == "now" else "Force: this step stops and your message goes in.")
+    await asyncio.to_thread(update_state, f, note)
+    await asyncio.to_thread(update_state, f.parent / "queue.json",
+                            lambda q: q.setdefault(c["id"], {}).setdefault("live", []).append({**msg, "mode": mode}))
+    return JSONResponse({"ok": True, "live": mode})
+
+
 def chat_add(c: dict, kind: str, text: str, events: int = CHAT_EVENTS, size_cap: int = CHAT_BYTES, extra: dict | None = None):
     """One event, within the caps: the oldest events go first (the chat says so). extra: a subagent's {sub, status}."""
     c["next"] = c.get("next", 0) + 1
@@ -5492,7 +5506,11 @@ async def ui_chat_send(request: Request):
         return chat_error(e)
     if not row["online"]:
         return JSONResponse({"error": f"{row['label']} is offline: a chat needs its companion running"}, status_code=409)
+    mode = str(b.get("mode") or "now")  # while it works: now (into the turn), queue (after it), force (stop the step, then this)
+    live = c.get("agent") in ((row.get("companion") or {}).get("live") or [])
     busy, msg = [], {"text": text, "by": device.get().get("user", ""), "at": time.time()}
+    if live and mode in ("now", "force") and c.get("status") in ("queued", "running"):
+        return await chat_live_message(f, c, {**msg, **pick}, mode, text)
 
     def change(c):
         c["closed"] = False  # a new message opens a closed chat again
@@ -5548,6 +5566,12 @@ async def ui_chat_stop(request: Request):
     if b.get("force") is True:
         if not row["online"] or not c.get("pending") or not read_json(q, {}).get(c["id"], {}).get("busy"):
             return JSONResponse({"error": "nothing to force: no queued message behind a running turn"}, status_code=409)
+        if c.get("agent") in ((row.get("companion") or {}).get("live") or []):  # a live agent: its step stops, the message goes in
+            first = []
+            await asyncio.to_thread(update_state, f, lambda c: first.append(c["pending"].pop(0)) if c.get("pending") else None)
+            if not first:
+                return JSONResponse({"error": "nothing to force: no queued message behind a running turn"}, status_code=409)
+            return await chat_live_message(f, c, first[0], "force", first[0]["text"], added=True)
         msg = []
 
         def steer(c):  # the next waiting one joins those on their way (Force again and again works)
@@ -5714,6 +5738,9 @@ async def machine_chats(request: Request):
                 out["busy"].append(cid)
                 if e.get("stop"):
                     out["stop"].append(cid)
+                for m in e.pop("live", []):  # a live chat's message while it works: into its running agent (now or force)
+                    out["work"].append({"chat": cid, "agent": c["agent"], "folder": c["folder"], "session": c.get("session", ""),
+                                        "model": c.get("model", ""), "effort": c.get("effort", ""), "allow": c.get("allow", []), **m})
                 if e.get("steer"):  # Force: once to the companion, which parks it for the running turn's hook
                     s = e.pop("steer")
                     out.setdefault("steer", []).extend({"chat": cid, **x} for x in (s if isinstance(s, list) else [s]))
@@ -5834,7 +5861,11 @@ async def machine_chat_events(request: Request):
     if not c or dev["name"] not in c.get("tokens", []):
         return JSONResponse({"error": "not a chat of this machine"}, status_code=404)
 
+    auto = b.get("auto") is True and not b.get("done")  # the agent went on by itself (a live chat): a turn without a message
+
     def change(c):
+        if auto and c.get("status") not in ("queued", "running"):
+            c["status"] = "running"
         for k, t, extra in events:
             if contains_secret(t):
                 t = "(withheld: contains a known secret value)"
@@ -5863,9 +5894,22 @@ async def machine_chat_events(request: Request):
                 c["status"] = "idle"
     nxt: list = []
     await asyncio.to_thread(update_state, f, change)
+    left, started = [], []  # live messages not yet handed out when the turn ended: they go next, in order, never lost
+
+    def turn_over(q):
+        left.extend({k: v for k, v in m.items() if k != "mode"} for m in (q.get(c["id"]) or {}).get("live", []))
+        first = nxt[0] if nxt else left.pop(0) if left else None
+        if first:
+            q[c["id"]] = {"msg": first, "stop": False}
+            started.append(not nxt)
+        else:
+            q.pop(c["id"], None)
     if b.get("done") is True:
-        await asyncio.to_thread(update_state, f.parent / "queue.json", lambda q: q.__setitem__(c["id"], {"msg": nxt[0], "stop": False})
-                                if nxt else q.pop(c["id"], None))
+        await asyncio.to_thread(update_state, f.parent / "queue.json", turn_over)
+        if left or any(started):
+            await asyncio.to_thread(update_state, f, lambda c: c.update(pending=left + c.get("pending", []), status="queued"))
+    elif auto:  # its own turn runs on the pc: the busy list and live messages need its entry
+        await asyncio.to_thread(update_state, f.parent / "queue.json", lambda q: q.setdefault(c["id"], {}).update(busy=True, stop=False))
     return JSONResponse({"ok": True})
 
 
@@ -6155,6 +6199,7 @@ async def machine_report(request: Request):
     try:
         b = json.loads(raw)
         report = {"version": str(b.get("version", ""))[:20], "workersAllowed": b.get("workersAllowed") is True,
+                  "live": [a for a in (b.get("live") or []) if a in AGENT_OWNERS],  # chats that take a message while they work
                   "maxWorkers": {a: int(n) for a, n in (b.get("maxWorkers") or {}).items() if a in AGENT_OWNERS},
                   "game": str(b.get("game") or "")[:80],
                   "agents": {a: {"yolo": v.get("yolo") is True, "trusted": v.get("trusted") if isinstance(v.get("trusted"), bool) else None,

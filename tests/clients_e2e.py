@@ -747,6 +747,64 @@ elif os.environ.get("KNOWLEDGE_CHAT") and name == "agy" and args[:1] == ["acp"]:
                 said += " | npm test ran" if got == "allow" else " | npm test denied"
             upd({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": said}})
             send({"id": m["id"], "result": {"stopReason": "end_turn"}})
+elif name == "claude" and "--input-format" in args and os.environ.get("KNOWLEDGE_CHAT"):  # a live chat: one process, messages in
+    import queue, subprocess, threading
+    sid, out, inbox = "sess-claude", (lambda x: print(json.dumps(x), flush=True)), queue.Queue()
+    threading.Thread(target=lambda: ([inbox.put(json.loads(ln)) for ln in sys.stdin if ln.strip()], inbox.put(None)), daemon=True).start()
+    said_before = "--resume" in args  # a resumed conversation, or one this process answered before
+
+    def ask_owner():  # its permission prompt tool, as Claude calls it (see the one-turn branch below)
+        cfg = json.load(open(args[args.index("--mcp-config") + 1], encoding="utf-8"))["mcpServers"]["knowledge_approval"]
+        tool = args[args.index("--permission-prompt-tool") + 1].split("__")[-1]
+        srv = subprocess.Popen([cfg["command"], *cfg["args"]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env={**os.environ, **cfg["env"]})
+        srv.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}}) + "\\n")
+        srv.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": tool, "arguments": {
+            "tool_name": "Bash", "input": {"command": "npm test", "description": "run the tests"}, "tool_use_id": "t1"}, "_meta": {"progressToken": 7}}}) + "\\n")
+        srv.stdin.flush()
+        for line in srv.stdout:
+            r = json.loads(line)
+            if r.get("id") == 2:
+                srv.kill()
+                v = json.loads(r["result"]["content"][0]["text"])
+                return " | npm test ran" if v["behavior"] == "allow" else " | npm test denied: " + v.get("message", "")
+        return ""
+
+    out({"type": "system", "subtype": "init", "session_id": sid})
+    while (m := inbox.get()) is not None:
+        if m.get("type") == "control_request":  # an interrupt with no turn running: answered, nothing else
+            out({"type": "control_response", "response": {"subtype": "success", "request_id": m.get("request_id")}})
+            continue
+        texts = [m["message"]["content"]]
+        rec({"chat": os.environ["KNOWLEDGE_CHAT"], "argv": [name] + args, "cwd": os.getcwd(), "stdin": texts[0], "pid": os.getpid()})
+        stopped = False
+        if "SLOW" in texts[0]:  # a turn that keeps working: messages sent meanwhile go into it; an interrupt ends it
+            out({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": "sleep 90"}}]}})
+            end = time.time() + 90
+            while time.time() < end:
+                try:
+                    x = inbox.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+                if x is None:
+                    break
+                if x.get("type") == "control_request":
+                    out({"type": "control_response", "response": {"subtype": "success", "request_id": x.get("request_id")}})
+                    stopped = True
+                    break
+                texts.append(x["message"]["content"])
+                rec({"chat": os.environ["KNOWLEDGE_CHAT"], "argv": [name] + args, "cwd": os.getcwd(), "stdin": texts[-1], "pid": os.getpid(), "into": True})
+                if "DONE" in texts[-1]:
+                    break
+        if stopped:
+            out({"type": "result", "subtype": "error_during_execution", "is_error": True, "session_id": sid})
+            continue
+        said = "echo: " + " + ".join(texts) + (" (resumed)" if said_before else "")
+        if "ASK" in texts[0] and "--permission-prompt-tool" in args:
+            said += ask_owner()
+        said_before = True
+        out({"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": said}}})
+        out({"type": "assistant", "message": {"content": [{"type": "text", "text": said}, {"type": "tool_use", "name": "Bash", "input": {"command": "git status"}}]}})
+        out({"type": "result", "is_error": False, "session_id": sid, "permission_denials": [{"tool_name": "Bash", "tool_input": {"command": "git push"}}]})
 elif os.environ.get("KNOWLEDGE_CHAT"):  # one chat turn: the message on stdin, the agent's own JSON stream out
     import time
     msg = sys.stdin.buffer.read().decode("utf-8")
@@ -1494,10 +1552,12 @@ def chat_e2e(tok: str, tmp: Path):
             check(got1 and got2 and len(turns) == 2 and sent(first.get("stdin", "{}")) == msg1 and sent(second.get("stdin", "{}")) == "second"
                   and Path(first["cwd"]).resolve() == repo.resolve() and not any(msg1[:5] in a for a in first["argv"]),
                   f"chat {agent}: two turns, each message on stdin (never on the command line), in the linked folder", json.dumps(turns)[:900])
-            resume = {"claude": ["--resume", "sess-claude"], "codex": [], "agy": []}[agent]
-            check(not any(a in first["argv"] for a in resume) and all(a in second["argv"] for a in resume)
-                  and ("sess-" + agent in second["argv"] or agent != "claude" and not first.get("load") and second.get("load") == "sess-" + agent),
-                  f"chat {agent}: the first turn starts a conversation, the second continues it with the agent's own id", json.dumps([first.get("argv"), second.get("argv")]))
+            if agent == "claude":  # live: one process for both turns, the conversation simply goes on
+                check("--resume" not in first["argv"] and first.get("pid") == second.get("pid") and "--input-format" in first["argv"],
+                      "chat claude: live, the second turn goes into the same running agent", json.dumps([first.get("argv"), first.get("pid"), second.get("pid")]))
+            else:
+                check(not first.get("load") and second.get("load") == "sess-" + agent,
+                      f"chat {agent}: the first turn starts a conversation, the second continues it with the agent's own id", json.dumps([first.get("argv"), second.get("argv")]))
             check(f"echo: {msg1}" in texts and "echo: second (resumed)" in texts and "OLD HISTORY" not in texts and "PRE-DENIED" not in texts and any(e["kind"] == "tool" and "git status" in e["text"] for e in events)
                   and [e["kind"] for e in events if e["kind"] == "user"] == ["user", "user"] and chat(cid)["chat"]["session"] == "sess-" + agent,
                   f"chat {agent}: the streamed text and tool lines reach the server", json.dumps(events)[:900])
@@ -1563,6 +1623,35 @@ def chat_e2e(tok: str, tmp: Path):
                 back = st == 200 and idle(cid, 4)
                 turn = ([c for c in recorded() if c["chat"] == cid] + [{}, {}])[1]
                 check(back and turn.get("pick") == ["fake-default", "medium"], "chat codex: Default after a choice names the configured model and effort", json.dumps(turn)[:600])
+        # Live Claude: a message sent while it works goes into the running turn (the same process takes it); Force stops the
+        # step and sends the message after it; Stop interrupts and the process stays; idle, it ends and the next message
+        # resumes the conversation with --resume.
+        live = new("claude", repo)
+        sendm = lambda cid, text, mode: http("POST", "/ui/api/chat/send", {"machine": mid, "id": cid, "text": text, "mode": mode}, ui)[0]
+        running = lambda cid: wait_for(lambda: chat(cid)["chat"]["status"] == "running", 20)
+        send(live, "SLOW one")
+        ok = running(live) and wait_for(lambda: any(c.get("stdin") == "SLOW one" for c in recorded()), 20)
+        check(ok and sendm(live, "also this", "now") == 200 and sendm(live, "DONE", "now") == 200 and idle(live, 4),
+              "live: Send while it works is accepted", json.dumps(chat(live)["events"])[-600:])
+        said = "".join(e["text"] for e in chat(live)["events"] if e["kind"] == "text")
+        turns = [c for c in recorded() if c["chat"] == live]
+        check("echo: SLOW one + also this + DONE" in said and len({c["pid"] for c in turns}) == 1 and sum(1 for c in turns if c.get("into")) == 2,
+              "live: messages sent during a turn go into that turn of the same agent", said[-300:] + json.dumps(turns)[:300])
+        send(live, "SLOW two")
+        ok = running(live) and wait_for(lambda: any(c.get("stdin") == "SLOW two" for c in recorded()), 20)
+        check(ok and sendm(live, "instead do this", "force") == 200 and idle(live, 8),
+              "live: Force while it works", json.dumps(chat(live)["events"])[-600:])
+        said = "".join(e["text"] for e in chat(live)["events"] if e["kind"] == "text")
+        check("echo: instead do this" in said and "SLOW two +" not in said and any("Stopped this step" in e["text"] for e in chat(live)["events"]),
+              "live: Force stops the step and its message goes in after it", said[-300:])
+        send(live, "SLOW three")
+        ok = running(live) and wait_for(lambda: any(c.get("stdin") == "SLOW three" for c in recorded()), 20)
+        http("POST", "/ui/api/chat/stop", {"machine": mid, "id": live}, ui)
+        check(ok and wait_for(lambda: chat(live)["chat"]["status"] == "idle", 30) and any(e["text"] == "Stopped." for e in chat(live)["events"]),
+              "live: Stop interrupts the turn", json.dumps(chat(live)["events"])[-400:])
+        send(live, "after the stop")
+        check(idle(live, 12) and [c["pid"] for c in recorded() if c["chat"] == live][-1] == turns[0]["pid"],
+              "live: after a Stop the same agent goes on (its process stayed)", json.dumps([c.get("pid") for c in recorded() if c["chat"] == live]))
         # Approvals: a turn asks for a tool its allowed set lacks; the owner allows once, for the chat, or denies, from
         # the web UI; the agent goes on. One chat waits without an answer and times out (1 minute, the shortest setting).
         admin_ui = {**ui, "Content-Type": "application/json"}
@@ -2757,6 +2846,7 @@ print(json.dumps(seen))"""
 
 
 def main():
+    compile(FAKE_AGENT, "FAKE_AGENT", "exec")  # a broken stand-in fails every agent test: say so at once
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # this report only; the clients run as a stock Windows has them
     tmp = Path(tempfile.mkdtemp(prefix="kn e2e "))
     home = tmp / "Test Usér"

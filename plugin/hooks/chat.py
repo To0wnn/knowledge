@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -819,8 +820,211 @@ def run_turn(item: dict, post, log, linked, yolo):
         RUNNING.pop(cid, None)  # after the done post: until then the server's "busy" list matches this
 
 
+# ---------------------------------------------------------------- live chats: one running agent per chat
+# Claude Code runs as one process per chat (stream-json in and out) and stays between turns, as in a terminal: a message
+# sent while it works goes in at once and it takes it into the turn it is in; a background subagent goes on after the
+# answer, and when it ends the agent goes on by itself (a turn of its own); Force and Stop interrupt the step the native
+# way (a control_request), the process stays. Measured 2 Nov 2026 with Claude Code 2.1.314. Idle for IDLE_CLOSE with no
+# subagent running, the process ends; the next message resumes the same conversation.
+LIVE: dict = {}  # chat id -> Live
+LIVE_AGENTS = ("claude",)
+IDLE_CLOSE = 15 * 60
+TURN_GRACE = 3.0  # seconds after a result to see whether a message sent during the turn starts one more
+
+
+def live_argv(exe: str, yolo: bool, session: str, cid: str, model: str, effort: str) -> list:
+    one = argv("claude", exe, yolo, session, cid, model, effort)
+    return [one[0], "-p", "--input-format", "stream-json", *one[2:]]  # the same flags, the input a stream of messages
+
+
+def user_line(text: str) -> bytes:
+    return (json.dumps({"type": "user", "message": {"role": "user", "content": text}}) + "\n").encode("utf-8")
+
+
+class Live:
+    """One chat's running agent: write messages in, read its stream out, tell the server where each turn ends."""
+
+    def __init__(self, item: dict, post, log, yolo: bool):
+        self.cid, self.agent, self.folder = item["chat"], item["agent"], item.get("folder", "")
+        self.post, self.log, self.yolo, self.pick = post, log, yolo, choice(item)
+        self.st = {"session": item.get("session") or ""}
+        self.lock, self.buf, self.flushed, self.last = threading.Lock(), [], time.time(), time.time()
+        self.busy = self.extra = False  # a turn runs; a message went in during it (one more turn may follow)
+        self.after_interrupt, self.ended_at, self.closing, self.stop_asked = [], 0.0, False, False
+        self.subs = set()  # its subagents running now: not idle while one works
+        exe = shutil.which(self.agent)
+        if not exe:
+            raise RuntimeError(f"{self.agent} is not on PATH")
+        cmd = live_argv(exe, yolo, self.st["session"], self.cid, *self.pick)
+        if os.name == "nt" and exe.lower().endswith((".cmd", ".bat")):
+            cmd = workers.shim_line(cmd)
+        self.errf = tempfile.TemporaryFile()
+        kw = {"start_new_session": True} if os.name != "nt" else {"creationflags": workers.WIN_FLAGS}
+        env = {**os.environ, "KNOWLEDGE_CHAT": self.cid}
+        self.p = subprocess.Popen(cmd, cwd=self.folder, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.errf,
+                                  env=env if yolo else workers.git_safe_env(env), **kw)
+        self.rec = {"pid": self.p.pid, "ident": workers.identity(self.p.pid), "stop": False, "folder": self.folder, "st": self.st,
+                    "allow": [x for x in item.get("allow") or [] if isinstance(x, dict)], "live": self}
+        threading.Thread(target=self.read, daemon=True).start()
+        log("chat", f"Claude Code: live chat started in {self.folder}", f"chat {self.cid}" + (f", continues {self.st['session']}" if self.st["session"] else ""))
+
+    def alive(self) -> bool:
+        return self.p.poll() is None and not self.closing
+
+    def write(self, data: bytes):
+        self.p.stdin.write(data)
+        self.p.stdin.flush()
+
+    def begin(self):  # a turn runs: the server's busy list must find it here
+        self.busy, self.stop_asked = True, False
+        RUNNING[self.cid] = self.rec
+        self.rec["stop"] = False
+
+    def send(self, item: dict, mode: str = ""):
+        """A message: into the turn that runs ("now", the default while busy), after interrupting its step ("force"),
+        or as a new turn when none runs."""
+        with self.lock:
+            self.last = time.time()
+            text = item.get("text", "")
+            if self.busy and mode == "force":
+                self.after_interrupt.append(text)
+                self.interrupt()
+                return
+            if self.busy:
+                self.extra = True
+            else:
+                self.begin()
+            self.write(user_line(text))
+
+    def interrupt(self):
+        """Stop the step that runs, the native way: the turn ends with a result, the process stays."""
+        try:
+            self.write((json.dumps({"type": "control_request", "request_id": secrets.token_hex(6), "request": {"subtype": "interrupt"}}) + "\n").encode())
+        except OSError:
+            pass
+        threading.Timer(15, self.kill_if_stuck, args=(time.time(),)).start()
+
+    def kill_if_stuck(self, asked: float):
+        if self.busy and self.ended_at < asked and self.alive():  # no result 15 s after an interrupt: end it the hard way
+            workers.kill(self.rec, hard=True)
+
+    def stop(self):
+        with self.lock:
+            self.stop_asked, self.after_interrupt = True, []
+            self.interrupt()
+
+    def flush(self, **end):
+        body = {"chat": self.cid, "events": merged(self.buf), "session": self.st["session"], **end}
+        self.buf, self.flushed = [], time.time()
+        if body["events"] or end:
+            try:
+                self.post(body)
+            except Exception as e:  # the server away: it calls the turn lost when it next hands out work
+                self.log("error", "Could not send a chat's output to the server", f"chat {self.cid}: {e}"[:300])
+
+    def read(self):
+        for raw in self.p.stdout:
+            line = raw.decode("utf-8", "replace")
+            try:
+                kind = json.loads(line).get("type")
+            except ValueError:
+                kind = ""
+            evs = parse(self.agent, line, self.st)
+            with self.lock:
+                self.last = time.time()
+                if evs and not self.busy:  # it goes on by itself (a background subagent ended): a turn of its own
+                    self.begin()
+                    self.buf.append(("info", "The agent goes on by itself (a subagent it started has ended)."))
+                    self.flush(auto=True)
+                self.buf += evs
+                for e in evs:
+                    if e[0] == "sub" and len(e) > 3:
+                        (self.subs.add if e[3] == "running" else self.subs.discard)(e[2])
+                if kind == "result":
+                    self.ended_at = time.time()
+                    self.turn_end()
+                elif time.time() - self.flushed >= FLUSH:
+                    self.flush()
+        self.gone()
+
+    def turn_end(self):
+        """A result: the turn ended, unless a message sent during it starts one more (it does at once) or a Force waits."""
+        if self.after_interrupt:  # Force: the interrupted step's result; the message goes in now, the same turn for the server
+            texts, self.after_interrupt = self.after_interrupt, []
+            self.buf.append(("info", "Stopped this step; your message goes in now."))
+            self.flush()
+            for text in texts:
+                self.write(user_line(text))
+            self.extra = True
+            return
+        if self.extra:
+            self.extra = False
+            threading.Timer(TURN_GRACE, self.maybe_done, args=(self.ended_at,)).start()
+            self.flush()
+            return
+        self.done()
+
+    def maybe_done(self, at: float):
+        with self.lock:
+            if self.busy and self.ended_at == at and self.last <= at + 0.05:  # nothing came after that result: the turn is over
+                self.done()
+
+    def done(self, err: str = ""):
+        if self.stop_asked:
+            self.buf.append(("info", "Stopped."))
+        self.busy, self.stop_asked = False, False
+        if err:
+            self.buf.append(("error", err))
+        self.flush(done=True, **({"error": err} if err else {}))
+        RUNNING.pop(self.cid, None)
+
+    def gone(self):
+        """The process ended (idle close, a crash, a kill): a turn that ran ends with it."""
+        code = self.p.wait()
+        self.errf.seek(0)
+        tail = self.errf.read()[-2000:].decode("utf-8", "replace").strip()
+        with self.lock:
+            if self.busy:
+                self.done("" if self.closing or self.stop_asked else
+                          f"{self.agent} ended with exit code {code}" + (f": {first_line(tail.splitlines()[-1])}" if tail else ""))
+            if LIVE.get(self.cid) is self:
+                LIVE.pop(self.cid, None)
+        self.log("chat", f"Claude Code: live chat ended (exit {code})", f"chat {self.cid}")
+
+    def close(self):
+        """End the process between turns (idle, or another model or effort): stdin closes, it exits by itself."""
+        self.closing = True
+        try:
+            self.p.stdin.close()
+        except OSError:
+            pass
+        try:
+            self.p.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            workers.kill(self.rec, hard=True)
+
+    def idle(self) -> bool:
+        return not self.busy and not self.subs and time.time() - self.last > IDLE_CLOSE
+
+
+def reap():
+    """Close live chats idle for IDLE_CLOSE (the companion's loop calls it)."""
+    for cid, lv in list(LIVE.items()):
+        if lv.idle() or not lv.alive():
+            LIVE.pop(cid, None)
+            if lv.alive():
+                threading.Thread(target=lv.close, daemon=True).start()
+
+
 def stop(cid: str) -> bool:
-    """Stop a running turn (the agent and what it started); False when none runs here."""
+    """Stop a running turn (the agent and what it started); False when none runs here. A live chat: its step is
+    interrupted and the process stays."""
+    if (lv := LIVE.get(cid)) and lv.busy:
+        for w in [w for w in WAITS.values() if w["chat"] == cid]:  # nobody answers a stopped turn's approvals
+            w.update(decision="deny", stopped=True)
+            w["done"].set()
+        lv.stop()
+        return True
     rec = RUNNING.get(cid)
     if not rec:
         return False
@@ -833,6 +1037,9 @@ def stop(cid: str) -> bool:
 
 
 def start(item: dict, post, log, linked, yolo):
+    cid, agent = item["chat"], item.get("agent")
+    if agent in LIVE_AGENTS:
+        return start_live(item, post, log, linked, yolo)
     if len(RUNNING) >= MAX_TURNS:
         post({"chat": item["chat"], "events": [{"kind": "error", "text": f"{MAX_TURNS} chat turns run on this pc already; send again later"}],
               "done": True, "error": "busy"})
@@ -842,6 +1049,31 @@ def start(item: dict, post, log, linked, yolo):
     RUNNING[item["chat"]] = {"pid": 0, "ident": "", "stop": False, "folder": item.get("folder", ""),
                              "allow": [x for x in item.get("allow") or [] if isinstance(x, dict)]}
     threading.Thread(target=run_turn, args=(item, post, log, linked, yolo), daemon=True).start()
+
+
+def start_live(item: dict, post, log, linked, yolo):
+    """A message for a live chat: into its running agent, or a new one (resumed) when none runs, its model or effort
+    changed, or the YOLO setting did."""
+    cid = item["chat"]
+    try:
+        if item.get("folder", "") not in linked():
+            raise RuntimeError(f"{item.get('folder', '')} is not a folder linked to a project on this pc")
+        lv = LIVE.get(cid)
+        if lv and lv.alive() and (lv.pick != choice(item) or lv.yolo != yolo(item["agent"])) and not lv.busy:
+            LIVE.pop(cid, None)
+            lv.close()  # another model, effort or YOLO: the next process starts with it, the conversation resumes
+            item = {**item, "session": lv.st["session"] or item.get("session", "")}
+            lv = None
+        if not (lv and lv.alive()):
+            if sum(1 for x in LIVE.values() if x.busy) >= MAX_TURNS:
+                raise RuntimeError(f"{MAX_TURNS} chat turns run on this pc already; send again later")
+            steer_path(cid).unlink(missing_ok=True)
+            lv = LIVE[cid] = Live(item, post, log, yolo(item["agent"]))
+        lv.send(item, item.get("mode", ""))
+    except Exception as e:
+        log("error", "Claude Code: chat turn failed", f"chat {cid}: {e}"[:300])
+        post({"chat": cid, "events": [{"kind": "error", "text": f"{type(e).__name__}: {e}"[:300]}], "done": True, "error": str(e)[:200]})
+        RUNNING.pop(cid, None)
 
 
 def self_test():
