@@ -2044,6 +2044,7 @@ async function ckPoll(card) {
   card.meta = { ...card.meta, ...res.chat, label: res.label }; card.online = res.online; card.at = res.at;
   ckPicker(card);
   ckEvents(card, res);
+  if (!card.meta.subs) ckSubsEnded(card); // the server knows none runs (its turn ended, or it was lost): no block says running
   ckAsks(card, res.asks || [], (res.now || Date.now() / 1000) - Date.now() / 1000);
   ckPaint(card);
 }
@@ -2093,6 +2094,14 @@ function ckSub(card, e) {
   b.st.textContent = status === "running" ? "running" : status;
   ckSubbar(card);
   function report(x, ev) { x.report.innerHTML = renderMd(ev.text); }
+}
+function ckSubsEnded(card) {
+  for (const b of (card.subs || new Map()).values()) {
+    if (b.status !== "running") continue;
+    b.status = "ended"; b.d.classList.remove("running"); b.st.className = "chip"; b.st.textContent = "ended";
+    b.st.title = "It did not report its end in this chat (its turn ended or was cut off)";
+  }
+  ckSubbar(card);
 }
 const ckNum = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e4 ? `${Math.round(n / 1e3)}k` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n));
 // The subagents running now, pinned above the box: the log scrolls on, these stay; a click opens its block.

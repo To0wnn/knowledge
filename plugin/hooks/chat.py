@@ -214,7 +214,8 @@ def parse(agent: str, line: str, st: dict) -> list:
                     n = b["text"]
                     tid = re.search(r"<tool-use-id>([^<]+)</tool-use-id>", n)  # newer Claude Code; older ones name the task id
                     tid = tid.group(1) if tid else st.get("agent_ids", {}).get((re.search(r"<task-id>([^<]+)</task-id>", n) or [None, ""])[1])
-                    if tid and tid in st.get("subs", ()):
+                    # its tool-use id also closes one started in an earlier turn (a resumed session hears of it later)
+                    if tid and (tid in st.get("subs", ()) or re.fullmatch(r"toolu_[\w-]{6,80}", tid)):
                         state = re.search(r"<status>([^<]+)</status>", n)
                         res = re.search(r"<result>(.*?)</result>", n, flags=re.S)
                         out.append(("sub", hand_back(res.group(1) if res else "")[:2000] or "done", tid,
@@ -901,6 +902,8 @@ def self_test():
     assert ev[1:] == [usage("tu5", total=5949), usage(tokens=70871, ctx=34812)] and merged([ev[2]]) == [{"kind": "usage", "text": "", "tokens": 70871, "ctx": 34812}], ev
     cst = {}
     assert parse("codex", '{"type":"turn.completed","usage":{"input_tokens":900,"cached_input_tokens":800,"output_tokens":50}}', cst) == [usage(total=950)] and cst["result"]
+    later = parse("claude", json.dumps({"type": "user", "message": {"content": "<task-notification> <tool-use-id>toolu_0123456789</tool-use-id> <status>completed</status> <result>r</result></task-notification>"}}), {})
+    assert later == [("sub", "r", "toolu_0123456789", "done")], later  # started in an earlier turn: still closed
     st = {}  # in the background: the launch keeps it running, the task-notification (tool-use-id, or task-id) ends it
     for tu, note in (("tu7", "<tool-use-id>tu7</tool-use-id>"), ("tu8", "<task-id>ag8</task-id>")):
         lines = ['{"type":"assistant","message":{"content":[{"type":"tool_use","id":"%s","name":"Agent","input":{"description":"bg"}}]}}' % tu,
