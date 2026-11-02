@@ -444,7 +444,7 @@ function bdShow() {
 // The chats in board order: per project the ones waiting on you first, then the running ones, then the newest.
 function bdChats() {
   const rank = { needs: 0, running: 1, idle: 2 };
-  return ck.chats.filter(ckScope).map((c) => ({ c, st: ckState(c) }))
+  return ck.chats.filter(ckScope).map((c) => ({ c, st: ckState(c) })).filter((x) => x.st !== "closed") // closed: under the list's Closed only
     .sort((a, b) => rank[a.st] - rank[b.st] || (b.c.updated || 0) - (a.c.updated || 0));
 }
 // What a zoomed-out card says: the last thing in its log once loaded, else the board's line for it ("replied: …").
