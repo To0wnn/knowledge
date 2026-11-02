@@ -14,6 +14,7 @@ Codex over `codex app-server`, agy over `agy acp`.
 Standard library only; Linux, macOS and Windows.
 """
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -477,12 +478,11 @@ def auto_allowed(kind: str, name: str, inp, folder: str) -> bool:
     return kind in ("read", "search", "edit", "delete", "move", "think") and bool(paths_in(inp)) and not once_only(inp, folder)
 
 
-def agy_acp(p, item: dict, st: dict):
-    """One agy turn over ACP: initialize, continue the conversation (session/load) or start one (session/new), send
-    the message (session/prompt). Its permission requests are answered by auto_allowed() or the owner."""
-    cid, folder, live = item["chat"], item.get("folder", ""), [False]  # session/load replays the history: not new output
-
-    subs = set()  # tool call ids of agy's subagents in this turn
+def agy_handlers(cid: str, folder: str, live: list):
+    """(note, request) for agy over ACP: its session updates as chat events (none while live[0] is false: session/load
+    replays the history), its permission requests answered by auto_allowed() or the owner. Shared by one-turn and
+    live chats."""
+    subs = set()  # tool call ids of agy's subagents
 
     def note(method, params):
         u = params.get("update") or {}
@@ -516,6 +516,23 @@ def agy_acp(p, item: dict, st: dict):
             cid, name or str(tc.get("title") or "tool"), inp, str(inp.get("toolSummary") or "")) != "deny"
         pick = next((o for o in opts if o.get("kind") == ("allow_once" if ok else "reject_once")), None)
         return {"outcome": {"outcome": "selected", "optionId": pick["optionId"]}} if pick else {"outcome": {"outcome": "cancelled"}}
+    return note, request
+
+
+def agy_offered(result: dict):
+    """ACP's own model list (session/new or load): the one both ways accept (agy models names models ACP refuses)."""
+    offered = [{"id": m["modelId"], "name": str(m.get("name") or m["modelId"])[:80], "efforts": []}
+               for m in ((result.get("models") or {}).get("availableModels") or []) if MODEL_ID.fullmatch(str(m.get("modelId", "")))]
+    if offered:
+        _AGY_ACP[:] = offered[:40]
+        _MODELS["agy"] = (time.time(), offered[:40])
+
+
+def agy_acp(p, item: dict, st: dict):
+    """One agy turn over ACP: initialize, continue the conversation (session/load) or start one (session/new), send
+    the message (session/prompt)."""
+    folder, live = item.get("folder", ""), [False]
+    note, request = agy_handlers(item["chat"], folder, live)
     rpc, out = Rpc(p, note, request), []
     yield from rpc.call("initialize", {"protocolVersion": 1, "clientCapabilities": {}}, out)
     if st["session"]:
@@ -523,11 +540,7 @@ def agy_acp(p, item: dict, st: dict):
     else:
         yield from rpc.call("session/new", {"cwd": folder, "mcpServers": []}, out)
         st["session"] = out[-1].get("sessionId") or ""
-    offered = [{"id": m["modelId"], "name": str(m.get("name") or m["modelId"])[:80], "efforts": []}
-               for m in ((out[-1].get("models") or {}).get("availableModels") or []) if MODEL_ID.fullmatch(str(m.get("modelId", "")))]
-    if offered:  # ACP's own list is the one both ways accept (agy models also names models ACP refuses)
-        _AGY_ACP[:] = offered[:40]
-        _MODELS["agy"] = (time.time(), offered[:40])
+    agy_offered(out[-1])
     model = choice(item)[0]
     if model:  # per session in ACP; set again every turn, as the chat's choice may have changed
         yield from rpc.call("session/set_model", {"sessionId": st["session"], "modelId": model}, out)
@@ -634,12 +647,10 @@ def flat(d, at: str = "") -> str:
     return f"{at}: {', '.join(map(str, d)) if isinstance(d, list) else d}"
 
 
-def codex_app(p, item: dict, st: dict):
-    """One Codex turn over `codex app-server` (JSON-RPC v2; `codex exec` never asks): initialize, resume the thread
-    (thread/resume, also one `codex exec` began) or start one, then turn/start until turn/completed, all in the
-    workspace-write sandbox with approvalPolicy on-request. Its approval requests are answered by auto_allowed() or
-    the owner; only decisions it offers are sent."""
-    cid, folder, said, changes = item["chat"], item.get("folder", ""), [False], {}
+def codex_handlers(cid: str, folder: str, st: dict):
+    """(note, request) for a Codex app-server: its notifications as chat events, its approval requests answered by
+    auto_allowed() or the owner (only decisions it offers are sent). Shared by one-turn and live chats."""
+    said, changes = [False], {}
 
     def note(method, params):
         it = params.get("item") or {}
@@ -700,6 +711,32 @@ def codex_app(p, item: dict, st: dict):
         if method == "mcpServer/elicitation/request":  # the knowledge tools are approved by the -c override; others are not ours to fill in
             return {"action": "decline"}
         return {}
+    return note, request
+
+
+def codex_default(call, folder: str, model: str, effort: str) -> tuple:
+    """Default named (a turn/start override holds for the thread's later turns): config/read, else model/list's
+    isDefault; an older Codex without these methods keeps its own. `call(method, params)` -> result."""
+    if model and effort:
+        return model, effort
+    try:
+        cfg = call("config/read", {"cwd": folder}).get("config") or {}
+        model, effort = model or str(cfg.get("model") or ""), effort or str(cfg.get("model_reasoning_effort") or "")
+        if not (model and effort):
+            found = call("model/list", {}).get("data") or []
+            m = next((x for x in found if model and model in (x.get("id"), x.get("model"))), None) or next((x for x in found if x.get("isDefault")), {})
+            model, effort = model or str(m.get("model") or m.get("id") or ""), effort or str(m.get("defaultReasoningEffort") or "")
+    except RuntimeError:
+        pass
+    return model, effort
+
+
+def codex_app(p, item: dict, st: dict):
+    """One Codex turn over `codex app-server` (JSON-RPC v2; `codex exec` never asks): initialize, resume the thread
+    (thread/resume, also one `codex exec` began) or start one, then turn/start until turn/completed, all in the
+    workspace-write sandbox with approvalPolicy on-request."""
+    note, request = codex_handlers(item["chat"], item.get("folder", ""), st)
+    folder = item.get("folder", "")
     rpc, out = Rpc(p, note, request), []
     yield from rpc.call("initialize", {"clientInfo": {"name": "knowledge-companion", "version": "1"}}, out)
     rpc.notify("initialized")
@@ -827,7 +864,8 @@ def run_turn(item: dict, post, log, linked, yolo):
 # way (a control_request), the process stays. Measured 2 Nov 2026 with Claude Code 2.1.314. Idle for IDLE_CLOSE with no
 # subagent running, the process ends; the next message resumes the same conversation.
 LIVE: dict = {}  # chat id -> Live
-LIVE_AGENTS = ("claude",)
+LIVE_AGENTS = ("claude", "codex", "agy")
+AGENT_NAMES = {"claude": "Claude Code", "codex": "Codex", "agy": "agy"}
 IDLE_CLOSE = 15 * 60
 MAX_LIVE = 6  # agents kept running on one pc; the oldest idle one ends first (a few hundred MB each)
 START_LOCK = threading.Lock()  # one process per chat, also when two messages for it come in one poll
@@ -852,6 +890,7 @@ class Live:
     def __init__(self, item: dict, post, log, yolo: bool):
         self.cid, self.agent, self.folder = item["chat"], item["agent"], item.get("folder", "")
         self.post, self.log, self.yolo, self.pick = post, log, yolo, choice(item)
+        self.asked = self.pick  # the chat's own choice ("" = default); pick may name the default (Codex)
         self.st = {"session": item.get("session") or ""}
         self.lock, self.buf, self.flushed, self.last = threading.Lock(), [], time.time(), time.time()
         self.written = self.taken = 0  # messages written in, and echoed back as taken
@@ -861,7 +900,7 @@ class Live:
         exe = shutil.which(self.agent)
         if not exe:
             raise RuntimeError(f"{self.agent} is not on PATH")
-        cmd = live_argv(exe, yolo, self.st["session"], self.cid, *self.pick)
+        cmd = self.command(exe)
         if os.name == "nt" and exe.lower().endswith((".cmd", ".bat")):
             cmd = workers.shim_line(cmd)
         self.errf = tempfile.TemporaryFile()
@@ -872,8 +911,24 @@ class Live:
         # known to the companion for its whole life: its approvals (also a background subagent's between turns)
         self.rec = RUNNING[self.cid] = {"pid": self.p.pid, "ident": workers.identity(self.p.pid), "stop": False, "folder": self.folder,
                                         "st": self.st, "allow": [x for x in item.get("allow") or [] if isinstance(x, dict)], "live": True}
+        try:
+            self.started()
+        except Exception:  # initialize or resume refused: nothing may stay behind
+            if RUNNING.get(self.cid) is self.rec:
+                RUNNING.pop(self.cid, None)
+            self.closing = True
+            try:
+                workers.kill(self.rec, hard=True)
+            except Exception:
+                pass
+            raise
+        log("chat", f"{AGENT_NAMES[self.agent]}: live chat started in {self.folder}", f"chat {self.cid}" + (f", continues {self.st['session']}" if self.st["session"] else ""))
+
+    def command(self, exe: str) -> list:
+        return live_argv(exe, self.yolo, self.st["session"], self.cid, *self.pick)
+
+    def started(self):
         threading.Thread(target=self.read, daemon=True).start()
-        log("chat", f"Claude Code: live chat started in {self.folder}", f"chat {self.cid}" + (f", continues {self.st['session']}" if self.st["session"] else ""))
 
     def alive(self) -> bool:
         return self.p.poll() is None and not self.closing
@@ -886,6 +941,7 @@ class Live:
         """The chat runs (for the server too: auto tells it a turn began that it did not hand out)."""
         if not self.busy:
             self.busy, self.stop_asked = True, False
+            self.log("chat", f"{AGENT_NAMES[self.agent]}: chat turn started in {self.folder}", f"chat {self.cid}, live" + (f", {auto}" if auto else ""))
             if auto:
                 self.buf.append(("info", auto))
                 self.flush(auto=True)
@@ -997,6 +1053,11 @@ class Live:
             return
         if self.stop_asked:
             self.buf.append(("info", "Stopped."))
+            self.log("chat", f"{AGENT_NAMES[self.agent]}: chat turn stopped by its owner", f"chat {self.cid}")
+        elif err:
+            self.log("error", f"{AGENT_NAMES[self.agent]}: chat turn failed", f"chat {self.cid}: {err}"[:300])
+        else:
+            self.log("chat", f"{AGENT_NAMES[self.agent]}: chat turn done", f"chat {self.cid}, session {self.st['session']}")
         self.busy, self.stop_asked = False, False
         self.taken = self.written  # a stop drops what was not taken: nothing more is owed
         if err:
@@ -1020,7 +1081,7 @@ class Live:
                 LIVE.pop(self.cid, None)
             if RUNNING.get(self.cid) is self.rec:
                 RUNNING.pop(self.cid, None)
-        self.log("chat", f"Claude Code: live chat ended (exit {code})", f"chat {self.cid}")
+        self.log("chat", f"{AGENT_NAMES[self.agent]}: live chat ended (exit {code})", f"chat {self.cid}")
 
     def close(self):
         """End the process between turns (idle, too many, or another model or effort): stdin closes, it exits."""
@@ -1039,6 +1100,325 @@ class Live:
 
     def idle(self) -> bool:
         return not self.busy and not self.turn_open and not self.subs and time.time() - self.last > IDLE_CLOSE
+
+
+class CodexLive(Live):
+    """A Codex chat as one `codex app-server` (JSON-RPC v2) with one thread: a message while a turn runs goes in with
+    turn/steer (measured on Codex 0.166: taken into the same turn), Force and Stop with turn/interrupt (the turn ends
+    "interrupted", the server stays); a new turn with turn/start. Codex names each turn's start and end itself."""
+
+    def command(self, exe: str) -> list:
+        return [exe, "app-server", "-c", workers.CODEX_APPROVE]  # the knowledge tools approved, with YOLO too
+
+    def started(self):
+        self.res, self.ids, self.turn_id, self.ended = {}, itertools.count(1), "", set()  # ended: turns Codex said are over
+        self.note, self.request = codex_handlers(self.cid, self.folder, self.st)
+        threading.Thread(target=self.read, daemon=True).start()
+        self.call("initialize", {"clientInfo": {"name": "knowledge-companion", "version": "1"}})
+        self.rpc({"method": "initialized"})
+        perms = {"cwd": self.folder, **({"approvalPolicy": "never", "sandbox": "danger-full-access"} if self.yolo
+                                        else {"approvalPolicy": "on-request", "sandbox": "workspace-write"})}
+        r = self.call("thread/resume", {"threadId": self.st["session"], **perms}) if self.st["session"] else self.call("thread/start", perms)
+        self.st["session"] = (r.get("thread") or {}).get("id") or self.st["session"]
+        self.pick = codex_default(self.call, self.folder, *self.pick)
+
+    def rpc(self, msg: dict):
+        self.write((json.dumps({"jsonrpc": "2.0", **msg}) + "\n").encode("utf-8"))
+
+    def call(self, method: str, params: dict, timeout: float = 60) -> dict:
+        """A request and its answer (the reader thread files it); a JSON-RPC error raises."""
+        rid, box = next(self.ids), {"done": threading.Event()}  # itertools.count: safe from several threads
+        self.res[rid] = box
+        self.rpc({"id": rid, "method": method, "params": params})
+        if not box["done"].wait(timeout):
+            raise RuntimeError(f"{method}: no answer in {timeout:.0f} s")
+        if box.get("error"):
+            raise RuntimeError(f"{method}: {first_line((box['error'] or {}).get('message')) or box['error']}")
+        return box.get("result") or {}
+
+    def answer(self, m: dict):  # its own request (an approval): the owner may take minutes, off the reader thread
+        try:
+            self.rpc({"id": m["id"], "result": self.request(m["method"], m.get("params") or {})})
+        except Exception as e:
+            self.log("error", "Codex: an approval could not be answered", f"chat {self.cid}: {e}"[:300])
+
+    def read(self):
+        try:
+            for raw in self.p.stdout:
+                try:
+                    m = json.loads(raw.decode("utf-8", "replace"))
+                except ValueError:
+                    continue
+                if not isinstance(m, dict):
+                    continue
+                if "id" in m and "method" not in m:  # an answer to one of our requests
+                    box = self.res.pop(m["id"], None)
+                    if box:
+                        box.update(result=m.get("result"), error=m.get("error"))
+                        box["done"].set()
+                elif "id" in m:
+                    threading.Thread(target=self.answer, args=(m,), daemon=True).start()
+                elif m.get("method"):
+                    with self.lock:
+                        self.on_note(m["method"], m.get("params") or {})
+        except Exception as e:
+            self.log("error", "Codex: reading a live chat failed", f"chat {self.cid}: {e}"[:300])
+        finally:
+            for box in list(self.res.values()):  # nobody waits for ever on a dead server
+                box.update(error={"message": "the agent ended"})
+                box["done"].set()
+            self.gone()
+
+    def on_note(self, method: str, params: dict):
+        self.last = time.time()
+        if params.get("threadId") not in (None, "", self.st["session"]):  # a subagent's thread: its own block only
+            if method in ("item/started", "item/completed") and (params.get("item") or {}).get("type") == "collabAgentToolCall":
+                self.buf += codex_subs(params["item"], method == "item/completed")
+            return
+        if method == "turn/started":
+            self.turn_id, self.turn_open = (params.get("turn") or {}).get("id", ""), True
+            self.begin("The agent goes on by itself.")
+            return
+        evs = self.note(method, params) or []
+        self.buf += evs
+        for e in evs:
+            if e[0] == "sub" and len(e) > 3:
+                (self.subs.add if e[3] == "running" else self.subs.discard)(e[2])
+        if method == "turn/completed":
+            turn = params.get("turn") or {}
+            self.ended.add(turn.get("id") or self.turn_id)
+            self.turn_open, self.turn_id = False, ""
+            if turn.get("status") == "failed":
+                self.buf.append(("error", first_line((turn.get("error") or {}).get("message")) or "the turn failed"))
+            self.turn_end()
+        elif time.time() - self.flushed >= FLUSH:
+            self.flush()
+
+    def start_turn(self, text: str):
+        model, effort = self.pick
+        r = self.call("turn/start", {"threadId": self.st["session"], "input": [{"type": "text", "text": text}],
+                                     **({"model": model} if model else {}), **({"effort": effort} if effort else {})})
+        with self.lock:  # known from its answer already: a message right after it steers instead of starting another
+            tid = (r.get("turn") or {}).get("id")
+            if tid and not self.turn_id and tid not in self.ended:  # its end may have been read before this answer
+                self.turn_id, self.turn_open = tid, True
+
+    def send(self, item: dict, mode: str = ""):
+        text = item.get("text", "")
+        with self.lock:
+            self.last = time.time()
+            if mode == "force" and self.turn_open:
+                self.after_interrupt.append(text)
+                turn = self.turn_id
+            else:
+                turn = None
+                steer = self.turn_open and self.turn_id
+                self.begin("" if not mode else "Your message started a turn.")
+        if turn is not None:
+            self.interrupt(turn)
+            return
+        if steer:
+            try:  # into the turn that runs; it may have ended a moment ago: then a new turn
+                self.call("turn/steer", {"threadId": self.st["session"], "expectedTurnId": steer, "input": [{"type": "text", "text": text}]})
+                return
+            except RuntimeError:
+                pass
+        try:
+            self.start_turn(text)
+        except RuntimeError as e:  # refused (a model it does not know, …): said in the chat, the agent stays
+            with self.lock:
+                if not self.turn_open:
+                    self.done(f"{AGENT_NAMES[self.agent]} did not start the turn: {e}"[:300])
+
+    def forced(self, texts: list):
+        """After a Force's interrupt: the first message starts the next turn, any more go into it."""
+        try:
+            self.start_turn(texts[0])
+            for x in texts[1:]:
+                self.send({"text": x}, "now")
+        except RuntimeError as e:
+            with self.lock:
+                self.done(f"Codex did not take the message: {e}"[:300])
+
+    def interrupt(self, turn: str = ""):
+        try:
+            self.call("turn/interrupt", {"threadId": self.st["session"], "turnId": turn or self.turn_id}, timeout=15)
+        except RuntimeError:
+            pass
+
+    def stop(self):
+        with self.lock:
+            self.stop_asked, self.after_interrupt = True, []
+            open_turn = self.turn_open and self.turn_id
+            if not open_turn and self.busy:
+                self.done()
+        if open_turn:
+            threading.Thread(target=self.interrupt, args=(open_turn,), daemon=True).start()
+            threading.Timer(20, self.kill_if_stuck, args=(0, time.time())).start()  # no end 20 s later: the hard way
+
+    def turn_end(self):
+        """turn/completed: a Force waits for it, then its message starts the next turn (the same one for the server)."""
+        if self.after_interrupt:
+            texts, self.after_interrupt = self.after_interrupt, []
+            self.buf.append(("info", "Stopped this step; your message goes in now."))
+            self.flush()
+            threading.Thread(target=self.forced, args=(texts,), daemon=True).start()
+            return
+        self.done()
+
+
+class AgyLive(CodexLive):
+    """An agy chat as one running agy: with YOLO `agy --input-format stream-json` (a turn per message, in agy's own
+    line), without it `agy acp` (one session/prompt at a time, the next waits here). Measured on agy 1.4.12: a message
+    sent during a turn runs as the next turn, and there is no interrupt, so Force and Stop end the process and the
+    conversation goes on in a new one (--conversation / session/load)."""
+
+    def command(self, exe: str) -> list:
+        return argv("agy", exe, True, self.st["session"], self.cid, self.pick[0], "") if self.yolo else [exe, "acp"]
+
+    def started(self):
+        self.res, self.ids, self.turn_id, self.lines, self.answered, self.ended = {}, itertools.count(1), "", [], 0, set()
+        self.replayed, self.force_text, self.restarting, self.carry, self.wtexts = [False], None, False, [], []
+        if self.yolo:
+            threading.Thread(target=self.read_stream, daemon=True).start()
+            return
+        self.note, self.request = agy_handlers(self.cid, self.folder, self.replayed)
+        threading.Thread(target=self.read, daemon=True).start()
+        self.call("initialize", {"protocolVersion": 1, "clientCapabilities": {}})
+        r = (self.call("session/load", {"sessionId": self.st["session"], "cwd": self.folder, "mcpServers": []}, timeout=120)
+             if self.st["session"] else self.call("session/new", {"cwd": self.folder, "mcpServers": []}))
+        self.st["session"] = r.get("sessionId") or self.st["session"]
+        agy_offered(r)
+        if self.pick[0]:
+            self.call("session/set_model", {"sessionId": self.st["session"], "modelId": self.pick[0]})
+        self.replayed[0] = True
+
+    # YOLO: agy's stream-json, one result per message written
+    def read_stream(self):
+        try:
+            for raw in self.p.stdout:
+                line = raw.decode("utf-8", "replace")
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    ev = None
+                ev = ev if isinstance(ev, dict) else {}
+                with self.lock:
+                    self.last = time.time()
+                    evs = parse("agy", line, self.st)
+                    self.buf += evs
+                    if ev.get("event") == "result":
+                        self.answered += 1
+                        if self.answered >= self.written:
+                            self.done()
+                        else:
+                            self.flush()
+                    elif time.time() - self.flushed >= FLUSH:
+                        self.flush()
+        except Exception as e:
+            self.log("error", "agy: reading a live chat failed", f"chat {self.cid}: {e}"[:300])
+        finally:
+            self.gone()
+
+    def on_note(self, method: str, params: dict):  # ACP: session updates
+        self.last = time.time()
+        self.buf += self.note(method, params) or []
+        if time.time() - self.flushed >= FLUSH:
+            self.flush()
+
+    def prompts(self):
+        """ACP: one session/prompt at a time; the messages that came meanwhile go next, in order."""
+        while True:
+            with self.lock:
+                if not self.lines:
+                    self.turn_open = False
+                    self.done()
+                    return
+                text = self.lines.pop(0)
+                self.turn_open = True
+            try:
+                r = self.call("session/prompt", {"sessionId": self.st["session"], "prompt": [{"type": "text", "text": text}]}, timeout=24 * 3600)
+                if r.get("stopReason") not in (None, "end_turn"):
+                    with self.lock:
+                        self.buf.append(("info", f"The turn ended: {r['stopReason']}"))
+            except RuntimeError as e:
+                with self.lock:
+                    self.lines.clear()
+                    if self.alive():
+                        self.done(f"agy: {e}"[:300])
+                return
+
+    def send(self, item: dict, mode: str = ""):
+        text = item.get("text", "")
+        with self.lock:
+            self.last = time.time()
+            if mode == "force" and self.busy and not self.restarting:  # no interrupt in agy: a new process takes the conversation on
+                # what was written or waits but not answered goes along after the Force (the step it was on ends here)
+                waiting = self.wtexts[self.answered + 1:] if self.yolo else list(self.lines)
+                self.lines.clear()
+                self.force_text, self.carry = text, waiting + self.carry
+                self.restart()
+                return
+            self.begin("" if not mode else "Your message started a turn.")
+            if self.restarting:  # a new agy takes the conversation on: this goes along to it
+                self.carry.append(text)
+                return
+            if self.yolo:
+                self.written += 1
+                self.wtexts.append(text)
+                self.write(stdin_for("agy", text))
+                return
+            self.lines.append(text)
+            running = self.turn_open
+            self.turn_open = True
+        if not running:
+            threading.Thread(target=self.prompts, daemon=True).start()
+
+    def restart(self):
+        """End this process for a Force or a Stop; gone() hands the chat to a new one (Force) or ends the turn (Stop)."""
+        self.closing, self.restarting = True, self.force_text is not None
+        threading.Thread(target=workers.kill, args=(self.rec,), kwargs={"hard": True}, daemon=True).start()
+
+    def stop(self):
+        with self.lock:
+            if self.busy:
+                self.stop_asked, self.force_text, self.carry, self.restarting = True, None, [], False
+                if self.p.poll() is None:
+                    self.restart()
+
+    def gone(self):
+        with self.lock:
+            text, carry, self.force_text = self.force_text, self.carry, None
+        if text is None:  # no Force: an idle close, a Stop, a crash
+            return super().gone()
+        code = self.p.wait()
+        with self.lock:
+            self.buf.append(("info", "Stopped this step; your message goes in now (agy has no interrupt: a new agy takes the conversation on)."))
+            self.flush()
+        item = {"chat": self.cid, "agent": "agy", "folder": self.folder, "session": self.st["session"], "text": text,
+                "model": self.asked[0], "effort": self.asked[1], "allow": self.rec.get("allow", [])}
+        try:  # the same server turn goes on in the new process (made outside START_LOCK: its start may take a while)
+            lv = AgyLive(item, self.post, self.log, self.yolo)
+        except Exception as e:
+            lv = None
+            err = e
+        with self.lock:
+            more, self.carry, self.restarting = self.carry[len(carry):], [], False  # sent during the start
+            if RUNNING.get(self.cid) is self.rec:
+                RUNNING.pop(self.cid, None)
+        with START_LOCK:
+            if LIVE.get(self.cid) is self:
+                if lv:
+                    LIVE[self.cid] = lv
+                else:
+                    LIVE.pop(self.cid, None)
+        if not lv:
+            self.post({"chat": self.cid, "events": [{"kind": "error", "text": f"agy did not take the message: {err}"[:300]}], "done": True, "error": str(err)[:200]})
+            return
+        lv.busy = True
+        for x in [text, *carry, *more]:
+            lv.send({"text": x})
+        self.log("chat", f"agy: live chat ended for a Force (exit {code})", f"chat {self.cid}")
 
 
 def reap():
@@ -1104,7 +1484,10 @@ def _start_live(item: dict, post, log, linked, yolo):
             if item.get("folder", "") not in linked():
                 raise RuntimeError(f"{item.get('folder', '')} is not a folder linked to a project on this pc")
             lv = LIVE.get(cid)
-            if lv and lv.alive() and (lv.pick != choice(item) or lv.yolo != yolo(item["agent"])) and not lv.busy and not lv.turn_open:
+            if lv and getattr(lv, "restarting", False):  # agy restarting for a Force: this goes along to the new one
+                lv.send(item, "")
+                return
+            if lv and lv.alive() and (lv.asked != choice(item) or lv.yolo != yolo(item["agent"])) and not lv.busy and not lv.turn_open:
                 LIVE.pop(cid, None)
                 lv.close()  # another model, effort or YOLO: the next process starts with it, the conversation resumes
                 item = {**item, "session": lv.st["session"] or item.get("session", "")}
@@ -1113,15 +1496,15 @@ def _start_live(item: dict, post, log, linked, yolo):
                 if sum(1 for x in LIVE.values() if x.busy) >= MAX_TURNS:
                     raise RuntimeError(f"{MAX_TURNS} chat turns run on this pc already; send again later")
                 steer_path(cid).unlink(missing_ok=True)
-                lv = LIVE[cid] = Live(item, post, log, yolo(item["agent"]))
+                lv = LIVE[cid] = {"codex": CodexLive, "agy": AgyLive}.get(item["agent"], Live)(item, post, log, yolo(item["agent"]))
+        lv.rec["allow"] = [x for x in item.get("allow") or [] if isinstance(x, dict)]  # "for this chat" answers since it started
         lv.send(item, item.get("mode", ""))
     except Exception as e:
-        log("error", "Claude Code: chat turn failed", f"chat {cid}: {e}"[:300])
-        if lv and lv.busy:  # it had begun: its process going away posts the end (gone), once
-            try:
-                workers.kill(lv.rec, hard=True)
-            except Exception:
-                pass
+        log("error", f"{AGENT_NAMES.get(item.get('agent'), '?')}: chat turn failed", f"chat {cid}: {e}"[:300])
+        if lv and lv.busy:  # it had begun: the turn ends with the error, the agent stays for the next message
+            with lv.lock:
+                if lv.busy:
+                    lv.done(f"{type(e).__name__}: {e}"[:300])
             return
         post({"chat": cid, "events": [{"kind": "error", "text": f"{type(e).__name__}: {e}"[:300]}], "done": True, "error": str(e)[:200]})
 

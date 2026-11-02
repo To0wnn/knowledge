@@ -2039,7 +2039,8 @@ function ckPaint(card) {
   card.queueBtn.hidden = card.forceBtn.hidden = !(live && busy && typed); // a live agent at work: three ways in
   card.send.textContent = force ? "Force" : busy && !live ? "Queue" : "Send";
   card.send.title = force ? `Send the first of ${m.waiting} waiting message${m.waiting > 1 ? "s" : ""} into the turn${live ? ": its step stops and it goes in" : ": the agent reads it after its next step"} (Stop ends the turn)`
-    : busy && live ? "Into this turn: the agent takes it in as it works (Ctrl+Enter)" : busy ? "The agent gets this when its current turn ends" : "";
+    : busy && live ? (m.agent === "agy" ? "Right after this turn, in the same agy (it takes no message mid-turn) (Ctrl+Enter)" : "Into this turn: the agent takes it in as it works (Ctrl+Enter)")
+    : busy ? "The agent gets this when its current turn ends" : "";
   if (!card.note.classList.contains("bad") || busy) {
     card.note.className = "ck-note";
     card.note.textContent = !card.online ? `${m.label} is offline${card.at ? ` since ${ago(card.at)}` : ""}: a chat needs its companion running.` : "";
