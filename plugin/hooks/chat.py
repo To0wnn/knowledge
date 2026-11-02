@@ -916,6 +916,175 @@ def user_line(text: str) -> bytes:
     return (json.dumps({"type": "user", "message": {"role": "user", "content": text}}) + "\n").encode("utf-8")
 
 
+LIVE_DIR = workers.DIR.parent / "live"  # one folder per live chat's agent (chat_host.py): it outlives a companion restart
+
+
+def in_size(d: Path) -> int:
+    try:
+        return (d / "in").stat().st_size
+    except OSError:
+        return 0
+
+
+def in_lines(d: Path, start: int) -> list:
+    """The lines written to the agent after `start` (since the last save), as JSON objects."""
+    try:
+        with open(d / "in", "rb") as f:
+            f.seek(start)
+            raw = f.read().splitlines()
+    except OSError:
+        return []
+    out = []
+    for x in raw:
+        try:
+            v = json.loads(x)
+        except ValueError:
+            continue
+        out.append(v if isinstance(v, dict) else {})
+    return out
+
+
+def adopt(post, log) -> int:
+    """At the companion's start: every live chat a companion before it left running goes on here (read on from where
+    that one saved); a folder whose agent ended, or that never got as far as a save, goes."""
+    n = 0
+    for d in sorted(LIVE_DIR.iterdir()) if LIVE_DIR.is_dir() else []:
+        try:
+            s = json.loads((d / "state.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            s = None
+        try:
+            h = json.loads((d / "host.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            h = {}
+        alive = bool(h) and not (d / "exit").exists() and workers.running(h)
+        if not (s and alive) or s["chat"] in LIVE:
+            if alive:  # it never saved: nothing knows where it was
+                workers.kill(h, hard=True)
+            shutil.rmtree(d, True)
+            continue
+        try:
+            LIVE[s["chat"]] = {"codex": CodexLive, "agy": AgyLive}.get(s["agent"], Live).adopt(d, s, post, log)
+            n += 1
+        except Exception as e:
+            log("error", "A live chat could not be picked up after a companion restart", f"chat {s.get('chat')}: {e}"[:300])
+            workers.kill(h, hard=True)
+            shutil.rmtree(d, True)
+    return n
+
+
+class HostIn:
+    """The agent's stdin: whole lines appended to a file the host feeds it from."""
+
+    def __init__(self, d: Path):
+        self.d, self.lock, self.closed = d, threading.Lock(), False
+
+    def write(self, data: bytes):
+        with self.lock:
+            if self.closed:
+                raise OSError("the agent's input is closed")
+            with open(self.d / "in", "ab") as f:
+                f.write(data)
+
+    def flush(self):
+        pass
+
+    def close(self):
+        with self.lock:
+            self.closed = True
+            (self.d / "close").touch()
+
+
+class HostOut:
+    """The agent's output, line by line from the file it writes to, from `offset` (how far this companion got);
+    waits for more until the host has ended."""
+
+    def __init__(self, proc, offset: int):
+        self.proc, self.offset, self.stopped = proc, offset, False
+
+    def __iter__(self):
+        with open(self.proc.d / "out", "rb") as f:
+            f.seek(self.offset)
+            buf, last = b"", False
+            while not self.stopped:
+                chunk = f.readline()
+                if chunk:
+                    buf += chunk
+                    if buf.endswith(b"\n"):
+                        line, buf = buf, b""
+                        self.offset += len(line)
+                        yield line
+                    continue
+                if last:
+                    if buf:
+                        self.offset += len(buf)
+                        yield buf
+                    return
+                if self.proc.poll() is not None:
+                    last = True  # one more read: what it wrote just before it ended
+                    continue
+                time.sleep(0.05)
+
+
+class Hosted:
+    """A live chat's agent run by chat_host.py, used as Live uses a Popen. New (cmd given): the host starts in its own
+    process group (Windows: out of the companion's job), so a companion restart leaves it running; else an agent a
+    companion before this one started, read on from `offset`. The host is the process: stopping it stops the agent."""
+
+    def __init__(self, d: Path, cmd=None, cwd: str = "", env=None, offset: int = 0):
+        self.d, self.host = d, None
+        if cmd is not None:
+            d.mkdir(parents=True)
+            (d / "cmd.json").write_text(json.dumps({"argv": cmd, "cwd": cwd}), encoding="utf-8")
+            run = lambda **kw: subprocess.Popen([sys.executable, str(HOOKS / "chat_host.py"), str(d)], cwd=cwd or None, env=env,
+                                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **kw)
+            if os.name != "nt":
+                self.host = run(start_new_session=True)
+            else:
+                try:
+                    self.host = run(creationflags=workers.WIN_FLAGS | workers.BREAKAWAY)
+                except OSError:  # the scheduled task's job forbids it: the agent then ends with the companion
+                    self.host = run(creationflags=workers.WIN_FLAGS)
+            self.pid, self.ident = self.host.pid, workers.identity(self.host.pid)
+            (d / "host.json").write_text(json.dumps({"pid": self.pid, "ident": self.ident}), encoding="utf-8")
+            for _ in range(600):  # the agent started (its pid written), or the host ended
+                if (d / "pid").exists() or self.host.poll() is not None:
+                    break
+                time.sleep(0.05)
+            if not (d / "pid").exists():
+                raise RuntimeError(f"the chat host did not start the agent: {self.err_tail() or 'no output'}")
+        else:
+            h = json.loads((d / "host.json").read_text(encoding="utf-8"))
+            self.pid, self.ident = h["pid"], h["ident"]
+        self.stdin, self.stdout = HostIn(d), HostOut(self, offset)
+
+    def poll(self):
+        if self.host is not None:
+            self.host.poll()  # reaps its own child: a zombie would look alive
+        try:
+            return int((self.d / "exit").read_text(encoding="utf-8") or 0)
+        except FileNotFoundError:
+            return None if workers.running({"pid": self.pid, "ident": self.ident}) else -1
+        except ValueError:
+            return -1
+
+    def wait(self, timeout: float | None = None) -> int:
+        end = None if timeout is None else time.time() + timeout
+        while (code := self.poll()) is None:
+            if end is not None and time.time() > end:
+                raise subprocess.TimeoutExpired("chat host", timeout)
+            time.sleep(0.05)
+        return code
+
+    def err_tail(self) -> str:
+        try:
+            with open(self.d / "err", "rb") as f:
+                f.seek(max(0, f.seek(0, 2) - 2000))
+                return f.read().decode("utf-8", "replace").strip()
+        except OSError:
+            return ""
+
+
 class Live:
     """One chat's running agent: messages in, its stream out, and where each turn ends, counted, not guessed: every
     message written is echoed back (isReplay) when the agent takes it, so a turn is over at a result once every
@@ -923,28 +1092,17 @@ class Live:
     and answered in the same turn; an interrupt while idle gives no result)."""
 
     def __init__(self, item: dict, post, log, yolo: bool):
-        self.cid, self.agent, self.folder = item["chat"], item["agent"], item.get("folder", "")
-        self.post, self.log, self.yolo, self.pick = post, log, yolo, choice(item)
-        self.asked = self.pick  # the chat's own choice ("" = default); pick may name the default (Codex)
-        self.st = {"session": item.get("session") or ""}
-        self.lock, self.buf, self.flushed, self.last = threading.Lock(), [], time.time(), time.time()
-        self.written = self.taken = 0  # messages written in, and echoed back as taken
-        self.turn_open = self.busy = False  # the agent works on a turn; the server counts the chat running
-        self.after_interrupt, self.closing, self.stop_asked = [], False, False
-        self.subs = set()  # its subagents running now: not idle while one works
+        self.setup(item, post, log, yolo)
         exe = shutil.which(self.agent)
         if not exe:
             raise RuntimeError(f"{self.agent} is not on PATH")
         cmd = self.command(exe)
         if os.name == "nt" and exe.lower().endswith((".cmd", ".bat")):
             cmd = workers.shim_line(cmd)
-        self.errf = tempfile.TemporaryFile()
-        kw = {"start_new_session": True} if os.name != "nt" else {"creationflags": workers.WIN_FLAGS}
         env = {**os.environ, "KNOWLEDGE_CHAT": self.cid}
-        self.p = subprocess.Popen(cmd, cwd=self.folder, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.errf,
-                                  env=env if yolo else workers.git_safe_env(env), **kw)
+        self.p = Hosted(LIVE_DIR / f"{self.cid}-{secrets.token_hex(4)}", cmd, self.folder, env if yolo else workers.git_safe_env(env))
         # known to the companion for its whole life: its approvals (also a background subagent's between turns)
-        self.rec = RUNNING[self.cid] = {"pid": self.p.pid, "ident": workers.identity(self.p.pid), "stop": False, "folder": self.folder,
+        self.rec = RUNNING[self.cid] = {"pid": self.p.pid, "ident": self.p.ident, "stop": False, "folder": self.folder,
                                         "st": self.st, "allow": [x for x in item.get("allow") or [] if isinstance(x, dict)], "live": True}
         try:
             self.started()
@@ -956,11 +1114,56 @@ class Live:
                 workers.kill(self.rec, hard=True)
             except Exception:
                 pass
+            shutil.rmtree(self.p.d, True)
             raise
         log("chat", f"{AGENT_NAMES[self.agent]}: live chat started in {self.folder}", f"chat {self.cid}" + (f", continues {self.st['session']}" if self.st["session"] else ""))
 
+    def setup(self, item: dict, post, log, yolo: bool):
+        self.cid, self.agent, self.folder = item["chat"], item["agent"], item.get("folder", "")
+        self.post, self.log, self.yolo, self.pick = post, log, yolo, choice(item)
+        self.asked = self.pick  # the chat's own choice ("" = default); pick may name the default (Codex)
+        self.st = {"session": item.get("session") or ""}
+        self.lock, self.buf, self.flushed, self.last = threading.Lock(), [], time.time(), time.time()
+        self.written = self.taken = 0  # messages written in, and echoed back as taken
+        self.turn_open = self.busy = False  # the agent works on a turn; the server counts the chat running
+        self.after_interrupt, self.closing, self.stop_asked = [], False, False
+        self.subs = set()  # its subagents running now: not idle while one works
+
     def command(self, exe: str) -> list:
         return live_argv(exe, self.yolo, self.st["session"], self.cid, *self.pick)
+
+    # A companion restart: what a new one needs to read on (kept at every flush, with how far the output was read)
+    def state(self) -> dict:
+        return {"chat": self.cid, "agent": self.agent, "folder": self.folder, "yolo": self.yolo, "pick": list(self.pick),
+                "asked": list(self.asked), "session": self.st["session"], "allow": self.rec.get("allow", []),
+                "offset": self.p.stdout.offset, "in": in_size(self.p.d), "written": self.written, "taken": self.taken,
+                "turn_open": self.turn_open, "busy": self.busy, "subs": sorted(self.subs)}
+
+    def save(self):
+        try:
+            tmp = self.p.d / "state.part"
+            tmp.write_text(json.dumps(self.state()), encoding="utf-8")
+            tmp.replace(self.p.d / "state.json")
+        except OSError:  # its folder went with it (it ended)
+            pass
+
+    @classmethod
+    def adopt(cls, d: Path, s: dict, post, log):
+        """The agent a companion before this one ran, read on from where that one saved."""
+        self = cls.__new__(cls)
+        self.setup({"chat": s["chat"], "agent": s["agent"], "folder": s["folder"], "session": s["session"]}, post, log, s["yolo"])
+        self.pick, self.asked = tuple(s["pick"]), tuple(s["asked"])
+        self.written, self.taken, self.turn_open, self.busy, self.subs = s["written"], s["taken"], s["turn_open"], s["busy"], set(s["subs"])
+        self.p = Hosted(d, offset=s["offset"])
+        self.rec = RUNNING[self.cid] = {"pid": self.p.pid, "ident": self.p.ident, "stop": False, "folder": self.folder,
+                                        "st": self.st, "allow": s.get("allow", []), "live": True}
+        self.resumed(s, in_lines(d, s["in"]))
+        log("chat", f"{AGENT_NAMES[self.agent]}: live chat picked up again after a companion restart", f"chat {self.cid}")
+        return self
+
+    def resumed(self, s: dict, new_in: list):
+        self.written += sum(1 for x in new_in if x.get("type") == "user")  # written after its last save
+        self.started()
 
     def started(self):
         threading.Thread(target=self.read, daemon=True).start()
@@ -971,6 +1174,7 @@ class Live:
     def write(self, data: bytes):
         self.p.stdin.write(data)
         self.p.stdin.flush()
+        self.save()  # a restart right after a message: the new companion knows it was written
 
     def begin(self, auto: str = ""):
         """The chat runs (for the server too: auto tells it a turn began that it did not hand out)."""
@@ -1025,6 +1229,7 @@ class Live:
                 self.post(body)
             except Exception as e:  # the server away: it calls the turn lost when it next hands out work
                 self.log("error", "Could not send a chat's output to the server", f"chat {self.cid}: {e}"[:300])
+        self.save()
 
     def read(self):
         try:
@@ -1102,12 +1307,8 @@ class Live:
     def gone(self):
         """The process ended (idle close, a crash, a kill): a turn that ran ends with it."""
         code = self.p.wait()
-        try:
-            self.errf.seek(0)
-            tail = self.errf.read()[-2000:].decode("utf-8", "replace").strip()
-            self.errf.close()
-        except (OSError, ValueError):
-            tail = ""
+        tail = self.p.err_tail()
+        shutil.rmtree(self.p.d, True)
         with self.lock:
             if self.busy:
                 self.done("" if self.closing or self.stop_asked else
@@ -1146,7 +1347,7 @@ class CodexLive(Live):
         return [exe, "app-server", "-c", workers.CODEX_APPROVE]  # the knowledge tools approved, with YOLO too
 
     def started(self):
-        self.res, self.ids, self.turn_id, self.ended = {}, itertools.count(1), "", set()  # ended: turns Codex said are over
+        self.res, self.ids, self.turn_id, self.ended, self.calls = {}, itertools.count(1), "", set(), {}  # ended: turns Codex said are over
         self.note, self.request = codex_handlers(self.cid, self.folder, self.st)
         threading.Thread(target=self.read, daemon=True).start()
         self.call("initialize", {"clientInfo": {"name": "knowledge-companion", "version": "1"}})
@@ -1160,11 +1361,24 @@ class CodexLive(Live):
     def rpc(self, msg: dict):
         self.write((json.dumps({"jsonrpc": "2.0", **msg}) + "\n").encode("utf-8"))
 
+    def state(self) -> dict:
+        # ids go on well past the last one used: an answer still on its way to an old request matches nothing new
+        return {**super().state(), "turn_id": self.turn_id, "ended": sorted(self.ended)[-50:],
+                "next_id": max(self.calls.values(), default=0) + 1000, "calls": self.calls}
+
+    def resumed(self, s: dict, new_in: list):
+        self.res, self.ids, self.turn_id, self.ended, self.calls = {}, itertools.count(s["next_id"]), s["turn_id"], set(s["ended"]), {}
+        self.note, self.request = codex_handlers(self.cid, self.folder, self.st)
+        threading.Thread(target=self.read, daemon=True).start()
+
     def call(self, method: str, params: dict, timeout: float = 60) -> dict:
         """A request and its answer (the reader thread files it); a JSON-RPC error raises."""
         rid, box = next(self.ids), {"done": threading.Event()}  # itertools.count: safe from several threads
-        self.res[rid] = box
+        self.res[rid], self.calls[method] = box, rid
         self.rpc({"id": rid, "method": method, "params": params})
+        return self.answer_of(box, method, timeout)
+
+    def answer_of(self, box: dict, method: str, timeout: float) -> dict:
         if not box["done"].wait(timeout):
             raise RuntimeError(f"{method}: no answer in {timeout:.0f} s")
         if box.get("error"):
@@ -1313,7 +1527,7 @@ class AgyLive(CodexLive):
 
     def started(self):
         self.res, self.ids, self.turn_id, self.lines, self.answered, self.ended = {}, itertools.count(1), "", [], 0, set()
-        self.replayed, self.force_text, self.restarting, self.carry, self.wtexts = [False], None, False, [], []
+        self.replayed, self.force_text, self.restarting, self.carry, self.wtexts, self.calls = [False], None, False, [], [], {}
         if self.yolo:
             threading.Thread(target=self.read_stream, daemon=True).start()
             return
@@ -1327,6 +1541,29 @@ class AgyLive(CodexLive):
         if self.pick[0]:
             self.call("session/set_model", {"sessionId": self.st["session"], "modelId": self.pick[0]})
         self.replayed[0] = True
+
+    def state(self) -> dict:
+        return {**super().state(), "answered": self.answered, "wtexts": self.wtexts[-20:], "wbase": max(0, len(self.wtexts) - 20),
+                "lines": self.lines, "prompt": self.calls.get("session/prompt") if self.turn_open and not self.yolo else None}
+
+    def resumed(self, s: dict, new_in: list):
+        self.res, self.ids, self.turn_id, self.ended, self.calls = {}, itertools.count(s["next_id"]), "", set(), {}
+        self.lines, self.answered, self.carry, self.force_text, self.restarting, self.replayed = s["lines"], s["answered"], [], None, False, [True]
+        # only the last texts are kept: earlier slots stay empty (a Force carries what was not answered, never those)
+        self.wtexts = [""] * s["wbase"] + s["wtexts"]
+        if self.yolo:
+            fresh = [x["message"].get("content", "") for x in new_in if x.get("event") == "user" and isinstance(x.get("message"), dict)]
+            self.written += len(fresh)
+            self.wtexts += fresh
+            threading.Thread(target=self.read_stream, daemon=True).start()
+            return
+        self.note, self.request = agy_handlers(self.cid, self.folder, self.replayed)
+        box = None
+        if s.get("prompt") is not None:  # its turn's session/prompt still runs: its answer ends the turn here
+            box = self.res[s["prompt"]] = {"done": threading.Event()}  # filed before the reader can read the answer
+        threading.Thread(target=self.read, daemon=True).start()
+        if box is not None:
+            threading.Thread(target=self.prompts, args=(box,), daemon=True).start()
 
     # YOLO: agy's stream-json, one result per message written
     def read_stream(self):
@@ -1361,18 +1598,23 @@ class AgyLive(CodexLive):
         if time.time() - self.flushed >= FLUSH:
             self.flush()
 
-    def prompts(self):
-        """ACP: one session/prompt at a time; the messages that came meanwhile go next, in order."""
+    def prompts(self, pending: dict | None = None):
+        """ACP: one session/prompt at a time; the messages that came meanwhile go next, in order. `pending`: the prompt
+        a companion before this one sent, whose answer is still to come."""
         while True:
-            with self.lock:
-                if not self.lines:
-                    self.turn_open = False
-                    self.done()
-                    return
-                text = self.lines.pop(0)
-                self.turn_open = True
+            if pending is None:
+                with self.lock:
+                    if not self.lines:
+                        self.turn_open = False
+                        self.done()
+                        return
+                    text = self.lines.pop(0)
+                    self.turn_open = True
             try:
-                r = self.call("session/prompt", {"sessionId": self.st["session"], "prompt": [{"type": "text", "text": text}]}, timeout=24 * 3600)
+                if pending is not None:
+                    r, pending = self.answer_of(pending, "session/prompt", 24 * 3600), None
+                else:
+                    r = self.call("session/prompt", {"sessionId": self.st["session"], "prompt": [{"type": "text", "text": text}]}, timeout=24 * 3600)
                 if r.get("stopReason") not in (None, "end_turn"):
                     with self.lock:
                         self.buf.append(("info", f"The turn ended: {r['stopReason']}"))
@@ -1750,6 +1992,28 @@ def self_test():
     assert seen[3][0] == "permissions" and seen[3][3] and "network.enabled: True" in seen[3][4] and "fileSystem.write" in seen[3][4], seen[3]
     answers = [json.loads(x) for x in fake.stdin.getvalue().decode().splitlines() if '"result"' in x]
     assert [a["result"] for a in answers] == [{"decision": "decline"}] * 3 + [{"permissions": {}, "scope": "turn"}], answers
+    # The chat host: the agent's input and output go through files, so a new companion reads on where the old one
+    # stopped (nothing twice, nothing lost); closing its input ends it; adopt() clears what has no agent any more.
+    with tempfile.TemporaryDirectory() as t:
+        global LIVE_DIR
+        keep, LIVE_DIR = LIVE_DIR, Path(t) / "live"
+        try:
+            echo = "import sys\nfor ln in sys.stdin:\n    print('got:' + ln.strip(), flush=True)\nprint('bye', end='', flush=True)"
+            h = Hosted(LIVE_DIR / "c1-ab", [sys.executable, "-c", echo], t, dict(os.environ))
+            h.stdin.write(b"a\n")
+            it = iter(h.stdout)
+            assert next(it) == b"got:a\n" and h.poll() is None and workers.running({"pid": h.pid, "ident": h.ident})
+            h.stdout.stopped = True  # the old companion is gone
+            h2 = Hosted(LIVE_DIR / "c1-ab", offset=h.stdout.offset)
+            h2.stdin.write(b"b\n")
+            assert next(iter(h2.stdout)) == b"got:b\n", "read on, not from the start"
+            h2.stdin.close()
+            assert list(Hosted(LIVE_DIR / "c1-ab", offset=h2.stdout.offset + 0).stdout)[-1:] in ([b"bye"], []) and h2.wait(10) == 0
+            (LIVE_DIR / "c2-cd").mkdir()  # a host that never got going
+            (LIVE_DIR / "c2-cd" / "host.json").write_text('{"pid": 1, "ident": "x"}')
+            assert adopt(lambda b: None, lambda *a: None) == 0 and sorted(x.name for x in LIVE_DIR.iterdir()) == []
+        finally:
+            LIVE_DIR = keep
     print("ok")
 
 

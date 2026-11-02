@@ -10,10 +10,13 @@ or {"behavior": "deny", "message": ...}. Anything that goes wrong is a deny, nev
   approval_mcp.py              the MCP server (Claude starts it; KNOWLEDGE_CHAT names the chat)
 Standard library only; Linux, macOS and Windows.
 """
+import http.client
 import json
 import os
 import sys
 import threading
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -21,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import token_store  # noqa: E402
 
 PORT = int(os.environ.get("KNOWLEDGE_COMPANION_PORT") or 47321)
+RESTART_WAIT = 120  # seconds a restarting companion may take before a tool call is denied
 TOOL = {"name": "ask", "description": "Ask the chat's owner in the knowledge web UI to allow a tool call.",
         "inputSchema": {"type": "object", "properties": {"tool_name": {"type": "string"}, "input": {"type": "object"},
                                                          "tool_use_id": {"type": "string"}}, "required": ["tool_name", "input"]}}
@@ -34,8 +38,17 @@ def ask(args: dict) -> dict:
                            "input": args.get("input") or {}}).encode()
         req = urllib.request.Request(f"http://127.0.0.1:{PORT}/local/api/ask", data=body, method="POST",
                                      headers={"Content-Type": "application/json", "X-Companion-Key": key})
-        with urllib.request.urlopen(req, timeout=24 * 3600) as r:  # the companion ends the wait (the approval's timeout)
-            d = json.loads(r.read().decode("utf-8"))
+        end = time.time() + RESTART_WAIT
+        while True:
+            try:
+                with urllib.request.urlopen(req, timeout=24 * 3600) as r:  # the companion ends the wait (the approval's timeout)
+                    d = json.loads(r.read().decode("utf-8"))
+                break
+            except (ConnectionError, http.client.RemoteDisconnected, urllib.error.URLError) as e:
+                # the companion restarted (this agent runs on in its chat host): ask the new one
+                if isinstance(e, urllib.error.HTTPError) or time.time() > end:
+                    raise
+                time.sleep(2)
     except Exception as e:
         return {"behavior": "deny", "message": f"Could not ask the chat's owner ({type(e).__name__}: {e}); denied."}
     if d.get("decision") in ("once", "chat"):

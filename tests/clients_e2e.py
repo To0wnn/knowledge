@@ -770,6 +770,8 @@ elif os.environ.get("KNOWLEDGE_CHAT") and name == "agy" and args[:1] == ["acp"]:
             rec({"chat": os.environ["KNOWLEDGE_CHAT"], "argv": [name] + args, "cwd": os.getcwd(), "stdin": text, "load": loaded, "pid": os.getpid(), "pick": pick})
             if "SLOW" in text:  # works on; agy has no interrupt, a Force or Stop ends this process
                 time.sleep(90)
+            if "PAUSE" in text:  # a turn that takes a while (a companion restart falls in it)
+                time.sleep(8)
             upd({"sessionUpdate": "tool_call", "toolCallId": "c1", "name": "run_command", "kind": "execute", "rawInput": {"CommandLine": "git status"}})
             send({"id": "p1", "method": "session/request_permission", "params": {"sessionId": "sess-agy", "toolCall": {
                 "toolCallId": "c1", "name": "view_file", "kind": "read", "rawInput": {"AbsolutePath": os.path.join(os.getcwd(), "README.md")}},
@@ -1716,6 +1718,29 @@ def chat_e2e(tok: str, tmp: Path):
         send(live, "and on")
         check(wait_for(lambda: "echo: and on" in "".join(e["text"] for e in chat(live)["events"]), 30) and [c.get("load") for c in recorded() if c.get("chat") == live][-1] == "sess-agy",
               "live agy: after a Stop the conversation goes on (session/load)", json.dumps([c.get("load") for c in recorded() if c.get("chat") == live]))
+        # A companion restart (an update, a crash) in the middle of a turn: the agent runs on in its chat host, the new
+        # companion reads on where the old one stopped, and the turn ends as it would have, in the same agent.
+        def restart_companion():
+            nonlocal proc
+            proc.terminate()
+            proc.wait(timeout=30)
+            proc = subprocess.Popen([sys.executable, str(hooks / "agent_hooks.py"), "serve"], env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
+        for agent in ("claude", "codex", "agy"):
+            live = new(agent, repo)
+            word = "PAUSE" if agent == "agy" else "SLOW"  # agy takes nothing into a running turn: one that just takes a while
+            send(live, f"{word} across a restart")
+            ok = running(live) and wait_for(lambda: any(c.get("chat") == live and c.get("stdin") == f"{word} across a restart" for c in recorded()), 20)
+            restart_companion()
+            if agent != "agy":
+                time.sleep(3)  # the new companion picked it up (its first poll), then the turn's end goes into the same agent
+                ok = ok and sendm(live, "DONE", "now") == 200
+            said = lambda: "".join(e["text"] for e in chat(live)["events"] if e["kind"] == "text")
+            want = "echo: PAUSE across a restart" if agent == "agy" else "echo: SLOW across a restart + DONE"
+            check(ok and wait_for(lambda: want in said() and chat(live)["chat"]["status"] == "idle", 40)
+                  and len({c["pid"] for c in recorded() if c.get("chat") == live}) == 1
+                  and not any("lost" in e["text"] for e in chat(live)["events"] if e["kind"] == "error"),
+                  f"live {agent}: a turn goes on across a companion restart, in the same agent", said()[-300:] + json.dumps(chat(live)["events"])[-500:]
+                  + (home / "companion.log").read_text(errors="replace")[-800:])
         # Approvals: a turn asks for a tool its allowed set lacks; the owner allows once, for the chat, or denies, from
         # the web UI; the agent goes on. One chat waits without an answer and times out (1 minute, the shortest setting).
         admin_ui = {**ui, "Content-Type": "application/json"}

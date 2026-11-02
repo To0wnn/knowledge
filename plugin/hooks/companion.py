@@ -1893,6 +1893,11 @@ def take_over(args: dict, tok: str) -> str:
 def chats_loop():
     """Chats from the web UI, pulled like the actions: every ~2 s while one is active, else every ~10 s."""
     failed = False
+    try:  # the live chats a companion before this one left running go on here (before the first poll calls them lost)
+        if n := chat.adopt(lambda body: server("POST", "/machine/chats/events", token_store.token(), body), log):
+            log("chat", f"{n} live chat(s) picked up after the restart", "")
+    except Exception as e:
+        log("error", "Could not pick up the live chats after the restart", f"{e}"[:300])
     while True:
         active = False
         try:
