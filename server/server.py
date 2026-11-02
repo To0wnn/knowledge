@@ -4988,6 +4988,7 @@ def chat_events(b: dict) -> list:
     out = [(str(e.get("kind")), str(e.get("text", "")),
             {**({"sub": str(e["sub"])} if SUB_ID.fullmatch(str(e.get("sub") or "")) else {}),
              **({"status": e["status"]} if e.get("kind") == "sub" and e.get("status") in SUB_STATES else {}),
+             **({"aid": str(e["aid"])} if e.get("kind") == "sub" and SUB_ID.fullmatch(str(e.get("aid") or "")) else {}),  # how its agent reaches it
              **({k: e[k] for k in ("tokens", "total", "ctx") if type(e.get(k)) is int and 0 <= e[k] < 10**12} if e.get("kind") == "usage" else {})})
            for e in (b.get("events") or [])[:500] if isinstance(e, dict)]
     if bad := [k for k, _, _ in out if k not in CHAT_KINDS]:
@@ -5011,9 +5012,15 @@ def note_usage(c: dict, kind: str, extra: dict):
         c["ctx"] = extra["ctx"]
 
 
-def note_subs(c: dict, kind: str, extra: dict):
+def note_subs(c: dict, kind: str, extra: dict, label: str = ""):
     """Keep which subagents of a chat or worker run now (the board counts them), the last 50."""
     if kind == "sub" and extra.get("sub") and extra.get("status"):
+        info = c.setdefault("sub_info", {})  # name and agent id: its own entry under the chat in the list
+        i = info.pop(extra["sub"], {})
+        info[extra["sub"]] = {**i, **({"label": label[:200]} if extra["status"] == "running" and label else {}),
+                              **({"aid": extra["aid"]} if extra.get("aid") else {})}
+        for old in list(info)[:-50]:
+            info.pop(old)
         subs = c.setdefault("subs", {})
         subs.pop(extra["sub"], None)
         subs[extra["sub"]] = extra["status"]
@@ -5041,6 +5048,9 @@ def chat_meta(c: dict) -> dict:
     return {**{k: c.get(k) for k in ("id", "agent", "folder", "project", "title", "by", "created", "updated", "status", "session")},
             "subs": sum(1 for s in (c.get("subs") or {}).values() if s == "running"),  # subagents running now
             "closed": bool(c.get("closed")),
+            # its subagents, each a chat of its own in the list (the newest 20): name, state, how its agent reaches it
+            "sub_list": [{"id": k, "label": v.get("label", "subagent"), "status": (c.get("subs") or {}).get(k, "done"), **({"aid": v["aid"]} if v.get("aid") else {})}
+                         for k, v in list((c.get("sub_info") or {}).items())[-20:]],
             "used": c.get("used", 0), "ctx": c.get("ctx", 0),  # the conversation's tokens so far, its context now
             "model": c.get("model", ""), "effort": c.get("effort", ""),
             "waiting": len(c.get("pending") or [])}
@@ -5881,7 +5891,7 @@ async def machine_chat_events(request: Request):
         for k, t, extra in events:
             if contains_secret(t):
                 t = "(withheld: contains a known secret value)"
-            note_subs(c, k, extra)
+            note_subs(c, k, extra, t)
             note_usage(c, k, extra)
             if k != "usage" or extra.get("sub"):  # a subagent's count lives in its block; the chat's in its meta
                 chat_add(c, k, t, extra=extra)

@@ -161,6 +161,10 @@ def parse(agent: str, line: str, st: dict) -> list:
         t = e.get("type")
         if e.get("session_id"):
             st["session"] = e["session_id"]
+        if t == "system" and e.get("subtype") == "task_started" and e.get("tool_use_id") in st.get("subs", ()) and e.get("task_id"):
+            # its agent id: SendMessage reaches this subagent (talking to it from its own chat in the page)
+            out.append(("sub", " · ".join(x for x in (e.get("subagent_type"), e.get("description")) if x) or "subagent",
+                        e["tool_use_id"], "running", {"aid": str(e["task_id"])}))
         if t == "system" and e.get("subtype") in ("task_progress", "task_notification") and e.get("tool_use_id") in st.get("subs", ()):
             n, last = e.get("usage", {}).get("total_tokens"), st.setdefault("sub_tok", {}).get(e["tool_use_id"], (0, 0))
             # a subagent's tokens so far: its end always, progress at most every 5 s (each step was an event of its own)
@@ -184,10 +188,12 @@ def parse(agent: str, line: str, st: dict) -> list:
                 out.append(("text", d["text"]))
             elif (e.get("event") or {}).get("type") == "message_stop" and st.get("streamed"):
                 out.append(("text", "\n\n"))
-        elif t == "assistant" and e.get("parent_tool_use_id"):  # a subagent's own step: its tool calls, under it
+        elif t == "assistant" and e.get("parent_tool_use_id"):  # a subagent's own step: its words and tool calls, under it
             for b in (e.get("message") or {}).get("content") or []:
                 if b.get("type") == "tool_use":
                     out.append(("tool", f"{b.get('name')}: {summary(b.get('input'))}".rstrip(": "), e["parent_tool_use_id"]))
+                elif b.get("type") == "text" and b.get("text"):
+                    out.append(("text", b["text"] + "\n\n", e["parent_tool_use_id"]))
         elif t == "assistant":
             for b in (e.get("message") or {}).get("content") or []:
                 if b.get("type") == "tool_use" and b.get("name") in ("Agent", "Task"):  # a subagent starts
@@ -629,7 +635,7 @@ def codex_subs(it: dict, done: bool) -> list:
     states = it.get("agents_states") or it.get("agentsStates") or {}
     out = []
     if tool == "spawnagent" and ids:  # the receiver thread ids may only come with the completed spawn: open it then
-        out += [("sub", " ".join(str(it.get("prompt") or "sub-agent").split())[:200], str(i), "running") for i in ids]
+        out += [("sub", " ".join(str(it.get("prompt") or "sub-agent").split())[:200], str(i), "running", {"aid": str(i)}) for i in ids]
     for i, s in states.items() if isinstance(states, dict) else []:
         s = s if isinstance(s, dict) else {}
         state = sub_done(s.get("status"))
@@ -1558,7 +1564,10 @@ def self_test():
              '{"type":"assistant","parent_tool_use_id":"tu1","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"ls"}},{"type":"text","text":"inner words"}]}}',
              '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu1","content":[{"type":"text","text":"<tools-used-before-summary>Bash</tools-used-before-summary>\\n[Subagent hand-back] model output. The report follows:\\n  found a.txt\\n  - b"}]}]}}']
     ev = [e for ln in lines for e in parse("claude", ln, st)]
-    assert ev == [("sub", "Explore · list files", "tu1", "running"), ("tool", "Bash: ls", "tu1"), ("sub", "found a.txt\n- b", "tu1", "done")], ev
+    assert ev == [("sub", "Explore · list files", "tu1", "running"), ("tool", "Bash: ls", "tu1"), ("text", "inner words\n\n", "tu1"),
+                  ("sub", "found a.txt\n- b", "tu1", "done")], ev  # its own words in its block, never in the answer
+    ev = parse("claude", '{"type":"system","subtype":"task_started","tool_use_id":"tu1","task_id":"ae80","subagent_type":"Explore","description":"list files"}', st)
+    assert ev == [("sub", "Explore · list files", "tu1", "running", {"aid": "ae80"})], ev  # its agent id: SendMessage reaches it
     st = {}  # tokens: a subagent's so far, the main agent's context, the turn's total
     lines = ['{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu5","name":"Agent","input":{"description":"d"}}],"usage":{"input_tokens":2,"cache_read_input_tokens":13946,"cache_creation_input_tokens":20864,"output_tokens":5}}}',
              '{"type":"system","subtype":"task_progress","tool_use_id":"tu5","usage":{"total_tokens":5949}}',
@@ -1579,8 +1588,8 @@ def self_test():
     spawn = {"id": "i0", "type": "collab_tool_call", "tool": "spawn_agent", "receiver_thread_ids": ["T2"], "prompt": "list files", "agents_states": {}, "status": "in_progress"}
     wait = {"id": "i1", "type": "collab_tool_call", "tool": "wait", "receiver_thread_ids": ["T2"], "agents_states": {"T2": {"status": "completed", "message": "a.txt"}}, "status": "completed"}
     ev = [e for x in ({"type": "item.started", "item": spawn}, {"type": "item.completed", "item": wait}) for e in parse("codex", json.dumps(x), {})]
-    assert ev == [("sub", "list files", "T2", "running"), ("sub", "a.txt", "T2", "done")], ev
-    assert codex_subs({"type": "collabAgentToolCall", "tool": "spawnAgent", "receiverThreadIds": ["T3"], "prompt": "p"}, False) == [("sub", "p", "T3", "running")]
+    assert ev == [("sub", "list files", "T2", "running", {"aid": "T2"}), ("sub", "a.txt", "T2", "done")], ev
+    assert codex_subs({"type": "collabAgentToolCall", "tool": "spawnAgent", "receiverThreadIds": ["T3"], "prompt": "p"}, False) == [("sub", "p", "T3", "running", {"aid": "T3"})]
     lines = ['{"event":"step_update","step_update":{"step_index":3,"state":"ACTIVE","step_type":"tool","tool_name":"invoke_subagent","tool_info":{"name":"invoke_subagent","parameters":{"Role":"File Lister","TypeName":"self"}}}}',
              '{"event":"step_update","step_update":{"step_index":3,"state":"DONE","step_type":"subagent","tool_name":"invoke_subagent","subagent_info":{"subagents":[{"role":"File Lister","initial_prompt":"List all files"}]}}}']
     ev = [e for ln in lines for e in parse("agy", ln, {})]

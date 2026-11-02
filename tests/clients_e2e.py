@@ -2911,6 +2911,8 @@ print(json.dumps(seen))"""
 
 def main():
     compile(FAKE_AGENT, "FAKE_AGENT", "exec")  # a broken stand-in fails every agent test: say so at once
+    import faulthandler  # a hang prints every thread's stack before the CI job's 20 min limit cancels it without a log
+    faulthandler.dump_traceback_later(15 * 60, exit=True)
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # this report only; the clients run as a stock Windows has them
     tmp = Path(tempfile.mkdtemp(prefix="kn e2e "))
     home = tmp / "Test Usér"

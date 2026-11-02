@@ -521,6 +521,8 @@ body.admin-page { display: block; overflow-y: auto; }
 .ck-form .ck-btns { display: flex; gap: 6px; }
 #set-chat { max-width: 520px; } #set-chat h3 { margin: 8px 0 4px; } #set-chat .actions { justify-content: flex-start; }
 .ck-resets { display: inline-flex; gap: 6px; } .ck-resets[hidden] { display: none; }
+.ck-history .ck-subrow .ck-chat { padding-left: 22px; font-size: 13px; } /* a subagent's chat, under its chat */
+.ck-history .ck-subchat .ck-chat-title { color: var(--muted); }
 /* the subagents running now, pinned between the log and the box */
 .ck-subbar { display: flex; gap: 6px; flex-wrap: wrap; padding: 6px 12px; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 85%, transparent); }
 .ck-subbar[hidden] { display: none; }

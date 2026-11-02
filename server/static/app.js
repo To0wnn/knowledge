@@ -1406,6 +1406,7 @@ async function ckSummary() {
       continue;
     }
     if (card.meta.draft) continue; // a new chat before its first message: no chat on the server yet
+    if (card.meta.parent) { if (!ck.chats.some((x) => x.id === card.meta.parent)) ckDrop(k); continue; } // a subagent's chat lives with its chat
     const c = ck.chats.find((x) => ckKey(x) === k);
     if (!c) ckDrop(k);
     else card.meta = { ...card.meta, ...c };
@@ -1442,6 +1443,13 @@ function ckHistory() {
     if (ckKey(c) === ck.view) b.setAttribute("aria-current", "true");
     b.onclick = () => ckShow(c);
     li.append(b); box.append(li);
+    for (const s of (c.sub_list || []).slice().reverse()) { // its subagents, each a chat of its own, under it
+      const sl = el("li", "ck-subrow"), sb = el("button", `ck-chat ck-subchat ${s.status === "running" ? "running" : "idle"}`); sb.type = "button";
+      sb.append(el("span", "ck-dot", ""), el("span", "ck-chat-title", `↳ ${s.label}`), el("small", null, `subagent · ${s.status}`));
+      if (ck.view === `${ckKey(c)}~${s.id}`) sb.setAttribute("aria-current", "true");
+      sb.onclick = () => go(`#/chats/${encodeURIComponent(c.id)}/sub/${encodeURIComponent(s.id)}`);
+      sl.append(sb); box.append(sl);
+    }
   }
   if (!box.childNodes.length) box.append(el("li", "muted ck-none", !ck.chats.length ? "No chats yet." : words.length || only ? "No chat matches." : "No chats in this project."));
   for (const x of $("ck-only").querySelectorAll("button")) {
@@ -1764,6 +1772,10 @@ function ckCard(meta) {
     try {
       if (card.worker) await api("/ui/api/worker/steer", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, worker: card.worker, text }) });
       else if (card.meta.draft) return await ckStart(card, text);
+      else if (card.meta.parent) { // to the main agent, which passes it on
+        await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.parent, text: ckSubWrap(card, text), mode: "now" }) });
+        toast("Sent to the main agent, which passes it on", false);
+      }
       else {
         // only a choice made here: a saved model the pc no longer lists must not turn into Default unasked
         const pick = card.pick?.touched ? { model: card.pick.id, effort: card.pick.effort } : {};
@@ -1846,6 +1858,40 @@ async function loadSettings() {
       me.prefs = res.prefs; toast("Saved", false);
     } catch (err) { toast(err.message, true); }
   };
+}
+// A subagent as a chat of its own (#/chats/<chat>/sub/<id>): its own output only, taken from its chat's events (sub);
+// a message goes to the main agent, which hands it on (Claude: SendMessage to its agent id; Codex: send_input to its
+// thread); agy has no way to reach a subagent, so there it is read-only.
+function ckSubCard(c, sid) {
+  const card = ckCard({ ...c, id: `${c.id}~${sid}`, parent: c.id, sub: sid, title: "", status: "idle" });
+  card.close.hidden = true; card.picks.hidden = true;
+  card.input.placeholder = "Message this subagent (its main agent passes it on)… (Ctrl+Enter sends)";
+  return card;
+}
+const ckSubInfo = (card) => (ck.chats.find((x) => x.id === card.meta.parent && x.machine === card.meta.machine)?.sub_list || []).find((s) => s.id === card.meta.sub) || {};
+function ckSubWrap(card, text) {
+  const s = ckSubInfo(card), name = s.label || "your subagent";
+  if (card.meta.agent === "codex") return `Pass this on to your subagent "${name}" with send_input (thread ${s.aid || card.meta.sub}), then tell me what it answers:\n\n${text}`;
+  return `Pass this on to your subagent "${name}" with SendMessage (to: ${s.aid || card.meta.sub}) so it goes on with it, then tell me what it answers:\n\n${text}`;
+}
+async function ckSubPoll(card) {
+  let res;
+  try { res = await api(`/ui/api/chat?machine=${card.meta.machine}&id=${card.meta.parent}&after=${card.after}&peek=1`); }
+  catch (e) { card.note.className = "ck-note bad"; card.note.textContent = e.message; return; }
+  const mine = res.events.filter((e) => e.sub === card.meta.sub).map((e) => (e.kind === "sub" ? (e.status === "running"
+    ? { ...e, kind: "info", text: `Subagent: ${e.text}`, sub: undefined } : { ...e, kind: "text", text: `${e.text}\n\n`, sub: undefined }) : { ...e, sub: undefined }));
+  ckEvents(card, { ...res, events: mine });
+  card.after = Math.max(card.after, ...res.events.map((e) => e.n), 0);
+  const s = ckSubInfo(card), parent = res.chat;
+  card.meta = { ...card.meta, label: res.label, online: res.online, status: s.status === "running" ? "running" : "idle" };
+  card.online = res.online;
+  card.name.textContent = s.label || "Subagent";
+  card.where.textContent = `Subagent of “${parent.title || "a chat"}” · ${AGENT_NAME[card.meta.agent] || card.meta.agent} · ${res.label}`;
+  card.state.hidden = false; card.state.className = `ck-state ${s.status === "running" ? "running" : ""}`; card.state.textContent = s.status || "done";
+  const readOnly = card.meta.agent === "agy";
+  card.input.disabled = card.send.disabled = readOnly || !res.online;
+  card.stop.hidden = card.queueBtn.hidden = card.forceBtn.hidden = true; card.send.textContent = "Send";
+  if (!card.note.classList.contains("bad")) card.note.textContent = readOnly ? "agy offers no way to talk to its subagents: this chat is to read along." : "Your message goes to the main agent, which passes it on to this subagent.";
 }
 function ckDrop(k) { ck.cards.delete(k); if (ck.view === k) ck.view = ""; }
 const CK_EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"]; // the server's EFFORTS, in order
@@ -2004,6 +2050,7 @@ async function ckStart(card, text) { // the draft's first message: make the chat
 }
 function ckPaint(card) {
   if (card.worker) return ckWorkerPaint(card);
+  if (card.meta.parent) return; // a subagent's chat: painted by its poll (ckSubPoll)
   const m = card.meta, busy = ckBusy(m.status);
   card.mark.textContent = AGENT_MARK[m.agent] || "+";
   if (m.draft) {
@@ -2049,6 +2096,7 @@ function ckPaint(card) {
 async function ckPoll(card) {
   if (!card) return;
   if (card.worker) return ckWorkerPoll(card);
+  if (card.meta.parent) return ckSubPoll(card);
   if (card.meta.draft) return ckPicker(card), ckDraftWhere(card);
   let res;
   // only the chat opened full counts as read; a card glanced at on the board stays under Needs you

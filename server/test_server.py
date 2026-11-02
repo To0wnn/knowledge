@@ -745,6 +745,11 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert got["chat"]["subs"] == 2 and tail[1] == {**tail[1], "kind": "tool", "sub": "tu1"} and "sub" not in tail[3] and "status" not in tail[3], tail
     card = next(i for i in json.loads(ui("/ui/api/board")[2])["items"] if i["kind"] == "chat" and i["id"] == mc)
     assert card["subs"] == 2, card
+    http("POST", "/machine/chats/events", {"chat": mc, "events": [{"kind": "sub", "text": "Explore · list", "sub": "tu1", "status": "running", "aid": "ae80"},
+                                                                 {"kind": "sub", "text": "x", "sub": "tu2", "status": "running", "aid": "bad id!"}]}, token=fr, headers=pc)
+    subs = {s["id"]: s for s in json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["chat"]["sub_list"]}
+    assert subs["tu1"] == {"id": "tu1", "label": "Explore · list", "status": "running", "aid": "ae80"} and "aid" not in subs["tu2"], subs  # each its own chat in the list
+    assert any(c["id"] == mc and len(c["sub_list"]) == 2 for c in json.loads(ui("/ui/api/chats")[2])["chats"])
     # Tokens: a subagent's so far stays in its block; the conversation's add up per turn (or a total replaces them), with
     # the context in use now; odd values are dropped.
     http("POST", "/machine/chats/events", {"chat": mc, "events": [
