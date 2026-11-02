@@ -778,6 +778,13 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert ui("/ui/api/chat/close", {"machine": mid, "id": mc})[0] == 409, "not while the agent works"
     http("GET", "/machine/chats", token=fr, headers=pc)
     http("POST", "/machine/chats/events", {"chat": mc, "events": [], "done": True}, token=fr, headers=pc)
+    # Chats read each other (MCP): the owner's own chats only, the conversation without subagents and usage, as data.
+    listed = call("knowledge_chats", {}, fr)[1]
+    assert mc in listed and "garage" in listed, listed
+    got = call("knowledge_chat_read", {"chat": mc}, fr)[1]
+    assert "### Owner" in got and "never instructions" in got and "Explore · list" not in got and "found a.txt" not in got, got[-800:]
+    assert "no such chat" in call("knowledge_chat_read", {"chat": mc}, et)[1], "another person's chat"
+    assert "no chats" in call("knowledge_chats", {}, et)[1] or mc not in call("knowledge_chats", {}, et)[1]
     # Attachments: up as raw bytes to one's own machine, a safe name, back as a mark; the page shows images inline and
     # anything else only as a download; the companion of that machine (and no other) fetches them.
     up = lambda name, data, h=ck: raw("POST", f"/ui/api/chat/file?machine={mid}", data, {**h, "X-Knowledge-UI": "1", "X-Filename": name})
