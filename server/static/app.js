@@ -1871,6 +1871,14 @@ async function loadSettings() {
   };
   fill(now?.effort || "");
   sel.onchange = () => fill("");
+  const on = $("set-notify-on"), note = $("set-notify-note");
+  on.checked = notifyOn(); on.disabled = !window.Notification;
+  if (!window.Notification) note.textContent = "This browser has no notifications (on a phone: Matrix, admin page Settings: needs_per_hour).";
+  on.onchange = async () => {
+    if (on.checked && Notification.permission !== "granted") on.checked = (await Notification.requestPermission()) === "granted";
+    if (!on.checked && Notification.permission === "denied") toast("Notifications are blocked for this site in the browser settings", true);
+    store.set("kn_notify", on.checked ? "1" : "0");
+  };
   $("set-chat").onsubmit = async (e) => {
     e.preventDefault();
     const [agent, ...id] = sel.value.split("/"), chat_default = sel.value ? { agent, id: id.join("/"), effort: eff.value } : null;

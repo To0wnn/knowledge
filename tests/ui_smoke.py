@@ -481,6 +481,15 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
       const box = document.querySelector('#ck-canvas .ck-files'), seen = [box.hidden, box.textContent];
       box.querySelector('button')?.click(); return [...seen, document.querySelector('#ck-canvas .ck-files').hidden]; })()""")
     check(chips[0] is False and "shot.png" in chips[1] and chips[2] is True, f"attach: a pasted image is a chip until removed {chips}")
+    # notifications: only for an item new since the last board, only out of view, only when switched on (stubbed)
+    told = await pg.evaluate("""(() => { const got = [], old = [window.Notification, store.get("kn_notify")];
+      window.Notification = function (t) { got.push(t); }; window.Notification.permission = "granted";
+      Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+      const a = { col: "needs", key: "chat:a", sig: "1", title: "A" }, b = { col: "needs", key: "chat:b", sig: "1", title: "B" };
+      store.set("kn_notify", "1"); notifySeen = null; needsNotify([a]); needsNotify([a, b]); needsNotify([a, b]);
+      store.set("kn_notify", "0"); needsNotify([a, b, { ...b, key: "chat:c" }]);
+      delete document.hidden; window.Notification = old[0]; store.set("kn_notify", old[1] || "0"); return got; })()""")
+    check(told == ["Needs you: B"], f"notify: once per new Needs-you item, only when on {told}")
     if draft[4]:  # a pc online that reports its models
         await pg.click("#ck-canvas .ck-model summary")
         got = await pg.evaluate("""[[...document.querySelectorAll('#ck-canvas .ck-model .ck-mfam')].map(x => x.textContent),

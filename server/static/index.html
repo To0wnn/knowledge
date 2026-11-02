@@ -106,6 +106,13 @@
         <p class="muted" id="set-chat-note">The models your pcs that are online now offer.</p>
         <div class="actions"><button type="submit" class="btn primary">Save</button></div>
       </form>
+      <form id="set-notify" class="admin-form">
+        <h3>Notifications</h3>
+        <label class="check"><input type="checkbox" id="set-notify-on"> Tell me in this browser when something needs me</label>
+        <p class="muted" id="set-notify-note">A desktop notification for each new item under Needs you (a chat that answered or asks
+          for approval, a failed worker) while this page is open in a tab you are not looking at. For this browser only;
+          on a phone use Matrix (admin page, Settings: needs_per_hour).</p>
+      </form>
     </section>
     <section id="tab-thispc" class="view pad" aria-label="This pc" hidden>
       <p class="cmp-lede">The agents on this pc, as the knowledge companion running here sees them. <a id="thispc-open" href="http://127.0.0.1:47321/" target="_blank" rel="noopener">Open the companion</a> for YOLO, settings and activity.</p>

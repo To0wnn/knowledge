@@ -149,9 +149,25 @@ function setAgentProject(p) {
 function inboxCount(items) {
   const n = items.filter((i) => i.col === "needs").length;
   for (const b of document.querySelectorAll(".inbox-count")) b.textContent = n || "";
+  needsNotify(items);
 }
-// Off the Agents views the Inbox badge and the live count still follow: a light refresh every 30 s.
-setInterval(() => { if ($("cockpit").hidden && !document.hidden && me.user) ckSummary().catch(() => {}); }, 30000);
+// Browser notifications (Settings, per browser): each new Needs-you item while the tab is out of view; the first
+// board after loading only sets what was there already.
+const notifyOn = () => store.get("kn_notify") === "1" && window.Notification?.permission === "granted";
+let notifySeen = null;
+function needsNotify(items) {
+  const needs = items.filter((i) => i.col === "needs"), sig = (i) => `${i.key}:${i.sig || ""}`;
+  if (notifySeen && notifyOn() && document.hidden) for (const i of needs.filter((x) => !notifySeen.has(sig(x))).slice(0, 3)) {
+    try {
+      const n = new Notification(`Needs you: ${i.title || "an item"}`, { body: [i.label || i.project, i.line].filter(Boolean).join(" · ").slice(0, 180), tag: i.key });
+      n.onclick = () => { window.focus(); go(i.kind === "chat" && i.id ? `#/chats/${encodeURIComponent(i.id)}` : `#/inbox/${encodeURIComponent(i.key)}`); n.close(); };
+    } catch { /* a browser that only notifies from a service worker (Android): Matrix covers phones */ }
+  }
+  notifySeen = new Set(needs.map(sig));
+}
+// Off the Agents views the Inbox badge and the live count still follow: a light refresh every 30 s (also out of view
+// when notifications are on, which is when they matter).
+setInterval(() => { if ($("cockpit").hidden && (!document.hidden || notifyOn()) && me.user) ckSummary().catch(() => {}); }, 30000);
 
 for (const b of $("tasks-mode").querySelectorAll("button")) b.onclick = () => go(b.dataset.mode === "flow" ? "#/tasks?view=flow" : "#/tasks");
 
