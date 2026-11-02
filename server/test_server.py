@@ -657,13 +657,23 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "later"})
     assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={cid}")[2])["chat"]["waiting"] == 2
     assert ui("/ui/api/chat/stop", {"machine": mid, "id": cid, "force": True})[0] == 200
-    assert ui("/ui/api/chat/stop", {"machine": mid, "id": cid, "force": True})[0] == 409, "one on its way at a time"
     got = json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])
     assert got["stop"] == [] and got["steer"] == [{"chat": cid, "text": "urgent", "by": "alice"}], got
     assert "steer" not in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1]), "handed out once"
-    http("POST", "/machine/chats/events", {"chat": cid, "events": [], "done": True, "steered": "delivered"}, token=fr, headers=pc)
+    http("POST", "/machine/chats/events", {"chat": cid, "events": [], "done": True, "steered": "delivered", "steered_left": 0}, token=fr, headers=pc)
     assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={cid}")[2])["events"][-1]["text"].startswith("Delivered")
     assert [w["text"] for w in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"]] == ["later"], "urgent was read: not again"
+    # Force again and again: each next waiting message joins those on their way; the ones not read go back in order.
+    for x in ("f1", "f2", "f3"):
+        ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": x})
+    assert [ui("/ui/api/chat/stop", {"machine": mid, "id": cid, "force": True})[0] for _ in range(3)] == [200, 200, 200]
+    assert ui("/ui/api/chat/stop", {"machine": mid, "id": cid, "force": True})[0] == 409, "nothing left to force"
+    got = json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])
+    assert [s["text"] for s in got["steer"]] == ["f1", "f2", "f3"], got
+    http("POST", "/machine/chats/events", {"chat": cid, "events": [], "done": True, "steered": "pending", "steered_left": 2}, token=fr, headers=pc)
+    assert [w["text"] for w in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"]] == ["f2"], "f1 was read; f2, f3 go in next"
+    http("POST", "/machine/chats/events", {"chat": cid, "events": [], "done": True}, token=fr, headers=pc)
+    assert [w["text"] for w in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"]] == ["f3"]
     ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "late"})
     assert ui("/ui/api/chat/stop", {"machine": mid, "id": cid, "force": True})[0] == 200
     http("GET", "/machine/chats", token=fr, headers=pc)

@@ -5031,6 +5031,12 @@ def chat_file(mid: str, cid: str) -> Path:
     return CHATS_DIR / mid / f"{cid}.json"
 
 
+def steering(c: dict) -> list:
+    """The Force messages on their way into the running turn (one dict before 0.24, a list since)."""
+    s = c.get("steering")
+    return s if isinstance(s, list) else [s] if s else []
+
+
 def chat_meta(c: dict) -> dict:
     return {**{k: c.get(k) for k in ("id", "agent", "folder", "project", "title", "by", "created", "updated", "status", "session")},
             "subs": sum(1 for s in (c.get("subs") or {}).values() if s == "running"),  # subagents running now
@@ -5544,26 +5550,27 @@ async def ui_chat_stop(request: Request):
             return JSONResponse({"error": "nothing to force: no queued message behind a running turn"}, status_code=409)
         msg = []
 
-        def steer(c):
-            if c.get("pending") and not c.get("steering"):
+        def steer(c):  # the next waiting one joins those on their way (Force again and again works)
+            if c.get("pending"):
                 msg.append(c["pending"].pop(0))
-                c["steering"] = msg[0]
+                c["steering"] = steering(c) + msg
                 chat_add(c, "info", "Sent now: the agent reads it after its next step; its subagents keep running. If the turn ends first, it goes in next.")
         await asyncio.to_thread(update_state, f, steer)
         if not msg:
-            return JSONResponse({"error": "a message is on its way to the agent already: wait for it, or stop the turn"}, status_code=409)
+            return JSONResponse({"error": "nothing to force: no queued message behind a running turn"}, status_code=409)
         parked = []
 
         def park(q):  # only into the turn that runs: one that ended meanwhile took it back into the line (done)
             e = q.get(c["id"]) or {}
             if e.get("busy") and "msg" not in e:
-                e["steer"] = {"text": msg[0]["text"], "by": msg[0].get("by", "")}
+                e["steer"] = [*(e["steer"] if isinstance(e.get("steer"), list) else []), {"text": msg[0]["text"], "by": msg[0].get("by", "")}]
                 parked.append(True)
         await asyncio.to_thread(update_state, q, park)
         if not parked:
             def back(c):
-                if c.get("steering") == msg[0]:
-                    c.setdefault("pending", []).insert(0, c.pop("steering"))
+                if msg[0] in steering(c):
+                    c["steering"] = [s for s in steering(c) if s != msg[0]]
+                    c.setdefault("pending", []).insert(0, msg[0])
             await asyncio.to_thread(update_state, f, back)
         return JSONResponse({"ok": True})
     waiting = "msg" in read_json(q, {}).get(c["id"], {})
@@ -5708,7 +5715,8 @@ async def machine_chats(request: Request):
                 if e.get("stop"):
                     out["stop"].append(cid)
                 if e.get("steer"):  # Force: once to the companion, which parks it for the running turn's hook
-                    out.setdefault("steer", []).append({"chat": cid, **e.pop("steer")})
+                    s = e.pop("steer")
+                    out.setdefault("steer", []).extend({"chat": cid, **x} for x in (s if isinstance(s, list) else [s]))
             elif "msg" in e:
                 out["work"].append({"chat": cid, "agent": c["agent"], "folder": c["folder"], "session": c.get("session", ""),
                                     "model": c.get("model", ""), "effort": c.get("effort", ""),
@@ -5836,11 +5844,15 @@ async def machine_chat_events(request: Request):
                 chat_add(c, k, t, extra=extra)
         if isinstance(b.get("session"), str) and re.fullmatch(r"[\w.:-]{1,120}", b["session"]):
             c["session"] = b["session"]
-        if b.get("done") is True and (s := c.pop("steering", None)):
-            if b.get("steered") == "delivered":
-                chat_add(c, "info", "Delivered: the agent read your message during its turn.")
-            else:  # not read before the turn ended (or a companion without Force-by-steering): it goes in next
-                c.setdefault("pending", []).insert(0, s)
+        if b.get("done") is True and (s := steering(c)):
+            c.pop("steering", None)
+            # the companion counts what its hook did not hand over (the last ones parked); an older companion: all or none
+            left = b.get("steered_left") if type(b.get("steered_left")) is int else (0 if b.get("steered") == "delivered" else len(s))
+            left = max(0, min(left, len(s)))
+            if len(s) - left:
+                chat_add(c, "info", f"Delivered: the agent read {len(s) - left} message{'s' if len(s) - left > 1 else ''} during its turn.")
+            if left:  # not read before the turn ended: they go in next, in order
+                c["pending"] = s[len(s) - left:] + c.get("pending", [])
         if b.get("done") is True:
             asks_settle(c, time.time(), "the turn ended")
             c["subs"] = {k: ("done" if v == "running" else v) for k, v in (c.get("subs") or {}).items()}  # none outlives its turn

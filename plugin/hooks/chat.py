@@ -804,9 +804,12 @@ def run_turn(item: dict, post, log, linked, yolo):
     steered = {}
     (rec or RUNNING.get(cid) or {})["ending"] = True  # from here no Force message is parked for this turn
     if (rec or RUNNING.get(cid) or {}).get("steered") or steer_path(cid).exists():  # a Force message: read by the hook, or not (it goes in next)
-        left = steer_path(cid).exists()
+        try:  # the lines its hook did not take: the last ones parked (it takes all there are at once)
+            left = sum(1 for x in steer_path(cid).read_text(encoding="utf-8").splitlines() if x.strip())
+        except OSError:
+            left = 0
         steer_path(cid).unlink(missing_ok=True)
-        steered = {"steered": "pending" if left else "delivered"}
+        steered = {"steered": "pending" if left else "delivered", "steered_left": left}
     try:
         flush(done=True, **({"error": err} if err else {}), **steered)
     except Exception as e:  # the server away: it says the turn was lost when it next hands out work
