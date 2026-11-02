@@ -584,6 +584,34 @@ def tokens(u: dict) -> int:
     return sum(int(u.get(k) or 0) for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens"))
 
 
+FILE_REF = re.compile(r"⟦file:([0-9a-f]{12})/([\w(][\w .()+-]{0,119})⟧")  # as the server writes it (store_chat_file)
+FILES_DAYS = 30
+
+
+def attach(text: str, fetch) -> str:
+    """The files attached in the web UI (⟦file:<id>/<name>⟧ in the message), fetched once into this pc's chat files
+    folder; each mark becomes its local path, which every agent opens with its own file tools (images too)."""
+    if "⟦file:" not in text:
+        return text
+    root = workers.DIR / "files"
+    for d in root.glob("*") if root.is_dir() else []:  # an old attachment goes; a later message names it again if needed
+        if d.stat().st_mtime < time.time() - FILES_DAYS * 86400:
+            shutil.rmtree(d, True)
+
+    def put(m):
+        f = root / m.group(1) / m.group(2)
+        try:
+            if not f.is_file():
+                f.parent.mkdir(parents=True, exist_ok=True)
+                tmp = f.with_name(f.name + ".part")
+                tmp.write_bytes(fetch(f"{m.group(1)}/{m.group(2)}"))
+                tmp.replace(f)
+            return f"[attached file: {f}]"
+        except Exception as e:
+            return f"[attached file {m.group(2)} could not be fetched: {e}]"[:300]
+    return FILE_REF.sub(put, text)
+
+
 def steer_path(cid: str) -> Path:
     """A message for a running chat turn (Force in the web UI), JSON lines; the agent's watch hook (watch.py) reads and
     removes it after the main agent's next tool call."""
@@ -1523,6 +1551,12 @@ def self_test():
         c = argv("claude", "claude", False, "", "c1")
         assert c[:3] == ["claude", "-p", "--output-format"] and "--resume" not in c and "acceptEdits" in c, c
         assert c[c.index("--permission-prompt-tool") + 1] == "mcp__knowledge_approval__ask" and c.index("--allowedTools") > c.index("--mcp-config"), c
+        got = []  # an attachment: fetched once, its mark a local path; a failed one says so; a forged name stays text
+        fetch = lambda ref: got.append(ref) or b"img" if ref.endswith("a.png") else (_ for _ in ()).throw(OSError("gone"))
+        t1 = attach("see ⟦file:0123456789ab/a.png⟧ and ⟦file:0123456789ab/b.txt⟧ ⟦file:0123456789ab/../x⟧", fetch)
+        f = workers.DIR / "files" / "0123456789ab" / "a.png"
+        assert f.read_bytes() == b"img" and f"[attached file: {f}]" in t1 and "b.txt could not be fetched: gone" in t1 and "⟦file:0123456789ab/../x⟧" in t1, t1
+        assert attach("⟦file:0123456789ab/a.png⟧", fetch) == f"[attached file: {f}]" and got == ["0123456789ab/a.png"], got
         mcp = json.loads(Path(c[c.index("--mcp-config") + 1]).read_text(encoding="utf-8"))["mcpServers"]["knowledge_approval"]
         assert mcp["args"][0].endswith("approval_mcp.py") and mcp["env"]["KNOWLEDGE_CHAT"] == "c1", mcp
         c = argv("claude", "claude", True, "s-1")

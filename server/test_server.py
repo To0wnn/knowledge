@@ -778,6 +778,23 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert ui("/ui/api/chat/close", {"machine": mid, "id": mc})[0] == 409, "not while the agent works"
     http("GET", "/machine/chats", token=fr, headers=pc)
     http("POST", "/machine/chats/events", {"chat": mc, "events": [], "done": True}, token=fr, headers=pc)
+    # Attachments: up as raw bytes to one's own machine, a safe name, back as a mark; the page shows images inline and
+    # anything else only as a download; the companion of that machine (and no other) fetches them.
+    up = lambda name, data, h=ck: raw("POST", f"/ui/api/chat/file?machine={mid}", data, {**h, "X-Knowledge-UI": "1", "X-Filename": name})
+    st, _, b = up("..%2F..%2Fevil%3Ename.png", b"\x89PNG img")
+    ref = json.loads(b)["ref"]
+    assert st == 200 and re.fullmatch(r"⟦file:[0-9a-f]{12}/[\w .()+-]+⟧", ref) and "/.." not in ref and "evil_name.png" in ref, b
+    st, h, b = raw("GET", f"/ui/api/chat/file?machine={mid}&file={urllib.parse.quote(ref[6:-1])}", None, ck)
+    assert st == 200 and b == b"\x89PNG img" and h["content-type"] == "image/png" and h["content-disposition"].startswith("inline"), h
+    ref2 = json.loads(up("page.html", b"<script>x</script>")[2])["ref"]
+    h = raw("GET", f"/ui/api/chat/file?machine={mid}&file={urllib.parse.quote(ref2[6:-1])}", None, ck)[1]
+    assert h["content-type"] == "application/octet-stream" and h["content-disposition"].startswith("attachment") and h["x-content-type-options"] == "nosniff", h
+    assert up("x.png", b"x", er)[0] == 403 and up("x.png", b"")[0] == 413
+    assert raw("GET", f"/ui/api/chat/file?machine={mid}&file=000000000000/x.png", None, ck)[0] == 400
+    req = urllib.request.Request(BASE + f"/machine/chats/file?file={urllib.parse.quote(ref[6:-1])}", headers={**pc, "Authorization": f"Bearer {fr}"})
+    assert urllib.request.urlopen(req, timeout=10).read() == b"\x89PNG img"
+    other = {"X-Knowledge-Machine": "dddddddddddddddd", "X-Knowledge-Machine-Label": "shed"}
+    assert http("GET", f"/machine/chats/file?file={urllib.parse.quote(ref[6:-1])}", token=fr, headers=other)[0] == 404, "another machine's file"
     # A live chat (the pc says its Claude runs live): while it works, Send goes into the running agent at once (now),
     # Force too (its step stops first); Queue waits; a live message not handed out when the turn ends goes next; a turn
     # the agent starts by itself sets the chat running.

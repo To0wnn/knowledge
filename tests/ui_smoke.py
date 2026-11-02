@@ -474,6 +474,13 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
     draft = await pg.evaluate("""[location.hash, document.querySelector('#ck-canvas .ck-title strong').textContent, document.activeElement?.tagName,
       !!document.querySelector('#ck-new-dialog'), document.querySelector('#ck-canvas .ck-model summary')?.textContent || '']""")
     check(draft[0] == "#/chats/new" and draft[1] == "New chat" and not draft[3], f"new chat: a draft at #/chats/new, no dialog {draft}")
+    # a pasted screenshot becomes a chip above the box (it goes up only when sent), and its × takes it off again
+    chips = await pg.evaluate("""(() => { const t = document.querySelector('#ck-canvas .ck-card textarea'), d = new DataTransfer();
+      d.items.add(new File([new Uint8Array([137, 80, 78, 71])], 'shot.png', { type: 'image/png' }));
+      t.dispatchEvent(new ClipboardEvent('paste', { clipboardData: d, bubbles: true, cancelable: true }));
+      const box = document.querySelector('#ck-canvas .ck-files'), seen = [box.hidden, box.textContent];
+      box.querySelector('button')?.click(); return [...seen, document.querySelector('#ck-canvas .ck-files').hidden]; })()""")
+    check(chips[0] is False and "shot.png" in chips[1] and chips[2] is True, f"attach: a pasted image is a chip until removed {chips}")
     if draft[4]:  # a pc online that reports its models
         await pg.click("#ck-canvas .ck-model summary")
         got = await pg.evaluate("""[[...document.querySelectorAll('#ck-canvas .ck-model .ck-mfam')].map(x => x.textContent),

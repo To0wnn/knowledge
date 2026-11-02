@@ -1740,11 +1740,15 @@ function ckCard(meta) {
   queueBtn.title = "After this turn (Alt+Enter)"; forceBtn.title = "Stop the step it is on, then this (Ctrl+Shift+Enter)";
   // under the box: the model (one chip, its effort inside) and, in a new chat, where it runs (ckPicker)
   const picks = el("div", "ck-picks"); picks.hidden = true;
-  stop.type = "button"; send.type = "submit"; btns.append(stop, queueBtn, forceBtn, send); form.append(input, btns, picks, note);
+  // files for the next message: picked, pasted (a screenshot) or dropped; they go up when it is sent
+  const attachBtn = el("button", "btn icon quiet ck-attach", "+"), filePick = el("input"), files = el("div", "ck-files");
+  attachBtn.type = "button"; attachBtn.title = "Attach files or a screenshot (or paste or drop them here)"; attachBtn.setAttribute("aria-label", "Attach files");
+  filePick.type = "file"; filePick.multiple = true; filePick.hidden = true; files.hidden = true;
+  stop.type = "button"; send.type = "submit"; btns.append(attachBtn, filePick, stop, queueBtn, forceBtn, send); form.append(files, input, btns, picks, note);
   const asks = el("div", "ck-asks"); asks.hidden = true; asks.setAttribute("aria-live", "assertive");
   const subbar = el("div", "ck-subbar"); subbar.hidden = true; subbar.setAttribute("aria-label", "Subagents running now");
   root.append(head, log, subbar, asks, form);
-  const card = { meta: { ...meta }, root, name, where, git, state, log, asks, form, input, stop, send, note, picks, mark, close, tok, subbar, queueBtn, forceBtn, mode: "", pick: null, after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
+  const card = { meta: { ...meta }, root, name, where, git, state, log, asks, form, input, stop, send, note, picks, mark, close, tok, subbar, queueBtn, forceBtn, filesBox: files, files: [], mode: "", pick: null, after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
   x.onclick = () => ckShow(null);
   open.onclick = () => ckShow(card.meta);
   input.addEventListener("keydown", (e) => {
@@ -1755,18 +1759,31 @@ function ckCard(meta) {
     e.preventDefault(); form.requestSubmit();
   });
   input.addEventListener("input", () => ckPaint(card)); // typing turns Force back into Queue
+  attachBtn.onclick = () => filePick.click();
+  filePick.onchange = () => { ckAddFiles(card, filePick.files); filePick.value = ""; };
+  input.addEventListener("paste", (e) => { const fs = e.clipboardData?.files; if (fs?.length) { e.preventDefault(); ckAddFiles(card, fs); } });
+  form.addEventListener("dragover", (e) => { if ([...(e.dataTransfer?.types || [])].includes("Files")) { e.preventDefault(); form.classList.add("drop"); } });
+  form.addEventListener("dragleave", (e) => { if (!form.contains(e.relatedTarget)) form.classList.remove("drop"); });
+  form.addEventListener("drop", (e) => { if (!e.dataTransfer?.files?.length) return; e.preventDefault(); form.classList.remove("drop"); ckAddFiles(card, e.dataTransfer.files); });
   form.onsubmit = async (e) => {
     e.preventDefault();
-    const text = input.value.trim(), mode = card.mode || "now";
+    let text = input.value.trim(); const mode = card.mode || "now";
     card.mode = ""; // Queue or Force counts for this press only, also when it goes no further
-    if (!text && card.send.classList.contains("force")) { // empty box with messages waiting: the next one goes in now
+    if (!text && !card.files.length && card.send.classList.contains("force")) { // empty box with messages waiting: the next one goes in now
       send.disabled = true;
       try { await api("/ui/api/chat/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, force: true }) }); }
       catch (err) { note.className = "ck-note bad"; note.textContent = err.message; }
       return ckPoll(card);
     }
-    if (!text || send.disabled) return;
+    if ((!text && !card.files.length) || send.disabled) return;
     send.disabled = true;
+    if (card.files.length) { // up first; the message names them (the companion puts them on that pc)
+      try {
+        if (card.worker) throw new Error("Attachments do not reach a worker; open it as a chat first.");
+        const machine = card.meta.draft ? (card.where_ || "").split("\n")[0] : card.meta.machine;
+        if (machine) text = [text, ...(await ckUpload(machine, card.files))].filter(Boolean).join("\n");
+      } catch (err) { note.className = "ck-note bad"; note.textContent = err.message; send.disabled = false; return; }
+    }
     card.stickToBottom = true;
     ckScrollBottom(card, true);
     try {
@@ -1783,7 +1800,7 @@ function ckCard(meta) {
         await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, text, mode, ...pick }) });
         Object.assign(card.meta, pick); card.pick = null;
       }
-      input.value = ""; if (!card.worker) card.meta.status = "queued";
+      input.value = ""; card.files = []; ckFilesPaint(card); if (!card.worker) card.meta.status = "queued";
     } catch (err) { note.className = "ck-note bad"; note.textContent = err.message; }
     ckPaint(card); await ckPoll(card); clearTimeout(ck.timer); ck.timer = setTimeout(ckTick, 1500);
   };
@@ -2111,6 +2128,48 @@ async function ckPoll(card) {
   ckAsks(card, res.asks || [], (res.now || Date.now() / 1000) - Date.now() / 1000);
   ckPaint(card);
 }
+// Attachments: at most CK_FILES of 10 MB each per message, shown as chips until it is sent.
+const CK_FILES = 5, CK_FILE_MB = 10, CK_REF = /⟦file:([0-9a-f]{12})\/([^⟧]+)⟧/g, CK_IMG = /\.(png|jpe?g|gif|webp)$/i;
+function ckAddFiles(card, list) {
+  for (const f of list) {
+    if (f.size > CK_FILE_MB * 1024 * 1024) { card.note.className = "ck-note bad"; card.note.textContent = `${f.name}: larger than ${CK_FILE_MB} MB`; continue; }
+    if (card.files.length >= CK_FILES) { card.note.className = "ck-note bad"; card.note.textContent = `At most ${CK_FILES} files per message`; break; }
+    card.files.push(f);
+  }
+  ckFilesPaint(card);
+}
+function ckFilesPaint(card) {
+  card.filesBox.replaceChildren(...card.files.map((f, i) => {
+    const chip = el("span", "chip ck-filechip", f.name || "screenshot.png"), x = el("button", "btn icon small quiet", "×");
+    x.type = "button"; x.title = "Remove"; x.setAttribute("aria-label", `Remove ${f.name}`);
+    x.onclick = () => { card.files.splice(i, 1); ckFilesPaint(card); };
+    chip.append(x); return chip;
+  }));
+  card.filesBox.hidden = !card.files.length;
+}
+async function ckUpload(machine, files) {
+  const refs = [];
+  for (const f of files) {
+    const res = await api(`/ui/api/chat/file?machine=${encodeURIComponent(machine)}`, { method: "POST", headers: { "X-Filename": encodeURIComponent(f.name || "screenshot.png") }, body: f });
+    refs.push(res.ref);
+  }
+  return refs;
+}
+// A message of the owner: its text, each attachment a thumbnail (images) or a download link.
+function ckUserMsg(card, text) {
+  const box = el("div", "ck-msg user");
+  let at = 0;
+  for (const m of text.matchAll(CK_REF)) {
+    box.append(text.slice(at, m.index)); at = m.index + m[0].length;
+    const a = el("a", "ck-file"), url = `/ui/api/chat/file?machine=${encodeURIComponent(card.meta.machine)}&file=${encodeURIComponent(`${m[1]}/${m[2]}`)}`;
+    a.href = url; a.target = "_blank"; a.rel = "noopener";
+    if (CK_IMG.test(m[2])) { const img = el("img", "ck-img"); img.src = url; img.alt = m[2]; img.loading = "lazy"; a.append(img); }
+    else { a.textContent = m[2]; a.download = m[2]; }
+    box.append(a);
+  }
+  box.append(text.slice(at));
+  return box;
+}
 // New events into a card's log: text as sanitized Markdown, the rest as lines; never one twice.
 function ckEvents(card, res) {
   if (res.trimmed && !card.after && res.events.length) card.log.append(el("p", "ck-line info", "Older output was trimmed (the chat keeps its newest part)."));
@@ -2124,7 +2183,7 @@ function ckEvents(card, res) {
       const msg = last && last.classList.contains("agent") ? last : card.log.appendChild(el("div", "ck-msg agent md"));
       msg.dataset.raw = (msg.dataset.raw || "") + e.text;
       msg.innerHTML = renderMd(msg.dataset.raw.replace(/^\n+/, ""));
-    } else card.log.append(el("div", e.kind === "user" ? "ck-msg user" : `ck-line ${e.kind}`, e.text));
+    } else card.log.append(e.kind === "user" ? ckUserMsg(card, e.text) : el("div", `ck-line ${e.kind}`, e.text));
   }
   if (res.events.length) {
     const hasUser = res.events.some((e) => e.kind === "user");

@@ -540,6 +540,12 @@ body.admin-page { display: block; overflow-y: auto; }
 .ck-sub-report:empty, .ck-sub-tools:empty { display: none; }
 .ck-sub.running > summary .chip { animation: kn-pulse 1.6s ease-in-out infinite; }
 .chip.live { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.ck-form .ck-files { grid-column: 1 / -1; display: flex; gap: 6px; flex-wrap: wrap; }
+.ck-form .ck-files[hidden] { display: none; }
+.ck-filechip { display: inline-flex; align-items: center; gap: 4px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ck-form.drop { outline: 2px dashed var(--accent, #6aa0ff); outline-offset: -4px; }
+.ck-msg.user .ck-file { display: block; margin: 6px 0 0; }
+.ck-msg.user .ck-img { display: block; max-width: min(360px, 100%); max-height: 260px; border-radius: 6px; border: 1px solid var(--line); }
 .ck-form .ck-picks { grid-column: 1 / -1; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .ck-form .ck-picks[hidden], .ck-form .ck-picks select[hidden] { display: none; }
 .ck-form .ck-picks select { max-width: 60%; }

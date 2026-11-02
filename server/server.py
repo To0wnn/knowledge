@@ -5735,6 +5735,80 @@ async def machine_chat_diff(request: Request):
     return JSONResponse({"ok": True}) if found else JSONResponse({"error": "unknown diff request"}, status_code=404)
 
 
+# Files attached to a chat message: kept per machine (a new chat has no id yet when its files go up), named in the
+# message by a mark the companion turns into a local path; swept after CHAT_FILE_DAYS.
+CHAT_FILE_MAX, CHAT_FILE_DAYS, CHAT_FILES_MAX = 10 * 1024 * 1024, 30, 200
+FILE_REF = re.compile(r"⟦file:([0-9a-f]{12})/([\w(][\w .()+-]{0,119})⟧")
+INLINE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
+
+
+def chat_files_dir(mid: str) -> Path:
+    return chat_file(mid, "0" * 12).parent / "files"
+
+
+def file_name(name: str) -> str:
+    """A name safe on every OS (the companion writes it to disk), its extension kept."""
+    name = re.sub(r"[^\w .()+-]", "_", PurePosixPath(name.replace("\\", "/")).name).strip(" .")[:120].rstrip(" .")
+    return name if re.fullmatch(r"[\w(][\w .()+-]{0,119}", name or "") else "file" + Path(name).suffix[:10]
+
+
+def store_chat_file(mid: str, name: str, data: bytes) -> str:
+    d = chat_files_dir(mid)
+    d.mkdir(parents=True, exist_ok=True)
+    old = time.time() - CHAT_FILE_DAYS * 86400
+    kept = sorted(d.iterdir(), key=lambda x: x.stat().st_mtime)
+    for x in kept[:max(0, len(kept) - CHAT_FILES_MAX + 1)] + [x for x in kept if x.stat().st_mtime < old]:
+        shutil.rmtree(x, True)
+    fid, name = secrets.token_hex(6), file_name(name)
+    (d / fid).mkdir()
+    (d / fid / name).write_bytes(data)
+    return f"⟦file:{fid}/{name}⟧"
+
+
+def chat_file_path(mid: str, ref: str) -> Path:
+    m = FILE_REF.fullmatch(f"⟦file:{ref}⟧")
+    f = chat_files_dir(mid) / m.group(1) / m.group(2) if m else None
+    if not (f and f.is_file()):
+        raise ValueError("unknown file (attachments are kept 30 days)")
+    return f
+
+
+def file_response(f: Path) -> Response:
+    """Images shown inline; anything else only as a download (never rendered as a page of this site)."""
+    kind = INLINE_TYPES.get(f.suffix.lower())
+    return FileResponse(f, media_type=kind or "application/octet-stream", content_disposition_type="inline" if kind else "attachment",
+                        filename=f.name, headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=86400"})
+
+
+@server.custom_route("/ui/api/chat/file", methods=["GET", "POST"])
+async def ui_chat_file(request: Request):
+    """POST ?machine= (body: the file, X-Filename header): attach a file for a message to a chat there; answers the
+    mark to put in the message. GET ?machine=&file=<id>/<name>: the file again (an image in the chat)."""
+    try:
+        mid = request.query_params.get("machine", "")
+        if not await asyncio.to_thread(own_machine, mid):
+            raise PermissionError("not a machine of your own tokens")
+        if request.method == "GET":
+            return file_response(await asyncio.to_thread(chat_file_path, mid, request.query_params.get("file", "")))
+        data = await request.body()
+        if not data or len(data) > CHAT_FILE_MAX:
+            return JSONResponse({"error": "a file is 1 byte to 10 MB"}, status_code=413)
+        name = urllib.parse.unquote(request.headers.get("x-filename", "file"))
+        ref = await asyncio.to_thread(store_chat_file, mid, name, data)
+    except (ValueError, PermissionError, OSError) as e:
+        return chat_error(e)
+    return JSONResponse({"ref": ref, "size": len(data)})
+
+
+@server.custom_route("/machine/chats/file", methods=["GET"])
+async def machine_chat_file(request: Request):
+    """?file=<id>/<name>: a file attached to a message for a chat on this machine, for the companion to put on disk."""
+    try:
+        return file_response(await asyncio.to_thread(chat_file_path, device.get().get("machine", ""), request.query_params.get("file", "")))
+    except (ValueError, OSError) as e:
+        return JSONResponse({"error": str(e)}, status_code=404)
+
+
 @server.custom_route("/machine/chats", methods=["GET"])
 async def machine_chats(request: Request):
     """The companion asks every ~2 s while a chat is active (else ~10 s): new messages for it to run (handed out

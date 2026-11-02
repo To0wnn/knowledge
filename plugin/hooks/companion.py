@@ -657,6 +657,13 @@ def server(method: str, path: str, tok: str, body=None, timeout: float = 15):
         return json.loads(r.read().decode("utf-8") or "{}")
 
 
+def server_file(tok: str, ref: str) -> bytes:
+    """A file attached to a chat message in the web UI (chat.attach puts it on disk)."""
+    req = urllib.request.Request(token_store.url() + "/machine/chats/file?file=" + urllib.parse.quote(ref), headers=token_store.headers(tok))
+    with urllib.request.urlopen(req, timeout=120) as r:
+        return r.read()
+
+
 def claim(task: dict, tok: str, session: str, start: str = "") -> str:
     """Take the task for this pc on the server before waking anything: '' when this pc holds it now, else the device
     that does (another pc already woke a session for it, or the line is pinned to another device)."""
@@ -1675,7 +1682,7 @@ def chats_round() -> bool:
             post({"chat": cid, "events": [{"kind": "info", "text": "Stopped (no turn ran here any more)."}], "done": True})
     chat.reap()  # live chats idle for a while end (the next message resumes them)
     for s in r.get("steer", []):  # Force: for the running turn, read by the agent's hook after its next step
-        if chat.steer(str(s.get("chat", "")), str(s.get("by") or ""), str(s.get("text", ""))):
+        if chat.steer(str(s.get("chat", "")), str(s.get("by") or ""), chat.attach(str(s.get("text", "")), lambda ref: server_file(tok, ref))):
             log("remote", f"Chat message sent into a running turn by {s.get('by') or '?'}", f"chat {s.get('chat')}")
     for cid in r.get("busy", []):
         if cid not in chat.RUNNING:
@@ -1685,6 +1692,7 @@ def chats_round() -> bool:
     linked = lambda: {f["path"] for f in folder_links()["linked"]} | {w["cwd"] for w in load("workers.json", {}).values() if w.get("chat") and w.get("cwd")}
     yolo = lambda agent: bool(load("yolo.json", {}).get(agent, {}).get("on"))
     for item in r.get("work", []):
+        item["text"] = chat.attach(item.get("text", ""), lambda ref: server_file(tok, ref))
         log("remote", f"Chat message from {item.get('by') or '?'} for {AGENTS.get(item.get('agent'), ('?',))[0]}", f"chat {item.get('chat')} in {item.get('folder')}")
         chat.start(item, post, log, linked, yolo)
     for d in r.get("diffs", []):  # after the turns (handed out once: never lost to a diff); read-only, linked folders and workers only
