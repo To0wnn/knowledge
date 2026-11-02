@@ -5017,6 +5017,7 @@ def chat_file(mid: str, cid: str) -> Path:
 def chat_meta(c: dict) -> dict:
     return {**{k: c.get(k) for k in ("id", "agent", "folder", "project", "title", "by", "created", "updated", "status", "session")},
             "subs": sum(1 for s in (c.get("subs") or {}).values() if s == "running"),  # subagents running now
+            "closed": bool(c.get("closed")),
             "model": c.get("model", ""), "effort": c.get("effort", ""),
             "waiting": len(c.get("pending") or [])}
 
@@ -5151,6 +5152,8 @@ def chat_card(c: dict) -> tuple[str, str]:
     ended with output its owner has not opened yet (a reply, a refused tool call, an error); done once read."""
     if c.get("status") in ("queued", "running"):
         return "running", "waiting for the pc" if c["status"] == "queued" else "waits for your approval" if asks_open(c, time.time()) else "working"
+    if c.get("closed"):  # its owner closed it: off the board until a new message opens it
+        return "", ""
     events = c.get("events") or []
     last = len(events) - next((i for i, e in enumerate(reversed(events)) if e["kind"] == "user"), len(events))
     turn = events[last:]
@@ -5468,6 +5471,7 @@ async def ui_chat_send(request: Request):
     busy, msg = [], {"text": text, "by": device.get().get("user", ""), "at": time.time()}
 
     def change(c):
+        c["closed"] = False  # a new message opens a closed chat again
         if c.get("status") in ("queued", "running"):
             line = c.setdefault("pending", [])
             if len(line) >= CHAT_PENDING:
@@ -5489,6 +5493,21 @@ async def ui_chat_send(request: Request):
         return JSONResponse({"ok": True, "queued": True})
     await asyncio.to_thread(update_state, f.parent / "queue.json", lambda q: q.setdefault(c["id"], {}).update(msg=msg, stop=False))
     return JSONResponse({"ok": True})
+
+
+@server.custom_route("/ui/api/chat/close", methods=["POST"])
+async def ui_chat_close(request: Request):
+    """{machine, id, closed}: close a chat (off the board and the chat list, under Closed) or open it again. A running
+    turn is not closed; a new message opens it again by itself. Works with the pc offline: only the server's record."""
+    try:
+        row, b, f, c = await chat_request(request, True)
+    except (ValueError, AttributeError, TypeError, PermissionError) as e:
+        return chat_error(e)
+    closed = b.get("closed") is not False
+    if closed and c.get("status") in ("queued", "running"):
+        return JSONResponse({"error": "the agent is still working: stop it first, or close it when it is done"}, status_code=409)
+    await asyncio.to_thread(update_state, f, lambda c: c.update(closed=closed))
+    return JSONResponse({"ok": True, "closed": closed})
 
 
 @server.custom_route("/ui/api/chat/stop", methods=["POST"])

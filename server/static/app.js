@@ -1423,16 +1423,16 @@ async function ckSummary() {
 }
 // The Chats view's list: the chats waiting on you first, then the running ones, then the newest; a dot and a word
 // say which (not colour alone). The filter matches title, pc, agent and folder; the buttons narrow to one state.
-const CK_STATE = { needs: "needs you", running: "running", idle: "idle" };
+const CK_STATE = { needs: "needs you", running: "running", idle: "idle", closed: "closed" };
 function ckState(c) { // an approval waiting in a running turn needs you too
   const needs = (ck.board || []).some((i) => i.col === "needs" && i.machine === c.machine && (i.kind === "chat" ? i.id : i.kind === "ask" ? i.chat : "") === c.id);
-  return needs ? "needs" : ckBusy(c.status) ? "running" : "idle";
+  return needs ? "needs" : ckBusy(c.status) ? "running" : c.closed ? "closed" : "idle";
 }
 function ckHistory() {
   const box = $("ck-history"), words = ck.filter.toLowerCase().split(/\s+/).filter(Boolean), only = $("ck-only").dataset.only || "";
-  const rank = { needs: 0, running: 1, idle: 2 };
+  const rank = { needs: 0, running: 1, idle: 2, closed: 3 };
   const rows = ck.chats.filter(ckScope).map((c) => [c, ckState(c)])
-    .filter(([c, st]) => (!only || st === only) && words.every((w) => [c.title, c.label, c.folder, AGENT_NAME[c.agent] || c.agent].join(" ").toLowerCase().includes(w)))
+    .filter(([c, st]) => (only ? st === only : st !== "closed") /* a closed chat only under Closed */ && words.every((w) => [c.title, c.label, c.folder, AGENT_NAME[c.agent] || c.agent].join(" ").toLowerCase().includes(w)))
     .sort((a, b) => rank[a[1]] - rank[b[1]] || (b[0].updated || 0) - (a[0].updated || 0));
   box.replaceChildren();
   for (const [c, st] of rows.slice(0, 60)) {
@@ -1616,7 +1616,9 @@ function ckItem(i) {
     act("Reject", "Keep the branch, take the card off the board; optionally send it back to the agent", () => ckReject(card, i));
   }
   if (i.result) act("Open memo", "Read the whole line in its memo; remove it there (or under Tasks) once read", () => main.click());
-  if (i.col === "needs" && !i.approve && i.kind !== "ask" && i.kind !== "review") act("Dismiss", "Take it off the board until it changes again", () => ckDo("/ui/api/board/dismiss", { key: i.key, sig: i.sig }));
+  if (i.kind === "chat" && i.col !== "running") act("Close", "Close this chat: off the board and the chat list (under Closed); a new message opens it again",
+    () => ckDo("/ui/api/chat/close", { machine: i.machine, id: i.id, closed: true }));
+  if (i.col === "needs" && !i.approve && i.kind !== "ask" && i.kind !== "review" && i.kind !== "chat") act("Dismiss", "Take it off the board until it changes again", () => ckDo("/ui/api/board/dismiss", { key: i.key, sig: i.sig }));
   if (i.kind === "chat" && i.col === "running") act("Stop", "Stop this turn", () => ckDo("/ui/api/chat/stop", { machine: i.machine, id: i.id }));
   if (acts.childNodes.length) card.append(acts);
   return card;
@@ -1706,8 +1708,9 @@ function ckCard(meta) {
   title.append(name, where);
   const git = el("span", "ck-git-slot"), open = el("button", "btn icon small quiet ck-x bd-only", "↗"); // on the board: the full chat
   open.type = "button"; open.title = "Open the full chat"; open.setAttribute("aria-label", "Open the full chat");
-  const mark = el("span", "ck-mark", AGENT_MARK[meta.agent] || "+");
-  head.append(el("span", "ck-dot bd-only"), mark, title, git, state, open, x);
+  const mark = el("span", "ck-mark", AGENT_MARK[meta.agent] || "+"), close = el("button", "btn small quiet ck-close", "Close");
+  close.type = "button"; close.hidden = true;
+  head.append(el("span", "ck-dot bd-only"), mark, title, git, state, close, open, x);
   const log = el("div", "ck-log"), form = el("form", "ck-form"), input = el("textarea"), btns = el("div", "ck-btns");
   log.setAttribute("aria-live", "polite"); log.setAttribute("role", "log");
   log.addEventListener("click", (e) => {
@@ -1727,7 +1730,7 @@ function ckCard(meta) {
   stop.type = "button"; send.type = "submit"; btns.append(stop, send); form.append(input, btns, picks, note);
   const asks = el("div", "ck-asks"); asks.hidden = true; asks.setAttribute("aria-live", "assertive");
   root.append(head, log, asks, form);
-  const card = { meta: { ...meta }, root, name, where, git, state, log, asks, form, input, stop, send, note, picks, mark, pick: null, after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
+  const card = { meta: { ...meta }, root, name, where, git, state, log, asks, form, input, stop, send, note, picks, mark, close, pick: null, after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
   x.onclick = () => ckShow(null);
   open.onclick = () => ckShow(card.meta);
   input.addEventListener("keydown", (e) => {
@@ -1761,6 +1764,15 @@ function ckCard(meta) {
       input.value = ""; if (!card.worker) card.meta.status = "queued";
     } catch (err) { note.className = "ck-note bad"; note.textContent = err.message; }
     ckPaint(card); await ckPoll(card); clearTimeout(ck.timer); ck.timer = setTimeout(ckTick, 1500);
+  };
+  close.onclick = async () => { // off the board and the list (Closed); a new message opens it again
+    const closed = !card.meta.closed;
+    try {
+      await api("/ui/api/chat/close", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, closed }) });
+      card.meta.closed = closed; ck.summaryAt = 0;
+      if (closed) { toast("Closed: under Closed in the list; a new message opens it again", false); ckShow(null); } else ckPaint(card);
+      ckTick();
+    } catch (err) { note.className = "ck-note bad"; note.textContent = err.message; }
   };
   stop.onclick = async () => {
     if (card.worker) return ckWorkerAct(card, "stop_worker");
@@ -1992,6 +2004,8 @@ function ckPaint(card) {
     return;
   }
   card.state.hidden = false;
+  card.close.hidden = busy; card.close.textContent = m.closed ? "Open again" : "Close";
+  card.close.title = m.closed ? "Back on the board and in the list" : "Off the board and the chat list (under Closed); a new message opens it again";
   card.name.textContent = m.title || "New chat";
   card.where.textContent = `${AGENT_NAME[m.agent] || m.agent} · ${m.label} · ${ckShort(m.folder)}${m.project ? ` (${m.project})` : ""}`;
   card.where.title = m.folder || "";

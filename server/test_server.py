@@ -731,6 +731,19 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["chat"]["subs"] == 1
     http("POST", "/machine/chats/events", {"chat": mc, "events": [], "done": True}, token=fr, headers=pc)
     assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["chat"]["subs"] == 0, "no subagent outlives its turn"
+    # Close: off the board (and, in the page, the list), kept under Closed; not while a turn runs; a message opens it.
+    on_board = lambda: any(i["kind"] == "chat" and i["id"] == mc for i in json.loads(ui("/ui/api/board")[2])["items"])
+    assert on_board()
+    assert ui("/ui/api/chat/close", {"machine": mid, "id": mc, "closed": True}, er)[0] == 403
+    assert ui("/ui/api/chat/close", {"machine": mid, "id": mc, "closed": True})[0] == 200 and not on_board()
+    assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["chat"]["closed"] is True
+    assert ui("/ui/api/chat/close", {"machine": mid, "id": mc, "closed": False})[0] == 200 and on_board()
+    assert ui("/ui/api/chat/close", {"machine": mid, "id": mc})[0] == 200 and not on_board()  # closed is the default
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": mc, "text": "again"})[0] == 200
+    assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["chat"]["closed"] is False and on_board(), "a message opens it"
+    assert ui("/ui/api/chat/close", {"machine": mid, "id": mc})[0] == 409, "not while the agent works"
+    http("GET", "/machine/chats", token=fr, headers=pc)
+    http("POST", "/machine/chats/events", {"chat": mc, "events": [], "done": True}, token=fr, headers=pc)
     # The person's default model for a new chat (Settings page): checked for shape, per person, cleared with null.
     assert ui("/ui/api/me/prefs", {"chat_default": {"agent": "claude", "id": "-rf", "effort": ""}})[0] == 400
     assert ui("/ui/api/me/prefs", {"chat_default": {"agent": "bash", "id": "x", "effort": ""}})[0] == 400
