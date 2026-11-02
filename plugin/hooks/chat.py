@@ -160,8 +160,11 @@ def parse(agent: str, line: str, st: dict) -> list:
         if e.get("session_id"):
             st["session"] = e["session_id"]
         if t == "system" and e.get("subtype") in ("task_progress", "task_notification") and e.get("tool_use_id") in st.get("subs", ()):
-            if isinstance((e.get("usage") or {}).get("total_tokens"), int):  # a subagent's tokens so far (live while it runs)
-                out.append(usage(e["tool_use_id"], total=e["usage"]["total_tokens"]))
+            n, last = e.get("usage", {}).get("total_tokens"), st.setdefault("sub_tok", {}).get(e["tool_use_id"], (0, 0))
+            # a subagent's tokens so far: its end always, progress at most every 5 s (each step was an event of its own)
+            if isinstance(n, int) and (e["subtype"] == "task_notification" or time.time() - last[1] >= 5):
+                st["sub_tok"][e["tool_use_id"]] = (n, time.time())
+                out.append(usage(e["tool_use_id"], total=n))
         if t == "assistant" and not e.get("parent_tool_use_id") and isinstance((e.get("message") or {}).get("usage"), dict):
             u = e["message"]["usage"]  # the main agent's context now: what it sent for this step
             st["ctx"] = tokens(u) - int(u.get("output_tokens") or 0)
@@ -246,8 +249,8 @@ def parse(agent: str, line: str, st: dict) -> list:
                 out.append(("error", first_line(item.get("message"))))
         elif t == "turn.completed":
             st["result"] = True
-            if isinstance(u := e.get("usage"), dict):
-                out.append(usage(tokens=int(u.get("input_tokens") or 0) + int(u.get("output_tokens") or 0), ctx=int(u.get("input_tokens") or 0)))
+            if isinstance(u := e.get("usage"), dict):  # the thread's total so far, not this turn's (measured: 25.6k, 76.7k)
+                out.append(usage(total=int(u.get("input_tokens") or 0) + int(u.get("output_tokens") or 0)))
         elif t in ("turn.failed", "error"):
             out.append(("error", first_line((e.get("error") or {}).get("message") or e.get("message")) or t))
     else:  # agy
@@ -567,12 +570,13 @@ def steer_path(cid: str) -> Path:
 
 def steer(cid: str, by: str, text: str) -> bool:
     """Park a Force message for chat `cid` if a turn runs here; False (nothing parked) when none does."""
-    if cid not in RUNNING or not text:
+    rec = RUNNING.get(cid)
+    if not rec or rec.get("ending") or not text:  # a turn about to end: the server keeps it, it goes in next
         return False
     f = steer_path(cid)
     f.parent.mkdir(parents=True, exist_ok=True)
-    with f.open("a", encoding="utf-8") as out:
-        out.write(json.dumps({"by": by[:80], "text": text[:20_000], "at": time.time()}) + "\n")
+    with f.open("a", encoding="utf-8") as out:  # the session: only this chat's own agent takes it (watch.py)
+        out.write(json.dumps({"by": by[:80], "text": text[:20_000], "at": time.time(), "session": (rec.get("st") or {}).get("session", "")}) + "\n")
     RUNNING[cid]["steered"] = True
     return True
 
@@ -642,7 +646,7 @@ def codex_app(p, item: dict, st: dict):
             return [("text", params["delta"])]
         if method == "item/started" and it.get("type") == "fileChange" and it.get("id"):
             changes[it["id"]] = [str(c.get("path", "")) for c in it.get("changes") or []]  # what its approval request leaves out
-        if method == "thread/tokenUsage/updated":  # the conversation's tokens so far and the last request's context
+        if method == "thread/tokenUsage/updated" and params.get("threadId") in (None, "", st["session"]):  # this thread's, not a subagent's
             tu = params.get("tokenUsage") or {}
             return [usage(total=(tu.get("total") or {}).get("totalTokens") or 0, ctx=(tu.get("last") or {}).get("inputTokens") or 0)]
         if method in ("item/started", "item/completed") and it.get("type") == "collabAgentToolCall":  # its subagents
@@ -760,7 +764,7 @@ def run_turn(item: dict, post, log, linked, yolo):
             p = subprocess.Popen(cmd, cwd=folder, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errf,
                                  env=workers.git_safe_env({**os.environ, "KNOWLEDGE_CHAT": cid}) if not yolo(agent) else {**os.environ, "KNOWLEDGE_CHAT": cid}, **kw)
             rec = RUNNING.setdefault(cid, {"stop": False})  # start() put it there: a stop that came meanwhile holds
-            rec.update(pid=p.pid, ident=workers.identity(p.pid))
+            rec.update(pid=p.pid, ident=workers.identity(p.pid), st=st)  # st: its session, for a Force message
             if rec["stop"]:
                 workers.kill(rec, hard=True)
             if cmd_rpc:  # it asks for approvals over JSON-RPC on stdin/stdout: the driver answers and keeps stdin open
@@ -798,6 +802,7 @@ def run_turn(item: dict, post, log, linked, yolo):
         buf.append(("error", err))
         log("error", f"{name}: chat turn failed", f"chat {cid}: {err}")
     steered = {}
+    (rec or RUNNING.get(cid) or {})["ending"] = True  # from here no Force message is parked for this turn
     if (rec or RUNNING.get(cid) or {}).get("steered") or steer_path(cid).exists():  # a Force message: read by the hook, or not (it goes in next)
         left = steer_path(cid).exists()
         steer_path(cid).unlink(missing_ok=True)
@@ -828,6 +833,7 @@ def start(item: dict, post, log, linked, yolo):
         post({"chat": item["chat"], "events": [{"kind": "error", "text": f"{MAX_TURNS} chat turns run on this pc already; send again later"}],
               "done": True, "error": "busy"})
         return
+    steer_path(item["chat"]).unlink(missing_ok=True)  # a Force message left by an earlier turn: never into this one
     # taken: the server's next "busy" list must not call it lost
     RUNNING[item["chat"]] = {"pid": 0, "ident": "", "stop": False, "folder": item.get("folder", ""),
                              "allow": [x for x in item.get("allow") or [] if isinstance(x, dict)]}
@@ -891,7 +897,7 @@ def self_test():
     ev = [e for ln in lines for e in parse("claude", ln, st)]
     assert ev[1:] == [usage("tu5", total=5949), usage(tokens=70871, ctx=34812)] and merged([ev[2]]) == [{"kind": "usage", "text": "", "tokens": 70871, "ctx": 34812}], ev
     cst = {}
-    assert parse("codex", '{"type":"turn.completed","usage":{"input_tokens":900,"cached_input_tokens":800,"output_tokens":50}}', cst) == [usage(tokens=950, ctx=900)] and cst["result"]
+    assert parse("codex", '{"type":"turn.completed","usage":{"input_tokens":900,"cached_input_tokens":800,"output_tokens":50}}', cst) == [usage(total=950)] and cst["result"]
     st = {}  # in the background: the launch keeps it running, the task-notification (tool-use-id, or task-id) ends it
     for tu, note in (("tu7", "<tool-use-id>tu7</tool-use-id>"), ("tu8", "<task-id>ag8</task-id>")):
         lines = ['{"type":"assistant","message":{"content":[{"type":"tool_use","id":"%s","name":"Agent","input":{"description":"bg"}}]}}' % tu,

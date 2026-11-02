@@ -89,6 +89,16 @@ def flag(agent: str, sid: str, kind: str, detail: str):
         pass
 
 
+def mine(f: Path, sid: str) -> bool:
+    """A Force message is for the chat's own agent: its session (when the companion knew it) is this hook's. Codex and
+    agy subagents, and an agent CLI the chat started, inherit KNOWLEDGE_CHAT but run their own session."""
+    try:
+        want = {json.loads(x).get("session", "") for x in f.read_text(encoding="utf-8").splitlines() if x.strip()}
+    except (OSError, ValueError):
+        return False
+    return not (want - {""}) or sid in want
+
+
 def steered(f: Path, chat: bool = False) -> str:
     """The owner's messages the companion left for this worker (web UI, Steer) or this chat turn (Force), taken once:
     moved away first, so one written meanwhile waits for the next tool call instead of being lost."""
@@ -127,7 +137,7 @@ def main(agent: str):
             flag(agent, sid, kind, detail)
     note = ""
     # a chat turn's Force message, after a tool call of the main agent (a subagent's hook names its agent_id: not for it)
-    if chat and not worker and not hook.get("agent_id"):
+    if chat and not worker and not hook.get("agent_id") and mine(KN_HOME / "companion" / "chats" / f"{chat}.steer", sid):
         note = steered(KN_HOME / "companion" / "chats" / f"{chat}.steer", chat=True)
     if worker and (nonce := os.environ.get("KNOWLEDGE_START_NONCE", "")):  # its own note, not one of a namesake task
         base = KN_HOME / "companion" / "workers" / re.sub(r"[^\w.-]", "-", nonce)[:60]
@@ -177,6 +187,8 @@ def self_test():
         env.pop("KNOWLEDGE_WORKER", None)
         run = lambda hook: subprocess.run([sys.executable, __file__, "claude"], input=json.dumps(hook), capture_output=True, text=True, env=env, timeout=30).stdout
         assert run({"session_id": "s", "agent_id": "sub-1", "tool_input": {}}).strip() in ("", "{}"), "not to a subagent"
+        (box / "0123456789ab.steer").write_text(json.dumps({"by": "alice", "text": "use sqlite", "session": "s"}) + "\n", encoding="utf-8")
+        assert run({"session_id": "other", "tool_input": {}}).strip() in ("", "{}"), "not to another session (a Codex/agy subagent, a nested CLI)"
         out = json.loads(run({"session_id": "s", "tool_input": {}}))
         assert out["hookSpecificOutput"]["additionalContext"].endswith("use sqlite") and not (box / "0123456789ab.steer").exists(), out
     print("ok")

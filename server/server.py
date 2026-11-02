@@ -5552,7 +5552,19 @@ async def ui_chat_stop(request: Request):
         await asyncio.to_thread(update_state, f, steer)
         if not msg:
             return JSONResponse({"error": "a message is on its way to the agent already: wait for it, or stop the turn"}, status_code=409)
-        await asyncio.to_thread(update_state, q, lambda q: q.setdefault(c["id"], {}).update(steer={"text": msg[0]["text"], "by": msg[0].get("by", "")}))
+        parked = []
+
+        def park(q):  # only into the turn that runs: one that ended meanwhile took it back into the line (done)
+            e = q.get(c["id"]) or {}
+            if e.get("busy") and "msg" not in e:
+                e["steer"] = {"text": msg[0]["text"], "by": msg[0].get("by", "")}
+                parked.append(True)
+        await asyncio.to_thread(update_state, q, park)
+        if not parked:
+            def back(c):
+                if c.get("steering") == msg[0]:
+                    c.setdefault("pending", []).insert(0, c.pop("steering"))
+            await asyncio.to_thread(update_state, f, back)
         return JSONResponse({"ok": True})
     waiting = "msg" in read_json(q, {}).get(c["id"], {})
     await asyncio.to_thread(update_state, f, lambda c: (c.pop("pending", None), c.pop("steering", None)))  # Stop also drops what waited behind it
