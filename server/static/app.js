@@ -1719,7 +1719,8 @@ function ckCard(meta) {
   const mark = el("span", "ck-mark", AGENT_MARK[meta.agent] || "+"), close = el("button", "btn small quiet ck-close", "Close");
   const tok = el("span", "chip ck-tok"); tok.hidden = true;
   close.type = "button"; close.hidden = true;
-  head.append(el("span", "ck-dot bd-only"), mark, title, git, tok, state, close, open, x);
+  const headMeta = el("div", "ck-meta"); headMeta.append(git, tok); // its own line on a phone; inline on a wide screen
+  head.append(el("span", "ck-dot bd-only"), mark, title, headMeta, state, close, open, x);
   const log = el("div", "ck-log"), form = el("form", "ck-form"), input = el("textarea"), btns = el("div", "ck-btns");
   log.setAttribute("aria-live", "polite"); log.setAttribute("role", "log");
   log.addEventListener("click", (e) => {
@@ -1754,13 +1755,18 @@ function ckCard(meta) {
   // one box: the files, the text, and a bar under it (attach and model left; microphone, Stop and Send right)
   const box = el("div", "ck-box"), bar = el("div", "ck-bar"), barL = el("div", "ck-bar-l"), sendGroup = el("span", "ck-sendgroup");
   stop.type = "button"; send.type = "submit"; sendGroup.append(send, more);
-  barL.append(attachBtn, filePick, picks); btns.append(mic, stop, sendGroup); bar.append(barL, btns);
+  // a new chat only: its own git worktree and branch (chat/<id>) on the pc, so it never works in your checkout
+  const branch = el("button", "btn small quiet ck-branch", "Own branch"); branch.type = "button"; branch.hidden = true;
+  branch.title = "Work in its own git worktree on branch chat/<id> (your checkout stays as it is; you merge it yourself)";
+  branch.setAttribute("aria-pressed", "false");
+  branch.onclick = () => { card.worktree = !card.worktree; branch.setAttribute("aria-pressed", String(card.worktree)); };
+  barL.append(attachBtn, filePick, picks, branch); btns.append(mic, stop, sendGroup); bar.append(barL, btns);
   box.append(files, input, bar); form.append(box, note);
   box.addEventListener("click", (e) => { if (e.target === box || e.target === bar || e.target === barL) input.focus(); });
   const asks = el("div", "ck-asks"); asks.hidden = true; asks.setAttribute("aria-live", "assertive");
   const subbar = el("div", "ck-subbar"); subbar.hidden = true; subbar.setAttribute("aria-label", "Subagents running now");
   root.append(head, log, subbar, asks, form);
-  const card = { meta: { ...meta }, root, name, where, git, state, log, asks, form, input, stop, send, note, picks, mark, close, tok, subbar, queueBtn, forceBtn, more, filesBox: files, files: [], mode: "", pick: null, after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
+  const card = { meta: { ...meta }, root, name, where, git, state, log, asks, form, input, stop, send, note, picks, mark, close, tok, subbar, queueBtn, forceBtn, more, branch, filesBox: files, files: [], mode: "", pick: null, after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
   x.onclick = () => ckShow(null);
   open.onclick = () => ckShow(card.meta);
   input.addEventListener("keydown", (e) => {
@@ -2075,7 +2081,7 @@ async function ckStart(card, text) { // the draft's first message: make the chat
   if (!machine || !p) throw new Error(ck.machines.some((m) => m.online && m.companion) ? "No folder in this project on a pc that runs this model: link one under Machines, Folders." : "None of your pcs is online with a companion.");
   card.starting = true;
   try {
-    const res = await api("/ui/api/chats", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine, agent: p.agent, folder }) });
+    const res = await api("/ui/api/chats", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine, agent: p.agent, folder, ...(card.worktree ? { worktree: true } : {}) }) });
     const m = ck.machines.find((y) => y.id === machine);
     let failed = "";
     try {
@@ -2098,6 +2104,7 @@ function ckPaint(card) {
     card.name.textContent = "New chat";
     card.where.textContent = m.folder ? `${AGENT_NAME[m.agent] || m.agent} · ${m.label} · ${ckShort(m.folder)}` : "";
     card.where.title = m.folder || ""; card.state.hidden = true; card.stop.hidden = true; card.send.textContent = "Send"; card.send.disabled = !!card.starting;
+    card.branch.hidden = false;
     if (!card.note.classList.contains("bad")) card.note.textContent = !ckDraftPcs().length
       ? (agentProject ? `No pc of yours is online with a folder linked to ${shown(agentProject)}.` : "None of your pcs is online with a companion and a linked folder.")
       : "Runs on your pc in the project's folder, with a worker's permissions there (YOLO only where you turned it on).";
@@ -2110,7 +2117,8 @@ function ckPaint(card) {
   card.close.hidden = busy; card.close.textContent = m.closed ? "Open again" : "Close";
   card.close.title = m.closed ? "Back on the board and in the list" : "Off the board and the chat list (under Closed); a new message opens it again";
   card.name.textContent = m.title || "New chat";
-  card.where.textContent = `${AGENT_NAME[m.agent] || m.agent} · ${m.label} · ${ckShort(m.folder)}${m.project ? ` (${m.project})` : ""}`;
+  card.branch.hidden = true;
+  card.where.textContent = `${AGENT_NAME[m.agent] || m.agent} · ${m.label} · ${ckShort(m.folder)}${m.project ? ` (${m.project})` : ""}${m.worktree ? ` · branch chat/${m.id}` : ""}`;
   card.where.title = m.folder || "";
   const item = (ck.board || []).find((i) => i.kind === "chat" && `${i.machine}/${i.id}` === ckKey(m));
   if (card.git.dataset.v !== JSON.stringify(item?.git || null)) {

@@ -53,7 +53,7 @@ def git(cwd, *args, env=None, check=False, timeout=60) -> subprocess.CompletedPr
                           env={**base, **(env or {})}, check=check, stdin=subprocess.DEVNULL, timeout=timeout)
 
 
-def worktree(folder: str, tid: str, project: str = "") -> dict:
+def worktree(folder: str, tid: str, project: str = "", prefix: str = "task") -> dict:
     """Where a worker for task `tid` works: {cwd, worktree, branch, repo, base, base_branch} with its own worktree on branch
     task/<base ID> when the project folder is in a git repository (an existing one is reused: a hand-over goes on
     there), else {cwd: folder}."""
@@ -65,7 +65,7 @@ def worktree(folder: str, tid: str, project: str = "") -> dict:
     # worktree; two projects in one repository with the same ID get two worktrees, and git refuses the second one's
     # branch (checked out already) instead of letting both commit on it
     tag = hashlib.sha256(f"{repo.resolve()}\n{project}".encode()).hexdigest()[:6]
-    branch, wt = f"task/{safe(bid)}", WORKTREES / f"{safe(repo.name)}-{tag}-{safe(bid)}"
+    branch, wt = f"{prefix}/{safe(bid)}", WORKTREES / f"{safe(repo.name)}-{tag}-{'' if prefix == 'task' else prefix + '-'}{safe(bid)}"
     on = git(repo, "symbolic-ref", "--short", "-q", "HEAD").stdout.strip()  # what a review merges into (a new worktree starts from it)
     conf = config_hash(repo)  # before the worker runs: a merge refuses a config changed since
     if not (wt / ".git").exists():

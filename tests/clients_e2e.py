@@ -1718,6 +1718,15 @@ def chat_e2e(tok: str, tmp: Path):
         send(live, "and on")
         check(wait_for(lambda: "echo: and on" in "".join(e["text"] for e in chat(live)["events"]), 30) and [c.get("load") for c in recorded() if c.get("chat") == live][-1] == "sess-agy",
               "live agy: after a Stop the conversation goes on (session/load)", json.dumps([c.get("load") for c in recorded() if c.get("chat") == live]))
+        # Own branch: a chat made with worktree runs its agent in a git worktree of its own on branch chat/<id>, said once.
+        own = json.loads(http("POST", "/ui/api/chats", {"machine": mid, "agent": "claude", "folder": str(pill), "worktree": True}, ui)[1])["chat"]["id"]
+        send(own, "hello branch")
+        ok = idle(own, 2)
+        cwd = next((c.get("cwd", "") for c in recorded() if c.get("chat") == own), "")
+        branches = subprocess.run(["git", "-C", str(pill), "branch", "--list", f"chat/{own}"], capture_output=True, text=True).stdout
+        check(ok and Path(cwd).resolve() != pill.resolve() and "worktrees" in cwd and f"chat/{own}" in branches
+              and any(f"branch chat/{own}" in e["text"] for e in chat(own)["events"]),
+              "chat: Own branch runs the agent in a worktree of its own on branch chat/<id>", cwd + " | " + branches + json.dumps(chat(own)["events"])[-400:])
         # A companion restart (an update, a crash) in the middle of a turn: the agent runs on in its chat host, the new
         # companion reads on where the old one stopped, and the turn ends as it would have, in the same agent.
         def restart_companion():

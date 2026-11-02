@@ -497,6 +497,7 @@ body.admin-page { display: block; overflow-y: auto; }
 .ck-card.running { border-color: color-mix(in srgb, var(--amber) 60%, var(--line-hi)); box-shadow: 0 0 0 1px var(--amber-soft), 0 10px 40px var(--glow); animation: ck-pulse-card 3s ease-in-out infinite; }
 @keyframes ck-pulse-card { 50% { box-shadow: 0 0 0 2px var(--amber), 0 12px 48px var(--glow); } }
 .ck-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.ck-meta { display: contents; }
 .ck-mark { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 8px; background: var(--amber-soft); color: var(--amber-ink); font-weight: 700; font-size: 13px; flex: none; }
 .ck-title { min-width: 0; flex: 1; }
 .ck-title strong { display: block; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -524,6 +525,7 @@ body.admin-page { display: block; overflow-y: auto; }
 .ck-bar { display: flex; align-items: center; gap: 6px; cursor: default; }
 .ck-bar-l { display: flex; align-items: center; gap: 2px; flex: 1; min-width: 0; }
 .ck-sendgroup { display: inline-flex; }
+.ck-branch[aria-pressed=true] { color: var(--accent); background: color-mix(in srgb, var(--amber) 14%, transparent); }
 .ck-send.split { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .ck-more > summary.ck-send-more { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left-color: color-mix(in srgb, #000 22%, var(--amber)); padding: 0 8px; }
 .ck-more > summary::-webkit-details-marker { display: none; }
@@ -717,7 +719,22 @@ dialog.ck-diff { width: min(980px, calc(100vw - 32px)); }
   .ck-side { border-right: 0; padding: 10px 12px; }
   .ck-resize { display: none; }
   body:not(.in-chat) .ck-canvas, body.in-chat .ck-side { display: none; }
-  body.in-chat .ck-canvas { height: calc(100dvh - 53px); padding: 0; grid-template-columns: 100%; }
+  body.in-chat .ck-canvas { height: 100dvh; padding: 0; grid-template-columns: 100%; }
+  /* An open chat on a phone: no page header above it; the chat's head is the top bar, back (‹) on the left, the
+     title on its own line's full width, the state as a dot, tokens and Close small on a second line. */
+  body.in-chat .head { display: none; }
+  body.in-chat .ck-head { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; grid-template-areas: "x mark title state" ". meta meta close";
+    column-gap: 8px; row-gap: 2px; padding: calc(6px + env(safe-area-inset-top)) 10px 6px 4px; }
+  body.in-chat .ck-head > .ck-x:not(.bd-only) { grid-area: x; order: 0; width: 36px; height: 36px; font-size: 0; }
+  body.in-chat .ck-head > .ck-x:not(.bd-only)::before { content: "‹"; font-size: 28px; line-height: 1; margin-top: -3px; }
+  body.in-chat .ck-head > .ck-mark { grid-area: mark; }
+  body.in-chat .ck-head > .ck-title { grid-area: title; }
+  body.in-chat .ck-head > .ck-state { grid-area: state; font-size: 11.5px; padding: 1px 8px; }
+  body.in-chat .ck-head > .ck-meta { grid-area: meta; display: flex; gap: 6px; align-items: center; min-width: 0; overflow: hidden; }
+  body.in-chat .ck-head > .ck-meta:empty, body.in-chat .ck-head > .ck-meta:not(:has(> :not([hidden]):not(:empty))) { display: none; }
+  body.in-chat .ck-head .ck-tok { font-size: 11px; padding: 0 6px; }
+  body.in-chat .ck-head > .ck-close { grid-area: close; height: 26px; font-size: 12px; }
+  body.in-chat .ck-head .ck-git-slot { flex-basis: auto; }
   body.in-chat .ck-card { border: 0; border-radius: 0; }
   body.in-chat .ck-form { padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
 }

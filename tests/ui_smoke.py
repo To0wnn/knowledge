@@ -474,6 +474,8 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
     draft = await pg.evaluate("""[location.hash, document.querySelector('#ck-canvas .ck-title strong').textContent, document.activeElement?.tagName,
       !!document.querySelector('#ck-new-dialog'), document.querySelector('#ck-canvas .ck-model summary')?.textContent || '']""")
     check(draft[0] == "#/chats/new" and draft[1] == "New chat" and not draft[3], f"new chat: a draft at #/chats/new, no dialog {draft}")
+    check(await pg.locator("#ck-canvas .ck-branch:not([hidden])").count() == 1 and await pg.locator("#ck-canvas .ck-more[hidden]").count() == 1,
+          "new chat: Own branch is offered; the Queue/Force menu is hidden until a live agent works")
     # a pasted screenshot becomes a chip above the box (it goes up only when sent), and its × takes it off again
     chips = await pg.evaluate("""(() => { const t = document.querySelector('#ck-canvas .ck-card textarea'), d = new DataTransfer();
       d.items.add(new File([new Uint8Array([137, 80, 78, 71])], 'shot.png', { type: 'image/png' }));
