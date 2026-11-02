@@ -1538,7 +1538,7 @@ def chat_e2e(tok: str, tmp: Path):
                  "for _ in range(100):\n    got = companion.agy_rate_read(time.time())\n    if got: break\n    time.sleep(0.2)\n"
                  "print(got)")
         code, out, err = run([sys.executable, "-c", probe], "", {**env, "PYTHONPATH": str(hooks)}, cwd=str(hooks))
-        check(code == 0 and "75" in out and "Gemini X" in out, "companion: agy's limit from its cloud quota with agy's own token (no running agy)", out + err[-400:])
+        check(code == 0 and "75" in out and "Gemini X" in out, "companion: agy's limit from its cloud quota with agy's own token (no running agy)", out + err[-6000:])
         tokf.unlink()  # the running companion must never send a test token to Google
         # Model and effort: the pc reports what each agent offers; a chat's choice reaches the turn the agent's own way
         # (Claude flags, Codex turn/start, agy session/set_model + thought_level).
