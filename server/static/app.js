@@ -1735,7 +1735,7 @@ function ckCard(meta) {
   input.rows = 1; input.placeholder = "Message the agent…"; input.setAttribute("aria-label", "Message (Enter a new line, Ctrl+Enter sends)");
   const stop = el("button", "btn small ck-stop", "Stop"), send = el("button", "btn small primary ck-send", "Send"), note = el("p", "ck-note");
   // a live agent at work: Queue (after this turn) and Force (stop the step, then this) in a small menu beside Send
-  const more = el("details", "menu up ck-more"), moreSum = el("summary", "btn small ck-send-more", "▾"), moreList = el("div", "menu-list");
+  const more = el("details", "menu up ck-more"), moreSum = el("summary", "btn small primary ck-send-more"), moreList = el("div", "menu-list");
   moreSum.title = "Queue or Force"; moreSum.setAttribute("aria-label", "Queue or Force this message");
   const queueBtn = el("button", "ck-queue"), forceBtn = el("button", "ck-forcebtn");
   queueBtn.append("Queue", el("span", "muted", "after this turn · Alt+Enter")); forceBtn.append("Force", el("span", "muted", "stop the step, then this · Ctrl+Shift+Enter"));

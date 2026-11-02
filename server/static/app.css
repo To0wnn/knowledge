@@ -525,8 +525,7 @@ body.admin-page { display: block; overflow-y: auto; }
 .ck-bar-l { display: flex; align-items: center; gap: 2px; flex: 1; min-width: 0; }
 .ck-sendgroup { display: inline-flex; }
 .ck-send.split { border-top-right-radius: 0; border-bottom-right-radius: 0; }
-.ck-more > summary.ck-send-more { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 1px solid color-mix(in srgb, #000 18%, transparent);
-  background: var(--accent); border-color: var(--accent); color: #fff; padding: 0 7px; list-style: none; }
+.ck-more > summary.ck-send-more { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left-color: color-mix(in srgb, #000 22%, var(--amber)); padding: 0 8px; }
 .ck-more > summary::-webkit-details-marker { display: none; }
 .ck-more[hidden] { display: none; }
 .ck-more.menu.up .menu-list { right: 0; left: auto; min-width: 260px; transform-origin: bottom right; }
