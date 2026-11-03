@@ -1536,7 +1536,7 @@ const INSTALL_CMD = {
   linux: "curl -fsSL https://raw.githubusercontent.com/To0wnn/knowledge/main/install.sh | sh",
   windows: "irm https://raw.githubusercontent.com/To0wnn/knowledge/main/install.ps1 | iex",
 };
-function ckStart() {
+function ckGetStarted() {
   const os = store.get("kn_help_os") || (/Windows/.test(navigator.userAgent) ? "windows" : "linux");
   const card = el("section", "card ck-start"), h = el("h2", null, "Get started"); h.id = "ck-start-h";
   card.setAttribute("aria-labelledby", h.id);
@@ -1567,7 +1567,7 @@ function ckList() {
   side.querySelector(".ck-sec-earlier").hidden = !ck.ready || fresh; // nothing to filter yet
   if (!ck.ready) { box.replaceChildren(ck.error ? errorState(`Chats did not load: ${ck.error}`, () => { ck.error = ""; ckList(); ckRun(true); }) : loadingState()); return; }
   box.replaceChildren();
-  if (!pcs && !items.length) box.append(ck.start ||= ckStart()); // kept: a refresh would reset Copy and a selection
+  if (!pcs && !items.length) box.append(ck.start ||= ckGetStarted()); // kept: a refresh would reset Copy and a selection
   const elsewhere = (ck.board || []).filter((i) => i.col === "needs" && !ckScope(i)).length; // a project filter never hides what needs you without saying so
   if (elsewhere) {
     const b = el("button", "btn small ck-elsewhere", `${elsewhere} more need${elsewhere > 1 ? "" : "s"} you in other projects: show all`);
