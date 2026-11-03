@@ -23,8 +23,8 @@
     <div class="head-title"><div class="crumb" id="crumb"></div><h1 id="title" tabindex="-1">Knowledge</h1></div>
     <span class="gap"></span>
     <div class="head-actions" id="head-actions">
-      <span data-views="inbox chats"><span class="ck-resets" id="ck-resets" hidden></span></span>
-      <div class="seg" id="chats-mode" role="group" aria-label="Chats as" data-views="chats"><button type="button" data-mode="list" aria-pressed="true">List</button><button type="button" data-mode="board" aria-pressed="false">Board</button></div>
+      <span data-views="chats"><span class="ck-resets" id="ck-resets" hidden></span></span>
+      <div class="seg" id="chats-mode" role="group" aria-label="Chats as" data-views="chats"><button type="button" data-mode="list" aria-pressed="true">List</button><button type="button" data-mode="board" aria-pressed="false">Side by side</button></div>
       <div class="seg" id="tasks-mode" role="group" aria-label="Tasks as" data-views="tasks"><button type="button" data-mode="list" aria-pressed="true">List</button><button type="button" data-mode="flow" aria-pressed="false">Flow</button></div>
       <span data-views="notes map"><details id="add-menu" class="menu">
         <summary class="btn">+ Add</summary>
@@ -33,19 +33,25 @@
           <button id="ingest-open" type="button">Add a source (web page, PDF, text)</button>
         </div>
       </details></span>
-      <button type="button" class="btn primary" id="ck-new" data-views="inbox chats" aria-label="New chat">+<span class="wide-only">&nbsp;New chat</span></button>
+      <button type="button" class="btn primary" id="ck-new" data-views="chats" aria-label="New chat">+<span class="wide-only">&nbsp;New chat</span></button>
       <button type="button" class="btn icon phone-only" id="head-search" aria-label="Search" title="Search"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg></button>
     </div>
   </header>
 
   <main id="content">
     <section id="cockpit" class="view ck" aria-label="Agents" hidden>
-      <div class="ck-board" id="ck-board" aria-label="Attention board"></div>
       <div class="ck-chats" id="ck-chats">
         <div class="ck-side" id="ck-side">
-          <input id="ck-filter" type="search" placeholder="Filter chats…" autocomplete="off" aria-label="Filter chats">
-          <div class="seg" id="ck-only" role="group" aria-label="Show" data-only=""><button type="button" data-only="" aria-pressed="true">All<span class="n"></span></button><button type="button" data-only="needs" aria-pressed="false">Needs you<span class="n"></span></button><button type="button" data-only="running" aria-pressed="false">Running<span class="n"></span></button><button type="button" data-only="closed" aria-pressed="false">Closed<span class="n"></span></button></div>
-          <ol id="ck-history" class="ck-history" aria-label="Chats"></ol>
+          <p class="ck-lede">What needs you, what runs, and your chats</p>
+          <div class="ck-list" id="ck-list"></div>
+          <section class="ck-sec ck-sec-earlier" aria-labelledby="ck-earlier-h">
+            <h2 class="ck-sec-head" id="ck-earlier-h"><span>Earlier</span><span class="ck-count" id="ck-earlier-n"></span></h2>
+            <div class="ck-earlier-tools">
+              <input id="ck-filter" type="search" placeholder="Filter chats…" autocomplete="off" aria-label="Filter earlier chats">
+              <button type="button" class="btn small quiet" id="ck-closed" aria-pressed="false" title="Show the chats you closed instead">Closed</button>
+            </div>
+            <ol id="ck-history" class="ck-history" aria-label="Earlier chats"></ol>
+          </section>
         </div>
         <div class="ck-resize" id="ck-resize" role="separator" aria-orientation="vertical" aria-label="Width of the chat list" tabindex="0" title="Drag to widen or narrow the list (double-click: back to 300 px)"></div>
         <div class="ck-canvas" id="ck-canvas"></div>

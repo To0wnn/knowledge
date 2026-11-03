@@ -851,7 +851,7 @@ $("q").addEventListener("keydown", (e) => { // Enter opens the first result
   if (e.key === "Enter") { e.preventDefault(); clearTimeout(searchTimer); runSearch().then(() => $("results").querySelector("button")?.click()); }
 });
 
-// Keys: Ctrl/Cmd+K the palette (/ the same, for notes only), [ folds the sidebar, A the Inbox, M map or notes, 1-9/0 the project; in a note E
+// Keys: Ctrl/Cmd+K the palette (/ the same, for notes only), [ folds the sidebar, A the Agents view, M map or notes, 1-9/0 the project; in a note E
 // edits and Esc closes it; in a chat Esc goes back.
 document.addEventListener("keydown", (e) => {
   const typing = /input|textarea|select/i.test(document.activeElement.tagName) || document.querySelector("dialog[open]");
@@ -860,7 +860,7 @@ document.addEventListener("keydown", (e) => {
   const kn = shellRoute.view === "notes" || shellRoute.view === "map", at = current ? `/${encPath(current.path)}` : "";
   if (e.key === "[") toggleRail();
   else if (e.key === "/") { e.preventDefault(); openPalette(true); }
-  else if (e.key.toLowerCase() === "a") go("#/inbox");
+  else if (e.key.toLowerCase() === "a") go("#/chats");
   else if (/^[1-9]$/.test(e.key) && PROJECTS[Number(e.key) - 1]) switchProject(PROJECTS[Number(e.key) - 1]);
   else if (e.key === "0") switchProject(ALL);
   else if (e.key.toLowerCase() === "m") go(mapOn ? `#/notes${at}` : `#/map${at}`);
@@ -1346,11 +1346,11 @@ $("ingest-form").addEventListener("submit", async (e) => {
   } catch (err) { out.className = "error"; out.textContent = err.message; }
 });
 
-// ---------------------------------------------------------------- Agents: Inbox (the attention board) and Chats
+// ---------------------------------------------------------------- Agents: what needs you, what runs, and your chats
 // Chats with agents on your pcs: one card per chat (pc, agent, folder), the answer streaming in. The server only
 // relays: the pc's companion pulls each message and runs one turn of the agent (plugin/hooks/chat.py). Everything is
-// text (textContent): nothing an agent prints becomes markup. Inbox and Chats are routes (shell.js): #/chats/<chat id>
-// is one chat (its card is keyed by pc and chat id).
+// text (textContent): nothing an agent prints becomes markup. The view is #/chats (shell.js; #/inbox is the same):
+// #/chats/<chat id> is one chat (its card is keyed by pc and chat id).
 const AGENT_MARK = { claude: "C", codex: "X", agy: "A" };
 const ck = { cards: new Map(), machines: [], chats: [], board: [], view: "", timer: 0, summaryAt: 0, doneOpen: false, focus: "", hit: "", boardAt: 0, filter: "", waits: new Map() };
 const ckKey = (c) => `${c.machine}/${c.id}`;
@@ -1371,7 +1371,7 @@ async function ckTick() {
     if (Date.now() - ck.summaryAt > (ck.view ? 10000 : 5000)) await ckSummary();
     live = [ck.cards.get(ck.view), ...bdLive()].filter(Boolean);
     await Promise.all(live.map(ckPoll));
-  } catch (e) { $("ck-board").title = e.message; }
+  } catch (e) { $("ck-list").title = e.message; }
   clearTimeout(ck.timer);
   ck.timer = setTimeout(ckTick, live.some((c) => ckBusy(c.meta.status)) ? 1500 : 4000);
 }
@@ -1423,46 +1423,88 @@ async function ckSummary() {
       if (shellRoute.view === "chats" && shellRoute.arg) { history.replaceState(history.state, "", "#/chats"); shellRoute = { ...shellRoute, arg: "" }; lastRoute.chats = "#/chats"; }
     }
   }
-  ckHistory(); ckBoard(); ckLayout();
+  ckList(); ckLayout();
 }
-// The Chats view's list: the chats waiting on you first, then the running ones, then the newest; a dot and a word
-// say which (not colour alone). The filter matches title, pc, agent and folder; the buttons narrow to one state.
+// The Agents view's list, grouped by what you have to do: Needs you (each card says why), Review (branches to merge,
+// finished workers), Working, Done today (folded to one line), then the earlier chats (the filter and Closed narrow
+// those). A dot and a word say a chat's state (not colour alone). Every card has its actions right there.
 const CK_STATE = { needs: "needs you", running: "running", idle: "idle", closed: "closed" };
+const CK_SECS = [["needs", "Needs you"], ["review", "Review"], ["running", "Working"], ["done", "Done today"]];
+const ckSec = (i) => (i.kind === "review" || (i.kind === "worker" && i.col === "done" && i.status === "finished") ? "review" : i.col);
 function ckState(c) { // an approval waiting in a running turn needs you too
   const needs = (ck.board || []).some((i) => i.col === "needs" && i.machine === c.machine && (i.kind === "chat" ? i.id : i.kind === "ask" ? i.chat : "") === c.id);
   return needs ? "needs" : ckBusy(c.status) ? "running" : c.closed ? "closed" : "idle";
 }
-function ckHistory() {
-  const box = $("ck-history"), words = ck.filter.toLowerCase().split(/\s+/).filter(Boolean), only = $("ck-only").dataset.only || "";
-  const rank = { needs: 0, running: 1, idle: 2, closed: 3 };
-  const rows = ck.chats.filter(ckScope).map((c) => [c, ckState(c)])
-    .filter(([c, st]) => (only ? st === only : st !== "closed") /* a closed chat only under Closed */ && words.every((w) => [c.title, c.label, c.folder, AGENT_NAME[c.agent] || c.agent].join(" ").toLowerCase().includes(w)))
-    .sort((a, b) => rank[a[1]] - rank[b[1]] || (b[0].updated || 0) - (a[0].updated || 0));
+function ckSubRows(c) { // a chat's subagents, each a chat of its own, under it
+  return (c?.sub_list || []).slice().reverse().map((s) => {
+    const sl = el("li", "ck-subrow"), sb = el("button", `ck-chat ck-subchat ${s.status === "running" ? "running" : "idle"}`); sb.type = "button";
+    sb.dataset.row = `sub:${ckKey(c)}~${s.id}`;
+    sb.append(el("span", "ck-dot", ""), el("span", "ck-chat-title", `↳ ${s.label}`), el("small", null, `subagent · ${s.status}`));
+    if (ck.view === `${ckKey(c)}~${s.id}`) sb.setAttribute("aria-current", "true");
+    sb.onclick = () => go(`#/chats/${encodeURIComponent(c.id)}/sub/${encodeURIComponent(s.id)}`);
+    sl.append(sb); return sl;
+  });
+}
+function ckList() {
+  const box = $("ck-list"), hist = $("ck-history"), side = $("ck-side");
+  // a half-typed reply or reason, or an open menu, outlives the refresh: the list waits until it is sent or closed
+  if (side.querySelector(".ck-reply, .ck-reject, .ck-snooze[open]")) return;
+  const had = side.contains(document.activeElement) && document.activeElement.dataset.row;
+  const items = (ck.board || []).filter((i) => i.col !== "open" && ckScope(i) && !(i.kind === "chat" && i.col === "done")); // a read chat is an earlier chat
   box.replaceChildren();
-  for (const [c, st] of rows.slice(0, 60)) {
-    const li = el("li"), b = el("button", `ck-chat ${st}`); b.type = "button";
-    b.append(el("span", "ck-dot", ""), el("span", "ck-chat-title", c.title || "(no message yet)"),
-      el("small", null, `${CK_STATE[st]} · ${AGENT_NAME[c.agent] || c.agent} · ${c.label} · ${ckShort(c.folder)} · ${ago(c.updated)}`));
+  const elsewhere = (ck.board || []).filter((i) => i.col === "needs" && !ckScope(i)).length; // a project filter never hides what needs you without saying so
+  if (elsewhere) {
+    const b = el("button", "btn small ck-elsewhere", `${elsewhere} more need${elsewhere > 1 ? "" : "s"} you in other projects: show all`);
+    b.type = "button"; b.onclick = () => switchProject(ALL); box.append(b); // the one picker: the sidebar shows All too
+  }
+  for (const [id, name] of CK_SECS) {
+    const list = items.filter((i) => ckSec(i) === id);
+    if (!list.length && id !== "needs") continue;
+    const sec = el("section", `ck-sec ck-sec-${id}${list.length ? " has-items" : ""}`), head = el("h2", "ck-sec-head");
+    sec.setAttribute("aria-label", `${name}: ${list.length}`);
+    if (id === "done") { // one line ("9 done today") that unfolds
+      const fold = el("button", "ck-done-toggle", `${list.length} done today`); fold.type = "button"; fold.dataset.row = "done";
+      fold.setAttribute("aria-expanded", String(ck.doneOpen));
+      fold.onclick = () => { ck.doneOpen = !ck.doneOpen; ckList(); $("ck-list").querySelector(".ck-done-toggle")?.focus(); };
+      head.append(fold);
+    } else head.append(el("span", null, name), el("span", "ck-count", String(list.length)));
+    sec.append(head);
+    if (!list.length) sec.append(el("p", "ck-none", "Nothing waits for you."));
+    if (id !== "done" || ck.doneOpen) sec.append(...ckBunches(list));
+    box.append(sec);
+  }
+  const inList = new Set(items.filter((i) => i.kind === "chat").map((i) => `${i.machine}/${i.id}`));
+  const words = ck.filter.toLowerCase().split(/\s+/).filter(Boolean), closed = $("ck-closed").getAttribute("aria-pressed") === "true";
+  const rows = ck.chats.filter((c) => ckScope(c) && !inList.has(ckKey(c)) && !!c.closed === closed
+      && words.every((w) => [c.title, c.label, c.folder, AGENT_NAME[c.agent] || c.agent].join(" ").toLowerCase().includes(w)))
+    .sort((a, b) => (b.updated || 0) - (a.updated || 0));
+  hist.replaceChildren();
+  for (const c of rows.slice(0, 60)) {
+    const st = ckState(c), li = el("li"), b = el("button", `ck-chat ${st}`), out = (ck.board || []).find((i) => i.kind === "chat" && ckKey(i) === ckKey(c))?.outcome;
+    const meta = `${CK_STATE[st]} · ${AGENT_NAME[c.agent] || c.agent} · ${c.label} · ${ckShort(c.folder)} · ${ago(c.updated)}`;
+    b.type = "button"; b.dataset.row = `chat:${ckKey(c)}`;
+    b.append(el("span", "ck-dot", ""), el("span", "ck-chat-title", c.title || "(no message yet)"), el("small", null, out || meta));
+    if (out) b.title = meta;
     if (ckKey(c) === ck.view) b.setAttribute("aria-current", "true");
     b.onclick = () => ckShow(c);
-    li.append(b); box.append(li);
-    for (const s of (c.sub_list || []).slice().reverse()) { // its subagents, each a chat of its own, under it
-      const sl = el("li", "ck-subrow"), sb = el("button", `ck-chat ck-subchat ${s.status === "running" ? "running" : "idle"}`); sb.type = "button";
-      sb.append(el("span", "ck-dot", ""), el("span", "ck-chat-title", `↳ ${s.label}`), el("small", null, `subagent · ${s.status}`));
-      if (ck.view === `${ckKey(c)}~${s.id}`) sb.setAttribute("aria-current", "true");
-      sb.onclick = () => go(`#/chats/${encodeURIComponent(c.id)}/sub/${encodeURIComponent(s.id)}`);
-      sl.append(sb); box.append(sl);
-    }
+    li.append(b); hist.append(li, ...ckSubRows(c));
   }
-  if (!box.childNodes.length) box.append(el("li", "muted ck-none", !ck.chats.length ? "No chats yet." : words.length || only ? "No chat matches." : "No chats in this project."));
-  for (const x of $("ck-only").querySelectorAll("button")) {
-    const n = x.dataset.only ? ck.chats.filter((c) => ckScope(c) && ckState(c) === x.dataset.only).length : 0;
-    x.setAttribute("aria-pressed", String(x.dataset.only === only)); x.lastChild.textContent = n ? ` ${n}` : "";
-  }
+  $("ck-earlier-n").textContent = rows.length;
+  if (!hist.childNodes.length) hist.append(el("li", "muted ck-none", !ck.chats.length ? "No chats yet." : words.length ? "No chat matches." : closed ? "No closed chats." : "No earlier chats here."));
+  if (had) side.querySelector(`[data-row="${CSS.escape(had)}"]`)?.focus({ preventScroll: true }); // the refresh keeps your place
+  const n = items.filter((i) => i.col === "needs").length, asks = items.filter((i) => i.kind === "ask").length;
+  const said = (n ? `${n} item${n > 1 ? "s" : ""} need${n > 1 ? "" : "s"} you` : "Nothing needs you") + (asks ? `, ${asks} approval${asks > 1 ? "s" : ""} waiting` : "");
+  if ($("ck-needs-live").textContent !== said) $("ck-needs-live").textContent = said;
+  ckFocus();
 }
 let ckFilterTimer;
-$("ck-filter").oninput = () => { clearTimeout(ckFilterTimer); ckFilterTimer = setTimeout(() => { ck.filter = $("ck-filter").value; ckHistory(); }, 120); };
-for (const x of $("ck-only").querySelectorAll("button")) x.onclick = () => { $("ck-only").dataset.only = x.dataset.only; ckHistory(); };
+$("ck-filter").oninput = () => { clearTimeout(ckFilterTimer); ckFilterTimer = setTimeout(() => { ck.filter = $("ck-filter").value; ckList(); }, 120); };
+$("ck-closed").onclick = () => { $("ck-closed").setAttribute("aria-pressed", String($("ck-closed").getAttribute("aria-pressed") !== "true")); ckList(); };
+$("ck-side").addEventListener("keydown", (e) => { // up and down go through the rows; Enter opens one (it is a button)
+  if ((e.key !== "ArrowDown" && e.key !== "ArrowUp") || !e.target.dataset.row) return;
+  const rows = [...$("ck-side").querySelectorAll("[data-row]")].filter((r) => r.offsetParent), at = rows.indexOf(e.target);
+  e.preventDefault(); rows[Math.max(0, Math.min(rows.length - 1, at + (e.key === "ArrowDown" ? 1 : -1)))]?.focus();
+});
 // Open one chat (its route), or go back from it when `meta` is empty.
 function ckShow(meta) {
   if (!meta) return goBack("#/chats");
@@ -1486,17 +1528,15 @@ function ckScrollBottom(card, force = false) {
 const ckPick = el("p", "ck-none ck-pick");
 function ckLayout() {
   const card = ck.cards.get(ck.view), show = card ? card.root : ckPick;
-  ckPick.textContent = ck.chats.length ? "Pick a chat on the left, or start a new one." : "No chats yet: start one with + New chat.";
+  ckPick.textContent = ck.chats.length ? "Pick a chat on the left, or start a new one." : ck.machines.some((m) => m.online && m.companion)
+    ? "No chats yet: start one with + New chat, with Claude Code, Codex or agy in a folder linked to a project on one of your pcs."
+    : "None of your pcs is online with a companion right now. Chats run on a pc through its knowledge companion (plugin 0.16 or newer).";
   if ($("ck-canvas").firstChild !== show || $("ck-canvas").childNodes.length !== 1) $("ck-canvas").replaceChildren(show);
   document.body.classList.toggle("in-chat", !!card && !$("cockpit").hidden && $("cockpit").dataset.mode === "chats");
   if (card) ckScrollBottom(card, card.savedScrollTop == null);
   bdShow(); // the board (mission.js) instead of the list, on #/chats?view=board
 }
 
-// The attention board: what needs you first (a reply nobody read, a refused tool call, a failed worker, a task to
-// approve, a result for you), then what runs and what finished in the last 24 h; grouped per project. Open task lines
-// live under Tasks (one place for them). A phone shows the columns one under the other in that order.
-const CK_COLS = [["needs", "Needs you"], ["running", "Running"], ["done", "Done (24 h)"]];
 // Items that say the same thing (eleven tasks waiting for the same missing pc) fold into one group with a count.
 const ckSame = (i) => (i.kind === "ask" || i.kind === "chat" ? "" : `${i.kind}|${i.col}|${i.kind === "worker" ? `${i.status}|${i.why || (i.offline_since ? "offline" : "")}` : i.line}`);
 function ckBunches(list) {
@@ -1512,51 +1552,8 @@ function ckBunches(list) {
     return d;
   });
 }
-function ckBoard() {
-  const items = (ck.board || []).filter((i) => i.col !== "open" && ckScope(i)), box = $("ck-board");
-  if (!items.length && !ck.chats.length) {
-    const empty = el("div", "ck-empty");
-    empty.append(el("h2", null, "Your agents, from anywhere"),
-      el("p", null, ck.machines.some((m) => m.online && m.companion) ? "Start a chat with Claude Code, Codex or agy on one of your pcs, in a folder linked to a project there."
-        : "None of your pcs is online with a companion right now. Chats run on a pc through its knowledge companion (plugin 0.16 or newer)."));
-    const b = el("button", "btn primary", "+ New chat"); b.type = "button"; b.onclick = () => ckNewChat(); empty.append(b);
-    box.replaceChildren(empty);
-  } else box.replaceChildren(...CK_COLS.map(([id, name]) => {
-    const list = items.filter((i) => i.col === id), col = el("section", `ck-col ck-col-${id}${list.length ? " has-items" : ""}`), head = el("h2", "ck-col-head");
-    col.setAttribute("aria-label", `${name}: ${list.length}`);
-    head.append(el("span", null, name), el("span", "ck-count", String(list.length)));
-    col.append(head);
-    if (id === "done") { // a phone folds it to one line ("9 done") that unfolds; a desktop hides this button
-      const fold = el("button", "ck-done-toggle", `${list.length} done${ck.doneOpen ? " · hide" : ""}`); fold.type = "button";
-      fold.setAttribute("aria-expanded", String(ck.doneOpen));
-      fold.onclick = () => { ck.doneOpen = !ck.doneOpen; ckBoard(); box.querySelector(".ck-done-toggle")?.focus(); };
-      col.classList.toggle("open", ck.doneOpen); col.append(fold);
-    }
-    if (!list.length) col.append(el("p", "ck-none", id === "needs" ? "Nothing waits for you." : "Nothing here."));
-    for (const p of [...new Set(list.map((i) => i.project || ""))]) {
-      const group = el("div", "ck-group");
-      group.append(el("h3", null, p ? shown(p) : "no project"), ...ckBunches(list.filter((i) => (i.project || "") === p)));
-      col.append(group);
-    }
-    return col;
-  }));
-  if (items.length || ck.chats.length) {
-    const more = el("p", "ck-foot muted", "Open task lines live under "), a = el("a", null, "Tasks"); a.href = "#/tasks";
-    more.append(a, "; the board shows only what needs you, runs or just finished."); box.append(more);
-  }
-  // A project filter never hides what needs you without saying so.
-  const elsewhere = (ck.board || []).filter((i) => i.col === "needs" && !ckScope(i)).length;
-  if (elsewhere) {
-    const b = el("button", "btn small ck-elsewhere", `${elsewhere} more need${elsewhere > 1 ? "" : "s"} you in other projects: show all`);
-    b.type = "button"; b.onclick = () => switchProject(ALL); box.prepend(b); // the one picker: the sidebar shows All too
-  }
-  const n = items.filter((i) => i.col === "needs").length, asks = items.filter((i) => i.kind === "ask").length;
-  const said = (n ? `${n} item${n > 1 ? "s" : ""} need${n > 1 ? "" : "s"} you` : "Nothing needs you") + (asks ? `, ${asks} approval${asks > 1 ? "s" : ""} waiting` : "");
-  if ($("ck-needs-live").textContent !== said) $("ck-needs-live").textContent = said;
-  ckFocus();
-}
-// #/inbox/<key> (the Matrix links): once the board is in, scroll to that item and mark it; a chat's item opens its
-// chat. An unknown key leaves the plain inbox. ck.hit keeps the mark across the board's refreshes.
+// #/inbox/<key> (the Matrix links, an alias of #/chats): once the board is in, scroll to that item and mark it; a
+// chat's item opens its chat. An unknown key leaves the plain list. ck.hit keeps the mark across the refreshes.
 function ckFocus() {
   const key = ck.focus;
   if (!key || !ck.boardAt || ck.boardAt < (ck.focusAt || 0)) return; // a board older than the link: wait for the fresh one
@@ -1564,55 +1561,60 @@ function ckFocus() {
   const i = (ck.board || []).find((x) => x.key === key);
   if (i && (i.kind === "chat" || i.kind === "ask")) return go(`#/chats/${encodeURIComponent(i.kind === "ask" ? i.chat : i.id)}`, true);
   if (i && i.col === "open") { history.replaceState(history.state, "", "#/tasks"); return applyRoute(); } // Tasks has open lines
-  if (!i) { // gone or dismissed: the plain inbox
-    history.replaceState(history.state, "", "#/inbox"); shellRoute = { ...shellRoute, arg: "" }; ck.hit = "";
-    for (const c of $("ck-board").querySelectorAll(".ck-item.hit")) c.classList.remove("hit");
+  if (!i) { // gone or dismissed: the plain list
+    ck.hit = "";
+    for (const c of $("ck-list").querySelectorAll(".ck-item.hit")) c.classList.remove("hit");
     return;
   }
   ck.hit = key;
   if (!ckScope(i)) { ck.focus = key; return switchProject(ALL); } // filtered away: show all (the sidebar too), then find it
-  if (i.col === "done" && !ck.doneOpen) { ck.doneOpen = true; ck.focus = key; return ckBoard(); }
-  const card = [...$("ck-board").querySelectorAll(".ck-item")].find((c) => c.dataset.key === key);
+  if (ckSec(i) === "done" && !ck.doneOpen) { ck.doneOpen = true; ck.focus = key; return ckList(); }
+  const card = [...$("ck-list").querySelectorAll(".ck-item")].find((c) => c.dataset.key === key);
   if (!card) return;
   card.closest("details")?.setAttribute("open", "");
-  for (const c of $("ck-board").querySelectorAll(".ck-item.hit")) c.classList.remove("hit");
+  for (const c of $("ck-list").querySelectorAll(".ck-item.hit")) c.classList.remove("hit");
   card.classList.add("hit");
   card.scrollIntoView({ block: "center", behavior: calm ? "auto" : "smooth" });
   card.querySelector(".ck-item-main").focus({ preventScroll: true });
 }
 async function ckDo(path, body) {
   try { await api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); }
-  catch (e) { toast(e.message); }
-  ck.summaryAt = 0; ckTick();
+  catch (e) { toast(e.message); return false; }
+  finally { ck.summaryAt = 0; ckTick(); }
+  return true;
 }
 function ckItem(i) {
   const card = el("article", `ck-item ${i.col}${i.key && i.key === ck.hit ? " hit" : ""}${i.result ? " result" : ""}`), main = el("button", "ck-item-main"), top = el("span", "ck-item-top");
-  main.type = "button"; card.dataset.key = i.key || "";
+  main.type = "button"; card.dataset.key = main.dataset.row = i.key || "";
+  const chat = i.kind === "chat" || i.kind === "ask" ? ck.chats.find((c) => ckKey(c) === `${i.machine}/${i.kind === "ask" ? i.chat : i.id}`) : null;
+  if (i.kind === "chat" && chat && ckKey(chat) === ck.view) main.setAttribute("aria-current", "true");
   top.append(el("span", "ck-mark", AGENT_MARK[i.agent] || (i.owner || "?")[0].toUpperCase()), el("strong", null, i.kind === "ask" ? ckUnbidi(i.title) : i.title));
   if (i.overdue) top.append(el("span", "chip bad", "overdue"));
   if (i.subs) { const s = el("span", "chip live", `${i.subs} subagent${i.subs > 1 ? "s" : ""}`); s.title = "Subagents of this chat running now"; top.append(s); }
-  const where = [i.kind === "review" ? `review · ${AGENT_NAME[i.agent] || i.agent}` : i.kind === "worker" ? "worker" : i.kind === "task" ? (i.result ? "result" : `task for ${i.owner}`) : i.kind === "ask" ? "approval" : "", i.label, ckShort(i.folder),
-    i.due && !i.result ? `due ${i.due}` : "", i.at ? ago(i.at) : ""];
-  main.append(top, el("span", "ck-item-where", where.filter(Boolean).join(" · ")), el("span", "ck-item-line", i.line));
+  // a chat's second line is the agent's last sentence when there is one; why it needs you moves up to the first
+  const why = i.kind === "chat" && i.outcome && i.col === "needs" ? (i.line.startsWith("replied: ") ? "answered, not read" : i.line) : "";
+  const where = [why, i.kind === "review" ? `review · ${AGENT_NAME[i.agent] || i.agent}` : i.kind === "worker" ? "worker" : i.kind === "task" ? (i.result ? "result" : `task for ${i.owner}`) : i.kind === "ask" ? "approval" : "", i.label, ckShort(i.folder),
+    agentProject ? "" : shown(i.project || ""), i.due && !i.result ? `due ${i.due}` : "", i.at ? ago(i.at) : ""];
+  main.append(top, el("span", "ck-item-where", where.filter(Boolean).join(" · ")), el("span", "ck-item-line", (i.kind === "chat" && i.outcome) || i.line));
   if (i.kind === "worker" && i.why && !i.line.includes(i.why)) main.append(el("span", "ck-item-why", i.why)); // the line says why and "pc offline since"
   if (i.progress) main.append(workerProgress(i.progress));
   if (i.kind === "review") main.append(ckReview(i));
   card.append(main);
   main.title = i.kind === "chat" || i.kind === "ask" ? "Open this chat" : i.kind === "task" || i.kind === "review" ? "Open its line in the memo" : "How to look at this worker";
   main.onclick = () => {
-    if (i.kind === "chat") return ckShow(ck.chats.find((c) => ckKey(c) === `${i.machine}/${i.id}`) || i);
-    if (i.kind === "ask") return ckShow(ck.chats.find((c) => ckKey(c) === `${i.machine}/${i.chat}`));
+    if (i.kind === "chat") return ckShow(chat || i);
+    if (i.kind === "ask") return ckShow(chat);
     if (i.kind === "task") { return openNote(i.path, { find: [i.id.toLowerCase()] }); }
     if (i.kind === "review") return openNote(i.path, { find: [`${i.task.toLowerCase()}-done`] });
     const more = card.querySelector(".ck-item-open");
     if (more) more.remove(); else card.append(el("p", "ck-item-open", i.open || "No details yet."));
   };
-  const acts = el("div", "ck-item-acts"), act = (text, title, fn) => { const b = el("button", "btn small", text); b.type = "button"; b.title = title; b.onclick = fn; acts.append(b); };
+  const acts = el("div", "ck-item-acts"), act = (text, title, fn) => { const b = el("button", "btn small quiet", text); b.type = "button"; b.title = title; b.onclick = fn; acts.append(b); };
   if (i.git) acts.append(ckGitPill(i));
   if (i.approve) act("Approve", "Let this task start", () => ckDo("/ui/api/task/approve", { project: i.project, id: i.id }));
   if (i.kind === "ask") { // the board shows a short title: Allow only when that title is the whole request
     for (const [d, text, title] of ckAskButtons(i).filter(([d]) => i.full !== false || d === "deny")) act(text, title, () => ckDo("/ui/api/chat/approve", { machine: i.machine, id: i.chat, ask: i.id, decision: d }));
-    if (i.full === false) act("Open chat", "The request is longer than the board shows: read it whole in its chat", () => main.click());
+    if (i.full === false) act("Open chat", "The request is longer than the list shows: read it whole in its chat", () => main.click());
   }
   for (const h of i.hosts || []) act(`Start on ${h.label}`, "Start a worker for this task there now",
     () => ckDo("/ui/api/machines/action", { machine: h.machine, action: "start_worker", args: { project: i.project, id: i.id } }));
@@ -1624,15 +1626,52 @@ function ckItem(i) {
   if (i.kind === "review") {
     act("View diff", `The changes on ${i.branch}, read on ${i.label}`, () => ckDiff(i));
     if (i.can_merge) act("Merge", `git merge --no-ff ${i.branch} into ${i.into} on ${i.label}`, () => ckMerge(i));
-    act("Reject", "Keep the branch, take the card off the board; optionally send it back to the agent", () => ckReject(card, i));
+    act("Reject", "Keep the branch, take the card off the list; optionally send it back to the agent", () => ckReject(card, i));
   }
   if (i.result) act("Open memo", "Read the whole line in its memo; remove it there (or under Tasks) once read", () => main.click());
-  if (i.kind === "chat" && i.col !== "running") act("Close", "Close this chat: off the board and the chat list (under Closed); a new message opens it again",
+  if (i.kind === "chat" && i.col !== "running") act("Close", "Close this chat: off the list (under Earlier, Closed); a new message opens it again",
     () => ckDo("/ui/api/chat/close", { machine: i.machine, id: i.id, closed: true }));
-  if (i.col === "needs" && !i.approve && i.kind !== "ask" && i.kind !== "review" && i.kind !== "chat") act("Dismiss", "Take it off the board until it changes again", () => ckDo("/ui/api/board/dismiss", { key: i.key, sig: i.sig }));
+  if (i.kind === "chat" && i.col === "needs") act("Reply", "Answer in one line without opening the chat (Enter sends, Esc closes)", () => ckReply(card, i));
+  if (ckSec(i) === "needs" && i.kind !== "ask") { // an approval is answered, not put off: its turn waits on it
+    acts.append(ckSnooze(i));
+    act("Dismiss", "Take it off the list until it changes again", () => ckDo("/ui/api/board/dismiss", { key: i.key, sig: i.sig }));
+  }
   if (i.kind === "chat" && i.col === "running") act("Stop", "Stop this turn", () => ckDo("/ui/api/chat/stop", { machine: i.machine, id: i.id }));
   if (acts.childNodes.length) card.append(acts);
+  if (i.kind === "chat" && chat?.sub_list?.length) { const subs = el("ol", "ck-history ck-subs"); subs.append(...ckSubRows(chat)); card.append(subs); }
   return card;
+}
+// Off the list for a while: it comes back at `until` (Unix seconds), or sooner when it changes.
+function ckSnooze(i) {
+  const menu = el("details", "menu ck-snooze"), sum = el("summary", "btn small quiet", "Snooze"), list = el("div", "menu-list");
+  sum.title = "Take it off the list for a while";
+  const tomorrow = () => { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(8, 0, 0, 0); return d.getTime() / 1000; };
+  for (const [text, until] of [["1 hour", () => Date.now() / 1000 + 3600], ["Until tomorrow 08:00", tomorrow]]) {
+    const b = el("button", null, text); b.type = "button";
+    b.onclick = () => { menu.open = false; ckDo("/ui/api/board/dismiss", { key: i.key, sig: i.sig, until: Math.round(until()) }); };
+    list.append(b);
+  }
+  menu.onkeydown = (e) => { if (e.key === "Escape") { e.stopPropagation(); menu.open = false; sum.focus(); } };
+  menu.append(sum, list);
+  return menu;
+}
+// One line to a chat's agent from the list: Enter sends it as the chat's next message, Esc closes without sending.
+function ckReply(card, i) {
+  const old = card.querySelector(".ck-reply");
+  if (old) { old.remove(); return ckList(); }
+  const form = el("form", "ck-reply"), input = el("input", "small");
+  input.placeholder = "Reply…"; input.maxLength = 20000; input.setAttribute("aria-label", `Reply to ${i.title}`);
+  const shut = () => { form.remove(); card.querySelector(".ck-item-main")?.focus(); ckList(); };
+  input.onkeydown = (e) => { if (e.key === "Escape" && !e.isComposing) { e.preventDefault(); e.stopPropagation(); shut(); } };
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const text = input.value.trim();
+    if (!text || input.disabled) return;
+    input.disabled = true;
+    if (await ckDo("/ui/api/chat/send", { machine: i.machine, id: i.id, text })) { toast(`Sent to ${i.title}`, false); form.remove(); }
+    else { input.disabled = false; input.focus(); } // refused (the pc offline): the text stays
+  };
+  form.append(input); card.append(form); input.focus();
 }
 
 // A finished worker's branch, for review: what the pc counted, what the worker said it did, left and tested. The
@@ -1673,6 +1712,7 @@ function ckReject(card, i) {
       await api("/ui/api/review/reject", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: i.key, reason: reason.value, send_back: back.checked }) });
       toast(back.checked ? `Sent ${i.task} back to ${AGENT_NAME[i.agent] || i.agent}` : `Review of ${i.task} rejected; the branch stays`, false);
     } catch (err) { toast(err.message); go.disabled = false; return; }
+    form.remove(); // the list waits while a reason is being typed
     ck.summaryAt = 0; ckTick();
   };
   card.append(form); reason.focus();
@@ -1715,7 +1755,7 @@ function ckCard(meta) {
   if (ck.cards.has(k)) return ck.cards.get(k);
   const root = el("article", "ck-card"), head = el("header", "ck-head"), title = el("div", "ck-title");
   const name = el("strong"), where = el("span"), state = el("span", "ck-state"), x = el("button", "btn icon small quiet ck-x", "×");
-  x.type = "button"; x.title = "Back to the board (the chat stays under Earlier chats)"; x.setAttribute("aria-label", "Back to the board");
+  x.type = "button"; x.title = "Back to the list (the chat stays under Earlier)"; x.setAttribute("aria-label", "Back to the list");
   title.append(name, where);
   const git = el("span", "ck-git-slot"), open = el("button", "btn icon small quiet ck-x bd-only", "↗"); // on the board: the full chat
   open.type = "button"; open.title = "Open the full chat"; open.setAttribute("aria-label", "Open the full chat");
@@ -2028,8 +2068,8 @@ function ckPicker(card) {
   menu.append(sum, panel);
   card.picks.replaceChildren(menu, ...(draft ? [ckDraftFolder(card)] : []));
 }
-document.addEventListener("click", (e) => { // a click outside closes the model panel
-  for (const d of document.querySelectorAll("details.ck-model[open]")) if (!d.contains(e.target)) d.open = false;
+document.addEventListener("click", (e) => { // a click outside closes the model panel and the Snooze menu
+  for (const d of document.querySelectorAll("details.ck-model[open], details.ck-snooze[open]")) if (!d.contains(e.target)) d.open = false;
 });
 
 // A new chat is a draft in the chat pane (#/chats/new): an empty box with the model chip and the folder; the chat is
@@ -2118,7 +2158,7 @@ function ckPaint(card) {
   card.tok.textContent = [m.ctx && `${ckNum(m.ctx)} context`, m.used && `${ckNum(m.used)} used`].filter(Boolean).join(" · ");
   card.tok.title = "Context: what the agent sent for its last step. Used: every token of this chat so far, cache reads included.";
   card.close.hidden = busy; card.close.textContent = m.closed ? "Open again" : "Close";
-  card.close.title = m.closed ? "Back on the board and in the list" : "Off the board and the chat list (under Closed); a new message opens it again";
+  card.close.title = m.closed ? "Back in the list" : "Off the list (under Earlier, Closed); a new message opens it again";
   card.name.textContent = m.title || "New chat";
   card.branch.hidden = true;
   card.where.textContent = `${AGENT_NAME[m.agent] || m.agent} · ${m.label} · ${ckShort(m.folder)}${m.project ? ` (${m.project})` : ""}${m.worktree ? ` · branch chat/${m.id}` : ""}`;
@@ -2508,6 +2548,6 @@ loadMe().then(() => {
   connectLive();
   loadLint(false); loadTasks(false); loadRecent();
   if (!routedEarly) applyRoute();
-  if ($("cockpit").hidden) ckSummary().catch(() => {}); // the Inbox badge, on every view
+  if ($("cockpit").hidden) ckSummary().catch(() => {}); // the Needs-you badge, on every view
   probeCompanion();
 });

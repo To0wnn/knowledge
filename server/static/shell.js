@@ -1,6 +1,6 @@
 // App shell: the sidebar (desktop; [ folds it to an icon rail, below 1000 px it is the rail unless opened), the
-// bottom tab bar and More sheet (phone), one page header per view, and a hash route per view: #/inbox, #/inbox/<item key>, #/chats,
-// #/chats/<chat id>, #/chats/worker/<project>/<ID> (follow a worker), #/chats?view=board, #/tasks, #/tasks?view=flow, #/machines, #/notes, #/notes/<path>, #/notes?q=<search>, #/map, #/map/<path>,
+// bottom tab bar and More sheet (phone), one page header per view, and a hash route per view: #/chats (Agents),
+// #/inbox/<item key> (the same view, that item marked; #/inbox is an older name of #/chats), #/chats/<chat id>, #/chats/worker/<project>/<ID> (follow a worker), #/chats?view=board, #/tasks, #/tasks?view=flow, #/machines, #/notes, #/notes/<path>, #/notes?q=<search>, #/map, #/map/<path>,
 // #/changes, #/health, #/thispc. The URL is the only record of the view (refresh, back and forward work); an old
 // #<note path> link becomes #/notes/<path>. Paths in routes are encoded per part (encPath), decoded here. The views themselves are app.js's and mission.js's; this file shows one
 // at a time and asks it to load. The sidebar, More sheet and theme are nav.js's. Uses app.js globals ($, el, store, decode, pushHash, ck, Graph, mapOn, current, …).
@@ -8,12 +8,12 @@
 
 // view -> where it lives (element id), its section label and title
 const VIEWS = {
-  inbox: ["cockpit", "Agents", "Inbox"], chats: ["cockpit", "Agents", "Chats"], tasks: ["tab-tasks", "Agents", "Tasks"],
+  inbox: ["cockpit", "Agents", "Agents"], chats: ["cockpit", "Agents", "Agents"], tasks: ["tab-tasks", "Agents", "Tasks"],
   machines: ["tab-machines", "Agents", "Machines"], notes: ["kn", "Knowledge", "Notes"], map: ["kn", "Knowledge", "Map"],
   changes: ["tab-changes", "Knowledge", "Changes"], health: ["tab-lint", "Knowledge", "Health"], thispc: ["tab-thispc", "This pc", "This pc"],
   settings: ["tab-settings", "You", "Settings"],
 };
-const PHONE_TABS = ["inbox", "chats", "tasks", "notes"]; // the rest sit behind More
+const PHONE_TABS = ["chats", "tasks", "machines", "notes"]; // the rest sit behind More
 let shellRoute = { view: "", arg: "", q: new URLSearchParams() };
 
 // "#/notes/memory/x.md?a=b" -> {view: "notes", arg: "memory/x.md", q}; null for anything else.
@@ -23,7 +23,7 @@ function parseRoute(hash) {
 }
 const oldLink = (hash) => { const p = decode(hash.slice(1)); return p.includes("/") && !p.startsWith("/") ? p : ""; };
 // The view the URL asks for, before it is shown (app.js decides from it what to load first).
-const routeView = () => parseRoute(location.hash)?.view || (oldLink(location.hash) ? "notes" : "inbox");
+const routeView = () => parseRoute(location.hash)?.view || (oldLink(location.hash) ? "notes" : "chats");
 
 function go(hash, replace = false) {
   if (replace) history.replaceState(history.state, "", hash); else pushHash(hash);
@@ -50,7 +50,11 @@ function restoreScroll(hash) {
 }
 function applyRoute() {
   let r = parseRoute(location.hash);
-  if (!r) { history.replaceState(history.state, "", oldLink(location.hash) ? noteRoute(oldLink(location.hash)) : "#/inbox"); r = parseRoute(location.hash); }
+  if (!r) { history.replaceState(history.state, "", oldLink(location.hash) ? noteRoute(oldLink(location.hash)) : "#/chats"); r = parseRoute(location.hash); }
+  if (r.view === "inbox") { // the same view under its older name; a key marks that item once the board is in (ckFocus)
+    if (r.arg) { ck.focus = r.arg; ck.focusAt = Date.now(); } else ck.hit = "";
+    history.replaceState(history.state, "", "#/chats"); r = parseRoute(location.hash);
+  }
   if (r.arg !== "new") { lastRoute[r.view] = location.hash; try { sessionStorage.setItem("kn_routes", JSON.stringify(lastRoute)); } catch { /* blocked */ } }
   const [home] = VIEWS[r.view], changed = r.view !== shellRoute.view, first = !shellRoute.view;
   shellRoute = r;
@@ -62,7 +66,7 @@ function applyRoute() {
     window.scrollTo(0, 0); // a phone scrolls the page, not the view
     if (!$("page-head").contains(document.activeElement)) $("title").focus({ preventScroll: true }); // a screen reader hears the new page
   }
-  // Agents: Inbox and Chats share the cockpit; polling runs only while one of them shows.
+  // Agents: polling runs only while the cockpit shows.
   const agents = home === "cockpit";
   $("cockpit").dataset.mode = r.view;
   // a chat route carries the chat id; the card is keyed by pc and id (ckSummary resolves an id it does not know yet)
@@ -74,10 +78,10 @@ function applyRoute() {
     const d = ck.cards.get(ckKey(CK_DRAFT));
     ck.view = ckKey(d && !ck.draftFor ? d.meta : ckDraft(ck.draftFor || "").meta); ck.draftFor = "";
   }
-  else if (r.view === "chats") { const c = ck.chats.find((x) => x.id === r.arg || ckKey(x) === r.arg), hit = !c && ckFindWorker(r.arg); ck.view = c ? ckKey(c) : hit ? ckKey(ckWorkerCard(hit.m, hit.w).meta) : r.arg; } else if (r.view === "inbox") { ck.view = ""; ck.focus = r.arg; ck.focusAt = Date.now(); if (!r.arg) ck.hit = ""; }
+  else if (r.view === "chats") { const c = ck.chats.find((x) => x.id === r.arg || ckKey(x) === r.arg), hit = !c && ckFindWorker(r.arg); ck.view = c ? ckKey(c) : hit ? ckKey(ckWorkerCard(hit.m, hit.w).meta) : r.arg; }
   ckLayout();
   if (agents) {
-    if (r.view === "inbox") ckBoard(); else ckHistory();
+    ckList();
     const card = ck.cards.get(ck.view);
     if (card && !touch) card.input.focus({ preventScroll: true }); // a phone would pop its keyboard up
   }
@@ -134,15 +138,14 @@ function paintHead() {
   }
   if (PHONE_TABS.includes(r.view)) $("more-btn").removeAttribute("aria-current"); else $("more-btn").setAttribute("aria-current", "page");
 }
-$("back").onclick = () => (shellRoute.view === "chats" && ck.view ? ckShow(null) : goBack(shellRoute.view === "notes" ? "#/notes" : "#/inbox"));
+$("back").onclick = () => (shellRoute.view === "chats" && ck.view ? ckShow(null) : goBack(shellRoute.view === "notes" ? "#/notes" : "#/chats"));
 
-// The Agents views follow the one project picker (sidebar, More sheet; "" = all projects); the Inbox badge counts all.
+// The Agents views follow the one project picker (sidebar, More sheet; "" = all projects); the Needs-you badge counts all.
 function setAgentProject(p) {
   if (p === agentProject) return;
   agentProject = p;
   if (shellRoute.view !== "tasks") loadTasks(false).catch(() => {}); // its badge counts this project
-  if (shellRoute.view === "inbox") ckBoard();
-  else if (shellRoute.view === "chats") { ckHistory(); bdRender(); const d = ck.cards.get(ckKey(CK_DRAFT)); if (d) ckPoll(d); }
+  if (shellRoute.view === "chats") { ckList(); bdRender(); const d = ck.cards.get(ckKey(CK_DRAFT)); if (d) ckPoll(d); }
   else if (shellRoute.view === "tasks") {
     if ($("tab-tasks").classList.contains("flow")) { ms.project = p; ms.fitted = false; msLoad(); } else loadTasks(true);
   }
@@ -166,7 +169,7 @@ function needsNotify(items) {
   }
   notifySeen = new Set(needs.map(sig));
 }
-// Off the Agents views the Inbox badge and the live count still follow: a light refresh every 30 s (also out of view
+// Off the Agents views the Needs-you badge and the live count still follow: a light refresh every 30 s (also out of view
 // when notifications are on, which is when they matter).
 setInterval(() => { if ($("cockpit").hidden && (!document.hidden || notifyOn()) && me.user) ckSummary().catch(() => {}); }, 30000);
 

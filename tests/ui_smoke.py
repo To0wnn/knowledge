@@ -13,10 +13,10 @@ phone's tab bar and More sheet, no sideways scroll at 390 px, the map resizing w
 old checks instead. Tool approvals show on the board and in their chat with fake data (skipped without them).
 Knowledge pages and the palette (0.19): Notes as list and note (two panes; on a phone two pages with a Back arrow),
 Changes and Health as full pages, the search page, the command palette (search, jump, actions, keys, recent, roles),
-a toast instead of alert(); skipped on an older server. The agents pages: the board's groups and #/inbox/<key> links, the
-chat list's states and filter, Tasks' Cancel and counts, Machines full width, Changes' Deleted section (skipped on an
+a toast instead of alert(); skipped on an older server. The agents pages: the Agents list's groups and #/inbox/<key> links,
+the earlier chats' states, filter and Closed, Tasks' Cancel and counts, Machines full width, Changes' Deleted section (skipped on an
 older server). Admin and Help in the shell (0.20): sidebar, header, tab bar, settings labels, "Saved" and the server's
-message on a refusal (faked; skipped on an older server). Chats > Board (desktop): toggle and route, frames per
+message on a refusal (faked; skipped on an older server). Agents > Side by side (desktop): toggle and route, frames per
 project, Fit, folding, a dragged card kept across a reload, Tidy up; a phone keeps the list (skipped without it).
 The Review card with faked data: Merge asks first and queues the pc's action, Reject sends reason and send back
 (intercepted; skipped on an older server). Follow a worker: its transcript read only when it ended, the Steer composer
@@ -185,7 +185,7 @@ async def search(browser, secret: str) -> None:
     if await has_palette(pg):  # the search page; the palette has its own test
         await route(pg, f"#/notes?q={WORD}")
     elif await is_shell(pg):
-        await pg.keyboard.press("Control+k")  # from the Inbox: Ctrl+K opens the search in the Notes view
+        await pg.keyboard.press("Control+k")  # from the Agents view: Ctrl+K opens the search in the Notes view
         await pg.wait_for_timeout(300)
         check(await pg.evaluate("location.hash.startsWith('#/notes') && document.activeElement === $('q')"), "Ctrl+K opens the search")
     if not await has_palette(pg):
@@ -377,7 +377,11 @@ async def approvals(browser, devices, secret: str) -> None:
                       "machine": chat["machine"], "label": "smoke-pc", "online": True, "key": f"ask:{chat['machine']}/{chat['id']}/{a['id']}",
                       "sig": a["id"], "title": f"Bash: {a['detail']}", "folder": chat["folder"], "at": now, "line": "asks to run this (Run the tests)",
                       "expires": a["expires"], "once_only": a["once_only"], "full": len(a["detail"]) < 150}
-    routes = {"/ui/api/board": {"items": [item(ask), item(push)], "now": now}, "/ui/api/chats": {"chats": [chat]},
+    replied = {**chat, "id": "fedcba987654", "title": "Fix the docs", "status": "idle", "sub_list": [], "subs": 0}
+    reply = {"kind": "chat", "col": "needs", "id": replied["id"], "agent": "claude", "project": "garden", "machine": chat["machine"], "label": "smoke-pc",
+             "online": True, "key": f"chat:{chat['machine']}/{replied['id']}", "sig": "4", "title": replied["title"], "folder": chat["folder"], "at": now,
+             "line": "replied: the docs are fixed", "outcome": "The docs are fixed.", "subs": 0}
+    routes = {"/ui/api/board": {"items": [item(ask), item(push), reply], "now": now}, "/ui/api/chats": {"chats": [chat, replied]},
               "/ui/api/chat": {"chat": chat, "events": [{"n": 1, "at": now, "kind": "user", "text": "Run the tests"},
                                                         {"n": 2, "at": now, "kind": "ask", "text": "asks: Bash: npm test"},
                                                         {"n": 3, "at": now, "kind": "sub", "text": "Explore · find the tests", "sub": "tu1", "status": "running"},
@@ -391,8 +395,8 @@ async def approvals(browser, devices, secret: str) -> None:
 
     async def fake(route):
         path = urlsplit(route.request.url).path
-        if path == "/ui/api/chat/approve":
-            sent.append(json.loads(route.request.post_data or "{}"))
+        if path in ("/ui/api/chat/approve", "/ui/api/chat/send", "/ui/api/board/dismiss"):  # nothing reaches a pc
+            sent.append({**json.loads(route.request.post_data or "{}"), "_path": path})
             return await route.fulfill(json={"ok": True})
         if path in routes and route.request.method == "GET":
             return await route.fulfill(json=routes[path])
@@ -401,26 +405,42 @@ async def approvals(browser, devices, secret: str) -> None:
         ctx = await browser.new_context(ignore_https_errors=True, bypass_csp=True, **dev,
                                         extra_http_headers={"X-Knowledge-Proxy": secret, "X-authentik-username": USER})
         await ctx.route("**/ui/api/**", fake)
-        await ctx.add_init_script("localStorage.setItem('kn_project', 'all')")  # the fake items' project: the one picker scopes the Inbox too
+        await ctx.add_init_script("localStorage.setItem('kn_project', 'all')")  # the fake items' project: the one picker scopes the Agents list too
         pg = await ctx.new_page()
         errors = []
         pg.on("pageerror", lambda e: errors.append(str(e)))
         await pg.goto(URL + "/ui")
-        await pg.wait_for_selector("#map-btn, #cockpit-btn, #ck-board", state="attached")
+        await pg.wait_for_selector("#map-btn, #cockpit-btn, #ck-list", state="attached")
         if not await pg.evaluate("typeof ckAsks === 'function'"):
             print("skip approvals (server older than 0.18)")
             return await ctx.close()
         if await pg.locator("#cockpit-btn").count():  # before the app shell: the Agents button
             await pg.click("#cockpit-btn")
         else:
-            await pg.evaluate("location.hash = '#/inbox'")
-        await pg.wait_for_selector("#ck-board .ck-col-needs .ck-item", timeout=15000)
-        acts = await pg.locator("#ck-board .ck-col-needs .ck-item").first.locator(".ck-item-acts button").all_inner_texts()
-        check(acts == ["Allow once", "Allow for this chat", "Deny"], f"board: an approval is a Needs-you item with its answers {acts}")
-        acts = await pg.locator("#ck-board .ck-col-needs .ck-item").nth(1).locator(".ck-item-acts button").all_inner_texts()
-        check(acts == ["Deny", "Open chat"], f"board: a request longer than its title can only be denied there {acts}")
-        check("2 approvals waiting" in await pg.locator("#ck-needs-live").text_content(), "board: the approvals are counted")
-        await pg.locator("#ck-board .ck-col-needs .ck-item-main").first.click()
+            await pg.evaluate("location.hash = '#/chats'")
+        await pg.wait_for_selector("#ck-list .ck-sec-needs .ck-item", timeout=15000)
+        needs = pg.locator("#ck-list .ck-sec-needs .ck-item")
+        acts = [t.strip() for t in await needs.first.locator(".ck-item-acts button").all_text_contents()]
+        check(acts == ["Allow once", "Allow for this chat", "Deny"], f"list: an approval is a Needs-you row with its answers (no Snooze) {acts}")
+        acts = [t.strip() for t in await needs.nth(1).locator(".ck-item-acts button").all_text_contents()]
+        check(acts == ["Deny", "Open chat"], f"list: a request longer than its title can only be denied there {acts}")
+        check("2 approvals waiting" in await pg.locator("#ck-needs-live").text_content(), "list: the approvals are counted")
+        # a chat that answered: why up top, the agent's last sentence below, Reply / Snooze / Dismiss right on the row
+        row = pg.locator(f'#ck-list .ck-sec-needs .ck-item[data-key="{reply["key"]}"]')
+        got = await row.evaluate("""r => [r.querySelector('.ck-item-where').textContent, r.querySelector('.ck-item-line').textContent,
+          [...r.querySelectorAll('.ck-item-acts > button, .ck-item-acts summary')].map(b => b.textContent.trim())]""")
+        check(got[0].startswith("answered, not read") and got[1] == "The docs are fixed." and all(a in got[2] for a in ("Reply", "Snooze", "Dismiss")),
+              f"list: a chat that needs you says why, its outcome and its quick actions {got}")
+        await row.hover()
+        await row.get_by_role("button", name="Reply").click()
+        box = row.locator(".ck-reply input")
+        check(await box.count() == 1 and await box.evaluate("i => document.activeElement === i"), "Reply: a one-line box opens on the row, focused")
+        await box.fill("not sent")
+        await box.press("Escape")
+        await pg.wait_for_timeout(300)
+        check(not await row.locator(".ck-reply").count() and not any(x["_path"] == "/ui/api/chat/send" for x in sent),
+              "Reply: Esc closes the box without sending")
+        await pg.locator("#ck-list .ck-sec-needs .ck-item-main").first.click()
         await pg.wait_for_selector("#ck-canvas .ck-ask")
         check(await pg.locator("#ck-canvas .ck-ask").count() == 2 and await pg.locator("#ck-canvas .ck-ask-what").first.text_content() == "npm test",
               "chat card: one approval block per waiting approval, the command as text")
@@ -449,25 +469,41 @@ async def approvals(browser, devices, secret: str) -> None:
               "chat card: a long request is shown whole (folded), its end included")
         await pg.locator("#ck-canvas .ck-ask").first.get_by_role("button", name="Allow once").click()
         await pg.wait_for_timeout(500)
-        check(sent and sent[-1] == {"machine": chat["machine"], "id": chat["id"], "ask": ask["id"], "decision": "once"}, f"Allow once answers that approval {sent[-1:]}")
+        check(sent and sent[-1] == {"machine": chat["machine"], "id": chat["id"], "ask": ask["id"], "decision": "once", "_path": "/ui/api/chat/approve"}, f"Allow once answers that approval {sent[-1:]}")
         check(not errors, f"no page errors with approvals {errors[:2]}")
         await ctx.close()
 
 
 async def cockpit_shell(browser, devices, secret: str) -> None:
-    """Inbox and Chats as views of the shell: the board, a chat as its own route (Esc goes back), the new chat dialog;
-    on a phone one list, Done folded to one line, the tab bar gone inside a chat."""
+    """The Agents view (#/chats; #/inbox is the same): one list grouped Needs you, Review, Working, Done today (folded)
+    and Earlier beside the open chat, a chat as its own route (Esc goes back), the new chat draft, arrow keys through
+    the rows; on a phone the list first, a chat full screen with the tab bar gone."""
     ctx, pg, errors = await page(browser, secret, "/ui#/inbox", viewport={"width": 1440, "height": 900})
-    await pg.wait_for_selector("#ck-board .ck-col, #ck-board .ck-empty", timeout=15000)
-    check(await pg.locator("#cockpit").is_visible(), "Inbox shows the attention board")
-    cols = await pg.locator("#ck-board .ck-col-head > span:first-child").all_text_contents()
-    check(cols in ([], ["Needs you", "Running", "Open", "Done (24 h)"], ["Needs you", "Running", "Done (24 h)"]), f"board columns, Needs you first {cols}")
-    check(await pg.locator("#ck-needs-live[aria-live=polite]").count() == 1, "board: the Needs you count is announced (aria-live)")
-    needs = await pg.locator("#ck-board .ck-col-needs .ck-item").count()  # also the ones folded into a group
+    await pg.wait_for_function("ck.boardAt > 0", timeout=15000)
+    await pg.wait_for_timeout(300)
+    check(await pg.evaluate("location.hash === '#/chats' && !$('cockpit').hidden && $('title').textContent === 'Agents'"), "#/inbox opens the Agents view (#/chats)")
+    heads = await pg.locator("#ck-list .ck-sec-head > span:first-child").all_text_contents()
+    check(heads[:1] == ["Needs you"] and heads == [h for h in ("Needs you", "Review", "Working") if h in heads], f"groups: Needs you first, then Review and Working {heads}")
+    check(await pg.evaluate("!!$('ck-earlier-h') && !!$('ck-filter') && !!$('ck-closed') && !$('ck-only') && !$('ck-board')"),
+          "Earlier below with its filter and Closed; no state chips and no separate board")
+    check("What needs you" in await pg.locator("#ck-side .ck-lede").inner_text(), "a lede says what the view is")
+    check(await pg.locator("#ck-needs-live[aria-live=polite]").count() == 1, "list: the Needs you count is announced (aria-live)")
+    if await pg.locator("#ck-list .ck-sec-done").count():
+        check(not await pg.locator("#ck-list .ck-sec-done .ck-item").count() and await pg.locator(".ck-done-toggle[aria-expanded=false]").count() == 1,
+              "Done today is folded to one line")
+    # the badge counts every Needs-you item (Review cards too), in this project and the others the button points to
+    n = await pg.evaluate("document.querySelectorAll('#ck-list .ck-item.needs').length + (ck.board || []).filter((i) => i.col === 'needs' && !ckScope(i)).length")
     badge = await pg.locator("#sidebar .inbox-count").inner_text()
-    check(badge == (str(needs) if needs else ""), f"the Inbox badge counts Needs you ({badge!r} vs {needs})")
+    check(badge == (str(n) if n else ""), f"the Agents badge counts Needs you ({badge!r} vs {n})")
     hot = await pg.evaluate("[...document.querySelectorAll('#sidebar .badge')].filter(b => b.textContent && b.classList.contains('hot')).map(b => b.className)")
-    check(all("inbox-count" in c for c in hot), f"only the Inbox badge wears the accent {hot}")
+    check(all("inbox-count" in c for c in hot), f"only the Needs-you badge wears the accent {hot}")
+    check(await pg.evaluate("$('chats-mode').querySelector('[data-mode=board]').textContent === 'Side by side' && !document.querySelector('[data-nav=inbox]')"),
+          "the toggle reads List | Side by side; one Agents entry in the sidebar")
+    rows = await pg.evaluate("[...document.querySelectorAll('#ck-side [data-row]')].filter(r => r.offsetParent).length")
+    if rows > 1:
+        await pg.locator("#ck-side [data-row]").first.focus()
+        await pg.keyboard.press("ArrowDown")
+        check(await pg.evaluate("document.activeElement === [...document.querySelectorAll('#ck-side [data-row]')].filter(r => r.offsetParent)[1]"), "ArrowDown moves to the next row")
     # New chat: a draft in the chat pane (#/chats/new) with an empty box; one chip picks the model, its effort inside
     await pg.click("#ck-new")
     await pg.wait_for_selector("#ck-canvas .ck-card textarea")
@@ -509,11 +545,12 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
         await pg.mouse.click(5, 5)
         check(not await pg.locator("#ck-canvas details.ck-model[open]").count(), "model chip: a click outside closes the panel")
     await route(pg, "#/chats", "#ck-history li")
-    if await pg.locator("#ck-history button").count():
-        await pg.locator("#ck-history button").first.click()
+    chat_row = '#ck-side [data-row^="chat:"]'  # a chat in any group, or under Earlier
+    if await pg.locator(chat_row).count():
+        await pg.locator(chat_row).first.click()
         await pg.wait_for_selector("#ck-canvas .ck-card", timeout=10000)
         cid = await pg.evaluate("ck.cards.get(ck.view).meta.id")
-        check(await pg.evaluate("(id) => location.hash === '#/chats/' + encodeURIComponent(id) && !!document.querySelector('#ck-history [aria-current=true]')", cid),
+        check(await pg.evaluate("(id) => location.hash === '#/chats/' + encodeURIComponent(id) && !!document.querySelector('#ck-side [aria-current=true]')", cid),
               "a chat opens as #/chats/<chat id>, marked in the list")
         await pg.goto(f"{URL}/ui#/chats/{cid}")  # what the server's needs-you links build
         await pg.wait_for_selector("#ck-canvas .ck-card", timeout=15000)
@@ -521,41 +558,42 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
         await pg.goto(f"{URL}/ui#/chats/no-such-chat")
         await pg.wait_for_timeout(2500)
         check(await pg.evaluate("location.hash === '#/chats' && !!$('ck-canvas').querySelector('.ck-pick')"), "a link to a missing chat falls back to #/chats")
-        await pg.locator("#ck-history button").first.click()
+        await pg.locator(chat_row).first.click()
         await pg.wait_for_selector("#ck-canvas .ck-card", timeout=10000)
         await pg.locator("#title").focus()
         await pg.keyboard.press("Escape")
         await pg.wait_for_timeout(300)
         check(await pg.evaluate("location.hash === '#/chats' && !!$('ck-canvas').querySelector('.ck-pick')"), "Esc goes back from a chat to the list")
-    check(not errors, f"no page errors in Inbox and Chats {errors[:2]}")
+    check(not errors, f"no page errors in the Agents view {errors[:2]}")
     await ctx.close()
     ctx, pg, errors = await page(browser, secret, "/ui#/inbox", **devices["iPhone 14"])
-    await pg.wait_for_selector("#ck-board .ck-col, #ck-board .ck-empty", timeout=15000)
+    await pg.wait_for_function("ck.boardAt > 0", timeout=15000)
     await pg.wait_for_timeout(500)
-    tops = await pg.evaluate("[...document.querySelectorAll('#ck-board .ck-col')].map(c => c.getBoundingClientRect().top)")
-    check(tops == sorted(tops) and len(set(tops)) == len(tops), f"phone board: one list, Needs you → Running → Done {tops}")
-    if await pg.locator(".ck-col-done").count():
-        # an empty Done (nothing finished in 24 h, closed chats are off the board) has nothing to fold: that counts as folded
-        folded = await pg.evaluate("[($('ck-board').querySelector('.ck-col-done .ck-group')?.offsetParent ?? null) === null, !!$('ck-board').querySelector('.ck-done-toggle').offsetParent]")
+    check(await pg.evaluate("location.hash === '#/chats' && !!$('ck-side').offsetParent && !$('ck-canvas').offsetParent"), "phone: the list is the start screen")
+    tops = await pg.evaluate("[...document.querySelectorAll('#ck-side .ck-sec')].map(c => c.getBoundingClientRect().top)")
+    check(tops == sorted(tops) and len(set(tops)) == len(tops), f"phone: the groups one under the other, Earlier last {tops}")
+    tabs = await pg.evaluate("[...document.querySelectorAll('#tabbar > a, #tabbar > button')].map(t => t.dataset.nav || t.id)")
+    check(len(tabs) == 5 and tabs[0] == "chats" and "inbox" not in tabs and await pg.locator('#tabbar [data-nav="chats"] .inbox-count').count() == 1,
+          f"phone: five tabs, Agents first with the Needs-you badge {tabs}")
+    if await pg.locator(".ck-done-toggle").count():
         await pg.tap(".ck-done-toggle")
-        open_ = await pg.evaluate("$('ck-board').querySelector('.ck-done-toggle').getAttribute('aria-expanded') === 'true'")
-        check(folded == [True, True] and open_, f"phone board: Done is one line that unfolds {folded} {open_}")
+        check(await pg.evaluate("$('ck-list').querySelector('.ck-done-toggle').getAttribute('aria-expanded') === 'true'"), "phone: Done today unfolds")
     # the unfold can shift the emulated visual viewport, so a synthetic tap misses the fixed bar: click the link itself
     await pg.locator('#tabbar [data-nav="chats"]').dispatch_event("click")
     await pg.wait_for_selector("#ck-history li")
-    if await pg.locator("#ck-history button").count():
-        await pg.locator("#ck-history button").first.tap()
+    if await pg.locator('#ck-side [data-row^="chat:"]').count():
+        await pg.locator('#ck-side [data-row^="chat:"]').first.tap()
         await pg.wait_for_selector("#ck-canvas .ck-card", timeout=10000)
         check(await pg.evaluate("getComputedStyle($('tabbar')).display === 'none' && !!document.querySelector('#ck-canvas .ck-head > .ck-x:not(.bd-only)')?.offsetParent && document.documentElement.scrollWidth <= innerWidth"),
               "phone chat: tab bar and page header hidden, the chat's own back button shown, fits")
         await pg.tap("#ck-canvas .ck-head > .ck-x:not(.bd-only)")
         await pg.wait_for_timeout(400)
         check(await pg.evaluate("location.hash === '#/chats' && getComputedStyle($('tabbar')).display !== 'none'"), "phone chat: back returns to the list and the tab bar")
-    check(not errors, f"no page errors in the phone Inbox and Chats {errors[:2]}")
+    check(not errors, f"no page errors in the phone Agents view {errors[:2]}")
     await ctx.close()
 
 
-VIEW_EL = {"inbox": "cockpit", "chats": "cockpit", "tasks": "tab-tasks", "machines": "tab-machines", "notes": "kn", "map": "kn",
+VIEW_EL = {"chats": "cockpit", "tasks": "tab-tasks", "machines": "tab-machines", "notes": "kn", "map": "kn",
            "changes": "tab-changes", "health": "tab-lint", "thispc": "tab-thispc"}
 
 
@@ -570,8 +608,8 @@ async def shell(browser, devices, secret: str) -> None:
         return
     await pg.wait_for_function("typeof Graph !== 'undefined' && Graph && Graph.graphData().nodes.length > 0", timeout=20000)
     await pg.wait_for_timeout(500)
-    check(await pg.evaluate("location.hash === '#/inbox' && !$('cockpit').hidden"), "the default route is the Inbox")
-    for v in ("inbox", "chats", "tasks", "machines", "notes", "map", "changes", "health"):
+    check(await pg.evaluate("location.hash === '#/chats' && !$('cockpit').hidden"), "the default route is the Agents view")
+    for v in ("chats", "tasks", "machines", "notes", "map", "changes", "health"):
         await route(pg, f"#/{v}")
         st = await pg.evaluate("""(a) => ({shown: !$(a.el).hidden, only: [...document.querySelectorAll('#content > .view')].filter(e => !e.hidden).length === 1,
             current: document.querySelector('#sidebar [aria-current=page]')?.dataset.nav, title: $('title').textContent})""", {"el": VIEW_EL[v]})
@@ -653,24 +691,24 @@ async def shell(browser, devices, secret: str) -> None:
         if await pg.evaluate("document.documentElement.scrollWidth > innerWidth"):
             wide.append(v)
     check(not wide, f"phone: no sideways scroll at 390 px {wide}")
-    await route(pg, "#/inbox")
+    await route(pg, "#/chats")
     check(await pg.evaluate("$('head-search').getBoundingClientRect().right <= innerWidth"), "phone: the header's search button is fully on screen")
     await pg.locator("#more-btn").dispatch_event("click")  # fixed bar: see the tab bar note above
     await pg.wait_for_selector("#more-sheet[open]")
-    await pg.locator('#more-sheet [data-nav="machines"]').dispatch_event("click")
+    await pg.locator('#more-sheet [data-nav="map"]').dispatch_event("click")
     await pg.wait_for_timeout(400)
-    check(await pg.evaluate("location.hash === '#/machines' && !$('more-sheet').open && $('more-btn').getAttribute('aria-current') === 'page'"), "phone: More opens a sheet whose links go to their view")
+    check(await pg.evaluate("location.hash === '#/map' && !$('more-sheet').open && $('more-btn').getAttribute('aria-current') === 'page'"), "phone: More opens a sheet whose links go to their view")
     await pg.go_back()
     await pg.wait_for_timeout(400)
-    check(await pg.evaluate("location.hash === '#/inbox'"), "phone: back goes to the previous view")
+    check(await pg.evaluate("location.hash === '#/chats'"), "phone: back goes to the previous view")
     check(not errors, f"no page errors in the phone shell {errors[:2]}")
     await ctx.close()
 
 
 async def agents_pages(browser, devices, secret: str) -> None:
-    """Inbox, Chats, Tasks, Machines and Changes as full pages (shell steps 2+3): the board without an Open column,
-    identical items folded into a counted group, #/inbox/<key> marking its item (an unknown key: the plain inbox), the
-    chat list with a state per chat (waiting on you first) and a filter, Tasks with Cancel instead of Done and the same
+    """Agents, Tasks, Machines and Changes as full pages (shell steps 2+3): the list without open task lines, identical
+    items folded into a counted group, #/inbox/<key> marking its item (an unknown key: the plain list), the earlier
+    chats with a state per chat and a filter, Tasks with Cancel instead of Done and the same
     count as its badge, Machines one pc per row, Changes with a Deleted section. Read-only: nothing is clicked that
     acts. Skipped on a server before it."""
     ctx, pg, errors = await page(browser, secret, "/ui#/inbox", viewport={"width": 1440, "height": 900})
@@ -680,33 +718,39 @@ async def agents_pages(browser, devices, secret: str) -> None:
         return
     await pg.wait_for_function("ck.boardAt > 0", timeout=15000)
     await pg.wait_for_timeout(300)
-    check(not await pg.locator("#ck-board .ck-col-open").count(), "Inbox: no Open column (open task lines live under Tasks)")
-    bunches = await pg.evaluate("[...document.querySelectorAll('#ck-board .ck-bunch')].map(d => [parseInt(d.querySelector('summary .ck-count').textContent), d.querySelectorAll('.ck-item').length])")
-    check(all(a == b and b > 1 for a, b in bunches), f"Inbox: a group's count is the number of items in it {bunches}")
+    check(not await pg.evaluate("[...document.querySelectorAll('#ck-list .ck-item')].some(c => ck.board.find(x => x.key === c.dataset.key)?.col === 'open')"),
+          "Agents: no open task lines (they live under Tasks)")
+    bunches = await pg.evaluate("[...document.querySelectorAll('#ck-list .ck-bunch')].map(d => [parseInt(d.querySelector('summary .ck-count').textContent), d.querySelectorAll('.ck-item').length])")
+    check(all(a == b and b > 1 for a, b in bunches), f"Agents: a group's count is the number of items in it {bunches}")
     loose = await pg.evaluate("""(() => { const items = ck.board.filter(x => x.col !== 'open' && ckScope(x)), id = (x) => [x.col, x.project || '', ckSame(x)].join('|');
       const twice = new Set(items.filter((x, n) => ckSame(x) && items.findIndex(y => id(y) === id(x)) !== n).map(id));
-      return [...document.querySelectorAll('#ck-board .ck-item')].filter(c => !c.closest('.ck-bunch')).map(c => items.find(x => x.key === c.dataset.key)).filter(x => x && twice.has(id(x))).length; })()""")
-    check(loose == 0, f"Inbox: identical items are grouped ({loose} left loose)")
+      return [...document.querySelectorAll('#ck-list .ck-item')].filter(c => !c.closest('.ck-bunch')).map(c => items.find(x => x.key === c.dataset.key)).filter(x => x && twice.has(id(x))).length; })()""")
+    check(loose == 0, f"Agents: identical items are grouped ({loose} left loose)")
     key = await pg.evaluate("(ck.board.find(i => i.col !== 'open' && i.kind !== 'chat' && i.kind !== 'ask') || {}).key || ''")
     if key:
         await pg.goto(f"{URL}/ui#/inbox/{key}")
-        await pg.wait_for_selector("#ck-board .ck-item.hit", timeout=15000)
-        hit = await pg.evaluate("(k) => { const c = document.querySelector('#ck-board .ck-item.hit'); const r = c.getBoundingClientRect(); return c.dataset.key === k && r.bottom > 0 && r.top < innerHeight; }", key)
+        await pg.wait_for_selector("#ck-list .ck-item.hit", timeout=15000)
+        hit = await pg.evaluate("(k) => { const c = document.querySelector('#ck-list .ck-item.hit'); const r = c.getBoundingClientRect(); return c.dataset.key === k && r.bottom > 0 && r.top < innerHeight; }", key)
         check(hit, f"#/inbox/<key> scrolls to and marks that item ({key})")
     else:
         print("     no board item to deep-link: #/inbox/<key> is not checked")
     await pg.goto(f"{URL}/ui#/inbox/task:nowhere/NOPE-1")
     await pg.wait_for_function("ck.boardAt > 0", timeout=15000)
     await pg.wait_for_timeout(500)
-    check(await pg.evaluate("location.hash === '#/inbox' && !document.querySelector('.ck-item.hit')"), "an unknown #/inbox/<key> leaves the plain inbox")
+    check(await pg.evaluate("location.hash === '#/chats' && !document.querySelector('.ck-item.hit')"), "an unknown #/inbox/<key> leaves the plain list")
     await route(pg, "#/chats", "#ck-history li", 500)
-    st = await pg.evaluate("[...document.querySelectorAll('#ck-history .ck-chat')].map(b => ['needs', 'running', 'idle'].findIndex(c => b.classList.contains(c)))")
-    check(-1 not in st and st == sorted(st), f"Chats: a state per chat, waiting on you first {st}")
+    st = await pg.evaluate("[...document.querySelectorAll('#ck-history .ck-chat:not(.ck-subchat)')].map(b => ['needs', 'running', 'idle'].findIndex(c => b.classList.contains(c)))")
+    check(-1 not in st, f"Earlier: a state per chat {st}")
     if st:
         await pg.fill("#ck-filter", "zzz-no-such-chat")
-        await pg.wait_for_timeout(200)
-        check(await pg.locator("#ck-history .ck-chat").count() == 0, "Chats: the filter narrows the list")
+        await pg.wait_for_timeout(400)
+        check(await pg.locator("#ck-history .ck-chat").count() == 0, "Earlier: the filter narrows the list")
         await pg.fill("#ck-filter", "")
+    await pg.click("#ck-closed")
+    await pg.wait_for_timeout(200)
+    closed = await pg.evaluate("[$('ck-closed').getAttribute('aria-pressed'), [...document.querySelectorAll('#ck-history .ck-chat:not(.ck-subchat)')].every(b => b.classList.contains('closed') || b.classList.contains('needs') || b.classList.contains('running'))]")
+    check(closed[0] == "true" and closed[1], f"Earlier: Closed shows the closed chats {closed}")
+    await pg.click("#ck-closed")
     await route(pg, "#/tasks", "#tasks h3, #tasks p", 800)
     await pg.select_option("#projects", "all")  # the one project picker (sidebar) also scopes the agents views
     await pg.wait_for_timeout(800)
@@ -727,7 +771,7 @@ async def agents_pages(browser, devices, secret: str) -> None:
     await ctx.close()
     ctx, pg, errors = await page(browser, secret, "/ui#/inbox", **devices["iPhone 14"])
     wide = []
-    for v in ("inbox", "chats", "tasks", "machines", "changes"):
+    for v in ("chats", "tasks", "machines", "changes"):
         await route(pg, f"#/{v}", ms=900)
         if await pg.evaluate("document.documentElement.scrollWidth > innerWidth"):
             wide.append(v)
@@ -763,7 +807,7 @@ async def knowledge(browser, devices, secret: str) -> None:
     check(await pg.evaluate("(w) => !$('results').hidden && $('note').hidden && $('q').value === w && $('results').getBoundingClientRect().width > 400", WORD),
           "the search page shows in the middle, in place of the note")
     # The palette: Ctrl+K from anywhere, roles, typing finds notes, arrows move, Enter opens.
-    await route(pg, "#/inbox")
+    await route(pg, "#/chats")
     await pg.keyboard.press("Control+k")
     await pg.wait_for_selector("#palette[open]")
     roles = await pg.evaluate("({focus: document.activeElement === $('pal-q'), combo: $('pal-q').getAttribute('role'), list: $('pal-list').getAttribute('role'), act: $('pal-q').getAttribute('aria-activedescendant'), views: [...document.querySelectorAll('.pal-opt')].length})")
@@ -964,7 +1008,7 @@ async def shell_pages(browser, devices, secret: str) -> None:
               f"{path}: in the shell with its own sidebar entry marked")
         check(await pg.evaluate("!!document.querySelector('.head h1#title')?.textContent.trim()"), f"{path}: the app's page header")
         check("Back to the graph" not in await pg.content(), f"{path}: no 'Back to the graph' link")
-        check(await pg.evaluate("document.querySelector('#sidebar a[data-nav=\"inbox\"]').getAttribute('href')") == "/ui#/inbox",
+        check(await pg.evaluate("document.querySelector('#sidebar a[data-nav=\"chats\"]').getAttribute('href')") == "/ui#/chats",
               f"{path}: the app's views link to /ui")
     # Admin settings: short labels in plain English, the measured values in the help text under each.
     await pg.click('[data-sec="settings"]')
@@ -1019,7 +1063,7 @@ BOARD_LAYOUT = """(() => {
 
 
 async def board(browser, devices, secret: str) -> None:
-    """Chats > Board (desktop): the List|Board toggle and its route, a frame per project with each card inside it,
+    """Agents > Side by side (desktop): the List | Side by side toggle and its route, a frame per project with each card inside it,
     F fits all on screen, arrows pan, Esc leaves a card, folding a frame, a dragged card keeping its place across a
     reload and Tidy up putting it back; the layout as a pure function; a phone keeps the list. The board's own chat
     polls are blocked here (showing a chat marks it read), so the live chats stay as they were; positions live in
@@ -1135,17 +1179,17 @@ async def review(browser, devices, secret: str) -> None:
         ctx = await browser.new_context(ignore_https_errors=True, bypass_csp=True, **dev,
                                         extra_http_headers={"X-Knowledge-Proxy": secret, "X-authentik-username": USER})
         await ctx.route("**/ui/api/**", fake)
-        await ctx.add_init_script("localStorage.setItem('kn_project', 'all')")  # the fake items' project: the one picker scopes the Inbox too
+        await ctx.add_init_script("localStorage.setItem('kn_project', 'all')")  # the fake items' project: the one picker scopes the Agents list too
         pg = await ctx.new_page()
         errors = []
         pg.on("pageerror", lambda e: errors.append(str(e)))
         pg.on("dialog", lambda d: (asked.append(d.message), asyncio.ensure_future(d.accept())))
         await pg.goto(URL + "/ui#/inbox")
-        await pg.wait_for_selector("#ck-board", state="attached")
+        await pg.wait_for_selector("#ck-list", state="attached")
         if not await pg.evaluate("typeof ckReview === 'function'"):
             print("skip review card (server older than 0.19.1)")
             return await ctx.close()
-        card = pg.locator(f'#ck-board .ck-col-needs .ck-item[data-key="{item["key"]}"]')
+        card = pg.locator(f'#ck-list .ck-sec-review .ck-item[data-key="{item["key"]}"]')
         await card.wait_for(timeout=15000)
         acts = await card.locator(".ck-item-acts button.btn:not(.ck-git)").all_inner_texts()
         check(acts == ["View diff", "Merge", "Reject"], f"{name}: a review card has View diff, Merge and Reject {acts}")
@@ -1156,11 +1200,13 @@ async def review(browser, devices, secret: str) -> None:
         if shots:
             await card.scroll_into_view_if_needed()
             await pg.screenshot(path=os.path.join(shots, f"review-{name}.png"), full_page=name == "phone")
+        await card.hover()  # a pointer sees a row's actions on hover
         await card.get_by_role("button", name="Merge").click()
         await pg.wait_for_timeout(400)
         check(asked and "task/KN-42" in asked[-1] and "into main" in asked[-1] and "smoke-pc" in asked[-1], f"{name}: Merge asks first, naming branch, target and pc")
         check(sent and sent[-1] == ("/ui/api/machines/action", {"machine": item["machine"], "action": "merge", "args": {"project": "garden", "id": "KN-42"}}),
               f"{name}: Merge queues the pc's merge action {sent[-1:]}")
+        await card.hover()
         await card.get_by_role("button", name="Reject").click()
         await card.locator(".ck-reject input:not([type])").fill("water less often")
         await card.locator(".ck-reject input[type=checkbox]").check()
@@ -1216,7 +1262,7 @@ async def follow(browser, devices, secret: str) -> None:
         ctx = await browser.new_context(ignore_https_errors=True, bypass_csp=True, **dev,
                                         extra_http_headers={"X-Knowledge-Proxy": secret, "X-authentik-username": USER})
         await ctx.route("**/ui/api/**", fake)
-        await ctx.add_init_script("localStorage.setItem('kn_project', 'all')")  # the fake items' project: the one picker scopes the Inbox too
+        await ctx.add_init_script("localStorage.setItem('kn_project', 'all')")  # the fake items' project: the one picker scopes the Agents list too
         pg = await ctx.new_page()
         errors = []
         pg.on("pageerror", lambda e: errors.append(str(e)))
@@ -1288,16 +1334,16 @@ DS_JS = """() => {
 
 async def design_system(browser, devices, secret: str) -> None:
     ctx, pg, errors = await page(browser, secret, "/ui#/inbox", viewport={"width": 1280, "height": 860})
-    await pg.wait_for_selector("#ck-board", state="attached")
+    await pg.wait_for_selector("#ck-list", state="attached")
     if not await pg.locator("#page-head .btn").count():
         print("skip design system (server older than 0.21)")
         return await ctx.close()
-    views = ["#/inbox", "#/chats", "#/tasks", "#/machines", "#/notes", "#/changes", "#/health"]
+    views = ["#/chats", "#/tasks", "#/machines", "#/notes", "#/changes", "#/health"]
     for v in views:
         await route(pg, v, "", 900)
         r = await pg.evaluate(DS_JS)
         check(r["n"] > 0 and not r["bad"], f"design system {v}: {r['n']} buttons, all 36/28 px with an 8 px radius, fields alike, chips quiet {r['bad'][:4]}")
-    check(not await pg.locator("#ck-resets").is_visible(), "the usage-limit reset chip stays off a view outside Inbox and Chats")
+    check(not await pg.locator("#ck-resets").is_visible(), "the usage-limit reset chip stays off a view outside Agents")
     for path in ("/ui/admin", "/ui/help"):
         await pg.goto(URL + path); await pg.wait_for_timeout(1200)
         r = await pg.evaluate(DS_JS)
@@ -1305,7 +1351,7 @@ async def design_system(browser, devices, secret: str) -> None:
     await ctx.close()
     ctx, pg, errors = await page(browser, secret, "/ui#/notes", **{**devices["iPhone 14"], "viewport": {"width": 390, "height": 844}})
     await pg.wait_for_timeout(1500)
-    for v in ("#/inbox", "#/notes", "#/tasks"):
+    for v in ("#/chats", "#/notes", "#/tasks"):
         await route(pg, v, "", 900)
         small = await pg.evaluate("() => [...document.querySelectorAll('.btn')].filter((b) => b.offsetParent && b.getBoundingClientRect().height && b.getBoundingClientRect().height < 43.5).map((b) => b.id || b.textContent.trim().slice(0, 20))")
         check(not small, f"phone design system {v}: every button a 44 px touch target {small[:4]}")
