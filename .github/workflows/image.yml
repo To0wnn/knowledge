@@ -9,7 +9,20 @@ permissions:
   contents: read
   packages: write
 jobs:
+  check:
+    # No image without a passing project check.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - name: Git identity for the tests that commit
+        run: git config --global user.name ci && git config --global user.email ci@example.invalid
+      - run: ./check.sh
   image:
+    needs: check
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}

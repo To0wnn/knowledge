@@ -10,6 +10,36 @@ on:
 permissions:
   contents: read
 jobs:
+  check:
+    # The project check (./check.sh: hook self-tests, graph, lint, server tests), as before a commit or deploy.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - name: Git identity for the tests that commit
+        run: git config --global user.name ci && git config --global user.email ci@example.invalid
+      - run: ./check.sh
+  py39:
+    # macOS's own /usr/bin/python3 is 3.9: the plugin and knowledge-agent.py must import and pass their self-tests there
+    # (an `X | None` annotation without the __future__ import once broke `import chat`).
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+      - name: Git identity for the tests that commit
+        run: git config --global user.name ci && git config --global user.email ci@example.invalid
+      - name: Self-tests under Python 3.9
+        working-directory: server
+        run: |
+          python3 --version
+          for t in limits secret-guard companion workers chat watch; do python3 "../plugin/hooks/$t.py" --self-test; done
+          python3 ../clients/knowledge-agent.py --selftest
   e2e:
     strategy:
       fail-fast: false
