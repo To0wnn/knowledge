@@ -28,6 +28,11 @@ Pick one, then restart the server.
   fetches the model (`small`, ~470 MB) into `data/voice`; it then needs ~1 GB RAM and answers a sentence in ~2.5 s
   on 8 cores (measured 2 Nov 2026, Dutch). Another model: `KNOWLEDGE_VOICE_MODEL=large-v3-turbo` (most accurate,
   ~1.6 GB, slower on a CPU), `base` or `tiny` (faster, more mistakes).
+  The image is pinned to the build of a whisper.cpp release (`main-<commit>`; `:main` moves with every commit). To
+  move to a newer release: `gh api repos/ggml-org/whisper.cpp/releases/latest --jq .tag_name` gives the tag, `gh api
+  repos/ggml-org/whisper.cpp/git/ref/tags/<tag>` its object (for an annotated tag, `gh api
+  repos/ggml-org/whisper.cpp/git/tags/<sha> --jq .object.sha` the commit), and `ghcr.io/ggml-org/whisper.cpp:main-<full
+  commit sha>` is its image; put it in `compose.yaml`, then `docker compose --profile voice up -d`.
 - **A server you already run** (whisper.cpp's `whisper-server` started with `--inference-path /v1/audio/transcriptions`
   and `--convert`, LocalAI, speaches, …): its `/v1` base in `KNOWLEDGE_STT_URL`, its model name in
   `KNOWLEDGE_STT_MODEL` when it needs one.

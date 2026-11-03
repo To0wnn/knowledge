@@ -53,7 +53,7 @@ services:
   # Started only with `--profile voice`; the model is fetched on first start into ./data/voice (small: ~470 MB,
   # ~1 GB RAM, a sentence in ~2.5 s on 8 cores). Others: tiny, base, medium, large-v3-turbo (best, slower on a CPU).
   voice:
-    image: ghcr.io/ggml-org/whisper.cpp:main
+    image: ghcr.io/ggml-org/whisper.cpp:main-d1be6fde11ac6e0407606b4e42fe72d34add8037  # release v1.9.5 (docs/voice.md: updating it)
     profiles: [voice]
     container_name: knowledge-voice
     restart: unless-stopped
