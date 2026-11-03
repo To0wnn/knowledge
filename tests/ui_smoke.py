@@ -144,12 +144,23 @@ async def desktop(browser, secret: str) -> None:
     check(await pg.evaluate("!$('graph').hidden && $('note').hidden"), "Map swaps the middle column to the map")
     nid = await pg.evaluate("Graph.graphData().nodes.find(n => (neighbors.get(n.id) || new Set()).size >= 4).id")
     box = await pg.evaluate("$('g2d').getBoundingClientRect().toJSON()")
-    await pg.wait_for_timeout(8000)
+    await pg.wait_for_timeout(2000)
+    try:  # the layout has settled (a slow CI runner takes longer than a fixed wait), then its overview fit
+        await pg.wait_for_function("!settling && loadGraph.fitted", timeout=30000)
+    except Exception:
+        pass
+    await pg.wait_for_timeout(1000)
     home = await pg.evaluate("Object.fromEntries(Graph.graphData().nodes.map(n => [n.id, [n.x, n.y]]))")
     overview = await pg.evaluate("Graph.zoom()")
     sc = await pg.evaluate("(id) => { const n = byId.get(id); return Graph.graph2ScreenCoords(n.x, n.y); }", nid)
     await click_node(pg, box, sc)
-    await pg.wait_for_timeout(2000)
+    ring = """(id) => { const c = byId.get(id); const r = [...neighbors.get(id)].map(i => byId.get(i)).filter(n => n.x != null)
+        .map(n => Math.round(Math.hypot(n.x - c.x, n.y - c.y))); return selected === id && new Set(r).size === 1; }"""
+    try:  # the neighbours gather, then the view zooms to them
+        await pg.wait_for_function(ring, arg=nid, timeout=10000)
+    except Exception:
+        pass
+    await pg.wait_for_timeout(1500)
     zoom = await pg.evaluate("Graph.zoom()")
     radii = await pg.evaluate("""(id) => { const c = byId.get(id); return [...neighbors.get(id)].map(i => byId.get(i))
         .filter(n => n.x != null).map(n => Math.round(Math.hypot(n.x - c.x, n.y - c.y))); }""", nid)
