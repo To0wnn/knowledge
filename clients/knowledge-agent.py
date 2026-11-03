@@ -20,7 +20,8 @@ it in ~/.config/knowledge/url for the hooks and sets the Claude plugin option. O
                     offer it once): ~/.claude/CLAUDE.md, ~/.codex/AGENTS.md, ~/.gemini/GEMINI.md, Claude Code's local
                     memory (~/.claude/projects/*/memory) and CLAUDE.md/AGENTS.md of folders linked to a project; through
                     the server's knowledge_new_memo (known secrets refused, nothing replaced), once per file
-  knowledge-agent.py install <claude|codex|agy> [TOKEN]   set up or update; safe to run again. Claude Code: the plugin.
+  knowledge-agent.py install <claude|codex|agy> [TOKEN]   set up or update; safe to run again; never the companion
+                    (so --plugin-only changes nothing). Claude Code: the plugin.
                     Codex and agy: the plugin (an older setup of this script is removed first); with a vault name,
                     KNOWLEDGE_SETUP=script, or agy on Windows without python3 on PATH: this script's setup (MCP relay,
                     hooks, rules in AGENTS.md/GEMINI.md, skills in ~/.agents/skills)
@@ -1132,6 +1133,13 @@ def finish_companion(cmd: str, flags: list):
     print("companion: not installed (plugin only); add it later with: knowledge-agent.py install-companion")
 
 
+def install_args(args: list):
+    """The words after `install <agent>`: [] or [TOKEN], with --plugin-only dropped (one agent's install never sets up
+    the companion), or None for another flag or more words (never taken as a token or vault name)."""
+    rest = [a for a in args if a != "--plugin-only"]
+    return rest if len(rest) <= 1 and not any(a.startswith("-") and a != "-" for a in rest) else None
+
+
 def main(argv: list):
     cmd = argv[0] if argv else ""
     if cmd == "header" and len(argv) <= 2:
@@ -1150,10 +1158,10 @@ def main(argv: list):
         if "--dry-run" not in argv:
             save_choice(not cmd.startswith("un"))  # update follows this choice from now on
         install_companion(argv[1:], undo=cmd.startswith("un"))
-    elif cmd == "install" and len(argv) >= 2 and argv[1] in (*CONFIG, "claude"):
-        if len(argv) == 2:  # a vault name (the machine that holds the files) keeps the URL it is given
+    elif cmd == "install" and len(argv) >= 2 and argv[1] in (*CONFIG, "claude") and (rest := install_args(argv[2:])) is not None:
+        if not rest:  # a vault name (the machine that holds the files) keeps the URL it is given
             ensure_url()
-        install(argv[1], argv[2] if len(argv) > 2 else "-")
+        install(argv[1], rest[0] if rest else "-")
     elif cmd in ("context", "docs-sync", "session-log", "hints", "tasks", "wake", "gate", "guard", "watch", "take", "register", "serve", "companion"):  # hooks written by the setup call this script
         agent_hooks.SETUP = "script"  # its auto-update: git pull + install, not the plugin CLI
         agent_hooks.main(argv)
@@ -1175,6 +1183,8 @@ if __name__ == "__main__":
         assert choose(["claude", "codex", "agy"], lambda q: next(replies)) == ["claude", "agy"]
         assert locked_hint("unlinkat x: The process cannot access the file because it is being used by another process.")
         assert locked_hint("token ok") == ""
+        assert install_args(["--plugin-only"]) == [] and install_args(["tok", "--plugin-only"]) == ["tok"] and install_args(["-"]) == ["-"]
+        assert install_args(["--yolo"]) is None and install_args(["a", "b"]) is None, "no flag or second word is a token"
         try:
             import tomllib
         except ImportError:  # Python < 3.11 (macOS's python3 is 3.9): the text checks below still run
