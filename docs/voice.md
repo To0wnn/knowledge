@@ -41,5 +41,6 @@ and `KNOWLEDGE_STT_PROMPT` (names and terms it should spell right, comma-separat
 | You see | Cause |
 |---|---|
 | No microphone button | `KNOWLEDGE_STT_URL` not set, or the page is on http |
-| "Microphone: not allowed" | the browser blocked it: allow it in the site settings |
+| "Microphone: not allowed" and no prompt | a reverse proxy sends `Permissions-Policy: microphone=()`: allow `microphone=(self)` for the web UI |
+| "Microphone: not allowed" after a prompt | you refused it: allow it in the site settings (the lock icon) |
 | "the speech server failed: …" | the server cannot reach the speech server, or it refused the model name |

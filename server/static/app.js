@@ -2202,7 +2202,7 @@ function ckMic(card, btn) {
   async function start() {
     let stream;
     try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
-    catch (e) { return say(`Microphone: ${e.name === "NotAllowedError" ? "not allowed in this browser" : e.message}`); }
+    catch (e) { return say(`Microphone: ${e.name === "NotAllowedError" ? "not allowed (site settings, or the server's Permissions-Policy: docs/voice.md)" : e.message}`); }
     rec = new MediaRecorder(stream); rec.t0 = Date.now(); const parts = [];
     rec.ondataavailable = (e) => e.data.size && parts.push(e.data);
     rec.onstop = async () => {
