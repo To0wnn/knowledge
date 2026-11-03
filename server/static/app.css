@@ -512,6 +512,7 @@ body.admin-page { display: block; overflow-y: auto; }
 .ck-title { min-width: 0; flex: 1; }
 .ck-title strong { display: block; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ck-title span { display: block; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ck-log > .ck-older { align-self: center; flex: none; }
 .ck-log { overflow-y: auto; overflow-anchor: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; font-size: 14px; line-height: 1.55; }
 .ck-msg { white-space: pre-wrap; overflow-wrap: anywhere; }
 .ck-msg.user { align-self: flex-end; max-width: 85%; padding: 8px 12px; border-radius: 14px 14px 4px 14px; background: var(--amber-soft); border: 1px solid color-mix(in srgb, var(--amber) 35%, transparent); }

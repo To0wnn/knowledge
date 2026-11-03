@@ -1902,6 +1902,7 @@ function ckCard(meta) {
     if (/^https?:/.test(href)) { a.target = "_blank"; a.rel = "noopener noreferrer"; }
   });
   log.addEventListener("scroll", () => {
+    if (log.scrollTop < 300 && card.older) ckOlder(card); // near the top of a long chat: the part before
     const dist = log.scrollHeight - log.scrollTop - log.clientHeight;
     card.stickToBottom = dist < 80;
     card.savedScrollTop = log.scrollTop;
@@ -2336,8 +2337,11 @@ async function ckPoll(card) {
   let res;
   // only the chat opened full counts as read; a card glanced at on the board stays under Needs you
   const peek = ck.view !== ckKey(card.meta) ? "&peek=1" : "";
-  try { res = await api(`/ui/api/chat?machine=${card.meta.machine}&id=${card.meta.id}&after=${card.after}${peek}`); }
+  // a long chat opens on its newest part; the rest loads when you scroll up (ckOlder)
+  const tail = card.after ? "" : `&tail=${CK_PAGE}`;
+  try { res = await api(`/ui/api/chat?machine=${card.meta.machine}&id=${card.meta.id}&after=${card.after}${tail}${peek}`); }
   catch (e) { card.note.className = "ck-note bad"; card.note.textContent = e.message; return; }
+  if (!card.after) { card.older = res.older; card.first = res.events[0]?.n || 0; ckOlderMark(card); }
   card.meta = { ...card.meta, ...res.chat, label: res.label }; card.online = res.online; card.at = res.at;
   ckPicker(card);
   ckEvents(card, res);
@@ -2435,9 +2439,11 @@ function ckUserMsg(card, text) {
   return box;
 }
 // New events into a card's log: text as sanitized Markdown, the rest as lines; never one twice.
+const CK_PAGE = 200; // events a chat opens with, and loads per step when you scroll up
 function ckEvents(card, res) {
-  if (res.trimmed && !card.after && res.events.length) card.log.append(el("p", "ck-line info", "Older output was trimmed (the chat keeps its newest part)."));
+  if (res.trimmed && !card.after && !res.older && res.events.length) card.log.append(el("p", "ck-line info", "Older output was trimmed (the chat keeps its newest part)."));
   const near = card.stickToBottom !== false || (card.log.scrollHeight - card.log.scrollTop - card.log.clientHeight < 120);
+  const dirty = new Set(); // a long answer comes in many pieces: its Markdown is rendered once, at the end
   for (const e of res.events) {
     if (e.n <= card.after) continue; // two polls crossed (board + chat): never append an event twice
     card.after = Math.max(card.after, e.n);
@@ -2446,15 +2452,42 @@ function ckEvents(card, res) {
     if (e.kind === "text") { // Markdown, sanitized as a note is (DOMPurify): an agent's output never becomes script
       const msg = last && last.classList.contains("agent") ? last : card.log.appendChild(el("div", "ck-msg agent md"));
       msg.dataset.raw = (msg.dataset.raw || "") + e.text;
-      msg.innerHTML = renderMd(msg.dataset.raw.replace(/^\n+/, ""));
+      dirty.add(msg);
     } else card.log.append(e.kind === "user" ? ckUserMsg(card, e.text) : el("div", `ck-line ${e.kind}`, e.text));
   }
+  for (const msg of dirty) msg.innerHTML = renderMd(msg.dataset.raw.replace(/^\n+/, ""));
   if (res.events.length) {
     const hasUser = res.events.some((e) => e.kind === "user");
     if (near || hasUser) ckScrollBottom(card, hasUser);
   }
 }
 
+// Scrolling up in a long chat: the CK_PAGE events before the oldest shown are rendered apart (their own subagent
+// blocks) and put on top, the view kept where it was.
+function ckOlderMark(card) {
+  let m = card.log.querySelector(":scope > .ck-older");
+  if (!card.older) return m?.remove();
+  if (!m) {
+    m = el("button", "btn small quiet ck-older", "Earlier messages"); m.type = "button";
+    m.onclick = () => ckOlder(card); card.log.prepend(m);
+  }
+}
+async function ckOlder(card) {
+  if (!card.older || card.loadingOlder || !card.first) return;
+  card.loadingOlder = true;
+  try {
+    const res = await api(`/ui/api/chat?machine=${card.meta.machine}&id=${card.meta.id}&before=${card.first}&tail=${CK_PAGE}&peek=1`);
+    const part = el("div"), shadow = { ...card, log: part, subs: new Map(), subbar: el("div"), after: 0, stickToBottom: false };
+    ckEvents(shadow, { ...res, trimmed: false });
+    const log = card.log, keep = log.scrollHeight - log.scrollTop, mark = log.querySelector(":scope > .ck-older");
+    (mark ? mark.after.bind(mark) : log.prepend.bind(log))(...part.childNodes);
+    log.scrollTop = log.scrollHeight - keep; // the message you were reading stays in place
+    card.older = res.older; card.first = res.events[0]?.n || card.first;
+    if (!card.older && res.trimmed) log.prepend(el("p", "ck-line info", "Older output was trimmed (the chat keeps its newest part)."));
+    ckOlderMark(card);
+  } catch (e) { toast(e.message); }
+  finally { card.loadingOlder = false; }
+}
 // A subagent in the log: one folded block per subagent (its task, running/done, its tool calls, its report), so its
 // work never mixes into the agent's own answer. Text only (textContent); its report is Markdown like any answer.
 function ckSub(card, e) {

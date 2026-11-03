@@ -5663,16 +5663,20 @@ def needs_check(now: float) -> int:
 
 @server.custom_route("/ui/api/chat", methods=["GET"])
 async def ui_chat(request: Request):
-    """?machine=&id=&after=<n>: one chat, its events after n, and whether its pc is online."""
+    """?machine=&id=&after=<n>: one chat, its events after n, and whether its pc is online. &tail=<k>: only the newest k
+    of them ("older": more came before); &before=<n>&tail=<k>: the k before event n (a long chat loads as you scroll)."""
     try:
         row, b, f, c = await chat_request(request, False)
-        after = int(b.get("after") or 0)
+        after, before, tail = int(b.get("after") or 0), int(b.get("before") or 0), max(0, min(int(b.get("tail") or 0), 1000))
     except (ValueError, AttributeError, TypeError, PermissionError) as e:
         return chat_error(e)
     if c.get("next", 0) > c.get("seen", 0) and not b.get("peek"):  # opened: its newest output is seen, off "Needs you"
         await asyncio.to_thread(update_state, f, lambda d: d.update(seen=max(d.get("seen", 0), c.get("next", 0))))
     asks = [{k: a.get(k) for k in ("id", "tool", "detail", "reason", "once_only", "at", "expires")} for a in asks_open(c, time.time())]
-    return JSONResponse({"chat": chat_meta(c), "events": [e for e in c.get("events", []) if e["n"] > after], "trimmed": bool(c.get("trimmed")),
+    events = [e for e in c.get("events", []) if (e["n"] < before if before else e["n"] > after)]
+    older = bool(tail) and len(events) > tail and (bool(before) or not after)
+    events = events[-tail:] if older else events
+    return JSONResponse({"chat": chat_meta(c), "events": events, "older": older, "trimmed": bool(c.get("trimmed")),
                          "online": row["online"], "at": row["at"], "label": row["label"], "asks": asks, "now": time.time(),
                          "models": ((row.get("companion") or {}).get("models") or {}).get(c.get("agent"), [])})
 

@@ -791,6 +791,13 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert ui("/ui/api/chat/close", {"machine": mid, "id": mc})[0] == 409, "not while the agent works"
     http("GET", "/machine/chats", token=fr, headers=pc)
     http("POST", "/machine/chats/events", {"chat": mc, "events": [], "done": True}, token=fr, headers=pc)
+    # A long chat opens on its newest part (tail), the rest comes in steps (before), never twice, never a gap.
+    full = json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}&after=0")[2])["events"]
+    page = json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}&after=0&tail=3")[2])
+    assert page["older"] is (len(full) > 3) and page["events"] == full[-3:], page["events"]
+    back = json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}&before={page['events'][0]['n']}&tail=3")[2])
+    assert back["events"] == full[-6:-3] and back["older"] is (len(full) > 6), back["events"]
+    assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}&after={full[-2]['n']}&tail=3")[2])["older"] is False, "a poll is never cut"
     # Chats read each other (MCP): the owner's own chats only, the conversation without subagents and usage, as data.
     listed = call("knowledge_chats", {}, fr)[1]
     assert mc in listed and "garage" in listed, listed
