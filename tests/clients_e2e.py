@@ -3018,6 +3018,8 @@ def main():
         real_clis(tok, home)
     finally:
         proc.kill()
+        if os.name != "nt":  # live chat hosts outlive their companion by design: end the ones this run started
+            subprocess.run(["pkill", "-f", re.escape(str(tmp))], check=False)
         if failures:
             print("server log tail:\n" + (tmp / "server.log").read_text(errors="replace")[-2000:])
     print(f"\n{len(failures)} failed" if failures else "\nall passed")
