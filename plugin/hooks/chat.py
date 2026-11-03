@@ -13,6 +13,7 @@ Codex over `codex app-server`, agy over `agy acp`.
   chat.py --self-test   the argv and the stream parsing per agent
 Standard library only; Linux, macOS and Windows.
 """
+from __future__ import annotations  # X | None on Python 3.9 (macOS's /usr/bin/python3)
 import hashlib
 import itertools
 import json

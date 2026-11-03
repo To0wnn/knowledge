@@ -1175,7 +1175,10 @@ if __name__ == "__main__":
         assert choose(["claude", "codex", "agy"], lambda q: next(replies)) == ["claude", "agy"]
         assert locked_hint("unlinkat x: The process cannot access the file because it is being used by another process.")
         assert locked_hint("token ok") == ""
-        import tomllib
+        try:
+            import tomllib
+        except ImportError:  # Python < 3.11 (macOS's python3 is 3.9): the text checks below still run
+            tomllib = None
         k = "[mcp_servers.knowledge]\nurl = \"u\"\n"
         for before, after, want in (  # the knowledge table goes, everything else stays (review 31 Oct 2026)
                 ("", "", ""), ('model = "x"\n', "", 'model = "x"\n'),
@@ -1187,8 +1190,8 @@ if __name__ == "__main__":
                 ("[b]\r\n", '# note\r\nc = 1\r\n[mcp_servers.knowledgex]\r\n', "[b]\r\n\n[mcp_servers.knowledgex]\r\n")):
             for t in (before + k + after, (before + k + after).replace("\n", "\r\n").replace("\r\r", "\r")):
                 rest = drop_toml_table(t, "mcp_servers.knowledge")
-                assert "knowledge" not in tomllib.loads(rest).get("mcp_servers", {}), t
-                assert tomllib.loads(rest) == tomllib.loads(want), (t, rest)
+                assert not tomllib or "knowledge" not in tomllib.loads(rest).get("mcp_servers", {}), t
+                assert not tomllib or tomllib.loads(rest) == tomllib.loads(want), (t, rest)
                 assert ("# my other" in rest) == ("# my other" in want) and ("once" in rest) == ("once" in want), (t, rest)
         assert toml_table_span("[[mcp_servers.knowledge]]\n# [mcp_servers.knowledge]\n", "mcp_servers.knowledge") is None
         import tempfile

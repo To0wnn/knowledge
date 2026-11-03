@@ -17,6 +17,7 @@ the agents log themselves. Its page and local API listen on 127.0.0.1:47321 only
   companion.py yolo-off       put back the agents' own settings YOLO changed (uninstall-companion runs this)
 Standard library only; Linux, macOS and Windows.
 """
+from __future__ import annotations  # X | None on Python 3.9 (macOS's /usr/bin/python3)
 import atexit
 import contextlib
 import datetime
