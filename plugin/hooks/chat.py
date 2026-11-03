@@ -36,6 +36,7 @@ import workers  # noqa: E402
 RUNNING: dict = {}  # chat id -> {pid, ident, stop, allow, folder}: the turns this companion runs now
 WAITS: dict = {}  # approval id -> {chat, done (Event), decision, by, expired}: asks waiting for the owner
 ASK_SERVER = None  # the companion sets it: body -> the server's answer to POST /machine/chats/ask ({id, timeout})
+UPLOAD = None  # the companion sets it: (chat id, file name, bytes) -> the mark ⟦file:…⟧ (POST /machine/chats/file)
 LOG = lambda *a: None  # the companion's activity log
 PATH_KEYS = ("file_path", "path", "Path", "notebook_path", "AbsolutePath", "TargetFile", "DirectoryPath", "cwd")
 MAX_TURNS = 4  # turns at once on one pc
@@ -545,6 +546,32 @@ def attach(text: str, fetch) -> str:
     return FILE_REF.sub(put, text)
 
 
+IMAGE_TOOL = re.compile(r"[\w.-]+: (.+\.(?:png|jpe?g|gif|webp))", re.I)  # a tool line naming one image: Read, view_file, view_image
+IMAGE_MAX = 10 * 1024 * 1024  # the server's limit per chat file
+
+
+def shown_images(cid: str, events: list, seen: dict) -> list:
+    """Each tool line that names an image file the agent looked at gets its mark appended, so the web UI shows the
+    image under it; uploaded once per file version (seen), a file attached in the web UI keeps its own mark."""
+    out = []
+    for ev in events:
+        m = IMAGE_TOOL.fullmatch(ev[1]) if ev[0] == "tool" else None
+        f, key = (Path(m.group(1)).expanduser() if m else None), None
+        try:
+            if f and f.is_absolute() and f.is_file() and f.stat().st_size <= IMAGE_MAX:
+                key = (str(f), f.stat().st_mtime)
+                mine = f.parent.parent == workers.DIR / "files" and FILE_REF.fullmatch(f"⟦file:{f.parent.name}/{f.name}⟧")
+                if key not in seen and (mine or UPLOAD):  # UPLOAD is set from the companion's first chat poll on
+                    seen[key] = mine.group(0) if mine else UPLOAD(cid, f.name, f.read_bytes())
+                if seen.get(key):
+                    ev = (ev[0], f"{ev[1]} {seen[key]}", *ev[2:])
+        except Exception as e:  # the line still goes, without its image
+            seen[key] = ""
+            LOG("error", "An image the chat's agent looked at could not be shown", f"chat {cid}: {f}: {e}"[:300])
+        out.append(ev)
+    return out
+
+
 def steer_path(cid: str) -> Path:
     """A message for a running chat turn (Force in the web UI), JSON lines; the agent's watch hook (watch.py) reads and
     removes it after the main agent's next tool call."""
@@ -645,6 +672,8 @@ def codex_handlers(cid: str, folder: str, st: dict):
                 return [("tool", "edit: " + ", ".join(str(c.get("path", "")) for c in it.get("changes") or [])[:200])]
             if k == "mcpToolCall":
                 return [("tool", f"{it.get('server')}.{it.get('tool')}")]
+            if k == "imageView":
+                return [("tool", f"view_image: {it.get('path', '')}"[:300])]
         if method == "error" and not params.get("willRetry"):
             return [("error", first_line((params.get("error") or {}).get("message")) or "error")]
         return []
@@ -1069,7 +1098,7 @@ class Live:
 
     def flush(self, **end):
         shells = [{"id": k, "label": v} for k, v in list(self.bg.items())[:20]]
-        body = {"chat": self.cid, "events": merged(self.buf), "session": self.st["session"], "bg": len(self.bg), "bg_list": shells, **end}
+        body = {"chat": self.cid, "events": merged(shown_images(self.cid, self.buf, self.__dict__.setdefault("images", {}))), "session": self.st["session"], "bg": len(self.bg), "bg_list": shells, **end}
         self.buf, self.flushed = [], time.time()
         if body["events"] or end or shells != getattr(self, "bg_told", []):
             self.bg_told = shells
@@ -1740,6 +1769,14 @@ def self_test():
         f = workers.DIR / "files" / "0123456789ab" / "a.png"
         assert f.read_bytes() == b"img" and f"[attached file: {f}]" in t1 and "b.txt could not be fetched: gone" in t1 and "⟦file:0123456789ab/../x⟧" in t1, t1
         assert attach("⟦file:0123456789ab/a.png⟧", fetch) == f"[attached file: {f}]" and got == ["0123456789ab/a.png"], got
+        # an image the agent looked at: uploaded once per version, an attachment keeps its mark, other lines untouched
+        shot, sent = Path(t) / "shot.png", []
+        shot.write_bytes(b"png")
+        globals()["UPLOAD"] = lambda cid, name, data: sent.append((cid, name, data)) or "⟦file:00000000000a/shot.png⟧"
+        seen, evs = {}, [("tool", f"Read: {shot}"), ("tool", f"view_file: {f}", "s1"), ("tool", "Bash: ls x.png"), ("tool", f"Read: {Path(t)}/no.png"), ("text", f"Read: {shot}")]
+        assert shown_images("c1", evs, seen) == [("tool", f"Read: {shot} ⟦file:00000000000a/shot.png⟧"), ("tool", f"view_file: {f} ⟦file:0123456789ab/a.png⟧", "s1")] + evs[2:]
+        assert shown_images("c1", evs[:1], seen)[0][1].endswith("⟧") and sent == [("c1", "shot.png", b"png")], sent
+        globals()["UPLOAD"] = None
         mcp = json.loads(Path(c[c.index("--mcp-config") + 1]).read_text(encoding="utf-8"))["mcpServers"]["knowledge_approval"]
         assert mcp["args"][0].endswith("approval_mcp.py") and mcp["env"]["KNOWLEDGE_CHAT"] == "c1", mcp
         c = argv("claude", "claude", True, "s-1")
@@ -1919,6 +1956,7 @@ def self_test():
             answers.append(request(m["method"], m["params"])) if "id" in m else note(m["method"], m["params"])
     finally:
         globals()["decide"] = real_decide
+    assert note("item/completed", {"item": {"type": "imageView", "id": "i9", "path": "/tmp/a.png"}}) == [("tool", "view_image: /tmp/a.png")]
     cfg = {"config/read": {"config": {"model": "cfg-m", "model_reasoning_effort": "low"}}}
     assert codex_default(lambda m, p: cfg.get(m, {}), f, "", "") == ("cfg-m", "low"), "Default names the configured model: an earlier override would hold"
     assert seen[0][1]["command"].endswith("tee ~/.ssh/authorized_keys'") and "cat README.md" in seen[0][2], seen[0]

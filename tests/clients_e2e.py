@@ -648,6 +648,10 @@ def hook_errors(tmp: Path, project: Path):
 
 FAKE_AGENT = """import json, os, sys, time
 calls, name, args = os.environ["KN_FAKE_CALLS"], sys.argv[1], sys.argv[2:]
+def look():  # LOOK: the agent looks at an image (the chat shows it under the tool line)
+    f = os.path.abspath(calls + "." + name + ".png")
+    open(f, "wb").write(b"PNG " + name.encode())
+    return f
 rec = lambda x: open(calls, "a", encoding="utf-8").write(json.dumps(x) + "\\n")
 if name == "codex" and args == ["debug", "models"]:  # what a chat may pick: one listed model, one hidden
     print(json.dumps({"models": [{"slug": "fake-big", "display_name": "Fake Big", "visibility": "list", "default_reasoning_level": "high", "supported_reasoning_levels": [{"effort": "high"}, {"effort": "ultra"}]},
@@ -696,6 +700,8 @@ if name == "codex" and args[:1] == ["app-server"] and os.environ.get("KNOWLEDGE_
             send({"id": m["id"], "result": {"turn": {"id": tid, "status": "inProgress"}}})
             note("turn/started", {"threadId": "sess-codex", "turn": {"id": tid, "status": "inProgress"}})
             note("item/started", {"item": {"type": "commandExecution", "command": "git status"}})
+            if "LOOK" in texts[0]:
+                note("item/completed", {"item": {"type": "imageView", "id": "iv1", "path": look()}})
             status, verdict = "completed", ""
             if "ASK" in texts[0]:
                 send({"id": 0, "method": "item/commandExecution/requestApproval", "params": {"reason": "run the tests", "command": "/bin/sh -lc 'npm test'",
@@ -773,6 +779,8 @@ elif os.environ.get("KNOWLEDGE_CHAT") and name == "agy" and args[:1] == ["acp"]:
             if "PAUSE" in text:  # a turn that takes a while (a companion restart falls in it)
                 time.sleep(8)
             upd({"sessionUpdate": "tool_call", "toolCallId": "c1", "name": "run_command", "kind": "execute", "rawInput": {"CommandLine": "git status"}})
+            if "LOOK" in text:
+                upd({"sessionUpdate": "tool_call", "toolCallId": "c9", "name": "view_file", "kind": "read", "rawInput": {"AbsolutePath": look()}})
             send({"id": "p1", "method": "session/request_permission", "params": {"sessionId": "sess-agy", "toolCall": {
                 "toolCallId": "c1", "name": "view_file", "kind": "read", "rawInput": {"AbsolutePath": os.path.join(os.getcwd(), "README.md")}},
                 "options": [{"optionId": "allow", "kind": "allow_once"}, {"optionId": "deny", "kind": "reject_once"}]}})
@@ -846,6 +854,8 @@ elif name == "claude" and "--input-format" in args and os.environ.get("KNOWLEDGE
         said_before = True
         out({"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": said}}})
         out({"type": "assistant", "message": {"content": [{"type": "text", "text": said}, {"type": "tool_use", "name": "Bash", "input": {"command": "git status"}}]}})
+        if "LOOK" in texts[0]:
+            out({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Read", "input": {"file_path": look()}}]}})
         out({"type": "result", "is_error": False, "session_id": sid, "permission_denials": [{"tool_name": "Bash", "tool_input": {"command": "git push"}}]})
 elif os.environ.get("KNOWLEDGE_CHAT"):  # one chat turn: the message on stdin, the agent's own JSON stream out
     import time
@@ -1603,6 +1613,14 @@ def chat_e2e(tok: str, tmp: Path):
             check(f"echo: {msg1}" in texts and "echo: second (resumed)" in texts and "OLD HISTORY" not in texts and "PRE-DENIED" not in texts and any(e["kind"] == "tool" and "git status" in e["text"] for e in events)
                   and [e["kind"] for e in events if e["kind"] == "user"] == ["user", "user"] and chat(cid)["chat"]["session"] == "sess-" + agent,
                   f"chat {agent}: the streamed text and tool lines reach the server", json.dumps(events)[:900])
+            send(cid, "LOOK at the board")  # an image the agent looked at shows in the chat, under its tool line
+            shots = lambda: [e for e in chat(cid)["events"] if e["kind"] == "tool" and "⟦file:" in e["text"]]
+            wait_for(lambda: shots() and chat(cid)["chat"]["status"] == "idle", 30)
+            shot = shots()
+            ref = re.search(r"⟦file:([0-9a-f]{12}/[^⟧]+)⟧", shot[-1]["text"]) if shot else None
+            got = http("GET", f"/ui/api/chat/file?machine={mid}&file={urllib.parse.quote(ref.group(1))}", headers=ui) if ref else (0, b"")
+            check(bool(ref) and ref.group(1).endswith(f".{agent}.png") and got[0] == 200 and got[1] in (b"PNG " + agent.encode(), "PNG " + agent),
+                  f"chat {agent}: an image the agent looked at reaches the server and shows under its tool line", json.dumps(shot)[:600] + str(got)[:200])
             if agent == "codex":
                 check(first["argv"][:2] == ["codex", "app-server"] and first.get("perms", {}).get("sandbox") == "workspace-write"
                       and first["perms"].get("approvalPolicy") == "on-request" and not any("writable_roots" in a for a in first["argv"]),

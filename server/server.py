@@ -5937,15 +5937,31 @@ async def ui_chat_file(request: Request):
     return JSONResponse({"ref": ref, "size": len(data)})
 
 
-@server.custom_route("/machine/chats/file", methods=["GET"])
+@server.custom_route("/machine/chats/file", methods=["GET", "POST"])
 async def machine_chat_file(request: Request):
-    """?file=<id>/<name>: a file attached to a message for a chat on this machine, for the companion to put on disk."""
+    """GET ?file=<id>/<name>: a file attached to a message for a chat on this machine, for the companion to put on disk.
+    POST ?chat= (body: the file, X-Filename header): an image the chat's agent looked at, shown in the chat; answers
+    the mark the companion puts in the tool line."""
     if no := remote_refused():
         return no
+    dev = device.get()
+    mid = dev.get("machine", "")
+    if request.method == "GET":
+        try:
+            return file_response(await asyncio.to_thread(chat_file_path, mid, request.query_params.get("file", "")))
+        except (ValueError, OSError) as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
     try:
-        return file_response(await asyncio.to_thread(chat_file_path, device.get().get("machine", ""), request.query_params.get("file", "")))
+        c = await asyncio.to_thread(read_json, chat_file(mid, request.query_params.get("chat", "")), None)
+        if not c or dev["name"] not in c.get("tokens", []):
+            return JSONResponse({"error": "not a chat of this machine"}, status_code=404)
+        data = await request.body()
+        if not data or len(data) > CHAT_FILE_MAX:
+            return JSONResponse({"error": "a file is 1 byte to 10 MB"}, status_code=413)
+        ref = await asyncio.to_thread(store_chat_file, mid, urllib.parse.unquote(request.headers.get("x-filename", "file")), data)
     except (ValueError, OSError) as e:
-        return JSONResponse({"error": str(e)}, status_code=404)
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return JSONResponse({"ref": ref, "size": len(data)})
 
 
 @server.custom_route("/machine/chats", methods=["GET"])

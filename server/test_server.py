@@ -828,6 +828,13 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert urllib.request.urlopen(req, timeout=10).read() == b"\x89PNG img"
     other = {"X-Knowledge-Machine": "dddddddddddddddd", "X-Knowledge-Machine-Label": "shed"}
     assert http("GET", f"/machine/chats/file?file={urllib.parse.quote(ref[6:-1])}", token=fr, headers=other)[0] == 404, "another machine's file"
+    # An image the chat's agent looked at: the companion puts it up for one of this machine's chats, never another's.
+    shot = lambda cid, h=pc, data=b"\x89PNG shot": raw("POST", f"/machine/chats/file?chat={cid}", data, {**h, "Authorization": f"Bearer {fr}", "X-Filename": "board%201920.png"})
+    st, _, b = shot(mc)
+    ref3 = json.loads(b)["ref"]
+    assert st == 200 and ref3.endswith("/board 1920.png⟧"), b
+    assert raw("GET", f"/ui/api/chat/file?machine={mid}&file={urllib.parse.quote(ref3[6:-1])}", None, ck)[2] == b"\x89PNG shot"
+    assert shot("000000000000")[0] == 404 and shot(mc, other)[0] == 404 and shot(mc, pc, b"")[0] == 413
     # A live chat (the pc says its Claude runs live): while it works, Send goes into the running agent at once (now),
     # Force too (its step stops first); Queue waits; a live message not handed out when the turn ends goes next; a turn
     # the agent starts by itself sets the chat running.

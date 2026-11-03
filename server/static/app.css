@@ -576,8 +576,8 @@ body.admin-page { display: block; overflow-y: auto; }
 .ck-filechip { display: inline-flex; align-items: center; gap: 4px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ck-mic.rec { color: var(--bad, #c33); font-variant-numeric: tabular-nums; }
 .ck-form.drop .ck-box { border-style: dashed; border-color: var(--accent); }
-.ck-msg.user .ck-file { display: block; margin: 6px 0 0; }
-.ck-msg.user .ck-img { display: block; max-width: min(360px, 100%); max-height: 260px; border-radius: 6px; border: 1px solid var(--line); }
+.ck-msg.user .ck-file, .ck-line.tool .ck-file { display: block; margin: 6px 0 0; }
+.ck-msg.user .ck-img, .ck-line.tool .ck-img { display: block; max-width: min(360px, 100%); max-height: 260px; border-radius: 6px; border: 1px solid var(--line); }
 .ck-form .ck-picks { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; min-width: 0; }
 .ck-form .ck-picks .ck-model > summary { border-color: transparent; background: transparent; color: var(--muted); }
 .ck-form .ck-picks .ck-model > summary:hover, .ck-form .ck-picks .ck-model[open] > summary { background: var(--hover); color: var(--ink); }

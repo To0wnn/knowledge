@@ -683,6 +683,14 @@ def server_file(tok: str, ref: str) -> bytes:
         return r.read()
 
 
+def server_upload(tok: str, cid: str, name: str, data: bytes) -> str:
+    """An image a chat's agent looked at, onto the server for the web UI; answers its mark ⟦file:…⟧."""
+    req = urllib.request.Request(token_store.url() + "/machine/chats/file?chat=" + urllib.parse.quote(cid), method="POST", data=data,
+                                 headers={**token_store.headers(tok), "Content-Type": "application/octet-stream", "X-Filename": urllib.parse.quote(name)})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return json.loads(r.read().decode("utf-8") or "{}").get("ref", "")
+
+
 def claim(task: dict, tok: str, session: str, start: str = "") -> str:
     """Take the task for this pc on the server before waking anything: '' when this pc holds it now, else the device
     that does (another pc already woke a session for it, or the line is pinned to another device)."""
@@ -1738,6 +1746,7 @@ def chats_round() -> bool:
     if remote_off(r.get("agents") is False):
         return False
     chat.ASK_SERVER, chat.LOG = (lambda body: server("POST", "/machine/chats/ask", tok, body)), log
+    chat.UPLOAD = lambda cid, name, data: server_upload(tok, cid, name, data)
     fetch = lambda ref: server_file(tok, ref)
     for a in r.get("answers", []):  # the owner's answers to tool approvals (before the stops: a stop denies the rest)
         chat.answer(a)

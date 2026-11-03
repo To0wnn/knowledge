@@ -1009,9 +1009,9 @@ function ckMic(card, btn) {
   btn.addEventListener("pointerup", () => { if ((rec || starting) && held && Date.now() - held > 700) stop(); held = 0; });
   btn.addEventListener("click", (e) => { if (e.detail === 0) btn.toggle(); }); // the keyboard (Enter/Space on the button)
 }
-// A message of the owner: its text, each attachment a thumbnail (images) or a download link.
-function ckUserMsg(card, text) {
-  const box = el("div", "ck-msg user");
+// A message of the owner, or a tool line naming an image the agent looked at: its text, each file a thumbnail
+// (images) or a download link.
+function ckUserMsg(card, text, box = el("div", "ck-msg user")) {
   let at = 0;
   for (const m of text.matchAll(CK_REF)) {
     box.append(text.slice(at, m.index)); at = m.index + m[0].length;
@@ -1024,6 +1024,7 @@ function ckUserMsg(card, text) {
   box.append(text.slice(at));
   return box;
 }
+const ckLine = (card, e) => (e.kind === "tool" && e.text.includes("⟦file:") ? ckUserMsg(card, e.text, el("div", "ck-line tool")) : el("div", `ck-line ${e.kind}`, e.text));
 // New events into a card's log: text as sanitized Markdown, the rest as lines; never one twice.
 const CK_PAGE = 200; // events a chat opens with, and loads per step when you scroll up
 function ckEvents(card, res) {
@@ -1039,7 +1040,7 @@ function ckEvents(card, res) {
       const msg = last && last.classList.contains("agent") ? last : card.log.appendChild(el("div", "ck-msg agent md"));
       msg.dataset.raw = (msg.dataset.raw || "") + e.text;
       dirty.add(msg);
-    } else card.log.append(e.kind === "user" ? ckUserMsg(card, e.text) : el("div", `ck-line ${e.kind}`, e.text));
+    } else card.log.append(e.kind === "user" ? ckUserMsg(card, e.text) : ckLine(card, e));
   }
   for (const msg of dirty) msg.innerHTML = renderMd(msg.dataset.raw.replace(/^\n+/, ""));
   if (res.events.length) {
@@ -1092,7 +1093,7 @@ function ckSub(card, e) {
   if (e.kind === "usage") { b.tokens = e.total ?? (b.tokens || 0) + (e.tokens || 0); b.tk.textContent = `${ckNum(b.tokens)} tokens`; return ckSubbar(card); }
   if (e.kind === "sub" && e.status === "running") b.label.textContent = e.text;
   else if (e.kind === "sub") report(b, e);
-  else b.tools.append(el("div", `ck-line ${e.kind}`, e.text));
+  else b.tools.append(ckLine(card, e));
   const status = e.kind === "sub" ? e.status || "running" : b.status || "running";
   b.status = status; b.d.classList.toggle("running", status === "running");
   b.st.className = `chip${status === "failed" ? " bad" : status === "done" ? "" : " live"}`;
