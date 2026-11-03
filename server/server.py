@@ -5319,6 +5319,22 @@ def chat_card(c: dict) -> tuple[str, str]:
     return ("done", "read") if time.time() - (c.get("updated") or 0) < BOARD_DONE else ("", "")
 
 
+def chat_outcome(c: dict) -> str:
+    """The last sentence the agent said in its newest run of text (subagents and usage left out), plain, 160 characters at
+    most; "" when that run is empty. Only the newest events: a chat holds thousands."""
+    run = []
+    for e in reversed((c.get("events") or [])[-200:]):
+        if e.get("sub") or e["kind"] in ("usage", "sub"):
+            continue
+        if e["kind"] != "text":
+            break
+        run.append(e["text"])
+    text = "".join(reversed(run)).replace("`", "")
+    parts = [" ".join(s.split()) for line in text.splitlines() for s in re.split(r"(?<=[.!?])\s+", line.strip().lstrip("#*-> "))]
+    last = next((s for s in reversed(parts) if s), "")
+    return last if len(last) <= 160 else last[:159] + "…"
+
+
 def task_hosts(t: dict, rows: list[dict]) -> list[dict]:
     """The viewer's own online pcs that may start a worker for this task now ("Start on <pc>"): workers allowed, the
     owner's agent there, a folder linked to its project; none while it is not startable or already held."""
@@ -5347,7 +5363,7 @@ def board_items() -> list[dict]:
                 items.append({**base, "kind": "chat", "col": col, "id": c["id"], "agent": c.get("agent"), "project": c.get("project"),
                               "key": f"chat:{r['id']}/{c['id']}", "sig": str(c.get("next", 0)),
                               "title": c.get("title") or "New chat", "folder": c.get("folder"), "at": c.get("updated") or 0,
-                              "line": line, "git": git.get(c.get("folder")),
+                              "line": line, "git": git.get(c.get("folder")), "outcome": chat_outcome(c),
                               "subs": sum(1 for s in (c.get("subs") or {}).values() if s == "running")})
             for a in asks_open(c, now):  # one Needs-you item per open approval, answered right there
                 items.append({**base, "kind": "ask", "col": "needs", "id": a["id"], "chat": c["id"], "agent": c.get("agent"),
@@ -5406,8 +5422,8 @@ def board_items() -> list[dict]:
             held = t["runs"].startswith(("running in", "taken by"))
             items.append({**task, "col": "running" if held else "open", "hosts": task_hosts(t, rows),
                           "line": t["runs"] or t["waiting_reason"] or (f"due {t['due']}" if t["due"] else f"start {t['start']}")})
-    gone = read_json(BOARD_DISMISSED, {}).get(device.get().get("user", ""), {})  # dismissed until the item changes
-    items = [i for i in items if not (i["col"] == "needs" and gone.get(i["key"], {}).get("sig") == i["sig"])]
+    gone = read_json(BOARD_DISMISSED, {}).get(device.get().get("user", ""), {})  # dismissed until the item changes (or snoozed until "until")
+    items = [i for i in items if not (i["col"] == "needs" and (g := gone.get(i["key"], {})).get("sig") == i["sig"] and now < (g.get("until") or float("inf")))]
     # a branch under review is that one card: not also its ended worker and its result line (a rejected review shows them again)
     rev = {(i["project"], i["task"]) for i in items if i["kind"] == "review"}
     items = [i for i in items if not (i["kind"] == "worker" and i["col"] != "running" and (i["project"], REVIEW_BASE.sub("", i["id"] or "")) in rev
@@ -5461,19 +5477,22 @@ async def ui_board(request: Request):
 
 @server.custom_route("/ui/api/board/dismiss", methods=["POST"])
 async def ui_board_dismiss(request: Request):
-    """{key, sig}: take a Needs-you item off this person's board until it changes (a new signature brings it back)."""
+    """{key, sig, until?}: take a Needs-you item off this person's board until it changes (a new signature brings it
+    back); with until (Unix seconds, at most 30 days ahead) it is snoozed: back at that time or on a change, whichever first."""
     user = device.get().get("user", "")
     try:
         b = await request.json()
-        key, sig = str(b.get("key", "")), str(b.get("sig", ""))
-        if not user or not re.fullmatch(r"(chat|worker|task|handover):[\w./-]{1,200}", key) or not 0 < len(sig) <= 80:
+        key, sig, until = str(b.get("key", "")), str(b.get("sig", "")), b.get("until")
+        if not user or not re.fullmatch(r"(chat|worker|task|handover|review):[\w./-]{1,200}", key) or not 0 < len(sig) <= 80:
             raise ValueError("send JSON {key, sig} of a board item")
+        if until is not None and (isinstance(until, bool) or not isinstance(until, (int, float)) or not time.time() < until <= time.time() + 30 * 86400):
+            raise ValueError("until: Unix seconds in the future, at most 30 days ahead")
     except (ValueError, AttributeError) as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 
     def change(d):
         mine = d.setdefault(user, {})
-        mine[key] = {"sig": sig, "at": time.time()}
+        mine[key] = {"sig": sig, "at": time.time(), **({"until": until} if until is not None else {})}
         for k in sorted(mine, key=lambda k: mine[k]["at"])[:max(0, len(mine) - 500)]:  # the oldest go: at most 500 per person
             mine.pop(k)
     await asyncio.to_thread(update_state, BOARD_DISMISSED, change)

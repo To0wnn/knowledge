@@ -5,11 +5,16 @@ Moved from the README; [back to the README](../README.md).
 ## Views
 
 - **Web UI:** one app shell: a sidebar (`[` folds it to an icon rail; below 1000 px it is the rail) with one project
-  picker on top (keys 1-9, 0 = all; it scopes every view: Notes, Map, Inbox, Chats, Tasks and a new chat's folder; the
-  Inbox badge still counts all), **Agents** (Inbox, Chats, Tasks, Machines) and **Knowledge** (Notes, Map, Changes,
+  picker on top (keys 1-9, 0 = all; it scopes every view: Notes, Map, Agents, Tasks and a new chat's folder; the
+  Needs-you badge still counts all), **Agents** (Agents, Tasks, Machines) and **Knowledge** (Notes, Map, Changes,
   Health = lint), This pc, Admin, Help and Settings (user menu: a new chat's default model);
-  on a phone a bottom tab bar (Inbox, Chats, Tasks, Notes, More). Every view has its own URL (`#/inbox`, `#/notes/<path>`,
-  `#/map`, `#/tasks?view=flow`, …), so refresh, back and forward work; an old `#<path>` link opens the note. The sidebar goes back to where you were in a view (its last route and scroll, per tab: sessionStorage `kn_routes`); clicking the view you are on goes to its start. Usage chips (Inbox, Chats) show each agent's fullest limit and reset time (Claude from its sessions and workers, Codex from its rollout or, without a session, `codex app-server` `account/rateLimits/read` every 15 min, agy from a running agy's language server, else the cloud quota call agy itself makes (`v1internal:fetchAvailableModels` with agy's OAuth token from `~/.gemini/antigravity-cli/antigravity-oauth-token`, `User-Agent: antigravity-cli` or Google answers 403; an expired token is renewed with `agy models`, no prompt; every 15 min; undocumented API, so a failure goes to the activity log)).
+  on a phone a bottom tab bar (Agents, Tasks, Notes, More). The Agents view (`#/chats`; `#/inbox` opens the same view) is one
+  list grouped Needs you (each row says why: answered and not read, asks approval, failed), Review (branches ready to
+  merge, finished workers), Working and Done today (folded), with quick actions on a row (Allow/Deny an approval,
+  Merge/Reject a review, a one-line Reply, Snooze 1 h / until tomorrow, Dismiss) and the open chat on the right; on a
+  phone the list is the start screen and a chat opens full screen. Its "Side by side" mode (`#/chats?view=board`)
+  shows several chats next to each other. Details: [chats.md](chats.md). Every view has its own URL (`#/chats`, `#/notes/<path>`,
+  `#/map`, `#/tasks?view=flow`, …), so refresh, back and forward work; an old `#<path>` link opens the note. The sidebar goes back to where you were in a view (its last route and scroll, per tab: sessionStorage `kn_routes`); clicking the view you are on goes to its start. Usage chips (Agents) show each agent's fullest limit and reset time (Claude from its sessions and workers, Codex from its rollout or, without a session, `codex app-server` `account/rateLimits/read` every 15 min, agy from a running agy's language server, else the cloud quota call agy itself makes (`v1internal:fetchAvailableModels` with agy's OAuth token from `~/.gemini/antigravity-cli/antigravity-oauth-token`, `User-Agent: antigravity-cli` or Google answers 403; an expired token is renewed with `agy models`, no prompt; every 15 min; undocumented API, so a failure goes to the activity log)).
   Ctrl/Cmd+K (or "Search or jump", or the phone's search icon) opens a command palette: notes by title, text and
   meaning, chats, tasks, every view and a few actions (new chat, theme, sidebar, mission flow), with arrow keys, Enter,
   Esc and your recent picks; `/` opens it for notes only, and "Search all notes" opens the search page
@@ -37,7 +42,7 @@ One small set of controls in `server/static/app.css` ("Controls"), shared by the
 - **Buttons** are 8 px rectangles in two sizes, 36 px and `.small` 28 px (44 px on a phone), chosen by class, never by
   where they sit: `.btn` (secondary), `.btn.primary`, `.btn.quiet`, `.btn.danger`, `.btn.icon`. A pressed toggle or an
   open `<details>` button wears the amber tint. Inputs and selects are as high as the buttons beside them.
-- **Clickable rows and cards** (`.row-link`, a chat in the list, an Inbox card) tint on hover, underline their title and
+- **Clickable rows and cards** (`.row-link`, a row in the Agents list) tint on hover, underline their title and
   end in a `›`. **Disclosures** always show `▸`/`▾`, also on a phone; a menu shows `▾`.
 - **Links** have one look: the accent ink with a soft underline (never the browser's blue).
 - **Status chips** (`.chip`, `.pill`, `.badge`, counts) are the only pills and never look clickable: no border, the
@@ -51,7 +56,7 @@ One small set of controls in `server/static/app.css` ("Controls"), shared by the
 ## Install as an app (PWA)
 
 The web UI installs as an app (Chrome or Edge menu, "Install app"; Safari, "Add to Home Screen"): a manifest at
-`/ui/manifest.webmanifest` (start page `/ui#/inbox`, scope `/ui`, standalone) with 192/512 px and maskable icons.
+`/ui/manifest.webmanifest` (start page `/ui#/inbox`, the Agents view, scope `/ui`, standalone) with 192/512 px and maskable icons.
 There is no service worker: Chrome needs none for "Install app" since version 108 on Android and 112 on desktop,
 only its automatic install banner still wants a fetch handler
 ([Chrome blog](https://developer.chrome.com/blog/update-install-criteria)). The manifest and icons carry no data and

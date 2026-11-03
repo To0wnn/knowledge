@@ -1188,6 +1188,7 @@ def board_contract(tmp, ck, fr, raw, er, et):
     col = lambda kind, i: items.get((kind, i), {}).get("col")
     reply = items[("chat", cids[0])]
     assert reply["col"] == "needs" and "merge?" in reply["line"] and reply["label"] == "garage" and reply["git"]["ahead"] == 2, reply
+    assert reply["outcome"] == "All done, merge?" and items[("chat", cids[1])]["outcome"] == "", (reply, items[("chat", cids[1])])
     assert reply["git"]["changed"] == 0, "a number the companion sent as text is no number"
     assert col("chat", cids[1]) == "needs" and items[("chat", cids[1])]["line"] == "refused: git push", items[("chat", cids[1])]
     assert col("chat", cids[2]) == "running"
@@ -1276,6 +1277,21 @@ def board_contract(tmp, ck, fr, raw, er, et):
     http("POST", "/machine/chats/events", {"chat": cids[1], "events": [{"kind": "refused", "text": "git push -f"}], "done": True}, token=fr, headers=pc)
     back = {(i["kind"], i["id"]): i for i in board()}.get(("chat", cids[1]), {})
     assert back.get("col") == "needs" and back["line"] == "refused: git push -f", back
+    # Snooze (until): hidden until that time or until the item changes, whichever comes first.
+    shows = lambda: ("chat", cids[1]) in {(i["kind"], i["id"]) for i in board()}
+    assert ui("/ui/api/board/dismiss", {"key": back["key"], "sig": back["sig"], "until": time.time() + 2})[0] == 200
+    assert not shows(), "a snoozed item is hidden"
+    time.sleep(2.2)
+    assert shows(), "a snooze that ran out shows the item again"
+    assert ui("/ui/api/board/dismiss", {"key": back["key"], "sig": back["sig"], "until": time.time() + 600})[0] == 200
+    assert not shows()
+    ui("/ui/api/chat/send", {"machine": mid, "id": cids[1], "text": "once more"})
+    http("GET", "/machine/chats", token=fr, headers=pc)
+    http("POST", "/machine/chats/events", {"chat": cids[1], "events": [{"kind": "refused", "text": "rm -rf"}], "done": True}, token=fr, headers=pc)
+    assert shows(), "a snoozed item that changed shows again"
+    assert ui("/ui/api/board/dismiss", {"key": "review:garage/garden/BRD-1", "sig": "1"})[0] == 200, "review cards can be dismissed"
+    for bad in (time.time() + 31 * 86400, time.time() - 1, "soon", True):
+        assert ui("/ui/api/board/dismiss", {"key": back["key"], "sig": back["sig"], "until": bad})[0] == 400, bad
     # A turn the owner stopped is no reply to answer; a chat from before 0.17 (no "seen") is read; nor an old one.
     ui("/ui/api/chat/send", {"machine": mid, "id": cids[1], "text": "slow"})
     http("GET", "/machine/chats", token=fr, headers=pc)

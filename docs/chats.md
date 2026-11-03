@@ -1,30 +1,36 @@
-# Inbox, chats and approvals
+# Agents, chats and approvals
 
 Moved from the README; [back to the README](../README.md). The web UI's attention board and the chats with agents on your own pcs, including how a tool call is approved
 from a phone. The pc side runs in the companion ([companion.md](companion.md)).
 
-## Agents: Inbox and Chats
+## Agents
 
-- **Agents: Inbox and Chats (chat with your agents):** the web UI's **Inbox** (key `A`, the start page) is the
+- **Agents (chat with your agents):** the web UI's **Agents** view (route `#/chats`, key `A`, the start page;
+  `#/inbox` keeps working and opens the same view) is one list on the left with the open chat on the right, fed by the
   **attention board** (`GET /ui/api/board`); its sidebar badge counts what needs you, on every view and in every
-  project. The header filters Inbox, Chats and Tasks to one project ("show all" says how many Needs-you items the
-  filter hides) and shows when the fullest usage window resets. Its columns, each grouped per project with a count: **Needs you** (a chat whose agent
-  answered and you have not opened since, a refused tool call or error in its last turn, a failed worker of the last
-  week with the companion's reason (`why`), a worker whose pc went offline ("pc offline since <time>", no Stop), a
-  task line waiting for your approval, a task woken that nobody took, a result or hand-over to a person (`result`:
-  read it, then remove the line; it never starts anything), a task whose "start after" task was cancelled
-  (`blocked`)), **Running** (chat turns, workers, task
-  lines a session holds), **Open** (task lines for an agent, with where they will run and a "Start on <pc>" button
-  per pc that may take it) and **Done (24 h)** (chats read, workers ended, results handed back). Opening a chat marks
-  it read (chats from before 0.17 count as read; a turn you stopped yourself and replies older than a week do not
-  need you). Dismiss takes a Needs-you item off your own board until it changes (stored per person on the server,
-  `POST /ui/api/board/dismiss`). With Matrix configured (`KNOWLEDGE_MATRIX_URL/ROOM/TOKEN`), a new Needs-you item on
-  an admin's board gives one Matrix message in that room, with a link to the item itself,
-  `<KNOWLEDGE_PUBLIC_URL>/ui#/inbox/<key>` (every board item has a stable `key`): once per item and version (the key and signature Dismiss uses), at most
-  `needs_per_hour` an hour (admin page, Settings; 0 = off, default 6; more at once give one summary, the rest wait
-  for room), and none while an admin has the board open (polled in the last 2 minutes: they see it there). A woken
-  task nobody took keeps its own notice, now with the same link. Non-admins get none: the room is the admin's. A card opens its chat (Esc or Back returns), a task its memo line, a worker how to look
-  at it; Approve, Start and Stop act in place. A phone shows the columns one under the other, Done folded to one line. Chat cards and workers
+  project. The header filters the list and Tasks to one project ("show all" says how many Needs-you items the filter
+  hides) and shows when the fullest usage window resets. The list is grouped: **Needs you**, each row saying why (a
+  chat whose agent answered and you have not opened since, a refused tool call or error in its last turn, an approval
+  it asks, a failed worker of the last week with the companion's reason (`why`), a worker whose pc went offline ("pc
+  offline since <time>", no Stop), a task line waiting for your approval, a task woken that nobody took, a result or
+  hand-over to a person (`result`: read it, then remove the line; it never starts anything), a task whose "start
+  after" task was cancelled (`blocked`)); **Review** (branches ready to merge, finished workers); **Working** (chat
+  turns, workers, task lines a session holds, and open task lines for an agent with a "Start on <pc>" button per pc
+  that may take it); **Done today** (folded: chats read, workers ended, results handed back). A chat row shows its
+  `outcome`, the last sentence the agent said (plain text, at most 160 characters). Quick actions on a row: Allow or
+  Deny an approval, Merge or Reject a review, a one-line Reply, Snooze (1 h or until tomorrow) and Dismiss. Opening a
+  chat marks it read (chats from before 0.17 count as read; a turn you stopped yourself and replies older than a week
+  do not need you). Dismiss takes a Needs-you item off your own board until it changes; Snooze (`until`, Unix seconds,
+  at most 30 days ahead) hides it until that time or until it changes, whichever comes first (stored per person on
+  the server, `POST /ui/api/board/dismiss` with `{key, sig, until?}`). With Matrix configured
+  (`KNOWLEDGE_MATRIX_URL/ROOM/TOKEN`), a new Needs-you item on an admin's board gives one Matrix message in that room,
+  with a link to the item itself, `<KNOWLEDGE_PUBLIC_URL>/ui#/inbox/<key>` (every board item has a stable `key`): once
+  per item and version (the key and signature Dismiss uses), at most `needs_per_hour` an hour (admin page, Settings;
+  0 = off, default 6; more at once give one summary, the rest wait for room), and none while an admin has the board
+  open (polled in the last 2 minutes: they see it there). A woken task nobody took keeps its own notice, now with the
+  same link. Non-admins get none: the room is the admin's. A row opens its chat on the right (Esc or Back returns), a
+  task its memo line, a worker how to look at it. On a phone the list is the start screen and a chat opens full
+  screen. **Side by side** (`#/chats?view=board`, formerly "Board") shows several chats next to each other. Chat cards and workers
   carry a **git button** (`task/KN-12 · ●3 · ↑2↓0`: branch, changed files, commits ahead/behind `main`/`master`, or
   the upstream on main itself), which the companion counts once a round per folder with `GIT_OPTIONAL_LOCKS=0` and
   sends in its report (the linked folder only, `-- .`, also inside a bigger repo); a tap asks that pc for the diff (`POST /ui/api/git/diff`, handed to the companion with the chat
