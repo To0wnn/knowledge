@@ -1861,6 +1861,14 @@ def main():
         import server as srv
         assert srv.is_archive("a350/docs/history/x.md") and srv.is_archive("a/requests/archief-2026-10-23/x.md")
         assert not srv.is_archive("a350/old.md") and not srv.is_archive("memory/project_old.md")
+        # Dismissals per person: ended snoozes go before any permanent dismissal, then the oldest.
+        mine = {"gone": {"sig": "1", "at": 1}, "ended": {"sig": "1", "at": 2, "until": 3}, "later": {"sig": "1", "at": 4, "until": time.time() + 99},
+                **{f"k{i}": {"sig": "1", "at": 10 + i} for i in range(srv.DISMISS_KEEP - 2)}}
+        srv.keep_dismissed(mine)
+        assert "ended" not in mine and "gone" in mine and "later" in mine and len(mine) == srv.DISMISS_KEEP, len(mine)
+        mine["new"] = {"sig": "1", "at": 9999}
+        srv.keep_dismissed(mine)
+        assert len(mine) == srv.DISMISS_KEEP and "gone" not in mine and "later" in mine and "k0" in mine, sorted(mine)[:3]
         # First start: one admin token on a fresh installation only; never again, never over existing tokens.
         fresh = tmp / "fresh" / "tokens.json"
         first = srv.first_token(fresh)

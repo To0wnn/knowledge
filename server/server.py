@@ -5548,10 +5548,21 @@ async def ui_board_dismiss(request: Request):
     def change(d):
         mine = d.setdefault(user, {})
         mine[key] = {"sig": sig, "at": time.time(), **({"until": until} if until is not None else {})}
-        for k in sorted(mine, key=lambda k: mine[k]["at"])[:max(0, len(mine) - 500)]:  # the oldest go: at most 500 per person
-            mine.pop(k)
+        keep_dismissed(mine)
     await asyncio.to_thread(update_state, BOARD_DISMISSED, change)
     return JSONResponse({"ok": True})
+
+
+DISMISS_KEEP = 500  # dismissed, snoozed and rejected board items kept per person
+
+
+def keep_dismissed(mine: dict):
+    """At most DISMISS_KEEP: snoozes that ended go first (they hide nothing any more), then the oldest."""
+    now = time.time()
+    for k in [k for k, v in mine.items() if v.get("until") and v["until"] <= now]:
+        mine.pop(k)
+    for k in sorted(mine, key=lambda k: mine[k]["at"])[:max(0, len(mine) - DISMISS_KEEP)]:
+        mine.pop(k)
 
 
 REVIEW_OWNERS = {"claude": "Claude", "codex": "Codex", "agy": "Gemini"}  # the owner name a task line gives each agent
@@ -5589,7 +5600,9 @@ async def ui_review_reject(request: Request):
             return JSONResponse({"error": str(e)}, status_code=409)
 
     def change(d):
-        d.setdefault(user, {})[key] = {"sig": item["sig"], "at": time.time(), "reason": reason, "rejected": True}
+        mine = d.setdefault(user, {})
+        mine[key] = {"sig": item["sig"], "at": time.time(), "reason": reason, "rejected": True}
+        keep_dismissed(mine)
     await asyncio.to_thread(update_state, BOARD_DISMISSED, change)
     audit("review-reject", f"{item['project']}/{item['task']} {item['branch']}" + (" sent back" if back else "") + (f": {reason}" if reason else ""))
     return JSONResponse({"ok": True, "line": line})
