@@ -1334,6 +1334,7 @@ def board_contract(tmp, ck, fr, raw, er, et):
     assert cards[wid]["git"] == wpill and cards[cids[2]]["git"]["branch"] == "task/KN-12", cards.get(wid)
     rid = json.loads(ui("/ui/api/git/diff", {"machine": mid, "chat": wid})[2])["id"]
     assert json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["diffs"] == [{"id": rid, "folder": "/home/x/garden", "chat": wid}]
+    http("POST", "/machine/chats/events", {"chat": wid, "events": [], "done": True}, token=fr, headers=pc)  # its turn ends: no busy chat left
     # Every companion poll reads diffs.json; it is written only when a request waits or expired.
     dq = tmp / "chats" / mid / "diffs.json"
     before = dq.stat().st_mtime_ns
