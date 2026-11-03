@@ -864,7 +864,7 @@ document.addEventListener("keydown", (e) => {
   else if (/^[1-9]$/.test(e.key) && PROJECTS[Number(e.key) - 1]) switchProject(PROJECTS[Number(e.key) - 1]);
   else if (e.key === "0") switchProject(ALL);
   else if (e.key.toLowerCase() === "m") go(mapOn ? `#/notes${at}` : `#/map${at}`);
-  else if (e.key === "Escape" && shellRoute.view === "chats" && ck.view) ckShow(null);
+  else if (e.key === "Escape" && shellRoute.view === "chats" && ck.view) { store.set("kn_last_chat", ""); ckShow(null); } // as its ×
   else if (!kn) return;
   else if (e.key.toLowerCase() === "e" && current?.writable) { e.preventDefault(); startEdit(); }
   else if (e.key === "Escape") deselect();
@@ -1424,6 +1424,7 @@ async function ckSummary() {
     else { // gone or never there: the list, without a dead chat in the URL
       ck.view = "";
       if (shellRoute.view === "chats" && shellRoute.arg) { history.replaceState(history.state, "", "#/chats"); shellRoute = { ...shellRoute, arg: "" }; lastRoute.chats = "#/chats"; }
+      store.set("kn_last_chat", ""); // a link to a chat that is gone lands on the list, not on another chat
     }
   }
   ckList(); ckLayout();
