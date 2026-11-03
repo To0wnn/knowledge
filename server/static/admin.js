@@ -340,6 +340,7 @@ function renderSystem() {
   $("lessons").replaceChildren(...(sys.lessons.length ? sys.lessons.map((l) =>
     row(stamp(new Date(l.at)), `${l.device} (${l.project})`, l.status, `${l.what} — prevent: ${l.prevent}${l.note ? ` [${l.note}]` : ""}`)
   ) : [emptyRow(4, "No lessons yet.")]));
+  for (const k of ["background", "index-roots", "config", "audit", "gaps", "lessons"]) $(`n-${k}`).textContent = sys[{ "index-roots": "index" }[k] || k].length || "";
 }
 
 let loaded = false;
@@ -456,17 +457,28 @@ $("project-form").onsubmit = (e) => {
     .then((ok) => ok && e.target.reset());
 };
 
-// One section at a time, chosen in the nav; the hash keeps it on reload (/ui/admin#settings).
+// One section at a time, chosen in the nav; the hash keeps it on reload (/ui/admin#settings). A part of System has a
+// hash of its own (#gaps, #audit …): it opens System with that part unfolded and in view.
 const tabs = [...document.querySelectorAll(".admin-nav [role=tab]")];
 function showSection() {
-  const want = location.hash.slice(1), sec = tabs.some((t) => t.dataset.sec === want && !t.hidden) ? want : "tokens";
+  const want = location.hash.slice(1), sub = want && document.getElementById(`sub-${want}`);
+  const sec = sub ? "system" : tabs.some((t) => t.dataset.sec === want && !t.hidden) ? want : "tokens";
   for (const t of tabs) {
-    t.setAttribute("aria-selected", String(t.dataset.sec === sec));
-    $(`sec-${t.dataset.sec}`).hidden = t.dataset.sec !== sec;
-    if (t.dataset.sec === sec) $("title").textContent = t.firstChild.textContent.trim(); // the page header names the section
+    const on = t.dataset.sec === sec;
+    t.setAttribute("aria-selected", String(on)); t.tabIndex = on ? 0 : -1;
+    $(`sec-${t.dataset.sec}`).hidden = !on;
+    if (on) { $("title").textContent = t.firstChild.textContent.trim(); t.scrollIntoView({ block: "nearest", inline: "nearest" }); } // the bar scrolls on a phone
   }
+  if (sub && !tabs.find((t) => t.dataset.sec === "system").hidden) { sub.open = true; sub.scrollIntoView({ block: "start" }); }
 }
-for (const t of tabs) t.onclick = () => { history.replaceState(null, "", `#${t.dataset.sec}`); showSection(); };
+tabs.forEach((t) => {
+  t.onclick = () => { history.replaceState(null, "", `#${t.dataset.sec}`); showSection(); };
+  t.onkeydown = (e) => { // a tablist: Left and Right go through the visible tabs
+    if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+    const on = tabs.filter((x) => !x.hidden), n = on[(on.indexOf(t) + (e.key === "ArrowRight" ? 1 : on.length - 1)) % on.length];
+    e.preventDefault(); n.focus(); n.click();
+  };
+});
 addEventListener("hashchange", showSection);
 showSection();
 

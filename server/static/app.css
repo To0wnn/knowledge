@@ -284,7 +284,7 @@ input[type=url], input[type=text], input[type=password], input[type=search], tex
 .md blockquote { margin: 12px 0; padding: 2px 14px; border-left: 3px solid var(--amber); background: var(--amber-soft); border-radius: 0 var(--r-md) var(--r-md) 0; }
 /* One section heading: small capitals in the muted ink (sidebar sections, search groups, Changes days, Health checks,
    connected notes, task projects, mission lanes, Agents groups, admin System parts). */
-.sec, h3.sub, .connected h3, #tasks h3, .ms-lane-list h3, .pal-grp, .ck-sec-head, .admin section > h3 {
+.sec, h3.sub, .connected h3, #tasks h3, .ms-lane-list h3, .pal-grp, .ck-sec-head, .admin section > h3, .admin-sub > summary > h3 {
   display: flex; align-items: center; gap: 8px; margin: 18px 0 6px; font-size: 11px; font-weight: 650; letter-spacing: .1em; text-transform: uppercase; color: var(--muted);
 }
 .connected h3 { margin-top: 0; }
@@ -393,6 +393,11 @@ body.admin-page { display: block; overflow-y: auto; }
 .admin-form { display: grid; gap: 8px; margin-top: 14px; max-width: 520px; }
 .admin-form.inline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; max-width: none; }
 .admin section > h3 { margin: 26px 0 10px; }
+/* System's parts fold; the heading is the summary, its count beside it */
+.admin-sub { scroll-margin-top: 64px; }
+.admin-sub > summary { display: flex; align-items: center; margin: 26px 0 10px; }
+.admin-sub > summary > h3 { margin: 0; }
+.admin-sub > summary > h3 .badge { margin-left: 2px; letter-spacing: 0; text-transform: none; }
 .setting-help { grid-column: 1 / -1; margin: -6px 0 6px; font-size: 12px; }
 .setting { display: grid; grid-template-columns: minmax(0, 1fr) 120px; gap: 12px; align-items: center; }
 .setting input { font-variant-numeric: tabular-nums; }
@@ -939,7 +944,9 @@ body:not(.no-agents) .ag-off, body.no-agents .ag-on { display: none !important; 
   :root { --h-btn: 44px; --h-btn-sm: 44px; } /* every button, field, tab and toggle */
   summary { display: flex; align-items: center; min-height: 44px; }
   .admin { padding: 14px 12px 24px; }
-  .admin-nav { top: 52px; padding: 8px 12px; }
+  .admin-nav { top: 52px; padding: 8px 12px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; } /* one row that scrolls sideways */
+  .admin-nav > [role=tab] { flex: none; }
+  .admin-sub { scroll-margin-top: 112px; }
 }
 /* The More sheet (phone): a dialog that rises from the bottom. */
 dialog.sheet { position: fixed; inset: auto 0 0 0; width: 100%; max-width: none; margin: 0; padding: 0; border-radius: 20px 20px 0 0; border-bottom: 0; }
