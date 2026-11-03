@@ -643,11 +643,11 @@ body.admin-page { display: block; overflow-y: auto; }
 .ck-item-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 0 8px 6px 8px; }
 /* a pointer sees a card's actions on hover (or keyboard focus) over its lower right corner, so rows keep their height */
 @media (hover: hover) and (min-width: 700px) {
-  /* Needs you keeps its answers in view under the row (they are why it is there, and a floating bar over a narrow
+  /* Needs you and Review keep their answers in view under the row (they are why it is there, and a floating bar over a narrow
      list would cover the row itself); elsewhere they float on hover */
-  .ck-sec:not(.ck-sec-needs) .ck-item > .ck-item-acts { position: absolute; right: 4px; bottom: 4px; z-index: 1; max-width: calc(100% - 8px); justify-content: flex-end; padding: 3px;
+  .ck-sec:not(.ck-sec-needs):not(.ck-sec-review) .ck-item > .ck-item-acts { position: absolute; right: 4px; bottom: 4px; z-index: 1; max-width: calc(100% - 8px); justify-content: flex-end; padding: 3px;
     border: 1px solid var(--line-hi); border-radius: var(--r-md); background: var(--panel-solid); box-shadow: var(--shadow); }
-  .ck-sec:not(.ck-sec-needs) .ck-item:not(:hover):not(:focus-within):not(.hit) > .ck-item-acts { display: none; }
+  .ck-sec:not(.ck-sec-needs):not(.ck-sec-review) .ck-item:not(:hover):not(:focus-within):not(.hit) > .ck-item-acts { display: none; }
 }
 .ck-snooze .menu-list { min-width: 180px; }
 .ck-reply { display: flex; padding: 0 8px 8px; }
