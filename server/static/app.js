@@ -26,8 +26,17 @@ const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 // One empty state and one loading state for every list; a toast instead of alert() (errors stay longer, a click
 // dismisses), announced by the #toasts live region.
-const emptyState = (text) => el("p", "empty", text);
+// An empty state is one muted line that says what the view is for and the next step, with an optional action button.
+const actionButton = (text, onclick, cls = "btn small") => { const b = el("button", cls, text); b.type = "button"; b.onclick = onclick; return b; };
+const emptyState = (text, ...acts) => { const p = el("p", "empty", text); for (const a of acts) p.append(" ", a); return p; };
 const loadingState = () => el("p", "empty loading", "Loading…");
+const errorState = (text, retry) => { const p = el("p", "empty error", text); p.setAttribute("role", "alert"); if (retry) p.append(" ", actionButton("Retry", retry)); return p; };
+// A view's loader into its box: "Loading…" while the box is still empty, on an error the message and Retry.
+function viewLoad(id, what, fn) {
+  const box = $(id);
+  if (!box.childNodes.length || box.querySelector(":scope > .empty.error")) box.replaceChildren(loadingState());
+  return fn().catch((e) => box.replaceChildren(errorState(`${what} did not load: ${e.message}`, () => viewLoad(id, what, fn))));
+}
 function toast(text, bad = true) {
   const t = el("div", `toast${bad ? " bad" : ""}`, text);
   t.onclick = () => t.remove(); $("toasts").append(t);
@@ -398,7 +407,8 @@ function renderTopics() {
     s.onclick = () => { if (!d.open && mapOn) highlight(ns.map((n) => n.id)); }; // fires before the toggle: about to open
     d.append(s, list); return d;
   }));
-  if (!$("topics").childNodes.length) $("topics").append(emptyState("No notes in this project yet."));
+  if (!$("topics").childNodes.length) $("topics").append(emptyState("No notes in this project yet: agents write memos here as they work.",
+    ...(me.writable?.includes(project) ? [actionButton("New memo", () => $("new-memo").click())] : [])));
 }
 
 // The middle column shows the note, or the map of the project instead.
@@ -492,7 +502,7 @@ async function homeSide() {
     const n = byId.get(f.path);
     list.append(hitItem(n ? n.label : f.path.split("/").pop(), `${ago(f.mtime)} · ${f.session ? f.session.device : f.by === "VM" ? "on the VM" : writer(f.by)}`, () => openNote(f.path)));
   }
-  if (!res.files.length) list.append(el("li", null, emptyState("No changes yet.")));
+  if (!res.files.length) list.append(el("li", null, emptyState("No changes yet: edits to memos and docs show here.")));
   const all = el("button", "btn small", "All changes"); all.onclick = () => go("#/changes");
   box.append(el("h3", null, "Recently changed"), list, all);
   const lint = $("lint-count").textContent;
@@ -946,7 +956,7 @@ async function loadRecent(look = false) {
     b.onclick = async () => { if (await openNote(f.path) && f.version) { setMap(false); showHistory(f.version); } };
     li.append(b); list.append(li);
   }
-  if (!res.files.length) box.append(emptyState("No changes yet."));
+  if (!res.files.length) box.append(emptyState(`No changes in ${p === ALL ? "any project" : shown(p)} yet: every edit to a memo or doc shows here, newest first.`));
   store.set(key, String(Math.max(seen, ...res.files.map((f) => f.mtime))));
   loadTrash(p).catch((e) => box.append(el("p", "error", `Deleted: ${e.message}`)));
 }
@@ -985,7 +995,7 @@ function highlight(ids) {
 }
 
 async function loadLint(render = true) {
-  if (!me.admin) return; // lint spans every project: admins only
+  if (!me.admin) { if (render) $("lint").replaceChildren(emptyState("Health lists what lint finds in every project: an admin's view.")); return; } // lint spans every project
   if (render && !$("lint").childNodes.length) $("lint").replaceChildren(loadingState());
   const res = await api("/ui/api/lint?v=2"), full = res.report || res, hints = res.hints || {};
   // checks in a group (token usage) are context, not problems: folded at the end and left out of the badge
@@ -1019,7 +1029,7 @@ async function loadLint(render = true) {
     folds.get(g.id).append(card);
   }
   box.append(...folds.values());
-  if (!here) box.append(emptyState(`No findings in ${project === ALL ? "any project" : shown(project)}.`));
+  if (!here) box.append(el("p", "empty ok", `All clear: no findings in ${project === ALL ? "any project" : shown(project)}.`));
   if (all > here) {
     const b = el("button", "btn small", `${all - here} in other projects`); b.onclick = () => switchProject(ALL);
     box.append(b);
@@ -1117,7 +1127,7 @@ async function loadTasks(render = true) {
   open.sort((a, b) => (b.overdue - a.overdue) || (a.due || "9").localeCompare(b.due || "9"));
   section("Open", open);
   for (const who of [...new Set(back.map((t) => t.owner))].sort()) section(`Results waiting to be read by ${who}`, back.filter((t) => t.owner === who));
-  if (!tasks.length) box.append(el("p", "muted", "No open tasks."));
+  if (!tasks.length) box.append(emptyState(`No task lines${agentProject ? ` in ${shown(agentProject)}` : ""}: when an agent hands work to another in a memo, it shows here.`));
 }
 
 // Machines: every pc of the viewer's tokens (an admin sees all) with its agents, workers and recent sessions. The
@@ -1167,6 +1177,10 @@ async function loadMachines() {
   const narrow = matchMedia("(max-width: 699.98px)").matches;
   const sha = async (t) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t)))].map((b) => b.toString(16).padStart(2, "0")).join("");
   const here = localMachine && crypto.subtle ? (await Promise.all(res.machines.map(async (m) => (await sha(m.id)) === localMachine ? m.id : ""))).find(Boolean) : "";
+  if (!res.machines.length) {
+    const how = el("a", "btn small", "How to install"); how.href = "/ui/help#install";
+    box.append(emptyState("No pcs yet: a pc shows up here, with its agents and workers, once it runs the knowledge setup.", how));
+  }
   for (const m of res.machines) {
     const card = el("article", "machine" + (m.online ? "" : " offline")), head = el("div", "machine-head");
     head.append(el("h3", null, m.label));
@@ -1371,14 +1385,14 @@ async function ckTick() {
     if (Date.now() - ck.summaryAt > (ck.view ? 10000 : 5000)) await ckSummary();
     live = [ck.cards.get(ck.view), ...bdLive()].filter(Boolean);
     await Promise.all(live.map(ckPoll));
-  } catch (e) { $("ck-list").title = e.message; }
+  } catch (e) { $("ck-list").title = e.message; if (!ck.ready) { ck.error = e.message; ckList(); } }
   clearTimeout(ck.timer);
   ck.timer = setTimeout(ckTick, live.some((c) => ckBusy(c.meta.status)) ? 1500 : 4000);
 }
 async function ckSummary() {
   ck.summaryAt = Date.now();
   const [ms, cs, bd] = await Promise.all([api("/ui/api/machines"), api("/ui/api/chats"), api("/ui/api/board").catch(() => ({ items: [] }))]);
-  ck.machines = ms.machines.filter((m) => m.own && !m.old);
+  ck.machines = ms.machines.filter((m) => m.own && !m.old); ck.ready = true; ck.error = "";
   for (const m of ck.machines) for (const x of m.actions || []) { // a Merge queued from a card: say how it went on the pc
     const what = ck.waits.get(x.id);
     if (what && (x.status === "done" || x.status === "failed")) { ck.waits.delete(x.id); toast(`${what}: ${x.result || x.status}`, x.status === "failed"); }
@@ -1458,19 +1472,51 @@ function ckSubRows(c) { // a chat's subagents, each a chat of its own, under it:
   }
   return rows;
 }
+const ckOnlinePc = () => ck.machines.some((m) => m.online && m.companion);
+// Getting started, instead of an empty list: the help page's install line for this pc's system (help.html#install),
+// then linking a folder and the first chat.
+const INSTALL_CMD = {
+  linux: "curl -fsSL https://raw.githubusercontent.com/To0wnn/knowledge/main/install.sh | sh",
+  windows: "irm https://raw.githubusercontent.com/To0wnn/knowledge/main/install.ps1 | iex",
+};
+function ckStart() {
+  const os = store.get("kn_help_os") || (/Windows/.test(navigator.userAgent) ? "windows" : "linux");
+  const card = el("section", "card ck-start"), h = el("h2", null, "Get started"); h.id = "ck-start-h";
+  card.setAttribute("aria-labelledby", h.id);
+  const cmd = el("div", "cmd"), pre = el("pre", null, INSTALL_CMD[os] || INSTALL_CMD.linux), copy = actionButton("Copy", async () => {
+    try { await navigator.clipboard.writeText(pre.textContent); copy.textContent = "Copied"; }
+    catch { getSelection().selectAllChildren(pre); copy.textContent = "Selected"; } // no clipboard access
+    setTimeout(() => (copy.textContent = "Copy"), 1500);
+  }, "btn small copy");
+  cmd.append(pre, copy);
+  const help = el("a", null, "Help: Install"); help.href = "/ui/help#install";
+  const step = (title, ...body) => { const li = el("li"); li.append(el("b", null, title), ...body); return li; };
+  const ol = el("ol");
+  ol.append(
+    step("Install on your pc", `Run the setup in a ${os === "windows" ? "PowerShell" : "terminal"}; it asks for this server's address (${location.origin}) and your token, and offers the companion: say yes, chats run through it.`, cmd,
+      el("span", "muted", "Other systems and what it needs: "), help, "."),
+    step("Link a project folder", "On the companion page (Folders), under Machines here, or by asking your agent: sessions in that folder get the project."),
+    step("Start a chat", "Once your pc shows online here, + New chat talks to Claude Code, Codex or agy in that folder."));
+  card.append(h, el("p", "muted", "None of your pcs is online with a companion yet. Three steps:"), ol);
+  return card;
+}
 function ckList() {
   const box = $("ck-list"), hist = $("ck-history"), side = $("ck-side");
   // a half-typed reply or reason, or an open menu, outlives the refresh: the list waits until it is sent or closed
   if (side.querySelector(".ck-reply, .ck-reject, .ck-snooze[open]")) return;
   const had = side.contains(document.activeElement) && document.activeElement.dataset.row;
   const items = (ck.board || []).filter((i) => i.col !== "open" && ckScope(i) && !(i.kind === "chat" && i.col === "done")); // a read chat is an earlier chat
+  const pcs = ckOnlinePc(), fresh = ck.ready && !pcs && !ck.chats.length;
+  side.querySelector(".ck-sec-earlier").hidden = !ck.ready || fresh; // nothing to filter yet
+  if (!ck.ready) { box.replaceChildren(ck.error ? errorState(`Chats did not load: ${ck.error}`, () => { ck.error = ""; ckList(); ckRun(true); }) : loadingState()); return; }
   box.replaceChildren();
+  if (!pcs && !items.length) box.append(ck.start ||= ckStart()); // kept: a refresh would reset Copy and a selection
   const elsewhere = (ck.board || []).filter((i) => i.col === "needs" && !ckScope(i)).length; // a project filter never hides what needs you without saying so
   if (elsewhere) {
     const b = el("button", "btn small ck-elsewhere", `${elsewhere} more need${elsewhere > 1 ? "" : "s"} you in other projects: show all`);
     b.type = "button"; b.onclick = () => switchProject(ALL); box.append(b); // the one picker: the sidebar shows All too
   }
-  for (const [id, name] of CK_SECS) {
+  for (const [id, name] of pcs || items.length ? CK_SECS : []) {
     const list = items.filter((i) => ckSec(i) === id);
     if (!list.length && id !== "needs") continue;
     const sec = el("section", `ck-sec ck-sec-${id}${list.length ? " has-items" : ""}`), head = el("h2", "ck-sec-head");
@@ -1503,7 +1549,8 @@ function ckList() {
     li.append(b); hist.append(li, ...ckSubRows(c));
   }
   $("ck-earlier-n").textContent = rows.length;
-  if (!hist.childNodes.length) hist.append(el("li", "muted ck-none", !ck.chats.length ? "No chats yet." : words.length ? "No chat matches." : closed ? "No closed chats." : "No earlier chats here."));
+  if (!hist.childNodes.length) hist.append(!ck.chats.length && pcs ? el("li", null, emptyState("No chats yet: talk to an agent on one of your pcs.", actionButton("New chat", () => $("ck-new").click(), "btn small primary")))
+    : el("li", "muted ck-none", !ck.chats.length ? "No chats yet." : words.length ? "No chat matches." : closed ? "No closed chats." : "No earlier chats here."));
   if (had) side.querySelector(`[data-row="${CSS.escape(had)}"]`)?.focus({ preventScroll: true }); // the refresh keeps your place
   const n = items.filter((i) => i.col === "needs").length, asks = items.filter((i) => i.kind === "ask").length;
   const said = (n ? `${n} item${n > 1 ? "s" : ""} need${n > 1 ? "" : "s"} you` : "Nothing needs you") + (asks ? `, ${asks} approval${asks > 1 ? "s" : ""} waiting` : "");
@@ -1541,7 +1588,7 @@ function ckScrollBottom(card, force = false) {
 const ckPick = el("p", "ck-none ck-pick");
 function ckLayout() {
   const card = ck.cards.get(ck.view), show = card ? card.root : ckPick;
-  ckPick.textContent = ck.chats.length ? "Pick a chat on the left, or start a new one." : ck.machines.some((m) => m.online && m.companion)
+  ckPick.textContent = !ck.ready ? "" : ck.chats.length ? "Pick a chat on the left, or start a new one." : ckOnlinePc()
     ? "No chats yet: start one with + New chat, with Claude Code, Codex or agy in a folder linked to a project on one of your pcs."
     : "None of your pcs is online with a companion right now. Chats run on a pc through its knowledge companion (plugin 0.16 or newer).";
   if ($("ck-canvas").firstChild !== show || $("ck-canvas").childNodes.length !== 1) $("ck-canvas").replaceChildren(show);

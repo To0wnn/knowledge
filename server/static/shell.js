@@ -103,8 +103,8 @@ function applyRoute() {
   $("tab-tasks").classList.toggle("flow", flow);
   for (const b of $("tasks-mode").querySelectorAll("button")) b.setAttribute("aria-pressed", String((b.dataset.mode === "flow") === flow));
   if (flow) openMission(true); else if (ms.root) openMission(false);
-  if (r.view === "tasks" && !flow) loadTasks(true).catch((e) => $("tasks").replaceChildren(el("p", "error", e.message)));
-  if (r.view === "machines") loadMachines().catch((e) => $("machines").replaceChildren(el("p", "error", `Machines: ${e.message}`)));
+  if (r.view === "tasks" && !flow) viewLoad("tasks", "Tasks", () => loadTasks(true));
+  if (r.view === "machines") viewLoad("machines", "Machines", loadMachines);
   // Notes and Map: the topic list and right column, the note, the search results or the map in the middle. On a
   // phone the list and the note are two pages: a note or a search hides the list and shows the Back arrow.
   const q = r.view === "notes" ? r.q.get("q") : null; // null: no search; "" an empty search page
@@ -118,8 +118,8 @@ function applyRoute() {
     else if (changed) homeView();
     if (q !== null && $("q").value !== q) { $("q").value = q; runSearch(); }
   } else if (mapOn) setMap(false);
-  if (r.view === "changes") loadRecent(true);
-  if (r.view === "health") loadLint(true);
+  if (r.view === "changes") viewLoad("recent", "Changes", () => loadRecent(true));
+  if (r.view === "health") viewLoad("lint", "Health", () => loadLint(true));
   if (r.view === "thispc") loadThisPc();
   if (r.view === "settings") loadSettings();
   // The map's canvas follows its box: the sidebar or the view may have changed its size.
@@ -159,7 +159,7 @@ function setAgentProject(p) {
   if (shellRoute.view !== "tasks") loadTasks(false).catch(() => {}); // its badge counts this project
   if (shellRoute.view === "chats") { ckList(); bdRender(); const d = ck.cards.get(ckKey(CK_DRAFT)); if (d) ckPoll(d); }
   else if (shellRoute.view === "tasks") {
-    if ($("tab-tasks").classList.contains("flow")) { ms.project = p; ms.fitted = false; msLoad(); } else loadTasks(true);
+    if ($("tab-tasks").classList.contains("flow")) { ms.project = p; ms.fitted = false; msLoad(); } else viewLoad("tasks", "Tasks", () => loadTasks(true));
   }
 }
 function inboxCount(items) {
