@@ -16,4 +16,4 @@ for f in sys.argv[1:]:
     sys.path[:0] = [os.path.dirname(f)]
     s = u.spec_from_file_location(os.path.basename(f)[:-3].replace('-', '_'), f)
     s.loader.exec_module(u.module_from_spec(s))" ../clients/*.py ../plugin/hooks/*.py
-uv run --quiet graph.py && uv run --quiet lint.py && uv run --quiet external_skills.py && uv run --quiet test_server.py
+uv run --quiet graph.py && uv run --quiet lint.py && uv run --quiet tasks.py && uv run --quiet external_skills.py && uv run --quiet test_server.py

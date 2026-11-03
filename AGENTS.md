@@ -19,7 +19,7 @@ Antigravity, plus a web UI with a graph. Server in `server/` (Python, one Docker
 - Plugin parity: every plugin feature works the same in Claude Code, Codex and Antigravity, with a check per agent in
   `tests/clients_e2e.py`. Bump the version in both `plugin/.claude-plugin/plugin.json` and
   `plugin/.codex-plugin/plugin.json` on any plugin change.
-- New logic in `graph.py`, `lint.py` or `vectors.py` gets an assert in its `__main__` self-check.
+- New logic in `graph.py`, `lint.py`, `tasks.py` or `vectors.py` gets an assert in its `__main__` self-check.
 - Check a test's own exit code, never through a pipe (`| tail` hides a failure).
 - Design defaults: all text in RAM; file watcher for instant updates plus a 60 s stat rescan; embeddings local (ONNX);
   hot reload: not needed (deploy rebuilds in seconds).

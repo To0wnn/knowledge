@@ -50,6 +50,7 @@ import graph as kb_graph
 from graph import MD_ONLY, PROJECTS
 import lint as kb_lint
 import rerank as kb_rerank
+from tasks import CONT, DONE_LINE, HAND_BACK, TASK_FORMAT, TASK_LIKE, WORKER_HANDBACK, parse_task, task_sig
 import vectors
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
@@ -1669,16 +1670,6 @@ def context_parts(project: str = "homelab", agent: str = "", chat: bool = False,
     return split_parts("\n\n".join(mine + text + rest))
 
 
-TASK_OWNER = re.compile(r"^\[([^,\]]+),\s*([^\]]+)\]")
-TASK_ITEM = re.compile(r"^\s*(?:[-*+]\s+)?")  # a task line is a list item, or a bare line, that starts with "open until"
-# "from <requester>, start <condition>:" right after the owner bracket; a "(claimed ...)" marker may sit around it.
-TASK_START = re.compile(r"\s*(?:\([^)]*\)\s*)*from\s+([^,:]+?)\s*,\s*start\s+(now|after approval|after\s+[^\s:,()]+"
-                        r"|20\d\d-\d\d-\d\d|\d{1,2} [a-z]+ 20\d\d)\s*(?:\([^)]*\)\s*)*:", re.I)
-DONE_LINE = re.compile(r"^\s*-\s*\[([^,\]]+),\s*([^\]]+-done)\]:?\s*(.*)$", re.I)  # a result handed back, no date
-TASK_FORMAT = ("'- open until <date> [<Owner>, <ID>] from <Requester>, start <now | after <ID> | <date> | after approval>: "
-               "<what>' (<Owner>@<device> lets only that device start it)")
-HAND_BACK = ("When another agent handed it to you and waits on the result, hand it back with a line for that agent: "
-             "'[<requester>, <ID>-done]: <result>; <commit or path>'. A new task for another agent: " + TASK_FORMAT + ".")
 AGENT_OWNERS = {"claude": ("claude",), "codex": ("codex",), "agy": ("gemini", "agy", "antigravity")}  # names used in task lines
 TASK_CHARS = 240  # the memo holds the full text; the start context only has to make the agent look
 STALLED_AFTER = int(os.environ.get("KNOWLEDGE_TASK_STALLED", 30 * 60))  # a woken task nobody claimed this long is stalled
@@ -1694,38 +1685,6 @@ TASK_WRITERS = ADMIN_DIR / "task_writers.json"  # project -> trusted writers (to
 _task_lock = threading.Lock()
 
 
-def parse_task(line: str) -> dict | None:
-    """A task line "open until <date> [<owner>, <ID>] from <requester>, start <when>: <what>" as fields, None for any
-    other line. A line without from/start is legacy and starts now. Only a line (list item) that starts with "open
-    until": an index line "- [<title>](memo.md)" quoting one is a link, never a task."""
-    if not ((m := kb_lint.OPEN_DUE.match(TASK_ITEM.sub("", line, 1))) and (o := TASK_OWNER.match(m.group(2)))):
-        return None
-    rest, (owner, _, pin) = m.group(2)[o.end():], o.group(1).partition("@")  # [Claude@<device>, ID]: only that device
-    f = TASK_START.match(rest)
-    return {"owner": owner.strip(), "device": pin.strip(), "id": o.group(2).strip(), "due": kb_lint.latest_date(m.group(1)),
-            "from": f.group(1).strip() if f else "", "start": " ".join(f.group(2).split()) if f else "now",
-            "legacy": not f, "claimed": bool(re.search(r"\((?:claimed|bezig)\b", line, re.I)),
-            "worker_claim": bool(re.search(r"\((?:claimed|bezig)\b[^)]*\bworker\b", line, re.I)),
-            "text": (rest[f.end():] if f else rest).lstrip(": ").strip(), "body": line.strip().removeprefix("- ")}
-
-
-assert parse_task("- open tot 1 jan 2099 [Gemini, VS-1]: water")["legacy"]
-assert parse_task("- open until 2099-01-01 [Codex, K-2] from Claude, start after K-1: build: it")["start"] == "after K-1"
-assert parse_task("- open until 2099-01-01 [Codex, K-2] from Claude, start after K-1: build: it")["text"] == "build: it"
-assert parse_task("- open until 2099-01-01 [Codex, K-3] (claimed Codex, 2026-10-31) from Ann, start 2 nov 2026: x")["from"] == "Ann"
-assert parse_task("- open until 2099-01-01 [Codex, K-4] from Ann, start after approval: x")["start"] == "after approval"
-assert parse_task("- open until 2099-01-01: no owner") is None
-assert parse_task("- [open until 2099-01-01 [Codex, I-1] from A, start now: x](f.md) — d") is None  # an index line
-assert (lambda t: (t["owner"], t["device"]))(parse_task("- open until 2099-01-01 [Claude@Lap-1, P-1] from Ann, start now: x")) == ("Claude", "Lap-1")
-
-
-def task_sig(t: dict) -> str:
-    """What a task asks, as a short hash: owner, requester, start and text. A claim marker or a new due date leave it."""
-    what = re.sub(r"\((?:claimed|bezig)\b[^)]*\)", "", t["text"], flags=re.I)
-    owner = t["owner"] + ("@" + t["device"] if t.get("device") else "")  # pinning to another device is another task
-    return hashlib.sha256("\n".join((owner.lower(), t["from"], t["start"].lower(), " ".join(what.split()))).encode()).hexdigest()[:16]
-
-
 def added_tasks(rel: str, before: str, after: str, changed: bool = False) -> list[dict]:
     """The task lines `after` has whose ID `before` had not: what a write hands over; with `changed` also the lines
     whose ID stays but whose task (task_sig) is new. Session logs only quote task lines and archives hold finished ones."""
@@ -1735,9 +1694,6 @@ def added_tasks(rel: str, before: str, after: str, changed: bool = False) -> lis
     ids, sigs = {t["id"] for t in old}, {(t["id"], task_sig(t)) for t in old}
     return [t for line in after.splitlines() if (t := parse_task(line))
             and (t["id"] not in ids or changed and (t["id"], task_sig(t)) not in sigs)]
-
-
-WORKER_HANDBACK = re.compile(r"\b(?:branch|folder)\s+\S+.*\bdone:.*\bleft:", re.I | re.S)  # folder: a project without git
 
 
 def refuse_worker_handback(rel: str, before: str, after: str):
@@ -1757,14 +1713,6 @@ def refuse_worker_handback(rel: str, before: str, after: str):
                             f"e.g. '[<requester>, <ID>-done]: <result>; branch task/<ID>; done: <what>; left: <what or nothing>' "
                             "(a hand-over to another agent the same, as a task line '<ID>-cont'). The next session only "
                             "has this line, the memo and the branch.")
-
-
-assert WORKER_HANDBACK.search("- [Claude, K-1-done]: works; branch task/K-1; done: all; left: nothing")
-assert not WORKER_HANDBACK.search("- [Claude, K-1-done]: works")
-
-
-# what is meant as a task line: the owner bracket before any ':' (a plain open item may link "[a, b](...)" after its colon)
-TASK_LIKE = re.compile(r"^\s*(?:[-*+]\s+)?open (?:until|tot)\b[^:\[]*\[[^,\]]+,[^\]]+\]", re.I)
 
 
 def task_problems(rel: str, before: str, after: str) -> list[str]:
@@ -1927,7 +1875,6 @@ def project_tasks(project: str) -> tuple[list[dict], list[dict]]:
     return tasks, back
 
 
-CONT = re.compile(r"(?:-cont|-fix)+$", re.I)  # KN-1-cont-cont (a hand-over) and KN-1-fix (a review sent back) continue KN-1
 CANCELLED = re.compile(r"cancelled by ", re.I)  # the text of a result line cancel_task writes
 
 
