@@ -19,6 +19,30 @@ history) and run `clients/knowledge-agent.py setup`. It is the same line every t
 Code, Codex and agy and asks y/n for each; after that it updates the agents that have the plugin, asks y/n only for an
 agent found without it, and asks for a token only when the server refuses the stored one.
 
+## Plugin only, or with the companion
+
+The install line sets up the plugin (memory, MCP, hooks) and, by default, the companion: an agent runner that starts
+at logon, for chats, workers and approvals from the web UI. Where no process may start agents (a work laptop, an SSH
+server), install the plugin only:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/To0wnn/knowledge/main/install.sh | sh -s -- --plugin-only
+```
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/To0wnn/knowledge/main/install.ps1))) --plugin-only
+```
+
+- `--plugin-only` works on `install`, `setup` and `update`. Without it, `install` and `setup` in a terminal ask once:
+  "Also install the companion ...? [Y/n]" (Enter means yes). Without a terminal and without a saved choice the
+  companion is installed, as before.
+- The choice is saved in `~/.knowledge/install.json` (`{"companion": false}`), so `update` (also the daily
+  auto-update) and a later `setup` never put the companion back. The last line says what happened, e.g.
+  `companion: not installed (plugin only); add it later with: knowledge-agent.py install-companion`.
+- Switch later: `knowledge-agent.py install-companion` saves "companion" and installs it; `uninstall-companion`
+  saves "plugin only" and removes it. Choosing plugin only on a pc that has the companion runs the same undo as
+  `uninstall-companion` (YOLO off first) and says so.
+
 
 ## Import what your agents already know
 
@@ -45,7 +69,8 @@ without a terminal) or numbers such as `1,3,5`.
 
 ## The companion's autostart
 
-`setup`, `install` and `update` end by setting up the companion (again only updates; `install-companion` alone):
+`setup`, `install` and `update` end by setting up the companion unless plugin only was chosen (see above; again
+only updates; `install-companion` alone):
 it starts at logon (Linux: systemd `--user` unit `knowledge-companion.service`; macOS: LaunchAgent
 `io.github.knowledge.companion`; Windows: a per-user Scheduled Task "Knowledge companion" that runs `pythonw.exe`
 directly, no PowerShell), a menu entry "Knowledge companion" opens its page in an app window (Edge or Chrome

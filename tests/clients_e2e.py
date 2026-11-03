@@ -2586,6 +2586,17 @@ def installer(tok: str, tmp: Path):
         check(code == 0 and "Already set up (" in out and all(f"== {a} ==" in out for a in have) and "== agy ==" not in out
               and "== companion (" in out and re.search(r'companion\.py"? trust', out),
               f"setup (the one-line installer), once set up: every agent with the plugin is updated ({', '.join(have)}), no questions", (out + err)[-1500:])
+        choice = home / ".knowledge" / "install.json"
+        code, out, err = run([sys.executable, str(agent), "setup", "--plugin-only"], "", env, timeout=600)
+        check(code == 0 and "== companion (" not in out and "not installed (plugin only)" in out
+              and json.loads(choice.read_text(encoding="utf-8")) == {"companion": False},
+              "setup --plugin-only: the plugin is updated, no companion steps, the choice is saved", (out + err)[-1500:])
+        code, out, err = run([sys.executable, str(agent), "update"], "", env, timeout=600)
+        check(code == 0 and "== companion (" not in out and "not installed (plugin only)" in out,
+              "update after a plugin-only setup leaves the companion out", (out + err)[-1500:])
+        code, out, err = run([sys.executable, str(agent), "install-companion"], "", env, timeout=120)
+        check(code == 0 and "== companion (" in out and json.loads(choice.read_text(encoding="utf-8")) == {"companion": True},
+              "install-companion saves the companion as the choice again", (out + err)[-1500:])
         # Set up before the URL was stored (review 27 Oct 2026): the token must not go to the default server.
         url_file, settings_path = home / ".config" / "knowledge" / "url", home / ".claude" / "settings.json"
         saved = (url_file.read_bytes() if url_file.exists() else None, settings_path.read_bytes() if settings_path.exists() else None)

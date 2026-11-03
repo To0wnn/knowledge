@@ -68,7 +68,9 @@ irm https://raw.githubusercontent.com/To0wnn/knowledge/main/install.ps1 | iex   
 ```
 
 It finds Claude Code, Codex and agy, asks y/n for each, and asks for the server address
-(`http://localhost:8766`) and the token. Run the same line again later to update.
+(`http://localhost:8766`) and the token. Run the same line again later to update. Only the plugin, without the
+companion (a work laptop, an SSH server): add `-s -- --plugin-only` after `sh`
+([docs/clients.md](docs/clients.md#plugin-only-or-with-the-companion)).
 
 **4. Try it.** Tell Claude Code: *"save to knowledge: we deploy with ./deploy.sh"* (the installer turns Claude's own
 local auto-memory off, so it writes a memo on the server). Then start Codex (or agy), on this pc or another, and ask

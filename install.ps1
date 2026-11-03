@@ -3,6 +3,8 @@
 # The same line every time: the first time it installs; after that it updates, offers agents found without the
 # plugin, and asks for a token only when the server refuses the stored one (clients/knowledge-agent.py setup).
 # It also sets up the local companion: autostart at logon, a menu entry for its page, a first hook-trust run.
+# The plugin only, without the companion (iex passes no arguments, a script block does):
+#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/To0wnn/knowledge/main/install.ps1))) --plugin-only
 # Gets or updates the scripts in ~\knowledge (git), then runs clients\knowledge-agent.py. Same steps as install.sh.
 # No "exit": under iex it would close the PowerShell window; errors are thrown instead.
 $Repo = if ($env:KNOWLEDGE_REPO) { $env:KNOWLEDGE_REPO } else { "https://github.com/To0wnn/knowledge" }
@@ -48,5 +50,6 @@ elseif ($OldVersion -eq $NewVersion) { Write-Host "${Dir}: up to date (version $
 else { Write-Host "${Dir}: updated version $OldVersion -> $NewVersion" }
 # $args splatted as is: a one-element array assigned to a variable becomes a plain string.
 $Agent = Join-Path $Dir "clients\knowledge-agent.py"
-if ($args.Count) { & $Py.Source $Agent @args } else { & $Py.Source $Agent setup }
+# Only flags (--plugin-only) go to setup.
+if ($args.Count -and -not "$($args[0])".StartsWith("-")) { & $Py.Source $Agent @args } else { & $Py.Source $Agent setup @args }
 if ($LASTEXITCODE) { throw "knowledge-agent.py failed (exit $LASTEXITCODE)" }
