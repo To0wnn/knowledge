@@ -730,7 +730,12 @@ async def agents_pages(browser, devices, secret: str) -> None:
     if key:
         await pg.goto(f"{URL}/ui#/inbox/{key}")
         await pg.wait_for_selector("#ck-list .ck-item.hit", timeout=15000)
-        hit = await pg.evaluate("(k) => { const c = document.querySelector('#ck-list .ck-item.hit'); const r = c.getBoundingClientRect(); return c.dataset.key === k && r.bottom > 0 && r.top < innerHeight; }", key)
+        in_view = "(k) => { const c = document.querySelector('#ck-list .ck-item.hit'); const r = c.getBoundingClientRect(); return c.dataset.key === k && r.bottom > 0 && r.top < innerHeight; }"
+        try:  # a smooth scroll: give it time (an item far down, under Done today, takes a moment)
+            await pg.wait_for_function(in_view, arg=key, timeout=3000)
+        except Exception:
+            pass
+        hit = await pg.evaluate(in_view, key)
         check(hit, f"#/inbox/<key> scrolls to and marks that item ({key})")
     else:
         print("     no board item to deep-link: #/inbox/<key> is not checked")
