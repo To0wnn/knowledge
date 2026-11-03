@@ -33,6 +33,11 @@ Moved from the README; [back to the README](../README.md).
   stopped typing) are logged as gaps like the agents' searches. Deleted memos and docs are listed with
   `GET /ui/api/trash` and go back with `POST /ui/api/trash/restore` (owner or admin, never over a file that exists). Machines: workers, sessions, hook errors and remote actions per pc. The project
   picker scopes only the knowledge views. An admin page for tokens, people and projects. Light or dark, your pick.
+- **Empty, loading and error states:** every view says in one muted line what it is for and the next step (with a
+  button where there is one), "Loading…" while it loads and, when its API call fails, the message with Retry. Health
+  with no findings says "All clear". A person with no pc online with a companion gets a Get started card in the
+  Agents list instead (the setup line for their system from the help page's Install section, link a folder, start a
+  chat); with a pc but no chats, a line with New chat.
 - **Without remote control:** a person none of whose tokens has "Agents (remote control)" on (`me.agents` false,
   [companion.md](companion.md#agents-remote-control-per-token)) gets only the knowledge part: no Agents or Machines
   entries (sidebar, tab bar, palette), no usage chips or New chat; the start page, `#/chats`, `#/inbox` and

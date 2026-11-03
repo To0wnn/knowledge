@@ -30,9 +30,6 @@ ol.steps > li { counter-increment: s; position: relative; padding-left: 38px; mi
 ol.steps > li::before { content: counter(s); position: absolute; left: 0; top: 1px; width: 24px; height: 24px; border-radius: 50%;
   display: grid; place-items: center; font: 600 12px var(--mono); background: var(--hover); color: var(--accent); }
 ol.steps > li > b { display: block; }
-.cmd { position: relative; margin-top: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); min-width: 0; }
-.cmd pre { margin: 0; padding: 10px 76px 10px 12px; overflow-x: auto; font: 13px/1.55 var(--mono); white-space: pre; }
-.copy { position: absolute; top: 7px; right: 7px; }
 .note { margin-top: 12px; padding: 10px 14px; border: 1px solid color-mix(in srgb, var(--g-feedback) 45%, var(--line));
   background: color-mix(in srgb, var(--g-feedback) 10%, var(--panel)); border-radius: var(--r-md); font-size: 14px; }
 .wrap .table-wrap { margin-top: 14px; }
@@ -73,7 +70,7 @@ body.admin-page .client-tabs { top: 0; } /* /setup has no page header */
     </span>
   </div>
 
-  <h2>Install</h2>
+  <h2 id="install">Install</h2>
   <ol class="steps">
     <li><b>Get the scripts and run the setup</b>
       <span data-os="linux">Needs <code>git</code> and <code>python3</code>.</span>

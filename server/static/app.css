@@ -294,6 +294,13 @@ input[type=url], input[type=text], input[type=password], input[type=search], tex
 .card > h3.sub:first-child { margin: 2px 9px 8px; }
 .empty { margin: 0; padding: 18px 12px; color: var(--muted); font-size: 13.5px; text-align: center; }
 .empty.loading { animation: kn-pulse 1.6s ease-in-out infinite; }
+.empty.ok { color: var(--ok); }
+.empty.error { color: var(--bad); }
+.empty > .btn { margin-left: 4px; vertical-align: middle; }
+/* A copyable command (help page, the Agents view's getting-started card). */
+.cmd { position: relative; margin-top: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); min-width: 0; }
+.cmd pre { margin: 0; padding: 10px 76px 10px 12px; overflow-x: auto; font: 13px/1.55 var(--mono); white-space: pre; }
+.cmd > .copy { position: absolute; top: 7px; right: 7px; }
 /* right column: connected notes; on the map also the selected note's card */
 .connected a { display: block; font-size: 13px; padding: 5px 0; }
 .connected .why { display: inline-block; width: 100%; color: var(--muted); font-size: 12px; } /* inline-block: the link's underline stays on the title */
@@ -616,6 +623,12 @@ body.admin-page { display: block; overflow-y: auto; }
 #ck-closed[aria-pressed="true"] { background: var(--amber-soft); color: var(--amber-ink); }
 .ck-count { display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 7px; border-radius: 999px; cursor: default; background: var(--hover); color: var(--ink); font-size: 12px; letter-spacing: 0; }
 .ck-none { margin: 4px 6px 6px; font-size: 12.5px; color: var(--muted); }
+/* Getting started: a person with no pc online with a companion yet. */
+.ck-start { padding: 12px; font-size: 13px; }
+.ck-start h2 { margin: 0 0 6px; font-size: 15px; }
+.ck-start ol { margin: 0; padding-left: 20px; display: grid; gap: 10px; }
+.ck-start li > b { display: block; }
+.ck-start .cmd pre { font-size: 12px; }
 .ck-item { position: relative; margin-bottom: 2px; border: 1px solid transparent; border-radius: var(--r-md); }
 .ck-item:hover, .ck-item:focus-within { border-color: var(--line); }
 .ck-item.needs { border-left: 3px solid var(--amber); }
@@ -812,7 +825,6 @@ dialog.ck-diff { width: min(980px, calc(100vw - 32px)); }
 .ms-c .ms-tx { -webkit-line-clamp: 1; }
 .ms-from { grid-column: 1 / -1; font-size: 11px; color: var(--amber-ink); }
 .ms-arrow { color: var(--muted); width: 100%; text-align: center; line-height: 1; }
-.ms-empty { padding: 24px 16px; }
 @media (max-width: 699.98px) {
   .ms-bar { padding: 8px 12px; gap: 6px; }
   .ms-legend { padding: 0 12px 6px; }

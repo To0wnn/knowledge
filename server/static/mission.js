@@ -110,7 +110,7 @@ function openMission(on) {
   if (!ms.root) msBuild();
   ms.root.hidden = !on; clearTimeout(ms.timer);
   if (!on) return;
-  ms.project = agentProject; ms.fitted = false; ms.data = null;
+  ms.project = agentProject; ms.fitted = false; ms.data = null; $("ms-count").textContent = "Loading…";
   msLoad();
 }
 
@@ -121,7 +121,10 @@ async function msLoad() {
     const q = new URLSearchParams({ project: ms.project, ...(ms.all ? { all: "1" } : {}) });
     const g = await api(`/ui/api/mission?${q}`);
     if (JSON.stringify(g) !== JSON.stringify(ms.data)) { ms.data = g; msRender(); } // a re-render would drop the focus
-  } catch (e) { $("ms-count").textContent = e.message; }
+  } catch (e) {
+    $("ms-count").textContent = e.message;
+    if (!ms.data) { $("ms-stage").hidden = true; $("ms-list").hidden = false; $("ms-list").replaceChildren(errorState(`The flow did not load: ${e.message}`, msLoad)); }
+  }
   if (!document.hidden) ms.timer = setTimeout(msLoad, 20000); // tasks change when agents write memos
 }
 
@@ -135,8 +138,9 @@ function msRender() {
   ms.lay = missionLayout(g);
   $("ms-stage").hidden = msNarrow(); $("ms-list").hidden = !msNarrow();
   if (!g.nodes.length) {
-    const all = el("button", "btn small ck-elsewhere", "Show all projects"); all.type = "button"; all.onclick = () => switchProject(ALL);
-    $("ms-world").replaceChildren(); $("ms-list").replaceChildren(el("p", "muted ms-empty", ms.project ? `No task lines in ${shown(ms.project)}.` : "No task lines here."), ...(ms.project ? [all] : []));
+    $("ms-world").replaceChildren();
+    $("ms-list").replaceChildren(emptyState(`No task lines${ms.project ? ` in ${shown(ms.project)}` : ""}: the flow of work agents hand each other shows here.`,
+      ...(ms.project ? [actionButton("Show all projects", () => switchProject(ALL))] : [])));
     $("ms-stage").hidden = true; $("ms-list").hidden = false; // the list holds the empty line: also on a desktop
     return;
   }
