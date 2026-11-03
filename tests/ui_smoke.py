@@ -729,6 +729,12 @@ async def agents_pages(browser, devices, secret: str) -> None:
       const twice = new Set(items.filter((x, n) => ckSame(x) && items.findIndex(y => id(y) === id(x)) !== n).map(id));
       return [...document.querySelectorAll('#ck-list .ck-item')].filter(c => !c.closest('.ck-bunch')).map(c => items.find(x => x.key === c.dataset.key)).filter(x => x && twice.has(id(x))).length; })()""")
     check(loose == 0, f"Agents: identical items are grouped ({loose} left loose)")
+    secs = await pg.evaluate("""[ckSec({kind: 'worker', col: 'done', status: 'finished'}), ckSec({kind: 'review', col: 'needs'})]""")
+    check(secs == ["done", "review"], f"Agents: Review is a branch to merge; a finished worker is done {secs}")
+    unfold = await pg.evaluate("""(() => { const c = document.querySelector('#ck-list .ck-item'); if (!c) return 'none';
+      c.append(Object.assign(document.createElement('p'), {className: 'ck-item-open'})); c.classList.add('hit');
+      document.body.click(); return [!!c.querySelector('.ck-item-open'), c.classList.contains('hit')]; })()""")
+    check(unfold in ("none", [False, False]), f"Agents: a click beside it folds a row's details and drops its mark {unfold}")
     key = await pg.evaluate("(ck.board.find(i => i.col !== 'open' && i.kind !== 'chat' && i.kind !== 'ask') || {}).key || ''")
     if key:
         await pg.goto(f"{URL}/ui#/inbox/{key}")

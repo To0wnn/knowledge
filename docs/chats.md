@@ -15,7 +15,7 @@ from a phone. The pc side runs in the companion ([companion.md](companion.md)).
   it asks, a failed worker of the last week with the companion's reason (`why`), a worker whose pc went offline ("pc
   offline since <time>", no Stop), a task line waiting for your approval, a task woken that nobody took, a result or
   hand-over to a person (`result`: read it, then remove the line; it never starts anything), a task whose "start
-  after" task was cancelled (`blocked`)); **Review** (branches ready to merge, finished workers); **Working** (chat
+  after" task was cancelled (`blocked`)); **Review** (a branch with commits ready to merge: View diff, Merge, Reject; a finished worker with nothing to merge is under Done today); **Working** (chat
   turns, workers, task lines a session holds, and open task lines for an agent with a "Start on <pc>" button per pc
   that may take it); **Done today** (folded: chats read, workers ended, results handed back). A chat row shows its
   `outcome`, the last sentence the agent said (plain text, at most 160 characters). Quick actions on a row: Allow or

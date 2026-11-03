@@ -9,8 +9,8 @@ Moved from the README; [back to the README](../README.md).
   Needs-you badge still counts all), **Agents** (Agents, Tasks, Machines) and **Knowledge** (Notes, Map, Changes,
   Health = lint), This pc, Admin, Help and Settings (user menu: a new chat's default model);
   on a phone a bottom tab bar (Agents, Tasks, Machines, Notes, More). The Agents view (`#/chats`; `#/inbox` opens the same view) is one
-  list grouped Needs you (each row says why: answered and not read, asks approval, failed), Review (branches ready to
-  merge, finished workers), Working and Done today (folded), with quick actions on a row (Allow/Deny an approval,
+  list grouped Needs you (each row says why: answered and not read, asks approval, failed), Review (a branch with
+  commits ready to merge), Working and Done today (folded), with quick actions on a row (Allow/Deny an approval,
   Merge/Reject a review, a one-line Reply, Snooze 1 h / until tomorrow, Dismiss) and the open chat on the right; on a
   phone the list is the start screen and a chat opens full screen. Its "Side by side" mode (`#/chats?view=board`)
   shows several chats next to each other. Details: [chats.md](chats.md). Every view has its own URL (`#/chats`, `#/notes/<path>`,

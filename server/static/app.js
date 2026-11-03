@@ -1430,7 +1430,7 @@ async function ckSummary() {
 // those). A dot and a word say a chat's state (not colour alone). Every card has its actions right there.
 const CK_STATE = { needs: "needs you", running: "running", idle: "idle", closed: "closed" };
 const CK_SECS = [["needs", "Needs you"], ["review", "Review"], ["running", "Working"], ["done", "Done today"]];
-const ckSec = (i) => (i.kind === "review" || (i.kind === "worker" && i.col === "done" && i.status === "finished") ? "review" : i.col);
+const ckSec = (i) => (i.kind === "review" ? "review" : i.col); // Review: a branch with work to merge; a finished worker is done
 function ckState(c) { // an approval waiting in a running turn needs you too
   const needs = (ck.board || []).some((i) => i.col === "needs" && i.machine === c.machine && (i.kind === "chat" ? i.id : i.kind === "ask" ? i.chat : "") === c.id);
   return needs ? "needs" : ckBusy(c.status) ? "running" : c.closed ? "closed" : "idle";
@@ -2077,9 +2077,16 @@ function ckPicker(card) {
   menu.append(sum, panel);
   card.picks.replaceChildren(menu, ...(draft ? [ckDraftFolder(card)] : []));
 }
-document.addEventListener("click", (e) => { // a click outside closes the model panel and the Snooze menu
-  for (const d of document.querySelectorAll("details.ck-model[open], details.ck-snooze[open]")) if (!d.contains(e.target)) d.open = false;
-});
+// A click outside (or Esc) closes the model panel and the Snooze menu, folds a worker's opened details and drops the
+// mark a link put on an item.
+function ckUnfold(target) {
+  for (const d of document.querySelectorAll("details.ck-model[open], details.ck-snooze[open]")) if (!target || !d.contains(target)) d.open = false;
+  for (const p of document.querySelectorAll(".ck-item-open")) if (!target || !p.closest(".ck-item").contains(target)) p.remove();
+  const hit = document.querySelector("#ck-list .ck-item.hit");
+  if (hit && (!target || !hit.contains(target))) { hit.classList.remove("hit"); ck.hit = ""; }
+}
+document.addEventListener("click", (e) => ckUnfold(e.target));
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !document.querySelector("dialog[open]")) ckUnfold(null); });
 
 // A new chat is a draft in the chat pane (#/chats/new): an empty box with the model chip and the folder; the chat is
 // made on the first message. The project is the sidebar's; the pc follows from the model and the folder.
