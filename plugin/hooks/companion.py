@@ -117,9 +117,20 @@ def newline_of(path: Path) -> str:
         return "\n"
 
 
+WRITE_LOCKS: dict = {}  # path -> lock: this process's writers of one file take turns (Windows refuses a replace mid-replace)
+WRITE_LOCKS_LOCK = threading.Lock()
+
+
 def write_text(path: Path, text: str):
     """Replace a file at once through a temp file of its own: two writers (threads, or a hook process logging) never
     write into one temp file, so neither can leave a torn mix of both."""
+    with WRITE_LOCKS_LOCK:
+        lock = WRITE_LOCKS.setdefault(str(path), threading.Lock())
+    with lock:
+        _write_text(path, text)
+
+
+def _write_text(path: Path, text: str):
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".companion-tmp")
     try:
@@ -127,7 +138,14 @@ def write_text(path: Path, text: str):
             f.write(text)
         if path.exists():  # ~/.claude.json is private: the new file keeps the old one's mode
             os.chmod(tmp, path.stat().st_mode & 0o777)
-        os.replace(tmp, path)
+        for attempt in range(40):  # Windows: another process (a hook, a virus scanner) may hold it a moment
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if os.name != "nt" or attempt == 39:
+                    raise
+                time.sleep(0.05)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise

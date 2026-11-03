@@ -726,6 +726,15 @@ def user_line(text: str) -> bytes:
 LIVE_DIR = workers.DIR.parent / "live"  # one folder per live chat's agent (chat_host.py): it outlives a companion restart
 
 
+def rmtree_soon(d: Path):
+    """A live chat's folder away; Windows keeps a file busy for a moment after the process that had it open ended."""
+    for _ in range(40):
+        shutil.rmtree(d, True)
+        if not d.exists():
+            return
+        time.sleep(0.05)
+
+
 def in_size(d: Path) -> int:
     try:
         return (d / "in").stat().st_size
@@ -769,7 +778,7 @@ def adopt(post, log) -> int:
         if not (s and h) or s["chat"] in LIVE:
             if alive:  # it never saved: nothing knows where it was
                 workers.kill(h, hard=True)
-            shutil.rmtree(d, True)
+            rmtree_soon(d)
             continue
         try:
             LIVE[s["chat"]] = {"codex": CodexLive, "agy": AgyLive}.get(s["agent"], Live).adopt(d, s, post, log)
@@ -777,7 +786,7 @@ def adopt(post, log) -> int:
         except Exception as e:
             log("error", "A live chat could not be picked up after a companion restart", f"chat {s.get('chat')}: {e}"[:300])
             workers.kill(h, hard=True)
-            shutil.rmtree(d, True)
+            rmtree_soon(d)
     return n
 
 
@@ -937,7 +946,7 @@ class Live:
                 workers.kill(self.rec, hard=True)
             except Exception:
                 pass
-            shutil.rmtree(self.p.d, True)
+            rmtree_soon(self.p.d)
             raise
         log("chat", f"{AGENT_NAMES[self.agent]}: live chat started in {self.folder}", f"chat {self.cid}" + (f", continues {self.st['session']}" if self.st["session"] else ""))
 
@@ -1159,7 +1168,7 @@ class Live:
         """The process ended (idle close, a crash, a kill): a turn that ran ends with it."""
         code = self.p.wait()
         tail = self.p.err_tail()
-        shutil.rmtree(self.p.d, True)
+        rmtree_soon(self.p.d)
         with self.lock:
             if self.busy:
                 self.done("" if self.closing or self.stop_asked else
@@ -1537,7 +1546,7 @@ class AgyLive(CodexLive):
         if text is None:  # no Force: an idle close, a Stop, a crash
             return super().gone()
         code = self.p.wait()
-        shutil.rmtree(self.p.d, True)
+        rmtree_soon(self.p.d)
         with self.lock:
             self.buf.append(("info", "Stopped this step; your message goes in now (agy has no interrupt: a new agy takes the conversation on)."))
             self.flush()
@@ -1928,12 +1937,15 @@ def self_test():
             h = Hosted(LIVE_DIR / "c1-ab", [sys.executable, "-c", echo], t, dict(os.environ))
             h.stdin.write(b"a\n")
             it = iter(h.stdout)
-            assert next(it) == b"got:a\n" and h.poll() is None and workers.running({"pid": h.pid, "ident": h.ident})
+            line = lambda b: b.rstrip(b"\r\n")  # Windows writes \r\n
+            first = next(it)
+            assert line(first) == b"got:a" and h.poll() is None and workers.running({"pid": h.pid, "ident": h.ident})
             h.stdout.stopped = True  # the old companion is gone
-            assert h.stdout.offset == 0 and h.stdout.end == 6, "a line counts as read once it was handled"
+            it.close()  # its reader with it (an open reader keeps the file busy on Windows)
+            assert h.stdout.offset == 0 and h.stdout.end == len(first), "a line counts as read once it was handled"
             h2 = Hosted(LIVE_DIR / "c1-ab", offset=h.stdout.end)
             h2.stdin.write(b"b\n")
-            assert next(iter(h2.stdout)) == b"got:b\n", "read on, not from the start"
+            assert line(next(iter(h2.stdout))) == b"got:b", "read on, not from the start"
             h2.stdin.close()
             assert list(Hosted(LIVE_DIR / "c1-ab", offset=h2.stdout.end).stdout)[-1:] in ([b"bye"], []) and h2.wait(10) == 0
             (LIVE_DIR / "c2-cd").mkdir()  # a host that never got going
@@ -1959,6 +1971,11 @@ def self_test():
             assert texts == ["late"] and seen_[-1].get("done") and "error" not in seen_[-1] and not d3.exists(), seen_
             LIVE.pop("c3", None)
         finally:
+            for d in (LIVE_DIR / "c1-ab",):  # a failed check leaves no host behind (it would hold its files open)
+                try:
+                    workers.kill(json.loads((d / "host.json").read_text(encoding="utf-8")), hard=True)
+                except (OSError, ValueError):
+                    pass
             LIVE_DIR = keep
     # Attachments are fetched off the poll thread, in order per chat: a slow file holds up its own chat only, a later
     # message of it waits; a Stop while files come drops the message and ends its turn once.

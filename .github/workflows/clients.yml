@@ -63,6 +63,11 @@ jobs:
         run: npm install -g @anthropic-ai/claude-code @openai/codex
       - name: Server dependencies
         run: uv sync --project server --frozen --no-dev
+      - name: Plugin self-tests on this OS
+        shell: bash  # the same line on Windows, macOS and Linux (Windows: file locks, CRLF, process groups differ)
+        run: |
+          for t in plugin/hooks/chat.py plugin/hooks/companion.py plugin/hooks/workers.py; do uv run --project server --frozen python "$t" --self-test; done
+          uv run --project server --frozen python clients/knowledge-agent.py --selftest
       - name: Client end-to-end
         run: uv run --project server --frozen python tests/clients_e2e.py
   ui-smoke:
