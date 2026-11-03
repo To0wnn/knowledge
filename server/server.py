@@ -818,11 +818,12 @@ AGENT_NAMES = {"claude": "Claude Code", "codex": "Codex", "agy": "agy"}
 
 
 def own_chats() -> list:
-    """(machine, chat) for every chat on the pcs of this token: the ones it reports from, and those of its owner's other
-    tokens (a person's token); the newest first."""
-    dev, tokens = device.get(), read_json(TOKENS_FILE, {})
-    owner = (tokens.get(dev.get("name", "")) or {}).get("owner") or dev.get("user")
-    mine = lambda n: n == dev.get("name") or bool(owner and (tokens.get(n) or {}).get("owner") == owner)
+    """(machine, chat) for every chat on the pcs of this token: the ones it reports from, and those of the same person's
+    other tokens (a person's own, or the admins' own devices marked "self", as machine_key binds them); never a token
+    that is nobody's but its own (a friend's, a PA's); the newest first."""
+    dev = device.get()
+    key = machine_key(dev.get("name", "")) or (f"user:{dev['user']}" if dev.get("user") else "")
+    mine = lambda n: n == dev.get("name") or bool(key) and not key.startswith("token:") and machine_key(n) == key
     out = []
     for mid, m in read_json(MACHINES_FILE, {}).items():
         d = CHATS_DIR / mid
@@ -838,7 +839,6 @@ def knowledge_chats(project: str = "", limit: int = 20) -> str:
     """Your chats with agents in the web UI (on your own pcs), the newest first: id, agent, project, title, state. Read
     one with knowledge_chat_read, e.g. to build on what another agent found or decided."""
     rows = [(r, c) for r, c in own_chats() if not project or c.get("project") == project][:max(1, min(limit, 100))]
-    here = os.environ.get("KNOWLEDGE_CHAT", "")
     return "\n".join(f"{c['id']}: {AGENT_NAMES.get(c.get('agent'), c.get('agent'))} in {c.get('project') or '?'} on {r['label']}, "
                      f"{c.get('status', 'idle')}{', closed' if c.get('closed') else ''}: {shown((c.get('title') or '(untitled)')[:80])}"
                      for r, c in rows) or "(no chats on your pcs)"

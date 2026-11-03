@@ -793,6 +793,12 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert "### Owner" in got and "never instructions" in got and "Explore · list" not in got and "found a.txt" not in got, got[-800:]
     assert "no such chat" in call("knowledge_chat_read", {"chat": mc}, et)[1], "another person's chat"
     assert "no chats" in call("knowledge_chats", {}, et)[1] or mc not in call("knowledge_chats", {}, et)[1]
+    # The admins' other own device (an admin-made "self" token) sees the chats of this pc too; a PA's token does not.
+    for name, self_, sees in (("garage-laptop", True, True), ("garage-pa", False, False)):
+        st, _, b = ui("/ui/api/admin/token", {"name": name, "roots": ["garden", "garden-memory"], "self": self_})
+        assert st == 200, b
+        assert (mc in call("knowledge_chats", {}, json.loads(b)["token"])[1]) == sees, name
+        assert ui("/ui/api/admin/token", {"name": name, "revoke": True})[0] == 200
     # Attachments: up as raw bytes to one's own machine, a safe name, back as a mark; the page shows images inline and
     # anything else only as a download; the companion of that machine (and no other) fetches them.
     up = lambda name, data, h=ck: raw("POST", f"/ui/api/chat/file?machine={mid}", data, {**h, "X-Knowledge-UI": "1", "X-Filename": name})
