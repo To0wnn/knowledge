@@ -5139,7 +5139,7 @@ def chat_meta(c: dict) -> dict:
             "sub_list": [{"id": k, "label": v.get("label", "subagent"), "status": (c.get("subs") or {}).get(k, "done"), **({"aid": v["aid"]} if v.get("aid") else {})}
                          for k, v in list((c.get("sub_info") or {}).items())[-20:]],
             "used": c.get("used", 0), "ctx": c.get("ctx", 0),  # the conversation's tokens so far, its context now
-            "model": c.get("model", ""), "effort": c.get("effort", ""), "worktree": bool(c.get("worktree")), "bg": int(c.get("bg") or 0),
+            "model": c.get("model", ""), "effort": c.get("effort", ""), "worktree": bool(c.get("worktree")), "bg": int(c.get("bg") or 0), "bg_list": c.get("bg_list") or [],
             "waiting": len(c.get("pending") or [])}
 
 
@@ -6103,6 +6103,8 @@ async def machine_chat_events(request: Request):
             c["session"] = b["session"]
         if type(b.get("bg")) is int:  # the agent's shells left running in the background (Claude Code), counted by the pc
             c["bg"] = max(0, min(b["bg"], 99))
+            c["bg_list"] = [{"id": str(x.get("id", ""))[:40], "label": str(x.get("label", ""))[:120]} for x in (b.get("bg_list") or [])[:20]
+                            if isinstance(x, dict)] if isinstance(b.get("bg_list"), list) else []
         if b.get("done") is True and (s := steering(c)):
             c.pop("steering", None)
             # the companion counts what its hook did not hand over (the last ones parked); an older companion: all or none

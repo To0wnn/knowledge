@@ -2209,6 +2209,7 @@ async function ckPoll(card) {
   ckPicker(card);
   ckEvents(card, res);
   if (!card.meta.subs) ckSubsEnded(card); // the server knows none runs (its turn ended, or it was lost): no block says running
+  ckSubbar(card); // its background shells come with the chat's meta
   ckAsks(card, res.asks || [], (res.now || Date.now() / 1000) - Date.now() / 1000);
   ckPaint(card);
 }
@@ -2355,8 +2356,13 @@ const ckNum = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e4 ? `${Math
 // The subagents running now, pinned above the box: the log scrolls on, these stay; a click opens its block.
 function ckSubbar(card) {
   const run = [...(card.subs || new Map()).values()].filter((b) => b.status === "running");
-  card.subbar.hidden = !run.length;
-  card.subbar.replaceChildren(...run.map((b) => {
+  // the agent's shells left running in the background (Claude Code), named by what they run
+  const shells = (card.meta.bg_list || []).map((s) => {
+    const x = el("span", "ck-subpin ck-shellpin"); x.append(el("span", "ck-dot live"), el("span", "ck-sub-label", `shell: ${s.label}`));
+    x.title = "A shell the agent left running in the background"; return x;
+  });
+  card.subbar.hidden = !run.length && !shells.length;
+  card.subbar.replaceChildren(...shells, ...run.map((b) => {
     const x = el("button", "ck-subpin"); x.type = "button";
     x.append(el("span", "ck-dot live"), el("span", "ck-sub-label", b.label.textContent), ...(b.tokens ? [el("small", null, `${ckNum(b.tokens)} tokens`)] : []));
     x.title = "Open this subagent's block";

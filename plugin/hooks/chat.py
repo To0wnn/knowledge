@@ -1152,7 +1152,7 @@ class Live:
         self.turn_open = self.busy = False  # the agent works on a turn; the server counts the chat running
         self.after_interrupt, self.closing, self.stop_asked = [], False, False
         self.subs = set()  # its subagents running now: not idle while one works
-        self.snap, self.save_lock, self.asking, self.bg = None, threading.Lock(), {}, set()  # bg: Claude's background shells running  # asking: approval request id -> where its line starts
+        self.snap, self.save_lock, self.asking, self.bg = None, threading.Lock(), {}, {}  # bg: Claude's background shells running  # asking: approval request id -> where its line starts
 
     def command(self, exe: str) -> list:
         return live_argv(exe, self.yolo, self.st["session"], self.cid, *self.pick)
@@ -1164,7 +1164,7 @@ class Live:
         still unanswered holds the place: the new companion reads its request again and asks again."""
         o = self.p.stdout
         at = o.end if o.end and threading.get_ident() == getattr(self, "reader", None) else o.offset
-        return {"offset": min([at, *self.asking.values()]), "taken": self.taken, "subs": sorted(self.subs), "bg": sorted(self.bg)}
+        return {"offset": min([at, *self.asking.values()]), "taken": self.taken, "subs": sorted(self.subs), "bg": dict(self.bg)}
 
     def live_state(self) -> dict:
         """What was written to the agent, kept at every write."""
@@ -1190,7 +1190,7 @@ class Live:
         self.setup({"chat": s["chat"], "agent": s["agent"], "folder": s["folder"], "session": s["session"]}, post, log, s["yolo"])
         self.pick, self.asked = tuple(s["pick"]), tuple(s["asked"])
         self.written, self.taken, self.turn_open, self.busy, self.subs = s["written"], s["taken"], s["turn_open"], s["busy"], set(s["subs"])
-        self.bg = set(s.get("bg") or [])
+        self.bg = dict(s.get("bg") or {})
         self.st["bg"] = dict.fromkeys(self.bg, 1)  # their ends, read after the restart, still match
         self.p = Hosted(d, offset=s["offset"])
         self.rec = RUNNING[self.cid] = {"pid": self.p.pid, "ident": self.p.ident, "stop": False, "folder": self.folder,
@@ -1260,10 +1260,11 @@ class Live:
                 self.done()
 
     def flush(self, **end):
-        body = {"chat": self.cid, "events": merged(self.buf), "session": self.st["session"], "bg": len(self.bg), **end}
+        shells = [{"id": k, "label": v} for k, v in list(self.bg.items())[:20]]
+        body = {"chat": self.cid, "events": merged(self.buf), "session": self.st["session"], "bg": len(self.bg), "bg_list": shells, **end}
         self.buf, self.flushed = [], time.time()
-        if body["events"] or end or len(self.bg) != getattr(self, "bg_told", 0):
-            self.bg_told = len(self.bg)
+        if body["events"] or end or shells != getattr(self, "bg_told", []):
+            self.bg_told = shells
             try:
                 self.post(body)
             except Exception as e:  # the server away: it calls the turn lost when it next hands out work
@@ -1299,8 +1300,11 @@ class Live:
         evs = parse(self.agent, line, self.st)
         if any(e[0] == "bg" for e in evs):  # background shells: only their number goes to the server
             for e in evs:
-                if e[0] == "bg":
-                    (self.bg.add if e[3] == "running" else self.bg.discard)(e[2])
+                if e[0] == "bg":  # id -> what it runs (shown above the box)
+                    if e[3] == "running":
+                        self.bg[e[2]] = e[1][:120]
+                    else:
+                        self.bg.pop(e[2], None)
             evs = [e for e in evs if e[0] != "bg"]
             self.flush()
         if kind in ("assistant", "stream_event") and not ev.get("parent_tool_use_id"):  # the main agent at work
