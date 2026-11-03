@@ -4,6 +4,7 @@
 # The same line every time: the first time it installs; after that it updates, offers agents found without the
 # plugin, and asks for a token only when the server refuses the stored one (clients/knowledge-agent.py setup).
 # It also sets up the local companion: autostart at logon, a menu entry for its page, a first hook-trust run.
+# The plugin only, without the companion:  curl -fsSL .../install.sh | sh -s -- --plugin-only
 # Gets or updates the scripts in ~/knowledge (git), then runs clients/knowledge-agent.py. Same steps as install.ps1.
 set -eu
 # Everything inside main, called on the last line: a download cut off half-way runs nothing.
@@ -44,7 +45,8 @@ elif [ "$old_version" = "$new_version" ]; then echo "$DIR: up to date (version $
 else echo "$DIR: updated version $old_version -> $new_version"
 fi
 
-[ $# -gt 0 ] || set -- setup
+# Only flags (curl ... | sh -s -- --plugin-only) go to setup.
+case "${1:-}" in ""|-*) set -- setup "$@" ;; esac
 # Through a pipe stdin is this script, so the setup's questions read the terminal.
 if ( : </dev/tty ) 2>/dev/null; then
   exec "$PY" "$DIR/clients/knowledge-agent.py" "$@" </dev/tty

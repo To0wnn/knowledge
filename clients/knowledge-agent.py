@@ -13,6 +13,9 @@ it in ~/.config/knowledge/url for the hooks and sets the Claude plugin option. O
                     offer agents found without the plugin, and ask for a token only when the stored one is refused
   knowledge-agent.py update                        update this checkout from GitHub, then the knowledge plugin in every
                     agent that has it, no questions
+                    install, setup and update end with the companion (install-companion) unless --plugin-only is
+                    given or an earlier choice in ~/.knowledge/install.json says so; in a terminal install and setup
+                    ask once. --plugin-only on a pc with the companion removes it (as uninstall-companion)
   knowledge-agent.py import [--dry-run]            import what the agents here already know as memos (setup and install
                     offer it once): ~/.claude/CLAUDE.md, ~/.codex/AGENTS.md, ~/.gemini/GEMINI.md, Claude Code's local
                     memory (~/.claude/projects/*/memory) and CLAUDE.md/AGENTS.md of folders linked to a project; through
@@ -35,9 +38,10 @@ it in ~/.config/knowledge/url for the hooks and sets the Claude plugin option. O
   knowledge-agent.py install-companion [--dry-run] [--os linux|darwin|windows]
                     start the companion at logon (systemd --user unit, LaunchAgent, or a per-user Scheduled Task that
                     runs pythonw.exe directly), a menu shortcut that opens its page in an app window, a first hook-trust
-                    run; setup, install and update do this at the end. --dry-run (or KNOWLEDGE_COMPANION_DRY_RUN=1) only
-                    lists the steps, for this or another OS
-  knowledge-agent.py uninstall-companion [--dry-run] [--os ...]   remove that autostart and shortcut again
+                    run; setup, install and update do this at the end, unless plugin only was chosen. --dry-run (or
+                    KNOWLEDGE_COMPANION_DRY_RUN=1) only lists the steps, for this or another OS
+  knowledge-agent.py uninstall-companion [--dry-run] [--os ...]   remove that autostart and shortcut again; both
+                    save the choice, so update keeps the companion or leaves it out from then on
 """
 import getpass
 import hashlib
@@ -416,7 +420,7 @@ def setup():
         install(agent, "-", tok)
 
 
-def update():
+def update(argv: list = ()):
     """Every agent here that has the plugin gets the newest version; the stored token, no questions. A git checkout of
     this script is first brought to GitHub's main (self_update.sync), then the new script does the rest."""
     repo = HOOKS.parent.parent
@@ -430,7 +434,7 @@ def update():
             sys.exit(str(e))
         new = json.loads(manifest.read_text(encoding="utf-8"))["version"]
         print(f"{repo}: " + (f"updated version {old} -> {new}" if new != old else f"up to date (version {new})"))
-        sys.exit(subprocess.run([sys.executable, "-X", "utf8", __file__, "update"],
+        sys.exit(subprocess.run([sys.executable, "-X", "utf8", __file__, "update", *argv],
                                 env={**os.environ, "KNOWLEDGE_SYNCED": "1"}).returncode)
     if not token_store.token():
         sys.exit("No stored token: run install first.")
@@ -1088,25 +1092,63 @@ def install_companion(argv: list = (), undo: bool = False):
         print("companion: autostart and shortcut removed" if undo else f"companion: runs at logon; page on {COMPANION_URL}")
 
 
+CHOICE = token_store.KN_HOME / "install.json"  # {"companion": bool}: what install/setup chose, so update keeps it
+ASK_COMPANION = "Also install the companion (chats and workers from the web UI, an agent runner that starts at logon)? [Y/n] "
+
+
+def saved_choice():
+    try:
+        return json.loads(CHOICE.read_text(encoding="utf-8")).get("companion")
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def save_choice(want: bool):
+    CHOICE.parent.mkdir(parents=True, exist_ok=True)
+    CHOICE.write_text(json.dumps({"companion": want}), encoding="utf-8")
+
+
+def want_companion(cmd: str, flags: list, saved, tty: bool, answer=input) -> bool:
+    """--plugin-only decides; else a saved choice; else install/setup in a terminal ask; else the companion (as before)."""
+    if "--plugin-only" in flags:
+        return False
+    if saved is not None:
+        return saved is True
+    if tty and cmd != "update":
+        return answer(ASK_COMPANION).strip().lower() in ("", *YES)
+    return True
+
+
+def finish_companion(cmd: str, flags: list):
+    """The end of install, setup and update: the companion, or the plugin only (an existing companion removed)."""
+    want = want_companion(cmd, flags, saved_choice(), sys.stdin.isatty() and sys.stdout.isatty())
+    save_choice(want)
+    if want:
+        return install_companion()
+    p = companion_paths(this_system())
+    if any(p[k].exists() for k in ("unit", "plist", "task_xml") if k in p):
+        print("\ncompanion: plugin only chosen, so the companion set up here is removed (YOLO off first)")
+        install_companion(undo=True)
+    print("companion: not installed (plugin only); add it later with: knowledge-agent.py install-companion")
+
+
 def main(argv: list):
     cmd = argv[0] if argv else ""
     if cmd == "header" and len(argv) <= 2:
         tok = token(argv[1] if len(argv) == 2 else "-")
         print(json.dumps(token_store.headers(tok) if tok else {}))
-    elif cmd == "install" and len(argv) == 1:
-        install_found()
-        offer_import()
-        install_companion()
-    elif cmd == "update" and len(argv) == 1:
-        update()
-        install_companion()
-    elif cmd == "setup" and len(argv) == 1:
-        setup()
-        offer_import()
-        install_companion()
+    elif cmd in ("install", "setup", "update") and set(argv[1:]) <= {"--plugin-only"}:
+        if cmd == "update":
+            update(argv[1:])
+        else:
+            install_found() if cmd == "install" else setup()
+            offer_import()
+        finish_companion(cmd, argv[1:])
     elif cmd == "import" and set(argv[1:]) <= {"--dry-run"}:
         import_cmd(argv[1:])
     elif cmd in ("install-companion", "uninstall-companion"):
+        if "--dry-run" not in argv:
+            save_choice(not cmd.startswith("un"))  # update follows this choice from now on
         install_companion(argv[1:], undo=cmd.startswith("un"))
     elif cmd == "install" and len(argv) >= 2 and argv[1] in (*CONFIG, "claude"):
         if len(argv) == 2:  # a vault name (the machine that holds the files) keeps the URL it is given
@@ -1170,6 +1212,10 @@ if __name__ == "__main__":
             assert not likely_secret(text), text
         assert [n for n, _ in pick([(1, 0), (2, 0), (3, 0)], "1, 3")] == [1, 3] and pick([(1, 0)], "") == [] and pick([(1, 0)], "all") == [(1, 0)]
         assert claude_folder("-home-u-My-Proj", {"/home/u/My Proj", "/home/u/My"}) == "/home/u/My Proj"
+        for flags, saved, tty, reply, want in ((["--plugin-only"], True, True, "", False), ([], False, True, "y", False),
+                                               ([], None, True, "n", False), ([], None, True, "", True), ([], None, False, "n", True)):
+            assert want_companion("install", flags, saved, tty, lambda q: reply) is want, (flags, saved, tty, reply)
+        assert want_companion("update", [], None, True, lambda q: "n") is True  # update never asks
         assert claude_folder("C--Users-u-x", {"C:\\Users\\u\\x"}) == "C:\\Users\\u\\x" and claude_folder("-y", {"/x"}) == ""
         print("ok")
     else:
