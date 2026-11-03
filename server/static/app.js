@@ -1435,8 +1435,10 @@ function ckState(c) { // an approval waiting in a running turn needs you too
   const needs = (ck.board || []).some((i) => i.col === "needs" && i.machine === c.machine && (i.kind === "chat" ? i.id : i.kind === "ask" ? i.chat : "") === c.id);
   return needs ? "needs" : ckBusy(c.status) ? "running" : c.closed ? "closed" : "idle";
 }
-function ckSubRows(c) { // a chat's subagents, each a chat of its own, under it
-  return (c?.sub_list || []).slice().reverse().map((s) => {
+function ckSubRows(c) { // a chat's subagents, each a chat of its own, under it: running first, then the newest 3 done
+  const all = (c?.sub_list || []).slice().reverse(), run = all.filter((s) => s.status === "running"), rest = all.filter((s) => s.status !== "running");
+  const open = ck.subsOpen?.has(ckKey(c)), shown = [...run, ...(open ? rest : rest.slice(0, 3))];
+  const rows = shown.map((s) => {
     const sl = el("li", "ck-subrow"), sb = el("button", `ck-chat ck-subchat ${s.status === "running" ? "running" : "idle"}`); sb.type = "button";
     sb.dataset.row = `sub:${ckKey(c)}~${s.id}`;
     sb.append(el("span", "ck-dot", ""), el("span", "ck-chat-title", `↳ ${s.label}`), el("small", null, `subagent · ${s.status}`));
@@ -1444,6 +1446,13 @@ function ckSubRows(c) { // a chat's subagents, each a chat of its own, under it
     sb.onclick = () => go(`#/chats/${encodeURIComponent(c.id)}/sub/${encodeURIComponent(s.id)}`);
     sl.append(sb); return sl;
   });
+  if (rest.length > 3) { // the older ones fold away (the server keeps a chat's newest 20)
+    const li = el("li", "ck-subrow"), more = el("button", "btn small quiet ck-submore", open ? "Fewer subagents" : `+${rest.length - 3} earlier subagents`);
+    more.type = "button";
+    more.onclick = (e) => { e.stopPropagation(); ck.subsOpen = ck.subsOpen || new Set(); ck.subsOpen[open ? "delete" : "add"](ckKey(c)); ckList(); };
+    li.append(more); rows.push(li);
+  }
+  return rows;
 }
 function ckList() {
   const box = $("ck-list"), hist = $("ck-history"), side = $("ck-side");
