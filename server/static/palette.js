@@ -7,7 +7,7 @@
 "use strict";
 
 const pal = { items: [], sel: 0, notesOnly: false, seq: 0, timer: 0, tasks: [], server: null };
-const PAL_VIEWS = [["inbox", "Inbox"], ["chats", "Chats"], ["tasks", "Tasks"], ["machines", "Machines"], ["notes", "Notes"],
+const PAL_VIEWS = [["chats", "Agents"], ["tasks", "Tasks"], ["machines", "Machines"], ["notes", "Notes"],
   ["map", "Map"], ["changes", "Changes"], ["health", "Health"], ["thispc", "This pc"], ["admin", "Admin"], ["help", "Help"]];
 const PAL_ACTIONS = [["new-chat", "New chat…"], ["theme", "Toggle theme"], ["rail", "Collapse or expand the sidebar", "["], ["flow", "Open mission flow"]];
 const palKey = (it) => `${it.kind}:${it.id}`;
