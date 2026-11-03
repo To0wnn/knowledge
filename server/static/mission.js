@@ -141,6 +141,7 @@ function msRender() {
     $("ms-world").replaceChildren();
     $("ms-list").replaceChildren(emptyState(`No task lines${ms.project ? ` in ${shown(ms.project)}` : ""}: the flow of work agents hand each other shows here.`,
       ...(ms.project ? [actionButton("Show all projects", () => switchProject(ALL))] : [])));
+    $("ms-list").firstChild.classList.add("ms-empty"); // the smoke test waits for it
     $("ms-stage").hidden = true; $("ms-list").hidden = false; // the list holds the empty line: also on a desktop
     return;
   }
