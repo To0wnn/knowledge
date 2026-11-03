@@ -750,6 +750,11 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     subs = {s["id"]: s for s in json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["chat"]["sub_list"]}
     assert subs["tu1"] == {"id": "tu1", "label": "Explore · list", "status": "running", "aid": "ae80"} and "aid" not in subs["tu2"], subs  # each its own chat in the list
     assert any(c["id"] == mc and len(c["sub_list"]) == 2 for c in json.loads(ui("/ui/api/chats")[2])["chats"])
+    # A long-running subagent stays listed however many finish after it; of the finished ones the newest 20.
+    http("POST", "/machine/chats/events", {"chat": mc, "events": [{"kind": "sub", "text": f"q{i}", "sub": f"tq{i}", "status": "done"} for i in range(22)]},
+         token=fr, headers=pc)
+    ids = [s["id"] for s in json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["chat"]["sub_list"]]
+    assert ids == ["tu1", "tu2", *(f"tq{i}" for i in range(2, 22))], ids
     # Tokens: a subagent's so far stays in its block; the conversation's add up per turn (or a total replaces them), with
     # the context in use now; odd values are dropped.
     http("POST", "/machine/chats/events", {"chat": mc, "events": [

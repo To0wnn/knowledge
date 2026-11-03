@@ -5167,13 +5167,20 @@ def steering(c: dict) -> list:
     return s if isinstance(s, list) else [s] if s else []
 
 
+def sub_list(c: dict) -> list:
+    """A chat's subagents, each a chat of its own in the list: name, state, how its agent reaches it. Every running one
+    (counted in "subs", so never hidden by newer ones) and the newest 20 finished, in their order."""
+    subs, info = c.get("subs") or {}, list((c.get("sub_info") or {}).items())
+    finished = set([k for k, _ in info if subs.get(k) != "running"][-20:])
+    return [{"id": k, "label": v.get("label", "subagent"), "status": subs.get(k, "done"), **({"aid": v["aid"]} if v.get("aid") else {})}
+            for k, v in info if k in finished or subs.get(k) == "running"]
+
+
 def chat_meta(c: dict) -> dict:
     return {**{k: c.get(k) for k in ("id", "agent", "folder", "project", "title", "by", "created", "updated", "status", "session")},
             "subs": sum(1 for s in (c.get("subs") or {}).values() if s == "running"),  # subagents running now
             "closed": bool(c.get("closed")),
-            # its subagents, each a chat of its own in the list (the newest 20): name, state, how its agent reaches it
-            "sub_list": [{"id": k, "label": v.get("label", "subagent"), "status": (c.get("subs") or {}).get(k, "done"), **({"aid": v["aid"]} if v.get("aid") else {})}
-                         for k, v in list((c.get("sub_info") or {}).items())[-20:]],
+            "sub_list": sub_list(c),
             "used": c.get("used", 0), "ctx": c.get("ctx", 0),  # the conversation's tokens so far, its context now
             "model": c.get("model", ""), "effort": c.get("effort", ""), "worktree": bool(c.get("worktree")), "bg": int(c.get("bg") or 0), "bg_list": c.get("bg_list") or [],
             "waiting": len(c.get("pending") or [])}
