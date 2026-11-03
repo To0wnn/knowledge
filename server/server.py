@@ -2481,9 +2481,25 @@ def workers_unmerged() -> list[str]:
             and now - w["ended"] > 7 * 86400]
 
 
-def own_token(cfg: dict, dev: dict) -> bool:
-    """A token this person may steer machines with: their own, or for an admin the admins' own devices (marked "self")."""
-    return bool(dev.get("user")) and cfg.get("owner") == dev.get("user") or bool(dev.get("admin")) and not cfg.get("owner") and bool(cfg.get("self"))
+def agents_on(cfg: dict) -> bool:
+    """The token's "Agents (remote control)" switch: its pc may be steered from the web UI (chats, workers, remote
+    actions, approvals). A token from before the switch has no key: on, so nothing changes for it."""
+    return cfg.get("agents") is not False
+
+
+def own_token(cfg: dict, dev: dict, steer: bool = True) -> bool:
+    """A token this person may steer machines with: their own, or for an admin the admins' own devices (marked "self"),
+    and its remote-control switch on (steer=False: theirs regardless of the switch, e.g. to forget the machine)."""
+    mine = bool(dev.get("user")) and cfg.get("owner") == dev.get("user") or bool(dev.get("admin")) and not cfg.get("owner") and bool(cfg.get("self"))
+    return mine and (not steer or agents_on(cfg))
+
+
+REMOTE_OFF = "remote control is off for this pc's token"
+
+
+def remote_refused() -> JSONResponse | None:
+    """The answer for a pc whose token has remote control off, on a route that steers it from the web UI; else None."""
+    return JSONResponse({"error": REMOTE_OFF, "agents": False}, status_code=403) if device.get().get("agents") is False else None
 
 
 def machine_rows() -> list[dict]:
@@ -2513,6 +2529,7 @@ def machine_rows() -> list[dict]:
                          "sessions": [{k: s.get(k, "") for k in ("project", "task", "at", "worker")} for s in sessions]}
         rows.append({"id": mid, "label": m.get("label", mid), "at": m.get("at", 0), "online": now - m.get("at", 0) < ONLINE,
                      "tokens": names, "own": any(own_token(tokens[n], dev) for n in names), "agents": agents,
+                     "mine": any(own_token(tokens[n], dev, steer=False) for n in names),
                      "companion": {**{k: comp.get(k) for k in ("version", "at", "workersAllowed", "game", "maxWorkers", "folders", "projects", "token", "live")},
                                    "agents": sorted(comp.get("agents") or {}),
                                    "models": {a: v.get("models", []) for a, v in (comp.get("agents") or {}).items()}} if comp else None,
@@ -2526,7 +2543,8 @@ def machine_rows() -> list[dict]:
                       for a in AGENT_OWNERS if any(c.get("agent") == a for c in old)}
             last = max(c["at"] for c in old)  # an old plugin reports only on a turn: online while it has turns
             rows.append({"id": f"token:{n}", "label": n, "old": True, "at": last, "online": now - last < ONLINE,
-                         "tokens": [n], "own": own_token(cfg, dev), "agents": agents, "companion": None, "actions": []})
+                         "tokens": [n], "own": own_token(cfg, dev), "mine": own_token(cfg, dev, steer=False), "agents": agents,
+                         "companion": None, "actions": []})
     return sorted(rows, key=lambda r: -r["at"])
 
 
@@ -2598,7 +2616,8 @@ def token_device(given: str) -> dict | None:
     name, cfg = hit
     dev = {"name": name, "write": bool(cfg.get("write")), "watch": bool(cfg.get("watch")),
            "roots": cfg.get("roots") or [], "redact": bool(cfg.get("redact")), "skills": bool(cfg.get("skills")),
-           "write_roots": cfg.get("write_roots")}  # None: may write every root it reads (a PA: reads all, writes memory)
+           "write_roots": cfg.get("write_roots"),  # None: may write every root it reads (a PA: reads all, writes memory)
+           "agents": agents_on(cfg)}
     if cfg.get("owner"):  # made by a person on the admin page: never more than that person may do right now
         if not (dev := owned_scope(dev, user_device(cfg["owner"]))):
             return None
@@ -3354,6 +3373,8 @@ async def tasks_ready_route(request: Request):
     device holds (lease or pin) is left out, `mine` says this device holds its lease."""
     out, dev, now = [], dev_key(), time.time()
     await asyncio.to_thread(mark_machine, device.get())
+    if device.get().get("agents") is False:  # remote control off: its companion starts no workers
+        return JSONResponse({"tasks": [], "agents": False})
     for p, (_, mem) in list(PROJECTS.items()):
         if in_scope(mem + "/") and may_lease(device.get(), p):  # a read-only token could take none of them
             tasks, leases = (await asyncio.to_thread(project_tasks, p))[0], read_json(TASK_LEASES, {}).get(p, {})
@@ -3376,6 +3397,8 @@ async def tasks_woken_route(request: Request):
         project, tid, agent, session, start = (str(b.get(k, "")) for k in ("project", "id", "agent", "session", "start"))
     except (ValueError, AttributeError):
         return JSONResponse({"error": "send JSON {project, id, agent, session}"}, status_code=400)
+    if session.startswith("worker:") and (no := remote_refused()):  # a worker; "pak <ID>" in a session at the pc still may
+        return no
     if project not in PROJECTS or not in_scope(PROJECTS[project][1] + "/"):
         return JSONResponse({"error": f"unknown project {project}"}, status_code=404)
     if not may_lease(device.get(), project):
@@ -3669,6 +3692,8 @@ async def ui_me(request: Request):
                          "writable": [p for p in projects if wr is None or PROJECTS[p][1] in wr],
                          "sections": list(kb_lint.STRUCTURE),  # a new memo's two sections in the server's language
                          "prefs": read_json(PREFS_FILE, {}).get(dev.get("user") or "", {}),
+                         # the agent views only when one of this person's tokens may be steered from here
+                         "agents": any(own_token(cfg, dev) for cfg in read_json(TOKENS_FILE, {}).values()),
                          "stt": bool(os.environ.get("KNOWLEDGE_STT_URL"))})  # the page shows the microphone only then
 
 
@@ -4324,24 +4349,30 @@ async def ui_admin_token(request: Request, body: dict):
         if body.get("revoke"):
             if tokens.get(name, {}).get("owner") != owner:
                 raise ToolError(f"no token {name} of yours")
+        elif body.get("update"):  # a person switches only remote control of their own tokens
+            name = prefix + name.removeprefix(prefix)
+            if set(body) - {"name", "update", "agents"}:
+                raise ToolError("you may only switch remote control (agents) of your own tokens")
         else:
             name = prefix + name.removeprefix(prefix)
             if sum(cfg.get("owner") == owner for cfg in tokens.values()) >= USER_MAX_TOKENS:
                 raise ToolError(f"you may hold {USER_MAX_TOKENS} tokens; revoke one first")
-            if body.get("all") or body.get("watch") or body.get("skills") or body.get("update") or body.get("self"):
+            if body.get("all") or body.get("watch") or body.get("skills") or body.get("self"):
                 raise ToolError("only admins make tokens for all projects, shared skills, the VM watcher or their own devices")
             roots = [str(r) for r in body.get("roots", [])]
             if set(roots) - set(dev["roots"]):
                 raise ToolError("pick only projects you have access to")
             if body.get("write") and not set(roots) & set(dev["write_roots"]):
                 raise ToolError("you may only read these projects: untick 'May write memos'")
-    if body.get("update"):  # {"name", "update": true, "skills": bool and/or "self": bool}: switch on an existing token
-        if name not in tokens or tokens[name].get("owner"):
+    if body.get("update"):  # {"name", "update": true, "skills" / "self" / "agents": bool}: switch on an existing token
+        if name not in tokens or owner and tokens[name].get("owner") != owner:
+            raise ToolError(f"no token {name}" + (" of yours" if owner else ""))
+        if tokens[name].get("owner") and set(body) - {"name", "update", "agents"}:  # a person's token: only its remote control
             raise ToolError(f"no admin token {name}")
         roots = tokens[name].get("roots") or []
         if body.get("skills") and (not tokens[name].get("write") or tokens[name].get("redact") or (roots and "claude" not in roots)):
             raise ToolError("shared skills need a write token that does not mask secrets and sees the shared skills")
-        for key in ("skills", "self"):
+        for key in ("skills", "self", "agents"):
             if key in body:
                 tokens[name] = {**tokens[name], key: bool(body[key])}
                 audit(f"admin-token-{key}-" + ("on" if body[key] else "off"), name)
@@ -4370,6 +4401,7 @@ async def ui_admin_token(request: Request, body: dict):
                     "watch": bool(body.get("watch")),  # the VM's file watcher (/invalidate)
                     "skills": bool(body.get("skills")),  # may sync and change claude/skills (write_refusal)
                     "self": bool(body.get("self")),  # an admin's own device: counts as the admin (machines, task writers)
+                    "agents": body.get("agents") is not False,  # remote control from the web UI (agents_on)
                     "roots": roots, "redact": bool(body.get("redact")), "created": time.strftime("%Y-%m-%d"),
                     "by": device.get()["user"], **({"owner": owner} if owner else {})}
     write_json(TOKENS_FILE, tokens)
@@ -4882,7 +4914,7 @@ async def ui_machine_forget(request: Request):
     except (ValueError, AttributeError):
         return JSONResponse({"error": "send JSON {machine}"}, status_code=400)
     row = next((r for r in await asyncio.to_thread(machine_rows) if r["id"] == mid), None)
-    if not row or not row["own"]:
+    if not row or not row["mine"]:
         return JSONResponse({"error": "not a machine of your own tokens"}, status_code=403)
     if row.get("old"):
         await asyncio.to_thread(update_state, CLIENTS_FILE, lambda d: d.pop(mid.removeprefix("token:"), None))
@@ -4950,7 +4982,8 @@ async def ui_machine_action(request: Request):
         return JSONResponse({"error": str(e) or "send JSON {machine, action, args}"}, status_code=400)
     row = next((r for r in await asyncio.to_thread(machine_rows) if r["id"] == mid), None)
     if not row or not row["own"] or row.get("old"):
-        return JSONResponse({"error": "not a machine of your own tokens (with plugin 0.15.0 or newer)"}, status_code=403)
+        return JSONResponse({"error": REMOTE_OFF if row and row["mine"] and not row.get("old")
+                             else "not a machine of your own tokens (with plugin 0.15.0 or newer)"}, status_code=403)
     if action == "restart":  # a worker that ended: start it again now, past the companion's RESTART_AFTER hold
         if not any(w.get("project") == args["project"] and w.get("id") == args["id"] and w.get("status") in ("failed", "stopped", "finished")
                    for a in row["agents"].values() for w in a.get("workers", [])):
@@ -4992,6 +5025,9 @@ async def machine_actions_route(request: Request):
     dev, out = device.get(), []
     if not dev.get("machine"):
         return JSONResponse({"actions": []})
+    if dev.get("agents") is False:
+        await asyncio.to_thread(mark_machine, dev)
+        return JSONResponse({"actions": [], "agents": False})
     try:
         wait = max(0.0, min(float(request.query_params.get("wait") or 0), 25.0))
     except ValueError:
@@ -5220,6 +5256,12 @@ def own_machine(mid: str) -> dict | None:
     return row if row and row["own"] and not row.get("old") else None
 
 
+def not_own(mid: str) -> str:
+    """Why this person may not steer `mid`: their own pc whose tokens all have remote control off, or not theirs."""
+    row = next((r for r in machine_rows() if r["id"] == mid), None)
+    return REMOTE_OFF if row and row["mine"] and not row.get("old") else "not a machine of your own tokens (with plugin 0.15.0 or newer)"
+
+
 async def chat_request(request: Request, need_body: bool) -> tuple:
     """(row, body, chat file, chat) for a UI chat route on one of this person's own machines; raises PermissionError
     or ValueError."""
@@ -5229,7 +5271,7 @@ async def chat_request(request: Request, need_body: bool) -> tuple:
     mid, cid = str(b.get("machine", "")), str(b.get("id", ""))
     row = await asyncio.to_thread(own_machine, mid)
     if not row:
-        raise PermissionError("not a machine of your own tokens (with plugin 0.15.0 or newer)")
+        raise PermissionError(await asyncio.to_thread(not_own, mid))
     f = chat_file(mid, cid)
     c = await asyncio.to_thread(read_json, f, None)
     if not c:
@@ -5257,7 +5299,7 @@ async def ui_chats(request: Request):
         mid = str(b.get("machine", ""))
         row = await asyncio.to_thread(own_machine, mid)
         if not row:
-            raise PermissionError("not a machine of your own tokens (with plugin 0.15.0 or newer)")
+            raise PermissionError(await asyncio.to_thread(not_own, mid))
         d = CHATS_DIR / chat_file(mid, "0" * 12).parent.name
     except (ValueError, AttributeError, TypeError, PermissionError) as e:
         return chat_error(e)
@@ -5796,7 +5838,7 @@ async def ui_git_diff(request: Request):
         mid = str(b.get("machine", ""))
         row = await asyncio.to_thread(own_machine, mid)
         if not row:
-            raise PermissionError("not a machine of your own tokens (with plugin 0.15.0 or newer)")
+            raise PermissionError(await asyncio.to_thread(not_own, mid))
         q = chat_file(mid, "0" * 12).parent / "diffs.json"
         if request.method == "GET":
             d = read_json(q, {}).get(str(b.get("id", "")))
@@ -5829,6 +5871,8 @@ async def ui_git_diff(request: Request):
 @server.custom_route("/machine/chats/diff", methods=["POST"])
 async def machine_chat_diff(request: Request):
     """{id, text, error}: the companion's answer to a diff request of this machine."""
+    if no := remote_refused():
+        return no
     dev = device.get()
     try:
         b = await request.json()
@@ -5932,6 +5976,8 @@ async def ui_chat_file(request: Request):
 @server.custom_route("/machine/chats/file", methods=["GET"])
 async def machine_chat_file(request: Request):
     """?file=<id>/<name>: a file attached to a message for a chat on this machine, for the companion to put on disk."""
+    if no := remote_refused():
+        return no
     try:
         return file_response(await asyncio.to_thread(chat_file_path, device.get().get("machine", ""), request.query_params.get("file", "")))
     except (ValueError, OSError) as e:
@@ -5947,6 +5993,8 @@ async def machine_chats(request: Request):
     mid = dev.get("machine", "")
     if not mid:
         return JSONResponse({"work": [], "stop": [], "busy": [], "active": False})
+    if dev.get("agents") is False:  # remote control off: no work, stops, diffs or answers for this pc
+        return JSONResponse({"work": [], "stop": [], "busy": [], "active": False, "agents": False})
     q_path, out = CHATS_DIR / mid / "queue.json", {"work": [], "stop": [], "busy": []}
 
     def change(q):
@@ -6034,6 +6082,8 @@ async def machine_chats(request: Request):
 async def machine_chat_ask(request: Request):
     """{chat, tool, detail, reason, key, once_only}: a running turn of this machine wants a tool call its allowed set
     does not hold; the owner is asked. Answers {id, timeout}; the decision comes with a later GET /machine/chats."""
+    if no := remote_refused():
+        return no
     dev = device.get()
     try:
         b = await request.json()
@@ -6076,6 +6126,8 @@ async def machine_chat_ask(request: Request):
 @server.custom_route("/machine/chats/events", methods=["POST"])
 async def machine_chat_events(request: Request):
     """{chat, events: [{kind, text}], session, done, error}: a turn's output, in small batches; done ends the turn."""
+    if no := remote_refused():
+        return no
     dev = device.get()
     try:
         b = await request.json()
@@ -6178,7 +6230,7 @@ async def ui_worker(request: Request):
         f = worker_file(mid, key)
         row = await asyncio.to_thread(own_machine, mid)
         if not row:
-            raise PermissionError("not a machine of your own tokens (with plugin 0.15.0 or newer)")
+            raise PermissionError(await asyncio.to_thread(not_own, mid))
     except (ValueError, TypeError, PermissionError) as e:
         return chat_error(e)
     w, t = reported_worker(row, key), await asyncio.to_thread(read_json, f, None)
@@ -6214,6 +6266,8 @@ async def ui_worker(request: Request):
 async def machine_chat_worker(request: Request):
     """{worker: <project>/<id>, started, agent, status, events: [{kind, text}], done}: a worker's output, from the
     companion that reports it; a new `started` begins a new transcript. Known secrets are masked again here."""
+    if no := remote_refused():
+        return no
     dev = device.get()
     try:
         b = await request.json()
@@ -6266,7 +6320,7 @@ async def ui_worker_steer(request: Request):
             raise ValueError(f"a message is 1 to {CHAT_TEXT} characters")
         row = await asyncio.to_thread(own_machine, mid)
         if not row:
-            raise PermissionError("not a machine of your own tokens (with plugin 0.15.0 or newer)")
+            raise PermissionError(await asyncio.to_thread(not_own, mid))
     except (ValueError, AttributeError, TypeError, PermissionError) as e:
         return chat_error(e)
     w = reported_worker(row, key)
@@ -6304,6 +6358,8 @@ async def machine_chat_adopt(request: Request):
     takeover action); its conversation becomes a chat in the worker's folder that resumes the worker's session, with
     the transcript so far. The task line is claimed '<owner> via chat' until the chat hands back or the owner cancels
     or assigns it. Answers {chat}."""
+    if no := remote_refused():
+        return no
     dev = device.get()
     try:
         b = await request.json()

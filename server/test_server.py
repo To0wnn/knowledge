@@ -880,6 +880,44 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     http("POST", "/machine/report", {"version": "0.16.0"}, token=fr, headers=pc)
 
 
+def remote_toggle_contract(tmp, ck, raw, er, et):
+    """The per-token switch "Agents (remote control)": off, the pc behind the token gets no chat work, actions or
+    worker tasks, asks are refused, its machine takes no actions or new chats, and its owner's me.agents is false
+    (enforced by the server, not only hidden). A token from before the switch (no key) counts as on."""
+    mid, pc = "ffffffffffffffff", {"X-Knowledge-Machine": "ffffffffffffffff", "X-Knowledge-Machine-Label": "den"}
+    ui = lambda path, body=None, h=er: raw("POST" if body is not None else "GET", path, None if body is None else json.dumps(body),
+                                          {**h, "X-Knowledge-UI": "1", "Content-Type": "application/json"})
+    me = lambda h=er: json.loads(raw("GET", "/ui/api/me", headers=h)[2])["agents"]
+    toks = json.loads((tmp / "tokens.json").read_text())
+    toks["erin.laptop"].pop("agents", None)  # as before the switch existed
+    (tmp / "tokens.json").write_text(json.dumps(toks))
+    assert me() is True and me(ck) is True, "no key: on"
+    http("POST", "/machine/report", {"version": "0.30.0", "agents": {"codex": {}},
+                                     "folders": {"linked": [{"path": "/home/e/trade", "project": "trade"}]}}, token=et, headers=pc)
+    assert ui("/ui/api/machines/action", {"machine": mid, "action": "workers_allowed", "args": {"on": True}})[0] == 200
+    assert ui("/ui/api/admin/token", {"name": "erin.laptop", "update": True, "skills": True})[0] == 400  # a person: only agents
+    assert ui("/ui/api/admin/token", {"name": "erin.laptop", "update": True, "agents": False})[0] == 200
+    assert json.loads((tmp / "tokens.json").read_text())["erin.laptop"]["agents"] is False
+    assert me() is False, "her only token has remote control off"
+    assert json.loads(http("GET", "/machine/chats", token=et, headers=pc)[1]) == {"work": [], "stop": [], "busy": [], "active": False, "agents": False}
+    assert json.loads(http("GET", "/machine/actions", token=et, headers=pc)[1]) == {"actions": [], "agents": False}, "the queued action stays there"
+    assert json.loads(http("GET", "/tasks/ready", token=et, headers=pc)[1]) == {"tasks": [], "agents": False}
+    st, b = http("POST", "/machine/chats/ask", {"chat": "000000000000", "tool": "Bash"}, token=et, headers=pc)
+    assert st == 403 and "remote control is off" in b, b
+    assert http("POST", "/tasks/woken", {"project": "trade", "id": "X-1", "agent": "codex", "session": "worker:x"}, token=et, headers=pc)[0] == 403
+    for path, body in (("/ui/api/machines/action", {"machine": mid, "action": "workers_allowed", "args": {"on": False}}),
+                       ("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/e/trade"})):
+        st, _, b = ui(path, body)
+        assert st == 403 and b"remote control is off for this pc's token" in b, (path, b)
+    row = next(r for r in json.loads(ui("/ui/api/machines")[2])["machines"] if r["id"] == mid)
+    assert not row["own"] and row["mine"], row
+    # The admin switches it back on from the admin page (a person's token: only this switch).
+    assert ui("/ui/api/admin/token", {"name": "erin.laptop", "update": True, "self": True}, ck)[0] == 400
+    assert ui("/ui/api/admin/token", {"name": "erin.laptop", "update": True, "agents": True}, ck)[0] == 200
+    assert me() is True and [a["action"] for a in json.loads(http("GET", "/machine/actions", token=et, headers=pc)[1])["actions"]] == ["workers_allowed"]
+    assert ui("/ui/api/machines/forget", {"machine": mid})[0] == 200
+
+
 def worker_follow_contract(tmp, ck, fr, raw, er, et):
     """Follow, steer and take over a worker: only the machine's owner reads its transcript, polling a running one
     follows it (the companion hears "follow" in its chat poll, never for a peek), only that machine's companion token
@@ -1983,7 +2021,7 @@ def main():
         assert raw("POST", "/ui/login", "password=gategategate", form)[0] == 429  # also the right one, until the minute passed
         assert raw("GET", "/", headers=ck)[1].get("location") == "/ui"
         assert raw("GET", "/ui", headers=ck)[0] == 200
-        assert json.loads(raw("GET", "/ui/api/me", headers=ck)[2]) == {"user": "alice", "admin": True, "projects": ["homelab", "trade"], "writable": ["homelab", "trade"], "labels": {}, "sections": ["## Stand", "## Keuzes"], "prefs": {}, "stt": True}  # anpitek is empty here: no tab; the server's (nl) sections for "+ Add memo"
+        assert json.loads(raw("GET", "/ui/api/me", headers=ck)[2]) == {"user": "alice", "admin": True, "projects": ["homelab", "trade"], "writable": ["homelab", "trade"], "labels": {}, "sections": ["## Stand", "## Keuzes"], "prefs": {}, "agents": True, "stt": True}  # anpitek is empty here: no tab; the server's (nl) sections for "+ Add memo"
         g = json.loads(raw("GET", "/ui/api/graph", headers=ck)[2])
         assert g["nodes"] and not any(n["id"].endswith("/MEMORY.md") for n in g["nodes"]), g["nodes"][:3]  # index not drawn, still readable below
         assert {n["project"] for n in g["nodes"] if n["id"].startswith("trade")} == {"trade"}
@@ -2071,7 +2109,7 @@ def main():
         assert admin("/ui/api/admin/user", {"username": "alice", "projects": {}})[0] == 400  # admins come from the config
         assert admin("/ui/api/admin/user", {"username": "bob", "projects": {"trade": "read", "homelab": "none"}})[0] == 200
         ro = user("bob")
-        assert json.loads(raw("GET", "/ui/api/me", headers=ro)[2]) == {"user": "bob", "admin": False, "projects": ["trade"], "writable": [], "labels": {}, "sections": ["## Stand", "## Keuzes"], "prefs": {}, "stt": True}
+        assert json.loads(raw("GET", "/ui/api/me", headers=ro)[2]) == {"user": "bob", "admin": False, "projects": ["trade"], "writable": [], "labels": {}, "sections": ["## Stand", "## Keuzes"], "prefs": {}, "agents": False, "stt": True}
         # A display name for a project: set by an admin, shown to everyone who sees the project; empty restores the name.
         assert admin("/ui/api/admin/project-label", {"name": "trade", "label": "Trading"}, ro)[0] == 403
         assert admin("/ui/api/admin/project-label", {"name": "nope", "label": "X"})[0] == 400
@@ -2570,6 +2608,7 @@ def main():
         assert {"erinproj", "erinproj-memory"} <= set(roots), roots  # her devices reach her new project at once
         machines_contract(tmp, ck, fr, raw, er, et)
         chats_contract(tmp, ck, fr, raw, er, et)
+        remote_toggle_contract(tmp, ck, raw, er, et)
         # Speech to text: the page's recording goes on to the configured server with model, language, prompt and key;
         # its text comes back trimmed; the microphone shows only when it is set up (me.stt).
         st, _, b = raw("POST", "/ui/api/transcribe", b"OggS-audio", {**ck, "X-Knowledge-UI": "1", "Content-Type": "audio/ogg;codecs=opus"})

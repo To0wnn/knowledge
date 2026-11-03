@@ -53,6 +53,7 @@ navEl("more-sheet").addEventListener("click", (e) => { if (e.target === navEl("m
 
 // Who is signed in (/ui/api/me): the user menu, and what an admin sees that others do not.
 function navMe(me) {
+  document.body.classList.toggle("no-agents", me.agents === false); // no token with remote control on: the knowledge views only
   for (const a of document.querySelectorAll(".admin-link")) { // non-admins manage their own tokens there
     (a.querySelector(".label") || a).textContent = me.admin ? "Admin" : "My tokens & projects"; a.title = me.admin ? "Admin" : "My tokens & projects";
   }
@@ -95,7 +96,7 @@ if (navPage) {
   }).catch(() => {});
   // the badges count as the app does (app.js ckSummary, loadTasks, loadLint), so they do not change on this page
   const get = (u) => fetch(u, { credentials: "same-origin" }).then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.status))));
-  Promise.all([get("/ui/api/chats"), get("/ui/api/machines")]).then(([cs, ms]) => {
+  meReady.then(() => document.body.classList.contains("no-agents") ? [{}, {}] : Promise.all([get("/ui/api/chats"), get("/ui/api/machines")])).then(([cs, ms]) => {
     const now = Date.now() / 1000;
     let live = (cs.chats || []).filter((c) => ["queued", "running"].includes(c.status)).length;
     for (const m of (ms.machines || []).filter((x) => x.own && !x.old)) for (const ag of Object.values(m.agents || {}))

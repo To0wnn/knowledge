@@ -65,12 +65,22 @@ function skillsWhyNot(t) {
 // An admin-made token counts as the admin (its machines, its task lines) only when marked as the admin's own device.
 function accessCell(t, access) {
   const td = el("td", "", access);
+  if (!t.watch) td.append(el("br"), agentsSwitch(t));
   if (!state.admin || t.owner) return td;
   const l = el("label", "check"), c = el("input"); c.type = "checkbox"; c.checked = !!t.self;
   c.setAttribute("aria-label", `${t.name} is my own device`);
   l.title = "My own device: counts as me for its machines and task lines. Never tick it for a friend's or a PA's token.";
   c.onchange = () => run(() => api("/ui/api/admin/token", { name: t.name, update: true, self: c.checked }), c, `Saved: ${t.name} ${c.checked ? "is" : "is not"} your own device`);
   l.append(c, " own device"); td.append(el("br"), l); return td;
+}
+// Agents (remote control): whether the pc behind this token may be steered from the web UI (chats, workers, remote
+// actions, approvals). Off, the server refuses all of it for that token; a token from before the switch counts as on.
+function agentsSwitch(t) {
+  const on = t.agents !== false, l = el("label", "check"), c = el("input"); c.type = "checkbox"; c.setAttribute("role", "switch"); c.checked = on;
+  c.setAttribute("aria-label", `Agents (remote control) for ${t.name}`);
+  l.title = "Agents (remote control): chats, workers, remote actions and approvals for the pc behind this token. Off: the web UI cannot steer it (memory and MCP keep working).";
+  c.onchange = () => run(() => api("/ui/api/admin/token", { name: t.name, update: true, agents: c.checked }), c, `Saved: remote control ${c.checked ? "on" : "off"} for ${t.name}`);
+  l.append(c, " agents"); return l;
 }
 function skillsCell(t) {
   const td = el("td"), why = skillsWhyNot(t);

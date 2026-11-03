@@ -33,6 +33,11 @@ Moved from the README; [back to the README](../README.md).
   stopped typing) are logged as gaps like the agents' searches. Deleted memos and docs are listed with
   `GET /ui/api/trash` and go back with `POST /ui/api/trash/restore` (owner or admin, never over a file that exists). Machines: workers, sessions, hook errors and remote actions per pc. The project
   picker scopes only the knowledge views. An admin page for tokens, people and projects. Light or dark, your pick.
+- **Without remote control:** a person none of whose tokens has "Agents (remote control)" on (`me.agents` false,
+  [companion.md](companion.md#agents-remote-control-per-token)) gets only the knowledge part: no Agents or Machines
+  entries (sidebar, tab bar, palette), no usage chips or New chat; the start page, `#/chats`, `#/inbox` and
+  `#/machines` open Notes. Tasks stays, without "Start on <pc>" or worker buttons; the phone tab bar is Tasks,
+  Notes, Map, Changes, More. The server enforces it; the page only follows.
 
 ## Design system
 

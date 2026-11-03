@@ -43,9 +43,9 @@ const noteItem = (n, hint, find) => ({ kind: "note", id: n.id, label: n.label, h
 // The groups for the current text: [[heading, items]], empty groups left out.
 function palGroups(q) {
   const words = q.toLowerCase().split(/\s+/).filter(Boolean), has = (t) => words.every((w) => t.toLowerCase().includes(w));
-  const views = PAL_VIEWS.filter(([id]) => (id !== "health" || me.admin) && (id !== "thispc" || !$("nav-thispc").hidden))
+  const views = PAL_VIEWS.filter(([id]) => (id !== "health" || me.admin) && (id !== "thispc" || !$("nav-thispc").hidden) && !(agentsOff() && AGENT_VIEWS.includes(id)))
     .map(([id, label]) => ({ kind: "view", id, label: id === "admin" && !me.admin ? "My tokens & projects" : label, hint: "Go to" }));
-  const actions = PAL_ACTIONS.map(([id, label, hint]) => ({ kind: "action", id, label, hint: hint || "" }));
+  const actions = PAL_ACTIONS.filter(([id]) => !(agentsOff() && id === "new-chat")).map(([id, label, hint]) => ({ kind: "action", id, label, hint: hint || "" }));
   if (!words.length) {
     const recent = palRecent().filter((x) => !pal.notesOnly || x.kind === "note");
     return [["Recent", recent], ...(pal.notesOnly ? [] : [["Go to", views], ["Actions", actions]])];

@@ -14,6 +14,12 @@ const VIEWS = {
   settings: ["tab-settings", "You", "Settings"],
 };
 const PHONE_TABS = ["chats", "tasks", "machines", "notes"]; // the rest sit behind More
+// Without a token whose pc may be steered from here (me.agents false) the page is the knowledge part only: the agent
+// views go to Notes, and Map and Changes take their places in the tab bar (nav.html ag-on / ag-off).
+const AGENT_VIEWS = ["inbox", "chats", "machines"];
+const agentsOff = () => me.agents === false;
+const phoneTabs = () => (agentsOff() ? ["tasks", "notes", "map", "changes"] : PHONE_TABS);
+const startRoute = () => (agentsOff() ? "#/notes" : "#/chats");
 let shellRoute = { view: "", arg: "", q: new URLSearchParams() };
 
 // "#/notes/memory/x.md?a=b" -> {view: "notes", arg: "memory/x.md", q}; null for anything else.
@@ -23,7 +29,7 @@ function parseRoute(hash) {
 }
 const oldLink = (hash) => { const p = decode(hash.slice(1)); return p.includes("/") && !p.startsWith("/") ? p : ""; };
 // The view the URL asks for, before it is shown (app.js decides from it what to load first).
-const routeView = () => parseRoute(location.hash)?.view || (oldLink(location.hash) ? "notes" : "chats");
+const routeView = () => { const v = parseRoute(location.hash)?.view || (oldLink(location.hash) ? "notes" : "chats"); return agentsOff() && AGENT_VIEWS.includes(v) ? "notes" : v; };
 
 function go(hash, replace = false) {
   if (replace) history.replaceState(history.state, "", hash); else pushHash(hash);
@@ -50,7 +56,9 @@ function restoreScroll(hash) {
 }
 function applyRoute() {
   let r = parseRoute(location.hash);
-  if (!r) { history.replaceState(history.state, "", oldLink(location.hash) ? noteRoute(oldLink(location.hash)) : "#/chats"); r = parseRoute(location.hash); }
+  if (!r || (agentsOff() && AGENT_VIEWS.includes(r.view))) {
+    history.replaceState(history.state, "", r || !oldLink(location.hash) ? startRoute() : noteRoute(oldLink(location.hash))); r = parseRoute(location.hash);
+  }
   if (r.view === "inbox") { // the same view under its older name; a key marks that item once the board is in (ckFocus)
     if (r.arg) { ck.focus = r.arg; ck.focusAt = Date.now(); } else ck.hit = "";
     history.replaceState(history.state, "", "#/chats"); r = parseRoute(location.hash);
@@ -136,9 +144,9 @@ function paintHead() {
   for (const a of document.querySelectorAll("[data-nav]")) {
     if (a.dataset.nav === r.view) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   }
-  if (PHONE_TABS.includes(r.view)) $("more-btn").removeAttribute("aria-current"); else $("more-btn").setAttribute("aria-current", "page");
+  if (phoneTabs().includes(r.view)) $("more-btn").removeAttribute("aria-current"); else $("more-btn").setAttribute("aria-current", "page");
 }
-$("back").onclick = () => (shellRoute.view === "chats" && ck.view ? ckShow(null) : goBack(shellRoute.view === "notes" ? "#/notes" : "#/chats"));
+$("back").onclick = () => (shellRoute.view === "chats" && ck.view ? ckShow(null) : goBack(shellRoute.view === "notes" ? "#/notes" : startRoute()));
 
 // The Agents views follow the one project picker (sidebar, More sheet; "" = all projects); the Needs-you badge counts all.
 function setAgentProject(p) {
@@ -171,7 +179,7 @@ function needsNotify(items) {
 }
 // Off the Agents views the Needs-you badge and the live count still follow: a light refresh every 30 s (also out of view
 // when notifications are on, which is when they matter).
-setInterval(() => { if ($("cockpit").hidden && (!document.hidden || notifyOn()) && me.user) ckSummary().catch(() => {}); }, 30000);
+setInterval(() => { if ($("cockpit").hidden && (!document.hidden || notifyOn()) && me.user && !agentsOff()) ckSummary().catch(() => {}); }, 30000);
 
 for (const b of $("tasks-mode").querySelectorAll("button")) b.onclick = () => go(b.dataset.mode === "flow" ? "#/tasks?view=flow" : "#/tasks");
 

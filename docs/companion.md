@@ -59,6 +59,23 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   companion's activity log. There is no free-text command anywhere; free text reaches a pc only as a chat message
   to an agent (below), which runs with that agent's own permissions.
 
+## Agents (remote control) per token
+
+- **Agents (remote control):** a switch per device token (`"agents"` in `tokens.json`, a checkbox "agents" in the
+  Access column of the admin page's Tokens table; a person switches it on their own tokens, an admin on every token
+  with `POST /ui/api/admin/token {"name", "update": true, "agents": bool}`). It says whether the pc behind the token
+  may be steered from the web UI. Default on: a token from before the switch (no key) and every new token, so nothing
+  changes for an existing installation; a token that is not the person's own (an admin-made token not marked "My own
+  device": a guest, a friend, a PA) could not be steered anyway. Off, the server refuses it, not only the page:
+  `GET /machine/chats` hands out no messages, stops, diffs or answers (`"agents": false`), `GET /machine/actions`
+  hands out no actions (they wait), `GET /tasks/ready` lists nothing and `POST /tasks/woken` refuses a worker
+  session, so its companion starts no workers; `/machine/chats/ask`, `/events`, `/worker`, `/adopt`, `/diff` and
+  `/file` answer 403 "remote control is off for this pc's token". In the web UI that machine counts as steerable only
+  through a token with the switch on: remote actions, new chats, messages, approvals and diffs are refused with the
+  same message, and its chats and workers drop out of the Agents view (forgetting the machine still works). Memory
+  and the MCP tools are untouched, and so is "pak <ID>" in a session at the pc itself. A person none of whose tokens
+  has it on gets `me.agents` false and sees only the knowledge part of the web UI.
+
 ## YOLO safety without blocking
 
 - **YOLO safety without blocking:** task text by a writer the project does not trust reaches agents and workers marked

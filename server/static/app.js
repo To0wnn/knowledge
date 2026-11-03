@@ -2563,6 +2563,6 @@ loadMe().then(() => {
   connectLive();
   loadLint(false); loadTasks(false); loadRecent();
   if (!routedEarly) applyRoute();
-  if ($("cockpit").hidden) ckSummary().catch(() => {}); // the Needs-you badge, on every view
+  if ($("cockpit").hidden && !agentsOff()) ckSummary().catch(() => {}); // the Needs-you badge, on every view
   probeCompanion();
 });
