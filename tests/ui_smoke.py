@@ -456,7 +456,10 @@ async def approvals(browser, devices, secret: str) -> None:
         if not dev.get("is_mobile"):  # desktop: the list beside the chat
             await pg.evaluate("location.hash = '#/chats'"); await pg.wait_for_timeout(800)
             rows = await pg.evaluate("[...document.querySelectorAll('#ck-history .ck-subchat .ck-chat-title')].map(x => x.textContent)")
-            check(rows == ["↳ Plan · check the docs", "↳ Explore · find the tests"], f"chat list: a chat's subagents under it {rows}")
+            check(rows == ["↳ Plan · check the docs"], f"chat list: only the running subagents under a chat {rows}")
+            await pg.locator("#ck-history .ck-submore").first.click()  # the finished ones on request
+            rows = await pg.evaluate("[...document.querySelectorAll('#ck-history .ck-subchat .ck-chat-title')].map(x => x.textContent)")
+            check(rows == ["↳ Plan · check the docs", "↳ Explore · find the tests"], f"chat list: +N finished subagents unfolds them {rows}")
             await pg.locator("#ck-history .ck-subchat").last.click()
             await pg.wait_for_function("location.hash.includes('/sub/tu1') && document.querySelector('#ck-canvas .ck-card .ck-title strong')?.textContent === 'Explore · find the tests'", timeout=10000)
             sub = await pg.evaluate("""[document.querySelector('#ck-canvas .ck-card .ck-title span').textContent, [...document.querySelectorAll('#ck-canvas .ck-card .ck-line.tool')].map(x => x.textContent),
@@ -572,7 +575,7 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
     check(await pg.evaluate("location.hash === '#/chats' && !!$('ck-side').offsetParent && !$('ck-canvas').offsetParent"), "phone: the list is the start screen")
     tops = await pg.evaluate("[...document.querySelectorAll('#ck-side .ck-sec')].map(c => c.getBoundingClientRect().top)")
     check(tops == sorted(tops) and len(set(tops)) == len(tops), f"phone: the groups one under the other, Earlier last {tops}")
-    tabs = await pg.evaluate("[...document.querySelectorAll('#tabbar > a, #tabbar > button')].map(t => t.dataset.nav || t.id)")
+    tabs = await pg.evaluate("[...document.querySelectorAll('#tabbar > a, #tabbar > button')].filter(t => t.offsetParent).map(t => t.dataset.nav || t.id)")
     check(len(tabs) == 5 and tabs[0] == "chats" and "inbox" not in tabs and await pg.locator('#tabbar [data-nav="chats"] .inbox-count').count() == 1,
           f"phone: five tabs, Agents first with the Needs-you badge {tabs}")
     if await pg.locator(".ck-done-toggle").count():
@@ -683,7 +686,7 @@ async def shell(browser, devices, secret: str) -> None:
     ctx, pg, errors = await page(browser, secret, **devices["iPhone 14"])
     await pg.wait_for_function("typeof Graph !== 'undefined' && Graph && Graph.graphData().nodes.length > 0", timeout=20000)
     check(await pg.evaluate("getComputedStyle($('tabbar')).display !== 'none' && getComputedStyle($('sidebar')).display === 'none'"), "phone: a tab bar instead of the sidebar")
-    small = await pg.evaluate("[...document.querySelectorAll('#tabbar a, #tabbar button')].map(b => b.getBoundingClientRect().height).filter(h => h < 44)")
+    small = await pg.evaluate("[...document.querySelectorAll('#tabbar a, #tabbar button')].filter((b) => b.offsetParent).map(b => b.getBoundingClientRect().height).filter(h => h < 44)")
     check(not small, f"phone: tab bar targets are at least 44 px {small}")
     wide = []
     for v in ("inbox", "chats", "tasks", "tasks?view=flow", "machines", "notes", "map", "changes", "health"):
