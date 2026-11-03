@@ -1127,7 +1127,7 @@ BOARD_LAYOUT = """(() => {
 
 
 async def board(browser, devices, secret: str) -> None:
-    """Agents > Side by side (desktop): the List | Side by side toggle and its route, a frame per project with each card inside it,
+    """Agents > Side by side (desktop): the List | Side by side toggle and its route, Grid (columns, route, no canvas places), a frame per project with each card inside it,
     F fits all on screen, arrows pan, Esc leaves a card, folding a frame, a dragged card keeping its place across a
     reload and Tidy up putting it back; the layout as a pure function; a phone keeps the list. The board's own chat
     polls are blocked here (showing a chat marks it read), so the live chats stay as they were; positions live in
@@ -1145,6 +1145,15 @@ async def board(browser, devices, secret: str) -> None:
     await pg.wait_for_function("location.hash === '#/chats?view=board' && $('bd') && !$('bd').hidden", timeout=5000)
     check(await pg.evaluate("getComputedStyle($('ck-chats')).display === 'none' && $('chats-mode').querySelector('[data-mode=board]').getAttribute('aria-pressed') === 'true'"),
           "Chats > Board: the toggle sets #/chats?view=board and the board replaces the list")
+    if await pg.evaluate("typeof gridCols") == "function":  # Grid, the trial next to the canvas
+        check(await pg.evaluate("[gridCols(4, 1700), gridCols(5, 1700), gridCols(4, 2400), gridCols(1, 2400), gridCols(3, 600)].join() === '2,3,4,1,1'"),
+              "Grid: as many columns as fit, balanced (4 -> 2x2, 5 -> 3+2)")
+        await pg.click('#chats-mode [data-mode="grid"]')
+        await pg.wait_for_function("location.hash === '#/chats?view=grid' && $('bd').classList.contains('grid') && !$('bd').hidden", timeout=5000)
+        g = await pg.evaluate("[getComputedStyle($('bd-world')).display, [...bd.wraps.values()].every((w) => !w.style.left), $('bd-world').style.transform, $('chats-mode').querySelector('[data-mode=grid]').getAttribute('aria-pressed')]")
+        check(g == ["grid", True, "", "true"], f"Grid: the toggle sets #/chats?view=grid and the cards tile without canvas places {g}")
+        await pg.click('#chats-mode [data-mode="board"]')
+        await pg.wait_for_function("location.hash === '#/chats?view=board' && !$('bd').classList.contains('grid')", timeout=5000)
     n = await pg.evaluate("ck.chats.filter((c) => ckScope(c) && !c.closed).length")  # a closed chat is off the board
     if not n:
         print("skip: no chats: the board's cards are not checked")

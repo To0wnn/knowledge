@@ -31,7 +31,7 @@ from a phone. The pc side runs in the companion ([companion.md](companion.md)).
   open (polled in the last 2 minutes: they see it there). A woken task nobody took keeps its own notice, now with the
   same link. Non-admins get none: the room is the admin's. A row opens its chat on the right (Esc or Back returns), a
   task its memo line, a worker how to look at it. On a phone the list is the start screen and a chat opens full
-  screen. **Side by side** (`#/chats?view=board`, formerly "Board") shows several chats next to each other. Chat cards and workers
+  screen. **Side by side** (`#/chats?view=board`, formerly "Board") shows several chats next to each other on a canvas you pan and zoom. **Grid** (`#/chats?view=grid`, a trial next to it) tiles the same cards to fill the screen: as many columns of at least 480 px as fit, balanced (4 chats 2×2), two rows on screen and the rest scrolls, waiting-on-you first; no zoom, pan or dragging. Chat cards and workers
   carry a **git button** (`task/KN-12 · ●3 · ↑2↓0`: branch, changed files, commits ahead/behind `main`/`master`, or
   the upstream on main itself), which the companion counts once a round per folder with `GIT_OPTIONAL_LOCKS=0` and
   sends in its report (the linked folder only, `-- .`, also inside a bigger repo); a tap asks that pc for the diff (`POST /ui/api/git/diff`, handed to the companion with the chat

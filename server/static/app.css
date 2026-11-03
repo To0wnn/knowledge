@@ -737,6 +737,17 @@ dialog.ck-diff { width: min(980px, calc(100vw - 32px)); }
 .bd-mini-card.needs { background: var(--amber); opacity: 1; }
 .bd-mini-card.running { background: var(--ok); opacity: .9; }
 .bd-mini-view { border: 1.5px solid var(--amber); border-radius: 3px; background: var(--amber-soft); pointer-events: none; }
+/* Grid (trial next to the canvas): the same frames and cards tiled to fill the screen; mission.js sets --bg-cols and
+   --bg-row from the stage (two rows at most on screen, more scroll). A frame is a heading row, hidden with one project. */
+.bd.grid .bd-stage { overflow: hidden auto; touch-action: auto; cursor: auto; background: none; }
+.bd.grid .bd-world { position: static; transform: none; display: grid; grid-template-columns: repeat(var(--bg-cols, 2), minmax(0, 1fr)); gap: 16px; padding: 16px; }
+.bd.grid .bd-frame { position: static; grid-column: 1 / -1; border: 0; background: none; }
+.bd.grid .bd-frame-title { margin: 0; }
+.bd.grid.one .bd-frame, .bd.grid .bd-tools, .bd.grid .bd-mini { display: none; }
+.bd.grid .bd-card { position: relative; height: var(--bg-row, 420px); }
+.bd.grid .bd-card[hidden] { display: none; }
+.bd.grid .bd-card .ck-head { cursor: auto; }
+.bd.grid .bd-none { position: static; }
 @media (max-width: 999.98px) { #chats-mode, #tasks-mode, .bd { display: none !important; } } /* the board and flow are desktop only: the list stays */
 #ck-diff-body { max-height: 65vh; overflow: auto; }
 @media (max-width: 699.98px) {
