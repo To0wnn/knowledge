@@ -753,7 +753,8 @@ def in_lines(d: Path, start: int) -> list:
 
 def adopt(post, log) -> int:
     """At the companion's start: every live chat a companion before it left running goes on here (read on from where
-    that one saved); a folder whose agent ended, or that never got as far as a save, goes."""
+    that one saved). One whose agent ended meanwhile is read the same way: what it wrote after that save still goes to
+    the chat and its turn ends (gone() then removes the folder). A folder that never got as far as a save goes."""
     n = 0
     for d in sorted(LIVE_DIR.iterdir()) if LIVE_DIR.is_dir() else []:
         try:
@@ -765,7 +766,7 @@ def adopt(post, log) -> int:
         except (OSError, ValueError):
             h = {}
         alive = bool(h) and not (d / "exit").exists() and workers.running(h)
-        if not (s and alive) or s["chat"] in LIVE:
+        if not (s and h) or s["chat"] in LIVE:
             if alive:  # it never saved: nothing knows where it was
                 workers.kill(h, hard=True)
             shutil.rmtree(d, True)
@@ -1938,6 +1939,25 @@ def self_test():
             (LIVE_DIR / "c2-cd").mkdir()  # a host that never got going
             (LIVE_DIR / "c2-cd" / "host.json").write_text('{"pid": 1, "ident": "x"}')
             assert adopt(lambda b: None, lambda *a: None) == 0 and sorted(x.name for x in LIVE_DIR.iterdir()) == []
+            # an agent that ended during the restart: what it wrote after the last save still reaches the chat
+            d3, seen_ = LIVE_DIR / "c3-ef", []
+            d3.mkdir()
+            (d3 / "host.json").write_text('{"pid": 1, "ident": "x"}')
+            (d3 / "exit").write_text("0")
+            old_ = b'{"type":"stream_event","event":{"delta":{"type":"text_delta","text":"seen "}}}\n'
+            (d3 / "out").write_bytes(old_ + b'{"type":"stream_event","event":{"delta":{"type":"text_delta","text":"late"}}}\n'
+                                     b'{"type":"result","result":"late","session_id":"s3"}\n')
+            (d3 / "state.json").write_text(json.dumps({"chat": "c3", "agent": "claude", "folder": t, "yolo": True, "pick": ["", ""], "asked": ["", ""],
+                                                       "session": "s3", "allow": [], "in": 0, "written": 1, "turn_open": True, "busy": True,
+                                                       "offset": len(old_), "taken": 1, "subs": [], "bg": {}}))
+            assert adopt(seen_.append, lambda *a: None) == 1
+            for _ in range(200):
+                if any(b.get("done") for b in seen_) and not d3.exists():
+                    break
+                time.sleep(0.05)
+            texts = [e["text"] for b in seen_ for e in b["events"] if e["kind"] == "text"]
+            assert texts == ["late"] and seen_[-1].get("done") and "error" not in seen_[-1] and not d3.exists(), seen_
+            LIVE.pop("c3", None)
         finally:
             LIVE_DIR = keep
     # Attachments are fetched off the poll thread, in order per chat: a slow file holds up its own chat only, a later
