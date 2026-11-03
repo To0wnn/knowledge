@@ -1004,3 +1004,27 @@ button.busy::before { content: ""; display: inline-block; width: .9em; height: .
 .task-worker pre { margin: 4px 0 0; padding: 8px; max-height: 12em; overflow: auto; background: var(--panel); border-radius: var(--r-md); white-space: pre-wrap; }
 .task-assign { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .task-assign[hidden] { display: none; }
+
+/* ---- Other views (r2) ---- */
+/* note names: the title first, a skill or archive file marked, the file name small after it */
+.chip.name-kind { padding: 0 6px; font-size: 10.5px; line-height: 17px; font-weight: 600; vertical-align: 1px; }
+.name-file { font: 11px var(--mono); color: var(--muted); }
+/* memo text in list lines keeps its `code` */
+.hit-text code, .connected code, .home-card code { font: .92em var(--mono); padding: 0 4px; border-radius: 4px; background: var(--hover); color: var(--ink); }
+/* hidden wins over the display these set */
+.crumb[hidden], .ms-legend[hidden], #ms-all[hidden] { display: none; }
+/* Machines: YOLO is a state, not an alarm; only a small warning mark while it is on */
+.pill.yolo { background: var(--hover); color: var(--muted); font-weight: 600; letter-spacing: 0; }
+.pill.yolo::before { content: "⚠"; color: var(--warn); }
+.yolo-switch { min-height: var(--h-btn-sm); }
+.yolo-mark { color: var(--warn); font-size: 12px; }
+.machine-actions { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.machine-more > summary.btn::after { content: none; }
+.machine-more .menu-list { min-width: 180px; }
+/* a destructive action that repeats per row stays quiet; red only on hover or focus */
+.btn.quiet.risky:hover:not(:disabled), .btn.quiet.risky:focus-visible { color: var(--bad); border-color: var(--bad); background: var(--bad-soft); }
+/* Tasks: the syntax behind a disclosure, after the list */
+.task-howto { margin-top: 18px; }
+.task-howto p { max-width: 70ch; }
+/* Settings: the notifications switch saves at once and says so */
+.set-saved { font-size: 12px; }

@@ -212,6 +212,13 @@ function animateHover(ms = 400) {
   if (!hover) settleTimer = setTimeout(() => { if (!tweening) Graph.autoPauseRedraw(true); }, ms);
 }
 
+// The overview fit: topic names are drawn at a fixed screen size and stick out past the outer notes, so pad by half
+// the widest name (capped, so a phone keeps most of its width for the map).
+function fitPad() {
+  const ctx = document.createElement("canvas").getContext("2d"); ctx.font = `650 15px ${tok("--font")}`;
+  const widest = Math.max(0, ...[...new Set(Graph.graphData().nodes.map(groupOf))].filter(Boolean).map((g) => ctx.measureText(g).width));
+  return Math.round(Math.min(Math.max(40, widest / 2 + 16), $("graph").clientWidth / 4));
+}
 // Zoom to the selected note and everything it links to, capped so a lone note is not blown up.
 let settling = true;
 function zoomToFocus() {
@@ -300,7 +307,7 @@ async function loadGraph() {
     .onEngineStop(() => {
       settling = false;
       if (zoomToFocus.again && selected) zoomToFocus();
-      else if (!loadGraph.fitted) Graph.zoomToFit(400, 40);
+      else if (!loadGraph.fitted) Graph.zoomToFit(400, fitPad());
       zoomToFocus.again = false; loadGraph.fitted = true;
     })
     .onNodeHover((n) => {
@@ -399,7 +406,7 @@ function renderTopics() {
     s.append(dot, topic, el("span", "n", String(ns.length)));
     const list = el("ol", "hits");
     for (const n of ns.sort((a, b) => a.label.localeCompare(b.label))) {
-      const li = hitItem(n.label, "", () => openNote(n.id));
+      const li = hitItem(noteName(n.id).title, "", () => openNote(n.id));
       li.firstChild.dataset.id = n.id;
       if (n.id === selected) li.firstChild.classList.add("active");
       list.append(li);
@@ -422,7 +429,7 @@ function setMap(on) {
   requestAnimationFrame(() => { // once the map has its size
     if (!Graph) return; // the map data is still loading: loadGraph sizes it
     Graph.width($("graph").clientWidth).height($("graph").clientHeight);
-    if (selected) { gather(selected, 1).then(zoomToFocus); if (settling) zoomToFocus.again = true; } else Graph.zoomToFit(400, 40);
+    if (selected) { gather(selected, 1).then(zoomToFocus); if (settling) zoomToFocus.again = true; } else Graph.zoomToFit(400, fitPad());
   });
 }
 addEventListener("kn-theme", themeChanged); // the viewer switched the theme (nav.js)
@@ -436,7 +443,38 @@ function splitFront(text) {
   return { meta, body: text.slice(m[0].length) };
 }
 
-const ago = (sec) => { const d = Date.now() / 1000 - sec; return d < 90 ? "just now" : d < 3600 ? `${Math.round(d / 60)} min ago` : d < 86400 ? `${Math.round(d / 3600)} h ago` : new Date(sec * 1000).toLocaleDateString(); };
+// One date format for every view: relative under a day ("21 h ago"), else "1 Nov 2026" (no day/month order to
+// guess); a time of day in the browser's own locale.
+const fmtDay = (sec) => new Date(sec * 1000).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+const fmtClock = (sec) => new Date(sec * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const fmtTime = (sec) => `${fmtDay(sec)}, ${fmtClock(sec)}`;
+const fmtIso = (iso) => (/^\d{4}-\d\d-\d\d$/.test(iso || "") ? fmtDay(Date.parse(`${iso}T12:00`) / 1000) : iso); // a due date "2026-10-21"
+const age = (sec) => { const d = Date.now() / 1000 - sec; return d < 90 ? "" : d < 3600 ? `${Math.round(d / 60)} min` : d < 86400 ? `${Math.round(d / 3600)} h` : null; };
+const ago = (sec) => { const a = age(sec); return a === "" ? "just now" : a ? `${a} ago` : fmtDay(sec); };
+const offlineFor = (sec) => { const a = age(sec); return a ? `offline ${a}` : a === "" ? "offline just now" : `offline since ${fmtDay(sec)}`; };
+
+// A note's name for lists and headings: its title, never a slug or file name; skills and archive files are marked.
+function noteName(path) {
+  const n = byId.get(path), file = path.split("/").pop(), skill = path.startsWith("claude/skills/");
+  const archive = /(^|\/)(archive|archief|old|history)\//.test(path) || /_archi(ve|ef)\.md$/.test(file);
+  const words = (t) => { t = t.replace(/[_-]+/g, " ").trim(); return t.charAt(0).toUpperCase() + t.slice(1); };
+  const title = file === "MEMORY.md" ? `Index of ${shown(projectOf(path))}` : n && !skill ? n.label
+    : words(skill ? path.split("/")[2] : file.replace(/\.md$/, "").replace(/_archi(ve|ef)$/, "").replace(/^(project|feedback|reference|user|infra|incident)_/, ""));
+  return { title, file, kind: skill ? "skill" : archive ? "archive" : "" };
+}
+// The name as a list line: title, a chip for a skill or archive file, the file name small and secondary.
+function nameEl(path, cls = "hit-path") {
+  const { title, file, kind } = noteName(path), s = el("span", cls, title);
+  if (kind) s.append(" ", el("span", "chip name-kind", kind));
+  if (kind !== "skill" && !title.toLowerCase().includes(file.replace(/\.md$/, "").toLowerCase())) s.append(" ", el("small", "name-file", file));
+  return s;
+}
+// Memo text in a list line: `code` as <code> (text nodes only, never innerHTML), **bold** markers dropped.
+function inlineCode(text, cls = "hit-text") {
+  const span = el("span", cls);
+  String(text).replace(/\*\*/g, "").split(/(`[^`\n]+`)/).forEach((part, i) => span.append(i % 2 ? el("code", null, part.slice(1, -1)) : part));
+  return span;
+}
 
 // Clicking empty canvas clears the selection and the note in the URL, so a refresh opens nothing.
 function deselect({ push = true } = {}) {
@@ -447,7 +485,7 @@ function deselect({ push = true } = {}) {
   $("note").replaceChildren(el("div", "note-empty muted", "Pick a note from the list or search."));
   $("side").replaceChildren(); markActive();
   homeView();
-  releaseFocus().then(() => { if (!selected && mapOn) Graph.zoomToFit(600, 40); }); // home, then the overview
+  releaseFocus().then(() => { if (!selected && mapOn) Graph.zoomToFit(600, fitPad()); }); // home, then the overview
 }
 
 // With nothing selected the middle shows the project's MEMORY.md: the user's own table of contents.
@@ -479,7 +517,7 @@ async function homeView() {
     dot.style.background = clusterColor.get(topic) || tok("--g-doc");
     h.append(dot, topic, el("span", "n", String(ns.length)));
     const list = el("ol", "hits"), ranked = [...ns].sort((a, b) => (b.degree || 0) - (a.degree || 0) || a.label.localeCompare(b.label));
-    const show = (k) => list.replaceChildren(...ranked.slice(0, k).map((n) => hitItem(n.label, hooks.get(n.id) || n.desc || "", () => openNote(n.id))));
+    const show = (k) => list.replaceChildren(...ranked.slice(0, k).map((n) => hitItem(noteName(n.id).title, inlineCode(hooks.get(n.id) || n.desc || ""), () => openNote(n.id))));
     show(5); card.append(h, list);
     if (ns.length > 5) {
       const more = el("button", "btn small", `All ${ns.length}`);
@@ -499,8 +537,7 @@ async function homeSide() {
   if (current || p !== project) return;
   const box = el("div", "connected"), list = el("ol", "hits");
   for (const f of res.files.slice(0, 8)) {
-    const n = byId.get(f.path);
-    list.append(hitItem(n ? n.label : f.path.split("/").pop(), `${ago(f.mtime)} · ${f.session ? f.session.device : f.by === "VM" ? "on the VM" : writer(f.by)}`, () => openNote(f.path)));
+    list.append(hitItem(nameEl(f.path), `${ago(f.mtime)} · ${f.session ? f.session.device : f.by === "VM" ? "on the VM" : writer(f.by)}`, () => openNote(f.path)));
   }
   if (!res.files.length) list.append(el("li", null, emptyState("No changes yet: edits to memos and docs show here.")));
   const all = el("button", "btn small", "All changes"); all.onclick = () => go("#/changes");
@@ -585,7 +622,8 @@ function renderNote() {
   });
   const pane = $("note"); pane.replaceChildren();
   const head = el("div", "note-head");
-  head.append(el("h2", null, n ? n.label : note.path.split("/").pop()));
+  head.append(el("h2", null, noteName(note.path).title));
+  if (noteName(note.path).kind) head.append(el("span", "chip name-kind", noteName(note.path).kind));
   if (n) { const pill = el("span", "pill topic", n.cluster || n.group); pill.style.setProperty("--c", nodeColor(n)); head.append(pill); }
   const tools = el("div", "note-tools");
   const copy = el("button", "btn small", "Copy link");
@@ -608,7 +646,7 @@ function renderSide() {
   side.replaceChildren();
   if (mapOn) {
     const card = el("div", "map-card");
-    card.append(el("h2", null, n ? n.label : note.path.split("/").pop()));
+    card.append(el("h2", null, noteName(note.path).title));
     const desc = splitFront(note.text).meta.description; if (desc) card.append(el("p", "note-desc", desc));
     const read = el("button", "btn small primary", "Read note"); read.onclick = () => go(noteRoute(note.path)); card.append(read);
     side.append(card);
@@ -623,8 +661,8 @@ function renderSide() {
     box.replaceChildren(el("h3", null, all.length ? `Connected (${all.length})` : "Not connected to other notes yet"));
     for (const x of all) {
       const a = el("a"); a.href = `#${encPath(x.id)}`;
-      const why = x.why.replace("shared neighbours", "neighbours").replace(/similar meaning \(([\d.]+)\)/, "meaning $1").replace(/, /g, " · ");
-      a.append(x.label, el("span", "why", `${x.project !== project && x.project !== "shared" ? x.project + " · " : ""}${why}`));
+      const why = x.why.replace("shared neighbours", "neighbours").replace(/similar meaning \(([\d.]+)\)/, "similar").replace(/, /g, " · ");
+      a.append(noteName(x.id).title, el("span", "why", `${x.project !== project && x.project !== "shared" ? x.project + " · " : ""}${why}`));
       box.append(a);
     }
   };
@@ -689,7 +727,7 @@ async function showHistory(open = null) {
   if (current !== note || editing) return;
   historyOpen = true;
   pane.replaceChildren();
-  const head = el("div", "note-head"); head.append(el("h2", null, `History of ${note.path.split("/").pop()}`));
+  const head = el("div", "note-head"); head.append(el("h2", null, `History of ${noteName(note.path).title}`));
   const back = el("button", "btn small", "Back to the note"); back.onclick = renderNote;
   pane.append(head, el("div", "note-tools"), el("div", "note-path", note.path));
   pane.querySelector(".note-tools").append(back);
@@ -697,7 +735,7 @@ async function showHistory(open = null) {
   const list = el("ol", "hits"), view = el("div", "version");
   pane.append(view, list); // the chosen diff above the list, so it is in sight
   res.versions.forEach((v, i) => {
-    const when = new Date(v.time * 1000).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+    const when = fmtTime(v.time);
     const li = hitItem(`${when}${i === 0 ? " (current)" : ""}`, `${v.by.endsWith("-removed") ? `removed (${v.by === "VM-removed" ? "on the VM" : `via ${v.by.slice(0, -8)}`}); the version below holds its last text` : v.by === "VM" ? "edited on the VM" : v.by === "before" ? (v.size ? "baseline" : "did not exist yet") : `via ${writer(v.by)}`} · ${v.size} bytes`, async () => {
       for (const b of list.querySelectorAll("button")) b.classList.remove("active");
       li.firstChild.classList.add("active");
@@ -726,7 +764,7 @@ function startEdit() {
   if (!current?.writable || editing) return; // a second E must not rebuild the editor over unsaved text
   editing = true;
   const pane = $("note"); pane.replaceChildren();
-  const head = el("div", "note-head"); head.append(el("h2", null, `Editing ${current.path.split("/").pop()}`));
+  const head = el("div", "note-head"); head.append(el("h2", null, `Editing ${noteName(current.path).title}`));
   const area = el("textarea", "editor"); area.value = current.text; area.spellcheck = false;
   area.setAttribute("aria-label", `Text of ${current.path}`);
   const err = el("p", "error"); err.hidden = true; err.setAttribute("role", "alert");
@@ -814,14 +852,14 @@ async function runSearch() {
   const titles = data.nodes.filter((n) => words.every((w) => `${n.label} ${n.id}`.toLowerCase().includes(w)))
     .sort((a, b) => (inProject(b.project) - inProject(a.project)) || (b.degree - a.degree)).slice(0, 6);
   $("titles-head").hidden = !titles.length;
-  $("titles").replaceChildren(...titles.map((n) => hitItem(n.label, `${shown(n.project)} · ${n.id}`, () => openNote(n.id))));
+  $("titles").replaceChildren(...titles.map((n) => hitItem(noteName(n.id).title, `${shown(n.project)} · ${n.id}`, () => openNote(n.id))));
   let res; try { res = await api(`/ui/api/search?q=${encodeURIComponent(q)}&project=${project}`); } catch (e) { $("hits").textContent = e.message; return; }
   if (seq !== searchSeq) return; // a newer search is on its way
   $("hits-empty").hidden = res.notes.length > 0;
   if (!res.notes.length) $("hits-empty").textContent = "No note contains all of these words.";
   $("hits").replaceChildren(...res.notes.map((h) => {
     const li = el("li"), b = el("button", "row-link");
-    b.append(el("span", "hit-path", `${(byId.get(h.path) || {}).label || h.path.split("/").pop()}${h.count > h.hits.length ? `  +${h.count - h.hits.length}` : ""}`));
+    const top = nameEl(h.path); if (h.count > h.hits.length) top.append(`  +${h.count - h.hits.length}`); b.append(top);
     b.append(el("span", "hit-sub muted", h.path));
     for (const x of h.hits) b.append(marked_(x.text, words));
     b.onclick = () => openNote(h.path, { find: words });
@@ -834,7 +872,7 @@ async function runSearch() {
   const extra = sem.hits.filter((h) => !seen.has(h.path) && seen.add(h.path)); // one row per note
   $("sem-head").hidden = false;
   $("sem-head").textContent = sem.hits.length ? "By meaning" : `By meaning: ${sem.status}`;
-  $("sem").replaceChildren(...extra.map((h) => hitItem(`${(byId.get(h.path) || {}).label || h.path} · ${Math.round(h.score * 100)}%`, `${h.path}:${h.line} — ${h.text}`, () => openNote(h.path))));
+  $("sem").replaceChildren(...extra.map((h) => hitItem(nameEl(h.path), `${h.path}:${h.line} — ${h.text}`, () => openNote(h.path))));
 }
 // A search line as text with the query words in <mark>, built from text nodes (never innerHTML).
 function marked_(text, words) {
@@ -850,7 +888,7 @@ function marked_(text, words) {
 }
 function hitItem(top, sub, onclick) {
   const li = el("li"), b = el("button", "row-link");
-  b.append(el("span", "hit-path", top)); if (sub) b.append(el("span", "hit-text", sub));
+  b.append(typeof top === "string" ? el("span", "hit-path", top) : top); if (sub) b.append(typeof sub === "string" ? el("span", "hit-text", sub) : sub);
   b.onclick = onclick; li.append(b); return li;
 }
 $("q").addEventListener("input", () => { // the query lives in the route, so a refresh or Back keeps it
@@ -941,15 +979,14 @@ async function loadRecent(look = false) {
       day = d;
       const today = new Date().toDateString(), yesterday = new Date(Date.now() - 864e5).toDateString();
       const card = el("section", "card"); list = el("ol", "hits");
-      card.append(el("h3", "sub", d === today ? "Today" : d === yesterday ? "Yesterday" : new Date(f.mtime * 1000).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })), list);
+      card.append(el("h3", "sub", d === today ? "Today" : d === yesterday ? "Yesterday" : fmtDay(f.mtime)), list);
       box.append(card);
     }
-    const n = byId.get(f.path), li = el("li"), b = el("button", "row-link");
-    const top = el("span", "hit-path", n ? n.label : f.path.split("/").pop());
+    const li = el("li"), b = el("button", "row-link"), top = nameEl(f.path);
     if (f.mtime > seen) top.append(el("span", "new", "new"));
     const meta = el("span", "hit-text");
     if (f.added != null) meta.append(el("span", "plus", `+${f.added}`), " ", el("span", "minus", `−${f.removed}`), " · ");
-    meta.append(`${ago(f.mtime)} · ${f.session ? f.session.device : f.by === "VM" ? "on the VM" : writer(f.by)}`);
+    meta.append(`${age(f.mtime) == null ? fmtClock(f.mtime) : ago(f.mtime)} · ${f.session ? f.session.device : f.by === "VM" ? "on the VM" : writer(f.by)}`);
     b.append(top, meta);
     if (f.session?.asked) b.append(el("span", "hit-text why", `“${f.session.asked}”`));
     b.title = f.path;
@@ -972,7 +1009,7 @@ async function loadTrash(p) {
   const list = el("ol", "hits");
   for (const i of items.slice(0, 100)) {
     const li = el("li", "task"), info = el("span", "trash-info");
-    info.append(el("span", "hit-path", i.path.split("/").pop()), el("span", "hit-text", `${i.path} · deleted ${ago(i.deleted)} · ${(i.size / 1024).toFixed(1)} kB`));
+    info.append(nameEl(i.path), el("span", "hit-text", `${i.path} · deleted ${ago(i.deleted)} · ${(i.size / 1024).toFixed(1)} kB`));
     const b = el("button", "btn small", "Restore"); b.type = "button";
     b.disabled = !i.can_restore;
     b.title = i.can_restore ? `Put ${i.path} back as it was` : i.exists ? "A file is at that path again: open both and merge by hand" : "Only the project's owner or an admin may restore a file";
@@ -1008,8 +1045,8 @@ async function loadLint(render = true) {
   $("lint-count").title = `${here} in ${project}, ${all} in all projects`;
   if (!render) return;
   const box = $("lint"); box.replaceChildren();
-  const folds = new Map();
-  for (const [check, items] of Object.entries(report)) {
+  const folds = new Map(), rank = (c) => { const i = LINT_URGENT.indexOf(c); return i < 0 ? LINT_URGENT.length : i; };
+  for (const [check, items] of Object.entries(report).sort((a, b) => rank(a[0]) - rank(b[0]) || b[1].length - a[1].length)) {
     if (!items.length) continue;
     const [title, fix] = hints[check] || LINT_INFO[check] || [check.replace(/_/g, " "), ""];
     const ul = el("ol", "hits");
@@ -1017,7 +1054,7 @@ async function loadLint(render = true) {
       const m = item.match(/^([\w./-]+\.md)(?::\s*|\s+)?(.*)$/);
       if (!m) { ul.append(el("li", "hit-text", item)); continue; }
       const id = m[1].includes("/") ? m[1] : `memory/${m[1]}`;
-      const li = hitItem(byId.get(id)?.label || m[1].split("/").pop(), m[2].replace(/\*\*/g, ""), () => openNote(id));
+      const li = hitItem(nameEl(id), inlineCode(m[2].replace(/\bdue (\d{4}-\d\d-\d\d)/, (_, d) => `due ${fmtIso(d)}`)), () => openNote(id));
       li.firstChild.title = item; ul.append(li);
     }
     const card = el("section", "card"), h = el("h3", "sub", title);
@@ -1051,10 +1088,10 @@ async function loadTasks(render = true) {
   if (!render) return;
   const box = $("tasks"); box.replaceChildren();
   const elsewhere = all.length - open.length; // the badge counts every project: say what the picker hides
-  if (elsewhere) {
-    const b = el("button", "btn small ck-elsewhere", `${elsewhere} open task${elsewhere > 1 ? "s" : ""} in other projects: show all`);
-    b.type = "button"; b.onclick = () => switchProject(ALL); box.append(b);
-  }
+  const showAll = () => actionButton(`${elsewhere} in other projects: show`, () => switchProject(ALL), "btn small ck-elsewhere");
+  // the state first: nothing here (and how much elsewhere), or the lists with a pointer to the other projects
+  if (!tasks.length) box.append(emptyState(`No tasks${agentProject ? ` in ${shown(agentProject)}` : ""}${elsewhere ? " ·" : ": when an agent hands work to another in a memo, it shows here."}`, ...(elsewhere ? [showAll()] : [])));
+  else if (elsewhere) box.append(showAll());
   // the workers of these tasks, from the Machines list: progress and Stop/Restart live with the task, not the pc
   const machines = await api("/ui/api/machines").then((r) => (Array.isArray(r) ? r : r.machines || [])).catch(() => []);
   machinesCache = machines;
@@ -1062,9 +1099,9 @@ async function loadTasks(render = true) {
     .filter(({ w }) => w.project === t.project && (w.id === t.id || w.id === t.id.replace(/-(cont|fix)$/i, "")));
   const devices = [...new Set(machines.filter((m) => m.own).flatMap((m) => m.tokens || []))].sort();
   const row = (t) => {
-    const n = byId.get(t.path), li = hitItem(`${t.id} · ${t.owner}`, t.text, () => openNote(t.path, { find: [t.id.toLowerCase()] }));
+    const li = hitItem(`${t.id} · ${t.owner}`, inlineCode(t.text), () => openNote(t.path, { find: [t.id.toLowerCase()] }));
     const meta = el("span", "hit-text", [t.done ? "" : `${t.from || "?"} → ${t.owner}`, t.done ? "" : `start ${t.start}`,
-      t.due && `due ${t.due}`, t.done && t.since && `handed back ${ago(t.since)}`, t.claimed && "claimed", t.waiting_reason, t.runs, n ? n.label : t.path.split("/").pop(),
+      t.due && `due ${fmtIso(t.due)}`, t.done && t.since && `handed back ${ago(t.since)}`, t.claimed && "claimed", t.waiting_reason, t.runs, noteName(t.path).title,
       agentProject ? "" : shown(t.project)].filter(Boolean).join(" · "));
     if (t.legacy) meta.prepend(el("span", "badge", "legacy"), " ");
     if (t.stalled) meta.prepend(el("span", "new", "stalled"), " ");
@@ -1127,7 +1164,6 @@ async function loadTasks(render = true) {
   open.sort((a, b) => (b.overdue - a.overdue) || (a.due || "9").localeCompare(b.due || "9"));
   section("Open", open);
   for (const who of [...new Set(back.map((t) => t.owner))].sort()) section(`Results waiting to be read by ${who}`, back.filter((t) => t.owner === who));
-  if (!tasks.length) box.append(emptyState(`No task lines${agentProject ? ` in ${shown(agentProject)}` : ""}: when an agent hands work to another in a memo, it shows here.`));
 }
 
 // Machines: every pc of the viewer's tokens (an admin sees all) with its agents, workers and recent sessions. The
@@ -1168,6 +1204,37 @@ function machineButton(text, title, onclick) {
   };
   return b;
 }
+// What acts on the whole pc sits in its card head: Chat and Update plugin, Forget (destructive) behind ⋯ with a confirm.
+function machineActions(m) {
+  const box = el("span", "machine-actions"), c = m.companion;
+  if (c && (c.agents || []).length && (c.folders?.linked || []).length) box.append(machineButton("Chat", "Talk to an agent on this pc (Chats)", async () => { go("#/chats"); if (!ck.machines.length) await ckSummary().catch(() => {}); ckNewChat(m.id); }));
+  if (c) box.append(machineButton("Update plugin", "Update the knowledge plugin of every agent there", () => machineAction(m, "update_plugin")));
+  const menu = el("details", "menu machine-more"), sum = el("summary", "btn small icon", "⋯"), list = el("div", "menu-list");
+  sum.setAttribute("aria-label", `More for ${m.label}`); sum.title = "More";
+  list.append(actionButton("Forget this pc…", async () => {
+    menu.open = false;
+    if (!confirm(`Forget ${m.label}? It leaves this list and comes back when it reports again; its actions and history here go.`)) return;
+    try { await api("/ui/api/machines/forget", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: m.id }) }); } catch (e) { toast(e.message); }
+    loadMachines();
+  }, ""));
+  menu.append(sum, list); box.append(menu);
+  return box;
+}
+// YOLO per agent: a plain switch with the state; only a small warning mark while it is on. On asks to type YOLO.
+function yoloSwitch(m, a, ag) {
+  const l = el("label", "check yolo-switch"), c = el("input"); c.type = "checkbox"; c.setAttribute("role", "switch"); c.checked = !!ag.yolo;
+  c.setAttribute("aria-label", `YOLO for ${AGENT_NAME[a] || a} on ${m.label}`);
+  l.title = "Run without asking: the agent's global setting on that pc";
+  c.onchange = async () => {
+    const on = c.checked;
+    if (on && prompt(`${YOLO_WARNING}\n\nType YOLO to turn it on for ${AGENT_NAME[a] || a} on ${m.label}.`) !== "YOLO") { c.checked = false; return; }
+    c.disabled = true; l.setAttribute("aria-busy", "true"); // machineAction redraws the card once the pc reported
+    await machineAction(m, "yolo", on ? { agent: a, on: true, confirm: "YOLO" } : { agent: a, on: false });
+  };
+  l.append(c, " YOLO");
+  if (ag.yolo) { const w = el("span", "yolo-mark", "⚠"); w.title = "On: every session of this agent there runs without asking"; w.setAttribute("aria-hidden", "true"); l.append(w); }
+  return l;
+}
 // The Machines view: one card per pc.
 async function loadMachines() {
   const res = await api("/ui/api/machines");
@@ -1184,8 +1251,9 @@ async function loadMachines() {
   for (const m of res.machines) {
     const card = el("article", "machine" + (m.online ? "" : " offline")), head = el("div", "machine-head");
     head.append(el("h3", null, m.label));
-    head.append(el("span", `pill ${m.online ? "ok" : ""}`, m.old ? "old plugin" : m.online ? "online" : `offline since ${ago(m.at)}`));
+    head.append(el("span", `pill ${m.online ? "ok" : ""}`, m.old ? "old plugin" : m.online ? "online" : offlineFor(m.at)));
     if (here && m.id === here) head.append(el("span", "pill this", "This pc"));
+    if (m.own && !m.old) head.append(machineActions(m));
     card.append(head, el("p", "machine-meta", [m.tokens.join(", "), m.companion ? `companion ${m.companion.version || "?"}` : !m.old && "no companion"].filter(Boolean).join(" · ")));
     const c = m.companion;
     if (c) {
@@ -1199,7 +1267,7 @@ async function loadMachines() {
     for (const [a, ag] of Object.entries(m.agents)) {
       const row = el("div", "machine-agent"), top = el("div", "machine-agent-head");
       top.append(el("strong", null, AGENT_NAME[a] || a), el("span", "muted", ag.plugin ? `plugin ${ag.plugin}` : "plugin ?"));
-      if (ag.yolo) top.append(el("span", "pill yolo", "YOLO"));
+      if (ag.yolo && !(m.own && c && !m.old)) top.append(el("span", "pill yolo", "YOLO on")); // the owner sees the switch instead
       if (ag.trusted === false) top.append(el("span", "pill warn", "hooks not trusted"));
       if (c) top.append(el("span", `pill ${ag.limit >= 90 ? "warn" : ""}`, ag.limit == null ? "limit unknown" : `limit ${Math.round(ag.limit)}%`));
       row.append(top);
@@ -1213,7 +1281,7 @@ async function loadMachines() {
         const head = el("span"); text.append(head);
         head.append(el("strong", null, w.id), ` · ${w.project || "?"} · ${w.status === "running" ? `running ${mins(w.started)}` : `${w.status} ${ago(w.ended || w.started)}`}${w.branch ? ` · ${w.branch}` : ""}`);
         if (w.why) text.append(el("span", "worker-why", w.why));
-        if (w.status === "running" && !m.online) text.append(el("span", "worker-why", `pc offline since ${ago(m.at)}: nobody knows whether it still runs`));
+        if (w.status === "running" && !m.online) text.append(el("span", "worker-why", `pc ${offlineFor(m.at)}: nobody knows whether it still runs`));
         if (w.status === "running" && w.progress) text.append(workerProgress(w.progress));
         li.append(text);
         if (w.yolo) li.append(el("span", "pill yolo", "YOLO"));
@@ -1235,10 +1303,7 @@ async function loadMachines() {
       if (m.own && c && !m.old) {
         const ctl = el("div", "machine-controls");
         if (ag.trusted === false) ctl.append(machineButton("Trust hooks", "Trust the knowledge hooks the agent's own way", () => machineAction(m, "trust_hooks", { agent: a })));
-        ctl.append(machineButton(ag.yolo ? "YOLO: ON · Turn off" : "YOLO: off · Turn on", "Run without asking: the agent's global setting on that pc", () => {
-          if (ag.yolo) return machineAction(m, "yolo", { agent: a, on: false });
-          if (prompt(`${YOLO_WARNING}\n\nType YOLO to turn it on for ${AGENT_NAME[a] || a} on ${m.label}.`) === "YOLO") return machineAction(m, "yolo", { agent: a, on: true, confirm: "YOLO" });
-        }));
+        ctl.append(yoloSwitch(m, a, ag));
         const max = el("select", "small"); max.title = "At most this many workers of this agent at once";
         for (const n of [0, 1, 2, 3, 4]) { const o = el("option", null, `max ${n} worker${n === 1 ? "" : "s"}`); o.value = n; o.selected = n === ((c.maxWorkers || {})[a] ?? 1); max.append(o); }
         max.onchange = () => machineAction(m, "max_workers", { agent: a, n: Number(max.value) });
@@ -1246,19 +1311,6 @@ async function loadMachines() {
         row.append(ctl);
       }
       agents.append(row);
-    }
-    if (m.own && !m.old) {
-      const ctl = el("div", "machine-controls");
-      if (c) {
-        if ((c.agents || []).length && (c.folders?.linked || []).length) ctl.append(machineButton("Chat", "Talk to an agent on this pc (Chats)", async () => { go("#/chats"); if (!ck.machines.length) await ckSummary().catch(() => {}); ckNewChat(m.id); }));
-        ctl.append(machineButton("Update plugin", "Update the knowledge plugin of every agent there", () => machineAction(m, "update_plugin")));
-      }
-      ctl.append(machineButton("Forget", "Remove this pc from the list (it comes back when it reports again)", async () => {
-        if (!confirm(`Forget ${m.label}?`)) return;
-        try { await api("/ui/api/machines/forget", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: m.id }) }); } catch (e) { toast(e.message); }
-        loadMachines();
-      }));
-      card.append(ctl);
     }
     const fl = c && c.folders;
     if (fl && (fl.linked.length || (m.own && fl.candidates.length))) {
@@ -1290,6 +1342,9 @@ async function loadMachines() {
   }
   if (!res.machines.length) box.append(el("p", "muted", "No machine has reported yet. Machines appear once a plugin 0.15.0 or newer asks the server."));
 }
+// Health lists these first (something to do now or a risk), the rest by how many findings they have.
+const LINT_URGENT = ["open_overdue", "possible_secret_in_memo", "possible_secret_in_skill", "stale_handback", "offline_conflict",
+  "history_failed", "duplicate_check_failed", "skill_broken", "worker_unmerged", "plugin_behind"];
 // Lint checks in plain words, with what to do about them (unknown checks fall back to their name).
 const LINT_INFO = {
   usage_outlier: ["Session that used far more tokens than usual", "Look at that session's log: a loop, a huge file read or a runaway subagent? Nothing to fix when the work was simply big."],
@@ -2001,6 +2056,7 @@ async function loadSettings() {
     if (on.checked && Notification.permission !== "granted") on.checked = (await Notification.requestPermission()) === "granted";
     if (!on.checked && Notification.permission === "denied") toast("Notifications are blocked for this site in the browser settings", true);
     store.set("kn_notify", on.checked ? "1" : "0");
+    $("set-notify-saved").textContent = "Saved"; clearTimeout(on.savedTimer); on.savedTimer = setTimeout(() => ($("set-notify-saved").textContent = ""), 2000);
   };
   $("set-chat").onsubmit = async (e) => {
     e.preventDefault();

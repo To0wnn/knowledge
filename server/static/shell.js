@@ -142,6 +142,7 @@ function paintHead() {
   const r = shellRoute; if (!r.view) return;
   const [, sec, title] = VIEWS[r.view];
   $("crumb").textContent = sec === "Knowledge" ? `Knowledge · ${project === ALL ? "all projects" : shown(project)}` : sec;
+  $("crumb").hidden = sec === title; // "Agents › Agents" says nothing twice
   $("title").textContent = title;
   document.title = `${title} · Knowledge`;
   for (const a of $("head-actions").querySelectorAll("[data-views]")) a.hidden = !a.dataset.views.split(" ").includes(r.view);

@@ -77,7 +77,7 @@ function missionLayout(g, s = MS_SIZE) {
 function msBuild() {
   const root = el("section", "ms"); root.id = "mission"; root.hidden = true; root.setAttribute("aria-label", "Mission map");
   root.innerHTML = `<div class="ms-bar">
-      <button type="button" class="btn small" id="ms-all" aria-pressed="false" title="Also results handed back more than a day ago">Show all</button>
+      <button type="button" class="btn small" id="ms-all" aria-pressed="false" title="Also results handed back more than a day ago">Older results</button>
       <span class="ck-gap"></span>
       <span class="ms-count muted" id="ms-count" aria-live="polite"></span>
       <button type="button" class="btn small" id="ms-fit" title="Fit the map to the screen (F)">Fit</button>
@@ -137,6 +137,8 @@ function msRender() {
   $("ms-count").textContent = `${open} open · ${g.nodes.length - open} done${ms.all ? "" : ` (last ${g.done_hours} h)`}`;
   ms.lay = missionLayout(g);
   $("ms-stage").hidden = msNarrow(); $("ms-list").hidden = !msNarrow();
+  $("ms-legend").hidden = !g.nodes.length; // a key to an empty graph explains nothing
+  $("ms-all").hidden = !g.nodes.length && !ms.all; // one "show" on an empty flow: the other projects
   if (!g.nodes.length) {
     $("ms-world").replaceChildren();
     $("ms-list").replaceChildren(emptyState(`No task lines${ms.project ? ` in ${shown(ms.project)}` : ""}: the flow of work agents hand each other shows here.`,
