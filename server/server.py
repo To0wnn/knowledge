@@ -5069,7 +5069,7 @@ async def machine_action_result(request: Request):
 
 
 # Chats: the owner talks to an agent on one of their pcs from the web UI. The server only stores and relays: the UI
-# posts a message, the pc's companion pulls it (GET /machine/chats), runs one turn of the agent in a folder linked
+# posts a message, the pc's companion pulls it (GET /machine/chats), hands it to the chat's agent in a folder linked
 # there and posts the output back (POST /machine/chats/events); the UI polls for new events. One file per chat under
 # chats/<machine>/, plus a small queue.json per machine that the companion's poll reads.
 CHATS_DIR = ADMIN_DIR / "chats"

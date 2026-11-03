@@ -1510,8 +1510,8 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
 
 def chat_e2e(tok: str, tmp: Path):
     """Chats from the web UI (plugin/hooks/chat.py): the owner starts a chat with an agent on a pc, its companion pulls
-    each message, runs one turn of that agent in the linked folder (message on stdin, the agent's own resume id from
-    the second turn on) and posts the output back; stop ends a running turn; only linked folders."""
+    each message, hands it to that chat's running agent in the linked folder (message on stdin, the agent's own resume
+    id when a new process continues it) and posts the output back; stop ends a running turn; only linked folders."""
     hooks = CLIENT / "plugin" / "hooks"
     home = tmp / "Chat Usér"
     bin_dir, calls = home / "bin", home / "calls.jsonl"

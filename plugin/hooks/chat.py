@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Chats from the web UI: the owner talks to an agent on this pc as in a terminal, the companion runs each turn.
 
-The companion pulls a chat's next message from the server (GET /machine/chats), runs one headless turn of the agent in
-the chat's folder (a folder linked to a project here, nothing else) and posts what the agent prints back in small
-batches (POST /machine/chats/events). The first turn starts a new conversation, every later turn continues it the
-agent's own way. The message goes in on stdin, never on the command line (a .cmd shim would hand it to cmd.exe). With
-YOLO on here: the agent's YOLO flag (Claude `--resume <session>`, Codex `codex exec resume <thread>`, agy
-`--conversation <id>`). Without: a worker's narrow set (workers.py), and for anything else the turn pauses and asks the
-chat's owner in the web UI (ask()), each agent its native way: Claude's permission prompt tool (approval_mcp.py),
-Codex over `codex app-server`, agy over `agy acp`.
+The companion pulls a chat's next message from the server (GET /machine/chats) and hands it to the chat's agent, one
+running process per chat in the chat's folder (a folder linked to a project here, nothing else), as in a terminal (see
+"live chats" below); what the agent prints goes back in small batches (POST /machine/chats/events). The first message
+starts a new conversation; a new process after an idle end or a restart resumes it the agent's own way. Messages go in
+on stdin, never on the command line (a .cmd shim would hand them to cmd.exe). With YOLO on here: the agent's YOLO flag.
+Without: a worker's narrow set (workers.py), and for anything else the turn pauses and asks the chat's owner in the
+web UI (ask()), each agent its native way: Claude's permission prompt tool (approval_mcp.py), Codex over
+`codex app-server`, agy over `agy acp`.
 
   chat.py --self-test   the argv and the stream parsing per agent
 Standard library only; Linux, macOS and Windows.
@@ -105,24 +105,16 @@ def approval_config(cid: str) -> str:
 
 
 def argv(agent: str, exe: str, yolo: bool, session: str, chat: str = "", model: str = "", effort: str = "") -> list:
-    """One turn's command line (flags checked against claude 2.1, codex-cli 0.164, agy 1.4.12); the message is stdin.
-    Without YOLO, Claude asks the owner through its documented permission prompt tool (approval_mcp.py) for what its
-    allowed set does not hold. A chosen model and effort go in as flags; over JSON-RPC (Codex app-server, agy acp) the
-    driver sets them per turn instead."""
+    """The command line of a Claude chat (live_argv adds its stream input) or an agy chat with YOLO (flags checked
+    against claude 2.1, agy 1.4.12); Codex, and agy without YOLO, run over JSON-RPC (CodexLive, AgyLive). Without YOLO,
+    Claude asks the owner through its documented permission prompt tool (approval_mcp.py) for what its allowed set
+    does not hold. A chosen model and effort go in as flags."""
     if agent == "claude":
         return [exe, "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
                 *(["--resume", session] if session else []), *(["--model", model] if model else []), *(["--effort", effort] if effort else []),
                 *(["--dangerously-skip-permissions"] if yolo else [
                     "--mcp-config", approval_config(chat), "--permission-prompt-tool", "mcp__knowledge_approval__ask",
                     "--permission-mode", "acceptEdits", "--allowedTools", *workers.CLAUDE_ALLOWED])]
-    if agent == "codex":
-        if not yolo:  # app-server (JSON-RPC): the Codex that asks its client (`codex exec` never asks); sandbox and policy per thread
-            return [exe, "app-server", "-c", workers.CODEX_APPROVE]
-        return [exe, "exec", *(["resume"] if session else []), "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "--json",
-                *(["-m", model] if model else []), *(["-c", f"model_reasoning_effort={effort}"] if effort else []),
-                *([session] if session else []), "-"]
-    if not yolo:  # ACP (agy acp): the only headless agy that asks its client for a permission (-p denies by itself)
-        return [exe, "acp"]
     return [exe, "--input-format", "stream-json", "--output-format", "stream-json", "--dangerously-skip-permissions",
             *(["--model", model] if model else []),  # no --effort: the model name carries it (models())
             *(["--conversation", session] if session else []), "-p", ""]
@@ -428,55 +420,6 @@ def answer(a: dict):
         w["done"].set()
 
 
-class Rpc:
-    """JSON-RPC 2.0 over an agent's stdin/stdout (agy acp, codex app-server): requests out, its own requests
-    (approvals) answered by `on_request`, its notifications turned into chat events by `on_note`."""
-
-    def __init__(self, p, on_note, on_request):
-        self.p, self.n, self.on_note, self.on_request = p, 0, on_note, on_request
-
-    def send(self, msg: dict):
-        self.p.stdin.write((json.dumps({"jsonrpc": "2.0", **msg}) + "\n").encode("utf-8"))
-        self.p.stdin.flush()
-
-    def notify(self, method: str, params: dict = None):
-        self.send({"method": method, **({"params": params} if params is not None else {})})
-
-    def call(self, method: str, params: dict, out: list, until: str = ""):
-        """Send a request and read until its answer; yields event lists on the way (None: flush now). The result
-        lands in out[0]; a JSON-RPC error raises."""
-        self.n += 1
-        rid, answered = self.n, False
-        self.send({"id": rid, "method": method, "params": params})
-        for raw in self.p.stdout:
-            try:
-                m = json.loads(raw.decode("utf-8", "replace"))
-            except ValueError:
-                yield [("info", raw.decode("utf-8", "replace").strip()[:500])] if raw.strip() else []
-                continue
-            if not isinstance(m, dict):
-                continue
-            if not answered and m.get("id") == rid and "method" not in m:
-                if m.get("error"):
-                    raise RuntimeError(f"{method}: {first_line((m['error'] or {}).get('message')) or m['error']}")
-                out.append(m.get("result") or {})
-                if not until:
-                    return
-                answered = True  # read on until the notification `until` (a turn's end)
-            if "method" in m and "id" in m:  # the agent asks us (an approval): the owner may take minutes
-                yield None
-                try:
-                    self.send({"id": m["id"], "result": self.on_request(m["method"], m.get("params") or {})})
-                except OSError:
-                    return
-            elif "method" in m:
-                yield self.on_note(m["method"], m.get("params") or {})
-                if answered and m["method"] == until:
-                    out.append(m.get("params") or {})
-                    return
-        raise RuntimeError(f"{method}: the agent ended before it answered")
-
-
 def decide(cid: str, tool: str, inp, reason: str, once: bool = False, detail: str = "") -> str:
     """once, chat or deny for a tool call the agent's own allowed set does not cover (the owner, via ask())."""
     return ask(cid, tool, inp, reason, once, detail)[0]
@@ -502,8 +445,7 @@ def auto_allowed(kind: str, name: str, inp, folder: str) -> bool:
 
 def agy_handlers(cid: str, folder: str, live: list):
     """(note, request) for agy over ACP: its session updates as chat events (none while live[0] is false: session/load
-    replays the history), its permission requests answered by auto_allowed() or the owner. Shared by one-turn and
-    live chats."""
+    replays the history), its permission requests answered by auto_allowed() or the owner. Used by AgyLive."""
     subs = set()  # tool call ids of agy's subagents
 
     def note(method, params):
@@ -548,30 +490,6 @@ def agy_offered(result: dict):
     if offered:
         _AGY_ACP[:] = offered[:40]
         _MODELS["agy"] = (time.time(), offered[:40])
-
-
-def agy_acp(p, item: dict, st: dict):
-    """One agy turn over ACP: initialize, continue the conversation (session/load) or start one (session/new), send
-    the message (session/prompt)."""
-    folder, live = item.get("folder", ""), [False]
-    note, request = agy_handlers(item["chat"], folder, live)
-    rpc, out = Rpc(p, note, request), []
-    yield from rpc.call("initialize", {"protocolVersion": 1, "clientCapabilities": {}}, out)
-    if st["session"]:
-        yield from rpc.call("session/load", {"sessionId": st["session"], "cwd": folder, "mcpServers": []}, out)
-    else:
-        yield from rpc.call("session/new", {"cwd": folder, "mcpServers": []}, out)
-        st["session"] = out[-1].get("sessionId") or ""
-    agy_offered(out[-1])
-    model = choice(item)[0]
-    if model:  # per session in ACP; set again every turn, as the chat's choice may have changed
-        yield from rpc.call("session/set_model", {"sessionId": st["session"], "modelId": model}, out)
-    live[0] = True
-    yield from rpc.call("session/prompt", {"sessionId": st["session"], "prompt": [{"type": "text", "text": item.get("text", "")}]}, out)
-    st["result"] = True
-    if out[-1].get("stopReason") not in (None, "end_turn"):
-        yield [("info", f"The turn ended: {out[-1]['stopReason']}")]
-    p.stdin.close()
 
 
 def merged(events: list) -> list:
@@ -699,7 +617,7 @@ def flat(d, at: str = "") -> str:
 
 def codex_handlers(cid: str, folder: str, st: dict):
     """(note, request) for a Codex app-server: its notifications as chat events, its approval requests answered by
-    auto_allowed() or the owner (only decisions it offers are sent). Shared by one-turn and live chats."""
+    auto_allowed() or the owner (only decisions it offers are sent). Used by CodexLive."""
     said, changes = [False], {}
 
     def note(method, params):
@@ -779,133 +697,6 @@ def codex_default(call, folder: str, model: str, effort: str) -> tuple:
     except RuntimeError:
         pass
     return model, effort
-
-
-def codex_app(p, item: dict, st: dict):
-    """One Codex turn over `codex app-server` (JSON-RPC v2; `codex exec` never asks): initialize, resume the thread
-    (thread/resume, also one `codex exec` began) or start one, then turn/start until turn/completed, all in the
-    workspace-write sandbox with approvalPolicy on-request."""
-    note, request = codex_handlers(item["chat"], item.get("folder", ""), st)
-    folder = item.get("folder", "")
-    rpc, out = Rpc(p, note, request), []
-    yield from rpc.call("initialize", {"clientInfo": {"name": "knowledge-companion", "version": "1"}}, out)
-    rpc.notify("initialized")
-    perms = {"cwd": folder, "approvalPolicy": "on-request", "sandbox": "workspace-write"}
-    if st["session"]:
-        yield from rpc.call("thread/resume", {"threadId": st["session"], **perms}, out)
-    else:
-        yield from rpc.call("thread/start", perms, out)
-    st["session"] = ((out[-1].get("thread") or {}).get("id")) or st["session"]
-    model, effort = choice(item)
-    if not (model and effort):  # Default: name it, as a turn/start override holds for the thread's later turns
-        try:
-            yield from rpc.call("config/read", {"cwd": folder}, out)
-            cfg = out[-1].get("config") or {}
-            model, effort = model or str(cfg.get("model") or ""), effort or str(cfg.get("model_reasoning_effort") or "")
-            if not (model and effort):
-                yield from rpc.call("model/list", {}, out)
-                found = out[-1].get("data") or []
-                m = next((x for x in found if model and model in (x.get("id"), x.get("model"))), None) or next((x for x in found if x.get("isDefault")), {})
-                model, effort = model or str(m.get("model") or m.get("id") or ""), effort or str(m.get("defaultReasoningEffort") or "")
-        except RuntimeError:  # an older Codex without these methods: its own default, as before
-            pass
-    yield from rpc.call("turn/start", {"threadId": st["session"], "input": [{"type": "text", "text": item.get("text", "")}],
-                                       **({"model": model} if model else {}), **({"effort": effort} if effort else {})}, out, until="turn/completed")
-    turn = out[-1].get("turn") or {}
-    st["result"] = True
-    if turn.get("status") == "failed":
-        yield [("error", first_line((turn.get("error") or {}).get("message")) or "the turn failed")]
-    elif turn.get("status") == "interrupted":
-        yield [("info", "The turn was interrupted.")]
-    p.stdin.close()
-
-
-RPC = {"agy": agy_acp, "codex": codex_app}  # the agents whose turns without YOLO run over JSON-RPC, so they can ask
-
-
-def run_turn(item: dict, post, log, linked, yolo):
-    """One turn of chat `item` ({chat, agent, folder, session, text}): run it, post its output as it comes (post(body)),
-    and end with done (and the error, if any). Never raises; failures go to the chat and the activity log."""
-    cid, agent, folder = item["chat"], item.get("agent"), item.get("folder", "")
-    st, buf, rec, last, err = {"session": item.get("session") or ""}, [], None, time.time(), ""
-    name = {"claude": "Claude Code", "codex": "Codex", "agy": "agy"}.get(agent, str(agent))
-
-    def flush(**end):
-        nonlocal buf, last
-        body, buf, last = {"chat": cid, "events": merged(buf), "session": st["session"], **end}, [], time.time()
-        if body["events"] or end:
-            post(body)
-    try:
-        if agent not in ("claude", "codex", "agy"):
-            raise RuntimeError(f"unknown agent {agent}")
-        if folder not in linked():
-            raise RuntimeError(f"{folder} is not a folder linked to a project on this pc")
-        exe = shutil.which(agent)
-        if not exe:
-            raise RuntimeError(f"{agent} is not on PATH")
-        cmd_rpc = agent in RPC and not yolo(agent)
-        cmd = argv(agent, exe, yolo(agent), st["session"], cid, *choice(item))
-        if os.name == "nt" and exe.lower().endswith((".cmd", ".bat")):
-            cmd = workers.shim_line(cmd)
-        log("chat", f"{name}: chat turn started in {folder}", f"chat {cid}" + (f", continues {st['session']}" if st["session"] else ", a new conversation"))
-        with tempfile.TemporaryFile() as errf:
-            kw = {"start_new_session": True} if os.name != "nt" else {"creationflags": workers.WIN_FLAGS}  # its own group: stop ends its children too
-            p = subprocess.Popen(cmd, cwd=folder, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errf,
-                                 env=workers.git_safe_env({**os.environ, "KNOWLEDGE_CHAT": cid}) if not yolo(agent) else {**os.environ, "KNOWLEDGE_CHAT": cid}, **kw)
-            rec = RUNNING.setdefault(cid, {"stop": False})  # start() put it there: a stop that came meanwhile holds
-            rec.update(pid=p.pid, ident=workers.identity(p.pid), st=st)  # st: its session, for a Force message
-            if rec["stop"]:
-                workers.kill(rec, hard=True)
-            if cmd_rpc:  # it asks for approvals over JSON-RPC on stdin/stdout: the driver answers and keeps stdin open
-                source = RPC[agent](p, item, st)
-            else:
-                try:
-                    p.stdin.write(stdin_for(agent, item.get("text", "")))
-                    p.stdin.close()
-                except OSError:  # it ended before reading: its exit code and stderr say why
-                    pass
-                source = (parse(agent, raw.decode("utf-8", "replace"), st) for raw in p.stdout)
-            for evs in source:  # None: about to wait for the owner, so what came so far goes out now
-                buf += evs or []
-                if evs is None or time.time() - last >= FLUSH:
-                    flush()
-            code = p.wait()
-            errf.seek(0)
-            tail = errf.read()[-2000:].decode("utf-8", "replace").strip()
-        if rec["stop"]:
-            buf.append(("info", "Stopped."))
-            log("chat", f"{name}: chat turn stopped by its owner", f"chat {cid}")
-        elif code != 0:
-            err = f"{agent} ended with exit code {code}" + (f": {first_line(tail.splitlines()[-1] if tail else '')}" if tail else "")
-        elif not st.get("result"):
-            err = f"{agent} ended without a result" + (f": {first_line(tail)}" if tail else "")
-        if not err and not rec["stop"]:
-            log("chat", f"{name}: chat turn done", f"chat {cid}, session {st['session']}")
-    except Exception as e:
-        if rec and rec.get("stop"):  # a stop ended an RPC turn mid-answer: that is the stop, not a failure
-            buf.append(("info", "Stopped."))
-            log("chat", f"{name}: chat turn stopped by its owner", f"chat {cid}")
-        else:
-            err = f"{type(e).__name__}: {e}"[:300]
-    if err:
-        buf.append(("error", err))
-        log("error", f"{name}: chat turn failed", f"chat {cid}: {err}")
-    steered = {}
-    (rec or RUNNING.get(cid) or {})["ending"] = True  # from here no Force message is parked for this turn
-    if (rec or RUNNING.get(cid) or {}).get("steered") or steer_path(cid).exists():  # a Force message: read by the hook, or not (it goes in next)
-        try:  # the lines its hook did not take: the last ones parked (it takes all there are at once)
-            left = sum(1 for x in steer_path(cid).read_text(encoding="utf-8").splitlines() if x.strip())
-        except OSError:
-            left = 0
-        steer_path(cid).unlink(missing_ok=True)
-        steered = {"steered": "pending" if left else "delivered", "steered_left": left}
-    try:
-        flush(done=True, **({"error": err} if err else {}), **steered)
-    except Exception as e:  # the server away: it says the turn was lost when it next hands out work
-        if getattr(e, "code", None) != 403:  # remote control off: the companion says so once
-            log("error", "Could not send a chat's last output to the server", f"chat {cid}: {e}"[:300])
-    finally:
-        RUNNING.pop(cid, None)  # after the done post: until then the server's "busy" list matches this
 
 
 # ---------------------------------------------------------------- live chats: one running agent per chat
@@ -1879,20 +1670,8 @@ def start(item: dict, post, log, linked, yolo, fetch=None):
                 except Exception:  # the server away or remote control off: its "busy" list calls the turn lost
                     pass
             return
-        (_start_live if item.get("agent") in LIVE_AGENTS else _start)(item, post, log, linked, yolo)
+        _start_live(item, post, log, linked, yolo)
     in_order(cid, job)
-
-
-def _start(item: dict, post, log, linked, yolo):
-    if sum(1 for r in RUNNING.values() if not r.get("live")) >= MAX_TURNS:  # live chats count in their own limit
-        post({"chat": item["chat"], "events": [{"kind": "error", "text": f"{MAX_TURNS} chat turns run on this pc already; send again later"}],
-              "done": True, "error": "busy"})
-        return
-    steer_path(item["chat"]).unlink(missing_ok=True)  # a Force message left by an earlier turn: never into this one
-    # taken: the server's next "busy" list must not call it lost
-    RUNNING[item["chat"]] = {"pid": 0, "ident": "", "stop": False, "folder": item.get("folder", ""),
-                             "allow": [x for x in item.get("allow") or [] if isinstance(x, dict)]}
-    threading.Thread(target=run_turn, args=(item, post, log, linked, yolo), daemon=True).start()
 
 
 def _start_live(item: dict, post, log, linked, yolo):
@@ -1900,6 +1679,8 @@ def _start_live(item: dict, post, log, linked, yolo):
     cid, lv = item["chat"], None
     try:
         with START_LOCK:
+            if item.get("agent") not in LIVE_AGENTS:
+                raise RuntimeError(f"unknown agent {item.get('agent')}")
             if item.get("folder", "") not in linked():
                 raise RuntimeError(f"{item.get('folder', '')} is not a folder linked to a project on this pc")
             if item.get("worktree"):  # its own git worktree and branch, made at its first message, reused after
@@ -1953,21 +1734,14 @@ def self_test():
         assert mcp["args"][0].endswith("approval_mcp.py") and mcp["env"]["KNOWLEDGE_CHAT"] == "c1", mcp
         c = argv("claude", "claude", True, "s-1")
         assert c[c.index("--resume") + 1] == "s-1" and "--dangerously-skip-permissions" in c and "acceptEdits" not in c, c
-        x = argv("codex", "codex", False, "")
-        assert x == ["codex", "app-server", "-c", workers.CODEX_APPROVE], x
-        x = argv("codex", "codex", True, "th-1")
-        assert x[:3] == ["codex", "exec", "resume"] and x[-2:] == ["th-1", "-"] and "--dangerously-bypass-approvals-and-sandbox" in x, x
         g = argv("agy", "agy", True, "cv-1")
         assert g[-2:] == ["-p", ""] and g[g.index("--conversation") + 1] == "cv-1" and "--dangerously-skip-permissions" in g, g
-        assert argv("agy", "agy", False, "cv-1") == ["agy", "acp"], "without YOLO agy runs over ACP, where it can ask"
-        assert not [a for a in c + x + g if "\n" in a or "%" in a or '"' in a], "nothing a .cmd shim would refuse"
+        assert not [a for a in c + g if "\n" in a or "%" in a or '"' in a], "nothing a .cmd shim would refuse"
         c = argv("claude", "claude", True, "s-1", "", "opus", "max")
         assert c[c.index("--model") + 1] == "opus" and c[c.index("--effort") + 1] == "max", c
-        x = argv("codex", "codex", True, "th-1", "", "gpt-x", "high")
-        assert x[x.index("-m") + 1] == "gpt-x" and "model_reasoning_effort=high" in x and x[-2:] == ["th-1", "-"], x
         g = argv("agy", "agy", True, "cv-1", "", "gemini-y", "low")
         assert g[g.index("--model") + 1] == "gemini-y" and "--effort" not in g and g[-2:] == ["-p", ""], g
-        assert "--model" not in argv("claude", "claude", True, "") and argv("codex", "codex", False, "", "", "m", "high")[1] == "app-server"
+        assert "--model" not in argv("claude", "claude", True, "")
         assert choice({"model": "opus", "effort": "max"}) == ("opus", "max")
         assert choice({"model": "a b", "effort": "huge"}) == ("", ""), "anything else falls back to the agent's default"
         assert choice({"model": "-rf", "effort": ""}) == ("", ""), "no model name that reads as a flag"
@@ -2121,34 +1895,28 @@ def self_test():
         RUNNING.pop("c9", None)
     # Codex: decided and shown on the command it runs (not its parsed commandActions); a file change is never allowed by
     # itself and shows the paths from item/started; wider permissions are once at most and spelled out.
-    import io
-    msgs = [{"id": 1, "result": {}}, {"id": 2, "result": {"thread": {"id": "T"}}}, {"id": 3, "result": {"config": {"model": "cfg-m", "model_reasoning_effort": "low"}}},
-            {"id": 4, "result": {}},
-            {"method": "item/commandExecution/requestApproval", "id": 10, "params": {"command": "/bin/sh -lc 'cat README.md | tee ~/.ssh/authorized_keys'", "cwd": "/tmp/other",
+    msgs = [{"method": "item/commandExecution/requestApproval", "id": 10, "params": {"command": "/bin/sh -lc 'cat README.md | tee ~/.ssh/authorized_keys'", "cwd": "/tmp/other",
              "commandActions": [{"command": "cat README.md"}], "availableDecisions": ["accept", "decline"]}},
             {"method": "item/started", "params": {"item": {"type": "fileChange", "id": "fc1", "changes": [{"path": "/home/x/.bashrc"}]}}},
             {"method": "item/fileChange/requestApproval", "id": 11, "params": {"itemId": "fc1", "grantRoot": None}},
             {"method": "item/fileChange/requestApproval", "id": 12, "params": {"itemId": "unknown"}},
-            {"method": "item/permissions/requestApproval", "id": 13, "params": {"permissions": {"network": {"enabled": True}, "fileSystem": {"write": [f]}}}},
-            {"method": "turn/completed", "params": {"turn": {"status": "completed"}}}]
-    fake = type("P", (), {"stdin": io.BytesIO(), "stdout": [json.dumps(m).encode() + b"\n" for m in msgs]})()
-    fake.stdin.close = lambda: None
-    seen, real_decide = [], globals()["decide"]
+            {"method": "item/permissions/requestApproval", "id": 13, "params": {"permissions": {"network": {"enabled": True}, "fileSystem": {"write": [f]}}}}]
+    seen, real_decide, answers = [], globals()["decide"], []
     globals()["decide"] = lambda cid, tool, inp, reason, once=False, detail="": seen.append((tool, inp, reason, once, detail)) or "deny"
     try:
-        list(codex_app(fake, {"chat": "c1", "folder": f, "text": "hi"}, {"session": ""}))
+        note, request = codex_handlers("c1", f, {"session": ""})
+        for m in msgs:
+            answers.append(request(m["method"], m["params"])) if "id" in m else note(m["method"], m["params"])
     finally:
         globals()["decide"] = real_decide
-    sent = [json.loads(ln) for ln in fake.stdin.getvalue().splitlines()]
-    turn = next(m for m in sent if m.get("method") == "turn/start")["params"]
-    assert (turn.get("model"), turn.get("effort")) == ("cfg-m", "low"), "Default names the configured model: an earlier override would hold"
+    cfg = {"config/read": {"config": {"model": "cfg-m", "model_reasoning_effort": "low"}}}
+    assert codex_default(lambda m, p: cfg.get(m, {}), f, "", "") == ("cfg-m", "low"), "Default names the configured model: an earlier override would hold"
     assert seen[0][1]["command"].endswith("tee ~/.ssh/authorized_keys'") and "cat README.md" in seen[0][2], seen[0]
     assert seen[0][4].startswith("(in /tmp/other) /bin/sh -lc"), "a command run elsewhere says where"
     assert seen[1][0] == "edit" and seen[1][1]["paths"] == ["/home/x/.bashrc"] and seen[1][3] and ".bashrc" in seen[1][4], seen[1]
     assert seen[2][3], "a file change Codex named no paths for: once at most"
     assert seen[3][0] == "permissions" and seen[3][3] and "network.enabled: True" in seen[3][4] and "fileSystem.write" in seen[3][4], seen[3]
-    answers = [json.loads(x) for x in fake.stdin.getvalue().decode().splitlines() if '"result"' in x]
-    assert [a["result"] for a in answers] == [{"decision": "decline"}] * 3 + [{"permissions": {}, "scope": "turn"}], answers
+    assert answers == [{"decision": "decline"}] * 3 + [{"permissions": {}, "scope": "turn"}], answers
     # The chat host: the agent's input and output go through files, so a new companion reads on where the old one
     # stopped (nothing twice, nothing lost); closing its input ends it; adopt() clears what has no agent any more.
     with tempfile.TemporaryDirectory() as t:
