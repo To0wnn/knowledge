@@ -7,7 +7,14 @@ Moved from the README; [back to the README](../README.md).
 - `tests/clients_e2e.py` runs the client side against a real server: plugin hooks, the installers, Codex's own start
   of the MCP server, the offline copy and the skills sync. CI runs it on Windows, macOS and Linux for every push
   (`.github/workflows/clients.yml`).
-- `tests/ui_smoke.py` checks the web UI with Playwright.
+- `tests/ui_smoke.py` checks the web UI with Playwright. `tests/ui_ci.py` runs it against a throwaway server on the
+  demo notes (seeded with projects, a used token, a pc, a chat and a task line); CI does the same on every push, and
+  locally it is one command:
+  `uv run --project server --with playwright python tests/ui_ci.py`
+  (once: `uv run --with playwright python -m playwright install chromium`). Checks that need data the demo lacks
+  print a `skip:` line; `KNOWLEDGE_SMOKE_SHOTS=<dir>` keeps screenshots. Against a real server, set `KNOWLEDGE_URL`,
+  `KNOWLEDGE_TEST_USER` and `KNOWLEDGE_PROXY_SECRET` and run `tests/ui_smoke.py` itself
+  (`KNOWLEDGE_SMOKE_BROWSER=chromium` when there is no system Chrome).
 - A change to the plugin needs a version bump in `plugin/.claude-plugin/plugin.json` and
   `plugin/.codex-plugin/plugin.json` (the test checks they match), or installed copies never update.
 

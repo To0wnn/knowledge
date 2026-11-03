@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Browser smoke test of the web UI against the live server (headless system Chrome via Playwright).
+"""Browser smoke test of the web UI (headless Chrome via Playwright), against the live server or a throwaway one (tests/ui_ci.py).
 
 Checks what broke before: the page loads without errors; the topic list opens a note in the middle with its
 connected notes on the right; Changes lists lines added/removed. On the map (Map button) a click on a note zooms to it
@@ -547,6 +547,8 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
             check(stays == (1 if has_levels else 0) or stays == 1, f"model chip: after a model the panel stays open for its effort ({stays}, levels {has_levels})")
         await pg.mouse.click(5, 5)
         check(not await pg.locator("#ck-canvas details.ck-model[open]").count(), "model chip: a click outside closes the panel")
+    else:
+        print("skip: no pc reports its models: the model chip is not checked")
     await route(pg, "#/chats", "#ck-history li")
     chat_row = '#ck-side [data-row^="chat:"]'  # a chat in any group, or under Earlier
     if await pg.locator(chat_row).count():
@@ -567,6 +569,8 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
         await pg.keyboard.press("Escape")
         await pg.wait_for_timeout(300)
         check(await pg.evaluate("location.hash === '#/chats' && !!$('ck-canvas').querySelector('.ck-pick')"), "Esc goes back from a chat to the list")
+    else:
+        print("skip: no chat in the list: opening a chat, its link and Esc are not checked")
     check(not errors, f"no page errors in the Agents view {errors[:2]}")
     await ctx.close()
     ctx, pg, errors = await page(browser, secret, "/ui#/inbox", **devices["iPhone 14"])
@@ -592,6 +596,8 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
         await pg.tap("#ck-canvas .ck-head > .ck-x:not(.bd-only)")
         await pg.wait_for_timeout(400)
         check(await pg.evaluate("location.hash === '#/chats' && getComputedStyle($('tabbar')).display !== 'none'"), "phone chat: back returns to the list and the tab bar")
+    else:
+        print("skip: no chat in the list: the phone chat view is not checked")
     check(not errors, f"no page errors in the phone Agents view {errors[:2]}")
     await ctx.close()
 
@@ -662,7 +668,7 @@ async def shell(browser, devices, secret: str) -> None:
         await pg.wait_for_timeout(600)
         check(await pg.evaluate("(n) => history.length === n", n0), f"a note named {odd!r} opens by link, survives a refresh, no duplicate history entry")
     else:
-        print("     no note with a space, ?, #, % or accent in its name: the live round trip is not checked")
+        print("skip: no note with a space, ?, #, % or accent in its name: the live round trip is not checked")
     await pg.locator("#title").focus()
     await pg.keyboard.press("[")
     await pg.wait_for_timeout(300)
@@ -746,7 +752,7 @@ async def agents_pages(browser, devices, secret: str) -> None:
         hit = await pg.evaluate(in_view, key)
         check(hit, f"#/inbox/<key> scrolls to and marks that item ({key})")
     else:
-        print("     no board item to deep-link: #/inbox/<key> is not checked")
+        print("skip: no board item to deep-link: #/inbox/<key> is not checked")
     await pg.goto(f"{URL}/ui#/inbox/task:nowhere/NOPE-1")
     await pg.wait_for_function("ck.boardAt > 0", timeout=15000)
     await pg.wait_for_timeout(500)
@@ -1123,7 +1129,7 @@ async def board(browser, devices, secret: str) -> None:
           "Chats > Board: the toggle sets #/chats?view=board and the board replaces the list")
     n = await pg.evaluate("ck.chats.filter((c) => ckScope(c) && !c.closed).length")  # a closed chat is off the board
     if not n:
-        print("     no chats: the board's cards are not checked")
+        print("skip: no chats: the board's cards are not checked")
     else:
         await pg.wait_for_selector("#bd .bd-card", timeout=5000)
         frames = await pg.evaluate("""(() => { const ps = [...new Set(ck.chats.filter((c) => ckScope(c) && !c.closed).map((c) => c.project || ''))];
@@ -1402,7 +1408,9 @@ async def design_system(browser, devices, secret: str) -> None:
 async def main() -> None:
     secret = os.environ.get("KNOWLEDGE_PROXY_SECRET") or subprocess.run(["secret", "KNOWLEDGE_PROXY_SECRET"], check=True, capture_output=True, text=True).stdout.strip()
     async with async_playwright() as p:
-        browser = await p.chromium.launch(channel="chrome")
+        # system Chrome by default; KNOWLEDGE_SMOKE_BROWSER=chromium takes Playwright's own (CI, tests/ui_ci.py)
+        chan = os.environ.get("KNOWLEDGE_SMOKE_BROWSER", "chrome")
+        browser = await p.chromium.launch(channel=None if chan == "chromium" else chan)
         await csp(browser, secret)
         await desktop(browser, secret)
         await search(browser, secret)
