@@ -147,7 +147,7 @@ Known gaps: [docs/ROADMAP.md](docs/ROADMAP.md).
 | [memory.md](docs/memory.md) | MCP tools, session start, projects, lint, duplicates, secrets, search quality |
 | [tasks.md](docs/tasks.md) | Task lines, leases and nonces, results, workers, usage limit, mission map |
 | [companion.md](docs/companion.md) | The companion, machines, own devices, remote control, YOLO safety |
-| [chats.md](docs/chats.md) | Inbox, chats and approvals |
+| [chats.md](docs/chats.md) | Agents (what needs you, what runs, chats) and approvals |
 | [voice.md](docs/voice.md) | Speaking chat messages: set up speech to text |
 | [web-ui.md](docs/web-ui.md) | Views, routes, graph, installing as an app (PWA, cookies) |
 | [security.md](docs/security.md) | The security model in one page |

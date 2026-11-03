@@ -8,7 +8,7 @@ Moved from the README; [back to the README](../README.md).
   picker on top (keys 1-9, 0 = all; it scopes every view: Notes, Map, Agents, Tasks and a new chat's folder; the
   Needs-you badge still counts all), **Agents** (Agents, Tasks, Machines) and **Knowledge** (Notes, Map, Changes,
   Health = lint), This pc, Admin, Help and Settings (user menu: a new chat's default model);
-  on a phone a bottom tab bar (Agents, Tasks, Notes, More). The Agents view (`#/chats`; `#/inbox` opens the same view) is one
+  on a phone a bottom tab bar (Agents, Tasks, Machines, Notes, More). The Agents view (`#/chats`; `#/inbox` opens the same view) is one
   list grouped Needs you (each row says why: answered and not read, asks approval, failed), Review (branches ready to
   merge, finished workers), Working and Done today (folded), with quick actions on a row (Allow/Deny an approval,
   Merge/Reject a review, a one-line Reply, Snooze 1 h / until tomorrow, Dismiss) and the open chat on the right; on a
