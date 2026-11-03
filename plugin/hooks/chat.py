@@ -1063,7 +1063,12 @@ class Hosted:
                     self.host = run(creationflags=workers.WIN_FLAGS | workers.BREAKAWAY)
                 except OSError:  # the scheduled task's job forbids it: the agent then ends with the companion
                     self.host = run(creationflags=workers.WIN_FLAGS)
-            self.pid, self.ident = self.host.pid, workers.identity(self.host.pid)
+            self.pid, self.ident = self.host.pid, ""
+            for _ in range(40):  # macOS reads it with ps, which may not list a process started a moment ago
+                self.ident = workers.identity(self.pid)
+                if self.ident or self.host.poll() is not None:
+                    break
+                time.sleep(0.05)
             (d / "host.json").write_text(json.dumps({"pid": self.pid, "ident": self.ident}), encoding="utf-8")
             for _ in range(600):  # the agent started (its pid written), or the host ended
                 if (d / "pid").exists() or self.host.poll() is not None:

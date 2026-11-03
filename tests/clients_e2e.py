@@ -1664,7 +1664,8 @@ def chat_e2e(tok: str, tmp: Path):
                 st = http("POST", "/ui/api/chat/send", {"machine": mid, "id": cid, "text": "default", "model": "", "effort": ""}, ui)[0]
                 back = st == 200 and idle(cid, 4)
                 turn = ([c for c in recorded() if c["chat"] == cid] + [{}, {}])[1]
-                check(back and turn.get("pick") == ["fake-default", "medium"], "chat codex: Default after a choice names the configured model and effort", json.dumps(turn)[:600])
+                check(back and turn.get("pick") == ["fake-default", "medium"], "chat codex: Default after a choice names the configured model and effort",
+                      json.dumps(turn)[:600] + " | events: " + json.dumps(chat(cid)["events"])[-900:] + " | log: " + (home / "companion.log").read_text(errors="replace")[-1500:])
         # Live chats (Claude Code and Codex): a message sent while it works goes into the running turn (the same process
         # takes it); Force stops the step and sends the message after it; Stop interrupts and the process stays.
         sendm = lambda cid, text, mode: http("POST", "/ui/api/chat/send", {"machine": mid, "id": cid, "text": text, "mode": mode}, ui)[0]
