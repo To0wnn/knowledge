@@ -57,6 +57,34 @@ async def shoot() -> None:
         await browser.close()
 
 
+async def shoot_agents() -> None:
+    """The Agents view on the seeded test server of tests/ui_ci.py (made-up pc, chat and task line)."""
+    sys.path.insert(0, str(DEMO.parent / "tests"))
+    import ui_ci
+    with tempfile.TemporaryDirectory() as t:
+        server = ui_ci.start(Path(t))
+        try:
+            ui_ci.seed()
+            head = {"X-Knowledge-Proxy": ui_ci.SECRET, "X-authentik-username": ui_ci.USER}
+            async with async_playwright() as p:
+                browser = await p.chromium.launch()
+                for scheme in ("light", "dark"):
+                    ctx = await browser.new_context(viewport={"width": 1400, "height": 820}, device_scale_factor=2, color_scheme=scheme,
+                                                    extra_http_headers=head)
+                    pg = await ctx.new_page()
+                    await pg.goto(ui_ci.BASE + "/ui#/chats")
+                    await pg.wait_for_selector("#ck-history .ck-chat, #ck-list .ck-item", timeout=20000)
+                    await pg.locator("#ck-history .ck-chat, #ck-list .ck-item-main").first.click()
+                    await pg.wait_for_selector("#ck-canvas .ck-card .ck-msg", timeout=20000)
+                    await pg.wait_for_timeout(1500)
+                    await pg.screenshot(path=str(DEMO / f"agents-{scheme}.png"))
+                    await ctx.close()
+                await browser.close()
+        finally:
+            server.terminate()
+            server.wait()
+
+
 if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as t:
         server = start(Path(t))
@@ -65,4 +93,5 @@ if __name__ == "__main__":
         finally:
             server.terminate()
             server.wait()
-    print("saved", *sorted(DEMO.glob("map-*.png")))
+    asyncio.run(shoot_agents())
+    print("saved", *sorted(DEMO.glob("*.png")))

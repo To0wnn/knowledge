@@ -24,14 +24,15 @@ homelabbers with two or more PCs and two or more agents who want their notes to 
   <img alt="The web UI map: notes grouped into topics, links between them" src="demo/map-light.png">
 </picture>
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="demo/agents-dark.png">
+  <img alt="The Agents view: what needs you on the left with Reply, the open chat with the agent on the right" src="demo/agents-light.png">
+</picture>
+
 <sub>Made-up demo notes from <code>demo/</code>.</sub>
 
-<!-- Screenshots to add (demo/screenshot.py, made-up data only):
-     1. phone Inbox with the "Needs you" column
-     2. a chat on the phone with an approval (Allow once / Allow for this chat / Deny)
-     3. the mission map (Tasks > Flow)
-     4. the memory graph (above)
-     5. the Machines list -->
+<!-- More screenshots (demo/screenshot.py, made-up data only): a chat on the phone with an approval, Tasks > Flow,
+     the Machines list. -->
 
 You can use it in two layers. **Memory** is the server plus one agent: five minutes, nothing else on your PCs.
 **Cockpit** adds the companion on each PC, so tasks run as workers and you can chat and approve from your phone.
