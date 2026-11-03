@@ -165,6 +165,12 @@ def parse(agent: str, line: str, st: dict) -> list:
             # its agent id: SendMessage reaches this subagent (talking to it from its own chat in the page)
             out.append(("sub", " · ".join(x for x in (e.get("subagent_type"), e.get("description")) if x) or "subagent",
                         e["tool_use_id"], "running", {"aid": str(e["task_id"])}))
+        if t == "system" and e.get("subtype") == "task_notification" and e.get("tool_use_id") and e.get("status") in ("completed", "failed", "killed", "stopped") \
+                and e["tool_use_id"] not in st.setdefault("sub_ended", set()):
+            # a background subagent ended (newer Claude Code says so here; older ones in a <task-notification> text); its
+            # tool-use id also closes one started before a companion restart, which this parse state no longer knows
+            st["sub_ended"].add(e["tool_use_id"])
+            out.append(("sub", str(e.get("summary") or "done")[:2000], e["tool_use_id"], "done" if e["status"] == "completed" else "failed"))
         if t == "system" and e.get("subtype") in ("task_progress", "task_notification") and e.get("tool_use_id") in st.get("subs", ()):
             n, last = e.get("usage", {}).get("total_tokens"), st.setdefault("sub_tok", {}).get(e["tool_use_id"], (0, 0))
             # a subagent's tokens so far: its end always, progress at most every 5 s (each step was an event of its own)
@@ -223,7 +229,8 @@ def parse(agent: str, line: str, st: dict) -> list:
                     tid = re.search(r"<tool-use-id>([^<]+)</tool-use-id>", n)  # newer Claude Code; older ones name the task id
                     tid = tid.group(1) if tid else st.get("agent_ids", {}).get((re.search(r"<task-id>([^<]+)</task-id>", n) or [None, ""])[1])
                     # its tool-use id also closes one started in an earlier turn (a resumed session hears of it later)
-                    if tid and (tid in st.get("subs", ()) or re.fullmatch(r"toolu_[\w-]{6,80}", tid)):
+                    if tid and (tid in st.get("subs", ()) or re.fullmatch(r"toolu_[\w-]{6,80}", tid)) and tid not in st.setdefault("sub_ended", set()):
+                        st["sub_ended"].add(tid)  # the same end may come both ways: one block end
                         state = re.search(r"<status>([^<]+)</status>", n)
                         res = re.search(r"<result>(.*?)</result>", n, flags=re.S)
                         out.append(("sub", hand_back(res.group(1) if res else "")[:2000] or "done", tid,
@@ -1905,6 +1912,9 @@ def self_test():
     assert parse("codex", '{"type":"turn.completed","usage":{"input_tokens":900,"cached_input_tokens":800,"output_tokens":50}}', cst) == [usage(total=950)] and cst["result"]
     later = parse("claude", json.dumps({"type": "user", "message": {"content": "<task-notification> <tool-use-id>toolu_0123456789</tool-use-id> <status>completed</status> <result>r</result></task-notification>"}}), {})
     assert later == [("sub", "r", "toolu_0123456789", "done")], later  # started in an earlier turn: still closed
+    sys_end = parse("claude", json.dumps({"type": "system", "subtype": "task_notification", "tool_use_id": "toolu_0123456789", "status": "completed",
+                                          "summary": "Both in"}), {})
+    assert sys_end == [("sub", "Both in", "toolu_0123456789", "done")], sys_end  # newer Claude Code: a system line ends it
     st = {}  # in the background: the launch keeps it running, the task-notification (tool-use-id, or task-id) ends it
     for tu, note in (("tu7", "<tool-use-id>tu7</tool-use-id>"), ("tu8", "<task-id>ag8</task-id>")):
         lines = ['{"type":"assistant","message":{"content":[{"type":"tool_use","id":"%s","name":"Agent","input":{"description":"bg"}}]}}' % tu,
