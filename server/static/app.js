@@ -1609,14 +1609,13 @@ function ckItem(i) {
   if (i.progress) main.append(workerProgress(i.progress));
   if (i.kind === "review") main.append(ckReview(i));
   card.append(main);
-  main.title = i.kind === "chat" || i.kind === "ask" ? "Open this chat" : i.kind === "task" || i.kind === "review" ? "Open its line in the memo" : "How to look at this worker";
+  main.title = i.kind === "chat" || i.kind === "ask" ? "Open this chat" : i.kind === "task" || i.kind === "review" ? "Open its line in the memo" : "Follow this worker";
   main.onclick = () => {
     if (i.kind === "chat") return ckShow(chat || i);
     if (i.kind === "ask") return ckShow(chat);
     if (i.kind === "task") { return openNote(i.path, { find: [i.id.toLowerCase()] }); }
     if (i.kind === "review") return openNote(i.path, { find: [`${i.task.toLowerCase()}-done`] });
-    const more = card.querySelector(".ck-item-open");
-    if (more) more.remove(); else card.append(el("p", "ck-item-open", i.open || "No details yet."));
+    return ckFollow(i); // a worker opens as a chat nobody types in: its transcript, steer, take over
   };
   const acts = el("div", "ck-item-acts"), act = (text, title, fn) => { const b = el("button", "btn small quiet", text); b.type = "button"; b.title = title; b.onclick = fn; acts.append(b); };
   if (i.git) acts.append(ckGitPill(i));
@@ -2077,11 +2076,9 @@ function ckPicker(card) {
   menu.append(sum, panel);
   card.picks.replaceChildren(menu, ...(draft ? [ckDraftFolder(card)] : []));
 }
-// A click outside (or Esc) closes the model panel and the Snooze menu, folds a worker's opened details and drops the
-// mark a link put on an item.
+// A click outside (or Esc) closes the model panel and the Snooze menu and drops the mark a link put on an item.
 function ckUnfold(target) {
   for (const d of document.querySelectorAll("details.ck-model[open], details.ck-snooze[open]")) if (!target || !d.contains(target)) d.open = false;
-  for (const p of document.querySelectorAll(".ck-item-open")) if (!target || !p.closest(".ck-item").contains(target)) p.remove();
   const hit = document.querySelector("#ck-list .ck-item.hit");
   if (hit && (!target || !hit.contains(target))) { hit.classList.remove("hit"); ck.hit = ""; }
 }

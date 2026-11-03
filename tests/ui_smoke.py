@@ -732,9 +732,8 @@ async def agents_pages(browser, devices, secret: str) -> None:
     secs = await pg.evaluate("""[ckSec({kind: 'worker', col: 'done', status: 'finished'}), ckSec({kind: 'review', col: 'needs'})]""")
     check(secs == ["done", "review"], f"Agents: Review is a branch to merge; a finished worker is done {secs}")
     unfold = await pg.evaluate("""(() => { const c = document.querySelector('#ck-list .ck-item'); if (!c) return 'none';
-      c.append(Object.assign(document.createElement('p'), {className: 'ck-item-open'})); c.classList.add('hit');
-      document.body.click(); return [!!c.querySelector('.ck-item-open'), c.classList.contains('hit')]; })()""")
-    check(unfold in ("none", [False, False]), f"Agents: a click beside it folds a row's details and drops its mark {unfold}")
+      c.classList.add('hit'); document.body.click(); return c.classList.contains('hit'); })()""")
+    check(unfold in ("none", False), f"Agents: a click beside a marked item drops its mark {unfold}")
     key = await pg.evaluate("(ck.board.find(i => i.col !== 'open' && i.kind !== 'chat' && i.kind !== 'ask') || {}).key || ''")
     if key:
         await pg.goto(f"{URL}/ui#/inbox/{key}")
