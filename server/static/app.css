@@ -680,6 +680,10 @@ dialog.ck-diff { width: min(980px, calc(100vw - 32px)); }
 .bd-chev { color: var(--muted); transition: transform .15s; }
 .bd-frame.shut .bd-chev { transform: rotate(-90deg); }
 .bd-card { position: absolute; display: grid; border-radius: var(--r-lg); }
+/* text sized against the zoom (--bd-k, mission.js bdMoved): about 14 px on screen from 0.55x to 1.6x, then it scales */
+.bd-card .ck-log { font-size: clamp(9px, calc(14px / var(--bd-k, 1)), 25px); }
+.bd-card .ck-line { font-size: clamp(7.5px, calc(12px / var(--bd-k, 1)), 22px); }
+.bd-card .ck-box textarea { font-size: clamp(9px, calc(14px / var(--bd-k, 1)), 25px); }
 .bd-card.dragging { z-index: 2; opacity: .92; }
 .bd-card.dragging .ck-card { box-shadow: var(--menu-shadow); }
 .bd-card > .ck-card { min-height: 0; height: 100%; }

@@ -533,8 +533,13 @@ function bdFit() { if (bd.lay && !$("bd").hidden) panFit(bd, $("bd-stage"), bd.l
 // After every pan or zoom: zoomed-out cards show their summary, the overview follows, and cards that came on screen
 // load their log now instead of at the next poll.
 let bdLoadTimer = 0;
+let bdFontFrame = 0;
 function bdMoved() {
   $("bd").classList.toggle("far", bd.view.k < BD.far);
+  // the cards' text keeps about the same size on screen while zooming (within bounds): one variable, once a frame
+  if (!bdFontFrame && Math.abs((bd.fontK || 0) - bd.view.k) > bd.view.k * 0.03) bdFontFrame = requestAnimationFrame(() => {
+    bdFontFrame = 0; bd.fontK = bd.view.k; $("bd").style.setProperty("--bd-k", String(bd.view.k));
+  });
   bdMiniView();
   clearTimeout(bdLoadTimer);
   bdLoadTimer = setTimeout(() => { for (const c of bdLive()) if (!c.loaded) { c.loaded = true; ckPoll(c); } }, 250);

@@ -86,7 +86,11 @@ function applyRoute() {
     const d = ck.cards.get(ckKey(CK_DRAFT));
     ck.view = ckKey(d && !ck.draftFor ? d.meta : ckDraft(ck.draftFor || "").meta); ck.draftFor = "";
   }
-  else if (r.view === "chats") { const c = ck.chats.find((x) => x.id === r.arg || ckKey(x) === r.arg), hit = !c && ckFindWorker(r.arg); ck.view = c ? ckKey(c) : hit ? ckKey(ckWorkerCard(hit.m, hit.w).meta) : r.arg; }
+  else if (r.view === "chats") {
+    const c = ck.chats.find((x) => x.id === r.arg || ckKey(x) === r.arg), hit = !c && ckFindWorker(r.arg);
+    ck.view = c ? ckKey(c) : hit ? ckKey(ckWorkerCard(hit.m, hit.w).meta) : r.arg;
+    if (/^[0-9a-f]{12}$/.test(r.arg || "")) store.set("kn_last_chat", r.arg); // the list opens it again next time
+  }
   ckLayout();
   if (agents) {
     ckList();

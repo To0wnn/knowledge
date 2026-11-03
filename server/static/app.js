@@ -1414,6 +1414,9 @@ async function ckSummary() {
     if (!c) ckDrop(k);
     else card.meta = { ...card.meta, ...c };
   }
+  const last = store.get("kn_last_chat"); // the list keeps the chat last open (until its × closes it); a phone starts on the list
+  if (!ck.view && shellRoute.view === "chats" && !shellRoute.arg && !bdOn() && matchMedia("(min-width: 700px)").matches
+      && last && ck.chats.some((x) => x.id === last && !x.closed)) return go(`#/chats/${encodeURIComponent(last)}`, true);
   if (ck.view && !ck.cards.has(ck.view)) { // a route's chat id (or an older pc/id key) once the chats are known
     const c = ck.chats.find((x) => x.id === ck.view || ckKey(x) === ck.view), hit = ckFindWorker(ck.view);
     if (c) ck.view = ckKey(ckCard(c).meta);
@@ -1818,7 +1821,7 @@ function ckCard(meta) {
   const subbar = el("div", "ck-subbar"); subbar.hidden = true; subbar.setAttribute("aria-label", "Subagents running now");
   root.append(head, log, subbar, asks, form);
   const card = { meta: { ...meta }, root, name, where, git, state, log, asks, form, input, stop, send, note, picks, mark, close, tok, subbar, queueBtn, forceBtn, more, branch, filesBox: files, files: [], mode: "", pick: null, after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
-  x.onclick = () => ckShow(null);
+  x.onclick = () => { store.set("kn_last_chat", ""); ckShow(null); }; // closed on purpose: the list stays empty
   open.onclick = () => ckShow(card.meta);
   input.addEventListener("keydown", (e) => {
     // Enter is a new line; Ctrl/Cmd+Enter presses the button (Send, Queue or Force)
@@ -1881,7 +1884,11 @@ function ckCard(meta) {
     try {
       await api("/ui/api/chat/close", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, closed }) });
       card.meta.closed = closed; ck.summaryAt = 0;
-      if (closed) { toast("Closed: under Closed in the list; a new message opens it again", false); ckShow(null); } else ckPaint(card);
+      if (closed) {
+        toast("Closed: under Closed in the list; a new message opens it again", false);
+        if (store.get("kn_last_chat") === card.meta.id) store.set("kn_last_chat", "");
+        if (bdOn()) bdRender(); else ckShow(null); // side by side: only its card goes
+      } else ckPaint(card);
       ckTick();
     } catch (err) { note.className = "ck-note bad"; note.textContent = err.message; }
   };
