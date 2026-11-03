@@ -122,9 +122,9 @@ body.admin-page .client-tabs { top: 0; } /* /setup has no page header */
   <!--PRIVATE--><h2>Agents and chats in the web UI</h2>
   <p><b>Agents</b> is one list of what needs you, what runs and your chats, with the open chat beside it (on a phone the list first).</p>
   <ul class="tight">
-    <li><b>Needs you</b>: each row says why (answered, asks approval, failed). Allow, Deny, Reply, Snooze or Dismiss right on the row.</li>
+    <li><b>Needs you</b>: each row says why (answered, asks approval, failed). Allow, Deny or Reply right on the row; Snooze, Dismiss and Archive under its ⋯ menu. Its subagents fold to one line "N running".</li>
     <li><b>Review</b>: a branch with commits to merge: View diff, Merge or Reject.</li>
-    <li><b>Working</b>, <b>Done today</b> and <b>Earlier</b> (your other chats; Closed ones behind the filter).</li>
+    <li><b>Working</b>, <b>Done today</b> and <b>Earlier</b> (your other chats; archived ones behind the Archived filter).</li>
   </ul>
   <h3>In a chat</h3>
   <ul class="tight">
@@ -132,8 +132,8 @@ body.admin-page .client-tabs { top: 0; } /* /setup has no page header */
     <li>The chip under the box picks the model and its effort; the default for new chats is under Settings.</li>
     <li>Paperclip, paste or drop to attach files (5 of 10 MB); the microphone turns speech into text (https only).</li>
     <li>"Own branch" on a new chat: the agent works in a git worktree of its own (branch <code>chat/&lt;id&gt;</code>); you merge it.</li>
-    <li>Running subagents and background shells show above the box; finished subagents fold away under the chat in the list.</li>
-    <li>Close takes a chat off the list; a new message opens it again. Side by side shows several chats at once.</li>
+    <li>Running subagents and background shells show above the box (on a phone folded to "N running ▸"); finished subagents fold away under the chat in the list.</li>
+    <li>Archive takes a chat off the list (Open again brings it back, and so does a new message); × only closes the pane. Side by side shows several chats at once.</li>
   </ul>
   <div class="table-wrap"><table>
     <thead><tr><th>Key</th><th>Does</th></tr></thead>
@@ -146,7 +146,7 @@ body.admin-page .client-tabs { top: 0; } /* /setup has no page header */
       <tr><td><kbd>Ctrl</kbd>+<kbd>K</kbd></td><td>Search notes, chats and tasks</td></tr>
     </tbody>
   </table></div>
-  <p class="muted">On a Mac use <kbd>Cmd</kbd> for <kbd>Ctrl</kbd>. Notifications in this browser: Settings. Details: <code>docs/chats.md</code>.</p><!--/PRIVATE-->
+  <p class="muted">On a Mac use <kbd>Cmd</kbd> for <kbd>Ctrl</kbd>, except Speak: that is <kbd>Ctrl</kbd>+<kbd>Space</kbd> on every system (<kbd>Cmd</kbd>+<kbd>Space</kbd> is Spotlight). Notifications in this browser: Settings. Details: <code>docs/chats.md</code>.</p><!--/PRIVATE-->
 
   <h2>Which project does my session get?</h2>
   <p>At every start the server picks the project whose memory and context the session gets:</p>

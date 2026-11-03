@@ -1391,13 +1391,14 @@ async function ckTick() {
 }
 async function ckSummary() {
   ck.summaryAt = Date.now();
-  const [ms, cs, bd] = await Promise.all([api("/ui/api/machines"), api("/ui/api/chats"), api("/ui/api/board").catch(() => ({ items: [] }))]);
+  const [ms, cs, bd] = await Promise.all([api("/ui/api/machines"), api("/ui/api/chats"), api("/ui/api/board").catch(() => null)]);
   ck.machines = ms.machines.filter((m) => m.own && !m.old); ck.ready = true; ck.error = "";
   for (const m of ck.machines) for (const x of m.actions || []) { // a Merge queued from a card: say how it went on the pc
     const what = ck.waits.get(x.id);
     if (what && (x.status === "done" || x.status === "failed")) { ck.waits.delete(x.id); toast(`${what}: ${x.result || x.status}`, x.status === "failed"); }
   }
-  ck.chats = cs.chats; ck.board = bd.items; ck.boardAt = Date.now(); inboxCount(ck.board);
+  ck.chats = cs.chats;
+  if (bd) { ck.board = bd.items; ck.boardAt = Date.now(); inboxCount(ck.board); } // a failed board keeps the last one: an empty one would notify it all again
   const now = Date.now() / 1000;
   let live = ck.chats.filter((c) => ckBusy(c.status)).length;
   const worst = {}; // per agent its fullest usage window over the pcs
@@ -1444,9 +1445,10 @@ async function ckSummary() {
   ckList(); ckLayout();
 }
 // The Agents view's list, grouped by what you have to do: Needs you (each card says why), Review (branches to merge,
-// finished workers), Working, Done today (folded to one line), then the earlier chats (the filter and Closed narrow
-// those). A dot and a word say a chat's state (not colour alone). Every card has its actions right there.
-const CK_STATE = { needs: "needs you", running: "running", idle: "idle", closed: "closed" };
+// finished workers), Working, Done today (folded to one line), then the earlier chats (the filter and Archived narrow
+// those; the API calls an archived chat closed). A dot and a word say a chat's state (not colour alone). Every card
+// has its actions right there.
+const CK_STATE = { needs: "needs you", running: "running", idle: "idle", closed: "archived" };
 const CK_SECS = [["needs", "Needs you"], ["review", "Review"], ["running", "Working"], ["done", "Done today"]];
 const ckSec = (i) => (i.kind === "review" ? "review" : i.col); // Review: a branch with work to merge; a finished worker is done
 function ckState(c) { // an approval waiting in a running turn needs you too
@@ -1550,7 +1552,7 @@ function ckList() {
   }
   $("ck-earlier-n").textContent = rows.length;
   if (!hist.childNodes.length) hist.append(!ck.chats.length && pcs ? el("li", null, emptyState("No chats yet: talk to an agent on one of your pcs.", actionButton("New chat", () => $("ck-new").click(), "btn small primary")))
-    : el("li", "muted ck-none", !ck.chats.length ? "No chats yet." : words.length ? "No chat matches." : closed ? "No closed chats." : "No earlier chats here."));
+    : el("li", "muted ck-none", !ck.chats.length ? "No chats yet." : words.length ? "No chat matches." : closed ? "No archived chats." : "No earlier chats here."));
   if (had) side.querySelector(`[data-row="${CSS.escape(had)}"]`)?.focus({ preventScroll: true }); // the refresh keeps your place
   const n = items.filter((i) => i.col === "needs").length, asks = items.filter((i) => i.kind === "ask").length;
   const said = (n ? `${n} item${n > 1 ? "s" : ""} need${n > 1 ? "" : "s"} you` : "Nothing needs you") + (asks ? `, ${asks} approval${asks > 1 ? "s" : ""} waiting` : "");
@@ -1668,7 +1670,8 @@ function ckItem(i) {
     if (i.kind === "review") return openNote(i.path, { find: [`${i.task.toLowerCase()}-done`] });
     return ckFollow(i); // a worker opens as a chat nobody types in: its transcript, steer, take over
   };
-  const acts = el("div", "ck-item-acts"), act = (text, title, fn) => { const b = el("button", "btn small quiet", text); b.type = "button"; b.title = title; b.onclick = fn; acts.append(b); };
+  const acts = el("div", "ck-item-acts"), act = (text, title, fn, cls = "btn small quiet") => { const b = el("button", cls, text); b.type = "button"; b.title = title; b.onclick = fn; acts.append(b); return b; };
+  const later = []; // Snooze, Dismiss and Archive: behind one ⋯ menu, so the row's answer stands out
   if (i.git) acts.append(ckGitPill(i));
   if (i.approve) act("Approve", "Let this task start", () => ckDo("/ui/api/task/approve", { project: i.project, id: i.id }));
   if (i.kind === "ask") { // the board shows a short title: Allow only when that title is the whole request
@@ -1688,31 +1691,44 @@ function ckItem(i) {
     act("Reject", "Keep the branch, take the card off the list; optionally send it back to the agent", () => ckReject(card, i));
   }
   if (i.result) act("Open memo", "Read the whole line in its memo; remove it there (or under Tasks) once read", () => main.click());
-  if (i.kind === "chat" && i.col !== "running") act("Close", "Close this chat: off the list (under Earlier, Closed); a new message opens it again",
-    () => ckDo("/ui/api/chat/close", { machine: i.machine, id: i.id, closed: true }));
-  if (i.kind === "chat" && i.col === "needs") act("Reply", "Answer in one line without opening the chat (Enter sends, Esc closes)", () => ckReply(card, i));
+  if (i.kind === "chat" && i.col === "needs") act("Reply", "Answer in one line without opening the chat (Enter sends, Esc closes)", () => ckReply(card, i), "btn small primary");
   if (ckSec(i) === "needs" && i.kind !== "ask") { // an approval is answered, not put off: its turn waits on it
-    acts.append(ckSnooze(i));
-    act("Dismiss", "Take it off the list until it changes again", () => ckDo("/ui/api/board/dismiss", { key: i.key, sig: i.sig }));
+    // Off the list for a while: it comes back at `until` (Unix seconds), or sooner when it changes.
+    const tomorrow = () => { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(8, 0, 0, 0); return d.getTime() / 1000; };
+    for (const [text, until] of [["Snooze 1 hour", () => Date.now() / 1000 + 3600], ["Snooze until tomorrow 08:00", tomorrow]])
+      later.push([text, "Take it off the list for a while", () => ckDo("/ui/api/board/dismiss", { key: i.key, sig: i.sig, until: Math.round(until()) })]);
+    later.push(["Dismiss", "Take it off the list until it changes again", () => ckDo("/ui/api/board/dismiss", { key: i.key, sig: i.sig })]);
   }
+  if (i.kind === "chat" && i.col !== "running") later.push(["Archive", "Off the list (under Earlier, Archived); a new message opens it again",
+    () => ckDo("/ui/api/chat/close", { machine: i.machine, id: i.id, closed: true })]);
   if (i.kind === "chat" && i.col === "running") act("Stop", "Stop this turn", () => ckDo("/ui/api/chat/stop", { machine: i.machine, id: i.id }));
+  if (later.length) acts.append(ckMore(later, i.title));
   if (acts.childNodes.length) card.append(acts);
-  if (i.kind === "chat" && chat?.sub_list?.length) { const subs = el("ol", "ck-history ck-subs"); subs.append(...ckSubRows(chat)); card.append(subs); }
+  if (i.kind === "chat" && chat?.sub_list?.length) card.append(ckItemSubs(chat));
   return card;
 }
-// Off the list for a while: it comes back at `until` (Unix seconds), or sooner when it changes.
-function ckSnooze(i) {
-  const menu = el("details", "menu ck-snooze"), sum = el("summary", "btn small quiet", "Snooze"), list = el("div", "menu-list");
-  sum.title = "Take it off the list for a while";
-  const tomorrow = () => { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(8, 0, 0, 0); return d.getTime() / 1000; };
-  for (const [text, until] of [["1 hour", () => Date.now() / 1000 + 3600], ["Until tomorrow 08:00", tomorrow]]) {
-    const b = el("button", null, text); b.type = "button";
-    b.onclick = () => { menu.open = false; ckDo("/ui/api/board/dismiss", { key: i.key, sig: i.sig, until: Math.round(until()) }); };
-    list.append(b);
+// A row's less frequent actions in a small menu (⋯); Esc closes it and gives the focus back.
+function ckMore(list, what) {
+  const menu = el("details", "menu ck-snooze ck-rowmore"), sum = el("summary", "btn small quiet", "⋯"), box = el("div", "menu-list");
+  sum.title = list.map(([t]) => t.replace(/ .*/, "")).filter((t, j, a) => a.indexOf(t) === j).join(", "); sum.setAttribute("aria-label", `More actions for ${what}`);
+  for (const [text, title, fn] of list) {
+    const b = el("button", null, text); b.type = "button"; b.title = title;
+    b.onclick = () => { menu.open = false; fn(); };
+    box.append(b);
   }
   menu.onkeydown = (e) => { if (e.key === "Escape") { e.stopPropagation(); menu.open = false; sum.focus(); } };
-  menu.append(sum, list);
+  menu.append(sum, box);
   return menu;
+}
+// A row's subagents in the list: folded to one line "N running" that unfolds (six of them made a phone row a page tall).
+function ckItemSubs(chat) {
+  const subs = el("ol", "ck-history ck-subs"), k = ckKey(chat), n = chat.sub_list.filter((s) => s.status === "running").length;
+  if (!n) { subs.append(...ckSubRows(chat)); return subs; } // only finished ones: ckSubRows folds them to one line already
+  const open = !!ck.itemSubsOpen?.has(k), li = el("li", "ck-subrow"), b = el("button", "btn small quiet ck-subfold", `${n} subagent${n > 1 ? "s" : ""} running ${open ? "▾" : "▸"}`);
+  b.type = "button"; b.dataset.row = `subs:${k}`; b.setAttribute("aria-expanded", String(open));
+  b.onclick = (e) => { e.stopPropagation(); ck.itemSubsOpen = ck.itemSubsOpen || new Set(); ck.itemSubsOpen[open ? "delete" : "add"](k); ckList(); };
+  li.append(b); subs.append(li, ...(open ? ckSubRows(chat) : []));
+  return subs;
 }
 // One line to a chat's agent from the list: Enter sends it as the chat's next message, Esc closes without sending.
 function ckReply(card, i) {
@@ -1818,7 +1834,7 @@ function ckCard(meta) {
   title.append(name, where);
   const git = el("span", "ck-git-slot"), open = el("button", "btn icon small quiet ck-x bd-only", "↗"); // on the board: the full chat
   open.type = "button"; open.title = "Open the full chat"; open.setAttribute("aria-label", "Open the full chat");
-  const mark = el("span", "ck-mark", AGENT_MARK[meta.agent] || "+"), close = el("button", "btn small quiet ck-close", "Close");
+  const mark = el("span", "ck-mark", AGENT_MARK[meta.agent] || "+"), close = el("button", "btn small quiet ck-close", "Archive");
   const tok = el("span", "chip ck-tok"); tok.hidden = true;
   close.type = "button"; close.hidden = true;
   const headMeta = el("div", "ck-meta"); headMeta.append(git, tok); // its own line on a phone; inline on a wide screen
@@ -1927,13 +1943,13 @@ function ckCard(meta) {
     } catch (err) { note.className = "ck-note bad"; note.textContent = err.message; }
     ckPaint(card); await ckPoll(card); clearTimeout(ck.timer); ck.timer = setTimeout(ckTick, 1500);
   };
-  close.onclick = async () => { // off the board and the list (Closed); a new message opens it again
+  close.onclick = async () => { // archive: off the board and the list (Archived); a new message opens it again
     const closed = !card.meta.closed;
     try {
       await api("/ui/api/chat/close", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, closed }) });
       card.meta.closed = closed; ck.summaryAt = 0;
       if (closed) {
-        toast("Closed: under Closed in the list; a new message opens it again", false);
+        toast("Archived: under Archived in the list; a new message opens it again", false);
         if (store.get("kn_last_chat") === card.meta.id) store.set("kn_last_chat", "");
         if (bdOn()) bdRender(); else ckShow(null); // side by side: only its card goes
       } else ckPaint(card);
@@ -2206,6 +2222,8 @@ async function ckStart(card, text) { // the draft's first message: make the chat
     ckTick();
   } finally { card.starting = false; }
 }
+// A chat without a title yet (its first turn still running) goes by its first message.
+const ckTitle = (m, card) => m.title || card?.log.querySelector(".ck-msg.user")?.textContent.trim().slice(0, 120) || "New chat";
 function ckPaint(card) {
   if (card.worker) return ckWorkerPaint(card);
   if (card.meta.parent) return; // a subagent's chat: painted by its poll (ckSubPoll)
@@ -2225,9 +2243,9 @@ function ckPaint(card) {
   card.tok.hidden = !m.used && !m.ctx; // the conversation's tokens: its context now and all it used
   card.tok.textContent = [m.ctx && `${ckNum(m.ctx)} context`, m.used && `${ckNum(m.used)} used`].filter(Boolean).join(" · ");
   card.tok.title = "Context: what the agent sent for its last step. Used: every token of this chat so far, cache reads included.";
-  card.close.hidden = busy; card.close.textContent = m.closed ? "Open again" : "Close";
-  card.close.title = m.closed ? "Back in the list" : "Off the list (under Earlier, Closed); a new message opens it again";
-  card.name.textContent = m.title || "New chat";
+  card.close.hidden = busy; card.close.textContent = m.closed ? "Open again" : "Archive";
+  card.close.title = m.closed ? "Back in the list" : "Off the list (under Earlier, Archived); a new message opens it again";
+  card.name.textContent = ckTitle(m, card);
   card.branch.hidden = true;
   card.where.textContent = `${AGENT_NAME[m.agent] || m.agent} · ${m.label} · ${ckShort(m.folder)}${m.project ? ` (${m.project})` : ""}${m.worktree ? ` · branch chat/${m.id}` : ""}`;
   card.where.title = m.folder || "";
@@ -2305,16 +2323,20 @@ async function ckUpload(machine, files) {
 }
 // Speaking a message: the browser records (MediaRecorder; needs https), the server passes it to its speech-to-text
 // server and the text goes into the box at the cursor; nothing is sent by itself. Click starts and stops; held down
-// longer than a moment, letting go stops (push to talk).
+// longer than a moment, letting go stops (push to talk). While the browser asks for the microphone (the first time a
+// prompt) presses are ignored, so no second recorder starts; a release in that time stops right after the start.
 const ckMicOk = () => !!(me.stt && window.MediaRecorder && navigator.mediaDevices?.getUserMedia);
 function ckMic(card, btn) {
-  let rec = null, held = 0, timer = null;
+  let rec = null, held = 0, timer = null, starting = false, stopSoon = false;
   const label = () => { const s = Math.round((Date.now() - rec.t0) / 1000); btn.textContent = `● ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; if (s >= 300) stop(); };
   const say = (msg) => { card.note.className = "ck-note bad"; card.note.textContent = msg; };
   async function start() {
+    if (starting || rec) return;
     let stream;
+    starting = true; stopSoon = false;
     try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
     catch (e) { return say(`Microphone: ${e.name === "NotAllowedError" ? "not allowed (site settings, or the server's Permissions-Policy: docs/voice.md)" : e.message}`); }
+    finally { starting = false; }
     rec = new MediaRecorder(stream); rec.t0 = Date.now(); const parts = [];
     rec.ondataavailable = (e) => e.data.size && parts.push(e.data);
     rec.onstop = async () => {
@@ -2333,11 +2355,12 @@ function ckMic(card, btn) {
       btn.innerHTML = CK_ICON.mic; btn.disabled = false; card.input.focus();
     };
     rec.start(); btn.classList.add("rec"); label(); timer = setInterval(label, 500);
+    if (stopSoon) stop();
   }
-  const stop = () => rec && rec.state === "recording" && rec.stop();
-  btn.toggle = () => (rec ? stop() : start());
-  btn.addEventListener("pointerdown", (e) => { e.preventDefault(); if (rec) return stop(); held = Date.now(); start(); });
-  btn.addEventListener("pointerup", () => { if (rec && held && Date.now() - held > 700) stop(); held = 0; });
+  const stop = () => { if (starting) stopSoon = true; else if (rec && rec.state === "recording") rec.stop(); };
+  btn.toggle = () => (starting ? undefined : rec ? stop() : start());
+  btn.addEventListener("pointerdown", (e) => { e.preventDefault(); if (starting) return; if (rec) return stop(); held = Date.now(); start(); });
+  btn.addEventListener("pointerup", () => { if ((rec || starting) && held && Date.now() - held > 700) stop(); held = 0; });
   btn.addEventListener("click", (e) => { if (e.detail === 0) btn.toggle(); }); // the keyboard (Enter/Space on the button)
 }
 // A message of the owner: its text, each attachment a thumbnail (images) or a download link.
@@ -2412,7 +2435,9 @@ function ckSubsEnded(card) {
   ckSubbar(card);
 }
 const ckNum = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e4 ? `${Math.round(n / 1e3)}k` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n));
-// The subagents running now, pinned above the box: the log scrolls on, these stay; a click opens its block.
+// The subagents running now, pinned above the box: the log scrolls on, these stay; a click opens its block. Folded so
+// the log keeps the room: a phone shows one line "N running ▸", a wide screen two lines and "+N" for the rest.
+const ckPhone = () => matchMedia("(max-width: 699.98px)").matches;
 function ckSubbar(card) {
   const run = [...(card.subs || new Map()).values()].filter((b) => b.status === "running");
   // the agent's shells left running in the background (Claude Code), named by what they run
@@ -2420,14 +2445,34 @@ function ckSubbar(card) {
     const x = el("span", "ck-subpin ck-shellpin"); x.append(el("span", "ck-dot live"), el("span", "ck-sub-label", `shell: ${s.label}`));
     x.title = "A shell the agent left running in the background"; return x;
   });
-  card.subbar.hidden = !run.length && !shells.length;
-  card.subbar.replaceChildren(...shells, ...run.map((b) => {
+  const pins = [...shells, ...run.map((b) => {
     const x = el("button", "ck-subpin"); x.type = "button";
     x.append(el("span", "ck-dot live"), el("span", "ck-sub-label", b.label.textContent), ...(b.tokens ? [el("small", null, `${ckNum(b.tokens)} tokens`)] : []));
     x.title = "Open this subagent's block";
     x.onclick = () => { b.d.open = true; b.d.scrollIntoView({ block: "nearest", behavior: "smooth" }); };
     return x;
-  }));
+  })];
+  const n = pins.length, open = !!card.subbarOpen, phone = ckPhone(), had = document.activeElement?.classList.contains("ck-subfold") && card.subbar.contains(document.activeElement);
+  card.subbar.hidden = !n;
+  const fold = el("button", "btn small quiet ck-subfold"); fold.type = "button"; fold.setAttribute("aria-expanded", String(open));
+  fold.title = pins.map((x) => x.querySelector(".ck-sub-label").textContent).join("\n");
+  fold.onclick = () => { card.subbarOpen = !open; ckSubbar(card); };
+  if (phone) { fold.textContent = `${n} running ${open ? "▾" : "▸"}`; for (const x of pins) x.hidden = !open; card.subbar.replaceChildren(fold, ...pins); }
+  else {
+    card.subbar.replaceChildren(...pins);
+    if (open) { fold.textContent = "Show less"; card.subbar.append(fold); }
+    else if (n > 1 && card.subbar.offsetParent) { // what wraps past the second line goes behind +N
+      const tops = [...new Set(pins.map((x) => x.offsetTop))].sort((a, b) => a - b), cut = tops[1] ?? tops[0];
+      let shown = pins.filter((x) => x.offsetTop <= cut).length;
+      if (shown < n) {
+        for (const x of pins.slice(shown)) x.hidden = true;
+        fold.textContent = `+${n - shown}`; card.subbar.append(fold);
+        while (shown > 1 && fold.offsetTop > cut) { pins[--shown].hidden = true; fold.textContent = `+${n - shown}`; } // +N must fit too
+      }
+    }
+  }
+  card.subbar.classList.toggle("open", open);
+  if (had && fold.isConnected) fold.focus({ preventScroll: true });
 }
 
 // Follow a worker (#/chats/worker/<project>/<ID>): a worker is a chat nobody types in. Its card is a chat card whose
