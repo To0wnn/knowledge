@@ -74,7 +74,11 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   through a token with the switch on: remote actions, new chats, messages, approvals and diffs are refused with the
   same message, and its chats and workers drop out of the Agents view (forgetting the machine still works). Memory
   and the MCP tools are untouched, and so is "pak <ID>" in a session at the pc itself. A person none of whose tokens
-  has it on gets `me.agents` false and sees only the knowledge part of the web UI.
+  has it on gets `me.agents` false and sees only the knowledge part of the web UI. The companion goes quiet when it
+  hears `"agents": false` (or such a 403): one line in its activity log ("Remote control is off for this pc's token
+  on the server"), the chats it runs end (a running turn stops, live agents end cleanly, a message still fetching
+  its files is dropped), and its polls go on without further errors; when the server says on again it logs that
+  once and the next message resumes the chat. Running workers keep running; no new ones start.
 
 ## YOLO safety without blocking
 

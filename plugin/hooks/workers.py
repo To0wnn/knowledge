@@ -53,10 +53,10 @@ def git(cwd, *args, env=None, check=False, timeout=60) -> subprocess.CompletedPr
                           env={**base, **(env or {})}, check=check, stdin=subprocess.DEVNULL, timeout=timeout)
 
 
-def worktree(folder: str, tid: str, project: str = "", prefix: str = "task") -> dict:
+def worktree(folder: str, tid: str, project: str = "", prefix: str = "task", make: bool = True) -> dict:
     """Where a worker for task `tid` works: {cwd, worktree, branch, repo, base, base_branch} with its own worktree on branch
     task/<base ID> when the project folder is in a git repository (an existing one is reused: a hand-over goes on
-    there), else {cwd: folder}."""
+    there), else {cwd: folder}. make=False only looks: {} when that worktree does not exist (a diff, the git pill)."""
     top = git(folder, "rev-parse", "--show-toplevel")
     if top.returncode or not shutil.which("git"):
         return {"cwd": folder}
@@ -66,6 +66,8 @@ def worktree(folder: str, tid: str, project: str = "", prefix: str = "task") -> 
     # branch (checked out already) instead of letting both commit on it
     tag = hashlib.sha256(f"{repo.resolve()}\n{project}".encode()).hexdigest()[:6]
     branch, wt = f"{prefix}/{safe(bid)}", WORKTREES / f"{safe(repo.name)}-{tag}-{'' if prefix == 'task' else prefix + '-'}{safe(bid)}"
+    if not make:
+        return {"cwd": str(wt / Path(os.path.relpath(Path(folder).resolve(), repo.resolve()))), "worktree": str(wt)} if (wt / ".git").exists() else {}
     on = git(repo, "symbolic-ref", "--short", "-q", "HEAD").stdout.strip()  # what a review merges into (a new worktree starts from it)
     conf = config_hash(repo)  # before the worker runs: a merge refuses a config changed since
     if not (wt / ".git").exists():

@@ -969,6 +969,15 @@ def worker_follow_contract(tmp, ck, fr, raw, er, et):
     assert "steer" not in json.loads(m("GET", "/machine/chats")[1]), "handed out once"
     send([{"kind": "text", "text": "new run"}], started=2000.0)
     assert [e["text"] for e in json.loads(next((tmp / "chats" / mid / "workers").glob("*.json")).read_text())["events"]] == ["new run"]
+    # Follow on an ended worker whose end never came: its companion is asked (it sends the log's tail once); with it, no more.
+    report({**wk, "status": "finished", "started": 2000.0})
+    fp.unlink(missing_ok=True)
+    got = json.loads(view()[2])
+    assert not got["following"] and json.loads(m("GET", "/machine/chats")[1]).get("follow") == [key], "an ended worker without its end is asked for"
+    send([{"kind": "text", "text": "tail"}], started=2000.0, status="finished", done=True)
+    fp.unlink(missing_ok=True)
+    view()
+    assert "follow" not in json.loads(m("GET", "/machine/chats")[1]), "its end is here: nothing more to ask"
     # Take over: queued as a machine action (owner only), the companion stops the worker and adopts it as a chat.
     path = "garden-memory/project_tasks.md"
     assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string":
@@ -1305,6 +1314,15 @@ def board_contract(tmp, ck, fr, raw, er, et):
         http("POST", "/machine/chats/diff", {"id": rid, "text": f"@@ -1 +1 @@\n{sign}Sup3rSecret99\n"}, token=fr, headers=pc)
         d = json.loads(ui(f"/ui/api/git/diff?machine={mid}&id={rid}")[2])
         assert d["text"] == "" and "withheld" in d["error"], (sign, d)
+    # An "Own branch" chat: its pill is its worktree's (by chat id, from the report), its diff request names the chat.
+    wid = json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/x/garden", "worktree": True})[2])["chat"]["id"]
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": wid, "text": "on a branch"})[0] == 200
+    wpill = {"branch": f"chat/{wid}", "base": "main", "changed": 1, "ahead": 0, "behind": 0}
+    assert http("POST", "/machine/report", {**rep, "chats": {wid: wpill, "../x": wpill}}, token=fr, headers=pc)[0] == 200
+    cards = {i["id"]: i for i in board() if i["kind"] == "chat"}
+    assert cards[wid]["git"] == wpill and cards[cids[2]]["git"]["branch"] == "task/KN-12", cards.get(wid)
+    rid = json.loads(ui("/ui/api/git/diff", {"machine": mid, "chat": wid})[2])["id"]
+    assert json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["diffs"] == [{"id": rid, "folder": "/home/x/garden", "chat": wid}]
     # Every companion poll reads diffs.json; it is written only when a request waits or expired.
     dq = tmp / "chats" / mid / "diffs.json"
     before = dq.stat().st_mtime_ns

@@ -103,7 +103,9 @@ it (`GET /ui/api/worker?machine=&worker=<project>/<ID>&after=<n>`), as for chats
   them into chat events with the chats' own parsers (Claude stream-json, Codex `--json`; agy `-p` prints plain text,
   its lines are its answer): text, one line per tool call or refused call, info. It posts them on
   `POST /machine/chats/worker` (masked on the pc, known secrets masked again on the server). A worker nobody follows
-  sends nothing while it runs; when it ends, its companion sends its last 200 events once. Only the token that
+  sends nothing while it runs; when it ends, its companion sends its tail once (the last 2000 lines of its log, within
+  4 MB, as at most 2000 events). Follow on an ended worker whose end the server does not have (it ended before the
+  companion sent tails, or that send failed) asks its companion for it the same way, once. Only the token that
   machine's companion reports with may write. One transcript per worker under `chats/<machine>/workers/`, at most
   2000 events and 400 kB (the oldest go), 40 per machine, removed with the worker's record (30 days) or the machine.
   A new run of the same task starts a new transcript.

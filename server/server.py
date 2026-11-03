@@ -5401,7 +5401,7 @@ def board_items() -> list[dict]:
     rows = [r for r in machine_rows() if r["own"] and not r.get("old")]
     for r in rows:
         comp, base = r.get("companion") or {}, {"machine": r["id"], "label": r["label"], "online": r["online"]}
-        git = {f["path"]: f.get("git") for f in (comp.get("folders") or {}).get("linked", [])}
+        git, chat_git = {f["path"]: f.get("git") for f in (comp.get("folders") or {}).get("linked", [])}, comp.get("chats") or {}
         d = CHATS_DIR / r["id"]
         for f in (d.glob(CHAT_GLOB) if d.is_dir() else []):
             if not (c := read_json(f, None)):
@@ -5411,7 +5411,7 @@ def board_items() -> list[dict]:
                 items.append({**base, "kind": "chat", "col": col, "id": c["id"], "agent": c.get("agent"), "project": c.get("project"),
                               "key": f"chat:{r['id']}/{c['id']}", "sig": str(c.get("next", 0)),
                               "title": c.get("title") or "New chat", "folder": c.get("folder"), "at": c.get("updated") or 0,
-                              "line": line, "git": git.get(c.get("folder")), "outcome": chat_outcome(c),
+                              "line": line, "git": chat_git.get(c["id"]) if c.get("worktree") else git.get(c.get("folder")), "outcome": chat_outcome(c),
                               "subs": sum(1 for s in (c.get("subs") or {}).values() if s == "running")})
             for a in asks_open(c, now):  # one Needs-you item per open approval, answered right there
                 items.append({**base, "kind": "ask", "col": "needs", "id": a["id"], "chat": c["id"], "agent": c.get("agent"),
@@ -5846,7 +5846,8 @@ async def ui_git_diff(request: Request):
                 raise ValueError("unknown diff request")
             return JSONResponse({k: d.get(k) for k in ("status", "text", "error")})
         if b.get("chat"):
-            target = {"folder": (read_json(chat_file(mid, str(b["chat"])), None) or {}).get("folder")}
+            c = read_json(chat_file(mid, str(b["chat"])), None) or {}
+            target = {"folder": c.get("folder"), **({"chat": c["id"]} if c.get("worktree") else {})}  # its companion diffs that chat's worktree
         elif re.fullmatch(r"\w[\w.-]{0,79}/\w[\w.-]{0,79}", str(b.get("worker", ""))):
             target = {"worker": b["worker"]}
         else:
@@ -6032,7 +6033,7 @@ async def machine_chats(request: Request):
             d.pop(k)
         for k, v in d.items():
             if v.get("status") == "waiting" and dev["name"] in v.get("tokens", []):
-                diffs.append({"id": k, **{x: v[x] for x in ("folder", "worker") if x in v}})
+                diffs.append({"id": k, **{x: v[x] for x in ("folder", "worker", "chat") if x in v}})
                 v["status"] = "sent"
     dq = q_path.parent / "diffs.json"
     # every companion poll passes here: read only, and write (under the shared lock) when a request waits or expired
@@ -6236,8 +6237,11 @@ async def ui_worker(request: Request):
     w, t = reported_worker(row, key), await asyncio.to_thread(read_json, f, None)
     if not w and not t:
         return JSONResponse({"error": "no such worker on that pc"}, status_code=404)
+    if t and w and t.get("started") != w.get("started"):  # an earlier run's transcript: not this worker's
+        t = None
     now, following = time.time(), False
-    if w and w.get("status") == "running" and row["online"] and not b.get("peek"):
+    # running: followed; ended without its end here (before the companion sent tails, or that send failed): its tail once
+    if w and (w.get("status") == "running" or not (t or {}).get("ended")) and row["online"] and not b.get("peek"):
         dev, tokens = device.get(), read_json(TOKENS_FILE, {})
         mine = [n for n in row["tokens"] if n in tokens and own_token(tokens[n], dev)]
         fp = f.parent.parent / "follow.json"
@@ -6249,9 +6253,7 @@ async def ui_worker(request: Request):
                 d[key] = {"until": now + WORKER_FOLLOW, "tokens": mine}
             fp.parent.mkdir(parents=True, exist_ok=True)
             await asyncio.to_thread(update_state, fp, mark)
-        following = True
-    if t and w and t.get("started") != w.get("started"):  # an earlier run's transcript: not this worker's
-        t = None
+        following = w.get("status") == "running"
     t = t or {}
     info = {k: (w or t).get(k) for k in ("id", "project", "agent", "status", "started", "ended", "branch", "why", "open", "yolo")}
     info.update(id=info["id"] or key.split("/", 1)[1], project=info["project"] or key.split("/", 1)[0], agent=info["agent"] or t.get("agent"),
@@ -6507,6 +6509,8 @@ async def machine_report(request: Request):
                                   for f in ((b.get("folders") or {}).get(k) or [])[:200] if isinstance(f, dict)]
                               for k in ("linked", "candidates")},
                   "projects": [str(p)[:80] for p in (b.get("projects") or [])[:100]],
+                  # "Own branch" chats: the git pill of each one's worktree, by chat id
+                  "chats": {str(k): git_pill(g) for k, g in list((b.get("chats") or {}).items())[:50] if re.fullmatch(r"[0-9a-f]{12}", str(k))},
                   "waiting": {str(k)[:120]: str(v)[:200] for k, v in list((b.get("waiting") or {}).items())[:50]}}
         waits = [str(i)[:60] for i in (b.get("limitWait") or [])][:20]
     except (ValueError, AttributeError, TypeError) as e:

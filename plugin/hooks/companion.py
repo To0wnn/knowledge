@@ -1205,6 +1205,14 @@ def with_git(folders: dict, ws: dict, now: float) -> tuple:
     return {**folders, "linked": linked}, {k: once(w.get("worktree")) if recent(w) else None for k, w in ws.items()}
 
 
+def chat_git(cid: str, folder: str) -> dict | None:
+    """An "Own branch" chat's pill: its worktree against its base, not the folder's own checkout; None without one."""
+    try:
+        return git_state(workers.worktree(folder, cid, prefix="chat", make=False).get("cwd"))
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
 # a labelled value (password: x, token=x, Bearer x), `sshpass -p x`, the password in https://user:x@host, and keys with a
 # known prefix (sk-, ghp_, xoxb-); hashes and file names stay (a commit id is no secret). The server masks its known
 # secret values as well.
@@ -1292,6 +1300,7 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
     why each ready task waits here (the Tasks tab shows it)."""
     yolo, folders, s = load("yolo.json", {}), sorted(project_folders().values()), settings()
     links, gits = with_git(folder_links(), ws, now)
+    chat_gits = {cid: chat_git(cid, f) for cid, f in load("chat_worktrees.json", {}).items()}
     body = {"version": version(), "workersAllowed": s["workersAllowed"], "maxWorkers": s["maxWorkers"], "game": workers.game_session(),
             "live": list(chat.LIVE_AGENTS),  # agents whose chats run live: a message while they work goes in at once
             "agents": {a: {"yolo": bool(yolo.get(a, {}).get("on")), "trusted": not untrusted(a, folders), "limit": lim.get(a),
@@ -1302,7 +1311,7 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
                          "checkpoint": bool(w.get("checkpoint")), "merged": w["status"] == "merged", "git": gits.get(k),
                          **({"progress": progress(w, gits.get(k))} if w["status"] == "running" else {}),
                          **({"review": r} if (r := review(w, now)) else {})} for k, w in sorted(ws.items(), key=lambda kw: -(kw[1].get("started") or 0))],  # newest first: the server keeps 40
-            "limitWait": wait, "waiting": waiting or {}, "folders": links, "projects": load("state.json", {}).get("projects", [])}
+            "limitWait": wait, "waiting": waiting or {}, "folders": links, "chats": chat_gits, "projects": load("state.json", {}).get("projects", [])}
     server("POST", "/machine/report", tok, body)
 
 
@@ -1322,7 +1331,8 @@ def one_round(only: str = "") -> dict:
     with LOCK:
         st = load("state.json", {})
     try:
-        ready = server("GET", "/tasks/ready", tok)["tasks"]
+        got = server("GET", "/tasks/ready", tok)
+        ready = [] if remote_off(got.get("agents") is False) else got["tasks"]
         if st.get("sync_error"):
             log("sync", "The knowledge server answers again")
         st.update(synced=now, sync_error="", ready=ready, projects=server("GET", "/machine/projects", tok).get("projects", []))
@@ -1419,6 +1429,8 @@ def actions_round():
     tok, changed = token_store.token(), False
     # a long poll: the server answers as soon as an action waits, or after ACTIONS_WAIT s with none
     got = server("GET", f"/machine/actions?wait={ACTIONS_WAIT:g}", tok, timeout=ACTIONS_WAIT + 15)
+    if remote_off(got.get("agents") is False):
+        return False
     for a in got.get("actions", []):
         changed = changed or a.get("action") in STATE_ACTIONS
         log("remote", f"Remote action {a.get('action')} from {a.get('by') or '?'}", json.dumps(a.get("args") or {})[:200])
@@ -1430,7 +1442,8 @@ def actions_round():
         try:
             server("POST", "/machine/actions/result", tok, {"id": a["id"], "ok": ok, "result": str(result)[:300]})
         except Exception as e:
-            log("error", "Could not report a remote action's result", str(e)[:200])
+            if not (refused(e) and remote_off(True)):
+                log("error", "Could not report a remote action's result", str(e)[:200])
     if changed:  # the page shows the new state at once, not at the next minute's report
         threading.Thread(target=tick, daemon=True).start()
     return "waited" in got  # a server before the long poll answers at once: then the loop waits itself
@@ -1668,39 +1681,77 @@ def actions_loop():
             time.sleep(ACTIONS_EVERY)
 
 
+REMOTE = {"off": False}
+REMOTE_LOCK = threading.Lock()
+
+
+def remote_off(off: bool) -> bool:
+    """The server's word on this token's "Agents (remote control)" switch (agents: false, or a 403 saying so): off is said
+    once and ends the chats running here; on again is said once. Returns `off`."""
+    with REMOTE_LOCK:
+        if off == REMOTE["off"]:
+            return off
+        REMOTE["off"] = off
+    if off:
+        log("remote", "Remote control is off for this pc's token on the server", "Chats, remote actions and new workers pause until it is on again")
+        chat.close_all()
+    else:
+        log("remote", "Remote control is on again for this pc's token", "")
+    return off
+
+
+def refused(e: Exception) -> bool:
+    """A 403 because remote control is off for this token (the server's remote_refused answer)."""
+    if not (isinstance(e, urllib.error.HTTPError) and e.code == 403):
+        return False
+    try:
+        return json.loads(e.read().decode("utf-8") or "{}").get("agents") is False
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
 def chats_round() -> bool:
     """The owner's chats with an agent here: stop what was stopped, call a turn the server thinks runs but this
     companion does not (it restarted) lost, start a turn per new message. True while a chat is active."""
     tok = token_store.token()
     post = lambda body: server("POST", "/machine/chats/events", tok, body)
     r = server("GET", "/machine/chats", tok)
+    if remote_off(r.get("agents") is False):
+        return False
     chat.ASK_SERVER, chat.LOG = (lambda body: server("POST", "/machine/chats/ask", tok, body)), log
+    fetch = lambda ref: server_file(tok, ref)
     for a in r.get("answers", []):  # the owner's answers to tool approvals (before the stops: a stop denies the rest)
         chat.answer(a)
     for cid in r.get("stop", []):
         if not chat.stop(cid):
             post({"chat": cid, "events": [{"kind": "info", "text": "Stopped (no turn ran here any more)."}], "done": True})
     chat.reap()  # live chats idle for a while end (the next message resumes them)
-    for s in r.get("steer", []):  # Force: for the running turn, read by the agent's hook after its next step
-        if chat.steer(str(s.get("chat", "")), str(s.get("by") or ""), chat.attach(str(s.get("text", "")), lambda ref: server_file(tok, ref))):
-            log("remote", f"Chat message sent into a running turn by {s.get('by') or '?'}", f"chat {s.get('chat')}")
+    for s in r.get("steer", []):  # Force: for the running turn, read by the agent's hook after its next step; after its files
+        cid, by = str(s.get("chat", "")), str(s.get("by") or "")
+        chat.in_order(cid, lambda cid=cid, by=by, text=str(s.get("text", "")): chat.steer(cid, by, chat.attach(text, fetch))
+                      and log("remote", f"Chat message sent into a running turn by {by or '?'}", f"chat {cid}"))
     for cid in r.get("busy", []):
-        if cid not in chat.RUNNING:
+        if cid not in chat.RUNNING and cid not in chat.PENDING:  # PENDING: its message still fetches its files
             post({"chat": cid, "events": [{"kind": "error", "text": "The turn was lost: the companion on this pc restarted."}], "done": True, "error": "lost"})
             log("error", "A chat turn was lost (the companion restarted)", f"chat {cid}")
     # a worker taken over goes on as a chat in its worktree
     linked = lambda: {f["path"] for f in folder_links()["linked"]} | {w["cwd"] for w in load("workers.json", {}).values() if w.get("chat") and w.get("cwd")}
     yolo = lambda agent: bool(load("yolo.json", {}).get(agent, {}).get("on"))
     for item in r.get("work", []):
-        item["text"] = chat.attach(item.get("text", ""), lambda ref: server_file(tok, ref))
         log("remote", f"Chat message from {item.get('by') or '?'} for {AGENTS.get(item.get('agent'), ('?',))[0]}", f"chat {item.get('chat')} in {item.get('folder')}")
-        chat.start(item, post, log, linked, yolo)
+        if item.get("worktree") and (wts := load("chat_worktrees.json", {})).get(item["chat"]) != item.get("folder"):  # for its git pill
+            save("chat_worktrees.json", dict(list({**wts, item["chat"]: item.get("folder")}.items())[-50:]))
+        chat.start(item, post, log, linked, yolo, fetch)
     for d in r.get("diffs", []):  # after the turns (handed out once: never lost to a diff); read-only, linked folders and workers only
         try:
             w = load("workers.json", {}).get(d.get("worker", ""), {})
             path = d["folder"] if d.get("folder") in linked() else w.get("worktree") if d.get("worker") else None
             if not path:
                 raise RuntimeError("not a folder linked on this pc, nor a worker here")
+            if d.get("chat"):  # an "Own branch" chat: its worktree (looked up, never made here)
+                path = workers.worktree(path, str(d["chat"]), prefix="chat", make=False).get("cwd")
+                if not path:
+                    raise RuntimeError("the chat's worktree is not on this pc (removed, or no message ran yet)")
             answer = {"id": d["id"], "text": git_diff(path)}
         except Exception as e:
             answer = {"id": d.get("id"), "error": f"{e}"[:300]}
@@ -1714,7 +1765,10 @@ def chats_round() -> bool:
 
 # ---------------------------------------------------------------- follow and steer a worker from the web UI
 
-FOLLOW_READ, FOLLOW_TAIL = 256_000, 200  # bytes of a worker's log read per send; events sent once when an unwatched worker ends
+FOLLOW_READ = 256_000  # bytes of a worker's log read per send while it runs
+# its tail, sent once when it ends (or when Follow opens an ended one the server has no end of): a Claude log's tool
+# results make a few hundred kB only a few events, so the tail is counted in lines within a bigger read
+FOLLOW_TAIL, FOLLOW_TAIL_LINES, FOLLOW_TAIL_READ = 2000, 2000, 4_000_000
 FOLLOW_LOCK = threading.Lock()  # the chat poll (followed workers) and the minute round (ended ones) share follow.json
 FOLLOW_FAILED: set = set()  # workers whose send failed: said once in the activity log
 
@@ -1727,20 +1781,23 @@ def worker_events(w: dict, frm: int, final: bool) -> tuple:
         with open(w["log"], "rb") as fh:
             size = fh.seek(0, 2)
             frm = 0 if frm > size else frm  # a new log
-            start = max(frm, size - FOLLOW_READ) if final or size - frm > 4 * FOLLOW_READ else frm
+            n = FOLLOW_TAIL_READ if final else FOLLOW_READ
+            start = max(frm, size - n) if final or size - frm > 4 * FOLLOW_READ else frm
             fh.seek(start)
-            data = fh.read(FOLLOW_READ)
+            data = fh.read(n)
     except (OSError, KeyError, TypeError):
         return [], frm
     end = len(data) if final and start + len(data) >= size else data.rfind(b"\n") + 1
-    if not end and len(data) == FOLLOW_READ:  # one line longer than a read: sent cut, never stuck on it
+    if not end and len(data) == n:  # one line longer than a read: sent cut, never stuck on it
         end = len(data)
     lines = data[:end].decode("utf-8", "replace").splitlines()
     if start > frm:
         lines = lines[1:]  # the read began inside a line
+    skipped = start > frm or final and len(lines) > FOLLOW_TAIL_LINES
+    lines = lines[-FOLLOW_TAIL_LINES:] if final else lines
     # parse state per log, across reads: a subagent's hand-back in a later read still closes its block
     st = PARSE_STATE.setdefault(str(w.get("log") or ""), {})
-    out = [("info", "Earlier output skipped: only the newest part is shown.")] if start > frm else []
+    out = [("info", "Earlier output skipped: only the newest part is shown.")] if skipped else []
     for line in lines:
         if w["agent"] == "agy" and not line.lstrip().startswith("{"):
             out += [("text", line + "\n")] if line.strip() else []
@@ -1785,7 +1842,7 @@ def send_final(tok: str, w: dict):
     try:
         send_worker(tok, f"{w['project']}/{w['id']}", w, final=True)
     except urllib.error.HTTPError as e:
-        if e.code != 404:
+        if e.code != 404 and not refused(e):  # refused: remote control off, said once elsewhere
             log("error", f"Could not send the last output of the worker for {w['id']}", f"{e}"[:200])
     except Exception as e:
         log("error", f"Could not send the last output of the worker for {w['id']}", f"{type(e).__name__}: {e}"[:200])
@@ -1827,8 +1884,8 @@ def follow_round(tok: str, r: dict):
     for key in r.get("follow", []):
         if key not in ws:
             continue
-        try:
-            send_worker(tok, key, ws[key])
+        try:  # an ended one: the server asks only while it has no end of it (ended before this version, or the send failed)
+            send_worker(tok, key, ws[key], final=ws[key]["status"] != "running")
             FOLLOW_FAILED.discard(key)
         except Exception as e:
             if key not in FOLLOW_FAILED:
@@ -1904,7 +1961,9 @@ def chats_loop():
             active = chats_round()
             failed = False
         except urllib.error.HTTPError as e:
-            if e.code != 404 and not failed:  # 404: a server older than chats
+            if refused(e):  # a post of this round refused: said once by remote_off
+                remote_off(True)
+            elif e.code != 404 and not failed:  # 404: a server older than chats
                 log("error", "Could not fetch chat messages", f"{e}"[:300])
             failed = True
         except Exception as e:
@@ -2119,6 +2178,39 @@ def main(argv: list):
                 finally:
                     globals().update(HOME=real[0], known_folders=real[1], git_repos=real[2])
                     subprocess.run = real[3]
+        # An "Own branch" chat: its pill and diff come from its worktree, which a look never makes.
+        if shutil.which("git"):
+            with tempfile.TemporaryDirectory() as tmp:
+                g = lambda *a: workers.git(tmp + "/r", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *a, check=True)
+                Path(tmp, "r").mkdir()
+                g("init", "-q", "-b", "main")
+                Path(tmp, "r", "a.txt").write_text("one\n")
+                g("add", "a.txt")
+                g("commit", "-qm", "one")
+                real_wt, workers.WORKTREES = workers.WORKTREES, Path(tmp) / "wt"
+                try:
+                    assert chat_git("0123456789ab", tmp + "/r") is None and not workers.WORKTREES.exists(), "a look makes no worktree"
+                    wt = workers.worktree(tmp + "/r", "0123456789ab", prefix="chat")["cwd"]
+                    Path(wt, "a.txt").write_text("two\n")
+                    assert chat_git("0123456789ab", tmp + "/r") == {"branch": "chat/0123456789ab", "base": "main", "changed": 1, "ahead": 0, "behind": 0}
+                    assert git_state(tmp + "/r")["changed"] == 0, "the folder's own checkout is untouched"
+                finally:
+                    workers.WORKTREES = real_wt
+        # A finished worker's tail: its last FOLLOW_TAIL_LINES lines, said cut, the offset at the log's end.
+        with tempfile.TemporaryDirectory() as tmp:
+            lg = Path(tmp) / "w.log"
+            lg.write_text("".join(f"line {i}\n" for i in range(FOLLOW_TAIL_LINES + 5)))
+            evs, off = worker_events({"log": str(lg), "agent": "agy"}, 0, True)
+            assert off == lg.stat().st_size and evs[0][0] == "info" and evs[1][1] == "line 5\n" and len(evs) == FOLLOW_TAIL_LINES + 1, (off, evs[:2])
+        # Remote control off: said once, the chats here end once; on again: said once.
+        logged, closed, real = [], [], (globals()["log"], chat.close_all)
+        globals()["log"], chat.close_all = (lambda kind, text, detail="": logged.append(text)), (lambda: closed.append(1))
+        try:
+            for off in (True, True, True, False, False):
+                remote_off(off)
+        finally:
+            globals()["log"], chat.close_all = real
+        assert logged == ["Remote control is off for this pc's token on the server", "Remote control is on again for this pc's token"] and closed == [1], logged
         # A diff that fails, and whose failure cannot be sent, never costs a chat turn handed out in the same poll.
         started, real = [], (globals()["server"], globals()["folder_links"], chat.start)
         def fake_server(method, path, tok, body=None):

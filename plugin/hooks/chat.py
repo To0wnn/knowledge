@@ -901,7 +901,8 @@ def run_turn(item: dict, post, log, linked, yolo):
     try:
         flush(done=True, **({"error": err} if err else {}), **steered)
     except Exception as e:  # the server away: it says the turn was lost when it next hands out work
-        log("error", "Could not send a chat's last output to the server", f"chat {cid}: {e}"[:300])
+        if getattr(e, "code", None) != 403:  # remote control off: the companion says so once
+            log("error", "Could not send a chat's last output to the server", f"chat {cid}: {e}"[:300])
     finally:
         RUNNING.pop(cid, None)  # after the done post: until then the server's "busy" list matches this
 
@@ -1273,7 +1274,8 @@ class Live:
             try:
                 self.post(body)
             except Exception as e:  # the server away: it calls the turn lost when it next hands out work
-                self.log("error", "Could not send a chat's output to the server", f"chat {self.cid}: {e}"[:300])
+                if getattr(e, "code", None) != 403:  # remote control off: the companion says so once and ends the chat
+                    self.log("error", "Could not send a chat's output to the server", f"chat {self.cid}: {e}"[:300])
         self.save(turn=True)
 
     def read(self):
@@ -1785,7 +1787,29 @@ def reap():
         threading.Thread(target=lv.close, daemon=True).start()
 
 
+def close_all():
+    """End every chat here (remote control was turned off on the server): running turns stop, live agents end
+    cleanly, messages still fetching files are dropped; the next message after it is on again resumes the chat."""
+    for cid in set(RUNNING) | set(PENDING):
+        stop(cid)
+    for cid, lv in list(LIVE.items()):
+        LIVE.pop(cid, None)
+        threading.Thread(target=lv.close, daemon=True).start()
+
+
 def stop(cid: str) -> bool:
+    """Stop a running turn, and drop its messages still fetching their files; False when neither is here."""
+    with PENDING_LOCK:
+        waiting = cid in PENDING
+        if waiting:
+            STOPS[cid] = [STOPS.get(cid, [0])[0] + 1, False]
+    ended = _stop(cid)
+    if ended and cid in STOPS:
+        STOPS[cid][1] = True  # the running turn said its end: a dropped message must not say it again
+    return ended or waiting
+
+
+def _stop(cid: str) -> bool:
     """Stop a running turn (the agent and what it started); False when none runs here. A live chat: its step is
     interrupted and the process stays."""
     if lv := LIVE.get(cid):  # a live chat: its step is interrupted, the process stays (never killed for a Stop)
@@ -1807,10 +1831,58 @@ def stop(cid: str) -> bool:
     return True
 
 
-def start(item: dict, post, log, linked, yolo):
-    cid, agent = item["chat"], item.get("agent")
-    if agent in LIVE_AGENTS:
-        return start_live(item, post, log, linked, yolo)
+PENDING: dict = {}  # chat id -> its messages being handed on (files to fetch), in order; one thread per chat drains it
+PENDING_LOCK = threading.Lock()
+STOPS: dict = {}  # chat id -> [Stops so far, whether that turn's end was said]: a message fetched across a Stop is dropped
+
+
+def in_order(cid: str, job):
+    """Run job() off the poll thread, after the earlier jobs of chat `cid`: a big attachment holds up only its own chat,
+    and a later message of that chat never overtakes it."""
+    with PENDING_LOCK:
+        if cid in PENDING:
+            PENDING[cid].append(job)
+            return
+        PENDING[cid] = [job]
+    threading.Thread(target=_drain, args=(cid,), daemon=True).start()
+
+
+def _drain(cid: str):
+    while True:
+        with PENDING_LOCK:
+            if not PENDING[cid]:
+                PENDING.pop(cid)
+                return
+            job = PENDING[cid][0]  # listed until done: the poll's "busy" check must not call its turn lost meanwhile
+        try:
+            job()
+        except Exception as e:
+            LOG("error", "A chat message could not be handed on", f"chat {cid}: {type(e).__name__}: {e}"[:300])
+        with PENDING_LOCK:
+            PENDING[cid].pop(0)
+
+
+def start(item: dict, post, log, linked, yolo, fetch=None):
+    """A message for a chat: its attached files fetched (fetch: ref -> bytes), then into its agent; off the poll thread
+    (a model change waits for the old process to end), in order per chat."""
+    cid, gen = item["chat"], STOPS.get(item["chat"], [0])[0]
+
+    def job():
+        if fetch:
+            item["text"] = attach(item.get("text", ""), fetch)
+        if (st := STOPS.get(cid, [0, True]))[0] != gen:  # Stopped while its files came: it never starts
+            if not st[1]:  # nothing ran here to end the turn: this message's turn ends now, once
+                st[1] = True
+                try:
+                    post({"chat": cid, "events": [{"kind": "info", "text": "Stopped."}], "done": True})
+                except Exception:  # the server away or remote control off: its "busy" list calls the turn lost
+                    pass
+            return
+        (_start_live if item.get("agent") in LIVE_AGENTS else _start)(item, post, log, linked, yolo)
+    in_order(cid, job)
+
+
+def _start(item: dict, post, log, linked, yolo):
     if sum(1 for r in RUNNING.values() if not r.get("live")) >= MAX_TURNS:  # live chats count in their own limit
         post({"chat": item["chat"], "events": [{"kind": "error", "text": f"{MAX_TURNS} chat turns run on this pc already; send again later"}],
               "done": True, "error": "busy"})
@@ -1820,11 +1892,6 @@ def start(item: dict, post, log, linked, yolo):
     RUNNING[item["chat"]] = {"pid": 0, "ident": "", "stop": False, "folder": item.get("folder", ""),
                              "allow": [x for x in item.get("allow") or [] if isinstance(x, dict)]}
     threading.Thread(target=run_turn, args=(item, post, log, linked, yolo), daemon=True).start()
-
-
-def start_live(item: dict, post, log, linked, yolo):
-    """A message for a live chat, handled off the poll thread (a model change waits for the old process to end)."""
-    threading.Thread(target=_start_live, args=(item, post, log, linked, yolo), daemon=True).start()
 
 
 def _start_live(item: dict, post, log, linked, yolo):
@@ -2104,6 +2171,43 @@ def self_test():
             assert adopt(lambda b: None, lambda *a: None) == 0 and sorted(x.name for x in LIVE_DIR.iterdir()) == []
         finally:
             LIVE_DIR = keep
+    # Attachments are fetched off the poll thread, in order per chat: a slow file holds up its own chat only, a later
+    # message of it waits; a Stop while files come drops the message and ends its turn once.
+    gate, ran, posts, real = threading.Event(), [], [], globals()["_start_live"]
+    globals()["_start_live"] = lambda item, *a: ran.append((item["chat"], item["text"]))
+    try:
+        slow = lambda ref: gate.wait(10) and b"x"
+        with tempfile.TemporaryDirectory() as t:
+            keep, workers.DIR = workers.DIR, Path(t)
+            try:
+                start({"chat": "a", "agent": "claude", "text": "see ⟦file:0123456789ab/f.txt⟧"}, posts.append, None, None, None, slow)
+                start({"chat": "a", "agent": "claude", "text": "second"}, posts.append, None, None, None)
+                start({"chat": "b", "agent": "claude", "text": "other"}, posts.append, None, None, None)
+                for _ in range(100):
+                    if ran:
+                        break
+                    time.sleep(0.02)
+                assert ran == [("b", "other")] and "a" in PENDING, "chat b goes on; chat a waits for its file"
+                gate.set()
+                for _ in range(200):
+                    if "a" not in PENDING:
+                        break
+                    time.sleep(0.02)
+                assert ran[1:] == [("a", f"see [attached file: {Path(t) / 'files' / '0123456789ab' / 'f.txt'}]"), ("a", "second")], ran
+                gate.clear()
+                start({"chat": "c", "agent": "claude", "text": "⟦file:0123456789ac/g.txt⟧"}, posts.append, None, None, None, slow)
+                start({"chat": "c", "agent": "claude", "text": "queued"}, posts.append, None, None, None)
+                assert stop("c"), "a message still fetching counts as something stopped"
+                gate.set()
+                for _ in range(200):
+                    if "c" not in PENDING:
+                        break
+                    time.sleep(0.02)
+                assert all(c != "c" for c, _ in ran) and [p["done"] for p in posts] == [True], (ran, posts)
+            finally:
+                workers.DIR = keep
+    finally:
+        globals()["_start_live"] = real
     print("ok")
 
 
