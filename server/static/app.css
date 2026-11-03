@@ -1004,3 +1004,15 @@ button.busy::before { content: ""; display: inline-block; width: .9em; height: .
 .task-worker pre { margin: 4px 0 0; padding: 8px; max-height: 12em; overflow: auto; background: var(--panel); border-radius: var(--r-md); white-space: pre-wrap; }
 .task-assign { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .task-assign[hidden] { display: none; }
+
+/* ---- Agents view (r2) ---- */
+/* a side-by-side card is narrow: its title keeps at least about half the head, the chips shrink into what is left */
+.bd-card .ck-title { flex: 1 0 40%; }
+.bd-card .ck-head > .ck-meta .ck-tok, .bd-card .ck-head > .ck-state, .bd-card .ck-head > .ck-close { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* the running subagents and shells above the box: folded (a phone to one line, a wide screen to two and +N) */
+.ck-subpin[hidden] { display: none; }
+.ck-subfold { flex: none; }
+@media (max-width: 699.98px) { .ck-subbar.open { max-height: 30vh; overflow-y: auto; } }
+/* a list row: its subagents folded to one line, its less frequent actions in the ⋯ menu */
+.ck-subs .ck-subfold { margin: 0 0 2px 22px; color: var(--muted); }
+.ck-rowmore > summary.btn::after { content: none; } /* ⋯ says it is a menu */

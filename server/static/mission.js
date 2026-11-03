@@ -496,11 +496,11 @@ function bdRender() {
       }
       if (card.root.parentNode !== w) w.append(card.root); // back from the full chat (ckLayout moved it there)
       w.className = `bd-card ${st}${p.pinned ? " pinned" : ""}${w.classList.contains("dragging") ? " dragging" : ""}`; w.hidden = saved.shut.includes(f.project);
-      w.setAttribute("aria-label", `${c.title || "New chat"}: ${CK_STATE[st]}, ${AGENT_NAME[c.agent] || c.agent} on ${c.label}, ${ckShort(c.folder)}. Enter opens the full chat, Esc goes back to the board`);
+      w.setAttribute("aria-label", `${ckTitle(c, card)}: ${CK_STATE[st]}, ${AGENT_NAME[c.agent] || c.agent} on ${c.label}, ${ckShort(c.folder)}. Enter opens the full chat, Esc goes back to the board`);
       if (!w.classList.contains("dragging")) Object.assign(w.style, { left: `${p.x}px`, top: `${p.y}px`, width: `${BD.w}px`, height: `${BD.h}px` });
       const sum = w.firstChild, top = el("div", "bd-sum-top");
       top.append(el("span", "ck-dot"), el("span", "ck-mark", AGENT_MARK[c.agent] || "?"), el("span", "bd-sum-state", CK_STATE[st]));
-      sum.replaceChildren(top, el("strong", "bd-sum-title", c.title || "New chat"), el("p", "bd-sum-line", bdLine(c, card)),
+      sum.replaceChildren(top, el("strong", "bd-sum-title", ckTitle(c, card)), el("p", "bd-sum-line", bdLine(c, card)),
         el("small", null, `${AGENT_NAME[c.agent] || c.agent} · ${c.label} · ${ckShort(c.folder)} · ${ago(c.updated)}`));
       order.push(w);
     }

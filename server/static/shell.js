@@ -167,19 +167,24 @@ function inboxCount(items) {
   for (const b of document.querySelectorAll(".inbox-count")) b.textContent = n || "";
   needsNotify(items);
 }
-// Browser notifications (Settings, per browser): each new Needs-you item while the tab is out of view; the first
-// board after loading only sets what was there already.
+// Browser notifications (Settings, per browser): each new Needs-you item while the tab is out of view (three, then one
+// "and N more"); the first board after loading only sets what was there already. What was seen survives a reload.
 const notifyOn = () => store.get("kn_notify") === "1" && window.Notification?.permission === "granted";
-let notifySeen = null;
+let notifySeen = (() => { try { const v = JSON.parse(sessionStorage.getItem("kn_notify_seen")); return Array.isArray(v) ? new Set(v) : null; } catch { return null; } })();
 function needsNotify(items) {
   const needs = items.filter((i) => i.col === "needs"), sig = (i) => `${i.key}:${i.sig || ""}`;
-  if (notifySeen && notifyOn() && document.hidden) for (const i of needs.filter((x) => !notifySeen.has(sig(x))).slice(0, 3)) {
+  const fresh = notifySeen && notifyOn() && document.hidden ? needs.filter((x) => !notifySeen.has(sig(x))) : [];
+  const say = (title, body, tag, to) => {
     try {
-      const n = new Notification(`Needs you: ${i.title || "an item"}`, { body: [i.label || i.project, i.line].filter(Boolean).join(" · ").slice(0, 180), tag: i.key });
-      n.onclick = () => { window.focus(); go(i.kind === "chat" && i.id ? `#/chats/${encodeURIComponent(i.id)}` : `#/inbox/${encodeURIComponent(i.key)}`); n.close(); };
+      const n = new Notification(title, { body: body.slice(0, 180), tag });
+      n.onclick = () => { window.focus(); go(to); n.close(); };
     } catch { /* a browser that only notifies from a service worker (Android): Matrix covers phones */ }
-  }
+  };
+  for (const i of fresh.slice(0, 3)) say(`Needs you: ${i.title || "an item"}`, [i.label || i.project, i.line].filter(Boolean).join(" · "), i.key,
+    i.kind === "chat" && i.id ? `#/chats/${encodeURIComponent(i.id)}` : `#/inbox/${encodeURIComponent(i.key)}`);
+  if (fresh.length > 3) say(`Needs you: and ${fresh.length - 3} more`, fresh.slice(3, 8).map((i) => i.title).filter(Boolean).join(" · "), "kn-needs-more", "#/chats");
   notifySeen = new Set(needs.map(sig));
+  try { sessionStorage.setItem("kn_notify_seen", JSON.stringify([...notifySeen])); } catch { /* blocked */ }
 }
 // Off the Agents views the Needs-you badge and the live count still follow: a light refresh every 30 s (also out of view
 // when notifications are on, which is when they matter).

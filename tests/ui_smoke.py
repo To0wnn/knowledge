@@ -425,12 +425,13 @@ async def approvals(browser, devices, secret: str) -> None:
         acts = [t.strip() for t in await needs.nth(1).locator(".ck-item-acts button").all_text_contents()]
         check(acts == ["Deny", "Open chat"], f"list: a request longer than its title can only be denied there {acts}")
         check("2 approvals waiting" in await pg.locator("#ck-needs-live").text_content(), "list: the approvals are counted")
-        # a chat that answered: why up top, the agent's last sentence below, Reply / Snooze / Dismiss right on the row
+        # a chat that answered: why up top, the agent's last sentence below, Reply on the row, Snooze / Dismiss / Archive under its ⋯ menu
         row = pg.locator(f'#ck-list .ck-sec-needs .ck-item[data-key="{reply["key"]}"]')
         got = await row.evaluate("""r => [r.querySelector('.ck-item-where').textContent, r.querySelector('.ck-item-line').textContent,
-          [...r.querySelectorAll('.ck-item-acts > button, .ck-item-acts summary')].map(b => b.textContent.trim())]""")
-        check(got[0].startswith("answered, not read") and got[1] == "The docs are fixed." and all(a in got[2] for a in ("Reply", "Snooze", "Dismiss")),
-              f"list: a chat that needs you says why, its outcome and its quick actions {got}")
+          [...r.querySelectorAll('.ck-item-acts > button, .ck-item-acts summary, .ck-item-acts .menu-list button')].map(b => b.textContent.trim()),
+          !!r.querySelector('.ck-item-acts > button.primary'), r.querySelector('.ck-rowmore > summary')?.getAttribute('aria-label') || '']""")
+        check(got[0].startswith("answered, not read") and got[1] == "The docs are fixed." and all(any(x.startswith(a) for x in got[2]) for a in ("Reply", "Snooze", "Dismiss", "Archive"))
+              and got[3] and got[4].startswith("More actions"), f"list: a chat that needs you says why, its outcome, Reply first and the rest in a labelled ⋯ menu {got}")
         await row.hover()
         await row.get_by_role("button", name="Reply").click()
         box = row.locator(".ck-reply input")
