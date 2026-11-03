@@ -857,7 +857,8 @@ async def knowledge(browser, devices, secret: str) -> None:
     theme = await pg.evaluate("document.documentElement.dataset.theme || 'auto'")
     await pg.keyboard.press("Control+k")
     await pg.keyboard.type("toggle theme")
-    await pg.wait_for_timeout(200)
+    await pg.wait_for_timeout(1000)  # as above: meaning hits for the words can arrive late and lead the list
+    await pg.evaluate("palSelect(pal.items.findIndex(i => i.kind === 'action' && i.id === 'theme'))")
     await pg.keyboard.press("Enter")
     await pg.wait_for_timeout(300)
     check(await pg.evaluate("(t) => (document.documentElement.dataset.theme || 'auto') !== t", theme), "the palette runs an action (theme)")
