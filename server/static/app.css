@@ -1020,7 +1020,12 @@ button.busy::before { content: ""; display: inline-block; width: .9em; height: .
 /* ---- Agents view (r2) ---- */
 /* a side-by-side card is narrow: its title keeps at least about half the head, the chips shrink into what is left */
 .bd-card .ck-title { flex: 1 0 40%; }
-.bd-card .ck-head > .ck-meta .ck-tok, .bd-card .ck-head > .ck-state, .bd-card .ck-head > .ck-close { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* a chip cannot shrink with an ellipsis (it is inline-flex: its text was cut to "rea"), so a narrow card drops whole
+   chips, least needed first (widths measured on live chats): the token count (also in the full chat), then the state
+   (the dot shows it) */
+.bd-card { container-type: inline-size; }
+@container (max-width: 719.98px) { .ck-head .ck-tok { display: none; } }
+@container (max-width: 439.98px) { .ck-head > .ck-state { display: none; } }
 /* the running subagents and shells above the box: folded (a phone to one line, a wide screen to two and +N) */
 .ck-subpin[hidden] { display: none; }
 .ck-subfold { flex: none; }

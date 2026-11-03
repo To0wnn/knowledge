@@ -1152,6 +1152,8 @@ async def board(browser, devices, secret: str) -> None:
         await pg.wait_for_function("location.hash === '#/chats?view=grid' && $('bd').classList.contains('grid') && !$('bd').hidden", timeout=5000)
         g = await pg.evaluate("[getComputedStyle($('bd-world')).display, [...bd.wraps.values()].every((w) => !w.style.left), $('bd-world').style.transform, $('chats-mode').querySelector('[data-mode=grid]').getAttribute('aria-pressed')]")
         check(g == ["grid", True, "", "true"], f"Grid: the toggle sets #/chats?view=grid and the cards tile without canvas places {g}")
+        cut = await pg.evaluate("[...document.querySelectorAll('#bd .bd-card .ck-head :is(.chip, .ck-state, .ck-close)')].filter((e) => e.offsetParent && e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent.trim())")
+        check(not cut, f"Grid: no chip in a card head has its text cut {cut}")
         await pg.click('#chats-mode [data-mode="board"]')
         await pg.wait_for_function("location.hash === '#/chats?view=board' && !$('bd').classList.contains('grid')", timeout=5000)
     n = await pg.evaluate("ck.chats.filter((c) => ckScope(c) && !c.closed).length")  # a closed chat is off the board
@@ -1165,6 +1167,8 @@ async def board(browser, devices, secret: str) -> None:
             return w.classList.contains('pinned') || (r.left >= f.left - 1 && r.top >= f.top - 1 && r.right <= f.right + 1 && r.bottom <= f.bottom + 1); });
           return [fs.length, ps.length, document.querySelectorAll('#bd .bd-card').length, inFrame]; })()""")
         check(frames[0] == frames[1] and frames[2] == n and frames[3], f"board: one frame per project, one card per chat, each inside its frame {frames} ({n} chats)")
+        cut = await pg.evaluate("[...document.querySelectorAll('#bd .bd-card .ck-head :is(.chip, .ck-state, .ck-close)')].filter((e) => e.offsetParent && e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent.trim())")
+        check(not cut, f"board: no chip in a narrow card's head has its text cut (a narrow card drops chips) {cut}")
         await pg.evaluate("panZoom(bd, 2.5, 0, 0)")
         await pg.focus("#bd-stage")
         await pg.keyboard.press("f")
