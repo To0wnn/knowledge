@@ -61,8 +61,10 @@
 
     <section id="tab-tasks" class="view pad" aria-label="Tasks" hidden>
       <div id="tasks-list">
-        <p class="muted">Task lines in the memos and who can pick them up. A task goes to an agent as a line "open until &lt;date&gt; [&lt;owner&gt;, &lt;ID&gt;] from &lt;requester&gt;, start &lt;now | after &lt;ID&gt; | &lt;date&gt; | after approval&gt;: …".</p>
         <div id="tasks"></div>
+        <details class="task-howto"><summary>How to add a task</summary>
+          <p class="muted">Task lines in the memos are tasks between agents. Write one in a memo of the project as "open until &lt;date&gt; [&lt;owner&gt;, &lt;ID&gt;] from &lt;requester&gt;, start &lt;now | after &lt;ID&gt; | &lt;date&gt; | after approval&gt;: …"; it shows here, and a pc that allows workers may pick it up.</p>
+        </details>
       </div>
     </section>
 
@@ -101,20 +103,19 @@
       <div id="lint"></div>
     </section>
     <section id="tab-settings" class="view pad" aria-label="Settings" hidden>
-      <h2>Settings</h2>
-      <p class="muted">Yours, on every device you sign in with.</p>
       <form id="set-chat" class="admin-form">
         <h3>New chats start with</h3>
+        <p class="muted">Saved for you, on every device you sign in with.</p>
         <label for="set-model">Model</label>
         <select id="set-model"></select>
         <label for="set-effort">Effort</label>
         <select id="set-effort"></select>
         <p class="muted" id="set-chat-note">The models your pcs that are online now offer.</p>
-        <div class="actions"><button type="submit" class="btn primary">Save</button></div>
+        <div class="actions"><button type="submit" class="btn primary">Save model</button></div>
       </form>
       <form id="set-notify" class="admin-form">
         <h3>Notifications</h3>
-        <label class="check"><input type="checkbox" id="set-notify-on"> Tell me in this browser when something needs me</label>
+        <label class="check"><input type="checkbox" id="set-notify-on" role="switch"> Tell me in this browser when something needs me <span class="set-saved muted" id="set-notify-saved" role="status"></span></label>
         <p class="muted" id="set-notify-note">A desktop notification for each new item under Needs you (a chat that answered or asks
           for approval, a failed worker) while this page is open in a tab you are not looking at. For this browser only;
           on a phone use Matrix (admin page, Settings: needs_per_hour).</p>

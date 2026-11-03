@@ -625,11 +625,10 @@ async def shell(browser, devices, secret: str) -> None:
             current: document.querySelector('#sidebar [aria-current=page]')?.dataset.nav, title: $('title').textContent})""", {"el": VIEW_EL[v]})
         check(st["shown"] and st["only"] and st["current"] == v, f"route #/{v}: its view alone, its nav item current {st}")
     await route(pg, "#/machines", ms=1500)
-    labels = await pg.eval_on_selector_all(".machine-controls button", "bs => bs.map(b => b.textContent)")
-    if any(t in ("YOLO on", "YOLO off") for t in labels):
-        print("skip YOLO state button (server older than fix/yolo-memo-health)")
-    elif labels:
-        check(any(t in ("YOLO: off · Turn on", "YOLO: ON · Turn off") for t in labels), "Machines: the YOLO button shows the state and the action")
+    yolo = await pg.evaluate("""() => ({switches: document.querySelectorAll('.machine-controls .yolo-switch input[role=switch]').length,
+        own: document.querySelectorAll('.machine-head .machine-actions').length, old: [...document.querySelectorAll('.machine-controls button')].some(b => /Forget|YOLO/.test(b.textContent))})""")
+    if yolo["own"]:
+        check(not yolo["old"], f"Machines: YOLO is a switch per agent, pc actions in the card head, Forget behind ⋯ {yolo}")
     lint2 = await pg.evaluate("api('/ui/api/lint?v=2')")
     if "report" in lint2:
         check(any("usage_outlier" in g["checks"] and g["collapsed"] for g in lint2["groups"]) and "missing_structure" in lint2["hints"],
@@ -826,8 +825,14 @@ async def knowledge(browser, devices, secret: str) -> None:
     await route(pg, f"#/notes?q={WORD}", "#hits li button, #hits-empty:not([hidden])", 500)
     check(await pg.evaluate("(w) => !$('results').hidden && $('note').hidden && $('q').value === w && $('results').getBoundingClientRect().width > 400", WORD),
           "the search page shows in the middle, in place of the note")
+    check(await pg.evaluate("""() => { const s = Date.now() / 1000; return ago(s - 7200) === '2 h ago' && ago(s - 3 * 86400) === fmtDay(s - 3 * 86400)
+        && /^\\d{1,2} [A-Z][a-z]{2,3} \\d{4}$/.test(fmtDay(s)) && offlineFor(s - 7200) === 'offline 2 h'; }"""),
+          "one date format: relative under a day, else '1 Nov 2026'")
+    check(await pg.evaluate("inlineCode('rol `pa_egress`, **x**').innerHTML === 'rol <code>pa_egress</code>, x'"), "memo `code` in list lines shows as <code>")
+    check(await pg.evaluate("palPlain('- **Gemeten** `ups.status` [doc](x.md)') === 'Gemeten ups.status doc'"), "palette snippets without Markdown")
     # The palette: Ctrl+K from anywhere, roles, typing finds notes, arrows move, Enter opens.
     await route(pg, "#/chats")
+    check(await pg.evaluate("$('crumb').hidden && !$('title').hidden"), "Agents: no breadcrumb that repeats the title")
     await pg.keyboard.press("Control+k")
     await pg.wait_for_selector("#palette[open]")
     roles = await pg.evaluate("({focus: document.activeElement === $('pal-q'), combo: $('pal-q').getAttribute('role'), list: $('pal-list').getAttribute('role'), act: $('pal-q').getAttribute('aria-activedescendant'), views: [...document.querySelectorAll('.pal-opt')].length})")

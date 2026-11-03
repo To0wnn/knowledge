@@ -5130,16 +5130,16 @@ def note_subs(c: dict, kind: str, extra: dict, label: str = ""):
     """Keep which subagents of a chat or worker run now (the board counts them), the last 50."""
     if kind == "sub" and extra.get("sub") and extra.get("status"):
         info = c.setdefault("sub_info", {})  # name and agent id: its own entry under the chat in the list
+        # its place by a number of its own: the chat file is saved with sorted keys, so dict order is gone on reload
+        c["sub_n"] = n = int(c.get("sub_n") or 0) + 1
         i = info.pop(extra["sub"], {})
         info[extra["sub"]] = {**i, **({"label": label[:200]} if extra["status"] == "running" and label else {}),
-                              **({"aid": extra["aid"]} if extra.get("aid") else {})}
-        for old in list(info)[:-50]:
-            info.pop(old)
+                              **({"aid": extra["aid"]} if extra.get("aid") else {}), "n": i.get("n", n)}
         subs = c.setdefault("subs", {})
-        subs.pop(extra["sub"], None)
         subs[extra["sub"]] = extra["status"]
-        for old in list(subs)[:-50]:
-            subs.pop(old)
+        for old in sorted(info, key=lambda k: (subs.get(k) == "running", info[k].get("n", 0)))[:-50]:  # running ones stay
+            info.pop(old)
+            subs.pop(old, None)
 ASK_DETAIL = 4000  # characters of a tool call the owner sees whole; a longer one can only be allowed once
 CHAT_ASK_MINUTES = 30  # a tool approval waits this long for its owner, then counts as denied (admin page, Settings)
 ASK_DECISIONS = ("once", "chat", "deny")
@@ -5161,7 +5161,8 @@ def steering(c: dict) -> list:
 def sub_list(c: dict) -> list:
     """A chat's subagents, each a chat of its own in the list: name, state, how its agent reaches it. Every running one
     (counted in "subs", so never hidden by newer ones) and the newest 20 finished, in their order."""
-    subs, info = c.get("subs") or {}, list((c.get("sub_info") or {}).items())
+    subs = c.get("subs") or {}
+    info = sorted((c.get("sub_info") or {}).items(), key=lambda kv: kv[1].get("n", 0))  # the order they started in
     finished = set([k for k, _ in info if subs.get(k) != "running"][-20:])
     return [{"id": k, "label": v.get("label", "subagent"), "status": subs.get(k, "done"), **({"aid": v["aid"]} if v.get("aid") else {})}
             for k, v in info if k in finished or subs.get(k) == "running"]

@@ -282,9 +282,12 @@ def lint(files: dict[str, str], today: date | None = None, mem: str = "memory") 
     for name, text in memos.items():
         if name != "MEMORY.md":
             no_code = CODE.sub(lambda m: "\n" * m.group(0).count("\n"), text)  # keep line numbers right
+            lines = text.splitlines()
             for no, line in enumerate(no_code.splitlines(), 1):
                 if (d := OPEN_DUE.search(line)) and (due := latest_date(d.group(1))) and due < today:
-                    report["open_overdue"].append(f"{name}: due {due.isoformat()}: {d.group(2).strip()[:100]}")
+                    # found outside code, said as written: its `inline code` is often the point of the item
+                    said = OPEN_DUE.search(lines[no - 1]) if no <= len(lines) else None
+                    report["open_overdue"].append(f"{name}: due {due.isoformat()}: {(said or d).group(2).strip()[:100]}")
             for no, line in enumerate(no_code.splitlines(), 1):
                 if m := RELATIVE_DATE.search(line):
                     report["relative_date"].append(f"{name}: line {no} '{m.group(0)}'")
@@ -457,8 +460,10 @@ if __name__ == "__main__":  # self-check
                                 "w.md: never checked (no date) (1 addresses/versions)"], r7  # 2029 is no check
     assert not r6["review_due"], r6  # k.md: IP, but a decision of 20 Oct
     od = lint({"memory/MEMORY.md": "", "memory/d.md": "- open tot 21 okt 2026: HA-herhaling weghalen\n- Open tot 2026-10-30: later\n"
+               "- open tot 19 okt 2026: rol `pa_egress` op modus `log`\n"
                "- open tot 20 okt 2026 zonder dubbele punt\n```\nopen tot 1 jan 2026: in code\n```\n"}, today=date(2026, 10, 22))
-    assert od["open_overdue"] == ["d.md: due 2026-10-21: HA-herhaling weghalen", "d.md: due 2026-10-20: zonder dubbele punt"], od
+    assert od["open_overdue"] == ["d.md: due 2026-10-21: HA-herhaling weghalen", "d.md: due 2026-10-19: rol `pa_egress` op modus `log`",
+                                  "d.md: due 2026-10-20: zonder dubbele punt"], od  # inline code kept as written
     assert query_coverage("welk IP heeft de NAS BMC", "bmc van de nas: 10.0.0.12 ip") == 1.0
     assert query_coverage("waarom bevriest de NAS", "nas bevriezen dinsdag") == 1.0  # prefix: bevri
     assert query_coverage("hoe werkt de Nest thermostaat", "honeywell en hue") == 0.0 and query_coverage("hoe is het", "") == 1.0

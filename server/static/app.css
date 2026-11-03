@@ -1016,3 +1016,45 @@ button.busy::before { content: ""; display: inline-block; width: .9em; height: .
 /* a list row: its subagents folded to one line, its less frequent actions in the ⋯ menu */
 .ck-subs .ck-subfold { margin: 0 0 2px 22px; color: var(--muted); }
 .ck-rowmore > summary.btn::after { content: none; } /* ⋯ says it is a menu */
+
+/* ---- Other views (r2) ---- */
+/* note names: the title first, a skill or archive file marked, the file name small after it */
+.chip.name-kind { padding: 0 6px; font-size: 10.5px; line-height: 17px; font-weight: 600; vertical-align: 1px; }
+.name-file { font: 11px var(--mono); color: var(--muted); }
+/* memo text in list lines keeps its `code` */
+.hit-text code, .connected code, .home-card code { font: .92em var(--mono); padding: 0 4px; border-radius: 4px; background: var(--hover); color: var(--ink); }
+/* hidden wins over the display these set */
+.crumb[hidden], .ms-legend[hidden], #ms-all[hidden] { display: none; }
+/* Machines: YOLO is a state, not an alarm; only a small warning mark while it is on */
+.pill.yolo { background: var(--hover); color: var(--muted); font-weight: 600; letter-spacing: 0; }
+.pill.yolo::before { content: "⚠"; color: var(--warn); }
+.yolo-switch { min-height: var(--h-btn-sm); }
+.yolo-mark { color: var(--warn); font-size: 12px; }
+.machine-actions { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.machine-more > summary.btn::after { content: none; }
+.machine-more .menu-list { min-width: 180px; }
+/* a destructive action that repeats per row stays quiet; red only on hover or focus */
+.btn.quiet.risky:hover:not(:disabled), .btn.quiet.risky:focus-visible { color: var(--bad); border-color: var(--bad); background: var(--bad-soft); }
+/* Tasks: the syntax behind a disclosure, after the list */
+.task-howto { margin-top: 18px; }
+.task-howto p { max-width: 70ch; }
+/* Settings: the notifications switch saves at once and says so */
+.set-saved { font-size: 12px; }
+/* Admin tokens on a phone: each token a card, every cell a line with its column name */
+@media (max-width: 599.98px) {
+  .token-table, .token-table tbody, .token-table tr, .token-table td { display: block; width: auto; }
+  .token-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .token-table tr { padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  .token-table tr.client { padding: 2px 12px 2px 26px; border-bottom: 0; }
+  .admin .token-table td { padding: 2px 0; border: 0; white-space: normal; min-width: 0; }
+  .admin .token-table tr.client td { display: inline; padding: 0 6px 0 0; }
+  .token-table td[data-label]::before { content: attr(data-label) ": "; color: var(--muted); font-size: 12px; }
+  .token-table td.mono:first-child { font-size: 13.5px; font-weight: 600; }
+  .token-table td.token-acts { padding-top: 6px; }
+}
+/* help: on a phone the Copy button sits above its command, never over the end of it */
+@media (max-width: 699.98px) {
+  div.cmd { display: flex; flex-direction: column; }
+  div.cmd > .copy { position: static; order: -1; align-self: flex-end; margin: 6px 6px 0 0; }
+  div.cmd > pre { min-height: 0; padding: 8px 12px 12px; }
+}

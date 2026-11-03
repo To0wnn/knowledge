@@ -38,7 +38,12 @@ function palGo(it) {
   if (act) act();
 }
 
-const noteItem = (n, hint, find) => ({ kind: "note", id: n.id, label: n.label, hint: hint ?? `${shown(n.project)}${n.cluster ? ` · ${n.cluster}` : ""}`, ...(find ? { find } : {}) });
+// A snippet as plain text: no **, `, # or [text](link) markup in a one-line hint.
+const palPlain = (t) => String(t || "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/\[\[([^\]]+)\]\]/g, "$1").replace(/(\*{1,3}|`)([^*`]+)\1/g, "$2")
+  .replace(/^\s*(#+|[-*>]|\d+\.)\s+/, "").replace(/\s+/g, " ").trim();
+// Where a note lives, short: its project and folder ("homelab · memory"), so two notes with one title tell apart.
+const palWhere = (path) => `${shown(projectOf(path))} · ${path.split("/").slice(0, -1).join("/") || "/"}`;
+const noteItem = (n, hint, find) => ({ kind: "note", id: n.id, label: noteName(n.id).title, hint: hint ?? `${palWhere(n.id)}${n.cluster ? ` · ${n.cluster}` : ""}`, ...(find ? { find } : {}) });
 
 // The groups for the current text: [[heading, items]], empty groups left out.
 function palGroups(q) {
@@ -56,15 +61,15 @@ function palGroups(q) {
   notes.forEach((x) => seen.add(x.id));
   const text = [];
   if (pal.server?.q === q) {
-    for (const h of pal.server.text) if (!seen.has(h.path) && seen.add(h.path)) text.push(noteItem(byId.get(h.path) || { id: h.path, label: h.path.split("/").pop(), project }, h.hits[0]?.text || h.path, words));
-    for (const h of pal.server.sem) if (!seen.has(h.path) && seen.add(h.path)) text.push(noteItem(byId.get(h.path) || { id: h.path, label: h.path.split("/").pop(), project }, `meaning · ${h.text}`));
+    for (const h of pal.server.text) if (!seen.has(h.path) && seen.add(h.path)) text.push(noteItem({ id: h.path }, `${palWhere(h.path)} · ${palPlain(h.hits[0]?.text)}`, words));
+    for (const h of pal.server.sem) if (!seen.has(h.path) && seen.add(h.path)) text.push(noteItem({ id: h.path }, `${palWhere(h.path)} · similar · ${palPlain(h.text)}`));
   }
   const all = { kind: "search", id: q, label: `Search all notes for “${q}”`, hint: "Enter on the page" };
   if (pal.notesOnly) return [["Notes", notes], ["Text and meaning", text.slice(0, 8)], ["", [all]]];
   const chats = ck.chats.filter((c) => has(`${c.title || ""} ${c.folder || ""} ${c.label || ""}`)).slice(0, 5)
     .map((c) => ({ kind: "chat", id: c.id, label: c.title || "(no message yet)", hint: `chat · ${c.label} · ${ckShort(c.folder)}` }));
   const tasks = pal.tasks.filter((t) => has(`${t.id} ${t.owner} ${t.text}`)).slice(0, 5)
-    .map((t) => ({ kind: "task", id: t.id, path: t.path, label: `${t.id} · ${t.owner}`, hint: t.text }));
+    .map((t) => ({ kind: "task", id: t.id, path: t.path, label: `${t.id} · ${t.owner}`, hint: palPlain(t.text) }));
   return [["Notes", notes], ["Text and meaning", text.slice(0, 6)], ["Chats", chats], ["Tasks", tasks],
     ["Go to", views.filter((v) => has(v.label))], ["Actions", actions.filter((a) => has(a.label))], ["", [all]]];
 }
@@ -73,13 +78,15 @@ function palGroups(q) {
 function palRender(keep = false) {
   const q = $("pal-q").value.trim(), was = keep && pal.moved && pal.items[pal.sel] ? palKey(pal.items[pal.sel]) : "";
   const list = $("pal-list"); list.replaceChildren(); pal.items = [];
-  for (const [head, items] of palGroups(q)) {
+  const seen = new Set(); // one row per note: a recent pick or a title hit is not listed again under text
+  for (const [head, all] of palGroups(q)) {
+    const items = all.filter((it) => !seen.has(palKey(it)) && seen.add(palKey(it)));
     if (!items.length) continue;
     if (head) { const h = el("li", "pal-grp", head); h.setAttribute("role", "presentation"); list.append(h); }
     for (const it of items) {
       const i = pal.items.length, li = el("li", "pal-opt");
       li.id = `pal-o-${i}`; li.setAttribute("role", "option");
-      li.append(el("span", "pal-label", it.label)); if (it.hint) li.append(el("small", null, it.hint));
+      li.append(el("span", "pal-label", it.kind === "note" ? noteName(it.id).title : it.label)); // a recent pick saved before titles were used if (it.hint) li.append(el("small", null, it.hint));
       li.onmousemove = () => { if (pal.sel !== i) { pal.moved = true; palSelect(i); } };
       li.onclick = () => palGo(it);
       list.append(li); pal.items.push(it);
