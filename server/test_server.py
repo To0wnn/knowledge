@@ -1640,9 +1640,11 @@ def main():
     # Every command block on the help page must paste in one go: zsh runs a "# ..." line as a command (help 23 Oct 2026).
     import html as _html
     # The page scripts share one scope: a second top-level function of the same name silently replaces the first.
-    names = [n for f in sorted((Path(__file__).parent / "static").glob("*.js"))
-             for n in re.findall(r"^(?:async )?function (\w+)", f.read_text(encoding="utf-8"), re.M)]
-    assert len(names) == len(set(names)), sorted({n for n in names if names.count(n) > 1})
+    static = Path(__file__).parent / "static"
+    for page in static.glob("*.html"):  # per page: the scripts it loads together
+        names = [n for js in re.findall(r'src="/ui/static/(\w+\.js)', page.read_text(encoding="utf-8"))
+                 for n in re.findall(r"^(?:async )?function (\w+)", (static / js).read_text(encoding="utf-8"), re.M)]
+        assert len(names) == len(set(names)), (page.name, sorted({n for n in names if names.count(n) > 1}))
     blocks = re.findall(r"<pre>(.*?)</pre>", (Path(__file__).parent / "static" / "help.html").read_text(), re.S)
     assert blocks and not [b for b in blocks if re.search(r"(^|\s)#", _html.unescape(b), re.M)], "help.html: # in a <pre>"
     # One plugin version for every agent, or one of them never sees an update.
