@@ -72,7 +72,9 @@ the admin page to be given projects. `KNOWLEDGE_PROXY_IPS` are the addresses tru
 ## Notifications
 
 Notices (a Needs-you item, a stalled or idle task, a worker waiting for its usage limit, a risky YOLO action) go to
-one Matrix room when `KNOWLEDGE_MATRIX_URL`, `KNOWLEDGE_MATRIX_ROOM` and `KNOWLEDGE_MATRIX_TOKEN` are set; Matrix is
-the only channel; set them in `.env`. Details of the Needs-you notices: [chats.md](chats.md).
+one Matrix room when `KNOWLEDGE_MATRIX_URL`, `KNOWLEDGE_MATRIX_ROOM` and `KNOWLEDGE_MATRIX_TOKEN` are set in `.env`
+(`compose.yaml` passes them on). In the web UI, Settings, "Tell me in this browser" adds desktop notifications for new
+Needs-you items while the tab is open; a phone gets none of those, so there Matrix is the only push. Details of the
+Needs-you notices: [chats.md](chats.md).
 
 The trust model in one place: [security.md](security.md).

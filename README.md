@@ -119,10 +119,9 @@ cockpit across several agents and PCs.
 - **A server to run:** Docker, about 2 GB RAM, an image of about 1.5 GB (the embedding model ships in it).
 - **HTTPS for more than one PC** or the phone: you put a reverse proxy in front.
 - **Agents:** Claude Code, Codex and Antigravity (agy) only.
-- **Notifications:** Matrix only, and the one-machine `compose.yaml` needs a small edit for it
-  ([docs/server.md](docs/server.md#notifications)).
+- **Notifications:** a Matrix room (set three values in `.env`) and desktop notifications in an open browser tab;
+  no phone push without Matrix ([docs/server.md](docs/server.md#notifications)).
 - **One admin:** password sign-in is for one person; several people need a reverse proxy with forward auth.
-- **First token** is made in the web UI, not by a command.
 - **One maintainer**, built for their own use first. Issues and pull requests welcome.
 
 Known gaps: [docs/ROADMAP.md](docs/ROADMAP.md).
