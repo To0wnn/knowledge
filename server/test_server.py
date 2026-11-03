@@ -1382,7 +1382,9 @@ def board_contract(tmp, ck, fr, raw, er, et):
     c["seen"], c["updated"] = 0, now - 8 * 86400
     f.write_text(json.dumps(c))
     assert ("chat", cids[1]) not in {(i["kind"], i["id"]) for i in board()}, "an unread chat older than a week needs nobody"
-    assert len(json.loads(ui(f"/ui/api/chats?machine={mid}")[2])["chats"]) == 50, "diffs.json is no chat"
+    chats = json.loads(ui(f"/ui/api/chats?machine={mid}")[2])["chats"]
+    busy = sum(1 for c in chats if c["status"] in ("queued", "running"))  # a chat at work is never swept: it comes on top
+    assert 50 <= len(chats) <= 50 + busy, ("diffs.json is no chat", len(chats), busy)
     text = (tmp / "projects/garden/memory/project_tasks.md").read_text()
     for line in lines:
         assert line in text
