@@ -1028,3 +1028,15 @@ button.busy::before { content: ""; display: inline-block; width: .9em; height: .
 .task-howto p { max-width: 70ch; }
 /* Settings: the notifications switch saves at once and says so */
 .set-saved { font-size: 12px; }
+/* Admin tokens on a phone: each token a card, every cell a line with its column name */
+@media (max-width: 599.98px) {
+  .token-table, .token-table tbody, .token-table tr, .token-table td { display: block; width: auto; }
+  .token-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .token-table tr { padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  .token-table tr.client { padding: 2px 12px 2px 26px; border-bottom: 0; }
+  .admin .token-table td { padding: 2px 0; border: 0; white-space: normal; min-width: 0; }
+  .admin .token-table tr.client td { display: inline; padding: 0 6px 0 0; }
+  .token-table td[data-label]::before { content: attr(data-label) ": "; color: var(--muted); font-size: 12px; }
+  .token-table td.mono:first-child { font-size: 13.5px; font-weight: 600; }
+  .token-table td.token-acts { padding-top: 6px; }
+}

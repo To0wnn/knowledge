@@ -32,7 +32,7 @@ const openClients = new Set();  // tokens whose client rows are unfolded; kept a
 
 let state = null;
 const ago = (sec) => { if (!sec) return "never"; const d = Date.now() / 1000 - sec;
-  return d < 900 ? "in the last 15 min" : d < 3600 ? `${Math.round(d / 60)} min ago` : d < 86400 ? `${Math.round(d / 3600)} h ago` : `${Math.round(d / 86400)} days ago`; };
+  return d < 900 ? "in the last 15 min" : d < 3600 ? `${Math.round(d / 60)} min ago` : d < 86400 ? `${Math.round(d / 3600)} h ago` : day(sec); }; // as the app: a date past a day
 
 // One empty state for every table (the app's .empty): a single cell over all columns.
 const emptyRow = (cols, text) => { const tr = el("tr"), td = el("td", "empty", text); td.colSpan = cols; tr.append(td); return tr; };
@@ -70,7 +70,10 @@ function accessCell(t, access) {
   const l = el("label", "check"), c = el("input"); c.type = "checkbox"; c.checked = !!t.self;
   c.setAttribute("aria-label", `${t.name} is my own device`);
   l.title = "My own device: counts as me for its machines and task lines. Never tick it for a friend's or a PA's token.";
-  c.onchange = () => run(() => api("/ui/api/admin/token", { name: t.name, update: true, self: c.checked }), c, `Saved: ${t.name} ${c.checked ? "is" : "is not"} your own device`);
+  c.onchange = () => {
+    if (!confirm(c.checked ? `Mark ${t.name} as your own device? Its machines and task lines then count as yours.` : `${t.name} is not your own device: its machines and task lines stop counting as yours. Go on?`)) { c.checked = !c.checked; return; }
+    run(() => api("/ui/api/admin/token", { name: t.name, update: true, self: c.checked }), c, `Saved: ${t.name} ${c.checked ? "is" : "is not"} your own device`);
+  };
   l.append(c, " own device"); td.append(el("br"), l); return td;
 }
 // Agents (remote control): whether the pc behind this token may be steered from the web UI (chats, workers, remote
@@ -79,7 +82,10 @@ function agentsSwitch(t) {
   const on = t.agents !== false, l = el("label", "check"), c = el("input"); c.type = "checkbox"; c.setAttribute("role", "switch"); c.checked = on;
   c.setAttribute("aria-label", `Agents (remote control) for ${t.name}`);
   l.title = "Agents (remote control): chats, workers, remote actions and approvals for the pc behind this token. Off: the web UI cannot steer it (memory and MCP keep working).";
-  c.onchange = () => run(() => api("/ui/api/admin/token", { name: t.name, update: true, agents: c.checked }), c, `Saved: remote control ${c.checked ? "on" : "off"} for ${t.name}`);
+  c.onchange = () => {
+    if (!confirm(c.checked ? `Allow remote control for ${t.name}? The web UI may then start chats and workers and run actions on the pc behind it.` : `Turn remote control off for ${t.name}? The web UI can no longer steer that pc; memory and MCP keep working.`)) { c.checked = !c.checked; return; }
+    run(() => api("/ui/api/admin/token", { name: t.name, update: true, agents: c.checked }), c, `Saved: remote control ${c.checked ? "on" : "off"} for ${t.name}`);
+  };
   l.append(c, " agents"); return l;
 }
 function skillsCell(t) {
@@ -110,12 +116,12 @@ function pluginCell(t, open) {
   const own = new Set(open ? t.clients.map((c) => c.agent) : []);  // unfolded, those show it in their own rows
   const rest = (t.plugin || []).filter((p) => !own.has(p.agent));
   if (!rest.length) { td.textContent = "–"; return td; }
-  rest.forEach((p, i) => {
-    if (i) td.append(el("br"));
-    const v = el("span", p.behind || p.update_error ? "plugin-v unused" : "plugin-v", `${p.agent} ${pluginText(p)}`);
-    v.title = `session start ${ago(p.at)}`;  // the time is in Last used and the client rows; here it only wrapped
-    td.append(v);
-  });
+  // one short line; every agent's version, check and session start on hover
+  const bad = rest.filter((p) => p.behind || p.update_error).length, versions = [...new Set(rest.map((p) => p.v))];
+  const v = el("span", bad ? "plugin-v unused" : "plugin-v", bad ? `${bad} behind` : versions.length === 1 ? `${versions[0]} · current` : `${rest.length} current`);
+  v.title = rest.map((p) => `${p.agent} ${pluginText(p)} · session start ${ago(p.at)}`).join("\n");
+  v.tabIndex = 0; v.setAttribute("aria-label", `Plugin: ${v.title}`); // the details reach the keyboard and a screen reader too
+  td.append(v);
   return td;
 }
 
@@ -130,7 +136,7 @@ function clientRows(t) {
     tr.append(el("td", "mono", `↳ ${c.agent}`), id, el("td", c.wake ? "" : "muted", c.wake ? "wakeable" : "not wakeable"),
       el("td", "", c.project || "–"), el("td", "", ago(c.at)),
       el("td", p && p.behind ? "unused" : "", p ? pluginText(p) : "–"));
-    const td = el("td"), b = el("button", "btn small danger", "Forget");
+    const td = el("td"), b = el("button", "btn small quiet risky", "Forget");
     b.setAttribute("aria-label", `Forget ${c.agent} session ${c.session}`);
     b.title = "Remove from this list; a session still in use comes back at its next prompt";
     b.onclick = () => run(() => api("/ui/api/admin/client", { name: t.name, session: c.session }), b);
@@ -156,13 +162,15 @@ function renderTokens() {
     tr.append(name, accessCell(t, access), el("td", "wrap", scopeText(t) + (t.redact ? " · secrets masked" : "")), skillsCell(t),
       el("td", "muted", t.created ? `${day(t.created)}${t.by ? " · " + t.by : ""}` : "before the admin page"),
       el("td", t.last_used ? "muted" : "unused", t.last_used ? ago(t.last_used) : "never used"), pluginCell(t, open));
-    const td = el("td"), b = el("button", "btn small danger", "Revoke");
+    const td = el("td", "token-acts"), b = el("button", "btn small quiet risky", "Revoke");
     b.setAttribute("aria-label", `Revoke ${t.name}`);
     b.onclick = () => {
       const warn = SYSTEM.has(t.name) || t.watch ? " The VM uses this token: live updates, the weekly report or the VM sessions stop." : "";
       if (confirm(`Revoke ${t.name}? Devices using it stop working right away.${warn}`)) run(() => api("/ui/api/admin/token", { name: t.name, revoke: true }), b);
     };
     td.append(b); tr.append(td);
+    // the phone shows each token as a card: every cell its own line with its column name (app.css, under 600 px)
+    ["", "Access", "Scope", "Shared skills", "Created", "Last used", "Plugin", ""].forEach((l, i) => { if (l) tr.children[i].dataset.label = l; });
     return [tr, ...(open ? clientRows(t) : [])];
   }));
   // Rebuilt after every action: keep what was ticked. "All projects" is explicit, the server refuses an empty pick.
@@ -321,7 +329,7 @@ function renderSettings() {
 // One date style on the whole page: "21 Oct 09:26", the year only when it is not this year.
 const stamp = (d) => d.toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
   ...(d.getFullYear() !== new Date().getFullYear() ? { year: "numeric" } : {}) });
-const day = (iso) => new Date(`${iso}T12:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+const day = (when) => new Date(typeof when === "number" ? when * 1000 : `${when}T12:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }); // "1 Nov 2026"
 const when = (sec) => sec ? `${stamp(new Date(sec * 1000))} (${ago(sec)})` : "—";
 function renderSystem() {
   const sys = state.system, row = (...cells) => { const tr = el("tr"); tr.append(...cells.map((c) => el("td", "", c))); return tr; };
