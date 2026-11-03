@@ -1782,7 +1782,7 @@ def reap():
             LIVE.pop(cid, None)
             if lv.alive():
                 threading.Thread(target=lv.close, daemon=True).start()
-    spare = sorted((lv for lv in LIVE.values() if not lv.busy and not lv.turn_open and not lv.subs), key=lambda lv: lv.last)
+    spare = sorted((lv for lv in LIVE.values() if not lv.busy and not lv.turn_open and not lv.subs and not lv.bg), key=lambda lv: lv.last)
     for lv in spare[:max(0, len(LIVE) - MAX_LIVE)]:
         LIVE.pop(lv.cid, None)
         threading.Thread(target=lv.close, daemon=True).start()
