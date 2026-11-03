@@ -29,17 +29,16 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.9"
+      - uses: astral-sh/setup-uv@v6  # setup-python has no 3.9 for this runner's Ubuntu; uv fetches a standalone build
       - name: Git identity for the tests that commit
         run: git config --global user.name ci && git config --global user.email ci@example.invalid
       - name: Self-tests under Python 3.9
         working-directory: server
         run: |
-          python3 --version
-          for t in limits secret-guard companion workers chat watch; do python3 "../plugin/hooks/$t.py" --self-test; done
-          python3 ../clients/knowledge-agent.py --selftest
+          uv python install 3.9
+          py=$(uv python find 3.9); "$py" --version
+          for t in limits secret-guard companion workers chat watch; do "$py" "../plugin/hooks/$t.py" --self-test; done
+          "$py" ../clients/knowledge-agent.py --selftest
   e2e:
     strategy:
       fail-fast: false
@@ -83,7 +82,8 @@ jobs:
       - name: Server dependencies
         run: uv sync --project server --frozen --no-dev
       - name: Playwright Chromium
-        run: uv run --project server --frozen --with playwright python -m playwright install --with-deps chromium
+        working-directory: ${{ runner.temp }}  # not the repo root: its token.py would shadow Python's own token module
+        run: uv run --project "$GITHUB_WORKSPACE/server" --frozen --with playwright python -m playwright install --with-deps chromium
       - name: UI smoke test
         env:
           KNOWLEDGE_SMOKE_SHOTS: ${{ runner.temp }}/shots
