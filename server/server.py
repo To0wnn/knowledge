@@ -5139,7 +5139,7 @@ def chat_meta(c: dict) -> dict:
             "sub_list": [{"id": k, "label": v.get("label", "subagent"), "status": (c.get("subs") or {}).get(k, "done"), **({"aid": v["aid"]} if v.get("aid") else {})}
                          for k, v in list((c.get("sub_info") or {}).items())[-20:]],
             "used": c.get("used", 0), "ctx": c.get("ctx", 0),  # the conversation's tokens so far, its context now
-            "model": c.get("model", ""), "effort": c.get("effort", ""), "worktree": bool(c.get("worktree")),
+            "model": c.get("model", ""), "effort": c.get("effort", ""), "worktree": bool(c.get("worktree")), "bg": int(c.get("bg") or 0),
             "waiting": len(c.get("pending") or [])}
 
 
@@ -5302,6 +5302,9 @@ def chat_card(c: dict) -> tuple[str, str]:
         return "running", "waiting for the pc" if c["status"] == "queued" else "waits for your approval" if asks_open(c, time.time()) else "working"
     if c.get("closed"):  # its owner closed it: off the board until a new message opens it
         return "", ""
+    # its turn ended, but a subagent or a background shell of it still works: it runs on (Working, not earlier)
+    nsub, nbg = sum(1 for v in (c.get("subs") or {}).values() if v == "running"), int(c.get("bg") or 0)
+    still = ", ".join(x for x in (nsub and f"{nsub} subagent{'s' * (nsub > 1)}", nbg and f"{nbg} shell{'s' * (nbg > 1)}") if x)
     events = c.get("events") or []
     last = len(events) - next((i for i, e in enumerate(reversed(events)) if e["kind"] == "user"), len(events))
     turn = events[last:]
@@ -5315,7 +5318,10 @@ def chat_card(c: dict) -> tuple[str, str]:
             return "needs", f"refused: {refused}"
         if err := first("error"):
             return "needs", f"failed: {err}"
-        return "needs", "replied: " + (" ".join("".join(e["text"] for e in turn if e["kind"] == "text").split())[-140:] or first("info") or "done")
+        return "needs", "replied: " + (" ".join("".join(e["text"] for e in turn if e["kind"] == "text").split())[-140:] or first("info") or "done") \
+            + (f" · {still} still running" if still else "")
+    if still:
+        return "running", f"{still} still running"
     return ("done", "read") if time.time() - (c.get("updated") or 0) < BOARD_DONE else ("", "")
 
 
@@ -6095,6 +6101,8 @@ async def machine_chat_events(request: Request):
                 chat_add(c, k, t, extra=extra)
         if isinstance(b.get("session"), str) and re.fullmatch(r"[\w.:-]{1,120}", b["session"]):
             c["session"] = b["session"]
+        if type(b.get("bg")) is int:  # the agent's shells left running in the background (Claude Code), counted by the pc
+            c["bg"] = max(0, min(b["bg"], 99))
         if b.get("done") is True and (s := steering(c)):
             c.pop("steering", None)
             # the companion counts what its hook did not hand over (the last ones parked); an older companion: all or none

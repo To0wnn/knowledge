@@ -765,6 +765,10 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["chat"]["subs"] == 1
     http("POST", "/machine/chats/events", {"chat": mc, "events": [], "done": True, "running_subs": ["tu2"]}, token=fr, headers=pc)
     assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["chat"]["subs"] == 1, "a background subagent the pc says still runs stays running"
+    http("POST", "/machine/chats/events", {"chat": mc, "events": [], "bg": 2}, token=fr, headers=pc)
+    card = next(i for i in json.loads(ui("/ui/api/board")[2])["items"] if i["kind"] == "chat" and i["id"] == mc)
+    assert "1 subagent, 2 shells still running" in card["line"] and card["col"] in ("needs", "running"), card  # never "earlier" while it works
+    http("POST", "/machine/chats/events", {"chat": mc, "events": [], "bg": 0}, token=fr, headers=pc)
     http("POST", "/machine/chats/events", {"chat": mc, "events": [], "done": True}, token=fr, headers=pc)
     assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["chat"]["subs"] == 0, "no subagent outlives its turn"
     # Close: off the board (and, in the page, the list), kept under Closed; not while a turn runs; a message opens it.

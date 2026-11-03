@@ -165,7 +165,14 @@ def parse(agent: str, line: str, st: dict) -> list:
             # its agent id: SendMessage reaches this subagent (talking to it from its own chat in the page)
             out.append(("sub", " · ".join(x for x in (e.get("subagent_type"), e.get("description")) if x) or "subagent",
                         e["tool_use_id"], "running", {"aid": str(e["task_id"])}))
-        if t == "system" and e.get("subtype") == "task_notification" and e.get("tool_use_id") and e.get("status") in ("completed", "failed", "killed", "stopped") \
+        if t == "system" and e.get("subtype") == "task_started" and e.get("task_type") == "local_bash" and e.get("task_id"):
+            st.setdefault("bg", {})[str(e["task_id"])] = 1  # a shell left running in the background: the chat still works
+            out.append(("bg", str(e.get("description") or "shell"), str(e["task_id"]), "running"))
+        elif t == "system" and e.get("subtype") in ("task_notification", "task_updated") and str(e.get("task_id")) in st.get("bg", {}) \
+                and (e.get("status") or (e.get("patch") or {}).get("status")) in ("completed", "failed", "killed", "stopped"):
+            st["bg"].pop(str(e["task_id"]))
+            out.append(("bg", str(e.get("summary") or "done"), str(e["task_id"]), "done"))
+        elif t == "system" and e.get("subtype") == "task_notification" and e.get("tool_use_id") and e.get("status") in ("completed", "failed", "killed", "stopped") \
                 and e["tool_use_id"] not in st.setdefault("sub_ended", set()):
             # a background subagent ended (newer Claude Code says so here; older ones in a <task-notification> text); its
             # tool-use id also closes one started before a companion restart, which this parse state no longer knows
@@ -1145,7 +1152,7 @@ class Live:
         self.turn_open = self.busy = False  # the agent works on a turn; the server counts the chat running
         self.after_interrupt, self.closing, self.stop_asked = [], False, False
         self.subs = set()  # its subagents running now: not idle while one works
-        self.snap, self.save_lock, self.asking = None, threading.Lock(), {}  # asking: approval request id -> where its line starts
+        self.snap, self.save_lock, self.asking, self.bg = None, threading.Lock(), {}, set()  # bg: Claude's background shells running  # asking: approval request id -> where its line starts
 
     def command(self, exe: str) -> list:
         return live_argv(exe, self.yolo, self.st["session"], self.cid, *self.pick)
@@ -1157,7 +1164,7 @@ class Live:
         still unanswered holds the place: the new companion reads its request again and asks again."""
         o = self.p.stdout
         at = o.end if o.end and threading.get_ident() == getattr(self, "reader", None) else o.offset
-        return {"offset": min([at, *self.asking.values()]), "taken": self.taken, "subs": sorted(self.subs)}
+        return {"offset": min([at, *self.asking.values()]), "taken": self.taken, "subs": sorted(self.subs), "bg": sorted(self.bg)}
 
     def live_state(self) -> dict:
         """What was written to the agent, kept at every write."""
@@ -1183,6 +1190,8 @@ class Live:
         self.setup({"chat": s["chat"], "agent": s["agent"], "folder": s["folder"], "session": s["session"]}, post, log, s["yolo"])
         self.pick, self.asked = tuple(s["pick"]), tuple(s["asked"])
         self.written, self.taken, self.turn_open, self.busy, self.subs = s["written"], s["taken"], s["turn_open"], s["busy"], set(s["subs"])
+        self.bg = set(s.get("bg") or [])
+        self.st["bg"] = dict.fromkeys(self.bg, 1)  # their ends, read after the restart, still match
         self.p = Hosted(d, offset=s["offset"])
         self.rec = RUNNING[self.cid] = {"pid": self.p.pid, "ident": self.p.ident, "stop": False, "folder": self.folder,
                                         "st": self.st, "allow": s.get("allow", []), "live": True}
@@ -1251,9 +1260,10 @@ class Live:
                 self.done()
 
     def flush(self, **end):
-        body = {"chat": self.cid, "events": merged(self.buf), "session": self.st["session"], **end}
+        body = {"chat": self.cid, "events": merged(self.buf), "session": self.st["session"], "bg": len(self.bg), **end}
         self.buf, self.flushed = [], time.time()
-        if body["events"] or end:
+        if body["events"] or end or len(self.bg) != getattr(self, "bg_told", 0):
+            self.bg_told = len(self.bg)
             try:
                 self.post(body)
             except Exception as e:  # the server away: it calls the turn lost when it next hands out work
@@ -1287,6 +1297,12 @@ class Live:
         if kind == "control_response":
             return
         evs = parse(self.agent, line, self.st)
+        if any(e[0] == "bg" for e in evs):  # background shells: only their number goes to the server
+            for e in evs:
+                if e[0] == "bg":
+                    (self.bg.add if e[3] == "running" else self.bg.discard)(e[2])
+            evs = [e for e in evs if e[0] != "bg"]
+            self.flush()
         if kind in ("assistant", "stream_event") and not ev.get("parent_tool_use_id"):  # the main agent at work
             if not self.turn_open:  # it goes on by itself (a subagent of an earlier turn reported back)
                 self.begin("The agent goes on by itself.")
@@ -1366,7 +1382,7 @@ class Live:
                 pass
 
     def idle(self) -> bool:
-        return not self.busy and not self.turn_open and not self.subs and time.time() - self.last > IDLE_CLOSE
+        return not self.busy and not self.turn_open and not self.subs and not self.bg and time.time() - self.last > IDLE_CLOSE
 
 
 class CodexLive(Live):
@@ -1915,6 +1931,10 @@ def self_test():
     sys_end = parse("claude", json.dumps({"type": "system", "subtype": "task_notification", "tool_use_id": "toolu_0123456789", "status": "completed",
                                           "summary": "Both in"}), {})
     assert sys_end == [("sub", "Both in", "toolu_0123456789", "done")], sys_end  # newer Claude Code: a system line ends it
+    bst = {}  # a background shell: running from task_started, done at its notification (never a subagent block)
+    ev = parse("claude", json.dumps({"type": "system", "subtype": "task_started", "task_id": "b1", "task_type": "local_bash", "description": "wait"}), bst)
+    ev += parse("claude", json.dumps({"type": "system", "subtype": "task_notification", "task_id": "b1", "tool_use_id": "toolu_0123456780", "status": "completed", "summary": "ok"}), bst)
+    assert ev == [("bg", "wait", "b1", "running"), ("bg", "ok", "b1", "done")], ev
     st = {}  # in the background: the launch keeps it running, the task-notification (tool-use-id, or task-id) ends it
     for tu, note in (("tu7", "<tool-use-id>tu7</tool-use-id>"), ("tu8", "<task-id>ag8</task-id>")):
         lines = ['{"type":"assistant","message":{"content":[{"type":"tool_use","id":"%s","name":"Agent","input":{"description":"bg"}}]}}' % tu,
