@@ -997,6 +997,33 @@ async def csp(browser, secret: str) -> None:
         await ctx.close()
 
 
+async def no_agents(browser, secret: str) -> None:
+    """A person without a token whose pc may be steered from here (me.agents false, faked with a route): the knowledge
+    part only. No Agents or Machines entries, and #/chats lands on #/notes without an error."""
+    ctx = await browser.new_context(ignore_https_errors=True, bypass_csp=True, viewport={"width": 1440, "height": 900},
+                                    extra_http_headers={"X-Knowledge-Proxy": secret, "X-authentik-username": USER})
+
+    async def fake(r):
+        resp = await r.fetch()
+        await r.fulfill(response=resp, json={**await resp.json(), "agents": False})
+    await ctx.route("**/ui/api/me", fake)
+    pg = await ctx.new_page()
+    errors = []
+    pg.on("pageerror", lambda e: errors.append(str(e)))
+    await pg.goto(URL + "/ui#/chats")
+    if not await is_shell(pg):
+        print("skip the knowledge-only page (no app shell)")
+        return await ctx.close()
+    await pg.wait_for_function("location.hash.startsWith('#/notes')", timeout=10000)
+    hidden = await pg.evaluate("""() => ['chats', 'machines'].every((v) => [...document.querySelectorAll(`#sidebar [data-nav="${v}"]`)]
+      .every((a) => !a.offsetParent))""")
+    check(hidden and await pg.locator('#sidebar [data-nav="notes"]').is_visible(), "me.agents false: no Agents or Machines entries")
+    await route(pg, "#/machines")
+    check(pg.url.endswith("#/notes") and not await pg.locator(".load-error").count() and not errors,
+          f"me.agents false: #/chats and #/machines land on #/notes without an error {errors[:2]}")
+    await ctx.close()
+
+
 async def shell_pages(browser, devices, secret: str) -> None:
     """Admin and Help inside the app shell (0.20): the sidebar, page header and phone tab bar as in the app, no "Back
     to the graph" link, admin settings with short labels and their details as help text, "Saved" after a change and
@@ -1381,6 +1408,7 @@ async def main() -> None:
         await knowledge(browser, p.devices, secret)
         await agents_pages(browser, p.devices, secret)
         await shell_pages(browser, p.devices, secret)
+        await no_agents(browser, secret)
         await board(browser, p.devices, secret)
         await follow(browser, p.devices, secret)
         await design_system(browser, p.devices, secret)

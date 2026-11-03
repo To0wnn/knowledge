@@ -5,7 +5,8 @@ from a phone. The pc side runs in the companion ([companion.md](companion.md)).
 
 ## Agents
 
-- **Agents (chat with your agents):** the web UI's **Agents** view (route `#/chats`, key `A`, the start page;
+- **Agents (chat with your agents):** only for a person with at least one token whose "Agents (remote control)"
+  switch is on ([companion.md](companion.md#agents-remote-control-per-token)). The web UI's **Agents** view (route `#/chats`, key `A`, the start page;
   `#/inbox` keeps working and opens the same view) is one list on the left with the open chat on the right, fed by the
   **attention board** (`GET /ui/api/board`); its sidebar badge counts what needs you, on every view and in every
   project. The header filters the list and Tasks to one project ("show all" says how many Needs-you items the filter

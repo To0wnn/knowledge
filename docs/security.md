@@ -15,6 +15,9 @@ described in full on the linked page.
 - **Whose machine.** A machine belongs to the person whose token first reported it; only its owner sees and steers it.
   Admin-made tokens count as the admins' only when marked "My own device".
   [companion.md](companion.md#machines), [companion.md](companion.md#the-admins-own-devices)
+- **Remote control per token.** A switch per device token ("agents", default on) says whether its pc may be steered
+  from the web UI at all; off, the server refuses chats, workers, remote actions and approvals for it (the page only
+  follows). [companion.md](companion.md#agents-remote-control-per-token)
 - **No remote shell.** Remote control is a fixed list of actions the companion runs with its own code; free text
   reaches a pc only as a chat message to an agent, which runs with that agent's own permissions.
   [companion.md](companion.md#remote-control)

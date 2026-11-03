@@ -890,6 +890,8 @@ svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor;
 #tab-tasks.flow > #tasks-list { display: none; }
 #tab-tasks > .ms { max-width: none; }
 .tabbar, .sheet:not([open]) { display: none; }
+/* nav.html: the agent entries only for a person whose pcs may be steered from here (body.no-agents: nav.js navMe) */
+body:not(.no-agents) .ag-off, body.no-agents .ag-on { display: none !important; }
 
 /* Phone: no sidebar; the page scrolls under a sticky header, the tab bar sits at the bottom. */
 @media (max-width: 699.98px) {
