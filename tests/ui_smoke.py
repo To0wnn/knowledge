@@ -892,7 +892,7 @@ async def knowledge(browser, devices, secret: str) -> None:
     check(await pg.evaluate("$('palette').open"), "the sidebar's Search or jump opens the palette")
     await pg.keyboard.press("Escape")
     # alert() is gone from the knowledge views and the mission map: errors are toasts.
-    src = await pg.evaluate("Promise.all(['app.js', 'mission.js'].map(f => fetch('/ui/static/' + f).then(r => r.text())))")
+    src = await pg.evaluate("Promise.all(['app.js', 'agents.js', 'mission.js'].map(f => fetch('/ui/static/' + f).then(r => r.text())))")
     left = [ln.strip() for f in src for ln in f.split("\n") if "alert(" in ln and not ln.strip().startswith("//")]
     check(not left, f"no alert() left {left}")
     await pg.evaluate("toast('smoke toast')")

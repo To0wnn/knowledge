@@ -94,7 +94,7 @@ if (navPage) {
     const n = (bd.items || []).filter((i) => i.col === "needs").length;
     for (const b of document.querySelectorAll(".inbox-count")) b.textContent = n || "";
   }).catch(() => {});
-  // the badges count as the app does (app.js ckSummary, loadTasks, loadLint), so they do not change on this page
+  // the badges count as the app does (agents.js ckSummary, app.js loadTasks, loadLint), so they do not change on this page
   const get = (u) => fetch(u, { credentials: "same-origin" }).then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.status))));
   meReady.then(() => document.body.classList.contains("no-agents") ? [{}, {}] : Promise.all([get("/ui/api/chats"), get("/ui/api/machines")])).then(([cs, ms]) => {
     const now = Date.now() / 1000;

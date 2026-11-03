@@ -2,7 +2,7 @@
 // bottom tab bar and More sheet (phone), one page header per view, and a hash route per view: #/chats (Agents),
 // #/inbox/<item key> (the same view, that item marked; #/inbox is an older name of #/chats), #/chats/<chat id>, #/chats/worker/<project>/<ID> (follow a worker), #/chats?view=board, #/tasks, #/tasks?view=flow, #/machines, #/notes, #/notes/<path>, #/notes?q=<search>, #/map, #/map/<path>,
 // #/changes, #/health, #/thispc. The URL is the only record of the view (refresh, back and forward work); an old
-// #<note path> link becomes #/notes/<path>. Paths in routes are encoded per part (encPath), decoded here. The views themselves are app.js's and mission.js's; this file shows one
+// #<note path> link becomes #/notes/<path>. Paths in routes are encoded per part (encPath), decoded here. The views themselves are app.js's, agents.js's and mission.js's; this file shows one
 // at a time and asks it to load. The sidebar, More sheet and theme are nav.js's. Uses app.js globals ($, el, store, decode, pushHash, ck, Graph, mapOn, current, …).
 "use strict";
 
