@@ -29,9 +29,11 @@ MEMORY_ROOTS = {mem for _, mem in ALL_BUILTIN.values()}
 MD_ONLY = {docs for docs, _ in ALL_BUILTIN.values()} - {"homelab"}
 
 
-def project_of(rel: str) -> str:
+def project_of(rel: str, none: str = "shared") -> str:
+    """The project whose docs or memory root holds rel; `none` for a path in no project (the graph and search call that
+    "shared"; the server's task and approval code passes "")."""
     root = rel.split("/", 1)[0]
-    return next((p for p, roots in list(PROJECTS.items()) if root in roots), "shared")  # copy: the UI can add projects
+    return next((p for p, roots in list(PROJECTS.items()) if root in roots), none)  # copy: the UI can add projects
 
 
 def mem_root(rel: str) -> str | None:
@@ -339,6 +341,7 @@ def related(graph: dict, rel: str, limit: int = 10, semantic: dict[str, float] |
 
 if __name__ == "__main__":
     PROJECTS.update(ALL_BUILTIN)  # the tests below use all three
+    assert project_of("trade-memory/x.md") == "trade" and project_of("claude/x.md") == "shared" and project_of("claude/x.md", "") == ""
     g = build({
         "memory/MEMORY.md": "## Werk\n- [Alpha memo](a.md) — x\n",
         "memory/a.md": "---\nname: a\nmetadata:\n  type: feedback\n---\nsee [[b_c]], `framework.md`, skill `forge-stack`, 2026-10-18-x.md",

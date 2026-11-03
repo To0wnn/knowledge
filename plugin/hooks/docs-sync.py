@@ -41,13 +41,6 @@ def edited_paths(hook: dict) -> list:
     return [a or b for a, b in PATCH_FILE.findall(str(inp.get("command") or inp.get("patch") or ""))]
 
 
-def option(name: str, default: str = "") -> str:
-    if name == "token":  # one lookup order for every hook and the MCP header: token_store.py
-        return token_store.token()
-    return os.environ.get(f"CLAUDE_PLUGIN_OPTION_{name.upper()}", os.environ.get(f"CLAUDE_PLUGIN_OPTION_{name}")) \
-        or os.environ.get(f"KNOWLEDGE_{name.upper()}", default)
-
-
 def markdown_files(root: Path) -> dict:
     out = {}
     for dirpath, dirs, names in os.walk(root):
@@ -64,7 +57,7 @@ def markdown_files(root: Path) -> dict:
 def post(payload: dict) -> dict:
     url = token_store.url() + "/sync"
     req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST", headers={
-        "Authorization": f"Bearer {option('token')}", "Content-Type": "application/json"})
+        "Authorization": f"Bearer {token_store.token()}", "Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=20) as r:
         return json.load(r)
 

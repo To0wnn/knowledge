@@ -1719,15 +1719,6 @@ assert parse_task("- [open until 2099-01-01 [Codex, I-1] from A, start now: x](f
 assert (lambda t: (t["owner"], t["device"]))(parse_task("- open until 2099-01-01 [Claude@Lap-1, P-1] from Ann, start now: x")) == ("Claude", "Lap-1")
 
 
-def project_of(rel: str) -> str:
-    root = rel.split("/", 1)[0]
-    return next((p for p, roots in list(PROJECTS.items()) if root in roots), "")
-
-
-def task_ids(text: str) -> set[str]:
-    return {t["id"] for line in text.splitlines() if (t := parse_task(line))}
-
-
 def task_sig(t: dict) -> str:
     """What a task asks, as a short hash: owner, requester, start and text. A claim marker or a new due date leave it."""
     what = re.sub(r"\((?:claimed|bezig)\b[^)]*\)", "", t["text"], flags=re.I)
@@ -1787,7 +1778,7 @@ def task_problems(rel: str, before: str, after: str) -> list[str]:
         if line not in old and TASK_LIKE.match(line) and not parse_task(line):
             out.append(f"task line '{line.strip()[:80]}' is no task line the server can read (its date), so it would be no task at all: write "
                        "'open until <date>' as 2026-11-10 or 10 nov 2026 (always with the year). Format: " + TASK_FORMAT)
-    project = project_of(rel)
+    project = kb_graph.project_of(rel, "")
     for t in added_tasks(rel, before, after) if project else []:
         dep = t["start"][6:].strip() if t["start"].lower().startswith("after ") and t["start"].lower() != "after approval" else ""
         if not dep:
@@ -1806,7 +1797,7 @@ def tell_task_problems(rel: str, before: str, after: str):
     wrong with its new task lines at its next turn."""
     if WATCH_DEVICE and (problems := task_problems(rel, before, after)):
         for p in problems:
-            add_notice(WATCH_DEVICE, project_of(rel), f"Knowledge: in {rel}, {p}", once=True)
+            add_notice(WATCH_DEVICE, kb_graph.project_of(rel, ""), f"Knowledge: in {rel}, {p}", once=True)
 
 
 def refuse_bare_tasks(rel: str, before: str, after: str):
@@ -1830,7 +1821,7 @@ def approval_hint(rel: str, before: str, after: str) -> str:
     """The answer to a write that added a task line which will not start by itself: tell the agent, so it does not
     wait for a worker that never comes."""
     new = {t["id"] for t in added_tasks(rel, before, after, changed=True)}
-    if not new or not (project := project_of(rel)):
+    if not new or not (project := kb_graph.project_of(rel, "")):
         return ""
     return "".join(f"\nTask {t['id']} waits for the owner's approval in the Tasks tab ({t['waiting_reason']})."
                    for t in project_tasks(project)[0] if t["id"] in new and t["path"] == rel and t["needs_approval"])
@@ -1852,12 +1843,12 @@ def note_task_authors(rel: str, before: str, after: str, by: str, keep: bool = F
     these words get one; an approval stays (it holds for its own words only)."""
     old = {d.group(2).strip() for line in before.splitlines() if (d := DONE_LINE.match(line))}
     done = [i for line in after.splitlines() if (d := DONE_LINE.match(line)) and (i := d.group(2).strip()) not in old]
-    if done and mem_of(rel) and not is_archive(rel) and (project := project_of(rel)):
+    if done and mem_of(rel) and not is_archive(rel) and (project := kb_graph.project_of(rel, "")):
         try:
             update_state(TASK_AUTHORS, lambda d: d.setdefault(project, {}).update({i: {"by": by, "at": int(time.time())} for i in done}))
         except OSError as e:
             print(f"result time not saved: {e}", flush=True)
-    if not (new := added_tasks(rel, before, after, changed=True)) or not (project := project_of(rel)):
+    if not (new := added_tasks(rel, before, after, changed=True)) or not (project := kb_graph.project_of(rel, "")):
         return
     if keep:
         known = read_json(TASK_AUTHORS, {}).get(project, {})
@@ -2154,8 +2145,8 @@ def open_items_text(mem: str, agent: str = "", chat: bool = False) -> tuple[list
     memos = task_memos(mem)
     overdue = kb_lint.lint(memos, mem=mem)["open_overdue"]
     names = AGENT_OWNERS.get(agent, ())
-    tasks, back = project_tasks(project_of(mem + "/"))
-    mine, waiting, others = task_items(project_of(mem + "/"), names, tasks=tasks)
+    tasks, back = project_tasks(kb_graph.project_of(mem + "/", ""))
+    mine, waiting, others = task_items(kb_graph.project_of(mem + "/", ""), names, tasks=tasks)
     head, tail = [], []
     if results := results_for(back, names, mem):
         who = next(o for o in ("Claude", "Codex", "Gemini") if o.lower() in names)
@@ -6677,7 +6668,7 @@ def trash_rel(name: str) -> str:
 
 def may_restore(rel: str) -> bool:
     """Owner or admin only: an admin anything, a project's owner the files of their own project."""
-    return bool(device.get().get("admin")) or bool(project := project_of(rel)) and may_approve(project)
+    return bool(device.get().get("admin")) or bool(project := kb_graph.project_of(rel, "")) and may_approve(project)
 
 
 def trash_rows() -> list[dict]:
@@ -6692,7 +6683,7 @@ def trash_rows() -> list[dict]:
         except (ToolError, OSError):
             continue
         at = time.mktime(time.strptime(f.name[:15], "%Y%m%d-%H%M%S"))
-        rows.append({"name": f.name, "path": rel, "project": project_of(rel), "deleted": at, "size": size, "exists": exists,
+        rows.append({"name": f.name, "path": rel, "project": kb_graph.project_of(rel, ""), "deleted": at, "size": size, "exists": exists,
                      "can_restore": not exists and may_restore(rel)})
     return rows[:500]
 

@@ -33,13 +33,6 @@ MAX_REMOVALS = 5  # more skills or memos gone from the server in one sync looks 
 SKILL_EXT = {".md", ".py", ".sh", ".json", ".txt", ".yaml", ".yml", ".toml", ".js", ".html", ".css", ".xml", ".xsd"}  # = server
 
 
-def option(name: str, default: str = "") -> str:
-    if name == "token":  # one lookup order for every hook and the MCP header: token_store.py
-        return token_store.token()  # same lookup as docs-sync.py: plugin option, else KNOWLEDGE_*
-    return os.environ.get(f"CLAUDE_PLUGIN_OPTION_{name.upper()}", os.environ.get(f"CLAUDE_PLUGIN_OPTION_{name}")) \
-        or os.environ.get(f"KNOWLEDGE_{name.upper()}", default)
-
-
 def version(data: bytes) -> str:  # the server's file version
     return hashlib.sha256(data).hexdigest()[:16]
 
@@ -47,7 +40,7 @@ def version(data: bytes) -> str:  # the server's file version
 def post(path: str, payload: dict) -> dict:
     url = token_store.url() + path
     req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST", headers={
-        "Authorization": f"Bearer {option('token')}", "Content-Type": "application/json"})
+        "Authorization": f"Bearer {token_store.token()}", "Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=60) as r:
         return json.load(r)
 
