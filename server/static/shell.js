@@ -140,6 +140,7 @@ $("back").onclick = () => (shellRoute.view === "chats" && ck.view ? ckShow(null)
 function setAgentProject(p) {
   if (p === agentProject) return;
   agentProject = p;
+  if (shellRoute.view !== "tasks") loadTasks(false).catch(() => {}); // its badge counts this project
   if (shellRoute.view === "inbox") ckBoard();
   else if (shellRoute.view === "chats") { ckHistory(); bdRender(); const d = ck.cards.get(ckKey(CK_DRAFT)); if (d) ckPoll(d); }
   else if (shellRoute.view === "tasks") {

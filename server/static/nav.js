@@ -105,7 +105,8 @@ if (navPage) {
     if (elLive) elLive.classList.toggle("on", live > 0);
   }).catch(() => {});
   get("/ui/api/tasks").then((ts) => {
-    const el = navEl("tasks-count"), open = (ts.tasks || []).filter((t) => !t.done);
+    // the picked project's open lines, as the app's Tasks badge ("all" = every project)
+    const p = localStorage.getItem("kn_project") || "homelab", el = navEl("tasks-count"), open = (ts.tasks || []).filter((t) => !t.done && (p === "all" || t.project === p));
     if (el) { el.textContent = open.length || ""; el.className = open.some((t) => t.overdue) ? "badge warn" : "badge"; }
   }).catch(() => {});
   meReady.then(() => get("/ui/api/lint?v=2")).then((res) => { // this project's findings, as the app's Health badge (project from the app's picker)

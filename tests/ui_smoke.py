@@ -713,6 +713,11 @@ async def agents_pages(browser, devices, secret: str) -> None:
     t = await pg.evaluate("""[$('tasks-count').textContent, ([...document.querySelectorAll('#tasks h3')].find(h => h.textContent.startsWith('Open')) || {textContent: ''}).textContent,
       [...document.querySelectorAll('#tasks .task-acts button')].map(b => b.textContent), [...document.querySelectorAll('#tasks .task-acts button:disabled')].every(b => b.title)]""")
     check(t[1] == (f"Open ({t[0]})" if t[0] else ""), f"Tasks: the badge and the Open heading agree {t[:2]}")
+    await pg.select_option("#projects", "homelab")  # one project: the badge counts its lines, as the list does
+    await pg.wait_for_timeout(1500)
+    h = await pg.evaluate("""[$('tasks-count').textContent, ([...document.querySelectorAll('#tasks h3')].find(h => h.textContent.startsWith('Open')) || {textContent: ''}).textContent]""")
+    check(h[1] == (f"Open ({h[0]})" if h[0] else ""), f"Tasks: with one project picked the badge follows it {h}")
+    await pg.select_option("#projects", "all")
     check("Done" not in t[2] and t[3], f"Tasks: Cancel (with the reason when disabled) instead of Done {sorted(set(t[2]))}")
     await route(pg, "#/machines", "#machines .machine, #machines p", 800)
     check(await pg.evaluate("getComputedStyle($('machines')).gridTemplateColumns.split(' ').length === 1"), "Machines: one pc per row, full width")

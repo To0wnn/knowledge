@@ -1027,13 +1027,16 @@ async function loadLint(render = true) {
 }
 // Tasks: the task lines between agents in every project (or the one picked in the header), overdue first, then by due
 // date, with where each runs and a "Start on <pc>" per pc that may take it; results handed back. Cancel turns an open
-// line into a result for its requester; Remove takes a read result away (history keeps both). The badge counts every
-// project's open lines, the same number as the list's Open heading without a project filter.
+// line into a result for its requester; Remove takes a read result away (history keeps both). The badge counts the open lines
+// of the project picked in the sidebar, the same number as the list's Open heading.
 let agentProject = project === ALL ? "" : project; // the Agents views' project: the sidebar's, "" = all (shell.js setAgentProject)
 async function loadTasks(render = true) {
   const res = await api(render ? "/ui/api/tasks?hosts=1" : "/ui/api/tasks"), all = res.tasks.filter((t) => !t.done);
-  $("tasks-count").textContent = all.length || "";
-  $("tasks-count").className = all.some((t) => t.overdue) ? "badge warn" : "badge";
+  // the badge follows the project picker, as the list does (the Health badge too); its title has both counts
+  const here = all.filter((t) => !agentProject || t.project === agentProject);
+  $("tasks-count").textContent = here.length || "";
+  $("tasks-count").className = here.some((t) => t.overdue) ? "badge warn" : "badge";
+  $("tasks-count").title = agentProject ? `${here.length} open in ${agentProject}, ${all.length} in all projects` : `${all.length} open in all projects`;
   const tasks = res.tasks.filter((t) => !agentProject || t.project === agentProject), open = tasks.filter((t) => !t.done), back = tasks.filter((t) => t.done);
   if (!render) return;
   const box = $("tasks"); box.replaceChildren();
