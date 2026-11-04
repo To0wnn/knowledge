@@ -9,11 +9,11 @@ dependencies = [
     "uvloop==0.23.0; sys_platform != 'win32'",  # C event loop, picked up by uvicorn automatically (none for Windows: the client tests run the server there)
     "httptools==0.9.0",  # C HTTP parser, picked up by uvicorn automatically
     "trafilatura==2.3.1",  # ingest: main text of web pages as markdown (Apache-2.0)
-    "pypdf==6.21.1",  # ingest: PDF text (BSD-3)
+    "pypdf==6.21.4",  # ingest: PDF text (BSD-3)
     "python-docx==1.2.0",  # ingest: Word documents (MIT)
     "networkx==3.7",  # graph: Louvain communities, Adamic-Adar (BSD-3)
-    "fastembed==0.9.0",  # semantic search: local ONNX embeddings, no torch (Apache-2.0)
-    "onnxruntime==1.31.0",  # optional duplicate check (rerank.py); already pulled in by fastembed
+    "fastembed==0.9.1",  # semantic search: local ONNX embeddings, no torch (Apache-2.0)
+    "onnxruntime==1.31.1",  # optional duplicate check (rerank.py); already pulled in by fastembed
     "tokenizers==0.23.3",
     "regex==2026.9.29",
 ]

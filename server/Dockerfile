@@ -1,6 +1,6 @@
 # Versions pinned on purpose: updates are a deliberate bump + rebuild, never a surprise.
-FROM python:3.13.16-slim-trixie
-COPY --from=ghcr.io/astral-sh/uv:0.13.1 /uv /usr/local/bin/uv
+FROM python:3.14.10-slim-trixie
+COPY --from=ghcr.io/astral-sh/uv:0.13.7 /uv /usr/local/bin/uv
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
