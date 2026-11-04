@@ -1545,17 +1545,18 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
             if made.returncode:
                 print(f"skip the Scheduled Task check: {made.stderr.strip()[:200]}")
             else:
+                manifest_text = {f: f.read_text(encoding="utf-8") for f in manifests}  # `before` means something else by now
                 try:
-                    for m, t in before.items():
-                        m.write_text(re.sub(r'"version": "[^"]+"', '"version": "9.8.6"', t), encoding="utf-8")
+                    for f, t in manifest_text.items():
+                        f.write_text(re.sub(r'"version": "[^"]+"', '"version": "9.8.6"', t), encoding="utf-8")
                     wait_for(lambda: reported() == "9.8.6" or poke(), 90)
                     state = subprocess.run(["schtasks", "/Query", "/TN", name, "/FO", "LIST"], capture_output=True, text=True).stdout
                     check(reported() == "9.8.6" and "Running" in state, "companion on Windows: the Scheduled Task runs it again after an update", f"{reported()} {state[:300]}")
                 finally:
                     subprocess.run(["schtasks", "/End", "/TN", name], capture_output=True)
                     subprocess.run(["schtasks", "/Delete", "/F", "/TN", name], capture_output=True)
-                    for m, t in before.items():
-                        m.write_text(t, encoding="utf-8")
+                    for f, t in manifest_text.items():
+                        f.write_text(t, encoding="utf-8")
     finally:
         proc.kill()
         if fake_codex:
