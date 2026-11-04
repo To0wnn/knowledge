@@ -1046,7 +1046,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
     self_url = f"http://127.0.0.1:{port}"
     env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, PATH=str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
                    KNOWLEDGE_COMPANION_PORT=str(port), KNOWLEDGE_COMPANION_EVERY="3600", KN_FAKE_CALLS=str(calls),
-                   KNOWLEDGE_COMPANION_ACTIONS_EVERY="1", KNOWLEDGE_WORKER_GRACE="1", KNOWLEDGE_COMPANION_SCAN_EVERY="0",
+                   KNOWLEDGE_COMPANION_ACTIONS_EVERY="1", KNOWLEDGE_COMPANION_UPDATE_EVERY="1", KNOWLEDGE_WORKER_GRACE="1", KNOWLEDGE_COMPANION_SCAN_EVERY="0",
                    KNOWLEDGE_AGY_PROCESS="knfakeagy" if fake_agy else Path(sys.executable).stem,
                    KNOWLEDGE_CODEX_PROCESS="knfakecodex" if fake_codex else Path(sys.executable).stem)
 
@@ -1379,6 +1379,19 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         ws = json.loads(wfile.read_text(encoding="utf-8"))
         check(done()[-1]["status"] == "done" and ws["garden/CMP-GEMINI"].get("archived") is True, "workers: Archive keeps the record, marked", json.dumps(done()[-1]))
         check(ws["garden/CMP-GEMINI"].get("title"), "workers: a worker keeps its task's text as its title", json.dumps(ws["garden/CMP-GEMINI"])[:300])
+        # An updated plugin takes effect in the running companion: it restarts itself and reports the new version.
+        manifests = [hooks.parent / m / "plugin.json" for m in (".claude-plugin", ".codex-plugin") if (hooks.parent / m / "plugin.json").exists()]
+        before = {m: m.read_text(encoding="utf-8") for m in manifests}
+        reported = lambda: next((r for r in machines() if r["id"] == mid), {}).get("companion", {}).get("version")
+        for m, t in before.items():
+            m.write_text(re.sub(r'"version": "[^"]+"', '"version": "9.8.7"', t), encoding="utf-8")
+        act("workers_allowed", {"on": True})  # a round reports soon after the restart
+        wait_for(lambda: reported() == "9.8.7" or call("POST", "/local/api/tick", {}) and False, 60)
+        check(reported() == "9.8.7", "companion: an updated plugin restarts it, and the list shows the code that runs", str(reported()))
+        for m, t in before.items():
+            m.write_text(t, encoding="utf-8")
+        wait_for(lambda: reported() != "9.8.7" or call("POST", "/local/api/tick", {}) and False, 60)
+        check(reported() != "9.8.7", "companion: after going back it restarts again", str(reported()))
         code, out, err = run([sys.executable, str(hooks / "workers.py"), "--self-test"], "", env)
         check(code == 0 and out.strip() == "ok", "review: workers.py self-test on a real repository (clean merge, conflict aborted and said, "
               "dirty or other branch refused)", out[-400:] + err[-800:])

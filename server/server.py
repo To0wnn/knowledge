@@ -745,6 +745,21 @@ def model_advice(offered: dict, data: dict, chosen: dict) -> dict:
     return {"rows": rows, "missing": sorted(set(missing))}
 
 
+def model_differs(plan: dict, offered: dict, current: dict) -> tuple:
+    """(what differs between the plan and an agent's settings on this pc, agents that did not say what they are set to)."""
+    differs, unknown = [], []
+    for agent, wants in plan.items():
+        now = current.get(agent)
+        if not now:
+            unknown.append(agent)
+            continue
+        names = {m.get("id"): m.get("name") for m in offered.get(agent) or []} if agent == "agy" else {}  # agy stores the display name
+        for k, v in wants.items():
+            if now.get(k) != names.get(v, v):
+                differs.append({"agent": agent, "setting": k, "now": now.get(k, ""), "wants": v})
+    return differs, unknown
+
+
 def model_plan(advice: dict) -> dict:
     """For Apply: the settings an agent has for its lead and its reader; review and search have no setting of their own."""
     plan: dict = {}
@@ -766,7 +781,14 @@ def model_overview(rows: list[dict], data: dict, chosen: dict) -> dict:
             for m in models or []:
                 offered.setdefault(agent, {}).setdefault(m.get("id"), []).append(r["label"])
     measured = {a: {c.get("model") for role in data.get("roles", []) for c in role.get("agents", {}).get(a, [])} for a in offered}
-    return {"measured_on": data.get("measured_on", ""), "note": data.get("note", ""), "chosen": chosen,
+    pcs = []
+    for r in rows:
+        if r["own"] and not r.get("old") and r.get("advice"):
+            last = next((x for x in reversed(r.get("actions") or []) if x.get("action") == "apply_models"), None)
+            differs, unknown = model_differs(model_plan(r["advice"]), (r["companion"].get("models") or {}), (r["companion"].get("current") or {}))
+            pcs.append({"id": r["id"], "label": r["label"], "online": r["online"], "differs": differs, "unknown": unknown, "missing": r["advice"]["missing"],
+                        "last": {k: last.get(k) for k in ("status", "result", "at")} if last else None})
+    return {"measured_on": data.get("measured_on", ""), "note": data.get("note", ""), "chosen": chosen, "pcs": pcs,
             "roles": [{"key": x.get("key"), "role": x.get("role", ""), "agents": {
                 a: {"advised": c, "offered": sorted(offered.get(a, {}))} for a, c in x.get("agents", {}).items()}} for x in data.get("roles", [])],
             "unmeasured": [{"agent": a, "model": i, "pcs": sorted(set(pcs))} for a, ms in sorted(offered.items())
@@ -2526,7 +2548,8 @@ def machine_rows() -> list[dict]:
                      "mine": any(own_token(tokens[n], dev, steer=False) for n in names),
                      "companion": {**{k: comp.get(k) for k in ("version", "at", "workersAllowed", "game", "maxWorkers", "folders", "projects", "token", "live", "chats")},
                                    "agents": sorted(comp.get("agents") or {}),
-                                   "models": {a: v.get("models", []) for a, v in (comp.get("agents") or {}).items()}} if comp else None,
+                                   "models": {a: v.get("models", []) for a, v in (comp.get("agents") or {}).items()},
+                                   "current": {a: v.get("current", {}) for a, v in (comp.get("agents") or {}).items()}} if comp else None,
                      **({"advice": model_advice({a: v.get("models", []) for a, v in comp["agents"].items()}, advice, chosen)}
                         if advice and comp and comp.get("agents") else {}),
                      "actions": queue.get(mid, [])[-10:]})
@@ -4923,7 +4946,7 @@ async def ui_mission(request: Request):
 async def ui_machines(request: Request):
     def build():
         rows = machine_rows()
-        return {"machines": rows, "stuck": stuck_projects(task_rows(), rows), "now": time.time()}
+        return {"machines": rows, "stuck": stuck_projects(task_rows(), rows), "admin": bool(device.get().get("admin")), "now": time.time()}
     return JSONResponse({**await asyncio.to_thread(build)})
 
 
@@ -5433,6 +5456,8 @@ def task_hosts(t: dict, rows: list[dict]) -> list[dict]:
 def stuck_projects(tasks: list[dict], rows: list[dict]) -> list[dict]:
     """Tasks for an agent that could start but never will: no pc of this person has a folder linked to their project."""
     linked = {f.get("project") for r in rows if r["own"] for f in ((r.get("companion") or {}).get("folders") or {}).get("linked", [])}
+    user = device.get().get("user")  # a project on someone else's token runs on their pc: no job for this person's pcs
+    linked |= {x for c in read_json(TOKENS_FILE, {}).values() if c.get("owner") != user for x in c.get("roots") or []}
     counts: dict = {}
     for t in tasks:
         if not t["done"] and owner_agent(t["owner"]) and t["startable"] and t["project"] not in linked:  # a handed-back result has no "startable"
@@ -6577,7 +6602,9 @@ async def machine_report(request: Request):
                                  "resets": float(v["resets"]) if isinstance(v.get("resets"), (int, float)) else None,
                                  # the installed plugin, read from disk by the companion: shown before the agent's first session
                                  **({"plugin": v["plugin"][:20]} if isinstance(v.get("plugin"), str) and re.fullmatch(r"[\w.+-]{1,20}", v["plugin"]) else {}),
-                                 **({"models": report_models(v["models"])} if "models" in v else {})}
+                                 **({"models": report_models(v["models"])} if "models" in v else {}),
+                                 **({"current": {k: str(x)[:80] for k, x in v["current"].items() if k in ("lead", "lead_effort", "reader", "reader_effort")}}
+                                    if isinstance(v.get("current"), dict) else {})}
                              for a, v in (b.get("agents") or {}).items() if a in AGENT_OWNERS and isinstance(v, dict)},
                   "workers": [{k: (w.get(k) if w.get(k) is None or isinstance(w.get(k), (int, float, bool)) else str(w[k])[:300])
                                for k in ("id", "project", "agent", "status", "started", "ended", "branch", "title", "yolo", "open", "checkpoint", "merged", "why", "chat")}

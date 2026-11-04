@@ -330,7 +330,7 @@ function renderSettings() {
 function renderModels() {
   const m = state.models; $("models-box").hidden = !m;
   if (!m) return;
-  $("models-note").textContent = `Scores are right answers on our reading and review test${m.measured_on ? `, last measured ${m.measured_on}` : ""}. A pc changes only when you click Apply on its card. ${m.note}`;
+  $("models-note").textContent = `Scores are right answers on our reading and review test${m.measured_on ? `, last measured ${m.measured_on}` : ""}. Pick here, then Apply per pc below; nothing else changes a pc. ${m.note}`;
   const name = (c) => `${c.model}${c.effort ? `, ${c.effort}` : ""}${c.score ? ` (${c.score})` : " (not measured)"}`;
   $("models-rows").replaceChildren(...m.roles.flatMap((r) => Object.entries(r.agents).map(([a, v]) => {
     const wrap = el("div", "setting"), id = `m-${r.key}-${a}`, label = el("label", "", `${r.role} · ${a}`), sel = el("select");
@@ -345,10 +345,26 @@ function renderModels() {
       if (![...sel.options].some((o) => o.value === value)) opt(value, `${mine.model} (no pc offers it now)`);
       sel.value = value;
     }
-    sel.onchange = () => run(() => api("/ui/api/admin/model-choice", { role: r.key, agent: a, ...(sel.value ? JSON.parse(sel.value) : {}) }), sel, "Saved: Apply it on a pc's card");
+    sel.onchange = () => run(() => api("/ui/api/admin/model-choice", { role: r.key, agent: a, ...(sel.value ? JSON.parse(sel.value) : {}) }), sel, "Saved: Apply it per pc below");
     wrap.append(label, sel);
     return wrap;
   })));
+  $("models-pcs").replaceChildren(...m.pcs.map((pc) => {
+    const row = el("p", "setting-help"), plain = (d) => `${d.agent} ${d.setting.replace("_", " ")}: ${d.now || "not set"} → ${d.wants}`;
+    row.append(el("strong", "", pc.label), ` · ${pc.online ? "online" : "offline, runs when it is back"} · `,
+      pc.differs.length ? pc.differs.map(plain).join("; ") : pc.unknown.length ? `not reported yet (${pc.unknown.join(", ")})` : "matches");
+    if (pc.missing.length) row.append(` · not offered there: ${pc.missing.join(", ")}`);
+    if (pc.differs.length || pc.unknown.length) {
+      const b = el("button", "btn small", "Apply"); b.type = "button"; b.title = "Write these into the agents' settings on this pc; new sessions use them"; 
+      b.onclick = () => run(async () => {
+        await api("/ui/api/machines/action", { machine: pc.id, action: "apply_models", args: {} });
+        for (let i = 0; i < 12 && pc.online; i++) { await new Promise((r) => setTimeout(r, 3000)); await load(); if (state.models.pcs.find((x) => x.id === pc.id)?.last?.status !== "waiting") break; }
+      }, b, "");
+      row.append(" ", b);
+    }
+    if (pc.last) row.append(el("span", pc.last.status === "failed" ? "error" : "muted", ` Last Apply: ${pc.last.status}${pc.last.result ? `: ${pc.last.result}` : ""}`));
+    return row;
+  }));
   $("models-unmeasured").textContent = m.unmeasured.length ? `Not measured yet: ${m.unmeasured.map((u) => `${u.model} (${u.agent}, on ${u.pcs.join(", ")})`).join("; ")}.` : "Every model a pc offers has been measured.";
 }
 

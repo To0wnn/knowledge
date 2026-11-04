@@ -107,6 +107,26 @@ def apply(agent: str, plan: dict, label: str = "", home: Path | None = None) -> 
     return f"{agent}: lead {lead or 'unchanged'}, reader {reader or 'unchanged'}"
 
 
+def current(agent: str, home: Path | None = None) -> dict:
+    """What an agent is set to now, for the server's "matches or not"; {} when it cannot be read."""
+    home = home or Path.home()
+    try:
+        if agent == "claude":
+            s = read_json(home / ".claude" / "settings.json")
+            found = {"lead": s.get("model"), "lead_effort": s.get("effortLevel"), "reader": (s.get("env") or {}).get("CLAUDE_CODE_SUBAGENT_MODEL")}
+        elif agent == "codex":
+            text = (home / ".codex" / "config.toml").read_text(encoding="utf-8")
+            top, agents = ("\n" + text).partition("\n[")[0], (re.search(r"^\[agents\]\n((?:(?!\[).*\n?)*)", text, re.M) or [None, ""])[1]
+            value = lambda block, key: (re.search(rf'^{key} = "([^"]*)"', block, re.M) or [None, None])[1]
+            found = {"lead": value(top, "model"), "lead_effort": value(top, "model_reasoning_effort"),
+                     "reader": value(agents, "default_subagent_model"), "reader_effort": value(agents, "default_subagent_reasoning_effort")}
+        else:
+            found = {"lead": read_json(home / ".gemini" / "antigravity-cli" / "settings.json").get("model")}
+    except (OSError, ValueError):
+        return {}
+    return {k: str(v)[:80] for k, v in found.items() if v}
+
+
 def self_test() -> None:
     import tomllib
     with tempfile.TemporaryDirectory() as t:
@@ -125,7 +145,10 @@ def self_test() -> None:
         assert (c["model"], c["model_reasoning_effort"], c["agents"]["default_subagent_model"], c["projects"]["x"]["trust_level"]) == ("gpt-x", "medium", "gpt-y", "trusted"), c
         apply("codex", {"lead": "gpt-x", "lead_effort": "medium", "reader": "gpt-y", "reader_effort": "low"}, home=h)
         assert (h / ".codex/config.toml").read_text() == first, "applying twice changes nothing"
+        assert current("codex", h) == {"lead": "gpt-x", "lead_effort": "medium", "reader": "gpt-y", "reader_effort": "low"}, current("codex", h)
+        assert current("claude", h) == {"lead": "opus", "lead_effort": "high", "reader": "sonnet"} and current("agy", h) == {}
         apply("agy", {"lead": "flash-low"}, label="Flash (Low)", home=h)
+        assert current("agy", h) == {"lead": "Flash (Low)"}
         assert json.loads((h / ".gemini/antigravity-cli/settings.json").read_text())["model"] == "Flash (Low)"
         try:
             apply("agy", {"lead": "gone"}, home=h)

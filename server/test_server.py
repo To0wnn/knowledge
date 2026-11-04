@@ -425,6 +425,11 @@ def lease_contract(tmp, ck, fr, raw):
 
 
 def machines_contract(tmp, ck, fr, raw, er, et):
+    import server as srv  # the pure comparison: an agent's settings against the plan
+    d, u = srv.model_differs({"claude": {"lead": "opus", "reader": "sonnet"}, "agy": {"lead": "f-low"}, "codex": {"lead": "g"}},
+                             {"agy": [{"id": "f-low", "name": "Flash (Low)"}]},
+                             {"claude": {"lead": "opus", "reader": "haiku"}, "agy": {"lead": "Flash (Low)"}})
+    assert d == [{"agent": "claude", "setting": "reader", "now": "haiku", "wants": "sonnet"}] and u == ["codex"], (d, u)
     """The Machines list: every pc that reported (token + machine id), its sessions of the last 2 h with project and
     held task, online/offline; a person sees the machines of their own tokens only, an admin all; forget."""
     ui = {**ck, "X-Knowledge-UI": "1", "Content-Type": "application/json"}
@@ -740,6 +745,8 @@ def chats_contract(tmp, ck, fr, raw, er, et):
         http("POST", "/machine/actions/result", {"id": x["id"], "status": "done", "result": "ok"}, token=fr, headers=pc)
     state = json.loads(ui("/ui/api/admin")[2])["models"]
     assert {u["model"] for u in state["unmeasured"]} >= {"sonnet-x"} and state["chosen"]["read"]["claude"]["model"] == "on-no-pc", state
+    row = next(x for x in state["pcs"] if x["id"] == mid)
+    assert row["unknown"] == ["claude"] and row["last"], row  # no agent said what it is set to yet; the Apply above shows
     assert ui("/ui/api/admin/model-choice", {"role": "read", "agent": "claude"})[0] == 200
     advice.unlink()
     assert ui("/ui/api/chat/send", {"machine": mid, "id": mc, "text": "a", "model": "sonnet"})[0] == 400  # not reported

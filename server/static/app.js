@@ -1180,13 +1180,16 @@ function workerProgress(p) {
   return box;
 }
 async function machineAction(m, action, args = {}) {
+  let sent = {};
   try {
-    await api("/ui/api/machines/action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: m.id, action, args }) });
+    sent = await api("/ui/api/machines/action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: m.id, action, args }) });
   } catch (e) { toast(e.message); return loadMachines(); }
   // the pc fetches the action within ~10 s and reports its new state right after: refresh until nothing waits
   for (let i = 0; i < 20; i++) {
     await loadMachines();
     const row = (machinesCache || []).find((x) => x.id === m.id);
+    const mine = row && (row.actions || []).find((x) => x.id === sent.id);
+    if (mine?.status === "failed") { toast(`${action} failed on ${m.label}: ${mine.result || "no reason given"}`); break; } // never only in the folded log
     if (!row || !(row.actions || []).some((x) => x.status === "waiting")) break;
     await new Promise((r) => setTimeout(r, 3000));
   }
@@ -1335,13 +1338,9 @@ async function loadMachines() {
       }
       agents.append(row);
     }
-    if (m.advice?.rows.some((r) => r.model) && m.own && !m.old && c) {
-      const plain = (k) => m.advice.rows.filter((r) => r.key === k && r.model).map((r) => `${AGENT_NAME[r.agent] || r.agent}: ${r.model}`).join(", ");
-      const line = el("p", "machine-meta", `Models: ${plain("lead") || "?"}`);
-      line.title = `Reading: ${plain("read")}`;
-      line.append(" ", machineButton("Apply", "Write the server's model choice into this pc's agent settings; new sessions use it",
-        () => confirm(`Apply on ${m.label}?\n\nLead: ${plain("lead")}\nReading: ${plain("read")}`) && machineAction(m, "apply_models")));
-      if (m.advice.missing.length) line.append(` · not on this pc: ${m.advice.missing.join(", ")}`);
+    if (res.admin && m.own && !m.old && m.advice?.rows.some((r) => r.model)) { // chosen and applied in one place: Admin > Settings
+      const line = el("p", "machine-meta", `Models: ${m.advice.rows.filter((r) => r.key === "lead" && r.model).map((r) => `${AGENT_NAME[r.agent] || r.agent} ${r.model}`).join(", ")} `);
+      const link = el("a", null, "Manage"); link.href = "/ui/admin#settings"; line.append(link);
       card.append(line);
     }
     const fl = c && c.folders;

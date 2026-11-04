@@ -97,8 +97,11 @@ TICK = threading.Lock()  # one round at a time: the minute loop and the page's "
 TRUST_KEYS = ("keep_trusted", "codex_trusted")  # what trust() keeps in state.json; a round never writes them
 
 
+STARTED = self_update.own()  # the code this process runs; the file on disk can be newer after an update
+
+
 def version() -> str:
-    return ".".join(map(str, self_update.own()))
+    return ".".join(map(str, STARTED))
 
 
 # ---------------------------------------------------------------- files
@@ -1345,7 +1348,8 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
             "live": list(chat.LIVE_AGENTS),  # agents whose chats run live: a message while they work goes in at once
             "agents": {a: {"yolo": bool(yolo.get(a, {}).get("on")), "trusted": not untrusted(a, folders), "limit": lim.get(a),
                      "resets": (resets or {}).get(a), **({"plugin": v} if (v := plugin_version(a)) else {}),  # known before a session
-                     "models": chat.models(a)}  # what a chat may pick (cached for hours)
+                     "models": chat.models(a),  # what a chat may pick (cached for hours)
+                     "current": model_settings.current(a)}
                        for a in AGENTS if installed(a)},
             "workers": [{**{k: w.get(k) for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open", "why", "chat", "title")},
                          "checkpoint": bool(w.get("checkpoint")), "merged": w["status"] == "merged", "git": gits.get(k),
@@ -1711,6 +1715,27 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+def update_watch(httpd):
+    """An updated plugin only counts once this process runs it: without this a new action failed as "unknown" while the
+    list showed the new version. Waits for two equal readings, so a half-written update is not started."""
+    seen = STARTED
+    while True:
+        time.sleep(UPDATE_EVERY)
+        now = self_update.own()
+        if now and now != STARTED and now == seen:
+            with TICK:  # between rounds; live chats and workers run in their own processes and are picked up again
+                log("info", "Restarting for the updated plugin", ".".join(map(str, now)))
+                if os.name == "nt":  # exec would leave the exclusive port taken for a moment: the new one would refuse to start
+                    httpd.server_close()
+                    subprocess.Popen([sys.executable, *sys.argv], stdin=subprocess.DEVNULL, creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
+                    os._exit(0)
+                os.execv(sys.executable, [sys.executable, *sys.argv])
+        seen = now
+
+
+UPDATE_EVERY = float(os.environ.get("KNOWLEDGE_COMPANION_UPDATE_EVERY") or 30)
+
+
 def loop():
     while True:
         try:
@@ -2053,6 +2078,7 @@ def serve():
     threading.Thread(target=loop, daemon=True).start()
     threading.Thread(target=actions_loop, daemon=True).start()
     threading.Thread(target=chats_loop, daemon=True).start()
+    threading.Thread(target=update_watch, args=(httpd,), daemon=True).start()
     print(f"knowledge companion on {SELF}", flush=True)
     httpd.serve_forever()
 
