@@ -19,6 +19,7 @@ import glob
 import json
 import os
 import re
+import shlex
 import statistics
 import subprocess
 import sys
@@ -75,8 +76,9 @@ def summary(sessions: int, ctx: list[int], out: int, requests: int, sub: int, la
 def claude(root: Path, since: float) -> dict:
     """Claude Code transcripts. Every content block of one reply is its own line sharing message.id, so a reply is
     counted (and its usage taken) once per id; subagent transcripts live under <session>/subagents/."""
-    ctx, models, seen = [], Counter(), set()
-    out = requests = sub = launches = parallel = calls = errors = interrupts = 0
+    ctx, models, sub_models, seen = [], Counter(), Counter(), set()
+    outs: dict = {}  # per reply; the first line of a reply holds a running count, later lines the higher total
+    requests = sub = launches = parallel = calls = errors = interrupts = 0
     files = recent(str(root / "*/*.jsonl"), since) + recent(str(root / "*/*/subagents/*.jsonl"), since)
     per_reply: Counter = Counter()
     for path in files:
@@ -95,12 +97,14 @@ def claude(root: Path, since: float) -> dict:
                             per_reply[(path, m.get("id"))] += 1
                 key = (path, m.get("id"))
                 u = m.get("usage")
+                if u and m.get("model") and m["model"] != "<synthetic>":
+                    outs[key] = max(outs.get(key, 0), u.get("output_tokens") or 0)
                 if u and m.get("model") and m["model"] != "<synthetic>" and key not in seen:
                     seen.add(key)
                     requests += 1
                     sub += is_sub
                     models[m["model"]] += 1
-                    out += u.get("output_tokens") or 0
+                    sub_models[m["model"]] += is_sub
                     if not is_sub:
                         ctx.append(sum(u.get(k) or 0 for k in ("input_tokens", "cache_read_input_tokens",
                                                                "cache_creation_input_tokens")))
@@ -112,7 +116,8 @@ def claude(root: Path, since: float) -> dict:
                         interrupts += 1
     parallel = sum(1 for n in per_reply.values() if n >= 2)
     sessions = len({p for p in files if "/subagents/" not in p})
-    return summary(sessions, ctx, out, requests, sub, launches, parallel, calls, errors, interrupts, models)
+    return {**summary(sessions, ctx, sum(outs.values()), requests, sub, launches, parallel, calls, errors, interrupts, models),
+            "subagent_models": dict(sub_models.most_common())}
 
 
 EXIT = re.compile(r"Process exited with code (\d+)")
@@ -278,7 +283,10 @@ def note(stats: dict, before: dict, models: dict, config: dict, actions: list[st
         b = before.get(cli, {})
         out += [f"## {cli}", "", "| | this week | last week |", "|---|---|---|"]
         out += [f"| {label} | {fmt(s.get(k, 0))} | {fmt(b[k]) if k in b else '-'} |" for k, label in ROWS]
-        out += ["", "Requests per model: " + (", ".join(f"{m} {n}" for m, n in s["models"].items()) or "none"), ""]
+        out += ["", "Requests per model: " + (", ".join(f"{m} {n}" for m, n in s["models"].items()) or "none")]
+        if any(s.get("subagent_models", {}).values()):
+            out += ["Of which subagents: " + ", ".join(f"{m} {n}" for m, n in s["subagent_models"].items() if n)]
+        out += [""]
     out += ["## Models offered on this machine", ""]
     out += [f"- {cli} (configured: {config.get(cli) or 'default'}): {', '.join(ms) or 'could not be read'}"
             for cli, ms in models.items()]
@@ -298,6 +306,21 @@ def send(text: str) -> None:
             raise RuntimeError(f"Matrix answered {r.status}")
 
 
+def measure_new(actions: list[str], command: str | None, run=subprocess.run) -> list[str]:
+    """Hand new models to the installation's measuring command (KNOWLEDGE_NEW_MODEL_CMD), if any, and return its report
+    lines. It only reports; a failure is an action, never silence."""
+    new = [a.replace(": new model ", ":", 1) for a in actions if ": new model " in a]
+    if not new or not command:
+        return []
+    try:
+        r = run([*shlex.split(command), *new], capture_output=True, text=True, timeout=3 * 3600, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return [f"measuring new models failed: {type(e).__name__}: {e}"]
+    if r.returncode:
+        return [f"measuring new models failed with exit code {r.returncode}: {r.stderr.strip()[-300:]}"]
+    return r.stdout.strip().splitlines()
+
+
 def main() -> None:
     since = time.time() - WEEK
     config = configured()
@@ -309,6 +332,8 @@ def main() -> None:
     state = json.loads(STATE.read_text()) if STATE.exists() else {}
     actions = (unreadable + changes(state.get("models", {}), {c: m for c, m in models.items() if m})
                + missing_config(models, config, labels))
+    if "--dry-run" not in sys.argv:
+        actions += measure_new(actions, os.environ.get("KNOWLEDGE_NEW_MODEL_CMD"))
     text = note(stats, state.get("stats", {}), models, config, actions, time.strftime("%Y-%m-%d"))
     message = ("Agent report needs action (a changed model: test it before using it):\n" + "\n".join(f"- {a}" for a in actions)
                + "\nDetails: rapporten/agent-gebruik.md in the homelab memory") if actions else ""
@@ -328,6 +353,13 @@ def main() -> None:
 
 def selftest() -> None:
     import tempfile
+    calls = []
+    done = lambda rc=0: type("R", (), {"returncode": rc, "stdout": "codex:x scored 9/9\n", "stderr": "boom"})
+    assert measure_new(["codex: model gone y"], "m", lambda *a, **k: calls.append(a)) == [] and not calls
+    assert measure_new(["codex: new model x"], None) == []
+    assert measure_new(["codex: new model x"], "m --a", lambda c, **k: (calls.append(c), done())[1]) == ["codex:x scored 9/9"]
+    assert calls == [["m", "--a", "codex:x"]], calls
+    assert "exit code 1" in measure_new(["codex: new model x"], "m", lambda c, **k: done(1))[0]
     now = time.time()
     iso = lambda t: datetime.fromtimestamp(t).astimezone().isoformat()
     with tempfile.TemporaryDirectory() as t:
@@ -346,7 +378,11 @@ def selftest() -> None:
         (t / "c/p/s1.jsonl").write_text("\n".join(map(json.dumps, main)))
         (t / "c/p/s1/subagents/a.jsonl").write_text(json.dumps({"type": "assistant", "timestamp": iso(now), "message": {
             "id": "s", "model": "claude-haiku-5-5", "usage": u, "content": [{"type": "tool_use", "name": "Read"}]}}))
+        # A reply's later line carries the higher output count; the reply counts once, at that count.
+        main[1]["message"]["usage"] = {**u, "output_tokens": 40}
+        (t / "c/p/s1.jsonl").write_text("\n".join(map(json.dumps, main)))
         c = claude(t / "c", now - WEEK)
+        assert c["output_tokens"] == 45 and c["subagent_models"] == {"claude-haiku-5-5": 1, "claude-opus-5-5": 0}, c
         assert (c["sessions"], c["requests"], c["subagent_launches"], c["parallel_launches"]) == (1, 2, 2, 1), c
         assert c["ctx_median"] == 1010 and c["subagent_share"] == 0.5 and c["tool_errors"] == 1 and c["interrupts"] == 1, c
         assert c["models"] == {"claude-opus-5-5": 1, "claude-haiku-5-5": 1}, c
@@ -389,6 +425,8 @@ def selftest() -> None:
 
 
 if __name__ == "__main__":
+    if set(sys.argv[1:]) - {"--selftest", "--dry-run"}:  # a mistyped test flag must not start the real weekly run
+        sys.exit(f"unknown arguments: {sys.argv[1:]}; use --selftest or --dry-run")
     if "--selftest" in sys.argv:
         selftest()
     else:
