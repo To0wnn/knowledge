@@ -1386,11 +1386,16 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         for m, t in before.items():
             m.write_text(re.sub(r'"version": "[^"]+"', '"version": "9.8.7"', t), encoding="utf-8")
         act("workers_allowed", {"on": True})  # a round reports soon after the restart
-        wait_for(lambda: reported() == "9.8.7" or call("POST", "/local/api/tick", {}) and False, 60)
+        def poke():  # the port is closed for a moment while it restarts
+            try:
+                call("POST", "/local/api/tick", {})
+            except OSError:
+                pass
+        wait_for(lambda: reported() == "9.8.7" or poke(), 60)
         check(reported() == "9.8.7", "companion: an updated plugin restarts it, and the list shows the code that runs", str(reported()))
         for m, t in before.items():
             m.write_text(t, encoding="utf-8")
-        wait_for(lambda: reported() != "9.8.7" or call("POST", "/local/api/tick", {}) and False, 60)
+        wait_for(lambda: reported() != "9.8.7" or poke(), 60)
         check(reported() != "9.8.7", "companion: after going back it restarts again", str(reported()))
         code, out, err = run([sys.executable, str(hooks / "workers.py"), "--self-test"], "", env)
         check(code == 0 and out.strip() == "ok", "review: workers.py self-test on a real repository (clean merge, conflict aborted and said, "
