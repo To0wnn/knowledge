@@ -90,6 +90,7 @@ SKIP_PARTS = {".git", "__pycache__", "node_modules", ".venv", "venv", ".next", "
 SKIP_NAMES = re.compile(r"(\.bak|\.vault_pass$|\.env$|credentials|\.pem$|\.key$|id_ed25519|id_rsa|\.unf$|\.unifi$|\.cred$"
                         r"|\.p12$|\.pfx$|\.kdbx$|\.ovpn$|(^|/)wg\d*\.conf$|opnsense[^/]*\.xml$|(^|/)config[^/]*\.xml$)", re.I)
 MAX_BYTES = 2_000_000
+SESSION_LOG_MAX = MAX_BYTES * 3 // 4
 # Admin state the web UI manages (tokens, users, projects): a writable directory, unlike the read-only /config.
 ADMIN_DIR = Path(os.environ.get("KNOWLEDGE_ADMIN_DIR", HOME / ".config/knowledge-server"))
 TOKENS_FILE = Path(os.environ.get("KNOWLEDGE_TOKENS", ADMIN_DIR / "tokens.json"))
@@ -420,6 +421,10 @@ class Index:
 
 HISTORY = AUDIT.parent / "history"
 HISTORY_KEEP = 200  # versions per file; text is small, so this covers months of edits
+# A large file changing often is the exception: a whole copy per version made 200 versions of a session log 53 MB, under
+# a day of history. Over this many bytes per file the oldest go, but never the newest HISTORY_KEEP_MIN.
+HISTORY_KEEP_BYTES = 25_000_000
+HISTORY_KEEP_MIN = 10
 
 
 def history_dir(rel: str) -> Path:
@@ -439,6 +444,20 @@ def by_mtime(d: Path) -> list[Path]:
         except FileNotFoundError:
             pass
     return [p for _, p in sorted(found)]
+
+
+def history_excess(d: Path) -> list[Path]:
+    """The versions in a history folder that go: over HISTORY_KEEP, or older than the newest HISTORY_KEEP_BYTES."""
+    versions = by_mtime(d)
+    excess, total = versions[:-HISTORY_KEEP], 0
+    for n, p in enumerate(reversed(versions[-HISTORY_KEEP:])):
+        try:
+            total += p.stat().st_size
+        except FileNotFoundError:
+            continue
+        if total > HISTORY_KEEP_BYTES and n >= HISTORY_KEEP_MIN:
+            excess.append(p)
+    return excess
 
 
 def tracked(rel: str) -> bool:
@@ -487,7 +506,7 @@ def keep_version(rel: str, old: tuple, new_text: str, removed: bool = False):
         now = time.time()  # microseconds keep versions from the same second in order
         path = d / f"{time.strftime('%Y%m%d-%H%M%S', time.localtime(now))}.{int(now % 1 * 1e6):06d}_{who}{'-removed' * removed}.md"
         path.write_text(new_text)
-        for extra in by_mtime(d)[:-HISTORY_KEEP]:
+        for extra in history_excess(d):
             extra.unlink(missing_ok=True)
         HISTORY_FAILED.pop(rel, None)
     except OSError as e:  # history is a safety net; never let it break an edit, but say so in lint
@@ -1947,6 +1966,8 @@ def project_tasks(project: str) -> tuple[list[dict], list[dict]]:
     tasks, back = [], []
     for rel, text in sorted(task_memos(PROJECTS[project][1]).items()):
         for line in text.splitlines():
+            if "[" not in line:  # both kinds of line have one, and most lines of a memo have none: no regex for those
+                continue
             if t := parse_task(line):
                 tasks.append({**t, "project": project, "path": rel, "line": line})
             elif d := DONE_LINE.match(line):
@@ -2982,6 +3003,15 @@ class BearerAuth:
         return await self.app(scope, receive, send)
 
 
+def session_log_file(mem: str, month: str) -> str:
+    """The month's session log, or its next part once it is nearly MAX_BYTES: a bigger file leaves the index and search."""
+    rel, part = f"{mem}/sessions/{month}.md", 1
+    while (hit := index.files.get(rel)) and hit[1] > SESSION_LOG_MAX:
+        part += 1
+        rel = f"{mem}/sessions/{month}-{part}.md"
+    return rel
+
+
 @server.custom_route("/sessions", methods=["POST"])
 async def sessions_route(request: Request):
     """Session log, posted by the plugin's SessionEnd/PreCompact hook: one short entry per (part of a) Claude Code
@@ -2995,7 +3025,7 @@ async def sessions_route(request: Request):
         return JSONResponse({"skipped": "no prompts"})
     project = token_project() or project_for(str(b.get("cwd", "")))
     mem = PROJECTS[project][1]
-    rel = f"{mem}/sessions/{time.strftime('%Y-%m')}.md"
+    rel = session_log_file(mem, time.strftime('%Y-%m'))
     lines = [f"\n## {time.strftime('%Y-%m-%d %H:%M')} · {project} · {device.get().get('name', '?')} · "
              f"{str(b.get('reason', 'end'))[:20]} · session {str(b.get('session_id', ''))[:8]}",
              *[f"- Asked: {p}" for p in prompts]]

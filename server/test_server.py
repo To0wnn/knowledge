@@ -3057,6 +3057,22 @@ def main():
                 def iterdir(self):
                     return [Path(h) / "a", Path(h) / "gone"]
             assert [p.name for p in srv.by_mtime(Racing(h))] == ["a"]
+            # History per file stays bounded in bytes too, never below the newest versions.
+            hist = Path(h) / "hist"
+            hist.mkdir()
+            for n in range(14):
+                (hist / f"{n:02d}.md").write_text("x" * 3)
+                os.utime(hist / f"{n:02d}.md", (n + 1, n + 1))
+            keep, srv.HISTORY_KEEP_BYTES = srv.HISTORY_KEEP_BYTES, 30
+            assert sorted(p.name for p in srv.history_excess(hist)) == [f"{n:02d}.md" for n in range(4)]
+            srv.HISTORY_KEEP_BYTES = keep
+            # A session log nearly too big for the index goes on in a next part (test on the sizes the index holds).
+            mem = "memory/sessions/2099-01"
+            assert srv.session_log_file("memory", "2099-01") == f"{mem}.md"
+            srv.index.files[f"{mem}.md"] = (0, srv.SESSION_LOG_MAX + 1, "", None)
+            assert srv.session_log_file("memory", "2099-01") == f"{mem}-2.md"
+            srv.index.files[f"{mem}-2.md"] = (0, 10, "", None)
+            assert srv.session_log_file("memory", "2099-01") == f"{mem}-2.md"
             # One notice per duplicate pair: the in-memory "told" set is gone after a deploy and the score moves.
             srv.NOTICES = Path(h) / "notices.json"
             srv.add_notice("pc", "p", "rule 1: x and y (reranker 0.73)", like="rule 1: x and y (")

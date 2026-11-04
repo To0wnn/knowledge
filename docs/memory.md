@@ -34,6 +34,8 @@ checks them against a few house rules, so a growing pile of agent memory stays f
   `data/docs`, memory in `data/memory`); the admin page makes more and gives a project the name the web UI shows.
 - **Lint:** deterministic checks in ~80 ms: dead links, index lines without a file and the reverse, missing frontmatter
   or sections, oversized memos, overdue open items, probable secrets (never shown), raw sources not yet processed.
+- **Bounds:** a file keeps up to 200 versions and 25 MB of history (always the newest 10). A month's session log goes on
+  in `<YYYY-MM>-2.md` at 1.5 MB, because a file over 2 MB leaves the index.
 - **Archive:** folders such as `archief/`, `archive/`, `old/` or `history/` are skipped by search unless asked for.
 
 ## External skills
