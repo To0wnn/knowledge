@@ -326,6 +326,32 @@ function renderSettings() {
   $("s-config-admins").textContent = `Always admin (server config): ${state.config_admins.join(", ") || "nobody"}.`;
 }
 
+// One list for the whole server: per role and agent the advice, or the admin's own pick. A pc follows only after Apply on Machines.
+function renderModels() {
+  const m = state.models; $("models-box").hidden = !m;
+  if (!m) return;
+  $("models-note").textContent = `Scores are right answers on our reading and review test${m.measured_on ? `, last measured ${m.measured_on}` : ""}. A pc changes only when you click Apply on its card. ${m.note}`;
+  const name = (c) => `${c.model}${c.effort ? `, ${c.effort}` : ""}${c.score ? ` (${c.score})` : " (not measured)"}`;
+  $("models-rows").replaceChildren(...m.roles.flatMap((r) => Object.entries(r.agents).map(([a, v]) => {
+    const wrap = el("div", "setting"), id = `m-${r.key}-${a}`, label = el("label", "", `${r.role} · ${a}`), sel = el("select");
+    label.htmlFor = id; sel.id = id; sel.name = id;
+    const mine = m.chosen[r.key]?.[a], opt = (value, text) => { const o = el("option", "", text); o.value = value; sel.append(o); return o; };
+    opt("", v.advised.length ? `Advice: ${name(v.advised[0])}` : "Advice: none");
+    const seen = new Set();
+    for (const c of v.advised) { seen.add(c.model); opt(JSON.stringify({ model: c.model, effort: c.effort || "" }), name(c)); }
+    for (const id2 of v.offered) if (!seen.has(id2)) opt(JSON.stringify({ model: id2, effort: "" }), `${id2} (not measured)`);
+    if (mine) {
+      const value = JSON.stringify({ model: mine.model, effort: mine.effort || "" });
+      if (![...sel.options].some((o) => o.value === value)) opt(value, `${mine.model} (no pc offers it now)`);
+      sel.value = value;
+    }
+    sel.onchange = () => run(() => api("/ui/api/admin/model-choice", { role: r.key, agent: a, ...(sel.value ? JSON.parse(sel.value) : {}) }), sel, "Saved: Apply it on a pc's card");
+    wrap.append(label, sel);
+    return wrap;
+  })));
+  $("models-unmeasured").textContent = m.unmeasured.length ? `Not measured yet: ${m.unmeasured.map((u) => `${u.model} (${u.agent}, on ${u.pcs.join(", ")})`).join("; ")}.` : "Every model a pc offers has been measured.";
+}
+
 // One date style on the whole page: "21 Oct 09:26", the year only when it is not this year.
 const stamp = (d) => d.toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
   ...(d.getFullYear() !== new Date().getFullYear() ? { year: "numeric" } : {}) });
@@ -374,6 +400,7 @@ async function load() {
   $("n-people").textContent = waiting ? `${waiting} new` : $("users").rows.length; // config admins are rows too
   $("n-people").classList.toggle("alert", !!waiting);
   if (!$("settings-form").contains(document.activeElement)) renderSettings(); // don't overwrite what is being typed
+  if (!$("models-box").contains(document.activeElement)) renderModels();
 }
 
 $("settings-form").onsubmit = (e) => {

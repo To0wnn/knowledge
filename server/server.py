@@ -728,20 +728,49 @@ DEV_RULES_FILE = "dev_rules.md"  # how code is changed; next to the house rules,
 ADVICE_FILE = "model_advice.json"  # an installation's own measurements; without the file the UI shows no advice
 
 
-def model_advice(offered: dict, data: dict) -> dict:
-    """Per role and agent the first measured model this pc offers, and what it offers that nobody measured. Advice only:
-    nothing here changes a setting. offered: {agent: [{"id": ...}]}; data: the ADVICE_FILE."""
-    rows, measured = [], {}
+def model_advice(offered: dict, data: dict, chosen: dict) -> dict:
+    """What one pc would run: per role and agent the admin's choice, else the first measured model it offers. Nothing
+    here changes a setting. offered: {agent: [{"id": ...}]}; chosen: {role key: {agent: {"model", "effort"}}}."""
+    rows, missing = [], []
     for role in data.get("roles", []):
         for agent, candidates in role.get("agents", {}).items():
-            ids = {m.get("id") for m in offered.get(agent) or []}
-            measured.setdefault(agent, set()).update(c.get("model") for c in candidates)
-            if agent in offered:
-                pick = next((c for c in candidates if c.get("model") in ids), None)
-                rows.append({"role": role.get("role", ""), "agent": agent, **(pick or {"model": None})})
-    return {"rows": rows, "measured_on": data.get("measured_on", ""), "note": data.get("note", ""),
-            "unmeasured": {a: sorted(i for i in ({m.get("id") for m in v or []} - measured.get(a, set())) if i)
-                           for a, v in offered.items()}}
+            if agent not in offered:
+                continue
+            ids = {m.get("id") for m in offered[agent] or []}
+            mine = (chosen.get(role.get("key")) or {}).get(agent)
+            if mine and mine.get("model") not in ids:
+                missing.append(mine["model"])
+            pick = mine if mine and mine.get("model") in ids else next((c for c in candidates if c.get("model") in ids), None)
+            rows.append({"key": role.get("key"), "role": role.get("role", ""), "agent": agent, **(pick or {"model": None})})
+    return {"rows": rows, "missing": sorted(set(missing))}
+
+
+def model_plan(advice: dict) -> dict:
+    """For Apply: the settings an agent has for its lead and its reader; review and search have no setting of their own."""
+    plan: dict = {}
+    for r in advice.get("rows", []):
+        if r.get("model") and r.get("key") in ("lead", "read"):
+            name = "lead" if r["key"] == "lead" else "reader"
+            plan.setdefault(r["agent"], {})[name] = r["model"]
+            if r.get("effort"):
+                plan[r["agent"]][f"{name}_effort"] = r["effort"]
+    return plan
+
+
+def model_overview(rows: list[dict], data: dict, chosen: dict) -> dict:
+    """The server-wide list: every pc's models together, the advice with its scores, the choice, and what nobody measured
+    yet (a model only some pc has shows up here: that is when measuring it is worth it)."""
+    offered: dict = {}
+    for r in rows:
+        for agent, models in ((r.get("companion") or {}).get("models") or {}).items():
+            for m in models or []:
+                offered.setdefault(agent, {}).setdefault(m.get("id"), []).append(r["label"])
+    measured = {a: {c.get("model") for role in data.get("roles", []) for c in role.get("agents", {}).get(a, [])} for a in offered}
+    return {"measured_on": data.get("measured_on", ""), "note": data.get("note", ""), "chosen": chosen,
+            "roles": [{"key": x.get("key"), "role": x.get("role", ""), "agents": {
+                a: {"advised": c, "offered": sorted(offered.get(a, {}))} for a, c in x.get("agents", {}).items()}} for x in data.get("roles", [])],
+            "unmeasured": [{"agent": a, "model": i, "pcs": sorted(set(pcs))} for a, ms in sorted(offered.items())
+                           for i, pcs in sorted(ms.items()) if i not in measured[a]]}
 
 
 def advice_data() -> dict:
@@ -2473,7 +2502,7 @@ def machine_rows() -> list[dict]:
     person may steer it (remote actions, forget). Tokens of old plugins (no machine id) show as one "old plugin" row."""
     dev, now, tokens = device.get(), time.time(), read_json(TOKENS_FILE, {})
     seen = lambda n: n in tokens and (dev.get("admin") or tokens[n].get("owner") == dev.get("user"))
-    queue, rows, advice = read_json(MACHINE_ACTIONS, {}), [], advice_data()
+    queue, rows, advice, chosen = read_json(MACHINE_ACTIONS, {}), [], advice_data(), read_json(MODEL_CHOICE, {})
     for mid, m in read_json(MACHINES_FILE, {}).items():
         names = [n for n in m.get("tokens", {}) if seen(n)]
         if not names:
@@ -2498,7 +2527,7 @@ def machine_rows() -> list[dict]:
                      "companion": {**{k: comp.get(k) for k in ("version", "at", "workersAllowed", "game", "maxWorkers", "folders", "projects", "token", "live", "chats")},
                                    "agents": sorted(comp.get("agents") or {}),
                                    "models": {a: v.get("models", []) for a, v in (comp.get("agents") or {}).items()}} if comp else None,
-                     **({"advice": model_advice({a: v.get("models", []) for a, v in comp["agents"].items()}, advice)}
+                     **({"advice": model_advice({a: v.get("models", []) for a, v in comp["agents"].items()}, advice, chosen)}
                         if advice and comp and comp.get("agents") else {}),
                      "actions": queue.get(mid, [])[-10:]})
     for n, cfg in tokens.items():  # plugins before 0.15.0: one row per token, from clients.json
@@ -3814,6 +3843,7 @@ async def ui_admin_page(request: Request):
 # Settings the admin page may change: policy, not infrastructure. Paths, hosts, proxy IPs and the port stay in
 # compose.yaml / local.env (infra as code) and are only shown. Defaults are the calibrated values in the code.
 SETTINGS_FILE = ADMIN_DIR / "settings.json"
+MODEL_CHOICE = ADMIN_DIR / "model_choice.json"  # the admin's pick per role and agent; empty: the advice counts
 SETTINGS = {  # key: (type, min, max, label, help); the label is short, the help says what it does and how it was set
     "similar_hint": (float, 0.5, 0.95, "Similar memo hint", "Similarity from which a new memo shows 'similar existing memos'. Calibrated on 18 Oct 2026: 0.72."),
     "rerank_threshold": (float, 0.2, 0.99, "Duplicate memo score", "Reranker score from which lint reports two memos as possible_duplicate. Measured on 28 Oct 2026: 0.5."),
@@ -3969,6 +3999,26 @@ async def ui_admin_settings(request: Request, body: dict):
     BACKGROUND.pop("settings", None)
     audit("admin-settings", ",".join(f"{k}={v}" for k, v in values.items()))
     return JSONResponse({"ok": True, "settings": current_settings()})
+
+
+@server.custom_route("/ui/api/admin/model-choice", methods=["POST"])
+@admin_only
+async def ui_admin_model_choice(request: Request, body: dict):
+    """{"role", "agent", "model", "effort"}; no model: back to the advice. Nothing reaches a pc until its owner clicks Apply."""
+    role, agent, model, effort = str(body.get("role", "")), str(body.get("agent", "")), str(body.get("model", "")), str(body.get("effort", ""))
+    if role not in {r.get("key") for r in advice_data().get("roles", [])} or agent not in AGENT_OWNERS:
+        raise ToolError("unknown role or agent")
+    if model and not re.fullmatch(r"[\w.:\[\]-]{1,80}", model) or effort and effort not in EFFORTS:
+        raise ToolError("not a model or effort")
+
+    def change(d):
+        if model:
+            d.setdefault(role, {})[agent] = {"model": model, **({"effort": effort} if effort else {})}
+        else:
+            (d.get(role) or {}).pop(agent, None)
+    await asyncio.to_thread(update_state, MODEL_CHOICE, change)
+    audit("admin-model-choice", f"{role} {agent} {model} {effort}")
+    return JSONResponse({"ok": True})
 
 
 # ---------------------------------------------------------------- skills from GitHub (admin tab "External skills")
@@ -4187,6 +4237,7 @@ async def ui_admin_state(request: Request, _):
         "config_admins": sorted(CONFIG_ADMINS),
         "settings": current_settings(), "setting_info": {k: {"min": lo, "max": hi, "label": label, "help": hlp, "float": kind is float}
                                                          for k, (kind, lo, hi, label, hlp) in SETTINGS.items()},
+        "models": model_overview(await asyncio.to_thread(machine_rows), data, read_json(MODEL_CHOICE, {})) if (data := advice_data()) else None,
         "system": await asyncio.to_thread(system_state),
         "external": read_json(EXTERNAL_FILE, {}),
     })
@@ -4870,7 +4921,10 @@ async def ui_mission(request: Request):
 
 @server.custom_route("/ui/api/machines", methods=["GET"])
 async def ui_machines(request: Request):
-    return JSONResponse({"machines": await asyncio.to_thread(machine_rows), "now": time.time()})
+    def build():
+        rows = machine_rows()
+        return {"machines": rows, "stuck": stuck_projects(task_rows(), rows), "now": time.time()}
+    return JSONResponse({**await asyncio.to_thread(build)})
 
 
 @server.custom_route("/ui/api/machines/forget", methods=["POST"])
@@ -4906,7 +4960,7 @@ def action_args(action: str, args: dict) -> dict:
         if not re.fullmatch(r"[\w.-]{1,60}", str(args.get("id", ""))):
             raise ValueError("id must be a task id")
         return str(args["id"])
-    if action in ("start_worker", "stop_worker", "rollback", "restart", "merge", "takeover"):  # a task id is unique per project only
+    if action in ("start_worker", "stop_worker", "rollback", "restart", "merge", "takeover", "archive_worker"):  # a task id is unique per project only
         if args.get("project") not in PROJECTS or not in_scope(PROJECTS[args["project"]][1] + "/"):
             raise ValueError("unknown project")
         return {"project": args["project"], "id": tid()}
@@ -4928,6 +4982,8 @@ def action_args(action: str, args: dict) -> dict:
         if args.get("on") is True and args.get("confirm") != "YOLO":
             raise ValueError("YOLO on needs the word YOLO typed in the confirm dialog")
         return {"agent": agent(), "on": args.get("on") is True}
+    if action == "apply_models":
+        return {}  # the route fills in the plan: a page cannot send one of its own
     if action == "workers_allowed":
         return {"on": args.get("on") is True}
     if action == "max_workers":
@@ -4956,6 +5012,11 @@ async def ui_machine_action(request: Request):
                    for a in row["agents"].values() for w in a.get("workers", [])):
             return JSONResponse({"error": f"no ended worker for {args['id']} on this machine"}, status_code=409)
         action = "start_worker"  # the companion's own start (any version): `only` skips the hold
+    if action == "apply_models":
+        plan = model_plan(row.get("advice") or {})
+        if not plan:
+            return JSONResponse({"error": "no model to apply on this machine"}, status_code=409)
+        args = {"plans": json.dumps(plan, separators=(",", ":"))}
     dev, tokens = device.get(), read_json(TOKENS_FILE, {})
     if action == "takeover":  # the owner goes on with a worker as a chat: its companion stops it and asks /machine/chats/adopt
         key = f"{args['project']}/{args['id']}"
@@ -5367,6 +5428,16 @@ def task_hosts(t: dict, rows: list[dict]) -> list[dict]:
     return [{"machine": r["id"], "label": r["label"]} for r in rows if r["own"] and not r.get("old") and r["online"]
             and (c := r.get("companion")) and c.get("workersAllowed") and agent in (c.get("agents") or [])
             and any(f.get("project") == t["project"] for f in (c.get("folders") or {}).get("linked", []))]
+
+
+def stuck_projects(tasks: list[dict], rows: list[dict]) -> list[dict]:
+    """Tasks for an agent that could start but never will: no pc of this person has a folder linked to their project."""
+    linked = {f.get("project") for r in rows if r["own"] for f in ((r.get("companion") or {}).get("folders") or {}).get("linked", [])}
+    counts: dict = {}
+    for t in tasks:
+        if not t["done"] and owner_agent(t["owner"]) and t["startable"] and t["project"] not in linked:  # a handed-back result has no "startable"
+            counts[t["project"]] = counts.get(t["project"], 0) + 1
+    return [{"project": p, "tasks": n} for p, n in sorted(counts.items())]
 
 
 def board_items() -> list[dict]:
@@ -6509,7 +6580,7 @@ async def machine_report(request: Request):
                                  **({"models": report_models(v["models"])} if "models" in v else {})}
                              for a, v in (b.get("agents") or {}).items() if a in AGENT_OWNERS and isinstance(v, dict)},
                   "workers": [{k: (w.get(k) if w.get(k) is None or isinstance(w.get(k), (int, float, bool)) else str(w[k])[:300])
-                               for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open", "checkpoint", "merged", "why", "chat")}
+                               for k in ("id", "project", "agent", "status", "started", "ended", "branch", "title", "yolo", "open", "checkpoint", "merged", "why", "chat")}
                               | {"git": git_pill(w.get("git")), "progress": worker_progress(w.get("progress")), "review": worker_review(w.get("review"))}
                               for w in (b.get("workers") or [])[:40] if isinstance(w, dict)],
                   "folders": {k: [{"path": str(f.get("path", ""))[:500], "project": str(f.get("project", ""))[:80]}

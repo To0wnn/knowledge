@@ -1235,6 +1235,30 @@ function yoloSwitch(m, a, ag) {
   if (ag.yolo) { const w = el("span", "yolo-mark", "⚠"); w.title = "On: every session of this agent there runs without asking"; w.setAttribute("aria-hidden", "true"); l.append(w); }
   return l;
 }
+// One worker: what it does first, its task id small behind it. Actions that matter rarely (roll back, archive) only once it ended.
+function workerList(m, list) {
+  const ws = el("ul", "machine-list");
+  for (const w of list) {
+    const li = el("li", `worker ${w.status}`), text = el("span", "worker-text"), head = el("span");
+    text.append(head); li.title = w.branch || "";
+    head.append(el("strong", null, w.title || w.id), w.title ? el("span", "muted", ` ${w.id}`) : "", ` · ${w.project || "?"} · ${w.status === "running" ? `running ${mins(w.started)}` : `${w.status} ${ago(w.ended || w.started)}`}`);
+    if (w.why) text.append(el("span", "worker-why", w.why));
+    if (w.status === "running" && !m.online) text.append(el("span", "worker-why", `pc ${offlineFor(m.at)}: nobody knows whether it still runs`));
+    if (w.status === "failed") text.append(el("span", "worker-why", "Starts again by itself after 6 h while its task line is open."));
+    if (w.review?.ahead > 0) text.append(el("span", "worker-why", `${w.review.ahead} commit(s) not merged: review them under Agents.`));
+    if (w.status === "running" && w.progress) text.append(workerProgress(w.progress));
+    li.append(text);
+    if (w.yolo) li.append(el("span", "pill yolo", "YOLO"));
+    li.append(machineButton("open", "How to look at this worker", () => toast(w.open || "No details yet.", false)));
+    if (m.own && m.online && w.status === "running") li.append(machineButton("stop", "Stop this worker", () => confirm(`Stop the worker on ${w.id}?`) && machineAction(m, "stop_worker", { project: w.project, id: w.id })));
+    if (m.own && m.online && w.status === "failed") li.append(machineButton("restart", "Start this worker again now (past the 6 h hold)", () => machineAction(m, "restart", { project: w.project, id: w.id })));
+    if (m.own && w.status !== "running" && !w.merged && w.checkpoint) li.append(machineButton("roll back", "Put its worktree back as it was before its last turn (a checkpoint of now is kept)",
+      () => confirm(`Roll ${w.id} back to before its last turn?`) && machineAction(m, "rollback", { project: w.project, id: w.id })));
+    if (m.own && m.online && w.status !== "running" && !(w.review?.ahead > 0)) li.append(machineButton("archive", "Take it off this list; its branch and worktree stay", () => machineAction(m, "archive_worker", { project: w.project, id: w.id })));
+    ws.append(li);
+  }
+  return ws;
+}
 // The Machines view: one card per pc.
 async function loadMachines() {
   const res = await api("/ui/api/machines");
@@ -1244,6 +1268,7 @@ async function loadMachines() {
   const narrow = matchMedia("(max-width: 699.98px)").matches;
   const sha = async (t) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t)))].map((b) => b.toString(16).padStart(2, "0")).join("");
   const here = localMachine && crypto.subtle ? (await Promise.all(res.machines.map(async (m) => (await sha(m.id)) === localMachine ? m.id : ""))).find(Boolean) : "";
+  for (const s of res.stuck || []) box.append(el("p", "machine-error", `${s.tasks} task${s.tasks > 1 ? "s" : ""} of ${s.project} cannot start: none of your pcs has a folder linked to that project (Folders on a pc).`));
   if (!res.machines.length) {
     const how = el("a", "btn small", "How to install"); how.href = "/ui/help#install";
     box.append(emptyState("No pcs yet: a pc shows up here, with its agents and workers, once it runs the knowledge setup.", how));
@@ -1267,7 +1292,8 @@ async function loadMachines() {
     for (const [a, ag] of Object.entries(m.agents)) {
       const row = el("div", "machine-agent"), top = el("div", "machine-agent-head");
       top.append(el("strong", null, AGENT_NAME[a] || a), el("span", "muted", ag.plugin ? `plugin ${ag.plugin}` : "plugin ?"));
-      if (ag.yolo && !(m.own && c && !m.old)) top.append(el("span", "pill yolo", "YOLO on")); // the owner sees the switch instead
+      if (ag.yolo) top.append(el("span", "pill yolo", "YOLO on")); // stays in sight: its switch sits under Settings
+      if (c) top.append(el("span", "pill", `${ag.workers.filter((w) => w.status === "running").length} of ${(c.maxWorkers || {})[a] ?? 1} running`));
       if (ag.trusted === false) top.append(el("span", "pill warn", "hooks not trusted"));
       if (c) top.append(el("span", `pill ${ag.limit >= 90 ? "warn" : ""}`, ag.limit == null ? "limit unknown" : `limit ${Math.round(ag.limit)}%`));
       row.append(top);
@@ -1275,24 +1301,17 @@ async function loadMachines() {
         const e = ag.error, w = el("p", "machine-error", `hook ${e.hook || "?"}${e.event ? ` (${e.event})` : ""} failed · ${(e.stderr || e.text || "").split("\n")[0].slice(0, 160)} · ${ago(e.at)}`);
         w.title = e.stderr || ""; row.append(w);
       }
-      const ws = el("ul", "machine-list");
-      for (const w of ag.workers) {
-        const li = el("li", `worker ${w.status}`), text = el("span", "worker-text");
-        const head = el("span"); text.append(head);
-        head.append(el("strong", null, w.id), ` · ${w.project || "?"} · ${w.status === "running" ? `running ${mins(w.started)}` : `${w.status} ${ago(w.ended || w.started)}`}${w.branch ? ` · ${w.branch}` : ""}`);
-        if (w.why) text.append(el("span", "worker-why", w.why));
-        if (w.status === "running" && !m.online) text.append(el("span", "worker-why", `pc ${offlineFor(m.at)}: nobody knows whether it still runs`));
-        if (w.status === "running" && w.progress) text.append(workerProgress(w.progress));
-        li.append(text);
-        if (w.yolo) li.append(el("span", "pill yolo", "YOLO"));
-        li.append(machineButton("open", "How to look at this worker", () => toast(w.open || "No details yet.", false)));
-        if (m.own && m.online && w.status === "running") li.append(machineButton("stop", "Stop this worker", () => confirm(`Stop the worker on ${w.id}?`) && machineAction(m, "stop_worker", { project: w.project, id: w.id })));
-        if (m.own && m.online && w.status === "failed") li.append(machineButton("restart", "Start this worker again now (past the 6 h hold)", () => machineAction(m, "restart", { project: w.project, id: w.id })));
-        if (m.own && w.status !== "running" && w.checkpoint) li.append(machineButton("roll back", "Put its worktree back as it was before its last turn (a checkpoint of now is kept)",
-          () => confirm(`Roll ${w.id} back to before its last turn?`) && machineAction(m, "rollback", { project: w.project, id: w.id })));
-        ws.append(li);
+      const unmerged = (w) => w.review?.ahead > 0;
+      const needs = ag.workers.filter((w) => w.status === "failed" || unmerged(w) || (w.status === "running" && !m.online));
+      const running = ag.workers.filter((w) => w.status === "running" && !needs.includes(w));
+      const earlier = ag.workers.filter((w) => !needs.includes(w) && !running.includes(w));
+      if (needs.length) row.append(el("p", "machine-group", "Needs you"), workerList(m, needs));
+      if (running.length) row.append(el("p", "machine-group", "Running now"), workerList(m, running));
+      if (earlier.length) {
+        const d = el("details", "machine-sessions");
+        d.append(el("summary", null, `Earlier (${earlier.length})`), workerList(m, earlier));
+        row.append(d);
       }
-      if (ag.workers.length) row.append(ws);
       if (ag.sessions.length) {
         const d = el("details", "machine-sessions"), list = el("ul", "machine-list");
         d.open = !narrow && ag.sessions.length <= 3;
@@ -1301,26 +1320,28 @@ async function loadMachines() {
         d.append(list); row.append(d);
       }
       if (m.own && c && !m.old) {
-        const ctl = el("div", "machine-controls");
+        const ctl = el("div", "machine-controls"), set = el("details", "machine-sessions");
+        set.open = ag.trusted === false; // hooks not trusted needs a click: no need to hunt for it
+        set.append(el("summary", null, "Settings"), ctl);
         if (ag.trusted === false) ctl.append(machineButton("Trust hooks", "Trust the knowledge hooks the agent's own way", () => machineAction(m, "trust_hooks", { agent: a })));
         ctl.append(yoloSwitch(m, a, ag));
-        const max = el("select", "small"); max.title = "At most this many workers of this agent at once";
-        for (const n of [0, 1, 2, 3, 4]) { const o = el("option", null, `max ${n} worker${n === 1 ? "" : "s"}`); o.value = n; o.selected = n === ((c.maxWorkers || {})[a] ?? 1); max.append(o); }
+        const max = el("select", "small"); max.title = "At most this many workers of this agent on this pc at the same time; 0: none";
+        const most = (c.maxWorkers || {})[a] ?? 1; // the companion's page allows up to 8: show what is set
+        for (const n of [...new Set([0, 1, 2, 3, 4, most])].sort((x, y) => x - y)) { const o = el("option", null, `${n} at a time`); o.value = n; o.selected = n === most; max.append(o); }
         max.onchange = () => machineAction(m, "max_workers", { agent: a, n: Number(max.value) });
         ctl.append(max);
-        row.append(ctl);
+        row.append(set);
       }
       agents.append(row);
     }
-    if (m.advice?.rows.length) {
-      const d = el("details", "machine-sessions"), list = el("ul", "machine-list");
-      d.append(el("summary", null, `Recommended settings${m.advice.measured_on ? ` (measured ${m.advice.measured_on})` : ""}`));
-      for (const r of m.advice.rows) list.append(el("li", null, `${r.role} · ${AGENT_NAME[r.agent] || r.agent}: ${r.model
-        ? `${r.model}${r.effort ? `, ${r.effort}` : ""}${r.score ? ` (test score ${r.score})` : " (not measured)"}` : "no measured model on this pc"}`));
-      d.append(list);
-      for (const [a, ids] of Object.entries(m.advice.unmeasured)) if (ids.length) d.append(el("p", "machine-meta", `Not measured yet on ${AGENT_NAME[a] || a}: ${ids.join(", ")}`));
-      d.append(el("p", "machine-meta", `Advice only: nothing changes by itself.${m.advice.note ? ` ${m.advice.note}` : ""}`));
-      card.append(d);
+    if (m.advice?.rows.some((r) => r.model) && m.own && !m.old && c) {
+      const plain = (k) => m.advice.rows.filter((r) => r.key === k && r.model).map((r) => `${AGENT_NAME[r.agent] || r.agent}: ${r.model}`).join(", ");
+      const line = el("p", "machine-meta", `Models: ${plain("lead") || "?"}`);
+      line.title = `Reading: ${plain("read")}`;
+      line.append(" ", machineButton("Apply", "Write the server's model choice into this pc's agent settings; new sessions use it",
+        () => confirm(`Apply on ${m.label}?\n\nLead: ${plain("lead")}\nReading: ${plain("read")}`) && machineAction(m, "apply_models")));
+      if (m.advice.missing.length) line.append(` · not on this pc: ${m.advice.missing.join(", ")}`);
+      card.append(line);
     }
     const fl = c && c.folders;
     if (fl && (fl.linked.length || (m.own && fl.candidates.length))) {

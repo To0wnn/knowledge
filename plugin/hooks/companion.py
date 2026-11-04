@@ -43,6 +43,7 @@ from pathlib import Path
 
 HOOKS = Path(__file__).resolve().parent
 sys.path.insert(0, str(HOOKS))
+import model_settings  # noqa: E402  (next to this file)
 import agent_hooks  # noqa: E402  (the wake code and the session registry)
 import chat  # noqa: E402  (chats from the web UI)
 import project_marker  # noqa: E402
@@ -1303,6 +1304,18 @@ def progress(w: dict, g) -> dict:
             "log": log_tail(w.get("log"))}
 
 
+def unmerged_commits(w: dict) -> int:
+    """Commits on a worker's branch that its base branch lacks; 0 when the branch or its repo is gone."""
+    b, into = w.get("branch"), w.get("base_branch")
+    if not b or not into or w["status"] == "merged":
+        return 0
+    try:
+        n = workers.git(w["repo"], "rev-list", "--count", f"refs/heads/{into}..refs/heads/{b}", env=GIT_RO, timeout=10)
+        return int(n.stdout.strip() or 0) if not n.returncode else 0
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return 0
+
+
 def review(w: dict, now: float):
     """For the review card of an ended worker (last 7 days, not merged): its branch against the branch its worktree
     was made from: commits ahead, changed files, the newest commit's subject. None without a recorded base branch."""
@@ -1334,10 +1347,10 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
                      "resets": (resets or {}).get(a), **({"plugin": v} if (v := plugin_version(a)) else {}),  # known before a session
                      "models": chat.models(a)}  # what a chat may pick (cached for hours)
                        for a in AGENTS if installed(a)},
-            "workers": [{**{k: w.get(k) for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open", "why", "chat")},
+            "workers": [{**{k: w.get(k) for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open", "why", "chat", "title")},
                          "checkpoint": bool(w.get("checkpoint")), "merged": w["status"] == "merged", "git": gits.get(k),
                          **({"progress": progress(w, gits.get(k))} if w["status"] == "running" else {}),
-                         **({"review": r} if (r := review(w, now)) else {})} for k, w in sorted(ws.items(), key=lambda kw: -(kw[1].get("started") or 0))],  # newest first: the server keeps 40
+                         **({"review": r} if (r := review(w, now)) else {})} for k, w in sorted(ws.items(), key=lambda kw: -(kw[1].get("started") or 0)) if not w.get("archived")],  # newest first: the server keeps 40
             "limitWait": wait, "waiting": waiting or {}, "folders": links, "chats": chat_gits, "projects": load("state.json", {}).get("projects", [])}
     server("POST", "/machine/report", tok, body)
 
@@ -1411,11 +1424,29 @@ def run_action(a: dict) -> str:
                 " change it to 'start after approval' or remove it to stop it for good")
     if act == "takeover":
         return take_over(args, token_store.token())
+    if act == "apply_models":
+        said = []
+        for a, plan in json.loads(args["plans"]).items():
+            if a in AGENTS and installed(a):
+                label = next((m.get("name", "") for m in chat.models(a) if m.get("id") == plan.get("lead")), "") if a == "agy" else ""
+                said.append(model_settings.apply(a, plan, label))
+        return "; ".join(said) + ". A new session uses them."
+    if act == "archive_worker":  # off the list only: the record keeps its restart hold, the branch and worktree stay
+        with TICK, LOCK:
+            ws = load("workers.json", {})
+            w = ws.get(f"{args.get('project')}/{args['id']}")
+            if not w or w["status"] == "running":
+                raise RuntimeError(f"no ended worker for {args['id']}")
+            if unmerged_commits(w):
+                raise RuntimeError(f"{args['id']} has {unmerged_commits(w)} commit(s) that are not merged: review them first")
+            w["archived"] = True
+            save("workers.json", ws)
+        return f"archived {args['id']}"
     if act == "rollback":
         with LOCK:
             ws = load("workers.json", {})
         w = ws.get(f"{args.get('project')}/{args['id']}")
-        if not w or w["status"] == "running" or not w.get("branch"):
+        if not w or w["status"] in ("running", "merged") or not w.get("branch"):  # a merge removed the worktree
             raise RuntimeError(f"no finished worker with a worktree for {args['id']}")
         if shared_running(ws, w):
             raise RuntimeError(f"another worker runs in the worktree of {args['id']} now; stop it first")
@@ -1476,7 +1507,7 @@ def actions_round():
     return "waited" in got  # a server before the long poll answers at once: then the loop waits itself
 
 
-STATE_ACTIONS = {"yolo", "workers_allowed", "max_workers", "link_folder", "unlink_folder", "trust_hooks", "stop_worker", "restart", "merge", "takeover"}
+STATE_ACTIONS = {"yolo", "workers_allowed", "max_workers", "link_folder", "unlink_folder", "trust_hooks", "stop_worker", "restart", "merge", "takeover", "archive_worker", "apply_models"}
 
 
 # ---------------------------------------------------------------- the page

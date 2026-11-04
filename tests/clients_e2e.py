@@ -1370,6 +1370,15 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         ws = json.loads(wfile.read_text(encoding="utf-8"))
         check(ws.get("garden/CMP-GEMINI", {}).get("status") == "merged" and not gwt.exists(),
               "workers: once the requester merged the branch, the companion removes the worktree", json.dumps(ws.get("garden/CMP-GEMINI"))[:400])
+        # Roll back is refused after a merge; Archive only hides the record, which keeps the task's restart hold.
+        act("rollback", {"project": "garden", "id": "CMP-GEMINI"})
+        wait_for(lambda: done()[-1]["status"] not in ("waiting", "running"), 20)
+        check(done()[-1]["status"] == "failed" and "no finished worker" in done()[-1]["result"], "workers: roll back is refused once merged", json.dumps(done()[-1]))
+        act("archive_worker", {"project": "garden", "id": "CMP-GEMINI"})
+        wait_for(lambda: done()[-1]["status"] not in ("waiting", "running"), 20)
+        ws = json.loads(wfile.read_text(encoding="utf-8"))
+        check(done()[-1]["status"] == "done" and ws["garden/CMP-GEMINI"].get("archived") is True, "workers: Archive keeps the record, marked", json.dumps(done()[-1]))
+        check(ws["garden/CMP-GEMINI"].get("title"), "workers: a worker keeps its task's text as its title", json.dumps(ws["garden/CMP-GEMINI"])[:300])
         code, out, err = run([sys.executable, str(hooks / "workers.py"), "--self-test"], "", env)
         check(code == 0 and out.strip() == "ok", "review: workers.py self-test on a real repository (clean merge, conflict aborted and said, "
               "dirty or other branch refused)", out[-400:] + err[-800:])

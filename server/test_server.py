@@ -715,17 +715,32 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     mc = json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "claude", "folder": "/home/x/garden"})[2])["chat"]["id"]
     told = json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["models"]
     assert [(m["id"], m.get("default")) for m in told] == [("opus", "max"), ("sonnet-x", None)], told  # a default it does not offer is dropped
-    # Advice: the first measured model this pc offers, what it offers that nobody measured; no file, no advice.
+    # Models: the admin's pick if this pc offers it, else the first measured one; Apply sends only the lead and reader.
     rows = lambda: {r["id"]: r for r in json.loads(ui("/ui/api/machines")[2])["machines"]}
     assert "advice" not in rows()[mid]
     advice = tmp / "claude" / "model_advice.json"
-    advice.write_text(json.dumps({"measured_on": "1 Nov", "note": "n", "roles": [{"role": "Read", "agents": {
-        "claude": [{"model": "gone", "effort": "low", "score": "9/9"}, {"model": "opus", "effort": "max", "score": "1/2"}],
-        "codex": [{"model": "elsewhere"}], "agy": [{"model": "not-on-this-pc"}]}}]}))
+    advice.write_text(json.dumps({"measured_on": "1 Nov", "note": "n", "roles": [
+        {"key": "read", "role": "Read", "agents": {"claude": [{"model": "gone", "score": "9/9"}, {"model": "opus", "effort": "max", "score": "1/2"}], "codex": [{"model": "elsewhere"}]}},
+        {"key": "review", "role": "Review", "agents": {"claude": [{"model": "opus"}]}}]}))
     got = rows()[mid]["advice"]
-    assert got["rows"] == [{"role": "Read", "agent": "claude", "model": "opus", "effort": "max", "score": "1/2"},
-                           {"role": "Read", "agent": "codex", "model": None}], got
-    assert got["unmeasured"] == {"codex": [], "claude": ["sonnet-x"]} and got["measured_on"] == "1 Nov", got
+    assert got["rows"][:2] == [{"key": "read", "role": "Read", "agent": "claude", "model": "opus", "effort": "max", "score": "1/2"},
+                               {"key": "read", "role": "Read", "agent": "codex", "model": None}] and not got["missing"], got
+    assert ui("/ui/api/admin/model-choice", {"role": "nope", "agent": "claude", "model": "x"})[0] >= 400
+    assert ui("/ui/api/admin/model-choice", {"role": "read", "agent": "claude", "model": "a b"})[0] >= 400
+    assert ui("/ui/api/admin/model-choice", {"role": "read", "agent": "claude", "model": "sonnet-x", "effort": "low"})[0] == 200
+    got = rows()[mid]["advice"]
+    assert got["rows"][0]["model"] == "sonnet-x" and not got["missing"], got
+    assert ui("/ui/api/admin/model-choice", {"role": "read", "agent": "claude", "model": "on-no-pc"})[0] == 200
+    got = rows()[mid]["advice"]
+    assert got["rows"][0]["model"] == "opus" and got["missing"] == ["on-no-pc"], got
+    assert ui("/ui/api/machines/action", {"machine": mid, "action": "apply_models", "args": {"plans": "{}"}})[0] == 200
+    sent = [a for a in json.loads(ui("/ui/api/machines")[2])["machines"] if a["id"] == mid][0]["actions"][-1]
+    assert sent["action"] == "apply_models" and json.loads(sent["args"]["plans"]) == {"claude": {"reader": "opus", "reader_effort": "max"}}, sent  # the page's own plan is ignored
+    for x in json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"]:  # taken, or the next test finds it
+        http("POST", "/machine/actions/result", {"id": x["id"], "status": "done", "result": "ok"}, token=fr, headers=pc)
+    state = json.loads(ui("/ui/api/admin")[2])["models"]
+    assert {u["model"] for u in state["unmeasured"]} >= {"sonnet-x"} and state["chosen"]["read"]["claude"]["model"] == "on-no-pc", state
+    assert ui("/ui/api/admin/model-choice", {"role": "read", "agent": "claude"})[0] == 200
     advice.unlink()
     assert ui("/ui/api/chat/send", {"machine": mid, "id": mc, "text": "a", "model": "sonnet"})[0] == 400  # not reported
     assert ui("/ui/api/chat/send", {"machine": mid, "id": mc, "text": "a", "model": "-rf"})[0] == 400  # dropped from the report

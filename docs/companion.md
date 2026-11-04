@@ -29,7 +29,8 @@ fixed remote actions and relays chats. Installing it is part of the client setup
 
 ## Machines
 
-- **Recommended settings:** with a `model_advice.json` next to the development rules, each pc's card shows per role and agent the first measured model that pc offers, with its test score, and which offered models nobody measured. It is advice only and changes no setting. Without the file the section does not appear.
+- **Models:** with a `model_advice.json` next to the development rules, Admin > Settings shows one list for the whole server: per role and agent the advice with its test score, your own pick, and which models any pc offers that nobody measured. A pc's card shows what it would run and an Apply button; Apply writes the lead and reader into that agent's own settings on that pc (a copy goes to `~/.knowledge/backups/`), only for your own pcs and only when you click. Without the file none of this appears.
+- **What a card shows:** per agent "x of y running", then Needs you (failed, commits not merged, running on an offline pc), Running now, and Earlier folded away; a worker shows its task text with its id behind it. Archive takes an ended worker off the list without touching its branch, worktree or restart hold, and refuses while commits are not merged. YOLO stays visible as a pill; its switch and the worker maximum sit under Settings. Above the cards: tasks no pc can start because no folder is linked to their project.
 
 - **Machines:** every request of plugin 0.15+ names its pc (`X-Knowledge-Machine`, a random id made once in
   `~/.knowledge/machine.json` with the host name as label; `KNOWLEDGE_HOME` moves `~/.knowledge`). Leases and wakes key

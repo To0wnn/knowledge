@@ -347,6 +347,7 @@ def start(agent: str, task: dict, machine: str, where: dict, yolo: bool, nonce: 
     follow = f"Get-Content -Wait '{log}'" if os.name == "nt" else f"tail -f '{log}'"
     return {"id": task["id"], "project": task["project"], "agent": agent, "pid": p.pid, "ident": ident, "started": time.time(), "status": "running",
             "nonce": nonce, "yolo": yolo, "log": str(log), "checkpoint": bool(ckpt), **where,
+            "title": " ".join(str(task.get("text") or "").split())[:120],  # a person reads this; the line itself may be gone later
             "open": f"{agent} worker for {task['id']} (pid {p.pid}) in {where['cwd']}" + (f", branch {where['branch']}" if where.get("branch") else "")
                     + f". It runs headless: follow its output with {follow}; when it is done, look at the branch with git log." + note}
 
