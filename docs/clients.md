@@ -126,6 +126,8 @@ broad job over subagents, have every finding refuted by a fresh verifier, report
 - **Secret guard:** an edit that writes a known secret value into a file is refused (Claude Code Edit/Write, Codex
   apply_patch, agy's file tools), where `token.py push-secrets` left the hash file (`secret set` and `secret rm` run it themselves; a value
   added in the Vaultwarden web UI needs a manual push). Only new text counts, so removing a secret is allowed.
+- **Scripted runs:** set `KNOWLEDGE_NO_SESSION_LOG=1` for a measurement or a one-off reader: every agent's hook then skips
+  the session log, which is for sessions someone looks back on.
 - **Token use:** the session log also sends the tokens of each logged part (uncached input, cache writes, cache reads,
   output; Claude's per-block copies of one call counted once, Codex's running totals differenced). Lint reports
   `usage_outlier`: a session of the last week far above that agent's usual (modified z-score above 3.5 against the last

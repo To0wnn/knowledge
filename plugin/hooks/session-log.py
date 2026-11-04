@@ -168,6 +168,8 @@ def usage(before: list[str], span: list[str]) -> dict:
 
 
 def main():
+    if os.environ.get("KNOWLEDGE_NO_SESSION_LOG"):  # a scripted run (a measurement, a one-off reader), not a session to look back on
+        return
     hook = json.load(sys.stdin)
     if "conversationId" in hook:  # agy: camelCase fields, Stop after every turn, no event name
         hook = {"session_id": hook["conversationId"], "transcript_path": os.path.expanduser(hook.get("transcriptPath", "")),

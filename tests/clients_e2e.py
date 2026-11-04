@@ -128,6 +128,25 @@ def usage_logged(home: Path, agent: str, sid: str) -> bool:
     return [(r["agent"], r.get("in"), r.get("cache_read"), r.get("out")) for r in rows if r["session"] == sid] == [(agent, 40, 60, 7)]
 
 
+def no_session_log_e2e(tok: str, tmp: Path):
+    """KNOWLEDGE_NO_SESSION_LOG keeps a scripted run out of the session log, through each agent's own hook path; without
+    it the same run is logged, so the check cannot pass by accident."""
+    home = tmp / "NoLog"
+    hooks = REPO / "plugin" / "hooks"
+    env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home), "XDG_CACHE_HOME": str(home / ".cache"),
+           "KNOWLEDGE_URL": BASE, "KNOWLEDGE_TOKEN": tok}
+    env.pop("KNOWLEDGE_NO_SESSION_LOG", None)
+    for agent, cmd in (("claude", [str(hooks / "session-log.py")]), ("codex", [str(hooks / "agent_hooks.py"), "session-log"]),
+                       ("agy", [str(hooks / "agent_hooks.py"), "session-log"])):
+        for sid, extra in ((f"{agent}-scripted", {"KNOWLEDGE_NO_SESSION_LOG": "1"}), (f"{agent}-normal", {})):
+            hook = {**usage_hook(home, agent, sid), "cwd": str(tmp)}
+            subprocess.run([sys.executable, "-X", "utf8", *cmd], input=json.dumps(hook), env={**env, **extra}, text=True,
+                           encoding="utf-8", capture_output=True, timeout=60)
+        rows = (tmp / "usage.jsonl").read_text(encoding="utf-8") if (tmp / "usage.jsonl").exists() else ""
+        check(f"{agent}-scripted" not in rows, f"{agent}: KNOWLEDGE_NO_SESSION_LOG keeps a scripted run out of the session log")
+        check(usage_logged(home, agent, f"{agent}-normal"), f"{agent}: without it the same run is logged")
+
+
 def limits_e2e(tok: str, tmp: Path):
     """The usage-limit ladder in every setup (Claude plugin, Codex and agy as plugin and as script setup): each agent's
     own source at 96% (Claude's status line through the tap, a Codex rollout, agy's language server), then the real
@@ -3047,6 +3066,7 @@ def main():
         script_mcp(tok, home)
         codex_plugin(tok, tmp / "Codex Usér", project)  # its own home: the plugin next to the setup's server would clash
         agy_plugin(tok, home, project, garden)
+        no_session_log_e2e(tok, tmp)
         limits_e2e(tok, tmp)
         plugin_versions(tmp)
         relay_errors(home)
