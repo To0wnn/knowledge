@@ -760,16 +760,19 @@ def model_differs(plan: dict, offered: dict, current: dict) -> tuple:
     return differs, unknown
 
 
+# What each agent has a setting for; anything else could never match and would stay "differs" for good.
+MODEL_SETTINGS = {"claude": ("lead", "lead_effort", "reader"), "codex": ("lead", "lead_effort", "reader", "reader_effort"), "agy": ("lead",)}
+
+
 def model_plan(advice: dict) -> dict:
     """For Apply: the settings an agent has for its lead and its reader; review and search have no setting of their own."""
     plan: dict = {}
     for r in advice.get("rows", []):
         if r.get("model") and r.get("key") in ("lead", "read"):
             name = "lead" if r["key"] == "lead" else "reader"
-            plan.setdefault(r["agent"], {})[name] = r["model"]
-            if r.get("effort"):
-                plan[r["agent"]][f"{name}_effort"] = r["effort"]
-    return plan
+            wanted = {name: r["model"], **({f"{name}_effort": r["effort"]} if r.get("effort") else {})}
+            plan.setdefault(r["agent"], {}).update({k: v for k, v in wanted.items() if k in MODEL_SETTINGS.get(r["agent"], ())})
+    return {a: p for a, p in plan.items() if p}
 
 
 def model_overview(rows: list[dict], data: dict, chosen: dict) -> dict:

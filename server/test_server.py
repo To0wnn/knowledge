@@ -740,7 +740,7 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert got["rows"][0]["model"] == "opus" and got["missing"] == ["on-no-pc"], got
     assert ui("/ui/api/machines/action", {"machine": mid, "action": "apply_models", "args": {"plans": "{}"}})[0] == 200
     sent = [a for a in json.loads(ui("/ui/api/machines")[2])["machines"] if a["id"] == mid][0]["actions"][-1]
-    assert sent["action"] == "apply_models" and json.loads(sent["args"]["plans"]) == {"claude": {"reader": "opus", "reader_effort": "max"}}, sent  # the page's own plan is ignored
+    assert sent["action"] == "apply_models" and json.loads(sent["args"]["plans"]) == {"claude": {"reader": "opus"}}, sent  # the page's own plan is ignored
     for x in json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"]:  # taken, or the next test finds it
         http("POST", "/machine/actions/result", {"id": x["id"], "status": "done", "result": "ok"}, token=fr, headers=pc)
     state = json.loads(ui("/ui/api/admin")[2])["models"]
