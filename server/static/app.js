@@ -1447,12 +1447,25 @@ $("ingest-form").addEventListener("submit", async (e) => {
 });
 
 // ---------------------------------------------------------------- live updates (Server-Sent Events)
-let liveTimer;
+let liveTimer, liveBusy = 0, liveAgain = false;
+// One refresh at a time: changes during a refresh make one more after it, so a slow server never gets a growing pile of
+// requests. A background tab asks nothing until it is looked at. After a minute a refresh counts as hung (a request can
+// stay open on a half-dead connection after sleep), which must not end the live updates for good.
 async function onChanged() {
-  await refreshData();
-  loadRecent();
-  loadLint(!$("tab-lint").hidden);
-  loadTasks(!$("tab-tasks").hidden);
+  if (Date.now() - liveBusy < 60000 || document.hidden) { liveAgain = true; return; }
+  liveBusy = Date.now();
+  try { await liveRefresh(); } finally {
+    liveBusy = 0;
+    if (liveAgain) { liveAgain = false; onChanged(); }
+  }
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden && liveAgain) { liveAgain = false; onChanged(); } });
+async function liveRefresh() {
+  await refreshData(); // first: the Changes list names notes from the graph
+  const done = await Promise.allSettled([loadRecent(), loadLint(!$("tab-lint").hidden), loadTasks(!$("tab-tasks").hidden), liveNote()]);
+  for (const r of done) if (r.reason) console.warn("live refresh:", r.reason);
+}
+async function liveNote() {
   const note = current;
   if (!note || historyOpen) return;
   let fresh; try { fresh = await api(`/ui/api/note?path=${encodeURIComponent(note.path)}`); } catch { return; }
@@ -1469,7 +1482,10 @@ async function onChanged() {
 let liveHellos = 0, liveRetry = 3000;
 function connectLive() {
   const es = new EventSource("/ui/api/events");
-  es.addEventListener("changed", () => { clearTimeout(liveTimer); liveTimer = setTimeout(onChanged, 700); });
+  const soon = () => { clearTimeout(liveTimer); liveTimer = setTimeout(onChanged, 700); };
+  es.addEventListener("changed", soon);
+  // A session log says who changed what: only a page showing that needs it, and the graph and lint answers stay cached.
+  es.addEventListener("sessions", () => { if (!$("tab-changes").hidden || current?.path.includes("/sessions/")) soon(); });
   es.addEventListener("hello", (e) => {
     $("live").classList.add("on"); liveRetry = 3000;
     // A new release was deployed while this tab was open (the stream reconnects after the restart): reload, unless

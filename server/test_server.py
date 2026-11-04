@@ -3032,6 +3032,37 @@ def main():
         assert raw("GET", "/ui/static/app.js?v=old")[1]["cache-control"] == "no-cache"
         st, hd, _ = raw("GET", "/ui/api/graph", headers=ck)
         assert raw("GET", "/ui/api/graph", headers={**ck, "If-None-Match": hd["etag"]})[0] == 304
+        # A session log is most of a busy day's writes and in neither graph nor lint: it must not rebuild them or ping
+        # the open pages; its entry still reaches the Changes list on the next look.
+        st, body = http("POST", "/sessions", {"prompts": ["etag check"], "session_id": "etagtest", "cwd": "/home/x/homelab"})
+        assert st == 200 and "logged" in body, (st, body)
+        assert raw("GET", "/ui/api/graph", headers={**ck, "If-None-Match": hd["etag"]})[0] == 304
+        # A folder that merely has that name is an ordinary note: it does change the graph.
+        call("knowledge_write", {"path": "claude/skills/sessions/SKILL.md", "content": "---\nname: sessions\ndescription: d\n---\nx\n"})
+        etag = raw("GET", "/ui/api/graph", headers=ck)[1]["etag"]
+        assert etag != hd["etag"], etag
+        hd = {**hd, "etag": etag}
+        # The Changes list caches each file's diff: a new edit must show at once, with its own numbers.
+        call("knowledge_write", {"path": "trade-memory/cached.md", "content": memo("one\n", "cached")})
+        size = lambda: next(f for f in json.loads(raw("GET", "/ui/api/recent?project=trade", headers=ck)[2])["files"] if f["path"] == "trade-memory/cached.md")
+        size()
+        call("knowledge_edit", {"path": "trade-memory/cached.md", "old_string": "one\n", "new_string": "one\ntwo\nthree\n"})
+        assert size().get("added") == 2, size()
+        assert raw("GET", "/ui/api/graph", headers={**ck, "If-None-Match": hd["etag"]})[0] == 200  # a memo does change it
+        import server as srv
+        # A version pruned by another thread between listing and stat is skipped, not an error (seen live at 200 versions).
+        with tempfile.TemporaryDirectory() as h:
+            (Path(h) / "a").write_text("a")
+            class Racing(type(Path(h))):
+                def iterdir(self):
+                    return [Path(h) / "a", Path(h) / "gone"]
+            assert [p.name for p in srv.by_mtime(Racing(h))] == ["a"]
+            # One notice per duplicate pair: the in-memory "told" set is gone after a deploy and the score moves.
+            srv.NOTICES = Path(h) / "notices.json"
+            srv.add_notice("pc", "p", "rule 1: x and y (reranker 0.73)", like="rule 1: x and y (")
+            srv.add_notice("pc", "p", "rule 1: x and y (reranker 0.74)", like="rule 1: x and y (")
+            srv.add_notice("pc", "p", "rule 1: x and z (reranker 0.74)", like="rule 1: x and z (")
+            assert len(json.loads(srv.NOTICES.read_text())) == 2
         # Live updates: the event stream says "changed" after a write by any session.
         c = httpc.HTTPConnection("127.0.0.1", PORT, timeout=10)
         c.request("GET", "/ui/api/events", headers=ck)
@@ -3039,6 +3070,11 @@ def main():
         assert r.status == 200 and r.getheader("content-type").startswith("text/event-stream")
         hello = b"".join(r.fp.readline() for _ in range(5))  # chunk-size line + retry + event + data
         assert b"event: hello" in hello and rel.encode() in hello, hello
+        assert http("POST", "/sessions", {"prompts": ["sse check"], "session_id": "ssetest", "cwd": "/home/x/homelab"})[0] == 200
+        got = b""
+        while b"event: sessions" not in got:  # its own event: only a page showing session logs refreshes
+            got += r.fp.readline()
+        assert b"event: changed" not in got, got
         call("knowledge_write", {"path": "trade-memory/live.md", "content": memo("live\n", "live")})
         got = b""
         while b"event: changed" not in got:

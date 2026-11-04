@@ -1409,6 +1409,32 @@ DS_JS = """() => {
 }"""
 
 
+async def live_refresh(browser, secret: str) -> None:
+    """Changes during a refresh make one more after it, and a background tab asks nothing until it is looked at, so a
+    slow server never gets a growing pile of requests (read-only: only reads, slowed down with page.route)."""
+    ctx, pg, errors = await page(browser, secret)
+    await pg.wait_for_function("typeof onChanged === 'function'")
+    seen = []
+
+    async def slow(route):
+        seen.append(route.request.url)
+        await asyncio.sleep(0.4)
+        await route.continue_()
+    await pg.route("**/ui/api/recent*", slow)
+    await pg.evaluate("onChanged(); onChanged(); onChanged()")
+    await pg.wait_for_timeout(2000)
+    check(len(seen) == 2, f"three changes during a refresh make two refreshes, not {len(seen)}")
+    seen.clear()
+    await pg.evaluate("Object.defineProperty(document, 'hidden', {configurable: true, get: () => true}); onChanged()")
+    await pg.wait_for_timeout(600)
+    check(not seen, "a background tab refreshes nothing")
+    await pg.evaluate("delete document.hidden; document.dispatchEvent(new Event('visibilitychange'))")
+    await pg.wait_for_timeout(1000)
+    check(len(seen) == 1, f"the tab catches up once when shown, not {len(seen)} times")
+    check(not errors, f"no page errors during live refreshes: {errors}")
+    await ctx.close()
+
+
 async def design_system(browser, devices, secret: str) -> None:
     ctx, pg, errors = await page(browser, secret, "/ui#/inbox", viewport={"width": 1280, "height": 860})
     await pg.wait_for_selector("#ck-list", state="attached")
@@ -1458,6 +1484,7 @@ async def main() -> None:
         await no_agents(browser, secret)
         await board(browser, p.devices, secret)
         await follow(browser, p.devices, secret)
+        await live_refresh(browser, secret)
         await design_system(browser, p.devices, secret)
         await browser.close()
     print("ok" if not failures else f"{len(failures)} failed")

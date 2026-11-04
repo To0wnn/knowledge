@@ -328,11 +328,19 @@ class Index:
         self.gen = 0  # bumped on every change; the UI graph cache keys on it
         self.loaded = False  # set after the startup scan: from then on a file that appears is new, not just unseen
         self.root_gen: dict[str, int] = {}  # changes per root, so a user only hears about their own roots
+        # Without session logs (97 % of the writes on a busy day, and not in the graph, lint or context): what the page
+        # and those caches key on, so an agent ending a session rebuilds nothing.
+        self.note_gen = 0
+        self.session_gen: dict[str, int] = {}  # session-log writes per root, for a page that shows them
 
     def bump(self, rel: str):  # call with self.lock held
         self.gen += 1
         root = rel.split("/", 1)[0]
-        self.root_gen[root] = self.root_gen.get(root, 0) + 1
+        if mem_of(rel) and rel.split("/", 2)[1:2] == ["sessions"]:
+            self.session_gen[root] = self.session_gen.get(root, 0) + 1
+        else:
+            self.note_gen += 1
+            self.root_gen[root] = self.root_gen.get(root, 0) + 1
 
     def refresh(self, rel: str):
         try:
@@ -365,7 +373,8 @@ class Index:
         with self.lock:
             # A few Unicode characters change length when lowercased; then positions would not line up.
             self.files[rel] = (st.st_mtime_ns, st.st_size, text, low if len(low) == len(text) else None)
-            self.bump(rel)
+            if old is None or old[2] != text:  # a touch or a same-text sync changes nothing anyone derives from the text
+                self.bump(rel)
 
     def rescan(self):
         seen = set()
@@ -420,6 +429,18 @@ def history_dir(rel: str) -> Path:
 HISTORY_FAILED: dict[str, str] = {}  # rel -> error of the last failed history write; lint reports it
 
 
+def by_mtime(d: Path) -> list[Path]:
+    """The files of a history folder, oldest first. A file another thread pruned meanwhile is skipped: stat in a sort
+    key made that an error, which lost the pruning and a page's whole answer."""
+    found = []
+    for p in d.iterdir():
+        try:
+            found.append((p.stat().st_mtime_ns, p))
+        except FileNotFoundError:
+            pass
+    return [p for _, p in sorted(found)]
+
+
 def tracked(rel: str) -> bool:
     """Files whose versions are kept: Markdown, and every file of a shared skill (its scripts and data too)."""
     return rel.endswith(".md") or rel.startswith("claude/skills/")
@@ -466,9 +487,8 @@ def keep_version(rel: str, old: tuple, new_text: str, removed: bool = False):
         now = time.time()  # microseconds keep versions from the same second in order
         path = d / f"{time.strftime('%Y%m%d-%H%M%S', time.localtime(now))}.{int(now % 1 * 1e6):06d}_{who}{'-removed' * removed}.md"
         path.write_text(new_text)
-        versions = sorted(d.iterdir(), key=lambda p: p.stat().st_mtime_ns)
-        for extra in versions[:-HISTORY_KEEP]:
-            extra.unlink()
+        for extra in by_mtime(d)[:-HISTORY_KEEP]:
+            extra.unlink(missing_ok=True)
         HISTORY_FAILED.pop(rel, None)
     except OSError as e:  # history is a safety net; never let it break an edit, but say so in lint
         HISTORY_FAILED[rel] = str(e)
@@ -480,9 +500,12 @@ def versions_of(rel: str) -> list[dict]:
     out = []
     # Ordered by when the version was written (file mtime), not by its name: the name holds local time, which jumps
     # back an hour when daylight saving time ends.
-    for p in sorted(d.iterdir(), key=lambda p: p.stat().st_mtime_ns, reverse=True) if d.is_dir() else []:
+    for p in reversed(by_mtime(d)) if d.is_dir() else []:
         stamp, _, who = p.stem.partition("_")
-        st = p.stat()
+        try:
+            st = p.stat()
+        except FileNotFoundError:  # pruned since by_mtime listed it
+            continue
         out.append({"id": p.stem, "time": st.st_mtime, "by": who, "size": st.st_size})
     return out
 
@@ -497,7 +520,7 @@ def version_text(rel: str, vid: str) -> str:
 def base_text(rel: str, base: str) -> str | None:
     """The text a device's offline copy started from: the history version whose content hash is `base`."""
     d = history_dir(rel)
-    for p in sorted(d.iterdir(), key=lambda p: p.stat().st_mtime_ns, reverse=True) if d.is_dir() else []:
+    for p in reversed(by_mtime(d)) if d.is_dir() else []:
         data = p.read_bytes()
         if version(data) == base:
             return data.decode("utf-8", "replace")
@@ -528,6 +551,7 @@ def merge3(base: str, ours: str, theirs: str) -> str | None:
 index = Index()
 vec = vectors.Vectors(index)
 _graph_cache: dict[tuple, tuple[int, dict]] = {}
+_graph_lock = threading.Lock()
 
 
 INSTANCE = os.environ.get("KNOWLEDGE_INSTANCE", "")  # blue / green sharing :8766 (compose.yaml, swap.sh); "" = alone
@@ -540,13 +564,14 @@ def instance_ready() -> bool:
 
 def get_graph() -> dict:
     """The graph with communities and insights over what this device may see, rebuilt only after a change
-    (index.gen). Built from the visible files only, so names outside the scope never show up in links or insights."""
+    (index.note_gen). Built from the visible files only, so names outside the scope never show up in links or insights."""
     scope = tuple(device.get().get("roots") or ())
-    hit = _graph_cache.get(scope)
-    if not hit or hit[0] != index.gen:
-        gen = index.gen
-        hit = (gen, kb_graph.build({rel: text for rel, text, _ in index.items() if in_scope(rel)}))
-        _graph_cache[scope] = hit
+    with _graph_lock:  # tabs asking at once wait for one build instead of each making their own
+        hit = _graph_cache.get(scope)
+        if not hit or hit[0] != index.note_gen:
+            gen = index.note_gen
+            hit = (gen, kb_graph.build({rel: text for rel, text, _ in index.items() if in_scope(rel)}))
+            _graph_cache[scope] = hit
     return hit[1]
 
 
@@ -1979,7 +2004,7 @@ def done_since(project: str, b: dict) -> float:
         at = rec.get("at", 0)
     else:
         at, hist = 0.0, history_dir(b["path"])
-        for v in sorted(hist.iterdir(), key=lambda v: -v.stat().st_mtime_ns) if hist.is_dir() else []:
+        for v in reversed(by_mtime(hist)) if hist.is_dir() else []:
             if b["line"] not in v.read_text(errors="replace"):
                 break
             at = v.stat().st_mtime
@@ -2224,7 +2249,9 @@ _project_lint_cache: dict = {}
 def project_lint(mem: str) -> list[str]:
     """The fixable lint findings of the project whose memory root is `mem` (its docs included), at most
     LINT_AT_START_MAX plus a count; lint_all prefixes items with their root, homelab's memory root excepted."""
-    key = (mem, index.gen, tuple(device.get().get("roots") or ()))  # every context part asks: lint once per change
+    # every context part asks: lint once per change; per hour too, since hand-back ages move without any change
+    gen = (index.note_gen, int(time.time() // 3600))
+    key = (mem, gen, tuple(device.get().get("roots") or ()))
     if (hit := _project_lint_cache.get(key)) is not None:
         return hit
     roots = {mem} | {d for d, m in PROJECTS.values() if m == mem}
@@ -2236,7 +2263,7 @@ def project_lint(mem: str) -> list[str]:
     items = [f"{check}: {item}" for check, found in report.items() if check in LINT_AT_START for item in found
              if (item.split(" ", 1)[0].split("/", 1)[0] if "/" in item.split(" ", 1)[0] else "memory") in roots]
     more = len(items) - LINT_AT_START_MAX
-    if any(k[1] != index.gen for k in _project_lint_cache):
+    if any(k[1] != gen for k in _project_lint_cache):
         _project_lint_cache.clear()
     _project_lint_cache[key] = items[:LINT_AT_START_MAX] + ([f"... and {more} more: run knowledge_lint"] if more > 0 else [])
     return _project_lint_cache[key]
@@ -3568,8 +3595,8 @@ _context_guard = threading.Lock()
 def shared_context_parts(project: str, agent: str, chat: bool, webchat: bool) -> list[str]:
     """context_parts once per session start: the plugin asks for every part at the same moment, and building the whole
     context (lint, tasks) for each part made them queue for seconds, past the hook's 8 s limit (offline mode)."""
-    # the token's scope decides what it may see; index.gen makes any memo or doc change rebuild it at once
-    key = (device.get().get("name", ""), project, agent, chat, webchat, index.gen)
+    # the token's scope decides what it may see; index.note_gen makes any memo or doc change rebuild it at once
+    key = (device.get().get("name", ""), project, agent, chat, webchat, index.note_gen)
     with _context_guard:
         lock = _context_locks.setdefault(key, threading.Lock())
     with lock:  # the parts that arrive meanwhile wait for this one build instead of each building their own
@@ -4500,6 +4527,11 @@ def scoped_gen() -> int:
         return sum(n for r, n in index.root_gen.items() if in_scope(r + "/"))
 
 
+def scoped_session_gen() -> int:
+    with index.lock:
+        return sum(n for r, n in index.session_gen.items() if in_scope(r + "/"))
+
+
 @server.custom_route("/ui/api/graph", methods=["GET"])
 async def ui_graph(request: Request):
     # The graph only changes with the index generation; per boot (gen restarts) and per scope (users see different
@@ -4517,13 +4549,16 @@ async def ui_events(request: Request):
     updates itself. Checks the changes in the user's own roots once a second (no count is sent: a user scoped to one
     project learns nothing about the others); a comment every 25 s keeps proxies from closing it."""
     async def stream():
-        last, quiet = scoped_gen(), 0
+        last, last_log, quiet = scoped_gen(), scoped_session_gen(), 0
         yield f"retry: 3000\nevent: hello\ndata: {RELEASE}\n\n"
         while not await request.is_disconnected():
             await asyncio.sleep(1)
             if (now := scoped_gen()) != last:
                 last, quiet = now, 0
                 yield "event: changed\ndata: 1\n\n"
+            elif (log := scoped_session_gen()) != last_log:  # only a page showing session logs acts on this one
+                last_log, quiet = log, 0
+                yield "event: sessions\ndata: 1\n\n"
             else:
                 quiet += 1
                 if quiet >= 25:
@@ -4684,9 +4719,9 @@ def last_writers() -> dict[str, tuple[float, str]]:
             tail = f.read().decode("utf-8", errors="replace").splitlines()[1:]
     except OSError:
         return out
-    for line in tail:
+    for line in reversed(tail):  # newest first: strptime once per file, not once per line
         bits = line.split(" ", 3)
-        if len(bits) == 4:
+        if len(bits) == 4 and bits[3] not in out:
             try:
                 out[bits[3]] = (time.mktime(time.strptime(bits[0], "%Y-%m-%dT%H:%M:%S")), bits[1])
             except ValueError:
@@ -4695,6 +4730,16 @@ def last_writers() -> dict[str, tuple[float, str]]:
 
 
 def change_size(rel: str, mtime: float) -> dict:
+    """change_size_of, redone only when the file or its history folder changed (one stat instead of a folder walk and a
+    diff per listed file on every page refresh)."""
+    try:
+        return change_size_of(rel, mtime, history_dir(rel).stat().st_mtime_ns)
+    except OSError:
+        return {}
+
+
+@functools.lru_cache(maxsize=1024)
+def change_size_of(rel: str, mtime: float, _history_mtime: int) -> dict:
     """Lines added and removed by the change that produced the current file, and that version's id (for its diff),
     when the history holds that change."""
     import difflib
@@ -4713,25 +4758,37 @@ def change_size(rel: str, mtime: float) -> dict:
 SESSION_HEAD = re.compile(r"(\d{4}-\d\d-\d\d \d\d:\d\d) · [^·\n]+ · ([^·\n]+) · ")
 
 
+_session_parsed: dict[str, tuple[str, tuple]] = {}  # rel -> (text, entries): one per file, so old text is not kept
+
+
+def session_entries(rel: str, text: str) -> tuple[dict, ...]:
+    """Only this month's file changes; the rest of the logs are never parsed twice."""
+    if (hit := _session_parsed.get(rel)) and hit[0] is text:  # the index hands out the same object until the file changes
+        return hit[1]
+    out = []
+    for block in text.split("\n## ")[1:]:
+        m = SESSION_HEAD.match(block)
+        if not m:
+            continue
+        lines = block.splitlines()
+        asked = next((x[9:] for x in lines if x.startswith("- Asked: ")), "")
+        changed = next((x[11:] for x in lines if x.startswith("- Changed: ")), "")
+        try:
+            when = time.mktime(time.strptime(m[1], "%Y-%m-%d %H:%M"))
+        except ValueError:  # a hand-edited or odd heading: skip that entry, not the whole Changes list
+            continue
+        out.append({"time": when, "device": m[2].strip(), "asked": asked,
+                    "names": {c.strip().rsplit("/", 1)[-1] for c in changed.split(",") if c.strip()}})
+    _session_parsed[rel] = (text, tuple(out))
+    return _session_parsed[rel][1]
+
+
 def session_log(roots: tuple) -> list[dict]:
     """Entries of the session logs of these roots, oldest first: when, device, first question, changed file names."""
     out = []
     for rel, text, _ in index.items(",".join(roots)):
-        if "/sessions/" not in rel or not in_scope(rel):
-            continue
-        for block in text.split("\n## ")[1:]:
-            m = SESSION_HEAD.match(block)
-            if not m:
-                continue
-            lines = block.splitlines()
-            asked = next((x[9:] for x in lines if x.startswith("- Asked: ")), "")
-            changed = next((x[11:] for x in lines if x.startswith("- Changed: ")), "")
-            try:
-                when = time.mktime(time.strptime(m[1], "%Y-%m-%d %H:%M"))
-            except ValueError:  # a hand-edited or odd heading: skip that entry, not the whole Changes list
-                continue
-            out.append({"time": when, "device": m[2].strip(), "asked": asked,
-                        "names": {c.strip().rsplit("/", 1)[-1] for c in changed.split(",") if c.strip()}})
+        if "/sessions/" in rel and in_scope(rel):
+            out.extend(session_entries(rel, text))
     return sorted(out, key=lambda e: e["time"])
 
 
@@ -4804,6 +4861,7 @@ async def ui_search(request: Request):
 
 
 _ui_lint_cache: dict = {}  # scope -> (index gen, time, report): every page load and change asked for a ~0.5 s lint
+_ui_lint_lock = asyncio.Lock()
 UI_LINT_MAX_AGE = 60  # device reports, usage and hand-back ages change without an index change
 
 
@@ -4811,10 +4869,12 @@ UI_LINT_MAX_AGE = 60  # device reports, usage and hand-back ages change without 
 async def ui_lint(request: Request):
     if not device.get().get("admin"):  # lint spans every project
         return JSONResponse({})
-    scope, gen, now = tuple(device.get().get("roots") or ()), index.gen, time.time()
-    hit = _ui_lint_cache.get(scope)
-    if not hit or hit[0] != gen or now - hit[1] > UI_LINT_MAX_AGE:
-        hit = _ui_lint_cache[scope] = (gen, now, await asyncio.to_thread(lint_all))
+    scope = tuple(device.get().get("roots") or ())
+    async with _ui_lint_lock:  # tabs asking at once wait for one run instead of each making their own
+        gen, now = index.note_gen, time.time()
+        hit = _ui_lint_cache.get(scope)
+        if not hit or hit[0] != gen or now - hit[1] > UI_LINT_MAX_AGE:
+            hit = _ui_lint_cache[scope] = (gen, now, await asyncio.to_thread(lint_all))
     if request.query_params.get("v") == "2":  # the plain {check: [items]} stays the default for older pages
         return JSONResponse({"report": hit[2], "groups": kb_lint.GROUPS, "hints": kb_lint.HINTS})
     return JSONResponse(hit[2])

@@ -46,6 +46,11 @@ Moved from the README; [back to the README](../README.md).
   entries (sidebar, tab bar, palette), no usage chips or New chat; the start page, `#/chats`, `#/inbox` and
   `#/machines` open Notes. Tasks stays, without "Start on <pc>" or worker buttons; the phone tab bar is Tasks,
   Notes, Map, Changes, More. The server enforces it; the page only follows.
+- Live updates: the page keeps a Server-Sent Events stream open. `changed` means a note or doc changed; the page then
+  does one refresh at a time (changes during it make one more after it) and a background tab waits until it is shown.
+  `sessions` means a session log changed, nearly all writes on a busy day: only a page showing Changes or an open session
+  log acts on it, and graph, lint and context caches stay valid. `tests/ui_load.py` measures what the refreshes cost the
+  rest of the server.
 
 ## Design system
 

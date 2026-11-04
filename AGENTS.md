@@ -10,6 +10,7 @@ Antigravity, plus a web UI with a graph. Server in `server/` (Python, one Docker
 - UI test: `uv run --project server --with playwright python tests/ui_ci.py` (a seeded throwaway server; CI runs it too),
   or `env -u KNOWLEDGE_URL uv run -q --with playwright python tests/ui_smoke.py` (read-only against the live server;
   an agent session has the public KNOWLEDGE_URL set, which would win over local.env and land on the sign-in page)
+- load test of the web UI against a server on a copy of real data, before and after a change: `tests/ui_load.py`
 - client test: `uv run --project server python tests/clients_e2e.py`; CI runs it on Windows, macOS and Linux
 - deploy: `./deploy.sh` (runs the check first; routine)
 - roll back: `git revert <commit>` and `./deploy.sh`
