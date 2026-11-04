@@ -3,6 +3,9 @@
 set -eu
 STACK=/root/docker/dockhand/dockhand_data/stacks/forge/knowledge
 cd "$(dirname "$0")"
+# Sessions work side by side: a checkout without the newest main would silently take other sessions' fixes off the server.
+git fetch -q origin main
+git merge-base --is-ancestor FETCH_HEAD HEAD || { echo "deploy refused: this checkout lacks commits of origin/main; rebase first" >&2; exit 1; }
 [ -f local.env ] || { echo "local.env missing: copy local.env.example and fill in the addresses" >&2; exit 1; }
 set -a; . ./local.env; set +a
 cp local.env server/.env  # docker compose reads the addresses from .env next to compose.yaml
