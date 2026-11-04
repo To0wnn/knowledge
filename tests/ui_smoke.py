@@ -1414,16 +1414,22 @@ async def live_refresh(browser, secret: str) -> None:
     slow server never gets a growing pile of requests (read-only: only reads, slowed down with page.route)."""
     ctx, pg, errors = await page(browser, secret)
     await pg.wait_for_function("typeof onChanged === 'function'")
-    seen = []
+    await pg.wait_for_timeout(2000)  # the page's own first load is done
+    seen, busy, most = [], 0, 0
 
     async def slow(route):
+        nonlocal busy, most
         seen.append(route.request.url)
+        busy += 1
+        most = max(most, busy)
         await asyncio.sleep(0.4)
         await route.continue_()
+        busy -= 1
     await pg.route("**/ui/api/recent*", slow)
     await pg.evaluate("onChanged(); onChanged(); onChanged()")
     await pg.wait_for_timeout(2000)
-    check(len(seen) == 2, f"three changes during a refresh make two refreshes, not {len(seen)}")
+    # not an exact count: on a live server a real change may add a refresh, never an overlapping one
+    check(len(seen) >= 2 and most == 1, f"changes during a refresh wait for it and make one more ({len(seen)} requests, {most} at once)")
     seen.clear()
     await pg.evaluate("Object.defineProperty(document, 'hidden', {configurable: true, get: () => true}); onChanged()")
     await pg.wait_for_timeout(600)
