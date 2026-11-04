@@ -259,6 +259,11 @@ def identity(pid: int) -> str:
     """Who process `pid` is: its start time (on Linux with the boot id), '' when there is no such live process. A worker
     record keeps it, so a pid reused after a reboot, or by another process, never counts as the worker."""
     try:
+        if os.name != "nt" and pid not in PROCS:  # started before this process exec'ed itself: still our child, so a zombie
+            try:                                  # until reaped, and on macOS ps keeps listing that as a live process
+                os.waitpid(pid, os.WNOHANG)
+            except (ChildProcessError, OSError):
+                pass
         if os.name == "nt":
             import ctypes
             from ctypes import wintypes
