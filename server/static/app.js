@@ -1272,7 +1272,7 @@ async function loadMachines() {
   const narrow = matchMedia("(max-width: 699.98px)").matches;
   const sha = async (t) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t)))].map((b) => b.toString(16).padStart(2, "0")).join("");
   const here = localMachine && crypto.subtle ? (await Promise.all(res.machines.map(async (m) => (await sha(m.id)) === localMachine ? m.id : ""))).find(Boolean) : "";
-  for (const s of res.stuck || []) box.append(el("p", "machine-error", `${s.tasks} task${s.tasks > 1 ? "s" : ""} of ${s.project} cannot start: none of your pcs has a folder linked to that project (Folders on a pc).`));
+  for (const s of res.stuck || []) box.append(el("p", "machine-error", `${s.tasks} task${s.tasks > 1 ? "s" : ""} of ${s.project} cannot start by itself: none of your pcs has a folder linked to that project (Folders on a pc). An open chat can still take them.`));
   if (!res.machines.length) {
     const how = el("a", "btn small", "How to install"); how.href = "/ui/help#install";
     box.append(emptyState("No pcs yet: a pc shows up here, with its agents and workers, once it runs the knowledge setup.", how));

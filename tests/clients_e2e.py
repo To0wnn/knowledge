@@ -1397,6 +1397,25 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
             m.write_text(t, encoding="utf-8")
         wait_for(lambda: reported() != "9.8.7" or poke(), 60)
         check(reported() != "9.8.7", "companion: after going back it restarts again", str(reported()))
+        if WIN:  # the restart under the real Scheduled Task: the task stays the owner, so uninstalling can stop it
+            wrapper = tmp / "task.cmd"
+            wrapper.write_text("@echo off\r\n" + "".join(f'set "{k}={v}"\r\n' for k, v in env.items() if k.startswith(("KNOWLEDGE", "HOME", "USERPROFILE", "APPDATA", "PATH", "PYTHON"))) + subprocess.list2cmdline([sys.executable, str(hooks / "agent_hooks.py"), "serve"]) + "\r\n", encoding="utf-8")
+            name = "Knowledge companion"
+            made = subprocess.run(["schtasks", "/Create", "/F", "/SC", "ONCE", "/ST", "23:59", "/TN", name, "/TR", str(wrapper)], capture_output=True, text=True)
+            if made.returncode:
+                print(f"skip the Scheduled Task check: {made.stderr.strip()[:200]}")
+            else:
+                try:
+                    for m, t in before.items():
+                        m.write_text(re.sub(r'"version": "[^"]+"', '"version": "9.8.6"', t), encoding="utf-8")
+                    wait_for(lambda: reported() == "9.8.6" or poke(), 90)
+                    state = subprocess.run(["schtasks", "/Query", "/TN", name, "/FO", "LIST"], capture_output=True, text=True).stdout
+                    check(reported() == "9.8.6" and "Running" in state, "companion on Windows: the Scheduled Task runs it again after an update", f"{reported()} {state[:300]}")
+                finally:
+                    subprocess.run(["schtasks", "/End", "/TN", name], capture_output=True)
+                    subprocess.run(["schtasks", "/Delete", "/F", "/TN", name], capture_output=True)
+                    for m, t in before.items():
+                        m.write_text(t, encoding="utf-8")
         code, out, err = run([sys.executable, str(hooks / "workers.py"), "--self-test"], "", env)
         check(code == 0 and out.strip() == "ok", "review: workers.py self-test on a real repository (clean merge, conflict aborted and said, "
               "dirty or other branch refused)", out[-400:] + err[-800:])

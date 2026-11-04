@@ -723,6 +723,9 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     # Models: the admin's pick if this pc offers it, else the first measured one; Apply sends only the lead and reader.
     rows = lambda: {r["id"]: r for r in json.loads(ui("/ui/api/machines")[2])["machines"]}
     assert "advice" not in rows()[mid]
+    import server as srv  # a pc with only the MCP server: no workers, so no task is stuck
+    srv.device.set({"user": "x"})
+    assert srv.stuck_projects([{"done": False, "owner": "Codex", "startable": True, "project": "p"}], [{"own": True, "companion": None}]) == []
     advice = tmp / "claude" / "model_advice.json"
     advice.write_text(json.dumps({"measured_on": "1 Nov", "note": "n", "roles": [
         {"key": "read", "role": "Read", "agents": {"claude": [{"model": "gone", "score": "9/9"}, {"model": "opus", "effort": "max", "score": "1/2"}], "codex": [{"model": "elsewhere"}]}},

@@ -29,19 +29,60 @@ def checked(plan: dict) -> dict:
     return out
 
 
-def toml_top(text: str, key: str, value: str) -> str:
-    """Set a top-level key: it has to stand before the first [table] to stay top-level."""
-    head, sep, rest = ("\n" + text).partition("\n[")
-    line = f'{key} = "{value}"'
-    head, n = re.subn(rf"^{key} = .*$", lambda _: line, head, count=1, flags=re.M)
-    return (head if n else head.rstrip("\n") + f"\n{line}").lstrip("\n") + sep + rest
+def toml_set(text: str, table, key: str, raw):
+    """Set (raw = a TOML value as text) or remove (raw = None) one key of a table (None = top level), leaving every
+    other line as it is; the old value as text (with its comment), or None when it was not there."""
+    lines = text.splitlines(keepends=True)
+    header = lambda ln: ln.lstrip().startswith("[")
+    if table is None:
+        start, end = 0, next((i for i, ln in enumerate(lines) if header(ln)), len(lines))
+    else:
+        at = next((i for i, ln in enumerate(lines) if ln.split("#")[0].strip() == f"[{table}]"), None)
+        if at is None:
+            if raw is None:
+                return text, None
+            sep = "" if not text or text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
+            return f"{text}{sep}[{table}]\n{key} = {raw}\n", None
+        start, end = at + 1, next((i for i in range(at + 1, len(lines)) if header(lines[i])), len(lines))
+    pat = re.compile(rf"\s*{re.escape(key)}\s*=\s*(.*?)\s*$")
+    for i in range(start, end):
+        m = pat.fullmatch(lines[i].rstrip("\r\n"))
+        if m:
+            if raw is None:
+                del lines[i]
+            else:
+                lines[i] = f"{key} = {raw}\n"
+            return "".join(lines), m.group(1)
+    if raw is None:
+        return text, None
+    last = end
+    while last > start and not lines[last - 1].strip():
+        last -= 1
+    if last and not lines[last - 1].endswith("\n"):
+        lines[last - 1] += "\n"
+    lines.insert(last, f"{key} = {raw}\n")
+    return "".join(lines), None
 
 
-def toml_agents(text: str, model: str, effort: str | None) -> str:
-    block = f'[agents]\ndefault_subagent_model = "{model}"\n' + (f'default_subagent_reasoning_effort = "{effort}"\n' if effort else "")
-    if re.search(r"^\[agents\]$", text, re.M):
-        return re.sub(r"^\[agents\]\n(?:(?!\[).*\n?)*", lambda m: block + ("" if m.end() == len(text) else "\n"), text, count=1, flags=re.M)
-    return text.rstrip("\n") + "\n\n" + block
+def codex_text(text: str, plan: dict) -> str:
+    """Only the keys of this plan change: other lines of the file and of [agents] stay as they are."""
+    quoted = lambda v: json.dumps(v)
+    if plan.get("reader") and re.search(r"^\s*agents\s*[.=]", text, re.M):
+        raise ValueError("codex: config.toml sets agents in a form this cannot edit; left unchanged")
+    for key, table, value in (("model", None, plan.get("lead")), ("model_reasoning_effort", None, plan.get("lead") and plan.get("lead_effort")),
+                              ("default_subagent_model", "agents", plan.get("reader")),
+                              ("default_subagent_reasoning_effort", "agents", plan.get("reader") and plan.get("reader_effort"))):
+        if value:
+            text = toml_set(text, table, key, quoted(value))[0]
+    try:
+        import tomllib  # Python 3.11+; older ones write without this last check
+    except ImportError:
+        return text
+    try:
+        tomllib.loads(text)
+    except ValueError as e:
+        raise ValueError(f"codex: the result would not be valid TOML ({e}); left unchanged") from e
+    return text
 
 
 def write(path: Path, text: str, home: Path) -> None:
@@ -84,13 +125,7 @@ def apply(agent: str, plan: dict, label: str = "", home: Path | None = None) -> 
         text = json.dumps(s, indent=2, ensure_ascii=False) + "\n"
     elif agent == "codex":
         path = home / ".codex" / "config.toml"
-        text = path.read_text(encoding="utf-8") if path.exists() else ""
-        if lead:
-            text = toml_top(text, "model", lead)
-            if plan.get("lead_effort"):
-                text = toml_top(text, "model_reasoning_effort", plan["lead_effort"])
-        if reader:
-            text = toml_agents(text, reader, plan.get("reader_effort"))
+        text = codex_text(path.read_text(encoding="utf-8-sig") if path.exists() else "", plan)
     elif agent == "agy":  # its subagents follow the main model or a fixed flash/pro: only the lead has a setting
         path = home / ".gemini" / "antigravity-cli" / "settings.json"
         s = read_json(path)
@@ -115,14 +150,14 @@ def current(agent: str, home: Path | None = None) -> dict:
             s = read_json(home / ".claude" / "settings.json")
             found = {"lead": s.get("model"), "lead_effort": s.get("effortLevel"), "reader": (s.get("env") or {}).get("CLAUDE_CODE_SUBAGENT_MODEL")}
         elif agent == "codex":
-            text = (home / ".codex" / "config.toml").read_text(encoding="utf-8")
-            top, agents = ("\n" + text).partition("\n[")[0], (re.search(r"^\[agents\]\n((?:(?!\[).*\n?)*)", text, re.M) or [None, ""])[1]
-            value = lambda block, key: (re.search(rf'^{key} = "([^"]*)"', block, re.M) or [None, None])[1]
+            text = (home / ".codex" / "config.toml").read_text(encoding="utf-8-sig")
+            top, agents = ("\n" + text).partition("\n[")[0], (re.search(r"^\[agents\][^\n]*\n((?:(?!\[).*\n?)*)", text, re.M) or [None, ""])[1]
+            value = lambda block, key: (re.search(rf'^\s*{key}\s*=\s*"([^"]*)"', block, re.M) or [None, None])[1]
             found = {"lead": value(top, "model"), "lead_effort": value(top, "model_reasoning_effort"),
                      "reader": value(agents, "default_subagent_model"), "reader_effort": value(agents, "default_subagent_reasoning_effort")}
         else:
             found = {"lead": read_json(home / ".gemini" / "antigravity-cli" / "settings.json").get("model")}
-    except (OSError, ValueError):
+    except (OSError, ValueError, AttributeError, TypeError):  # a report must not fail on an odd settings file
         return {}
     return {k: str(v)[:80] for k, v in found.items() if v}
 
@@ -145,6 +180,28 @@ def self_test() -> None:
         assert (c["model"], c["model_reasoning_effort"], c["agents"]["default_subagent_model"], c["projects"]["x"]["trust_level"]) == ("gpt-x", "medium", "gpt-y", "trusted"), c
         apply("codex", {"lead": "gpt-x", "lead_effort": "medium", "reader": "gpt-y", "reader_effort": "low"}, home=h)
         assert (h / ".codex/config.toml").read_text() == first, "applying twice changes nothing"
+        for odd in ('model="a"\n[agents] # c\nmax_threads = 4\ndefault_subagent_model   = "z"\n', '\ufeffmodel = "a"\n'):
+            (h / ".codex/config.toml").write_text(odd, encoding="utf-8")
+            apply("codex", {"lead": "gpt-x", "lead_effort": "medium", "reader": "gpt-y", "reader_effort": "low"}, home=h)
+            got = tomllib.loads((h / ".codex/config.toml").read_text(encoding="utf-8"))
+            assert got["model"] == "gpt-x" and got["agents"]["default_subagent_model"] == "gpt-y", got
+            assert current("codex", h)["reader"] == "gpt-y"
+        assert got["agents"]["default_subagent_reasoning_effort"] == "low"
+        (h / ".codex/config.toml").write_text('model="a"\n[agents] # c\nmax_threads = 4\n', encoding="utf-8")
+        apply("codex", {"reader": "gpt-y"}, home=h)
+        kept = (h / ".codex/config.toml").read_text(encoding="utf-8")
+        assert tomllib.loads(kept)["agents"]["max_threads"] == 4 and "# c" in kept, kept
+        (h / ".codex/config.toml").write_text('agents = {x = 1}\n', encoding="utf-8")
+        try:
+            apply("codex", {"reader": "gpt-y"}, home=h)
+            raise AssertionError("an inline agents table must be refused")
+        except ValueError:
+            assert (h / ".codex/config.toml").read_text(encoding="utf-8") == 'agents = {x = 1}\n'
+        (h / ".claude/settings.json").write_text('{"env": "x"}')
+        assert current("claude", h) == {}, "an odd file must not fail the report"
+        (h / ".claude/settings.json").write_text('{"model": "opus", "effortLevel": "high", "env": {"CLAUDE_CODE_SUBAGENT_MODEL": "sonnet"}}')
+        (h / ".codex/config.toml").write_text("", encoding="utf-8")
+        apply("codex", {"lead": "gpt-x", "lead_effort": "medium", "reader": "gpt-y", "reader_effort": "low"}, home=h)
         assert current("codex", h) == {"lead": "gpt-x", "lead_effort": "medium", "reader": "gpt-y", "reader_effort": "low"}, current("codex", h)
         assert current("claude", h) == {"lead": "opus", "lead_effort": "high", "reader": "sonnet"} and current("agy", h) == {}
         apply("agy", {"lead": "flash-low"}, label="Flash (Low)", home=h)

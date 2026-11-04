@@ -5457,10 +5457,13 @@ def task_hosts(t: dict, rows: list[dict]) -> list[dict]:
 
 
 def stuck_projects(tasks: list[dict], rows: list[dict]) -> list[dict]:
-    """Tasks for an agent that could start but never will: no pc of this person has a folder linked to their project."""
+    """Tasks that wait for a worker here while none can start. Without a companion on any own pc there are no workers at
+    all (an open chat of the owner takes the task), so nothing is stuck; a project on someone else's token runs there."""
+    if not any(r["own"] and r.get("companion") for r in rows):
+        return []
     linked = {f.get("project") for r in rows if r["own"] for f in ((r.get("companion") or {}).get("folders") or {}).get("linked", [])}
-    user = device.get().get("user")  # a project on someone else's token runs on their pc: no job for this person's pcs
-    linked |= {x for c in read_json(TOKENS_FILE, {}).values() if c.get("owner") != user for x in c.get("roots") or []}
+    user = device.get().get("user")
+    linked |= {x for c in read_json(TOKENS_FILE, {}).values() if c.get("owner") not in (None, "", user) for x in c.get("roots") or []}
     counts: dict = {}
     for t in tasks:
         if not t["done"] and owner_agent(t["owner"]) and t["startable"] and t["project"] not in linked:  # a handed-back result has no "startable"

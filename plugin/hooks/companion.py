@@ -97,7 +97,16 @@ TICK = threading.Lock()  # one round at a time: the minute loop and the page's "
 TRUST_KEYS = ("keep_trusted", "codex_trusted")  # what trust() keeps in state.json; a round never writes them
 
 
-STARTED = self_update.own()  # the code this process runs; the file on disk can be newer after an update
+def own_version() -> tuple:
+    """() while the manifest cannot be read, say halfway an update: that must not stop the companion."""
+    try:
+        return self_update.own()
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return ()
+
+
+STARTED = own_version()  # the code this process runs; the file on disk can be newer after an update
+ACTING = threading.Lock()  # held while a remote action runs: a restart must not cut one off halfway
 
 
 def version() -> str:
@@ -560,39 +569,7 @@ def keep_trusted():
 
 # ---------------------------------------------------------------- YOLO
 
-def toml_set(text: str, table, key: str, raw):
-    """Set (raw = a TOML value as text) or remove (raw = None) one key of a table (None = top level), leaving every
-    other line as it is; the old value as text (with its comment), or None when it was not there."""
-    lines = text.splitlines(keepends=True)
-    header = lambda ln: ln.lstrip().startswith("[")
-    if table is None:
-        start, end = 0, next((i for i, ln in enumerate(lines) if header(ln)), len(lines))
-    else:
-        at = next((i for i, ln in enumerate(lines) if ln.strip() == f"[{table}]"), None)
-        if at is None:
-            if raw is None:
-                return text, None
-            sep = "" if not text or text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
-            return f"{text}{sep}[{table}]\n{key} = {raw}\n", None
-        start, end = at + 1, next((i for i in range(at + 1, len(lines)) if header(lines[i])), len(lines))
-    pat = re.compile(rf"\s*{re.escape(key)}\s*=\s*(.*?)\s*$")
-    for i in range(start, end):
-        m = pat.fullmatch(lines[i].rstrip("\r\n"))
-        if m:
-            if raw is None:
-                del lines[i]
-            else:
-                lines[i] = f"{key} = {raw}\n"
-            return "".join(lines), m.group(1)
-    if raw is None:
-        return text, None
-    last = end
-    while last > start and not lines[last - 1].strip():
-        last -= 1
-    if last and not lines[last - 1].endswith("\n"):
-        lines[last - 1] += "\n"
-    lines.insert(last, f"{key} = {raw}\n")
-    return "".join(lines), None
+toml_set = model_settings.toml_set
 
 
 def json_set(data: dict, keys: tuple, value):
@@ -1307,16 +1284,26 @@ def progress(w: dict, g) -> dict:
             "log": log_tail(w.get("log"))}
 
 
-def unmerged_commits(w: dict) -> int:
-    """Commits on a worker's branch that its base branch lacks; 0 when the branch or its repo is gone."""
-    b, into = w.get("branch"), w.get("base_branch")
-    if not b or not into or w["status"] == "merged":
-        return 0
+def unfinished_work(w: dict) -> str:
+    """Why this worker's branch or worktree may hold work nobody saw; "" only when that is certain."""
+    b, into = w.get("branch"), w.get("base_branch") or w.get("base")
+    if not b or w["status"] == "merged":
+        return ""
+    run = lambda *a: workers.git(w["repo"], *a, env=GIT_RO, timeout=10)
     try:
-        n = workers.git(w["repo"], "rev-list", "--count", f"refs/heads/{into}..refs/heads/{b}", env=GIT_RO, timeout=10)
-        return int(n.stdout.strip() or 0) if not n.returncode else 0
-    except (OSError, subprocess.SubprocessError, ValueError):
-        return 0
+        if not Path(w["repo"]).exists() or run("rev-parse", "--verify", "-q", f"refs/heads/{b}").returncode:
+            return ""  # the branch is gone: nothing left to lose
+        n = run("rev-list", "--count", f"{f'refs/heads/{into}' if w.get('base_branch') else into}..refs/heads/{b}") if into else None
+        if n is None or n.returncode:
+            return "has a branch that cannot be compared with its base"
+        if int(n.stdout.strip() or 0):
+            return f"has {int(n.stdout.strip())} commit(s) that are not merged"
+        tree = w.get("worktree") or w.get("cwd")
+        if tree and Path(tree).exists() and workers.git(tree, "status", "--porcelain", env=GIT_RO, timeout=10).stdout.strip():
+            return "has uncommitted changes in its worktree"
+        return ""
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError):
+        return "could not be checked"
 
 
 def review(w: dict, now: float):
@@ -1428,21 +1415,30 @@ def run_action(a: dict) -> str:
                 " change it to 'start after approval' or remove it to stop it for good")
     if act == "takeover":
         return take_over(args, token_store.token())
-    if act == "apply_models":
-        said = []
+    if act == "apply_models":  # each agent on its own: one that cannot change must not hide what the others did
+        said, failed = [], False
         for a, plan in json.loads(args["plans"]).items():
-            if a in AGENTS and installed(a):
+            if a not in AGENTS or not installed(a):
+                continue
+            try:
+                if a == "agy" and running("agy"):  # agy rewrites its settings on exit, so a change now would be lost
+                    raise RuntimeError("agy: close agy first, it would overwrite this when it exits")
                 label = next((m.get("name", "") for m in chat.models(a) if m.get("id") == plan.get("lead")), "") if a == "agy" else ""
                 said.append(model_settings.apply(a, plan, label))
-        return "; ".join(said) + ". A new session uses them."
+            except (OSError, ValueError, RuntimeError) as e:
+                failed = True
+                said.append(str(e) if str(e).startswith(a) else f"{a}: {e}")
+        if failed:
+            raise RuntimeError("; ".join(said))
+        return "; ".join(said) + ". New sessions use them."
     if act == "archive_worker":  # off the list only: the record keeps its restart hold, the branch and worktree stay
         with TICK, LOCK:
             ws = load("workers.json", {})
             w = ws.get(f"{args.get('project')}/{args['id']}")
             if not w or w["status"] == "running":
                 raise RuntimeError(f"no ended worker for {args['id']}")
-            if unmerged_commits(w):
-                raise RuntimeError(f"{args['id']} has {unmerged_commits(w)} commit(s) that are not merged: review them first")
+            if why := unfinished_work(w):
+                raise RuntimeError(f"{args['id']} {why}: look at it first")
             w["archived"] = True
             save("workers.json", ws)
         return f"archived {args['id']}"
@@ -1497,7 +1493,8 @@ def actions_round():
         changed = changed or a.get("action") in STATE_ACTIONS
         log("remote", f"Remote action {a.get('action')} from {a.get('by') or '?'}", json.dumps(a.get("args") or {})[:200])
         try:
-            ok, result = True, run_action(a)
+            with ACTING:
+                ok, result = True, run_action(a)
         except Exception as e:
             ok, result = False, f"{type(e).__name__}: {e}"
             log("error", f"Remote action {a.get('action')} failed", result[:300])
@@ -1715,22 +1712,36 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
-def update_watch(httpd):
+TASK_NAME = "Knowledge companion"  # the Scheduled Task knowledge-agent.py installs on Windows
+
+
+def restart() -> None:
+    if os.name != "nt":
+        os.execv(sys.executable, [sys.executable, *sys.argv])
+    # Windows: exec would leave the exclusive port taken for a moment. Under the Scheduled Task the task must stay the owner,
+    # or uninstalling could not stop it, so a detached helper asks the task to run again once this process has gone.
+    flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_BREAKAWAY_FROM_JOB
+    under_task = subprocess.run(["schtasks", "/Query", "/TN", TASK_NAME], capture_output=True).returncode == 0
+    again = f'schtasks /Run /TN "{TASK_NAME}"' if under_task else subprocess.list2cmdline([sys.executable, *sys.argv])
+    subprocess.Popen(f"cmd /c ping -n 4 127.0.0.1 >nul & {again}", shell=False, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
+    os._exit(0)
+
+
+def update_watch():
     """An updated plugin only counts once this process runs it: without this a new action failed as "unknown" while the
     list showed the new version. Waits for two equal readings, so a half-written update is not started."""
     seen = STARTED
     while True:
         time.sleep(UPDATE_EVERY)
-        now = self_update.own()
-        if now and now != STARTED and now == seen:
-            with TICK:  # between rounds; live chats and workers run in their own processes and are picked up again
-                log("info", "Restarting for the updated plugin", ".".join(map(str, now)))
-                if os.name == "nt":  # exec would leave the exclusive port taken for a moment: the new one would refuse to start
-                    httpd.server_close()
-                    subprocess.Popen([sys.executable, *sys.argv], stdin=subprocess.DEVNULL, creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
-                    os._exit(0)
-                os.execv(sys.executable, [sys.executable, *sys.argv])
-        seen = now
+        try:
+            now = own_version()
+            if now and now != STARTED and now == seen:
+                with ACTING, TICK:  # the order of an action, which takes TICK inside; live chats and workers run in their own processes
+                    log("info", "Restarting for the updated plugin", ".".join(map(str, now)))
+                    restart()
+            seen = now
+        except Exception as e:  # this thread must outlive a failed restart: the next reading tries again
+            log("error", "Could not restart for the updated plugin", f"{type(e).__name__}: {e}"[:300])
 
 
 UPDATE_EVERY = float(os.environ.get("KNOWLEDGE_COMPANION_UPDATE_EVERY") or 30)
@@ -2078,7 +2089,7 @@ def serve():
     threading.Thread(target=loop, daemon=True).start()
     threading.Thread(target=actions_loop, daemon=True).start()
     threading.Thread(target=chats_loop, daemon=True).start()
-    threading.Thread(target=update_watch, args=(httpd,), daemon=True).start()
+    threading.Thread(target=update_watch, daemon=True).start()
     print(f"knowledge companion on {SELF}", flush=True)
     httpd.serve_forever()
 
