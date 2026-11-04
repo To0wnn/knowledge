@@ -29,6 +29,8 @@ fixed remote actions and relays chats. Installing it is part of the client setup
 
 ## Machines
 
+- **Recommended settings:** with a `model_advice.json` next to the development rules, each pc's card shows per role and agent the first measured model that pc offers, with its test score, and which offered models nobody measured. It is advice only and changes no setting. Without the file the section does not appear.
+
 - **Machines:** every request of plugin 0.15+ names its pc (`X-Knowledge-Machine`, a random id made once in
   `~/.knowledge/machine.json` with the host name as label; `KNOWLEDGE_HOME` moves `~/.knowledge`). Leases and wakes key
   on token + machine, so one token on two pcs is two holders. The server keeps per machine and agent the sessions of

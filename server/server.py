@@ -725,6 +725,33 @@ def house_rules(mem: str) -> str:
 DEV_RULES_FILE = "dev_rules.md"  # how code is changed; next to the house rules, same delivery
 
 
+ADVICE_FILE = "model_advice.json"  # an installation's own measurements; without the file the UI shows no advice
+
+
+def model_advice(offered: dict, data: dict) -> dict:
+    """Per role and agent the first measured model this pc offers, and what it offers that nobody measured. Advice only:
+    nothing here changes a setting. offered: {agent: [{"id": ...}]}; data: the ADVICE_FILE."""
+    rows, measured = [], {}
+    for role in data.get("roles", []):
+        for agent, candidates in role.get("agents", {}).items():
+            ids = {m.get("id") for m in offered.get(agent) or []}
+            measured.setdefault(agent, set()).update(c.get("model") for c in candidates)
+            if agent in offered:
+                pick = next((c for c in candidates if c.get("model") in ids), None)
+                rows.append({"role": role.get("role", ""), "agent": agent, **(pick or {"model": None})})
+    return {"rows": rows, "measured_on": data.get("measured_on", ""), "note": data.get("note", ""),
+            "unmeasured": {a: sorted(i for i in ({m.get("id") for m in v or []} - measured.get(a, set())) if i)
+                           for a, v in offered.items()}}
+
+
+def advice_data() -> dict:
+    try:
+        data = json.loads((ROOTS["claude"] / ADVICE_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def dev_rules() -> str:
     """The development rules as Markdown, or "" when the file is not there (then only the house rules apply)."""
     try:
@@ -2446,7 +2473,7 @@ def machine_rows() -> list[dict]:
     person may steer it (remote actions, forget). Tokens of old plugins (no machine id) show as one "old plugin" row."""
     dev, now, tokens = device.get(), time.time(), read_json(TOKENS_FILE, {})
     seen = lambda n: n in tokens and (dev.get("admin") or tokens[n].get("owner") == dev.get("user"))
-    queue, rows = read_json(MACHINE_ACTIONS, {}), []
+    queue, rows, advice = read_json(MACHINE_ACTIONS, {}), [], advice_data()
     for mid, m in read_json(MACHINES_FILE, {}).items():
         names = [n for n in m.get("tokens", {}) if seen(n)]
         if not names:
@@ -2471,6 +2498,8 @@ def machine_rows() -> list[dict]:
                      "companion": {**{k: comp.get(k) for k in ("version", "at", "workersAllowed", "game", "maxWorkers", "folders", "projects", "token", "live", "chats")},
                                    "agents": sorted(comp.get("agents") or {}),
                                    "models": {a: v.get("models", []) for a, v in (comp.get("agents") or {}).items()}} if comp else None,
+                     **({"advice": model_advice({a: v.get("models", []) for a, v in comp["agents"].items()}, advice)}
+                        if advice and comp and comp.get("agents") else {}),
                      "actions": queue.get(mid, [])[-10:]})
     for n, cfg in tokens.items():  # plugins before 0.15.0: one row per token, from clients.json
         old = [c for s, c in read_json(CLIENTS_FILE, {}).get(n, {}).items() if now - c.get("at", 0) < SESSION_KEEP]

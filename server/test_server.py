@@ -715,6 +715,18 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     mc = json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "claude", "folder": "/home/x/garden"})[2])["chat"]["id"]
     told = json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["models"]
     assert [(m["id"], m.get("default")) for m in told] == [("opus", "max"), ("sonnet-x", None)], told  # a default it does not offer is dropped
+    # Advice: the first measured model this pc offers, what it offers that nobody measured; no file, no advice.
+    rows = lambda: {r["id"]: r for r in json.loads(ui("/ui/api/machines")[2])["machines"]}
+    assert "advice" not in rows()[mid]
+    advice = tmp / "claude" / "model_advice.json"
+    advice.write_text(json.dumps({"measured_on": "1 Nov", "note": "n", "roles": [{"role": "Read", "agents": {
+        "claude": [{"model": "gone", "effort": "low", "score": "9/9"}, {"model": "opus", "effort": "max", "score": "1/2"}],
+        "codex": [{"model": "elsewhere"}], "agy": [{"model": "not-on-this-pc"}]}}]}))
+    got = rows()[mid]["advice"]
+    assert got["rows"] == [{"role": "Read", "agent": "claude", "model": "opus", "effort": "max", "score": "1/2"},
+                           {"role": "Read", "agent": "codex", "model": None}], got
+    assert got["unmeasured"] == {"codex": [], "claude": ["sonnet-x"]} and got["measured_on"] == "1 Nov", got
+    advice.unlink()
     assert ui("/ui/api/chat/send", {"machine": mid, "id": mc, "text": "a", "model": "sonnet"})[0] == 400  # not reported
     assert ui("/ui/api/chat/send", {"machine": mid, "id": mc, "text": "a", "model": "-rf"})[0] == 400  # dropped from the report
     assert ui("/ui/api/chat/send", {"machine": mid, "id": mc, "text": "a", "model": "opus", "effort": "huge"})[0] == 400

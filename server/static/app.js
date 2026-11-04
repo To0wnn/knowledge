@@ -1312,6 +1312,16 @@ async function loadMachines() {
       }
       agents.append(row);
     }
+    if (m.advice?.rows.length) {
+      const d = el("details", "machine-sessions"), list = el("ul", "machine-list");
+      d.append(el("summary", null, `Recommended settings${m.advice.measured_on ? ` (measured ${m.advice.measured_on})` : ""}`));
+      for (const r of m.advice.rows) list.append(el("li", null, `${r.role} · ${AGENT_NAME[r.agent] || r.agent}: ${r.model
+        ? `${r.model}${r.effort ? `, ${r.effort}` : ""}${r.score ? ` (test score ${r.score})` : " (not measured)"}` : "no measured model on this pc"}`));
+      d.append(list);
+      for (const [a, ids] of Object.entries(m.advice.unmeasured)) if (ids.length) d.append(el("p", "machine-meta", `Not measured yet on ${AGENT_NAME[a] || a}: ${ids.join(", ")}`));
+      d.append(el("p", "machine-meta", `Advice only: nothing changes by itself.${m.advice.note ? ` ${m.advice.note}` : ""}`));
+      card.append(d);
+    }
     const fl = c && c.folders;
     if (fl && (fl.linked.length || (m.own && fl.candidates.length))) {
       const d = el("details", "machine-sessions"), list = el("ul", "machine-list");
