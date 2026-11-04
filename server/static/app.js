@@ -1244,7 +1244,8 @@ function workerList(m, list) {
     head.append(el("strong", null, w.title || w.id), w.title ? el("span", "muted", ` ${w.id}`) : "", ` · ${w.project || "?"} · ${w.status === "running" ? `running ${mins(w.started)}` : `${w.status} ${ago(w.ended || w.started)}`}`);
     if (w.why) text.append(el("span", "worker-why", w.why));
     if (w.status === "running" && !m.online) text.append(el("span", "worker-why", `pc ${offlineFor(m.at)}: nobody knows whether it still runs`));
-    if (w.status === "failed") text.append(el("span", "worker-why", "Starts again by itself after 6 h while its task line is open."));
+    const again = (w.ended || 0) + 6 * 3600; // later than that it did not start again, so its line is gone or held: no promise then
+    if (w.status === "failed" && !w.chat && again > Date.now() / 1000) text.append(el("span", "worker-why", `Starts again by itself around ${new Date(again * 1000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })} if its task line is still open.`));
     if (w.review?.ahead > 0) text.append(el("span", "worker-why", `${w.review.ahead} commit(s) not merged: review them under Agents.`));
     if (w.status === "running" && w.progress) text.append(workerProgress(w.progress));
     li.append(text);
