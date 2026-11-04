@@ -16,10 +16,12 @@ import asyncio
 import contextlib
 import difflib
 import fnmatch
+import functools
 import hashlib
 import hmac
 import html
 import json
+import logging
 import os
 import re
 from datetime import date, timedelta
@@ -287,6 +289,7 @@ def version(data: bytes) -> str:
 BINARY = {".zip", ".gz", ".tgz", ".xz", ".7z", ".tar", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf",
           ".bin", ".img", ".iso", ".so", ".pyc", ".whl", ".mp4", ".mkv", ".db", ".sqlite", ".woff", ".woff2", ".ttf"}
 RESCAN_SECONDS = int(os.environ.get("KNOWLEDGE_RESCAN", "60"))
+logging.getLogger("mcp.server.streamable_http").setLevel(logging.WARNING)  # stateless: one "Terminating session: None" per request
 BACKGROUND: dict[str, dict] = {}  # last run of the background work, for the admin page
 
 
@@ -1296,9 +1299,10 @@ def tell_writers(written: dict[str, tuple[str, float]]):
                 _told.add((dev, a, b))
                 other = b if rel == a else a
                 about = kb_lint.frontmatter(text_of(other)).get("description", "").strip('"')[:200]
-                add_notice(dev, project, f"Knowledge house rule 1: the memo you wrote, {rel}, looks like the same subject as "
-                           f"{other} (reranker {s:.2f}{'; it is about: ' + about if about else ''}). Merge the two, or link "
-                           f"them with [[{Path(other).stem}]] when they are deliberately separate (lint stops reporting linked memos).")
+                head = f"Knowledge house rule 1: the memo you wrote, {rel}, looks like the same subject as {other} ("
+                add_notice(dev, project, f"{head}reranker {s:.2f}{'; it is about: ' + about if about else ''}). Merge the two, or link "
+                           f"them with [[{Path(other).stem}]] when they are deliberately separate (lint stops reporting linked memos).",
+                           like=head)  # _told is gone after a deploy and the score moves: one notice per pair, not one per deploy
 
 
 def possible_duplicates() -> list[str]:
@@ -3140,13 +3144,16 @@ def notices_locked():
         yield [dict(n) for n in read_json(NOTICES, [])]
 
 
-def add_notice(dev: str, project: str, text: str, once: bool = False):
+def add_notice(dev: str, project: str, text: str, once: bool = False, like: str = ""):
     """`once`: not when the same text waits for that device already (the rescan and the watcher, or blue and green,
-    may both see one write)."""
+    may both see one write). `like`: not when that device has a notice starting with this, taken or not."""
     now = time.time()
     NOTICES.parent.mkdir(parents=True, exist_ok=True)
     with notices_locked() as notes:
         if once and any((n.get("device"), n.get("project"), n.get("text")) == (dev, project, text) for n in notes):
+            return
+        if like and any((n.get("device"), n.get("project")) == (dev, project) and n.get("text", "").startswith(like)
+                        and now - n.get("at", 0) < NOTICE_DAYS * 86400 for n in notes):
             return
         keep = [n for n in notes if now - n.get("at", 0) < NOTICE_DAYS * 86400]
         mine = [n for n in keep if (n.get("device"), n.get("project")) == (dev, project)]

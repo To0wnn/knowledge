@@ -1995,7 +1995,7 @@ def main():
         old = (srv.index, srv.memo_candidates, srv.write_json, srv.add_notice, srv.linked, srv.dupes)
         told = []
         srv.index, srv.write_json, srv.linked = FakeIndex(), lambda *a: None, lambda a, b: False
-        srv.add_notice = lambda dev, project, text: told.append(text)
+        srv.add_notice = lambda dev, project, text, **_: told.append(text)
         srv.dupes = {"pairs": {"memory/a.md\tmemory/b.md": {"v": ["x", "y"], "score": 0.9}}, "searched": {}}
         srv.memo_candidates = lambda rel, text, floor: {}
         srv.duplicate_pass(srv.kb_rerank.Reranker("test"))
