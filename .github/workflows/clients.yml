@@ -16,7 +16,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           python-version: "3.14"
       - name: Git identity for the tests that commit
@@ -29,7 +29,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10  # setup-python has no 3.9 for this runner's Ubuntu; uv fetches a standalone build
+      - uses: astral-sh/setup-uv@v10.3.3  # setup-python has no 3.9 for this runner's Ubuntu; uv fetches a standalone build
       - name: Git identity for the tests that commit
         run: git config --global user.name ci && git config --global user.email ci@example.invalid
       - name: Self-tests under Python 3.9
@@ -48,7 +48,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           python-version: "3.14"  # as in the image: onnxruntime has no wheels for 3.15 yet
       - uses: actions/setup-go@v7  # tests/clients_e2e.py starts the agy plugin's MCP command the way Go (agy) does
@@ -76,7 +76,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           python-version: "3.14"
       - name: Server dependencies
