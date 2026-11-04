@@ -165,7 +165,7 @@ async def desktop(browser, secret: str) -> None:
     radii = await pg.evaluate("""(id) => { const c = byId.get(id); return [...neighbors.get(id)].map(i => byId.get(i))
         .filter(n => n.x != null).map(n => Math.round(Math.hypot(n.x - c.x, n.y - c.y))); }""", nid)
     in_view = await pg.evaluate("""() => { const w = Graph.width(), h = Graph.height(); return [...focusSet].map(i => byId.get(i))
-        .filter(Boolean).every(n => { const c = Graph.graph2ScreenCoords(n.x, n.y); return c.x >= 0 && c.y >= 0 && c.x <= w && c.y <= h; }); }""")
+        .filter(n => n && n.x != null).every(n => { const c = Graph.graph2ScreenCoords(n.x, n.y); return c.x >= 0 && c.y >= 0 && c.x <= w && c.y <= h; }); }""")
     check(zoom > overview * 2, f"click zooms in ({overview:.2f} -> {zoom:.2f})")
     check(len(set(radii)) == 1, f"neighbours gather in a ring (radii {sorted(set(radii))})")
     check(in_view, "note and all neighbours in view")

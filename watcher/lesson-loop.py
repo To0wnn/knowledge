@@ -156,6 +156,9 @@ class Remote:
     def __init__(self, rel: str):
         self.rel, self.name, self.version = rel, rel.rsplit("/", 1)[-1], None
 
+    def __str__(self) -> str:
+        return self.rel
+
     def read_text(self, encoding: str = "utf-8", errors: str | None = None) -> str:
         head, _, body = MCP("knowledge_read", {"path": self.rel, "limit": 5000}).partition("\n")
         self.version = re.search(r"version (\w+)", head).group(1)

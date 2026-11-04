@@ -33,6 +33,8 @@ ROOTS = {  # lint's path prefix -> folder on this machine; the homelab memory ha
     "anpitek-memory/": HOME / f".claude/projects/{PREFIX}-anpitek/memory",
     "trade-memory/": HOME / f".claude/projects/{PREFIX}-trade-bot/memory",
 }
+# Memory roots that live on the server only but whose facts this machine can check (a guest's memos are not such a root).
+REMOTE = {r for r in os.environ.get("KNOWLEDGE_REVIEW_REMOTE", "").replace(" ", "").split(",") if r}
 PER_PASS = 2
 PASS_TIMEOUT = 40 * 60
 STALL = 2  # passes in a row without progress
@@ -47,10 +49,12 @@ def today_nl(d: date) -> str:
     return f"{d.day} {NL_MONTHS[d.month - 1]} {d.year}"
 
 
-def locate(item: str) -> Path | None:
+def locate(item: str):
     """'trade-memory/x.md: not checked since …' -> the file here, or None (a root this VM does not hold)."""
     rel = item.split(": ", 1)[0]
     prefix = rel.split("/", 1)[0] + "/" if "/" in rel else ""
+    if prefix[:-1] in REMOTE:
+        return __import__("lesson-loop").Remote(rel)
     root = ROOTS.get(prefix)
     p = root / rel[len(prefix):] if root else None
     return p if p and p.is_file() else None
@@ -72,6 +76,7 @@ beyond reading. Then edit only that memo file:
 - a fact that is wrong: correct it and mark it "(gecontroleerd {today_nl(day)})";
 - a fact you cannot check (host off, not reachable, hardware not bought yet): leave its marks as they are and report the
   memo as blocked with the reason. Never write a "gecontroleerd" mark for something you did not check this session.
+A name like "<project>-memory/x.md" lives on the server: read it with knowledge_read and edit it with knowledge_edit.
 Follow the house rules for the memo (Stand/Keuzes, absolute dates, ‹secret:NAME› for secrets). Answer with the memos you
 could not check fully, as JSON (empty list when all were checked)."""
 
@@ -147,6 +152,11 @@ if __name__ == "__main__":
         import tempfile
         day = date(2026, 10, 25)
         assert today_nl(day) == "25 okt 2026"
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        REMOTE.add("x-memory")
+        assert str(locate("x-memory/a.md: never checked")) == "x-memory/a.md" and locate("x-memory/a.md: y").name == "a.md"
+        assert locate("g-memory/a.md: never checked") is None  # a root that is neither local nor named stays skipped
+        REMOTE.discard("x-memory")
         assert checked_on("IP 10.0.0.1 (gecontroleerd 25 okt 2026)", day)
         assert not checked_on("IP 10.0.0.1 (stand 25 okt 2026, niet opnieuw gecontroleerd)", day), "carried over is not checked"
         assert not checked_on("IP 10.0.0.1 (gecontroleerd 1 aug 2026), edited 25 okt 2026", day), "another date in the text does not count"
