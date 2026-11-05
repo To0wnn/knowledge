@@ -9,7 +9,7 @@ git merge-base --is-ancestor FETCH_HEAD HEAD || { echo "deploy refused: this che
 [ -f local.env ] || { echo "local.env missing: copy local.env.example and fill in the addresses" >&2; exit 1; }
 set -a; . ./local.env; set +a
 cp local.env server/.env  # docker compose reads the addresses from .env next to compose.yaml
-./check.sh
+./check.sh --unless-passed  # the pre-commit hook usually just ran it on this very tree
 cd server
 ssh "$KNOWLEDGE_FORGE_SSH" "mkdir -p $STACK /root/docker/knowledge/config /root/docker/knowledge/state && chown 1000:1000 /root/docker/knowledge/state"
 rsync -a --delete --exclude .venv --exclude __pycache__ ./ "$KNOWLEDGE_FORGE_SSH:$STACK/"

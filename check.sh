@@ -5,7 +5,15 @@ set -eu
 # (a commit hook once set core.bare=true here).
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GIT_COMMON_DIR GIT_OBJECT_DIRECTORY
 unset KNOWLEDGE_TOKEN KNOWLEDGE_URL KNOWLEDGE_CHAT
-cd "$(dirname "$0")/server"
+cd "$(dirname "$0")"
+# The tree this run tests, when the working copy is exactly that (no unstaged or untracked files): the stamp of a pass.
+tree=$(git diff --quiet 2>/dev/null && [ -z "$(git ls-files --others --exclude-standard)" ] && git write-tree 2>/dev/null || true)
+stamp=$(git rev-parse --path-format=absolute --git-path check-passed 2>/dev/null || true)
+if [ "${1:-}" = --unless-passed ] && [ -n "$tree" ] && [ "$tree" = "$(cat "$stamp" 2>/dev/null || true)" ]; then
+  echo "check: tree $tree passed already, not run again"
+  exit 0
+fi
+cd server
 PATH="$HOME/.local/bin:$PATH"  # uv lives there; shells started at boot may lack it
 python3 ../plugin/hooks/limits.py --self-test && python3 ../plugin/hooks/secret-guard.py --self-test && python3 ../plugin/hooks/companion.py --self-test && python3 ../plugin/hooks/model_settings.py --self-test && python3 ../plugin/hooks/workers.py --self-test && python3 ../plugin/hooks/chat.py --self-test && python3 ../plugin/hooks/watch.py --self-test || exit 1  # set -e ignores a failure before the last && of a list
 # client code also runs on macOS's /usr/bin/python3 (3.9): an f-string with a backslash in {} once broke the setup there,
@@ -17,3 +25,4 @@ for f in sys.argv[1:]:
     s = u.spec_from_file_location(os.path.basename(f)[:-3].replace('-', '_'), f)
     s.loader.exec_module(u.module_from_spec(s))" ../clients/*.py ../plugin/hooks/*.py
 uv run --quiet graph.py && uv run --quiet lint.py && uv run --quiet tasks.py && uv run --quiet external_skills.py && uv run --quiet test_server.py || exit 1  # set -e ignores a failure before the last && of a list
+if [ -n "$tree" ]; then echo "$tree" > "$stamp"; fi
