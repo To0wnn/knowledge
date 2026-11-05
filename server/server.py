@@ -5361,6 +5361,9 @@ def asks_open(c: dict, now: float) -> list:
     return [a for a in c.get("asks", []) if a["status"] == "pending" and now < a["expires"]]
 
 
+ASK_MINUTE = float(os.environ.get("KNOWLEDGE_CHAT_ASK_MINUTE", 60))  # seconds in a "minute" of chat_approval_minutes; the end-to-end test uses less
+
+
 def asks_settle(c: dict, now: float, why: str = ""):
     """Expire what waited too long; with `why` (the turn ended), cancel every ask still open."""
     for a in c.get("asks", []):
@@ -6319,7 +6322,7 @@ async def machine_chat_ask(request: Request):
         if len(asks_open(c, now)) >= 5:
             return err.append((429, "5 approvals wait in this chat already"))
         a = {"id": secrets.token_hex(4), "tool": tool, "detail": detail, "reason": reason, "key": key, "once_only": once,
-             "at": now, "expires": now + CHAT_ASK_MINUTES * 60, "minutes": CHAT_ASK_MINUTES, "status": "pending"}
+             "at": now, "expires": now + CHAT_ASK_MINUTES * ASK_MINUTE, "minutes": CHAT_ASK_MINUTES, "status": "pending"}
         keep = [x for x in c.get("asks", []) if x["status"] == "pending" or not x.get("sent") or now - x["at"] < 86400]
         c["asks"] = (keep + [a])[-50:]
         chat_add(c, "ask", f"asks: {tool}: {' '.join(detail.split())[:300]}" + (f" ({reason})" if reason else ""))

@@ -286,7 +286,7 @@ def start_server(tmp: Path):
            "KNOWLEDGE_PROXY_SECRET": "proxy-secret", "KNOWLEDGE_ADMINS": "alice", "KNOWLEDGE_AUDIT": str(tmp / "audit.log"),
            "KNOWLEDGE_PORT": str(PORT), "KNOWLEDGE_BIND": "127.0.0.1", "KNOWLEDGE_RESCAN": "3600", "KNOWLEDGE_EMBED_MODEL": "hash",
            "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"),
-           "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}", "PYTHONUTF8": "1", "KNOWLEDGE_WORKER_FOLLOW_SECONDS": "3",
+           "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}", "PYTHONUTF8": "1", "KNOWLEDGE_WORKER_FOLLOW_SECONDS": "3", "KNOWLEDGE_CHAT_ASK_MINUTE": "3",
            "KNOWLEDGE_GITHUB_RAW": "http://127.0.0.1:9"}  # no newest-version lookup on GitHub from a test
     log = open(tmp / "server.log", "wb")
     proc = subprocess.Popen([sys.executable, str(REPO / "server" / "server.py")], env=env, stdout=log, stderr=subprocess.STDOUT)
@@ -1076,7 +1076,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
     self_url = f"http://127.0.0.1:{port}"
     env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, PATH=str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
                    KNOWLEDGE_COMPANION_PORT=str(port), KNOWLEDGE_COMPANION_EVERY="3600", KN_FAKE_CALLS=str(calls),
-                   KNOWLEDGE_COMPANION_ACTIONS_EVERY="1", KNOWLEDGE_COMPANION_UPDATE_EVERY="1", KNOWLEDGE_WORKER_GRACE="1", KNOWLEDGE_COMPANION_SCAN_EVERY="0",
+                   KNOWLEDGE_COMPANION_ACTIONS_EVERY="0.2", KNOWLEDGE_COMPANION_UPDATE_EVERY="1", KNOWLEDGE_WORKER_GRACE="1", KNOWLEDGE_COMPANION_SCAN_EVERY="0",
                    KNOWLEDGE_AGY_PROCESS="knfakeagy" if fake_agy else Path(sys.executable).stem,
                    KNOWLEDGE_CODEX_PROCESS="knfakecodex" if fake_codex else Path(sys.executable).stem)
 
@@ -1636,7 +1636,7 @@ def chat_e2e(tok: str, tmp: Path):
     (pill / "new2.txt").write_text("y", encoding="utf-8")
     env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, PATH=str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
                    KNOWLEDGE_COMPANION_PORT=str(free_port()), KNOWLEDGE_COMPANION_EVERY="3600", KN_FAKE_CALLS=str(calls),
-                   KNOWLEDGE_COMPANION_ACTIONS_EVERY="1", KNOWLEDGE_COMPANION_SCAN_EVERY="0")
+                   KNOWLEDGE_COMPANION_ACTIONS_EVERY="0.2", KNOWLEDGE_COMPANION_SCAN_EVERY="0")
     ui = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice", "X-Knowledge-UI": "1"}
     recorded = lambda: [json.loads(ln) for ln in calls.read_text(encoding="utf-8").splitlines() if '"chat"' in ln] if calls.exists() else []
     log = open(home / "companion.log", "wb")
@@ -1854,6 +1854,8 @@ def chat_e2e(tok: str, tmp: Path):
         http("POST", "/ui/api/admin/settings", {"chat_approval_minutes": 1}, admin_ui)
         late = new("claude", repo)
         send(late, "ASK and nobody answers")
+        wait_for(lambda: approvals(late), 30)
+        http("POST", "/ui/api/admin/settings", {"chat_approval_minutes": 30}, admin_ui)  # this ask keeps its own; the ones below get time to be answered
         for agent in ("claude", "codex", "agy"):
             cid = new(agent, repo)
             for n, (decision, said) in enumerate((("once", "npm test ran"), ("deny", "npm test denied"), ("chat", "npm test ran"))):
@@ -1887,7 +1889,6 @@ def chat_e2e(tok: str, tmp: Path):
         texts = "".join(e["text"] for e in events if e["kind"] == "text")
         check(timed and any(e["text"] == "No answer within 1 min: denied Bash." for e in events) and "npm test denied" in texts and "in time" in texts,
               "chat claude: an approval nobody answers is denied after its time, the chat says so and the agent is told", json.dumps(events)[-600:])
-        http("POST", "/ui/api/admin/settings", {"chat_approval_minutes": 30}, admin_ui)
         activity = json.loads((home / ".knowledge" / "companion" / "activity.json").read_text(encoding="utf-8"))
         check(any("Approval asked" in a["text"] for a in activity) and any("allowed once" in a["text"] and "by alice" in a["text"] for a in activity)
               and any("denied (no answer in time)" in a["text"] for a in activity),
@@ -1979,7 +1980,7 @@ def follow_e2e(tok: str, tmp: Path):
     port = free_port()
     env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, PATH=str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
                    KNOWLEDGE_COMPANION_PORT=str(port), KNOWLEDGE_COMPANION_EVERY="3600", KN_FAKE_CALLS=str(calls),
-                   KNOWLEDGE_COMPANION_ACTIONS_EVERY="1", KNOWLEDGE_COMPANION_SCAN_EVERY="0", KN_FAKE_FOLLOW=str(hooks / "watch.py"))
+                   KNOWLEDGE_COMPANION_ACTIONS_EVERY="0.2", KNOWLEDGE_COMPANION_SCAN_EVERY="0", KN_FAKE_FOLLOW=str(hooks / "watch.py"))
     ui = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice", "X-Knowledge-UI": "1"}
     key_file = home / ".knowledge" / "companion" / "api-key"
 
