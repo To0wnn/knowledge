@@ -424,7 +424,7 @@ def lease_contract(tmp, ck, fr, raw):
     (tmp / "task_leases.json").write_text("{}")  # the later checks start without leases
 
 
-def machines_contract(tmp, ck, fr, raw, er, et):
+def machines_contract(tmp, ck, fr, raw, er, et, heard):
     import server as srv  # the pure comparison: an agent's settings against the plan
     d, u = srv.model_differs({"claude": {"lead": "opus", "reader": "sonnet"}, "agy": {"lead": "f-low"}, "codex": {"lead": "g"}},
                              {"agy": [{"id": "f-low", "name": "Flash (Low)"}]},
@@ -569,10 +569,13 @@ def machines_contract(tmp, ck, fr, raw, er, et):
         time.sleep(0.3)
     idle = json.loads((tmp / "task_idle.json").read_text()); idle["garden"]["MC-6"]["at"] -= 3600; (tmp / "task_idle.json").write_text(json.dumps(idle))
     deadline = time.time() + 10
-    while not json.loads((tmp / "task_idle.json").read_text())["garden"]["MC-6"].get("noticed") and time.time() < deadline:
-        time.sleep(0.3)
-    matrix = next(b for b in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["system"]["background"] if b["name"] == "Matrix")
-    assert "MC-6" in matrix["detail"] and "nobody took it" in matrix["detail"] and "no pc runs Gemini workers" in matrix["detail"], matrix
+    told = lambda: [m for m in heard if "MC-6" in m and "nobody took it" in m]
+    while not (json.loads((tmp / "task_idle.json").read_text())["garden"]["MC-6"].get("noticed") and told()) and time.time() < deadline:
+        time.sleep(0.1)
+    assert told() and "no pc runs Gemini workers" in told()[0], told()
+    assert json.loads((tmp / "task_idle.json").read_text())["garden"]["MC-6"]["noticed"]  # on disk: a restart does not tell it again
+    time.sleep(2.2)  # past the next background checks: one notice, not one per check
+    assert len(told()) == 1, told()
     # A worker (X-Knowledge-Worker) leases its own task only, and its start context is not the chat's.
     wk = {**pc, "X-Knowledge-Worker": "MC-3"}
     assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": "- open until 2099-01-01 [Codex, MC-5] from Claude, start now: not the worker's\n## Keuzes"}, fr)[0]
@@ -2703,7 +2706,7 @@ def main():
         assert "erinproj" in json.loads(raw("GET", "/ui/api/me", headers=er)[2])["writable"]
         roots = next(t["roots"] for t in json.loads(raw("GET", "/ui/api/admin", headers=er)[2])["tokens"] if t["name"] == "erin.laptop")
         assert {"erinproj", "erinproj-memory"} <= set(roots), roots  # her devices reach her new project at once
-        machines_contract(tmp, ck, fr, raw, er, et)
+        machines_contract(tmp, ck, fr, raw, er, et, heard)
         chats_contract(tmp, ck, fr, raw, er, et)
         remote_toggle_contract(tmp, ck, raw, er, et)
         # Speech to text: the page's recording goes on to the configured server with model, language, prompt and key;

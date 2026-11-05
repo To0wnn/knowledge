@@ -3574,7 +3574,7 @@ def idle_check(now: float) -> int:
         for t in project_tasks(project)[0]:
             lease = leases.get(project, {}).get(t["id"])
             if t["startable"] and owner_agent(t["owner"]) and not (lease and lease.get("until", 0) >= now) and t["id"] not in limit:
-                rec = waiting.setdefault(project, {})[t["id"]] = idle.get(project, {}).get(t["id"]) or {"at": int(now)}
+                rec = waiting.setdefault(project, {})[t["id"]] = {**idle.get(project, {}).get(t["id"], {"at": int(now)})}  # a copy: read_json hands out its cached object, and marking that would look unchanged and never reach the file
                 if not rec.get("noticed") and now - rec["at"] >= IDLE_AFTER:
                     notify(f"Knowledge: task {t['id']} ({project}, for {t['owner']}) may start but nobody took it for "
                            f"{int((now - rec['at']) // 60)} min ({task_where(project, t, None, now)}): {t['text'][:120]}")
