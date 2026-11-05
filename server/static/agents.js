@@ -17,8 +17,8 @@ const ckScope = (x) => !agentProject || x.project === agentProject; // the heade
 function ckRun(on) { clearTimeout(ck.timer); if (on) { ck.summaryAt = 0; ckTick(); } }
 
 // The bar and the board: the pcs, the chats and the board every ~5 s on the board (10 s in a chat); the open chat
-// every 1.5 s while it runs, else 4 s. Only the chats on screen are polled (the open one, or the board's cards on
-// screen and zoomed in, mission.js bdLive): showing a chat's log is what marks it read.
+// every 1.5 s while it runs, else 4 s. Only the chats on screen are polled (the open one, or the grid's cards on
+// screen, mission.js bdLive): showing a chat's log is what marks it read.
 async function ckTick() {
   if ($("cockpit").hidden) return;
   let live = [];
@@ -237,7 +237,7 @@ function ckLayout() {
   if ($("ck-canvas").firstChild !== show || $("ck-canvas").childNodes.length !== 1) $("ck-canvas").replaceChildren(show);
   document.body.classList.toggle("in-chat", !!card && !$("cockpit").hidden && $("cockpit").dataset.mode === "chats");
   if (card) ckScrollBottom(card, card.savedScrollTop == null);
-  bdShow(); // the board (mission.js) instead of the list, on #/chats?view=board
+  bdShow(); // the grid (mission.js) instead of the list, on #/chats on a desktop
 }
 
 // Items that say the same thing (eleven tasks waiting for the same missing pc) fold into one group with a count.
@@ -473,7 +473,7 @@ function ckCard(meta) {
   const name = el("strong"), where = el("span"), state = el("span", "ck-state"), x = el("button", "btn icon small quiet ck-x", "×");
   x.type = "button"; x.title = "Back to the list (the chat stays under Earlier)"; x.setAttribute("aria-label", "Back to the list");
   title.append(name, where);
-  const git = el("span", "ck-git-slot"), open = el("button", "btn icon small quiet ck-x bd-only", "↗"); // on the board: the full chat
+  const git = el("span", "ck-git-slot"), open = el("button", "btn icon small quiet ck-x bd-only", "↗"); // on a grid card: the full chat
   open.type = "button"; open.title = "Open the full chat"; open.setAttribute("aria-label", "Open the full chat");
   const mark = el("span", "ck-mark", AGENT_MARK[meta.agent] || "+"), close = el("button", "btn small quiet ck-close", "Archive");
   const tok = el("span", "chip ck-tok"); tok.hidden = true;
@@ -593,7 +593,7 @@ function ckCard(meta) {
       if (closed) {
         toast("Archived: under Archived in the list; a new message opens it again", false);
         if (store.get("kn_last_chat") === card.meta.id) store.set("kn_last_chat", "");
-        if (bdOn()) bdRender(); else ckShow(null); // side by side: only its card goes
+        if (bdOn()) bdRender(); else ckShow(null); // the grid: only its card goes
       } else ckPaint(card);
       ckTick();
     } catch (err) { note.className = "ck-note bad"; note.textContent = err.message; }

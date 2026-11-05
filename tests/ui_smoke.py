@@ -16,8 +16,8 @@ Changes and Health as full pages, the search page, the command palette (search, 
 a toast instead of alert(); skipped on an older server. The agents pages: the Agents list's groups and #/inbox/<key> links,
 the earlier chats' states, filter and Closed, Tasks' Cancel and counts, Machines full width, Changes' Deleted section (skipped on an
 older server). Admin and Help in the shell (0.20): sidebar, header, tab bar, settings labels, "Saved" and the server's
-message on a refusal (faked; skipped on an older server). Agents > Side by side (desktop): toggle and route, frames per
-project, Fit, folding, a dragged card kept across a reload, Tidy up; a phone keeps the list (skipped without it).
+message on a refusal (faked; skipped on an older server). Agents > the grid (desktop): #/chats and old links, columns, frames per
+project, folding, Esc and the full chat; a phone keeps the list (skipped without it).
 The Review card with faked data: Merge asks first and queues the pc's action, Reject sends reason and send back
 (intercepted; skipped on an older server). Follow a worker: its transcript read only when it ended, the Steer composer
 and Take over when it runs (intercepted; skipped on an older server). The design system (0.21): button heights and radii, quiet chips, one link colour on several views.
@@ -428,7 +428,7 @@ async def approvals(browser, devices, secret: str) -> None:
         if await pg.locator("#cockpit-btn").count():  # before the app shell: the Agents button
             await pg.click("#cockpit-btn")
         else:
-            await pg.evaluate("location.hash = '#/chats'")
+            await pg.evaluate("location.hash = '#/chats?view=list'")  # a desktop's #/chats is the grid
         await pg.wait_for_selector("#ck-list .ck-sec-needs .ck-item", timeout=15000)
         needs = pg.locator("#ck-list .ck-sec-needs .ck-item")
         acts = [t.strip() for t in await needs.first.locator(".ck-item-acts button").all_text_contents()]
@@ -466,7 +466,7 @@ async def approvals(browser, devices, secret: str) -> None:
         check(pins[0] == ["Plan · check the docs5.9k tokens"] and pins[1] == "8.6k tokens" and pins[2] == "35k context · 71k used",
               f"chat: running subagents pinned above the box with their tokens; tokens per subagent and for the chat {pins}")
         if not dev.get("is_mobile"):  # desktop: the list beside the chat
-            await pg.evaluate("location.hash = '#/chats'"); await pg.wait_for_timeout(800)
+            await pg.evaluate("location.hash = '#/chats?view=list'"); await pg.wait_for_timeout(800)
             rows = await pg.evaluate("[...document.querySelectorAll('#ck-history .ck-subchat .ck-chat-title')].map(x => x.textContent)")
             check(rows == ["↳ Plan · check the docs"], f"chat list: only the running subagents under a chat {rows}")
             await pg.locator("#ck-history .ck-submore").first.click()  # the finished ones on request
@@ -496,7 +496,7 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
     ctx, pg, errors = await page(browser, secret, "/ui#/inbox", viewport={"width": 1440, "height": 900})
     await pg.wait_for_function("ck.boardAt > 0", timeout=15000)
     await pg.wait_for_timeout(300)
-    check(await pg.evaluate("location.hash === '#/chats' && !$('cockpit').hidden && $('title').textContent === 'Agents'"), "#/inbox opens the Agents view (#/chats)")
+    check(await pg.evaluate("location.hash === '#/chats?view=list' && !$('cockpit').hidden && $('title').textContent === 'Agents'"), "#/inbox opens the Agents list")
     heads = await pg.locator("#ck-list .ck-sec-head > span:first-child").all_text_contents()
     check(heads[:1] == ["Needs you"] and heads == [h for h in ("Needs you", "Review", "Working") if h in heads], f"groups: Needs you first, then Review and Working {heads}")
     check(await pg.evaluate("!!$('ck-earlier-h') && !!$('ck-filter') && !!$('ck-closed') && !$('ck-only') && !$('ck-board')"),
@@ -512,8 +512,7 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
     check(badge == (str(n) if n else ""), f"the Agents badge counts Needs you ({badge!r} vs {n})")
     hot = await pg.evaluate("[...document.querySelectorAll('#sidebar .badge')].filter(b => b.textContent && b.classList.contains('hot')).map(b => b.className)")
     check(all("inbox-count" in c for c in hot), f"only the Needs-you badge wears the accent {hot}")
-    check(await pg.evaluate("$('chats-mode').querySelector('[data-mode=board]').textContent === 'Side by side' && !document.querySelector('[data-nav=inbox]')"),
-          "the toggle reads List | Side by side; one Agents entry in the sidebar")
+    check(await pg.evaluate("!$('chats-mode') && !document.querySelector('[data-nav=inbox]')"), "no view toggle; one Agents entry in the sidebar")
     rows = await pg.evaluate("[...document.querySelectorAll('#ck-side [data-row]')].filter(r => r.offsetParent).length")
     if rows > 1:
         await pg.locator("#ck-side [data-row]").first.focus()
@@ -561,7 +560,7 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
         check(not await pg.locator("#ck-canvas details.ck-model[open]").count(), "model chip: a click outside closes the panel")
     else:
         print("skip: no pc reports its models: the model chip is not checked")
-    await route(pg, "#/chats", "#ck-history li")
+    await route(pg, "#/chats?view=list", "#ck-history li")
     chat_row = '#ck-side [data-row^="chat:"]'  # a chat in any group, or under Earlier
     if await pg.locator(chat_row).count():
         await pg.locator(chat_row).first.click()
@@ -575,12 +574,13 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
         await pg.goto(f"{URL}/ui#/chats/no-such-chat")
         await pg.wait_for_timeout(2500)
         check(await pg.evaluate("location.hash === '#/chats' && !!$('ck-canvas').querySelector('.ck-pick')"), "a link to a missing chat falls back to #/chats")
+        await route(pg, "#/chats?view=list", "#ck-history li")
         await pg.locator(chat_row).first.click()
         await pg.wait_for_selector("#ck-canvas .ck-card", timeout=10000)
         await pg.locator("#title").focus()
         await pg.keyboard.press("Escape")
         await pg.wait_for_timeout(300)
-        check(await pg.evaluate("location.hash === '#/chats' && !!$('ck-canvas').querySelector('.ck-pick')"), "Esc goes back from a chat to the list")
+        check(await pg.evaluate("location.hash === '#/chats?view=list' && !!$('ck-canvas').querySelector('.ck-pick')"), "Esc goes back from a chat to the list")
     else:
         print("skip: no chat in the list: opening a chat, its link and Esc are not checked")
     check(not errors, f"no page errors in the Agents view {errors[:2]}")
@@ -588,7 +588,7 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
     ctx, pg, errors = await page(browser, secret, "/ui#/inbox", **devices["iPhone 14"])
     await pg.wait_for_function("ck.boardAt > 0", timeout=15000)
     await pg.wait_for_timeout(500)
-    check(await pg.evaluate("location.hash === '#/chats' && !!$('ck-side').offsetParent && !$('ck-canvas').offsetParent"), "phone: the list is the start screen")
+    check(await pg.evaluate("location.hash === '#/chats?view=list' && !!$('ck-side').offsetParent && !$('ck-canvas').offsetParent"), "phone: the list is the start screen")
     tops = await pg.evaluate("[...document.querySelectorAll('#ck-side .ck-sec')].map(c => c.getBoundingClientRect().top)")
     check(tops == sorted(tops) and len(set(tops)) == len(tops), f"phone: the groups one under the other, Earlier last {tops}")
     tabs = await pg.evaluate("[...document.querySelectorAll('#tabbar > a, #tabbar > button')].filter(t => t.offsetParent).map(t => t.dataset.nav || t.id)")
@@ -767,8 +767,8 @@ async def agents_pages(browser, devices, secret: str) -> None:
     await pg.goto(f"{URL}/ui#/inbox/task:nowhere/NOPE-1")
     await pg.wait_for_function("ck.boardAt > 0", timeout=15000)
     await pg.wait_for_timeout(500)
-    check(await pg.evaluate("location.hash === '#/chats' && !document.querySelector('.ck-item.hit')"), "an unknown #/inbox/<key> leaves the plain list")
-    await route(pg, "#/chats", "#ck-history li", 500)
+    check(await pg.evaluate("location.hash === '#/chats?view=list' && !document.querySelector('.ck-item.hit')"), "an unknown #/inbox/<key> leaves the plain list")
+    await route(pg, "#/chats?view=list", "#ck-history li", 500)
     st = await pg.evaluate("[...document.querySelectorAll('#ck-history .ck-chat:not(.ck-subchat)')].map(b => ['needs', 'running', 'idle'].findIndex(c => b.classList.contains(c)))")
     check(-1 not in st, f"Earlier: a state per chat {st}")
     if st:
@@ -1113,116 +1113,64 @@ async def shell_pages(browser, devices, secret: str) -> None:
     await ctx.close()
 
 
-BOARD_LAYOUT = """(() => {
-  const S = BD, bad = [], chats = [...Array(7)].map((_, i) => ({ id: 'c' + i, project: i < 4 ? 'b' : 'a' })).concat([{ id: 'n', project: '' }]);
-  const inside = (p, f) => p.x >= f.x && p.y >= f.y && p.x + S.w <= f.x + f.w && p.y + S.h <= f.y + f.h;
-  const L = boardLayout(chats, { c1: [-900, 40] }, []), autos = [...L.pos].filter(([, p]) => !p.pinned);
-  for (const [a, p] of autos) for (const [b, q] of autos) if (a < b && p.x < q.x + S.w && q.x < p.x + S.w && p.y < q.y + S.h && q.y < p.y + S.h) bad.push('overlap ' + a + ' ' + b);
-  for (const c of chats) if (!inside(L.pos.get(c.id), L.frames.find((f) => f.project === c.project))) bad.push('outside its frame ' + c.id);
-  if (L.pos.get('c1').x !== -900 || L.pos.get('c1').y !== 40 || !L.pos.get('c1').pinned) bad.push('a dragged card moved');
-  if (L.frames.map((f) => f.project).join() !== 'a,b,') bad.push('frame order ' + L.frames.map((f) => f.project));
-  for (const f of L.frames) if (f.x < L.bounds.x || f.y < L.bounds.y || f.x + f.w > L.bounds.x + L.bounds.w || f.y + f.h > L.bounds.y + L.bounds.h) bad.push('outside the bounds ' + f.project);
-  const F = boardLayout(chats, {}, ['a']); if (F.frames[0].h !== S.head || F.frames[1].x !== boardLayout(chats).frames[1].x) bad.push('a folded frame');
-  return bad; })()"""
-
-
 async def board(browser, devices, secret: str) -> None:
-    """Agents > Side by side (desktop): the List | Side by side toggle and its route, Grid (columns, route, no canvas places), a frame per project with each card inside it,
-    F fits all on screen, arrows pan, Esc leaves a card, folding a frame, a dragged card keeping its place across a
-    reload and Tidy up putting it back; the layout as a pure function; a phone keeps the list. The board's own chat
-    polls are blocked here (showing a chat marks it read), so the live chats stay as they were; positions live in
-    this browser context's localStorage. Skipped on a server without the board."""
+    """Agents > the grid (desktop): #/chats and the old links show it, ?view=list the list; columns and frames as pure
+    functions, a frame per project, a card per chat, Esc leaves a card, folding a frame, a card opening its full chat;
+    a phone keeps the list. The grid's own chat polls are blocked here (showing a chat marks it read), so the live chats
+    stay as they were. Skipped on a server without the grid."""
     ctx, pg, errors = await page(browser, secret, "/ui#/chats", viewport={"width": 1440, "height": 900})
-    if not await is_shell(pg) or await pg.evaluate("typeof boardLayout") != "function":
-        print("skip chat board (server without it)")
+    if not await is_shell(pg) or await pg.evaluate("typeof bdProjects") != "function":
+        print("skip chat grid (server without it)")
         await ctx.close()
         return
     await pg.route("**/ui/api/chat?*", lambda r: r.abort())
-    bad = await pg.evaluate(BOARD_LAYOUT)
-    check(not bad, f"board layout: no overlaps, cards in their frame, dragged cards kept, frames in name order {bad[:3]}")
+    check(await pg.evaluate("[gridCols(4, 1700), gridCols(5, 1700), gridCols(4, 2400), gridCols(1, 2400), gridCols(3, 600)].join() === '2,3,4,1,1'"),
+          "Grid: as many columns as fit, balanced (4 -> 2x2, 5 -> 3+2)")
+    fr = await pg.evaluate("JSON.stringify(bdProjects([{project: 'b'}, {project: ''}, {project: 'a'}, {project: 'b'}], ['a']))")
+    check(fr == '[{"project":"a","n":1,"shut":true},{"project":"b","n":2,"shut":false},{"project":"","n":1,"shut":false}]', f"Grid: frames in name order, no project last, with counts and folding {fr}")
     await pg.wait_for_function("ck.summaryAt > 0", timeout=15000)
-    await pg.click('#chats-mode [data-mode="board"]')
-    await pg.wait_for_function("location.hash === '#/chats?view=board' && $('bd') && !$('bd').hidden", timeout=5000)
-    check(await pg.evaluate("getComputedStyle($('ck-chats')).display === 'none' && $('chats-mode').querySelector('[data-mode=board]').getAttribute('aria-pressed') === 'true'"),
-          "Chats > Board: the toggle sets #/chats?view=board and the board replaces the list")
-    if await pg.evaluate("typeof gridCols") == "function":  # Grid, the trial next to the canvas
-        check(await pg.evaluate("[gridCols(4, 1700), gridCols(5, 1700), gridCols(4, 2400), gridCols(1, 2400), gridCols(3, 600)].join() === '2,3,4,1,1'"),
-              "Grid: as many columns as fit, balanced (4 -> 2x2, 5 -> 3+2)")
-        await pg.click('#chats-mode [data-mode="grid"]')
-        await pg.wait_for_function("location.hash === '#/chats?view=grid' && $('bd').classList.contains('grid') && !$('bd').hidden", timeout=5000)
-        g = await pg.evaluate("[getComputedStyle($('bd-world')).display, [...bd.wraps.values()].every((w) => !w.style.left), $('bd-world').style.transform, $('chats-mode').querySelector('[data-mode=grid]').getAttribute('aria-pressed')]")
-        check(g == ["grid", True, "", "true"], f"Grid: the toggle sets #/chats?view=grid and the cards tile without canvas places {g}")
-        cut = await pg.evaluate("[...document.querySelectorAll('#bd .bd-card .ck-head :is(.chip, .ck-state, .ck-close)')].filter((e) => e.offsetParent && e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent.trim())")
-        check(not cut, f"Grid: no chip in a card head has its text cut {cut}")
-        await pg.click('#chats-mode [data-mode="board"]')
-        await pg.wait_for_function("location.hash === '#/chats?view=board' && !$('bd').classList.contains('grid')", timeout=5000)
-    n = await pg.evaluate("ck.chats.filter((c) => ckScope(c) && !c.closed).length")  # a closed chat is off the board
+    shows = "$('bd') && !$('bd').hidden && getComputedStyle($('ck-chats')).display === 'none' && getComputedStyle($('bd-world')).display === 'grid'"
+    await pg.wait_for_function(shows, timeout=5000)
+    check(await pg.evaluate("!$('chats-mode') && !$('bd-tools') && !$('bd-mini')"), "Grid: #/chats is the grid, without a toggle or canvas tools")
+    for old in ("grid", "board"):
+        await route(pg, f"#/chats?view={old}")
+        check(await pg.evaluate(shows), f"Grid: an old ?view={old} link opens the grid")
+    await route(pg, "#/chats?view=list")
+    check(await pg.evaluate("$('bd').hidden && !!$('ck-side').offsetParent"), "?view=list shows the list instead of the grid")
+    await route(pg, "#/chats")
+    n = await pg.evaluate("ck.chats.filter((c) => ckScope(c) && !c.closed).length")  # a closed chat is off the grid
     if not n:
-        print("skip: no chats: the board's cards are not checked")
+        print("skip: no chats: the grid's cards are not checked")
     else:
         await pg.wait_for_selector("#bd .bd-card", timeout=5000)
         frames = await pg.evaluate("""(() => { const ps = [...new Set(ck.chats.filter((c) => ckScope(c) && !c.closed).map((c) => c.project || ''))];
-          const fs = [...document.querySelectorAll('#bd .bd-frame')];
-          const inFrame = [...bd.wraps.values()].every((w) => { const c = ck.chats.find((x) => x.id === w.dataset.id), f = bd.frames.get(c.project || '').getBoundingClientRect(), r = w.getBoundingClientRect();
-            return w.classList.contains('pinned') || (r.left >= f.left - 1 && r.top >= f.top - 1 && r.right <= f.right + 1 && r.bottom <= f.bottom + 1); });
-          return [fs.length, ps.length, document.querySelectorAll('#bd .bd-card').length, inFrame]; })()""")
-        check(frames[0] == frames[1] and frames[2] == n and frames[3], f"board: one frame per project, one card per chat, each inside its frame {frames} ({n} chats)")
+          return [document.querySelectorAll('#bd .bd-frame').length, ps.length, document.querySelectorAll('#bd .bd-card').length]; })()""")
+        check(frames[0] == frames[1] and frames[2] == n, f"Grid: one frame per project, one card per chat {frames} ({n} chats)")
         cut = await pg.evaluate("[...document.querySelectorAll('#bd .bd-card .ck-head :is(.chip, .ck-state, .ck-close)')].filter((e) => e.offsetParent && e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent.trim())")
-        check(not cut, f"board: no chip in a narrow card's head has its text cut (a narrow card drops chips) {cut}")
-        await pg.evaluate("panZoom(bd, 2.5, 0, 0)")
-        await pg.focus("#bd-stage")
-        await pg.keyboard.press("f")
-        await pg.wait_for_timeout(200)
-        fit = await pg.evaluate("""(() => { const s = $('bd-stage').getBoundingClientRect();
-          return [...bd.wraps.values()].filter((w) => !w.hidden).every((w) => { const r = w.getBoundingClientRect(); return r.left >= s.left - 1 && r.top >= s.top - 1 && r.right <= s.right + 1 && r.bottom <= s.bottom + 1; }); })()""")
-        check(fit, "board: F fits every card on screen")
-        x0 = await pg.evaluate("bd.view.x")
-        await pg.keyboard.press("ArrowRight")
-        check(await pg.evaluate("(x) => Math.abs(bd.view.x - (x - 80)) < 0.5", x0), "board: an arrow key pans the focused canvas")
-        await pg.keyboard.press("f")
+        check(not cut, f"Grid: no chip in a card head has its text cut {cut}")
         await pg.evaluate("[...bd.wraps.values()][0].focus()")
         await pg.keyboard.press("Escape")
-        check(await pg.evaluate("document.activeElement === $('bd-stage') && !ck.view"), "board: Esc leaves a focused card for the canvas")
-        title = pg.locator("#bd .bd-frame-title").first
-        await title.click()
-        shut = await pg.evaluate("(() => { const f = document.querySelector('#bd .bd-frame'), p = [...bd.frames].find(([, b]) => b === f)[0]; return [f.firstChild.getAttribute('aria-expanded'), [...bd.wraps.values()].filter((w) => ck.chats.find((c) => c.id === w.dataset.id)?.project === p || (!p && !ck.chats.find((c) => c.id === w.dataset.id)?.project)).every((w) => w.hidden)]; })()")
-        await title.click()
-        check(shut == ["false", True] and await pg.evaluate("document.querySelector('#bd .bd-frame-title').getAttribute('aria-expanded') === 'true'"),
-              f"board: a frame folds its cards away and opens again {shut}")
-        # drag a card by its header (zoomed out: anywhere on it); it keeps that place after a reload
-        w = pg.locator("#bd .bd-card").first
-        cid = await w.get_attribute("data-id")
-        box = await w.bounding_box()
-        before = await pg.evaluate("(id) => bd.lay.pos.get(id)", cid)
-        await pg.mouse.move(box["x"] + box["width"] / 2, box["y"] + 6)
-        await pg.mouse.down()
-        await pg.mouse.move(box["x"] + box["width"] / 2 + 150, box["y"] + 96, steps=8)
-        await pg.mouse.up()
-        saved = await pg.evaluate("(id) => bdSaved().pos[id]", cid)
-        moved = saved and abs(saved[0] - before["x"]) > 20
-        await pg.reload()
-        await pg.wait_for_selector(f'#bd .bd-card[data-id="{cid}"]', timeout=15000)
-        after = await pg.evaluate("(id) => [bd.lay.pos.get(id), document.querySelector(`#bd .bd-card[data-id='${id}']`).classList.contains('pinned')]", cid)
-        check(bool(moved) and after[1] and [after[0]["x"], after[0]["y"]] == saved, f"board: a dragged card keeps its place across a reload {before} -> {saved} -> {after}")
-        await pg.click("#bd-tidy")
-        check(await pg.evaluate("(id) => !bdSaved().pos[id] && !bd.lay.pos.get(id).pinned", cid), "board: Tidy up puts dragged cards back in the grid")
+        check(await pg.evaluate("document.activeElement === $('bd-stage') && !ck.view"), "Grid: Esc leaves a focused card for the grid")
+        fold = "document.querySelector('#bd .bd-frame-title').click()"  # with one project the title is hidden until folded
+        await pg.evaluate(fold)
+        shut = await pg.evaluate("(() => { const f = document.querySelector('#bd .bd-frame'), p = [...bd.frames].find(([, b]) => b === f)[0]; return [f.firstChild.getAttribute('aria-expanded'), [...bd.wraps.values()].filter((w) => (ck.chats.find((c) => c.id === w.dataset.id)?.project || '') === p).every((w) => w.hidden), !!f.firstChild.offsetParent]; })()")
+        await pg.evaluate(fold)
+        check(shut == ["false", True, True] and await pg.evaluate("document.querySelector('#bd .bd-frame-title').getAttribute('aria-expanded') === 'true'"),
+              f"Grid: a frame folds its cards away, stays reachable and opens again {shut}")
         await pg.evaluate("document.querySelector('#bd .bd-card .ck-x.bd-only').click()")  # the card's "open the full chat"
-        await pg.wait_for_function("location.hash.startsWith('#/chats/') && $('bd').hidden && $('ck-canvas').querySelector('.ck-card')", timeout=5000)
+        await pg.wait_for_function("location.hash.startsWith('#/chats/') && $('bd').hidden && $('ck-canvas').querySelector('.ck-card') && !!$('ck-side').offsetParent", timeout=5000)
         await pg.go_back()
-        await pg.wait_for_function("location.hash === '#/chats?view=board' && !$('bd').hidden", timeout=5000)
+        await pg.wait_for_function("location.hash === '#/chats' && !$('bd').hidden", timeout=5000)
         check(await pg.evaluate("[...bd.wraps.values()].every((w) => w.querySelector('.ck-card')) && !$('ck-canvas').querySelector('.ck-card')"),
-              "board: a card opens its full chat and Back returns to the board with the card in place")
-        await pg.click('#chats-mode [data-mode="list"]')
-        check(await pg.evaluate("location.hash === '#/chats' && $('bd').hidden && getComputedStyle($('ck-chats')).display !== 'none'"), "board: List goes back to #/chats and the list")
-    check(not errors, f"no page errors on the chat board {errors[:2]}")
+              "Grid: a card opens its full chat beside the list and Back returns to the grid with the card in place")
+    check(not errors, f"no page errors on the chat grid {errors[:2]}")
     await ctx.close()
-    ctx, pg, errors = await page(browser, secret, "/ui#/chats?view=board", **devices["iPhone 14"])
+    ctx, pg, errors = await page(browser, secret, "/ui#/chats?view=grid", **devices["iPhone 14"])
     await pg.route("**/ui/api/chat?*", lambda r: r.abort())
     await pg.wait_for_selector("#ck-history", state="attached")
     await pg.wait_for_timeout(800)
-    check(await pg.evaluate("(!$('bd') || !$('bd').offsetParent) && !!$('ck-history').offsetParent && !$('chats-mode').offsetParent"),
-          "phone: #/chats?view=board shows the list, no board and no toggle")
-    check(not errors, f"no page errors on the phone chat board {errors[:2]}")
+    check(await pg.evaluate("(!$('bd') || !$('bd').offsetParent) && !!$('ck-history').offsetParent"), "phone: #/chats?view=grid shows the list, no grid")
+    check(not errors, f"no page errors on the phone chat list {errors[:2]}")
     await ctx.close()
 
 

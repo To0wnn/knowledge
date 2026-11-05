@@ -1,6 +1,6 @@
 // App shell: the sidebar (desktop; [ folds it to an icon rail, below 1000 px it is the rail unless opened), the
 // bottom tab bar and More sheet (phone), one page header per view, and a hash route per view: #/chats (Agents),
-// #/inbox/<item key> (the same view, that item marked; #/inbox is an older name of #/chats), #/chats/<chat id>, #/chats/worker/<project>/<ID> (follow a worker), #/chats?view=board, #/tasks, #/tasks?view=flow, #/machines, #/notes, #/notes/<path>, #/notes?q=<search>, #/map, #/map/<path>,
+// #/inbox/<item key> (the same view, that item marked; #/inbox is an older name of #/chats), #/chats/<chat id>, #/chats/worker/<project>/<ID> (follow a worker), #/chats?view=list (the attention list a desktop otherwise shows beside an open chat), #/tasks, #/tasks?view=flow, #/machines, #/notes, #/notes/<path>, #/notes?q=<search>, #/map, #/map/<path>,
 // #/changes, #/health, #/thispc. The URL is the only record of the view (refresh, back and forward work); an old
 // #<note path> link becomes #/notes/<path>. Paths in routes are encoded per part (encPath), decoded here. The views themselves are app.js's, agents.js's and mission.js's; this file shows one
 // at a time and asks it to load. The sidebar, More sheet and theme are nav.js's. Uses app.js globals ($, el, store, decode, pushHash, ck, Graph, mapOn, current, …).
@@ -61,7 +61,7 @@ function applyRoute() {
   }
   if (r.view === "inbox") { // the same view under its older name; a key marks that item once the board is in (ckFocus)
     if (r.arg) { ck.focus = r.arg; ck.focusAt = Date.now(); } else ck.hit = "";
-    history.replaceState(history.state, "", "#/chats"); r = parseRoute(location.hash);
+    history.replaceState(history.state, "", "#/chats?view=list"); r = parseRoute(location.hash); // the item is in the list, not the grid
   }
   if (r.arg !== "new") { lastRoute[r.view] = location.hash; try { sessionStorage.setItem("kn_routes", JSON.stringify(lastRoute)); } catch { /* blocked */ } }
   const [home] = VIEWS[r.view], changed = r.view !== shellRoute.view, first = !shellRoute.view;
