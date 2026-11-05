@@ -1030,6 +1030,24 @@ async def csp(browser, secret: str) -> None:
             await pg.wait_for_timeout(1500)
         check(not blocked, f"nothing blocked by the CSP on {path} {blocked[:2]}")
         await ctx.close()
+    # A hostile note: the sanitizer alone must stop it, so the CSP is off here.
+    ctx = await browser.new_context(ignore_https_errors=True, bypass_csp=True,
+                                    extra_http_headers={"X-Knowledge-Proxy": secret, "X-authentik-username": USER})
+    pg = await ctx.new_page()
+    await pg.goto(URL + "/ui")
+    await pg.wait_for_timeout(1500)
+    html = await pg.evaluate("""async () => {
+        const d = document.createElement("div");
+        d.innerHTML = renderMd(`<img src=x onerror="window.__xss=1"><script>window.__xss=1</scr` + `ipt>
+[a](javascript:window.__xss=1) <svg onload="window.__xss=1"></svg> <iframe srcdoc="<script>parent.__xss=1</scr` + `ipt>"></iframe>`);
+        document.body.append(d);
+        await new Promise((r) => setTimeout(r, 500));
+        const out = (window.__xss ? "RAN " : "") + d.innerHTML;
+        d.remove();
+        return out;
+    }""")
+    check(not re.search(r"^RAN |onerror|onload|<script|<iframe|javascript:", html), f"a hostile note renders harmless {html[:120]}")
+    await ctx.close()
 
 
 async def no_agents(browser, secret: str) -> None:
