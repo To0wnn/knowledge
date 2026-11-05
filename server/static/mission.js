@@ -400,9 +400,21 @@ function bdBuild() {
   });
 }
 
+// The header link between grid and list. On the grid it counts what needs you but has no card here: the sidebar's badge
+// counts those too, and only the list shows them (reviews, tasks, workers, other projects).
+function bdLink() {
+  const on = bdOn(), a = $("ck-view"), cards = new Set(on ? bdChats().map(({ c }) => ckKey(c)) : []);
+  const n = on ? (ck.board || []).filter((i) => i.col === "needs" && !cards.has(`${i.machine}/${i.kind === "chat" ? i.id : i.kind === "ask" ? i.chat : ""}`)).length : 0;
+  a.href = on ? "#/chats?view=list" : "#/chats";
+  a.replaceChildren(on ? "List" : "Grid", ...(n ? [el("span", "n", String(n))] : []));
+  a.title = on ? "Review, workers, tasks, earlier and archived chats" : "Back to the grid";
+  if (n) a.setAttribute("aria-label", `List, ${n} need${n > 1 ? "" : "s"} you`); else a.removeAttribute("aria-label");
+}
+
 // Shown or hidden by the route (ckLayout); the cockpit hides the list while it shows.
 function bdShow() {
   const on = bdOn();
+  bdLink();
   if (!on && !$("bd")) return;
   if (!$("bd")) bdBuild();
   $("bd").hidden = !on; $("cockpit").classList.toggle("board", on);
@@ -420,6 +432,7 @@ function bdChats() {
 // the focus and a half-typed message stay.
 function bdRender() {
   if (!$("bd") || $("bd").hidden) return;
+  bdLink();
   const rows = bdChats(), shut = bdShut(), world = $("bd-world");
   const frames = bd.lay = bdProjects(rows.map(({ c }) => c), shut);
   const keep = new Set();

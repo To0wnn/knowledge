@@ -1138,9 +1138,16 @@ async def board(browser, devices, secret: str) -> None:
     for old in ("grid", "board"):
         await route(pg, f"#/chats?view={old}")
         check(await pg.evaluate(shows), f"Grid: an old ?view={old} link opens the grid")
-    await route(pg, "#/chats?view=list")
-    check(await pg.evaluate("$('bd').hidden && !!$('ck-side').offsetParent"), "?view=list shows the list instead of the grid")
-    await route(pg, "#/chats")
+    count = await pg.evaluate("""(() => { const keep = ck.board, c = ck.chats.find(ckScope), a = $('ck-view');
+      ck.board = [{col: 'needs', kind: 'task', machine: 'x', id: 't', project: ''}, {col: 'done', kind: 'task', machine: 'x', id: 'u', project: ''}]; bdLink();
+      const one = a.textContent; if (c) ck.board.push({col: 'needs', kind: 'ask', machine: c.machine, chat: c.id, project: c.project}); bdLink();
+      const out = [one, a.textContent, a.getAttribute('aria-label')]; ck.board = []; bdLink(); out.push(a.textContent); ck.board = keep; bdLink(); return out; })()""")
+    check(count == ["List1", "List1", "List, 1 needs you", "List"], f"Grid: the List link counts what needs you without a card here, not what has one {count}")
+    await pg.click("#ck-view")
+    await pg.wait_for_function("location.hash === '#/chats?view=list' && $('bd').hidden && !!$('ck-side').offsetParent", timeout=5000)
+    check(await pg.evaluate("$('ck-view').textContent === 'Grid'"), "the List link opens the list, instead of the grid, and offers Grid back")
+    await pg.click("#ck-view")
+    await pg.wait_for_function("location.hash === '#/chats' && !$('bd').hidden && $('ck-view').textContent.startsWith('List')", timeout=5000)
     n = await pg.evaluate("ck.chats.filter((c) => ckScope(c) && !c.closed).length")  # a closed chat is off the grid
     if not n:
         print("skip: no chats: the grid's cards are not checked")
@@ -1172,7 +1179,7 @@ async def board(browser, devices, secret: str) -> None:
     await pg.route("**/ui/api/chat?*", lambda r: r.abort())
     await pg.wait_for_selector("#ck-history", state="attached")
     await pg.wait_for_timeout(800)
-    check(await pg.evaluate("(!$('bd') || !$('bd').offsetParent) && !!$('ck-history').offsetParent"), "phone: #/chats?view=grid shows the list, no grid")
+    check(await pg.evaluate("(!$('bd') || !$('bd').offsetParent) && !!$('ck-history').offsetParent && !$('ck-view').offsetParent"), "phone: #/chats?view=grid shows the list, no grid or List link")
     check(not errors, f"no page errors on the phone chat list {errors[:2]}")
     await ctx.close()
 
@@ -1398,7 +1405,7 @@ async def design_system(browser, devices, secret: str) -> None:
     if not await pg.locator("#page-head .btn").count():
         print("skip design system (server older than 0.21)")
         return await ctx.close()
-    views = ["#/chats", "#/tasks", "#/machines", "#/notes", "#/changes", "#/health"]
+    views = ["#/chats", "#/chats?view=list", "#/tasks", "#/machines", "#/notes", "#/changes", "#/health"]
     for v in views:
         await route(pg, v, "", 900)
         r = await pg.evaluate(DS_JS)

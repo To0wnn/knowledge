@@ -700,6 +700,8 @@ dialog.ck-diff { width: min(980px, calc(100vw - 32px)); }
 .bd-frame-title { display: flex; align-items: center; gap: 8px; height: 36px; margin: 0; padding: 0 10px; border: 0; border-radius: var(--r-md); background: transparent; color: var(--ink); font-size: 15px; cursor: pointer; max-width: calc(100% - 16px); }
 .bd-frame-title:hover { background: var(--hover); }
 .bd-frame-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bd-frame-title .ck-count { cursor: default; } /* a count, not a second button */
+#ck-view .n { margin-left: 6px; color: var(--amber-ink); font-weight: 650; font-variant-numeric: tabular-nums; }
 .bd-chev { color: var(--muted); transition: transform .15s; }
 .bd-frame.shut .bd-chev { transform: rotate(-90deg); }
 .bd-card { position: relative; display: grid; height: var(--bg-row, 420px); border-radius: var(--r-lg); }
@@ -711,7 +713,7 @@ dialog.ck-diff { width: min(980px, calc(100vw - 32px)); }
 .bd-card .bd-only { display: inline-grid; }
 .bd-card .ck-dot.bd-only { display: block; flex: none; }
 .bd-card .ck-box textarea { min-height: 22px; }
-@media (max-width: 999.98px) { #tasks-mode, .bd { display: none !important; } } /* the grid and flow are desktop only: the list stays */
+@media (max-width: 999.98px) { #tasks-mode, #ck-view, .bd { display: none !important; } } /* the grid and flow are desktop only: the list stays */
 #ck-diff-body { max-height: 65vh; overflow: auto; }
 @media (max-width: 699.98px) {
   .ck { overflow: visible; }
