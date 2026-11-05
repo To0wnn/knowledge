@@ -199,11 +199,14 @@ def headers(tok: str) -> dict:
 def sync_dir(folder: Path) -> None:
     """Make a rename in this folder survive a crash; Windows cannot open a folder like this and needs none."""
     if os.name != "nt":
-        fd = os.open(folder, os.O_RDONLY)
         try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+            fd = os.open(folder, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        except OSError:  # some filesystems refuse it (vboxsf, FUSE); the rename already happened, so no failure
+            pass
 
 
 def replace_durable(tmp: Path, path: Path) -> None:

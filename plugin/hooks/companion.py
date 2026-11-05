@@ -133,7 +133,10 @@ def load(name: str, default):
             text = f"Companion state {name} is damaged, so its defaults apply: check this pc's settings"
             print(f"knowledge companion: {text} ({e})", file=sys.stderr, flush=True)
             hook_status.record("companion", "damaged state", f"{text} ({e})")  # reaches the Tasks tab
-            log("error", text, f"{e}"[:300])
+            try:
+                log("error", text, f"{e}"[:300])
+            except OSError:  # a full disk is what damaged the file: loading must still work
+                pass
         return default
 
 

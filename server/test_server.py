@@ -2287,7 +2287,7 @@ def main():
         assert "homelab" not in ctx and "secret set" not in ctx and "trade" not in ctx, ctx
         assert "First session" not in ctx  # garden-memory has a memo now
         # A name that would break out of its line or, on a Windows copy, out of its folder is refused on every path.
-        for bad in ("a\nb.md", "a\tb.md", "..\\win.md", "a:stream.md", "CON.md", "sub/aux.txt", "lpt1", "dot.", "sub /x.md", "sub./x.md"):
+        for bad in ("a\nb.md", "a\u2028b.md", "a\tb.md", "..\\win.md", "a:stream.md", "CON.md", "sub/aux.txt", "lpt1", "dot.", "sub /x.md", "sub./x.md"):
             err, text = call("knowledge_write", {"path": f"memory/{bad}", "content": memo("x\n", "bad")})
             assert err and "reserves" in text, (bad, text)
         assert not call("knowledge_read", {"path": "memory/MEMORY.md"})[0]

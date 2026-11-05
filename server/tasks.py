@@ -36,6 +36,19 @@ def parse_task(line: str) -> dict | None:
             "text": (rest[f.end():] if f else rest).lstrip(": ").strip(), "body": line.strip().removeprefix("- ")}
 
 
+def new_results(before: str, after: str, known: dict | None = None) -> dict:
+    """{ID: signature} of the result lines a change added or reworded, so they get this writer. `known` (a rescan, which
+    sees every memo as new after a restart): a line whose record fits, or has no signature yet, stays its writer's."""
+    old, out = set(before.splitlines()), {}
+    for line in after.splitlines():
+        if line not in old and (d := DONE_LINE.match(line)):
+            i, sig = d.group(2).strip(), hashlib.sha256(line.strip().encode()).hexdigest()[:16]
+            rec = (known or {}).get(i)
+            if known is None or not rec or rec.get("sig") not in (None, sig):
+                out[i] = sig
+    return out
+
+
 def task_sig(t: dict) -> str:
     """What a task asks, as a short hash: owner, requester, start and text. A claim marker or a new due date leave it."""
     what = re.sub(r"\((?:claimed|bezig)\b[^)]*\)", "", t["text"], flags=re.I)
@@ -44,6 +57,13 @@ def task_sig(t: dict) -> str:
 
 
 if __name__ == "__main__":
+    res = "- [Codex, R-1-done]: ok\n"
+    sig = new_results("", res)["R-1-done"]
+    assert not new_results(res, res) and new_results(res, "- [Codex, R-1-done]: other\n").keys() == {"R-1-done"}
+    assert not new_results("", res, {"R-1-done": {"by": "guest", "sig": sig}}), "a restart keeps the writer"
+    assert not new_results("", res, {"R-1-done": {"by": "guest"}}), "a record from before signatures too"
+    assert new_results("", res, {"R-1-done": {"by": "guest", "sig": "other"}}) == {"R-1-done": sig}
+    assert new_results("", res, {}) == {"R-1-done": sig}
     assert parse_task("- open tot 1 jan 2099 [Gemini, VS-1]: water")["legacy"]
     assert parse_task("- open until 2099-01-01 [Codex, K-2] from Claude, start after K-1: build: it")["start"] == "after K-1"
     assert parse_task("- open until 2099-01-01 [Codex, K-2] from Claude, start after K-1: build: it")["text"] == "build: it"

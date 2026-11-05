@@ -35,11 +35,14 @@ TOML_TOKEN = re.compile(r'''"""|\'\'\'|"(?:[^"\\\n]|\\.)*"|\'[^\'\n]*\'|#.*|[\[\
 TOML_CLOSE = {'"""': re.compile(r'(?:[^\\]|\\.)*?"{3,5}', re.S), "'''": re.compile(r"(?s).*?'{3,5}")}
 
 
-def toml_headers(lines: list) -> set:
-    """The lines that really open a table: one inside a multi-line array or string only looks like it."""
-    heads, opened, depth = set(), "", 0
+def toml_lines(lines: list) -> tuple:
+    """(the lines that really open a table, the lines inside a multi-line array or string): those only look like a
+    header or a key."""
+    heads, inside, opened, depth = set(), set(), "", 0
     for n, line in enumerate(lines):
-        if not opened and depth <= 0 and line.lstrip().startswith("["):
+        if opened or depth > 0:
+            inside.add(n)
+        elif line.lstrip().startswith("["):
             heads.add(n)
             continue
         i = 0
@@ -57,14 +60,14 @@ def toml_headers(lines: list) -> set:
                 opened = t
             elif t in "[]":
                 depth += 1 if t == "[" else -1
-    return heads
+    return heads, inside
 
 
 def toml_set(text: str, table, key: str, raw):
     """Set (raw = a TOML value as text) or remove (raw = None) one key of a table (None = top level), leaving every
     other line as it is; the old value as text (with its comment), or None when it was not there."""
     lines = text.splitlines(keepends=True)
-    heads = toml_headers(lines)
+    heads, inside = toml_lines(lines)
     if table is None:
         start, end = 0, min(heads, default=len(lines))
     else:
@@ -77,7 +80,7 @@ def toml_set(text: str, table, key: str, raw):
         start, end = at + 1, min((i for i in heads if i > at), default=len(lines))
     pat = re.compile(rf"\s*{re.escape(key)}\s*=\s*(.*?)\s*$")
     for i in range(start, end):
-        m = pat.fullmatch(lines[i].rstrip("\r\n"))
+        m = i not in inside and pat.fullmatch(lines[i].rstrip("\r\n"))
         if m:
             if raw is None:
                 del lines[i]
@@ -125,9 +128,12 @@ def write(path: Path, text: str, home: Path) -> None:
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name)
     with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
         f.write(text)
+        f.flush()
+        os.fsync(f.fileno())  # here: the mode copied below may be read-only (a config from home-manager)
     if path.exists():
         shutil.copymode(path, tmp)
-    token_store.replace_durable(tmp, path)
+    os.replace(tmp, path)
+    token_store.sync_dir(path.parent)
 
 
 def read_json(path: Path) -> dict:
@@ -199,6 +205,9 @@ def self_test() -> None:
                            ('[z]\nn = """\n[y]\n"""\nq = 1\n[y]\nr = 2\n', "y", '[z]\nn = """\n[y]\n"""\nq = 1\n[y]\nr = 2\nk = 1\n'),
                            ('[z]\nm = [\n  ["a"],\n]\n[y]\nr = 2\n', "z", '[z]\nm = [\n  ["a"],\n]\nk = 1\n[y]\nr = 2\n')):
         assert toml_set(t, table, "k", "1") == (want, None), (t, toml_set(t, table, "k", "1"))
+    t = 'd = """\nk = "keep"\n"""\nk = "real"\n'
+    assert toml_set(t, None, "k", "1") == ('d = """\nk = "keep"\n"""\nk = 1\n', '"real"')
+    assert toml_set(t, None, "k", None) == ('d = """\nk = "keep"\n"""\n', '"real"')
     import tomllib
     with tempfile.TemporaryDirectory() as t:
         h = Path(t)

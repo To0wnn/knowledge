@@ -52,7 +52,7 @@ import graph as kb_graph
 from graph import MD_ONLY, PROJECTS
 import lint as kb_lint
 import rerank as kb_rerank
-from tasks import CONT, DONE_LINE, HAND_BACK, TASK_FORMAT, TASK_LIKE, WORKER_HANDBACK, parse_task, task_sig
+from tasks import CONT, DONE_LINE, HAND_BACK, TASK_FORMAT, TASK_LIKE, WORKER_HANDBACK, new_results, parse_task, task_sig
 import vectors
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
@@ -166,7 +166,8 @@ def unsafe_path(rest: str) -> bool:
     """A name that breaks out elsewhere: a line break becomes its own line wherever a path is listed (a memo name could
     pose as a task line in an agent's context); on a Windows copy a backslash climbs folders, a colon opens a stream
     and some names and trailing dots mean something else."""
-    return any(ord(c) < 32 or c in "\x7f\\:" for c in rest) or any(
+    # shortcut: a file with such a name written on disk just drops out of the index; lint it if one ever shows up
+    return len(rest.splitlines()) > 1 or any(ord(c) < 32 or c in "\x7f\\:" for c in rest) or any(
         WINDOWS_NAME.fullmatch(p) or (p.endswith((".", " ")) and p not in (".", "..")) for p in rest.split("/"))
 
 
@@ -1939,11 +1940,11 @@ def note_task_authors(rel: str, before: str, after: str, by: str, keep: bool = F
     approval, so reusing an ID or editing a trusted line never borrows trust. A result handed back gets its time.
     `keep` (the rescan, which may see a write after the server that made it noted it): only lines with no record for
     these words get one; an approval stays (it holds for its own words only)."""
-    old = set(before.splitlines())  # whole lines: reworded text is its new writer's, under the same ID
-    done = [d.group(2).strip() for line in after.splitlines() if line not in old and (d := DONE_LINE.match(line))]
-    if done and mem_of(rel) and not is_archive(rel) and (project := kb_graph.project_of(rel, "")):
+    if mem_of(rel) and not is_archive(rel) and (project := kb_graph.project_of(rel, "")) \
+            and (done := new_results(before, after, read_json(TASK_AUTHORS, {}).get(project, {}) if keep else None)):
         try:
-            update_state(TASK_AUTHORS, lambda d: d.setdefault(project, {}).update({i: {"by": by, "at": int(time.time())} for i in done}))
+            update_state(TASK_AUTHORS, lambda d: d.setdefault(project, {}).update(
+                {i: {"by": by, "at": int(time.time()), "sig": sig} for i, sig in done.items()}))
         except OSError as e:
             print(f"result time not saved: {e}", flush=True)
     if not (new := added_tasks(rel, before, after, changed=True)) or not (project := kb_graph.project_of(rel, "")):
