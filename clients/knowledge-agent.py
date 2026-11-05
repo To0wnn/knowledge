@@ -483,6 +483,12 @@ def update(argv: list = ()):
         install(agent, "-", token_store.token())
 
 
+def drop_agy_plugin():
+    """The script setup replaces the plugin: left in place, an old version keeps running and every hook fires twice."""
+    if shutil.which("agy") and has_plugin("agy"):
+        run_cli([cli("agy"), "plugin", "uninstall", "knowledge"])
+
+
 def install(agent: str, name: str, tok: str = ""):
     """Set up or update; every step says what it did. Fails loudly: a wrong token or no connection stops here."""
     tok = tok or ensure_token(name)
@@ -497,6 +503,7 @@ def install(agent: str, name: str, tok: str = ""):
             return install_plugin(agent)
         print("agy starts the plugin's MCP server with python3, which is not on PATH here (Python from the python.org "
               "install manager or the Microsoft Store has it): using the script setup")
+        drop_agy_plugin()
     if install_mcp(agent, name):
         restart_codex() if agent == "codex" else say_restart("agy")
     install_hooks(agent, name)
@@ -1235,6 +1242,14 @@ if __name__ == "__main__":
         sys.stdout.reconfigure(errors="replace")  # agent CLIs print ✔ and such; a Windows pipe is cp1252
         main(sys.argv[1:])
     elif "--selftest" in sys.argv:
+        ran, kept = [], (shutil.which, has_plugin, run_cli)  # falling back to the script setup takes the plugin away
+        shutil.which, has_plugin, run_cli = (lambda n: n), (lambda a: a == "agy"), (lambda argv, ok_if=(): ran.append(argv[1:]))
+        drop_agy_plugin()
+        assert ran == [["plugin", "uninstall", "knowledge"]], ran
+        has_plugin, ran[:] = (lambda a: False), []
+        drop_agy_plugin()
+        assert not ran, ran
+        shutil.which, has_plugin, run_cli = kept
         c = hook_config("codex", "-")["hooks"]
         assert len(c["SessionStart"]) == 1 and c["SessionEnd"][0]["hooks"][0]["timeout"] <= 3
         a = hook_config("agy", "X")["knowledge"]
