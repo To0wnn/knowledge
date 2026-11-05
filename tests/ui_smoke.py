@@ -640,6 +640,9 @@ async def shell(browser, devices, secret: str) -> None:
         own: document.querySelectorAll('.machine-head .machine-actions').length, old: [...document.querySelectorAll('.machine-controls button')].some(b => /Forget|YOLO/.test(b.textContent))})""")
     if yolo["own"]:
         check(not yolo["old"], f"Machines: YOLO is a switch per agent, pc actions in the card head, Forget behind ⋯ {yolo}")
+    pill = await pg.evaluate("""(() => { const p = el('span', 'pill yolo', 'YOLO'); document.body.append(p); const s = getComputedStyle(p), b = s.backgroundColor;
+      const d = el('span'); d.style.color = 'var(--bad)'; document.body.append(d); const bad = getComputedStyle(d).color; p.remove(); d.remove(); return [b, bad]; })()""")
+    check(pill[0] == pill[1], f"Machines: the YOLO pill is red, as on the companion page {pill}")
     lint2 = await pg.evaluate("api('/ui/api/lint?v=2')")
     if "report" in lint2:
         check(any("usage_outlier" in g["checks"] and g["collapsed"] for g in lint2["groups"]) and "missing_structure" in lint2["hints"],

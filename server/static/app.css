@@ -1005,9 +1005,6 @@ button.busy::before { content: ""; display: inline-block; width: .9em; height: .
 .hit-text code, .connected code, .home-card code { font: .92em var(--mono); padding: 0 4px; border-radius: 4px; background: var(--hover); color: var(--ink); }
 /* hidden wins over the display these set */
 .crumb[hidden], .ms-legend[hidden], #ms-all[hidden] { display: none; }
-/* Machines: YOLO is a state, not an alarm; only a small warning mark while it is on */
-.pill.yolo { background: var(--hover); color: var(--muted); font-weight: 600; letter-spacing: 0; }
-.pill.yolo::before { content: "⚠"; color: var(--warn); }
 .yolo-switch { min-height: var(--h-btn-sm); }
 .yolo-mark { color: var(--warn); font-size: 12px; }
 .machine-actions { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
