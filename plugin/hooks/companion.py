@@ -2068,6 +2068,9 @@ def chats_loop():
         time.sleep(min(2.0, ACTIONS_EVERY) if active else ACTIONS_EVERY)
 
 
+DRAIN_MAX = 16 << 20  # bytes read and thrown away after an answer
+
+
 class LocalServer(ThreadingHTTPServer):
     """One companion per pc: its port is the lock. On Windows SO_REUSEADDR would let a second one bind the same port
     (and both start the same tasks), so there the port is taken exclusively instead."""
@@ -2077,6 +2080,23 @@ class LocalServer(ThreadingHTTPServer):
         if os.name == "nt":
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         super().server_bind()
+
+    def shutdown_request(self, request):
+        """Every answer ends here, also one sent before the body was read (a refusal, 413, a GET with a body). Closing
+        with unread bytes makes the OS reset the connection and the client loses the answer (Windows 10053/10054), so
+        say we are done sending and read what is still coming, within limits. Past them the reset is accepted."""
+        try:
+            request.shutdown(socket.SHUT_WR)
+            request.settimeout(1)
+            left, end = DRAIN_MAX, time.monotonic() + 2
+            while left > 0 and time.monotonic() < end:
+                got = request.recv(65536)
+                if not got:
+                    break
+                left -= len(got)
+        except OSError:  # the client is gone or too slow
+            pass
+        self.close_request(request)
 
 
 def serve():
@@ -2321,6 +2341,14 @@ def main(argv: list):
             globals().update(server=real[0], folder_links=real[1])
             chat.start = real[2]
         assert started == ["c1"], started
+        httpd = LocalServer(("127.0.0.1", 0), Handler)  # a client still sending gets the refusal, not a reset (6 MiB outgrows the socket buffers)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        for method, size, want in (("POST", 100, b" 403 "), ("POST", 6 << 20, b" 413 "), ("GET", 1024, b" 403 ")):
+            with socket.create_connection(httpd.server_address, timeout=10) as s:
+                s.sendall(f"{method} /local/api/tick HTTP/1.1\r\nHost: x\r\nContent-Length: {size}\r\n\r\n".encode() + b"x" * size)
+                assert want in s.recv(64), (method, size)
+        httpd.shutdown()
+        httpd.server_close()
         print("ok")
     else:
         sys.exit(__doc__)
