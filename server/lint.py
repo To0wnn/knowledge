@@ -247,6 +247,13 @@ def check_decisions(report: dict, name: str, text: str, today: date):
         report["stale_unchecked_fact"].append(f"{name}: {stale} fact(s) unchecked for over {STALE_UNCHECKED_DAYS} days")
 
 
+def shorten(text: str, limit: int = 160) -> str:
+    """A long line for a list: cut at a word, and say that it was cut."""
+    if len(text) <= limit:
+        return text
+    return text[:limit + 1].rsplit(None, 1)[0].rstrip(" ,;:") + "…"
+
+
 def lint(files: dict[str, str], today: date | None = None, mem: str = "memory") -> dict[str, list[str]]:
     """Check one memory root (index, links, frontmatter, size, staleness, secrets); with the homelab root "memory"
     also homelab/sources/ (unprocessed raw sources)."""
@@ -287,7 +294,7 @@ def lint(files: dict[str, str], today: date | None = None, mem: str = "memory") 
                 if (d := OPEN_DUE.search(line)) and (due := latest_date(d.group(1))) and due < today:
                     # found outside code, said as written: its `inline code` is often the point of the item
                     said = OPEN_DUE.search(lines[no - 1]) if no <= len(lines) else None
-                    report["open_overdue"].append(f"{name}: due {due.isoformat()}: {(said or d).group(2).strip()[:100]}")
+                    report["open_overdue"].append(f"{name}: due {due.isoformat()}: {shorten((said or d).group(2).strip())}")
             for no, line in enumerate(no_code.splitlines(), 1):
                 if m := RELATIVE_DATE.search(line):
                     report["relative_date"].append(f"{name}: line {no} '{m.group(0)}'")
@@ -464,6 +471,7 @@ if __name__ == "__main__":  # self-check
                "- open tot 20 okt 2026 zonder dubbele punt\n```\nopen tot 1 jan 2026: in code\n```\n"}, today=date(2026, 10, 22))
     assert od["open_overdue"] == ["d.md: due 2026-10-21: HA-herhaling weghalen", "d.md: due 2026-10-19: rol `pa_egress` op modus `log`",
                                   "d.md: due 2026-10-20: zonder dubbele punt"], od  # inline code kept as written
+    assert shorten("kort") == "kort" and shorten("woord " * 40, 20) == "woord woord woord…", shorten("woord " * 40, 20)  # never mid-word
     assert query_coverage("welk IP heeft de NAS BMC", "bmc van de nas: 10.0.0.12 ip") == 1.0
     assert query_coverage("waarom bevriest de NAS", "nas bevriezen dinsdag") == 1.0  # prefix: bevri
     assert query_coverage("hoe werkt de Nest thermostaat", "honeywell en hue") == 0.0 and query_coverage("hoe is het", "") == 1.0
