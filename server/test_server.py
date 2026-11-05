@@ -408,7 +408,7 @@ def lease_contract(tmp, ck, fr, raw):
     assert http("POST", "/tasks/woken", {"project": "garden", "id": "LW-1", "agent": "codex", "session": "worker:w"}, token=fr)[0] == 200
     lw = lambda: next(t for t in json.loads(raw("GET", "/ui/api/tasks", headers=ck)[2])["tasks"] if t["id"] == "LW-1")
     assert lw()["claimed"] and not lw()["startable"], lw()
-    time.sleep(2.5)  # the background check runs every second: the lease of a worker-claimed task stays
+    time.sleep(0.8)  # the background check runs several times meanwhile: the lease of a worker-claimed task stays
     assert "LW-1" in leases() and lw()["claimed"], leases()
     l = json.loads((tmp / "task_leases.json").read_text()); l["garden"]["LW-1"]["until"] = 0; (tmp / "task_leases.json").write_text(json.dumps(l))
     assert not lw()["claimed"] and lw()["startable"] and "LW-1" in ready(fr), lw()
@@ -574,7 +574,7 @@ def machines_contract(tmp, ck, fr, raw, er, et, heard):
         time.sleep(0.1)
     assert told() and "no pc runs Gemini workers" in told()[0], told()
     assert json.loads((tmp / "task_idle.json").read_text())["garden"]["MC-6"]["noticed"]  # on disk: a restart does not tell it again
-    time.sleep(2.2)  # past the next background checks: one notice, not one per check
+    time.sleep(0.8)  # past the next background checks: one notice, not one per check
     assert len(told()) == 1, told()
     # A worker (X-Knowledge-Worker) leases its own task only, and its start context is not the chat's.
     wk = {**pc, "X-Knowledge-Worker": "MC-3"}
@@ -1464,11 +1464,11 @@ def needs_contract(tmp, ck, fr, raw, heard):
     add = lambda *ids: call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": "".join(map(line, ids)) + "## Keuzes"}, fr)
     about = lambda tid: [m for m in heard if m.startswith(f"Knowledge needs you: NT-{tid} ")]
     wait = lambda cond, t=8: next((True for _ in range(int(t / 0.2)) if cond() or time.sleep(0.2)), cond())
-    time.sleep(2.5)  # past the quiet window of the polls before
+    time.sleep(1.2)  # past the quiet window of the polls before
     add(1)
     assert wait(lambda: about(1)), heard
     assert "waits for your approval" in about(1)[0] and about(1)[0].endswith("https://kn.example/ui#/inbox/task:garden/NT-1"), about(1)
-    time.sleep(2.5)
+    time.sleep(0.8)
     assert len(about(1)) == 1, "one message per item"
     # A chat reply links to its own item in the inbox too.
     pc = {"X-Knowledge-Machine": "cccccccccccccccc", "X-Knowledge-Machine-Label": "garage"}
@@ -1481,18 +1481,18 @@ def needs_contract(tmp, ck, fr, raw, heard):
     http("POST", "/machine/chats/events", {"chat": cid, "events": [{"kind": "text", "text": "pong"}], "done": True}, token=fr, headers=pc)
     assert wait(lambda: any(m.endswith(f"https://kn.example/ui#/inbox/chat:cccccccccccccccc/{cid}") and "replied: pong" in m for m in heard)), heard
     # The board is open (polled): the item shows there, so no message, also not after the board closes.
-    end = time.time() + 3
+    end = time.time() + 1.5
     add(2)
     while time.time() < end:
-        raw("GET", "/ui/api/board", headers=ck); time.sleep(0.4)
-    time.sleep(3)
+        raw("GET", "/ui/api/board", headers=ck); time.sleep(0.2)
+    time.sleep(1.5)
     assert not about(2), heard
     # One slot left this hour: three at once give one summary; then the hour is full and the next waits.
     add(3, 4, 5)
     assert wait(lambda: any("3 new items need you" in m for m in heard)), heard
     assert not about(3) and not about(4), heard
     add(6)
-    time.sleep(3)
+    time.sleep(1.5)
     assert not about(6) and not any("NT-6" in m for m in heard), heard
     assert json.loads(state.read_text())["items"].get("task:garden/NT-6") is None, "held back, still to tell"
     http("POST", "/machine/report", {"version": "0.16.0"}, token=fr, headers=pc)
@@ -1515,7 +1515,7 @@ def flow_contract(tmp, ck, fr, raw, heard):
     state = tmp / "needs_notified.json"
     assert ui("/ui/api/admin/settings", {"needs_per_hour": 60})[0] == 200
     assert wait(state.exists)
-    time.sleep(2.5)  # past the quiet window of the board polls before
+    time.sleep(1.2)  # past the quiet window of the board polls before
     path = "garden-memory/project_tasks.md"
     lines = ["- [Sam, FL-1-done]: the beds are built",
              "- [Claude, FL-2-done]: for an agent",
@@ -1583,10 +1583,10 @@ def flow_contract(tmp, ck, fr, raw, heard):
         d = json.loads((tmp / "machines.json").read_text())
         d["ffffffffffffffff"]["at"] -= 3600; d["ffffffffffffffff"]["companion"]["at"] -= 3600
         (tmp / "machines.json").write_text(json.dumps(d))
-    time.sleep(2.5)  # past the quiet window of the board polls above
+    time.sleep(1.2)  # past the quiet window of the board polls above
     nap(); sleep_pc()
     assert wait(lambda: said("FL-W1")), heard
-    nap(); time.sleep(2.5); sleep_pc(); time.sleep(3)
+    nap(); time.sleep(1.2); sleep_pc(); time.sleep(1.5)
     assert len(said("FL-W1")) == 1, said("FL-W1")
     http("POST", "/machine/report", {"version": "0.18.1"}, token=fr, headers=pc)
     for line in ("- [Sam, FL-1-done]: the beds are built", "- [Claude, FL-2-done]: for an agent", "- [Sam, FL-6-done]: cancelled by alice",
@@ -1823,10 +1823,10 @@ def main():
            "KNOWLEDGE_LANGUAGE": "nl", "KNOWLEDGE_BUILTIN_PROJECTS": "homelab,anpitek,trade",
            "KNOWLEDGE_BIND": "127.0.0.1", "KNOWLEDGE_RESCAN": "3600",
            "KNOWLEDGE_GITHUB_API": ghurl, "KNOWLEDGE_GITHUB_RAW": ghurl + "/raw", "KNOWLEDGE_EXTERNAL_SLEEP": "3600", "KNOWLEDGE_INSTANCE": "blue", "KNOWLEDGE_PLUGIN_GRACE": "0",
-           "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_RERANK_MODEL": "test", "KNOWLEDGE_DUPES_EVERY": "1", "KNOWLEDGE_DUPES_DELAY": "0", "KNOWLEDGE_DUPES_DEBOUNCE": "0", "KNOWLEDGE_VECTOR_SYNC": "0.2", "KNOWLEDGE_WATCH_DEVICE": "laptop", "KNOWLEDGE_TASK_STALLED": "1", "KNOWLEDGE_TASK_LEASE": "600", "KNOWLEDGE_TASK_CHECK": "1", "KNOWLEDGE_RESCAN": "2", "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}",
+           "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_RERANK_MODEL": "test", "KNOWLEDGE_DUPES_EVERY": "1", "KNOWLEDGE_DUPES_DELAY": "0", "KNOWLEDGE_DUPES_DEBOUNCE": "0", "KNOWLEDGE_VECTOR_SYNC": "0.2", "KNOWLEDGE_WATCH_DEVICE": "laptop", "KNOWLEDGE_TASK_STALLED": "1", "KNOWLEDGE_TASK_LEASE": "600", "KNOWLEDGE_TASK_CHECK": "0.25", "KNOWLEDGE_RESCAN": "2", "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}",
            "KNOWLEDGE_MATRIX_URL": ghurl, "KNOWLEDGE_MATRIX_ROOM": "!room:example", "KNOWLEDGE_MATRIX_TOKEN": "mx",
            "KNOWLEDGE_STT_URL": ghurl + "/v1/", "KNOWLEDGE_STT_LANGUAGE": "nl", "KNOWLEDGE_STT_PROMPT": "forge, Proxmox", "KNOWLEDGE_STT_KEY": "sk-1",
-           "KNOWLEDGE_NEEDS_QUIET": "2", "KNOWLEDGE_UI_GAP_WAIT": "0.5", "KNOWLEDGE_PUBLIC_URL": "https://kn.example"}
+           "KNOWLEDGE_NEEDS_QUIET": "1", "KNOWLEDGE_UI_GAP_WAIT": "0.5", "KNOWLEDGE_PUBLIC_URL": "https://kn.example"}
     proc = subprocess.Popen([sys.executable, str(Path(__file__).with_name("server.py"))], env=env)
     try:
         for _ in range(50):
