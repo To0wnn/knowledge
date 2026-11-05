@@ -2383,7 +2383,9 @@ def main(argv: list):
             token_store.replace_durable(Path(tmp_state) / "w.json", Path(tmp_state) / "x.json")
         finally:
             os.fsync, os.replace = real_sync
-        assert calls[:2] == ["fsync", "replace"] and "fsync" in calls[2:3] and calls[-2:][0] == "replace" and (Path(tmp_state) / "x.json").read_text() == "{}", calls
+        # after the rename the folder too, where the OS has that (not on Windows)
+        assert calls.count("replace") == 2 and all(calls[i - 1] == "fsync" for i, c in enumerate(calls) if c == "replace") \
+            and (os.name == "nt" or calls[-1] == "fsync") and (Path(tmp_state) / "x.json").read_text() == "{}", calls
         httpd = LocalServer(("127.0.0.1", 0), Handler)  # a client still sending gets the refusal, not a reset (6 MiB outgrows the socket buffers)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         for method, size, want in (("POST", 100, b" 403 "), ("POST", 6 << 20, b" 413 "), ("GET", 1024, b" 403 ")):
