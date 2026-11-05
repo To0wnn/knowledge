@@ -29,6 +29,7 @@ import re
 import secrets
 import shutil
 import socket
+import socketserver
 import sqlite3
 import subprocess
 import sys
@@ -2076,7 +2077,9 @@ class LocalServer(ThreadingHTTPServer):
     def server_bind(self):
         if os.name == "nt":
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-        super().server_bind()
+        # Not HTTPServer's own: it asks reverse DNS for its address (socket.getfqdn), about 35 s per start on a Mac whose DNS gives no answer.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 
 def serve():
@@ -2113,6 +2116,11 @@ def main(argv: list):
         tmp_state = tempfile.mkdtemp()  # the checks log and save: never into this pc's real activity log
         atexit.register(shutil.rmtree, tmp_state, True)
         globals()["STATE"] = Path(tmp_state)
+        real_fqdn, socket.getfqdn = socket.getfqdn, lambda *a: sys.exit("LocalServer must not ask reverse DNS at its start")
+        probe = LocalServer(("127.0.0.1", 0), Handler)
+        assert probe.server_port == probe.server_address[1]
+        probe.server_close()
+        socket.getfqdn = real_fqdn
         live = {"v": (42.0, "7d", 2000.0)}  # the last reading lasts until its window resets
         real_live, globals()["usage_live"] = usage_live, lambda a, ws, now: live["v"]
         assert usage_info("agy", {}, 1000) == (42.0, "7d", 2000.0)

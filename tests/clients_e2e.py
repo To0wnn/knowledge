@@ -28,7 +28,9 @@ import shutil
 import subprocess
 import sys
 import socket
+import socketserver
 import tempfile
+import http.server as http_server  # not 'import http': that hides http() below
 import threading
 import time
 import urllib.request
@@ -48,6 +50,15 @@ PORT = free_port()
 BASE = f"http://127.0.0.1:{PORT}"
 WIN = os.name == "nt"
 failures = []
+
+
+def _bind_without_dns(self):
+    """The stand-in servers below: HTTPServer's own bind asks reverse DNS for 127.0.0.1, about 35 s on a macOS runner."""
+    socketserver.TCPServer.server_bind(self)
+    self.server_name, self.server_port = self.server_address[:2]
+
+
+http_server.HTTPServer.server_bind = _bind_without_dns
 
 
 def check(ok: bool, what: str, detail: str = "") -> bool:
@@ -1718,7 +1729,7 @@ def chat_e2e(tok: str, tmp: Path):
                  "        body = json.dumps({'models': {'g': {'displayName': 'Gemini X', 'quotaInfo': {'remainingFraction': 0.25, 'resetTime': '2099-01-01T00:00:00Z'}}, 'tab': {'quotaInfo': {'remainingFraction': 1}}}}).encode()\n"
                  "        self.send_response(200 if ok else 403); self.end_headers(); self.wfile.write(body if ok else b'{}')\n"
                  "    def log_message(self, *a): pass\n"
-                 "s = http.server.HTTPServer(('127.0.0.1', 0), H); threading.Thread(target=s.serve_forever, daemon=True).start()\n"
+                 "s = companion.LocalServer(('127.0.0.1', 0), H); threading.Thread(target=s.serve_forever, daemon=True).start()\n"
                  "companion.AGY_QUOTA_URL = f'http://127.0.0.1:{s.server_port}/q'\n"
                  "(companion.STATE / 'agy-rate.json').unlink(missing_ok=True)\n"
                  "companion.agy_rate_read(time.time())\n"
