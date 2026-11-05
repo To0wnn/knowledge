@@ -521,6 +521,7 @@ def mcp(tok: str):
     header helper without the plugin folder or env, agy sends a ${VAR} header as is), so the token comes from
     token_store here and stays in memory."""
     # shortcut: one request at a time, so parallel tool calls wait on each other; use a thread per line if that hurts.
+    os.chdir(Path.home())  # agy starts this in the plugin folder: standing there for a whole session blocks an update on Windows
     session, out = "", sys.stdout.buffer
     for raw in sys.stdin.buffer:
         if not raw.strip():

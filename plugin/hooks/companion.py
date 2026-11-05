@@ -1380,6 +1380,13 @@ def one_round(only: str = "") -> dict:
     except Exception as e:
         log("error", "Could not apply the queued YOLO setting of agy", str(e)[:300])
     keep_trusted()
+    try:
+        if self_update.heal_agy():
+            log("sync", self_update.HEALING)
+        if line := self_update.heal_result():
+            log("sync" if "updated to" in line else "error", line)
+    except Exception as e:  # the ready tasks still start
+        log("error", "Could not check agy's plugin", f"{type(e).__name__}: {e}"[:300])
     with LOCK:
         st = load("state.json", {})
     try:
@@ -1490,7 +1497,9 @@ def run_action(a: dict) -> str:
     if act == "unlink_folder":
         return unlink_folder(str(args.get("path", "")))
     if act == "update_plugin":
-        update_plugins()
+        failed = update_plugins()
+        if failed:
+            raise RuntimeError("; ".join(failed)[:500])
         return "updated"
     if act == "yolo":
         return f"YOLO {set_yolo(agent, args.get('on') is True)}"
@@ -1598,14 +1607,33 @@ def origin_of(url: str) -> str:
     return f"{u.scheme}://{u.netloc}"
 
 
-def update_plugins():
-    """The plugin of each agent here: Codex and agy with their own CLI (as self_update does daily); Claude Code updates
-    its plugins itself."""
-    for a in ("codex", "agy"):
-        if installed(a) and plugin_version(a):
-            msg = self_update.run(a) or f"{AGENTS[a][0]}: the knowledge plugin is up to date"
-            log("sync", msg)
+def update_plugins() -> list:
+    """The plugin of each agent here with its own CLI, compared with that agent's version: this companion may run from
+    another agent's newer copy. Returns the failures."""
+    failed = []
+    for a, (name, _) in AGENTS.items():
+        if not installed(a):
+            continue
+        have = plugin_version(a)
+        if not have and not (a == "agy" and self_update.agy_wiped()):  # also the setup without a plugin: installing one there would run every hook twice
+            log("sync", f"{name}: no knowledge plugin here, nothing to update")
+            continue
+        try:
+            parts = tuple(map(int, have.split(".")))
+        except ValueError:  # Claude Code lists a commit for a plugin without a version: update
+            parts = (0,)
+        try:
+            res = self_update.run(a, have=parts)
+        except Exception as e:  # the other agents still get theirs, and the page said "see Activity"
+            res = f"knowledge plugin: the update of {a} failed ({type(e).__name__}: {e})"
+        if res and res.startswith("knowledge plugin: updated to") and a != "agy" and plugin_version(a) == have:
+            res = f"knowledge plugin: the update of {a} changed nothing, it stays on {have} (a local marketplace?)"
+        ok = not res or res.startswith("knowledge plugin: updated to")
+        log("sync" if ok else "error", res or f"{name}: the knowledge plugin is up to date")
+        if not ok:
+            failed.append(res)
     keep_trusted()
+    return failed
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1720,7 +1748,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/local/api/tick":
                 return self.send(200, tick(), origin=o)
             if path == "/local/api/update":
-                threading.Thread(target=update_plugins, daemon=True).start()
+                def update():  # ACTING: a restart for the updated plugin must not cut this off
+                    with ACTING:
+                        update_plugins()
+                threading.Thread(target=update, daemon=True).start()
                 return self.send(200, {"started": True}, origin=o)
         except (ValueError, AttributeError) as e:
             return self.send(400, {"error": str(e)}, origin=o)
@@ -2156,6 +2187,12 @@ def main(argv: list):
         tmp_state = tempfile.mkdtemp()  # the checks log and save: never into this pc's real activity log
         atexit.register(shutil.rmtree, tmp_state, True)
         globals()["STATE"] = Path(tmp_state)
+        real = (installed, plugin_version, self_update.run, keep_trusted)
+        calls, globals()["installed"], globals()["keep_trusted"] = [], lambda a: a != "agy", lambda: None
+        globals()["plugin_version"] = lambda a: {"claude": "abc123", "codex": "0.1.0"}[a]
+        self_update.run = lambda a, have=None: calls.append((a, have)) or (None if a == "claude" else "knowledge plugin: the auto-update to 9.9.9 failed")
+        assert update_plugins() == ["knowledge plugin: the auto-update to 9.9.9 failed"] and calls == [("claude", (0,)), ("codex", (0, 1, 0))], calls
+        globals()["installed"], globals()["plugin_version"], self_update.run, globals()["keep_trusted"] = real
         real_fqdn, socket.getfqdn = socket.getfqdn, lambda *a: sys.exit("LocalServer must not ask reverse DNS at its start")
         probe = LocalServer(("127.0.0.1", 0), Handler)
         assert probe.server_port == probe.server_address[1]

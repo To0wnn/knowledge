@@ -15,7 +15,7 @@ if [ "${1:-}" = --unless-passed ] && [ -n "$tree" ] && [ "$tree" = "$(cat "$stam
 fi
 cd server
 PATH="$HOME/.local/bin:$PATH"  # uv lives there; shells started at boot may lack it
-python3 ../plugin/hooks/limits.py --self-test && python3 ../plugin/hooks/secret-guard.py --self-test && python3 ../plugin/hooks/companion.py --self-test && python3 ../plugin/hooks/model_settings.py --self-test && python3 ../plugin/hooks/workers.py --self-test && python3 ../plugin/hooks/chat.py --self-test && python3 ../plugin/hooks/watch.py --self-test || exit 1  # set -e ignores a failure before the last && of a list
+python3 ../plugin/hooks/limits.py --self-test && python3 ../plugin/hooks/secret-guard.py --self-test && python3 ../plugin/hooks/self_update.py --self-test && python3 ../plugin/hooks/companion.py --self-test && python3 ../plugin/hooks/model_settings.py --self-test && python3 ../plugin/hooks/workers.py --self-test && python3 ../plugin/hooks/chat.py --self-test && python3 ../plugin/hooks/watch.py --self-test || exit 1  # set -e ignores a failure before the last && of a list
 # client code also runs on macOS's /usr/bin/python3 (3.9): an f-string with a backslash in {} once broke the setup there,
 # and an `X | None` annotation only fails on import, so each file is imported, not just compiled
 uv run --quiet --no-project --python 3.9 python -I -c "

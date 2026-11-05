@@ -12,6 +12,7 @@ import sys
 
 from pathlib import Path
 
+import self_update
 import token_store
 
 NAME = "knowledge"  # the marketplace name in .claude-plugin/marketplace.json
@@ -47,6 +48,13 @@ def main() -> None:
                   "(turn it off under /plugin > Marketplaces).")
     except (OSError, ValueError) as e:  # an unreadable settings file: say so, but never stop the session
         print(f"knowledge plugin: could not turn on auto-update ({type(e).__name__}: {e})", file=sys.stderr)
+    try:
+        if self_update.heal_agy():
+            print(self_update.HEALING)
+        elif line := self_update.heal_result():
+            print(line)
+    except Exception as e:  # never stop the session
+        print(f"knowledge plugin: could not check agy's plugin ({type(e).__name__}: {e})", file=sys.stderr)
 
 
 if __name__ == "__main__":

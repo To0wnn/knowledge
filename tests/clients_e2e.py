@@ -2569,6 +2569,17 @@ def agy_plugin(tok: str, home: Path, project: Path, garden: Path):
     got = next((x for x in json.loads(out or "[]") if x.get("name") == "knowledge"), {}) if code == 0 else {}
     check(bool(got.get("enabled")) and got.get("mcpServers") == ["knowledge"] and got.get("hooks") == ["knowledge"],
           "agy: plugin listed and enabled, with its MCP server and hooks", out + err)
+    # A failed update of an older version left the folder without a plugin: another agent's hook puts it back.
+    folder = home / ".gemini" / "config" / "plugins" / "knowledge"
+    (home / ".gemini" / "config" / "hooks.json").write_text("{}", encoding="utf-8")
+    (home / ".knowledge" / "auto-update.json").write_text(json.dumps({"agy:result": "knowledge plugin: the auto-update to 9.9.9 failed"}), encoding="utf-8")
+    shutil.rmtree(folder)
+    folder.mkdir()
+    os.utime(folder, (1, 1))
+    heal = "import self_update, sys; started = self_update.heal_agy(); sys.exit(0 if started else 3)"
+    code, out, err = run([sys.executable, "-X", "utf8", "-c", heal], "", {**env, "KNOWLEDGE_AGY_PLUGIN": str(root)}, cwd=str(root / "hooks"))
+    check(code == 0, "agy: another agent's hook sees the emptied plugin folder", out + err)
+    check(wait_for(lambda: (folder / ".claude-plugin" / "plugin.json").exists(), 120), "agy: the emptied plugin folder is installed again", out + err)
 
 
 def import_e2e(tok: str, tmp: Path, garden: Path):
@@ -3115,19 +3126,22 @@ def background_flags(tmp: Path):
     code = """import json, os, subprocess, sys
 sys.path.insert(0, sys.argv[1])
 import self_update, memory_mirror, agent_hooks
-seen = []
+seen, cwds = [], []
 class P:
     def __init__(self, *a, **kw):
         seen.append(kw.get("creationflags", 0) if os.name == "nt" else int(bool(kw.get("start_new_session"))))
+        cwds.append(kw.get("cwd"))
         self.stdin = open(os.devnull, "wb")
 subprocess.Popen = P
 self_update.start("codex"); memory_mirror.start_background(); agent_hooks.start_hook("docs-sync.py", "", "{}")
-print(json.dumps(seen))"""
+print(json.dumps(seen)); print(json.dumps(cwds))"""
     home = tmp / "Flags Usér"
     home.mkdir(parents=True, exist_ok=True)
     rc, out, err = run([sys.executable, "-c", code, str(CLIENT / "plugin" / "hooks")], "", user_env(home, KNOWLEDGE_HOME=str(home / ".knowledge")),
                        cwd=str(home))  # not the repo root: its token.py would shadow the stdlib module
-    seen = json.loads(out) if rc == 0 else []
+    seen, cwds = map(json.loads, out.splitlines()) if rc == 0 else ([], [])
+    check(cwds[:2] == [str(home)] * 2,
+          "self-update and offline copy do not stand in the plugin folder (it blocks agy's update on Windows)", out + err[-500:])
     ok = len(seen) == 3 and all((f & 0x08000000 and not f & 0x00000008) if WIN else f == 1 for f in seen)
     check(ok, "self-update, offline copy and background hook start detached without a console window", out + err[-500:])
 
