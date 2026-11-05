@@ -688,70 +688,32 @@ dialog.ck-diff { width: min(980px, calc(100vw - 32px)); }
 /* Chats > Board (mission.js, desktop only): an endless canvas with a frame per project and a card per chat. The
    world is one transformed layer; zoomed out (.far) a card shows its summary in large type instead of the chat. */
 .ck.board .ck-chats { display: none; }
+/* The chat grid: frames and cards tiled to fill the screen; mission.js sets --bg-cols and --bg-row from the stage (two
+   rows at most on screen, more scroll). A frame is a heading row, hidden with one project (unless folded). */
 .bd { position: relative; min-height: 0; overflow: hidden; }
-.bd-stage { position: absolute; inset: 0; overflow: hidden; touch-action: none; cursor: grab; background: var(--dot-grid); }
-.bd-stage.panning { cursor: grabbing; }
+.bd-stage { position: absolute; inset: 0; overflow: hidden auto; }
 .bd-stage:focus-visible { outline-offset: -2px; } /* it fills a clipping box: the ring goes inside */
-.bd-world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
-.bd-none { position: absolute; left: 0; top: 0; width: 360px; }
-.bd-frame { position: absolute; border: 1px solid var(--line-hi); border-radius: var(--r-lg); background: color-mix(in srgb, var(--panel) 55%, transparent); }
-.bd-frame.shut { background: var(--panel); }
-.bd-frame-title { display: flex; align-items: center; gap: 8px; height: 36px; margin: 5px 8px; padding: 0 10px; border: 0; border-radius: var(--r-md); background: transparent; color: var(--ink); font-size: 15px; cursor: pointer; max-width: calc(100% - 16px); }
+.bd-world { display: grid; grid-template-columns: repeat(var(--bg-cols, 2), minmax(0, 1fr)); gap: 16px; padding: 16px; }
+.bd-none { width: 360px; }
+.bd-frame { grid-column: 1 / -1; }
+.bd.one .bd-frame { display: none; }
+.bd-frame-title { display: flex; align-items: center; gap: 8px; height: 36px; margin: 0; padding: 0 10px; border: 0; border-radius: var(--r-md); background: transparent; color: var(--ink); font-size: 15px; cursor: pointer; max-width: calc(100% - 16px); }
 .bd-frame-title:hover { background: var(--hover); }
 .bd-frame-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bd-frame-title .ck-count { cursor: default; } /* a count, not a second button */
+#ck-view .n { margin-left: 6px; color: var(--amber-ink); font-weight: 650; font-variant-numeric: tabular-nums; }
 .bd-chev { color: var(--muted); transition: transform .15s; }
 .bd-frame.shut .bd-chev { transform: rotate(-90deg); }
-.bd-card { position: absolute; display: grid; border-radius: var(--r-lg); }
-/* text sized against the zoom (--bd-k, mission.js bdMoved): about 14 px on screen from 0.55x to 1.6x, then it scales */
-.bd-card .ck-log { font-size: clamp(9px, calc(14px / var(--bd-k, 1)), 25px); }
-.bd-card .ck-line { font-size: clamp(7.5px, calc(12px / var(--bd-k, 1)), 22px); }
-.bd-card .ck-box textarea { font-size: clamp(9px, calc(14px / var(--bd-k, 1)), 25px); }
-.bd-card.dragging { z-index: 2; opacity: .92; }
-.bd-card.dragging .ck-card { box-shadow: var(--menu-shadow); }
+.bd-card { position: relative; display: grid; height: var(--bg-row, 420px); border-radius: var(--r-lg); }
+.bd-card[hidden] { display: none; }
 .bd-card > .ck-card { min-height: 0; height: 100%; }
-.bd-card .ck-head { cursor: move; }
 .bd-card .ck-git-slot { display: none; } /* the full chat has it; a card's header keeps room for its title */
 .bd-card.needs > .ck-card { border-color: var(--amber); }
 .bd-card .ck-x:not(.bd-only), .bd-only { display: none; }
 .bd-card .bd-only { display: inline-grid; }
 .bd-card .ck-dot.bd-only { display: block; flex: none; }
 .bd-card .ck-box textarea { min-height: 22px; }
-.bd-sum { display: none; }
-.bd.far .bd-card > .ck-card { display: none; }
-.bd.far .bd-card { cursor: move; }
-.bd.far .bd-sum { display: grid; align-content: start; gap: 12px; padding: 22px 24px; border: 2px solid var(--line-hi); border-radius: var(--r-lg); background: var(--panel-solid); box-shadow: var(--shadow); overflow: hidden; }
-.bd.far .bd-card.needs .bd-sum { border-color: var(--amber); box-shadow: 0 0 0 4px var(--amber-soft), var(--shadow); }
-.bd.far .bd-card.running .bd-sum { border-color: color-mix(in srgb, var(--ok) 60%, var(--line-hi)); }
-.bd-sum-top { display: flex; align-items: center; gap: 12px; font-size: 22px; font-weight: 650; color: var(--muted); }
-.bd-sum-top .ck-dot { width: 18px; height: 18px; }
-.bd-sum-top .ck-mark { width: 40px; height: 40px; border-radius: 12px; font-size: 22px; }
-.bd-card.needs .bd-sum-state { color: var(--amber-ink); }
-.bd-sum-title { font-size: 34px; line-height: 1.15; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
-.bd-sum-line { margin: 0; font-size: 24px; line-height: 1.3; color: var(--muted); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
-.bd-sum small { font-size: 18px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bd-tools { position: absolute; top: 12px; right: 12px; display: flex; gap: 6px; }
-.bd-tools .btn { background: var(--panel-hi); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
-.bd-mini { position: absolute; right: 12px; bottom: 12px; width: 180px; height: 120px; overflow: hidden; border: 1px solid var(--line-hi); border-radius: var(--r-md); background: var(--panel-hi); box-shadow: var(--shadow); cursor: pointer; touch-action: none; }
-.bd-mini:hover { border-color: var(--amber); }
-.bd-mini-in, .bd-mini-in > div, .bd-mini-view { position: absolute; }
-.bd-mini-in { inset: 0; }
-.bd-mini-frame { border: 1px solid var(--line-hi); border-radius: 3px; }
-.bd-mini-card { background: var(--muted); opacity: .45; border-radius: 1px; }
-.bd-mini-card.needs { background: var(--amber); opacity: 1; }
-.bd-mini-card.running { background: var(--ok); opacity: .9; }
-.bd-mini-view { border: 1.5px solid var(--amber); border-radius: 3px; background: var(--amber-soft); pointer-events: none; }
-/* Grid (trial next to the canvas): the same frames and cards tiled to fill the screen; mission.js sets --bg-cols and
-   --bg-row from the stage (two rows at most on screen, more scroll). A frame is a heading row, hidden with one project. */
-.bd.grid .bd-stage { overflow: hidden auto; touch-action: auto; cursor: auto; background: none; }
-.bd.grid .bd-world { position: static; transform: none; display: grid; grid-template-columns: repeat(var(--bg-cols, 2), minmax(0, 1fr)); gap: 16px; padding: 16px; }
-.bd.grid .bd-frame { position: static; grid-column: 1 / -1; border: 0; background: none; }
-.bd.grid .bd-frame-title { margin: 0; }
-.bd.grid.one .bd-frame, .bd.grid .bd-tools, .bd.grid .bd-mini { display: none; }
-.bd.grid .bd-card { position: relative; height: var(--bg-row, 420px); }
-.bd.grid .bd-card[hidden] { display: none; }
-.bd.grid .bd-card .ck-head { cursor: auto; }
-.bd.grid .bd-none { position: static; }
-@media (max-width: 999.98px) { #chats-mode, #tasks-mode, .bd { display: none !important; } } /* the board and flow are desktop only: the list stays */
+@media (max-width: 999.98px) { #tasks-mode, #ck-view, .bd { display: none !important; } } /* the grid and flow are desktop only: the list stays */
 #ck-diff-body { max-height: 65vh; overflow: auto; }
 @media (max-width: 699.98px) {
   .ck { overflow: visible; }
@@ -1021,7 +983,7 @@ button.busy::before { content: ""; display: inline-block; width: .9em; height: .
 .task-assign[hidden] { display: none; }
 
 /* ---- Agents view (r2) ---- */
-/* a side-by-side card is narrow: its title keeps at least about half the head, the chips shrink into what is left */
+/* a grid card can be narrow: its title keeps at least about half the head, the chips shrink into what is left */
 .bd-card .ck-title { flex: 1 0 40%; }
 /* a chip cannot shrink with an ellipsis (it is inline-flex: its text was cut to "rea"), so a narrow card drops whole
    chips, least needed first (widths measured on live chats): the token count (also in the full chat), then the state
@@ -1045,9 +1007,6 @@ button.busy::before { content: ""; display: inline-block; width: .9em; height: .
 .hit-text code, .connected code, .home-card code { font: .92em var(--mono); padding: 0 4px; border-radius: 4px; background: var(--hover); color: var(--ink); }
 /* hidden wins over the display these set */
 .crumb[hidden], .ms-legend[hidden], #ms-all[hidden] { display: none; }
-/* Machines: YOLO is a state, not an alarm; only a small warning mark while it is on */
-.pill.yolo { background: var(--hover); color: var(--muted); font-weight: 600; letter-spacing: 0; }
-.pill.yolo::before { content: "⚠"; color: var(--warn); }
 .yolo-switch { min-height: var(--h-btn-sm); }
 .yolo-mark { color: var(--warn); font-size: 12px; }
 .machine-actions { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }

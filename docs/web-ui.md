@@ -11,9 +11,10 @@ Moved from the README; [back to the README](../README.md).
   on a phone a bottom tab bar (Agents, Tasks, Machines, Notes, More). The Agents view (`#/chats`; `#/inbox` opens the same view) is one
   list grouped Needs you (each row says why: answered and not read, asks approval, failed), Review (a branch with
   commits ready to merge), Working and Done today (folded), with quick actions on a row (Allow/Deny an approval,
-  Merge/Reject a review, a one-line Reply; Snooze 1 h / until tomorrow, Dismiss and Archive in the row's ⋯ menu) and the open chat on the right; on a
-  phone the list is the start screen and a chat opens full screen. Its "Side by side" mode (`#/chats?view=board`)
-  shows several chats next to each other on a canvas, "Grid" (`#/chats?view=grid`, trial) tiles them to fill the screen. Details: [chats.md](chats.md). Every view has its own URL (`#/chats`, `#/notes/<path>`,
+  Merge/Reject a review, a one-line Reply; Snooze 1 h / until tomorrow, Dismiss and Archive in the row's ⋯ menu) beside an open chat
+  (`#/chats/<chat>`, or on its own at `#/chats?view=list`, where the `#/inbox/<key>` links land); on a desktop (1000 px and up) `#/chats` itself
+  tiles the open chats in a grid that fills the screen, with a List link in the header that counts what needs you but has no card there (an old `?view=grid` or `?view=board` link opens it too); on a
+  phone the list is the start screen and a chat opens full screen. Details: [chats.md](chats.md). Every view has its own URL (`#/chats`, `#/notes/<path>`,
   `#/map`, `#/tasks?view=flow`, …), so refresh, back and forward work; an old `#<path>` link opens the note. The sidebar goes back to where you were in a view (its last route and scroll, per tab: sessionStorage `kn_routes`); clicking the view you are on goes to its start. Usage chips (Agents) show each agent's fullest limit and reset time (Claude from its sessions and workers, Codex from its rollout or, without a session, `codex app-server` `account/rateLimits/read` every 15 min, agy from a running agy's language server, else the cloud quota call agy itself makes (`v1internal:fetchAvailableModels` with agy's OAuth token from `~/.gemini/antigravity-cli/antigravity-oauth-token`, `User-Agent: antigravity-cli` or Google answers 403; an expired token is renewed with `agy models`, no prompt; every 15 min; undocumented API, so a failure goes to the activity log)).
   Ctrl/Cmd+K (or "Search or jump", or the phone's search icon) opens a command palette: notes by title, text and
   meaning, chats, tasks, every view and a few actions (new chat, theme, sidebar, mission flow), with arrow keys, Enter,

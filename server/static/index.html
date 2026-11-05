@@ -24,7 +24,6 @@
     <span class="gap"></span>
     <div class="head-actions" id="head-actions">
       <span data-views="chats"><span class="ck-resets" id="ck-resets" hidden></span></span>
-      <div class="seg" id="chats-mode" role="group" aria-label="Chats as" data-views="chats"><button type="button" data-mode="list" aria-pressed="true">List</button><button type="button" data-mode="board" aria-pressed="false">Side by side</button><button type="button" data-mode="grid" aria-pressed="false" title="Trial: the chats fill the screen in columns">Grid</button></div>
       <div class="seg" id="tasks-mode" role="group" aria-label="Tasks as" data-views="tasks"><button type="button" data-mode="list" aria-pressed="true">List</button><button type="button" data-mode="flow" aria-pressed="false">Flow</button></div>
       <span data-views="notes map"><details id="add-menu" class="menu">
         <summary class="btn">+ Add</summary>
@@ -33,6 +32,7 @@
           <button id="ingest-open" type="button">Add a source (web page, PDF, text)</button>
         </div>
       </details></span>
+      <a class="btn quiet" id="ck-view" data-views="chats" href="#/chats?view=list">List</a>
       <button type="button" class="btn primary" id="ck-new" data-views="chats" aria-label="New chat">+<span class="wide-only">&nbsp;New chat</span></button>
       <button type="button" class="btn icon phone-only" id="head-search" aria-label="Search" title="Search"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg></button>
     </div>
