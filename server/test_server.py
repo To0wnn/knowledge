@@ -2338,7 +2338,13 @@ def main():
         assert f"{frname} codex: plugin 0.9.10, newest 0.9.16" in call("knowledge_lint", {})[1], call("knowledge_lint", {})[1][-500:]
         row = next(t for t in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["tokens"] if t["name"] == frname)
         assert {(p["agent"], p["v"], p["behind"]) for p in row["plugin"]} == {("agy", "0.9.16", False), ("codex", "0.9.10", True)}, row
-        parts("agent=agy&plugin=0.9.16&url=default")  # a device that names no server: shown before the default goes
+        told = "removes the built-in server address"  # only this server can still give such a device its address
+        said = parts("agent=agy&plugin=0.9.16&url=default")  # a device that names no server: shown before the default goes
+        assert told in said and "install.sh | KNOWLEDGE_URL='http" in said and "install.ps1 | iex" in said, said[-600:]
+        assert told in parts("agent=agy&plugin=0.10.3"), "before 0.10.7 it does not say whether it relies on it"
+        assert told in parts("agent=agy&plugin=0.14.1&url=default") and told not in parts("agent=agy&plugin=0.14.1")
+        assert told not in parts("agent=agy&plugin=0.14.2&url=default") + parts("agent=claude")
+        parts("agent=agy&plugin=0.9.16&url=default")
         row = next(t for t in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["tokens"] if t["name"] == frname)
         assert {p["agent"]: p["default_url"] for p in row["plugin"]} == {"agy": None, "codex": None}, row  # before 0.10.7
         parts("agent=agy&plugin=0.10.7&url=default")

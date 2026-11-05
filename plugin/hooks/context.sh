@@ -5,8 +5,8 @@
 # Never blocks a session: on failure it prints one short notice, or the offline context when this device has a copy.
 part=${1:-1}
 url=${CLAUDE_PLUGIN_OPTION_URL:-${CLAUDE_PLUGIN_OPTION_url:-$(sh "$(dirname "$0")/py.sh" "$(dirname "$0")/token_store.py" url)}}
-if [ -z "$url" ]; then  # no built-in server: say so once, never send the token somewhere by default
-  [ "$part" = 1 ] && echo "knowledge: no server address is set on this device, so the knowledge server is not used. Run \`knowledge-agent.py setup\` or set the plugin option url."
+if [ -z "$url" ]; then  # no built-in server: say so once, never send the token somewhere by default; words as token_store.NO_URL
+  [ "$part" = 1 ] && echo "knowledge: no server address is set on this device, so the knowledge server is not used and no token was sent. Tell the user to run the one-line installer, which asks for the address: curl -fsSL https://raw.githubusercontent.com/To0wnn/knowledge/main/install.sh | sh (Linux, macOS), irm https://raw.githubusercontent.com/To0wnn/knowledge/main/install.ps1 | iex (Windows); or set the plugin option url."
   exit 0
 fi
 token=$(sh "$(dirname "$0")/py.sh" "$(dirname "$0")/token_store.py" token)

@@ -104,11 +104,12 @@ function skillsCell(t) {
   l.append(c, " " + (t.skills ? "on" : "off")); td.append(l); return td;
 }
 
-// "behind" when older than the newest; "default URL" when the device names no server (that default will go);
-// plugins before 0.10.7 do not say, so they cannot count as safe yet.
+// "behind" when older than the newest; "no URL set" when the device names no server: a plugin before 0.14.2 leans on
+// its built-in address and loses the server at its next update, a newer Claude plugin found the server elsewhere but
+// has no MCP address. Plugins before 0.10.7 do not say, so they cannot count as safe yet.
 // Codex and agy also report their own daily update check, so a device stuck behind says why.
 const pluginText = (p) => `${p.v}${p.behind ? " · behind" : ""}${p.checked ? ` · last check ${ago(p.checked)}` : ""}`
-  + `${p.update_error ? ` · update failed: ${p.update_error}` : ""}${p.default_url ? " · default URL" : p.default_url === null ? " · URL not reported" : ""}`;
+  + `${p.update_error ? ` · update failed: ${p.update_error}` : ""}${p.default_url ? " · no URL set" : p.default_url === null ? " · URL not reported" : ""}`;
 
 // The plugin version per agent this token reported at its last session start.
 function pluginCell(t, open) {

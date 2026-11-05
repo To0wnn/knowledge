@@ -2930,8 +2930,15 @@ def claude_stored_token(tmp: Path):
     code, out, err = run([sys.executable, "-c", "import token_store as t; print(repr(t.url()))"], env=bare, cwd=CLIENT / "plugin" / "hooks")
     check(out.strip() == "''", "no built-in server: url() is empty when nothing names one", out + err)
     code, out, err = run([sys.executable, str(CLIENT / "plugin" / "hooks" / "agent_hooks.py"), "context", "codex"], "{}", bare)
-    check("no server address is set" in out and "knowledge-agent.py setup" in out,
-          "no server set: the session start says how to connect, and calls no server", out + err)
+    hooks = CLIENT / "plugin" / "hooks"
+    installer = "install.sh | sh"
+    check("no server address is set" in out and installer in out and "install.ps1 | iex" in out,
+          "no server set: Codex's session start says how to connect, and calls no server", out + err)
+    code, out, err = run([sys.executable, str(hooks / "agent_hooks.py"), "context", "agy"], "{}", bare)
+    check("no server address is set" in out and installer in out, "no server set: agy's session start says how to connect", out + err)
+    code, out, err = run([bash(), "-c", f'sh "{(hooks / "context.sh").as_posix()}" 1'], "",
+                         {**bare, "PATH": os.environ["PATH"], "CLAUDE_PROJECT_DIR": str(tmp)})
+    check("no server address is set" in out and installer in out, "no server set: Claude's session start says how to connect", out + err)
 
 
 def checkout_update(tmp: Path):
