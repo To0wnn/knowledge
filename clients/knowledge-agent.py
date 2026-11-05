@@ -558,20 +558,45 @@ def say_restart(agent: str):
         print(f"{agent} is running with the old settings: restart it so the knowledge server is used")
 
 
+def same_codex_home(environ: bytes, mine: Path) -> bool:
+    """Whether a process with this /proc environ uses this CODEX_HOME: another home holds other settings."""
+    env = dict(v.split(b"=", 1) for v in environ.split(b"\0") if b"=" in v)
+    home = env.get(b"CODEX_HOME") or (env.get(b"HOME", b"") + b"/.codex")
+    return os.path.normpath(os.fsdecode(home)) == os.path.normpath(str(mine))
+
+
+def codex_servers() -> list:
+    """This user's `codex app-server` processes (the program, not a shell whose command line names it). On Linux only
+    those of this CODEX_HOME. shortcut: macOS cannot read another process's environment simply, so there every
+    CODEX_HOME of this user counts; the question says how many it stops."""
+    try:
+        pids = subprocess.run(["pgrep", "-u", str(os.getuid()), "-f", r"(^|/)codex(\.js)? app-server"], capture_output=True, text=True).stdout.split()
+    except (OSError, AttributeError):  # no pgrep, or no getuid: Windows
+        return []
+    if not sys.platform.startswith("linux"):
+        return pids
+    keep = []
+    for pid in pids:
+        try:
+            if same_codex_home(Path(f"/proc/{pid}/environ").read_bytes(), CODEX):
+                keep.append(pid)
+        except OSError:  # gone meanwhile
+            pass
+    return keep
+
+
 def restart_codex():
     """Codex keeps a background app-server that holds the MCP settings it started with, so a changed config only
     counts after it restarts. Offer to stop it (Codex starts a new one on its next run); never without asking."""
-    # shortcut: Linux/macOS only (pgrep); on Windows the setup only says to restart Codex.
-    try:
-        pids = subprocess.run(["pgrep", "-f", "codex app-server"], capture_output=True, text=True).stdout.split()
-    except OSError:
-        pids = []
+    pids = codex_servers()
     if not pids:
         return
     msg = "Codex is still running with the old settings."
     if not sys.stdin.isatty():
         return print(f"{msg} Quit Codex (and its background server) so the new settings apply.")
-    if input(f"{msg} Stop it now? [y/N] ").strip().lower() not in ("y", "yes", "j", "ja"):
+    what = (f"{len(pids)} Codex background server(s) of this user ({CODEX}), pid {', '.join(pids)}; any Codex session or "
+            "web UI chat on them stops too")
+    if input(f"{msg} Stop {what}? [y/N] ").strip().lower() not in ("y", "yes", "j", "ja"):
         return print("left running: quit Codex yourself so the new settings apply")
     for pid in pids:
         try:
@@ -1230,6 +1255,10 @@ if __name__ == "__main__":
                 assert not tomllib or tomllib.loads(rest) == tomllib.loads(want), (t, rest)
                 assert ("# my other" in rest) == ("# my other" in want) and ("once" in rest) == ("once" in want), (t, rest)
         assert toml_table_span("[[mcp_servers.knowledge]]\n# [mcp_servers.knowledge]\n", "mcp_servers.knowledge") is None
+        mine = Path(os.path.join(os.sep, "h", "me", ".codex"))
+        for env, same in ((b"HOME=/h/me\0A=b=c\0", True), (b"HOME=/h/other\0", False), (b"HOME=/h/me\0CODEX_HOME=/x\0", False),
+                          (b"HOME=/x\0CODEX_HOME=/h/me/.codex/\0", True)):
+            assert same_codex_home(env, mine) == same or os.name == "nt", env
         for t, want in (  # a look-alike in a value is no table; the real one goes whole (stopped review 23 Oct 2026, reproduced 5 Nov 2026)
                 ('note = "[mcp_servers.knowledge]"\n[z]\nq = 1\n', None),
                 ('note = """\n[mcp_servers.knowledge]\nurl = 1\n"""\n[z]\nq = 1\n', None),
