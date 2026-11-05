@@ -31,21 +31,50 @@ def checked(plan: dict) -> dict:
     return out
 
 
+TOML_TOKEN = re.compile(r'''"""|\'\'\'|"(?:[^"\\\n]|\\.)*"|\'[^\'\n]*\'|#.*|[\[\]]''')
+TOML_CLOSE = {'"""': re.compile(r'(?:[^\\]|\\.)*?"{3,5}', re.S), "'''": re.compile(r"(?s).*?'{3,5}")}
+
+
+def toml_headers(lines: list) -> set:
+    """The lines that really open a table: one inside a multi-line array or string only looks like it."""
+    heads, opened, depth = set(), "", 0
+    for n, line in enumerate(lines):
+        if not opened and depth <= 0 and line.lstrip().startswith("["):
+            heads.add(n)
+            continue
+        i = 0
+        while True:
+            if opened:
+                end = TOML_CLOSE[opened].match(line, i)
+                if not end:
+                    break
+                i, opened = end.end(), ""
+            m = TOML_TOKEN.search(line, i)
+            if not m:
+                break
+            t, i = m.group(0), m.end()
+            if t in TOML_CLOSE:
+                opened = t
+            elif t in "[]":
+                depth += 1 if t == "[" else -1
+    return heads
+
+
 def toml_set(text: str, table, key: str, raw):
     """Set (raw = a TOML value as text) or remove (raw = None) one key of a table (None = top level), leaving every
     other line as it is; the old value as text (with its comment), or None when it was not there."""
     lines = text.splitlines(keepends=True)
-    header = lambda ln: ln.lstrip().startswith("[")
+    heads = toml_headers(lines)
     if table is None:
-        start, end = 0, next((i for i, ln in enumerate(lines) if header(ln)), len(lines))
+        start, end = 0, min(heads, default=len(lines))
     else:
-        at = next((i for i, ln in enumerate(lines) if ln.split("#")[0].strip() == f"[{table}]"), None)
+        at = next((i for i in sorted(heads) if lines[i].split("#")[0].strip() == f"[{table}]"), None)
         if at is None:
             if raw is None:
                 return text, None
             sep = "" if not text or text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
             return f"{text}{sep}[{table}]\n{key} = {raw}\n", None
-        start, end = at + 1, next((i for i in range(at + 1, len(lines)) if header(lines[i])), len(lines))
+        start, end = at + 1, min((i for i in heads if i > at), default=len(lines))
     pat = re.compile(rf"\s*{re.escape(key)}\s*=\s*(.*?)\s*$")
     for i in range(start, end):
         m = pat.fullmatch(lines[i].rstrip("\r\n"))
@@ -165,6 +194,11 @@ def current(agent: str, home: Path | None = None) -> dict:
 
 
 def self_test() -> None:
+    # A line in a multi-line value is no table header: a key used to land inside the array and break the file.
+    for t, table, want in (('notify = [\n  ["a"],\n]\nm = "x"\n[z]\nq = 1\n', None, 'notify = [\n  ["a"],\n]\nm = "x"\nk = 1\n[z]\nq = 1\n'),
+                           ('[z]\nn = """\n[y]\n"""\nq = 1\n[y]\nr = 2\n', "y", '[z]\nn = """\n[y]\n"""\nq = 1\n[y]\nr = 2\nk = 1\n'),
+                           ('[z]\nm = [\n  ["a"],\n]\n[y]\nr = 2\n', "z", '[z]\nm = [\n  ["a"],\n]\nk = 1\n[y]\nr = 2\n')):
+        assert toml_set(t, table, "k", "1") == (want, None), (t, toml_set(t, table, "k", "1"))
     import tomllib
     with tempfile.TemporaryDirectory() as t:
         h = Path(t)
