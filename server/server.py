@@ -1320,9 +1320,9 @@ def duplicates_loop():
             except Exception as e:  # never let it die; lint reports the failure (weekly report, Matrix)
                 BACKGROUND["duplicates"] = {"at": t0, "error": f"duplicate check failed: {e}"}
                 print(BACKGROUND["duplicates"]["error"], flush=True)
-            wait = DUPES_EVERY if "duplicates" in BACKGROUND else 60
+            wait = DUPES_EVERY if "duplicates" in BACKGROUND else min(60, DUPES_EVERY)
         else:
-            wait = 10 if _written else 60  # a written memo waits for its embedding, not for the hour
+            wait = min(10 if _written else 60, DUPES_EVERY)  # a written memo waits for its embedding, not for the hour
         if JUDGE_SOON.wait(wait):
             while JUDGE_SOON.is_set():  # debounce: run once the writes stop
                 JUDGE_SOON.clear()
