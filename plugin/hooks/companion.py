@@ -1613,7 +1613,7 @@ class Handler(BaseHTTPRequestHandler):
         return o if o in (SELF, origin_of(token_store.url())) else (None if o else "")
 
     def key_ok(self) -> bool:
-        return hmac.compare_digest(self.headers.get("X-Companion-Key", ""), api_key())
+        return hmac.compare_digest(self.headers.get("X-Companion-Key", "").encode(), api_key().encode())  # bytes: a str with non-ASCII raises
 
     def host_ok(self) -> bool:  # DNS rebinding: a foreign name that resolves to 127.0.0.1 gets nothing
         return self.headers.get("Host", "") in (f"127.0.0.1:{PORT}", f"localhost:{PORT}")
@@ -2379,6 +2379,10 @@ def main(argv: list):
             with socket.create_connection(httpd.server_address, timeout=10) as s:
                 s.sendall(f"{method} /local/api/tick HTTP/1.1\r\nHost: x\r\nContent-Length: {size}\r\n\r\n".encode() + b"x" * size)
                 assert want in s.recv(64), (method, size)
+        with socket.create_connection(httpd.server_address, timeout=10) as s:  # a key that is no ASCII: a refusal, not a dropped connection
+            s.sendall(f"POST /local/api/tick HTTP/1.1\r\nHost: 127.0.0.1:{PORT}\r\nOrigin: {SELF}\r\nContent-Type: application/json\r\n"
+                      "X-Companion-Key: ".encode() + b"\xe9\r\nContent-Length: 0\r\n\r\n")
+            assert b" 403 " in s.recv(64)
         httpd.shutdown()
         httpd.server_close()
         print("ok")

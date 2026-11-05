@@ -2841,8 +2841,8 @@ def note_user(username: str):
 def proxied_user(headers: dict) -> str:
     """The proxy's user name (KNOWLEDGE_PROXY_USER_HEADER), but only on requests that really came through the proxy
     (shared secret header): never trust the user header on its own."""
-    given = headers.get(b"x-knowledge-proxy", b"").decode()
-    if not (PROXY_SECRET and given and hmac.compare_digest(given, PROXY_SECRET)):
+    given = headers.get(b"x-knowledge-proxy", b"")  # bytes: a non-ASCII value must refuse, not raise
+    if not (PROXY_SECRET and given and hmac.compare_digest(given, PROXY_SECRET.encode())):
         return ""
     return headers.get(PROXY_USER_HEADER.encode(), b"").decode().strip()
 

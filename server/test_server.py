@@ -2081,6 +2081,7 @@ def main():
         assert raw("GET", "/ui", headers={"X-authentik-username": "alice"})[0] == 401  # header without the secret: forged
         assert raw("GET", "/ui", headers=user("alice", "wrong"))[0] == 401
         assert raw("GET", "/ui", headers={"X-Knowledge-Proxy": "proxy-secret", "Remote-User": "alice"})[0] == 401  # not the configured header
+        assert raw("GET", "/ui", headers={"X-Knowledge-Proxy": "\xe9", "X-authentik-username": "alice"})[0] == 401  # no ASCII: a refusal, not a crash
         assert raw("GET", "/ui/api/graph", headers=user("alice", ""))[0] == 401
         assert raw("GET", "/ui/static/app.js")[0] == 200  # static is public (no data)
         # Installable app: the manifest and its icons are public too (no data); the page links it and its CSP allows it.
