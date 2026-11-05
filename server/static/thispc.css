@@ -1,52 +1,55 @@
 /* The companion look as a web UI tab panel: generated from companion.css (COMPONENTS START..END, scope ".cmp" -> "#tab-thispc").
    Edit companion.css and regenerate; server/test_server.py fails when they drift. Class names: see companion.css. */
 #tab-thispc {
-  --canvas: #eef0f3; --dots: rgba(40, 44, 56, 0.13);
-  --panel: rgba(255, 255, 255, 0.78); --panel-solid: #ffffff; --panel-hi: rgba(255, 255, 255, 0.95);
-  --ink: #1c1a17; --muted: #6a645b; --line: rgba(28, 26, 23, 0.1); --line-hi: rgba(28, 26, 23, 0.18);
-  --amber: #c96a06; --amber-ink: #8f4a00; --amber-soft: rgba(232, 135, 30, 0.14); --glow: rgba(242, 140, 30, 0.35);
-  --ok: #1a7d43; --ok-soft: rgba(31, 138, 76, 0.12);
-  --warn: #9a6a00; --warn-soft: rgba(214, 160, 20, 0.16);
-  --bad: #c2352a; --bad-soft: rgba(194, 53, 42, 0.1);
-  --shadow: 0 1px 2px rgba(20, 18, 14, 0.05), 0 8px 24px rgba(20, 18, 14, 0.06);
-  --menu-shadow: 0 18px 50px rgba(20, 18, 14, 0.18);
-  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
-  --r-lg: 18px; --r-md: 12px; --r-sm: 8px; --h-btn: 36px; --h-btn-sm: 28px;
+  --canvas: #f0f2ee; --dots: rgba(20, 60, 50, 0.16); --rail: #e4e8e2;
+  --panel: #fafbf8; --panel-solid: #fdfefc; --panel-hi: #fdfefc;
+  --ink: #16211d; --muted: #55625c; --line: rgba(22, 33, 29, 0.13); --line-hi: rgba(22, 33, 29, 0.27);
+  --act: #14594f; --on-act: #f5fbf8; --act-text: #115045; --act-soft: rgba(20, 89, 79, 0.11);
+  --amber: #e58a0b; --on-amber: #201203; --amber-ink: #8a4a00; --amber-soft: rgba(229, 138, 11, 0.17); --glow: rgba(229, 138, 11, 0.45);
+  --ok: #1a7440; --ok-soft: rgba(26, 116, 64, 0.12);
+  --warn: #7a5600; --warn-soft: rgba(160, 120, 10, 0.16);
+  --bad: #b92d22; --bad-soft: rgba(185, 45, 34, 0.1);
+  --shadow: 0 1px 0 rgba(22, 33, 29, 0.05);
+  --menu-shadow: 0 12px 32px rgba(18, 30, 26, 0.2);
+  --font: "Atkinson Hyperlegible Next", system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+  --r-lg: 10px; --r-md: 6px; --r-sm: 6px; --h-btn: 36px; --h-btn-sm: 28px;
   color: var(--ink); font: 14px/1.5 var(--font); font-variant-numeric: tabular-nums;
-  background: var(--canvas) radial-gradient(var(--dots) 1px, transparent 1.4px) 0 0 / 22px 22px;
+  background: var(--canvas);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) #tab-thispc {
-    --canvas: #15120f; --dots: rgba(255, 220, 180, 0.075);
-    --panel: rgba(35, 30, 25, 0.66); --panel-solid: #221d18; --panel-hi: rgba(48, 41, 34, 0.82);
-    --ink: #f4ece1; --muted: #a59a8b; --line: rgba(255, 236, 210, 0.08); --line-hi: rgba(255, 236, 210, 0.16);
-    --amber: #ffa53d; --amber-ink: #ffbf73; --amber-soft: rgba(255, 165, 61, 0.13); --glow: rgba(255, 150, 40, 0.55);
+    --canvas: #161d1b; --dots: rgba(200, 235, 225, 0.09); --rail: #111816;
+    --panel: #1e2724; --panel-solid: #222c29; --panel-hi: #26312d;
+    --ink: #e8eeea; --muted: #9caaa4; --line: rgba(232, 238, 234, 0.11); --line-hi: rgba(232, 238, 234, 0.24);
+    --act: #6fcdbb; --on-act: #0c1f1b; --act-text: #86d8c7; --act-soft: rgba(111, 205, 187, 0.14);
+    --amber: #ffb02e; --on-amber: #241402; --amber-ink: #ffc566; --amber-soft: rgba(255, 176, 46, 0.15); --glow: rgba(255, 176, 46, 0.5);
     --ok: #7fd89c; --ok-soft: rgba(127, 216, 156, 0.12);
-    --warn: #f3c45a; --warn-soft: rgba(243, 196, 90, 0.12);
+    --warn: #e8c15a; --warn-soft: rgba(232, 193, 90, 0.12);
     --bad: #ff8a7a; --bad-soft: rgba(255, 138, 122, 0.12);
-    --shadow: 0 1px 0 rgba(255, 236, 210, 0.04) inset, 0 10px 30px rgba(0, 0, 0, 0.35);
-    --menu-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+    --shadow: 0 1px 0 rgba(0, 0, 0, 0.25);
+    --menu-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
   }
 }
 :root[data-theme="dark"] #tab-thispc {
-  --canvas: #15120f; --dots: rgba(255, 220, 180, 0.075);
-  --panel: rgba(35, 30, 25, 0.66); --panel-solid: #221d18; --panel-hi: rgba(48, 41, 34, 0.82);
-  --ink: #f4ece1; --muted: #a59a8b; --line: rgba(255, 236, 210, 0.08); --line-hi: rgba(255, 236, 210, 0.16);
-  --amber: #ffa53d; --amber-ink: #ffbf73; --amber-soft: rgba(255, 165, 61, 0.13); --glow: rgba(255, 150, 40, 0.55);
+  --canvas: #161d1b; --dots: rgba(200, 235, 225, 0.09); --rail: #111816;
+  --panel: #1e2724; --panel-solid: #222c29; --panel-hi: #26312d;
+  --ink: #e8eeea; --muted: #9caaa4; --line: rgba(232, 238, 234, 0.11); --line-hi: rgba(232, 238, 234, 0.24);
+  --act: #6fcdbb; --on-act: #0c1f1b; --act-text: #86d8c7; --act-soft: rgba(111, 205, 187, 0.14);
+  --amber: #ffb02e; --on-amber: #241402; --amber-ink: #ffc566; --amber-soft: rgba(255, 176, 46, 0.15); --glow: rgba(255, 176, 46, 0.5);
   --ok: #7fd89c; --ok-soft: rgba(127, 216, 156, 0.12);
-  --warn: #f3c45a; --warn-soft: rgba(243, 196, 90, 0.12);
+  --warn: #e8c15a; --warn-soft: rgba(232, 193, 90, 0.12);
   --bad: #ff8a7a; --bad-soft: rgba(255, 138, 122, 0.12);
-  --shadow: 0 1px 0 rgba(255, 236, 210, 0.04) inset, 0 10px 30px rgba(0, 0, 0, 0.35);
-  --menu-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+  --shadow: 0 1px 0 rgba(0, 0, 0, 0.25);
+  --menu-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
 }
 #tab-thispc *, #tab-thispc *::before, #tab-thispc *::after { box-sizing: border-box; }
 #tab-thispc svg { width: 18px; height: 18px; flex: none; }
-#tab-thispc h2 { margin: 0 0 4px; font-size: 22px; line-height: 1.2; font-weight: 650; letter-spacing: -0.015em; }
-#tab-thispc h3 { margin: 0; font-size: 15px; font-weight: 620; }
-#tab-thispc :focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+#tab-thispc h2 { margin: 0 0 4px; font-size: 26px; line-height: 1.2; font-weight: 650; }
+#tab-thispc h3 { margin: 0; font-size: 16px; font-weight: 600; }
+#tab-thispc :focus-visible { outline: 2px solid var(--act); outline-offset: 2px; }
 #tab-thispc button, #tab-thispc input, #tab-thispc select { font: inherit; color: inherit; }
 /* One link style, fields as high as the buttons: the web UI's design system (server/static/app.css "Controls"). */
-#tab-thispc a { color: var(--amber-ink); text-underline-offset: 2px; text-decoration-color: color-mix(in srgb, currentColor 40%, transparent); }
+#tab-thispc a { color: var(--act-text); text-underline-offset: 2px; text-decoration-color: color-mix(in srgb, currentColor 40%, transparent); }
 #tab-thispc a:hover { text-decoration-color: currentColor; }
 #tab-thispc select, #tab-thispc input:not([type="checkbox"]):not([type="radio"]) {
   height: var(--h-btn); padding: 0 10px; border: 1px solid var(--line-hi); border-radius: var(--r-sm); background: var(--panel-hi); color: var(--ink);
@@ -55,46 +58,38 @@
 /* Top bar */
 #tab-thispc .cmp-top { position: relative; display: flex; align-items: center; gap: 14px 18px; flex-wrap: wrap; padding: 14px 0; }
 #tab-thispc .cmp-brand { display: flex; align-items: center; gap: 12px; min-width: 0; margin-right: auto; }
-#tab-thispc .cmp-orb {
-  position: relative; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; color: #fff7ec;
-  background: radial-gradient(circle at 35% 30%, #ffd59a, #ff9a2e 45%, #d95f00 100%);
-  box-shadow: 0 0 0 1px rgba(255, 190, 120, 0.35), 0 0 22px var(--glow), 0 0 60px var(--glow);
-}
+#tab-thispc .cmp-orb { position: relative; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; color: var(--on-act); background: var(--act); }
 #tab-thispc .cmp-orb svg { width: 22px; height: 22px; }
-#tab-thispc .cmp-brand-name { font-weight: 650; font-size: 15px; letter-spacing: -0.01em; }
-#tab-thispc .cmp-brand-host { color: var(--muted); font-size: 12.5px; }
+#tab-thispc .cmp-brand-name { font-weight: 650; font-size: 16px; }
+#tab-thispc .cmp-brand-host { color: var(--muted); font-size: 13px; }
 #tab-thispc .cmp-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
 /* a status chip: never clickable, so no border and the default cursor */
 #tab-thispc .cmp-chip {
-  display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 11px; border-radius: 999px; cursor: default;
-  background: var(--panel); color: var(--muted); font-size: 12.5px; white-space: nowrap;
-  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 11px; border-radius: 4px; cursor: default;
+  background: var(--panel); color: var(--muted); font-size: 13px; white-space: nowrap;
 }
-#tab-thispc .cmp-chip strong { color: var(--ink); font-weight: 620; }
-#tab-thispc .cmp-chip--live { background: var(--amber-soft); color: var(--amber-ink); }
-#tab-thispc .cmp-chip--live strong { color: var(--amber-ink); }
+#tab-thispc .cmp-chip strong { color: var(--ink); font-weight: 600; }
+#tab-thispc .cmp-chip--live { background: var(--act-soft); color: var(--act-text); }
+#tab-thispc .cmp-chip--live strong { color: var(--act-text); }
 #tab-thispc .cmp-chip--warn { color: var(--warn); background: var(--warn-soft); }
 #tab-thispc .cmp-chip--bad { color: var(--bad); background: var(--bad-soft); }
-#tab-thispc .cmp-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
-#tab-thispc .cmp-chip--live .cmp-dot { background: var(--amber); animation: cmp-pulse 2.4s ease-in-out infinite; }
-@keyframes cmp-pulse { 50% { opacity: 0.35; box-shadow: none; } }
+#tab-thispc .cmp-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+#tab-thispc .cmp-chip--live .cmp-dot { background: var(--act); }
 #tab-thispc .cmp-actions { display: flex; gap: 8px; }
-/* an icon button: the web UI's .btn.icon (secondary, 8 px square) */
+/* an icon button: the web UI's .btn.icon (secondary, square) */
 #tab-thispc .cmp-iconbtn {
   display: grid; place-items: center; width: var(--h-btn); height: var(--h-btn); padding: 0; border-radius: var(--r-sm); cursor: pointer;
   border: 1px solid var(--line-hi); background: var(--panel-hi); color: var(--ink); transition: background 0.15s, border-color 0.15s;
 }
-#tab-thispc .cmp-iconbtn:hover { border-color: var(--amber); }
-#tab-thispc .cmp-iconbtn--accent { color: var(--amber-ink); }
-#tab-thispc .cmp-iconbtn[aria-expanded="true"] { background: var(--amber-soft); border-color: var(--amber); }
+#tab-thispc .cmp-iconbtn:hover { border-color: var(--act); }
+#tab-thispc .cmp-iconbtn--accent { color: var(--act-text); }
+#tab-thispc .cmp-iconbtn[aria-expanded="true"] { background: var(--act-soft); border-color: var(--act); }
 
 /* Floating tools menu */
 #tab-thispc .cmp-menu {
   position: absolute; right: 0; top: calc(100% - 4px); z-index: 20; width: min(300px, calc(100vw - 32px)); padding: 6px;
   border-radius: var(--r-lg); border: 1px solid var(--line-hi);
-  /* Nearly opaque: inside a blurred top bar the menu's own backdrop blur sees nothing behind it. */
-  background: color-mix(in srgb, var(--panel-solid) 90%, transparent);
-  backdrop-filter: blur(22px) saturate(1.4); -webkit-backdrop-filter: blur(22px) saturate(1.4); box-shadow: var(--menu-shadow);
+  background: var(--panel-solid); box-shadow: var(--menu-shadow);
   transform-origin: top right; animation: cmp-menu-in 0.16s ease-out;
 }
 @keyframes cmp-menu-in { from { opacity: 0; transform: scale(0.96) translateY(-4px); } }
@@ -103,7 +98,7 @@
   display: flex; align-items: center; gap: 12px; width: 100%; padding: 9px 10px; border: 0; border-radius: var(--r-md);
   background: none; text-align: left; cursor: pointer;
 }
-#tab-thispc .cmp-menu-item svg { width: 32px; height: 32px; padding: 7px; border-radius: 10px; background: var(--amber-soft); color: var(--amber); }
+#tab-thispc .cmp-menu-item svg { width: 32px; height: 32px; padding: 7px; border-radius: var(--r-md); background: var(--line); color: var(--ink); }
 #tab-thispc .cmp-menu-item span { display: grid; line-height: 1.3; }
 #tab-thispc .cmp-menu-item small { color: var(--muted); font-size: 12px; }
 #tab-thispc .cmp-menu-item:hover, #tab-thispc .cmp-menu-item:focus-visible { background: var(--hover, var(--panel-hi)); }
@@ -117,8 +112,8 @@
   color: var(--muted); text-decoration: none;
 }
 #tab-thispc .cmp-nav a:hover { color: var(--ink); background: var(--panel-hi); }
-#tab-thispc .cmp-nav a[aria-current="true"] { color: var(--amber-ink); background: var(--amber-soft); font-weight: 620; }
-#tab-thispc .cmp-count { min-width: 18px; padding: 0 5px; border-radius: 999px; background: var(--amber-soft); color: var(--amber-ink); font-size: 11.5px; text-align: center; cursor: default; }
+#tab-thispc .cmp-nav a[aria-current="true"] { color: var(--act-text); background: var(--act-soft); font-weight: 600; }
+#tab-thispc .cmp-count { min-width: 18px; padding: 0 5px; border-radius: 4px; background: var(--act-soft); color: var(--act-text); font-size: 12px; text-align: center; cursor: default; }
 #tab-thispc .cmp-count:empty { display: none; }
 
 /* Sections */
@@ -131,22 +126,21 @@
 #tab-thispc .cmp-agent {
   display: flex; flex-direction: column; gap: 14px; padding: 18px; border-radius: var(--r-lg);
   border: 1px solid var(--line); background: var(--panel); box-shadow: var(--shadow);
-  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
 }
 #tab-thispc .cmp-agent--missing { background: transparent; box-shadow: none; border-style: dashed; }
 #tab-thispc .cmp-agent > .cmp-error { margin-top: auto; }
 #tab-thispc .cmp-agent-head { display: flex; align-items: center; gap: 11px; }
 #tab-thispc .cmp-agent-mark {
   display: grid; place-items: center; width: 34px; height: 34px; border-radius: var(--r-md); flex: none;
-  background: var(--amber-soft); color: var(--amber); font-weight: 700; font-size: 14px;
+  background: var(--hover, var(--line)); color: var(--ink); font-weight: 700; font-size: 14px;
 }
 #tab-thispc .cmp-agent--missing .cmp-agent-mark { background: var(--line); color: var(--muted); }
 #tab-thispc .cmp-agent-head h3 { flex: 1; }
-#tab-thispc .cmp-ver { color: var(--muted); font-size: 12.5px; }
+#tab-thispc .cmp-ver { color: var(--muted); font-size: 13px; }
 #tab-thispc .cmp-facts { display: grid; grid-template-columns: auto 1fr; gap: 8px 14px; margin: 0; align-items: center; }
 #tab-thispc .cmp-facts dt { color: var(--muted); }
 #tab-thispc .cmp-facts dd { margin: 0; display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; text-align: right; }
-#tab-thispc .cmp-state { display: inline-flex; align-items: center; gap: 5px; font-weight: 560; cursor: default; }
+#tab-thispc .cmp-state { display: inline-flex; align-items: center; gap: 5px; font-weight: 500; cursor: default; }
 #tab-thispc .cmp-state svg { width: 15px; height: 15px; }
 #tab-thispc .cmp-state--ok { color: var(--ok); }
 #tab-thispc .cmp-state--warn { color: var(--warn); }
@@ -158,35 +152,35 @@
 }
 #tab-thispc .cmp-sessions li > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #tab-thispc .cmp-sessions small { color: var(--muted); }
-#tab-thispc .cmp-sessions select { height: var(--h-btn-sm); font-size: 12.5px; } /* beside the row's small buttons */
+#tab-thispc .cmp-sessions select { height: var(--h-btn-sm); font-size: 13px; } /* beside the row's small buttons */
 #tab-thispc .cmp-sessions-empty { color: var(--muted); font-size: 13px; margin: 0; }
 #tab-thispc .cmp-yolo { display: flex; align-items: center; gap: 9px; cursor: pointer; } /* a label: a click ticks its box */
-#tab-thispc .cmp-yolo input, #tab-thispc .cmp-switch input { width: 17px; height: 17px; margin: 0; accent-color: var(--amber); flex: none; }
-#tab-thispc .cmp-yolo-warn { margin: -8px 0 0 26px; color: var(--muted); font-size: 12.5px; }
+#tab-thispc .cmp-yolo input, #tab-thispc .cmp-switch input { width: 17px; height: 17px; margin: 0; accent-color: var(--act); flex: none; }
+#tab-thispc .cmp-yolo-warn { margin: -8px 0 0 26px; color: var(--muted); font-size: 13px; }
 #tab-thispc .cmp-yolo input:checked ~ * { color: var(--warn); }
 #tab-thispc .cmp-error {
-  margin: 0; padding: 9px 11px; border-radius: var(--r-md); background: var(--bad-soft); color: var(--bad); font-size: 12.5px;
+  margin: 0; padding: 9px 11px; border-radius: var(--r-md); background: var(--bad-soft); color: var(--bad); font-size: 13px;
   display: flex; gap: 8px; align-items: flex-start; overflow-wrap: anywhere;
 }
 #tab-thispc .cmp-error svg { width: 16px; height: 16px; margin-top: 1px; }
 #tab-thispc .cmp-error--none { background: transparent; color: var(--muted); padding: 0; }
 
-/* Buttons: the web UI's .btn (secondary), .btn.primary and .btn.small, same sizes and 8 px radius */
+/* Buttons: the web UI's .btn (secondary), .btn.primary and .btn.small, same sizes and radius */
 #tab-thispc .cmp-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: var(--h-btn); padding: 0 14px; border-radius: var(--r-sm); cursor: pointer;
-  border: 1px solid var(--line-hi); background: var(--panel-hi); color: var(--ink); font-size: 13px; font-weight: 560; line-height: 1; white-space: nowrap;
+  border: 1px solid var(--line-hi); background: var(--panel-hi); color: var(--ink); font-size: 13px; font-weight: 500; line-height: 1; white-space: nowrap;
 }
-#tab-thispc .cmp-btn:hover:not(:disabled) { border-color: var(--amber); }
+#tab-thispc .cmp-btn:hover:not(:disabled) { border-color: var(--act); }
 #tab-thispc .cmp-btn:disabled { opacity: .5; cursor: not-allowed; }
-#tab-thispc .cmp-btn--primary { border-color: var(--amber); background: var(--amber); color: #1d1206; font-weight: 620; }
+#tab-thispc .cmp-btn--primary { border-color: var(--act); background: var(--act); color: var(--on-act); font-weight: 600; }
 #tab-thispc .cmp-btn--primary:hover:not(:disabled) { filter: brightness(1.07); }
-#tab-thispc .cmp-btn--small { height: var(--h-btn-sm); padding: 0 10px; font-size: 12.5px; }
+#tab-thispc .cmp-btn--small { height: var(--h-btn-sm); padding: 0 10px; font-size: 13px; }
 #tab-thispc .cmp-btn svg { width: 14px; height: 14px; }
 
 /* Task lanes */
 #tab-thispc .cmp-lanes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 #tab-thispc .cmp-lane { padding: 14px; border-radius: var(--r-lg); border: 1px solid var(--line); background: var(--panel); }
-#tab-thispc .cmp-lane h3 { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 13.5px; }
+#tab-thispc .cmp-lane h3 { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 14px; }
 #tab-thispc .cmp-lane h3 .cmp-dot { width: 8px; height: 8px; }
 #tab-thispc .cmp-lane--ready h3 { color: var(--ok); }
 #tab-thispc .cmp-lane--waiting h3 { color: var(--warn); }
@@ -196,25 +190,25 @@
 #tab-thispc .cmp-task { padding: 10px 11px; border-radius: var(--r-md); background: color-mix(in srgb, var(--panel-hi) 70%, transparent); border: 1px solid var(--line); }
 #tab-thispc .cmp-task-id { color: var(--muted); font-size: 12px; }
 #tab-thispc .cmp-task-text { margin: 2px 0 0; }
-#tab-thispc .cmp-task-why { margin: 6px 0 0; color: var(--muted); font-size: 12.5px; }
+#tab-thispc .cmp-task-why { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
 #tab-thispc .cmp-lane-empty { color: var(--muted); font-size: 13px; margin: 0; }
 
 /* Activity log */
 #tab-thispc .cmp-log { margin: 0; padding: 0; list-style: none; border-radius: var(--r-lg); border: 1px solid var(--line); background: var(--panel); }
 #tab-thispc .cmp-log li { display: grid; grid-template-columns: 52px 26px 1fr; gap: 10px; align-items: start; padding: 11px 14px; }
 #tab-thispc .cmp-log li + li { border-top: 1px solid var(--line); }
-#tab-thispc .cmp-log-time { color: var(--muted); font-size: 12.5px; padding-top: 2px; }
-#tab-thispc .cmp-log-icon { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--amber-soft); color: var(--amber); }
+#tab-thispc .cmp-log-time { color: var(--muted); font-size: 13px; padding-top: 2px; }
+#tab-thispc .cmp-log-icon { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--act-soft); color: var(--act); }
 #tab-thispc .cmp-log-icon svg { width: 14px; height: 14px; }
 #tab-thispc .cmp-log-icon--bad { background: var(--bad-soft); color: var(--bad); }
 #tab-thispc .cmp-log-text { padding-top: 2px; }
-#tab-thispc .cmp-log-text small { display: block; color: var(--muted); font-size: 12.5px; }
+#tab-thispc .cmp-log-text small { display: block; color: var(--muted); font-size: 13px; }
 
 /* Settings */
 #tab-thispc .cmp-settings { display: grid; gap: 18px; padding: 18px; border-radius: var(--r-lg); border: 1px solid var(--line); background: var(--panel); }
 #tab-thispc .cmp-field { display: grid; gap: 6px; }
-#tab-thispc .cmp-field > label, #tab-thispc .cmp-field > legend { font-weight: 560; padding: 0; }
-#tab-thispc .cmp-field small { color: var(--muted); font-size: 12.5px; }
+#tab-thispc .cmp-field > label, #tab-thispc .cmp-field > legend { font-weight: 500; padding: 0; }
+#tab-thispc .cmp-field small { color: var(--muted); font-size: 13px; }
 #tab-thispc fieldset.cmp-field { margin: 0; padding: 0; border: 0; }
 #tab-thispc .cmp-field input[type="url"] { width: 100%; padding: 0 12px; }
 #tab-thispc .cmp-token { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -223,12 +217,12 @@
 
 /* Toast */
 #tab-thispc .cmp-toast {
-  position: fixed; left: 50%; bottom: 20px; z-index: 30; max-width: calc(100vw - 32px); padding: 9px 16px; border-radius: 999px;
+  position: fixed; left: 50%; bottom: 20px; z-index: 30; max-width: calc(100vw - 32px); padding: 9px 16px; border-radius: var(--r-md);
   background: var(--panel-solid); border: 1px solid var(--line-hi); box-shadow: var(--menu-shadow);
   transform: translate(-50%, 140%); opacity: 0; transition: transform 0.2s, opacity 0.2s; pointer-events: none;
 }
 #tab-thispc .cmp-toast.cmp-toast--on { transform: translate(-50%, 0); opacity: 1; }
-#tab-thispc .cmp-skip { position: absolute; left: 16px; top: -60px; display: inline-flex; align-items: center; height: var(--h-btn); padding: 0 14px; border: 1px solid var(--amber); border-radius: var(--r-sm); background: var(--amber); color: #1d1206; font-size: 13px; font-weight: 620; text-decoration: none; z-index: 40; } /* the primary button look */
+#tab-thispc .cmp-skip { position: absolute; left: 16px; top: -60px; display: inline-flex; align-items: center; height: var(--h-btn); padding: 0 14px; border: 1px solid var(--act); border-radius: var(--r-sm); background: var(--act); color: var(--on-act); font-size: 13px; font-weight: 600; text-decoration: none; z-index: 40; } /* the primary button look */
 #tab-thispc .cmp-skip:focus { top: 12px; }
 
 @media (max-width: 860px) {

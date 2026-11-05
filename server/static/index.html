@@ -8,8 +8,8 @@
 <link rel="icon" href="data:,">
 <link rel="manifest" href="/ui/manifest.webmanifest" crossorigin="use-credentials">
 <link rel="apple-touch-icon" href="/ui/static/icons/apple-touch-icon.png">
-<meta name="theme-color" content="#eef0f3" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#15120f" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f0f2ee" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#161d1b" media="(prefers-color-scheme: dark)">
 <link rel="stylesheet" href="/ui/static/app.css">
 <link rel="stylesheet" href="/ui/static/thispc.css">
 <script src="/ui/static/theme.js"></script>
@@ -69,7 +69,7 @@
     </section>
 
     <section id="tab-machines" class="view pad" aria-label="Machines" hidden>
-      <p class="muted">Every pc that runs your agents: its workers (a fresh session per task), YOLO, hooks, usage limit and the sessions of the last two hours. Actions reach a pc when its companion next asks (about every 10 s).</p>
+      <p class="muted">Every pc that runs your agents, with its workers, YOLO, hooks, usage limit and recent sessions.</p>
       <div id="machines"></div>
     </section>
 
@@ -99,7 +99,7 @@
       <div id="recent"></div>
     </section>
     <section id="tab-lint" class="view pad" aria-label="Health" hidden>
-      <p class="muted">Facts only: fix what is clearly wrong, ask Claude to judge the rest.</p>
+      <p class="muted">Facts only: fix what is clearly wrong, ask an agent to judge the rest.</p>
       <div id="lint"></div>
     </section>
     <section id="tab-settings" class="view pad" aria-label="Settings" hidden>
@@ -164,7 +164,7 @@
     <textarea id="in-text" rows="6"></textarea>
     <label for="in-title">Title (optional)</label>
     <input id="in-title" type="text">
-    <div id="ingest-result" class="muted" aria-live="polite">Sources are stored unchanged in <code>homelab/sources/</code>. Ask Claude to turn a new source into memos; lint lists unprocessed sources.</div>
+    <div id="ingest-result" class="muted" aria-live="polite">Sources are stored unchanged in <code>homelab/sources/</code>. Ask an agent to turn a new source into memos; lint lists unprocessed sources.</div>
     <div class="actions"><button type="button" class="btn" id="ingest-cancel">Close</button><button type="submit" class="btn primary">Add source</button></div>
   </form>
 </dialog>

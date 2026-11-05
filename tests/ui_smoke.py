@@ -20,7 +20,7 @@ message on a refusal (faked; skipped on an older server). Agents > the grid (des
 project, folding, Esc and the full chat; a phone keeps the list (skipped without it).
 The Review card with faked data: Merge asks first and queues the pc's action, Reject sends reason and send back
 (intercepted; skipped on an older server). Follow a worker: its transcript read only when it ended, the Steer composer
-and Take over when it runs (intercepted; skipped on an older server). The design system (0.21): button heights and radii, quiet chips, one link colour on several views.
+and Take over when it runs (intercepted; skipped on an older server). The design system (0.21): button heights and radii, quiet chips, one link colour on several views. The one lamp (0.37).
 Read-only: it opens notes, it never edits or sends.
 
   systemd-run --user --scope -q -p MemoryMax=3G ~/.local/bin/uv run -q --with playwright python tests/ui_smoke.py
@@ -640,9 +640,9 @@ async def shell(browser, devices, secret: str) -> None:
         own: document.querySelectorAll('.machine-head .machine-actions').length, old: [...document.querySelectorAll('.machine-controls button')].some(b => /Forget|YOLO/.test(b.textContent))})""")
     if yolo["own"]:
         check(not yolo["old"], f"Machines: YOLO is a switch per agent, pc actions in the card head, Forget behind ⋯ {yolo}")
-    pill = await pg.evaluate("""(() => { const p = el('span', 'pill yolo', 'YOLO'); document.body.append(p); const s = getComputedStyle(p), b = s.backgroundColor;
-      const d = el('span'); d.style.color = 'var(--bad)'; document.body.append(d); const bad = getComputedStyle(d).color; p.remove(); d.remove(); return [b, bad]; })()""")
-    check(pill[0] == pill[1], f"Machines: the YOLO pill is red, as on the companion page {pill}")
+    pill = await pg.evaluate("""(() => { const p = el('span', 'pill yolo', 'YOLO'); document.body.append(p); const s = getComputedStyle(p), b = s.backgroundColor, c = s.color;
+      const d = el('span'); d.style.color = 'var(--bad)'; document.body.append(d); const bad = getComputedStyle(d).color; p.remove(); d.remove(); return [b, bad, c]; })()""")
+    check(pill[2] == pill[1] and pill[0] != "rgba(0, 0, 0, 0)", f"Machines: the YOLO label is red and stands out {pill}")
     lint2 = await pg.evaluate("api('/ui/api/lint?v=2')")
     if "report" in lint2:
         check(any("usage_outlier" in g["checks"] and g["collapsed"] for g in lint2["groups"]) and "missing_structure" in lint2["hints"],
@@ -798,8 +798,9 @@ async def agents_pages(browser, devices, secret: str) -> None:
     check("Done" not in t[2] and t[3], f"Tasks: Cancel (with the reason when disabled) instead of Done {sorted(set(t[2]))}")
     await route(pg, "#/machines", "#machines .machine, #machines p", 800)
     check(await pg.evaluate("getComputedStyle($('machines')).gridTemplateColumns.split(' ').length === 1"), "Machines: one pc per row, full width")
-    await route(pg, "#/changes", "#trash", 500)
-    check(await pg.evaluate("$('trash').tagName === 'DETAILS' && $('trash').querySelector('summary').textContent.startsWith('Deleted')"), "Changes: a Deleted section")
+    await route(pg, "#/changes", "#recent", 500)
+    await pg.wait_for_selector("#trash", state="attached", timeout=10000)
+    check(await pg.evaluate("$('trash').tagName === 'DETAILS' && $('trash').querySelector('summary').textContent.startsWith('Deleted') && $('trash').hidden === ($('trash').querySelector('.badge').textContent === '0')"), "Changes: a Deleted section, only with something in it")
     check(not errors, f"no page errors on the agents pages {errors[:2]}")
     await ctx.close()
     ctx, pg, errors = await page(browser, secret, "/ui#/inbox", **devices["iPhone 14"])
@@ -1369,7 +1370,7 @@ DS_JS = """() => {
   for (const b of document.querySelectorAll('.btn, .cmp-btn, .cmp-iconbtn')) {
     if (!vis(b)) continue; out.n++;
     const c = getComputedStyle(b), h = Math.round(b.getBoundingClientRect().height);
-    if (![36, 28, 44].includes(h) || c.borderTopLeftRadius !== '8px') out.bad.push(`button ${tag(b)} ${h}px r=${c.borderTopLeftRadius}`);
+    if (![36, 28, 44].includes(h) || c.borderTopLeftRadius !== '6px') out.bad.push(`button ${tag(b)} ${h}px r=${c.borderTopLeftRadius}`);
   }
   for (const f of document.querySelectorAll('select, input:not([type=checkbox]):not([type=radio]):not([type=file])')) {
     if (!vis(f) || f.id === 'pal-q' || f.closest('.proj')) continue;
@@ -1417,6 +1418,42 @@ async def live_refresh(browser, secret: str) -> None:
     await ctx.close()
 
 
+# The one lamp (0.37): amber only for what needs you, Send wakes up with text, the map and the notes overview get the
+# width, offline pcs fold, and a project without tasks shows the work elsewhere. Read-only: the page's own DOM only.
+async def one_lamp(browser, secret: str) -> None:
+    ctx, pg, errors = await page(browser, secret, "/ui#/notes", viewport={"width": 1400, "height": 820})
+    await pg.wait_for_selector(".home-card, #topics summary", timeout=20000)
+    await pg.wait_for_timeout(1000)
+    if not await pg.evaluate("getComputedStyle(document.documentElement).getPropertyValue('--act') !== ''"):
+        print("skip the one lamp (server older than 0.37)")
+        return await ctx.close()
+    check(await pg.evaluate("document.fonts.ready.then(() => document.fonts.check('14px \"Atkinson Hyperlegible Next\"'))"), "the interface's own font loaded")
+    lamp = await pg.evaluate("""() => { const b = document.querySelector('.inbox-count'), was = b.textContent, look = () => getComputedStyle(document.querySelector('.sidebar .brand'), '::before').backgroundColor;
+      const amber = (() => { const d = document.createElement('i'); d.style.color = 'var(--amber)'; document.body.append(d); const c = getComputedStyle(d).color; d.remove(); return c; })();
+      b.textContent = ''; const off = look(); b.textContent = '1'; const on = look(); b.textContent = was; return {off, on, amber}; }""")
+    check(lamp["on"] == lamp["amber"] and lamp["off"] != lamp["amber"], f"the lamp lights only when something needs you {lamp}")
+    wide = await pg.evaluate("""() => ({right: getComputedStyle($('side')).display, note: $('note').getBoundingClientRect().width, recent: !!document.querySelector('.home-recent')})""")
+    check(wide["right"] == "none" and wide["note"] > 800 and wide["recent"], f"the notes overview takes the width, what changed lately first {wide}")
+    await route(pg, "#/map", "#g2d canvas", 1500)
+    map_ = await pg.evaluate("""() => ({w: $('graph').getBoundingClientRect().width, main: document.querySelector('.main').getBoundingClientRect().width, left: getComputedStyle($('topics-pane')).display, right: getComputedStyle($('side')).display})""")
+    check(map_["w"] >= map_["main"] - 2 and map_["left"] == "none" and map_["right"] == "none", f"the map takes the whole page until a note is chosen {map_}")
+    await route(pg, "#/machines", "#machines .machine, #machines p", 800)
+    fold = await pg.evaluate("""() => { const off = [...document.querySelectorAll('.machine.offline')]; return {n: off.length, folded: off.filter((m) => m.querySelector(':scope > .machine-fold') && m.querySelector('.machine-head .machine-meta')).length, order: [...document.querySelectorAll('.machine')].map((m) => m.classList.contains('offline'))}; }""")
+    check(fold["n"] == fold["folded"] and fold["order"] == sorted(fold["order"]), f"offline pcs come last, on one line with the rest folded {fold}")
+    await route(pg, "#/tasks", "#tasks > *", 1000)
+    spill = await pg.evaluate("""() => { const t = $('tasks').textContent; return {none: /No tasks in /.test(t), others: /In your other projects/.test(t), rows: document.querySelectorAll('#tasks li.task').length, badge: $('tasks-count').textContent}; }""")
+    check(not spill["others"] or (spill["rows"] > 0 and spill["badge"] != ""), f"a project without tasks shows the work elsewhere, and the badge counts it {spill}")
+    await route(pg, "#/chats", "", 1500)
+    send = await pg.evaluate("""async () => { const f = [...document.querySelectorAll('.ck-box')].find((b) => b.offsetParent); if (!f) return null; const t = f.querySelector('textarea'), s = f.querySelector('.ck-send'), was = t.value, bg = () => getComputedStyle(s).backgroundColor;
+      t.value = ''; await new Promise((r) => setTimeout(r, 300)); const empty = bg(); t.value = 'x'; await new Promise((r) => setTimeout(r, 300)); const typed = bg(); t.value = was; return {empty, typed}; }""")
+    if send is None:
+        print("skip Send wakes up (no open chat)")
+    else:
+        check(send["empty"] == "rgba(0, 0, 0, 0)" and send["typed"] != send["empty"], f"Send is quiet until there is something to send {send}")
+    check(not errors, f"no page errors on the lamp checks {errors[:2]}")
+    await ctx.close()
+
+
 async def design_system(browser, devices, secret: str) -> None:
     ctx, pg, errors = await page(browser, secret, "/ui#/inbox", viewport={"width": 1280, "height": 860})
     await pg.wait_for_selector("#ck-list", state="attached")
@@ -1427,7 +1464,7 @@ async def design_system(browser, devices, secret: str) -> None:
     for v in views:
         await route(pg, v, "", 900)
         r = await pg.evaluate(DS_JS)
-        check(r["n"] > 0 and not r["bad"], f"design system {v}: {r['n']} buttons, all 36/28 px with an 8 px radius, fields alike, chips quiet {r['bad'][:4]}")
+        check(r["n"] > 0 and not r["bad"], f"design system {v}: {r['n']} buttons, all 36/28 px with a 6 px radius, fields alike, chips quiet {r['bad'][:4]}")
     check(not await pg.locator("#ck-resets").is_visible(), "the usage-limit reset chip stays off a view outside Agents")
     for path in ("/ui/admin", "/ui/help"):
         await pg.goto(URL + path); await pg.wait_for_timeout(1200)
@@ -1468,6 +1505,7 @@ async def main() -> None:
         await follow(browser, p.devices, secret)
         await live_refresh(browser, secret)
         await design_system(browser, p.devices, secret)
+        await one_lamp(browser, secret)
         await browser.close()
     print("ok" if not failures else f"{len(failures)} failed")
     sys.exit(1 if failures else 0)

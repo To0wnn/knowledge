@@ -55,17 +55,36 @@ Moved from the README; [back to the README](../README.md).
 
 ## Design system
 
+One idea: **one lamp**. Amber means "this needs you" and nothing else: the lamp before the name (dark until something
+waits, then lit with one ring), the Needs-you count, a chat or row that waits, an approval, a token shown once. What you
+act on or have selected is spruce (`--act`, `--act-soft`, `--act-text`); red (`--bad`) is only for what is broken or
+dangerous, such as YOLO. Surfaces are flat, without blur: the sidebar on `--rail`, pages on `--canvas`, raised things on
+`--panel`, rows divided by a hairline instead of boxed in cards. The dotted grid is only on the map, where graph paper
+means something. `server/test_server.py` checks the contrast of the tokens in both themes (text 4.5:1, map colours 3:1).
+
+Type is Atkinson Hyperlegible Next and its Mono, self-hosted in `static/vendor` (SIL OFL, latin subset, 34 and 18 kB;
+other scripts fall back to the system font): chosen because it keeps l, I, 1 and 0, O apart in the ids and paths this
+tool is full of. Sizes are 11, 12, 13, 14, 16, 20 and 26 px; headings are in sentence case.
+
 One small set of controls in `server/static/app.css` ("Controls"), shared by the companion page (`.cmp-btn`,
 `.cmp-iconbtn`, same sizes) through the token block both files carry (`--r-sm`, `--h-btn`, `--h-btn-sm`):
 
-- **Buttons** are 8 px rectangles in two sizes, 36 px and `.small` 28 px (44 px on a phone), chosen by class, never by
+- **Buttons** are 6 px rectangles in two sizes, 36 px and `.small` 28 px (44 px on a phone), chosen by class, never by
   where they sit: `.btn` (secondary), `.btn.primary`, `.btn.quiet`, `.btn.danger`, `.btn.icon`. A pressed toggle or an
-  open `<details>` button wears the amber tint. Inputs and selects are as high as the buttons beside them.
-- **Clickable rows and cards** (`.row-link`, a row in the Agents list) tint on hover, underline their title and
-  end in a `›`. **Disclosures** always show `▸`/`▾`, also on a phone; a menu shows `▾`.
+  open `<details>` button wears the spruce tint. Inputs and selects are as high as the buttons beside them. Send is
+  quiet until there is something to send, so a grid of open chats is not a wall of filled buttons.
+- **Clickable rows** (`.row-link`, a row in the Agents list) tint on hover and underline their title. **Disclosures**
+  always show a drawn chevron that turns, also on a phone; a menu has one after its label.
 - **Links** have one look: the accent ink with a soft underline (never the browser's blue).
-- **Status chips** (`.chip`, `.pill`, `.badge`, counts) are the only pills and never look clickable: no border, the
-  default cursor. One focus ring everywhere: 2 px amber, outside the element (inside only where a box clips it).
+- **Status chips** (`.chip`, `.pill`, `.badge`, counts) are small labels with 4 px corners and never look clickable: no
+  border, the default cursor. One focus ring everywhere: 2 px spruce, outside the element (inside only where a box clips it).
+
+**Layout that follows the content:** the map takes the whole page, the chosen note's card floats over it; the Notes
+overview has no right column, what changed lately comes first and then the notes per topic; a project without tasks
+shows the open tasks of your other projects instead of an empty page (the sidebar count follows); on Machines offline
+pcs come last, as one line with their last report folded, and Update plugin is a button only on an online pc with an
+older plugin than another of your pcs reports (otherwise in the ⋯ menu); the Deleted section of Changes shows only with
+something in it; an agent's prose stops at 78 characters while its code and tool lines keep the whole width.
 
 ## Graph
 

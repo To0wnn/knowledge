@@ -72,7 +72,7 @@ async def shoot_agents() -> None:
                     ctx = await browser.new_context(viewport={"width": 1400, "height": 820}, device_scale_factor=2, color_scheme=scheme,
                                                     extra_http_headers=head)
                     pg = await ctx.new_page()
-                    await pg.goto(ui_ci.BASE + "/ui#/chats")
+                    await pg.goto(ui_ci.BASE + "/ui#/chats?view=list")
                     await pg.wait_for_selector("#ck-history .ck-chat, #ck-list .ck-item", timeout=20000)
                     await pg.locator("#ck-history .ck-chat, #ck-list .ck-item-main").first.click()
                     await pg.wait_for_selector("#ck-canvas .ck-card .ck-msg", timeout=20000)

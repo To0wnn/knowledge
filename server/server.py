@@ -4572,7 +4572,7 @@ async def ui_admin_token(request: Request, body: dict):
 # like /ui/static (index.html links it with crossorigin="use-credentials" so a sign-in proxy in front lets it through).
 MANIFEST = json.dumps({
     "name": "Knowledge", "short_name": "Knowledge", "id": "/ui", "start_url": "/ui#/inbox", "scope": "/ui",
-    "display": "standalone", "theme_color": "#eef0f3", "background_color": "#eef0f3",
+    "display": "standalone", "theme_color": "#14594f", "background_color": "#f0f2ee",
     "icons": [{"src": f"/ui/static/icons/{n}-{s}.png", "sizes": f"{s}x{s}", "type": "image/png", "purpose": p}
               for n, p in (("icon", "any"), ("maskable", "maskable")) for s in (192, 512)]})
 

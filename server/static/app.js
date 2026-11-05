@@ -446,7 +446,7 @@ function splitFront(text) {
 // One date format for every view: relative under a day ("21 h ago"), else "1 Nov 2026" (no day/month order to
 // guess); a time of day in the browser's own locale.
 const fmtDay = (sec) => new Date(sec * 1000).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
-const fmtClock = (sec) => new Date(sec * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const fmtClock = (sec) => new Date(sec * 1000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
 const fmtTime = (sec) => `${fmtDay(sec)}, ${fmtClock(sec)}`;
 const fmtIso = (iso) => (/^\d{4}-\d\d-\d\d$/.test(iso || "") ? fmtDay(Date.parse(`${iso}T12:00`) / 1000) : iso); // a due date "2026-10-21"
 const age = (sec) => { const d = Date.now() / 1000 - sec; return d < 90 ? "" : d < 3600 ? `${Math.round(d / 60)} min` : d < 86400 ? `${Math.round(d / 3600)} h` : null; };
@@ -497,10 +497,10 @@ async function homeView() {
   if (current || editing || p !== project) return; // the user opened something or switched meanwhile
   homeNote = note;
   if (!data.nodes.length) return; // the map data is still loading: its arrival draws the home view
-  homeSide();
   const body = splitFront(note.text).body, groups = topicGroups();
   if (p !== ALL && (!/^## /m.test(body) || !groups.length)) { // no headings yet: the index as it is
     const md = el("div", "md"); md.innerHTML = renderMd(body);
+    homeRecent($("side"));
     $("note").replaceChildren(el("div", "note-empty muted", "Pick a note from the list or search. Index of this project:"), md);
     return;
   }
@@ -526,28 +526,29 @@ async function homeView() {
     }
     grid.append(card);
   }
-  $("note").replaceChildren(head, grid);
+  const recent = el("section", "home-recent"); homeRecent(recent);
+  $("note").replaceChildren(head, recent, grid);
   document.body.classList.add("home"); // phone: the cards replace the topic list
 }
 
-// The right column on the home view: what changed lately and what lint asks for, instead of an empty panel.
-async function homeSide() {
+// On the home view, above the topics: what changed lately, with a way to what lint asks for.
+async function homeRecent(target) {
   const p = project;
   let res; try { res = await api(`/ui/api/recent?project=${p}`); } catch { return; }
   if (current || p !== project) return;
-  const box = el("div", "connected"), list = el("ol", "hits");
-  for (const f of res.files.slice(0, 8)) {
+  const list = el("ol", "hits"), top = el("div", "home-recent-head");
+  for (const f of res.files.slice(0, 6)) {
     list.append(hitItem(nameEl(f.path), `${ago(f.mtime)} · ${f.session ? f.session.device : f.by === "VM" ? "on the VM" : writer(f.by)}`, () => openNote(f.path)));
   }
   if (!res.files.length) list.append(el("li", null, emptyState("No changes yet: edits to memos and docs show here.")));
   const all = el("button", "btn small", "All changes"); all.onclick = () => go("#/changes");
-  box.append(el("h3", null, "Recently changed"), list, all);
+  top.append(el("h3", null, "Recently changed"), all);
   const lint = $("lint-count").textContent;
   if (lint) {
-    const b = el("button", "btn small", `${lint} lint findings`); b.onclick = () => go("#/health");
-    box.append(el("h3", "home-lint", "Housekeeping"), b);
+    const b = el("button", "btn small", `${lint} health finding${lint === "1" ? "" : "s"}`); b.onclick = () => go("#/health");
+    top.append(b);
   }
-  $("side").replaceChildren(box);
+  target.replaceChildren(top, list);
 }
 
 // The open note is marked in the topic list, and its topic unfolded.
@@ -1004,7 +1005,7 @@ async function loadTrash(p) {
   const res = await api("/ui/api/trash");
   if (p !== project || $("tab-changes").hidden) return;
   const items = res.items.filter((i) => allMode() || i.project === p), card = el("details", "card trash");
-  card.id = "trash"; card.open = trashOpen; card.ontoggle = () => { trashOpen = card.open; };
+  card.id = "trash"; card.hidden = !items.length; card.open = trashOpen; card.ontoggle = () => { trashOpen = card.open; };
   const sum = el("summary", "sub", "Deleted"); sum.append(el("span", "badge", String(items.length)));
   const list = el("ol", "hits");
   for (const i of items.slice(0, 100)) {
@@ -1080,17 +1081,19 @@ let agentProject = project === ALL ? "" : project; // the Agents views' project:
 async function loadTasks(render = true) {
   const res = await api(render ? "/ui/api/tasks?hosts=1" : "/ui/api/tasks"), all = res.tasks.filter((t) => !t.done);
   // the badge follows the project picker, as the list does (the Health badge too); its title has both counts
-  const here = all.filter((t) => !agentProject || t.project === agentProject);
-  $("tasks-count").textContent = here.length || "";
-  $("tasks-count").className = here.some((t) => t.overdue) ? "badge warn" : "badge";
+  const here = all.filter((t) => !agentProject || t.project === agentProject), counted = here.length ? here : all; // as the list below
+  $("tasks-count").textContent = counted.length || "";
+  $("tasks-count").className = counted.some((t) => t.overdue) ? "badge warn" : "badge";
   $("tasks-count").title = agentProject ? `${here.length} open in ${agentProject}, ${all.length} in all projects` : `${all.length} open in all projects`;
-  const tasks = res.tasks.filter((t) => !agentProject || t.project === agentProject), open = tasks.filter((t) => !t.done), back = tasks.filter((t) => t.done);
+  const inProject = res.tasks.filter((t) => !agentProject || t.project === agentProject), spill = !!agentProject && !inProject.length && res.tasks.length > 0;
+  const tasks = spill ? res.tasks : inProject, open = tasks.filter((t) => !t.done), back = tasks.filter((t) => t.done);
   if (!render) return;
   const box = $("tasks"); box.replaceChildren();
   const elsewhere = all.length - open.length; // the badge counts every project: say what the picker hides
   const showAll = () => actionButton(`${elsewhere} in other projects: show`, () => switchProject(ALL), "btn small ck-elsewhere");
   // the state first: nothing here (and how much elsewhere), or the lists with a pointer to the other projects
-  if (!tasks.length) box.append(emptyState(`No tasks${agentProject ? ` in ${shown(agentProject)}` : ""}${elsewhere ? " ·" : ": when an agent hands work to another in a memo, it shows here."}`, ...(elsewhere ? [showAll()] : [])));
+  if (!tasks.length) box.append(emptyState(`No tasks${agentProject ? ` in ${shown(agentProject)}` : ""}: when an agent hands work to another in a memo, it shows here.`));
+  else if (spill) box.append(emptyState(`No tasks in ${shown(agentProject)}. In your other projects:`));
   else if (elsewhere) box.append(showAll());
   // the workers of these tasks, from the Machines list: progress and Stop/Restart live with the task, not the pc
   const machines = await api("/ui/api/machines").then((r) => (Array.isArray(r) ? r : r.machines || [])).catch(() => []);
@@ -1102,7 +1105,7 @@ async function loadTasks(render = true) {
     const li = hitItem(`${t.id} · ${t.owner}`, inlineCode(t.text), () => openNote(t.path, { find: [t.id.toLowerCase()] }));
     const meta = el("span", "hit-text", [t.done ? "" : `${t.from || "?"} → ${t.owner}`, t.done ? "" : `start ${t.start}`,
       t.due && `due ${fmtIso(t.due)}`, t.done && t.since && `handed back ${ago(t.since)}`, t.claimed && "claimed", t.waiting_reason, t.runs, noteName(t.path).title,
-      agentProject ? "" : shown(t.project)].filter(Boolean).join(" · "));
+      agentProject && !spill ? "" : shown(t.project)].filter(Boolean).join(" · "));
     if (t.legacy) meta.prepend(el("span", "badge", "legacy"), " ");
     if (t.stalled) meta.prepend(el("span", "new", "stalled"), " ");
     if (t.overdue) meta.prepend(el("span", "chip bad", "overdue"), " ");
@@ -1137,7 +1140,7 @@ async function loadTasks(render = true) {
         if (!owner) return;
         await post("/ui/api/task/assign", { project: t.project, id: t.id, owner, device: where.value }); toast(`${t.id} → ${owner}${where.value ? "@" + where.value : ""}`, false); });
       form.append(who, where, save);
-      const b = act("Assign…", "Give this task to another agent or person, optionally on one pc", () => { form.hidden = !form.hidden; });
+      const b = act("Assign…", "Give this task to another agent or person, optionally on one pc", () => { form.hidden = !form.hidden; }, "btn small quiet");
       if (!t.can_cancel) { b.disabled = true; b.title = "Only the project's owner or an admin, and not while it is being worked on"; }
       acts.append(form);
     }
@@ -1148,7 +1151,7 @@ async function loadTasks(render = true) {
         if (why === null) return;
         await post("/ui/api/task/cancel", { project: t.project, id: t.id, reason: why });
         toast(`${t.id} cancelled`, false);
-      }));
+      }), "btn small quiet risky");
       if (!t.can_cancel) { b.disabled = true; b.title = held ? "Being worked on: stop its worker first (here, under the task), then cancel" : "Only the project's owner or an admin may cancel a task"; }
     } else if (t.done && me.writable?.includes(t.project)) act("Remove", "Read it? Remove the line from the memo (its history keeps it)", run(async () => {
       if (confirm(`Remove ${t.id} from ${t.path}?`)) await post("/ui/api/task/done", { path: t.path, line: t.line });
@@ -1208,12 +1211,22 @@ function machineButton(text, title, onclick) {
   return b;
 }
 // What acts on the whole pc sits in its card head: Chat and Update plugin, Forget (destructive) behind ⋯ with a confirm.
+// The newest plugin any of your pcs reports, when this pc has an older one ("" otherwise).
+const versionParts = (v) => String(v).split(".").map(Number);
+const versionNewer = (a, b) => { const x = versionParts(a), y = versionParts(b); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); return false; };
+function pluginBehind(m) {
+  const plugins = (pc) => Object.values(pc.agents || {}).map((ag) => ag.plugin).filter(Boolean);
+  const newest = machinesCache.flatMap(plugins).reduce((a, v) => (versionNewer(v, a) ? v : a), "0");
+  return plugins(m).some((v) => versionNewer(newest, v)) ? newest : "";
+}
 function machineActions(m) {
   const box = el("span", "machine-actions"), c = m.companion;
   if (c && (c.agents || []).length && (c.folders?.linked || []).length) box.append(machineButton("Chat", "Talk to an agent on this pc (Chats)", async () => { go("#/chats"); if (!ck.machines.length) await ckSummary().catch(() => {}); ckNewChat(m.id); }));
-  if (c) box.append(machineButton("Update plugin", "Update the knowledge plugin of every agent there", () => machineAction(m, "update_plugin")));
+  const update = () => machineAction(m, "update_plugin"), behind = c && pluginBehind(m);
+  if (behind && m.online) box.append(machineButton("Update plugin", `Update the knowledge plugin of every agent there (${behind} is out)`, update));
   const menu = el("details", "menu machine-more"), sum = el("summary", "btn small icon", "⋯"), list = el("div", "menu-list");
   sum.setAttribute("aria-label", `More for ${m.label}`); sum.title = "More";
+  if (c && !(behind && m.online)) list.append(actionButton("Update plugin", () => { menu.open = false; update(); }, ""));
   list.append(actionButton("Forget this pc…", async () => {
     menu.open = false;
     if (!confirm(`Forget ${m.label}? It leaves this list and comes back when it reports again; its actions and history here go.`)) return;
@@ -1277,7 +1290,7 @@ async function loadMachines() {
     const how = el("a", "btn small", "How to install"); how.href = "/ui/help#install";
     box.append(emptyState("No pcs yet: a pc shows up here, with its agents and workers, once it runs the knowledge setup.", how));
   }
-  for (const m of res.machines) {
+  for (const m of [...res.machines].sort((a, b) => !!b.online - !!a.online)) { // stable: online first, each in the server's order
     const card = el("article", "machine" + (m.online ? "" : " offline")), head = el("div", "machine-head");
     head.append(el("h3", null, m.label));
     head.append(el("span", `pill ${m.online ? "ok" : ""}`, m.old ? "old plugin" : m.online ? "online" : offlineFor(m.at)));
@@ -1368,6 +1381,12 @@ async function loadMachines() {
       for (const x of m.actions.slice().reverse()) list.append(el("li", x.status === "failed" ? "machine-error" : null,
         `${x.action}${x.args && Object.keys(x.args).length ? ` ${Object.values(x.args).join(" ")}` : ""} · ${x.status === "waiting" ? "waiting for machine" : x.status}${x.result ? `: ${x.result}` : ""} · ${x.by} ${ago(x.at)}`));
       d.append(list); card.append(d);
+    }
+    if (!m.online) { // one line; what the pc last reported stays one click away
+      const fold = el("details", "machine-sessions machine-fold"), meta = card.children[1];
+      head.insertBefore(meta, head.children[2]);
+      fold.append(el("summary", null, "Last report"), ...[...card.children].slice(1));
+      card.append(fold);
     }
     box.append(card);
   }

@@ -1728,6 +1728,28 @@ def main():
     app_css = (Path(__file__).parent / "static" / "app.css").read_text()
     shared = app_css.split("SHARED TOKENS START */")[1].split("/* SHARED TOKENS END */")[0]
     assert decls(shared) == decls(comp.split(".cmp *, ")[0]) != [], "app.css shared tokens drifted from companion.css"
+    # The companion serves its font offline: its own copy of the web UI's file, with a type a browser accepts.
+    assert (cstatic / "atkinson-hyperlegible-next.woff2").read_bytes() == (Path(__file__).parent / "static/vendor/atkinson-hyperlegible-next-5.3.0.woff2").read_bytes()
+    assert 'url("atkinson-hyperlegible-next.woff2")' in (cstatic / "companion.css").read_text() and '".woff2": "font/woff2"' in (cstatic.parent.parent / "hooks/companion.py").read_text()
+    # Readable in both themes: text 4.5:1 on what it sits on, map colours 3:1 on the canvas (solid colours only, hex).
+    def contrast(a, b):
+        lum = lambda h: sum(w * ((c / 255 / 12.92) if c / 255 <= 0.03928 else ((c / 255 + 0.055) / 1.055) ** 2.4)
+                            for w, c in zip((0.2126, 0.7152, 0.0722), bytes.fromhex(h[1:])))
+        hi, lo = sorted((lum(a), lum(b)), reverse=True)
+        return (hi + 0.05) / (lo + 0.05)
+    own_tokens = app_css[app_css.index("The web UI's own names"):app_css.index(":root[data-theme=\"light\"] {")]
+    dark = dict(re.findall(r"--([\w-]+):\s*(#[0-9a-f]{6})\b", shared[shared.index(":root[data-theme"):]))
+    dark.update(re.findall(r"--([\w-]+):\s*(#[0-9a-f]{6})\b", own_tokens[own_tokens.index(":root[data-theme=\"dark\"] {"):]))
+    light = dict(re.findall(r"--([\w-]+):\s*(#[0-9a-f]{6})\b", shared[:shared.index("@media")]))
+    light.update(re.findall(r"--([\w-]+):\s*(#[0-9a-f]{6})\b", own_tokens[:own_tokens.index("@media")]))
+    for t in (light, dark):
+        for fg, bgs in (("ink", ("canvas", "rail", "panel", "panel-solid", "panel-hi")), ("muted", ("canvas", "rail", "panel", "panel-solid", "panel-hi")),
+                        ("act-text", ("canvas", "rail", "panel", "panel-solid")), ("accent", ("canvas", "panel")), ("on-act", ("act",)), ("on-amber", ("amber",)),
+                        ("amber-ink", ("canvas", "panel")), ("ok", ("canvas", "panel")), ("warn", ("canvas", "panel")), ("bad", ("canvas", "panel"))):
+            for bg in bgs:
+                assert contrast(t[fg], t[bg]) >= 4.5, (fg, bg, t[fg], t[bg], round(contrast(t[fg], t[bg]), 2))
+        for k in [k for k in t if k.startswith("g-")]:
+            assert contrast(t[k], t["canvas"]) >= 3, (k, t[k], round(contrast(t[k], t["canvas"]), 2))
     tmp = Path(tempfile.mkdtemp())
     mem, lab, cla = tmp / "memory", tmp / "homelab", tmp / "claude"
     for d in (mem, lab, cla / "skills/x"):

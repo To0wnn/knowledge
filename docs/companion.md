@@ -37,7 +37,7 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   `~/.knowledge/machine.json` with the host name as label; `KNOWLEDGE_HOME` moves `~/.knowledge`). Leases and wakes key
   on token + machine, so one token on two pcs is two holders. The server keeps per machine and agent the sessions of
   the last two hours (project, held task) and what the machine's companion reports; the Tasks tab lists them under
-  "Machines": online or "offline since", per agent its plugin, a red YOLO pill, hooks trusted, usage limit (or
+  "Machines": online or "offline since", per agent its plugin, a red YOLO label, hooks trusted, usage limit (or
   "unknown"), last hook error, workers and recent sessions. A person sees the machines of their own tokens; an admin
   all. A machine id belongs to the person (or the admins) whose token first reported it; another
   person's token on the same pc gets a machine record of its own and never sees or steers the first one. Plugins before 0.15 show as one "old plugin" row per token.

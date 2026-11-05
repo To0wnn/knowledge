@@ -51,7 +51,7 @@ async function ckSummary() {
   // one chip per agent with a known limit: "Claude 82% · Mon 12:00"; amber from 80%, red from 95%
   const chips = Object.values(worst).sort((a, b) => b.limit - a.limit).map((w) => {
     const at = new Date(w.resets * 1000), far = w.resets - now > 86400; // a weekly or monthly window: say the day too
-    const when = far ? at.toLocaleString([], { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const when = far ? at.toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).replace(",", "") : at.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
     const c = el("span", `chip${w.limit >= 95 ? " bad" : w.limit >= 80 ? " warn" : ""}`, `${(AGENT_NAME[w.agent] || w.agent).replace(" Code", "")} ${Math.round(w.limit)}% · ${when}`);
     c.title = `${AGENT_NAME[w.agent] || w.agent} on ${w.label}: ${Math.round(w.limit)}% of its usage limit used; resets ${at.toLocaleString()}`;
     return c;
