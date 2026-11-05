@@ -342,6 +342,12 @@ body.home[data-view="notes"] .kn > .right { display: none; }
   body[data-view="map"] .kn > .left { position: absolute; z-index: 3; top: 12px; left: 12px; width: 240px; max-height: calc(100% - 24px); padding: 6px; border: 1px solid var(--line-hi); border-radius: var(--r-lg); background: var(--panel-solid); }
   body[data-view="map"] .kn:has(> .right .map-card) > .left, body[data-view="map"] .kn > .right:not(:has(.map-card)) { display: none; }
   body[data-view="map"] .kn > .right { max-height: none; border-top: 0; border-left: 1px solid var(--line); }
+  /* folded to its colour dots, a legend that covers nothing; pointer or keyboard unfolds it */
+  body[data-view="map"] .kn > .left:has(.topic):not(:hover, :focus-within) { width: 34px; padding: 6px 0; overflow: hidden; }
+  body[data-view="map"] .kn > .left:has(.topic):not(:hover, :focus-within) .topic summary { justify-content: center; min-height: 24px; padding: 0; font-size: 0; }
+  body[data-view="map"] .kn > .left:has(.topic):not(:hover, :focus-within) .topic summary::before,
+  body[data-view="map"] .kn > .left:has(.topic):not(:hover, :focus-within) .topic summary .n,
+  body[data-view="map"] .kn > .left:has(.topic):not(:hover, :focus-within) .topic .hits { display: none; }
 }
 
 /* narrower screens: connected notes under the note */

@@ -79,7 +79,7 @@ One small set of controls in `server/static/app.css` ("Controls"), shared by the
 - **Status chips** (`.chip`, `.pill`, `.badge`, counts) are small labels with 4 px corners and never look clickable: no
   border, the default cursor. One focus ring everywhere: 2 px spruce, outside the element (inside only where a box clips it).
 
-**Layout that follows the content:** the map takes the whole page with the topic list floating over it, and a chosen note's card opens as a column beside it; the Notes
+**Layout that follows the content:** the map takes the whole page with the topic list floating over it, folded to its colour dots until you point at it, and a chosen note's card opens as a column beside it; the Notes
 overview has no right column, what changed lately comes first and then the notes per topic; a project without tasks
 shows the open tasks of your other projects instead of an empty page (the sidebar count follows); on Machines offline
 pcs come last, as one line with their last report folded (open when something in it needs you or an action waits), and Update plugin is a button only on an online pc with an
