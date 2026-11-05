@@ -47,6 +47,7 @@ sys.path.insert(0, str(HOOKS))
 import model_settings  # noqa: E402  (next to this file)
 import agent_hooks  # noqa: E402  (the wake code and the session registry)
 import chat  # noqa: E402  (chats from the web UI)
+import hook_status  # noqa: E402  (failures reported to the server)
 import project_marker  # noqa: E402
 import self_update  # noqa: E402
 import token_store  # noqa: E402
@@ -116,10 +117,23 @@ def version() -> str:
 
 # ---------------------------------------------------------------- files
 
+DAMAGED: set = set()  # state files already reported by this process
+
+
 def load(name: str, default):
+    """A state file, or the default when it does not exist yet. An empty or broken one also gives the default, but says
+    so: looking like a first start would silently turn off what the owner had set (Workers allowed)."""
     try:
         return json.loads((STATE / name).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except FileNotFoundError:
+        return default
+    except (OSError, ValueError) as e:
+        if name not in DAMAGED:
+            DAMAGED.add(name)  # first: log() reads activity.json through here
+            text = f"Companion state {name} is damaged, so its defaults apply: check this pc's settings"
+            print(f"knowledge companion: {text} ({e})", file=sys.stderr, flush=True)
+            hook_status.record("companion", "damaged state", f"{text} ({e})")  # reaches the Tasks tab
+            log("error", text, f"{e}"[:300])
         return default
 
 
@@ -150,6 +164,8 @@ def _write_text(path: Path, text: str):
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline=newline_of(path)) as f:
             f.write(text)
+            f.flush()
+            os.fsync(f.fileno())  # or a crash can leave the renamed file empty (token_store.replace_durable)
         if path.exists():  # ~/.claude.json is private: the new file keeps the old one's mode
             os.chmod(tmp, path.stat().st_mode & 0o777)
         for attempt in range(40):  # Windows: another process (a hook, a virus scanner) may hold it a moment
@@ -160,6 +176,7 @@ def _write_text(path: Path, text: str):
                 if os.name != "nt" or attempt == 39:
                     raise
                 time.sleep(0.05)
+        token_store.sync_dir(path.parent)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
@@ -1597,7 +1614,7 @@ class Handler(BaseHTTPRequestHandler):
         return o if o in (SELF, origin_of(token_store.url())) else (None if o else "")
 
     def key_ok(self) -> bool:
-        return hmac.compare_digest(self.headers.get("X-Companion-Key", ""), api_key())
+        return hmac.compare_digest(self.headers.get("X-Companion-Key", "").encode(), api_key().encode())  # bytes: a str with non-ASCII raises
 
     def host_ok(self) -> bool:  # DNS rebinding: a foreign name that resolves to 127.0.0.1 gets nothing
         return self.headers.get("Host", "") in (f"127.0.0.1:{PORT}", f"localhost:{PORT}")
@@ -2069,6 +2086,9 @@ def chats_loop():
         time.sleep(min(2.0, ACTIONS_EVERY) if active else ACTIONS_EVERY)
 
 
+DRAIN_MAX = 16 << 20  # bytes read and thrown away after an answer
+
+
 class LocalServer(ThreadingHTTPServer):
     """One companion per pc: its port is the lock. On Windows SO_REUSEADDR would let a second one bind the same port
     (and both start the same tasks), so there the port is taken exclusively instead."""
@@ -2080,6 +2100,23 @@ class LocalServer(ThreadingHTTPServer):
         # Not HTTPServer's own: it asks reverse DNS for its address (socket.getfqdn), about 35 s per start on a Mac whose DNS gives no answer.
         socketserver.TCPServer.server_bind(self)
         self.server_name, self.server_port = self.server_address[:2]
+
+    def shutdown_request(self, request):
+        """Every answer ends here, also one sent before the body was read (a refusal, 413, a GET with a body). Closing
+        with unread bytes makes the OS reset the connection and the client loses the answer (Windows 10053/10054), so
+        say we are done sending and read what is still coming, within limits. Past them the reset is accepted."""
+        try:
+            request.shutdown(socket.SHUT_WR)
+            request.settimeout(1)
+            left, end = DRAIN_MAX, time.monotonic() + 2
+            while left > 0 and time.monotonic() < end:
+                got = request.recv(65536)
+                if not got:
+                    break
+                left -= len(got)
+        except OSError:  # the client is gone or too slow
+            pass
+        self.close_request(request)
 
 
 def serve():
@@ -2329,6 +2366,33 @@ def main(argv: list):
             globals().update(server=real[0], folder_links=real[1])
             chat.start = real[2]
         assert started == ["c1"], started
+        hook_status.ERRORS = Path(tmp_state) / "hook-errors.jsonl"  # a damaged state file says so, once; a missing one does not
+        STATE.mkdir(parents=True, exist_ok=True); (STATE / "damaged.json").write_text("", encoding="utf-8")
+        assert load("gone.json", {"d": 1}) == {"d": 1} and not hook_status.ERRORS.exists()
+        assert load("damaged.json", {"d": 1}) == {"d": 1} and load("damaged.json", {"d": 1}) == {"d": 1}
+        said = [a for a in load("activity.json", []) if "damaged.json is damaged" in a["text"]]
+        assert len(said) == 1 and said[0]["kind"] == "error" and "damaged.json" in hook_status.ERRORS.read_text(encoding="utf-8"), said
+        calls, real_sync = [], (os.fsync, os.replace)  # the data is on disk before the rename, the rename after it
+        os.fsync = lambda fd: (calls.append("fsync"), real_sync[0](fd))[1]
+        os.replace = lambda a, b: (calls.append("replace"), real_sync[1](a, b))[1]
+        try:
+            write_text(Path(tmp_state) / "w.json", "{}")
+            token_store.replace_durable(Path(tmp_state) / "w.json", Path(tmp_state) / "x.json")
+        finally:
+            os.fsync, os.replace = real_sync
+        assert calls[:2] == ["fsync", "replace"] and "fsync" in calls[2:3] and calls[-2:][0] == "replace" and (Path(tmp_state) / "x.json").read_text() == "{}", calls
+        httpd = LocalServer(("127.0.0.1", 0), Handler)  # a client still sending gets the refusal, not a reset (6 MiB outgrows the socket buffers)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        for method, size, want in (("POST", 100, b" 403 "), ("POST", 6 << 20, b" 413 "), ("GET", 1024, b" 403 ")):
+            with socket.create_connection(httpd.server_address, timeout=10) as s:
+                s.sendall(f"{method} /local/api/tick HTTP/1.1\r\nHost: x\r\nContent-Length: {size}\r\n\r\n".encode() + b"x" * size)
+                assert want in s.recv(64), (method, size)
+        with socket.create_connection(httpd.server_address, timeout=10) as s:  # a key that is no ASCII: a refusal, not a dropped connection
+            s.sendall(f"POST /local/api/tick HTTP/1.1\r\nHost: 127.0.0.1:{PORT}\r\nOrigin: {SELF}\r\nContent-Type: application/json\r\n"
+                      "X-Companion-Key: ".encode() + b"\xe9\r\nContent-Length: 0\r\n\r\n")
+            assert b" 403 " in s.recv(64)
+        httpd.shutdown()
+        httpd.server_close()
         print("ok")
     else:
         sys.exit(__doc__)

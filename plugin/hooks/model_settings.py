@@ -12,6 +12,8 @@ import shutil
 import sys
 import tempfile
 import time
+
+import token_store
 from pathlib import Path
 
 MODEL = re.compile(r"[\w.:\[\]-]{1,80}")
@@ -96,7 +98,7 @@ def write(path: Path, text: str, home: Path) -> None:
         f.write(text)
     if path.exists():
         shutil.copymode(path, tmp)
-    os.replace(tmp, path)
+    token_store.replace_durable(tmp, path)
 
 
 def read_json(path: Path) -> dict:

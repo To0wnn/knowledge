@@ -9,7 +9,10 @@ Prints one line into the session context when it changes something; never breaks
 import json
 import os
 import sys
+
 from pathlib import Path
+
+import token_store
 
 NAME = "knowledge"  # the marketplace name in .claude-plugin/marketplace.json
 
@@ -32,7 +35,7 @@ def enable(config: Path) -> bool:
     data.setdefault("extraKnownMarketplaces", {})[NAME] = {**entry, "source": source, "autoUpdate": True}
     tmp = settings.with_name(settings.name + ".knowledge-tmp")
     tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    os.replace(tmp, settings)
+    token_store.replace_durable(tmp, settings)
     return True
 
 

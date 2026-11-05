@@ -1128,6 +1128,9 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         big = {"agent": "codex", "pad": "x" * 60000}  # a refusal sent before the body was read made Windows reset the connection (10053)
         check(all(_quiet(lambda: call("POST", "/local/api/yolo", big, key=False)[0] == 403) for _ in range(20)),
               "companion: a refused POST reads its body first (no connection reset)")
+        big = {"agent": "codex", "pad": "x" * 300000}  # past the 64 KiB it reads: the server's closing drain must save the answer
+        check(all(_quiet(lambda: call("POST", "/local/api/yolo", big, key=False)[0] == 413) for _ in range(20)),
+              "companion: a too large POST gets its 413, not a connection reset")
         st, _, body = call("GET", "/local/api/state", origin=None, key=False)
         check(st == 200 and json.loads(body).get("locked") and "tasks" not in json.loads(body) and "activity" not in json.loads(body)
               and json.loads(body)["agents"], "companion: without the key the state shows the agents only (the web UI's tab)", body[:300])
@@ -2345,6 +2348,21 @@ def codex_plugin(tok: str, home: Path, project: Path):
     check(set(replies) == {1, 2} and "taxi" in json.dumps(replies[2].get("result")), "codex plugin: the stdio MCP server answers initialize and knowledge_search", out[:400] + err[-400:])
     code, out, err = run([exe, *server["args"]], json.dumps(msgs[2]) + "\n", {**env, "KNOWLEDGE_TOKEN": "wrong"}, cwd=str(root))
     check("token invalid" in out, "codex plugin: a wrong token answers with a plain reason", out[:300] + err[-300:])
+    if not WIN:  # a keyring tool that finds nothing: Windows has the real Credential Manager in-process
+        fake = home / "No Keyring"
+        fake.mkdir(exist_ok=True)
+        for tool in ("secret-tool", "security"):
+            (fake / tool).write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+            (fake / tool).chmod(0o755)
+        none = {k: v for k, v in env.items() if k != "KNOWLEDGE_TOKEN"}
+        none = {**none, "PATH": f"{fake}{os.pathsep}{os.environ['PATH']}", "HOME": str(fake)}
+        code, out, err = run([exe, *server["args"]], json.dumps(msgs[2]) + "\n", none, cwd=str(root))
+        check("no token is stored" in out and "install.sh" in out and "token invalid" not in out,
+              "codex plugin: no token says so and what to run, not that it is invalid", out[:300] + err[-300:])
+        code, out, err = run([bash(), "-c", f'sh "{(root / "hooks" / "context.sh").as_posix()}" 1'], "",
+                             {**none, "KNOWLEDGE_URL": BASE, "CLAUDE_PROJECT_DIR": str(fake)})
+        check("no token is stored" in out and "token invalid" not in out,
+              "claude: no token says so at session start, not that it is invalid", out[:300] + err[-300:])
     codex = shutil.which("codex")
     if not codex:
         return print("skip codex plugin install (codex not installed)")
@@ -2680,6 +2698,7 @@ def installer(tok: str, tmp: Path):
     have = [a for a in ("claude", "codex") if shutil.which(a)]
     if have:  # agy is not installed on the CI runners
         code, out, err = run([sys.executable, str(agent), "setup"], "", env, timeout=600)
+        check(out.rstrip().splitlines()[-1].startswith("Try it:"), "setup: the last line says what to try", out[-300:])
         check(code == 0 and "Already set up (" in out and all(f"== {a} ==" in out for a in have) and "== agy ==" not in out
               and "== companion (" in out and re.search(r'companion\.py"? trust', out),
               f"setup (the one-line installer), once set up: every agent with the plugin is updated ({', '.join(have)}), no questions", (out + err)[-1500:])
@@ -2939,8 +2958,70 @@ def claude_stored_token(tmp: Path):
     code, out, err = run([sys.executable, "-c", "import token_store as t; print(repr(t.url()))"], env=bare, cwd=CLIENT / "plugin" / "hooks")
     check(out.strip() == "''", "no built-in server: url() is empty when nothing names one", out + err)
     code, out, err = run([sys.executable, str(CLIENT / "plugin" / "hooks" / "agent_hooks.py"), "context", "codex"], "{}", bare)
-    check("no server address is set" in out and "knowledge-agent.py setup" in out,
-          "no server set: the session start says how to connect, and calls no server", out + err)
+    hooks = CLIENT / "plugin" / "hooks"
+    installer = "install.sh | sh"
+    check("no server address is set" in out and installer in out and "install.ps1 | iex" in out,
+          "no server set: Codex's session start says how to connect, and calls no server", out + err)
+    code, out, err = run([sys.executable, str(hooks / "agent_hooks.py"), "context", "agy"], "{}", bare)
+    check("no server address is set" in out and installer in out, "no server set: agy's session start says how to connect", out + err)
+    code, out, err = run([bash(), "-c", f'sh "{(hooks / "context.sh").as_posix()}" 1'], "",
+                         {**bare, "PATH": os.environ["PATH"], "CLAUDE_PROJECT_DIR": str(tmp)})
+    check("no server address is set" in out and installer in out, "no server set: Claude's session start says how to connect", out + err)
+    # Odd input never fails a hook: Codex shows "hook: PostToolUse Failed" on a non-zero exit or broken JSON (not all agents send the same).
+    named = {**bare, "KNOWLEDGE_URL": "http://127.0.0.1:9", "KNOWLEDGE_TOKEN": "x", "KNOWLEDGE_YOLO": "1", "KNOWLEDGE_HOME": str(tmp / "Odd Hooks")}
+    def clean(out):  # as Codex reads it: plain text is fine, what looks like JSON must parse
+        try:
+            return not out.lstrip().startswith(("{", "[")) or isinstance(json.loads(out), dict)
+        except ValueError:
+            return False
+    for agent in ("claude", "codex", "agy"):
+        bad = []
+        for odd in ("", "nope", "[1]", "null", '{"cwd":5,"tool_input":[1]}', '{"toolCall":"x"}', '{"tool_input":"' + "x" * 200000 + '"}'):
+            for cmd in ([str(hooks / "watch.py"), agent], [str(hooks / "agent_hooks.py"), "wake", agent], [str(hooks / "agent_hooks.py"), "docs-sync"]):
+                code, out, err = run([sys.executable, "-X", "utf8", *cmd], odd, named, cwd=tmp)
+                if code != 0 or not clean(out):
+                    bad.append(f"{cmd[-2:]} {odd[:30]!r}: {code} {out[:200]} {err[-300:]}")
+        check(not bad, f"{agent}: the PostToolUse hooks exit 0 with clean output on odd input", "; ".join(bad)[:1000])
+
+
+def codex_worker_sandbox(tmp: Path):
+    """A real Codex sandbox with the folders a worker gets: it commits on its task branch and cannot move main."""
+    codex = shutil.which("codex")
+    if not codex or not sys.platform.startswith("linux"):
+        return print("skip codex worker sandbox (needs codex on Linux)")
+    home, repo, wt = tmp / "Sandbox Home", tmp / "sandbox repo", tmp / "sandbox wt"
+    (home / ".codex").mkdir(parents=True)
+    env = user_env(home, PATH=os.environ["PATH"], GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",
+                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com")
+    def git(*args, cwd=repo):
+        return run(["git", *args], "", env, cwd=str(cwd), timeout=60)
+    repo.mkdir()
+    git("-c", "init.defaultBranch=main", "init", "-q")
+    git("commit", "-q", "--allow-empty", "-m", "one")
+    git("worktree", "add", "-q", "-b", "task/T1", str(wt), "HEAD")
+    main_at = git("rev-parse", "main")[1].strip()
+    probe = ("import json, workers; "
+             f"print(json.dumps(workers.codex_git_dirs({{'cwd': {str(wt)!r}, 'worktree': {str(wt)!r}}})))")
+    code, out, err = run([sys.executable, "-c", probe], "", env, cwd=CLIENT / "plugin" / "hooks")
+    roots = json.loads(out)[1::2] if code == 0 else []
+    check(any(r.endswith("task") for r in roots) and not any(r.endswith("refs") for r in roots),
+          "codex worker: of the refs only the task branches and checkpoints are writable", out + err)
+    def boxed(*args):
+        # as `exec -s workspace-write --add-dir`: everything readable, the folder and these roots writable
+        writable = ", ".join(f"{json.dumps(r)} = \"write\"" for r in [str(wt), *roots])
+        return run([codex, "sandbox", "-P", "worker", "-c", f'permissions.worker.filesystem={{":root" = "read", {writable}}}',
+                    "-C", str(wt), "--", *args], "", env, cwd=str(wt), timeout=60)
+    if boxed("true")[0] != 0:  # no user namespaces on this runner
+        return print("skip codex worker sandbox (the sandbox does not start here)")
+    (wt / "work.txt").write_text("x", encoding="utf-8")
+    code, out, err = boxed("git", "add", "work.txt")
+    code2, out2, err2 = boxed("git", "commit", "-q", "-m", "two")
+    check(code == 0 and code2 == 0 and git("log", "-1", "--format=%s", "task/T1")[1].strip() == "two",
+          "codex worker: a commit on its task branch works in the sandbox", out + err + out2 + err2)
+    code, out, err = boxed("git", "update-ref", "refs/heads/main", "HEAD")
+    code2, out2, err2 = boxed("git", "branch", "-f", "main", "HEAD")
+    check(code != 0 and code2 != 0 and git("rev-parse", "main")[1].strip() == main_at,
+          "codex worker: moving main is refused by the sandbox", out + err + out2 + err2)
 
 
 def checkout_update(tmp: Path):
@@ -3094,6 +3175,7 @@ def main():
         companion_setup(tmp)
         checkout_update(tmp)
         claude_stored_token(tmp)
+        codex_worker_sandbox(tmp)
         real_clis(tok, home)
     finally:
         proc.kill()

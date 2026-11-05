@@ -7,7 +7,7 @@ outside Claude read where Claude Code stored it, claude_option). store() writes 
 OS it runs on (clients/knowledge-agent.py install asks for the token and calls it).
 The MCP headersHelper sees no credential env vars (Claude Code strips them), so there the keyring comes first too.
 url() is the server address the same way: the Claude plugin option, KNOWLEDGE_URL, the file the setup wrote, the option
-as Claude stored it, the default.
+as Claude stored it; "" when none is set: there is no built-in server.
 `token_store.py header` prints the MCP Authorization header as JSON for Claude Code's headersHelper and Codex's
 http_headers_helper; `{}` when there is no token, so a static header still applies. Standard library only.
 """
@@ -22,8 +22,13 @@ import time
 from pathlib import Path
 
 SERVICE = "knowledge"
-NO_URL = ("knowledge: no server address is set on this device, so the knowledge server is not used. Run "
-          "`knowledge-agent.py setup` (or set KNOWLEDGE_URL) to connect it.")
+NO_URL = ("knowledge: no server address is set on this device, so the knowledge server is not used and no token was sent. "
+          "Tell the user to run the one-line installer, which asks for the address: "
+          "curl -fsSL https://raw.githubusercontent.com/To0wnn/knowledge/main/install.sh | sh (Linux, macOS), "
+          "irm https://raw.githubusercontent.com/To0wnn/knowledge/main/install.ps1 | iex (Windows); or set KNOWLEDGE_URL.")
+NO_TOKEN = ("no token is stored on this device, so the server refused it. Run the one-line installer, which asks for it: "
+            "curl -fsSL https://raw.githubusercontent.com/To0wnn/knowledge/main/install.sh | sh (Linux, macOS), "
+            "irm https://raw.githubusercontent.com/To0wnn/knowledge/main/install.ps1 | iex (Windows); or set KNOWLEDGE_TOKEN.")
 
 
 def unreachable(url: str, reason) -> str:
@@ -189,6 +194,25 @@ def headers(tok: str) -> dict:
             **({"X-Knowledge-Machine": m["id"], "X-Knowledge-Machine-Label": m["label"]} if m else {}),
             **({"X-Knowledge-Worker": w} if (w := re.sub(r"[^\w.-]", "", os.environ.get("KNOWLEDGE_WORKER", ""), flags=re.ASCII)[:60]) else {}),
             **({"X-Knowledge-Chat": "1"} if os.environ.get("KNOWLEDGE_CHAT") else {})}
+
+
+def sync_dir(folder: Path) -> None:
+    """Make a rename in this folder survive a crash; Windows cannot open a folder like this and needs none."""
+    if os.name != "nt":
+        fd = os.open(folder, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+
+def replace_durable(tmp: Path, path: Path) -> None:
+    """os.replace that survives a crash: without the fsync the rename can reach the disk before the data, and after a
+    power cut or a killed VM the file is there but empty."""
+    with open(tmp, "rb+") as f:
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+    sync_dir(Path(path).parent)
 
 
 def store_url(u: str) -> None:

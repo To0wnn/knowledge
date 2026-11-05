@@ -90,6 +90,9 @@ address (or set `KNOWLEDGE_URL`, e.g. `KNOWLEDGE_URL=http://localhost:8766`, for
 token never goes to a server you did not name.
 The address that answered is stored in `~/.config/knowledge/url` for the hooks of every agent and set as the Claude
 plugin's "Knowledge server URL" option, so later sessions and `update` need nothing else.
+A device with no address uses no server and sends its token nowhere: its session start and the MCP relay say so and give
+the one-line installer. Plugins before 0.14.2 had a built-in address; while such a device still reaches its server, the
+server tells it to run the installer with that server's address before the update removes the built-in one.
 
 It asks for the token once, checks it with the server, stores it in the keyring and installs the plugin. The plugin
 keeps itself up to date in every agent, and says so once at session start: in Claude Code it turns on the marketplace's

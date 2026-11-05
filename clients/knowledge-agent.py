@@ -61,7 +61,7 @@ sys.path.insert(0, str(HOOKS))
 import token_store  # noqa: E402  (KNOWLEDGE_TOKEN or the keyring, shared with the Claude plugin)
 import agent_hooks  # noqa: E402  (the hook runtime, shipped in plugin/ for the Codex and agy plugins)
 from agent_hooks import token  # noqa: E402
-URL = token_store.url()  # KNOWLEDGE_URL, else what an earlier install stored, else the default
+URL = token_store.url()  # KNOWLEDGE_URL, else what an earlier install stored; "" until the setup asks for it
 CODEX = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")  # Codex's own override, as Codex reads it
 CONFIG = {"agy": Path.home() / ".gemini" / "config" / "hooks.json", "codex": CODEX / "hooks.json"}
 RULES = {"agy": Path.home() / ".gemini" / "GEMINI.md", "codex": CODEX / "AGENTS.md"}
@@ -177,7 +177,8 @@ def ensure_token(name: str) -> str:
     except OSError as e:
         print(f"Could not save the token in a keyring ({e}). This computer has none (a server without a desktop?): "
               "add 'export KNOWLEDGE_TOKEN=\"<the token>\"' to ~/.profile and log in again; Claude Code there takes it "
-              "with 'claude plugin configure knowledge@knowledge'. This run goes on with the token.")
+              "with 'claude plugin configure knowledge@knowledge'. Restart or stop the Codex daemon after adding the "
+              "export: it keeps the environment it started with. This run goes on with the token.")
         os.environ["KNOWLEDGE_TOKEN"] = tok  # the agent CLIs this setup starts
     return tok
 
@@ -207,6 +208,10 @@ def run_cli(argv: list, ok_if: tuple = ()) -> bool:
     return r.returncode == 0
 
 
+def claude_settings() -> Path:
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "settings.json"
+
+
 def install_claude(tok: str):
     claude = cli("claude")
     run_cli([claude, "plugin", "marketplace", "add", MARKET], ok_if=("already",))
@@ -230,7 +235,7 @@ def install_claude(tok: str):
     if keyring:
         print("(a note that options are not set is fine: the plugin takes the token from the keyring)")
     # The memory lives on the server: Claude's local auto memory would build a second one.
-    path = Path.home() / ".claude" / "settings.json"
+    path = claude_settings()
     data = load_json(path)
     changed = False
     if data.get("autoMemoryEnabled") is not False:
@@ -251,14 +256,40 @@ def install_claude(tok: str):
     print("done; start a new Claude Code session in your project folder")
 
 
+TOML_TOKEN = re.compile(r'''"""|\'\'\'|"(?:[^"\\\n]|\\.)*"|'[^'\n]*'|#.*|[\[\]]''')
+TOML_CLOSE = {'"""': re.compile(r'(?:[^\\]|\\.)*?"{3,5}', re.S), "'''": re.compile(r"(?s).*?'{3,5}")}
+
+
+def toml_value_state(line: str, opened: str, depth: int) -> tuple:
+    """(open multi-line string, array depth) after a line that is no table header, given the state before it."""
+    i = 0
+    while True:
+        if opened:
+            end = TOML_CLOSE[opened].match(line, i)
+            if not end:
+                return opened, depth
+            i, opened = end.end(), ""
+        m = TOML_TOKEN.search(line, i)
+        if not m:
+            return opened, depth
+        t, i = m.group(0), m.end()
+        if t in TOML_CLOSE:
+            opened = t
+        elif t in "[]":
+            depth += 1 if t == "[" else -1
+
+
 def toml_table_span(text: str, name: str):
     """(start, end) of table [name] in a TOML text with its subtables ([name.x], [[name.x]]), or None. It ends at the
-    next other table header; comment lines above that header belong to that table. A header-like line inside a
-    multi-line string would count as a header: Codex's config.toml has none where this is used."""
+    next other table header; comment lines above that header belong to that table. A line inside a multi-line string
+    or array is a value, also when it looks like a header. Lines end at \\n only, as in TOML (no \\f, no U+2028)."""
     head = re.compile(r"\s*\[\[?\s*([^\[\]]+?)\s*\]\]?\s*(#.*)?")
-    pos, start, comments = 0, None, None
-    for line in text.splitlines(keepends=True):
-        m = head.fullmatch(line.rstrip("\r\n"))
+    pos, start, comments, opened, depth = 0, None, None, "", 0
+    for line in re.findall(r".*\n|.+", text):
+        m = head.fullmatch(line.rstrip("\r\n")) if not opened and depth <= 0 else None
+        in_value = bool(opened or depth > 0)
+        if not m:
+            opened, depth = toml_value_state(line, opened, depth)
         if start is None:
             if m and not line.lstrip().startswith("[[") and m.group(1) == name:
                 start = pos
@@ -266,7 +297,7 @@ def toml_table_span(text: str, name: str):
             if m.group(1) != name and not m.group(1).startswith(name + "."):
                 return start, pos if comments is None else comments
             comments = None
-        elif line.lstrip().startswith("#"):
+        elif not in_value and line.lstrip().startswith("#"):
             comments = pos if comments is None else comments
         elif line.strip():
             comments = None
@@ -311,7 +342,10 @@ def remove_old_setup(agent: str):
 
 
 CODEX_TRUST = ("the knowledge companion trusts the Codex hooks for you (install-companion; again after each plugin "
-               "update); without the companion, open codex and type /hooks once")
+               "update); without the companion, open codex, type /hooks once and pick \"Trust all\" (the third choice "
+               "turns the hooks off, and with them the shared memory)")
+TRY_IT = ('Try it: tell your agent "save to knowledge: we deploy with ./deploy.sh", then start another agent, on this pc or '
+          'another, and ask "how do we deploy?". It answers from the shared memory.')
 
 
 def install_plugin(agent: str):
@@ -532,20 +566,45 @@ def say_restart(agent: str):
         print(f"{agent} is running with the old settings: restart it so the knowledge server is used")
 
 
+def same_codex_home(environ: bytes, mine: Path) -> bool:
+    """Whether a process with this /proc environ uses this CODEX_HOME: another home holds other settings."""
+    env = dict(v.split(b"=", 1) for v in environ.split(b"\0") if b"=" in v)
+    home = env.get(b"CODEX_HOME") or (env.get(b"HOME", b"") + b"/.codex")
+    return os.path.normpath(os.fsdecode(home)) == os.path.normpath(str(mine))
+
+
+def codex_servers() -> list:
+    """This user's `codex app-server` processes (the program, not a shell whose command line names it). On Linux only
+    those of this CODEX_HOME. shortcut: macOS cannot read another process's environment simply, so there every
+    CODEX_HOME of this user counts; the question says how many it stops."""
+    try:
+        pids = subprocess.run(["pgrep", "-u", str(os.getuid()), "-f", r"(^|/)codex(\.js)? app-server"], capture_output=True, text=True).stdout.split()
+    except (OSError, AttributeError):  # no pgrep, or no getuid: Windows
+        return []
+    if not sys.platform.startswith("linux"):
+        return pids
+    keep = []
+    for pid in pids:
+        try:
+            if same_codex_home(Path(f"/proc/{pid}/environ").read_bytes(), CODEX):
+                keep.append(pid)
+        except OSError:  # gone meanwhile
+            pass
+    return keep
+
+
 def restart_codex():
     """Codex keeps a background app-server that holds the MCP settings it started with, so a changed config only
     counts after it restarts. Offer to stop it (Codex starts a new one on its next run); never without asking."""
-    # shortcut: Linux/macOS only (pgrep); on Windows the setup only says to restart Codex.
-    try:
-        pids = subprocess.run(["pgrep", "-f", "codex app-server"], capture_output=True, text=True).stdout.split()
-    except OSError:
-        pids = []
+    pids = codex_servers()
     if not pids:
         return
     msg = "Codex is still running with the old settings."
     if not sys.stdin.isatty():
         return print(f"{msg} Quit Codex (and its background server) so the new settings apply.")
-    if input(f"{msg} Stop it now? [y/N] ").strip().lower() not in ("y", "yes", "j", "ja"):
+    what = (f"{len(pids)} Codex background server(s) of this user ({CODEX}), pid {', '.join(pids)}; any Codex session or "
+            "web UI chat on them stops too")
+    if input(f"{msg} Stop {what}? [y/N] ").strip().lower() not in ("y", "yes", "j", "ja"):
         return print("left running: quit Codex yourself so the new settings apply")
     for pid in pids:
         try:
@@ -1152,6 +1211,8 @@ def main(argv: list):
             install_found() if cmd == "install" else setup()
             offer_import()
         finish_companion(cmd, argv[1:])
+        if cmd != "update":
+            print(f"\n{TRY_IT}")
     elif cmd == "import" and set(argv[1:]) <= {"--dry-run"}:
         import_cmd(argv[1:])
     elif cmd in ("install-companion", "uninstall-companion"):
@@ -1204,6 +1265,29 @@ if __name__ == "__main__":
                 assert not tomllib or tomllib.loads(rest) == tomllib.loads(want), (t, rest)
                 assert ("# my other" in rest) == ("# my other" in want) and ("once" in rest) == ("once" in want), (t, rest)
         assert toml_table_span("[[mcp_servers.knowledge]]\n# [mcp_servers.knowledge]\n", "mcp_servers.knowledge") is None
+        os.environ["CLAUDE_CONFIG_DIR"] = "elsewhere"
+        assert claude_settings() == Path("elsewhere", "settings.json")
+        del os.environ["CLAUDE_CONFIG_DIR"]
+        mine = Path(os.path.join(os.sep, "h", "me", ".codex"))
+        for env, same in ((b"HOME=/h/me\0A=b=c\0", True), (b"HOME=/h/other\0", False), (b"HOME=/h/me\0CODEX_HOME=/x\0", False),
+                          (b"HOME=/x\0CODEX_HOME=/h/me/.codex/\0", True)):
+            assert same_codex_home(env, mine) == same or os.name == "nt", env
+        for t, want in (  # a look-alike in a value is no table; the real one goes whole (stopped review 23 Oct 2026, reproduced 5 Nov 2026)
+                ('note = "[mcp_servers.knowledge]"\n[z]\nq = 1\n', None),
+                ('note = """\n[mcp_servers.knowledge]\nurl = 1\n"""\n[z]\nq = 1\n', None),
+                ("note = '''\n[mcp_servers.knowledge]\n'''\n[z]\nq = 1\n", None),
+                ('note = "a [mcp_servers.knowledge] b"\n', None),
+                ('[z]\nnote = """\n[mcp_servers.knowledge]\n"""\nq = 1\n' + k, '[z]\nnote = """\n[mcp_servers.knowledge]\n"""\nq = 1\n'),
+                ('a = """x\\"""\n[mcp_servers.knowledge]\n"""\n' + k, 'a = """x\\"""\n[mcp_servers.knowledge]\n"""\n'),
+                ('a = """x"""\n' + k + '[z]\nq = 1\n', 'a = """x"""\n\n[z]\nq = 1\n'),
+                (k + 'd = """\n[other]\n"""\n[z]\nq = 1\n', '[z]\nq = 1\n'),
+                (k + 'm = [\n  ["a"]\n]\n[z]\nq = 1\n', '[z]\nq = 1\n'),
+                (k + '# c\nm = [\n  # ]\n  "]"\n]\n[z]\nq = 1\n', '[z]\nq = 1\n'),
+                ('m = "x"\n[mcp_servers.knowledge]\nurl = "u"', 'm = "x"\n'),
+                (k + "[[profiles]]\nx = 1\n", "[[profiles]]\nx = 1\n"),
+                ('[mcp_servers.knowledge]\r\nurl = "u"\r\n[z]\r\nq = 1', "[z]\r\nq = 1\n")):
+            assert drop_toml_table(t, "mcp_servers.knowledge") == want, (t, drop_toml_table(t, "mcp_servers.knowledge"))
+            assert not tomllib or tomllib.loads(want if want is not None else t), t
         import tempfile
         with tempfile.TemporaryDirectory() as d:
             (Path(d) / "e.json").write_text("\ufeff \n", encoding="utf-8")

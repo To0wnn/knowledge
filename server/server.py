@@ -2712,6 +2712,20 @@ def plugin_notice(agent: str, v: str) -> str:
             f"fetched it; tell the user it did not, and how to update by hand: {how.get(agent, how['claude'])}.")
 
 
+def builtin_url_notice(v: str, names_none: bool, url: str) -> str:
+    """Plugins before 0.14.2 fall back on a built-in address that newer ones do not have: a device that relies on it
+    reaches this server now and loses it at its next update. Only this server can still tell it the address. Before
+    0.10.7 a plugin does not report whether it relies on it, so all of them hear it."""
+    have = plugin_version(v)
+    if not have or have >= (0, 14, 2) or (have >= (0, 10, 7) and not names_none):
+        return ""
+    raw = f"{ext.RAW}/To0wnn/knowledge/main"
+    return (f"knowledge plugin: this device runs {v}. Its next update removes the built-in server address, and a device "
+            "that names no server then stops using this one. Tell the user to run the one-line installer now, which "
+            f"stores this server's address: curl -fsSL {raw}/install.sh | KNOWLEDGE_URL='{url}' sh (Linux, macOS), "
+            f"$env:KNOWLEDGE_URL='{url}'; irm {raw}/install.ps1 | iex (Windows).")
+
+
 def token_device(given: str) -> dict | None:
     hit = load_tokens().get(hashlib.sha256(given.encode()).hexdigest()) if given else None
     if not hit:
@@ -2856,8 +2870,8 @@ def note_user(username: str):
 def proxied_user(headers: dict) -> str:
     """The proxy's user name (KNOWLEDGE_PROXY_USER_HEADER), but only on requests that really came through the proxy
     (shared secret header): never trust the user header on its own."""
-    given = headers.get(b"x-knowledge-proxy", b"").decode()
-    if not (PROXY_SECRET and given and hmac.compare_digest(given, PROXY_SECRET)):
+    given = headers.get(b"x-knowledge-proxy", b"")  # bytes: a non-ASCII value must refuse, not raise
+    if not (PROXY_SECRET and given and hmac.compare_digest(given, PROXY_SECRET.encode())):
         return ""
     return headers.get(PROXY_USER_HEADER.encode(), b"").decode().strip()
 
@@ -3687,8 +3701,9 @@ async def context_route(request: Request):
             q = request.query_params
             checked = float(q["upd_at"]) if re.fullmatch(r"\d{1,12}(\.\d+)?", q.get("upd_at", "")) else 0
             mark_plugin(device.get().get("name", ""), agent, v, q.get("url") == "default", checked, q.get("upd_err", ""))
-        if behind := await asyncio.to_thread(plugin_notice, agent, v):
-            note = "\n\n".join(n for n in (note, behind) if n)
+        behind = await asyncio.to_thread(plugin_notice, agent, v)
+        keep_url = builtin_url_notice(v, request.query_params.get("url") == "default", PUBLIC_URL or str(request.base_url).rstrip("/"))
+        note = "\n\n".join(n for n in (note, behind, keep_url) if n)
     if note:
         parts = parts[:-1] + split_parts(parts[-1] + "\n\n" + note)
     n = request.path_params["part"]
