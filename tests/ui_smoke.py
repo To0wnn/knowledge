@@ -1461,6 +1461,52 @@ async def one_lamp(browser, secret: str) -> None:
     await ctx.close()
 
 
+async def update_button(browser, secret: str) -> None:
+    """The real page and its Update plugin button against a fake pc: the action is picked up (running) and fails later;
+    the failure must reach a toast, not only the folded log. Answers come from a fake, so the live server stays untouched."""
+    polls, sent = {"n": 0}, []
+
+    async def fake(route):
+        req = route.request
+        if req.url.endswith("/ui/api/machines/action"):
+            sent.append(req.post_data_json)
+            polls["n"] = 1
+            return await route.fulfill(json={"ok": True, "id": "a1"})
+        res = await route.fetch()
+        data = await res.json()
+        own = [m for m in data["machines"] if m.get("companion")][:1]
+        for m in own:  # a real row, behind on its plugin
+            m.update(own=True, online=True, old=None)
+            for i, ag in enumerate(m["agents"].values()):
+                ag["plugin"] = f"0.{i + 1}.0"
+            ag["plugin"] = "0.0.1"
+            if polls["n"]:
+                polls["n"] += 1
+                status = "failed" if polls["n"] > 4 else "running"
+                m["actions"] = [{"id": "a1", "action": "update_plugin", "status": status,
+                                 "result": "being used by another process" if status == "failed" else None}]
+        await route.fulfill(json={**data, "machines": own})
+    ctx, pg, errors = await page(browser, secret, "/ui#/machines", viewport={"width": 1280, "height": 860})
+    await ctx.route("**/ui/api/machines**", fake)
+    await pg.reload()
+    button = pg.locator(".machine-actions").get_by_text("Update plugin", exact=True)
+    try:
+        await button.first.wait_for(timeout=10000)
+    except Exception:
+        print("skip update button (no pc with a companion on this server)")
+        return await ctx.close()
+    await button.first.click()
+    toast = pg.locator(".toast.bad", has_text="being used by another process")
+    try:
+        await toast.wait_for(timeout=30000)
+    except Exception:
+        pass
+    check(sent and sent[0].get("action") == "update_plugin" and await toast.count() == 1,
+          f"Update plugin: a failure after running shows in a toast {sent} polls={polls['n']}")
+    check(not errors, f"no page errors around Update plugin {errors[:2]}")
+    await ctx.close()
+
+
 async def design_system(browser, devices, secret: str) -> None:
     ctx, pg, errors = await page(browser, secret, "/ui#/inbox", viewport={"width": 1280, "height": 860})
     await pg.wait_for_selector("#ck-list", state="attached")
@@ -1511,6 +1557,7 @@ async def main() -> None:
         await board(browser, p.devices, secret)
         await follow(browser, p.devices, secret)
         await live_refresh(browser, secret)
+        await update_button(browser, secret)
         await design_system(browser, p.devices, secret)
         await one_lamp(browser, secret)
         await browser.close()

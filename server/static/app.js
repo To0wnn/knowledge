@@ -1189,12 +1189,12 @@ async function machineAction(m, action, args = {}) {
     sent = await api("/ui/api/machines/action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: m.id, action, args }) });
   } catch (e) { toast(e.message); return loadMachines(); }
   // the pc fetches the action within ~10 s and reports its new state right after: refresh until nothing waits
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < 60; i++) { // up to 3 min: updating the plugins of three agents takes a while
     await loadMachines();
     const row = (machinesCache || []).find((x) => x.id === m.id);
     const mine = row && (row.actions || []).find((x) => x.id === sent.id);
     if (mine?.status === "failed") { toast(`${action} failed on ${m.label}: ${mine.result || "no reason given"}`); break; } // never only in the folded log
-    if (!row || !(row.actions || []).some((x) => x.status === "waiting")) break;
+    if (!row || !(row.actions || []).some((x) => x.status === "waiting" || x.status === "running")) break;
     await new Promise((r) => setTimeout(r, 3000));
   }
   setTimeout(loadMachines, 4000); // the report that follows the action
