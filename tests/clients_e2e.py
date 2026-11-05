@@ -2336,6 +2336,21 @@ def codex_plugin(tok: str, home: Path, project: Path):
     check(set(replies) == {1, 2} and "taxi" in json.dumps(replies[2].get("result")), "codex plugin: the stdio MCP server answers initialize and knowledge_search", out[:400] + err[-400:])
     code, out, err = run([exe, *server["args"]], json.dumps(msgs[2]) + "\n", {**env, "KNOWLEDGE_TOKEN": "wrong"}, cwd=str(root))
     check("token invalid" in out, "codex plugin: a wrong token answers with a plain reason", out[:300] + err[-300:])
+    if not WIN:  # a keyring tool that finds nothing: Windows has the real Credential Manager in-process
+        fake = home / "No Keyring"
+        fake.mkdir(exist_ok=True)
+        for tool in ("secret-tool", "security"):
+            (fake / tool).write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+            (fake / tool).chmod(0o755)
+        none = {k: v for k, v in env.items() if k != "KNOWLEDGE_TOKEN"}
+        none = {**none, "PATH": f"{fake}{os.pathsep}{os.environ['PATH']}", "HOME": str(fake)}
+        code, out, err = run([exe, *server["args"]], json.dumps(msgs[2]) + "\n", none, cwd=str(root))
+        check("no token is stored" in out and "install.sh" in out and "token invalid" not in out,
+              "codex plugin: no token says so and what to run, not that it is invalid", out[:300] + err[-300:])
+        code, out, err = run([bash(), "-c", f'sh "{(root / "hooks" / "context.sh").as_posix()}" 1'], "",
+                             {**none, "KNOWLEDGE_URL": BASE, "CLAUDE_PROJECT_DIR": str(fake)})
+        check("no token is stored" in out and "token invalid" not in out,
+              "claude: no token says so at session start, not that it is invalid", out[:300] + err[-300:])
     codex = shutil.which("codex")
     if not codex:
         return print("skip codex plugin install (codex not installed)")
@@ -2671,6 +2686,7 @@ def installer(tok: str, tmp: Path):
     have = [a for a in ("claude", "codex") if shutil.which(a)]
     if have:  # agy is not installed on the CI runners
         code, out, err = run([sys.executable, str(agent), "setup"], "", env, timeout=600)
+        check(out.rstrip().splitlines()[-1].startswith("Try it:"), "setup: the last line says what to try", out[-300:])
         check(code == 0 and "Already set up (" in out and all(f"== {a} ==" in out for a in have) and "== agy ==" not in out
               and "== companion (" in out and re.search(r'companion\.py"? trust', out),
               f"setup (the one-line installer), once set up: every agent with the plugin is updated ({', '.join(have)}), no questions", (out + err)[-1500:])

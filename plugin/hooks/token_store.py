@@ -26,6 +26,9 @@ NO_URL = ("knowledge: no server address is set on this device, so the knowledge 
           "Tell the user to run the one-line installer, which asks for the address: "
           "curl -fsSL https://raw.githubusercontent.com/To0wnn/knowledge/main/install.sh | sh (Linux, macOS), "
           "irm https://raw.githubusercontent.com/To0wnn/knowledge/main/install.ps1 | iex (Windows); or set KNOWLEDGE_URL.")
+NO_TOKEN = ("no token is stored on this device, so the server refused it. Run the one-line installer, which asks for it: "
+            "curl -fsSL https://raw.githubusercontent.com/To0wnn/knowledge/main/install.sh | sh (Linux, macOS), "
+            "irm https://raw.githubusercontent.com/To0wnn/knowledge/main/install.ps1 | iex (Windows); or set KNOWLEDGE_TOKEN.")
 
 
 def unreachable(url: str, reason) -> str:

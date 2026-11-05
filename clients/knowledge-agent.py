@@ -177,7 +177,8 @@ def ensure_token(name: str) -> str:
     except OSError as e:
         print(f"Could not save the token in a keyring ({e}). This computer has none (a server without a desktop?): "
               "add 'export KNOWLEDGE_TOKEN=\"<the token>\"' to ~/.profile and log in again; Claude Code there takes it "
-              "with 'claude plugin configure knowledge@knowledge'. This run goes on with the token.")
+              "with 'claude plugin configure knowledge@knowledge'. Restart or stop the Codex daemon after adding the "
+              "export: it keeps the environment it started with. This run goes on with the token.")
         os.environ["KNOWLEDGE_TOKEN"] = tok  # the agent CLIs this setup starts
     return tok
 
@@ -207,6 +208,10 @@ def run_cli(argv: list, ok_if: tuple = ()) -> bool:
     return r.returncode == 0
 
 
+def claude_settings() -> Path:
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "settings.json"
+
+
 def install_claude(tok: str):
     claude = cli("claude")
     run_cli([claude, "plugin", "marketplace", "add", MARKET], ok_if=("already",))
@@ -230,7 +235,7 @@ def install_claude(tok: str):
     if keyring:
         print("(a note that options are not set is fine: the plugin takes the token from the keyring)")
     # The memory lives on the server: Claude's local auto memory would build a second one.
-    path = Path.home() / ".claude" / "settings.json"
+    path = claude_settings()
     data = load_json(path)
     changed = False
     if data.get("autoMemoryEnabled") is not False:
@@ -337,7 +342,10 @@ def remove_old_setup(agent: str):
 
 
 CODEX_TRUST = ("the knowledge companion trusts the Codex hooks for you (install-companion; again after each plugin "
-               "update); without the companion, open codex and type /hooks once")
+               "update); without the companion, open codex, type /hooks once and pick \"Trust all\" (the third choice "
+               "turns the hooks off, and with them the shared memory)")
+TRY_IT = ('Try it: tell your agent "save to knowledge: we deploy with ./deploy.sh", then start another agent, on this pc or '
+          'another, and ask "how do we deploy?". It answers from the shared memory.')
 
 
 def install_plugin(agent: str):
@@ -1203,6 +1211,8 @@ def main(argv: list):
             install_found() if cmd == "install" else setup()
             offer_import()
         finish_companion(cmd, argv[1:])
+        if cmd != "update":
+            print(f"\n{TRY_IT}")
     elif cmd == "import" and set(argv[1:]) <= {"--dry-run"}:
         import_cmd(argv[1:])
     elif cmd in ("install-companion", "uninstall-companion"):
@@ -1255,6 +1265,9 @@ if __name__ == "__main__":
                 assert not tomllib or tomllib.loads(rest) == tomllib.loads(want), (t, rest)
                 assert ("# my other" in rest) == ("# my other" in want) and ("once" in rest) == ("once" in want), (t, rest)
         assert toml_table_span("[[mcp_servers.knowledge]]\n# [mcp_servers.knowledge]\n", "mcp_servers.knowledge") is None
+        os.environ["CLAUDE_CONFIG_DIR"] = "elsewhere"
+        assert claude_settings() == Path("elsewhere", "settings.json")
+        del os.environ["CLAUDE_CONFIG_DIR"]
         mine = Path(os.path.join(os.sep, "h", "me", ".codex"))
         for env, same in ((b"HOME=/h/me\0A=b=c\0", True), (b"HOME=/h/other\0", False), (b"HOME=/h/me\0CODEX_HOME=/x\0", False),
                           (b"HOME=/x\0CODEX_HOME=/h/me/.codex/\0", True)):

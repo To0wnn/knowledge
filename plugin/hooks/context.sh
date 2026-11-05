@@ -33,6 +33,8 @@ if [ "$code" = 200 ]; then
     cat /tmp/knowledge-context.$$
     mkdir -p "$cache" && cp /tmp/knowledge-context.$$ "$cache/.context-$key-$part" 2>/dev/null
     [ "$part" = 1 ] && [ -s "$cache/last-sync.log" ] && { echo; sh "$(dirname "$0")/py.sh" "$(dirname "$0")/memory_mirror.py" notice; echo; }
+elif [ "$part" = 1 ] && [ "$code" = 401 ] && [ -z "$token" ]; then  # the same words as token_store.NO_TOKEN
+    echo "knowledge server: no token is stored on this device, so the server refused it. Run the one-line installer, which asks for it: curl -fsSL https://raw.githubusercontent.com/To0wnn/knowledge/main/install.sh | sh (Linux, macOS), irm https://raw.githubusercontent.com/To0wnn/knowledge/main/install.ps1 | iex (Windows); or set the plugin option token. Shared memory and docs were not loaded."
 elif [ "$part" = 1 ] && [ "$code" = 401 ]; then
     echo "knowledge server: token invalid or revoked (keyring or plugin setting 'token'). Shared memory and docs were not loaded."
 elif [ -f "$cache/.state.json" ] && { [ "$code" = 000 ] || [ "${code#5}" != "$code" ]; }; then  # down, not refused
