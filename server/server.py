@@ -303,6 +303,7 @@ def version(data: bytes) -> str:
 BINARY = {".zip", ".gz", ".tgz", ".xz", ".7z", ".tar", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf",
           ".bin", ".img", ".iso", ".so", ".pyc", ".whl", ".mp4", ".mkv", ".db", ".sqlite", ".woff", ".woff2", ".ttf"}
 RESCAN_SECONDS = int(os.environ.get("KNOWLEDGE_RESCAN", "60"))
+JUST_WRITTEN = float(os.environ.get("KNOWLEDGE_JUST_WRITTEN", "5"))  # seconds the rescan leaves a new memo to whoever wrote it; the tests use less
 logging.getLogger("mcp.server.streamable_http").setLevel(logging.WARNING)  # stateless: one "Terminating session: None" per request
 BACKGROUND: dict[str, dict] = {}  # last run of the background work, for the admin page
 
@@ -339,6 +340,7 @@ class Index:
         # ~12x faster than re.I on the original (8 ms vs 98 ms over 24 MB, measured 18 Oct).
         self.files: dict[str, tuple[int, int, str, str | None]] = {}
         self.lock = threading.Lock()
+        self.refreshing = threading.Lock()
         self.gen = 0  # bumped on every change; the UI graph cache keys on it
         self.loaded = False  # set after the startup scan: from then on a file that appears is new, not just unseen
         self.root_gen: dict[str, int] = {}  # changes per root, so a user only hears about their own roots
@@ -357,6 +359,12 @@ class Index:
             self.root_gen[root] = self.root_gen.get(root, 0) + 1
 
     def refresh(self, rel: str):
+        # One at a time: the rescan and a write or watcher report can see the same change at once, and both would keep a
+        # version of it. The second then finds the text already there.
+        with self.refreshing:
+            self._refresh(rel)
+
+    def _refresh(self, rel: str):
         try:
             full, rel = resolve(rel, scoped=False)
             with open(full, "rb") as f:
@@ -402,7 +410,7 @@ class Index:
                 continue
             hit = self.files.get(rel)
             if not hit or hit[0] != st.st_mtime_ns or hit[1] != st.st_size:
-                if self.loaded and WATCH_DEVICE and mem_of(rel) and time.time() - st.st_mtime < 5:
+                if self.loaded and WATCH_DEVICE and mem_of(rel) and time.time() - st.st_mtime < JUST_WRITTEN:
                     continue  # just written: the server that wrote it notes its task lines first (blue/green), or the watcher reports it
                 self.refresh(rel)
                 # a file changed on disk that no write here noted: a VM session wrote it, and the watcher's report may
@@ -1333,9 +1341,9 @@ def duplicates_loop():
             except Exception as e:  # never let it die; lint reports the failure (weekly report, Matrix)
                 BACKGROUND["duplicates"] = {"at": t0, "error": f"duplicate check failed: {e}"}
                 print(BACKGROUND["duplicates"]["error"], flush=True)
-            wait = DUPES_EVERY if "duplicates" in BACKGROUND else 60
+            wait = DUPES_EVERY if "duplicates" in BACKGROUND else min(60, DUPES_EVERY)
         else:
-            wait = 10 if _written else 60  # a written memo waits for its embedding, not for the hour
+            wait = min(10 if _written else 60, DUPES_EVERY)  # a written memo waits for its embedding, not for the hour
         if JUDGE_SOON.wait(wait):
             while JUDGE_SOON.is_set():  # debounce: run once the writes stop
                 JUDGE_SOON.clear()
@@ -2984,7 +2992,7 @@ class BearerAuth:
             return await HTMLResponse(LOGIN.format(msg="<p class='alert'>Too many wrong passwords: wait a minute.</p>"), 429)(scope, receive, send)
         if not (UI_PASSWORD and hmac.compare_digest(given.encode(), UI_PASSWORD.encode())):
             _login_fails.setdefault(client, []).append(time.time())
-            await asyncio.sleep(1)
+            await asyncio.sleep(float(os.environ.get("KNOWLEDGE_LOGIN_DELAY", 1)))  # the tests use less
             return await HTMLResponse(LOGIN.format(msg="<p class='alert'>Wrong password.</p>"), 401)(scope, receive, send)
         audit("ui-login", UI_USER)
         resp = RedirectResponse("/ui", status_code=303)
@@ -3595,7 +3603,7 @@ def idle_check(now: float) -> int:
         for t in project_tasks(project)[0]:
             lease = leases.get(project, {}).get(t["id"])
             if t["startable"] and owner_agent(t["owner"]) and not (lease and lease.get("until", 0) >= now) and t["id"] not in limit:
-                rec = waiting.setdefault(project, {})[t["id"]] = idle.get(project, {}).get(t["id"]) or {"at": int(now)}
+                rec = waiting.setdefault(project, {})[t["id"]] = {**idle.get(project, {}).get(t["id"], {"at": int(now)})}  # a copy: read_json hands out its cached object, and marking that would look unchanged and never reach the file
                 if not rec.get("noticed") and now - rec["at"] >= IDLE_AFTER:
                     notify(f"Knowledge: task {t['id']} ({project}, for {t['owner']}) may start but nobody took it for "
                            f"{int((now - rec['at']) // 60)} min ({task_where(project, t, None, now)}): {t['text'][:120]}")
@@ -5382,6 +5390,9 @@ def asks_open(c: dict, now: float) -> list:
     return [a for a in c.get("asks", []) if a["status"] == "pending" and now < a["expires"]]
 
 
+ASK_MINUTE = float(os.environ.get("KNOWLEDGE_CHAT_ASK_MINUTE", 60))  # seconds in a "minute" of chat_approval_minutes; the end-to-end test uses less
+
+
 def asks_settle(c: dict, now: float, why: str = ""):
     """Expire what waited too long; with `why` (the turn ended), cancel every ask still open."""
     for a in c.get("asks", []):
@@ -6340,7 +6351,7 @@ async def machine_chat_ask(request: Request):
         if len(asks_open(c, now)) >= 5:
             return err.append((429, "5 approvals wait in this chat already"))
         a = {"id": secrets.token_hex(4), "tool": tool, "detail": detail, "reason": reason, "key": key, "once_only": once,
-             "at": now, "expires": now + CHAT_ASK_MINUTES * 60, "minutes": CHAT_ASK_MINUTES, "status": "pending"}
+             "at": now, "expires": now + CHAT_ASK_MINUTES * ASK_MINUTE, "minutes": CHAT_ASK_MINUTES, "status": "pending"}
         keep = [x for x in c.get("asks", []) if x["status"] == "pending" or not x.get("sent") or now - x["at"] < 86400]
         c["asks"] = (keep + [a])[-50:]
         chat_add(c, "ask", f"asks: {tool}: {' '.join(detail.split())[:300]}" + (f" ({reason})" if reason else ""))

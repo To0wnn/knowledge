@@ -414,7 +414,7 @@ def lease_contract(tmp, ck, fr, raw):
     assert http("POST", "/tasks/woken", {"project": "garden", "id": "LW-1", "agent": "codex", "session": "worker:w"}, token=fr)[0] == 200
     lw = lambda: next(t for t in json.loads(raw("GET", "/ui/api/tasks", headers=ck)[2])["tasks"] if t["id"] == "LW-1")
     assert lw()["claimed"] and not lw()["startable"], lw()
-    time.sleep(2.5)  # the background check runs every second: the lease of a worker-claimed task stays
+    time.sleep(0.8)  # the background check runs several times meanwhile: the lease of a worker-claimed task stays
     assert "LW-1" in leases() and lw()["claimed"], leases()
     l = json.loads((tmp / "task_leases.json").read_text()); l["garden"]["LW-1"]["until"] = 0; (tmp / "task_leases.json").write_text(json.dumps(l))
     assert not lw()["claimed"] and lw()["startable"] and "LW-1" in ready(fr), lw()
@@ -430,7 +430,7 @@ def lease_contract(tmp, ck, fr, raw):
     (tmp / "task_leases.json").write_text("{}")  # the later checks start without leases
 
 
-def machines_contract(tmp, ck, fr, raw, er, et):
+def machines_contract(tmp, ck, fr, raw, er, et, heard):
     import server as srv  # the pure comparison: an agent's settings against the plan
     d, u = srv.model_differs({"claude": {"lead": "opus", "reader": "sonnet"}, "agy": {"lead": "f-low"}, "codex": {"lead": "g"}},
                              {"agy": [{"id": "f-low", "name": "Flash (Low)"}]},
@@ -513,8 +513,8 @@ def machines_contract(tmp, ck, fr, raw, er, et):
     assert json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"] == []  # handed out once
     # A long poll: with nothing waiting the server holds the ask for ?wait= seconds and says it did; an old-style ask
     # (no wait) answers at once.
-    t0 = time.time(); held = json.loads(http("GET", "/machine/actions?wait=2", token=fr, headers=pc)[1])
-    assert held == {"actions": [], "waited": 2.0} and 1.5 <= time.time() - t0 < 6, (held, time.time() - t0)
+    t0 = time.time(); held = json.loads(http("GET", "/machine/actions?wait=0.5", token=fr, headers=pc)[1])
+    assert held == {"actions": [], "waited": 0.5} and 0.4 <= time.time() - t0 < 5, (held, time.time() - t0)
     t0 = time.time(); json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1]); assert time.time() - t0 < 1.5
     assert http("POST", "/machine/actions/result", {"id": got[0]["id"], "ok": True, "result": "on"}, token=fr, headers=pc)[0] == 200
     assert http("POST", "/machine/actions/result", {"id": got[1]["id"], "ok": True}, token=et, headers=pc)[0] == 404  # not her machine: her own record has no such action
@@ -575,10 +575,13 @@ def machines_contract(tmp, ck, fr, raw, er, et):
         time.sleep(0.3)
     idle = json.loads((tmp / "task_idle.json").read_text()); idle["garden"]["MC-6"]["at"] -= 3600; (tmp / "task_idle.json").write_text(json.dumps(idle))
     deadline = time.time() + 10
-    while not json.loads((tmp / "task_idle.json").read_text())["garden"]["MC-6"].get("noticed") and time.time() < deadline:
-        time.sleep(0.3)
-    matrix = next(b for b in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["system"]["background"] if b["name"] == "Matrix")
-    assert "MC-6" in matrix["detail"] and "nobody took it" in matrix["detail"] and "no pc runs Gemini workers" in matrix["detail"], matrix
+    told = lambda: [m for m in heard if "MC-6" in m and "nobody took it" in m]
+    while not (json.loads((tmp / "task_idle.json").read_text())["garden"]["MC-6"].get("noticed") and told()) and time.time() < deadline:
+        time.sleep(0.1)
+    assert told() and "no pc runs Gemini workers" in told()[0], told()
+    assert json.loads((tmp / "task_idle.json").read_text())["garden"]["MC-6"]["noticed"]  # on disk: a restart does not tell it again
+    time.sleep(0.8)  # past the next background checks: one notice, not one per check
+    assert len(told()) == 1, told()
     # A worker (X-Knowledge-Worker) leases its own task only, and its start context is not the chat's.
     wk = {**pc, "X-Knowledge-Worker": "MC-3"}
     assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": "- open until 2099-01-01 [Codex, MC-5] from Claude, start now: not the worker's\n## Keuzes"}, fr)[0]
@@ -1410,9 +1413,9 @@ def board_contract(tmp, ck, fr, raw, er, et):
     assert back.get("col") == "needs" and back["line"] == "refused: git push -f", back
     # Snooze (until): hidden until that time or until the item changes, whichever comes first.
     shows = lambda: ("chat", cids[1]) in {(i["kind"], i["id"]) for i in board()}
-    assert ui("/ui/api/board/dismiss", {"key": back["key"], "sig": back["sig"], "until": time.time() + 2})[0] == 200
+    assert ui("/ui/api/board/dismiss", {"key": back["key"], "sig": back["sig"], "until": time.time() + 1})[0] == 200
     assert not shows(), "a snoozed item is hidden"
-    time.sleep(2.2)
+    time.sleep(1.2)
     assert shows(), "a snooze that ran out shows the item again"
     assert ui("/ui/api/board/dismiss", {"key": back["key"], "sig": back["sig"], "until": time.time() + 600})[0] == 200
     assert not shows()
@@ -1467,11 +1470,11 @@ def needs_contract(tmp, ck, fr, raw, heard):
     add = lambda *ids: call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": "".join(map(line, ids)) + "## Keuzes"}, fr)
     about = lambda tid: [m for m in heard if m.startswith(f"Knowledge needs you: NT-{tid} ")]
     wait = lambda cond, t=8: next((True for _ in range(int(t / 0.2)) if cond() or time.sleep(0.2)), cond())
-    time.sleep(2.5)  # past the quiet window of the polls before
+    time.sleep(1.2)  # past the quiet window of the polls before
     add(1)
     assert wait(lambda: about(1)), heard
     assert "waits for your approval" in about(1)[0] and about(1)[0].endswith("https://kn.example/ui#/inbox/task:garden/NT-1"), about(1)
-    time.sleep(2.5)
+    time.sleep(0.8)
     assert len(about(1)) == 1, "one message per item"
     # A chat reply links to its own item in the inbox too.
     pc = {"X-Knowledge-Machine": "cccccccccccccccc", "X-Knowledge-Machine-Label": "garage"}
@@ -1484,18 +1487,18 @@ def needs_contract(tmp, ck, fr, raw, heard):
     http("POST", "/machine/chats/events", {"chat": cid, "events": [{"kind": "text", "text": "pong"}], "done": True}, token=fr, headers=pc)
     assert wait(lambda: any(m.endswith(f"https://kn.example/ui#/inbox/chat:cccccccccccccccc/{cid}") and "replied: pong" in m for m in heard)), heard
     # The board is open (polled): the item shows there, so no message, also not after the board closes.
-    end = time.time() + 3
+    end = time.time() + 1.5
     add(2)
     while time.time() < end:
-        raw("GET", "/ui/api/board", headers=ck); time.sleep(0.4)
-    time.sleep(3)
+        raw("GET", "/ui/api/board", headers=ck); time.sleep(0.2)
+    time.sleep(1.5)
     assert not about(2), heard
     # One slot left this hour: three at once give one summary; then the hour is full and the next waits.
     add(3, 4, 5)
     assert wait(lambda: any("3 new items need you" in m for m in heard)), heard
     assert not about(3) and not about(4), heard
     add(6)
-    time.sleep(3)
+    time.sleep(1.5)
     assert not about(6) and not any("NT-6" in m for m in heard), heard
     assert json.loads(state.read_text())["items"].get("task:garden/NT-6") is None, "held back, still to tell"
     http("POST", "/machine/report", {"version": "0.16.0"}, token=fr, headers=pc)
@@ -1518,7 +1521,7 @@ def flow_contract(tmp, ck, fr, raw, heard):
     state = tmp / "needs_notified.json"
     assert ui("/ui/api/admin/settings", {"needs_per_hour": 60})[0] == 200
     assert wait(state.exists)
-    time.sleep(2.5)  # past the quiet window of the board polls before
+    time.sleep(1.2)  # past the quiet window of the board polls before
     path = "garden-memory/project_tasks.md"
     lines = ["- [Sam, FL-1-done]: the beds are built",
              "- [Claude, FL-2-done]: for an agent",
@@ -1586,10 +1589,10 @@ def flow_contract(tmp, ck, fr, raw, heard):
         d = json.loads((tmp / "machines.json").read_text())
         d["ffffffffffffffff"]["at"] -= 3600; d["ffffffffffffffff"]["companion"]["at"] -= 3600
         (tmp / "machines.json").write_text(json.dumps(d))
-    time.sleep(2.5)  # past the quiet window of the board polls above
+    time.sleep(1.2)  # past the quiet window of the board polls above
     nap(); sleep_pc()
     assert wait(lambda: said("FL-W1")), heard
-    nap(); time.sleep(2.5); sleep_pc(); time.sleep(3)
+    nap(); time.sleep(1.2); sleep_pc(); time.sleep(1.5)
     assert len(said("FL-W1")) == 1, said("FL-W1")
     http("POST", "/machine/report", {"version": "0.18.1"}, token=fr, headers=pc)
     for line in ("- [Sam, FL-1-done]: the beds are built", "- [Claude, FL-2-done]: for an agent", "- [Sam, FL-6-done]: cancelled by alice",
@@ -1826,10 +1829,10 @@ def main():
            "KNOWLEDGE_LANGUAGE": "nl", "KNOWLEDGE_BUILTIN_PROJECTS": "homelab,anpitek,trade",
            "KNOWLEDGE_BIND": "127.0.0.1", "KNOWLEDGE_RESCAN": "3600",
            "KNOWLEDGE_GITHUB_API": ghurl, "KNOWLEDGE_GITHUB_RAW": ghurl + "/raw", "KNOWLEDGE_EXTERNAL_SLEEP": "3600", "KNOWLEDGE_INSTANCE": "blue", "KNOWLEDGE_PLUGIN_GRACE": "0",
-           "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_RERANK_MODEL": "test", "KNOWLEDGE_DUPES_EVERY": "1", "KNOWLEDGE_DUPES_DELAY": "0", "KNOWLEDGE_DUPES_DEBOUNCE": "0", "KNOWLEDGE_WATCH_DEVICE": "laptop", "KNOWLEDGE_TASK_STALLED": "1", "KNOWLEDGE_TASK_LEASE": "600", "KNOWLEDGE_TASK_CHECK": "1", "KNOWLEDGE_RESCAN": "2", "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}",
+           "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_RERANK_MODEL": "test", "KNOWLEDGE_DUPES_EVERY": "1", "KNOWLEDGE_DUPES_DELAY": "0", "KNOWLEDGE_DUPES_DEBOUNCE": "0", "KNOWLEDGE_VECTOR_SYNC": "0.2", "KNOWLEDGE_WATCH_DEVICE": "laptop", "KNOWLEDGE_TASK_STALLED": "1", "KNOWLEDGE_TASK_LEASE": "600", "KNOWLEDGE_TASK_CHECK": "0.25", "KNOWLEDGE_RESCAN": "1", "KNOWLEDGE_JUST_WRITTEN": "1", "KNOWLEDGE_LOGIN_DELAY": "0.05", "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}",
            "KNOWLEDGE_MATRIX_URL": ghurl, "KNOWLEDGE_MATRIX_ROOM": "!room:example", "KNOWLEDGE_MATRIX_TOKEN": "mx",
            "KNOWLEDGE_STT_URL": ghurl + "/v1/", "KNOWLEDGE_STT_LANGUAGE": "nl", "KNOWLEDGE_STT_PROMPT": "forge, Proxmox", "KNOWLEDGE_STT_KEY": "sk-1",
-           "KNOWLEDGE_NEEDS_QUIET": "2", "KNOWLEDGE_UI_GAP_WAIT": "0.5", "KNOWLEDGE_PUBLIC_URL": "https://kn.example"}
+           "KNOWLEDGE_NEEDS_QUIET": "1", "KNOWLEDGE_UI_GAP_WAIT": "0.5", "KNOWLEDGE_PUBLIC_URL": "https://kn.example"}
     proc = subprocess.Popen([sys.executable, str(Path(__file__).with_name("server.py"))], env=env)
     try:
         for _ in range(50):
@@ -2030,24 +2033,24 @@ def main():
             assert not call("knowledge_write", {"path": f"memory/{n}.md", "content": memo(body, n)})[0]
         deadline = time.time() + 60
         while "dup_a.md ↔ dup_b.md" not in (lint_out := call("knowledge_lint", {})[1]) and time.time() < deadline:
-            time.sleep(1)
+            time.sleep(0.2)
         assert "possible_duplicate" in lint_out and "dup_a.md ↔ dup_b.md (0." in lint_out, lint_out[-800:]
         # The writing device hears it at its next turn, without waiting for lint (judge_soon -> tell_writers).
         deadline, notes = time.time() + 60, []
         while not notes and time.time() < deadline:
-            notes = json.loads(http("GET", "/tasks?project=homelab&agent=claude&v=2")[1])["notices"] or time.sleep(1) or []
+            notes = json.loads(http("GET", "/tasks?project=homelab&agent=claude&v=2")[1])["notices"] or time.sleep(0.2) or []
         assert notes and "looks like the same subject as" in notes[0]["text"] and "[[dup_" in notes[0]["text"], notes
         assert "it is about: d" in notes[0]["text"], notes
         # One notice per pair: a later edit of a known duplicate does not repeat it.
         assert not call("knowledge_edit", {"path": "memory/dup_a.md", "old_string": "closed state", "new_string": "closed state too"})[0]
-        time.sleep(6)
+        time.sleep(2.2)  # past a whole pass: the pair is judged again within 2 s (vector sync 0.2 s, pass every 1 s)
         assert not json.loads(http("GET", "/tasks?project=homelab&agent=claude&v=2")[1])["notices"]
         # A memo file written directly (a VM session, reported by the watcher) is judged and told too.
         (mem / "dup_c.md").write_text(memo(body, "dup_c"))
         http("POST", "/invalidate", {"paths": ["memory/dup_c.md"]}, token="watch-token")
         deadline, notes = time.time() + 60, []
         while not notes and time.time() < deadline:
-            notes = json.loads(http("GET", "/tasks?project=homelab&agent=claude&v=2")[1])["notices"] or time.sleep(1) or []
+            notes = json.loads(http("GET", "/tasks?project=homelab&agent=claude&v=2")[1])["notices"] or time.sleep(0.2) or []
         assert notes and "dup_c.md" in notes[0]["text"], notes
         (mem / "dup_c.md").unlink()
         http("POST", "/invalidate", {"paths": ["memory/dup_c.md"]}, token="watch-token")
@@ -2717,7 +2720,7 @@ def main():
         assert "erinproj" in json.loads(raw("GET", "/ui/api/me", headers=er)[2])["writable"]
         roots = next(t["roots"] for t in json.loads(raw("GET", "/ui/api/admin", headers=er)[2])["tokens"] if t["name"] == "erin.laptop")
         assert {"erinproj", "erinproj-memory"} <= set(roots), roots  # her devices reach her new project at once
-        machines_contract(tmp, ck, fr, raw, er, et)
+        machines_contract(tmp, ck, fr, raw, er, et, heard)
         chats_contract(tmp, ck, fr, raw, er, et)
         remote_toggle_contract(tmp, ck, raw, er, et)
         # Speech to text: the page's recording goes on to the configured server with model, language, prompt and key;
@@ -2888,7 +2891,7 @@ def main():
         # A weak answer tells the agent, in the result, to add the search words as an alias where it finds the answer.
         weak = call("knowledge_semantic_search", {"query": "zzqx plumbing quantum walrus"})[1]
         assert "(no semantic results" in weak or "'aliases:' frontmatter line" in weak, weak[-300:]
-        assert "'aliases:'" not in call("knowledge_semantic_search", {"query": "entry timing plan", "root": "trade-memory"})[1]
+        assert "'aliases:'" not in call("knowledge_semantic_search", {"query": "walrus feeding schedule", "root": "trade-memory"})[1]  # walrus.md: nothing edits it, so its score stays high
         assert not call("knowledge_related", {"path": "trade-memory/plan.md"})[0]
         # A new memo that says the same as an existing one gets a merge hint (not a refusal); a different one does not.
         # Against a memo nothing else edits (plan.md was edited above; the semantic index re-syncs every 10 s).
@@ -3064,6 +3067,18 @@ def main():
         assert size().get("added") == 2, size()
         assert raw("GET", "/ui/api/graph", headers={**ck, "If-None-Match": hd["etag"]})[0] == 200  # a memo does change it
         import server as srv
+        # One change seen twice at once (a write or the watcher's report, and the rescan) is one version: a second one
+        # with the same text made the Changes list say "0 lines added".
+        with tempfile.TemporaryDirectory() as h:
+            changed = Path(h) / "race.md"
+            changed.write_text("new\n")
+            ix, kept, real = srv.Index(), [], (srv.keep_version, srv.resolve)
+            ix.files["memory/race.md"] = (0, 0, "old\n", None)
+            srv.keep_version, srv.resolve = lambda *a, **k: (time.sleep(0.05), kept.append(a)), lambda rel, scoped=True: (changed, rel)
+            both = [threading.Thread(target=ix.refresh, args=("memory/race.md",)) for _ in range(2)]
+            [t.start() for t in both]; [t.join() for t in both]
+            srv.keep_version, srv.resolve = real
+            assert len(kept) == 1 and ix.files["memory/race.md"][2] == "new\n", kept
         # A version pruned by another thread between listing and stat is skipped, not an error (seen live at 200 versions).
         with tempfile.TemporaryDirectory() as h:
             (Path(h) / "a").write_text("a")

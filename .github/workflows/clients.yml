@@ -1,27 +1,39 @@
 # The client side on every OS a device or guest uses: plugin hooks through Git Bash on Windows, knowledge-agent.py
 # for agy/Codex through PowerShell and cmd, the offline copy, and the real Claude Code and Codex CLIs.
-# tests/clients_e2e.py starts the real server on the runner itself.
+# tests/clients_e2e.py starts the real server on the runner itself. It only talks to the server's APIs, never to its
+# web UI files, so a push of only those has nothing to test here (check.yml runs for it). That push starts no run
+# at all, so it cannot cancel a run of an earlier commit. A release bumps the plugin version, which always runs this.
 name: clients
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "README.md"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "LICENSE"
+      - "local.env.example"
+      - "docs/**"
+      - "server/static/**"
+      - "tests/ui_*"
   pull_request:
+    paths-ignore:
+      - "README.md"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "LICENSE"
+      - "local.env.example"
+      - "docs/**"
+      - "server/static/**"
+      - "tests/ui_*"
   workflow_dispatch:
+# A newer push replaces a run in progress: it tests everything the older one would have.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
-  check:
-    # The project check (./check.sh: hook self-tests, graph, lint, server tests), as before a commit or deploy.
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.3.3
-        with:
-          python-version: "3.14"
-      - name: Git identity for the tests that commit
-        run: git config --global user.name ci && git config --global user.email ci@example.invalid
-      - run: ./check.sh
   py39:
     # macOS's own /usr/bin/python3 is 3.9: the plugin and knowledge-agent.py must import and pass their self-tests there
     # (an `X | None` annotation without the __future__ import once broke `import chat`).
@@ -53,7 +65,7 @@ jobs:
           python-version: "3.14"  # as in the image: onnxruntime has no wheels for 3.15 yet
       - uses: actions/setup-go@v7  # tests/clients_e2e.py starts the agy plugin's MCP command the way Go (agy) does
         with:
-          go-version: stable
+          go-version: "1.x"  # the runner's own Go; "stable" downloads the newest for 20 s and the test needs no particular version
           cache: false
       - uses: actions/setup-node@v7
         with:
@@ -69,30 +81,3 @@ jobs:
           uv run --project server --frozen python clients/knowledge-agent.py --selftest
       - name: Client end-to-end
         run: uv run --project server --frozen python tests/clients_e2e.py
-  ui-smoke:
-    # tests/ui_ci.py starts a throwaway server on the demo notes, seeds a project, token, pc, chat and task line,
-    # and runs tests/ui_smoke.py against it with Playwright's Chromium; any FAIL line exits non-zero.
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.3.3
-        with:
-          python-version: "3.14"
-      - name: Server dependencies
-        run: uv sync --project server --frozen --no-dev
-      - name: Playwright Chromium
-        working-directory: ${{ runner.temp }}  # not the repo root: its token.py would shadow Python's own token module
-        run: uv run --project "$GITHUB_WORKSPACE/server" --frozen --with playwright python -m playwright install --with-deps chromium
-      - name: UI smoke test
-        env:
-          KNOWLEDGE_SMOKE_SHOTS: ${{ runner.temp }}/shots
-        run: |
-          mkdir -p "$KNOWLEDGE_SMOKE_SHOTS"
-          uv run --project server --frozen --with playwright python tests/ui_ci.py 2>&1 | tee "$KNOWLEDGE_SMOKE_SHOTS/ui_smoke.log"
-          exit "${PIPESTATUS[0]}"
-      - uses: actions/upload-artifact@v7
-        if: failure()
-        with:
-          name: ui-smoke
-          path: ${{ runner.temp }}/shots

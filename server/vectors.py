@@ -28,6 +28,7 @@ CHUNK_CHARS = 1200
 SOURCE_PENALTY = 0.1
 MAX_FILE = 300_000  # bigger files (generated logs such as trade/claude_insights.md) stay regex-only
 THREADS = int(os.environ.get("KNOWLEDGE_EMBED_THREADS", "6"))
+SYNC_SECONDS = float(os.environ.get("KNOWLEDGE_VECTOR_SYNC", "10"))  # how often the index is checked for changed notes; the tests use less
 
 
 def title_of(rel: str, text: str) -> str:
@@ -119,7 +120,7 @@ class Vectors:
             except Exception as e:  # never let it die; retried on the next change
                 self.error = str(e)
                 print(f"vector sync failed: {e}", flush=True)
-            time.sleep(10)
+            time.sleep(SYNC_SECONDS)
 
     def sync(self):
         gen = self.index.gen

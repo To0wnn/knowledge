@@ -4,14 +4,16 @@ A self-hosted knowledge server for AI coding agents: live docs and memory over M
 Antigravity, plus a web UI with a graph. Server in `server/` (Python, one Docker container), clients in `plugin/`.
 
 ## Commands
-- check (must pass before "done"; the pre-commit hook runs it): `./check.sh`
+- check (must pass before "done"; the pre-commit hook runs it; about 50 s): `./check.sh`; `./check.sh --unless-passed` skips
+  it when this exact tree passed on this checkout already (deploy.sh uses that)
 - run: deployed as a Docker stack; there is no local dev server
 - test one thing: `cd server && uv run test_server.py` (or `uv run lint.py`, `uv run graph.py` for their self-checks)
 - UI test: `uv run --project server --with playwright python tests/ui_ci.py` (a seeded throwaway server; CI runs it too),
   or `env -u KNOWLEDGE_URL uv run -q --with playwright python tests/ui_smoke.py` (read-only against the live server;
   an agent session has the public KNOWLEDGE_URL set, which would win over local.env and land on the sign-in page)
 - load test of the web UI against a server on a copy of real data, before and after a change: `tests/ui_load.py`
-- client test: `uv run --project server python tests/clients_e2e.py`; CI runs it on Windows, macOS and Linux
+- client test (about 2.5 min): `uv run --project server python tests/clients_e2e.py`; CI runs it on Windows, macOS and Linux
+  (`clients.yml`, not for a push of only docs or web UI files; `check.yml` runs the check and the UI test)
 - deploy: `./deploy.sh` (runs the check first; routine)
 - roll back: `git revert <commit>` and `./deploy.sh`
 
