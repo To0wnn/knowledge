@@ -2939,6 +2939,21 @@ def claude_stored_token(tmp: Path):
     code, out, err = run([bash(), "-c", f'sh "{(hooks / "context.sh").as_posix()}" 1'], "",
                          {**bare, "PATH": os.environ["PATH"], "CLAUDE_PROJECT_DIR": str(tmp)})
     check("no server address is set" in out and installer in out, "no server set: Claude's session start says how to connect", out + err)
+    # Odd input never fails a hook: Codex shows "hook: PostToolUse Failed" on a non-zero exit or broken JSON (not all agents send the same).
+    named = {**bare, "KNOWLEDGE_URL": "http://127.0.0.1:9", "KNOWLEDGE_TOKEN": "x", "KNOWLEDGE_YOLO": "1", "KNOWLEDGE_HOME": str(tmp / "Odd Hooks")}
+    def clean(out):  # as Codex reads it: plain text is fine, what looks like JSON must parse
+        try:
+            return not out.lstrip().startswith(("{", "[")) or isinstance(json.loads(out), dict)
+        except ValueError:
+            return False
+    for agent in ("claude", "codex", "agy"):
+        bad = []
+        for odd in ("", "nope", "[1]", "null", '{"cwd":5,"tool_input":[1]}', '{"toolCall":"x"}', '{"tool_input":"' + "x" * 200000 + '"}'):
+            for cmd in ([str(hooks / "watch.py"), agent], [str(hooks / "agent_hooks.py"), "wake", agent], [str(hooks / "agent_hooks.py"), "docs-sync"]):
+                code, out, err = run([sys.executable, "-X", "utf8", *cmd], odd, named, cwd=tmp)
+                if code != 0 or not clean(out):
+                    bad.append(f"{cmd[-2:]} {odd[:30]!r}: {code} {out[:200]} {err[-300:]}")
+        check(not bad, f"{agent}: the PostToolUse hooks exit 0 with clean output on odd input", "; ".join(bad)[:1000])
 
 
 def checkout_update(tmp: Path):
