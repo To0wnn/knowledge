@@ -109,7 +109,7 @@ button { cursor: pointer; }
   content: ""; width: 16px; height: 16px; margin: 0 3px; border-radius: 50%; flex: none;
   background: var(--panel-hi); box-shadow: inset 0 0 0 2px var(--line-hi);
 }
-.sidebar:has(.inbox-count:not(:empty)) .brand::before { background: var(--amber); box-shadow: 0 0 0 3px var(--amber-soft), 0 0 14px var(--glow); animation: kn-lamp-on .9s ease-out; }
+body:not(.no-agents) .sidebar:has(.inbox-count:not(:empty)) .brand::before { background: var(--amber); box-shadow: 0 0 0 3px var(--amber-soft), 0 0 14px var(--glow); animation: kn-lamp-on .9s ease-out; }
 @keyframes kn-lamp-on { from { box-shadow: 0 0 0 0 var(--glow); } 60% { box-shadow: 0 0 0 11px transparent; } }
 #live { width: 7px; height: 7px; border-radius: 50%; background: var(--line-hi); }
 #live.on { background: var(--ok); }
@@ -224,7 +224,7 @@ kbd { font-family: var(--mono); font-size: 11px; padding: 0 5px; border: 1px sol
 .topic summary .n { margin-left: auto; font-weight: 400; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .topic .hits { margin: 2px 0 8px 16px; }
 .topic .hits li .row-link { padding: 5px 9px; }
-.topic .hit-path { color: var(--ink); font-size: 13px; white-space: normal; }
+.topic .hit-path { color: var(--ink); font-size: 13px; }
 .hits li .row-link.active .hit-path { color: var(--act-text); font-weight: 600; }
 .new { margin-left: 6px; vertical-align: 1px; }
 .plus { color: var(--ok); font-variant-numeric: tabular-nums; } .minus { color: var(--bad); font-variant-numeric: tabular-nums; }
@@ -259,7 +259,7 @@ dialog h2 { margin: 0 0 4px; font-size: 20px; font-weight: 650; }
 .hits .hit-text.warn { color: var(--bad); }
 .hits li.session { display: grid; padding: 7px 9px; }
 .badge.warn { background: var(--bad-soft); color: var(--bad); }
-.hit-path { display: block; font-size: 14px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hit-path { display: block; font-size: 14px; color: var(--ink); overflow-wrap: anywhere; }
 .hit-text { display: block; font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hit-sub { display: block; font: 11px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 mark { background: var(--act-soft); color: inherit; border-radius: 3px; box-shadow: 0 0 0 1px var(--act-soft); }
@@ -334,12 +334,14 @@ body.home[data-view="notes"] .kn > .right { display: none; }
 .home-card .hits { width: 100%; }
 .home-card .hit-path { color: var(--ink); font-size: 14px; }
 .home-card > .btn { margin: 4px 0 0 9px; }
-/* The map gets the whole page: no topic list, and the chosen note's card floats over the map instead of a column. */
+/* The map gets the whole page: the topic list (click: light up a topic's notes) floats over it. A chosen note's card is a
+   column, not an overlay, so the note and its neighbours are never behind it; the list gives way while it is open. */
 @media (min-width: 700px) {
   body[data-view="map"] .kn { position: relative; grid-template: "center" minmax(0, 1fr) / minmax(0, 1fr); }
-  body[data-view="map"] .kn > .left { display: none; }
-  body[data-view="map"] .kn > .right { position: absolute; z-index: 3; top: 12px; right: 12px; width: 320px; max-height: calc(100% - 24px); border: 1px solid var(--line-hi); border-radius: var(--r-lg); background: var(--panel-solid); box-shadow: var(--menu-shadow); }
-  body[data-view="map"] .kn > .right:not(:has(.map-card)) { display: none; }
+  body[data-view="map"] .kn:has(> .right .map-card) { grid-template: "center right" minmax(0, 1fr) / minmax(0, 1fr) 320px; }
+  body[data-view="map"] .kn > .left { position: absolute; z-index: 3; top: 12px; left: 12px; width: 240px; max-height: calc(100% - 24px); padding: 6px; border: 1px solid var(--line-hi); border-radius: var(--r-lg); background: var(--panel-solid); }
+  body[data-view="map"] .kn:has(> .right .map-card) > .left, body[data-view="map"] .kn > .right:not(:has(.map-card)) { display: none; }
+  body[data-view="map"] .kn > .right { max-height: none; border-top: 0; border-left: 1px solid var(--line); }
 }
 
 /* narrower screens: connected notes under the note */

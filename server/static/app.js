@@ -500,6 +500,7 @@ async function homeView() {
   const body = splitFront(note.text).body, groups = topicGroups();
   if (p !== ALL && (!/^## /m.test(body) || !groups.length)) { // no headings yet: the index as it is
     const md = el("div", "md"); md.innerHTML = renderMd(body);
+    document.body.classList.remove("home"); // this overview keeps its right column
     homeRecent($("side"));
     $("note").replaceChildren(el("div", "note-empty muted", "Pick a note from the list or search. Index of this project:"), md);
     return;
@@ -1081,11 +1082,11 @@ let agentProject = project === ALL ? "" : project; // the Agents views' project:
 async function loadTasks(render = true) {
   const res = await api(render ? "/ui/api/tasks?hosts=1" : "/ui/api/tasks"), all = res.tasks.filter((t) => !t.done);
   // the badge follows the project picker, as the list does (the Health badge too); its title has both counts
-  const here = all.filter((t) => !agentProject || t.project === agentProject), counted = here.length ? here : all; // as the list below
+  const inProject = res.tasks.filter((t) => !agentProject || t.project === agentProject), spill = !!agentProject && !inProject.length && res.tasks.length > 0; // nothing here: show the work elsewhere
+  const here = all.filter((t) => !agentProject || t.project === agentProject), counted = spill ? all : here;
   $("tasks-count").textContent = counted.length || "";
   $("tasks-count").className = counted.some((t) => t.overdue) ? "badge warn" : "badge";
   $("tasks-count").title = agentProject ? `${here.length} open in ${agentProject}, ${all.length} in all projects` : `${all.length} open in all projects`;
-  const inProject = res.tasks.filter((t) => !agentProject || t.project === agentProject), spill = !!agentProject && !inProject.length && res.tasks.length > 0;
   const tasks = spill ? res.tasks : inProject, open = tasks.filter((t) => !t.done), back = tasks.filter((t) => t.done);
   if (!render) return;
   const box = $("tasks"); box.replaceChildren();
@@ -1277,6 +1278,7 @@ function workerList(m, list) {
   return ws;
 }
 // The Machines view: one card per pc.
+const offlineOpen = new Set(); // offline pcs whose last report you opened
 async function loadMachines() {
   const res = await api("/ui/api/machines");
   machinesCache = Array.isArray(res) ? res : res.machines || [];
@@ -1386,6 +1388,10 @@ async function loadMachines() {
       const fold = el("details", "machine-sessions machine-fold"), meta = card.children[1];
       head.insertBefore(meta, head.children[2]);
       fold.append(el("summary", null, "Last report"), ...[...card.children].slice(1));
+      const needsYou = [...fold.querySelectorAll(".machine-group")].some((g) => g.textContent === "Needs you") || fold.querySelector(".machine-error, .pill.warn");
+      const queued = (m.actions || []).some((x) => x.status === "waiting" || x.status === "pending");
+      fold.open = !!needsYou || queued || offlineOpen.has(m.id);
+      fold.ontoggle = () => { if (fold.open) offlineOpen.add(m.id); else offlineOpen.delete(m.id); };
       card.append(fold);
     }
     box.append(card);

@@ -1730,6 +1730,7 @@ def main():
     assert decls(shared) == decls(comp.split(".cmp *, ")[0]) != [], "app.css shared tokens drifted from companion.css"
     # The companion serves its font offline: its own copy of the web UI's file, with a type a browser accepts.
     assert (cstatic / "atkinson-hyperlegible-next.woff2").read_bytes() == (Path(__file__).parent / "static/vendor/atkinson-hyperlegible-next-5.3.0.woff2").read_bytes()
+    assert (cstatic / "atkinson-hyperlegible-next.LICENSE").is_file(), "the OFL wants its licence with every copy of the font"
     assert 'url("atkinson-hyperlegible-next.woff2")' in (cstatic / "companion.css").read_text() and '".woff2": "font/woff2"' in (cstatic.parent.parent / "hooks/companion.py").read_text()
     # Readable in both themes: text 4.5:1 on what it sits on, map colours 3:1 on the canvas (solid colours only, hex).
     def contrast(a, b):

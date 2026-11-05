@@ -107,7 +107,7 @@ if (navPage) {
   }).catch(() => {});
   get("/ui/api/tasks").then((ts) => {
     // the picked project's open lines, as the app's Tasks badge ("all" = every project)
-    const p = localStorage.getItem("kn_project") || "homelab", el = navEl("tasks-count"), openAll = (ts.tasks || []).filter((t) => !t.done), here = openAll.filter((t) => p === "all" || t.project === p), open = here.length ? here : openAll;
+    const p = localStorage.getItem("kn_project") || "homelab", el = navEl("tasks-count"), openAll = (ts.tasks || []).filter((t) => !t.done), inProject = (ts.tasks || []).some((t) => p === "all" || t.project === p), open = inProject ? openAll.filter((t) => p === "all" || t.project === p) : openAll; // nothing here: the list shows the work elsewhere
     if (el) { el.textContent = open.length || ""; el.className = open.some((t) => t.overdue) ? "badge warn" : "badge"; }
   }).catch(() => {});
   meReady.then(() => get("/ui/api/lint?v=2")).then((res) => { // this project's findings, as the app's Health badge (project from the app's picker)

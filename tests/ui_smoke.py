@@ -1436,7 +1436,7 @@ async def one_lamp(browser, secret: str) -> None:
     check(wide["right"] == "none" and wide["note"] > 800 and wide["recent"], f"the notes overview takes the width, what changed lately first {wide}")
     await route(pg, "#/map", "#g2d canvas", 1500)
     map_ = await pg.evaluate("""() => ({w: $('graph').getBoundingClientRect().width, main: document.querySelector('.main').getBoundingClientRect().width, left: getComputedStyle($('topics-pane')).display, right: getComputedStyle($('side')).display})""")
-    check(map_["w"] >= map_["main"] - 2 and map_["left"] == "none" and map_["right"] == "none", f"the map takes the whole page until a note is chosen {map_}")
+    check(map_["w"] >= map_["main"] - 2 and map_["left"] != "none" and map_["right"] == "none", f"the map takes the whole page, the topic list floats over it {map_}")
     await route(pg, "#/machines", "#machines .machine, #machines p", 800)
     fold = await pg.evaluate("""() => { const off = [...document.querySelectorAll('.machine.offline')]; return {n: off.length, folded: off.filter((m) => m.querySelector(':scope > .machine-fold') && m.querySelector('.machine-head .machine-meta')).length, order: [...document.querySelectorAll('.machine')].map((m) => m.classList.contains('offline'))}; }""")
     check(fold["n"] == fold["folded"] and fold["order"] == sorted(fold["order"]), f"offline pcs come last, on one line with the rest folded {fold}")
