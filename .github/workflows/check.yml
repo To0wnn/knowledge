@@ -1,0 +1,68 @@
+# The project check and the web UI test, on every push that is more than docs. image.yml relies on this workflow's
+# green run instead of repeating ./check.sh for a release of the same commit.
+name: check
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "README.md"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "LICENSE"
+      - "local.env.example"
+      - "docs/**"
+  pull_request:
+    paths-ignore:
+      - "README.md"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "LICENSE"
+      - "local.env.example"
+      - "docs/**"
+  workflow_dispatch:
+# A newer push replaces a run in progress: it tests everything the older one would have.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  check:
+    # The project check (./check.sh: hook self-tests, graph, lint, server tests), as before a commit or deploy.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          python-version: "3.14"
+      - name: Git identity for the tests that commit
+        run: git config --global user.name ci && git config --global user.email ci@example.invalid
+      - run: ./check.sh
+  ui-smoke:
+    # tests/ui_ci.py starts a throwaway server on the demo notes, seeds a project, token, pc, chat and task line,
+    # and runs tests/ui_smoke.py against it with Playwright's Chromium; any FAIL line exits non-zero.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          python-version: "3.14"
+      - name: Server dependencies
+        run: uv sync --project server --frozen --no-dev
+      - name: Playwright Chromium
+        working-directory: ${{ runner.temp }}  # not the repo root: its token.py would shadow Python's own token module
+        run: uv run --project "$GITHUB_WORKSPACE/server" --frozen --with playwright python -m playwright install --with-deps chromium
+      - name: UI smoke test
+        env:
+          KNOWLEDGE_SMOKE_SHOTS: ${{ runner.temp }}/shots
+        run: |
+          mkdir -p "$KNOWLEDGE_SMOKE_SHOTS"
+          uv run --project server --frozen --with playwright python tests/ui_ci.py 2>&1 | tee "$KNOWLEDGE_SMOKE_SHOTS/ui_smoke.log"
+          exit "${PIPESTATUS[0]}"
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: ui-smoke
+          path: ${{ runner.temp }}/shots

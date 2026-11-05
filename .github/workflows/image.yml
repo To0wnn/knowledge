@@ -10,17 +10,32 @@ permissions:
   packages: write
 jobs:
   check:
-    # No image without a passing project check.
+    # No image without a passing project check: the green check.yml run of this very commit, or else the check right here.
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
     steps:
+      - name: Did this commit pass already?
+        id: green
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          n=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/check.yml/runs?head_sha=$GITHUB_SHA&event=push&status=success&per_page=1" --jq .total_count || echo 0)
+          echo "$n green check run(s) for $GITHUB_SHA"
+          echo "count=$n" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v7
+        if: steps.green.outputs.count == '0'
       - uses: astral-sh/setup-uv@v10.3.3
+        if: steps.green.outputs.count == '0'
         with:
-          python-version: "3.13"
+          python-version: "3.14"  # as in the image and check.yml
       - name: Git identity for the tests that commit
+        if: steps.green.outputs.count == '0'
         run: git config --global user.name ci && git config --global user.email ci@example.invalid
       - run: ./check.sh
+        if: steps.green.outputs.count == '0'
   image:
     needs: check
     runs-on: ubuntu-latest

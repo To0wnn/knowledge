@@ -6,9 +6,9 @@ Moved from the README; [back to the README](../README.md).
   tests the server. `deploy.sh` runs all of them first.
 - `tests/clients_e2e.py` runs the client side against a real server: plugin hooks, the installers, Codex's own start
   of the MCP server, the offline copy and the skills sync. CI runs it on Windows, macOS and Linux for every push
-  (`.github/workflows/clients.yml`).
+  except one of only docs or web UI files, which it never touches (`.github/workflows/clients.yml`).
 - `tests/ui_smoke.py` checks the web UI with Playwright. `tests/ui_ci.py` runs it against a throwaway server on the
-  demo notes (seeded with projects, a used token, a pc, a chat and a task line); CI does the same on every push, and
+  demo notes (seeded with projects, a used token, a pc, a chat and a task line); CI does the same on every push but docs (`.github/workflows/check.yml`, with `./check.sh`), and
   locally it is one command:
   `uv run --project server --with playwright python tests/ui_ci.py`
   (once: `uv run --with playwright python -m playwright install chromium`). Checks that need data the demo lacks
