@@ -326,6 +326,7 @@ class Index:
         # ~12x faster than re.I on the original (8 ms vs 98 ms over 24 MB, measured 18 Oct).
         self.files: dict[str, tuple[int, int, str, str | None]] = {}
         self.lock = threading.Lock()
+        self.refreshing = threading.Lock()
         self.gen = 0  # bumped on every change; the UI graph cache keys on it
         self.loaded = False  # set after the startup scan: from then on a file that appears is new, not just unseen
         self.root_gen: dict[str, int] = {}  # changes per root, so a user only hears about their own roots
@@ -344,6 +345,12 @@ class Index:
             self.root_gen[root] = self.root_gen.get(root, 0) + 1
 
     def refresh(self, rel: str):
+        # One at a time: the rescan and a write or watcher report can see the same change at once, and both would keep a
+        # version of it. The second then finds the text already there.
+        with self.refreshing:
+            self._refresh(rel)
+
+    def _refresh(self, rel: str):
         try:
             full, rel = resolve(rel, scoped=False)
             with open(full, "rb") as f:

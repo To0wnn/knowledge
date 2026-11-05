@@ -3053,6 +3053,18 @@ def main():
         assert size().get("added") == 2, size()
         assert raw("GET", "/ui/api/graph", headers={**ck, "If-None-Match": hd["etag"]})[0] == 200  # a memo does change it
         import server as srv
+        # One change seen twice at once (a write or the watcher's report, and the rescan) is one version: a second one
+        # with the same text made the Changes list say "0 lines added".
+        with tempfile.TemporaryDirectory() as h:
+            changed = Path(h) / "race.md"
+            changed.write_text("new\n")
+            ix, kept, real = srv.Index(), [], (srv.keep_version, srv.resolve)
+            ix.files["memory/race.md"] = (0, 0, "old\n", None)
+            srv.keep_version, srv.resolve = lambda *a, **k: (time.sleep(0.05), kept.append(a)), lambda rel, scoped=True: (changed, rel)
+            both = [threading.Thread(target=ix.refresh, args=("memory/race.md",)) for _ in range(2)]
+            [t.start() for t in both]; [t.join() for t in both]
+            srv.keep_version, srv.resolve = real
+            assert len(kept) == 1 and ix.files["memory/race.md"][2] == "new\n", kept
         # A version pruned by another thread between listing and stat is skipped, not an error (seen live at 200 versions).
         with tempfile.TemporaryDirectory() as h:
             (Path(h) / "a").write_text("a")
