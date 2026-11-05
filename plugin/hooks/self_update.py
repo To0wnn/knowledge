@@ -20,6 +20,8 @@ import subprocess
 import sys
 import time
 import urllib.request
+
+import token_store
 from pathlib import Path
 
 PLUGIN = Path(__file__).resolve().parent.parent
@@ -92,7 +94,7 @@ def save(state: dict) -> None:
     STATE.parent.mkdir(parents=True, exist_ok=True)
     tmp = STATE.with_name(STATE.name + ".tmp")
     tmp.write_text(json.dumps(state), encoding="utf-8")
-    os.replace(tmp, STATE)
+    token_store.replace_durable(tmp, STATE)
 
 
 def notice(agent: str, now: float | None = None, spawn=None, mode: str = "plugin") -> str:

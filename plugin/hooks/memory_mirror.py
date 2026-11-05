@@ -76,7 +76,7 @@ def write_atomic(path: Path, data: bytes):
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_bytes(data)  # bytes: no newline translation on Windows, so versions match the server's
-    os.replace(tmp, path)
+    token_store.replace_durable(tmp, path)
 
 
 def linked(p: Path) -> bool:

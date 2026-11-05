@@ -193,6 +193,25 @@ def headers(tok: str) -> dict:
             **({"X-Knowledge-Chat": "1"} if os.environ.get("KNOWLEDGE_CHAT") else {})}
 
 
+def sync_dir(folder: Path) -> None:
+    """Make a rename in this folder survive a crash; Windows cannot open a folder like this and needs none."""
+    if os.name != "nt":
+        fd = os.open(folder, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+
+def replace_durable(tmp: Path, path: Path) -> None:
+    """os.replace that survives a crash: without the fsync the rename can reach the disk before the data, and after a
+    power cut or a killed VM the file is there but empty."""
+    with open(tmp, "rb+") as f:
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+    sync_dir(Path(path).parent)
+
+
 def store_url(u: str) -> None:
     URL_FILE.parent.mkdir(parents=True, exist_ok=True)
     URL_FILE.write_text(u.rstrip("/") + "\n", encoding="utf-8")

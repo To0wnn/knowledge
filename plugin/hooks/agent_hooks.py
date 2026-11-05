@@ -284,7 +284,7 @@ def write_private(path: Path, data: dict):
     tmp = path.with_suffix(".tmp")
     with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as f:
         f.write(json.dumps(data))  # created 0600: agy's entry holds the key to its session
-    os.replace(tmp, path)
+    token_store.replace_durable(tmp, path)
 
 
 def read_entries(pattern: str) -> list:

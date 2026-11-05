@@ -22,6 +22,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+
 RUNGS = (50, 75, 90, 95)
 GATE = 95  # from here on new subagents are refused
 STATE = Path(os.environ.get("KNOWLEDGE_HOME") or Path.home() / ".knowledge")
@@ -208,7 +209,8 @@ def install(config: Path) -> str:
     data["statusLine"] = {**current, "type": "command", "command": ours}
     tmp = settings.with_name(f"{settings.name}.knowledge-{os.getpid()}.tmp")
     tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    os.replace(tmp, settings)
+    import token_store  # here only: the status line runs this file on every tick
+    token_store.replace_durable(tmp, settings)
     if wrapped:
         return ""
     return ("knowledge plugin: the status line now also hands the usage limit to the plugin (your own status line "
