@@ -1452,6 +1452,13 @@ async def one_lamp(browser, secret: str) -> None:
         check(send["empty"] == "rgba(0, 0, 0, 0)" and send["typed"] != send["empty"], f"Send is quiet until there is something to send {send}")
     check(not errors, f"no page errors on the lamp checks {errors[:2]}")
     await ctx.close()
+    # a wide table scrolls inside its own box: the page itself never moves sideways, also not for a keyboard user
+    ctx, pg, errors = await page(browser, secret, "/ui/admin#tokens", viewport={"width": 800, "height": 900})
+    await pg.wait_for_selector("#tokens table, .token-table", timeout=10000)
+    await pg.wait_for_timeout(800)
+    wide = await pg.evaluate("() => ({doc: document.scrollingElement.scrollWidth, win: innerWidth})")
+    check(wide["doc"] <= wide["win"], f"admin tokens at 800 px: the page does not scroll sideways {wide}")
+    await ctx.close()
 
 
 async def design_system(browser, devices, secret: str) -> None:
