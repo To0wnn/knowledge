@@ -54,8 +54,10 @@ The companion that starts workers is described in [companion.md](companion.md); 
   (`--output=<file>` would write anywhere, .git/config included; agy rules are prefixes, so agy gets none) (no push, no other command; a
   headless run cannot ask, so the rest is refused). Each agent the native way: Claude `--permission-mode acceptEdits`
   plus `--allowedTools`; agy `--mode accept-edits` plus allow rules for that session only (`--settings`, never saved);
-  Codex `-s workspace-write` with only the worktree's git folder and the repository's objects, refs and logs writable
-  (not `.git/config` or hooks; the sandbox has no network) and the plugin's knowledge tools approved with
+  Codex `-s workspace-write` with only the worktree's git folder, the repository's objects and logs, and the refs under
+  `refs/heads/task` and `refs/knowledge/checkpoints` writable, so it cannot move main (it can move another task's branch:
+  a ref's lock file sits next to it), and not `.git/config` or hooks; other shell commands run, inside that sandbox without
+  network, and the plugin's knowledge tools are approved with
   `-c plugins.knowledge@knowledge.mcp_servers.knowledge.default_tools_approval_mode=approve`. A worker that ends with exit 0
   but left its task open (not claimed, not handed back) counts as failed: an error in the activity log and the
   stalled lane, plus the server's idle notice. Its prompt holds the task line and the rules: claim it, commit

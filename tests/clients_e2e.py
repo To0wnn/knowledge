@@ -2956,6 +2956,46 @@ def claude_stored_token(tmp: Path):
         check(not bad, f"{agent}: the PostToolUse hooks exit 0 with clean output on odd input", "; ".join(bad)[:1000])
 
 
+def codex_worker_sandbox(tmp: Path):
+    """A real Codex sandbox with the folders a worker gets: it commits on its task branch and cannot move main."""
+    codex = shutil.which("codex")
+    if not codex or not sys.platform.startswith("linux"):
+        return print("skip codex worker sandbox (needs codex on Linux)")
+    home, repo, wt = tmp / "Sandbox Home", tmp / "sandbox repo", tmp / "sandbox wt"
+    (home / ".codex").mkdir(parents=True)
+    env = user_env(home, PATH=os.environ["PATH"], GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",
+                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com")
+    def git(*args, cwd=repo):
+        return run(["git", *args], "", env, cwd=str(cwd), timeout=60)
+    repo.mkdir()
+    git("-c", "init.defaultBranch=main", "init", "-q")
+    git("commit", "-q", "--allow-empty", "-m", "one")
+    git("worktree", "add", "-q", "-b", "task/T1", str(wt), "HEAD")
+    main_at = git("rev-parse", "main")[1].strip()
+    probe = ("import json, workers; "
+             f"print(json.dumps(workers.codex_git_dirs({{'cwd': {str(wt)!r}, 'worktree': {str(wt)!r}}})))")
+    code, out, err = run([sys.executable, "-c", probe], "", env, cwd=CLIENT / "plugin" / "hooks")
+    roots = json.loads(out)[1::2] if code == 0 else []
+    check(any(r.endswith("task") for r in roots) and not any(r.endswith("refs") for r in roots),
+          "codex worker: of the refs only the task branches and checkpoints are writable", out + err)
+    def boxed(*args):
+        # as `exec -s workspace-write --add-dir`: everything readable, the folder and these roots writable
+        writable = ", ".join(f"{json.dumps(r)} = \"write\"" for r in [str(wt), *roots])
+        return run([codex, "sandbox", "-P", "worker", "-c", f'permissions.worker.filesystem={{":root" = "read", {writable}}}',
+                    "-C", str(wt), "--", *args], "", env, cwd=str(wt), timeout=60)
+    if boxed("true")[0] != 0:  # no user namespaces on this runner
+        return print("skip codex worker sandbox (the sandbox does not start here)")
+    (wt / "work.txt").write_text("x", encoding="utf-8")
+    code, out, err = boxed("git", "add", "work.txt")
+    code2, out2, err2 = boxed("git", "commit", "-q", "-m", "two")
+    check(code == 0 and code2 == 0 and git("log", "-1", "--format=%s", "task/T1")[1].strip() == "two",
+          "codex worker: a commit on its task branch works in the sandbox", out + err + out2 + err2)
+    code, out, err = boxed("git", "update-ref", "refs/heads/main", "HEAD")
+    code2, out2, err2 = boxed("git", "branch", "-f", "main", "HEAD")
+    check(code != 0 and code2 != 0 and git("rev-parse", "main")[1].strip() == main_at,
+          "codex worker: moving main is refused by the sandbox", out + err + out2 + err2)
+
+
 def checkout_update(tmp: Path):
     """The setup's git checkout after a rewritten history (force-push): update resets it to GitHub's main, keeps the
     old HEAD as a branch, and refuses when a tracked file is changed (a pull would stop with conflicts everywhere)."""
@@ -3107,6 +3147,7 @@ def main():
         companion_setup(tmp)
         checkout_update(tmp)
         claude_stored_token(tmp)
+        codex_worker_sandbox(tmp)
         real_clis(tok, home)
     finally:
         proc.kill()
