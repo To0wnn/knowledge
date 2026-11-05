@@ -61,7 +61,7 @@ sys.path.insert(0, str(HOOKS))
 import token_store  # noqa: E402  (KNOWLEDGE_TOKEN or the keyring, shared with the Claude plugin)
 import agent_hooks  # noqa: E402  (the hook runtime, shipped in plugin/ for the Codex and agy plugins)
 from agent_hooks import token  # noqa: E402
-URL = token_store.url()  # KNOWLEDGE_URL, else what an earlier install stored, else the default
+URL = token_store.url()  # KNOWLEDGE_URL, else what an earlier install stored; "" until the setup asks for it
 CODEX = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")  # Codex's own override, as Codex reads it
 CONFIG = {"agy": Path.home() / ".gemini" / "config" / "hooks.json", "codex": CODEX / "hooks.json"}
 RULES = {"agy": Path.home() / ".gemini" / "GEMINI.md", "codex": CODEX / "AGENTS.md"}
@@ -251,14 +251,40 @@ def install_claude(tok: str):
     print("done; start a new Claude Code session in your project folder")
 
 
+TOML_TOKEN = re.compile(r'''"""|\'\'\'|"(?:[^"\\\n]|\\.)*"|'[^'\n]*'|#.*|[\[\]]''')
+TOML_CLOSE = {'"""': re.compile(r'(?:[^\\]|\\.)*?"{3,5}', re.S), "'''": re.compile(r"(?s).*?'{3,5}")}
+
+
+def toml_value_state(line: str, opened: str, depth: int) -> tuple:
+    """(open multi-line string, array depth) after a line that is no table header, given the state before it."""
+    i = 0
+    while True:
+        if opened:
+            end = TOML_CLOSE[opened].match(line, i)
+            if not end:
+                return opened, depth
+            i, opened = end.end(), ""
+        m = TOML_TOKEN.search(line, i)
+        if not m:
+            return opened, depth
+        t, i = m.group(0), m.end()
+        if t in TOML_CLOSE:
+            opened = t
+        elif t in "[]":
+            depth += 1 if t == "[" else -1
+
+
 def toml_table_span(text: str, name: str):
     """(start, end) of table [name] in a TOML text with its subtables ([name.x], [[name.x]]), or None. It ends at the
-    next other table header; comment lines above that header belong to that table. A header-like line inside a
-    multi-line string would count as a header: Codex's config.toml has none where this is used."""
+    next other table header; comment lines above that header belong to that table. A line inside a multi-line string
+    or array is a value, also when it looks like a header. Lines end at \\n only, as in TOML (no \\f, no U+2028)."""
     head = re.compile(r"\s*\[\[?\s*([^\[\]]+?)\s*\]\]?\s*(#.*)?")
-    pos, start, comments = 0, None, None
-    for line in text.splitlines(keepends=True):
-        m = head.fullmatch(line.rstrip("\r\n"))
+    pos, start, comments, opened, depth = 0, None, None, "", 0
+    for line in re.findall(r".*\n|.+", text):
+        m = head.fullmatch(line.rstrip("\r\n")) if not opened and depth <= 0 else None
+        in_value = bool(opened or depth > 0)
+        if not m:
+            opened, depth = toml_value_state(line, opened, depth)
         if start is None:
             if m and not line.lstrip().startswith("[[") and m.group(1) == name:
                 start = pos
@@ -266,7 +292,7 @@ def toml_table_span(text: str, name: str):
             if m.group(1) != name and not m.group(1).startswith(name + "."):
                 return start, pos if comments is None else comments
             comments = None
-        elif line.lstrip().startswith("#"):
+        elif not in_value and line.lstrip().startswith("#"):
             comments = pos if comments is None else comments
         elif line.strip():
             comments = None
@@ -1204,6 +1230,22 @@ if __name__ == "__main__":
                 assert not tomllib or tomllib.loads(rest) == tomllib.loads(want), (t, rest)
                 assert ("# my other" in rest) == ("# my other" in want) and ("once" in rest) == ("once" in want), (t, rest)
         assert toml_table_span("[[mcp_servers.knowledge]]\n# [mcp_servers.knowledge]\n", "mcp_servers.knowledge") is None
+        for t, want in (  # a look-alike in a value is no table; the real one goes whole (stopped review 23 Oct 2026, reproduced 5 Nov 2026)
+                ('note = "[mcp_servers.knowledge]"\n[z]\nq = 1\n', None),
+                ('note = """\n[mcp_servers.knowledge]\nurl = 1\n"""\n[z]\nq = 1\n', None),
+                ("note = '''\n[mcp_servers.knowledge]\n'''\n[z]\nq = 1\n", None),
+                ('note = "a [mcp_servers.knowledge] b"\n', None),
+                ('[z]\nnote = """\n[mcp_servers.knowledge]\n"""\nq = 1\n' + k, '[z]\nnote = """\n[mcp_servers.knowledge]\n"""\nq = 1\n'),
+                ('a = """x\\"""\n[mcp_servers.knowledge]\n"""\n' + k, 'a = """x\\"""\n[mcp_servers.knowledge]\n"""\n'),
+                ('a = """x"""\n' + k + '[z]\nq = 1\n', 'a = """x"""\n\n[z]\nq = 1\n'),
+                (k + 'd = """\n[other]\n"""\n[z]\nq = 1\n', '[z]\nq = 1\n'),
+                (k + 'm = [\n  ["a"]\n]\n[z]\nq = 1\n', '[z]\nq = 1\n'),
+                (k + '# c\nm = [\n  # ]\n  "]"\n]\n[z]\nq = 1\n', '[z]\nq = 1\n'),
+                ('m = "x"\n[mcp_servers.knowledge]\nurl = "u"', 'm = "x"\n'),
+                (k + "[[profiles]]\nx = 1\n", "[[profiles]]\nx = 1\n"),
+                ('[mcp_servers.knowledge]\r\nurl = "u"\r\n[z]\r\nq = 1', "[z]\r\nq = 1\n")):
+            assert drop_toml_table(t, "mcp_servers.knowledge") == want, (t, drop_toml_table(t, "mcp_servers.knowledge"))
+            assert not tomllib or tomllib.loads(want if want is not None else t), t
         import tempfile
         with tempfile.TemporaryDirectory() as d:
             (Path(d) / "e.json").write_text("\ufeff \n", encoding="utf-8")
