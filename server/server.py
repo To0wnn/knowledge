@@ -290,6 +290,7 @@ def version(data: bytes) -> str:
 BINARY = {".zip", ".gz", ".tgz", ".xz", ".7z", ".tar", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf",
           ".bin", ".img", ".iso", ".so", ".pyc", ".whl", ".mp4", ".mkv", ".db", ".sqlite", ".woff", ".woff2", ".ttf"}
 RESCAN_SECONDS = int(os.environ.get("KNOWLEDGE_RESCAN", "60"))
+JUST_WRITTEN = float(os.environ.get("KNOWLEDGE_JUST_WRITTEN", "5"))  # seconds the rescan leaves a new memo to whoever wrote it; the tests use less
 logging.getLogger("mcp.server.streamable_http").setLevel(logging.WARNING)  # stateless: one "Terminating session: None" per request
 BACKGROUND: dict[str, dict] = {}  # last run of the background work, for the admin page
 
@@ -396,7 +397,7 @@ class Index:
                 continue
             hit = self.files.get(rel)
             if not hit or hit[0] != st.st_mtime_ns or hit[1] != st.st_size:
-                if self.loaded and WATCH_DEVICE and mem_of(rel) and time.time() - st.st_mtime < 5:
+                if self.loaded and WATCH_DEVICE and mem_of(rel) and time.time() - st.st_mtime < JUST_WRITTEN:
                     continue  # just written: the server that wrote it notes its task lines first (blue/green), or the watcher reports it
                 self.refresh(rel)
                 # a file changed on disk that no write here noted: a VM session wrote it, and the watcher's report may
@@ -2970,7 +2971,7 @@ class BearerAuth:
             return await HTMLResponse(LOGIN.format(msg="<p class='alert'>Too many wrong passwords: wait a minute.</p>"), 429)(scope, receive, send)
         if not (UI_PASSWORD and hmac.compare_digest(given.encode(), UI_PASSWORD.encode())):
             _login_fails.setdefault(client, []).append(time.time())
-            await asyncio.sleep(1)
+            await asyncio.sleep(float(os.environ.get("KNOWLEDGE_LOGIN_DELAY", 1)))  # the tests use less
             return await HTMLResponse(LOGIN.format(msg="<p class='alert'>Wrong password.</p>"), 401)(scope, receive, send)
         audit("ui-login", UI_USER)
         resp = RedirectResponse("/ui", status_code=303)

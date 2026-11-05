@@ -507,8 +507,8 @@ def machines_contract(tmp, ck, fr, raw, er, et, heard):
     assert json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"] == []  # handed out once
     # A long poll: with nothing waiting the server holds the ask for ?wait= seconds and says it did; an old-style ask
     # (no wait) answers at once.
-    t0 = time.time(); held = json.loads(http("GET", "/machine/actions?wait=2", token=fr, headers=pc)[1])
-    assert held == {"actions": [], "waited": 2.0} and 1.5 <= time.time() - t0 < 6, (held, time.time() - t0)
+    t0 = time.time(); held = json.loads(http("GET", "/machine/actions?wait=0.5", token=fr, headers=pc)[1])
+    assert held == {"actions": [], "waited": 0.5} and 0.4 <= time.time() - t0 < 5, (held, time.time() - t0)
     t0 = time.time(); json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1]); assert time.time() - t0 < 1.5
     assert http("POST", "/machine/actions/result", {"id": got[0]["id"], "ok": True, "result": "on"}, token=fr, headers=pc)[0] == 200
     assert http("POST", "/machine/actions/result", {"id": got[1]["id"], "ok": True}, token=et, headers=pc)[0] == 404  # not her machine: her own record has no such action
@@ -1407,9 +1407,9 @@ def board_contract(tmp, ck, fr, raw, er, et):
     assert back.get("col") == "needs" and back["line"] == "refused: git push -f", back
     # Snooze (until): hidden until that time or until the item changes, whichever comes first.
     shows = lambda: ("chat", cids[1]) in {(i["kind"], i["id"]) for i in board()}
-    assert ui("/ui/api/board/dismiss", {"key": back["key"], "sig": back["sig"], "until": time.time() + 2})[0] == 200
+    assert ui("/ui/api/board/dismiss", {"key": back["key"], "sig": back["sig"], "until": time.time() + 1})[0] == 200
     assert not shows(), "a snoozed item is hidden"
-    time.sleep(2.2)
+    time.sleep(1.2)
     assert shows(), "a snooze that ran out shows the item again"
     assert ui("/ui/api/board/dismiss", {"key": back["key"], "sig": back["sig"], "until": time.time() + 600})[0] == 200
     assert not shows()
@@ -1823,7 +1823,7 @@ def main():
            "KNOWLEDGE_LANGUAGE": "nl", "KNOWLEDGE_BUILTIN_PROJECTS": "homelab,anpitek,trade",
            "KNOWLEDGE_BIND": "127.0.0.1", "KNOWLEDGE_RESCAN": "3600",
            "KNOWLEDGE_GITHUB_API": ghurl, "KNOWLEDGE_GITHUB_RAW": ghurl + "/raw", "KNOWLEDGE_EXTERNAL_SLEEP": "3600", "KNOWLEDGE_INSTANCE": "blue", "KNOWLEDGE_PLUGIN_GRACE": "0",
-           "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_RERANK_MODEL": "test", "KNOWLEDGE_DUPES_EVERY": "1", "KNOWLEDGE_DUPES_DELAY": "0", "KNOWLEDGE_DUPES_DEBOUNCE": "0", "KNOWLEDGE_VECTOR_SYNC": "0.2", "KNOWLEDGE_WATCH_DEVICE": "laptop", "KNOWLEDGE_TASK_STALLED": "1", "KNOWLEDGE_TASK_LEASE": "600", "KNOWLEDGE_TASK_CHECK": "0.25", "KNOWLEDGE_RESCAN": "2", "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}",
+           "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_RERANK_MODEL": "test", "KNOWLEDGE_DUPES_EVERY": "1", "KNOWLEDGE_DUPES_DELAY": "0", "KNOWLEDGE_DUPES_DEBOUNCE": "0", "KNOWLEDGE_VECTOR_SYNC": "0.2", "KNOWLEDGE_WATCH_DEVICE": "laptop", "KNOWLEDGE_TASK_STALLED": "1", "KNOWLEDGE_TASK_LEASE": "600", "KNOWLEDGE_TASK_CHECK": "0.25", "KNOWLEDGE_RESCAN": "1", "KNOWLEDGE_JUST_WRITTEN": "1", "KNOWLEDGE_LOGIN_DELAY": "0.05", "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}",
            "KNOWLEDGE_MATRIX_URL": ghurl, "KNOWLEDGE_MATRIX_ROOM": "!room:example", "KNOWLEDGE_MATRIX_TOKEN": "mx",
            "KNOWLEDGE_STT_URL": ghurl + "/v1/", "KNOWLEDGE_STT_LANGUAGE": "nl", "KNOWLEDGE_STT_PROMPT": "forge, Proxmox", "KNOWLEDGE_STT_KEY": "sk-1",
            "KNOWLEDGE_NEEDS_QUIET": "1", "KNOWLEDGE_UI_GAP_WAIT": "0.5", "KNOWLEDGE_PUBLIC_URL": "https://kn.example"}
@@ -2027,24 +2027,24 @@ def main():
             assert not call("knowledge_write", {"path": f"memory/{n}.md", "content": memo(body, n)})[0]
         deadline = time.time() + 60
         while "dup_a.md ↔ dup_b.md" not in (lint_out := call("knowledge_lint", {})[1]) and time.time() < deadline:
-            time.sleep(1)
+            time.sleep(0.2)
         assert "possible_duplicate" in lint_out and "dup_a.md ↔ dup_b.md (0." in lint_out, lint_out[-800:]
         # The writing device hears it at its next turn, without waiting for lint (judge_soon -> tell_writers).
         deadline, notes = time.time() + 60, []
         while not notes and time.time() < deadline:
-            notes = json.loads(http("GET", "/tasks?project=homelab&agent=claude&v=2")[1])["notices"] or time.sleep(1) or []
+            notes = json.loads(http("GET", "/tasks?project=homelab&agent=claude&v=2")[1])["notices"] or time.sleep(0.2) or []
         assert notes and "looks like the same subject as" in notes[0]["text"] and "[[dup_" in notes[0]["text"], notes
         assert "it is about: d" in notes[0]["text"], notes
         # One notice per pair: a later edit of a known duplicate does not repeat it.
         assert not call("knowledge_edit", {"path": "memory/dup_a.md", "old_string": "closed state", "new_string": "closed state too"})[0]
-        time.sleep(3)  # several passes: the pair is judged again within 2 s (vector sync 0.2 s, pass every 1 s)
+        time.sleep(2.2)  # past a whole pass: the pair is judged again within 2 s (vector sync 0.2 s, pass every 1 s)
         assert not json.loads(http("GET", "/tasks?project=homelab&agent=claude&v=2")[1])["notices"]
         # A memo file written directly (a VM session, reported by the watcher) is judged and told too.
         (mem / "dup_c.md").write_text(memo(body, "dup_c"))
         http("POST", "/invalidate", {"paths": ["memory/dup_c.md"]}, token="watch-token")
         deadline, notes = time.time() + 60, []
         while not notes and time.time() < deadline:
-            notes = json.loads(http("GET", "/tasks?project=homelab&agent=claude&v=2")[1])["notices"] or time.sleep(1) or []
+            notes = json.loads(http("GET", "/tasks?project=homelab&agent=claude&v=2")[1])["notices"] or time.sleep(0.2) or []
         assert notes and "dup_c.md" in notes[0]["text"], notes
         (mem / "dup_c.md").unlink()
         http("POST", "/invalidate", {"paths": ["memory/dup_c.md"]}, token="watch-token")
