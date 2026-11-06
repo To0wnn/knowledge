@@ -142,6 +142,10 @@ def main(agent: str):
     if worker and (nonce := os.environ.get("KNOWLEDGE_START_NONCE", "")):  # its own note, not one of a namesake task
         base = KN_HOME / "companion" / "workers" / re.sub(r"[^\w.-]", "-", nonce)[:60]
         try:
+            Path(f"{base}.seen").touch()  # workers.seen_path: the board's "no output since"
+        except OSError:
+            pass
+        try:
             note = Path(f"{base}.stop").read_text(encoding="utf-8")
         except OSError:
             pass

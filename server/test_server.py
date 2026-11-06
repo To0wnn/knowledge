@@ -1463,7 +1463,7 @@ def board_contract(tmp, ck, fr, raw, er, et):
     rep = {"version": "0.17.0", "workersAllowed": True, "agents": {"codex": {}, "claude": {}},
            "folders": {"linked": [{"path": "/home/x/garden", "project": "garden", "git": {**pill, "changed": "3; rm -rf"}}]},
            "workers": [worker("BRD-4", "running", git=pill, progress={"commit": "feat: beds", "commits": 2, "changed": "3", "log": [
-               "one", "two Sup3rSecret99", "three", "four " + "y" * 400]}), worker("BRD-5", "failed", now - 60, why="ended without claiming or handing back its task"), worker("BRD-6", "finished", now - 60),
+               "one", "two Sup3rSecret99", "three", "four " + "y" * 400]}), worker("BRD-Q", "running", progress={"quiet": 31 * 60}), worker("BRD-5", "failed", now - 60, why="ended without claiming or handing back its task"), worker("BRD-6", "finished", now - 60),
                        worker("BRD-7", "failed", now - 8 * 86400), worker("BRD-8", "finished", now - 2 * 86400)]}
     assert http("POST", "/machine/report", rep, token=fr, headers=pc)[0] == 200
     path = "garden-memory/project_tasks.md"
@@ -1488,6 +1488,14 @@ def board_contract(tmp, ck, fr, raw, er, et):
     assert reply["git"]["changed"] == 0, "a number the companion sent as text is no number"
     assert col("chat", cids[1]) == "needs" and items[("chat", cids[1])]["line"] == "refused: git push", items[("chat", cids[1])]
     assert col("chat", cids[2]) == "running"
+    # No output for too long: it shows under Needs you with its reason, and a running worker keeps its task out of "open".
+    quiet = items[("worker", "BRD-Q")]
+    assert quiet["col"] == "needs" and quiet["line"].startswith("no output since") and quiet["can_stop"] and quiet["sig"].endswith(":quiet"), quiet
+    import server as srv  # the pure rule, without a turn of half an hour
+    assert srv.chat_card({"status": "running", "events": [{"at": now - 60}]}) == ("running", "working")
+    assert srv.chat_card({"status": "running", "events": [{"at": now - 31 * 60}]})[0] == "needs"
+    assert srv.chat_card({"status": "queued", "events": [{"at": now - 31 * 60}]})[0] == "running", "not on the pc yet: that has its own line"
+    assert srv.chat_card({"status": "running", "updated": now - 31 * 60, "asks": []})[0] == "needs", "a new chat has no events yet"
     assert col("worker", "BRD-4") == "running" and items[("worker", "BRD-4")]["git"] == pill
     prog = items[("worker", "BRD-4")]["progress"]
     assert prog["commit"] == "feat: beds" and prog["commits"] == 2 and prog["changed"] == 0, prog

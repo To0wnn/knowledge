@@ -4395,6 +4395,7 @@ SETTINGS = {  # key: (type, min, max, label, help); the label is short, the help
     "docs_sync_minutes": (int, 5, 1440, "Guest docs sync (minutes)", "A guest's session asks for a full docs mirror sync when the last one is older than this."),
     "needs_per_hour": (int, 0, 60, "Needs-you messages per hour", "Matrix messages per hour about new 'Needs you' items of the admins; 0 turns them off."),
     "chat_approval_minutes": (int, 1, 1440, "Chat approval wait (minutes)", "How long a tool approval in a chat waits for an answer before it is denied."),
+    "quiet_minutes": (int, 0, 1440, "Quiet turn notice (minutes)", "A chat turn or worker without output for this long shows under Needs you; nothing is stopped. 0 turns it off."),
 }
 
 
@@ -4403,7 +4404,7 @@ def current_settings() -> dict:
             "review_after_days": kb_lint.REVIEW_AFTER_DAYS,
             "big_memo": kb_lint.BIG_MEMO, "rescan_seconds": RESCAN_SECONDS, "user_max_projects": USER_MAX_PROJECTS,
             "user_max_tokens": USER_MAX_TOKENS, "project_max_mb": PROJECT_MAX_MB,
-            "docs_sync_minutes": DOCS_SYNC_MINUTES, "needs_per_hour": NEEDS_PER_HOUR, "chat_approval_minutes": CHAT_ASK_MINUTES, "extra_admins": sorted(ADMINS - CONFIG_ADMINS)}
+            "docs_sync_minutes": DOCS_SYNC_MINUTES, "needs_per_hour": NEEDS_PER_HOUR, "chat_approval_minutes": CHAT_ASK_MINUTES, "quiet_minutes": QUIET_MINUTES, "extra_admins": sorted(ADMINS - CONFIG_ADMINS)}
 
 
 def check_settings(values: dict) -> dict:
@@ -4430,8 +4431,9 @@ def check_settings(values: dict) -> dict:
 
 
 def apply_settings(values: dict):
-    global SIMILAR_HINT, HISTORY_KEEP, RESCAN_SECONDS, USER_MAX_PROJECTS, USER_MAX_TOKENS, PROJECT_MAX_MB, DOCS_SYNC_MINUTES, NEEDS_PER_HOUR, CHAT_ASK_MINUTES
+    global SIMILAR_HINT, HISTORY_KEEP, RESCAN_SECONDS, USER_MAX_PROJECTS, USER_MAX_TOKENS, PROJECT_MAX_MB, DOCS_SYNC_MINUTES, QUIET_MINUTES, NEEDS_PER_HOUR, CHAT_ASK_MINUTES
     NEEDS_PER_HOUR = values.get("needs_per_hour", NEEDS_PER_HOUR)
+    QUIET_MINUTES = values.get("quiet_minutes", QUIET_MINUTES)
     DOCS_SYNC_MINUTES = values.get("docs_sync_minutes", DOCS_SYNC_MINUTES)
     CHAT_ASK_MINUTES = values.get("chat_approval_minutes", CHAT_ASK_MINUTES)
     USER_MAX_PROJECTS = values.get("user_max_projects", USER_MAX_PROJECTS)
@@ -6026,7 +6028,14 @@ def chat_card(c: dict) -> tuple[str, str]:
     """(column, status line) of one chat on the board: running while a turn runs or waits; needs you once a turn
     ended with output its owner has not opened yet (a reply, a refused tool call, an error); done once read."""
     if c.get("status") in ("queued", "running"):
-        return "running", "waiting for the pc" if c["status"] == "queued" else "waits for your approval" if asks_open(c, time.time()) else "working"
+        if c["status"] == "queued":
+            return "running", "waiting for the pc"
+        if asks_open(c, time.time()):
+            return "running", "waits for your approval"
+        last = (c.get("events") or [{}])[-1].get("at") or c.get("updated") or time.time()
+        if QUIET_MINUTES and time.time() - last >= QUIET_MINUTES * 60:
+            return "needs", f"no output since {since(last)}: still working, or stuck"
+        return "running", "working"
     if c.get("closed"):  # its owner closed it: off the board until a new message opens it
         return "", ""
     # its turn ended, but a subagent or a background shell of it still works: it runs on (Working, not earlier)
@@ -6127,19 +6136,22 @@ def board_items() -> list[dict]:
             for w in ag.get("workers", []):
                 st, ended = w.get("status"), w.get("ended") or w.get("started") or 0
                 lost = st == "running" and not r["online"]  # its pc went offline: nobody knows whether it still runs
-                col = ("needs" if lost else "running" if st == "running" else "needs" if st == "failed" and now - ended < BOARD_FAILED
+                quiet = (w.get("progress") or {}).get("quiet", 0) if st == "running" and not lost and QUIET_MINUTES else 0
+                quiet = quiet if quiet >= QUIET_MINUTES * 60 else 0
+                col = ("needs" if lost or quiet else "running" if st == "running" else "needs" if st == "failed" and now - ended < BOARD_FAILED
                        else "done" if st in ("finished", "stopped", "merged", "failed") and now - ended < BOARD_DONE else "")
                 if col:
                     items.append({**base, "kind": "worker", "col": col, "id": w.get("id"), "agent": a, "project": w.get("project"),
-                                  "key": f"worker:{r['id']}/{w.get('project')}/{w.get('id')}", "sig": f"{st}:{ended}" + (":offline" if lost else ""),
+                                  "key": f"worker:{r['id']}/{w.get('project')}/{w.get('id')}", "sig": f"{st}:{ended}" + (":offline" if lost else ":quiet" if quiet else ""), "quiet": quiet,
                                   "title": w.get("id"), "at": w.get("started") if st == "running" else ended,
-                                  "line": (f"pc offline since {since(r['at'])}" if lost else f"worker {st}" + (f": {w['why']}" if w.get("why") else ""))
+                                  "line": (f"pc offline since {since(r['at'])}" if lost else f"no output since {since(now - quiet)}: still working, or stuck" if quiet
+                                           else f"worker {st}" + (f": {w['why']}" if w.get("why") else ""))
                                           + (f" · {w['branch']}" if w.get("branch") else ""),
                                   "offline_since": r["at"] if lost else None, "can_stop": st == "running" and r["online"],
                                   "can_restart": st in ("failed", "stopped", "finished") and r["online"],
                                   "git": w.get("git"), "status": st, "open": w.get("open") or "", "checkpoint": bool(w.get("checkpoint")),
                                   "why": w.get("why") or "", "progress": w.get("progress") if st == "running" else None})
-    working = {(i["project"], i["id"]) for i in items if i["kind"] == "worker" and i["col"] == "running"}
+    working = {(i["project"], i["id"]) for i in items if i["kind"] == "worker" and (i["col"] == "running" or i.get("quiet"))}
     tasks = task_rows()
     items += review_items(rows, tasks)
     for t in tasks:
@@ -6326,6 +6338,9 @@ async def ui_review_reject(request: Request):
 # ---------------------------------------------------------------- "Needs you" -> Matrix (admins only: it is their room)
 NEEDS_NOTIFIED = ADMIN_DIR / "needs_notified.json"  # {"items": {board key: sig told or seen}, "sent": [times]}
 NEEDS_PER_HOUR = 6  # admin Settings; 0 = off
+# admin Settings; 0 = off. Measured on 68 real chats (7 Nov 2026): 3 of 13917 gaps in a turn above 30 min, 2 of them a turn
+# stuck at the usage limit. Only a notice, nothing is stopped: a long build is quiet too.
+QUIET_MINUTES = 30
 NEEDS_QUIET = float(os.environ.get("KNOWLEDGE_NEEDS_QUIET", 120))  # an admin who polled the board this recently sees it
 BOARD_SEEN: dict[str, float] = {}  # user -> last /ui/api/board poll (this process; a restart only means one message too many)
 
@@ -7268,7 +7283,7 @@ def worker_progress(p) -> dict | None:
         return None
     num = lambda k: max(0, min(int(p[k]), 10**6)) if type(p.get(k)) is int else 0
     log = p.get("log") if isinstance(p.get("log"), list) else []
-    return {"commit": redact(str(p.get("commit") or "")[:200]), "commits": num("commits"), "changed": num("changed"),
+    return {"commit": redact(str(p.get("commit") or "")[:200]), "commits": num("commits"), "changed": num("changed"), "quiet": num("quiet"),
             "log": [redact(str(x)[:300]) for x in log[-3:]]}
 
 

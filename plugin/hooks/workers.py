@@ -397,6 +397,11 @@ def stop_note(w: dict, target: str) -> Path:
     return f
 
 
+def seen_path(w: dict) -> Path:
+    """Touched by a worker's watch hook after each tool call: it still lives, also when its log stays empty."""
+    return DIR / f"{safe(w['nonce'])}.seen"
+
+
 def steer_path(w: dict) -> Path:
     """The owner's messages for one running worker (JSON lines), read and removed by its watch hook after its next
     tool call; named by its start nonce like the stop note."""

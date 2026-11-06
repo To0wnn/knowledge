@@ -1131,6 +1131,7 @@ def check_workers(ws: dict, tok: str, now: float, lim: dict):
                 if not w.get("owner_stopped"):  # stopped on purpose: no other pc may take it at once, only after the lease
                     release(w, tok)  # a line it claimed but left open may start again at once (the server's idle notice)
                 workers.stop_path(w).unlink(missing_ok=True)
+                workers.seen_path(w).unlink(missing_ok=True)
                 if w["status"] == "finished" and left_open(w, tok):  # exit 0 is not done: e.g. its tools were refused
                     w.update(status="failed", why="ended without claiming or handing back its task" if code == 0 else
                              "the companion restarted while it ran; its task is still open")
@@ -1414,7 +1415,19 @@ def progress(w: dict, g) -> dict:
         except (OSError, subprocess.SubprocessError):
             pass
     return {"commit": mask(commit)[:TAIL_WIDTH], "commits": (g or {}).get("ahead", 0), "changed": (g or {}).get("changed", 0),
-            "log": log_tail(w.get("log"))}
+            "log": log_tail(w.get("log")), "quiet": quiet_for(w, time.time())}
+
+
+def quiet_for(w: dict, now: float) -> int:
+    """Seconds since a running worker last showed life: its log, or its watch hook after a tool call (agy -p logs nothing
+    until it ends). The server decides what is too long."""
+    last = w.get("started") or now
+    for f in (w.get("log"), workers.seen_path(w) if w.get("nonce") else None):
+        try:
+            last = max(last, os.stat(f).st_mtime) if f else last
+        except OSError:
+            pass
+    return max(0, int(now - last))
 
 
 def unfinished_work(w: dict) -> str:
@@ -2493,6 +2506,18 @@ def main(argv: list):
                 assert usage("claude", {"k": {"agent": "claude", "log": str(f)}}, now) == 93.0
             finally:
                 agent_hooks.limits.claude_used = real
+        with tempfile.TemporaryDirectory() as t:  # quiet: since the newest of its start, its log and its hook's mark
+            lf, seen_at = Path(t) / "w.log", 5000
+            lf.write_text("x"); os.utime(lf, (4000, 4000))
+            kept_seen, workers.seen_path = workers.seen_path, lambda w: Path(t) / "w.seen"
+            try:
+                assert quiet_for({"started": 1000, "log": str(lf), "nonce": "n"}, 6000) == 2000
+                assert quiet_for({"started": 1000, "nonce": "n"}, 6000) == 5000, "no log yet: since its start"
+                (Path(t) / "w.seen").touch(); os.utime(Path(t) / "w.seen", (seen_at, seen_at))
+                assert quiet_for({"started": 1000, "log": str(lf), "nonce": "n"}, 6000) == 1000, "agy -p logs nothing: its hook counts"
+                assert quiet_for({"started": 7000}, 6000) == 0
+            finally:
+                workers.seen_path = kept_seen
         # A started worker is on disk before the next task starts: killed in between, a restart still knows it.
         kept = {k: g[k] for k in ("settings", "usage_info", "check_workers", "why_not", "installed", "start_worker", "log", "save", "load", "workers")}
         saved, seen = {}, []

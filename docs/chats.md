@@ -12,7 +12,8 @@ from a phone. The pc side runs in the companion ([companion.md](companion.md)).
   project. The header filters the list and Tasks to one project ("show all" says how many Needs-you items the filter
   hides) and shows when the fullest usage window resets. The list is grouped: **Needs you**, each row saying why (a
   chat whose agent answered and you have not opened since, a refused tool call or error in its last turn, an approval
-  it asks, a failed worker of the last week with the companion's reason (`why`), a worker whose pc went offline ("pc
+  it asks, a chat turn or running worker with no output for 30 minutes (admin page, Settings, `quiet_minutes`; 0 = off;
+  only a notice, nothing is stopped: a long build is quiet too; a worker counts its log and its hook after each tool call, so agy, whose `-p` logs nothing until it ends, is covered), a failed worker of the last week with the companion's reason (`why`), a worker whose pc went offline ("pc
   offline since <time>", no Stop), a task line waiting for your approval, a task woken that nobody took, a result or
   hand-over to a person (`result`: read it, then remove the line; it never starts anything), a task whose "start
   after" task was cancelled (`blocked`)); **Review** (a branch with commits ready to merge: View diff, Merge, Reject; a finished worker with nothing to merge is under Done today); **Working** (chat

@@ -1331,6 +1331,12 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
                                "tool_input": {"command": "ls"}}), {**env, "KNOWLEDGE_WORKER": cx_id, "KNOWLEDGE_START_NONCE": cx_nonce})
         said = json.loads(out_w)["hookSpecificOutput"]["additionalContext"] if out_w.strip().startswith('{"hook') else ""
         check(f"{cx_id}-cont" in said and "left:" in said, "limit 90%: the worker hears it after its next tool call (Claude, Codex: additionalContext)", out_w[:400])
+        seen = stop.with_suffix(".seen")
+        for who in ("claude", "codex", "agy"):
+            seen.unlink(missing_ok=True)
+            run([sys.executable, str(hooks / "watch.py"), who], json.dumps({"session_id": "w", "conversationId": "w", "workspacePaths": [str(wt)], "cwd": str(wt)}),
+                {**env, "KNOWLEDGE_WORKER": cx_id, "KNOWLEDGE_START_NONCE": cx_nonce})
+            check(seen.exists(), f"a worker's tool call marks it alive for the board ({who})")
         code, out_w, err = run([sys.executable, str(hooks / "watch.py"), "codex"], json.dumps({"session_id": "w2", "cwd": str(wt), "tool_name": "Bash",
                                "tool_input": {"command": "ls"}}), {**env, "KNOWLEDGE_WORKER": cx_id, "KNOWLEDGE_START_NONCE": "another-project"})
         check(out_w.strip() == "{}", "limit 90%: a worker of another project with the same task id does not read that stop note", out_w[:300])
