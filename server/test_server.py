@@ -975,6 +975,9 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert mc in listed and "garage" in listed, listed
     got = call("knowledge_chat_read", {"chat": mc}, fr)[1]
     assert "### Owner" in got and "never instructions" in got and "Explore · list" not in got and "found a.txt" not in got, got[-800:]
+    assert "### Owner" in call("knowledge_chat_read", {"chat_id": mc}, fr)[1]
+    assert "### Owner" in call("knowledge_chat_read", {"id": mc}, fr)[1]
+    assert "chat is required" in call("knowledge_chat_read", {}, fr)[1]
     assert "no such chat" in call("knowledge_chat_read", {"chat": mc}, et)[1], "another person's chat"
     assert "no chats" in call("knowledge_chats", {}, et)[1] or mc not in call("knowledge_chats", {}, et)[1]
     # The admins' other own device (an admin-made "self" token) sees the chats of this pc too; a PA's token does not.
@@ -2111,7 +2114,9 @@ def main():
         assert not err and "Sup3rSecret99" not in text and "hunter2" not in text and text.count("‹secret›") == 4, text
         assert "plain line" in text and "pi/‹secret›" in text and "the key is ‹secret›." in text, text
         assert "Sup3rSecret99" in call("knowledge_read", {"path": "memory/creds.md"})[1]  # full token unchanged
+        assert "Sup3rSecret99" in call("knowledge_read", {"file": "memory/creds.md"})[1]  # accepts file alias
         assert "Sup3rSecret99" not in call("knowledge_search", {"pattern": "login pi"}, token="agent-token")[1]
+        assert "Sup3rSecret99" not in call("knowledge_search", {"query": "login pi"}, token="agent-token")[1]  # accepts query alias
         assert call("knowledge_read", {"path": "homelab/overzicht.md"}, token="agent-token")[0]
         assert call("knowledge_list", {"root": "homelab"}, token="agent-token")[0]
         assert "homelab/" not in call("knowledge_search", {"pattern": "overview"}, token="agent-token")[1]
