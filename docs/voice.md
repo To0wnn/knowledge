@@ -1,7 +1,7 @@
 # Speaking in chats
 
 [Back to the README](../README.md). The chat box has a microphone button when the server knows a speech-to-text
-server: click to start and again to stop, or hold it while you talk (Ctrl+Space in the box does the same). The text
+server: click to start and again to stop, or hold it while you talk (Ctrl+Space in the box does the same; Settings can change that key). The text
 lands in the box at the cursor; you read it and send it yourself.
 
 ## How it works

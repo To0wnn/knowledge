@@ -636,7 +636,10 @@ function renderNote() {
   const copy = el("button", "btn small", "Copy link");
   copy.onclick = () => navigator.clipboard?.writeText(`${location.origin}/ui${noteRoute(note.path)}`).then(() => { copy.textContent = "Copied"; setTimeout(() => (copy.textContent = "Copy link"), 1500); });
   tools.append(copy);
-  if (note.writable) { const edit = el("button", "btn small", touch ? "Edit" : `Edit (${keyOf("edit")})`); edit.onclick = startEdit; tools.append(edit); }
+  if (note.writable) {
+    const edit = el("button", "btn small", touch ? "Edit" : "Edit ({key})"); edit.onclick = startEdit; tools.append(edit);
+    if (!touch) { edit.dataset.shortcut = "edit"; keyLabels(tools); }
+  }
   const hist = el("button", "btn small", "History"); hist.onclick = () => showHistory(); tools.append(hist);
   pane.append(head, tools, el("div", "note-path", `${note.path} · version ${note.version}`));
   if (meta.description) pane.append(el("p", "note-desc", meta.description));
@@ -775,8 +778,9 @@ function startEdit() {
   const area = el("textarea", "editor"); area.value = current.text; area.spellcheck = false;
   area.setAttribute("aria-label", `Text of ${current.path}`);
   const err = el("p", "error"); err.hidden = true; err.setAttribute("role", "alert");
-  const save = el("button", "btn primary", `Save (${keyOf("save")})`), cancel = el("button", "btn", "Cancel");
-  const actions = el("div", "actions"); actions.append(cancel, save);
+  const save = el("button", "btn primary", "Save ({key})"), cancel = el("button", "btn", "Cancel");
+  save.dataset.shortcut = "save";
+  const actions = el("div", "actions"); actions.append(cancel, save); keyLabels(actions);
   pane.append(head, el("div", "note-path", `${current.path} · based on version ${current.version}`), area, err, actions);
   area.focus(); area.setSelectionRange(0, 0); area.scrollTop = 0;
   cancel.onclick = () => { if (keepEdits()) return; editing = false; renderNote(); };

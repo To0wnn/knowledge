@@ -239,9 +239,14 @@ function ckCloseTab() {
   setTimeout(() => go(startRoute(), true), 200);
 }
 // What is typed but not sent, per person and chat, in this browser (so a reload, a closed tab or the chat's other tab
-// keeps it; the newest 50; sign out clears them, nav.js). Files are not kept: only their names would be.
+// keeps it; the newest 50; sign out clears them, nav.js; a session that just expires does not, so the next load drops
+// what is older than 7 days: it can hold a secret). Files are not kept: only their names would be.
 const CK_DRAFTS = "kn_drafts", ckDraftKey = (card) => `${me.user}/${ckKey(card.meta)}`;
 function ckDrafts() { try { return JSON.parse(store.get(CK_DRAFTS) || "{}") || {}; } catch { return {}; } } // a damaged entry must not break a chat
+(function ckDraftsExpire(now = Date.now()) {
+  const kept = Object.entries(ckDrafts()).map(([k, d]) => [k, { ...d, at: d?.at || now }]).filter(([, d]) => now - d.at < 7 * 864e5); // without a date (older code): from today
+  if (kept.length || store.get(CK_DRAFTS)) store.set(CK_DRAFTS, JSON.stringify(Object.fromEntries(kept)));
+})();
 function ckDraftKeep(card) {
   const all = ckDrafts(), k = ckDraftKey(card), text = card.input.value;
   if (text.trim()) all[k] = { text, at: Date.now() }; else delete all[k];

@@ -29,6 +29,7 @@ from the vault plus the username; systemd-run does not see ~/.local/bin on PATH,
 """
 import asyncio
 import contextlib
+import json
 import re
 import os
 import subprocess
@@ -2127,11 +2128,41 @@ async def chat_drafts(browser, secret: str) -> None:
     await pg.reload()
     await pg.wait_for_selector(box, timeout=15000)
     check(True, "Draft: a damaged entry does not break the page")
+    await pg.fill(box, "too old")  # this chat's own key: its box must come up empty
+    aged = """(() => { const all = JSON.parse(store.get('kn_drafts')), [k] = Object.keys(all), day = 864e5;
+      all[k].at = Date.now() - 8 * day; all['x/fresh'] = {text: 'fresh', at: Date.now() - 6 * day}; all['x/undated'] = {text: 'undated'};
+      store.set('kn_drafts', JSON.stringify(all)); return [k, all['x/fresh'].at]; })()"""
+    key, fresh = await pg.evaluate(aged)
+    await pg.reload()
+    await pg.wait_for_selector(box, timeout=15000)
+    await pg.wait_for_function("ck.ready", timeout=15000)
+    left = json.loads(await pg.evaluate("store.get('kn_drafts')"))
+    check(key not in left and await pg.input_value(box) == "", f"Draft: one older than 7 days is gone at load {list(left)}")
+    check(left.get("x/fresh") == {"text": "fresh", "at": fresh}, f"Draft: one younger than 7 days stays as it was {left.get('x/fresh')}")
+    undated = left.get("x/undated", {})
+    check(undated.get("text") == "undated" and await pg.evaluate("(at) => Math.abs(Date.now() - at) < 6e4", undated.get("at", 0)), f"Draft: one without a date gets today's and stays {undated}")
     await pg.fill(box, "secret plans")
     await pg.evaluate("document.querySelector('a[href=\"/ui/logout\"]').addEventListener('click', (e) => e.preventDefault()); document.querySelector('a[href=\"/ui/logout\"]').click()")
     check(await pg.evaluate("store.get('kn_drafts')") is None, "Draft: sign out clears them")
     check(not errors, f"no page errors with drafts {errors[:2]}")
     await ctx.close()
+
+
+async def project_pick_pages(browser, secret: str) -> None:
+    """The picker on the pages outside the app (admin, help): it shows the project and picking one lands there."""
+    for path in ("/ui/admin", "/ui/help"):
+        ctx, pg, errors = await page(browser, secret, path, viewport={"width": 1300, "height": 900})
+        await pg.wait_for_function("document.querySelector('#projects').options.length > 1", timeout=15000)
+        now, target = await pg.evaluate("""(() => { const s = document.querySelector('#projects'), p = navProject.get();
+          return [s.value === p && p, [...s.options].map((o) => o.value).find((v) => v !== p && v !== 'all')]; })()""")
+        check(bool(now), f"{path}: the picker shows the current project")
+        check(await pg.locator("#projects option[value=all]").count() == 1, f"{path}: the picker offers all projects, as the app does")
+        await pg.select_option("#projects", target)
+        await pg.wait_for_url("**/ui#/notes*", timeout=15000)
+        await pg.wait_for_function("(p) => typeof data === 'object' && data.nodes.length > 0 && project === p && $('projects').value === p", arg=target, timeout=15000)
+        check(True, f"{path}: picking a project lands on that project")
+        check(not errors, f"{path}: no page errors with the picker {errors[:2]}")
+        await ctx.close()
 
 
 async def settings(browser, secret: str) -> None:
@@ -2171,6 +2202,26 @@ async def settings(browser, secret: str) -> None:
     await pg.click("[data-action=rail]")
     await pg.keyboard.press("Escape")
     check(await pg.inner_text("[data-action=rail]") == "Alt+[" and posted[-1] == {"keys": {"new_chat": None}}, "Settings: Esc cancels picking a key")
+    # The Edit and Save buttons of a note already open follow a new key at once (no re-render when you go back to it).
+    await pg.wait_for_function("data.nodes.length > 0", timeout=15000)
+    note = await pg.evaluate("data.nodes.find((n) => n.id.endsWith('.md') && !n.id.startsWith('claude/') && me.writable.includes(n.project))?.id")
+    if note:
+        await pg.evaluate("(p) => go(noteRoute(p))", note)
+        await pg.wait_for_selector('#note .note-tools button:text-matches("^Edit")', timeout=5000)
+        for action, button, opened in (("edit", '#note .note-tools button:text-matches("^Edit")', "Edit"), ("save", "#note .actions .btn.primary", "Save")):
+            if action == "save":
+                await pg.evaluate("go(noteRoute(current.path)); startEdit()")
+            check(f"({await pg.evaluate('(a) => keyOf(a)', action)})" in await pg.text_content(button), f"Keys: {opened} names its key")
+            await pg.evaluate("go('#/settings')")
+            await pg.click(f"[data-action={action}]")
+            await pg.keyboard.press("Alt+KeyQ")
+            await pg.wait_for_function("(a) => keyOf(a) === 'Alt+Q'", arg=action, timeout=5000)
+            check(await pg.text_content(button) == f"{opened} (Alt+Q)", f"Keys: the open note's {opened} shows a new key at once")
+            await pg.click(f".set-key:has([data-action={action}]) .btn.quiet")
+            await pg.wait_for_function("(a) => !me.prefs.keys?.[a]", arg=action, timeout=5000)
+        await pg.evaluate("go(noteRoute(current.path)); document.querySelector('#note .actions .btn:not(.primary)').click(); go('#/settings')")
+    else:
+        print("skip the open note's key labels (no writable note)")
     await pg.select_option("#set-grid", "here")
     await pg.wait_for_function("me.prefs.grid_open === 'here'", timeout=5000)
     await pg.select_option("#set-theme", "dark")
@@ -2229,6 +2280,7 @@ async def main() -> None:
         await search(browser, secret)
         await phone(browser, p.devices, secret)
         await admin(browser, secret)
+        await project_pick_pages(browser, secret)
         await cockpit(browser, p.devices, secret)
         await approvals(browser, p.devices, secret)
         await review(browser, p.devices, secret)
