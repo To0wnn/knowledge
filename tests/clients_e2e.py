@@ -2082,7 +2082,6 @@ def follow_e2e(tok: str, tmp: Path):
             http("POST", "/ui/api/machines/action", {"machine": mid, "action": "start_worker", "args": {"project": "garden", "id": i}}, ui)
         wait_for(lambda: len(started()) == 3, 60)
         local("/local/api/settings", {"workersAllowed": False})
-        row = lambda: next((r for r in machines() if r["id"] == mid), {})
         workers_of = lambda: {w["id"]: w for a in row().get("agents", {}).values() for w in a.get("workers", [])}
         ok = wait_for(lambda: len(started()) == 3 and all(workers_of().get(i, {}).get("status") == "running" for i in ids.values()), 60)
         if not check(ok, "follow: one worker per agent runs and is reported", json.dumps({"started": [x.get("worker") for x in started()], "reported": {i: (w.get("status"), w.get("agent"), w.get("why")) for i, w in workers_of().items()}, "at": row().get("at"), "now": time.time(), "actions": [(a["action"], a["status"], str(a.get("result"))[:120]) for a in row().get("actions", [])][-6:]})
@@ -2100,6 +2099,9 @@ def follow_e2e(tok: str, tmp: Path):
         for a in ids:
             st, body = http("POST", "/ui/api/worker/steer", {"machine": mid, "worker": f"garden/{ids[a]}", "text": f"use sqlite {a}"}, ui)
             check(st == 200, f"steer {a}: the owner's message is taken", body)
+        row = lambda: next((r for r in machines() if r["id"] == mid), {})
+        # its first round is over (it reports last): one still running would see workers on and start other tests' lines
+        check(wait_for(lambda: row().get("companion"), 60), "follow: the companion's first round reports", (home / "companion.log").read_text(errors="replace")[-600:])
         for a in ids:
             got = wait_for(lambda: f"use sqlite {a}" in texts(a).split("heard:")[-1] and "Delivered" in texts(a), 40)
             ev = view(a)["events"]
