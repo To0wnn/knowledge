@@ -915,7 +915,8 @@ document.addEventListener("keydown", (e) => {
   else if (/^[1-9]$/.test(e.key) && PROJECTS[Number(e.key) - 1]) switchProject(PROJECTS[Number(e.key) - 1]);
   else if (e.key === "0") switchProject(ALL);
   else if (e.key.toLowerCase() === "m") go(mapOn ? `#/notes${at}` : `#/map${at}`);
-  else if (e.key === "Escape" && shellRoute.view === "chats" && ck.view) { if (!solo()) store.set("kn_last_chat", ""); ckShow(null); } // as its ×
+  else if (e.key === "Escape" && shellRoute.view === "chats" && ck.view && !document.querySelector("details[open]")) { // an open menu takes Esc for itself
+    if (!solo()) store.set("kn_last_chat", ""); ckShow(null); } // as its ×
   else if (!kn) return;
   else if (e.key.toLowerCase() === "e" && current?.writable) { e.preventDefault(); startEdit(); }
   else if (e.key === "Escape") deselect();

@@ -75,7 +75,9 @@ async function ckSummary() {
   const last = store.get("kn_last_chat"); // the list keeps the chat last open (until its × closes it); a phone starts on the list
   if (!ck.view && shellRoute.view === "chats" && !shellRoute.arg && !bdOn() && matchMedia("(min-width: 700px)").matches
       && last && ck.chats.some((x) => x.id === last && !x.closed)) return go(`#/chats/${encodeURIComponent(last)}`, true);
-  if (ck.view && !ck.cards.has(ck.view)) { // a route's chat id (or an older pc/id key) once the chats are known
+  if (solo() && !ck.view) ck.view = shellRoute.arg; // its chat was dropped above: below it comes back or the tab becomes the app, never an empty page
+  const opened = ck.view && !ck.cards.has(ck.view);
+  if (opened) { // a route's chat id (or an older pc/id key) once the chats are known
     const c = ck.chats.find((x) => x.id === ck.view || ckKey(x) === ck.view), hit = ckFindWorker(ck.view);
     if (c) ck.view = ckKey(ckCard(c).meta);
     else if (hit) ck.view = ckKey(ckWorkerCard(hit.m, hit.w).meta);
@@ -86,6 +88,7 @@ async function ckSummary() {
     }
   }
   ckList(); ckLayout();
+  if (opened && !touch) ck.cards.get(ck.view)?.input.focus({ preventScroll: true }); // a link opened on this chat: as applyRoute does for a card it knows
 }
 // The Agents view's list, grouped by what you have to do: Needs you (each card says why), Review (branches to merge,
 // finished workers), Working, Done today (folded to one line), then the earlier chats (the filter and Archived narrow
@@ -250,7 +253,7 @@ function ckDraftShow(card) {
 }
 // Typed or sent in the chat's other tab: follow, but never under someone's fingers.
 addEventListener("storage", (e) => {
-  if (e.key === CK_DRAFTS) for (const c of ck.cards.values()) if (document.activeElement !== c.input) ckDraftShow(c);
+  if (e.key === CK_DRAFTS) for (const c of ck.cards.values()) if (document.activeElement !== c.input || !document.hasFocus()) ckDraftShow(c);
 });
 // The send key (Settings); a phone's keyboard has no Shift+Enter, so its Enter stays a new line.
 const ckEnterSends = () => me.prefs?.send_key === "enter" && !touch;
@@ -599,8 +602,11 @@ function ckCard(meta) {
     if (e.key === " " && e.ctrlKey && !mic.hidden) { e.preventDefault(); return mic.toggle(); }
     if (e.key === "Enter" && e.altKey && !e.isComposing && !queueBtn.hidden) { e.preventDefault(); return queueBtn.click(); } // queue
     if (e.key === "Enter" && e.shiftKey && (e.ctrlKey || e.metaKey) && !e.isComposing && !forceBtn.hidden) { e.preventDefault(); return forceBtn.click(); }
-    if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey || (ckEnterSends() && !e.shiftKey && !e.altKey)) || e.isComposing) return;
-    e.preventDefault(); form.requestSubmit();
+    if (e.key !== "Enter" || e.isComposing || e.keyCode === 229) return; // 229: Enter that ends a composition (Safari)
+    const bare = ckEnterSends() && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey;
+    if (!bare && !e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    if (!bare || input.value.trim() || card.files.length) form.requestSubmit(); // a stray Enter on an empty box must not Force: that stops the agent's step
   });
   const grow = () => { input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 220)}px`; }; // the box grows with the text
   card.grow = grow;

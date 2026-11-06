@@ -190,7 +190,7 @@ function needsNotify(items) {
   const say = (title, body, tag, to) => {
     try {
       const n = new Notification(title, { body: body.slice(0, 180), tag });
-      n.onclick = () => { window.focus(); go(to); n.close(); };
+      n.onclick = () => { window.focus(); if (!solo() || to !== `#/chats/${encodeURIComponent(shellRoute.arg)}`) go(to); n.close(); }; // a chat alone in its tab stays alone
     } catch { /* a browser that only notifies from a service worker (Android): Matrix covers phones */ }
   };
   for (const i of fresh.slice(0, 3)) say(`Needs you: ${i.title || "an item"}`, [i.label || i.project, i.line].filter(Boolean).join(" · "), i.key,
