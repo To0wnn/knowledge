@@ -1876,6 +1876,65 @@ async def grid_groups(browser, secret: str) -> None:
     await pg.evaluate("bdSettle(); ck.summaryAt = 0; ckSummary()")
     await pg.wait_for_function(f"{heads} === 'bbb,aaa,ccc'", timeout=5000)
 
+    # Parts: two real windows of one browser, each showing its own part.
+    cards = "[...document.querySelectorAll('#bd .bd-card')].map((w) => w.dataset.id.slice(-1)).sort().join()"
+    await pg.evaluate("$('bd-stage').focus()")
+    await pg.keyboard.press("2")
+    await pg.wait_for_function(f"{cards} === '' && document.querySelector('#bd .bd-none').textContent.includes('part 2')", timeout=5000)
+    check(await pg.evaluate("[sessionStorage.getItem('kn_part'), agentProject, $('bd-parts').children.length]") == ["2", "", 3], "Parts: key 2 shows part 2, not a project, and its buttons appear")
+    other = await ctx.new_page()
+    other_errors = []
+    other.on("pageerror", lambda e: other_errors.append(str(e)))
+    await other.goto(f"{URL}/ui#/chats")
+    await other.wait_for_function("typeof bdRender === 'function' && ck.ready", timeout=15000)
+    await other.evaluate("agentProject = ''; ck.summaryAt = 0; ckSummary()")
+    await other.wait_for_function(f"{cards} === '1,2,3,4'", timeout=5000)
+    check(await other.evaluate("bd.part") == 0, "Parts: a new window starts on all, the other window's part is its own")
+    await other.evaluate("$('bd-stage').focus()")
+    await other.keyboard.press("1")
+    await other.wait_for_function("bd.part === 1", timeout=5000)
+    await other.focus(".bd-card[data-id='000000000003']")
+    await other.keyboard.press("Shift+Digit2")
+    await other.wait_for_function(f"{cards} === '1,2,4'", timeout=5000)
+    await pg.wait_for_function(f"{cards} === '3'", timeout=2000)  # sooner than a poll: the storage event
+    check(True, "Parts: Shift+2 moves a card out of this window and into the window on part 2")
+    check(await other.evaluate("document.activeElement === $('bd-stage')"), "Parts: the focus lands on the grid after the card left")
+    await pg.fill(".bd-card[data-id='000000000003'] textarea", "")
+    await pg.focus(".bd-card[data-id='000000000003'] textarea")
+    await pg.keyboard.press("1")
+    check(await pg.evaluate("[bd.part, document.activeElement.value]") == [2, "1"], "Parts: a digit in a text box is just text")
+    await pg.fill(".bd-card[data-id='000000000003'] textarea", "")
+    await pg.evaluate("$('bd-stage').focus()")
+    chats[0] = {**chats[0], "raised": now + 30}  # finishes in the window on part 1, while both look
+    await pg.evaluate("ck.summaryAt = 0; ckSummary()")
+    await other.evaluate("ck.summaryAt = 0; ckSummary()")
+    await other.wait_for_selector("#bd-sort:not([hidden])", timeout=5000)
+    check(await other.inner_text("#bd-sort") == "↑ 1 updated" and await pg.evaluate("$('bd-sort').hidden") and await pg.evaluate(cards) == "3",
+          "Parts: a finished chat moves inside its own part only; the pill is in its own window")
+    chats[0] = {**chats[0], "raised": now + 1}
+    await other.evaluate("ck.summaryAt = 0; ckSummary(); bdSettle(); bdRender()")
+    board[0] = {**board[0], "id": chats[2]["id"]}
+    await other.evaluate("ck.summaryAt = 0; ckSummary()")
+    await other.wait_for_function("$('bd-parts').children[2]?.getAttribute('aria-label') === 'Part 2, 1 needs you'", timeout=5000)
+    check(True, "Parts: the buttons say which other part needs you")
+    board[0] = {**board[0], "id": chats[3]["id"]}
+    scrolled = await other.evaluate("""(async () => { const card = ck.cards.get('x/000000000001'); for (let i = 0; i < 200; i++) card.log.append(el('p', '', 'line'));
+      card.log.scrollTop = 500; await new Promise((r) => setTimeout(r, 50)); const top = card.log.scrollTop;
+      bdPartShow(2); const gone = !card.root.isConnected; bdPartShow(1); await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame);
+      return [gone, top > 0, card.log.scrollTop === top]; })()""")
+    check(scrolled == [True, True, True], f"Parts: a chat you scrolled in is still there when you come back to its part {scrolled}")
+    await other.keyboard.press("0")
+    await other.wait_for_function(f"{cards} === '1,2,3,4'", timeout=5000)
+    check(True, "Parts: key 0 shows all")
+    await other.evaluate("bdPartShow(7); ckNewChat()")
+    check(await other.evaluate("!!document.querySelector('.bd-card.draft')"), "Parts: a new chat shows in the part you start it from")
+    await other.evaluate("ckDrop(ckKey(CK_DRAFT)); bdRender(); bdPartMove('x/000000000003', 1); bdPartShow(0)")
+    check(await other.evaluate("store.get('kn_parts')") == "{}", "Parts: a chat back in part 1 leaves nothing behind")
+    check(not other_errors, f"no page errors in the second window {other_errors[:2]}")
+    await other.close()
+    await pg.evaluate("ck.summaryAt = 0; ckSummary().then(() => bdPartShow(0))")  # this window last saw chat 1 raised
+    await pg.wait_for_function(f"bd.part === 0 && {cards} === '1,2,3,4' && {heads} === 'bbb,aaa,ccc'", timeout=5000)
+
     await pg.evaluate("me.prefs.grid_group = 'together'; store.set('kn_board', JSON.stringify({shut: ['bbb']})); bdRender()")
     state = await pg.evaluate("[document.querySelectorAll('#bd .bd-frame').length, getComputedStyle(document.querySelector('#bd .bd-frame')).display, [...bd.wraps.values()].filter((w) => !w.hidden).length, [...document.querySelectorAll('#bd-world > .bd-card')].map((w) => w.dataset.id.slice(-1)).join()]")
     check(state[:3] == [1, "none", 4], f"Grid: together has no headings and nothing folded {state}")

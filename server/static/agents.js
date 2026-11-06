@@ -962,7 +962,7 @@ async function ckStart(card, text) { // the draft's first message: make the chat
     if (failed) { chat.input.value = text; ckDraftKeep(chat); chat.note.className = "ck-note bad"; chat.note.textContent = failed; }
     if (bdOn()) { // on the grid the chat stays a card there; the next summary brings it from the server
       const raised = Date.now() / 1000; // your own new chat is the one move that is not held
-      ck.chats.unshift({ ...chat.meta, raised }); bd.held.set(ckKey(chat.meta), raised); bdRender();
+      ck.chats.unshift({ ...chat.meta, raised }); bd.held.set(ckKey(chat.meta), raised); if (bd.part) bdPartMove(ckKey(chat.meta), bd.part); bdRender();
       if (!touch) chat.input.focus();
     } else go(`#/chats/${encodeURIComponent(chat.meta.id)}`, true); // Back from it goes to the list, not to an empty draft
     ckTick();

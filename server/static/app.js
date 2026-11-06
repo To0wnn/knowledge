@@ -909,6 +909,7 @@ document.addEventListener("keydown", (e) => {
   if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
   const kn = shellRoute.view === "notes" || shellRoute.view === "map", at = current ? `/${encPath(current.path)}` : "";
   if (solo() && e.key !== "Escape") return; // a chat alone in its tab has no views to jump to
+  if (bdOn() && bdPartKey(e)) { e.preventDefault(); return; } // on the grid the digits are its parts, not the projects
   if (e.key === "[") toggleRail();
   else if (e.key === "/") { e.preventDefault(); openPalette(true); }
   else if (e.key.toLowerCase() === "a") go("#/chats");

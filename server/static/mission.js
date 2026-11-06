@@ -357,7 +357,7 @@ function msOpenPanel(key) {
 // foldable frame per project, the one last active on top (folding is kept in localStorage; while you look at the grid, by bdHold), or Settings: all in one. A card is the chat itself (ckCard). Only cards on screen
 // are polled (ckTick). ?view=grid is an older link to the same view; ?view=list is the attention list (#/inbox links).
 const BG = { minW: 480, minH: 380, gap: 16, pad: 16, head: 46 };
-const bd = { lay: [], wraps: new Map(), frames: new Map(), held: new Map() };
+const bd = { lay: [], wraps: new Map(), frames: new Map(), held: new Map(), part: (() => { try { return Number(sessionStorage.getItem("kn_part")) || 0; } catch { return 0; } })() };
 const bdWide = matchMedia("(min-width: 1000px)");
 bdWide.addEventListener("change", () => ckLayout());
 const bdOn = () => shellRoute.view === "chats" && !shellRoute.arg && shellRoute.q.get("view") !== "list" && bdWide.matches;
@@ -389,6 +389,55 @@ function bdProjects(chats, shut = [], together = false) {
   return [...new Set(chats.map((c) => c.project || ""))].map((p) => ({ project: p, n: chats.filter((c) => (c.project || "") === p).length, shut: shut.includes(p) }));
 }
 
+// Parts, for a grid over several windows: a chat belongs to one part (kept per browser, so all its windows agree; none =
+// part 1) and a window shows one (per tab; 0 = all). A part is not a slice of the sorted list: then a finished chat would
+// jump to another window, and each window's own hold would show a chat twice or not at all. So sorting stays inside a part.
+function bdParts() { try { return JSON.parse(store.get("kn_parts") || "{}") || {}; } catch { return {}; } } // a damaged entry must not break every render
+const bdPartOf = (c, parts = bdParts()) => parts[ckKey(c)] || 1;
+function bdPartShow(n) {
+  bd.part = n;
+  try { sessionStorage.setItem("kn_part", String(n)); } catch { /* blocked: this tab still shows it */ }
+  bdSettle(); bdRender(); // another part's order is news to nobody here: no pill for it
+  $("bd-stage").scrollTop = 0; $("bd-stage").focus({ preventScroll: true }); bdLoadSoon();
+}
+function bdPartMove(key, n) {
+  const known = new Set(ck.chats.map(ckKey)), parts = Object.fromEntries(Object.entries(bdParts()).filter(([k]) => known.has(k) && k !== key));
+  if (n > 1) parts[key] = n;
+  store.set("kn_parts", JSON.stringify(parts));
+}
+addEventListener("storage", (e) => { if (e.key === "kn_parts") bdRender(); }); // moved in another window
+// 0-9 show a part; Shift+1-9 moves the card you are in or point at there. By key position: Shift changes the character.
+function bdPartKey(e) {
+  const hit = /^(?:Digit|Numpad)(\d)$/.exec(e.code);
+  if (!hit) return false;
+  const n = Number(hit[1]);
+  if (!e.shiftKey) { bdPartShow(n); return true; }
+  const w = document.activeElement?.closest?.(".bd-card") || document.querySelector(".bd-card:hover");
+  const key = [...bd.wraps].find(([, x]) => x === w)?.[0];
+  if (!n || !key || ck.cards.get(key)?.meta.draft) return false;
+  bdPartMove(key, n); bdRender();
+  if (!w.isConnected) $("bd-stage").focus({ preventScroll: true });
+  return true;
+}
+// The buttons beside List, once there is more than one part; each counts what needs you there, on no card in this window.
+function bdPartBar(on) {
+  const box = $("bd-parts"), parts = bdParts(), live = on ? ck.chats.filter((c) => ckScope(c) && ckState(c) !== "closed") : [];
+  const top = Math.max(bd.part, ...live.map((c) => bdPartOf(c, parts)));
+  const list = on && top > 1 ? Array.from({ length: top + 1 }, (_, n) => ({ n, needs: n ? live.filter((c) => bdPartOf(c, parts) === n && ckState(c) === "needs").length : 0 })) : [];
+  const sig = JSON.stringify([bd.part, list]);
+  if (box.dataset.sig === sig) return; // a rebuild would drop the focus from a button
+  box.dataset.sig = sig;
+  box.replaceChildren(...list.map(({ n, needs }) => {
+    const b = el("button", "btn small quiet", n ? String(n) : "All"); b.type = "button";
+    b.title = n ? `Part ${n} (key ${n}). Shift+${n} moves a card here` : "All parts (key 0)";
+    b.setAttribute("aria-label", `${n ? `Part ${n}` : "All parts"}${needs ? `, ${needs} need${needs > 1 ? "" : "s"} you` : ""}`);
+    b.setAttribute("aria-pressed", String(n === bd.part));
+    if (needs) b.append(el("span", "n", String(needs)));
+    b.onclick = () => bdPartShow(n);
+    return b;
+  }));
+}
+
 function bdBuild() {
   const root = el("section", "bd"); root.id = "bd"; root.hidden = true; root.setAttribute("aria-label", "Chats");
   root.innerHTML = `<button type="button" class="btn small ck-jump-btn bd-sort" id="bd-sort" title="Put the chats that finished or need you on top" hidden></button><div class="bd-stage" id="bd-stage" tabindex="0" aria-label="Chats. Tab goes through them"><div class="bd-world" id="bd-world"></div></div>`;
@@ -406,6 +455,7 @@ function bdBuild() {
 // counts those too, and only the list shows them (reviews, tasks, workers, other projects).
 function bdLink() {
   const on = bdOn(), a = $("ck-view"), cards = new Set(on ? bdChats().map(({ c }) => ckKey(c)) : []);
+  bdPartBar(on);
   const n = on ? (ck.board || []).filter((i) => i.col === "needs" && !cards.has(`${i.machine}/${i.kind === "chat" ? i.id : i.kind === "ask" ? i.chat : ""}`)).length : 0;
   a.href = on ? "#/chats?view=list" : "#/chats";
   a.replaceChildren(on ? "List" : "Grid", ...(n ? [el("span", "n", String(n))] : []));
@@ -428,8 +478,8 @@ function bdShow() {
 // counts only once it is settled (bdHold).
 function bdChats(live = false) {
   const rank = (c) => (live ? null : bd.held.get(ckKey(c))) ?? c.raised ?? 0;
-  const draft = ck.cards.get(ckKey(CK_DRAFT))?.meta; // + New chat on the grid: on top, so its project's frame is too
-  return [...(draft ? [draft] : []), ...ck.chats].filter(ckScope).map((c) => ({ c, st: ckState(c) })).filter((x) => x.st !== "closed") // closed: under the list's Closed only
+  const draft = ck.cards.get(ckKey(CK_DRAFT))?.meta, parts = bdParts(); // + New chat on the grid: on top, so its project's frame is too
+  return [...(draft ? [draft] : []), ...ck.chats].filter(ckScope).map((c) => ({ c, st: ckState(c) })).filter((x) => x.st !== "closed" && (x.c.draft || !bd.part || bdPartOf(x.c, parts) === bd.part)) // closed: under the list's Closed only
     .sort((a, b) => !!b.c.draft - !!a.c.draft || rank(b.c) - rank(a.c));
 }
 
@@ -467,7 +517,7 @@ function bdRender() {
   const frames = bd.lay = bdProjects(rows.map(({ c }) => c), shut, together);
   // Whatever moves, the card you are in stays where it is on screen (the stage scrolls along below).
   const here = document.activeElement?.closest?.(".bd-card"), hereTop = here?.getBoundingClientRect().top;
-  const keep = new Set();
+  const keep = new Set(), back = [];
   for (const f of frames) {
     let box = bd.frames.get(f.project);
     if (!box) {
@@ -495,7 +545,7 @@ function bdRender() {
       let w = bd.wraps.get(k);
       if (!w) {
         w = el("article", "bd-card"); w.tabIndex = 0; w.dataset.id = c.id;
-        bd.wraps.set(k, w);
+        bd.wraps.set(k, w); back.push(card);
         w.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === w) { e.preventDefault(); if (card.meta.draft) card.input.focus(); else card.openTab.click(); } });
       }
       if (card.root.parentNode !== w) w.replaceChildren(card.root); // back from the full chat (ckLayout moved it there); a new draft replaces an old one
@@ -507,9 +557,10 @@ function bdRender() {
   for (const [k, w] of bd.wraps) if (!ck.cards.has(k) || !order.includes(w)) { w.remove(); bd.wraps.delete(k); }
   // DOM order = layout order, so Tab walks project by project; only moved nodes are touched
   order.forEach((n, i) => { if (world.children[i] !== n) bdMove(world, n, world.children[i] || null); });
-  if (!rows.length) world.replaceChildren(el("p", "bd-none muted", ck.chats.length ? "No chats in this project." : "No chats yet: start one with + New chat."));
+  if (!rows.length) world.replaceChildren(el("p", "bd-none muted", bd.part ? `No chats in part ${bd.part}${agentProject ? " of this project" : ""}. Shift+${bd.part} on a card in another part moves it here.` : ck.chats.length ? "No chats in this project." : "No chats yet: start one with + New chat."));
   else world.querySelector(".bd-none")?.remove();
   bdGridSize();
+  for (const card of back) ckScrollBottom(card, card.savedScrollTop == null); // back from another part: taken off the page, its log forgot where it was
   if (here?.isConnected) $("bd-stage").scrollTop += here.getBoundingClientRect().top - hereTop;
 }
 
