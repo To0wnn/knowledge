@@ -29,6 +29,7 @@ from the vault plus the username; systemd-run does not see ~/.local/bin on PATH,
 """
 import asyncio
 import contextlib
+import json
 import re
 import os
 import subprocess
@@ -2127,6 +2128,19 @@ async def chat_drafts(browser, secret: str) -> None:
     await pg.reload()
     await pg.wait_for_selector(box, timeout=15000)
     check(True, "Draft: a damaged entry does not break the page")
+    await pg.fill(box, "too old")  # this chat's own key: its box must come up empty
+    aged = """(() => { const all = JSON.parse(store.get('kn_drafts')), [k] = Object.keys(all), day = 864e5;
+      all[k].at = Date.now() - 8 * day; all['x/fresh'] = {text: 'fresh', at: Date.now() - 6 * day}; all['x/undated'] = {text: 'undated'};
+      store.set('kn_drafts', JSON.stringify(all)); return [k, all['x/fresh'].at]; })()"""
+    key, fresh = await pg.evaluate(aged)
+    await pg.reload()
+    await pg.wait_for_selector(box, timeout=15000)
+    await pg.wait_for_function("ck.ready", timeout=15000)
+    left = json.loads(await pg.evaluate("store.get('kn_drafts')"))
+    check(key not in left and await pg.input_value(box) == "", f"Draft: one older than 7 days is gone at load {list(left)}")
+    check(left.get("x/fresh") == {"text": "fresh", "at": fresh}, f"Draft: one younger than 7 days stays as it was {left.get('x/fresh')}")
+    undated = left.get("x/undated", {})
+    check(undated.get("text") == "undated" and await pg.evaluate("(at) => Math.abs(Date.now() - at) < 6e4", undated.get("at", 0)), f"Draft: one without a date gets today's and stays {undated}")
     await pg.fill(box, "secret plans")
     await pg.evaluate("document.querySelector('a[href=\"/ui/logout\"]').addEventListener('click', (e) => e.preventDefault()); document.querySelector('a[href=\"/ui/logout\"]').click()")
     check(await pg.evaluate("store.get('kn_drafts')") is None, "Draft: sign out clears them")
