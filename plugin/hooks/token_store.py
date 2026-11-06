@@ -218,6 +218,17 @@ def replace_durable(tmp: Path, path: Path) -> None:
     sync_dir(Path(path).parent)
 
 
+def read_settled(path: Path) -> str:
+    """A state file's text. Windows refuses to open a file during an os.replace of it (PermissionError for a moment),
+    which must not look like an empty or damaged file: the caller would go on with defaults and save those."""
+    for _ in range(40):
+        try:
+            return Path(path).read_text(encoding="utf-8")
+        except PermissionError:
+            time.sleep(0.05)
+    return Path(path).read_text(encoding="utf-8")
+
+
 def store_url(u: str) -> None:
     URL_FILE.parent.mkdir(parents=True, exist_ok=True)
     URL_FILE.write_text(u.rstrip("/") + "\n", encoding="utf-8")

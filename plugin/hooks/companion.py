@@ -125,7 +125,7 @@ def load(name: str, default):
     """A state file, or the default when it does not exist yet. An empty or broken one also gives the default, but says
     so: looking like a first start would silently turn off what the owner had set (Workers allowed)."""
     try:
-        return json.loads((STATE / name).read_text(encoding="utf-8"))
+        return json.loads(token_store.read_settled(STATE / name))
     except FileNotFoundError:
         return default
     except (OSError, ValueError) as e:

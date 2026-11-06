@@ -93,7 +93,7 @@ def latest() -> tuple:
 
 def load() -> dict:
     try:
-        return json.loads(STATE.read_text(encoding="utf-8"))
+        return json.loads(token_store.read_settled(STATE))
     except (OSError, ValueError):
         return {}
 
@@ -319,6 +319,12 @@ if __name__ == "__main__":
         assert "auto-update is on for agy" in first and started == ["agy"], first
         assert notice("agy", now=2000.0, spawn=started.append) == "" and started == ["agy"], "said once, checked once a day"
         assert notice("agy", now=1000.0 + DAY, spawn=started.append) == "" and started == ["agy", "agy"], "next day: check again"
+        real_read, tries = Path.read_text, []
+        Path.read_text = lambda *a, **k: real_read(*a, **k) if tries.append(1) or len(tries) > 2 else (_ for _ in ()).throw(PermissionError("mid replace"))
+        try:
+            assert load() and len(tries) == 3, "a read during a replace on Windows waits, it does not look like no state"
+        finally:
+            Path.read_text = real_read
         save({**load(), "agy:result": "knowledge plugin: updated to 9.9.9 for agy; it loads at the next start."})
         assert "updated to 9.9.9" in notice("agy", now=1000.0 + DAY, spawn=started.append), "the result is said"
         assert notice("agy", now=1000.0 + DAY, spawn=started.append) == "", "and said once"

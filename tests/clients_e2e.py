@@ -78,6 +78,15 @@ def http(method: str, path: str, body=None, headers=None):
         return e.code, e.read().decode("utf-8")
 
 
+def state_of(home: Path, name: str):
+    """A state file the companion may be replacing right now: on Windows opening it then gives PermissionError for a moment."""
+    for _ in range(40):
+        with contextlib.suppress(PermissionError):
+            return json.loads((home / ".knowledge" / "companion" / name).read_text(encoding="utf-8"))
+        time.sleep(0.05)
+    return json.loads((home / ".knowledge" / "companion" / name).read_text(encoding="utf-8"))
+
+
 def bash() -> str:
     """The shell Claude Code runs hooks in: Git Bash on Windows (never WSL's bash.exe), sh elsewhere."""
     if not WIN:
@@ -1313,7 +1322,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         write_rollout(95.0)
         n = len(recorded())
         st, _, body = call("POST", "/local/api/tick", {})
-        cx_nonce = json.loads((home / ".knowledge" / "companion" / "workers.json").read_text(encoding="utf-8"))[f"garden/{cx_id}"]["nonce"]
+        cx_nonce = state_of(home, "workers.json")[f"garden/{cx_id}"]["nonce"]
         stop = home / ".knowledge" / "companion" / "workers" / f"{cx_nonce}.stop"  # by its start nonce: never a namesake's
         check(not argvs(n) and json.loads(body)["waiting"].get("garden/CMP-CX3", "").startswith("waiting for limit") and stop.exists()
               and "for Claude" in stop.read_text(encoding="utf-8"),
@@ -1377,7 +1386,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
               and json.loads(yolo_file.read_text(encoding="utf-8"))["claude"]["on"] is True
               and json.loads((home / ".knowledge" / "companion" / "settings.json").read_text(encoding="utf-8"))["workersAllowed"] is False,
               "remote: stop worker, YOLO on (typed word) and workers off run on the pc and report back", json.dumps(done())[:800])
-        stopped = json.loads((home / ".knowledge" / "companion" / "workers.json").read_text(encoding="utf-8")).get("garden/CMP-GEMINI", {})
+        stopped = state_of(home, "workers.json").get("garden/CMP-GEMINI", {})
         check(stopped.get("owner_stopped") is True, "remote: a worker the owner stopped keeps its lease (no other pc restarts it at once)", json.dumps(stopped)[:300])
         act_log = json.loads(call("GET", "/local/api/state")[2])["activity"]
         check(any(a["kind"] == "remote" and "yolo" in a["text"] and "alice" in a["text"] for a in act_log), "remote: every action is in the activity log, with who asked")
@@ -1535,7 +1544,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
                              {**env, "KNOWLEDGE_URL": f"http://127.0.0.1:{fake.server_address[1]}"}, timeout=60)
         fake.shutdown()
         call("POST", "/local/api/settings", {"workersAllowed": False})
-        activity = json.loads((home / ".knowledge" / "companion" / "activity.json").read_text(encoding="utf-8"))
+        activity = state_of(home, "activity.json")
         check(code == 0 and not argvs(n) and "Held by other-pc" in out and any("Held by other-pc" in a["text"] for a in activity),
               "workers: a 409 from /tasks/woken (another pc holds the task) starts nothing and logs who holds it", out[-400:] + err[-400:])
         # Folders: link a folder to a project from the companion page or remotely, only folders from its own list.
@@ -1967,7 +1976,7 @@ def chat_e2e(tok: str, tmp: Path):
         texts = "".join(e["text"] for e in events if e["kind"] == "text")
         check(timed and any(e["text"] == "No answer within 1 min: denied Bash." for e in events) and "npm test denied" in texts and "in time" in texts,
               "chat claude: an approval nobody answers is denied after its time, the chat says so and the agent is told", json.dumps(events)[-600:])
-        activity = json.loads((home / ".knowledge" / "companion" / "activity.json").read_text(encoding="utf-8"))
+        activity = state_of(home, "activity.json")
         check(any("Approval asked" in a["text"] for a in activity) and any("allowed once" in a["text"] and "by alice" in a["text"] for a in activity)
               and any("denied (no answer in time)" in a["text"] for a in activity),
               "chat: every approval and who decided it is in the companion's activity log", json.dumps([a["text"] for a in activity[:12]]))
@@ -2023,6 +2032,15 @@ def chat_e2e(tok: str, tmp: Path):
         idle(cid, 2)
         events = chat(cid)["events"]
         activity = json.loads((home / ".knowledge" / "companion" / "activity.json").read_text(encoding="utf-8"))
+        check(any(e["kind"] == "error" and "not a folder linked" in e["text"] for e in events) and not any(c["chat"] == cid for c in recorded()),
+        # A folder unlinked after the chat began: the companion refuses the turn, loudly (chat and activity log).
+        second = repos["Second repo"]
+        cid = new("agy", second)
+        (second / ".knowledge-project").unlink()
+        send(cid, "still there?")
+        idle(cid, 2)
+        events = chat(cid)["events"]
+        activity = state_of(home, "activity.json")
         check(any(e["kind"] == "error" and "not a folder linked" in e["text"] for e in events) and not any(c["chat"] == cid for c in recorded()),
         # Stop before the agent took the message: its turn must not go on behind a chat that says Stopped.
         for agent in ("claude", "codex"):
