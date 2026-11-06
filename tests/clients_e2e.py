@@ -740,6 +740,8 @@ if name == "codex" and args[:1] == ["app-server"] and os.environ.get("KNOWLEDGE_
             if "ASK" in texts[0]:
                 send({"id": 0, "method": "item/commandExecution/requestApproval", "params": {"reason": "run the tests", "command": "/bin/sh -lc 'npm test'",
                       "commandActions": [{"type": "unknown", "command": "npm test"}], "availableDecisions": ["accept", "acceptForSession", "decline", "cancel"]}})
+            if "LATE" in texts[0]:  # the answer takes a while: a Stop comes before the turn is known
+                time.sleep(2)
                 got = answers.get()["result"]["decision"]
                 verdict = " | npm test ran" if got == "accept" else " | npm test denied"
             if "SLOW" in texts[0]:  # works until steered to the end (DONE) or interrupted
@@ -866,6 +868,9 @@ elif name == "claude" and "--input-format" in args and os.environ.get("KNOWLEDGE
             while time.time() < end:
                 try:
                     x = inbox.get(timeout=0.1)
+        if "LATE" in texts[0]:  # it takes a while to take it: a Stop comes first
+            rec({"chat": os.environ["KNOWLEDGE_CHAT"], "argv": [name] + args, "cwd": os.getcwd(), "stdin": texts[0], "pid": os.getpid()})
+            time.sleep(2)
                 except queue.Empty:
                     continue
                 if x is None:
@@ -2019,6 +2024,15 @@ def chat_e2e(tok: str, tmp: Path):
         events = chat(cid)["events"]
         activity = json.loads((home / ".knowledge" / "companion" / "activity.json").read_text(encoding="utf-8"))
         check(any(e["kind"] == "error" and "not a folder linked" in e["text"] for e in events) and not any(c["chat"] == cid for c in recorded()),
+        # Stop before the agent took the message: its turn must not go on behind a chat that says Stopped.
+        for agent in ("claude", "codex"):
+            cid = new(agent, repo)
+            send(cid, "LATE SLOW")
+            started = wait_for(lambda: any(c.get("chat") == cid for c in recorded()), 30)
+            http("POST", "/ui/api/chat/stop", {"machine": mid, "id": cid}, ui)
+            time.sleep(4)  # the agent took it by now
+            check(started and idle(cid, 2) and chat(cid)["events"][-1]["text"] == "Stopped." and not any("by itself" in e["text"] for e in chat(cid)["events"]),
+                  f"chat {agent}: stop before the agent took the message interrupts its turn when it starts", json.dumps(chat(cid)["events"])[-400:])
               "chat: a folder no longer linked on this pc is refused, the agent never starts", json.dumps(events)[-400:])
         check(any(a["kind"] == "chat" and "turn started" in a["text"] for a in activity) and any(a["kind"] == "chat" and "stopped" in a["text"] for a in activity)
               and any(a["kind"] == "error" and "chat turn failed" in a["text"] for a in activity),

@@ -1096,8 +1096,8 @@ class Live:
 
     def kill_if_stuck(self, taken: int, asked: float):
         with self.lock:
-            stuck = self.turn_open and self.last <= asked and self.alive()
-        if stuck:  # no sign of life 15 s after an interrupt of an open turn: end it the hard way
+            stuck = (self.turn_open or self.taken < self.written) and self.last <= asked and self.alive()
+        if stuck:  # no sign of life 15 s after an interrupt of an open turn or a stop: end it the hard way
             workers.kill(self.rec, hard=True)
 
     def stop(self):
@@ -1105,7 +1105,9 @@ class Live:
             self.stop_asked, self.after_interrupt = True, []
             if self.turn_open:
                 self.interrupt()
-            elif self.busy:  # nothing runs (messages not taken yet): the turn is over now
+            elif self.taken < self.written and self.alive():  # on its way in: on_line interrupts when the agent takes it
+                threading.Timer(15, self.kill_if_stuck, args=(self.taken, time.time())).start()
+            elif self.busy:  # nothing runs: the turn is over now
                 self.done()
 
     def flush(self, **end):
@@ -1144,6 +1146,9 @@ class Live:
         if kind == "user" and ev.get("isReplay") and not ev.get("parent_tool_use_id"):  # one of ours, taken now
             self.taken += 1
             self.turn_open = True
+            if self.stop_asked or self.taken > self.written:  # stopped while it was on its way in (a done() counted it as dropped)
+                self.taken = min(self.taken, self.written)
+                self.interrupt()
             return
         if kind == "control_response":
             return
@@ -1243,6 +1248,8 @@ class CodexLive(Live):
     """A Codex chat as one `codex app-server` (JSON-RPC v2) with one thread: a message while a turn runs goes in with
     turn/steer (measured on Codex 0.166: taken into the same turn), Force and Stop with turn/interrupt (the turn ends
     "interrupted", the server stays); a new turn with turn/start. Codex names each turn's start and end itself."""
+    starting = False  # a turn/start waits for its answer: a Stop now would not know what to interrupt
+
 
     def command(self, exe: str) -> list:
         return [exe, "app-server", "-c", workers.CODEX_APPROVE]  # the knowledge tools approved, with YOLO too
@@ -1355,12 +1362,24 @@ class CodexLive(Live):
 
     def start_turn(self, text: str):
         model, effort = self.pick
-        r = self.call("turn/start", {"threadId": self.st["session"], "input": [{"type": "text", "text": text}],
-                                     **({"model": model} if model else {}), **({"effort": effort} if effort else {})})
+        with self.lock:
+            if not self.busy:  # stopped before it went in: a stop drops what was not taken
+                return
+            self.starting = True
+        try:
+            r = self.call("turn/start", {"threadId": self.st["session"], "input": [{"type": "text", "text": text}],
+                                         **({"model": model} if model else {}), **({"effort": effort} if effort else {})})
+        except RuntimeError:
+            self.starting = False
+            raise
         with self.lock:  # known from its answer already: a message right after it steers instead of starting another
+            self.starting = False
             tid = (r.get("turn") or {}).get("id")
             if tid and not self.turn_id and tid not in self.ended:  # its end may have been read before this answer
                 self.turn_id, self.turn_open = tid, True
+            stopped = self.stop_asked and self.busy
+        if stopped:  # asked while this waited: now there is a turn to interrupt
+            self.stop()
 
     def send(self, item: dict, mode: str = ""):
         text = item.get("text", "")
@@ -1409,7 +1428,7 @@ class CodexLive(Live):
         with self.lock:
             self.stop_asked, self.after_interrupt = True, []
             open_turn = self.turn_open and self.turn_id
-            if not open_turn and self.busy:
+            if not open_turn and self.busy and not self.starting:
                 self.done()
         if open_turn:
             threading.Thread(target=self.interrupt, args=(open_turn,), daemon=True).start()
