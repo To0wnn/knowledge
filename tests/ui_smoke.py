@@ -1837,7 +1837,7 @@ async def grid_groups(browser, secret: str) -> None:
     if await pg.evaluate("typeof bdProjects") != "function":
         await ctx.close()
         return
-    await pg.evaluate("agentProject = ''; ck.summaryAt = 0; ckSummary()")
+    await pg.evaluate("agentProject = ''; bd.held = new Map(); ck.summaryAt = 0; ckSummary()")  # live: the real chats came first
     heads = "[...document.querySelectorAll('#bd .bd-frame-title strong')].map((s) => s.textContent).join()"
     await pg.wait_for_function(f"{heads} !== '' && document.querySelectorAll('#bd .bd-card').length === 4", timeout=5000)
     check(await pg.evaluate(heads) == "ccc,bbb,aaa", f"Grid: the project last active is on top ({await pg.evaluate(heads)})")
