@@ -57,10 +57,31 @@ function renderFolders() {
       : h("p", { class: "cmp-sessions-empty" }, "No folder is linked yet."),
     h("div", { class: "cmp-field" },
       h("label", { for: "link-path" }, "Link a folder"),
-      h("small", {}, "Git checkouts in your home folder and folders your agents worked in; the projects this pc's token may write."),
+      h("small", {}, "Git checkouts in your home folder and folders your agents worked in, or choose any folder on this pc; the projects this pc's token may write."),
       h("select", { id: "link-path", name: "path" }, f.candidates.map((x) => h("option", { value: x.path }, x.path))),
       pick("project", ""),
-      h("div", { class: "cmp-settings-foot" }, h("button", { class: "cmp-btn cmp-btn--primary", type: "submit", disabled: !f.candidates.length || !projects.length }, "Link"))));
+      h("div", { class: "cmp-settings-foot" },
+        h("button", { class: "cmp-btn", type: "button", disabled: !projects.length, onclick: openChooser }, "Choose a folder…"),
+        h("button", { class: "cmp-btn cmp-btn--primary", type: "submit", disabled: !f.candidates.length || !projects.length }, "Link"))));
+}
+
+// The folder chooser: a browser gives a page no path from its own folder dialog, so the companion lists the disk.
+let chosen = "";
+function openChooser() {
+  $("choose-project").replaceChildren(...(S.projects || []).map((p) => h("option", { value: p }, p)));
+  $("choose-dialog").showModal();
+  browse("");
+}
+async function browse(path) {
+  let d;
+  try { d = await api("/local/api/dirs", { path }); }
+  catch (e) { $("choose-note").textContent = e.message; return; }
+  const row = (label, to) => h("li", {}, h("button", { class: "cmp-btn cmp-btn--small", type: "button", onclick: () => browse(to) }, label));
+  chosen = d.path;
+  $("choose-path").textContent = d.path || "This pc";
+  $("choose-note").textContent = d.path && !d.linkable ? "A drive root, your home folder or a system folder cannot be linked: open a folder in it." : "";
+  $("choose-ok").disabled = !d.linkable;
+  $("choose-list").replaceChildren(...(d.parent == null ? [] : [row("↑ Up", d.parent)]), ...d.dirs.map((x) => row(x.name, x.path)));
 }
 
 const $ = (id) => document.getElementById(id);
@@ -306,6 +327,11 @@ document.addEventListener("DOMContentLoaded", () => {
   $("folders").addEventListener("submit", (e) => {
     e.preventDefault();
     act("/local/api/link", { path: e.target.elements.path.value, project: e.target.elements.project.value }, (r) => r.result);
+  });
+  $("choose-cancel").addEventListener("click", () => $("choose-dialog").close());
+  $("choose-ok").addEventListener("click", () => {
+    $("choose-dialog").close();
+    act("/local/api/link", { path: chosen, project: $("choose-project").value, chosen: true }, (r) => r.result);
   });
   $("settings").addEventListener("submit", (e) => {
     e.preventDefault();

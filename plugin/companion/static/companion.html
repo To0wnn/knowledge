@@ -82,6 +82,23 @@
   </section>
 </main>
 
+<dialog class="cmp-dialog" id="choose-dialog" aria-labelledby="choose-title">
+  <div class="cmp-settings">
+    <h2 id="choose-title">Choose a folder</h2>
+    <p class="cmp-choose-path" id="choose-path"></p>
+    <ul class="cmp-choose" id="choose-list" aria-label="Folders"></ul>
+    <p class="cmp-sessions-empty" id="choose-note" role="status"></p>
+    <div class="cmp-field">
+      <label for="choose-project">Project</label>
+      <select id="choose-project"></select>
+    </div>
+    <div class="cmp-settings-foot">
+      <button class="cmp-btn" type="button" id="choose-cancel">Cancel</button>
+      <button class="cmp-btn cmp-btn--primary" type="button" id="choose-ok" disabled>Link this folder</button>
+    </div>
+  </div>
+</dialog>
+
 <dialog class="cmp-dialog" id="yolo-dialog" aria-labelledby="yolo-title">
   <form method="dialog" class="cmp-settings">
     <h2 id="yolo-title">Turn YOLO on?</h2>

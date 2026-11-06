@@ -294,4 +294,7 @@ body.cmp-page .cmp-nav { margin-bottom: 22px; }
 .cmp .cmp-dialog { max-width: min(460px, calc(100vw - 32px)); padding: 20px; border: 1px solid var(--line-hi); border-radius: var(--r-lg); background: var(--panel-solid); color: var(--ink); }
 .cmp .cmp-dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
 .cmp .cmp-dialog .cmp-settings { padding: 0; border: 0; background: none; }
+.cmp .cmp-choose-path { margin: 0; overflow-wrap: anywhere; font-weight: 500; }
+.cmp .cmp-choose { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; max-height: 300px; overflow-y: auto; }
+.cmp .cmp-choose button { width: 100%; height: auto; min-height: var(--h-btn-sm); justify-content: flex-start; text-align: left; overflow-wrap: anywhere; }
 .cmp .cmp-dialog h2 { margin: 0 0 4px; font-size: 20px; }

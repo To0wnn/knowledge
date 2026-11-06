@@ -12,8 +12,11 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   knowledge hooks the agents' own way (Codex: `codex app-server` `hooks/list` + `config/batchWrite`, again after every
   plugin update; Claude Code: `hasTrustDialogAccepted` in `~/.claude.json`; agy: `trustedWorkspaces`), only for folders
   with a `.knowledge-project`. Its Folders section lists the linked folders and candidates (git checkouts up to three
-  levels under your home folder and folders agents worked in) and links one to a project the token may write by
-  writing `.knowledge-project`, as the knowledge-init skill does; unlink removes only that file. A YOLO switch per
+  levels under your home folder and folders agents worked in, also elsewhere on the pc, not in the temp folder) and
+  links one to a project the token may write by writing `.knowledge-project`, as the knowledge-init skill does; unlink
+  removes only that file. "Choose a folder" browses the pc's drives and links any folder, on this pc's own page only: a
+  web page or a remote action gets no free path and no listing. A drive root, the home folder or above it and system
+  folders are never linked. A YOLO switch per
   agent writes its native "run without asking" settings and unchecking restores the previous values (agy's only while
   agy is closed); workers then get the agent's own flag too. These are the agent's global settings on that pc (Claude
   Code `permissions.defaultMode: bypassPermissions`, Codex `approval_policy = "never"` + `danger-full-access`, agy

@@ -380,24 +380,74 @@ def git_repos(depth: int = 3) -> list:
     return _scan["repos"]
 
 
+# Never a project's folder: linking writes a file there and points agents at everything below it.
+SYSTEM_DIRS = [Path(p) for p in (*(os.environ.get(v) for v in ("SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramData")), *(
+    () if sys.platform == "win32" else ("/bin", "/boot", "/dev", "/etc", "/lib", "/lib64", "/proc", "/run", "/sbin", "/sys", "/usr", "/System", "/Library"))) if p]
+
+
 def under_home(p: Path) -> bool:
+    return p.resolve().is_relative_to(HOME.resolve()) and p.resolve() != HOME.resolve()
+
+
+def linkable(p: Path) -> bool:
+    """A folder that may be linked to a project: anywhere but a drive root, the home folder or above it, or a system folder."""
     try:
-        return p.resolve() != HOME.resolve() and p.resolve().is_relative_to(HOME.resolve())
+        r = p.resolve()
+        if under_home(r):
+            return True
+        return r != Path(r.anchor) and r != HOME.resolve() and r not in HOME.resolve().parents and not any(r == s or s in r.parents for s in map(Path.resolve, SYSTEM_DIRS))  # resolved: /etc is /private/etc on a Mac
     except OSError:
         return False
 
 
+def scratch(p: Path) -> bool:
+    """In the temp folder: an agent run there is no project, so the list does not offer it (choosing it stays possible)."""
+    return Path(tempfile.gettempdir()).resolve() in p.resolve().parents
+
+
+def drives() -> list:
+    if sys.platform != "win32":
+        return ["/"]
+    import ctypes  # the mask, not a look at each drive: a disconnected network drive would hang
+    mask = ctypes.windll.kernel32.GetLogicalDrives()
+    return [f"{chr(65 + i)}:\\" for i in range(26) if mask >> i & 1]
+
+
+def list_dirs(path: str) -> dict:
+    """One level of the folder chooser on the companion's own page; "" is the list of drives. parent None: nothing above."""
+    roots = drives()
+    if not path:
+        return {"path": "", "parent": None, "linkable": False, "dirs": [{"name": r, "path": r} for r in roots]}
+    p = Path(path)
+    if not p.is_absolute():
+        raise ValueError("send an absolute path")
+
+    def is_dir(e) -> bool:
+        try:
+            return e.is_dir()
+        except OSError:
+            return False
+    try:
+        with os.scandir(p) as it:
+            dirs = [{"name": e.name, "path": e.path} for e in it
+                    if not e.name.startswith((".", "$")) and e.name != "System Volume Information" and is_dir(e)]
+    except OSError as e:
+        raise ValueError(f"cannot open {p}: {e.strerror or e}")
+    parent = str(p.parent) if p.parent != p else "" if len(roots) > 1 else None
+    return {"path": str(p), "parent": parent, "linkable": linkable(p), "dirs": sorted(dirs, key=lambda d: d["name"].lower())}
+
+
 def folder_links() -> dict:
     """{linked: [{path, project}], candidates: [{path}]}: the folders linked here, and the folders that could be
-    (git checkouts under the home folder and folders agents worked in) that are not linked yet."""
+    (git checkouts under the home folder and folders agents worked in, also elsewhere on the pc) that are not linked yet."""
     linked, cands = {}, []
     for c in sorted(known_folders() | set(git_repos())):
         try:
             p = Path(os.path.abspath(c))
             root, name = project_marker.project_root(p)
-            if root and name and under_home(root):
+            if root and name and linkable(root):
                 linked.setdefault(str(root), name)
-            elif not root and p.is_dir() and under_home(p):
+            elif not root and p.is_dir() and linkable(p):
                 # git only for a folder inside a checkout: no .git up the tree, or .git right here, means the folder itself
                 git = next((q for q in (p, *p.parents) if (q / ".git").exists()), p) != p
                 top = subprocess.run(["git", "-C", str(p), "rev-parse", "--show-toplevel"], capture_output=True, text=True,  # git prints UTF-8, never the ANSI code page
@@ -408,17 +458,23 @@ def folder_links() -> dict:
                 cands.append(next((str(q) for q in (p, *p.parents) if q.resolve() == top.resolve()), str(top)) if top else str(p))
         except (OSError, subprocess.SubprocessError):
             continue
-    cands = sorted({c for c in cands if c not in linked and under_home(Path(c))})
+    cands = sorted({c for c in cands if c not in linked and linkable(Path(c)) and (under_home(Path(c)) or not scratch(Path(c)))})
     return {"linked": [{"path": k, "project": v} for k, v in sorted(linked.items())], "candidates": [{"path": c, "project": ""} for c in cands]}
 
 
-def link_folder(path: str, project: str) -> str:
-    """Link a folder the companion listed (candidate or already linked) to a project this token may write: the
-    .knowledge-project file, as the knowledge-init skill writes it. Never a path from elsewhere."""
+def link_folder(path: str, project: str, chosen: bool = False) -> str:
+    """Link a folder to a project this token may write: the .knowledge-project file, as the knowledge-init skill writes
+    it. A folder the companion listed (candidate or already linked), or, `chosen` on this pc's own page only, one the
+    person picked in its folder chooser. A remote action never gets a free path."""
     _scan["at"] = 0
-    f = folder_links()
-    if path not in {x["path"] for x in f["linked"] + f["candidates"]}:
-        raise ValueError("only a folder from the companion's own list can be linked")
+    if chosen:
+        if not Path(path).is_absolute() or not Path(path).is_dir() or not linkable(Path(path)):
+            raise ValueError("this folder cannot be linked: not a drive root, your home folder or a system folder")
+        path = os.path.abspath(path)
+    else:
+        f = folder_links()
+        if path not in {x["path"] for x in f["linked"] + f["candidates"]}:
+            raise ValueError("only a folder from the companion's own list can be linked")
     projects = server("GET", "/machine/projects", token_store.token()).get("projects", [])
     if project not in projects:
         raise ValueError(f"this token may not write project {project}; one of: {', '.join(projects) or 'none'}")
@@ -1854,7 +1910,14 @@ class Handler(BaseHTTPRequestHandler):
                 save_settings({k: body[k] for k in ("workersAllowed", "maxWorkers") if k in body})
                 return self.send(200, {"ok": True, **settings()}, origin=o)
             if path == "/local/api/link":
-                return self.send(200, {"result": link_folder(str(body.get("path", "")), str(body.get("project", "")))}, origin=o)
+                chosen = body.get("chosen") is True
+                if chosen and o != SELF:  # a free path is for this pc's own page, not for a web page elsewhere
+                    return self.send(403, {"error": "A folder can only be chosen on the companion page itself"}, origin=o)
+                return self.send(200, {"result": link_folder(str(body.get("path", "")), str(body.get("project", "")), chosen)}, origin=o)
+            if path == "/local/api/dirs":
+                if o != SELF:  # what is on this pc's disk stays on its own page
+                    return self.send(403, {"error": "Folders can only be browsed on the companion page itself"}, origin=o)
+                return self.send(200, list_dirs(str(body.get("path", ""))), origin=o)
             if path == "/local/api/unlink":
                 return self.send(200, {"result": unlink_folder(str(body.get("path", "")))}, origin=o)
             if path == "/local/api/tick":
@@ -2479,8 +2542,8 @@ def main(argv: list):
                 assert len(git_head(tmp, 5, "log", "--format=%s")) == 5, "a capped read stops at its limit"
         # folder_links runs git only for a folder inside a checkout (its root found by git); others need no process.
         if shutil.which("git"):
-            with tempfile.TemporaryDirectory() as tmp:
-                h, calls, real = Path(tmp).resolve(), [], (HOME, known_folders, git_repos, subprocess.run)
+            with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as tmp2:
+                h, calls, real, real_scratch = Path(tmp).resolve(), [], (HOME, known_folders, git_repos, subprocess.run), scratch
                 for d in ("repo/sub", "plain", "lk"):
                     (h / d).mkdir(parents=True)
                 subprocess.run(["git", "init", "-q", str(h / "repo")], check=True)
@@ -2492,7 +2555,29 @@ def main(argv: list):
                     assert [c[2] for c in calls] == [str(h / "repo" / "sub")], calls
                     assert f1["linked"] == [{"path": str(h / "lk"), "project": "p"}], f1
                     assert [c["path"] for c in f1["candidates"]] == [str(h / "plain"), str(h / "repo")], f1
+                    # Outside the home folder: a folder an agent worked in counts (not in the temp folder), never a root,
+                    # the home folder or above it, or a system folder; the chooser shows it and links it.
+                    away = Path(tmp2).resolve() / "away"
+                    (away / "sub").mkdir(parents=True)
+                    (away / ".hidden").mkdir()
+                    assert linkable(h / "plain") and linkable(away)
+                    assert not any(linkable(x) for x in (h, h.parent, Path(h.anchor), *SYSTEM_DIRS)), SYSTEM_DIRS
+                    assert sys.platform == "win32" or not linkable(Path("/etc/ssh"))
+                    globals().update(known_folders=lambda: {str(away), str(Path(tmp2).resolve() / "gone")})
+                    assert [c["path"] for c in folder_links()["candidates"]] == [], "the temp folder is not offered"
+                    globals().update(scratch=lambda p: False)
+                    assert [c["path"] for c in folder_links()["candidates"]] == [str(away)], folder_links()
+                    d = list_dirs(str(away))
+                    assert d["linkable"] and d["parent"] == str(away.parent) and d["dirs"] == [{"name": "sub", "path": str(away / "sub")}], d
+                    assert list_dirs("")["dirs"] and not list_dirs("")["linkable"] and not list_dirs(away.anchor)["linkable"]
+                    for bad in ("relative", str(away / "nope")):
+                        try:
+                            list_dirs(bad)
+                            raise AssertionError(bad)
+                        except ValueError:
+                            pass
                 finally:
+                    globals().update(scratch=real_scratch)
                     globals().update(HOME=real[0], known_folders=real[1], git_repos=real[2])
                     subprocess.run = real[3]
         # An "Own branch" chat: its pill and diff come from its worktree, which a look never makes.

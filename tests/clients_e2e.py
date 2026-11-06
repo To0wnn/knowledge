@@ -1561,6 +1561,25 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
               and "garden" in fs.get("projects", []), "folders: the page lists linked folders and git checkouts under home as candidates", json.dumps(fs.get("folders"))[:600])
         st, _, body = call("POST", "/local/api/link", {"path": str(outside), "project": "garden"})
         check(st == 400 and not (outside / ".knowledge-project").exists(), "folders: a path outside the companion's own list is refused", body)
+        # The folder chooser: any folder on the pc, from this pc's own page only.
+        picked = tmp / "Gekozen map é"
+        picked.mkdir()
+        st, _, body = call("POST", "/local/api/dirs", {"path": ""})
+        check(st == 200 and json.loads(body)["dirs"] and (not WIN or "C:\\" in [d["path"] for d in json.loads(body)["dirs"]]), "folders: the chooser starts at the drives of this pc", body[:300])
+        st, _, body = call("POST", "/local/api/dirs", {"path": str(tmp)})
+        check(st == 200 and str(picked) in [d["path"] for d in json.loads(body)["dirs"]] and not json.loads(body)["linkable"], "folders: the chooser lists the folders outside the home folder; the one above home is not linkable", body[:600])
+        st_d, _, _ = call("POST", "/local/api/dirs", {"path": str(tmp)}, origin=BASE)
+        st_l, _, _ = call("POST", "/local/api/link", {"path": str(picked), "project": "garden", "chosen": True}, origin=BASE)
+        check(st_d == 403 and st_l == 403 and not (picked / ".knowledge-project").exists(), "folders: a web page gets no listing and no free path", f"{st_d} {st_l}")
+        st, _, body = call("POST", "/local/api/link", {"path": str(home), "project": "garden", "chosen": True})
+        st2, _, body2 = call("POST", "/local/api/link", {"path": home.anchor, "project": "garden", "chosen": True})
+        check(st == 400 and st2 == 400 and not (home / ".knowledge-project").exists(), "folders: the chooser refuses the home folder and a drive root", body + body2)
+        st, _, body = call("POST", "/local/api/link", {"path": str(picked), "project": "garden", "chosen": True})
+        fs = json.loads(call("GET", "/local/api/state")[2])["folders"]
+        check(st == 200 and (picked / ".knowledge-project").read_text(encoding="utf-8") == "garden\n" and {"path": str(picked), "project": "garden"} in fs["linked"],
+              "folders: a chosen folder outside the home folder is linked and listed", body + json.dumps(fs)[:400])
+        st, _, body = call("POST", "/local/api/unlink", {"path": str(picked)})
+        check(st == 200 and not (picked / ".knowledge-project").exists(), "folders: a chosen folder can be unlinked", body)
         st, _, body = call("POST", "/local/api/link", {"path": str(app), "project": "homelab"})
         check(st == 400 and "may not write" in body and not (app / ".knowledge-project").exists(), "folders: only a project this token may write", body)
         st, _, body = call("POST", "/local/api/link", {"path": str(app), "project": "garden"})
