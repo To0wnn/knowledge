@@ -2188,6 +2188,26 @@ async def settings(browser, secret: str) -> None:
     await pg.click("[data-action=rail]")
     await pg.keyboard.press("Escape")
     check(await pg.inner_text("[data-action=rail]") == "Alt+[" and posted[-1] == {"keys": {"new_chat": None}}, "Settings: Esc cancels picking a key")
+    # The Edit and Save buttons of a note already open follow a new key at once (no re-render when you go back to it).
+    await pg.wait_for_function("data.nodes.length > 0", timeout=15000)
+    note = await pg.evaluate("data.nodes.find((n) => n.id.endsWith('.md') && !n.id.startsWith('claude/') && me.writable.includes(n.project))?.id")
+    if note:
+        await pg.evaluate("(p) => go(noteRoute(p))", note)
+        await pg.wait_for_selector('#note .note-tools button:text-matches("^Edit")', timeout=5000)
+        for action, button, opened in (("edit", '#note .note-tools button:text-matches("^Edit")', "Edit"), ("save", "#note .actions .btn.primary", "Save")):
+            if action == "save":
+                await pg.evaluate("go(noteRoute(current.path)); startEdit()")
+            check(f"({await pg.evaluate('(a) => keyOf(a)', action)})" in await pg.text_content(button), f"Keys: {opened} names its key")
+            await pg.evaluate("go('#/settings')")
+            await pg.click(f"[data-action={action}]")
+            await pg.keyboard.press("Alt+KeyQ")
+            await pg.wait_for_function("(a) => keyOf(a) === 'Alt+Q'", arg=action, timeout=5000)
+            check(await pg.text_content(button) == f"{opened} (Alt+Q)", f"Keys: the open note's {opened} shows a new key at once")
+            await pg.click(f".set-key:has([data-action={action}]) .btn.quiet")
+            await pg.wait_for_function("(a) => !me.prefs.keys?.[a]", arg=action, timeout=5000)
+        await pg.evaluate("go(noteRoute(current.path)); document.querySelector('#note .actions .btn:not(.primary)').click(); go('#/settings')")
+    else:
+        print("skip the open note's key labels (no writable note)")
     await pg.select_option("#set-grid", "here")
     await pg.wait_for_function("me.prefs.grid_open === 'here'", timeout=5000)
     await pg.select_option("#set-theme", "dark")
