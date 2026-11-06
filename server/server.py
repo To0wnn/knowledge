@@ -2933,6 +2933,45 @@ NO_ACCESS = """<!doctype html><html lang="en"><meta charset="utf-8"><meta name="
 <h1>Knowledge</h1><p>{msg}</p></main></body></html>"""
 
 
+# ---------------------------------------------------------------- Shared folders that stop answering
+# A hard NFS mount makes every read wait until the file server is back (15 minutes on 5 Nov 2026, with /health green).
+# One thread does the waiting; requests look at when it last got an answer and fail at once instead of piling up.
+STORAGE_TIMEOUT = 10  # seconds; a stat on the NFS roots took at most 2 ms over 5400 samples (6 Nov 2026)
+STORAGE_EVERY = 2  # above the mount's actimeo=1, so a stat really asks the file server
+_storage = {"ok": time.monotonic(), "down": False}
+
+
+def storage_probe():
+    for base in [*ROOTS.values(), AUDIT.parent]:
+        try:
+            base.stat()
+        except FileNotFoundError:  # a project without this folder yet: the disk answered
+            pass
+
+
+def storage_loop():
+    while True:
+        try:
+            storage_probe()
+            _storage["ok"] = time.monotonic()
+        except OSError as e:  # e.g. a stale NFS handle: the same as no answer
+            print(f"storage: {e}", flush=True)
+        time.sleep(STORAGE_EVERY)
+
+
+def storage_down() -> int:
+    """Seconds the shared folders have not answered, 0 while they do. Says so once when that changes."""
+    silent = time.monotonic() - _storage["ok"]
+    down = silent > STORAGE_TIMEOUT
+    if down != _storage["down"]:
+        _storage["down"] = down
+        text = "the shared folders stopped answering: requests get 503" if down else "the shared folders answer again"
+        BACKGROUND["storage"] = {"at": time.time(), "error" if down else "detail": text}
+        print(f"storage: {text}", flush=True)
+        notify(f"Knowledge: {text}.")
+    return max(1, int(silent)) if down else 0
+
+
 class BearerAuth:
     """ASGI middleware. API clients (Claude Code plugin, agents, the VM watcher) send 'Authorization: Bearer <token>',
     matched by its SHA-256 hash. The web UI has no tokens: Traefik signs people in with Authentik and passes the
@@ -2962,13 +3001,23 @@ class BearerAuth:
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
         path = scope["path"]
+        silent = storage_down()
         if path == "/health":
             # ?ready=1: 503 until this server can serve everything (index and semantic index loaded).
             if b"ready=1" in scope.get("query_string", b"") and not instance_ready():
                 return await PlainTextResponse("not ready", status_code=503)(scope, receive, send)
+            # ?disk=1: 503 while the shared folders do not answer. Plain /health stays "the process lives", which a
+            # restart cannot improve when the file server is what is gone.
+            if silent and b"disk=1" in scope.get("query_string", b""):
+                return await PlainTextResponse(f"shared folders not answering for {silent} s", status_code=503)(scope, receive, send)
             return await PlainTextResponse("ok")(scope, receive, send)
         if path.startswith("/ui/static/") or path in ("/ui/manifest.webmanifest", "/setup"):  # no data in any of them
             return await self.app(scope, receive, send)
+        if silent:
+            # shortcut: a write already busy on the event loop when the mount dies still blocks the loop until it returns;
+            # moving the reads of the async write tools to threads closes that if it ever shows.
+            return await JSONResponse({"error": f"the server's shared folders have not answered for {silent} s; try again later"},
+                                      status_code=503, headers={"Retry-After": "30"})(scope, receive, send)
         headers = dict(scope["headers"])
         if scope["method"] not in ("GET", "HEAD"):
             receive = self.capped(receive)
@@ -4710,7 +4759,7 @@ async def ui_related(request: Request):
 async def ui_note(request: Request):
     try:
         full, rel = resolve(request.query_params.get("path", ""))
-        data = full.read_bytes()
+        data = await asyncio.to_thread(full.read_bytes)  # not on the loop: a dead mount must not stop every other request
     except (ToolError, OSError) as e:
         return JSONResponse({"error": str(e)}, status_code=404)
     return JSONResponse({"path": rel, "version": version(data), "text": data.decode("utf-8", errors="replace"),
@@ -7077,6 +7126,7 @@ if __name__ == "__main__":
     index.rescan()
     index.loaded = True
     print(f"index: {len(index.files)} files in {time.time() - t0:.1f}s", flush=True)
+    threading.Thread(target=storage_loop, daemon=True).start()
     threading.Thread(target=index.loop, daemon=True).start()
     threading.Thread(target=vec.loop, daemon=True).start()
     threading.Thread(target=external_loop, daemon=True).start()

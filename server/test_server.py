@@ -1888,6 +1888,7 @@ def main():
             except OSError:
                 time.sleep(0.2)
         assert http("GET", "/health", token=None) == (200, "ok")
+        assert http("GET", "/health?disk=1", token=None) == (200, "ok")
         assert http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, token=None)[0] == 401
         assert http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, token="wrong")[0] == 401
 
@@ -1974,6 +1975,31 @@ def main():
         assert "giraffe new" in res and "giraffe old" not in res and "1 more file(s) in the archive" in res, res
         assert "giraffe old" in call("knowledge_search", {"pattern": "giraffe", "root": "trade-memory", "archive": True})[1]
         import server as srv
+        # Shared folders that stop answering: the probe thread hangs, requests get 503 at once, plain /health stays ok,
+        # the admin hears it once each way.
+        import asyncio, threading
+        hang, told, saved = threading.Event(), [], (srv.storage_probe, srv.notify, srv.STORAGE_TIMEOUT, srv.STORAGE_EVERY)
+        srv.notify, srv.STORAGE_TIMEOUT, srv.STORAGE_EVERY = told.append, 0.2, 0.02
+        srv._storage["ok"], srv._storage["down"] = time.monotonic(), False
+        srv.storage_probe = lambda: hang.wait()
+        threading.Thread(target=srv.storage_loop, daemon=True).start()
+        async def asked(path, query=b""):
+            sent, reached = [], []
+            async def inner(*_): reached.append(path)
+            async def recv(): return {"type": "http.request", "body": b""}
+            async def send(m): sent.append(m)
+            await srv.BearerAuth(inner)({"type": "http", "path": path, "method": "GET", "headers": [], "query_string": query}, recv, send)
+            return (sent[0]["status"] if sent else 0), reached
+        time.sleep(0.4)
+        t0 = time.time()
+        assert asyncio.run(asked("/mcp"))[0] == 503 and time.time() - t0 < 0.5
+        assert asyncio.run(asked("/ui/api/recent"))[0] == 503
+        assert asyncio.run(asked("/health"))[0] == 200 and asyncio.run(asked("/health", b"disk=1"))[0] == 503
+        assert asyncio.run(asked("/ui/static/app.js"))[1] == ["/ui/static/app.js"]  # the page itself needs no shared folder
+        assert len(told) == 1 and "stopped answering" in told[0], told
+        srv.storage_probe = saved[0]; hang.set(); time.sleep(0.1)
+        assert asyncio.run(asked("/health", b"disk=1"))[0] == 200 and len(told) == 2 and "answer again" in told[1], told
+        srv.notify, srv.STORAGE_TIMEOUT, srv.STORAGE_EVERY = saved[1:]
         assert srv.is_archive("a350/docs/history/x.md") and srv.is_archive("a/requests/archief-2026-10-23/x.md")
         assert not srv.is_archive("a350/old.md") and not srv.is_archive("memory/project_old.md")
         # Dismissals per person: ended snoozes go before any permanent dismissal, then the oldest.
