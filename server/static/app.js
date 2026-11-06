@@ -128,10 +128,11 @@ function applyView(refit = false) {
 
 async function refreshData() {
   await releaseFocus({ instant: true });
-  // Reload after a change but keep the layout: copy positions of known nodes onto the new data.
-  const old = new Map(data.nodes.map((n) => [n.id, n]));
+  // Reload after a change but keep the layout: known nodes get their positions and hold them while the new data reheats
+  // the simulation (copied alone, its forces moved most of the map on every change); only new nodes look for a place.
+  const old = new Map(data.nodes.map((n) => [n.id, n])), settled = !settling; // a first layout still has to finish
   data = await api("/ui/api/graph");
-  for (const n of data.nodes) { const o = old.get(n.id); if (o) Object.assign(n, { x: o.x, y: o.y, vx: 0, vy: 0 }); }
+  for (const n of data.nodes) { const o = old.get(n.id); if (o) Object.assign(n, { x: o.x, y: o.y, vx: 0, vy: 0 }, settled || o.held ? { fx: o.x, fy: o.y, held: true } : {}); }
   indexGraph(); renderProjects(); renderTopics(); applyView();
 }
 
@@ -306,6 +307,7 @@ async function loadGraph() {
     .cooldownTicks(250) // the layout settles, then the simulation stops: no CPU while idle
     .onEngineStop(() => {
       settling = false;
+      for (const n of data.nodes) if (n.held) { n.held = false; if (!home.has(n)) n.fx = n.fy = undefined; } // refreshData; a gathered node goes back with its focus
       if (zoomToFocus.again && selected) zoomToFocus();
       else if (!loadGraph.fitted) Graph.zoomToFit(400, fitPad());
       zoomToFocus.again = false; loadGraph.fitted = true;

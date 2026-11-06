@@ -14,6 +14,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -85,9 +86,18 @@ def seed() -> None:
                "path": "memory/project_wireguard.md", "old_string": "split tunnel.", "new_string": "split tunnel.\nKeys rotate yearly."}}}, bearer), "edit")
     assert '"isError":false' in body, body  # an edit of a homelab memo: Changes shows its lines added/removed
     pc = {**bearer, "X-Knowledge-Machine": MID, "X-Knowledge-Machine-Label": "smoke-pc"}
-    ok(http("POST", "/machine/report", {"version": "0.21.1", "agents": {"codex": {}, "claude": {"models": [
+    report = {"version": "0.21.1", "agents": {"codex": {}, "claude": {"models": [
         {"id": "opus", "name": "Opus", "efforts": ["low", "high"], "default": "high"}, {"id": "sonnet", "name": "Sonnet", "efforts": ["low"]}]}},
-        "folders": {"linked": [{"path": "/home/x/lab", "project": "homelab"}]}}, pc), "machine report")
+        "folders": {"linked": [{"path": "/home/x/lab", "project": "homelab"}]}}
+    ok(http("POST", "/machine/report", report, pc), "machine report")
+    def keep_online():  # as a companion does: else the pc goes offline once the tests take longer than the server's limit
+        while True:
+            time.sleep(30)
+            try:
+                http("POST", "/machine/report", report, pc)
+            except OSError:
+                return
+    threading.Thread(target=keep_online, daemon=True).start()
     cid = json.loads(ok(http("POST", "/ui/api/chats", {"machine": MID, "agent": "claude", "folder": "/home/x/lab"}, ADMIN), "chat"))["chat"]["id"]
     ok(http("POST", "/ui/api/chat/send", {"machine": MID, "id": cid, "text": "Which beds need water?"}, ADMIN), "chat message")
     ok(http("GET", "/machine/chats", headers=pc), "chat pickup")

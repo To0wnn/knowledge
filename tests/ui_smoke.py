@@ -157,6 +157,11 @@ async def desktop(browser, secret: str) -> None:
     await pg.wait_for_timeout(1000)
     home = await pg.evaluate("Object.fromEntries(Graph.graphData().nodes.map(n => [n.id, [n.x, n.y]]))")
     overview = await pg.evaluate("Graph.zoom()")
+    await pg.evaluate("refreshData().then(() => 0)")  # what every change to a note does
+    await pg.wait_for_function("!settling", timeout=30000)
+    kept = await pg.evaluate("Object.fromEntries(Graph.graphData().nodes.map(n => [n.id, [n.x, n.y, n.fx]]))")
+    moved = max(abs(kept[k][0] - v[0]) + abs(kept[k][1] - v[1]) for k, v in home.items() if k in kept)
+    check(moved < 0.01 and not any(v[2] is not None for v in kept.values()), f"a change to a note leaves the map where it is (moved {moved:.3f})")
     sc = await pg.evaluate("(id) => { const n = byId.get(id); return Graph.graph2ScreenCoords(n.x, n.y); }", nid)
     await click_node(pg, box, sc)
     ring = """(id) => { const c = byId.get(id); const r = [...neighbors.get(id)].map(i => byId.get(i)).filter(n => n.x != null)
@@ -178,7 +183,7 @@ async def desktop(browser, secret: str) -> None:
     await pg.mouse.click(box["x"] + pt["x"], box["y"] + pt["y"])
     await pg.wait_for_timeout(2000)
     after = await pg.evaluate("Object.fromEntries(Graph.graphData().nodes.map(n => [n.id, [n.x, n.y, n.fx]]))")
-    drift = max(abs(after[k][0] - v[0]) + abs(after[k][1] - v[1]) for k, v in home.items())
+    drift = max(abs(after[k][0] - v[0]) + abs(after[k][1] - v[1]) for k, v in home.items() if k in after)  # live: a note may have gone
     check(await pg.evaluate("selected") is None, "click beside the nodes deselects")
     check(drift < 0.01 and not any(v[2] is not None for v in after.values()), f"every node back home (drift {drift:.3f})")
     check(abs(await pg.evaluate("Graph.zoom()") - overview) < 0.05, "zoomed back to the overview")
@@ -1745,6 +1750,8 @@ async def chat_tabs(browser, secret: str) -> None:
 
     ctx, pg, errors = await page(browser, secret, "/ui#/chats", viewport={"width": 1440, "height": 900})
     await ctx.route("**/ui/api/chat?*", lambda r: r.abort())
+    await pg.wait_for_function("ck.summaryAt > 0 && ck.ready", timeout=15000)
+    await pg.evaluate("agentProject = ''; bdRender()")  # live: the open chats need not be in the default project
     await pg.wait_for_selector("#bd .bd-card .ck-card", timeout=15000)
     last, grid_hash = await pg.evaluate("[store.get('kn_last_chat'), location.hash]")
     async with ctx.expect_page() as new:
