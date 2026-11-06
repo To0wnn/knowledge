@@ -8,6 +8,7 @@ calls the same (possible_duplicate). Measured 28 Oct 2026 on 94 real memo pairs 
 Off unless KNOWLEDGE_RERANK_MODEL names a folder with model.onnx and tokenizer.json, made by export_reranker.sh
 (Apache-2.0 model; ~600 MB, not in git). "test" = a word-overlap stand-in for the tests.
 """
+import ctypes
 import gc
 import math
 import os
@@ -52,6 +53,11 @@ class Reranker:
     def unload(self):
         self.sess = self.tok = None
         gc.collect()
+        # glibc keeps what the background thread freed: 1.96 GB stayed after three passes, 1.43 GB with this (6 Nov 2026).
+        try:
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except (OSError, AttributeError):  # another libc: only more memory stays in use
+            pass
 
     def cut(self, text: str, n: int) -> str:
         # Cut each side by tokens before templating: truncating the whole input drops SUFFIX, and without it the
