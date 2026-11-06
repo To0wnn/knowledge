@@ -353,8 +353,8 @@ function msOpenPanel(key) {
 
 
 // ---------------------------------------------------------------- Chat grid (#/chats on a desktop)
-// 1000 px and up; narrower keeps the list. One card per chat, tiled to fill the screen like terminal panes, under a
-// heading per project (the project picker narrows them to one). A card is the chat itself (ckCard). Only cards on screen
+// 1000 px and up; narrower keeps the list. One card per chat, tiled to fill the screen like terminal panes, inside one
+// foldable frame per project (folding is kept in localStorage). A card is the chat itself (ckCard). Only cards on screen
 // are polled (ckTick). ?view=grid is an older link to the same view; ?view=list is the attention list (#/inbox links).
 const BG = { minW: 480, minH: 380, gap: 16, pad: 16, head: 46 };
 const bd = { lay: [], wraps: new Map(), frames: new Map() };
@@ -368,18 +368,24 @@ function gridCols(n, width, s = BG) {
 }
 // Grid sizes from the stage: columns from the biggest open project, rows share the height (two at most on screen).
 function bdGridSize() {
-  const st = $("bd-stage"), one = bd.lay.length < 2;
-  const cols = gridCols(Math.max(1, ...bd.lay.map((f) => f.n)), st.clientWidth);
-  const rows = bd.lay.reduce((a, f) => a + Math.ceil(f.n / cols), 0), fit = Math.max(1, Math.min(rows, 2));
+  const st = $("bd-stage"), open = bd.lay.filter((f) => !f.shut), one = bd.lay.length < 2 && !bd.lay[0]?.shut; // a folded project keeps its title: else nothing unfolds it
+  const cols = gridCols(Math.max(1, ...open.map((f) => f.n)), st.clientWidth);
+  const rows = open.reduce((a, f) => a + Math.ceil(f.n / cols), 0), fit = Math.max(1, Math.min(rows, 2));
   const heads = one ? 0 : bd.lay.length * BG.head;
   const h = Math.max(BG.minH, Math.floor((st.clientHeight - 2 * BG.pad - (fit - 1) * BG.gap - (rows <= 2 ? heads : 0)) / fit));
   $("bd").classList.toggle("one", one);
   $("bd").style.setProperty("--bg-cols", String(cols)); $("bd").style.setProperty("--bg-row", `${h}px`);
 }
+function bdShut() {
+  try {
+    const b = JSON.parse(store.get("kn_board") || "{}") || {}; // a damaged entry must not break every render
+    return Array.isArray(b.shut) ? b.shut : [];
+  } catch { return []; }
+}
 // The frames, pure (ui_smoke checks it): one per project in name order, no project last.
-function bdProjects(chats) {
+function bdProjects(chats, shut = []) {
   const projects = [...new Set(chats.map((c) => c.project || ""))].sort((a, b) => (a || "\uffff").localeCompare(b || "\uffff"));
-  return projects.map((p) => ({ project: p, n: chats.filter((c) => (c.project || "") === p).length }));
+  return projects.map((p) => ({ project: p, n: chats.filter((c) => (c.project || "") === p).length, shut: shut.includes(p) }));
 }
 
 function bdBuild() {
@@ -435,19 +441,22 @@ function bdMove(world, n, before) {
 function bdRender() {
   if (!$("bd") || $("bd").hidden) return;
   bdLink();
-  const rows = bdChats(), world = $("bd-world");
-  const frames = bd.lay = bdProjects(rows.map(({ c }) => c));
+  const rows = bdChats(), shut = bdShut(), world = $("bd-world");
+  const frames = bd.lay = bdProjects(rows.map(({ c }) => c), shut);
   const keep = new Set();
   for (const f of frames) {
     let box = bd.frames.get(f.project);
     if (!box) {
-      box = el("section", "bd-frame"); const t = el("div", "bd-frame-title");
-      t.append(el("strong"), el("span", "ck-count"));
+      box = el("section", "bd-frame"); const t = el("button", "bd-frame-title"); t.type = "button";
+      t.append(el("span", "bd-chev", "▾"), el("strong"), el("span", "ck-count"));
+      t.onclick = () => { const now = bdShut(); store.set("kn_board", JSON.stringify({ shut: now.includes(f.project) ? now.filter((x) => x !== f.project) : [...now, f.project] })); bdRender(); };
       box.append(t); bd.frames.set(f.project, box);
     }
     const t = box.firstChild, name = f.project ? shown(f.project) : "no project";
-    t.children[0].textContent = name; t.children[1].textContent = String(f.n);
+    t.children[1].textContent = name; t.children[2].textContent = String(f.n);
+    t.setAttribute("aria-expanded", String(!f.shut)); t.title = f.shut ? `Show the chats of ${name}` : `Fold ${name} away`;
     box.setAttribute("aria-label", `${name}: ${f.n} chat${f.n === 1 ? "" : "s"}`);
+    box.classList.toggle("shut", f.shut);
     keep.add(box);
   }
   for (const [p, box] of bd.frames) if (!keep.has(box)) { box.remove(); bd.frames.delete(p); }
@@ -463,7 +472,7 @@ function bdRender() {
         w.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === w) { e.preventDefault(); card.openTab.click(); } });
       }
       if (card.root.parentNode !== w) w.append(card.root); // back from the full chat (ckLayout moved it there)
-      w.className = `bd-card ${st}`;
+      w.className = `bd-card ${st}`; w.hidden = f.shut;
       w.setAttribute("aria-label", `${ckTitle(c, card)}: ${CK_STATE[st]}, ${AGENT_NAME[c.agent] || c.agent} on ${c.label}, ${ckShort(c.folder)}. Enter opens it in a tab of its own, Esc goes back to the grid`);
       order.push(w);
     }
@@ -481,10 +490,10 @@ function bdLoadSoon() {
   clearTimeout(bdLoadTimer);
   bdLoadTimer = setTimeout(() => { for (const c of bdLive()) if (!c.loaded) { c.loaded = true; ckPoll(c); } }, 250);
 }
-// The cards ckTick polls: their box meeting the stage's (the grid scrolls).
+// The cards ckTick polls: in an open frame, their box meeting the stage's (the grid scrolls).
 function bdLive() {
   if (!$("bd") || $("bd").hidden) return [];
   const s = $("bd-stage").getBoundingClientRect();
-  return [...bd.wraps].filter(([, w]) => { const r = w.getBoundingClientRect(); return r.bottom > s.top && r.top < s.bottom; })
+  return [...bd.wraps].filter(([, w]) => { if (w.hidden) return false; const r = w.getBoundingClientRect(); return r.bottom > s.top && r.top < s.bottom; })
     .map(([k]) => ck.cards.get(k)).filter(Boolean);
 }
