@@ -1547,7 +1547,8 @@ async function loadMe() {
 // The URL says which view shows (shell.js). The Agents views need no map data, so they show as soon as the user is
 // known; the knowledge views once the map data is in.
 let routedEarly = false;
-loadMe().then(() => {
+// Also wait for the scripts after this one (shell.js, ...): a fast /ui/api/me answer can come before they ran.
+Promise.all([loadMe(), new Promise((ready) => { if (document.readyState === "loading") addEventListener("DOMContentLoaded", ready); else ready(); })]).then(() => {
   if (!["notes", "map", "changes", "health"].includes(routeView())) { applyRoute(); routedEarly = true; }
   return loadGraph();
 }).catch((e) => {
