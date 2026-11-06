@@ -37,6 +37,7 @@ except ImportError:  # Windows (the e2e test server)
 import time
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
 from pathlib import Path, PurePosixPath
 
@@ -310,10 +311,18 @@ logging.getLogger("mcp.server.streamable_http").setLevel(logging.WARNING)  # sta
 BACKGROUND: dict[str, dict] = {}  # last run of the background work, for the admin page
 
 
+# A share that stopped answering (a timeout, the network gone), as opposed to a file that is really gone.
+OUTAGE_ERRNOS = {errno.ESTALE, errno.EIO, errno.ETIMEDOUT, errno.ENOTCONN, errno.EHOSTDOWN, errno.EHOSTUNREACH, errno.ENETDOWN, errno.ENETUNREACH}
+
+
 def shared_files(root: str):
     """Walk a root, pruning skipped directories while walking (the homelab tree has ~21k files, ~1.3k shared)."""
     base = ROOTS[root]
-    for dirpath, dirnames, filenames in os.walk(base):
+
+    def walk_error(e: OSError):  # os.walk skips errors: an outage would look like an empty folder
+        if e.errno in OUTAGE_ERRNOS:
+            raise e
+    for dirpath, dirnames, filenames in os.walk(base, onerror=walk_error):
         dirnames[:] = sorted(d for d in dirnames if d not in SKIP_PARTS)
         for name in sorted(filenames):
             p = Path(dirpath) / name
@@ -323,7 +332,9 @@ def shared_files(root: str):
                 resolve(f"{root}/{p.relative_to(base).as_posix()}", scoped=False)
                 if p.stat().st_size > MAX_BYTES:
                     continue
-            except (ToolError, OSError):
+            except (ToolError, OSError) as e:
+                if getattr(e, "errno", None) in OUTAGE_ERRNOS:
+                    raise
                 continue
             yield p
 
@@ -375,6 +386,8 @@ class Index:
                     raise OSError("not indexed")
                 text = f.read().decode("utf-8")
         except (ToolError, OSError, UnicodeDecodeError) as e:
+            if getattr(e, "errno", None) in OUTAGE_ERRNOS:  # says nothing about the file: dropping it would make every file "new" once the share is back
+                return
             with self.lock:
                 old = self.files.pop(rel, None)
                 if old is not None:
@@ -408,7 +421,9 @@ class Index:
             seen.add(rel)
             try:
                 st = p.stat()
-            except OSError:
+            except OSError as e:
+                if e.errno in OUTAGE_ERRNOS:
+                    raise
                 continue
             hit = self.files.get(rel)
             if not hit or hit[0] != st.st_mtime_ns or hit[1] != st.st_size:
@@ -755,6 +770,13 @@ def writing(full: Path):
         _writes[str(full)] = (dev["name"], time.monotonic())
 
 
+def read_if_there(full: Path) -> bytes | None:
+    try:  # not exists(): since Python 3.14 it says False on any OSError, so a share that fails would look like a new file
+        return full.read_bytes()
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+
+
 def replace_if_unchanged(full: Path, expected: bytes | None, data: bytes) -> bool:
     """Atomically replace `full` with `data`, but only if it still holds `expected` (None = must not exist).
 
@@ -767,7 +789,7 @@ def replace_if_unchanged(full: Path, expected: bytes | None, data: bytes) -> boo
     try:
         with os.fdopen(fd, "wb") as f:  # inside the try: a full disk must not leave a .knowledge-* file behind
             f.write(data)
-        current = full.read_bytes() if full.exists() else None
+        current = read_if_there(full)
         if current != expected:
             os.unlink(tmp)
             return False
@@ -1175,15 +1197,15 @@ def search_lines(rx_i, rx_low, root: str, max_results: int, archive: bool = Fals
 async def knowledge_edit(path: str, old_string: str, new_string: str) -> str:
     """Replace one unique snippet in a shared file (like the Edit tool). Edits by other sessions elsewhere in the
     file are kept. Fails if old_string is missing or not unique: read the file again and retry."""
-    full, rel = resolve(path)
-    check_writable(rel)
+    full, rel = await asyncio.to_thread(resolve, path)
+    await asyncio.to_thread(check_writable, rel)
     refuse_mirror(rel)
     new_string, hidden = strip_private(new_string)
     refuse_secrets(new_string)
     refuse_mask(new_string, old_string)
     async with _locks.setdefault(rel, asyncio.Lock()):
         for _ in range(5):  # retry on fresh content when a native edit on the VM landed in between
-            data = full.read_bytes()
+            data = await asyncio.to_thread(full.read_bytes)
             text = data.decode("utf-8")
             count = text.count(old_string)
             if count != 1:
@@ -1191,11 +1213,11 @@ async def knowledge_edit(path: str, old_string: str, new_string: str) -> str:
             new = text.replace(old_string, new_string, 1).encode()
             refuse_broken_skill(rel, new.decode("utf-8"))
             refuse_bare_tasks(rel, text, new.decode("utf-8"))
-            if replace_if_unchanged(full, data, new):
+            if await asyncio.to_thread(replace_if_unchanged, full, data, new):
                 break
         else:
             raise ToolError(f"{rel} kept changing while editing; read it again and retry")
-        index.refresh(rel)
+        await asyncio.to_thread(index.refresh, rel)
     note_task_authors(rel, text, new.decode("utf-8"), device.get().get("name", ""))
     audit("edit", rel)
     judge_soon(rel)
@@ -1208,14 +1230,14 @@ async def knowledge_edit(path: str, old_string: str, new_string: str) -> str:
 async def knowledge_write(path: str, content: str, base_version: str = "") -> str:
     """Create or replace a whole shared file. For an existing file pass base_version from knowledge_read; it is refused
     when another session changed the file since then. Leave base_version empty only to create a new file."""
-    full, rel = resolve(path)
-    check_writable(rel)
+    full, rel = await asyncio.to_thread(resolve, path)
+    await asyncio.to_thread(check_writable, rel)
     refuse_mirror(rel)
     content, hidden = strip_private(content)
     refuse_secrets(content)
     refuse_broken_skill(rel, content)
     async with _locks.setdefault(rel, asyncio.Lock()):
-        current = full.read_bytes() if full.exists() else None
+        current = await asyncio.to_thread(read_if_there, full)
         if current is not None and base_version != version(current):
             raise ToolError(f"{rel} changed since you read it (now {version(current)}); read it again and redo your change")
         if current is None and base_version:
@@ -1225,9 +1247,9 @@ async def knowledge_write(path: str, content: str, base_version: str = "") -> st
         refuse_mask(content, (current or b"").decode("utf-8", "replace"))
         refuse_bare_tasks(rel, (current or b"").decode("utf-8", "replace"), content)
         data = content.encode()
-        if not replace_if_unchanged(full, current, data):
+        if not await asyncio.to_thread(replace_if_unchanged, full, current, data):
             raise ToolError(f"{rel} changed while writing; read it again and redo your change")
-        index.refresh(rel)
+        await asyncio.to_thread(index.refresh, rel)
     note_task_authors(rel, (current or b"").decode("utf-8", "replace"), content, device.get().get("name", ""))
     audit("write", rel)
     judge_soon(rel)
@@ -1261,10 +1283,11 @@ async def knowledge_new_memo(title: str, description: str, type: str, heading: s
     mem = PROJECTS[proj][1]
     slug = slugify(title).replace("-", "_")
     file, rel = f"{type}_{slug}.md", f"{mem}/{type}_{slug}.md"
-    if resolve(rel)[0].exists():
+    if await asyncio.to_thread(lambda: resolve(rel)[0].exists()):
         raise ToolError(f"{rel} exists: read it and change it with knowledge_edit")
-    index_full, _ = resolve(f"{mem}/MEMORY.md")
-    headings = re.findall(r"^## (.+?)\s*$", index_full.read_text(encoding="utf-8"), re.M) if index_full.exists() else []
+    index_full, _ = await asyncio.to_thread(resolve, f"{mem}/MEMORY.md")
+    index_text = await asyncio.to_thread(read_if_there, index_full)
+    headings = re.findall(r"^## (.+?)\s*$", index_text.decode("utf-8"), re.M) if index_text is not None else []
     content = (f"---\nname: {type}_{slug}\ndescription: {json.dumps(description, ensure_ascii=False)}\nmetadata:\n"
                f"  type: {type}\n---\n\n{kb_lint.STRUCTURE[0]}\n\n{status.strip()}\n\n{kb_lint.STRUCTURE[1]}\n\n{decisions.strip()}\n".replace("\n\n\n", "\n\n"))
     written = await knowledge_write(rel, content, "")
@@ -1479,20 +1502,20 @@ async def knowledge_delete(path: str, base_version: str) -> str:
     """Delete a shared file you are allowed to write (e.g. an outdated memory). Pass base_version from knowledge_read;
     refused if the file changed since. A copy is kept on the server (state/deleted/), so nothing is lost for good.
     Also remove its line from memory/MEMORY.md with knowledge_edit."""
-    full, rel = resolve(path)
-    check_writable(rel, grows=False)  # a full project must still be able to shrink
+    full, rel = await asyncio.to_thread(resolve, path)
+    await asyncio.to_thread(check_writable, rel, grows=False)  # a full project must still be able to shrink
     refuse_mirror(rel)
     async with _locks.setdefault(rel, asyncio.Lock()):
-        if not full.exists():
+        if not await asyncio.to_thread(full.exists):
             raise ToolError(f"{rel} does not exist")
-        data = full.read_bytes()
+        data = await asyncio.to_thread(full.read_bytes)
         if base_version != version(data):
             raise ToolError(f"{rel} changed since you read it (now {version(data)}); read it again first")
         keep = TRASH / f"{time.strftime('%Y%m%d-%H%M%S')}_{rel.replace('/', '__')}"
         keep.parent.mkdir(parents=True, exist_ok=True)
         keep.write_bytes(data)
-        full.unlink()
-        index.refresh(rel)
+        await asyncio.to_thread(full.unlink)
+        await asyncio.to_thread(index.refresh, rel)
     audit("delete", rel)
     return f"deleted {rel} (copy kept on the server as {keep.name})"
 
@@ -1779,7 +1802,7 @@ async def knowledge_related(path: str, limit: int = 10, archive: bool = False) -
     """The notes most related to one note, ranked by a relevance model: direct links, shared raw sources, shared
     neighbours (Adamic-Adar), same type and similar meaning. Use it to find context before changing or adding a memo.
     Archive folders are left out unless archive=true."""
-    _, rel = resolve(path)
+    _, rel = await asyncio.to_thread(resolve, path)
     graph = await asyncio.to_thread(get_graph)
     out = [r for r in kb_graph.related(graph, rel, 30, vec.similar(rel))
            if in_scope(r["id"]) and (archive or not is_archive(r["id"], text_of(r["id"])))][:min(limit, 30)]
@@ -3012,17 +3035,19 @@ NO_ACCESS = """<!doctype html><html lang="en"><meta charset="utf-8"><meta name="
 # ---------------------------------------------------------------- Shared folders that stop answering
 # A hard NFS mount makes every read wait until the file server is back (15 minutes on 5 Nov 2026, with /health green).
 # One thread does the waiting; requests look at when it last got an answer and fail at once instead of piling up.
-STORAGE_TIMEOUT = 10  # seconds; a stat on the NFS roots took at most 2 ms over 5400 samples (6 Nov 2026)
-STORAGE_EVERY = 2  # above the mount's actimeo=1, so a stat really asks the file server
+STORAGE_TIMEOUT = 10  # seconds
+STORAGE_EVERY = 2
 _storage = {"ok": time.monotonic(), "down": False}
 
 
 def storage_probe():
+    """statvfs, because it always asks the server: on a blocked mount stat, listdir and reads kept answering from the
+    client's cache (measured 6 Nov 2026), so nothing ever tripped."""
     for base in [*ROOTS.values(), AUDIT.parent]:
         try:
-            base.stat()
+            os.statvfs(base)
         except OSError as e:  # a missing folder or a denied one: the disk did answer
-            if e.errno in (errno.ESTALE, errno.EIO, errno.ETIMEDOUT, errno.ENOTCONN, errno.EHOSTDOWN, errno.EHOSTUNREACH):
+            if e.errno in OUTAGE_ERRNOS:
                 raise
 
 
@@ -3075,6 +3100,11 @@ class BearerAuth:
         return wrapped
 
     async def __call__(self, scope, receive, send):
+        if scope["type"] == "lifespan":
+            # Each call hung on a dead share keeps its thread until the share is back. Those started before the gate
+            # closes would fill the default pool (12 on forge, 20 calls per 20 s at p99, audit log 6 Nov 2026) and stall
+            # the chats that keep working. Threads start only when needed.
+            asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=128))
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
         path = scope["path"]
@@ -3092,8 +3122,6 @@ class BearerAuth:
             return await self.app(scope, receive, send)
         # Chats and machines live in the admin folder, and a pc's chat output sent now cannot be sent again.
         if silent and not path.startswith(("/machine/", "/ui/api/chat", "/ui/api/machines", "/ui/api/worker", "/ui/api/board")):
-            # shortcut: a write already busy on the event loop when the mount dies still blocks the loop until it returns;
-            # moving the reads of the async write tools to threads closes that if it ever shows.
             return await JSONResponse({"error": f"the server's shared folders have not answered for {silent} s; try again later"},
                                       status_code=503, headers={"Retry-After": "30"})(scope, receive, send)
         headers = dict(scope["headers"])
@@ -3208,17 +3236,17 @@ async def sessions_route(request: Request):
         lines.append(f"- Outcome: {summary}")
     entry = redact("\n".join(lines))
     try:
-        full, rel = resolve(rel)
-        check_writable(rel)
+        full, rel = await asyncio.to_thread(resolve, rel)
+        await asyncio.to_thread(check_writable, rel)
         async with _locks.setdefault(rel, asyncio.Lock()):
             for _ in range(5):
-                current = full.read_bytes() if full.exists() else None
+                current = await asyncio.to_thread(read_if_there, full)
                 base = current or f"# Sessions {time.strftime('%Y-%m')} ({project})\n\nOne entry per Claude Code session (prompts, changed files, outcome), written automatically.\n".encode()
-                if replace_if_unchanged(full, current, base + entry.encode() + b"\n"):
+                if await asyncio.to_thread(replace_if_unchanged, full, current, base + entry.encode() + b"\n"):
                     break
             else:
                 return JSONResponse({"error": f"{rel} kept changing; entry not logged"}, status_code=409)
-            index.refresh(rel)
+            await asyncio.to_thread(index.refresh, rel)
     except ToolError as e:
         return JSONResponse({"error": str(e)}, status_code=403)
     audit("session", rel)
@@ -3262,8 +3290,7 @@ def mirror_files(roots: list[str]) -> dict[str, bytes]:
     out = {}
     for rel in rels:
         full, rel = resolve(rel)
-        if full.is_file():
-            data = full.read_bytes()
+        if (data := read_if_there(full)) is not None:
             out[rel] = shown(data.decode("utf-8", "replace")).encode() if device.get().get("redact") else data
     return out
 
@@ -3273,7 +3300,7 @@ async def mirror_route(request: Request):
     """Offline copy of a device's memory roots: {"have": {rel: version}} -> the files that differ from what the device
     has, plus the version of every file (what is missing there was deleted here). One round trip, nothing re-sent."""
     have = (await request.json()).get("have") or {}
-    roots = mirror_roots()
+    roots = await asyncio.to_thread(mirror_roots)
     files = await asyncio.to_thread(mirror_files, roots)
     versions = {rel: version(data) for rel, data in files.items()}
     return JSONResponse({"roots": roots, "versions": versions,
@@ -3287,7 +3314,7 @@ async def mirror_push(request: Request):
     deleted it, or the file is redacted for this device) the device's text lands next to it as <name>.offline-<time>.md,
     so nothing is lost and knowledge_lint asks to merge them."""
     files = (await request.json()).get("files") or {}
-    roots = mirror_roots()
+    roots = await asyncio.to_thread(mirror_roots)
     out = {"written": {}, "unchanged": 0, "unchanged_files": [], "conflicts": {}, "refused": []}
     items = list(files.items())
     out["refused"] += [f"{name}: more than 2000 files in one push, it goes up with the next sync" for name, _ in items[2000:]]
@@ -3295,10 +3322,10 @@ async def mirror_push(request: Request):
         try:
             if not isinstance(f, dict) or not isinstance(f.get("text"), str):
                 raise ToolError("not text")
-            full, rel = resolve(name)
-            if not mirrorable(rel, roots):
+            full, rel = await asyncio.to_thread(resolve, name)
+            if not await asyncio.to_thread(mirrorable, rel, roots):
                 raise ToolError("not a memo of a memory root this device mirrors")
-            check_writable(rel)
+            await asyncio.to_thread(check_writable, rel)
             refuse_secrets(f["text"])
             refuse_broken_skill(rel, f["text"])
             if len(f["text"].encode()) > MAX_BYTES:  # not indexed, so /mirror would never list it and the device drops it
@@ -3308,15 +3335,15 @@ async def mirror_push(request: Request):
             continue
         data, base = f["text"].encode(), str(f.get("base") or "")
         async with _locks.setdefault(rel, asyncio.Lock()):
-            current = full.read_bytes() if full.exists() else None
+            current = await asyncio.to_thread(read_if_there, full)
             if current == data:
                 out["unchanged"] += 1
                 out["unchanged_files"].append(rel)
                 continue
             plain = current is None or shown(current.decode("utf-8", "replace")).encode() == current
             if (current is None and not base) or (current is not None and plain and base == version(current)):
-                if replace_if_unchanged(full, current, data):
-                    index.refresh(rel)
+                if await asyncio.to_thread(replace_if_unchanged, full, current, data):
+                    await asyncio.to_thread(index.refresh, rel)
                     note_task_authors(rel, (current or b"").decode("utf-8", "replace"), f["text"], device.get().get("name", ""))
                     audit("mirror", rel)
                     out["written"][rel] = version(data)
@@ -3326,18 +3353,18 @@ async def mirror_push(request: Request):
             if current is not None and plain and base and (old := base_text(rel, base)) is not None and \
                     (merged := merge3(old, current.decode("utf-8", "replace"), f["text"])) is not None:
                 refuse_secrets(merged)
-                if replace_if_unchanged(full, current, merged.encode()):
-                    index.refresh(rel)
+                if await asyncio.to_thread(replace_if_unchanged, full, current, merged.encode()):
+                    await asyncio.to_thread(index.refresh, rel)
                     note_task_authors(rel, current.decode("utf-8", "replace"), merged, device.get().get("name", ""))
                     audit("mirror-merge", rel)
                     out.setdefault("merged", []).append(rel)  # not in "written": the device fetches the merged text
                     continue
             p = PurePosixPath(rel)  # also a skill's script: x.offline-<time>.py
-            copy, copy_rel = resolve(str(p.with_name(f"{p.stem}.offline-{time.strftime('%Y%m%d-%H%M%S')}{p.suffix}")))
-            if not replace_if_unchanged(copy, None, data):
+            copy, copy_rel = await asyncio.to_thread(resolve, str(p.with_name(f"{p.stem}.offline-{time.strftime('%Y%m%d-%H%M%S')}{p.suffix}")))
+            if not await asyncio.to_thread(replace_if_unchanged, copy, None, data):
                 out["refused"].append(f"{name}: changed while writing")
                 continue
-            index.refresh(copy_rel)
+            await asyncio.to_thread(index.refresh, copy_rel)
             audit("mirror-conflict", copy_rel)
             out["conflicts"][rel] = copy_rel
     return JSONResponse(out)
@@ -3459,26 +3486,26 @@ async def sync_route(request: Request):
             out["refused"].append(f"{name}: not text or bigger than {SYNC_MAX_FILE // 1000} KB")
             continue
         try:
-            full, rel = resolve(f"{docs}/{clean}")
+            full, rel = await asyncio.to_thread(resolve, f"{docs}/{clean}")
             keep.add(rel)  # still in the folder: a refusal (full project, secret) must never delete the server copy
             if headings and clean.rsplit("/", 1)[-1] not in ("CLAUDE.md", "AGENTS.md", "GEMINI.md") \
                     and not is_archive(rel) and (why := topic_problem(text if isinstance(text, str) else "", headings)):
                 hints.append(f"{clean}: {why}")  # the same rule as lint doc_without_topic, told at once
-            check_writable(rel)
+            await asyncio.to_thread(check_writable, rel)
             refuse_secrets(text)
         except ToolError as e:
             out["refused"].append(f"{name}: {e}")
             continue
         data = text.encode()
         async with _locks.setdefault(rel, asyncio.Lock()):
-            current = full.read_bytes() if full.exists() else None
+            current = await asyncio.to_thread(read_if_there, full)
             if current == data:
                 out["unchanged"] += 1
                 continue
-            if not replace_if_unchanged(full, current, data):
+            if not await asyncio.to_thread(replace_if_unchanged, full, current, data):
                 out["refused"].append(f"{name}: changed while writing")
                 continue
-            index.refresh(rel)
+            await asyncio.to_thread(index.refresh, rel)
         audit("sync", rel)
         out["written"] += 1
         if current is None and is_archive(rel):
@@ -3487,15 +3514,15 @@ async def sync_route(request: Request):
         with index.lock:
             gone = [r for r in index.files if r.startswith(docs + "/") and r.endswith(".md") and r not in keep]
         for rel in gone:
-            full, rel = resolve(rel)
+            full, rel = await asyncio.to_thread(resolve, rel)
             async with _locks.setdefault(rel, asyncio.Lock()):
-                if not full.exists():
+                if not await asyncio.to_thread(full.exists):
                     continue
                 copy = AUDIT.parent / "deleted" / f"{time.strftime('%Y%m%d-%H%M%S')}_{rel.replace('/', '__')}"
                 copy.parent.mkdir(parents=True, exist_ok=True)
-                copy.write_bytes(full.read_bytes())
-                full.unlink()
-                index.refresh(rel)
+                copy.write_bytes(await asyncio.to_thread(full.read_bytes))
+                await asyncio.to_thread(full.unlink)
+                await asyncio.to_thread(index.refresh, rel)
             audit("sync-delete", rel)
             out["deleted"] += 1
     if b.get("full"):  # a full listing also brings an old archive to a new device: only a move counts (original gone)
@@ -3530,7 +3557,7 @@ async def invalidate_route(request: Request):
             judge_soon(p, WATCH_DEVICE, keep=True)
     BACKGROUND["watcher"] = {"at": time.time(), "paths": len(paths)}
     if f"claude/{RULES_FILE}" in paths:  # new sessions get the edited rules
-        server._lowlevel_server.instructions = instructions()
+        server._lowlevel_server.instructions = await asyncio.to_thread(instructions)
     return JSONResponse({"refreshed": len(paths)})
 
 
@@ -3542,8 +3569,8 @@ async def house_rules_route(request: Request):
     mem = PROJECTS[project][1] if project in PROJECTS else "<memory root>"
     body = ("# Knowledge house rules\n\nUse the MCP server \"knowledge\" for this project's docs and memory: search with "
             "knowledge_search or knowledge_semantic_search before answering, open hits with knowledge_read.\n\n"
-            + "\n".join(f"{i}. {r}" for i, r in enumerate(house_rule_items(mem), 1)) + "\n"
-            + (f"\n# {dev}\n" if (dev := dev_rules()) else ""))
+            + "\n".join(f"{i}. {r}" for i, r in enumerate(await asyncio.to_thread(house_rule_items, mem), 1)) + "\n"
+            + (f"\n# {dev}\n" if (dev := await asyncio.to_thread(dev_rules)) else ""))
     return PlainTextResponse(body, media_type="text/markdown")
 
 
@@ -4085,8 +4112,8 @@ def notify(text: str):
 async def ui_help_page(request: Request):
     """How to connect Claude Code, agy or Codex; for everyone who may sign in. The house rules come from house_rules.md."""
     resp = page("help.html")
-    rules = "".join(f"<li>{html.escape(r)}</li>" for r in house_rule_items())
-    dev = "".join(f"<li>{html.escape(r)}</li>" for r in re.findall(r"^\d+\. (.+)$", dev_rules(), re.M))
+    rules = "".join(f"<li>{html.escape(r)}</li>" for r in await asyncio.to_thread(house_rule_items))
+    dev = "".join(f"<li>{html.escape(r)}</li>" for r in re.findall(r"^\d+\. (.+)$", await asyncio.to_thread(dev_rules), re.M))
     return HTMLResponse(resp.body.decode().replace("<!--HOUSE_RULES-->", rules).replace("<!--DEV_RULES-->", dev),
                         headers={"Cache-Control": "no-cache", "Content-Security-Policy": CSP})
 
@@ -4289,7 +4316,7 @@ async def ui_admin_settings(request: Request, body: dict):
 async def ui_admin_model_choice(request: Request, body: dict):
     """{"role", "agent", "model", "effort"}; no model: back to the advice. Nothing reaches a pc until its owner clicks Apply."""
     role, agent, model, effort = str(body.get("role", "")), str(body.get("agent", "")), str(body.get("model", "")), str(body.get("effort", ""))
-    if role not in {r.get("key") for r in advice_data().get("roles", [])} or agent not in AGENT_OWNERS:
+    if role not in {r.get("key") for r in (await asyncio.to_thread(advice_data)).get("roles", [])} or agent not in AGENT_OWNERS:
         raise ToolError("unknown role or agent")
     if model and not re.fullmatch(r"[\w.:\[\]-]{1,80}", model) or effort and effort not in EFFORTS:
         raise ToolError("not a model or effort")
@@ -4520,7 +4547,7 @@ async def ui_admin_state(request: Request, _):
         "config_admins": sorted(CONFIG_ADMINS),
         "settings": current_settings(), "setting_info": {k: {"min": lo, "max": hi, "label": label, "help": hlp, "float": kind is float}
                                                          for k, (kind, lo, hi, label, hlp) in SETTINGS.items()},
-        "models": model_overview(await asyncio.to_thread(machine_rows), data, read_json(MODEL_CHOICE, {})) if (data := advice_data()) else None,
+        "models": model_overview(await asyncio.to_thread(machine_rows), data, read_json(MODEL_CHOICE, {})) if (data := await asyncio.to_thread(advice_data)) else None,
         "system": await asyncio.to_thread(system_state),
         "external": read_json(EXTERNAL_FILE, {}),
     })
@@ -4801,7 +4828,7 @@ async def ui_history(request: Request):
     """Versions of a note, or one version with its diff against the version before it."""
     import difflib
     try:
-        _, rel = resolve(request.query_params.get("path", ""))
+        _, rel = await asyncio.to_thread(resolve, request.query_params.get("path", ""))
         vid = request.query_params.get("version", "")
         if not vid:
             return JSONResponse({"versions": versions_of(rel)})
@@ -4847,7 +4874,7 @@ def ui_gap_later(q: str, score: float | None):
 @server.custom_route("/ui/api/related", methods=["GET"])
 async def ui_related(request: Request):
     try:
-        _, rel = resolve(request.query_params.get("path", ""))
+        _, rel = await asyncio.to_thread(resolve, request.query_params.get("path", ""))
     except ToolError as e:
         return JSONResponse({"error": str(e)}, status_code=404)
     graph = await asyncio.to_thread(get_graph)
@@ -4857,12 +4884,12 @@ async def ui_related(request: Request):
 @server.custom_route("/ui/api/note", methods=["GET"])
 async def ui_note(request: Request):
     try:
-        full, rel = resolve(request.query_params.get("path", ""))
+        full, rel = await asyncio.to_thread(resolve, request.query_params.get("path", ""))
         data = await asyncio.to_thread(full.read_bytes)  # not on the loop: a dead mount must not stop every other request
     except (ToolError, OSError) as e:
         return JSONResponse({"error": str(e)}, status_code=404)
     return JSONResponse({"path": rel, "version": version(data), "text": data.decode("utf-8", errors="replace"),
-                         "writable": may_write(rel) and not mirrored(rel)})
+                         "writable": await asyncio.to_thread(may_write, rel) and not mirrored(rel)})
 
 
 def mirrored(rel: str) -> bool:
@@ -4883,7 +4910,7 @@ async def ui_save(request: Request):
     line in the project's MEMORY.md (index_line), like Claude adds one."""
     body = await request.json()
     try:
-        full, rel = resolve(body.get("path", ""))
+        full, rel = await asyncio.to_thread(resolve, body.get("path", ""))
         line = " ".join(str(body.get("index_line", "")).split())  # one line, no injected newlines
         root = rel.split("/", 1)[0]
         if line and (root not in {mem for _, mem in PROJECTS.values()} or rel.count("/") != 1):
@@ -4897,7 +4924,7 @@ async def ui_save(request: Request):
     except (ToolError, KeyError) as e:
         return JSONResponse({"error": str(e)}, status_code=409)
     hint = written.split("\n", 1)[1].strip() if "\n" in written else ""  # "Similar existing memos: ..." for a new memo
-    return JSONResponse({"path": rel, "version": version(full.read_bytes()), **({"hint": hint} if hint else {})})
+    return JSONResponse({"path": rel, "version": version(await asyncio.to_thread(full.read_bytes)), **({"hint": hint} if hint else {})})
 
 
 def insert_index_line(text: str, line: str, heading: str = "") -> str:
@@ -4920,20 +4947,20 @@ assert insert_index_line("", "- n") == "- n\n"
 
 
 async def append_line(path: str, line: str, heading: str = ""):
-    full, rel = resolve(path)
-    check_writable(rel)
+    full, rel = await asyncio.to_thread(resolve, path)
+    await asyncio.to_thread(check_writable, rel)
     refuse_secrets(f"{line}\n{heading}")
     async with _locks.setdefault(rel, asyncio.Lock()):
         for _ in range(5):
-            current = full.read_bytes() if full.exists() else None
+            current = await asyncio.to_thread(read_if_there, full)
             before = (current or b"").decode("utf-8")
             new = insert_index_line(before, line, heading).encode()
             refuse_bare_tasks(rel, before, new.decode("utf-8"))  # the same task checks as every other write
-            if replace_if_unchanged(full, current, new):
+            if await asyncio.to_thread(replace_if_unchanged, full, current, new):
                 break
         else:
             raise ToolError(f"{rel} kept changing; try again")
-        index.refresh(rel)
+        await asyncio.to_thread(index.refresh, rel)
     note_task_authors(rel, before, new.decode("utf-8"), device.get().get("name", ""))
     audit("edit", rel)
 
@@ -7074,7 +7101,7 @@ async def ui_task_done(request: Request):
         line = str(body.get("line", ""))
         if "\n" in line or not ((kb_lint.OPEN_DUE.search(line) and "[" in line) or DONE_LINE.match(line)):
             raise ToolError("not a task line")
-        _, rel = resolve(body.get("path", ""))
+        _, rel = await asyncio.to_thread(resolve, body.get("path", ""))
         await knowledge_edit(rel, line + "\n", "")
     except (ToolError, OSError, ValueError, AttributeError) as e:  # a bad body or a gone file: no 500
         return JSONResponse({"error": str(e)}, status_code=409)
@@ -7134,17 +7161,17 @@ async def ui_trash_restore(request: Request):
     except (ValueError, AttributeError):
         return JSONResponse({"error": "send JSON {name}"}, status_code=400)
     src = TRASH / name
-    if not (rel := trash_rel(name)) or not in_scope(rel) or not src.is_file():
+    if not (rel := await asyncio.to_thread(trash_rel, name)) or not in_scope(rel) or not src.is_file():
         return JSONResponse({"error": f"no deleted file {name}"}, status_code=404)
     if not may_restore(rel):
         return JSONResponse({"error": "only the project's owner or an admin may restore a file"}, status_code=403)
     try:
-        full, rel = resolve(rel)
-        check_writable(rel)
+        full, rel = await asyncio.to_thread(resolve, rel)
+        await asyncio.to_thread(check_writable, rel)
         async with _locks.setdefault(rel, asyncio.Lock()):
-            if full.exists() or not replace_if_unchanged(full, None, src.read_bytes()):
+            if await asyncio.to_thread(full.exists) or not await asyncio.to_thread(replace_if_unchanged, full, None, src.read_bytes()):
                 return JSONResponse({"error": f"{rel} exists again: restoring would overwrite it; open both and merge by hand"}, status_code=409)
-            index.refresh(rel)
+            await asyncio.to_thread(index.refresh, rel)
     except (ToolError, OSError) as e:
         return JSONResponse({"error": str(e)}, status_code=409)
     audit("restore", rel)

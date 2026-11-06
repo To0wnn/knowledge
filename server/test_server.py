@@ -1,5 +1,6 @@
 """End-to-end self-check: starts server.py on temp dirs and talks raw MCP JSON-RPC over HTTP to it.
 Run: uv run test_server.py"""
+import errno
 import gzip
 import hashlib
 import http.client as httpc
@@ -1757,7 +1758,38 @@ def mission_contract(tmp, ck, fr, raw, er):
     assert not call("knowledge_delete", {"path": path, "base_version": ver}, fr)[0]
 
 
+def share_on_loop(source: str) -> list[str]:
+    """Async functions that reach the shared files without leaving the event loop: one hung NFS call there stops the
+    whole server, /health included (seen on a blocked mount, 6 Nov 2026). Hand a call to asyncio.to_thread."""
+    import ast
+    funcs = {}
+    for n in ast.walk(ast.parse(source)):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            funcs.setdefault(n.name, n)
+
+    def calls(fn):  # what fn runs itself: a nested def or lambda runs wherever it is handed to
+        out, todo = [], list(ast.iter_child_nodes(fn))
+        while todo:
+            n = todo.pop()
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                continue
+            if isinstance(n, ast.Call):
+                out.append(getattr(n.func, "id", getattr(n.func, "attr", "")))
+            todo.extend(ast.iter_child_nodes(n))
+        return out
+    names_roots = lambda f: any(isinstance(n, ast.Name) and n.id == "ROOTS" for n in ast.walk(f))
+    reach = {"resolve", "replace_if_unchanged", "refresh", "rescan", "shared_files"} | {
+        name for name, f in funcs.items() if isinstance(f, ast.FunctionDef) and names_roots(f)}
+    for _ in range(20):
+        reach |= {name for name, f in funcs.items() if isinstance(f, ast.FunctionDef) and reach & set(calls(f))}
+    # ui_static calls Path.resolve on the image's own files, not this resolve()
+    return [name for name, f in funcs.items() if isinstance(f, ast.AsyncFunctionDef) and reach & set(calls(f)) and name != "ui_static"]
+
+
 def main():
+    on_loop = share_on_loop(Path(__file__).with_name("server.py").read_text())
+    assert not on_loop, on_loop
+    assert share_on_loop("def resolve(p): pass\ndef helper(): resolve(1)\nasync def bad(): helper()\nasync def good(): await to_thread(helper)\n") == ["bad"]
     # Every command block on the help page must paste in one go: zsh runs a "# ..." line as a command (help 23 Oct 2026).
     import html as _html
     # The page scripts share one scope: a second top-level function of the same name silently replaces the first.
@@ -2065,19 +2097,21 @@ def main():
         assert asyncio.run(asked("/health", b"disk=1"))[0] == 200 and len(told) == 2 and "answer again" in told[1], told
         srv.notify, srv.STORAGE_TIMEOUT, srv.STORAGE_EVERY = saved[1:]
         # An error that proves the disk answered is no outage; a stale handle is. And the thread survives anything.
-        import errno
-        class Answers:
-            def __init__(self, code): self.code = code
-            def stat(self): raise OSError(self.code, "x")
-        roots = srv.ROOTS
-        srv.ROOTS = {"a": Answers(errno.EACCES), "b": Answers(errno.ENOENT), "c": Answers(errno.ENOTDIR)}
-        srv.storage_probe()
-        srv.ROOTS = {"a": Answers(errno.ESTALE)}
-        try:
-            srv.storage_probe(); raise AssertionError("a stale handle counts as no answer")
-        except OSError:
-            pass
-        srv.ROOTS = roots
+        def answers(code):
+            def statvfs(_):
+                raise OSError(code, "x")
+            return statvfs
+        real_statvfs = os.statvfs
+        for code in (errno.EACCES, errno.ENOENT, errno.ENOTDIR):
+            srv.os.statvfs = answers(code)
+            srv.storage_probe()
+        for code in (errno.ESTALE, errno.ETIMEDOUT, errno.ENETUNREACH):
+            srv.os.statvfs = answers(code)
+            try:
+                srv.storage_probe(); raise AssertionError("this counts as no answer")
+            except OSError:
+                pass
+        srv.os.statvfs = real_statvfs
         # Undo per file: pruned history is no new file, and CRLF is not "changed on disk".
         with tempfile.TemporaryDirectory() as undo_dir:
             memo_, hist = Path(undo_dir) / "m.md", Path(undo_dir) / "hist"
@@ -3247,6 +3281,54 @@ def main():
         assert size().get("added") == 2, size()
         assert raw("GET", "/ui/api/graph", headers={**ck, "If-None-Match": hd["etag"]})[0] == 200  # a memo does change it
         import server as srv
+        # A share that stops answering is not a deletion: the index keeps its text, no history or "added" comes of it.
+        with tempfile.TemporaryDirectory() as h:
+            base, kept = Path(h), []
+            real = (srv.keep_version, srv.skill_changed, srv.ROOTS)
+            srv.keep_version, srv.skill_changed = lambda *a, **k: kept.append(a), lambda *a, **k: kept.append(a)
+            srv.ROOTS = {"memory": base}
+            (base / "a.md").write_text("one\n")
+            (base / "gone.md").write_text("two\n")
+            ix = srv.Index()
+            ix.rescan()
+            ix.loaded = True
+            assert set(ix.files) == {"memory/a.md", "memory/gone.md"}, ix.files
+            kept.clear()
+            real_open, real_walk = open, os.walk
+
+            def timed_out(*a, **k):
+                raise OSError(errno.ETIMEDOUT, "Connection timed out")
+            import builtins
+            builtins.open = timed_out
+            ix.refresh("memory/a.md")
+            builtins.open = real_open
+            assert "memory/a.md" in ix.files and not kept, (ix.files, kept)
+
+            def walk_fails(top, onerror=None, **k):
+                onerror(OSError(errno.ETIMEDOUT, "Connection timed out"))
+                return iter(())
+            srv.os.walk = walk_fails
+            gen = ix.gen
+            try:
+                ix.rescan()
+                assert False, "rescan went on over an outage"
+            except OSError as e:
+                assert e.errno == errno.ETIMEDOUT, e
+            srv.os.walk = real_walk
+            assert len(ix.files) == 2 and ix.gen == gen and not kept, (ix.files, kept)
+            real_read = Path.read_bytes
+            Path.read_bytes = timed_out
+            try:
+                srv.read_if_there(base / "a.md")
+                assert False, "a failing share looked like a new file"
+            except OSError as e:
+                assert e.errno == errno.ETIMEDOUT, e
+            Path.read_bytes = real_read
+            assert srv.read_if_there(base / "not-there.md") is None
+            (base / "gone.md").unlink()  # a file that is really gone still goes, with its version kept
+            ix.refresh("memory/gone.md")
+            assert "memory/gone.md" not in ix.files and kept, (ix.files, kept)
+            srv.keep_version, srv.skill_changed, srv.ROOTS = real
         # One change seen twice at once (a write or the watcher's report, and the rescan) is one version: a second one
         # with the same text made the Changes list say "0 lines added".
         with tempfile.TemporaryDirectory() as h:

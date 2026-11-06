@@ -96,6 +96,9 @@ a hope, so restore yours somewhere once as well.
 would otherwise make every read wait as long as the file server is away. After 10 s of silence a request that needs the
 notes gets a 503 at once, with one notice each way, until the folders answer again. A session that starts meanwhile uses its
 offline copy, if it has one; a tool call in a running session gets the error. Chats and machines keep working.
+A write already under way waits on the hung mount and lands when the folders are back; only that request waits, because
+async handlers leave file access to a thread (`test_server.py` checks this). A failing share never counts as a deletion:
+the index keeps its text and no history versions appear.
 
 ## Notifications
 
