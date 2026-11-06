@@ -1105,7 +1105,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         if not up:
             return
         second = subprocess.run([sys.executable, str(hooks / "agent_hooks.py"), "serve"], env=env, stdin=subprocess.DEVNULL,
-                                capture_output=True, text=True, timeout=30)
+                                capture_output=True, text=True, timeout=60)  # on Windows it waits 30 s for the port
         check(second.returncode != 0, "companion: a second one on this pc cannot bind the port (one minute loop per pc, also on Windows)",
               second.stdout[-300:] + second.stderr[-300:])
         # Only this pc's pages: a foreign origin, a rebound host name, a POST without Origin or not as JSON get nothing.

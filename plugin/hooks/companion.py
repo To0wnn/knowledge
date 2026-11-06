@@ -1464,8 +1464,12 @@ def one_round(only: str = "") -> dict:
     report_errors(st, tok, now)
     try:
         report(tok, load("workers.json", {}), summary.pop("limits"), summary.pop("limitWait"), now, summary["waiting"], summary.pop("resets"))
-    except Exception:  # the next round reports again; the server away is said above
-        pass
+        st["report_error"] = ""
+    except Exception as e:  # the next round reports again; the server away is said above, anything else once here
+        why = f"{type(e).__name__}: {e}"[:300]
+        if not st.get("sync_error") and why != st.get("report_error"):
+            log("error", "Could not report this pc's state to the server", why)
+        st["report_error"] = why
     with LOCK:
         save("state.json", {**load("state.json", {}), **{k: v for k, v in st.items() if k not in TRUST_KEYS}})  # trust() may have written meanwhile
     return summary
@@ -2264,11 +2268,27 @@ class LocalServer(ThreadingHTTPServer):
         self.close_request(request)
 
 
+# Windows keeps an exclusive port taken after its process ended, until that process's connections are gone (Microsoft,
+# "Using SO_REUSEADDR and SO_EXCLUSIVEADDRUSE"; 10048 in CI right after a restart): a restart that gave up there leaves no companion.
+BIND_WAIT = 30 if os.name == "nt" else 0
+
+
+def bind_local(addr: tuple, wait: float) -> LocalServer:
+    end = time.time() + wait
+    while True:
+        try:
+            return LocalServer(addr, Handler)
+        except OSError:
+            if time.time() >= end:
+                raise
+            time.sleep(0.5)
+
+
 def serve():
     token_store.machine()  # this pc's id, made once; the plugin hooks make it too when the companion never ran
     api_key()  # made now: a chat turn's permission prompt (approval_mcp.py) reads it before any page opened
     try:
-        httpd = LocalServer(("127.0.0.1", PORT), Handler)  # never another interface: the API changes agent settings
+        httpd = bind_local(("127.0.0.1", PORT), BIND_WAIT)  # never another interface: the API changes agent settings
     except OSError as e:  # loudly, with a failing exit: the hooks' wrapper would otherwise call it skipped and exit 0
         sys.exit(f"knowledge companion: {SELF} is taken, so another companion (or program) runs here: {e}")
     threading.Thread(target=loop, daemon=True).start()
@@ -2497,6 +2517,37 @@ def main(argv: list):
                     time.sleep(0.3)
                     here["update_agents"] = real_update
                     assert not AGENTS_UPDATING.locked()
+                    # A report that fails with the server there: said once, not every round; after it worked again, again.
+                    said, real_log, real_server = [], here["log"], here["server"]
+                    real_workers, real_report, real_due, real_errors = here["run_workers"], here["report"], here["agents_update_due"], here["report_errors"]
+                    fail = {"on": True}
+                    def broken(*a):
+                        if fail["on"]:
+                            raise KeyError("boom")
+                    here.update(log=lambda kind, text, more="": said.append(text), server=lambda *a, **k: {"tasks": [], "projects": []}, report=broken, agents_update_due=lambda *a: False, report_errors=lambda *a: None,
+                                run_workers=lambda *a: {"waiting": {}, "limits": {}, "limitWait": [], "resets": {}, "started": []})
+                    told = lambda: said.count("Could not report this pc's state to the server")
+                    try:
+                        one_round(), one_round()
+                        assert told() == 1, said
+                        fail["on"] = False
+                        one_round()
+                        fail["on"] = True
+                        one_round()
+                        assert told() == 2, said
+                    finally:
+                        here.update(log=real_log, server=real_server, run_workers=real_workers, report=real_report, agents_update_due=real_due, report_errors=real_errors)
+                    # A port still taken (a restart on Windows): waits for it, and gives up after the wait.
+                    held = LocalServer(("127.0.0.1", 0), Handler)
+                    freed = threading.Timer(0.5, held.server_close)
+                    addr = held.server_address
+                    try:
+                        bind_local(addr, 0)
+                        raise AssertionError("no wait, port taken: it says so")
+                    except OSError:
+                        pass
+                    freed.start()
+                    bind_local(addr, 5).server_close()
                     game, workers.game_session = workers.game_session, lambda: ""
                     try:
                         assert agents_update_due({}, {}, 1e9) and not agents_update_due({"agents_updated": 1e9 - 3600}, {}, 1e9), "once a day"
