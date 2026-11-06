@@ -1772,7 +1772,8 @@ async def chat_tabs(browser, secret: str) -> None:
     async with ctx.expect_page() as new:
         await pg.click("#ck-history a.ck-chat", modifiers=["Control"])
     tab = await new.value
-    await tab.wait_for_function(is_solo, timeout=15000)
+    await tab.wait_for_url(lambda u: "solo=1" in u, timeout=15000)  # the address only: system Chrome leaves the test's sign-in headers off this tab
+    check(True, "List: Ctrl+click goes to the chat's own tab")
     await tab.close()
     check(await pg.evaluate("location.hash") == before, "List: Ctrl+click on a row opens the chat alone in a tab and this tab stays")
     await pg.click("#ck-history a.ck-chat")
