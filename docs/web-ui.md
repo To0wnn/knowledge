@@ -4,8 +4,8 @@ Moved from the README; [back to the README](../README.md).
 
 ## Views
 
-- **Web UI:** one app shell: a sidebar (`[` folds it to an icon rail; below 1000 px it is the rail) with one project
-  picker on top (keys 1-9, 0 = all, except on the chat grid, where they pick a part of the grid: docs/chats.md; it scopes every view: Notes, Map, Agents, Tasks and a new chat's folder; the
+- **Web UI:** one app shell: a sidebar (`Alt+[` folds it to an icon rail; below 1000 px it is the rail) with one project
+  picker on top (Alt+1-9, Alt+0 = all, except on the chat grid, where they pick a part of the grid: docs/chats.md; it scopes every view: Notes, Map, Agents, Tasks and a new chat's folder; the
   Needs-you badge still counts all), **Agents** (Agents, Tasks, Machines) and **Knowledge** (Notes, Map, Changes,
   Health = lint), This pc, Admin, Help and Settings (user menu: a new chat's default model, the start page, what ↗ on a grid card does, whether the grid groups per project or puts all chats together, and the send key, kept per person on the server; theme and notifications, per browser. Only what use cannot teach gets a setting: what remembers itself, like the list's width, or what the browser does, like zoom, does not);
   on a phone a bottom tab bar (Agents, Tasks, Machines, Notes, More). The Agents view (`#/chats`; `#/inbox` opens the same view) is one
@@ -19,7 +19,7 @@ Moved from the README; [back to the README](../README.md).
   Ctrl/Cmd+K (or "Search or jump", or the phone's search icon) opens a command palette: notes by title, text and
   meaning, chats, tasks, every view and a few actions (new chat, theme, sidebar, mission flow), with arrow keys, Enter,
   Esc and your recent picks; `/` opens it for notes only, and "Search all notes" opens the search page
-  (`#/notes?q=…`). Outside a text box one key jumps: `[` folds the sidebar, `A` the Agents view, `N` a new chat, `M` map or notes, `1`-`9`/`0` the project. Notes: the topic list beside the note (on a phone two pages with a Back arrow), a home view per
+  (`#/notes?q=…`). Alt plus a key jumps: `Alt+[` folds the sidebar, `Alt+A` the Agents view, `Alt+N` a new chat, `Alt+M` map or notes, `Alt+1`-`9`/`0` the project (outside a text box, and from a chat's text box). Notes: the topic list beside the note (on a phone two pages with a Back arrow), a home view per
   topic, a note preview with connected notes, an editor, change history. Changes (per day) and Health (lint, per
   check) are full pages. Errors show as a short message at the bottom instead of a browser dialog. Tasks: the task lines between agents with from whom and when they may start, waiting ones
   greyed with the reason, stalled wakes, an Approve button for the owner, results handed back (Done removes a line),

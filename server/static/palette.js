@@ -9,7 +9,7 @@
 const pal = { items: [], sel: 0, notesOnly: false, seq: 0, timer: 0, tasks: [], server: null };
 const PAL_VIEWS = [["chats", "Agents"], ["tasks", "Tasks"], ["machines", "Machines"], ["notes", "Notes"],
   ["map", "Map"], ["changes", "Changes"], ["health", "Health"], ["thispc", "This pc"], ["admin", "Admin"], ["help", "Help"]];
-const PAL_ACTIONS = [["new-chat", "New chat…", "N"], ["theme", "Toggle theme"], ["rail", "Collapse or expand the sidebar", "["], ["flow", "Open mission flow"]];
+const PAL_ACTIONS = [["new-chat", "New chat…", "Alt+N"], ["theme", "Toggle theme"], ["rail", "Collapse or expand the sidebar", "Alt+["], ["flow", "Open mission flow"]];
 const palKey = (it) => `${it.kind}:${it.id}`;
 
 function openPalette(notesOnly = false) {

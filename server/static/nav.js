@@ -93,8 +93,8 @@ if (navPage) {
   document.addEventListener("keydown", (e) => {
     // on admin/help (no palette there) Ctrl/Cmd+K goes to the app's search, as the button says
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k" && typeof openPalette !== "function") { e.preventDefault(); location.href = "/ui#/notes?q="; return; }
-    if (e.target.closest("input, textarea, select, [contenteditable]") || e.ctrlKey || e.metaKey || e.altKey) return;
-    if (e.key === "[") toggleRail();
+    if (e.target.closest("input, textarea, select, [contenteditable]") || !e.altKey || e.ctrlKey || e.metaKey) return;
+    if (typeof openPalette !== "function" && e.code === "BracketLeft") { e.preventDefault(); toggleRail(); } // the app has appKey
   });
   const meReady = fetch("/ui/api/me", { credentials: "same-origin" }).then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.status))))
     .then((me) => { navProjects = me.projects; return navMe(me); }).catch(() => { navEl("who").textContent = "Signed in"; });

@@ -142,7 +142,7 @@ it (`GET /ui/api/worker?machine=&worker=<project>/<ID>&after=<n>`), as for chats
   itself (no dragging boxes around): one lane per owner (Claude, Codex, Gemini/agy, people), tasks as boxes coloured by
   status (open, waiting on a task or date, needs approval, claimed, running in a worker, done in the last 24 h,
   stalled), left to right by "start after <ID>", with `-cont` continuations and `-done` results in their own line styles; hand-overs
-  (requester to owner) show for the task you point at or pick. Tasks that wait on nothing stack in the first column. Pan and zoom with wheel, drag or pinch, `F` fits; a task opens a panel
+  (requester to owner) show for the task you point at or pick. Tasks that wait on nothing stack in the first column. Pan and zoom with wheel, drag or pinch, `Alt+F` fits; a task opens a panel
   with its full line, where it runs, Approve and its memo. "Show all" adds older results; a project filter narrows it.
   A phone shows the chains per lane as a list of full-width cards. Data: `GET /ui/api/mission?project=&all=1` (same visibility as the
   Tasks tab); the layout is a small layered (Sugiyama-style) pass in `static/mission.js`.

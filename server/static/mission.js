@@ -80,7 +80,7 @@ function msBuild() {
       <button type="button" class="btn small" id="ms-all" aria-pressed="false" title="Also results handed back more than a day ago">Older results</button>
       <span class="ck-gap"></span>
       <span class="ms-count muted" id="ms-count" aria-live="polite"></span>
-      <button type="button" class="btn small" id="ms-fit" title="Fit the map to the screen (F)">Fit</button>
+      <button type="button" class="btn small" id="ms-fit" title="Fit the map to the screen (Alt+F)">Fit</button>
     </div>
     <div class="ms-legend" id="ms-legend"></div>
     <div class="ms-stage" id="ms-stage"><div class="ms-world" id="ms-world"></div></div>
@@ -99,9 +99,9 @@ function msBuild() {
   $("ms-all").onclick = () => { ms.all = !ms.all; $("ms-all").setAttribute("aria-pressed", ms.all); ms.fitted = false; ms.data = null; msLoad(); };
   panInit($("ms-stage"), ms);
   window.addEventListener("keydown", (e) => { // capture: before the page's own keys
-    if (root.hidden || e.ctrlKey || e.metaKey || e.altKey || /input|textarea|select/i.test(document.activeElement.tagName)) return;
-    if (e.key === "Escape" && !$("ms-panel").hidden) { e.preventDefault(); e.stopPropagation(); msClosePanel(); }
-    else if (e.key.toLowerCase() === "f") { e.preventDefault(); e.stopPropagation(); msFit(); }
+    if (root.hidden || e.ctrlKey || e.metaKey || /input|textarea|select/i.test(document.activeElement.tagName)) return;
+    if (e.key === "Escape" && !e.altKey && !$("ms-panel").hidden) { e.preventDefault(); e.stopPropagation(); msClosePanel(); }
+    else if (e.altKey && e.code === "KeyF") { e.preventDefault(); e.stopPropagation(); msFit(); }
   }, true);
   matchMedia("(max-width: 640px)").addEventListener("change", () => msRender());
 }
@@ -409,7 +409,7 @@ function bdPartMove(key, n) {
   store.set("kn_parts", JSON.stringify(parts));
 }
 addEventListener("storage", (e) => { if (e.key === "kn_parts") bdRender(); }); // moved in another window
-// 0-9 show a part; Shift+1-9 moves the card you are in or point at there. By key position: Shift changes the character.
+// Alt+0-9 show a part; Alt+Shift+1-9 moves the card you are in or point at there. By key position: Shift changes the character.
 function bdPartKey(e) {
   const hit = /^(?:Digit|Numpad)(\d)$/.exec(e.code);
   if (!hit) return false;
@@ -422,6 +422,29 @@ function bdPartKey(e) {
   if (!w.isConnected) $("bd-stage").focus({ preventScroll: true });
   return true;
 }
+// The card keys go to: the one you are in, else the last one you were in, else the first.
+function bdCardNow() {
+  const world = $("bd-world");
+  return document.activeElement?.closest?.(".bd-card") || (bd.last && world?.querySelector(`.bd-card[data-id="${bd.last}"]:not([hidden])`))
+    || world?.querySelector(".bd-card:not([hidden]):has(.ck-form:not([hidden]) textarea:not(:disabled))");
+}
+// Arrows: to the box of the nearest card that way. Out of no card they first land on the card keys would go to.
+function bdArrow(e) {
+  const [dx, dy] = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key] || [];
+  if (dx === undefined) return false;
+  const mid = (w) => { const r = w.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; };
+  let to = bdCardNow();
+  if (to && document.activeElement.closest(".bd-card")) {
+    const [x, y] = mid(to);
+    const away = [...bd.wraps.values()].filter((w) => !w.hidden && w !== to).map((w) => { const [a, b] = mid(w); return { w, along: (a - x) * dx + (b - y) * dy, side: Math.abs((a - x) * dy) + Math.abs((b - y) * dx) }; });
+    to = away.filter((c) => c.along > 1).sort((p, q) => p.along + 2 * p.side - q.along - 2 * q.side)[0]?.w;
+  }
+  if (!to) return true; // nothing that way: stay
+  const box = to.querySelector(".ck-form textarea");
+  (box?.offsetParent && !box.disabled ? box : to).focus({ preventScroll: true });
+  to.scrollIntoView({ block: "nearest" });
+  return true;
+}
 // The buttons beside List, once there is more than one part; each counts what needs you there, on no card in this window.
 function bdPartBar(on) {
   const box = $("bd-parts"), parts = bdParts(), live = on ? ck.chats.filter((c) => ckScope(c) && ckState(c) !== "closed") : [];
@@ -432,7 +455,7 @@ function bdPartBar(on) {
   box.dataset.sig = sig;
   box.replaceChildren(...list.map(({ n, needs }) => {
     const b = el("button", "btn small quiet", n ? String(n) : "All"); b.type = "button";
-    b.title = n ? `Part ${n} (key ${n}). Shift+${n} moves a card here` : "All parts (key 0)";
+    b.title = n ? `Part ${n} (Alt+${n}). Alt+Shift+${n} moves a card here` : "All parts (Alt+0)";
     b.setAttribute("aria-label", `${n ? `Part ${n}` : "All parts"}${needs ? `, ${needs} need${needs > 1 ? "" : "s"} you` : ""}`);
     b.setAttribute("aria-pressed", String(n === bd.part));
     if (needs) b.append(el("span", "n", String(needs)));
@@ -448,6 +471,7 @@ function bdBuild() {
   const st = $("bd-stage");
   $("bd-sort").onclick = () => { bdSettle(); bdRender(); st.scrollTop = 0; st.focus({ preventScroll: true }); };
   new ResizeObserver(bdGridSize).observe(st);
+  $("bd-world").addEventListener("focusin", (e) => { bd.last = e.target.closest(".bd-card")?.dataset.id || bd.last; });
   st.addEventListener("scroll", bdLoadSoon, { passive: true }); // cards scrolled into view load now
   root.addEventListener("keydown", (e) => { // Esc leaves a card (also its text box) for the grid
     if (e.key === "Escape" && !e.isComposing && document.activeElement.closest(".bd-card")) { e.preventDefault(); e.stopPropagation(); st.focus(); }
@@ -560,7 +584,7 @@ function bdRender() {
   for (const [k, w] of bd.wraps) if (!ck.cards.has(k) || !order.includes(w)) { w.remove(); bd.wraps.delete(k); }
   // DOM order = layout order, so Tab walks project by project; only moved nodes are touched
   order.forEach((n, i) => { if (world.children[i] !== n) bdMove(world, n, world.children[i] || null); });
-  if (!rows.length) world.replaceChildren(el("p", "bd-none muted", bd.part ? `No chats in part ${bd.part}${agentProject ? " of this project" : ""}: start one with + New chat, or Shift+${bd.part} on a card elsewhere moves it here.` : ck.chats.length ? "No chats in this project." : "No chats yet: start one with + New chat."));
+  if (!rows.length) world.replaceChildren(el("p", "bd-none muted", bd.part ? `No chats in part ${bd.part}${agentProject ? " of this project" : ""}: start one with + New chat, or Alt+Shift+${bd.part} on a card elsewhere moves it here.` : ck.chats.length ? "No chats in this project." : "No chats yet: start one with + New chat."));
   else world.querySelector(".bd-none")?.remove();
   bdGridSize();
   for (const card of back) ckScrollBottom(card, card.savedScrollTop == null); // back from another part: taken off the page, its log forgot where it was

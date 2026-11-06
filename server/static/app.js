@@ -636,7 +636,7 @@ function renderNote() {
   const copy = el("button", "btn small", "Copy link");
   copy.onclick = () => navigator.clipboard?.writeText(`${location.origin}/ui${noteRoute(note.path)}`).then(() => { copy.textContent = "Copied"; setTimeout(() => (copy.textContent = "Copy link"), 1500); });
   tools.append(copy);
-  if (note.writable) { const edit = el("button", "btn small", touch ? "Edit" : "Edit (E)"); edit.onclick = startEdit; tools.append(edit); }
+  if (note.writable) { const edit = el("button", "btn small", touch ? "Edit" : "Edit (Alt+E)"); edit.onclick = startEdit; tools.append(edit); }
   const hist = el("button", "btn small", "History"); hist.onclick = () => showHistory(); tools.append(hist);
   pane.append(head, tools, el("div", "note-path", `${note.path} · version ${note.version}`));
   if (meta.description) pane.append(el("p", "note-desc", meta.description));
@@ -906,32 +906,45 @@ $("q").addEventListener("keydown", (e) => { // Enter opens the first result
   if (e.key === "Enter") { e.preventDefault(); clearTimeout(searchTimer); runSearch().then(() => $("results").querySelector("button")?.click()); }
 });
 
-// Keys: Ctrl/Cmd+K the palette (/ the same, for notes only), [ folds the sidebar, A the Agents view, N a new chat, M map or notes, 1-9/0 the project; in a note E
-// edits and Esc closes it; in a chat Esc goes back; in a card or an open chat other keys go to its text box.
-document.addEventListener("keydown", (e) => {
-  const typing = /input|textarea|select/i.test(document.activeElement.tagName) || document.querySelector("dialog[open]");
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); if (!document.querySelector("dialog[open]:not(#palette)")) openPalette(); return; }
-  if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
-  // In a card or an open chat a key is text: moving the focus now makes the browser type this very key in the box.
-  const on = document.activeElement, chat = !bdOn() && shellRoute.view === "chats" && ck.cards.get(ck.view)?.root;
-  const room = on.closest(".bd-card") || (chat && (on === document.body || chat.contains(on)) ? chat : null), box = room?.querySelector(".ck-form textarea");
-  if (box?.offsetParent && !box.disabled && e.key.length === 1 && !(bdOn() && e.shiftKey && /^(Digit|Numpad)/.test(e.code)) // Shift+1-9 moves the card
-    && !(e.key === " " && on.closest("button, a, summary")) && !document.querySelector("details[open]")) { box.focus(); return; }
+// Keys: Ctrl/Cmd+K the palette; Alt+key jumps (appKey). Without Alt: in a note Esc closes it, in a chat Esc goes back, and in the
+// chats a key is text for the box, arrows on the grid go from card to card.
+function appKey(e) {
+  if (solo()) return; // a chat alone in its tab has no views to jump to
+  if (bdOn() && (bdPartKey(e) || bdArrow(e))) { e.preventDefault(); return; } // on the grid the digits are its parts, not the projects
   const kn = shellRoute.view === "notes" || shellRoute.view === "map", at = current ? `/${encPath(current.path)}` : "";
-  if (solo() && e.key !== "Escape") return; // a chat alone in its tab has no views to jump to
-  if (bdOn() && bdPartKey(e)) { e.preventDefault(); return; } // on the grid the digits are its parts, not the projects
-  if (e.key === "[") toggleRail();
-  else if (e.key === "/") { e.preventDefault(); openPalette(true); }
-  else if (e.key.toLowerCase() === "a") go("#/chats");
-  else if (e.key.toLowerCase() === "n" && !agentsOff()) { e.preventDefault(); $("ck-new").onclick(); } // it focuses the new box: the n must not land there
-  else if (/^[1-9]$/.test(e.key) && PROJECTS[Number(e.key) - 1]) switchProject(PROJECTS[Number(e.key) - 1]);
-  else if (e.key === "0") switchProject(ALL);
-  else if (e.key.toLowerCase() === "m") go(mapOn ? `#/notes${at}` : `#/map${at}`);
-  else if (e.key === "Escape" && shellRoute.view === "chats" && ck.view && !document.querySelector("details[open]")) { // an open menu takes Esc for itself
-    if (!solo()) store.set("kn_last_chat", ""); ckShow(null); } // as its ×
-  else if (!kn) return;
-  else if (e.key.toLowerCase() === "e" && current?.writable) { e.preventDefault(); startEdit(); }
-  else if (e.key === "Escape") deselect();
+  // By position when the character is no letter: Alt+N on a Mac is a dead key.
+  const key = /^[a-z]$/i.test(e.key) ? e.key.toLowerCase() : /^Key[A-Z]$/.test(e.code) ? e.code[3].toLowerCase() : e.key, digit = /^(?:Digit|Numpad)(\d)$/.exec(e.code)?.[1];
+  const act = key === "[" || e.code === "BracketLeft" ? toggleRail
+    : key === "/" || e.code === "Slash" ? () => openPalette(true)
+    : key === "a" ? () => go("#/chats")
+    : key === "n" && !agentsOff() ? () => $("ck-new").onclick()
+    : digit === "0" && !e.shiftKey ? () => switchProject(ALL)
+    : digit && !e.shiftKey && PROJECTS[Number(digit) - 1] ? () => switchProject(PROJECTS[Number(digit) - 1])
+    : key === "m" ? () => go(mapOn ? `#/notes${at}` : `#/map${at}`)
+    : key === "e" && kn && current?.writable && !editing ? startEdit : null;
+  if (act) { e.preventDefault(); act(); }
+}
+document.addEventListener("keydown", (e) => {
+  const on = document.activeElement, dialog = document.querySelector("dialog[open]"), typing = /input|textarea|select/i.test(on.tagName) || dialog;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); if (!document.querySelector("dialog[open]:not(#palette)")) openPalette(); return; }
+  if (e.ctrlKey || e.metaKey) return;
+  // A chat's box keeps what is typed; anywhere else (a note being edited) a jump could lose it.
+  // On a Mac Option types characters (ñ, å, and [ or { on some layouts), so there the box keeps them.
+  if (e.altKey) { if (!typing || (!dialog && on.matches(".ck-form textarea") && !/Mac/.test(navigator.platform))) appKey(e); return; }
+  if (typing) return;
+  const menu = document.querySelector("details.menu[open]"); // not any details: a topic stays unfolded in a hidden view
+  if (e.key === "Escape") {
+    if (shellRoute.view === "chats" && ck.view && !menu) { if (!solo()) store.set("kn_last_chat", ""); ckShow(null); } // an open menu takes Esc for itself; as its ×
+    else if (shellRoute.view === "notes" || shellRoute.view === "map") deselect();
+    return;
+  }
+  if (menu) return;
+  if (bdOn() && !e.shiftKey && (on === document.body || on.closest("#bd")) && bdArrow(e)) { e.preventDefault(); return; }
+  if (e.key.length !== 1 || (e.key === " " && on.closest("button, a, summary"))) return;
+  // A key is text: moving the focus now makes the browser type this very key in the box.
+  const chat = !bdOn() && shellRoute.view === "chats" && ck.cards.get(ck.view)?.root;
+  const room = bdOn() ? bdCardNow() : chat && (on === document.body || chat.contains(on)) ? chat : null, box = room?.querySelector(".ck-form textarea");
+  if (box?.offsetParent && !box.disabled) box.focus();
 });
 
 // ---------------------------------------------------------------- views: changes, lint, tasks, machines, ingest
