@@ -76,6 +76,12 @@ def tasks_contract(tmp, ck, fr, ver, raw):
     legacy.write_text(memo("- open until 2099-01-01 [Codex, LEG-1]: old style\n", "legacy"))
     http("POST", "/invalidate", {"paths": ["garden-memory/project_legacy.md"]}, token="watch-token")
     assert not call("knowledge_edit", {"path": "garden-memory/project_legacy.md", "old_string": "old style", "new_string": "old style, edited"})[0]
+    # The same edit again, as after a timeout whose first attempt landed: say so, not just "found 0 times".
+    assert not call("knowledge_edit", {"path": "garden-memory/project_legacy.md", "old_string": "old style, edited", "new_string": "edited again"})[0]
+    er, said = call("knowledge_edit", {"path": "garden-memory/project_legacy.md", "old_string": "old style, edited", "new_string": "edited again"})
+    assert er and "seems done already" in said, said
+    er, said = call("knowledge_edit", {"path": "garden-memory/project_legacy.md", "old_string": "not in this file", "new_string": "neither is this"})
+    assert er and "found 0 times" in said, said
     authors = lambda: json.loads((tmp / "task_authors.json").read_text())
     assert authors()["garden"]["LEG-1"]["by"] == "laptop", authors()  # the VM watcher's device wrote it straight to disk
     assert rows()["LEG-1"]["legacy"] and rows()["LEG-1"]["startable"], rows()["LEG-1"]

@@ -1208,6 +1208,8 @@ async def knowledge_edit(path: str, old_string: str, new_string: str) -> str:
             data = await asyncio.to_thread(full.read_bytes)
             text = data.decode("utf-8")
             count = text.count(old_string)
+            if count == 0 and new_string and new_string in text:  # a retry after a timeout: the first attempt may have landed
+                raise ToolError(f"old_string not found in {rel}, but new_string is already there: this change seems done already (re-read the file to check)")
             if count != 1:
                 raise ToolError(f"old_string found {count} times in {rel}; it must occur exactly once (re-read the file)")
             new = text.replace(old_string, new_string, 1).encode()
