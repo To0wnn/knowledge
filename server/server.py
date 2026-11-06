@@ -5485,6 +5485,13 @@ async def machine_action_result(request: Request):
 CHATS_DIR = ADMIN_DIR / "chats"
 CHAT_KEEP, CHAT_EVENTS, CHAT_BYTES, CHAT_TEXT = 50, 4000, 1_000_000, 20_000  # chats per machine, events and bytes per chat, chars per message
 CHAT_PENDING = 5  # messages a chat keeps in line while its agent answers
+# Archive: the agent's last turn records the chat in the memos before the chat closes (the house rules, not the transcript)
+CHAT_WRAP_UP = ("This chat is being archived. Before it closes, record what it established on the knowledge server, following the "
+                "house rules: for each subject, knowledge_search first and knowledge_edit the memo that already covers it "
+                "(knowledge_new_memo only for a genuinely new subject). What is true now goes under '## Status', each decision "
+                "under '## Decisions' (what, date, who, why, what was rejected), unfinished work as 'open until <date>: ...' lines, "
+                "a correction or mistake with knowledge_lesson. Do not store the conversation itself, what the code, git history or a "
+                "doc already records, or any secret. Nothing worth keeping: say so in one line. End with one line: what you wrote where.")
 EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")  # the levels the agents know (plugin chat.py EFFORTS)
 MODEL_ID = re.compile(r"[A-Za-z0-9][\w.:/-]{0,79}", re.ASCII)  # as plugin chat.py MODEL_ID
 
@@ -6151,6 +6158,7 @@ async def ui_chat_send(request: Request):
 
     def change(c):
         c["closed"] = False  # a new message opens a closed chat again
+        c.pop("close_after", None)
         if c.get("status") in ("queued", "running"):
             line = c.setdefault("pending", [])
             if len(line) >= CHAT_PENDING:
@@ -6185,7 +6193,13 @@ async def ui_chat_close(request: Request):
     closed = b.get("closed") is not False
     if closed and c.get("status") in ("queued", "running"):
         return JSONResponse({"error": "the agent is still working: stop it first, or close it when it is done"}, status_code=409)
-    await asyncio.to_thread(update_state, f, lambda c: c.update(closed=closed))
+    # the agent answered here and its pc is on: one last turn records the chat in the memos, then the turn's end closes it
+    if closed and b.get("record") is not False and row["online"] and any(e["kind"] == "text" for e in c.get("events") or []):
+        msg = {"text": CHAT_WRAP_UP, "by": device.get().get("user", ""), "at": time.time()}
+        await asyncio.to_thread(update_state, f, lambda c: (chat_add(c, "user", CHAT_WRAP_UP), c.update(status="queued", close_after=True)))
+        await asyncio.to_thread(update_state, f.parent / "queue.json", lambda q: q.setdefault(c["id"], {}).update(msg=msg, stop=False))
+        return JSONResponse({"ok": True, "closed": False, "recording": True})
+    await asyncio.to_thread(update_state, f, lambda c: (c.pop("close_after", None), c.update(closed=closed)))
     return JSONResponse({"ok": True, "closed": closed})
 
 
@@ -6235,7 +6249,7 @@ async def ui_chat_stop(request: Request):
             await asyncio.to_thread(update_state, f, back)
         return JSONResponse({"ok": True})
     waiting = "msg" in read_json(q, {}).get(c["id"], {})
-    await asyncio.to_thread(update_state, f, lambda c: (c.pop("pending", None), c.pop("steering", None)))  # Stop also drops what waited behind it
+    await asyncio.to_thread(update_state, f, lambda c: (c.pop("pending", None), c.pop("steering", None), c.pop("close_after", None)))  # Stop also drops what waited behind it
     if waiting or not row["online"]:
         await asyncio.to_thread(update_state, q, lambda q: q.pop(c["id"], None))
         await asyncio.to_thread(update_state, f, lambda c: (chat_add(c, "info", "Stopped before it started." if waiting else
@@ -6655,6 +6669,9 @@ async def machine_chat_events(request: Request):
                 c["status"] = "queued"
             else:
                 c["status"] = "idle"
+                stopped = any(k == "info" and t.startswith("Stopped") for k, t, _ in events)
+                if c.pop("close_after", None) and not stopped:  # Archive: the memos are written, the chat closes
+                    c["closed"] = True
         if worked and not chat_works(c) and not any(k == "info" and t.startswith("Stopped") for k, t, _ in events):  # the owner's own stop: nothing to come back to
             ended.append(True)
     nxt: list = []

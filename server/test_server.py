@@ -891,15 +891,36 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     on_board = lambda: any(i["kind"] == "chat" and i["id"] == mc for i in json.loads(ui("/ui/api/board")[2])["items"])
     assert on_board()
     assert ui("/ui/api/chat/close", {"machine": mid, "id": mc, "closed": True}, er)[0] == 403
-    assert ui("/ui/api/chat/close", {"machine": mid, "id": mc, "closed": True})[0] == 200 and not on_board()
+    assert ui("/ui/api/chat/close", {"machine": mid, "id": mc, "closed": True, "record": False})[0] == 200 and not on_board()
     assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["chat"]["closed"] is True
     assert ui("/ui/api/chat/close", {"machine": mid, "id": mc, "closed": False})[0] == 200 and on_board()
-    assert ui("/ui/api/chat/close", {"machine": mid, "id": mc})[0] == 200 and not on_board()  # closed is the default
+    assert ui("/ui/api/chat/close", {"machine": mid, "id": mc, "record": False})[0] == 200 and not on_board()  # closed is the default
     assert ui("/ui/api/chat/send", {"machine": mid, "id": mc, "text": "again"})[0] == 200
     assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["chat"]["closed"] is False and on_board(), "a message opens it"
     assert ui("/ui/api/chat/close", {"machine": mid, "id": mc})[0] == 409, "not while the agent works"
     http("GET", "/machine/chats", token=fr, headers=pc)
     http("POST", "/machine/chats/events", {"chat": mc, "events": [], "done": True}, token=fr, headers=pc)
+    # Archive (the default): the agent's last turn records the chat in the memos; the turn's end closes it. A message
+    # sent meanwhile means the owner goes on: the chat stays open; the owner's own Stop too.
+    chat = lambda: json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["chat"]
+    st, _, body = ui("/ui/api/chat/close", {"machine": mid, "id": mc})
+    assert st == 200 and json.loads(body)["recording"] is True and chat()["status"] == "queued" and not chat()["closed"], body
+    got = json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])
+    assert any(w["chat"] == mc and "archived" in w["text"] for w in got["work"]), "the wrap-up is the next turn"
+    http("POST", "/machine/chats/events", {"chat": mc, "events": [{"kind": "text", "text": "Wrote it to memo x."}], "done": True}, token=fr, headers=pc)
+    assert chat()["closed"] is True and chat()["status"] == "idle" and not on_board(), "recorded, then archived"
+    assert ui("/ui/api/chat/close", {"machine": mid, "id": mc})[0] == 200 and chat()["status"] == "queued"
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": mc, "text": "one more thing"})[0] == 200
+    http("GET", "/machine/chats", token=fr, headers=pc)
+    http("POST", "/machine/chats/events", {"chat": mc, "events": [], "done": True}, token=fr, headers=pc)  # the wrap-up ended: the message goes in
+    http("GET", "/machine/chats", token=fr, headers=pc)
+    http("POST", "/machine/chats/events", {"chat": mc, "events": [], "done": True}, token=fr, headers=pc)
+    assert chat()["closed"] is False and on_board(), "a message during the wrap-up keeps the chat open"
+    assert ui("/ui/api/chat/close", {"machine": mid, "id": mc})[0] == 200 and chat()["status"] == "queued"
+    assert ui("/ui/api/chat/stop", {"machine": mid, "id": mc})[0] == 200
+    http("GET", "/machine/chats", token=fr, headers=pc)
+    http("POST", "/machine/chats/events", {"chat": mc, "events": [{"kind": "info", "text": "Stopped."}], "done": True}, token=fr, headers=pc)
+    assert chat()["closed"] is False, "the owner's own Stop keeps the chat open"
     # A long chat opens on its newest part (tail), the rest comes in steps (before), never twice, never a gap.
     full = json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}&after=0")[2])["events"]
     page = json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}&after=0&tail=3")[2])
