@@ -1358,6 +1358,28 @@ async def follow(browser, devices, secret: str) -> None:
         check(await pg.evaluate("document.documentElement.scrollWidth <= innerWidth"), f"{name}: the worker view fits the screen")
         if shots:
             await pg.screenshot(path=os.path.join(shots, f"follow-{name}-ended.png"))
+        # scrolled up: the pill shows, says when more came in, and Ctrl+End or a press brings you back
+        pill = card.locator(".ck-jump button")  # its wrapper has no height
+        grow = "(from) => ckEvents(ck.cards.get(ck.view), {events: Array.from({length: 80}, (_, i) => ({n: from + i, kind: 'info', text: 'line'}))})"
+        up = "document.querySelector('#ck-canvas .ck-card.worker .ck-log').scrollTop = 0"
+        await pg.evaluate(grow, 100000)
+        await pg.wait_for_timeout(100)
+        check(not await pill.is_visible(), f"{name}: no pill at the end of a chat")
+        await pg.evaluate(up)
+        await pill.wait_for(timeout=2000)
+        check("Jump to bottom" in await pill.inner_text(), f"{name}: scrolled up, the pill shows")
+        await pg.evaluate(grow, 200000)
+        await pg.wait_for_function("document.querySelector('#ck-canvas .ck-card.worker .ck-jump').innerText.includes('New messages')", timeout=2000)
+        check(await pg.evaluate("document.querySelector('#ck-canvas .ck-card.worker .ck-log').scrollTop") == 0, f"{name}: new output does not move you")
+        await pg.keyboard.press("Control+End")
+        await pill.wait_for(state="hidden", timeout=2000)
+        await pg.evaluate(up)
+        await pill.wait_for(timeout=2000)
+        check("Jump to bottom" in await pill.inner_text(), f"{name}: at the end the pill forgot the new messages")
+        if shots:
+            await pg.screenshot(path=os.path.join(shots, f"follow-{name}-jump.png"))
+        await pill.click()
+        await pill.wait_for(state="hidden", timeout=2000)
         await route(pg, "#/chats/worker/garden/KN-8")
         card = pg.locator("#ck-canvas .ck-card.worker:not([hidden])").last
         await pg.wait_for_function("[...document.querySelectorAll('#ck-canvas .ck-card.worker strong')].some((s) => s.textContent.includes('KN-8'))", timeout=15000)

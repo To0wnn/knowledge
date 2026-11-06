@@ -213,6 +213,21 @@ function ckShow(meta) {
   if (!meta) return goBack("#/chats");
   go(`#/chats/${encodeURIComponent(ckCard(meta).meta.id)}`);
 }
+// The pill over the end of a chat you scrolled up in; it also says when more came in below.
+function ckJump(card) {
+  if (!card.jump) return;
+  const far = card.log.scrollHeight - card.log.scrollTop - card.log.clientHeight >= 80;
+  if (!far) card.fresh = false;
+  card.jump.hidden = !far;
+  card.jumpText.textContent = card.fresh ? "↓ New messages" : "↓ Jump to bottom";
+}
+// Ctrl+End: the chat you are in or point at. With no pill to press, the key keeps its own meaning (end of the text box).
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "End" || !(e.ctrlKey || e.metaKey)) return;
+  const root = document.activeElement?.closest?.(".ck-card") || document.querySelector(".ck-card:hover") || ck.cards.get(ck.view)?.root;
+  const pill = root?.querySelector(":scope > .ck-jump:not([hidden]) button");
+  if (pill?.offsetParent) { e.preventDefault(); pill.click(); }
+});
 function ckScrollBottom(card, force = false) {
   if (!card?.log) return;
   requestAnimationFrame(() => {
@@ -492,7 +507,16 @@ function ckCard(meta) {
     const dist = log.scrollHeight - log.scrollTop - log.clientHeight;
     card.stickToBottom = dist < 80;
     card.savedScrollTop = log.scrollTop;
+    ckJump(card);
   }, { passive: true });
+  const jump = el("div", "ck-jump"), jumpBtn = el("button", "btn small ck-jump-btn"), jumpText = el("span");
+  jump.hidden = true; jumpBtn.type = "button";
+  jumpBtn.append(jumpText, el("span", "muted ck-jump-key", "Ctrl+End")); jump.append(jumpBtn);
+  jumpBtn.onmousedown = (e) => e.preventDefault(); // a click leaves the focus in the text box
+  jumpBtn.onclick = () => {
+    if (document.activeElement === jumpBtn) input.focus(); // the button hides: reached by keyboard, the focus must land somewhere
+    ckScrollBottom(card, true);
+  };
   input.rows = 1; input.placeholder = "Message the agent…"; input.setAttribute("aria-label", "Message (Enter a new line, Ctrl+Enter sends)");
   const stop = el("button", "btn small ck-stop", "Stop"), send = el("button", "btn small primary ck-send", "Send"), note = el("p", "ck-note");
   // a live agent at work: Queue (after this turn) and Force (stop the step, then this) in a small menu beside Send
@@ -525,8 +549,8 @@ function ckCard(meta) {
   box.addEventListener("click", (e) => { if (e.target === box || e.target === bar || e.target === barL) input.focus(); });
   const asks = el("div", "ck-asks"); asks.hidden = true; asks.setAttribute("aria-live", "assertive");
   const subbar = el("div", "ck-subbar"); subbar.hidden = true; subbar.setAttribute("aria-label", "Subagents running now");
-  root.append(head, log, subbar, asks, form);
-  const card = { meta: { ...meta }, root, name, where, git, state, log, asks, form, input, stop, send, note, picks, mark, close, tok, subbar, queueBtn, forceBtn, more, branch, filesBox: files, files: [], mode: "", pick: null, after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
+  root.append(head, log, jump, subbar, asks, form);
+  const card = { meta: { ...meta }, root, name, where, git, state, log, jump, jumpText, asks, form, input, stop, send, note, picks, mark, close, tok, subbar, queueBtn, forceBtn, more, branch, filesBox: files, files: [], mode: "", pick: null, after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
   x.onclick = () => { store.set("kn_last_chat", ""); ckShow(null); }; // closed on purpose: the list stays empty
   open.onclick = () => ckShow(card.meta);
   input.addEventListener("keydown", (e) => {
@@ -1047,6 +1071,7 @@ function ckEvents(card, res) {
   if (res.events.length) {
     const hasUser = res.events.some((e) => e.kind === "user");
     if (near || hasUser) ckScrollBottom(card, hasUser);
+    if (!hasUser && card.stickToBottom === false) { card.fresh = true; ckJump(card); }
   }
 }
 
@@ -1065,7 +1090,7 @@ async function ckOlder(card) {
   card.loadingOlder = true;
   try {
     const res = await api(`/ui/api/chat?machine=${card.meta.machine}&id=${card.meta.id}&before=${card.first}&tail=${CK_PAGE}&peek=1`);
-    const part = el("div"), shadow = { ...card, log: part, subs: new Map(), subbar: el("div"), after: 0, stickToBottom: false };
+    const part = el("div"), shadow = { ...card, log: part, subs: new Map(), subbar: el("div"), after: 0, stickToBottom: false, jump: null };
     ckEvents(shadow, { ...res, trimmed: false });
     const log = card.log, keep = log.scrollHeight - log.scrollTop, mark = log.querySelector(":scope > .ck-older");
     (mark ? mark.after.bind(mark) : log.prepend.bind(log))(...part.childNodes);
