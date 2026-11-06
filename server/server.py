@@ -3112,6 +3112,29 @@ class BearerAuth:
             return msg
         return wrapped
 
+    @staticmethod
+    def body_first(receive, send):
+        """No answer before the request's body is in: closing with bytes still coming resets the connection and on
+        Windows the client loses the answer (10053), so a refusal reads what is left, within limits."""
+        more = True
+
+        async def rx():
+            nonlocal more
+            msg = await receive()
+            more = msg["type"] == "http.request" and msg.get("more_body", False)
+            return msg
+
+        async def tx(msg):
+            if more and msg["type"] == "http.response.start":
+                try:
+                    async with asyncio.timeout(5):
+                        while more:
+                            await rx()
+                except (TimeoutError, ValueError):  # a stalled or oversized body: the reset is accepted
+                    pass
+            await send(msg)
+        return rx, tx
+
     async def __call__(self, scope, receive, send):
         if scope["type"] == "lifespan":
             # Each call hung on a dead share keeps its thread until the share is back. Those started before the gate
@@ -3142,6 +3165,7 @@ class BearerAuth:
             receive = self.capped(receive)
             if int(headers.get(b"content-length", b"0") or 0) > MAX_BODY:
                 return await JSONResponse({"error": "request body too large"}, status_code=413)(scope, receive, send)
+            receive, send = self.body_first(receive, send)
         if path in ("/", "/ui") or path.startswith("/ui/"):
             return await self.ui(scope, receive, send, path, headers)
         auth = headers.get(b"authorization", b"").decode()
