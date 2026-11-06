@@ -1453,6 +1453,9 @@ def one_round(only: str = "") -> dict:
             log("error", "Could not reach the knowledge server", str(e)[:200])
         st["sync_error"], ready = str(e)[:200], []
     summary = run_workers(ready, tok, now, only)
+    if agents_update_due(st, load("workers.json", {}), now):
+        st["agents_updated"] = now
+        update_agents_soon()
     for key, why in summary["waiting"].items():
         if why != st.get("waiting", {}).get(key) and not why.startswith("Workers are off"):  # once, not every minute
             log("wait", f"{key.split('/', 1)[1]}: {why}", "")
@@ -1554,6 +1557,9 @@ def run_action(a: dict) -> str:
         return link_folder(str(args.get("path", "")), str(args.get("project", "")))
     if act == "unlink_folder":
         return unlink_folder(str(args.get("path", "")))
+    if act == "update_agents":
+        update_agents_soon()
+        return "started: see Activity"
     if act == "update_plugin":
         failed = update_plugins()
         if failed:
@@ -1663,6 +1669,41 @@ def page_state() -> dict:
 def origin_of(url: str) -> str:
     u = urllib.parse.urlsplit(url)
     return f"{u.scheme}://{u.netloc}"
+
+
+AGENT_UPDATE_EVERY = 86400
+
+
+def update_agents() -> list:
+    """Each agent here with its own update command (`claude update`, `codex update`, `agy update`): a running session
+    stays on its version until its next start. Returns the failures, which also stand in Activity."""
+    failed = []
+    for a, (name, _) in AGENTS.items():
+        if not (exe := shutil.which(a)):
+            continue
+        try:
+            r = subprocess.run([exe, "update"], capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL, timeout=600)
+            out, ok = mask((r.stdout + r.stderr).strip())[-300:], r.returncode == 0
+        except (OSError, subprocess.SubprocessError) as e:
+            out, ok = f"{type(e).__name__}: {e}"[:300], False
+        log("sync" if ok else "error", f"{name}: {'its update command ran' if ok else 'the update failed'}", out)
+        if not ok:
+            failed.append(f"{name}: {out}")
+    return failed
+
+
+def agents_update_due(st: dict, ws: dict, now: float) -> bool:
+    """Once a day, off with KNOWLEDGE_AUTO_UPDATE=0, and not while a game, chat or worker runs: then a later round does it."""
+    return (os.environ.get("KNOWLEDGE_AUTO_UPDATE") != "0" and now - st.get("agents_updated", 0) >= AGENT_UPDATE_EVERY and not workers.game_session()
+            and not any(w["status"] == "running" for w in ws.values()) and not any(chat_busy(c) for c in {*chat.LIVE, *chat.RUNNING, *chat.PENDING}))
+
+
+def update_agents_soon():
+    """In the background, as the commands can take minutes; ACTING: a restart for an updated plugin must not cut this off."""
+    def update():
+        with ACTING:
+            update_agents()
+    threading.Thread(target=update, daemon=True).start()
 
 
 def update_plugins() -> list:
@@ -1805,6 +1846,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, {"result": unlink_folder(str(body.get("path", "")))}, origin=o)
             if path == "/local/api/tick":
                 return self.send(200, tick(), origin=o)
+            if path == "/local/api/update-agents":
+                update_agents_soon()
+                return self.send(200, {"started": True}, origin=o)
             if path == "/local/api/update":
                 def update():  # ACTING: a restart for the updated plugin must not cut this off
                     with ACTING:
@@ -2434,6 +2478,14 @@ def main(argv: list):
                 real_wt, workers.WORKTREES = workers.WORKTREES, Path(tmp) / "wt"
                 try:
                     assert chat_git("0123456789ab", tmp + "/r") is None and not workers.WORKTREES.exists(), "a look makes no worktree"
+                    game, workers.game_session = workers.game_session, lambda: ""
+                    try:
+                        assert agents_update_due({}, {}, 1e9) and not agents_update_due({"agents_updated": 1e9 - 3600}, {}, 1e9), "once a day"
+                        assert not agents_update_due({}, {"k": {"status": "running"}}, 1e9), "not while a worker runs"
+                        workers.game_session = lambda: "a game"
+                        assert not agents_update_due({}, {}, 1e9), "not during a game"
+                    finally:
+                        workers.game_session = game
                     wt = workers.worktree(tmp + "/r", "0123456789ab", prefix="chat")["cwd"]
                     Path(wt, "a.txt").write_text("two\n")
                     assert chat_git("0123456789ab", tmp + "/r") == {"branch": "chat/0123456789ab", "base": "main", "changed": 1, "ahead": 0, "behind": 0}

@@ -683,6 +683,10 @@ def look():  # LOOK: the agent looks at an image (the chat shows it under the to
     open(f, "wb").write(b"PNG " + name.encode())
     return f
 rec = lambda x: open(calls, "a", encoding="utf-8").write(json.dumps(x) + "\\n")
+if args == ["update"]:  # the companion's agent update
+    rec({"update": name})
+    print("agent update " + name)
+    sys.exit(1 if os.environ.get("KN_FAKE_UPDATE_FAIL") == name else 0)
 if name == "codex" and args == ["debug", "models"]:  # what a chat may pick: one listed model, one hidden
     print(json.dumps({"models": [{"slug": "fake-big", "display_name": "Fake Big", "visibility": "list", "default_reasoning_level": "high", "supported_reasoning_levels": [{"effort": "high"}, {"effort": "ultra"}]},
                                  {"slug": "fake-hidden", "visibility": "hide", "supported_reasoning_levels": []}]}))
@@ -1841,6 +1845,13 @@ def chat_e2e(tok: str, tmp: Path):
         check(ok and Path(cwd).resolve() != pill.resolve() and "worktrees" in cwd and f"chat/{own}" in branches
               and any(f"branch chat/{own}" in e["text"] for e in chat(own)["events"]),
               "chat: Own branch runs the agent in a worktree of its own on branch chat/<id>", cwd + " | " + branches + json.dumps(chat(own)["events"])[-400:])
+        # The agents' own update: once a day by itself, once more by hand, each agent with its own command.
+        updates = lambda: [json.loads(ln)["update"] for ln in calls.read_text(encoding="utf-8").splitlines() if '"update"' in ln]
+        for a in ("claude", "codex", "agy"):
+            check(wait_for(lambda: a in updates(), 30), f"update {a}: the companion runs its update command by itself once a day", str(updates()))
+        before = len(updates())
+        st = http("POST", "/ui/api/machines/action", {"machine": mid, "action": "update_agents", "args": {}}, ui)[0]
+        check(st == 200 and wait_for(lambda: len(updates()) == before + 3, 30), "update: the button runs all three once more", str(updates()))
         # A closed Own-branch chat, per agent: a Review card, Merge, and its worktree and branch gone. Without a choice a
         # second chat in a folder another chat works in gets its own branch by itself; pressed off it stays in the checkout.
         gitp = lambda *args, cwd=clean: subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout.strip()

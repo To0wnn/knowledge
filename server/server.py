@@ -5375,7 +5375,7 @@ def action_args(action: str, args: dict) -> dict:
         return {"project": args["project"], "id": tid(), **({"chat": True} if action == "merge" and args.get("chat") is True else {})}
     if action == "trust_hooks":
         return {"agent": agent()}
-    if action == "update_plugin":
+    if action in ("update_plugin", "update_agents"):
         return {}
     if action in ("link_folder", "unlink_folder"):
         # the path is one the companion listed itself (its candidates or linked folders); it refuses any other

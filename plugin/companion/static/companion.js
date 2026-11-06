@@ -225,6 +225,7 @@ const TOOLS = [
   { icon: "shield", label: "Trust all hooks", hint: "For every agent on this pc", run: () => act("/local/api/trust", {}, "Trusted the knowledge hooks") },
   { icon: "bolt", label: "Start ready tasks now", hint: "Workers, instead of waiting for the next minute", run: () => act("/local/api/tick", {}, (r) => `Started ${r.started.length} worker(s)`) },
   { icon: "sync", label: "Update the plugin", hint: "Claude Code, Codex and agy on this pc", run: () => act("/local/api/update", {}, "Updating in the background; see Activity") },
+  { icon: "sync", label: "Update the agents", hint: "claude, codex and agy update; also runs once a day by itself", run: () => act("/local/api/update-agents", {}, "Updating in the background; see Activity") },
   null,
   { icon: "globe", label: "Open the knowledge web UI", hint: "In your browser", run: () => window.open(`${S.settings.serverUrl}/ui`, "_blank", "noopener") },
   { icon: "copy", label: "Copy diagnostics", hint: "Versions and errors, no token", run: async () => {

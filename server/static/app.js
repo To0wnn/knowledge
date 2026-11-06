@@ -1253,6 +1253,7 @@ function machineActions(m) {
   const menu = el("details", "menu machine-more"), sum = el("summary", "btn small icon", "⋯"), list = el("div", "menu-list");
   sum.setAttribute("aria-label", `More for ${m.label}`); sum.title = "More";
   if (c && !(behind && m.online)) list.append(actionButton("Update plugin", () => { menu.open = false; update(); }, ""));
+  if (c) list.append(actionButton("Update agents", () => { menu.open = false; machineAction(m, "update_agents"); }, ""));
   list.append(actionButton("Forget this pc…", async () => {
     menu.open = false;
     if (!confirm(`Forget ${m.label}? It leaves this list and comes back when it reports again; its actions and history here go.`)) return;
