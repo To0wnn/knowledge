@@ -7187,6 +7187,101 @@ def open_port(host: str, port: int):
     return sock
 
 
+# ---------------------------------------------------------------- Undo what one device changed
+# For a token that went wrong or was stolen: finding and undoing each file by hand is what makes that incident expensive.
+# It never overwrites later work: a file someone else changed since is listed, not touched.
+UNDOABLE = {"write", "edit", "delete", "ingest", "restore", "mirror", "mirror-merge", "sync", "sync-delete"}  # not "session": a shared log
+
+
+def device_changes(name: str, since: float, until: float) -> list[str]:
+    """The files this device changed in the window, from the audit log."""
+    found = {}
+    try:
+        lines = AUDIT.read_text(errors="replace").splitlines()
+    except OSError:
+        return []
+    for line in lines:
+        bits = line.split(" ", 3)
+        if len(bits) == 4 and bits[1] == name and bits[2] in UNDOABLE:
+            try:
+                if since <= time.mktime(time.strptime(bits[0], "%Y-%m-%dT%H:%M:%S")) <= until:
+                    found[bits[3]] = True
+            except ValueError:
+                pass
+    return sorted(found)
+
+
+def undo_row(rel: str, who: str, since: float, until: float) -> dict:
+    """What undoing this device's changes to one file means: {path, action: restore|remove, version} or {path, skip: why}."""
+    row = {"path": rel}
+    try:
+        full, _ = resolve(rel)
+        if mirrored(rel):
+            return row | {"skip": "a mirror of a guest's folder: their next sync would overwrite it"}
+        vs = versions_of(rel)
+        mine = lambda v: since - 1 <= v["time"] <= until + 1 and v["by"].removesuffix("-removed") == who  # the audit log has whole seconds
+        if not vs or not mine(vs[0]):
+            return row | {"skip": f"changed since by {vs[0]['by']}" if vs else "no history"}
+        n = next((i for i, v in enumerate(vs) if not mine(v)), len(vs))
+        if other := next((v for v in vs[n:] if mine(v)), None):
+            return row | {"skip": f"{vs[n]['by']} changed it between this device's changes (last at {time.strftime('%H:%M', time.localtime(other['time']))}): by hand"}
+        now = full.read_bytes() if full.exists() else None
+        wrote = None if vs[0]["by"].endswith("-removed") else version_text(rel, vs[0]["id"]).encode()
+        if now != wrote:
+            return row | {"skip": "changed on disk since"}
+        # it did not exist before: no version, a removal, or the empty baseline a new file gets (keep_version)
+        if n == len(vs) or vs[n]["by"].endswith("-removed") or (vs[n]["by"] == "before" and not vs[n]["size"]):
+            return row | {"action": "remove"} if now is not None else row | {"skip": "nothing to undo"}
+        return row | {"action": "restore", "version": vs[n]["id"]}
+    except (ToolError, OSError, UnicodeError) as e:
+        return row | {"skip": str(e)}
+
+
+@server.custom_route("/ui/api/admin/undo-device", methods=["POST"])
+@admin_only
+async def ui_undo_device(request: Request, body: dict):
+    """{device, hours, apply, paths}: what this device changed in the last hours and what undoing it would do. With
+    apply, do that for the listed paths; each file is looked at again first."""
+    name, hours = str(body["device"]), float(body["hours"])
+    if not name or not 0 < hours <= 24 * 90:
+        raise ToolError("give a device and 0 to 2160 hours")
+    until = time.time()
+    since = until - hours * 3600
+    rels = await asyncio.to_thread(device_changes, name, since, until)
+    if not body.get("apply"):
+        return JSONResponse({"rows": await asyncio.to_thread(lambda: [undo_row(r, history_name(name), since, until) for r in rels])})
+    picked, rows = set(map(str, body.get("paths", []))), []
+    for rel in (r for r in rels if r in picked):
+        async with _locks.setdefault(rel, asyncio.Lock()):
+            rows.append(await asyncio.to_thread(undo_file, rel, history_name(name), since, until))
+    audit("undo-device", f"{name} {sum('done' in r for r in rows)} file(s)")
+    return JSONResponse({"rows": rows})
+
+
+def undo_file(rel: str, who: str, since: float, until: float) -> dict:
+    row = undo_row(rel, who, since, until)
+    if "skip" in row:
+        return row
+    full, _ = resolve(rel)
+    now = full.read_bytes() if full.exists() else None
+    try:
+        if row["action"] == "remove":
+            keep = TRASH / f"{time.strftime('%Y%m%d-%H%M%S')}_{rel.replace('/', '__')}"
+            keep.parent.mkdir(parents=True, exist_ok=True)
+            keep.write_bytes(now)
+            full.unlink()
+        else:
+            data = version_text(rel, row["version"])
+            refuse_secrets(data)
+            if not replace_if_unchanged(full, now, data.encode()):
+                return row | {"skip": "changed while undoing"}
+    except (ToolError, OSError) as e:
+        return row | {"skip": str(e)}
+    index.refresh(rel)
+    audit("undo", rel)
+    return row | {"done": True}
+
+
 if __name__ == "__main__":
     t0 = time.time()
     load_projects()

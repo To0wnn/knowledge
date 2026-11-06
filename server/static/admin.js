@@ -407,6 +407,7 @@ async function load() {
     $("limits-tokens").textContent = `You may hold ${l.tokens} tokens, for the projects you have access to. Revoke one you no longer use.`;
     $("limits-projects").textContent = `You may create ${l.projects} projects (${l.created} made so far), up to ${l.project_mb} MB each. The admin is told about every new project and token.`;
     renderTokens(); renderProjects();
+    $("undo-box").hidden = !state.admin;
     $("n-tokens").textContent = state.tokens.length; $("n-projects").textContent = state.projects.length;
     return;
   }
@@ -467,6 +468,22 @@ async function copyFrom(src, button) {
 $("copy-token").onclick = async () => { tokenCopied = await copyFrom($("new-token-value"), $("copy-token")) || tokenCopied; };
 document.addEventListener("copy", () => { if (getSelection().toString().includes($("new-token-value").textContent || "\0")) tokenCopied = true; });
 document.querySelectorAll(".copy-line").forEach((b) => (b.onclick = () => copyFrom($(b.dataset.src), b)));
+// Undo what one device changed: first the list, then only what that list offered.
+function showUndo(rows, device, hours, applied) {
+  const offered = rows.filter((r) => r.action && !r.done);
+  $("undo-rows").replaceChildren(...(rows.length ? rows : [{ path: "No changes by this device in that time." }]).map((r) =>
+    el("li", r.action || r.done ? "" : "muted", r.path + (r.done ? " · undone" : r.skip ? ` · left alone: ${r.skip}` : r.action === "remove" ? " · made by this device: goes to the trash" : r.action ? " · back to the version before" : ""))));
+  $("undo-apply").hidden = applied || !offered.length;
+  $("undo-apply").onclick = () => {
+    if (!confirm(`Undo ${offered.length} file(s) changed by ${device}?`)) return;
+    run(async () => showUndo((await api("/ui/api/admin/undo-device", { device, hours, apply: true, paths: offered.map((r) => r.path) })).rows, device, hours, true), $("undo-apply"), "Undone");
+  };
+}
+$("undo-form").onsubmit = (ev) => {
+  ev.preventDefault();
+  const device = $("undo-device").value.trim(), hours = Number($("undo-hours").value);
+  run(async () => showUndo((await api("/ui/api/admin/undo-device", { device, hours })).rows, device, hours), ev.submitter);
+};
 $("hide-token").onclick = () => {
   if (!tokenCopied && !confirm("The token was not copied, and it is not shown again. Hide it anyway?")) return;
   $("new-token").hidden = true; $("new-token-value").textContent = ""; $("new-token-setup").textContent = "";
