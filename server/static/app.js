@@ -1232,7 +1232,8 @@ async function chooseGo(path) {
       const a = await api(`/ui/api/git/diff?machine=${m.id}&id=${id}`);
       if (a.status !== "done") continue;
       if (!live()) return;
-      if (a.error) { note.textContent = a.error; return; }
+      // a companion before 0.38.6 takes this for a diff of an unknown folder
+      if (a.error) { note.textContent = /not a folder linked/.test(a.error) ? `${m.label} needs plugin 0.38.6 or newer for this: use Update plugin first.` : a.error; return; }
       const d = JSON.parse(a.text), row = (label, to) => { const li = el("li"), b = el("button", "btn small", label); b.type = "button"; b.onclick = () => chooseGo(to); li.append(b); return li; };
       choosePath = d.path;
       $("choose-where").textContent = d.path || m.label;
