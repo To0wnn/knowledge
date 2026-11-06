@@ -23,7 +23,7 @@ function themeChanged() {
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", themeChanged);
 const decode = (s) => { try { return decodeURIComponent(s); } catch { return s; } }; // a literal % is not an escape
 const $ = (id) => document.getElementById(id);
-const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text instanceof Node) e.append(text); else if (text != null) e.textContent = text; return e; };
 // One empty state and one loading state for every list; a toast instead of alert() (errors stay longer, a click
 // dismisses), announced by the #toasts live region.
 // An empty state is one muted line that says what the view is for and the next step, with an optional action button.

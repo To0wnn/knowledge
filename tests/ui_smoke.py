@@ -1356,6 +1356,8 @@ async def follow(browser, devices, secret: str) -> None:
         check(all(x in log for x in ("watering", "Bash: git status", "refused: Bash npm test", "use the soil sensor", "Delivered")),
               f"{name}: text, tool, refused, user and info lines show like a chat")
         check(await pg.evaluate("document.documentElement.scrollWidth <= innerWidth"), f"{name}: the worker view fits the screen")
+        empty = await pg.locator("#ck-side").text_content()
+        check("[object" not in empty and "No chats yet" in empty, f"{name}: the empty chat list says so in words")
         if shots:
             await pg.screenshot(path=os.path.join(shots, f"follow-{name}-ended.png"))
         # scrolled up: the pill shows, says when more came in, and Ctrl+End or a press brings you back
