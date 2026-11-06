@@ -66,6 +66,10 @@ async def page(browser, secret: str, path: str = "/ui", **opts):
     # app itself under the real policy.
     ctx = await browser.new_context(ignore_https_errors=True, bypass_csp=True, **opts,
                                     extra_http_headers={"X-Knowledge-Proxy": secret, "X-authentik-username": USER})
+    async def default_prefs(route):  # against the live server: not what the signed-in person chose in Settings
+        answer = await route.fetch()
+        await route.fulfill(response=answer, json={**await answer.json(), "prefs": {}})
+    await ctx.route("**/ui/api/me", default_prefs)
     pg = await ctx.new_page()
     errors = []
     pg.on("pageerror", lambda e: errors.append(str(e)))
