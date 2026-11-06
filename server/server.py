@@ -4921,6 +4921,18 @@ def session_log(roots: tuple) -> list[dict]:
     return sorted(out, key=lambda e: e["time"])
 
 
+_ui_recent_cache: dict = {}  # (roots, scope) -> (stamp, files)
+_ui_recent_lock = asyncio.Lock()
+
+
+def audit_stamp() -> tuple:
+    try:
+        st = AUDIT.stat()
+        return st.st_mtime_ns, st.st_size
+    except OSError:
+        return 0, 0
+
+
 @server.custom_route("/ui/api/recent", methods=["GET"])
 async def ui_recent(request: Request):
     """Newest changed Markdown files of a project: the device when the change came through this server (otherwise
@@ -4928,7 +4940,14 @@ async def ui_recent(request: Request):
     written after the change that names the file), so you see who changed what and why."""
     want = request.query_params.get("project", "homelab")
     roots = tuple(r for pr in PROJECTS.values() for r in pr) if want == "all" else PROJECTS.get(want, PROJECTS["homelab"])
-    return JSONResponse({"files": await asyncio.to_thread(recent_files, roots)})  # audit log + diffs: not on the loop
+    key = (roots, tuple(device.get().get("roots") or ()))
+    async with _ui_recent_lock:  # tabs asking at once wait for one run instead of each making their own
+        stamp = (index.note_gen, *audit_stamp())  # a session log entry counts too, and that is no note change
+        hit = _ui_recent_cache.get(key)
+        if not hit or hit[0] != stamp:
+            _ui_recent_cache.pop(key, None)
+            hit = _ui_recent_cache[key] = (stamp, await asyncio.to_thread(recent_files, roots))  # audit log + diffs: not on the loop
+    return JSONResponse({"files": hit[1]})
 
 
 def recent_files(roots: tuple) -> list[dict]:
