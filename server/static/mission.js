@@ -354,10 +354,10 @@ function msOpenPanel(key) {
 
 // ---------------------------------------------------------------- Chat grid (#/chats on a desktop)
 // 1000 px and up; narrower keeps the list. One card per chat, tiled to fill the screen like terminal panes, inside one
-// foldable frame per project, the one last active on top (folding is kept in localStorage), or Settings: all in one. A card is the chat itself (ckCard). Only cards on screen
+// foldable frame per project, the one last active on top (folding is kept in localStorage; while you look at the grid, by bdHold), or Settings: all in one. A card is the chat itself (ckCard). Only cards on screen
 // are polled (ckTick). ?view=grid is an older link to the same view; ?view=list is the attention list (#/inbox links).
 const BG = { minW: 480, minH: 380, gap: 16, pad: 16, head: 46 };
-const bd = { lay: [], wraps: new Map(), frames: new Map() };
+const bd = { lay: [], wraps: new Map(), frames: new Map(), held: new Map() };
 const bdWide = matchMedia("(min-width: 1000px)");
 bdWide.addEventListener("change", () => ckLayout());
 const bdOn = () => shellRoute.view === "chats" && !shellRoute.arg && shellRoute.q.get("view") !== "list" && bdWide.matches;
@@ -391,9 +391,10 @@ function bdProjects(chats, shut = [], together = false) {
 
 function bdBuild() {
   const root = el("section", "bd"); root.id = "bd"; root.hidden = true; root.setAttribute("aria-label", "Chats");
-  root.innerHTML = `<div class="bd-stage" id="bd-stage" tabindex="0" aria-label="Chats. Tab goes through them"><div class="bd-world" id="bd-world"></div></div>`;
+  root.innerHTML = `<button type="button" class="btn small ck-jump-btn bd-sort" id="bd-sort" title="Put the chats that finished or need you on top" hidden></button><div class="bd-stage" id="bd-stage" tabindex="0" aria-label="Chats. Tab goes through them"><div class="bd-world" id="bd-world"></div></div>`;
   $("cockpit").append(root);
   const st = $("bd-stage");
+  $("bd-sort").onclick = () => { bdSettle(); bdRender(); st.scrollTop = 0; st.focus({ preventScroll: true }); };
   new ResizeObserver(bdGridSize).observe(st);
   st.addEventListener("scroll", bdLoadSoon, { passive: true }); // cards scrolled into view load now
   root.addEventListener("keydown", (e) => { // Esc leaves a card (also its text box) for the grid
@@ -423,11 +424,28 @@ function bdShow() {
 }
 
 // The chats in grid order: per project the one that last finished (or asks an approval) first. A card keeps its place
-// otherwise: a new message, its events or reading it never move it; its state shows on the card.
-function bdChats() {
+// otherwise: a new message, its events or reading it never move it; its state shows on the card. Unless `live`, a finish
+// counts only once it is settled (bdHold).
+function bdChats(live = false) {
+  const rank = (c) => (live ? null : bd.held.get(ckKey(c))) ?? c.raised ?? 0;
   const draft = ck.cards.get(ckKey(CK_DRAFT))?.meta; // + New chat on the grid: on top, so its project's frame is too
   return [...(draft ? [draft] : []), ...ck.chats].filter(ckScope).map((c) => ({ c, st: ckState(c) })).filter((x) => x.st !== "closed") // closed: under the list's Closed only
-    .sort((a, b) => !!b.c.draft - !!a.c.draft || (b.c.raised || 0) - (a.c.raised || 0));
+    .sort((a, b) => !!b.c.draft - !!a.c.draft || rank(b.c) - rank(a.c));
+}
+
+const bdSettle = () => { bd.held = new Map(ck.chats.map((c) => [ckKey(c), c.raised || 0])); };
+// A grid you look at holds still, or you lose the line you read: a chat that finishes, or one new from elsewhere (it comes
+// in below), moves only by the pill or while the tab is hidden. The pill counts them, also what no scrolled-off card can show.
+function bdHold(together) {
+  const low = Math.min(...bd.held.values()), project = ({ c }) => c.project || "";
+  ck.chats.forEach((c, i) => { if (!bd.held.has(ckKey(c))) bd.held.set(ckKey(c), low - 1 - i); });
+  const seq = (rows) => (together ? rows : [...new Set(rows.map(project))].flatMap((p) => rows.filter((r) => project(r) === p))).map(({ c }) => ckKey(c)).join();
+  const rows = bdChats(), moved = rows.filter(({ c }) => !c.draft && (c.raised || 0) > bd.held.get(ckKey(c)));
+  const still = !document.hidden && low !== Infinity && moved.length && seq(rows) !== seq(bdChats(true));
+  if (!still) bdSettle();
+  const needs = moved.filter(({ st }) => st === "needs").length, pill = $("bd-sort");
+  pill.hidden = !still; pill.classList.toggle("hot", !!needs);
+  pill.textContent = needs ? `↑ ${needs} need${needs > 1 ? "" : "s"} you` : `↑ ${moved.length} updated`;
 }
 
 // A re-insert resets a node's focus and scroll position: you may be typing or reading in the card that moves.
@@ -443,7 +461,9 @@ function bdMove(world, n, before) {
 function bdRender() {
   if (!$("bd") || $("bd").hidden) return;
   bdLink();
-  const rows = bdChats(), shut = bdShut(), world = $("bd-world"), together = me.prefs?.grid_group === "together";
+  const together = me.prefs?.grid_group === "together";
+  bdHold(together);
+  const rows = bdChats(), shut = bdShut(), world = $("bd-world");
   const frames = bd.lay = bdProjects(rows.map(({ c }) => c), shut, together);
   // Whatever moves, the card you are in stays where it is on screen (the stage scrolls along below).
   const here = document.activeElement?.closest?.(".bd-card"), hereTop = here?.getBoundingClientRect().top;

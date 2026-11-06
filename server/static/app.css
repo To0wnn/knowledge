@@ -735,6 +735,9 @@ dialog.ck-diff { width: min(980px, calc(100vw - 32px)); }
 .bd-stage:focus-visible { outline-offset: -2px; } /* it fills a clipping box: the ring goes inside */
 .bd-world { display: grid; grid-template-columns: repeat(var(--bg-cols, 2), minmax(0, 1fr)); gap: 16px; padding: 16px; }
 .bd-none { width: 360px; }
+.bd-sort { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 2; margin: 0; }
+.bd-sort[hidden] { display: none; }
+.bd-sort.hot { background: var(--amber); color: var(--on-amber); font-weight: 700; }
 .bd-frame { grid-column: 1 / -1; }
 .bd.one .bd-frame { display: none; }
 .bd-frame-title { display: flex; align-items: center; gap: 8px; height: 36px; margin: 0; padding: 0 10px; border: 0; border-radius: var(--r-md); background: transparent; color: var(--ink); font-size: 16px; cursor: pointer; max-width: calc(100% - 16px); }

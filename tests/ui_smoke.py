@@ -1178,17 +1178,24 @@ async def board(browser, devices, secret: str) -> None:
     await pg.click("#bd .bd-card.draft .ck-x:not(.bd-only)")
     await pg.wait_for_function("!document.querySelector('#bd .bd-card.draft') && !ck.cards.has('draft/new') && location.hash === '#/chats'", timeout=5000)
     check(True, "Grid: the draft card's x drops it, the grid stays")
-    kept = await pg.evaluate("""(() => { const keep = [ck.chats, ck.board, agentProject]; agentProject = ''; ck.board = [];
+    kept = await pg.evaluate("""(() => { const keep = [ck.chats, ck.board, agentProject, bd.held]; agentProject = ''; ck.board = []; bd.held = new Map();
       const chat = (id, raised) => ({ id, machine: 'x', label: 'pc', folder: '/f', project: 'p', agent: 'claude', status: 'running', raised });
       ck.chats = [chat('a', 2), chat('b', 1)]; bdRender();
       const card = ck.cards.get('x/b'); card.input.disabled = false; card.input.value = 'half typed'; card.input.focus(); card.input.setSelectionRange(4, 4);
       for (let i = 0; i < 200; i++) card.log.append(el('p', '', 'line'));
       card.log.scrollTop = 500; const top = card.log.scrollTop;
+      const first = () => [...$('bd-world').querySelectorAll('.bd-card')][0] === bd.wraps.get('x/b'), pill = $('bd-sort');
       ck.chats = [chat('a', 2), chat('b', 3)]; bdRender();
-      const first = [...$('bd-world').querySelectorAll('.bd-card')][0] === bd.wraps.get('x/b');
-      const out = [first, document.activeElement === card.input, card.input.selectionStart, card.log.scrollTop === top, top > 0];
-      [ck.chats, ck.board, agentProject] = keep; ckDrop('x/a'); ckDrop('x/b'); bdRender(); return out; })()""")
-    check(kept == [True, True, 4, True, True], f"Grid: a card that moves up keeps its focus, cursor and scroll position {kept}")
+      const held = [first(), pill.hidden, pill.textContent];
+      ck.board = [{col: 'needs', kind: 'chat', machine: 'x', id: 'b'}]; bdRender(); held.push(pill.textContent, pill.classList.contains('hot')); ck.board = []; bdRender();
+      ck.chats = [chat('a', 2), chat('b', 3), chat('c', 4)]; bdRender(); // new from elsewhere: below, counted
+      const below = [[...$('bd-world').querySelectorAll('.bd-card')].at(-1) === bd.wraps.get('x/c'), pill.textContent];
+      ck.chats = [chat('a', 2), chat('b', 3)]; bd.held.delete('x/c'); bdRender();
+      card.input.focus(); pill.click(); card.input.focus(); // the pill takes the focus; the card must survive its own move
+      const out = [first(), document.activeElement === card.input, card.input.selectionStart, card.log.scrollTop === top, top > 0, pill.hidden];
+      [ck.chats, ck.board, agentProject, bd.held] = keep; ckDrop('x/a'); ckDrop('x/b'); ckDrop('x/c'); bdRender(); return [held, below, out]; })()""")
+    check(kept == [[False, False, "↑ 1 updated", "↑ 1 needs you", True], [True, "↑ 2 updated"], [True, True, 4, True, True, True]],
+          f"Grid: a finished chat holds until the pill, a new one comes in below; then it moves up with focus, cursor and scroll kept {kept}")
     for old in ("grid", "board"):
         await route(pg, f"#/chats?view={old}")
         check(await pg.evaluate(shows), f"Grid: an old ?view={old} link opens the grid")
@@ -1843,10 +1850,23 @@ async def grid_groups(browser, secret: str) -> None:
     chats[0], chats[3] = {**chats[0], "raised": now + 1}, {**chats[3], "raised": now}  # ccc below the rest now, aaa stays
     chats[1] = {**chats[1], "raised": now + 9}
     await pg.evaluate("ck.summaryAt = 0; ckSummary()")
-    await pg.wait_for_function(f"{heads} === 'bbb,aaa,ccc'", timeout=5000)
+    await pg.wait_for_selector("#bd-sort:not([hidden])", timeout=5000)
+    check(await pg.evaluate(heads) == "ccc,bbb,aaa", f"Grid: while you look at it a finish moves nothing, the pill says so ({await pg.evaluate(heads)})")
     await pg.evaluate("new Promise(requestAnimationFrame)")
     at = await pg.evaluate(f"[document.querySelector(\"{box}\").getBoundingClientRect().top, document.activeElement === document.querySelector(\"{box}\"), document.querySelector(\"{box}\").value]")
-    check(abs(at[0] - top) < 3 and at[1] and at[2] == "typing here", f"Grid: when projects change places the card you are in stays put ({top} -> {at})")
+    check(abs(at[0] - top) < 3 and at[1] and at[2] == "typing here", f"Grid: the card you are in stays put, focus and text kept ({top} -> {at})")
+    await pg.click("#bd-sort")
+    await pg.wait_for_function(f"{heads} === 'bbb,aaa,ccc' && $('bd-sort').hidden && $('bd-stage').scrollTop === 0", timeout=5000)
+    check(await pg.input_value(box) == "typing here", "Grid: the pill sorts and goes to the top, the half-typed text stays")
+    await pg.evaluate("Object.defineProperty(document, 'hidden', {value: true, configurable: true})")
+    chats[3] = {**chats[3], "raised": now + 20}
+    await pg.evaluate("ck.summaryAt = 0; ckSummary()")
+    await pg.wait_for_function(f"{heads} === 'ccc,bbb,aaa' && $('bd-sort').hidden", timeout=5000)
+    check(True, "Grid: with the tab hidden the order just follows, no pill")
+    await pg.evaluate("delete document.hidden")
+    chats[3] = {**chats[3], "raised": now}
+    await pg.evaluate("bdSettle(); ck.summaryAt = 0; ckSummary()")
+    await pg.wait_for_function(f"{heads} === 'bbb,aaa,ccc'", timeout=5000)
 
     await pg.evaluate("me.prefs.grid_group = 'together'; store.set('kn_board', JSON.stringify({shut: ['bbb']})); bdRender()")
     state = await pg.evaluate("[document.querySelectorAll('#bd .bd-frame').length, getComputedStyle(document.querySelector('#bd .bd-frame')).display, [...bd.wraps.values()].filter((w) => !w.hidden).length, [...document.querySelectorAll('#bd-world > .bd-card')].map((w) => w.dataset.id.slice(-1)).join()]")
