@@ -6,8 +6,8 @@ time what must stay fast (health, session-start context). Run it before and afte
     python3 tests/ui_load.py http://127.0.0.1:18790 [tabs] [seconds]
 
 A change comes every CHANGE_EVERY seconds: a session-log entry (what dominates a busy day), or a memo write with
-LOAD_CHANGE=memo (the worst case: it does invalidate graph and lint; uses memory/load_test.md, so never run that against
-live data). The tabs do not wait for their own earlier requests, as the page did before it got a single refresh at a
+LOAD_CHANGE=memo (the worst case: it does invalidate graph and lint; creates memory/load_test_<n>.md, so never run that
+against live data). The tabs do not wait for their own earlier requests, as the page did before it got a single refresh at a
 time. Standard library only.
 """
 import json
@@ -35,9 +35,12 @@ def timed(path: str, name: str = "", data: bytes | None = None, timeout: float =
     t0 = time.perf_counter()
     try:
         with urllib.request.urlopen(urllib.request.Request(BASE + path, data=data, headers=headers), timeout=timeout) as r:
-            r.read()
+            refused = b'"isError":true' in r.read()  # a refused MCP call is still HTTP 200
         with lock:
-            times.setdefault(name or path, []).append(time.perf_counter() - t0)
+            if refused:
+                failed[name or path] = failed.get(name or path, 0) + 1
+            else:
+                times.setdefault(name or path, []).append(time.perf_counter() - t0)
     except OSError:
         with lock:
             failed[name or path] = failed.get(name or path, 0) + 1
@@ -50,9 +53,9 @@ def probe(path: str, headers: dict, every: float = 0.5):
 
 def change(n: int):
     if os.environ.get("LOAD_CHANGE") == "memo":
-        memo = f"---\nname: load_test\ndescription: d\nmetadata:\n  type: project\n---\n\n## Status\n\nrun {n}\n\n## Decisions\n"
+        memo = f"---\nname: load_test_{n}\ndescription: d\nmetadata:\n  type: project\n---\n\n## Status\n\nrun {n}\n\n## Decisions\n"
         body = json.dumps({"jsonrpc": "2.0", "id": n, "method": "tools/call",
-                           "params": {"name": "knowledge_write", "arguments": {"path": "memory/load_test.md", "content": memo}}}).encode()
+                           "params": {"name": "knowledge_write", "arguments": {"path": f"memory/load_test_{n}.md", "content": memo}}}).encode()
         timed("/mcp", "POST /mcp write", body, headers={**AGENT, "Accept": "application/json, text/event-stream"})
         return
     body = json.dumps({"prompts": [f"load test {n}"], "session_id": f"load{n}", "reason": "end", "cwd": "/tmp"}).encode()
