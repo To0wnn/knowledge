@@ -140,8 +140,7 @@ def main():
             print(f"ok   recovers by itself after {took:.1f} s")
             assert "first" in call(url, token, "knowledge_read", {"path": "memory/project_x.md"})[1]
 
-            # What is left of the gap: a write that is busy when the disk stops, before the gate closes. Reported, not
-            # asserted: the outcome tells whether that write can stop other requests.
+            # A write that is busy when the disk stops, before the gate closes, must not stop other requests.
             print("-- the disk stops while a write is busy")
             import threading
             flag.touch()
@@ -149,7 +148,8 @@ def main():
             writer.start()
             time.sleep(1)
             st, sec = get(url + "/health", 3)
-            print(f"info /health while a write hangs: {'no answer in 3 s: the event loop is blocked' if not st else f'{st} in {sec * 1000:.0f} ms'}")
+            assert st == 200, "/health gives no answer while a write hangs: the event loop is blocked"
+            print(f"ok   /health while a write hangs: {st} in {sec * 1000:.0f} ms")
             flag.unlink()
             writer.join(30)
             wait_for("recovery after the write", lambda: get(url + "/health?disk=1", 2)[0] == 200)
