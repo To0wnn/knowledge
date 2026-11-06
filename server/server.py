@@ -3043,11 +3043,11 @@ _storage = {"ok": time.monotonic(), "down": False}
 
 
 def storage_probe():
-    """statvfs, because it always asks the server: on a blocked mount stat, listdir and reads kept answering from the
-    client's cache (measured 6 Nov 2026), so nothing ever tripped."""
+    """disk_usage, which is statvfs on Linux and macOS (Windows has none), because it always asks the server: on a blocked
+    mount stat, listdir and reads kept answering from the client's cache (measured 6 Nov 2026), so nothing ever tripped."""
     for base in [*ROOTS.values(), AUDIT.parent]:
         try:
-            os.statvfs(base)
+            shutil.disk_usage(base)
         except OSError as e:  # a missing folder or a denied one: the disk did answer
             if e.errno in OUTAGE_ERRNOS:
                 raise

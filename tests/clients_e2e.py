@@ -3166,10 +3166,13 @@ def main():
     CLIENT = home / "knowledge repo"
     for part in ("plugin", "clients"):
         shutil.copytree(REPO / part, CLIENT / part, ignore=shutil.ignore_patterns("__pycache__"))
+    started = time.monotonic()
     proc, tok, garden = start_server(tmp)
     try:
         print(f"platform {sys.platform}, python {sys.version.split()[0]}, home {home}")
         mirror = claude_plugin(tok, home, project, garden)
+        time.sleep(max(0, started + 12 - time.monotonic()))  # past the server's STORAGE_TIMEOUT
+        check(http("GET", "/health?disk=1")[0] == 200, "the server's check of its folders works on this system (else every request gets 503)")
         folder_link(tmp / "Link Usér")
         offline(tok, home, project, garden, mirror)
         skills(tmp, home)
