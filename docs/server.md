@@ -45,6 +45,7 @@ The one-machine `compose.yaml` reads these from `.env` (checked against `compose
 | `KNOWLEDGE_PROXY_SECRET`, `KNOWLEDGE_ADMINS`, `KNOWLEDGE_PROXY_IPS` | empty, empty, `127.0.0.1` | Sign-in through a reverse proxy (below) |
 | `KNOWLEDGE_PROXY_USER_HEADER` | `X-Authentik-Username` | The header the proxy puts the user name in (below) |
 | `KNOWLEDGE_MATRIX_URL`, `KNOWLEDGE_MATRIX_ROOM`, `KNOWLEDGE_MATRIX_TOKEN` | empty | Notices to one Matrix room (below) |
+| `KNOWLEDGE_NTFY_URL`, `KNOWLEDGE_NTFY_TOKEN` | empty | Notices to an ntfy topic (below) |
 | `KNOWLEDGE_RERANK_MODEL` | empty | Duplicate check: a reranker folder under `./data` (`server/export_reranker.sh`), e.g. `/data/models/reranker` |
 
 Sign-in through a reverse proxy: the proxy sends the shared secret in the header `X-Knowledge-Proxy` and the user name
@@ -71,10 +72,17 @@ the admin page to be given projects. `KNOWLEDGE_PROXY_IPS` are the addresses tru
 
 ## Notifications
 
-Notices (a Needs-you item, a stalled or idle task, a worker waiting for its usage limit, a risky YOLO action) go to
-one Matrix room when `KNOWLEDGE_MATRIX_URL`, `KNOWLEDGE_MATRIX_ROOM` and `KNOWLEDGE_MATRIX_TOKEN` are set in `.env`
-(`compose.yaml` passes them on). In the web UI, Settings, "Tell me in this browser" adds desktop notifications for new
-Needs-you items while the tab is open; a phone gets none of those, so there Matrix is the only push. Details of the
-Needs-you notices: [chats.md](chats.md).
+Notices (a Needs-you item, a stalled or idle task, a worker waiting for its usage limit, a risky YOLO action, shared
+folders that stop answering) go to:
+
+- one Matrix room, when `KNOWLEDGE_MATRIX_URL`, `KNOWLEDGE_MATRIX_ROOM` and `KNOWLEDGE_MATRIX_TOKEN` are set in `.env`;
+- an [ntfy](https://ntfy.sh) topic, when `KNOWLEDGE_NTFY_URL` is set to the topic's full URL (`https://ntfy.example.com/knowledge`),
+  plus `KNOWLEDGE_NTFY_TOKEN` when the topic needs one. Take a long topic name on a public server: the notices name
+  your projects and tasks. A self-hosted server reaches an iPhone through a relay (`upstream-base-url`, see the
+  [ntfy docs](https://docs.ntfy.sh/config/)).
+
+Either or both; `compose.yaml` passes them on. A failed message shows on the admin page, System. In the web UI, Settings,
+"Tell me in this browser" adds desktop notifications for new Needs-you items while the tab is open; a phone gets none of
+those, so there Matrix or ntfy is the only push. Details of the Needs-you notices: [chats.md](chats.md).
 
 The trust model in one place: [security.md](security.md).

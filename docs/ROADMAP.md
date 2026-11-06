@@ -9,8 +9,8 @@ Open first-run conveniences found while rewriting the README (1 Nov 2026). Not p
 - [x] **Notifications in the one-machine `compose.yaml`.** `KNOWLEDGE_MATRIX_URL`, `KNOWLEDGE_MATRIX_ROOM` and
   `KNOWLEDGE_MATRIX_TOKEN` (and `KNOWLEDGE_RERANK_MODEL` for the duplicate check) are not passed through from `.env`,
   so they need a hand edit of `compose.yaml`. Done.
-- [ ] **Notification channels besides Matrix.** Matrix is the only one; ntfy or Web Push would suit phone users who
-  run no homeserver.
+- [x] **Notification channels besides Matrix.** Done: ntfy ([server.md](server.md#notifications)). Web Push stays out: it
+  needs VAPID keys, a service worker and a dependency, for what one POST to ntfy does.
 - [x] **Generic proxy user header.** Proxy sign-in reads `X-Authentik-Username`; other proxies (oauth2-proxy,
   Pomerium, Caddy) send `Remote-User` or `X-Forwarded-User` and need a header rewrite. Done: `KNOWLEDGE_PROXY_USER_HEADER` ([server.md](server.md#settings-in-env)).
 - [x] **`compose.yaml` comment.** It points to "README, Web sign-in"; that text now lives in

@@ -4019,24 +4019,36 @@ def signed_in(handler):
 
 
 def notify(text: str):
-    """One Matrix message to the admin room, in the background: a failure never fails the request, but shows on the
-    admin page (System) and in the container log."""
+    """One message to the admin, to Matrix and/or ntfy, in the background: a failure never fails the request, but shows on
+    the admin page (System) and in the container log."""
     url, room, token = (os.environ.get(k, "") for k in ("KNOWLEDGE_MATRIX_URL", "KNOWLEDGE_MATRIX_ROOM", "KNOWLEDGE_MATRIX_TOKEN"))
+    ntfy, ntfy_token = os.environ.get("KNOWLEDGE_NTFY_URL", ""), os.environ.get("KNOWLEDGE_NTFY_TOKEN", "")
 
-    def send():
+    def to_matrix():
+        if not (url and room and token):
+            raise RuntimeError("KNOWLEDGE_MATRIX_URL/ROOM/TOKEN not set")
+        req = urllib.request.Request(
+            f"{url}/_matrix/client/v3/rooms/{urllib.parse.quote(room)}/send/m.room.message/kn-{time.time_ns()}",
+            method="PUT", data=json.dumps({"msgtype": "m.text", "body": text}).encode(),
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=15).close()
+
+    def to_ntfy():
+        headers = {"Title": "Knowledge"} | ({"Authorization": f"Bearer {ntfy_token}"} if ntfy_token else {}) \
+            | ({"Click": f"{PUBLIC_URL}/ui"} if PUBLIC_URL else {})
+        urllib.request.urlopen(urllib.request.Request(ntfy, method="POST", data=text.encode(), headers=headers), timeout=15).close()
+
+    def send(key, label, deliver):
         try:
-            if not (url and room and token):
-                raise RuntimeError("KNOWLEDGE_MATRIX_URL/ROOM/TOKEN not set")
-            req = urllib.request.Request(
-                f"{url}/_matrix/client/v3/rooms/{urllib.parse.quote(room)}/send/m.room.message/kn-{time.time_ns()}",
-                method="PUT", data=json.dumps({"msgtype": "m.text", "body": text}).encode(),
-                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
-            urllib.request.urlopen(req, timeout=15).close()
-            BACKGROUND["matrix"] = {"at": time.time(), "detail": f"last message sent: {text[:160]}"}
+            deliver()
+            BACKGROUND[key] = {"at": time.time(), "detail": f"last message sent: {text[:160]}"}
         except Exception as e:
-            BACKGROUND["matrix"] = {"at": time.time(), "error": f"Matrix message failed ({e}): {text[:160]}"}
-            print(f"matrix: {e}: {text}", flush=True)
-    threading.Thread(target=send, daemon=True).start()
+            BACKGROUND[key] = {"at": time.time(), "error": f"{label} message failed ({e}): {text[:160]}"}
+            print(f"{key}: {e}: {text}", flush=True)
+    if ntfy:
+        threading.Thread(target=send, args=("ntfy", "ntfy", to_ntfy), daemon=True).start()
+    if not ntfy or (url and room and token):  # with neither set, System says so
+        threading.Thread(target=send, args=("matrix", "Matrix", to_matrix), daemon=True).start()
 
 
 @server.custom_route("/ui/help", methods=["GET"])
@@ -4206,6 +4218,10 @@ def system_state() -> dict:
             *([{"name": "Settings", "what": "settings.json", "last": BACKGROUND["settings"]["at"], "detail": BACKGROUND["settings"]["error"]}] if "settings" in BACKGROUND else []),
             *([{"name": "Matrix", "what": "tells the admin about projects and tokens people made", "last": BACKGROUND["matrix"]["at"],
                 "detail": BACKGROUND["matrix"].get("error") or BACKGROUND["matrix"]["detail"]}] if "matrix" in BACKGROUND else []),
+            *([{"name": "Shared folders", "what": "whether the notes' folders answer; while not, requests get 503", "last": BACKGROUND["storage"]["at"],
+                "detail": BACKGROUND["storage"].get("error") or BACKGROUND["storage"]["detail"]}] if "storage" in BACKGROUND else []),
+            *([{"name": "ntfy", "what": "the same messages as a push to your phone", "last": BACKGROUND["ntfy"]["at"],
+                "detail": BACKGROUND["ntfy"].get("error") or BACKGROUND["ntfy"]["detail"]}] if "ntfy" in BACKGROUND else []),
         ],
         "index": [{"root": r, "path": str(ROOTS.get(r, "")), "files": n, "mb": round(b / 1e6, 1), "bytes": b} for r, (n, b) in sorted(per_root.items())],
         "config": [  # where each value is set: change it there, then deploy

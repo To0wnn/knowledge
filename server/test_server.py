@@ -2007,6 +2007,33 @@ def main():
         assert "giraffe old" in call("knowledge_search", {"pattern": "giraffe", "root": "trade-memory", "archive": True})[1]
         import server as srv
         assert srv.instructions().index("House rules") < 1900, srv.instructions().index("House rules")  # Claude Code cuts at 2048
+        # ntfy next to Matrix: one POST to the topic's URL, a failure shows on the admin page.
+        import http.server as hs
+        posted = []
+        class Ntfy(hs.BaseHTTPRequestHandler):
+            def do_POST(self):
+                posted.append((self.path, self.headers.get("Authorization"), self.rfile.read(int(self.headers["Content-Length"])).decode()))
+                self.send_response(200); self.end_headers()
+            def log_message(self, *_): pass
+        stand_in = hs.HTTPServer(("127.0.0.1", 0), Ntfy)
+        __import__("threading").Thread(target=stand_in.serve_forever, daemon=True).start()
+        saved_env = {k: os.environ.pop(k, None) for k in ("KNOWLEDGE_MATRIX_URL", "KNOWLEDGE_NTFY_URL", "KNOWLEDGE_NTFY_TOKEN")}
+        os.environ.update(KNOWLEDGE_NTFY_URL=f"http://127.0.0.1:{stand_in.server_port}/topic", KNOWLEDGE_NTFY_TOKEN="tk")
+        srv.notify("Needs you: tést")
+        for _ in range(50):
+            if "ntfy" in srv.BACKGROUND:
+                break
+            time.sleep(0.05)
+        assert posted == [("/topic", "Bearer tk", "Needs you: tést")] and "detail" in srv.BACKGROUND["ntfy"] and "matrix" not in srv.BACKGROUND, (posted, srv.BACKGROUND)
+        stand_in.shutdown(); stand_in.server_close()
+        srv.notify("nobody home")
+        for _ in range(100):
+            if "error" in srv.BACKGROUND["ntfy"]:
+                break
+            time.sleep(0.05)
+        assert "ntfy message failed" in srv.BACKGROUND["ntfy"]["error"], srv.BACKGROUND["ntfy"]
+        del os.environ["KNOWLEDGE_NTFY_URL"], os.environ["KNOWLEDGE_NTFY_TOKEN"]
+        os.environ.update({k: v for k, v in saved_env.items() if v is not None})
         # Shared folders that stop answering: the probe thread hangs, requests get 503 at once, plain /health stays ok,
         # the admin hears it once each way.
         import asyncio, threading
