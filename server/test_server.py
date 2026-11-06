@@ -80,6 +80,12 @@ def tasks_contract(tmp, ck, fr, ver, raw):
     assert not call("knowledge_edit", {"path": "garden-memory/project_legacy.md", "old_string": "old style, edited", "new_string": "edited again"})[0]
     er, said = call("knowledge_edit", {"path": "garden-memory/project_legacy.md", "old_string": "old style, edited", "new_string": "edited again"})
     assert er and "seems done already" in said, said
+    insert = {"path": "garden-memory/project_legacy.md", "old_string": "edited again", "new_string": "added here\nedited again"}
+    assert not call("knowledge_edit", insert)[0]
+    er, said = call("knowledge_edit", insert)  # at an anchor: the same edit again would put the line in twice
+    assert er and "seems done already" in said, said
+    assert legacy.read_text().count("added here") == 1
+    assert not call("knowledge_edit", {"path": "garden-memory/project_legacy.md", "old_string": "added here", "new_string": "added here\nand more"})[0]
     er, said = call("knowledge_edit", {"path": "garden-memory/project_legacy.md", "old_string": "not in this file", "new_string": "neither is this"})
     assert er and "found 0 times" in said, said
     authors = lambda: json.loads((tmp / "task_authors.json").read_text())
@@ -781,6 +787,10 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     advice.write_text(json.dumps({"measured_on": "1 Nov", "note": "n", "roles": [
         {"key": "read", "role": "Read", "agents": {"claude": [{"model": "gone", "score": "9/9"}, {"model": "opus", "effort": "max", "score": "1/2"}], "codex": [{"model": "elsewhere"}]}},
         {"key": "review", "role": "Review", "agents": {"claude": [{"model": "opus"}]}}]}))
+    for _ in range(50):  # the probe thread reads this file, so a request never waits for the disk
+        if "advice" in rows()[mid]:
+            break
+        time.sleep(0.1)
     got = rows()[mid]["advice"]
     assert got["rows"][:2] == [{"key": "read", "role": "Read", "agent": "claude", "model": "opus", "effort": "max", "score": "1/2"},
                                {"key": "read", "role": "Read", "agent": "codex", "model": None}] and not got["missing"], got
@@ -3343,6 +3353,40 @@ def main():
             ix.refresh("memory/gone.md")
             assert "memory/gone.md" not in ix.files and kept, (ix.files, kept)
             srv.keep_version, srv.skill_changed, srv.ROOTS = real
+        # The watcher reporting a write while it is under way must not make the VM the author of a guest's task line:
+        # a trusted writer's line starts without approval.
+        with tempfile.TemporaryDirectory() as h:
+            memo_file = Path(h) / "race_author.md"
+            memo_file.write_text("## Status\nanchor\n")
+            notes, saved = [], (srv.note_task_authors, srv.tell_task_problems, srv.WATCH_DEVICE, srv.resolve, srv.index._refresh,
+                                srv.check_writable, srv.refuse_mirror, srv.judge_soon, srv.audit, srv.house_rules_hint, srv.approval_hint, srv.mem_of)
+            srv.note_task_authors = lambda rel, before, after, by, keep=False: notes.append((by, before, after))
+            srv.tell_task_problems, srv.WATCH_DEVICE = (lambda *a: None), "vm"
+            srv.resolve = lambda path, scoped=True: (memo_file, "memory/race_author.md")
+            srv.check_writable = srv.refuse_mirror = srv.judge_soon = srv.audit = lambda *a, **k: None
+            srv.house_rules_hint, srv.approval_hint = (lambda *a: ""), (lambda *a: "")
+            srv.mem_of = lambda rel: "memory"
+            slow = saved[4]
+            srv.index._refresh = lambda rel: (time.sleep(0.2), slow(rel))
+            srv.index.files["memory/race_author.md"] = (0, 0, "## Status\nanchor\n", None)
+
+            class Report:
+                async def json(self):
+                    return {"paths": ["memory/race_author.md"]}
+
+            async def race():
+                edit = asyncio.create_task(srv.knowledge_edit("memory/race_author.md", "anchor", "guest line\nanchor"))
+                while "guest line" not in memo_file.read_text():  # on disk, so the watcher would report it now
+                    await asyncio.sleep(0.005)
+                await asyncio.gather(edit, srv.invalidate_route(Report()))
+            token = srv.device.set({"name": "guest", "write": True, "watch": True})
+            asyncio.run(race())
+            srv.device.reset(token)
+            (srv.note_task_authors, srv.tell_task_problems, srv.WATCH_DEVICE, srv.resolve, srv.index._refresh,
+             srv.check_writable, srv.refuse_mirror, srv.judge_soon, srv.audit, srv.house_rules_hint, srv.approval_hint, srv.mem_of) = saved
+            srv.index.files.pop("memory/race_author.md", None)
+            assert [n for n in notes if n[0] == "guest" and "guest line" in n[2]], notes
+            assert not [n for n in notes if n[0] == "vm" and n[1] != n[2]], notes
         # One change seen twice at once (a write or the watcher's report, and the rescan) is one version: a second one
         # with the same text made the Changes list say "0 lines added".
         with tempfile.TemporaryDirectory() as h:

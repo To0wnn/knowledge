@@ -905,12 +905,19 @@ def model_overview(rows: list[dict], data: dict, chosen: dict) -> dict:
                            for i, pcs in sorted(ms.items()) if i not in measured[a]]}
 
 
-def advice_data() -> dict:
+def read_advice() -> dict:
     try:
         data = json.loads((ROOTS["claude"] / ADVICE_FILE).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+_advice: dict | None = None  # kept by storage_loop: chats and machines ask for it and must keep working in an outage
+
+
+def advice_data() -> dict:
+    return read_advice() if _advice is None else _advice
 
 
 def dev_rules() -> str:
@@ -1208,8 +1215,10 @@ async def knowledge_edit(path: str, old_string: str, new_string: str) -> str:
             data = await asyncio.to_thread(full.read_bytes)
             text = data.decode("utf-8")
             count = text.count(old_string)
-            if count == 0 and new_string and new_string in text:  # a retry after a timeout: the first attempt may have landed
-                raise ToolError(f"old_string not found in {rel}, but new_string is already there: this change seems done already (re-read the file to check)")
+            # A retry after a timeout whose first attempt landed. With old_string inside new_string (inserting at an anchor)
+            # the anchor is still there, and the change would go in twice.
+            if new_string and new_string in text and (count == 0 or count == 1 and old_string in new_string):
+                raise ToolError(f"new_string is already in {rel}: this change seems done already (re-read the file to check)")
             if count != 1:
                 raise ToolError(f"old_string found {count} times in {rel}; it must occur exactly once (re-read the file)")
             new = text.replace(old_string, new_string, 1).encode()
@@ -3043,8 +3052,8 @@ _storage = {"ok": time.monotonic(), "down": False}
 
 
 def storage_probe():
-    """disk_usage, which is statvfs on Linux and macOS (Windows has none), because it always asks the server: on a blocked
-    mount stat, listdir and reads kept answering from the client's cache (measured 6 Nov 2026), so nothing ever tripped."""
+    """disk_usage, which is statvfs on Linux and macOS (Windows has none), because it always asks the server: on a blocked,
+    quiet mount stat on the mount's root kept answering from the client's cache, so the gate never closed (6 Nov 2026)."""
     for base in [*ROOTS.values(), AUDIT.parent]:
         try:
             shutil.disk_usage(base)
@@ -3054,10 +3063,12 @@ def storage_probe():
 
 
 def storage_loop():
+    global _advice
     while True:
         try:
             storage_probe()
             _storage["ok"] = time.monotonic()
+            _advice = read_advice()
         except Exception as e:  # a stale NFS handle: the same as no answer; this thread must never die, that closes the server
             print(f"storage: {e}", flush=True)
         time.sleep(STORAGE_EVERY)
@@ -3546,14 +3557,19 @@ async def invalidate_route(request: Request):
     if not device.get().get("watch"):
         return JSONResponse({"error": "token may not invalidate"}, status_code=403)
     paths = (await request.json()).get("paths", [])[:5000]
-    with index.lock:  # what a task line was before, so a line a VM session wrote straight into a memo gets its author
-        before = {p: index.files[p][2] for p in paths if p in index.files and mem_of(p)}
-    await asyncio.to_thread(lambda: [index.refresh(p) for p in paths])
-    if WATCH_DEVICE:
-        for p in paths:
-            if mem_of(p) and (hit := index.files.get(p)):
-                note_task_authors(p, before.get(p, ""), hit[2], WATCH_DEVICE)
-                tell_task_problems(p, before.get(p, ""), hit[2])
+    await asyncio.to_thread(lambda: [index.refresh(p) for p in paths if not mem_of(p)])
+    for p in paths:
+        if not mem_of(p):
+            continue
+        # The lock of the writes through this server: reported halfway one, its task line would get the VM as its author,
+        # and a line from a trusted writer starts without approval.
+        async with _locks.setdefault(p, asyncio.Lock()):
+            with index.lock:  # what a task line was before, so a line a VM session wrote straight into a memo gets its author
+                before = index.files[p][2] if p in index.files else ""
+            await asyncio.to_thread(index.refresh, p)
+            if WATCH_DEVICE and (hit := index.files.get(p)):
+                note_task_authors(p, before, hit[2], WATCH_DEVICE)
+                tell_task_problems(p, before, hit[2])
     if WATCH_DEVICE:  # sessions that write memo files directly (not through knowledge_write) hear about duplicates too
         for p in paths:
             judge_soon(p, WATCH_DEVICE, keep=True)
