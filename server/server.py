@@ -5490,8 +5490,10 @@ CHAT_WRAP_UP = ("This chat is being archived. Before it closes, record what it e
                 "house rules: for each subject, knowledge_search first and knowledge_edit the memo that already covers it "
                 "(knowledge_new_memo only for a genuinely new subject). What is true now goes under '## Status', each decision "
                 "under '## Decisions' (what, date, who, why, what was rejected), unfinished work as 'open until <date>: ...' lines, "
-                "a correction or mistake with knowledge_lesson. Do not store the conversation itself, what the code, git history or a "
-                "doc already records, or any secret. Nothing worth keeping: say so in one line. End with one line: what you wrote where.")
+                "a correction or mistake with knowledge_lesson. Record only what this chat itself established: do not infer or guess "
+                "the state of anything outside it, and mark a fact '(checked <date>)' only when you checked it on the live system, else "
+                "'(as of <date>, not re-checked)'. Do not store the conversation itself, what the code, git history or a doc already "
+                "records, or any secret. Nothing worth keeping: say so in one line. End with one line: what you wrote where.")
 EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")  # the levels the agents know (plugin chat.py EFFORTS)
 MODEL_ID = re.compile(r"[A-Za-z0-9][\w.:/-]{0,79}", re.ASCII)  # as plugin chat.py MODEL_ID
 
@@ -6682,7 +6684,11 @@ async def machine_chat_events(request: Request):
                 c["status"] = "idle"
                 stopped = any(k == "info" and t.startswith("Stopped") for k, t, _ in events)
                 if c.pop("close_after", None) and not stopped:  # Archive: the memos are written, the chat closes
-                    c["closed"] = True
+                    last = max((i for i, e in enumerate(c["events"]) if e["kind"] == "user"), default=-1)
+                    if any(e["kind"] in ("error", "refused") for e in c["events"][last + 1:]):  # not written: it stays, under Needs you
+                        chat_add(c, "info", "Not archived: the turn that records this chat in the memos hit an error or a refused tool call. Fix that, then Archive again.")
+                    else:
+                        c["closed"] = True
         if worked and not chat_works(c) and not any(k == "info" and t.startswith("Stopped") for k, t, _ in events):  # the owner's own stop: nothing to come back to
             ended.append(True)
     nxt: list = []

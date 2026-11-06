@@ -928,6 +928,11 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     http("GET", "/machine/chats", token=fr, headers=pc)
     http("POST", "/machine/chats/events", {"chat": mc, "events": [{"kind": "info", "text": "Stopped."}], "done": True}, token=fr, headers=pc)
     assert chat()["closed"] is False, "the owner's own Stop keeps the chat open"
+    assert ui("/ui/api/chat/close", {"machine": mid, "id": mc})[0] == 200 and chat()["status"] == "queued"
+    http("GET", "/machine/chats", token=fr, headers=pc)
+    http("POST", "/machine/chats/events", {"chat": mc, "events": [{"kind": "error", "text": "usage limit reached"}], "done": True}, token=fr, headers=pc)
+    got = json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])
+    assert got["chat"]["closed"] is False and on_board() and got["events"][-1]["text"].startswith("Not archived"), "a failed recording keeps the chat open, under Needs you"
     # A long chat opens on its newest part (tail), the rest comes in steps (before), never twice, never a gap.
     full = json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}&after=0")[2])["events"]
     page = json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}&after=0&tail=3")[2])
