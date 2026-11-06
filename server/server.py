@@ -382,16 +382,16 @@ class Index:
             # Removed, also by a plain rm on the VM: its last text stays in the history (knowledge_history restores
             # it). Not when the whole root looks empty: that is an unmounted share, not a deletion.
             if old is not None and isinstance(e, FileNotFoundError) and tracked(rel) and root_present(rel):
-                keep_version(rel, old, "", removed=True)
+                keep_version(rel, old, "", removed=True, full=full)
                 skill_changed(rel, "removed")
             return
         low = text.lower()
         old = self.files.get(rel)
         if old is not None and old[2] != text and tracked(rel):
-            keep_version(rel, old, text)
+            keep_version(rel, old, text, full=full)
         elif old is None and self.loaded and tracked(rel):
             # A new file: an empty baseline plus its first version, so Changes and History show what it added.
-            keep_version(rel, (st.st_mtime_ns, 0, ""), text)
+            keep_version(rel, (st.st_mtime_ns, 0, ""), text, full=full)
         if old is None or old[2] != text:
             skill_changed(rel, "added" if old is None else "changed")
         with self.lock:
@@ -454,6 +454,7 @@ def history_dir(rel: str) -> Path:
     return HISTORY / rel.replace("/", "__")
 
 
+WRITE_SEEN_WITHIN = 5  # seconds; an edit on the VM this soon after a device's write of the same file gets that device's name
 HISTORY_FAILED: dict[str, str] = {}  # rel -> error of the last failed history write; lint reports it
 
 
@@ -513,7 +514,7 @@ def root_present(rel: str) -> bool:
         return False
 
 
-def keep_version(rel: str, old: tuple, new_text: str, removed: bool = False):
+def keep_version(rel: str, old: tuple, new_text: str, removed: bool = False, full: Path | None = None):
     """Store every version of a tracked file (who changed it and when), so any change can be inspected and undone.
     The first time a file changes, its previous content is kept as the baseline; a removal adds an empty version
     "<who>-removed", so the version before it holds the last text."""
@@ -525,7 +526,9 @@ def keep_version(rel: str, old: tuple, new_text: str, removed: bool = False):
             base.write_text(old[2])
             os.utime(base, ns=(old[0], old[0]))  # its time is when that content was written
         dev = device.get()  # the watcher (watch token) or the rescan thread (no device) = an edit made on the VM
-        who = "VM" if dev.get("watch") or not dev.get("name") else re.sub(r"[^A-Za-z0-9-]", "-", dev["name"])
+        name, at = _writes.pop(str(full), ("", 0.0))  # one write, one version: the next change is someone else's again
+        name = name if time.monotonic() - at < WRITE_SEEN_WITHIN else dev.get("name") if not dev.get("watch") else ""
+        who = re.sub(r"[^A-Za-z0-9-]", "-", name) if name else "VM"
         now = time.time()  # microseconds keep versions from the same second in order
         path = d / f"{time.strftime('%Y%m%d-%H%M%S', time.localtime(now))}.{int(now % 1 * 1e6):06d}_{who}{'-removed' * removed}.md"
         path.write_text(new_text)
@@ -741,6 +744,17 @@ def lesson_admin_only() -> JSONResponse | None:
         return JSONResponse({"error": "needs a write token for all projects"}, status_code=403)
     return None
 
+_writes: dict[str, tuple[str, float]] = {}  # file -> (the device writing it, when): history must not take that for an edit on the VM
+
+
+def writing(full: Path):
+    """Say who changes this file, before it changes: the rescan or the watcher's report may see the change first, without
+    that device, and a version labelled VM counts as the owner's."""
+    dev = device.get()
+    if dev.get("name") and not dev.get("watch"):
+        _writes[str(full)] = (dev["name"], time.monotonic())
+
+
 def replace_if_unchanged(full: Path, expected: bytes | None, data: bytes) -> bool:
     """Atomically replace `full` with `data`, but only if it still holds `expected` (None = must not exist).
 
@@ -758,6 +772,7 @@ def replace_if_unchanged(full: Path, expected: bytes | None, data: bytes) -> boo
             os.unlink(tmp)
             return False
         os.chmod(tmp, full.stat().st_mode & 0o777 if full.exists() else 0o644)  # mkstemp would leave new files 0600
+        writing(full)
         os.replace(tmp, full)
         return True
     except BaseException:
@@ -1065,8 +1080,6 @@ def foreign_writer(rel: str) -> str:
     there is undo. Edits on the VM and text from before history count as the owner's: their writer is not known here.
     "" when trusted."""
     who = note_writer(rel)
-    # shortcut: a rescan that sees a device's write before the write's own refresh labels it VM; closing that takes the
-    # writer in the file's refresh, do so if the label is ever seen wrong.
     if who in ("", "VM", "before"):
         return ""
     tokens = read_json(REVOKED_TOKENS, {}) | read_json(TOKENS_FILE, {})

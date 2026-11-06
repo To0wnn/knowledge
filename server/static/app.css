@@ -179,6 +179,7 @@ input[type=checkbox], input[type=radio] { accent-color: var(--act); }
 .btn.danger:hover:not(:disabled) { border-color: var(--bad); }
 .btn.icon { width: var(--h-btn); padding: 0; }
 .btn.icon.small { width: var(--h-btn-sm); font-size: 16px; }
+.btn[hidden] { display: none; }  /* its display above would beat the attribute */
 .btn[aria-pressed="true"], details[open] > summary.btn { border-color: var(--act); background: var(--act-soft); color: var(--act-text); }
 button:disabled { opacity: .5; cursor: not-allowed; }
 /* Fields: the same height, radius and box as a secondary button. */

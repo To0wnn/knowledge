@@ -14,6 +14,7 @@ Antigravity, plus a web UI with a graph. Server in `server/` (Python, one Docker
 - load test of the web UI against a server on a copy of real data, before and after a change: `tests/ui_load.py`
 - client test (about 2.5 min): `uv run --project server python tests/clients_e2e.py`; CI runs it on Windows, macOS and Linux
   (`clients.yml`, not for a push of only docs or web UI files; `check.yml` runs the check and the UI test)
+- a really hanging disk (Linux with FUSE; not in the check): `systemd-run --user --scope -q -p MemoryMax=3G uv run --project server --with fusepy python tests/storage_hang.py`
 - deploy: `./deploy.sh` (runs the check first; routine)
 - roll back: `git revert <commit>` and `./deploy.sh`
 

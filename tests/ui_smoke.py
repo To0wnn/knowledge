@@ -1498,6 +1498,18 @@ async def one_lamp(browser, secret: str) -> None:
     await pg.wait_for_timeout(800)
     wide = await pg.evaluate("() => ({doc: document.scrollingElement.scrollWidth, win: innerWidth})")
     check(wide["doc"] <= wide["win"], f"admin tokens at 800 px: the page does not scroll sideways {wide}")
+    if os.environ.get("KNOWLEDGE_SMOKE_WRITES"):  # only on a throwaway server: this really undoes what a device wrote
+        await pg.click("#undo-box summary")
+        await pg.fill("#undo-device", "smoke-pc")
+        await pg.click("#undo-form button[type=submit]")
+        await pg.wait_for_selector("#undo-rows li", timeout=10000)
+        listed = await pg.inner_text("#undo-rows")
+        check("trash" in listed or "back to" in listed, f"undo a device: the list says what would happen {listed[:120]}")
+        check(await pg.is_visible("#undo-apply"), "undo a device: offers to undo")
+        pg.once("dialog", lambda d: asyncio.ensure_future(d.accept()))
+        await pg.click("#undo-apply")
+        await pg.wait_for_function("() => document.getElementById('undo-rows').textContent.includes('undone')", timeout=10000)
+        check(await pg.is_hidden("#undo-apply"), "undo a device: done, and not offered again")
     await ctx.close()
 
 

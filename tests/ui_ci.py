@@ -101,7 +101,7 @@ if __name__ == "__main__":
         try:
             seed()
             env = {**os.environ, "KNOWLEDGE_URL": BASE, "KNOWLEDGE_PROXY_SECRET": SECRET, "KNOWLEDGE_TEST_USER": USER,
-                   "KNOWLEDGE_SMOKE_SEARCH": "wireguard", "KNOWLEDGE_SMOKE_BROWSER": "chromium"}
+                   "KNOWLEDGE_SMOKE_SEARCH": "wireguard", "KNOWLEDGE_SMOKE_BROWSER": "chromium", "KNOWLEDGE_SMOKE_WRITES": "1"}
             code = subprocess.run([sys.executable, str(REPO / "tests" / "ui_smoke.py")], env=env).returncode
         finally:
             server.terminate()

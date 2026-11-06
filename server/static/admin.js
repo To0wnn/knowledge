@@ -407,12 +407,12 @@ async function load() {
     $("limits-tokens").textContent = `You may hold ${l.tokens} tokens, for the projects you have access to. Revoke one you no longer use.`;
     $("limits-projects").textContent = `You may create ${l.projects} projects (${l.created} made so far), up to ${l.project_mb} MB each. The admin is told about every new project and token.`;
     renderTokens(); renderProjects();
-    $("undo-box").hidden = !state.admin;
-    $("undo-names").replaceChildren(...state.tokens.map((t) => { const o = el("option"); o.value = t.name; return o; }));
     $("n-tokens").textContent = state.tokens.length; $("n-projects").textContent = state.projects.length;
     return;
   }
   renderTokens(); renderUsers(); renderProjects(); renderSystem(); renderExternal();
+  $("undo-box").hidden = false;
+  $("undo-names").replaceChildren(...state.tokens.map((t) => { const o = el("option"); o.value = t.name; return o; }));
   if (!loaded) { loaded = true; applyKind(); } // later reloads keep what is being filled in
   $("n-tokens").textContent = state.tokens.length; $("n-projects").textContent = state.projects.length;
   const users = Object.values(state.users), waiting = users.filter((u) => !Object.keys(u.projects || {}).length).length; // asks for access

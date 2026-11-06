@@ -3259,6 +3259,22 @@ def main():
             [t.start() for t in both]; [t.join() for t in both]
             srv.keep_version, srv.resolve = real
             assert len(kept) == 1 and ix.files["memory/race.md"][2] == "new\n", kept
+        # A device's write the rescan sees first still carries that device's name; a later edit on the VM is the VM's.
+        with tempfile.TemporaryDirectory() as h:
+            saved_hist, srv.HISTORY = srv.HISTORY, Path(h)
+            target = Path(h) / "w.md"
+            label = lambda: [v["by"] for v in srv.versions_of("memory/w.md")][0]
+            who_now = srv.device.get()
+            srv.device.set({"name": "pal.pc"})
+            assert srv.replace_if_unchanged(target, None, b"from pal\n")
+            srv.device.set({})  # the rescan thread
+            srv.keep_version("memory/w.md", (0, 0, ""), "from pal\n", full=target)
+            assert label() == "pal-pc", label()
+            srv._writes.clear()
+            srv.keep_version("memory/w.md", (0, 0, "from pal\n"), "edit on the VM\n", full=target)
+            assert label() == "VM", label()
+            srv.device.set(who_now)
+            srv.HISTORY = saved_hist
         # A version pruned by another thread between listing and stat is skipped, not an error (seen live at 200 versions).
         with tempfile.TemporaryDirectory() as h:
             (Path(h) / "a").write_text("a")
