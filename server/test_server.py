@@ -1975,6 +1975,7 @@ def main():
         assert "giraffe new" in res and "giraffe old" not in res and "1 more file(s) in the archive" in res, res
         assert "giraffe old" in call("knowledge_search", {"pattern": "giraffe", "root": "trade-memory", "archive": True})[1]
         import server as srv
+        assert srv.instructions().index("House rules") < 1900, srv.instructions().index("House rules")  # Claude Code cuts at 2048
         # Shared folders that stop answering: the probe thread hangs, requests get 503 at once, plain /health stays ok,
         # the admin hears it once each way.
         import asyncio, threading
