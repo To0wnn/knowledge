@@ -1854,14 +1854,14 @@ async def grid_groups(browser, secret: str) -> None:
     box = "#bd .bd-card[data-id='000000000001'] textarea"
     await pg.locator(box).scroll_into_view_if_needed()
     await pg.fill(box, "typing here")
-    top = await pg.evaluate(f"document.querySelector(\"{box}\").getBoundingClientRect().top")
+    top = await pg.evaluate(f"document.querySelector(\"{box}\").closest('.bd-card').getBoundingClientRect().top")  # the card: a failed poll's note moves the box inside it
     chats[0], chats[3] = {**chats[0], "raised": now + 1}, {**chats[3], "raised": now}  # ccc below the rest now, aaa stays
     chats[1] = {**chats[1], "raised": now + 9}
     await pg.evaluate("ck.summaryAt = 0; ckSummary()")
     await pg.wait_for_selector("#bd-sort:not([hidden])", timeout=5000)
     check(await pg.evaluate(heads) == "ccc,bbb,aaa", f"Grid: while you look at it a finish moves nothing, the pill says so ({await pg.evaluate(heads)})")
     await pg.evaluate("new Promise(requestAnimationFrame)")
-    at = await pg.evaluate(f"[document.querySelector(\"{box}\").getBoundingClientRect().top, document.activeElement === document.querySelector(\"{box}\"), document.querySelector(\"{box}\").value]")
+    at = await pg.evaluate(f"[document.querySelector(\"{box}\").closest('.bd-card').getBoundingClientRect().top, document.activeElement === document.querySelector(\"{box}\"), document.querySelector(\"{box}\").value]")
     check(abs(at[0] - top) < 3 and at[1] and at[2] == "typing here", f"Grid: the card you are in stays put, focus and text kept ({top} -> {at})")
     await pg.click("#bd-sort")
     await pg.wait_for_function(f"{heads} === 'bbb,aaa,ccc' && $('bd-sort').hidden && $('bd-stage').scrollTop === 0", timeout=5000)
