@@ -880,6 +880,8 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     ref3 = json.loads(b)["ref"]
     assert st == 200 and ref3.endswith("/board 1920.png⟧"), b
     assert raw("GET", f"/ui/api/chat/file?machine={mid}&file={urllib.parse.quote(ref3[6:-1])}", None, ck)[2] == b"\x89PNG shot"
+    st, h, b = raw("GET", f"/ui/images?machine={mid}&id={mc}", None, ck)
+    assert st == 200 and b"images.js" in b and "script-src 'self'" in h["content-security-policy"] and raw("GET", "/ui/images")[0] == 401, "the image tab: signed in only"
     assert shot("000000000000")[0] == 404 and shot(mc, other)[0] == 404 and shot(mc, pc, b"")[0] == 413
     # A live chat (the pc says its Claude runs live): while it works, Send goes into the running agent at once (now),
     # Force too (its step stops first); Queue waits; a live message not handed out when the turn ends goes next; a turn

@@ -1016,7 +1016,8 @@ function ckUserMsg(card, text, box = el("div", "ck-msg user")) {
   for (const m of text.matchAll(CK_REF)) {
     box.append(text.slice(at, m.index)); at = m.index + m[0].length;
     const a = el("a", "ck-file"), url = `/ui/api/chat/file?machine=${encodeURIComponent(card.meta.machine)}&file=${encodeURIComponent(`${m[1]}/${m[2]}`)}`;
-    a.href = url; a.target = "_blank"; a.rel = "noopener";
+    a.href = CK_IMG.test(m[2]) ? `/ui/images?machine=${encodeURIComponent(card.meta.machine)}&id=${encodeURIComponent(card.meta.parent || card.meta.id)}&file=${encodeURIComponent(`${m[1]}/${m[2]}`)}` : url;
+    a.target = "_blank"; a.rel = "noopener";
     if (CK_IMG.test(m[2])) { const img = el("img", "ck-img"); img.src = url; img.alt = m[2]; img.loading = "lazy"; a.append(img); }
     else { a.textContent = m[2]; a.download = m[2]; }
     box.append(a);

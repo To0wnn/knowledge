@@ -1071,3 +1071,35 @@ button.busy::before { content: ""; display: inline-block; width: .9em; height: .
   div.cmd > .copy { position: static; order: -1; align-self: flex-end; margin: 6px 6px 0 0; }
   div.cmd > pre { min-height: 0; padding: 8px 12px 12px; }
 }
+
+/* The image viewer of a chat (images.html): a tab of its own, the image as large as the window allows. */
+body.iv { display: flex; flex-direction: column; height: 100dvh; margin: 0; overflow: hidden; background: var(--canvas); color: var(--ink); }
+.iv-bar { display: flex; align-items: center; gap: 12px; padding: 8px 12px; padding-top: max(8px, env(safe-area-inset-top)); background: var(--panel); border-bottom: 1px solid var(--line); }
+.iv-title { display: flex; align-items: baseline; gap: 10px; min-width: 0; flex: 1; }
+.iv-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.iv-title span { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
+.iv-hint { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.iv-zoom { display: flex; align-items: center; gap: 2px; flex: none; }
+#iv-pct { min-width: 56px; font-variant-numeric: tabular-nums; }
+#iv-close { flex: none; font-size: 22px; line-height: 1; }
+.iv-stage { position: relative; flex: 1; min-height: 0; overflow: hidden; touch-action: none; user-select: none; }
+.iv-stage.zoomed { cursor: grab; }
+.iv-stage.zoomed:active { cursor: grabbing; }
+#iv-img { position: absolute; left: 0; top: 0; max-width: none; transform-origin: 0 0; -webkit-user-drag: none; }
+#iv-img[hidden] { display: none; }
+.iv-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; margin: 0; padding: 24px; color: var(--muted); text-align: center; }
+.iv-msg[hidden] { display: none; }
+.iv-nav { position: absolute; top: 50%; transform: translateY(-50%); width: 44px; height: 44px; border-radius: 50%; font-size: 26px; line-height: 1; background: var(--panel); border: 1px solid var(--line-hi); opacity: 0.85; }
+.iv-nav:hover:not(:disabled) { opacity: 1; }
+.iv-nav:disabled { opacity: 0.25; }
+.iv-nav[hidden] { display: none; }
+.iv-nav.prev { left: 12px; }
+.iv-nav.next { right: 12px; }
+.iv-thumbs { display: flex; gap: 8px; flex: none; padding: 8px 12px; padding-bottom: max(8px, env(safe-area-inset-bottom)); overflow-x: auto; background: var(--panel); border-top: 1px solid var(--line); }
+.iv-thumbs[hidden] { display: none; }
+.iv-thumb { flex: none; width: 88px; height: 56px; padding: 0; overflow: hidden; background: var(--canvas); border: 2px solid transparent; border-radius: 8px; cursor: pointer; opacity: 0.6; }
+.iv-thumb:hover, .iv-thumb:focus-visible { opacity: 1; }
+.iv-thumb[aria-current] { border-color: var(--accent, currentColor); opacity: 1; }
+.iv-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
+@media (max-width: 900px) { .iv-hint { display: none; } }
+@media (max-width: 640px) { .iv-nav { display: none; } .iv-thumb { width: 64px; height: 44px; } }

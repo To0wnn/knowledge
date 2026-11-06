@@ -1534,6 +1534,78 @@ async def design_system(browser, devices, secret: str) -> None:
     await ctx.close()
 
 
+async def images(browser, secret: str) -> None:
+    """The image tab of a chat, on faked chat data: a chat's image links here; scroll, keys and thumbnails go through
+    the images, zoom and drag work, the close button closes the tab it opened in."""
+    svg = '<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000"><rect width="1600" height="1000" fill="#486"/></svg>'
+    refs = [f"0123456789a{i}/shot{i}.png" for i in range(3)]
+    events = [{"n": 1, "kind": "user", "text": f"see \u27e6file:{refs[0]}\u27e7"}, {"n": 2, "kind": "tool", "text": f"Read: /tmp/a \u27e6file:{refs[1]}\u27e7"},
+              {"n": 3, "kind": "tool", "sub": "s1", "text": f"Read: /tmp/b \u27e6file:{refs[2]}\u27e7"}, {"n": 4, "kind": "tool", "text": f"Read: /tmp/a \u27e6file:{refs[1]}\u27e7"}]
+    ctx, pg, errors = await page(browser, secret, viewport={"width": 1280, "height": 800})
+
+    async def fake(route):
+        url = route.request.url
+        if "/ui/api/chat/file" in url:
+            await route.fulfill(content_type="image/svg+xml", body=svg)
+        else:
+            await route.fulfill(json={"events": [] if "after=0" not in url else events})
+    await ctx.route("**/ui/api/chat?*", fake)
+    await ctx.route("**/ui/api/chat/file*", fake)
+    href = await pg.evaluate("""() => { const b = ckUserMsg({ meta: { machine: "m1", id: "c1~s1", parent: "c1" } }, "x \u27e6file:0123456789ab/a.png\u27e7 \u27e6file:0123456789ab/b.txt\u27e7");
+        return [...b.querySelectorAll("a")].map((a) => a.getAttribute("href")); }""")
+    check(href[0].startswith("/ui/images?machine=m1&id=c1&file=") and "/ui/api/chat/file" in href[1], f"images: a chat's image opens the image tab, another file downloads {href}")
+    # opened the way a chat opens it: a link to a new tab, so the close button may close it
+    await pg.evaluate("""(u) => { const a = document.createElement("a"); a.id = "open-iv"; a.href = u; a.target = "_blank"; a.rel = "noopener"; a.textContent = "open"; a.style.cssText = "position:fixed;top:0;left:0;z-index:99999"; document.body.append(a); }""",
+                      f"/ui/images?machine=m1&id=c1&file={refs[1].replace('/', '%2F')}")
+    async with ctx.expect_page() as opened:
+        await pg.click("#open-iv")
+    iv = await opened.value
+    iv_errors = []
+    iv.on("pageerror", lambda e: iv_errors.append(str(e)))
+    await iv.wait_for_function("document.getElementById('iv-img').naturalWidth > 0 && document.getElementById('iv-count').textContent")
+    count = lambda: iv.locator("#iv-count").inner_text()
+    check(await count() == "2 / 3" and await iv.locator(".iv-thumb").count() == 3 and "shot1.png" in await iv.locator("#iv-name").inner_text(),
+          "images: every image of the chat once, subagents' too, opened on the one clicked")
+    pct = lambda: iv.locator("#iv-pct").inner_text()
+    await iv.mouse.move(640, 400)
+    await iv.mouse.wheel(0, 100)
+    await iv.wait_for_timeout(250)
+    check(await count() == "3 / 3", "images: scrolling goes to the next image")
+    await iv.keyboard.press("ArrowLeft")
+    check(await count() == "2 / 3", "images: an arrow key goes back")
+    await iv.locator(".iv-thumb").first.click()
+    check(await count() == "1 / 3" and "shot0.png" in iv.url, "images: a thumbnail jumps to its image, the address follows")
+    await iv.wait_for_function("document.getElementById('iv-pct').textContent !== '100%'")
+    fitted = await pct()
+    await iv.mouse.move(640, 400)  # off the thumbnail strip, back over the image
+    await iv.keyboard.down("Control")
+    await iv.mouse.wheel(0, -200)
+    await iv.keyboard.up("Control")
+    await iv.wait_for_function("document.getElementById('iv-stage').classList.contains('zoomed')")
+    zoomed = await pct()
+    before = await iv.evaluate("document.getElementById('iv-img').style.transform")
+    await iv.mouse.down()
+    await iv.mouse.move(600, 360, steps=4)
+    await iv.mouse.up()
+    check(int(zoomed[:-1]) > int(fitted[:-1]) and before != await iv.evaluate("document.getElementById('iv-img').style.transform") and await count() == "1 / 3",
+          f"images: Ctrl+scroll zooms ({fitted} to {zoomed}) and a drag pans, the image stays")
+    await iv.keyboard.press("0")
+    check(await pct() == fitted, "images: 0 fits the image again")
+    await iv.mouse.dblclick(640, 400)
+    check(int((await pct())[:-1]) > int(fitted[:-1]), "images: a double-click zooms in")
+    await iv.keyboard.press("0")
+    width = await iv.evaluate("[document.documentElement.scrollWidth, innerWidth]")
+    check(width[0] <= width[1] and not iv_errors, f"images: no sideways scroll, no page errors {width} {iv_errors}")
+    await iv.set_viewport_size({"width": 390, "height": 800})
+    await iv.wait_for_timeout(100)
+    check(await iv.locator("#iv-close").is_visible() and await iv.evaluate("document.documentElement.scrollWidth <= innerWidth"), "images: on a phone the close button stays, no sideways scroll")
+    async with iv.expect_event("close", timeout=3000):
+        await iv.click("#iv-close")
+    check(iv.is_closed(), "images: the close button closes the tab")
+    check(not errors, f"images: no page errors {errors}")
+    await ctx.close()
+
+
 async def main() -> None:
     secret = os.environ.get("KNOWLEDGE_PROXY_SECRET") or subprocess.run(["secret", "KNOWLEDGE_PROXY_SECRET"], check=True, capture_output=True, text=True).stdout.strip()
     async with async_playwright() as p:
@@ -1554,6 +1626,7 @@ async def main() -> None:
         await agents_pages(browser, p.devices, secret)
         await shell_pages(browser, p.devices, secret)
         await no_agents(browser, secret)
+        await images(browser, secret)
         await board(browser, p.devices, secret)
         await follow(browser, p.devices, secret)
         await live_refresh(browser, secret)

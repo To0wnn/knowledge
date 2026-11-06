@@ -3780,8 +3780,8 @@ STATIC = Path(__file__).with_name("static")
 # is a new URL (no stale script after a refresh), and the live stream tells open tabs to reload on a new release.
 STARTED = time.time()
 BOOT = secrets.token_hex(4)  # changes on every start, so ETags from before a restart never match
-UI_FILES = ("app.js", "agents.js", "admin.js", "app.css", "theme.js", "mission.js", "shell.js", "palette.js", "thispc.css", "nav.js", "help.js")  # linked with ?v=<release>: in the hash too
-RELEASE = hashlib.sha256(b"".join((STATIC / f).read_bytes() for f in ("index.html", "admin.html", "help.html", "nav.html", *UI_FILES))).hexdigest()[:12]
+UI_FILES = ("app.js", "agents.js", "admin.js", "app.css", "theme.js", "mission.js", "shell.js", "palette.js", "thispc.css", "nav.js", "help.js", "images.js")  # linked with ?v=<release>: in the hash too
+RELEASE = hashlib.sha256(b"".join((STATIC / f).read_bytes() for f in ("index.html", "admin.html", "help.html", "images.html", "nav.html", *UI_FILES))).hexdigest()[:12]
 
 
 COMPANION = "http://127.0.0.1:47321"  # the local companion (plugin/hooks/companion.py): the "This pc" tab asks it
@@ -3968,6 +3968,11 @@ async def setup_page(request: Request):
     text = text.replace("<!--PUBLIC-->", "").replace("<!--/PUBLIC-->", "").replace('<body class="app" data-page="help">', '<body class="admin-page">')
     return HTMLResponse(text,
                         headers={"Cache-Control": "no-cache", "Content-Security-Policy": SETUP_CSP})
+
+
+@server.custom_route("/ui/images", methods=["GET"])
+async def ui_images_page(request: Request):
+    return page("images.html")  # the images of one chat in a tab of their own; its API calls check who may see them
 
 
 @server.custom_route("/ui/admin", methods=["GET"])

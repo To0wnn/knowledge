@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Images · Knowledge</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/ui/static/app.css">
+</head>
+<body class="iv">
+<header class="iv-bar">
+  <div class="iv-title"><strong id="iv-name"></strong><span id="iv-count" aria-live="polite"></span></div>
+  <span class="iv-hint">Scroll: next image · Ctrl+scroll or pinch: zoom · Double-click: zoom · Esc: close</span>
+  <div class="iv-zoom" role="group" aria-label="Zoom">
+    <button class="btn icon small quiet" id="iv-out" type="button" aria-label="Zoom out" title="Zoom out (-)">−</button>
+    <button class="btn small quiet" id="iv-pct" type="button" title="Fit to the window (0)">100%</button>
+    <button class="btn icon small quiet" id="iv-in" type="button" aria-label="Zoom in" title="Zoom in (+)">+</button>
+  </div>
+  <button class="btn icon quiet" id="iv-close" type="button" aria-label="Close" title="Close (Esc)">×</button>
+</header>
+<main class="iv-stage" id="iv-stage">
+  <img id="iv-img" alt="" draggable="false">
+  <p class="iv-msg" id="iv-msg" hidden></p>
+  <button class="btn icon iv-nav prev" id="iv-prev" type="button" aria-label="Previous image" title="Previous (←)">‹</button>
+  <button class="btn icon iv-nav next" id="iv-next" type="button" aria-label="Next image" title="Next (→)">›</button>
+</main>
+<nav class="iv-thumbs" id="iv-thumbs" aria-label="Images in this chat" hidden></nav>
+<script src="/ui/static/images.js"></script>
+</body>
+</html>
