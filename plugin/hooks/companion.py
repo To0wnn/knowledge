@@ -786,10 +786,10 @@ def report_errors(st: dict, tok: str, now: float):
 
 def settings() -> dict:
     """Workers: off on a new pc (a work laptop or the family's gaming pc must never run them by surprise); at most one
-    per agent unless the owner says more."""
+    per agent unless the owner says more; 0: no limit."""
     s = load("settings.json", {})
     return {"workersAllowed": s.get("workersAllowed") is True,
-            "maxWorkers": {a: max(0, min(8, int((s.get("maxWorkers") or {}).get(a, 1)))) for a in AGENTS}}
+            "maxWorkers": {a: max(0, int((s.get("maxWorkers") or {}).get(a, 1))) for a in AGENTS}}
 
 
 def save_settings(change: dict):
@@ -799,7 +799,7 @@ def save_settings(change: dict):
             s["workersAllowed"] = change["workersAllowed"] is True
         for a, n in (change.get("maxWorkers") or {}).items():
             if a in AGENTS:
-                s.setdefault("maxWorkers", {})[a] = max(0, min(8, int(n)))
+                s.setdefault("maxWorkers", {})[a] = max(0, int(n))
         save("settings.json", s)
 
 
@@ -1012,8 +1012,8 @@ def why_not(t: dict, ws: dict, s: dict, lim: dict, game: str) -> str:
         return f"No workers while {game}"
     if (lim.get(a) or 0) >= 90:
         return f"waiting for limit: {AGENTS[a][0]} is at {lim[a]:.0f}% of its usage limit"
-    cap = s["maxWorkers"][a] if lim.get(a) is not None else min(1, s["maxWorkers"][a])  # unknown limit: one at most
-    if sum(1 for w in ws.values() if w["agent"] == a and w["status"] == "running") >= cap:
+    cap = s["maxWorkers"][a] if lim.get(a) is not None else 1  # unknown limit: one at most; 0: no limit
+    if cap and sum(1 for w in ws.values() if w["agent"] == a and w["status"] == "running") >= cap:
         return f"{AGENTS[a][0]} runs {cap} worker(s) already, its maximum here" + ("" if lim.get(a) is not None else " (limit unknown: 1)")
     if not project_folders().get(t["project"]):
         return (f"No folder linked to project {t['project']} on this pc: link one under Machines → this pc → Folders "
@@ -2248,6 +2248,11 @@ def main(argv: list):
         assert why_not({**task, "id": "T-1-cont"}, old, on, {"codex": 10.0}, "").startswith("T-1 still runs"), "a hand-over waits for the old worker"
         assert why_not(task, run, on, {"codex": None}, "").endswith("(limit unknown: 1)"), "unknown limit: one worker at most"
         assert why_not(task, run, on, {"codex": 40.0}, "") == "", "known limit: up to its max"
+        assert why_not(task, run, {**on, "maxWorkers": {"codex": 1}}, {"codex": 40.0}, "").endswith("its maximum here"), "at its max: waits"
+        free = {**on, "maxWorkers": {"codex": 0}}
+        assert why_not(task, {str(i): run["k"] for i in range(50)}, free, {"codex": 40.0}, "") == "", "0: no limit"
+        assert why_not(task, run, free, {"codex": None}, "").endswith("(limit unknown: 1)"), "0 does not lift the rule for an unknown limit"
+        assert why_not(task, {}, free, {"codex": 90.0}, "").startswith("waiting for limit"), "0 does not lift the usage stop"
         assert why_not({**task, "project": "q"}, {}, on, {"codex": 10.0}, "").startswith("No folder linked")
         DENIED.add("/Users/x/Documents/app")
         assert "Full Disk Access" in why_not({**task, "project": "q"}, {}, on, {"codex": 10.0}, ""), "a folder macOS keeps from it is named"

@@ -2643,10 +2643,10 @@ def mark_machine(dev: dict, agent: str = "", session: str = "", project: str = "
 
 def worker_machines(project: str, agent: str) -> list[tuple[str, float]]:
     """(label, last report) of every pc whose companion last said it runs workers of `agent` for `project` (workers
-    allowed, a maximum above 0, the agent installed, a folder linked to the project), online or not."""
+    allowed, the agent installed, a folder linked to the project), online or not."""
     return sorted((m.get("label", mid), c.get("at", 0)) for mid, m in read_json(MACHINES_FILE, {}).items()
                   if (c := m.get("companion")) and c.get("workersAllowed")
-                  and (c.get("maxWorkers") or {}).get(agent, 1) > 0 and agent in (c.get("agents") or {})
+                  and agent in (c.get("agents") or {})
                   and any(f.get("project") == project for f in (c.get("folders") or {}).get("linked", [])))
 
 
@@ -5396,8 +5396,8 @@ def action_args(action: str, args: dict) -> dict:
     if action == "workers_allowed":
         return {"on": args.get("on") is True}
     if action == "max_workers":
-        if not isinstance(args.get("n"), int) or not 0 <= args["n"] <= 8:
-            raise ValueError("n must be 0 to 8")
+        if not isinstance(args.get("n"), int) or args["n"] < 0:
+            raise ValueError("n must be 0 (no limit) or more")
         return {"agent": agent(), "n": args["n"]}
     raise ValueError(f"unknown action {action}")
 

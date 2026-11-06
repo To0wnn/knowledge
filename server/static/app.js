@@ -1337,7 +1337,7 @@ async function loadMachines() {
       const row = el("div", "machine-agent"), top = el("div", "machine-agent-head");
       top.append(el("strong", null, AGENT_NAME[a] || a), el("span", "muted", ag.plugin ? `plugin ${ag.plugin}` : "plugin ?"));
       if (ag.yolo) top.append(el("span", "pill yolo", "YOLO on")); // stays in sight: its switch sits under Settings
-      if (c) top.append(el("span", "pill", `${ag.workers.filter((w) => w.status === "running").length} of ${(c.maxWorkers || {})[a] ?? 1} running`));
+      if (c) top.append(el("span", "pill", `${ag.workers.filter((w) => w.status === "running").length} of ${((c.maxWorkers || {})[a] ?? 1) || "any"} running`));
       if (ag.trusted === false) top.append(el("span", "pill warn", "hooks not trusted"));
       if (c) top.append(el("span", `pill ${ag.limit >= 90 ? "warn" : ""}`, ag.limit == null ? "limit unknown" : `limit ${Math.round(ag.limit)}%`));
       row.append(top);
@@ -1369,11 +1369,15 @@ async function loadMachines() {
         set.append(el("summary", null, "Settings"), ctl);
         if (ag.trusted === false) ctl.append(machineButton("Trust hooks", "Trust the knowledge hooks the agent's own way", () => machineAction(m, "trust_hooks", { agent: a })));
         ctl.append(yoloSwitch(m, a, ag));
-        const max = el("select", "small"); max.title = "At most this many workers of this agent on this pc at the same time; 0: none";
-        const most = (c.maxWorkers || {})[a] ?? 1; // the companion's page allows up to 8: show what is set
-        for (const n of [...new Set([0, 1, 2, 3, 4, most])].sort((x, y) => x - y)) { const o = el("option", null, `${n} at a time`); o.value = n; o.selected = n === most; max.append(o); }
-        max.onchange = () => machineAction(m, "max_workers", { agent: a, n: Number(max.value) });
-        ctl.append(max);
+        const most = (c.maxWorkers || {})[a] ?? 1;
+        const max = el("input", "small"); max.type = "number"; max.min = 0; max.value = most; max.style.width = "5em";
+        max.onchange = () => {
+          const n = Number(max.value);
+          if (max.value === "" || !Number.isInteger(n) || n < 0) { max.value = most; return; } // empty is not 0: it must not lift the limit
+          machineAction(m, "max_workers", { agent: a, n });
+        };
+        const lab = el("label", null, "Workers at a time (0: no limit) "); lab.title = "At most this many workers of this agent on this pc at the same time"; lab.append(max);
+        ctl.append(lab);
         row.append(set);
       }
       agents.append(row);

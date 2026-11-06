@@ -194,7 +194,7 @@ function renderSettings() {
       h("small", {}, "A worker is a fresh session per ready task, in its own git worktree, started here. Off by default: turn it on only on a pc that may work on its own (not a work laptop or a shared family pc)." + (s.game ? ` Now: no workers while ${s.game}.` : "")),
       h("label", { class: "cmp-switch" }, h("input", { type: "checkbox", name: "workersAllowed", checked: !!s.workersAllowed }), "Workers allowed on this pc"),
       S.agents.filter((a) => a.installed).map((a) => h("label", { class: "cmp-switch" },
-        h("input", { type: "number", name: `max-${a.id}`, min: 0, max: 8, value: s.maxWorkers[a.id] ?? 1, style: "width:4em" }), `at most this many ${a.name} workers at once`))),
+        h("input", { type: "number", name: `max-${a.id}`, min: 0, required: true, value: s.maxWorkers[a.id] ?? 1, style: "width:4em" }), `at most this many ${a.name} workers at once (0: no limit)`))),
     h("div", { class: "cmp-settings-foot" }, h("button", { class: "cmp-btn cmp-btn--primary", type: "submit" }, "Save settings")));
 }
 

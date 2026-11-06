@@ -676,6 +676,9 @@ async def shell(browser, devices, secret: str) -> None:
         own: document.querySelectorAll('.machine-head .machine-actions').length, old: [...document.querySelectorAll('.machine-controls button')].some(b => /Forget|YOLO/.test(b.textContent))})""")
     if yolo["own"]:
         check(not yolo["old"], f"Machines: YOLO is a switch per agent, pc actions in the card head, Forget behind ⋯ {yolo}")
+        most = await pg.evaluate("""() => { const i = document.querySelector('.machine-controls input[type=number]'); if (!i) return null; const was = i.value;
+          i.value = ''; i.dispatchEvent(new Event('change')); return {max: i.max, min: i.min, label: i.closest('label').textContent, back: i.value === was}; }""")
+        check(most and most["max"] == "" and most["min"] == "0" and "0: no limit" in most["label"] and most["back"], f"Machines: workers at a time is a free number, 0 is no limit, an empty field changes nothing {most}")
     pill = await pg.evaluate("""(() => { const p = el('span', 'pill yolo', 'YOLO'); document.body.append(p); const s = getComputedStyle(p), b = s.backgroundColor, c = s.color;
       const d = el('span'); d.style.color = 'var(--bad)'; document.body.append(d); const bad = getComputedStyle(d).color; p.remove(); d.remove(); return [b, bad, c]; })()""")
     check(pill[2] == pill[1] and pill[0] != "rgba(0, 0, 0, 0)", f"Machines: the YOLO label is red and stands out {pill}")
@@ -1813,6 +1816,12 @@ async def chat_tabs(browser, secret: str) -> None:
     await pg.wait_for_function("ck.summaryAt > 0 && ck.ready", timeout=15000)
     await pg.evaluate("agentProject = ''; bdRender()")  # live: the open chats need not be in the default project
     await pg.wait_for_selector("#bd .bd-card .ck-card", timeout=15000)
+    card = pg.locator("#bd .bd-card").first
+    await pg.mouse.move(0, 0)
+    before = await card.evaluate("(w) => getComputedStyle(w).outlineStyle")
+    await card.hover()
+    after = await card.evaluate("(w) => getComputedStyle(w).outlineStyle")
+    check(before == "none" and after == "solid", f"Grid: the card under the mouse has a focus band {before} {after}")
     last, grid_hash = await pg.evaluate("[store.get('kn_last_chat'), location.hash]")
     async with ctx.expect_page() as new:
         await pg.click("#bd .bd-card a.ck-x.bd-only")

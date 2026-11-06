@@ -753,6 +753,7 @@ dialog.ck-diff { width: min(980px, calc(100vw - 32px)); }
 .bd-frame.shut .bd-chev { transform: rotate(-90deg); }
 .bd-card { position: relative; display: grid; height: var(--bg-row, 420px); border-radius: var(--r-lg); }
 .bd-card[hidden] { display: none; }
+.bd-card:hover { outline: 2px solid var(--act); outline-offset: 2px; } /* the card the shortcuts act on when focus is elsewhere */
 .bd-card > .ck-card { min-height: 0; height: 100%; }
 .bd-card .ck-git-slot { display: none; } /* the full chat has it; a card's header keeps room for its title */
 .bd-card.needs > .ck-card { border-color: var(--amber); box-shadow: 0 0 0 1px var(--amber); }
