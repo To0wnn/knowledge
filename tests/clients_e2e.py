@@ -2085,7 +2085,8 @@ def follow_e2e(tok: str, tmp: Path):
         row = lambda: next((r for r in machines() if r["id"] == mid), {})
         workers_of = lambda: {w["id"]: w for a in row().get("agents", {}).values() for w in a.get("workers", [])}
         ok = wait_for(lambda: len(started()) == 3 and all(workers_of().get(i, {}).get("status") == "running" for i in ids.values()), 60)
-        if not check(ok, "follow: one worker per agent runs and is reported", json.dumps(workers_of())[:600] + (home / "companion.log").read_text(errors="replace")[-600:]):
+        if not check(ok, "follow: one worker per agent runs and is reported", json.dumps({"started": [x.get("worker") for x in started()], "reported": {i: (w.get("status"), w.get("agent"), w.get("why")) for i, w in workers_of().items()}, "at": row().get("at"), "now": time.time(), "actions": [(a["action"], a["status"], str(a.get("result"))[:120]) for a in row().get("actions", [])][-6:]})
+                     + (home / "companion.log").read_text(errors="replace")[-600:] + (home / ".knowledge" / "companion" / "activity.json").read_text(errors="replace")[:1500]):
             return
         view = lambda a, peek=False, after=0: json.loads(http("GET", f"/ui/api/worker?machine={mid}&worker=garden/{ids[a]}&after={after}" + ("&peek=1" if peek else ""), headers=ui)[1])
         texts = lambda a, peek=False: "".join(e["text"] for e in view(a, peek)["events"])
