@@ -3150,6 +3150,30 @@ print(json.dumps(seen)); print(json.dumps(cwds))"""
     check(ok, "self-update, offline copy and background hook start detached without a console window", out + err[-500:])
 
 
+def installer_progress(tmp: Path):
+    """A step that can take minutes says what it does before it starts, not only afterwards (a silent installer looks stuck)."""
+    code = """import importlib.util as u, io, subprocess, sys
+s = u.spec_from_file_location("knowledge_agent", sys.argv[1])
+m = u.module_from_spec(s)
+s.loader.exec_module(m)
+out, seen = io.StringIO(), []
+sys.stdout = out
+def fake(*a, **kw):
+    seen.append(out.getvalue())
+    return subprocess.CompletedProcess(a[0], 0, "fine", "")
+subprocess.run = fake
+m.run_cli(["claude", "plugin", "install"])
+m.run_steps([("run", ["slow-tool"], False)], False)
+sys.stderr.write(repr(seen))
+assert "claude plugin install" in seen[0] and "slow-tool" in seen[1], seen
+assert "claude plugin install: ... fine" in out.getvalue() and "slow-tool ... ok" in out.getvalue(), out.getvalue()"""
+    home = tmp / "Progress Usér"
+    home.mkdir(parents=True, exist_ok=True)
+    rc, out, err = run([sys.executable, "-c", code, str(CLIENT / "clients" / "knowledge-agent.py")], "",
+                       user_env(home, KNOWLEDGE_HOME=str(home / ".knowledge")), cwd=str(home))
+    check(rc == 0, "installer: a slow step says what it does before it starts", out + err[-500:])
+
+
 def main():
     compile(FAKE_AGENT, "FAKE_AGENT", "exec")  # a broken stand-in fails every agent test: say so at once
     import faulthandler  # a hang prints every thread's stack before the CI job's 20 min limit cancels it without a log
@@ -3193,6 +3217,7 @@ def main():
         background_flags(tmp)
         import_e2e(tok, tmp, garden)
         installer(tok, tmp)
+        installer_progress(tmp)
         companion_setup(tmp)
         checkout_update(tmp)
         claude_stored_token(tmp)
