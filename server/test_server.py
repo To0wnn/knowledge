@@ -2127,8 +2127,23 @@ def main():
         assert "plain line" in text and "pi/‹secret›" in text and "the key is ‹secret›." in text, text
         assert "Sup3rSecret99" in call("knowledge_read", {"path": "memory/creds.md"})[1]  # full token unchanged
         assert "Sup3rSecret99" in call("knowledge_read", {"file": "memory/creds.md"})[1]  # accepts file alias
+        assert "Sup3rSecret99" in call("knowledge_read", {"name": "memory/creds.md"})[1]  # accepts name alias
+        assert "Sup3rSecret99" in call("knowledge_read", {"name": "creds.md"})[1]  # resolves bare filename in scope
+        assert "Sup3rSecret99" in call("knowledge_read", {"name": "creds"})[1]  # resolves bare filename without .md
+        assert "Sup3rSecret99" in call("knowledge_read", {"path": "memory/creds"})[1]  # appends .md if missing
+        assert call("knowledge_list", {"dir": "memory/"})[1].count("fact.md") == 1  # list accepts dir alias and trailing slash
+        err, text = call("knowledge_read", {"path": "memory/missing.md"})
+        assert err and text.endswith("memory/missing.md does not exist"), text
+        err, text = call("knowledge_read", {"path": "memory/plan.md"})
+        assert err and "Did you mean 'trade-memory/plan.md'?" in text, text
+        err, text = call("knowledge_edit", {"path": "memory/missing.md", "old_string": "x", "new_string": "y"})
+        assert err and "memory/missing.md does not exist" in text, text
+        assert not call("knowledge_edit", {"name": "fact.md", "old_string": "line two", "new_string": "line 2"})[0]  # edit accepts bare name
+        assert not call("knowledge_edit", {"name": "fact.md", "old_string": "line 2", "new_string": "line two"})[0]
         assert "Sup3rSecret99" not in call("knowledge_search", {"pattern": "login pi"}, token="agent-token")[1]
         assert "Sup3rSecret99" not in call("knowledge_search", {"query": "login pi"}, token="agent-token")[1]  # accepts query alias
+        assert "Sup3rSecret99" not in call("knowledge_search", {"search": "login pi"}, token="agent-token")[1]  # accepts search alias
+        assert "Sup3rSecret99" not in call("knowledge_search", {"text": "login pi"}, token="agent-token")[1]  # accepts text alias
         assert call("knowledge_read", {"path": "homelab/overzicht.md"}, token="agent-token")[0]
         assert call("knowledge_list", {"root": "homelab"}, token="agent-token")[0]
         assert "homelab/" not in call("knowledge_search", {"pattern": "overview"}, token="agent-token")[1]

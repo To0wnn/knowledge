@@ -176,7 +176,15 @@ def unsafe_path(rest: str) -> bool:
 def resolve(path: str, scoped: bool = True) -> tuple[Path, str]:
     """'memory/x.md' -> absolute path inside its root; rejects traversal and hidden secrets, and (scoped) paths
     outside the caller's roots. The index is shared by everyone, so it resolves unscoped."""
-    root, _, rest = path.strip().lstrip("/").partition("/")
+    clean = path.strip().strip("/")
+    if "/" not in clean and clean and "index" in globals() and hasattr(index, "files"):
+        candidates = (clean, clean + ".md") if not clean.endswith(".md") else (clean,)
+        hits = [r for r in index.files if any(r.endswith("/" + c) or r == c for c in candidates) and (not scoped or in_scope(r))]
+        if len(hits) == 1:
+            clean = hits[0]
+        elif len(hits) > 1:
+            raise ToolError(f"multiple files named '{clean}': {hits}")
+    root, _, rest = clean.partition("/")
     if root not in ROOTS or not rest:
         raise ToolError(f"path must start with one of {sorted(r for r in ROOTS if in_scope(r + '/'))}/, e.g. memory/MEMORY.md")
     if unsafe_path(rest):
@@ -986,14 +994,15 @@ server = MCPServer(
 
 
 @server.tool(annotations=READ)
-def knowledge_list(root: str = "", pattern: str = "*") -> str:
+def knowledge_list(root: str = "", pattern: str = "*", dir: str = "", folder: str = "", path: str = "") -> str:
     """List shared files under a root (memory, homelab, claude, the other built-in roots, or a guest
     project's <name> and <name>-memory), optionally filtered by a glob on the relative path. Without a root: the memory
     of this device's project (a guest's own), else memory."""
-    root = root or (PROJECTS[p][1] if (p := token_project()) else "memory")
-    if root not in ROOTS or not in_scope(root + "/"):  # never name roots this device may not see
+    target_root = (root or dir or folder or path).strip().rstrip("/")
+    target_root = target_root or (PROJECTS[p][1] if (p := token_project()) else "memory")
+    if target_root not in ROOTS or not in_scope(target_root + "/"):  # never name roots this device may not see
         raise ToolError(f"root must be one of {sorted(r for r in ROOTS if in_scope(r + '/'))}")
-    hits = [rel for rel, _, _ in index.items(root) if fnmatch.fnmatch(rel.split("/", 1)[1], pattern)]
+    hits = [rel for rel, _, _ in index.items(target_root) if fnmatch.fnmatch(rel.split("/", 1)[1], pattern)]
     return "\n".join(hits[:2000]) or "(no files)"
 
 
@@ -1063,14 +1072,25 @@ def knowledge_chat_read(chat: str = "", chat_id: str = "", id: str = "", chars: 
 
 
 @server.tool(annotations=READ)
-def knowledge_read(path: str = "", file: str = "", offset: int = 1, limit: int = 600) -> str:
+def knowledge_read(path: str = "", file: str = "", name: str = "", offset: int = 1, limit: int = 600) -> str:
     """Read a shared text file, e.g. memory/MEMORY.md or homelab/diensten.md. Returns lines offset..offset+limit-1
     with line numbers, plus the file version needed by knowledge_write."""
-    target = (path or file).strip()
+    target = (path or file or name).strip()
     if not target:
         raise ToolError("path is required, e.g. 'memory/MEMORY.md'")
     full, rel = resolve(target)
-    data = full.read_bytes()
+    data = read_if_there(full)
+    if data is None and not full.suffix:
+        data = read_if_there(full.with_suffix(".md"))
+        if data is not None:
+            full = full.with_suffix(".md")
+            rel = rel + ".md"
+    if data is None:
+        name_part = Path(rel).name
+        candidates = (name_part, name_part + ".md") if not name_part.endswith(".md") else (name_part,)
+        alt = [r for r in index.files if any(r.endswith("/" + c) for c in candidates) and in_scope(r)] if "index" in globals() else []
+        hint = f". Did you mean '{alt[0]}'?" if alt else ""
+        raise ToolError(f"{rel} does not exist{hint}")
     note_gap_answer(rel)
     lines = data.decode("utf-8", errors="replace").splitlines()
     start = max(offset, 1)
@@ -1147,11 +1167,11 @@ SEARCH_SECONDS = 3
 
 
 @server.tool(annotations=READ)
-def knowledge_search(pattern: str = "", query: str = "", root: str = "", max_results: int = 60, archive: bool = False) -> str:
+def knowledge_search(pattern: str = "", query: str = "", search: str = "", text: str = "", root: str = "", max_results: int = 60, archive: bool = False) -> str:
     """Case-insensitive regex search over shared files (all roots, or one or more comma-separated roots, e.g.
     "trade,trade-memory"). Returns path:line: text. Archive folders (archief/, old/, history/ ...) and session-log
     entries older than two weeks are skipped and only counted; archive=true searches them too."""
-    target = pattern or query
+    target = pattern or query or search or text
     if not target:
         raise ToolError("pattern is required (regex to search for)")
     # The `regex` module, not `re`: it can time out and release the GIL, so a catastrophic pattern such as (a+)+$
@@ -1211,10 +1231,13 @@ def search_lines(rx_i, rx_low, root: str, max_results: int, archive: bool = Fals
 
 
 @server.tool(annotations=EDIT)
-async def knowledge_edit(path: str, old_string: str, new_string: str) -> str:
+async def knowledge_edit(path: str = "", old_string: str = "", new_string: str = "", file: str = "", name: str = "") -> str:
     """Replace one unique snippet in a shared file (like the Edit tool). Edits by other sessions elsewhere in the
     file are kept. Fails if old_string is missing or not unique: read the file again and retry."""
-    full, rel = await asyncio.to_thread(resolve, path)
+    target = (path or file or name).strip()
+    if not target:
+        raise ToolError("path is required, e.g. 'memory/MEMORY.md'")
+    full, rel = await asyncio.to_thread(resolve, target)
     await asyncio.to_thread(check_writable, rel)
     refuse_mirror(rel)
     new_string, hidden = strip_private(new_string)
@@ -1222,7 +1245,9 @@ async def knowledge_edit(path: str, old_string: str, new_string: str) -> str:
     refuse_mask(new_string, old_string)
     async with _locks.setdefault(rel, asyncio.Lock()):
         for _ in range(5):  # retry on fresh content when a native edit on the VM landed in between
-            data = await asyncio.to_thread(full.read_bytes)
+            data = await asyncio.to_thread(read_if_there, full)
+            if data is None:
+                raise ToolError(f"{rel} does not exist")
             text = data.decode("utf-8")
             count = text.count(old_string)
             # A retry after a timeout whose first attempt landed. With old_string inside new_string (inserting at an anchor)
@@ -1248,10 +1273,13 @@ async def knowledge_edit(path: str, old_string: str, new_string: str) -> str:
 
 
 @server.tool(annotations=REPLACE)
-async def knowledge_write(path: str, content: str, base_version: str = "") -> str:
+async def knowledge_write(path: str = "", content: str = "", base_version: str = "", file: str = "", name: str = "") -> str:
     """Create or replace a whole shared file. For an existing file pass base_version from knowledge_read; it is refused
     when another session changed the file since then. Leave base_version empty only to create a new file."""
-    full, rel = await asyncio.to_thread(resolve, path)
+    target = (path or file or name).strip()
+    if not target:
+        raise ToolError("path is required, e.g. 'memory/MEMORY.md'")
+    full, rel = await asyncio.to_thread(resolve, target)
     await asyncio.to_thread(check_writable, rel)
     refuse_mirror(rel)
     content, hidden = strip_private(content)
@@ -1283,8 +1311,8 @@ async def knowledge_write(path: str, content: str, base_version: str = "") -> st
 
 # Not decision_without_date: old decisions with an unknown date would push an agent to invent one (lint still lists them).
 @server.tool(annotations=EDIT)
-async def knowledge_new_memo(title: str, description: str, type: str, heading: str, status: str, decisions: str = "",
-                             project: str = "") -> str:
+async def knowledge_new_memo(title: str = "", description: str = "", type: str = "", heading: str = "", status: str = "", decisions: str = "",
+                             project: str = "", name: str = "", body: str = "") -> str:
     """Create a memo the house-rules way in one step: frontmatter (name, description, metadata.type), the status section
     (what is true now: how it works, where things are, pitfalls, open items), the decisions section (one bullet per decision:
     "- **<decision>** (<date>, <who>): <reason>; rejected: <alternative>") and its line under "## <heading>" in the
@@ -1293,6 +1321,8 @@ async def knowledge_new_memo(title: str, description: str, type: str, heading: s
     Why: and How to apply: in status). The section names follow the server's language (## Status / ## Decisions or
     ## Stand / ## Keuzes). heading: an existing index heading; a new one only for a genuinely new area.
     project: default this device's project (a guest's own), else homelab."""
+    title = title or name
+    status = status or body
     proj = project or token_project() or "homelab"
     if proj not in PROJECTS:
         raise ToolError(f"project must be one of {sorted(PROJECTS)}")
@@ -1519,11 +1549,14 @@ def linked(a: str, b: str) -> bool:
 
 
 @server.tool(annotations=REPLACE)
-async def knowledge_delete(path: str, base_version: str) -> str:
+async def knowledge_delete(path: str = "", base_version: str = "", file: str = "", name: str = "") -> str:
     """Delete a shared file you are allowed to write (e.g. an outdated memory). Pass base_version from knowledge_read;
     refused if the file changed since. A copy is kept on the server (state/deleted/), so nothing is lost for good.
     Also remove its line from memory/MEMORY.md with knowledge_edit."""
-    full, rel = await asyncio.to_thread(resolve, path)
+    target = (path or file or name).strip()
+    if not target:
+        raise ToolError("path is required, e.g. 'memory/MEMORY.md'")
+    full, rel = await asyncio.to_thread(resolve, target)
     await asyncio.to_thread(check_writable, rel, grows=False)  # a full project must still be able to shrink
     refuse_mirror(rel)
     async with _locks.setdefault(rel, asyncio.Lock()):
@@ -1791,11 +1824,11 @@ async def knowledge_ingest(url: str = "", text: str = "", title: str = "") -> st
 
 
 @server.tool(annotations=READ)
-async def knowledge_semantic_search(query: str = "", pattern: str = "", root: str = "", limit: int = 10, archive: bool = False) -> str:
+async def knowledge_semantic_search(query: str = "", pattern: str = "", search: str = "", text: str = "", root: str = "", limit: int = 10, archive: bool = False) -> str:
     """Search Markdown notes by meaning (synonyms, paraphrases, Dutch or English), for when knowledge_search (regex)
     finds nothing or you do not know the exact words. root: one or more comma-separated roots, e.g. "trade,trade-memory".
     Returns path:line (score): passage. Archive folders are skipped unless archive=true."""
-    target = (query or pattern).strip()
+    target = (query or pattern or search or text).strip()
     if not target:
         raise ToolError("query is required (words or sentence describing what to look for)")
     # A scoped token searches its own roots by default, so the top hits are not used up by notes it may not see.
@@ -1822,11 +1855,14 @@ def hit_meta(rel: str) -> str:
 
 
 @server.tool(annotations=READ)
-async def knowledge_related(path: str, limit: int = 10, archive: bool = False) -> str:
+async def knowledge_related(path: str = "", limit: int = 10, archive: bool = False, file: str = "", name: str = "") -> str:
     """The notes most related to one note, ranked by a relevance model: direct links, shared raw sources, shared
     neighbours (Adamic-Adar), same type and similar meaning. Use it to find context before changing or adding a memo.
     Archive folders are left out unless archive=true."""
-    _, rel = await asyncio.to_thread(resolve, path)
+    target = (path or file or name).strip()
+    if not target:
+        raise ToolError("path is required, e.g. 'memory/MEMORY.md'")
+    _, rel = await asyncio.to_thread(resolve, target)
     graph = await asyncio.to_thread(get_graph)
     out = [r for r in kb_graph.related(graph, rel, 30, vec.similar(rel))
            if in_scope(r["id"]) and (archive or not is_archive(r["id"], text_of(r["id"])))][:min(limit, 30)]
@@ -1834,19 +1870,22 @@ async def knowledge_related(path: str, limit: int = 10, archive: bool = False) -
 
 
 @server.tool(annotations=READ)
-def knowledge_history(path: str, version: str = "") -> str:
+def knowledge_history(path: str = "", version: str = "", file: str = "", name: str = "") -> str:
     """Earlier versions of a Markdown file or a shared skill's file: without `version` a list (newest first, with who
     changed it: a device name, or VM for edits made directly on the VM; "-removed" = the file was deleted); with
     `version` that version's full text plus its diff against the current file. To undo a change, write the old text
     back with knowledge_write (pass the current base_version; for a removed file leave it empty)."""
     import difflib
-    _, rel = resolve(path)
+    target = (path or file or name).strip()
+    if not target:
+        raise ToolError("path is required, e.g. 'memory/MEMORY.md'")
+    _, rel = resolve(target)
     if not version:
         vs = versions_of(rel)
         return "\n".join(f"{v['id']}  {time.strftime('%Y-%m-%d %H:%M', time.localtime(v['time']))}  by {v['by']}  "
                          f"({v['size']} bytes)" for v in vs) or f"(no history yet for {rel}: it has not changed since history started)"
     old = version_text(rel, version)
-    full = resolve(path)[0]
+    full = resolve(target)[0]
     cur = full.read_text() if full.exists() else ""  # removed: the diff shows the whole old text
     diff = "".join(difflib.unified_diff(old.splitlines(True), cur.splitlines(True), f"{rel}@{version}", f"{rel} (now)"))
     return shown(f"{diff or '(identical to the current file)'}\n\n<version {version}>\n{old}\n</version>")
