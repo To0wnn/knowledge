@@ -395,10 +395,13 @@ function bdProjects(chats, shut = [], together = false) {
 function bdParts() { try { return JSON.parse(store.get("kn_parts") || "{}") || {}; } catch { return {}; } } // a damaged entry must not break every render
 const bdPartOf = (c, parts = bdParts()) => parts[ckKey(c)] || 1;
 function bdPartShow(n) {
+  const draft = ck.cards.get(ckKey(CK_DRAFT));
+  if (draft && !draft.starting && !draft.input.value.trim() && !draft.files.length) ckDrop(ckKey(CK_DRAFT)); // an empty new chat stays behind; one with text goes along
   bd.part = n;
   try { sessionStorage.setItem("kn_part", String(n)); } catch { /* blocked: this tab still shows it */ }
   bdSettle(); bdRender(); // another part's order is news to nobody here: no pill for it
   $("bd-stage").scrollTop = 0; $("bd-stage").focus({ preventScroll: true }); bdLoadSoon();
+  if (n && !bdChats().length) $("ck-new").onclick(); // an empty part is there to start something
 }
 function bdPartMove(key, n) {
   const known = new Set(ck.chats.map(ckKey)), parts = Object.fromEntries(Object.entries(bdParts()).filter(([k]) => known.has(k) && k !== key));
@@ -557,7 +560,7 @@ function bdRender() {
   for (const [k, w] of bd.wraps) if (!ck.cards.has(k) || !order.includes(w)) { w.remove(); bd.wraps.delete(k); }
   // DOM order = layout order, so Tab walks project by project; only moved nodes are touched
   order.forEach((n, i) => { if (world.children[i] !== n) bdMove(world, n, world.children[i] || null); });
-  if (!rows.length) world.replaceChildren(el("p", "bd-none muted", bd.part ? `No chats in part ${bd.part}${agentProject ? " of this project" : ""}. Shift+${bd.part} on a card in another part moves it here.` : ck.chats.length ? "No chats in this project." : "No chats yet: start one with + New chat."));
+  if (!rows.length) world.replaceChildren(el("p", "bd-none muted", bd.part ? `No chats in part ${bd.part}${agentProject ? " of this project" : ""}: start one with + New chat, or Shift+${bd.part} on a card elsewhere moves it here.` : ck.chats.length ? "No chats in this project." : "No chats yet: start one with + New chat."));
   else world.querySelector(".bd-none")?.remove();
   bdGridSize();
   for (const card of back) ckScrollBottom(card, card.savedScrollTop == null); // back from another part: taken off the page, its log forgot where it was

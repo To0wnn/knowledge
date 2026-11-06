@@ -1836,7 +1836,8 @@ async def grid_groups(browser, secret: str) -> None:
                                               "status": "idle", "updated": raised, "raised": now + raised, "online": True}
     chats = [chat(1, "aaa", 1, "one"), chat(2, "bbb", 3, "two"), chat(3, "bbb", 2, "three"), chat(4, "ccc", 4, "four")]
     board = [{"col": "needs", "kind": "chat", "machine": "x", "id": chats[3]["id"], "key": "k", "title": "four"}]
-    await ctx.route("**/ui/api/chats", lambda r: r.fulfill(json={"chats": chats}) if r.request.method == "GET" else r.continue_())
+    await ctx.route("**/ui/api/chats", lambda r: r.fulfill(json={"chats": chats} if r.request.method == "GET" else {"chat": chat(9, "aaa", 9, "nine")}))
+    await ctx.route("**/ui/api/chat/send", lambda r: r.fulfill(json={}))
     await ctx.route("**/ui/api/board*", lambda r: r.fulfill(json={"items": board}))
     await ctx.route("**/ui/api/chat?*", lambda r: r.abort())
     await pg.goto(f"{URL}/ui#/chats")
@@ -1884,11 +1885,12 @@ async def grid_groups(browser, secret: str) -> None:
     await pg.wait_for_function(f"{heads} === 'bbb,aaa,ccc'", timeout=5000)
 
     # Parts: two real windows of one browser, each showing its own part.
-    cards = "[...document.querySelectorAll('#bd .bd-card')].map((w) => w.dataset.id.slice(-1)).sort().join()"
+    cards = "[...document.querySelectorAll('#bd .bd-card:not(.draft)')].map((w) => w.dataset.id.slice(-1)).sort().join()"
     await pg.evaluate("$('bd-stage').focus()")
     await pg.keyboard.press("2")
-    await pg.wait_for_function(f"{cards} === '' && document.querySelector('#bd .bd-none').textContent.includes('part 2')", timeout=5000)
-    check(await pg.evaluate("[sessionStorage.getItem('kn_part'), agentProject, $('bd-parts').children.length]") == ["2", "", 3], "Parts: key 2 shows part 2, not a project, and its buttons appear")
+    await pg.wait_for_function(f"{cards} === '' && document.activeElement === document.querySelector('#bd .bd-card.draft textarea')", timeout=5000)
+    check(await pg.evaluate("[sessionStorage.getItem('kn_part'), agentProject, $('bd-parts').children.length]") == ["2", "", 3], "Parts: key 2 goes to part 2, not a project, its buttons appear, and being empty it opens a new chat")
+    await pg.keyboard.press("Escape")
     other = await ctx.new_page()
     other_errors = []
     other.on("pageerror", lambda e: other_errors.append(str(e)))
@@ -1934,9 +1936,16 @@ async def grid_groups(browser, secret: str) -> None:
     await other.keyboard.press("0")
     await other.wait_for_function(f"{cards} === '1,2,3,4' && agentProject === ''", timeout=5000)
     check(True, "Parts: key 0 shows all parts of all projects, also from one project")
-    await other.evaluate("bdPartShow(7); ckNewChat()")
-    check(await other.evaluate("!!document.querySelector('.bd-card.draft')"), "Parts: a new chat shows in the part you start it from")
-    await other.evaluate("ckDrop(ckKey(CK_DRAFT)); bdRender(); bdPartMove('x/000000000003', 1); bdPartShow(0)")
+    await other.evaluate("bdPartShow(7)")
+    await other.wait_for_selector(".bd-card.draft", timeout=5000)
+    await other.evaluate("bdPartShow(0)")
+    check(await other.evaluate("!document.querySelector('.bd-card.draft') && !ck.cards.has(ckKey(CK_DRAFT))"), "Parts: an empty new chat stays behind when you switch")
+    await other.evaluate("bdPartShow(7)")
+    await other.wait_for_selector(".bd-card.draft", timeout=5000)
+    started = await other.evaluate("""(async () => { const d = ck.cards.get(ckKey(CK_DRAFT)); d.where_ = 'x\\n/x/aaa'; d.pick = {agent: 'claude', id: 'opus', effort: ''};
+      await ckStart(d, 'hello'); return [bdParts()['x/000000000009'], !!bd.wraps.get('x/000000000009')?.isConnected, !ck.cards.has(ckKey(CK_DRAFT))]; })()""")
+    check(started == [7, True, True], f"Parts: a chat started in part 7 belongs to part 7, and stays a card there {started}")
+    await other.evaluate("bdPartMove('x/000000000003', 1); bdPartMove('x/000000000009', 1); ckDrop('x/000000000009'); bdPartShow(0)")
     check(await other.evaluate("store.get('kn_parts')") == "{}", "Parts: a chat back in part 1 leaves nothing behind")
     check(not other_errors, f"no page errors in the second window {other_errors[:2]}")
     await other.close()
