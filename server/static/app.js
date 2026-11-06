@@ -908,13 +908,14 @@ document.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); if (!document.querySelector("dialog[open]:not(#palette)")) openPalette(); return; }
   if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
   const kn = shellRoute.view === "notes" || shellRoute.view === "map", at = current ? `/${encPath(current.path)}` : "";
+  if (solo() && e.key !== "Escape") return; // a chat alone in its tab has no views to jump to
   if (e.key === "[") toggleRail();
   else if (e.key === "/") { e.preventDefault(); openPalette(true); }
   else if (e.key.toLowerCase() === "a") go("#/chats");
   else if (/^[1-9]$/.test(e.key) && PROJECTS[Number(e.key) - 1]) switchProject(PROJECTS[Number(e.key) - 1]);
   else if (e.key === "0") switchProject(ALL);
   else if (e.key.toLowerCase() === "m") go(mapOn ? `#/notes${at}` : `#/map${at}`);
-  else if (e.key === "Escape" && shellRoute.view === "chats" && ck.view) { store.set("kn_last_chat", ""); ckShow(null); } // as its ×
+  else if (e.key === "Escape" && shellRoute.view === "chats" && ck.view) { if (!solo()) store.set("kn_last_chat", ""); ckShow(null); } // as its ×
   else if (!kn) return;
   else if (e.key.toLowerCase() === "e" && current?.writable) { e.preventDefault(); startEdit(); }
   else if (e.key === "Escape") deselect();

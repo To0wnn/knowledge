@@ -17,7 +17,7 @@ a toast instead of alert(); skipped on an older server. The agents pages: the Ag
 the earlier chats' states, filter and Closed, Tasks' Cancel and counts, Machines full width, Changes' Deleted section (skipped on an
 older server). Admin and Help in the shell (0.20): sidebar, header, tab bar, settings labels, "Saved" and the server's
 message on a refusal (faked; skipped on an older server). Agents > the grid (desktop): #/chats and old links, columns, frames per
-project, folding, Esc and the full chat; a phone keeps the list (skipped without it).
+project, folding, Esc and the full chat; a phone keeps the list (skipped without it). A chat in a tab of its own: no bars, its logo, its title, its keys, and out of view it does not count as read.
 The Review card with faked data: Merge asks first and queues the pc's action, Reject sends reason and send back
 (intercepted; skipped on an older server). Follow a worker: its transcript read only when it ended, the Steer composer
 and Take over when it runs (intercepted; skipped on an older server). The design system (0.21): button heights and radii, quiet chips, one link colour on several views. The one lamp (0.37).
@@ -1219,12 +1219,12 @@ async def board(browser, devices, secret: str) -> None:
         await pg.evaluate(fold)
         check(shut == ["false", True, True] and await pg.evaluate("document.querySelector('#bd .bd-frame-title').getAttribute('aria-expanded') === 'true'"),
               f"Grid: a frame folds its cards away, stays reachable and opens again {shut}")
-        await pg.evaluate("document.querySelector('#bd .bd-card .ck-x.bd-only').click()")  # the card's "open the full chat"
+        await pg.evaluate("ckShow(ck.chats.find((c) => bd.wraps.has(ckKey(c))))")  # what a row in the list does
         await pg.wait_for_function("location.hash.startsWith('#/chats/') && $('bd').hidden && $('ck-canvas').querySelector('.ck-card') && !!$('ck-side').offsetParent", timeout=5000)
         await pg.go_back()
         await pg.wait_for_function("location.hash === '#/chats' && !$('bd').hidden", timeout=5000)
         check(await pg.evaluate("[...bd.wraps.values()].every((w) => w.querySelector('.ck-card')) && !$('ck-canvas').querySelector('.ck-card')"),
-              "Grid: a card opens its full chat beside the list and Back returns to the grid with the card in place")
+              "Grid: a chat opens beside the list and Back returns to the grid with the card in place")
     check(not errors, f"no page errors on the chat grid {errors[:2]}")
     await ctx.close()
     ctx, pg, errors = await page(browser, secret, "/ui#/chats?view=grid", **devices["iPhone 14"])
@@ -1713,6 +1713,61 @@ async def chat_tabs(browser, secret: str) -> None:
     await pg.wait_for_timeout(600)
     check(any("peek=1" not in u for u in polls), "Chat tab: back in view it catches up at once and counts as read")
     check(not errors, f"no page errors on a chat tab {errors[:2]}")
+    await ctx.close()
+
+    ctx, pg, errors = await page(browser, secret, "/ui#/chats", viewport={"width": 1440, "height": 900})
+    await ctx.route("**/ui/api/chat?*", lambda r: r.abort())
+    await pg.wait_for_selector("#bd .bd-card .ck-card", timeout=15000)
+    last, grid_hash = await pg.evaluate("[store.get('kn_last_chat'), location.hash]")
+    async with ctx.expect_page() as new:
+        await pg.click("#bd .bd-card a.ck-x.bd-only")
+    tab = await new.value
+    tab_errors = []
+    tab.on("pageerror", lambda e: tab_errors.append(str(e)))
+    is_solo = "document.body?.classList.contains('solo') && document.querySelector('#ck-canvas .ck-card')"
+    await tab.wait_for_function(is_solo, timeout=15000)
+    check(await pg.evaluate("location.hash") == grid_hash, "Chat tab: the grid's ↗ leaves the grid where it is")
+    gone = await tab.evaluate("['#sidebar', '#tabbar', '#page-head', '#ck-side'].map((s) => getComputedStyle(document.querySelector(s)).display)")
+    check(gone == ["none"] * 4, f"Chat tab: no sidebar, tab bar, header or list {gone}")
+    await tab.wait_for_timeout(500)  # the view's fade-in
+    box = await tab.evaluate("(() => { const c = document.querySelector('#ck-canvas .ck-card').getBoundingClientRect(); return [c.left, c.top, c.width, c.bottom]; })()")
+    check(box[:2] == [0, 0] and box[2] == tab.viewport_size["width"] and box[3] == tab.viewport_size["height"], f"Chat tab: the chat fills the tab {box} {tab.viewport_size}")
+    title = await tab.title()
+    check(title.endswith(" · Knowledge") and "Agents" not in title, f"Chat tab: the browser tab has the chat's name ({title})")
+    await tab.keyboard.press("m")
+    check("solo=1" in await tab.evaluate("location.hash"), "Chat tab: the view keys do nothing")
+    check(await pg.evaluate("store.get('kn_last_chat')") == last, "Chat tab: other tabs keep their last chat")
+    await tab.click(".ck-home")
+    await tab.wait_for_function("document.body && !document.body.classList.contains('solo') && location.hash === '#/chats' && !!document.getElementById('sidebar')?.offsetParent", timeout=15000)
+    check(True, "Chat tab: its logo goes to the home page, with the sidebar back")
+    check(await tab.evaluate("document.querySelector('.brand-home').getAttribute('href')") == "/ui", "The sidebar's logo links to the home page")
+    await tab.close()
+    tab = await ctx.new_page()
+    tab.on("pageerror", lambda e: tab_errors.append(str(e)))
+    await tab.goto(f"{URL}/ui#/chats/{cid}?solo=1")
+    await tab.wait_for_function(is_solo, timeout=15000)
+    await tab.evaluate("window.close = () => {}")  # a browser that refuses: the app in this tab
+    await tab.keyboard.press("Tab")  # out of the text box: Esc there stays with the box
+    await tab.evaluate("document.activeElement.blur()")
+    await tab.keyboard.press("Escape")
+    await tab.wait_for_function("!document.body.classList.contains('solo') && location.hash === '#/chats'", timeout=5000)
+    check(True, "Chat tab: Esc closes it; a browser that refuses to close gives the app in the tab")
+    await tab.close()
+    await ctx.route("**/ui/api/board*", lambda r: r.fulfill(json={"items": []}))  # every chat under Earlier
+    await pg.goto(f"{URL}/ui#/chats?view=list")
+    await pg.reload()
+    await pg.wait_for_selector("#ck-history a.ck-chat", timeout=5000)
+    before = await pg.evaluate("location.hash")
+    async with ctx.expect_page() as new:
+        await pg.click("#ck-history a.ck-chat", modifiers=["Control"])
+    tab = await new.value
+    await tab.wait_for_function(is_solo, timeout=15000)
+    await tab.close()
+    check(await pg.evaluate("location.hash") == before, "List: Ctrl+click on a row opens the chat alone in a tab and this tab stays")
+    await pg.click("#ck-history a.ck-chat")
+    await pg.wait_for_function("document.body.classList.contains('in-chat') && !document.body.classList.contains('solo') && !!$('ck-side').offsetParent", timeout=5000)
+    check(True, "List: a plain click still opens the chat beside the list")
+    check(not errors + tab_errors, f"no page errors in a chat tab {(errors + tab_errors)[:2]}")
     await ctx.close()
 
 

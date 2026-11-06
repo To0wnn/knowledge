@@ -81,7 +81,7 @@ async function ckSummary() {
     else if (hit) ck.view = ckKey(ckWorkerCard(hit.m, hit.w).meta);
     else { // gone or never there: the list, without a dead chat in the URL
       ck.view = "";
-      if (shellRoute.view === "chats" && shellRoute.arg) { history.replaceState(history.state, "", "#/chats"); shellRoute = { ...shellRoute, arg: "" }; lastRoute.chats = "#/chats"; }
+      if (shellRoute.view === "chats" && shellRoute.arg) { document.body.classList.remove("solo"); history.replaceState(history.state, "", "#/chats"); shellRoute = { ...shellRoute, arg: "" }; lastRoute.chats = "#/chats"; }
       store.set("kn_last_chat", ""); // a link to a chat that is gone lands on the list, not on another chat
     }
   }
@@ -184,13 +184,13 @@ function ckList() {
     .sort((a, b) => (b.updated || 0) - (a.updated || 0));
   hist.replaceChildren();
   for (const c of rows.slice(0, 60)) {
-    const st = ckState(c), li = el("li"), b = el("button", `ck-chat ${st}`), out = (ck.board || []).find((i) => i.kind === "chat" && ckKey(i) === ckKey(c))?.outcome;
+    const st = ckState(c), li = el("li"), b = el("a", `ck-chat ${st}`), out = (ck.board || []).find((i) => i.kind === "chat" && ckKey(i) === ckKey(c))?.outcome;
     const meta = `${CK_STATE[st]} · ${AGENT_NAME[c.agent] || c.agent} · ${c.label} · ${ckShort(c.folder)} · ${ago(c.updated)}`;
-    b.type = "button"; b.dataset.row = `chat:${ckKey(c)}`;
+    b.href = `#/chats/${encodeURIComponent(c.id)}?solo=1`; b.dataset.row = `chat:${ckKey(c)}`; // a click opens it here; Ctrl, Cmd or the middle button in a tab of its own
     b.append(el("span", "ck-dot", ""), el("span", "ck-chat-title", c.title || "(no message yet)"), el("small", null, out || meta));
     if (out) b.title = meta;
     if (ckKey(c) === ck.view) b.setAttribute("aria-current", "true");
-    b.onclick = () => ckShow(c);
+    b.onclick = (e) => { if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return; e.preventDefault(); ckShow(c); };
     li.append(b); hist.append(li, ...ckSubRows(c));
   }
   $("ck-earlier-n").textContent = rows.length;
@@ -212,7 +212,7 @@ $("ck-side").addEventListener("keydown", (e) => { // up and down go through the 
 });
 // Open one chat (its route), or go back from it when `meta` is empty.
 function ckShow(meta) {
-  if (!meta) return goBack("#/chats");
+  if (!meta) return solo() ? ckCloseTab() : goBack("#/chats");
   go(`#/chats/${encodeURIComponent(ckCard(meta).meta.id)}`);
 }
 // The pill over the end of a chat you scrolled up in; it also says when more came in below.
@@ -230,6 +230,11 @@ document.addEventListener("keydown", (e) => {
   const pill = root?.querySelector(":scope > .ck-jump:not([hidden]) button");
   if (pill?.offsetParent) { e.preventDefault(); pill.click(); }
 });
+// × of a chat alone in its tab: the tab closes; a browser that refuses gets the app in this tab instead.
+function ckCloseTab() {
+  window.close();
+  setTimeout(() => go(startRoute(), true), 200);
+}
 function ckScrollBottom(card, force = false) {
   if (!card?.log) return;
   requestAnimationFrame(() => {
@@ -253,7 +258,11 @@ function ckLayout() {
     : "None of your pcs is online with a companion right now. Chats run on a pc through its knowledge companion (plugin 0.16 or newer).";
   if ($("ck-canvas").firstChild !== show || $("ck-canvas").childNodes.length !== 1) $("ck-canvas").replaceChildren(show);
   document.body.classList.toggle("in-chat", !!card && !$("cockpit").hidden && $("cockpit").dataset.mode === "chats");
-  if (card) ckScrollBottom(card, card.savedScrollTop == null);
+  if (card) {
+    ckScrollBottom(card, card.savedScrollTop == null);
+    card.x.title = solo() ? "Close this tab" : "Back to the list (the chat stays under Earlier)"; card.x.setAttribute("aria-label", solo() ? "Close this tab" : "Back to the list");
+  }
+  paintTitle();
   bdShow(); // the grid (mission.js) instead of the list, on #/chats on a desktop
 }
 
@@ -490,13 +499,14 @@ function ckCard(meta) {
   const name = el("strong"), where = el("span"), state = el("span", "ck-state"), x = el("button", "btn icon small quiet ck-x", "×");
   x.type = "button"; x.title = "Back to the list (the chat stays under Earlier)"; x.setAttribute("aria-label", "Back to the list");
   title.append(name, where);
-  const git = el("span", "ck-git-slot"), open = el("button", "btn icon small quiet ck-x bd-only", "↗"); // on a grid card: the full chat
-  open.type = "button"; open.title = "Open the full chat"; open.setAttribute("aria-label", "Open the full chat");
+  const git = el("span", "ck-git-slot"), open = el("a", "btn icon small quiet ck-x bd-only", "↗"); // on a grid card: the chat alone in a tab
+  open.href = `#/chats/${encodeURIComponent(meta.id)}?solo=1`; open.target = "_blank"; open.rel = "noopener"; open.title = "Open in a tab of its own"; open.setAttribute("aria-label", "Open in a tab of its own");
+  const home = el("a", "ck-home", "Knowledge"); home.href = "/ui"; home.title = "Knowledge: the home page"; // only a chat alone in its tab shows it
   const mark = el("span", "ck-mark", AGENT_MARK[meta.agent] || "+"), close = el("button", "btn small quiet ck-close", "Archive");
   const tok = el("span", "chip ck-tok"); tok.hidden = true;
   close.type = "button"; close.hidden = true;
   const headMeta = el("div", "ck-meta"); headMeta.append(git, tok); // its own line on a phone; inline on a wide screen
-  head.append(el("span", "ck-dot bd-only"), mark, title, headMeta, state, close, open, x);
+  head.append(home, el("span", "ck-dot bd-only"), mark, title, headMeta, state, close, open, x);
   const log = el("div", "ck-log"), form = el("form", "ck-form"), input = el("textarea"), btns = el("div", "ck-btns");
   log.setAttribute("aria-live", "polite"); log.setAttribute("role", "log");
   log.addEventListener("click", (e) => {
@@ -555,9 +565,8 @@ function ckCard(meta) {
   const asks = el("div", "ck-asks"); asks.hidden = true; asks.setAttribute("aria-live", "assertive");
   const subbar = el("div", "ck-subbar"); subbar.hidden = true; subbar.setAttribute("aria-label", "Subagents running now");
   root.append(head, log, jump, subbar, asks, form);
-  const card = { meta: { ...meta }, root, name, where, git, state, log, jump, jumpText, asks, form, input, stop, send, note, picks, mark, close, tok, subbar, queueBtn, forceBtn, more, branch, filesBox: files, files: [], mode: "", pick: null, after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
-  x.onclick = () => { store.set("kn_last_chat", ""); ckShow(null); }; // closed on purpose: the list stays empty
-  open.onclick = () => ckShow(card.meta);
+  const card = { meta: { ...meta }, x, openTab: open, root, name, where, git, state, log, jump, jumpText, asks, form, input, stop, send, note, picks, mark, close, tok, subbar, queueBtn, forceBtn, more, branch, filesBox: files, files: [], mode: "", pick: null, after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
+  x.onclick = () => { if (!solo()) store.set("kn_last_chat", ""); ckShow(null); }; // closed on purpose: the list stays empty
   input.addEventListener("keydown", (e) => {
     // Enter is a new line; Ctrl/Cmd+Enter presses the button (Send, Queue or Force)
     if (e.key === " " && e.ctrlKey && !mic.hidden) { e.preventDefault(); return mic.toggle(); }

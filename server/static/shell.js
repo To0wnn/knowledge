@@ -1,7 +1,7 @@
 // App shell: the sidebar (desktop; [ folds it to an icon rail, below 1000 px it is the rail unless opened), the
 // bottom tab bar and More sheet (phone), one page header per view, and a hash route per view: #/chats (Agents),
 // #/inbox/<item key> (the same view, that item marked; #/inbox is an older name of #/chats), #/chats/<chat id>, #/chats/worker/<project>/<ID> (follow a worker), #/chats?view=list (the attention list a desktop otherwise shows beside an open chat), #/tasks, #/tasks?view=flow, #/machines, #/notes, #/notes/<path>, #/notes?q=<search>, #/map, #/map/<path>,
-// #/changes, #/health, #/thispc. The URL is the only record of the view (refresh, back and forward work); an old
+// #/changes, #/health, #/thispc. #/chats/<id>?solo=1 is one chat alone, in a tab of its own (a grid card's ↗): no sidebar, no list, no header; its logo goes home, × closes the tab. The URL is the only record of the view (refresh, back and forward work); an old
 // #<note path> link becomes #/notes/<path>. Paths in routes are encoded per part (encPath), decoded here. The views themselves are app.js's, agents.js's and mission.js's; this file shows one
 // at a time and asks it to load. The sidebar, More sheet and theme are nav.js's. Uses app.js globals ($, el, store, decode, pushHash, ck, Graph, mapOn, current, …).
 "use strict";
@@ -20,6 +20,7 @@ const AGENT_VIEWS = ["inbox", "chats", "machines"];
 const agentsOff = () => me.agents === false;
 const phoneTabs = () => (agentsOff() ? ["tasks", "notes", "map", "changes"] : PHONE_TABS);
 const startRoute = () => (agentsOff() ? "#/notes" : "#/chats");
+const solo = () => document.body.classList.contains("solo");
 let shellRoute = { view: "", arg: "", q: new URLSearchParams() };
 
 // "#/notes/memory/x.md?a=b" -> {view: "notes", arg: "memory/x.md", q}; null for anything else.
@@ -63,7 +64,9 @@ function applyRoute() {
     if (r.arg) { ck.focus = r.arg; ck.focusAt = Date.now(); } else ck.hit = "";
     history.replaceState(history.state, "", "#/chats?view=list"); r = parseRoute(location.hash); // the item is in the list, not the grid
   }
-  if (r.arg !== "new") { lastRoute[r.view] = location.hash; try { sessionStorage.setItem("kn_routes", JSON.stringify(lastRoute)); } catch { /* blocked */ } }
+  // a chat alone in its tab is no place to come back to and leaves the other tabs' last chat alone
+  document.body.classList.toggle("solo", r.view === "chats" && !!r.arg && r.q.has("solo"));
+  if (r.arg !== "new" && !solo()) { lastRoute[r.view] = location.hash; try { sessionStorage.setItem("kn_routes", JSON.stringify(lastRoute)); } catch { /* blocked */ } }
   const [home] = VIEWS[r.view], changed = r.view !== shellRoute.view, first = !shellRoute.view;
   shellRoute = r;
   document.body.dataset.view = r.view;
@@ -89,7 +92,7 @@ function applyRoute() {
   else if (r.view === "chats") {
     const c = ck.chats.find((x) => x.id === r.arg || ckKey(x) === r.arg), hit = !c && ckFindWorker(r.arg);
     ck.view = c ? ckKey(c) : hit ? ckKey(ckWorkerCard(hit.m, hit.w).meta) : r.arg;
-    if (/^[0-9a-f]{12}$/.test(r.arg || "")) store.set("kn_last_chat", r.arg); // the list opens it again next time
+    if (/^[0-9a-f]{12}$/.test(r.arg || "") && !solo()) store.set("kn_last_chat", r.arg); // the list opens it again next time
   }
   ckLayout();
   if (agents) {
@@ -129,7 +132,7 @@ function applyRoute() {
 window.addEventListener("popstate", applyRoute);
 // A plain click on a route link goes through go(), so its history entry counts for Back (a new tab still works).
 document.addEventListener("click", (e) => {
-  const a = e.target.closest('a[href^="#/"]');
+  const a = e.target.closest('a[href^="#/"]:not([target])');
   if (!a || e.defaultPrevented || e.button || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
   e.preventDefault();
   keepScroll();
@@ -137,6 +140,14 @@ document.addEventListener("click", (e) => {
   go(back && a.getAttribute("href") === `#/${view}` ? back : a.getAttribute("href")); // the sidebar: where you were in that view
 });
 
+// The browser tab: the open chat's name or the view, "(n)" in front for what needs you (as Gmail), so tabs tell apart.
+let needsN = 0;
+function paintTitle() {
+  if (!shellRoute.view) return;
+  const card = document.body.classList.contains("in-chat") && ck.cards.get(ck.view);
+  const n = card ? +(ckState(card.meta) === "needs") : needsN;
+  document.title = `${n ? `(${n}) ` : ""}${card ? ckTitle(card.meta, card) : VIEWS[shellRoute.view][2]} · Knowledge`;
+}
 // One header for every view: section label and title, the view's own actions on the right.
 function paintHead() {
   const r = shellRoute; if (!r.view) return;
@@ -144,7 +155,7 @@ function paintHead() {
   $("crumb").textContent = sec === "Knowledge" ? `Knowledge · ${project === ALL ? "all projects" : shown(project)}` : sec;
   $("crumb").hidden = sec === title; // "Agents › Agents" says nothing twice
   $("title").textContent = title;
-  document.title = `${title} · Knowledge`;
+  paintTitle();
   for (const a of $("head-actions").querySelectorAll("[data-views]")) a.hidden = !a.dataset.views.split(" ").includes(r.view);
   for (const a of document.querySelectorAll("[data-nav]")) {
     if (a.dataset.nav === r.view) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
@@ -166,6 +177,7 @@ function setAgentProject(p) {
 function inboxCount(items) {
   const n = items.filter((i) => i.col === "needs").length;
   for (const b of document.querySelectorAll(".inbox-count")) b.textContent = n || "";
+  needsN = n; paintTitle();
   needsNotify(items);
 }
 // Browser notifications (Settings, per browser): each new Needs-you item while the tab is out of view (three, then one

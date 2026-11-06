@@ -469,11 +469,11 @@ function bdRender() {
       if (!w) {
         w = el("article", "bd-card"); w.tabIndex = 0; w.dataset.id = c.id;
         bd.wraps.set(k, w);
-        w.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === w) { e.preventDefault(); ckShow(card.meta); } });
+        w.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === w) { e.preventDefault(); card.openTab.click(); } });
       }
       if (card.root.parentNode !== w) w.append(card.root); // back from the full chat (ckLayout moved it there)
       w.className = `bd-card ${st}`; w.hidden = f.shut;
-      w.setAttribute("aria-label", `${ckTitle(c, card)}: ${CK_STATE[st]}, ${AGENT_NAME[c.agent] || c.agent} on ${c.label}, ${ckShort(c.folder)}. Enter opens the full chat, Esc goes back to the grid`);
+      w.setAttribute("aria-label", `${ckTitle(c, card)}: ${CK_STATE[st]}, ${AGENT_NAME[c.agent] || c.agent} on ${c.label}, ${ckShort(c.folder)}. Enter opens it in a tab of its own, Esc goes back to the grid`);
       order.push(w);
     }
   }
