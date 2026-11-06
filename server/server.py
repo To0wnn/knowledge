@@ -785,6 +785,19 @@ def read_if_there(full: Path) -> bytes | None:
         return None
 
 
+def sync_dir(folder: Path):
+    """Make a rename in this folder survive a crash (token_store.sync_dir on the clients)."""
+    if os.name != "nt":
+        try:
+            fd = os.open(folder, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        except OSError:  # some filesystems refuse it; the rename already happened
+            pass
+
+
 def replace_if_unchanged(full: Path, expected: bytes | None, data: bytes) -> bool:
     """Atomically replace `full` with `data`, but only if it still holds `expected` (None = must not exist).
 
@@ -797,6 +810,8 @@ def replace_if_unchanged(full: Path, expected: bytes | None, data: bytes) -> boo
     try:
         with os.fdopen(fd, "wb") as f:  # inside the try: a full disk must not leave a .knowledge-* file behind
             f.write(data)
+            f.flush()
+            os.fsync(f.fileno())  # or a power cut can leave the renamed file empty
         current = read_if_there(full)
         if current != expected:
             os.unlink(tmp)
@@ -804,6 +819,7 @@ def replace_if_unchanged(full: Path, expected: bytes | None, data: bytes) -> boo
         os.chmod(tmp, full.stat().st_mode & 0o777 if full.exists() else 0o644)  # mkstemp would leave new files 0600
         writing(full)
         os.replace(tmp, full)
+        sync_dir(full.parent)
         return True
     except BaseException:
         if os.path.exists(tmp):
@@ -3019,8 +3035,11 @@ def write_json(path: Path, data):
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".knowledge-")
     with os.fdopen(fd, "w") as f:
         json.dump(data, f, indent=2, sort_keys=True)
+        f.flush()
+        os.fsync(f.fileno())  # or a power cut can leave tokens.json empty, and then nobody gets in
     os.chmod(tmp, 0o600)
     os.replace(tmp, path)
+    sync_dir(path.parent)
 
 
 _json_cache: dict[Path, tuple[int, int, object]] = {}

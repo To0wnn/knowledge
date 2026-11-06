@@ -2381,6 +2381,15 @@ def main():
         f.write_text("native\n")
         assert not srv.replace_if_unchanged(f, b"stale\n", b"server\n") and f.read_text() == "native\n"
         assert srv.replace_if_unchanged(f, b"native\n", b"server\n") and f.read_text() == "server\n"
+        calls, real = [], (os.fsync, os.replace)  # the data is on disk before the rename, the rename after it
+        os.fsync, os.replace = (lambda fd: (calls.append("fsync"), real[0](fd))[1]), (lambda a, b: (calls.append("replace"), real[1](a, b))[1])
+        try:
+            assert srv.replace_if_unchanged(f, b"server\n", b"durable\n")
+            srv.write_json(f.parent / "durable.json", {})
+        finally:
+            os.fsync, os.replace = real
+        assert calls.count("replace") == 2 and all(calls[i - 1] == "fsync" for i, c in enumerate(calls) if c == "replace") \
+            and (os.name == "nt" or calls[-1] == "fsync"), calls
         assert not list(mem.glob(".knowledge-*")), "temp files must not be left behind"
         # Lint runs on the in-memory index (the temp MEMORY.md points to 120 files that do not exist).
         lint_out = call("knowledge_lint", {})[1]
