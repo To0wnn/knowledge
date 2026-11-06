@@ -144,16 +144,27 @@ def main():
             print("-- the disk stops while a write is busy")
             import threading
             flag.touch()
-            writer = threading.Thread(target=call, args=(url, token, "knowledge_edit", {"path": "memory/project_x.md", "old_string": "first", "new_string": "second"}, 60), daemon=True)
+            edit = {"path": "memory/project_x.md", "old_string": "first", "new_string": "second"}
+            answers = []
+            # The client gives up after 2 s, as a real one does; the server keeps the write.
+            writer = threading.Thread(target=lambda: answers.append(call(url, token, "knowledge_edit", edit, 2)), daemon=True)
             writer.start()
             time.sleep(1)
             st, sec = get(url + "/health", 3)
             assert st == 200, "/health gives no answer while a write hangs: the event loop is blocked"
             print(f"ok   /health while a write hangs: {st} in {sec * 1000:.0f} ms")
-            flag.unlink()
             writer.join(30)
+            flag.unlink()
             wait_for("recovery after the write", lambda: get(url + "/health?disk=1", 2)[0] == 200)
             print("ok   back after the write finished")
+            assert answers and answers[0][0] == 0, f"the client was meant to time out: {answers}"
+            wait_for("the write to land", lambda: "second" in call(url, token, "knowledge_read", {"path": "memory/project_x.md"})[1])
+            print("ok   the write landed after its client gave up")
+            said = call(url, token, "knowledge_edit", edit)[1]
+            assert "seems done already" in said, said
+            text = json.loads(call(url, token, "knowledge_read", {"path": "memory/project_x.md"})[1])["result"]["content"][0]["text"]
+            assert text.count("second") == 1, text
+            print("ok   the client's retry hears the change is already there")
         finally:
             if flag.exists():
                 flag.unlink()
