@@ -1161,6 +1161,17 @@ async def board(browser, devices, secret: str) -> None:
     shows = "$('bd') && !$('bd').hidden && getComputedStyle($('ck-chats')).display === 'none' && getComputedStyle($('bd-world')).display === 'grid'"
     await pg.wait_for_function(shows, timeout=5000)
     check(await pg.evaluate("!$('chats-mode') && !$('bd-tools') && !$('bd-mini')"), "Grid: #/chats is the grid, without a toggle or canvas tools")
+    kept = await pg.evaluate("""(() => { const keep = [ck.chats, ck.board, agentProject]; agentProject = ''; ck.board = [];
+      const chat = (id, raised) => ({ id, machine: 'x', label: 'pc', folder: '/f', project: 'p', agent: 'claude', status: 'running', raised });
+      ck.chats = [chat('a', 2), chat('b', 1)]; bdRender();
+      const card = ck.cards.get('x/b'); card.input.disabled = false; card.input.value = 'half typed'; card.input.focus(); card.input.setSelectionRange(4, 4);
+      for (let i = 0; i < 200; i++) card.log.append(el('p', '', 'line'));
+      card.log.scrollTop = 500; const top = card.log.scrollTop;
+      ck.chats = [chat('a', 2), chat('b', 3)]; bdRender();
+      const first = [...$('bd-world').querySelectorAll('.bd-card')][0] === bd.wraps.get('x/b');
+      const out = [first, document.activeElement === card.input, card.input.selectionStart, card.log.scrollTop === top, top > 0];
+      [ck.chats, ck.board, agentProject] = keep; ckDrop('x/a'); ckDrop('x/b'); bdRender(); return out; })()""")
+    check(kept == [True, True, 4, True, True], f"Grid: a card that moves up keeps its focus, cursor and scroll position {kept}")
     for old in ("grid", "board"):
         await route(pg, f"#/chats?view={old}")
         check(await pg.evaluate(shows), f"Grid: an old ?view={old} link opens the grid")

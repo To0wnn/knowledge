@@ -428,6 +428,14 @@ function bdChats() {
     .sort((a, b) => (b.c.raised || 0) - (a.c.raised || 0));
 }
 
+// A re-insert resets a node's focus and scroll position: you may be typing or reading in the card that moves.
+function bdMove(world, n, before) {
+  const active = n.contains(document.activeElement) ? document.activeElement : null, log = n.querySelector(".ck-log"), top = log?.scrollTop;
+  world.insertBefore(n, before);
+  if (log) log.scrollTop = top;
+  active?.focus({ preventScroll: true });
+}
+
 // Frames and cards are kept per project and per chat: a re-render (every summary) moves them, never rebuilds them, so
 // the focus and a half-typed message stay.
 function bdRender() {
@@ -470,8 +478,8 @@ function bdRender() {
     }
   }
   for (const [k, w] of bd.wraps) if (!ck.cards.has(k) || !order.includes(w)) { w.remove(); bd.wraps.delete(k); }
-  // DOM order = layout order, so Tab walks project by project; only moved nodes are touched (a move drops the focus)
-  order.forEach((n, i) => { if (world.children[i] !== n) world.insertBefore(n, world.children[i] || null); });
+  // DOM order = layout order, so Tab walks project by project; only moved nodes are touched
+  order.forEach((n, i) => { if (world.children[i] !== n) bdMove(world, n, world.children[i] || null); });
   if (!rows.length) world.replaceChildren(el("p", "bd-none muted", ck.chats.length ? "No chats in this project." : "No chats yet: start one with + New chat."));
   else world.querySelector(".bd-none")?.remove();
   bdGridSize();
