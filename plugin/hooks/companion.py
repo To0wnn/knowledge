@@ -131,7 +131,11 @@ def load(name: str, default):
     except (OSError, ValueError) as e:
         if name not in DAMAGED:
             DAMAGED.add(name)  # first: log() reads activity.json through here
-            text = f"Companion state {name} is damaged, so its defaults apply: check this pc's settings"
+            try:  # the next save replaces it, and what it held may still be readable by hand
+                backup(STATE / name)
+            except OSError:
+                pass
+            text = f"Companion state {name} is damaged, so its defaults apply (a copy is in {BACKUPS}): check this pc's settings"
             print(f"knowledge companion: {text} ({e})", file=sys.stderr, flush=True)
             hook_status.record("companion", "damaged state", f"{text} ({e})")  # reaches the Tasks tab
             try:
@@ -1200,6 +1204,8 @@ def run_workers(ready: list, tok: str, now: float, only: str = "") -> dict:
                 log("error", f"{AGENTS[t['agent']][0]}: no worker for {t['id']}", why)
             if rec:
                 ws[key] = rec
+                with LOCK:  # at once: killed before the save at the end, nothing knows it runs and its lease runs out
+                    save("workers.json", ws)
                 out["started"].append({"id": t["id"], "project": t["project"], "agent": t["agent"]})
                 log("worker", f"{AGENTS[t['agent']][0]}: started a worker for {t['id']}", rec["open"])
                 continue
@@ -2487,6 +2493,20 @@ def main(argv: list):
                 assert usage("claude", {"k": {"agent": "claude", "log": str(f)}}, now) == 93.0
             finally:
                 agent_hooks.limits.claude_used = real
+        # A started worker is on disk before the next task starts: killed in between, a restart still knows it.
+        kept = {k: g[k] for k in ("settings", "usage_info", "check_workers", "why_not", "installed", "start_worker", "log", "save", "load", "workers")}
+        saved, seen = {}, []
+        def second(t, *a):
+            seen.append(dict(saved.get("workers.json") or {}))
+            return {"id": t["id"], "agent": "claude", "status": "running", "open": ""}, ""
+        g.update(settings=lambda: {}, usage_info=lambda a, ws, now: None, check_workers=lambda *a: None, why_not=lambda *a: "", installed=lambda a: a == "claude",
+                 start_worker=second, log=lambda *a: None, load=lambda n, d: d, save=lambda n, d: saved.update({n: dict(d)}),
+                 workers=type("W", (), {"game_session": staticmethod(lambda: "")}))
+        try:
+            run_workers([{"project": "p", "id": "A", "agent": "claude"}, {"project": "p", "id": "B", "agent": "claude"}], "", 1000)
+        finally:
+            g.update(kept)
+        assert "p/A" in seen[1] and set(saved["workers.json"]) == {"p/A", "p/B"}, seen
         # A failed start gives the task back at once.
         did = []
         g.update(claim=lambda t, tok, s, start="": did.append(("claim", s)) or "", release=lambda t, tok: did.append(("release",)))
@@ -2703,7 +2723,11 @@ def main(argv: list):
         hook_status.ERRORS = Path(tmp_state) / "hook-errors.jsonl"  # a damaged state file says so, once; a missing one does not
         STATE.mkdir(parents=True, exist_ok=True); (STATE / "damaged.json").write_text("", encoding="utf-8")
         assert load("gone.json", {"d": 1}) == {"d": 1} and not hook_status.ERRORS.exists()
+        real_backups, globals()["BACKUPS"] = BACKUPS, Path(tmp_state) / "backups"
+        (STATE / "damaged.json").write_text("{half", encoding="utf-8")
         assert load("damaged.json", {"d": 1}) == {"d": 1} and load("damaged.json", {"d": 1}) == {"d": 1}
+        assert [f.read_text(encoding="utf-8") for f in BACKUPS.rglob("*damaged.json")] == ["{half"], "the next save replaces it: a copy stays"
+        globals()["BACKUPS"] = real_backups
         said = [a for a in load("activity.json", []) if "damaged.json is damaged" in a["text"]]
         assert len(said) == 1 and said[0]["kind"] == "error" and "damaged.json" in hook_status.ERRORS.read_text(encoding="utf-8"), said
         calls, real_sync = [], (os.fsync, os.replace)  # the data is on disk before the rename, the rename after it
