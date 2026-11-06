@@ -222,6 +222,11 @@ async def search(browser, secret: str) -> None:
           "+ Add → Add a source opens (menu closed)")
     await pg.click("#ingest-cancel")
     check(not await pg.locator("#ingest-dialog").is_visible(), "the source dialog closes")
+    # a click beside an open menu closes it (every details.menu: the user menu stayed open before)
+    await pg.click("#user-menu summary")
+    check(await pg.locator("#user-menu").get_attribute("open") is not None, "the user menu opens")
+    await pg.mouse.click(8, 8)  # the page's corner, outside every menu
+    check(await pg.locator("#user-menu").get_attribute("open") is None, "a click beside the user menu closes it")
     check(not errors, f"no page errors while searching {errors[:2]}")
     await ctx.close()
 

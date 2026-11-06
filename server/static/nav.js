@@ -46,6 +46,10 @@ function closeSide() {
 navEl("collapse").onclick = toggleRail;
 wide.addEventListener("change", () => { sideOpen = false; paintRail(); });
 document.addEventListener("click", (e) => { if (sideOpen && !navEl("sidebar").contains(e.target)) { sideOpen = false; paintRail(); } });
+// Every open menu (user, + Add, a row's ⋯, the model chip) closes on a click outside it or on one of its own actions.
+document.addEventListener("click", (e) => {
+  for (const d of document.querySelectorAll("details.menu[open]")) if (!d.contains(e.target) || e.target.closest(".menu-list a, .menu-list button")) d.open = false;
+});
 paintRail();
 
 // Sign out: what was typed but not sent stays with the person, not with the browser (agents.js ckDrafts).

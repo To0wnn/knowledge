@@ -394,7 +394,7 @@ function ckItem(i) {
       later.push([text, "Take it off the list for a while", () => ckDo("/ui/api/board/dismiss", { key: i.key, sig: i.sig, until: Math.round(until()) })]);
     later.push(["Dismiss", "Take it off the list until it changes again", () => ckDo("/ui/api/board/dismiss", { key: i.key, sig: i.sig })]);
   }
-  if (i.kind === "chat" && i.col !== "running") later.push(["Archive", "Off the list (under Earlier, Archived); a new message opens it again",
+  if (i.kind === "chat" && i.col !== "running") later.push(["Archive", "The agent records it in the memos, then it goes off the list (under Earlier, Archived); a new message opens it again",
     () => ckDo("/ui/api/chat/close", { machine: i.machine, id: i.id, closed: true })]);
   if (i.kind === "chat" && i.col === "running") act("Stop", "Stop this turn", () => ckDo("/ui/api/chat/stop", { machine: i.machine, id: i.id }));
   if (later.length) acts.append(ckMore(later, i.title));
@@ -658,11 +658,16 @@ function ckCard(meta) {
     } catch (err) { note.className = "ck-note bad"; note.textContent = err.message; }
     ckPaint(card); await ckPoll(card); clearTimeout(ck.timer); ck.timer = setTimeout(ckTick, 1500);
   };
-  close.onclick = async () => { // archive: off the board and the list (Archived); a new message opens it again
+  close.onclick = async () => { // archive: the agent records the chat in the memos, then it goes off the board and the list (Archived); a new message opens it again
     const closed = !card.meta.closed;
     try {
-      await api("/ui/api/chat/close", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, closed }) });
-      card.meta.closed = closed; ck.summaryAt = 0;
+      const r = await api("/ui/api/chat/close", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, closed }) });
+      ck.summaryAt = 0;
+      if (r.recording) { // the agent records the chat in the memos first; the server closes it when that turn ends
+        toast("Recording this chat in the memos first; it is archived when the agent is done", false);
+        card.meta.status = "queued"; ckPaint(card); await ckPoll(card); clearTimeout(ck.timer); ck.timer = setTimeout(ckTick, 1500); return;
+      }
+      card.meta.closed = closed;
       if (closed) {
         toast("Archived: under Archived in the list; a new message opens it again", false);
         if (store.get("kn_last_chat") === card.meta.id) store.set("kn_last_chat", "");
@@ -877,9 +882,10 @@ function ckPicker(card) {
   menu.append(sum, panel);
   card.picks.replaceChildren(menu, ...(draft ? [ckDraftFolder(card)] : []));
 }
-// A click outside (or Esc) closes the model panel and the Snooze menu and drops the mark a link put on an item.
+// Esc closes the model panel and the Snooze menu (a click outside: nav.js, for every menu); a click or Esc drops the
+// mark a link put on an item.
 function ckUnfold(target) {
-  for (const d of document.querySelectorAll("details.ck-model[open], details.ck-snooze[open]")) if (!target || !d.contains(target)) d.open = false;
+  if (!target) for (const d of document.querySelectorAll("details.ck-model[open], details.ck-snooze[open]")) d.open = false;
   const hit = document.querySelector("#ck-list .ck-item.hit");
   if (hit && (!target || !hit.contains(target))) { hit.classList.remove("hit"); ck.hit = ""; }
 }
@@ -974,7 +980,7 @@ function ckPaint(card) {
   card.tok.textContent = [m.ctx && `${ckNum(m.ctx)} context`, m.used && `${ckNum(m.used)} used`].filter(Boolean).join(" · ");
   card.tok.title = "Context: what the agent sent for its last step. Used: every token of this chat so far, cache reads included.";
   card.close.hidden = busy; card.close.textContent = m.closed ? "Open again" : "Archive";
-  card.close.title = m.closed ? "Back in the list" : "Off the list (under Earlier, Archived); a new message opens it again";
+  card.close.title = m.closed ? "Back in the list" : "The agent records this chat in the memos, then it goes off the list (under Earlier, Archived); a new message opens it again";
   card.name.textContent = ckTitle(m, card);
   card.branch.hidden = true;
   card.where.textContent = `${AGENT_NAME[m.agent] || m.agent} · ${m.label} · ${ckShort(m.folder)}${m.project ? ` (${m.project})` : ""}${m.worktree ? ` · branch chat/${m.id}` : ""}`;
