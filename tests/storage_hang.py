@@ -177,7 +177,8 @@ def main():
     print("ok storage hang")
 
 
-if len(sys.argv) > 1 and sys.argv[1] == "--fuse":
-    serve_fuse(*sys.argv[2:5])
-else:
-    main()
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--fuse":
+        serve_fuse(*sys.argv[2:5])
+    else:
+        main()

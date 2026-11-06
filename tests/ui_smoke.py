@@ -1779,11 +1779,15 @@ async def chat_tabs(browser, secret: str) -> None:
     await tab.goto(f"{URL}/ui#/chats/{cid}?solo=1")
     await tab.wait_for_function(is_solo, timeout=15000)
     await tab.evaluate("window.close = () => {}")  # a browser that refuses: the app in this tab
-    await tab.keyboard.press("Tab")  # out of the text box: Esc there stays with the box
-    await tab.evaluate("document.activeElement.blur()")
+    await tab.wait_for_function("document.activeElement === document.querySelector('#ck-canvas .ck-form textarea')", timeout=5000)
+    await tab.evaluate("(() => { const c = ck.cards.get(ck.view); c.files = [{name: 'x'}]; })()")
     await tab.keyboard.press("Escape")
+    await tab.wait_for_timeout(300)
+    check("solo=1" in await tab.evaluate("location.hash"), "Chat tab: Esc with a file attached does not close it (a file is not kept)")
+    await tab.evaluate("ck.cards.get(ck.view).files = []")
+    await tab.keyboard.press("Escape")  # from the text box, where a new tab starts
     await tab.wait_for_function("!document.body.classList.contains('solo') && location.hash === '#/chats'", timeout=5000)
-    check(True, "Chat tab: Esc closes it; a browser that refuses to close gives the app in the tab")
+    check(True, "Chat tab: Esc in its text box closes it; a browser that refuses to close gives the app in the tab")
     await tab.close()
     tab = await ctx.new_page()
     tab.on("pageerror", lambda e: tab_errors.append(str(e)))
