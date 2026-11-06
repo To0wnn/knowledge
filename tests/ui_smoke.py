@@ -1540,6 +1540,33 @@ async def live_refresh(browser, secret: str) -> None:
     await ctx.close()
 
 
+async def two_windows(browser, secret: str) -> None:
+    """Each window keeps its own project, also through a refresh (a deploy reloads every open window); a new window
+    starts at the last one picked. A second browser shares nothing. Read-only: the choice lives in the browser."""
+    ctx, a, errors = await page(browser, secret)
+    await a.wait_for_function("typeof switchProject === 'function' && PROJECTS.length > 1")
+    first, second = await a.evaluate("[project, PROJECTS.find((p) => p !== project)]")  # a fresh browser starts at first
+    b = await ctx.new_page()
+    await b.goto(URL + "/ui")
+    await b.wait_for_function("typeof switchProject === 'function' && PROJECTS.length > 1")
+    check(await b.evaluate("project") == first, f"a new window starts at the last project picked ({first})")
+    await a.select_option("#projects", second)
+    check(await b.evaluate("project") == first, "picking a project leaves the other window alone")
+    await b.reload()
+    await b.wait_for_function("typeof switchProject === 'function' && PROJECTS.length > 1")
+    check(await b.evaluate("project") == first, "a refresh keeps this window's project, not the other window's")
+    check(await comes_true(b, "(v) => data.nodes.length > 0 && $('projects').value === v", first), "the picker shows this window's project after a refresh")
+    await a.reload()
+    await a.wait_for_function("typeof switchProject === 'function' && PROJECTS.length > 1")
+    check(await a.evaluate("project") == second, "the other window keeps its own project through a refresh too")
+    ctx2, other, errors2 = await page(browser, secret)
+    await other.wait_for_function("typeof switchProject === 'function' && PROJECTS.length > 1")
+    check(await other.evaluate("project") == first, "a second browser does not follow the first")
+    check(not errors and not errors2, f"no page errors with two windows: {errors + errors2}")
+    await ctx2.close()
+    await ctx.close()
+
+
 # The one lamp (0.37): amber only for what needs you, Send wakes up with text, the map and the notes overview get the
 # width, offline pcs fold, and a project without tasks shows the work elsewhere. Read-only: the page's own DOM only.
 async def one_lamp(browser, secret: str) -> None:
@@ -2139,6 +2166,24 @@ async def settings(browser, secret: str) -> None:
         await pg.press(box, "Enter")
         await pg.wait_for_timeout(300)
         check(not stopped, "Settings: Enter on an empty box does not stop the agent's step")
+    # A shortcut per person: picked by pressing it, a key in use refused, the old one dead, the labels follow, Default undoes it.
+    await pg.wait_for_selector("[data-action=new_chat]", timeout=5000)
+    await pg.click("[data-action=new_chat]")
+    await pg.keyboard.press("Alt+KeyM")
+    check(posted[-1] != {"keys": {"new_chat": "Alt+M"}} and await pg.inner_text("[data-action=new_chat]") == "Press the keys…", "Settings: a key in use is refused and it keeps listening")
+    await pg.keyboard.press("KeyT")
+    check(await pg.inner_text("[data-action=new_chat]") == "Press the keys…", "Settings: a key needs Ctrl or Alt")
+    await pg.keyboard.press("Alt+KeyT")
+    await pg.wait_for_function("keyOf('new_chat') === 'Alt+T'", timeout=5000)
+    check(posted[-1] == {"keys": {"new_chat": "Alt+T"}} and await pg.get_attribute("#ck-new", "title") == "New chat (Alt+T)", f"Settings: a new shortcut saves and shows {posted[-1]}")
+    check(await pg.evaluate("[keyHit(new KeyboardEvent('keydown', {key: 't', code: 'KeyT', altKey: true}), 'new_chat'), keyHit(new KeyboardEvent('keydown', {key: 'n', code: 'KeyN', altKey: true}), 'new_chat')]") == [True, False], "Settings: the new key works, the old one no longer")
+    check(await pg.evaluate("keyHit(new KeyboardEvent('keydown', {key: '@', code: 'Digit2', altKey: true, shiftKey: true}), 'digits_move')"), "Keys: a digit counts by position, also with Shift")
+    await pg.click(".set-key:has([data-action=new_chat]) .btn.quiet")
+    await pg.wait_for_function("keyOf('new_chat') === 'Alt+N'", timeout=5000)
+    check(posted[-1] == {"keys": {}}, "Settings: Default takes a shortcut back")
+    await pg.click("[data-action=rail]")
+    await pg.keyboard.press("Escape")
+    check(await pg.inner_text("[data-action=rail]") == "Alt+[" and posted[-1] == {"keys": {}}, "Settings: Esc cancels picking a key")
     await pg.evaluate("me.prefs.start_page = 'tasks'; location.hash = ''")
     check(await pg.evaluate("startRoute()") == "#/tasks", "Settings: the start page decides where the app opens")
     check(not errors, f"no page errors in settings {errors[:2]}")
@@ -2173,6 +2218,7 @@ async def main() -> None:
         await board(browser, p.devices, secret)
         await follow(browser, p.devices, secret)
         await live_refresh(browser, secret)
+        await two_windows(browser, secret)
         await update_button(browser, secret)
         await design_system(browser, p.devices, secret)
         await one_lamp(browser, secret)

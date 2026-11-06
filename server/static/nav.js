@@ -8,6 +8,12 @@ let navProjects = null; // the signed-in person's projects (/ui/api/me): the lin
 const navEl = (id) => document.getElementById(id);
 const navStore = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
   set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* blocked: not remembered */ } } };
+// The picked project belongs to this window, so a refresh or a deploy's reload never takes over another window's pick;
+// the last one picked anywhere is where a new window starts.
+const navProject = {
+  get() { try { const p = sessionStorage.getItem("kn_project") || localStorage.getItem("kn_project") || "homelab"; sessionStorage.setItem("kn_project", p); return p; } catch { return "homelab"; } },
+  set(p) { try { sessionStorage.setItem("kn_project", p); localStorage.setItem("kn_project", p); } catch { /* blocked: this window still shows it */ } },
+};
 
 // Theme: Auto (the system's), Light or Dark; theme.js applies the stored pick before the page paints. The sidebar has
 // it as an icon, the More sheet as a labelled button. The app listens for "kn-theme" to recolour the map.
@@ -59,8 +65,51 @@ for (const a of document.querySelectorAll('a[href="/ui/logout"]')) a.addEventLis
 navEl("more-btn").onclick = () => navEl("more-sheet").showModal();
 navEl("more-sheet").addEventListener("click", (e) => { if (e.target === navEl("more-sheet") || e.target.closest("a")) navEl("more-sheet").close(); });
 
+// Keys per person (Settings; /ui/api/me/prefs "keys" holds what differs from these). "Ctrl" is also Cmd, "#" any digit, "Arrow" any arrow.
+// The last field: only with the agent views. Fixed: Esc, Enter, arrows without Alt, the image viewer's keys: they do what such a key does everywhere.
+const KEY_ACTIONS = [
+  ["palette", "Ctrl+K", "Search notes, chats and tasks"],
+  ["notes_search", "Alt+/", "Search notes only"],
+  ["chats", "Alt+A", "Agents view", true],
+  ["new_chat", "Alt+N", "New chat", true],
+  ["map", "Alt+M", "Map or notes"],
+  ["rail", "Alt+[", "Fold the sidebar"],
+  ["digits", "Alt+#", "Pick a project; on the grid show a part (0 = all)"],
+  ["digits_move", "Alt+Shift+#", "On the grid: move a card to a part", true],
+  ["arrows", "Alt+Arrow", "On the grid: to the next card that way", true],
+  ["queue", "Alt+Enter", "Queue a message after this turn", true],
+  ["force", "Ctrl+Shift+Enter", "Force: stop the step, then this message", true],
+  ["speak", "Ctrl+Space", "Speak", true],
+  ["jump", "Ctrl+End", "Jump to the end of a chat", true],
+  ["edit", "Alt+E", "Edit a note"],
+  ["save", "Ctrl+S", "Save a note"],
+  ["fit", "Alt+F", "Fit the task map"],
+];
+let keyPrefs = {};
+const keyDefault = (action) => KEY_ACTIONS.find((a) => a[0] === action)[1];
+const keyOf = (action) => keyPrefs[action] || keyDefault(action);
+const keyShow = (action) => keyOf(action).replace(/#$/, "1-9").replace(/Arrow$/, "arrows");
+// A letter as the layout has it, else by position: Alt+N on a Mac is a dead key, Shift changes the character of a digit.
+function keyCombo(e) {
+  const c = e.code, name = /^[a-z]$/i.test(e.key) ? e.key.toUpperCase() : /^Key[A-Z]$/.test(c) ? c[3] : /^(?:Digit|Numpad)\d$/.test(c) ? c.at(-1)
+    : c === "BracketLeft" ? "[" : c === "Slash" ? "/" : e.key === " " ? "Space" : e.key.length === 1 ? e.key.toUpperCase() : e.key;
+  return `${e.ctrlKey || e.metaKey ? "Ctrl+" : ""}${e.altKey ? "Alt+" : ""}${e.shiftKey ? "Shift+" : ""}${name}`;
+}
+const keyFamily = (combo) => combo.replace(/\+\d$/, "+#").replace(/Arrow\w+$/, "Arrow");
+const keyHit = (e, action) => keyFamily(keyCombo(e)) === keyOf(action);
+// An element with data-key: {key} in its title, or else its text, is the action's key now.
+function keyLabels(root = document) {
+  for (const n of root.querySelectorAll("[data-key]")) {
+    const prop = n.title ? "title" : "textContent";
+    n.dataset.keyText ||= n[prop];
+    n[prop] = n.dataset.keyText.replace("{key}", keyShow(n.dataset.key));
+  }
+}
+keyLabels();
+
 // Who is signed in (/ui/api/me): the user menu, and what an admin sees that others do not.
 function navMe(me) {
+  keyPrefs = me.prefs?.keys || {}; keyLabels();
   document.body.classList.toggle("no-agents", me.agents === false); // no token with remote control on: the knowledge views only
   for (const a of document.querySelectorAll(".admin-link")) { // non-admins manage their own tokens there
     (a.querySelector(".label") || a).textContent = me.admin ? "Admin" : "My tokens & projects"; a.title = me.admin ? "Admin" : "My tokens & projects";
@@ -92,9 +141,9 @@ if (navPage) {
   navEl("live")?.classList.add("on");
   document.addEventListener("keydown", (e) => {
     // on admin/help (no palette there) Ctrl/Cmd+K goes to the app's search, as the button says
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k" && typeof openPalette !== "function") { e.preventDefault(); location.href = "/ui#/notes?q="; return; }
-    if (e.target.closest("input, textarea, select, [contenteditable]") || !e.altKey || e.ctrlKey || e.metaKey) return;
-    if (typeof openPalette !== "function" && e.code === "BracketLeft") { e.preventDefault(); toggleRail(); } // the app has appKey
+    if (keyHit(e, "palette") && typeof openPalette !== "function") { e.preventDefault(); location.href = "/ui#/notes?q="; return; }
+    if (e.target.closest("input, textarea, select, [contenteditable]")) return;
+    if (typeof openPalette !== "function" && keyHit(e, "rail")) { e.preventDefault(); toggleRail(); } // the app has appKey
   });
   const meReady = fetch("/ui/api/me", { credentials: "same-origin" }).then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.status))))
     .then((me) => { navProjects = me.projects; return navMe(me); }).catch(() => { navEl("who").textContent = "Signed in"; });
@@ -115,11 +164,11 @@ if (navPage) {
   }).catch(() => {});
   get("/ui/api/tasks").then((ts) => {
     // the picked project's open lines, as the app's Tasks badge ("all" = every project)
-    const p = localStorage.getItem("kn_project") || "homelab", el = navEl("tasks-count"), openAll = (ts.tasks || []).filter((t) => !t.done), inProject = (ts.tasks || []).some((t) => p === "all" || t.project === p), open = inProject ? openAll.filter((t) => p === "all" || t.project === p) : openAll; // nothing here: the list shows the work elsewhere
+    const p = navProject.get(), el = navEl("tasks-count"), openAll = (ts.tasks || []).filter((t) => !t.done), inProject = (ts.tasks || []).some((t) => p === "all" || t.project === p), open = inProject ? openAll.filter((t) => p === "all" || t.project === p) : openAll; // nothing here: the list shows the work elsewhere
     if (el) { el.textContent = open.length || ""; el.className = open.some((t) => t.overdue) ? "badge warn" : "badge"; }
   }).catch(() => {});
   meReady.then(() => get("/ui/api/lint?v=2")).then((res) => { // this project's findings, as the app's Health badge (project from the app's picker)
-    const el = navEl("lint-count"), project = localStorage.getItem("kn_project") || "homelab", full = res.report || res;
+    const el = navEl("lint-count"), project = navProject.get(), full = res.report || res;
     const grouped = new Set((res.groups || []).flatMap((g) => g.checks));
     const of = (item) => { // as app.js lintProject: a project's root or its -memory root, claude/ shared, the rest homelab
       const r = item.split(/[/:]/)[0], p = r.replace(/-memory$/, "");

@@ -24,6 +24,7 @@ if [ -d "$DIR/.git" ]; then
   if [ "$(norm "$have")" != "$(norm "$REPO")" ]; then
     echo "$DIR is another repository (origin: ${have:-none}): move it away, or set KNOWLEDGE_DIR" >&2; exit 1
   fi
+  echo "$DIR: checking for updates ..."
   # The same steps as sync() in plugin/hooks/self_update.py; an old checkout may not have that function yet.
   [ ! -f "$DIR/.git/MERGE_HEAD" ] || git -C "$DIR" merge --abort
   if ! git -C "$DIR" pull --ff-only -q 2>/dev/null; then
@@ -37,7 +38,7 @@ if [ -d "$DIR/.git" ]; then
 elif [ -e "$DIR" ]; then
   echo "$DIR exists but is not a git checkout: move it away, or set KNOWLEDGE_DIR" >&2; exit 1
 else
-  git clone -q "$REPO" "$DIR"
+  git clone "$REPO" "$DIR"  # not -q: its progress is the only sign of life on a slow line
 fi
 new_version=$(version)
 if [ -z "$old_version" ]; then echo "$DIR: installed version $new_version"

@@ -27,6 +27,7 @@ if (Test-Path (Join-Path $Dir ".git")) {
     # Someone's own ~\knowledge (notes, another project) is never reset to our repository.
     $Have = git -C $Dir remote get-url origin 2>$null
     if ((Norm $Have) -ne (Norm $Repo)) { throw "$Dir is another repository (origin: $Have): move it away, or set KNOWLEDGE_DIR." }
+    Write-Host "${Dir}: checking for updates ..."
     # The same steps as sync() in plugin/hooks/self_update.py; an old checkout may not have that function yet.
     if (Test-Path (Join-Path $Dir ".git\MERGE_HEAD")) { Git-Step merge --abort }
     $null = git -C $Dir pull --ff-only -q 2>&1
@@ -41,7 +42,7 @@ if (Test-Path (Join-Path $Dir ".git")) {
 } elseif (Test-Path $Dir) {
     throw "$Dir exists but is not a git checkout: move it away, or set KNOWLEDGE_DIR."
 } else {
-    git clone -q $Repo $Dir
+    git clone $Repo $Dir  # not -q: its progress is the only sign of life on a slow line
     if ($LASTEXITCODE) { throw "git clone $Repo failed" }
 }
 $NewVersion = Version

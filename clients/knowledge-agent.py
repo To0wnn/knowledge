@@ -128,6 +128,7 @@ def fetch(path: str, tok: str) -> str:
 
 def check_token(tok: str) -> tuple:
     """(house rules, "") when the server accepts the token, else (None, a plain reason)."""
+    print(f"Contacting {URL} ...", flush=True)  # a server that does not answer takes the whole timeout
     try:
         return fetch("/house-rules", tok), ""
     except urllib.error.HTTPError as e:
@@ -200,11 +201,13 @@ def locked_hint(text: str) -> str:
 
 def run_cli(argv: list, ok_if: tuple = ()) -> bool:
     """Run an agent CLI step and say what it did; stop loudly on a failure, unless its output holds one of ok_if."""
+    print(f"{Path(argv[0]).stem} {' '.join(argv[1:4])}: ...", end=" ", flush=True)  # a step can take minutes (a download, a slow disk)
     r = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace")
     text = (r.stdout + r.stderr).strip()
     if r.returncode != 0 and not any(x in text.lower() for x in ok_if):
+        print("failed")
         sys.exit(f"{Path(argv[0]).stem} {' '.join(argv[1:])} failed:\n{text[-1500:]}{locked_hint(text)}")
-    print(f"{Path(argv[0]).stem} {' '.join(argv[1:3])}: {text.splitlines()[-1] if text else 'ok'}")
+    print(text.splitlines()[-1] if text else "ok")
     return r.returncode == 0
 
 
@@ -438,6 +441,8 @@ def setup():
     update the agents that have the plugin, offer the ones found without it (y/n), and ask for a token again only when
     the server refuses the stored one. The scripts already brought this checkout up to date."""
     tok = token_store.token()
+    if tok:
+        print("Looking for the agents on this computer ...", flush=True)
     have = [a for a in AGENTS if shutil.which(a) and has_plugin(a)] if tok else []
     if not have:
         return install_found()
@@ -1105,6 +1110,7 @@ def run_steps(steps: list, dry: bool) -> list:
                 print(f"companion: would run {shown}")
                 continue
             exe = shutil.which(what[0]) or what[0]
+            print(f"companion: {shown} ...", end=" ", flush=True)
             try:
                 r = subprocess.run([exe, *what[1:]], capture_output=True, text=True, encoding="utf-8", errors="replace",
                                    env={**os.environ, **env}, stdin=subprocess.DEVNULL, timeout=180)
@@ -1112,9 +1118,9 @@ def run_steps(steps: list, dry: bool) -> list:
             except (OSError, subprocess.TimeoutExpired) as e:
                 ok, out = False, str(e)
             if ok or may_fail:
-                print(f"companion: ran {shown}" + ("" if ok else " (nothing to do)"))
+                print("ok" if ok else "nothing to do")
             else:
-                print(f"companion: FAILED {shown}: {out[-500:]}")
+                print(f"FAILED: {out[-500:]}")
                 failed.append(shown)
     return failed
 
