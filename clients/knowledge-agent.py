@@ -52,6 +52,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -655,14 +656,31 @@ def install_skills():
     print(f"skills: {', '.join(names)} in {dest}" if names else "skills: none found next to this script")
 
 
+def merged_hooks(old: dict, ours: dict) -> dict:
+    """`ours` in the agent's hooks file, the hooks of anyone else untouched. agy's file has a group per plugin; in Codex's,
+    an entry is ours when a command of it runs this script (a setup moved elsewhere still ran `knowledge-agent.py`)."""
+    if "hooks" not in ours:
+        return {**old, **ours}
+    mine = lambda entry: any(Path(__file__).name in str(h.get("command")) for h in entry.get("hooks", []))
+    kept = {ev: others for ev, entries in old.get("hooks", {}).items() if (others := [e for e in entries if not mine(e)])}
+    return {**old, "hooks": {**kept, **{ev: kept.get(ev, []) + entries for ev, entries in ours["hooks"].items()}}}
+
+
 def install_hooks(agent: str, name: str):
-    path, new = CONFIG[agent], json.dumps(hook_config(agent, name), indent=2) + "\n"
-    bak = path.with_suffix(".json.bak")
-    if path.exists() and path.read_text(encoding="utf-8-sig") != new and not bak.exists():  # the first original stays
-        bak.write_text(path.read_text(encoding="utf-8-sig"), encoding="utf-8")
-        print(f"kept the old file as {bak}; merge your own hooks from it if it had any")
+    path = CONFIG[agent]
+    text = path.read_text(encoding="utf-8-sig") if path.exists() else "{}"
+    try:
+        new = json.dumps(merged_hooks(json.loads(text), hook_config(agent, name)), indent=2) + "\n"
+    except (ValueError, AttributeError, TypeError) as e:
+        sys.exit(f"{path} is not a hooks file I can read ({e}): fix it, or move it away, and run this again; it was not changed")
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(new, encoding="utf-8")
+    if text != new and path.exists():
+        keep = token_store.KN_HOME / "backups" / f"hooks-{time.strftime('%Y%m%d-%H%M%S')}"
+        keep.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, keep / f"{agent}-{path.name}")
+    tmp = token_store.temp_beside(path)
+    tmp.write_text(new, encoding="utf-8")
+    token_store.replace_durable(tmp, path)
     print(f"hooks: context at start, session log and docs mirror in {path}")
 
 
@@ -1260,6 +1278,13 @@ if __name__ == "__main__":
         assert len(c["SessionStart"]) == 1 and c["SessionEnd"][0]["hooks"][0]["timeout"] <= 3
         a = hook_config("agy", "X")["knowledge"]
         assert a["Stop"][0]["command"].endswith("session-log -") and a["SessionStart"][0]["command"].endswith("context agy X")
+        theirs = {"matcher": "x", "hooks": [{"type": "command", "command": "their-script"}]}
+        ours_old = {"hooks": [{"type": "command", "command": f"python {Path(__file__).name} old-event codex -"}]}
+        m = merged_hooks({"other": 1, "hooks": {"PostToolUse": [theirs, ours_old], "Removed": [ours_old], "Theirs": [theirs]}}, hook_config("codex", "-"))
+        assert m["other"] == 1 and m["hooks"]["Theirs"] == [theirs] and "Removed" not in m["hooks"], "their hooks stay, an event of ours no longer used goes"
+        assert m["hooks"]["PostToolUse"][0] == theirs and ours_old not in m["hooks"]["PostToolUse"] and len(m["hooks"]["PostToolUse"]) == 4
+        assert merged_hooks(m, hook_config("codex", "-")) == m, "a second run changes nothing"
+        assert merged_hooks({"their-plugin": {"Stop": []}, "knowledge": {"Old": []}}, hook_config("agy", "X")) == {"their-plugin": {"Stop": []}, **hook_config("agy", "X")}
         assert helper_line("-").startswith('http_headers_helper = "') and helper_line("-").endswith(' header -"')
         replies = iter(["", "n", "J"])
         assert choose(["claude", "codex", "agy"], lambda q: next(replies)) == ["claude", "agy"]
