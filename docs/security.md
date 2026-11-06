@@ -12,7 +12,7 @@ described in full on the linked page.
 - **Who may start a task.** A task line starts by itself only when its writer is trusted for that project; otherwise
   the owner or an admin approves it. Text by an untrusted writer reaches agents marked as data, not instructions.
   [tasks.md](tasks.md#task-lines-and-leases), [companion.md](companion.md#yolo-safety-without-blocking)
-- **Whose words.** A note someone else wrote reaches your agents as data, and a search shows your own notes first.
+- **Whose words.** A note someone else wrote reaches your agents as data, and semantic search shows your own notes first.
   A token that went wrong: revoke it, then undo what it changed, per file, on the admin page. Nothing later is
   overwritten. [memory.md](memory.md#whose-words-a-note-holds)
 - **Whose machine.** A machine belongs to the person whose token first reported it; only its owner sees and steers it.

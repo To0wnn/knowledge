@@ -61,7 +61,8 @@ def copy_included(repo: Path, wt: Path):
     listed = lambda *how: set(git(repo, "ls-files", "-z", "--others", "--ignored", *how, check=True).stdout.split("\0")) - {""}
     for rel in listed("--exclude-from=.worktreeinclude") & listed("--exclude-standard"):
         src, dst = repo / rel, wt / rel
-        if src.is_file() and not src.is_symlink() and not dst.exists():  # a link could point anywhere
+        # never through a link, either way: one in a task branch could carry a secret out of the worktree
+        if src.is_file() and not src.is_symlink() and not os.path.lexists(dst) and dst.parent.resolve().is_relative_to(wt.resolve()):
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dst)
 
@@ -89,7 +90,7 @@ def worktree(folder: str, tid: str, project: str = "", prefix: str = "task", mak
         r = git(repo, "worktree", "add", "-q", str(wt), branch) if has else git(repo, "worktree", "add", "-q", "-b", branch, str(wt), "HEAD")
         if r.returncode:
             raise RuntimeError(f"git worktree add failed: {(r.stderr or r.stdout).strip()[:200]}")
-        copy_included(repo, wt)
+    copy_included(repo, wt)  # each start, not only a new worktree: an earlier failure must not leave a worker without them
     cwd = wt / Path(os.path.relpath(Path(folder).resolve(), repo.resolve()))
     root, name = project_marker.project_root(Path(folder).resolve())
     marker = cwd / project_marker.MARKER
@@ -637,7 +638,20 @@ def self_test():
         made = Path(worktree(str(inc), "INC-1")["worktree"])
         assert (made / ".env").read_text() == "X=1\n" and not (made / "not-ignored.txt").exists() and not (made / "build").exists(), list(made.iterdir())
         assert not git(made, "status", "--porcelain", "--untracked-files=all").stdout.strip(), "copied files stay out of commits"
-        assert git(inc, "worktree", "remove", str(made)).returncode == 0, "and do not block removing the worktree"
+        (made / ".env").unlink()
+        assert (Path(worktree(str(inc), "INC-1")["worktree"]) / ".env").exists(), "a later start fills in what is missing"
+        (made / ".env").unlink()
+        (made / "out").symlink_to(t, target_is_directory=True) if os.name != "nt" else None
+        (inc / ".worktreeinclude").write_text(".env\nout/s\n")
+        (inc / ".gitignore").write_text(".env\nbuild/\nout/\n")
+        if os.name != "nt":
+            (inc / "out").mkdir()
+            (inc / "out" / "s").write_text("secret\n")
+            worktree(str(inc), "INC-1")
+            assert not (Path(t) / "s").exists(), "never through a link in the worktree"
+            (made / "out").unlink()
+        git(inc, "checkout", "-q", ".")
+        assert git(inc, "worktree", "remove", "--force", str(made)).returncode == 0
         repo = Path(t) / "repo"
         sub = repo / "app"
         sub.mkdir(parents=True)

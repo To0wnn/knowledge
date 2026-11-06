@@ -91,7 +91,7 @@
     <details id="undo-box" hidden><summary>Undo what one device changed</summary>
       <p class="muted">For a token that went wrong or was stolen: revoke it, then look here. A file someone else changed since is listed but left alone; a file the device made goes to the trash.</p>
       <form id="undo-form" class="admin-form inline">
-        <label>Device <input id="undo-device" required autocomplete="off" placeholder="token name"></label>
+        <label>Device <input id="undo-device" required autocomplete="off" placeholder="token name" list="undo-names"></label><datalist id="undo-names"></datalist>
         <label>In the last <select id="undo-hours"><option value="1">hour</option><option value="6">6 hours</option><option value="24" selected>day</option><option value="168">week</option><option value="720">30 days</option></select></label>
         <button class="btn" type="submit">Show changes</button>
       </form>

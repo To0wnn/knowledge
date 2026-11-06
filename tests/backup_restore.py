@@ -70,7 +70,7 @@ def main():
             proc.terminate()
             proc.wait(20)
         shutil.copytree(data, copy)
-        shutil.rmtree(copy / "state" / "vectors.npz", ignore_errors=True)  # derived: docs/server.md says it may be left out
+        (copy / "state" / "vectors.npz").unlink(missing_ok=True)  # derived: docs/server.md says it may be left out
         shutil.rmtree(data)  # the disk is gone
         proc, url, log = start(copy)
         try:

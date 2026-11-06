@@ -408,6 +408,7 @@ async function load() {
     $("limits-projects").textContent = `You may create ${l.projects} projects (${l.created} made so far), up to ${l.project_mb} MB each. The admin is told about every new project and token.`;
     renderTokens(); renderProjects();
     $("undo-box").hidden = !state.admin;
+    $("undo-names").replaceChildren(...state.tokens.map((t) => { const o = el("option"); o.value = t.name; return o; }));
     $("n-tokens").textContent = state.tokens.length; $("n-projects").textContent = state.projects.length;
     return;
   }
