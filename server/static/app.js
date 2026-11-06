@@ -914,7 +914,7 @@ function appKey(e) {
   const kn = shellRoute.view === "notes" || shellRoute.view === "map", at = current ? `/${encPath(current.path)}` : "";
   const digit = keyHit(e, "digits") && keyCombo(e).at(-1);
   const act = keyHit(e, "rail") ? toggleRail
-    : keyHit(e, "notes_search") ? () => openPalette(true)
+    : keyHit(e, "notes_search") || (e.key === "/" && e.altKey && keyOf("notes_search") === "Alt+/") ? () => openPalette(true) // some layouts need Shift for /
     : keyHit(e, "chats") ? () => go("#/chats")
     : keyHit(e, "new_chat") && !agentsOff() ? () => $("ck-new").onclick()
     : digit === "0" ? () => switchProject(ALL)

@@ -9,7 +9,7 @@
 const pal = { items: [], sel: 0, notesOnly: false, seq: 0, timer: 0, tasks: [], server: null };
 const PAL_VIEWS = [["chats", "Agents"], ["tasks", "Tasks"], ["machines", "Machines"], ["notes", "Notes"],
   ["map", "Map"], ["changes", "Changes"], ["health", "Health"], ["thispc", "This pc"], ["admin", "Admin"], ["help", "Help"]];
-const PAL_ACTIONS = [["new-chat", "New chat…", "Alt+N"], ["theme", "Toggle theme"], ["rail", "Collapse or expand the sidebar", "Alt+["], ["flow", "Open mission flow"]];
+const PAL_ACTIONS = [["new-chat", "New chat…", "new_chat"], ["theme", "Toggle theme"], ["rail", "Collapse or expand the sidebar", "rail"], ["flow", "Open mission flow"]];
 const palKey = (it) => `${it.kind}:${it.id}`;
 
 function openPalette(notesOnly = false) {
@@ -50,7 +50,7 @@ function palGroups(q) {
   const words = q.toLowerCase().split(/\s+/).filter(Boolean), has = (t) => words.every((w) => t.toLowerCase().includes(w));
   const views = PAL_VIEWS.filter(([id]) => (id !== "health" || me.admin) && (id !== "thispc" || !$("nav-thispc").hidden) && !(agentsOff() && AGENT_VIEWS.includes(id)))
     .map(([id, label]) => ({ kind: "view", id, label: id === "admin" && !me.admin ? "My tokens & projects" : label, hint: "Go to" }));
-  const actions = PAL_ACTIONS.filter(([id]) => !(agentsOff() && id === "new-chat")).map(([id, label, hint]) => ({ kind: "action", id, label, hint: hint || "" }));
+  const actions = PAL_ACTIONS.filter(([id]) => !(agentsOff() && id === "new-chat")).map(([id, label, key]) => ({ kind: "action", id, label, hint: key ? keyOf(key) : "" }));
   if (!words.length) {
     const recent = palRecent().filter((x) => !pal.notesOnly || x.kind === "note");
     return [["Recent", recent], ...(pal.notesOnly ? [] : [["Go to", views], ["Actions", actions]])];

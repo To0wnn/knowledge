@@ -1082,6 +1082,9 @@ button.busy::before { content: ""; display: inline-block; width: .9em; height: .
 .task-howto p { max-width: 70ch; }
 /* Settings: the notifications switch saves at once and says so */
 .set-saved { font-size: 12px; }
+#set-keys[hidden] { display: none; } /* .admin-form's display would beat the attribute */
+.set-keys { display: grid; gap: 6px; }
+.set-key { display: grid; grid-template-columns: 1fr auto 64px; align-items: center; gap: 8px; font-size: 13px; }
 /* Admin tokens on a phone: each token a card, every cell a line with its column name */
 @media (max-width: 599.98px) {
   .token-table, .token-table tbody, .token-table tr, .token-table td { display: block; width: auto; }

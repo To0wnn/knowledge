@@ -91,18 +91,19 @@ const keyOf = (action) => keyPrefs[action] || keyDefault(action);
 const keyShow = (action) => keyOf(action).replace(/#$/, "1-9").replace(/Arrow$/, "arrows");
 // A letter as the layout has it, else by position: Alt+N on a Mac is a dead key, Shift changes the character of a digit.
 function keyCombo(e) {
-  const c = e.code, name = /^[a-z]$/i.test(e.key) ? e.key.toUpperCase() : /^Key[A-Z]$/.test(c) ? c[3] : /^(?:Digit|Numpad)\d$/.test(c) ? c.at(-1)
-    : c === "BracketLeft" ? "[" : c === "Slash" ? "/" : e.key === " " ? "Space" : e.key.length === 1 ? e.key.toUpperCase() : e.key;
+  const c = e.code, k = e.key || ""; // a browser's autofill sends a keydown without a key
+  const name = /^[a-z]$/i.test(k) ? k.toUpperCase() : /^Key[A-Z]$/.test(c) ? c[3] : /^(?:Digit|Numpad)\d$/.test(c) ? c.at(-1)
+    : c === "BracketLeft" ? "[" : c === "Slash" ? "/" : k === " " ? "Space" : k.length === 1 ? k.toUpperCase() : k;
   return `${e.ctrlKey || e.metaKey ? "Ctrl+" : ""}${e.altKey ? "Alt+" : ""}${e.shiftKey ? "Shift+" : ""}${name}`;
 }
 const keyFamily = (combo) => combo.replace(/\+\d$/, "+#").replace(/Arrow\w+$/, "Arrow");
 const keyHit = (e, action) => keyFamily(keyCombo(e)) === keyOf(action);
-// An element with data-key: {key} in its title, or else its text, is the action's key now.
+// An element with data-shortcut: {key} in its title, or else its text, is the action's key now.
 function keyLabels(root = document) {
-  for (const n of root.querySelectorAll("[data-key]")) {
+  for (const n of root.querySelectorAll("[data-shortcut]")) {
     const prop = n.title ? "title" : "textContent";
-    n.dataset.keyText ||= n[prop];
-    n[prop] = n.dataset.keyText.replace("{key}", keyShow(n.dataset.key));
+    n.dataset.shortcutText ||= n[prop];
+    n[prop] = n.dataset.shortcutText.replace("{key}", keyShow(n.dataset.shortcut));
   }
 }
 keyLabels();

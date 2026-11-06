@@ -80,7 +80,7 @@ function msBuild() {
       <button type="button" class="btn small" id="ms-all" aria-pressed="false" title="Also results handed back more than a day ago">Older results</button>
       <span class="ck-gap"></span>
       <span class="ms-count muted" id="ms-count" aria-live="polite"></span>
-      <button type="button" class="btn small" id="ms-fit" title="Fit the map to the screen (Alt+F)">Fit</button>
+      <button type="button" class="btn small" id="ms-fit" data-shortcut="fit" title="Fit the map to the screen ({key})">Fit</button>
     </div>
     <div class="ms-legend" id="ms-legend"></div>
     <div class="ms-stage" id="ms-stage"><div class="ms-world" id="ms-world"></div></div>
@@ -95,13 +95,14 @@ function msBuild() {
     s.innerHTML = `<svg viewBox="0 0 28 8" aria-hidden="true"><path class="ms-e k-${k}" d="M1 4H27"/></svg>`;
     s.append(v); legend.append(s);
   }
+  keyLabels(root);
   $("ms-fit").onclick = msFit;
   $("ms-all").onclick = () => { ms.all = !ms.all; $("ms-all").setAttribute("aria-pressed", ms.all); ms.fitted = false; ms.data = null; msLoad(); };
   panInit($("ms-stage"), ms);
   window.addEventListener("keydown", (e) => { // capture: before the page's own keys
-    if (root.hidden || e.ctrlKey || e.metaKey || /input|textarea|select/i.test(document.activeElement.tagName)) return;
-    if (e.key === "Escape" && !e.altKey && !$("ms-panel").hidden) { e.preventDefault(); e.stopPropagation(); msClosePanel(); }
-    else if (e.altKey && e.code === "KeyF") { e.preventDefault(); e.stopPropagation(); msFit(); }
+    if (root.hidden || /input|textarea|select/i.test(document.activeElement.tagName)) return;
+    if (e.key === "Escape" && !e.altKey && !e.ctrlKey && !e.metaKey && !$("ms-panel").hidden) { e.preventDefault(); e.stopPropagation(); msClosePanel(); }
+    else if (keyHit(e, "fit")) { e.preventDefault(); e.stopPropagation(); msFit(); }
   }, true);
   matchMedia("(max-width: 640px)").addEventListener("change", () => msRender());
 }
@@ -409,12 +410,12 @@ function bdPartMove(key, n) {
   store.set("kn_parts", JSON.stringify(parts));
 }
 addEventListener("storage", (e) => { if (e.key === "kn_parts") bdRender(); }); // moved in another window
-// Alt+0-9 show a part; Alt+Shift+1-9 moves the card you are in or point at there. By key position: Shift changes the character.
+// Alt+0-9 show a part; Alt+Shift+1-9 moves the card you are in or point at there (Settings can change both).
 function bdPartKey(e) {
-  const hit = /^(?:Digit|Numpad)(\d)$/.exec(e.code);
-  if (!hit) return false;
-  const n = Number(hit[1]);
-  if (!e.shiftKey) { if (!n) switchProject(ALL); bdPartShow(n); return true; } // 0 is everything, as it is off the grid
+  const show = keyHit(e, "digits");
+  if (!show && !keyHit(e, "digits_move")) return false;
+  const n = Number(keyCombo(e).at(-1));
+  if (show) { if (!n) switchProject(ALL); bdPartShow(n); return true; } // 0 is everything, as it is off the grid
   const w = document.activeElement?.closest?.(".bd-card") || document.querySelector(".bd-card:hover");
   const key = [...bd.wraps].find(([, x]) => x === w)?.[0];
   if (!n || !key || ck.cards.get(key)?.meta.draft) return false;
@@ -450,12 +451,12 @@ function bdPartBar(on) {
   const box = $("bd-parts"), parts = bdParts(), live = on ? ck.chats.filter((c) => ckScope(c) && ckState(c) !== "closed") : [];
   const top = Math.max(bd.part, ...live.map((c) => bdPartOf(c, parts)));
   const list = on && top > 1 ? Array.from({ length: top + 1 }, (_, n) => ({ n, needs: n ? live.filter((c) => bdPartOf(c, parts) === n && ckState(c) === "needs").length : 0 })) : [];
-  const sig = JSON.stringify([bd.part, list]);
+  const sig = JSON.stringify([bd.part, list, keyOf("digits"), keyOf("digits_move")]);
   if (box.dataset.sig === sig) return; // a rebuild would drop the focus from a button
   box.dataset.sig = sig;
   box.replaceChildren(...list.map(({ n, needs }) => {
     const b = el("button", "btn small quiet", n ? String(n) : "All"); b.type = "button";
-    b.title = n ? `Part ${n} (Alt+${n}). Alt+Shift+${n} moves a card here` : "All parts (Alt+0)";
+    b.title = n ? `Part ${n} (${keyOf("digits").replace("#", n)}). ${keyOf("digits_move").replace("#", n)} moves a card here` : `All parts (${keyOf("digits").replace("#", 0)})`;
     b.setAttribute("aria-label", `${n ? `Part ${n}` : "All parts"}${needs ? `, ${needs} need${needs > 1 ? "" : "s"} you` : ""}`);
     b.setAttribute("aria-pressed", String(n === bd.part));
     if (needs) b.append(el("span", "n", String(needs)));
@@ -584,7 +585,7 @@ function bdRender() {
   for (const [k, w] of bd.wraps) if (!ck.cards.has(k) || !order.includes(w)) { w.remove(); bd.wraps.delete(k); }
   // DOM order = layout order, so Tab walks project by project; only moved nodes are touched
   order.forEach((n, i) => { if (world.children[i] !== n) bdMove(world, n, world.children[i] || null); });
-  if (!rows.length) world.replaceChildren(el("p", "bd-none muted", bd.part ? `No chats in part ${bd.part}${agentProject ? " of this project" : ""}: start one with + New chat, or Alt+Shift+${bd.part} on a card elsewhere moves it here.` : ck.chats.length ? "No chats in this project." : "No chats yet: start one with + New chat."));
+  if (!rows.length) world.replaceChildren(el("p", "bd-none muted", bd.part ? `No chats in part ${bd.part}${agentProject ? " of this project" : ""}: start one with + New chat, or ${keyOf("digits_move").replace("#", bd.part)} on a card elsewhere moves it here.` : ck.chats.length ? "No chats in this project." : "No chats yet: start one with + New chat."));
   else world.querySelector(".bd-none")?.remove();
   bdGridSize();
   for (const card of back) ckScrollBottom(card, card.savedScrollTop == null); // back from another part: taken off the page, its log forgot where it was

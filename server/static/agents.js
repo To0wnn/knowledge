@@ -226,9 +226,9 @@ function ckJump(card) {
   card.jump.hidden = !far;
   card.jumpText.textContent = card.fresh ? "↓ New messages" : "↓ Jump to bottom";
 }
-// Ctrl+End: the chat you are in or point at. With no pill to press, the key keeps its own meaning (end of the text box).
+// The jump key (Ctrl+End): the chat you are in or point at. With no pill to press, the key keeps its own meaning (end of the text box).
 document.addEventListener("keydown", (e) => {
-  if (e.key !== "End" || !(e.ctrlKey || e.metaKey)) return;
+  if (!keyHit(e, "jump")) return;
   const root = document.activeElement?.closest?.(".ck-card") || document.querySelector(".ck-card:hover") || ck.cards.get(ck.view)?.root;
   const pill = root?.querySelector(":scope > .ck-jump:not([hidden]) button");
   if (pill?.offsetParent) { e.preventDefault(); pill.click(); }
@@ -256,12 +256,13 @@ addEventListener("storage", (e) => {
   if (e.key === CK_DRAFTS) for (const c of ck.cards.values()) if (document.activeElement !== c.input || !document.hasFocus()) ckDraftShow(c);
 });
 // The send key (Settings); a phone's keyboard has no Shift+Enter, so its Enter stays a new line.
-const ckEnterSends = () => me.prefs?.send_key === "enter" && !touch;
-const ckSendKey = () => (ckEnterSends() ? "Enter" : "Ctrl+Enter");
+const ckSendKey = () => (!touch && { enter: "Enter", shift: "Shift+Enter" }[me.prefs?.send_key]) || "Ctrl+Enter";
+const ckKeyEl = (action, cls, text) => { const s = el("span", cls, text); s.dataset.shortcut = action; return s; };
 function ckSendHints(card) {
   const hint = card.input.dataset.hint; // a subagent's and a worker's box name the key; a chat's says it in its label
   if (hint) card.input.placeholder = `${hint} (${ckSendKey()} sends)`;
-  card.input.setAttribute("aria-label", ckEnterSends() ? "Message (Enter sends, Shift+Enter a new line)" : "Message (Enter a new line, Ctrl+Enter sends)");
+  card.input.setAttribute("aria-label", ckSendKey() === "Enter" ? "Message (Enter sends, Shift+Enter a new line)" : `Message (Enter a new line, ${ckSendKey()} sends)`);
+  keyLabels(card.root);
 }
 function ckScrollBottom(card, force = false) {
   if (!card?.log) return;
@@ -554,7 +555,7 @@ function ckCard(meta) {
   new MutationObserver((changes) => { for (const c of changes) for (const n of c.addedNodes) if (n.nodeType === 1) sized.observe(n); }).observe(log, { childList: true });
   const jump = el("div", "ck-jump"), jumpBtn = el("button", "btn small ck-jump-btn"), jumpText = el("span");
   jump.hidden = true; jumpBtn.type = "button";
-  jumpBtn.append(jumpText, el("span", "muted ck-jump-key", "Ctrl+End")); jump.append(jumpBtn);
+  jumpBtn.append(jumpText, ckKeyEl("jump", "muted ck-jump-key", "{key}")); jump.append(jumpBtn);
   jumpBtn.onmousedown = (e) => e.preventDefault(); // a click leaves the focus in the text box
   jumpBtn.onclick = () => {
     if (document.activeElement === jumpBtn) input.focus(); // the button hides: reached by keyboard, the focus must land somewhere
@@ -566,7 +567,7 @@ function ckCard(meta) {
   const more = el("details", "menu up ck-more"), moreSum = el("summary", "btn small primary ck-send-more"), moreList = el("div", "menu-list");
   moreSum.title = "Queue or Force"; moreSum.setAttribute("aria-label", "Queue or Force this message");
   const queueBtn = el("button", "ck-queue"), forceBtn = el("button", "ck-forcebtn");
-  queueBtn.append("Queue", el("span", "muted", "after this turn · Alt+Enter")); forceBtn.append("Force", el("span", "muted", "stop the step, then this · Ctrl+Shift+Enter"));
+  queueBtn.append("Queue", ckKeyEl("queue", "muted", "after this turn · {key}")); forceBtn.append("Force", ckKeyEl("force", "muted", "stop the step, then this · {key}"));
   queueBtn.type = forceBtn.type = "button"; queueBtn.hidden = forceBtn.hidden = more.hidden = true;
   moreList.append(queueBtn, forceBtn); more.append(moreSum, moreList);
   // under the box: the model (one chip, its effort inside) and, in a new chat, where it runs (ckPicker)
@@ -578,7 +579,7 @@ function ckCard(meta) {
   filePick.type = "file"; filePick.multiple = true; filePick.hidden = true; files.hidden = true;
   const mic = el("button", "btn icon small quiet ck-mic"); // speech to text into the box (server's KNOWLEDGE_STT_URL)
   mic.innerHTML = CK_ICON.mic;
-  mic.type = "button"; mic.hidden = !ckMicOk(); mic.title = "Speak (click to start and stop, or hold; Ctrl+Space). The text lands in the box; you send it."; mic.setAttribute("aria-label", "Speak a message");
+  mic.type = "button"; mic.hidden = !ckMicOk(); mic.dataset.shortcut = "speak"; mic.title = "Speak (click to start and stop, or hold; {key}). The text lands in the box; you send it."; mic.setAttribute("aria-label", "Speak a message");
   // one box: the files, the text, and a bar under it (attach and model left; microphone, Stop and Send right)
   const box = el("div", "ck-box"), bar = el("div", "ck-bar"), barL = el("div", "ck-bar-l"), sendGroup = el("span", "ck-sendgroup");
   stop.type = "button"; send.type = "submit"; sendGroup.append(send, more);
@@ -603,13 +604,13 @@ function ckCard(meta) {
   input.addEventListener("keydown", (e) => {
     // Esc as its ×, also from this box, where an opened chat starts (the text stays as a draft; an attached file would not; the grid has its own Esc)
     if (e.key === "Escape" && !e.isComposing && document.body.classList.contains("in-chat") && !card.files.length && !document.querySelector("details[open], dialog[open]")) { e.preventDefault(); return x.click(); }
-    // Ctrl/Cmd+Enter presses the button (Send, Queue or Force), and so does Enter when Settings say so; a phone's Enter stays a new line
-    if (e.key === " " && e.ctrlKey && !mic.hidden) { e.preventDefault(); return mic.toggle(); }
-    if (e.key === "Enter" && e.altKey && !e.isComposing && !queueBtn.hidden) { e.preventDefault(); return queueBtn.click(); } // queue
-    if (e.key === "Enter" && e.shiftKey && (e.ctrlKey || e.metaKey) && !e.isComposing && !forceBtn.hidden) { e.preventDefault(); return forceBtn.click(); }
+    // Ctrl/Cmd+Enter presses the button (Send, Queue or Force), and so does the send key of Settings; a phone's Enter stays a new line
+    if (keyHit(e, "speak") && !(e.metaKey && e.key === " ") && !mic.hidden) { e.preventDefault(); return mic.toggle(); }
+    if (keyHit(e, "queue") && !e.isComposing && !queueBtn.hidden) { e.preventDefault(); return queueBtn.click(); } // queue
+    if (keyHit(e, "force") && !e.isComposing && !forceBtn.hidden) { e.preventDefault(); return forceBtn.click(); }
     if (e.key !== "Enter" || e.isComposing || e.keyCode === 229) return; // 229: Enter that ends a composition (Safari)
-    const bare = ckEnterSends() && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey;
-    if (!bare && !e.ctrlKey && !e.metaKey) return;
+    const bare = ckSendKey() !== "Ctrl+Enter" && keyCombo(e) === ckSendKey();
+    if (!bare && ((!e.ctrlKey && !e.metaKey) || e.altKey)) return; // Ctrl+Alt is AltGr on Windows: it must not send into the running turn
     e.preventDefault();
     if (!bare || input.value.trim() || card.files.length) form.requestSubmit(); // a stray Enter on an empty box must not Force: that stops the agent's step
   });
@@ -715,7 +716,54 @@ function ckCard(meta) {
 }
 // Settings (#/settings): the person's own choices, kept on the server (/ui/api/me/prefs): the model a new chat starts
 // with ("" = the one used last, from the models the pcs online now offer), the start page, how the grid opens a chat and groups its chats,
-// the send key. Theme and notifications are per browser. Only what use cannot teach belongs here (docs/web-ui.md).
+// the send key, the shortcuts. Theme and notifications are per browser. Only what use cannot teach belongs here (docs/web-ui.md).
+// Ctrl+Enter always sends and these belong to the browser's text editing: a shortcut there would take them away.
+const KEY_TAKEN = ["Ctrl+Enter", "Ctrl+A", "Ctrl+C", "Ctrl+V", "Ctrl+X", "Ctrl+Y", "Ctrl+Z"];
+// Why this key cannot do this action, or "". A digit or arrow counts for the whole family: Alt+1 is taken by Alt+#.
+function keyRefusal(action, combo) {
+  const fam = keyFamily(combo), last = (k) => k.split("+").at(-1), want = last(keyDefault(action));
+  if (!/\b(Ctrl|Alt)\+/.test(combo)) return "Use Ctrl or Alt with it";
+  if (/Ctrl\+Alt\+/.test(combo)) return "Ctrl+Alt is AltGr on some keyboards: it types characters";
+  if (last(combo) === "Dead") return "That key types an accent here: take another";
+  if (/^(#|Arrow)$/.test(want) ? last(fam) !== want : fam !== combo) return /^(#|Arrow)$/.test(want) ? `This one needs ${want === "#" ? "a digit" : "an arrow"}` : "Digits and arrows are taken";
+  if (KEY_TAKEN.includes(combo)) return `${combo} stays what it is`;
+  const other = KEY_ACTIONS.find((a) => a[0] !== action && keyOf(a[0]) === fam);
+  return other ? `${combo} is already: ${other[2]}` : "";
+}
+async function setKeysSave(action, combo) {
+  const keys = { [action]: combo === keyDefault(action) ? null : combo };
+  try {
+    me.prefs = (await api("/ui/api/me/prefs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ keys }) })).prefs;
+    keyPrefs = me.prefs.keys || {}; keyLabels();
+    for (const c of ck.cards.values()) ckSendHints(c);
+    setKeysShow();
+    const saved = $("set-keys-saved"); saved.textContent = "Saved"; clearTimeout(saved.timer); saved.timer = setTimeout(() => (saved.textContent = ""), 2000);
+  } catch (err) { toast(err.message, true); }
+}
+function setKeysShow() {
+  $("set-keys").hidden = touch; // no keyboard to press them on
+  $("set-keys-list").replaceChildren(...KEY_ACTIONS.map(([action, dflt, label, agents]) => {
+    const row = el("div", `set-key${agents ? " ag-on" : ""}`), pick = el("button", "btn small", keyShow(action)), undo = el("button", "btn small quiet", "Default");
+    pick.type = undo.type = "button"; pick.dataset.action = action; pick.setAttribute("aria-label", `${label}: ${keyShow(action)}. Press to change`);
+    undo.hidden = keyOf(action) === dflt; undo.onclick = () => { const why = keyRefusal(action, dflt); if (why) toast(why, true); else setKeysSave(action, dflt); };
+    pick.onclick = () => {
+      pick.textContent = "Press the keys…";
+      const stop = () => { removeEventListener("keydown", listen, true); pick.onblur = null; pick.textContent = keyShow(action); };
+      const listen = (e) => { // capture: before the page's own keys
+        e.preventDefault(); e.stopPropagation();
+        if (/^(Control|Alt|AltGraph|Shift|Meta)$/.test(e.key) || e.isComposing) return;
+        if (e.key === "Escape") return stop();
+        const combo = keyFamily(keyCombo(e)), why = keyRefusal(action, combo);
+        if (why) return toast(why, true);
+        stop(); setKeysSave(action, combo);
+      };
+      addEventListener("keydown", listen, true);
+      pick.onblur = stop; pick.focus();
+    };
+    row.append(el("span", null, label), pick, undo);
+    return row;
+  }));
+}
 async function loadSettings() {
   if (!ck.machines.length) await ckSummary().catch(() => {});
   const cat = ckCatalog(ck.machines.filter((m) => m.online)), sel = $("set-model"), eff = $("set-effort");
@@ -747,6 +795,7 @@ async function loadSettings() {
     };
   }
   $("set-start").querySelector('[value="chats"]').hidden = agentsOff();
+  setKeysShow();
   $("set-theme").onchange = () => setTheme($("set-theme").value);
   showTheme();
   const on = $("set-notify-on"), note = $("set-notify-note");

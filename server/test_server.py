@@ -1053,6 +1053,14 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert ui("/ui/api/me/prefs", {"grid_group": "together"})[0] == 200 and json.loads(ui("/ui/api/me")[2])["prefs"]["grid_group"] == "together"
     assert ui("/ui/api/me/prefs", {"grid_group": "project"})[0] == 200 and "grid_group" not in json.loads(ui("/ui/api/me")[2])["prefs"]  # the default
     assert ui("/ui/api/me/prefs", {"grid_group": "x"})[0] == 400
+    assert ui("/ui/api/me/prefs", {"keys": {"new_chat": "Alt+Shift+T", "digits": "Ctrl+Shift+#"}, "send_key": "shift"})[0] == 200
+    assert json.loads(ui("/ui/api/me")[2])["prefs"]["keys"] == {"new_chat": "Alt+Shift+T", "digits": "Ctrl+Shift+#"}
+    assert ui("/ui/api/me/prefs", {"keys": {"fit": "Alt+G"}})[0] == 200  # a change leaves the others: a stale tab overwrites nothing
+    assert json.loads(ui("/ui/api/me")[2])["prefs"]["keys"] == {"new_chat": "Alt+Shift+T", "digits": "Ctrl+Shift+#", "fit": "Alt+G"}
+    assert json.loads(ui("/ui/api/me", h=er)[2])["prefs"] == {}, "another person's keys are theirs alone"
+    for bad in ({"new_chat": "T"}, {"new_chat": "Shift+T"}, {"Bad-Name": "Alt+T"}, {"new_chat": 1}, {"new_chat": "Alt+a b"}, {"new_chat": "Ctrl+Alt+T"}, ["Alt+T"]):
+        assert ui("/ui/api/me/prefs", {"keys": bad})[0] == 400, bad
+    assert ui("/ui/api/me/prefs", {"keys": {"new_chat": None, "digits": None, "fit": None}, "send_key": "enter"})[0] == 200 and "keys" not in json.loads(ui("/ui/api/me")[2])["prefs"]  # back to the defaults
     assert ui("/ui/api/me/prefs", {"send_key": "shout"})[0] == 400 and ui("/ui/api/me/prefs", {"start_page": "/evil"})[0] == 400
     assert ui("/ui/api/me/prefs", {"theme": "dark"})[0] == 400 and ui("/ui/api/me/prefs", {})[0] == 400
     assert ui("/ui/api/me/prefs", {"send_key": "ctrl", "grid_open": "tab", "start_page": "chats"})[0] == 200  # the defaults are not stored
