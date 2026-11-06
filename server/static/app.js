@@ -901,7 +901,7 @@ $("q").addEventListener("keydown", (e) => { // Enter opens the first result
   if (e.key === "Enter") { e.preventDefault(); clearTimeout(searchTimer); runSearch().then(() => $("results").querySelector("button")?.click()); }
 });
 
-// Keys: Ctrl/Cmd+K the palette (/ the same, for notes only), [ folds the sidebar, A the Agents view, M map or notes, 1-9/0 the project; in a note E
+// Keys: Ctrl/Cmd+K the palette (/ the same, for notes only), [ folds the sidebar, A the Agents view, N a new chat, M map or notes, 1-9/0 the project; in a note E
 // edits and Esc closes it; in a chat Esc goes back.
 document.addEventListener("keydown", (e) => {
   const typing = /input|textarea|select/i.test(document.activeElement.tagName) || document.querySelector("dialog[open]");
@@ -912,6 +912,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "[") toggleRail();
   else if (e.key === "/") { e.preventDefault(); openPalette(true); }
   else if (e.key.toLowerCase() === "a") go("#/chats");
+  else if (e.key.toLowerCase() === "n" && !agentsOff()) $("ck-new").onclick();
   else if (/^[1-9]$/.test(e.key) && PROJECTS[Number(e.key) - 1]) switchProject(PROJECTS[Number(e.key) - 1]);
   else if (e.key === "0") switchProject(ALL);
   else if (e.key.toLowerCase() === "m") go(mapOn ? `#/notes${at}` : `#/map${at}`);

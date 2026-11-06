@@ -19,7 +19,7 @@ Moved from the README; [back to the README](../README.md).
   Ctrl/Cmd+K (or "Search or jump", or the phone's search icon) opens a command palette: notes by title, text and
   meaning, chats, tasks, every view and a few actions (new chat, theme, sidebar, mission flow), with arrow keys, Enter,
   Esc and your recent picks; `/` opens it for notes only, and "Search all notes" opens the search page
-  (`#/notes?q=…`). Notes: the topic list beside the note (on a phone two pages with a Back arrow), a home view per
+  (`#/notes?q=…`). Outside a text box one key jumps: `[` folds the sidebar, `A` the Agents view, `N` a new chat, `M` map or notes, `1`-`9`/`0` the project. Notes: the topic list beside the note (on a phone two pages with a Back arrow), a home view per
   topic, a note preview with connected notes, an editor, change history. Changes (per day) and Health (lint, per
   check) are full pages. Errors show as a short message at the bottom instead of a browser dialog. Tasks: the task lines between agents with from whom and when they may start, waiting ones
   greyed with the reason, stalled wakes, an Approve button for the owner, results handed back (Done removes a line),
