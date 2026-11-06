@@ -16,8 +16,9 @@ Antigravity, plus a web UI with a graph. Server in `server/` (Python, one Docker
   (`clients.yml`, not for a push of only docs or web UI files; `check.yml` runs the check and the UI test)
 - a really hanging disk (Linux with FUSE; not in the check): `systemd-run --user --scope -q -p MemoryMax=3G uv run --project server --with fusepy python tests/storage_hang.py`
 - a really blocked NFS mount (Linux with an NFS server and passwordless sudo; not in the check; about 2 min): `uv run --project server python tests/nfs_outage.py`
-- deploy: `./deploy.sh` (runs the check first; routine). It rsyncs the working tree, not a commit: `git status` must be clean
-  first, or you ship another session's unfinished work; with someone else's changes in the checkout, deploy from your own worktree
+- deploy: `./deploy.sh` (runs the check first; routine). It rsyncs the working tree, so it refuses uncommitted changes (with
+  someone else's changes in the checkout, deploy from your own worktree) and a checkout without the commit that is live
+  (merge it first; `--replace-live` takes it off the server on purpose)
 - roll back: `git revert <commit>` and `./deploy.sh`
 
 ## Project rules
