@@ -1923,9 +1923,10 @@ async def grid_groups(browser, secret: str) -> None:
       bdPartShow(2); const gone = !card.root.isConnected; bdPartShow(1); await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame);
       return [gone, top > 0, card.log.scrollTop === top]; })()""")
     check(scrolled == [True, True, True], f"Parts: a chat you scrolled in is still there when you come back to its part {scrolled}")
+    await other.evaluate("agentProject = 'aaa'; project = PROJECTS[0]; bdRender()")
     await other.keyboard.press("0")
-    await other.wait_for_function(f"{cards} === '1,2,3,4'", timeout=5000)
-    check(True, "Parts: key 0 shows all")
+    await other.wait_for_function(f"{cards} === '1,2,3,4' && agentProject === ''", timeout=5000)
+    check(True, "Parts: key 0 shows all parts of all projects, also from one project")
     await other.evaluate("bdPartShow(7); ckNewChat()")
     check(await other.evaluate("!!document.querySelector('.bd-card.draft')"), "Parts: a new chat shows in the part you start it from")
     await other.evaluate("ckDrop(ckKey(CK_DRAFT)); bdRender(); bdPartMove('x/000000000003', 1); bdPartShow(0)")

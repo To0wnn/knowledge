@@ -411,7 +411,7 @@ function bdPartKey(e) {
   const hit = /^(?:Digit|Numpad)(\d)$/.exec(e.code);
   if (!hit) return false;
   const n = Number(hit[1]);
-  if (!e.shiftKey) { bdPartShow(n); return true; }
+  if (!e.shiftKey) { if (!n) switchProject(ALL); bdPartShow(n); return true; } // 0 is everything, as it is off the grid
   const w = document.activeElement?.closest?.(".bd-card") || document.querySelector(".bd-card:hover");
   const key = [...bd.wraps].find(([, x]) => x === w)?.[0];
   if (!n || !key || ck.cards.get(key)?.meta.draft) return false;
