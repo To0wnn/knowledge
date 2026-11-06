@@ -1234,6 +1234,55 @@ def with_git(folders: dict, ws: dict, now: float) -> tuple:
     return {**folders, "linked": linked}, {k: once(w.get("worktree")) if recent(w) else None for k, w in ws.items()}
 
 
+def remember_chat_branch(cid: str, where: dict):
+    """An "Own branch" chat's first message (under chat.START_LOCK): what its Merge needs later, the base branch and
+    config of now."""
+    if where.get("branch"):
+        with LOCK:
+            if cid not in (known := load("chat_branches.json", {})):
+                save("chat_branches.json", {**known, cid: where})
+
+
+chat.remember_branch = remember_chat_branch
+
+
+def chat_busy(cid: str) -> bool:
+    """A turn of this chat runs or waits, or a subagent or background shell of it works. A live agent stays in RUNNING
+    between turns, so that alone says nothing."""
+    lv = chat.LIVE.get(cid)
+    return cid in chat.PENDING or (bool(lv.busy or lv.turn_open or lv.subs or lv.bg) if lv and lv.alive() else cid in chat.RUNNING)
+
+
+def chat_reviews(now: float, gits: dict) -> dict:
+    """For the review card of a closed "Own branch" chat: its branch against the branch it was made from. Only those
+    with commits, the newest 20: the report has a size limit and this runs git every round."""
+    branches = load("chat_branches.json", {})
+    ahead = [cid for cid in gits if cid in branches and (gits[cid] or {}).get("ahead")][-20:]
+    return {cid: r for cid in ahead if (r := review({**branches[cid], "status": "finished", "ended": now}, now))}
+
+
+def clean_chat_branches(closed: list):
+    """A closed chat's worktree and branch go once nothing in them is left to merge: all commits in the base branch, no
+    uncommitted file, still on its own branch. A new message makes them again, at the same path, so its conversation
+    resumes. shortcut: files git ignores go with the worktree, as with a worker; keep them when that ever costs work."""
+    for cid in closed:
+        with chat.START_LOCK:  # a message for this chat starts its agent under the same lock
+            w = load("chat_branches.json", {}).get(cid)
+            if not w or chat_busy(cid) or not workers.merged({**w, "status": "finished"}) or not Path(w["worktree"]).is_dir():
+                continue
+            if workers.git(w["worktree"], "symbolic-ref", "--short", "-q", "HEAD").stdout.strip() != w["branch"] or workers.git(w["worktree"], "status", "--porcelain").stdout.strip():
+                continue
+            if lv := chat.LIVE.pop(cid, None):
+                lv.close()
+            result = workers.remove(w)
+            if not result.endswith("removed"):  # the process has not let go yet: the next round tries again
+                continue
+            with LOCK:
+                save("chat_branches.json", {k: v for k, v in load("chat_branches.json", {}).items() if k != cid})
+                save("chat_worktrees.json", {k: v for k, v in load("chat_worktrees.json", {}).items() if k != cid})
+        log("worker", f"Chat {cid}: no unmerged work left", result)
+
+
 def chat_git(cid: str, folder: str) -> dict | None:
     """An "Own branch" chat's pill: its worktree against its base, not the folder's own checkout; None without one."""
     try:
@@ -1363,8 +1412,12 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
                          "checkpoint": bool(w.get("checkpoint")), "merged": w["status"] == "merged", "git": gits.get(k),
                          **({"progress": progress(w, gits.get(k))} if w["status"] == "running" else {}),
                          **({"review": r} if (r := review(w, now)) else {})} for k, w in sorted(ws.items(), key=lambda kw: -(kw[1].get("started") or 0)) if not w.get("archived")],  # newest first: the server keeps 40
-            "limitWait": wait, "waiting": waiting or {}, "folders": links, "chats": chat_gits, "projects": load("state.json", {}).get("projects", [])}
-    server("POST", "/machine/report", tok, body)
+            "limitWait": wait, "waiting": waiting or {}, "folders": links, "chats": chat_gits, "chatReviews": chat_reviews(now, chat_gits), "projects": load("state.json", {}).get("projects", [])}
+    answer = server("POST", "/machine/report", tok, body)
+    try:
+        clean_chat_branches(answer.get("closed_chats") or [])
+    except Exception as e:  # never cost the round; the next one tries again
+        log("error", "Could not clean up a closed chat's worktree", f"{e}"[:200])
 
 
 def tick() -> dict:
@@ -1483,6 +1536,11 @@ def run_action(a: dict) -> str:
         return workers.rollback(w["cwd"], w["id"])
     if act == "merge":  # the review card's Merge: into the branch the worktree was made from, in the main checkout
         with TICK, LOCK:  # between rounds: a round's merged() cleanup must not remove the worktree halfway
+            if args.get("chat"):  # a closed "Own branch" chat's card
+                w = load("chat_branches.json", {}).get(args["id"])
+                if not w or chat_busy(args["id"]):
+                    raise RuntimeError(f"no idle chat with a branch for {args['id']}")
+                return workers.merge(w)
             ws = load("workers.json", {})
             w = ws.get(f"{args.get('project')}/{args['id']}")
             if not w or w["status"] in ("running", "merged") or not w.get("branch"):

@@ -1638,6 +1638,17 @@ def chat_e2e(tok: str, tmp: Path):
         (pill / f"{n}.txt").write_text(n + "\n", encoding="utf-8")
         g("add", f"{n}.txt")
         g("commit", "-qm", n)
+    clean = repos["Clean repo"] = home / "code" / "Clean repo"
+    clean.mkdir(parents=True)
+    gc = lambda *a: subprocess.run(["git", "-C", str(clean), "-c", "user.name=t", "-c", "user.email=t@example.invalid", *a], check=True, capture_output=True)
+    gc("init", "-q", "-b", "main")
+    gc("config", "user.name", "t")  # Merge commits here, with git's identity of the repository
+    gc("config", "user.email", "t@example.invalid")
+    (clean / ".knowledge-project").write_text("garden\n", encoding="utf-8")
+    (clean / ".gitignore").write_text(".knowledge-project\n", encoding="utf-8")
+    (clean / "a.txt").write_text("one\n", encoding="utf-8")
+    gc("add", "-A")
+    gc("commit", "-qm", "one")
     (pill / "a.txt").write_text("two\n", encoding="utf-8")
     (pill / "new 1.txt").write_text("x", encoding="utf-8")
     (pill / "new2.txt").write_text("y", encoding="utf-8")
@@ -1666,7 +1677,7 @@ def chat_e2e(tok: str, tmp: Path):
         got = next((f.get("git") for f in row["companion"]["folders"]["linked"] if Path(f["path"]).resolve() == pill.resolve()), None)
         check(got == {"branch": "task/KN-12", "base": "main", "changed": 3, "ahead": 2, "behind": 0},
               "board: the companion reports a folder's git pill (branch, 3 changed, 2 ahead of main, 0 behind)", json.dumps(got))
-        new = lambda agent, folder: json.loads(http("POST", "/ui/api/chats", {"machine": mid, "agent": agent, "folder": str(folder)}, ui)[1]).get("chat", {}).get("id")
+        new = lambda agent, folder: json.loads(http("POST", "/ui/api/chats", {"machine": mid, "agent": agent, "folder": str(folder), "worktree": False}, ui)[1]).get("chat", {}).get("id")
         chat = lambda cid: json.loads(http("GET", f"/ui/api/chat?machine={mid}&id={cid}", headers=ui)[1])
         send = lambda cid, text: http("POST", "/ui/api/chat/send", {"machine": mid, "id": cid, "text": text}, ui)[0]
         idle = lambda cid, n: wait_for(lambda: (c := chat(cid))["chat"]["status"] == "idle" and len(c["events"]) >= n, 30)
@@ -1830,6 +1841,50 @@ def chat_e2e(tok: str, tmp: Path):
         check(ok and Path(cwd).resolve() != pill.resolve() and "worktrees" in cwd and f"chat/{own}" in branches
               and any(f"branch chat/{own}" in e["text"] for e in chat(own)["events"]),
               "chat: Own branch runs the agent in a worktree of its own on branch chat/<id>", cwd + " | " + branches + json.dumps(chat(own)["events"])[-400:])
+        # A closed Own-branch chat, per agent: a Review card, Merge, and its worktree and branch gone. Without a choice a
+        # second chat in a folder another chat works in gets its own branch by itself; pressed off it stays in the checkout.
+        gitp = lambda *args, cwd=clean: subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout.strip()
+        cards = lambda: json.loads(http("GET", "/ui/api/board", headers=ui)[1])["items"]
+        action = lambda act, args: http("POST", "/ui/api/machines/action", {"machine": mid, "action": act, "args": args}, ui)
+        report_now = lambda: action("workers_allowed", {"on": False})  # a state action makes the companion report at once
+        report_now()
+        wait_for(lambda: any(Path(f["path"]).resolve() == clean.resolve() and (f.get("git") or {}).get("changed") == 0
+                             for f in next(r for r in machines() if r["id"] == mid)["companion"]["folders"]["linked"]), 30)
+        for agent in ("claude", "codex", "agy"):
+            alone = json.loads(http("POST", "/ui/api/chats", {"machine": mid, "agent": agent, "folder": str(clean)}, ui)[1])["chat"]["id"]
+            check(not chat(alone)["chat"].get("worktree"), f"chat {agent}: alone in a clean checkout it stays there", json.dumps(chat(alone))[-300:])
+            send(alone, "works in the checkout")
+            idle(alone, 2)
+            auto = json.loads(http("POST", "/ui/api/chats", {"machine": mid, "agent": agent, "folder": str(clean)}, ui)[1])["chat"]["id"]
+            off = new(agent, clean)
+            dirty = json.loads(http("POST", "/ui/api/chats", {"machine": mid, "agent": agent, "folder": str(pill)}, ui)[1])["chat"]["id"]
+            check(chat(auto)["chat"].get("worktree") is True and not chat(off)["chat"].get("worktree") and any("another chat works" in e["text"] for e in chat(auto)["events"])
+                  and any("uncommitted" in e["text"] for e in chat(dirty)["events"]) and chat(dirty)["chat"].get("worktree") is True,
+                  f"chat {agent}: beside a working chat or with uncommitted files it gets its own branch, unless pressed off", json.dumps(chat(auto))[-400:])
+            send(auto, "hello branch")
+            done = idle(auto, 2)
+            wt = next((c.get("cwd", "") for c in recorded() if c.get("chat") == auto), "")
+            Path(wt, f"own-{agent}.txt").write_text("own\n")
+            gitp("add", f"own-{agent}.txt", cwd=wt)
+            gitp("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", f"own {agent}", cwd=wt)
+            for c in (alone, off, dirty, auto):
+                http("POST", "/ui/api/chat/close", {"machine": mid, "id": c, "record": False}, ui)
+            card = lambda: next((i for i in cards() if i["kind"] == "review" and i.get("chat") == auto and i.get("can_merge")), None)
+            report_now()
+            check(done and wait_for(card, 30), f"chat {agent}: closed with a commit, its branch gets a Review card with Merge",
+                  json.dumps({k: next(r for r in machines() if r["id"] == mid)["companion"].get(k) for k in ("chats", "chatReviews")}))
+            st = action("merge", {"project": "garden", "id": auto, "chat": True})[0]
+            merged_in = wait_for(lambda: Path(clean, f"own-{agent}.txt").exists(), 30)
+            report_now()
+            check(st == 200 and merged_in and wait_for(lambda: not Path(wt).exists() and not gitp("branch", "--list", f"chat/{auto}"), 30) and not card(),
+                  f"chat {agent}: Merge lands in the checkout, then its worktree and branch go", f"{st} {merged_in} {wt} " + json.dumps(next(r for r in machines() if r["id"] == mid)["actions"])[-500:])
+            # a chat that committed nothing has nothing to merge: closed, it leaves no worktree or card
+            idle_own = json.loads(http("POST", "/ui/api/chats", {"machine": mid, "agent": agent, "folder": str(clean), "worktree": True}, ui)[1])["chat"]["id"]
+            send(idle_own, "only a question")
+            idle(idle_own, 2)
+            http("POST", "/ui/api/chat/close", {"machine": mid, "id": idle_own, "record": False}, ui)
+            report_now()
+            check(wait_for(lambda: not gitp("branch", "--list", f"chat/{idle_own}"), 30), f"chat {agent}: closed without commits its branch goes by itself", gitp("branch", "--list", "chat/*"))
         # A companion restart (an update, a crash) in the middle of a turn: the agent runs on in its chat host, the new
         # companion reads on where the old one stopped, and the turn ends as it would have, in the same agent.
         def restart_companion():

@@ -384,7 +384,7 @@ function ckItem(i) {
   if (i.kind === "review") {
     act("View diff", `The changes on ${i.branch}, read on ${i.label}`, () => ckDiff(i));
     if (i.can_merge) act("Merge", `git merge --no-ff ${i.branch} into ${i.into} on ${i.label}`, () => ckMerge(i));
-    act("Reject", "Keep the branch, take the card off the list; optionally send it back to the agent", () => ckReject(card, i));
+    act("Reject", i.chat ? "Keep the branch, take the card off the list" : "Keep the branch, take the card off the list; optionally send it back to the agent", () => ckReject(card, i));
   }
   if (i.result) act("Open memo", "Read the whole line in its memo; remove it there (or under Tasks) once read", () => main.click());
   if (i.kind === "chat" && i.col === "needs") act("Reply", "Answer in one line without opening the chat (Enter sends, Esc closes)", () => ckReply(card, i), "btn small primary");
@@ -452,7 +452,8 @@ function ckReview(i) {
   if (i.commit) row("last commit", i.commit);
   if (i.done) row("done", i.done);
   if (i.left) row("left", i.left);
-  row("tests", i.tests || "not reported by the worker");
+  if (i.uncommitted) row("uncommitted", `${i.uncommitted} file${i.uncommitted === 1 ? "" : "s"} never committed: not part of a merge, the worktree stays until they are gone`);
+  if (!i.chat) row("tests", i.tests || "not reported by the worker");
   if (i.blocked) { const r = el("span", "ck-review-row ck-item-why"); r.append(el("b", null, "merge by hand"), " ", i.blocked); box.append(r); }
   if (i.files.length) box.append(el("code", "progress-log", i.files.join("\n") + (i.nfiles > i.files.length ? `\n… ${i.nfiles - i.files.length} more` : "")));
   return box;
@@ -461,7 +462,7 @@ async function ckMerge(i) {
   if (!confirm(`Merge ${i.branch} into ${i.into} on ${i.label}?\n\nIts companion runs git merge --no-ff in the main checkout, only when that is on ${i.into} and has no uncommitted changes. A conflict is aborted, nothing is pushed.`)) return;
   try {
     const { id } = await api("/ui/api/machines/action", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ machine: i.machine, action: "merge", args: { project: i.project, id: i.id } }) });
+      body: JSON.stringify({ machine: i.machine, action: "merge", args: { project: i.project, id: i.id, ...(i.chat ? { chat: true } : {}) } }) });
     ck.waits.set(id, `Merge ${i.branch} on ${i.label}`);
     toast(`Asked ${i.label} to merge ${i.branch} into ${i.into}`, false);
   } catch (e) { toast(e.message); }
@@ -474,7 +475,8 @@ function ckReject(card, i) {
   reason.placeholder = "Why (optional; needed to send it back)"; reason.maxLength = 300; reason.setAttribute("aria-label", "Reason");
   back.type = "checkbox"; lab.append(back, ` send back to ${AGENT_NAME[i.agent] || i.agent} as ${i.task}-fix`);
   go.type = "submit";
-  form.append(reason, lab, go);
+  reason.placeholder = i.chat ? "Why (optional)" : reason.placeholder;
+  form.append(reason, ...(i.chat ? [] : [lab]), go);
   form.onsubmit = async (e) => {
     e.preventDefault();
     if (back.checked && !reason.value.trim()) return toast("Sending it back needs a reason: the agent only gets that line.");
@@ -503,12 +505,12 @@ let ckDiffAsk = 0;
 async function ckDiff(i) {
   const body = $("ck-diff-body"), ask = ++ckDiffAsk, say = (cls, text) => body.replaceChildren(el("p", cls, text));
   $("ck-diff-title").textContent = `Changes · ${i.title}`;
-  $("ck-diff-where").textContent = `${i.label} · ${i.kind === "worker" || i.kind === "review" ? `worker ${i.id}` : i.folder}${i.git ? ` · ${ckGitText(i.git)}` : ""}`;
+  $("ck-diff-where").textContent = `${i.label} · ${i.chat ? i.branch : i.kind === "worker" || i.kind === "review" ? `worker ${i.id}` : i.folder}${i.git ? ` · ${ckGitText(i.git)}` : ""}`;
   say("muted", `Asking ${i.label}…`);
   if (!$("ck-diff-dialog").open) $("ck-diff-dialog").showModal();
   try {
     const { id } = await api("/ui/api/git/diff", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(i.kind === "worker" || i.kind === "review" ? { machine: i.machine, worker: `${i.project}/${i.id}` } : { machine: i.machine, chat: i.id }) });
+      body: JSON.stringify(!i.chat && (i.kind === "worker" || i.kind === "review") ? { machine: i.machine, worker: `${i.project}/${i.id}` } : { machine: i.machine, chat: i.id }) });
     for (let n = 0; n < 40 && ask === ckDiffAsk && $("ck-diff-dialog").open; n++) {
       await new Promise((r) => setTimeout(r, n ? 1000 : 300));
       const d = await api(`/ui/api/git/diff?machine=${i.machine}&id=${id}`);
@@ -585,7 +587,7 @@ function ckCard(meta) {
   stop.type = "button"; send.type = "submit"; sendGroup.append(send, more);
   // a new chat only: its own git worktree and branch (chat/<id>) on the pc, so it never works in your checkout
   const branch = el("button", "btn small quiet ck-branch", "Own branch"); branch.type = "button"; branch.hidden = true;
-  branch.title = "Work in its own git worktree on branch chat/<id> (your checkout stays as it is; you merge it yourself)";
+  branch.title = "Work in its own git worktree on branch chat/<id>, merged from a Review card once closed. Left alone, a chat gets this by itself when another chat works in the folder or it has uncommitted files; pressed and released, it stays in the checkout";
   branch.setAttribute("aria-pressed", "false");
   branch.onclick = () => { card.worktree = !card.worktree; branch.setAttribute("aria-pressed", String(card.worktree)); };
   barL.append(attachBtn, filePick, picks, branch); btns.append(mic, stop, sendGroup); bar.append(barL, btns);
@@ -999,7 +1001,7 @@ async function ckStart(card, text) { // the draft's first message: make the chat
   if (!machine || !p) throw new Error(ck.machines.some((m) => m.online && m.companion) ? "No folder in this project on a pc that runs this model: link one under Machines, Folders." : "None of your pcs is online with a companion.");
   card.starting = true;
   try {
-    const res = await api("/ui/api/chats", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine, agent: p.agent, folder, ...(card.worktree ? { worktree: true } : {}) }) });
+    const res = await api("/ui/api/chats", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine, agent: p.agent, folder, ...(card.worktree === undefined ? {} : { worktree: card.worktree }) }) });
     const m = ck.machines.find((y) => y.id === machine);
     let failed = "";
     try {

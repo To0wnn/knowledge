@@ -178,16 +178,16 @@ AGY_ALLOWED = [*(f"command({g})" for g in GIT_ALLOWED), "command(git branch --sh
 
 def codex_git_dirs(where: dict) -> list:
     """--add-dir for what `git add/commit` in a linked worktree writes: the worktree's own git folder (Codex keeps a
-    .git target read-only unless it is named itself), the repository's objects and logs, and of its refs only the task
-    branches and the checkpoints, so main stays out of reach; never the whole .git, whose config and hooks would let a
+    .git target read-only unless it is named itself), the repository's objects and logs, and of its refs only the branches
+    of its kind (task/ or chat/) and the checkpoints, so main stays out of reach; never the whole .git, whose config and hooks would let a
     sandboxed run reach outside the sandbox later. A name in --add-dir must exist, so those two folders are made first.
-    shortcut: a ref's lock file sits next to it, so a worker can move another task's branch too; per-task refs would need
+    shortcut: a ref's lock file sits next to it, so a worker can move another branch of its kind too; per-task refs would need
     a sandbox rule per file."""
     if not where.get("worktree"):
         return []
     common = Path(git(where["cwd"], "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip() or ".")
     own = git(where["cwd"], "rev-parse", "--absolute-git-dir").stdout.strip()
-    refs = [common / "refs" / "heads" / "task", common / "refs" / "knowledge" / "checkpoints"]
+    refs = [common / "refs" / "heads" / (where.get("branch") or "task").split("/")[0], common / "refs" / "knowledge" / "checkpoints"]
     for d in refs:
         d.mkdir(parents=True, exist_ok=True)
     dirs = [d for d in (own, *(str(p) for p in (common / "objects", common / "logs", *refs))) if d and Path(d).is_dir()]

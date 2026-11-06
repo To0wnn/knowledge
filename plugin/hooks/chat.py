@@ -734,6 +734,18 @@ def codex_default(call, folder: str, model: str, effort: str) -> tuple:
 # answer, and when it ends the agent goes on by itself (a turn of its own); Force and Stop interrupt the step the native
 # way (a control_request), the process stays. Measured 2 Nov 2026 with Claude Code 2.1.314. Idle for IDLE_CLOSE with no
 # subagent running, the process ends; the next message resumes the same conversation.
+remember_branch = lambda cid, where: None  # the companion's: what a chat's Merge needs later
+
+
+def codex_worktree_config(folder: str) -> dict:
+    """A Codex chat without YOLO in a linked worktree (Own branch, a worker taken over): the same git folders a worker
+    may write, or every commit on its own branch is refused. A main checkout's .git stays read-only."""
+    where = {"worktree": True, "cwd": folder, "branch": workers.git(folder, "symbolic-ref", "--short", "-q", "HEAD").stdout.strip()}
+    if not workers.project_marker.worktree(Path(folder)) or "/" not in where["branch"]:  # task/ and chat/ only: a flat name is a ref file
+        return {}
+    return {"config": {"sandbox_workspace_write": {"writable_roots": workers.codex_git_dirs(where)[1::2]}}}
+
+
 LIVE: dict = {}  # chat id -> Live
 LIVE_AGENTS = ("claude", "codex", "agy")
 AGENT_NAMES = {"claude": "Claude Code", "codex": "Codex", "agy": "agy"}
@@ -1242,7 +1254,7 @@ class CodexLive(Live):
         self.call("initialize", {"clientInfo": {"name": "knowledge-companion", "version": "1"}})
         self.rpc({"method": "initialized"})
         perms = {"cwd": self.folder, **({"approvalPolicy": "never", "sandbox": "danger-full-access"} if self.yolo
-                                        else {"approvalPolicy": "on-request", "sandbox": "workspace-write"})}
+                                        else {"approvalPolicy": "on-request", "sandbox": "workspace-write", **codex_worktree_config(self.folder)})}
         r = self.call("thread/resume", {"threadId": self.st["session"], **perms}) if self.st["session"] else self.call("thread/start", perms)
         self.st["session"] = (r.get("thread") or {}).get("id") or self.st["session"]
         self.pick = codex_default(self.call, self.folder, *self.pick)
@@ -1724,9 +1736,10 @@ def _start_live(item: dict, post, log, linked, yolo):
                 raise RuntimeError(f"{item.get('folder', '')} is not a folder linked to a project on this pc")
             if item.get("worktree"):  # its own git worktree and branch, made at its first message, reused after
                 where = workers.worktree(item["folder"], cid, prefix="chat")
+                remember_branch(cid, where)
                 if where.get("worktree") and not item.get("session") and cid not in LIVE:
                     post({"chat": cid, "events": [{"kind": "info", "text": f"Works on branch {where['branch']} in its own worktree {where['worktree']}. "
-                                                   "Merge it yourself when it is done; Close leaves the branch and the worktree."}]})
+                                                   "Commit there. Close the chat when it is done: it gets a Review card with Merge, and its worktree goes once nothing is left to merge."}]})
                 elif not where.get("worktree") and not item.get("session") and cid not in LIVE:
                     post({"chat": cid, "events": [{"kind": "info", "text": "The folder is not in a git repository: it works in the folder itself."}]})
                 item = {**item, "folder": where["cwd"]}

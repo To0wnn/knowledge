@@ -2741,7 +2741,7 @@ def machine_rows() -> list[dict]:
         rows.append({"id": mid, "label": m.get("label", mid), "at": m.get("at", 0), "online": now - m.get("at", 0) < ONLINE,
                      "tokens": names, "own": any(own_token(tokens[n], dev) for n in names), "agents": agents,
                      "mine": any(own_token(tokens[n], dev, steer=False) for n in names),
-                     "companion": {**{k: comp.get(k) for k in ("version", "at", "workersAllowed", "game", "maxWorkers", "folders", "projects", "token", "live", "chats")},
+                     "companion": {**{k: comp.get(k) for k in ("version", "at", "workersAllowed", "game", "maxWorkers", "folders", "projects", "token", "live", "chats", "chatReviews")},
                                    "agents": sorted(comp.get("agents") or {}),
                                    "models": {a: v.get("models", []) for a, v in (comp.get("agents") or {}).items()},
                                    "current": {a: v.get("current", {}) for a, v in (comp.get("agents") or {}).items()}} if comp else None,
@@ -5372,7 +5372,7 @@ def action_args(action: str, args: dict) -> dict:
     if action in ("start_worker", "stop_worker", "rollback", "restart", "merge", "takeover", "archive_worker"):  # a task id is unique per project only
         if args.get("project") not in PROJECTS or not in_scope(PROJECTS[args["project"]][1] + "/"):
             raise ValueError("unknown project")
-        return {"project": args["project"], "id": tid()}
+        return {"project": args["project"], "id": tid(), **({"chat": True} if action == "merge" and args.get("chat") is True else {})}
     if action == "trust_hooks":
         return {"agent": agent()}
     if action == "update_plugin":
@@ -5793,6 +5793,10 @@ async def ui_chats(request: Request):
          "updated": now, "status": "idle", "session": "", "next": 0, "seen": 0, "events": [],
          "tokens": [n for n in row["tokens"] if n in tokens and own_token(tokens[n], dev)],
          **({"worktree": True} if b.get("worktree") is True else {})}  # its own git worktree and branch (chat/<id>) on the pc
+    why_own = await asyncio.to_thread(checkout_in_use, comp, d, folder, now) if "worktree" not in b else ""
+    if why_own:  # nobody chose: a second writer in one checkout takes the other's half work along in its commits
+        c["worktree"] = True
+        chat_add(c, "info", f"Own branch by itself: {why_own}. Close the chat when it is done: its branch gets a Review card.")
 
     def create():
         d.mkdir(parents=True, exist_ok=True)
@@ -5805,6 +5809,24 @@ async def ui_chats(request: Request):
     await asyncio.to_thread(create)
     audit("chat-new", f"{mid} {agent} {folder}")
     return JSONResponse({"ok": True, "chat": chat_meta(c)})
+
+
+CHECKOUT_IDLE = 3600  # shortcut: a chat quiet for an hour counts as done with the checkout (uncommitted files count anyway); tune it on real use
+
+
+def checkout_in_use(comp: dict, d: Path, folder: str, now: float) -> str:
+    """Why a new chat should not work in this checkout, '' when it may: uncommitted files (a terminal session of any
+    agent shows here too) or another open chat working there. Workers and Own-branch chats have their own worktree."""
+    pill = next((x.get("git") for x in (comp.get("folders") or {}).get("linked", []) if x["path"] == folder), None)
+    if not pill:  # not a git checkout, or an older plugin
+        return ""
+    if pill.get("changed"):
+        return f"{pill['changed']} uncommitted file{'s' * (pill['changed'] != 1)} in this folder"
+    for f in d.glob(CHAT_GLOB) if d.is_dir() else []:
+        o = read_json(f, None) or {}
+        if o.get("folder") == folder and not o.get("worktree") and not o.get("closed") and (chat_works(o) or now - (o.get("updated") or 0) < CHECKOUT_IDLE):
+            return "another chat works in this folder"
+    return ""
 
 
 BOARD_DONE, BOARD_FAILED = 86400, 7 * 86400  # Done shows the last 24 h; a failed worker or an unread chat needs you for a week
@@ -5902,6 +5924,8 @@ def board_items() -> list[dict]:
                               "title": c.get("title") or "New chat", "folder": c.get("folder"), "at": c.get("updated") or 0,
                               "line": line, "git": chat_git.get(c["id"]) if c.get("worktree") else git.get(c.get("folder")), "outcome": chat_outcome(c),
                               "subs": sum(1 for s in (c.get("subs") or {}).values() if s == "running")})
+            if rv := chat_review_item(r, c):
+                items.append(rv)
             for a in asks_open(c, now):  # one Needs-you item per open approval, answered right there
                 items.append({**base, "kind": "ask", "col": "needs", "id": a["id"], "chat": c["id"], "agent": c.get("agent"),
                               "project": c.get("project"), "key": f"ask:{r['id']}/{c['id']}/{a['id']}", "sig": a["id"],
@@ -5970,6 +5994,24 @@ def board_items() -> list[dict]:
 
 REVIEW_BASE = re.compile(r"(?:-cont|-fix)+$", re.I)  # a hand-over or a review sent back goes on on the task's branch
 TESTS_SAID = re.compile(r"[^;,]*\b(?:tests?|checks?|ci|e2e)\b[^;,]*", re.I)  # the clause of the done text that speaks of tests
+
+
+def chat_review_item(r: dict, c: dict) -> dict | None:
+    """A Review card for a closed "Own branch" chat with commits to merge or files it never committed."""
+    comp = r.get("companion") or {}
+    rv, pill = (comp.get("chatReviews") or {}).get(c["id"]) or {}, (comp.get("chats") or {}).get(c["id"]) or {}
+    ahead, changed = rv.get("ahead") or pill.get("ahead", 0), pill.get("changed", 0)  # no review: an older companion, or no base branch known
+    if not c.get("closed") or not c.get("worktree") or not (ahead or changed):
+        return None
+    what = [f"{ahead} commit{'s' * (ahead != 1)} on {pill.get('branch')} for {rv.get('into') or pill.get('base')}, {rv.get('nfiles', 0)} file{'s' * (rv.get('nfiles', 0) != 1)} changed"] if ahead else []
+    what += [f"{changed} uncommitted file{'s' * (changed != 1)} in its worktree"] if changed else []
+    return {"machine": r["id"], "label": r["label"], "online": r["online"], "kind": "review", "col": "needs", "id": c["id"], "chat": c["id"], "task": c["id"],
+            "agent": c.get("agent"), "project": c.get("project"), "key": f"review:{r['id']}/{c.get('project')}/chat-{c['id']}", "owner": c.get("by"),
+            "sig": hashlib.sha256(f"{rv.get('commit')}|{ahead}|{changed}".encode()).hexdigest()[:16], "title": f"Review chat · {c.get('title') or c['id']}",
+            "at": c.get("updated") or 0, "line": "; ".join(what), "branch": pill.get("branch") or f"chat/{c['id']}", "into": rv.get("into") or pill.get("base") or "",
+            "commits": ahead, "files": rv.get("files", []), "nfiles": rv.get("nfiles", 0), "commit": rv.get("commit", ""), "uncommitted": changed, "git": pill,
+            "blocked": rv.get("blocked", "") or ("" if rv or not ahead else "no base branch was recorded for this chat: merge by hand"),
+            "can_merge": r["online"] and bool(rv.get("ahead")) and not rv.get("blocked")}
 
 
 def review_items(rows: list[dict], tasks: list[dict]) -> list[dict]:
@@ -6069,6 +6111,8 @@ async def ui_review_reject(request: Request):
     item = next((i for i in await asyncio.to_thread(board_items) if i["kind"] == "review" and i["key"] == key), None)
     if not item:  # only the cards of this person's own pcs exist on their board
         return JSONResponse({"error": "no such review on your board"}, status_code=404)
+    if back and item.get("chat"):
+        return JSONResponse({"error": "a chat has no task line to send back: open the chat and tell it"}, status_code=400)
     line = ""
     if back:
         if not may_approve(item["project"]):
@@ -7058,6 +7102,7 @@ async def machine_report(request: Request):
                   "projects": [str(p)[:80] for p in (b.get("projects") or [])[:100]],
                   # "Own branch" chats: the git pill of each one's worktree, by chat id
                   "chats": {str(k): git_pill(g) for k, g in list((b.get("chats") or {}).items())[:50] if re.fullmatch(r"[0-9a-f]{12}", str(k))},
+                  "chatReviews": {str(k): worker_review(g) for k, g in list((b.get("chatReviews") or {}).items())[:50] if re.fullmatch(r"[0-9a-f]{12}", str(k))},
                   "waiting": {str(k)[:120]: str(v)[:200] for k, v in list((b.get("waiting") or {}).items())[:50]}}
         waits = [str(i)[:60] for i in (b.get("limitWait") or [])][:20]
     except (ValueError, AttributeError, TypeError) as e:
@@ -7075,7 +7120,9 @@ async def machine_report(request: Request):
     await asyncio.to_thread(update_state, MACHINES_FILE, change)
     for tid in told:
         notify(f"Knowledge: task {tid} waits on {dev.get('machine_label')}: every agent there is at 90% of its usage limit.")
-    return JSONResponse({"ok": True})
+    # its "Own branch" chats that are closed: the companion removes what has nothing left to merge
+    closed = await asyncio.to_thread(lambda: [k for k in report["chats"] if (read_json(chat_file(dev["machine"], k), None) or {}).get("closed")])
+    return JSONResponse({"ok": True, "closed_chats": closed})
 
 
 @server.custom_route("/ui/api/task/approve", methods=["POST"])

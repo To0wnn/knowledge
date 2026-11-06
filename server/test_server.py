@@ -1427,7 +1427,7 @@ def board_contract(tmp, ck, fr, raw, er, et):
              "- [Claude, BRD-9-done]: board result; branch task/BRD-9; done: it; left: nothing"]
     assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": "\n".join(lines) + "\n## Keuzes"}, fr)[0]
     # A chat with a reply nobody read needs you; one with a refused tool call says so; a running one runs.
-    cids = [json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/x/garden"})[2])["chat"]["id"] for _ in range(3)]
+    cids = [json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/x/garden", "worktree": False})[2])["chat"]["id"] for _ in range(3)]
     for cid in cids:
         assert ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": f"hello {cid}"})[0] == 200
     http("GET", "/machine/chats", token=fr, headers=pc)
@@ -1520,6 +1520,27 @@ def board_contract(tmp, ck, fr, raw, er, et):
     rid = json.loads(ui("/ui/api/git/diff", {"machine": mid, "chat": wid})[2])["id"]
     assert json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["diffs"] == [{"id": rid, "folder": "/home/x/garden", "chat": wid}]
     http("POST", "/machine/chats/events", {"chat": wid, "events": [], "done": True}, token=fr, headers=pc)  # its turn ends: no busy chat left
+    # Closed, an Own-branch chat gets a Review card (not before), its pc hears it is closed, and Merge names the chat.
+    rv = {"into": "main", "ahead": 2, "nfiles": 1, "files": ["b.txt"], "commit": "feat: beds Sup3rSecret99", "blocked": ""}
+    wrep = {**rep, "chats": {wid: {**wpill, "ahead": 2}}, "chatReviews": {wid: rv, "../x": rv}}
+    assert json.loads(http("POST", "/machine/report", wrep, token=fr, headers=pc)[1])["closed_chats"] == []
+    review = lambda: next((i for i in board() if i["kind"] == "review" and i.get("chat") == wid), None)
+    assert not review(), "open: no card"
+    assert ui("/ui/api/chat/close", {"machine": mid, "id": wid, "record": False})[0] == 200
+    assert json.loads(http("POST", "/machine/report", wrep, token=fr, headers=pc)[1])["closed_chats"] == [wid]
+    card = review()
+    assert card["can_merge"] and card["uncommitted"] == 1 and card["branch"] == f"chat/{wid}" and "2 commits" in card["line"] and "Sup3rSecret99" not in card["commit"], card
+    assert ui("/ui/api/review/reject", {"key": card["key"], "reason": "no", "send_back": True})[0] == 400, "a chat has no task line to send back"
+    assert ui("/ui/api/machines/action", {"machine": mid, "action": "merge", "args": {"project": "garden", "id": wid, "chat": True}})[0] == 200
+    assert [x["args"] for x in json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"]] == [{"project": "garden", "id": wid, "chat": True}]
+    http("POST", "/machine/report", {**rep, "chats": {wid: wpill}, "chatReviews": {wid: {**rv, "ahead": 0}}}, token=fr, headers=pc)
+    assert review()["uncommitted"] == 1 and not review()["can_merge"], "only uncommitted files left: a card, nothing to merge"
+    http("POST", "/machine/report", {**rep, "chats": {wid: {**wpill, "changed": 0}}, "chatReviews": {}}, token=fr, headers=pc)
+    assert not review(), "nothing left: no card"
+    # Nobody chose: beside a working chat, or with uncommitted files, a new chat gets its own branch and says why.
+    fresh = lambda **k: json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/x/garden", **k})[2])["chat"]
+    auto = fresh()
+    assert auto["worktree"] is True and fresh(worktree=False)["worktree"] is False
     # Every companion poll reads diffs.json; it is written only when a request waits or expired.
     dq = tmp / "chats" / mid / "diffs.json"
     before = dq.stat().st_mtime_ns
