@@ -17,7 +17,7 @@ const ckScope = (x) => !agentProject || x.project === agentProject; // the heade
 function ckRun(on) { clearTimeout(ck.timer); if (on) { ck.summaryAt = 0; ckTick(); } }
 
 // The bar and the board: the pcs, the chats and the board every ~5 s on the board (10 s in a chat); the open chat
-// every 1.5 s while it runs, else 4 s. Only the chats on screen are polled (the open one, or the grid's cards on
+// every 1.5 s while it runs, else 4 s (15 s in a tab out of view). Only the chats on screen are polled (the open one, or the grid's cards on
 // screen, mission.js bdLive): showing a chat's log is what marks it read.
 async function ckTick() {
   if ($("cockpit").hidden) return;
@@ -28,8 +28,10 @@ async function ckTick() {
     await Promise.all(live.map(ckPoll));
   } catch (e) { $("ck-list").title = e.message; if (!ck.ready) { ck.error = e.message; ckList(); } }
   clearTimeout(ck.timer);
-  ck.timer = setTimeout(ckTick, live.some((c) => ckBusy(c.meta.status)) ? 1500 : 4000);
+  ck.timer = setTimeout(ckTick, document.hidden ? 15000 : live.some((c) => ckBusy(c.meta.status)) ? 1500 : 4000); // out of view: enough for the badge and a notification
 }
+// Back in view: catch up now, which also marks the open chat read.
+document.addEventListener("visibilitychange", () => { if (!document.hidden && !$("cockpit").hidden) { clearTimeout(ck.timer); ckTick(); } });
 async function ckSummary() {
   ck.summaryAt = Date.now();
   const [ms, cs, bd] = await Promise.all([api("/ui/api/machines"), api("/ui/api/chats"), api("/ui/api/board").catch(() => null)]);
@@ -948,8 +950,8 @@ async function ckPoll(card) {
   if (card.meta.parent) return ckSubPoll(card);
   if (card.meta.draft) return ckPicker(card), ckDraftWhere(card);
   let res;
-  // only the chat opened full counts as read; a card glanced at on the board stays under Needs you
-  const peek = ck.view !== ckKey(card.meta) ? "&peek=1" : "";
+  // only the chat opened full and in view counts as read; a card glanced at on the board, or a tab in the background, stays under Needs you
+  const peek = ck.view !== ckKey(card.meta) || document.hidden ? "&peek=1" : "";
   // a long chat opens on its newest part; the rest loads when you scroll up (ckOlder)
   const tail = card.after ? "" : `&tail=${CK_PAGE}`;
   try { res = await api(`/ui/api/chat?machine=${card.meta.machine}&id=${card.meta.id}&after=${card.after}${tail}${peek}`); }

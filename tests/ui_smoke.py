@@ -1689,6 +1689,33 @@ async def images(browser, secret: str) -> None:
     await ctx.close()
 
 
+async def chat_tabs(browser, secret: str) -> None:
+    """A chat in a tab of its own. Read-only: the chat polls are aborted, so a live chat is never marked read."""
+    ctx, pg, errors = await page(browser, secret, "/ui#/chats", viewport={"width": 1440, "height": 900})
+    await pg.wait_for_function("ck.summaryAt > 0 && ck.ready", timeout=15000)
+    cid = await pg.evaluate("ck.chats.find((c) => !c.closed && !c.parent)?.id")
+    if not cid:
+        print("skip chat tabs (no open chat)")
+        await ctx.close()
+        return
+    polls = []
+    async def poll(route):
+        polls.append(route.request.url)
+        await route.abort()
+    await pg.route("**/ui/api/chat?*", poll)
+    await pg.evaluate("Object.defineProperty(document, 'hidden', {get: () => window.fakeHidden, configurable: true}); window.fakeHidden = true")
+    await pg.evaluate(f"go('#/chats/{cid}')")
+    await pg.wait_for_function("document.body.classList.contains('in-chat')", timeout=5000)
+    await pg.wait_for_timeout(600)
+    check(bool(polls) and all("peek=1" in u for u in polls), f"Chat tab: out of view its polls leave the chat under Needs you ({len(polls)} polls)")
+    polls.clear()
+    await pg.evaluate("window.fakeHidden = false; document.dispatchEvent(new Event('visibilitychange'))")
+    await pg.wait_for_timeout(600)
+    check(any("peek=1" not in u for u in polls), "Chat tab: back in view it catches up at once and counts as read")
+    check(not errors, f"no page errors on a chat tab {errors[:2]}")
+    await ctx.close()
+
+
 async def main() -> None:
     secret = os.environ.get("KNOWLEDGE_PROXY_SECRET") or subprocess.run(["secret", "KNOWLEDGE_PROXY_SECRET"], check=True, capture_output=True, text=True).stdout.strip()
     async with async_playwright() as p:
@@ -1710,6 +1737,7 @@ async def main() -> None:
         await shell_pages(browser, p.devices, secret)
         await no_agents(browser, secret)
         await images(browser, secret)
+        await chat_tabs(browser, secret)
         await board(browser, p.devices, secret)
         await follow(browser, p.devices, secret)
         await live_refresh(browser, secret)
