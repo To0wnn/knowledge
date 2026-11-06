@@ -728,7 +728,7 @@ dialog.ck-diff { width: min(980px, calc(100vw - 32px)); }
    world is one transformed layer; zoomed out (.far) a card shows its summary in large type instead of the chat. */
 .ck.board .ck-chats { display: none; }
 /* The chat grid: frames and cards tiled to fill the screen; mission.js sets --bg-cols and --bg-row from the stage (two
-   rows at most on screen, more scroll). A frame is a heading row, hidden with one project (unless folded). */
+   rows at most on screen, more scroll). A frame is a heading row, hidden with one project. */
 .bd { position: relative; min-height: 0; overflow: hidden; }
 .bd-stage { position: absolute; inset: 0; overflow: hidden auto; }
 .bd-stage:focus-visible { outline-offset: -2px; } /* it fills a clipping box: the ring goes inside */
@@ -737,12 +737,8 @@ dialog.ck-diff { width: min(980px, calc(100vw - 32px)); }
 .bd-frame { grid-column: 1 / -1; }
 .bd.one .bd-frame { display: none; }
 .bd-frame-title { display: flex; align-items: center; gap: 8px; height: 36px; margin: 0; padding: 0 10px; border: 0; border-radius: var(--r-md); background: transparent; color: var(--ink); font-size: 16px; cursor: pointer; max-width: calc(100% - 16px); }
-.bd-frame-title:hover { background: var(--hover); }
 .bd-frame-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bd-frame-title .ck-count { cursor: default; } /* a count, not a second button */
 #ck-view .n { margin-left: 6px; color: var(--act-text); font-weight: 650; font-variant-numeric: tabular-nums; }
-.bd-chev { color: var(--muted); transition: transform .15s; }
-.bd-frame.shut .bd-chev { transform: rotate(-90deg); }
 .bd-card { position: relative; display: grid; height: var(--bg-row, 420px); border-radius: var(--r-lg); }
 .bd-card[hidden] { display: none; }
 .bd-card > .ck-card { min-height: 0; height: 100%; }

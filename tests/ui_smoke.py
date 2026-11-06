@@ -17,7 +17,7 @@ a toast instead of alert(); skipped on an older server. The agents pages: the Ag
 the earlier chats' states, filter and Closed, Tasks' Cancel and counts, Machines full width, Changes' Deleted section (skipped on an
 older server). Admin and Help in the shell (0.20): sidebar, header, tab bar, settings labels, "Saved" and the server's
 message on a refusal (faked; skipped on an older server). Agents > the grid (desktop): #/chats and old links, columns, frames per
-project, folding, Esc and the full chat; a phone keeps the list (skipped without it). A chat in a tab of its own: no bars, its logo, its title, its keys, and out of view it does not count as read.
+project, Esc and the full chat; a phone keeps the list (skipped without it). A chat in a tab of its own: no bars, its logo, its title, its keys, and out of view it does not count as read.
 The Review card with faked data: Merge asks first and queues the pc's action, Reject sends reason and send back
 (intercepted; skipped on an older server). Follow a worker: its transcript read only when it ended, the Steer composer
 and Take over when it runs (intercepted; skipped on an older server). The design system (0.21): button heights and radii, quiet chips, one link colour on several views. The one lamp (0.37).
@@ -1149,8 +1149,8 @@ async def board(browser, devices, secret: str) -> None:
     await pg.route("**/ui/api/chat?*", lambda r: r.abort())
     check(await pg.evaluate("[gridCols(4, 1700), gridCols(5, 1700), gridCols(4, 2400), gridCols(1, 2400), gridCols(3, 600)].join() === '2,3,4,1,1'"),
           "Grid: as many columns as fit, balanced (4 -> 2x2, 5 -> 3+2)")
-    fr = await pg.evaluate("JSON.stringify(bdProjects([{project: 'b'}, {project: ''}, {project: 'a'}, {project: 'b'}], ['a']))")
-    check(fr == '[{"project":"a","n":1,"shut":true},{"project":"b","n":2,"shut":false},{"project":"","n":1,"shut":false}]', f"Grid: frames in name order, no project last, with counts and folding {fr}")
+    fr = await pg.evaluate("JSON.stringify(bdProjects([{project: 'b'}, {project: ''}, {project: 'a'}, {project: 'b'}]))")
+    check(fr == '[{"project":"a","n":1},{"project":"b","n":2},{"project":"","n":1}]', f"Grid: frames in name order, no project last, with counts {fr}")
     await pg.wait_for_function("ck.summaryAt > 0", timeout=15000)
     order = await pg.evaluate("""(() => { const keep = [ck.chats, ck.board, agentProject]; agentProject = '';
       ck.chats = [{id: 'run', machine: 'x', status: 'running', updated: 9, raised: 1}, {id: 'done', machine: 'x', status: 'idle', updated: 8, raised: 3},
@@ -1213,12 +1213,6 @@ async def board(browser, devices, secret: str) -> None:
         await pg.evaluate("[...bd.wraps.values()][0].focus()")
         await pg.keyboard.press("Escape")
         check(await pg.evaluate("document.activeElement === $('bd-stage') && !ck.view"), "Grid: Esc leaves a focused card for the grid")
-        fold = "document.querySelector('#bd .bd-frame-title').click()"  # with one project the title is hidden until folded
-        await pg.evaluate(fold)
-        shut = await pg.evaluate("(() => { const f = document.querySelector('#bd .bd-frame'), p = [...bd.frames].find(([, b]) => b === f)[0]; return [f.firstChild.getAttribute('aria-expanded'), [...bd.wraps.values()].filter((w) => (ck.chats.find((c) => c.id === w.dataset.id)?.project || '') === p).every((w) => w.hidden), !!f.firstChild.offsetParent]; })()")
-        await pg.evaluate(fold)
-        check(shut == ["false", True, True] and await pg.evaluate("document.querySelector('#bd .bd-frame-title').getAttribute('aria-expanded') === 'true'"),
-              f"Grid: a frame folds its cards away, stays reachable and opens again {shut}")
         await pg.evaluate("ckShow(ck.chats.find((c) => bd.wraps.has(ckKey(c))))")  # what a row in the list does
         await pg.wait_for_function("location.hash.startsWith('#/chats/') && $('bd').hidden && $('ck-canvas').querySelector('.ck-card') && !!$('ck-side').offsetParent", timeout=5000)
         await pg.go_back()
