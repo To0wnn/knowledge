@@ -5378,8 +5378,14 @@ def sub_list(c: dict) -> list:
             for k, v in info if k in finished or subs.get(k) == "running"]
 
 
+def chat_works(c: dict) -> bool:
+    """Its turn runs, or a subagent or background shell of it still works."""
+    return c.get("status") in ("queued", "running") or "running" in (c.get("subs") or {}).values() or int(c.get("bg") or 0) > 0
+
+
 def chat_meta(c: dict) -> dict:
     return {**{k: c.get(k) for k in ("id", "agent", "folder", "project", "title", "by", "created", "updated", "status", "session")},
+            "raised": c.get("raised") or c.get("updated"),  # when it last wanted you: the grid's order
             "subs": sum(1 for s in (c.get("subs") or {}).values() if s == "running"),  # subagents running now
             "closed": bool(c.get("closed")),
             "sub_list": sub_list(c),
@@ -5459,6 +5465,7 @@ def chat_add(c: dict, kind: str, text: str, events: int = CHAT_EVENTS, size_cap:
     while len(c["events"]) > events or size > size_cap:
         size -= len(c["events"].pop(0)["text"]) + 60
         c["trimmed"] = True
+    c.setdefault("raised", c.get("updated"))  # a new chat, or one from before "raised": it stays where it was
     c["updated"] = time.time()
 
 
@@ -6375,6 +6382,7 @@ async def machine_chat_ask(request: Request):
              "at": now, "expires": now + CHAT_ASK_MINUTES * ASK_MINUTE, "minutes": CHAT_ASK_MINUTES, "status": "pending"}
         keep = [x for x in c.get("asks", []) if x["status"] == "pending" or not x.get("sent") or now - x["at"] < 86400]
         c["asks"] = (keep + [a])[-50:]
+        c["raised"] = now  # its turn waits on the owner and is denied unanswered: it must not sit out of sight
         chat_add(c, "ask", f"asks: {tool}: {' '.join(detail.split())[:300]}" + (f" ({reason})" if reason else ""))
         out.update(id=a["id"], timeout=CHAT_ASK_MINUTES * 60)
     await asyncio.to_thread(update_state, f, change)
@@ -6403,6 +6411,7 @@ async def machine_chat_events(request: Request):
     auto = b.get("auto") is True and not b.get("done")  # the agent went on by itself (a live chat): a turn without a message
 
     def change(c):
+        worked = chat_works(c)
         if auto and c.get("status") not in ("queued", "running"):
             c["status"] = "running"
         for k, t, extra in events:
@@ -6437,7 +6446,10 @@ async def machine_chat_events(request: Request):
                 c["status"] = "queued"
             else:
                 c["status"] = "idle"
+        if worked and not chat_works(c) and not any(k == "info" and t.startswith("Stopped") for k, t, _ in events):  # the owner's own stop: nothing to come back to
+            ended.append(True)
     nxt: list = []
+    ended: list = []
     await asyncio.to_thread(update_state, f, change)
     left, started = [], []  # live messages not yet handed out when the turn ended: they go next, in order, never lost
 
@@ -6453,9 +6465,12 @@ async def machine_chat_events(request: Request):
         await asyncio.to_thread(update_state, f.parent / "queue.json", turn_over)
         if left or any(started):
             await asyncio.to_thread(update_state, f, lambda c: c.update(pending=left + c.get("pending", []), status="queued"))
+            ended.clear()  # a message goes in next: not finished
     elif auto:  # its own turn runs on the pc: the busy list and live messages need its entry (not over a message still to hand out)
         await asyncio.to_thread(update_state, f.parent / "queue.json",
                                 lambda q: None if "msg" in q.get(c["id"], {}) else q.setdefault(c["id"], {}).update(busy=True, stop=False))
+    if ended:
+        await asyncio.to_thread(update_state, f, lambda c: c.update(raised=time.time()))
     return JSONResponse({"ok": True})
 
 

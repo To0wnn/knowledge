@@ -421,11 +421,11 @@ function bdShow() {
   if (on) bdRender();
 }
 
-// The chats in grid order: per project the ones waiting on you first, then the running ones, then the newest.
+// The chats in grid order: per project the one that last finished (or asks an approval) first. A card keeps its place
+// otherwise: a new message, its events or reading it never move it; its state shows on the card.
 function bdChats() {
-  const rank = { needs: 0, running: 1, idle: 2 };
   return ck.chats.filter(ckScope).map((c) => ({ c, st: ckState(c) })).filter((x) => x.st !== "closed") // closed: under the list's Closed only
-    .sort((a, b) => rank[a.st] - rank[b.st] || (b.c.updated || 0) - (a.c.updated || 0));
+    .sort((a, b) => (b.c.raised || 0) - (a.c.raised || 0));
 }
 
 // Frames and cards are kept per project and per chat: a re-render (every summary) moves them, never rebuilds them, so

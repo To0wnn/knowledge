@@ -824,6 +824,27 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     http("POST", "/machine/chats/events", {"chat": mc, "events": [], "bg": 0}, token=fr, headers=pc)
     http("POST", "/machine/chats/events", {"chat": mc, "events": [], "done": True}, token=fr, headers=pc)
     assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["chat"]["subs"] == 0, "no subagent outlives its turn"
+    # The grid's order: "raised" moves only when the work really ended (subagents and shells too), not on a new message or its events.
+    raised = lambda: json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["chat"]["raised"]
+    post = lambda **k: http("POST", "/machine/chats/events", {"chat": mc, "events": [], **k}, token=fr, headers=pc)
+    r0 = raised()
+    assert r0 and ui("/ui/api/chat/send", {"machine": mid, "id": mc, "text": "more"})[0] == 200
+    http("GET", "/machine/chats", token=fr, headers=pc)
+    post(events=[{"kind": "text", "text": "busy"}, {"kind": "sub", "text": "s", "sub": "tr1", "status": "running"}])
+    assert raised() == r0, "a new message and its events do not raise a card"
+    post(done=True, running_subs=["tr1"], bg=1)
+    assert raised() == r0, "the turn ended, but a subagent and a shell still work"
+    post(events=[{"kind": "sub", "text": "s", "sub": "tr1", "status": "done"}])
+    assert raised() == r0, "a shell still works"
+    post(bg=0)
+    r1 = raised()
+    assert r1 > r0, "the last one ended: now it is done"
+    post(events=[{"kind": "text", "text": "late"}], done=True)
+    assert raised() == r1, "a second end is no new finish"
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": mc, "text": "stop this"})[0] == 200
+    http("GET", "/machine/chats", token=fr, headers=pc)
+    post(events=[{"kind": "info", "text": "Stopped."}], done=True)
+    assert raised() == r1, "the owner's own stop is no finish"
     # Close: off the board (and, in the page, the list), kept under Closed; not while a turn runs; a message opens it.
     on_board = lambda: any(i["kind"] == "chat" and i["id"] == mc for i in json.loads(ui("/ui/api/board")[2])["items"])
     assert on_board()
