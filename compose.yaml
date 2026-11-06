@@ -10,6 +10,8 @@ services:
     user: "${KNOWLEDGE_UID:-1000}:${KNOWLEDGE_GID:-1000}"  # the owner of ./data
     ports: ["${KNOWLEDGE_PORT:-8766}:8766"]
     mem_limit: 3g  # the embedding model uses ~1 GB
+    cap_drop: [ALL]  # it runs as a plain user and needs no kernel privilege
+    security_opt: ["no-new-privileges:true"]
     environment:
       KNOWLEDGE_UI_PASSWORD: ${KNOWLEDGE_UI_PASSWORD:?set KNOWLEDGE_UI_PASSWORD in .env}
       KNOWLEDGE_ALLOWED_HOSTS: ${KNOWLEDGE_ALLOWED_HOSTS:-localhost:8766,127.0.0.1:8766}  # host:port the clients use

@@ -40,8 +40,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.3.3  # setup-python has no 3.9 for this runner's Ubuntu; uv fetches a standalone build
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3; setup-python has no 3.9 for this runner's Ubuntu; uv fetches a standalone build
       - name: Git identity for the tests that commit
         run: git config --global user.name ci && git config --global user.email ci@example.invalid
       - name: Self-tests under Python 3.9
@@ -59,15 +59,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.3.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: "3.14"  # as in the image: onnxruntime has no wheels for 3.15 yet
-      - uses: actions/setup-go@v7  # tests/clients_e2e.py starts the agy plugin's MCP command the way Go (agy) does
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7; tests/clients_e2e.py starts the agy plugin's MCP command the way Go (agy) does
         with:
           go-version: "1.x"  # the runner's own Go; "stable" downloads the newest for 20 s and the test needs no particular version
           cache: false
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
       - name: Real CLIs

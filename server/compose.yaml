@@ -13,6 +13,8 @@ x-server: &server
   # Hard cap: the embedding model uses ~1 GB, the optional reranker ~1.1 GB while it runs; a runaway can never
   # squeeze the other forge services (measured 18 and 28 Oct 2026).
   mem_limit: 3500m
+  cap_drop: [ALL]  # it runs as a plain user and needs no kernel privilege
+  security_opt: ["no-new-privileges:true"]
   environment: &env
     KNOWLEDGE_MEMORY: /data/memory
     KNOWLEDGE_HOMELAB: /data/homelab
