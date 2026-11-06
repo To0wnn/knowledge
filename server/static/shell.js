@@ -52,8 +52,10 @@ function keepScroll() {
 }
 function restoreScroll(hash) {
   const at = scrolled.get(hash); if (!at) return;
-  const put = () => { for (const [id, top] of Object.entries(at)) if (id === "@window") window.scrollTo(0, top); else if ($(id)) $(id).scrollTop = top; };
-  requestAnimationFrame(put); setTimeout(put, 400); setTimeout(put, 1200); // lists render after their data comes
+  const you = new AbortController(); // once you scroll or click yourself, a retry would throw you back
+  for (const ev of ["wheel", "touchstart", "pointerdown", "keydown"]) addEventListener(ev, () => you.abort(), { capture: true, passive: true, signal: you.signal });
+  const put = () => { if (!you.signal.aborted) for (const [id, top] of Object.entries(at)) if (id === "@window") window.scrollTo(0, top); else if ($(id)) $(id).scrollTop = top; };
+  requestAnimationFrame(put); setTimeout(put, 400); setTimeout(() => { put(); you.abort(); }, 1200); // lists render after their data comes
 }
 function applyRoute() {
   let r = parseRoute(location.hash);
