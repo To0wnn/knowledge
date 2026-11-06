@@ -53,6 +53,19 @@ def git(cwd, *args, env=None, check=False, timeout=60) -> subprocess.CompletedPr
                           env={**base, **(env or {})}, check=check, stdin=subprocess.DEVNULL, timeout=timeout)
 
 
+def copy_included(repo: Path, wt: Path):
+    """A new worktree has no .env and the like, so a worker cannot run the project. The repository's .worktreeinclude says
+    what to copy, as in Claude Code: gitignore syntax, only files that git ignores as well, so nothing gets committed."""
+    if not (repo / ".worktreeinclude").is_file():
+        return
+    listed = lambda *how: set(git(repo, "ls-files", "-z", "--others", "--ignored", *how, check=True).stdout.split("\0")) - {""}
+    for rel in listed("--exclude-from=.worktreeinclude") & listed("--exclude-standard"):
+        src, dst = repo / rel, wt / rel
+        if src.is_file() and not src.is_symlink() and not dst.exists():  # a link could point anywhere
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+
+
 def worktree(folder: str, tid: str, project: str = "", prefix: str = "task", make: bool = True) -> dict:
     """Where a worker for task `tid` works: {cwd, worktree, branch, repo, base, base_branch} with its own worktree on branch
     task/<base ID> when the project folder is in a git repository (an existing one is reused: a hand-over goes on
@@ -76,6 +89,7 @@ def worktree(folder: str, tid: str, project: str = "", prefix: str = "task", mak
         r = git(repo, "worktree", "add", "-q", str(wt), branch) if has else git(repo, "worktree", "add", "-q", "-b", branch, str(wt), "HEAD")
         if r.returncode:
             raise RuntimeError(f"git worktree add failed: {(r.stderr or r.stdout).strip()[:200]}")
+        copy_included(repo, wt)
     cwd = wt / Path(os.path.relpath(Path(folder).resolve(), repo.resolve()))
     root, name = project_marker.project_root(Path(folder).resolve())
     marker = cwd / project_marker.MARKER
@@ -606,6 +620,24 @@ def self_test():
     with tempfile.TemporaryDirectory() as t:
         WORKTREES = Path(t) / "wt"
         os.environ["GIT_INDEX_FILE"] = outer = str(Path(t) / "outer-index")  # as inside a git hook of another repository
+        # .worktreeinclude: only what it names and git ignores, and the copies stay out of commits.
+        inc = Path(t) / "inc"
+        inc.mkdir()
+        git(inc, "init", "-q", "-b", "main", check=True)
+        for k, v in (("user.name", "t"), ("user.email", "t@x")):
+            git(inc, "config", k, v, check=True)
+        (inc / ".gitignore").write_text(".env\nbuild/\n")
+        (inc / ".worktreeinclude").write_text(".env\nnot-ignored.txt\n")
+        (inc / ".env").write_text("X=1\n")
+        (inc / "not-ignored.txt").write_text("stays out\n")
+        (inc / "build").mkdir()
+        (inc / "build" / "big").write_text("not named\n")
+        git(inc, "add", ".gitignore", ".worktreeinclude", check=True)
+        git(inc, "commit", "-qm", "one", check=True)
+        made = Path(worktree(str(inc), "INC-1")["worktree"])
+        assert (made / ".env").read_text() == "X=1\n" and not (made / "not-ignored.txt").exists() and not (made / "build").exists(), list(made.iterdir())
+        assert not git(made, "status", "--porcelain", "--untracked-files=all").stdout.strip(), "copied files stay out of commits"
+        assert git(inc, "worktree", "remove", str(made)).returncode == 0, "and do not block removing the worktree"
         repo = Path(t) / "repo"
         sub = repo / "app"
         sub.mkdir(parents=True)

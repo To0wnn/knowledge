@@ -49,7 +49,8 @@ The companion that starts workers is described in [companion.md](companion.md); 
 - **Workers, not chats:** a task never goes into someone's chat. The companion (below) starts a **worker** per ready
   task: a fresh headless session of the task's agent (Claude Code `claude -p --output-format stream-json`, Codex
   `codex exec --json`, agy `agy -p`) in its own git worktree on branch `task/<ID>` (`~/.knowledge/worktrees/`), or in
-  the project folder when that is no git repository. Without YOLO a worker may do what its task needs and no more: edit
+  the project folder when that is no git repository. A new worktree gets the ignored files the repository's
+  `.worktreeinclude` names (`.env` and the like; gitignore syntax, as in Claude Code: only files git ignores too). Without YOLO a worker may do what its task needs and no more: edit
   its own folder, use the knowledge tools, and run `git status/add/commit`, plus `git diff`/`git log` in fixed forms for Claude only
   (`--output=<file>` would write anywhere, .git/config included; agy rules are prefixes, so agy gets none) (no push, no other command; a
   headless run cannot ask, so the rest is refused). Each agent the native way: Claude `--permission-mode acceptEdits`

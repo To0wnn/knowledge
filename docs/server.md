@@ -70,6 +70,32 @@ the admin page to be given projects. `KNOWLEDGE_PROXY_IPS` are the addresses tru
   tries a minute), or, for several people, a reverse proxy with forward auth (for example Authentik) that sets the user
   header and a shared secret (`KNOWLEDGE_PROXY_SECRET`).
 
+## Back up and restore
+
+Everything lives in `./data` and `.env`. Copy both, with the container stopped or from a filesystem snapshot:
+
+```sh
+docker compose stop knowledge && tar czf knowledge-$(date +%F).tgz data .env && docker compose start knowledge
+```
+
+| In `./data` | What | Without it |
+|---|---|---|
+| `memory/`, `docs/`, `shared/`, `projects/` | the notes | lost |
+| `admin/` | tokens, people, projects, chats, the sign-in key | every device and person starts over |
+| `state/` | audit log, version history, trash | no undo |
+| `state/vectors.npz`, `models/`, `voice/` | search index, optional models | rebuilt or fetched again; may be left out |
+
+To restore, unpack both next to `compose.yaml` and `docker compose up -d`. The same tokens work and the search index
+rebuilds itself. `tests/backup_restore.py`, part of the check, does this for real on every commit. An untested backup is
+a hope, so restore yours somewhere once as well.
+
+## Health checks
+
+`/health` answers `ok` while the process lives. `/health?ready=1` is 503 until the indexes are loaded.
+`/health?disk=1` is 503 while the note folders do not answer: point your monitor at that one. A network share that hangs
+would otherwise make every read wait as long as the file server is away. After 10 s of silence every request gets a 503 at
+once, with one notice each way, until the folders answer again; agents with an offline copy go on from that.
+
 ## Notifications
 
 Notices (a Needs-you item, a stalled or idle task, a worker waiting for its usage limit, a risky YOLO action, shared

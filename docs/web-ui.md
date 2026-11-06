@@ -33,7 +33,7 @@ Moved from the README; [back to the README](../README.md).
   says so in the write's answer. Searches in the web UI that find nothing (exact and by meaning, where the person
   stopped typing) are logged as gaps like the agents' searches. Deleted memos and docs are listed with
   `GET /ui/api/trash` and go back with `POST /ui/api/trash/restore` (owner or admin, never over a file that exists). Machines: workers, sessions, hook errors and remote actions per pc. The project
-  picker scopes only the knowledge views. An admin page for tokens, people and projects: one section at a time from a
+  picker scopes only the knowledge views. Under Tokens, an admin can undo what one device changed in a time window (`POST /ui/api/admin/undo-device {device, hours, apply, paths}`): first the list, per file back to the version before or, for a file it made, to the trash; a file someone else changed since is left alone. An admin page for tokens, people and projects: one section at a time from a
   sticky tab bar (arrow keys move through it; on a phone it scrolls sideways), its hash in the URL (`/ui/admin#tokens`,
   `#settings`); System's parts (background jobs, index, config, audit log, searches without hits, lessons) fold, each
   with its count, and have a hash of their own (`#gaps`, `#audit`, …) that opens System there. Light or dark, your pick.

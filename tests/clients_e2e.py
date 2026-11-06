@@ -1207,6 +1207,9 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         repo.mkdir()
         (repo / ".knowledge-project").write_text("garden\n", encoding="utf-8")
         (repo / "README.md").write_text("garden\n", encoding="utf-8")
+        (repo / ".gitignore").write_text(".env\n", encoding="utf-8")
+        (repo / ".worktreeinclude").write_text(".env\n", encoding="utf-8")
+        (repo / ".env").write_text("X=1\n", encoding="utf-8")
         for args in (["init", "-q", "-b", "main"], ["config", "user.name", "t"], ["config", "user.email", "t@x"], ["add", "-A"], ["commit", "-qm", "one"]):
             subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
         run([sys.executable, str(hooks / "agent_hooks.py"), "tasks", "codex"], json.dumps({"session_id": "cmp-cx", "cwd": str(repo)}), env, cwd=str(repo))
@@ -1246,6 +1249,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
               "workers: a Codex task starts `codex exec` in its own worktree on branch task/<ID>, with only its own task", json.dumps(cx)[:900])
         branch = subprocess.run(["git", "-C", str(wt), "branch", "--show-current"], capture_output=True, text=True).stdout.strip()
         check(branch == f"task/{cx_id}" and (wt / "README.md").exists(), "workers: the worktree is on branch task/<ID>", branch)
+        check((wt / ".env").read_text(encoding="utf-8") == "X=1\n", "workers: .worktreeinclude copies an ignored .env into the worktree")
         dirs = [Path(cx["argv"][i + 1]).resolve() for i, a in enumerate(cx["argv"]) if a == "--add-dir"]
         dot = (repo / ".git").resolve()
         check(dot / "worktrees" in [d.parent for d in dirs] and dot / "objects" in dirs and dot not in dirs

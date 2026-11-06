@@ -103,6 +103,20 @@ GitHub's main, also after a rewritten history when nothing in it is changed, the
 reports the plugin version (Codex and agy also their last update check and why it failed): the admin page shows it per device and agent, and a device still behind the newest
 version after two days hears how to update by hand (also listed in lint as `plugin_behind`).
 
+## Another agent: memory only
+
+Claude Code, Codex and agy get the plugin. Any other agent that speaks MCP over streamable HTTP with a custom header
+(Cursor, OpenCode, Gemini CLI and others) can use the memory with a token and no install:
+
+```json
+{ "mcpServers": { "knowledge": {
+  "url": "https://your-server/mcp",
+  "headers": { "Authorization": "Bearer <token>" } } } }
+```
+
+The key names differ per agent; see its docs. It gets the tools and the house rules, not what the plugin adds: start
+context, hand-overs, offline copy and the secret guard. Our tests cover only the three agents above.
+
 ## Linking a folder, and Windows
 
 Link a project folder to its project once: ask your agent (skill `knowledge-init`), which writes a file
