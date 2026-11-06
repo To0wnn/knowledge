@@ -105,14 +105,31 @@
     </section>
     <section id="tab-settings" class="view pad" aria-label="Settings" hidden>
       <form id="set-chat" class="admin-form">
-        <h3>New chats start with</h3>
+        <h3>Agent roles</h3>
         <p class="muted">Saved for you, on every device you sign in with.</p>
-        <label for="set-model">Model</label>
-        <select id="set-model"></select>
-        <label for="set-effort">Effort</label>
-        <select id="set-effort"></select>
+        <fieldset>
+          <legend>Lead &amp; new chats</legend>
+          <label for="set-model">Model</label>
+          <select id="set-model"></select>
+          <label for="set-effort">Effort</label>
+          <select id="set-effort"></select>
+        </fieldset>
+        <fieldset>
+          <legend>Reader / subagents</legend>
+          <label for="set-reader-model">Model</label>
+          <select id="set-reader-model"></select>
+          <label for="set-reader-effort">Effort</label>
+          <select id="set-reader-effort"></select>
+        </fieldset>
+        <fieldset>
+          <legend>Review</legend>
+          <label for="set-review-model">Model</label>
+          <select id="set-review-model"></select>
+          <label for="set-review-effort">Effort</label>
+          <select id="set-review-effort"></select>
+        </fieldset>
         <p class="muted" id="set-chat-note">The models your pcs that are online now offer.</p>
-        <div class="actions"><button type="submit" class="btn primary">Save model</button></div>
+        <div class="actions"><button type="submit" class="btn primary">Save agent preferences</button></div>
       </form>
       <form id="set-use" class="admin-form">
         <h3>How it works <span class="set-saved muted" id="set-use-saved" role="status"></span></h3>

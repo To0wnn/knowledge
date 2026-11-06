@@ -241,7 +241,11 @@ def parse(agent: str, line: str, st: dict) -> list:
             for d in e.get("permission_denials") or []:
                 out.append(("refused", f"refused: {d.get('tool_name')} {summary(d.get('tool_input'))}".strip()))
             if e.get("is_error"):
-                out.append(("error", first_line(e.get("result")) or str(e.get("subtype") or "the turn failed")))
+                sub = str(e.get("subtype") or "")
+                msg = first_line(e.get("result"))
+                if not msg and sub == "error_during_execution":
+                    msg = "the turn stopped"
+                out.append(("error", msg or sub or "the turn failed"))
     elif agent == "codex":
         t, item = e.get("type"), e.get("item") or {}
         if t == "thread.started" and e.get("thread_id"):
@@ -973,6 +977,8 @@ class Live:
         if os.name == "nt" and exe.lower().endswith((".cmd", ".bat")):
             cmd = workers.shim_line(cmd)
         env = {**os.environ, "KNOWLEDGE_CHAT": self.cid}
+        if item.get("reader"):
+            env["CLAUDE_CODE_SUBAGENT_MODEL"] = str(item["reader"])
         self.p = Hosted(LIVE_DIR / f"{self.cid}-{secrets.token_hex(4)}", cmd, self.folder, env if yolo else workers.git_safe_env(env))
         # known to the companion for its whole life: its approvals (also a background subagent's between turns)
         self.rec = RUNNING[self.cid] = {"pid": self.p.pid, "ident": self.p.ident, "stop": False, "folder": self.folder,
@@ -1166,6 +1172,8 @@ class Live:
             if not self.turn_open:  # it goes on by itself (a subagent of an earlier turn reported back)
                 self.begin("The agent goes on by itself.")
             self.turn_open = True
+        if kind == "result" and (self.after_interrupt or self.stop_asked):
+            evs = [x for x in evs if not (x[0] == "error" and x[1] in ("error_during_execution", "interrupted", "the turn failed", "the turn stopped"))]
         self.buf += evs
         for e in evs:
             if e[0] == "sub" and len(e) > 3:
@@ -1354,7 +1362,7 @@ class CodexLive(Live):
             turn = params.get("turn") or {}
             self.ended.add(turn.get("id") or self.turn_id)
             self.turn_open, self.turn_id = False, ""
-            if turn.get("status") == "failed":
+            if turn.get("status") == "failed" and not (self.after_interrupt or self.stop_asked):
                 self.buf.append(("error", first_line((turn.get("error") or {}).get("message")) or "the turn failed"))
             self.turn_end()
         elif time.time() - self.flushed >= FLUSH:

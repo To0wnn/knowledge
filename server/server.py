@@ -2244,6 +2244,11 @@ def held_by(lease: dict) -> dict:
 def holder_name(h: dict) -> str:
     """A lease holder for people: the token, and the pc when the plugin named it."""
     name = h.get("device", "").partition("#")[0]
+    dev = device.get()
+    if dev and not dev.get("admin"):
+        tok = read_json(TOKENS_FILE, {}).get(name, {})
+        if tok.get("owner") != dev.get("user") and dev.get("name") != name:
+            return "another pc"
     return f"{name} on {h['label']}" if h.get("label") else name
 
 
@@ -2685,13 +2690,30 @@ def task_where(project: str, t: dict, lease: dict | None, now: float) -> str:
     if not agent:
         return ""
     name = next(o for o in ("Claude", "Codex", "Gemini") if o.lower() in AGENT_OWNERS[agent])
+    dev = device.get()
+    is_admin = not dev or bool(dev.get("admin"))
+    tokens = read_json(TOKENS_FILE, {}) if not is_admin else {}
+
+    def host_visible(lbl: str) -> bool:
+        if is_admin:
+            return True
+        for m in read_json(MACHINES_FILE, {}).values():
+            if m.get("label") == lbl or m.get("id") == lbl:
+                return any(tokens.get(n, {}).get("owner") == dev.get("user") for n in m.get("tokens", {}))
+        return False
+
     if hosts := worker_hosts(project, agent):
+        visible_hosts = [h for h in hosts if host_visible(h)]
         why = sorted({w for mid, m in read_json(MACHINES_FILE, {}).items() if m.get("label", mid) in hosts  # not an offline pc's old reason
                       if (w := ((m.get("companion") or {}).get("waiting") or {}).get(f"{project}/{t['id']}"))})
-        return f"goes to a worker on {', '.join(hosts)}" + (f"; waits there: {'; '.join(why)}" if why else "")
+        if visible_hosts:
+            return f"goes to a worker on {', '.join(visible_hosts)}" + (f"; waits there: {'; '.join(why)}" if why else "")
+        return "goes to a worker" + (f"; waits there: {'; '.join(why)}" if why else "")
     if gone := worker_machines(project, agent):  # its worker pcs are all offline: say which, not "none"
-        return (", ".join(f"{label} offline since {since(at)}" for label, at in gone)
-                + f": until one is back, the next {name} chat in this project starts the task")
+        visible_gone = [f"{lbl} offline since {since(at)}" for lbl, at in gone if host_visible(lbl)]
+        if visible_gone:
+            return (", ".join(visible_gone) + f": until one is back, the next {name} chat in this project starts the task")
+        return f"worker is offline: until back, the next {name} chat in this project starts the task"
     return f"no pc runs {name} workers for this project: the next {name} chat in it starts the task"
 
 
@@ -4080,22 +4102,26 @@ PREF_KEY_COMBO = re.compile(r"(Ctrl\+|Alt\+)(Shift\+)?(\+|[^\s+]{1,12})")  # wit
 
 @server.custom_route("/ui/api/me/prefs", methods=["POST"])
 async def ui_me_prefs(request: Request):
-    """Any of {chat_default: {agent, id, effort} | null, keys: {action: combo}, grid_open, grid_group, send_key, start_page}, for this
-    person on every device. keys: the shortcuts that change, null = back to the default; checked for shape only: the page owns the actions. chat_default: the model a new chat starts with ("" id or effort = the agent's own); checked for shape only: a
-    pc that does not run it falls back in the page. Keys left out stay as they are."""
+    """Any of {chat_default: {agent, id, effort} | null, chat_reader: {agent, id, effort} | null, chat_review: {agent, id, effort} | null,
+    keys: {action: combo}, grid_open, grid_group, send_key, start_page}, for this person on every device. keys: the shortcuts that change,
+    null = back to the default; checked for shape only: the page owns the actions. chat_default, chat_reader, chat_review: the models for
+    new chats, reading/subagents, and review ("" id or effort = the agent's own); checked for shape only: a pc that does not run it falls
+    back in the page. Keys left out stay as they are."""
     user = device.get().get("user") or ""
     try:
         b = await request.json()
-        if not isinstance(b, dict) or not b or set(b) - {"chat_default", "keys", *PREF_CHOICES}:
+        if not isinstance(b, dict) or not b or set(b) - {"chat_default", "chat_reader", "chat_review", "keys", *PREF_CHOICES}:
             raise ValueError("unknown setting")
         for k, allowed in PREF_CHOICES.items():
             if k in b and b[k] not in allowed:
                 raise ValueError(f"{k} is one of {', '.join(allowed)}")
-        d = b.get("chat_default")
-        if d is not None and not (isinstance(d, dict) and d.get("agent") in AGENT_OWNERS
-                                  and (d.get("id") == "" or MODEL_ID.fullmatch(str(d.get("id", ""))))
-                                  and d.get("effort", "") in ("", *EFFORTS)):
-            raise ValueError("chat_default is {agent, id, effort}")
+        for role_key in ("chat_default", "chat_reader", "chat_review"):
+            if role_key in b:
+                d = b.get(role_key)
+                if d is not None and not (isinstance(d, dict) and d.get("agent") in AGENT_OWNERS
+                                          and (d.get("id") == "" or MODEL_ID.fullmatch(str(d.get("id", ""))))
+                                          and d.get("effort", "") in ("", *EFFORTS)):
+                    raise ValueError(f"{role_key} is {{agent, id, effort}}")
         if "keys" in b and not (isinstance(b["keys"], dict) and len(b["keys"]) <= 40 and all(
                 PREF_KEY_ACTION.fullmatch(a) and (c is None or (isinstance(c, str) and PREF_KEY_COMBO.fullmatch(c))) for a, c in b["keys"].items())):
             raise ValueError("keys is {action: combo with Ctrl or Alt}")
@@ -4116,11 +4142,13 @@ async def ui_me_prefs(request: Request):
             keys = {a: c for a, c in keys.items() if c}
             if keys:
                 mine["keys"] = dict(list(keys.items())[-40:])  # any action name passes the shape check: keep the file small
-        if "chat_default" in b:
-            if d is None:
-                mine.pop("chat_default", None)
-            else:
-                mine["chat_default"] = {"agent": d["agent"], "id": d.get("id", ""), "effort": d.get("effort", "")}
+        for role_key in ("chat_default", "chat_reader", "chat_review"):
+            if role_key in b:
+                d = b.get(role_key)
+                if d is None:
+                    mine.pop(role_key, None)
+                else:
+                    mine[role_key] = {"agent": d["agent"], "id": d.get("id", ""), "effort": d.get("effort", "")}
     await asyncio.to_thread(update_state, PREFS_FILE, change)
     return JSONResponse({"ok": True, "prefs": read_json(PREFS_FILE, {}).get(user, {})})
 
@@ -6615,6 +6643,7 @@ async def machine_chats(request: Request):
     if dev.get("agents") is False:  # remote control off: no work, stops, diffs or answers for this pc
         return JSONResponse({"work": [], "stop": [], "busy": [], "active": False, "agents": False})
     q_path, out = CHATS_DIR / mid / "queue.json", {"work": [], "stop": [], "busy": []}
+    all_prefs = read_json(PREFS_FILE, {})
 
     def change(q):
         for cid, e in list(q.items()):
@@ -6626,6 +6655,8 @@ async def machine_chats(request: Request):
                 if not c:
                     q.pop(cid)
                 continue
+            rdr = (all_prefs.get(c.get("by", "") or "", {}).get("chat_reader") or {}).get("id") or ""
+            extra = {"reader": rdr} if rdr else {}
             if e.get("busy"):
                 out["busy"].append(cid)
                 if e.get("stop"):
@@ -6633,14 +6664,14 @@ async def machine_chats(request: Request):
                 for m in e.pop("live", []):  # a live chat's message while it works: into its running agent (now or force)
                     out["work"].append({"chat": cid, "agent": c["agent"], "folder": c["folder"], "session": c.get("session", ""),
                                         "model": c.get("model", ""), "effort": c.get("effort", ""), "allow": c.get("allow", []),
-                                        **({"worktree": True} if c.get("worktree") else {}), **m})
+                                        **({"worktree": True} if c.get("worktree") else {}), **extra, **m})
                 if e.get("steer"):  # Force: once to the companion, which parks it for the running turn's hook
                     s = e.pop("steer")
                     out.setdefault("steer", []).extend({"chat": cid, **x} for x in (s if isinstance(s, list) else [s]))
             elif "msg" in e:
                 out["work"].append({"chat": cid, "agent": c["agent"], "folder": c["folder"], "session": c.get("session", ""),
                                     "model": c.get("model", ""), "effort": c.get("effort", ""),
-                                    "allow": c.get("allow", []), **({"worktree": True} if c.get("worktree") else {}), **e.pop("msg")})
+                                    "allow": c.get("allow", []), **({"worktree": True} if c.get("worktree") else {}), **extra, **e.pop("msg")})
                 e["busy"] = True
     if q_path.exists():
         await asyncio.to_thread(update_state, q_path, change)

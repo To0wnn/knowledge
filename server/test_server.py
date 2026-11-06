@@ -634,6 +634,13 @@ def machines_contract(tmp, ck, fr, raw, er, et, heard):
     runs = {t["id"]: t["runs"] for t in json.loads(raw("GET", "/ui/api/tasks", headers=ck)[2])["tasks"] if t["project"] == "garden" and not t["done"]}
     assert runs["MC-3"] == "goes to a worker on garage; waits there: Codex runs 2 worker(s) already", runs
     assert runs["MC-4"] == "running in a worker on friend-pc on garage" and runs["MC-6"].startswith("taken by a session on friend-pc"), runs
+    cur_p = json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["users"]["erin"]["projects"]
+    adm = lambda path, body: raw("POST", path, json.dumps(body), {**ck, "Content-Type": "application/json", "X-Knowledge-UI": "1"})
+    adm("/ui/api/admin/user", {"username": "erin", "projects": {**cur_p, "garden": "read"}})
+    er_runs = {t["id"]: t["runs"] for t in json.loads(raw("GET", "/ui/api/tasks", headers=er)[2])["tasks"] if t["project"] == "garden" and not t["done"]}
+    assert er_runs["MC-4"] == "running in a worker on another pc", er_runs
+    assert er_runs["MC-3"].startswith("goes to a worker; waits there:"), er_runs
+    adm("/ui/api/admin/user", {"username": "erin", "projects": cur_p})
     # A task nobody takes (no lease) for KNOWLEDGE_TASK_IDLE: one Matrix notice, saying where it waits.
     (tmp / "task_leases.json").write_text(json.dumps({"garden": {k: v for k, v in json.loads((tmp / "task_leases.json").read_text())["garden"].items() if k != "MC-6"}}))
     assert runs["MC-6"] and next(t for t in json.loads(raw("GET", "/ui/api/tasks", headers=ck)[2])["tasks"] if t["id"] == "MC-6")["runs"] \
@@ -1086,8 +1093,13 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert ui("/ui/api/me/prefs", {"keys": {"new_chat": None, "digits": None, "fit": None}, "send_key": "enter"})[0] == 200 and "keys" not in json.loads(ui("/ui/api/me")[2])["prefs"]  # back to the defaults
     assert ui("/ui/api/me/prefs", {"send_key": "shout"})[0] == 400 and ui("/ui/api/me/prefs", {"start_page": "/evil"})[0] == 400
     assert ui("/ui/api/me/prefs", {"theme": "dark"})[0] == 400 and ui("/ui/api/me/prefs", {})[0] == 400
+    assert ui("/ui/api/me/prefs", {"chat_reader": {"agent": "claude", "id": "sonnet", "effort": "low"}})[0] == 200
+    assert ui("/ui/api/me/prefs", {"chat_review": {"agent": "codex", "id": "gpt-6-luna", "effort": "medium"}})[0] == 200
+    assert ui("/ui/api/me/prefs", {"chat_reader": {"agent": "invalid", "id": "x", "effort": ""}})[0] == 400
+    assert json.loads(ui("/ui/api/me")[2])["prefs"]["chat_reader"] == {"agent": "claude", "id": "sonnet", "effort": "low"}
+    assert json.loads(ui("/ui/api/me")[2])["prefs"]["chat_review"] == {"agent": "codex", "id": "gpt-6-luna", "effort": "medium"}
     assert ui("/ui/api/me/prefs", {"send_key": "ctrl", "grid_open": "tab", "start_page": "chats"})[0] == 200  # the defaults are not stored
-    assert ui("/ui/api/me/prefs", {"chat_default": None})[0] == 200 and json.loads(ui("/ui/api/me")[2])["prefs"] == {}
+    assert ui("/ui/api/me/prefs", {"chat_default": None, "chat_reader": None, "chat_review": None})[0] == 200 and json.loads(ui("/ui/api/me")[2])["prefs"] == {}
     # Offline: no new message (it would run whenever the pc comes back).
     d = json.loads((tmp / "machines.json").read_text())
     d[mid]["at"] -= 3600

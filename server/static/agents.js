@@ -773,24 +773,36 @@ function setKeysShow() {
 }
 async function loadSettings() {
   if (!ck.machines.length) await ckSummary().catch(() => {});
-  const cat = ckCatalog(ck.machines.filter((m) => m.online)), sel = $("set-model"), eff = $("set-effort");
-  const now = me.prefs?.chat_default, key = (x) => `${x.agent}/${x.id}`;
-  sel.replaceChildren(new Option("The one I used last", ""));
-  for (const fam of [...new Set(cat.map((m) => ckFamily(m.id)))]) {
-    const g = document.createElement("optgroup"); g.label = fam;
-    for (const m of cat.filter((y) => ckFamily(y.id) === fam)) g.append(new Option(`${m.name} · ${AGENT_NAME[m.agent] || m.agent}`, key(m)));
-    sel.append(g);
-  }
-  if (now && !cat.some((m) => key(m) === key(now))) sel.append(new Option(`${now.id || "own model"} · ${AGENT_NAME[now.agent] || now.agent} (no pc online offers it now)`, key(now)));
-  sel.value = now ? key(now) : "";
-  const fill = (want) => {
-    const m = cat.find((y) => key(y) === sel.value), lv = m ? levels(m) : [];
-    eff.replaceChildren(new Option("auto (the agent's setting)", ""), ...lv.map((e) => new Option(e === m.default ? `${e} (this model's default)` : e, e)));
-    eff.value = lv.includes(want) ? want : m?.default || "";
-    eff.disabled = !lv.length;
+  const cat = ckCatalog(ck.machines.filter((m) => m.online));
+  const key = (x) => `${x.agent}/${x.id}`;
+  const setupRolePick = (selId, effId, now, emptyLabel = "auto (the agent's setting)") => {
+    const sel = $(selId), eff = $(effId);
+    if (!sel || !eff) return () => null;
+    sel.replaceChildren(new Option(emptyLabel, ""));
+    for (const fam of [...new Set(cat.map((m) => ckFamily(m.id)))]) {
+      const g = document.createElement("optgroup"); g.label = fam;
+      for (const m of cat.filter((y) => ckFamily(y.id) === fam)) g.append(new Option(`${m.name} · ${AGENT_NAME[m.agent] || m.agent}`, key(m)));
+      sel.append(g);
+    }
+    if (now && !cat.some((m) => key(m) === key(now))) sel.append(new Option(`${now.id || "own model"} · ${AGENT_NAME[now.agent] || now.agent} (no pc online offers it now)`, key(now)));
+    sel.value = now ? key(now) : "";
+    const fill = (want) => {
+      const m = cat.find((y) => key(y) === sel.value), lv = m ? levels(m) : [];
+      eff.replaceChildren(new Option("auto (the agent's setting)", ""), ...lv.map((e) => new Option(e === m.default ? `${e} (this model's default)` : e, e)));
+      eff.value = lv.includes(want) ? want : m?.default || "";
+      eff.disabled = !lv.length;
+    };
+    fill(now?.effort || "");
+    sel.onchange = () => fill("");
+    return () => {
+      if (!sel.value) return null;
+      const [agent, ...id] = sel.value.split("/");
+      return { agent, id: id.join("/"), effort: eff.value };
+    };
   };
-  fill(now?.effort || "");
-  sel.onchange = () => fill("");
+  const getLead = setupRolePick("set-model", "set-effort", me.prefs?.chat_default, "The one I used last");
+  const getReader = setupRolePick("set-reader-model", "set-reader-effort", me.prefs?.chat_reader);
+  const getReview = setupRolePick("set-review-model", "set-review-effort", me.prefs?.chat_review);
   for (const [id, key, dflt] of [["set-start", "start_page", "chats"], ["set-grid", "grid_open", "tab"], ["set-group", "grid_group", "project"], ["set-send", "send_key", "ctrl"]]) {
     const pick = $(id); pick.value = me.prefs?.[key] || dflt;
     pick.onchange = async () => {
@@ -816,9 +828,9 @@ async function loadSettings() {
   };
   $("set-chat").onsubmit = async (e) => {
     e.preventDefault();
-    const [agent, ...id] = sel.value.split("/"), chat_default = sel.value ? { agent, id: id.join("/"), effort: eff.value } : null;
+    const chat_default = getLead(), chat_reader = getReader(), chat_review = getReview();
     try {
-      const res = await api("/ui/api/me/prefs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chat_default }) });
+      const res = await api("/ui/api/me/prefs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chat_default, chat_reader, chat_review }) });
       me.prefs = res.prefs; toast("Saved", false);
     } catch (err) { toast(err.message, true); }
   };
