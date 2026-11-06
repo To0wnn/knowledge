@@ -751,6 +751,8 @@ dialog.ck-diff { width: min(980px, calc(100vw - 32px)); }
 .bd-card.needs > .ck-card { border-color: var(--amber); box-shadow: 0 0 0 1px var(--amber); }
 .bd-card .ck-x:not(.bd-only), .bd-only { display: none; }
 .bd-card .bd-only { display: inline-grid; }
+.bd-card.draft .ck-x:not(.bd-only) { display: inline-grid; } /* a new chat on the grid: × drops it; nothing to open yet */
+.bd-card.draft .ck-x.bd-only { display: none; }
 .bd-card .ck-dot.bd-only { display: block; flex: none; }
 .bd-card .ck-box textarea { min-height: 22px; }
 @media (max-width: 999.98px) { #tasks-mode, #ck-view, .bd { display: none !important; } } /* the grid and flow are desktop only: the list stays */

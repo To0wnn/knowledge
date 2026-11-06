@@ -1168,6 +1168,16 @@ async def board(browser, devices, secret: str) -> None:
     shows = "$('bd') && !$('bd').hidden && getComputedStyle($('ck-chats')).display === 'none' && getComputedStyle($('bd-world')).display === 'grid'"
     await pg.wait_for_function(shows, timeout=5000)
     check(await pg.evaluate("!$('chats-mode') && !$('bd-tools') && !$('bd-mini')"), "Grid: #/chats is the grid, without a toggle or canvas tools")
+    # + New chat on the grid: a draft card on top of the grid, the route stays; its × drops it
+    await pg.click("#ck-new")
+    await pg.wait_for_selector("#bd .bd-card.draft textarea", timeout=5000)
+    nd = await pg.evaluate("""(() => { const w = document.querySelector('#bd .bd-card.draft'); return [location.hash, w.querySelector('.ck-title strong').textContent,
+      $('bd-world').querySelector('.bd-card') === w, document.activeElement === w.querySelector('textarea'),
+      getComputedStyle(w.querySelector('.ck-x:not(.bd-only)')).display !== 'none', getComputedStyle(w.querySelector('a.bd-only')).display === 'none']; })()""")
+    check(nd == ["#/chats", "New chat", True, True, True, True], f"Grid: + New chat puts a draft card on top of the grid, focused, with x and no open link {nd}")
+    await pg.click("#bd .bd-card.draft .ck-x:not(.bd-only)")
+    await pg.wait_for_function("!document.querySelector('#bd .bd-card.draft') && !ck.cards.has('draft/new') && location.hash === '#/chats'", timeout=5000)
+    check(True, "Grid: the draft card's x drops it, the grid stays")
     kept = await pg.evaluate("""(() => { const keep = [ck.chats, ck.board, agentProject]; agentProject = ''; ck.board = [];
       const chat = (id, raised) => ({ id, machine: 'x', label: 'pc', folder: '/f', project: 'p', agent: 'claude', status: 'running', raised });
       ck.chats = [chat('a', 2), chat('b', 1)]; bdRender();

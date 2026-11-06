@@ -425,8 +425,9 @@ function bdShow() {
 // The chats in grid order: per project the one that last finished (or asks an approval) first. A card keeps its place
 // otherwise: a new message, its events or reading it never move it; its state shows on the card.
 function bdChats() {
-  return ck.chats.filter(ckScope).map((c) => ({ c, st: ckState(c) })).filter((x) => x.st !== "closed") // closed: under the list's Closed only
-    .sort((a, b) => (b.c.raised || 0) - (a.c.raised || 0));
+  const draft = ck.cards.get(ckKey(CK_DRAFT))?.meta; // + New chat on the grid: on top, so its project's frame is too
+  return [...(draft ? [draft] : []), ...ck.chats].filter(ckScope).map((c) => ({ c, st: ckState(c) })).filter((x) => x.st !== "closed") // closed: under the list's Closed only
+    .sort((a, b) => !!b.c.draft - !!a.c.draft || (b.c.raised || 0) - (a.c.raised || 0));
 }
 
 // A re-insert resets a node's focus and scroll position: you may be typing or reading in the card that moves.
@@ -475,10 +476,10 @@ function bdRender() {
       if (!w) {
         w = el("article", "bd-card"); w.tabIndex = 0; w.dataset.id = c.id;
         bd.wraps.set(k, w);
-        w.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === w) { e.preventDefault(); card.openTab.click(); } });
+        w.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target === w) { e.preventDefault(); if (card.meta.draft) card.input.focus(); else card.openTab.click(); } });
       }
-      if (card.root.parentNode !== w) w.append(card.root); // back from the full chat (ckLayout moved it there)
-      w.className = `bd-card ${st}`; w.hidden = f.shut;
+      if (card.root.parentNode !== w) w.replaceChildren(card.root); // back from the full chat (ckLayout moved it there); a new draft replaces an old one
+      w.className = `bd-card ${st}${c.draft ? " draft" : ""}`; w.hidden = f.shut;
       w.setAttribute("aria-label", `${ckTitle(c, card)}: ${CK_STATE[st]}, ${AGENT_NAME[c.agent] || c.agent} on ${c.label}, ${ckShort(c.folder)}. Enter opens it in a tab of its own, Esc goes back to the grid`);
       order.push(w);
     }

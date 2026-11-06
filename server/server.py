@@ -5654,6 +5654,7 @@ async def chat_live_message(f: Path, c: dict, msg: dict, mode: str, text: str, a
         c["closed"] = False
         if not added:
             chat_add(c, "user", text)
+            c["title"] = chat_title(text, c.get("title") or "")
         chat_add(c, "info", "Sent into the running turn." if mode == "now" else "Force: this step stops and your message goes in.")
     await asyncio.to_thread(update_state, f, note)
     as_next = []
@@ -5671,6 +5672,15 @@ async def chat_live_message(f: Path, c: dict, msg: dict, mode: str, text: str, a
         await asyncio.to_thread(update_state, f, lambda c: c.setdefault("pending", []).extend(as_next))
     await asyncio.to_thread(update_state, f, lambda c: c.update(status="queued") if c.get("status") not in ("queued", "running") else None)
     return JSONResponse({"ok": True, "live": mode})
+
+
+def chat_title(text: str, old: str = "") -> str:
+    """A chat goes by what its owner last asked: the first line of the latest message of four words or more, at most
+    60 characters, cut at a word. A short reply ("yes", "go on") keeps the title it has."""
+    line = " ".join(next((x for x in text.splitlines() if x.strip()), "").split()).lstrip("-*• ")
+    if old and len(line.split()) < 4:
+        return old
+    return line if len(line) <= 60 else line[:60].rsplit(" ", 1)[0][:59] + "…"
 
 
 def chat_add(c: dict, kind: str, text: str, events: int = CHAT_EVENTS, size_cap: int = CHAT_BYTES, extra: dict | None = None):
@@ -6168,11 +6178,12 @@ async def ui_chat_send(request: Request):
             line.append(msg)
             busy.append("queued")
             chat_add(c, "user", text)
+            c["title"] = chat_title(text, c.get("title") or "")
             chat_add(c, "info", "Queued: the agent gets this when its current turn ends.")
             return
         c.update(pick)
         chat_add(c, "user", text)
-        c.update(status="queued", title=c.get("title") or " ".join(text.split())[:80])
+        c.update(status="queued", title=chat_title(text, c.get("title") or ""))
     await asyncio.to_thread(update_state, f, change)
     if busy == ["full"]:
         return JSONResponse({"error": f"{CHAT_PENDING} messages wait already: wait for the agent, or stop it"}, status_code=409)

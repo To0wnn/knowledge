@@ -596,7 +596,10 @@ function ckCard(meta) {
   const card = { meta: { ...meta }, x, openTab: open, root, name, where, git, state, log, jump, jumpText, asks, form, input, stop, send, note, picks, mark, close, tok, subbar, queueBtn, forceBtn, more, branch, filesBox: files, files: [], mode: "", pick: null, after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
   open.onclick = (e) => { if (me.prefs?.grid_open === "here" && !e.ctrlKey && !e.metaKey && !e.shiftKey) { e.preventDefault(); ckShow(card.meta); } }; // Settings
   ckSendHints(card);
-  x.onclick = () => { if (!solo()) store.set("kn_last_chat", ""); ckShow(null); }; // closed on purpose: the list stays empty
+  x.onclick = () => {
+    if (card.meta.draft && bdOn()) { card.input.value = ""; ckDraftKeep(card); ckDrop(ckKey(CK_DRAFT)); return bdRender(); } // a draft on the grid: gone
+    if (!solo()) store.set("kn_last_chat", ""); ckShow(null); // closed on purpose: the list stays empty
+  };
   input.addEventListener("keydown", (e) => {
     // Ctrl/Cmd+Enter presses the button (Send, Queue or Force), and so does Enter when Settings say so; a phone's Enter stays a new line
     if (e.key === " " && e.ctrlKey && !mic.hidden) { e.preventDefault(); return mic.toggle(); }
@@ -918,7 +921,8 @@ function ckDraftFolder(card) {
 function ckDraftWhere(card) {
   if (!card.meta.draft) return;
   const [machine, folder] = (card.where_ || "").split("\n"), m = ck.machines.find((y) => y.id === machine);
-  card.meta = { ...card.meta, machine: "draft", agent: card.pick?.agent || "", folder: folder || "", label: m?.label || "", target: machine || "" };
+  const project = ckDraftFolders(card).find((f) => `${f.machine}\n${f.path}` === card.where_)?.project ?? agentProject ?? ""; // its frame on the grid
+  card.meta = { ...card.meta, machine: "draft", agent: card.pick?.agent || "", folder: folder || "", label: m?.label || "", target: machine || "", project };
   ckPaint(card);
 }
 function ckDraft(machine = "") {
@@ -954,12 +958,15 @@ async function ckStart(card, text) { // the draft's first message: make the chat
     card.input.value = ""; ckDraftKeep(card); ckDrop(ckKey(CK_DRAFT)); ck.summaryAt = 0;
     const chat = ckCard({ ...res.chat, ...(failed ? {} : { model: p.id, effort: p.effort, status: "queued" }), machine, label: m?.label || machine, online: true });
     if (failed) { chat.input.value = text; ckDraftKeep(chat); chat.note.className = "ck-note bad"; chat.note.textContent = failed; }
-    go(`#/chats/${encodeURIComponent(chat.meta.id)}`, true); // Back from it goes to the list, not to an empty draft
+    if (bdOn()) { // on the grid the chat stays a card there; the next summary brings it from the server
+      ck.chats.unshift({ ...chat.meta, raised: Date.now() / 1000 }); bdRender();
+      if (!touch) chat.input.focus();
+    } else go(`#/chats/${encodeURIComponent(chat.meta.id)}`, true); // Back from it goes to the list, not to an empty draft
     ckTick();
   } finally { card.starting = false; }
 }
 // A chat without a title yet (its first turn still running) goes by its first message.
-const ckTitle = (m, card) => m.title || card?.log.querySelector(".ck-msg.user")?.textContent.trim().slice(0, 120) || "New chat";
+const ckTitle = (m, card) => m.title || card?.log.querySelector(".ck-msg.user")?.textContent.trim().slice(0, 60) || "New chat";
 function ckPaint(card) {
   if (card.worker) return ckWorkerPaint(card);
   if (card.meta.parent) return; // a subagent's chat: painted by its poll (ckSubPoll)
@@ -1367,6 +1374,12 @@ function ckAsks(card, asks, skew) {
 }
 
 // New chat: a pc of your own with a companion, an agent installed there, a folder linked there.
-function ckNewChat(machine = "") { ck.draftFor = machine; go("#/chats/new"); } // a draft in the chat pane (ckDraft)
+function ckNewChat(machine = "") {
+  if (machine || !bdOn()) { ck.draftFor = machine; return go("#/chats/new"); } // a draft in the chat pane (ckDraft)
+  const card = ck.cards.get(ckKey(CK_DRAFT)) || ckDraft(), shut = bdShut(); // on the grid: a card on top of its project
+  if (shut.includes(card.meta.project)) store.set("kn_board", JSON.stringify({ shut: shut.filter((p) => p !== card.meta.project) }));
+  bdRender();
+  if (touch) card.root.scrollIntoView({ block: "nearest" }); else card.input.focus(); // a phone would pop its keyboard up
+}
 $("ck-new").onclick = async () => { if (!ck.machines.length) await ckSummary().catch(() => {}); ckNewChat(); };
 

@@ -700,6 +700,13 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     # The second turn goes out with the session of the first (the agent continues its own conversation).
     ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "next"})
     assert json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"][0]["session"] == "th-1"
+    assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={cid}")[2])["chat"]["title"] == "hello <b>agent</b>", "a short reply keeps the title"
+    # A chat goes by the owner's latest message of four words or more: its first line, at most 60 characters, cut at a word.
+    import server as srv
+    long = "please refactor the whole storage layer so that every write goes through one function\nmore"
+    assert srv.chat_title(long, "hello") == "please refactor the whole storage layer so that every write…", srv.chat_title(long, "hello")
+    assert srv.chat_title("ok go on", "old title") == "old title" and srv.chat_title("yes") == "yes" and len(srv.chat_title("x" * 80)) == 60
+    assert srv.chat_title("\n  - fix the  login page bug now", "old") == "fix the login page bug now"
     # Messages sent while it answers wait in line and go in one by one as turns end; at most CHAT_PENDING wait; Stop clears them.
     st, _, b = ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "after that"})
     assert st == 200 and json.loads(b).get("queued"), b
