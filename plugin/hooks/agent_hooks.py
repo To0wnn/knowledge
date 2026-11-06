@@ -281,7 +281,7 @@ def private_dir():
 
 def write_private(path: Path, data: dict):
     private_dir()
-    tmp = path.with_suffix(".tmp")
+    tmp = token_store.temp_beside(path)
     with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as f:
         f.write(json.dumps(data))  # created 0600: agy's entry holds the key to its session
     token_store.replace_durable(tmp, path)

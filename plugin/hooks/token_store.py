@@ -18,6 +18,7 @@ import secrets
 import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -214,8 +215,22 @@ def replace_durable(tmp: Path, path: Path) -> None:
     power cut or a killed VM the file is there but empty."""
     with open(tmp, "rb+") as f:
         os.fsync(f.fileno())
-    os.replace(tmp, path)
+    for wait in (*[0.05] * 40, None):
+        try:
+            os.replace(tmp, path)
+            break
+        except PermissionError:  # Windows, while someone reads or replaces the target: for a moment (see read_settled)
+            if os.name != "nt" or wait is None:
+                Path(tmp).unlink(missing_ok=True)
+                raise
+            time.sleep(wait)
     sync_dir(Path(path).parent)
+
+
+def temp_beside(path: Path) -> Path:
+    """A temp file for `path` of this writer alone: hooks run at the same time, and a shared name means one writer takes
+    the other's file away (Linux) or finds it locked (Windows)."""
+    return path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
 
 
 def read_settled(path: Path) -> str:

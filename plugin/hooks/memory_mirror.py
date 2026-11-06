@@ -74,7 +74,7 @@ def target(rel: str):
 
 def write_atomic(path: Path, data: bytes):
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
+    tmp = token_store.temp_beside(path)
     tmp.write_bytes(data)  # bytes: no newline translation on Windows, so versions match the server's
     token_store.replace_durable(tmp, path)
 
