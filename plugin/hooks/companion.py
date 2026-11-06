@@ -1110,7 +1110,7 @@ def check_workers(ws: dict, tok: str, now: float, lim: dict):
             for o in ws.values():  # the sessions before or after it in that worktree (a hand-over) share its branch
                 if o is not w and o.get("worktree") == w["worktree"] and o["status"] != "running":
                     o["status"], o["result"] = "merged", w["result"]
-            log("worker", f"{w['id']}: merged by its requester", w["result"])
+            log("worker", f"{w['id']}: no unmerged work left", w["result"])
 
 
 def run_workers(ready: list, tok: str, now: float, only: str = "") -> dict:

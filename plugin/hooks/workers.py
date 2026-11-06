@@ -418,11 +418,13 @@ def steer_note(w: dict, by: str, text: str) -> Path:
 
 def merged(w: dict) -> bool:
     """The worker's branch has commits and they are in the repository's main branch (main or master) or the branch its
-    worktree was made from."""
+    worktree was made from. A finished worker that committed nothing and left a clean worktree counts too (a task that
+    only deployed something, say): nothing to merge, and its worktree would otherwise stay for good."""
     if not w.get("branch"):
         return False
     tip = git(w["repo"], "rev-parse", "-q", "--verify", f"refs/heads/{w['branch']}").stdout.strip()
-    if not tip or tip == w.get("base"):
+    if not tip or (tip == w.get("base") and (w.get("status") != "finished" or not Path(w.get("worktree") or "").is_dir()
+                                             or git(w["worktree"], "status", "--porcelain").stdout.strip())):
         return False
     return any(git(w["repo"], "merge-base", "--is-ancestor", tip, f"refs/heads/{b}").returncode == 0 for b in dict.fromkeys(("main", "master", w.get("base_branch")))
                if b and git(w["repo"], "rev-parse", "-q", "--verify", f"refs/heads/{b}").returncode == 0)
@@ -688,6 +690,10 @@ def self_test():
         undo = git(w["cwd"], "show", f"{CKPT}KN-1-undo:app/new.txt")
         assert undo.returncode == 0 and undo.stdout == "new\n", "the rolled-back work is kept on the -undo checkpoint"
         assert not merged({**w, "repo": str(repo)}), "no commits yet: nothing merged"
+        assert merged({**w, "status": "finished"}), "finished without commits, clean: nothing left to merge"
+        (Path(w["cwd"]) / "dirty.txt").write_text("x\n")
+        assert not merged({**w, "status": "finished"}), "finished with uncommitted work: that stays"
+        (Path(w["cwd"]) / "dirty.txt").unlink()
         (Path(w["cwd"]) / "b.txt").write_text("b\n")
         git(w["cwd"], "add", "b.txt", check=True)
         git(w["cwd"], "commit", "-qm", "work", check=True)
