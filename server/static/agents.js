@@ -235,6 +235,14 @@ function ckCloseTab() {
   window.close();
   setTimeout(() => go(startRoute(), true), 200);
 }
+// The send key (Settings); a phone's keyboard has no Shift+Enter, so its Enter stays a new line.
+const ckEnterSends = () => me.prefs?.send_key === "enter" && !touch;
+const ckSendKey = () => (ckEnterSends() ? "Enter" : "Ctrl+Enter");
+function ckSendHints(card) {
+  const hint = card.input.dataset.hint; // a subagent's and a worker's box name the key; a chat's says it in its label
+  if (hint) card.input.placeholder = `${hint} (${ckSendKey()} sends)`;
+  card.input.setAttribute("aria-label", ckEnterSends() ? "Message (Enter sends, Shift+Enter a new line)" : "Message (Enter a new line, Ctrl+Enter sends)");
+}
 function ckScrollBottom(card, force = false) {
   if (!card?.log) return;
   requestAnimationFrame(() => {
@@ -532,7 +540,7 @@ function ckCard(meta) {
     if (document.activeElement === jumpBtn) input.focus(); // the button hides: reached by keyboard, the focus must land somewhere
     ckScrollBottom(card, true);
   };
-  input.rows = 1; input.placeholder = "Message the agent…"; input.setAttribute("aria-label", "Message (Enter a new line, Ctrl+Enter sends)");
+  input.rows = 1; input.placeholder = "Message the agent…";
   const stop = el("button", "btn small ck-stop", "Stop"), send = el("button", "btn small primary ck-send", "Send"), note = el("p", "ck-note");
   // a live agent at work: Queue (after this turn) and Force (stop the step, then this) in a small menu beside Send
   const more = el("details", "menu up ck-more"), moreSum = el("summary", "btn small primary ck-send-more"), moreList = el("div", "menu-list");
@@ -566,13 +574,15 @@ function ckCard(meta) {
   const subbar = el("div", "ck-subbar"); subbar.hidden = true; subbar.setAttribute("aria-label", "Subagents running now");
   root.append(head, log, jump, subbar, asks, form);
   const card = { meta: { ...meta }, x, openTab: open, root, name, where, git, state, log, jump, jumpText, asks, form, input, stop, send, note, picks, mark, close, tok, subbar, queueBtn, forceBtn, more, branch, filesBox: files, files: [], mode: "", pick: null, after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
+  open.onclick = (e) => { if (me.prefs?.grid_open === "here" && !e.ctrlKey && !e.metaKey && !e.shiftKey) { e.preventDefault(); ckShow(card.meta); } }; // Settings
+  ckSendHints(card);
   x.onclick = () => { if (!solo()) store.set("kn_last_chat", ""); ckShow(null); }; // closed on purpose: the list stays empty
   input.addEventListener("keydown", (e) => {
-    // Enter is a new line; Ctrl/Cmd+Enter presses the button (Send, Queue or Force)
+    // Ctrl/Cmd+Enter presses the button (Send, Queue or Force), and so does Enter when Settings say so; a phone's Enter stays a new line
     if (e.key === " " && e.ctrlKey && !mic.hidden) { e.preventDefault(); return mic.toggle(); }
     if (e.key === "Enter" && e.altKey && !e.isComposing && !queueBtn.hidden) { e.preventDefault(); return queueBtn.click(); } // queue
     if (e.key === "Enter" && e.shiftKey && (e.ctrlKey || e.metaKey) && !e.isComposing && !forceBtn.hidden) { e.preventDefault(); return forceBtn.click(); }
-    if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey) || e.isComposing) return;
+    if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey || (ckEnterSends() && !e.shiftKey && !e.altKey)) || e.isComposing) return;
     e.preventDefault(); form.requestSubmit();
   });
   const grow = () => { input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 220)}px`; }; // the box grows with the text
@@ -668,8 +678,9 @@ function ckCard(meta) {
   });
   bar.addEventListener("dblclick", () => set(300));
 }
-// Settings (#/settings): the person's own choices, kept on the server (/ui/api/me/prefs). Now: the model a new chat
-// starts with ("" = the one used last), from the models the pcs online now offer.
+// Settings (#/settings): the person's own choices, kept on the server (/ui/api/me/prefs): the model a new chat starts
+// with ("" = the one used last, from the models the pcs online now offer), the start page, how the grid opens a chat,
+// the send key. Theme and notifications are per browser. Only what use cannot teach belongs here (docs/web-ui.md).
 async function loadSettings() {
   if (!ck.machines.length) await ckSummary().catch(() => {});
   const cat = ckCatalog(ck.machines.filter((m) => m.online)), sel = $("set-model"), eff = $("set-effort");
@@ -690,6 +701,19 @@ async function loadSettings() {
   };
   fill(now?.effort || "");
   sel.onchange = () => fill("");
+  for (const [id, key, dflt] of [["set-start", "start_page", "chats"], ["set-grid", "grid_open", "tab"], ["set-send", "send_key", "ctrl"]]) {
+    const pick = $(id); pick.value = me.prefs?.[key] || dflt;
+    pick.onchange = async () => {
+      try {
+        me.prefs = (await api("/ui/api/me/prefs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ [key]: pick.value }) })).prefs;
+        for (const c of ck.cards.values()) ckSendHints(c);
+        $("set-use-saved").textContent = "Saved"; clearTimeout(pick.savedTimer); pick.savedTimer = setTimeout(() => ($("set-use-saved").textContent = ""), 2000);
+      } catch (err) { pick.value = me.prefs?.[key] || dflt; toast(err.message, true); }
+    };
+  }
+  $("set-start").querySelector('[value="chats"]').hidden = agentsOff();
+  $("set-theme").onchange = () => setTheme($("set-theme").value);
+  showTheme();
   const on = $("set-notify-on"), note = $("set-notify-note");
   on.checked = notifyOn(); on.disabled = !window.Notification;
   if (!window.Notification) note.textContent = "This browser has no notifications (on a phone: Matrix, admin page Settings: needs_per_hour).";
@@ -714,7 +738,7 @@ async function loadSettings() {
 function ckSubCard(c, sid) {
   const card = ckCard({ ...c, id: `${c.id}~${sid}`, parent: c.id, sub: sid, title: "", status: "idle" });
   card.close.hidden = true; card.picks.hidden = true;
-  card.input.placeholder = "Message this subagent (its main agent passes it on)… (Ctrl+Enter sends)";
+  card.input.dataset.hint = "Message this subagent (its main agent passes it on)…"; ckSendHints(card);
   return card;
 }
 const ckSubInfo = (card) => (ck.chats.find((x) => x.id === card.meta.parent && x.machine === card.meta.machine)?.sub_list || []).find((s) => s.id === card.meta.sub) || {};
@@ -946,7 +970,7 @@ function ckPaint(card) {
   card.send.classList.toggle("split", !card.more.hidden);
   card.send.textContent = force ? "Force" : busy && !live ? "Queue" : "Send";
   card.send.title = force ? `Send the first of ${m.waiting} waiting message${m.waiting > 1 ? "s" : ""} into the turn${live ? ": its step stops and it goes in" : ": the agent reads it after its next step"} (Stop ends the turn)`
-    : busy && live ? (m.agent === "agy" ? "Right after this turn, in the same agy (it takes no message mid-turn) (Ctrl+Enter)" : "Into this turn: the agent takes it in as it works (Ctrl+Enter)")
+    : busy && live ? (m.agent === "agy" ? `Right after this turn, in the same agy (it takes no message mid-turn) (${ckSendKey()})` : `Into this turn: the agent takes it in as it works (${ckSendKey()})`)
     : busy ? "The agent gets this when its current turn ends" : "";
   if (!card.note.classList.contains("bad") || busy) {
     card.note.className = "ck-note";
@@ -1269,7 +1293,7 @@ function ckWorkerPaint(card) {
   }
   card.form.hidden = !live;
   card.stop.hidden = true; card.send.disabled = !live;
-  card.input.placeholder = "Steer the worker… (it reads this after its next step; Ctrl+Enter sends)";
+  card.input.dataset.hint = "Steer the worker… (it reads this after its next step)"; ckSendHints(card);
   if (!card.note.classList.contains("bad")) { card.note.className = "ck-note"; card.note.textContent = !card.online ? `${m.label} is offline${card.at ? ` since ${ago(card.at)}` : ""}.` : ""; }
 }
 

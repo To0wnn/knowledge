@@ -999,6 +999,11 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert ui("/ui/api/me/prefs", {"chat_default": {"agent": "claude", "id": "opus", "effort": "max"}})[0] == 200
     assert json.loads(ui("/ui/api/me")[2])["prefs"] == {"chat_default": {"agent": "claude", "id": "opus", "effort": "max"}}
     assert json.loads(ui("/ui/api/me", h=er)[2])["prefs"] == {}, "another person's default is theirs alone"
+    assert ui("/ui/api/me/prefs", {"send_key": "enter", "grid_open": "here", "start_page": "map"})[0] == 200  # beside the model, which stays
+    assert json.loads(ui("/ui/api/me")[2])["prefs"] == {"chat_default": {"agent": "claude", "id": "opus", "effort": "max"}, "send_key": "enter", "grid_open": "here", "start_page": "map"}
+    assert ui("/ui/api/me/prefs", {"send_key": "shout"})[0] == 400 and ui("/ui/api/me/prefs", {"start_page": "/evil"})[0] == 400
+    assert ui("/ui/api/me/prefs", {"theme": "dark"})[0] == 400 and ui("/ui/api/me/prefs", {})[0] == 400
+    assert ui("/ui/api/me/prefs", {"send_key": "ctrl", "grid_open": "tab", "start_page": "chats"})[0] == 200  # the defaults are not stored
     assert ui("/ui/api/me/prefs", {"chat_default": None})[0] == 200 and json.loads(ui("/ui/api/me")[2])["prefs"] == {}
     # Offline: no new message (it would run whenever the pc comes back).
     d = json.loads((tmp / "machines.json").read_text())

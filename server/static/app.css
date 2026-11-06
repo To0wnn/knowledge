@@ -438,6 +438,7 @@ body.admin-page { display: block; overflow-y: auto; }
 .admin-form legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
 .checks { display: flex; flex-wrap: wrap; gap: 6px 14px; }
 .admin-form > .btn { justify-self: start; }
+.set-rows { display: grid; gap: 8px; }
 .new-token { margin-top: 14px; padding: 14px 16px; border: 1px solid var(--amber); border-radius: var(--r-lg); background: var(--amber-soft); }
 .new-token p { margin: 0 0 8px; }
 .new-token pre.setup { margin: 10px 0; padding: 10px 12px; background: var(--panel-solid); border-radius: var(--r-md); overflow-x: auto; font: 12px/1.5 var(--mono); }
@@ -593,7 +594,7 @@ body.admin-page { display: block; overflow-y: auto; }
   font-size: 14px; line-height: 1.45; box-shadow: none; outline: none; }
 .ck-box textarea:hover:not(:focus) { border-color: transparent; }
 .ck-form .ck-btns { display: flex; gap: 4px; align-items: center; }
-#set-chat { max-width: 520px; } #set-chat h3 { margin: 8px 0 4px; } #set-chat .actions { justify-content: flex-start; }
+#tab-settings .admin-form { max-width: 520px; } #tab-settings h3 { margin: 8px 0 4px; } #set-chat .actions { justify-content: flex-start; }
 .ck-resets { display: inline-flex; gap: 6px; } .ck-resets[hidden] { display: none; }
 .ck-history .ck-subrow .ck-chat { padding-left: 22px; font-size: 13px; } /* a subagent's chat, under its chat */
 .ck-history .ck-subchat .ck-chat-title { color: var(--muted); }

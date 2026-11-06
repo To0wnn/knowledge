@@ -4016,16 +4016,23 @@ async def ui_transcribe(request: Request):
     return JSONResponse({"text": text})
 
 
-PREFS_FILE = ADMIN_DIR / "user_prefs.json"  # per person, set on the Settings page: {user: {chat_default: {agent, id, effort}}}
+PREFS_FILE = ADMIN_DIR / "user_prefs.json"  # per person, set on the Settings page: {user: {chat_default: {agent, id, effort}, <PREF_CHOICES key>: value}}
+PREF_CHOICES = {"grid_open": ("tab", "here"), "send_key": ("ctrl", "enter"), "start_page": ("chats", "tasks", "notes", "map")}  # the first is the default: not stored
 
 
 @server.custom_route("/ui/api/me/prefs", methods=["POST"])
 async def ui_me_prefs(request: Request):
-    """{chat_default: {agent, id, effort} | null}: the model a new chat starts with, for this person on every device
-    ("" id or effort = the agent's own). Checked for shape only: a pc that does not run it falls back in the page."""
+    """Any of {chat_default: {agent, id, effort} | null, grid_open, send_key, start_page}, for this person on every
+    device. chat_default: the model a new chat starts with ("" id or effort = the agent's own); checked for shape only: a
+    pc that does not run it falls back in the page. Keys left out stay as they are."""
     user = device.get().get("user") or ""
     try:
         b = await request.json()
+        if not isinstance(b, dict) or not b or set(b) - {"chat_default", *PREF_CHOICES}:
+            raise ValueError("unknown setting")
+        for k, allowed in PREF_CHOICES.items():
+            if k in b and b[k] not in allowed:
+                raise ValueError(f"{k} is one of {', '.join(allowed)}")
         d = b.get("chat_default")
         if d is not None and not (isinstance(d, dict) and d.get("agent") in AGENT_OWNERS
                                   and (d.get("id") == "" or MODEL_ID.fullmatch(str(d.get("id", ""))))
@@ -4038,10 +4045,16 @@ async def ui_me_prefs(request: Request):
 
     def change(all_prefs):
         mine = all_prefs.setdefault(user, {})
-        if d is None:
-            mine.pop("chat_default", None)
-        else:
-            mine["chat_default"] = {"agent": d["agent"], "id": d.get("id", ""), "effort": d.get("effort", "")}
+        for k, allowed in PREF_CHOICES.items():
+            if k in b:
+                mine.pop(k, None)
+                if b[k] != allowed[0]:
+                    mine[k] = b[k]
+        if "chat_default" in b:
+            if d is None:
+                mine.pop("chat_default", None)
+            else:
+                mine["chat_default"] = {"agent": d["agent"], "id": d.get("id", ""), "effort": d.get("effort", "")}
     await asyncio.to_thread(update_state, PREFS_FILE, change)
     return JSONResponse({"ok": True, "prefs": read_json(PREFS_FILE, {}).get(user, {})})
 

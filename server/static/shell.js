@@ -19,7 +19,7 @@ const PHONE_TABS = ["chats", "tasks", "machines", "notes"]; // the rest sit behi
 const AGENT_VIEWS = ["inbox", "chats", "machines"];
 const agentsOff = () => me.agents === false;
 const phoneTabs = () => (agentsOff() ? ["tasks", "notes", "map", "changes"] : PHONE_TABS);
-const startRoute = () => (agentsOff() ? "#/notes" : "#/chats");
+const startRoute = () => { const v = me.prefs?.start_page || "chats"; return agentsOff() && AGENT_VIEWS.includes(v) ? "#/notes" : `#/${v}`; }; // Settings
 const solo = () => document.body.classList.contains("solo");
 let shellRoute = { view: "", arg: "", q: new URLSearchParams() };
 
@@ -30,7 +30,7 @@ function parseRoute(hash) {
 }
 const oldLink = (hash) => { const p = decode(hash.slice(1)); return p.includes("/") && !p.startsWith("/") ? p : ""; };
 // The view the URL asks for, before it is shown (app.js decides from it what to load first).
-const routeView = () => { const v = parseRoute(location.hash)?.view || (oldLink(location.hash) ? "notes" : "chats"); return agentsOff() && AGENT_VIEWS.includes(v) ? "notes" : v; };
+const routeView = () => { const v = parseRoute(location.hash)?.view || (oldLink(location.hash) ? "notes" : startRoute().slice(2)); return agentsOff() && AGENT_VIEWS.includes(v) ? "notes" : v; };
 
 function go(hash, replace = false) {
   if (replace) history.replaceState(history.state, "", hash); else pushHash(hash);

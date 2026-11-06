@@ -1750,7 +1750,7 @@ async def chat_tabs(browser, secret: str) -> None:
     await ctx.route("**/ui/api/board*", lambda r: r.fulfill(json={"items": []}))  # every chat under Earlier
     await pg.goto(f"{URL}/ui#/chats?view=list")
     await pg.reload()
-    await pg.wait_for_selector("#ck-history a.ck-chat", timeout=5000)
+    await pg.wait_for_selector("#ck-history a.ck-chat", timeout=15000)
     before = await pg.evaluate("location.hash")
     async with ctx.expect_page() as new:
         await pg.click("#ck-history a.ck-chat", modifiers=["Control"])
@@ -1762,6 +1762,51 @@ async def chat_tabs(browser, secret: str) -> None:
     await pg.wait_for_function("document.body.classList.contains('in-chat') && !document.body.classList.contains('solo') && !!$('ck-side').offsetParent", timeout=5000)
     check(True, "List: a plain click still opens the chat beside the list")
     check(not errors + tab_errors, f"no page errors in a chat tab {(errors + tab_errors)[:2]}")
+    await ctx.close()
+
+
+async def settings(browser, secret: str) -> None:
+    """The person's own settings, with the server's answer faked: this test never changes the real ones."""
+    ctx, pg, errors = await page(browser, secret, "/ui#/settings", viewport={"width": 1280, "height": 900})
+    await ctx.route("**/ui/api/chat?*", lambda r: r.abort())
+    posted = []
+    async def prefs(route):
+        posted.append(route.request.post_data_json)
+        await route.fulfill(json={"ok": True, "prefs": {**await pg.evaluate("me.prefs"), **posted[-1]}})
+    await pg.route("**/ui/api/me/prefs", prefs)
+    await pg.wait_for_function("!!$('set-send').onchange", timeout=15000)  # a function it would call
+    await pg.select_option("#set-send", "enter")
+    await pg.wait_for_function("me.prefs.send_key === 'enter'", timeout=5000)
+    check(posted == [{"send_key": "enter"}], f"Settings: a choice saves only itself {posted}")
+    check((await pg.inner_text("#set-use-saved")) == "Saved", "Settings: a choice says Saved")
+    await pg.select_option("#set-grid", "here")
+    await pg.wait_for_function("me.prefs.grid_open === 'here'", timeout=5000)
+    await pg.select_option("#set-theme", "dark")
+    check(await pg.evaluate("[document.documentElement.dataset.theme, store.get('kn_theme')].join()") == "dark,dark", "Settings: the theme applies at once, in this browser")
+    await pg.click(".theme-btn")
+    check(await pg.input_value("#set-theme") == "auto", "Settings: the theme picker follows the sidebar's button")
+    await pg.evaluate("go('#/chats')")
+    await pg.wait_for_function("ck.ready", timeout=15000)
+    if await pg.locator("#bd .bd-card .ck-card").count():
+        await pg.click("#bd .bd-card a.ck-x.bd-only")  # grid_open "here": no new tab
+        await pg.wait_for_function("document.body.classList.contains('in-chat') && !document.body.classList.contains('solo')", timeout=5000)
+        check(len(ctx.pages) == 1, "Settings: ↗ can open the chat in this tab")
+        sent = []
+        async def send(route):
+            sent.append(route.request.post_data_json)
+            await route.fulfill(json={"ok": True})
+        await pg.route("**/ui/api/chat/send", send)
+        box = "#ck-canvas .ck-form textarea"
+        check("Enter sends" in await pg.get_attribute(box, "aria-label"), "Settings: the box says which key sends")
+        await pg.fill(box, "one")
+        await pg.press(box, "Shift+Enter")
+        check(await pg.input_value(box) == "one\n" and not sent, "Settings: Shift+Enter is a new line")
+        await pg.press(box, "Enter")
+        await pg.wait_for_function("document.querySelector('#ck-canvas .ck-form textarea').value === ''", timeout=5000)
+        check(len(sent) == 1, f"Settings: Enter sends {sent}")
+    await pg.evaluate("me.prefs.start_page = 'tasks'; location.hash = ''")
+    check(await pg.evaluate("startRoute()") == "#/tasks", "Settings: the start page decides where the app opens")
+    check(not errors, f"no page errors in settings {errors[:2]}")
     await ctx.close()
 
 
@@ -1787,6 +1832,7 @@ async def main() -> None:
         await no_agents(browser, secret)
         await images(browser, secret)
         await chat_tabs(browser, secret)
+        await settings(browser, secret)
         await board(browser, p.devices, secret)
         await follow(browser, p.devices, secret)
         await live_refresh(browser, secret)

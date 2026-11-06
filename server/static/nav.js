@@ -1,7 +1,7 @@
 // The navigation every signed-in page shares (nav.html): the sidebar and its icon rail, the phone's More sheet, the
 // theme switch and who is signed in. The app (index.html) routes its views itself (shell.js); the admin and help pages
 // are pages of their own, so here they mark their own entry and fetch who is signed in. Globals: toggleRail,
-// closeSide, navMe (app.js, shell.js and palette.js call them).
+// closeSide, navMe (app.js, shell.js and palette.js call them), setTheme (Settings).
 "use strict";
 let navProjects = null; // the signed-in person's projects (/ui/api/me): the lint badge counts as the app does
 
@@ -12,15 +12,16 @@ const navStore = { get: (k) => { try { return localStorage.getItem(k); } catch {
 // Theme: Auto (the system's), Light or Dark; theme.js applies the stored pick before the page paints. The sidebar has
 // it as an icon, the More sheet as a labelled button. The app listens for "kn-theme" to recolour the map.
 const NAV_THEMES = ["auto", "light", "dark"];
-function showTheme() {
-  const name = `Theme: ${{ auto: "Auto", light: "Light", dark: "Dark" }[document.documentElement.dataset.theme || "auto"]}`;
-  for (const b of document.querySelectorAll(".theme-btn")) { b.title = name; b.setAttribute("aria-label", name); if (!b.querySelector("svg")) b.textContent = name; }
-}
-for (const b of document.querySelectorAll(".theme-btn")) b.onclick = () => {
-  const next = NAV_THEMES[(NAV_THEMES.indexOf(document.documentElement.dataset.theme || "auto") + 1) % NAV_THEMES.length];
+function setTheme(next) {
   if (next === "auto") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = next;
   navStore.set("kn_theme", next); showTheme(); dispatchEvent(new Event("kn-theme"));
-};
+}
+function showTheme() {
+  const name = `Theme: ${{ auto: "Auto", light: "Light", dark: "Dark" }[document.documentElement.dataset.theme || "auto"]}`;
+  const pick = navEl("set-theme"); if (pick) pick.value = document.documentElement.dataset.theme || "auto"; // Settings
+  for (const b of document.querySelectorAll(".theme-btn")) { b.title = name; b.setAttribute("aria-label", name); if (!b.querySelector("svg")) b.textContent = name; }
+}
+for (const b of document.querySelectorAll(".theme-btn")) b.onclick = () => setTheme(NAV_THEMES[(NAV_THEMES.indexOf(document.documentElement.dataset.theme || "auto") + 1) % NAV_THEMES.length]);
 showTheme();
 
 // The sidebar: wide screens keep the viewer's choice (stored); narrow ones show the rail and open it over the page.

@@ -113,8 +113,23 @@
         <p class="muted" id="set-chat-note">The models your pcs that are online now offer.</p>
         <div class="actions"><button type="submit" class="btn primary">Save model</button></div>
       </form>
+      <form id="set-use" class="admin-form">
+        <h3>How it works <span class="set-saved muted" id="set-use-saved" role="status"></span></h3>
+        <p class="muted">Saved for you, on every device you sign in with. A tab that is already open follows after a reload.</p>
+        <label for="set-start">Start page</label>
+        <select id="set-start"><option value="chats">Agents</option><option value="tasks">Tasks</option><option value="notes">Notes</option><option value="map">Map</option></select>
+        <div class="ag-on set-rows">
+          <label for="set-grid">↗ on a chat in the grid opens it</label>
+          <select id="set-grid"><option value="tab">Alone, in a tab of its own</option><option value="here">In this tab, beside the list</option></select>
+          <label for="set-send">Send a message with</label>
+          <select id="set-send"><option value="ctrl">Ctrl+Enter (Enter is a new line)</option><option value="enter">Enter (Shift+Enter is a new line)</option></select>
+          <p class="muted">On a phone Enter is always a new line: there you send with the button.</p>
+        </div>
+      </form>
       <form id="set-notify" class="admin-form">
-        <h3>Notifications</h3>
+        <h3>In this browser</h3>
+        <label for="set-theme">Theme</label>
+        <select id="set-theme"><option value="auto">Auto (as the system)</option><option value="light">Light</option><option value="dark">Dark</option></select>
         <label class="check"><input type="checkbox" id="set-notify-on" role="switch"> Tell me in this browser when something needs me <span class="set-saved muted" id="set-notify-saved" role="status"></span></label>
         <p class="muted" id="set-notify-note">A desktop notification for each new item under Needs you (a chat that answered or asks
           for approval, a failed worker) while this page is open in a tab you are not looking at. For this browser only;
