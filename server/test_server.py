@@ -2655,11 +2655,11 @@ def main():
         assert done(g["CX-0-done"]) == 200
         left = call("knowledge_read", {"path": "garden-memory/project_tasks.md"})[1]
         assert "CX-0-done" not in left and "CX-1] from Claude, start now: prune" in left, left
+        refusal_arrives()
         tasks_contract(tmp, ck, fr, ver, raw)
         lease_contract(tmp, ck, fr, raw)
         handback_contract(tmp, ck, fr, ver, raw)
         # The plugin version: recorded per token and agent, a device behind the newest hears it at session start.
-        refusal_arrives()
         parts = lambda q: "".join(http("GET", f"/context/{n}?project=x&{q}", token=fr)[1] for n in range(1, 6))
         assert "runs 0.9.10 for codex, the newest is 0.9.16" in parts("agent=codex&plugin=0.9.10"), parts("agent=codex&plugin=0.9.10")[-600:]
         assert "codex plugin marketplace upgrade knowledge" in parts("agent=codex&plugin=0.9.10")

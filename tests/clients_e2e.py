@@ -740,6 +740,8 @@ if name == "codex" and args[:1] == ["app-server"] and os.environ.get("KNOWLEDGE_
             tid, texts = f"t{turns}", [m["params"]["input"][0]["text"]]
             rec({"chat": os.environ["KNOWLEDGE_CHAT"], "argv": [name] + args, "cwd": os.getcwd(), "stdin": texts[0], "load": loaded, "perms": perms, "pid": os.getpid(),
                  "pick": [m["params"].get("model"), m["params"].get("effort")]})
+            if "LATE" in texts[0]:  # the answer takes a while: a Stop comes before the turn is known
+                time.sleep(2)
             send({"id": m["id"], "result": {"turn": {"id": tid, "status": "inProgress"}}})
             note("turn/started", {"threadId": "sess-codex", "turn": {"id": tid, "status": "inProgress"}})
             note("item/started", {"item": {"type": "commandExecution", "command": "git status"}})
@@ -749,8 +751,6 @@ if name == "codex" and args[:1] == ["app-server"] and os.environ.get("KNOWLEDGE_
             if "ASK" in texts[0]:
                 send({"id": 0, "method": "item/commandExecution/requestApproval", "params": {"reason": "run the tests", "command": "/bin/sh -lc 'npm test'",
                       "commandActions": [{"type": "unknown", "command": "npm test"}], "availableDecisions": ["accept", "acceptForSession", "decline", "cancel"]}})
-            if "LATE" in texts[0]:  # the answer takes a while: a Stop comes before the turn is known
-                time.sleep(2)
                 got = answers.get()["result"]["decision"]
                 verdict = " | npm test ran" if got == "accept" else " | npm test denied"
             if "SLOW" in texts[0]:  # works until steered to the end (DONE) or interrupted
@@ -868,6 +868,9 @@ elif name == "claude" and "--input-format" in args and os.environ.get("KNOWLEDGE
             out({"type": "control_response", "response": {"subtype": "success", "request_id": m.get("request_id")}})
             continue
         texts = [m["message"]["content"]]
+        if "LATE" in texts[0]:  # it takes a while to take it: a Stop comes first
+            rec({"chat": os.environ["KNOWLEDGE_CHAT"], "argv": [name] + args, "cwd": os.getcwd(), "stdin": texts[0], "pid": os.getpid()})
+            time.sleep(2)
         out({"type": "user", "isReplay": True, "message": m["message"]})  # --replay-user-messages: taken now
         rec({"chat": os.environ["KNOWLEDGE_CHAT"], "argv": [name] + args, "cwd": os.getcwd(), "stdin": texts[0], "pid": os.getpid()})
         stopped = False
@@ -877,9 +880,6 @@ elif name == "claude" and "--input-format" in args and os.environ.get("KNOWLEDGE
             while time.time() < end:
                 try:
                     x = inbox.get(timeout=0.1)
-        if "LATE" in texts[0]:  # it takes a while to take it: a Stop comes first
-            rec({"chat": os.environ["KNOWLEDGE_CHAT"], "argv": [name] + args, "cwd": os.getcwd(), "stdin": texts[0], "pid": os.getpid()})
-            time.sleep(2)
                 except queue.Empty:
                     continue
                 if x is None:
@@ -2024,24 +2024,6 @@ def chat_e2e(tok: str, tmp: Path):
         events = chat(cid)["events"]
         check(started and stopped and time.time() - t0 < 30 and events[-1]["text"] == "Stopped." and not Path(str(calls) + ".slow-done").exists(),
               "chat: stop ends a running turn (the agent's process tree) and the chat says so", json.dumps(events)[-400:])
-        # A folder unlinked after the chat began: the companion refuses the turn, loudly (chat and activity log).
-        second = repos["Second repo"]
-        cid = new("agy", second)
-        (second / ".knowledge-project").unlink()
-        send(cid, "still there?")
-        idle(cid, 2)
-        events = chat(cid)["events"]
-        activity = json.loads((home / ".knowledge" / "companion" / "activity.json").read_text(encoding="utf-8"))
-        check(any(e["kind"] == "error" and "not a folder linked" in e["text"] for e in events) and not any(c["chat"] == cid for c in recorded()),
-        # A folder unlinked after the chat began: the companion refuses the turn, loudly (chat and activity log).
-        second = repos["Second repo"]
-        cid = new("agy", second)
-        (second / ".knowledge-project").unlink()
-        send(cid, "still there?")
-        idle(cid, 2)
-        events = chat(cid)["events"]
-        activity = state_of(home, "activity.json")
-        check(any(e["kind"] == "error" and "not a folder linked" in e["text"] for e in events) and not any(c["chat"] == cid for c in recorded()),
         # Stop before the agent took the message: its turn must not go on behind a chat that says Stopped.
         for agent in ("claude", "codex"):
             cid = new(agent, repo)
@@ -2051,6 +2033,15 @@ def chat_e2e(tok: str, tmp: Path):
             time.sleep(4)  # the agent took it by now
             check(started and idle(cid, 2) and chat(cid)["events"][-1]["text"] == "Stopped." and not any("by itself" in e["text"] for e in chat(cid)["events"]),
                   f"chat {agent}: stop before the agent took the message interrupts its turn when it starts", json.dumps(chat(cid)["events"])[-400:])
+        # A folder unlinked after the chat began: the companion refuses the turn, loudly (chat and activity log).
+        second = repos["Second repo"]
+        cid = new("agy", second)
+        (second / ".knowledge-project").unlink()
+        send(cid, "still there?")
+        idle(cid, 2)
+        events = chat(cid)["events"]
+        activity = state_of(home, "activity.json")
+        check(any(e["kind"] == "error" and "not a folder linked" in e["text"] for e in events) and not any(c["chat"] == cid for c in recorded()),
               "chat: a folder no longer linked on this pc is refused, the agent never starts", json.dumps(events)[-400:])
         check(any(a["kind"] == "chat" and "turn started" in a["text"] for a in activity) and any(a["kind"] == "chat" and "stopped" in a["text"] for a in activity)
               and any(a["kind"] == "error" and "chat turn failed" in a["text"] for a in activity),
@@ -2109,6 +2100,9 @@ def follow_e2e(tok: str, tmp: Path):
         if not check(wait_for(lambda: key_file.exists(), 30), "follow: the companion runs", (home / "companion.log").read_text(errors="replace")[-600:]):
             return
         mid = json.loads((home / ".knowledge" / "machine.json").read_text(encoding="utf-8"))["id"]
+        row = lambda: next((r for r in machines() if r["id"] == mid), {})
+        # its first round is over (it reports last): one still running would see workers on and start other tests' lines
+        check(wait_for(lambda: row().get("companion"), 60), "follow: the companion's first round reports", (home / "companion.log").read_text(errors="replace")[-600:])
         local("/local/api/settings", {"workersAllowed": True})
         for i in ids.values():  # only these (other tests' lines stay alone); off again after, so a later round starts nothing
             http("POST", "/ui/api/machines/action", {"machine": mid, "action": "start_worker", "args": {"project": "garden", "id": i}}, ui)
@@ -2131,9 +2125,6 @@ def follow_e2e(tok: str, tmp: Path):
         for a in ids:
             st, body = http("POST", "/ui/api/worker/steer", {"machine": mid, "worker": f"garden/{ids[a]}", "text": f"use sqlite {a}"}, ui)
             check(st == 200, f"steer {a}: the owner's message is taken", body)
-        row = lambda: next((r for r in machines() if r["id"] == mid), {})
-        # its first round is over (it reports last): one still running would see workers on and start other tests' lines
-        check(wait_for(lambda: row().get("companion"), 60), "follow: the companion's first round reports", (home / "companion.log").read_text(errors="replace")[-600:])
         for a in ids:
             got = wait_for(lambda: f"use sqlite {a}" in texts(a).split("heard:")[-1] and "Delivered" in texts(a), 40)
             ev = view(a)["events"]
