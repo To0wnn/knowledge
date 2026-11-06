@@ -1693,9 +1693,13 @@ def update_agents() -> list:
 
 
 def agents_update_due(st: dict, ws: dict, now: float) -> bool:
-    """Once a day, off with KNOWLEDGE_AUTO_UPDATE=0, and not while a game, chat or worker runs: then a later round does it."""
-    return (os.environ.get("KNOWLEDGE_AUTO_UPDATE") != "0" and now - st.get("agents_updated", 0) >= AGENT_UPDATE_EVERY and not workers.game_session()
-            and not any(w["status"] == "running" for w in ws.values()) and not any(chat_busy(c) for c in {*chat.LIVE, *chat.RUNNING, *chat.PENDING}))
+    """Once a day, off with KNOWLEDGE_AUTO_UPDATE=0, not during a game, and not while a chat or worker runs: then a later
+    round does it. A pc that always has work updates after two days anyway: a running agent stays on its version
+    (measured on Linux and Windows, Codex's app-server running through its own update)."""
+    since = now - st.get("agents_updated", 0)
+    return (os.environ.get("KNOWLEDGE_AUTO_UPDATE") != "0" and since >= AGENT_UPDATE_EVERY and not workers.game_session()
+            and (since >= 2 * AGENT_UPDATE_EVERY or not (any(w["status"] == "running" for w in ws.values())
+                                                         or any(chat_busy(c) for c in {*chat.LIVE, *chat.RUNNING, *chat.PENDING}))))
 
 
 def update_agents_soon():
@@ -2481,7 +2485,9 @@ def main(argv: list):
                     game, workers.game_session = workers.game_session, lambda: ""
                     try:
                         assert agents_update_due({}, {}, 1e9) and not agents_update_due({"agents_updated": 1e9 - 3600}, {}, 1e9), "once a day"
-                        assert not agents_update_due({}, {"k": {"status": "running"}}, 1e9), "not while a worker runs"
+                        day = {"agents_updated": 1e9 - 1.5 * AGENT_UPDATE_EVERY}
+                        assert agents_update_due(day, {}, 1e9) and not agents_update_due(day, {"k": {"status": "running"}}, 1e9), "not while a worker runs"
+                        assert agents_update_due({}, {"k": {"status": "running"}}, 1e9), "after two days anyway"
                         workers.game_session = lambda: "a game"
                         assert not agents_update_due({}, {}, 1e9), "not during a game"
                     finally:
