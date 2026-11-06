@@ -1144,7 +1144,8 @@ async function ckUpload(machine, files) {
 // prompt) presses are ignored, so no second recorder starts; a release in that time stops right after the start.
 const ckMicOk = () => !!(me.stt && window.MediaRecorder && navigator.mediaDevices?.getUserMedia);
 function ckMic(card, btn) {
-  let rec = null, held = 0, timer = null, starting = false, stopSoon = false;
+  let rec = null, timer = null, starting = false, stopSoon = false;
+  let held = 0, startX = 0, startY = 0, holdTimer = null, isHold = false, cancelled = false;
   const label = () => { const s = Math.round((Date.now() - rec.t0) / 1000); btn.textContent = `● ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; if (s >= 300) stop(); };
   const say = (msg) => { card.note.className = "ck-note bad"; card.note.textContent = msg; };
   async function start() {
@@ -1157,8 +1158,13 @@ function ckMic(card, btn) {
     rec = new MediaRecorder(stream); rec.t0 = Date.now(); const parts = [];
     rec.ondataavailable = (e) => e.data.size && parts.push(e.data);
     rec.onstop = async () => {
-      stream.getTracks().forEach((t) => t.stop()); clearInterval(timer); rec = null;
-      btn.classList.remove("rec"); btn.textContent = "…"; btn.disabled = true;
+      stream.getTracks().forEach((t) => t.stop()); clearInterval(timer);
+      const wasRec = rec; rec = null;
+      btn.classList.remove("rec");
+      if (wasRec?.discarded || (Date.now() - wasRec.t0 < 600 && !parts.some((p) => p.size > 2000))) {
+        btn.innerHTML = CK_ICON.mic; btn.disabled = false; return;
+      }
+      btn.textContent = "…"; btn.disabled = true;
       const blob = new Blob(parts, { type: parts[0]?.type || "audio/webm" });
       try {
         const { text } = await api("/ui/api/transcribe", { method: "POST", headers: { "Content-Type": blob.type }, body: blob });
@@ -1176,8 +1182,43 @@ function ckMic(card, btn) {
   }
   const stop = () => { if (starting) stopSoon = true; else if (rec && rec.state === "recording") rec.stop(); };
   btn.toggle = () => (starting ? undefined : rec ? stop() : start());
-  btn.addEventListener("pointerdown", (e) => { e.preventDefault(); if (starting) return; if (rec) return stop(); held = Date.now(); start(); });
-  btn.addEventListener("pointerup", () => { if ((rec || starting) && held && Date.now() - held > 700) stop(); held = 0; });
+  btn.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || starting) return;
+    if (rec) { e.preventDefault(); stop(); return; }
+    startX = e.clientX; startY = e.clientY; cancelled = false; isHold = false; held = Date.now();
+    if (e.pointerType !== "touch") {
+      e.preventDefault();
+      holdTimer = setTimeout(() => { isHold = true; start(); }, 300);
+    } else {
+      holdTimer = setTimeout(() => {
+        if (!cancelled && !rec) {
+          isHold = true; start();
+          try { navigator.vibrate?.(40); } catch (_) {}
+        }
+      }, 350);
+    }
+  });
+  btn.addEventListener("pointermove", (e) => {
+    if (!held || cancelled) return;
+    if (Math.hypot(e.clientX - startX, e.clientY - startY) > 10) {
+      cancelled = true; clearTimeout(holdTimer);
+      if (isHold && rec) { rec.discarded = true; stop(); }
+    }
+  });
+  const abort = () => {
+    clearTimeout(holdTimer); cancelled = true;
+    if (isHold && rec) { rec.discarded = true; stop(); }
+    held = 0;
+  };
+  btn.addEventListener("pointercancel", abort);
+  btn.addEventListener("pointerup", (e) => {
+    clearTimeout(holdTimer);
+    if (cancelled || !held) { held = 0; return; }
+    const duration = Date.now() - held; held = 0;
+    if (isHold) { stop(); return; }
+    if (e.pointerType === "touch" && duration < 120) return;
+    btn.toggle();
+  });
   btn.addEventListener("click", (e) => { if (e.detail === 0) btn.toggle(); }); // the keyboard (Enter/Space on the button)
 }
 // A message of the owner, or a tool line naming an image the agent looked at: its text, each file a thumbnail

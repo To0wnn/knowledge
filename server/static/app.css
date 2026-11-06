@@ -621,6 +621,7 @@ body.admin-page { display: block; overflow-y: auto; }
 .ck-form .ck-files { display: flex; gap: 6px; flex-wrap: wrap; }
 .ck-form .ck-files[hidden] { display: none; }
 .ck-filechip { display: inline-flex; align-items: center; gap: 4px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ck-mic { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .ck-mic.rec { color: var(--bad, #c33); font-variant-numeric: tabular-nums; }
 .ck-form.drop .ck-box { border-style: dashed; border-color: var(--accent); }
 .ck-msg.user .ck-file, .ck-line.tool .ck-file { display: block; margin: 6px 0 0; }
