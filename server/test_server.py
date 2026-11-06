@@ -970,6 +970,10 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     http("POST", "/machine/chats/events", {"chat": mc, "events": [{"kind": "error", "text": "usage limit reached"}], "done": True}, token=fr, headers=pc)
     got = json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])
     assert got["chat"]["closed"] is False and on_board() and got["events"][-1]["text"].startswith("Not archived"), "a failed recording keeps the chat open, under Needs you"
+    # Force archive closes without another turn even after a failed wrap-up or when queued
+    assert ui("/ui/api/chat/close", {"machine": mid, "id": mc, "force": True})[0] == 200
+    assert chat()["closed"] is True and not on_board()
+    assert ui("/ui/api/chat/close", {"machine": mid, "id": mc, "closed": False})[0] == 200 and on_board()
     # A long chat opens on its newest part (tail), the rest comes in steps (before), never twice, never a gap.
     full = json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}&after=0")[2])["events"]
     page = json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}&after=0&tail=3")[2])
@@ -987,6 +991,15 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert "chat is required" in call("knowledge_chat_read", {}, fr)[1]
     assert "no such chat" in call("knowledge_chat_read", {"chat": mc}, et)[1], "another person's chat"
     assert "no chats" in call("knowledge_chats", {}, et)[1] or mc not in call("knowledge_chats", {}, et)[1]
+    # Another agent archives the chat (MCP)
+    assert "force-archived" in call("knowledge_chat_close", {"chat": mc, "force": True, "reason": "limit reached"}, fr)[1]
+    assert chat()["closed"] is True and not on_board()
+    assert "opened again" in call("knowledge_chat_close", {"chat": mc, "open": True}, fr)[1]
+    assert chat()["closed"] is False and on_board()
+    assert "force-archived" in call("knowledge_chat_archive", {"chat_id": mc}, fr)[1]
+    assert chat()["closed"] is True
+    assert "chat is required" in call("knowledge_chat_close", {}, fr)[1]
+    assert "no such chat" in call("knowledge_chat_close", {"chat": mc}, et)[1], "another person's chat"
     # The admins' other own device (an admin-made "self" token) sees the chats of this pc too; a PA's token does not.
     for name, self_, sees in (("garage-laptop", True, True), ("garage-pa", False, False)):
         st, _, b = ui("/ui/api/admin/token", {"name": name, "roots": ["garden", "garden-memory"], "self": self_})

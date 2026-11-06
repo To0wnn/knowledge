@@ -402,6 +402,8 @@ function ckItem(i) {
   }
   if (i.kind === "chat" && i.col !== "running") later.push(["Archive", "The agent records it in the memos, then it goes off the list (under Earlier, Archived); a new message opens it again",
     () => ckDo("/ui/api/chat/close", { machine: i.machine, id: i.id, closed: true })]);
+  if (i.kind === "chat") later.push(["Force archive", "Close right away without wrap-up (e.g. when quota is exhausted or agent is stuck)",
+    () => ckDo("/ui/api/chat/close", { machine: i.machine, id: i.id, closed: true, force: true, record: false })]);
   if (i.kind === "chat" && i.col === "running") act("Stop", "Stop this turn", () => ckDo("/ui/api/chat/stop", { machine: i.machine, id: i.id }));
   if (later.length) acts.append(ckMore(later, i.title));
   if (acts.childNodes.length) card.append(acts);
@@ -671,18 +673,20 @@ function ckCard(meta) {
     } catch (err) { note.className = "ck-note bad"; note.textContent = err.message; }
     ckPaint(card); await ckPoll(card); clearTimeout(ck.timer); ck.timer = setTimeout(ckTick, 1500);
   };
-  close.onclick = async () => { // archive: the agent records the chat in the memos, then it goes off the board and the list (Archived); a new message opens it again
+  close.onclick = async (e) => { // archive: the agent records the chat in the memos, then it goes off the board and the list (Archived); a new message opens it again
     const closed = !card.meta.closed;
+    const force = closed && (Boolean(e?.shiftKey) || Boolean(card.failedWrap));
     try {
-      const r = await api("/ui/api/chat/close", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, closed }) });
+      const r = await api("/ui/api/chat/close", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, closed, ...(force ? { force: true, record: false } : {}) }) });
       ck.summaryAt = 0;
       if (r.recording) { // the agent records the chat in the memos first; the server closes it when that turn ends
         toast("Recording this chat in the memos first; it is archived when the agent is done", false);
         card.meta.status = "queued"; ckPaint(card); await ckPoll(card); clearTimeout(ck.timer); ck.timer = setTimeout(ckTick, 1500); return;
       }
       card.meta.closed = closed;
+      card.failedWrap = false;
       if (closed) {
-        toast("Archived: under Archived in the list; a new message opens it again", false);
+        toast(force ? "Force archived without wrap-up" : "Archived: under Archived in the list; a new message opens it again", false);
         if (store.get("kn_last_chat") === card.meta.id) store.set("kn_last_chat", "");
         if (bdOn()) bdRender(); else ckShow(null); // the grid: only its card goes
       } else ckPaint(card);
@@ -1057,8 +1061,16 @@ function ckPaint(card) {
   card.tok.hidden = !m.used && !m.ctx; // the conversation's tokens: its context now and all it used
   card.tok.textContent = [m.ctx && `${ckNum(m.ctx)} context`, m.used && `${ckNum(m.used)} used`].filter(Boolean).join(" · ");
   card.tok.title = "Context: what the agent sent for its last step. Used: every token of this chat so far, cache reads included.";
-  card.close.hidden = busy; card.close.textContent = m.closed ? "Open again" : "Archive";
-  card.close.title = m.closed ? "Back in the list" : "The agent records this chat in the memos, then it goes off the list (under Earlier, Archived); a new message opens it again";
+  card.close.hidden = busy && !card.failedWrap;
+  if (card.failedWrap && !m.closed) {
+    card.close.textContent = "Force archive";
+    card.close.className = "btn small bad ck-close";
+    card.close.title = "Wrap-up failed: click to force archive without wrap-up (or Shift+click)";
+  } else {
+    card.close.textContent = m.closed ? "Open again" : "Archive";
+    card.close.className = "btn small quiet ck-close";
+    card.close.title = m.closed ? "Back in the list" : "The agent records this chat in the memos, then it goes off the list (under Earlier, Archived); Shift-click to force archive without wrap-up";
+  }
   card.name.textContent = ckTitle(m, card);
   card.branch.hidden = true;
   card.where.textContent = `${AGENT_NAME[m.agent] || m.agent} · ${m.label} · ${ckShort(m.folder)}${m.project ? ` (${m.project})` : ""}${m.worktree ? ` · branch chat/${m.id}` : ""}`;
@@ -1237,7 +1249,38 @@ function ckUserMsg(card, text, box = el("div", "ck-msg user")) {
   box.append(text.slice(at));
   return box;
 }
-const ckLine = (card, e) => (e.kind === "tool" && e.text.includes("⟦file:") ? ckUserMsg(card, e.text, el("div", "ck-line tool")) : el("div", `ck-line ${e.kind}`, e.text));
+function ckLine(card, e) {
+  if (e.kind === "tool" && e.text.includes("⟦file:")) return ckUserMsg(card, e.text, el("div", "ck-line tool"));
+  const line = el("div", `ck-line ${e.kind}`, e.text);
+  if (e.kind === "info" && (e.text || "").startsWith("Not archived:")) {
+    card.failedWrap = true;
+    const btn = el("button", "btn small bad", "Force archive");
+    btn.type = "button";
+    btn.style.marginLeft = "8px";
+    btn.title = "Archive immediately without recording turn (e.g. when quota is exhausted)";
+    btn.onclick = async () => {
+      btn.disabled = true;
+      try {
+        await api("/ui/api/chat/close", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, closed: true, force: true, record: false }),
+        });
+        toast("Force archived without wrap-up", false);
+        card.meta.closed = true;
+        card.failedWrap = false;
+        if (store.get("kn_last_chat") === card.meta.id) store.set("kn_last_chat", "");
+        if (bdOn()) bdRender(); else ckShow(null);
+        ckTick();
+      } catch (err) {
+        toast(err.message, true);
+        btn.disabled = false;
+      }
+    };
+    line.append(btn);
+  }
+  return line;
+}
 // New events into a card's log: text as sanitized Markdown, the rest as lines; never one twice.
 const CK_PAGE = 200; // events a chat opens with, and loads per step when you scroll up
 function ckEvents(card, res) {
