@@ -598,6 +598,8 @@ function ckCard(meta) {
   ckSendHints(card);
   x.onclick = () => { if (!solo()) store.set("kn_last_chat", ""); ckShow(null); }; // closed on purpose: the list stays empty
   input.addEventListener("keydown", (e) => {
+    // Esc as its ×, also from this box, where an opened chat starts (the text stays as a draft; an attached file would not; the grid has its own Esc)
+    if (e.key === "Escape" && !e.isComposing && document.body.classList.contains("in-chat") && !card.files.length && !document.querySelector("details[open], dialog[open]")) { e.preventDefault(); return x.click(); }
     // Ctrl/Cmd+Enter presses the button (Send, Queue or Force), and so does Enter when Settings say so; a phone's Enter stays a new line
     if (e.key === " " && e.ctrlKey && !mic.hidden) { e.preventDefault(); return mic.toggle(); }
     if (e.key === "Enter" && e.altKey && !e.isComposing && !queueBtn.hidden) { e.preventDefault(); return queueBtn.click(); } // queue
