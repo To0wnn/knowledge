@@ -72,7 +72,7 @@ let data = { nodes: [], links: [] };
 let byId = new Map(), neighbors = new Map(), slugToId = new Map(), clusterColor = new Map();
 let selected = null, hover = null, focusSet = new Set();
 let machinesCache = []; // the last /ui/api/machines rows (declared early for loadTasks/loadMachines)
-let project = store.get("kn_project") || "homelab";
+let project = navProject.get();
 let labelMin = 0, current = null, editing = false, Graph, mapOn = false;
 
 // "all": every project on one map, each project an island; otherwise one project and its topics.
@@ -371,7 +371,7 @@ function renderProjects() {
 function switchProject(p, refit = true) {
   releaseFocus({ instant: true });
   if (p === project || (p !== ALL && !PROJECTS.includes(p))) return;
-  project = p; store.set("kn_project", p);
+  project = p; navProject.set(p);
   setAgentProject(p === ALL ? "" : p); // one project picker for every view
   $("new-memo").hidden = !me.writable.includes(p);
   $("add-menu").hidden = $("new-memo").hidden && $("ingest-open").hidden;
@@ -636,7 +636,7 @@ function renderNote() {
   const copy = el("button", "btn small", "Copy link");
   copy.onclick = () => navigator.clipboard?.writeText(`${location.origin}/ui${noteRoute(note.path)}`).then(() => { copy.textContent = "Copied"; setTimeout(() => (copy.textContent = "Copy link"), 1500); });
   tools.append(copy);
-  if (note.writable) { const edit = el("button", "btn small", touch ? "Edit" : "Edit (Alt+E)"); edit.onclick = startEdit; tools.append(edit); }
+  if (note.writable) { const edit = el("button", "btn small", touch ? "Edit" : `Edit (${keyOf("edit")})`); edit.onclick = startEdit; tools.append(edit); }
   const hist = el("button", "btn small", "History"); hist.onclick = () => showHistory(); tools.append(hist);
   pane.append(head, tools, el("div", "note-path", `${note.path} · version ${note.version}`));
   if (meta.description) pane.append(el("p", "note-desc", meta.description));
@@ -775,7 +775,7 @@ function startEdit() {
   const area = el("textarea", "editor"); area.value = current.text; area.spellcheck = false;
   area.setAttribute("aria-label", `Text of ${current.path}`);
   const err = el("p", "error"); err.hidden = true; err.setAttribute("role", "alert");
-  const save = el("button", "btn primary", "Save (Ctrl+S)"), cancel = el("button", "btn", "Cancel");
+  const save = el("button", "btn primary", `Save (${keyOf("save")})`), cancel = el("button", "btn", "Cancel");
   const actions = el("div", "actions"); actions.append(cancel, save);
   pane.append(head, el("div", "note-path", `${current.path} · based on version ${current.version}`), area, err, actions);
   area.focus(); area.setSelectionRange(0, 0); area.scrollTop = 0;
@@ -791,7 +791,7 @@ function startEdit() {
     }
   };
   area.addEventListener("keydown", (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); save.click(); }
+    if (keyHit(e, "save")) { e.preventDefault(); save.click(); }
     if (e.key === "Escape" && !e.isComposing) { e.preventDefault(); e.stopPropagation(); cancel.click(); } // not on to the page's Escape
   });
 }
@@ -906,31 +906,29 @@ $("q").addEventListener("keydown", (e) => { // Enter opens the first result
   if (e.key === "Enter") { e.preventDefault(); clearTimeout(searchTimer); runSearch().then(() => $("results").querySelector("button")?.click()); }
 });
 
-// Keys: Ctrl/Cmd+K the palette; Alt+key jumps (appKey). Without Alt: in a note Esc closes it, in a chat Esc goes back, and in the
+// Keys (KEY_ACTIONS, Settings): the palette from anywhere; Ctrl or Alt plus a key jumps (appKey). Without them: in a note Esc closes it, in a chat Esc goes back, and in the
 // chats a key is text for the box, arrows on the grid go from card to card.
 function appKey(e) {
   if (solo()) return; // a chat alone in its tab has no views to jump to
-  if (bdOn() && (bdPartKey(e) || bdArrow(e))) { e.preventDefault(); return; } // on the grid the digits are its parts, not the projects
+  if (bdOn() && (bdPartKey(e) || (keyHit(e, "arrows") && bdArrow(e)))) { e.preventDefault(); return; } // on the grid the digits are its parts, not the projects
   const kn = shellRoute.view === "notes" || shellRoute.view === "map", at = current ? `/${encPath(current.path)}` : "";
-  // By position when the character is no letter: Alt+N on a Mac is a dead key.
-  const key = /^[a-z]$/i.test(e.key) ? e.key.toLowerCase() : /^Key[A-Z]$/.test(e.code) ? e.code[3].toLowerCase() : e.key, digit = /^(?:Digit|Numpad)(\d)$/.exec(e.code)?.[1];
-  const act = key === "[" || e.code === "BracketLeft" ? toggleRail
-    : key === "/" || e.code === "Slash" ? () => openPalette(true)
-    : key === "a" ? () => go("#/chats")
-    : key === "n" && !agentsOff() ? () => $("ck-new").onclick()
-    : digit === "0" && !e.shiftKey ? () => switchProject(ALL)
-    : digit && !e.shiftKey && PROJECTS[Number(digit) - 1] ? () => switchProject(PROJECTS[Number(digit) - 1])
-    : key === "m" ? () => go(mapOn ? `#/notes${at}` : `#/map${at}`)
-    : key === "e" && kn && current?.writable && !editing ? startEdit : null;
+  const digit = keyHit(e, "digits") && keyCombo(e).at(-1);
+  const act = keyHit(e, "rail") ? toggleRail
+    : keyHit(e, "notes_search") ? () => openPalette(true)
+    : keyHit(e, "chats") ? () => go("#/chats")
+    : keyHit(e, "new_chat") && !agentsOff() ? () => $("ck-new").onclick()
+    : digit === "0" ? () => switchProject(ALL)
+    : digit && PROJECTS[Number(digit) - 1] ? () => switchProject(PROJECTS[Number(digit) - 1])
+    : keyHit(e, "map") ? () => go(mapOn ? `#/notes${at}` : `#/map${at}`)
+    : keyHit(e, "edit") && kn && current?.writable && !editing ? startEdit : null;
   if (act) { e.preventDefault(); act(); }
 }
 document.addEventListener("keydown", (e) => {
   const on = document.activeElement, dialog = document.querySelector("dialog[open]"), typing = /input|textarea|select/i.test(on.tagName) || dialog;
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); if (!document.querySelector("dialog[open]:not(#palette)")) openPalette(); return; }
-  if (e.ctrlKey || e.metaKey) return;
+  if (keyHit(e, "palette")) { e.preventDefault(); if (!document.querySelector("dialog[open]:not(#palette)")) openPalette(); return; }
   // A chat's box keeps what is typed; anywhere else (a note being edited) a jump could lose it.
   // On a Mac Option types characters (ñ, å, and [ or { on some layouts), so there the box keeps them.
-  if (e.altKey) { if (!typing || (!dialog && on.matches(".ck-form textarea") && !/Mac/.test(navigator.platform))) appKey(e); return; }
+  if (e.altKey || e.ctrlKey || e.metaKey) { if (!typing || (!dialog && on.matches(".ck-form textarea") && !(e.altKey && /Mac/.test(navigator.platform)))) appKey(e); return; }
   if (typing) return;
   const menu = document.querySelector("details.menu[open]"); // not any details: a topic stays unfolded in a hidden view
   if (e.key === "Escape") {

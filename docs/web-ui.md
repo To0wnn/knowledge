@@ -5,9 +5,9 @@ Moved from the README; [back to the README](../README.md).
 ## Views
 
 - **Web UI:** one app shell: a sidebar (`Alt+[` folds it to an icon rail; below 1000 px it is the rail) with one project
-  picker on top (Alt+1-9, Alt+0 = all, except on the chat grid, where they pick a part of the grid: docs/chats.md; it scopes every view: Notes, Map, Agents, Tasks and a new chat's folder; the
+  picker on top (Alt+1-9, Alt+0 = all, except on the chat grid, where they pick a part of the grid: docs/chats.md; it scopes every view: Notes, Map, Agents, Tasks and a new chat's folder; each window keeps its own, also through a refresh, and a new window starts at the last one picked; the
   Needs-you badge still counts all), **Agents** (Agents, Tasks, Machines) and **Knowledge** (Notes, Map, Changes,
-  Health = lint), This pc, Admin, Help and Settings (user menu: a new chat's default model, the start page, what ↗ on a grid card does, whether the grid groups per project or puts all chats together, and the send key, kept per person on the server; theme and notifications, per browser. Only what use cannot teach gets a setting: what remembers itself, like the list's width, or what the browser does, like zoom, does not);
+  Health = lint), This pc, Admin, Help and Settings (user menu: a new chat's default model, the start page, what ↗ on a grid card does, whether the grid groups per project or puts all chats together, the send key (Ctrl+Enter, Enter or Shift+Enter) and every keyboard shortcut (`KEY_ACTIONS` in `nav.js`; Ctrl or Alt required, a key in use is refused, Esc, Enter and plain arrows stay fixed), kept per person on the server; theme and notifications, per browser. Only what use cannot teach gets a setting: what remembers itself, like the list's width, or what the browser does, like zoom, does not);
   on a phone a bottom tab bar (Agents, Tasks, Machines, Notes, More). The Agents view (`#/chats`; `#/inbox` opens the same view) is one
   list grouped Needs you (each row says why: answered and not read, asks approval, failed), Review (a branch with
   commits ready to merge), Working and Done today (folded), with quick actions on a row (Allow/Deny an approval,
