@@ -2134,6 +2134,23 @@ async def chat_drafts(browser, secret: str) -> None:
     await ctx.close()
 
 
+async def project_pick_pages(browser, secret: str) -> None:
+    """The picker on the pages outside the app (admin, help): it shows the project and picking one lands there."""
+    for path in ("/ui/admin", "/ui/help"):
+        ctx, pg, errors = await page(browser, secret, path, viewport={"width": 1300, "height": 900})
+        await pg.wait_for_function("document.querySelector('#projects').options.length > 1", timeout=15000)
+        now, target = await pg.evaluate("""(() => { const s = document.querySelector('#projects'), p = navProject.get();
+          return [s.value === p && p, [...s.options].map((o) => o.value).find((v) => v !== p && v !== 'all')]; })()""")
+        check(bool(now), f"{path}: the picker shows the current project")
+        check(await pg.locator("#projects option[value=all]").count() == 1, f"{path}: the picker offers all projects, as the app does")
+        await pg.select_option("#projects", target)
+        await pg.wait_for_url("**/ui#/notes*", timeout=15000)
+        await pg.wait_for_function("(p) => typeof data === 'object' && data.nodes.length > 0 && project === p && $('projects').value === p", arg=target, timeout=15000)
+        check(True, f"{path}: picking a project lands on that project")
+        check(not errors, f"{path}: no page errors with the picker {errors[:2]}")
+        await ctx.close()
+
+
 async def settings(browser, secret: str) -> None:
     """The person's own settings, with the server's answer faked: this test never changes the real ones."""
     ctx, pg, errors = await page(browser, secret, "/ui#/settings", viewport={"width": 1280, "height": 900})
@@ -2229,6 +2246,7 @@ async def main() -> None:
         await search(browser, secret)
         await phone(browser, p.devices, secret)
         await admin(browser, secret)
+        await project_pick_pages(browser, secret)
         await cockpit(browser, p.devices, secret)
         await approvals(browser, p.devices, secret)
         await review(browser, p.devices, secret)

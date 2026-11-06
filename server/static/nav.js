@@ -122,12 +122,13 @@ function navMe(me) {
   if (!me.admin) for (const a of document.querySelectorAll(".nav-health")) a.hidden = true;
   if (me.projects && me.projects.length) {
     for (const s of document.querySelectorAll(".project-pick")) {
-      s.replaceChildren(...me.projects.map((p) => {
+      s.replaceChildren(...[...me.projects, "all"].map((p) => {
         const opt = document.createElement("option");
-        opt.value = p; opt.textContent = me.labels?.[p] || p;
+        opt.value = p; opt.textContent = p === "all" ? "All projects" : me.labels?.[p] || p;
         return opt;
       }));
-      s.onchange = () => { location.href = `/ui#/notes?project=${encodeURIComponent(s.value)}`; };
+      s.value = navProject.get();
+      s.onchange = () => { navProject.set(s.value); location.href = "/ui#/notes"; }; // the app starts from the picked project (app.js renderProjects takes over there)
     }
   }
 }
