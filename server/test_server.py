@@ -1510,6 +1510,8 @@ def board_contract(tmp, ck, fr, raw, er, et):
     # The diff: only the owner asks; the machine's companion gets it once through the chat channel and answers.
     assert ui("/ui/api/git/diff", {"machine": mid, "chat": cids[0]}, er)[0] == 403
     assert ui("/ui/api/git/diff", {"machine": mid, "worker": "../x"})[0] == 400
+    assert ui("/ui/api/git/diff", {"machine": mid, "dirs": ""}, er)[0] == 403  # the folder chooser: the owner only
+    assert ui("/ui/api/git/diff", {"machine": mid, "dirs": "x" * 501})[0] == 400
     st, _, b = ui("/ui/api/git/diff", {"machine": mid, "chat": cids[0]})
     assert st == 200, b
     rid = json.loads(b)["id"]

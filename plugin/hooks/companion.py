@@ -414,7 +414,7 @@ def drives() -> list:
 
 
 def list_dirs(path: str) -> dict:
-    """One level of the folder chooser on the companion's own page; "" is the list of drives. parent None: nothing above."""
+    """One level of the folder chooser (the companion's page, or the owner's web UI); "" is the list of drives. parent None: nothing above."""
     roots = drives()
     if not path:
         return {"path": "", "parent": None, "linkable": False, "dirs": [{"name": r, "path": r} for r in roots]}
@@ -464,8 +464,8 @@ def folder_links() -> dict:
 
 def link_folder(path: str, project: str, chosen: bool = False) -> str:
     """Link a folder to a project this token may write: the .knowledge-project file, as the knowledge-init skill writes
-    it. A folder the companion listed (candidate or already linked), or, `chosen` on this pc's own page only, one the
-    person picked in its folder chooser. A remote action never gets a free path."""
+    it. A folder the companion listed (candidate or already linked), or, `chosen`, one its owner picked in a folder
+    chooser (this page, or the web UI: the owner's remote control only)."""
     _scan["at"] = 0
     if chosen:
         if not Path(path).is_absolute() or not Path(path).is_dir() or not linkable(Path(path)):
@@ -1615,7 +1615,7 @@ def run_action(a: dict) -> str:
     if act == "trust_hooks":
         return trust(agent)
     if act == "link_folder":
-        return link_folder(str(args.get("path", "")), str(args.get("project", "")))
+        return link_folder(str(args.get("path", "")), str(args.get("project", "")), args.get("chosen") is True)
     if act == "unlink_folder":
         return unlink_folder(str(args.get("path", "")))
     if act == "update_agents":
@@ -1911,11 +1911,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, {"ok": True, **settings()}, origin=o)
             if path == "/local/api/link":
                 chosen = body.get("chosen") is True
-                if chosen and o != SELF:  # a free path is for this pc's own page, not for a web page elsewhere
+                if chosen and o != SELF:  # from the web UI it goes through the server, which checks who owns this pc
                     return self.send(403, {"error": "A folder can only be chosen on the companion page itself"}, origin=o)
                 return self.send(200, {"result": link_folder(str(body.get("path", "")), str(body.get("project", "")), chosen)}, origin=o)
             if path == "/local/api/dirs":
-                if o != SELF:  # what is on this pc's disk stays on its own page
+                if o != SELF:  # as above
                     return self.send(403, {"error": "Folders can only be browsed on the companion page itself"}, origin=o)
                 return self.send(200, list_dirs(str(body.get("path", ""))), origin=o)
             if path == "/local/api/unlink":
@@ -2069,6 +2069,9 @@ def chats_round() -> bool:
         chat.start(item, post, log, linked, yolo, fetch)
     for d in r.get("diffs", []):  # after the turns (handed out once: never lost to a diff); read-only, linked folders and workers only
         try:
+            if "dirs" in d:  # the owner's folder chooser in the web UI, on the same way as a diff: never kept in a log
+                server("POST", "/machine/chats/diff", tok, {"id": d["id"], "text": json.dumps(list_dirs(str(d["dirs"])))})
+                continue
             w = load("workers.json", {}).get(d.get("worker", ""), {})
             path = d["folder"] if d.get("folder") in linked() else w.get("worktree") if d.get("worker") else None
             if not path:
@@ -2580,6 +2583,25 @@ def main(argv: list):
                     globals().update(scratch=real_scratch)
                     globals().update(HOME=real[0], known_folders=real[1], git_repos=real[2])
                     subprocess.run = real[3]
+        # Hooks start at once (7 agy sessions on one pc): each writer its own temp file, or one takes the other's away.
+        with tempfile.TemporaryDirectory() as tmp:
+            target, real_dir, fails = Path(tmp) / "agy-ls-x.json", agent_hooks.AGENTS_DIR, []
+
+            def writer(n):
+                for i in range(60):
+                    try:
+                        agent_hooks.write_private(target, {"n": n, "i": i})
+                    except OSError as e:
+                        fails.append(repr(e))
+            agent_hooks.AGENTS_DIR = Path(tmp)
+            try:
+                ts = [threading.Thread(target=writer, args=(n,)) for n in range(6)]
+                [t.start() for t in ts]
+                [t.join() for t in ts]
+            finally:
+                agent_hooks.AGENTS_DIR = real_dir
+            assert not fails, fails[:3]
+            assert json.loads(target.read_text(encoding="utf-8"))["i"] == 59 and [x.name for x in Path(tmp).iterdir()] == [target.name]
         # An "Own branch" chat: its pill and diff come from its worktree, which a look never makes.
         if shutil.which("git"):
             with tempfile.TemporaryDirectory() as tmp:

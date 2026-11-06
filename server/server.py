@@ -5402,7 +5402,7 @@ def action_args(action: str, args: dict) -> dict:
     if action in ("update_plugin", "update_agents"):
         return {}
     if action in ("link_folder", "unlink_folder"):
-        # the path is one the companion listed itself (its candidates or linked folders); it refuses any other
+        # a path from the companion's list, or chosen by the owner in the folder chooser; the companion checks both
         path = str(args.get("path", ""))
         if not path or len(path) > 500 or "\n" in path:
             raise ValueError("path must be a folder the companion listed")
@@ -5410,7 +5410,7 @@ def action_args(action: str, args: dict) -> dict:
             return {"path": path}
         if args.get("project") not in PROJECTS or not in_scope(PROJECTS[args["project"]][1] + "/"):
             raise ValueError("unknown project")
-        return {"path": path, "project": args["project"]}
+        return {"path": path, "project": args["project"], **({"chosen": True} if args.get("chosen") is True else {})}
     if action == "yolo":
         if args.get("on") is True and args.get("confirm") != "YOLO":
             raise ValueError("YOLO on needs the word YOLO typed in the confirm dialog")
@@ -6414,7 +6414,8 @@ DIFF_KEEP, DIFF_BYTES = 600, 200_000  # seconds a diff request lives; characters
 @server.custom_route("/ui/api/git/diff", methods=["GET", "POST"])
 async def ui_git_diff(request: Request):
     """POST {machine, chat} or {machine, worker: "<project>/<id>"}: ask that pc's companion for the diff of the chat's
-    folder or the worker's worktree (read-only, pulled with the chats). GET ?machine=&id=: the answer once it came."""
+    folder or the worker's worktree (read-only, pulled with the chats). POST {machine, dirs: "<path>"}: one level of that
+    pc's folders for the owner's chooser ("" = its drives), JSON in text. GET ?machine=&id=: the answer once it came."""
     try:
         b = (await request.json()) if request.method == "POST" else dict(request.query_params)
         mid = str(b.get("machine", ""))
@@ -6426,8 +6427,14 @@ async def ui_git_diff(request: Request):
             d = read_json(q, {}).get(str(b.get("id", "")))
             if not d:
                 raise ValueError("unknown diff request")
+            if "dirs" in d and d.get("status") == "done":  # the names on someone's disk stay on the server no longer than needed
+                await asyncio.to_thread(update_state, q, lambda x: x.pop(str(b.get("id", "")), None))
             return JSONResponse({k: d.get(k) for k in ("status", "text", "error")})
-        if b.get("chat"):
+        if "dirs" in b:
+            if len(str(b["dirs"])) > 500 or "\n" in str(b["dirs"]):
+                raise ValueError("path too long")
+            target = {"dirs": str(b["dirs"])}
+        elif b.get("chat"):
             c = read_json(chat_file(mid, str(b["chat"])), None) or {}
             target = {"folder": c.get("folder"), **({"chat": c["id"]} if c.get("worktree") else {})}  # its companion diffs that chat's worktree
         elif re.fullmatch(r"\w[\w.-]{0,79}/\w[\w.-]{0,79}", str(b.get("worker", ""))):
@@ -6631,7 +6638,7 @@ async def machine_chats(request: Request):
             d.pop(k)
         for k, v in d.items():
             if v.get("status") == "waiting" and dev["name"] in v.get("tokens", []):
-                diffs.append({"id": k, **{x: v[x] for x in ("folder", "worker", "chat") if x in v}})
+                diffs.append({"id": k, **{x: v[x] for x in ("folder", "worker", "chat", "dirs") if x in v}})
                 v["status"] = "sent"
     dq = q_path.parent / "diffs.json"
     # every companion poll passes here: read only, and write (under the shared lock) when a request waits or expired

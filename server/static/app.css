@@ -503,6 +503,8 @@ body.admin-page { display: block; overflow-y: auto; }
 #models-rows .setting { display: block; margin-bottom: 10px; }
 #models-rows select { display: block; width: 100%; max-width: 560px; margin-top: 3px; }
 .machine-group { margin: 6px 0 0; color: var(--muted); font-size: 12px; font-weight: 600; }
+.choose-list { max-height: 300px; overflow-y: auto; }
+.choose-list li > .btn { flex: 1; justify-content: flex-start; height: auto; min-height: 28px; text-align: left; }
 .machine-list { margin: 4px 0; padding: 0; list-style: none; font-size: 13px; }
 .machine-list li { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 2px 0; overflow-wrap: anywhere; }
 .machine-list li.worker { padding: 6px 0; border-top: 1px dashed var(--line); }

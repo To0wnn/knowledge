@@ -160,6 +160,18 @@
   <div class="actions"><button type="button" class="btn" id="ck-diff-close">Close</button></div>
 </dialog>
 
+<dialog id="choose-dialog" class="ck-diff" aria-labelledby="choose-title">
+  <h2 id="choose-title">Choose a folder</h2>
+  <p class="muted" id="choose-where"></p>
+  <ul class="machine-list choose-list" id="choose-list" aria-label="Folders"></ul>
+  <p class="muted" id="choose-note" role="status" aria-live="polite"></p>
+  <label>Project <select class="small" id="choose-project"></select></label>
+  <div class="actions">
+    <button type="button" class="btn" id="choose-close">Cancel</button>
+    <button type="button" class="btn primary" id="choose-ok" disabled>Link this folder</button>
+  </div>
+</dialog>
+
 <dialog id="new-dialog" aria-label="New memo">
   <form id="new-form" method="dialog">
     <h2>New memo</h2>

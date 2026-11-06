@@ -88,7 +88,7 @@ def seed() -> None:
     pc = {**bearer, "X-Knowledge-Machine": MID, "X-Knowledge-Machine-Label": "smoke-pc"}
     report = {"version": "0.21.1", "agents": {"codex": {}, "claude": {"models": [
         {"id": "opus", "name": "Opus", "efforts": ["low", "high"], "default": "high"}, {"id": "sonnet", "name": "Sonnet", "efforts": ["low"]}]}},
-        "folders": {"linked": [{"path": "/home/x/lab", "project": "homelab"}]}}
+        "folders": {"linked": [{"path": "/home/x/lab", "project": "homelab"}], "candidates": []}, "projects": ["garden"]}
     ok(http("POST", "/machine/report", report, pc), "machine report")
     def keep_online():  # as a companion does: else the pc goes offline once the tests take longer than the server's limit
         while True:

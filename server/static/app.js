@@ -1212,6 +1212,44 @@ function workerProgress(p) {
   if ((p.log || []).length) box.append(el("code", "progress-log", p.log.join("\n")));
   return box;
 }
+// The folder chooser of a pc of your own: one level at a time, asked of its companion on the same way as a diff.
+let chooseAsk = 0, chooseMachine = null, choosePath = "";
+function chooseFolder(m) {
+  chooseMachine = m;
+  $("choose-project").replaceChildren(...m.companion.projects.map((p) => { const o = el("option", null, p); o.value = p; return o; }));
+  $("choose-dialog").showModal();
+  chooseGo("");
+}
+async function chooseGo(path) {
+  const ask = ++chooseAsk, m = chooseMachine, note = $("choose-note"), live = () => ask === chooseAsk && $("choose-dialog").open;
+  $("choose-ok").disabled = true;
+  note.textContent = `Asking ${m.label}…`;
+  try {
+    const post = { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: m.id, dirs: path }) };
+    const { id } = await api("/ui/api/git/diff", post);
+    for (let n = 0; n < 40 && live(); n++) {
+      await new Promise((r) => setTimeout(r, n ? 1000 : 300));
+      const a = await api(`/ui/api/git/diff?machine=${m.id}&id=${id}`);
+      if (a.status !== "done") continue;
+      if (!live()) return;
+      if (a.error) { note.textContent = a.error; return; }
+      const d = JSON.parse(a.text), row = (label, to) => { const li = el("li"), b = el("button", "btn small", label); b.type = "button"; b.onclick = () => chooseGo(to); li.append(b); return li; };
+      choosePath = d.path;
+      $("choose-where").textContent = d.path || m.label;
+      note.textContent = d.path && !d.linkable ? "A drive root, the home folder or a system folder cannot be linked: open a folder in it." : d.dirs.length ? "" : "No folders in here.";
+      $("choose-ok").disabled = !d.linkable;
+      $("choose-list").replaceChildren(...(d.parent == null ? [] : [row("↑ Up", d.parent)]), ...d.dirs.map((x) => row(x.name, x.path)));
+      return;
+    }
+    if (live()) note.textContent = `${m.label} did not answer: it may need plugin 0.38.6 or newer, or it is busy.`;
+  } catch (e) { if (live()) note.textContent = e.message; }
+}
+$("choose-close").onclick = () => $("choose-dialog").close();
+$("choose-ok").onclick = () => {
+  $("choose-dialog").close();
+  machineAction(chooseMachine, "link_folder", { path: choosePath, project: $("choose-project").value, chosen: true });
+};
+
 async function machineAction(m, action, args = {}) {
   let sent = {};
   try {
@@ -1393,7 +1431,7 @@ async function loadMachines() {
       card.append(line);
     }
     const fl = c && c.folders;
-    if (fl && (fl.linked.length || (m.own && fl.candidates.length))) {
+    if (fl && (fl.linked.length || (m.own && (c.projects || []).length))) {
       const d = el("details", "machine-sessions"), list = el("ul", "machine-list");
       d.append(el("summary", null, `Folders (${fl.linked.length} linked)`));
       for (const f of fl.linked) {
@@ -1409,6 +1447,7 @@ async function loadMachines() {
         ctl.append(path, proj, machineButton("Link", "Write .knowledge-project in that folder", () => machineAction(m, "link_folder", { path: path.value, project: proj.value })));
         d.append(ctl);
       }
+      if (m.own && (c.projects || []).length) d.append(machineButton("Choose a folder…", "Browse the drives of this pc and link any folder", () => chooseFolder(m)));
       card.append(d);
     }
     if (m.actions.length) {

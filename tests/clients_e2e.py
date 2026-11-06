@@ -1602,6 +1602,21 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         row = next((r for r in machines() if r["id"] == mid), {})
         check({"path": str(app), "project": "garden"} in [{k: f[k] for k in ("path", "project")} for f in (row.get("companion") or {}).get("folders", {}).get("linked", [])],
               "folders: the Machines list shows the pc's linked folders", json.dumps((row.get("companion") or {}).get("folders"))[:400])
+        # The folder chooser in the web UI: the same list and link, through the server, and the answer is not kept.
+        def remote_dirs(path):
+            rid = json.loads(http("POST", "/ui/api/git/diff", {"machine": mid, "dirs": path}, ui)[1])["id"]
+            a = {}
+            wait_for(lambda: a.update(json.loads(http("GET", f"/ui/api/git/diff?machine={mid}&id={rid}", headers=ui)[1])) or a.get("status") == "done", 30)
+            return a, rid
+        a, rid = remote_dirs(str(tmp))
+        check(str(picked) in [d["path"] for d in json.loads(a.get("text") or "{}").get("dirs", [])] and http("GET", f"/ui/api/git/diff?machine={mid}&id={rid}", headers=ui)[0] == 400,
+              "folders: the web UI's chooser lists a pc's folders, and the server does not keep them", json.dumps(a)[:400])
+        a, _ = remote_dirs(str(tmp / "no such folder"))
+        check("cannot open" in (a.get("error") or ""), "folders: the web UI's chooser says why a folder cannot be opened", json.dumps(a)[:300])
+        http("POST", "/ui/api/machines/action", {"machine": mid, "action": "link_folder", "args": {"path": str(picked), "project": "garden", "chosen": True}}, ui)
+        wait_for(lambda: (picked / ".knowledge-project").exists(), 30)
+        check((picked / ".knowledge-project").exists(), "folders: the web UI links a folder its owner chose, also outside the home folder")
+        call("POST", "/local/api/unlink", {"path": str(picked)})
         # A plugin update (a new cache folder) makes the companion trust Codex's hooks again by itself.
         manifest = home / ".codex" / "plugins" / "cache" / "knowledge" / "knowledge" / "9.9.9" / ".codex-plugin" / "plugin.json"
         manifest.parent.mkdir(parents=True)

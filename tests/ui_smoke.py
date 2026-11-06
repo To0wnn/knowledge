@@ -680,6 +680,43 @@ async def shell(browser, devices, secret: str) -> None:
         most = await pg.evaluate("""() => { const i = document.querySelector('.machine-controls input[type=number]'); if (!i) return null; const was = i.value;
           i.value = ''; i.dispatchEvent(new Event('change')); return {max: i.max, min: i.min, label: i.closest('label').textContent, back: i.value === was}; }""")
         check(most and most["max"] == "" and most["min"] == "0" and "0: no limit" in most["label"] and most["back"], f"Machines: workers at a time is a free number, 0 is no limit, an empty field changes nothing {most}")
+    # The folder chooser on a pc of your own; the pc's answers and the link are stand-ins, so nothing changes (also live).
+    await pg.evaluate("document.querySelectorAll('.machine-sessions').forEach((d) => { d.open = true; })")  # a closed one hides its button
+    if await pg.get_by_role("button", name="Choose a folder…").count():
+        tree = {"": {"path": "", "parent": None, "linkable": False, "dirs": [{"name": "C:\\", "path": "C:\\"}, {"name": "D:\\", "path": "D:\\"}]},
+                "D:\\": {"path": "D:\\", "parent": "", "linkable": False, "dirs": [{"name": "Sim", "path": "D:\\Sim"}]},
+                "D:\\Sim": {"path": "D:\\Sim", "parent": "D:\\", "linkable": True, "dirs": []}}
+        asked, linked = [], []
+
+        async def fake_dirs(r):
+            if r.request.method == "POST":
+                asked.append(json.loads(r.request.post_data)["dirs"])
+                return await r.fulfill(json={"ok": True, "id": "r"})
+            await r.fulfill(json={"status": "done", "text": json.dumps(tree[asked[-1]]), "error": ""})
+
+        async def fake_action(r):
+            linked.append(json.loads(r.request.post_data))
+            await r.fulfill(json={"ok": True, "id": "a"})
+        await pg.route("**/ui/api/git/diff*", fake_dirs)
+        await pg.route("**/ui/api/machines/action", fake_action)
+        await pg.get_by_role("button", name="Choose a folder…").first.click()
+        d_drive = pg.locator("#choose-list").get_by_role("button", name="D:\\")
+        await d_drive.wait_for(timeout=8000)
+        check(await pg.locator("#choose-list").get_by_role("button", name="C:\\").count() == 1, "Machines: the folder chooser starts at the drives, C: and D:")
+        await d_drive.click()
+        sim = pg.locator("#choose-list").get_by_role("button", name="Sim")
+        await sim.wait_for(timeout=8000)
+        check(await pg.locator("#choose-ok").is_disabled() and "drive root" in await pg.locator("#choose-note").inner_text(), "Machines: a drive root cannot be linked, and it says so")
+        await sim.click()
+        await pg.wait_for_function("!document.getElementById('choose-ok').disabled", timeout=8000)
+        await pg.locator("#choose-ok").click()
+        await pg.wait_for_timeout(300)
+        check(len(linked) == 1 and linked[0]["action"] == "link_folder" and linked[0]["args"]["path"] == "D:\\Sim" and linked[0]["args"]["chosen"] is True and not await pg.evaluate("document.getElementById('choose-dialog').open"),
+              f"Machines: the chooser links the chosen folder as the owner's action {linked}")
+        await pg.unroute("**/ui/api/git/diff*")
+        await pg.unroute("**/ui/api/machines/action")
+    else:
+        check(False, "Machines: no Choose a folder button on a pc of your own")
     pill = await pg.evaluate("""(() => { const p = el('span', 'pill yolo', 'YOLO'); document.body.append(p); const s = getComputedStyle(p), b = s.backgroundColor, c = s.color;
       const d = el('span'); d.style.color = 'var(--bad)'; document.body.append(d); const bad = getComputedStyle(d).color; p.remove(); d.remove(); return [b, bad, c]; })()""")
     check(pill[2] == pill[1] and pill[0] != "rgba(0, 0, 0, 0)", f"Machines: the YOLO label is red and stands out {pill}")
