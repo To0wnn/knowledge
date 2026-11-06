@@ -305,8 +305,12 @@ def tasks_contract(tmp, ck, fr, ver, raw):
     while not json.loads((tmp / "task_wakes.json").read_text())["garden"]["CX-2"].get("noticed") and time.time() < deadline:
         time.sleep(0.3)
     assert rows()["CX-2"]["stalled"], rows()["CX-2"]
-    matrix = next(b for b in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["system"]["background"] if b["name"] == "Matrix")
-    assert "CX-2" in matrix["detail"] and "nobody claimed it" in matrix["detail"], matrix
+    def matrix():  # notify() sends in a thread of its own: "noticed" can be saved before the row is there
+        return next((b for b in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["system"]["background"] if b["name"] == "Matrix"), {})
+    deadline = time.time() + 20
+    while "nobody claimed it" not in matrix().get("detail", "") and time.time() < deadline:
+        time.sleep(0.2)
+    assert "CX-2" in matrix()["detail"] and "nobody claimed it" in matrix()["detail"], matrix()
     # Hook errors a device reports: kept per token and agent, secrets masked, shown with its sessions (agy: the
     # codex errors of this token are checked later in main()).
     st = lambda b: http("POST", "/status", b, token=fr)[0]
