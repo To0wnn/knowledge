@@ -907,18 +907,23 @@ $("q").addEventListener("keydown", (e) => { // Enter opens the first result
 });
 
 // Keys: Ctrl/Cmd+K the palette (/ the same, for notes only), [ folds the sidebar, A the Agents view, N a new chat, M map or notes, 1-9/0 the project; in a note E
-// edits and Esc closes it; in a chat Esc goes back.
+// edits and Esc closes it; in a chat Esc goes back; in a card or an open chat other keys go to its text box.
 document.addEventListener("keydown", (e) => {
   const typing = /input|textarea|select/i.test(document.activeElement.tagName) || document.querySelector("dialog[open]");
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); if (!document.querySelector("dialog[open]:not(#palette)")) openPalette(); return; }
   if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
+  // In a card or an open chat a key is text: moving the focus now makes the browser type this very key in the box.
+  const on = document.activeElement, chat = !bdOn() && shellRoute.view === "chats" && ck.cards.get(ck.view)?.root;
+  const room = on.closest(".bd-card") || (chat && (on === document.body || chat.contains(on)) ? chat : null), box = room?.querySelector(".ck-form textarea");
+  if (box?.offsetParent && !box.disabled && e.key.length === 1 && !(bdOn() && e.shiftKey && /^(Digit|Numpad)/.test(e.code)) // Shift+1-9 moves the card
+    && !(e.key === " " && on.closest("button, a, summary")) && !document.querySelector("details[open]")) { box.focus(); return; }
   const kn = shellRoute.view === "notes" || shellRoute.view === "map", at = current ? `/${encPath(current.path)}` : "";
   if (solo() && e.key !== "Escape") return; // a chat alone in its tab has no views to jump to
   if (bdOn() && bdPartKey(e)) { e.preventDefault(); return; } // on the grid the digits are its parts, not the projects
   if (e.key === "[") toggleRail();
   else if (e.key === "/") { e.preventDefault(); openPalette(true); }
   else if (e.key.toLowerCase() === "a") go("#/chats");
-  else if (e.key.toLowerCase() === "n" && !agentsOff()) $("ck-new").onclick();
+  else if (e.key.toLowerCase() === "n" && !agentsOff()) { e.preventDefault(); $("ck-new").onclick(); } // it focuses the new box: the n must not land there
   else if (/^[1-9]$/.test(e.key) && PROJECTS[Number(e.key) - 1]) switchProject(PROJECTS[Number(e.key) - 1]);
   else if (e.key === "0") switchProject(ALL);
   else if (e.key.toLowerCase() === "m") go(mapOn ? `#/notes${at}` : `#/map${at}`);

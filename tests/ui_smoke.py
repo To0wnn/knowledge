@@ -1793,6 +1793,9 @@ async def chat_tabs(browser, secret: str) -> None:
     await tab.evaluate("document.activeElement.blur()")
     await tab.keyboard.press("m")
     check("solo=1" in await tab.evaluate("location.hash"), "Chat tab: the view keys do nothing")
+    check(await tab.input_value("#ck-canvas .ck-form textarea") == "m", "Chat tab: a key outside the box lands in the box")
+    await tab.fill("#ck-canvas .ck-form textarea", "")
+    await tab.evaluate("document.activeElement.blur()")
     await tab.evaluate("window.closed_ = 0; window.close = () => { window.closed_++; }; 0")  # evaluate would call a function it gets back
     await tab.evaluate("(() => { const d = document.querySelector('#ck-canvas details.ck-model') || document.body.appendChild(document.createElement('details')); d.open = true; })()")
     await tab.keyboard.press("Escape")
@@ -1933,7 +1936,28 @@ async def grid_groups(browser, secret: str) -> None:
     await pg.focus(".bd-card[data-id='000000000003'] textarea")
     await pg.keyboard.press("1")
     check(await pg.evaluate("[bd.part, document.activeElement.value]") == [2, "1"], "Parts: a digit in a text box is just text")
+    # Keys: N opens an empty box; in a card a key goes to its box, without a click there; on the grid itself keys stay shortcuts.
     await pg.fill(".bd-card[data-id='000000000003'] textarea", "")
+    t3, d = '.bd-card[data-id="000000000003"] textarea', "#bd .bd-card.draft textarea"
+    await pg.evaluate("$('bd-stage').focus()")
+    await pg.keyboard.press("n")
+    await pg.wait_for_function(f"document.activeElement === document.querySelector('{d}')", timeout=5000)
+    check(await pg.input_value(d) == "", "Keys: N on the grid puts the cursor in the new chat's box, without the letter n")
+    await pg.click(".bd-card[data-id='000000000003'] .ck-log")
+    await pg.keyboard.type("hi 2")
+    check(await pg.input_value(t3) == "hi 2" and await pg.evaluate(f"[bd.part, document.activeElement === document.querySelector('{t3}')]") == [2, True],
+          "Keys: after a click in the log, typing lands in that card's box, also digits and the first letter")
+    await pg.fill(t3, "")
+    await pg.focus(".bd-card[data-id='000000000003']")
+    await pg.keyboard.press("Control+c")
+    check(await pg.evaluate(f"document.activeElement !== document.querySelector('{t3}')"), "Keys: Ctrl+C in a card leaves the focus, so a selection in the log stays")
+    await pg.focus(".bd-card[data-id='000000000003'] .ck-x:not(.bd-only)")
+    await pg.keyboard.press("k")
+    check(await pg.input_value(t3) == "k", "Keys: a letter on a card's button goes to its box too")
+    await pg.fill(t3, "")
+    await pg.keyboard.press("Escape")
+    await pg.keyboard.press("x")
+    check(await pg.evaluate("document.activeElement === $('bd-stage')") and await pg.input_value(t3) == "", "Keys: after Esc a key on the grid itself goes to no box")
     await pg.evaluate("$('bd-stage').focus()")
     chats[0] = {**chats[0], "raised": now + 30}  # finishes in the window on part 1, while both look
     await pg.evaluate("ck.summaryAt = 0; ckSummary()")
