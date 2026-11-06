@@ -232,7 +232,7 @@ function zoomToFocus() {
 // beside the nodes sends everything home. Positions are animated, not simulated, so the island map comes back
 // exactly as it was and the rest of the map does not shift.
 const home = new Map(); // node -> {x, y} before focus mode moved it
-let tweenId = 0, hoverTimer, tweening = false;
+let tweenId = 0, hoverTimer, tweening = false, homeTween = 0; // homeTween: deselect's way home, which ends with the zoom out
 
 function tween(moves, done) {
   const id = ++tweenId, t0 = performance.now(), ms = calm ? 0 : 450;
@@ -314,10 +314,12 @@ async function loadGraph() {
     })
     .onNodeHover((n) => {
       if (touch) return;
-      hover = n ? n.id : null; if (!selected) setFocus(hover);
+      // a note gliding home under a still mouse is no hover: its gather would take over the way home, and the zoom out never comes
+      const goingHome = tweening && tweenId === homeTween;
+      hover = n ? n.id : null; if (!selected && !goingHome) setFocus(hover);
       $("g2d").style.cursor = n ? "pointer" : ""; animateHover(selected ? 6000 : 400);
       clearTimeout(hoverTimer);
-      if (!selected) hoverTimer = setTimeout(() => (hover ? gather(hover, 0.3) : releaseFocus()), hover ? 150 : 250);
+      if (!selected && !goingHome) hoverTimer = setTimeout(() => (hover ? gather(hover, 0.3) : releaseFocus()), hover ? 150 : 250);
     })
     .onNodeClick((n) => (selected === n.id ? go(noteRoute(n.id)) : openNote(n.id))) // a second click reads it
     .onBackgroundClick(() => deselect())
@@ -487,7 +489,8 @@ function deselect({ push = true } = {}) {
   $("note").replaceChildren(el("div", "note-empty muted", "Pick a note from the list or search."));
   $("side").replaceChildren(); markActive();
   homeView();
-  releaseFocus().then(() => { if (!selected && mapOn) Graph.zoomToFit(600, fitPad()); }); // home, then the overview
+  const back = releaseFocus(); homeTween = tweenId;
+  back.then(() => { if (!selected && mapOn) Graph.zoomToFit(600, fitPad()); }); // home, then the overview
 }
 
 // With nothing selected the middle shows the project's MEMORY.md: the user's own table of contents.

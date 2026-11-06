@@ -196,6 +196,18 @@ async def desktop(browser, secret: str) -> None:
     await pg.wait_for_timeout(500)
     state = await pg.evaluate("({map: !$('graph').hidden, note: current && current.path, selected, hover})")
     check(not state["map"] and state["note"] == nid, f"a second click reads the note {state if state['note'] != nid or state['map'] else ''}")
+    # A note gliding home under a still mouse hovers: that must not take over from the way home, which zooms out at its end.
+    sc = await pg.evaluate("(id) => { const n = byId.get(id); return Graph.graph2ScreenCoords(n.x, n.y); }", nid)
+    await click_node(pg, box, sc)
+    await pg.wait_for_timeout(1500)
+    pt = await pg.evaluate(EMPTY_POINT)
+    await pg.mouse.move(box["x"] + pt["x"], box["y"] + pt["y"])  # still, and on no note once zoomed out: a real hover after the way home is fine
+    await pg.evaluate("(id) => { deselect(); setTimeout(() => Graph.onNodeHover()(byId.get(id)), 50); }", nid)
+    await pg.wait_for_timeout(2000)
+    state = await pg.evaluate("[home.size, focusSet.size, Math.abs(Graph.zoom() - %f) < 0.05]" % overview)
+    await pg.evaluate("Graph.onNodeHover()(null)")
+    await pg.wait_for_timeout(500)
+    check(state == [0, 0, True], f"a note passing under the mouse on the way home leaves the map free and zoomed out {state}")
     check(not errors, f"no page errors on desktop {errors[:2]}")
     await ctx.close()
 
