@@ -6,7 +6,8 @@ const $ = (id) => document.getElementById(id), enc = encodeURIComponent;
 const stage = $("iv-stage"), img = $("iv-img"), thumbs = $("iv-thumbs");
 const fileUrl = (ref) => `/ui/api/chat/file?machine=${enc(machine)}&file=${enc(ref)}`;
 const nameOf = (ref) => ref.slice(ref.indexOf("/") + 1);
-let files = [], current = "", after = 0;
+const start = query.get("file") || "";
+let listed = [], files = start ? [start] : [], current = "", after = 0;
 let s = 1, x = 0, y = 0, fit = 1;
 
 // What the chat shows as an image: the owner's attachments and the tool lines, subagents' too; each file once.
@@ -14,7 +15,7 @@ function collect(events) {
   for (const e of events) {
     after = Math.max(after, e.n);
     if (e.kind !== "user" && e.kind !== "tool") continue;
-    for (const m of (e.text || "").matchAll(REF)) if (IMAGE.test(m[1]) && !files.includes(m[1])) files.push(m[1]);
+    for (const m of (e.text || "").matchAll(REF)) if (IMAGE.test(m[1]) && !listed.includes(m[1])) listed.push(m[1]);
   }
 }
 async function load() {
@@ -22,11 +23,13 @@ async function load() {
     const res = await fetch(`/ui/api/chat?machine=${enc(machine)}&id=${enc(chat)}&after=${after}&peek=1`);
     if (res.ok) collect((await res.json()).events);
   } catch { /* offline: the images known so far stay */ }
-  renderThumbs();
+  files = !start || listed.includes(start) ? listed : [start, ...listed]; // older than what the chat keeps: still shown
+  if (current) renderThumbs(); else show(files[files.length - 1]);
 }
 
 function renderThumbs() {
-  if (thumbs.children.length !== files.length) {
+  if (thumbs.dataset.list !== files.join()) {
+    thumbs.dataset.list = files.join();
     thumbs.replaceChildren(...files.map((ref) => {
       const b = document.createElement("button"), t = document.createElement("img");
       b.type = "button"; b.className = "iv-thumb"; b.title = nameOf(ref); b.onclick = () => show(ref);
@@ -78,6 +81,7 @@ function fitView() {
   paint();
 }
 function zoomAt(to, px = stage.clientWidth / 2, py = stage.clientHeight / 2) { // the point under (px, py) stays there
+  if (!img.naturalWidth) return;
   const next = Math.max(fit, Math.min(ZOOM_MAX, to));
   x = px - (px - x) * (next / s);
   y = py - (py - y) * (next / s);
@@ -89,12 +93,14 @@ img.onerror = () => {
   img.hidden = true;
   $("iv-msg").hidden = false;
   $("iv-msg").textContent = "This image is no longer here (chat files are kept 30 days).";
+  s = fit = 1; // not zoomed: the wheel goes on to the next image
+  paint();
 };
 new ResizeObserver(() => {
   if (!img.naturalWidth) return;
   const wasZoomed = zoomed();
   fit = Math.min(1, stage.clientWidth / img.naturalWidth, stage.clientHeight / img.naturalHeight);
-  if (wasZoomed) paint(); else fitView();
+  if (wasZoomed) { s = Math.max(s, fit); paint(); } else fitView();
 }).observe(stage);
 
 // Wheel: Ctrl (also how a trackpad reports a pinch) zooms, a zoomed image pans, else on to the next image. One flick
@@ -122,7 +128,7 @@ thumbs.addEventListener("wheel", (e) => { // a plain mouse wheel moves the strip
 const pointers = new Map();
 let pinch = 0, downAt = null, lastTap = 0;
 stage.addEventListener("pointerdown", (e) => {
-  if (e.target.closest("button")) return;
+  if (e.button || e.target.closest("button")) return; // a right-click's menu may swallow its pointerup
   stage.setPointerCapture(e.pointerId);
   pointers.set(e.pointerId, [e.clientX, e.clientY]);
   downAt = pointers.size === 1 ? [e.clientX, e.clientY] : null;
@@ -176,15 +182,10 @@ document.addEventListener("keydown", (e) => {
 });
 window.addEventListener("focus", load); // back from the chat: the images the agent looked at meanwhile
 
-(async () => {
-  const start = query.get("file") || "";
-  await load();
-  if (start && !files.includes(start)) files.unshift(start); // older than what the chat keeps: still shown
-  show(start || files[files.length - 1]);
-  if (!files.length) {
-    img.hidden = true;
-    $("iv-msg").hidden = false;
-    $("iv-msg").textContent = "This chat has no images.";
-    renderThumbs();
-  }
-})();
+show(start); // at once: the chat's events can take a moment
+load().then(() => {
+  if (files.length) return;
+  img.hidden = true;
+  $("iv-msg").hidden = false;
+  $("iv-msg").textContent = "This chat has no images.";
+});

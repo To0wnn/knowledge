@@ -28,6 +28,7 @@ Read-only: it opens notes, it never edits or sends.
 from the vault plus the username; systemd-run does not see ~/.local/bin on PATH, hence the full path)
 """
 import asyncio
+import contextlib
 import re
 import os
 import subprocess
@@ -1151,6 +1152,12 @@ async def board(browser, devices, secret: str) -> None:
     fr = await pg.evaluate("JSON.stringify(bdProjects([{project: 'b'}, {project: ''}, {project: 'a'}, {project: 'b'}], ['a']))")
     check(fr == '[{"project":"a","n":1,"shut":true},{"project":"b","n":2,"shut":false},{"project":"","n":1,"shut":false}]', f"Grid: frames in name order, no project last, with counts and folding {fr}")
     await pg.wait_for_function("ck.summaryAt > 0", timeout=15000)
+    order = await pg.evaluate("""(() => { const keep = [ck.chats, ck.board, agentProject]; agentProject = '';
+      ck.chats = [{id: 'run', machine: 'x', status: 'running', updated: 9, raised: 1}, {id: 'done', machine: 'x', status: 'idle', updated: 8, raised: 3},
+        {id: 'unread', machine: 'x', status: 'idle', updated: 7, raised: 2}, {id: 'gone', machine: 'x', status: 'idle', closed: true, updated: 6, raised: 4}];
+      ck.board = [{col: 'needs', kind: 'chat', machine: 'x', id: 'unread'}];
+      const out = bdChats().map((x) => x.c.id).join(); [ck.chats, ck.board, agentProject] = keep; return out; })()""")
+    check(order == "done,unread,run", f"Grid: cards keep their place by when they last finished, whatever their state now ({order})")
     shows = "$('bd') && !$('bd').hidden && getComputedStyle($('ck-chats')).display === 'none' && getComputedStyle($('bd-world')).display === 'grid'"
     await pg.wait_for_function(shows, timeout=5000)
     check(await pg.evaluate("!$('chats-mode') && !$('bd-tools') && !$('bd-mini')"), "Grid: #/chats is the grid, without a toggle or canvas tools")
@@ -1539,13 +1546,17 @@ async def images(browser, secret: str) -> None:
     the images, zoom and drag work, the close button closes the tab it opened in."""
     svg = '<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000"><rect width="1600" height="1000" fill="#486"/></svg>'
     refs = [f"0123456789a{i}/shot{i}.png" for i in range(3)]
+    gone = "0123456789a3/gone.png"
     events = [{"n": 1, "kind": "user", "text": f"see \u27e6file:{refs[0]}\u27e7"}, {"n": 2, "kind": "tool", "text": f"Read: /tmp/a \u27e6file:{refs[1]}\u27e7"},
-              {"n": 3, "kind": "tool", "sub": "s1", "text": f"Read: /tmp/b \u27e6file:{refs[2]}\u27e7"}, {"n": 4, "kind": "tool", "text": f"Read: /tmp/a \u27e6file:{refs[1]}\u27e7"}]
+              {"n": 3, "kind": "tool", "sub": "s1", "text": f"Read: /tmp/b \u27e6file:{refs[2]}\u27e7"}, {"n": 4, "kind": "tool", "text": f"Read: /tmp/a \u27e6file:{refs[1]}\u27e7"},
+              {"n": 5, "kind": "tool", "text": f"Read: /tmp/c \u27e6file:{gone}\u27e7"}]
     ctx, pg, errors = await page(browser, secret, viewport={"width": 1280, "height": 800})
 
     async def fake(route):
         url = route.request.url
-        if "/ui/api/chat/file" in url:
+        if "gone.png" in url:
+            await route.fulfill(status=400, json={"error": "unknown file"})
+        elif "/ui/api/chat/file" in url:
             await route.fulfill(content_type="image/svg+xml", body=svg)
         else:
             await route.fulfill(json={"events": [] if "after=0" not in url else events})
@@ -1564,17 +1575,17 @@ async def images(browser, secret: str) -> None:
     iv.on("pageerror", lambda e: iv_errors.append(str(e)))
     await iv.wait_for_function("document.getElementById('iv-img').naturalWidth > 0 && document.getElementById('iv-count').textContent")
     count = lambda: iv.locator("#iv-count").inner_text()
-    check(await count() == "2 / 3" and await iv.locator(".iv-thumb").count() == 3 and "shot1.png" in await iv.locator("#iv-name").inner_text(),
+    check(await count() == "2 / 4" and await iv.locator(".iv-thumb").count() == 4 and "shot1.png" in await iv.locator("#iv-name").inner_text(),
           "images: every image of the chat once, subagents' too, opened on the one clicked")
     pct = lambda: iv.locator("#iv-pct").inner_text()
     await iv.mouse.move(640, 400)
     await iv.mouse.wheel(0, 100)
     await iv.wait_for_timeout(250)
-    check(await count() == "3 / 3", "images: scrolling goes to the next image")
+    check(await count() == "3 / 4", "images: scrolling goes to the next image")
     await iv.keyboard.press("ArrowLeft")
-    check(await count() == "2 / 3", "images: an arrow key goes back")
+    check(await count() == "2 / 4", "images: an arrow key goes back")
     await iv.locator(".iv-thumb").first.click()
-    check(await count() == "1 / 3" and "shot0.png" in iv.url, "images: a thumbnail jumps to its image, the address follows")
+    check(await count() == "1 / 4" and "shot0.png" in iv.url, "images: a thumbnail jumps to its image, the address follows")
     await iv.wait_for_function("document.getElementById('iv-pct').textContent !== '100%'")
     fitted = await pct()
     await iv.mouse.move(640, 400)  # off the thumbnail strip, back over the image
@@ -1587,20 +1598,30 @@ async def images(browser, secret: str) -> None:
     await iv.mouse.down()
     await iv.mouse.move(600, 360, steps=4)
     await iv.mouse.up()
-    check(int(zoomed[:-1]) > int(fitted[:-1]) and before != await iv.evaluate("document.getElementById('iv-img').style.transform") and await count() == "1 / 3",
+    check(int(zoomed[:-1]) > int(fitted[:-1]) and before != await iv.evaluate("document.getElementById('iv-img').style.transform") and await count() == "1 / 4",
           f"images: Ctrl+scroll zooms ({fitted} to {zoomed}) and a drag pans, the image stays")
     await iv.keyboard.press("0")
     check(await pct() == fitted, "images: 0 fits the image again")
     await iv.mouse.dblclick(640, 400)
     check(int((await pct())[:-1]) > int(fitted[:-1]), "images: a double-click zooms in")
-    await iv.keyboard.press("0")
+    await iv.keyboard.press("End")  # zoomed in, on to an image the server no longer has
+    await iv.locator("#iv-msg").wait_for()
+    await iv.mouse.move(640, 400)
+    await iv.wait_for_timeout(200)
+    await iv.mouse.wheel(0, -100)
+    await iv.wait_for_timeout(250)
+    check(await count() == "3 / 4", "images: a file that is gone says so, and the wheel still goes through the images")
+    await iv.keyboard.press("Home")
+    await iv.wait_for_function("document.getElementById('iv-img').naturalWidth > 0 && !document.getElementById('iv-img').hidden")
     width = await iv.evaluate("[document.documentElement.scrollWidth, innerWidth]")
     check(width[0] <= width[1] and not iv_errors, f"images: no sideways scroll, no page errors {width} {iv_errors}")
     await iv.set_viewport_size({"width": 390, "height": 800})
     await iv.wait_for_timeout(100)
     check(await iv.locator("#iv-close").is_visible() and await iv.evaluate("document.documentElement.scrollWidth <= innerWidth"), "images: on a phone the close button stays, no sideways scroll")
-    async with iv.expect_event("close", timeout=3000):
+    closed = asyncio.ensure_future(iv.wait_for_event("close", timeout=3000))
+    with contextlib.suppress(Exception):  # the tab may go before the click returns
         await iv.click("#iv-close")
+    await closed
     check(iv.is_closed(), "images: the close button closes the tab")
     check(not errors, f"images: no page errors {errors}")
     await ctx.close()
