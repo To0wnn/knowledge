@@ -215,7 +215,7 @@ function ckShow(meta) {
 }
 // The pill over the end of a chat you scrolled up in; it also says when more came in below.
 function ckJump(card) {
-  if (!card.jump) return;
+  if (!card.jump || !card.log.clientHeight) return; // not on screen: nothing to measure, keep what it said
   const far = card.log.scrollHeight - card.log.scrollTop - card.log.clientHeight >= 80;
   if (!far) card.fresh = false;
   card.jump.hidden = !far;
@@ -509,6 +509,9 @@ function ckCard(meta) {
     card.savedScrollTop = log.scrollTop;
     ckJump(card);
   }, { passive: true });
+  // the distance to the end also changes without a scroll: an image loads, a block unfolds, the card gets another size
+  const sized = new ResizeObserver(() => ckJump(card)); sized.observe(log);
+  new MutationObserver((changes) => { for (const c of changes) for (const n of c.addedNodes) if (n.nodeType === 1) sized.observe(n); }).observe(log, { childList: true });
   const jump = el("div", "ck-jump"), jumpBtn = el("button", "btn small ck-jump-btn"), jumpText = el("span");
   jump.hidden = true; jumpBtn.type = "button";
   jumpBtn.append(jumpText, el("span", "muted ck-jump-key", "Ctrl+End")); jump.append(jumpBtn);
