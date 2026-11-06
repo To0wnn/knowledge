@@ -109,6 +109,7 @@ def own_version() -> tuple:
 
 STARTED = own_version()  # the code this process runs; the file on disk can be newer after an update
 ACTING = threading.Lock()  # held while a remote action runs: a restart must not cut one off halfway
+AGENTS_UPDATING = threading.Lock()  # held while the agents' update commands run: a restart waits, actions do not
 
 
 def version() -> str:
@@ -1703,10 +1704,14 @@ def agents_update_due(st: dict, ws: dict, now: float) -> bool:
 
 
 def update_agents_soon():
-    """In the background, as the commands can take minutes; ACTING: a restart for an updated plugin must not cut this off."""
+    """In the background, as the commands can take minutes, and one run at a time. Not under ACTING: Stop or Merge must
+    not wait for it. update_watch holds a restart back while it runs."""
     def update():
-        with ACTING:
-            update_agents()
+        if AGENTS_UPDATING.acquire(blocking=False):
+            try:
+                update_agents()
+            finally:
+                AGENTS_UPDATING.release()
     threading.Thread(target=update, daemon=True).start()
 
 
@@ -1893,7 +1898,7 @@ def update_watch():
         time.sleep(UPDATE_EVERY)
         try:
             now = own_version()
-            if now and now != STARTED and now == seen:
+            if now and now != STARTED and now == seen and not AGENTS_UPDATING.locked():
                 with ACTING, TICK:  # the order of an action, which takes TICK inside; live chats and workers run in their own processes
                     log("info", "Restarting for the updated plugin", ".".join(map(str, now)))
                     restart()
@@ -2482,6 +2487,16 @@ def main(argv: list):
                 real_wt, workers.WORKTREES = workers.WORKTREES, Path(tmp) / "wt"
                 try:
                     assert chat_git("0123456789ab", tmp + "/r") is None and not workers.WORKTREES.exists(), "a look makes no worktree"
+                    here, hold, runs = globals(), threading.Event(), []
+                    real_update, here["update_agents"] = here["update_agents"], lambda: (runs.append(1), hold.wait(10))
+                    update_agents_soon()
+                    update_agents_soon()
+                    time.sleep(0.3)
+                    assert AGENTS_UPDATING.locked() and not ACTING.locked() and len(runs) == 1, "an action does not wait for it, one run at a time"
+                    hold.set()
+                    time.sleep(0.3)
+                    here["update_agents"] = real_update
+                    assert not AGENTS_UPDATING.locked()
                     game, workers.game_session = workers.game_session, lambda: ""
                     try:
                         assert agents_update_due({}, {}, 1e9) and not agents_update_due({"agents_updated": 1e9 - 3600}, {}, 1e9), "once a day"
