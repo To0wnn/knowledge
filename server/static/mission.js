@@ -354,7 +354,7 @@ function msOpenPanel(key) {
 
 // ---------------------------------------------------------------- Chat grid (#/chats on a desktop)
 // 1000 px and up; narrower keeps the list. One card per chat, tiled to fill the screen like terminal panes, inside one
-// foldable frame per project (folding is kept in localStorage). A card is the chat itself (ckCard). Only cards on screen
+// foldable frame per project, the one last active on top (folding is kept in localStorage), or Settings: all in one. A card is the chat itself (ckCard). Only cards on screen
 // are polled (ckTick). ?view=grid is an older link to the same view; ?view=list is the attention list (#/inbox links).
 const BG = { minW: 480, minH: 380, gap: 16, pad: 16, head: 46 };
 const bd = { lay: [], wraps: new Map(), frames: new Map() };
@@ -382,10 +382,11 @@ function bdShut() {
     return Array.isArray(b.shut) ? b.shut : [];
   } catch { return []; }
 }
-// The frames, pure (ui_smoke checks it): one per project in name order, no project last.
-function bdProjects(chats, shut = []) {
-  const projects = [...new Set(chats.map((c) => c.project || ""))].sort((a, b) => (a || "\uffff").localeCompare(b || "\uffff"));
-  return projects.map((p) => ({ project: p, n: chats.filter((c) => (c.project || "") === p).length, shut: shut.includes(p) }));
+// The frames, pure (ui_smoke checks it): chats come latest first (bdChats), so a project's newest chat puts it in its
+// place and the project last active is on top. Settings can put all chats in one frame, which has no heading to fold.
+function bdProjects(chats, shut = [], together = false) {
+  if (together) return chats.length ? [{ project: "", n: chats.length, shut: false }] : [];
+  return [...new Set(chats.map((c) => c.project || ""))].map((p) => ({ project: p, n: chats.filter((c) => (c.project || "") === p).length, shut: shut.includes(p) }));
 }
 
 function bdBuild() {
@@ -441,19 +442,24 @@ function bdMove(world, n, before) {
 function bdRender() {
   if (!$("bd") || $("bd").hidden) return;
   bdLink();
-  const rows = bdChats(), shut = bdShut(), world = $("bd-world");
-  const frames = bd.lay = bdProjects(rows.map(({ c }) => c), shut);
+  const rows = bdChats(), shut = bdShut(), world = $("bd-world"), together = me.prefs?.grid_group === "together";
+  const frames = bd.lay = bdProjects(rows.map(({ c }) => c), shut, together);
+  // Whatever moves, the card you are in stays where it is on screen (the stage scrolls along below).
+  const here = document.activeElement?.closest?.(".bd-card"), hereTop = here?.getBoundingClientRect().top;
   const keep = new Set();
   for (const f of frames) {
     let box = bd.frames.get(f.project);
     if (!box) {
       box = el("section", "bd-frame"); const t = el("button", "bd-frame-title"); t.type = "button";
-      t.append(el("span", "bd-chev", "▾"), el("strong"), el("span", "ck-count"));
+      t.append(el("span", "bd-chev", "▾"), el("strong"), el("span", "ck-count"), el("span", "badge hot"));
       t.onclick = () => { const now = bdShut(); store.set("kn_board", JSON.stringify({ shut: now.includes(f.project) ? now.filter((x) => x !== f.project) : [...now, f.project] })); bdRender(); };
       box.append(t); bd.frames.set(f.project, box);
     }
     const t = box.firstChild, name = f.project ? shown(f.project) : "no project";
     t.children[1].textContent = name; t.children[2].textContent = String(f.n);
+    // folded away, its cards cannot show that one waits on you
+    const needs = f.shut ? rows.filter(({ c, st }) => st === "needs" && (c.project || "") === f.project).length : 0;
+    t.children[3].textContent = needs ? `${needs} need${needs > 1 ? "" : "s"} you` : ""; t.children[3].hidden = !needs;
     t.setAttribute("aria-expanded", String(!f.shut)); t.title = f.shut ? `Show the chats of ${name}` : `Fold ${name} away`;
     box.setAttribute("aria-label", `${name}: ${f.n} chat${f.n === 1 ? "" : "s"}`);
     box.classList.toggle("shut", f.shut);
@@ -463,7 +469,7 @@ function bdRender() {
   const order = [];
   for (const f of frames) {
     order.push(bd.frames.get(f.project));
-    for (const { c, st } of rows.filter(({ c }) => (c.project || "") === f.project)) {
+    for (const { c, st } of rows.filter(({ c }) => together || (c.project || "") === f.project)) {
       const card = ckCard(c), k = ckKey(c);
       let w = bd.wraps.get(k);
       if (!w) {
@@ -483,6 +489,7 @@ function bdRender() {
   if (!rows.length) world.replaceChildren(el("p", "bd-none muted", ck.chats.length ? "No chats in this project." : "No chats yet: start one with + New chat."));
   else world.querySelector(".bd-none")?.remove();
   bdGridSize();
+  if (here?.isConnected) $("bd-stage").scrollTop += here.getBoundingClientRect().top - hereTop;
 }
 
 let bdLoadTimer = 0;

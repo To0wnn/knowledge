@@ -1007,6 +1007,9 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert json.loads(ui("/ui/api/me", h=er)[2])["prefs"] == {}, "another person's default is theirs alone"
     assert ui("/ui/api/me/prefs", {"send_key": "enter", "grid_open": "here", "start_page": "map"})[0] == 200  # beside the model, which stays
     assert json.loads(ui("/ui/api/me")[2])["prefs"] == {"chat_default": {"agent": "claude", "id": "opus", "effort": "max"}, "send_key": "enter", "grid_open": "here", "start_page": "map"}
+    assert ui("/ui/api/me/prefs", {"grid_group": "together"})[0] == 200 and json.loads(ui("/ui/api/me")[2])["prefs"]["grid_group"] == "together"
+    assert ui("/ui/api/me/prefs", {"grid_group": "project"})[0] == 200 and "grid_group" not in json.loads(ui("/ui/api/me")[2])["prefs"]  # the default
+    assert ui("/ui/api/me/prefs", {"grid_group": "x"})[0] == 400
     assert ui("/ui/api/me/prefs", {"send_key": "shout"})[0] == 400 and ui("/ui/api/me/prefs", {"start_page": "/evil"})[0] == 400
     assert ui("/ui/api/me/prefs", {"theme": "dark"})[0] == 400 and ui("/ui/api/me/prefs", {})[0] == 400
     assert ui("/ui/api/me/prefs", {"send_key": "ctrl", "grid_open": "tab", "start_page": "chats"})[0] == 200  # the defaults are not stored

@@ -704,7 +704,7 @@ function ckCard(meta) {
   bar.addEventListener("dblclick", () => set(300));
 }
 // Settings (#/settings): the person's own choices, kept on the server (/ui/api/me/prefs): the model a new chat starts
-// with ("" = the one used last, from the models the pcs online now offer), the start page, how the grid opens a chat,
+// with ("" = the one used last, from the models the pcs online now offer), the start page, how the grid opens a chat and groups its chats,
 // the send key. Theme and notifications are per browser. Only what use cannot teach belongs here (docs/web-ui.md).
 async function loadSettings() {
   if (!ck.machines.length) await ckSummary().catch(() => {});
@@ -726,7 +726,7 @@ async function loadSettings() {
   };
   fill(now?.effort || "");
   sel.onchange = () => fill("");
-  for (const [id, key, dflt] of [["set-start", "start_page", "chats"], ["set-grid", "grid_open", "tab"], ["set-send", "send_key", "ctrl"]]) {
+  for (const [id, key, dflt] of [["set-start", "start_page", "chats"], ["set-grid", "grid_open", "tab"], ["set-group", "grid_group", "project"], ["set-send", "send_key", "ctrl"]]) {
     const pick = $(id); pick.value = me.prefs?.[key] || dflt;
     pick.onchange = async () => {
       try {

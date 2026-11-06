@@ -1150,7 +1150,9 @@ async def board(browser, devices, secret: str) -> None:
     check(await pg.evaluate("[gridCols(4, 1700), gridCols(5, 1700), gridCols(4, 2400), gridCols(1, 2400), gridCols(3, 600)].join() === '2,3,4,1,1'"),
           "Grid: as many columns as fit, balanced (4 -> 2x2, 5 -> 3+2)")
     fr = await pg.evaluate("JSON.stringify(bdProjects([{project: 'b'}, {project: ''}, {project: 'a'}, {project: 'b'}], ['a']))")
-    check(fr == '[{"project":"a","n":1,"shut":true},{"project":"b","n":2,"shut":false},{"project":"","n":1,"shut":false}]', f"Grid: frames in name order, no project last, with counts and folding {fr}")
+    check(fr == '[{"project":"b","n":2,"shut":false},{"project":"","n":1,"shut":false},{"project":"a","n":1,"shut":true}]', f"Grid: frames in the order of the chats, latest first, with counts and folding {fr}")
+    fr = await pg.evaluate("JSON.stringify([bdProjects([{project: 'b'}, {project: 'a'}], ['a'], true), bdProjects([], [], true)])")
+    check(fr == '[[{"project":"","n":2,"shut":false}],[]]', f"Grid: together is one frame, nothing folded {fr}")
     await pg.wait_for_function("ck.summaryAt > 0", timeout=15000)
     order = await pg.evaluate("""(() => { const keep = [ck.chats, ck.board, agentProject]; agentProject = '';
       ck.chats = [{id: 'run', machine: 'x', status: 'running', updated: 9, raised: 1}, {id: 'done', machine: 'x', status: 'idle', updated: 8, raised: 3},
@@ -1789,6 +1791,57 @@ async def chat_tabs(browser, secret: str) -> None:
     await ctx.close()
 
 
+async def grid_groups(browser, secret: str) -> None:
+    """Several projects in the grid, with the chats faked: the order of the frames, folding and all together."""
+    ctx, pg, errors = await page(browser, secret, viewport={"width": 1440, "height": 900})
+    now = 2_000_000_000
+    chat = lambda i, project, raised, title: {"id": f"{i:012x}", "machine": "x", "agent": "claude", "folder": f"/x/{project}", "project": project, "label": "pc", "title": title,
+                                              "status": "idle", "updated": raised, "raised": now + raised, "online": True}
+    chats = [chat(1, "aaa", 1, "one"), chat(2, "bbb", 3, "two"), chat(3, "bbb", 2, "three"), chat(4, "ccc", 4, "four")]
+    board = [{"col": "needs", "kind": "chat", "machine": "x", "id": chats[3]["id"], "key": "k", "title": "four"}]
+    await ctx.route("**/ui/api/chats", lambda r: r.fulfill(json={"chats": chats}) if r.request.method == "GET" else r.continue_())
+    await ctx.route("**/ui/api/board*", lambda r: r.fulfill(json={"items": board}))
+    await ctx.route("**/ui/api/chat?*", lambda r: r.abort())
+    await pg.goto(f"{URL}/ui#/chats")
+    await pg.wait_for_function("typeof bdRender === 'function' && ck.ready", timeout=15000)
+    if await pg.evaluate("typeof bdProjects") != "function":
+        await ctx.close()
+        return
+    await pg.evaluate("agentProject = ''; ck.summaryAt = 0; ckSummary()")
+    heads = "[...document.querySelectorAll('#bd .bd-frame-title strong')].map((s) => s.textContent).join()"
+    await pg.wait_for_function(f"{heads} !== '' && document.querySelectorAll('#bd .bd-card').length === 4", timeout=5000)
+    check(await pg.evaluate(heads) == "ccc,bbb,aaa", f"Grid: the project last active is on top ({await pg.evaluate(heads)})")
+    await pg.click("#bd .bd-frame:first-of-type .bd-frame-title")
+    await pg.wait_for_function("document.querySelector('#bd .bd-frame').classList.contains('shut')", timeout=5000)
+    badge = await pg.inner_text("#bd .bd-frame .badge.hot")
+    check(badge == "1 needs you", f"Grid: a folded project says what waits on you ({badge})")
+    check(await pg.evaluate("[...bd.wraps.values()].filter((w) => !w.hidden).length") == 3, "Grid: folding hides that project's cards")
+    check(await pg.evaluate("store.get('kn_board')") == '{"shut":["ccc"]}', "Grid: folding is remembered")
+    await pg.click("#bd .bd-frame:first-of-type .bd-frame-title")
+    await pg.wait_for_function("!document.querySelector('#bd .bd-frame').classList.contains('shut')", timeout=5000)
+
+    await pg.evaluate("$('bd-stage').scrollTop = 500")
+    box = "#bd .bd-card[data-id='000000000001'] textarea"
+    await pg.locator(box).scroll_into_view_if_needed()
+    await pg.fill(box, "typing here")
+    top = await pg.evaluate(f"document.querySelector(\"{box}\").getBoundingClientRect().top")
+    chats[0], chats[3] = {**chats[0], "raised": now + 1}, {**chats[3], "raised": now}  # ccc below the rest now, aaa stays
+    chats[1] = {**chats[1], "raised": now + 9}
+    await pg.evaluate("ck.summaryAt = 0; ckSummary()")
+    await pg.wait_for_function(f"{heads} === 'bbb,aaa,ccc'", timeout=5000)
+    await pg.evaluate("new Promise(requestAnimationFrame)")
+    at = await pg.evaluate(f"[document.querySelector(\"{box}\").getBoundingClientRect().top, document.activeElement === document.querySelector(\"{box}\"), document.querySelector(\"{box}\").value]")
+    check(abs(at[0] - top) < 3 and at[1] and at[2] == "typing here", f"Grid: when projects change places the card you are in stays put ({top} -> {at})")
+
+    await pg.evaluate("me.prefs.grid_group = 'together'; store.set('kn_board', JSON.stringify({shut: ['bbb']})); bdRender()")
+    state = await pg.evaluate("[document.querySelectorAll('#bd .bd-frame').length, getComputedStyle(document.querySelector('#bd .bd-frame')).display, [...bd.wraps.values()].filter((w) => !w.hidden).length, [...document.querySelectorAll('#bd-world > .bd-card')].map((w) => w.dataset.id.slice(-1)).join()]")
+    check(state[:3] == [1, "none", 4], f"Grid: together has no headings and nothing folded {state}")
+    check(state[3] == "2,3,1,4", f"Grid: together goes by the latest active, across projects {state}")
+    check("(aaa)" in await pg.inner_text("#bd .bd-card[data-id='000000000001'] .ck-title"), "Grid: together, a card still names its project")
+    check(not errors, f"no page errors with projects in the grid {errors[:2]}")
+    await ctx.close()
+
+
 async def chat_drafts(browser, secret: str) -> None:
     """What is typed but not sent. Read-only: the send is faked and the chat polls aborted."""
     ctx, pg, errors = await page(browser, secret, "/ui#/chats", viewport={"width": 1440, "height": 900})
@@ -1907,6 +1960,7 @@ async def main() -> None:
         await chat_tabs(browser, secret)
         await settings(browser, secret)
         await chat_drafts(browser, secret)
+        await grid_groups(browser, secret)
         await board(browser, p.devices, secret)
         await follow(browser, p.devices, secret)
         await live_refresh(browser, secret)

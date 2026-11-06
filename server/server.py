@@ -4019,12 +4019,12 @@ async def ui_transcribe(request: Request):
 
 
 PREFS_FILE = ADMIN_DIR / "user_prefs.json"  # per person, set on the Settings page: {user: {chat_default: {agent, id, effort}, <PREF_CHOICES key>: value}}
-PREF_CHOICES = {"grid_open": ("tab", "here"), "send_key": ("ctrl", "enter"), "start_page": ("chats", "tasks", "notes", "map")}  # the first is the default: not stored
+PREF_CHOICES = {"grid_open": ("tab", "here"), "grid_group": ("project", "together"), "send_key": ("ctrl", "enter"), "start_page": ("chats", "tasks", "notes", "map")}  # the first is the default: not stored
 
 
 @server.custom_route("/ui/api/me/prefs", methods=["POST"])
 async def ui_me_prefs(request: Request):
-    """Any of {chat_default: {agent, id, effort} | null, grid_open, send_key, start_page}, for this person on every
+    """Any of {chat_default: {agent, id, effort} | null, grid_open, grid_group, send_key, start_page}, for this person on every
     device. chat_default: the model a new chat starts with ("" id or effort = the agent's own); checked for shape only: a
     pc that does not run it falls back in the page. Keys left out stay as they are."""
     user = device.get().get("user") or ""
