@@ -77,6 +77,15 @@ async def page(browser, secret: str, path: str = "/ui", **opts):
     return ctx, pg, errors
 
 
+async def comes_true(pg, expression, arg=None, timeout=5000) -> bool:
+    """For what a busy live server takes a moment over: a fixed wait fails now and then on a slow answer."""
+    try:
+        await pg.wait_for_function(expression, arg=arg, timeout=timeout)
+        return True
+    except Exception:
+        return False
+
+
 async def click_node(pg, box, sc):
     """Like a person: move onto the node first. force-graph finds the node under the pointer in its next frame, so a
     click in the same instant as the move can land "beside" it when nothing else is animating."""
@@ -187,15 +196,6 @@ async def desktop(browser, secret: str) -> None:
     check(await pg.evaluate("selected") is None, "click beside the nodes deselects")
     check(drift < 0.01 and not any(v[2] is not None for v in after.values()), f"every node back home (drift {drift:.3f})")
     check(abs(await pg.evaluate("Graph.zoom()") - overview) < 0.05, "zoomed back to the overview")
-    sc = await pg.evaluate("(id) => { const n = byId.get(id); return Graph.graph2ScreenCoords(n.x, n.y); }", nid)
-    await click_node(pg, box, sc)
-    await pg.wait_for_timeout(1500)
-    check(await pg.evaluate("!!$('side').querySelector('.map-card')"), "on the map the right column shows the note card")
-    sc = await pg.evaluate("(id) => { const n = byId.get(id); return Graph.graph2ScreenCoords(n.x, n.y); }", nid)
-    await click_node(pg, box, sc)
-    await pg.wait_for_timeout(500)
-    state = await pg.evaluate("({map: !$('graph').hidden, note: current && current.path, selected, hover})")
-    check(not state["map"] and state["note"] == nid, f"a second click reads the note {state if state['note'] != nid or state['map'] else ''}")
     # A note gliding home under a still mouse hovers: that must not take over from the way home, which zooms out at its end.
     sc = await pg.evaluate("(id) => { const n = byId.get(id); return Graph.graph2ScreenCoords(n.x, n.y); }", nid)
     await click_node(pg, box, sc)
@@ -208,6 +208,15 @@ async def desktop(browser, secret: str) -> None:
     await pg.evaluate("Graph.onNodeHover()(null)")
     await pg.wait_for_timeout(500)
     check(state == [0, 0, True], f"a note passing under the mouse on the way home leaves the map free and zoomed out {state}")
+    sc = await pg.evaluate("(id) => { const n = byId.get(id); return Graph.graph2ScreenCoords(n.x, n.y); }", nid)
+    await click_node(pg, box, sc)
+    await pg.wait_for_timeout(1500)
+    check(await pg.evaluate("!!$('side').querySelector('.map-card')"), "on the map the right column shows the note card")
+    sc = await pg.evaluate("(id) => { const n = byId.get(id); return Graph.graph2ScreenCoords(n.x, n.y); }", nid)
+    await click_node(pg, box, sc)
+    await pg.wait_for_timeout(500)
+    state = await pg.evaluate("({map: !$('graph').hidden, note: current && current.path, selected, hover})")
+    check(not state["map"] and state["note"] == nid, f"a second click reads the note {state if state['note'] != nid or state['map'] else ''}")
     check(not errors, f"no page errors on desktop {errors[:2]}")
     await ctx.close()
 
@@ -889,8 +898,7 @@ async def knowledge(browser, devices, secret: str) -> None:
     await pg.keyboard.press("ArrowUp")
     target = await pg.evaluate("pal.items[0]")
     await pg.keyboard.press("Enter")
-    await pg.wait_for_timeout(1200)
-    check(target["kind"] == "note" and await pg.evaluate("(id) => !$('palette').open && current && current.path === id && location.hash.startsWith('#/notes/')", target["id"]),
+    check(target["kind"] == "note" and await comes_true(pg, "(id) => !$('palette').open && current && current.path === id && location.hash.startsWith('#/notes/')", target["id"]),
           f"typing finds the note and Enter opens it {target.get('id')}")
     await pg.locator("#title").focus()
     await pg.keyboard.press("Control+k")
@@ -900,8 +908,7 @@ async def knowledge(browser, devices, secret: str) -> None:
     await pg.wait_for_timeout(1000)  # the note search answers late and redraws the list: select after it
     await pg.evaluate("palSelect(pal.items.findIndex(i => i.kind === 'view' && i.id === 'changes'))")
     await pg.keyboard.press("Enter")
-    await pg.wait_for_timeout(500)
-    check(await pg.evaluate("location.hash === '#/changes' && !$('palette').open"), "the palette jumps to a view")
+    check(await comes_true(pg, "location.hash === '#/changes' && !$('palette').open"), "the palette jumps to a view")
     theme = await pg.evaluate("document.documentElement.dataset.theme || 'auto'")
     await pg.keyboard.press("Control+k")
     await pg.keyboard.type("toggle theme")
@@ -1588,7 +1595,8 @@ async def update_button(browser, secret: str) -> None:
             return await route.fulfill(json={"ok": True, "id": "a1"})
         res = await route.fetch()
         data = await res.json()
-        own = [m for m in data["machines"] if m.get("companion")][:1]
+        polls.setdefault("pc", next((m["id"] for m in data["machines"] if m.get("companion")), None))  # one pc: live their order changes with each report
+        own = [m for m in data["machines"] if m["id"] == polls["pc"]]
         for m in own:  # a real row, behind on its plugin
             m.update(own=True, online=True, old=None)
             for i, ag in enumerate(m["agents"].values()):
@@ -1822,6 +1830,7 @@ async def chat_tabs(browser, secret: str) -> None:
     check(True, "Chat tab: its chat gone, the tab becomes the app, no empty page")
     await tab.close()
     await ctx.route("**/ui/api/board*", lambda r: r.fulfill(json={"items": []}))  # every chat under Earlier
+    await ctx.add_init_script("localStorage.setItem('kn_project', 'all')")  # live: the earlier chats need not be in the default project
     await pg.goto(f"{URL}/ui#/chats?view=list")
     await pg.reload()
     await pg.wait_for_selector("#ck-history a.ck-chat", timeout=15000)
@@ -1933,10 +1942,10 @@ async def grid_groups(browser, secret: str) -> None:
     check(await other.inner_text("#bd-sort") == "↑ 1 updated" and await pg.evaluate("$('bd-sort').hidden") and await pg.evaluate(cards) == "3",
           "Parts: a finished chat moves inside its own part only; the pill is in its own window")
     chats[0] = {**chats[0], "raised": now + 1}
-    await other.evaluate("ck.summaryAt = 0; ckSummary(); bdSettle(); bdRender()")
+    await other.evaluate("ck.summaryAt = 0; ckSummary().then(() => { bdSettle(); bdRender(); return 0; })")
     board[0] = {**board[0], "id": chats[2]["id"]}
-    await other.evaluate("ck.summaryAt = 0; ckSummary()")
-    await other.wait_for_function("$('bd-parts').children[2]?.getAttribute('aria-label') === 'Part 2, 1 needs you'", timeout=5000)
+    await other.evaluate("ck.summaryAt = 0; ckSummary().then(() => 0)")  # one in flight would keep the old board
+    await other.wait_for_function("$('bd-parts').children[2]?.getAttribute('aria-label') === 'Part 2, 1 needs you'", timeout=15000)
     check(True, "Parts: the buttons say which other part needs you")
     board[0] = {**board[0], "id": chats[3]["id"]}
     scrolled = await other.evaluate("""(async () => { const card = ck.cards.get('x/000000000001'); for (let i = 0; i < 200; i++) card.log.append(el('p', '', 'line'));
