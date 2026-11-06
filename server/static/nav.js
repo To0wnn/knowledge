@@ -48,6 +48,9 @@ wide.addEventListener("change", () => { sideOpen = false; paintRail(); });
 document.addEventListener("click", (e) => { if (sideOpen && !navEl("sidebar").contains(e.target)) { sideOpen = false; paintRail(); } });
 paintRail();
 
+// Sign out: what was typed but not sent stays with the person, not with the browser (agents.js ckDrafts).
+for (const a of document.querySelectorAll('a[href="/ui/logout"]')) a.addEventListener("click", () => { try { localStorage.removeItem("kn_drafts"); } catch { /* blocked: nothing kept either */ } });
+
 // Phone: More opens a sheet with the other views, the project, theme and sign out.
 navEl("more-btn").onclick = () => navEl("more-sheet").showModal();
 navEl("more-sheet").addEventListener("click", (e) => { if (e.target === navEl("more-sheet") || e.target.closest("a")) navEl("more-sheet").close(); });

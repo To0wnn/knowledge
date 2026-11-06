@@ -235,6 +235,23 @@ function ckCloseTab() {
   window.close();
   setTimeout(() => go(startRoute(), true), 200);
 }
+// What is typed but not sent, per person and chat, in this browser (so a reload, a closed tab or the chat's other tab
+// keeps it; the newest 50; sign out clears them, nav.js). Files are not kept: only their names would be.
+const CK_DRAFTS = "kn_drafts", ckDraftKey = (card) => `${me.user}/${ckKey(card.meta)}`;
+function ckDrafts() { try { return JSON.parse(store.get(CK_DRAFTS) || "{}") || {}; } catch { return {}; } } // a damaged entry must not break a chat
+function ckDraftKeep(card) {
+  const all = ckDrafts(), k = ckDraftKey(card), text = card.input.value;
+  if (text.trim()) all[k] = { text, at: Date.now() }; else delete all[k];
+  store.set(CK_DRAFTS, JSON.stringify(Object.fromEntries(Object.entries(all).sort((a, b) => b[1].at - a[1].at).slice(0, 50))));
+}
+function ckDraftShow(card) {
+  card.input.value = ckDrafts()[ckDraftKey(card)]?.text || "";
+  card.grow(); ckPaint(card);
+}
+// Typed or sent in the chat's other tab: follow, but never under someone's fingers.
+addEventListener("storage", (e) => {
+  if (e.key === CK_DRAFTS) for (const c of ck.cards.values()) if (document.activeElement !== c.input) ckDraftShow(c);
+});
 // The send key (Settings); a phone's keyboard has no Shift+Enter, so its Enter stays a new line.
 const ckEnterSends = () => me.prefs?.send_key === "enter" && !touch;
 const ckSendKey = () => (ckEnterSends() ? "Enter" : "Ctrl+Enter");
@@ -586,7 +603,9 @@ function ckCard(meta) {
     e.preventDefault(); form.requestSubmit();
   });
   const grow = () => { input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 220)}px`; }; // the box grows with the text
-  input.addEventListener("input", () => { grow(); ckPaint(card); }); // typing turns Force back into Queue
+  card.grow = grow;
+  input.addEventListener("input", () => { grow(); ckPaint(card); ckDraftKeep(card); }); // typing turns Force back into Queue
+  queueMicrotask(() => { if (card.input.value === "") ckDraftShow(card); }); // after the caller's own setup of the card (a worker's meta, say)
   attachBtn.onclick = () => filePick.click();
   ckMic(card, mic);
   filePick.onchange = () => { ckAddFiles(card, filePick.files); filePick.value = ""; };
@@ -629,7 +648,7 @@ function ckCard(meta) {
         await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, text, mode, ...pick }) });
         Object.assign(card.meta, pick); card.pick = null;
       }
-      input.value = ""; input.style.height = ""; card.files = []; ckFilesPaint(card); if (!card.worker) card.meta.status = "queued";
+      input.value = ""; input.style.height = ""; ckDraftKeep(card); card.files = []; ckFilesPaint(card); if (!card.worker) card.meta.status = "queued";
     } catch (err) { note.className = "ck-note bad"; note.textContent = err.message; }
     ckPaint(card); await ckPoll(card); clearTimeout(ck.timer); ck.timer = setTimeout(ckTick, 1500);
   };
@@ -920,9 +939,9 @@ async function ckStart(card, text) { // the draft's first message: make the chat
       await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine, id: res.chat.id, text, model: p.id, effort: p.effort }) });
       store.set("kn_chat_pick", JSON.stringify({ agent: p.agent, id: p.id, effort: p.effort, machine, folder }));
     } catch (err) { failed = err.message; } // the chat exists now: go there with the text kept, never make another
-    ckDrop(ckKey(CK_DRAFT)); ck.summaryAt = 0;
+    card.input.value = ""; ckDraftKeep(card); ckDrop(ckKey(CK_DRAFT)); ck.summaryAt = 0;
     const chat = ckCard({ ...res.chat, ...(failed ? {} : { model: p.id, effort: p.effort, status: "queued" }), machine, label: m?.label || machine, online: true });
-    if (failed) { chat.input.value = text; chat.note.className = "ck-note bad"; chat.note.textContent = failed; }
+    if (failed) { chat.input.value = text; ckDraftKeep(chat); chat.note.className = "ck-note bad"; chat.note.textContent = failed; }
     go(`#/chats/${encodeURIComponent(chat.meta.id)}`, true); // Back from it goes to the list, not to an empty draft
     ckTick();
   } finally { card.starting = false; }

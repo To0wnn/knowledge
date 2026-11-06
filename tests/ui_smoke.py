@@ -1765,6 +1765,48 @@ async def chat_tabs(browser, secret: str) -> None:
     await ctx.close()
 
 
+async def chat_drafts(browser, secret: str) -> None:
+    """What is typed but not sent. Read-only: the send is faked and the chat polls aborted."""
+    ctx, pg, errors = await page(browser, secret, "/ui#/chats", viewport={"width": 1440, "height": 900})
+    await ctx.route("**/ui/api/chat?*", lambda r: r.abort())
+    await ctx.route("**/ui/api/chat/send", lambda r: r.fulfill(json={"ok": True}))
+    await pg.wait_for_function("ck.ready", timeout=15000)
+    if not await pg.locator("#bd .bd-card .ck-card").count():
+        print("skip chat drafts (no card in the grid)")
+        await ctx.close()
+        return
+    box = "#bd .bd-card textarea"
+    await pg.fill(box, "half a message")
+    await pg.reload()
+    await pg.wait_for_selector(box, timeout=15000)
+    await pg.wait_for_function(f"document.querySelector('{box}').value === 'half a message'", timeout=5000)
+    check(True, "Draft: a reload keeps what is typed")
+    async with ctx.expect_page() as new:
+        await pg.click("#bd .bd-card a.ck-x.bd-only")
+    tab = await new.value
+    tbox = "#ck-canvas .ck-form textarea"
+    await tab.wait_for_selector(tbox, timeout=15000)
+    await tab.wait_for_function(f"document.querySelector('{tbox}').value === 'half a message'", timeout=5000)
+    check(True, "Draft: the chat's own tab has it too")
+    await pg.evaluate("document.activeElement.blur()")
+    await tab.fill(tbox, "half a message, and more")
+    await pg.wait_for_function(f"document.querySelector('{box}').value === 'half a message, and more'", timeout=5000)
+    check(True, "Draft: typing in one tab shows in the other")
+    await tab.press(tbox, "Control+Enter")
+    await tab.wait_for_function(f"document.querySelector('{tbox}').value === ''", timeout=5000)
+    await pg.wait_for_function(f"document.querySelector('{box}').value === ''", timeout=5000)
+    check(await pg.evaluate("store.get('kn_drafts')") == "{}", "Draft: sending clears it everywhere, so it cannot be sent twice")
+    await pg.evaluate("store.set('kn_drafts', '{broken')")
+    await pg.reload()
+    await pg.wait_for_selector(box, timeout=15000)
+    check(True, "Draft: a damaged entry does not break the page")
+    await pg.fill(box, "secret plans")
+    await pg.evaluate("document.querySelector('a[href=\"/ui/logout\"]').addEventListener('click', (e) => e.preventDefault()); document.querySelector('a[href=\"/ui/logout\"]').click()")
+    check(await pg.evaluate("store.get('kn_drafts')") is None, "Draft: sign out clears them")
+    check(not errors, f"no page errors with drafts {errors[:2]}")
+    await ctx.close()
+
+
 async def settings(browser, secret: str) -> None:
     """The person's own settings, with the server's answer faked: this test never changes the real ones."""
     ctx, pg, errors = await page(browser, secret, "/ui#/settings", viewport={"width": 1280, "height": 900})
@@ -1833,6 +1875,7 @@ async def main() -> None:
         await images(browser, secret)
         await chat_tabs(browser, secret)
         await settings(browser, secret)
+        await chat_drafts(browser, secret)
         await board(browser, p.devices, secret)
         await follow(browser, p.devices, secret)
         await live_refresh(browser, secret)
