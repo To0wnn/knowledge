@@ -141,10 +141,11 @@ def ask_mark(sid: str) -> Path:
 
 def asks(agent: str):
     """A terminal session is about to ask approval: the mark the companion reports if it stays. A chat or worker has
-    its own way to ask, and YOLO asks nothing."""
+    its own way to ask. Claude Code and Codex call this only for a real prompt, which a session can get under YOLO too
+    (--permission-mode, an ask rule); agy calls it for every tool, and under YOLO those never wait."""
     hook = json.loads(sys.stdin.read() or "{}")
     sid = session_of(hook)
-    if not sid or os.environ.get("KNOWLEDGE_CHAT") or os.environ.get("KNOWLEDGE_WORKER") or yolo_on(agent):
+    if not sid or os.environ.get("KNOWLEDGE_CHAT") or os.environ.get("KNOWLEDGE_WORKER") or (agent == "agy" and yolo_on(agent)):
         return
     call = hook.get("toolCall") if isinstance(hook.get("toolCall"), dict) else {}
     what = hook.get("tool_input") or call.get("args") or {}
@@ -259,8 +260,10 @@ def self_test():
         assert hook("claude", session_id="other") == "{}\n" and len(marks()) == 2, "another session's tool leaves it"
         assert hook("claude", session_id="s") == "{}\n" and [m["session"] for m in marks()] == ["c"], "the tool ran"
         assert hook("agy", "settled", conversationId="c") == "" and marks() == []
-        for extra in ({"KNOWLEDGE_CHAT": "c"}, {"KNOWLEDGE_WORKER": "T-1"}, {"KNOWLEDGE_YOLO": "1"}):
-            assert hook("codex", "asks", e={**env, **extra}, session_id="y", tool_name="Bash") == "" and marks() == [], extra
+        for who, extra in (("codex", {"KNOWLEDGE_CHAT": "c"}), ("codex", {"KNOWLEDGE_WORKER": "T-1"}), ("agy", {"KNOWLEDGE_YOLO": "1"})):
+            assert hook(who, "asks", e={**env, **extra}, session_id="y", tool_name="Bash") == "" and marks() == [], extra
+        assert hook("claude", "asks", e={**env, "KNOWLEDGE_YOLO": "1"}, session_id="y", tool_name="Bash") == "" and len(marks()) == 1, "a real prompt under YOLO counts"
+        hook("claude", "settled", session_id="y")
         assert subprocess.run([sys.executable, __file__, "codex", "asks"], input="nope", capture_output=True, text=True, env=env).returncode == 0
     import subprocess  # a chat turn: the main agent's hook hands it over, a subagent's (agent_id) leaves it
     with tempfile.TemporaryDirectory() as t:

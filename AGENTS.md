@@ -12,7 +12,7 @@ Antigravity, plus a web UI with a graph. Server in `server/` (Python, one Docker
   or `env -u KNOWLEDGE_URL uv run -q --with playwright python tests/ui_smoke.py` (read-only against the live server;
   an agent session has the public KNOWLEDGE_URL set, which would win over local.env and land on the sign-in page)
 - load test of the web UI against a server on a copy of real data, before and after a change: `tests/ui_load.py`
-- client test (about 2.5 min): `uv run --project server python tests/clients_e2e.py`; CI runs it on Windows, macOS and Linux
+- client test (about 2.5 min; `KNOWLEDGE_E2E_KEEP=1` keeps its temp folder): `uv run --project server python tests/clients_e2e.py`; CI runs it on Windows, macOS and Linux
   (`clients.yml`, not for a push of only docs or web UI files; `check.yml` runs the check and the UI test)
 - a really hanging disk (Linux with FUSE; not in the check): `systemd-run --user --scope -q -p MemoryMax=3G uv run --project server --with fusepy python tests/storage_hang.py`
 - a really hanging disk under the companion (Linux with FUSE; not in the check): `systemd-run --user --scope -q -p MemoryMax=3G uv run --project server --with fusepy python tests/companion_hang.py`

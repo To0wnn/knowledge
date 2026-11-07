@@ -1532,7 +1532,9 @@ def review(w: dict, now: float):
 # longer: its long commands look the same. shortcut: agy's own language server knows a step that waits for approval
 # (undocumented, only with a registered agy); use it if these false alarms hurt.
 ASK_AFTER = {"claude": 120, "codex": 120, "agy": 300}
-ASK_KEEP = 86400
+# agy sends no hook at all for Esc at its prompt (live test, 7 Nov 2026; its transcript stays the same too), so a refused
+# prompt keeps its mark until the next tool call or turn: at most an hour, not a day.
+ASK_KEEP = {"agy": 3600}
 
 
 def terminal_asks(now: float) -> list:
@@ -1545,7 +1547,7 @@ def terminal_asks(now: float) -> list:
             agent, age = a["agent"], now - a["at"]
             if agent not in alive:
                 alive[agent] = running(agent)  # shortcut: an npm Claude on Windows runs as node: its marks go, so no row there
-            if age > ASK_KEEP or not alive[agent]:
+            if age > ASK_KEEP.get(agent, 86400) or not alive[agent]:
                 f.unlink(missing_ok=True)
             elif age >= ASK_AFTER.get(agent, 120):
                 cwd = str(a.get("cwd") or "")
@@ -2638,6 +2640,9 @@ def main(argv: list):
                 g["running"] = lambda a: True
                 mark("agy1", "agy", 1000 - 200); mark("agy2", "agy", 1000 - 400)
                 assert [a["session"] for a in terminal_asks(1000) if a["agent"] == "agy"] == ["agy2"], "agy marks every tool: it waits longer"
+                mark("agy3", "agy", 10000 - 3700)
+                terminal_asks(10000)
+                assert not (box / "agy3.json").exists() and (box / "waits.json").exists(), "agy's Esc sends no hook: its mark goes after an hour"
             finally:
                 agent_hooks.KN_HOME, g["running"] = real_home, real_running
         # A started worker is on disk before the next task starts: killed in between, a restart still knows it.

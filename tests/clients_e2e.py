@@ -3409,6 +3409,8 @@ def main():
             subprocess.run(["pkill", "-f", re.escape(str(tmp))], check=False)
         if failures:
             print("server log tail:\n" + (tmp / "server.log").read_text(errors="replace")[-2000:])
+        if not os.environ.get("KNOWLEDGE_E2E_KEEP"):  # ~370 MB a run: on a tmpfs with a quota the next run fails on a full disk
+            shutil.rmtree(tmp, ignore_errors=True)
     print(f"\n{len(failures)} failed" if failures else "\nall passed")
     sys.exit(1 if failures else 0)
 
