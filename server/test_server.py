@@ -439,6 +439,7 @@ def lease_contract(tmp, ck, fr, raw):
     l["garden"]["LN-1"].update(session="", at=int(time.time()) - 60); (tmp / "task_leases.json").write_text(json.dumps(l))
     assert not lc("LN-1", "older-s")
     l["garden"]["LN-1"]["at"] = int(time.time()) - 200; (tmp / "task_leases.json").write_text(json.dumps(l))
+    os.utime(tmp / "task_leases.json", (time.time() + 1, time.time() + 1))  # written in place, same size: the server must see a change
     assert lc("LN-1", "older-s") and leases()["LN-1"]["session"] == "older-s"
     # Release: only the holding device gives a lease back; then another device takes it at once.
     rel = lambda tok: http("POST", "/tasks/release", {"project": "garden", "id": "LN-1"}, token=tok)
@@ -2415,6 +2416,10 @@ def main():
             os.fsync, os.replace = real
         assert calls.count("replace") == 2 and all(calls[i - 1] == "fsync" for i, c in enumerate(calls) if c == "replace") \
             and (os.name == "nt" or calls[-1] == "fsync"), calls
+        same = f.parent / "same.json"  # one size, one clock tick: the second write still reaches the reader
+        srv.write_json(same, {"a": 1}); srv.read_json(same, {}); stamp = same.stat().st_mtime_ns
+        srv.write_json(same, {"a": 2}); os.utime(same, ns=(stamp, stamp))
+        assert srv.read_json(same, {}) == {"a": 2}
         assert not list(mem.glob(".knowledge-*")), "temp files must not be left behind"
         # Lint runs on the in-memory index (the temp MEMORY.md points to 120 files that do not exist).
         lint_out = call("knowledge_lint", {})[1]

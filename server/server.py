@@ -3044,7 +3044,7 @@ def write_json(path: Path, data):
     sync_dir(path.parent)
 
 
-_json_cache: dict[Path, tuple[int, int, object]] = {}
+_json_cache: dict[Path, tuple[int, int, int, object]] = {}
 
 
 def read_json(path: Path, default):
@@ -3054,10 +3054,11 @@ def read_json(path: Path, default):
     except FileNotFoundError:
         return default
     hit = _json_cache.get(path)
-    if not hit or hit[:2] != (st.st_mtime_ns, st.st_size):
-        hit = (st.st_mtime_ns, st.st_size, json.loads(path.read_text()))
+    # the inode too: two writes of one size within a clock tick (4 ms) have the same time, and the later one would never be read
+    if not hit or hit[:3] != (st.st_mtime_ns, st.st_size, st.st_ino):
+        hit = (st.st_mtime_ns, st.st_size, st.st_ino, json.loads(path.read_text()))
         _json_cache[path] = hit
-    return hit[2]
+    return hit[3]
 
 
 # ---------------------------------------------------------------- projects created in the web UI
