@@ -30,6 +30,8 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   passes to the page through the private file `~/.knowledge/companion/open.html` (`#key=`; never on a browser's
   command line, where other accounts on the pc could read it). YOLO and the worker settings change only on its own page (or remotely by the owner).
 
+- **A folder that hangs:** a round never waits for a hard NFS mount or a share that stopped answering: looks at known folders wait 3 s, git numbers 30 s, each on its own thread. The folder is then skipped until that call returns, said once in the activity list and the Tasks tab, and again when it answers. A remote action on such a repository still waits. `tests/companion_hang.py` proves it on a FUSE mount that really hangs.
+
 ## Machines
 
 - **Models:** with a `model_advice.json` next to the development rules, Admin > Settings is the one place for models: per role and agent the advice with its test score and your own pick, models any pc offers that nobody measured, and per own pc whether its agents match, with what differs and an Apply button. Apply writes the lead and reader into that agent's own settings (a copy goes to `~/.knowledge/backups/`), only on a click; the result shows next to the button. Each agent reports what it is set to, so the page shows the real state. Without the file none of this appears.

@@ -305,6 +305,50 @@ def sessions(agent: str, now: float) -> list:
     return sorted(out, key=lambda s: -s["at"])
 
 
+HUNG: dict = {}  # folder -> the thread still waiting for it
+
+
+def bounded(folder, fn, wait: float = 30, default=None):
+    """fn() about `folder`, without ever waiting longer than `wait`: a hard NFS mount or a share that stopped answering
+    blocks a call for as long as it is gone (subprocess.run's timeout too: it waits for the killed git), and a round holds
+    TICK, so the minute loop and every remote action would stop with it. Skipped while its last call still hangs, so
+    a dead folder costs one thread and is said once. shortcut: only what a round does by itself goes through this; a
+    remote action on a hung repository still waits (the owner asked for that repository), bound it when that hurts."""
+    key = str(folder)
+    old = HUNG.get(key)
+    if old is not None:
+        if old.is_alive():
+            return default
+        HUNG.pop(key, None)
+        log("sync", f"Folder {key} answers again")
+    out = []
+
+    def call():
+        try:
+            out.append((fn(), None))
+        except Exception as e:
+            out.append((None, e))
+    t = threading.Thread(target=call, daemon=True, name="bounded")
+    t.start()
+    t.join(wait)
+    if t.is_alive():
+        HUNG[key] = t
+        text = f"Folder {key} does not answer (a disk or share that hangs): skipped until it does"
+        log("error", text)
+        hook_status.record("companion", "hanging folder", text)  # reaches the Tasks tab
+        return default
+    if out and out[0][1] is not None:
+        raise out[0][1]
+    return out[0][0] if out else default
+
+
+def answering(folder, wait: float = 3) -> bool:
+    """False while a look at this folder does not come back; one that is merely gone does answer."""
+    if folder:
+        bounded(folder, lambda: os.path.lexists(folder), wait)
+    return str(folder) not in HUNG
+
+
 def known_folders() -> set:
     """Folders the agents worked in (session registry, Claude's projects, agy's trusted folders, Codex's projects) and
     the folders linked on the companion page."""
@@ -321,7 +365,7 @@ def known_folders() -> set:
         cands |= {json.loads(f'"{p}"') for p in re.findall(r'^\[projects\."((?:[^"\\]|\\.)*)"\]', (CODEX / "config.toml").read_text(encoding="utf-8"), re.M)}
     except (OSError, ValueError):
         pass
-    return {c for c in cands if c}
+    return {c for c in cands if c and answering(c)}
 
 
 def project_folders() -> dict:
@@ -445,7 +489,7 @@ def folder_links() -> dict:
     """{linked: [{path, project}], candidates: [{path}]}: the folders linked here, and the folders that could be
     (git checkouts under the home folder and folders agents worked in, also elsewhere on the pc) that are not linked yet."""
     linked, cands = {}, []
-    for c in sorted(known_folders() | set(git_repos())):
+    for c in sorted(known_folders() | {r for r in bounded(HOME, git_repos, default=_scan["repos"]) if answering(r)}):
         try:
             p = Path(os.path.abspath(c))
             root, name = project_marker.project_root(p)
@@ -1167,7 +1211,7 @@ def check_workers(ws: dict, tok: str, now: float, lim: dict):
                     log("worker", f"{AGENTS[w['agent']][0]}: the worker for {w['id']} was stopped (usage limit)", "")
                 except Exception as e:
                     log("error", f"Could not stop the worker for {w['id']}", f"{e}"[:200])
-        elif w["status"] != "merged" and w.get("worktree") and not shared_running(ws, w) and workers.merged(w):
+        elif w["status"] != "merged" and w.get("worktree") and not shared_running(ws, w) and bounded(w["worktree"], lambda w=w: workers.merged(w), default=False):
             w["status"], w["result"] = "merged", workers.remove(w)
             for o in ws.values():  # the sessions before or after it in that worktree (a hand-over) share its branch
                 if o is not w and o.get("worktree") == w["worktree"] and o["status"] != "running":
@@ -1292,7 +1336,7 @@ def git_head(path: str, limit: int, *args) -> str:
 def with_git(folders: dict, ws: dict, now: float) -> tuple:
     """The linked folders and the recent workers with their git numbers, each folder once per round."""
     seen = {}
-    once = lambda p: seen[p] if p in seen else seen.setdefault(p, git_state(p))
+    once = lambda p: seen[p] if p in seen else seen.setdefault(p, bounded(p, lambda: git_state(p)))
     linked = [{**f, "git": once(f["path"])} for f in folders["linked"][:40]] + folders["linked"][40:]
     recent = lambda w: w["status"] == "running" or now - (w.get("ended") or now) < 7 * 86400
     return {**folders, "linked": linked}, {k: once(w.get("worktree")) if recent(w) else None for k, w in ws.items()}
@@ -1322,7 +1366,7 @@ def chat_reviews(now: float, gits: dict) -> dict:
     with commits, the newest 20: the report has a size limit and this runs git every round."""
     branches = load("chat_branches.json", {})
     ahead = [cid for cid in gits if cid in branches and (gits[cid] or {}).get("ahead")][-20:]
-    return {cid: r for cid in ahead if (r := review({**branches[cid], "status": "finished", "ended": now}, now))}
+    return {cid: r for cid in ahead if (r := bounded(branches[cid].get("repo"), lambda cid=cid: review({**branches[cid], "status": "finished", "ended": now}, now)))}
 
 
 def clean_chat_branches(closed: list):
@@ -1332,7 +1376,8 @@ def clean_chat_branches(closed: list):
     for cid in closed:
         with chat.START_LOCK:  # a message for this chat starts its agent under the same lock
             w = load("chat_branches.json", {}).get(cid)
-            if not w or chat_busy(cid) or not workers.merged({**w, "status": "finished"}) or not Path(w["worktree"]).is_dir():
+            if not w or chat_busy(cid) or not answering(w["worktree"]) or not answering(w.get("repo")) \
+                    or not workers.merged({**w, "status": "finished"}) or not Path(w["worktree"]).is_dir():
                 continue
             if workers.git(w["worktree"], "symbolic-ref", "--short", "-q", "HEAD").stdout.strip() != w["branch"] or workers.git(w["worktree"], "status", "--porcelain").stdout.strip():
                 continue
@@ -1350,7 +1395,7 @@ def clean_chat_branches(closed: list):
 def chat_git(cid: str, folder: str) -> dict | None:
     """An "Own branch" chat's pill: its worktree against its base, not the folder's own checkout; None without one."""
     try:
-        return git_state(workers.worktree(folder, cid, prefix="chat", make=False).get("cwd"))
+        return bounded(folder, lambda: git_state(workers.worktree(folder, cid, prefix="chat", make=False).get("cwd")))
     except (OSError, subprocess.SubprocessError):
         return None
 
@@ -1487,7 +1532,7 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
             "workers": [{**{k: w.get(k) for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open", "why", "chat", "title")},
                          "checkpoint": bool(w.get("checkpoint")), "merged": w["status"] == "merged", "git": gits.get(k),
                          **({"progress": progress(w, gits.get(k))} if w["status"] == "running" else {}),
-                         **({"review": r} if (r := review(w, now)) else {})} for k, w in sorted(ws.items(), key=lambda kw: -(kw[1].get("started") or 0)) if not w.get("archived")],  # newest first: the server keeps 40
+                         **({"review": r} if (r := bounded(w.get("repo"), lambda w=w: review(w, now))) else {})} for k, w in sorted(ws.items(), key=lambda kw: -(kw[1].get("started") or 0)) if not w.get("archived")],  # newest first: the server keeps 40
             "limitWait": wait, "waiting": waiting or {}, "folders": links, "chats": chat_gits, "chatReviews": chat_reviews(now, chat_gits), "projects": load("state.json", {}).get("projects", [])}
     answer = server("POST", "/machine/report", tok, body)
     try:
@@ -2518,6 +2563,26 @@ def main(argv: list):
                 assert quiet_for({"started": 7000}, 6000) == 0
             finally:
                 workers.seen_path = kept_seen
+        # A folder that hangs costs one wait and one thread, is said once, and says when it is back.
+        gate, said, real_log = threading.Event(), [], g["log"]
+        g["log"] = lambda kind, text, detail="": said.append(text)
+        calls = []
+        try:
+            assert bounded("/dead", lambda: calls.append(1) or gate.wait() or "late", 0.05, "gave up") == "gave up"
+            assert bounded("/dead", lambda: calls.append(1), 0.05, "gave up") == "gave up" and calls == [1], "no second thread"
+            assert not answering("/dead", 0.05), "a hanging folder does not answer"
+            assert answering(os.path.join(tmp_state, "not-there")), "a folder that is gone does answer"
+            assert len([s for s in said if "does not answer" in s]) == 1, said
+            gate.set(); HUNG["/dead"].join(2)
+            assert bounded("/dead", lambda: "fine") == "fine" and "/dead" not in HUNG and any("answers again" in s for s in said), said
+            assert bounded("/x", lambda: "v") == "v"
+            try:
+                bounded("/x", lambda: 1 / 0)
+                raise AssertionError("an error of fn stays the caller's")
+            except ZeroDivisionError:
+                pass
+        finally:
+            g["log"] = real_log
         # A started worker is on disk before the next task starts: killed in between, a restart still knows it.
         kept = {k: g[k] for k in ("settings", "usage_info", "check_workers", "why_not", "installed", "start_worker", "log", "save", "load", "workers")}
         saved, seen = {}, []
