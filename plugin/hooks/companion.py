@@ -1583,6 +1583,18 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
         log("error", "Could not clean up a closed chat's worktree", f"{e}"[:200])
 
 
+STOPS_DONE: dict = {}  # chat -> when a stop last ended a turn here
+
+
+def stop_is_news(cid: str, ran: bool, now: float) -> bool:
+    """A stop for a chat with no turn here says so and ends it on the server, unless this pc just stopped that turn: an
+    answer already on its way brings the same stop twice. Still handed out after a while: the first "done" was lost."""
+    if ran:
+        STOPS_DONE[cid] = now
+        return False
+    return now - STOPS_DONE.get(cid, 0) > 30
+
+
 def tick() -> dict:
     """One round: queued YOLO, trust after an update, the ready tasks, the agents' own hook errors."""
     with TICK:
@@ -2154,7 +2166,7 @@ def chats_round() -> bool:
     for a in r.get("answers", []):  # the owner's answers to tool approvals (before the stops: a stop denies the rest)
         chat.answer(a)
     for cid in r.get("stop", []):
-        if not chat.stop(cid):
+        if stop_is_news(cid, chat.stop(cid), time.time()):
             post({"chat": cid, "events": [{"kind": "info", "text": "Stopped (no turn ran here any more)."}], "done": True})
     chat.reap()  # live chats idle for a while end (the next message resumes them)
     for s in r.get("steer", []):  # Force: for the running turn, read by the agent's hook after its next step; after its files
@@ -2626,6 +2638,9 @@ def main(argv: list):
                 pass
         finally:
             g["log"], hook_status.ERRORS = real_log, real_errors
+        assert stop_is_news("c9", False, 1000), "nothing ran and nothing was stopped: it says so (after a restart of the companion)"
+        assert not stop_is_news("c9", True, 2000) and not stop_is_news("c9", False, 2001), "the same stop twice: one line"
+        assert stop_is_news("c9", False, 2031), "still handed out: the first done was lost, this one ends it"
         # A terminal's mark shows once it stayed; a prompt answered in time never gets there, and an old or orphaned one goes.
         with tempfile.TemporaryDirectory() as t:
             real_home, real_running = agent_hooks.KN_HOME, g["running"]
