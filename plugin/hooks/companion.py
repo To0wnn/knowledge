@@ -2606,6 +2606,7 @@ def main(argv: list):
         # A folder that hangs costs one wait and one thread, is said once, and says when it is back.
         gate, said, real_log = threading.Event(), [], g["log"]
         g["log"] = lambda kind, text, detail="": said.append(text)
+        real_errors, hook_status.ERRORS = hook_status.ERRORS, Path(tmp_state) / "hung-errors.jsonl"  # never into this pc's real list
         calls = []
         try:
             assert bounded("/dead", lambda: calls.append(1) or gate.wait() or "late", 0.05, "gave up") == "gave up"
@@ -2622,7 +2623,7 @@ def main(argv: list):
             except ZeroDivisionError:
                 pass
         finally:
-            g["log"] = real_log
+            g["log"], hook_status.ERRORS = real_log, real_errors
         # A terminal's mark shows once it stayed; a prompt answered in time never gets there, and an old or orphaned one goes.
         with tempfile.TemporaryDirectory() as t:
             real_home, real_running = agent_hooks.KN_HOME, g["running"]

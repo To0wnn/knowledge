@@ -963,6 +963,14 @@ class Hosted:
             return ""
 
 
+def written_by_us(replay: dict) -> bool:
+    """A replayed user message is one we wrote, except what Claude Code queues itself: a background shell or subagent
+    that ended during a turn comes back the same way (seen in claude 2.1.319, 7 Nov 2026)."""
+    content = (replay.get("message") or {}).get("content")
+    first = content if isinstance(content, str) else next((b.get("text", "") for b in content or [] if isinstance(b, dict) and b.get("type") == "text"), "")
+    return not first.lstrip().startswith("<task-notification>")
+
+
 class Live:
     """One chat's running agent: messages in, its stream out, and where each turn ends, counted, not guessed: every
     message written is echoed back (isReplay) when the agent takes it, so a turn is over at a result once every
@@ -1151,6 +1159,8 @@ class Live:
         kind = ev.get("type")
         self.last = time.time()
         if kind == "user" and ev.get("isReplay") and not ev.get("parent_tool_use_id"):  # one of ours, taken now
+            if not written_by_us(ev):  # counted as ours, it made taken > written below: the turn interrupted itself
+                return
             self.taken += 1
             self.turn_open = True
             if self.stop_asked or self.taken > self.written:  # stopped while it was on its way in (a done() counted it as dropped)
@@ -1798,6 +1808,18 @@ def _start_live(item: dict, post, log, linked, yolo):
 
 
 def self_test():
+    # A background job that ended during a turn is no message of ours: it must not interrupt that turn; a real one counts.
+    lv, stops = Live.__new__(Live), []
+    lv.written, lv.taken, lv.stop_asked, lv.turn_open, lv.interrupt = 1, 1, False, True, lambda: stops.append(1)
+    note = "<task-notification>\n<task-id>b</task-id>\n<status>completed</status>"
+    for content in (note, [{"type": "text", "text": note}]):
+        lv.on_line({"type": "user", "isReplay": True, "message": {"content": content}}, "")
+    assert not stops and lv.taken == 1, (stops, lv.taken)
+    lv.written = 2
+    lv.on_line({"type": "user", "isReplay": True, "message": {"content": "next message"}}, "")
+    assert not stops and lv.taken == 2 and written_by_us({"message": {"content": [{"type": "image"}]}})
+    lv.on_line({"type": "user", "isReplay": True, "message": {"content": "one too many"}}, "")
+    assert stops and lv.taken == 2, "more than written: dropped by a stop, and it still interrupts"
     w = workers.DIR
     with tempfile.TemporaryDirectory() as t:
         workers.DIR = Path(t)
