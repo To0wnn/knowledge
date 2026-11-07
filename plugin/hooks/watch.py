@@ -17,7 +17,8 @@
 
   watch.py <claude|codex|agy>     the hook (stdin: the agent's PostToolUse JSON)
   watch.py <agent> asks           PermissionRequest (agy: PreToolUse); prints nothing, so it never decides anything
-  watch.py <agent> settled        Stop, SessionEnd, UserPromptSubmit: that session asks nothing any more; prints nothing
+  watch.py <agent> settled        Stop, SessionEnd, UserPromptSubmit, and for Esc at a prompt, which ends no turn, Claude's
+                                  idle_prompt (after a minute) and Codex's Interrupt: that session asks nothing any more; prints nothing
   watch.py --self-test
 Standard library only; never fails a turn.
 """

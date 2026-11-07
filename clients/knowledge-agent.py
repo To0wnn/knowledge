@@ -118,6 +118,7 @@ def hook_config(agent: str, name: str) -> dict:
                         {"matcher": ".*", "hooks": [{"type": "command", "command": cmd("watch", "codex"), "timeout": 10}]}],
         "PermissionRequest": [{"matcher": ".*", "hooks": [{"type": "command", "command": cmd("asks", "codex"), "timeout": 10}]}],
         "Stop": [{"hooks": [{"type": "command", "command": cmd("settled", "codex"), "timeout": 10}]}],
+        "Interrupt": [{"hooks": [{"type": "command", "command": cmd("settled", "codex"), "timeout": 3}]}],  # at most 3 s, or Codex warns at each start
         "UserPromptSubmit": [{"hooks": [{"type": "command", "command": cmd("tasks", "codex"), "timeout": 8},
                                         {"type": "command", "command": cmd("settled", "codex"), "timeout": 8}]}],
         "PreToolUse": [{"matcher": ".*spawn_agent", "hooks": [{"type": "command", "command": cmd("gate", "codex"), "timeout": 10}]},

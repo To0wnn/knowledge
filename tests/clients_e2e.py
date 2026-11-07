@@ -354,7 +354,8 @@ def claude_plugin(tok: str, home: Path, project: Path, garden: Path):
                "PreCompact": {"hook_event_name": "PreCompact", "session_id": "s2", "transcript_path": str(transcript), "cwd": str(project)},
                "UserPromptSubmit": {"hook_event_name": "UserPromptSubmit", "session_id": "s3", "cwd": str(project), "prompt": "hi"},
                "PermissionRequest": {"hook_event_name": "PermissionRequest", "session_id": "s4", "cwd": str(project), "tool_name": "Bash", "tool_input": {"command": "ls"}},
-               "Stop": {"hook_event_name": "Stop", "session_id": "s4", "cwd": str(project)}}
+               "Stop": {"hook_event_name": "Stop", "session_id": "s4", "cwd": str(project)},
+               "Notification": {"hook_event_name": "Notification", "notification_type": "idle_prompt", "session_id": "s4", "cwd": str(project)}}
     hashes = home / ".config" / "knowledge-server" / "secret-hashes.json"  # an owner device has them (token.py push-secrets)
     hashes.parent.mkdir(parents=True, exist_ok=True)
     hashes.write_text(json.dumps([hashlib.sha256(b"Sup3rSecret99").hexdigest()]), encoding="utf-8")
@@ -366,7 +367,7 @@ def claude_plugin(tok: str, home: Path, project: Path, garden: Path):
         env = user_env(home, CLAUDE_PLUGIN_ROOT=root, CLAUDE_PLUGIN_OPTION_URL=BASE, CLAUDE_PLUGIN_OPTION_TOKEN=tok,
                        CLAUDE_PROJECT_DIR=str(project))
         outs = {}
-        for event in ("SessionStart", "PostToolUse", "PreToolUse", "SessionEnd", "UserPromptSubmit", "PermissionRequest", "Stop"):
+        for event in ("SessionStart", "PostToolUse", "PreToolUse", "SessionEnd", "UserPromptSubmit", "PermissionRequest", "Stop", "Notification"):
             for group in hooks.get(event, []):
                 for hk in group["hooks"]:
                     if hk.get("asyncRewake"):  # waits in the background for a wake; wake_e2e runs it
@@ -2246,6 +2247,10 @@ def _quiet(f):
         return False
 
 
+def hk_max(groups: list) -> int:
+    return max(h["timeout"] for g in groups for h in g["hooks"])
+
+
 def terminal_asks(tmp: Path):
     """A terminal session that asks approval leaves a mark the companion reports, in every agent, through the commands
     their own hook files name; the tool having run clears it, and a chat leaves none."""
@@ -2256,6 +2261,8 @@ def terminal_asks(tmp: Path):
     one = lambda groups, word: next(h for g in groups for h in (g.get("hooks") or [g]) if word in h["command"])
     def as_codex(hk):
         return codex_hook_argvs(hk, REPO / "plugin")[0][1]
+    check(hk_max(codex["Interrupt"]) <= 3 and "idle_prompt" == claude["Notification"][0]["matcher"],
+          "Esc at a prompt ends no turn: Codex's Interrupt (at most 3 s, or it warns at each start) and Claude's idle_prompt clear the mark")
     agents = {"claude": (lambda hk: [sh, "-c", hk["command"]], one(claude["PermissionRequest"], "asks"), one(claude["Stop"], "settled"), {"session_id": "t-c", "tool_name": "Bash", "tool_input": {"command": "ls"}}, None),
               "codex": (as_codex, one(codex["PermissionRequest"], "asks"), one(codex["Stop"], "settled"), {"session_id": "t-x", "tool_name": "Bash", "tool_input": {"command": "ls"}}, None),
               "agy": ((lambda hk: f'cmd /d /s /c "{hk["command"]}"' if WIN else [shutil.which("sh"), "-c", hk["command"]]), one(agy["PreToolUse"], " asks"), one(agy["Stop"], "settled"),
@@ -2483,9 +2490,10 @@ def codex_plugin(tok: str, home: Path, project: Path):
                 "UserPromptSubmit": {"hook_event_name": "UserPromptSubmit", "session_id": "cx-3", "cwd": str(project), "prompt": "hi"},
                 "PreToolUse": {"hook_event_name": "PreToolUse", "session_id": "cx-4", "cwd": str(project), "tool_name": "spawn_agent"},
                 "PermissionRequest": {"hook_event_name": "PermissionRequest", "session_id": "cx-5", "cwd": str(project), "tool_name": "Bash", "tool_input": {"command": "ls"}},
-                "Stop": {"hook_event_name": "Stop", "session_id": "cx-5", "cwd": str(project)}}
+                "Stop": {"hook_event_name": "Stop", "session_id": "cx-5", "cwd": str(project)},
+                "Interrupt": {"hook_event_name": "Interrupt", "session_id": "cx-5", "cwd": str(project)}}
     check(set(hooks) == set(payloads) and len(hooks["SessionStart"][0]["hooks"]) == 1,
-          "codex plugin: the eight hook events, one SessionStart handler (openai/codex#45999)", str(list(hooks)))
+          "codex plugin: the nine hook events, one SessionStart handler (openai/codex#45999)", str(list(hooks)))
     for event, groups in hooks.items():
         for hk in (h for g in groups for h in g["hooks"]):
             for i, (shell, argv) in enumerate(codex_hook_argvs(hk, root)):

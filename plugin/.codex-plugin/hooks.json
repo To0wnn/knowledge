@@ -146,6 +146,18 @@
           }
         ]
       }
+    ],
+    "Interrupt": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -X utf8 \"${PLUGIN_ROOT}/hooks/watch.py\" codex settled",
+            "commandWindows": "cmd /d /c call \"${PLUGIN_ROOT}\\python3.cmd\" -X utf8 \"${PLUGIN_ROOT}\\hooks\\watch.py\" codex settled",
+            "timeout": 3
+          }
+        ]
+      }
     ]
   }
 }
