@@ -356,7 +356,7 @@ function ckItem(i) {
   if (i.subs) { const s = el("span", "chip live", `${i.subs} subagent${i.subs > 1 ? "s" : ""}`); s.title = "Subagents of this chat running now"; top.append(s); }
   // a chat's second line is the agent's last sentence when there is one; why it needs you moves up to the first
   const why = i.kind === "chat" && i.outcome && i.col === "needs" ? (i.line.startsWith("replied: ") ? "answered, not read" : i.line) : "";
-  const where = [why, i.kind === "review" ? `review · ${AGENT_NAME[i.agent] || i.agent}` : i.kind === "worker" ? "worker" : i.kind === "terminal" ? `terminal · ${i.label}` : i.kind === "task" ? (i.result ? "result" : `task for ${i.owner}`) : i.kind === "ask" ? "approval" : "", i.label, ckShort(i.folder),
+  const where = [why, i.kind === "review" ? `review · ${AGENT_NAME[i.agent] || i.agent}` : i.kind === "worker" ? "worker" : i.kind === "terminal" ? "terminal" : i.kind === "task" ? (i.result ? "result" : `task for ${i.owner}`) : i.kind === "ask" ? "approval" : "", i.label, ckShort(i.folder),
     agentProject ? "" : shown(i.project || ""), i.due && !i.result ? `due ${i.due}` : "", i.at ? ago(i.at) : ""];
   main.append(top, el("span", "ck-item-where", where.filter(Boolean).join(" · ")), el("span", "ck-item-line", (i.kind === "chat" && i.outcome) || i.line));
   if (i.kind === "worker" && i.why && !i.line.includes(i.why)) main.append(el("span", "ck-item-why", i.why)); // the line says why and "pc offline since"
@@ -401,11 +401,11 @@ function ckItem(i) {
       later.push([text, "Take it off the list for a while", () => ckDo("/ui/api/board/dismiss", { key: i.key, sig: i.sig, until: Math.round(until()) })]);
     later.push(["Dismiss", "Take it off the list until it changes again", () => ckDo("/ui/api/board/dismiss", { key: i.key, sig: i.sig })]);
   }
-  if (i.kind === "chat" && i.col !== "running") later.push(["Archive", "The agent records it in the memos, then it goes off the list (under Earlier, Archived); a new message opens it again",
+  if (i.kind === "chat" && !ckBusy(i.status)) later.push(["Archive", "The agent records it in the memos, then it goes off the list (under Earlier, Archived); a new message opens it again",
     () => ckDo("/ui/api/chat/close", { machine: i.machine, id: i.id, closed: true })]);
   if (i.kind === "chat") later.push(["Force archive", "Close right away without wrap-up (e.g. when quota is exhausted or agent is stuck)",
     () => ckDo("/ui/api/chat/close", { machine: i.machine, id: i.id, closed: true, force: true, record: false })]);
-  if (i.kind === "chat" && i.col === "running") act("Stop", "Stop this turn", () => ckDo("/ui/api/chat/stop", { machine: i.machine, id: i.id }));
+  if (i.kind === "chat" && ckBusy(i.status)) act("Stop", "Stop this turn", () => ckDo("/ui/api/chat/stop", { machine: i.machine, id: i.id }));
   if (later.length) acts.append(ckMore(later, i.title));
   if (acts.childNodes.length) card.append(acts);
   if (i.kind === "chat" && chat?.sub_list?.length) card.append(ckItemSubs(chat));

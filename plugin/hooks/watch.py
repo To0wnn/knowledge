@@ -151,7 +151,7 @@ def asks(agent: str):
     what = next((what[k] for k in ("command", "CommandLine", "file_path", "Path") if isinstance(what, dict) and isinstance(what.get(k), str)), what)
     what = what if isinstance(what, str) else json.dumps(what, ensure_ascii=False)
     cwd = hook.get("cwd") or (hook.get("workspacePaths") or [os.getcwd()])[0]
-    ASKS.mkdir(parents=True, exist_ok=True)
+    ASKS.mkdir(mode=0o700, parents=True, exist_ok=True)  # a raw command, maybe with a password in it
     tmp = ask_mark(sid).with_name(f"{ask_mark(sid).name}.{os.getpid()}.tmp")
     tmp.write_text(json.dumps({"agent": agent, "session": sid, "tool": str(hook.get("tool_name") or call.get("name") or "")[:80],
                                "detail": " ".join(what.split())[:200], "cwd": str(cwd), "at": time.time()}), encoding="utf-8")

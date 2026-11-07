@@ -30,7 +30,7 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   passes to the page through the private file `~/.knowledge/companion/open.html` (`#key=`; never on a browser's
   command line, where other accounts on the pc could read it). YOLO and the worker settings change only on its own page (or remotely by the owner).
 
-- **A folder that hangs:** a round never waits for a hard NFS mount or a share that stopped answering: looks at known folders wait 3 s, git numbers 30 s, each on its own thread. The folder is then skipped until that call returns, said once in the activity list and the Tasks tab, and again when it answers. A remote action on such a repository still waits. `tests/companion_hang.py` proves it on a FUSE mount that really hangs.
+- **A folder that hangs:** a round never waits for a hard NFS mount or a share that stopped answering: looks at known folders wait 3 s together, git numbers 30 s, each on its own thread. The folder is then skipped until that call returns, said once in the activity list and the Tasks tab (the first three folders, so one dead NAS does not fill the list), and again when it answers. A remote action on such a repository still waits. `tests/companion_hang.py` proves it on a FUSE mount that really hangs.
 
 ## Machines
 

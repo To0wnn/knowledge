@@ -92,7 +92,8 @@ CODEX = Path(os.environ.get("CODEX_HOME") or HOME / ".codex")
 AGY_DIR = HOME / ".gemini" / "antigravity-cli"
 AGY_SETTINGS = AGY_DIR / "settings.json"
 PROCESS = {"agy": os.environ.get("KNOWLEDGE_AGY_PROCESS") or "agy",  # other names in the tests
-           "codex": os.environ.get("KNOWLEDGE_CODEX_PROCESS") or "codex"}
+           "codex": os.environ.get("KNOWLEDGE_CODEX_PROCESS") or "codex",
+           "claude": os.environ.get("KNOWLEDGE_CLAUDE_PROCESS") or "claude"}  # Claude's terminal marks only: see terminal_asks
 MISSING = {"missing": True}  # a setting that was not there: unchecking YOLO removes it again
 LOCK = threading.RLock()
 TICK = threading.Lock()  # one round at a time: the minute loop and the page's "Wake ready tasks now"
@@ -306,6 +307,7 @@ def sessions(agent: str, now: float) -> list:
 
 
 HUNG: dict = {}  # folder -> the thread still waiting for it
+HUNG_SAID = 3
 
 
 def bounded(folder, fn, wait: float = 30, default=None):
@@ -320,7 +322,8 @@ def bounded(folder, fn, wait: float = 30, default=None):
         if old.is_alive():
             return default
         HUNG.pop(key, None)
-        log("sync", f"Folder {key} answers again")
+        if len(HUNG) < HUNG_SAID:
+            log("sync", f"Folder {key} answers again")
     out = []
 
     def call():
@@ -333,9 +336,10 @@ def bounded(folder, fn, wait: float = 30, default=None):
     t.join(wait)
     if t.is_alive():
         HUNG[key] = t
-        text = f"Folder {key} does not answer (a disk or share that hangs): skipped until it does"
-        log("error", text)
-        hook_status.record("companion", "hanging folder", text)  # reaches the Tasks tab
+        if len(HUNG) <= HUNG_SAID:  # one dead NAS can hold dozens of folders: the activity list keeps only 100 lines
+            text = f"Folder {key} does not answer (a disk or share that hangs): skipped until it does"
+            log("error", text)
+            hook_status.record("companion", "hanging folder", text)  # reaches the Tasks tab
         return default
     if out and out[0][1] is not None:
         raise out[0][1]
@@ -365,7 +369,13 @@ def known_folders() -> set:
         cands |= {json.loads(f'"{p}"') for p in re.findall(r'^\[projects\."((?:[^"\\]|\\.)*)"\]', (CODEX / "config.toml").read_text(encoding="utf-8"), re.M)}
     except (OSError, ValueError):
         pass
-    return {c for c in cands if c and answering(c)}
+    cands = {c for c in cands if c}
+    looks = [threading.Thread(target=answering, args=(c,), daemon=True) for c in cands]  # together: a dead NAS costs 3 s, not 3 s a folder
+    for t in looks:
+        t.start()
+    for t in looks:
+        t.join()
+    return {c for c in cands if str(c) not in HUNG}
 
 
 def project_folders() -> dict:
@@ -489,7 +499,7 @@ def folder_links() -> dict:
     """{linked: [{path, project}], candidates: [{path}]}: the folders linked here, and the folders that could be
     (git checkouts under the home folder and folders agents worked in, also elsewhere on the pc) that are not linked yet."""
     linked, cands = {}, []
-    for c in sorted(known_folders() | {r for r in bounded(HOME, git_repos, default=_scan["repos"]) if answering(r)}):
+    for c in sorted(known_folders() | {r for r in bounded(f"scan of {HOME}", git_repos, default=_scan["repos"]) if answering(r)}):
         try:
             p = Path(os.path.abspath(c))
             root, name = project_marker.project_root(p)
@@ -1460,19 +1470,20 @@ def progress(w: dict, g) -> dict:
         except (OSError, subprocess.SubprocessError):
             pass
     return {"commit": mask(commit)[:TAIL_WIDTH], "commits": (g or {}).get("ahead", 0), "changed": (g or {}).get("changed", 0),
-            "log": log_tail(w.get("log")), "quiet": quiet_for(w, time.time())}
+            "log": log_tail(w.get("log")), "seen": last_seen(w, time.time())}
 
 
-def quiet_for(w: dict, now: float) -> int:
-    """Seconds since a running worker last showed life: its log, or its watch hook after a tool call (agy -p logs nothing
-    until it ends). The server decides what is too long."""
+def last_seen(w: dict, now: float) -> int:
+    """When a running worker last showed life: its log, or its watch hook after a tool call (agy -p logs nothing until it
+    ends). The time, not the age: each quiet spell then has its own signature, so dismissing one does not hide the next.
+    The server decides what is too long."""
     last = w.get("started") or now
     for f in (w.get("log"), workers.seen_path(w) if w.get("nonce") else None):
         try:
             last = max(last, os.stat(f).st_mtime) if f else last
         except OSError:
             pass
-    return max(0, int(now - last))
+    return int(min(last, now))
 
 
 def unfinished_work(w: dict) -> str:
@@ -1533,7 +1544,7 @@ def terminal_asks(now: float) -> list:
             a = json.loads(f.read_text(encoding="utf-8"))
             agent, age = a["agent"], now - a["at"]
             if agent not in alive:
-                alive[agent] = agent not in PROCESS or running(agent)
+                alive[agent] = running(agent)  # shortcut: an npm Claude on Windows runs as node: its marks go, so no row there
             if age > ASK_KEEP or not alive[agent]:
                 f.unlink(missing_ok=True)
             elif age >= ASK_AFTER.get(agent, 120):
@@ -2585,11 +2596,11 @@ def main(argv: list):
             lf.write_text("x"); os.utime(lf, (4000, 4000))
             kept_seen, workers.seen_path = workers.seen_path, lambda w: Path(t) / "w.seen"
             try:
-                assert quiet_for({"started": 1000, "log": str(lf), "nonce": "n"}, 6000) == 2000
-                assert quiet_for({"started": 1000, "nonce": "n"}, 6000) == 5000, "no log yet: since its start"
+                assert last_seen({"started": 1000, "log": str(lf), "nonce": "n"}, 6000) == 4000
+                assert last_seen({"started": 1000, "nonce": "n"}, 6000) == 1000, "no log yet: its start"
                 (Path(t) / "w.seen").touch(); os.utime(Path(t) / "w.seen", (seen_at, seen_at))
-                assert quiet_for({"started": 1000, "log": str(lf), "nonce": "n"}, 6000) == 1000, "agy -p logs nothing: its hook counts"
-                assert quiet_for({"started": 7000}, 6000) == 0
+                assert last_seen({"started": 1000, "log": str(lf), "nonce": "n"}, 6000) == 5000, "agy -p logs nothing: its hook counts"
+                assert last_seen({"started": 7000}, 6000) == 6000
             finally:
                 workers.seen_path = kept_seen
         # A folder that hangs costs one wait and one thread, is said once, and says when it is back.

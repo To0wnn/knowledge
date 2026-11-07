@@ -34,7 +34,9 @@ def main():
             said = []
             companion.log = lambda kind, text, detail="": said.append((kind, text))
             companion.STATE.mkdir(parents=True, exist_ok=True)
-            (companion.STATE / "linked.json").write_text(json.dumps([str(mount)]))
+            (mount / "b").mkdir()
+            (mount / "b" / ".knowledge-project").write_text("beds\n")
+            (companion.STATE / "linked.json").write_text(json.dumps([str(mount), str(mount / "b")]))
             links = {"linked": [{"path": str(mount), "project": "garden"}], "candidates": []}
 
             def round_(budget, what):
@@ -52,11 +54,11 @@ def main():
 
             flag.touch()
             print("-- the disk stops answering")
-            found, folders, git = round_(40, "first round on the hung disk")  # one wait for each look, then skipped
+            found, folders, git = round_(8, "first round on the hung disk, two folders")  # the looks wait together, then skipped
             assert "garden" not in found and git is None, (found, git)
             found, folders, git = round_(2, "next round")
             assert "garden" not in found and git is None, (found, git)
-            assert len([s for s in said if "does not answer" in s[1]]) == 1 and all(s[0] == "error" for s in said if "does not answer" in s[1]), said
+            assert len([s for s in said if "does not answer" in s[1]]) == 2 and all(s[0] == "error" for s in said if "does not answer" in s[1]), said
 
             flag.unlink()
             print("-- it answers again")

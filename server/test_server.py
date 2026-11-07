@@ -1463,10 +1463,10 @@ def board_contract(tmp, ck, fr, raw, er, et):
     rep = {"version": "0.17.0", "workersAllowed": True, "agents": {"codex": {}, "claude": {}},
            "asks": [{"agent": "claude", "session": "t-1", "tool": "Bash", "detail": "deploy Sup3rSecret99", "project": "garden", "at": now - 200},
                     {"agent": "agy", "session": "t-2", "tool": "run_command", "detail": "make", "project": "", "at": now - 400},
-                    {"agent": "nobody", "session": "t-3", "at": now}, {"agent": "codex", "session": "t-4", "at": float("inf")}, "junk"],
+                    {"agent": "nobody", "session": "t-3", "at": now}, {"agent": "codex", "session": "t-4", "at": float("inf")}, {"agent": ["x"], "session": "t-5", "at": now}, "junk"],
            "folders": {"linked": [{"path": "/home/x/garden", "project": "garden", "git": {**pill, "changed": "3; rm -rf"}}]},
            "workers": [worker("BRD-4", "running", git=pill, progress={"commit": "feat: beds", "commits": 2, "changed": "3", "log": [
-               "one", "two Sup3rSecret99", "three", "four " + "y" * 400]}), worker("BRD-Q", "running", progress={"quiet": 31 * 60}), worker("BRD-5", "failed", now - 60, why="ended without claiming or handing back its task"), worker("BRD-6", "finished", now - 60),
+               "one", "two Sup3rSecret99", "three", "four " + "y" * 400]}), worker("BRD-Q", "running", progress={"seen": int(now - 31 * 60)}), worker("BRD-5", "failed", now - 60, why="ended without claiming or handing back its task"), worker("BRD-6", "finished", now - 60),
                        worker("BRD-7", "failed", now - 8 * 86400), worker("BRD-8", "finished", now - 2 * 86400)]}
     assert http("POST", "/machine/report", rep, token=fr, headers=pc)[0] == 200
     path = "garden-memory/project_tasks.md"
@@ -1496,14 +1496,23 @@ def board_contract(tmp, ck, fr, raw, er, et):
     assert term["col"] == "needs" and term["title"] == "Bash deploy ‹secret›" and "that terminal" in term["line"] and term["project"] == "garden", term
     assert "may wait" in items[("terminal", "t-2")]["line"], "agy has no approval event: the card says so"
     assert not any(k == "terminal" and i not in ("t-1", "t-2") for k, i in items), "only what is valid"
+    assert ui("/ui/api/board/dismiss", {"key": term["key"], "sig": term["sig"]})[0] == 200
+    assert not any(i["key"] == term["key"] for i in board()), "a row nobody can answer here can at least go away"
+    other = {"X-Knowledge-Machine": "dddddddddddddddd", "X-Knowledge-Machine-Label": "theirs"}
+    assert http("POST", "/machine/report", {"version": "0.39.0", "asks": [{"agent": "claude", "session": "o-1", "tool": "Bash", "at": now}]}, token=et, headers=other)[0] == 200
+    row = next(r for r in json.loads(ui("/ui/api/machines")[2])["machines"] if r["id"] == "dddddddddddddddd")
+    assert not row["own"] and "asks" not in row["companion"], "an admin sees the pc, not another person's commands"
+    assert ("terminal", "o-1") not in {(i["kind"], i["id"]) for i in board()}
     # No output for too long: it shows under Needs you with its reason, and a running worker keeps its task out of "open".
     quiet = items[("worker", "BRD-Q")]
-    assert quiet["col"] == "needs" and quiet["line"].startswith("no output since") and quiet["can_stop"] and quiet["sig"].endswith(":quiet"), quiet
+    assert quiet["col"] == "needs" and quiet["line"].startswith("no output since") and quiet["can_stop"] and quiet["sig"].endswith(f":quiet:{int(now - 31 * 60)}"), quiet
     import server as srv  # the pure rule, without a turn of half an hour
     assert srv.chat_card({"status": "running", "events": [{"at": now - 60}]}) == ("running", "working")
     assert srv.chat_card({"status": "running", "events": [{"at": now - 31 * 60}]})[0] == "needs"
     assert srv.chat_card({"status": "queued", "events": [{"at": now - 31 * 60}]})[0] == "running", "not on the pc yet: that has its own line"
     assert srv.chat_card({"status": "running", "updated": now - 31 * 60, "asks": []})[0] == "needs", "a new chat has no events yet"
+    assert srv.chat_card({"status": "running", "events": [{"at": now - 45 * 60}], "claimed": now - 60})[0] == "running", "it waited for a sleeping pc"
+    assert items[("chat", cids[2])]["status"] == "running", "the row offers Stop by the turn, not by its column"
     assert col("worker", "BRD-4") == "running" and items[("worker", "BRD-4")]["git"] == pill
     prog = items[("worker", "BRD-4")]["progress"]
     assert prog["commit"] == "feat: beds" and prog["commits"] == 2 and prog["changed"] == 0, prog

@@ -2904,6 +2904,8 @@ def machine_rows() -> list[dict]:
                      **({"advice": model_advice({a: v.get("models", []) for a, v in comp["agents"].items()}, advice, chosen)}
                         if advice and comp and comp.get("agents") else {}),
                      "actions": queue.get(mid, [])[-10:]})
+        if rows[-1]["companion"] and not rows[-1]["own"]:  # a raw command that waits is its owner's, also for an admin
+            rows[-1]["companion"].pop("asks", None)
     for n, cfg in tokens.items():  # plugins before 0.15.0: one row per token, from clients.json
         old = [c for s, c in read_json(CLIENTS_FILE, {}).get(n, {}).items() if now - c.get("at", 0) < SESSION_KEEP]
         if old and seen(n):
@@ -6032,7 +6034,8 @@ def chat_card(c: dict) -> tuple[str, str]:
             return "running", "waiting for the pc"
         if asks_open(c, time.time()):
             return "running", "waits for your approval"
-        last = (c.get("events") or [{}])[-1].get("at") or c.get("updated") or time.time()
+        # claimed: a message that waited for a sleeping pc: its turn starts now, not when it was sent
+        last = max((c.get("events") or [{}])[-1].get("at") or c.get("updated") or 0, c.get("claimed") or 0) or time.time()
         if QUIET_MINUTES and time.time() - last >= QUIET_MINUTES * 60:
             return "needs", f"no output since {since(last)}: still working, or stuck"
         return "running", "working"
@@ -6119,7 +6122,7 @@ def board_items() -> list[dict]:
             if col:
                 items.append({**base, "kind": "chat", "col": col, "id": c["id"], "agent": c.get("agent"), "project": c.get("project"),
                               "key": f"chat:{r['id']}/{c['id']}", "sig": str(c.get("next", 0)),
-                              "title": c.get("title") or "New chat", "folder": c.get("folder"), "at": c.get("updated") or 0,
+                              "title": c.get("title") or "New chat", "folder": c.get("folder"), "at": c.get("updated") or 0, "status": c.get("status"),
                               "line": line, "git": chat_git.get(c["id"]) if c.get("worktree") else git.get(c.get("folder")), "outcome": chat_outcome(c),
                               "subs": sum(1 for s in (c.get("subs") or {}).values() if s == "running")})
             if rv := chat_review_item(r, c):
@@ -6132,7 +6135,8 @@ def board_items() -> list[dict]:
                               "full": "\n" not in a["detail"] and len(f"{a['tool']}: {a['detail']}") <= 160 and a["detail"] == " ".join(a["detail"].split()),
                               "line": f"asks to run this ({c.get('title') or 'New chat'})" + (f": {a['reason']}" if a.get("reason") else ""),
                               "expires": a["expires"], "once_only": bool(a.get("once_only"))})
-        for a in comp.get("asks") or [] if r["online"] else []:  # answered at that terminal, not here: no Allow or Deny
+        # answered at that terminal, not here: no Allow or Deny. Only from a fresh report: a session's MCP keeps a pc "online"
+        for a in comp.get("asks") or [] if now - (comp.get("at") or 0) < ASKS_FRESH else []:
             items.append({**base, "kind": "terminal", "col": "needs", "id": a["session"], "agent": a["agent"], "project": a["project"],
                           "key": f"terminal:{r['id']}/{a['agent']}/{a['session']}", "sig": str(a["at"]), "title": " ".join(x for x in (a["tool"], a["detail"]) if x)[:160],
                           "at": a["at"], "line": "a terminal session may wait for your approval; a command you allowed may also still run" if a["agent"] == "agy"
@@ -6141,15 +6145,15 @@ def board_items() -> list[dict]:
             for w in ag.get("workers", []):
                 st, ended = w.get("status"), w.get("ended") or w.get("started") or 0
                 lost = st == "running" and not r["online"]  # its pc went offline: nobody knows whether it still runs
-                quiet = (w.get("progress") or {}).get("quiet", 0) if st == "running" and not lost and QUIET_MINUTES else 0
-                quiet = quiet if quiet >= QUIET_MINUTES * 60 else 0
+                seen = (w.get("progress") or {}).get("seen", 0) if st == "running" and not lost and QUIET_MINUTES else 0
+                quiet = seen if seen and now - seen >= QUIET_MINUTES * 60 else 0  # 0: an older companion sends no time
                 col = ("needs" if lost or quiet else "running" if st == "running" else "needs" if st == "failed" and now - ended < BOARD_FAILED
                        else "done" if st in ("finished", "stopped", "merged", "failed") and now - ended < BOARD_DONE else "")
                 if col:
                     items.append({**base, "kind": "worker", "col": col, "id": w.get("id"), "agent": a, "project": w.get("project"),
-                                  "key": f"worker:{r['id']}/{w.get('project')}/{w.get('id')}", "sig": f"{st}:{ended}" + (":offline" if lost else ":quiet" if quiet else ""), "quiet": quiet,
+                                  "key": f"worker:{r['id']}/{w.get('project')}/{w.get('id')}", "sig": f"{st}:{ended}" + (":offline" if lost else f":quiet:{quiet}" if quiet else ""), "quiet": quiet,
                                   "title": w.get("id"), "at": w.get("started") if st == "running" else ended,
-                                  "line": (f"pc offline since {since(r['at'])}" if lost else f"no output since {since(now - quiet)}: still working, or stuck" if quiet
+                                  "line": (f"pc offline since {since(r['at'])}" if lost else f"no output since {since(quiet)}: still working, or stuck" if quiet
                                            else f"worker {st}" + (f": {w['why']}" if w.get("why") else ""))
                                           + (f" · {w['branch']}" if w.get("branch") else ""),
                                   "offline_since": r["at"] if lost else None, "can_stop": st == "running" and r["online"],
@@ -6268,7 +6272,7 @@ async def ui_board_dismiss(request: Request):
     try:
         b = await request.json()
         key, sig, until = str(b.get("key", "")), str(b.get("sig", "")), b.get("until")
-        if not user or not re.fullmatch(r"(chat|worker|task|handover|review):[\w./-]{1,200}", key) or not 0 < len(sig) <= 80:
+        if not user or not re.fullmatch(r"(chat|worker|task|handover|review|terminal):[\w./-]{1,200}", key) or not 0 < len(sig) <= 80:
             raise ValueError("send JSON {key, sig} of a board item")
         if until is not None and (isinstance(until, bool) or not isinstance(until, (int, float)) or not time.time() < until <= time.time() + 30 * 86400):
             raise ValueError("until: Unix seconds in the future, at most 30 days ahead")
@@ -6346,6 +6350,7 @@ NEEDS_PER_HOUR = 6  # admin Settings; 0 = off
 # admin Settings; 0 = off. Measured on 68 real chats (7 Nov 2026): 3 of 13917 gaps in a turn above 30 min, 2 of them a turn
 # stuck at the usage limit. Only a notice, nothing is stopped: a long build is quiet too.
 QUIET_MINUTES = 30
+ASKS_FRESH = 300  # seconds; a companion reports every minute
 NEEDS_QUIET = float(os.environ.get("KNOWLEDGE_NEEDS_QUIET", 120))  # an admin who polled the board this recently sees it
 BOARD_SEEN: dict[str, float] = {}  # user -> last /ui/api/board poll (this process; a restart only means one message too many)
 
@@ -6851,7 +6856,7 @@ async def machine_chats(request: Request):
     if diffs:  # only when there are: an older companion ignores the key
         out["diffs"] = diffs
     for w in out["work"]:  # after the queue's lock: update_state's lock is not reentrant
-        await asyncio.to_thread(update_state, chat_file(mid, w["chat"]), lambda c: c.update(status="running"))
+        await asyncio.to_thread(update_state, chat_file(mid, w["chat"]), lambda c: c.update(status="running", claimed=time.time()))
     answers = []
 
     def answer(c, cid):  # decided approvals go out once; what waited too long goes out as denied
@@ -7285,7 +7290,7 @@ def report_asks(asks) -> list:
     """What terminal sessions on a pc wait for, from its companion: known secrets masked again here, every string capped."""
     out = []
     for a in asks[:20] if isinstance(asks, list) else []:
-        if isinstance(a, dict) and a.get("agent") in AGENT_OWNERS and isinstance(a.get("session"), str) and a["session"] \
+        if isinstance(a, dict) and isinstance(a.get("agent"), str) and a["agent"] in AGENT_OWNERS and isinstance(a.get("session"), str) and a["session"] \
                 and type(a.get("at")) in (int, float) and 0 < a["at"] < 1e11:  # not Infinity: it reaches json and str below
             out.append({"agent": a["agent"], "session": a["session"][:80], "tool": redact(str(a.get("tool") or "")[:80]), "detail": redact(str(a.get("detail") or "")[:200]),
                         "project": str(a.get("project") or "")[:60], "at": a["at"]})
@@ -7299,7 +7304,7 @@ def worker_progress(p) -> dict | None:
         return None
     num = lambda k: max(0, min(int(p[k]), 10**6)) if type(p.get(k)) is int else 0
     log = p.get("log") if isinstance(p.get("log"), list) else []
-    return {"commit": redact(str(p.get("commit") or "")[:200]), "commits": num("commits"), "changed": num("changed"), "quiet": num("quiet"),
+    return {"commit": redact(str(p.get("commit") or "")[:200]), "commits": num("commits"), "changed": num("changed"), "seen": p["seen"] if type(p.get("seen")) in (int, float) and 0 < p["seen"] < 1e11 else 0,
             "log": [redact(str(x)[:300]) for x in log[-3:]]}
 
 
