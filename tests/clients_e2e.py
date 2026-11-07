@@ -352,7 +352,9 @@ def claude_plugin(tok: str, home: Path, project: Path, garden: Path):
                                "tool_input": {"file_path": str(project / "docs" / "taxi.md")}},
                "SessionEnd": {**usage_hook(home, "claude", "claude-usage", "fix the taxi speed → ✅"), "cwd": str(project), "reason": "exit"},
                "PreCompact": {"hook_event_name": "PreCompact", "session_id": "s2", "transcript_path": str(transcript), "cwd": str(project)},
-               "UserPromptSubmit": {"hook_event_name": "UserPromptSubmit", "session_id": "s3", "cwd": str(project), "prompt": "hi"}}
+               "UserPromptSubmit": {"hook_event_name": "UserPromptSubmit", "session_id": "s3", "cwd": str(project), "prompt": "hi"},
+               "PermissionRequest": {"hook_event_name": "PermissionRequest", "session_id": "s4", "cwd": str(project), "tool_name": "Bash", "tool_input": {"command": "ls"}},
+               "Stop": {"hook_event_name": "Stop", "session_id": "s4", "cwd": str(project)}}
     hashes = home / ".config" / "knowledge-server" / "secret-hashes.json"  # an owner device has them (token.py push-secrets)
     hashes.parent.mkdir(parents=True, exist_ok=True)
     hashes.write_text(json.dumps([hashlib.sha256(b"Sup3rSecret99").hexdigest()]), encoding="utf-8")
@@ -364,7 +366,7 @@ def claude_plugin(tok: str, home: Path, project: Path, garden: Path):
         env = user_env(home, CLAUDE_PLUGIN_ROOT=root, CLAUDE_PLUGIN_OPTION_URL=BASE, CLAUDE_PLUGIN_OPTION_TOKEN=tok,
                        CLAUDE_PROJECT_DIR=str(project))
         outs = {}
-        for event in ("SessionStart", "PostToolUse", "PreToolUse", "SessionEnd", "UserPromptSubmit"):
+        for event in ("SessionStart", "PostToolUse", "PreToolUse", "SessionEnd", "UserPromptSubmit", "PermissionRequest", "Stop"):
             for group in hooks.get(event, []):
                 for hk in group["hooks"]:
                     if hk.get("asyncRewake"):  # waits in the background for a wake; wake_e2e runs it
@@ -552,6 +554,8 @@ def agents(tok: str, home: Path, project: Path, garden: Path):
                     "session-log": {**usage_hook(home, name, f"{name}-usage"), "cwd": str(project), "workspacePaths": [str(project)]},
                     "hints": {"invocationNum": 1, "workspacePaths": [str(project)]},
                     "tasks": {"hook_event_name": "UserPromptSubmit", "session_id": f"{name}-1", "cwd": str(project), "prompt": "hi"},
+                    "asks": {"session_id": f"{name}-1", "conversationId": f"{name}-1", "cwd": str(project), "workspacePaths": [str(project)], "tool_name": "Bash", "toolCall": {"name": "run_command"}},
+                    "settled": {"session_id": f"{name}-1", "conversationId": f"{name}-1", "cwd": str(project)},
                     "gate": {"hook_event_name": "PreToolUse", "session_id": f"{name}-1", "cwd": str(project), "tool_name": "spawn_agent",
                              "toolCall": {"name": "invoke_subagent"}},
                     "guard": {"hook_event_name": "PreToolUse", "cwd": str(project), "tool_name": "apply_patch",
@@ -570,6 +574,8 @@ def agents(tok: str, home: Path, project: Path, garden: Path):
                 kind = next(k for k in payloads if f" {k} " in f" {cmd} " or cmd.split(" ")[-2:-1] == [k])
                 code, out, err = run(wrap(cmd), json.dumps(payloads[kind]), hook_env, cwd=str(project))
                 check(code == 0, f"{name} via {label}: {kind} hook runs", err[-600:])
+                if kind in ("asks", "settled"):
+                    check(out.strip() == "", f"{name} via {label}: the {kind} hook prints nothing, so it decides nothing", out[:300])
                 if kind == "gate":
                     check(out.strip() == "", f"{name} via {label}: below the limit the subagent hook prints nothing", out[:300])
                 if kind == "watch":
@@ -2240,6 +2246,34 @@ def _quiet(f):
         return False
 
 
+def terminal_asks(tmp: Path):
+    """A terminal session that asks approval leaves a mark the companion reports, in every agent, through the commands
+    their own hook files name; the tool having run clears it, and a chat leaves none."""
+    root, sh = str(REPO / "plugin"), bash()
+    claude = json.loads((REPO / "plugin" / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
+    codex = json.loads((REPO / "plugin" / ".codex-plugin" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
+    agy = json.loads((REPO / "plugin" / "hooks.json").read_text(encoding="utf-8"))["knowledge"]
+    one = lambda groups, word: next(h for g in groups for h in (g.get("hooks") or [g]) if word in h["command"])
+    def as_codex(hk):
+        return codex_hook_argvs(hk, REPO / "plugin")[0][1]
+    agents = {"claude": (lambda hk: [sh, "-c", hk["command"]], one(claude["PermissionRequest"], "asks"), one(claude["Stop"], "settled"), {"session_id": "t-c", "tool_name": "Bash", "tool_input": {"command": "ls"}}, None),
+              "codex": (as_codex, one(codex["PermissionRequest"], "asks"), one(codex["Stop"], "settled"), {"session_id": "t-x", "tool_name": "Bash", "tool_input": {"command": "ls"}}, None),
+              "agy": ((lambda hk: f'cmd /d /s /c "{hk["command"]}"' if WIN else [shutil.which("sh"), "-c", hk["command"]]), one(agy["PreToolUse"], " asks"), one(agy["Stop"], "settled"),
+                      {"conversationId": "t-a", "workspacePaths": [str(tmp)], "toolCall": {"name": "run_command", "args": {"CommandLine": "ls"}}}, root)}
+    for name, (argv, asks, done, hook, cwd) in agents.items():
+        kn = tmp / f"asks-{name}"
+        env = {**{k: v for k, v in os.environ.items() if not k.startswith("KNOWLEDGE_")}, "KNOWLEDGE_HOME": str(kn), "CLAUDE_PLUGIN_ROOT": root}
+        marks = lambda: [json.loads(f.read_text(encoding="utf-8")) for f in (kn / "asks").glob("*.json")]
+        code, out, err = run(argv(asks), json.dumps(hook), env, cwd=cwd or str(tmp))
+        got = marks()
+        check(code == 0 and out.strip() == "" and len(got) == 1 and got[0]["agent"] == name and got[0]["detail"] == "ls",
+              f"{name}: a terminal session about to ask leaves a mark, and the hook decides nothing", f"{code} {out[:200]} {err[-300:]} {got}")
+        code, out, err = run(argv(done), json.dumps(hook), env, cwd=cwd or str(tmp))
+        check(code == 0 and out.strip() == "" and not marks(), f"{name}: the turn's end clears the mark", f"{code} {out[:200]} {err[-300:]}")
+        code, out, err = run(argv(asks), json.dumps(hook), {**env, "KNOWLEDGE_CHAT": "abc"}, cwd=cwd or str(tmp))
+        check(code == 0 and not marks(), f"{name}: a chat from the web UI leaves none: it has its own approvals", err[-300:])
+
+
 def new_task(agent: Path, env: dict, project: Path, tok: str, home: Path):
     """A task handed to Codex while its session runs reaches the next prompt once; the first prompt only remembers."""
     ask = lambda: run([sys.executable, str(agent), "tasks", "codex", "-"],
@@ -2447,9 +2481,11 @@ def codex_plugin(tok: str, home: Path, project: Path):
                 "PreCompact": {"hook_event_name": "PreCompact", "session_id": "cx-1", "cwd": str(project), "transcript_path": ""},
                 "SessionEnd": {**usage_hook(home, "codex", "cx-usage"), "cwd": str(project)},
                 "UserPromptSubmit": {"hook_event_name": "UserPromptSubmit", "session_id": "cx-3", "cwd": str(project), "prompt": "hi"},
-                "PreToolUse": {"hook_event_name": "PreToolUse", "session_id": "cx-4", "cwd": str(project), "tool_name": "spawn_agent"}}
+                "PreToolUse": {"hook_event_name": "PreToolUse", "session_id": "cx-4", "cwd": str(project), "tool_name": "spawn_agent"},
+                "PermissionRequest": {"hook_event_name": "PermissionRequest", "session_id": "cx-5", "cwd": str(project), "tool_name": "Bash", "tool_input": {"command": "ls"}},
+                "Stop": {"hook_event_name": "Stop", "session_id": "cx-5", "cwd": str(project)}}
     check(set(hooks) == set(payloads) and len(hooks["SessionStart"][0]["hooks"]) == 1,
-          "codex plugin: the six hook events, one SessionStart handler (openai/codex#45999)", str(list(hooks)))
+          "codex plugin: the eight hook events, one SessionStart handler (openai/codex#45999)", str(list(hooks)))
     for event, groups in hooks.items():
         for hk in (h for g in groups for h in g["hooks"]):
             for i, (shell, argv) in enumerate(codex_hook_argvs(hk, root)):
@@ -2657,7 +2693,8 @@ def agy_plugin(tok: str, home: Path, project: Path, garden: Path):
     hooks = json.loads((root / "hooks.json").read_text(encoding="utf-8"))["knowledge"]
     cmds = [h["command"] for e in hooks.values() for g in e for h in (g.get("hooks") or [g])]
     common = {"conversationId": "agy-plugin", "workspacePaths": [str(project)]}
-    payloads = {"context": common, "session-log": {**common, **usage_hook(home, "agy", "agy-plugin-usage")}, "hints": {**common, "invocationNum": 1},
+    payloads = {"asks": {**common, "toolCall": {"name": "run_command", "args": {"CommandLine": "ls"}}}, "settled": common,
+                "context": common, "session-log": {**common, **usage_hook(home, "agy", "agy-plugin-usage")}, "hints": {**common, "invocationNum": 1},
                 "docs-sync": {**common, "toolCall": {"name": "write_file", "args": {"Path": json.dumps(str(project / "docs" / "agy.md"))}}},
                 "wake": {**common, "toolCall": {"name": "call_mcp_tool", "args": {"ToolName": "knowledge_search"}}},
                 "gate": {**common, "toolCall": {"name": "invoke_subagent"}},
@@ -2672,6 +2709,8 @@ def agy_plugin(tok: str, home: Path, project: Path, garden: Path):
             check(out.strip() == "{}", "agy plugin: the watch hook answers {}", out[:300])
         if kind == "gate":  # agy reads any output, even {}, as a verdict: {} denied every subagent (27 Oct 2026)
             check(out.strip() == "", "agy plugin: below the limit the subagent hook prints nothing", out[:300])
+        if kind in ("asks", "settled"):  # the same: on every tool, {} would deny them all
+            check(out.strip() == "", f"agy plugin: the {kind} hook prints nothing", out[:300])
         if kind == "guard":
             check(out.strip() == "", "agy plugin: a clean edit gets no word from secret-guard", out[:300])
         if kind == "context":
@@ -3342,6 +3381,7 @@ def main():
         relay_errors(home)
         honest_errors(tok, tmp)
         hook_errors(tmp, project)
+        terminal_asks(tmp)
         knowledge_home(tok, tmp, project)
         companion_e2e(tok, tmp, project)
         chat_e2e(tok, tmp)

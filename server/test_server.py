@@ -1461,6 +1461,9 @@ def board_contract(tmp, ck, fr, raw, er, et):
     worker = lambda i, st, ended=None, **k: {"id": i, "project": "garden", "agent": "codex", "status": st, "started": now - 600, "ended": ended,
                                              "branch": f"task/{i}", **k}
     rep = {"version": "0.17.0", "workersAllowed": True, "agents": {"codex": {}, "claude": {}},
+           "asks": [{"agent": "claude", "session": "t-1", "tool": "Bash", "detail": "deploy Sup3rSecret99", "project": "garden", "at": now - 200},
+                    {"agent": "agy", "session": "t-2", "tool": "run_command", "detail": "make", "project": "", "at": now - 400},
+                    {"agent": "nobody", "session": "t-3", "at": now}, {"agent": "codex", "session": "t-4", "at": float("inf")}, "junk"],
            "folders": {"linked": [{"path": "/home/x/garden", "project": "garden", "git": {**pill, "changed": "3; rm -rf"}}]},
            "workers": [worker("BRD-4", "running", git=pill, progress={"commit": "feat: beds", "commits": 2, "changed": "3", "log": [
                "one", "two Sup3rSecret99", "three", "four " + "y" * 400]}), worker("BRD-Q", "running", progress={"quiet": 31 * 60}), worker("BRD-5", "failed", now - 60, why="ended without claiming or handing back its task"), worker("BRD-6", "finished", now - 60),
@@ -1488,6 +1491,11 @@ def board_contract(tmp, ck, fr, raw, er, et):
     assert reply["git"]["changed"] == 0, "a number the companion sent as text is no number"
     assert col("chat", cids[1]) == "needs" and items[("chat", cids[1])]["line"] == "refused: git push", items[("chat", cids[1])]
     assert col("chat", cids[2]) == "running"
+    # A terminal session that waits: under Needs you, masked, without Allow or Deny; what is not valid never gets there.
+    term = items[("terminal", "t-1")]
+    assert term["col"] == "needs" and term["title"] == "Bash deploy ‹secret›" and "that terminal" in term["line"] and term["project"] == "garden", term
+    assert "may wait" in items[("terminal", "t-2")]["line"], "agy has no approval event: the card says so"
+    assert not any(k == "terminal" and i not in ("t-1", "t-2") for k, i in items), "only what is valid"
     # No output for too long: it shows under Needs you with its reason, and a running worker keeps its task out of "open".
     quiet = items[("worker", "BRD-Q")]
     assert quiet["col"] == "needs" and quiet["line"].startswith("no output since") and quiet["can_stop"] and quiet["sig"].endswith(":quiet"), quiet

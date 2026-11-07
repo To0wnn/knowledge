@@ -351,20 +351,21 @@ function ckItem(i) {
   main.type = "button"; card.dataset.key = main.dataset.row = i.key || "";
   const chat = i.kind === "chat" || i.kind === "ask" ? ck.chats.find((c) => ckKey(c) === `${i.machine}/${i.kind === "ask" ? i.chat : i.id}`) : null;
   if (i.kind === "chat" && chat && ckKey(chat) === ck.view) main.setAttribute("aria-current", "true");
-  top.append(el("span", "ck-mark", AGENT_MARK[i.agent] || (i.owner || "?")[0].toUpperCase()), el("strong", null, i.kind === "ask" ? ckUnbidi(i.title) : i.title));
+  top.append(el("span", "ck-mark", AGENT_MARK[i.agent] || (i.owner || "?")[0].toUpperCase()), el("strong", null, i.kind === "ask" || i.kind === "terminal" ? ckUnbidi(i.title) : i.title));
   if (i.overdue) top.append(el("span", "chip bad", "overdue"));
   if (i.subs) { const s = el("span", "chip live", `${i.subs} subagent${i.subs > 1 ? "s" : ""}`); s.title = "Subagents of this chat running now"; top.append(s); }
   // a chat's second line is the agent's last sentence when there is one; why it needs you moves up to the first
   const why = i.kind === "chat" && i.outcome && i.col === "needs" ? (i.line.startsWith("replied: ") ? "answered, not read" : i.line) : "";
-  const where = [why, i.kind === "review" ? `review · ${AGENT_NAME[i.agent] || i.agent}` : i.kind === "worker" ? "worker" : i.kind === "task" ? (i.result ? "result" : `task for ${i.owner}`) : i.kind === "ask" ? "approval" : "", i.label, ckShort(i.folder),
+  const where = [why, i.kind === "review" ? `review · ${AGENT_NAME[i.agent] || i.agent}` : i.kind === "worker" ? "worker" : i.kind === "terminal" ? `terminal · ${i.label}` : i.kind === "task" ? (i.result ? "result" : `task for ${i.owner}`) : i.kind === "ask" ? "approval" : "", i.label, ckShort(i.folder),
     agentProject ? "" : shown(i.project || ""), i.due && !i.result ? `due ${i.due}` : "", i.at ? ago(i.at) : ""];
   main.append(top, el("span", "ck-item-where", where.filter(Boolean).join(" · ")), el("span", "ck-item-line", (i.kind === "chat" && i.outcome) || i.line));
   if (i.kind === "worker" && i.why && !i.line.includes(i.why)) main.append(el("span", "ck-item-why", i.why)); // the line says why and "pc offline since"
   if (i.progress) main.append(workerProgress(i.progress));
   if (i.kind === "review") main.append(ckReview(i));
   card.append(main);
-  main.title = i.kind === "chat" || i.kind === "ask" ? "Open this chat" : i.kind === "task" || i.kind === "review" ? "Open its line in the memo" : "Follow this worker";
+  main.title = i.kind === "terminal" ? "Answer it in that terminal" : i.kind === "chat" || i.kind === "ask" ? "Open this chat" : i.kind === "task" || i.kind === "review" ? "Open its line in the memo" : "Follow this worker";
   main.onclick = () => {
+    if (i.kind === "terminal") return; // nothing to open here: it is answered in that terminal
     if (i.kind === "chat") return ckShow(chat || i);
     if (i.kind === "ask") return ckShow(chat);
     if (i.kind === "task") { return openNote(i.path, { find: [i.id.toLowerCase()] }); }

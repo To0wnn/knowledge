@@ -1516,6 +1516,35 @@ def review(w: dict, now: float):
         return None
 
 
+# Seconds a terminal session's mark must stay before Needs you shows it: a prompt answered at the terminal never gets
+# there. In real turns 99% of the gaps are under a minute (7 Nov 2026, 252125 gaps). agy marks every tool, so it waits
+# longer: its long commands look the same. shortcut: agy's own language server knows a step that waits for approval
+# (undocumented, only with a registered agy); use it if these false alarms hurt.
+ASK_AFTER = {"claude": 120, "codex": 120, "agy": 300}
+ASK_KEEP = 86400
+
+
+def terminal_asks(now: float) -> list:
+    """What terminal sessions here have been asking for a while (watch.py's marks). A mark goes when it is a day old or
+    when that agent runs no more at all: a killed session has no SessionEnd."""
+    out, alive = [], {}
+    for f in sorted(agent_hooks.KN_HOME.joinpath("asks").glob("*.json")):
+        try:
+            a = json.loads(f.read_text(encoding="utf-8"))
+            agent, age = a["agent"], now - a["at"]
+            if agent not in alive:
+                alive[agent] = agent not in PROCESS or running(agent)
+            if age > ASK_KEEP or not alive[agent]:
+                f.unlink(missing_ok=True)
+            elif age >= ASK_AFTER.get(agent, 120):
+                cwd = str(a.get("cwd") or "")
+                out.append({"agent": agent, "session": str(a["session"])[:80], "tool": mask(str(a.get("tool") or "")), "detail": mask(str(a.get("detail") or "")),
+                            "project": agent_hooks.project_query(cwd).get("project", "") if cwd and answering(cwd) else "", "at": a["at"]})
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            f.unlink(missing_ok=True)
+    return out[:20]
+
+
 def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, resets=None):
     """The machine's state for the Machines list: settings, game, per agent YOLO, hooks and limit, the workers, and
     why each ready task waits here (the Tasks tab shows it)."""
@@ -1533,7 +1562,7 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
                          "checkpoint": bool(w.get("checkpoint")), "merged": w["status"] == "merged", "git": gits.get(k),
                          **({"progress": progress(w, gits.get(k))} if w["status"] == "running" else {}),
                          **({"review": r} if (r := bounded(w.get("repo"), lambda w=w: review(w, now))) else {})} for k, w in sorted(ws.items(), key=lambda kw: -(kw[1].get("started") or 0)) if not w.get("archived")],  # newest first: the server keeps 40
-            "limitWait": wait, "waiting": waiting or {}, "folders": links, "chats": chat_gits, "chatReviews": chat_reviews(now, chat_gits), "projects": load("state.json", {}).get("projects", [])}
+            "limitWait": wait, "waiting": waiting or {}, "asks": terminal_asks(now), "folders": links, "chats": chat_gits, "chatReviews": chat_reviews(now, chat_gits), "projects": load("state.json", {}).get("projects", [])}
     answer = server("POST", "/machine/report", tok, body)
     try:
         clean_chat_branches(answer.get("closed_chats") or [])
@@ -2583,6 +2612,22 @@ def main(argv: list):
                 pass
         finally:
             g["log"] = real_log
+        # A terminal's mark shows once it stayed; a prompt answered in time never gets there, and an old or orphaned one goes.
+        with tempfile.TemporaryDirectory() as t:
+            real_home, real_running = agent_hooks.KN_HOME, g["running"]
+            agent_hooks.KN_HOME, g["running"] = Path(t), lambda a: a != "agy"
+            box = Path(t) / "asks"; box.mkdir()
+            mark = lambda n, agent, at: (box / f"{n}.json").write_text(json.dumps({"agent": agent, "session": n, "tool": "Bash", "detail": "ls", "at": at}), encoding="utf-8")
+            try:
+                mark("fresh", "claude", 1000 - 60); mark("waits", "claude", 1000 - 130); mark("old", "claude", 1000 - 90000)
+                mark("codex", "codex", 1000 - 130); mark("gone", "agy", 1000 - 400); (box / "bad.json").write_text("{", encoding="utf-8")
+                assert [a["session"] for a in terminal_asks(1000)] == ["codex", "waits"]
+                assert sorted(f.stem for f in box.glob("*.json")) == ["codex", "fresh", "waits"], "old, orphaned and broken marks go"
+                g["running"] = lambda a: True
+                mark("agy1", "agy", 1000 - 200); mark("agy2", "agy", 1000 - 400)
+                assert [a["session"] for a in terminal_asks(1000) if a["agent"] == "agy"] == ["agy2"], "agy marks every tool: it waits longer"
+            finally:
+                agent_hooks.KN_HOME, g["running"] = real_home, real_running
         # A started worker is on disk before the next task starts: killed in between, a restart still knows it.
         kept = {k: g[k] for k in ("settings", "usage_info", "check_workers", "why_not", "installed", "start_worker", "log", "save", "load", "workers")}
         saved, seen = {}, []

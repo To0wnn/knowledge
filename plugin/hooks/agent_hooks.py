@@ -626,6 +626,9 @@ def main(argv: list):
     elif cmd == "watch" and rest[:1] and rest[0] in ("claude", "codex", "agy") and len(rest) <= 2:
         import watch  # the script setup's hooks come through here; the plugins start watch.py directly (faster)
         watch.main(rest[0])
+    elif cmd in ("asks", "settled") and rest[:1] and rest[0] in ("claude", "codex", "agy") and len(rest) <= 2:
+        import watch  # the script setup; the plugins start watch.py directly
+        watch.run_mark([rest[0], cmd])
     elif cmd == "register" and not rest:
         register_agy()
     elif cmd == "mcp" and len(rest) <= 1:

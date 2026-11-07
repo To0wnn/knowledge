@@ -102,9 +102,11 @@ def hook_config(agent: str, name: str) -> dict:
                             {"matcher": ".*", "hooks": [{"type": "command", "command": cmd("watch", "agy"), "timeout": 10}]}],
             "PreToolUse": [{"matcher": "invoke_subagent", "hooks": [{"type": "command", "command": cmd("gate", "agy"), "timeout": 10}]},
                            {"matcher": "write_file|edit_file|write_to_file|replace_file_content|multi_replace_file_content",
-                            "hooks": [{"type": "command", "command": cmd("guard", "agy"), "timeout": 10}]}],
+                            "hooks": [{"type": "command", "command": cmd("guard", "agy"), "timeout": 10}]},
+                           {"matcher": ".*", "hooks": [{"type": "command", "command": cmd("asks", "agy"), "timeout": 10}]}],
             "PostInvocation": [{"type": "command", "command": cmd("hints"), "timeout": 10}],  # docs-sync's hint, once
-            "Stop": [{"type": "command", "command": cmd("session-log"), "timeout": 15}]}}
+            "Stop": [{"type": "command", "command": cmd("session-log"), "timeout": 15},
+                     {"type": "command", "command": cmd("settled", "agy"), "timeout": 10}]}}
     # One SessionStart handler only: with several, Codex drops the context (openai/codex#45999).
     # SessionEnd hooks may take at most 3 seconds.
     return {"hooks": {
@@ -114,11 +116,15 @@ def hook_config(agent: str, name: str) -> dict:
                         {"matcher": "mcp__.*knowledge_(edit|write|new_memo)",
                          "hooks": [{"type": "command", "command": cmd("wake", "codex"), "timeout": 40}]},
                         {"matcher": ".*", "hooks": [{"type": "command", "command": cmd("watch", "codex"), "timeout": 10}]}],
-        "UserPromptSubmit": [{"hooks": [{"type": "command", "command": cmd("tasks", "codex"), "timeout": 8}]}],
+        "PermissionRequest": [{"matcher": ".*", "hooks": [{"type": "command", "command": cmd("asks", "codex"), "timeout": 10}]}],
+        "Stop": [{"hooks": [{"type": "command", "command": cmd("settled", "codex"), "timeout": 10}]}],
+        "UserPromptSubmit": [{"hooks": [{"type": "command", "command": cmd("tasks", "codex"), "timeout": 8},
+                                        {"type": "command", "command": cmd("settled", "codex"), "timeout": 8}]}],
         "PreToolUse": [{"matcher": ".*spawn_agent", "hooks": [{"type": "command", "command": cmd("gate", "codex"), "timeout": 10}]},
                        {"matcher": "apply_patch", "hooks": [{"type": "command", "command": cmd("guard", "codex"), "timeout": 10}]}],
         "PreCompact": [{"hooks": [{"type": "command", "command": cmd("session-log"), "timeout": 15}]}],
-        "SessionEnd": [{"hooks": [{"type": "command", "command": cmd("session-log"), "timeout": 3}]}]}}
+        "SessionEnd": [{"hooks": [{"type": "command", "command": cmd("session-log"), "timeout": 3},
+                                  {"type": "command", "command": cmd("settled", "codex"), "timeout": 3}]}]}}
 
 
 def fetch(path: str, tok: str) -> str:
@@ -1254,7 +1260,7 @@ def main(argv: list):
         if not rest:  # a vault name (the machine that holds the files) keeps the URL it is given
             ensure_url()
         install(argv[1], rest[0] if rest else "-")
-    elif cmd in ("context", "docs-sync", "session-log", "hints", "tasks", "wake", "gate", "guard", "watch", "take", "register", "serve", "companion"):  # hooks written by the setup call this script
+    elif cmd in ("context", "docs-sync", "session-log", "hints", "tasks", "wake", "gate", "guard", "watch", "asks", "settled", "take", "register", "serve", "companion"):  # hooks written by the setup call this script
         agent_hooks.SETUP = "script"  # its auto-update: git pull + install, not the plugin CLI
         agent_hooks.main(argv)
     else:

@@ -2897,7 +2897,7 @@ def machine_rows() -> list[dict]:
         rows.append({"id": mid, "label": m.get("label", mid), "at": m.get("at", 0), "online": now - m.get("at", 0) < ONLINE,
                      "tokens": names, "own": any(own_token(tokens[n], dev) for n in names), "agents": agents,
                      "mine": any(own_token(tokens[n], dev, steer=False) for n in names),
-                     "companion": {**{k: comp.get(k) for k in ("version", "at", "workersAllowed", "game", "maxWorkers", "folders", "projects", "token", "live", "chats", "chatReviews")},
+                     "companion": {**{k: comp.get(k) for k in ("version", "at", "workersAllowed", "game", "maxWorkers", "folders", "projects", "token", "live", "chats", "chatReviews", "asks")},
                                    "agents": sorted(comp.get("agents") or {}),
                                    "models": {a: v.get("models", []) for a, v in (comp.get("agents") or {}).items()},
                                    "current": {a: v.get("current", {}) for a, v in (comp.get("agents") or {}).items()}} if comp else None,
@@ -6132,6 +6132,11 @@ def board_items() -> list[dict]:
                               "full": "\n" not in a["detail"] and len(f"{a['tool']}: {a['detail']}") <= 160 and a["detail"] == " ".join(a["detail"].split()),
                               "line": f"asks to run this ({c.get('title') or 'New chat'})" + (f": {a['reason']}" if a.get("reason") else ""),
                               "expires": a["expires"], "once_only": bool(a.get("once_only"))})
+        for a in comp.get("asks") or [] if r["online"] else []:  # answered at that terminal, not here: no Allow or Deny
+            items.append({**base, "kind": "terminal", "col": "needs", "id": a["session"], "agent": a["agent"], "project": a["project"],
+                          "key": f"terminal:{r['id']}/{a['agent']}/{a['session']}", "sig": str(a["at"]), "title": " ".join(x for x in (a["tool"], a["detail"]) if x)[:160],
+                          "at": a["at"], "line": "a terminal session may wait for your approval; a command you allowed may also still run" if a["agent"] == "agy"
+                          else "a terminal session asks your approval, or still runs what you allowed: answer it in that terminal"})
         for a, ag in r["agents"].items():
             for w in ag.get("workers", []):
                 st, ended = w.get("status"), w.get("ended") or w.get("started") or 0
@@ -7276,6 +7281,17 @@ def git_pill(g) -> dict | None:
             "changed": num("changed"), "ahead": num("ahead"), "behind": num("behind")}
 
 
+def report_asks(asks) -> list:
+    """What terminal sessions on a pc wait for, from its companion: known secrets masked again here, every string capped."""
+    out = []
+    for a in asks[:20] if isinstance(asks, list) else []:
+        if isinstance(a, dict) and a.get("agent") in AGENT_OWNERS and isinstance(a.get("session"), str) and a["session"] \
+                and type(a.get("at")) in (int, float) and 0 < a["at"] < 1e11:  # not Infinity: it reaches json and str below
+            out.append({"agent": a["agent"], "session": a["session"][:80], "tool": redact(str(a.get("tool") or "")[:80]), "detail": redact(str(a.get("detail") or "")[:200]),
+                        "project": str(a.get("project") or "")[:60], "at": a["at"]})
+    return out
+
+
 def worker_progress(p) -> dict | None:
     """A running worker's progress snapshot from its companion: newest commit subject, commits and changed files, the
     last 3 log lines; known secrets masked again here and every string capped. None when it sent none."""
@@ -7331,6 +7347,7 @@ async def machine_report(request: Request):
                               for k in ("linked", "candidates")},
                   "projects": [str(p)[:80] for p in (b.get("projects") or [])[:100]],
                   # "Own branch" chats: the git pill of each one's worktree, by chat id
+                  "asks": report_asks(b.get("asks")),
                   "chats": {str(k): git_pill(g) for k, g in list((b.get("chats") or {}).items())[:50] if re.fullmatch(r"[0-9a-f]{12}", str(k))},
                   "chatReviews": {str(k): worker_review(g) for k, g in list((b.get("chatReviews") or {}).items())[:50] if re.fullmatch(r"[0-9a-f]{12}", str(k))},
                   "waiting": {str(k)[:120]: str(v)[:200] for k, v in list((b.get("waiting") or {}).items())[:50]}}

@@ -1,5 +1,5 @@
 {
-  "description": "Load the shared knowledge context at session start, turn on auto-update for this plugin once, log each session, tell a running session about tasks handed to it meanwhile, let the companion on this machine start a worker when a task is handed over, tell a worker to hand over at 90% of the usage limit, watch YOLO sessions for risky actions (never blocking), warn at 50/75/90% of the usage limit and refuse new subagents from 95%, guard secrets, and mirror a guest project's Markdown (folders with .knowledge-project) and keep an offline copy of the memory and the shared skills that syncs both ways",
+  "description": "Load the shared knowledge context at session start, turn on auto-update for this plugin once, log each session, tell a running session about tasks handed to it meanwhile, let the companion on this machine start a worker when a task is handed over, tell a worker to hand over at 90% of the usage limit, watch YOLO sessions for risky actions (never blocking), warn at 50/75/90% of the usage limit and refuse new subagents from 95%, show under Needs you what a terminal session waits for, guard secrets, and mirror a guest project's Markdown (folders with .knowledge-project) and keep an offline copy of the memory and the shared skills that syncs both ways",
   "hooks": {
     "SessionStart": [
       {
@@ -75,6 +75,11 @@
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/py.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/docs-sync.py\"",
             "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/py.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/watch.py\" claude settled",
+            "timeout": 10
           }
         ]
       }
@@ -96,6 +101,11 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/py.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/agent_hooks.py\" tasks claude",
+            "timeout": 8
+          },
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/py.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/watch.py\" claude settled",
             "timeout": 8
           }
         ]
@@ -155,6 +165,29 @@
           {
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/py.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/watch.py\" claude",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/py.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/watch.py\" claude asks",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/py.sh\" \"${CLAUDE_PLUGIN_ROOT}/hooks/watch.py\" claude settled",
             "timeout": 10
           }
         ]

@@ -5,6 +5,8 @@ from a phone. The pc side runs in the companion ([companion.md](companion.md)).
 
 ## Agents
 
+- **Terminal sessions under Needs you:** a session you started yourself shows on the board when it waits for your approval: the plugin's hook leaves a mark in `~/.knowledge/asks`, and the companion reports a mark that stayed 2 minutes in its next report. The row names the tool and its command and offers Dismiss and Snooze, no Allow or Deny: you answer in that terminal. Claude Code and Codex have a `PermissionRequest` event, but none for "approved", so a long command you allowed looks the same until it ends; the row says so. agy has no such event: its mark comes from `PreToolUse` on every tool, stays 5 minutes before it shows, and says "may wait". A mark goes when the tool ran, the turn ended, the next prompt came, that agent no longer runs on the pc, or after a day. Needs the companion on that pc.
+
 - **Agents (chat with your agents):** only for a person with at least one token whose "Agents (remote control)"
   switch is on ([companion.md](companion.md#agents-remote-control-per-token)). The keys this doc names are the defaults: Settings can change each one, per person, and the send key can also be Enter or Shift+Enter ([web-ui.md](web-ui.md)). The web UI's **Agents** view (route `#/chats`, Alt+A, the start page;
   `#/inbox` keeps working and opens the same view) is one list on the left with the open chat on the right, fed by the
@@ -12,7 +14,7 @@ from a phone. The pc side runs in the companion ([companion.md](companion.md)).
   project. The header filters the list and Tasks to one project ("show all" says how many Needs-you items the filter
   hides) and shows when the fullest usage window resets. The list is grouped: **Needs you**, each row saying why (a
   chat whose agent answered and you have not opened since, a refused tool call or error in its last turn, an approval
-  it asks, a chat turn or running worker with no output for 30 minutes (admin page, Settings, `quiet_minutes`; 0 = off;
+  it asks, a terminal session on one of your pcs that asks approval (see below), a chat turn or running worker with no output for 30 minutes (admin page, Settings, `quiet_minutes`; 0 = off;
   only a notice, nothing is stopped: a long build is quiet too; a worker counts its log and its hook after each tool call, so agy, whose `-p` logs nothing until it ends, is covered), a failed worker of the last week with the companion's reason (`why`), a worker whose pc went offline ("pc
   offline since <time>", no Stop), a task line waiting for your approval, a task woken that nobody took, a result or
   hand-over to a person (`result`: read it, then remove the line; it never starts anything), a task whose "start

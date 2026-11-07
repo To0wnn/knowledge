@@ -10,10 +10,18 @@
   push, rm -rf outside the project, curl|sh, reading key or token files, or reading the vault goes to the companion's
   activity log and once per session and kind to the server (one Matrix notice).
 
+- A terminal session about to ask approval leaves a mark in ~/.knowledge/asks, cleared once the tool ran, the turn ended
+  or the next prompt came; the companion reports marks that stayed, so Needs you also shows what waits in a terminal.
+  The hooks never talk to the server here: a prompt answered in time costs nothing. Claude Code and Codex have
+  PermissionRequest. agy has no such event, so its mark comes from PreToolUse on every tool (and says "may").
+
   watch.py <claude|codex|agy>     the hook (stdin: the agent's PostToolUse JSON)
+  watch.py <agent> asks           PermissionRequest (agy: PreToolUse); prints nothing, so it never decides anything
+  watch.py <agent> settled        Stop, SessionEnd, UserPromptSubmit: that session asks nothing any more; prints nothing
   watch.py --self-test
 Standard library only; never fails a turn.
 """
+import hashlib
 import json
 import os
 import re
@@ -22,6 +30,7 @@ import time
 from pathlib import Path
 
 KN_HOME = Path(os.environ.get("KNOWLEDGE_HOME") or Path.home() / ".knowledge")
+ASKS = KN_HOME / "asks"
 RISKS = (  # (kind, pattern over the tool input as text); rm-outside is checked apart
     ("force-push", re.compile(r"\bgit\b[^\n;&|]*\bpush\b[^\n;&|]*(?:--force\b|--force-with-lease\b|\s-f\b|\s\+\S)")),
     ("pipe-to-shell", re.compile(r"\b(?:curl|wget|iwr|Invoke-WebRequest)\b[^\n;]*\|\s*(?:sudo\s+)?(?:ba|z|da)?sh\b|\biex\b.*\b(?:iwr|irm)\b", re.I)),
@@ -121,14 +130,59 @@ def steered(f: Path, chat: bool = False) -> str:
                      + str(m.get("text", "")) for m in msgs if isinstance(m, dict))
 
 
+def session_of(hook: dict) -> str:
+    return str(hook.get("session_id") or hook.get("conversationId") or "")
+
+
+def ask_mark(sid: str) -> Path:
+    return ASKS / (hashlib.sha256(sid.encode("utf-8", "replace")).hexdigest()[:24] + ".json")
+
+
+def asks(agent: str):
+    """A terminal session is about to ask approval: the mark the companion reports if it stays. A chat or worker has
+    its own way to ask, and YOLO asks nothing."""
+    hook = json.loads(sys.stdin.read() or "{}")
+    sid = session_of(hook)
+    if not sid or os.environ.get("KNOWLEDGE_CHAT") or os.environ.get("KNOWLEDGE_WORKER") or yolo_on(agent):
+        return
+    call = hook.get("toolCall") if isinstance(hook.get("toolCall"), dict) else {}
+    what = hook.get("tool_input") or call.get("args") or {}
+    what = next((what[k] for k in ("command", "CommandLine", "file_path", "Path") if isinstance(what, dict) and isinstance(what.get(k), str)), what)
+    what = what if isinstance(what, str) else json.dumps(what, ensure_ascii=False)
+    cwd = hook.get("cwd") or (hook.get("workspacePaths") or [os.getcwd()])[0]
+    ASKS.mkdir(parents=True, exist_ok=True)
+    tmp = ask_mark(sid).with_name(f"{ask_mark(sid).name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps({"agent": agent, "session": sid, "tool": str(hook.get("tool_name") or call.get("name") or "")[:80],
+                               "detail": " ".join(what.split())[:200], "cwd": str(cwd), "at": time.time()}), encoding="utf-8")
+    os.replace(tmp, ask_mark(sid))
+
+
+def settled(hook: dict):
+    if sid := session_of(hook):
+        ask_mark(sid).unlink(missing_ok=True)
+
+
+def any_asks() -> bool:
+    try:
+        with os.scandir(ASKS) as found:
+            return next(found, None) is not None
+    except OSError:
+        return False
+
+
 def main(agent: str):
     worker, chat = os.environ.get("KNOWLEDGE_WORKER", ""), re.sub(r"[^0-9a-f]", "", os.environ.get("KNOWLEDGE_CHAT", ""))[:12]
-    yolo = yolo_on(agent)
-    if not (worker or yolo or chat):
+    yolo, marked = yolo_on(agent), any_asks()
+    if not (worker or yolo or chat or marked):
         print("{}")
         return
     hook = json.loads(sys.stdin.read() or "{}")
-    sid = str(hook.get("session_id") or hook.get("conversationId") or "")
+    if marked:
+        settled(hook)
+    if not (worker or yolo or chat):
+        print("{}")
+        return
+    sid = session_of(hook)
     cwd = hook.get("cwd") or (hook.get("workspacePaths") or [os.getcwd()])[0]
     if yolo:
         text = json.dumps(hook.get("tool_input") or hook.get("toolCall") or hook.get("toolInput") or {}, ensure_ascii=False)
@@ -161,6 +215,14 @@ def main(agent: str):
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": note}} if note and agent != "agy" else {}))
 
 
+def run_mark(argv: list):
+    """asks or settled, as a hook: whatever goes wrong, a tool call and the turn go on, and nothing is printed."""
+    try:
+        (asks(argv[0]) if argv[1] == "asks" else settled(json.loads(sys.stdin.read() or "{}")))
+    except Exception as e:
+        print(f"knowledge watch skipped: {e}", file=sys.stderr)
+
+
 def self_test():
     cwd = os.path.join(os.sep, "w", "proj")
     kinds = lambda t: [k for k, _ in risky(t, cwd)]
@@ -182,6 +244,23 @@ def self_test():
         f.write_text(json.dumps({"by": "alice", "text": "stop and test"}) + "\n", encoding="utf-8")
         said = steered(f, chat=True)
         assert "pressed Force" in said and said.endswith("stop and test") and not f.exists(), said
+    import subprocess
+    with tempfile.TemporaryDirectory() as t:  # a mark stays until the tool ran; a chat, a worker and YOLO leave none
+        env = {**os.environ, "KNOWLEDGE_HOME": t}
+        for k in ("KNOWLEDGE_CHAT", "KNOWLEDGE_WORKER", "KNOWLEDGE_YOLO"):
+            env.pop(k, None)
+        hook = lambda *a, e=env, **h: subprocess.run([sys.executable, __file__, *a], input=json.dumps(h), capture_output=True, text=True, env=e, check=True).stdout
+        marks = lambda: [json.loads(f.read_text(encoding="utf-8")) for f in (Path(t) / "asks").glob("*.json")]
+        assert hook("claude", "asks", session_id="s", cwd="/p", tool_name="Bash", tool_input={"command": "rm  x\ny"}) == "", "prints nothing: no decision"
+        assert [(m["agent"], m["tool"], m["detail"], m["cwd"]) for m in marks()] == [("claude", "Bash", "rm x y", "/p")], marks()
+        assert hook("agy", "asks", conversationId="c", workspacePaths=["/q"], toolCall={"name": "run_command", "args": {"CommandLine": "ls"}}) == ""
+        assert sorted(m["detail"] for m in marks()) == ["ls", "rm x y"], marks()
+        assert hook("claude", session_id="other") == "{}\n" and len(marks()) == 2, "another session's tool leaves it"
+        assert hook("claude", session_id="s") == "{}\n" and [m["session"] for m in marks()] == ["c"], "the tool ran"
+        assert hook("agy", "settled", conversationId="c") == "" and marks() == []
+        for extra in ({"KNOWLEDGE_CHAT": "c"}, {"KNOWLEDGE_WORKER": "T-1"}, {"KNOWLEDGE_YOLO": "1"}):
+            assert hook("codex", "asks", e={**env, **extra}, session_id="y", tool_name="Bash") == "" and marks() == [], extra
+        assert subprocess.run([sys.executable, __file__, "codex", "asks"], input="nope", capture_output=True, text=True, env=env).returncode == 0
     import subprocess  # a chat turn: the main agent's hook hands it over, a subagent's (agent_id) leaves it
     with tempfile.TemporaryDirectory() as t:
         box = Path(t) / "companion" / "chats"
@@ -201,6 +280,8 @@ def self_test():
 if __name__ == "__main__":
     if "--self-test" in sys.argv:
         self_test()
+    elif sys.argv[1:2] and sys.argv[1] in ("claude", "codex", "agy") and sys.argv[2:3] and sys.argv[2] in ("asks", "settled"):
+        run_mark(sys.argv[1:3])
     elif sys.argv[1:2] and sys.argv[1] in ("claude", "codex", "agy"):
         try:
             main(sys.argv[1])

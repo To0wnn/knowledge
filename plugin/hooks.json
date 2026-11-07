@@ -51,6 +51,11 @@
         "type": "command",
         "command": "python3 -X utf8 hooks/agent_hooks.py session-log",
         "timeout": 15
+      },
+      {
+        "type": "command",
+        "command": "python3 -X utf8 hooks/watch.py agy settled",
+        "timeout": 10
       }
     ],
     "PreToolUse": [
@@ -70,6 +75,16 @@
           {
             "type": "command",
             "command": "python3 -X utf8 hooks/agent_hooks.py guard agy",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -X utf8 hooks/watch.py agy asks",
             "timeout": 10
           }
         ]
