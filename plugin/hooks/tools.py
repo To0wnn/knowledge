@@ -6,6 +6,7 @@ more than a tool id (the companion's rule that no free text reaches a pc). A man
 
     {"name", "description", "homepage", "needs": [command on PATH, ...],
      "path": [folder put in front of PATH for every step], "env": {"NAME": "value"} (every step),
+     "bin": {"name": [argv]} (a launcher per program in ~/.local/bin, so an agent finds it on its own PATH),
      "install": [step], "check": [step], "remove": [step], "version": step}
     step = one of {"run": [argv]}, {"fetch": fetch}, {"delete": "<name in the tools folder>"}, plus
            "os": ["linux"|"darwin"|"windows"], "agent": "claude"|"codex"|"agy",
@@ -18,7 +19,9 @@ more than a tool id (the companion's rule that no free text reaches a pc). A man
              "asset": {"<os>-<x64|arm64>": "regex of the file name" or {"match": regex, "strip": folders to drop}},
              "into": "<name in the tools folder>"}
 
-"{tools}" in an argument, a path or an env value is the tools folder (~/.knowledge/tools). A step with "agent" runs
+"{tools}" in an argument, a path or an env value is the tools folder (~/.knowledge/tools), "{exe}" and "{cmd}" are
+".exe" and ".cmd" on Windows and nothing elsewhere; an env value that starts with "?" is set only when that path exists (an engine this
+platform has no build of). A step with "agent" runs
 only when that agent is installed here, one with "os" only on those systems; a fetch with no asset for this platform
 is skipped. Install runs again as the update: "@latest" in a step, a fetch takes the newest release (and skips it
 when that one is there already). Standard library only; Python 3.9.
@@ -29,6 +32,7 @@ import os
 import platform
 import posixpath
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -50,8 +54,10 @@ AGENTS = ("claude", "codex", "agy")
 ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 NAME = re.compile(r"^[\w][\w.-]{0,79}$")  # a file or folder right in the tools folder
 STEP_KEYS = {"run", "fetch", "delete", "os", "agent", "ok_if", "expect", "info", "timeout", "env"}
-TOP_KEYS = {"name", "description", "homepage", "needs", "path", "env", "install", "check", "remove", "version"}
+TOP_KEYS = {"name", "description", "homepage", "needs", "path", "env", "bin", "install", "check", "remove", "version"}
 TIMEOUT = 900  # an npm install of a large package on a slow line
+SHIMS = Path(os.environ.get("KNOWLEDGE_SHIMS") or Path.home() / ".local" / "bin")  # Claude Code, uv and pipx put theirs here too
+MARK = "knowledge-tool-launcher"
 MAX_DOWNLOAD = 3 << 30  # Ghidra is 0.6 GB
 RETRY_WAIT = 5.0
 
@@ -65,8 +71,9 @@ def validate(m: dict) -> dict:
     if not isinstance(m, dict) or set(m) - TOP_KEYS or not isinstance(m.get("name"), str) or not m.get("install"):
         raise ValueError(f"needs name and install, and only the keys {sorted(TOP_KEYS)}")
     if not (all(isinstance(c, str) for c in m.get("needs", [])) and all(isinstance(c, str) for c in m.get("path", []))
-            and strings(m.get("env", {}))):
-        raise ValueError("needs and path are lists of strings, env maps names to strings")
+            and strings(m.get("env", {})) and isinstance(m.get("bin", {}), dict)
+            and all(re.fullmatch(r"[\w][\w.-]{0,40}", k) and isinstance(v, list) and v and all(isinstance(a, str) for a in v) for k, v in m.get("bin", {}).items())):
+        raise ValueError("needs and path are lists of strings, env maps names to strings, bin maps program names to argv")
     all_steps = [*m.get("install", []), *m.get("check", []), *m.get("remove", []), *([m["version"]] if "version" in m else [])]
     for s in all_steps:
         if not isinstance(s, dict) or set(s) - STEP_KEYS or len({"run", "fetch", "delete"} & set(s)) != 1:
@@ -123,12 +130,14 @@ def steps(m: dict, key: str, agents) -> list:
 
 
 def fill(text: str) -> str:
-    return text.replace("{tools}", str(TOOLS))
+    return text.replace("{tools}", str(TOOLS)).replace("{exe}", ".exe" if OS == "windows" else "").replace("{cmd}", ".cmd" if OS == "windows" else "")
 
 
 def environment(m: dict, s: dict) -> dict:
     """This pc's environment with the tool's path folders in front of PATH and its env, then the step's env."""
-    env = {**os.environ, **{k: fill(v) for k, v in {**m.get("env", {}), **s.get("env", {})}.items()}}
+    raw = {**m.get("env", {}), **s.get("env", {})}
+    mine = {k: fill(v[1:] if v.startswith("?") else v) for k, v in raw.items()}
+    env = {**os.environ, **{k: v for k, v in mine.items() if not raw[k].startswith("?") or Path(v).exists()}}
     front = [str(Path(fill(p))) for p in m.get("path", []) if Path(fill(p)).is_dir()]
     env["PATH"] = os.pathsep.join(front + [env.get("PATH", "")])
     return env
@@ -315,6 +324,8 @@ def fetch(f: dict) -> tuple:
                 unpack(part, name, new, spec.get("strip", 1) if isinstance(spec, dict) else 1)
             else:
                 part.rename(new)
+                if os.name != "nt":  # a single program (micromamba) must run; a jar does not mind
+                    new.chmod(0o755)
             if dest.exists():  # a file in use (Windows) fails here, before anything changed
                 dest.rename(Path(tmp) / "old")
             new.rename(dest)
@@ -337,6 +348,57 @@ def delete(name: str) -> tuple:
         return True, "", f"{name} deleted"
     except OSError as e:
         return False, "", f"{name}: {e}"
+
+
+def ours(f: Path) -> bool:
+    try:
+        with open(f, "rb") as h:  # ~/.local/bin also holds big programs: read the head only
+            return MARK in h.read(300).decode("utf-8", "replace")
+    except OSError:
+        return False
+
+
+def launcher(argv: list) -> str:
+    if OS == "windows":  # cmd reads a .cmd in the OEM code page: a home folder's non-ASCII name breaks, so go from %~dp0
+        text = f"@echo off\r\nrem {MARK}: made by the knowledge companion\r\n" + " ".join(f'"{a}"' for a in argv) + " %*\r\n"
+        return text.replace(str(Path.home()) + "\\", "%~dp0..\\..\\") if SHIMS == Path.home() / ".local" / "bin" else text
+    return f"#!/bin/sh\n# {MARK}: made by the knowledge companion\nexec " + " ".join(shlex.quote(a) for a in argv) + ' "$@"\n'
+
+
+def link(m: dict, on: bool = True) -> list:
+    """Write (or with on=False remove) the tool's launchers; the names left out because another program has them."""
+    skipped = []
+    for name, argv in m.get("bin", {}).items():
+        f, argv = SHIMS / (name + (".cmd" if OS == "windows" else "")), [fill(a) for a in argv]
+        if f.exists() and not ours(f):
+            skipped.append(name)
+        elif not on or not Path(argv[0]).exists():  # removed, or no build of it for this platform
+            f.unlink(missing_ok=True) if f.exists() else None
+        else:
+            SHIMS.mkdir(parents=True, exist_ok=True)
+            with open(f, "w", encoding="utf-8", newline="") as out:  # write_text has no newline= on Python 3.9
+                out.write(launcher(argv))
+            f.chmod(0o755)
+    if on and OS == "windows" and m.get("bin"):
+        user_path(SHIMS)
+    return skipped
+
+
+def user_path(folder: Path):
+    """Put the launcher folder on the user's own PATH (no admin), as scoop and uv do, and tell running programs."""
+    if os.environ.get("KNOWLEDGE_COMPANION_DRY_RUN") == "1":  # the tests never touch this user's PATH
+        return
+    import ctypes
+    import winreg
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_READ | winreg.KEY_WRITE) as k:
+        try:
+            have, kind = winreg.QueryValueEx(k, "Path")
+        except FileNotFoundError:
+            have, kind = "", winreg.REG_EXPAND_SZ
+        if str(folder).lower() in [os.path.expandvars(p).strip().lower() for p in have.split(";")]:
+            return
+        winreg.SetValueEx(k, "Path", 0, kind, (have.rstrip(";") + ";" if have else "") + str(folder))
+    ctypes.windll.user32.SendMessageTimeoutW(0xFFFF, 0x1A, 0, "Environment", 2, 5000, None)
 
 
 def do(m: dict, s: dict) -> tuple:
@@ -383,11 +445,16 @@ def install(m: dict, agents) -> dict:
         good, out, text = do(m, s)
         if not good:
             raise RuntimeError(said(s, text, out))
-    return check(m, agents)
+    skipped = link(m)
+    got = check(m, agents)
+    if skipped:  # never overwrite another program's file, but say so
+        got["detail"] = (f"not linked, another program has the name: {', '.join(skipped)}; " + got["detail"])[:300]
+    return got
 
 
 def remove(m: dict, agents) -> dict:
     """Every remove step, also after one failed: a registration left behind is worse than a package left behind."""
+    link(m, on=False)
     failed = [said(s, text, out) for s in steps(m, "remove", agents) for good, out, text in [do(m, s)] if not good]
     if failed:
         raise RuntimeError("; ".join(failed)[:500])
@@ -395,7 +462,7 @@ def remove(m: dict, agents) -> dict:
 
 
 def self_test():
-    global TOOLS, API, RETRY_WAIT
+    global TOOLS, API, RETRY_WAIT, SHIMS
     import io
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -448,6 +515,24 @@ def self_test():
                 raise AssertionError(f"refused: {typo}")
             except ValueError:
                 pass
+        shims_was, SHIMS = SHIMS, Path(d) / "shims"
+        os.environ["KNOWLEDGE_COMPANION_DRY_RUN"] = "1"  # never this user's real PATH
+        try:  # launchers: ours written and removed, a foreign file kept, a program this platform lacks skipped
+            SHIMS.mkdir()
+            ext = ".cmd" if OS == "windows" else ""
+            (SHIMS / ("foreign" + ext)).write_text("someone else's")
+            lm = {**m, "bin": {"hello": [py, "-c", "print('hi from the launcher')"], "foreign": [py], "absent": [str(Path(d) / "none")]}}
+            got = install(lm, [])
+            out = subprocess.run([str(SHIMS / ("hello" + ext))], capture_output=True, text=True).stdout
+            assert "hi from the launcher" in out and "another program has the name: foreign" in got["detail"], (out, got)
+            assert (SHIMS / ("foreign" + ext)).read_text() == "someone else's" and not (SHIMS / ("absent" + ext)).exists()
+            try:
+                remove(lm, [])
+            except RuntimeError:
+                pass  # its remove steps fail on purpose (above)
+            assert not (SHIMS / ("hello" + ext)).exists() and (SHIMS / ("foreign" + ext)).exists()
+        finally:
+            SHIMS = shims_was
         (Path(d) / "good.json").write_text(json.dumps(m), encoding="utf-8")
         (Path(d) / "broken.json").write_text("{", encoding="utf-8")
         (Path(d) / "Bad Name.json").write_text(json.dumps(m), encoding="utf-8")
@@ -554,8 +639,10 @@ def self_test():
             assert ok and (TOOLS / "tool.jar").read_bytes() == b"JAR", text
             assert delete("engine")[0] and not (TOOLS / "engine").exists() and "engine" not in json.loads((TOOLS / ".versions.json").read_text())
             (TOOLS / "pbin").mkdir()
-            env = environment({"path": ["{tools}/pbin", "{tools}/none"], "env": {"A": "{tools}/a"}}, {"env": {"B": "b"}})
+            env = environment({"path": ["{tools}/pbin", "{tools}/none"], "env": {"A": "{tools}/a", "C": "?{tools}/pbin", "D": "?{tools}/none{exe}"}}, {"env": {"B": "b"}})
             assert env["PATH"].split(os.pathsep)[0] == str(TOOLS / "pbin") and env["A"] == str(TOOLS / "a") and env["B"] == "b", env["PATH"][:200]
+            assert env["C"] == str(TOOLS / "pbin") and "D" not in env, "a ? value only when its path is there"
+            assert os.name == "nt" or os.access(TOOLS / "tool.jar", os.X_OK), "a single fetched file can run"
         finally:
             srv.shutdown()
             TOOLS, API = old[0], old[1]

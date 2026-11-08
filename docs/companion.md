@@ -75,7 +75,11 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   `~/.knowledge/tools`, the old copy replaced only once the new one is complete and checked; skipped when that release
   is there already, or when no file fits this platform) or `delete` (a name in that folder). `{tools}` in an argument,
   `path` or `env` value is `~/.knowledge/tools`; the manifest's `path` goes in front of PATH and its `env` into every
-  step, so a tool can bring its own runtime without admin rights. Downloads are https only, tried three times on a
+  step, so a tool can bring its own runtime without admin rights (`{exe}`/`{cmd}`: `.exe`/`.cmd` on Windows; an env
+  value starting with `?` is set only when that path exists). `"bin": {"name": [argv]}` writes a small launcher per
+  program into `~/.local/bin` (where Claude Code, uv and pipx put theirs, so it is on PATH; on Windows it is added to
+  the user's own PATH), so an agent finds the program without the tool's env. A file there that is not one of our
+  launchers is never overwritten (the list says which name was taken); remove deletes ours. Downloads are https only, tried three times on a
   server error, and use a `GH_TOKEN` or `GITHUB_TOKEN` from the environment for the GitHub API when one is set. `agent`: only when that agent is installed; `os`: only on
   `linux`, `darwin` or `windows`; `ok_if`: output text that makes a non-zero exit fine ("already"); `expect`: a regex
   the output must match; `info` (check only): reported but never marks the tool unhealthy. Install stops at the first
@@ -83,9 +87,11 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   plugin restart does), a step stops after 15 minutes with its whole process tree, and the result or the error shows in
   the Tools list and in the companion's Activity. Update is install again, so steps use `@latest` or the agent's own marketplace
   update. A JSON report's failed `checks` or its `remediation` become the one line the page shows.
-- **Shipped:** `rea` (its own Node.js LTS, Temurin JDK LTS, Ghidra and jadx-headless-mcp in `~/.knowledge/tools`,
-  npm `rea-agents` into a prefix there, registered with `rea setup` per agent so the agents get those engines, checked
-  with `rea doctor`; Linux-only engines such as tshark or binwalk are left to the system), `ponytail` (each agent's own
+- **Shipped:** `rea` (its own Node.js LTS, Temurin JDK LTS, Ghidra, jadx-headless-mcp, Apktool, WABT and rizin, and on
+  Linux binwalk and mitmproxy from conda-forge through micromamba, all in `~/.knowledge/tools` without root; tshark,
+  sigrok and unblob have no build without root and stay with the system;
+  npm `rea-agents` into a prefix there, registered with `rea setup` per agent, which passes Ghidra, the JDK and JADX to
+  each agent; the other engines reach agents through launchers; checked with `rea doctor`), `ponytail` (each agent's own
   plugin command) and `no-ai-slop` (the skills CLI, telemetry off). The Node.js and JDK major versions are in the
   manifest (`latest-v26.x`, `temurin25-binaries`): move them when a newer LTS is out. Ghidra is the newest 12.1.x,
   the line REA 6.8.0 accepts (its doctor refuses 12.2): move the `tag` when REA takes a newer line. On Linux and macOS
