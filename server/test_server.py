@@ -126,6 +126,26 @@ def tasks_contract(tmp, ck, fr, ver, raw):
     assert not add("- open until 2099-01-01 [Codex, DAT-1] from Gemini, start 1 jan 2098: later")[0]
     err, res = add("- open until 2099-01-01 [Codex, APR-1] from Gemini, start after approval: risky")
     assert not err and "Task APR-1 waits for the owner's approval in the Tasks tab (waits for approval)" in res, res
+    # A task a session (not a worker) writes: the answer asks to claim it when the session does it itself, and the
+    # approve buttons warn for a while (8 Nov 2026: a chat did the task while a worker started the same one).
+    def mcall(line, extra=None):
+        body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_edit", "arguments":
+                {"path": path, "old_string": "## Keuzes", "new_string": line + "\n## Keuzes"}}}
+        res = json.loads(http("POST", "/mcp", body, fr, headers={"X-Knowledge-Machine": "d0d0d0d0d0d0d0d0", "X-Knowledge-Machine-Label": "desk-pc", **(extra or {})})[1])["result"]
+        return res.get("isError", False), "".join(c.get("text", "") for c in res["content"])
+    dup = {"DUP-1": "- open until 2099-01-01 [Claude, DUP-1] from Gemini, start after approval: the same work twice",
+           "DUP-3": "- open until 2099-01-01 [Claude, DUP-3] (claimed Claude, 2026-11-08) from Gemini, start now: mine already"}
+    err, res = mcall(dup["DUP-1"])
+    assert not err and "Not claimed: DUP-1" in res and "claim it now" in res, res
+    assert "in a session on desk-pc, not by a worker" in rows()["DUP-1"]["approve_warning"], rows()["DUP-1"]
+    err, res = mcall(dup["DUP-3"])
+    assert not err and "Not claimed" not in res and rows()["DUP-3"]["approve_warning"] == "", (res, rows()["DUP-3"])
+    dup["DUP-2"] = "- open until 2099-01-01 [Claude, DUP-2] from Gemini, start after approval: a worker hands it on"
+    err, res = mcall(dup["DUP-2"], {"X-Knowledge-Worker": "WK-1"})
+    assert "Not claimed" not in res, res  # a worker writes what others do; it never does it itself
+    for line in dup.values():
+        if not (err and line == dup["DUP-2"]):  # a worker may be refused that write: then there is nothing to remove
+            call("knowledge_edit", {"path": path, "old_string": line + "\n", "new_string": ""}, fr)
     # Refused, not silently wrong: an unknown "start after" ID would start at once; a date without year is no task.
     err, res = add("- open until 2099-01-01 [Codex, DEP-9] from Gemini, start after NOPE-77: typo")
     assert err and "no task NOPE-77" in res, res
@@ -607,6 +627,14 @@ def machines_contract(tmp, ck, fr, raw, er, et, heard):
                                                   "started": time.time() - 9 * 86400, "ended": time.time() - 8 * 86400, "branch": "task/MC-0"}]}
     assert http("POST", "/machine/report", old, token=fr, headers=pc)[0] == 200
     assert any("MC-0" in i and "task/MC-0 not merged" in i for i in json.loads(http("GET", "/lint")[1]).get("worker_unmerged", [])), http("GET", "/lint")[1][:500]
+    # a worker its owner stopped from the page ended "failed": it says so and does not wait in Needs you
+    stopped = {**rep, "limitWait": [], "workers": [*rep["workers"], {"id": "MC-5", "project": "garden", "agent": "codex", "status": "failed",
+                                                                     "started": time.time() - 600, "ended": time.time() - 60, "owner_stopped": True}]}
+    assert http("POST", "/machine/report", stopped, token=fr, headers=pc)[0] == 200
+    got = next(w for w in json.loads(raw("GET", "/ui/api/machines", headers=ck)[2])["machines"] if w["id"] == "cccccccccccccccc")["agents"]["codex"]["workers"]
+    assert next(w for w in got if w["id"] == "MC-5")["owner_stopped"] is True and next(w for w in got if w["id"] == "MC-1")["owner_stopped"] is False, got
+    card = next(i for i in json.loads(raw("GET", "/ui/api/board", headers=ck)[2])["items"] if i["kind"] == "worker" and i["id"] == "MC-5")
+    assert card["col"] != "needs" and card["line"].startswith("stopped by you"), card
     http("POST", "/machine/report", rep, token=fr, headers=pc)
     # A risky YOLO action: flagged once per session and kind, never refused.
     flag = lambda kind: json.loads(http("POST", "/machine/flag", {"agent": "codex", "session": "w1", "kind": kind, "detail": "git push --force"}, token=fr, headers=pc)[1])
@@ -849,10 +877,11 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     for x in json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"]:  # taken, or the next test finds it
         http("POST", "/machine/actions/result", {"id": x["id"], "status": "done", "result": "ok"}, token=fr, headers=pc)
     tools = {"rea": {"name": "REA", "homepage": "javascript:alert(1)", "installed": True, "ok": "yes", "version": "6.8.0", "detail": "x" * 999,
-                     "at": float("inf"), "busy": "rm -rf"},
-             "Bad Id": {"name": "no"}}
+                     "at": float("inf"), "busy": "rm -rf", "kind": "program"},
+             "slop": {"name": "Slop", "kind": "<b>"}, "Bad Id": {"name": "no"}}
     assert http("POST", "/machine/report", {**mrep, "tools": tools}, token=fr, headers=pc)[0] == 200
     got = [a for a in json.loads(ui("/ui/api/machines")[2])["machines"] if a["id"] == mid][0]["companion"]["tools"]
+    assert got.pop("slop")["kind"] == "" and got["rea"]["kind"] == "program", got  # the page's label: skill or program, nothing else
     assert list(got) == ["rea"] and got["rea"]["homepage"] == "" and got["rea"]["ok"] is None and got["rea"]["installed"] is True \
         and len(got["rea"]["detail"]) == 300 and got["rea"]["version"] == "6.8.0" and got["rea"]["at"] is None and got["rea"]["busy"] == "", got
     failed = {"rea": {"name": "REA", "installed": True, "error": "fetch: jdk: HTTP Error 503"}}

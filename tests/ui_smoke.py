@@ -673,6 +673,7 @@ async def shell(browser, devices, secret: str) -> None:
             current: document.querySelector('#sidebar [aria-current=page]')?.dataset.nav, title: $('title').textContent})""", {"el": VIEW_EL[v]})
         check(st["shown"] and st["only"] and st["current"] == v, f"route #/{v}: its view alone, its nav item current {st}")
     await route(pg, "#/machines", ms=1500)
+    await pg.evaluate("document.querySelectorAll('.machine-tabs [data-key=agents]').forEach((b) => b.click())")  # YOLO and max workers sit under Agents
     yolo = await pg.evaluate("""() => ({switches: document.querySelectorAll('.machine-controls .yolo-switch input[role=switch]').length,
         own: document.querySelectorAll('.machine-head .machine-actions').length, old: [...document.querySelectorAll('.machine-controls button')].some(b => /Forget|YOLO/.test(b.textContent))})""")
     if yolo["own"]:
@@ -681,7 +682,20 @@ async def shell(browser, devices, secret: str) -> None:
           i.value = ''; i.dispatchEvent(new Event('change')); return {max: i.max, min: i.min, label: i.closest('label').textContent, back: i.value === was}; }""")
         check(most and most["max"] == "" and most["min"] == "0" and "0: no limit" in most["label"] and most["back"], f"Machines: workers at a time is a free number, 0 is no limit, an empty field changes nothing {most}")
     # The folder chooser on a pc of your own; the pc's answers and the link are stand-ins, so nothing changes (also live).
-    await pg.evaluate("document.querySelectorAll('.machine-sessions').forEach((d) => { d.open = true; })")  # a closed one hides its button
+    tabs = await pg.evaluate("""async () => { const card = document.querySelector('#machines > .machine'); if (!card) return null;
+      const tab = (k) => card.querySelector(`.machine-tabs [data-key=${k}]`), id = card.dataset.machine;
+      if (!tab('tools')) return {skip: true};
+      tab('tools').click(); const kinds = [...card.querySelectorAll('.machine-panel .pill[class*=kind-]')].map((p) => p.textContent);
+      await loadMachines(); const again = document.querySelector(`#machines > .machine[data-machine="${id}"] .machine-tabs [aria-selected=true]`)?.dataset.key;
+      return {kinds, again, title: workerTitle({id: 'K-1', title: '\u00ab(claimed Gemini worker, 2026-11-06): fix the beds'})}; }""")
+    check(tabs and (tabs.get("skip") or tabs["again"] == "tools"), f"Machines: the tab a person picked stays picked when the list refreshes {tabs}")
+    check(tabs and tabs.get("title", "fix the beds") == "fix the beds", f"Machines: a worker's title drops the claim marker of its task line {tabs}")
+    words = await pg.evaluate("""() => { const now = Date.now() / 1000, w = (x) => ({id: 'K-1', started: now - 600, ended: now - 60, ...x});
+      return [workerState(w({status: 'failed', owner_stopped: true})), workerState(w({status: 'finished'})), workerNeedsYou({online: true}, w({status: 'failed', owner_stopped: true}))]; }""")
+    check(words[0].startswith("stopped by you") and words[1].startswith("done") and words[2] is False, f"Machines: a worker stopped from the page is not a failure, finished reads as done {words}")
+    if os.environ.get("KNOWLEDGE_SMOKE_WRITES"):  # the seeded pc of tests/ui_ci.py lists a skill and a program
+        check(tabs and sorted(tabs.get("kinds") or []) == ["Program", "Skill"], f"Machines: each tool is labelled Skill or Program {tabs}")
+    await pg.evaluate("document.querySelectorAll('.machine-tabs [data-key=folders]').forEach((b) => b.click())")  # Choose a folder sits under Folders
     if await pg.get_by_role("button", name="Choose a folder…").count():
         tree = {"": {"path": "", "parent": None, "linkable": False, "dirs": [{"name": "C:\\", "path": "C:\\"}, {"name": "D:\\", "path": "D:\\"}]},
                 "D:\\": {"path": "D:\\", "parent": "", "linkable": False, "dirs": [{"name": "Sim", "path": "D:\\Sim"}]},
@@ -1628,8 +1642,10 @@ async def one_lamp(browser, secret: str) -> None:
     map_ = await pg.evaluate("""() => ({w: $('graph').getBoundingClientRect().width, main: document.querySelector('.main').getBoundingClientRect().width, left: getComputedStyle($('topics-pane')).display, right: getComputedStyle($('side')).display})""")
     check(map_["w"] >= map_["main"] - 2 and map_["left"] != "none" and map_["right"] == "none", f"the map takes the whole page, the topic list floats over it {map_}")
     await route(pg, "#/machines", "#machines .machine, #machines p", 800)
-    fold = await pg.evaluate("""() => { const off = [...document.querySelectorAll('.machine.offline')]; return {n: off.length, folded: off.filter((m) => m.querySelector(':scope > .machine-fold') && m.querySelector('.machine-head .machine-meta')).length, order: [...document.querySelectorAll('.machine')].map((m) => m.classList.contains('offline'))}; }""")
-    check(fold["n"] == fold["folded"] and fold["order"] == sorted(fold["order"]), f"offline pcs come last, on one line with the rest folded {fold}")
+    fold = await pg.evaluate("""() => { const kids = [...$('machines').children], first = kids.findIndex((k) => k.matches('.machines-offline'));
+      const off = [...document.querySelectorAll('.machine-offline')];
+      return {n: off.length, closed: off.filter((d) => !d.open && d.children.length === 1).length, last: first === -1 || kids.slice(first + 1).every((k) => !k.matches('.machine'))}; }""")
+    check(fold["n"] == fold["closed"] and fold["last"], f"offline pcs come last, on one line with the rest folded {fold}")
     await route(pg, "#/tasks", "#tasks > *", 1000)
     spill = await pg.evaluate("""() => { const t = $('tasks').textContent; return {none: /No tasks in /.test(t), others: /In your other projects/.test(t), rows: document.querySelectorAll('#tasks li.task').length, badge: $('tasks-count').textContent}; }""")
     check(not spill["others"] or (spill["rows"] > 0 and spill["badge"] != ""), f"a project without tasks shows the work elsewhere, and the badge counts it {spill}")

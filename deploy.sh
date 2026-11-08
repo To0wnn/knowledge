@@ -11,6 +11,9 @@ git merge-base --is-ancestor FETCH_HEAD HEAD || { echo "deploy refused: this che
 # The checks do not parse the web UI's JavaScript: a stopped rebase once went live with conflict markers in it.
 if [ -n "$(git ls-files -u)" ] || git grep -qE '^(<<<<<<<|>>>>>>>) ' -- server plugin clients watcher; then echo "deploy refused: unresolved merge conflict in this checkout" >&2; exit 1; fi
 [ -f local.env ] || { echo "local.env missing: copy local.env.example and fill in the addresses" >&2; exit 1; }
+# Before local.env is read: exported, this installation's settings (projects, language) leak into the tests'
+# in-process server and fail them (8 Nov 2026); --unless-passed had hidden that while the tree was already stamped.
+./check.sh --unless-passed  # the pre-commit hook usually just ran it on this very tree
 set -a; . ./local.env; set +a
 # What is live must be part of what goes live, or this deploy takes it off the server again: a fix deployed from a
 # branch vanished twice when someone deployed main. --replace-live: on purpose, e.g. a deployed branch was rebased.
@@ -20,7 +23,6 @@ if [ -n "$live" ] && [ "${1:-}" != --replace-live ] && ! git merge-base --is-anc
   echo "deploy refused: live runs $live, which this checkout lacks; merge it into your branch first (or ./deploy.sh --replace-live to take it off the server)" >&2; exit 1
 fi
 cp local.env server/.env  # docker compose reads the addresses from .env next to compose.yaml
-./check.sh --unless-passed  # the pre-commit hook usually just ran it on this very tree
 cd server
 ssh "$KNOWLEDGE_FORGE_SSH" "mkdir -p $STACK /root/docker/knowledge/config /root/docker/knowledge/state && chown 1000:1000 /root/docker/knowledge/state"
 rsync -a --delete --exclude .venv --exclude __pycache__ ./ "$KNOWLEDGE_FORGE_SSH:$STACK/"

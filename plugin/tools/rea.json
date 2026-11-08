@@ -1,4 +1,5 @@
 {
+  "kind": "program",
   "name": "REA",
   "description": "Reverse engineering for agents: native binaries, JavaScript/Electron, .NET, Android and websites (MCP server and skill). Brings its own Node.js, JDK, Ghidra, JADX, Apktool, adb, WABT and rizin, and on Linux binwalk and mitmproxy, in ~/.knowledge/tools.",
   "homepage": "https://github.com/morluto/rea",

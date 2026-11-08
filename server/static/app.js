@@ -1144,7 +1144,9 @@ async function loadTasks(render = true) {
       (t.author ? `\nWritten by ${t.author}` : "") + (t.stalled ? "\nWoken, but nobody claimed it within 30 minutes." : "");
     const acts = el("div", "task-acts"), act = (text, title, fn, cls = "btn small") => { const b = el("button", cls, text); b.type = "button"; b.title = title; b.onclick = fn; acts.append(b); return b; };
     const run = (fn) => async () => { try { await fn(); loadTasks(true); } catch (e) { toast(e.message); } };
-    if (t.can_approve) act("Approve", "Let this task start (it waits for the project owner's or an admin's approval)", run(() => post("/ui/api/task/approve", { project: t.project, id: t.id })));
+    const approve = run(() => post("/ui/api/task/approve", { project: t.project, id: t.id }));
+    if (t.can_approve) act("Approve", "Let this task start (it waits for the project owner's or an admin's approval)" + (t.approve_warning ? `\n\n${t.approve_warning}` : ""),
+      () => (!t.approve_warning || confirm(`${t.approve_warning}\n\nApprove ${t.id} anyway?`)) && approve());
     for (const h of t.hosts || []) act(`Start on ${h.label}`, "Start a worker for this task there now",
       run(async () => { await post("/ui/api/machines/action", { machine: h.machine, action: "start_worker", args: { project: t.project, id: t.id } }); toast(`Asked ${h.label} to start ${t.id}`, false); }));
     for (const { w, m } of workersOf(t)) { // its worker: where, how far, and Stop / Restart right here
@@ -1267,233 +1269,446 @@ async function machineAction(m, action, args = {}) {
   }
   setTimeout(loadMachines, 4000); // the report that follows the action
 }
-function machineButton(text, title, onclick) {
-  const b = el("button", "btn small", text); b.type = "button"; b.title = title;
-  // the pc carries the action out a moment later: a spinner and "…ing" until it reports back (machineAction waits)
-  const busy = /Turn on/.test(text) ? "Turning on…" : /Turn off/.test(text) ? "Turning off…" : "Working…";
+// A button for an action a pc carries out a moment later: a spinner and "Working…" until it reports back. `busy`: the
+// list says this action still waits or runs (the card is redrawn on every refresh, so the button cannot remember it).
+function machineButton(text, title, onclick, busy = false, cls = "btn small") {
+  const b = el("button", cls, text); b.type = "button"; b.title = title;
+  const on = () => { b.disabled = true; b.classList.add("busy"); b.textContent = "Working…"; b.setAttribute("aria-busy", "true"); };
+  if (busy) on();
   b.onclick = async () => {
     const run = onclick();
     if (!run || typeof run.then !== "function") return; // cancelled (a prompt answered no): nothing to wait for
-    b.disabled = true; b.classList.add("busy"); b.textContent = busy; b.setAttribute("aria-busy", "true");
-    try { await run; } finally { b.disabled = false; b.classList.remove("busy"); b.removeAttribute("aria-busy"); b.textContent = text; }
+    on();
+    try { await run; } finally { if (b.isConnected) { b.disabled = false; b.classList.remove("busy"); b.removeAttribute("aria-busy"); b.textContent = text; } }
   };
   return b;
 }
-// What acts on the whole pc sits in its card head: Chat and Update plugin, Forget (destructive) behind ⋯ with a confirm.
+const pendingAction = (m, action, match = () => true) => (m.actions || []).some((x) => (x.status === "waiting" || x.status === "running") && x.action === action && match(x.args || {}));
 // The newest plugin any of your pcs reports, when this pc has an older one ("" otherwise).
 const versionParts = (v) => String(v).split(".").map(Number);
 const versionNewer = (a, b) => { const x = versionParts(a), y = versionParts(b); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); return false; };
+const newestPlugin = () => machinesCache.flatMap((pc) => Object.values(pc.agents || {}).map((ag) => ag.plugin).filter(Boolean)).reduce((a, v) => (versionNewer(v, a) ? v : a), "0");
 function pluginBehind(m) {
-  const plugins = (pc) => Object.values(pc.agents || {}).map((ag) => ag.plugin).filter(Boolean);
-  const newest = machinesCache.flatMap(plugins).reduce((a, v) => (versionNewer(v, a) ? v : a), "0");
-  return plugins(m).some((v) => versionNewer(newest, v)) ? newest : "";
+  const newest = newestPlugin();
+  return Object.values(m.agents || {}).some((ag) => ag.plugin && versionNewer(newest, ag.plugin)) ? newest : "";
 }
+// What acts on the whole pc sits in its card head: Chat and Update plugin, the rarer ones and Forget behind ⋯.
 function machineActions(m) {
-  const box = el("span", "machine-actions"), c = m.companion;
-  if (c && (c.agents || []).length && (c.folders?.linked || []).length) box.append(machineButton("Chat", "Talk to an agent on this pc (Chats)", async () => { go("#/chats"); if (!ck.machines.length) await ckSummary().catch(() => {}); ckNewChat(m.id); }));
-  const update = () => machineAction(m, "update_plugin"), behind = c && pluginBehind(m);
-  if (behind && m.online) box.append(machineButton("Update plugin", `Update the knowledge plugin of every agent there (${behind} is out)`, update));
+  const box = el("span", "machine-actions"), c = m.companion, steer = m.own && !m.old;
+  if (steer && c && (c.agents || []).length && (c.folders?.linked || []).length) box.append(machineButton("Chat", "Talk to an agent on this pc (Chats)", async () => { go("#/chats"); if (!ck.machines.length) await ckSummary().catch(() => {}); ckNewChat(m.id); }));
+  const update = () => machineAction(m, "update_plugin"), behind = steer && c && pluginBehind(m);
+  if (behind && m.online) box.append(machineButton("Update plugin", `Update the knowledge plugin of every agent there (${behind} is out)`, update, pendingAction(m, "update_plugin")));
+  if (!m.mine) return box;
   const menu = el("details", "menu machine-more"), sum = el("summary", "btn small icon", "⋯"), list = el("div", "menu-list");
   sum.setAttribute("aria-label", `More for ${m.label}`); sum.title = "More";
-  if (c && !(behind && m.online)) list.append(actionButton("Update plugin", () => { menu.open = false; update(); }, ""));
-  if (c) list.append(actionButton("Update agents", () => { menu.open = false; machineAction(m, "update_agents"); }, ""));
+  if (steer && c && !(behind && m.online)) list.append(actionButton("Update plugin", () => { menu.open = false; update(); }, ""));
+  if (steer && c) list.append(actionButton("Update agents", () => { menu.open = false; machineAction(m, "update_agents"); }, ""));
   list.append(actionButton("Forget this pc…", async () => {
     menu.open = false;
-    if (!confirm(`Forget ${m.label}? It leaves this list and comes back when it reports again; its actions and history here go.`)) return;
+    if (!confirm(`Forget ${m.label}? It leaves this list and comes back when it reports again; its actions, history and chats on the server go.`)) return;
     try { await api("/ui/api/machines/forget", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: m.id }) }); } catch (e) { toast(e.message); }
     loadMachines();
   }, ""));
   menu.append(sum, list); box.append(menu);
   return box;
 }
-// YOLO per agent: a plain switch with the state; only a small warning mark while it is on. On asks to type YOLO.
-function yoloSwitch(m, a, ag) {
-  const l = el("label", "check yolo-switch"), c = el("input"); c.type = "checkbox"; c.setAttribute("role", "switch"); c.checked = !!ag.yolo;
-  c.setAttribute("aria-label", `YOLO for ${AGENT_NAME[a] || a} on ${m.label}`);
-  l.title = "Run without asking: the agent's global setting on that pc";
+// A switch that sends an action: it shows the state the pc reported, and waits while the change is on its way.
+function machineSwitch(label, on, busy, aria, onchange) {
+  const l = el("label", "check machine-switch"), c = el("input"); c.type = "checkbox"; c.setAttribute("role", "switch"); c.checked = !!on;
+  c.setAttribute("aria-label", aria); c.disabled = busy;
+  if (busy) l.setAttribute("aria-busy", "true");
   c.onchange = async () => {
-    const on = c.checked;
-    if (on && prompt(`${YOLO_WARNING}\n\nType YOLO to turn it on for ${AGENT_NAME[a] || a} on ${m.label}.`) !== "YOLO") { c.checked = false; return; }
+    const want = c.checked;
+    if (!(await onchange(want))) { c.checked = !want; return; }
     c.disabled = true; l.setAttribute("aria-busy", "true"); // machineAction redraws the card once the pc reported
-    await machineAction(m, "yolo", on ? { agent: a, on: true, confirm: "YOLO" } : { agent: a, on: false });
   };
-  l.append(c, " YOLO");
-  if (ag.yolo) { const w = el("span", "yolo-mark", "⚠"); w.title = "On: every session of this agent there runs without asking"; w.setAttribute("aria-hidden", "true"); l.append(w); }
+  l.append(c, " ", label);
   return l;
 }
-// One worker: what it does first, its task id small behind it. Actions that matter rarely (roll back, archive) only once it ended.
-function workerList(m, list) {
-  const ws = el("ul", "machine-list");
-  for (const w of list) {
-    const li = el("li", `worker ${w.status}`), text = el("span", "worker-text"), head = el("span");
-    text.append(head); li.title = w.branch || "";
-    head.append(el("strong", null, w.title || w.id), w.title ? el("span", "muted", ` ${w.id}`) : "", ` · ${w.project || "?"} · ${w.status === "running" ? `running ${mins(w.started)}` : `${w.status} ${ago(w.ended || w.started)}`}`);
-    if (w.why) text.append(el("span", "worker-why", w.why));
-    if (w.status === "running" && !m.online) text.append(el("span", "worker-why", `pc ${offlineFor(m.at)}: nobody knows whether it still runs`));
-    const again = (w.ended || 0) + 6 * 3600; // later than that it did not start again, so its line is gone or held: no promise then
-    if (w.status === "failed" && !w.chat && again > Date.now() / 1000) text.append(el("span", "worker-why", `Starts again by itself around ${new Date(again * 1000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })} if its task line is still open.`));
-    if (w.review?.ahead > 0) text.append(el("span", "worker-why", `${w.review.ahead} commit(s) not merged: review them under Agents.`));
-    if (w.status === "running" && w.progress) text.append(workerProgress(w.progress));
-    li.append(text);
-    if (w.yolo) li.append(el("span", "pill yolo", "YOLO"));
-    li.append(machineButton("open", "How to look at this worker", () => toast(w.open || "No details yet.", false)));
-    if (m.own && m.online && w.status === "running") li.append(machineButton("stop", "Stop this worker", () => confirm(`Stop the worker on ${w.id}?`) && machineAction(m, "stop_worker", { project: w.project, id: w.id })));
-    if (m.own && m.online && w.status === "failed") li.append(machineButton("restart", "Start this worker again now (past the 6 h hold)", () => machineAction(m, "restart", { project: w.project, id: w.id })));
-    if (m.own && w.status !== "running" && !w.merged && w.checkpoint) li.append(machineButton("roll back", "Put its worktree back as it was before its last turn (a checkpoint of now is kept)",
-      () => confirm(`Roll ${w.id} back to before its last turn?`) && machineAction(m, "rollback", { project: w.project, id: w.id })));
-    if (m.own && m.online && w.status !== "running" && !(w.review?.ahead > 0)) li.append(machineButton("archive", "Take it off this list; its branch and worktree stay", () => machineAction(m, "archive_worker", { project: w.project, id: w.id })));
-    ws.append(li);
-  }
-  return ws;
+// YOLO per agent: a plain switch with the state. On asks to type YOLO.
+function yoloSwitch(m, a, ag) {
+  const name = AGENT_NAME[a] || a;
+  const l = machineSwitch("YOLO", ag.yolo, pendingAction(m, "yolo", (x) => x.agent === a), `YOLO for ${name} on ${m.label}`, (on) => {
+    if (on && prompt(`${YOLO_WARNING}\n\nType YOLO to turn it on for ${name} on ${m.label}.`) !== "YOLO") return false;
+    machineAction(m, "yolo", on ? { agent: a, on: true, confirm: "YOLO" } : { agent: a, on: false });
+    return true;
+  });
+  l.classList.add("yolo-switch"); l.title = "Run without asking: the agent's global setting on that pc";
+  return l;
 }
-// The Machines view: one card per pc.
-const offlineOpen = new Set(); // offline pcs whose last report you opened
+// A worker's task text, without the claim marker the line carried when the worker started (its id says which task).
+function workerTitle(w) {
+  const t = String(w.title || "").replace(/\((?:claimed|bezig)\b[^)]*\):?\s*/gi, "").replace(/^[\s«»"'“”:]+/, "").trim();
+  return !t ? w.id : (w.title || "").length >= 120 ? `${t}…` : t; // the companion keeps 120 characters
+}
+// One worker: what it does, then id, project, agent and when. Actions that matter rarely (roll back, archive) only once it ended.
+function workerRow(m, w) {
+  const li = el("li", `worker ${w.owner_stopped ? "stopped" : w.status}`), text = el("div", "worker-text"), acts = el("div", "worker-actions");
+  const title = el("strong", "worker-title", workerTitle(w)); title.title = w.title || "";
+  const when = workerState(w);
+  text.append(title, el("span", "worker-meta", [w.id, w.project, AGENT_NAME[w.agent] || w.agent, when].filter(Boolean).join(" · ")));
+  if (w.why) text.append(el("span", "worker-why", w.why));
+  if (w.status === "running" && !m.online) text.append(el("span", "worker-why", `The pc is ${offlineFor(m.at)}: nobody knows whether it still runs.`));
+  const again = (w.ended || 0) + 6 * 3600; // later than that it did not start again, so its line is gone or held: no promise then
+  if (w.status === "failed" && !w.owner_stopped && !w.chat && again > Date.now() / 1000) text.append(el("span", "worker-note", `Starts again by itself around ${new Date(again * 1000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })} if its task line is still open.`));
+  if (w.review?.ahead > 0) text.append(el("span", "worker-why", `It left ${w.review.ahead} commit${w.review.ahead > 1 ? "s" : ""} on its branch that ${w.review.ahead > 1 ? "are" : "is"} not merged yet: look at the result and merge it, or send it back.`));
+  const p = w.status === "running" && w.progress;
+  if (p) text.append(el("span", "worker-note", [p.commits ? `${p.commits} commit${p.commits > 1 ? "s" : ""}` : "no commits yet", `${p.changed} file${p.changed === 1 ? "" : "s"} changed`, p.commit && `last: ${p.commit}`].filter(Boolean).join(" · ")));
+  const busy = (action) => pendingAction(m, action, (x) => x.id === w.id && x.project === w.project);
+  if (m.own && w.review?.ahead > 0 && w.status !== "running") { // the review card under Agents: the diff, Merge and Send back
+    const r = el("a", "btn small primary", "Review"); r.href = `#/inbox/${encodeURIComponent(`review:${m.id}/${w.project}/${String(w.id).replace(/(?:-cont|-fix)+$/i, "")}`)}`;
+    r.title = "Its changes, what it says is done and left, Merge or Send back"; acts.append(r);
+  }
+  if (m.own) { // Follow finds the newest run of the task on your own pcs
+    const f = el("a", "btn small", "Follow"); f.href = ckWorkerRoute(w); f.title = w.open || "Its transcript, live while it runs";
+    acts.append(f);
+  }
+  if (m.own && m.online && w.status === "running") acts.append(machineButton("Stop", "Stop this worker", () => confirm(`Stop the worker on ${w.id}?`) && machineAction(m, "stop_worker", { project: w.project, id: w.id }), busy("stop_worker")));
+  if (m.own && m.online && w.status === "failed") acts.append(machineButton(w.owner_stopped ? "Start again" : "Restart", "Start this worker again now (past the 6 h hold)", () => machineAction(m, "restart", { project: w.project, id: w.id }), busy("restart")));
+  if (m.own && w.status !== "running" && !w.merged && w.checkpoint) acts.append(machineButton("Roll back", "Put its worktree back as it was before its last turn (a checkpoint of now is kept)",
+    () => confirm(`Roll ${w.id} back to before its last turn?`) && machineAction(m, "rollback", { project: w.project, id: w.id }), busy("rollback")));
+  if (m.own && m.online && w.status !== "running" && !(w.review?.ahead > 0)) acts.append(machineButton("Archive", "Take it off this list; its branch and worktree stay", () => machineAction(m, "archive_worker", { project: w.project, id: w.id }), busy("archive_worker"), "btn small quiet"));
+  if (w.yolo) { const y = el("span", "pill yolo", "YOLO"); y.title = "This worker runs every command without asking"; title.after(" ", y); }
+  li.append(text);
+  if (acts.childNodes.length) li.append(acts);
+  return li;
+}
+const workerNeedsYou = (m, w) => (w.status === "failed" && !w.owner_stopped) || w.review?.ahead > 0 || (w.status === "running" && !m.online);
+// A worker's state in plain words: a worker stopped from this page did not fail, and "finished" is done.
+function workerState(w) {
+  const at = ago(w.ended || w.started);
+  if (w.status === "running") return `working for ${mins(w.started)}`;
+  if (w.owner_stopped) return `stopped by you ${at}`;
+  return { finished: `done ${at}`, merged: `done and merged ${at}`, stopped: `stopped ${at}`, failed: `stopped with a problem ${at}` }[w.status] || `${w.status} ${at}`;
+}
+const allWorkers = (m) => Object.entries(m.agents || {}).flatMap(([a, ag]) => (ag.workers || []).map((w) => ({ ...w, agent: w.agent || a })));
+// Remote actions in words: the log of a pc reads as what happened, not as the API's names.
+const ACTION_WORDS = {
+  update_plugin: () => "Update plugin", update_agents: () => "Update agents", apply_models: () => "Apply models",
+  workers_allowed: (a) => (a.on ? "Allow workers" : "Turn workers off"),
+  max_workers: (a) => `${AGENT_NAME[a.agent] || a.agent}: ${a.n || "no limit on"} workers at a time`,
+  yolo: (a) => `YOLO ${a.on ? "on" : "off"} for ${AGENT_NAME[a.agent] || a.agent}`, trust_hooks: (a) => `Trust the hooks of ${AGENT_NAME[a.agent] || a.agent}`,
+  link_folder: (a) => `Link ${a.path} to ${a.project}`, unlink_folder: (a) => `Unlink ${a.path}`,
+  install_tool: (a) => `Install ${a.tool}`, remove_tool: (a) => `Remove ${a.tool}`,
+  start_worker: (a) => `Start a worker for ${a.id}`, stop_worker: (a) => `Stop the worker of ${a.id}`, restart: (a) => `Restart the worker of ${a.id}`,
+  rollback: (a) => `Roll back ${a.id}`, archive_worker: (a) => `Archive the worker of ${a.id}`, merge: (a) => `Merge ${a.id}`, takeover: (a) => `Take over ${a.id}`,
+};
+const actionWords = (x) => (ACTION_WORDS[x.action] || ((a) => `${x.action} ${Object.values(a).join(" ")}`.trim()))(x.args || {});
+const ACTION_STATE = { waiting: "waiting for the pc", running: "running", done: "done", failed: "failed" };
+
+// The Machines view: one card per pc; per card the part that needs you on top and its details in tabs. The cards are
+// drawn again on every refresh, so what a person opened (a tab, an offline pc) lives here and not in the DOM.
+const machineTab = new Map(), offlineOpen = new Set();
+// A fold whose open state outlives the redraw.
+function foldKept(key, cls = "machine-more-list") {
+  const d = el("details", cls); d.open = offlineOpen.has(key);
+  d.addEventListener("toggle", () => { if (d.open) offlineOpen.add(key); else offlineOpen.delete(key); });
+  return d;
+}
+let machinesTimer = 0;
+const MACHINE_REFRESH = 20000; // a pc reports about every 10 s
+function machineTabs(m, panels) {
+  const keep = machineTab.get(m.id), first = panels.find((p) => p.alert) || panels[0];
+  const pick = panels.some((p) => p.key === keep) ? keep : first.key;
+  const bar = el("div", "machine-tabs"), box = el("div", "machine-panel");
+  bar.setAttribute("role", "tablist"); bar.setAttribute("aria-label", `${m.label}: details`);
+  const id = (key) => `mt-${m.id}-${key}`.replace(/[^\w-]/g, "_");
+  box.id = `mp-${m.id}`.replace(/[^\w-]/g, "_");
+  const show = (key, picked) => {
+    if (picked) machineTab.set(m.id, key); // only a person's pick sticks: else a new alert elsewhere would never show first
+    for (const b of bar.children) { const on = b.dataset.key === key; b.setAttribute("aria-selected", String(on)); b.tabIndex = on ? 0 : -1; }
+    box.replaceChildren(panels.find((p) => p.key === key).draw());
+    box.setAttribute("aria-labelledby", id(key));
+  };
+  for (const p of panels) {
+    const b = el("button", null, p.label); b.type = "button"; b.setAttribute("role", "tab"); b.dataset.key = p.key; b.id = id(p.key);
+    b.setAttribute("aria-controls", box.id);
+    if (p.count != null) b.append(" ", el("span", `badge${p.alert ? " alert" : ""}`, String(p.count)));
+    b.onclick = () => show(p.key, true);
+    b.onkeydown = (e) => { // arrow keys move between tabs, as in the admin page
+      const i = panels.indexOf(p), n = panels.length;
+      const to = { ArrowRight: (i + 1) % n, ArrowLeft: (i - 1 + n) % n, Home: 0, End: n - 1 }[e.key];
+      if (to == null) return;
+      e.preventDefault(); const next = panels[to]; show(next.key, true); bar.querySelector(`[data-key="${next.key}"]`).focus();
+    };
+    bar.append(b);
+  }
+  box.setAttribute("role", "tabpanel");
+  show(pick);
+  return [bar, box];
+}
+function workersPanel(m) {
+  const c = m.companion, box = el("div"), list = allWorkers(m);
+  if (c) {
+    const line = el("div", "machine-line");
+    if (m.own && !m.old) line.append(machineSwitch("Workers may start here", c.workersAllowed, pendingAction(m, "workers_allowed"), `Workers on ${m.label}`, (on) => {
+      if (on && !confirm(`${WORKERS_WARNING}\n\n${m.label}`)) return false;
+      machineAction(m, "workers_allowed", { on }); return true;
+    }));
+    else line.append(el("span", null, c.workersAllowed ? "Workers may start here." : "Workers are off on this pc."));
+    if (c.game) line.append(el("span", "pill", c.game));
+    box.append(line);
+  }
+  const needs = list.filter((w) => workerNeedsYou(m, w)), running = list.filter((w) => w.status === "running" && !needs.includes(w));
+  const earlier = list.filter((w) => !needs.includes(w) && !running.includes(w));
+  const group = (title, ws, note) => { const ul = el("ul", "machine-list"); ul.append(...ws.map((w) => workerRow(m, w))); box.append(el("h4", "machine-group", title), ...(note ? [el("p", "machine-note", note)] : []), ul); };
+  if (needs.length) group("Needs you", needs, "A worker that stopped with a problem, or finished work that waits for you to look at and merge.");
+  if (running.length) group("Running now", running);
+  if (!needs.length && !running.length) box.append(el("p", "muted", c?.workersAllowed ? "No worker runs here now." : "No worker runs here."));
+  if (earlier.length) {
+    const d = foldKept(`${m.id}:earlier`), ul = el("ul", "machine-list");
+    ul.append(...earlier.map((w) => workerRow(m, w)));
+    d.append(el("summary", null, `Ended earlier (${earlier.length})`), ul); box.append(d);
+  }
+  return box;
+}
+function agentsPanel(m, res) {
+  const c = m.companion, box = el("div"), newest = newestPlugin(), steer = m.own && c && !m.old;
+  const table = el("div", "machine-agents");
+  for (const [a, ag] of Object.entries(m.agents || {})) {
+    const row = el("section", "machine-agent"), head = el("div", "machine-agent-head"), facts = el("p", "machine-facts");
+    head.append(el("h4", null, AGENT_NAME[a] || a));
+    if (ag.yolo) head.append(el("span", "pill yolo", "YOLO"));
+    if (ag.trusted === false) head.append(el("span", "pill warn", "hooks not trusted"));
+    const old = ag.plugin && versionNewer(newest, ag.plugin);
+    const model = ag.current?.lead;
+    const running = (ag.workers || []).filter((w) => w.status === "running").length, most = (c?.maxWorkers || {})[a] ?? 1;
+    facts.append(el("span", old ? "warn-text" : null, ag.plugin ? `plugin ${ag.plugin}${old ? ` (${newest} is out)` : ""}` : "plugin unknown"));
+    if (model) facts.append(el("span", null, `model ${model}`));
+    if (ag.limit != null) facts.append(el("span", ag.limit >= 90 ? "warn-text" : null, `${Math.round(ag.limit)}% of its usage limit used`));
+    if (c) facts.append(el("span", null, `${running} worker${running === 1 ? "" : "s"} running, ${most ? `at most ${most}` : "no limit"}`));
+    row.append(head, facts);
+    if (ag.error) {
+      const e = ag.error, w = el("p", "machine-error", `Hook ${e.hook || "?"}${e.event ? ` (${e.event})` : ""} failed ${ago(e.at)}: ${(e.stderr || e.text || "").trim().split("\n").pop().slice(0, 200)}`);
+      w.title = e.stderr || ""; row.append(w);
+    }
+    if (steer) {
+      const ctl = el("div", "machine-controls");
+      if (ag.trusted === false) ctl.append(machineButton("Trust hooks", "Trust the knowledge hooks the agent's own way", () => machineAction(m, "trust_hooks", { agent: a }), pendingAction(m, "trust_hooks", (x) => x.agent === a)));
+      ctl.append(yoloSwitch(m, a, ag));
+      const max = el("input", "small"); max.type = "number"; max.min = 0; max.value = most; max.style.width = "5em";
+      max.onchange = () => {
+        const n = Number(max.value);
+        if (max.value === "" || !Number.isInteger(n) || n < 0) { max.value = most; return; } // empty is not 0: it must not lift the limit
+        machineAction(m, "max_workers", { agent: a, n });
+      };
+      const lab = el("label", "check", "Workers at a time (0: no limit) "); lab.title = "At most this many workers of this agent on this pc at the same time"; lab.append(max);
+      ctl.append(lab);
+      row.append(ctl);
+    }
+    if ((ag.sessions || []).length) {
+      const ul = el("ul", "machine-list muted-list");
+      for (const s of ag.sessions) ul.append(el("li", null, `${s.project || "?"} · ${s.task ? `task ${s.task}` : "own session"}${s.worker ? " (worker)" : ""} · ${ago(s.at)}`));
+      row.append(el("p", "machine-group", `Sessions in the last 2 hours (${ag.sessions.length})`), ul);
+    }
+    table.append(row);
+  }
+  box.append(table);
+  if (res.admin && m.own && !m.old && m.advice?.rows.some((r) => r.model)) { // chosen and applied in one place: Admin > Settings
+    const line = el("p", "machine-note", "Models for agents are chosen for all pcs at once: ");
+    const link = el("a", null, "Admin > Settings"); link.href = "/ui/admin#settings"; line.append(link);
+    box.append(line);
+  }
+  return box;
+}
+const TOOL_KIND = { skill: ["Skill", "Instructions an agent loads when a task fits"], program: ["Program", "Software installed on this pc that agents run, such as an MCP server"] };
+function toolsPanel(m) {
+  const c = m.companion, box = el("div"), tools = Object.entries(c?.tools || {});
+  if (!tools.length) {
+    box.append(el("p", "muted", c && m.own ? "This pc lists no tools yet: its plugin is older than 0.41.0. Update the plugin, then the tools that ship with it show here." : "This pc lists no tools."));
+    return box;
+  }
+  box.append(el("p", "machine-note", "Add-ons that ship with the knowledge plugin. Install one here and the companion sets it up for every agent on this pc."));
+  const ul = el("ul", "machine-list tool-list");
+  for (const [id, t] of tools.sort(([, a], [, b]) => !!b.installed - !!a.installed || a.name.localeCompare(b.name))) {
+    const li = el("li", "tool"), main = el("div", "tool-main"), head = el("div", "tool-head");
+    const kind = TOOL_KIND[t.kind];
+    head.append(el("strong", null, t.name));
+    if (kind) { const k = el("span", `pill kind-${t.kind}`, kind[0]); k.title = kind[1]; head.append(k); }
+    const bad = t.error || t.ok === false;
+    head.append(el("span", `pill ${t.busy ? "" : bad ? "warn" : t.installed ? "ok" : ""}`,
+      t.busy ? ({ remove: "removing…", update: "updating…" }[t.busy] || "installing…") : t.error ? "failed" : !t.installed ? "not installed" : t.ok === false ? "needs attention" : "installed"));
+    if (t.version) head.append(el("span", "muted", t.version));
+    main.append(head);
+    if (t.description) main.append(el("p", "tool-desc", t.description));
+    if (t.error || t.detail) main.append(el("p", t.error ? "machine-error" : "worker-note", t.error || t.detail));
+    if (t.homepage) { const a = el("a", "tool-source", "Source"); a.href = t.homepage; a.target = "_blank"; a.rel = "noopener"; main.append(a); }
+    li.append(main);
+    if (m.own && m.online && !t.busy) {
+      const acts = el("div", "worker-actions"), busy = (action) => pendingAction(m, action, (x) => x.tool === id);
+      acts.append(machineButton(t.installed ? "Update" : "Install", t.installed ? "Install the newest version again for every agent here" : `Install ${t.name} for every agent on this pc`,
+        () => machineAction(m, "install_tool", { tool: id }), busy("install_tool"), t.installed ? "btn small" : "btn small primary"));
+      if (t.installed) acts.append(machineButton("Remove", `Remove ${t.name} from every agent on this pc`, () => confirm(`Remove ${t.name} from ${m.label}?`) && machineAction(m, "remove_tool", { tool: id }), busy("remove_tool"), "btn small danger"));
+      li.append(acts);
+    }
+    ul.append(li);
+  }
+  box.append(ul);
+  return box;
+}
+function foldersPanel(m) {
+  const c = m.companion, fl = c?.folders || { linked: [], candidates: [] }, box = el("div"), steer = m.own && !m.old && (c?.projects || []).length;
+  box.append(el("p", "machine-note", "A linked folder gets the memory of its project in every session there, and workers of that project may start in it."));
+  if (fl.linked.length) {
+    const ul = el("ul", "machine-list");
+    for (const f of fl.linked) {
+      const li = el("li", "folder"), path = el("code", null, f.path);
+      li.append(path, el("span", "muted", "→"), el("span", "pill", f.project));
+      if (m.own) li.append(machineButton("Unlink", "Remove its .knowledge-project file (nothing else)", () => confirm(`Unlink ${f.path}?`) && machineAction(m, "unlink_folder", { path: f.path }), pendingAction(m, "unlink_folder", (x) => x.path === f.path), "btn small quiet"));
+      ul.append(li);
+    }
+    box.append(ul);
+  } else box.append(el("p", "muted", "No folder linked yet."));
+  if (steer) {
+    const ctl = el("div", "machine-controls");
+    if (fl.candidates.length) {
+      const path = el("select", "small"), proj = el("select", "small");
+      path.setAttribute("aria-label", "Folder"); proj.setAttribute("aria-label", "Project");
+      for (const f of fl.candidates) { const o = el("option", null, f.path); o.value = f.path; path.append(o); }
+      for (const p of c.projects) { const o = el("option", null, p); o.value = p; proj.append(o); }
+      ctl.append(path, proj, machineButton("Link", "Write .knowledge-project in that folder", () => machineAction(m, "link_folder", { path: path.value, project: proj.value }), pendingAction(m, "link_folder")));
+    }
+    ctl.append(machineButton("Choose a folder…", "Browse the drives of this pc and link any folder", () => chooseFolder(m)));
+    box.append(ctl);
+  }
+  return box;
+}
+function activityPanel(m) {
+  const box = el("div"), acts = (m.actions || []).slice().reverse();
+  if (!acts.length) { box.append(el("p", "muted", "Nothing was asked of this pc lately.")); return box; }
+  const ul = el("ul", "machine-list activity");
+  for (const x of acts) {
+    const li = el("li", x.status === "failed" ? "failed" : null);
+    li.append(el("span", "activity-what", actionWords(x)), el("span", `pill ${x.status === "failed" ? "warn" : x.status === "done" ? "ok" : ""}`, ACTION_STATE[x.status] || x.status),
+      el("span", "muted", `${x.by || "?"} · ${ago(x.at)}`));
+    if (x.result) li.append(el("span", x.status === "failed" ? "machine-error activity-result" : "worker-note activity-result", x.result));
+    ul.append(li);
+  }
+  box.append(ul);
+  return box;
+}
+// What on this pc needs a person, in one sentence each: the reason to open the page.
+function machineAlerts(m) {
+  const out = [], c = m.companion;
+  for (const [a, ag] of Object.entries(m.agents || {})) {
+    if (ag.trusted === false) out.push(`${AGENT_NAME[a] || a} does not trust the knowledge hooks yet (Agents).`);
+    if (ag.error && Date.now() / 1000 - (ag.error.at || 0) < 86400) out.push(`A hook of ${AGENT_NAME[a] || a} failed ${ago(ag.error.at)} (Agents).`);
+  }
+  const day = Date.now() / 1000 - 86400, failed = (m.actions || []).filter((x) => x.status === "failed" && x.at > day);
+  if (failed.length) out.push(`${actionWords(failed[failed.length - 1])} failed ${ago(failed[failed.length - 1].at)}${failed.length > 1 ? ` (and ${failed.length - 1} more)` : ""} (Activity).`);
+  const toolBad = Object.values(c?.tools || {}).filter((t) => t.error || t.ok === false);
+  if (toolBad.length) out.push(`${toolBad.map((t) => t.name).join(", ")} ${toolBad.length > 1 ? "need" : "needs"} attention (Tools).`);
+  return out;
+}
+function machineCard(m, res, here) {
+  const c = m.companion, card = el("article", "machine" + (m.online ? "" : " offline")), head = el("header", "machine-head");
+  card.dataset.machine = m.id;
+  const name = el("div", "machine-name"), dot = el("span", `machine-dot${m.online ? " on" : ""}`);
+  dot.setAttribute("aria-hidden", "true");
+  name.append(dot, el("h3", null, m.label));
+  if (here && m.id === here) name.append(el("span", "pill this", "This pc"));
+  if (m.old) name.append(el("span", "pill warn", "old plugin"));
+  else if (!m.own) { const p = el("span", "pill", "view only"); p.title = "Someone else's pc, or one not marked as your own device: you see it, you cannot steer it"; name.append(p); }
+  head.append(name, machineActions(m));
+  const meta = [m.online ? "online" : offlineFor(m.at), c ? `companion ${c.version || "?"}` : !m.old && "no companion", m.tokens.length && `token ${m.tokens.join(", ")}`].filter(Boolean);
+  card.append(head, el("p", "machine-meta", meta.join(" · ")));
+  const alerts = machineAlerts(m);
+  if (alerts.length) {
+    const ul = el("ul", "machine-alerts"); ul.setAttribute("aria-label", "Needs you");
+    ul.append(...alerts.map((t) => el("li", null, t)));
+    card.append(ul);
+  }
+  const ws = allWorkers(m), tools = Object.values(c?.tools || {}), needs = ws.filter((w) => workerNeedsYou(m, w)).length;
+  const panels = [
+    { key: "workers", label: "Workers", count: needs || ws.filter((w) => w.status === "running").length || null, alert: needs > 0, draw: () => workersPanel(m) },
+    { key: "agents", label: "Agents", count: Object.keys(m.agents || {}).length, alert: Object.values(m.agents || {}).some((ag) => ag.trusted === false || (ag.error && Date.now() / 1000 - (ag.error.at || 0) < 86400)), draw: () => agentsPanel(m, res) },
+  ];
+  if (c) panels.push(
+    { key: "tools", label: "Tools", count: tools.length ? tools.filter((t) => t.installed).length : null, alert: tools.some((t) => t.error || t.ok === false), draw: () => toolsPanel(m) },
+    { key: "folders", label: "Folders", count: (c.folders?.linked || []).length, draw: () => foldersPanel(m) });
+  panels.push({ key: "activity", label: "Activity", count: (m.actions || []).some((x) => x.status === "waiting" || x.status === "running") ? "…" : null,
+    alert: (m.actions || []).some((x) => x.status === "failed" && x.at > Date.now() / 1000 - 86400), draw: () => activityPanel(m) });
+  card.append(...machineTabs(m, panels));
+  return card;
+}
+// An offline pc on one line; its last report one click away. Old reports of a pc that came back under a new id share its name.
+function offlineRow(m, res, here) {
+  const d = el("details", "machine-offline");
+  d.dataset.machine = m.id; d.open = offlineOpen.has(m.id);
+  const sum = el("summary"), when = el("span", "muted", m.old ? "old plugin" : offlineFor(m.at));
+  sum.append(el("strong", null, m.label), when);
+  if (allWorkers(m).some((w) => workerNeedsYou(m, w)) || machineAlerts(m).length) sum.append(el("span", "pill warn", "needs you"));
+  if ((m.actions || []).some((x) => x.status === "waiting")) sum.append(el("span", "pill", "action waiting"));
+  d.append(sum);
+  const fill = () => { if (d.open && d.childNodes.length === 1) d.append(machineCard(m, res, here)); };
+  d.ontoggle = () => { if (d.open) offlineOpen.add(m.id); else offlineOpen.delete(m.id); fill(); };
+  fill();
+  return d;
+}
+// Redraws while the view is open; never under a person's hands (a field being typed in, an open menu or dialog).
+function machinesBusy() {
+  const box = $("machines"), a = document.activeElement;
+  const typing = box.contains(a) && (/^(SELECT|TEXTAREA)$/.test(a.tagName) || (a.tagName === "INPUT" && !/^(checkbox|radio)$/.test(a.type)));
+  return typing || box.querySelector(".menu[open]") || document.querySelector("dialog[open]");
+}
+function machinesSoon() {
+  clearTimeout(machinesTimer);
+  machinesTimer = setTimeout(() => {
+    if ($("tab-machines").hidden) return;
+    if (document.hidden || machinesBusy()) return machinesSoon();
+    loadMachines().catch(() => machinesSoon());
+  }, MACHINE_REFRESH);
+}
 async function loadMachines() {
   const res = await api("/ui/api/machines");
   machinesCache = Array.isArray(res) ? res : res.machines || [];
+  if (machinesBusy() && $("machines").querySelector(".machine, .machine-offline")) return machinesSoon(); // machineAction still reads machinesCache
   if (!localMachine) await probeCompanion();
-  const box = $("machines"); box.replaceChildren();
-  const narrow = matchMedia("(max-width: 699.98px)").matches;
   const sha = async (t) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t)))].map((b) => b.toString(16).padStart(2, "0")).join("");
   const here = localMachine && crypto.subtle ? (await Promise.all(res.machines.map(async (m) => (await sha(m.id)) === localMachine ? m.id : ""))).find(Boolean) : "";
-  for (const s of res.stuck || []) box.append(el("p", "machine-error", `${s.tasks} task${s.tasks > 1 ? "s" : ""} of ${s.project} cannot start by itself: none of your pcs has a folder linked to that project (Folders on a pc). An open chat can still take them.`));
+  const box = $("machines"), top = el("div", "machines-top"), parts = [];
+  for (const s of res.stuck || []) parts.push(el("p", "machine-stuck", `${s.tasks} task${s.tasks > 1 ? "s" : ""} of ${s.project} cannot start by itself: none of your pcs has a folder linked to that project (Folders on a pc). An open chat can still take them.`));
   if (!res.machines.length) {
     const how = el("a", "btn small", "How to install"); how.href = "/ui/help#install";
-    box.append(emptyState("No pcs yet: a pc shows up here, with its agents and workers, once it runs the knowledge setup.", how));
+    parts.push(emptyState("No pcs yet: a pc shows up here, with its agents and workers, once it runs the knowledge setup.", how));
   }
-  for (const m of [...res.machines].sort((a, b) => !!b.online - !!a.online)) { // stable: online first, each in the server's order
-    const card = el("article", "machine" + (m.online ? "" : " offline")), head = el("div", "machine-head");
-    head.append(el("h3", null, m.label));
-    head.append(el("span", `pill ${m.online ? "ok" : ""}`, m.old ? "old plugin" : m.online ? "online" : offlineFor(m.at)));
-    if (here && m.id === here) head.append(el("span", "pill this", "This pc"));
-    if (m.own && !m.old) head.append(machineActions(m));
-    card.append(head, el("p", "machine-meta", [m.tokens.join(", "), m.companion ? `companion ${m.companion.version || "?"}` : !m.old && "no companion"].filter(Boolean).join(" · ")));
-    const c = m.companion;
-    if (c) {
-      const line = el("p", "machine-meta", `Workers ${c.workersAllowed ? "allowed" : "off"}${c.game ? ` · ${c.game}` : ""}`);
-      if (m.own) line.append(" ", machineButton(c.workersAllowed ? "Turn off" : "Allow workers", "Whether this pc may run workers at all",
-        () => (c.workersAllowed || confirm(`${WORKERS_WARNING}\n\n${m.label}`)) && machineAction(m, "workers_allowed", { on: !c.workersAllowed })));
-      card.append(line);
+  // online first: this pc, then your own, then the ones you only see
+  const rank = (m) => (m.id === here ? 0 : m.own ? 1 : 2);
+  const online = res.machines.filter((m) => m.online).sort((a, b) => rank(a) - rank(b));
+  parts.push(...online.map((m) => machineCard(m, res, here)));
+  const offline = res.machines.filter((m) => !m.online).sort((a, b) => (b.at || 0) - (a.at || 0));
+  if (offline.length) {
+    // an older report: one of your own pcs under the same name and token that reported later (a reinstall gets a new id)
+    const same = (m) => `${m.label.toLowerCase()}|${[...m.tokens].sort().join(",")}`;
+    const seen = new Set(online.filter((m) => m.mine).map(same)), latest = [], stale = [];
+    for (const m of offline) (m.mine && seen.has(same(m)) ? stale : latest).push(m), m.mine && seen.add(same(m));
+    const sec = el("section", "machines-offline");
+    sec.append(el("h3", "machine-group", `Offline (${offline.length})`), ...latest.map((m) => offlineRow(m, res, here)));
+    const forgettable = stale.filter((m) => m.mine);
+    if (stale.length) {
+      const d = foldKept("stale"), names = [...new Set(stale.map((m) => m.label))].join(", ");
+      d.append(el("summary", null, `${stale.length} older report${stale.length > 1 ? "s" : ""} of ${names}: the same name came back under a new id`));
+      if (forgettable.length) d.append(machineButton(`Forget ${forgettable.length === stale.length ? "them" : `the ${forgettable.length} of your own`}`, "Take these old entries off the list; a pc that reports again comes back", async () => {
+        if (!confirm(`Forget ${forgettable.length} old report${forgettable.length > 1 ? "s" : ""} of ${names}? Their actions, history and chats on the server go.`)) return;
+        for (const m of forgettable) await api("/ui/api/machines/forget", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: m.id }) }).catch((e) => toast(e.message));
+        await loadMachines();
+      }, false, "btn small danger"));
+      d.append(...stale.map((m) => offlineRow(m, res, here)));
+      sec.append(d);
     }
-    const agents = el("div", "machine-agents");
-    card.append(agents);
-    for (const [a, ag] of Object.entries(m.agents)) {
-      const row = el("div", "machine-agent"), top = el("div", "machine-agent-head");
-      top.append(el("strong", null, AGENT_NAME[a] || a), el("span", "muted", ag.plugin ? `plugin ${ag.plugin}` : "plugin ?"));
-      if (ag.yolo) top.append(el("span", "pill yolo", "YOLO on")); // stays in sight: its switch sits under Settings
-      if (c) top.append(el("span", "pill", `${ag.workers.filter((w) => w.status === "running").length} of ${((c.maxWorkers || {})[a] ?? 1) || "any"} running`));
-      if (ag.trusted === false) top.append(el("span", "pill warn", "hooks not trusted"));
-      if (c) top.append(el("span", `pill ${ag.limit >= 90 ? "warn" : ""}`, ag.limit == null ? "limit unknown" : `limit ${Math.round(ag.limit)}%`));
-      row.append(top);
-      if (ag.error) {
-        const e = ag.error, w = el("p", "machine-error", `hook ${e.hook || "?"}${e.event ? ` (${e.event})` : ""} failed · ${(e.stderr || e.text || "").split("\n")[0].slice(0, 160)} · ${ago(e.at)}`);
-        w.title = e.stderr || ""; row.append(w);
-      }
-      const unmerged = (w) => w.review?.ahead > 0;
-      const needs = ag.workers.filter((w) => w.status === "failed" || unmerged(w) || (w.status === "running" && !m.online));
-      const running = ag.workers.filter((w) => w.status === "running" && !needs.includes(w));
-      const earlier = ag.workers.filter((w) => !needs.includes(w) && !running.includes(w));
-      if (needs.length) row.append(el("p", "machine-group", "Needs you"), workerList(m, needs));
-      if (running.length) row.append(el("p", "machine-group", "Running now"), workerList(m, running));
-      if (earlier.length) {
-        const d = el("details", "machine-sessions");
-        d.append(el("summary", null, `Earlier (${earlier.length})`), workerList(m, earlier));
-        row.append(d);
-      }
-      if (ag.sessions.length) {
-        const d = el("details", "machine-sessions"), list = el("ul", "machine-list");
-        d.open = !narrow && ag.sessions.length <= 3;
-        d.append(el("summary", null, `${ag.sessions.length} session${ag.sessions.length > 1 ? "s" : ""} in the last 2 h`));
-        for (const s of ag.sessions) list.append(el("li", null, `${s.project || "?"} · ${s.task || "free"}${s.worker ? " (worker)" : ""} · ${ago(s.at)}`));
-        d.append(list); row.append(d);
-      }
-      if (m.own && c && !m.old) {
-        const ctl = el("div", "machine-controls"), set = el("details", "machine-sessions");
-        set.open = ag.trusted === false; // hooks not trusted needs a click: no need to hunt for it
-        set.append(el("summary", null, "Settings"), ctl);
-        if (ag.trusted === false) ctl.append(machineButton("Trust hooks", "Trust the knowledge hooks the agent's own way", () => machineAction(m, "trust_hooks", { agent: a })));
-        ctl.append(yoloSwitch(m, a, ag));
-        const most = (c.maxWorkers || {})[a] ?? 1;
-        const max = el("input", "small"); max.type = "number"; max.min = 0; max.value = most; max.style.width = "5em";
-        max.onchange = () => {
-          const n = Number(max.value);
-          if (max.value === "" || !Number.isInteger(n) || n < 0) { max.value = most; return; } // empty is not 0: it must not lift the limit
-          machineAction(m, "max_workers", { agent: a, n });
-        };
-        const lab = el("label", null, "Workers at a time (0: no limit) "); lab.title = "At most this many workers of this agent on this pc at the same time"; lab.append(max);
-        ctl.append(lab);
-        row.append(set);
-      }
-      agents.append(row);
-    }
-    if (res.admin && m.own && !m.old && m.advice?.rows.some((r) => r.model)) { // chosen and applied in one place: Admin > Settings
-      const line = el("p", "machine-meta", `Models: ${m.advice.rows.filter((r) => r.key === "lead" && r.model).map((r) => `${AGENT_NAME[r.agent] || r.agent} ${r.model}`).join(", ")} `);
-      const link = el("a", null, "Manage"); link.href = "/ui/admin#settings"; line.append(link);
-      card.append(line);
-    }
-    const fl = c && c.folders;
-    if (fl && (fl.linked.length || (m.own && (c.projects || []).length))) {
-      const d = el("details", "machine-sessions"), list = el("ul", "machine-list");
-      d.append(el("summary", null, `Folders (${fl.linked.length} linked)`));
-      for (const f of fl.linked) {
-        const li = el("li"); li.append(el("span", null, `${f.path} → ${f.project}`));
-        if (m.own) li.append(machineButton("unlink", "Remove its .knowledge-project file (nothing else)", () => confirm(`Unlink ${f.path}?`) && machineAction(m, "unlink_folder", { path: f.path })));
-        list.append(li);
-      }
-      d.append(list);
-      if (m.own && fl.candidates.length && (c.projects || []).length) {
-        const ctl = el("div", "machine-controls"), path = el("select", "small"), proj = el("select", "small");
-        for (const f of fl.candidates) { const o = el("option", null, f.path); o.value = f.path; path.append(o); }
-        for (const p of c.projects) { const o = el("option", null, p); o.value = p; proj.append(o); }
-        ctl.append(path, proj, machineButton("Link", "Write .knowledge-project in that folder", () => machineAction(m, "link_folder", { path: path.value, project: proj.value })));
-        d.append(ctl);
-      }
-      if (m.own && (c.projects || []).length) d.append(machineButton("Choose a folder…", "Browse the drives of this pc and link any folder", () => chooseFolder(m)));
-      card.append(d);
-    }
-    const tools = Object.entries((c && c.tools) || {});
-    if (tools.length) { // tool add-ons from the pc's own plugin (plugin/tools): installed for every agent there by its companion
-      const d = el("details", "machine-sessions"), list = el("ul", "machine-list");
-      d.open = tools.some(([, t]) => t.error || t.ok === false);
-      d.append(el("summary", null, `Tools (${tools.filter(([, t]) => t.installed).length} installed)`));
-      for (const [id, t] of tools) {
-        const li = el("li"), name = el("strong", null, t.name);
-        name.title = t.description || "";
-        li.append(name, " ", el("span", `pill ${t.busy ? "" : t.error || t.ok === false ? "warn" : t.installed ? "ok" : ""}`,
-          t.busy ? ({ remove: "removing…", update: "updating…" }[t.busy] || "installing…") : t.error ? "failed" : !t.installed ? "not installed" : t.ok === false ? "needs attention" : "installed"));
-        if (t.version) li.append(" ", el("span", "muted", t.version));
-        if (m.own && m.online && !t.busy) {
-          li.append(" ", machineButton(t.installed ? "Update" : "Install", t.installed ? "Install the newest version again for every agent here" : `Install ${t.name} for every agent on this pc`,
-            () => machineAction(m, "install_tool", { tool: id })));
-          if (t.installed) li.append(" ", machineButton("Remove", `Remove ${t.name} from every agent on this pc`, () => confirm(`Remove ${t.name} from ${m.label}?`) && machineAction(m, "remove_tool", { tool: id })));
-        }
-        if (t.homepage) { const a = el("a", "muted", "source"); a.href = t.homepage; a.target = "_blank"; a.rel = "noopener"; li.append(" ", a); }
-        if (t.description) li.append(el("p", "muted", t.description));
-        if (t.error || t.detail) li.append(el("p", t.error ? "machine-error" : "muted", t.error || t.detail));
-        list.append(li);
-      }
-      d.append(list); card.append(d);
-    }
-    if (m.actions.length) {
-      const d = el("details", "machine-sessions"), list = el("ul", "machine-list");
-      d.append(el("summary", null, `Actions (${m.actions.length})`));
-      for (const x of m.actions.slice().reverse()) list.append(el("li", x.status === "failed" ? "machine-error" : null,
-        `${x.action}${x.args && Object.keys(x.args).length ? ` ${Object.values(x.args).join(" ")}` : ""} · ${x.status === "waiting" ? "waiting for machine" : x.status}${x.result ? `: ${x.result}` : ""} · ${x.by} ${ago(x.at)}`));
-      d.append(list); card.append(d);
-    }
-    if (!m.online) { // one line; what the pc last reported stays one click away
-      const fold = el("details", "machine-sessions machine-fold"), meta = card.children[1];
-      head.insertBefore(meta, head.children[2]);
-      fold.append(el("summary", null, "Last report"), ...[...card.children].slice(1));
-      const needsYou = [...fold.querySelectorAll(".machine-group")].some((g) => g.textContent === "Needs you") || fold.querySelector(".machine-error, .pill.warn");
-      const queued = (m.actions || []).some((x) => x.status === "waiting" || x.status === "pending");
-      fold.open = !!needsYou || queued || offlineOpen.has(m.id);
-      fold.ontoggle = () => { if (fold.open) offlineOpen.add(m.id); else offlineOpen.delete(m.id); };
-      card.append(fold);
-    }
-    box.append(card);
+    parts.push(sec);
   }
-  if (!res.machines.length) box.append(el("p", "muted", "No machine has reported yet. Machines appear once a plugin 0.15.0 or newer asks the server."));
+  top.replaceChildren(...parts);
+  const y = box.closest(".view")?.scrollTop, a = document.activeElement, was = box.contains(a) && a !== box &&
+    { pc: a.closest("[data-machine]")?.dataset.machine, key: a.dataset.key, text: a.textContent, tag: a.tagName };
+  box.replaceChildren(...top.childNodes);
+  if (y != null) box.closest(".view").scrollTop = y; // a refresh must not move the page under the reader
+  if (was) { // nor take the keyboard focus away
+    const card = [...box.querySelectorAll("[data-machine]")].find((c) => c.dataset.machine === was.pc) || box;
+    const again = was.key ? card.querySelector(`[role=tab][data-key="${was.key}"]`) : [...card.querySelectorAll(was.tag)].find((e) => e.textContent === was.text);
+    again?.focus({ preventScroll: true });
+  }
+  machinesSoon();
 }
 // Health lists these first (something to do now or a risk), the rest by how many findings they have.
 const LINT_URGENT = ["open_overdue", "possible_secret_in_memo", "possible_secret_in_skill", "stale_handback", "offline_conflict",

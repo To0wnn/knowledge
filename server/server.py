@@ -2170,8 +2170,14 @@ def approval_hint(rel: str, before: str, after: str) -> str:
     new = {t["id"] for t in added_tasks(rel, before, after, changed=True)}
     if not new or not (project := kb_graph.project_of(rel, "")):
         return ""
-    return "".join(f"\nTask {t['id']} waits for the owner's approval in the Tasks tab ({t['waiting_reason']})."
-                   for t in project_tasks(project)[0] if t["id"] in new and t["path"] == rel and t["needs_approval"])
+    mine = [t for t in project_tasks(project)[0] if t["id"] in new and t["path"] == rel]
+    out = "".join(f"\nTask {t['id']} waits for the owner's approval in the Tasks tab ({t['waiting_reason']})." for t in mine if t["needs_approval"])
+    if not device.get().get("worker") and (free := [t["id"] for t in mine if not t["claimed"]]):
+        # the duplicate work of 8 Nov 2026: a chat wrote a task, did it itself, and a worker started the same task
+        out += (f"\nNot claimed: {', '.join(free)}. If you do it in this session yourself, claim it now: add "
+                f"'({kb_lint.W['claimed']} <you>, {date.today().isoformat()})' to its line, so no worker starts the same work. "
+                "If it is for a worker or someone else, leave it as it is.")
+    return out
 
 
 def update_state(path: Path, change):
@@ -2201,10 +2207,13 @@ def note_task_authors(rel: str, before: str, after: str, by: str, keep: bool = F
         known = read_json(TASK_AUTHORS, {}).get(project, {})
         if not (new := [t for t in new if (known.get(t["id"]) or {}).get("sig") != task_sig(t)]):
             return
+    dev = {} if keep else device.get()
+    # written in a session (a chat, an agent in a terminal), not by a worker: that session may do the work itself
+    session = {"session": dev.get("machine_label") or by} if dev.get("machine") and not dev.get("worker") else {}
     try:
         if by:
             update_state(TASK_AUTHORS, lambda d: d.setdefault(project, {}).update(
-                {t["id"]: {"by": by, "at": int(time.time()), "sig": task_sig(t)} for t in new}))
+                {t["id"]: {"by": by, "at": int(time.time()), "sig": task_sig(t), **session} for t in new}))
         if not keep:
             update_state(TASK_APPROVALS, lambda d: [d.get(project, {}).pop(t["id"], None) for t in new])
         if any(t["id"] in read_json(TASK_CANCELLED, {}).get(project, {}) for t in new):  # written again: no longer cancelled
@@ -2270,12 +2279,17 @@ def project_tasks(project: str) -> tuple[list[dict], list[dict]]:
             (f"waits for approval: written by {by or 'an unknown writer'}", start != "after approval" and not approved and not trusted),
         ) if waits]
         w = wakes.get(t["id"])
+        fresh = rec and fits(rec) and rec.get("session") and not t["claimed"] and now - rec.get("at", 0) < SESSION_WARN
+        t["approve_warning"] = (f"Written {int((now - rec['at']) // 60)} min ago in a session on {rec['session']}, not by a worker. "
+                                "If that session is doing this task itself, it should claim it instead: approving lets a worker "
+                                "start it now, and both would do the same work.") if fresh else ""
         t.update(author=by, approved=approved, startable=not t["claimed"] and not why, waiting_reason="; ".join(why),
                  needs_approval=not approved and (start == "after approval" or not trusted),
                  stalled=bool(w) and not t["claimed"] and now - w.get("at", 0) > STALLED_AFTER)
     return tasks, back
 
 
+SESSION_WARN = 6 * 3600  # how long the approve buttons warn that a session wrote the line (it may be doing it itself)
 CANCELLED = re.compile(r"cancelled by ", re.I)  # the text of a result line cancel_task writes
 
 
@@ -5424,7 +5438,7 @@ def task_rows() -> list[dict]:
         tasks, back = project_tasks(name)
         approver, leases = may_approve(name), read_json(TASK_LEASES, {}).get(name, {})
         rows += [{**{k: t[k] for k in ("project", "path", "line", "owner", "id", "claimed", "text", "from", "start", "legacy",
-                                        "author", "startable", "waiting_reason", "stalled", "approved")},
+                                        "author", "startable", "waiting_reason", "stalled", "approved", "approve_warning")},
                   "can_cancel": approver and not held_now(t, leases.get(t["id"]), now),
                   "runs": task_where(name, t, leases.get(t["id"]), now) if t["startable"] else "",
                   "due": t["due"].isoformat() if t["due"] else "", "overdue": bool(t["due"] and t["due"] < today),
@@ -5493,7 +5507,7 @@ def mission_graph(project: str = "", everything: bool = False) -> dict:
         lanes.setdefault(lane, r["owner"].partition("@")[0].strip())
         nodes.append({"key": f"{r['project']}/{r['id']}", "status": status, "lane": lane, "where": where,
                       **{k: r.get(k, "") for k in ("id", "project", "owner", "text", "line", "path", "from", "start", "due",
-                                                   "waiting_reason", "author", "since")},
+                                                   "waiting_reason", "author", "since", "approve_warning")},
                       "can_approve": bool(r.get("can_approve"))})
     keys = {(n["project"], n["id"]): n for n in nodes}
     edges = []
@@ -6160,14 +6174,14 @@ def board_items() -> list[dict]:
                 lost = st == "running" and not r["online"]  # its pc went offline: nobody knows whether it still runs
                 seen = (w.get("progress") or {}).get("seen", 0) if st == "running" and not lost and QUIET_MINUTES else 0
                 quiet = seen if seen and now - seen >= QUIET_MINUTES * 60 else 0  # 0: an older companion sends no time
-                col = ("needs" if lost or quiet else "running" if st == "running" else "needs" if st == "failed" and now - ended < BOARD_FAILED
+                col = ("needs" if lost or quiet else "running" if st == "running" else "needs" if st == "failed" and not w.get("owner_stopped") and now - ended < BOARD_FAILED
                        else "done" if st in ("finished", "stopped", "merged", "failed") and now - ended < BOARD_DONE else "")
                 if col:
                     items.append({**base, "kind": "worker", "col": col, "id": w.get("id"), "agent": a, "project": w.get("project"),
                                   "key": f"worker:{r['id']}/{w.get('project')}/{w.get('id')}", "sig": f"{st}:{ended}" + (":offline" if lost else f":quiet:{quiet}" if quiet else ""), "quiet": quiet,
                                   "title": w.get("id"), "at": w.get("started") if st == "running" else ended,
                                   "line": (f"pc offline since {since(r['at'])}" if lost else f"no output since {since(quiet)}: still working, or stuck" if quiet
-                                           else f"worker {st}" + (f": {w['why']}" if w.get("why") else ""))
+                                           else "stopped by you" if w.get("owner_stopped") else f"worker {st}" + (f": {w['why']}" if w.get("why") else ""))
                                           + (f" · {w['branch']}" if w.get("branch") else ""),
                                   "offline_since": r["at"] if lost else None, "can_stop": st == "running" and r["online"],
                                   "can_restart": st in ("failed", "stopped", "finished") and r["online"],
@@ -6192,7 +6206,7 @@ def board_items() -> list[dict]:
             continue
         task = {"kind": "task", "id": t["id"], "agent": agent, "project": t["project"], "title": f"{t['id']} · {t['text'][:120]}",
                 "path": t["path"], "line": "", "at": 0, "owner": t["owner"], "key": key, "sig": sig, "can_cancel": t.get("can_cancel", False),
-                "due": t["due"], "overdue": t["overdue"]}
+                "due": t["due"], "overdue": t["overdue"], "approve_warning": t.get("approve_warning", "")}
         if t["done"]:
             if now - (t.get("since") or 0) < BOARD_DONE:
                 items.append({**task, "col": "done", "line": f"handed back to {t['owner']}", "at": t.get("since") or 0})
@@ -7337,7 +7351,7 @@ def report_tools(t) -> dict:
     if not isinstance(t, dict):
         return {}
     flag = lambda v: v if isinstance(v, bool) else None
-    return {k: {"name": str(v.get("name") or k)[:60], "description": str(v.get("description") or "")[:300],
+    return {k: {"name": str(v.get("name") or k)[:60], "kind": v["kind"] if v.get("kind") in ("skill", "program") else "", "description": str(v.get("description") or "")[:300],
                 "homepage": h if (h := str(v.get("homepage") or "")[:200]).startswith("https://") else "",
                 "installed": flag(v.get("installed")), "ok": flag(v.get("ok")), "version": str(v.get("version") or "")[:40],
                 "detail": redact(str(v.get("detail") or "")[:300]), "error": redact(str(v.get("error") or "")[:300]),
@@ -7371,6 +7385,7 @@ async def machine_report(request: Request):
                              for a, v in (b.get("agents") or {}).items() if a in AGENT_OWNERS and isinstance(v, dict)},
                   "workers": [{k: (w.get(k) if w.get(k) is None or isinstance(w.get(k), (int, float, bool)) else str(w[k])[:300])
                                for k in ("id", "project", "agent", "status", "started", "ended", "branch", "title", "yolo", "open", "checkpoint", "merged", "why", "chat")}
+                              | {"owner_stopped": w.get("owner_stopped") is True}  # stopped from the page, not failed
                               | {"git": git_pill(w.get("git")), "progress": worker_progress(w.get("progress")), "review": worker_review(w.get("review"))}
                               for w in (b.get("workers") or [])[:40] if isinstance(w, dict)],
                   "folders": {k: [{"path": str(f.get("path", ""))[:500], "project": str(f.get("project", ""))[:80]}

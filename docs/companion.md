@@ -60,7 +60,7 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   unknown key):
 
   ```json
-  {"name": "...", "description": "...", "homepage": "https://...", "needs": ["npm"],
+  {"name": "...", "kind": "program", "description": "...", "homepage": "https://...", "needs": ["npm"],
    "install": [{"run": ["npm", "install", "--global", "pkg@latest"]},
                {"run": ["pkg", "setup", "--client", "codex"], "agent": "codex"}],
    "check":   [{"run": ["pkg", "doctor", "--json"], "info": true}],
@@ -68,6 +68,8 @@ fixed remote actions and relays chats. Installing it is part of the client setup
    "remove":  [{"run": ["npm", "uninstall", "--global", "pkg"]}]}
   ```
 
+  `kind` is `skill` (instructions an agent loads) or `program` (software agents run, such as an MCP server): the
+  Machines page labels the tool with it.
   A step is one of `run` (a command looked up on PATH, no shell), `fetch` (the newest release file for this
   platform: `{"github": "owner/repo"}` with GitHub's sha256 of the asset (`"tag": "regex"`: the newest release of a
   line, when a tool supports only that line), `{"android": "platform-tools"}` (Google's stable SDK package, with the
@@ -103,7 +105,8 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   release; a fetch skips what is current. A failed install or update keeps the tool as it was, shows red in the list
   and goes once to the admins' Matrix/ntfy (again only after it was fixed and failed anew). No cooldown after a
   release and no automatic rollback: the newest version goes in, and a red check says when it broke something.
-- **Adding a tool:** a new manifest plus a plugin version bump; `tools.py --self-test` validates every manifest. A
+- **Adding a tool:** a new manifest (with its `kind`: a registry draft is a `program`) plus a plugin version bump;
+  `tools.py --self-test` validates every manifest. A
   draft is only a proposal: a person reads it and commits it, nothing installs it before that (the companion only
   runs manifests its plugin shipped). Two ways to get a draft:
   - **From the MCP registry:** `python3 plugin/hooks/tools.py --from-registry <name>` (a name in the
