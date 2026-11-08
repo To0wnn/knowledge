@@ -707,6 +707,15 @@ async def shell(browser, devices, secret: str) -> None:
       const lines = [...document.querySelectorAll('#machines > .mx-offline .mx-line')].map((l) => l.querySelector('strong').textContent);
       machinesRes = was; drawMachines(); return {theirs, yours, lines}; }""")
     check(split["yours"] == ["mine-off"] and split["theirs"] == ["friend"], f"Machines: a pc of yours with remote control off stays with yours {split}")
+    upd = await pg.evaluate("""() => { const was = machinesRes, now = Date.now() / 1000;
+      const pc = (id, label, at) => ({id, label, mine: true, own: true, online: true, at: now, tokens: [label], agents: {claude: {plugin: '1.0.0', trusted: true, workers: []}},
+        companion: {version: '1.0.0', agents: ['claude'], tools: {}}, actions: [{id: 'u', action: 'update_plugin', status: 'done', at, result: 'updated'}]});
+      const fresh = pc('a'.repeat(16), 'fresh', now - 60), stale = pc('b'.repeat(16), 'stale', now - 900), newer = {...pc('c'.repeat(16), 'newer', 0), actions: [], companion: {version: '2.0.0', agents: ['claude'], tools: {}}};
+      const cache = machinesCache; machinesRes = {machines: [fresh, stale, newer], stuck: []}; machinesCache = machinesRes.machines; drawMachines();
+      const btn = (label) => [...document.querySelectorAll('.mx-pc')].find((h) => h.querySelector('h3').textContent === label)?.querySelector('.mx-pc-acts button.primary');
+      const out = {fresh: btn('fresh')?.textContent, stale: btn('stale')?.textContent, said: /did not bring it/.test(document.querySelector('.mx-status').textContent)};
+      machinesRes = was; machinesCache = cache; drawMachines(); return out; }""")
+    check(upd["fresh"] == "Working…" and upd["stale"] == "Update to 2.0.0" and upd["said"], f"Machines: an update that is still settling shows as working after a page switch; one that said done but did not take is said {upd}")
     check(split["lines"] == [" test-vm 3 reports"], f"Machines: a pc set up again (same name and token) is one offline line with its reports counted {split}")
     words = await pg.evaluate("""() => { const now = Date.now() / 1000; return [workerNeedsYou({online: true}, {status: 'failed', owner_stopped: true}), workerNeedsYou({online: true}, {status: 'failed'})]; }""")
     check(words == [False, True], f"Machines: a worker stopped by its owner does not need you, one that failed does {words}")

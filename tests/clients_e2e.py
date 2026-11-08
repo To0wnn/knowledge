@@ -1849,6 +1849,15 @@ def chat_e2e(tok: str, tmp: Path):
                  "print(got)")
         code, out, err = run([sys.executable, "-c", probe], "", {**env, "PYTHONPATH": str(hooks), "KN_FAKE_RATE": "1"}, cwd=str(hooks))
         check(code == 0 and "42" in out and "5h" in out, "companion: Codex's limit asked without a session (app-server account/rateLimits/read)", out + err[-400:])
+        # An agent that closes its end of a stdio MCP server before the answer (its session ended) is no hook failure:
+        # the relay and the approval server end quietly with 0 (Linux says EPIPE, Windows EINVAL).
+        for script, args in (("agent_hooks.py", ["mcp", "-"]), ("approval_mcp.py", [])):
+            p = subprocess.Popen([sys.executable, str(hooks / script), *args], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 env={**env, "KNOWLEDGE_URL": "http://127.0.0.1:9"}, cwd=str(hooks))
+            p.stdout.close()
+            p.stdin.write(b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}\n'); p.stdin.close()
+            perr = p.stderr.read().decode("utf-8", "replace"); p.wait(timeout=60)
+            check(p.returncode == 0 and "Traceback" not in perr, f"{script}: an agent that went away before the answer ends it quietly", f"exit {p.returncode}: {perr[-400:]}")
         # agy's usage limit without a running agy: its cloud quota call with the OAuth token agy keeps (a local stand-in
         # here; it must send agy's User-Agent, Google refuses Python's).
         tokf = home / ".gemini" / "antigravity-cli" / "antigravity-oauth-token"

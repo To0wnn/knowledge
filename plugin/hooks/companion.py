@@ -1962,10 +1962,29 @@ def update_agents_soon():
     threading.Thread(target=update, daemon=True).start()
 
 
+def update_own_checkout(repo: Path | None = None) -> str:
+    """The companion's own code, when it runs from a git checkout (the one-line installer's ~/knowledge): fast-forward it
+    to GitHub's main, so update_watch restarts it on the new version. Without this only the agents' plugins moved and the
+    companion stayed old for good. Never a reset: a checkout with commits of its own (a developer's) stays as it is.
+    '' when done or not a checkout, else why not."""
+    repo = repo or self_update.PLUGIN.parent
+    if not (repo / ".git").exists():
+        return ""
+    p = subprocess.run(["git", "-C", str(repo), "pull", "--ff-only", "-q"], capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", timeout=300, stdin=subprocess.DEVNULL, **({"creationflags": workers.WIN_FLAGS} if os.name == "nt" else {}))
+    if p.returncode == 0:
+        return ""
+    return (f"knowledge companion: its checkout {repo} could not move to GitHub's main ({(p.stderr or p.stdout).strip()[-200:]}); "
+            "run the one-line installer again on that pc")
+
+
 def update_plugins() -> list:
     """The plugin of each agent here with its own CLI, compared with that agent's version: this companion may run from
-    another agent's newer copy. Returns the failures."""
+    another agent's newer copy; then the companion's own checkout. Returns the failures."""
     failed = []
+    if why := update_own_checkout():
+        log("error", why)
+        failed.append(why)
     for a, (name, _) in AGENTS.items():
         if not installed(a):
             continue
@@ -2575,7 +2594,11 @@ def main(argv: list):
         calls, globals()["installed"], globals()["keep_trusted"] = [], lambda a: a != "agy", lambda: None
         globals()["plugin_version"] = lambda a: {"claude": "abc123", "codex": "0.1.0"}[a]
         self_update.run = lambda a, have=None: calls.append((a, have)) or (None if a == "claude" else "knowledge plugin: the auto-update to 9.9.9 failed")
+        real_own, globals()["update_own_checkout"] = update_own_checkout, lambda: ""  # never a pull in the checkout this test runs from
         assert update_plugins() == ["knowledge plugin: the auto-update to 9.9.9 failed"] and calls == [("claude", (0,)), ("codex", (0, 1, 0))], calls
+        globals()["update_own_checkout"] = lambda: "knowledge companion: its checkout x could not move"
+        calls.clear(); assert update_plugins()[0].startswith("knowledge companion: its checkout"), "the companion's own checkout is part of the update"
+        globals()["update_own_checkout"] = real_own
         globals()["installed"], globals()["plugin_version"], self_update.run, globals()["keep_trusted"] = real
         real_fqdn, socket.getfqdn = socket.getfqdn, lambda *a: sys.exit("LocalServer must not ask reverse DNS at its start")
         probe = LocalServer(("127.0.0.1", 0), Handler)
@@ -2589,6 +2612,19 @@ def main(argv: list):
         assert usage_info("agy", {}, 1100) == [(42.0, "7d", 2000.0), (10.0, "5h", 1200.0)]
         assert usage_info("agy", {}, 1500) == [(42.0, "7d", 2000.0)] and usage_info("agy", {}, 2500) == []
         globals()["usage_live"] = real_live
+        with tempfile.TemporaryDirectory() as g:  # the companion's own checkout follows main, never by a reset
+            run = lambda *a, cwd=g: subprocess.run(["git", *a], cwd=cwd, capture_output=True, text=True, check=True)
+            env_git = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
+            run("init", "-q", "-b", "main", "up"); up = Path(g) / "up"
+            (up / "f").write_text("1"); run("add", "f", cwd=up); run(*env_git, "commit", "-qm", "one", cwd=up)
+            run("clone", "-q", str(up), "co"); co = Path(g) / "co"
+            (up / "f").write_text("2"); run(*env_git, "commit", "-qam", "two", cwd=up)
+            assert update_own_checkout(co) == "" and (co / "f").read_text() == "2", "a checkout behind main moves forward"
+            (co / "g").write_text("mine"); run("add", "g", cwd=co); run(*env_git, "commit", "-qm", "local", cwd=co)
+            (up / "f").write_text("3"); run(*env_git, "commit", "-qam", "three", cwd=up)
+            why = update_own_checkout(co)
+            assert "could not move" in why and (co / "g").exists() and (co / "f").read_text() == "2", why
+            assert update_own_checkout(Path(g) / "nothing") == "", "not a checkout: nothing to do"
         real_job, jobs, ids = tool_job, [], sorted(tools.catalog())[:2]  # the daily tool update skips a tool its owner took off it
         globals()["tool_job"] = lambda act, tid, m: jobs.append(tid) or TOOLS_BUSY.release()
         save("tools.json", {ids[0]: {"installed": True}, ids[1]: {"installed": True, "auto": False}})

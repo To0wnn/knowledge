@@ -136,6 +136,11 @@ const AGENT_ORDER = ["claude", "codex", "agy"];
 const TOOL_KIND = { skill: ["skill", "Instructions an agent loads when a task fits"], program: ["program", "Software installed on this pc that agents run, such as an MCP server"] };
 const recentError = (ag) => ag.error && Date.now() / 1000 - (ag.error.at || 0) < 86400;
 const steers = (m) => m.own && !m.old && m.online && !!m.companion;
+// An update of the plugin that the pc ran in the last 5 minutes: it still restarts on the new version. Read from the
+// server's list, so it shows the same after a switch to another page and back.
+const UPDATE_SETTLE = 300;
+const lastUpdate = (m) => (m.actions || []).filter((x) => x.action === "update_plugin").pop();
+const updating = (m) => pendingAction(m, "update_plugin") || (lastUpdate(m)?.status === "done" && Date.now() / 1000 - lastUpdate(m).at < UPDATE_SETTLE);
 // An agent this pc's companion knows: only then do its switches and buttons act (a hook alone may report an agent).
 const steersAgent = (m, a) => steers(m) && (m.companion.agents || []).includes(a);
 
@@ -183,10 +188,13 @@ function pcHead(m, here) {
   meta.append(behind ? differs(`Knowledge ${c?.version || "?"}`) : val(`Knowledge ${c?.version || "?"}`));
   if (c?.game) meta.append(" · ", val(c.game));
   box.append(name, meta);
+  const last = lastUpdate(m);
+  if (behind && last?.status === "done" && !updating(m) && Date.now() / 1000 - last.at < 86400)
+    box.append(el("p", "machine-error", `The update ${ago(last.at)} said done, yet it still runs ${c?.version || "an older version"}.`));
   const acts = el("div", "mx-pc-acts");
-  if (behind && steers(m)) acts.append(machineButton(`Update to ${behind}`, "Update the knowledge plugin of every agent there and its companion (it restarts by itself)", () => machineAction(m, "update_plugin"), pendingAction(m, "update_plugin"), "btn small primary"));
+  if (behind && steers(m)) acts.append(machineButton(`Update to ${behind}`, "Update the knowledge plugin of every agent there and its companion (it restarts by itself)", () => machineAction(m, "update_plugin"), updating(m), "btn small primary"));
   // an admin may update the plugin on someone else's pc, nothing else there (the server checks its remote-control switch)
-  if (behind && me.admin && !m.own && !m.old && m.online && c) acts.append(machineButton(`Update to ${behind} (admin)`, "Update the knowledge plugin there; its owner's settings stay as they are", () => machineAction(m, "update_plugin"), pendingAction(m, "update_plugin"), "btn small primary"));
+  if (behind && me.admin && !m.own && !m.old && m.online && c) acts.append(machineButton(`Update to ${behind} (admin)`, "Update the knowledge plugin there; its owner's settings stay as they are", () => machineAction(m, "update_plugin"), updating(m), "btn small primary"));
   if (steers(m) && (c.agents || []).length && (c.folders?.linked || []).length) acts.append(machineButton("Chat", "Talk to an agent on this pc (Chats)", async () => { go("#/chats"); if (!ck.machines.length) await ckSummary().catch(() => {}); ckNewChat(m.id); }));
   if (m.mine) acts.append(pcMore(m));
   if (acts.childNodes.length) box.append(acts);
@@ -353,8 +361,15 @@ function machinesStatus(res, own, online) {
   const box = el("section", "mx-status"), text = el("div"), items = [];
   const lead = el("p", "mx-lead", own.length ? `${online.length} of your ${own.length} pc${own.length === 1 ? " is" : "s are"} online.` : "None of your pcs reported yet.");
   const behind = online.filter((m) => steers(m) && pluginBehind(m));
-  for (const m of behind) items.push([versionNewer(newestPlugin(), m.companion.version || "0") ? `${m.label} runs an older Knowledge (${m.companion.version}).`
+  for (const m of behind) {
+    const last = lastUpdate(m);
+    if (last?.status === "done" && !updating(m) && Date.now() / 1000 - last.at < 86400) { // it said done, yet it is still behind
+      items.push([`The update on ${m.label} ${ago(last.at)} did not bring it to ${newestPlugin()} (it runs ${m.companion.version}): `, actionButton("see Activity", () => pcActivity(m), "btn small quiet")]);
+      continue;
+    }
+    items.push([versionNewer(newestPlugin(), m.companion.version || "0") ? `${m.label} runs an older Knowledge (${m.companion.version}).`
     : `The plugin of ${Object.entries(m.agents || {}).filter(([, ag]) => ag.plugin && versionNewer(newestPlugin(), ag.plugin)).map(([a]) => AGENT_NAME[a] || a).join(" and ")} on ${m.label} is older than its Knowledge.`]);
+  }
   for (const m of online) for (const [a, ag] of Object.entries(m.agents || {})) {
     if (ag.trusted === false) items.push([`${AGENT_NAME[a] || a} on ${m.label} does not trust the knowledge hooks yet.`]);
     if (recentError(ag)) items.push([`A hook of ${AGENT_NAME[a] || a} on ${m.label} failed ${ago(ag.error.at)}.`]);
