@@ -44,6 +44,8 @@ x-server: &server
     KNOWLEDGE_STT_URL: ${KNOWLEDGE_STT_URL:-}  # speaking in chats (docs/voice.md)
     KNOWLEDGE_STT_LANGUAGE: ${KNOWLEDGE_STT_LANGUAGE:-}
     KNOWLEDGE_STT_PROMPT: ${KNOWLEDGE_STT_PROMPT:-}
+    KNOWLEDGE_TOOLS_MEMO: ${KNOWLEDGE_TOOLS_MEMO:-}  # the memo a tool request's draft task goes into (Admin › Tools & skills)
+    KNOWLEDGE_TOOLS_DRAFTER: ${KNOWLEDGE_TOOLS_DRAFTER:-Claude}
   # KNOWLEDGE_PROXY_SECRET (Vaultwarden KNOWLEDGE_PROXY_SECRET): Traefik sends it with the Authentik user header.
   # KNOWLEDGE_MATRIX_TOKEN (Vaultwarden MATRIX_BOT_TOKEN): the bot that posts to KNOWLEDGE_MATRIX_ROOM.
   # KNOWLEDGE_GITHUB_TOKEN (Vaultwarden KNOWLEDGE_GITHUB_TOKEN): read-only, public repositories only; tool downloads

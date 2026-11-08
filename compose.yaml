@@ -40,6 +40,8 @@ services:
       KNOWLEDGE_MATRIX_TOKEN: ${KNOWLEDGE_MATRIX_TOKEN:-}
       KNOWLEDGE_NTFY_URL: ${KNOWLEDGE_NTFY_URL:-}
       KNOWLEDGE_NTFY_TOKEN: ${KNOWLEDGE_NTFY_TOKEN:-}
+      KNOWLEDGE_TOOLS_MEMO: ${KNOWLEDGE_TOOLS_MEMO:-}
+      KNOWLEDGE_TOOLS_DRAFTER: ${KNOWLEDGE_TOOLS_DRAFTER:-Claude}
       KNOWLEDGE_GITHUB_TOKEN: ${KNOWLEDGE_GITHUB_TOKEN:-}
       # Optional: speak chat messages (docs/voice.md). Any OpenAI-compatible speech-to-text server: the "voice" profile
       # below (docker compose --profile voice up -d, then KNOWLEDGE_STT_URL=http://voice:8000/v1), one you run already,

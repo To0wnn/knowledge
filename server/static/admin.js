@@ -306,11 +306,69 @@ function renderExternal() {
   $("n-external").textContent = waiting ? `${waiting} !` : rows.length || "";
   $("n-external").classList.toggle("alert", !!waiting);
 }
-$("external-form").onsubmit = (e) => {
+// Tools & skills: one Add for both kinds. A GitHub skill folder is a shared skill at once; anything else becomes a
+// request that is drafted right away (a task line for an agent), as any person's request would be after Draft it.
+const SKILL_FOLDER = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(tree|blob)\/\S+$/;
+$("tool-add-form").onsubmit = (e) => {
   e.preventDefault();
-  run(() => api("/ui/api/admin/external", { url: $("x-url").value.trim() }), e.target.querySelector("button"))
-    .then((ok) => ok && e.target.reset());
+  const what = $("tool-what").value.trim();
+  run(async () => {
+    if (SKILL_FOLDER.test(what)) return api("/ui/api/admin/external", { url: what });
+    const { id } = await api("/ui/api/tools/request", { what, why: "" });
+    await api("/ui/api/admin/tools/request", { id, decision: "draft" });
+  }, e.target.querySelector("button"), SKILL_FOLDER.test(what) ? "Added as a shared skill" : "Drafting: a task line for an agent").then((ok) => ok && e.target.reset());
 };
+const REQUEST_STATE = { waiting: "New request", drafting: "Being drafted", added: "Added", declined: "Declined" };
+// Requests of people, newest first: the open ones with Draft it, Mark added and Decline; the answered ones folded below.
+async function renderRequests() {
+  let res;
+  try { res = await api("/ui/api/tools/requests"); } catch (e) { $("tool-requests").replaceChildren(el("p", "error", e.message)); return; }
+  const open = res.requests.filter((r) => r.status === "waiting" || r.status === "drafting"), done = res.requests.filter((r) => !open.includes(r));
+  const row = (r) => {
+    const li = el("li", "req"), text = el("div"), acts = el("div", "actions");
+    text.append(el("strong", null, r.what), el("span", "muted", ` · ${r.by} ${ago(r.at)}${r.why ? `: "${r.why}"` : ""}`));
+    if (r.task) text.append(el("span", "muted", ` · task ${r.task}`));
+    if (r.reason) text.append(el("span", "muted", ` · ${r.reason}`));
+    const tag = el("span", `pill ${r.status === "waiting" ? "warn" : r.status === "added" ? "ok" : ""}`, REQUEST_STATE[r.status] || r.status);
+    const decide = (label, decision, cls, ask) => { const b = el("button", cls, label); b.type = "button";
+      b.onclick = () => { const reason = ask ? prompt(ask) : ""; if (ask && reason === null) return;
+        run(() => api("/ui/api/admin/tools/request", { id: r.id, decision, reason }), b); }; return b; };
+    if (r.status === "waiting") acts.append(decide(SKILL_FOLDER.test(r.what) ? "Add as shared skill" : "Draft it", "draft", "btn small primary", res.draft || SKILL_FOLDER.test(r.what) ? "" : null));
+    if (r.status !== "added" && r.status !== "declined") acts.append(decide("Mark added", "added", "btn small", ""), decide("Decline…", "decline", "btn small quiet", `Why decline "${r.what}"? ${r.by} sees the reason.`));
+    li.append(tag, text, acts);
+    return li;
+  };
+  const box = [];
+  if (open.length) { const ul = el("ul", "req-list"); ul.append(...open.map(row)); box.push(ul); }
+  else box.push(el("p", "muted", "No requests waiting."));
+  if (!res.draft) box.push(el("p", "muted small", "Draft it needs KNOWLEDGE_TOOLS_MEMO in local.env: the memo a draft task goes into."));
+  if (done.length) { const d = el("details"), ul = el("ul", "req-list"); d.append(el("summary", null, `Answered (${done.length})`)); ul.append(...done.map(row)); d.append(ul); box.push(d); }
+  $("tool-requests").replaceChildren(...box);
+  const waiting = open.filter((r) => r.status === "waiting").length, ext = Object.values(state.external || {}).filter((x) => x.status !== "ok").length;
+  $("n-external").textContent = waiting + ext ? `${waiting + ext} !` : ""; $("n-external").classList.toggle("alert", !!(waiting + ext));
+}
+// The tools the plugin offers, as the pcs report them: name, kind, what it does, on how many of your own pcs.
+async function renderCatalog() {
+  let res;
+  try { res = await api("/ui/api/machines"); } catch (e) { $("tool-catalog").replaceChildren(el("p", "error", e.message)); return; }
+  const tools = {}, own = res.machines.filter((m) => m.mine && m.companion);
+  for (const m of res.machines) for (const [id, t] of Object.entries(m.companion?.tools || {})) tools[id] = tools[id] || t;
+  const ids = Object.keys(tools).sort((x, y) => tools[x].name.localeCompare(tools[y].name));
+  if (!ids.length) { $("tool-catalog").replaceChildren(el("p", "muted", "No pc reported its tools yet (plugin 0.41.0 or newer).")); return; }
+  const table = el("table"), body = el("tbody"), head = el("thead"), hr = el("tr");
+  for (const h of ["Name", "Kind", "What it does", "Installed on"]) hr.append(el("th", null, h));
+  head.append(hr);
+  for (const id of ids) {
+    const t = tools[id], tr = el("tr"), n = own.filter((m) => m.companion.tools?.[id]?.installed).length, link = el("a", null, `${n} of ${own.length} of your pcs`);
+    link.href = "/ui#/machines";
+    const on = el("td"); on.append(link);
+    tr.append(el("td", null, t.name), el("td", "muted", t.kind || ""), el("td", "muted", t.description || ""), on);
+    body.append(tr);
+  }
+  table.append(head, body);
+  const wrap = el("div", "table-wrap"); wrap.append(table);
+  $("tool-catalog").replaceChildren(wrap);
+}
 
 // Settings: a number field per server setting (range and meaning from the server), plus the extra admins.
 function renderSettings() {
@@ -410,7 +468,7 @@ async function load() {
     $("n-tokens").textContent = state.tokens.length; $("n-projects").textContent = state.projects.length;
     return;
   }
-  renderTokens(); renderUsers(); renderProjects(); renderSystem(); renderExternal();
+  renderTokens(); renderUsers(); renderProjects(); renderSystem(); renderExternal(); renderRequests(); renderCatalog();
   $("undo-box").hidden = false;
   $("undo-names").replaceChildren(...state.tokens.map((t) => { const o = el("option"); o.value = t.name; return o; }));
   if (!loaded) { loaded = true; applyKind(); } // later reloads keep what is being filled in

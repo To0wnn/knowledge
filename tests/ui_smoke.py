@@ -314,6 +314,15 @@ async def admin(browser, secret: str) -> None:
     check("ago" in await pg.locator("#tokens").inner_text() or "last 15 min" in await pg.locator("#tokens").inner_text(),
           "admin page shows when tokens were last used")
     check(await pg.locator("#project-rows tr").count() >= 3, "admin page lists the projects")
+    # Tools & skills: one Add, the requests waiting for an admin and the catalog the pcs report (read-only here).
+    await pg.click('[data-sec="external"]')
+    await pg.wait_for_function("!document.querySelector('#tool-requests .loading') && !document.querySelector('#tool-catalog .loading')", timeout=10000)
+    tools = await pg.evaluate("""() => ({tab: document.querySelector('[data-sec="external"]').textContent.trim(), add: !!$('tool-add-form'),
+        requests: $('tool-requests').textContent.length > 0, catalog: document.querySelectorAll('#tool-catalog tbody tr').length, shared: !!$('external')})""")
+    check(tools["tab"].startswith("Tools & skills") and tools["add"] and tools["requests"] and tools["shared"], f"admin: Tools & skills with one Add, requests and shared skills {tools}")
+    if os.environ.get("KNOWLEDGE_SMOKE_WRITES"):  # the seeded pc of tests/ui_ci.py reports two tools
+        check(tools["catalog"] == 2, f"admin: the catalog lists the tools the pcs report {tools}")
+    await pg.click('[data-sec="tokens"]')  # the checks below are on the Tokens tab
     sizes = await pg.locator("#project-rows tr td:nth-child(5)").all_inner_texts()
     check(bool(sizes) and all(t.endswith((" KB", " MB")) for t in sizes), f"admin page shows each project's size {sizes[:3]}")
     # New token: the kind of token sets the switches; shared skills are greyed out with the reason where not allowed.
@@ -716,6 +725,11 @@ async def shell(browser, devices, secret: str) -> None:
       const out = {fresh: btn('fresh')?.textContent, stale: btn('stale')?.textContent, said: /did not bring it/.test(document.querySelector('.mx-status').textContent)};
       machinesRes = was; machinesCache = cache; drawMachines(); return out; }""")
     check(upd["fresh"] == "Working…" and upd["stale"] == "Update to 2.0.0" and upd["said"], f"Machines: an update that is still settling shows as working after a page switch; one that said done but did not take is said {upd}")
+    ask = await pg.evaluate("""async () => { const link = [...document.querySelectorAll('.mx-ask a, .mx-ask button')].map((b) => b.textContent);
+      askTool(); await new Promise((r) => setTimeout(r, 300)); const d = document.querySelector('dialog.mx-dialog[open]');
+      const out = {link, fields: d ? d.querySelectorAll('input, textarea').length : 0, list: !!d?.querySelector('.mx-ask-list')}; d?.close(); return out; }""")
+    check(ask["fields"] == 2 and ask["list"] and (ask["link"] == ["Add a tool or skill"] or ask["link"] == ["Ask for a tool or skill…"] or not ask["link"]),
+          f"Machines: an admin adds a tool in Admin, anyone else asks for one, with their requests in the same dialog {ask}")
     check(split["lines"] == [" test-vm 3 reports"], f"Machines: a pc set up again (same name and token) is one offline line with its reports counted {split}")
     words = await pg.evaluate("""() => { const now = Date.now() / 1000; return [workerNeedsYou({online: true}, {status: 'failed', owner_stopped: true}), workerNeedsYou({online: true}, {status: 'failed'})]; }""")
     check(words == [False, True], f"Machines: a worker stopped by its owner does not need you, one that failed does {words}")

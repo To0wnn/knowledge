@@ -46,6 +46,8 @@ The one-machine `compose.yaml` reads these from `.env` (checked against `compose
 | `KNOWLEDGE_PROXY_USER_HEADER` | `X-Authentik-Username` | The header the proxy puts the user name in (below) |
 | `KNOWLEDGE_MATRIX_URL`, `KNOWLEDGE_MATRIX_ROOM`, `KNOWLEDGE_MATRIX_TOKEN` | empty | Notices to one Matrix room (below) |
 | `KNOWLEDGE_NTFY_URL`, `KNOWLEDGE_NTFY_TOKEN` | empty | Notices to an ntfy topic (below) |
+| `KNOWLEDGE_TOOLS_MEMO` | empty | The memo a tool request's draft task goes into (Admin › Tools & skills › Draft it), e.g. `knowledge-memory/project_tools.md`; empty: requests can only be marked added or declined |
+| `KNOWLEDGE_TOOLS_DRAFTER` | `Claude` | The agent that owns such a draft task |
 | `KNOWLEDGE_GITHUB_TOKEN` | empty | A fine-grained GitHub token with read-only access to public repositories only: the companions of the admins' own devices use it for tool add-on downloads (GitHub times anonymous callers out at busy moments). Never a token that can write |
 | `KNOWLEDGE_RERANK_MODEL` | empty | Duplicate check: a reranker folder under `./data` (`server/export_reranker.sh`), e.g. `/data/models/reranker` |
 

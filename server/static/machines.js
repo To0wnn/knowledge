@@ -353,7 +353,41 @@ function compareTable(pcs, here, mine) {
       grid.append(row("", label, pcs.map((m) => toolCell(m, id, `${m.id}:${id}`)), end));
     }
   }
+  if (mine) { // what is not in the list yet: an admin adds it, anyone else asks
+    const ask = el("div", "mx-ask");
+    if (me.admin) { const a = el("a", "btn small", "Add a tool or skill"); a.href = "/ui/admin#external"; ask.append(a, val("in Admin › Tools & skills: it reaches every pc.", "muted")); }
+    else ask.append(actionButton("Ask for a tool or skill…", () => askTool(), "btn small"), val("An admin decides; once it is added you install it here.", "muted"));
+    grid.append(mxRow("mx-askrow", ids.length ? null : "Tools", [ask], null));
+    grid.lastChild.children[1].style.gridColumn = "2 / -1";
+  }
   return wrap;
+}
+// Ask the admins for a tool or skill, and see what became of earlier requests.
+async function askTool() {
+  const d = el("dialog", "mx-dialog"), form = el("form", "mx-ask-form"), what = el("input"), why = el("textarea"), list = el("ul", "mx-ask-list");
+  what.required = true; what.minLength = 3; what.maxLength = 300; what.placeholder = "Name or link, e.g. https://github.com/owner/tool";
+  why.maxLength = 300; why.rows = 3; why.placeholder = "What do you want to use it for?";
+  const lab = (text, field) => { const l = el("label", null, text); l.append(field); return l; };
+  const send = el("button", "btn primary", "Send request"), cancel = el("button", "btn quiet", "Cancel"), acts = el("div", "mx-pop-acts");
+  send.type = "submit"; cancel.type = "button"; cancel.onclick = () => d.close(); acts.append(cancel, send);
+  form.append(el("h3", null, "Ask for a tool or skill"), el("p", "muted", "An admin decides whether it is added. Once it is, you install it per pc on this page."),
+    lab("Name or link", what), lab("What do you want to use it for?", why), acts);
+  const STATE = { waiting: "Waiting for an admin", drafting: "Being prepared", added: "Added: install it on Machines", declined: "Declined" };
+  const fill = async () => {
+    try {
+      const res = await api("/ui/api/tools/requests");
+      list.replaceChildren(...res.requests.map((r) => { const li = el("li"); li.append(el("span", null, r.what), el("span", "muted", STATE[r.status] + (r.status === "declined" && r.reason ? `: "${r.reason}"` : ""))); return li; }));
+    } catch (e) { list.replaceChildren(el("li", "error", e.message)); }
+  };
+  form.onsubmit = async (e) => {
+    e.preventDefault(); send.disabled = true;
+    try { await api("/ui/api/tools/request", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ what: what.value, why: why.value }) }); toast("Sent: an admin decides", false); form.reset(); await fill(); }
+    catch (err) { toast(err.message); } finally { send.disabled = false; }
+  };
+  d.append(form, el("h4", null, "Your requests"), list);
+  d.onclose = () => d.remove();
+  document.body.append(d); d.showModal(); what.focus();
+  fill();
 }
 
 // What needs a person on your own pcs, one line each, the action right there.
