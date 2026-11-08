@@ -1579,6 +1579,7 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
                          **({"review": r} if (r := bounded(w.get("repo"), lambda w=w: review(w, now))) else {})} for k, w in sorted(ws.items(), key=lambda kw: -(kw[1].get("started") or 0)) if not w.get("archived")],  # newest first: the server keeps 40
             "tools": tool_state(), "limitWait": wait, "waiting": waiting or {}, "asks": terminal_asks(now), "folders": links, "chats": chat_gits, "chatReviews": chat_reviews(now, chat_gits), "projects": load("state.json", {}).get("projects", [])}
     answer = server("POST", "/machine/report", tok, body)
+    tools.TOKEN = str(answer.get("github_token") or "")  # for tool downloads only: agents keep their own gh login
     try:
         clean_chat_branches(answer.get("closed_chats") or [])
     except Exception as e:  # never cost the round; the next one tries again

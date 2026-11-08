@@ -60,6 +60,7 @@ SHIMS = Path(os.environ.get("KNOWLEDGE_SHIMS") or Path.home() / ".local" / "bin"
 MARK = "knowledge-tool-launcher"
 MAX_DOWNLOAD = 3 << 30  # Ghidra is 0.6 GB
 RETRY_WAIT = 5.0
+TOKEN = ""  # set by the companion from the server's answer: a read-only token for public repositories
 
 
 def strings(d) -> bool:
@@ -201,17 +202,19 @@ OPENER = urllib.request.build_opener(_SameHostAuth)
 
 def _get(url: str, timeout: float = 30, tries: int = 3):
     """GET with three tries on a server error or a dropped line (GitHub times out anonymous callers at busy moments);
-    a GH_TOKEN or GITHUB_TOKEN in the environment goes to the GitHub API and github.com only, never along a redirect
-    to another host (the file storage)."""
+    a GitHub token (the server's read-only one for the admins' own devices, else GH_TOKEN or GITHUB_TOKEN) goes to the
+    GitHub API and github.com only, never along a redirect to another host (the file storage)."""
     if not url.startswith("https://") and "KNOWLEDGE_GITHUB_API" not in os.environ:
         raise RuntimeError(f"only https downloads: {url}")
     headers = {"User-Agent": "knowledge-tools", "Accept": "application/vnd.github+json"}
-    if url.startswith((API + "/", "https://github.com/")) and (tok := os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")):
+    if url.startswith((API + "/", "https://github.com/")) and (tok := TOKEN or os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")):
         headers["Authorization"] = f"Bearer {tok}"
     for n in range(tries):
         try:
             return OPENER.open(urllib.request.Request(url, headers=headers), timeout=timeout)
         except urllib.error.HTTPError as e:
+            if e.code == 401 and headers.pop("Authorization", None):  # an expired token: anonymous still works most of the time
+                continue
             if e.code < 500 or n == tries - 1:
                 raise
         except (urllib.error.URLError, TimeoutError):
@@ -462,7 +465,7 @@ def remove(m: dict, agents) -> dict:
 
 
 def self_test():
-    global TOOLS, API, RETRY_WAIT, SHIMS
+    global TOOLS, API, RETRY_WAIT, SHIMS, TOKEN
     import io
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -582,6 +585,10 @@ def self_test():
             def do_GET(self):
                 base = f"http://127.0.0.1:{srv.server_port}"
                 state.setdefault("auth", []).append((self.path, self.headers.get("Authorization")))
+                if self.headers.get("Authorization") == "Bearer expired":
+                    self.send_response(401)
+                    self.end_headers()
+                    return
                 if self.path == "/hop":  # a redirect to another host name of this machine
                     self.send_response(302)
                     self.send_header("Location", f"http://localhost:{srv.server_port}/dl/tool.jar")
@@ -627,6 +634,11 @@ def self_test():
             finally:
                 os.environ.pop("GH_TOKEN")
             assert state["auth"] == [("/hop", "Bearer tok"), ("/dl/tool.jar", None)], state["auth"]
+            TOKEN = "expired"
+            try:
+                assert fetch({**eng, "into": "engine2"})[0], "an expired token falls back to no token"
+            finally:
+                TOKEN = ""
             assert fetch({**eng, "asset": {"linux-arm64" if plat != "linux-arm64" else "darwin-x64": "x"}})[2].endswith("skipped")
             state["digest"] = "sha256:" + "0" * 64
             (TOOLS / ".versions.json").write_text("{}")

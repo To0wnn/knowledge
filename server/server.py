@@ -7401,7 +7401,9 @@ async def machine_report(request: Request):
         notify(f"Knowledge: a tool on {dev.get('machine_label')} failed (Machines page, Tools): {e}"[:500])
     # its "Own branch" chats that are closed: the companion removes what has nothing left to merge
     closed = await asyncio.to_thread(lambda: [k for k in report["chats"] if (read_json(chat_file(dev["machine"], k), None) or {}).get("closed")])
-    return JSONResponse({"ok": True, "closed_chats": closed})
+    # the read-only GitHub token for tool downloads: only to the admins' own devices, never a friend's or a guest's
+    gh = os.environ.get("KNOWLEDGE_GITHUB_TOKEN", "") if read_json(TOKENS_FILE, {}).get(dev.get("name", ""), {}).get("self") else ""
+    return JSONResponse({"ok": True, "closed_chats": closed, **({"github_token": gh} if gh else {})})
 
 
 @server.custom_route("/ui/api/task/approve", methods=["POST"])

@@ -860,6 +860,16 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert json.loads((tmp / "machines.json").read_text())[mid]["tools_told"] == {"rea": "REA: fetch: jdk: HTTP Error 503"}  # told once, kept to compare
     assert http("POST", "/machine/report", {**mrep, "tools": tools}, token=fr, headers=pc)[0] == 200
     assert json.loads((tmp / "machines.json").read_text())[mid]["tools_told"] == {}  # fixed: a new failure is told again
+    # the read-only GitHub token goes only to the admins' own devices ("self"), never to a friend's or a guest's pc
+    tf = tmp / "tokens.json"
+    name = [r for r in json.loads(ui("/ui/api/machines")[2])["machines"] if r["id"] == mid][0]["tokens"][0]
+    before = tf.read_text()
+    for own in (False, True):
+        tf.write_text(json.dumps({**json.loads(before), name: {**json.loads(before)[name], "self": own}}))
+        time.sleep(1.1)  # read_json sees a write by its time stamp
+        answer = json.loads(http("POST", "/machine/report", {**mrep, "tools": tools}, token=fr, headers=pc)[1])
+        assert answer.get("github_token") == ("gh-read-only" if own else None), (own, answer)
+    tf.write_text(before)
     state = json.loads(ui("/ui/api/admin")[2])["models"]
     assert {u["model"] for u in state["unmeasured"]} >= {"sonnet-x"} and state["chosen"]["read"]["claude"]["model"] == "on-no-pc", state
     row = next(x for x in state["pcs"] if x["id"] == mid)
@@ -2123,7 +2133,7 @@ def main():
            "KNOWLEDGE_BIND": "127.0.0.1", "KNOWLEDGE_RESCAN": "3600",
            "KNOWLEDGE_GITHUB_API": ghurl, "KNOWLEDGE_GITHUB_RAW": ghurl + "/raw", "KNOWLEDGE_EXTERNAL_SLEEP": "3600", "KNOWLEDGE_INSTANCE": "blue", "KNOWLEDGE_PLUGIN_GRACE": "0",
            "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_RERANK_MODEL": "test", "KNOWLEDGE_DUPES_EVERY": "1", "KNOWLEDGE_DUPES_DELAY": "0", "KNOWLEDGE_DUPES_DEBOUNCE": "0", "KNOWLEDGE_VECTOR_SYNC": "0.2", "KNOWLEDGE_WATCH_DEVICE": "laptop", "KNOWLEDGE_TASK_STALLED": "1", "KNOWLEDGE_TASK_LEASE": "600", "KNOWLEDGE_TASK_CHECK": "0.25", "KNOWLEDGE_RESCAN": "1", "KNOWLEDGE_JUST_WRITTEN": "1", "KNOWLEDGE_LOGIN_DELAY": "0.05", "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}",
-           "KNOWLEDGE_MATRIX_URL": ghurl, "KNOWLEDGE_MATRIX_ROOM": "!room:example", "KNOWLEDGE_MATRIX_TOKEN": "mx",
+           "KNOWLEDGE_MATRIX_URL": ghurl, "KNOWLEDGE_MATRIX_ROOM": "!room:example", "KNOWLEDGE_MATRIX_TOKEN": "mx", "KNOWLEDGE_GITHUB_TOKEN": "gh-read-only",
            "KNOWLEDGE_STT_URL": ghurl + "/v1/", "KNOWLEDGE_STT_LANGUAGE": "nl", "KNOWLEDGE_STT_PROMPT": "forge, Proxmox", "KNOWLEDGE_STT_KEY": "sk-1",
            "KNOWLEDGE_NEEDS_QUIET": "1", "KNOWLEDGE_UI_GAP_WAIT": "0.5", "KNOWLEDGE_PUBLIC_URL": "https://kn.example"}
     proc = subprocess.Popen([sys.executable, str(Path(__file__).with_name("server.py"))], env=env)
