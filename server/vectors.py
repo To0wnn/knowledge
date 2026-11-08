@@ -15,6 +15,7 @@ import os
 import re
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -113,6 +114,10 @@ class Vectors:
         self.seen_gen = -1
         self.lock = threading.Lock()
         self.error = ""
+        # Every embedding runs on this one thread: onnxruntime keeps working buffers per calling thread, so queries from
+        # asyncio.to_thread's many threads grew the server from 734 to 855 MB in an hour. Load test of 240 queries from 8
+        # threads (8 Nov 2026): ~1000 MB -> ~480 MB; parallel runs gained nothing, each already uses THREADS cores.
+        self.worker = ThreadPoolExecutor(1, thread_name_prefix="embed", initializer=os.nice, initargs=(10,))  # nice is per thread
 
     # ------------------------------------------------------------------ background work
     def load(self):
@@ -127,9 +132,15 @@ class Vectors:
             except Exception as e:  # a broken cache is only a slower start
                 print(f"vector cache unreadable, rebuilding: {e}", flush=True)
         self.model = HashEmbedder() if MODEL == "hash" else text_model(THREADS)
+        trim()  # loading leaves ~190 MB of temporaries that glibc keeps otherwise
 
     def embed(self, texts: list[str]) -> np.ndarray:
-        v = np.array(list(self.model.embed(texts, batch_size=4)), dtype=np.float32)
+        # One text per job, submitted one after the other, so a query waits for at most one chunk (~0.75 s) while a sync
+        # embeds hundreds; jobs of 4 made it wait ~2.3 s and were only 11% faster (measured 8 Nov 2026).
+        out = []
+        for t in texts:
+            out += self.worker.submit(lambda t=t: list(self.model.embed([t], batch_size=1))).result()
+        v = np.array(out, dtype=np.float32)
         return v / np.maximum(np.linalg.norm(v, axis=1, keepdims=True), 1e-9)
 
     def loop(self):
@@ -266,6 +277,13 @@ if __name__ == "__main__":  # self-check of the chunker and the search ranking w
     src = next(h for h in v.search("boiler water") if h["path"] == "homelab/sources/s.md")
     raw = float(v.matrix[[r[0] for r in v.rows].index("homelab/sources/s.md")] @ v.embed([QUERY_PREFIX + "boiler water"])[0])
     assert abs(src["score"] - (raw - SOURCE_PENALTY)) < 1e-3, (src, raw)  # a raw source ranks lower by the penalty
+    seen_threads = set()
+    real_embed = v.model.embed
+    v.model.embed = lambda texts, **k: (seen_threads.add(threading.current_thread().name), real_embed(texts, **k))[1]
+    callers = [threading.Thread(target=v.search, args=("boiler",)) for _ in range(4)]
+    [t.start() for t in callers]
+    [t.join() for t in callers]
+    assert len(seen_threads) == 1 and next(iter(seen_threads)).startswith("embed"), seen_threads  # one embedding thread
     v.save()  # tagged with the default model; another model must not reuse these vectors
     MODEL = "hash"
     w = Vectors(FakeIndex())
