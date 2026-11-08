@@ -50,6 +50,8 @@ hostile page and then wrote a memo writes as you, which no server can tell. That
 
 ## External skills
 
+- **Tools & skills (Admin):** one Add for both kinds: a GitHub link to a skill folder becomes a shared skill (below); anything that needs installing becomes a request that is drafted at once. Anyone signed in may ask for a tool or skill (Machines › Tools, `POST /ui/api/tools/request`, at most 10 open per person; the admins get a notice). An admin answers with Draft it (a task line for `KNOWLEDGE_TOOLS_DRAFTER` in `KNOWLEDGE_TOOLS_MEMO`: draft `plugin/tools/<id>.json` per [companion.md](companion.md) > Adding a tool, the request text marked as data), Mark added or Decline (with a reason the asker sees). A request's text is kept on one line without brackets, so it never reads as a task line of its own.
+
 - **External skills:** an admin adds a skill folder from GitHub by its link; it is pinned to a commit, taken in only as
   plain text (no tools, hooks or load-time commands, a licence that allows copying) and shared like your own skills.
   A weekly check takes small updates in by itself and holds big or unsafe ones for the admin; local additions below

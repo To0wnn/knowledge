@@ -543,6 +543,17 @@ body.admin-page { display: block; overflow-y: auto; }
 .mx-frow + .mx-frow { border-top: 1px solid var(--line); }
 .mx-frow code { overflow-wrap: anywhere; }
 .mx-empty { margin: 0; padding: 10px 14px; }
+.mx-ask { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.mx-ask-list { margin: 10px 0; padding: 0; list-style: none; }
+.mx-ask-list li { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.mx-ask-form { display: grid; gap: 6px; }
+.mx-ask-form input, .mx-ask-form textarea { width: 100%; box-sizing: border-box; }
+/* Admin › Tools & skills: requests of people */
+.req-list { margin: 6px 0 12px; padding: 0; list-style: none; }
+.req { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 13px; flex-wrap: wrap; }
+.req > div:nth-child(2) { flex: 1 1 300px; min-width: 0; overflow-wrap: anywhere; }
+.req .actions { display: flex; gap: 6px; }
+.muted.small, p.small { font-size: 12px; }
 /* a phone: no columns; each row a block with its name, then each pc's value under the other (pc name in front) */
 @media (max-width: 699.98px) {
   .mx-status { flex-direction: column; gap: 10px; }
