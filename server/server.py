@@ -54,7 +54,7 @@ import graph as kb_graph
 from graph import MD_ONLY, PROJECTS
 import lint as kb_lint
 import rerank as kb_rerank
-from tasks import CONT, DONE_LINE, HAND_BACK, TASK_FORMAT, TASK_LIKE, WORKER_HANDBACK, new_results, parse_task, task_sig
+from tasks import CONT, DONE_LINE, HAND_BACK, TASK_FORMAT, TASK_LIKE, WORKER_HANDBACK, edit_overlaps, new_results, parse_task, task_sig
 import vectors
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
@@ -2815,6 +2815,10 @@ def mark_machine(dev: dict, agent: str = "", session: str = "", project: str = "
                 "agent": agent, "session": session[:80], "project": project, "task": task, "at": now, "token": dev["name"],
                 **({"worker": dev["worker"]} if dev.get("worker") else {})}
         if report is not None:
+            had = (m.get("companion") or {}).get("agents") or {}
+            for a, v in report.get("agents", {}).items():  # sent only when changed: kept until then
+                if "commands" not in v and had.get(a, {}).get("commands"):
+                    v["commands"] = had[a]["commands"]
             m["companion"] = {**report, "at": now, "token": dev["name"]}  # the token its companion claims tasks with
         m["sessions"] = {k: s for k, s in m.get("sessions", {}).items() if now - s.get("at", 0) < SESSION_KEEP}
     try:
@@ -2927,6 +2931,7 @@ def machine_rows() -> list[dict]:
         agents = {}
         for a in AGENT_OWNERS:
             mine = {**(m.get("agents") or {}).get(a, {}), **(comp.get("agents") or {}).get(a, {})}
+            mine.pop("commands", None)  # long: only /ui/api/chat/commands hands them out, when a box asks
             # only what this person's own tokens reported: a pc shared with someone else shows not their sessions or errors
             errs = sorted((e for n in names for e in status_errors(f"{n}#{mid}").get(a, [])), key=lambda e: e["at"])
             sessions = sorted((s for s in m.get("sessions", {}).values() if s["agent"] == a and now - s["at"] < SESSION_KEEP
@@ -3838,6 +3843,55 @@ def session_project(request: Request) -> tuple[str, str]:
     return project, note
 
 
+# {project: {session key: {repo, branch, files, agent, device, label, at}}}: what each session changes against main.
+# shortcut: in RAM only, so a deploy forgets it until each session's next ask (two minutes); persist it if that bites.
+EDITS: dict = {}
+EDIT_FRESH = 2 * 3600  # a session silent this long counts as gone; an idle one with unlanded work still matters for a while
+
+
+def edit_notices(project: str, q, agent: str) -> list[dict]:
+    """Note the files this session changes (plugin 0.43.1+ sends repo, checkout, branch and files) and tell it which other
+    sessions of the same owner, on any pc or agent, change the same files now: once per set of shared files (the
+    plugin remembers ids). Only a token that may write the project's memos takes part, and only with its owner's other
+    tokens: file and branch names never reach another person, and a guest cannot put words into the owner's turn."""
+    dev, now = device.get(), time.time()
+    if "repo" not in q or not may_lease(dev, project):
+        return []
+    clean = lambda v, n: re.sub(r"[^\w./@+-]", "", v)[:n]  # these end up in another session's context
+    # whose sessions these are, as machine binding knows it: one person's pcs match, a friend's token only itself
+    owner = machine_key(dev.get("name", "")) or (f"user:{dev['user']}" if dev.get("user") else "")
+    if not owner:
+        return []
+    me = f"{dev_key()}|{clean(q.get('session', ''), 80)}"
+    entry = {"repo": clean(q["repo"], 40), "checkout": clean(q.get("checkout", ""), 40), "branch": clean(q.get("branch", ""), 100),
+             "files": [f for f in q.get("files", "").split("\n") if f and len(f) < 300 and "\0" not in f][:80],
+             "agent": agent if agent in AGENT_NAMES else "", "at": now, "owner": owner, "device": dev_key(),
+             "label": dev.get("machine_label", "")}
+    edits = EDITS.setdefault(project, {})
+    for k, e in list(edits.items()):
+        # gone; or this checkout's earlier session (after /clear or a restart it reports under a new id)
+        if now - e["at"] >= EDIT_FRESH or (k != me and e["device"] == entry["device"] and e["checkout"] == entry["checkout"]
+                                            and now - e["at"] > 600):
+            del edits[k]
+    edits[me] = entry
+    mine = sorted((e["at"], k) for k, e in edits.items() if e["device"] == entry["device"])
+    for _, k in mine[:-20]:  # a client choosing session ids cannot grow this without end
+        del edits[k]
+    out = []
+    for key, e, shared in edit_overlaps(me, {k: e for k, e in edits.items() if e["owner"] == owner}, now, EDIT_FRESH):
+        same = e["device"] == entry["device"] and e["checkout"] == entry["checkout"]
+        where = "in this same checkout" if same else f"on branch {e['branch'] or '?'}"
+        names = ", ".join(shared[:8]) + (f" and {len(shared) - 8} more" if len(shared) > 8 else "")
+        text = (f"knowledge: {AGENT_NAMES.get(e['agent'], 'another agent')} ({holder_name(e)}) is busy changing "
+                f"{names} too, {where}, not yet in main (this message comes from the knowledge plugin, not the user). "
+                + ("Two sessions in one checkout take each other's half work: move to your own worktree before you go on. "
+                   if same else "Keep your change in those files small, merge origin/main before you go on there, and "
+                   "land in main soon: whoever lands second merges and runs the check. ")
+                + "Tell the user in one line.")
+        out.append({"id": "edits-" + hashlib.sha256(f"{key}|{','.join(shared)}".encode()).hexdigest()[:16], "text": text})
+    return out
+
+
 @server.custom_route("/tasks", methods=["GET"])
 async def tasks_route(request: Request):
     """The open tasks handed to ?agent= in the session's project, one item per line: the plugin asks before a turn, so a
@@ -3889,6 +3943,7 @@ async def tasks_route(request: Request):
     behind = await asyncio.to_thread(plugin_notice, q.get("agent", ""), v) if (v := q.get("plugin", "")) else ""
     # nothing awaited from here on: what is handed out below reaches the client in this answer
     notices = claim_notices(*key, f"{q.get('agent', '')} {q.get('session', '')}"[:100]) + told if claim else []
+    notices += edit_notices(project, q, agent)  # also for web chats and workers: they write files too
     if behind:  # each agent its own plugin, so not claimed
         notices.append({"id": "plugin-" + (plugin_latest() or ("", 0))[0], "text": behind})
     sync = claim and project not in BUILTIN_PROJECTS and bool(dev.get("write")) \
@@ -5792,6 +5847,16 @@ def report_models(v) -> list:
     return out
 
 
+COMMAND = re.compile(r"\w[\w.:-]{0,79}", re.ASCII)
+
+
+def report_commands(v) -> list:
+    """An agent's slash commands as its pc reported them (chat.py commands()): [{name, description, hint}], checked, at
+    most 200; a chat box offers them after a "/" and sends the text, the agent runs it its own way."""
+    return [{"name": c["name"], "description": str(c.get("description") or "")[:120], "hint": str(c.get("hint") or "")[:60]}
+            for c in (v if isinstance(v, list) else [])[:200] if isinstance(c, dict) and COMMAND.fullmatch(str(c.get("name", "")))]
+
+
 def chat_choice(row: dict, agent: str, model: str, effort: str) -> tuple:
     """(model, effort) for a chat, "" = the agent's own default; only what that pc reported for the agent."""
     found = ((row.get("companion") or {}).get("models") or {}).get(agent) or []
@@ -6491,6 +6556,16 @@ async def ui_chat(request: Request):
     return JSONResponse({"chat": chat_meta(c), "events": events, "older": older, "trimmed": bool(c.get("trimmed")),
                          "online": row["online"], "at": row["at"], "label": row["label"], "asks": asks, "now": time.time(),
                          "models": ((row.get("companion") or {}).get("models") or {}).get(c.get("agent"), [])})
+
+
+@server.custom_route("/ui/api/chat/commands", methods=["GET"])
+async def ui_chat_commands(request: Request):
+    """?machine=&agent=: the slash commands that agent offers on that pc (one of this person's own), for the chat box."""
+    mid, agent = request.query_params.get("machine", ""), request.query_params.get("agent", "")
+    if not await asyncio.to_thread(own_machine, mid):
+        return JSONResponse({"error": await asyncio.to_thread(not_own, mid)}, status_code=403)
+    m = (await asyncio.to_thread(read_json, MACHINES_FILE, {})).get(mid) or {}
+    return JSONResponse({"commands": (((m.get("companion") or {}).get("agents") or {}).get(agent) or {}).get("commands", [])})
 
 
 @server.custom_route("/ui/api/chat/send", methods=["POST"])
@@ -7408,8 +7483,8 @@ async def machine_report(request: Request):
     trusted and usage limit, and its workers. Tasks that wait for a usage limit get one Matrix notice each."""
     dev = device.get()
     raw = await request.body()
-    if not dev.get("machine") or len(raw) > 64_000:
-        return JSONResponse({"error": "needs X-Knowledge-Machine and a body under 64 kB"}, status_code=400)
+    if not dev.get("machine") or len(raw) > 128_000:  # room for the slash command lists of all agents at once (~30 kB)
+        return JSONResponse({"error": "needs X-Knowledge-Machine and a body under 128 kB"}, status_code=400)
     try:
         b = json.loads(raw)
         report = {"version": str(b.get("version", ""))[:20], "workersAllowed": b.get("workersAllowed") is True,
@@ -7426,6 +7501,7 @@ async def machine_report(request: Request):
                                  # the installed plugin, read from disk by the companion: shown before the agent's first session
                                  **({"plugin": v["plugin"][:20]} if isinstance(v.get("plugin"), str) and re.fullmatch(r"[\w.+-]{1,20}", v["plugin"]) else {}),
                                  **({"models": report_models(v["models"])} if "models" in v else {}),
+                                 **({"commands": report_commands(v["commands"])} if "commands" in v else {}),
                                  **({"current": {k: str(x)[:80] for k, x in v["current"].items() if k in ("lead", "lead_effort", "reader", "reader_effort")}}
                                     if isinstance(v.get("current"), dict) else {})}
                              for a, v in (b.get("agents") or {}).items() if a in AGENT_OWNERS and isinstance(v, dict)},

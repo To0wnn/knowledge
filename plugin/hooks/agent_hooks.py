@@ -98,6 +98,46 @@ def project_query(cwd: str) -> dict:
     return {"project": linked, "linked": "1"} if linked else {"project": cwd}
 
 
+def changed_files(cwd: str, budget: float = 2.0) -> dict:
+    """What this checkout changes that is not in the shared main yet, for the server's 'who else changes these files'
+    notice: {repo, checkout, branch, files}. repo: a hash of the origin URL, so the worktrees of one repository match;
+    checkout: a hash of this folder. {} outside git, or when git is too slow (the hook has 8 s for everything)."""
+    end = time.monotonic() + budget
+    kw = {"creationflags": 0x08000000} if os.name == "nt" else {}  # CREATE_NO_WINDOW: no console flash per prompt
+
+    def g(*args):
+        left = end - time.monotonic()
+        if left <= 0:
+            raise TimeoutError
+        r = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=left,
+                           stdin=subprocess.DEVNULL, env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")}, **kw)
+        return r.stdout if r.returncode == 0 else None
+    try:
+        head = (g("rev-parse", "--show-toplevel", "--abbrev-ref", "HEAD") or "").splitlines()
+        if len(head) != 2:
+            return {}
+        top, branch = head
+        origin = (g("config", "--get", "remote.origin.url") or top).strip()
+        base = (g("merge-base", "HEAD", "origin/HEAD") or g("merge-base", "HEAD", "origin/main") or "").strip()
+        files = set((g("diff", "--name-only", base, "HEAD") or "").splitlines()) if base else set()
+        # staged, unstaged and untracked; -z: names as they are, a rename's old name follows as its own entry
+        entries = iter((g("status", "--porcelain", "-z", "-uall") or "").split("\0"))
+        for e in entries:
+            if len(e) > 3:
+                files.add(e[3:])
+                if e[0] in "RC":
+                    next(entries, None)
+    except Exception:  # no git, a slow disk: the turn goes on without it
+        return {}
+    listed, size = [], 0
+    for f in sorted(f for f in files if f):  # shortcut: a GET query, so at most ~3 KB of names; POST them if that is too few
+        if len(listed) >= 80 or size + len(f) > 3000:
+            break
+        listed.append(f)
+        size += len(f) + 1
+    return {"repo": short(origin)[:12], "checkout": short(top)[:12], "branch": branch, "files": "\n".join(listed)}
+
+
 AGENTS_DIR = KN_HOME / "agents"  # who runs on this machine and how to wake it
 WAKE_WITHIN = 2 * 86400  # a session not seen this long is not listed
 WAKE_TOOLS = re.compile(r"knowledge_(edit|write|new_memo)")  # the tools that can add a task line
@@ -236,7 +276,7 @@ def new_tasks(agent: str, tok: str, hook: dict, now=None, wake: bool = False) ->
     if nonce := os.environ.get("KNOWLEDGE_START_NONCE"):
         extra["start"] = nonce
     try:
-        beat = ask_tasks(tok, {**project_query(cwd), "agent": agent, "session": str(sid)[:80], "wake": int(wake), "v": 2,
+        beat = ask_tasks(tok, {**project_query(cwd), **changed_files(cwd), "agent": agent, "session": str(sid)[:80], "wake": int(wake), "v": 2,
                                **({} if worker else {"chat": 1}), **({"claim": 0} if webchat else {}), **extra, **({"plugin": version} if version else {})})
         ids = {m.group(1).strip(): ln for ln in beat.get("tasks", []) if (m := TASK_ID.search(ln))}
     except Exception:  # the next session start says so loudly; a prompt is no place to nag

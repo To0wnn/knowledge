@@ -762,6 +762,11 @@ body.admin-page { display: block; overflow-y: auto; }
 .ck-sub.running > summary .chip { animation: kn-pulse 1.6s ease-in-out infinite; }
 .chip.live { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
 .ck-form .ck-files { display: flex; gap: 6px; flex-wrap: wrap; }
+/* the slash command list: over the box's text, the agent's own commands (agents.js ckCmdShow) */
+.ck-cmds { list-style: none; margin: 0; padding: 2px 0 4px; max-height: min(40vh, 300px); overflow-y: auto; border-bottom: 1px solid var(--line); }
+.ck-cmds[hidden] { display: none; }
+.ck-cmds .pal-opt { min-height: 34px; padding: 6px 10px; }
+.ck-cmds-none { padding: 6px 10px; font-size: 13px; }
 .ck-form .ck-files[hidden] { display: none; }
 .ck-filechip { display: inline-flex; align-items: center; gap: 4px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ck-mic { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }

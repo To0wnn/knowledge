@@ -47,6 +47,8 @@ CLAUDE_MODELS = ("fable", "opus", "sonnet", "haiku")  # Claude Code's aliases fo
 MODELS_TTL = 6 * 3600
 _MODELS: dict = {}  # agent -> (at, [{id, name, efforts}])
 _AGY_ACP: list = []  # the models agy's ACP offered in a session here: once known, the list for agy
+COMMAND = re.compile(r"[\w][\w.:-]{0,79}", re.ASCII)  # a slash command's name (plugin:skill too)
+_COMMANDS: dict = {}  # agent -> [{name, description, hint}], as its last live chat here listed them
 
 
 def models(agent: str, wait: bool = False) -> list:
@@ -84,6 +86,40 @@ def _ask_models(agent: str):
         found = []
     # an empty answer (offline, a CLI error) is asked again in 10 minutes, not after hours
     _MODELS[agent] = (time.time() - (MODELS_TTL - 600 if not found else 0), found[:40])
+
+
+def commands(agent: str) -> list:
+    """The slash commands `agent` offered in the last live chat on this pc (kept in a file over companion restarts).
+    shortcut: one list per agent, not per folder (a project's own skills show in every folder); per folder when it bites."""
+    if agent not in _COMMANDS:
+        try:
+            _COMMANDS.update(json.loads((workers.DIR.parent / "commands.json").read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            pass
+        _COMMANDS.setdefault(agent, [])
+    return _COMMANDS[agent]
+
+
+def seen_commands(agent: str, found: list):
+    """What a live chat's agent said it offers: [{name, description[, argumentHint|input.hint]}] from Claude Code's
+    initialize, Codex's skills/list or ACP's available_commands_update; names checked, texts cut short."""
+    out, size = [], 0
+    for c in found:
+        if not (isinstance(c, dict) and COMMAND.fullmatch(str(c.get("name", ""))) and not str(c["name"]).startswith("_")):
+            continue
+        inp = c.get("input") if isinstance(c.get("input"), dict) else {}
+        hint = c.get("argumentHint") or inp.get("hint") or ""
+        out.append({"name": str(c["name"]), "description": first_line(c.get("description"))[:120], "hint": str(hint or "")[:60]})
+        size += len(json.dumps(out[-1])) + 2  # with the ", " between items
+        if size > 24_000:  # each agent's list stays a small part of the companion's report (the server takes 128 kB)
+            out.pop()
+            break
+    if out and out != commands(agent):
+        _COMMANDS[agent] = out
+        try:
+            (workers.DIR.parent / "commands.json").write_text(json.dumps(_COMMANDS), encoding="utf-8")
+        except OSError:  # only the restart loses it; the next chat lists them again
+            pass
 
 
 def choice(item: dict) -> tuple:
@@ -1004,6 +1040,7 @@ class Live:
                 pass
             rmtree_soon(self.p.d)
             raise
+        self.list_commands()
         log("chat", f"{AGENT_NAMES[self.agent]}: live chat started in {self.folder}", f"chat {self.cid}" + (f", continues {self.st['session']}" if self.st["session"] else ""))
 
     def setup(self, item: dict, post, log, yolo: bool):
@@ -1014,6 +1051,8 @@ class Live:
         self.lock, self.buf, self.flushed, self.last = threading.Lock(), [], time.time(), time.time()
         self.written = self.taken = 0  # messages written in, and echoed back as taken
         self.turn_open = self.busy = False  # the agent works on a turn; the server counts the chat running
+        self.echoed = False  # a message of ours was echoed since the last result
+        self.slash = set()  # which messages written (1 = the first) are slash commands: a local one comes back unechoed
         self.after_interrupt, self.closing, self.stop_asked = [], False, False
         self.subs = set()  # its subagents running now: not idle while one works
         self.snap, self.save_lock, self.asking, self.bg = None, threading.Lock(), {}, {}  # bg: Claude's background shells running  # asking: approval request id -> where its line starts
@@ -1028,13 +1067,14 @@ class Live:
         still unanswered holds the place: the new companion reads its request again and asks again."""
         o = self.p.stdout
         at = o.end if o.end and threading.get_ident() == getattr(self, "reader", None) else o.offset
-        return {"offset": min([at, *self.asking.values()]), "taken": self.taken, "subs": sorted(self.subs), "bg": dict(self.bg)}
+        return {"offset": min([at, *self.asking.values()]), "taken": self.taken, "subs": sorted(self.subs), "bg": dict(self.bg), "echoed": self.echoed}
 
     def live_state(self) -> dict:
         """What was written to the agent, kept at every write."""
         return {"chat": self.cid, "agent": self.agent, "folder": self.folder, "yolo": self.yolo, "pick": list(self.pick),
                 "asked": list(self.asked), "session": self.st["session"], "allow": list(self.rec.get("allow", [])),
-                "in": in_size(self.p.d), "written": self.written, "turn_open": self.turn_open, "busy": self.busy}  # a send sets them
+                "in": in_size(self.p.d), "written": self.written, "turn_open": self.turn_open, "busy": self.busy,  # a send sets them
+                "slash": sorted(x for x in self.slash if x > self.taken)}
 
     def save(self, turn: bool = False):
         with self.save_lock:  # several threads write; one file at a time
@@ -1055,6 +1095,7 @@ class Live:
         self.pick, self.asked = tuple(s["pick"]), tuple(s["asked"])
         self.written, self.taken, self.turn_open, self.busy, self.subs = s["written"], s["taken"], s["turn_open"], s["busy"], set(s["subs"])
         self.bg = dict(s.get("bg") or {})
+        self.echoed, self.slash = bool(s.get("echoed")), set(s.get("slash") or [])
         self.st["bg"] = dict.fromkeys(self.bg, 1)  # their ends, read after the restart, still match
         self.p = Hosted(d, offset=s["offset"])
         self.rec = RUNNING[self.cid] = {"pid": self.p.pid, "ident": self.p.ident, "stop": False, "folder": self.folder,
@@ -1064,11 +1105,17 @@ class Live:
         return self
 
     def resumed(self, s: dict, new_in: list):
-        self.written += sum(1 for x in new_in if x.get("type") == "user")  # written after its last save
+        for x in new_in:  # written after its last save
+            if x.get("type") == "user":
+                self.wrote(str((x.get("message") or {}).get("content") or ""))
         self.started()
 
     def started(self):
         threading.Thread(target=self.read, daemon=True).start()
+
+    def list_commands(self):
+        """Its slash commands for the box (commands()): Claude Code answers an initialize request with them."""
+        self.write((json.dumps({"type": "control_request", "request_id": "commands", "request": {"subtype": "initialize"}}) + "\n").encode())
 
     def alive(self) -> bool:
         return self.p.poll() is None and not self.closing
@@ -1098,8 +1145,13 @@ class Live:
                 self.interrupt()
                 return
             self.begin("" if not mode else "Your message started a turn.")
-            self.written += 1
+            self.wrote(text)
             self.write(user_line(text))
+
+    def wrote(self, text: str):
+        self.written += 1
+        if text.lstrip().startswith("/"):
+            self.slash.add(self.written)
 
     def interrupt(self):
         """Stop the step that runs, the native way: the turn ends with a result, the process stays."""
@@ -1162,12 +1214,14 @@ class Live:
             if not written_by_us(ev):  # counted as ours, it made taken > written below: the turn interrupted itself
                 return
             self.taken += 1
-            self.turn_open = True
+            self.turn_open = self.echoed = True
             if self.stop_asked or self.taken > self.written:  # stopped while it was on its way in (a done() counted it as dropped)
                 self.taken = min(self.taken, self.written)
                 self.interrupt()
             return
         if kind == "control_response":
+            if (ev.get("response") or {}).get("request_id") == "commands":
+                seen_commands(self.agent, ((ev["response"].get("response") or {}).get("commands")) or [])
             return
         evs = parse(self.agent, line, self.st)
         if any(e[0] == "bg" for e in evs):  # background shells: only their number goes to the server
@@ -1190,7 +1244,12 @@ class Live:
             if e[0] == "sub" and len(e) > 3:
                 (self.subs.add if e[3] == "running" else self.subs.discard)(e[2])
         if kind == "result":
-            self.turn_open = False
+            # a local slash command (/context, /cost, /model) answers with no echo, where every other message is echoed
+            # (/compact and skills too): its result, no model turn, takes it; one sent during a turn runs after that
+            # turn's result, so it is the next one owed (measured on Claude Code 2.1.319)
+            if ev.get("num_turns") == 0 and not self.echoed and self.taken < self.written and self.taken + 1 in self.slash:
+                self.taken += 1
+            self.turn_open = self.echoed = False
             self.turn_end()
         elif time.time() - self.flushed >= FLUSH:
             self.flush()
@@ -1203,7 +1262,7 @@ class Live:
             self.buf.append(("info", "Stopped this step; your message goes in now."))
             self.flush()
             for text in texts:
-                self.written += 1
+                self.wrote(text)
                 self.write(user_line(text))
             return
         if self.taken < self.written and not self.stop_asked:
@@ -1284,6 +1343,23 @@ class CodexLive(Live):
         r = self.call("thread/resume", {"threadId": self.st["session"], **perms}) if self.st["session"] else self.call("thread/start", perms)
         self.st["session"] = (r.get("thread") or {}).get("id") or self.st["session"]
         self.pick = codex_default(self.call, self.folder, *self.pick)
+
+    def list_commands(self):  # its skills (sent as a skill input) and /compact (thread/compact/start)
+        try:  # before the first message, which may name a skill
+            skills = [x for d in self.call("skills/list", {"cwds": [self.folder]}, timeout=15).get("data") or [] for x in d.get("skills") or []
+                      if isinstance(x, dict) and x.get("enabled", True)]
+            self.skills = {x["name"]: x["path"] for x in skills if isinstance(x.get("name"), str) and isinstance(x.get("path"), str)}
+        except Exception:  # refused or another shape: the chat runs on without the list
+            return
+        seen_commands("codex", [{"name": "compact", "description": "Compact the conversation now (summarize history to free up the context window)."}, *skills])
+
+    def user_input(self, text: str) -> list:
+        """A message as Codex input: "/skill rest" names the skill as its own input (the TUI's $skill), as Codex reads it."""
+        name, _, rest = text[1:].partition(" ") if text.startswith("/") else ("", "", "")
+        path = getattr(self, "skills", {}).get(name)
+        if not path:
+            return [{"type": "text", "text": text}]
+        return [{"type": "skill", "name": name, "path": path}, {"type": "text", "text": f"${name} {rest}".strip()}]
 
     def rpc(self, msg: dict):
         self.write((json.dumps({"jsonrpc": "2.0", **msg}) + "\n").encode("utf-8"))
@@ -1386,8 +1462,11 @@ class CodexLive(Live):
                 return
             self.starting = True
         try:
-            r = self.call("turn/start", {"threadId": self.st["session"], "input": [{"type": "text", "text": text}],
-                                         **({"model": model} if model else {}), **({"effort": effort} if effort else {})})
+            if text.strip() == "/compact":  # Codex's own compaction: a turn of its own (turn/started ... turn/completed)
+                r = self.call("thread/compact/start", {"threadId": self.st["session"]})
+            else:
+                r = self.call("turn/start", {"threadId": self.st["session"], "input": self.user_input(text),
+                                             **({"model": model} if model else {}), **({"effort": effort} if effort else {})})
         except RuntimeError:
             self.starting = False
             raise
@@ -1416,7 +1495,7 @@ class CodexLive(Live):
             return
         if steer:
             try:  # into the turn that runs; it may have ended a moment ago: then a new turn
-                self.call("turn/steer", {"threadId": self.st["session"], "expectedTurnId": steer, "input": [{"type": "text", "text": text}]})
+                self.call("turn/steer", {"threadId": self.st["session"], "expectedTurnId": steer, "input": self.user_input(text)})
                 return
             except RuntimeError:
                 pass
@@ -1548,8 +1627,14 @@ class AgyLive(CodexLive):
         finally:
             self.gone()
 
+    def list_commands(self):  # ACP sends its own (available_commands_update, on_note)
+        pass
+
     def on_note(self, method: str, params: dict):  # ACP: session updates
         self.last = time.time()
+        u = params.get("update") or {}
+        if u.get("sessionUpdate") == "available_commands_update":
+            seen_commands("agy", u.get("availableCommands") or [])
         self.buf += self.note(method, params) or []
         if time.time() - self.flushed >= FLUSH:
             self.flush()
@@ -1866,6 +1951,56 @@ def self_test():
             "seven_day": {"utilization": 0.91, "resetsAt": later}, "five_hour": {"utilization": 0.2, "resetsAt": later}}}}), {})
         kept = json.loads((Path(t) / "usage-claude-chat.json").read_text(encoding="utf-8"))["windows"]
         assert [(round(p), n, r) for p, n, r in kept] == [(91, "7d", later), (20, "5h", later)], kept
+    # Slash commands: what each agent listed (shapes from Claude Code 2.1.319, Codex 0.167, agy 1.5.3), kept over a restart
+    with tempfile.TemporaryDirectory() as t:
+        workers.DIR = Path(t) / "workers"
+        seen_commands("claude", [{"name": "compact", "description": "Clear history\nkeep a summary", "argumentHint": "<focus>"},
+                                 {"name": "__remote-workflow"}, {"name": "rm -rf"}, "junk", {"name": "ponytail:ponytail-review", "description": "x" * 400}])
+        seen_commands("agy", [{"name": "goal", "description": "Run until done.", "input": {"hint": "goal"}}])
+        _COMMANDS.clear()
+        got = commands("claude")
+        assert got == [{"name": "compact", "description": "Clear history", "hint": "<focus>"},
+                       {"name": "ponytail:ponytail-review", "description": "x" * 120, "hint": ""}], got
+        assert commands("agy") == [{"name": "goal", "description": "Run until done.", "hint": "goal"}] and commands("codex") == []  # before the budget test
+        seen_commands("claude", [])  # an empty answer keeps what was known
+        seen_commands("codex", [{"name": f"s{i}", "description": "d" * 300, "input": "not a dict"} for i in range(400)])
+        assert 100 < len(commands("codex")) < 200 and len(json.dumps(commands("codex"))) <= 24_000 and commands("codex")[0]["hint"] == "", "a byte budget per agent"
+        assert len(commands("claude")) == 2
+        _COMMANDS.clear()
+        # Claude's turn count with slash commands, in the orders measured on 2.1.319
+        def live(*texts):
+            lv = Live.__new__(Live)
+            lv.setup({"chat": "c", "agent": "claude"}, lambda b: None, lambda *a: None, False)
+            lv.save, lv.stops = (lambda **k: None), []
+            lv.interrupt = lambda: lv.stops.append(1)
+            lv.busy = True
+            for t in texts:
+                lv.wrote(t)
+            return lv
+        line = lambda lv, ev: lv.on_line(ev, json.dumps(ev))
+        echo = lambda t: {"type": "user", "isReplay": True, "message": {"role": "user", "content": t}}
+        lv = live("/context")  # a local command: a result of no model turn, no echo
+        line(lv, {"type": "result", "num_turns": 0, "result": "ctx"})
+        assert not lv.busy and lv.taken == 1 and not lv.stops
+        lv = live("hi")  # a turn the agent began itself fails before the model while "hi" waits: "hi" is still owed
+        line(lv, {"type": "result", "num_turns": 0, "is_error": True})
+        assert lv.busy and lv.taken == 0
+        line(lv, echo("hi")); line(lv, {"type": "result", "num_turns": 1})
+        assert not lv.busy and not lv.stops, "no interrupt of the owner's own turn"
+        lv = live("long", "/cost")  # /cost sent during a turn runs after that turn's result
+        line(lv, echo("long")); line(lv, {"type": "result", "num_turns": 2})
+        assert lv.busy and lv.taken == 1
+        line(lv, {"type": "result", "num_turns": 0})
+        assert not lv.busy and lv.taken == 2 and not lv.stops
+        lv = live("/compact")  # echoed: counted once
+        line(lv, echo("<local-command-stdout>Compacted</local-command-stdout>")); line(lv, {"type": "result", "num_turns": 0})
+        assert not lv.busy and lv.taken == 1 and not lv.stops
+        cx = CodexLive.__new__(CodexLive)
+        assert cx.user_input("/verify-done now") == [{"type": "text", "text": "/verify-done now"}], "skills not listed yet: plain text"
+        cx.skills = {"verify-done": "/s/verify-done/SKILL.md"}
+        assert cx.user_input("/verify-done now") == [{"type": "skill", "name": "verify-done", "path": "/s/verify-done/SKILL.md"}, {"type": "text", "text": "$verify-done now"}]
+        assert cx.user_input("/verify-done") [1] == {"type": "text", "text": "$verify-done"}
+        assert cx.user_input("a /verify-done") == [{"type": "text", "text": "a /verify-done"}], "only at the start"
     workers.DIR = w0
     # Subagents, in the shapes the CLIs printed (Claude 2.1.314, Codex 0.166 exec --json, agy 1.4.12 stream-json):
     # a block opens, its tool calls go under it, its hand-back ends it; its own words never mix into the answer.

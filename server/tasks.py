@@ -56,7 +56,26 @@ def task_sig(t: dict) -> str:
     return hashlib.sha256("\n".join((owner.lower(), t["from"], t["start"].lower(), " ".join(what.split()))).encode()).hexdigest()[:16]
 
 
+def edit_overlaps(me: str, edits: dict, now: float, fresh: float) -> list:
+    """[(other session key, its entry, shared files)] for the sessions whose unlanded changes (files changed against the
+    shared main, reported with each /tasks ask) touch the files session `me` changes in the same repository. Two writers
+    of one file are where merges conflict; being told early is the plan-with-files that halves conflicts (CooperBench)."""
+    mine = edits.get(me)
+    if not mine or not mine["files"]:
+        return []
+    out = []
+    for key, e in edits.items():
+        if key != me and e["repo"] == mine["repo"] and now - e["at"] < fresh and (shared := sorted(set(e["files"]) & set(mine["files"]))):
+            out.append((key, e, shared))
+    return out
+
+
 if __name__ == "__main__":
+    ed = {"a": {"repo": "r", "files": ["x.py", "y.py"], "at": 100}, "b": {"repo": "r", "files": ["y.py"], "at": 100},
+          "c": {"repo": "other", "files": ["y.py"], "at": 100}, "d": {"repo": "r", "files": ["y.py"], "at": 0}}
+    assert [(k, s) for k, _, s in edit_overlaps("a", ed, 150, 60)] == [("b", ["y.py"])], "same repo, fresh, shared file only"
+    assert edit_overlaps("b", {**ed, "b": {**ed["b"], "files": []}}, 150, 60) == [], "nothing changed: no overlap"
+    assert edit_overlaps("z", ed, 150, 60) == [], "an unknown session"
     res = "- [Codex, R-1-done]: ok\n"
     sig = new_results("", res)["R-1-done"]
     assert not new_results(res, res) and new_results(res, "- [Codex, R-1-done]: other\n").keys() == {"R-1-done"}
