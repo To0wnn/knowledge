@@ -35,7 +35,7 @@ fixed remote actions and relays chats. Installing it is part of the client setup
 ## Machines
 
 - **Models:** with a `model_advice.json` next to the development rules, Admin > Settings is the one place for models: per role and agent the advice with its test score and your own pick, models any pc offers that nobody measured, and per own pc whether its agents match, with what differs and an Apply button. Apply writes the lead and reader into that agent's own settings (a copy goes to `~/.knowledge/backups/`), only on a click; the result shows next to the button. Each agent reports what it is set to, so the page shows the real state. Without the file none of this appears.
-- **The agents update too:** once a day, when no game, chat or worker runs (a pc that always has work: after two days anyway, a running session is not touched; never during a game), the companion runs `claude update`, `codex update` and `agy update`, each agent's own command; a failure stands in Activity as an error, a running session stays on its version until its next start. By hand: Update agents in a pc's ⋯ menu on the Machines page, or Update the agents in the companion. Off per pc: `KNOWLEDGE_AUTO_UPDATE=0`, which also turns off the plugin's own check.
+- **The agents update too (and the tools, see Tools):** once a day, when no game, chat or worker runs (a pc that always has work: after two days anyway, a running session is not touched; never during a game), the companion runs `claude update`, `codex update` and `agy update`, each agent's own command; a failure stands in Activity as an error, a running session stays on its version until its next start. By hand: Update agents in a pc's ⋯ menu on the Machines page, or Update the agents in the companion. Off per pc: `KNOWLEDGE_AUTO_UPDATE=0`, which also turns off the plugin's own check.
 - **Updates reach the running companion:** it watches its plugin version and restarts itself when an update lands (between rounds and actions, after two equal readings; on Windows through its Scheduled Task); live chats and workers are picked up again. The version in the list is the code that runs.
 - **What a card shows:** per agent "x of y running", then Needs you (failed, commits not merged, running on an offline pc), Running now, and Earlier folded away; a worker shows its task text with its id behind it. Archive takes an ended worker off the list without touching its branch, worktree or restart hold, and refuses while commits are not merged. YOLO stays visible as a pill; its switch and the worker maximum sit under Settings. Above the cards: tasks no pc can start because no folder is linked to their project.
 
@@ -47,6 +47,56 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   "unknown"), last hook error, workers and recent sessions. A person sees the machines of their own tokens; an admin
   all. A machine id belongs to the person (or the admins) whose token first reported it; another
   person's token on the same pc gets a machine record of its own and never sees or steers the first one. Plugins before 0.15 show as one "old plugin" row per token.
+
+## Tools (add-ons)
+
+- **What it is:** an outside tool (an MCP server, an agent plugin, a skill repo) installed on a pc for every agent
+  there (Claude Code, Codex, agy) with one click: a pc's card on the Machines page has a Tools list with Install,
+  Update and Remove, the installed version and the result of the tool's own health check. Nobody has to open the
+  tool's repository.
+- **Where a tool is described:** one JSON manifest per tool in `plugin/tools/<id>.json`, shipped with the plugin. The
+  page sends only the tool id; the companion runs the steps from its own plugin's manifest (so no free text reaches a
+  pc, and a new manifest arrives with a plugin update). Format (checked by `plugin/hooks/tools.py`, which refuses an
+  unknown key):
+
+  ```json
+  {"name": "...", "description": "...", "homepage": "https://...", "needs": ["npm"],
+   "install": [{"run": ["npm", "install", "--global", "pkg@latest"]},
+               {"run": ["pkg", "setup", "--client", "codex"], "agent": "codex"}],
+   "check":   [{"run": ["pkg", "doctor", "--json"], "info": true}],
+   "version": {"run": ["pkg", "--version"]},
+   "remove":  [{"run": ["npm", "uninstall", "--global", "pkg"]}]}
+  ```
+
+  A step is one of `run` (a command looked up on PATH, no shell), `fetch` (the newest release file for this
+  platform: `{"github": "owner/repo"}` with GitHub's sha256 of the asset (`"tag": "regex"`: the newest release of a
+  line, when a tool supports only that line), or `{"shasums": "https://.../SHASUMS256.txt"}`
+  like Node.js; `"asset": {"<os>-<x64|arm64>": "regex"}` or `{"match", "strip"}`; unpacked into `"into"` in
+  `~/.knowledge/tools`, the old copy replaced only once the new one is complete and checked; skipped when that release
+  is there already, or when no file fits this platform) or `delete` (a name in that folder). `{tools}` in an argument,
+  `path` or `env` value is `~/.knowledge/tools`; the manifest's `path` goes in front of PATH and its `env` into every
+  step, so a tool can bring its own runtime without admin rights. Downloads are https only, tried three times on a
+  server error, and use a `GH_TOKEN` or `GITHUB_TOKEN` from the environment for the GitHub API when one is set. `agent`: only when that agent is installed; `os`: only on
+  `linux`, `darwin` or `windows`; `ok_if`: output text that makes a non-zero exit fine ("already"); `expect`: a regex
+  the output must match; `info` (check only): reported but never marks the tool unhealthy. Install stops at the first
+  failed step; remove runs every step. Both run in the background (one tool at a time, other actions do not wait; a
+  plugin restart does), a step stops after 15 minutes with its whole process tree, and the result or the error shows in
+  the Tools list and in the companion's Activity. Update is install again, so steps use `@latest` or the agent's own marketplace
+  update. A JSON report's failed `checks` or its `remediation` become the one line the page shows.
+- **Shipped:** `rea` (its own Node.js LTS, Temurin JDK LTS, Ghidra and jadx-headless-mcp in `~/.knowledge/tools`,
+  npm `rea-agents` into a prefix there, registered with `rea setup` per agent so the agents get those engines, checked
+  with `rea doctor`; Linux-only engines such as tshark or binwalk are left to the system), `ponytail` (each agent's own
+  plugin command) and `no-ai-slop` (the skills CLI, telemetry off). The Node.js and JDK major versions are in the
+  manifest (`latest-v26.x`, `temurin25-binaries`): move them when a newer LTS is out. Ghidra is the newest 12.1.x,
+  the line REA 6.8.0 accepts (its doctor refuses 12.2): move the `tag` when REA takes a newer line. On Linux and macOS
+  REA registers its `rea` launcher, which starts the first `node` on the agent's PATH; a step points that launcher at
+  the Node in `~/.knowledge/tools`, as REA already does itself on Windows.
+- **Updates:** with the agents' daily update (same rules: not during a game, chat or worker; Update agents in the ⋯
+  menu runs it now; off with `KNOWLEDGE_AUTO_UPDATE=0`) every installed tool is installed again, so it takes the newest
+  release; a fetch skips what is current. A failed install or update keeps the tool as it was, shows red in the list
+  and goes once to the admins' Matrix/ntfy (again only after it was fixed and failed anew). No cooldown after a
+  release and no automatic rollback: the newest version goes in, and a red check says when it broke something.
+- **Adding a tool:** a new manifest plus a plugin version bump; `tools.py --self-test` validates every manifest.
 
 ## The admins' own devices
 
@@ -61,7 +111,7 @@ fixed remote actions and relays chats. Installing it is part of the client setup
 
 - **Remote control:** the owner of a machine steers it from the Machines list with fixed actions only: start a worker
   for a ready task, stop a worker, restart a worker that ended (`restart`: at once, past the companion's 6 h hold;
-  queued as its own start), roll a YOLO worker back, trust hooks, update the plugin, YOLO on or off per agent
+  queued as its own start), roll a YOLO worker back, trust hooks, update the plugin, install or remove a tool (see Tools above), YOLO on or off per agent
   (on needs the word YOLO typed in a dialog), workers allowed, max workers, link or unlink a folder (only folders the
   companion listed itself). The server queues them per machine (`POST /ui/api/machines/action`); the companion pulls
   them about every 10 seconds (`GET /machine/actions`), runs them with its own code and reports the result; an

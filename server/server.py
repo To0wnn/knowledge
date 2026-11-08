@@ -2899,7 +2899,7 @@ def machine_rows() -> list[dict]:
         rows.append({"id": mid, "label": m.get("label", mid), "at": m.get("at", 0), "online": now - m.get("at", 0) < ONLINE,
                      "tokens": names, "own": any(own_token(tokens[n], dev) for n in names), "agents": agents,
                      "mine": any(own_token(tokens[n], dev, steer=False) for n in names),
-                     "companion": {**{k: comp.get(k) for k in ("version", "at", "workersAllowed", "game", "maxWorkers", "folders", "projects", "token", "live", "chats", "chatReviews", "asks")},
+                     "companion": {**{k: comp.get(k) for k in ("version", "at", "workersAllowed", "game", "maxWorkers", "folders", "projects", "token", "live", "chats", "chatReviews", "asks", "tools")},
                                    "agents": sorted(comp.get("agents") or {}),
                                    "models": {a: v.get("models", []) for a, v in (comp.get("agents") or {}).items()},
                                    "current": {a: v.get("current", {}) for a, v in (comp.get("agents") or {}).items()}} if comp else None,
@@ -5573,6 +5573,10 @@ def action_args(action: str, args: dict) -> dict:
         return {"project": args["project"], "id": tid(), **({"chat": True} if action == "merge" and args.get("chat") is True else {})}
     if action == "trust_hooks":
         return {"agent": agent()}
+    if action in ("install_tool", "remove_tool"):  # an id only: the steps ship with the pc's own plugin (plugin/tools)
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,39}", str(args.get("tool", ""))):
+            raise ValueError("tool must be a tool id")
+        return {"tool": args["tool"]}
     if action in ("update_plugin", "update_agents"):
         return {}
     if action in ("link_folder", "unlink_folder"):
@@ -7324,6 +7328,20 @@ def worker_review(r) -> dict | None:
             "commit": redact(str(r.get("commit") or "")[:200]), "blocked": str(r.get("blocked") or "")[:300]}
 
 
+def report_tools(t) -> dict:
+    """The tool add-ons a companion knows and what it last found for each (plugin/tools): strings capped, secrets masked."""
+    if not isinstance(t, dict):
+        return {}
+    flag = lambda v: v if isinstance(v, bool) else None
+    return {k: {"name": str(v.get("name") or k)[:60], "description": str(v.get("description") or "")[:300],
+                "homepage": h if (h := str(v.get("homepage") or "")[:200]).startswith("https://") else "",
+                "installed": flag(v.get("installed")), "ok": flag(v.get("ok")), "version": str(v.get("version") or "")[:40],
+                "detail": redact(str(v.get("detail") or "")[:300]), "error": redact(str(v.get("error") or "")[:300]),
+                "busy": v["busy"] if v.get("busy") in ("install", "remove", "update") else "",
+                "at": v["at"] if type(v.get("at")) in (int, float) and 0 < v["at"] < 1e11 else None}  # not Infinity: it reaches json
+            for k, v in list(t.items())[:50] if re.fullmatch(r"[a-z0-9][a-z0-9-]{0,39}", str(k)) and isinstance(v, dict)}
+
+
 @server.custom_route("/machine/report", methods=["POST"])
 async def machine_report(request: Request):
     """The companion's state every round: version, workers allowed, max workers, game session, per agent YOLO, hooks
@@ -7356,6 +7374,7 @@ async def machine_report(request: Request):
                                   for f in ((b.get("folders") or {}).get(k) or [])[:200] if isinstance(f, dict)]
                               for k in ("linked", "candidates")},
                   "projects": [str(p)[:80] for p in (b.get("projects") or [])[:100]],
+                  "tools": report_tools(b.get("tools")),
                   # "Own branch" chats: the git pill of each one's worktree, by chat id
                   "asks": report_asks(b.get("asks")),
                   "chats": {str(k): git_pill(g) for k, g in list((b.get("chats") or {}).items())[:50] if re.fullmatch(r"[0-9a-f]{12}", str(k))},
@@ -7367,16 +7386,21 @@ async def machine_report(request: Request):
     await asyncio.to_thread(mark_machine, dev, report=report)
     if isinstance(b.get("workers"), list):  # an older companion that sends none keeps its transcripts; all it sent, not only the 40 kept
         await asyncio.to_thread(prune_worker_transcripts, dev["machine"], [w for w in b["workers"][:1000] if isinstance(w, dict)])
-    told = []
+    told, broken = [], []
+    errors = {k: f"{t['name']}: {t['error']}" for k, t in report["tools"].items() if t["error"]}
 
     def change(d):
         m = d.get(dev["machine"], {})
         new = [i for i in waits if i not in m.get("limit_told", [])]
         m["limit_told"] = (m.get("limit_told", []) + new)[-50:] if waits else []  # said again after it ran
         told.extend(new)
+        broken.extend(e for k, e in errors.items() if m.get("tools_told", {}).get(k) != e)  # a tool's failure, once
+        m["tools_told"] = errors
     await asyncio.to_thread(update_state, MACHINES_FILE, change)
     for tid in told:
         notify(f"Knowledge: task {tid} waits on {dev.get('machine_label')}: every agent there is at 90% of its usage limit.")
+    for e in broken:
+        notify(f"Knowledge: a tool on {dev.get('machine_label')} failed (Machines page, Tools): {e}"[:500])
     # its "Own branch" chats that are closed: the companion removes what has nothing left to merge
     closed = await asyncio.to_thread(lambda: [k for k in report["chats"] if (read_json(chat_file(dev["machine"], k), None) or {}).get("closed")])
     return JSONResponse({"ok": True, "closed_chats": closed})

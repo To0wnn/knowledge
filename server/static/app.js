@@ -1451,6 +1451,29 @@ async function loadMachines() {
       if (m.own && (c.projects || []).length) d.append(machineButton("Choose a folder…", "Browse the drives of this pc and link any folder", () => chooseFolder(m)));
       card.append(d);
     }
+    const tools = Object.entries((c && c.tools) || {});
+    if (tools.length) { // tool add-ons from the pc's own plugin (plugin/tools): installed for every agent there by its companion
+      const d = el("details", "machine-sessions"), list = el("ul", "machine-list");
+      d.open = tools.some(([, t]) => t.error || t.ok === false);
+      d.append(el("summary", null, `Tools (${tools.filter(([, t]) => t.installed).length} installed)`));
+      for (const [id, t] of tools) {
+        const li = el("li"), name = el("strong", null, t.name);
+        name.title = t.description || "";
+        li.append(name, " ", el("span", `pill ${t.busy ? "" : t.error || t.ok === false ? "warn" : t.installed ? "ok" : ""}`,
+          t.busy ? ({ remove: "removing…", update: "updating…" }[t.busy] || "installing…") : t.error ? "failed" : !t.installed ? "not installed" : t.ok === false ? "needs attention" : "installed"));
+        if (t.version) li.append(" ", el("span", "muted", t.version));
+        if (m.own && m.online && !t.busy) {
+          li.append(" ", machineButton(t.installed ? "Update" : "Install", t.installed ? "Install the newest version again for every agent here" : `Install ${t.name} for every agent on this pc`,
+            () => machineAction(m, "install_tool", { tool: id })));
+          if (t.installed) li.append(" ", machineButton("Remove", `Remove ${t.name} from every agent on this pc`, () => confirm(`Remove ${t.name} from ${m.label}?`) && machineAction(m, "remove_tool", { tool: id })));
+        }
+        if (t.homepage) { const a = el("a", "muted", "source"); a.href = t.homepage; a.target = "_blank"; a.rel = "noopener"; li.append(" ", a); }
+        if (t.description) li.append(el("p", "muted", t.description));
+        if (t.error || t.detail) li.append(el("p", t.error ? "machine-error" : "muted", t.error || t.detail));
+        list.append(li);
+      }
+      d.append(list); card.append(d);
+    }
     if (m.actions.length) {
       const d = el("details", "machine-sessions"), list = el("ul", "machine-list");
       d.append(el("summary", null, `Actions (${m.actions.length})`));

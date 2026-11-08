@@ -805,10 +805,11 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     call("knowledge_edit", {"path": path, "old_string": line + "\n", "new_string": ""}, fr)
     # Model and effort: only what the pc reported for that agent; they hold for the chat until changed; an older page
     # that sends neither keeps them.
-    http("POST", "/machine/report", {"version": "0.21.1", "agents": {"codex": {}, "claude": {"models": [
+    mrep = {"version": "0.21.1", "agents": {"codex": {}, "claude": {"models": [
         {"id": "opus", "name": "Opus", "efforts": ["low", "max", "huge"], "default": "max"}, {"id": "-rf", "efforts": []},
         {"id": "sonnet-x", "efforts": ["low"], "default": "max"}]}},
-        "folders": {"linked": [{"path": "/home/x/garden", "project": "garden"}]}}, token=fr, headers=pc)
+        "folders": {"linked": [{"path": "/home/x/garden", "project": "garden"}]}}
+    http("POST", "/machine/report", mrep, token=fr, headers=pc)
     mc = json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "claude", "folder": "/home/x/garden"})[2])["chat"]["id"]
     told = json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["models"]
     assert [(m["id"], m.get("default")) for m in told] == [("opus", "max"), ("sonnet-x", None)], told  # a default it does not offer is dropped
@@ -840,8 +841,25 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert ui("/ui/api/machines/action", {"machine": mid, "action": "apply_models", "args": {"plans": "{}"}})[0] == 200
     sent = [a for a in json.loads(ui("/ui/api/machines")[2])["machines"] if a["id"] == mid][0]["actions"][-1]
     assert sent["action"] == "apply_models" and json.loads(sent["args"]["plans"]) == {"claude": {"reader": "opus"}}, sent  # the page's own plan is ignored
+    # Tool add-ons: the page sends an id only, the pc's report lists its catalog; anything else is refused or cut.
+    assert ui("/ui/api/machines/action", {"machine": mid, "action": "install_tool", "args": {"tool": "rea", "run": ["sh"]}})[0] == 200
+    sent = [a for a in json.loads(ui("/ui/api/machines")[2])["machines"] if a["id"] == mid][0]["actions"][-1]
+    assert sent["action"] == "install_tool" and sent["args"] == {"tool": "rea"}, sent
+    assert ui("/ui/api/machines/action", {"machine": mid, "action": "remove_tool", "args": {"tool": "../x"}})[0] == 400
     for x in json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"]:  # taken, or the next test finds it
         http("POST", "/machine/actions/result", {"id": x["id"], "status": "done", "result": "ok"}, token=fr, headers=pc)
+    tools = {"rea": {"name": "REA", "homepage": "javascript:alert(1)", "installed": True, "ok": "yes", "version": "6.8.0", "detail": "x" * 999,
+                     "at": float("inf"), "busy": "rm -rf"},
+             "Bad Id": {"name": "no"}}
+    assert http("POST", "/machine/report", {**mrep, "tools": tools}, token=fr, headers=pc)[0] == 200
+    got = [a for a in json.loads(ui("/ui/api/machines")[2])["machines"] if a["id"] == mid][0]["companion"]["tools"]
+    assert list(got) == ["rea"] and got["rea"]["homepage"] == "" and got["rea"]["ok"] is None and got["rea"]["installed"] is True \
+        and len(got["rea"]["detail"]) == 300 and got["rea"]["version"] == "6.8.0" and got["rea"]["at"] is None and got["rea"]["busy"] == "", got
+    failed = {"rea": {"name": "REA", "installed": True, "error": "fetch: jdk: HTTP Error 503"}}
+    assert http("POST", "/machine/report", {**mrep, "tools": failed}, token=fr, headers=pc)[0] == 200
+    assert json.loads((tmp / "machines.json").read_text())[mid]["tools_told"] == {"rea": "REA: fetch: jdk: HTTP Error 503"}  # told once, kept to compare
+    assert http("POST", "/machine/report", {**mrep, "tools": tools}, token=fr, headers=pc)[0] == 200
+    assert json.loads((tmp / "machines.json").read_text())[mid]["tools_told"] == {}  # fixed: a new failure is told again
     state = json.loads(ui("/ui/api/admin")[2])["models"]
     assert {u["model"] for u in state["unmeasured"]} >= {"sonnet-x"} and state["chosen"]["read"]["claude"]["model"] == "on-no-pc", state
     row = next(x for x in state["pcs"] if x["id"] == mid)

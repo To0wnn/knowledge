@@ -1,0 +1,47 @@
+{
+  "name": "REA",
+  "description": "Reverse engineering for agents: native binaries, JavaScript/Electron, .NET, Android and websites (MCP server and skill). Brings its own Node.js, JDK, Ghidra and JADX in ~/.knowledge/tools.",
+  "homepage": "https://github.com/morluto/rea",
+  "path": ["{tools}/node/bin", "{tools}/node", "{tools}/npm/bin", "{tools}/npm"],
+  "env": {
+    "npm_config_prefix": "{tools}/npm",
+    "JAVA_HOME": "{tools}/jdk",
+    "GHIDRA_INSTALL_DIR": "{tools}/ghidra",
+    "REA_JADX_MCP_JAR": "{tools}/jadx-headless-mcp.jar"
+  },
+  "install": [
+    {"fetch": {"shasums": "https://nodejs.org/dist/latest-v26.x/SHASUMS256.txt", "into": "node", "asset": {
+      "linux-x64": "^node-v[\\d.]+-linux-x64\\.tar\\.xz$", "linux-arm64": "^node-v[\\d.]+-linux-arm64\\.tar\\.xz$",
+      "darwin-x64": "^node-v[\\d.]+-darwin-x64\\.tar\\.gz$", "darwin-arm64": "^node-v[\\d.]+-darwin-arm64\\.tar\\.gz$",
+      "windows-x64": "^node-v[\\d.]+-win-x64\\.zip$", "windows-arm64": "^node-v[\\d.]+-win-arm64\\.zip$"}}},
+    {"fetch": {"github": "adoptium/temurin25-binaries", "into": "jdk", "asset": {
+      "linux-x64": "^OpenJDK25U-jdk_x64_linux_hotspot_[\\d._]+\\.tar\\.gz$", "linux-arm64": "^OpenJDK25U-jdk_aarch64_linux_hotspot_[\\d._]+\\.tar\\.gz$",
+      "darwin-x64": {"match": "^OpenJDK25U-jdk_x64_mac_hotspot_[\\d._]+\\.tar\\.gz$", "strip": 3},
+      "darwin-arm64": {"match": "^OpenJDK25U-jdk_aarch64_mac_hotspot_[\\d._]+\\.tar\\.gz$", "strip": 3},
+      "windows-x64": "^OpenJDK25U-jdk_x64_windows_hotspot_[\\d._]+\\.zip$"}}},
+    {"fetch": {"github": "NationalSecurityAgency/ghidra", "tag": "^Ghidra_12\\.1(\\.\\d+)?_build$", "into": "ghidra", "asset": {
+      "linux-x64": "^ghidra_[\\d.]+_PUBLIC_\\d+\\.zip$", "linux-arm64": "^ghidra_[\\d.]+_PUBLIC_\\d+\\.zip$",
+      "darwin-x64": "^ghidra_[\\d.]+_PUBLIC_\\d+\\.zip$", "darwin-arm64": "^ghidra_[\\d.]+_PUBLIC_\\d+\\.zip$",
+      "windows-x64": "^ghidra_[\\d.]+_PUBLIC_\\d+\\.zip$"}}},
+    {"fetch": {"github": "1013503897/jadx-headless-mcp", "into": "jadx-headless-mcp.jar", "asset": {
+      "linux-x64": "-all\\.jar$", "linux-arm64": "-all\\.jar$", "darwin-x64": "-all\\.jar$", "darwin-arm64": "-all\\.jar$", "windows-x64": "-all\\.jar$"}}},
+    {"run": ["npm", "install", "--global", "--ignore-scripts", "rea-agents@latest"]},
+    {"run": ["node", "-e", "const fs=require('fs'),f=fs.realpathSync(process.argv[1]),t=fs.readFileSync(f,'utf8');if(t.startsWith('#!/usr/bin/env node'))fs.writeFileSync(f,'#!'+process.execPath+t.slice(t.indexOf('\\n')))", "{tools}/npm/bin/rea"], "os": ["linux", "darwin"]},
+    {"run": ["rea", "setup", "--yes", "--json", "--client", "claude_code"], "agent": "claude"},
+    {"run": ["rea", "setup", "--yes", "--json", "--client", "codex"], "agent": "codex"},
+    {"run": ["rea", "setup", "--yes", "--json", "--client", "antigravity"], "agent": "agy"}
+  ],
+  "check": [
+    {"run": ["rea", "doctor", "--json", "--skill", "--client", "claude_code"], "agent": "claude"},
+    {"run": ["rea", "doctor", "--json", "--skill", "--client", "codex"], "agent": "codex"},
+    {"run": ["rea", "doctor", "--json", "--skill", "--client", "antigravity"], "agent": "agy"},
+    {"run": ["rea", "doctor", "--json", "--provider", "ghidra", "--provider", "jadx"], "os": ["linux", "darwin"]},
+    {"run": ["rea", "doctor", "--json"], "info": true}
+  ],
+  "version": {"run": ["rea", "--version", "--json"]},
+  "remove": [
+    {"run": ["rea", "uninstall", "--json"]},
+    {"run": ["npm", "uninstall", "--global", "rea-agents"]},
+    {"delete": "npm"}, {"delete": "jadx-headless-mcp.jar"}, {"delete": "ghidra"}, {"delete": "jdk"}, {"delete": "node"}
+  ]
+}
