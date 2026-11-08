@@ -551,7 +551,7 @@ def from_registry(server: dict) -> dict:
         needs = []
     else:
         raise ValueError(f"{server['name']}: no npm or PyPI package with stdio and no streamable-http remote: write the manifest by hand")
-    m = {"name": server.get("title") or tid, "description": server.get("description", ""),
+    m = {"name": server.get("title") or tid, "kind": "program", "description": server.get("description", ""),
          "homepage": (server.get("repository") or {}).get("url") or server.get("websiteUrl") or f"{REGISTRY}/v0/servers?search={tid}",
          **({"needs": needs} if needs else {}),
          "install": [{"run": ["claude", "mcp", "remove", "--scope", "user", tid], "agent": "claude", "ok_if": ["no mcp server"]},  # Claude refuses to overwrite
