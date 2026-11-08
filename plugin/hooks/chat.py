@@ -103,9 +103,17 @@ def commands(agent: str) -> list:
 def seen_commands(agent: str, found: list):
     """What a live chat's agent said it offers: [{name, description[, argumentHint|input.hint]}] from Claude Code's
     initialize, Codex's skills/list or ACP's available_commands_update; names checked, texts cut short."""
-    out = [{"name": str(c["name"]), "description": first_line(c.get("description"))[:120],
-            "hint": str(c.get("argumentHint") or (c.get("input") or {}).get("hint") or "")[:60]}
-           for c in found if isinstance(c, dict) and COMMAND.fullmatch(str(c.get("name", ""))) and not str(c["name"]).startswith("_")][:200]
+    out, size = [], 0
+    for c in found:
+        if not (isinstance(c, dict) and COMMAND.fullmatch(str(c.get("name", ""))) and not str(c["name"]).startswith("_")):
+            continue
+        inp = c.get("input") if isinstance(c.get("input"), dict) else {}
+        hint = c.get("argumentHint") or inp.get("hint") or ""
+        out.append({"name": str(c["name"]), "description": first_line(c.get("description"))[:120], "hint": str(hint or "")[:60]})
+        size += len(json.dumps(out[-1])) + 2  # with the ", " between items
+        if size > 24_000:  # each agent's list stays a small part of the companion's report (the server takes 128 kB)
+            out.pop()
+            break
     if out and out != commands(agent):
         _COMMANDS[agent] = out
         try:
@@ -1044,6 +1052,7 @@ class Live:
         self.written = self.taken = 0  # messages written in, and echoed back as taken
         self.turn_open = self.busy = False  # the agent works on a turn; the server counts the chat running
         self.echoed = False  # a message of ours was echoed since the last result
+        self.slash = set()  # which messages written (1 = the first) are slash commands: a local one comes back unechoed
         self.after_interrupt, self.closing, self.stop_asked = [], False, False
         self.subs = set()  # its subagents running now: not idle while one works
         self.snap, self.save_lock, self.asking, self.bg = None, threading.Lock(), {}, {}  # bg: Claude's background shells running  # asking: approval request id -> where its line starts
@@ -1058,13 +1067,14 @@ class Live:
         still unanswered holds the place: the new companion reads its request again and asks again."""
         o = self.p.stdout
         at = o.end if o.end and threading.get_ident() == getattr(self, "reader", None) else o.offset
-        return {"offset": min([at, *self.asking.values()]), "taken": self.taken, "subs": sorted(self.subs), "bg": dict(self.bg)}
+        return {"offset": min([at, *self.asking.values()]), "taken": self.taken, "subs": sorted(self.subs), "bg": dict(self.bg), "echoed": self.echoed}
 
     def live_state(self) -> dict:
         """What was written to the agent, kept at every write."""
         return {"chat": self.cid, "agent": self.agent, "folder": self.folder, "yolo": self.yolo, "pick": list(self.pick),
                 "asked": list(self.asked), "session": self.st["session"], "allow": list(self.rec.get("allow", [])),
-                "in": in_size(self.p.d), "written": self.written, "turn_open": self.turn_open, "busy": self.busy}  # a send sets them
+                "in": in_size(self.p.d), "written": self.written, "turn_open": self.turn_open, "busy": self.busy,  # a send sets them
+                "slash": sorted(x for x in self.slash if x > self.taken)}
 
     def save(self, turn: bool = False):
         with self.save_lock:  # several threads write; one file at a time
@@ -1085,6 +1095,7 @@ class Live:
         self.pick, self.asked = tuple(s["pick"]), tuple(s["asked"])
         self.written, self.taken, self.turn_open, self.busy, self.subs = s["written"], s["taken"], s["turn_open"], s["busy"], set(s["subs"])
         self.bg = dict(s.get("bg") or {})
+        self.echoed, self.slash = bool(s.get("echoed")), set(s.get("slash") or [])
         self.st["bg"] = dict.fromkeys(self.bg, 1)  # their ends, read after the restart, still match
         self.p = Hosted(d, offset=s["offset"])
         self.rec = RUNNING[self.cid] = {"pid": self.p.pid, "ident": self.p.ident, "stop": False, "folder": self.folder,
@@ -1094,7 +1105,9 @@ class Live:
         return self
 
     def resumed(self, s: dict, new_in: list):
-        self.written += sum(1 for x in new_in if x.get("type") == "user")  # written after its last save
+        for x in new_in:  # written after its last save
+            if x.get("type") == "user":
+                self.wrote(str((x.get("message") or {}).get("content") or ""))
         self.started()
 
     def started(self):
@@ -1132,8 +1145,13 @@ class Live:
                 self.interrupt()
                 return
             self.begin("" if not mode else "Your message started a turn.")
-            self.written += 1
+            self.wrote(text)
             self.write(user_line(text))
+
+    def wrote(self, text: str):
+        self.written += 1
+        if text.lstrip().startswith("/"):
+            self.slash.add(self.written)
 
     def interrupt(self):
         """Stop the step that runs, the native way: the turn ends with a result, the process stays."""
@@ -1227,8 +1245,9 @@ class Live:
                 (self.subs.add if e[3] == "running" else self.subs.discard)(e[2])
         if kind == "result":
             # a local slash command (/context, /cost, /model) answers with no echo, where every other message is echoed
-            # (/compact and skills too): its result, no model turn, takes it (measured on Claude Code 2.1.319)
-            if ev.get("num_turns") == 0 and not self.echoed and self.taken < self.written:
+            # (/compact and skills too): its result, no model turn, takes it; one sent during a turn runs after that
+            # turn's result, so it is the next one owed (measured on Claude Code 2.1.319)
+            if ev.get("num_turns") == 0 and not self.echoed and self.taken < self.written and self.taken + 1 in self.slash:
                 self.taken += 1
             self.turn_open = self.echoed = False
             self.turn_end()
@@ -1243,7 +1262,7 @@ class Live:
             self.buf.append(("info", "Stopped this step; your message goes in now."))
             self.flush()
             for text in texts:
-                self.written += 1
+                self.wrote(text)
                 self.write(user_line(text))
             return
         if self.taken < self.written and not self.stop_asked:
@@ -1327,10 +1346,11 @@ class CodexLive(Live):
 
     def list_commands(self):  # its skills (sent as a skill input) and /compact (thread/compact/start)
         try:  # before the first message, which may name a skill
-            skills = [x for d in self.call("skills/list", {"cwds": [self.folder]}, timeout=15).get("data") or [] for x in d.get("skills") or [] if x.get("enabled", True)]
-        except RuntimeError:
+            skills = [x for d in self.call("skills/list", {"cwds": [self.folder]}, timeout=15).get("data") or [] for x in d.get("skills") or []
+                      if isinstance(x, dict) and x.get("enabled", True)]
+            self.skills = {x["name"]: x["path"] for x in skills if isinstance(x.get("name"), str) and isinstance(x.get("path"), str)}
+        except Exception:  # refused or another shape: the chat runs on without the list
             return
-        self.skills = {x["name"]: x["path"] for x in skills if x.get("name") and x.get("path")}
         seen_commands("codex", [{"name": "compact", "description": "Compact the conversation now (summarize history to free up the context window)."}, *skills])
 
     def user_input(self, text: str) -> list:
@@ -1941,10 +1961,40 @@ def self_test():
         got = commands("claude")
         assert got == [{"name": "compact", "description": "Clear history", "hint": "<focus>"},
                        {"name": "ponytail:ponytail-review", "description": "x" * 120, "hint": ""}], got
-        assert commands("agy") == [{"name": "goal", "description": "Run until done.", "hint": "goal"}] and commands("codex") == []
+        assert commands("agy") == [{"name": "goal", "description": "Run until done.", "hint": "goal"}] and commands("codex") == []  # before the budget test
         seen_commands("claude", [])  # an empty answer keeps what was known
+        seen_commands("codex", [{"name": f"s{i}", "description": "d" * 300, "input": "not a dict"} for i in range(400)])
+        assert 100 < len(commands("codex")) < 200 and len(json.dumps(commands("codex"))) <= 24_000 and commands("codex")[0]["hint"] == "", "a byte budget per agent"
         assert len(commands("claude")) == 2
         _COMMANDS.clear()
+        # Claude's turn count with slash commands, in the orders measured on 2.1.319
+        def live(*texts):
+            lv = Live.__new__(Live)
+            lv.setup({"chat": "c", "agent": "claude"}, lambda b: None, lambda *a: None, False)
+            lv.save, lv.stops = (lambda **k: None), []
+            lv.interrupt = lambda: lv.stops.append(1)
+            lv.busy = True
+            for t in texts:
+                lv.wrote(t)
+            return lv
+        line = lambda lv, ev: lv.on_line(ev, json.dumps(ev))
+        echo = lambda t: {"type": "user", "isReplay": True, "message": {"role": "user", "content": t}}
+        lv = live("/context")  # a local command: a result of no model turn, no echo
+        line(lv, {"type": "result", "num_turns": 0, "result": "ctx"})
+        assert not lv.busy and lv.taken == 1 and not lv.stops
+        lv = live("hi")  # a turn the agent began itself fails before the model while "hi" waits: "hi" is still owed
+        line(lv, {"type": "result", "num_turns": 0, "is_error": True})
+        assert lv.busy and lv.taken == 0
+        line(lv, echo("hi")); line(lv, {"type": "result", "num_turns": 1})
+        assert not lv.busy and not lv.stops, "no interrupt of the owner's own turn"
+        lv = live("long", "/cost")  # /cost sent during a turn runs after that turn's result
+        line(lv, echo("long")); line(lv, {"type": "result", "num_turns": 2})
+        assert lv.busy and lv.taken == 1
+        line(lv, {"type": "result", "num_turns": 0})
+        assert not lv.busy and lv.taken == 2 and not lv.stops
+        lv = live("/compact")  # echoed: counted once
+        line(lv, echo("<local-command-stdout>Compacted</local-command-stdout>")); line(lv, {"type": "result", "num_turns": 0})
+        assert not lv.busy and lv.taken == 1 and not lv.stops
         cx = CodexLive.__new__(CodexLive)
         assert cx.user_input("/verify-done now") == [{"type": "text", "text": "/verify-done now"}], "skills not listed yet: plain text"
         cx.skills = {"verify-done": "/s/verify-done/SKILL.md"}

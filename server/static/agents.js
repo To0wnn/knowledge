@@ -622,7 +622,7 @@ function ckCard(meta) {
   box.prepend(cmds); card.cmds = { list: cmds, items: [], sel: 0 };
   input.setAttribute("aria-autocomplete", "list"); input.setAttribute("aria-controls", cmds.id);
   input.addEventListener("keydown", (e) => { // the command list open: its keys first (registered before the box's own)
-    if (cmds.hidden || e.isComposing) return;
+    if (cmds.hidden || e.isComposing || e.keyCode === 229) return; // 229: an Enter that ends a composition (Safari)
     const c = card.cmds, n = c.items.length;
     if (e.key === "ArrowDown" || e.key === "ArrowUp") { if (!n) return; e.preventDefault(); ckCmdSel(card, (c.sel + (e.key === "ArrowDown" ? 1 : n - 1)) % n); }
     else if ((e.key === "Enter" && !e.ctrlKey && !e.metaKey && !e.altKey) || e.key === "Tab") { if (!n || e.shiftKey) return; e.preventDefault(); ckCmdPick(card, c.items[c.sel]); }
@@ -690,7 +690,7 @@ function ckCard(meta) {
         await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, text, mode, ...pick }) });
         Object.assign(card.meta, pick); card.pick = null;
       }
-      input.value = ""; input.style.height = ""; ckDraftKeep(card); card.files = []; ckFilesPaint(card); if (!card.worker) card.meta.status = "queued";
+      input.value = ""; input.style.height = ""; ckCmdClose(card); ckDraftKeep(card); card.files = []; ckFilesPaint(card); if (!card.worker) card.meta.status = "queued";
     } catch (err) { note.className = "ck-note bad"; note.textContent = err.message; }
     ckPaint(card); await ckPoll(card); clearTimeout(ck.timer); ck.timer = setTimeout(ckTick, 1500);
   };
