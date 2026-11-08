@@ -291,24 +291,40 @@ def unpack(archive: Path, name: str, dest: Path, strip: int):
                     shutil.copyfileobj(src, dst)
                 mode = i.external_attr >> 16
                 if os.name != "nt" and mode & 0o111:  # zip keeps unix modes here: Ghidra's launchers must stay executable
-                    out.chmod(mode & 0o777)
+                    out.chmod(mode & 0o755)
         return
+    root = os.path.realpath(dest)
+    within = lambda p: p == root or p.startswith(root + os.sep)
     with tarfile.open(archive) as t:
-        members = []
-        for mem in t.getmembers():
+        for mem in t.getmembers():  # one by one, each checked against what is on disk by now: links in a chain too
             mem.name = cut(mem.name)
             if mem.islnk():
                 mem.linkname = cut(mem.linkname)
             if not mem.name:
                 continue
-            target = posixpath.normpath(posixpath.join(posixpath.dirname(mem.name), mem.linkname)) if mem.issym() else ""
-            if not _inside(dest, mem.name) or (mem.issym() and (mem.linkname.startswith("/") or target == ".." or target.startswith("../"))):
+            parent = os.path.realpath(os.path.join(root, os.path.dirname(mem.name)))
+            bad = not _inside(dest, mem.name) or not within(parent) or (
+                mem.issym() and (os.path.isabs(mem.linkname) or not within(os.path.realpath(os.path.join(parent, mem.linkname))))) or (
+                mem.islnk() and (not _inside(dest, mem.linkname) or not within(os.path.realpath(os.path.join(root, mem.linkname)))))
+            if bad or not (mem.isfile() or mem.isdir() or mem.issym() or mem.islnk()):  # no devices or fifos
                 raise RuntimeError(f"{name}: refused a path outside its folder: {mem.name}")
-            members.append(mem)
-        if hasattr(tarfile, "data_filter"):  # 3.12+ (and later 3.9-3.11 patches) check again in the library
-            t.extractall(dest, members, filter="data")
-        else:
-            t.extractall(dest, members)
+            if hasattr(tarfile, "data_filter"):  # 3.12+ (and later 3.9-3.11 patches) check again in the library
+                t.extract(mem, dest, filter="data")
+            else:
+                t.extract(mem, dest)
+
+
+def stamps() -> dict:
+    try:
+        return json.loads((TOOLS / ".versions.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):  # missing, or cut off by a crash: everything is fetched again, nothing breaks
+        return {}
+
+
+def save_stamps(d: dict):
+    tmp = TOOLS / ".versions.json.tmp"
+    tmp.write_text(json.dumps(d, indent=1), encoding="utf-8")
+    os.replace(tmp, TOOLS / ".versions.json")
 
 
 def fetch(f: dict) -> tuple:
@@ -320,10 +336,9 @@ def fetch(f: dict) -> tuple:
             return True, "", f"{f['into']}: nothing for {OS}-{ARCH}, skipped"
         name, url, sha, version = found
         TOOLS.mkdir(parents=True, exist_ok=True)
-        stamps = TOOLS / ".versions.json"
-        have = json.loads(stamps.read_text(encoding="utf-8")) if stamps.exists() else {}
+        have, stamp = stamps(), f"{name} {sha}"  # the checksum too: micromamba's file name never changes
         dest = TOOLS / f["into"]
-        if have.get(f["into"]) == name and dest.exists():
+        if have.get(f["into"]) == stamp and dest.exists():
             return True, version, f"{f['into']} {version} is current"
         spec = f["asset"][f"{OS}-{ARCH}"]
         with tempfile.TemporaryDirectory(dir=TOOLS) as tmp:
@@ -346,10 +361,18 @@ def fetch(f: dict) -> tuple:
                 part.rename(new)
                 if os.name != "nt":  # a single program (micromamba) must run; a jar does not mind
                     new.chmod(0o755)
-            if dest.exists():  # a file in use (Windows) fails here, before anything changed
-                dest.rename(Path(tmp) / "old")
-            new.rename(dest)
-        stamps.write_text(json.dumps({**have, f["into"]: name}, indent=1), encoding="utf-8")
+            try:
+                if dest.exists():  # a file in use (Windows) fails here, before anything changed
+                    dest.rename(Path(tmp) / "old")
+            except PermissionError:
+                raise RuntimeError(f"{f['into']} is in use (an agent runs it): close it, the next update tries again") from None
+            try:
+                new.rename(dest)
+            except OSError:
+                if (Path(tmp) / "old").exists():  # put the old copy back, or the temp folder takes it along
+                    (Path(tmp) / "old").rename(dest)
+                raise
+        save_stamps({**stamps(), f["into"]: stamp})
         return True, version, f"{f['into']} {version} installed"
     except (OSError, ValueError, RuntimeError, tarfile.TarError, zipfile.BadZipFile) as e:
         return False, "", f"{f['into']}: {type(e).__name__}: {e}"
@@ -362,9 +385,8 @@ def delete(name: str) -> tuple:
             shutil.rmtree(target)
         elif target.exists() or target.is_symlink():
             target.unlink()
-        stamps = TOOLS / ".versions.json"
-        if stamps.exists():
-            stamps.write_text(json.dumps({k: v for k, v in json.loads(stamps.read_text(encoding="utf-8")).items() if k != name}, indent=1), encoding="utf-8")
+        if (TOOLS / ".versions.json").exists():
+            save_stamps({k: v for k, v in stamps().items() if k != name})
         return True, "", f"{name} deleted"
     except OSError as e:
         return False, "", f"{name}: {e}"
@@ -576,6 +598,24 @@ def self_test():
             return b.getvalue()
         good = archive("zip", {"engine_1.0/bin/run": (b"#!/bin/sh\n", 0o755), "engine_1.0/README": (b"hi", 0o644)})
         evil = archive("tgz", {"top/../../escape": (b"x", 0o644)})
+        with tempfile.TemporaryDirectory() as t2:  # links in a chain that together leave the folder, and a hard link out
+            for entries in ([("top/a/b", tarfile.SYMTYPE, ".."), ("top/a/b/c", tarfile.SYMTYPE, ".."), ("top/a/b/c/ESCAPED", tarfile.REGTYPE, "")],
+                            [("top/h", tarfile.LNKTYPE, "../../etc/passwd")]):
+                b = io.BytesIO()
+                with tarfile.open(fileobj=b, mode="w:gz") as t:
+                    for n, kind, link in entries:
+                        i = tarfile.TarInfo(n)
+                        i.type, i.linkname = kind, link
+                        t.addfile(i, io.BytesIO(b"") if kind == tarfile.REGTYPE else None)
+                (Path(t2) / "c.tar.gz").write_bytes(b.getvalue())
+                out = Path(t2) / "deep" / "dest"
+                out.mkdir(parents=True, exist_ok=True)
+                try:
+                    unpack(Path(t2) / "c.tar.gz", "c.tar.gz", out, 1)
+                    raise AssertionError(f"refused: {entries}")
+                except RuntimeError:
+                    pass
+                assert not list(Path(t2).rglob("ESCAPED")), "nothing written outside"
         with tempfile.TemporaryDirectory() as t2:  # a link inside the folder (Node's bin/npm) is fine, one that leaves it is not
             for link, fine in (("../lib/npm-cli.js", True), ("../../outside", False)):
                 b = io.BytesIO()
@@ -643,6 +683,8 @@ def self_test():
             assert ok and version == "v1.0" and (TOOLS / "engine" / "README").read_text() == "hi", (ok, text)  # top folder dropped
             assert os.name == "nt" or os.access(TOOLS / "engine" / "bin" / "run", os.X_OK), "the launcher stays executable"
             assert fetch(eng)[2] == "engine v1.0 is current"
+            (TOOLS / ".versions.json").write_text('{"engine": "cut off')  # a crash mid-write: fetched again, not broken
+            assert fetch(eng)[2] == "engine v1.0 installed" and fetch(eng)[2] == "engine v1.0 is current"
             (TOOLS / ".versions.json").write_text("{}")
             assert fetch({**eng, "tag": r"^v1\."})[1] == "v1.0", "the newest release of a line, never a pre-release"
             assert "no release tagged" in fetch({**eng, "tag": r"^v9\."})[2]
@@ -673,7 +715,7 @@ def self_test():
             assert ok and version == "9.1" and (TOOLS / "platform-tools" / "README").exists(), text  # Google's sha1 checked
             ok, version, text = fetch({"shasums": API + "/dl/SHASUMS256.txt", "asset": {plat: r"^tool\.jar$"}, "into": "tool.jar"})
             assert ok and (TOOLS / "tool.jar").read_bytes() == b"JAR", text
-            assert delete("engine")[0] and not (TOOLS / "engine").exists() and "engine" not in json.loads((TOOLS / ".versions.json").read_text())
+            assert delete("engine")[0] and not (TOOLS / "engine").exists() and "engine" not in stamps()
             (TOOLS / "pbin").mkdir()
             env = environment({"path": ["{tools}/pbin", "{tools}/none"], "env": {"A": "{tools}/a", "C": "?{tools}/pbin", "D": "?{tools}/none{exe}"}}, {"env": {"B": "b"}})
             assert env["PATH"].split(os.pathsep)[0] == str(TOOLS / "pbin") and env["A"] == str(TOOLS / "a") and env["B"] == "b", env["PATH"][:200]

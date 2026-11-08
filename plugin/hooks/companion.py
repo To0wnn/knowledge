@@ -1592,6 +1592,15 @@ def set_tool(tid: str, **change):
         save("tools.json", {**done, tid: {**done.get(tid, {}), **change}})
 
 
+def mark_busy(tid: str, what: str):
+    """Under TOOLS_BUSY, which goes again when even this write fails: else every tool action stays refused."""
+    try:
+        set_tool(tid, busy=what)
+    except BaseException:
+        TOOLS_BUSY.release()
+        raise
+
+
 def tool_job(act: str, tid: str, m: dict):
     """Install or remove in the background (npm can take minutes; Stop or Merge must not wait), then report at once.
     A failure keeps what was there, with the error beside it, in the list and in Activity."""
@@ -1618,7 +1627,7 @@ def update_tools():
     cat = tools.catalog()
     for tid, t in load("tools.json", {}).items():
         if t.get("installed") and tid in cat and TOOLS_BUSY.acquire(blocking=False):
-            set_tool(tid, busy="update")
+            mark_busy(tid, "update")
             tool_job("install_tool", tid, cat[tid])
 
 
@@ -1783,7 +1792,7 @@ def run_action(a: dict) -> str:
             raise ValueError(f"no tool {tid} in this plugin version: update the plugin")
         if not TOOLS_BUSY.acquire(blocking=False):
             raise RuntimeError("another tool is being installed or removed here; try again when it is done")
-        set_tool(tid, busy=act.split("_")[0])
+        mark_busy(tid, act.split("_")[0])
         threading.Thread(target=tool_job, args=(act, tid, cat[tid]), daemon=True).start()
         return f"{cat[tid]['name']}: started, see Tools"
     if act == "trust_hooks":
