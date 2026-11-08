@@ -692,8 +692,26 @@ def hook_errors(tmp: Path, project: Path):
     check(code == 0 and state.get("sent", 0) == 0 and state.get("at"), "server away: the turn goes on, the error stays unsent", json.dumps(state) + err[-300:])
 
 
-FAKE_AGENT = """import json, os, sys, time
+FAKE_AGENT = """import io, json, os, re, sys, time
 calls, name, args = os.environ["KN_FAKE_CALLS"], sys.argv[1], sys.argv[2:]
+# the server asks for a chat title on a chat's first turn: noted once (title_ask), then dropped, so checks see the message
+_ASK = re.compile("(" + re.escape(chr(92) + "n" + chr(92) + "n") + "|" + chr(10) * 2 + ")" + re.escape("(knowledge web UI: ") + "[^)]*" + re.escape(")"))
+def _cut(text):
+    out = _ASK.sub("", text)
+    if out != text:
+        open(calls, "a", encoding="utf-8").write(json.dumps({"title_ask": os.environ.get("KNOWLEDGE_CHAT", "")}) + chr(10))
+    return out
+class _In:
+    def __init__(self, f):
+        self.f, self.buffer = f, self
+    def readline(self):
+        return _cut(self.f.readline())
+    def __iter__(self):
+        for ln in self.f:
+            yield _cut(ln)
+    def read(self):
+        return _cut(self.f.buffer.read().decode("utf-8")).encode("utf-8")
+sys.stdin = _In(sys.stdin)
 def look():  # LOOK: the agent looks at an image (the chat shows it under the tool line)
     f = os.path.abspath(calls + "." + name + ".png")
     open(f, "wb").write(b"PNG " + name.encode())
@@ -1792,6 +1810,8 @@ def chat_e2e(tok: str, tmp: Path):
             texts = "".join(e["text"] for e in events if e["kind"] == "text")
             first, second = (turns + [{}, {}])[:2]
             sent = lambda x: x  # agy without YOLO runs over ACP: the prompt is a session/prompt, not stream-json
+            asked = [ln for ln in calls.read_text(encoding="utf-8").splitlines() if '"title_ask"' in ln and cid in ln]
+            check(len(asked) == 1, f"chat {agent}: the first turn of an untitled chat asks for a title, the second does not", json.dumps(asked))
             check(got1 and got2 and len(turns) == 2 and sent(first.get("stdin", "{}")) == msg1 and sent(second.get("stdin", "{}")) == "second"
                   and Path(first["cwd"]).resolve() == repo.resolve() and not any(msg1[:5] in a for a in first["argv"]),
                   f"chat {agent}: two turns, each message on stdin (never on the command line), in the linked folder", json.dumps(turns)[:900])
