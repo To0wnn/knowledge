@@ -673,30 +673,45 @@ async def shell(browser, devices, secret: str) -> None:
             current: document.querySelector('#sidebar [aria-current=page]')?.dataset.nav, title: $('title').textContent})""", {"el": VIEW_EL[v]})
         check(st["shown"] and st["only"] and st["current"] == v, f"route #/{v}: its view alone, its nav item current {st}")
     await route(pg, "#/machines", ms=1500)
-    await pg.evaluate("document.querySelectorAll('.machine-tabs [data-key=agents]').forEach((b) => b.click())")  # YOLO and max workers sit under Agents
-    yolo = await pg.evaluate("""() => ({switches: document.querySelectorAll('.machine-controls .yolo-switch input[role=switch]').length,
-        own: document.querySelectorAll('.machine-head .machine-actions').length, old: [...document.querySelectorAll('.machine-controls button')].some(b => /Forget|YOLO/.test(b.textContent))})""")
-    if yolo["own"]:
-        check(not yolo["old"], f"Machines: YOLO is a switch per agent, pc actions in the card head, Forget behind ⋯ {yolo}")
-        most = await pg.evaluate("""() => { const i = document.querySelector('.machine-controls input[type=number]'); if (!i) return null; const was = i.value;
-          i.value = ''; i.dispatchEvent(new Event('change')); return {max: i.max, min: i.min, label: i.closest('label').textContent, back: i.value === was}; }""")
-        check(most and most["max"] == "" and most["min"] == "0" and "0: no limit" in most["label"] and most["back"], f"Machines: workers at a time is a free number, 0 is no limit, an empty field changes nothing {most}")
-    # The folder chooser on a pc of your own; the pc's answers and the link are stand-ins, so nothing changes (also live).
-    tabs = await pg.evaluate("""async () => { const card = document.querySelector('#machines > .machine'); if (!card) return null;
-      const tab = (k) => card.querySelector(`.machine-tabs [data-key=${k}]`), id = card.dataset.machine;
-      if (!tab('tools')) return {skip: true};
-      tab('tools').click(); const kinds = [...card.querySelectorAll('.machine-panel .pill[class*=kind-]')].map((p) => p.textContent);
-      await loadMachines(); const again = document.querySelector(`#machines > .machine[data-machine="${id}"] .machine-tabs [aria-selected=true]`)?.dataset.key;
-      return {kinds, again, title: workerTitle({id: 'K-1', title: '\u00ab(claimed Gemini worker, 2026-11-06): fix the beds'})}; }""")
-    check(tabs and (tabs.get("skip") or tabs["again"] == "tools"), f"Machines: the tab a person picked stays picked when the list refreshes {tabs}")
-    check(tabs and tabs.get("title", "fix the beds") == "fix the beds", f"Machines: a worker's title drops the claim marker of its task line {tabs}")
-    words = await pg.evaluate("""() => { const now = Date.now() / 1000, w = (x) => ({id: 'K-1', started: now - 600, ended: now - 60, ...x});
-      return [workerState(w({status: 'failed', owner_stopped: true})), workerState(w({status: 'finished'})), workerNeedsYou({online: true}, w({status: 'failed', owner_stopped: true}))]; }""")
-    check(words[0].startswith("stopped by you") and words[1].startswith("done") and words[2] is False, f"Machines: a worker stopped from the page is not a failure, finished reads as done {words}")
+    # Pcs: one column per pc of your own, a switch per agent for YOLO, workers at a time a list with No limit, Forget behind More
+    yolo = await pg.evaluate("""() => ({switches: document.querySelectorAll('.mx-c .yolo-switch input[role=switch]').length,
+        heads: document.querySelectorAll('.mx-head .mx-pc').length, more: document.querySelectorAll('.mx-pc-acts .machine-more').length,
+        forget: [...document.querySelectorAll('#machines .mx-c button')].some(b => /Forget/.test(b.textContent) && !b.closest('.menu-list'))})""")
+    if yolo["switches"]:
+        check(yolo["heads"] >= 1 and yolo["more"] >= 1 and not yolo["forget"], f"Machines: YOLO is a switch per agent, pc actions in its column head, Forget behind More {yolo}")
+        most = await pg.evaluate("""() => { const s = document.querySelector('.mx-c select[aria-label^="Workers of"]'); if (!s) return null;
+          return {options: [...s.options].map(o => o.textContent), value: s.value}; }""")
+        check(most and "No limit" in most["options"] and most["value"].isdigit(),
+              f"Machines: workers at a time is a list with No limit {most}")
+    # A tool's panel a person opened stays open when the list refreshes; each tool is labelled skill or program.
+    tabs = await pg.evaluate("""async () => { const b = document.querySelector('.mx-cellbtn'); const kinds = [...document.querySelectorAll('.mx-tool small')].map((k) => k.textContent);
+      if (!b) return {skip: true, kinds}; const key = b.dataset.key; b.click(); await loadMachines();
+      const again = document.querySelector(`.mx-cellbtn[data-key="${key}"]`); const open = again?.getAttribute('aria-expanded') === 'true' && !!document.querySelector('.mx-pop');
+      machinesOpen.clear(); drawMachines(); return {kinds, open}; }""")
+    check(tabs and (tabs.get("skip") or tabs["open"]), f"Machines: an open tool panel stays open when the list refreshes {tabs}")
     if os.environ.get("KNOWLEDGE_SMOKE_WRITES"):  # the seeded pc of tests/ui_ci.py lists a skill and a program
-        check(tabs and sorted(tabs.get("kinds") or []) == ["Program", "Skill"], f"Machines: each tool is labelled Skill or Program {tabs}")
-    await pg.evaluate("document.querySelectorAll('.machine-tabs [data-key=folders]').forEach((b) => b.click())")  # Choose a folder sits under Folders
-    if await pg.get_by_role("button", name="Choose a folder…").count():
+        check(tabs and sorted(set(tabs.get("kinds") or [])) == ["program", "skill"], f"Machines: each tool is labelled skill or program {tabs}")
+    # A click beside an open tool panel closes it and still does what it clicked: More opens at the first click.
+    more = await pg.evaluate("""async () => { const b = document.querySelector('.mx-cellbtn'), more = () => document.querySelector('.mx-pc-acts .machine-more > summary');
+      if (!b || !more()) return {skip: true}; b.click(); await new Promise((r) => setTimeout(r, 50));
+      const panel = !!document.querySelector('.mx-pop'); more().click(); await new Promise((r) => setTimeout(r, 50));
+      const menu = document.querySelector('.mx-pc-acts .machine-more[open]'), out = {panel, closed: !document.querySelector('.mx-pop'), open: !!menu};
+      if (menu) menu.open = false; return out; }""")
+    check(more.get("skip") or (more["panel"] and more["closed"] and more["open"]), f"Machines: a click beside an open tool panel closes it and opens what it clicked {more}")
+    # A pc of yours whose token has remote control off stays with yours (read-only), never under other people's pcs.
+    split = await pg.evaluate("""() => { const was = machinesRes, now = Date.now() / 1000;
+      const pc = (id, label, mine, own) => ({id, label, mine, own, online: true, at: now, tokens: [label], actions: [], agents: {claude: {plugin: '1.0.0', trusted: true, workers: []}}, companion: {version: '1.0.0', agents: ['claude'], tools: {}}});
+      const gone = (id) => ({...pc(id, 'test-vm', true, true), online: false});
+      machinesRes = {machines: [pc('a'.repeat(16), 'mine-off', true, false), pc('b'.repeat(16), 'friend', false, false), gone('1'.repeat(16)), gone('2'.repeat(16)), gone('3'.repeat(16))], stuck: []}; drawMachines();
+      const theirs = [...document.querySelectorAll('.mx-theirs .mx-pc h3')].map((h) => h.textContent), yours = [...document.querySelectorAll('#machines > .mx-wrap .mx-pc h3')].map((h) => h.textContent);
+      const lines = [...document.querySelectorAll('#machines > .mx-offline .mx-line')].map((l) => l.querySelector('strong').textContent);
+      machinesRes = was; drawMachines(); return {theirs, yours, lines}; }""")
+    check(split["yours"] == ["mine-off"] and split["theirs"] == ["friend"], f"Machines: a pc of yours with remote control off stays with yours {split}")
+    check(split["lines"] == [" test-vm 3 reports"], f"Machines: a pc set up again (same name and token) is one offline line with its reports counted {split}")
+    words = await pg.evaluate("""() => { const now = Date.now() / 1000; return [workerNeedsYou({online: true}, {status: 'failed', owner_stopped: true}), workerNeedsYou({online: true}, {status: 'failed'})]; }""")
+    check(words == [False, True], f"Machines: a worker stopped by its owner does not need you, one that failed does {words}")
+    await route(pg, "#/machines?view=folders", ms=1500)  # Link a folder sits under Folders, per project
+    if await pg.get_by_role("button", name="Link a folder").count():
         tree = {"": {"path": "", "parent": None, "linkable": False, "dirs": [{"name": "C:\\", "path": "C:\\"}, {"name": "D:\\", "path": "D:\\"}]},
                 "D:\\": {"path": "D:\\", "parent": "", "linkable": False, "dirs": [{"name": "Sim", "path": "D:\\Sim"}]},
                 "D:\\Sim": {"path": "D:\\Sim", "parent": "D:\\", "linkable": True, "dirs": []}}
@@ -713,7 +728,7 @@ async def shell(browser, devices, secret: str) -> None:
             await r.fulfill(json={"ok": True, "id": "a"})
         await pg.route("**/ui/api/git/diff*", fake_dirs)
         await pg.route("**/ui/api/machines/action", fake_action)
-        await pg.get_by_role("button", name="Choose a folder…").first.click()
+        await pg.get_by_role("button", name="Link a folder").first.click()
         d_drive = pg.locator("#choose-list").get_by_role("button", name="D:\\")
         await d_drive.wait_for(timeout=8000)
         check(await pg.locator("#choose-list").get_by_role("button", name="C:\\").count() == 1, "Machines: the folder chooser starts at the drives, C: and D:")
@@ -730,7 +745,7 @@ async def shell(browser, devices, secret: str) -> None:
         await pg.unroute("**/ui/api/git/diff*")
         await pg.unroute("**/ui/api/machines/action")
     else:
-        check(False, "Machines: no Choose a folder button on a pc of your own")
+        check(False, "Machines: no Link a folder button for a project of a pc of your own")
     pill = await pg.evaluate("""(() => { const p = el('span', 'pill yolo', 'YOLO'); document.body.append(p); const s = getComputedStyle(p), b = s.backgroundColor, c = s.color;
       const d = el('span'); d.style.color = 'var(--bad)'; document.body.append(d); const bad = getComputedStyle(d).color; p.remove(); d.remove(); return [b, bad, c]; })()""")
     check(pill[2] == pill[1] and pill[0] != "rgba(0, 0, 0, 0)", f"Machines: the YOLO label is red and stands out {pill}")
@@ -900,8 +915,8 @@ async def agents_pages(browser, devices, secret: str) -> None:
     check(h[1] == (f"Open ({h[0]})" if h[0] else ""), f"Tasks: with one project picked the badge follows it {h}")
     await pg.select_option("#projects", "all")
     check("Done" not in t[2] and t[3], f"Tasks: Cancel (with the reason when disabled) instead of Done {sorted(set(t[2]))}")
-    await route(pg, "#/machines", "#machines .machine, #machines p", 800)
-    check(await pg.evaluate("getComputedStyle($('machines')).gridTemplateColumns.split(' ').length === 1"), "Machines: one pc per row, full width")
+    await route(pg, "#/machines", "#machines > *", 800)
+    check(await pg.evaluate("getComputedStyle($('machines')).gridTemplateColumns.split(' ').length === 1"), "Machines: one block under the other, full width")
     await route(pg, "#/changes", "#recent", 500)
     await pg.wait_for_selector("#trash", state="attached", timeout=10000)
     check(await pg.evaluate("$('trash').tagName === 'DETAILS' && $('trash').querySelector('summary').textContent.startsWith('Deleted') && $('trash').hidden === ($('trash').querySelector('.badge').textContent === '0')"), "Changes: a Deleted section, only with something in it")
@@ -1486,7 +1501,7 @@ async def follow(browser, devices, secret: str) -> None:
         banner = await card.locator(".ck-banner-text").inner_text()
         acts = await card.locator(".ck-banner-acts button").all_inner_texts()
         check("KN-7" in banner and "smoke-pc" in banner and "Read only" in banner, f"{name}: an ended worker opens read only with its banner ({banner})")
-        check(not await card.locator(".ck-form").is_visible() and acts == ["Restart", "Review", "Take over"], f"{name}: no composer; Restart, Review, Take over {acts}")
+        check(not await card.locator(".ck-form").is_visible() and acts == ["Restart", "Review", "Take over", "Archive"], f"{name}: no composer; Restart, Review, Take over, Archive (moved here from Machines) {acts}")
         log = await card.locator(".ck-log").inner_text()
         check(all(x in log for x in ("watering", "Bash: git status", "refused: Bash npm test", "use the soil sensor", "Delivered")),
               f"{name}: text, tool, refused, user and info lines show like a chat")
@@ -1641,11 +1656,11 @@ async def one_lamp(browser, secret: str) -> None:
     await route(pg, "#/map", "#g2d canvas", 1500)
     map_ = await pg.evaluate("""() => ({w: $('graph').getBoundingClientRect().width, main: document.querySelector('.main').getBoundingClientRect().width, left: getComputedStyle($('topics-pane')).display, right: getComputedStyle($('side')).display})""")
     check(map_["w"] >= map_["main"] - 2 and map_["left"] != "none" and map_["right"] == "none", f"the map takes the whole page, the topic list floats over it {map_}")
-    await route(pg, "#/machines", "#machines .machine, #machines p", 800)
-    fold = await pg.evaluate("""() => { const kids = [...$('machines').children], first = kids.findIndex((k) => k.matches('.machines-offline'));
-      const off = [...document.querySelectorAll('.machine-offline')];
-      return {n: off.length, closed: off.filter((d) => !d.open && d.children.length === 1).length, last: first === -1 || kids.slice(first + 1).every((k) => !k.matches('.machine'))}; }""")
-    check(fold["n"] == fold["closed"] and fold["last"], f"offline pcs come last, on one line with the rest folded {fold}")
+    await route(pg, "#/machines", "#machines > *", 800)
+    fold = await pg.evaluate("""() => { const kids = [...$('machines').children], first = kids.findIndex((k) => k.matches('.mx-offline'));
+      return {lines: document.querySelectorAll('.mx-offline .mx-line').length, columns: document.querySelectorAll('.mx-offline .mx-pc').length,
+              last: first === -1 || kids.slice(first + 1).every((k) => !k.matches('.mx-wrap'))}; }""")
+    check(fold["columns"] == 0 and fold["last"], f"offline pcs of your own come after the comparison, one line each {fold}")
     await route(pg, "#/tasks", "#tasks > *", 1000)
     spill = await pg.evaluate("""() => { const t = $('tasks').textContent; return {none: /No tasks in /.test(t), others: /In your other projects/.test(t), rows: document.querySelectorAll('#tasks li.task').length, badge: $('tasks-count').textContent}; }""")
     check(not spill["others"] or (spill["rows"] > 0 and spill["badge"] != ""), f"a project without tasks shows the work elsewhere, and the badge counts it {spill}")
@@ -1708,7 +1723,7 @@ async def update_button(browser, secret: str) -> None:
     ctx, pg, errors = await page(browser, secret, "/ui#/machines", viewport={"width": 1280, "height": 860})
     await ctx.route("**/ui/api/machines**", fake)
     await pg.reload()
-    button = pg.locator(".machine-actions").get_by_text("Update plugin", exact=True)
+    button = pg.locator(".mx-pc-acts button", has_text="Update to")
     try:
         await button.first.wait_for(timeout=10000)
     except Exception:

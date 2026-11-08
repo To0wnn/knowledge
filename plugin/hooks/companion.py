@@ -1626,8 +1626,8 @@ def update_tools():
     """With the agents' daily update: every tool installed here is installed again, so it takes the newest release (a
     fetch skips what is current). A failure keeps the tool as it was and says so; the server passes it on."""
     cat = tools.catalog()
-    for tid, t in load("tools.json", {}).items():
-        if t.get("installed") and tid in cat and TOOLS_BUSY.acquire(blocking=False):
+    for tid, t in load("tools.json", {}).items():  # "auto": false, the owner's choice on the Machines page: left as it is
+        if t.get("installed") and t.get("auto") is not False and tid in cat and TOOLS_BUSY.acquire(blocking=False):
             mark_busy(tid, "update")
             tool_job("install_tool", tid, cat[tid])
 
@@ -1636,7 +1636,8 @@ def tool_state() -> dict:
     """Every tool this plugin knows, with what the last install, check or remove here found: the page's Tools list."""
     done = load("tools.json", {})
     return {tid: {"name": m["name"], "kind": m.get("kind", ""), "description": m.get("description", ""), "homepage": m.get("homepage", ""),
-                  **{k: done.get(tid, {}).get(k) for k in ("installed", "ok", "version", "detail", "error", "busy", "at")}}
+                  **{k: done.get(tid, {}).get(k) for k in ("installed", "ok", "version", "detail", "error", "busy", "at")},
+                  "auto": done.get(tid, {}).get("auto") is not False}
             for tid, m in tools.catalog().items()}
 
 
@@ -1796,6 +1797,12 @@ def run_action(a: dict) -> str:
         mark_busy(tid, act.split("_")[0])
         threading.Thread(target=tool_job, args=(act, tid, cat[tid]), daemon=True).start()
         return f"{cat[tid]['name']}: started, see Tools"
+    if act == "tool_auto":  # whether the daily update installs this tool again
+        tid = str(args.get("tool", ""))
+        if tid not in tools.catalog():
+            raise ValueError(f"no tool {tid} in this plugin version: update the plugin")
+        set_tool(tid, auto=args.get("on") is True)
+        return f"{tools.catalog()[tid]['name']}: daily update {'on' if args.get('on') is True else 'off'}"
     if act == "trust_hooks":
         return trust(agent)
     if act == "link_folder":
@@ -1847,7 +1854,7 @@ def actions_round():
     return "waited" in got  # a server before the long poll answers at once: then the loop waits itself
 
 
-STATE_ACTIONS = {"install_tool", "remove_tool", "yolo", "workers_allowed", "max_workers", "link_folder", "unlink_folder", "trust_hooks", "stop_worker", "restart", "merge", "takeover", "archive_worker", "apply_models"}
+STATE_ACTIONS = {"install_tool", "remove_tool", "tool_auto", "yolo", "workers_allowed", "max_workers", "link_folder", "unlink_folder", "trust_hooks", "stop_worker", "restart", "merge", "takeover", "archive_worker", "apply_models"}
 
 
 # ---------------------------------------------------------------- the page
@@ -2588,6 +2595,13 @@ def main(argv: list):
         assert usage_info("agy", {}, 1100) == [(42.0, "7d", 2000.0), (10.0, "5h", 1200.0)]
         assert usage_info("agy", {}, 1500) == [(42.0, "7d", 2000.0)] and usage_info("agy", {}, 2500) == []
         globals()["usage_live"] = real_live
+        real_job, jobs, ids = tool_job, [], sorted(tools.catalog())[:2]  # the daily tool update skips a tool its owner took off it
+        globals()["tool_job"] = lambda act, tid, m: jobs.append(tid) or TOOLS_BUSY.release()
+        save("tools.json", {ids[0]: {"installed": True}, ids[1]: {"installed": True, "auto": False}})
+        update_tools()
+        assert jobs == [ids[0]] and tool_state()[ids[1]]["auto"] is False and tool_state()[ids[0]]["auto"] is True, jobs
+        globals()["tool_job"] = real_job
+        save("tools.json", {})
         t = '# mine\napproval_policy = "on-request" # keep\n\n[notice]\nother = 1\n\n[projects."/x"]\ntrust_level = "trusted"\n'
         t2, old = toml_set(t, None, "approval_policy", '"never"')
         assert old == '"on-request" # keep' and 'approval_policy = "never"\n' in t2, t2

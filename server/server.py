@@ -1160,13 +1160,16 @@ def knowledge_chat_archive(chat: str = "", chat_id: str = "", id: str = "", forc
 
 
 @server.tool(annotations=EDIT)
-def knowledge_chat_title(title: str) -> str:
+def knowledge_chat_title(title: str, chat: str = "") -> str:
     """Name the web UI chat you run in: 3 to 6 words in the user's language saying what it works on (e.g. 'Clearer chat
-    titles'), not their message. Call it after your first answer and again when the subject changes."""
-    cid = device.get().get("chat", "")
+    titles'), not their message. Call it after your first answer and again when the subject changes.
+    chat: another of your chats (id from knowledge_chats), e.g. to rename it when its owner asks."""
+    cid = chat.strip() or device.get().get("chat", "")
     title = " ".join(str(title).split()).strip(" .\"'")[:60]
     if not cid:
-        raise ToolError("only a chat from the web UI has a title to set")
+        raise ToolError("only a chat from the web UI has a title to set (or name one with chat, an id from knowledge_chats)")
+    if chat.strip() and not device.get().get("write"):
+        raise ToolError("this device token is read-only")
     if not title:
         raise ToolError("title is required")
     found = next((r for r, c in own_chats() if c["id"] == cid), None)
@@ -2030,8 +2033,8 @@ def token_project() -> str | None:
 
 WEBCHAT_NOTE = ("===== knowledge: a chat from the web UI =====\nThe user talks to you from the knowledge web UI; each message "
                 "is one turn. Answer what they ask. Tasks between agents run in workers: do not list, take or start them here.\n"
-                "Name the chat with knowledge_chat_title (3 to 6 words on what it works on) after your first answer and when "
-                "the subject changes.")
+                "Name the chat with knowledge_chat_title (3 to 6 words on what it works on, chat: its id from the first "
+                "message) after your first answer and when the subject changes.")
 
 
 def context_parts(project: str = "homelab", agent: str = "", chat: bool = False, webchat: bool = False) -> list[str]:
@@ -5619,10 +5622,10 @@ def action_args(action: str, args: dict) -> dict:
         return {"project": args["project"], "id": tid(), **({"chat": True} if action == "merge" and args.get("chat") is True else {})}
     if action == "trust_hooks":
         return {"agent": agent()}
-    if action in ("install_tool", "remove_tool"):  # an id only: the steps ship with the pc's own plugin (plugin/tools)
+    if action in ("install_tool", "remove_tool", "tool_auto"):  # an id only: the steps ship with the pc's own plugin (plugin/tools)
         if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,39}", str(args.get("tool", ""))):
             raise ValueError("tool must be a tool id")
-        return {"tool": args["tool"]}
+        return {"tool": args["tool"], **({"on": args.get("on") is True} if action == "tool_auto" else {})}
     if action in ("update_plugin", "update_agents"):
         return {}
     if action in ("link_folder", "unlink_folder"):
@@ -5768,6 +5771,8 @@ CHATS_DIR = ADMIN_DIR / "chats"
 CHAT_KEEP, CHAT_EVENTS, CHAT_BYTES, CHAT_TEXT = 50, 4000, 1_000_000, 20_000  # chats per machine, events and bytes per chat, chars per message
 CHAT_PENDING = 5  # messages a chat keeps in line while its agent answers
 # Archive: the agent's last turn records the chat in the memos before the chat closes (the house rules, not the transcript)
+CHAT_TITLE_ASK = ("\n\n(knowledge web UI: after your answer, name this chat with the tool knowledge_chat_title, chat {chat}, title "
+                  "3 to 6 words in my language on what it works on.)")  # the id in the text: works without the plugin's header
 CHAT_WRAP_UP = ("This chat is being archived. Before it closes, record what it established on the knowledge server, following the "
                 "house rules: for each subject, knowledge_search first and knowledge_edit the memo that already covers it "
                 "(knowledge_new_memo only for a genuinely new subject). What is true now goes under '## Status', each decision "
@@ -6918,9 +6923,13 @@ async def machine_chats(request: Request):
                     s = e.pop("steer")
                     out.setdefault("steer", []).extend({"chat": cid, **x} for x in (s if isinstance(s, list) else [s]))
             elif "msg" in e:
+                msg = e.pop("msg")
+                if not c.get("session") and not c.get("titled") and msg.get("text") != CHAT_WRAP_UP:
+                    # the start context asks too, but a session without the plugin's start hook never sees it
+                    msg = {**msg, "text": (msg.get("text") or "") + CHAT_TITLE_ASK.format(chat=cid)}
                 out["work"].append({"chat": cid, "agent": c["agent"], "folder": c["folder"], "session": c.get("session", ""),
                                     "model": c.get("model", ""), "effort": c.get("effort", ""),
-                                    "allow": c.get("allow", []), **({"worktree": True} if c.get("worktree") else {}), **extra, **e.pop("msg")})
+                                    "allow": c.get("allow", []), **({"worktree": True} if c.get("worktree") else {}), **extra, **msg})
                 e["busy"] = True
     if q_path.exists():
         await asyncio.to_thread(update_state, q_path, change)
@@ -7170,7 +7179,8 @@ async def ui_worker(request: Request):
     t = t or {}
     info = {k: (w or t).get(k) for k in ("id", "project", "agent", "status", "started", "ended", "branch", "why", "open", "yolo")}
     info.update(id=info["id"] or key.split("/", 1)[1], project=info["project"] or key.split("/", 1)[0], agent=info["agent"] or t.get("agent"),
-                review=bool(w and w.get("review")), git=bool(w and w.get("git")))
+                review=bool(w and w.get("review")), git=bool(w and w.get("git")),
+                checkpoint=bool(w and w.get("checkpoint")), merged=bool(w and w.get("merged")), ahead=int(((w or {}).get("review") or {}).get("ahead") or 0))
     taken = read_json(f.parent.parent / "takeover.json", {}).get(key) or {}
     info["chat"] = taken.get("chat") if taken.get("started") == info.get("started") else None
     return JSONResponse({"worker": info, "events": [e for e in t.get("events", []) if e["n"] > after], "trimmed": bool(t.get("trimmed")),
@@ -7410,7 +7420,7 @@ def report_tools(t) -> dict:
     flag = lambda v: v if isinstance(v, bool) else None
     return {k: {"name": str(v.get("name") or k)[:60], "kind": v["kind"] if v.get("kind") in ("skill", "program") else "", "description": str(v.get("description") or "")[:300],
                 "homepage": h if (h := str(v.get("homepage") or "")[:200]).startswith("https://") else "",
-                "installed": flag(v.get("installed")), "ok": flag(v.get("ok")), "version": str(v.get("version") or "")[:40],
+                "installed": flag(v.get("installed")), "ok": flag(v.get("ok")), "auto": flag(v.get("auto")), "version": str(v.get("version") or "")[:40],
                 "detail": redact(str(v.get("detail") or "")[:300]), "error": redact(str(v.get("error") or "")[:300]),
                 "busy": v["busy"] if v.get("busy") in ("install", "remove", "update") else "",
                 "at": v["at"] if type(v.get("at")) in (int, float) and 0 < v["at"] < 1e11 else None}  # not Infinity: it reaches json

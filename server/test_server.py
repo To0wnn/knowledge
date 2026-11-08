@@ -723,6 +723,7 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     """Chats with an agent on a pc: only the machine's owner sees or posts, only installed agents and linked folders;
     the companion pulls a message once, posts events back, a stop reaches it; caps per chat and per machine."""
     pc = {"X-Knowledge-Machine": "cccccccccccccccc", "X-Knowledge-Machine-Label": "garage"}
+    import server as srv
     mid = "cccccccccccccccc"
     ui = lambda path, body=None, h=ck: raw("POST" if body is not None else "GET", path, None if body is None else json.dumps(body),
                                           {**h, "X-Knowledge-UI": "1", "Content-Type": "application/json"})
@@ -749,7 +750,8 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     # Her token, even naming this machine id, gets nothing (its own record); the machine's own token gets the message once.
     assert json.loads(http("GET", "/machine/chats", token=et, headers=pc)[1])["work"] == []
     got = json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])
-    assert [(w["chat"], w["agent"], w["folder"], w["text"], w["session"]) for w in got["work"]] == [(cid, "codex", "/home/x/garden", "hello <b>agent</b>", "")], got
+    assert [(w["chat"], w["agent"], w["folder"], w["text"], w["session"]) for w in got["work"]] == [(cid, "codex", "/home/x/garden", "hello <b>agent</b>" + srv.CHAT_TITLE_ASK.format(chat=cid), "")], got
+    assert "knowledge_chat_title" in srv.CHAT_TITLE_ASK and f"chat {cid}," in srv.CHAT_TITLE_ASK.format(chat=cid), "the first turn asks for a title and names the chat"
     again = json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])
     assert again["work"] == [] and again["busy"] == [cid] and again["active"], again
     assert json.loads(http("GET", "/machine/chats", token=fr, headers={"X-Knowledge-Machine": "eeeeeeeeeeeeeeee"})[1])["work"] == []
@@ -770,10 +772,10 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1]) == {"work": [], "stop": [], "busy": [], "active": False}
     # The second turn goes out with the session of the first (the agent continues its own conversation).
     ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "next"})
-    assert json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"][0]["session"] == "th-1"
+    w = json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"][0]
+    assert w["session"] == "th-1" and w["text"] == "next", "later turns go out as written"
     assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={cid}")[2])["chat"]["title"] == "hello <b>agent</b>", "a short reply keeps the title"
     # A chat goes by the owner's latest message of four words or more: its first line, at most 60 characters, cut at a word.
-    import server as srv
     long = "please refactor the whole storage layer so that every write goes through one function\nmore"
     assert srv.chat_title(long, "hello") == "please refactor the whole storage layer so that every write…", srv.chat_title(long, "hello")
     assert srv.chat_title("ok go on", "old title") == "old title" and srv.chat_title("yes") == "yes" and len(srv.chat_title("x" * 80)) == 60
@@ -886,10 +888,11 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     for x in json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"]:  # taken, or the next test finds it
         http("POST", "/machine/actions/result", {"id": x["id"], "status": "done", "result": "ok"}, token=fr, headers=pc)
     tools = {"rea": {"name": "REA", "homepage": "javascript:alert(1)", "installed": True, "ok": "yes", "version": "6.8.0", "detail": "x" * 999,
-                     "at": float("inf"), "busy": "rm -rf", "kind": "program"},
-             "slop": {"name": "Slop", "kind": "<b>"}, "Bad Id": {"name": "no"}}
+                     "at": float("inf"), "busy": "rm -rf", "kind": "program", "auto": False},
+             "slop": {"name": "Slop", "kind": "<b>", "auto": "no"}, "Bad Id": {"name": "no"}}
     assert http("POST", "/machine/report", {**mrep, "tools": tools}, token=fr, headers=pc)[0] == 200
     got = [a for a in json.loads(ui("/ui/api/machines")[2])["machines"] if a["id"] == mid][0]["companion"]["tools"]
+    assert got["rea"]["auto"] is False and got["slop"]["auto"] is None, got  # the daily update switch reaches the page as reported
     assert got.pop("slop")["kind"] == "" and got["rea"]["kind"] == "program", got  # the page's label: skill or program, nothing else
     assert list(got) == ["rea"] and got["rea"]["homepage"] == "" and got["rea"]["ok"] is None and got["rea"]["installed"] is True \
         and len(got["rea"]["detail"]) == 300 and got["rea"]["version"] == "6.8.0" and got["rea"]["at"] is None and got["rea"]["busy"] == "", got
@@ -1064,6 +1067,9 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert "titled 'Clearer chat titles'" in call("knowledge_chat_title", {"title": ' "Clearer  chat titles". '}, fr, {"X-Knowledge-Chat": mc})[1]
     assert chat()["title"] == "Clearer chat titles"
     assert srv.chat_title("please rename every chat after this long message", "Clearer chat titles", True) == "Clearer chat titles"
+    assert "titled 'Renamed by another chat'" in call("knowledge_chat_title", {"title": "Renamed by another chat", "chat": mc}, fr)[1]
+    assert chat()["title"] == "Renamed by another chat", "another chat of the owner renames it"
+    assert "not on your pcs" in call("knowledge_chat_title", {"title": "x", "chat": mc}, et)[1], "never another person's chat"
     # Another agent archives the chat (MCP)
     assert "force-archived" in call("knowledge_chat_close", {"chat": mc, "force": True, "reason": "limit reached"}, fr)[1]
     assert chat()["closed"] is True and not on_board()
@@ -1128,7 +1134,7 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert [(w["text"], w["mode"]) for w in got] == [("also this", "now"), ("stop that", "force")], got
     assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={lc}")[2])["chat"]["waiting"] == 1, "only the queued one waits"
     ui("/ui/api/chat/send", {"machine": mid, "id": lc, "text": "racing the end", "mode": "now"})  # not handed out before the end
-    http("POST", "/machine/chats/events", {"chat": lc, "events": [{"kind": "text", "text": "ok"}], "done": True}, token=fr, headers=pc)
+    http("POST", "/machine/chats/events", {"chat": lc, "session": "s-lc", "events": [{"kind": "text", "text": "ok"}], "done": True}, token=fr, headers=pc)
     nxt = [w["text"] for w in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"] if w["chat"] == lc]
     assert nxt == ["later"], nxt  # the queued one first (it waited longer); the racing one waits behind it, not lost
     http("POST", "/machine/chats/events", {"chat": lc, "events": [], "done": True}, token=fr, headers=pc)
