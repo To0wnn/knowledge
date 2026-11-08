@@ -42,7 +42,8 @@ const pendingAction = (m, action, match = () => true) => (m.actions || []).some(
 const versionParts = (v) => String(v).split(".").map(Number);
 const versionNewer = (a, b) => { const x = versionParts(a), y = versionParts(b); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); return false; };
 // The newest plugin any pc reports, and whether a pc has an older one anywhere ("" when it is current).
-const newestPlugin = () => machinesCache.flatMap((pc) => [pc.companion?.version, ...Object.values(pc.agents || {}).map((ag) => ag.plugin)].filter(Boolean)).reduce((a, v) => (versionNewer(v, a) ? v : a), "0");
+// the server's word (GitHub's newest); only an old server without it falls back to the highest a pc reports
+const newestPlugin = () => machinesRes?.newest || machinesCache.flatMap((pc) => [pc.companion?.version, ...Object.values(pc.agents || {}).map((ag) => ag.plugin)].filter(Boolean)).reduce((a, v) => (versionNewer(v, a) ? v : a), "0");
 function pluginBehind(m) {
   const newest = newestPlugin();
   return [m.companion?.version, ...Object.values(m.agents || {}).map((ag) => ag.plugin)].some((v) => v && versionNewer(newest, v)) ? newest : "";

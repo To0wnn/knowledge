@@ -5720,7 +5720,9 @@ async def ui_mission(request: Request):
 async def ui_machines(request: Request):
     def build():
         rows = machine_rows()
-        return {"machines": rows, "stuck": stuck_projects(task_rows(), rows), "admin": bool(device.get().get("admin")), "now": time.time()}
+        # the newest plugin on GitHub: what "behind" means, never the highest a pc reports (a test pc may say anything)
+        return {"machines": rows, "stuck": stuck_projects(task_rows(), rows), "admin": bool(device.get().get("admin")), "now": time.time(),
+                "newest": (plugin_latest() or ("",))[0]}
     return JSONResponse({**await asyncio.to_thread(build)})
 
 
