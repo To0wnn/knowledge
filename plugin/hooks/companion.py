@@ -1665,6 +1665,10 @@ def one_round(only: str = "") -> dict:
         pending_yolo()
     except Exception as e:
         log("error", "Could not apply the queued YOLO setting of agy", str(e)[:300])
+    try:
+        agy_later_round()
+    except Exception as e:  # tried again next minute
+        log("error", "Could not update agy's plugin after agy closed", f"{type(e).__name__}: {e}"[:300])
     keep_trusted()
     try:
         if self_update.heal_agy():
@@ -1818,7 +1822,7 @@ def run_action(a: dict) -> str:
             raise RuntimeError("; ".join(failed)[:500])
         me = self_state()  # what the page can tell: the plugins now, and whether the companion itself follows
         plugins = ", ".join(f"{AGENTS[a][0]} {v}" for a in AGENTS if installed(a) and (v := plugin_version(a)))
-        return (f"plugins: {plugins or 'none'}; companion {version()}" + (f", restarts on {me['disk']} (waits for {me['waits']})" if me["waits"]
+        return (f"plugins: {plugins or 'none'}" + ("; agy is open, its plugin updates once agy is closed" if me["later"] else "") + f"; companion {version()}" + (f", restarts on {me['disk']} (waits for {me['waits']})" if me["waits"]
                 else " runs from a plugin copy, which an update does not move: run the installer once" if me["from"] == "copy" else " is current"))
     if act == "yolo":
         return f"YOLO {set_yolo(agent, args.get('on') is True)}"
@@ -1989,6 +1993,38 @@ def update_own_checkout(repo: Path | None = None) -> str:
             "run the one-line installer again on that pc")
 
 
+AGY_LATER = "agy-update-later"  # a marker in STATE: agy's plugin waits until no agy runs here (Windows)
+
+
+def agy_running() -> bool:
+    """An agy session or worker on this pc. On Windows it holds its own plugin folder, so replacing that folder fails
+    ("in use by another process", seen on a friend's pc 8 Nov 2026) until agy is closed."""
+    try:
+        if os.name == "nt":
+            out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq agy.exe", "/NH"], capture_output=True, text=True,
+                                 timeout=15, creationflags=workers.WIN_FLAGS).stdout
+            return "agy.exe" in out.lower()
+        return subprocess.run(["pgrep", "-x", "agy"], capture_output=True, timeout=15).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def agy_later_round():
+    """The minute's round: agy's plugin update that waited for agy to close, now that it is closed."""
+    if not (STATE / AGY_LATER).exists() or agy_running():
+        return
+    have = plugin_version("agy")
+    try:
+        res = self_update.run("agy", have=tuple(map(int, have.split("."))) if have else (0,))
+    except Exception as e:
+        res = f"knowledge plugin: the update of agy failed ({type(e).__name__}: {e})"
+    ok = not res or res.startswith("knowledge plugin: updated to")
+    log("sync" if ok else "error", res or "agy: the knowledge plugin is up to date", "the update that waited for agy to close")
+    if ok:
+        (STATE / AGY_LATER).unlink(missing_ok=True)
+        keep_trusted()
+
+
 def update_plugins() -> list:
     """The plugin of each agent here with its own CLI, compared with that agent's version: this companion may run from
     another agent's newer copy; then the companion's own checkout. Returns the failures."""
@@ -2007,10 +2043,18 @@ def update_plugins() -> list:
             parts = tuple(map(int, have.split(".")))
         except ValueError:  # Claude Code lists a commit for a plugin without a version: update
             parts = (0,)
+        if a == "agy" and os.name == "nt" and agy_running():  # it holds its plugin folder: later, not a failure
+            write_json(STATE / AGY_LATER, {"at": time.time()})
+            log("sync", "agy is open on this pc and holds its plugin folder: its plugin updates once agy is closed")
+            continue
         try:
             res = self_update.run(a, have=parts)
         except Exception as e:  # the other agents still get theirs, and the page said "see Activity"
             res = f"knowledge plugin: the update of {a} failed ({type(e).__name__}: {e})"
+        if a == "agy" and res and "removing existing destination" in res:  # agy started meanwhile: the same, later
+            write_json(STATE / AGY_LATER, {"at": time.time()})
+            log("sync", "agy holds its plugin folder: its plugin updates once agy is closed", res[:200])
+            continue
         if res and res.startswith("knowledge plugin: updated to") and a != "agy" and plugin_version(a) == have:
             res = f"knowledge plugin: the update of {a} changed nothing, it stays on {have} (a local marketplace?)"
         ok = not res or res.startswith("knowledge plugin: updated to")
@@ -2186,7 +2230,8 @@ def self_state() -> dict:
     disk = ".".join(map(str, own_version()))
     waits = "" if disk in ("", version()) else "a tool being installed" if TOOLS_BUSY.locked() else \
         "the agents' own update" if AGENTS_UPDATING.locked() else "the next check (within a minute)"
-    return {"from": "checkout" if (self_update.PLUGIN.parent / ".git").exists() else "copy", "disk": disk, "waits": waits}
+    return {"from": "checkout" if (self_update.PLUGIN.parent / ".git").exists() else "copy", "disk": disk, "waits": waits,
+            "later": ["agy"] if (STATE / AGY_LATER).exists() else []}
 
 
 def update_watch():
@@ -2655,6 +2700,15 @@ def main(argv: list):
             why = update_own_checkout(co)
             assert "could not move" in why and (co / "g").exists() and (co / "f").read_text() == "2", why
             assert update_own_checkout(Path(g) / "nothing") == "", "not a checkout: nothing to do"
+        real_run, real_up, calls = agy_running, self_update.run, []  # agy open on Windows: its update waits, then runs once it closed
+        globals()["agy_running"], self_update.run = (lambda: True), (lambda a, have=None: calls.append(a) or None)
+        write_json(STATE / AGY_LATER, {"at": 1})
+        agy_later_round()
+        assert calls == [] and (STATE / AGY_LATER).exists() and self_state()["later"] == ["agy"], "not while agy runs"
+        globals()["agy_running"] = lambda: False
+        agy_later_round()
+        assert calls == ["agy"] and not (STATE / AGY_LATER).exists() and self_state()["later"] == [], calls
+        globals()["agy_running"], self_update.run = real_run, real_up
         me = self_state()  # running what is on disk: nothing waits; the checkout this test runs from is one
         assert me["waits"] == "" and me["disk"] == version() and me["from"] in ("checkout", "copy"), me
         real_job, jobs, ids = tool_job, [], sorted(tools.catalog())[:2]  # the daily tool update skips a tool its owner took off it

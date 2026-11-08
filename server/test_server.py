@@ -917,7 +917,7 @@ def chats_contract(tmp, ck, fr, raw, er, et):
         http("POST", "/machine/actions/result", {"id": x["id"], "status": "done", "result": "ok"}, token=fr, headers=pc)
     assert http("POST", "/machine/report", {**mrep, "self": {"from": "checkout", "disk": "9.9.9", "waits": "the next check"}}, token=fr, headers=pc)[0] == 200
     me = [a for a in json.loads(ui("/ui/api/machines")[2])["machines"] if a["id"] == mid][0]["companion"]["self"]
-    assert me == {"from": "checkout", "disk": "9.9.9", "waits": "the next check"}, me  # where it runs from, a newer one waiting
+    assert me == {"from": "checkout", "disk": "9.9.9", "waits": "the next check", "later": []}, me  # where it runs from, a newer one waiting
     assert "newest" in json.loads(ui("/ui/api/machines")[2]), "the page's newest version comes from the server, not from the highest a pc reports"
     assert http("POST", "/machine/report", {**mrep, "self": {"from": "<b>", "disk": 1}}, token=fr, headers=pc)[0] == 200
     me = [a for a in json.loads(ui("/ui/api/machines")[2])["machines"] if a["id"] == mid][0]["companion"]["self"]

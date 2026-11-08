@@ -7585,7 +7585,8 @@ async def machine_report(request: Request):
         report = {"version": str(b.get("version", ""))[:20], "workersAllowed": b.get("workersAllowed") is True,
                   # where the companion runs from and a newer version of it waiting on disk (companion.self_state)
                   "self": {"from": me["from"] if me.get("from") in ("checkout", "copy") else "", "disk": str(me.get("disk") or "")[:20],
-                           "waits": str(me.get("waits") or "")[:80]},
+                           "waits": str(me.get("waits") or "")[:80],
+                           "later": [a for a in (me.get("later") or []) if a in AGENT_OWNERS] if isinstance(me.get("later"), list) else []},
                   "live": [a for a in (b.get("live") or []) if a in AGENT_OWNERS],  # chats that take a message while they work
                   "maxWorkers": {a: int(n) for a, n in (b.get("maxWorkers") or {}).items() if a in AGENT_OWNERS},
                   "game": str(b.get("game") or "")[:80],

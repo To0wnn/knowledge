@@ -146,6 +146,7 @@ const updating = (m) => pendingAction(m, "update_plugin") || (lastUpdate(m)?.sta
 function selfNote(m) {
   const c = m.companion, me = c?.self || {}, newest = newestPlugin(), last = lastUpdate(m);
   if (me.waits) return `Knowledge ${me.disk} is installed; the companion restarts on it after ${me.waits}.`;
+  if ((me.later || []).includes("agy")) return `agy is open on ${m.label}: its plugin updates by itself once agy is closed.`;
   if (!c?.version || !versionNewer(newest, c.version)) return "";
   if (me.from === "copy") return `Its companion runs from a plugin copy, which Update does not move: run the installer once on ${m.label}.`;
   if (last?.status === "done" && !updating(m) && Date.now() / 1000 - last.at < 86400) return `The update ${ago(last.at)} said done, yet the companion still runs ${c.version}${me.from ? "" : " (its plugin is too old to say why)"}.`;
@@ -199,7 +200,7 @@ function pcHead(m, here) {
   if (c?.game) meta.append(" · ", val(c.game));
   box.append(name, meta);
   const note = selfNote(m);
-  if (note) box.append(el("p", c.self?.waits ? "mx-pc-meta" : "machine-error", note));
+  if (note) box.append(el("p", c.self?.waits || c.self?.later?.length ? "mx-pc-meta" : "machine-error", note));
   const acts = el("div", "mx-pc-acts");
   if (behind && steers(m)) acts.append(machineButton(`Update to ${behind}`, "Update the knowledge plugin of every agent there and its companion (it restarts by itself)", () => machineAction(m, "update_plugin"), updating(m), "btn small primary"));
   // an admin may update the plugin on someone else's pc, nothing else there (the server checks its remote-control switch)
