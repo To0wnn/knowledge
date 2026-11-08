@@ -1343,24 +1343,28 @@ function workerTitle(w) {
 }
 // One worker: what it does, then id, project, agent and when. Actions that matter rarely (roll back, archive) only once it ended.
 function workerRow(m, w) {
-  const li = el("li", `worker ${w.status}`), text = el("div", "worker-text"), acts = el("div", "worker-actions");
+  const li = el("li", `worker ${w.owner_stopped ? "stopped" : w.status}`), text = el("div", "worker-text"), acts = el("div", "worker-actions");
   const title = el("strong", "worker-title", workerTitle(w)); title.title = w.title || "";
-  const when = w.status === "running" ? `running for ${mins(w.started)}` : `${w.status} ${ago(w.ended || w.started)}`;
+  const when = workerState(w);
   text.append(title, el("span", "worker-meta", [w.id, w.project, AGENT_NAME[w.agent] || w.agent, when].filter(Boolean).join(" · ")));
   if (w.why) text.append(el("span", "worker-why", w.why));
   if (w.status === "running" && !m.online) text.append(el("span", "worker-why", `The pc is ${offlineFor(m.at)}: nobody knows whether it still runs.`));
   const again = (w.ended || 0) + 6 * 3600; // later than that it did not start again, so its line is gone or held: no promise then
-  if (w.status === "failed" && !w.chat && again > Date.now() / 1000) text.append(el("span", "worker-note", `Starts again by itself around ${new Date(again * 1000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })} if its task line is still open.`));
-  if (w.review?.ahead > 0) text.append(el("span", "worker-why", `${w.review.ahead} commit${w.review.ahead > 1 ? "s" : ""} not merged yet: review ${w.review.ahead > 1 ? "them" : "it"} under Agents.`));
+  if (w.status === "failed" && !w.owner_stopped && !w.chat && again > Date.now() / 1000) text.append(el("span", "worker-note", `Starts again by itself around ${new Date(again * 1000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })} if its task line is still open.`));
+  if (w.review?.ahead > 0) text.append(el("span", "worker-why", `It left ${w.review.ahead} commit${w.review.ahead > 1 ? "s" : ""} on its branch that ${w.review.ahead > 1 ? "are" : "is"} not merged yet: look at the result and merge it, or send it back.`));
   const p = w.status === "running" && w.progress;
   if (p) text.append(el("span", "worker-note", [p.commits ? `${p.commits} commit${p.commits > 1 ? "s" : ""}` : "no commits yet", `${p.changed} file${p.changed === 1 ? "" : "s"} changed`, p.commit && `last: ${p.commit}`].filter(Boolean).join(" · ")));
   const busy = (action) => pendingAction(m, action, (x) => x.id === w.id && x.project === w.project);
+  if (m.own && w.review?.ahead > 0 && w.status !== "running") { // the review card under Agents: the diff, Merge and Send back
+    const r = el("a", "btn small primary", "Review"); r.href = `#/inbox/${encodeURIComponent(`review:${m.id}/${w.project}/${String(w.id).replace(/(?:-cont|-fix)+$/i, "")}`)}`;
+    r.title = "Its changes, what it says is done and left, Merge or Send back"; acts.append(r);
+  }
   if (m.own) { // Follow finds the newest run of the task on your own pcs
     const f = el("a", "btn small", "Follow"); f.href = ckWorkerRoute(w); f.title = w.open || "Its transcript, live while it runs";
     acts.append(f);
   }
   if (m.own && m.online && w.status === "running") acts.append(machineButton("Stop", "Stop this worker", () => confirm(`Stop the worker on ${w.id}?`) && machineAction(m, "stop_worker", { project: w.project, id: w.id }), busy("stop_worker")));
-  if (m.own && m.online && w.status === "failed") acts.append(machineButton("Restart", "Start this worker again now (past the 6 h hold)", () => machineAction(m, "restart", { project: w.project, id: w.id }), busy("restart")));
+  if (m.own && m.online && w.status === "failed") acts.append(machineButton(w.owner_stopped ? "Start again" : "Restart", "Start this worker again now (past the 6 h hold)", () => machineAction(m, "restart", { project: w.project, id: w.id }), busy("restart")));
   if (m.own && w.status !== "running" && !w.merged && w.checkpoint) acts.append(machineButton("Roll back", "Put its worktree back as it was before its last turn (a checkpoint of now is kept)",
     () => confirm(`Roll ${w.id} back to before its last turn?`) && machineAction(m, "rollback", { project: w.project, id: w.id }), busy("rollback")));
   if (m.own && m.online && w.status !== "running" && !(w.review?.ahead > 0)) acts.append(machineButton("Archive", "Take it off this list; its branch and worktree stay", () => machineAction(m, "archive_worker", { project: w.project, id: w.id }), busy("archive_worker"), "btn small quiet"));
@@ -1369,7 +1373,14 @@ function workerRow(m, w) {
   if (acts.childNodes.length) li.append(acts);
   return li;
 }
-const workerNeedsYou = (m, w) => w.status === "failed" || w.review?.ahead > 0 || (w.status === "running" && !m.online);
+const workerNeedsYou = (m, w) => (w.status === "failed" && !w.owner_stopped) || w.review?.ahead > 0 || (w.status === "running" && !m.online);
+// A worker's state in plain words: a worker stopped from this page did not fail, and "finished" is done.
+function workerState(w) {
+  const at = ago(w.ended || w.started);
+  if (w.status === "running") return `working for ${mins(w.started)}`;
+  if (w.owner_stopped) return `stopped by you ${at}`;
+  return { finished: `done ${at}`, merged: `done and merged ${at}`, stopped: `stopped ${at}`, failed: `stopped with a problem ${at}` }[w.status] || `${w.status} ${at}`;
+}
 const allWorkers = (m) => Object.entries(m.agents || {}).flatMap(([a, ag]) => (ag.workers || []).map((w) => ({ ...w, agent: w.agent || a })));
 // Remote actions in words: the log of a pc reads as what happened, not as the API's names.
 const ACTION_WORDS = {
@@ -1440,8 +1451,8 @@ function workersPanel(m) {
   }
   const needs = list.filter((w) => workerNeedsYou(m, w)), running = list.filter((w) => w.status === "running" && !needs.includes(w));
   const earlier = list.filter((w) => !needs.includes(w) && !running.includes(w));
-  const group = (title, ws) => { const ul = el("ul", "machine-list"); ul.append(...ws.map((w) => workerRow(m, w))); box.append(el("h4", "machine-group", title), ul); };
-  if (needs.length) group("Needs you", needs);
+  const group = (title, ws, note) => { const ul = el("ul", "machine-list"); ul.append(...ws.map((w) => workerRow(m, w))); box.append(el("h4", "machine-group", title), ...(note ? [el("p", "machine-note", note)] : []), ul); };
+  if (needs.length) group("Needs you", needs, "A worker that stopped with a problem, or finished work that waits for you to look at and merge.");
   if (running.length) group("Running now", running);
   if (!needs.length && !running.length) box.append(el("p", "muted", c?.workersAllowed ? "No worker runs here now." : "No worker runs here."));
   if (earlier.length) {

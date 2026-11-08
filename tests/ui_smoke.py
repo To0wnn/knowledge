@@ -690,6 +690,9 @@ async def shell(browser, devices, secret: str) -> None:
       return {kinds, again, title: workerTitle({id: 'K-1', title: '\u00ab(claimed Gemini worker, 2026-11-06): fix the beds'})}; }""")
     check(tabs and (tabs.get("skip") or tabs["again"] == "tools"), f"Machines: the tab a person picked stays picked when the list refreshes {tabs}")
     check(tabs and tabs.get("title", "fix the beds") == "fix the beds", f"Machines: a worker's title drops the claim marker of its task line {tabs}")
+    words = await pg.evaluate("""() => { const now = Date.now() / 1000, w = (x) => ({id: 'K-1', started: now - 600, ended: now - 60, ...x});
+      return [workerState(w({status: 'failed', owner_stopped: true})), workerState(w({status: 'finished'})), workerNeedsYou({online: true}, w({status: 'failed', owner_stopped: true}))]; }""")
+    check(words[0].startswith("stopped by you") and words[1].startswith("done") and words[2] is False, f"Machines: a worker stopped from the page is not a failure, finished reads as done {words}")
     if os.environ.get("KNOWLEDGE_SMOKE_WRITES"):  # the seeded pc of tests/ui_ci.py lists a skill and a program
         check(tabs and sorted(tabs.get("kinds") or []) == ["Program", "Skill"], f"Machines: each tool is labelled Skill or Program {tabs}")
     await pg.evaluate("document.querySelectorAll('.machine-tabs [data-key=folders]').forEach((b) => b.click())")  # Choose a folder sits under Folders

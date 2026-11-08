@@ -627,6 +627,14 @@ def machines_contract(tmp, ck, fr, raw, er, et, heard):
                                                   "started": time.time() - 9 * 86400, "ended": time.time() - 8 * 86400, "branch": "task/MC-0"}]}
     assert http("POST", "/machine/report", old, token=fr, headers=pc)[0] == 200
     assert any("MC-0" in i and "task/MC-0 not merged" in i for i in json.loads(http("GET", "/lint")[1]).get("worker_unmerged", [])), http("GET", "/lint")[1][:500]
+    # a worker its owner stopped from the page ended "failed": it says so and does not wait in Needs you
+    stopped = {**rep, "limitWait": [], "workers": [*rep["workers"], {"id": "MC-5", "project": "garden", "agent": "codex", "status": "failed",
+                                                                     "started": time.time() - 600, "ended": time.time() - 60, "owner_stopped": True}]}
+    assert http("POST", "/machine/report", stopped, token=fr, headers=pc)[0] == 200
+    got = next(w for w in json.loads(raw("GET", "/ui/api/machines", headers=ck)[2])["machines"] if w["id"] == "cccccccccccccccc")["agents"]["codex"]["workers"]
+    assert next(w for w in got if w["id"] == "MC-5")["owner_stopped"] is True and next(w for w in got if w["id"] == "MC-1")["owner_stopped"] is False, got
+    card = next(i for i in json.loads(raw("GET", "/ui/api/board", headers=ck)[2])["items"] if i["kind"] == "worker" and i["id"] == "MC-5")
+    assert card["col"] != "needs" and card["line"].startswith("stopped by you"), card
     http("POST", "/machine/report", rep, token=fr, headers=pc)
     # A risky YOLO action: flagged once per session and kind, never refused.
     flag = lambda kind: json.loads(http("POST", "/machine/flag", {"agent": "codex", "session": "w1", "kind": kind, "detail": "git push --force"}, token=fr, headers=pc)[1])
