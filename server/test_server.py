@@ -849,10 +849,11 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     for x in json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"]:  # taken, or the next test finds it
         http("POST", "/machine/actions/result", {"id": x["id"], "status": "done", "result": "ok"}, token=fr, headers=pc)
     tools = {"rea": {"name": "REA", "homepage": "javascript:alert(1)", "installed": True, "ok": "yes", "version": "6.8.0", "detail": "x" * 999,
-                     "at": float("inf"), "busy": "rm -rf"},
-             "Bad Id": {"name": "no"}}
+                     "at": float("inf"), "busy": "rm -rf", "kind": "program"},
+             "slop": {"name": "Slop", "kind": "<b>"}, "Bad Id": {"name": "no"}}
     assert http("POST", "/machine/report", {**mrep, "tools": tools}, token=fr, headers=pc)[0] == 200
     got = [a for a in json.loads(ui("/ui/api/machines")[2])["machines"] if a["id"] == mid][0]["companion"]["tools"]
+    assert got.pop("slop")["kind"] == "" and got["rea"]["kind"] == "program", got  # the page's label: skill or program, nothing else
     assert list(got) == ["rea"] and got["rea"]["homepage"] == "" and got["rea"]["ok"] is None and got["rea"]["installed"] is True \
         and len(got["rea"]["detail"]) == 300 and got["rea"]["version"] == "6.8.0" and got["rea"]["at"] is None and got["rea"]["busy"] == "", got
     failed = {"rea": {"name": "REA", "installed": True, "error": "fetch: jdk: HTTP Error 503"}}

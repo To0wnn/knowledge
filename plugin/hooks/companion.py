@@ -1634,7 +1634,7 @@ def update_tools():
 def tool_state() -> dict:
     """Every tool this plugin knows, with what the last install, check or remove here found: the page's Tools list."""
     done = load("tools.json", {})
-    return {tid: {"name": m["name"], "description": m.get("description", ""), "homepage": m.get("homepage", ""),
+    return {tid: {"name": m["name"], "kind": m.get("kind", ""), "description": m.get("description", ""), "homepage": m.get("homepage", ""),
                   **{k: done.get(tid, {}).get(k) for k in ("installed", "ok", "version", "detail", "error", "busy", "at")}}
             for tid, m in tools.catalog().items()}
 

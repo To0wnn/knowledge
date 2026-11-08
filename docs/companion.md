@@ -60,7 +60,7 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   unknown key):
 
   ```json
-  {"name": "...", "description": "...", "homepage": "https://...", "needs": ["npm"],
+  {"name": "...", "kind": "program", "description": "...", "homepage": "https://...", "needs": ["npm"],
    "install": [{"run": ["npm", "install", "--global", "pkg@latest"]},
                {"run": ["pkg", "setup", "--client", "codex"], "agent": "codex"}],
    "check":   [{"run": ["pkg", "doctor", "--json"], "info": true}],
@@ -68,6 +68,8 @@ fixed remote actions and relays chats. Installing it is part of the client setup
    "remove":  [{"run": ["npm", "uninstall", "--global", "pkg"]}]}
   ```
 
+  `kind` is `skill` (instructions an agent loads) or `program` (software agents run, such as an MCP server): the
+  Machines page labels the tool with it.
   A step is one of `run` (a command looked up on PATH, no shell), `fetch` (the newest release file for this
   platform: `{"github": "owner/repo"}` with GitHub's sha256 of the asset (`"tag": "regex"`: the newest release of a
   line, when a tool supports only that line), `{"android": "platform-tools"}` (Google's stable SDK package, with the

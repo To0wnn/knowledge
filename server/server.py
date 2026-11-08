@@ -7337,7 +7337,7 @@ def report_tools(t) -> dict:
     if not isinstance(t, dict):
         return {}
     flag = lambda v: v if isinstance(v, bool) else None
-    return {k: {"name": str(v.get("name") or k)[:60], "description": str(v.get("description") or "")[:300],
+    return {k: {"name": str(v.get("name") or k)[:60], "kind": v["kind"] if v.get("kind") in ("skill", "program") else "", "description": str(v.get("description") or "")[:300],
                 "homepage": h if (h := str(v.get("homepage") or "")[:200]).startswith("https://") else "",
                 "installed": flag(v.get("installed")), "ok": flag(v.get("ok")), "version": str(v.get("version") or "")[:40],
                 "detail": redact(str(v.get("detail") or "")[:300]), "error": redact(str(v.get("error") or "")[:300]),

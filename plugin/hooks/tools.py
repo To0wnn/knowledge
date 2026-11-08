@@ -56,7 +56,8 @@ AGENTS = ("claude", "codex", "agy")
 ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 NAME = re.compile(r"^[\w][\w.-]{0,79}$")  # a file or folder right in the tools folder
 STEP_KEYS = {"run", "fetch", "delete", "os", "agent", "ok_if", "expect", "info", "timeout", "env"}
-TOP_KEYS = {"name", "description", "homepage", "needs", "path", "env", "bin", "install", "check", "remove", "version"}
+TOP_KEYS = {"name", "kind", "description", "homepage", "needs", "path", "env", "bin", "install", "check", "remove", "version"}
+KINDS = {"skill", "program"}  # skill: instructions an agent loads; program: software it runs (an MCP server, engines)
 TIMEOUT = 900  # an npm install of a large package on a slow line
 SHIMS = Path(os.environ.get("KNOWLEDGE_SHIMS") or Path.home() / ".local" / "bin")  # Claude Code, uv and pipx put theirs here too
 MARK = "knowledge-tool-launcher"
@@ -110,6 +111,8 @@ def validate(m: dict) -> dict:
                 re.compile(v if isinstance(v, str) else v["match"])
         except re.error as e:
             raise ValueError(f"not a regex: {e}") from None
+    if m.get("kind") not in KINDS:  # the page labels each tool with it
+        raise ValueError(f"kind must be one of {sorted(KINDS)}")
     return m
 
 
@@ -514,7 +517,7 @@ def self_test():
     with tempfile.TemporaryDirectory() as d:
         mark, py = Path(d) / "mark", sys.executable
         put = lambda text: [py, "-c", f"open({str(mark)!r}, 'a').write({text!r})"]
-        m = validate({"name": "Fixture", "needs": [Path(py).name],
+        m = validate({"name": "Fixture", "kind": "program", "needs": [Path(py).name],
              "install": [{"run": [py, "-c", "import os, sys; sys.exit(os.environ.get('KN_T') != 'x')"], "env": {"KN_T": "x"}}, {"run": put("i")}, {"run": put("C"), "agent": "claude"}, {"run": put("X"), "agent": "codex"},
                          {"run": put("W"), "os": ["windows"]}, {"run": put("P"), "os": ["linux", "darwin"]},
                          {"run": [py, "-c", "import sys; print('already there'); sys.exit(1)"], "ok_if": ["already"]}],
@@ -544,7 +547,7 @@ def self_test():
                 raise AssertionError(why)
             except RuntimeError as e:
                 assert why in str(e), e
-        for typo in ({**m, "instal": []}, {"name": "x", "install": [{"run": "npm i"}]}, {"name": "x", "install": [{"run": ["a"], "agent": "cursor"}]},
+        for typo in ({**m, "instal": []}, {k: v for k, v in m.items() if k != "kind"}, {**m, "kind": "plugin"}, {"name": "x", "install": [{"run": "npm i"}]}, {"name": "x", "install": [{"run": ["a"], "agent": "cursor"}]},
                      {"name": "x", "install": [{"run": ["a"], "os": ["win"]}]}, {"name": "x", "install": [{"run": ["a"], "shell": True}]},
                      {"name": "x", "install": [{"run": ["a"], "ok_if": "already"}]}, {"name": "x", "install": [{"run": ["a"], "timeout": "60"}]},
                      {"name": "x", "install": [{"run": ["a"], "ok_if": ["Already"]}]}, {"name": "x", "install": [{"run": ["a"], "expect": "("}]},

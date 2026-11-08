@@ -453,26 +453,74 @@ body.admin-page { display: block; overflow-y: auto; }
 #t-advanced .check { display: flex; margin: 4px 0; }
 #t-skills-why { margin: 2px 0 6px 30px; font-size: 12px; }
 
-/* Machines: one card per pc, agents as rows, sessions folded on narrow screens */
-#machines { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
-.machine-agents { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); column-gap: 16px; border-top: 1px solid var(--line); }
-.machine-agents > .machine-agent { border-top: 0; }
-#machines > p { grid-column: 1 / -1; }
-.machine { margin: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--panel); }
-/* an offline pc is one line; its details stay one click away */
-.machine.offline { padding: 8px 14px; background: none; border: 0; border-top: 1px solid var(--line); border-radius: 0; }
-.machine.offline + .machine:not(.offline) { margin-top: 12px; }
-.machine.offline .machine-head h3 { flex: 0 1 auto; font-weight: 500; }
-.machine.offline .machine-head .machine-meta { flex: 1; margin: 0; }
-.machine.offline .machine-fold > summary { color: var(--muted); font-size: 12px; }
-#machines > .machine-error { padding: 8px 12px; border-left: 3px solid var(--bad); background: var(--bad-soft); font-size: 13px; }
-.machine-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.machine-head h3 { margin: 0; font-size: 14px; flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.machine-meta { margin: 2px 0 6px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
-.machine-agent { padding: 6px 0; border-top: 1px solid var(--line); }
-.machine-agent-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; }
-.machine-agent-head .muted { font-size: 12px; }
-.machine-agent-head .pill:not(.yolo, .warn) { padding: 0 2px; background: none; font-weight: 400; } /* facts, not alerts */
+/* Machines: one card per online pc (what needs you on top, the rest in tabs), offline pcs as one line each below. */
+#machines { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; max-width: 1100px; }
+.machine { margin: 0; padding: 14px 16px 6px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--panel); }
+.machine-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.machine-name { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; flex-wrap: wrap; }
+.machine-head h3 { margin: 0; font-size: 16px; overflow-wrap: anywhere; }
+.machine-dot { width: 9px; height: 9px; flex: none; border-radius: 50%; background: var(--line-hi); }
+.machine-dot.on { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
+.machine-meta { margin: 2px 0 8px 17px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.machine-alerts { margin: 4px 0 10px; padding: 8px 12px; list-style: none; border-left: 3px solid var(--warn); border-radius: var(--r-sm); background: var(--warn-soft); font-size: 13px; }
+.machine-alerts li + li { margin-top: 3px; }
+.machine-tabs { display: flex; gap: 2px; margin: 0 -16px; padding: 0 12px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+.machine-tabs [role="tab"] { height: 34px; margin-bottom: -1px; padding: 0 10px; border-radius: 0; border-bottom: 2px solid transparent; background: none; font-size: 13px; }
+.machine-tabs [role="tab"][aria-selected="true"] { border-bottom-color: var(--act); background: none; }
+.machine-tabs .badge.alert { background: var(--amber); color: var(--on-amber); font-weight: 700; }
+.machine-panel { padding: 10px 0 8px; font-size: 13px; }
+.machine-panel > div > p:first-child, .machine-panel .machine-note { margin-top: 0; }
+.machine-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+.machine-switch { font-weight: 500; margin-right: 8px; }
+.machine-switch[aria-busy="true"] { cursor: progress; opacity: .7; }
+.machine-note { margin: 6px 0; color: var(--muted); font-size: 12px; }
+.machine-group { margin: 12px 0 2px; color: var(--muted); font-size: 12px; font-weight: 600; text-transform: none; }
+.machine-list { margin: 4px 0; padding: 0; list-style: none; font-size: 13px; }
+.machine-list li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 3px 0; overflow-wrap: anywhere; }
+.machine-list li.worker, .machine-list li.tool { align-items: flex-start; padding: 9px 0; border-top: 1px solid var(--line); }
+.worker-text, .tool-main { flex: 1 1 320px; min-width: 0; display: grid; gap: 3px; }
+.worker-title { font-weight: 600; line-height: 1.35; }
+.worker-meta { color: var(--muted); font-size: 12px; }
+.worker-why { font-size: 12px; color: var(--warn); }
+.worker.failed .worker-why { color: var(--bad); }
+.worker-note { font-size: 12px; color: var(--muted); }
+.worker-actions { display: flex; gap: 6px; flex-wrap: wrap; flex: none; }
+.machine-more-list { margin-top: 8px; }
+.machine-more-list > summary { color: var(--muted); font-size: 12px; padding: 4px 0; }
+.machine-more-list > .btn { margin: 6px 0; }
+.machine-agents { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); gap: 12px; }
+.machine-agent { padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-md); }
+.machine-agent-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.machine-agent-head h4 { margin: 0; font-size: 14px; }
+.machine-facts { display: grid; gap: 2px; margin: 6px 0; color: var(--muted); font-size: 12px; }
+.warn-text { color: var(--warn); font-weight: 600; }
+.muted-list li { color: var(--muted); font-size: 12px; }
+.tool-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.tool-desc { margin: 0; color: var(--muted); font-size: 12px; }
+.tool-source { font-size: 12px; justify-self: start; }
+.pill.kind-skill { background: var(--act-soft); color: var(--act-text); }
+.pill.kind-program { background: var(--amber-soft); color: var(--amber-ink); }
+.machine-list li.folder code { font-size: 12px; overflow-wrap: anywhere; }
+.machine-list li.folder .btn { margin-left: auto; }
+.activity li { padding: 5px 0; border-top: 1px solid var(--line); }
+.activity-what { flex: 1 1 200px; }
+.activity-result { flex: 1 1 100%; }
+.machine-stuck { margin: 0; padding: 8px 12px; border-left: 3px solid var(--bad); background: var(--bad-soft); font-size: 13px; }
+.pill.yolo { background: var(--bad-soft); color: var(--bad); font-weight: 700; box-shadow: inset 0 0 0 1px var(--bad); } /* stays in sight; solid red would shout on a pc where it is the normal state */
+.machine-error { margin: 4px 0; color: var(--bad); font-size: 12px; overflow-wrap: anywhere; }
+.machines-offline { margin-top: 8px; }
+.machine-offline { border-top: 1px solid var(--line); }
+.machine-offline > summary { display: flex; align-items: center; gap: 10px; padding: 9px 4px; font-size: 13px; }
+.machine-offline > .machine { margin: 0 0 10px; }
+.machine-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.machine-controls select { max-width: 100%; }
+@media (max-width: 699.98px) {
+  .machine { padding: 12px 12px 4px; }
+  .machine-tabs { margin: 0 -12px; padding: 0 6px; }
+  .machine-meta { margin-left: 0; }
+  .machine-name { flex-basis: 100%; } /* the pc's actions go on their own row under its name */
+  .worker-actions { flex-basis: 100%; }
+}
 /* One chip family: a quiet status label (machines, the note's topic with its map colour as a dot, a chat's state, the
    board's chips, "new", the usage-limit reset in a page header), in tones. Never clickable: no border, default cursor. */
 .pill, .chip, .ck-state, .new { display: inline-flex; align-items: center; gap: 5px; flex: none; padding: 0 7px; border-radius: 4px; background: var(--hover); color: var(--muted); font-size: 12px; font-weight: 600; line-height: 20px; white-space: nowrap; cursor: default; }
@@ -498,22 +546,10 @@ body.admin-page { display: block; overflow-y: auto; }
 .pill.warn { background: var(--warn-soft); color: var(--warn); }
 .chip.bad, .ck-state.offline { background: var(--bad-soft); color: var(--bad); }
 .chip.warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
-.pill.yolo { background: var(--bad-soft); color: var(--bad); font-weight: 700; box-shadow: inset 0 0 0 1px var(--bad); } /* stays in sight; solid red would shout on a pc where it is the normal state */
-.machine-error { margin: 4px 0; color: var(--bad); font-size: 12px; overflow-wrap: anywhere; }
 #models-rows .setting { display: block; margin-bottom: 10px; }
 #models-rows select { display: block; width: 100%; max-width: 560px; margin-top: 3px; }
-.machine-group { margin: 6px 0 0; color: var(--muted); font-size: 12px; font-weight: 600; }
 .choose-list { max-height: 300px; overflow-y: auto; }
 .choose-list li > .btn { flex: 1; justify-content: flex-start; height: auto; min-height: 28px; text-align: left; }
-.machine-list { margin: 4px 0; padding: 0; list-style: none; font-size: 13px; }
-.machine-list li { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 2px 0; overflow-wrap: anywhere; }
-.machine-list li.worker { padding: 6px 0; border-top: 1px dashed var(--line); }
-.machine-list li.worker > .worker-text { flex: 1 1 100%; min-width: 0; display: grid; gap: 3px; } /* the buttons go under the text in the narrow column */
-.worker-why { font-size: 12px; color: var(--muted); }
-.worker.failed .worker-why { color: var(--bad); }
-.machine-sessions summary { color: var(--muted); font-size: 12px; }
-.machine-controls { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
-.machine-controls select { max-width: 100%; }
 
 /* ---------------------------------------------------------------- Agents: one list grouped by what needs you
    (Needs you, Review, Working, Done today, Earlier) beside the open chat, in #cockpit. */
