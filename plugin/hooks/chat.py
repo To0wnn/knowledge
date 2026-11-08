@@ -596,11 +596,11 @@ def steer(cid: str, by: str, text: str) -> bool:
     return True
 
 
-def keep_usage(agent: str, got: tuple):
+def keep_usage(agent: str, got: list):
     """A chat turn's own usage reading, for the companion (usage_live): newer than a worker's log or a stale status
     line when the person works in web chats only."""
     try:
-        (workers.DIR.parent / f"usage-{agent}-chat.json").write_text(json.dumps({"got": list(got), "at": time.time()}), encoding="utf-8")
+        (workers.DIR.parent / f"usage-{agent}-chat.json").write_text(json.dumps({"windows": got, "at": time.time()}), encoding="utf-8")
     except OSError:
         pass
 
@@ -1864,8 +1864,8 @@ def self_test():
         later = int(time.time()) + 3600
         parse("claude", json.dumps({"type": "rate_limit_event", "rate_limit_info": {"unifiedWindows": {
             "seven_day": {"utilization": 0.91, "resetsAt": later}, "five_hour": {"utilization": 0.2, "resetsAt": later}}}}), {})
-        kept = json.loads((Path(t) / "usage-claude-chat.json").read_text(encoding="utf-8"))["got"]
-        assert round(kept[0]) == 91 and kept[1] == "7d" and kept[2] == later, kept
+        kept = json.loads((Path(t) / "usage-claude-chat.json").read_text(encoding="utf-8"))["windows"]
+        assert [(round(p), n, r) for p, n, r in kept] == [(91, "7d", later), (20, "5h", later)], kept
     workers.DIR = w0
     # Subagents, in the shapes the CLIs printed (Claude 2.1.314, Codex 0.166 exec --json, agy 1.4.12 stream-json):
     # a block opens, its tool calls go under it, its hand-back ends it; its own words never mix into the answer.

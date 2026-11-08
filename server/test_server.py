@@ -592,7 +592,7 @@ def machines_contract(tmp, ck, fr, raw, er, et, heard):
     assert "machine-action" in "\n".join(json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["system"]["audit"])
     # The companion's report: YOLO, limit, workers; a task that waits for a usage limit is told once.
     rep = {"version": "0.15.0", "workersAllowed": True, "maxWorkers": {"codex": 2}, "game": "",
-           "agents": {"codex": {"yolo": True, "trusted": True, "limit": 91.5}, "claude": {"yolo": False, "trusted": False, "limit": None}},
+           "agents": {"codex": {"yolo": True, "trusted": True, "limit": 91.5, "windows": [[91.5, "5h", 2e9], [20, "7d", None], ["x", 1, 2], [True, "b", 1]]}, "claude": {"yolo": False, "trusted": False, "limit": None}},
            "workers": [{"id": "MC-1", "project": "garden", "agent": "codex", "status": "running", "started": time.time() - 240,
                         "branch": "task/MC-1", "yolo": True, "open": "tail -f x.log"}], "limitWait": ["MC-2"],
            "folders": {"linked": [{"path": "/home/x/garden", "project": "garden"}]}, "waiting": {"garden/MC-3": "Codex runs 2 worker(s) already"}}
@@ -601,7 +601,8 @@ def machines_contract(tmp, ck, fr, raw, er, et, heard):
     m = {r["id"]: r for r in json.loads(raw("GET", "/ui/api/machines", headers=ck)[2])["machines"]}["cccccccccccccccc"]
     cx = m["agents"]["codex"]
     assert m["online"] and cx["yolo"] and cx["limit"] == 91.5 and cx["workers"][0]["id"] == "MC-1" and m["companion"]["workersAllowed"], m
-    assert m["agents"]["claude"]["trusted"] is False and m["agents"]["claude"]["limit"] is None
+    assert m["agents"]["claude"]["trusted"] is False and m["agents"]["claude"]["limit"] is None and m["agents"]["claude"]["windows"] == []
+    assert cx["windows"] == [[91.5, "5h", 2e9], [20.0, "7d", None]], cx["windows"]  # malformed windows dropped
     assert json.loads((tmp / "machines.json").read_text())["cccccccccccccccc"]["limit_told"] == ["MC-2"]  # told once
     old = {**rep, "limitWait": [], "workers": [{"id": "MC-0", "project": "garden", "agent": "codex", "status": "finished",
                                                   "started": time.time() - 9 * 86400, "ended": time.time() - 8 * 86400, "branch": "task/MC-0"}]}

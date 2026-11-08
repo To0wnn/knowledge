@@ -135,6 +135,11 @@ it (`GET /ui/api/worker?machine=&worker=<project>/<ID>&after=<n>`), as for chats
   starts and the task waits ("waiting for limit", one Matrix notice); a running worker is told after its next tool call
   to commit, write the hand-over line `[<agent with room>, <ID>-cont] from <original requester> ... done: ...; left: ...` (the result still goes back to whoever asked first) and end, and is stopped
   after two minutes. A result handed back never starts anything by itself.
+- **Usage chips:** the companion reports every window it knows per agent, not only the fullest: Claude and Codex
+  their 5-hour and weekly window, agy one per quota pool (models that share a quota reset together: "Gemini",
+  "Claude/GPT-OSS"). The Chats header shows one chip per agent ("Claude 5h 12% · 7d 69%", coloured by the fullest
+  window, reset times in its tooltip); Machines shows the same per pc. A window the agent does not report is left out,
+  never shown as 0%.
 
 ## Mission map
 

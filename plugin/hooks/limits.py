@@ -37,11 +37,26 @@ ADVICE = {50: "Just so you know; carry on.",
           95: "New subagents are refused until it resets; tell the user in one line."}
 
 
+def live(windows: list, now: float) -> list:
+    """(percent, window, resets_at) of each window that has not reset yet, fullest first; windows are (name, percent,
+    resets_at)."""
+    return sorted(((float(p), n, r) for n, p, r in windows if isinstance(p, (int, float)) and not isinstance(p, bool)
+                   and (not r or r > now)), key=lambda w: -w[0])
+
+
 def worst(windows: list, now: float) -> tuple | None:
-    """(percent, window, resets_at) of the fullest window that has not reset yet; windows are (name, percent, resets_at)."""
-    live = [(float(p), n, r) for n, p, r in windows if isinstance(p, (int, float)) and not isinstance(p, bool)
-            and (not r or r > now)]
-    return max(live, default=None)
+    """(percent, window, resets_at) of the fullest window that has not reset yet."""
+    return next(iter(live(windows, now)), None)
+
+
+def merge(*readings) -> list:
+    """Several readings of one agent's windows (lists of (percent, window, resets_at)): per window the fullest, since
+    usage never drops inside a window; fullest first."""
+    best = {}
+    for w in (w for r in readings for w in r or ()):
+        if w[1] not in best or w[0] > best[w[1]][0]:
+            best[w[1]] = tuple(w)
+    return sorted(best.values(), key=lambda w: -w[0])
 
 
 def label(minutes) -> str:
@@ -49,16 +64,18 @@ def label(minutes) -> str:
     return f"{m // 1440}d" if m >= 1440 else f"{m // 60}h" if m else "?"
 
 
-def claude_used(now: float) -> tuple | None:
+def claude_used(now: float) -> list:
+    """Claude Code's windows (5h, 7d) from its status line, fullest first; [] when unknown."""
     d = json.loads(CLAUDE_FILE.read_text(encoding="utf-8"))
     if now - d.get("at", 0) > 900:  # the status line has not run for a while (claude -p has none): too old to act on
-        return None
+        return []
     rl = d.get("rate_limits") or {}
-    return worst([(n.replace("five_hour", "5h").replace("seven_day", "7d"), v.get("used_percentage"), v.get("resets_at"))
+    return live([(n.replace("five_hour", "5h").replace("seven_day", "7d"), v.get("used_percentage"), v.get("resets_at"))
                   for n, v in rl.items() if isinstance(v, dict)], now)
 
 
-def codex_used(transcript: str, now: float) -> tuple | None:
+def codex_used(transcript: str, now: float) -> list:
+    """Codex's windows from its rollout, fullest first; [] when unknown."""
     with open(transcript, "rb") as f:  # the newest event is at the end; a rollout can be tens of MB
         f.seek(max(0, f.seek(0, 2) - 512_000))
         tail = f.read().decode("utf-8", "replace")
@@ -68,9 +85,9 @@ def codex_used(transcript: str, now: float) -> tuple | None:
                 rl = (json.loads(line).get("payload") or {}).get("rate_limits") or {}
             except ValueError:
                 continue
-            return worst([(label(v.get("window_minutes")), v.get("used_percent"), v.get("resets_at"))
+            return live([(label(v.get("window_minutes")), v.get("used_percent"), v.get("resets_at"))
                           for v in (rl.get("primary"), rl.get("secondary")) if isinstance(v, dict)], now)
-    return None
+    return []
 
 
 def epoch(stamp) -> float | None:
@@ -84,26 +101,36 @@ def plain(text) -> str:
     return "".join(c for c in str(text).lower() if c.isalnum())
 
 
-def agy_used(status: dict, now: float, model: str = "") -> tuple | None:
-    """The quota of the model this session runs on (hook field modelName, e.g. gemini-3.8-flash-medium, against labels
-    such as "Gemini 3.8 Flash"); without a match the models whose quota is in use, the one closest to its limit."""
+def agy_used(status: dict, now: float, model: str = "") -> list:
+    """agy's quota pools, fullest first: models that share a quota have the same reset time (Gemini models one, Claude
+    and GPT-OSS another); a pool is named after its model, or the first word of each of its models ("Claude/GPT-OSS").
+    With the model this session runs on (hook field modelName, e.g. gemini-3.8-flash-medium, against labels such as
+    "Gemini 3.8 Flash") only that model's quota. A model with a full quota and no reset time says nothing."""
     configs = ((status.get("userStatus") or {}).get("cascadeModelConfigData") or {}).get("clientModelConfigs") or []
     mine = sorted((c for c in configs if model and plain(c.get("label")) and plain(c.get("label")) in plain(model)),
                   key=lambda c: len(plain(c.get("label"))))
     configs = mine[-1:] if mine else configs  # shortcut: label format seen only in the docs, not from a live agy yet
-    return worst([(c.get("label", "?"), round((1 - q["remainingFraction"]) * 100), epoch(q.get("resetTime")))
-                  for c in configs if isinstance(q := c.get("quotaInfo"), dict)
-                  and isinstance(q.get("remainingFraction"), (int, float)) and q["remainingFraction"] < 1], now)
+    pools = {}
+    for c in configs:
+        q = c.get("quotaInfo")
+        if c.get("label") and isinstance(q, dict) and isinstance(q.get("remainingFraction"), (int, float)) \
+                and (q["remainingFraction"] < 1 or q.get("resetTime")):
+            pools.setdefault((q.get("resetTime"), q["remainingFraction"]), []).append(str(c["label"]))
+    name = lambda ls: ls[0] if len(set(ls)) == 1 else "/".join(dict.fromkeys(x.split()[0] for x in ls))
+    return live([(name(ls), round((1 - f) * 100), epoch(r)) for (r, f), ls in pools.items()], now)
 
 
 def used(agent: str, hook: dict, agy_status=None, now: float | None = None) -> tuple | None:
+    """(percent, window, resets_at) of the agent's fullest window, or None (unknown)."""
     now = time.time() if now is None else now
     try:
         if agent == "claude":
-            return claude_used(now)
-        if agent == "codex":
-            return codex_used(hook["transcript_path"], now)
-        return agy_used(agy_status(), now, hook.get("modelName", "")) if agy_status else None
+            got = claude_used(now)
+        elif agent == "codex":
+            got = codex_used(hook["transcript_path"], now)
+        else:
+            got = agy_used(agy_status(), now, hook.get("modelName", "")) if agy_status else []
+        return got[0] if got else None
     except Exception:  # no status line yet, no rollout, agy not registered: no numbers, no verdict
         return None
 
@@ -222,6 +249,15 @@ def self_test():
     global STATE, CLAUDE_FILE, SAID, ORIGINAL, TAP
     now = 1_800_000_000
     assert worst([("5h", 40, now + 60), ("7d", 80, now + 600), ("old", 99, now - 1), ("x", True, None)], now) == (80, "7d", now + 600)
+    assert live([("5h", 40, now + 60), ("7d", 80, now + 600), ("old", 99, now - 1)], now) == [(80, "7d", now + 600), (40, "5h", now + 60)]
+    assert merge([(40, "5h", 1), (80, "7d", 2)], None, [(50, "5h", 1)]) == [(80, "7d", 2), (50, "5h", 1)]
+    pools = agy_used({"userStatus": {"cascadeModelConfigData": {"clientModelConfigs": [
+        {"label": "Gemini 3 Flash", "quotaInfo": {"remainingFraction": 0.75, "resetTime": "2099-01-01T00:00:00Z"}},
+        {"label": "Gemini 2.5 Pro", "quotaInfo": {"remainingFraction": 0.75, "resetTime": "2099-01-01T00:00:00Z"}},
+        {"label": "Claude Opus 4.6", "quotaInfo": {"remainingFraction": 1, "resetTime": "2099-01-02T00:00:00Z"}},
+        {"label": "GPT-OSS 120B", "quotaInfo": {"remainingFraction": 1, "resetTime": "2099-01-02T00:00:00Z"}},
+        {"label": "Tab", "quotaInfo": {"remainingFraction": 1}}]}}}, now)
+    assert [(p, n) for p, n, _ in pools] == [(25, "Gemini"), (0, "Claude/GPT-OSS")], pools
     with tempfile.TemporaryDirectory() as t:
         STATE = Path(t)
         CLAUDE_FILE, SAID, ORIGINAL, TAP = STATE / "c.json", STATE / "s.json", STATE / "o.json", STATE / "limits.py"

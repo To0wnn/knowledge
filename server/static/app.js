@@ -1202,6 +1202,10 @@ async function loadTasks(render = true) {
 // Machines: every pc of the viewer's tokens (an admin sees all) with its agents, workers and recent sessions. The
 // owner steers a pc with fixed actions only; the server queues them and the pc's companion fetches them.
 const AGENT_NAME = { claude: "Claude Code", codex: "Codex", agy: "agy" };
+// An agent's usage windows that have not reset, soonest reset first: Claude and Codex 5h and 7d, agy one per quota pool
+// ("Gemini", "Claude/GPT-OSS"); [percent, name, resets_at]. An older companion sends only its fullest window.
+const usageWindows = (ag) => (ag.windows || []).filter((w) => !w[2] || w[2] > Date.now() / 1000).sort((a, b) => (a[2] || Infinity) - (b[2] || Infinity));
+const usageText = (ag) => usageWindows(ag).map(([p, n]) => `${n} ${Math.round(p)}%`).join(" · ") || `${Math.round(ag.limit)}%`;
 const YOLO_WARNING = "YOLO changes this agent's own global setting on that pc (Claude Code: bypassPermissions, Codex: approval never + no sandbox, agy: always-proceed), so EVERY session of it there runs every command and edits every file without asking: the owner's own sessions too, not only workers and chats, also for tasks other people wrote. Risky actions are flagged, never stopped. Turning it off puts the previous settings back.";
 const WORKERS_WARNING = "Allow workers on this pc? For every ready task in a linked project it may then start a fresh agent session on its own, in a git worktree of its own, without anyone watching (at most the max per agent). Only for a pc that may work by itself: not a work laptop or a shared family pc.";
 const mins = (sec) => `${Math.max(1, Math.round((Date.now() / 1000 - sec) / 60))} min`;
@@ -1383,7 +1387,7 @@ async function loadMachines() {
       if (ag.yolo) top.append(el("span", "pill yolo", "YOLO on")); // stays in sight: its switch sits under Settings
       if (c) top.append(el("span", "pill", `${ag.workers.filter((w) => w.status === "running").length} of ${((c.maxWorkers || {})[a] ?? 1) || "any"} running`));
       if (ag.trusted === false) top.append(el("span", "pill warn", "hooks not trusted"));
-      if (c) top.append(el("span", `pill ${ag.limit >= 90 ? "warn" : ""}`, ag.limit == null ? "limit unknown" : `limit ${Math.round(ag.limit)}%`));
+      if (c) top.append(el("span", `pill ${ag.limit >= 90 ? "warn" : ""}`, ag.limit == null ? "limit unknown" : `limit ${usageText(ag)}`));
       row.append(top);
       if (ag.error) {
         const e = ag.error, w = el("p", "machine-error", `hook ${e.hook || "?"}${e.event ? ` (${e.event})` : ""} failed · ${(e.stderr || e.text || "").split("\n")[0].slice(0, 160)} · ${ago(e.at)}`);

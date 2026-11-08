@@ -923,26 +923,30 @@ def save_settings(change: dict):
 def usage(agent: str, ws: dict, now: float):
     """The agent's usage limit in percent, or None (unknown)."""
     got = usage_info(agent, ws, now)
-    return got[0] if got else None
+    return got[0][0] if got else None
 
 
-def usage_info(agent: str, ws: dict, now: float):
-    """(percent, window, resets_at) of the agent's fullest usage window, or None (unknown). Codex and agy only tell it
-    while a session runs, so the last reading is kept until its window resets: usage does not go down before that."""
+def kept_windows(f: Path, now: float) -> list:
+    """The windows a reading file keeps ({"windows": [[percent, window, resets_at], ...]}) that have not reset yet."""
+    try:
+        return [tuple(w) for w in json.loads(f.read_text(encoding="utf-8"))["windows"] if w[2] and w[2] > now]
+    except (OSError, ValueError, KeyError, TypeError, IndexError):
+        return []
+
+
+def usage_info(agent: str, ws: dict, now: float) -> list:
+    """The agent's usage windows as (percent, window, resets_at), fullest first; [] when unknown. Codex and agy only
+    tell it while a session runs, so the last reading is kept until its window resets: usage does not go down before
+    that."""
     got = usage_live(agent, ws, now)
     f = STATE / f"usage-{agent}.json"
     if got:
         try:
-            write_json(f, {"got": list(got), "at": now})
+            write_json(f, {"windows": got, "at": now})
         except OSError:
             pass
         return got
-    try:
-        old = json.loads(f.read_text(encoding="utf-8"))
-        pct, window, resets = old["got"]
-        return (pct, window, resets) if resets and resets > now else None  # shortcut: another pc may have used more since
-    except (OSError, ValueError, KeyError, TypeError):
-        return None
+    return kept_windows(f, now)  # shortcut: another pc may have used more since
 
 
 CODEX_READ_EVERY = 900  # seconds between asking Codex for its limits without a session
@@ -959,8 +963,7 @@ def codex_rate_read(now: float):
     if now - old.get("at", 0) >= CODEX_READ_EVERY:
         write_json(f, {**old, "at": now})  # one read at a time
         threading.Thread(target=_codex_rate_ask, args=(f,), daemon=True).start()
-    got = old.get("got")
-    return tuple(got) if got and got[2] and got[2] > now else None
+    return kept_windows(f, now)
 
 
 def _codex_rate_ask(f):
@@ -997,12 +1000,12 @@ def _codex_rate_ask(f):
                     continue
                 if m.get("id") == 2:
                     rl = (m.get("result") or {}).get("rateLimits") or {}
-                    got = agent_hooks.limits.worst([(agent_hooks.limits.label(v.get("windowDurationMins")), v.get("usedPercent"), v.get("resetsAt"))
+                    got = agent_hooks.limits.live([(agent_hooks.limits.label(v.get("windowDurationMins")), v.get("usedPercent"), v.get("resetsAt"))
                                                     for v in (rl.get("primary"), rl.get("secondary")) if isinstance(v, dict)], time.time())
         except (OSError, ValueError, TypeError):
             got = None
     try:
-        write_json(f, {"at": time.time(), "got": list(got) if got else None})
+        write_json(f, {"at": time.time(), "windows": got or []})
     except OSError:
         pass
 
@@ -1024,8 +1027,7 @@ def agy_rate_read(now: float):
     if now - old.get("at", 0) >= CODEX_READ_EVERY and AGY_TOKEN.exists():
         write_json(f, {**old, "at": now})
         threading.Thread(target=_agy_rate_ask, args=(f, old.get("error", "")), daemon=True).start()
-    got = old.get("got")
-    return tuple(got) if got and got[2] and got[2] > now else None
+    return kept_windows(f, now)
 
 
 def _agy_token() -> tuple:
@@ -1059,15 +1061,12 @@ def _agy_rate_ask(f, last_error: str):
         if not configs:
             raise ValueError("no model with a quota in the answer (the API changed?)")
         got = agent_hooks.limits.agy_used({"userStatus": {"cascadeModelConfigData": {"clientModelConfigs": configs}}}, time.time())
-        if not got:  # nothing used yet in any window: 0%, known (the chip shows it), with the first reset
-            resets = [(x, r) for x in configs if (r := agent_hooks.limits.epoch(x["quotaInfo"].get("resetTime"))) and r > time.time()]
-            got = (0.0, min(resets, key=lambda xr: xr[1])[0]["label"], min(r for _, r in resets)) if resets else None
     except (OSError, ValueError, LookupError, KeyError, TypeError, subprocess.SubprocessError) as e:
         err = f"{type(e).__name__}: {e}"[:300]
         if err != last_error:
             log("error", "Could not read agy's usage limit", err)
     try:
-        write_json(f, {"at": time.time(), "got": list(got) if got else None, "error": err})
+        write_json(f, {"at": time.time(), "windows": got or [], "error": err})
     except OSError:
         pass
 
@@ -1081,26 +1080,21 @@ def usage_live(agent: str, ws: dict, now: float):
             logs = sorted((Path(w["log"]) for w in ws.values() if w.get("agent") == "claude" and w.get("log") and Path(w["log"]).exists()),
                           key=lambda f: f.stat().st_mtime)
             # a worker's reading stays true until its window resets (claude_usage drops those), however old the log
-            got = next((g for f in reversed(logs) if (g := workers.claude_usage(str(f), now))), None)
-            line = agent_hooks.limits.claude_used(now)
-            try:  # a web chat's turn (chat.py keep_usage): fresh while the person only chats
-                chat_got = tuple(json.loads((STATE / "usage-claude-chat.json").read_text(encoding="utf-8"))["got"])
-                chat_got = chat_got if chat_got[2] and chat_got[2] > now else None
-            except (OSError, ValueError, KeyError, TypeError, IndexError):
-                chat_got = None
-            # usage never drops inside a window and expired ones are left out: the fullest reading is the true one
-            return max((x for x in (got, line, chat_got) if x), key=lambda x: x[0], default=None)
+            got = next((g for f in reversed(logs) if (g := workers.claude_usage(str(f), now))), [])
+            # a web chat's turn (chat.py keep_usage): fresh while the person only chats; usage never drops inside a
+            # window and expired ones are left out: per window the fullest reading is the true one
+            return agent_hooks.limits.merge(got, agent_hooks.limits.claude_used(now), kept_windows(STATE / "usage-claude-chat.json", now))
         if agent == "codex":
             days = [time.localtime(now - d * 86400) for d in (0, 1)]
             files = [f for d in days for f in CODEX.glob(f"sessions/{d.tm_year:04d}/{d.tm_mon:02d}/{d.tm_mday:02d}/rollout-*.jsonl")
                      if now - f.stat().st_mtime < 900]
-            return (agent_hooks.limits.codex_used(str(max(files, key=lambda f: f.stat().st_mtime)), now) if files else None) or codex_rate_read(now)
+            return (agent_hooks.limits.codex_used(str(max(files, key=lambda f: f.stat().st_mtime)), now) if files else []) or codex_rate_read(now)
         try:  # a running agy's own language server first; else agy's cloud quota (agy_rate_read)
             return agent_hooks.limits.agy_used(agent_hooks.agy_status(), now) or agy_rate_read(now)
         except LookupError:
             return agy_rate_read(now)
     except Exception:  # no numbers: unknown, which allows one worker
-        return None
+        return []
 
 
 RESTART_AFTER = 6 * 3600
@@ -1238,7 +1232,7 @@ def run_workers(ready: list, tok: str, now: float, only: str = "") -> dict:
         ws = load("workers.json", {})
     s, out = settings(), {"started": [], "waiting": {}, "limitWait": []}
     info = {a: usage_info(a, ws, now) for a in AGENTS if installed(a)}
-    lim = {a: (i[0] if i else None) for a, i in info.items()}
+    lim = {a: (i[0][0] if i else None) for a, i in info.items()}
     check_workers(ws, tok, now, lim)
     game = workers.game_session()
     for t in ready:
@@ -1273,7 +1267,8 @@ def run_workers(ready: list, tok: str, now: float, only: str = "") -> dict:
     with LOCK:
         save("workers.json", ws)
     out["limits"] = lim
-    out["resets"] = {a: i[2] for a, i in info.items() if i and isinstance(i[2], (int, float))}
+    out["resets"] = {a: i[0][2] for a, i in info.items() if i and isinstance(i[0][2], (int, float))}
+    out["windows"] = {a: i for a, i in info.items() if i}
     return out
 
 
@@ -1560,7 +1555,7 @@ def terminal_asks(now: float) -> list:
     return out[:20]
 
 
-def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, resets=None):
+def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, resets=None, windows=None):
     """The machine's state for the Machines list: settings, game, per agent YOLO, hooks and limit, the workers, and
     why each ready task waits here (the Tasks tab shows it)."""
     yolo, folders, s = load("yolo.json", {}), sorted(project_folders().values()), settings()
@@ -1569,7 +1564,7 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
     body = {"version": version(), "workersAllowed": s["workersAllowed"], "maxWorkers": s["maxWorkers"], "game": workers.game_session(),
             "live": list(chat.LIVE_AGENTS),  # agents whose chats run live: a message while they work goes in at once
             "agents": {a: {"yolo": bool(yolo.get(a, {}).get("on")), "trusted": not untrusted(a, folders), "limit": lim.get(a),
-                     "resets": (resets or {}).get(a), **({"plugin": v} if (v := plugin_version(a)) else {}),  # known before a session
+                     "resets": (resets or {}).get(a), "windows": (windows or {}).get(a, []), **({"plugin": v} if (v := plugin_version(a)) else {}),  # known before a session
                      "models": chat.models(a),  # what a chat may pick (cached for hours)
                      "current": model_settings.current(a)}
                        for a in AGENTS if installed(a)},
@@ -1693,7 +1688,7 @@ def one_round(only: str = "") -> dict:
     st["waiting"] = summary["waiting"]
     report_errors(st, tok, now)
     try:
-        report(tok, load("workers.json", {}), summary.pop("limits"), summary.pop("limitWait"), now, summary["waiting"], summary.pop("resets"))
+        report(tok, load("workers.json", {}), summary.pop("limits"), summary.pop("limitWait"), now, summary["waiting"], summary.pop("resets"), summary.pop("windows", {}))
         st["report_error"] = ""
     except Exception as e:  # the next round reports again; the server away is said above, anything else once here
         why = f"{type(e).__name__}: {e}"[:300]
@@ -2580,11 +2575,12 @@ def main(argv: list):
         assert probe.server_port == probe.server_address[1]
         probe.server_close()
         socket.getfqdn = real_fqdn
-        live = {"v": (42.0, "7d", 2000.0)}  # the last reading lasts until its window resets
+        live = {"v": [(42.0, "7d", 2000.0), (10.0, "5h", 1200.0)]}  # the last reading lasts until its window resets
         real_live, globals()["usage_live"] = usage_live, lambda a, ws, now: live["v"]
-        assert usage_info("agy", {}, 1000) == (42.0, "7d", 2000.0)
-        live["v"] = None
-        assert usage_info("agy", {}, 1500) == (42.0, "7d", 2000.0) and usage_info("agy", {}, 2500) is None
+        assert usage_info("agy", {}, 1000) == live["v"]
+        live["v"] = []
+        assert usage_info("agy", {}, 1100) == [(42.0, "7d", 2000.0), (10.0, "5h", 1200.0)]
+        assert usage_info("agy", {}, 1500) == [(42.0, "7d", 2000.0)] and usage_info("agy", {}, 2500) == []
         globals()["usage_live"] = real_live
         t = '# mine\napproval_policy = "on-request" # keep\n\n[notice]\nother = 1\n\n[projects."/x"]\ntrust_level = "trusted"\n'
         t2, old = toml_set(t, None, "approval_policy", '"never"')
@@ -2667,7 +2663,7 @@ def main(argv: list):
             f.write_text(json.dumps({"type": "rate_limit_event", "rate_limit_info": {"unifiedWindows": {
                 "five_hour": {"utilization": 0.93, "resetsAt": now + 4 * 3600}}}}) + "\n")
             os.utime(f, (now - 3600, now - 3600))
-            real, agent_hooks.limits.claude_used = agent_hooks.limits.claude_used, lambda now: None
+            real, agent_hooks.limits.claude_used = agent_hooks.limits.claude_used, lambda now: []
             try:
                 assert usage("claude", {"k": {"agent": "claude", "log": str(f)}}, now) == 93.0
             finally:
@@ -2733,7 +2729,7 @@ def main(argv: list):
         def second(t, *a):
             seen.append(dict(saved.get("workers.json") or {}))
             return {"id": t["id"], "agent": "claude", "status": "running", "open": ""}, ""
-        g.update(settings=lambda: {}, usage_info=lambda a, ws, now: None, check_workers=lambda *a: None, why_not=lambda *a: "", installed=lambda a: a == "claude",
+        g.update(settings=lambda: {}, usage_info=lambda a, ws, now: [], check_workers=lambda *a: None, why_not=lambda *a: "", installed=lambda a: a == "claude",
                  start_worker=second, log=lambda *a: None, load=lambda n, d: d, save=lambda n, d: saved.update({n: dict(d)}),
                  workers=type("W", (), {"game_session": staticmethod(lambda: "")}))
         try:

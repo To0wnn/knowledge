@@ -7363,6 +7363,10 @@ async def machine_report(request: Request):
                   "agents": {a: {"yolo": v.get("yolo") is True, "trusted": v.get("trusted") if isinstance(v.get("trusted"), bool) else None,
                                  "limit": float(v["limit"]) if isinstance(v.get("limit"), (int, float)) else None,
                                  "resets": float(v["resets"]) if isinstance(v.get("resets"), (int, float)) else None,
+                                 # each usage window (5h, 7d; agy per quota pool): [percent, name, resets_at]
+                                 "windows": [[float(w[0]), str(w[1])[:40], float(w[2]) if isinstance(w[2], (int, float)) else None]
+                                             for w in (v.get("windows") or [])[:6] if isinstance(w, list) and len(w) == 3
+                                             and isinstance(w[0], (int, float)) and not isinstance(w[0], bool)] if isinstance(v.get("windows"), list) else [],
                                  # the installed plugin, read from disk by the companion: shown before the agent's first session
                                  **({"plugin": v["plugin"][:20]} if isinstance(v.get("plugin"), str) and re.fullmatch(r"[\w.+-]{1,20}", v["plugin"]) else {}),
                                  **({"models": report_models(v["models"])} if "models" in v else {}),

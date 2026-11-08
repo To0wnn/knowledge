@@ -505,31 +505,30 @@ def remove(w: dict) -> str:
 
 
 def claude_usage(log: str, now: float):
-    """The newest rate_limit_event of a `claude -p --output-format stream-json` run: (percent, window, resets_at) of
-    its fullest window that has not reset, or None."""
+    """The newest rate_limit_event of a `claude -p --output-format stream-json` run: its windows that have not reset,
+    as (percent, window, resets_at), fullest first; [] when unknown."""
     try:
         with open(log, "rb") as f:
             f.seek(max(0, f.seek(0, 2) - 256_000))
             lines = f.read().decode("utf-8", "replace").splitlines()
     except OSError:
-        return None
+        return []
     for line in reversed(lines):
         if '"rate_limit_event"' in line:
             try:
                 return claude_rate(json.loads(line), now)
             except ValueError:
                 continue
-    return None
+    return []
 
 
 def claude_rate(event: dict, now: float):
-    """One stream-json rate_limit_event: (percent, window, resets_at) of its fullest window not reset yet, or None.
+    """One stream-json rate_limit_event: its windows not reset yet, as (percent, window, resets_at), fullest first.
     Workers' logs and chat turns (chat.py) both carry it."""
     info = event.get("rate_limit_info") or {}
     wins = [(n.replace("five_hour", "5h").replace("seven_day", "7d"), w.get("utilization"), w.get("resetsAt"))
             for n, w in (info.get("unifiedWindows") or {}).items() if isinstance(w, dict)]
-    live = [(float(u) * 100, n, r) for n, u, r in wins if isinstance(u, (int, float)) and (not r or r > now)]
-    return max(live, default=None)
+    return sorted(((float(u) * 100, n, r) for n, u, r in wins if isinstance(u, (int, float)) and (not r or r > now)), key=lambda w: -w[0])
 
 
 def game_session() -> str:
@@ -776,7 +775,7 @@ def self_test():
     with tempfile.NamedTemporaryFile("w", suffix=".log", delete=False) as f:
         f.write(json.dumps({"type": "rate_limit_event", "rate_limit_info": {"unifiedWindows": {
             "five_hour": {"utilization": 0.93, "resetsAt": now + 60}, "seven_day": {"utilization": 0.5, "resetsAt": now + 600}}}}) + "\n")
-    assert claude_usage(f.name, now) == (93.0, "5h", now + 60)
+    assert claude_usage(f.name, now) == [(93.0, "5h", now + 60), (50.0, "7d", now + 600)]
     os.unlink(f.name)
     print("ok")
 

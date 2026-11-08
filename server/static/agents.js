@@ -50,12 +50,13 @@ async function ckSummary() {
     if (ag.limit != null && ag.resets > now && (!worst[a] || ag.limit > worst[a].limit)) worst[a] = { ...ag, agent: a, label: m.label };
   }
   $("ck-live-n").textContent = live; $("ck-live").classList.toggle("on", live > 0);
-  // one chip per agent with a known limit: "Claude 82% · Mon 12:00"; amber from 80%, red from 95%
+  // one chip per agent with a known limit, each window: "Claude 5h 12% · 7d 82%"; amber from 80%, red from 95% (the
+  // fullest window); when each resets in the tooltip
+  const when = (t) => new Date(t * 1000).toLocaleString("en-GB", t - now > 86400 ? { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" } : { hour: "2-digit", minute: "2-digit" }).replace(",", "");
   const chips = Object.values(worst).sort((a, b) => b.limit - a.limit).map((w) => {
-    const at = new Date(w.resets * 1000), far = w.resets - now > 86400; // a weekly or monthly window: say the day too
-    const when = far ? at.toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).replace(",", "") : at.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
-    const c = el("span", `chip${w.limit >= 95 ? " bad" : w.limit >= 80 ? " warn" : ""}`, `${(AGENT_NAME[w.agent] || w.agent).replace(" Code", "")} ${Math.round(w.limit)}% · ${when}`);
-    c.title = `${AGENT_NAME[w.agent] || w.agent} on ${w.label}: ${Math.round(w.limit)}% of its usage limit used; resets ${at.toLocaleString()}`;
+    const c = el("span", `chip${w.limit >= 95 ? " bad" : w.limit >= 80 ? " warn" : ""}`, `${(AGENT_NAME[w.agent] || w.agent).replace(" Code", "")} ${usageText(w)}`);
+    const wins = usageWindows(w).length ? usageWindows(w) : [[w.limit, "limit", w.resets]];
+    c.title = `${AGENT_NAME[w.agent] || w.agent} on ${w.label}, usage limit used:\n` + wins.map(([p, n, r]) => `${n}: ${Math.round(p)}%${r ? `, resets ${when(r)}` : ""}`).join("\n");
     return c;
   });
   $("ck-resets").replaceChildren(...chips); $("ck-resets").hidden = !chips.length;
