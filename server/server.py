@@ -5087,7 +5087,9 @@ async def ui_semantic(request: Request):
     hits = [h for h in await asyncio.to_thread(vec.search, q, roots, 30) if in_scope(h["path"])][:15] if q else []
     # the UI asks this after the exact search, for every pause in typing: a query that found nothing either way is a
     # gap like an MCP search's, once the person stopped typing it (UI_GAP_WAIT without a newer query)
-    if q and vec.matrix is not None and weak_answer(q, hits) and not await asyncio.to_thread(search_notes, q, tuple(r[:-1] for r in roots), 1):
+    # gap=0: the palette matched one of its own views or actions ("toggle theme": 135 of 383 logged gaps by 8 Nov 2026)
+    if q and request.query_params.get("gap") != "0" and vec.matrix is not None and weak_answer(q, hits) \
+            and not await asyncio.to_thread(search_notes, q, tuple(r[:-1] for r in roots), 1):
         ui_gap_later(q, hits[0]["score"] if hits else None)
     return JSONResponse({"hits": hits, "status": vec.status()})
 
