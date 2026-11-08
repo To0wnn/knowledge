@@ -3850,7 +3850,7 @@ EDIT_FRESH = 2 * 3600  # a session silent this long counts as gone; an idle one 
 
 
 def edit_notices(project: str, q, agent: str) -> list[dict]:
-    """Note the files this session changes (plugin 0.43.0+ sends repo, checkout, branch and files) and tell it which other
+    """Note the files this session changes (plugin 0.43.1+ sends repo, checkout, branch and files) and tell it which other
     sessions of the same owner, on any pc or agent, change the same files now: once per set of shared files (the
     plugin remembers ids). Only a token that may write the project's memos takes part, and only with its owner's other
     tokens: file and branch names never reach another person, and a guest cannot put words into the owner's turn."""
