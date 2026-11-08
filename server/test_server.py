@@ -750,8 +750,8 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     # Her token, even naming this machine id, gets nothing (its own record); the machine's own token gets the message once.
     assert json.loads(http("GET", "/machine/chats", token=et, headers=pc)[1])["work"] == []
     got = json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])
-    assert [(w["chat"], w["agent"], w["folder"], w["text"], w["session"]) for w in got["work"]] == [(cid, "codex", "/home/x/garden", "hello <b>agent</b>" + srv.CHAT_TITLE_ASK, "")], got
-    assert "knowledge_chat_title" in srv.CHAT_TITLE_ASK, "the first turn of an untitled chat asks its agent for a title"
+    assert [(w["chat"], w["agent"], w["folder"], w["text"], w["session"]) for w in got["work"]] == [(cid, "codex", "/home/x/garden", "hello <b>agent</b>" + srv.CHAT_TITLE_ASK.format(chat=cid), "")], got
+    assert "knowledge_chat_title" in srv.CHAT_TITLE_ASK and f"chat {cid}," in srv.CHAT_TITLE_ASK.format(chat=cid), "the first turn asks for a title and names the chat"
     again = json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])
     assert again["work"] == [] and again["busy"] == [cid] and again["active"], again
     assert json.loads(http("GET", "/machine/chats", token=fr, headers={"X-Knowledge-Machine": "eeeeeeeeeeeeeeee"})[1])["work"] == []
