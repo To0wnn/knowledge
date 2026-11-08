@@ -1625,11 +1625,30 @@ def tool_job(act: str, tid: str, m: dict):
 def update_tools():
     """With the agents' daily update: every tool installed here is installed again, so it takes the newest release (a
     fetch skips what is current). A failure keeps the tool as it was and says so; the server passes it on."""
+    detect_tools()
     cat = tools.catalog()
     for tid, t in load("tools.json", {}).items():  # "auto": false, the owner's choice on the Machines page: left as it is
         if t.get("installed") and t.get("auto") is not False and tid in cat and TOOLS_BUSY.acquire(blocking=False):
             mark_busy(tid, "update")
             tool_job("install_tool", tid, cat[tid])
+
+
+def detect_tools():
+    """A tool installed by hand shows on the Machines page too: one this pc never installed or removed through the
+    companion is looked for at start and with the daily update. A removal here stays a removal, and the daily update
+    stays off for it (it would add the tool to the other agents too) until the owner turns it on."""
+    agents = tools.here([a for a in AGENTS if installed(a)])
+    for tid, m in tools.catalog().items():
+        if tid in load("tools.json", {}) or not TOOLS_BUSY.acquire(blocking=False):
+            continue
+        try:
+            if got := tools.detect(m, agents):
+                set_tool(tid, **got, error="", busy="", at=time.time(), auto=False)
+                log("sync", f"{m['name']} found here (installed by hand)", mask(got.get("detail", "")))
+        except Exception as e:
+            log("error", f"{m['name']}: could not check whether it is installed", mask(f"{e}")[:300])
+        finally:
+            TOOLS_BUSY.release()
 
 
 def tool_state() -> dict:
@@ -2642,6 +2661,7 @@ def serve():
     threading.Thread(target=actions_loop, daemon=True).start()
     threading.Thread(target=chats_loop, daemon=True).start()
     threading.Thread(target=update_watch, daemon=True).start()
+    threading.Thread(target=detect_tools, daemon=True).start()
     print(f"knowledge companion on {SELF}", flush=True)
     httpd.serve_forever()
 
@@ -2713,9 +2733,14 @@ def main(argv: list):
         assert me["waits"] == "" and me["disk"] == version() and me["from"] in ("checkout", "copy"), me
         real_job, jobs, ids = tool_job, [], sorted(tools.catalog())[:2]  # the daily tool update skips a tool its owner took off it
         globals()["tool_job"] = lambda act, tid, m: jobs.append(tid) or TOOLS_BUSY.release()
+        real_detect, looked = tools.detect, []  # a tool installed by hand is found; one installed or removed here is not looked at
+        tools.detect = lambda m, agents: looked.append(m["name"]) or {"installed": True, "ok": False, "version": "", "detail": "x"}
         save("tools.json", {ids[0]: {"installed": True}, ids[1]: {"installed": True, "auto": False}})
         update_tools()
+        tools.detect = real_detect
+        found = [t for t in tools.catalog() if t not in ids]
         assert jobs == [ids[0]] and tool_state()[ids[1]]["auto"] is False and tool_state()[ids[0]]["auto"] is True, jobs
+        assert len(looked) == len(found) and all(tool_state()[t]["installed"] and tool_state()[t]["ok"] is False and tool_state()[t]["auto"] is False for t in found), looked
         globals()["tool_job"] = real_job
         save("tools.json", {})
         t = '# mine\napproval_policy = "on-request" # keep\n\n[notice]\nother = 1\n\n[projects."/x"]\ntrust_level = "trusted"\n'
@@ -3002,13 +3027,14 @@ def main(argv: list):
                     assert chat_git("0123456789ab", tmp + "/r") is None and not workers.WORKTREES.exists(), "a look makes no worktree"
                     here, hold, runs = globals(), threading.Event(), []
                     real_update, here["update_agents"] = here["update_agents"], lambda: (runs.append(1), hold.wait(10))
+                    real_tools, here["update_tools"] = here["update_tools"], lambda: None  # it would run the real tools' checks
                     update_agents_soon()
                     update_agents_soon()
                     time.sleep(0.3)
                     assert AGENTS_UPDATING.locked() and not ACTING.locked() and len(runs) == 1, "an action does not wait for it, one run at a time"
                     hold.set()
                     time.sleep(0.3)
-                    here["update_agents"] = real_update
+                    here["update_agents"], here["update_tools"] = real_update, real_tools
                     assert not AGENTS_UPDATING.locked()
                     # A report that fails with the server there: said once, not every round; after it worked again, again.
                     said, real_log, real_server = [], here["log"], here["server"]

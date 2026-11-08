@@ -93,6 +93,10 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   plugin restart does), a step stops after 15 minutes with its whole process tree, and the result or the error shows in
   the Tools list and in the companion's Activity. Update is install again, so steps use `@latest` or the agent's own marketplace
   update. A JSON report's failed `checks` or its `remediation` become the one line the page shows.
+- **Installed by hand:** a tool this pc never installed or removed through the companion is looked for at the
+  companion's start and with the daily update: when one of its non-info checks passes (e.g. a plugin added to Claude
+  Code only) it shows as installed, not ok when an agent lacks it, with its daily update off (that would add it to the
+  other agents too) until the owner turns it on. A removal through the companion is never undone by this.
 - **Shipped:** `rea` (its own Node.js LTS, Temurin JDK LTS, Ghidra, jadx-headless-mcp, Apktool, adb, WABT and rizin, and on
   Linux binwalk and mitmproxy from conda-forge through micromamba, all in `~/.knowledge/tools` without root; tshark,
   sigrok and unblob have no build without root and stay with the system;
