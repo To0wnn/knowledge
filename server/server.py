@@ -7386,7 +7386,7 @@ def report_tools(t) -> dict:
     flag = lambda v: v if isinstance(v, bool) else None
     return {k: {"name": str(v.get("name") or k)[:60], "kind": v["kind"] if v.get("kind") in ("skill", "program") else "", "description": str(v.get("description") or "")[:300],
                 "homepage": h if (h := str(v.get("homepage") or "")[:200]).startswith("https://") else "",
-                "installed": flag(v.get("installed")), "ok": flag(v.get("ok")), "version": str(v.get("version") or "")[:40],
+                "installed": flag(v.get("installed")), "ok": flag(v.get("ok")), "auto": flag(v.get("auto")), "version": str(v.get("version") or "")[:40],
                 "detail": redact(str(v.get("detail") or "")[:300]), "error": redact(str(v.get("error") or "")[:300]),
                 "busy": v["busy"] if v.get("busy") in ("install", "remove", "update") else "",
                 "at": v["at"] if type(v.get("at")) in (int, float) and 0 < v["at"] < 1e11 else None}  # not Infinity: it reaches json

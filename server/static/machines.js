@@ -136,6 +136,8 @@ const AGENT_ORDER = ["claude", "codex", "agy"];
 const TOOL_KIND = { skill: ["skill", "Instructions an agent loads when a task fits"], program: ["program", "Software installed on this pc that agents run, such as an MCP server"] };
 const recentError = (ag) => ag.error && Date.now() / 1000 - (ag.error.at || 0) < 86400;
 const steers = (m) => m.own && !m.old && m.online && !!m.companion;
+// An agent this pc's companion knows: only then do its switches and buttons act (a hook alone may report an agent).
+const steersAgent = (m, a) => steers(m) && (m.companion.agents || []).includes(a);
 
 // One row of the grid: its name, one cell per pc, and the column at the end for an action on the whole row.
 // `pcs`: the column names, which a phone shows in front of each cell (its rows are blocks, the pcs under each other).
@@ -175,7 +177,8 @@ function pcHead(m, here) {
   const dot = el("span", `machine-dot${m.online ? " on" : ""}`); dot.setAttribute("aria-hidden", "true");
   name.append(dot, el("h3", null, m.label));
   if (here && m.id === here) name.append(el("span", "pill this", "This pc"));
-  if (!m.own) { const p = el("span", "pill", "view only"); p.title = "Someone else's pc, or one not marked as your own device: you see it, you cannot steer it"; name.append(p); }
+  if (m.mine && !m.own) { const p = el("span", "pill", "remote control off"); p.title = "Your pc, but its token does not allow steering it from here (Admin › Tokens)"; name.append(p); }
+  else if (!m.own) { const p = el("span", "pill", "view only"); p.title = "Someone else's pc, or one not marked as your own device: you see it, you cannot steer it"; name.append(p); }
   const behind = pluginBehind(m), meta = el("div", "mx-pc-meta");
   meta.append(behind ? differs(`Knowledge ${c?.version || "?"}`) : val(`Knowledge ${c?.version || "?"}`));
   if (c?.game) meta.append(" · ", val(c.game));
@@ -238,7 +241,7 @@ function hooksCell(m, a) {
   const out = [];
   if (ag.trusted === false) {
     out.push(differs("Not trusted"));
-    if (steers(m)) out.push(" ", machineButton("Trust", "Trust the knowledge hooks the agent's own way", () => machineAction(m, "trust_hooks", { agent: a }), pendingAction(m, "trust_hooks", (x) => x.agent === a)));
+    if (steersAgent(m, a)) out.push(" ", machineButton("Trust", "Trust the knowledge hooks the agent's own way", () => machineAction(m, "trust_hooks", { agent: a }), pendingAction(m, "trust_hooks", (x) => x.agent === a)));
   } else out.push(val(ag.trusted ? "Trusted" : "Unknown", ag.trusted ? "ok" : "muted"));
   if (recentError(ag)) {
     const e = ag.error, p = el("p", "machine-error", `Hook ${e.hook || "?"} failed ${ago(e.at)}: ${(e.stderr || e.text || "").trim().split("\n").pop().slice(0, 160)}`);
@@ -249,15 +252,15 @@ function hooksCell(m, a) {
 function yoloCell(m, a) {
   const ag = m.agents?.[a];
   if (!ag) return null;
-  if (steers(m)) return yoloSwitch(m, a, ag);
+  if (steersAgent(m, a)) return yoloSwitch(m, a, ag);
   return ag.yolo ? el("span", "pill yolo", "YOLO on") : val("Off", "muted");
 }
 function workersCell(m, a) {
-  const ag = m.agents?.[a];
-  if (!ag) return null;
-  const c = m.companion, running = (ag.workers || []).filter((w) => w.status === "running").length, most = (c?.maxWorkers || {})[a] ?? 1;
+  const ag = m.agents?.[a], c = m.companion;
+  if (!ag || !c) return null; // without a companion nothing starts workers: no number to show
+  const running = (ag.workers || []).filter((w) => w.status === "running").length, most = (c?.maxWorkers || {})[a] ?? 1;
   const now = val(running ? `${running} running` : "none running", "muted");
-  if (!steers(m)) return [val(most ? `at most ${most}` : "no limit"), " · ", now];
+  if (!steersAgent(m, a)) return [val(most ? `at most ${most}` : "no limit"), " · ", now];
   const pick = el("select", "small"); pick.setAttribute("aria-label", `Workers of ${AGENT_NAME[a] || a} at a time on ${m.label}`);
   for (const n of [...new Set([1, 2, 3, 4, 5, most || 1])].sort((x, y) => x - y).concat(0)) { const o = el("option", null, n ? String(n) : "No limit"); o.value = n; pick.append(o); }
   pick.value = String(most); pick.disabled = pendingAction(m, "max_workers", (x) => x.agent === a);
@@ -384,13 +387,13 @@ function offlineSection(title, pcs, res) {
     const li = el("li", "mx-line"), name = el("strong"), info = el("div");
     const dot = el("span", "machine-dot"); dot.setAttribute("aria-hidden", "true");
     name.append(dot, " ", m.label);
-    if (!m.own) name.append(" ", el("span", "pill", "view only"));
+    if (!m.mine) name.append(" ", el("span", "pill", "view only"));
     const shared = m.tokens.filter((t) => res.machines.some((o) => o.id !== m.id && o.tokens.includes(t)));
     info.append(el("span", null, [m.old ? "old plugin" : `last seen ${ago(m.at)}`, m.companion?.version && `Knowledge ${m.companion.version}`, m.tokens.length && `token ${m.tokens.join(", ")}`].filter(Boolean).join(" · ")));
     if (shared.length) info.append(el("small", "muted", `Token ${shared.join(", ")} is also used by ${res.machines.filter((o) => o.id !== m.id && o.tokens.some((t) => shared.includes(t))).map((o) => o.label).join(", ")}: revoking it would cut those off too.`));
     const acts = el("div", "mx-line-acts");
     if (m.mine) acts.append(actionButton("Forget", () => forgetPc(m), "btn small"));
-    if (me.admin && m.tokens.length && !shared.length) acts.append(actionButton("Revoke its token…", async () => {
+    if (me.admin && !m.online && m.tokens.length && !shared.length) acts.append(actionButton("Revoke its token…", async () => {
       if (!confirm(`Revoke token ${m.tokens.join(", ")} of ${m.label}? It can no longer reach the server; a new token is needed to set it up again.`)) return;
       try { for (const t of m.tokens) await api("/ui/api/admin/token", { method: "POST", headers: { "Content-Type": "application/json", "X-Knowledge-UI": "1" }, body: JSON.stringify({ name: t, revoke: true }) }); } catch (e) { toast(e.message); }
       loadMachines();
@@ -404,7 +407,7 @@ function offlineSection(title, pcs, res) {
 
 // ---------------------------------------------------------------- Folders: per project, the folders on each pc
 function foldersView(res) {
-  const own = res.machines.filter((m) => m.own && !m.old && m.companion), parts = [];
+  const own = res.machines.filter((m) => m.mine && !m.old && m.companion), parts = [];
   for (const s of res.stuck || []) parts.push(el("p", "machine-stuck", `${s.tasks} task${s.tasks > 1 ? "s" : ""} of ${s.project} cannot start by itself: none of your pcs has a folder linked to that project.`));
   parts.push(el("p", "muted mx-lede", "Which folder on which pc belongs to which project. An agent started in a linked folder gets that project's memory and docs, and workers of that project may start there."));
   const projects = [...new Set(own.flatMap((m) => [...(m.companion.projects || []), ...(m.companion.folders?.linked || []).map((f) => f.project)]))].sort();
@@ -484,12 +487,13 @@ function drawMachines() {
     const how = el("a", "btn small", "How to install"); how.href = "/ui/help#install";
     parts.push(emptyState("No pcs yet: a pc shows up here, with its agents and tools, once it runs the knowledge setup.", how));
   } else {
-    const own = res.machines.filter((m) => m.own), online = own.filter((m) => m.online && !m.old).sort((a, b) => (b.id === here) - (a.id === here));
+    // yours by owner (mine), not by "may steer" (own): a pc of yours with remote control off is still yours, read-only
+    const own = res.machines.filter((m) => m.mine), online = own.filter((m) => m.online && !m.old).sort((a, b) => (b.id === here) - (a.id === here));
     parts.push(machinesStatus(res, own, online));
     if (online.length) parts.push(compareTable(online, here, true));
     const offline = own.filter((m) => !m.online || m.old).sort((a, b) => (b.at || 0) - (a.at || 0));
     if (offline.length) parts.push(offlineSection(`Offline (${offline.length})`, offline, res));
-    const theirs = res.machines.filter((m) => !m.own);
+    const theirs = res.machines.filter((m) => !m.mine);
     if (theirs.length) {
       const sec = el("section", "mx-theirs"), h = el("h2", "mx-h", "Other people's pcs"), live = theirs.filter((m) => m.online && !m.old);
       const behind = me.admin ? live.filter((m) => m.companion && pluginBehind(m)) : [];
@@ -511,7 +515,10 @@ function drawMachines() {
 }
 // An open tool panel closes with Escape or a click outside it.
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && machinesOpen.size && !$("tab-machines").hidden) { machinesOpen.clear(); drawMachines(); } });
+// No redraw on that click: it would replace what was clicked (a More menu, a list, a button) before it acts.
 document.addEventListener("click", (e) => {
   if (!machinesOpen.size || $("tab-machines").hidden || e.target.closest(".mx-pop, .mx-cellbtn, dialog")) return;
-  machinesOpen.clear(); drawMachines();
+  machinesOpen.clear();
+  for (const p of $("machines").querySelectorAll(".mx-pop")) p.remove();
+  for (const b of $("machines").querySelectorAll('.mx-cellbtn[aria-expanded="true"]')) b.setAttribute("aria-expanded", "false");
 });

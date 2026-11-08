@@ -691,6 +691,20 @@ async def shell(browser, devices, secret: str) -> None:
     check(tabs and (tabs.get("skip") or tabs["open"]), f"Machines: an open tool panel stays open when the list refreshes {tabs}")
     if os.environ.get("KNOWLEDGE_SMOKE_WRITES"):  # the seeded pc of tests/ui_ci.py lists a skill and a program
         check(tabs and sorted(set(tabs.get("kinds") or [])) == ["program", "skill"], f"Machines: each tool is labelled skill or program {tabs}")
+    # A click beside an open tool panel closes it and still does what it clicked: More opens at the first click.
+    more = await pg.evaluate("""async () => { const b = document.querySelector('.mx-cellbtn'), more = () => document.querySelector('.mx-pc-acts .machine-more > summary');
+      if (!b || !more()) return {skip: true}; b.click(); await new Promise((r) => setTimeout(r, 50));
+      const panel = !!document.querySelector('.mx-pop'); more().click(); await new Promise((r) => setTimeout(r, 50));
+      const menu = document.querySelector('.mx-pc-acts .machine-more[open]'), out = {panel, closed: !document.querySelector('.mx-pop'), open: !!menu};
+      if (menu) menu.open = false; return out; }""")
+    check(more.get("skip") or (more["panel"] and more["closed"] and more["open"]), f"Machines: a click beside an open tool panel closes it and opens what it clicked {more}")
+    # A pc of yours whose token has remote control off stays with yours (read-only), never under other people's pcs.
+    split = await pg.evaluate("""() => { const was = machinesRes, now = Date.now() / 1000;
+      const pc = (id, label, mine, own) => ({id, label, mine, own, online: true, at: now, tokens: [label], actions: [], agents: {claude: {plugin: '1.0.0', trusted: true, workers: []}}, companion: {version: '1.0.0', agents: ['claude'], tools: {}}});
+      machinesRes = {machines: [pc('a'.repeat(16), 'mine-off', true, false), pc('b'.repeat(16), 'friend', false, false)], stuck: []}; drawMachines();
+      const theirs = [...document.querySelectorAll('.mx-theirs .mx-pc h3')].map((h) => h.textContent), yours = [...document.querySelectorAll('#machines > .mx-wrap .mx-pc h3')].map((h) => h.textContent);
+      machinesRes = was; drawMachines(); return {theirs, yours}; }""")
+    check(split["yours"] == ["mine-off"] and split["theirs"] == ["friend"], f"Machines: a pc of yours with remote control off stays with yours {split}")
     words = await pg.evaluate("""() => { const now = Date.now() / 1000; return [workerNeedsYou({online: true}, {status: 'failed', owner_stopped: true}), workerNeedsYou({online: true}, {status: 'failed'})]; }""")
     check(words == [False, True], f"Machines: a worker stopped by its owner does not need you, one that failed does {words}")
     await route(pg, "#/machines?view=folders", ms=1500)  # Link a folder sits under Folders, per project
