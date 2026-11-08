@@ -85,6 +85,9 @@ def worktree(folder: str, tid: str, project: str = "", prefix: str = "task", mak
     on = git(repo, "symbolic-ref", "--short", "-q", "HEAD").stdout.strip()  # what a review merges into (a new worktree starts from it)
     conf = config_hash(repo)  # before the worker runs: a merge refuses a config changed since
     if not (wt / ".git").exists():
+        if wt.exists():
+            shutil.rmtree(wt, ignore_errors=True)
+            git(repo, "worktree", "prune")
         WORKTREES.mkdir(parents=True, exist_ok=True)
         has = git(repo, "rev-parse", "-q", "--verify", f"refs/heads/{branch}").returncode == 0
         r = git(repo, "worktree", "add", "-q", str(wt), branch) if has else git(repo, "worktree", "add", "-q", "-b", branch, str(wt), "HEAD")
@@ -497,7 +500,7 @@ def merge(w: dict) -> str:
 
 def remove(w: dict) -> str:
     """The worktree and branch of a merged worker: git refuses a worktree with changes, so nothing is lost."""
-    r = git(w["repo"], "worktree", "remove", w["worktree"])
+    r = git(w["repo"], "worktree", "remove", "--force", w["worktree"])
     if r.returncode:
         return f"worktree kept: {(r.stderr or r.stdout).strip()[:160]}"
     git(w["repo"], "branch", "-d", w["branch"])

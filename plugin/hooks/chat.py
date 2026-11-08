@@ -960,6 +960,7 @@ class Hosted:
                     break
                 time.sleep(0.05)
             if not (d / "pid").exists():
+                workers.kill({"pid": self.pid, "ident": self.ident}, hard=True)
                 raise RuntimeError(f"the chat host did not start the agent: {self.err_tail() or 'no output'}")
         else:
             h = json.loads((d / "host.json").read_text(encoding="utf-8"))

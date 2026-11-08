@@ -1340,7 +1340,11 @@ function connectLive() {
   es.onerror = () => {
     $("live").classList.remove("on");
     // The browser retries by itself, but gives up for good after a non-200 answer (Traefik 502 during a deploy).
-    if (es.readyState === EventSource.CLOSED) { setTimeout(connectLive, liveRetry); liveRetry = Math.min(liveRetry * 2, 60000); }
+    if (es.readyState === EventSource.CLOSED) {
+      es.close();
+      setTimeout(connectLive, liveRetry);
+      liveRetry = Math.min(liveRetry * 2, 60000);
+    }
   };
 }
 

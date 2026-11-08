@@ -49,8 +49,8 @@ def parse_source(url: str) -> dict:
     if not m:
         raise SkillError("give the GitHub link of the skill folder, like https://github.com/<owner>/<repo>/tree/main/skills/<name>")
     owner, repo, ref, path = m.groups()
-    if ".." in path.split("/"):
-        raise SkillError("the path may not contain ..")
+    if ".." in path.split("/") or ".." in ref.split("/"):
+        raise SkillError("the path or ref may not contain ..")
     return {"owner": owner, "repo": repo, "ref": ref, "path": path.strip("/")}
 
 

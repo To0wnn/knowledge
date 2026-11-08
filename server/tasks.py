@@ -33,7 +33,7 @@ def parse_task(line: str) -> dict | None:
             "from": f.group(1).strip() if f else "", "start": " ".join(f.group(2).split()) if f else "now",
             "legacy": not f, "claimed": bool(re.search(r"\((?:claimed|bezig)\b", line, re.I)),
             "worker_claim": bool(re.search(r"\((?:claimed|bezig)\b[^)]*\bworker\b", line, re.I)),
-            "text": (rest[f.end():] if f else rest).lstrip(": ").strip(), "body": line.strip().removeprefix("- ")}
+            "text": (rest[f.end():] if f else rest).lstrip(": ").strip(), "body": TASK_ITEM.sub("", line.strip())}
 
 
 def new_results(before: str, after: str, known: dict | None = None) -> dict:
@@ -42,7 +42,8 @@ def new_results(before: str, after: str, known: dict | None = None) -> dict:
     old, out = set(before.splitlines()), {}
     for line in after.splitlines():
         if line not in old and (d := DONE_LINE.match(line)):
-            i, sig = d.group(2).strip(), hashlib.sha256(line.strip().encode()).hexdigest()[:16]
+            i = re.sub(r"-done$", "-done", d.group(2).strip(), flags=re.I)
+            sig = hashlib.sha256(line.strip().encode()).hexdigest()[:16]
             rec = (known or {}).get(i)
             if known is None or not rec or rec.get("sig") not in (None, sig):
                 out[i] = sig
@@ -53,7 +54,7 @@ def task_sig(t: dict) -> str:
     """What a task asks, as a short hash: owner, requester, start and text. A claim marker or a new due date leave it."""
     what = re.sub(r"\((?:claimed|bezig)\b[^)]*\)", "", t["text"], flags=re.I)
     owner = t["owner"] + ("@" + t["device"] if t.get("device") else "")  # pinning to another device is another task
-    return hashlib.sha256("\n".join((owner.lower(), t["from"], t["start"].lower(), " ".join(what.split()))).encode()).hexdigest()[:16]
+    return hashlib.sha256("\n".join((owner.lower(), t["from"].lower(), t["start"].lower(), " ".join(what.split()))).encode()).hexdigest()[:16]
 
 
 def edit_overlaps(me: str, edits: dict, now: float, fresh: float) -> list:
@@ -84,6 +85,9 @@ if __name__ == "__main__":
     assert new_results("", res, {"R-1-done": {"by": "guest", "sig": "other"}}) == {"R-1-done": sig}
     assert new_results("", res, {}) == {"R-1-done": sig}
     assert parse_task("- open tot 1 jan 2099 [Gemini, VS-1]: water")["legacy"]
+    assert parse_task("* open until 2099-01-01 [Codex, K-2] from Claude, start after K-1: build: it")["body"].startswith("open until")
+    assert "R-1-done" in new_results("", "- [Codex, R-1-Done]: ok\n"), "case-insensitive -Done suffix normalized"
+    assert task_sig({"owner": "A", "from": "Claude", "start": "now", "text": "x"}) == task_sig({"owner": "a", "from": "claude", "start": "now", "text": "x"}), "task_sig case-insensitive"
     assert parse_task("- open until 2099-01-01 [Codex, K-2] from Claude, start after K-1: build: it")["start"] == "after K-1"
     assert parse_task("- open until 2099-01-01 [Codex, K-2] from Claude, start after K-1: build: it")["text"] == "build: it"
     assert parse_task("- open until 2099-01-01 [Codex, K-3] (claimed Codex, 2026-10-31) from Ann, start 2 nov 2026: x")["from"] == "Ann"

@@ -2275,12 +2275,13 @@ def project_tasks(project: str) -> tuple[list[dict], list[dict]]:
             if t := parse_task(line):
                 tasks.append({**t, "project": project, "path": rel, "line": line})
             elif d := DONE_LINE.match(line):
+                did = re.sub(r"-done$", "-done", d.group(2).strip(), flags=re.I)
                 back.append({"project": project, "path": rel, "line": line, "owner": d.group(1).strip(),
-                             "id": d.group(2).strip(), "text": d.group(3).strip()})
+                             "id": did, "text": d.group(3).strip()})
     # a hand-over <ID>-cont keeps <ID> open for "start after <ID>" until <ID>-done is there
     open_ids, done_ids = {t["id"] for t in tasks} | {CONT.sub("", t["id"]) for t in tasks}, {b["id"] for b in back}
     # cancelled (ui_task_cancel): what starts after it waits for a decision, also once its result line was read and removed
-    cancelled = {b["id"].removesuffix("-done") for b in back if CANCELLED.match(b["text"])} | set(read_json(TASK_CANCELLED, {}).get(project, {}))
+    cancelled = {re.sub(r"-done$", "", b["id"], flags=re.I) for b in back if CANCELLED.match(b["text"])} | set(read_json(TASK_CANCELLED, {}).get(project, {}))
     authors, approvals, wakes, leases = (read_json(f, {}).get(project, {}) for f in (TASK_AUTHORS, TASK_APPROVALS, TASK_WAKES, TASK_LEASES))
     today, now = date.today(), time.time()
     for t in tasks:
@@ -2298,7 +2299,7 @@ def project_tasks(project: str) -> tuple[list[dict], list[dict]]:
         t["trusted"] = trusted
         why = [r for r, waits in (
             ("waits for approval", start == "after approval" and not approved),
-            (f"waits for {after}", after and after in open_ids and f"{after}-done" not in done_ids),
+            (f"waits for {after}", after and after in open_ids and f"{after.lower()}-done" not in {d.lower() for d in done_ids}),
             (f"{after} was cancelled: change or remove this line, or approve it to start anyway", after and after in cancelled and not approved),
             (f"starts {when.isoformat() if when else ''}", when and when > today),
             (f"waits for approval: written by {by or 'an unknown writer'}", start != "after approval" and not approved and not trusted),
@@ -4138,6 +4139,7 @@ def shared_context_parts(project: str, agent: str, chat: bool, webchat: bool) ->
         with _context_guard:
             for k in [k for k, (at, _) in _context_cache.items() if now - at >= CONTEXT_TTL]:
                 del _context_cache[k]
+                _context_locks.pop(k, None)
             _context_cache[key] = (now, parts)
         return parts
 
@@ -6952,13 +6954,26 @@ assert file_name("CON.txt") == "_CON.txt" and file_name("nul") == "_nul" and fil
 CHAT_FILES_TOTAL = 2 * 1024 ** 3  # all attachments on this server together
 
 
+def attachments_size() -> int:
+    total = 0
+    for f in CHATS_DIR.glob("*/files/*/*"):
+        try:
+            total += f.stat().st_size
+        except OSError:
+            pass
+    return total
+
+
 def store_chat_file(mid: str, name: str, data: bytes) -> str:
-    if sum(f.stat().st_size for f in CHATS_DIR.glob("*/files/*/*")) + len(data) > CHAT_FILES_TOTAL:
+    if attachments_size() + len(data) > CHAT_FILES_TOTAL:
         raise ValueError("the server holds 2 GB of chat attachments already: try again when older ones are swept (30 days)")
     d = chat_files_dir(mid)
     d.mkdir(parents=True, exist_ok=True)
     old = time.time() - CHAT_FILE_DAYS * 86400
-    kept = sorted(d.iterdir(), key=lambda x: x.stat().st_mtime)
+    try:
+        kept = sorted(d.iterdir(), key=lambda x: x.stat().st_mtime)
+    except OSError:
+        kept = []
     for x in kept[:max(0, len(kept) - CHAT_FILES_MAX + 1)] + [x for x in kept if x.stat().st_mtime < old]:
         shutil.rmtree(x, True)
     fid, name = secrets.token_hex(6), file_name(name)

@@ -78,6 +78,7 @@ def fetch(url: str, deadline_s: float = 20.0) -> tuple[bytes, str, str]:
                 if not loc:
                     raise FetchError(f"redirect without Location from {url}")
                 url = urljoin(url, loc)
+                conn.close()
                 continue
             if resp.status != 200:
                 raise FetchError(f"{url} answered HTTP {resp.status}")
@@ -95,6 +96,7 @@ def fetch(url: str, deadline_s: float = 20.0) -> tuple[bytes, str, str]:
                     raise FetchError("download took longer than 20 s")
             return bytes(body), ctype, url
         finally:
+            conn.close()
             sock.close()
     raise FetchError("too many redirects")
 

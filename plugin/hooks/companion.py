@@ -614,6 +614,10 @@ def app_server_rpc(calls) -> list:
     finally:
         timer.cancel()
         p.kill()
+        try:
+            p.wait(timeout=5)
+        except Exception:
+            pass
 
 
 def trust_codex(folders: list) -> int:

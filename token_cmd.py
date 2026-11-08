@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Push the SHA-256 hashes of the known secrets to the knowledge server (redaction and the write guard). Run on the VM.
 
-  ./token.py push-secrets
+  ./token push-secrets
 
 Device tokens are created and revoked in the web UI (<server>/ui/admin); the server stores only
 their hashes and treats them as secrets too. tokens-plain.json still holds the tokens made before the web UI, so
@@ -53,9 +53,11 @@ def push_secrets():
     for cfg in load().values():  # device tokens are secrets too
         values.add(hashlib.sha256(cfg["token"].encode()).hexdigest())
     local = os.path.join(os.path.dirname(PLAIN), "secret-hashes.json")  # for the local secret-guard hook
-    with open(local, "w") as f:
+    tmp_local = local + ".tmp"
+    with open(tmp_local, "w") as f:
         json.dump(sorted(values), f)
-    os.chmod(local, 0o600)
+    os.chmod(tmp_local, 0o600)
+    os.replace(tmp_local, local)
     with tempfile.NamedTemporaryFile("w", delete=False, suffix=".json") as f:
         json.dump(sorted(values), f)
     target = f"{os.environ['KNOWLEDGE_FORGE_SSH']}:{REMOTE_PATH}"  # KeyError = local.env missing

@@ -320,7 +320,7 @@ def lint(files: dict[str, str], today: date | None = None, mem: str = "memory") 
             report["memo_not_in_index"].append(name)
         if len(text.encode()) > BIG_MEMO and not re.search(r"\b(?:archief|archive)/", text):
             report["big_memo_without_archive"].append(f"{name} ({len(text.encode()) // 1024} KB)")
-        last = latest_date(text)
+        last = latest_date(text, today)
         opens = len(OPEN_WORDS.findall(open_text(no_code)))
         if last and opens and (today - last).days > 45:
             report["possibly_stale_open_item"].append(f"{name}: {opens} open/TODO mention(s), newest date {last}")

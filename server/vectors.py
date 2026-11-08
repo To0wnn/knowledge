@@ -153,6 +153,9 @@ class Vectors:
     def embed(self, texts: list[str]) -> np.ndarray:
         # One text per job, submitted one after the other, so a query waits for at most one chunk (~0.75 s) while a sync
         # embeds hundreds; jobs of 4 made it wait ~2.3 s and were only 11% faster (measured 8 Nov 2026).
+        if not texts:
+            dim = 256 if isinstance(self.model, HashEmbedder) else 768
+            return np.zeros((0, dim), dtype=np.float32)
         out = []
         for t in texts:
             out += self.worker.submit(lambda t=t: list(self.model.embed([t], batch_size=1))).result()
@@ -211,6 +214,8 @@ class Vectors:
     def publish(self, wanted):
         rows = [(rel, line, chunk) for rel, line, chunk, h in wanted if h in self.cache]
         if not rows:
+            with self.lock:
+                self.rows, self.matrix, self.doc_ids, self.doc_matrix, self.bias = [], None, [], None, None
             return
         matrix = np.stack([self.cache[h] for *_, h in wanted if h in self.cache])
         docs: dict[str, list[int]] = {}
@@ -226,8 +231,10 @@ class Vectors:
     def save(self):
         CACHE.parent.mkdir(parents=True, exist_ok=True)
         tmp = CACHE.with_suffix(".tmp.npz")
-        keys = list(self.cache)
-        np.savez(tmp, model=np.array(MODEL), keys=np.array(keys), vecs=np.stack([self.cache[k] for k in keys]) if keys else np.zeros((0, 1)))
+        with self.lock:
+            items = list(self.cache.items())
+        keys = [k for k, _ in items]
+        np.savez(tmp, model=np.array(MODEL), keys=np.array(keys), vecs=np.stack([v for _, v in items]) if items else np.zeros((0, 1)))
         os.replace(tmp, CACHE)
 
     # ------------------------------------------------------------------ queries
@@ -313,4 +320,7 @@ if __name__ == "__main__":  # self-check of the chunker and the search ranking w
     MODEL = "other"
     assert read_cache() == {}, "another model's vectors are never read"
     MODEL, CACHE = "hash", CACHE_BASE
+    assert v.embed([]).shape == (0, 256), v.embed([]).shape
+    v.publish([])
+    assert v.matrix is None and v.rows == [], (v.matrix, v.rows)
     print("ok", len(cs), "chunks")

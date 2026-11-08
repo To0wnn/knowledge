@@ -257,7 +257,12 @@ def insert(path: Path, line: str) -> str:
         text = f"{head}\n{bullet}\n{text[m.start():]}"
     else:
         text = text.rstrip("\n") + f"\n{bullet}\n"
-    path.write_text(text, encoding="utf-8")
+    if isinstance(path, Path):
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
+    else:
+        path.write_text(text, encoding="utf-8")
     return bullet
 
 
@@ -360,7 +365,13 @@ def replace_line(path: Path | None, old: str, new: str | None) -> bool:
         lines.remove(old)
     else:
         lines[lines.index(old)] = new
-    path.write_text("\n".join(lines), encoding="utf-8")
+    out = "\n".join(lines)
+    if isinstance(path, Path):
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(out, encoding="utf-8")
+        os.replace(tmp, path)
+    else:
+        path.write_text(out, encoding="utf-8")
     return True
 
 

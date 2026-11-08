@@ -69,6 +69,8 @@ class Reranker:
         if self.dir == "test":
             a, b = set(re.findall(r"\w+", query.lower())), set(re.findall(r"\w+", doc.lower()))
             return len(a & b) / max(len(a | b), 1)
+        if self.sess is None or self.tok is None:
+            self.load()
         import numpy as np
         e = self.tok.encode(f"{PREFIX}<Instruct>: {TASK}\n<Query>: {self.cut(query, 350)}\n",
                             f"<Document>: {self.cut(doc, 560)}{SUFFIX}")
