@@ -1071,7 +1071,7 @@ function ckCmdList(card) {
   if (!machine || !agent || card.worker || card.meta.parent) return Promise.resolve(null); // a worker or subagent: not its own box
   const k = `${machine}/${agent}`, hit = CK_CMDS.get(k);
   if (hit && Date.now() - hit.at < 60000) return hit.list;
-  const list = api(`/ui/api/chat/commands?machine=${encodeURIComponent(machine)}&agent=${encodeURIComponent(agent)}`).then((r) => r.commands || []).catch(() => { CK_CMDS.delete(k); return []; });
+  const list = api(`/ui/api/chat/commands?machine=${encodeURIComponent(machine)}&agent=${encodeURIComponent(agent)}`).then((r) => Object.assign(r.commands || [], { version: r.version || "" })).catch(() => { CK_CMDS.delete(k); return []; });
   CK_CMDS.set(k, { at: Date.now(), list });
   return list;
 }
@@ -1090,7 +1090,9 @@ async function ckCmdShow(card) {
     li.onclick = () => ckCmdPick(card, x);
     c.list.append(li);
   });
-  if (!c.items.length) { const li = el("li", "muted ck-cmds-none", all.length ? "No command matches." : "No commands known yet: they show once this agent has run a chat on this pc."); li.setAttribute("role", "presentation"); c.list.append(li); }
+  if (!c.items.length) { const li = el("li", "muted ck-cmds-none", all.length ? "No command matches."
+    : all.version && versionNewer("0.43.0", all.version) ? `This pc runs plugin ${all.version}; its commands show from 0.43.0 on: update it under Machines, then start a chat there.`
+    : "No commands known yet: they show once this agent has started a chat on this pc."); li.setAttribute("role", "presentation"); c.list.append(li); }
   c.list.hidden = false;
   ckCmdSel(card, 0);
 }

@@ -6565,7 +6565,8 @@ async def ui_chat_commands(request: Request):
     if not await asyncio.to_thread(own_machine, mid):
         return JSONResponse({"error": await asyncio.to_thread(not_own, mid)}, status_code=403)
     m = (await asyncio.to_thread(read_json, MACHINES_FILE, {})).get(mid) or {}
-    return JSONResponse({"commands": (((m.get("companion") or {}).get("agents") or {}).get(agent) or {}).get("commands", [])})
+    comp = m.get("companion") or {}  # its version: a plugin before 0.43.0 lists none, which the box says
+    return JSONResponse({"commands": ((comp.get("agents") or {}).get(agent) or {}).get("commands", []), "version": comp.get("version") or ""})
 
 
 @server.custom_route("/ui/api/chat/send", methods=["POST"])
