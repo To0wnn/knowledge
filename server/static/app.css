@@ -190,6 +190,8 @@ select, textarea, input:not([type=checkbox]):not([type=radio]):not([type=file]):
 }
 select, input:not([type=checkbox]):not([type=radio]):not([type=file]):not([type=range]) { height: var(--h-btn); padding: 0 12px; }
 select { padding: 0 8px; font-size: 13px; }
+/* a select with a transparent background (the project picker) would get a white popup under light theme text */
+option { background: var(--panel-solid); color: var(--ink); }
 select.small, input.small { height: var(--h-btn-sm); padding: 0 8px; font-size: 13px; }
 textarea { padding: 8px 12px; }
 :is(select, input, textarea):hover:not(:disabled):not(:focus) { border-color: color-mix(in srgb, var(--act) 45%, var(--line-hi)); }
@@ -716,6 +718,11 @@ body.admin-page { display: block; overflow-y: auto; }
   .ck-sec:not(.ck-sec-needs):not(.ck-sec-review) .ck-item:not(:hover):not(:focus-within):not(.hit) > .ck-item-acts { display: none; }
 }
 .ck-snooze .menu-list { min-width: 180px; }
+/* the row's ⋯ sits on the left of its actions, so its menu opens to the right; the floating hover bar sits right and opens left */
+.ck-rowmore .menu-list { left: 0; right: auto; transform-origin: top left; }
+@media (hover: hover) and (min-width: 700px) {
+  .ck-sec:not(.ck-sec-needs):not(.ck-sec-review) .ck-item > .ck-item-acts .ck-rowmore .menu-list { left: auto; right: 0; transform-origin: top right; }
+}
 .ck-reply { display: flex; padding: 0 8px 8px; }
 .ck-reply input { flex: 1; min-width: 0; }
 .ck-subs { list-style: none; margin: 0 0 4px; padding: 0; }
@@ -908,6 +915,17 @@ svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor;
 .proj:focus-within { outline: 2px solid var(--act); outline-offset: 2px; }
 .proj select:focus-visible { outline: 0; } /* the box shows the focus, not the field inside it */
 .proj select { flex: 1; min-width: 0; height: 32px; padding: 0; border: 0; background: transparent; padding: 0; color: var(--ink); font-size: 13px; font-weight: 600; }
+/* the project list drawn like the other menus where the browser allows it (Chromium's customizable select); elsewhere native */
+@supports (appearance: base-select) {
+  .project-pick, .project-pick::picker(select) { appearance: base-select; }
+  .project-pick { align-items: center; }
+  .project-pick::picker-icon { color: var(--muted); }
+  .project-pick::picker(select) { min-width: anchor-size(width); margin-top: 8px; padding: 6px; border: 1px solid var(--line-hi); border-radius: var(--r-lg); background: var(--panel-solid); box-shadow: var(--menu-shadow); }
+  .project-pick option { min-height: var(--h-btn); padding: 0 12px; border-radius: var(--r-md); background: transparent; color: var(--ink); font-size: 14px; font-weight: 400; cursor: pointer; }
+  .project-pick option:hover, .project-pick option:focus-visible { background: var(--hover); outline: 0; }
+  .project-pick option:checked { font-weight: 600; }
+  .project-pick option::checkmark { color: var(--act); }
+}
 .sidebar .grow { flex: 1; min-height: 12px; }
 .me { display: flex; align-items: center; gap: 6px; margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--line); }
 .me .menu { min-width: 0; flex: 1; }
