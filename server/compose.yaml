@@ -46,6 +46,8 @@ x-server: &server
     KNOWLEDGE_STT_PROMPT: ${KNOWLEDGE_STT_PROMPT:-}
   # KNOWLEDGE_PROXY_SECRET (Vaultwarden KNOWLEDGE_PROXY_SECRET): Traefik sends it with the Authentik user header.
   # KNOWLEDGE_MATRIX_TOKEN (Vaultwarden MATRIX_BOT_TOKEN): the bot that posts to KNOWLEDGE_MATRIX_ROOM.
+  # KNOWLEDGE_GITHUB_TOKEN (Vaultwarden KNOWLEDGE_GITHUB_TOKEN): read-only, public repositories only; tool downloads
+  # of the admins' own devices (docs/server.md).
   env_file: /root/docker/knowledge/config/proxy.env
   volumes:
     - memory:/data/memory
