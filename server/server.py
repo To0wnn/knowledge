@@ -5636,7 +5636,7 @@ async def ui_machine_action(request: Request):
     row = next((r for r in await asyncio.to_thread(machine_rows) if r["id"] == mid), None)
     dev, tokens = device.get(), read_json(TOKENS_FILE, {})
     # an admin may update the knowledge plugin on anyone's pc, nothing else there, and only while its token allows
-    # remote control (8 Nov 2026, Anthony): the pc's own settings, agents and folders stay its owner's
+    # remote control (8 Nov 2026): the pc's own settings, agents and folders stay its owner's
     admin_update = action == "update_plugin" and bool(dev.get("admin")) and bool(row) and not row["own"]
     steer = lambda n: n in tokens and (own_token(tokens[n], dev) or admin_update and agents_on(tokens[n]))
     if admin_update and not any(steer(n) for n in row["tokens"]):
