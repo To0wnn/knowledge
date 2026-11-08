@@ -87,7 +87,8 @@ def seed() -> None:
     assert '"isError":false' in body, body  # an edit of a homelab memo: Changes shows its lines added/removed
     pc = {**bearer, "X-Knowledge-Machine": MID, "X-Knowledge-Machine-Label": "smoke-pc"}
     report = {"version": "0.21.1", "agents": {"codex": {}, "claude": {"models": [
-        {"id": "opus", "name": "Opus", "efforts": ["low", "high"], "default": "high"}, {"id": "sonnet", "name": "Sonnet", "efforts": ["low"]}]}},
+        {"id": "opus", "name": "Opus", "efforts": ["low", "high"], "default": "high"}, {"id": "sonnet", "name": "Sonnet", "efforts": ["low"]}],
+        "commands": [{"name": "compact", "description": "Clear history, keep a summary", "hint": ""}, {"name": "verify-done", "description": "Prove a task is done", "hint": ""}]}},
         "folders": {"linked": [{"path": "/home/x/lab", "project": "homelab"}], "candidates": []}, "projects": ["garden"],
         "tools": {"rea": {"name": "REA", "kind": "program", "installed": True, "ok": True, "version": "6.8.0"},
                   "no-ai-slop": {"name": "No AI Slop", "kind": "skill", "installed": False}}}

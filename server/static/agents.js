@@ -537,6 +537,7 @@ async function ckDiff(i) {
 }
 $("ck-diff-close").onclick = () => $("ck-diff-dialog").close();
 
+const CK_CMDS = Object.assign(new Map(), { seq: 0 }); // "machine/agent" -> {at, list: Promise}; seq: a box's list id
 function ckCard(meta) {
   const k = ckKey(meta);
   if (ck.cards.has(k)) return ck.cards.get(k);
@@ -617,6 +618,18 @@ function ckCard(meta) {
     if (card.meta.draft && bdOn()) { card.input.value = ""; ckDraftKeep(card); ckDrop(ckKey(CK_DRAFT)); return bdRender(); } // a draft on the grid: gone
     if (!solo()) store.set("kn_last_chat", ""); ckShow(null); // closed on purpose: the list stays empty
   };
+  const cmds = el("ul", "ck-cmds"); cmds.hidden = true; cmds.id = `ck-cmds-${++CK_CMDS.seq}`; cmds.setAttribute("role", "listbox"); cmds.setAttribute("aria-label", "Slash commands");
+  box.prepend(cmds); card.cmds = { list: cmds, items: [], sel: 0 };
+  input.setAttribute("aria-autocomplete", "list"); input.setAttribute("aria-controls", cmds.id);
+  input.addEventListener("keydown", (e) => { // the command list open: its keys first (registered before the box's own)
+    if (cmds.hidden || e.isComposing) return;
+    const c = card.cmds, n = c.items.length;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") { if (!n) return; e.preventDefault(); ckCmdSel(card, (c.sel + (e.key === "ArrowDown" ? 1 : n - 1)) % n); }
+    else if ((e.key === "Enter" && !e.ctrlKey && !e.metaKey && !e.altKey) || e.key === "Tab") { if (!n || e.shiftKey) return; e.preventDefault(); ckCmdPick(card, c.items[c.sel]); }
+    else if (e.key === "Escape") ckCmdClose(card);
+    else return;
+    e.stopImmediatePropagation();
+  });
   input.addEventListener("keydown", (e) => {
     // Esc as its ×, also from this box, where an opened chat starts (the text stays as a draft; an attached file would not; the grid has its own Esc)
     if (e.key === "Escape" && !e.isComposing && document.body.classList.contains("in-chat") && !card.files.length && !document.querySelector("details[open], dialog[open]")) { e.preventDefault(); return x.click(); }
@@ -632,7 +645,8 @@ function ckCard(meta) {
   });
   const grow = () => { input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 220)}px`; }; // the box grows with the text
   card.grow = grow;
-  input.addEventListener("input", () => { grow(); ckPaint(card); ckDraftKeep(card); }); // typing turns Force back into Queue
+  input.addEventListener("input", () => { grow(); ckPaint(card); ckDraftKeep(card); ckCmdShow(card); });
+  input.addEventListener("blur", () => setTimeout(() => ckCmdClose(card), 150)); // after a click on an item // typing turns Force back into Queue
   queueMicrotask(() => { if (card.input.value === "") ckDraftShow(card); }); // after the caller's own setup of the card (a worker's meta, say)
   attachBtn.onclick = () => filePick.click();
   ckMic(card, mic);
@@ -1049,6 +1063,52 @@ async function ckStart(card, text) { // the draft's first message: make the chat
 }
 // A chat without a title yet (its first turn still running) goes by its first message.
 const ckTitle = (m, card) => m.title || card?.log.querySelector(".ck-msg.user")?.textContent.trim().slice(0, 60) || "New chat";
+// Slash commands: "/" at the start of the box lists what the chat's agent offers on its pc (its skills and commands,
+// reported by the companion from the agent itself); a pick fills the box and the agent runs the text its own way.
+function ckCmdList(card) {
+  const machine = card.meta.draft ? (card.where_ || "").split("\n")[0] : card.meta.machine;
+  const agent = card.meta.draft ? card.pick?.agent : card.meta.agent;
+  if (!machine || !agent || card.worker || card.meta.parent) return Promise.resolve(null); // a worker or subagent: not its own box
+  const k = `${machine}/${agent}`, hit = CK_CMDS.get(k);
+  if (hit && Date.now() - hit.at < 60000) return hit.list;
+  const list = api(`/ui/api/chat/commands?machine=${encodeURIComponent(machine)}&agent=${encodeURIComponent(agent)}`).then((r) => r.commands || []).catch(() => { CK_CMDS.delete(k); return []; });
+  CK_CMDS.set(k, { at: Date.now(), list });
+  return list;
+}
+async function ckCmdShow(card) {
+  const m = /^\/(\S*)$/.exec(card.input.value), c = card.cmds;
+  if (!m) return ckCmdClose(card);
+  const all = await ckCmdList(card);
+  if (all === null || !/^\/\S*$/.test(card.input.value)) return ckCmdClose(card); // typed on meanwhile
+  const q = m[1].toLowerCase(), name = (x) => x.name.toLowerCase();
+  c.items = [...all.filter((x) => name(x).startsWith(q)), ...all.filter((x) => !name(x).startsWith(q) && name(x).includes(q))].slice(0, 50);
+  c.list.replaceChildren();
+  c.items.forEach((x, i) => {
+    const li = el("li", "pal-opt"); li.id = `${c.list.id}-${i}`; li.setAttribute("role", "option");
+    li.append(el("span", "pal-label", `/${x.name}${x.hint ? ` ${x.hint}` : ""}`), el("small", null, x.description));
+    li.onmousedown = (e) => e.preventDefault(); // the focus stays in the box
+    li.onclick = () => ckCmdPick(card, x);
+    c.list.append(li);
+  });
+  if (!c.items.length) { const li = el("li", "muted ck-cmds-none", all.length ? "No command matches." : "No commands known yet: they show once this agent has run a chat on this pc."); li.setAttribute("role", "presentation"); c.list.append(li); }
+  c.list.hidden = false;
+  ckCmdSel(card, 0);
+}
+function ckCmdSel(card, i) {
+  const c = card.cmds; c.sel = i;
+  [...c.list.querySelectorAll("[role=option]")].forEach((li, j) => li.setAttribute("aria-selected", String(j === i)));
+  const on = c.list.querySelector(`[aria-selected="true"]`);
+  if (on) { card.input.setAttribute("aria-activedescendant", on.id); on.scrollIntoView({ block: "nearest" }); } else card.input.removeAttribute("aria-activedescendant");
+}
+function ckCmdPick(card, x) {
+  card.input.value = `/${x.name} `; ckCmdClose(card); card.input.focus(); card.grow(); ckDraftKeep(card); ckPaint(card);
+}
+function ckCmdClose(card) {
+  if (!card.cmds || card.cmds.list.hidden) return;
+  card.cmds.list.hidden = true; card.cmds.items = [];
+  card.input.removeAttribute("aria-activedescendant");
+}
+
 function ckPaint(card) {
   if (card.worker) return ckWorkerPaint(card);
   if (card.meta.parent) return; // a subagent's chat: painted by its poll (ckSubPoll)
