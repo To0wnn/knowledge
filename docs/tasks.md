@@ -11,6 +11,15 @@ The companion that starts workers is described in [companion.md](companion.md); 
   (such as docs moved into an archive folder) go to the first session of the device that asks, offered again after an
   hour when that session had no further turn, and one session is asked to run a full docs mirror sync in the
   background when the device's last one is older than `docs_sync_minutes` (admin page, Settings).
+- **Who else changes these files (plugin 0.43.0+):** the same call carries what the session's checkout changes that is
+  not in main yet: the files changed since the merge base with `origin/HEAD` (or `origin/main`), plus staged, unstaged
+  and untracked files (at most 80), its branch, and a hash of the origin URL so the worktrees of one repository match.
+  When another session in the same project and repository, on any pc or agent, changes one of the same files, both
+  sessions hear it once per set of shared files: on another branch, keep the change small there, merge `origin/main`
+  and land soon (whoever lands second merges and runs the check); on the same branch (one shared checkout), move to
+  an own worktree. The server keeps this in RAM only (a deploy forgets it until the next ask) and drops a session
+  silent for two hours. It only sees files, not intent: two sessions writing different files of one feature are not
+  told.
 
 ## Task lines and leases
 

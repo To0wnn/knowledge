@@ -398,6 +398,34 @@ def lease_contract(tmp, ck, fr, raw):
     assert any("LT-1" in x and "[not yet: already being handled by" in x for x in loser["waiting"]), loser["waiting"]
     pinned = json.loads(http("GET", "/tasks?project=x&agent=codex&v=2&session=turn-lap", token=fr2)[1])
     assert any("PIN-1 is reserved for FRIEND-PC" in n["text"] for n in pinned["notices"]), pinned
+    # two sessions on two pcs change the same file of one repository: both hear it, a third in another repo does not
+    edits = lambda tok, sid, files, repo="r1", branch="b", checkout="c1", agent="codex": [n["text"] for n in json.loads(http("GET", "/tasks?" + urllib.parse.urlencode(
+        {"project": "garden", "agent": agent, "v": 2, "session": sid, "repo": repo, "checkout": checkout, "branch": branch, "files": "\n".join(files)}), token=tok)[1])["notices"]
+        if n["id"].startswith("edits-")]
+    own = "rw-token"  # the admins' own devices ("self"), like fr and fr2: one person on several pcs
+    pal = json.loads(raw("POST", "/ui/api/admin/token", json.dumps({"name": "pal-pc", "write": True, "roots": ["garden", "garden-memory"]}), ui)[2])["token"]
+    assert edits(own, "ed-pc", ["a.py", "b.py"], branch="task/A") == [], "alone: nothing to say"
+    assert edits(pal, "ed-pal", ["b.py"]) == [], "another person's token (not 'self') is never compared"
+    raw("POST", "/ui/api/admin/token", json.dumps({"name": "pal-pc", "revoke": True}), ui)  # later tests look tokens up by roots
+    told = edits(fr2, "ed-lap", ["b.py"], branch="chat/B")
+    assert len(told) == 1 and "b.py" in told[0] and "on branch task/A" in told[0] and "a.py" not in told[0], told
+    assert "b.py" in edits(own, "ed-pc", ["a.py", "b.py"], branch="task/A")[0], "the first writer hears it on its next ask"
+    assert edits(own, "ed-other", ["b.py"], repo="r2") == [], "another repository"
+    assert not any("same checkout" in t for t in edits(own, "ed-pc3", ["b.py"], branch="task/A", checkout="c2")), "another clone"
+    assert any("same checkout" in t for t in edits(own, "ed-pc2", ["b.py"], branch="task/A")), "a second session in one folder"
+    edits(fr2, "ed-x", ["b.py"], agent="<evil>", branch="<b>x")
+    seen = [t for t in edits(own, "ed-pc", ["a.py", "b.py"], branch="task/A") if "branch bx" in t]
+    assert seen and "<" not in seen[0] and "another agent" in seen[0], seen  # what one client sends is cleaned for the other
+    # the hook's side: what a checkout changes against main, a rename by its new name, nothing outside git
+    hooks_dir = str(Path(__file__).parents[1] / "plugin/hooks")
+    with tempfile.TemporaryDirectory() as d:
+        gitc = lambda *a: subprocess.run(["git", "-C", d, "-c", "user.email=t@t", "-c", "user.name=t", *a], check=True, capture_output=True)
+        gitc("init", "-q"), Path(d, "a").write_text("a"), gitc("add", "a"), gitc("commit", "-qm", "a"), gitc("mv", "a", "b")
+        Path(d, "c d.txt").write_text("c")
+        got = json.loads(subprocess.run([sys.executable, "-I", "-c", f"import sys, json; sys.path.insert(0, {hooks_dir!r}); import agent_hooks as a; "
+                                         f"print(json.dumps([a.changed_files({d!r}), a.changed_files({tempfile.gettempdir()!r})]))"],
+                                        capture_output=True, text=True, check=True).stdout)
+    assert got[0]["files"].split("\n") == ["b", "c d.txt"] and got[1] == {}, got
     plain = http("GET", "/tasks?project=x&agent=codex&session=turn-lap", token=fr2)[1]
     assert "PIN-1 is reserved for FRIEND-PC; do not start it" in plain and "[Codex@FRIEND-PC, PIN-1]" not in plain, plain
     start = http("GET", "/context/1?project=x&agent=codex", token=fr2)[1]

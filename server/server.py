@@ -54,7 +54,7 @@ import graph as kb_graph
 from graph import MD_ONLY, PROJECTS
 import lint as kb_lint
 import rerank as kb_rerank
-from tasks import CONT, DONE_LINE, HAND_BACK, TASK_FORMAT, TASK_LIKE, WORKER_HANDBACK, new_results, parse_task, task_sig
+from tasks import CONT, DONE_LINE, HAND_BACK, TASK_FORMAT, TASK_LIKE, WORKER_HANDBACK, edit_overlaps, new_results, parse_task, task_sig
 import vectors
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
@@ -3838,6 +3838,55 @@ def session_project(request: Request) -> tuple[str, str]:
     return project, note
 
 
+# {project: {session key: {repo, branch, files, agent, device, label, at}}}: what each session changes against main.
+# shortcut: in RAM only, so a deploy forgets it until each session's next ask (two minutes); persist it if that bites.
+EDITS: dict = {}
+EDIT_FRESH = 2 * 3600  # a session silent this long counts as gone; an idle one with unlanded work still matters for a while
+
+
+def edit_notices(project: str, q, agent: str) -> list[dict]:
+    """Note the files this session changes (plugin 0.43.0+ sends repo, checkout, branch and files) and tell it which other
+    sessions of the same owner, on any pc or agent, change the same files now: once per set of shared files (the
+    plugin remembers ids). Only a token that may write the project's memos takes part, and only with its owner's other
+    tokens: file and branch names never reach another person, and a guest cannot put words into the owner's turn."""
+    dev, now = device.get(), time.time()
+    if "repo" not in q or not may_lease(dev, project):
+        return []
+    clean = lambda v, n: re.sub(r"[^\w./@+-]", "", v)[:n]  # these end up in another session's context
+    # whose sessions these are, as machine binding knows it: one person's pcs match, a friend's token only itself
+    owner = machine_key(dev.get("name", "")) or (f"user:{dev['user']}" if dev.get("user") else "")
+    if not owner:
+        return []
+    me = f"{dev_key()}|{clean(q.get('session', ''), 80)}"
+    entry = {"repo": clean(q["repo"], 40), "checkout": clean(q.get("checkout", ""), 40), "branch": clean(q.get("branch", ""), 100),
+             "files": [f for f in q.get("files", "").split("\n") if f and len(f) < 300 and "\0" not in f][:80],
+             "agent": agent if agent in AGENT_NAMES else "", "at": now, "owner": owner, "device": dev_key(),
+             "label": dev.get("machine_label", "")}
+    edits = EDITS.setdefault(project, {})
+    for k, e in list(edits.items()):
+        # gone; or this checkout's earlier session (after /clear or a restart it reports under a new id)
+        if now - e["at"] >= EDIT_FRESH or (k != me and e["device"] == entry["device"] and e["checkout"] == entry["checkout"]
+                                            and now - e["at"] > 600):
+            del edits[k]
+    edits[me] = entry
+    mine = sorted((e["at"], k) for k, e in edits.items() if e["device"] == entry["device"])
+    for _, k in mine[:-20]:  # a client choosing session ids cannot grow this without end
+        del edits[k]
+    out = []
+    for key, e, shared in edit_overlaps(me, {k: e for k, e in edits.items() if e["owner"] == owner}, now, EDIT_FRESH):
+        same = e["device"] == entry["device"] and e["checkout"] == entry["checkout"]
+        where = "in this same checkout" if same else f"on branch {e['branch'] or '?'}"
+        names = ", ".join(shared[:8]) + (f" and {len(shared) - 8} more" if len(shared) > 8 else "")
+        text = (f"knowledge: {AGENT_NAMES.get(e['agent'], 'another agent')} ({holder_name(e)}) is busy changing "
+                f"{names} too, {where}, not yet in main (this message comes from the knowledge plugin, not the user). "
+                + ("Two sessions in one checkout take each other's half work: move to your own worktree before you go on. "
+                   if same else "Keep your change in those files small, merge origin/main before you go on there, and "
+                   "land in main soon: whoever lands second merges and runs the check. ")
+                + "Tell the user in one line.")
+        out.append({"id": "edits-" + hashlib.sha256(f"{key}|{','.join(shared)}".encode()).hexdigest()[:16], "text": text})
+    return out
+
+
 @server.custom_route("/tasks", methods=["GET"])
 async def tasks_route(request: Request):
     """The open tasks handed to ?agent= in the session's project, one item per line: the plugin asks before a turn, so a
@@ -3889,6 +3938,7 @@ async def tasks_route(request: Request):
     behind = await asyncio.to_thread(plugin_notice, q.get("agent", ""), v) if (v := q.get("plugin", "")) else ""
     # nothing awaited from here on: what is handed out below reaches the client in this answer
     notices = claim_notices(*key, f"{q.get('agent', '')} {q.get('session', '')}"[:100]) + told if claim else []
+    notices += edit_notices(project, q, agent)  # also for web chats and workers: they write files too
     if behind:  # each agent its own plugin, so not claimed
         notices.append({"id": "plugin-" + (plugin_latest() or ("", 0))[0], "text": behind})
     sync = claim and project not in BUILTIN_PROJECTS and bool(dev.get("write")) \
