@@ -433,7 +433,7 @@ def decide(cid: str, tool: str, inp, reason: str, once: bool = False, detail: st
 KNOWLEDGE_TOOLS = ("knowledge_search", "knowledge_semantic_search", "knowledge_read", "knowledge_related", "knowledge_list",
                    "knowledge_history", "knowledge_lint", "knowledge_projects", "knowledge_write", "knowledge_edit",
                    "knowledge_new_memo", "knowledge_delete", "knowledge_ingest", "knowledge_lesson", "knowledge_chats",
-                   "knowledge_chat_read", "knowledge_chat_close", "knowledge_chat_archive")
+                   "knowledge_chat_read", "knowledge_chat_close", "knowledge_chat_archive", "knowledge_chat_title")
 # the knowledge MCP tools as agy names them: its plugin's server is <plugin>_<server>, the script setup's "knowledge"
 KNOWLEDGE_NAMES = {f"{srv}/{t}" for srv in ("knowledge_knowledge", "knowledge") for t in KNOWLEDGE_TOOLS}
 

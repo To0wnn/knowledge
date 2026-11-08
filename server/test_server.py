@@ -49,9 +49,9 @@ def memo(body: str, name: str = "m") -> str:
     return f"---\nname: {name}\ndescription: d\nmetadata:\n  type: project\n---\n\n## Stand\n\n{body}\n## Keuzes\n"
 
 
-def call(tool, args, token="rw-token"):
+def call(tool, args, token="rw-token", headers=None):
     st, body = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                                     "params": {"name": tool, "arguments": args}}, token)
+                                     "params": {"name": tool, "arguments": args}}, token, **({"headers": headers} if headers else {}))
     assert st == 200, (st, body)
     res = json.loads(body)["result"]
     text = "".join(c.get("text", "") for c in res["content"])
@@ -1058,6 +1058,12 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert "chat is required" in call("knowledge_chat_read", {}, fr)[1]
     assert "no such chat" in call("knowledge_chat_read", {"chat": mc}, et)[1], "another person's chat"
     assert "no chats" in call("knowledge_chats", {}, et)[1] or mc not in call("knowledge_chats", {}, et)[1]
+    # The chat's own agent names it (MCP, X-Knowledge-Chat carries the chat id); the owner's later messages keep that name.
+    assert "only a chat from the web UI" in call("knowledge_chat_title", {"title": "x"}, fr)[1]
+    assert "not on your pcs" in call("knowledge_chat_title", {"title": "x"}, et, {"X-Knowledge-Chat": mc})[1], "another person's chat"
+    assert "titled 'Clearer chat titles'" in call("knowledge_chat_title", {"title": ' "Clearer  chat titles". '}, fr, {"X-Knowledge-Chat": mc})[1]
+    assert chat()["title"] == "Clearer chat titles"
+    assert srv.chat_title("please rename every chat after this long message", "Clearer chat titles", True) == "Clearer chat titles"
     # Another agent archives the chat (MCP)
     assert "force-archived" in call("knowledge_chat_close", {"chat": mc, "force": True, "reason": "limit reached"}, fr)[1]
     assert chat()["closed"] is True and not on_board()
