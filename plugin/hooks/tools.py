@@ -56,7 +56,11 @@ AGENTS = ("claude", "codex", "agy")
 ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
 NAME = re.compile(r"^[\w][\w.-]{0,79}$")  # a file or folder right in the tools folder
 STEP_KEYS = {"run", "fetch", "delete", "os", "agent", "ok_if", "expect", "info", "timeout", "env"}
-TOP_KEYS = {"name", "kind", "description", "homepage", "needs", "path", "env", "bin", "install", "check", "remove", "version"}
+TOP_KEYS = {"name", "kind", "description", "homepage", "needs", "path", "env", "bin", "install", "check", "remove", "version", "skills"}
+# Claude Code's skills folder. A skill a tool put there must stay on this pc: the shared-skills sync (memory_mirror.py,
+# and the server reading the admin's folder) would otherwise hand it to every device, next to the tool's own install.
+SKILLS = Path(os.environ.get("KNOWLEDGE_SKILLS") or Path.home() / ".claude" / "skills")
+NOT_SHARED = ".not-shared"  # = memory_mirror.py and server.py
 KINDS = {"skill", "program"}  # skill: instructions an agent loads; program: software it runs (an MCP server, engines)
 TIMEOUT = 900  # an npm install of a large package on a slow line
 SHIMS = Path(os.environ.get("KNOWLEDGE_SHIMS") or Path.home() / ".local" / "bin")  # Claude Code, uv and pipx put theirs here too
@@ -111,6 +115,8 @@ def validate(m: dict) -> dict:
                 re.compile(v if isinstance(v, str) else v["match"])
         except re.error as e:
             raise ValueError(f"not a regex: {e}") from None
+    if not (isinstance(m.get("skills", []), list) and all(isinstance(n, str) and ID.match(n) for n in m.get("skills", []))):
+        raise ValueError("skills lists the folder names the tool installs in ~/.claude/skills")
     if m.get("kind") not in KINDS:  # the page labels each tool with it
         raise ValueError(f"kind must be one of {sorted(KINDS)}")
     return m
@@ -493,6 +499,9 @@ def install(m: dict, agents) -> dict:
         if not good:
             raise RuntimeError(said(s, text, out))
     skipped = link(m)
+    for name in m.get("skills", []):  # after every install and update: an update may have replaced the folder
+        if (SKILLS / name).is_dir():
+            (SKILLS / name / NOT_SHARED).write_text("installed by a knowledge tool add-on: stays on this pc\n", encoding="utf-8")
     got = check(m, agents)
     if skipped:  # never overwrite another program's file, but say so
         got["detail"] = (f"not linked, another program has the name: {', '.join(skipped)}; " + got["detail"])[:300]
@@ -583,7 +592,7 @@ def describe(m: dict) -> list:
 
 
 def self_test():
-    global TOOLS, API, RETRY_WAIT, SHIMS, TOKEN, ANDROID
+    global TOOLS, API, RETRY_WAIT, SHIMS, TOKEN, ANDROID, SKILLS
     import io
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -620,6 +629,15 @@ def self_test():
                        {"run": [py, "-c", "import sys; print('{\"checks\": [{\"name\": \"ghidra\", \"ok\": false}]}'); sys.exit(1)"], "info": True}],
              "version": {"run": [py, "-c", "print('{\"version\": \"1.2.3\"}')"]},
              "remove": [{"run": [py, "-c", "import sys; sys.exit(3)"]}, {"run": put("r")}]})
+        skills_was, SKILLS = SKILLS, Path(d) / "skills"
+        try:  # a skill the tool installed is marked to stay on this pc; a folder it does not name is left alone
+            (SKILLS / "fx-skill").mkdir(parents=True)
+            (SKILLS / "other").mkdir()
+            got = install({**m, "skills": ["fx-skill", "fx-gone"]}, here(["claude", "agy"]))
+            assert (SKILLS / "fx-skill" / NOT_SHARED).exists() and not (SKILLS / "other" / NOT_SHARED).exists() and not (SKILLS / "fx-gone").exists()
+        finally:
+            SKILLS = skills_was
+        mark.write_text("")
         got = install(m, here(["claude", "agy"]))
         assert mark.read_text() == "iC" + ("W" if OS == "windows" else "P"), mark.read_text()  # codex is not here
         assert got["ok"] is True and got["version"] == "1.2.3" and got["detail"].endswith("not ok: ghidra"), got  # info only
@@ -642,7 +660,7 @@ def self_test():
                 raise AssertionError(why)
             except RuntimeError as e:
                 assert why in str(e), e
-        for typo in ({**m, "instal": []}, {k: v for k, v in m.items() if k != "kind"}, {**m, "kind": "plugin"}, {"name": "x", "install": [{"run": "npm i"}]}, {"name": "x", "install": [{"run": ["a"], "agent": "cursor"}]},
+        for typo in ({**m, "instal": []}, {k: v for k, v in m.items() if k != "kind"}, {**m, "kind": "plugin"}, {"name": "x", "install": [{"run": "npm i"}]}, {"name": "x", "install": [{"run": ["a"], "agent": "cursor"}]}, {**m, "skills": ["../x"]}, {**m, "skills": "x"},
                      {"name": "x", "install": [{"run": ["a"], "os": ["win"]}]}, {"name": "x", "install": [{"run": ["a"], "shell": True}]},
                      {"name": "x", "install": [{"run": ["a"], "ok_if": "already"}]}, {"name": "x", "install": [{"run": ["a"], "timeout": "60"}]},
                      {"name": "x", "install": [{"run": ["a"], "ok_if": ["Already"]}]}, {"name": "x", "install": [{"run": ["a"], "expect": "("}]},

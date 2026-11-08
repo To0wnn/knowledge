@@ -3063,8 +3063,10 @@ def main():
         senv = {**menv, "KNOWLEDGE_TOKEN": "rw-token", "KNOWLEDGE_MIRROR": str(tmp / "mirror-own"), "KNOWLEDGE_SKILLS": str(skills)}
         (cla / "skills/synced/q").mkdir(parents=True); (cla / "skills/synced/q/SKILL.md").write_text("claude.ai skill\n")
         assert call("knowledge_read", {"path": "claude/skills/synced/q/SKILL.md"})[0]
+        (cla / "skills/toolskill").mkdir(); (cla / "skills/toolskill/SKILL.md").write_text("from a tool\n"); (cla / "skills/toolskill/.not-shared").write_text("")
+        assert call("knowledge_read", {"path": "claude/skills/toolskill/SKILL.md"})[0], "a tool's skill on the admin's pc stays there"
         run_mm(senv)
-        assert (skills / "x/SKILL.md").read_text() == "skill\n" and not (skills / "synced").exists()
+        assert (skills / "x/SKILL.md").read_text() == "skill\n" and not (skills / "synced").exists() and not (skills / "toolskill").exists()
         (skills / "y/scripts").mkdir(parents=True); (skills / "y/SKILL.md").write_text(SK("new skill"))
         (skills / "y/scripts/run.py").write_text("print(1)\n"); (skills / "y/blob.bin").write_bytes(b"\0")
         (tmp / "elsewhere").mkdir(); (tmp / "elsewhere/SKILL.md").write_text("local only\n")

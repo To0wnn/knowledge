@@ -86,6 +86,7 @@ WRITABLE = [w for w in ["claude/skills/*/**", "homelab/*.md", "anpitek/*/*.md", 
                         *(f"{m}/{sub}*.md" for m in ("memory", "anpitek-memory", "trade-memory")
                           for sub in ("", "archief/", "archive/", "sessions/"))]
             if w.split("/", 1)[0] in ROOTS]  # projects added in the UI extend it
+NOT_SHARED = ".not-shared"  # in a skill folder: the skill stays on its pc (= tools.py, memory_mirror.py)
 SKIP_PARTS = {".git", "__pycache__", "node_modules", ".venv", "venv", ".next", ".cache"}
 # Never shared, whatever folder they sit in: secrets, keys, and config exports that carry them (an OPNsense config
 # holds WireGuard private keys and password hashes; a UniFi backup the same). Redaction cannot mask unknown keys.
@@ -205,6 +206,8 @@ def resolve(path: str, scoped: bool = True) -> tuple[Path, str]:
         raise ToolError("only CLAUDE.md, house_rules.md, skills/ and agents/ are shared from ~/.claude")
     if root == "claude" and (rel.startswith("skills/synced/") or any(x.startswith(".") for x in rel.split("/"))):
         raise ToolError("path not shared")  # Claude Code's own: skills synced from claude.ai, .trash
+    if root == "claude" and rel.startswith("skills/") and rel.count("/") > 1 and (base / "skills" / rel.split("/")[1] / NOT_SHARED).exists():
+        raise ToolError("path not shared")  # a tool add-on installed it on the admin's pc: it stays there (tools.py)
     if root in MD_ONLY and not rel.endswith(".md"):
         raise ToolError(f"only Markdown is shared from {root}/ (it is a code repo)")
     if scoped and not in_scope(f"{root}/{rel}"):

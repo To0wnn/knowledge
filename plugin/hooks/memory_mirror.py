@@ -30,6 +30,7 @@ MIRROR = Path(os.environ.get("KNOWLEDGE_MIRROR") or Path(os.environ.get("KNOWLED
 STATE, LOCK = MIRROR / ".state.json", MIRROR / ".lock"
 SKILLS = Path(os.environ.get("KNOWLEDGE_SKILLS") or Path.home() / ".claude" / "skills")
 MAX_REMOVALS = 5  # more skills or memos gone from the server in one sync looks like an accident: hold and say so
+NOT_SHARED = ".not-shared"  # a skill folder holding it stays on this pc (a tool add-on's skill; = tools.py, server.py)
 SKILL_EXT = {".md", ".py", ".sh", ".json", ".txt", ".yaml", ".yml", ".toml", ".js", ".html", ".css", ".xml", ".xsd"}  # = server
 
 
@@ -53,6 +54,8 @@ def local_path(rel: str) -> Path:
         if parts[1:2] != ["skills"] or len(parts) < 4 or parts[2] == "synced" or any(p.startswith(".") for p in parts) \
                 or Path(rel).suffix.lower() not in SKILL_EXT:
             raise ValueError(f"unsafe path from server: {rel}")
+        if (SKILLS / parts[2] / NOT_SHARED).exists():
+            raise ValueError(f"a skill that stays on this pc: {rel}")
         path = SKILLS
         for part in parts[2:]:  # never through a linked folder: that leads into someone else's files (a repo, /usr/share)
             path = path / part
@@ -86,7 +89,7 @@ def linked(p: Path) -> bool:
 def local_skills() -> dict:
     out = {}
     for d in sorted(SKILLS.iterdir()) if SKILLS.is_dir() else ():
-        if linked(d) or not d.is_dir() or d.name == "synced" or d.name.startswith("."):
+        if linked(d) or not d.is_dir() or d.name == "synced" or d.name.startswith(".") or (d / NOT_SHARED).exists():
             continue
         for p in d.rglob("*"):
             rel = p.relative_to(SKILLS)
@@ -241,6 +244,18 @@ if __name__ == "__main__":
                 pass
         assert local_path("g-memory/archief/x.md") == MIRROR / "g-memory" / "archief" / "x.md"
         assert local_path("claude/skills/s/scripts/a.py") == SKILLS / "s" / "scripts" / "a.py"
+        import tempfile
+        real_skills = SKILLS
+        with tempfile.TemporaryDirectory() as t:  # never this user's own skills folder
+            SKILLS = Path(t)
+            (SKILLS / "tool-skill").mkdir()
+            (SKILLS / "tool-skill" / "SKILL.md").write_text("x")
+            (SKILLS / "tool-skill" / NOT_SHARED).write_text("")
+            (SKILLS / "own").mkdir()
+            (SKILLS / "own" / "SKILL.md").write_text("y")
+            assert target("claude/skills/tool-skill/SKILL.md") is None, "a tool's skill is never written or removed by the sync"
+            assert list(local_skills()) == ["claude/skills/own/SKILL.md"], "and never goes up"
+        SKILLS = real_skills
         for bad in ("claude/CLAUDE.md", "claude/skills/synced/x/SKILL.md", "claude/skills/s/.x/a.md", "claude/skills/s/a.bin", "g/a.py"):
             try:
                 local_path(bad)

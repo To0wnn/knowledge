@@ -69,7 +69,10 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   ```
 
   `kind` is `skill` (instructions an agent loads) or `program` (software agents run, such as an MCP server): the
-  Machines page labels the tool with it.
+  Machines page labels the tool with it. `skills` lists the folders the tool installs in `~/.claude/skills`: after each
+  install or update the companion puts a `.not-shared` file in them, so the shared-skills sync never hands that skill to
+  other devices (the server and `memory_mirror.py` skip a skill folder holding it). Without it, a skill installed on the
+  admin's pc would reach every device as a shared skill, next to the tool's own install there.
   A step is one of `run` (a command looked up on PATH, no shell), `fetch` (the newest release file for this
   platform: `{"github": "owner/repo"}` with GitHub's sha256 of the asset (`"tag": "regex"`: the newest release of a
   line, when a tool supports only that line), `{"android": "platform-tools"}` (Google's stable SDK package, with the
