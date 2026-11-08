@@ -375,7 +375,8 @@ function ckItem(i) {
   const acts = el("div", "ck-item-acts"), act = (text, title, fn, cls = "btn small quiet") => { const b = el("button", cls, text); b.type = "button"; b.title = title; b.onclick = fn; acts.append(b); return b; };
   const later = []; // Snooze, Dismiss and Archive: behind one ⋯ menu, so the row's answer stands out
   if (i.git) acts.append(ckGitPill(i));
-  if (i.approve) act("Approve", "Let this task start", () => ckDo("/ui/api/task/approve", { project: i.project, id: i.id }));
+  if (i.approve) act("Approve", "Let this task start" + (i.approve_warning ? `\n\n${i.approve_warning}` : ""),
+    () => (!i.approve_warning || confirm(`${i.approve_warning}\n\nApprove ${i.id} anyway?`)) && ckDo("/ui/api/task/approve", { project: i.project, id: i.id }));
   if (i.kind === "ask") { // the board shows a short title: Allow only when that title is the whole request
     for (const [d, text, title] of ckAskButtons(i).filter(([d]) => i.full !== false || d === "deny")) act(text, title, () => ckDo("/ui/api/chat/approve", { machine: i.machine, id: i.chat, ask: i.id, decision: d }));
     if (i.full === false) act("Open chat", "The request is longer than the list shows: read it whole in its chat", () => main.click());

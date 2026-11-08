@@ -328,7 +328,9 @@ function msOpenPanel(key) {
   if (n.can_approve) {
     const ok = el("button", "btn small primary", "Approve"); ok.type = "button";
     ok.title = "Let this task start (it waits for the project owner's or an admin's approval)";
+    if (n.approve_warning) ok.title += `\n\n${n.approve_warning}`;
     ok.onclick = async () => {
+      if (n.approve_warning && !confirm(`${n.approve_warning}\n\nApprove ${n.id} anyway?`)) return;
       ok.disabled = true;
       try { await api("/ui/api/task/approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project: n.project, id: n.id }) }); msLoad(); }
       catch (e) { ok.disabled = false; toast(e.message); }
