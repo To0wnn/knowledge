@@ -1481,7 +1481,7 @@ function ckWorkerPaint(card) {
   card.root.classList.toggle("running", run);
   card.bannerText.textContent = `Worker for ${w.id} on ${m.label} · ${w.chat ? "taken over as a chat" : run ? "running" : w.status}` +
     (live ? ". Steer: your message reaches it after its next step. Take over: stop it and go on as a chat." : w.chat ? "." : ". Read only.");
-  const sig = JSON.stringify([w.status, w.chat, !!w.review, !!w.git, card.online]);
+  const sig = JSON.stringify([w.status, w.chat, !!w.review, !!w.git, card.online, !!w.checkpoint, !!w.merged, w.ahead]);
   if (card.acts.dataset.sig !== sig) {
     card.acts.dataset.sig = sig; card.acts.replaceChildren();
     const act = (text, title, fn) => { const b = el("button", "btn small", text); b.type = "button"; b.title = title; b.onclick = fn; card.acts.append(b); };
@@ -1490,6 +1490,8 @@ function ckWorkerPaint(card) {
     if (w.review || w.git) act("Review", "The changes on its branch, read on that pc", () => ckDiff({ kind: "worker", machine: m.machine, project: w.project, id: w.id, title: w.id, label: m.label }));
     if (card.online && !w.chat && w.status !== "merged") act("Take over", "Stop the worker and go on with its conversation as a chat on that pc", () => ckWorkerAct(card, "takeover"));
     if (w.chat) act("Open chat", "The chat this worker became", () => go(`#/chats/${encodeURIComponent(w.chat)}`));
+    if (!run && !w.merged && w.checkpoint) act("Roll back", "Put its worktree back as it was before its last turn (a checkpoint of now is kept)", () => confirm(`Roll ${w.id} back to before its last turn?`) && ckWorkerAct(card, "rollback"));
+    if (card.online && !run && !(w.ahead > 0)) act("Archive", "Take it off the lists; its branch and worktree stay", () => ckWorkerAct(card, "archive_worker"));
   }
   card.form.hidden = !live;
   card.stop.hidden = true; card.send.disabled = !live;

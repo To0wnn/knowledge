@@ -109,6 +109,9 @@ function applyRoute() {
   for (const b of $("tasks-mode").querySelectorAll("button")) b.setAttribute("aria-pressed", String((b.dataset.mode === "flow") === flow));
   if (flow) openMission(true); else if (ms.root) openMission(false);
   if (r.view === "tasks" && !flow) viewLoad("tasks", "Tasks", () => loadTasks(true));
+  // Machines: Pcs (the comparison) or Folders (per project); one load, two drawings of it
+  machinesMode = r.view === "machines" && r.q.get("view") === "folders" ? "folders" : "pcs";
+  for (const b of $("machines-mode").querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.mode === machinesMode));
   if (r.view === "machines") viewLoad("machines", "Machines", loadMachines);
   // Notes and Map: the topic list and right column, the note, the search results or the map in the middle. On a
   // phone the list and the note are two pages: a note or a search hides the list and shows the Back arrow.
@@ -206,6 +209,7 @@ function needsNotify(items) {
 setInterval(() => { if ($("cockpit").hidden && (!document.hidden || notifyOn()) && me.user && !agentsOff()) ckSummary().catch(() => {}); }, 30000);
 
 for (const b of $("tasks-mode").querySelectorAll("button")) b.onclick = () => go(b.dataset.mode === "flow" ? "#/tasks?view=flow" : "#/tasks");
+for (const b of $("machines-mode").querySelectorAll("button")) b.onclick = () => go(b.dataset.mode === "folders" ? "#/machines?view=folders" : "#/machines");
 
 // Search or jump: the command palette (palette.js).
 $("jump").onclick = () => openPalette();

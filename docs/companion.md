@@ -142,7 +142,7 @@ fixed remote actions and relays chats. Installing it is part of the client setup
 
 - **Remote control:** the owner of a machine steers it from the Machines list with fixed actions only: start a worker
   for a ready task, stop a worker, restart a worker that ended (`restart`: at once, past the companion's 6 h hold;
-  queued as its own start), roll a YOLO worker back, trust hooks, update the plugin, install or remove a tool (see Tools above), YOLO on or off per agent
+  queued as its own start), roll a YOLO worker back, trust hooks, update the plugin, install or remove a tool and turn its daily update on or off (`tool_auto`; see Tools above), YOLO on or off per agent
   (on needs the word YOLO typed in a dialog), workers allowed, max workers, link or unlink a folder (only folders the
   companion listed itself). The server queues them per machine (`POST /ui/api/machines/action`); the companion pulls
   them about every 10 seconds (`GET /machine/actions`), runs them with its own code and reports the result; an

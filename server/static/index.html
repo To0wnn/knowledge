@@ -24,6 +24,7 @@
     <span class="gap"></span>
     <div class="head-actions" id="head-actions">
       <span data-views="chats"><span class="ck-resets" id="ck-resets" hidden></span></span>
+      <div class="seg" id="machines-mode" role="group" aria-label="Machines as" data-views="machines"><button type="button" data-mode="pcs" aria-pressed="true">Pcs</button><button type="button" data-mode="folders" aria-pressed="false">Folders</button></div>
       <div class="seg" id="tasks-mode" role="group" aria-label="Tasks as" data-views="tasks"><button type="button" data-mode="list" aria-pressed="true">List</button><button type="button" data-mode="flow" aria-pressed="false">Flow</button></div>
       <span data-views="notes map"><details id="add-menu" class="menu">
         <summary class="btn">+ Add</summary>
@@ -70,7 +71,6 @@
     </section>
 
     <section id="tab-machines" class="view pad" aria-label="Machines" hidden>
-      <p class="muted">Every pc that runs your agents. Per pc what needs you first, then its workers, agents, tools, linked folders and what was asked of it.</p>
       <div id="machines"></div>
     </section>
 
@@ -238,6 +238,7 @@
 <script src="/ui/static/vendor/dompurify-3.4.17.js"></script>
 <script src="/ui/static/nav.js"></script>
 <script src="/ui/static/app.js"></script>
+<script src="/ui/static/machines.js"></script>
 <script src="/ui/static/agents.js"></script>
 <script src="/ui/static/mission.js"></script>
 <script src="/ui/static/shell.js"></script>

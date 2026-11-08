@@ -5614,10 +5614,10 @@ def action_args(action: str, args: dict) -> dict:
         return {"project": args["project"], "id": tid(), **({"chat": True} if action == "merge" and args.get("chat") is True else {})}
     if action == "trust_hooks":
         return {"agent": agent()}
-    if action in ("install_tool", "remove_tool"):  # an id only: the steps ship with the pc's own plugin (plugin/tools)
+    if action in ("install_tool", "remove_tool", "tool_auto"):  # an id only: the steps ship with the pc's own plugin (plugin/tools)
         if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,39}", str(args.get("tool", ""))):
             raise ValueError("tool must be a tool id")
-        return {"tool": args["tool"]}
+        return {"tool": args["tool"], **({"on": args.get("on") is True} if action == "tool_auto" else {})}
     if action in ("update_plugin", "update_agents"):
         return {}
     if action in ("link_folder", "unlink_folder"):
@@ -7145,7 +7145,8 @@ async def ui_worker(request: Request):
     t = t or {}
     info = {k: (w or t).get(k) for k in ("id", "project", "agent", "status", "started", "ended", "branch", "why", "open", "yolo")}
     info.update(id=info["id"] or key.split("/", 1)[1], project=info["project"] or key.split("/", 1)[0], agent=info["agent"] or t.get("agent"),
-                review=bool(w and w.get("review")), git=bool(w and w.get("git")))
+                review=bool(w and w.get("review")), git=bool(w and w.get("git")),
+                checkpoint=bool(w and w.get("checkpoint")), merged=bool(w and w.get("merged")), ahead=int(((w or {}).get("review") or {}).get("ahead") or 0))
     taken = read_json(f.parent.parent / "takeover.json", {}).get(key) or {}
     info["chat"] = taken.get("chat") if taken.get("started") == info.get("started") else None
     return JSONResponse({"worker": info, "events": [e for e in t.get("events", []) if e["n"] > after], "trimmed": bool(t.get("trimmed")),
