@@ -503,6 +503,80 @@ def remove(m: dict, agents) -> dict:
     return {"installed": False, "ok": None, "version": "", "detail": ""}
 
 
+# Drafting a manifest (maintainer side, never run by the companion): the result is a proposal a person reviews and
+# commits to plugin/tools/; nothing here installs anything.
+REGISTRY = os.environ.get("KNOWLEDGE_MCP_REGISTRY", "https://registry.modelcontextprotocol.io")
+LAUNCH = {"npm": ("npx", ["-y"]), "pypi": ("uvx", [])}  # registry type -> runner that fetches "<package>@latest" each start
+
+
+def _fixed(items: list, what: str) -> list:
+    """name/value pairs of the registry's arguments or variables with a fixed value; a required one without a value
+    (a token, a path of the user's) cannot go into a public one-click manifest."""
+    out = []
+    for a in items or []:
+        value = a.get("value", a.get("default"))
+        if value is None or "{" in str(value):  # "{token}": filled in by the user
+            if a.get("isRequired"):
+                raise ValueError(f"needs a value of the user's ({what} {a.get('name') or a.get('valueHint') or '?'}): write the manifest by hand")
+            continue
+        out.append((a.get("name"), str(value)))
+    return out
+
+
+def from_registry(server: dict) -> dict:
+    """A draft manifest for an MCP server from the official MCP registry (its server.json): an npm or PyPI package run
+    with npx/uvx at its newest version, or else a streamable-http remote, registered with each agent's own
+    `mcp add`. ValueError when the entry has neither in a form that needs no user value."""
+    tid = re.sub(r"[^a-z0-9-]+", "-", server["name"].rsplit("/", 1)[-1].lower()).strip("-")[:40]
+    if not ID.match(tid):
+        raise ValueError(f"no usable id in {server['name']!r}")
+    pkg = next((p for p in server.get("packages", []) if p.get("registryType") in LAUNCH
+                and p.get("transport", {}).get("type", "stdio") == "stdio"), None)
+    remote = next((r for r in server.get("remotes", []) if r.get("type") == "streamable-http"), None)
+    if pkg:
+        runner, pre = LAUNCH[pkg["registryType"]]
+        env = [f"{k}={v}" for k, v in _fixed(pkg.get("environmentVariables"), "environment variable")]
+        args = [x for k, v in _fixed(pkg.get("packageArguments"), "argument") for x in ((k, v) if k else (v,))]
+        _fixed(pkg.get("runtimeArguments"), "runtime argument")  # only the check: npx/uvx get their own flags
+        cmd = [runner, *pre, f"{pkg['identifier']}@latest", *args]
+        e = lambda flag: [x for kv in env for x in (flag, kv)]
+        claude, codex, agy = [tid, *e("-e"), "--", *cmd], [tid, *e("--env"), "--", *cmd], [*e("-e"), tid, "--", *cmd]
+        needs = [runner]
+    elif remote:
+        _fixed(remote.get("headers"), "header")
+        claude, codex, agy = ["--transport", "http", tid, remote["url"]], [tid, "--url", remote["url"]], [tid, remote["url"]]
+        needs = []
+    else:
+        raise ValueError(f"{server['name']}: no npm or PyPI package with stdio and no streamable-http remote: write the manifest by hand")
+    m = {"name": server.get("title") or tid, "description": server.get("description", ""),
+         "homepage": (server.get("repository") or {}).get("url") or server.get("websiteUrl") or f"{REGISTRY}/v0/servers?search={tid}",
+         **({"needs": needs} if needs else {}),
+         "install": [{"run": ["claude", "mcp", "remove", "--scope", "user", tid], "agent": "claude", "ok_if": ["no mcp server"]},  # Claude refuses to overwrite
+                     {"run": ["claude", "mcp", "add", "--scope", "user", *claude], "agent": "claude"},
+                     {"run": ["codex", "mcp", "add", *codex], "agent": "codex"},
+                     {"run": ["agy", "mcp", "add", *agy], "agent": "agy"}],
+         "check": [{"run": ["claude", "mcp", "get", tid], "agent": "claude"},
+                   {"run": ["codex", "mcp", "get", tid], "agent": "codex"},
+                   {"run": ["agy", "mcp", "list"], "agent": "agy", "expect": rf"(?m)^{re.escape(tid)}\s"}],
+         "remove": [{"run": ["claude", "mcp", "remove", "--scope", "user", tid], "agent": "claude", "ok_if": ["no mcp server"]},
+                    {"run": ["codex", "mcp", "remove", tid], "agent": "codex"},
+                    {"run": ["agy", "mcp", "remove", tid], "agent": "agy", "ok_if": ["not found"]}]}
+    return {"id": tid, "manifest": validate(m)}
+
+
+def describe(m: dict) -> list:
+    """The steps as lines a reviewer reads before approving a draft; "!" marks a step that runs a shell or inline code."""
+    out = []
+    for key in ("install", "check", "version", "remove"):
+        for s in m.get(key, []) if key != "version" else [m["version"]] if "version" in m else []:
+            where = " ".join(x for x in (s.get("agent", ""), ",".join(s.get("os", []))) if x) or "all"
+            what = (" ".join(s["run"]) if "run" in s else f"fetch {json.dumps(s['fetch'])}" if "fetch" in s else f"delete {s['delete']}")
+            risky = "run" in s and (Path(s["run"][0]).stem.lower() in ("sh", "bash", "zsh", "cmd", "powershell", "pwsh")
+                                    or any(a in ("-c", "-e", "/c", "-command", "--eval") for a in (x.lower() for x in s["run"][1:])))
+            out.append(f"{'!' if risky else ' '} {key:7} [{where}] {what}")
+    return out
+
+
 def self_test():
     global TOOLS, API, RETRY_WAIT, SHIMS, TOKEN, ANDROID
     import io
@@ -511,6 +585,25 @@ def self_test():
     for tid, f in ((f.stem, f) for f in sorted(CATALOG.glob("*.json"))):  # the shipped manifests are valid
         assert ID.match(tid), tid
         validate(json.loads(f.read_text(encoding="utf-8")))
+    npm = {"registryType": "npm", "identifier": "@o/srv-mcp", "transport": {"type": "stdio"},
+           "environmentVariables": [{"name": "KEY", "isSecret": True}, {"name": "MODE", "isRequired": True, "default": "ro"}],
+           "packageArguments": [{"type": "named", "name": "--dir", "value": "."}, {"type": "positional", "valueHint": "x"}]}
+    draft = from_registry({"name": "io.github.o/Srv_MCP", "packages": [{"registryType": "oci"}, npm], "remotes": [{"type": "streamable-http", "url": "https://u"}]})
+    run_of = lambda m, agent: [s["run"] for s in m["install"] if s.get("agent") == agent][-1]
+    assert draft["id"] == "srv-mcp" and draft["manifest"]["needs"] == ["npx"], draft  # the package wins over the remote
+    assert run_of(draft["manifest"], "claude")[4:] == ["user", "srv-mcp", "-e", "MODE=ro", "--", "npx", "-y", "@o/srv-mcp@latest", "--dir", "."], draft
+    assert run_of(draft["manifest"], "agy")[3:6] == ["-e", "MODE=ro", "srv-mcp"]  # agy wants flags before the name
+    http = from_registry({"name": "com.x/y", "remotes": [{"type": "streamable-http", "url": "https://u", "headers": [{"name": "Authorization", "isSecret": True}]}]})["manifest"]
+    assert run_of(http, "codex") == ["codex", "mcp", "add", "y", "--url", "https://u"] and "needs" not in http, http
+    for bad in ({"name": "a/b", "packages": [{**npm, "environmentVariables": [{"name": "TOKEN", "isRequired": True, "value": "{t}"}]}]},
+                {"name": "a/b", "packages": [{"registryType": "oci", "identifier": "img"}]}):
+        try:
+            from_registry(bad)
+            raise AssertionError(bad)
+        except ValueError:
+            pass
+    lines = describe({"name": "x", "install": [{"run": ["bash", "-c", "curl x | sh"]}, {"run": ["npm", "i"], "agent": "codex", "os": ["linux"]}]})
+    assert lines[0].startswith("! install [all] bash") and lines[1] == "  install [codex linux] npm i", lines
     with tempfile.TemporaryDirectory() as d:
         mark, py = Path(d) / "mark", sys.executable
         put = lambda text: [py, "-c", f"open({str(mark)!r}, 'a').write({text!r})"]
@@ -732,3 +825,22 @@ def self_test():
 if __name__ == "__main__":
     if "--self-test" in sys.argv:
         self_test()
+    elif len(sys.argv) == 3 and sys.argv[1] == "--from-registry":  # print a draft manifest; a person reviews it
+        try:
+            with _get(f"{REGISTRY}/v0/servers/{urllib.parse.quote(sys.argv[2], safe='')}/versions/latest") as r:
+                draft = from_registry(json.load(r)["server"])
+        except (OSError, ValueError, KeyError) as e:
+            sys.exit(f"{sys.argv[2]}: {e}")
+        print(f"plugin/tools/{draft['id']}.json:", file=sys.stderr)
+        m = draft["manifest"]  # one step per line, like the shipped manifests
+        print("{\n" + ",\n".join(f"  {json.dumps(k)}: " + ("[\n" + ",\n".join(f"    {json.dumps(s)}" for s in v) + "\n  ]"
+                                    if k in ("install", "check", "remove") else json.dumps(v)) for k, v in m.items()) + "\n}")
+    elif len(sys.argv) == 3 and sys.argv[1] == "--validate":  # a draft before it is committed: valid, and what it runs
+        try:
+            if not ID.match(Path(sys.argv[2]).stem):
+                raise ValueError(f"the file name is the id: {ID.pattern}")
+            print("\n".join(describe(validate(json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))))))
+        except (OSError, ValueError) as e:
+            sys.exit(f"{sys.argv[2]}: {e}")
+    else:
+        sys.exit("usage: tools.py --self-test | --from-registry <name in the MCP registry> | --validate <manifest.json>")
