@@ -36,7 +36,7 @@ ROOTS = {CC("homelab"): ("memory", "homelab"), CC("anpitek"): ("anpitek-memory",
 DOCS = {Path.home() / "homelab": CC("homelab"), Path.home() / "anpitek": CC("anpitek"), Path.home() / "trade_bot": CC("trade_bot")}
 NOT_PLACED = {"CLAUDE.md", "AGENTS.md", "GEMINI.md"}  # instructions, not docs (server.py lint_all)
 SKIP_DIRS = {"archief", "archive", "old", "history", "node_modules", "venv", "site-packages"}  # server ARCHIVE_DIRS + code
-SIMILAR = 0.72  # same threshold as the server (calibrated 18 Oct 2026)
+SIMILAR = 0.74  # same threshold as the server (SIMILAR_HINT; 0.72 until the q4 embedding model, 8 Nov 2026)
 
 
 def memo_of(path: str):

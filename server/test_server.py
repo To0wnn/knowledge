@@ -1833,6 +1833,9 @@ def ui_gap_contract(tmp, ck, raw):
     time.sleep(1.2)
     raw("GET", "/ui/api/semantic?q=toggle%20theme%20qwzx&project=garden&gap=0", headers=ck)  # the palette matched an action
     time.sleep(1.2)
+    ask("togle qwzx")  # a typo, then the palette's match within the wait: neither is a gap
+    raw("GET", "/ui/api/semantic?q=toggle%20qwzx&project=garden&gap=0", headers=ck)
+    time.sleep(1.2)
     ask("garden")  # finds notes
     time.sleep(1.2)
     ui = [g for g in gaps() if g[2] == "ui"]

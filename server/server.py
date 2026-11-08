@@ -1528,8 +1528,9 @@ def duplicate_pass(rr: kb_rerank.Reranker) -> int:
     """Judge the memo pairs that are new or changed since the last pass; returns how many."""
     memos = {rel: text for rel, text, _ in index.items() if mem_of(rel) and rel.count("/") == 1 and not rel.endswith("/MEMORY.md")}
     ver = {rel: version(text.encode()) for rel, text in memos.items()}
+    gate = f"{vectors.MODEL} {kb_rerank.CANDIDATE}"  # candidates found with another model or gate are searched again
     with DUPES_LOCK:
-        searched = {k: v for k, v in dupes["searched"].items() if k in memos}
+        searched = {k: v for k, v in dupes["searched"].items() if k in memos} if dupes.get("gate") == gate else {}
         pairs = {k: v for k, v in dupes["pairs"].items() if all(p in memos for p in k.split("\t"))}
     todo = []
     for rel, text in memos.items():
@@ -1551,7 +1552,7 @@ def duplicate_pass(rr: kb_rerank.Reranker) -> int:
         finally:
             rr.unload()
     with DUPES_LOCK:
-        dupes.update(pairs=pairs, searched=searched)
+        dupes.update(pairs=pairs, searched=searched, gate=gate)
         write_json(DUPES_FILE, dupes)
     return len(todo)
 
@@ -1919,7 +1920,7 @@ async def knowledge_semantic_search(query: str = "", pattern: str = "", search: 
     # A scoped token searches its own roots by default, so the top hits are not used up by notes it may not see.
     roots = tuple(r.strip() + "/" for r in root.split(",") if r.strip()) or tuple(r + "/" for r in device.get().get("roots") or ())
     hits = [h for h in await asyncio.to_thread(vec.search, target, roots, min(limit, 30), None if archive else is_archive_line) if in_scope(h["path"])]
-    weak = vec.matrix is not None and weak_answer(target, hits)  # while the index is (re)built nothing is a gap
+    weak = vec.matrix is not None and not vec.pending and weak_answer(target, hits)  # while chunks are embedded nothing is a gap
     if weak:
         log_gap("semantic", target, hits[0]["score"] if hits else None)
     if not hits:
@@ -4132,7 +4133,7 @@ async def semantic_route(request: Request):
     hits = [h for h in await asyncio.to_thread(vec.search, q, roots, 30, skip) if in_scope(h["path"])][:15] if q else []
     # "gap": what knowledge_semantic_search would log (calibrate_gaps.py measures the thresholds through this)
     return JSONResponse({"hits": [{**h, "text": shown(h["text"])} for h in hits], "status": vec.status(),
-                         "gap": vec.matrix is not None and bool(q) and weak_answer(q, hits)})
+                         "gap": vec.matrix is not None and not vec.pending and bool(q) and weak_answer(q, hits)})
 
 
 # ---------------------------------------------------------------- web UI ("brain" graph, search, preview, lint, ingest)
@@ -5089,7 +5090,9 @@ async def ui_semantic(request: Request):
     # the UI asks this after the exact search, for every pause in typing: a query that found nothing either way is a
     # gap like an MCP search's, once the person stopped typing it (UI_GAP_WAIT without a newer query)
     # gap=0: the palette matched one of its own views or actions ("toggle theme": 135 of 383 logged gaps by 8 Nov 2026)
-    if q and request.query_params.get("gap") != "0" and vec.matrix is not None and weak_answer(q, hits) \
+    if q and request.query_params.get("gap") == "0":
+        _ui_gap_last.pop(device.get().get("name", "?"), None)  # it also ends the typo before it ("togle" -> "toggle")
+    elif q and vec.matrix is not None and not vec.pending and weak_answer(q, hits) \
             and not await asyncio.to_thread(search_notes, q, tuple(r[:-1] for r in roots), 1):
         ui_gap_later(q, hits[0]["score"] if hits else None)
     return JSONResponse({"hits": hits, "status": vec.status()})

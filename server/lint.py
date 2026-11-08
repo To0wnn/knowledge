@@ -141,7 +141,7 @@ def query_coverage(query: str, text: str) -> float:
     """Share of the query's subject words found in `text` (lowercase); a 5-letter prefix covers Dutch inflections.
     Two-letter capitals (PA, IP, VM) are the subject too and count as whole words."""
     words = [w for w in re.findall(r"[a-z0-9]+", query.lower()) if len(w) >= 3 and w not in QUERY_STOP and w not in ORDINALS]
-    acronyms = [w.lower() for w in re.findall(r"\b[A-Z]{2}\b", query)]
+    acronyms = [w.lower() for w in re.findall(r"\b[A-Z]{2}\b", query) if w.lower() not in QUERY_STOP]  # not "IS" in caps
     found = sum((w if len(w) < 6 else w[:5]) in text for w in words) + sum(bool(re.search(rf"\b{w}\b", text)) for w in acronyms)
     return found / (len(words) + len(acronyms)) if words or acronyms else 1.0
 
@@ -484,6 +484,7 @@ if __name__ == "__main__":  # self-check
     assert query_coverage("hoe werkt de Nest thermostaat", "honeywell en hue") == 0.0 and query_coverage("hoe is het", "") == 1.0
     assert query_coverage("hoe draait de tweede PA", "de pa van het gezin") == 1.0  # ordinal ignored, acronym counted
     assert query_coverage("hoe draait de tweede PA", "een paar dingen") == 0.0  # whole word: "paar" is no PA
+    assert query_coverage("HOE IS DE NAS", "nas bevriest") == 1.0 and query_coverage("HOE IS HET", "") == 1.0  # caps
     t = lint({**files, "trade-memory/MEMORY.md": "- [X](x.md) — y\n"}, today=date(2026, 10, 18), mem="trade-memory")
     assert t["index_points_to_missing_file"] == ["MEMORY.md → x.md"] and not t["unprocessed_source"], t
     day, now = 86400, 1_800_000_000
