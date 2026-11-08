@@ -190,6 +190,8 @@ select, textarea, input:not([type=checkbox]):not([type=radio]):not([type=file]):
 }
 select, input:not([type=checkbox]):not([type=radio]):not([type=file]):not([type=range]) { height: var(--h-btn); padding: 0 12px; }
 select { padding: 0 8px; font-size: 13px; }
+/* a select with a transparent background (the project picker) would get a white popup under light theme text */
+option { background: var(--panel-solid); color: var(--ink); }
 select.small, input.small { height: var(--h-btn-sm); padding: 0 8px; font-size: 13px; }
 textarea { padding: 8px 12px; }
 :is(select, input, textarea):hover:not(:disabled):not(:focus) { border-color: color-mix(in srgb, var(--act) 45%, var(--line-hi)); }
