@@ -915,6 +915,17 @@ svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor;
 .proj:focus-within { outline: 2px solid var(--act); outline-offset: 2px; }
 .proj select:focus-visible { outline: 0; } /* the box shows the focus, not the field inside it */
 .proj select { flex: 1; min-width: 0; height: 32px; padding: 0; border: 0; background: transparent; padding: 0; color: var(--ink); font-size: 13px; font-weight: 600; }
+/* the project list drawn like the other menus where the browser allows it (Chromium's customizable select); elsewhere native */
+@supports (appearance: base-select) {
+  .project-pick, .project-pick::picker(select) { appearance: base-select; }
+  .project-pick { align-items: center; }
+  .project-pick::picker-icon { color: var(--muted); }
+  .project-pick::picker(select) { min-width: anchor-size(width); margin-top: 8px; padding: 6px; border: 1px solid var(--line-hi); border-radius: var(--r-lg); background: var(--panel-solid); box-shadow: var(--menu-shadow); }
+  .project-pick option { min-height: var(--h-btn); padding: 0 12px; border-radius: var(--r-md); background: transparent; color: var(--ink); font-size: 14px; font-weight: 400; cursor: pointer; }
+  .project-pick option:hover, .project-pick option:focus-visible { background: var(--hover); outline: 0; }
+  .project-pick option:checked { font-weight: 600; }
+  .project-pick option::checkmark { color: var(--act); }
+}
 .sidebar .grow { flex: 1; min-height: 12px; }
 .me { display: flex; align-items: center; gap: 6px; margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--line); }
 .me .menu { min-width: 0; flex: 1; }
