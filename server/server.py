@@ -5771,7 +5771,10 @@ def action_args(action: str, args: dict) -> dict:
         if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,39}", str(args.get("tool", ""))):
             raise ValueError("tool must be a tool id")
         return {"tool": args["tool"], **({"on": args.get("on") is True} if action == "tool_auto" else {})}
-    if action in ("update_plugin", "update_agents"):
+    if action == "update_plugin":
+        target = str(args.get("target", ""))
+        return {"target": target} if re.fullmatch(r"\d+\.\d+\.\d+", target) else {}
+    if action == "update_agents":
         return {}
     if action in ("link_folder", "unlink_folder"):
         # a path from the companion's list, or chosen by the owner in the folder chooser; the companion checks both

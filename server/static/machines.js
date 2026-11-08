@@ -149,7 +149,14 @@ function selfNote(m) {
   if ((me.later || []).includes("agy")) return `agy is open on ${m.label}: its plugin updates by itself once agy is closed.`;
   if (!c?.version || !versionNewer(newest, c.version)) return "";
   if (me.from === "copy") return `Its companion runs from a plugin copy, which Update does not move: run the installer once on ${m.label}.`;
-  if (last?.status === "done" && !updating(m) && Date.now() / 1000 - last.at < 86400) return `The update ${ago(last.at)} said done, yet the companion still runs ${c.version}${me.from ? "" : " (its plugin is too old to say why)"}.`;
+  if (last?.status === "done" && !updating(m) && Date.now() / 1000 - last.at < 86400) {
+    if (last.args?.target) {
+      if (!versionNewer(last.args.target, c.version)) return "";
+    } else if (last.result && last.result.includes(c.version)) {
+      return "";
+    }
+    return `The update ${ago(last.at)} said done, yet the companion still runs ${c.version}${me.from ? "" : " (its plugin is too old to say why)"}.`;
+  }
   return "";
 }
 // An agent this pc's companion knows: only then do its switches and buttons act (a hook alone may report an agent).
@@ -202,9 +209,9 @@ function pcHead(m, here) {
   const note = selfNote(m);
   if (note) box.append(el("p", c.self?.waits || c.self?.later?.length ? "mx-pc-meta" : "machine-error", note));
   const acts = el("div", "mx-pc-acts");
-  if (behind && steers(m)) acts.append(machineButton(`Update to ${behind}`, "Update the knowledge plugin of every agent there and its companion (it restarts by itself)", () => machineAction(m, "update_plugin"), updating(m), "btn small primary"));
+  if (behind && steers(m)) acts.append(machineButton(`Update to ${behind}`, "Update the knowledge plugin of every agent there and its companion (it restarts by itself)", () => machineAction(m, "update_plugin", { target: behind }), updating(m), "btn small primary"));
   // an admin may update the plugin on someone else's pc, nothing else there (the server checks its remote-control switch)
-  if (behind && me.admin && !m.own && !m.old && m.online && c) acts.append(machineButton(`Update to ${behind} (admin)`, "Update the knowledge plugin there; its owner's settings stay as they are", () => machineAction(m, "update_plugin"), updating(m), "btn small primary"));
+  if (behind && me.admin && !m.own && !m.old && m.online && c) acts.append(machineButton(`Update to ${behind} (admin)`, "Update the knowledge plugin there; its owner's settings stay as they are", () => machineAction(m, "update_plugin", { target: behind }), updating(m), "btn small primary"));
   if (steers(m) && (c.agents || []).length && (c.folders?.linked || []).length) acts.append(machineButton("Chat", "Talk to an agent on this pc (Chats)", async () => { go("#/chats"); if (!ck.machines.length) await ckSummary().catch(() => {}); ckNewChat(m.id); }));
   if (m.mine) acts.append(pcMore(m));
   if (acts.childNodes.length) box.append(acts);
@@ -432,7 +439,7 @@ function machinesStatus(res, own, online) {
   else if (online.length) text.append(el("p", "muted", "Everything is up to date."));
   box.append(text);
   if (behind.length > 1 || (behind.length === 1 && online.length > 1)) box.append(machineButton("Update all my pcs", `Update Knowledge on ${behind.map((m) => m.label).join(", ")}`,
-    () => Promise.all(behind.map((m) => machineAction(m, "update_plugin"))), behind.some((m) => pendingAction(m, "update_plugin")), "btn primary"));
+    () => Promise.all(behind.map((m) => machineAction(m, "update_plugin", { target: pluginBehind(m) }))), behind.some((m) => pendingAction(m, "update_plugin")), "btn primary"));
   return box;
 }
 
@@ -562,7 +569,7 @@ function drawMachines() {
     if (theirs.length) {
       const sec = el("section", "mx-theirs"), h = el("h2", "mx-h", "Other people's pcs"), live = theirs.filter((m) => m.online && !m.old);
       const behind = me.admin ? live.filter((m) => m.companion && pluginBehind(m)) : [];
-      if (behind.length > 1) h.append(machineButton("Update all their pcs (admin)", `Update Knowledge on ${behind.map((m) => m.label).join(", ")}`, () => Promise.all(behind.map((m) => machineAction(m, "update_plugin")))));
+      if (behind.length > 1) h.append(machineButton("Update all their pcs (admin)", `Update Knowledge on ${behind.map((m) => m.label).join(", ")}`, () => Promise.all(behind.map((m) => machineAction(m, "update_plugin", { target: pluginBehind(m) })))));
       sec.append(h, el("p", "muted mx-lede", "Each pc on its owner's accounts: never counted with yours. You see them; their owner steers them."));
       for (const m of live) sec.append(compareTable([m], here, false));
       const gone = theirs.filter((m) => !m.online || m.old);
