@@ -1720,7 +1720,8 @@ def one_round(only: str = "") -> dict:
         st["sync_error"], ready = str(e)[:200], []
     summary = run_workers(ready, tok, now, only)
     ws_now, later = load("workers.json", {}), self_state()["later"]
-    busy = workers.game_session() or any(w["status"] == "running" for w in ws_now.values()) or any(chat_busy(c) for c in {*chat.LIVE, *chat.RUNNING, *chat.PENDING})
+    # a chat runs in its own process and goes on through the companion's restart: only a game or a worker holds it back
+    busy = workers.game_session() or any(w["status"] == "running" for w in ws_now.values())
     if knowledge_update_due(NEWEST["v"], [version(), *(plugin_version(a) for a in AGENTS if installed(a) and a not in later)], bool(busy), st.get("knowledge_updated", 0), now):
         st["knowledge_updated"] = now
         knowledge_update_soon()
@@ -2007,7 +2008,7 @@ def knowledge_update_soon():
     """The Update button's work in the background, then the restart at once; the activity log says it happened."""
     def run():
         with ACTING:
-            log("sync", f"Knowledge {NEWEST['v']} is out: updating by itself", "nothing runs here now")
+            log("sync", f"Knowledge {NEWEST['v']} is out: updating by itself", "no worker or game runs here now")
             try:
                 failed = update_plugins()
             except Exception as e:
