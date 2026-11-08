@@ -9,6 +9,7 @@ chunks), so a restart or an edit only embeds new text. One background thread at 
 kernel serves every other forge service first. Measured on forge (18 Oct): 6 threads 5.5 chunks/s (full run ~13 min),
 2 threads 3.2/s; the Intel UHD 770 iGPU via OpenVINO only 1.2/s (and out of memory at batch 16), so no GPU.
 """
+import ctypes
 import hashlib
 import os
 import re
@@ -74,7 +75,17 @@ def text_model(threads: int = THREADS):
         TextEmbedding.add_custom_model(MODEL, pooling=PoolingType.DISABLED, normalization=True, dim=768,
                                        sources=ModelSource(hf="onnx-community/embeddinggemma-300m-ONNX"),
                                        model_file=f"{f}.onnx", additional_files=[f"{f}.onnx_data"], output_name="sentence_embedding")
-    return TextEmbedding(MODEL, threads=threads, cache_dir=MODELS_DIR or None)
+    # no ONNX memory arena: it kept ~300 MB after embedding long chunks; without it and with trim() 413 instead of
+    # 721 MB, and no slower (measured 8 Nov 2026, 64 chunks of 2400 characters)
+    return TextEmbedding(MODEL, threads=threads, cache_dir=MODELS_DIR or None, enable_cpu_mem_arena=False)
+
+
+def trim():
+    """Hand memory glibc keeps after a burst of embedding back to the system (as rerank.unload does)."""
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):  # another libc: only more memory stays in use
+        pass
 
 
 class HashEmbedder:
@@ -160,6 +171,8 @@ class Vectors:
             if i % 640 == 0:  # make finished chunks searchable and keep them across a restart
                 self.publish(wanted)
                 self.save()
+        if todo:
+            trim()
         live = {h for *_, h in wanted}
         changed = bool(todo) or len(self.cache) != len(live)
         self.cache = {h: v for h, v in self.cache.items() if h in live}
