@@ -595,6 +595,14 @@ def machines_contract(tmp, ck, fr, raw, er, et, heard):
     assert "buddy-m" not in d["cccccccccccccccc"]["tokens"] and (d["cccccccccccccccc"].get("companion") or {}).get("version") != "evil"
     theirs = next(r for r in json.loads(raw("GET", "/ui/api/machines", headers=ck)[2])["machines"] if r["tokens"] == ["buddy-m"])
     assert theirs["id"] != "cccccccccccccccc" and not theirs["own"], theirs  # the admin sees it, but may not steer a friend's pc
+    to_theirs = lambda body, h=ck: raw("POST", "/ui/api/machines/action", json.dumps({"machine": theirs["id"], **body}),
+                                       {**h, "X-Knowledge-UI": "1", "Content-Type": "application/json"})[0]
+    assert to_theirs({"action": "yolo", "args": {"agent": "codex", "on": False}}) == 403, "an admin steers nothing else there"
+    assert to_theirs({"action": "update_plugin"}, er) == 403, "only an admin updates someone else's plugin"
+    assert to_theirs({"action": "update_plugin"}) == 200, "an admin may update the plugin on a friend's pc"
+    assert [a["action"] for a in json.loads(http("GET", "/machine/actions", token=bt, headers=pc)[1])["actions"]] == ["update_plugin"]
+    raw("POST", "/ui/api/admin/token", json.dumps({"name": "buddy-m", "update": True, "agents": False}), ui)
+    assert to_theirs({"action": "update_plugin"}) == 403, "not while its token has remote control off"
     raw("POST", "/ui/api/admin/token", json.dumps({"name": "buddy-m", "revoke": True}), ui)
     assert json.loads(http("GET", "/machine/actions", token=fr, headers={"X-Knowledge-Machine": "eeeeeeeeeeeeeeee"})[1])["actions"] == []  # another pc
     got = json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"]

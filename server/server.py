@@ -5624,8 +5624,9 @@ def action_args(action: str, args: dict) -> dict:
 
 @server.custom_route("/ui/api/machines/action", methods=["POST"])
 async def ui_machine_action(request: Request):
-    """{"machine", "action", "args"}: queue a fixed action for one of this person's own machines (an admin too: only
-    own ones). Its companion fetches it (GET /machine/actions), runs it and reports; offline it waits."""
+    """{"machine", "action", "args"}: queue a fixed action for one of this person's own machines; an admin may also
+    queue update_plugin on anyone's pc whose token allows remote control. Its companion fetches it (GET
+    /machine/actions), runs it and reports; offline it waits."""
     try:
         b = await request.json()
         mid, action = str(b.get("machine", "")), str(b.get("action", ""))
@@ -5633,7 +5634,14 @@ async def ui_machine_action(request: Request):
     except (ValueError, AttributeError, TypeError) as e:
         return JSONResponse({"error": str(e) or "send JSON {machine, action, args}"}, status_code=400)
     row = next((r for r in await asyncio.to_thread(machine_rows) if r["id"] == mid), None)
-    if not row or not row["own"] or row.get("old"):
+    dev, tokens = device.get(), read_json(TOKENS_FILE, {})
+    # an admin may update the knowledge plugin on anyone's pc, nothing else there, and only while its token allows
+    # remote control (8 Nov 2026, Anthony): the pc's own settings, agents and folders stay its owner's
+    admin_update = action == "update_plugin" and bool(dev.get("admin")) and bool(row) and not row["own"]
+    steer = lambda n: n in tokens and (own_token(tokens[n], dev) or admin_update and agents_on(tokens[n]))
+    if admin_update and not any(steer(n) for n in row["tokens"]):
+        return JSONResponse({"error": REMOTE_OFF}, status_code=403)
+    if not row or not (row["own"] or admin_update) or row.get("old"):
         return JSONResponse({"error": REMOTE_OFF if row and row["mine"] and not row.get("old")
                              else "not a machine of your own tokens (with plugin 0.15.0 or newer)"}, status_code=403)
     if action == "restart":  # a worker that ended: start it again now, past the companion's RESTART_AFTER hold
@@ -5646,7 +5654,6 @@ async def ui_machine_action(request: Request):
         if not plan:
             return JSONResponse({"error": "no model to apply on this machine"}, status_code=409)
         args = {"plans": json.dumps(plan, separators=(",", ":"))}
-    dev, tokens = device.get(), read_json(TOKENS_FILE, {})
     if action == "takeover":  # the owner goes on with a worker as a chat: its companion stops it and asks /machine/chats/adopt
         key = f"{args['project']}/{args['id']}"
         w = reported_worker(row, key)
@@ -5660,7 +5667,7 @@ async def ui_machine_action(request: Request):
         tf.parent.mkdir(parents=True, exist_ok=True)
         await asyncio.to_thread(update_state, tf, lambda d: d.__setitem__(key, pending))
     item = {"id": secrets.token_hex(6), "action": action, "args": args, "by": dev.get("user", ""), "at": time.time(),
-            "status": "waiting", "tokens": [n for n in row["tokens"] if n in tokens and own_token(tokens[n], dev)]}
+            "status": "waiting", "tokens": [n for n in row["tokens"] if steer(n)]}
     await asyncio.to_thread(update_state, MACHINE_ACTIONS, lambda d: d.__setitem__(mid, (d.get(mid, []) + [item])[-50:]))
     audit("machine-action", f"{mid} {action} {json.dumps(args)}")
     return JSONResponse({"ok": True, "id": item["id"]})

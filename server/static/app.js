@@ -1302,6 +1302,9 @@ function machineActions(m) {
   if (steer && c && (c.agents || []).length && (c.folders?.linked || []).length) box.append(machineButton("Chat", "Talk to an agent on this pc (Chats)", async () => { go("#/chats"); if (!ck.machines.length) await ckSummary().catch(() => {}); ckNewChat(m.id); }));
   const update = () => machineAction(m, "update_plugin"), behind = steer && c && pluginBehind(m);
   if (behind && m.online) box.append(machineButton("Update plugin", `Update the knowledge plugin of every agent there (${behind} is out)`, update, pendingAction(m, "update_plugin")));
+  // an admin may update the plugin on someone else's pc, nothing else there (the server checks its remote-control switch)
+  const theirs = me.admin && !m.own && !m.old && m.online && c && pluginBehind(m);
+  if (theirs) box.append(machineButton("Update plugin (admin)", `Update the knowledge plugin there to ${theirs}; its owner's settings stay as they are`, update, pendingAction(m, "update_plugin")));
   if (!m.mine) return box;
   const menu = el("details", "menu machine-more"), sum = el("summary", "btn small icon", "⋯"), list = el("div", "menu-list");
   sum.setAttribute("aria-label", `More for ${m.label}`); sum.title = "More";

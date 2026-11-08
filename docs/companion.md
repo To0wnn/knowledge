@@ -143,7 +143,9 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   (on needs the word YOLO typed in a dialog), workers allowed, max workers, link or unlink a folder (only folders the
   companion listed itself). The server queues them per machine (`POST /ui/api/machines/action`); the companion pulls
   them about every 10 seconds (`GET /machine/actions`), runs them with its own code and reports the result; an
-  offline machine's action shows "waiting for machine". Every action is logged with who and when, and shows in the
+  offline machine's action shows "waiting for machine". One exception to "the owner only": an admin may update the
+  knowledge plugin on anyone's pc (button "Update plugin (admin)"), nothing else there, and only while its token has
+  remote control on. Every action is logged with who and when, and shows in the
   companion's activity log. There is no free-text command anywhere; free text reaches a pc only as a chat message
   to an agent (below), which runs with that agent's own permissions.
 
