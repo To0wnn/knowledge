@@ -1,6 +1,6 @@
 {
   "name": "REA",
-  "description": "Reverse engineering for agents: native binaries, JavaScript/Electron, .NET, Android and websites (MCP server and skill). Brings its own Node.js, JDK, Ghidra, JADX, Apktool, WABT and rizin, and on Linux binwalk and mitmproxy, in ~/.knowledge/tools.",
+  "description": "Reverse engineering for agents: native binaries, JavaScript/Electron, .NET, Android and websites (MCP server and skill). Brings its own Node.js, JDK, Ghidra, JADX, Apktool, adb, WABT and rizin, and on Linux binwalk and mitmproxy, in ~/.knowledge/tools.",
   "homepage": "https://github.com/morluto/rea",
   "path": [
     "{tools}/node/bin",
@@ -47,6 +47,9 @@
     ],
     "mitmdump": [
       "{tools}/conda/bin/mitmdump"
+    ],
+    "adb": [
+      "{tools}/platform-tools/adb{exe}"
     ]
   },
   "install": [
@@ -132,6 +135,18 @@
           "darwin-x64": "^apktool_[\\d.]+\\.jar$",
           "darwin-arm64": "^apktool_[\\d.]+\\.jar$",
           "windows-x64": "^apktool_[\\d.]+\\.jar$"
+        }
+      }
+    },
+    {
+      "fetch": {
+        "android": "platform-tools",
+        "into": "platform-tools",
+        "asset": {
+          "linux-x64": "-linux\\.zip$",
+          "darwin-x64": "-darwin\\.zip$",
+          "darwin-arm64": "-darwin\\.zip$",
+          "windows-x64": "-win\\.zip$"
         }
       }
     },
@@ -350,6 +365,9 @@
     },
     {
       "delete": "micromamba"
+    },
+    {
+      "delete": "platform-tools"
     },
     {
       "delete": "rizin"

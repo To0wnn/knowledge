@@ -70,7 +70,8 @@ fixed remote actions and relays chats. Installing it is part of the client setup
 
   A step is one of `run` (a command looked up on PATH, no shell), `fetch` (the newest release file for this
   platform: `{"github": "owner/repo"}` with GitHub's sha256 of the asset (`"tag": "regex"`: the newest release of a
-  line, when a tool supports only that line), or `{"shasums": "https://.../SHASUMS256.txt"}`
+  line, when a tool supports only that line), `{"android": "platform-tools"}` (Google's stable SDK package, with the
+  sha1 Google publishes), or `{"shasums": "https://.../SHASUMS256.txt"}`
   like Node.js; `"asset": {"<os>-<x64|arm64>": "regex"}` or `{"match", "strip"}`; unpacked into `"into"` in
   `~/.knowledge/tools`, the old copy replaced only once the new one is complete and checked; skipped when that release
   is there already, or when no file fits this platform) or `delete` (a name in that folder). `{tools}` in an argument,
@@ -87,7 +88,7 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   plugin restart does), a step stops after 15 minutes with its whole process tree, and the result or the error shows in
   the Tools list and in the companion's Activity. Update is install again, so steps use `@latest` or the agent's own marketplace
   update. A JSON report's failed `checks` or its `remediation` become the one line the page shows.
-- **Shipped:** `rea` (its own Node.js LTS, Temurin JDK LTS, Ghidra, jadx-headless-mcp, Apktool, WABT and rizin, and on
+- **Shipped:** `rea` (its own Node.js LTS, Temurin JDK LTS, Ghidra, jadx-headless-mcp, Apktool, adb, WABT and rizin, and on
   Linux binwalk and mitmproxy from conda-forge through micromamba, all in `~/.knowledge/tools` without root; tshark,
   sigrok and unblob have no build without root and stay with the system;
   npm `rea-agents` into a prefix there, registered with `rea setup` per agent, which passes Ghidra, the JDK and JADX to

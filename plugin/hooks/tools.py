@@ -15,7 +15,8 @@ more than a tool id (the companion's rule that no free text reaches a pc). A man
            "env": {"NAME": "value"} (this step only, e.g. DO_NOT_TRACK)
     fetch = {"github": "owner/repo" (its latest release, or with "tag": "regex" the newest release whose tag matches,
              for a line the tool supports; GitHub's sha256 of the asset is checked)
-             or "shasums": "https://.../SHASUMS256.txt" (a list of file names with their sha256, e.g. Node.js),
+             or "shasums": "https://.../SHASUMS256.txt" (a list of file names with their sha256, e.g. Node.js)
+             or "android": "platform-tools" (the stable package from Google's SDK repository; Google gives a sha1),
              "asset": {"<os>-<x64|arm64>": "regex of the file name" or {"match": regex, "strip": folders to drop}},
              "into": "<name in the tools folder>"}
 
@@ -48,6 +49,7 @@ from pathlib import Path
 CATALOG = Path(os.environ.get("KNOWLEDGE_TOOLS_DIR") or Path(__file__).resolve().parent.parent / "tools")  # a fixture in the tests
 TOOLS = Path(os.environ.get("KNOWLEDGE_HOME") or Path.home() / ".knowledge") / "tools"
 API = os.environ.get("KNOWLEDGE_GITHUB_API", "https://api.github.com")  # a local fake in the tests: then http is allowed
+ANDROID = os.environ.get("KNOWLEDGE_ANDROID_REPO", "https://dl.google.com/android/repository/")
 OS = {"win32": "windows", "darwin": "darwin"}.get(sys.platform, "linux")
 ARCH = "arm64" if platform.machine().lower() in ("arm64", "aarch64") else "x64"
 AGENTS = ("claude", "codex", "agy")
@@ -86,13 +88,15 @@ def validate(m: dict) -> dict:
         if "fetch" in s:
             f = s["fetch"]
             src = f.get("github") if isinstance(f, dict) else None
-            if not (isinstance(f, dict) and set(f) <= {"github", "shasums", "asset", "into", "tag"} and isinstance(f.get("tag", ""), str) and len({"github", "shasums"} & set(f)) == 1
-                    and (re.fullmatch(r"[\w.-]+/[\w.-]+", src) if src else str(f.get("shasums", "")).startswith("https://"))
+            if not (isinstance(f, dict) and set(f) <= {"github", "shasums", "android", "asset", "into", "tag"} and isinstance(f.get("tag", ""), str)
+                    and len({"github", "shasums", "android"} & set(f)) == 1
+                    and (re.fullmatch(r"[\w.-]+/[\w.-]+", src) if src else re.fullmatch(r"[\w-]+", str(f["android"])) if "android" in f
+                         else str(f.get("shasums", "")).startswith("https://"))
                     and isinstance(f.get("into"), str) and NAME.match(f["into"]) and isinstance(f.get("asset"), dict)
                     and all(re.fullmatch(r"(linux|darwin|windows)-(x64|arm64)", k) and (isinstance(v, str) or (
                         isinstance(v, dict) and set(v) <= {"match", "strip"} and isinstance(v.get("match"), str) and type(v.get("strip", 0)) is int))
                         for k, v in f["asset"].items())):
-                raise ValueError(f"fetch needs github owner/repo or an https shasums list, asset per <os>-<arch>, and into: {s}")
+                raise ValueError(f"fetch needs github owner/repo, an https shasums list or an android package, asset per <os>-<arch>, and into: {s}")
         if not set(s.get("os", [])) <= {"linux", "darwin", "windows"} or s.get("agent", "claude") not in AGENTS:
             raise ValueError(f"unknown os or agent: {s}")
         if not (isinstance(s.get("ok_if", []), list) and all(isinstance(x, str) and x == x.lower() for x in s.get("ok_if", []))
@@ -224,7 +228,7 @@ def _get(url: str, timeout: float = 30, tries: int = 3):
 
 
 def latest(f: dict) -> tuple:
-    """(file name, url, sha256, version) of the asset for this platform, or None when there is none for it."""
+    """(file name, url, "sha256:<hex>" or "sha1:<hex>", version) of the asset for this platform, or None when there is none."""
     spec = f["asset"].get(f"{OS}-{ARCH}")
     if spec is None:
         return None
@@ -244,13 +248,25 @@ def latest(f: dict) -> tuple:
         digest = str(a.get("digest") or "")
         if not digest.startswith("sha256:"):  # older uploads have none: never install what cannot be checked
             raise RuntimeError(f"{f['github']}: GitHub gives no sha256 for {a['name']}")
-        return a["name"], a["browser_download_url"], digest[7:], str(rel.get("tag_name", ""))
+        return a["name"], a["browser_download_url"], digest, str(rel.get("tag_name", ""))
+    if "android" in f:  # channel-0 is stable
+        import xml.etree.ElementTree as ET
+        with _get(ANDROID + "repository2-1.xml") as r:
+            root = ET.fromstring(r.read(8 << 20))
+        for p in root.iter("remotePackage"):
+            ch = p.find("channelRef")
+            if p.get("path") == f["android"] and (ch is None or ch.get("ref") == "channel-0"):
+                for a in p.iter("archive"):
+                    name = a.findtext("complete/url") or ""
+                    if pattern.search(name):
+                        return name, ANDROID + name, "sha1:" + (a.findtext("complete/checksum") or ""), ".".join(x.text or "" for x in p.find("revision"))
+        raise RuntimeError(f"{f['android']}: no stable build for {OS}-{ARCH}")
     with _get(f["shasums"]) as r:
         lines = r.read(1 << 20).decode("utf-8", "replace").split("\n")
     for line in lines:
         parts = line.split()
         if len(parts) == 2 and pattern.search(parts[1]):
-            return parts[1], f["shasums"].rsplit("/", 1)[0] + "/" + parts[1], parts[0], parts[1]
+            return parts[1], f["shasums"].rsplit("/", 1)[0] + "/" + parts[1], "sha256:" + parts[0], parts[1]
     raise RuntimeError(f"{f['shasums']}: no file for {OS}-{ARCH}")
 
 
@@ -311,7 +327,8 @@ def fetch(f: dict) -> tuple:
             return True, version, f"{f['into']} {version} is current"
         spec = f["asset"][f"{OS}-{ARCH}"]
         with tempfile.TemporaryDirectory(dir=TOOLS) as tmp:
-            part, h, size = Path(tmp) / name, hashlib.sha256(), 0
+            algo, sha = sha.split(":", 1)
+            part, h, size = Path(tmp) / name, hashlib.new(algo), 0
             with _get(url, 120) as r, open(part, "wb") as out:
                 while chunk := r.read(1 << 20):
                     size += len(chunk)
@@ -320,7 +337,7 @@ def fetch(f: dict) -> tuple:
                     h.update(chunk)
                     out.write(chunk)
             if h.hexdigest() != sha.lower():
-                raise RuntimeError(f"{name}: sha256 does not match, not installed")
+                raise RuntimeError(f"{name}: {algo} does not match, not installed")
             new = Path(tmp) / "new"
             if re.search(r"\.(zip|tar\.gz|tgz|tar\.xz)$", name):
                 new.mkdir()
@@ -465,7 +482,7 @@ def remove(m: dict, agents) -> dict:
 
 
 def self_test():
-    global TOOLS, API, RETRY_WAIT, SHIMS, TOKEN
+    global TOOLS, API, RETRY_WAIT, SHIMS, TOKEN, ANDROID
     import io
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -606,7 +623,11 @@ def self_test():
                     return
                 rel["/repos/o/flaky/releases/latest"] = rel["/repos/o/engine/releases/latest"]
                 body = json.dumps(rel[self.path]).encode() if self.path in rel else files.get(self.path) if self.path in files else \
-                    f"{sha(b'JAR')}  tool.jar\n{sha(b'x')}  tool-other.jar\n".encode() if self.path == "/dl/SHASUMS256.txt" else None
+                    f"{sha(b'JAR')}  tool.jar\n{sha(b'x')}  tool-other.jar\n".encode() if self.path == "/dl/SHASUMS256.txt" else \
+                    (f'<r><remotePackage path="platform-tools"><revision><major>9</major><minor>1</minor></revision><channelRef ref="channel-0"/>'
+                     f'<archives><archive><complete><checksum>{hashlib.sha1(good).hexdigest()}</checksum><url>engine_1.0.zip</url></complete></archive></archives>'
+                     f'</remotePackage></r>').encode() if self.path == "/android/repository2-1.xml" else \
+                    good if self.path == "/android/engine_1.0.zip" else None
                 self.send_response(200 if body is not None else 404)
                 self.end_headers()
                 self.wfile.write(body or b"")
@@ -647,6 +668,9 @@ def self_test():
             assert "no sha256" in fetch({**eng, "github": "o/old"})[2]
             ok, _, text = fetch({"github": "o/evil", "asset": {plat: "evil"}, "into": "evil"})
             assert not ok and "outside" in text and not (Path(d) / "escape").exists() and not (TOOLS / "evil").exists(), text
+            ANDROID = API + "/android/"
+            ok, version, text = fetch({"android": "platform-tools", "asset": {plat: r"engine_.*\.zip$"}, "into": "platform-tools"})
+            assert ok and version == "9.1" and (TOOLS / "platform-tools" / "README").exists(), text  # Google's sha1 checked
             ok, version, text = fetch({"shasums": API + "/dl/SHASUMS256.txt", "asset": {plat: r"^tool\.jar$"}, "into": "tool.jar"})
             assert ok and (TOOLS / "tool.jar").read_bytes() == b"JAR", text
             assert delete("engine")[0] and not (TOOLS / "engine").exists() and "engine" not in json.loads((TOOLS / ".versions.json").read_text())
