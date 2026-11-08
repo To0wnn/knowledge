@@ -585,9 +585,13 @@ def mcp(tok: str):
                 else token_store.unreachable(URL, f"HTTP {code}" if code else e) if code == 403 or isinstance(e, OSError) and not code \
                 else f"HTTP {code}" if code else str(e) or type(e).__name__
             replies = [{"jsonrpc": "2.0", "id": i, "error": {"code": -32000, "message": f"knowledge server: {reason}"}} for i in ids]
-        for reply in replies:
-            out.write(json.dumps(reply).encode() + b"\n")  # one message per line, as stdio needs
-        out.flush()
+        try:
+            for reply in replies:
+                out.write(json.dumps(reply).encode() + b"\n")  # one message per line, as stdio needs
+            out.flush()
+        except OSError:  # the agent closed its end (its session ended; Windows says EINVAL): nobody to answer
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())  # nor may Python's own flush at exit fail on it
+            return
 
 
 def hints(tok: str):

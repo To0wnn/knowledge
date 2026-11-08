@@ -64,8 +64,11 @@ LOCK = threading.Lock()  # one line at a time on stdout: answers come from sever
 
 def send(msg: dict):
     with LOCK:
-        sys.stdout.write(json.dumps(msg) + "\n")
-        sys.stdout.flush()
+        try:
+            sys.stdout.write(json.dumps(msg) + "\n")
+            sys.stdout.flush()
+        except OSError:  # Claude closed its end (the turn ended; Windows says EINVAL): nobody to answer
+            os._exit(0)  # from any thread, and without Python's own flush at exit failing on the same pipe
 
 
 def call(rid, params: dict):
