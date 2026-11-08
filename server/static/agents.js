@@ -47,7 +47,11 @@ async function ckSummary() {
   const worst = {}; // per agent its fullest usage window over the pcs
   for (const m of ck.machines) for (const [a, ag] of Object.entries(m.agents || {})) {
     live += (ag.workers || []).filter((w) => w.status === "running").length + (ag.sessions || []).filter((s) => !s.worker && now - s.at < 600).length;
-    if (ag.limit != null && ag.resets > now && (!worst[a] || ag.limit > worst[a].limit)) worst[a] = { ...ag, agent: a, label: m.label };
+    if (ag.limit == null || !(ag.resets > now)) continue;
+    const had = worst[a], wins = [...(had?.windows || []), ...(ag.windows || [])];
+    // usage belongs to the account, not the pc: per window the fullest reading of any pc (one with an older plugin sends none)
+    const merged = Object.values(wins.reduce((by, w) => ((!by[w[1]] || w[0] > by[w[1]][0]) && (by[w[1]] = w), by), {}));
+    worst[a] = { ...(had && had.limit >= ag.limit ? had : { ...ag, agent: a, label: m.label }), windows: merged };
   }
   $("ck-live-n").textContent = live; $("ck-live").classList.toggle("on", live > 0);
   // one chip per agent with a known limit, each window: "Claude 5h 12% · 7d 82%"; amber from 80%, red from 95% (the
@@ -56,7 +60,7 @@ async function ckSummary() {
   const chips = Object.values(worst).sort((a, b) => b.limit - a.limit).map((w) => {
     const c = el("span", `chip${w.limit >= 95 ? " bad" : w.limit >= 80 ? " warn" : ""}`, `${(AGENT_NAME[w.agent] || w.agent).replace(" Code", "")} ${usageText(w)}`);
     const wins = usageWindows(w).length ? usageWindows(w) : [[w.limit, "limit", w.resets]];
-    c.title = `${AGENT_NAME[w.agent] || w.agent} on ${w.label}, usage limit used:\n` + wins.map(([p, n, r]) => `${n}: ${Math.round(p)}%${r ? `, resets ${when(r)}` : ""}`).join("\n");
+    c.title = `${AGENT_NAME[w.agent] || w.agent}, usage limit used:\n` + wins.map(([p, n, r]) => `${n}: ${Math.round(p)}%${r ? `, resets ${when(r)}` : ""}`).join("\n");
     return c;
   });
   $("ck-resets").replaceChildren(...chips); $("ck-resets").hidden = !chips.length;
