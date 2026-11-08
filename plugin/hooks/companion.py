@@ -1919,8 +1919,8 @@ AGENT_UPDATE_EVERY = 86400
 
 
 def update_agents() -> list:
-    """Each agent here with its own update command (`claude update`, `codex update`, `agy update`): a running session
-    stays on its version until its next start. Returns the failures, which also stand in Activity."""
+    """Each agent here with its own update command (`claude update`, `codex update`, `agy update`), then its knowledge
+    plugin: a running session stays on its version until its next start. Returns the failures, which also stand in Activity."""
     failed = []
     for a, (name, _) in AGENTS.items():
         if not (exe := shutil.which(a)):
@@ -1933,7 +1933,8 @@ def update_agents() -> list:
         log("sync" if ok else "error", f"{name}: {'its update command ran' if ok else 'the update failed'}", out)
         if not ok:
             failed.append(f"{name}: {out}")
-    return failed
+    # the plugin's own check runs only at an agent's session start, so a Codex or agy that is seldom started by hand stays behind
+    return failed + update_plugins()
 
 
 def agents_update_due(st: dict, ws: dict, now: float) -> bool:
