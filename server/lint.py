@@ -482,7 +482,7 @@ if __name__ == "__main__":  # self-check
     assert query_coverage("welk IP heeft de NAS BMC", "bmc van de nas: 10.0.0.12 ip") == 1.0
     assert query_coverage("waarom bevriest de NAS", "nas bevriezen dinsdag") == 1.0  # prefix: bevri
     assert query_coverage("hoe werkt de Nest thermostaat", "honeywell en hue") == 0.0 and query_coverage("hoe is het", "") == 1.0
-    assert query_coverage("hoe draait de tweede PA", "de pa van linda") == 1.0  # ordinal ignored, acronym counted
+    assert query_coverage("hoe draait de tweede PA", "de pa van het gezin") == 1.0  # ordinal ignored, acronym counted
     assert query_coverage("hoe draait de tweede PA", "een paar dingen") == 0.0  # whole word: "paar" is no PA
     t = lint({**files, "trade-memory/MEMORY.md": "- [X](x.md) — y\n"}, today=date(2026, 10, 18), mem="trade-memory")
     assert t["index_points_to_missing_file"] == ["MEMORY.md → x.md"] and not t["unprocessed_source"], t
