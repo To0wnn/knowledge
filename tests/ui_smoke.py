@@ -701,10 +701,13 @@ async def shell(browser, devices, secret: str) -> None:
     # A pc of yours whose token has remote control off stays with yours (read-only), never under other people's pcs.
     split = await pg.evaluate("""() => { const was = machinesRes, now = Date.now() / 1000;
       const pc = (id, label, mine, own) => ({id, label, mine, own, online: true, at: now, tokens: [label], actions: [], agents: {claude: {plugin: '1.0.0', trusted: true, workers: []}}, companion: {version: '1.0.0', agents: ['claude'], tools: {}}});
-      machinesRes = {machines: [pc('a'.repeat(16), 'mine-off', true, false), pc('b'.repeat(16), 'friend', false, false)], stuck: []}; drawMachines();
+      const gone = (id) => ({...pc(id, 'test-vm', true, true), online: false});
+      machinesRes = {machines: [pc('a'.repeat(16), 'mine-off', true, false), pc('b'.repeat(16), 'friend', false, false), gone('1'.repeat(16)), gone('2'.repeat(16)), gone('3'.repeat(16))], stuck: []}; drawMachines();
       const theirs = [...document.querySelectorAll('.mx-theirs .mx-pc h3')].map((h) => h.textContent), yours = [...document.querySelectorAll('#machines > .mx-wrap .mx-pc h3')].map((h) => h.textContent);
-      machinesRes = was; drawMachines(); return {theirs, yours}; }""")
+      const lines = [...document.querySelectorAll('#machines > .mx-offline .mx-line')].map((l) => l.querySelector('strong').textContent);
+      machinesRes = was; drawMachines(); return {theirs, yours, lines}; }""")
     check(split["yours"] == ["mine-off"] and split["theirs"] == ["friend"], f"Machines: a pc of yours with remote control off stays with yours {split}")
+    check(split["lines"] == [" test-vm 3 reports"], f"Machines: a pc set up again (same name and token) is one offline line with its reports counted {split}")
     words = await pg.evaluate("""() => { const now = Date.now() / 1000; return [workerNeedsYou({online: true}, {status: 'failed', owner_stopped: true}), workerNeedsYou({online: true}, {status: 'failed'})]; }""")
     check(words == [False, True], f"Machines: a worker stopped by its owner does not need you, one that failed does {words}")
     await route(pg, "#/machines?view=folders", ms=1500)  # Link a folder sits under Folders, per project
