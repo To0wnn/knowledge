@@ -3272,6 +3272,21 @@ def main():
         # never does more than its owner may do right now.
         assert admin("/ui/api/admin/user", {"username": "erin", "projects": {"trade": "write"}})[0] == 200
         er = user("erin")
+        # Impersonation: admin views as another user; non-admins cannot impersonate or forge cookies.
+        assert admin("/ui/api/admin/impersonate", {"user": "erin"}, er)[0] == 403
+        st, hdr, body = admin("/ui/api/admin/impersonate", {"user": "erin"}, ck)
+        assert st == 200 and json.loads(body)["impersonating"] == "erin"
+        imp_cookie = hdr.get("set-cookie", "").split(";")[0]
+        imp_headers = {**ck, "Cookie": imp_cookie}
+        me_imp = json.loads(raw("GET", "/ui/api/me", headers=imp_headers)[2])
+        assert me_imp["user"] == "erin" and not me_imp["admin"] and me_imp["impersonator"] == "alice"
+        assert me_imp["projects"] == ["trade"] and "homelab" not in me_imp["projects"]
+        assert admin("/ui/api/admin/settings", {"similar_hint": 0.8}, imp_headers)[0] == 403
+        assert "impersonator" not in json.loads(raw("GET", "/ui/api/me", headers={**er, "Cookie": imp_cookie})[2])
+        st, _, body = admin("/ui/api/admin/impersonate", {"stop": True}, imp_headers)
+        assert st == 200 and json.loads(body)["user"] == "alice"
+        st, rhdr, _ = raw("GET", "/ui/impersonate/stop", headers=imp_headers)
+        assert st == 303 and rhdr.get("location") == "/ui/admin"
         st, _, res = admin("/ui/api/admin/token", {"name": "laptop", "write": True, "roots": ["trade", "trade-memory"]}, er)
         assert st == 200 and json.loads(res)["name"] == "erin.laptop", res
         et = json.loads(res)["token"]

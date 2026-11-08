@@ -3199,6 +3199,7 @@ def proxied_user(headers: dict) -> str:
 
 
 SESSION_COOKIE, COOKIE_DAYS = "kn_session", 30
+IMPERSONATE_COOKIE = "kn_impersonate"
 _login_fails: dict[str, list[float]] = {}  # client address -> times of its recent wrong passwords
 
 
@@ -3217,6 +3218,30 @@ def session_key() -> bytes:
 def session_value(user: str, expires: int) -> str:
     body = f"{user}.{expires}"
     return f"{body}.{hmac.new(session_key(), body.encode(), hashlib.sha256).hexdigest()}"
+
+
+def impersonate_value(admin: str, user: str, expires: int) -> str:
+    body = f"{admin}:{user}:{expires}"
+    return f"{body}.{hmac.new(session_key(), body.encode(), hashlib.sha256).hexdigest()}"
+
+
+def impersonated_user(headers: dict, real_user: str) -> str:
+    """The user name an admin is viewing as (kn_impersonate cookie), or ''. Only valid when real_user is in ADMINS."""
+    if not real_user or real_user not in ADMINS:
+        return ""
+    cookies = {k.strip(): v for k, _, v in (c.partition("=") for c in headers.get(b"cookie", b"").decode(errors="replace").split(";"))}
+    value = cookies.get(IMPERSONATE_COOKIE, "")
+    if not value or "." not in value:
+        return ""
+    body, _, sig = value.rpartition(".")
+    parts = body.split(":")
+    if len(parts) != 3:
+        return ""
+    admin, target, expires = parts
+    if admin != real_user or not (expires.isdigit() and int(expires) > time.time()):
+        return ""
+    expected = hmac.new(session_key(), body.encode(), hashlib.sha256).hexdigest()
+    return target if hmac.compare_digest(sig.encode(), expected.encode()) else ""
 
 
 def cookie_user(headers: dict) -> str:
@@ -3425,26 +3450,41 @@ class BearerAuth:
         if path == "/ui/logout":  # ends a password session; behind Authentik its own sign-out follows
             resp = RedirectResponse("/outpost.goauthentik.io/sign_out" if proxied_user(headers) and PROXY_USER_HEADER == "x-authentik-username" else "/ui", status_code=303)
             resp.delete_cookie(SESSION_COOKIE, path="/")
+            if headers.get(b"cookie") and IMPERSONATE_COOKIE.encode() in headers.get(b"cookie"):
+                resp.delete_cookie(IMPERSONATE_COOKIE, path="/")
+            return await resp(scope, receive, send)
+        if path == "/ui/impersonate/stop":  # stop viewing as another person and return to admin
+            resp = RedirectResponse("/ui/admin", status_code=303)
+            resp.delete_cookie(IMPERSONATE_COOKIE, path="/")
             return await resp(scope, receive, send)
         if path == "/ui/login" and scope["method"] == "POST" and UI_PASSWORD:
             return await self.login(scope, receive, send, headers)
-        user = proxied_user(headers) or cookie_user(headers)
-        if not user and UI_PASSWORD and not api:
+        real_user = proxied_user(headers) or cookie_user(headers)
+        if not real_user and UI_PASSWORD and not api:
             return await HTMLResponse(LOGIN.format(msg=""), 401, headers={"Content-Security-Policy": CSP})(scope, receive, send)
-        if not user:
+        if not real_user:
             msg = "Sign in through the reverse proxy in front of this server, or set KNOWLEDGE_UI_PASSWORD (see the README)."
             resp = JSONResponse({"error": msg}, status_code=401) if api else HTMLResponse(NO_ACCESS.format(msg=msg), 401)
             return await resp(scope, receive, send)
         if scope["method"] != "GET" and headers.get(b"x-knowledge-ui") != b"1":
             return await JSONResponse({"error": "missing X-Knowledge-UI header"}, status_code=403)(scope, receive, send)
+        target = impersonated_user(headers, real_user)
+        user = target or real_user
         dev = user_device(user)
-        if not dev:
-            if user not in read_json(USERS_FILE, {}):
-                async with _admin_lock:  # the admin page writes users.json under the same lock
-                    await asyncio.to_thread(note_user, user)
-            msg = f"Signed in as {html.escape(user)}, but no project is shared with you yet. Ask the admin."
-            resp = JSONResponse({"error": msg}, status_code=403) if api else HTMLResponse(NO_ACCESS.format(msg=msg), 403)
-            return await resp(scope, receive, send)
+        if target:
+            if not dev:
+                msg = f"Viewing as {html.escape(user)}, but no project is shared with them yet. <p><a class='btn small' href='/ui/impersonate/stop'>Stop viewing as {html.escape(user)}</a></p>"
+                resp = JSONResponse({"error": f"Signed in as {user}, but no project is shared with you yet."}, status_code=403) if api else HTMLResponse(NO_ACCESS.format(msg=msg), 403)
+                return await resp(scope, receive, send)
+            dev = {**dev, "impersonator": real_user}
+        else:
+            if not dev:
+                if user not in read_json(USERS_FILE, {}):
+                    async with _admin_lock:  # the admin page writes users.json under the same lock
+                        await asyncio.to_thread(note_user, user)
+                msg = f"Signed in as {html.escape(user)}, but no project is shared with you yet. Ask the admin."
+                resp = JSONResponse({"error": msg}, status_code=403) if api else HTMLResponse(NO_ACCESS.format(msg=msg), 403)
+                return await resp(scope, receive, send)
         if path == "/":
             return await RedirectResponse("/ui", status_code=303)(scope, receive, send)
         device.set(dev)
@@ -4277,14 +4317,17 @@ async def ui_me(request: Request):
     # An empty built-in project (its folders absent on this installation) gets no tab, unless no tab would be left.
     projects = [p for p in seen if p not in BUILTIN_PROJECTS or set(PROJECTS[p]) & used] or seen[:1]
     labels = read_json(LABELS_FILE, {})
-    return JSONResponse({"user": dev.get("user"), "admin": bool(dev.get("admin")), "projects": projects,
-                         "labels": {p: labels[p] for p in projects if p in labels},
-                         "writable": [p for p in projects if wr is None or PROJECTS[p][1] in wr],
-                         "sections": list(kb_lint.STRUCTURE),  # a new memo's two sections in the server's language
-                         "prefs": read_json(PREFS_FILE, {}).get(dev.get("user") or "", {}),
-                         # the agent views only when one of this person's tokens may be steered from here
-                         "agents": any(own_token(cfg, dev) for cfg in read_json(TOKENS_FILE, {}).values()),
-                         "stt": bool(os.environ.get("KNOWLEDGE_STT_URL"))})  # the page shows the microphone only then
+    res = {"user": dev.get("user"), "admin": bool(dev.get("admin")), "projects": projects,
+           "labels": {p: labels[p] for p in projects if p in labels},
+           "writable": [p for p in projects if wr is None or PROJECTS[p][1] in wr],
+           "sections": list(kb_lint.STRUCTURE),  # a new memo's two sections in the server's language
+           "prefs": read_json(PREFS_FILE, {}).get(dev.get("user") or "", {}),
+           # the agent views only when one of this person's tokens may be steered from here
+           "agents": any(own_token(cfg, dev) for cfg in read_json(TOKENS_FILE, {}).values()),
+           "stt": bool(os.environ.get("KNOWLEDGE_STT_URL"))}
+    if dev.get("impersonator"):
+        res["impersonator"] = dev["impersonator"]
+    return JSONResponse(res)
 
 
 STT_TYPES = {"audio/webm": "webm", "audio/ogg": "ogg", "audio/mp4": "m4a", "audio/mpeg": "mp3", "audio/wav": "wav", "audio/x-wav": "wav"}
@@ -4979,6 +5022,39 @@ async def ui_admin_state(request: Request, _):
         "system": await asyncio.to_thread(system_state),
         "external": read_json(EXTERNAL_FILE, {}),
     })
+
+
+@server.custom_route("/ui/api/admin/impersonate", methods=["POST"])
+async def ui_admin_impersonate(request: Request):
+    """Admin starts or stops viewing the knowledge web UI as another person."""
+    dev = device.get()
+    real_user = dev.get("impersonator") or (dev.get("user") if dev.get("admin") else "")
+    if not real_user or real_user not in ADMINS:
+        return JSONResponse({"error": "admins only"}, status_code=403)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if body.get("stop"):
+        audit("stop-impersonate", real_user)
+        resp = JSONResponse({"ok": True, "user": real_user})
+        resp.delete_cookie(IMPERSONATE_COOKIE, path="/")
+        return resp
+    target = str(body.get("user", "")).strip()
+    if not target or not re.fullmatch(r"[\w.@+-]{1,150}", target):
+        return JSONResponse({"error": "invalid username"}, status_code=400)
+    if target == real_user:
+        audit("stop-impersonate", real_user)
+        resp = JSONResponse({"ok": True, "user": real_user})
+        resp.delete_cookie(IMPERSONATE_COOKIE, path="/")
+        return resp
+    audit("impersonate", f"{real_user} -> {target}")
+    expires = int(time.time()) + 8 * 3600
+    val = impersonate_value(real_user, target, expires)
+    resp = JSONResponse({"ok": True, "impersonating": target})
+    https = request.headers.get("x-forwarded-proto") == "https" or request.url.scheme == "https"
+    resp.set_cookie(IMPERSONATE_COOKIE, val, max_age=8 * 3600, path="/", httponly=True, samesite="lax", secure=https)
+    return resp
 
 
 @server.custom_route("/ui/api/admin/user", methods=["POST"])

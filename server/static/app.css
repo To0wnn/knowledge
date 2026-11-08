@@ -1190,6 +1190,12 @@ dialog.sheet { position: fixed; inset: auto 0 0 0; width: 100%; max-width: none;
 .toast.bad { border-color: var(--bad); border-left-width: 4px; }
 @media (max-width: 699.98px) { .toasts { bottom: calc(72px + env(safe-area-inset-bottom)); } }
 
+/* Impersonation banner: sticky at the top when an admin views as another user */
+.impersonate-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 16px; background: var(--amber); color: var(--on-amber); font-size: 13px; font-weight: 500; position: sticky; top: 0; z-index: 50; box-shadow: var(--shadow); }
+.impersonate-bar strong { font-weight: 700; }
+.impersonate-bar .btn { background: var(--on-amber); color: var(--amber); border: none; font-weight: 600; cursor: pointer; }
+.impersonate-bar .btn:hover { opacity: .9; }
+
 /* Command palette (static/palette.js): a dialog near the top; on a phone a full-screen sheet. */
 dialog.palette { width: min(640px, calc(100vw - 24px)); margin: 12vh auto auto; padding: 0; overflow: hidden; }
 .pal-box { display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--line); padding-right: 10px; }

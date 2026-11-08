@@ -119,8 +119,60 @@ function navMe(me) {
   const avatar = document.createElement("span"), name = document.createElement("span");
   avatar.className = "avatar"; avatar.textContent = (me.user || "?")[0].toUpperCase(); name.className = "label"; name.textContent = me.user;
   navEl("who").replaceChildren(avatar, name);
-  navEl("who").title = `Signed in as ${me.user}`; navEl("who-more").textContent = me.user;
+  navEl("who").title = me.impersonator ? `Viewing as ${me.user} (impersonated by ${me.impersonator})` : `Signed in as ${me.user}`;
+  navEl("who-more").textContent = me.user;
   if (!me.admin) for (const a of document.querySelectorAll(".nav-health")) a.hidden = true;
+  let bar = document.getElementById("impersonate-bar");
+  if (me.impersonator) {
+    if (!bar) {
+      bar = document.createElement("aside");
+      bar.id = "impersonate-bar";
+      bar.className = "impersonate-bar";
+      const target = document.querySelector(".main, .page-body") || document.body;
+      target.prepend(bar);
+    }
+    bar.replaceChildren();
+    const txt = document.createElement("span");
+    txt.className = "impersonate-text";
+    txt.append("Viewing as ");
+    const strong = document.createElement("strong");
+    strong.textContent = me.user;
+    txt.append(strong, ` (impersonated by ${me.impersonator})`);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn small";
+    btn.textContent = "Stop";
+    btn.onclick = async () => {
+      try {
+        await fetch("/ui/api/admin/impersonate", {
+          method: "POST", credentials: "same-origin",
+          headers: { "X-Knowledge-UI": "1", "Content-Type": "application/json" },
+          body: JSON.stringify({ stop: true })
+        });
+        location.href = "/ui/admin";
+      } catch {
+        location.href = "/ui/impersonate/stop";
+      }
+    };
+    bar.append(txt, btn);
+    bar.hidden = false;
+  } else if (bar) {
+    bar.hidden = true;
+  }
+  let stopLink = document.getElementById("impersonate-stop-link");
+  if (me.impersonator) {
+    if (!stopLink) {
+      stopLink = document.createElement("a");
+      stopLink.id = "impersonate-stop-link";
+      stopLink.href = "/ui/impersonate/stop";
+      const menuList = document.querySelector("#user-menu .menu-list");
+      if (menuList) menuList.prepend(stopLink);
+    }
+    stopLink.textContent = `Stop viewing as ${me.user}`;
+    stopLink.hidden = false;
+  } else if (stopLink) {
+    stopLink.hidden = true;
+  }
   if (me.projects && me.projects.length) {
     for (const s of document.querySelectorAll(".project-pick")) {
       s.replaceChildren(...[...me.projects, "all"].map((p) => {

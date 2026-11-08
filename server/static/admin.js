@@ -223,7 +223,20 @@ function renderUsers() {
         }, 700);
       };
     }
-    const td = el("td", "actions"), del = el("button", "btn small danger", "Remove");
+    const td = el("td", "actions");
+    if (state.admin) {
+      const imp = el("button", "btn small quiet", "View as");
+      imp.setAttribute("aria-label", `View as ${name}`);
+      imp.title = `View the knowledge server as ${name}`;
+      imp.onclick = async () => {
+        try {
+          await api("/ui/api/admin/impersonate", { user: name });
+          location.href = "/ui";
+        } catch (e) { showError(e); }
+      };
+      td.append(imp);
+    }
+    const del = el("button", "btn small danger", "Remove");
     del.setAttribute("aria-label", `Remove ${name}`);
     del.onclick = () => confirm(`Remove ${name}? They lose access right away.`) && run(() => api("/ui/api/admin/user", { username: name, delete: true }), del);
     td.append(del); tr.append(td);
