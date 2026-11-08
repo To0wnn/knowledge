@@ -716,6 +716,11 @@ body.admin-page { display: block; overflow-y: auto; }
   .ck-sec:not(.ck-sec-needs):not(.ck-sec-review) .ck-item:not(:hover):not(:focus-within):not(.hit) > .ck-item-acts { display: none; }
 }
 .ck-snooze .menu-list { min-width: 180px; }
+/* the row's ⋯ sits on the left of its actions, so its menu opens to the right; the floating hover bar sits right and opens left */
+.ck-rowmore .menu-list { left: 0; right: auto; transform-origin: top left; }
+@media (hover: hover) and (min-width: 700px) {
+  .ck-sec:not(.ck-sec-needs):not(.ck-sec-review) .ck-item > .ck-item-acts .ck-rowmore .menu-list { left: auto; right: 0; transform-origin: top right; }
+}
 .ck-reply { display: flex; padding: 0 8px 8px; }
 .ck-reply input { flex: 1; min-width: 0; }
 .ck-subs { list-style: none; margin: 0 0 4px; padding: 0; }
