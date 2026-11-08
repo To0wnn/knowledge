@@ -1417,7 +1417,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         # A tool add-on: installed from the pc's own manifest (a .cmd on Windows, a step per agent), checked, listed, removed.
         tool_mark = home / "tool-mark.txt"
         put = lambda text: [sys.executable, "-c", f"open({str(tool_mark)!r}, 'a').write({text!r})"]
-        (tools_dir / "fixture.json").write_text(json.dumps({"name": "Fixture", "description": "a test tool", "needs": ["kntool"],
+        (tools_dir / "fixture.json").write_text(json.dumps({"name": "Fixture", "kind": "program", "description": "a test tool", "needs": ["kntool"],
             "install": [{"run": ["kntool"]}, {"run": put("C"), "agent": "claude"}],
             "check": [{"run": [sys.executable, "-c", "import json, sys; print(json.dumps({'checks': [{'name': 'engine', 'ok': False}]})); sys.exit(1)"], "info": True}],
             "version": {"run": [sys.executable, "-c", "print('1.0.0')"]}, "remove": [{"run": put("R")}]}), encoding="utf-8")

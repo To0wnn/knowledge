@@ -32,7 +32,7 @@ Moved from the README; [back to the README](../README.md).
   straight to disk gets the same message as a notice at that device's next turn. A line that waits for approval
   says so in the write's answer. Searches in the web UI that find nothing (exact and by meaning, where the person
   stopped typing) are logged as gaps like the agents' searches. Deleted memos and docs are listed with
-  `GET /ui/api/trash` and go back with `POST /ui/api/trash/restore` (owner or admin, never over a file that exists). Machines: workers, sessions, hook errors and remote actions per pc. The project
+  `GET /ui/api/trash` and go back with `POST /ui/api/trash/restore` (owner or admin, never over a file that exists). Machines: one card per online pc with what needs you on top (hooks not trusted, a hook error or a failed action in the last day, a tool that needs attention) and tabs Workers, Agents, Tools (each add-on labelled Skill or Program, from the manifest's `kind`), Folders and Activity (remote actions in words); a worker reads as working, done, stopped by you (the companion reports `owner_stopped`; not in Needs you, on the board either) or stopped with a problem, and one with unmerged commits gets Review, which opens its review card; the picked tab and an opened offline pc survive the refresh every 20 s, which waits while you type in a field or have a menu open. The project
   picker scopes only the knowledge views. Under Tokens, an admin can undo what one device changed in a time window (`POST /ui/api/admin/undo-device {device, hours, apply, paths}`): first the list, per file back to the version before or, for a file it made, to the trash; a file someone else changed since is left alone. An admin page for tokens, people and projects: one section at a time from a
   sticky tab bar (arrow keys move through it; on a phone it scrolls sideways), its hash in the URL (`/ui/admin#tokens`,
   `#settings`); System's parts (background jobs, index, config, audit log, searches without hits, lessons) fold, each
@@ -82,7 +82,8 @@ One small set of controls in `server/static/app.css` ("Controls"), shared by the
 **Layout that follows the content:** the map takes the whole page with the topic list floating over it, folded to its colour dots until you point at it, and a chosen note's card opens as a column beside it; the Notes
 overview has no right column, what changed lately comes first and then the notes per topic; a project without tasks
 shows the open tasks of your other projects instead of an empty page (the sidebar count follows); on Machines offline
-pcs come last, as one line with their last report folded (open when something in it needs you or an action waits), and Update plugin is a button only on an online pc with an
+pcs come last, one line each with their last report folded, and older reports under a name that came back under a new id
+sit in one fold with Forget them; Update plugin is a button only on an online pc with an
 older plugin than another of your pcs reports (otherwise in the ⋯ menu); the Deleted section of Changes shows only with
 something in it; an agent's prose stops at 78 characters while its code and tool lines keep the whole width.
 

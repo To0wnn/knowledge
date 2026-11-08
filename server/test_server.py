@@ -628,6 +628,14 @@ def machines_contract(tmp, ck, fr, raw, er, et, heard):
                                                   "started": time.time() - 9 * 86400, "ended": time.time() - 8 * 86400, "branch": "task/MC-0"}]}
     assert http("POST", "/machine/report", old, token=fr, headers=pc)[0] == 200
     assert any("MC-0" in i and "task/MC-0 not merged" in i for i in json.loads(http("GET", "/lint")[1]).get("worker_unmerged", [])), http("GET", "/lint")[1][:500]
+    # a worker its owner stopped from the page ended "failed": it says so and does not wait in Needs you
+    stopped = {**rep, "limitWait": [], "workers": [*rep["workers"], {"id": "MC-5", "project": "garden", "agent": "codex", "status": "failed",
+                                                                     "started": time.time() - 600, "ended": time.time() - 60, "owner_stopped": True}]}
+    assert http("POST", "/machine/report", stopped, token=fr, headers=pc)[0] == 200
+    got = next(w for w in json.loads(raw("GET", "/ui/api/machines", headers=ck)[2])["machines"] if w["id"] == "cccccccccccccccc")["agents"]["codex"]["workers"]
+    assert next(w for w in got if w["id"] == "MC-5")["owner_stopped"] is True and next(w for w in got if w["id"] == "MC-1")["owner_stopped"] is False, got
+    card = next(i for i in json.loads(raw("GET", "/ui/api/board", headers=ck)[2])["items"] if i["kind"] == "worker" and i["id"] == "MC-5")
+    assert card["col"] != "needs" and card["line"].startswith("stopped by you"), card
     http("POST", "/machine/report", rep, token=fr, headers=pc)
     # A risky YOLO action: flagged once per session and kind, never refused.
     flag = lambda kind: json.loads(http("POST", "/machine/flag", {"agent": "codex", "session": "w1", "kind": kind, "detail": "git push --force"}, token=fr, headers=pc)[1])
@@ -870,10 +878,11 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     for x in json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"]:  # taken, or the next test finds it
         http("POST", "/machine/actions/result", {"id": x["id"], "status": "done", "result": "ok"}, token=fr, headers=pc)
     tools = {"rea": {"name": "REA", "homepage": "javascript:alert(1)", "installed": True, "ok": "yes", "version": "6.8.0", "detail": "x" * 999,
-                     "at": float("inf"), "busy": "rm -rf"},
-             "Bad Id": {"name": "no"}}
+                     "at": float("inf"), "busy": "rm -rf", "kind": "program"},
+             "slop": {"name": "Slop", "kind": "<b>"}, "Bad Id": {"name": "no"}}
     assert http("POST", "/machine/report", {**mrep, "tools": tools}, token=fr, headers=pc)[0] == 200
     got = [a for a in json.loads(ui("/ui/api/machines")[2])["machines"] if a["id"] == mid][0]["companion"]["tools"]
+    assert got.pop("slop")["kind"] == "" and got["rea"]["kind"] == "program", got  # the page's label: skill or program, nothing else
     assert list(got) == ["rea"] and got["rea"]["homepage"] == "" and got["rea"]["ok"] is None and got["rea"]["installed"] is True \
         and len(got["rea"]["detail"]) == 300 and got["rea"]["version"] == "6.8.0" and got["rea"]["at"] is None and got["rea"]["busy"] == "", got
     failed = {"rea": {"name": "REA", "installed": True, "error": "fetch: jdk: HTTP Error 503"}}

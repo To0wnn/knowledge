@@ -1569,7 +1569,7 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
                      "current": model_settings.current(a)}
                        for a in AGENTS if installed(a)},
             "workers": [{**{k: w.get(k) for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open", "why", "chat", "title")},
-                         "checkpoint": bool(w.get("checkpoint")), "merged": w["status"] == "merged", "git": gits.get(k),
+                         "checkpoint": bool(w.get("checkpoint")), "merged": w["status"] == "merged", "owner_stopped": bool(w.get("owner_stopped")), "git": gits.get(k),
                          **({"progress": progress(w, gits.get(k))} if w["status"] == "running" else {}),
                          **({"review": r} if (r := bounded(w.get("repo"), lambda w=w: review(w, now))) else {})} for k, w in sorted(ws.items(), key=lambda kw: -(kw[1].get("started") or 0)) if not w.get("archived")],  # newest first: the server keeps 40
             "tools": tool_state(), "limitWait": wait, "waiting": waiting or {}, "asks": terminal_asks(now), "folders": links, "chats": chat_gits, "chatReviews": chat_reviews(now, chat_gits), "projects": load("state.json", {}).get("projects", [])}
@@ -1629,7 +1629,7 @@ def update_tools():
 def tool_state() -> dict:
     """Every tool this plugin knows, with what the last install, check or remove here found: the page's Tools list."""
     done = load("tools.json", {})
-    return {tid: {"name": m["name"], "description": m.get("description", ""), "homepage": m.get("homepage", ""),
+    return {tid: {"name": m["name"], "kind": m.get("kind", ""), "description": m.get("description", ""), "homepage": m.get("homepage", ""),
                   **{k: done.get(tid, {}).get(k) for k in ("installed", "ok", "version", "detail", "error", "busy", "at")}}
             for tid, m in tools.catalog().items()}
 

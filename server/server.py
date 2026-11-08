@@ -6174,14 +6174,14 @@ def board_items() -> list[dict]:
                 lost = st == "running" and not r["online"]  # its pc went offline: nobody knows whether it still runs
                 seen = (w.get("progress") or {}).get("seen", 0) if st == "running" and not lost and QUIET_MINUTES else 0
                 quiet = seen if seen and now - seen >= QUIET_MINUTES * 60 else 0  # 0: an older companion sends no time
-                col = ("needs" if lost or quiet else "running" if st == "running" else "needs" if st == "failed" and now - ended < BOARD_FAILED
+                col = ("needs" if lost or quiet else "running" if st == "running" else "needs" if st == "failed" and not w.get("owner_stopped") and now - ended < BOARD_FAILED
                        else "done" if st in ("finished", "stopped", "merged", "failed") and now - ended < BOARD_DONE else "")
                 if col:
                     items.append({**base, "kind": "worker", "col": col, "id": w.get("id"), "agent": a, "project": w.get("project"),
                                   "key": f"worker:{r['id']}/{w.get('project')}/{w.get('id')}", "sig": f"{st}:{ended}" + (":offline" if lost else f":quiet:{quiet}" if quiet else ""), "quiet": quiet,
                                   "title": w.get("id"), "at": w.get("started") if st == "running" else ended,
                                   "line": (f"pc offline since {since(r['at'])}" if lost else f"no output since {since(quiet)}: still working, or stuck" if quiet
-                                           else f"worker {st}" + (f": {w['why']}" if w.get("why") else ""))
+                                           else "stopped by you" if w.get("owner_stopped") else f"worker {st}" + (f": {w['why']}" if w.get("why") else ""))
                                           + (f" · {w['branch']}" if w.get("branch") else ""),
                                   "offline_since": r["at"] if lost else None, "can_stop": st == "running" and r["online"],
                                   "can_restart": st in ("failed", "stopped", "finished") and r["online"],
@@ -7351,7 +7351,7 @@ def report_tools(t) -> dict:
     if not isinstance(t, dict):
         return {}
     flag = lambda v: v if isinstance(v, bool) else None
-    return {k: {"name": str(v.get("name") or k)[:60], "description": str(v.get("description") or "")[:300],
+    return {k: {"name": str(v.get("name") or k)[:60], "kind": v["kind"] if v.get("kind") in ("skill", "program") else "", "description": str(v.get("description") or "")[:300],
                 "homepage": h if (h := str(v.get("homepage") or "")[:200]).startswith("https://") else "",
                 "installed": flag(v.get("installed")), "ok": flag(v.get("ok")), "version": str(v.get("version") or "")[:40],
                 "detail": redact(str(v.get("detail") or "")[:300]), "error": redact(str(v.get("error") or "")[:300]),
@@ -7389,6 +7389,7 @@ async def machine_report(request: Request):
                              for a, v in (b.get("agents") or {}).items() if a in AGENT_OWNERS and isinstance(v, dict)},
                   "workers": [{k: (w.get(k) if w.get(k) is None or isinstance(w.get(k), (int, float, bool)) else str(w[k])[:300])
                                for k in ("id", "project", "agent", "status", "started", "ended", "branch", "title", "yolo", "open", "checkpoint", "merged", "why", "chat")}
+                              | {"owner_stopped": w.get("owner_stopped") is True}  # stopped from the page, not failed
                               | {"git": git_pill(w.get("git")), "progress": worker_progress(w.get("progress")), "review": worker_review(w.get("review"))}
                               for w in (b.get("workers") or [])[:40] if isinstance(w, dict)],
                   "folders": {k: [{"path": str(f.get("path", ""))[:500], "project": str(f.get("project", ""))[:80]}

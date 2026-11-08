@@ -1,4 +1,5 @@
 {
+  "kind": "skill",
   "name": "No AI Slop",
   "description": "A writing skill: edits drafts into sharper, more human writing, or names the AI-slop patterns in a text.",
   "homepage": "https://github.com/petergyang/no-ai-slop",

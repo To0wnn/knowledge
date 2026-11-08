@@ -1,4 +1,5 @@
 {
+  "kind": "skill",
   "name": "ponytail",
   "description": "Lazy senior dev mode: the smallest change that fully solves the task (skills, commands and hooks).",
   "homepage": "https://github.com/DietrichGebert/ponytail",
