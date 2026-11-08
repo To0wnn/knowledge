@@ -900,9 +900,9 @@ elif name == "claude" and "--input-format" in args and os.environ.get("KNOWLEDGE
         return ""
 
     out({"type": "system", "subtype": "init", "session_id": sid})
+    cmds = [{"name": "fake-skill", "description": "A fake skill (user)", "argumentHint": "[what]"}, {"name": "context", "description": "Show context usage"}]
     while (m := inbox.get()) is not None:
         if m.get("type") == "control_request":  # an interrupt with no turn running: answered, nothing else
-            cmds = [{"name": "fake-skill", "description": "A fake skill (user)", "argumentHint": "[what]"}, {"name": "context", "description": "Show context usage"}]
             out({"type": "control_response", "response": {"subtype": "success", "request_id": m.get("request_id"),
                  **({"response": {"commands": cmds}} if m["request"].get("subtype") == "initialize" else {})}})
             continue
@@ -928,6 +928,9 @@ elif name == "claude" and "--input-format" in args and os.environ.get("KNOWLEDGE
                     continue
                 if x is None:
                     break
+                if x.get("type") == "control_request" and x["request"].get("subtype") == "initialize":  # answered, the turn goes on (2.1.319)
+                    out({"type": "control_response", "response": {"subtype": "success", "request_id": x.get("request_id"), "response": {"commands": cmds}}})
+                    continue
                 if x.get("type") == "control_request":
                     out({"type": "control_response", "response": {"subtype": "success", "request_id": x.get("request_id")}})
                     stopped = True
@@ -2073,6 +2076,9 @@ def chat_e2e(tok: str, tmp: Path):
             word = "PAUSE" if agent == "agy" else "SLOW"  # agy takes nothing into a running turn: one that just takes a while
             send(live, f"{word} across a restart")
             ok = running(live) and wait_for(lambda: any(c.get("chat") == live and c.get("stdin") == f"{word} across a restart" for c in recorded()), 20)
+            listed = home / ".knowledge" / "companion" / "commands.json"
+            if agent == "claude":  # the list this pc knew is gone: the chat that runs on lists it again
+                listed.unlink(missing_ok=True)
             restart_companion()
             if agent != "agy":
                 time.sleep(3)  # the new companion picked it up (its first poll), then the turn's end goes into the same agent
@@ -2084,6 +2090,9 @@ def chat_e2e(tok: str, tmp: Path):
                   and not any("lost" in e["text"] for e in chat(live)["events"] if e["kind"] == "error"),
                   f"live {agent}: a turn goes on across a companion restart, in the same agent", said()[-300:] + json.dumps(chat(live)["events"])[-500:]
                   + (home / "companion.log").read_text(errors="replace")[-800:])
+            if agent == "claude":
+                check(wait_for(lambda: listed.exists() and "fake-skill" in listed.read_text(encoding="utf-8"), 20),
+                      "live claude: a chat that runs on through a companion restart lists its slash commands again")
         # Approvals: a turn asks for a tool its allowed set lacks; the owner allows once, for the chat, or denies, from
         # the web UI; the agent goes on. One chat waits without an answer and times out (1 minute, the shortest setting).
         admin_ui = {**ui, "Content-Type": "application/json"}

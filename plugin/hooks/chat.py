@@ -1101,6 +1101,7 @@ class Live:
         self.rec = RUNNING[self.cid] = {"pid": self.p.pid, "ident": self.p.ident, "stop": False, "folder": self.folder,
                                         "st": self.st, "allow": s.get("allow", []), "live": True}
         self.resumed(s, in_lines(d, s["in"]))
+        threading.Thread(target=self.relist, daemon=True).start()  # off the restart: Codex waits for its answer
         log("chat", f"{AGENT_NAMES[self.agent]}: live chat picked up again after a companion restart", f"chat {self.cid}")
         return self
 
@@ -1112,6 +1113,14 @@ class Live:
 
     def started(self):
         threading.Thread(target=self.read, daemon=True).start()
+
+    def relist(self):
+        """A chat that ran on through a companion restart (a plugin update) lists its commands too: else only a chat
+        started after the update would (a second initialize is answered and the session goes on; Claude Code 2.1.319)."""
+        try:
+            self.list_commands()
+        except Exception:  # it ended meanwhile: the next chat lists them
+            pass
 
     def list_commands(self):
         """Its slash commands for the box (commands()): Claude Code answers an initialize request with them."""
