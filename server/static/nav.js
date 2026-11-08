@@ -81,6 +81,7 @@ const KEY_ACTIONS = [
   ["force", "Ctrl+Shift+Enter", "Force: stop the step, then this message", true],
   ["speak", "Ctrl+Space", "Speak", true],
   ["jump", "Ctrl+End", "Jump to the end of a chat", true],
+  ["find", "Ctrl+F", "Find in a chat (elsewhere the browser's own find)", true],
   ["edit", "Alt+E", "Edit a note"],
   ["save", "Ctrl+S", "Save a note"],
   ["fit", "Alt+F", "Fit the task map"],

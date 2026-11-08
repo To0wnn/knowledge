@@ -1952,6 +1952,24 @@ async def chat_tabs(browser, secret: str) -> None:
         picked = await tab.input_value("#ck-canvas .ck-form textarea")
         check(picked == "/verify-done " and await tab.locator("#ck-canvas .ck-cmds").is_hidden(), f"Chat tab: Enter picks the command into the box ({picked!r})")
     await tab.fill("#ck-canvas .ck-form textarea", "")
+    # Find in the chat: Ctrl+F in it opens its own bar (the whole chat, older parts too); Enter steps; Esc closes
+    await tab.focus("#ck-canvas .ck-form textarea")
+    await tab.keyboard.press("Control+f")
+    check(await tab.evaluate("document.activeElement === document.querySelector('#ck-canvas .ck-find input')"), "Chat tab: Ctrl+F opens the chat's own find bar")
+    # two hits of its own in this page's log (nothing is sent); one inside a folded block, which opens on its turn
+    await tab.evaluate("""(() => { const log = document.querySelector('#ck-canvas .ck-log'), d = document.createElement('details');
+      d.append(Object.assign(document.createElement('summary'), {textContent: 'a folded block'}), Object.assign(document.createElement('p'), {textContent: 'zqx north'}));
+      log.append(Object.assign(document.createElement('p'), {textContent: 'zqx south'}), d); })()""")
+    await tab.keyboard.type("zqx")
+    await tab.wait_for_function("document.querySelector('#ck-canvas .ck-find-n')?.textContent === '2 of 2'", timeout=5000)
+    opened = await tab.evaluate("document.querySelector('#ck-canvas .ck-log details').open")
+    await tab.keyboard.press("Enter")
+    n = await tab.text_content("#ck-canvas .ck-find-n")
+    marked = await tab.evaluate("CSS.highlights?.get('ck-find')?.size ?? -1")
+    check(n == "1 of 2" and marked == 2 and opened, f"Chat tab: find counts and marks the hits, opens a folded one, Enter goes round ({n}, {marked} marked, opened {opened})")
+    await tab.keyboard.press("Escape")
+    check(await tab.locator("#ck-canvas .ck-find").is_hidden() and await tab.evaluate("document.activeElement === document.querySelector('#ck-canvas .ck-form textarea')"),
+          "Chat tab: Esc closes the find bar, back in the text box")
     await tab.evaluate("document.activeElement.blur()")
     await tab.evaluate("window.closed_ = 0; window.close = () => { window.closed_++; }; 0")  # evaluate would call a function it gets back
     await tab.evaluate("(() => { const d = document.querySelector('#ck-canvas details.ck-model') || document.body.appendChild(Object.assign(document.createElement('details'), {className: 'menu'})); d.open = true; })()")

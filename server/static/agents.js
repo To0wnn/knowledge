@@ -231,6 +231,87 @@ function ckJump(card) {
   card.jump.hidden = !far;
   card.jumpText.textContent = card.fresh ? "↓ New messages" : "↓ Jump to bottom";
 }
+// Find in a chat (its button or Ctrl+F): the whole chat is loaded first (the older parts too), then every hit is marked
+// with the CSS Custom Highlight API (the log's own nodes stay as they are); Enter and Shift+Enter go from hit to hit, a
+// folded block with the hit opens, Esc closes. Outside a chat the key keeps the browser's own find.
+function ckFindBar() {
+  const bar = el("div", "ck-find"), q = el("input"), count = el("span", "muted ck-find-n"), prev = el("button", "btn icon small quiet", "↑"), next = el("button", "btn icon small quiet", "↓"), close = el("button", "btn icon small quiet", "×");
+  bar.hidden = true; bar.setAttribute("role", "search");
+  q.type = "search"; q.placeholder = "Find in this chat"; q.setAttribute("aria-label", "Find in this chat");
+  count.setAttribute("aria-live", "polite");
+  for (const [b, label] of [[prev, "Previous hit (Shift+Enter)"], [next, "Next hit (Enter)"], [close, "Close (Esc)"]]) { b.type = "button"; b.title = label; b.setAttribute("aria-label", label); }
+  bar.append(q, count, prev, next, close);
+  return { bar, q, count, prev, next, close, hits: [], at: -1 };
+}
+function ckFindOpen(card) {
+  const f = card.find;
+  if (!f.wired) { // once per card: the card exists by now
+    f.wired = true;
+    let timer = 0;
+    f.q.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(() => ckFindRun(card), 200); });
+    f.q.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); ckFindStep(card, e.shiftKey ? -1 : 1); }
+      else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); ckFindClose(card); }
+    });
+    f.prev.onclick = () => ckFindStep(card, -1); f.next.onclick = () => ckFindStep(card, 1); f.close.onclick = () => ckFindClose(card);
+    new MutationObserver(() => { f.dirty = true; }).observe(card.log, { childList: true, subtree: true, characterData: true });
+  }
+  f.bar.hidden = false; f.q.focus(); f.q.select();
+  if (f.q.value) ckFindRun(card);
+}
+function ckFindClose(card) {
+  const f = card.find;
+  f.bar.hidden = true; f.hits = []; f.at = -1; ckFindPaint(card);
+  (card.input && !card.form.hidden ? card.input : f.btn).focus();
+}
+async function ckFindRun(card, keep = false) {
+  const f = card.find, word = f.q.value.trim().toLowerCase(), seq = (f.seq = (f.seq || 0) + 1);
+  if (!word) { f.hits = []; f.at = -1; f.count.textContent = ""; return ckFindPaint(card); }
+  for (let i = 0; card.older && i < 200; i++) { // the whole chat: a hit in an older part must be found too
+    f.count.textContent = "Loading the earlier part…";
+    const was = card.first; await ckOlder(card);
+    if (seq !== f.seq) return; // typed on meanwhile
+    if (card.first === was) break; // it did not load (an error, said in a toast)
+  }
+  const hits = [], walk = document.createTreeWalker(card.log, NodeFilter.SHOW_TEXT);
+  for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+    if (n.parentElement?.closest(".ck-older")) continue;
+    const t = n.data.toLowerCase();
+    for (let i = t.indexOf(word); i >= 0; i = t.indexOf(word, i + word.length)) { const r = new Range(); r.setStart(n, i); r.setEnd(n, i + word.length); hits.push(r); }
+  }
+  const old = keep && f.hits[f.at];
+  f.hits = hits; f.dirty = false;
+  // start at the newest hit (the end of the chat is where you are); keep the place when the log grew
+  f.at = old ? Math.max(0, hits.findIndex((r) => r.startContainer === old.startContainer && r.startOffset === old.startOffset)) : hits.length - 1;
+  ckFindPaint(card, true);
+}
+function ckFindStep(card, by) {
+  const f = card.find;
+  if (f.dirty) return ckFindRun(card, true).then(() => ckFindStep(card, by)); // new output came in: count again first
+  if (!f.hits.length) return;
+  f.at = (f.at + by + f.hits.length) % f.hits.length;
+  ckFindPaint(card, true);
+}
+function ckFindPaint(card, show = false) {
+  const f = card.find, hl = window.CSS?.highlights;
+  f.count.textContent = f.q.value.trim() && !f.bar.hidden ? (f.hits.length ? `${f.at + 1} of ${f.hits.length}` : "No hits") : "";
+  if (hl) { // one set per page: this card's hits only while its bar is open
+    hl.set("ck-find", new Highlight(...f.hits)); hl.set("ck-find-now", new Highlight(...(f.hits[f.at] ? [f.hits[f.at]] : [])));
+  }
+  const r = f.hits[f.at];
+  if (!show || !r) return;
+  for (let d = r.startContainer.parentElement?.closest("details"); d && card.log.contains(d); d = d.parentElement?.closest("details")) d.open = true;
+  const box = r.getBoundingClientRect(), log = card.log.getBoundingClientRect();
+  if (box.top < log.top + 40 || box.bottom > log.bottom - 40) card.log.scrollTop += box.top - log.top - log.height / 3;
+  card.stickToBottom = false;
+}
+document.addEventListener("keydown", (e) => {
+  if (!keyHit(e, "find")) return;
+  const root = document.activeElement?.closest?.(".ck-card") || document.querySelector(".ck-card:hover") || (document.body.classList.contains("in-chat") ? ck.cards.get(ck.view)?.root : null);
+  const card = root && [...ck.cards.values()].find((c) => c.root === root);
+  if (!card?.find) return;
+  e.preventDefault(); ckFindOpen(card);
+});
 // The jump key (Ctrl+End): the chat you are in or point at. With no pill to press, the key keeps its own meaning (end of the text box).
 document.addEventListener("keydown", (e) => {
   if (!keyHit(e, "jump")) return;
@@ -552,7 +633,9 @@ function ckCard(meta) {
   const tok = el("span", "chip ck-tok"); tok.hidden = true;
   close.type = "button"; close.hidden = true;
   const headMeta = el("div", "ck-meta"); headMeta.append(git, tok); // its own line on a phone; inline on a wide screen
-  head.append(home, el("span", "ck-dot bd-only"), mark, title, headMeta, state, close, open, x);
+  const findBtn = el("button", "btn icon small quiet ck-findbtn"); findBtn.type = "button"; findBtn.innerHTML = CK_ICON.find;
+  findBtn.dataset.shortcut = "find"; findBtn.title = "Find in this chat ({key})"; findBtn.setAttribute("aria-label", "Find in this chat");
+  head.append(home, el("span", "ck-dot bd-only"), mark, title, headMeta, state, findBtn, close, open, x);
   const log = el("div", "ck-log"), form = el("form", "ck-form"), input = el("textarea"), btns = el("div", "ck-btns");
   log.setAttribute("aria-live", "polite"); log.setAttribute("role", "log");
   log.addEventListener("click", (e) => {
@@ -610,8 +693,10 @@ function ckCard(meta) {
   box.addEventListener("click", (e) => { if (e.target === box || e.target === bar || e.target === barL) input.focus(); });
   const asks = el("div", "ck-asks"); asks.hidden = true; asks.setAttribute("aria-live", "assertive");
   const subbar = el("div", "ck-subbar"); subbar.hidden = true; subbar.setAttribute("aria-label", "Subagents running now");
-  root.append(head, log, jump, subbar, asks, form);
-  const card = { meta: { ...meta }, x, openTab: open, root, name, where, git, state, log, jump, jumpText, asks, form, input, stop, send, note, picks, mark, close, tok, subbar, queueBtn, forceBtn, more, branch, filesBox: files, files: [], mode: "", pick: null, after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
+  const find = ckFindBar(); find.btn = findBtn;
+  root.append(head, find.bar, log, jump, subbar, asks, form);
+  const card = { meta: { ...meta }, x, openTab: open, root, find, name, where, git, state, log, jump, jumpText, asks, form, input, stop, send, note, picks, mark, close, tok, subbar, queueBtn, forceBtn, more, branch, filesBox: files, files: [], mode: "", pick: null, after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
+  findBtn.onclick = () => (find.bar.hidden ? ckFindOpen(card) : ckFindClose(card));
   open.onclick = (e) => { if (me.prefs?.grid_open === "here" && !e.ctrlKey && !e.metaKey && !e.shiftKey) { e.preventDefault(); ckShow(card.meta); } }; // Settings
   ckSendHints(card);
   x.onclick = () => {
@@ -646,7 +731,7 @@ function ckCard(meta) {
   const grow = () => { input.style.height = "auto"; input.style.height = `${Math.min(input.scrollHeight, 220)}px`; }; // the box grows with the text
   card.grow = grow;
   input.addEventListener("input", () => { grow(); ckPaint(card); ckDraftKeep(card); ckCmdShow(card); });
-  input.addEventListener("blur", () => setTimeout(() => ckCmdClose(card), 150)); // after a click on an item // typing turns Force back into Queue
+  input.addEventListener("blur", () => setTimeout(() => { if (document.activeElement !== input) ckCmdClose(card); }, 150)); // after a click on an item; back in the box by then, it stays // typing turns Force back into Queue
   queueMicrotask(() => { if (card.input.value === "") ckDraftShow(card); }); // after the caller's own setup of the card (a worker's meta, say)
   attachBtn.onclick = () => filePick.click();
   ckMic(card, mic);
@@ -1189,6 +1274,7 @@ async function ckPoll(card) {
   ckPaint(card);
 }
 const CK_ICON = { // inline, in the text colour
+  find: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg>',
   clip: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5l-8.6 8.6a5.5 5.5 0 0 1-7.8-7.8l8.6-8.6a3.7 3.7 0 0 1 5.2 5.2l-8.6 8.6a1.8 1.8 0 0 1-2.6-2.6l7.9-7.9"/></svg>',
   mic: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>',
 };
