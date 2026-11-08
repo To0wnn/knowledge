@@ -1162,7 +1162,7 @@ def knowledge_chat_archive(chat: str = "", chat_id: str = "", id: str = "", forc
 @server.tool(annotations=EDIT)
 def knowledge_chat_title(title: str, chat: str = "") -> str:
     """Name the web UI chat you run in: 3 to 6 words in the user's language saying what it works on (e.g. 'Clearer chat
-    titles'), not their message. Call it after your first answer and again when the subject changes.
+    titles'), not their message. Call it at the start, with your first other tool call, and when the subject changes.
     chat: another of your chats (id from knowledge_chats), e.g. to rename it when its owner asks."""
     cid = chat.strip() or device.get().get("chat", "")
     title = " ".join(str(title).split()).strip(" .\"'")[:60]
@@ -2034,7 +2034,7 @@ def token_project() -> str | None:
 WEBCHAT_NOTE = ("===== knowledge: a chat from the web UI =====\nThe user talks to you from the knowledge web UI; each message "
                 "is one turn. Answer what they ask. Tasks between agents run in workers: do not list, take or start them here.\n"
                 "Name the chat with knowledge_chat_title (3 to 6 words on what it works on, chat: its id from the first "
-                "message) after your first answer and when the subject changes.")
+                "message) at the start, together with your first other tool call, and when the subject changes.")
 
 
 def context_parts(project: str = "homelab", agent: str = "", chat: bool = False, webchat: bool = False) -> list[str]:
@@ -5771,8 +5771,8 @@ CHATS_DIR = ADMIN_DIR / "chats"
 CHAT_KEEP, CHAT_EVENTS, CHAT_BYTES, CHAT_TEXT = 50, 4000, 1_000_000, 20_000  # chats per machine, events and bytes per chat, chars per message
 CHAT_PENDING = 5  # messages a chat keeps in line while its agent answers
 # Archive: the agent's last turn records the chat in the memos before the chat closes (the house rules, not the transcript)
-CHAT_TITLE_ASK = ("\n\n(knowledge web UI: after your answer, name this chat with the tool knowledge_chat_title, chat {chat}, title "
-                  "3 to 6 words in my language on what it works on.)")  # the id in the text: works without the plugin's header
+CHAT_TITLE_ASK = ("\n\n(knowledge web UI: first, together with your first other tool call, name this chat with the tool "
+                  "knowledge_chat_title, chat {chat}, title 3 to 6 words in my language on what it works on.)")  # the id in the text: works without the plugin's header
 CHAT_WRAP_UP = ("This chat is being archived. Before it closes, record what it established on the knowledge server, following the "
                 "house rules: for each subject, knowledge_search first and knowledge_edit the memo that already covers it "
                 "(knowledge_new_memo only for a genuinely new subject). What is true now goes under '## Status', each decision "
