@@ -2,7 +2,8 @@
 
 Markdown files are split into chunks of ~1200 characters on paragraph boundaries; each chunk is embedded with a local
 model (embeddinggemma-300m through fastembed/ONNX, no GPU, no external service; best of four models in a test on the
-real memos, 18 Oct). Vectors live in RAM as one normalized matrix, so a query is one matrix product (~1 ms for a few
+real memos, 18 Oct), in its 4-bit ONNX variant: 400 MB of RAM instead of 930 MB for fp32, with the same hit@5 on the 45
+real questions (measured 8 Nov 2026; hit@1 one question lower, a query ~10 ms slower). Vectors live in RAM as one normalized matrix, so a query is one matrix product (~1 ms for a few
 thousand chunks) plus embedding the query (~50 ms). They are cached on disk by chunk hash (saved every few hundred
 chunks), so a restart or an edit only embeds new text. One background thread at nice 10 with 6 CPU threads: the
 kernel serves every other forge service first. Measured on forge (18 Oct): 6 threads 5.5 chunks/s (full run ~13 min),
@@ -17,7 +18,10 @@ from pathlib import Path
 
 import numpy as np
 
-MODEL = os.environ.get("KNOWLEDGE_EMBED_MODEL", "google/embeddinggemma-300m")  # "hash" = tiny test embedder
+MODEL = os.environ.get("KNOWLEDGE_EMBED_MODEL", "onnx-community/embeddinggemma-300m-q4")  # "hash" = tiny test embedder
+# Variants fastembed does not list itself: name -> ONNX file in the embeddinggemma repo. Scores run ~0.02-0.05 higher
+# than fp32 ("google/embeddinggemma-300m"), so the cosine thresholds (server.py, rerank.py, graph.py) are set for q4.
+VARIANTS = {"onnx-community/embeddinggemma-300m-q4": "onnx/model_q4", "onnx-community/embeddinggemma-300m-int8": "onnx/model_quantized"}
 MODELS_DIR = os.environ.get("KNOWLEDGE_MODELS", "")
 CACHE = Path(os.environ.get("KNOWLEDGE_VECTORS", Path.home() / ".local/state/knowledge-server/vectors.npz"))
 QUERY_PREFIX = "task: search result | query: "  # embeddinggemma prompt format; documents get "title: ... | text: ..."
@@ -61,8 +65,20 @@ def chunks(text: str) -> list[tuple[int, str]]:
     return [(ln, c[i:i + 2 * CHUNK_CHARS]) for ln, c in out for i in range(0, len(c), 2 * CHUNK_CHARS)]
 
 
+def text_model(threads: int = THREADS):
+    """The fastembed model for MODEL (also used by the Dockerfile to bake it into the image)."""
+    from fastembed import TextEmbedding
+    if MODEL in VARIANTS and MODEL not in {m["model"] for m in TextEmbedding.list_supported_models()}:
+        from fastembed.common.model_description import ModelSource, PoolingType
+        f = VARIANTS[MODEL]  # same graph as the built-in fp32 entry: pooled, normalized output "sentence_embedding"
+        TextEmbedding.add_custom_model(MODEL, pooling=PoolingType.DISABLED, normalization=True, dim=768,
+                                       sources=ModelSource(hf="onnx-community/embeddinggemma-300m-ONNX"),
+                                       model_file=f"{f}.onnx", additional_files=[f"{f}.onnx_data"], output_name="sentence_embedding")
+    return TextEmbedding(MODEL, threads=threads, cache_dir=MODELS_DIR or None)
+
+
 class HashEmbedder:
-    """Deterministic bag-of-words vectors, only for the self-tests (the real model is 1.2 GB)."""
+    """Deterministic bag-of-words vectors, only for the self-tests (the real model takes ~400 MB of RAM)."""
 
     def embed(self, texts, batch_size=4):
         for t in texts:
@@ -92,14 +108,14 @@ class Vectors:
         if CACHE.exists():
             try:
                 with np.load(CACHE) as z:
-                    self.cache = dict(zip(z["keys"].tolist(), z["vecs"]))
+                    # vectors of another model do not compare with this one's queries: start over instead of mixing
+                    if (str(z["model"]) if "model" in z.files else "google/embeddinggemma-300m") == MODEL:  # untagged = old fp32
+                        self.cache = dict(zip(z["keys"].tolist(), z["vecs"]))
+                    else:
+                        print("vector cache is from another embedding model, rebuilding", flush=True)
             except Exception as e:  # a broken cache is only a slower start
                 print(f"vector cache unreadable, rebuilding: {e}", flush=True)
-        if MODEL == "hash":
-            self.model = HashEmbedder()
-        else:
-            from fastembed import TextEmbedding
-            self.model = TextEmbedding(MODEL, threads=THREADS, cache_dir=MODELS_DIR or None)
+        self.model = HashEmbedder() if MODEL == "hash" else text_model(THREADS)
 
     def embed(self, texts: list[str]) -> np.ndarray:
         v = np.array(list(self.model.embed(texts, batch_size=4)), dtype=np.float32)
@@ -171,7 +187,7 @@ class Vectors:
         CACHE.parent.mkdir(parents=True, exist_ok=True)
         tmp = CACHE.with_suffix(".tmp.npz")
         keys = list(self.cache)
-        np.savez(tmp, keys=np.array(keys), vecs=np.stack([self.cache[k] for k in keys]) if keys else np.zeros((0, 1)))
+        np.savez(tmp, model=np.array(MODEL), keys=np.array(keys), vecs=np.stack([self.cache[k] for k in keys]) if keys else np.zeros((0, 1)))
         os.replace(tmp, CACHE)
 
     # ------------------------------------------------------------------ queries
@@ -237,4 +253,12 @@ if __name__ == "__main__":  # self-check of the chunker and the search ranking w
     src = next(h for h in v.search("boiler water") if h["path"] == "homelab/sources/s.md")
     raw = float(v.matrix[[r[0] for r in v.rows].index("homelab/sources/s.md")] @ v.embed([QUERY_PREFIX + "boiler water"])[0])
     assert abs(src["score"] - (raw - SOURCE_PENALTY)) < 1e-3, (src, raw)  # a raw source ranks lower by the penalty
+    v.save()  # tagged with the default model; another model must not reuse these vectors
+    MODEL = "hash"
+    w = Vectors(FakeIndex())
+    w.load()
+    assert w.cache == {} and isinstance(w.model, HashEmbedder), len(w.cache)
+    v.save()
+    w.load()
+    assert set(w.cache) == set(v.cache), "same model: cache reused"
     print("ok", len(cs), "chunks")

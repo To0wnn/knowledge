@@ -39,7 +39,7 @@ You can use it in two layers. **Memory** is the server plus one agent: five minu
 
 ## Quickstart: Memory
 
-You need Docker and about 2 GB RAM on the server, and git plus Python 3.9 or newer on each PC.
+You need Docker and about 1.5 GB RAM on the server, and git plus Python 3.9 or newer on each PC.
 
 **1. Run the server.**
 

@@ -6,10 +6,12 @@ COPY --from=uv /uv /usr/local/bin/uv
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
-# Embedding model baked into the image (1.2 GB, downloaded once at build): the server never fetches anything at
-# runtime (HF_HUB_OFFLINE) and works without internet. Separate layer, so code changes do not re-download it.
+# Embedding model baked into the image (q4, 200 MB, downloaded once at build): the server never fetches anything at
+# runtime (HF_HUB_OFFLINE) and works without internet. Separate layer with only vectors.py (which names the model), so
+# other code changes do not re-download it.
 ENV KNOWLEDGE_MODELS=/opt/models
-RUN mkdir -p /opt/models && /app/.venv/bin/python -c "from fastembed import TextEmbedding; TextEmbedding('google/embeddinggemma-300m', cache_dir='/opt/models')" \
+COPY vectors.py ./
+RUN mkdir -p /opt/models && /app/.venv/bin/python -c "import vectors; vectors.text_model()" \
     && chmod -R a+rX /opt/models
 # All modules (a forgotten module once crash-looped the container; deploy.sh now waits for /health).
 COPY *.py ./

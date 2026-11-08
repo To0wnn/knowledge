@@ -72,9 +72,12 @@ hostile page and then wrote a memo writes as you, which no server can tell. That
 
 ## Search quality
 
-Semantic search uses [EmbeddingGemma](https://huggingface.co/google/embeddinggemma-300m) (300M, runs on a CPU):
+Semantic search uses [EmbeddingGemma](https://huggingface.co/google/embeddinggemma-300m) (300M, runs on a CPU; the 4-bit
+ONNX variant by default, about 400 MB of RAM; `KNOWLEDGE_EMBED_MODEL=google/embeddinggemma-300m` picks fp32, then lower the
+cosine thresholds by ~0.02-0.05, see `vectors.py`):
 multilingual (100+ languages) and made for prose as much as code, so notes in Dutch, German or English, docs, decisions
-and runbooks are found as well as code snippets. Measured with no LLM in the loop and nothing tuned on the test:
+and runbooks are found as well as code snippets. Measured with no LLM in the loop and nothing tuned on the test (fp32;
+the q4 default had the same top-5 score on the 45 real questions, top 1 one question lower):
 
 | Benchmark | Result |
 |---|---|

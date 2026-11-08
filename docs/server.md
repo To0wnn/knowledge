@@ -25,8 +25,8 @@ Settings in `.env` (all optional): `KNOWLEDGE_PUBLIC_URL` (the address people us
 `## Keuzes`; both are always accepted), `TZ`. The house rules every agent gets are `default_house_rules.md` until you
 put your own `house_rules.md` in `data/shared`.
 
-Requirements: Docker and about 2 GB RAM (the embedding model is 1.2 GB; it ships in the image, nothing is fetched at
-runtime).
+Requirements: Docker and about 1.5 GB RAM (the embedding model takes about 400 MB, and a duplicate check briefly loads
+a 1.1 GB reranker when one is set up; the model ships in the image, nothing is fetched at runtime).
 
 ## Settings in `.env`
 

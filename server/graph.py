@@ -309,7 +309,7 @@ def insights(graph: dict) -> dict[str, list[dict]]:
 def related(graph: dict, rel: str, limit: int = 10, semantic: dict[str, float] | None = None) -> list[dict]:
     """Notes most related to `rel`, by a relevance model with 4 graph signals, plus meaning when vectors are ready:
     direct link x3, shared raw source x4 (per source), Adamic-Adar (shared neighbours, weighted by their rarity) x1.5,
-    same type x1, and semantic similarity x3 (cosine of the note vectors, above 0.3)."""
+    same type x1, and semantic similarity x3 (cosine of the note vectors, above 0.35)."""
     nodes = {n["id"]: n for n in graph["nodes"]}
     if rel not in nodes:
         return []
@@ -330,7 +330,7 @@ def related(graph: dict, rel: str, limit: int = 10, semantic: dict[str, float] |
             continue
         score, why = pair_score(g, me, nodes[c])
         sim = (semantic or {}).get(c, 0.0)
-        if sim > 0.3:
+        if sim > 0.35:  # 0.3 for fp32; the q4 model scores ~0.05 higher here (note vs note, measured 8 Nov 2026)
             score += 3.0 * sim
             why.append(f"similar meaning ({sim:.2f})")
         if why:

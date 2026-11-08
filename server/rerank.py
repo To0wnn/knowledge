@@ -2,7 +2,7 @@
 
 The similar-memo hint (cosine of embeddings) finds candidates; this model judges each pair and lint reports the pairs it
 calls the same (possible_duplicate). Measured 28 Oct 2026 on 94 real memo pairs (42 merged in practice): AUC 0.941
-(cosine 0.848); cosine >= 0.68 then score >= 0.5 gave precision 0.94 / recall 0.79. ~1.75 s per pair on 4 threads and
+(cosine 0.848); cosine >= 0.68 (fp32; 0.70 for q4) then score >= 0.5 gave precision 0.94 / recall 0.79. ~1.75 s per pair on 4 threads and
 ~1.1 GB while loaded, so it runs in a background thread at nice 10, loads only when there is work and unloads after.
 
 Off unless KNOWLEDGE_RERANK_MODEL names a folder with model.onnx and tokenizer.json, made by export_reranker.sh
@@ -17,7 +17,7 @@ import re
 MODEL_DIR = os.environ.get("KNOWLEDGE_RERANK_MODEL", "")
 THREADS = int(os.environ.get("KNOWLEDGE_RERANK_THREADS", "4"))
 THRESHOLD = 0.5  # admin setting rerank_threshold
-CANDIDATE = 0.68  # cosine gate: below it the pair is not judged (kept 38 of 42 real pairs)
+CANDIDATE = 0.70  # cosine gate: below it the pair is not judged (q4, 8 Nov 2026: keeps 39 of 42 real pairs; fp32 0.68 kept 38)
 
 # The model card's template; the instruction is worth +0.033 AUC (measured without it: 0.908).
 PREFIX = ('<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct '

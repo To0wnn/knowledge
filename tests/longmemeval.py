@@ -52,8 +52,7 @@ def embedder():
             return v / np.maximum(np.linalg.norm(v, axis=1, keepdims=True), 1e-9)
         return embed
     from fastembed import TextEmbedding
-    name = "sentence-transformers/all-MiniLM-L6-v2" if mode == "minilm" else vectors.MODEL
-    m = TextEmbedding(name, threads=8)
+    m = TextEmbedding("sentence-transformers/all-MiniLM-L6-v2", threads=8) if mode == "minilm" else vectors.text_model(8)
     def embed(texts):
         # batch 4 as vectors.py: 16 long chunks went past 5 GB (OOM 28 Oct 2026)
         v = np.array(list(m.embed(texts, batch_size=4)), dtype=np.float32)

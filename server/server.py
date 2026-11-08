@@ -123,8 +123,10 @@ LESSONS = AUDIT.with_name("lessons.json")  # the lesson queue: agents add, the w
 # A meaning search answered nothing useful when its best score is below WEAK_SCORE, or below DOUBT_SCORE while the
 # best note lacks the question's subject words (lint.query_coverage < MIN_COVERAGE). Calibrated 21 Oct 2026 on 20
 # answerable and 20 plausible but unanswerable questions: score alone caught 8 of 20 gaps (answerable 0.45-0.75,
-# unanswerable 0.34-0.54); with coverage 15 of 20, and 0 of the 20 answerable ones flagged.
-WEAK_SCORE, DOUBT_SCORE, MIN_COVERAGE = 0.45, 0.55, 0.7
+# unanswerable 0.34-0.54); with coverage 15 of 20, and 0 of the 20 answerable ones flagged. Re-set 8 Nov 2026 for the
+# q4 model (scores ~0.02 higher): 0.47/0.57 catch 17 of 20 where fp32 at 0.45/0.55 caught 15 on the same copy of the
+# knowledge; both flag the same 2 answerable questions there (their subject words are missing from the best note).
+WEAK_SCORE, DOUBT_SCORE, MIN_COVERAGE = 0.47, 0.57, 0.7
 
 device: ContextVar[dict] = ContextVar("device", default={})
 _locks: dict[str, asyncio.Lock] = {}
@@ -1468,7 +1470,7 @@ def house_rules_hint(rel: str) -> str:
 
 ARCHIVE_HINT = ("This file is in an archive folder, which searches skip: carry over what is still true in what you archive "
                 "(how it works, decisions, open items) into a memo or doc that stays (house rule 2).")
-SIMILAR_HINT = 0.72  # calibrated 18 Oct 2026: a memo vs itself ~0.80-0.86, closely related memos ~0.78, loose docs ~0.70
+SIMILAR_HINT = 0.74  # calibrated 18 Oct 2026 at 0.72 for fp32; 0.74 for q4 (8 Nov 2026, 94 real pairs: 29 merged / 10 not, fp32 29 / 11)
 
 
 def memo_candidates(rel: str, content: str, floor: float) -> dict[str, float]:
@@ -4385,7 +4387,7 @@ async def ui_admin_page(request: Request):
 SETTINGS_FILE = ADMIN_DIR / "settings.json"
 MODEL_CHOICE = ADMIN_DIR / "model_choice.json"  # the admin's pick per role and agent; empty: the advice counts
 SETTINGS = {  # key: (type, min, max, label, help); the label is short, the help says what it does and how it was set
-    "similar_hint": (float, 0.5, 0.95, "Similar memo hint", "Similarity from which a new memo shows 'similar existing memos'. Calibrated on 18 Oct 2026: 0.72."),
+    "similar_hint": (float, 0.5, 0.95, "Similar memo hint", "Similarity from which a new memo shows 'similar existing memos'. Calibrated on 8 Nov 2026 for the q4 model: 0.74."),
     "rerank_threshold": (float, 0.2, 0.99, "Duplicate memo score", "Reranker score from which lint reports two memos as possible_duplicate. Measured on 28 Oct 2026: 0.5."),
     "history_keep": (int, 10, 2000, "Versions kept per file", "History: older versions of a file beyond this number are removed."),
     "stale_unchecked_days": (int, 7, 365, "Unchecked fact age (days)", "Lint reports a fact marked 'not re-checked' after this many days."),
