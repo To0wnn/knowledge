@@ -486,6 +486,14 @@ def check(m: dict, agents) -> dict:
     return {"installed": True, "ok": ok, "version": version[:40], "detail": "; ".join(notes)[:300]}
 
 
+def detect(m: dict, agents):
+    """A tool installed by hand, not through the companion: there when one of its own checks passes (e.g. a plugin added
+    to Claude Code only), then its full check; None when none passes."""
+    if not any(do(m, s)[0] for s in steps(m, "check", agents) if not s.get("info")):
+        return None
+    return check(m, agents)
+
+
 def install(m: dict, agents) -> dict:
     """Run the install steps in order (stop at the first failure), then the checks. Also the update: run it again."""
     path = environment(m, {})["PATH"]
@@ -652,6 +660,9 @@ def self_test():
         doc = json.dumps({"checks": [{"name": "hopper", "ok": False}], "scope_checks": [{"name": "ghidra-version", "ok": False, "detail": "12.2; accepted 12.1.x"}]})
         assert summary(doc, "") == "not ok: ghidra-version (12.2; accepted 12.1.x)", summary(doc, "")
         assert check(bad, [])["ok"] is False and "Install Node.js 22" in check(bad, [])["detail"]
+        assert detect(bad, []) is None and detect(m, [])["ok"] is True, "a hand-installed tool is found, a missing one not"
+        half = {**m, "check": [*m["check"], {"run": [py, "-c", "import sys; sys.exit(1)"], "agent": "codex"}]}
+        assert detect(half, ["codex"])["ok"] is False, "in one agent only: found, but not ok"
         for broken, why in (({**m, "needs": ["no-such-command-xyz"]}, "needs no-such-command-xyz"),
                             ({**m, "install": [{"run": ["no-such-command-xyz"]}]}, "not installed on this pc"),
                             ({**m, "install": [{"run": put("x"), "agent": "agy"}]}, "nothing to install")):
