@@ -1159,6 +1159,23 @@ def knowledge_chat_archive(chat: str = "", chat_id: str = "", id: str = "", forc
     return knowledge_chat_close(chat=chat, chat_id=chat_id, id=id, force=force, record=record, reason=reason, open=open)
 
 
+@server.tool(annotations=EDIT)
+def knowledge_chat_title(title: str) -> str:
+    """Name the web UI chat you run in: 3 to 6 words in the user's language saying what it works on (e.g. 'Clearer chat
+    titles'), not their message. Call it after your first answer and again when the subject changes."""
+    cid = device.get().get("chat", "")
+    title = " ".join(str(title).split()).strip(" .\"'")[:60]
+    if not cid:
+        raise ToolError("only a chat from the web UI has a title to set")
+    if not title:
+        raise ToolError("title is required")
+    found = next((r for r, c in own_chats() if c["id"] == cid), None)
+    if not found:
+        raise ToolError("this chat is not on your pcs")
+    update_state(CHATS_DIR / found["id"] / f"{cid}.json", lambda c: c.update(title=title, titled=True))
+    return f"Chat titled '{title}'."
+
+
 @server.tool(annotations=READ)
 def knowledge_read(path: str = "", file: str = "", name: str = "", offset: int = 1, limit: int = 600) -> str:
     """Read a shared text file, e.g. memory/MEMORY.md or homelab/diensten.md. Returns lines offset..offset+limit-1
@@ -2012,7 +2029,9 @@ def token_project() -> str | None:
 
 
 WEBCHAT_NOTE = ("===== knowledge: a chat from the web UI =====\nThe user talks to you from the knowledge web UI; each message "
-                "is one turn. Answer what they ask. Tasks between agents run in workers: do not list, take or start them here.")
+                "is one turn. Answer what they ask. Tasks between agents run in workers: do not list, take or start them here.\n"
+                "Name the chat with knowledge_chat_title (3 to 6 words on what it works on) after your first answer and when "
+                "the subject changes.")
 
 
 def context_parts(project: str = "homelab", agent: str = "", chat: bool = False, webchat: bool = False) -> list[str]:
@@ -3363,8 +3382,9 @@ class BearerAuth:
             dev = {**dev, "machine": mid, "machine_label": label or mid}
         if worker := re.sub(r"[^\w.-]", "", headers.get(b"x-knowledge-worker", b"").decode("latin-1"))[:60]:
             dev = {**dev, "worker": worker}  # a session the companion started for this one task
-        if headers.get(b"x-knowledge-chat") == b"1":
-            dev = {**dev, "webchat": True}  # a chat turn from the web UI: no tasks in its context, no lease, no notices
+        if chat := headers.get(b"x-knowledge-chat", b"").decode("latin-1"):
+            # a chat turn from the web UI: no tasks in its context, no lease, no notices; plugin 0.42+ sends the chat id
+            dev = {**dev, "webchat": True, **({"chat": chat} if re.fullmatch(r"[0-9a-f]{12}", chat) else {})}
         device.set(dev)
         return await self.app(scope, receive, send)
 
@@ -5913,7 +5933,7 @@ async def chat_live_message(f: Path, c: dict, msg: dict, mode: str, text: str, a
         c["closed"] = False
         if not added:
             chat_add(c, "user", text)
-            c["title"] = chat_title(text, c.get("title") or "")
+            c["title"] = chat_title(text, c.get("title") or "", c.get("titled"))
         chat_add(c, "info", "Sent into the running turn." if mode == "now" else "Force: this step stops and your message goes in.")
     await asyncio.to_thread(update_state, f, note)
     as_next = []
@@ -5933,9 +5953,11 @@ async def chat_live_message(f: Path, c: dict, msg: dict, mode: str, text: str, a
     return JSONResponse({"ok": True, "live": mode})
 
 
-def chat_title(text: str, old: str = "") -> str:
-    """A chat goes by what its owner last asked: the first line of the latest message of four words or more, at most
-    60 characters, cut at a word. A short reply ("yes", "go on") keeps the title it has."""
+def chat_title(text: str, old: str = "", titled: bool = False) -> str:
+    """Until its agent names it (knowledge_chat_title, titled), a chat goes by what its owner last asked: the first line
+    of the latest message of four words or more, at most 60 characters, cut at a word. A short reply keeps the title."""
+    if titled and old:
+        return old
     line = " ".join(next((x for x in text.splitlines() if x.strip()), "").split()).lstrip("-*• ")
     if old and len(line.split()) < 4:
         return old
@@ -6502,12 +6524,12 @@ async def ui_chat_send(request: Request):
             line.append(msg)
             busy.append("queued")
             chat_add(c, "user", text)
-            c["title"] = chat_title(text, c.get("title") or "")
+            c["title"] = chat_title(text, c.get("title") or "", c.get("titled"))
             chat_add(c, "info", "Queued: the agent gets this when its current turn ends.")
             return
         c.update(pick)
         chat_add(c, "user", text)
-        c.update(status="queued", title=chat_title(text, c.get("title") or ""))
+        c.update(status="queued", title=chat_title(text, c.get("title") or "", c.get("titled")))
     await asyncio.to_thread(update_state, f, change)
     if busy == ["full"]:
         return JSONResponse({"error": f"{CHAT_PENDING} messages wait already: wait for the agent, or stop it"}, status_code=409)
