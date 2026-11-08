@@ -25,7 +25,11 @@ MODEL = os.environ.get("KNOWLEDGE_EMBED_MODEL", "onnx-community/embeddinggemma-3
 # than fp32 ("google/embeddinggemma-300m"), so the cosine thresholds (server.py, rerank.py, graph.py) are set for q4.
 VARIANTS = {"onnx-community/embeddinggemma-300m-q4": "onnx/model_q4", "onnx-community/embeddinggemma-300m-int8": "onnx/model_quantized"}
 MODELS_DIR = os.environ.get("KNOWLEDGE_MODELS", "")
-CACHE = Path(os.environ.get("KNOWLEDGE_VECTORS", Path.home() / ".local/state/knowledge-server/vectors.npz"))
+FP32 = "google/embeddinggemma-300m"
+CACHE_BASE = Path(os.environ.get("KNOWLEDGE_VECTORS", Path.home() / ".local/state/knowledge-server/vectors.npz"))
+# One file per model: an older server (or a rollback) reads CACHE_BASE without looking at the model, so another model's
+# vectors there would be mixed with its queries. fp32 (and the test embedder) keep the plain name.
+CACHE = CACHE_BASE if MODEL in (FP32, "hash") else CACHE_BASE.with_name(f"{CACHE_BASE.stem}-{MODEL.rsplit('/', 1)[-1]}.npz")
 QUERY_PREFIX = "task: search result | query: "  # embeddinggemma prompt format; documents get "title: ... | text: ..."
 CHUNK_CHARS = 1200
 # Raw sources (ingested pages, "<root>/sources/") rank this much lower than notes: the processed memo is the better
@@ -81,10 +85,25 @@ def text_model(threads: int = THREADS):
     return TextEmbedding(MODEL, threads=threads, cache_dir=MODELS_DIR or None, enable_cpu_mem_arena=False)
 
 
+def read_cache() -> dict:
+    """This model's cached vectors: its own file, else CACHE_BASE when that holds this model's (the first start after
+    the switch to one file per model). Vectors of another model never: they do not compare with this one's queries."""
+    for path in dict.fromkeys((CACHE, CACHE_BASE)):
+        if not path.exists():
+            continue
+        try:
+            with np.load(path) as z:
+                if (str(z["model"]) if "model" in z.files else FP32) == MODEL:  # untagged = written by fp32-only code
+                    return dict(zip(z["keys"].tolist(), z["vecs"]))
+        except Exception as e:  # a broken cache is only a slower start
+            print(f"vector cache {path.name} unreadable: {e}", flush=True)
+    return {}
+
+
 def lower_priority():
     """nice 10 for the calling thread (Linux: nice is per thread); Windows has no os.nice and keeps normal priority."""
     if hasattr(os, "nice"):
-        os.nice(10)
+        os.nice(max(0, 10 - os.nice(0)))  # absolute: a thread inherits its creator's nice (10 + 10 gave 19)
 
 
 def trim():
@@ -127,16 +146,7 @@ class Vectors:
 
     # ------------------------------------------------------------------ background work
     def load(self):
-        if CACHE.exists():
-            try:
-                with np.load(CACHE) as z:
-                    # vectors of another model do not compare with this one's queries: start over instead of mixing
-                    if (str(z["model"]) if "model" in z.files else "google/embeddinggemma-300m") == MODEL:  # untagged = old fp32
-                        self.cache = dict(zip(z["keys"].tolist(), z["vecs"]))
-                    else:
-                        print("vector cache is from another embedding model, rebuilding", flush=True)
-            except Exception as e:  # a broken cache is only a slower start
-                print(f"vector cache unreadable, rebuilding: {e}", flush=True)
+        self.cache = read_cache()
         self.model = HashEmbedder() if MODEL == "hash" else text_model(THREADS)
         trim()  # loading leaves ~190 MB of temporaries that glibc keeps otherwise
 
@@ -273,7 +283,7 @@ if __name__ == "__main__":  # self-check of the chunker and the search ranking w
                     ("homelab/sources/s.md", "boiler water boiler water", None),
                     ("memory/b.md", "the printer prints paper", None), ("trade/c.md", "boiler water again", None)]
     import tempfile
-    CACHE = Path(tempfile.mkdtemp()) / "vectors.npz"  # module global: keep the self-check away from the real cache
+    CACHE = CACHE_BASE = Path(tempfile.mkdtemp()) / "vectors.npz"  # module globals: keep the self-check away from the real cache
     v = Vectors(FakeIndex())
     v.model = HashEmbedder()
     v.sync()
@@ -298,4 +308,9 @@ if __name__ == "__main__":  # self-check of the chunker and the search ranking w
     v.save()
     w.load()
     assert set(w.cache) == set(v.cache), "same model: cache reused"
+    CACHE = CACHE_BASE.with_name("vectors-q4.npz")  # own file missing: the shared one is used when it holds this model's
+    assert set(read_cache()) == set(v.cache)
+    MODEL = "other"
+    assert read_cache() == {}, "another model's vectors are never read"
+    MODEL, CACHE = "hash", CACHE_BASE
     print("ok", len(cs), "chunks")
