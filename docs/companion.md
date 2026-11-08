@@ -48,6 +48,37 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   all. A machine id belongs to the person (or the admins) whose token first reported it; another
   person's token on the same pc gets a machine record of its own and never sees or steers the first one. Plugins before 0.15 show as one "old plugin" row per token.
 
+## Tools (add-ons)
+
+- **What it is:** an outside tool (an MCP server, an agent plugin, a skill repo) installed on a pc for every agent
+  there (Claude Code, Codex, agy) with one click: a pc's card on the Machines page has a Tools list with Install,
+  Update and Remove, the installed version and the result of the tool's own health check. Nobody has to open the
+  tool's repository.
+- **Where a tool is described:** one JSON manifest per tool in `plugin/tools/<id>.json`, shipped with the plugin. The
+  page sends only the tool id; the companion runs the steps from its own plugin's manifest (so no free text reaches a
+  pc, and a new manifest arrives with a plugin update). Format (checked by `plugin/hooks/tools.py`, which refuses an
+  unknown key):
+
+  ```json
+  {"name": "...", "description": "...", "homepage": "https://...", "needs": ["npm"],
+   "install": [{"run": ["npm", "install", "--global", "pkg@latest"]},
+               {"run": ["pkg", "setup", "--client", "codex"], "agent": "codex"}],
+   "check":   [{"run": ["pkg", "doctor", "--json"], "info": true}],
+   "version": {"run": ["pkg", "--version"]},
+   "remove":  [{"run": ["npm", "uninstall", "--global", "pkg"]}]}
+  ```
+
+  A step runs a command looked up on PATH (no shell). `agent`: only when that agent is installed; `os`: only on
+  `linux`, `darwin` or `windows`; `ok_if`: output text that makes a non-zero exit fine ("already"); `expect`: a regex
+  the output must match; `info` (check only): reported but never marks the tool unhealthy. Install stops at the first
+  failed step; remove runs every step. Both run in the background (one tool at a time, other actions do not wait; a
+  plugin restart does), a step stops after 15 minutes with its whole process tree, and the result or the error shows in
+  the Tools list and in the companion's Activity. Update is install again, so steps use `@latest` or the agent's own marketplace
+  update. A JSON report's failed `checks` or its `remediation` become the one line the page shows.
+- **Shipped:** `rea` (npm `rea-agents`, registered with `rea setup` per agent, checked with `rea doctor`; its
+  analysis engines such as Ghidra are not installed yet) and `ponytail` (each agent's own plugin command).
+- **Adding a tool:** a new manifest plus a plugin version bump; `tools.py --self-test` validates every manifest.
+
 ## The admins' own devices
 
 - **The admins' own devices:** a token an admin makes counts as the admins only when it is marked **"My own device"**
@@ -61,7 +92,7 @@ fixed remote actions and relays chats. Installing it is part of the client setup
 
 - **Remote control:** the owner of a machine steers it from the Machines list with fixed actions only: start a worker
   for a ready task, stop a worker, restart a worker that ended (`restart`: at once, past the companion's 6 h hold;
-  queued as its own start), roll a YOLO worker back, trust hooks, update the plugin, YOLO on or off per agent
+  queued as its own start), roll a YOLO worker back, trust hooks, update the plugin, install or remove a tool (see Tools above), YOLO on or off per agent
   (on needs the word YOLO typed in a dialog), workers allowed, max workers, link or unlink a folder (only folders the
   companion listed itself). The server queues them per machine (`POST /ui/api/machines/action`); the companion pulls
   them about every 10 seconds (`GET /machine/actions`), runs them with its own code and reports the result; an

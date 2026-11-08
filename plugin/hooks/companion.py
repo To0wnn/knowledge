@@ -50,6 +50,7 @@ import chat  # noqa: E402  (chats from the web UI)
 import hook_status  # noqa: E402  (failures reported to the server)
 import project_marker  # noqa: E402
 import self_update  # noqa: E402
+import tools  # noqa: E402  (tool add-ons from plugin/tools)
 import token_store  # noqa: E402
 import workers  # noqa: E402  (a fresh agent session per task)
 
@@ -111,6 +112,7 @@ def own_version() -> tuple:
 STARTED = own_version()  # the code this process runs; the file on disk can be newer after an update
 ACTING = threading.Lock()  # held while a remote action runs: a restart must not cut one off halfway
 AGENTS_UPDATING = threading.Lock()  # held while the agents' update commands run: a restart waits, actions do not
+TOOLS_BUSY = threading.Lock()  # held while a tool add-on installs or goes: the same
 
 
 def version() -> str:
@@ -1575,12 +1577,46 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
                          "checkpoint": bool(w.get("checkpoint")), "merged": w["status"] == "merged", "git": gits.get(k),
                          **({"progress": progress(w, gits.get(k))} if w["status"] == "running" else {}),
                          **({"review": r} if (r := bounded(w.get("repo"), lambda w=w: review(w, now))) else {})} for k, w in sorted(ws.items(), key=lambda kw: -(kw[1].get("started") or 0)) if not w.get("archived")],  # newest first: the server keeps 40
-            "limitWait": wait, "waiting": waiting or {}, "asks": terminal_asks(now), "folders": links, "chats": chat_gits, "chatReviews": chat_reviews(now, chat_gits), "projects": load("state.json", {}).get("projects", [])}
+            "tools": tool_state(), "limitWait": wait, "waiting": waiting or {}, "asks": terminal_asks(now), "folders": links, "chats": chat_gits, "chatReviews": chat_reviews(now, chat_gits), "projects": load("state.json", {}).get("projects", [])}
     answer = server("POST", "/machine/report", tok, body)
     try:
         clean_chat_branches(answer.get("closed_chats") or [])
     except Exception as e:  # never cost the round; the next one tries again
         log("error", "Could not clean up a closed chat's worktree", f"{e}"[:200])
+
+
+def set_tool(tid: str, **change):
+    with LOCK:
+        done = load("tools.json", {})
+        save("tools.json", {**done, tid: {**done.get(tid, {}), **change}})
+
+
+def tool_job(act: str, tid: str, m: dict):
+    """Install or remove in the background (npm can take minutes; Stop or Merge must not wait), then report at once.
+    A failure keeps what was there, with the error beside it, in the list and in Activity."""
+    try:
+        try:
+            got = (tools.install if act == "install_tool" else tools.remove)(m, tools.here([a for a in AGENTS if installed(a)]))
+            set_tool(tid, **got, error="", busy="", at=time.time())
+            log("sync", f"{m['name']} {'installed' if got['installed'] else 'removed'}" + (f" {got['version']}" if got.get("version") else ""),
+                mask(got.get("detail", "")))
+        except Exception as e:  # a bug here must still end busy, or the list says "installing" for ever
+            set_tool(tid, error=mask(f"{e}")[:300], busy="", at=time.time())
+            log("error", f"{m['name']}: {act.split('_')[0]} failed", mask(f"{e}")[:300])
+    finally:
+        TOOLS_BUSY.release()
+    try:
+        tick()
+    except Exception as e:  # the minute's round reports it instead
+        log("error", "A round of the companion failed", f"{type(e).__name__}: {e}"[:300])
+
+
+def tool_state() -> dict:
+    """Every tool this plugin knows, with what the last install, check or remove here found: the page's Tools list."""
+    done = load("tools.json", {})
+    return {tid: {"name": m["name"], "description": m.get("description", ""), "homepage": m.get("homepage", ""),
+                  **{k: done.get(tid, {}).get(k) for k in ("installed", "ok", "version", "detail", "error", "busy", "at")}}
+            for tid, m in tools.catalog().items()}
 
 
 STOPS_DONE: dict = {}  # chat -> when a stop last ended a turn here
@@ -1730,6 +1766,15 @@ def run_action(a: dict) -> str:
             if shared_running(ws, w):
                 raise RuntimeError(f"another worker runs in the worktree of {args['id']} now; stop it first")
             return workers.merge(w)
+    if act in ("install_tool", "remove_tool"):  # the steps come from this plugin's own manifest, never from the server
+        tid, cat = str(args.get("tool", "")), tools.catalog()
+        if tid not in cat:
+            raise ValueError(f"no tool {tid} in this plugin version: update the plugin")
+        if not TOOLS_BUSY.acquire(blocking=False):
+            raise RuntimeError("another tool is being installed or removed here; try again when it is done")
+        set_tool(tid, busy=act.split("_")[0])
+        threading.Thread(target=tool_job, args=(act, tid, cat[tid]), daemon=True).start()
+        return f"{cat[tid]['name']}: started, see Tools"
     if act == "trust_hooks":
         return trust(agent)
     if act == "link_folder":
@@ -1781,7 +1826,7 @@ def actions_round():
     return "waited" in got  # a server before the long poll answers at once: then the loop waits itself
 
 
-STATE_ACTIONS = {"yolo", "workers_allowed", "max_workers", "link_folder", "unlink_folder", "trust_hooks", "stop_worker", "restart", "merge", "takeover", "archive_worker", "apply_models"}
+STATE_ACTIONS = {"install_tool", "remove_tool", "yolo", "workers_allowed", "max_workers", "link_folder", "unlink_folder", "trust_hooks", "stop_worker", "restart", "merge", "takeover", "archive_worker", "apply_models"}
 
 
 # ---------------------------------------------------------------- the page
@@ -2083,7 +2128,7 @@ def update_watch():
         time.sleep(UPDATE_EVERY)
         try:
             now = own_version()
-            if now and now != STARTED and now == seen and not AGENTS_UPDATING.locked():
+            if now and now != STARTED and now == seen and not AGENTS_UPDATING.locked() and not TOOLS_BUSY.locked():
                 with ACTING, TICK:  # the order of an action, which takes TICK inside; live chats and workers run in their own processes
                     log("info", "Restarting for the updated plugin", ".".join(map(str, now)))
                     restart()

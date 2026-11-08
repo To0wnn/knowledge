@@ -1065,6 +1065,14 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         else:
             (bin_dir / name).write_text(f'#!/bin/sh\nexec "{sys.executable}" "{bin_dir / "fakeagent.py"}" {name} "$@"\n', encoding="utf-8")
             (bin_dir / name).chmod(0o755)
+    tools_dir = home / "tools"  # the tool add-on fixture (KNOWLEDGE_TOOLS_DIR) and its command, a .cmd on Windows
+    tools_dir.mkdir()
+    (bin_dir / "kntool.py").write_text("import os\nopen(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tool-mark.txt'), 'a').write('K')\n", encoding="utf-8")
+    if WIN:  # %~dp0, not the path: the home's name is not ASCII (see the fake agents above)
+        (bin_dir / "kntool.cmd").write_text(f'@"{sys.executable}" "%~dp0kntool.py"\r\n', encoding="utf-8")
+    else:
+        (bin_dir / "kntool").write_text(f'#!/bin/sh\nexec "{sys.executable}" "{bin_dir / "kntool.py"}"\n', encoding="utf-8")
+        (bin_dir / "kntool").chmod(0o755)
     claude_json = home / ".claude.json"
     claude_json.write_text(json.dumps({"numStartups": 3, "projects": {}}), encoding="utf-8")
     (home / ".claude").mkdir()
@@ -1101,7 +1109,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
     self_url = f"http://127.0.0.1:{port}"
     env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, PATH=str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
                    KNOWLEDGE_COMPANION_PORT=str(port), KNOWLEDGE_COMPANION_EVERY="3600", KN_FAKE_CALLS=str(calls),
-                   KNOWLEDGE_COMPANION_ACTIONS_EVERY="0.2", KNOWLEDGE_COMPANION_UPDATE_EVERY="1", KNOWLEDGE_WORKER_GRACE="1", KNOWLEDGE_COMPANION_SCAN_EVERY="0",
+                   KNOWLEDGE_COMPANION_ACTIONS_EVERY="0.2", KNOWLEDGE_TOOLS_DIR=str(tools_dir), KNOWLEDGE_COMPANION_UPDATE_EVERY="1", KNOWLEDGE_WORKER_GRACE="1", KNOWLEDGE_COMPANION_SCAN_EVERY="0",
                    KNOWLEDGE_AGY_PROCESS="knfakeagy" if fake_agy else Path(sys.executable).stem,
                    KNOWLEDGE_CODEX_PROCESS="knfakecodex" if fake_codex else Path(sys.executable).stem)
 
@@ -1405,6 +1413,28 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         check(any(a["kind"] == "remote" and "yolo" in a["text"] and "alice" in a["text"] for a in act_log), "remote: every action is in the activity log, with who asked")
         act("yolo", {"agent": "claude", "on": False})
         wait_for(lambda: done()[-1]["status"] != "waiting", 20)
+        # A tool add-on: installed from the pc's own manifest (a .cmd on Windows, a step per agent), checked, listed, removed.
+        tool_mark = home / "tool-mark.txt"
+        put = lambda text: [sys.executable, "-c", f"open({str(tool_mark)!r}, 'a').write({text!r})"]
+        (tools_dir / "fixture.json").write_text(json.dumps({"name": "Fixture", "description": "a test tool", "needs": ["kntool"],
+            "install": [{"run": ["kntool"]}, {"run": put("C"), "agent": "claude"}],
+            "check": [{"run": [sys.executable, "-c", "import json, sys; print(json.dumps({'checks': [{'name': 'engine', 'ok': False}]})); sys.exit(1)"], "info": True}],
+            "version": {"run": [sys.executable, "-c", "print('1.0.0')"]}, "remove": [{"run": put("R")}]}), encoding="utf-8")
+        tool_row = lambda: (next((r for r in machines() if r["id"] == mid), {}).get("companion") or {}).get("tools", {}).get("fixture", {})
+        act("install_tool", {"tool": "fixture"})
+        wait_for(lambda: done()[-1]["status"] in ("done", "failed"), 30)
+        wait_for(lambda: tool_row().get("installed") or call("POST", "/local/api/tick", {}) and False, 30)
+        check(done()[-1]["status"] == "done" and tool_mark.read_text(encoding="utf-8") == "KC" and tool_row().get("version") == "1.0.0"
+              and tool_row().get("ok") is True and "not ok: engine" in tool_row().get("detail", ""),
+              "tools: install runs the manifest's steps (a .cmd on Windows, a step per agent), its check and version reach the Machines list",
+              json.dumps(done()[-1]) + json.dumps(tool_row()))
+        act("install_tool", {"tool": "nope"})
+        wait_for(lambda: done()[-1]["status"] in ("done", "failed"), 30)
+        check(done()[-1]["status"] == "failed" and "no tool nope" in done()[-1].get("result", ""), "tools: an id the pc's plugin does not know is refused there", json.dumps(done()[-1]))
+        act("remove_tool", {"tool": "fixture"})
+        wait_for(lambda: done()[-1]["status"] in ("done", "failed"), 30)
+        wait_for(lambda: tool_row().get("installed") is False or call("POST", "/local/api/tick", {}) and False, 30)
+        check(tool_mark.read_text(encoding="utf-8") == "KCR" and tool_row().get("installed") is False, "tools: remove runs its steps and the list says so", json.dumps(tool_row()))
         # Roll back a YOLO worker's last turn; once its branch is merged, the companion removes the worktree.
         call("POST", "/local/api/tick", {})
         gwt = home / ".knowledge" / "worktrees" / f"Garden-repo-{tag}-CMP-GEMINI"

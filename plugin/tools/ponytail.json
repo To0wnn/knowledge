@@ -1,0 +1,27 @@
+{
+  "name": "ponytail",
+  "description": "Lazy senior dev mode: the smallest change that fully solves the task (skills, commands and hooks).",
+  "homepage": "https://github.com/DietrichGebert/ponytail",
+  "install": [
+    {"run": ["claude", "plugin", "marketplace", "add", "DietrichGebert/ponytail"], "agent": "claude", "ok_if": ["already"]},
+    {"run": ["claude", "plugin", "marketplace", "update", "ponytail"], "agent": "claude"},
+    {"run": ["claude", "plugin", "install", "ponytail@ponytail", "--scope", "user"], "agent": "claude", "ok_if": ["already"]},
+    {"run": ["claude", "plugin", "update", "ponytail@ponytail"], "agent": "claude"},
+    {"run": ["codex", "plugin", "marketplace", "add", "DietrichGebert/ponytail"], "agent": "codex", "ok_if": ["already"]},
+    {"run": ["codex", "plugin", "marketplace", "upgrade", "ponytail"], "agent": "codex"},
+    {"run": ["codex", "plugin", "add", "ponytail@ponytail"], "agent": "codex"},
+    {"run": ["agy", "plugin", "install", "https://github.com/DietrichGebert/ponytail"], "agent": "agy"}
+  ],
+  "check": [
+    {"run": ["claude", "plugin", "list"], "agent": "claude", "expect": "ponytail@ponytail"},
+    {"run": ["codex", "plugin", "list"], "agent": "codex", "expect": "ponytail@\\S+\\s+installed"},
+    {"run": ["agy", "plugin", "list", "--json"], "agent": "agy", "expect": "\"name\": \"ponytail\""}
+  ],
+  "remove": [
+    {"run": ["claude", "plugin", "uninstall", "ponytail@ponytail"], "agent": "claude"},
+    {"run": ["claude", "plugin", "marketplace", "remove", "ponytail"], "agent": "claude"},
+    {"run": ["codex", "plugin", "remove", "ponytail"], "agent": "codex"},
+    {"run": ["codex", "plugin", "marketplace", "remove", "ponytail"], "agent": "codex"},
+    {"run": ["agy", "plugin", "uninstall", "ponytail"], "agent": "agy"}
+  ]
+}

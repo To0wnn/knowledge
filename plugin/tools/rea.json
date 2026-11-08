@@ -1,0 +1,23 @@
+{
+  "name": "REA",
+  "description": "Reverse engineering for agents: native binaries, JavaScript/Electron, .NET, Android and websites (MCP server and skill). Native decompiling also needs an engine such as Ghidra.",
+  "homepage": "https://github.com/morluto/rea",
+  "needs": ["npm"],
+  "install": [
+    {"run": ["npm", "install", "--global", "--ignore-scripts", "rea-agents@latest"]},
+    {"run": ["rea", "setup", "--yes", "--json", "--client", "claude_code"], "agent": "claude"},
+    {"run": ["rea", "setup", "--yes", "--json", "--client", "codex"], "agent": "codex"},
+    {"run": ["rea", "setup", "--yes", "--json", "--client", "antigravity"], "agent": "agy"}
+  ],
+  "check": [
+    {"run": ["rea", "doctor", "--json", "--skill", "--client", "claude_code"], "agent": "claude"},
+    {"run": ["rea", "doctor", "--json", "--skill", "--client", "codex"], "agent": "codex"},
+    {"run": ["rea", "doctor", "--json", "--skill", "--client", "antigravity"], "agent": "agy"},
+    {"run": ["rea", "doctor", "--json"], "info": true}
+  ],
+  "version": {"run": ["rea", "--version", "--json"]},
+  "remove": [
+    {"run": ["rea", "uninstall", "--json"]},
+    {"run": ["npm", "uninstall", "--global", "rea-agents"]}
+  ]
+}
