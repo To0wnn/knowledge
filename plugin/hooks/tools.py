@@ -141,7 +141,9 @@ def fill(text: str) -> str:
 def environment(m: dict, s: dict) -> dict:
     """This pc's environment with the tool's path folders in front of PATH and its env, then the step's env."""
     raw = {**m.get("env", {}), **s.get("env", {})}
-    mine = {k: fill(v[1:] if v.startswith("?") else v) for k, v in raw.items()}
+    # a {tools} path gets this OS's separators, as the PATH folders do (C:\...\tools/a would reach Java as is)
+    bare = {k: v[1:] if v.startswith("?") else v for k, v in raw.items()}
+    mine = {k: str(Path(fill(v))) if v.startswith("{tools}") else fill(v) for k, v in bare.items()}
     env = {**os.environ, **{k: v for k, v in mine.items() if not raw[k].startswith("?") or Path(v).exists()}}
     front = [str(Path(fill(p))) for p in m.get("path", []) if Path(fill(p)).is_dir()]
     env["PATH"] = os.pathsep.join(front + [env.get("PATH", "")])
