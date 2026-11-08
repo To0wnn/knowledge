@@ -7335,7 +7335,7 @@ def report_tools(t) -> dict:
                 "homepage": h if (h := str(v.get("homepage") or "")[:200]).startswith("https://") else "",
                 "installed": flag(v.get("installed")), "ok": flag(v.get("ok")), "version": str(v.get("version") or "")[:40],
                 "detail": redact(str(v.get("detail") or "")[:300]), "error": redact(str(v.get("error") or "")[:300]),
-                "busy": v["busy"] if v.get("busy") in ("install", "remove") else "",
+                "busy": v["busy"] if v.get("busy") in ("install", "remove", "update") else "",
                 "at": v["at"] if type(v.get("at")) in (int, float) and 0 < v["at"] < 1e11 else None}  # not Infinity: it reaches json
             for k, v in list(t.items())[:50] if re.fullmatch(r"[a-z0-9][a-z0-9-]{0,39}", str(k)) and isinstance(v, dict)}
 
@@ -7384,16 +7384,21 @@ async def machine_report(request: Request):
     await asyncio.to_thread(mark_machine, dev, report=report)
     if isinstance(b.get("workers"), list):  # an older companion that sends none keeps its transcripts; all it sent, not only the 40 kept
         await asyncio.to_thread(prune_worker_transcripts, dev["machine"], [w for w in b["workers"][:1000] if isinstance(w, dict)])
-    told = []
+    told, broken = [], []
+    errors = {k: f"{t['name']}: {t['error']}" for k, t in report["tools"].items() if t["error"]}
 
     def change(d):
         m = d.get(dev["machine"], {})
         new = [i for i in waits if i not in m.get("limit_told", [])]
         m["limit_told"] = (m.get("limit_told", []) + new)[-50:] if waits else []  # said again after it ran
         told.extend(new)
+        broken.extend(e for k, e in errors.items() if m.get("tools_told", {}).get(k) != e)  # a tool's failure, once
+        m["tools_told"] = errors
     await asyncio.to_thread(update_state, MACHINES_FILE, change)
     for tid in told:
         notify(f"Knowledge: task {tid} waits on {dev.get('machine_label')}: every agent there is at 90% of its usage limit.")
+    for e in broken:
+        notify(f"Knowledge: a tool on {dev.get('machine_label')} failed (Machines page, Tools): {e}"[:500])
     # its "Own branch" chats that are closed: the companion removes what has nothing left to merge
     closed = await asyncio.to_thread(lambda: [k for k in report["chats"] if (read_json(chat_file(dev["machine"], k), None) or {}).get("closed")])
     return JSONResponse({"ok": True, "closed_chats": closed})

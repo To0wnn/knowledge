@@ -855,6 +855,11 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     got = [a for a in json.loads(ui("/ui/api/machines")[2])["machines"] if a["id"] == mid][0]["companion"]["tools"]
     assert list(got) == ["rea"] and got["rea"]["homepage"] == "" and got["rea"]["ok"] is None and got["rea"]["installed"] is True \
         and len(got["rea"]["detail"]) == 300 and got["rea"]["version"] == "6.8.0" and got["rea"]["at"] is None and got["rea"]["busy"] == "", got
+    failed = {"rea": {"name": "REA", "installed": True, "error": "fetch: jdk: HTTP Error 503"}}
+    assert http("POST", "/machine/report", {**mrep, "tools": failed}, token=fr, headers=pc)[0] == 200
+    assert json.loads((tmp / "machines.json").read_text())[mid]["tools_told"] == {"rea": "REA: fetch: jdk: HTTP Error 503"}  # told once, kept to compare
+    assert http("POST", "/machine/report", {**mrep, "tools": tools}, token=fr, headers=pc)[0] == 200
+    assert json.loads((tmp / "machines.json").read_text())[mid]["tools_told"] == {}  # fixed: a new failure is told again
     state = json.loads(ui("/ui/api/admin")[2])["models"]
     assert {u["model"] for u in state["unmeasured"]} >= {"sonnet-x"} and state["chosen"]["read"]["claude"]["model"] == "on-no-pc", state
     row = next(x for x in state["pcs"] if x["id"] == mid)

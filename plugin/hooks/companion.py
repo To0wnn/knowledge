@@ -1611,6 +1611,16 @@ def tool_job(act: str, tid: str, m: dict):
         log("error", "A round of the companion failed", f"{type(e).__name__}: {e}"[:300])
 
 
+def update_tools():
+    """With the agents' daily update: every tool installed here is installed again, so it takes the newest release (a
+    fetch skips what is current). A failure keeps the tool as it was and says so; the server passes it on."""
+    cat = tools.catalog()
+    for tid, t in load("tools.json", {}).items():
+        if t.get("installed") and tid in cat and TOOLS_BUSY.acquire(blocking=False):
+            set_tool(tid, busy="update")
+            tool_job("install_tool", tid, cat[tid])
+
+
 def tool_state() -> dict:
     """Every tool this plugin knows, with what the last install, check or remove here found: the page's Tools list."""
     done = load("tools.json", {})
@@ -1933,6 +1943,7 @@ def update_agents_soon():
         if AGENTS_UPDATING.acquire(blocking=False):
             try:
                 update_agents()
+                update_tools()
             finally:
                 AGENTS_UPDATING.release()
     threading.Thread(target=update, daemon=True).start()

@@ -1460,7 +1460,7 @@ async function loadMachines() {
         const li = el("li"), name = el("strong", null, t.name);
         name.title = t.description || "";
         li.append(name, " ", el("span", `pill ${t.busy ? "" : t.error || t.ok === false ? "warn" : t.installed ? "ok" : ""}`,
-          t.busy ? (t.busy === "remove" ? "removing…" : "installing…") : t.error ? "failed" : !t.installed ? "not installed" : t.ok === false ? "needs attention" : "installed"));
+          t.busy ? ({ remove: "removing…", update: "updating…" }[t.busy] || "installing…") : t.error ? "failed" : !t.installed ? "not installed" : t.ok === false ? "needs attention" : "installed"));
         if (t.version) li.append(" ", el("span", "muted", t.version));
         if (m.own && m.online && !t.busy) {
           li.append(" ", machineButton(t.installed ? "Update" : "Install", t.installed ? "Install the newest version again for every agent here" : `Install ${t.name} for every agent on this pc`,
