@@ -159,18 +159,19 @@ def environment(m: dict, s: dict) -> dict:
     return env
 
 
-def summary(out: str, text: str) -> str:
-    """One line for the page: a JSON report's failed checks or remediation (REA's doctor and setup), else the last line."""
+def summary(out: str, text: str, info: bool = False) -> str:
+    """One line for the page: a JSON report's failed checks or remediation (REA's doctor and setup), else the last line.
+    info: the checks are optional extras (REA's paid engines), named only, so the note does not read as an error."""
     try:
         d = json.loads(out)
     except ValueError:
         d = None
     if isinstance(d, dict):
         scoped = d.get("scope_checks") if isinstance(d.get("scope_checks"), list) and d["scope_checks"] else d.get("checks", [])
-        bad = [f"{c.get('name', '?')} ({c['detail'][:80]})" if c.get("detail") and scoped is not d.get("checks") else c.get("name", "?")
+        bad = [f"{c.get('name', '?')} ({c['detail'][:80]})" if c.get("detail") and scoped is not d.get("checks") and not info else c.get("name", "?")
                for c in scoped if isinstance(c, dict) and c.get("ok") is False]  # what decides, with why when it is few
         if bad:
-            return "not ok: " + ", ".join(bad)
+            return ("optional, not set up: " if info else "not ok: ") + ", ".join(bad)
         for k in ("remediation", "error", "status"):
             if isinstance(d.get(k), str) and d[k]:
                 return d[k]
@@ -464,7 +465,8 @@ def do(m: dict, s: dict) -> tuple:
 
 def said(s: dict, text: str, out: str = "") -> str:
     label = " ".join(s["run"][:3]) if "run" in s else "fetch" if "fetch" in s else "delete"
-    return f"{label}: {summary(out, text)[:200]}"
+    line = summary(out, text, bool(s.get("info")))
+    return line if line.startswith("optional, not set up: ") else f"{label}: {line[:200]}"
 
 
 def check(m: dict, agents) -> dict:
@@ -648,7 +650,7 @@ def self_test():
         mark.write_text("")
         got = install(m, here(["claude", "agy"]))
         assert mark.read_text() == "iC" + ("W" if OS == "windows" else "P"), mark.read_text()  # codex is not here
-        assert got["ok"] is True and got["version"] == "1.2.3" and got["detail"].endswith("not ok: ghidra"), got  # info only
+        assert got["ok"] is True and got["version"] == "1.2.3" and got["detail"] == "optional, not set up: ghidra", got  # info only
         try:
             remove(m, [])
             raise AssertionError("a failed remove step is said")
@@ -659,6 +661,7 @@ def self_test():
         assert slow[0] is False and "timed out" in slow[2], slow  # back in a second, the grandchild too
         doc = json.dumps({"checks": [{"name": "hopper", "ok": False}], "scope_checks": [{"name": "ghidra-version", "ok": False, "detail": "12.2; accepted 12.1.x"}]})
         assert summary(doc, "") == "not ok: ghidra-version (12.2; accepted 12.1.x)", summary(doc, "")
+        assert summary(doc, "", True) == "optional, not set up: ghidra-version", summary(doc, "", True)  # no cut-off detail
         assert check(bad, [])["ok"] is False and "Install Node.js 22" in check(bad, [])["detail"]
         assert detect(bad, []) is None and detect(m, [])["ok"] is True, "a hand-installed tool is found, a missing one not"
         half = {**m, "check": [*m["check"], {"run": [py, "-c", "import sys; sys.exit(1)"], "agent": "codex"}]}
