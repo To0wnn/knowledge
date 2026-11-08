@@ -758,12 +758,22 @@ if name == "codex" and args[:1] == ["app-server"] and os.environ.get("KNOWLEDGE_
         elif m.get("method") in ("thread/start", "thread/resume"):
             loaded, perms = m["params"].get("threadId", ""), m["params"]
             send({"id": m["id"], "result": {"thread": {"id": "sess-codex"}}})
+        elif m.get("method") == "skills/list":  # slash commands: its skills (Codex 0.167's shape)
+            send({"id": m["id"], "result": {"data": [{"cwd": m["params"]["cwds"][0], "skills": [
+                {"name": "fake-skill", "description": "A fake skill\\nmore", "path": "/skills/fake-skill/SKILL.md", "scope": "user", "enabled": True}]}]}})
+        elif m.get("method") == "thread/compact/start":  # its own compaction: a turn of its own
+            turns += 1
+            rec({"chat": os.environ["KNOWLEDGE_CHAT"], "compact": True, "pid": os.getpid()})
+            send({"id": m["id"], "result": {}})
+            note("turn/started", {"threadId": "sess-codex", "turn": {"id": f"t{turns}", "status": "inProgress"}})
+            note("turn/completed", {"threadId": "sess-codex", "turn": {"id": f"t{turns}", "status": "completed"}})
         elif m.get("method") in ("turn/steer", "turn/interrupt"):  # no turn runs: as codex-rs, an error
             send({"id": m["id"], "error": {"code": -32600, "message": "no active turn"}})
         elif m.get("method") == "turn/start":
             turns += 1
-            tid, texts = f"t{turns}", [m["params"]["input"][0]["text"]]
+            tid, texts = f"t{turns}", [next(x["text"] for x in m["params"]["input"] if x["type"] == "text")]
             rec({"chat": os.environ["KNOWLEDGE_CHAT"], "argv": [name] + args, "cwd": os.getcwd(), "stdin": texts[0], "load": loaded, "perms": perms, "pid": os.getpid(),
+                 "input": m["params"]["input"],
                  "pick": [m["params"].get("model"), m["params"].get("effort")]})
             if "LATE" in texts[0]:  # the answer takes a while: a Stop comes before the turn is known
                 time.sleep(2)
@@ -837,6 +847,8 @@ elif os.environ.get("KNOWLEDGE_CHAT") and name == "agy" and args[:1] == ["acp"]:
             send({"id": m["id"], "result": {}})
         elif m.get("method") == "session/new":
             send({"id": m["id"], "result": {"sessionId": "sess-agy", "models": {"availableModels": [{"modelId": "fake-acp", "name": "Fake ACP"}]}}})
+            upd({"sessionUpdate": "available_commands_update", "availableCommands": [{"name": "compact", "description": "Compact the conversation now."},
+                                                                                {"name": "goal", "description": "Run until done.", "input": {"hint": "the goal"}}]})
         elif m.get("method") == "session/load":
             loaded = m["params"]["sessionId"]
             upd({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "OLD HISTORY"}})  # a replay: never output
@@ -890,9 +902,16 @@ elif name == "claude" and "--input-format" in args and os.environ.get("KNOWLEDGE
     out({"type": "system", "subtype": "init", "session_id": sid})
     while (m := inbox.get()) is not None:
         if m.get("type") == "control_request":  # an interrupt with no turn running: answered, nothing else
-            out({"type": "control_response", "response": {"subtype": "success", "request_id": m.get("request_id")}})
+            cmds = [{"name": "fake-skill", "description": "A fake skill (user)", "argumentHint": "[what]"}, {"name": "context", "description": "Show context usage"}]
+            out({"type": "control_response", "response": {"subtype": "success", "request_id": m.get("request_id"),
+                 **({"response": {"commands": cmds}} if m["request"].get("subtype") == "initialize" else {})}})
             continue
         texts = [m["message"]["content"]]
+        if texts[0] == "/context":  # a local command: its output and a result with no model turn, no echo (2.1.319)
+            rec({"chat": os.environ["KNOWLEDGE_CHAT"], "stdin": texts[0], "pid": os.getpid()})
+            out({"type": "assistant", "message": {"content": [{"type": "text", "text": "Context Usage: fake"}]}})
+            out({"type": "result", "subtype": "success", "num_turns": 0, "result": "Context Usage: fake", "session_id": sid})
+            continue
         if "LATE" in texts[0]:  # it takes a while to take it: a Stop comes first
             rec({"chat": os.environ["KNOWLEDGE_CHAT"], "argv": [name] + args, "cwd": os.getcwd(), "stdin": texts[0], "pid": os.getpid()})
             time.sleep(2)
@@ -1895,6 +1914,31 @@ def chat_e2e(tok: str, tmp: Path):
                 turn = ([c for c in recorded() if c["chat"] == cid] + [{}, {}])[1]
                 check(back and turn.get("pick") == ["fake-default", "medium"], "chat codex: Default after a choice names the configured model and effort",
                       json.dumps(turn)[:600] + " | events: " + json.dumps(chat(cid)["events"])[-900:] + " | log: " + (home / "companion.log").read_text(errors="replace")[-1500:])
+        # Slash commands: each agent's live chat lists its own (Claude initialize, Codex skills/list + compact, ACP's
+        # available_commands_update); the pc reports them, the chat box gets them; each runs them its own way.
+        cmds = lambda a: json.loads(http("GET", f"/ui/api/chat/commands?machine={mid}&agent={a}", None, ui)[1] or "{}").get("commands") or []
+        want = {"claude": ["fake-skill", "context"], "codex": ["compact", "fake-skill"], "agy": ["compact", "goal"]}
+        key = (home / ".knowledge" / "companion" / "api-key").read_text(encoding="utf-8").strip()
+        urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{env['KNOWLEDGE_COMPANION_PORT']}/local/api/tick", method="POST", data=b"{}", headers={
+            "Origin": f"http://127.0.0.1:{env['KNOWLEDGE_COMPANION_PORT']}", "Content-Type": "application/json", "X-Companion-Key": key}), timeout=120).read()  # a report round now
+        ok = wait_for(lambda: all([c["name"] for c in cmds(a)] == n for a, n in want.items()), 30)
+        check(ok and cmds("codex")[1]["description"] == "A fake skill" and cmds("claude")[0]["hint"] == "[what]" and cmds("agy")[1]["hint"] == "the goal",
+              "chat: the pc reports each agent's slash commands for the box", json.dumps({a: cmds(a) for a in want})[:900])
+        check("commands" not in json.dumps(next(r for r in machines() if r["id"] == mid)["agents"]), "chat: the machines list leaves the long command lists out")
+        cid = new("claude", repo)
+        st = http("POST", "/ui/api/chat/send", {"machine": mid, "id": cid, "text": "/context"}, ui)[0]
+        check(st == 200 and idle(cid, 2) and any("Context Usage: fake" in e["text"] for e in chat(cid)["events"]),
+              "chat claude: a local slash command (no echo, no model turn) ends its turn", json.dumps(chat(cid)["events"])[-600:])
+        cid = new("codex", repo)
+        st = http("POST", "/ui/api/chat/send", {"machine": mid, "id": cid, "text": "/fake-skill go"}, ui)[0]
+        wait_for(lambda: any(c.get("chat") == cid and c.get("input") for c in recorded()), 30)
+        turn = next((c for c in recorded() if c.get("chat") == cid and c.get("input")), None)
+        check(st == 200 and idle(cid, 2) and (turn or {}).get("input") == [{"type": "skill", "name": "fake-skill", "path": "/skills/fake-skill/SKILL.md"}, {"type": "text", "text": "$fake-skill go"}],
+              "chat codex: /skill goes in as Codex's own skill input", json.dumps(turn)[:600])
+        n = len(chat(cid)["events"])
+        st = http("POST", "/ui/api/chat/send", {"machine": mid, "id": cid, "text": "/compact"}, ui)[0]
+        check(st == 200 and wait_for(lambda: any(c.get("chat") == cid and c.get("compact") for c in recorded()), 30) and idle(cid, n + 1),
+              "chat codex: /compact runs Codex's own compaction and ends", json.dumps(chat(cid)["events"])[-600:])
         # Live chats (Claude Code and Codex): a message sent while it works goes into the running turn (the same process
         # takes it); Force stops the step and sends the message after it; Stop interrupts and the process stays.
         sendm = lambda cid, text, mode: http("POST", "/ui/api/chat/send", {"machine": mid, "id": cid, "text": text, "mode": mode}, ui)[0]

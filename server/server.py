@@ -1162,7 +1162,7 @@ def knowledge_chat_archive(chat: str = "", chat_id: str = "", id: str = "", forc
 @server.tool(annotations=EDIT)
 def knowledge_chat_title(title: str, chat: str = "") -> str:
     """Name the web UI chat you run in: 3 to 6 words in the user's language saying what it works on (e.g. 'Clearer chat
-    titles'), not their message. Call it after your first answer and again when the subject changes.
+    titles'), not their message. Call it at the start, with your first other tool call, and when the subject changes.
     chat: another of your chats (id from knowledge_chats), e.g. to rename it when its owner asks."""
     cid = chat.strip() or device.get().get("chat", "")
     title = " ".join(str(title).split()).strip(" .\"'")[:60]
@@ -2034,7 +2034,7 @@ def token_project() -> str | None:
 WEBCHAT_NOTE = ("===== knowledge: a chat from the web UI =====\nThe user talks to you from the knowledge web UI; each message "
                 "is one turn. Answer what they ask. Tasks between agents run in workers: do not list, take or start them here.\n"
                 "Name the chat with knowledge_chat_title (3 to 6 words on what it works on, chat: its id from the first "
-                "message) after your first answer and when the subject changes.")
+                "message) at the start, together with your first other tool call, and when the subject changes.")
 
 
 def context_parts(project: str = "homelab", agent: str = "", chat: bool = False, webchat: bool = False) -> list[str]:
@@ -2815,6 +2815,10 @@ def mark_machine(dev: dict, agent: str = "", session: str = "", project: str = "
                 "agent": agent, "session": session[:80], "project": project, "task": task, "at": now, "token": dev["name"],
                 **({"worker": dev["worker"]} if dev.get("worker") else {})}
         if report is not None:
+            had = (m.get("companion") or {}).get("agents") or {}
+            for a, v in report.get("agents", {}).items():  # sent only when changed: kept until then
+                if "commands" not in v and had.get(a, {}).get("commands"):
+                    v["commands"] = had[a]["commands"]
             m["companion"] = {**report, "at": now, "token": dev["name"]}  # the token its companion claims tasks with
         m["sessions"] = {k: s for k, s in m.get("sessions", {}).items() if now - s.get("at", 0) < SESSION_KEEP}
     try:
@@ -2927,6 +2931,7 @@ def machine_rows() -> list[dict]:
         agents = {}
         for a in AGENT_OWNERS:
             mine = {**(m.get("agents") or {}).get(a, {}), **(comp.get("agents") or {}).get(a, {})}
+            mine.pop("commands", None)  # long: only /ui/api/chat/commands hands them out, when a box asks
             # only what this person's own tokens reported: a pc shared with someone else shows not their sessions or errors
             errs = sorted((e for n in names for e in status_errors(f"{n}#{mid}").get(a, [])), key=lambda e: e["at"])
             sessions = sorted((s for s in m.get("sessions", {}).values() if s["agent"] == a and now - s["at"] < SESSION_KEEP
@@ -5816,8 +5821,8 @@ CHATS_DIR = ADMIN_DIR / "chats"
 CHAT_KEEP, CHAT_EVENTS, CHAT_BYTES, CHAT_TEXT = 50, 4000, 1_000_000, 20_000  # chats per machine, events and bytes per chat, chars per message
 CHAT_PENDING = 5  # messages a chat keeps in line while its agent answers
 # Archive: the agent's last turn records the chat in the memos before the chat closes (the house rules, not the transcript)
-CHAT_TITLE_ASK = ("\n\n(knowledge web UI: after your answer, name this chat with the tool knowledge_chat_title, chat {chat}, title "
-                  "3 to 6 words in my language on what it works on.)")  # the id in the text: works without the plugin's header
+CHAT_TITLE_ASK = ("\n\n(knowledge web UI: first, together with your first other tool call, name this chat with the tool "
+                  "knowledge_chat_title, chat {chat}, title 3 to 6 words in my language on what it works on.)")  # the id in the text: works without the plugin's header
 CHAT_WRAP_UP = ("This chat is being archived. Before it closes, record what it established on the knowledge server, following the "
                 "house rules: for each subject, knowledge_search first and knowledge_edit the memo that already covers it "
                 "(knowledge_new_memo only for a genuinely new subject). What is true now goes under '## Status', each decision "
@@ -5840,6 +5845,16 @@ def report_models(v) -> list:
             out.append({"id": m["id"], "name": str(m.get("name") or m["id"])[:80], "efforts": efforts,
                         **({"default": m["default"]} if m.get("default") in efforts else {})})
     return out
+
+
+COMMAND = re.compile(r"\w[\w.:-]{0,79}", re.ASCII)
+
+
+def report_commands(v) -> list:
+    """An agent's slash commands as its pc reported them (chat.py commands()): [{name, description, hint}], checked, at
+    most 200; a chat box offers them after a "/" and sends the text, the agent runs it its own way."""
+    return [{"name": c["name"], "description": str(c.get("description") or "")[:120], "hint": str(c.get("hint") or "")[:60]}
+            for c in (v if isinstance(v, list) else [])[:200] if isinstance(c, dict) and COMMAND.fullmatch(str(c.get("name", "")))]
 
 
 def chat_choice(row: dict, agent: str, model: str, effort: str) -> tuple:
@@ -6541,6 +6556,16 @@ async def ui_chat(request: Request):
     return JSONResponse({"chat": chat_meta(c), "events": events, "older": older, "trimmed": bool(c.get("trimmed")),
                          "online": row["online"], "at": row["at"], "label": row["label"], "asks": asks, "now": time.time(),
                          "models": ((row.get("companion") or {}).get("models") or {}).get(c.get("agent"), [])})
+
+
+@server.custom_route("/ui/api/chat/commands", methods=["GET"])
+async def ui_chat_commands(request: Request):
+    """?machine=&agent=: the slash commands that agent offers on that pc (one of this person's own), for the chat box."""
+    mid, agent = request.query_params.get("machine", ""), request.query_params.get("agent", "")
+    if not await asyncio.to_thread(own_machine, mid):
+        return JSONResponse({"error": await asyncio.to_thread(not_own, mid)}, status_code=403)
+    m = (await asyncio.to_thread(read_json, MACHINES_FILE, {})).get(mid) or {}
+    return JSONResponse({"commands": (((m.get("companion") or {}).get("agents") or {}).get(agent) or {}).get("commands", [])})
 
 
 @server.custom_route("/ui/api/chat/send", methods=["POST"])
@@ -7458,8 +7483,8 @@ async def machine_report(request: Request):
     trusted and usage limit, and its workers. Tasks that wait for a usage limit get one Matrix notice each."""
     dev = device.get()
     raw = await request.body()
-    if not dev.get("machine") or len(raw) > 64_000:
-        return JSONResponse({"error": "needs X-Knowledge-Machine and a body under 64 kB"}, status_code=400)
+    if not dev.get("machine") or len(raw) > 128_000:  # room for the slash command lists of all agents at once (~30 kB)
+        return JSONResponse({"error": "needs X-Knowledge-Machine and a body under 128 kB"}, status_code=400)
     try:
         b = json.loads(raw)
         report = {"version": str(b.get("version", ""))[:20], "workersAllowed": b.get("workersAllowed") is True,
@@ -7476,6 +7501,7 @@ async def machine_report(request: Request):
                                  # the installed plugin, read from disk by the companion: shown before the agent's first session
                                  **({"plugin": v["plugin"][:20]} if isinstance(v.get("plugin"), str) and re.fullmatch(r"[\w.+-]{1,20}", v["plugin"]) else {}),
                                  **({"models": report_models(v["models"])} if "models" in v else {}),
+                                 **({"commands": report_commands(v["commands"])} if "commands" in v else {}),
                                  **({"current": {k: str(x)[:80] for k, x in v["current"].items() if k in ("lead", "lead_effort", "reader", "reader_effort")}}
                                     if isinstance(v.get("current"), dict) else {})}
                              for a, v in (b.get("agents") or {}).items() if a in AGENT_OWNERS and isinstance(v, dict)},

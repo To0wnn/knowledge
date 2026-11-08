@@ -1555,6 +1555,9 @@ def terminal_asks(now: float) -> list:
     return out[:20]
 
 
+_COMMANDS_SENT: dict = {}  # agent -> (when, the slash command list) the server has from this companion
+
+
 def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, resets=None, windows=None):
     """The machine's state for the Machines list: settings, game, per agent YOLO, hooks and limit, the workers, and
     why each ready task waits here (the Tasks tab shows it)."""
@@ -1566,6 +1569,8 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
             "agents": {a: {"yolo": bool(yolo.get(a, {}).get("on")), "trusted": not untrusted(a, folders), "limit": lim.get(a),
                      "resets": (resets or {}).get(a), "windows": (windows or {}).get(a, []), **({"plugin": v} if (v := plugin_version(a)) else {}),  # known before a session
                      "models": chat.models(a),  # what a chat may pick (cached for hours)
+                     # the slash commands its last live chat here offered: long, so only when changed (the server keeps them)
+                     **({"commands": c} if (c := chat.commands(a)) != _COMMANDS_SENT.get(a, (0, None))[1] or now - _COMMANDS_SENT[a][0] > 6 * 3600 else {}),
                      "current": model_settings.current(a)}
                        for a in AGENTS if installed(a)},
             "workers": [{**{k: w.get(k) for k in ("id", "project", "agent", "status", "started", "ended", "branch", "yolo", "open", "why", "chat", "title")},
@@ -1574,6 +1579,7 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
                          **({"review": r} if (r := bounded(w.get("repo"), lambda w=w: review(w, now))) else {})} for k, w in sorted(ws.items(), key=lambda kw: -(kw[1].get("started") or 0)) if not w.get("archived")],  # newest first: the server keeps 40
             "tools": tool_state(), "limitWait": wait, "waiting": waiting or {}, "asks": terminal_asks(now), "folders": links, "chats": chat_gits, "chatReviews": chat_reviews(now, chat_gits), "projects": load("state.json", {}).get("projects", [])}
     answer = server("POST", "/machine/report", tok, body)
+    _COMMANDS_SENT.update({a: (now, v["commands"]) for a, v in body["agents"].items() if "commands" in v})
     tools.TOKEN = str(answer.get("github_token") or "")  # for tool downloads only: agents keep their own gh login
     try:
         clean_chat_branches(answer.get("closed_chats") or [])

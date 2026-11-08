@@ -340,7 +340,7 @@ function compareTable(pcs, here, mine) {
       label.append(el("span", null, t.name));
       const kind = TOOL_KIND[t.kind]; if (kind) { const k = el("small", "muted", kind[0]); k.title = kind[1]; label.append(" ", k); }
       const lacking = mine ? pcs.filter((m) => steers(m) && m.companion?.tools?.[id] && !m.companion.tools[id].installed && !m.companion.tools[id].busy) : [];
-      const end = mine && pcs.length > 1 && lacking.length ? machineButton(lacking.length === 1 ? `Install on ${lacking[0].label}` : "Install on all my pcs", `Install ${t.name} on ${lacking.map((m) => m.label).join(", ")}`,
+      const end = mine && lacking.length > 1 ? machineButton("Install on all my pcs", `Install ${t.name} on ${lacking.map((m) => m.label).join(", ")}`,
         () => Promise.all(lacking.map((m) => machineAction(m, "install_tool", { tool: id })))) : null;
       grid.append(row("", label, pcs.map((m) => toolCell(m, id, `${m.id}:${id}`)), end));
     }
@@ -353,7 +353,8 @@ function machinesStatus(res, own, online) {
   const box = el("section", "mx-status"), text = el("div"), items = [];
   const lead = el("p", "mx-lead", own.length ? `${online.length} of your ${own.length} pc${own.length === 1 ? " is" : "s are"} online.` : "None of your pcs reported yet.");
   const behind = online.filter((m) => steers(m) && pluginBehind(m));
-  for (const m of behind) items.push([`${m.label} runs an older Knowledge (${m.companion.version}).`]);
+  for (const m of behind) items.push([versionNewer(newestPlugin(), m.companion.version || "0") ? `${m.label} runs an older Knowledge (${m.companion.version}).`
+    : `The plugin of ${Object.entries(m.agents || {}).filter(([, ag]) => ag.plugin && versionNewer(newestPlugin(), ag.plugin)).map(([a]) => AGENT_NAME[a] || a).join(" and ")} on ${m.label} is older than its Knowledge.`]);
   for (const m of online) for (const [a, ag] of Object.entries(m.agents || {})) {
     if (ag.trusted === false) items.push([`${AGENT_NAME[a] || a} on ${m.label} does not trust the knowledge hooks yet.`]);
     if (recentError(ag)) items.push([`A hook of ${AGENT_NAME[a] || a} on ${m.label} failed ${ago(ag.error.at)}.`]);
@@ -381,19 +382,27 @@ function machinesStatus(res, own, online) {
 
 // Offline pcs: one line each, with Forget, and Revoke when its token is its own (revoking cuts off every pc using it).
 function offlineSection(title, pcs, res) {
-  const sec = el("section", "mx-offline"), ul = el("ul", "mx-lines");
-  sec.append(el("h2", "mx-h", title));
-  for (const m of pcs) {
-    const li = el("li", "mx-line"), name = el("strong"), info = el("div");
+  const sec = el("section", "mx-offline"), ul = el("ul", "mx-lines"), groups = new Map();
+  // a pc set up again reports under a new id each time: one line per name and token, its reports counted
+  for (const m of pcs) { const k = `${m.label.toLowerCase()}|${[...m.tokens].sort().join(",")}`; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(m); }
+  sec.append(el("h2", "mx-h", `${title} (${groups.size})`));
+  for (const ms of groups.values()) {
+    const m = ms[0], ids = new Set(ms.map((x) => x.id)), li = el("li", "mx-line"), name = el("strong"), info = el("div");
     const dot = el("span", "machine-dot"); dot.setAttribute("aria-hidden", "true");
     name.append(dot, " ", m.label);
+    if (ms.length > 1) name.append(" ", el("span", "pill", `${ms.length} reports`));
     if (!m.mine) name.append(" ", el("span", "pill", "view only"));
-    const shared = m.tokens.filter((t) => res.machines.some((o) => o.id !== m.id && o.tokens.includes(t)));
+    const others = res.machines.filter((o) => !ids.has(o.id) && o.tokens.some((t) => m.tokens.includes(t)));
     info.append(el("span", null, [m.old ? "old plugin" : `last seen ${ago(m.at)}`, m.companion?.version && `Knowledge ${m.companion.version}`, m.tokens.length && `token ${m.tokens.join(", ")}`].filter(Boolean).join(" · ")));
-    if (shared.length) info.append(el("small", "muted", `Token ${shared.join(", ")} is also used by ${res.machines.filter((o) => o.id !== m.id && o.tokens.some((t) => shared.includes(t))).map((o) => o.label).join(", ")}: revoking it would cut those off too.`));
-    const acts = el("div", "mx-line-acts");
-    if (m.mine) acts.append(actionButton("Forget", () => forgetPc(m), "btn small"));
-    if (me.admin && !m.online && m.tokens.length && !shared.length) acts.append(actionButton("Revoke its token…", async () => {
+    if (others.length) info.append(el("small", "muted", `Its token is also used by ${[...new Set(others.map((o) => o.label))].join(", ")}: revoking it would cut those off too.`));
+    const acts = el("div", "mx-line-acts"), mine = ms.filter((x) => x.mine);
+    if (mine.length) acts.append(actionButton(mine.length > 1 ? `Forget all ${mine.length}` : "Forget", async () => {
+      if (mine.length === 1) return forgetPc(m);
+      if (!confirm(`Forget the ${mine.length} reports of ${m.label}? Their actions, history and chats on the server go; a pc that reports again comes back.`)) return;
+      for (const x of mine) await api("/ui/api/machines/forget", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: x.id }) }).catch((e) => toast(e.message));
+      loadMachines();
+    }, "btn small"));
+    if (me.admin && !ms.some((x) => x.online) && m.tokens.length && !others.length) acts.append(actionButton("Revoke its token…", async () => {
       if (!confirm(`Revoke token ${m.tokens.join(", ")} of ${m.label}? It can no longer reach the server; a new token is needed to set it up again.`)) return;
       try { for (const t of m.tokens) await api("/ui/api/admin/token", { method: "POST", headers: { "Content-Type": "application/json", "X-Knowledge-UI": "1" }, body: JSON.stringify({ name: t, revoke: true }) }); } catch (e) { toast(e.message); }
       loadMachines();
@@ -492,7 +501,7 @@ function drawMachines() {
     parts.push(machinesStatus(res, own, online));
     if (online.length) parts.push(compareTable(online, here, true));
     const offline = own.filter((m) => !m.online || m.old).sort((a, b) => (b.at || 0) - (a.at || 0));
-    if (offline.length) parts.push(offlineSection(`Offline (${offline.length})`, offline, res));
+    if (offline.length) parts.push(offlineSection("Offline", offline, res));
     const theirs = res.machines.filter((m) => !m.mine);
     if (theirs.length) {
       const sec = el("section", "mx-theirs"), h = el("h2", "mx-h", "Other people's pcs"), live = theirs.filter((m) => m.online && !m.old);
@@ -501,7 +510,7 @@ function drawMachines() {
       sec.append(h, el("p", "muted mx-lede", "Each pc on its owner's accounts: never counted with yours. You see them; their owner steers them."));
       for (const m of live) sec.append(compareTable([m], here, false));
       const gone = theirs.filter((m) => !m.online || m.old);
-      if (gone.length) sec.append(offlineSection(`Offline (${gone.length})`, gone, res));
+      if (gone.length) sec.append(offlineSection("Offline", gone, res));
       parts.push(sec);
     }
   }
