@@ -19,13 +19,14 @@
       "darwin-x64": {"match": "^OpenJDK25U-jdk_x64_mac_hotspot_[\\d._]+\\.tar\\.gz$", "strip": 3},
       "darwin-arm64": {"match": "^OpenJDK25U-jdk_aarch64_mac_hotspot_[\\d._]+\\.tar\\.gz$", "strip": 3},
       "windows-x64": "^OpenJDK25U-jdk_x64_windows_hotspot_[\\d._]+\\.zip$"}}},
-    {"fetch": {"github": "NationalSecurityAgency/ghidra", "into": "ghidra", "asset": {
+    {"fetch": {"github": "NationalSecurityAgency/ghidra", "tag": "^Ghidra_12\\.1(\\.\\d+)?_build$", "into": "ghidra", "asset": {
       "linux-x64": "^ghidra_[\\d.]+_PUBLIC_\\d+\\.zip$", "linux-arm64": "^ghidra_[\\d.]+_PUBLIC_\\d+\\.zip$",
       "darwin-x64": "^ghidra_[\\d.]+_PUBLIC_\\d+\\.zip$", "darwin-arm64": "^ghidra_[\\d.]+_PUBLIC_\\d+\\.zip$",
       "windows-x64": "^ghidra_[\\d.]+_PUBLIC_\\d+\\.zip$"}}},
     {"fetch": {"github": "1013503897/jadx-headless-mcp", "into": "jadx-headless-mcp.jar", "asset": {
       "linux-x64": "-all\\.jar$", "linux-arm64": "-all\\.jar$", "darwin-x64": "-all\\.jar$", "darwin-arm64": "-all\\.jar$", "windows-x64": "-all\\.jar$"}}},
     {"run": ["npm", "install", "--global", "--ignore-scripts", "rea-agents@latest"]},
+    {"run": ["node", "-e", "const fs=require('fs'),f=fs.realpathSync(process.argv[1]),t=fs.readFileSync(f,'utf8');if(t.startsWith('#!/usr/bin/env node'))fs.writeFileSync(f,'#!'+process.execPath+t.slice(t.indexOf('\\n')))", "{tools}/npm/bin/rea"], "os": ["linux", "darwin"]},
     {"run": ["rea", "setup", "--yes", "--json", "--client", "claude_code"], "agent": "claude"},
     {"run": ["rea", "setup", "--yes", "--json", "--client", "codex"], "agent": "codex"},
     {"run": ["rea", "setup", "--yes", "--json", "--client", "antigravity"], "agent": "agy"}

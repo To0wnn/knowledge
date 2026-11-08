@@ -69,7 +69,8 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   ```
 
   A step is one of `run` (a command looked up on PATH, no shell), `fetch` (the newest release file for this
-  platform: `{"github": "owner/repo"}` with GitHub's sha256 of the asset, or `{"shasums": "https://.../SHASUMS256.txt"}`
+  platform: `{"github": "owner/repo"}` with GitHub's sha256 of the asset (`"tag": "regex"`: the newest release of a
+  line, when a tool supports only that line), or `{"shasums": "https://.../SHASUMS256.txt"}`
   like Node.js; `"asset": {"<os>-<x64|arm64>": "regex"}` or `{"match", "strip"}`; unpacked into `"into"` in
   `~/.knowledge/tools`, the old copy replaced only once the new one is complete and checked; skipped when that release
   is there already, or when no file fits this platform) or `delete` (a name in that folder). `{tools}` in an argument,
@@ -86,7 +87,10 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   npm `rea-agents` into a prefix there, registered with `rea setup` per agent so the agents get those engines, checked
   with `rea doctor`; Linux-only engines such as tshark or binwalk are left to the system), `ponytail` (each agent's own
   plugin command) and `no-ai-slop` (the skills CLI, telemetry off). The Node.js and JDK major versions are in the
-  manifest (`latest-v26.x`, `temurin25-binaries`): move them when a newer LTS is out.
+  manifest (`latest-v26.x`, `temurin25-binaries`): move them when a newer LTS is out. Ghidra is the newest 12.1.x,
+  the line REA 6.8.0 accepts (its doctor refuses 12.2): move the `tag` when REA takes a newer line. On Linux and macOS
+  REA registers its `rea` launcher, which starts the first `node` on the agent's PATH; a step points that launcher at
+  the Node in `~/.knowledge/tools`, as REA already does itself on Windows.
 - **Updates:** with the agents' daily update (same rules: not during a game, chat or worker; Update agents in the ⋯
   menu runs it now; off with `KNOWLEDGE_AUTO_UPDATE=0`) every installed tool is installed again, so it takes the newest
   release; a fetch skips what is current. A failed install or update keeps the tool as it was, shows red in the list

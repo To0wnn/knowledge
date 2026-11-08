@@ -12,7 +12,8 @@ more than a tool id (the companion's rule that no free text reaches a pc). A man
            "ok_if": [text in the output that makes a non-zero exit fine], "expect": "a regex the output must match",
            "info": true (check only: reported, never makes the tool unhealthy), "timeout": seconds,
            "env": {"NAME": "value"} (this step only, e.g. DO_NOT_TRACK)
-    fetch = {"github": "owner/repo" (its latest release; GitHub's sha256 of the asset is checked)
+    fetch = {"github": "owner/repo" (its latest release, or with "tag": "regex" the newest release whose tag matches,
+             for a line the tool supports; GitHub's sha256 of the asset is checked)
              or "shasums": "https://.../SHASUMS256.txt" (a list of file names with their sha256, e.g. Node.js),
              "asset": {"<os>-<x64|arm64>": "regex of the file name" or {"match": regex, "strip": folders to drop}},
              "into": "<name in the tools folder>"}
@@ -35,6 +36,7 @@ import tarfile
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -76,7 +78,7 @@ def validate(m: dict) -> dict:
         if "fetch" in s:
             f = s["fetch"]
             src = f.get("github") if isinstance(f, dict) else None
-            if not (isinstance(f, dict) and set(f) <= {"github", "shasums", "asset", "into"} and len({"github", "shasums"} & set(f)) == 1
+            if not (isinstance(f, dict) and set(f) <= {"github", "shasums", "asset", "into", "tag"} and isinstance(f.get("tag", ""), str) and len({"github", "shasums"} & set(f)) == 1
                     and (re.fullmatch(r"[\w.-]+/[\w.-]+", src) if src else str(f.get("shasums", "")).startswith("https://"))
                     and isinstance(f.get("into"), str) and NAME.match(f["into"]) and isinstance(f.get("asset"), dict)
                     and all(re.fullmatch(r"(linux|darwin|windows)-(x64|arm64)", k) and (isinstance(v, str) or (
@@ -91,6 +93,7 @@ def validate(m: dict) -> dict:
             raise ValueError(f"ok_if is a list of lowercase strings, expect a string, info true or false, timeout seconds, env names to strings: {s}")
         try:
             re.compile(s.get("expect", ""))
+            re.compile((s.get("fetch") or {}).get("tag", ""))
             for v in (s.get("fetch") or {}).get("asset", {}).values():
                 re.compile(v if isinstance(v, str) else v["match"])
         except re.error as e:
@@ -138,7 +141,9 @@ def summary(out: str, text: str) -> str:
     except ValueError:
         d = None
     if isinstance(d, dict):
-        bad = [c.get("name", "?") for c in d.get("checks", []) if isinstance(c, dict) and c.get("ok") is False]
+        scoped = d.get("scope_checks") if isinstance(d.get("scope_checks"), list) and d["scope_checks"] else d.get("checks", [])
+        bad = [f"{c.get('name', '?')} ({c['detail'][:80]})" if c.get("detail") and scoped is not d.get("checks") else c.get("name", "?")
+               for c in scoped if isinstance(c, dict) and c.get("ok") is False]  # what decides, with why when it is few
         if bad:
             return "not ok: " + ", ".join(bad)
         for k in ("remediation", "error", "status"):
@@ -174,17 +179,29 @@ def run(s: dict, env: dict = None) -> tuple:
     return ok, out, text
 
 
+class _SameHostAuth(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None and urllib.parse.urlsplit(newurl).hostname != urllib.parse.urlsplit(req.full_url).hostname:
+            new.remove_header("Authorization")
+        return new
+
+
+OPENER = urllib.request.build_opener(_SameHostAuth)
+
+
 def _get(url: str, timeout: float = 30, tries: int = 3):
     """GET with three tries on a server error or a dropped line (GitHub times out anonymous callers at busy moments);
-    a GH_TOKEN or GITHUB_TOKEN in the environment goes to the GitHub API only."""
+    a GH_TOKEN or GITHUB_TOKEN in the environment goes to the GitHub API and github.com only, never along a redirect
+    to another host (the file storage)."""
     if not url.startswith("https://") and "KNOWLEDGE_GITHUB_API" not in os.environ:
         raise RuntimeError(f"only https downloads: {url}")
     headers = {"User-Agent": "knowledge-tools", "Accept": "application/vnd.github+json"}
-    if url.startswith(API + "/") and (tok := os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")):
+    if url.startswith((API + "/", "https://github.com/")) and (tok := os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")):
         headers["Authorization"] = f"Bearer {tok}"
     for n in range(tries):
         try:
-            return urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=timeout)
+            return OPENER.open(urllib.request.Request(url, headers=headers), timeout=timeout)
         except urllib.error.HTTPError as e:
             if e.code < 500 or n == tries - 1:
                 raise
@@ -201,8 +218,14 @@ def latest(f: dict) -> tuple:
         return None
     pattern = re.compile(spec if isinstance(spec, str) else spec["match"])
     if "github" in f:
-        with _get(f"{API}/repos/{f['github']}/releases/latest") as r:
-            rel = json.load(r)
+        if f.get("tag"):  # newest first; drafts and pre-releases never
+            with _get(f"{API}/repos/{f['github']}/releases?per_page=100") as r:
+                rel = next((x for x in json.load(r) if not x.get("draft") and not x.get("prerelease") and re.search(f["tag"], x.get("tag_name", ""))), None)
+            if not rel:
+                raise RuntimeError(f"{f['github']}: no release tagged like {f['tag']}")
+        else:
+            with _get(f"{API}/repos/{f['github']}/releases/latest") as r:
+                rel = json.load(r)
         a = next((a for a in rel.get("assets", []) if pattern.search(a.get("name", ""))), None)
         if not a:
             raise RuntimeError(f"{f['github']} {rel.get('tag_name')}: no file for {OS}-{ARCH}")
@@ -401,6 +424,8 @@ def self_test():
         bad = {**m, "check": [{"run": [py, "-c", "print('{\"status\": \"needs_human\", \"remediation\": \"Install Node.js 22\"}')"], "expect": "ready"}]}
         slow = run({"run": [py, "-c", "import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)']); time.sleep(30)"], "timeout": 1})
         assert slow[0] is False and "timed out" in slow[2], slow  # back in a second, the grandchild too
+        doc = json.dumps({"checks": [{"name": "hopper", "ok": False}], "scope_checks": [{"name": "ghidra-version", "ok": False, "detail": "12.2; accepted 12.1.x"}]})
+        assert summary(doc, "") == "not ok: ghidra-version (12.2; accepted 12.1.x)", summary(doc, "")
         assert check(bad, [])["ok"] is False and "Install Node.js 22" in check(bad, [])["detail"]
         for broken, why in (({**m, "needs": ["no-such-command-xyz"]}, "needs no-such-command-xyz"),
                             ({**m, "install": [{"run": ["no-such-command-xyz"]}]}, "not installed on this pc"),
@@ -471,8 +496,16 @@ def self_test():
 
             def do_GET(self):
                 base = f"http://127.0.0.1:{srv.server_port}"
+                state.setdefault("auth", []).append((self.path, self.headers.get("Authorization")))
+                if self.path == "/hop":  # a redirect to another host name of this machine
+                    self.send_response(302)
+                    self.send_header("Location", f"http://localhost:{srv.server_port}/dl/tool.jar")
+                    self.end_headers()
+                    return
                 rel = {"/repos/o/engine/releases/latest": {"tag_name": "v1.0", "assets": [{"name": "engine_1.0.zip", "browser_download_url": base + "/dl/engine_1.0.zip", "digest": state["digest"]}]},
                        "/repos/o/evil/releases/latest": {"tag_name": "v6", "assets": [{"name": "evil.tar.gz", "browser_download_url": base + "/dl/evil.tar.gz", "digest": "sha256:" + sha(evil)}]},
+                       "/repos/o/engine/releases?per_page=100": [{"tag_name": "v2.0", "assets": []}, {"tag_name": "v1.1-rc", "prerelease": True, "assets": []},
+                                                                 {"tag_name": "v1.0", "assets": [{"name": "engine_1.0.zip", "browser_download_url": base + "/dl/engine_1.0.zip", "digest": state["digest"]}]}],
                        "/repos/o/old/releases/latest": {"tag_name": "v0", "assets": [{"name": "engine_1.0.zip", "browser_download_url": base + "/dl/engine_1.0.zip"}]}}
                 if self.path.startswith("/repos/o/flaky/") and not state.setdefault("flaked", False):
                     state["flaked"] = True
@@ -497,8 +530,18 @@ def self_test():
             assert ok and version == "v1.0" and (TOOLS / "engine" / "README").read_text() == "hi", (ok, text)  # top folder dropped
             assert os.name == "nt" or os.access(TOOLS / "engine" / "bin" / "run", os.X_OK), "the launcher stays executable"
             assert fetch(eng)[2] == "engine v1.0 is current"
+            (TOOLS / ".versions.json").write_text("{}")
+            assert fetch({**eng, "tag": r"^v1\."})[1] == "v1.0", "the newest release of a line, never a pre-release"
+            assert "no release tagged" in fetch({**eng, "tag": r"^v9\."})[2]
             RETRY_WAIT = 0.05
             assert fetch({**eng, "github": "o/flaky"})[0] and state["flaked"], "a 503 is tried again"
+            os.environ["GH_TOKEN"], state["auth"] = "tok", []
+            try:
+                with _get(API + "/hop") as r:
+                    assert r.read() == b"JAR"
+            finally:
+                os.environ.pop("GH_TOKEN")
+            assert state["auth"] == [("/hop", "Bearer tok"), ("/dl/tool.jar", None)], state["auth"]
             assert fetch({**eng, "asset": {"linux-arm64" if plat != "linux-arm64" else "darwin-x64": "x"}})[2].endswith("skipped")
             state["digest"] = "sha256:" + "0" * 64
             (TOOLS / ".versions.json").write_text("{}")
