@@ -1160,13 +1160,16 @@ def knowledge_chat_archive(chat: str = "", chat_id: str = "", id: str = "", forc
 
 
 @server.tool(annotations=EDIT)
-def knowledge_chat_title(title: str) -> str:
+def knowledge_chat_title(title: str, chat: str = "") -> str:
     """Name the web UI chat you run in: 3 to 6 words in the user's language saying what it works on (e.g. 'Clearer chat
-    titles'), not their message. Call it after your first answer and again when the subject changes."""
-    cid = device.get().get("chat", "")
+    titles'), not their message. Call it after your first answer and again when the subject changes.
+    chat: another of your chats (id from knowledge_chats), e.g. to rename it when its owner asks."""
+    cid = chat.strip() or device.get().get("chat", "")
     title = " ".join(str(title).split()).strip(" .\"'")[:60]
     if not cid:
-        raise ToolError("only a chat from the web UI has a title to set")
+        raise ToolError("only a chat from the web UI has a title to set (or name one with chat, an id from knowledge_chats)")
+    if chat.strip() and not device.get().get("write"):
+        raise ToolError("this device token is read-only")
     if not title:
         raise ToolError("title is required")
     found = next((r for r, c in own_chats() if c["id"] == cid), None)
@@ -2030,8 +2033,8 @@ def token_project() -> str | None:
 
 WEBCHAT_NOTE = ("===== knowledge: a chat from the web UI =====\nThe user talks to you from the knowledge web UI; each message "
                 "is one turn. Answer what they ask. Tasks between agents run in workers: do not list, take or start them here.\n"
-                "Name the chat with knowledge_chat_title (3 to 6 words on what it works on) after your first answer and when "
-                "the subject changes.")
+                "Name the chat with knowledge_chat_title (3 to 6 words on what it works on, chat: its id from the first "
+                "message) after your first answer and when the subject changes.")
 
 
 def context_parts(project: str = "homelab", agent: str = "", chat: bool = False, webchat: bool = False) -> list[str]:
@@ -5763,6 +5766,8 @@ CHATS_DIR = ADMIN_DIR / "chats"
 CHAT_KEEP, CHAT_EVENTS, CHAT_BYTES, CHAT_TEXT = 50, 4000, 1_000_000, 20_000  # chats per machine, events and bytes per chat, chars per message
 CHAT_PENDING = 5  # messages a chat keeps in line while its agent answers
 # Archive: the agent's last turn records the chat in the memos before the chat closes (the house rules, not the transcript)
+CHAT_TITLE_ASK = ("\n\n(knowledge web UI: after your answer, name this chat with the tool knowledge_chat_title, chat {chat}, title "
+                  "3 to 6 words in my language on what it works on.)")  # the id in the text: works without the plugin's header
 CHAT_WRAP_UP = ("This chat is being archived. Before it closes, record what it established on the knowledge server, following the "
                 "house rules: for each subject, knowledge_search first and knowledge_edit the memo that already covers it "
                 "(knowledge_new_memo only for a genuinely new subject). What is true now goes under '## Status', each decision "
@@ -6893,9 +6898,13 @@ async def machine_chats(request: Request):
                     s = e.pop("steer")
                     out.setdefault("steer", []).extend({"chat": cid, **x} for x in (s if isinstance(s, list) else [s]))
             elif "msg" in e:
+                msg = e.pop("msg")
+                if not c.get("session") and not c.get("titled") and msg.get("text") != CHAT_WRAP_UP:
+                    # the start context asks too, but a session without the plugin's start hook never sees it
+                    msg = {**msg, "text": (msg.get("text") or "") + CHAT_TITLE_ASK.format(chat=cid)}
                 out["work"].append({"chat": cid, "agent": c["agent"], "folder": c["folder"], "session": c.get("session", ""),
                                     "model": c.get("model", ""), "effort": c.get("effort", ""),
-                                    "allow": c.get("allow", []), **({"worktree": True} if c.get("worktree") else {}), **extra, **e.pop("msg")})
+                                    "allow": c.get("allow", []), **({"worktree": True} if c.get("worktree") else {}), **extra, **msg})
                 e["busy"] = True
     if q_path.exists():
         await asyncio.to_thread(update_state, q_path, change)
