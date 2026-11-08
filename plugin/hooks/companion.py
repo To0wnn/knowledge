@@ -1564,7 +1564,7 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
     yolo, folders, s = load("yolo.json", {}), sorted(project_folders().values()), settings()
     links, gits = with_git(folder_links(), ws, now)
     chat_gits = {cid: chat_git(cid, f) for cid, f in load("chat_worktrees.json", {}).items()}
-    body = {"version": version(), "workersAllowed": s["workersAllowed"], "maxWorkers": s["maxWorkers"], "game": workers.game_session(),
+    body = {"version": version(), "self": self_state(), "workersAllowed": s["workersAllowed"], "maxWorkers": s["maxWorkers"], "game": workers.game_session(),
             "live": list(chat.LIVE_AGENTS),  # agents whose chats run live: a message while they work goes in at once
             "agents": {a: {"yolo": bool(yolo.get(a, {}).get("on")), "trusted": not untrusted(a, folders), "limit": lim.get(a),
                      "resets": (resets or {}).get(a), "windows": (windows or {}).get(a, []), **({"plugin": v} if (v := plugin_version(a)) else {}),  # known before a session
@@ -1816,7 +1816,10 @@ def run_action(a: dict) -> str:
         failed = update_plugins()
         if failed:
             raise RuntimeError("; ".join(failed)[:500])
-        return "updated"
+        me = self_state()  # what the page can tell: the plugins now, and whether the companion itself follows
+        plugins = ", ".join(f"{AGENTS[a][0]} {v}" for a in AGENTS if installed(a) and (v := plugin_version(a)))
+        return (f"plugins: {plugins or 'none'}; companion {version()}" + (f", restarts on {me['disk']} (waits for {me['waits']})" if me["waits"]
+                else " runs from a plugin copy, which an update does not move: run the installer once" if me["from"] == "copy" else " is current"))
     if act == "yolo":
         return f"YOLO {set_yolo(agent, args.get('on') is True)}"
     if act == "workers_allowed":
@@ -1849,6 +1852,8 @@ def actions_round():
         except Exception as e:
             if not (refused(e) and remote_off(True)):
                 log("error", "Could not report a remote action's result", str(e)[:200])
+        if a.get("action") == "update_plugin":  # after its result went out, so a restart cannot swallow it
+            UPDATE_NOW.set()
     if changed:  # the page shows the new state at once, not at the next minute's report
         threading.Thread(target=tick, daemon=True).start()
     return "waited" in got  # a server before the long poll answers at once: then the loop waits itself
@@ -2169,12 +2174,25 @@ def restart() -> None:
     os._exit(0)
 
 
+def self_state() -> dict:
+    """Where this companion runs from and whether a newer version of it waits on disk, for the page: an update that
+    "worked" while the companion stayed old must be visible from afar. from: checkout (follows GitHub's main through
+    Update) or copy (a plugin copy: moves only when the setup points the companion at a new one)."""
+    disk = ".".join(map(str, own_version()))
+    waits = "" if disk in ("", version()) else "a tool being installed" if TOOLS_BUSY.locked() else \
+        "the agents' own update" if AGENTS_UPDATING.locked() else "the next check (within a minute)"
+    return {"from": "checkout" if (self_update.PLUGIN.parent / ".git").exists() else "copy", "disk": disk, "waits": waits}
+
+
 def update_watch():
     """An updated plugin only counts once this process runs it: without this a new action failed as "unknown" while the
     list showed the new version. Waits for two equal readings, so a half-written update is not started."""
     seen = STARTED
     while True:
-        time.sleep(UPDATE_EVERY)
+        if UPDATE_NOW.wait(UPDATE_EVERY):  # an Update just reported back: look now, two readings a second apart
+            UPDATE_NOW.clear()
+            seen = own_version()
+            time.sleep(1)
         try:
             now = own_version()
             if now and now != STARTED and now == seen and not AGENTS_UPDATING.locked() and not TOOLS_BUSY.locked():
@@ -2187,6 +2205,7 @@ def update_watch():
 
 
 UPDATE_EVERY = float(os.environ.get("KNOWLEDGE_COMPANION_UPDATE_EVERY") or 30)
+UPDATE_NOW = threading.Event()  # set once an Update's result is with the server: the restart need not wait up to a minute
 
 
 def loop():
@@ -2631,6 +2650,8 @@ def main(argv: list):
             why = update_own_checkout(co)
             assert "could not move" in why and (co / "g").exists() and (co / "f").read_text() == "2", why
             assert update_own_checkout(Path(g) / "nothing") == "", "not a checkout: nothing to do"
+        me = self_state()  # running what is on disk: nothing waits; the checkout this test runs from is one
+        assert me["waits"] == "" and me["disk"] == version() and me["from"] in ("checkout", "copy"), me
         real_job, jobs, ids = tool_job, [], sorted(tools.catalog())[:2]  # the daily tool update skips a tool its owner took off it
         globals()["tool_job"] = lambda act, tid, m: jobs.append(tid) or TOOLS_BUSY.release()
         save("tools.json", {ids[0]: {"installed": True}, ids[1]: {"installed": True, "auto": False}})

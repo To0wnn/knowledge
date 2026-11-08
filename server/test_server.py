@@ -915,6 +915,12 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert ui("/ui/api/machines/action", {"machine": mid, "action": "remove_tool", "args": {"tool": "../x"}})[0] == 400
     for x in json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"]:  # taken, or the next test finds it
         http("POST", "/machine/actions/result", {"id": x["id"], "status": "done", "result": "ok"}, token=fr, headers=pc)
+    assert http("POST", "/machine/report", {**mrep, "self": {"from": "checkout", "disk": "9.9.9", "waits": "the next check"}}, token=fr, headers=pc)[0] == 200
+    me = [a for a in json.loads(ui("/ui/api/machines")[2])["machines"] if a["id"] == mid][0]["companion"]["self"]
+    assert me == {"from": "checkout", "disk": "9.9.9", "waits": "the next check"}, me  # where it runs from, a newer one waiting
+    assert http("POST", "/machine/report", {**mrep, "self": {"from": "<b>", "disk": 1}}, token=fr, headers=pc)[0] == 200
+    me = [a for a in json.loads(ui("/ui/api/machines")[2])["machines"] if a["id"] == mid][0]["companion"]["self"]
+    assert me["from"] == "" and me["disk"] == "1", me
     tools = {"rea": {"name": "REA", "homepage": "javascript:alert(1)", "installed": True, "ok": "yes", "version": "6.8.0", "detail": "x" * 999,
                      "at": float("inf"), "busy": "rm -rf", "kind": "program", "auto": False},
              "slop": {"name": "Slop", "kind": "<b>", "auto": "no"}, "Bad Id": {"name": "no"}}

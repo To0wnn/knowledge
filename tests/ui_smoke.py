@@ -722,8 +722,14 @@ async def shell(browser, devices, secret: str) -> None:
       const fresh = pc('a'.repeat(16), 'fresh', now - 60), stale = pc('b'.repeat(16), 'stale', now - 900), newer = {...pc('c'.repeat(16), 'newer', 0), actions: [], companion: {version: '2.0.0', agents: ['claude'], tools: {}}};
       const cache = machinesCache; machinesRes = {machines: [fresh, stale, newer], stuck: []}; machinesCache = machinesRes.machines; drawMachines();
       const btn = (label) => [...document.querySelectorAll('.mx-pc')].find((h) => h.querySelector('h3').textContent === label)?.querySelector('.mx-pc-acts button.primary');
-      const out = {fresh: btn('fresh')?.textContent, stale: btn('stale')?.textContent, said: /did not bring it/.test(document.querySelector('.mx-status').textContent)};
+      const out = {fresh: btn('fresh')?.textContent, stale: btn('stale')?.textContent, said: /said done/.test(document.querySelector('.mx-status').textContent)};
       machinesRes = was; machinesCache = cache; drawMachines(); return out; }""")
+    notes = await pg.evaluate("""() => { const cache = machinesCache, now = Date.now() / 1000, pc = (self) => ({id: 'x', label: 'pc', actions: [], agents: {}, companion: {version: '1.0.0', self}});
+      machinesCache = [{id: 'n', agents: {}, actions: [], companion: {version: '2.0.0'}}];
+      const out = [selfNote(pc({from: 'checkout', disk: '2.0.0', waits: 'the next check (within a minute)'})), selfNote(pc({from: 'copy', disk: '1.0.0', waits: ''})), selfNote(pc({from: 'checkout', disk: '1.0.0', waits: ''}))];
+      machinesCache = cache; return out; }""")
+    check("restarts on it after the next check" in notes[0] and "plugin copy" in notes[1] and "run the installer once" in notes[1] and notes[2] == "",
+          f"Machines: why a companion is not on the newest version, from what it reports about itself {notes}")
     check(upd["fresh"] == "Working…" and upd["stale"] == "Update to 2.0.0" and upd["said"], f"Machines: an update that is still settling shows as working after a page switch; one that said done but did not take is said {upd}")
     ask = await pg.evaluate("""async () => { const link = [...document.querySelectorAll('.mx-ask a, .mx-ask button')].map((b) => b.textContent);
       askTool(); await new Promise((r) => setTimeout(r, 300)); const d = document.querySelector('dialog.mx-dialog[open]');

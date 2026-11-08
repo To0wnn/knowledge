@@ -2945,7 +2945,7 @@ def machine_rows() -> list[dict]:
         rows.append({"id": mid, "label": m.get("label", mid), "at": m.get("at", 0), "online": now - m.get("at", 0) < ONLINE,
                      "tokens": names, "own": any(own_token(tokens[n], dev) for n in names), "agents": agents,
                      "mine": any(own_token(tokens[n], dev, steer=False) for n in names),
-                     "companion": {**{k: comp.get(k) for k in ("version", "at", "workersAllowed", "game", "maxWorkers", "folders", "projects", "token", "live", "chats", "chatReviews", "asks", "tools")},
+                     "companion": {**{k: comp.get(k) for k in ("version", "self", "at", "workersAllowed", "game", "maxWorkers", "folders", "projects", "token", "live", "chats", "chatReviews", "asks", "tools")},
                                    "agents": sorted(comp.get("agents") or {}),
                                    "models": {a: v.get("models", []) for a, v in (comp.get("agents") or {}).items()},
                                    "current": {a: v.get("current", {}) for a, v in (comp.get("agents") or {}).items()}} if comp else None,
@@ -7579,7 +7579,11 @@ async def machine_report(request: Request):
         return JSONResponse({"error": "needs X-Knowledge-Machine and a body under 128 kB"}, status_code=400)
     try:
         b = json.loads(raw)
+        me = b.get("self") if isinstance(b.get("self"), dict) else {}
         report = {"version": str(b.get("version", ""))[:20], "workersAllowed": b.get("workersAllowed") is True,
+                  # where the companion runs from and a newer version of it waiting on disk (companion.self_state)
+                  "self": {"from": me["from"] if me.get("from") in ("checkout", "copy") else "", "disk": str(me.get("disk") or "")[:20],
+                           "waits": str(me.get("waits") or "")[:80]},
                   "live": [a for a in (b.get("live") or []) if a in AGENT_OWNERS],  # chats that take a message while they work
                   "maxWorkers": {a: int(n) for a, n in (b.get("maxWorkers") or {}).items() if a in AGENT_OWNERS},
                   "game": str(b.get("game") or "")[:80],

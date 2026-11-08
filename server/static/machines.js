@@ -141,6 +141,15 @@ const steers = (m) => m.own && !m.old && m.online && !!m.companion;
 const UPDATE_SETTLE = 300;
 const lastUpdate = (m) => (m.actions || []).filter((x) => x.action === "update_plugin").pop();
 const updating = (m) => pendingAction(m, "update_plugin") || (lastUpdate(m)?.status === "done" && Date.now() / 1000 - lastUpdate(m).at < UPDATE_SETTLE);
+// Why a pc's companion is not (yet) on the newest version, in words, from what it reports about itself ("" when it is).
+function selfNote(m) {
+  const c = m.companion, me = c?.self || {}, newest = newestPlugin(), last = lastUpdate(m);
+  if (me.waits) return `Knowledge ${me.disk} is installed; the companion restarts on it after ${me.waits}.`;
+  if (!c?.version || !versionNewer(newest, c.version)) return "";
+  if (me.from === "copy") return `Its companion runs from a plugin copy, which Update does not move: run the installer once on ${m.label}.`;
+  if (last?.status === "done" && !updating(m) && Date.now() / 1000 - last.at < 86400) return `The update ${ago(last.at)} said done, yet the companion still runs ${c.version}${me.from ? "" : " (its plugin is too old to say why)"}.`;
+  return "";
+}
 // An agent this pc's companion knows: only then do its switches and buttons act (a hook alone may report an agent).
 const steersAgent = (m, a) => steers(m) && (m.companion.agents || []).includes(a);
 
@@ -188,9 +197,8 @@ function pcHead(m, here) {
   meta.append(behind ? differs(`Knowledge ${c?.version || "?"}`) : val(`Knowledge ${c?.version || "?"}`));
   if (c?.game) meta.append(" · ", val(c.game));
   box.append(name, meta);
-  const last = lastUpdate(m);
-  if (behind && last?.status === "done" && !updating(m) && Date.now() / 1000 - last.at < 86400)
-    box.append(el("p", "machine-error", `The update ${ago(last.at)} said done, yet it still runs ${c?.version || "an older version"}.`));
+  const note = selfNote(m);
+  if (note) box.append(el("p", c.self?.waits ? "mx-pc-meta" : "machine-error", note));
   const acts = el("div", "mx-pc-acts");
   if (behind && steers(m)) acts.append(machineButton(`Update to ${behind}`, "Update the knowledge plugin of every agent there and its companion (it restarts by itself)", () => machineAction(m, "update_plugin"), updating(m), "btn small primary"));
   // an admin may update the plugin on someone else's pc, nothing else there (the server checks its remote-control switch)
@@ -396,11 +404,8 @@ function machinesStatus(res, own, online) {
   const lead = el("p", "mx-lead", own.length ? `${online.length} of your ${own.length} pc${own.length === 1 ? " is" : "s are"} online.` : "None of your pcs reported yet.");
   const behind = online.filter((m) => steers(m) && pluginBehind(m));
   for (const m of behind) {
-    const last = lastUpdate(m);
-    if (last?.status === "done" && !updating(m) && Date.now() / 1000 - last.at < 86400) { // it said done, yet it is still behind
-      items.push([`The update on ${m.label} ${ago(last.at)} did not bring it to ${newestPlugin()} (it runs ${m.companion.version}): `, actionButton("see Activity", () => pcActivity(m), "btn small quiet")]);
-      continue;
-    }
+    const note = selfNote(m);
+    if (note && !m.companion.self?.waits) { items.push([`${m.label}: ${note} `, actionButton("see Activity", () => pcActivity(m), "btn small quiet")]); continue; }
     items.push([versionNewer(newestPlugin(), m.companion.version || "0") ? `${m.label} runs an older Knowledge (${m.companion.version}).`
     : `The plugin of ${Object.entries(m.agents || {}).filter(([, ag]) => ag.plugin && versionNewer(newestPlugin(), ag.plugin)).map(([a]) => AGENT_NAME[a] || a).join(" and ")} on ${m.label} is older than its Knowledge.`]);
   }
@@ -511,7 +516,7 @@ function foldersView(res) {
 
 // ---------------------------------------------------------------- the page
 let machinesTimer = 0, machinesRes = null, machinesHere = "";
-const MACHINE_REFRESH = 20000; // a pc reports about every 10 s
+const MACHINE_REFRESH = 20000, MACHINE_REFRESH_UPDATING = 5000; // a pc reports about every 10 s; an update shows sooner
 // Redraws while the view is open; never under a person's hands (a field being typed in, an open menu, panel or dialog).
 function machinesBusy() {
   const box = $("machines"), a = document.activeElement;
@@ -524,7 +529,7 @@ function machinesSoon() {
     if ($("tab-machines").hidden) return;
     if (document.hidden || machinesBusy()) return machinesSoon();
     loadMachines().catch(() => machinesSoon());
-  }, MACHINE_REFRESH);
+  }, (machinesCache || []).some(updating) ? MACHINE_REFRESH_UPDATING : MACHINE_REFRESH);
 }
 async function loadMachines() {
   const res = await api("/ui/api/machines");
