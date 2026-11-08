@@ -1303,7 +1303,7 @@ function machineActions(m) {
   if (steer && c) list.append(actionButton("Update agents", () => { menu.open = false; machineAction(m, "update_agents"); }, ""));
   list.append(actionButton("Forget this pc…", async () => {
     menu.open = false;
-    if (!confirm(`Forget ${m.label}? It leaves this list and comes back when it reports again; its actions and history here go.`)) return;
+    if (!confirm(`Forget ${m.label}? It leaves this list and comes back when it reports again; its actions, history and chats on the server go.`)) return;
     try { await api("/ui/api/machines/forget", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: m.id }) }); } catch (e) { toast(e.message); }
     loadMachines();
   }, ""));
@@ -1362,6 +1362,7 @@ function workerRow(m, w) {
   if (m.own && w.status !== "running" && !w.merged && w.checkpoint) acts.append(machineButton("Roll back", "Put its worktree back as it was before its last turn (a checkpoint of now is kept)",
     () => confirm(`Roll ${w.id} back to before its last turn?`) && machineAction(m, "rollback", { project: w.project, id: w.id }), busy("rollback")));
   if (m.own && m.online && w.status !== "running" && !(w.review?.ahead > 0)) acts.append(machineButton("Archive", "Take it off this list; its branch and worktree stay", () => machineAction(m, "archive_worker", { project: w.project, id: w.id }), busy("archive_worker"), "btn small quiet"));
+  if (w.yolo) { const y = el("span", "pill yolo", "YOLO"); y.title = "This worker runs every command without asking"; title.after(" ", y); }
   li.append(text);
   if (acts.childNodes.length) li.append(acts);
   return li;
@@ -1385,6 +1386,12 @@ const ACTION_STATE = { waiting: "waiting for the pc", running: "running", done: 
 // The Machines view: one card per pc; per card the part that needs you on top and its details in tabs. The cards are
 // drawn again on every refresh, so what a person opened (a tab, an offline pc) lives here and not in the DOM.
 const machineTab = new Map(), offlineOpen = new Set();
+// A fold whose open state outlives the redraw.
+function foldKept(key, cls = "machine-more-list") {
+  const d = el("details", cls); d.open = offlineOpen.has(key);
+  d.addEventListener("toggle", () => { if (d.open) offlineOpen.add(key); else offlineOpen.delete(key); });
+  return d;
+}
 let machinesTimer = 0;
 const MACHINE_REFRESH = 20000; // a pc reports about every 10 s
 function machineTabs(m, panels) {
@@ -1392,20 +1399,24 @@ function machineTabs(m, panels) {
   const pick = panels.some((p) => p.key === keep) ? keep : first.key;
   const bar = el("div", "machine-tabs"), box = el("div", "machine-panel");
   bar.setAttribute("role", "tablist"); bar.setAttribute("aria-label", `${m.label}: details`);
-  const show = (key) => {
-    machineTab.set(m.id, key);
+  const id = (key) => `mt-${m.id}-${key}`.replace(/[^\w-]/g, "_");
+  box.id = `mp-${m.id}`.replace(/[^\w-]/g, "_");
+  const show = (key, picked) => {
+    if (picked) machineTab.set(m.id, key); // only a person's pick sticks: else a new alert elsewhere would never show first
     for (const b of bar.children) { const on = b.dataset.key === key; b.setAttribute("aria-selected", String(on)); b.tabIndex = on ? 0 : -1; }
     box.replaceChildren(panels.find((p) => p.key === key).draw());
-    box.setAttribute("aria-label", panels.find((p) => p.key === key).label);
+    box.setAttribute("aria-labelledby", id(key));
   };
   for (const p of panels) {
-    const b = el("button", null, p.label); b.type = "button"; b.setAttribute("role", "tab"); b.dataset.key = p.key;
-    if (p.count != null) b.append(el("span", `badge${p.alert ? " alert" : ""}`, String(p.count)));
-    b.onclick = () => show(p.key);
+    const b = el("button", null, p.label); b.type = "button"; b.setAttribute("role", "tab"); b.dataset.key = p.key; b.id = id(p.key);
+    b.setAttribute("aria-controls", box.id);
+    if (p.count != null) b.append(" ", el("span", `badge${p.alert ? " alert" : ""}`, String(p.count)));
+    b.onclick = () => show(p.key, true);
     b.onkeydown = (e) => { // arrow keys move between tabs, as in the admin page
-      const i = panels.indexOf(p), d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
-      if (!d) return;
-      e.preventDefault(); const next = panels[(i + d + panels.length) % panels.length]; show(next.key); bar.querySelector(`[data-key="${next.key}"]`).focus();
+      const i = panels.indexOf(p), n = panels.length;
+      const to = { ArrowRight: (i + 1) % n, ArrowLeft: (i - 1 + n) % n, Home: 0, End: n - 1 }[e.key];
+      if (to == null) return;
+      e.preventDefault(); const next = panels[to]; show(next.key, true); bar.querySelector(`[data-key="${next.key}"]`).focus();
     };
     bar.append(b);
   }
@@ -1432,7 +1443,7 @@ function workersPanel(m) {
   if (running.length) group("Running now", running);
   if (!needs.length && !running.length) box.append(el("p", "muted", c?.workersAllowed ? "No worker runs here now." : "No worker runs here."));
   if (earlier.length) {
-    const d = el("details", "machine-more-list"), ul = el("ul", "machine-list");
+    const d = foldKept(`${m.id}:earlier`), ul = el("ul", "machine-list");
     ul.append(...earlier.map((w) => workerRow(m, w)));
     d.append(el("summary", null, `Ended earlier (${earlier.length})`), ul); box.append(d);
   }
@@ -1597,12 +1608,13 @@ function machineCard(m, res, here) {
   const ws = allWorkers(m), tools = Object.values(c?.tools || {}), needs = ws.filter((w) => workerNeedsYou(m, w)).length;
   const panels = [
     { key: "workers", label: "Workers", count: needs || ws.filter((w) => w.status === "running").length || null, alert: needs > 0, draw: () => workersPanel(m) },
-    { key: "agents", label: "Agents", count: Object.keys(m.agents || {}).length, alert: Object.values(m.agents || {}).some((ag) => ag.trusted === false), draw: () => agentsPanel(m, res) },
+    { key: "agents", label: "Agents", count: Object.keys(m.agents || {}).length, alert: Object.values(m.agents || {}).some((ag) => ag.trusted === false || (ag.error && Date.now() / 1000 - (ag.error.at || 0) < 86400)), draw: () => agentsPanel(m, res) },
   ];
   if (c) panels.push(
     { key: "tools", label: "Tools", count: tools.length ? tools.filter((t) => t.installed).length : null, alert: tools.some((t) => t.error || t.ok === false), draw: () => toolsPanel(m) },
     { key: "folders", label: "Folders", count: (c.folders?.linked || []).length, draw: () => foldersPanel(m) });
-  panels.push({ key: "activity", label: "Activity", count: (m.actions || []).some((x) => x.status === "waiting" || x.status === "running") ? "…" : null, alert: false, draw: () => activityPanel(m) });
+  panels.push({ key: "activity", label: "Activity", count: (m.actions || []).some((x) => x.status === "waiting" || x.status === "running") ? "…" : null,
+    alert: (m.actions || []).some((x) => x.status === "failed" && x.at > Date.now() / 1000 - 86400), draw: () => activityPanel(m) });
   card.append(...machineTabs(m, panels));
   return card;
 }
@@ -1612,6 +1624,8 @@ function offlineRow(m, res, here) {
   d.dataset.machine = m.id; d.open = offlineOpen.has(m.id);
   const sum = el("summary"), when = el("span", "muted", m.old ? "old plugin" : offlineFor(m.at));
   sum.append(el("strong", null, m.label), when);
+  if (allWorkers(m).some((w) => workerNeedsYou(m, w)) || machineAlerts(m).length) sum.append(el("span", "pill warn", "needs you"));
+  if ((m.actions || []).some((x) => x.status === "waiting")) sum.append(el("span", "pill", "action waiting"));
   d.append(sum);
   const fill = () => { if (d.open && d.childNodes.length === 1) d.append(machineCard(m, res, here)); };
   d.ontoggle = () => { if (d.open) offlineOpen.add(m.id); else offlineOpen.delete(m.id); fill(); };
@@ -1621,7 +1635,8 @@ function offlineRow(m, res, here) {
 // Redraws while the view is open; never under a person's hands (a field being typed in, an open menu or dialog).
 function machinesBusy() {
   const box = $("machines"), a = document.activeElement;
-  return (box.contains(a) && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName)) || box.querySelector(".menu[open]") || document.querySelector("dialog[open]");
+  const typing = box.contains(a) && (/^(SELECT|TEXTAREA)$/.test(a.tagName) || (a.tagName === "INPUT" && !/^(checkbox|radio)$/.test(a.type)));
+  return typing || box.querySelector(".menu[open]") || document.querySelector("dialog[open]");
 }
 function machinesSoon() {
   clearTimeout(machinesTimer);
@@ -1634,6 +1649,7 @@ function machinesSoon() {
 async function loadMachines() {
   const res = await api("/ui/api/machines");
   machinesCache = Array.isArray(res) ? res : res.machines || [];
+  if (machinesBusy() && $("machines").querySelector(".machine, .machine-offline")) return machinesSoon(); // machineAction still reads machinesCache
   if (!localMachine) await probeCompanion();
   const sha = async (t) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t)))].map((b) => b.toString(16).padStart(2, "0")).join("");
   const here = localMachine && crypto.subtle ? (await Promise.all(res.machines.map(async (m) => (await sha(m.id)) === localMachine ? m.id : ""))).find(Boolean) : "";
@@ -1649,17 +1665,18 @@ async function loadMachines() {
   parts.push(...online.map((m) => machineCard(m, res, here)));
   const offline = res.machines.filter((m) => !m.online).sort((a, b) => (b.at || 0) - (a.at || 0));
   if (offline.length) {
-    const label = (m) => m.label.toLowerCase(), live = new Set(online.map(label)), seen = new Set(), latest = [], stale = [];
-    for (const m of offline) (live.has(label(m)) || seen.has(label(m)) ? stale : latest).push(m), seen.add(label(m));
+    // an older report: one of your own pcs under the same name and token that reported later (a reinstall gets a new id)
+    const same = (m) => `${m.label.toLowerCase()}|${[...m.tokens].sort().join(",")}`;
+    const seen = new Set(online.filter((m) => m.mine).map(same)), latest = [], stale = [];
+    for (const m of offline) (m.mine && seen.has(same(m)) ? stale : latest).push(m), m.mine && seen.add(same(m));
     const sec = el("section", "machines-offline");
     sec.append(el("h3", "machine-group", `Offline (${offline.length})`), ...latest.map((m) => offlineRow(m, res, here)));
     const forgettable = stale.filter((m) => m.mine);
     if (stale.length) {
-      const d = el("details", "machine-more-list"), names = [...new Set(stale.map((m) => m.label))].join(", ");
-      d.open = stale.some((m) => offlineOpen.has(m.id));
+      const d = foldKept("stale"), names = [...new Set(stale.map((m) => m.label))].join(", ");
       d.append(el("summary", null, `${stale.length} older report${stale.length > 1 ? "s" : ""} of ${names}: the same name came back under a new id`));
       if (forgettable.length) d.append(machineButton(`Forget ${forgettable.length === stale.length ? "them" : `the ${forgettable.length} of your own`}`, "Take these old entries off the list; a pc that reports again comes back", async () => {
-        if (!confirm(`Forget ${forgettable.length} old report${forgettable.length > 1 ? "s" : ""} of ${names}?`)) return;
+        if (!confirm(`Forget ${forgettable.length} old report${forgettable.length > 1 ? "s" : ""} of ${names}? Their actions, history and chats on the server go.`)) return;
         for (const m of forgettable) await api("/ui/api/machines/forget", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: m.id }) }).catch((e) => toast(e.message));
         await loadMachines();
       }, false, "btn small danger"));
@@ -1669,9 +1686,15 @@ async function loadMachines() {
     parts.push(sec);
   }
   top.replaceChildren(...parts);
-  const y = box.closest(".view")?.scrollTop;
+  const y = box.closest(".view")?.scrollTop, a = document.activeElement, was = box.contains(a) && a !== box &&
+    { pc: a.closest("[data-machine]")?.dataset.machine, key: a.dataset.key, text: a.textContent, tag: a.tagName };
   box.replaceChildren(...top.childNodes);
   if (y != null) box.closest(".view").scrollTop = y; // a refresh must not move the page under the reader
+  if (was) { // nor take the keyboard focus away
+    const card = [...box.querySelectorAll("[data-machine]")].find((c) => c.dataset.machine === was.pc) || box;
+    const again = was.key ? card.querySelector(`[role=tab][data-key="${was.key}"]`) : [...card.querySelectorAll(was.tag)].find((e) => e.textContent === was.text);
+    again?.focus({ preventScroll: true });
+  }
   machinesSoon();
 }
 // Health lists these first (something to do now or a risk), the rest by how many findings they have.
