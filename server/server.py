@@ -1160,13 +1160,16 @@ def knowledge_chat_archive(chat: str = "", chat_id: str = "", id: str = "", forc
 
 
 @server.tool(annotations=EDIT)
-def knowledge_chat_title(title: str) -> str:
+def knowledge_chat_title(title: str, chat: str = "") -> str:
     """Name the web UI chat you run in: 3 to 6 words in the user's language saying what it works on (e.g. 'Clearer chat
-    titles'), not their message. Call it after your first answer and again when the subject changes."""
-    cid = device.get().get("chat", "")
+    titles'), not their message. Call it after your first answer and again when the subject changes.
+    chat: another of your chats (id from knowledge_chats), e.g. to rename it when its owner asks."""
+    cid = chat.strip() or device.get().get("chat", "")
     title = " ".join(str(title).split()).strip(" .\"'")[:60]
     if not cid:
-        raise ToolError("only a chat from the web UI has a title to set")
+        raise ToolError("only a chat from the web UI has a title to set (or name one with chat, an id from knowledge_chats)")
+    if chat.strip() and not device.get().get("write"):
+        raise ToolError("this device token is read-only")
     if not title:
         raise ToolError("title is required")
     found = next((r for r, c in own_chats() if c["id"] == cid), None)

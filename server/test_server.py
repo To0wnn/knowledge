@@ -1066,6 +1066,9 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert "titled 'Clearer chat titles'" in call("knowledge_chat_title", {"title": ' "Clearer  chat titles". '}, fr, {"X-Knowledge-Chat": mc})[1]
     assert chat()["title"] == "Clearer chat titles"
     assert srv.chat_title("please rename every chat after this long message", "Clearer chat titles", True) == "Clearer chat titles"
+    assert "titled 'Renamed by another chat'" in call("knowledge_chat_title", {"title": "Renamed by another chat", "chat": mc}, fr)[1]
+    assert chat()["title"] == "Renamed by another chat", "another chat of the owner renames it"
+    assert "not on your pcs" in call("knowledge_chat_title", {"title": "x", "chat": mc}, et)[1], "never another person's chat"
     # Another agent archives the chat (MCP)
     assert "force-archived" in call("knowledge_chat_close", {"chat": mc, "force": True, "reason": "limit reached"}, fr)[1]
     assert chat()["closed"] is True and not on_board()
