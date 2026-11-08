@@ -724,6 +724,10 @@ async def shell(browser, devices, secret: str) -> None:
       const btn = (label) => [...document.querySelectorAll('.mx-pc')].find((h) => h.querySelector('h3').textContent === label)?.querySelector('.mx-pc-acts button.primary');
       const out = {fresh: btn('fresh')?.textContent, stale: btn('stale')?.textContent, said: /said done/.test(document.querySelector('.mx-status').textContent)};
       machinesRes = was; machinesCache = cache; drawMachines(); return out; }""")
+    later = await pg.evaluate("""() => { const cache = machinesCache, was = machinesRes; machinesRes = {newest: '2.0.0', machines: []};
+      const pc = (later) => ({companion: {version: '2.0.0', self: {later}}, agents: {claude: {plugin: '2.0.0'}, agy: {plugin: '1.0.0'}}});
+      const out = [pluginBehind(pc([])), pluginBehind(pc(['agy']))]; machinesRes = was; machinesCache = cache; return out; }""")
+    check(later == ["2.0.0", ""], f"Machines: an agent that updates once it is closed shows no Update button {later}")
     notes = await pg.evaluate("""() => { const cache = machinesCache, now = Date.now() / 1000, pc = (self) => ({id: 'x', label: 'pc', actions: [], agents: {}, companion: {version: '1.0.0', self}});
       machinesCache = [{id: 'n', agents: {}, actions: [], companion: {version: '2.0.0'}}];
       const out = [selfNote(pc({from: 'checkout', disk: '2.0.0', waits: 'the next check (within a minute)'})), selfNote(pc({from: 'copy', disk: '1.0.0', waits: ''})), selfNote(pc({from: 'checkout', disk: '1.0.0', waits: ''}))];

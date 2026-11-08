@@ -260,8 +260,17 @@ def installed(agent: str) -> bool:
 def plugin_version(agent: str) -> str:
     try:
         if agent == "claude":
-            plugins = json.loads((CLAUDE_DIR / "plugins" / "installed_plugins.json").read_text(encoding="utf-8"))["plugins"]
-            return next((str(v[0].get("version", "")) for k, v in plugins.items() if k.startswith("knowledge@") and v), "")
+            try:
+                plugins = json.loads((CLAUDE_DIR / "plugins" / "installed_plugins.json").read_text(encoding="utf-8"))["plugins"]
+            except (OSError, ValueError, KeyError):
+                plugins = {}
+            got = next((str(v[0].get("version", "")) for k, v in plugins.items() if k.startswith("knowledge@") and v), "")
+            if got:
+                return got
+            # the setup without a plugin: settings.json runs the hooks of a checkout, whose version is what Claude runs
+            hook = re.search(r'"([^"]*?)[\\/]plugin[\\/]hooks[\\/]agent_hooks\.py', (CLAUDE_DIR / "settings.json").read_text(encoding="utf-8"))
+            mf = Path(hook[1].split(" ")[-1].strip("'\"")) / "plugin" / ".claude-plugin" / "plugin.json" if hook else None
+            return ".".join(map(str, self_update.version(mf.read_text(encoding="utf-8")))) if mf and mf.is_file() else ""
         paths = (list(CODEX.glob("plugins/cache/*/knowledge/*/.codex-plugin/plugin.json")) if agent == "codex"
                  else [HOME / ".gemini" / "config" / "plugins" / "knowledge" / ".claude-plugin" / "plugin.json"])
         found = [self_update.version(p.read_text(encoding="utf-8")) for p in paths if p.is_file()]
@@ -2729,6 +2738,15 @@ def main(argv: list):
         agy_later_round()
         assert calls == ["agy"] and not (STATE / AGY_LATER).exists() and self_state()["later"] == [], calls
         globals()["agy_running"], self_update.run = real_run, real_up
+        with tempfile.TemporaryDirectory() as t:  # Claude without a plugin: the checkout its settings.json hooks run from
+            co = Path(t) / "co" / "plugin" / ".claude-plugin"; co.mkdir(parents=True); (co / "plugin.json").write_text('{"version": "7.1.2"}')
+            cd = Path(t) / "claude"; cd.mkdir()
+            (cd / "settings.json").write_text(json.dumps({"hooks": {"SessionStart": [{"hooks": [{"command": f"python3 {Path(t) / 'co' / 'plugin' / 'hooks' / 'agent_hooks.py'} context claude"}]}]}}))
+            real_cd, globals()["CLAUDE_DIR"] = CLAUDE_DIR, cd
+            try:
+                assert plugin_version("claude") == "7.1.2", plugin_version("claude")
+            finally:
+                globals()["CLAUDE_DIR"] = real_cd
         me = self_state()  # running what is on disk: nothing waits; the checkout this test runs from is one
         assert me["waits"] == "" and me["disk"] == version() and me["from"] in ("checkout", "copy"), me
         real_job, jobs, ids = tool_job, [], sorted(tools.catalog())[:2]  # the daily tool update skips a tool its owner took off it

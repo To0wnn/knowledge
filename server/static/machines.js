@@ -44,9 +44,9 @@ const versionNewer = (a, b) => { const x = versionParts(a), y = versionParts(b);
 // The newest plugin any pc reports, and whether a pc has an older one anywhere ("" when it is current).
 // the server's word (GitHub's newest); only an old server without it falls back to the highest a pc reports
 const newestPlugin = () => machinesRes?.newest || machinesCache.flatMap((pc) => [pc.companion?.version, ...Object.values(pc.agents || {}).map((ag) => ag.plugin)].filter(Boolean)).reduce((a, v) => (versionNewer(v, a) ? v : a), "0");
-function pluginBehind(m) {
-  const newest = newestPlugin();
-  return [m.companion?.version, ...Object.values(m.agents || {}).map((ag) => ag.plugin)].some((v) => v && versionNewer(newest, v)) ? newest : "";
+function pluginBehind(m) { // an agent that waits for itself to close (agy open on Windows) updates by itself: no button for it
+  const newest = newestPlugin(), later = m.companion?.self?.later || [];
+  return [m.companion?.version, ...Object.entries(m.agents || {}).filter(([a]) => !later.includes(a)).map(([, ag]) => ag.plugin)].some((v) => v && versionNewer(newest, v)) ? newest : "";
 }
 // A switch that sends an action: it shows the state the pc reported, and waits while the change is on its way.
 function machineSwitch(label, on, busy, aria, onchange) {
