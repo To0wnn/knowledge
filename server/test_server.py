@@ -3135,6 +3135,15 @@ def main():
         assert call("knowledge_read", {"path": "claude/skills/synced/q/SKILL.md"})[0]
         (cla / "skills/toolskill").mkdir(); (cla / "skills/toolskill/SKILL.md").write_text("from a tool\n"); (cla / "skills/toolskill/.not-shared").write_text("")
         assert call("knowledge_read", {"path": "claude/skills/toolskill/SKILL.md"})[0], "a tool's skill on the admin's pc stays there"
+        import server as srv  # an external skill whose folder a tool took over since: removing it keeps the tool's files
+        was_roots, was_file = srv.ROOTS, srv.EXTERNAL_FILE
+        srv.ROOTS, srv.EXTERNAL_FILE = {**srv.ROOTS, "claude": cla}, tmp / "external-test.json"  # never this user's own admin folder
+        try:
+            srv.write_json(srv.EXTERNAL_FILE, {"toolskill": {"files": ["SKILL.md"]}})
+            srv.external_remove("toolskill")
+            assert (cla / "skills/toolskill/SKILL.md").exists() and srv.read_json(srv.EXTERNAL_FILE, {}) == {}
+        finally:
+            srv.ROOTS, srv.EXTERNAL_FILE = was_roots, was_file
         run_mm(senv)
         assert (skills / "x/SKILL.md").read_text() == "skill\n" and not (skills / "synced").exists() and not (skills / "toolskill").exists()
         (skills / "y/scripts").mkdir(parents=True); (skills / "y/SKILL.md").write_text(SK("new skill"))
