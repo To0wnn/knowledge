@@ -1588,6 +1588,7 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
                          **({"review": r} if (r := bounded(w.get("repo"), lambda w=w: review(w, now))) else {})} for k, w in sorted(ws.items(), key=lambda kw: -(kw[1].get("started") or 0)) if not w.get("archived")],  # newest first: the server keeps 40
             "tools": tool_state(), "limitWait": wait, "waiting": waiting or {}, "asks": terminal_asks(now), "folders": links, "chats": chat_gits, "chatReviews": chat_reviews(now, chat_gits), "projects": load("state.json", {}).get("projects", [])}
     answer = server("POST", "/machine/report", tok, body)
+    NEWEST["v"] = str(answer.get("newest") or "")
     _COMMANDS_SENT.update({a: (now, v["commands"]) for a, v in body["agents"].items() if "commands" in v})
     tools.TOKEN = str(answer.get("github_token") or "")  # for tool downloads only: agents keep their own gh login
     try:
@@ -1718,6 +1719,11 @@ def one_round(only: str = "") -> dict:
             log("error", "Could not reach the knowledge server", str(e)[:200])
         st["sync_error"], ready = str(e)[:200], []
     summary = run_workers(ready, tok, now, only)
+    ws_now, later = load("workers.json", {}), self_state()["later"]
+    busy = workers.game_session() or any(w["status"] == "running" for w in ws_now.values()) or any(chat_busy(c) for c in {*chat.LIVE, *chat.RUNNING, *chat.PENDING})
+    if knowledge_update_due(NEWEST["v"], [version(), *(plugin_version(a) for a in AGENTS if installed(a) and a not in later)], bool(busy), st.get("knowledge_updated", 0), now):
+        st["knowledge_updated"] = now
+        knowledge_update_soon()
     if agents_update_due(st, load("workers.json", {}), now):
         st["agents_updated"] = now
         update_agents_soon()
@@ -1980,6 +1986,36 @@ def update_agents() -> list:
             failed.append(f"{name}: {out}")
     # the plugin's own check runs only at an agent's session start, so a Codex or agy that is seldom started by hand stays behind
     return failed + update_plugins()
+
+
+NEWEST = {"v": ""}  # the newest plugin, as the server last said in its answer to the report
+KNOWLEDGE_RETRY = 1800  # seconds between two tries of the same update by itself (a failing one must not loop)
+
+
+def knowledge_update_due(newest: str, have: list, busy: bool, last: float, now: float) -> bool:
+    """A newer Knowledge than this companion or one of its agents' plugins runs (agents waiting to close left out):
+    update by itself, as the Update button does, when nothing runs here and the last try is a while ago."""
+    try:
+        want = tuple(map(int, newest.split(".")))
+        behind = any(v and tuple(map(int, v.split("."))) < want for v in have)
+    except ValueError:
+        return False
+    return behind and not busy and now - last >= KNOWLEDGE_RETRY and os.environ.get("KNOWLEDGE_AUTO_UPDATE") != "0"
+
+
+def knowledge_update_soon():
+    """The Update button's work in the background, then the restart at once; the activity log says it happened."""
+    def run():
+        with ACTING:
+            log("sync", f"Knowledge {NEWEST['v']} is out: updating by itself", "nothing runs here now")
+            try:
+                failed = update_plugins()
+            except Exception as e:
+                failed = [f"{type(e).__name__}: {e}"]
+            if failed:
+                log("error", "The update by itself did not finish", "; ".join(failed)[:300])
+        UPDATE_NOW.set()
+    threading.Thread(target=run, daemon=True).start()
 
 
 def agents_update_due(st: dict, ws: dict, now: float) -> bool:
@@ -2729,6 +2765,9 @@ def main(argv: list):
             why = update_own_checkout(co)
             assert "could not move" in why and (co / "g").exists() and (co / "f").read_text() == "2", why
             assert update_own_checkout(Path(g) / "nothing") == "", "not a checkout: nothing to do"
+        due = lambda newest, have, busy=False, last=0: knowledge_update_due(newest, have, busy, last, 10_000)
+        assert due("1.2.3", ["1.2.2", "1.2.3"]) and not due("1.2.3", ["1.2.3", ""]), "behind: by itself; current: not"
+        assert not due("1.2.3", ["1.2.2"], busy=True) and not due("1.2.3", ["1.2.2"], last=9_000) and not due("", ["1.2.2"]), "busy, just tried, or no word"
         real_run, real_up, calls = agy_running, self_update.run, []  # agy open on Windows: its update waits, then runs once it closed
         globals()["agy_running"], self_update.run = (lambda: True), (lambda a, have=None: calls.append(a) or None)
         write_json(STATE / AGY_LATER, {"at": 1})

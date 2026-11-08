@@ -2681,10 +2681,10 @@ def plugin_version(v: str) -> tuple:
 
 
 def plugin_latest() -> tuple[str, float] | None:
-    """The newest plugin version on GitHub and since when the server knows it, checked at most once an hour.
+    """The newest plugin version on GitHub and since when the server knows it, checked at most every 10 minutes.
     The "since" starts the grace period, so a fresh release does not make every device "behind" at once."""
     seen = dict(read_json(PLUGIN_SEEN_FILE, {}))
-    if time.time() - _plugin_latest["at"] > 3600:
+    if time.time() - _plugin_latest["at"] > 600:  # every pc updates itself within minutes of a release
         _plugin_latest["at"] = time.time()
         try:
             with urllib.request.urlopen(PLUGIN_LATEST_URL, timeout=5) as r:
@@ -7645,7 +7645,9 @@ async def machine_report(request: Request):
     closed = await asyncio.to_thread(lambda: [k for k in report["chats"] if (read_json(chat_file(dev["machine"], k), None) or {}).get("closed")])
     # the read-only GitHub token for tool downloads: only to the admins' own devices, never a friend's or a guest's
     gh = os.environ.get("KNOWLEDGE_GITHUB_TOKEN", "") if read_json(TOKENS_FILE, {}).get(dev.get("name", ""), {}).get("self") else ""
-    return JSONResponse({"ok": True, "closed_chats": closed, **({"github_token": gh} if gh else {})})
+    # the newest plugin: a companion behind it updates itself when nothing runs there (companion.knowledge_update_due)
+    return JSONResponse({"ok": True, "closed_chats": closed, "newest": (await asyncio.to_thread(plugin_latest) or ("",))[0],
+                         **({"github_token": gh} if gh else {})})
 
 
 @server.custom_route("/ui/api/task/approve", methods=["POST"])
