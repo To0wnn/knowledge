@@ -2167,10 +2167,15 @@ def restart() -> None:
         os.execv(sys.executable, [sys.executable, *sys.argv])
     # Windows: exec would leave the exclusive port taken for a moment. Under the Scheduled Task the task must stay the owner,
     # or uninstalling could not stop it, so a detached helper asks the task to run again once this process has gone.
-    flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_BREAKAWAY_FROM_JOB
+    flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
     under_task = subprocess.run(["schtasks", "/Query", "/TN", TASK_NAME], capture_output=True).returncode == 0
     again = f'schtasks /Run /TN "{TASK_NAME}"' if under_task else subprocess.list2cmdline([sys.executable, *sys.argv])
-    subprocess.Popen(f"cmd /c ping -n 4 127.0.0.1 >nul & {again}", shell=False, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
+    helper = lambda f: subprocess.Popen(f"cmd /c ping -n 4 127.0.0.1 >nul & {again}", shell=False, stdin=subprocess.DEVNULL,
+                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=f)
+    try:
+        helper(flags | subprocess.CREATE_BREAKAWAY_FROM_JOB)
+    except OSError:  # the Scheduled Task's job forbids breaking away (Access is denied), so a companion under it never
+        helper(flags)  # restarted; the helper outlives the task anyway (tested on Windows 11, 8 Nov 2026)
     os._exit(0)
 
 
