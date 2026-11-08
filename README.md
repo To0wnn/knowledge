@@ -117,7 +117,7 @@ cockpit across several agents and PCs.
 
 ## Honest limits
 
-- **A server to run:** Docker, about 2 GB RAM, an image of about 1.5 GB (the embedding model ships in it).
+- **A server to run:** Docker, about 1.5 GB RAM, an image of about 500 MB (the embedding model ships in it).
 - **HTTPS for more than one PC** or the phone: you put a reverse proxy in front.
 - **Agents:** Claude Code, Codex and Antigravity (agy) only.
 - **Notifications:** a Matrix room or an ntfy topic (set a few values in `.env`) and desktop notifications in an open

@@ -9,11 +9,13 @@ chunks), so a restart or an edit only embeds new text. One background thread at 
 kernel serves every other forge service first. Measured on forge (18 Oct): 6 threads 5.5 chunks/s (full run ~13 min),
 2 threads 3.2/s; the Intel UHD 770 iGPU via OpenVINO only 1.2/s (and out of memory at batch 16), so no GPU.
 """
+import ctypes
 import hashlib
 import os
 import re
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -23,7 +25,11 @@ MODEL = os.environ.get("KNOWLEDGE_EMBED_MODEL", "onnx-community/embeddinggemma-3
 # than fp32 ("google/embeddinggemma-300m"), so the cosine thresholds (server.py, rerank.py, graph.py) are set for q4.
 VARIANTS = {"onnx-community/embeddinggemma-300m-q4": "onnx/model_q4", "onnx-community/embeddinggemma-300m-int8": "onnx/model_quantized"}
 MODELS_DIR = os.environ.get("KNOWLEDGE_MODELS", "")
-CACHE = Path(os.environ.get("KNOWLEDGE_VECTORS", Path.home() / ".local/state/knowledge-server/vectors.npz"))
+FP32 = "google/embeddinggemma-300m"
+CACHE_BASE = Path(os.environ.get("KNOWLEDGE_VECTORS", Path.home() / ".local/state/knowledge-server/vectors.npz"))
+# One file per model: an older server (or a rollback) reads CACHE_BASE without looking at the model, so another model's
+# vectors there would be mixed with its queries. fp32 (and the test embedder) keep the plain name.
+CACHE = CACHE_BASE if MODEL in (FP32, "hash") else CACHE_BASE.with_name(f"{CACHE_BASE.stem}-{MODEL.rsplit('/', 1)[-1]}.npz")
 QUERY_PREFIX = "task: search result | query: "  # embeddinggemma prompt format; documents get "title: ... | text: ..."
 CHUNK_CHARS = 1200
 # Raw sources (ingested pages, "<root>/sources/") rank this much lower than notes: the processed memo is the better
@@ -74,7 +80,38 @@ def text_model(threads: int = THREADS):
         TextEmbedding.add_custom_model(MODEL, pooling=PoolingType.DISABLED, normalization=True, dim=768,
                                        sources=ModelSource(hf="onnx-community/embeddinggemma-300m-ONNX"),
                                        model_file=f"{f}.onnx", additional_files=[f"{f}.onnx_data"], output_name="sentence_embedding")
-    return TextEmbedding(MODEL, threads=threads, cache_dir=MODELS_DIR or None)
+    # no ONNX memory arena: it kept ~300 MB after embedding long chunks; without it and with trim() 413 instead of
+    # 721 MB, and no slower (measured 8 Nov 2026, 64 chunks of 2400 characters)
+    return TextEmbedding(MODEL, threads=threads, cache_dir=MODELS_DIR or None, enable_cpu_mem_arena=False)
+
+
+def read_cache() -> dict:
+    """This model's cached vectors: its own file, else CACHE_BASE when that holds this model's (the first start after
+    the switch to one file per model). Vectors of another model never: they do not compare with this one's queries."""
+    for path in dict.fromkeys((CACHE, CACHE_BASE)):
+        if not path.exists():
+            continue
+        try:
+            with np.load(path) as z:
+                if (str(z["model"]) if "model" in z.files else FP32) == MODEL:  # untagged = written by fp32-only code
+                    return dict(zip(z["keys"].tolist(), z["vecs"]))
+        except Exception as e:  # a broken cache is only a slower start
+            print(f"vector cache {path.name} unreadable: {e}", flush=True)
+    return {}
+
+
+def lower_priority():
+    """nice 10 for the calling thread (Linux: nice is per thread); Windows has no os.nice and keeps normal priority."""
+    if hasattr(os, "nice"):
+        os.nice(max(0, 10 - os.nice(0)))  # absolute: a thread inherits its creator's nice (10 + 10 gave 19)
+
+
+def trim():
+    """Hand memory glibc keeps after a burst of embedding back to the system (as rerank.unload does)."""
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):  # another libc: only more memory stays in use
+        pass
 
 
 class HashEmbedder:
@@ -102,28 +139,29 @@ class Vectors:
         self.seen_gen = -1
         self.lock = threading.Lock()
         self.error = ""
+        # Every embedding runs on this one thread: onnxruntime keeps working buffers per calling thread, so queries from
+        # asyncio.to_thread's many threads grew the server from 734 to 855 MB in an hour. Load test of 240 queries from 8
+        # threads (8 Nov 2026): ~1000 MB -> ~480 MB; parallel runs gained nothing, each already uses THREADS cores.
+        self.worker = ThreadPoolExecutor(1, thread_name_prefix="embed", initializer=lower_priority)
 
     # ------------------------------------------------------------------ background work
     def load(self):
-        if CACHE.exists():
-            try:
-                with np.load(CACHE) as z:
-                    # vectors of another model do not compare with this one's queries: start over instead of mixing
-                    if (str(z["model"]) if "model" in z.files else "google/embeddinggemma-300m") == MODEL:  # untagged = old fp32
-                        self.cache = dict(zip(z["keys"].tolist(), z["vecs"]))
-                    else:
-                        print("vector cache is from another embedding model, rebuilding", flush=True)
-            except Exception as e:  # a broken cache is only a slower start
-                print(f"vector cache unreadable, rebuilding: {e}", flush=True)
+        self.cache = read_cache()
         self.model = HashEmbedder() if MODEL == "hash" else text_model(THREADS)
+        trim()  # loading leaves ~190 MB of temporaries that glibc keeps otherwise
 
     def embed(self, texts: list[str]) -> np.ndarray:
-        v = np.array(list(self.model.embed(texts, batch_size=4)), dtype=np.float32)
+        # One text per job, submitted one after the other, so a query waits for at most one chunk (~0.75 s) while a sync
+        # embeds hundreds; jobs of 4 made it wait ~2.3 s and were only 11% faster (measured 8 Nov 2026).
+        out = []
+        for t in texts:
+            out += self.worker.submit(lambda t=t: list(self.model.embed([t], batch_size=1))).result()
+        v = np.array(out, dtype=np.float32)
         return v / np.maximum(np.linalg.norm(v, axis=1, keepdims=True), 1e-9)
 
     def loop(self):
         try:
-            os.nice(10)  # embedding yields to everything else on forge
+            lower_priority()  # embedding yields to everything else on forge
             self.load()
         except Exception as e:
             self.error = f"embedding model unavailable: {e}"
@@ -160,6 +198,8 @@ class Vectors:
             if i % 640 == 0:  # make finished chunks searchable and keep them across a restart
                 self.publish(wanted)
                 self.save()
+        if todo:
+            trim()
         live = {h for *_, h in wanted}
         changed = bool(todo) or len(self.cache) != len(live)
         self.cache = {h: v for h, v in self.cache.items() if h in live}
@@ -243,7 +283,7 @@ if __name__ == "__main__":  # self-check of the chunker and the search ranking w
                     ("homelab/sources/s.md", "boiler water boiler water", None),
                     ("memory/b.md", "the printer prints paper", None), ("trade/c.md", "boiler water again", None)]
     import tempfile
-    CACHE = Path(tempfile.mkdtemp()) / "vectors.npz"  # module global: keep the self-check away from the real cache
+    CACHE = CACHE_BASE = Path(tempfile.mkdtemp()) / "vectors.npz"  # module globals: keep the self-check away from the real cache
     v = Vectors(FakeIndex())
     v.model = HashEmbedder()
     v.sync()
@@ -253,6 +293,13 @@ if __name__ == "__main__":  # self-check of the chunker and the search ranking w
     src = next(h for h in v.search("boiler water") if h["path"] == "homelab/sources/s.md")
     raw = float(v.matrix[[r[0] for r in v.rows].index("homelab/sources/s.md")] @ v.embed([QUERY_PREFIX + "boiler water"])[0])
     assert abs(src["score"] - (raw - SOURCE_PENALTY)) < 1e-3, (src, raw)  # a raw source ranks lower by the penalty
+    seen_threads = set()
+    real_embed = v.model.embed
+    v.model.embed = lambda texts, **k: (seen_threads.add(threading.current_thread().name), real_embed(texts, **k))[1]
+    callers = [threading.Thread(target=v.search, args=("boiler",)) for _ in range(4)]
+    [t.start() for t in callers]
+    [t.join() for t in callers]
+    assert len(seen_threads) == 1 and next(iter(seen_threads)).startswith("embed"), seen_threads  # one embedding thread
     v.save()  # tagged with the default model; another model must not reuse these vectors
     MODEL = "hash"
     w = Vectors(FakeIndex())
@@ -261,4 +308,9 @@ if __name__ == "__main__":  # self-check of the chunker and the search ranking w
     v.save()
     w.load()
     assert set(w.cache) == set(v.cache), "same model: cache reused"
+    CACHE = CACHE_BASE.with_name("vectors-q4.npz")  # own file missing: the shared one is used when it holds this model's
+    assert set(read_cache()) == set(v.cache)
+    MODEL = "other"
+    assert read_cache() == {}, "another model's vectors are never read"
+    MODEL, CACHE = "hash", CACHE_BASE
     print("ok", len(cs), "chunks")

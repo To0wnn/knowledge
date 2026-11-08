@@ -113,9 +113,11 @@ $("pal-q").addEventListener("input", () => {
   if (q.length < 2) return;
   pal.timer = setTimeout(async () => { // text and meaning: one round trip each, the newest query wins
     const seq = ++pal.seq, enc = encodeURIComponent(q);
+    // a query that matches one of the palette's own views or actions found what it looked for: no knowledge gap
+    const own = pal.items.some((i) => i.kind === "view" || i.kind === "action") ? "&gap=0" : "";
     try {
       const [t, s] = await Promise.all([api(`/ui/api/search?q=${enc}&project=${project}`),
-        api(`/ui/api/semantic?q=${enc}&project=${project}`).catch(() => ({ hits: [] }))]);
+        api(`/ui/api/semantic?q=${enc}&project=${project}${own}`).catch(() => ({ hits: [] }))]);
       if (seq !== pal.seq || !$("palette").open) return;
       pal.server = { q, text: t.notes.slice(0, 6), sem: s.hits.slice(0, 6) };
       palRender(true);

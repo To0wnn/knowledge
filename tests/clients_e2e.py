@@ -1087,8 +1087,9 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
     (agy_dir / "log").mkdir(parents=True)
     agy_settings = {"model": "Gemini", "trustedWorkspaces": [str(home)]}
     (agy_dir / "settings.json").write_text(json.dumps(agy_settings), encoding="utf-8")
-    (agy_dir / "log" / "cli-1.log").write_text("I1031 10:00:00.100000       1 hooks_manager.go:53] loaded 2 named hooks\n"
-                                               "E1031 10:00:01.200000       1 hooks.go:90] post-tool hook failed: exit status 1: agy-boom\n", encoding="utf-8")
+    md = time.strftime("%m%d")  # today: the server keeps hook failures for a week (a fixed 1031 failed from 7 Nov 2026)
+    (agy_dir / "log" / "cli-1.log").write_text(f"I{md} 00:00:00.100000       1 hooks_manager.go:53] loaded 2 named hooks\n"
+                                               f"E{md} 00:00:01.200000       1 hooks.go:90] post-tool hook failed: exit status 1: agy-boom\n", encoding="utf-8")
     import sqlite3
     con = sqlite3.connect(str(home / ".codex" / "logs_2.sqlite"))
     con.execute("CREATE TABLE logs (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, level TEXT, feedback_log_body TEXT)")

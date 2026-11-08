@@ -12,7 +12,7 @@ cd "$(dirname "$0")"
 c="docker compose -p ${KNOWLEDGE_PROJECT:-knowledge}"
 state=${KNOWLEDGE_STATE_DIR:-/root/docker/knowledge/state}
 n=${KNOWLEDGE_NAME:-knowledge}  # container names: $n (blue), $n-green (tests/swap/run.sh uses its own)
-listening() {  # up to 10 minutes: a changed embedding model re-embeds everything before the port opens
+listening() {  # up to 10 minutes: the port opens once the index and the first batch of vectors are ready
     i=0; while [ $i -lt 600 ]; do [ -f "$state/listening-$1" ] && return 0; sleep 1; i=$((i + 1)); done
     docker logs "$2" --tail 20; return 1
 }

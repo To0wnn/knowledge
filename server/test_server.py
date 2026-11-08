@@ -1859,6 +1859,11 @@ def ui_gap_contract(tmp, ck, raw):
     ask("qwzx")
     ask("qwzxvb plorkt")
     time.sleep(1.2)
+    raw("GET", "/ui/api/semantic?q=toggle%20theme%20qwzx&project=garden&gap=0", headers=ck)  # the palette matched an action
+    time.sleep(1.2)
+    ask("togle qwzx")  # a typo, then the palette's match within the wait: neither is a gap
+    raw("GET", "/ui/api/semantic?q=toggle%20qwzx&project=garden&gap=0", headers=ck)
+    time.sleep(1.2)
     ask("garden")  # finds notes
     time.sleep(1.2)
     ui = [g for g in gaps() if g[2] == "ui"]
@@ -2250,6 +2255,12 @@ def main():
         assert "giraffe old" in call("knowledge_search", {"pattern": "giraffe", "root": "trade-memory", "archive": True})[1]
         import server as srv
         assert srv.instructions().index("House rules") < 1900, srv.instructions().index("House rules")  # Claude Code cuts at 2048
+        many = dict(srv.PROJECTS)
+        try:  # the length no longer grows with the number of projects
+            srv.PROJECTS.update({f"project{i:02}": ("x", "x-memory") for i in range(12)})
+            assert srv.instructions().index("House rules") < 1900 and " more. " in srv.instructions()[:300], srv.instructions()[:300]
+        finally:
+            srv.PROJECTS.clear(); srv.PROJECTS.update(many)
         # ntfy next to Matrix: one POST to the topic's URL, a failure shows on the admin page.
         import http.server as hs
         posted = []
