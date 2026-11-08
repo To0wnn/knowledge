@@ -2170,8 +2170,14 @@ def approval_hint(rel: str, before: str, after: str) -> str:
     new = {t["id"] for t in added_tasks(rel, before, after, changed=True)}
     if not new or not (project := kb_graph.project_of(rel, "")):
         return ""
-    return "".join(f"\nTask {t['id']} waits for the owner's approval in the Tasks tab ({t['waiting_reason']})."
-                   for t in project_tasks(project)[0] if t["id"] in new and t["path"] == rel and t["needs_approval"])
+    mine = [t for t in project_tasks(project)[0] if t["id"] in new and t["path"] == rel]
+    out = "".join(f"\nTask {t['id']} waits for the owner's approval in the Tasks tab ({t['waiting_reason']})." for t in mine if t["needs_approval"])
+    if not device.get().get("worker") and (free := [t["id"] for t in mine if not t["claimed"]]):
+        # the duplicate work of 8 Nov 2026: a chat wrote a task, did it itself, and a worker started the same task
+        out += (f"\nNot claimed: {', '.join(free)}. If you do it in this session yourself, claim it now: add "
+                f"'({kb_lint.W['claimed']} <you>, {date.today().isoformat()})' to its line, so no worker starts the same work. "
+                "If it is for a worker or someone else, leave it as it is.")
+    return out
 
 
 def update_state(path: Path, change):
@@ -2201,10 +2207,13 @@ def note_task_authors(rel: str, before: str, after: str, by: str, keep: bool = F
         known = read_json(TASK_AUTHORS, {}).get(project, {})
         if not (new := [t for t in new if (known.get(t["id"]) or {}).get("sig") != task_sig(t)]):
             return
+    dev = {} if keep else device.get()
+    # written in a session (a chat, an agent in a terminal), not by a worker: that session may do the work itself
+    session = {"session": dev.get("machine_label") or by} if dev.get("machine") and not dev.get("worker") else {}
     try:
         if by:
             update_state(TASK_AUTHORS, lambda d: d.setdefault(project, {}).update(
-                {t["id"]: {"by": by, "at": int(time.time()), "sig": task_sig(t)} for t in new}))
+                {t["id"]: {"by": by, "at": int(time.time()), "sig": task_sig(t), **session} for t in new}))
         if not keep:
             update_state(TASK_APPROVALS, lambda d: [d.get(project, {}).pop(t["id"], None) for t in new])
         if any(t["id"] in read_json(TASK_CANCELLED, {}).get(project, {}) for t in new):  # written again: no longer cancelled
@@ -2270,12 +2279,17 @@ def project_tasks(project: str) -> tuple[list[dict], list[dict]]:
             (f"waits for approval: written by {by or 'an unknown writer'}", start != "after approval" and not approved and not trusted),
         ) if waits]
         w = wakes.get(t["id"])
+        fresh = rec and fits(rec) and rec.get("session") and not t["claimed"] and now - rec.get("at", 0) < SESSION_WARN
+        t["approve_warning"] = (f"Written {int((now - rec['at']) // 60)} min ago in a session on {rec['session']}, not by a worker. "
+                                "If that session is doing this task itself, it should claim it instead: approving lets a worker "
+                                "start it now, and both would do the same work.") if fresh else ""
         t.update(author=by, approved=approved, startable=not t["claimed"] and not why, waiting_reason="; ".join(why),
                  needs_approval=not approved and (start == "after approval" or not trusted),
                  stalled=bool(w) and not t["claimed"] and now - w.get("at", 0) > STALLED_AFTER)
     return tasks, back
 
 
+SESSION_WARN = 6 * 3600  # how long the approve buttons warn that a session wrote the line (it may be doing it itself)
 CANCELLED = re.compile(r"cancelled by ", re.I)  # the text of a result line cancel_task writes
 
 
@@ -5424,7 +5438,7 @@ def task_rows() -> list[dict]:
         tasks, back = project_tasks(name)
         approver, leases = may_approve(name), read_json(TASK_LEASES, {}).get(name, {})
         rows += [{**{k: t[k] for k in ("project", "path", "line", "owner", "id", "claimed", "text", "from", "start", "legacy",
-                                        "author", "startable", "waiting_reason", "stalled", "approved")},
+                                        "author", "startable", "waiting_reason", "stalled", "approved", "approve_warning")},
                   "can_cancel": approver and not held_now(t, leases.get(t["id"]), now),
                   "runs": task_where(name, t, leases.get(t["id"]), now) if t["startable"] else "",
                   "due": t["due"].isoformat() if t["due"] else "", "overdue": bool(t["due"] and t["due"] < today),
@@ -5493,7 +5507,7 @@ def mission_graph(project: str = "", everything: bool = False) -> dict:
         lanes.setdefault(lane, r["owner"].partition("@")[0].strip())
         nodes.append({"key": f"{r['project']}/{r['id']}", "status": status, "lane": lane, "where": where,
                       **{k: r.get(k, "") for k in ("id", "project", "owner", "text", "line", "path", "from", "start", "due",
-                                                   "waiting_reason", "author", "since")},
+                                                   "waiting_reason", "author", "since", "approve_warning")},
                       "can_approve": bool(r.get("can_approve"))})
     keys = {(n["project"], n["id"]): n for n in nodes}
     edges = []
@@ -6192,7 +6206,7 @@ def board_items() -> list[dict]:
             continue
         task = {"kind": "task", "id": t["id"], "agent": agent, "project": t["project"], "title": f"{t['id']} · {t['text'][:120]}",
                 "path": t["path"], "line": "", "at": 0, "owner": t["owner"], "key": key, "sig": sig, "can_cancel": t.get("can_cancel", False),
-                "due": t["due"], "overdue": t["overdue"]}
+                "due": t["due"], "overdue": t["overdue"], "approve_warning": t.get("approve_warning", "")}
         if t["done"]:
             if now - (t.get("since") or 0) < BOARD_DONE:
                 items.append({**task, "col": "done", "line": f"handed back to {t['owner']}", "at": t.get("since") or 0})

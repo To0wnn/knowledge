@@ -1144,7 +1144,9 @@ async function loadTasks(render = true) {
       (t.author ? `\nWritten by ${t.author}` : "") + (t.stalled ? "\nWoken, but nobody claimed it within 30 minutes." : "");
     const acts = el("div", "task-acts"), act = (text, title, fn, cls = "btn small") => { const b = el("button", cls, text); b.type = "button"; b.title = title; b.onclick = fn; acts.append(b); return b; };
     const run = (fn) => async () => { try { await fn(); loadTasks(true); } catch (e) { toast(e.message); } };
-    if (t.can_approve) act("Approve", "Let this task start (it waits for the project owner's or an admin's approval)", run(() => post("/ui/api/task/approve", { project: t.project, id: t.id })));
+    const approve = run(() => post("/ui/api/task/approve", { project: t.project, id: t.id }));
+    if (t.can_approve) act("Approve", "Let this task start (it waits for the project owner's or an admin's approval)" + (t.approve_warning ? `\n\n${t.approve_warning}` : ""),
+      () => (!t.approve_warning || confirm(`${t.approve_warning}\n\nApprove ${t.id} anyway?`)) && approve());
     for (const h of t.hosts || []) act(`Start on ${h.label}`, "Start a worker for this task there now",
       run(async () => { await post("/ui/api/machines/action", { machine: h.machine, action: "start_worker", args: { project: t.project, id: t.id } }); toast(`Asked ${h.label} to start ${t.id}`, false); }));
     for (const { w, m } of workersOf(t)) { // its worker: where, how far, and Stop / Restart right here

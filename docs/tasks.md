@@ -14,6 +14,12 @@ The companion that starts workers is described in [companion.md](companion.md); 
 
 ## Task lines and leases
 
+- **A session that writes a task and does it itself claims it:** when a session (a chat, an agent in a terminal; not a
+  worker) adds a task line that is not claimed, the write's answer says so and asks it to add
+  `(claimed <you>, <date>)` when it does the work itself, so no worker starts the same task. For six hours after such a
+  write the Approve buttons (Tasks tab, Agents board, Mission) warn that a session wrote the line and may be doing it
+  already, and ask before approving. Both came from 8 Nov 2026, when a chat built a task it had just written while a
+  worker, started by an approval minutes later, built the same thing.
 - **Task lines:** a hand-over is one line in a memo,
   `- open until <date> [<Owner>, <ID>] from <Requester>, start <now | after <ID> | <date> | after approval>: <what>`
   (`open tot` also works). A new line without `from`/`start` is refused at write time; older lines keep working as
