@@ -14,6 +14,7 @@ Standard library only.
 from __future__ import annotations  # X | None on Python 3.9 (macOS's /usr/bin/python3)
 
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -84,10 +85,24 @@ def own() -> tuple:
     return ()
 
 
+RAW_MAIN = re.compile(r"https://raw\.githubusercontent\.com/([^/]+/[^/]+)/main/(.+)")
+
+
 def latest() -> tuple:
     if "://" not in LATEST:  # a file, in the tests
         return version(Path(LATEST).read_text(encoding="utf-8"))
-    with urllib.request.urlopen(LATEST, timeout=15) as r:
+    url = LATEST
+    if m := RAW_MAIN.fullmatch(LATEST):  # raw.githubusercontent.com serves main up to 5 min old (measured 8 Nov 2026):
+        try:  # read the file at main's commit instead, which the API names fresh (60 asks an hour without a token)
+            req = urllib.request.Request(f"https://api.github.com/repos/{m[1]}/commits/main",
+                                         headers={"Accept": "application/vnd.github.sha", "User-Agent": "knowledge-plugin"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                sha = r.read().decode("utf-8").strip()
+            if re.fullmatch(r"[0-9a-f]{40}", sha):
+                url = f"https://raw.githubusercontent.com/{m[1]}/{sha}/{m[2]}"
+        except Exception:  # rate limit or offline: the cached copy, at most 5 minutes old
+            pass
+    with urllib.request.urlopen(url, timeout=15) as r:
         return version(r.read().decode("utf-8"))
 
 
@@ -312,6 +327,8 @@ if __name__ == "__main__":
             sys.exit(str(e))
     elif "--self-test" in sys.argv:
         import tempfile
+        m = RAW_MAIN.fullmatch(LATEST)  # the default source is read at main's commit, never the 5-minute cache
+        assert m and m[1] == "To0wnn/knowledge" and m[2] == "plugin/.claude-plugin/plugin.json", LATEST
         STATE = Path(tempfile.mkdtemp()) / "auto-update.json"
         AGY_DIR = STATE.parent / "no-agy"
         started = []
