@@ -1560,7 +1560,7 @@ def duplicates_loop():
         return
     global dupes
     dupes = {"pairs": {}, "searched": {}, **read_json(DUPES_FILE, {})}
-    os.nice(10)  # yields to everything else on forge, like the embedding thread
+    vectors.lower_priority()  # yields to everything else on forge, like the embedding thread
     rr = kb_rerank.Reranker()
     time.sleep(DUPES_DELAY)
     while True:

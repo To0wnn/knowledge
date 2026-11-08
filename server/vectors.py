@@ -81,6 +81,12 @@ def text_model(threads: int = THREADS):
     return TextEmbedding(MODEL, threads=threads, cache_dir=MODELS_DIR or None, enable_cpu_mem_arena=False)
 
 
+def lower_priority():
+    """nice 10 for the calling thread (Linux: nice is per thread); Windows has no os.nice and keeps normal priority."""
+    if hasattr(os, "nice"):
+        os.nice(10)
+
+
 def trim():
     """Hand memory glibc keeps after a burst of embedding back to the system (as rerank.unload does)."""
     try:
@@ -117,7 +123,7 @@ class Vectors:
         # Every embedding runs on this one thread: onnxruntime keeps working buffers per calling thread, so queries from
         # asyncio.to_thread's many threads grew the server from 734 to 855 MB in an hour. Load test of 240 queries from 8
         # threads (8 Nov 2026): ~1000 MB -> ~480 MB; parallel runs gained nothing, each already uses THREADS cores.
-        self.worker = ThreadPoolExecutor(1, thread_name_prefix="embed", initializer=os.nice, initargs=(10,))  # nice is per thread
+        self.worker = ThreadPoolExecutor(1, thread_name_prefix="embed", initializer=lower_priority)
 
     # ------------------------------------------------------------------ background work
     def load(self):
@@ -145,7 +151,7 @@ class Vectors:
 
     def loop(self):
         try:
-            os.nice(10)  # embedding yields to everything else on forge
+            lower_priority()  # embedding yields to everything else on forge
             self.load()
         except Exception as e:
             self.error = f"embedding model unavailable: {e}"
