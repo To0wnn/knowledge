@@ -385,7 +385,7 @@ function offlineSection(title, pcs, res) {
   const sec = el("section", "mx-offline"), ul = el("ul", "mx-lines"), groups = new Map();
   // a pc set up again reports under a new id each time: one line per name and token, its reports counted
   for (const m of pcs) { const k = `${m.label.toLowerCase()}|${[...m.tokens].sort().join(",")}`; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(m); }
-  sec.append(el("h2", "mx-h", title));
+  sec.append(el("h2", "mx-h", `${title} (${groups.size})`));
   for (const ms of groups.values()) {
     const m = ms[0], ids = new Set(ms.map((x) => x.id)), li = el("li", "mx-line"), name = el("strong"), info = el("div");
     const dot = el("span", "machine-dot"); dot.setAttribute("aria-hidden", "true");
@@ -501,7 +501,7 @@ function drawMachines() {
     parts.push(machinesStatus(res, own, online));
     if (online.length) parts.push(compareTable(online, here, true));
     const offline = own.filter((m) => !m.online || m.old).sort((a, b) => (b.at || 0) - (a.at || 0));
-    if (offline.length) parts.push(offlineSection(`Offline (${offline.length})`, offline, res));
+    if (offline.length) parts.push(offlineSection("Offline", offline, res));
     const theirs = res.machines.filter((m) => !m.mine);
     if (theirs.length) {
       const sec = el("section", "mx-theirs"), h = el("h2", "mx-h", "Other people's pcs"), live = theirs.filter((m) => m.online && !m.old);
@@ -510,7 +510,7 @@ function drawMachines() {
       sec.append(h, el("p", "muted mx-lede", "Each pc on its owner's accounts: never counted with yours. You see them; their owner steers them."));
       for (const m of live) sec.append(compareTable([m], here, false));
       const gone = theirs.filter((m) => !m.online || m.old);
-      if (gone.length) sec.append(offlineSection(`Offline (${gone.length})`, gone, res));
+      if (gone.length) sec.append(offlineSection("Offline", gone, res));
       parts.push(sec);
     }
   }
