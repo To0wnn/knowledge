@@ -8,7 +8,8 @@ more than a tool id (the companion's rule that no free text reaches a pc). A man
      "install": [step], "check": [step], "remove": [step], "version": step}
     step = {"run": [argv], "os": ["linux"|"darwin"|"windows"], "agent": "claude"|"codex"|"agy",
             "ok_if": [text in the output that makes a non-zero exit fine], "expect": "a regex the output must match",
-            "info": true (check only: reported, never makes the tool unhealthy), "timeout": seconds}
+            "info": true (check only: reported, never makes the tool unhealthy), "timeout": seconds,
+            "env": {"NAME": "value"} (added to this step's environment, e.g. DO_NOT_TRACK)}
 
 A step with "agent" runs only when that agent is installed here, one with "os" only on those systems. Install runs
 again as an update ("@latest" in a step, or the agent's own marketplace update). Standard library only; Python 3.9.
@@ -25,7 +26,7 @@ CATALOG = Path(os.environ.get("KNOWLEDGE_TOOLS_DIR") or Path(__file__).resolve()
 OS = {"win32": "windows", "darwin": "darwin"}.get(sys.platform, "linux")
 AGENTS = ("claude", "codex", "agy")
 ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
-STEP_KEYS = {"run", "os", "agent", "ok_if", "expect", "info", "timeout"}
+STEP_KEYS = {"run", "os", "agent", "ok_if", "expect", "info", "timeout", "env"}
 TOP_KEYS = {"name", "description", "homepage", "needs", "install", "check", "remove", "version"}
 TIMEOUT = 900  # an npm install of a large package on a slow line
 
@@ -44,8 +45,9 @@ def validate(m: dict) -> dict:
             raise ValueError(f"unknown os or agent: {s}")
         if not (isinstance(s.get("ok_if", []), list) and all(isinstance(x, str) and x == x.lower() for x in s.get("ok_if", []))
                 and isinstance(s.get("expect", ""), str) and isinstance(s.get("info", False), bool)
-                and type(s.get("timeout", TIMEOUT)) in (int, float) and s.get("timeout", TIMEOUT) > 0):
-            raise ValueError(f"ok_if is a list of lowercase strings, expect a string, info true or false, timeout seconds: {s}")
+                and type(s.get("timeout", TIMEOUT)) in (int, float) and s.get("timeout", TIMEOUT) > 0
+                and isinstance(s.get("env", {}), dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in s.get("env", {}).items())):
+            raise ValueError(f"ok_if is a list of lowercase strings, expect a string, info true or false, timeout seconds, env names to strings: {s}")
     for s in steps:
         try:
             re.compile(s.get("expect", ""))
@@ -101,7 +103,7 @@ def run(s: dict) -> tuple:
         return False, "", f"{s['run'][0]} is not installed on this pc"
     try:  # its own process group: a timeout must also stop the node an npm.cmd started, or its pipes keep us waiting
         p = subprocess.Popen([exe, *s["run"][1:]], stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
-                             text=True, encoding="utf-8", errors="replace", **({} if os.name == "nt" else {"start_new_session": True}))
+                             text=True, encoding="utf-8", errors="replace", env={**os.environ, **s.get("env", {})}, **({} if os.name == "nt" else {"start_new_session": True}))
         try:
             out, err = p.communicate(timeout=s.get("timeout", TIMEOUT))
         except subprocess.TimeoutExpired:
@@ -172,7 +174,7 @@ def self_test():
         mark, py = Path(d) / "mark", sys.executable
         put = lambda text: [py, "-c", f"open({str(mark)!r}, 'a').write({text!r})"]
         m = validate({"name": "Fixture", "needs": [Path(py).name],
-             "install": [{"run": put("i")}, {"run": put("C"), "agent": "claude"}, {"run": put("X"), "agent": "codex"},
+             "install": [{"run": [py, "-c", "import os, sys; sys.exit(os.environ.get('KN_T') != 'x')"], "env": {"KN_T": "x"}}, {"run": put("i")}, {"run": put("C"), "agent": "claude"}, {"run": put("X"), "agent": "codex"},
                          {"run": put("W"), "os": ["windows"]}, {"run": put("P"), "os": ["linux", "darwin"]},
                          {"run": [py, "-c", "import sys; print('already there'); sys.exit(1)"], "ok_if": ["already"]}],
              "check": [{"run": [py, "-c", "print('{\"checks\": [{\"name\": \"node\", \"ok\": true}]}')"], "expect": "node"},
@@ -202,7 +204,7 @@ def self_test():
         for typo in ({**m, "instal": []}, {"name": "x", "install": [{"run": "npm i"}]}, {"name": "x", "install": [{"run": ["a"], "agent": "cursor"}]},
                      {"name": "x", "install": [{"run": ["a"], "os": ["win"]}]}, {"name": "x", "install": [{"run": ["a"], "shell": True}]},
                      {"name": "x", "install": [{"run": ["a"], "ok_if": "already"}]}, {"name": "x", "install": [{"run": ["a"], "timeout": "60"}]},
-                     {"name": "x", "install": [{"run": ["a"], "ok_if": ["Already"]}]}, {"name": "x", "install": [{"run": ["a"], "expect": "("}]}):
+                     {"name": "x", "install": [{"run": ["a"], "ok_if": ["Already"]}]}, {"name": "x", "install": [{"run": ["a"], "expect": "("}]}, {"name": "x", "install": [{"run": ["a"], "env": {"A": 1}}]}):
             try:
                 validate(typo)
                 raise AssertionError(f"refused: {typo}")

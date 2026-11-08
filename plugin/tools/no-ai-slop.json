@@ -1,0 +1,19 @@
+{
+  "name": "No AI Slop",
+  "description": "A writing skill: edits drafts into sharper, more human writing, or names the AI-slop patterns in a text.",
+  "homepage": "https://github.com/petergyang/no-ai-slop",
+  "needs": ["npx"],
+  "install": [
+    {"run": ["npx", "-y", "skills@latest", "add", "petergyang/no-ai-slop", "--skill", "no-ai-slop", "--global", "--yes", "--copy", "--agent", "claude-code"], "agent": "claude", "env": {"DO_NOT_TRACK": "1"}},
+    {"run": ["npx", "-y", "skills@latest", "add", "petergyang/no-ai-slop", "--skill", "no-ai-slop", "--global", "--yes", "--copy", "--agent", "codex"], "agent": "codex", "env": {"DO_NOT_TRACK": "1"}},
+    {"run": ["npx", "-y", "skills@latest", "add", "petergyang/no-ai-slop", "--skill", "no-ai-slop", "--global", "--yes", "--copy", "--agent", "antigravity-cli"], "agent": "agy", "env": {"DO_NOT_TRACK": "1"}}
+  ],
+  "check": [
+    {"run": ["npx", "-y", "skills@latest", "list", "--global", "--json"], "expect": "\"name\": \"no-ai-slop\"", "env": {"DO_NOT_TRACK": "1"}}
+  ],
+  "remove": [
+    {"run": ["npx", "-y", "skills@latest", "remove", "no-ai-slop", "--global", "--yes", "--agent", "claude-code"], "agent": "claude", "env": {"DO_NOT_TRACK": "1"}},
+    {"run": ["npx", "-y", "skills@latest", "remove", "no-ai-slop", "--global", "--yes", "--agent", "codex"], "agent": "codex", "env": {"DO_NOT_TRACK": "1"}},
+    {"run": ["npx", "-y", "skills@latest", "remove", "no-ai-slop", "--global", "--yes", "--agent", "antigravity-cli"], "agent": "agy", "env": {"DO_NOT_TRACK": "1"}}
+  ]
+}
