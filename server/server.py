@@ -4805,7 +4805,9 @@ def external_remove(name: str):
     with external_lock:
         reg = dict(read_json(EXTERNAL_FILE, {}))
         e = reg.pop(name)
-        for rel in e.get("files", []):
+        # a tool add-on installed a skill of the same name there since (.not-shared): its files are the tool's, they stay
+        mine = not (ROOTS["claude"] / "skills" / name / NOT_SHARED).exists()
+        for rel in e.get("files", []) if mine else ():
             external_delete(f"claude/skills/{name}/{rel}")
         folder, _ = resolve(f"claude/skills/{name}", scoped=False)
         if folder.is_dir() and not any(folder.iterdir()):
