@@ -126,6 +126,26 @@ def tasks_contract(tmp, ck, fr, ver, raw):
     assert not add("- open until 2099-01-01 [Codex, DAT-1] from Gemini, start 1 jan 2098: later")[0]
     err, res = add("- open until 2099-01-01 [Codex, APR-1] from Gemini, start after approval: risky")
     assert not err and "Task APR-1 waits for the owner's approval in the Tasks tab (waits for approval)" in res, res
+    # A task a session (not a worker) writes: the answer asks to claim it when the session does it itself, and the
+    # approve buttons warn for a while (8 Nov 2026: a chat did the task while a worker started the same one).
+    def mcall(line, extra=None):
+        body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_edit", "arguments":
+                {"path": path, "old_string": "## Keuzes", "new_string": line + "\n## Keuzes"}}}
+        res = json.loads(http("POST", "/mcp", body, fr, headers={"X-Knowledge-Machine": "d0d0d0d0d0d0d0d0", "X-Knowledge-Machine-Label": "desk-pc", **(extra or {})})[1])["result"]
+        return res.get("isError", False), "".join(c.get("text", "") for c in res["content"])
+    dup = {"DUP-1": "- open until 2099-01-01 [Claude, DUP-1] from Gemini, start after approval: the same work twice",
+           "DUP-3": "- open until 2099-01-01 [Claude, DUP-3] (claimed Claude, 2026-11-08) from Gemini, start now: mine already"}
+    err, res = mcall(dup["DUP-1"])
+    assert not err and "Not claimed: DUP-1" in res and "claim it now" in res, res
+    assert "in a session on desk-pc, not by a worker" in rows()["DUP-1"]["approve_warning"], rows()["DUP-1"]
+    err, res = mcall(dup["DUP-3"])
+    assert not err and "Not claimed" not in res and rows()["DUP-3"]["approve_warning"] == "", (res, rows()["DUP-3"])
+    dup["DUP-2"] = "- open until 2099-01-01 [Claude, DUP-2] from Gemini, start after approval: a worker hands it on"
+    err, res = mcall(dup["DUP-2"], {"X-Knowledge-Worker": "WK-1"})
+    assert "Not claimed" not in res, res  # a worker writes what others do; it never does it itself
+    for line in dup.values():
+        if not (err and line == dup["DUP-2"]):  # a worker may be refused that write: then there is nothing to remove
+            call("knowledge_edit", {"path": path, "old_string": line + "\n", "new_string": ""}, fr)
     # Refused, not silently wrong: an unknown "start after" ID would start at once; a date without year is no task.
     err, res = add("- open until 2099-01-01 [Codex, DEP-9] from Gemini, start after NOPE-77: typo")
     assert err and "no task NOPE-77" in res, res
