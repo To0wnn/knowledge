@@ -1754,7 +1754,7 @@ class AgyLive(CodexLive):
             if RUNNING.get(self.cid) is self.rec:
                 RUNNING.pop(self.cid, None)
         with START_LOCK:
-            if LIVE.get(self.cid) is self:
+            if LIVE.get(self.cid) in (self, None):  # None: reaped meanwhile; the new process still owns the chat
                 if lv:
                     LIVE[self.cid] = lv
                 else:
@@ -1771,6 +1771,8 @@ class AgyLive(CodexLive):
 def reap():
     """End live chats idle for IDLE_CLOSE, and the oldest idle ones over MAX_LIVE (the companion's loop calls it)."""
     for cid, lv in list(LIVE.items()):
+        if getattr(lv, "restarting", False):  # an agy Force: gone() hands the chat to the new process
+            continue
         if lv.idle() or not lv.alive():
             LIVE.pop(cid, None)
             if lv.alive():

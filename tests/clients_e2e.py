@@ -2007,6 +2007,8 @@ def chat_e2e(tok: str, tmp: Path):
         idle(live, 2)
         send(live, "SLOW again")
         ok = running(live) and wait_for(lambda: any(c.get("chat") == live and c.get("stdin") == "SLOW again" for c in recorded()), 20)
+        pids = [c["pid"] for c in recorded() if c.get("chat") == live]
+        check(ok and pids[-1] == pids[-2], "live agy: after a Force the new agy stays the chat's process (no second agy)", json.dumps(pids))
         http("POST", "/ui/api/chat/stop", {"machine": mid, "id": live}, ui)
         check(ok and wait_for(lambda: chat(live)["chat"]["status"] == "idle", 30) and any(e["text"] == "Stopped." for e in chat(live)["events"]),
               "live agy: Stop ends the turn", json.dumps(chat(live)["events"])[-300:])
