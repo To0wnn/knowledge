@@ -311,6 +311,8 @@ async function loadGraph() {
       if (zoomToFocus.again && selected) zoomToFocus();
       else if (!loadGraph.fitted) Graph.zoomToFit(400, fitPad());
       zoomToFocus.again = false; loadGraph.fitted = true;
+      // a hidden map, laid out and fitted: stop force-graph's frame loop (60 a second on every other view); setMap resumes it
+      setTimeout(() => { if (!mapOn) Graph.pauseAnimation(); }, 500);
     })
     .onNodeHover((n) => {
       if (touch) return;
