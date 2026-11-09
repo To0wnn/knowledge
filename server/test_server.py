@@ -714,6 +714,16 @@ def machines_contract(tmp, ck, fr, raw, er, et, heard):
     adm("/ui/api/admin/user", {"username": "erin", "projects": {**cur_p, "garden": "read"}})
     er_runs = {t["id"]: t["runs"] for t in json.loads(raw("GET", "/ui/api/tasks", headers=er)[2])["tasks"] if t["project"] == "garden" and not t["done"]}
     assert er_runs["MC-4"] == "running in a worker on another pc", er_runs
+    import server as srv  # a token caller has no "user": the holder's owner is compared with the token's owner
+    toks, was = {"admin-pc": {"self": True}, "guest-pc": {"owner": "erin"}, "erin-2": {"owner": "erin"}}, srv.read_json
+    srv.read_json = lambda p, d: toks if p == srv.TOKENS_FILE else was(p, d)
+    try:
+        for holder, want in (("admin-pc", "another pc"), ("erin-2", "erin-2 on x"), ("guest-pc#1", "guest-pc on x")):
+            tk = srv.device.set({"name": "guest-pc", "admin": False})
+            assert srv.holder_name({"device": holder, "label": "x"}) == want, (holder, srv.holder_name({"device": holder, "label": "x"}))
+            srv.device.reset(tk)
+    finally:
+        srv.read_json = was
     assert er_runs["MC-3"].startswith("goes to a worker; waits there:"), er_runs
     adm("/ui/api/admin/user", {"username": "erin", "projects": cur_p})
     # A task nobody takes (no lease) for KNOWLEDGE_TASK_IDLE: one Matrix notice, saying where it waits.

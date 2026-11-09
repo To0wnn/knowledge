@@ -191,7 +191,7 @@ def resolve(path: str, scoped: bool = True) -> tuple[Path, str]:
     clean = path.strip().strip("/")
     if "/" not in clean and clean and "index" in globals() and hasattr(index, "files"):
         candidates = (clean, clean + ".md") if not clean.endswith(".md") else (clean,)
-        hits = [r for r in index.files if any(r.endswith("/" + c) or r == c for c in candidates) and (not scoped or in_scope(r))]
+        hits = [r for r in list(index.files) if any(r.endswith("/" + c) or r == c for c in candidates) and (not scoped or in_scope(r))]
         if len(hits) == 1:
             clean = hits[0]
         elif len(hits) > 1:
@@ -1213,7 +1213,7 @@ def knowledge_read(path: str = "", file: str = "", name: str = "", offset: int =
     if data is None:
         name_part = Path(rel).name
         candidates = (name_part, name_part + ".md") if not name_part.endswith(".md") else (name_part,)
-        alt = [r for r in index.files if any(r.endswith("/" + c) for c in candidates) and in_scope(r)] if "index" in globals() else []
+        alt = [r for r in list(index.files) if any(r.endswith("/" + c) for c in candidates) and in_scope(r)] if "index" in globals() else []
         hint = f". Did you mean '{alt[0]}'?" if alt else ""
         raise ToolError(f"{rel} does not exist{hint}")
     note_gap_answer(rel)
@@ -2072,7 +2072,7 @@ def context_parts(project: str = "homelab", agent: str = "", chat: bool = False,
                 "files. Search: knowledge_search, by meaning knowledge_semantic_search; housekeeping: knowledge_lint.",
                 house_rules(mem), *[r for r in [dev_rules()] if r]]
         with index.lock:
-            empty = not any(r.startswith(mem + "/") and r != f"{mem}/MEMORY.md" for r in index.files)
+            empty = not any(r.startswith(mem + "/") and r != f"{mem}/MEMORY.md" for r in list(index.files))
         if empty:  # a new guest whose folder may already hold CLAUDE.md / AGENTS.md / GEMINI.md and notes
             text.append("First session in this project: its memory is still empty. If this folder or this agent already "
                         "holds instructions or notes (CLAUDE.md, AGENTS.md, GEMINI.md, other .md files, Claude Code's local "
@@ -2433,8 +2433,9 @@ def holder_name(h: dict) -> str:
     name = h.get("device", "").partition("#")[0]
     dev = device.get()
     if dev and not dev.get("admin"):
-        tok = read_json(TOKENS_FILE, {}).get(name, {})
-        if tok.get("owner") != dev.get("user") and dev.get("name") != name:
+        tokens = read_json(TOKENS_FILE, {})
+        mine = dev.get("user") or tokens.get(dev.get("name"), {}).get("owner")  # a token caller has no "user"
+        if dev.get("name") != name and (not mine or tokens.get(name, {}).get("owner") != mine):
             return "another pc"
     return f"{name} on {h['label']}" if h.get("label") else name
 
@@ -3620,7 +3621,7 @@ def mirrorable(rel: str, roots: list[str]) -> bool:
 def mirror_files(roots: list[str]) -> dict[str, bytes]:
     """Every mirrorable file of these roots, as the device sees it (redacted for a redacting token)."""
     with index.lock:
-        rels = [r for r in index.files if mirrorable(r, roots)]
+        rels = [r for r in list(index.files) if mirrorable(r, roots)]
     out = {}
     for rel in rels:
         full, rel = resolve(rel)
@@ -3846,7 +3847,7 @@ async def sync_route(request: Request):
             archived.append(clean)
     if b.get("full") and keep:  # never empty the mirror because of an empty or failed listing
         with index.lock:
-            gone = [r for r in index.files if r.startswith(docs + "/") and r.endswith(".md") and r not in keep]
+            gone = [r for r in list(index.files) if r.startswith(docs + "/") and r.endswith(".md") and r not in keep]
         for rel in gone:
             full, rel = await asyncio.to_thread(resolve, rel)
             async with _locks.setdefault(rel, asyncio.Lock()):
@@ -4727,7 +4728,7 @@ def system_state() -> dict:
     """What runs in the background and how the server is configured, for the admin page. No secret values."""
     with index.lock:
         per_root: dict[str, list] = {}
-        for rel, v in index.files.items():
+        for rel, v in list(index.files.items()):
             r = per_root.setdefault(rel.split("/", 1)[0], [0, 0]); r[0] += 1; r[1] += v[1]
     tokens = read_json(TOKENS_FILE, {})
     try:
@@ -5323,7 +5324,7 @@ async def ui_admin_token(request: Request, body: dict):
         if name not in tokens:
             raise ToolError(f"no token {name}")
         was = read_json(REVOKED_TOKENS, {}) | {name: {k: tokens[name][k] for k in ("self", "owner") if tokens[name].get(k)}}
-        REVOKED_TOKENS.write_text(json.dumps(was))
+        write_json(REVOKED_TOKENS, was)
         del tokens[name]
         write_json(TOKENS_FILE, tokens)
         audit("admin-token-revoke", name)
@@ -5695,7 +5696,7 @@ async def ui_recent(request: Request):
 
 def recent_files(roots: tuple) -> list[dict]:
     with index.lock:
-        rows = sorted(((v[0], rel) for rel, v in index.files.items() if rel.split("/", 1)[0] in roots
+        rows = sorted(((v[0], rel) for rel, v in list(index.files.items()) if rel.split("/", 1)[0] in roots
                        and rel.endswith(".md") and "/sessions/" not in rel and in_scope(rel)), reverse=True)[:60]
     who, log = last_writers(), session_log(roots)
     out = []
