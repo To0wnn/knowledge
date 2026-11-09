@@ -491,6 +491,10 @@ def check(m: dict, agents) -> dict:
 def detect(m: dict, agents):
     """A tool installed by hand, not through the companion: there when one of its own checks passes (e.g. a plugin added
     to Claude Code only), then its full check; None when none passes."""
+    # a skill tool's check may download and run its installer (npx): only when one of its skill folders is there.
+    # shortcut: looks in Claude Code's skills folder only, a skill added by hand to Codex or agy alone is not found
+    if m.get("skills") and not any((SKILLS / n).is_dir() for n in m["skills"]):
+        return None
     if not any(do(m, s)[0] for s in steps(m, "check", agents) if not s.get("info")):
         return None
     return check(m, agents)
@@ -645,6 +649,10 @@ def self_test():
             (SKILLS / "other").mkdir()
             got = install({**m, "skills": ["fx-skill", "fx-gone"]}, here(["claude", "agy"]))
             assert (SKILLS / "fx-skill" / NOT_SHARED).exists() and not (SKILLS / "other" / NOT_SHARED).exists() and not (SKILLS / "fx-gone").exists()
+            mark.write_text("")
+            assert detect({**m, "skills": ["fx-gone"], "check": [{"run": put("c")}]}, []) is None and mark.read_text() == "", \
+                "a skill tool whose folder is missing is not looked for: its check may download and run its installer"
+            assert detect({**m, "skills": ["fx-skill"]}, [])["ok"] is True
         finally:
             SKILLS = skills_was
         mark.write_text("")
