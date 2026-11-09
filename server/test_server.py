@@ -607,6 +607,8 @@ def machines_contract(tmp, ck, fr, raw, er, et, heard):
     assert act({"action": "yolo", "args": {"agent": "codex", "on": True}})[0] == 400  # YOLO on needs the typed word
     assert act({"action": "max_workers", "args": {"agent": "codex", "n": -1}})[0] == 400
     assert act({"action": "max_workers", "args": {"agent": "codex", "n": 1.5}})[0] == 400
+    assert act({"action": "max_workers", "args": {"agent": "codex", "n": 100}})[0] == 400  # 0 (no limit) to 99
+    assert act({"action": "max_chats", "args": {"n": 100}})[0] == 400 and act({"action": "max_chats", "args": {"n": True}})[0] == 400
     assert act({"action": "stop_worker", "args": {"id": "MC-1"}})[0] == 400, "a task id is unique per project only: stop names both"
     assert act({"action": "link_folder", "args": {"path": "/x", "project": "nope"}})[0] == 400  # a project the server knows
     assert json.loads(http("GET", "/machine/projects", token=fr, headers=pc)[1])["projects"] == ["garden"]  # what it may write
@@ -650,7 +652,7 @@ def machines_contract(tmp, ck, fr, raw, er, et, heard):
     assert [(a["status"], a.get("result")) for a in m["actions"]][0] == ("done", "on"), m["actions"]
     assert "machine-action" in "\n".join(json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["system"]["audit"])
     # The companion's report: YOLO, limit, workers; a task that waits for a usage limit is told once.
-    rep = {"version": "0.15.0", "workersAllowed": True, "maxWorkers": {"codex": 2}, "game": "",
+    rep = {"version": "0.15.0", "workersAllowed": True, "maxWorkers": {"codex": 2}, "maxChats": 7, "game": "",
            "agents": {"codex": {"yolo": True, "trusted": True, "limit": 91.5, "windows": [[91.5, "5h", 2e9], [20, "7d", None], ["x", 1, 2], [True, "b", 1]]}, "claude": {"yolo": False, "trusted": False, "limit": None}},
            "workers": [{"id": "MC-1", "project": "garden", "agent": "codex", "status": "running", "started": time.time() - 240,
                         "branch": "task/MC-1", "yolo": True, "open": "tail -f x.log"}], "limitWait": ["MC-2"],
@@ -659,7 +661,7 @@ def machines_contract(tmp, ck, fr, raw, er, et, heard):
     http("POST", "/machine/report", rep, token=fr, headers=pc)
     m = {r["id"]: r for r in json.loads(raw("GET", "/ui/api/machines", headers=ck)[2])["machines"]}["cccccccccccccccc"]
     cx = m["agents"]["codex"]
-    assert m["online"] and cx["yolo"] and cx["limit"] == 91.5 and cx["workers"][0]["id"] == "MC-1" and m["companion"]["workersAllowed"], m
+    assert m["online"] and cx["yolo"] and cx["limit"] == 91.5 and cx["workers"][0]["id"] == "MC-1" and m["companion"]["workersAllowed"] and m["companion"]["maxChats"] == 7, m
     assert m["agents"]["claude"]["trusted"] is False and m["agents"]["claude"]["limit"] is None and m["agents"]["claude"]["windows"] == []
     assert cx["windows"] == [[91.5, "5h", 2e9], [20.0, "7d", None]], cx["windows"]  # malformed windows dropped
     assert json.loads((tmp / "machines.json").read_text())["cccccccccccccccc"]["limit_told"] == ["MC-2"]  # told once
