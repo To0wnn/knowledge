@@ -21,7 +21,8 @@ Antigravity, plus a web UI with a graph. Server in `server/` (Python, one Docker
   someone else's changes in the checkout, deploy from your own worktree) and a checkout without the commit that is live
   (merge it first; `--replace-live` takes it off the server on purpose). It pushes the commit to `origin/main` before it
   goes live (live is always in main; a refused push means main moved on: merge it, deploy again), and holds a lock on
-  forge so two deploys never overlap (a dead deploy's lock expires after 30 minutes)
+  forge so two deploys never overlap (a dead deploy's lock expires after 30 minutes); it refuses a plugin/ change whose version
+  equals main's (two parallel bumps to one number)
 - roll back: `git revert <commit>` and `./deploy.sh`
 
 ## Project rules

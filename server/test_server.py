@@ -104,6 +104,8 @@ def tasks_contract(tmp, ck, fr, ver, raw):
     assert not call("knowledge_edit", {"path": "garden-memory/project_legacy.md", "old_string": "added here", "new_string": "added here\nand more"})[0]
     er, said = call("knowledge_edit", {"path": "garden-memory/project_legacy.md", "old_string": "not in this file", "new_string": "neither is this"})
     assert er and "found 0 times" in said, said
+    er, said = call("knowledge_edit", {"path": "garden-memory/project_legacy.md", "after": "x", "new_string": "y"})
+    assert er and "old_string is required" in said, said
     authors = lambda: json.loads((tmp / "task_authors.json").read_text())
     assert authors()["garden"]["LEG-1"]["by"] == "laptop", authors()  # the VM watcher's device wrote it straight to disk
     assert rows()["LEG-1"]["legacy"] and rows()["LEG-1"]["startable"], rows()["LEG-1"]
@@ -1063,9 +1065,10 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert ui("/ui/api/chat/close", {"machine": mid, "id": mc, "closed": False})[0] == 200
     assert ui("/ui/api/chat/close", {"machine": mid, "id": mc})[0] == 200 and chat()["status"] == "queued"
     http("GET", "/machine/chats", token=fr, headers=pc)
-    http("POST", "/machine/chats/events", {"chat": mc, "events": [{"kind": "refused", "text": "call_mcp_tool: path is required"},
+    http("POST", "/machine/chats/events", {"chat": mc, "events": [{"kind": "refused", "failed": True, "text": "call_mcp_tool: path is required"},
          {"kind": "text", "text": "Wrote it to memo x."}], "done": True}, token=fr, headers=pc)
     assert chat()["closed"] is True and not on_board(), "a tool call that failed during the wrap-up does not block the archive"
+    assert any(e["kind"] == "failed" for e in json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["events"]), "refused + failed is stored as failed"
     assert ui("/ui/api/chat/close", {"machine": mid, "id": mc})[0] == 200 and chat()["status"] == "queued"
     assert ui("/ui/api/chat/send", {"machine": mid, "id": mc, "text": "one more thing"})[0] == 200
     http("GET", "/machine/chats", token=fr, headers=pc)
@@ -1634,12 +1637,14 @@ def board_contract(tmp, ck, fr, raw, er, et):
              "- [Claude, BRD-9-done]: board result; branch task/BRD-9; done: it; left: nothing"]
     assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": "\n".join(lines) + "\n## Keuzes"}, fr)[0]
     # A chat with a reply nobody read needs you; one with a refused tool call says so; a running one runs.
-    cids = [json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/x/garden", "worktree": False})[2])["chat"]["id"] for _ in range(3)]
+    cids = [json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/x/garden", "worktree": False})[2])["chat"]["id"] for _ in range(4)]
     for cid in cids:
         assert ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": f"hello {cid}"})[0] == 200
     http("GET", "/machine/chats", token=fr, headers=pc)
     http("POST", "/machine/chats/events", {"chat": cids[0], "events": [{"kind": "text", "text": "All done, merge?"}], "done": True}, token=fr, headers=pc)
     http("POST", "/machine/chats/events", {"chat": cids[1], "events": [{"kind": "refused", "text": "git push"}], "done": True}, token=fr, headers=pc)
+    http("POST", "/machine/chats/events", {"chat": cids[3], "events": [{"kind": "failed", "text": "exit 1: ls x"}, {"kind": "text", "text": "Found it."}],
+         "done": True}, token=fr, headers=pc)
     items = {(i["kind"], i["id"]): i for i in board()}
     col = lambda kind, i: items.get((kind, i), {}).get("col")
     reply = items[("chat", cids[0])]
@@ -1648,6 +1653,7 @@ def board_contract(tmp, ck, fr, raw, er, et):
     assert reply["git"]["changed"] == 0, "a number the companion sent as text is no number"
     assert col("chat", cids[1]) == "needs" and items[("chat", cids[1])]["line"] == "refused: git push", items[("chat", cids[1])]
     assert col("chat", cids[2]) == "running"
+    assert col("chat", cids[3]) == "needs" and items[("chat", cids[3])]["line"] == "replied: Found it.", "a failed tool call is no reason: the reply is"
     # A terminal session that waits: under Needs you, masked, without Allow or Deny; what is not valid never gets there.
     term = items[("terminal", "t-1")]
     assert term["col"] == "needs" and term["title"] == "Bash deploy ‹secret›" and "that terminal" in term["line"] and term["project"] == "garden", term
