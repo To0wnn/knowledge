@@ -77,6 +77,7 @@ const ACTION_WORDS = {
   update_plugin: () => "Update Knowledge", update_agents: () => "Update agents", apply_models: () => "Apply models",
   workers_allowed: (a) => (a.on ? "Allow workers" : "Turn workers off"),
   max_workers: (a) => `${AGENT_NAME[a.agent] || a.agent}: ${a.n || "no limit on"} workers at a time`,
+  max_chats: (a) => (a.n ? `At most ${a.n} chats at a time` : "No limit on chats at a time"),
   yolo: (a) => `YOLO ${a.on ? "on" : "off"} for ${AGENT_NAME[a.agent] || a.agent}`, trust_hooks: (a) => `Trust the hooks of ${AGENT_NAME[a.agent] || a.agent}`,
   link_folder: (a) => `Link ${a.path} to ${a.project}`, unlink_folder: (a) => `Unlink ${a.path}`,
   install_tool: (a) => `Install ${a.tool}`, remove_tool: (a) => `Remove ${a.tool}`, tool_auto: (a) => `Daily update of ${a.tool} ${a.on ? "on" : "off"}`,
@@ -227,6 +228,12 @@ function pcHead(m, here) {
     if (on && !confirm(`${WORKERS_WARNING}\n\n${m.label}`)) return false;
     machineAction(m, "workers_allowed", { on }); return true;
   }) : val(c.workersAllowed ? "Runs workers" : "Runs no workers", "mx-pc-meta"));
+  if (c) { // web chats at once (a companion before the setting: 4)
+    const most = c.maxChats ?? 4, line = el("div", "mx-pc-meta", "Chats at a time ");
+    line.append(steers(m) && c.maxChats != null ? limitControl(most, pendingAction(m, "max_chats"), `Chats at a time on ${m.label}`, (n) => machineAction(m, "max_chats", { n }))
+      : val(most ? `at most ${most}` : "no limit"));
+    box.append(line);
+  }
   return box;
 }
 // The rarer actions on a pc, behind a More button: update its agents, what was asked of it, forget it.
@@ -294,11 +301,18 @@ function workersCell(m, a) {
   const running = (ag.workers || []).filter((w) => w.status === "running").length, most = (c?.maxWorkers || {})[a] ?? 1;
   const now = val(running ? `${running} running` : "none running", "muted");
   if (!steersAgent(m, a)) return [val(most ? `at most ${most}` : "no limit"), " · ", now];
-  const pick = el("select", "small"); pick.setAttribute("aria-label", `Workers of ${AGENT_NAME[a] || a} at a time on ${m.label}`);
-  for (const n of [...new Set([1, 2, 3, 4, 5, most || 1])].sort((x, y) => x - y).concat(0)) { const o = el("option", null, n ? String(n) : "No limit"); o.value = n; pick.append(o); }
-  pick.value = String(most); pick.disabled = pendingAction(m, "max_workers", (x) => x.agent === a);
-  pick.onchange = () => machineAction(m, "max_workers", { agent: a, n: Number(pick.value) });
-  return [pick, " ", now];
+  return [limitControl(most, pendingAction(m, "max_workers", (x) => x.agent === a), `Workers of ${AGENT_NAME[a] || a} at a time on ${m.label}`,
+    (n) => machineAction(m, "max_workers", { agent: a, n })), " ", now];
+}
+// A limit: a switch (off: no limit, sent as 0) and, when on, a number 1 to 99 (the owner's choice, also a high one).
+function limitControl(most, busy, aria, send) {
+  const box = el("span", "mx-limit"), num = el("input", "small");
+  num.type = "number"; num.min = 1; num.max = 99; num.value = most || 4; num.hidden = !most; num.disabled = busy;
+  num.setAttribute("aria-label", aria);
+  num.onchange = () => { const n = Math.round(Number(num.value)); if (n >= 1 && n <= 99) send(n); else num.value = most || 4; };
+  const sw = machineSwitch(most ? "Limit" : "No limit", !!most, busy, `Limit for ${aria}`, (on) => { send(on ? Number(num.value) || 4 : 0); return true; });
+  box.append(sw, num);
+  return box;
 }
 
 // A tool on one pc: what it is there, and once installed a panel with its version, the daily update, Update now, Remove.

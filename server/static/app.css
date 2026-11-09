@@ -591,6 +591,8 @@ body.admin-page { display: block; overflow-y: auto; }
 .machine-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
 .machine-switch { font-weight: 500; margin-right: 8px; }
 .machine-switch[aria-busy="true"] { cursor: progress; opacity: .7; }
+.mx-limit { display: inline-flex; align-items: center; gap: 4px; }
+.mx-limit input[type="number"] { width: 4.5em; }
 .machine-note { margin: 6px 0; color: var(--muted); font-size: 12px; }
 .machine-group { margin: 12px 0 2px; color: var(--muted); font-size: 12px; font-weight: 600; text-transform: none; }
 .machine-list { margin: 4px 0; padding: 0; list-style: none; font-size: 13px; }

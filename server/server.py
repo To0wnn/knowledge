@@ -2956,7 +2956,7 @@ def machine_rows() -> list[dict]:
         rows.append({"id": mid, "label": m.get("label", mid), "at": m.get("at", 0), "online": now - m.get("at", 0) < ONLINE,
                      "tokens": names, "own": any(own_token(tokens[n], dev) for n in names), "agents": agents,
                      "mine": any(own_token(tokens[n], dev, steer=False) for n in names),
-                     "companion": {**{k: comp.get(k) for k in ("version", "self", "at", "workersAllowed", "game", "maxWorkers", "folders", "projects", "token", "live", "chats", "chatReviews", "asks", "tools")},
+                     "companion": {**{k: comp.get(k) for k in ("version", "self", "at", "workersAllowed", "game", "maxWorkers", "maxChats", "folders", "projects", "token", "live", "chats", "chatReviews", "asks", "tools")},
                                    "agents": sorted(comp.get("agents") or {}),
                                    "models": {a: v.get("models", []) for a, v in (comp.get("agents") or {}).items()},
                                    "current": {a: v.get("current", {}) for a, v in (comp.get("agents") or {}).items()}} if comp else None,
@@ -5917,10 +5917,10 @@ def action_args(action: str, args: dict) -> dict:
         return {}  # the route fills in the plan: a page cannot send one of its own
     if action == "workers_allowed":
         return {"on": args.get("on") is True}
-    if action == "max_workers":
-        if not isinstance(args.get("n"), int) or args["n"] < 0:
-            raise ValueError("n must be 0 (no limit) or more")
-        return {"agent": agent(), "n": args["n"]}
+    if action in ("max_workers", "max_chats"):
+        if not isinstance(args.get("n"), int) or isinstance(args["n"], bool) or not 0 <= args["n"] <= 99:
+            raise ValueError("n must be 0 (no limit) to 99")
+        return {"agent": agent(), "n": args["n"]} if action == "max_workers" else {"n": args["n"]}
     raise ValueError(f"unknown action {action}")
 
 
@@ -7739,6 +7739,7 @@ async def machine_report(request: Request):
                            "later": [a for a in (me.get("later") or []) if a in AGENT_OWNERS] if isinstance(me.get("later"), list) else []},
                   "live": [a for a in (b.get("live") or []) if a in AGENT_OWNERS],  # chats that take a message while they work
                   "maxWorkers": {a: int(n) for a, n in (b.get("maxWorkers") or {}).items() if a in AGENT_OWNERS},
+                  "maxChats": int(b["maxChats"]) if isinstance(b.get("maxChats"), int) else None,  # None: a companion before the setting (4)
                   "game": str(b.get("game") or "")[:80],
                   "agents": {a: {"yolo": v.get("yolo") is True, "trusted": v.get("trusted") if isinstance(v.get("trusted"), bool) else None,
                                  "limit": float(v["limit"]) if isinstance(v.get("limit"), (int, float)) else None,

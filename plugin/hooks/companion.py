@@ -922,10 +922,11 @@ def report_errors(st: dict, tok: str, now: float):
 
 def settings() -> dict:
     """Workers: off on a new pc (a work laptop or the family's gaming pc must never run them by surprise); at most one
-    per agent unless the owner says more; 0: no limit."""
+    per agent unless the owner says more; 0: no limit. Web chats: at most 4 turns at once unless the owner says otherwise."""
     s = load("settings.json", {})
     return {"workersAllowed": s.get("workersAllowed") is True,
-            "maxWorkers": {a: max(0, int((s.get("maxWorkers") or {}).get(a, 1))) for a in AGENTS}}
+            "maxWorkers": {a: max(0, int((s.get("maxWorkers") or {}).get(a, 1))) for a in AGENTS},
+            "maxChats": max(0, int(s.get("maxChats", 4)))}
 
 
 def save_settings(change: dict):
@@ -936,6 +937,8 @@ def save_settings(change: dict):
         for a, n in (change.get("maxWorkers") or {}).items():
             if a in AGENTS:
                 s.setdefault("maxWorkers", {})[a] = max(0, int(n))
+        if "maxChats" in change:
+            s["maxChats"] = max(0, int(change["maxChats"]))
         save("settings.json", s)
 
 
@@ -1416,6 +1419,7 @@ def remember_chat_branch(cid: str, where: dict):
 
 
 chat.remember_branch = remember_chat_branch
+chat.max_turns = lambda: settings()["maxChats"]
 
 
 def chat_busy(cid: str) -> bool:
@@ -1621,7 +1625,7 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
     yolo, folders, s = load("yolo.json", {}), sorted(project_folders().values()), settings()
     links, gits = with_git(folder_links(), ws, now)
     chat_gits = {cid: chat_git(cid, f) for cid, f in load("chat_worktrees.json", {}).items()}
-    body = {"version": version(), "self": self_state(), "workersAllowed": s["workersAllowed"], "maxWorkers": s["maxWorkers"], "game": workers.game_session(),
+    body = {"version": version(), "self": self_state(), "workersAllowed": s["workersAllowed"], "maxWorkers": s["maxWorkers"], "maxChats": s["maxChats"], "game": workers.game_session(),
             "live": list(chat.LIVE_AGENTS),  # agents whose chats run live: a message while they work goes in at once
             "agents": {a: {"yolo": bool(yolo.get(a, {}).get("on")), "trusted": not untrusted(a, folders), "limit": lim.get(a),
                      "resets": (resets or {}).get(a), "windows": (windows or {}).get(a, []), **({"plugin": v} if (v := plugin_version(a)) else {}),  # known before a session
@@ -1915,6 +1919,9 @@ def run_action(a: dict) -> str:
     if act == "max_workers":
         save_settings({"maxWorkers": {agent: args["n"]}})
         return f"at most {args['n']} {AGENTS[agent][0]} worker(s)"
+    if act == "max_chats":
+        save_settings({"maxChats": args["n"]})
+        return f"at most {args['n']} chat turn(s) at once" if args["n"] else "no limit on chat turns"
     raise ValueError(f"unknown action {act}")
 
 
@@ -1946,7 +1953,7 @@ def actions_round():
     return "waited" in got  # a server before the long poll answers at once: then the loop waits itself
 
 
-STATE_ACTIONS = {"install_tool", "remove_tool", "tool_auto", "yolo", "workers_allowed", "max_workers", "link_folder", "unlink_folder", "trust_hooks", "stop_worker", "restart", "merge", "takeover", "archive_worker", "apply_models"}
+STATE_ACTIONS = {"install_tool", "remove_tool", "tool_auto", "yolo", "workers_allowed", "max_workers", "max_chats", "link_folder", "unlink_folder", "trust_hooks", "stop_worker", "restart", "merge", "takeover", "archive_worker", "apply_models"}
 
 
 # ---------------------------------------------------------------- the page
@@ -2281,7 +2288,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/local/api/settings":
                 if o != SELF:  # whether this pc runs workers is for this pc's own page (or its owner, remotely)
                     return self.send(403, {"error": "Worker settings can only be changed on the companion page itself"}, origin=o)
-                save_settings({k: body[k] for k in ("workersAllowed", "maxWorkers") if k in body})
+                save_settings({k: body[k] for k in ("workersAllowed", "maxWorkers", "maxChats") if k in body})
                 return self.send(200, {"ok": True, **settings()}, origin=o)
             if path == "/local/api/link":
                 chosen = body.get("chosen") is True

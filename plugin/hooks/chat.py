@@ -39,7 +39,7 @@ ASK_SERVER = None  # the companion sets it: body -> the server's answer to POST 
 UPLOAD = None  # the companion sets it: (chat id, file name, bytes) -> the mark ⟦file:…⟧ (POST /machine/chats/file)
 LOG = lambda *a: None  # the companion's activity log
 PATH_KEYS = ("file_path", "path", "Path", "notebook_path", "AbsolutePath", "TargetFile", "DirectoryPath", "cwd")
-MAX_TURNS = 4  # turns at once on one pc
+max_turns = lambda: 4  # turns at once on one pc; the companion sets the owner's setting (0: no limit)
 FLUSH = 0.7  # seconds: output is posted in batches at most this often
 EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")  # every agent's levels together; each model lists its own
 MODEL_ID = re.compile(r"[A-Za-z0-9][\w.:/-]{0,79}", re.ASCII)  # a model name as the CLIs take it; nothing a .cmd shim would mangle
@@ -1889,8 +1889,8 @@ def _start_live(item: dict, post, log, linked, yolo):
                 item = {**item, "session": lv.st["session"] or item.get("session", "")}
                 lv = None
             if not (lv and lv.alive()):
-                if sum(1 for x in LIVE.values() if x.busy) >= MAX_TURNS:
-                    raise RuntimeError(f"{MAX_TURNS} chat turns run on this pc already; send again later")
+                if (most := max_turns()) and sum(1 for x in LIVE.values() if x.busy) >= most:
+                    raise RuntimeError(f"{most} chat turns run on this pc already (Machines: Chats at a time); send again later")
                 steer_path(cid).unlink(missing_ok=True)
                 lv = LIVE[cid] = {"codex": CodexLive, "agy": AgyLive}.get(item["agent"], Live)(item, post, log, yolo(item["agent"]))
         lv.rec["allow"] = [x for x in item.get("allow") or [] if isinstance(x, dict)]  # "for this chat" answers since it started
