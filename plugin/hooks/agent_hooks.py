@@ -74,7 +74,7 @@ def context_text(tok: str, cwd: str, agent: str = "") -> str:
                 text = r.read().decode("utf-8", "replace")
         except urllib.error.HTTPError as e:
             if e.code in (401, 403):
-                return {401: f"knowledge server: {'token invalid or revoked (KNOWLEDGE_TOKEN)' if tok else token_store.NO_TOKEN} Shared memory and docs were not loaded.",
+                return {401: f"knowledge server: {'token invalid or revoked (KNOWLEDGE_TOKEN)' if tok else token_store.no_token()} Shared memory and docs were not loaded.",
                         403: f"knowledge server: {token_store.unreachable(URL, 'HTTP 403 Forbidden')}. Shared memory and docs were not loaded."}[e.code]
             return memory_mirror.offline_context(key)  # 5xx: the server (or its proxy) is down
         except OSError:
@@ -582,7 +582,7 @@ def mcp(tok: str):
                 msg = None
             ids = [m["id"] for m in (msg if isinstance(msg, list) else [msg]) if isinstance(m, dict) and m.get("id") is not None]
             code = getattr(e, "code", 0)
-            reason = token_store.NO_URL if not URL else (("token invalid or revoked (KNOWLEDGE_TOKEN or the keyring)" if tok else token_store.NO_TOKEN)) if code == 401 \
+            reason = token_store.NO_URL if not URL else (("token invalid or revoked (KNOWLEDGE_TOKEN or the keyring)" if tok else token_store.no_token())) if code == 401 \
                 else token_store.unreachable(URL, f"HTTP {code}" if code else e) if code == 403 or isinstance(e, OSError) and not code \
                 else f"HTTP {code}" if code else str(e) or type(e).__name__
             replies = [{"jsonrpc": "2.0", "id": i, "error": {"code": -32000, "message": f"knowledge server: {reason}"}} for i in ids]
