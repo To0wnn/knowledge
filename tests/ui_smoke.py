@@ -765,6 +765,8 @@ async def shell(browser, devices, secret: str) -> None:
         d_drive = pg.locator("#choose-list").get_by_role("button", name="D:\\")
         await d_drive.wait_for(timeout=8000)
         check(await pg.locator("#choose-list").get_by_role("button", name="C:\\").count() == 1, "Machines: the folder chooser starts at the drives, C: and D:")
+        pcs = await pg.evaluate("[...document.getElementById('choose-pc').options].map((o) => o.value)")
+        check(len(pcs) >= 1 and await pg.locator("#choose-pc").input_value() in pcs, f"Machines: the folder chooser asks for the pc too {pcs}")
         await d_drive.click()
         sim = pg.locator("#choose-list").get_by_role("button", name="Sim")
         await sim.wait_for(timeout=8000)
