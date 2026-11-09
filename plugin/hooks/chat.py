@@ -26,6 +26,7 @@ import sys
 import tempfile
 import textwrap
 import threading
+import types
 import time
 from pathlib import Path
 
@@ -40,6 +41,7 @@ UPLOAD = None  # the companion sets it: (chat id, file name, bytes) -> the mark 
 LOG = lambda *a: None  # the companion's activity log
 PATH_KEYS = ("file_path", "path", "Path", "notebook_path", "AbsolutePath", "TargetFile", "DirectoryPath", "cwd")
 max_turns = lambda: 4  # turns at once on one pc; the companion sets the owner's setting (0: no limit)
+TURN_WAIT = 2.0  # seconds between looks for a free turn
 FLUSH = 0.7  # seconds: output is posted in batches at most this often
 EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")  # every agent's levels together; each model lists its own
 MODEL_ID = re.compile(r"[A-Za-z0-9][\w.:/-]{0,79}", re.ASCII)  # a model name as the CLIs take it; nothing a .cmd shim would mangle
@@ -1849,6 +1851,12 @@ def start(item: dict, post, log, linked, yolo, fetch=None):
     def job():
         if fetch:
             item["text"] = attach(item.get("text", ""), fetch)
+        told = False  # a new agent with max_turns() turns running: wait for a free one (or a Stop), not fail
+        while not ((lv := LIVE.get(cid)) and lv.alive()) and STOPS.get(cid, [gen])[0] == gen and (most := max_turns()) and sum(1 for x in list(LIVE.values()) if x.busy) >= most:
+            if not told:
+                told = True
+                post({"chat": cid, "events": [{"kind": "info", "text": f"Waits: {most} chat turns run on this pc already (Machines: Chats at a time). It starts by itself when one ends."}]})
+            time.sleep(TURN_WAIT)
         if (st := STOPS.get(cid, [0, True]))[0] != gen:  # Stopped while its files came: it never starts
             if not st[1]:  # nothing ran here to end the turn: this message's turn ends now, once
                 st[1] = True
@@ -2260,6 +2268,24 @@ def self_test():
                         break
                     time.sleep(0.02)
                 assert all(c != "c" for c, _ in ran) and [p["done"] for p in posts] == [True], (ran, posts)
+                # max_turns() turns busy on this pc: a new chat's message waits (said once) and starts when one ends.
+                global TURN_WAIT
+                busy = [types.SimpleNamespace(busy=True, alive=lambda: True) for _ in range(max_turns())]
+                keep_live, keep_wait, TURN_WAIT = dict(LIVE), TURN_WAIT, 0.02
+                LIVE.update({f"busy{n}": b for n, b in enumerate(busy)})
+                try:
+                    posts.clear(); ran.clear()
+                    start({"chat": "d", "agent": "claude", "text": "later"}, posts.append, None, None, None)
+                    time.sleep(0.2)
+                    assert not ran and [e["text"][:6] for p in posts for e in p["events"]] == ["Waits:"], (ran, posts)
+                    busy[0].busy = False
+                    for _ in range(200):
+                        if ran:
+                            break
+                        time.sleep(0.02)
+                    assert ran == [("d", "later")] and len(posts) == 1, (ran, posts)
+                finally:
+                    LIVE.clear(); LIVE.update(keep_live); TURN_WAIT = keep_wait
             finally:
                 workers.DIR = keep
     finally:

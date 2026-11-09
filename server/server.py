@@ -6535,7 +6535,7 @@ def board_items() -> list[dict]:
         if t["overdue"] and not t["done"] and not to_person and not t["held"] and (t["project"], t["id"]) not in working:
             # past its date and nobody on it (any owner: an agent, a person or a project): finished, more time, or cancel
             items.append({**task, "col": "needs", "stale": True, "task_line": t["line"], "can_close": may_approve(t["project"]),
-                          "line": f"past its date ({t['due']}) and nobody works on it: finished, more time, or cancel?"})
+                          "line": "past its date, nobody works on it: finished, more time, or cancel?"})  # the card shows the date
             continue
         if not agent or (t["project"], t["id"]) in working:  # a person's line is not an agent's work; a running worker shows it
             continue

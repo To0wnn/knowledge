@@ -387,7 +387,7 @@ function ckLayout() {
 }
 
 // Items that say the same thing (eleven tasks waiting for the same missing pc) fold into one group with a count.
-const ckSame = (i) => (i.kind === "ask" || i.kind === "chat" ? "" : `${i.kind}|${i.col}|${i.kind === "worker" ? `${i.status}|${i.why || (i.offline_since ? "offline" : "")}` : i.line}`);
+const ckSame = (i) => (i.kind === "ask" || i.kind === "chat" || i.stale ? "" : // a task past its date: each needs its own answer `${i.kind}|${i.col}|${i.kind === "worker" ? `${i.status}|${i.why || (i.offline_since ? "offline" : "")}` : i.line}`);
 function ckBunches(list) {
   const by = new Map();
   for (const i of list) { const k = ckSame(i) || `one|${i.key}`; by.set(k, [...(by.get(k) || []), i]); }
