@@ -539,6 +539,7 @@ body.admin-page { display: block; overflow-y: auto; }
 .mx-proj { border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--panel); }
 .mx-proj-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
 .mx-proj-head h3 { flex: 1; margin: 0; font-size: 15px; }
+.mx-link-bar { padding: 0 0 10px; border: 0; } .mx-link-bar p { flex: 1; margin: 0; }
 .mx-frow { display: grid; grid-template-columns: 200px 1fr auto auto; gap: 12px; align-items: center; padding: 8px 14px; font-size: 13px; }
 .mx-frow + .mx-frow { border-top: 1px solid var(--line); }
 .mx-frow code { overflow-wrap: anywhere; }
