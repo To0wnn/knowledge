@@ -179,8 +179,8 @@ def share_skills(dest: Path = None) -> list:
     touched. An edit in a copy is overwritten: change the skill in ~/.claude/skills. Returns the names left alone
     because another folder has them."""
     dest = dest or AGENT_SKILLS
-    # a tool's skill (.not-shared: never to the server) is copied too: it stays on this pc, and its installer may not
-    # know agy's folder (skills 1.7.6 writes ~/.gemini/antigravity-cli/skills, agy reads ~/.gemini/config/skills)
+    # a tool's skill (.not-shared: never to the server) is copied too: it stays on this pc, and its installer may miss
+    # agy (skills 1.7.6 writes only ~/.agents/skills for antigravity-cli: vercel-labs/skills#1874)
     want = {d.name: d for d in sorted(SKILLS.iterdir()) if d.is_dir() and not linked(d) and d.name != "synced"
             and not d.name.startswith(".") and (d / "SKILL.md").is_file()} if SKILLS.is_dir() else {}
     skipped = []
