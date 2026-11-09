@@ -188,7 +188,8 @@ function meters(pcs, a) {
   const wins = Object.values(by).sort((x, y) => (x[2] || Infinity) - (y[2] || Infinity));
   const box = el("div", "mx-meters");
   if (!wins.length) { box.append(val("Usage not known yet: it shows after a session or within 15 minutes.", "muted")); return box; }
-  const name = (n) => ({ "5h": "5 hours", "7d": "This week", "30d": "This month" }[n] || n);
+  // agy names a window after its model group: "Gemini 5h", "Claude/GPT 7d"
+  const name = (n) => ({ "5h": "5 hours", "7d": "This week", "30d": "This month" }[n] || n.replace(/ 5h$/, " · 5 hours").replace(/ 7d$/, " · this week"));
   for (const [pct, n, resets] of wins) {
     const mt = el("div", "mx-meter"), lab = el("div", "mx-meter-lab"), track = el("div", "mx-track"), fill = el("i");
     lab.append(el("span", null, name(n)), el("b", null, `${Math.round(pct)}%`));
