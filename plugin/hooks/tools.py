@@ -60,7 +60,11 @@ TOP_KEYS = {"name", "kind", "description", "homepage", "needs", "path", "env", "
 # Claude Code's skills folder. A skill a tool put there must stay on this pc: the shared-skills sync (memory_mirror.py,
 # and the server reading the admin's folder) would otherwise hand it to every device, next to the tool's own install.
 SKILLS = Path(os.environ.get("KNOWLEDGE_SKILLS") or Path.home() / ".claude" / "skills")
-AGENT_SKILLS = Path(os.environ.get("KNOWLEDGE_AGENT_SKILLS") or Path.home() / ".agents" / "skills")  # = memory_mirror
+# what Codex and agy read; a test that moves SKILLS gets these beside it, never the real home's
+AGENT_SKILLS = Path(os.environ.get("KNOWLEDGE_AGENT_SKILLS") or (SKILLS.parent / "agent-skills" if os.environ.get("KNOWLEDGE_SKILLS")
+                    else Path.home() / ".agents" / "skills"))
+AGY_SKILLS = Path(os.environ.get("KNOWLEDGE_AGY_SKILLS") or (SKILLS.parent / "agy-skills" if os.environ.get("KNOWLEDGE_SKILLS")
+                  else Path.home() / ".gemini" / "config" / "skills"))  # = memory_mirror
 NOT_SHARED = ".not-shared"  # = memory_mirror.py and server.py
 KINDS = {"skill", "program"}  # skill: instructions an agent loads; program: software it runs (an MCP server, engines)
 TIMEOUT = 900  # an npm install of a large package on a slow line
@@ -493,7 +497,7 @@ def detect(m: dict, agents):
     """A tool installed by hand, not through the companion: there when one of its own checks passes (e.g. a plugin added
     to Claude Code only), then its full check; None when none passes."""
     # a skill tool's check may download and run its installer (npx): only when one of its skill folders is there
-    if m.get("skills") and not any((d / n).is_dir() for d in (SKILLS, AGENT_SKILLS) for n in m["skills"]):
+    if m.get("skills") and not any((d / n).is_dir() for d in (SKILLS, AGENT_SKILLS, AGY_SKILLS) for n in m["skills"]):
         return None
     if not any(do(m, s)[0] for s in steps(m, "check", agents) if not s.get("info")):
         return None

@@ -30,7 +30,11 @@ from pathlib import Path
 MIRROR = Path(os.environ.get("KNOWLEDGE_MIRROR") or Path(os.environ.get("KNOWLEDGE_HOME") or Path.home() / ".knowledge") / "mirror")
 STATE, LOCK = MIRROR / ".state.json", MIRROR / ".lock"
 SKILLS = Path(os.environ.get("KNOWLEDGE_SKILLS") or Path.home() / ".claude" / "skills")
-AGENT_SKILLS = Path(os.environ.get("KNOWLEDGE_AGENT_SKILLS") or Path.home() / ".agents" / "skills")  # what Codex and agy read
+# what Codex reads, and agy (its global skills, the agy binary's own docs); a test that moves SKILLS gets these beside
+# it, never the real home's
+MOVED = bool(os.environ.get("KNOWLEDGE_SKILLS"))
+AGENT_SKILLS = Path(os.environ.get("KNOWLEDGE_AGENT_SKILLS") or (SKILLS.parent / "agent-skills" if MOVED else Path.home() / ".agents" / "skills"))
+AGY_SKILLS = Path(os.environ.get("KNOWLEDGE_AGY_SKILLS") or (SKILLS.parent / "agy-skills" if MOVED else Path.home() / ".gemini" / "config" / "skills"))
 FROM_CLAUDE = ".from-claude-skills"  # marks a copy share_skills() made: only those it updates or removes
 MAX_REMOVALS = 5  # more skills or memos gone from the server in one sync looks like an accident: hold and say so
 NOT_SHARED = ".not-shared"  # a skill folder holding it stays on this pc (a tool add-on's skill; = tools.py, server.py)
@@ -168,22 +172,24 @@ def skill_files(d: Path) -> dict:
             if p.is_file() and not linked(p) and not any(x.startswith(".") for x in p.relative_to(d).parts)}
 
 
-def share_skills() -> list:
-    """Codex and agy read ~/.agents/skills, not Claude Code's folder: every skill in ~/.claude/skills (the shared ones
-    from the server and those made here) gets a copy there, kept the same; a copy whose skill is gone goes too. A folder
-    there without our mark (the plugin's own skills, one made in Codex) is never touched. An edit in a copy is
-    overwritten: change the skill in ~/.claude/skills. Returns the names left alone because another folder has them."""
+def share_skills(dest: Path = None) -> list:
+    """Codex reads ~/.agents/skills and agy ~/.gemini/config/skills, not Claude Code's folder: every skill in
+    ~/.claude/skills (the shared ones from the server and those made here) gets a copy in dest, kept the same; a copy
+    whose skill is gone goes too. A folder there without our mark (the plugin's own skills, one made in Codex) is never
+    touched. An edit in a copy is overwritten: change the skill in ~/.claude/skills. Returns the names left alone
+    because another folder has them."""
+    dest = dest or AGENT_SKILLS
     want = {d.name: d for d in sorted(SKILLS.iterdir()) if d.is_dir() and not linked(d) and d.name != "synced"
             and not d.name.startswith(".") and not (d / NOT_SHARED).exists() and (d / "SKILL.md").is_file()} if SKILLS.is_dir() else {}
     skipped = []
     for name, src in want.items():
-        dst, files = AGENT_SKILLS / name, skill_files(src)
+        dst, files = dest / name, skill_files(src)
         if dst.exists() and not (dst / FROM_CLAUDE).exists():
             skipped.append(name)
             continue
         if dst.exists() and skill_files(dst) == files:
             continue
-        tmp = AGENT_SKILLS / f".{name}.new"
+        tmp = dest / f".{name}.new"
         shutil.rmtree(tmp, ignore_errors=True)
         for rel, data in files.items():
             (tmp / rel).parent.mkdir(parents=True, exist_ok=True)
@@ -191,7 +197,7 @@ def share_skills() -> list:
         (tmp / FROM_CLAUDE).write_text("a copy of ~/.claude/skills/" + name + " made by the knowledge plugin\n", encoding="utf-8")
         shutil.rmtree(dst, ignore_errors=True)
         tmp.rename(dst)
-    for d in sorted(AGENT_SKILLS.iterdir()) if AGENT_SKILLS.is_dir() else ():
+    for d in sorted(dest.iterdir()) if dest.is_dir() else ():
         if d.name not in want and not linked(d) and (d / FROM_CLAUDE).exists():
             shutil.rmtree(d)
     return skipped
@@ -213,7 +219,8 @@ def sync_locked():
     except Exception as e:  # offline or server down: the copy stays as it is, the next session tries again
         (MIRROR / "last-sync.log").write_text(f"sync failed {time.strftime('%d %b %Y %H:%M')}: {e}\n", encoding="utf-8")
     try:  # also offline: the skills already here reach Codex and agy
-        share_skills()
+        for dest in (AGENT_SKILLS, AGY_SKILLS):
+            share_skills(dest)
     except OSError as e:
         with open(MIRROR / "last-sync.log", "a", encoding="utf-8") as f:
             f.write(f"skills for Codex and agy not copied: {e}\n")

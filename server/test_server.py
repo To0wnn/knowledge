@@ -3270,6 +3270,7 @@ def main():
             srv.ROOTS, srv.EXTERNAL_FILE = was_roots, was_file
         run_mm(senv)
         assert (skills / "x/SKILL.md").read_text() == "skill\n" and not (skills / "synced").exists() and not (skills / "toolskill").exists()
+        assert (tmp / "agent-skills/x/SKILL.md").exists() and (tmp / "agy-skills/x/SKILL.md").exists(), "Codex and agy copies beside the moved skills folder, never in the real home"
         (skills / "y/scripts").mkdir(parents=True); (skills / "y/SKILL.md").write_text(SK("new skill"))
         (skills / "y/scripts/run.py").write_text("print(1)\n"); (skills / "y/blob.bin").write_bytes(b"\0")
         (tmp / "elsewhere").mkdir(); (tmp / "elsewhere/SKILL.md").write_text("local only\n")
