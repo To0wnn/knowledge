@@ -106,7 +106,8 @@ The companion that starts workers is described in [companion.md](companion.md); 
   runs `agent_hooks.py take agy <ID>`), and no worker starts it. With no such pc, that agent's chats take and start
   its tasks themselves, as before 0.15. The Tasks tab says per task where it runs or why it waits there; a task that
   may start but that nobody took for 30 minutes (`KNOWLEDGE_TASK_IDLE`) gives one Matrix notice. A knowledge write
-  asks the local companion to look at once.
+  asks the local companion to look at once: the agent's `wake` hook posts `/local/api/wake`, which answers at once and
+  ends the wait of the companion's minute loop (several wakes during a round make one more round, not one each).
 
 ## Follow, steer and take over a worker
 
