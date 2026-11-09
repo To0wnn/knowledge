@@ -1828,7 +1828,7 @@ def chat_e2e(tok: str, tmp: Path):
             return
         row = next(r for r in machines() if r["id"] == mid)
         got = next((f.get("git") for f in row["companion"]["folders"]["linked"] if Path(f["path"]).resolve() == pill.resolve()), None)
-        check(got == {"branch": "task/KN-12", "base": "main", "changed": 3, "ahead": 2, "behind": 0},
+        check(got == {"branch": "task/KN-12", "base": "main", "changed": 3, "ahead": 2, "behind": 0, "loose": []},
               "board: the companion reports a folder's git pill (branch, 3 changed, 2 ahead of main, 0 behind)", json.dumps(got))
         new = lambda agent, folder: json.loads(http("POST", "/ui/api/chats", {"machine": mid, "agent": agent, "folder": str(folder), "worktree": False}, ui)[1]).get("chat", {}).get("id")
         chat = lambda cid: json.loads(http("GET", f"/ui/api/chat?machine={mid}&id={cid}", headers=ui)[1])

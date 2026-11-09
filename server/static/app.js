@@ -1234,11 +1234,12 @@ function workerProgress(p) {
 }
 // Health lists these first (something to do now or a risk), the rest by how many findings they have.
 const LINT_URGENT = ["open_overdue", "possible_secret_in_memo", "possible_secret_in_skill", "stale_handback", "offline_conflict",
-  "history_failed", "duplicate_check_failed", "skill_broken", "worker_unmerged", "plugin_behind"];
+  "history_failed", "duplicate_check_failed", "skill_broken", "worker_unmerged", "branch_unlanded", "plugin_behind"];
 // Lint checks in plain words, with what to do about them (unknown checks fall back to their name).
 const LINT_INFO = {
   usage_outlier: ["Session that used far more tokens than usual", "Look at that session's log: a loop, a huge file read or a runaway subagent? Nothing to fix when the work was simply big."],
   worker_unmerged: ["Worker branch not merged after a week", "A worker finished its task on a branch nobody merged: review the branch on that pc and merge it (the companion then removes the worktree), or delete the branch and worktree by hand."],
+  branch_unlanded: ["Branch with work that never reached main", "A branch in a linked folder has commits not in main and no worktree uses it: often work an agent reported done. Merge or deploy it on that pc, or delete the branch when it is not wanted."],
   plugin_behind: ["Device with an old plugin", "Its auto-update did not fetch the newest version within two days: update it by hand on that device (the session start tells the agent how)."],
   skill_broken: ["Skill Claude cannot use", "Give SKILL.md frontmatter with name and a one-line description; without it the skill is never picked."],
   skill_name_mismatch: ["Skill name differs from its folder", "Set name: to the folder name (lowercase, digits, hyphens)."],

@@ -673,6 +673,12 @@ def machines_contract(tmp, ck, fr, raw, er, et, heard):
                                                   "started": time.time() - 9 * 86400, "ended": time.time() - 8 * 86400, "branch": "task/MC-0"}]}
     assert http("POST", "/machine/report", old, token=fr, headers=pc)[0] == 200
     assert any("MC-0" in i and "task/MC-0 not merged" in i for i in json.loads(http("GET", "/lint")[1]).get("worker_unmerged", [])), http("GET", "/lint")[1][:500]
+    rep2 = {**old, "folders": {"linked": [{"path": "/home/x/garden", "project": "garden", "git": {"branch": "main", "base": "origin/main", "ahead": 0,
+            "loose": [{"branch": "feat/old", "at": int(time.time() - 3 * 86400)}, {"branch": "feat/new", "at": int(time.time())}]}}]}}
+    assert http("POST", "/machine/report", rep2, token=fr, headers=pc)[0] == 200
+    bl = json.loads(http("GET", "/lint")[1]).get("branch_unlanded", [])
+    assert any("feat/old has commits not in origin/main" in i for i in bl) and not any("feat/new" in i for i in bl), bl
+    assert http("POST", "/machine/report", old, token=fr, headers=pc)[0] == 200
     # a worker its owner stopped from the page ended "failed": it says so and does not wait in Needs you
     stopped = {**rep, "limitWait": [], "workers": [*rep["workers"], {"id": "MC-5", "project": "garden", "agent": "codex", "status": "failed",
                                                                      "started": time.time() - 600, "ended": time.time() - 60, "owner_stopped": True}]}
@@ -1163,6 +1169,9 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert srv.chat_unlanded({"worktree": True}, {"ahead": 0, "changed": 1}) == "its worktree has 1 uncommitted file(s)"
     assert srv.chat_unlanded({}, {"ahead": 0, "changed": 4}) == "", "the folder's own checkout: its files may be someone else's"
     assert srv.chat_unlanded({}, None) == "", "an older companion sends no git: not checked"
+    loose = {"ahead": 0, "base": "main", "loose": [{"branch": "feat", "at": 2000}, {"branch": "old", "at": 500}]}
+    assert srv.chat_unlanded({"created": 1000}, loose) == "branch feat has commits not in main and is checked out nowhere", "only branches of this chat's time"
+    assert srv.chat_unlanded({"created": 3000}, loose) == ""
     # Another agent archives the chat (MCP)
     ahead = lambda n: http("POST", "/machine/report", {"version": "0.43.41", "folders": {"linked": [{"path": "/home/x/garden", "project": "garden",
                            "git": {"branch": "feat", "base": "main", "ahead": n, "behind": 0, "changed": 0}}]}}, token=fr, headers=pc)
@@ -1720,7 +1729,7 @@ def board_contract(tmp, ck, fr, raw, er, et):
     ui = lambda path, body=None, h=ck: raw("POST" if body is not None else "GET", path, None if body is None else json.dumps(body),
                                           {**h, "X-Knowledge-UI": "1", "Content-Type": "application/json"})
     board = lambda h=ck: json.loads(ui("/ui/api/board", h=h)[2])["items"]
-    pill = {"branch": "task/KN-12", "base": "main", "changed": 3, "ahead": 2, "behind": 0}
+    pill = {"branch": "task/KN-12", "base": "main", "changed": 3, "ahead": 2, "behind": 0, "loose": []}
     worker = lambda i, st, ended=None, **k: {"id": i, "project": "garden", "agent": "codex", "status": st, "started": now - 600, "ended": ended,
                                              "branch": f"task/{i}", **k}
     rep = {"version": "0.17.0", "workersAllowed": True, "agents": {"codex": {}, "claude": {}},
@@ -1854,7 +1863,7 @@ def board_contract(tmp, ck, fr, raw, er, et):
     # An "Own branch" chat: its pill is its worktree's (by chat id, from the report), its diff request names the chat.
     wid = json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/x/garden", "worktree": True})[2])["chat"]["id"]
     assert ui("/ui/api/chat/send", {"machine": mid, "id": wid, "text": "on a branch"})[0] == 200
-    wpill = {"branch": f"chat/{wid}", "base": "main", "changed": 1, "ahead": 0, "behind": 0}
+    wpill = {"branch": f"chat/{wid}", "base": "main", "changed": 1, "ahead": 0, "behind": 0, "loose": []}
     assert http("POST", "/machine/report", {**rep, "chats": {wid: wpill, "../x": wpill}}, token=fr, headers=pc)[0] == 200
     cards = {i["id"]: i for i in board() if i["kind"] == "chat"}
     assert cards[wid]["git"] == wpill and cards[cids[2]]["git"]["branch"] == "task/KN-12", cards.get(wid)

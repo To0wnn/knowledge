@@ -1067,6 +1067,10 @@ def chat_unlanded(c: dict, g) -> str:
         return f"{g.get('branch') or 'its branch'} has {g['ahead']} commit(s) not in {g.get('base') or 'main'}"
     if c.get("worktree") and type(g.get("changed")) is int and g["changed"] > 0:
         return f"its worktree has {g['changed']} uncommitted file(s)"
+    # a branch committed to since the chat began that nobody has checked out: the agent went back to main without merging
+    left = [x["branch"] for x in g.get("loose") or [] if isinstance(x, dict) and type(x.get("at")) is int and x["at"] >= (c.get("created") or 0)]
+    if left:
+        return f"branch {', '.join(str(b)[:120] for b in left)} has commits not in {g.get('base') or 'main'} and is checked out nowhere"
     return ""
 
 
@@ -1796,6 +1800,7 @@ def lint_all() -> dict[str, list[str]]:
     if in_scope("claude/"):  # the owner's report: a device whose auto-update stopped working
         report["plugin_behind"] = plugins_behind()
         report["worker_unmerged"] = workers_unmerged()
+        report["branch_unlanded"] = branches_unlanded()
         rows = []
         for x in USAGE.read_text().splitlines() if USAGE.exists() else []:
             try:  # a line cut off by a crash or a full disk must not cost the whole lint
@@ -2966,6 +2971,16 @@ def workers_unmerged() -> list[str]:
             for w in (m.get("companion") or {}).get("workers", []) if w.get("branch") and not w.get("merged")
             and w.get("status") in ("finished", "failed", "stopped") and isinstance(w.get("ended"), (int, float))
             and now - w["ended"] > 7 * 86400]
+
+
+def branches_unlanded() -> list[str]:
+    """Branches in a linked folder with commits not in its base, checked out nowhere, last commit over 2 days ago: work
+    an agent called done (in a memo or a hand-back) that never reached main."""
+    now = time.time()
+    return [f"{m.get('label', mid)}: {f.get('path')}: {x['branch']} has commits not in {g.get('base') or 'main'} "
+            f"(last {time.strftime('%Y-%m-%d', time.localtime(x['at']))})" for mid, m in read_json(MACHINES_FILE, {}).items()
+            for f in ((m.get("companion") or {}).get("folders") or {}).get("linked", []) if isinstance(g := f.get("git"), dict)
+            for x in g.get("loose") or [] if isinstance(x, dict) and type(x.get("at")) is int and now - x["at"] > 2 * 86400]
 
 
 def agents_on(cfg: dict) -> bool:
@@ -7812,7 +7827,9 @@ def git_pill(g) -> dict | None:
         return None
     num = lambda k: max(0, min(int(g[k]), 10**6)) if type(g.get(k)) is int else 0
     return {"branch": str(g.get("branch") or "")[:120], "base": str(g.get("base") or "")[:120],
-            "changed": num("changed"), "ahead": num("ahead"), "behind": num("behind")}
+            "changed": num("changed"), "ahead": num("ahead"), "behind": num("behind"),
+            "loose": [{"branch": str(x.get("branch") or "")[:120], "at": x["at"]} for x in (g.get("loose") if isinstance(g.get("loose"), list) else [])[:5]
+                      if isinstance(x, dict) and type(x.get("at")) is int]}
 
 
 def report_asks(asks) -> list:

@@ -1426,9 +1426,21 @@ def git_state(path) -> dict | None:
         if base:
             n = run("rev-list", "--left-right", "--count", f"{base}...HEAD").stdout.split()
             behind, ahead = (int(n[0]), int(n[1])) if len(n) == 2 else (0, 0)
-        return {"branch": branch, "base": base, "changed": changed, "ahead": ahead, "behind": behind}
+        return {"branch": branch, "base": base, "changed": changed, "ahead": ahead, "behind": behind, "loose": loose_branches(path, base or (branch if branch in ("main", "master") else ""))}
     except (OSError, subprocess.SubprocessError, ValueError):
         return None
+
+
+def loose_branches(path: str, base: str) -> list:
+    """Local branches with commits not in the base that no worktree has checked out: work someone left behind (an
+    agent that went back to main without merging), newest 5 with their last commit time."""
+    if not base:
+        return []
+    run = lambda *a: workers.git(path, *a, env=GIT_RO, timeout=10).stdout.splitlines()
+    used = {ln[len("branch refs/heads/"):] for ln in run("worktree", "list", "--porcelain") if ln.startswith("branch refs/heads/")}
+    refs = (ln.rsplit(" ", 1) for ln in run("for-each-ref", f"--no-merged={base}", "--sort=-committerdate",
+                                             "--format=%(refname:short) %(committerdate:unix)", "refs/heads") if " " in ln)
+    return [{"branch": n, "at": int(t)} for n, t in refs if n not in used and t.isdigit()][:5]
 
 
 def git_diff(path: str) -> str:
@@ -3193,7 +3205,7 @@ def main(argv: list):
                 (Path(tmp) / "a.txt").write_text("two\n")
                 (Path(tmp) / "new1.txt").write_text("x")
                 (Path(tmp) / "new2.txt").write_text("y")
-                assert git_state(tmp) == {"branch": "task/KN-12", "base": "main", "changed": 3, "ahead": 2, "behind": 0}, git_state(tmp)
+                assert git_state(tmp) == {"branch": "task/KN-12", "base": "main", "changed": 3, "ahead": 2, "behind": 0, "loose": []}, git_state(tmp)
                 d = git_diff(tmp)
                 assert "2 ahead, 0 behind" in d and "+two" in d and "+b" in d and "?? new1.txt" in d, d
                 assert git_state(Path(tmp) / "nope") is None
@@ -3333,8 +3345,14 @@ def main(argv: list):
                         workers.game_session = game
                     wt = workers.worktree(tmp + "/r", "0123456789ab", prefix="chat")["cwd"]
                     Path(wt, "a.txt").write_text("two\n")
-                    assert chat_git("0123456789ab", tmp + "/r") == {"branch": "chat/0123456789ab", "base": "main", "changed": 1, "ahead": 0, "behind": 0}
+                    assert chat_git("0123456789ab", tmp + "/r") == {"branch": "chat/0123456789ab", "base": "main", "changed": 1, "ahead": 0, "behind": 0, "loose": []}
                     assert git_state(tmp + "/r")["changed"] == 0, "the folder's own checkout is untouched"
+                    g("checkout", "-q", "-b", "side")
+                    g("commit", "-q", "--allow-empty", "-m", "left behind")
+                    g("checkout", "-q", "main")
+                    loose = git_state(tmp + "/r")["loose"]
+                    assert [x["branch"] for x in loose] == ["side"] and loose[0]["at"] > 0, loose  # chat/0123456789ab: checked out, so not loose
+                    g("branch", "-q", "-D", "side")
                 finally:
                     workers.WORKTREES = real_wt
         # A finished worker's tail: its last FOLLOW_TAIL_LINES lines, said cut, the offset at the log's end.
