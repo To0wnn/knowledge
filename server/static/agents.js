@@ -1571,10 +1571,15 @@ const ckNum = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e4 ? `${Math
 const ckPhone = () => matchMedia("(max-width: 699.98px)").matches;
 function ckSubbar(card) {
   const run = [...(card.subs || new Map()).values()].filter((b) => b.status === "running");
-  // the agent's shells left running in the background (Claude Code), named by what they run
-  const shells = (card.meta.bg_list || []).map((s) => {
-    const x = el("span", "ck-subpin ck-shellpin"); x.append(el("span", "ck-dot live"), el("span", "ck-sub-label", `shell: ${s.label}`));
-    x.title = "A shell the agent left running in the background"; return x;
+  // the agent's shells left running in the background (Claude Code), named by what they run; a click shows its output
+  const list = card.meta.bg_list || [];
+  if (card.shell && !list.some((s) => s.id === card.shell)) ckShellClose(card); // it ended
+  const shells = list.map((s) => {
+    const x = el("button", "ck-subpin ck-shellpin"); x.type = "button"; x.setAttribute("aria-expanded", String(card.shell === s.id));
+    x.append(el("span", "ck-dot live"), el("span", "ck-sub-label", `shell: ${s.label}`));
+    x.title = "A shell the agent left running in the background: show what it prints";
+    x.onclick = () => { if (card.shell === s.id) ckShellClose(card); else ckShellOpen(card, s.id); ckSubbar(card); };
+    return x;
   });
   const pins = [...shells, ...run.map((b) => {
     const x = el("button", "ck-subpin"); x.type = "button";
@@ -1603,8 +1608,34 @@ function ckSubbar(card) {
     }
   }
   card.subbar.classList.toggle("open", open);
+  if (card.shellOut) card.subbar.append(card.shellOut);
   if (had && fold.isConnected) fold.focus({ preventScroll: true });
 }
+// A background shell's output, live: asking keeps it watched, so the pc's companion sends the file's tail (~2 s).
+function ckShellOpen(card, id) {
+  ckShellClose(card);
+  const out = card.shellOut = el("pre", "progress-log ck-shell-out", "Waiting for the pc to send this shell's output…");
+  card.shell = id;
+  const tick = async () => {
+    if (card.shellOut !== out) return;
+    if (!card.subbar.isConnected) { ckShellClose(card); return; } // the chat was left
+    let r; try { r = await api(`/ui/api/chat/shell?machine=${card.meta.machine}&id=${card.meta.id}&shell=${encodeURIComponent(id)}`); }
+    catch (e) { r = { error: e.message }; }
+    if (card.shellOut !== out) return;
+    if (r.error) out.textContent = r.error;
+    else if (!r.online) out.textContent = "The pc is offline.";
+    else if (r.at) {
+      const end = out.scrollHeight - out.scrollTop - out.clientHeight < 8; // at the bottom: stay there as it grows
+      out.textContent = (r.size > r.text.length ? "…\n" : "") + (ckTerm(r.text) || "(no output yet)");
+      if (end) out.scrollTop = out.scrollHeight;
+    }
+    card.shellTimer = setTimeout(tick, 2000);
+  };
+  tick();
+}
+// What a terminal would show: colour codes dropped, and a line a progress bar redraws with \r only as it was last drawn.
+const ckTerm = (t) => t.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").split("\n").map((l) => l.replace(/\r+$/, "").split("\r").pop()).join("\n");
+function ckShellClose(card) { clearTimeout(card.shellTimer); card.shell = card.shellOut = null; }
 
 // Follow a worker (#/chats/worker/<project>/<ID>): a worker is a chat nobody types in. Its card is a chat card whose
 // log is the worker's transcript (its companion sends output only while someone follows it), with a banner and the

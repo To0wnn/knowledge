@@ -6794,6 +6794,50 @@ async def ui_chat_commands(request: Request):
     return JSONResponse({"commands": ((comp.get("agents") or {}).get(agent) or {}).get("commands", []), "version": comp.get("version") or ""})
 
 
+# Watch a background shell: the agent's shell (Claude Code's run_in_background) writes to a file on its pc. While a
+# page polls /ui/api/chat/shell, the companion's chat poll hears "shells" and sends the file's tail. Both live only in
+# RAM: a tail is seconds old and worthless after a restart, and a write per send would churn the chat file.
+SHELL_WATCH_SECONDS, SHELL_TAIL_BYTES = 10, 8000
+SHELL_WATCH: dict = {}  # (machine, chat, shell id) -> watched until
+SHELL_TAILS: dict = {}  # (machine, chat, shell id) -> {"text", "size", "at"}
+
+
+@server.custom_route("/ui/api/chat/shell", methods=["GET"])
+async def ui_chat_shell(request: Request):
+    """?machine=&id=&shell=: the newest output of one of the chat's background shells, as its pc last sent it
+    (text "" and at 0 until it did); asking keeps it watched for SHELL_WATCH_SECONDS."""
+    try:
+        row, b, f, c = await chat_request(request, False)
+        sid = str(b.get("shell", ""))
+        if sid not in {x["id"] for x in c.get("bg_list") or []}:
+            raise ValueError("no such shell running in this chat")
+    except (ValueError, AttributeError, TypeError, PermissionError) as e:
+        return chat_error(e)
+    now, key = time.time(), (str(b["machine"]), c["id"], sid)
+    for k in [k for k, t in SHELL_WATCH.items() if t < now]:
+        SHELL_WATCH.pop(k)
+        SHELL_TAILS.pop(k, None)
+    SHELL_WATCH[key] = now + SHELL_WATCH_SECONDS
+    return JSONResponse({**SHELL_TAILS.get(key, {"text": "", "size": 0, "at": 0}), "online": row["online"], "now": now})
+
+
+@server.custom_route("/machine/chats/shell", methods=["POST"])
+async def machine_chat_shell(request: Request):
+    """{chat, id, text, size}: the tail of a watched background shell's output (only one someone watches is kept)."""
+    if no := remote_refused():
+        return no
+    try:
+        b = await request.json()
+        key = (device.get().get("machine", ""), str(b["chat"]), str(b["id"]))
+        text, size = str(b.get("text", ""))[-SHELL_TAIL_BYTES:], int(b.get("size") or 0)
+    except (ValueError, KeyError, AttributeError, TypeError) as e:
+        return JSONResponse({"error": str(e) or "send JSON {chat, id, text, size}"}, status_code=400)
+    if SHELL_WATCH.get(key, 0) < time.time():  # also how a machine is kept to its own chats: only owners mark a watch
+        return JSONResponse({"error": "nobody watches this shell"}, status_code=404)
+    SHELL_TAILS[key] = {"text": "(withheld: contains a known secret value)" if contains_secret(text) else text, "size": size, "at": time.time()}
+    return JSONResponse({"ok": True})
+
+
 @server.custom_route("/ui/api/chat/send", methods=["POST"])
 async def ui_chat_send(request: Request):
     """{machine, id, text[, model, effort]}: the next message; its pc's companion runs it as the chat's next turn, with
@@ -7269,7 +7313,9 @@ async def machine_chats(request: Request):
     follow = [k for k, v in read_json(q_path.parent / "follow.json", {}).items() if v.get("until", 0) > now and dev["name"] in v.get("tokens", [])]
     if follow:  # workers someone watches in the web UI now: their companion sends their new output (an older one ignores it)
         out["follow"] = follow
-    out["active"] = bool(out["busy"] or out["work"] or follow or steer)
+    if shells := [{"chat": k[1], "id": k[2]} for k, t in list(SHELL_WATCH.items()) if k[0] == mid and t > now]:
+        out["shells"] = shells  # background shells someone watches: their companion sends the tail (an older one ignores it)
+    out["active"] = bool(out["busy"] or out["work"] or follow or steer or shells)
     if time.time() - (read_json(MACHINES_FILE, {}).get(mid) or {}).get("at", 0) > 30:  # online in the Machines list
         await asyncio.to_thread(mark_machine, dev)
     return JSONResponse(out)

@@ -2536,7 +2536,36 @@ def chats_round() -> bool:
         except Exception as e:
             log("error", "Could not send a diff to the web UI", f"{type(e).__name__}: {e}"[:300])
     follow_round(tok, r)
+    shell_round(tok, r)
     return bool(r.get("active") or chat.RUNNING)
+
+
+SHELL_SENT: dict = {}  # (chat, shell id) -> (size, mtime, when) last sent: unchanged, again only every 5 s (a page opened anew)
+SHELL_TAIL = 8000  # bytes of a shell's output sent (the server keeps as many)
+
+
+def shell_round(tok: str, r: dict):
+    """The poll's part for background shells someone watches in the web UI: the tail of each one's output file."""
+    for item in r.get("shells", []):
+        lv = chat.LIVE.get(str(item.get("chat")))
+        sid = str(item.get("id"))
+        path = lv and sid in lv.bg and lv.bg_out.get(sid)
+        if not path:
+            continue
+        try:
+            st = os.stat(path)
+            last = SHELL_SENT.get((lv.cid, sid))
+            if last and last[:2] == (st.st_size, st.st_mtime_ns) and time.time() - last[2] < 5:
+                continue
+            with open(path, "rb") as fh:
+                fh.seek(max(0, st.st_size - SHELL_TAIL))
+                text = fh.read(SHELL_TAIL).decode("utf-8", "replace")
+            server("POST", "/machine/chats/shell", tok, {"chat": lv.cid, "id": sid, "text": text, "size": st.st_size})
+            SHELL_SENT[(lv.cid, sid)] = (st.st_size, st.st_mtime_ns, time.time())
+        except Exception as e:  # a gone file or the server away: the page shows the last tail it got; said once per shell
+            if SHELL_SENT.pop((lv.cid, sid), True):
+                log("error", "Could not send a background shell's output", f"{type(e).__name__}: {e}"[:300])
+            SHELL_SENT[(lv.cid, sid)] = None
 
 
 # ---------------------------------------------------------------- follow and steer a worker from the web UI
@@ -2844,6 +2873,20 @@ def main(argv: list):
         globals()["update_own_checkout"] = real_own
         globals()["installed"], globals()["plugin_version"], self_update.run, globals()["keep_trusted"] = real
         real_fqdn, socket.getfqdn = socket.getfqdn, lambda *a: sys.exit("LocalServer must not ask reverse DNS at its start")
+        # A watched background shell: its file's tail goes to the server, once per change (again after 5 s); others nothing.
+        sent, real_srv, out = [], globals()["server"], Path(tmp_state) / "b1.output"
+        globals()["server"] = lambda m, p, t, body=None, **k: sent.append((p, body))
+        out.write_bytes(b"x" * 9000 + b"tick 1\n")
+        chat.LIVE["c1"] = __import__("types").SimpleNamespace(cid="c1", bg={"b1": "wait"}, bg_out={"b1": str(out)})
+        shell_round("t", {"shells": [{"chat": "c1", "id": "b1"}, {"chat": "c1", "id": "b2"}, {"chat": "gone", "id": "b1"}]})
+        shell_round("t", {"shells": [{"chat": "c1", "id": "b1"}]})
+        assert len(sent) == 1 and sent[0][0] == "/machine/chats/shell" and sent[0][1]["text"].endswith("tick 1\n") \
+            and len(sent[0][1]["text"]) == SHELL_TAIL and sent[0][1]["size"] == 9007, sent
+        with open(out, "ab") as fh:
+            fh.write(b"tick 2\n")
+        shell_round("t", {"shells": [{"chat": "c1", "id": "b1"}]})
+        assert len(sent) == 2 and sent[1][1]["text"].endswith("tick 2\n"), sent
+        chat.LIVE.pop("c1"); globals()["server"] = real_srv
         probe = LocalServer(("127.0.0.1", 0), Handler)
         assert probe.server_port == probe.server_address[1]
         probe.server_close()

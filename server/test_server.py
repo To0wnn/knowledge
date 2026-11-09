@@ -1014,6 +1014,14 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     http("POST", "/machine/chats/events", {"chat": mc, "events": [], "bg": 2, "bg_list": [{"id": "b1", "label": "gh run watch"}, {"id": "b2", "label": "x" * 300}]}, token=fr, headers=pc)
     shells = json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["chat"]["bg_list"]
     assert shells[0] == {"id": "b1", "label": "gh run watch"} and len(shells[1]["label"]) == 120, shells
+    # Watch a shell: the page asks, the pc's poll hears it, sends the tail, the page gets it. Unwatched, a tail is refused.
+    sh = lambda shell: json.loads(ui(f"/ui/api/chat/shell?machine={mid}&id={mc}&shell={shell}")[2])
+    assert http("POST", "/machine/chats/shell", {"chat": mc, "id": "b1", "text": "x"}, token=fr, headers=pc)[0] == 404, "nobody watches it yet"
+    assert sh("b1")["at"] == 0 and "error" in sh("nope"), "not sent yet; an unknown shell is refused"
+    assert {"chat": mc, "id": "b1"} in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["shells"]
+    assert http("POST", "/machine/chats/shell", {"chat": mc, "id": "b1", "text": "tick 1\ntick 2\n", "size": 14}, token=fr, headers=pc)[0] == 200
+    got = sh("b1")
+    assert got["text"] == "tick 1\ntick 2\n" and got["size"] == 14 and got["at"] > 0, got
     card = next(i for i in json.loads(ui("/ui/api/board")[2])["items"] if i["kind"] == "chat" and i["id"] == mc)
     assert "1 subagent, 2 shells still running" in card["line"] and card["col"] in ("needs", "running"), card  # never "earlier" while it works
     http("POST", "/machine/chats/events", {"chat": mc, "events": [], "bg": 0}, token=fr, headers=pc)
