@@ -1721,7 +1721,8 @@ def board_contract(tmp, ck, fr, raw, er, et):
     assert hosts["BRD-1"] == [{"machine": mid, "label": "garage"}] and hosts["BRD-2"] == [], hosts
     assert col("task", "BRD-2") == "needs" and items[("task", "BRD-2")]["approve"], items.get(("task", "BRD-2"))
     assert col("task", "BRD-9-done") == "done", "a result handed back today is done"
-    assert ("task", "BRD-3") not in items and ("task", "BRD-4") not in items, "a person's line and a task its worker shows"
+    assert ("task", "BRD-4") not in items, "a task its worker shows"
+    assert col("task", "BRD-3") == "needs" and items[("task", "BRD-3")]["closable"], "a person's line needs that person"
     # A glance on the board (peek) leaves it under "Needs you"; opening the chat reads it: off "Needs you", into "Done".
     ui(f"/ui/api/chat?machine={mid}&id={cids[0]}&peek=1")
     assert {(i["kind"], i["id"]): i["col"] for i in board()}[("chat", cids[0])] == "needs"
@@ -1981,14 +1982,19 @@ def flow_contract(tmp, ck, fr, raw, heard):
     b = board()
     for tid in ("FL-10", "FL-11"):
         c = b[f"task:garden/{tid}"]
-        assert c["col"] == "needs" and c["stale"] and c["can_close"] and c["task_line"].endswith(old[0 if tid == "FL-10" else 1][2:]), c
+        assert c["col"] == "needs" and c["closable"] and c["can_close"] and c["task_line"].endswith(old[0 if tid == "FL-10" else 1][2:]), c
     assert rows()["FL-11"]["can_cancel"] and not rows()["FL-11"]["held"], rows()["FL-11"]
     assert ui("/ui/api/task/extend", {"project": "garden", "id": "FL-10", "days": 0})[0] == 400
     st, _, body = ui("/ui/api/task/extend", {"project": "garden", "id": "FL-10", "days": 7})
     due = date.today() + timedelta(days=7)
     assert st == 200 and f"open until {due.day} {due.strftime('%b')} {due.year} [trade, FL-10]" in json.loads(body)["line"], body
-    assert rows()["FL-10"]["due"] == due.isoformat() and "task:garden/FL-10" not in {k for k, v in board().items() if v.get("stale")}
+    assert rows()["FL-10"]["due"] == due.isoformat() and "task:garden/FL-10" not in {k for k, v in board().items() if v.get("closable")}
     assert ui("/ui/api/task/cancel", {"project": "garden", "id": "FL-11", "reason": "forgotten"})[0] == 200
+    # Once in date, a project's line queues for a session there; a person's line needs that person, with the same answers.
+    assert board()["task:garden/FL-10"]["col"] == "open" and board()["task:garden/FL-10"]["line"].startswith("for a session of trade"), board()["task:garden/FL-10"]
+    assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": "- open until 2099-01-01 [Sam, FL-12] from Codex, start now: pick the colour\n## Keuzes"}, fr)[0]
+    c = board()["task:garden/FL-12"]
+    assert c["col"] == "needs" and c["closable"] and c["line"].startswith("for Sam:"), c
     assert "- [Sam, FL-11-done]: cancelled by alice: forgotten\n" in (tmp / "projects/garden/memory/project_tasks.md").read_text()
     # A pc that sleeps and wakes with a worker running is one message per worker run, not one per nap.
     pc = {"X-Knowledge-Machine": "ffffffffffffffff", "X-Knowledge-Machine-Label": "sleepy"}

@@ -6578,12 +6578,19 @@ def board_items() -> list[dict]:
         task = {"kind": "task", "id": t["id"], "agent": agent, "project": t["project"], "title": f"{t['id']} · {t['text'][:120]}",
                 "path": t["path"], "line": "", "at": 0, "owner": t["owner"], "key": key, "sig": sig, "can_cancel": t.get("can_cancel", False),
                 "due": t["due"], "overdue": t["overdue"], "approve_warning": t.get("approve_warning", "")}
-        if t["overdue"] and not t["done"] and not to_person and not t["held"] and (t["project"], t["id"]) not in working:
-            # past its date and nobody on it (any owner: an agent, a person or a project): finished, more time, or cancel
-            items.append({**task, "col": "needs", "stale": True, "task_line": t["line"], "can_close": may_approve(t["project"]),
-                          "line": "past its date, nobody works on it: finished, more time, or cancel?"})  # the card shows the date
+        if (t["project"], t["id"]) in working:  # a running worker shows it
             continue
-        if not agent or (t["project"], t["id"]) in working:  # a person's line is not an agent's work; a running worker shows it
+        closable = {**task, "col": "needs", "closable": True, "task_line": t["line"], "can_close": may_approve(t["project"])}
+        if t["overdue"] and not t["done"] and not to_person and not t["held"]:
+            # past its date and nobody on it (any owner: an agent, a person or a project): finished, more time, or cancel
+            items.append({**closable, "line": "past its date, nobody works on it: finished, more time, or cancel?"})  # the card shows the date
+            continue
+        if not agent and not t["done"] and not to_person and not agent_owner(t["owner"]):  # a person's task: theirs to do or decide
+            items.append({**closable, "line": f"for {t['owner']}: done, more time, or cancel?"})
+            continue
+        if not agent:  # a project's, device's or pc's name: a session there takes it at its next turn
+            if not t["done"]:
+                items.append({**task, "col": "open", "line": f"for a session of {t['owner']}" + (f" · {t['waiting_reason']}" if t["waiting_reason"] else "")})
             continue
         if t["done"]:
             if now - (t.get("since") or 0) < BOARD_DONE:
