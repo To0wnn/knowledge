@@ -924,7 +924,7 @@ def settings() -> dict:
     """Workers: off on a new pc (a work laptop or the family's gaming pc must never run them by surprise); at most one
     maxAgents: chat turns and workers at once on this pc together, 4 unless the owner says otherwise; 0: no limit."""
     s = load("settings.json", {})
-    return {"workersAllowed": s.get("workersAllowed") is True, "maxAgents": max(0, int(s.get("maxAgents", 4)))}
+    return {"workersAllowed": s.get("workersAllowed") is True, "maxAgents": max(0, int(s.get("maxAgents", s.get("maxChats", 4))))}  # maxChats: 0.43.21's setting, kept
 
 
 def save_settings(change: dict):
