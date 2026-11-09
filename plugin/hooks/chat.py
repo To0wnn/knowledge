@@ -1906,6 +1906,10 @@ def _start_live(item: dict, post, log, linked, yolo):
             if lv and getattr(lv, "restarting", False):  # agy restarting for a Force: this goes along to the new one
                 lv.send(item, "")
                 return
+            if lv and lv.agent != item["agent"]:  # the chat moved to another agent (its usage limit): the old one ends, never resumed
+                LIVE.pop(cid, None)
+                lv.close()
+                lv = None
             if lv and lv.alive() and (lv.asked != choice(item) or lv.yolo != yolo(item["agent"])) and not lv.busy and not lv.turn_open:
                 LIVE.pop(cid, None)
                 lv.close()  # another model, effort or YOLO: the next process starts with it, the conversation resumes
@@ -2247,6 +2251,17 @@ def self_test():
             texts = [e["text"] for b in seen_ for e in b["events"] if e["kind"] == "text"]
             assert texts == ["late"] and seen_[-1].get("done") and "error" not in seen_[-1] and not d3.exists(), seen_
             LIVE.pop("c3", None)
+            # a chat moved to another agent (usage limit): the old agent's process ends, the new one never gets it
+            class Old:
+                agent, closed = "codex", False
+                def close(self): self.closed = True
+            old, full_, out_ = Old(), globals()["full"], []
+            LIVE["c4"], globals()["full"] = old, lambda: True  # stop right after: no real agent starts here
+            try:
+                _start_live({"chat": "c4", "agent": "claude", "folder": t}, out_.append, lambda *a: None, lambda: [t], lambda a: False)
+            finally:
+                globals()["full"] = full_
+            assert old.closed and "c4" not in LIVE and "agents run on this pc already" in out_[-1]["error"], out_
         finally:
             for d in (LIVE_DIR / "c1-ab",):  # a failed check leaves no host behind (it would hold its files open)
                 try:

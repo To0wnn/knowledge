@@ -69,6 +69,9 @@ the admin page to be given projects. `KNOWLEDGE_PROXY_IPS` are the addresses tru
   small stdio relay, so the token never sits in a config file. `clients/knowledge-agent.py` sets everything up.
 - **Tokens:** one long random token per device, kept in the OS keyring (Linux Secret Service, macOS Keychain, Windows
   Credential Manager). Tokens can be read-only, masked, limited to one project, or allowed to sync shared skills.
+  Shared skills land in `~/.claude/skills`; after every sync each skill there (also one made on the device) gets a copy
+  in `~/.agents/skills`, the folder Codex and agy read, marked `.from-claude-skills`. Only marked copies are updated or
+  removed; edit a skill in `~/.claude/skills`, an edit in a copy is overwritten.
 - **Web sign-in:** a password for one admin (`KNOWLEDGE_UI_PASSWORD`, a signed cookie for 30 days; at most five wrong
   tries a minute), or, for several people, a reverse proxy with forward auth (for example Authentik) that sets the user
   header and a shared secret (`KNOWLEDGE_PROXY_SECRET`).

@@ -489,12 +489,17 @@ def skills(tmp: Path, home: Path):
     check((server_skills / "mine" / "SKILL.md").exists() and "é" in (server_skills / "mine" / "SKILL.md").read_text(encoding="utf-8"),
           "skills: a skill made on the device goes up", logged())
     check((repo / "SKILL.md").read_text(encoding="utf-8") == "repo version\n", "skills: never writes through a linked folder (junction on Windows)")
+    agents_dir = home / ".agents" / "skills"  # Codex and agy read this folder
+    check((agents_dir / "s1" / "SKILL.md").exists() and (agents_dir / "mine" / "SKILL.md").exists()
+          and "shared skill → ✅" in (agents_dir / "s1" / "SKILL.md").read_text(encoding="utf-8"),
+          "skills: every Claude Code skill reaches Codex and agy in ~/.agents/skills", str(sorted(p.name for p in agents_dir.iterdir()) if agents_dir.is_dir() else "none"))
     for name in ("s1", "linked"):
         (server_skills / name / "SKILL.md").unlink()
         (server_skills / name).rmdir()
         http("POST", "/invalidate", {"paths": [f"claude/skills/{name}/SKILL.md"]}, {"Authorization": "Bearer watch-token"})
     code, out, err = run(mm, "", env)
     check(not (local / "s1").exists(), "skills: removed on the server, gone here with its folder", logged())
+    check(not (agents_dir / "s1").exists() and (agents_dir / "mine").exists(), "skills: its copy for Codex and agy goes too", logged())
     check((repo / "SKILL.md").exists() and "failed" not in logged(), "skills: a linked folder is never emptied, the sync does not break", logged())
     # The PostToolUse hook (Git Bash on Windows) starts a sync when the edited file is a skill.
     (local / "mine" / "SKILL.md").write_text("---\nname: mine\ndescription: test skill\n---\nedited → ✅\n", encoding="utf-8")
