@@ -122,6 +122,7 @@ function navMe(me) {
   navEl("who").title = me.impersonator ? `Viewing as ${me.user} (impersonated by ${me.impersonator})` : `Signed in as ${me.user}`;
   navEl("who-more").textContent = me.user;
   if (!me.admin) for (const a of document.querySelectorAll(".nav-health")) a.hidden = true;
+  document.body.classList.toggle("is-impersonating", Boolean(me.impersonator));
   let bar = document.getElementById("impersonate-bar");
   if (me.impersonator) {
     if (!bar) {
