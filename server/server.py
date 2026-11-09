@@ -6131,9 +6131,10 @@ def chat_events(b: dict) -> list:
     return out
 
 
-def note_usage(c: dict, kind: str, extra: dict):
+def note_usage(c: dict, kind: str, extra: dict, agent: str = ""):
     """Tokens of a chat: the conversation's (tokens added per turn, or a total that replaces), the context in use now,
-    and each subagent's so far (sub_tokens, the last 50)."""
+    and each subagent's so far (sub_tokens, the last 50). Per agent (used_by): a chat continued in another agent counts
+    each one's own, and `used` is that of the agent it runs in now (a Codex total replaces only Codex's)."""
     if kind != "usage":
         return
     if extra.get("sub"):
@@ -6142,8 +6143,11 @@ def note_usage(c: dict, kind: str, extra: dict):
         for old in list(st)[:-50]:
             st.pop(old)
         return
-    c["used"] = extra["total"] if "total" in extra else c.get("used", 0) + extra.get("tokens", 0)  # not "tokens": the chat's device tokens
-    if extra.get("ctx"):
+    a, now = agent or c.get("agent", ""), c.get("agent", "")
+    by = c.setdefault("used_by", {now: c.get("used", 0)} if c.get("used") else {})  # a chat from before used_by: all its own
+    by[a] = extra["total"] if "total" in extra else by.get(a, 0) + extra.get("tokens", 0)  # not "tokens": the chat's device tokens
+    c["used"] = by.get(now, 0)
+    if extra.get("ctx") and a == now:  # a late count of the old agent is not the context in use now
         c["ctx"] = extra["ctx"]
 
 
@@ -6201,6 +6205,7 @@ def chat_meta(c: dict) -> dict:
             "closed": bool(c.get("closed")),
             "sub_list": sub_list(c),
             "used": c.get("used", 0), "ctx": c.get("ctx", 0),  # the conversation's tokens so far, its context now
+            "used_by": {a: n for a, n in (c.get("used_by") or {}).items() if a != c.get("agent") and n},  # other agents this chat ran in
             "model": c.get("model", ""), "effort": c.get("effort", ""), "worktree": bool(c.get("worktree")), "bg": int(c.get("bg") or 0), "bg_list": c.get("bg_list") or [],
             "waiting": len(c.get("pending") or [])}
 
@@ -6901,19 +6906,24 @@ async def ui_chat_send(request: Request):
     live = c.get("agent") in ((row.get("companion") or {}).get("live") or [])
     busy, msg = [], {"text": text, "by": device.get().get("user", ""), "at": time.time()}
     if agent != c["agent"]:
-        if c.get("status") in ("queued", "running"):
-            return JSONResponse({"error": "the agent is still working: stop it first, then continue in another agent"}, status_code=409)
-        old = AGENT_NAMES.get(c["agent"], c["agent"])
-        msg["text"] = CHAT_HANDOFF.format(old=old, transcript=chat_transcript(c, 40000)) + text
-        # a new session of the new agent; approvals given "for this chat" named the old agent's tools
-        pick.update(agent=agent, session="", allow=[])
-        await asyncio.to_thread(update_state, f, lambda c: chat_add(c, "info", f"Continued in {AGENT_NAMES.get(agent, agent)}: {old} could not go on. "
-                                                                    "The chat so far goes along as text; the new agent starts its own session."))
-        audit("chat-continue", f"{c['id']} {c['agent']} -> {agent}")
+        if plugin_version((row.get("companion") or {}).get("version") or "") < (0, 43, 38):  # older: it would resume the old session, or not say which agent posts
+            return JSONResponse({"error": f"update the knowledge plugin on {row['label']} first (0.43.38 or newer continues a chat in another agent)"}, status_code=409)
     elif live and mode in ("now", "force") and c.get("status") in ("queued", "running"):
         return await chat_live_message(f, c, {**msg, **pick}, mode, text)
 
     def change(c):
+        if agent != c["agent"]:  # checked under the chat's lock: a turn that started meanwhile is not moved
+            if c.get("status") in ("queued", "running") or c.get("bg") or any(v == "running" for v in (c.get("subs") or {}).values()):
+                busy.append("working")
+                return
+            old = AGENT_NAMES.get(c["agent"], c["agent"])
+            # a new session of the new agent, which gets the chat so far until it has one; "for this chat" approvals named the old agent's tools
+            if c.get("used") and not c.get("used_by"):  # a chat from before used_by: its count so far is the old agent's
+                c["used_by"] = {c["agent"]: c["used"]}
+            c.update(agent=agent, session="", allow=[], handoff={"from": old, "upto": c.get("next", 0)}, ctx=0,
+                     used=(c.get("used_by") or {}).get(agent, 0))
+            chat_add(c, "info", f"Continued in {AGENT_NAMES.get(agent, agent)}: {old} could not go on. "
+                                "The chat so far goes along as text; the new agent starts its own session.")
         c["closed"] = False  # a new message opens a closed chat again
         c.pop("close_after", None)
         if c.get("status") in ("queued", "running"):
@@ -6932,6 +6942,10 @@ async def ui_chat_send(request: Request):
         chat_add(c, "user", text)
         c.update(status="queued", title=chat_title(text, c.get("title") or "", c.get("titled")))
     await asyncio.to_thread(update_state, f, change)
+    if busy == ["working"]:
+        return JSONResponse({"error": "the agent or its background work is still running: stop it first, then continue in another agent"}, status_code=409)
+    if agent != c["agent"]:
+        audit("chat-continue", f"{c['id']} {c['agent']} -> {agent}")
     if busy == ["full"]:
         return JSONResponse({"error": f"{CHAT_PENDING} messages wait already: wait for the agent, or stop it"}, status_code=409)
     if busy:
@@ -7308,6 +7322,9 @@ async def machine_chats(request: Request):
                     out.setdefault("steer", []).extend({"chat": cid, **x} for x in (s if isinstance(s, list) else [s]))
             elif "msg" in e:
                 msg = e.pop("msg")
+                if (h := c.get("handoff")) and not c.get("session"):  # continued in another agent: until it has a session of its own
+                    old = {**c, "events": [x for x in c.get("events") or [] if x.get("n", 0) <= h.get("upto", 0)]}
+                    msg = {**msg, "text": CHAT_HANDOFF.format(old=h.get("from", "?"), transcript=chat_transcript(old, 40000)) + (msg.get("text") or "")}
                 if not c.get("session") and not c.get("titled") and msg.get("text") != CHAT_WRAP_UP:
                     # the start context asks too, but a session without the plugin's start hook never sees it
                     msg = {**msg, "text": (msg.get("text") or "") + CHAT_TITLE_ASK.format(chat=cid)}
@@ -7444,11 +7461,13 @@ async def machine_chat_events(request: Request):
             if contains_secret(t):
                 t = "(withheld: contains a known secret value)"
             note_subs(c, k, extra, t)
-            note_usage(c, k, extra)
+            note_usage(c, k, extra, str(b.get("agent") or ""))
             if k != "usage" or extra.get("sub"):  # a subagent's count lives in its block; the chat's in its meta
                 chat_add(c, k, t, extra=extra)
-        if isinstance(b.get("session"), str) and re.fullmatch(r"[\w.:-]{1,120}", b["session"]):
+        # only the chat's own agent: the old agent of a chat continued elsewhere may still post (a shell ending)
+        if isinstance(b.get("session"), str) and re.fullmatch(r"[\w.:-]{1,120}", b["session"]) and b.get("agent", c["agent"]) == c["agent"]:
             c["session"] = b["session"]
+            c.pop("handoff", None)  # the new agent has its own session now: it got the chat so far
         if type(b.get("bg")) is int:  # the agent's shells left running in the background (Claude Code), counted by the pc
             c["bg"] = max(0, min(b["bg"], 99))
             c["bg_list"] = [{"id": str(x.get("id", ""))[:40], "label": str(x.get("label", ""))[:120]} for x in (b.get("bg_list") or [])[:20]

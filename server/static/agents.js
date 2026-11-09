@@ -1260,9 +1260,12 @@ function ckPaint(card) {
     return;
   }
   card.state.hidden = false;
-  card.tok.hidden = !m.used && !m.ctx; // the conversation's tokens: its context now and all it used
-  card.tok.textContent = [m.ctx && `${ckNum(m.ctx)} context`, m.used && `${ckNum(m.used)} used`].filter(Boolean).join(" · ");
-  card.tok.title = "Context: what the agent sent for its last step. Used: every token of this chat so far, cache reads included.";
+  const before = Object.entries(m.used_by || {}); // agents this chat ran in before (continued elsewhere): each its own count
+  card.tok.hidden = !m.used && !m.ctx && !before.length; // the conversation's tokens: its context now and all it used
+  card.tok.textContent = [m.ctx && `${ckNum(m.ctx)} context`, m.used && `${ckNum(m.used)} used${before.length ? ` (${AGENT_NAME[m.agent] || m.agent})` : ""}`,
+    ...before.map(([a, n]) => `${ckNum(n)} (${AGENT_NAME[a] || a})`)].filter(Boolean).join(" · ");
+  card.tok.title = "Context: what the agent sent for its last step. Used: every token of this chat so far, cache reads included"
+    + (before.length ? "; per agent, since the chat continued in another one." : ".");
   card.close.hidden = busy && !card.failedWrap;
   if (card.failedWrap && !m.closed) {
     card.close.textContent = "Force archive";

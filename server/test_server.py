@@ -1292,11 +1292,27 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     ui("/ui/api/chat/send", {"machine": mid, "id": hid, "text": "build the parser"})
     http("GET", "/machine/chats", token=fr, headers=pc)
     assert ui("/ui/api/chat/send", {"machine": mid, "id": hid, "text": "go on", "agent": "claude"})[0] == 409  # still working
+    http("POST", "/machine/chats/events", {"chat": hid, "events": [{"kind": "usage", "text": "", "tokens": 100, "ctx": 50}]}, token=fr, headers=pc)
     http("POST", "/machine/chats/events", {"chat": hid, "session": "th-9", "events": [{"kind": "text", "text": "half the parser done"},
                                           {"kind": "error", "text": "usage limit reached"}], "done": True}, token=fr, headers=pc)
     assert ui("/ui/api/chat/send", {"machine": mid, "id": hid, "text": "go on", "agent": "agy"})[0] == 400  # not installed there
     st, _, b = ui("/ui/api/chat/send", {"machine": mid, "id": hid, "text": "go on", "agent": "claude"})
+    assert st == 409 and b"update the knowledge plugin" in b, b  # an older companion would resume the old agent's session
+    http("POST", "/machine/report", {"version": "0.43.38", "agents": {"codex": {}, "claude": {}},
+                                     "folders": {"linked": [{"path": "/home/x/garden", "project": "garden"}]}}, token=fr, headers=pc)
+    http("POST", "/machine/chats/events", {"chat": hid, "events": [], "bg": 1}, token=fr, headers=pc)  # a shell of the old agent still runs
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": hid, "text": "go on", "agent": "claude"})[0] == 409
+    http("POST", "/machine/chats/events", {"chat": hid, "events": [], "bg": 0}, token=fr, headers=pc)
+    st, _, b = ui("/ui/api/chat/send", {"machine": mid, "id": hid, "text": "go on", "agent": "claude"})
     assert st == 200, b
+    # the old agent posts late (a shell ended): its session never lands on the new agent's chat
+    http("POST", "/machine/chats/events", {"chat": hid, "session": "th-9", "agent": "codex", "events": []}, token=fr, headers=pc)
+    assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={hid}")[2])["chat"]["session"] == "", "an old agent's session stays out"
+    # tokens per agent: the new one starts at 0 with no context; a late count of the old one stays the old one's
+    http("POST", "/machine/chats/events", {"chat": hid, "agent": "codex", "events": [{"kind": "usage", "text": "", "total": 500, "ctx": 400}]}, token=fr, headers=pc)
+    http("POST", "/machine/chats/events", {"chat": hid, "agent": "claude", "events": [{"kind": "usage", "text": "", "tokens": 30, "ctx": 20}]}, token=fr, headers=pc)
+    m = json.loads(ui(f"/ui/api/chat?machine={mid}&id={hid}")[2])["chat"]
+    assert (m["used"], m["ctx"], m["used_by"]) == (30, 20, {"codex": 500}), m
     w = [x for x in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"] if x["chat"] == hid][0]
     assert w["agent"] == "claude" and w["session"] == "" and w["allow"] == [], w
     assert w["text"].startswith("(knowledge web UI: this chat ran in Codex") and "half the parser done" in w["text"] and "build the parser" in w["text"], w["text"]
@@ -1304,6 +1320,15 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     c = json.loads(ui(f"/ui/api/chat?machine={mid}&id={hid}")[2])
     assert c["chat"]["agent"] == "claude" and [e["text"] for e in c["events"] if e["kind"] == "user"][-1] == "go on", c
     assert any(e["kind"] == "info" and e["text"].startswith("Continued in Claude Code") for e in c["events"]), c["events"]
+    # its first turn failed before it had a session (not logged in): the next message still carries the chat so far
+    http("POST", "/machine/chats/events", {"chat": hid, "events": [{"kind": "error", "text": "not logged in"}], "done": True}, token=fr, headers=pc)
+    ui("/ui/api/chat/send", {"machine": mid, "id": hid, "text": "again"})
+    w = [x for x in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"] if x["chat"] == hid][0]
+    assert "half the parser done" in w["text"] and "### Owner\ngo on" not in w["text"] and "### Owner\nbuild the parser" in w["text"] and w["text"].split("</chat-so-far>")[1].strip().startswith("again"), w["text"]
+    http("POST", "/machine/chats/events", {"chat": hid, "session": "cl-1", "agent": "claude", "events": [], "done": True}, token=fr, headers=pc)
+    ui("/ui/api/chat/send", {"machine": mid, "id": hid, "text": "third"})
+    w = [x for x in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"] if x["chat"] == hid][0]
+    assert w["text"] == "third" and w["session"] == "cl-1", "once it has its own session, messages go as written"
     http("POST", "/machine/chats/events", {"chat": hid, "events": [], "done": True}, token=fr, headers=pc)
     # Offline: no new message (it would run whenever the pc comes back).
     d = json.loads((tmp / "machines.json").read_text())

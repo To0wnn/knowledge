@@ -179,8 +179,10 @@ def share_skills(dest: Path = None) -> list:
     touched. An edit in a copy is overwritten: change the skill in ~/.claude/skills. Returns the names left alone
     because another folder has them."""
     dest = dest or AGENT_SKILLS
+    # a tool's skill (.not-shared: never to the server) is copied too: it stays on this pc, and its installer may miss
+    # agy (skills 1.7.6 writes only ~/.agents/skills for antigravity-cli: vercel-labs/skills#1874)
     want = {d.name: d for d in sorted(SKILLS.iterdir()) if d.is_dir() and not linked(d) and d.name != "synced"
-            and not d.name.startswith(".") and not (d / NOT_SHARED).exists() and (d / "SKILL.md").is_file()} if SKILLS.is_dir() else {}
+            and not d.name.startswith(".") and (d / "SKILL.md").is_file()} if SKILLS.is_dir() else {}
     skipped = []
     for name, src in want.items():
         dst, files = dest / name, skill_files(src)
@@ -313,7 +315,8 @@ if __name__ == "__main__":
             (SKILLS / "own" / "scripts" / "a.py").write_text("print(1)")
             assert share_skills() == ["plugin-skill"], "a folder Codex or agy has that we did not make stays"
             assert (AGENT_SKILLS / "own" / "scripts" / "a.py").read_text() == "print(1)" and (AGENT_SKILLS / "own" / FROM_CLAUDE).exists()
-            assert not (AGENT_SKILLS / "tool-skill").exists() and (AGENT_SKILLS / "plugin-skill" / "SKILL.md").read_text() == "plugin"
+            assert (AGENT_SKILLS / "tool-skill" / "SKILL.md").read_text() == "x", "a tool's skill stays on this pc, but reaches the other agents"
+            assert (AGENT_SKILLS / "plugin-skill" / "SKILL.md").read_text() == "plugin"
             (SKILLS / "own" / "SKILL.md").write_text("y2")
             share_skills()
             assert (AGENT_SKILLS / "own" / "SKILL.md").read_text() == "y2", "an edit in Claude Code's folder reaches the copy"
