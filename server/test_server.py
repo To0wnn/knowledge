@@ -1217,6 +1217,11 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert ui("/ui/api/me/prefs", {"grid_group": "together"})[0] == 200 and json.loads(ui("/ui/api/me")[2])["prefs"]["grid_group"] == "together"
     assert ui("/ui/api/me/prefs", {"grid_group": "project"})[0] == 200 and "grid_group" not in json.loads(ui("/ui/api/me")[2])["prefs"]  # the default
     assert ui("/ui/api/me/prefs", {"grid_group": "x"})[0] == 400
+    # The admin's own Matrix room (Settings): a room id or empty; an alias or anything else is refused.
+    assert ui("/ui/api/me/prefs", {"matrix_room": "#alias:example.org"})[0] == 400 and ui("/ui/api/me/prefs", {"matrix_room": 5})[0] == 400
+    assert ui("/ui/api/me/prefs", {"matrix_room": "!abc:example.org"})[0] == 200 and json.loads(ui("/ui/api/me")[2])["prefs"]["matrix_room"] == "!abc:example.org"
+    assert ui("/ui/api/me/prefs", {"matrix_room": "!BENlZH1P1P7_00"})[0] == 200  # room v12: no :server
+    assert ui("/ui/api/me/prefs", {"matrix_room": ""})[0] == 200 and "matrix_room" not in json.loads(ui("/ui/api/me")[2])["prefs"]
     assert ui("/ui/api/me/prefs", {"keys": {"new_chat": "Alt+Shift+T", "digits": "Ctrl+Shift+#"}, "send_key": "shift"})[0] == 200
     assert json.loads(ui("/ui/api/me")[2])["prefs"]["keys"] == {"new_chat": "Alt+Shift+T", "digits": "Ctrl+Shift+#"}
     assert ui("/ui/api/me/prefs", {"keys": {"fit": "Alt+G"}})[0] == 200  # a change leaves the others: a stale tab overwrites nothing
@@ -2393,6 +2398,16 @@ def main():
             def log_message(self, *_): pass
         stand_in = hs.HTTPServer(("127.0.0.1", 0), Ntfy)
         __import__("threading").Thread(target=stand_in.serve_forever, daemon=True).start()
+        # Matrix rooms: what admins picked on Settings, else KNOWLEDGE_MATRIX_ROOM; a non-admin's pick is ignored.
+        saved_prefs, saved_admins, saved_room = srv.PREFS_FILE, set(srv.ADMINS), os.environ.get("KNOWLEDGE_MATRIX_ROOM")
+        srv.PREFS_FILE = Path(tempfile.mkdtemp()) / "prefs.json"
+        srv.ADMINS.clear(); srv.ADMINS.add("ann")
+        os.environ["KNOWLEDGE_MATRIX_ROOM"] = "!env:x"
+        assert srv.matrix_rooms() == ["!env:x"]
+        srv.PREFS_FILE.write_text(json.dumps({"ann": {"matrix_room": "!mine:x"}, "bob": {"matrix_room": "!bob:x"}}))
+        assert srv.matrix_rooms() == ["!mine:x"]
+        srv.PREFS_FILE = saved_prefs; srv.ADMINS.clear(); srv.ADMINS.update(saved_admins)
+        os.environ.pop("KNOWLEDGE_MATRIX_ROOM") if saved_room is None else os.environ.update(KNOWLEDGE_MATRIX_ROOM=saved_room)
         saved_env = {k: os.environ.pop(k, None) for k in ("KNOWLEDGE_MATRIX_URL", "KNOWLEDGE_NTFY_URL", "KNOWLEDGE_NTFY_TOKEN")}
         os.environ.update(KNOWLEDGE_NTFY_URL=f"http://127.0.0.1:{stand_in.server_port}/topic", KNOWLEDGE_NTFY_TOKEN="tk")
         srv.notify("Needs you: tést")
@@ -2688,7 +2703,7 @@ def main():
         assert raw("POST", "/ui/login", "password=gategategate", form)[0] == 429  # also the right one, until the minute passed
         assert raw("GET", "/", headers=ck)[1].get("location") == "/ui"
         assert raw("GET", "/ui", headers=ck)[0] == 200
-        assert json.loads(raw("GET", "/ui/api/me", headers=ck)[2]) == {"user": "alice", "admin": True, "projects": ["homelab", "trade"], "writable": ["homelab", "trade"], "labels": {}, "sections": ["## Stand", "## Keuzes"], "prefs": {}, "agents": True, "stt": True}  # anpitek is empty here: no tab; the server's (nl) sections for "+ Add memo"
+        assert json.loads(raw("GET", "/ui/api/me", headers=ck)[2]) == {"user": "alice", "admin": True, "projects": ["homelab", "trade"], "writable": ["homelab", "trade"], "labels": {}, "sections": ["## Stand", "## Keuzes"], "prefs": {}, "agents": True, "stt": True, "matrix": True}  # anpitek is empty here: no tab; the server's (nl) sections for "+ Add memo"
         g = json.loads(raw("GET", "/ui/api/graph", headers=ck)[2])
         assert g["nodes"] and not any(n["id"].endswith("/MEMORY.md") for n in g["nodes"]), g["nodes"][:3]  # index not drawn, still readable below
         assert {n["project"] for n in g["nodes"] if n["id"].startswith("trade")} == {"trade"}
@@ -2776,7 +2791,7 @@ def main():
         assert admin("/ui/api/admin/user", {"username": "alice", "projects": {}})[0] == 400  # admins come from the config
         assert admin("/ui/api/admin/user", {"username": "bob", "projects": {"trade": "read", "homelab": "none"}})[0] == 200
         ro = user("bob")
-        assert json.loads(raw("GET", "/ui/api/me", headers=ro)[2]) == {"user": "bob", "admin": False, "projects": ["trade"], "writable": [], "labels": {}, "sections": ["## Stand", "## Keuzes"], "prefs": {}, "agents": False, "stt": True}
+        assert json.loads(raw("GET", "/ui/api/me", headers=ro)[2]) == {"user": "bob", "admin": False, "projects": ["trade"], "writable": [], "labels": {}, "sections": ["## Stand", "## Keuzes"], "prefs": {}, "agents": False, "stt": True, "matrix": True}
         # A display name for a project: set by an admin, shown to everyone who sees the project; empty restores the name.
         assert admin("/ui/api/admin/project-label", {"name": "trade", "label": "Trading"}, ro)[0] == 403
         assert admin("/ui/api/admin/project-label", {"name": "nope", "label": "X"})[0] == 400

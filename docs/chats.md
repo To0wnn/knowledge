@@ -27,7 +27,7 @@ from a phone. The pc side runs in the companion ([companion.md](companion.md)).
   do not need you). Dismiss takes a Needs-you item off your own board until it changes; Snooze (`until`, Unix seconds,
   at most 30 days ahead) hides it until that time or until it changes, whichever comes first (stored per person on
   the server, `POST /ui/api/board/dismiss` with `{key, sig, until?}`). With Matrix configured
-  (`KNOWLEDGE_MATRIX_URL/ROOM/TOKEN`), a new Needs-you item on an admin's board gives one Matrix message in that room,
+  (`KNOWLEDGE_MATRIX_URL/TOKEN`, the room on Settings or `KNOWLEDGE_MATRIX_ROOM`), a new Needs-you item on an admin's board gives one Matrix message,
   with a link to the item itself, `<KNOWLEDGE_PUBLIC_URL>/ui#/inbox/<key>` (every board item has a stable `key`): once
   per item and version (the key and signature Dismiss uses), at most `needs_per_hour` an hour (admin page, Settings;
   0 = off, default 6; more at once give one summary, the rest wait for room), and none while an admin has the board

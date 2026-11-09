@@ -152,6 +152,14 @@
         <p class="muted">Saved for you, on every device. Click a key and press the new one, with Ctrl or Alt (on a Mac Cmd or Option); Esc cancels.</p>
         <div class="set-keys" id="set-keys-list"></div>
       </form>
+      <form id="set-matrix" class="admin-form" hidden>
+        <h3>Matrix <span class="set-saved muted" id="set-matrix-saved" role="status"></span></h3>
+        <p class="muted">The room the server's messages to admins go to (Needs you, a stalled task, a failed job). Invite the
+          server's bot into the room first. Empty: the room of KNOWLEDGE_MATRIX_ROOM.</p>
+        <label for="set-matrix-room">Room id</label>
+        <input id="set-matrix-room" placeholder="!abc123:example.org" autocomplete="off" spellcheck="false">
+        <div class="actions"><button type="submit" class="btn primary">Save room</button></div>
+      </form>
       <form id="set-notify" class="admin-form">
         <h3>In this browser</h3>
         <label for="set-theme">Theme</label>

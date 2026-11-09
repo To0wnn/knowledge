@@ -924,6 +924,15 @@ async function loadSettings() {
     };
   }
   $("set-start").querySelector('[value="chats"]').hidden = agentsOff();
+  $("set-matrix").hidden = !(me.admin && me.matrix); // only admins get the server's messages
+  $("set-matrix-room").value = me.prefs?.matrix_room || "";
+  $("set-matrix").onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      me.prefs = (await api("/ui/api/me/prefs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ matrix_room: $("set-matrix-room").value.trim() }) })).prefs;
+      $("set-matrix-saved").textContent = "Saved"; clearTimeout(e.target.savedTimer); e.target.savedTimer = setTimeout(() => ($("set-matrix-saved").textContent = ""), 2000);
+    } catch (err) { toast(err.message, true); }
+  };
   setKeysShow();
   $("set-theme").onchange = () => setTheme($("set-theme").value);
   showTheme();
