@@ -1059,6 +1059,25 @@ def knowledge_projects() -> str:
 AGENT_NAMES = {"claude": "Claude Code", "codex": "Codex", "agy": "agy"}
 
 
+def chat_unlanded(c: dict, g) -> str:
+    """Why a chat may not be archived yet: commits not in its base, or (own worktree) files not committed; "" when none
+    or its git is unknown (an older companion). g: the chat folder's git as the companion reports it."""
+    g = g if isinstance(g, dict) else {}
+    if type(g.get("ahead")) is int and g["ahead"] > 0:
+        return f"{g.get('branch') or 'its branch'} has {g['ahead']} commit(s) not in {g.get('base') or 'main'}"
+    if c.get("worktree") and type(g.get("changed")) is int and g["changed"] > 0:
+        return f"its worktree has {g['changed']} uncommitted file(s)"
+    return ""
+
+
+def chat_git_of(mid: str, c: dict):
+    """The chat folder's git from its pc's last report (a round old at most): its own worktree's, else the folder's."""
+    comp = next((r.get("companion") or {} for r in machine_rows() if r["id"] == mid), {})
+    if c.get("worktree"):
+        return (comp.get("chats") or {}).get(c["id"])
+    return next((f.get("git") for f in (comp.get("folders") or {}).get("linked", []) if f.get("path") == c.get("folder")), None)
+
+
 def own_chats() -> list:
     """(machine, chat) for every chat on the pcs of this token: the ones it reports from, and those of the same person's
     other tokens (a person's own, or the admins' own devices marked "self", as machine_key binds them); never a token
@@ -1147,6 +1166,8 @@ def knowledge_chat_close(chat: str = "", chat_id: str = "", id: str = "", force:
     if open:
         update_state(f, lambda c: (c.update(closed=False), chat_add(c, "info", f"Opened again by {who}.")))
         return f"Chat {c['id']} ('{c.get('title') or 'untitled'}') opened again."
+    if why := chat_unlanded(c, chat_git_of(mid, c)):  # an agent closing a chat skips the wrap-up, so the turn-end check too
+        raise ToolError(f"not archived: {why}. Land that work first (merge or deploy), or the owner uses Force archive in the web UI")
     note = f"Archived by {who}" + (f": {reason}" if reason else ".")
     if not force and record:
         mrow = next((mr for mr in machine_rows() if mr["id"] == mid), None)
@@ -7500,12 +7521,11 @@ async def machine_chat_events(request: Request):
                     last = max((i for i, e in enumerate(c["events"]) if e["kind"] == "user"), default=-1)
                     # only a failed turn (usage limit, crash) blocks: a failed or refused tool call is one the agent saw and worked
                     # around, and blocking on it re-ran the whole wrap-up at the next Archive
-                    g = b.get("git") if isinstance(b.get("git"), dict) else {}  # the chat folder's git right at the turn's end (companion 0.43.41+)
                     if any(e["kind"] == "error" for e in c["events"][last + 1:]):  # not written: it stays, under Needs you
                         chat_add(c, "info", "Not archived: the turn that records this chat in the memos failed. Fix that, then Archive again.")
-                    elif type(g.get("ahead")) is int and g["ahead"] > 0:  # memos that call it done while it sits on a branch: twice in Nov 2026
-                        chat_add(c, "info", f"Not archived: {g.get('branch') or 'its branch'} has {g['ahead']} commit(s) not in "
-                                 f"{g.get('base') or 'main'}. Land them (merge or deploy), then Archive again; Force archive closes it as it is.")
+                    # the chat folder's git right at the turn's end (companion 0.43.41+); memos once called work live that sat on a branch
+                    elif why := chat_unlanded(c, b.get("git")):
+                        chat_add(c, "info", f"Not archived: {why}. Land it (merge or deploy), then Archive again; Force archive closes it as it is.")
                     else:
                         c["closed"] = True
         if worked and not chat_works(c) and not any(k == "info" and t.startswith("Stopped") for k, t, _ in events):  # the owner's own stop: nothing to come back to

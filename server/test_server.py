@@ -1159,7 +1159,16 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert "titled 'Renamed by another chat'" in call("knowledge_chat_title", {"title": "Renamed by another chat", "chat": mc}, fr)[1]
     assert chat()["title"] == "Renamed by another chat", "another chat of the owner renames it"
     assert "not on your pcs" in call("knowledge_chat_title", {"title": "x", "chat": mc}, et)[1], "never another person's chat"
+    assert srv.chat_unlanded({}, {"ahead": 2, "branch": "b", "base": "main"}) == "b has 2 commit(s) not in main"
+    assert srv.chat_unlanded({"worktree": True}, {"ahead": 0, "changed": 1}) == "its worktree has 1 uncommitted file(s)"
+    assert srv.chat_unlanded({}, {"ahead": 0, "changed": 4}) == "", "the folder's own checkout: its files may be someone else's"
+    assert srv.chat_unlanded({}, None) == "", "an older companion sends no git: not checked"
     # Another agent archives the chat (MCP)
+    ahead = lambda n: http("POST", "/machine/report", {"version": "0.43.41", "folders": {"linked": [{"path": "/home/x/garden", "project": "garden",
+                           "git": {"branch": "feat", "base": "main", "ahead": n, "behind": 0, "changed": 0}}]}}, token=fr, headers=pc)
+    ahead(2)
+    assert "feat has 2 commit(s) not in main" in call("knowledge_chat_close", {"chat": mc, "force": True}, fr)[1] and not chat()["closed"], "an agent cannot close past unlanded work"
+    ahead(0)
     assert "force-archived" in call("knowledge_chat_close", {"chat": mc, "force": True, "reason": "limit reached"}, fr)[1]
     assert chat()["closed"] is True and not on_board()
     assert "opened again" in call("knowledge_chat_close", {"chat": mc, "open": True}, fr)[1]
