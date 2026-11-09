@@ -743,7 +743,7 @@ def weak_answer(query: str, hits: list[dict]) -> bool:
         return True
     entry = index.files.get(hits[0]["path"])
     text = (entry[3] or entry[2].lower()) if entry else ""
-    return hits[0]["score"] < DOUBT_SCORE and kb_lint.query_coverage(fold(query), text) < MIN_COVERAGE
+    return hits[0]["score"] < DOUBT_SCORE and kb_lint.query_coverage(query.translate(FOLD), text)  # case kept: it spots acronyms (PA, VM) < MIN_COVERAGE
 
 
 def gaps_summary(n: int = 30) -> list[dict]:
@@ -1302,9 +1302,9 @@ def knowledge_search(pattern: str = "", query: str = "", search: str = "", text:
     # costs at most SEARCH_SECONDS instead of freezing the whole server (security review 20 Oct 2026).
     try:
         rx_i = regex.compile(target, regex.I | regex.M | regex.V0)
-        # Fast path: lowercase pattern on the lowercase copy. Not when the pattern has uppercase escapes (\S, \W, \D,
-        # \B, \A, \Z), whose meaning would change by lowercasing.
-        rx_low = None if re.search(r"\\[A-Z]", target) else regex.compile(fold(target), regex.M | regex.V0)
+        # Fast path: folded pattern on the folded copy (accents do not count). Not when the pattern has uppercase escapes
+        # (\S, \W, \D, \B, \A, \Z), code escapes (\x, \u, \p) or a class ([à-ÿ]), whose meaning folding would change.
+        rx_low = None if re.search(r"\\[A-Zxup]|\[", target) else regex.compile(fold(target), regex.M | regex.V0)
     except regex.error as e:
         raise ToolError(f"invalid regex: {e}")
     try:

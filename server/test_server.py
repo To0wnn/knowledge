@@ -2770,6 +2770,8 @@ def main():
             assert hits and hits[0]["path"] == "memory/project_accent.md" and hits[0]["hits"][0]["line"] == 5, (q, hits)
         err, text = call("knowledge_search", {"pattern": "geinstalleerd"})
         assert not err and "memory/project_accent.md:5:" in text, text
+        err, text = call("knowledge_search", {"pattern": "ge[ïí]nstalleerd|[ø-ÿ]berall"})  # a class keeps its meaning (no fold)
+        assert not err and "memory/project_accent.md:5:" in text, text
         # A catastrophic regex costs at most a few seconds and never blocks other requests.
         t0 = time.time()
         err, text = call("knowledge_search", {"pattern": "(a+)+$"})

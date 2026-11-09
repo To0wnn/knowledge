@@ -1608,7 +1608,7 @@ function ckSubbar(card) {
     }
   }
   card.subbar.classList.toggle("open", open);
-  if (card.shellOut) card.subbar.append(card.shellOut);
+  if (card.shellOut) { card.shellOut.hidden = phone && !open; card.subbar.append(card.shellOut); }
   if (had && fold.isConnected) fold.focus({ preventScroll: true });
 }
 // A background shell's output, live: asking keeps it watched, so the pc's companion sends the file's tail (~2 s).

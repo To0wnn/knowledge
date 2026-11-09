@@ -1249,7 +1249,7 @@ class Live:
                 seen_commands(self.agent, ((ev["response"].get("response") or {}).get("commands")) or [])
             return
         if kind == "user" and (m := BG_OUT.search(line)):
-            self.bg_out[m[1]] = json.loads(f'"{m[2]}"')
+            self.bg_out.setdefault(m[1], json.loads(f'"{m[2]}"'))  # the first: Claude Code's own launch answer, not a file quoting it
         evs = parse(self.agent, line, self.st)
         if any(e[0] == "bg" for e in evs):  # background shells: only their number goes to the server
             for e in evs:
