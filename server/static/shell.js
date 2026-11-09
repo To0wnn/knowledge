@@ -88,7 +88,7 @@ function applyRoute() {
   const subRoute = r.view === "chats" && /^([0-9a-f]{12})\/sub\/(.+)$/.exec(r.arg || "");
   if (subRoute) { // #/chats/<chat>/sub/<id>: a subagent as a chat of its own
     const c = ck.chats.find((x) => x.id === subRoute[1]);
-    ck.view = c ? ckKey(ckSubCard(c, subRoute[2]).meta) : "";
+    ck.view = c ? ckKey(ckSubCard(c, subRoute[2]).meta) : r.arg; // a reload: ckSummary resolves it once the chats are known
   } else if (r.view === "chats" && r.arg === "new") { // #/chats/new: the draft (kept with what is typed, unless a pc asks for a new one)
     const d = ck.cards.get(ckKey(CK_DRAFT));
     ck.view = ckKey(d && !ck.draftFor ? d.meta : ckDraft(ck.draftFor || "").meta); ck.draftFor = "";

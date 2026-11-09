@@ -84,8 +84,10 @@ async function ckSummary() {
   if (solo() && !ck.view) ck.view = shellRoute.arg; // its chat was dropped above: below it comes back or the tab becomes the app, never an empty page
   const opened = ck.view && !ck.cards.has(ck.view);
   if (opened) { // a route's chat id (or an older pc/id key) once the chats are known
-    const c = ck.chats.find((x) => x.id === ck.view || ckKey(x) === ck.view), hit = ckFindWorker(ck.view);
-    if (c) ck.view = ckKey(ckCard(c).meta);
+    const sub = /^([0-9a-f]{12})\/sub\/(.+)$/.exec(ck.view), sc = sub && ck.chats.find((x) => x.id === sub[1]);
+    const c = !sub && ck.chats.find((x) => x.id === ck.view || ckKey(x) === ck.view), hit = !sub && ckFindWorker(ck.view);
+    if (sc) ck.view = ckKey(ckSubCard(sc, sub[2]).meta);
+    else if (c) ck.view = ckKey(ckCard(c).meta);
     else if (hit) ck.view = ckKey(ckWorkerCard(hit.m, hit.w).meta);
     else { // gone or never there: the list, without a dead chat in the URL
       ck.view = "";
@@ -1496,7 +1498,10 @@ function ckEvents(card, res) {
       const msg = last && last.classList.contains("agent") ? last : card.log.appendChild(el("div", "ck-msg agent md"));
       msg.dataset.raw = (msg.dataset.raw || "") + e.text;
       dirty.add(msg);
-    } else card.log.append(e.kind === "user" ? ckUserMsg(card, e.text) : ckLine(card, e));
+    } else {
+      if (e.kind === "user") card.failedWrap = false; // a new message or a retried Archive: only the newest wrap-up counts
+      card.log.append(e.kind === "user" ? ckUserMsg(card, e.text) : ckLine(card, e));
+    }
   }
   for (const msg of dirty) msg.innerHTML = renderMd(msg.dataset.raw.replace(/^\n+/, ""));
   if (res.events.length) {
