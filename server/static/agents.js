@@ -932,15 +932,28 @@ async function loadSettings() {
     };
   }
   $("set-start").querySelector('[value="chats"]').hidden = agentsOff();
-  $("set-matrix").hidden = !(me.admin && me.matrix); // only admins get the server's messages
-  $("set-matrix-room").value = me.prefs?.matrix_room || "";
-  $("set-matrix").onsubmit = async (e) => {
-    e.preventDefault();
-    try {
-      me.prefs = (await api("/ui/api/me/prefs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ matrix_room: $("set-matrix-room").value.trim() }) })).prefs;
-      $("set-matrix-saved").textContent = "Saved"; clearTimeout(e.target.savedTimer); e.target.savedTimer = setTimeout(() => ($("set-matrix-saved").textContent = ""), 2000);
-    } catch (err) { toast(err.message, true); }
-  };
+  const mx = me.matrix; // null for a non-admin: only admins get the server's messages
+  $("set-matrix").hidden = !mx;
+  if (mx) {
+    $("set-matrix-url").value = me.prefs?.matrix_url || ""; $("set-matrix-url").placeholder = mx.url || "https://matrix.example.org";
+    $("set-matrix-room").value = me.prefs?.matrix_room || ""; $("set-matrix-room").placeholder = mx.room || "!abc123:example.org";
+    const tokenHint = () => ($("set-matrix-token").placeholder = me.matrix.own_token ? "saved (type to replace)" : "the server's bot"); tokenHint();
+    $("set-matrix-token").value = ""; $("set-matrix-token-clear").checked = false; $("set-matrix-token-clear").hidden = !mx.own_token;
+    $("set-matrix").onsubmit = async (e) => {
+      e.preventDefault();
+      const body = { matrix_url: $("set-matrix-url").value.trim(), matrix_room: $("set-matrix-room").value.trim() }, tok = $("set-matrix-token").value.trim();
+      if (tok) body.matrix_token = tok; else if ($("set-matrix-token-clear").checked) body.matrix_token = "";
+      try {
+        me.prefs = (await api("/ui/api/me/prefs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).prefs;
+        if ("matrix_token" in body) me.matrix.own_token = !!tok;
+        $("set-matrix-token").value = ""; $("set-matrix-token-clear").checked = false; $("set-matrix-token-clear").hidden = !me.matrix.own_token; tokenHint();
+        $("set-matrix-saved").textContent = "Saved"; clearTimeout(e.target.savedTimer); e.target.savedTimer = setTimeout(() => ($("set-matrix-saved").textContent = ""), 2000);
+      } catch (err) { toast(err.message, true); }
+    };
+    $("set-matrix-test").onclick = async () => {
+      try { await api("/ui/api/me/matrix_test", { method: "POST" }); toast("Test message sent", false); } catch (err) { toast(err.message, true); }
+    };
+  }
   setKeysShow();
   $("set-theme").onchange = () => setTheme($("set-theme").value);
   showTheme();

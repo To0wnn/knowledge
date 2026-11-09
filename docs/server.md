@@ -108,8 +108,10 @@ the index keeps its text and no history versions appear.
 Notices (a Needs-you item, a stalled or idle task, a worker waiting for its usage limit, a risky YOLO action, shared
 folders that stop answering) go to:
 
-- Matrix, when `KNOWLEDGE_MATRIX_URL` and `KNOWLEDGE_MATRIX_TOKEN` (the bot) are set in `.env`: to the room each admin
-  picked on the Settings page (a room id; invite the bot first), or `KNOWLEDGE_MATRIX_ROOM` when no admin picked one;
+- Matrix: to each admin's homeserver, room and bot token from the Settings page, a field left empty taken from `.env`
+  (`KNOWLEDGE_MATRIX_URL`, `_ROOM`, `_TOKEN`). Another homeserver than `.env`'s needs the admin's own token (the `.env`
+  bot's token is never sent elsewhere); that token is kept apart in `matrix_tokens.json` (0600) and never shown again.
+  Admins on the same room get one message; Settings has a button for a test message;
 - an [ntfy](https://ntfy.sh) topic, when `KNOWLEDGE_NTFY_URL` is set to the topic's full URL (`https://ntfy.example.com/knowledge`),
   plus `KNOWLEDGE_NTFY_TOKEN` when the topic needs one. Take a long topic name on a public server: the notices name
   your projects and tasks. A self-hosted server reaches an iPhone through a relay (`upstream-base-url`, see the

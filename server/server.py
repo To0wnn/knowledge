@@ -4337,7 +4337,8 @@ async def ui_me(request: Request):
            # the agent views only when one of this person's tokens may be steered from here
            "agents": any(own_token(cfg, dev) for cfg in read_json(TOKENS_FILE, {}).values()),
            "stt": bool(os.environ.get("KNOWLEDGE_STT_URL")),
-           "matrix": bool(os.environ.get("KNOWLEDGE_MATRIX_URL") and os.environ.get("KNOWLEDGE_MATRIX_TOKEN"))}
+           "matrix": {"url": os.environ.get("KNOWLEDGE_MATRIX_URL", ""), "room": os.environ.get("KNOWLEDGE_MATRIX_ROOM", ""),
+                      "own_token": bool(read_json(MATRIX_TOKENS_FILE, {}).get(dev.get("user") or ""))} if dev.get("admin") else None}
     if dev.get("impersonator"):
         res["impersonator"] = dev["impersonator"]
     return JSONResponse(res)
@@ -4380,6 +4381,9 @@ async def ui_transcribe(request: Request):
 PREFS_FILE = ADMIN_DIR / "user_prefs.json"  # per person, set on the Settings page: {user: {chat_default: {agent, id, effort}, keys: {action: combo}, matrix_room, <PREF_CHOICES key>: value}}
 PREF_CHOICES = {"grid_open": ("tab", "here"), "grid_group": ("project", "together"), "send_key": ("ctrl", "enter", "shift"), "start_page": ("chats", "tasks", "notes", "map")}  # the first is the default: not stored
 
+MATRIX_TOKENS_FILE = ADMIN_DIR / "matrix_tokens.json"  # {user: token} for an admin's own homeserver; never sent back to the page
+MATRIX_URL = re.compile(r"https?://[^\s/?#]{1,255}(/[^\s?#]{0,200})?")
+MATRIX_TOKEN = re.compile(r"[\x21-\x7e]{8,512}")
 MATRIX_ROOM_ID = re.compile(r"![^\s:/]{1,255}(:[^\s/]{1,255})?")  # a room id, not an alias: the bot sends by id; room v12 ids have no :server
 PREF_KEY_ACTION = re.compile(r"[a-z_]{1,20}")
 PREF_KEY_COMBO = re.compile(r"(Ctrl\+|Alt\+)(Shift\+)?(\+|[^\s+]{1,12})")  # without Ctrl or Alt a key would be text in a box; Ctrl+Alt is AltGr
@@ -4388,14 +4392,14 @@ PREF_KEY_COMBO = re.compile(r"(Ctrl\+|Alt\+)(Shift\+)?(\+|[^\s+]{1,12})")  # wit
 @server.custom_route("/ui/api/me/prefs", methods=["POST"])
 async def ui_me_prefs(request: Request):
     """Any of {chat_default: {agent, id, effort} | null, chat_reader: {agent, id, effort} | null, chat_review: {agent, id, effort} | null,
-    keys: {action: combo}, matrix_room, grid_open, grid_group, send_key, start_page}, for this person on every device. keys: the shortcuts that change,
+    keys: {action: combo}, matrix_room, matrix_url, matrix_token (admins; the token is stored apart and never sent back), grid_open, grid_group, send_key, start_page}, for this person on every device. keys: the shortcuts that change,
     null = back to the default; checked for shape only: the page owns the actions. chat_default, chat_reader, chat_review: the models for
     new chats, reading/subagents, and review ("" id or effort = the agent's own); checked for shape only: a pc that does not run it falls
     back in the page. Keys left out stay as they are."""
     user = device.get().get("user") or ""
     try:
         b = await request.json()
-        if not isinstance(b, dict) or not b or set(b) - {"chat_default", "chat_reader", "chat_review", "keys", "matrix_room", *PREF_CHOICES}:
+        if not isinstance(b, dict) or not b or set(b) - {"chat_default", "chat_reader", "chat_review", "keys", "matrix_room", "matrix_url", "matrix_token", *PREF_CHOICES}:
             raise ValueError("unknown setting")
         for k, allowed in PREF_CHOICES.items():
             if k in b and b[k] not in allowed:
@@ -4407,6 +4411,12 @@ async def ui_me_prefs(request: Request):
                                           and (d.get("id") == "" or MODEL_ID.fullmatch(str(d.get("id", ""))))
                                           and d.get("effort", "") in ("", *EFFORTS)):
                     raise ValueError(f"{role_key} is {{agent, id, effort}}")
+        if {"matrix_room", "matrix_url", "matrix_token"} & set(b) and not device.get().get("admin"):
+            raise ValueError("only admins get the server's Matrix messages")
+        if "matrix_url" in b and not (b["matrix_url"] == "" or (isinstance(b["matrix_url"], str) and MATRIX_URL.fullmatch(b["matrix_url"]))):
+            raise ValueError("matrix_url is the homeserver's address, like https://matrix.example.org, or empty")
+        if "matrix_token" in b and not (b["matrix_token"] == "" or (isinstance(b["matrix_token"], str) and MATRIX_TOKEN.fullmatch(b["matrix_token"]))):
+            raise ValueError("matrix_token is an access token without spaces, or empty")
         if "matrix_room" in b and not (b["matrix_room"] == "" or (isinstance(b["matrix_room"], str) and MATRIX_ROOM_ID.fullmatch(b["matrix_room"]))):
             raise ValueError("matrix_room is a room id like !abc:example.org, or empty")
         if "keys" in b and not (isinstance(b["keys"], dict) and len(b["keys"]) <= 40 and all(
@@ -4424,10 +4434,11 @@ async def ui_me_prefs(request: Request):
                 mine.pop(k, None)
                 if b[k] != allowed[0]:
                     mine[k] = b[k]
-        if "matrix_room" in b:
-            mine.pop("matrix_room", None)
-            if b["matrix_room"]:
-                mine["matrix_room"] = b["matrix_room"]
+        for k in ("matrix_room", "matrix_url"):
+            if k in b:
+                mine.pop(k, None)
+                if b[k]:
+                    mine[k] = b[k].rstrip("/")
         if "keys" in b:
             keys = {**mine.pop("keys", {}), **b["keys"]}
             keys = {a: c for a, c in keys.items() if c}
@@ -4441,7 +4452,25 @@ async def ui_me_prefs(request: Request):
                 else:
                     mine[role_key] = {"agent": d["agent"], "id": d.get("id", ""), "effort": d.get("effort", "")}
     await asyncio.to_thread(update_state, PREFS_FILE, change)
+    if "matrix_token" in b:
+        await asyncio.to_thread(update_state, MATRIX_TOKENS_FILE, lambda t: t.update({user: b["matrix_token"]}) if b["matrix_token"] else t.pop(user, None))
     return JSONResponse({"ok": True, "prefs": read_json(PREFS_FILE, {}).get(user, {})})
+
+
+@server.custom_route("/ui/api/me/matrix_test", methods=["POST"])
+async def ui_me_matrix_test(request: Request):
+    """One test message to this admin's own Matrix target (Settings), sent now, so a wrong room or token shows at once."""
+    user = device.get().get("user") or ""
+    if not device.get().get("admin"):
+        return JSONResponse({"error": "admins only"}, status_code=403)
+    target = matrix_target(user)
+    if not target:
+        return JSONResponse({"error": "no homeserver, room or token: fill them in here, or in the server's .env"}, status_code=400)
+    try:
+        await asyncio.to_thread(matrix_send, *target, "Test from the knowledge server: notices for you come to this room.")
+    except (OSError, ValueError) as e:
+        return JSONResponse({"error": f"Matrix refused: {e}"[:300]}, status_code=502)
+    return JSONResponse({"ok": True})
 
 
 # ---------------------------------------------------------------- admin: users, projects, tokens (admins only)
@@ -4473,30 +4502,47 @@ def signed_in(handler):
     return admin_only(handler, everyone=True)
 
 
-def matrix_rooms() -> list[str]:
-    """The Matrix rooms an admin picked on Settings (the bot of KNOWLEDGE_MATRIX_TOKEN must be in them); none picked =
-    KNOWLEDGE_MATRIX_ROOM, so an installation that only has .env keeps working."""
-    prefs = read_json(PREFS_FILE, {})
-    picked = sorted({prefs.get(u, {}).get("matrix_room") for u in ADMINS} - {None, ""})
-    return picked or [r for r in [os.environ.get("KNOWLEDGE_MATRIX_ROOM", "")] if r]
+def matrix_target(user: str) -> tuple[str, str, str] | None:
+    """(homeserver, room, token) for one admin: what they set on Settings, the rest from .env (KNOWLEDGE_MATRIX_URL,
+    _ROOM, _TOKEN). An own homeserver needs an own token: the .env bot's token is never sent to another server."""
+    p, env = read_json(PREFS_FILE, {}).get(user, {}), os.environ.get
+    url = p.get("matrix_url") or env("KNOWLEDGE_MATRIX_URL", "").rstrip("/")
+    own = read_json(MATRIX_TOKENS_FILE, {}).get(user, "")
+    token = own or (env("KNOWLEDGE_MATRIX_TOKEN", "") if url == env("KNOWLEDGE_MATRIX_URL", "").rstrip("/") else "")
+    room = p.get("matrix_room") or env("KNOWLEDGE_MATRIX_ROOM", "")
+    return (url, room, token) if url and room and token else None
+
+
+def matrix_targets() -> list[tuple[str, str, str]]:
+    """Every admin's target once; two admins on the same room get one message."""
+    return sorted({t for u in ADMINS if (t := matrix_target(u))})
+
+
+def matrix_send(url: str, room: str, token: str, text: str):
+    req = urllib.request.Request(
+        f"{url}/_matrix/client/v3/rooms/{urllib.parse.quote(room)}/send/m.room.message/kn-{time.time_ns()}",
+        method="PUT", data=json.dumps({"msgtype": "m.text", "body": text}).encode(),
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+    urllib.request.urlopen(req, timeout=15).close()
 
 
 def notify(text: str):
     """One message to the admin, to Matrix and/or ntfy, in the background: a failure never fails the request, but shows on
     the admin page (System) and in the container log."""
-    url, token = os.environ.get("KNOWLEDGE_MATRIX_URL", ""), os.environ.get("KNOWLEDGE_MATRIX_TOKEN", "")
-    rooms = matrix_rooms()
+    targets = matrix_targets()
     ntfy, ntfy_token = os.environ.get("KNOWLEDGE_NTFY_URL", ""), os.environ.get("KNOWLEDGE_NTFY_TOKEN", "")
 
     def to_matrix():
-        if not (url and rooms and token):
-            raise RuntimeError("KNOWLEDGE_MATRIX_URL/TOKEN not set, or no room (Settings, or KNOWLEDGE_MATRIX_ROOM)")
-        for room in rooms:
-            req = urllib.request.Request(
-                f"{url}/_matrix/client/v3/rooms/{urllib.parse.quote(room)}/send/m.room.message/kn-{time.time_ns()}",
-                method="PUT", data=json.dumps({"msgtype": "m.text", "body": text}).encode(),
-                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
-            urllib.request.urlopen(req, timeout=15).close()
+        if not targets:
+            raise RuntimeError("no Matrix target: KNOWLEDGE_MATRIX_URL/ROOM/TOKEN in .env, or an admin's own on Settings")
+        failed = []
+        for t in targets:
+            try:
+                matrix_send(*t, text)
+            except Exception as e:  # one admin's broken room must not keep the message from the others
+                failed.append(f"{t[0]} {t[1]}: {e}")
+        if failed:
+            raise RuntimeError("; ".join(failed))
 
     def to_ntfy():
         headers = {"Title": "Knowledge"} | ({"Authorization": f"Bearer {ntfy_token}"} if ntfy_token else {}) \
@@ -4512,7 +4558,7 @@ def notify(text: str):
             print(f"{key}: {e}: {text}", flush=True)
     if ntfy:
         threading.Thread(target=send, args=("ntfy", "ntfy", to_ntfy), daemon=True).start()
-    if not ntfy or (url and rooms and token):  # with neither set, System says so
+    if not ntfy or targets:  # with neither set, System says so
         threading.Thread(target=send, args=("matrix", "Matrix", to_matrix), daemon=True).start()
 
 
@@ -6725,7 +6771,7 @@ def needs_check(now: float) -> int:
     """New items under Needs you on an admin's board: one Matrix message each, once per item version (key + sig, as
     Dismiss), at most NEEDS_PER_HOUR an hour (one summary when more come at once), none while an admin has the board
     open. The first run (or the first after "off") only notes what is there. Off unless Matrix is configured."""
-    if not (os.environ.get("KNOWLEDGE_MATRIX_URL") and os.environ.get("KNOWLEDGE_MATRIX_TOKEN") and matrix_rooms()):
+    if not matrix_targets():
         return 0
     if not NEEDS_PER_HOUR:
         if NEEDS_NOTIFIED.exists():
