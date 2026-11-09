@@ -470,7 +470,7 @@ def wake(me: str, tok: str):
     port = os.environ.get("KNOWLEDGE_COMPANION_PORT") or "47321"
     try:
         key = (KN_HOME / "companion" / "api-key").read_text(encoding="utf-8").strip()
-        req = urllib.request.Request(f"http://127.0.0.1:{port}/local/api/tick", b"{}", method="POST", headers={
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/local/api/tick", b'{"wait": false}', method="POST", headers={
             "Content-Type": "application/json", "Origin": f"http://127.0.0.1:{port}", "X-Companion-Key": key})
         urllib.request.urlopen(req, timeout=3).close()
         note = "knowledge: asked the companion on this pc to look for new tasks now (a worker starts where workers are allowed)."

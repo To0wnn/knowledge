@@ -268,8 +268,11 @@ def plugin_version(agent: str) -> str:
             if got:
                 return got
             # the setup without a plugin: settings.json runs the hooks of a checkout, whose version is what Claude runs
-            hook = re.search(r'"([^"]*?)[\\/]plugin[\\/]hooks[\\/]agent_hooks\.py', (CLAUDE_DIR / "settings.json").read_text(encoding="utf-8"))
-            mf = Path(hook[1].split(" ")[-1].strip("'\"")) / "plugin" / ".claude-plugin" / "plugin.json" if hook else None
+            # the parsed commands, not the file's text: there a Windows path has every backslash doubled
+            hooks = json.loads((CLAUDE_DIR / "settings.json").read_text(encoding="utf-8")).get("hooks") or {}
+            cmds = "\n".join(str(h.get("command", "")) for groups in hooks.values() for g in groups for h in g.get("hooks") or [])
+            hook = re.search(r'(\S+?)[\\/]plugin[\\/]hooks[\\/]agent_hooks\.py', cmds)
+            mf = Path(hook[1].strip("'\"")) / "plugin" / ".claude-plugin" / "plugin.json" if hook else None
             return ".".join(map(str, self_update.version(mf.read_text(encoding="utf-8")))) if mf and mf.is_file() else ""
         paths = (list(CODEX.glob("plugins/cache/*/knowledge/*/.codex-plugin/plugin.json")) if agent == "codex"
                  else [HOME / ".gemini" / "config" / "plugins" / "knowledge" / ".claude-plugin" / "plugin.json"])
@@ -2251,6 +2254,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/local/api/unlink":
                 return self.send(200, {"result": unlink_folder(str(body.get("path", "")))}, origin=o)
             if path == "/local/api/tick":
+                if body.get("wait") is False:  # the wake hook: a running round holds TICK longer than its 3 s timeout
+                    threading.Thread(target=tick, daemon=True).start()
+                    return self.send(200, {"started": True}, origin=o)
                 return self.send(200, tick(), origin=o)
             if path == "/local/api/update-agents":
                 update_agents_soon()
@@ -2789,6 +2795,9 @@ def main(argv: list):
             real_cd, globals()["CLAUDE_DIR"] = CLAUDE_DIR, cd
             try:
                 assert plugin_version("claude") == "7.1.2", plugin_version("claude")
+                win = str(Path(t) / "co").replace("/", "\\")  # as on Windows: backslashes, doubled in the file's JSON
+                (cd / "settings.json").write_text(json.dumps({"hooks": {"Stop": [{"hooks": [{"command": f'python "{win}\\plugin\\hooks\\agent_hooks.py" settled'}]}]}}))
+                assert plugin_version("claude") == ("7.1.2" if os.name == "nt" else ""), plugin_version("claude")  # POSIX: no such path
             finally:
                 globals()["CLAUDE_DIR"] = real_cd
         me = self_state()  # running what is on disk: nothing waits; the checkout this test runs from is one
