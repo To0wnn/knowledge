@@ -1743,7 +1743,13 @@ def tool_job(act: str, tid: str, m: dict):
     A failure keeps what was there, with the error beside it, in the list and in Activity."""
     try:
         try:
-            got = (tools.install if act == "install_tool" else tools.remove)(m, tools.here([a for a in AGENTS if installed(a)]))
+            agents = tools.here([a for a in AGENTS if installed(a)])
+            if act == "install_tool":
+                got = tools.install(m, agents)
+            else:  # a folder another installed tool downloaded too (node) stays
+                done = load("tools.json", {})
+                keep = set().union(*(tools.uses(o) for t, o in tools.catalog().items() if t != tid and done.get(t, {}).get("installed")))
+                got = tools.remove(m, agents, keep)
             set_tool(tid, **got, error="", busy="", at=time.time())
             log("sync", f"{m['name']} {'installed' if got['installed'] else 'removed'}" + (f" {got['version']}" if got.get("version") else ""),
                 mask(got.get("detail", "")))

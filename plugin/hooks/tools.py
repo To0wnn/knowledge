@@ -393,12 +393,12 @@ def fetch(f: dict) -> tuple:
 def delete(name: str) -> tuple:
     target = TOOLS / name
     try:
+        if (TOOLS / ".versions.json").exists():  # first: a delete that fails halfway must make the next install fetch it again
+            save_stamps({k: v for k, v in stamps().items() if k != name})
         if target.is_dir() and not target.is_symlink():
             shutil.rmtree(target)
         elif target.exists() or target.is_symlink():
             target.unlink()
-        if (TOOLS / ".versions.json").exists():
-            save_stamps({k: v for k, v in stamps().items() if k != name})
         return True, "", f"{name} deleted"
     except OSError as e:
         return False, "", f"{name}: {e}"
@@ -522,10 +522,17 @@ def install(m: dict, agents) -> dict:
     return got
 
 
-def remove(m: dict, agents) -> dict:
-    """Every remove step, also after one failed: a registration left behind is worse than a package left behind."""
+def uses(m: dict) -> set:
+    """The folders in {tools} this tool downloads (node is shared by several tools)."""
+    return {s["fetch"]["into"] for s in m.get("install", []) if "fetch" in s}
+
+
+def remove(m: dict, agents, keep=()) -> dict:
+    """Every remove step, also after one failed: a registration left behind is worse than a package left behind.
+    keep: folders another installed tool still uses; their delete steps are skipped."""
     link(m, on=False)
-    failed = [said(s, text, out) for s in steps(m, "remove", agents) for good, out, text in [do(m, s)] if not good]
+    failed = [said(s, text, out) for s in steps(m, "remove", agents) if s.get("delete") not in keep
+              for good, out, text in [do(m, s)] if not good]
     if failed:
         raise RuntimeError("; ".join(failed)[:500])
     return {"installed": False, "ok": None, "version": "", "detail": ""}
@@ -854,6 +861,18 @@ def self_test():
             ok, version, text = fetch({"shasums": API + "/dl/SHASUMS256.txt", "asset": {plat: r"^tool\.jar$"}, "into": "tool.jar"})
             assert ok and (TOOLS / "tool.jar").read_bytes() == b"JAR", text
             assert delete("engine")[0] and not (TOOLS / "engine").exists() and "engine" not in stamps()
+            (TOOLS / "shared").mkdir()
+            (TOOLS / "own").mkdir()
+            save_stamps({**stamps(), "shared": "x", "half": "y"})
+            remove({"name": "x", "remove": [{"delete": "shared"}, {"delete": "own"}]}, [], keep={"shared"})
+            assert (TOOLS / "shared").is_dir() and not (TOOLS / "own").exists(), "a folder another installed tool uses stays"
+            assert uses({"install": [{"fetch": {"into": "node"}}, {"run": ["a"]}]}) == {"node"}
+            (TOOLS / "half").mkdir()
+            real_rmtree, shutil.rmtree = shutil.rmtree, lambda p: (_ for _ in ()).throw(OSError("in use"))
+            try:
+                assert not delete("half")[0] and "half" not in stamps(), "a delete that fails halfway still forgets the version"
+            finally:
+                shutil.rmtree = real_rmtree
             (TOOLS / "pbin").mkdir()
             env = environment({"path": ["{tools}/pbin", "{tools}/none"], "env": {"A": "{tools}/a", "C": "?{tools}/pbin", "D": "?{tools}/none{exe}"}}, {"env": {"B": "b"}})
             assert env["PATH"].split(os.pathsep)[0] == str(TOOLS / "pbin") and env["A"] == str(TOOLS / "a") and env["B"] == "b", env["PATH"][:200]

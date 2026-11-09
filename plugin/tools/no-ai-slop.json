@@ -21,6 +21,7 @@
   ],
   "remove": [
     {"fetch": {"shasums": "https://nodejs.org/dist/latest-v26.x/SHASUMS256.txt", "into": "node", "asset": {"linux-x64": "^node-v[\\d.]+-linux-x64\\.tar\\.xz$", "linux-arm64": "^node-v[\\d.]+-linux-arm64\\.tar\\.xz$", "darwin-x64": "^node-v[\\d.]+-darwin-x64\\.tar\\.gz$", "darwin-arm64": "^node-v[\\d.]+-darwin-arm64\\.tar\\.gz$", "windows-x64": "^node-v[\\d.]+-win-x64\\.zip$", "windows-arm64": "^node-v[\\d.]+-win-arm64\\.zip$"}}},
-    {"run": ["npx", "-y", "skills@latest", "remove", "no-ai-slop", "--global", "--yes"], "env": {"DO_NOT_TRACK": "1"}}
+    {"run": ["npx", "-y", "skills@latest", "remove", "no-ai-slop", "--global", "--yes"], "env": {"DO_NOT_TRACK": "1"}},
+    {"delete": "node"}
   ]
 }
