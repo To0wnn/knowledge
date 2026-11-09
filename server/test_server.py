@@ -824,6 +824,13 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={cid}")[2])["chat"]["title"] == "hello <b>agent</b>", "a short reply keeps the title"
     # A chat goes by the owner's latest message of four words or more: its first line, at most 60 characters, cut at a word.
     long = "please refactor the whole storage layer so that every write goes through one function\nmore"
+    # the board line of an unread turn: a refusal it ended on needs the owner; one the agent got past does not
+    card = lambda *ev: srv.chat_card({"status": "done", "seen": 0, "next": 1, "updated": time.time(),
+                                      "events": [{"kind": "user", "text": "go"}, *({"kind": k, "text": t} for k, t in ev)]})
+    assert card(("tool", "Bash: ls"), ("refused", "Bash rm x")) == ("needs", "refused: Bash rm x")
+    assert card(("refused", "Bash rm x"), ("tool", "Bash: rm y"), ("text", "Done it another way.")) == \
+        ("needs", "replied: Done it another way."), card(("refused", "Bash rm x"), ("tool", "Bash: rm y"), ("text", "Done it another way."))
+    assert card(("refused", "Bash rm x"), ("text", "I could not.")) == ("needs", "refused: Bash rm x")
     assert srv.chat_title(long, "hello") == "please refactor the whole storage layer so that every write…", srv.chat_title(long, "hello")
     assert srv.chat_title("ok go on", "old title") == "old title" and srv.chat_title("yes") == "yes" and len(srv.chat_title("x" * 80)) == 60
     assert srv.chat_title("\n  - fix the  login page bug now", "old") == "fix the login page bug now"

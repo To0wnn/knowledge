@@ -13,7 +13,7 @@ from a phone. The pc side runs in the companion ([companion.md](companion.md)).
   **attention board** (`GET /ui/api/board`); its sidebar badge counts what needs you, on every view and in every
   project. The header filters the list and Tasks to one project ("show all" says how many Needs-you items the filter
   hides) and shows when the fullest usage window resets. The list is grouped: **Needs you**, each row saying why (a
-  chat whose agent answered and you have not opened since, a refused tool call (a permission denied) or error in its last turn; a tool call that only failed (`failed`: a command
+  chat whose agent answered and you have not opened since, a refused tool call (a permission denied, or a hook's deny) that its last turn ended on (one the agent got past with a later tool call shows the reply instead) or an error in its last turn; a tool call that only failed (`failed`: a command
   with a non-zero exit, a tool error, which the agent sees and works around) is no reason, its reply is, an approval
   it asks, a terminal session on one of your pcs that asks approval (see below), a chat turn or running worker with no output for 30 minutes (admin page, Settings, `quiet_minutes`; 0 = off;
   only a notice, nothing is stopped: a long build is quiet too; a worker counts its log and its hook after each tool call, so agy, whose `-p` logs nothing until it ends, is covered), a failed worker of the last week with the companion's reason (`why`), a worker whose pc went offline ("pc

@@ -6428,8 +6428,11 @@ def chat_card(c: dict) -> tuple[str, str]:
     stopped = any(e["kind"] == "info" and e["text"].startswith("Stopped") for e in turn)  # the owner's own stop: nothing to answer
     # no "seen": a chat from before 0.17, read as far as the board knows (else every old chat would need you after an update)
     if c.get("seen", c.get("next", 0)) < c.get("next", 0) and not stopped and time.time() - (c.get("updated") or 0) < BOARD_FAILED:
-        if refused := first("refused"):
-            return "needs", f"refused: {refused}"
+        # a refusal the agent got past (another tool call came after it, e.g. the same step done another way) is not
+        # what the turn ended on: the reply is (a chat showed "refused: ..." over a finished turn, 9 Nov 2026)
+        ref = max((i for i, e in enumerate(turn) if e["kind"] == "refused"), default=-1)
+        if ref >= 0 and not any(e["kind"] == "tool" for e in turn[ref + 1:]):
+            return "needs", "refused: " + " ".join(turn[ref]["text"].split())[:140]
         if err := first("error"):
             return "needs", f"failed: {err}"
         return "needs", "replied: " + (" ".join("".join(e["text"] for e in turn if e["kind"] == "text").split())[-140:] or first("info") or "done") \
