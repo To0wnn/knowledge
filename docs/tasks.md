@@ -56,7 +56,8 @@ The companion that starts workers is described in [companion.md](companion.md); 
 - **Where tasks show.** With Agents (remote control on) the sidebar has no Tasks entry and `#/tasks` opens the Agents
   list; the Tasks list stays for a person without Agents. In Agents: Needs you: approvals, results for a person, lines past their date, and a person's
   own lines ("for <name>", the same three answers). Queued: the open lines that wait or may start, with "Start on <pc>";
-  Assign… and Cancel task in the ⋯ menu, Remove (read) on a person's result. On the desktop grid one line of chips on top lists the queued tasks of the picked
+  Assign… and Cancel task in the ⋯ menu, Remove (read) on a person's result. On the desktop grid, on top: the running workers (and stopped ones that need you) as compact cards with their
+  progress, Follow and Stop, and one line of chips that lists the queued tasks of the picked
   project (all projects: with the project's name; a chip opens the task in the list). An owner that is a project, device token or pc name (`trade`, `gema`) is
   no person: a session there takes the line at its next turn (`agent_owner`), so it queues "for a session of <name>".
 
