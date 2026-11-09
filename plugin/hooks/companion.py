@@ -19,6 +19,7 @@ Standard library only; Linux, macOS and Windows.
 """
 from __future__ import annotations  # X | None on Python 3.9 (macOS's /usr/bin/python3)
 import atexit
+import base64
 import contextlib
 import datetime
 import hashlib
@@ -1040,15 +1041,41 @@ def agy_rate_read(now: float):
         old = json.loads(f.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         old = {}
-    if now - old.get("at", 0) >= CODEX_READ_EVERY and AGY_TOKEN.exists():
+    if now - old.get("at", 0) >= CODEX_READ_EVERY and installed("agy"):
         write_json(f, {**old, "at": now})
         threading.Thread(target=_agy_rate_ask, args=(f, old.get("error", "")), daemon=True).start()
     return kept_windows(f, now)
 
 
+def _agy_token_text() -> str:
+    """agy's saved login (JSON): the OS keyring as go-keyring keeps it (service "gemini", user "antigravity"; seen in
+    Windows Credential Manager as "gemini:antigravity", 9 Nov 2026), else the file agy writes without a keyring."""
+    if AGY_TOKEN.exists():
+        return AGY_TOKEN.read_text(encoding="utf-8")
+    if os.name == "nt":
+        ctypes, advapi, CREDENTIAL = token_store._windows()
+        cred = ctypes.POINTER(CREDENTIAL)()
+        if not advapi.CredReadW("gemini:antigravity", 1, 0, ctypes.byref(cred)):  # 1 = CRED_TYPE_GENERIC
+            return ""
+        try:
+            return ctypes.string_at(cred.contents.CredentialBlob, cred.contents.CredentialBlobSize).decode("utf-8")
+        finally:
+            advapi.CredFree(cred)
+    # shortcut: macOS and Linux keyring not tested with a real agy; test there when such a pc runs agy
+    cmd = (["security", "find-generic-password", "-s", "gemini", "-a", "antigravity", "-w"] if sys.platform == "darwin"
+           else ["secret-tool", "lookup", "service", "gemini", "username", "antigravity"])
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if out.startswith("go-keyring-base64:"):  # how go-keyring stores a value in the macOS Keychain
+        out = base64.b64decode(out.split(":", 1)[1]).decode("utf-8")
+    return out
+
+
 def _agy_token() -> tuple:
-    """(access token, its expiry as epoch) from agy's token file."""
-    tok = json.loads(AGY_TOKEN.read_text(encoding="utf-8")).get("token") or {}
+    """(access token, its expiry as epoch) from agy's saved login."""
+    tok = json.loads(_agy_token_text() or "{}").get("token") or {}
     return str(tok.get("access_token") or ""), agent_hooks.limits.epoch(tok.get("expiry")) or 0
 
 
