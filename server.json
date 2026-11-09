@@ -7,11 +7,11 @@
     "url": "https://github.com/To0wnn/knowledge",
     "source": "github"
   },
-  "version": "0.43.25",
+  "version": "0.43.26",
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/to0wnn/knowledge:0.43.25",
+      "identifier": "ghcr.io/to0wnn/knowledge:0.43.26",
       "transport": {
         "type": "streamable-http",
         "url": "http://localhost:8766/mcp",

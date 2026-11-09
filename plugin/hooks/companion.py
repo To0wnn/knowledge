@@ -1094,6 +1094,38 @@ def _agy_token() -> tuple:
     return str(tok.get("access_token") or ""), agent_hooks.limits.epoch(tok.get("expiry")) or 0
 
 
+_AGY_REFRESH = {}  # the OAuth client of agy that renewed its token, and the token: in memory only
+
+
+def _agy_refresh() -> tuple:
+    """(access token, expiry) renewed from agy's saved refresh token, or ("", 0). On a pc without a keyring agy keeps a
+    renewed token in memory only (agy 1.5.3, 9 Nov 2026), so its file stays expired after the first hour. Uses agy's own
+    OAuth client, read from the installed agy binary at run time (never stored here): the pair that renews is kept."""
+    if _AGY_REFRESH.get("expiry", 0) > time.time() + 60:
+        return _AGY_REFRESH["access"], _AGY_REFRESH["expiry"]
+    refresh = (json.loads(_agy_token_text() or "{}").get("token") or {}).get("refresh_token")
+    exe = shutil.which("agy")
+    if not refresh or not exe:
+        return "", 0
+    pairs = [_AGY_REFRESH["client"]] if "client" in _AGY_REFRESH else []
+    if not pairs:
+        data = Path(os.path.realpath(exe)).read_bytes()
+        pairs = [(i.decode(), c.decode()) for i in sorted(set(re.findall(rb"\d+-[a-z0-9]{32}\.apps\.googleusercontent\.com", data)))
+                 for c in sorted(set(re.findall(rb"GOCSPX-[A-Za-z0-9_-]{28}", data)))]
+    for cid, secret in pairs:
+        body = urllib.parse.urlencode({"client_id": cid, "client_secret": secret, "refresh_token": refresh,
+                                       "grant_type": "refresh_token"}).encode()
+        try:
+            with urllib.request.urlopen("https://oauth2.googleapis.com/token", body, timeout=15) as r:
+                got = json.loads(r.read().decode("utf-8"))
+        except (OSError, ValueError):
+            continue
+        if got.get("access_token"):
+            _AGY_REFRESH.update(client=(cid, secret), access=got["access_token"], expiry=time.time() + int(got.get("expires_in") or 0))
+            return _AGY_REFRESH["access"], _AGY_REFRESH["expiry"]
+    return "", 0
+
+
 def _agy_rate_ask(f, last_error: str):
     got, err = None, ""
     try:
@@ -1105,8 +1137,10 @@ def _agy_rate_ask(f, last_error: str):
             subprocess.run(cmd, capture_output=True, timeout=60, stdin=subprocess.DEVNULL,
                            **({"creationflags": workers.WIN_FLAGS} if os.name == "nt" else {}))  # renews the token, asks no model
             access, expiry = _agy_token()
-        if not access:
-            raise LookupError("agy has no access token (signed out?)")
+        if not access or expiry < time.time() + 60:  # agy kept the renewed token to itself
+            access, expiry = _agy_refresh() or (access, expiry)
+        if not access or expiry < time.time() + 60:
+            raise LookupError("agy's token expired and could not be renewed (signed out?)")
         # proxies from the environment only: macOS's system proxy lookup can hang in a background thread (CI, 2 Nov 2026)
         opener = urllib.request.build_opener(urllib.request.ProxyHandler(urllib.request.getproxies_environment()))
 
