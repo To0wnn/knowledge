@@ -69,7 +69,7 @@
 }
 .cmp *, .cmp *::before, .cmp *::after { box-sizing: border-box; }
 .cmp svg { width: 18px; height: 18px; flex: none; }
-.cmp h2 { margin: 0 0 4px; font-size: 26px; line-height: 1.2; font-weight: 650; }
+.cmp h2 { margin: 0 0 4px; font-size: 26px; line-height: 1.2; font-weight: 600; }
 .cmp h3 { margin: 0; font-size: 16px; font-weight: 600; }
 .cmp :focus-visible { outline: 2px solid var(--act); outline-offset: 2px; }
 .cmp button, .cmp input, .cmp select { font: inherit; color: inherit; }
@@ -85,7 +85,7 @@
 .cmp .cmp-brand { display: flex; align-items: center; gap: 12px; min-width: 0; margin-right: auto; }
 .cmp .cmp-orb { position: relative; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; color: var(--on-act); background: var(--act); }
 .cmp .cmp-orb svg { width: 22px; height: 22px; }
-.cmp .cmp-brand-name { font-weight: 650; font-size: 16px; }
+.cmp .cmp-brand-name { font-weight: 600; font-size: 16px; }
 .cmp .cmp-brand-host { color: var(--muted); font-size: 13px; }
 .cmp .cmp-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
 /* a status chip: never clickable, so no border and the default cursor */
