@@ -27,6 +27,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import shutil
 import socket
 import socketserver
@@ -98,6 +99,7 @@ PROCESS = {"agy": os.environ.get("KNOWLEDGE_AGY_PROCESS") or "agy",  # other nam
 MISSING = {"missing": True}  # a setting that was not there: unchecking YOLO removes it again
 LOCK = threading.RLock()
 TICK = threading.Lock()  # one round at a time: the minute loop and the page's "Wake ready tasks now"
+WAKE = threading.Event()  # a knowledge write (the wake hook): the minute loop's next round starts now
 TRUST_KEYS = ("keep_trusted", "codex_trusted")  # what trust() keeps in state.json; a round never writes them
 
 
@@ -268,11 +270,11 @@ def plugin_version(agent: str) -> str:
             if got:
                 return got
             # the setup without a plugin: settings.json runs the hooks of a checkout, whose version is what Claude runs
-            # the parsed commands, not the file's text: there a Windows path has every backslash doubled
             hooks = json.loads((CLAUDE_DIR / "settings.json").read_text(encoding="utf-8")).get("hooks") or {}
-            cmds = "\n".join(str(h.get("command", "")) for groups in hooks.values() for g in groups for h in g.get("hooks") or [])
-            hook = re.search(r'(\S+?)[\\/]plugin[\\/]hooks[\\/]agent_hooks\.py', cmds)
-            mf = Path(hook[1].strip("'\"")) / "plugin" / ".claude-plugin" / "plugin.json" if hook else None
+            scripts = (Path(w.strip("'\"")) for groups in hooks.values() for g in groups for h in g.get("hooks") or []
+                       for w in shlex.split(str(h.get("command", "")), posix=os.name != "nt"))  # Windows: keep backslashes
+            co = next((p.parents[2] for p in scripts if p.suffix == ".py" and p.parent.name == "hooks" and p.parent.parent.name == "plugin"), None)
+            mf = co / "plugin" / ".claude-plugin" / "plugin.json" if co else None
             return ".".join(map(str, self_update.version(mf.read_text(encoding="utf-8")))) if mf and mf.is_file() else ""
         paths = (list(CODEX.glob("plugins/cache/*/knowledge/*/.codex-plugin/plugin.json")) if agent == "codex"
                  else [HOME / ".gemini" / "config" / "plugins" / "knowledge" / ".claude-plugin" / "plugin.json"])
@@ -2254,10 +2256,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/local/api/unlink":
                 return self.send(200, {"result": unlink_folder(str(body.get("path", "")))}, origin=o)
             if path == "/local/api/tick":
-                if body.get("wait") is False:  # the wake hook: a running round holds TICK longer than its 3 s timeout
-                    threading.Thread(target=tick, daemon=True).start()
-                    return self.send(200, {"started": True}, origin=o)
                 return self.send(200, tick(), origin=o)
+            if path == "/local/api/wake":  # the wake hook: no waiting for a round, which may wait for one already running
+                WAKE.set()
+                return self.send(200, {"woken": True}, origin=o)
             if path == "/local/api/update-agents":
                 update_agents_soon()
                 return self.send(200, {"started": True}, origin=o)
@@ -2339,7 +2341,8 @@ def loop():
             tick()
         except Exception as e:  # never stop the loop; the page shows it
             log("error", "A round of the companion failed", f"{type(e).__name__}: {e}"[:300])
-        time.sleep(EVERY)
+        WAKE.wait(EVERY)
+        WAKE.clear()  # before the round: a wake during it asks for one more, which may find what this one read too early
 
 
 ACTIONS_EVERY = float(os.environ.get("KNOWLEDGE_COMPANION_ACTIONS_EVERY") or 10)
@@ -2795,6 +2798,9 @@ def main(argv: list):
             real_cd, globals()["CLAUDE_DIR"] = CLAUDE_DIR, cd
             try:
                 assert plugin_version("claude") == "7.1.2", plugin_version("claude")
+                (Path(t) / "my co").symlink_to(Path(t) / "co") if os.name != "nt" else None  # a quoted path with a space, another hook
+                (cd / "settings.json").write_text(json.dumps({"hooks": {"PreToolUse": [{"hooks": [{"command": f'python3 "{Path(t) / "my co" / "plugin" / "hooks" / "secret-guard.py"}"'}]}]}}))
+                assert plugin_version("claude") == ("7.1.2" if os.name != "nt" else ""), plugin_version("claude")
                 win = str(Path(t) / "co").replace("/", "\\")  # as on Windows: backslashes, doubled in the file's JSON
                 (cd / "settings.json").write_text(json.dumps({"hooks": {"Stop": [{"hooks": [{"command": f'python "{win}\\plugin\\hooks\\agent_hooks.py" settled'}]}]}}))
                 assert plugin_version("claude") == ("7.1.2" if os.name == "nt" else ""), plugin_version("claude")  # POSIX: no such path

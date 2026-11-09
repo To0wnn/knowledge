@@ -1432,10 +1432,13 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
                   "workers: a record whose pid now names another process (a reboot) ends, and that process is never killed", json.dumps(rec)[:300])
         finally:
             other.kill()
-        # A knowledge write makes the companion look at once (the wake hook).
+        # A knowledge write makes the companion look at once (the wake hook): its minute loop (here an hour) runs a round now.
+        synced = lambda: json.loads(call("GET", "/local/api/state")[2])["status"].get("synced") or 0
+        before = synced()
         code, out_w, err = run([sys.executable, str(hooks / "agent_hooks.py"), "wake", "claude"],
                                json.dumps({"session_id": "s", "cwd": str(repo), "tool_name": "mcp__knowledge__knowledge_edit"}), env)
-        check("asked the companion" in out_w, "workers: a knowledge write asks the companion here to look now", out_w + err)
+        check("asked the companion" in out_w and wait_for(lambda: synced() > before, 20),
+              "workers: a knowledge write asks the companion here to look now", out_w + err)
         # Remote actions (Machines list): pulled every few seconds, run with the companion's own code, result reported.
         ui = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice", "X-Knowledge-UI": "1"}
         act = lambda action, args: http("POST", "/ui/api/machines/action", {"machine": mid, "action": action, "args": args}, ui)
