@@ -55,8 +55,8 @@ The companion that starts workers is described in [companion.md](companion.md); 
   **+7 days** moves its date (`POST /ui/api/task/extend`, owner or admin), **Cancel** hands it back to its requester.
 - **Where tasks show in Agents.** Needs you: approvals, results for a person, lines past their date, and a person's
   own lines ("for <name>", the same three answers). Queued: the open lines that wait or may start, with "Start on <pc>"
-  and Cancel task in the ⋯ menu. On the desktop grid each project's frame lists its queued tasks as chips under its
-  title (a chip opens the task in the list). An owner that is a project, device token or pc name (`trade`, `gema`) is
+  and Cancel task in the ⋯ menu. On the desktop grid one line of chips on top lists the queued tasks of the picked
+  project (all projects: with the project's name; a chip opens the task in the list). An owner that is a project, device token or pc name (`trade`, `gema`) is
   no person: a session there takes the line at its next turn (`agent_owner`), so it queues "for a session of <name>".
 
 ## Results handed back
