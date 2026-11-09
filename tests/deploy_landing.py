@@ -37,6 +37,7 @@ def setup():
     (BIN / "ssh").write_text(f'#!/bin/sh\nshift\ncase "$*" in *"compose -p"*|*health*) echo ok; exit 0;; esac\n'
                              f'exec sh -c "$(printf %s "$*" | sed "s#/root/#{ROOT}/#g")"\n')
     (BIN / "rsync").write_text("#!/bin/sh\nexit 0\n")
+    (BIN / "chown").write_text("#!/bin/sh\nexit 0\n")  # forge's chown 1000:1000 runs as root there; a CI runner (uid 1001) may not
     # gh: GH_RED names a workflow whose last finished run on main failed
     (BIN / "gh").write_text('#!/bin/sh\ncase "$*" in *"$GH_RED"*) [ -n "$GH_RED" ] && echo "abc1234 (failure) broke it";; esac\nexit 0\n')
     for f in BIN.iterdir():

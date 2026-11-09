@@ -1277,6 +1277,27 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert json.loads(ui("/ui/api/me")[2])["prefs"]["chat_review"] == {"agent": "codex", "id": "gpt-6-luna", "effort": "medium"}
     assert ui("/ui/api/me/prefs", {"send_key": "ctrl", "grid_open": "tab", "start_page": "chats"})[0] == 200  # the defaults are not stored
     assert ui("/ui/api/me/prefs", {"chat_default": None, "chat_reader": None, "chat_review": None})[0] == 200 and json.loads(ui("/ui/api/me")[2])["prefs"] == {}
+    # Continue in another agent (the first one's usage limit is used up): the same chat, a new session of the new agent,
+    # which gets the chat so far as data before the message; refused while a turn runs and for an agent not installed.
+    http("POST", "/machine/report", {"version": "0.16.0", "agents": {"codex": {}, "claude": {}},
+                                     "folders": {"linked": [{"path": "/home/x/garden", "project": "garden"}]}}, token=fr, headers=pc)
+    hid = json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/x/garden"})[2])["chat"]["id"]
+    ui("/ui/api/chat/send", {"machine": mid, "id": hid, "text": "build the parser"})
+    http("GET", "/machine/chats", token=fr, headers=pc)
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": hid, "text": "go on", "agent": "claude"})[0] == 409  # still working
+    http("POST", "/machine/chats/events", {"chat": hid, "session": "th-9", "events": [{"kind": "text", "text": "half the parser done"},
+                                          {"kind": "error", "text": "usage limit reached"}], "done": True}, token=fr, headers=pc)
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": hid, "text": "go on", "agent": "agy"})[0] == 400  # not installed there
+    st, _, b = ui("/ui/api/chat/send", {"machine": mid, "id": hid, "text": "go on", "agent": "claude"})
+    assert st == 200, b
+    w = [x for x in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"] if x["chat"] == hid][0]
+    assert w["agent"] == "claude" and w["session"] == "" and w["allow"] == [], w
+    assert w["text"].startswith("(knowledge web UI: this chat ran in Codex") and "half the parser done" in w["text"] and "build the parser" in w["text"], w["text"]
+    assert w["text"].split("</chat-so-far>")[1].strip().startswith("go on"), w["text"]
+    c = json.loads(ui(f"/ui/api/chat?machine={mid}&id={hid}")[2])
+    assert c["chat"]["agent"] == "claude" and [e["text"] for e in c["events"] if e["kind"] == "user"][-1] == "go on", c
+    assert any(e["kind"] == "info" and e["text"].startswith("Continued in Claude Code") for e in c["events"]), c["events"]
+    http("POST", "/machine/chats/events", {"chat": hid, "events": [], "done": True}, token=fr, headers=pc)
     # Offline: no new message (it would run whenever the pc comes back).
     d = json.loads((tmp / "machines.json").read_text())
     d[mid]["at"] -= 3600
