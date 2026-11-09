@@ -86,7 +86,8 @@ function palRender(keep = false) {
     for (const it of items) {
       const i = pal.items.length, li = el("li", "pal-opt");
       li.id = `pal-o-${i}`; li.setAttribute("role", "option");
-      li.append(el("span", "pal-label", it.kind === "note" ? noteName(it.id).title : it.label)); // a recent pick saved before titles were used if (it.hint) li.append(el("small", null, it.hint));
+      li.append(el("span", "pal-label", it.kind === "note" ? noteName(it.id).title : it.label)); // a recent pick saved before titles were used
+      if (it.hint) li.append(el("small", null, it.hint));
       li.onmousemove = () => { if (pal.sel !== i) { pal.moved = true; palSelect(i); } };
       li.onclick = () => palGo(it);
       list.append(li); pal.items.push(it);

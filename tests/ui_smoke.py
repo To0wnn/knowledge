@@ -1000,6 +1000,7 @@ async def knowledge(browser, devices, secret: str) -> None:
     await pg.keyboard.type(WORD)
     await pg.wait_for_selector("#pal-list .pal-opt", timeout=5000)
     await pg.wait_for_timeout(700)
+    check(await pg.evaluate("!pal.items[0].hint || !!$('pal-o-0').querySelector('small')"), "a palette row shows its hint (where the note is)")
     first = await pg.evaluate("$('pal-q').getAttribute('aria-activedescendant')")
     await pg.keyboard.press("ArrowDown")
     second = await pg.evaluate("$('pal-q').getAttribute('aria-activedescendant')")
