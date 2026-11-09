@@ -1204,7 +1204,7 @@ class Live:
 
     def flush(self, **end):
         shells = [{"id": k, "label": v} for k, v in list(self.bg.items())[:20]]
-        body = {"chat": self.cid, "events": merged(shown_images(self.cid, self.buf, self.__dict__.setdefault("images", {}))), "session": self.st["session"], "bg": len(self.bg), "bg_list": shells, **end}
+        body = {"chat": self.cid, "events": merged(shown_images(self.cid, self.buf, self.__dict__.setdefault("images", {}))), "session": self.st["session"], "agent": self.agent, "bg": len(self.bg), "bg_list": shells, **end}
         self.buf, self.flushed = [], time.time()
         if body["events"] or end or shells != getattr(self, "bg_told", []):
             self.bg_told = shells
