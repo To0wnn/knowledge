@@ -47,7 +47,7 @@ const noteItem = (n, hint, find) => ({ kind: "note", id: n.id, label: noteName(n
 
 // The groups for the current text: [[heading, items]], empty groups left out.
 function palGroups(q) {
-  const words = q.toLowerCase().split(/\s+/).filter(Boolean), has = (t) => words.every((w) => t.toLowerCase().includes(w));
+  const words = fold(q).split(/\s+/).filter(Boolean), has = (t) => words.every((w) => fold(t).includes(w));
   const views = PAL_VIEWS.filter(([id]) => (id !== "health" || me.admin) && (id !== "thispc" || !$("nav-thispc").hidden) && !(agentsOff() && AGENT_VIEWS.includes(id)) && !(id === "tasks" && !agentsOff()))
     .map(([id, label]) => ({ kind: "view", id, label: id === "admin" && !me.admin ? "My tokens & projects" : label, hint: "Go to" }));
   const actions = PAL_ACTIONS.filter(([id]) => !(agentsOff() && id === "new-chat")).map(([id, label, key]) => ({ kind: "action", id, label, hint: key ? keyOf(key) : "" }));

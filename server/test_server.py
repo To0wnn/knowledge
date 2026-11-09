@@ -2754,6 +2754,14 @@ def main():
         http("POST", "/invalidate", {"paths": ["memory/project_nas_freeze.md", "homelab/07_BACKUP.md"]}, token="watch-token")
         hits = json.loads(raw("GET", "/ui/api/search?q=nas%20freeze&project=homelab", headers=ck)[2])["notes"]
         assert [h["path"] for h in hits][:2] == ["memory/project_nas_freeze.md", "homelab/07_BACKUP.md"], hits
+        # Accents do not count: typed without them (or with others) it still finds the note, on the right line.
+        (mem / "project_accent.md").write_text("---\nname: Accent\n---\nintro\nDe officiële build is geïnstalleerd.\n")
+        http("POST", "/invalidate", {"paths": ["memory/project_accent.md"]}, token="watch-token")
+        for q in ("officiele%20geinstalleerd", "OFFICI%C3%8BLE", "ge%C3%AFnstalleerd"):
+            hits = json.loads(raw("GET", f"/ui/api/search?q={q}&project=homelab", headers=ck)[2])["notes"]
+            assert hits and hits[0]["path"] == "memory/project_accent.md" and hits[0]["hits"][0]["line"] == 5, (q, hits)
+        err, text = call("knowledge_search", {"pattern": "geinstalleerd"})
+        assert not err and "memory/project_accent.md:5:" in text, text
         # A catastrophic regex costs at most a few seconds and never blocks other requests.
         t0 = time.time()
         err, text = call("knowledge_search", {"pattern": "(a+)+$"})

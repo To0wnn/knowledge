@@ -36,6 +36,7 @@ except ImportError:  # Windows (the e2e test server)
     fcntl = None
 import time
 import urllib.parse
+import unicodedata
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
@@ -61,6 +62,14 @@ from starlette.requests import Request
 from starlette.responses import (FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response,
                                  StreamingResponse)
 from starlette.staticfiles import NotModifiedResponse
+
+# Accented Latin letters -> their base letter, one char for one char (é -> e, ï -> i), so a search typed without
+# accents finds "geïnstalleerd" and offsets in the folded copy still match the original text.
+FOLD = {c: d[0] for c in range(0xC0, 0x250) if len(d := unicodedata.normalize("NFD", chr(c))) > 1 and d[0].isascii()}
+
+
+def fold(s: str) -> str:
+    return s.lower().translate(FOLD)
 
 HOME = Path.home()
 cc_memory = lambda folder: HOME / ".claude/projects" / re.sub(r"[^A-Za-z0-9]", "-", str(HOME / folder)) / "memory"  # Claude Code's naming
@@ -414,7 +423,7 @@ class Index:
                 keep_version(rel, old, "", removed=True, full=full)
                 skill_changed(rel, "removed")
             return
-        low = text.lower()
+        low = fold(text)
         old = self.files.get(rel)
         if old is not None and old[2] != text and tracked(rel):
             keep_version(rel, old, text, full=full)
@@ -734,7 +743,7 @@ def weak_answer(query: str, hits: list[dict]) -> bool:
         return True
     entry = index.files.get(hits[0]["path"])
     text = (entry[3] or entry[2].lower()) if entry else ""
-    return hits[0]["score"] < DOUBT_SCORE and kb_lint.query_coverage(query, text) < MIN_COVERAGE
+    return hits[0]["score"] < DOUBT_SCORE and kb_lint.query_coverage(fold(query), text) < MIN_COVERAGE
 
 
 def gaps_summary(n: int = 30) -> list[dict]:
@@ -1295,7 +1304,7 @@ def knowledge_search(pattern: str = "", query: str = "", search: str = "", text:
         rx_i = regex.compile(target, regex.I | regex.M | regex.V0)
         # Fast path: lowercase pattern on the lowercase copy. Not when the pattern has uppercase escapes (\S, \W, \D,
         # \B, \A, \Z), whose meaning would change by lowercasing.
-        rx_low = None if re.search(r"\\[A-Z]", target) else regex.compile(target.lower(), regex.M | regex.V0)
+        rx_low = None if re.search(r"\\[A-Z]", target) else regex.compile(fold(target), regex.M | regex.V0)
     except regex.error as e:
         raise ToolError(f"invalid regex: {e}")
     try:
@@ -1857,7 +1866,7 @@ def related_memos(text: str, limit: int = 6) -> list[str]:
              and in_scope(rel)]
     if not memos:
         return []
-    words = set(w for w in re.findall(r"[a-zà-ÿ][a-zà-ÿ0-9-]{3,}", text.lower()[:50000]) if w not in STOPWORDS)
+    words = set(w for w in re.findall(r"[a-z][a-z0-9-]{3,}", fold(text[:50000])) if w not in STOPWORDS)
     n = len(memos)
     weights = {}
     for w in words:
@@ -5681,15 +5690,15 @@ def search_notes(q: str, roots: tuple, limit: int = 40) -> list[dict]:
     """Web UI search: one result per note, every word must occur in it (case-insensitive, literal), ranked so the
     note about the subject comes first: words in the path or title, then memo > doc > skill > archive/source, then
     the number of matching lines. Up to 3 matching lines per note."""
-    words = [w for w in q.lower().split() if w][:8]
+    words = [w for w in fold(q).split() if w][:8]
     if not words:
         return []
     candidates = []
     for rel, text, low in index.items(",".join(roots)):
         if not in_scope(rel):
             continue
-        hay = low if low is not None else text.lower()
-        rel_low = rel.lower()
+        hay = low if low is not None else fold(text)
+        rel_low = fold(rel)
         if not all(w in hay or w in rel_low for w in words):
             continue
         head = hay[:400]
@@ -5712,7 +5721,7 @@ def search_notes(q: str, roots: tuple, limit: int = 40) -> list[dict]:
     for score, rel, text, low in candidates:
         found = []
         for n, line in enumerate(text.splitlines(), 1):
-            ll = line.lower()
+            ll = fold(line)
             match = (w0 in ll) if n_words == 1 else (w0 in ll or w1 in ll) if n_words == 2 else any(w in ll for w in words)
             if match:
                 is_phrase = phrase in ll
