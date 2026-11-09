@@ -1746,6 +1746,9 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
             fake_agy.kill()
 
 
+AGENT_LABEL = {"claude": "Claude Code", "codex": "Codex", "agy": "agy"}  # the server's AGENT_NAMES
+
+
 def chat_e2e(tok: str, tmp: Path):
     """Chats from the web UI (plugin/hooks/chat.py): the owner starts a chat with an agent on a pc, its companion pulls
     each message, hands it to that chat's running agent in the linked folder (message on stdin, the agent's own resume
@@ -1872,6 +1875,24 @@ def chat_e2e(tok: str, tmp: Path):
                       "chat claude: without YOLO the worker permission set (acceptEdits + allowed tools) and the approval prompt tool", json.dumps(first["argv"]))
             if agent == "agy":
                 check(first["argv"] == ["agy", "acp"], "chat agy: without YOLO it runs over ACP (the headless agy that can ask)", json.dumps(first["argv"]))
+        # Continue in another agent (the first one's usage limit is used up): the same chat goes on in each agent in turn,
+        # each a new process and a new session that gets the chat so far as data before the message, never a resume.
+        cid, prev = new("claude", repo), "claude"
+        send(cid, "start in claude")
+        idle(cid, 3)
+        for agent in ("codex", "agy", "claude"):
+            before = {c.get("pid") for c in recorded() if c["chat"] == cid}
+            st = http("POST", "/ui/api/chat/send", {"machine": mid, "id": cid, "text": f"go on in {agent}", "agent": agent}, ui)[0]
+            done = wait_for(lambda: (c := chat(cid))["chat"]["status"] == "idle" and c["chat"]["session"] == "sess-" + agent, 30)
+            turn = ([c for c in recorded() if c["chat"] == cid] or [{}])[-1]
+            stdin = turn.get("stdin", "")
+            check(st == 200 and done and chat(cid)["chat"]["agent"] == agent and turn.get("pid") not in before
+                  and turn.get("argv", [""])[0] == agent and "--resume" not in turn.get("argv", []) and not turn.get("load")
+                  and stdin.startswith(f"(knowledge web UI: this chat ran in {AGENT_LABEL[prev]}") and "echo: start in claude" in stdin
+                  and stdin.rstrip().endswith(f"go on in {agent}"),
+                  f"chat: continue {prev} -> {agent}: a new {agent} process and session, the chat so far before the message",
+                  json.dumps([st, done, turn])[:900])
+            prev = agent
         # Codex's usage limit without a session: the companion asks `codex app-server` (account/rateLimits/read, no
         # prompt) in the background and reports the answer; here no rollout exists.
         probe = ("import companion, time; (companion.STATE / 'codex-rate.json').unlink(missing_ok=True); companion.codex_rate_read(time.time())\n"
