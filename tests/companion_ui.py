@@ -23,7 +23,7 @@ STATE = {"version": "0.18", "status": {"host": "testpc", "live": 1, "synced": 0}
                     {"id": "codex", "name": "Codex", "mark": "X", "installed": True, "version": "0.18.1", "hooksTrusted": True,
                      "yolo": True, "sessions": [], "workers": []}],
          "tasks": {"ready": [], "waiting": [], "stalled": []}, "activity": [],
-         "settings": {"token": {"present": True}, "serverUrl": "https://kn.example", "workersAllowed": False, "maxWorkers": {}}}
+         "settings": {"token": {"present": True}, "serverUrl": "https://kn.example", "workersAllowed": False, "maxAgents": 4}}
 
 
 class H(BaseHTTPRequestHandler):
@@ -74,12 +74,12 @@ async def companion(browser):
     await pg.click("#yolo-codex"); await pg.wait_for_timeout(400)
     check(posts == [("/local/api/yolo", {"agent": "codex", "on": False})], "companion: off needs no dialog")
     # no wipe: a half-filled form survives the minute refresh, also after focus left it
-    await pg.fill('input[name="max-claude"]', "5")
+    await pg.fill('input[name="maxAgents"]', "5")
     await pg.click("h2#h-agents")
     await pg.evaluate("load()"); await pg.wait_for_timeout(200)
-    check(await pg.input_value('input[name="max-claude"]') == "5", "companion: refresh keeps an unsaved settings edit")
+    check(await pg.input_value('input[name="maxAgents"]') == "5", "companion: refresh keeps an unsaved settings edit")
     await pg.evaluate("load(true)"); await pg.wait_for_timeout(200)
-    check(await pg.input_value('input[name="max-claude"]') == "1", "companion: explicit refresh (force) redraws")
+    check(await pg.input_value('input[name="maxAgents"]') == "4", "companion: explicit refresh (force) redraws")
     # opened without the key: the companion sends no counts, so no chip may read "undefined live"
     global LOCKED
     LOCKED = {"agents": STATE["agents"], "status": {"host": "testpc"}, "version": "0.18", "locked": True}

@@ -40,7 +40,14 @@ ASK_SERVER = None  # the companion sets it: body -> the server's answer to POST 
 UPLOAD = None  # the companion sets it: (chat id, file name, bytes) -> the mark ⟦file:…⟧ (POST /machine/chats/file)
 LOG = lambda *a: None  # the companion's activity log
 PATH_KEYS = ("file_path", "path", "Path", "notebook_path", "AbsolutePath", "TargetFile", "DirectoryPath", "cwd")
-max_turns = lambda: 4  # turns at once on one pc; the companion sets the owner's setting (0: no limit)
+limit = lambda: (4, 0)  # (agents at once on this pc, 0: no limit; workers running): the companion sets the owner's setting
+busy_turns = lambda: sum(1 for x in list(LIVE.values()) if x.busy)
+
+
+def full() -> bool:
+    """This pc runs as many agents (chat turns and workers together) as its owner allows."""
+    most, workers_running = limit()
+    return bool(most) and busy_turns() + workers_running >= most
 TURN_WAIT = 2.0  # seconds between looks for a free turn
 FLUSH = 0.7  # seconds: output is posted in batches at most this often
 EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")  # every agent's levels together; each model lists its own
@@ -1851,11 +1858,11 @@ def start(item: dict, post, log, linked, yolo, fetch=None):
     def job():
         if fetch:
             item["text"] = attach(item.get("text", ""), fetch)
-        told = False  # a new agent with max_turns() turns running: wait for a free one (or a Stop), not fail
-        while not ((lv := LIVE.get(cid)) and lv.alive()) and STOPS.get(cid, [gen])[0] == gen and (most := max_turns()) and sum(1 for x in list(LIVE.values()) if x.busy) >= most:
+        told = False  # a new agent at the pc's limit: wait for a free place (or a Stop), not fail
+        while not ((lv := LIVE.get(cid)) and lv.alive()) and STOPS.get(cid, [gen])[0] == gen and full():
             if not told:
                 told = True
-                post({"chat": cid, "events": [{"kind": "info", "text": f"Waits: {most} chat turns run on this pc already (Machines: Chats at a time). It starts by itself when one ends."}]})
+                post({"chat": cid, "events": [{"kind": "info", "text": f"Waits: {limit()[0]} agents run on this pc already (Machines: Limit). It starts by itself when one ends."}]})
             time.sleep(TURN_WAIT)
         if (st := STOPS.get(cid, [0, True]))[0] != gen:  # Stopped while its files came: it never starts
             if not st[1]:  # nothing ran here to end the turn: this message's turn ends now, once
@@ -1897,8 +1904,8 @@ def _start_live(item: dict, post, log, linked, yolo):
                 item = {**item, "session": lv.st["session"] or item.get("session", "")}
                 lv = None
             if not (lv and lv.alive()):
-                if (most := max_turns()) and sum(1 for x in LIVE.values() if x.busy) >= most:
-                    raise RuntimeError(f"{most} chat turns run on this pc already (Machines: Chats at a time); send again later")
+                if full():
+                    raise RuntimeError(f"{limit()[0]} agents run on this pc already (Machines: Limit); send again later")
                 steer_path(cid).unlink(missing_ok=True)
                 lv = LIVE[cid] = {"codex": CodexLive, "agy": AgyLive}.get(item["agent"], Live)(item, post, log, yolo(item["agent"]))
         lv.rec["allow"] = [x for x in item.get("allow") or [] if isinstance(x, dict)]  # "for this chat" answers since it started
@@ -2268,9 +2275,9 @@ def self_test():
                         break
                     time.sleep(0.02)
                 assert all(c != "c" for c, _ in ran) and [p["done"] for p in posts] == [True], (ran, posts)
-                # max_turns() turns busy on this pc: a new chat's message waits (said once) and starts when one ends.
+                # the pc's limit busy: a new chat's message waits (said once) and starts when one ends.
                 global TURN_WAIT
-                busy = [types.SimpleNamespace(busy=True, alive=lambda: True) for _ in range(max_turns())]
+                busy = [types.SimpleNamespace(busy=True, alive=lambda: True) for _ in range(limit()[0])]
                 keep_live, keep_wait, TURN_WAIT = dict(LIVE), TURN_WAIT, 0.02
                 LIVE.update({f"busy{n}": b for n, b in enumerate(busy)})
                 try:

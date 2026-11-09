@@ -1302,9 +1302,9 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
               "workers: off by default, every ready task waits and says why", body[:600])
         check(call("POST", "/local/api/settings", {"workersAllowed": True}, origin=BASE)[0] == 403,
               "workers: the web UI cannot switch workers on through the local API (the owner does it on the page or remotely)")
-        st, _, body = call("POST", "/local/api/settings", {"workersAllowed": True, "maxWorkers": {"codex": 2}})
-        check(st == 200 and json.loads(body)["workersAllowed"] is True and json.loads(body)["maxWorkers"]["codex"] == 2,
-              "workers: allowed on the companion page, max workers per agent", body)
+        st, _, body = call("POST", "/local/api/settings", {"workersAllowed": True, "maxAgents": 4})
+        check(st == 200 and json.loads(body)["workersAllowed"] is True and json.loads(body)["maxAgents"] == 4,
+              "workers: allowed on the companion page, agents at once on the pc", body)
         Path(str(calls) + ".sleep").write_text("", encoding="utf-8")
         yolo_file = home / ".knowledge" / "companion" / "yolo.json"
         yolo_file.write_text(json.dumps({"agy": {"on": True}}), encoding="utf-8")  # as the page leaves it, minus the restore data
@@ -1353,7 +1353,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         call("POST", "/local/api/tick", {})
         wait_for(lambda: argvs(n), 15)
         check([c["env"]["KNOWLEDGE_WORKER"] for c in argvs(n)] == [next(i for i in ("CMP-CODEX", "CMP-CX2") if i != cx_id)],
-              "workers: a known limit below 90% allows up to the agent's max (2)", json.dumps(argvs(n))[:400])
+              "workers: a known limit below 90% allows a second Codex worker, up to the pc's limit (4 agents)", json.dumps(argvs(n))[:400])
         row = next((r for r in machines() if r["id"] == mid), {})
         cxa = row.get("agents", {}).get("codex", {})
         check(row.get("companion", {}).get("workersAllowed") is True and cxa.get("limit") == 40.0
@@ -2491,7 +2491,7 @@ def wake_e2e(tok: str, home: Path, project: Path):
         busy.clear()
         check(entry.exists(), "agy: a busy agy (HTTP 503) keeps its registration")
         # this pc's companion runs Codex and agy workers for the project; no pc runs Claude's: Claude's chats take its tasks
-        http("POST", "/machine/report", {"version": "0.15.0", "workersAllowed": True, "maxWorkers": {"codex": 1, "agy": 1, "claude": 1},
+        http("POST", "/machine/report", {"version": "0.15.0", "workersAllowed": True, "maxAgents": 3,
                                          "agents": {"codex": {}, "agy": {}}, "folders": {"linked": [{"path": str(project), "project": "garden"}]}},
              {"Authorization": f"Bearer {tok}", "Content-Type": "application/json", **pc()})
         tasks = "".join(f"- open tot 1 jan 2099 [{o}, WAKE-{o.upper()}1] from Claude, start now: chat test for {o} \"a & b > c %PATH%\n" for o in ("Codex", "Claude", "Gemini"))

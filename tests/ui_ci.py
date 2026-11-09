@@ -86,7 +86,7 @@ def seed() -> None:
                "path": "memory/project_wireguard.md", "old_string": "split tunnel.", "new_string": "split tunnel.\nKeys rotate yearly."}}}, bearer), "edit")
     assert '"isError":false' in body, body  # an edit of a homelab memo: Changes shows its lines added/removed
     pc = {**bearer, "X-Knowledge-Machine": MID, "X-Knowledge-Machine-Label": "smoke-pc"}
-    report = {"version": "0.21.1", "agents": {"codex": {}, "claude": {"models": [
+    report = {"version": "0.21.1", "maxAgents": 4, "agents": {"codex": {}, "claude": {"models": [
         {"id": "opus", "name": "Opus", "efforts": ["low", "high"], "default": "high"}, {"id": "sonnet", "name": "Sonnet", "efforts": ["low"]}],
         "commands": [{"name": "compact", "description": "Clear history, keep a summary", "hint": ""}, {"name": "verify-done", "description": "Prove a task is done", "hint": ""}]}},
         "folders": {"linked": [{"path": "/home/x/lab", "project": "homelab"}], "candidates": []}, "projects": ["garden"],
