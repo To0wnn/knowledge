@@ -564,20 +564,20 @@ function bdRender() {
     t.setAttribute("aria-expanded", String(!f.shut)); t.title = f.shut ? `Show the chats of ${name}` : `Fold ${name} away`;
     box.setAttribute("aria-label", `${name}: ${f.n} chat${f.n === 1 ? "" : "s"}`);
     box.classList.toggle("shut", f.shut);
-    // the project's queued tasks: one line of chips under the title; a chip opens the task in the list
-    const queued = (ck.board || []).filter((i) => i.kind === "task" && i.col === "open" && (i.project || "") === f.project);
-    let strip = box.querySelector(".bd-queue");
-    if (queued.length && !f.shut) {
-      if (!strip) { strip = el("div", "bd-queue"); box.append(strip); }
-      strip.replaceChildren(el("span", "muted", `Queued ${queued.length}:`), ...queued.map((i) => {
-        const b = el("a", "chip", i.id); b.href = `#/inbox/${encodeURIComponent(i.key)}`; b.title = `${i.title}\n${i.line}`;
-        return b;
-      }));
-    } else strip?.remove();
     keep.add(box);
   }
   for (const [p, box] of bd.frames) if (!keep.has(box)) { box.remove(); bd.frames.delete(p); }
-  const order = [];
+  // the queued tasks in scope: one line of chips on top of the grid (a project with tasks but no chat has no frame);
+  // a chip opens the task in the list
+  const queued = (ck.board || []).filter((i) => i.kind === "task" && i.col === "open" && ckScope(i));
+  bd.queue ||= el("div", "bd-queue");
+  bd.queue.replaceChildren(el("span", "muted", `Queued ${queued.length}:`), ...queued.map((i) => {
+    const b = el("a", "chip", agentProject ? i.id : `${shown(i.project)} · ${i.id}`); b.href = `#/inbox/${encodeURIComponent(i.key)}`;
+    b.title = `${i.title}\n${i.line}`;
+    return b;
+  }));
+  const order = queued.length ? [bd.queue] : [];
+  if (!queued.length) bd.queue.remove();
   for (const f of frames) {
     order.push(bd.frames.get(f.project));
     for (const { c, st } of rows.filter(({ c }) => together || (c.project || "") === f.project)) {
@@ -597,7 +597,7 @@ function bdRender() {
   for (const [k, w] of bd.wraps) if (!ck.cards.has(k) || !order.includes(w)) { w.remove(); bd.wraps.delete(k); }
   // DOM order = layout order, so Tab walks project by project; only moved nodes are touched
   order.forEach((n, i) => { if (world.children[i] !== n) bdMove(world, n, world.children[i] || null); });
-  if (!rows.length) world.replaceChildren(el("p", "bd-none muted", bd.part ? `No chats in part ${bd.part}${agentProject ? " of this project" : ""}: start one with + New chat, or ${keyOf("digits_move").replace("#", bd.part)} on a card elsewhere moves it here.` : ck.chats.length ? "No chats in this project." : "No chats yet: start one with + New chat."));
+  if (!rows.length) world.replaceChildren(...order, el("p", "bd-none muted", bd.part ? `No chats in part ${bd.part}${agentProject ? " of this project" : ""}: start one with + New chat, or ${keyOf("digits_move").replace("#", bd.part)} on a card elsewhere moves it here.` : ck.chats.length ? "No chats in this project." : "No chats yet: start one with + New chat."));
   else world.querySelector(".bd-none")?.remove();
   bdGridSize();
   for (const card of back) ckScrollBottom(card, card.savedScrollTop == null); // back from another part: taken off the page, its log forgot where it was
