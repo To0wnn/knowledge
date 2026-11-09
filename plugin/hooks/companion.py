@@ -956,6 +956,18 @@ def kept_windows(f: Path, now: float) -> list:
         return []
 
 
+def kept_agy(f: Path, now: float) -> list:
+    """agy's kept "<group> 5h|7d" windows; one that reset shows 0% until a new reading: using agy again renews the
+    token the cloud call needs (on a pc without a keyring `agy models` does not), so no reading means no use since.
+    shortcut: use on another pc of the same account after the reset is missed until a reading comes in."""
+    try:
+        wins = json.loads(f.read_text(encoding="utf-8"))["windows"]
+        return [(w[0], w[1], w[2]) if w[2] and w[2] > now else (0.0, w[1], None)
+                for w in wins if str(w[1]).endswith((" 5h", " 7d"))]
+    except (OSError, ValueError, KeyError, TypeError, IndexError):
+        return []
+
+
 def usage_info(agent: str, ws: dict, now: float) -> list:
     """The agent's usage windows as (percent, window, resets_at), fullest first; [] when unknown. Codex and agy only
     tell it while a session runs, so the last reading is kept until its window resets: usage does not go down before
@@ -964,14 +976,13 @@ def usage_info(agent: str, ws: dict, now: float) -> list:
     got = usage_live(agent, ws, now)
     if got:
         if agent == "agy":  # agy's cloud call has no Gemini week: keep an earlier reading's windows until they reset
-            # only "<group> 5h|7d": a window kept under an older plugin's name ("Gemini") would show twice
-            got = agent_hooks.limits.merge(got, [w for w in kept_windows(f, now) if w[1].endswith((" 5h", " 7d"))])
+            got = agent_hooks.limits.merge(got, kept_agy(f, now))
         try:
             write_json(f, {"windows": got, "at": now})
         except OSError:
             pass
         return got
-    return kept_windows(f, now)  # shortcut: another pc may have used more since
+    return kept_agy(f, now) if agent == "agy" else kept_windows(f, now)  # shortcut: another pc may have used more since
 
 
 CODEX_READ_EVERY = 900  # seconds between asking Codex for its limits without a session
@@ -1118,8 +1129,11 @@ def _agy_rate_ask(f, last_error: str):
             models = ask("fetchAvailableModels").get("models") or {}
             configs = [{"label": m["displayName"], "quotaInfo": m["quotaInfo"]} for m in models.values()
                        if isinstance(m, dict) and str(m.get("displayName", "")).startswith("Gemini") and isinstance(m.get("quotaInfo"), dict)]
-            gemini = agent_hooks.limits.agy_used({"userStatus": {"cascadeModelConfigData": {"clientModelConfigs": configs}}}, now)
-            got = agent_hooks.limits.merge(got, [(p, "Gemini 5h", r) for p, _, r in gemini[:1]])
+            # a full quota has no resetTime: then 0%, not nothing
+            left = [(agent_hooks.limits.fraction(c["quotaInfo"]), c["quotaInfo"].get("resetTime")) for c in configs]
+            if left := [x for x in left if x[0] is not None]:
+                frac, r = min(left, key=lambda x: x[0])
+                got = agent_hooks.limits.merge(got, agent_hooks.limits.live([("Gemini 5h", round((1 - frac) * 100), agent_hooks.limits.epoch(r))], now))
         if not got:
             raise ValueError("no quota in the answer (the API changed?)")
     except (OSError, ValueError, LookupError, KeyError, TypeError, subprocess.SubprocessError) as e:
@@ -2808,10 +2822,14 @@ def main(argv: list):
         socket.getfqdn = real_fqdn
         live = {"v": [(42.0, "7d", 2000.0), (10.0, "5h", 1200.0)]}  # the last reading lasts until its window resets
         real_live, globals()["usage_live"] = usage_live, lambda a, ws, now: live["v"]
+        assert usage_info("codex", {}, 1000) == live["v"]
+        live["v"] = []
+        assert usage_info("codex", {}, 1100) == [(42.0, "7d", 2000.0), (10.0, "5h", 1200.0)]
+        assert usage_info("codex", {}, 1500) == [(42.0, "7d", 2000.0)] and usage_info("codex", {}, 2500) == []
+        live["v"] = [(42.0, "Gemini 7d", 2000.0), (10.0, "Gemini 5h", 1200.0)]  # agy: a reset window reads 0% after
         assert usage_info("agy", {}, 1000) == live["v"]
         live["v"] = []
-        assert usage_info("agy", {}, 1100) == [(42.0, "7d", 2000.0), (10.0, "5h", 1200.0)]
-        assert usage_info("agy", {}, 1500) == [(42.0, "7d", 2000.0)] and usage_info("agy", {}, 2500) == []
+        assert usage_info("agy", {}, 1500) == [(42.0, "Gemini 7d", 2000.0), (0.0, "Gemini 5h", None)]
         globals()["usage_live"] = real_live
         with tempfile.TemporaryDirectory() as g:  # the companion's own checkout follows main, never by a reset
             run = lambda *a, cwd=g: subprocess.run(["git", *a], cwd=cwd, capture_output=True, text=True, check=True)
@@ -2942,6 +2960,11 @@ def main(argv: list):
         check_workers(pair, "", 1000, {})
         assert [w["status"] for w in pair.values()] == ["merged", "merged"], pair
         g["workers"] = workers_mod
+        # agy: a kept window that reset reads 0% (no reading since means no use), an older plugin's name is dropped
+        with tempfile.TemporaryDirectory() as tmp:
+            kf, now = Path(tmp) / "k.json", time.time()
+            kf.write_text(json.dumps({"windows": [[40, "Gemini 7d", now + 60], [70, "Gemini 5h", now - 60], [9, "Gemini", now + 60]]}))
+            assert kept_agy(kf, now) == [(40, "Gemini 7d", now + 60), (0.0, "Gemini 5h", None)], kept_agy(kf, now)
         # A Claude worker's reading counts until its window resets, also when its log is older than 15 minutes.
         with tempfile.TemporaryDirectory() as tmp:
             f, now = Path(tmp) / "w.log", time.time()
