@@ -721,6 +721,9 @@ if args == ["update"]:  # the companion's agent update
     rec({"update": name})
     print("agent update " + name)
     sys.exit(1 if os.environ.get("KN_FAKE_UPDATE_FAIL") == name else 0)
+if args == ["--version"]:  # the companion reads each agent's version for Machines
+    print("9.9.9 (" + name + ")")
+    sys.exit(0)
 if name == "codex" and args == ["debug", "models"]:  # what a chat may pick: one listed model, one hidden
     print(json.dumps({"models": [{"slug": "fake-big", "display_name": "Fake Big", "visibility": "list", "default_reasoning_level": "high", "supported_reasoning_levels": [{"effort": "high"}, {"effort": "ultra"}]},
                                  {"slug": "fake-hidden", "visibility": "hide", "supported_reasoning_levels": []}]}))
@@ -1359,6 +1362,8 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         check(row.get("companion", {}).get("workersAllowed") is True and cxa.get("limit") == 40.0
               and sum(1 for w in cxa.get("workers", []) if w["status"] == "running") == 2 and row["agents"]["agy"]["yolo"] is True,
               "workers: the Machines list shows the pc's workers, limit, YOLO and settings", json.dumps(row)[:900])
+        check(cxa.get("cli") == "9.9.9" and row["agents"]["claude"].get("channel") in ("latest", "stable"),
+              "Machines: the companion reports each agent program's version (and Claude Code's update channel)", json.dumps({a: {k: v.get(k) for k in ("cli", "channel")} for a, v in row["agents"].items()}))
         running = [w for w in cxa.get("workers", []) if w["status"] == "running"]
         check(running and all(isinstance(w.get("progress"), dict) and isinstance(w["progress"].get("log"), list)
                               and isinstance(w["progress"].get("commits"), int) for w in running),

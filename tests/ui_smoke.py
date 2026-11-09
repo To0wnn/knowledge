@@ -729,10 +729,15 @@ async def shell(browser, devices, secret: str) -> None:
       const pc = (later) => ({companion: {version: '2.0.0', self: {later}}, agents: {claude: {plugin: '2.0.0'}, agy: {plugin: '1.0.0'}}});
       const out = [pluginBehind(pc([])), pluginBehind(pc(['agy']))]; machinesRes = was; machinesCache = cache; return out; }""")
     check(later == ["2.0.0", ""], f"Machines: an agent that updates once it is closed shows no Update button {later}")
-    notes = await pg.evaluate("""() => { const cache = machinesCache, now = Date.now() / 1000, pc = (self) => ({id: 'x', label: 'pc', actions: [], agents: {}, companion: {version: '1.0.0', self}});
-      machinesCache = [{id: 'n', agents: {}, actions: [], companion: {version: '2.0.0'}}];
+    cli = await pg.evaluate("""() => { const was = machinesRes; machinesRes = {newestAgents: {claude: {latest: '2.1.9', stable: '2.1.5'}, codex: {latest: '0.9.0'}}, machines: []};
+      const pc = {agents: {claude: {cli: '2.1.5', channel: 'stable'}, codex: {cli: '0.8.0'}, agy: {cli: '1.0.0'}}};
+      const out = [agentBehind(pc, 'claude'), agentBehind(pc, 'codex'), agentBehind(pc, 'agy'), agentBehind({agents: {claude: {cli: '2.1.5', channel: 'latest'}}}, 'claude')];
+      machinesRes = was; return out; }""")
+    check(cli == ["", "0.9.0", "", "2.1.9"], f"Machines: an agent program is behind only against its own update channel, and never while its newest is unknown {cli}")
+    notes = await pg.evaluate("""() => { const cache = machinesCache, was = machinesRes, now = Date.now() / 1000, pc = (self) => ({id: 'x', label: 'pc', actions: [], agents: {}, companion: {version: '1.0.0', self}});
+      machinesCache = [{id: 'n', agents: {}, actions: [], companion: {version: '2.0.0'}}]; machinesRes = {newest: '2.0.0', machines: machinesCache};  // the server's newest wins
       const out = [selfNote(pc({from: 'checkout', disk: '2.0.0', waits: 'the next check (within a minute)'})), selfNote(pc({from: 'copy', disk: '1.0.0', waits: ''})), selfNote(pc({from: 'checkout', disk: '1.0.0', waits: ''}))];
-      machinesCache = cache; return out; }""")
+      machinesCache = cache; machinesRes = was; return out; }""")
     check("restarts on it after the next check" in notes[0] and "plugin copy" in notes[1] and "run the installer once" in notes[1] and notes[2] == "",
           f"Machines: why a companion is not on the newest version, from what it reports about itself {notes}")
     check(upd["fresh"] == "Working…" and upd["stale"] == "Update to 2.0.0" and upd["said"], f"Machines: an update that is still settling shows as working after a page switch; one that said done but did not take is said {upd}")
