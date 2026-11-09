@@ -31,7 +31,7 @@ homelabbers with two or more PCs and two or more agents who want their notes to 
 
 <sub>Made-up demo notes from <code>demo/</code>.</sub>
 
-<!-- More screenshots (demo/screenshot.py, made-up data only): a chat on the phone with an approval, Tasks > Flow,
+<!-- More screenshots (demo/screenshot.py, made-up data only): a chat on the phone with an approval,
      the Machines list. -->
 
 You can use it in two layers. **Memory** is the server plus one agent: five minutes, nothing else on your PCs.
@@ -147,7 +147,7 @@ Known gaps: [docs/ROADMAP.md](docs/ROADMAP.md).
 | [server.md](docs/server.md) | Running the server, `.env` settings, proxy sign-in, notifications |
 | [clients.md](docs/clients.md) | The installer, updates, linking folders, Windows, skills, usage limits, secret guard |
 | [memory.md](docs/memory.md) | MCP tools, session start, projects, lint, duplicates, secrets, search quality |
-| [tasks.md](docs/tasks.md) | Task lines, leases and nonces, results, workers, usage limit, mission map |
+| [tasks.md](docs/tasks.md) | Task lines, leases and nonces, results, workers, usage limit |
 | [companion.md](docs/companion.md) | The companion, machines, own devices, remote control, YOLO safety |
 | [chats.md](docs/chats.md) | Agents (what needs you, what runs, chats) and approvals |
 | [voice.md](docs/voice.md) | Speaking chat messages: set up speech to text |

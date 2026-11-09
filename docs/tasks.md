@@ -26,7 +26,7 @@ The companion that starts workers is described in [companion.md](companion.md); 
 - **A session that writes a task and does it itself claims it:** when a session (a chat, an agent in a terminal; not a
   worker) adds a task line that is not claimed, the write's answer says so and asks it to add
   `(claimed <you>, <date>)` when it does the work itself, so no worker starts the same task. For six hours after such a
-  write the Approve buttons (Tasks tab, Agents board, Mission) warn that a session wrote the line and may be doing it
+  write the Approve buttons (Tasks tab, Agents board) warn that a session wrote the line and may be doing it
   already, and ask before approving. Both came from 8 Nov 2026, when a chat built a task it had just written while a
   worker, started by an approval minutes later, built the same thing.
 - **Task lines:** a hand-over is one line in a memo,
@@ -53,9 +53,10 @@ The companion that starts workers is described in [companion.md](companion.md); 
 - **Past its date.** An open line past its "open until" date that no worker or session holds (a claim marker on such a
   line is a leftover, not a hold) is a Needs-you card in Agents, whoever owns it: **Finished** removes the line,
   **+7 days** moves its date (`POST /ui/api/task/extend`, owner or admin), **Cancel** hands it back to its requester.
-- **Where tasks show in Agents.** Needs you: approvals, results for a person, lines past their date, and a person's
-  own lines ("for <name>", the same three answers). Queued: the open lines that wait or may start, with "Start on <pc>"
-  and Cancel task in the ⋯ menu. On the desktop grid one line of chips on top lists the queued tasks of the picked
+- **Where tasks show.** With Agents (remote control on) the sidebar has no Tasks entry and `#/tasks` opens the Agents
+  list; the Tasks list stays for a person without Agents. In Agents: Needs you: approvals, results for a person, lines past their date, and a person's
+  own lines ("for <name>", the same three answers). Queued: the open lines that wait or may start, with "Start on <pc>";
+  Assign… and Cancel task in the ⋯ menu, Remove (read) on a person's result. On the desktop grid one line of chips on top lists the queued tasks of the picked
   project (all projects: with the project's name; a chip opens the task in the list). An owner that is a project, device token or pc name (`trade`, `gema`) is
   no person: a session there takes the line at its next turn (`agent_owner`), so it queues "for a session of <name>".
 
@@ -119,7 +120,7 @@ The companion that starts workers is described in [companion.md](companion.md); 
 
 ## Follow, steer and take over a worker
 
-A worker is a chat nobody types in. Its row in Tasks, its board card and its Flow panel have **Follow**, which opens
+A worker is a chat nobody types in. Its row in Tasks and its board card have **Follow**, which opens
 its transcript in the chat view (`#/chats/worker/<project>/<ID>`, also a link for Matrix or the Inbox) with a banner
 "Worker for <ID> on <pc>" and its actions (Stop, Restart, Review, Take over, Open chat). Only the machine's owner sees
 it (`GET /ui/api/worker?machine=&worker=<project>/<ID>&after=<n>`), as for chats.
@@ -164,14 +165,3 @@ it (`GET /ui/api/worker?machine=&worker=<project>/<ID>&after=<n>`), as for chats
   "Claude/GPT-OSS"). The Chats header shows one chip per agent ("Claude 5h 12% · 7d 69%", coloured by the fullest
   window, reset times in its tooltip); Machines shows the same per pc. A window the agent does not report is left out,
   never shown as 0%.
-
-## Mission map
-
-- **Mission map:** Tasks > Flow (`#/tasks?view=flow`) shows the task lines between agents as a graph, always laid out by
-  itself (no dragging boxes around): one lane per owner (Claude, Codex, Gemini/agy, people), tasks as boxes coloured by
-  status (open, waiting on a task or date, needs approval, claimed, running in a worker, done in the last 24 h,
-  stalled), left to right by "start after <ID>", with `-cont` continuations and `-done` results in their own line styles; hand-overs
-  (requester to owner) show for the task you point at or pick. Tasks that wait on nothing stack in the first column. Pan and zoom with wheel, drag or pinch, `Alt+F` fits; a task opens a panel
-  with its full line, where it runs, Approve and its memo. "Show all" adds older results; a project filter narrows it.
-  A phone shows the chains per lane as a list of full-width cards. Data: `GET /ui/api/mission?project=&all=1` (same visibility as the
-  Tasks tab); the layout is a small layered (Sugiyama-style) pass in `static/mission.js`.

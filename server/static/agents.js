@@ -496,6 +496,12 @@ function ckItem(i) {
       later.push([text, "Take it off the list for a while", () => ckDo("/ui/api/board/dismiss", { key: i.key, sig: i.sig, until: Math.round(until()) })]);
     later.push(["Dismiss", "Take it off the list until it changes again", () => ckDo("/ui/api/board/dismiss", { key: i.key, sig: i.sig })]);
   }
+  if (i.kind === "task" && !i.result && i.can_cancel) later.push(["Assign…", "Give it to another agent or person (owner@pc pins it to one pc)", () => {
+    const to = (prompt(`${i.id} goes to (Claude, Codex, Gemini or a person's name; add @<pc> to pin it):`, i.owner || "") || "").trim();
+    if (to) { const [owner, device = ""] = to.split("@"); ckDo("/ui/api/task/assign", { project: i.project, id: i.id, owner: owner.trim(), device: device.trim() }); }
+  }]);
+  if (i.result && me.writable?.includes(i.project) && i.line_text) later.push(["Remove (read)", "Take the result line out of its memo (its history keeps it)",
+    () => ckDo("/ui/api/task/done", { path: i.path, line: i.line_text })]);
   if (i.kind === "task" && i.col === "open" && i.can_cancel) later.push(["Cancel task", "Not wanted: its requester gets it back as a result", () => {
     const why = prompt(`Cancel ${i.id}? Why (optional):`, "");
     if (why !== null) ckDo("/ui/api/task/cancel", { project: i.project, id: i.id, reason: why });
@@ -936,6 +942,7 @@ async function loadSettings() {
     };
   }
   $("set-start").querySelector('[value="chats"]').hidden = agentsOff();
+  $("set-start").querySelector('[value="tasks"]').hidden = !agentsOff(); // with Agents, tasks are there
   const mx = me.matrix; // null for a non-admin: only admins get the server's messages
   $("set-matrix").hidden = !mx;
   if (mx) {

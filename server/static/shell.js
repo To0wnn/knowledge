@@ -13,7 +13,7 @@ const VIEWS = {
   changes: ["tab-changes", "Knowledge", "Changes"], health: ["tab-lint", "Knowledge", "Health"], thispc: ["tab-thispc", "This pc", "This pc"],
   settings: ["tab-settings", "You", "Settings"],
 };
-const PHONE_TABS = ["chats", "tasks", "machines", "notes"]; // the rest sit behind More
+const PHONE_TABS = ["chats", "machines", "notes", "map"]; // the rest sit behind More
 // Without a token whose pc may be steered from here (me.agents false) the page is the knowledge part only: the agent
 // views go to Notes, and Map and Changes take their places in the tab bar (nav.html ag-on / ag-off).
 const AGENT_VIEWS = ["inbox", "chats", "machines"];
@@ -62,6 +62,8 @@ function applyRoute() {
   if (!r || (agentsOff() && AGENT_VIEWS.includes(r.view))) {
     history.replaceState(history.state, "", r || !oldLink(location.hash) ? startRoute() : noteRoute(oldLink(location.hash))); r = parseRoute(location.hash);
   }
+  // Tasks is the task list for a person without Agents; with Agents the tasks are there (Needs you, Queued)
+  if (r.view === "tasks" && !agentsOff()) { history.replaceState(history.state, "", "#/chats?view=list"); r = parseRoute(location.hash); }
   if (r.view === "inbox") { // the same view under its older name; a key marks that item once the board is in (ckFocus)
     if (r.arg) { ck.focus = r.arg; ck.focusAt = Date.now(); } else ck.hit = "";
     history.replaceState(history.state, "", "#/chats?view=list"); r = parseRoute(location.hash); // the item is in the list, not the grid
@@ -103,12 +105,7 @@ function applyRoute() {
     if (card && !touch) card.input.focus({ preventScroll: true }); // a phone would pop its keyboard up
   }
   ckRun(agents);
-  // Tasks: List (the task lines) or Flow (the mission map).
-  const flow = r.view === "tasks" && r.q.get("view") === "flow";
-  $("tab-tasks").classList.toggle("flow", flow);
-  for (const b of $("tasks-mode").querySelectorAll("button")) b.setAttribute("aria-pressed", String((b.dataset.mode === "flow") === flow));
-  if (flow) openMission(true); else if (ms.root) openMission(false);
-  if (r.view === "tasks" && !flow) viewLoad("tasks", "Tasks", () => loadTasks(true));
+  if (r.view === "tasks") viewLoad("tasks", "Tasks", () => loadTasks(true));
   // Machines: Pcs (the comparison) or Folders (per project); one load, two drawings of it
   machinesMode = r.view === "machines" && r.q.get("view") === "folders" ? "folders" : "pcs";
   for (const b of $("machines-mode").querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.mode === machinesMode));
@@ -176,7 +173,7 @@ function setAgentProject(p) {
   if (shellRoute.view !== "tasks") loadTasks(false).catch(() => {}); // its badge counts this project
   if (shellRoute.view === "chats") { ckList(); bdRender(); const d = ck.cards.get(ckKey(CK_DRAFT)); if (d) ckPoll(d); }
   else if (shellRoute.view === "tasks") {
-    if ($("tab-tasks").classList.contains("flow")) { ms.project = p; ms.fitted = false; msLoad(); } else viewLoad("tasks", "Tasks", () => loadTasks(true));
+    viewLoad("tasks", "Tasks", () => loadTasks(true));
   }
 }
 function inboxCount(items) {
@@ -208,7 +205,6 @@ function needsNotify(items) {
 // when notifications are on, which is when they matter).
 setInterval(() => { if ($("cockpit").hidden && (!document.hidden || notifyOn()) && me.user && !agentsOff()) ckSummary().catch(() => {}); }, 30000);
 
-for (const b of $("tasks-mode").querySelectorAll("button")) b.onclick = () => go(b.dataset.mode === "flow" ? "#/tasks?view=flow" : "#/tasks");
 for (const b of $("machines-mode").querySelectorAll("button")) b.onclick = () => go(b.dataset.mode === "folders" ? "#/machines?view=folders" : "#/machines");
 
 // Search or jump: the command palette (palette.js).

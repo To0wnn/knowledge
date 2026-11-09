@@ -9,7 +9,7 @@
 const pal = { items: [], sel: 0, notesOnly: false, seq: 0, timer: 0, tasks: [], server: null };
 const PAL_VIEWS = [["chats", "Agents"], ["tasks", "Tasks"], ["machines", "Machines"], ["notes", "Notes"],
   ["map", "Map"], ["changes", "Changes"], ["health", "Health"], ["thispc", "This pc"], ["admin", "Admin"], ["help", "Help"]];
-const PAL_ACTIONS = [["new-chat", "New chat…", "new_chat"], ["theme", "Toggle theme"], ["rail", "Collapse or expand the sidebar", "rail"], ["flow", "Open mission flow"]];
+const PAL_ACTIONS = [["new-chat", "New chat…", "new_chat"], ["theme", "Toggle theme"], ["rail", "Collapse or expand the sidebar", "rail"]];
 const palKey = (it) => `${it.kind}:${it.id}`;
 
 function openPalette(notesOnly = false) {
@@ -34,7 +34,7 @@ function palGo(it) {
   if (it.kind === "task") return openNote(it.path, { find: [it.id.toLowerCase()] });
   if (it.kind === "view") return ["admin", "help"].includes(it.id) ? location.assign(`/ui/${it.id}`) : go(`#/${it.id}`);
   const act = { "new-chat": () => { go("#/chats"); $("ck-new").onclick(); }, theme: () => document.querySelector(".theme-btn").click(),
-    rail: toggleRail, flow: () => go("#/tasks?view=flow") }[it.id];
+    rail: toggleRail }[it.id];
   if (act) act();
 }
 
@@ -48,7 +48,7 @@ const noteItem = (n, hint, find) => ({ kind: "note", id: n.id, label: noteName(n
 // The groups for the current text: [[heading, items]], empty groups left out.
 function palGroups(q) {
   const words = q.toLowerCase().split(/\s+/).filter(Boolean), has = (t) => words.every((w) => t.toLowerCase().includes(w));
-  const views = PAL_VIEWS.filter(([id]) => (id !== "health" || me.admin) && (id !== "thispc" || !$("nav-thispc").hidden) && !(agentsOff() && AGENT_VIEWS.includes(id)))
+  const views = PAL_VIEWS.filter(([id]) => (id !== "health" || me.admin) && (id !== "thispc" || !$("nav-thispc").hidden) && !(agentsOff() && AGENT_VIEWS.includes(id)) && !(id === "tasks" && !agentsOff()))
     .map(([id, label]) => ({ kind: "view", id, label: id === "admin" && !me.admin ? "My tokens & projects" : label, hint: "Go to" }));
   const actions = PAL_ACTIONS.filter(([id]) => !(agentsOff() && id === "new-chat")).map(([id, label, key]) => ({ kind: "action", id, label, hint: key ? keyOf(key) : "" }));
   if (!words.length) {

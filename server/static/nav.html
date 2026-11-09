@@ -8,7 +8,7 @@
   <label class="proj" data-shortcut="digits" title="Project of every view: notes, agents, tasks ({key}, 0 = all)"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5h6l2 2h9v9h-17z"/></svg><span class="sr-only">Project</span><select class="project-pick" id="projects"></select></label>
   <div class="sec ag-on">Agents</div>
   <a class="nav ag-on" href="#/chats" data-nav="chats" data-shortcut="chats" title="Agents: what needs you, what runs, and your chats ({key})"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 5.5h15v10h-9l-4 3.5v-3.5h-2z"/></svg><span class="label">Agents</span><span class="badge hot inbox-count" title="Needs you"></span><span class="badge" id="ck-live" title="Running chats, workers and sessions active in the last 10 min on your pcs"><span id="ck-live-n">0</span> live</span></a>
-  <a class="nav" href="#/tasks" data-nav="tasks" title="Tasks"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6.5h11M9 12h11M9 17.5h11"/><path d="M4 6.5l1 1 2-2M4 12l1 1 2-2M4 17.5l1 1 2-2"/></svg><span class="label">Tasks</span><span id="tasks-count" class="badge" title="Open tasks between agents"></span></a>
+  <a class="nav ag-off" href="#/tasks" data-nav="tasks" title="Tasks"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6.5h11M9 12h11M9 17.5h11"/><path d="M4 6.5l1 1 2-2M4 12l1 1 2-2M4 17.5l1 1 2-2"/></svg><span class="label">Tasks</span><span id="tasks-count" class="badge" title="Open tasks between agents"></span></a>
   <a class="nav ag-on" href="#/machines" data-nav="machines" title="Machines"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="11" rx="2"/><path d="M9 19.5h6M12 15.5v4"/></svg><span class="label">Machines</span></a>
   <div class="sec">Knowledge</div>
   <a class="nav" href="#/notes" data-nav="notes" title="Notes"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5h10l4 4v11H5z"/><path d="M8.5 12h7M8.5 15.5h7"/></svg><span class="label">Notes</span></a>
@@ -30,10 +30,10 @@
 
 <nav class="tabbar" id="tabbar" aria-label="Main (phone)">
   <a class="ag-on" href="#/chats" data-nav="chats"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 5.5h15v10h-9l-4 3.5v-3.5h-2z"/></svg><span>Agents</span><span class="badge hot inbox-count" title="Needs you"></span></a>
-  <a href="#/tasks" data-nav="tasks"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6.5h11M9 12h11M9 17.5h11"/><path d="M4 6.5l1 1 2-2M4 12l1 1 2-2M4 17.5l1 1 2-2"/></svg><span>Tasks</span></a>
+  <a class="ag-off" href="#/tasks" data-nav="tasks"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6.5h11M9 12h11M9 17.5h11"/><path d="M4 6.5l1 1 2-2M4 12l1 1 2-2M4 17.5l1 1 2-2"/></svg><span>Tasks</span></a>
   <a class="ag-on" href="#/machines" data-nav="machines"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="11" rx="2"/><path d="M9 19.5h6M12 15.5v4"/></svg><span>Machines</span></a>
   <a href="#/notes" data-nav="notes"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5h10l4 4v11H5z"/><path d="M8.5 12h7M8.5 15.5h7"/></svg><span>Notes</span></a>
-  <a class="ag-off" href="#/map" data-nav="map"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="11" cy="18" r="2.5"/><path d="M8.3 7l7.4.7M7 8.3l3 7.4M16.6 10l-4 6"/></svg><span>Map</span></a>
+  <a href="#/map" data-nav="map"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="11" cy="18" r="2.5"/><path d="M8.3 7l7.4.7M7 8.3l3 7.4M16.6 10l-4 6"/></svg><span>Map</span></a>
   <a class="ag-off" href="#/changes" data-nav="changes"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 7v5l3 2M3.5 12a8.5 8.5 0 1 0 2.5-6M3 4v4h4"/></svg><span>Changes</span></a>
   <button type="button" id="more-btn" aria-haspopup="dialog" aria-controls="more-sheet"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="18" cy="12" r="1.2"/></svg><span>More</span></button>
 </nav>
@@ -41,7 +41,6 @@
 <dialog id="more-sheet" class="sheet" aria-label="More">
   <div class="sheet-body">
     <div class="grab" aria-hidden="true"></div>
-    <a class="nav ag-on" href="#/map" data-nav="map">Map</a>
     <a class="nav ag-on" href="#/changes" data-nav="changes">Changes</a>
     <a class="nav nav-health" href="#/health" data-nav="health">Health</a>
     <a class="nav nav-thispc" href="#/thispc" data-nav="thispc" hidden>This pc</a>

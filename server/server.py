@@ -5820,75 +5820,6 @@ async def ui_tasks(request: Request):
     return JSONResponse({"tasks": await asyncio.to_thread(rows), "sessions": task_sessions()})
 
 
-# ---------------------------------------------------------------- Mission map (Agents cockpit, static/mission.js)
-# The task lines as a graph: nodes = tasks, one lane per owner (agent or person), edges = "start after <ID>",
-# hand-overs (requester -> owner), <ID>-cont continuations and <ID>-done results back to the requester. The same rows
-# and visibility as the Tasks tab (task_rows); the browser lays it out.
-MISSION_DONE_HOURS = 24
-MISSION_AGENTS = {"claude": "Claude", "codex": "Codex", "agy": "Gemini / agy"}
-
-
-def mission_lane(name: str) -> str:
-    """The lane of an owner or requester: the agent ("Claude@pc-2" -> claude), else the person's name."""
-    return owner_agent(name) or name.partition("@")[0].strip().lower()
-
-
-def mission_graph(project: str = "", everything: bool = False) -> dict:
-    now, nodes, lanes = time.time(), [], {}
-    leases = read_json(TASK_LEASES, {})
-    for r in task_rows():
-        if project and r["project"] != project:
-            continue
-        if r["done"] and not everything and r.get("since", 0) < now - MISSION_DONE_HOURS * 3600:
-            continue
-        lease = leases.get(r["project"], {}).get(r["id"])
-        live = bool(lease) and lease.get("until", 0) >= now
-        where = r.get("runs") or (task_where(r["project"], r, lease, now) if live else "")
-        status = ("done" if r["done"] else "stalled" if r["stalled"]
-                  else ("running" if str(lease.get("session", "")).startswith("worker:") else "claimed") if live and (r["claimed"] or r["startable"])
-                  else "claimed" if r["claimed"] else "approval" if "approval" in r["waiting_reason"]
-                  else "waiting" if r["waiting_reason"] else "open")
-        lane = mission_lane(r["owner"])
-        lanes.setdefault(lane, r["owner"].partition("@")[0].strip())
-        nodes.append({"key": f"{r['project']}/{r['id']}", "status": status, "lane": lane, "where": where,
-                      **{k: r.get(k, "") for k in ("id", "project", "owner", "text", "line", "path", "from", "start", "due",
-                                                   "waiting_reason", "author", "since", "approve_warning")},
-                      "can_approve": bool(r.get("can_approve"))})
-    keys = {(n["project"], n["id"]): n for n in nodes}
-    edges = []
-    for n in nodes:
-        p, tid = n["project"], n["id"]
-        if n["status"] == "done":  # a result: from the task (or its last hand-over) it closes
-            base = tid[:-5]
-            src = max((m for m in nodes if m["project"] == p and m["status"] != "done" and CONT.sub("", m["id"]) == base),
-                      key=lambda m: len(m["id"]), default=None)
-            if src:
-                edges.append({"from": src["key"], "to": n["key"], "kind": "done"})
-            continue
-        start = n["start"]
-        if start.lower().startswith("after ") and start.lower() != "after approval":
-            dep = start[6:].strip()
-            if src := keys.get((p, dep)) or keys.get((p, dep + "-done")):
-                edges.append({"from": src["key"], "to": n["key"], "kind": "dep"})
-        if tid.lower().endswith("-cont") and (src := keys.get((p, tid[:-5]))):
-            edges.append({"from": src["key"], "to": n["key"], "kind": "cont"})
-        req = mission_lane(n["from"]) if n["from"] else ""
-        linked = any(e["to"] == n["key"] for e in edges)
-        if req and req != n["lane"] and not linked:  # a dependency or continuation already shows where it came from
-            lanes.setdefault(req, n["from"].partition("@")[0].strip())
-            edges.append({"from": f"lane:{req}", "to": n["key"], "kind": "handover"})
-    order = lambda l: (list(MISSION_AGENTS).index(l) if l in MISSION_AGENTS else len(MISSION_AGENTS), l)
-    return {"nodes": nodes, "edges": edges, "done_hours": MISSION_DONE_HOURS,
-            "lanes": [{"id": l, "name": MISSION_AGENTS.get(l, lanes[l]), "agent": l in MISSION_AGENTS} for l in sorted(lanes, key=order)]}
-
-
-@server.custom_route("/ui/api/mission", methods=["GET"])
-async def ui_mission(request: Request):
-    """?project=<name> (default: every project the viewer sees), ?all=1 also older results."""
-    q = request.query_params
-    return JSONResponse(await asyncio.to_thread(mission_graph, q.get("project", ""), q.get("all") == "1"))
-
-
 @server.custom_route("/ui/api/machines", methods=["GET"])
 async def ui_machines(request: Request):
     def build():
@@ -6572,7 +6503,7 @@ def board_items() -> list[dict]:
             what = (f"result for {t['owner']}: " if t["done"] else f"handed over to {t['owner']} for {t['from']}: ") + t["text"][:140]
             items.append({"kind": "task", "col": "needs", "id": t["id"], "agent": agent, "project": t["project"], "path": t["path"],
                           "title": f"{t['id']} · {t['text'][:120]}", "line": what, "at": t.get("since") or 0, "owner": t["owner"],
-                          "key": key if t["done"] else f"handover:{t['project']}/{t['id']}", "sig": sig, "result": True})
+                          "key": key if t["done"] else f"handover:{t['project']}/{t['id']}", "sig": sig, "result": True, "line_text": t["line"]})
             if t["done"]:
                 continue
         task = {"kind": "task", "id": t["id"], "agent": agent, "project": t["project"], "title": f"{t['id']} · {t['text'][:120]}",

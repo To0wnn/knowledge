@@ -6,9 +6,7 @@ connected notes on the right; Changes lists lines added/removed. On the map (Map
 and its neighbours (after the layout settled); the neighbours gather in a ring; a click beside the nodes (which usually
 lands on a link) deselects, puts every node back exactly and zooms out; a second click on a note reads it. On a phone
 the lists come first (on the home view the topic cards instead of the topic list) and opening a note scrolls to it. The
-Agents views open with the board and the new chat dialog (skipped on a server older than 0.16); the mission map lays
-out a seeded graph cleanly (lone tasks in the first column) and opens as Tasks > Flow (skipped on a server without
-it). The app shell (0.18): hash routes per view, sidebar and rail, back/forward, refresh, old deep links, Ctrl+K, the
+Agents views open with the board and the new chat dialog (skipped on a server older than 0.16). The app shell (0.18): hash routes per view, sidebar and rail, back/forward, refresh, old deep links, Ctrl+K, the
 phone's tab bar and More sheet, no sideways scroll at 390 px, the map resizing with its box; an older server gets the
 old checks instead. Tool approvals show on the board and in their chat with fake data (skipped without them).
 Knowledge pages and the palette (0.19): Notes as list and note (two panes; on a phone two pages with a Back arrow),
@@ -149,9 +147,11 @@ async def desktop(browser, secret: str) -> None:
     await pg.click(nav("changes"))
     await pg.wait_for_selector("#recent section li button", timeout=5000)
     check(await pg.locator("#recent .plus").count() > 0, "Changes shows lines added/removed")
-    await pg.click(nav("tasks"))
-    await pg.wait_for_selector("#tasks h3, #tasks p", timeout=5000)
-    check(await pg.evaluate("!$('tab-tasks').hidden && $('tab-lint').hidden"), "Tasks tab shows task lines and agent sessions")
+    if shell:  # with Agents, tasks live there: no Tasks entry, and #/tasks opens the Agents list
+        check(not await pg.locator(nav("tasks")).is_visible(), "with Agents the sidebar has no Tasks entry")
+        await pg.evaluate("location.hash = '#/tasks'")
+        await pg.wait_for_timeout(500)
+        check(await pg.evaluate("location.hash") == "#/chats?view=list", "#/tasks opens the Agents list")
     # The map.
     await pg.keyboard.press("Escape")
     await pg.click(nav("map") if shell else "#map-btn")
@@ -676,7 +676,7 @@ async def shell(browser, devices, secret: str) -> None:
     await pg.wait_for_function("typeof Graph !== 'undefined' && Graph && Graph.graphData().nodes.length > 0", timeout=20000)
     await pg.wait_for_timeout(500)
     check(await pg.evaluate("location.hash === '#/chats' && !$('cockpit').hidden"), "the default route is the Agents view")
-    for v in ("chats", "tasks", "machines", "notes", "map", "changes", "health"):
+    for v in ("chats", "machines", "notes", "map", "changes", "health"):
         await route(pg, f"#/{v}")
         st = await pg.evaluate("""(a) => ({shown: !$(a.el).hidden, only: [...document.querySelectorAll('#content > .view')].filter(e => !e.hidden).length === 1,
             current: document.querySelector('#sidebar [aria-current=page]')?.dataset.nav, title: $('title').textContent})""", {"el": VIEW_EL[v]})
@@ -792,13 +792,13 @@ async def shell(browser, devices, secret: str) -> None:
     else:
         print("skip lint v2 (server older than fix/yolo-memo-health)")
     await route(pg, "#/notes")
-    await route(pg, "#/tasks")
+    await route(pg, "#/machines")
     await pg.go_back()
     await pg.wait_for_timeout(400)
     check(await pg.evaluate("location.hash === '#/notes' && !$('kn').hidden"), "Back returns to the previous view")
     await pg.go_forward()
     await pg.wait_for_timeout(400)
-    check(await pg.evaluate("location.hash === '#/tasks' && !$('tab-tasks').hidden"), "Forward goes to the next view")
+    check(await pg.evaluate("location.hash === '#/machines' && !$('tab-machines').hidden"), "Forward goes to the next view")
     # back in a view its scroll position returns, but scrolling yourself right away is not undone by the late retries
     await route(pg, "#/settings", ms=800)
     await pg.evaluate("$('tab-settings').scrollTop = 100")
@@ -812,9 +812,6 @@ async def shell(browser, devices, secret: str) -> None:
     await pg.wait_for_timeout(1500)
     after = await pg.evaluate("$('tab-settings').scrollTop")
     check(back == 100 and after > 200, f"back in a view: its scroll returns and your own scrolling then stays ({back}, then {after})")
-    await route(pg, "#/tasks?view=flow", "#mission .ms-n, #mission .ms-empty")
-    check(await pg.evaluate("!$('mission').hidden && $('tab-tasks').contains($('mission')) && $('tasks-list').offsetParent === null && $('tasks-mode').querySelector('[data-mode=flow]').getAttribute('aria-pressed') === 'true'"),
-          "Tasks > Flow shows the mission map in place of the list")
     await route(pg, "#/changes")
     await pg.reload()
     await pg.wait_for_selector("#recent section li", timeout=15000)
@@ -864,7 +861,7 @@ async def shell(browser, devices, secret: str) -> None:
     small = await pg.evaluate("[...document.querySelectorAll('#tabbar a, #tabbar button')].filter((b) => b.offsetParent).map(b => b.getBoundingClientRect().height).filter(h => h < 44)")
     check(not small, f"phone: tab bar targets are at least 44 px {small}")
     wide = []
-    for v in ("inbox", "chats", "tasks", "tasks?view=flow", "machines", "notes", "map", "changes", "health"):
+    for v in ("inbox", "chats", "tasks", "machines", "notes", "map", "changes", "health"):
         await route(pg, f"#/{v}", ms=900)
         if await pg.evaluate("document.documentElement.scrollWidth > innerWidth"):
             wide.append(v)
@@ -873,9 +870,9 @@ async def shell(browser, devices, secret: str) -> None:
     check(await pg.evaluate("$('head-search').getBoundingClientRect().right <= innerWidth"), "phone: the header's search button is fully on screen")
     await pg.locator("#more-btn").dispatch_event("click")  # fixed bar: see the tab bar note above
     await pg.wait_for_selector("#more-sheet[open]")
-    await pg.locator('#more-sheet [data-nav="map"]').dispatch_event("click")
+    await pg.locator('#more-sheet [data-nav="changes"]').dispatch_event("click")
     await pg.wait_for_timeout(400)
-    check(await pg.evaluate("location.hash === '#/map' && !$('more-sheet').open && $('more-btn').getAttribute('aria-current') === 'page'"), "phone: More opens a sheet whose links go to their view")
+    check(await pg.evaluate("location.hash === '#/changes' && !$('more-sheet').open && $('more-btn').getAttribute('aria-current') === 'page'"), "phone: More opens a sheet whose links go to their view")
     await pg.go_back()
     await pg.wait_for_timeout(400)
     check(await pg.evaluate("location.hash === '#/chats'"), "phone: back goes to the previous view")
@@ -939,18 +936,6 @@ async def agents_pages(browser, devices, secret: str) -> None:
     closed = await pg.evaluate("[$('ck-closed').getAttribute('aria-pressed'), [...document.querySelectorAll('#ck-history .ck-chat:not(.ck-subchat)')].every(b => b.classList.contains('closed') || b.classList.contains('needs') || b.classList.contains('running'))]")
     check(closed[0] == "true" and closed[1], f"Earlier: Closed shows the closed chats {closed}")
     await pg.click("#ck-closed")
-    await route(pg, "#/tasks", "#tasks h3, #tasks p", 800)
-    await pg.select_option("#projects", "all")  # the one project picker (sidebar) also scopes the agents views
-    await pg.wait_for_timeout(800)
-    t = await pg.evaluate("""[$('tasks-count').textContent, ([...document.querySelectorAll('#tasks h3')].find(h => h.textContent.startsWith('Open')) || {textContent: ''}).textContent,
-      [...document.querySelectorAll('#tasks .task-acts button')].map(b => b.textContent), [...document.querySelectorAll('#tasks .task-acts button:disabled')].every(b => b.title)]""")
-    check(t[1] == (f"Open ({t[0]})" if t[0] else ""), f"Tasks: the badge and the Open heading agree {t[:2]}")
-    await pg.select_option("#projects", "homelab")  # one project: the badge counts its lines, as the list does
-    await pg.wait_for_timeout(1500)
-    h = await pg.evaluate("""[$('tasks-count').textContent, ([...document.querySelectorAll('#tasks h3')].find(h => h.textContent.startsWith('Open')) || {textContent: ''}).textContent]""")
-    check(h[1] == (f"Open ({h[0]})" if h[0] else ""), f"Tasks: with one project picked the badge follows it {h}")
-    await pg.select_option("#projects", "all")
-    check("Done" not in t[2] and t[3], f"Tasks: Cancel (with the reason when disabled) instead of Done {sorted(set(t[2]))}")
     await route(pg, "#/machines", "#machines > *", 800)
     check(await pg.evaluate("getComputedStyle($('machines')).gridTemplateColumns.split(' ').length === 1"), "Machines: one block under the other, full width")
     await route(pg, "#/changes", "#recent", 500)
@@ -960,7 +945,7 @@ async def agents_pages(browser, devices, secret: str) -> None:
     await ctx.close()
     ctx, pg, errors = await page(browser, secret, "/ui#/inbox", **devices["iPhone 14"])
     wide = []
-    for v in ("chats", "tasks", "machines", "changes"):
+    for v in ("chats", "machines", "changes"):
         await route(pg, f"#/{v}", ms=900)
         if await pg.evaluate("document.documentElement.scrollWidth > innerWidth"):
             wide.append(v)
@@ -1048,7 +1033,7 @@ async def knowledge(browser, devices, secret: str) -> None:
     await pg.click("#jump")
     check(await pg.evaluate("$('palette').open"), "the sidebar's Search or jump opens the palette")
     await pg.keyboard.press("Escape")
-    # alert() is gone from the knowledge views and the mission map: errors are toasts.
+    # alert() is gone from the knowledge views: errors are toasts.
     src = await pg.evaluate("Promise.all(['app.js', 'agents.js', 'mission.js'].map(f => fetch('/ui/static/' + f).then(r => r.text())))")
     left = [ln.strip() for f in src for ln in f.split("\n") if "alert(" in ln and not ln.strip().startswith("//")]
     check(not left, f"no alert() left {left}")
@@ -1065,104 +1050,6 @@ async def knowledge(browser, devices, secret: str) -> None:
     await pg.tap("#pal-close")
     check(not await pg.evaluate("$('palette').open"), "phone: Close shuts the palette")
     check(not errors, f"no page errors in the phone palette {errors[:2]}")
-    await ctx.close()
-
-
-MISSION_LAYOUT_CHECK = """() => {
-  // A seeded graph: 3 lanes, every status, chains inside lanes and links across them, a hand-over, lone tasks.
-  const lanes = [{id: "claude", name: "Claude"}, {id: "codex", name: "Codex"}, {id: "agy", name: "Gemini"}], st = Object.keys(MS_STATUS);
-  const graph = (n, seed) => {
-    const nodes = [], edges = [{from: "lane:claude", to: "p/T-1", kind: "handover"}];
-    let r = seed; const rnd = () => (r = (r * 16807) % 2147483647) / 2147483647;
-    for (let i = 0; i < n + 6; i++) nodes.push({key: `p/T-${i}`, id: `T-${i}`, lane: lanes[i % 3].id, status: st[i % st.length]});
-    for (let i = 3; i < n; i++) {
-      if (i % 4) edges.push({from: `p/T-${i - 3}`, to: `p/T-${i}`, kind: "dep"});
-      if (rnd() < 0.3) edges.push({from: `p/T-${Math.floor(rnd() * i)}`, to: `p/T-${i}`, kind: "cont"});
-    }
-    return {nodes, edges, lanes};
-  };
-  const check = (g) => {
-    const L = missionLayout(g), P = [...L.pos.values()], bad = [];
-    for (let i = 0; i < P.length; i++) for (let j = i + 1; j < P.length; j++) {
-      const a = P[i], b = P[j];
-      if (a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h) bad.push("overlap");
-    }
-    const seg = [];
-    for (const e of g.edges) {
-      const f = L.pos.get(e.from), t = L.pos.get(e.to); if (!f || !t) continue;
-      if (t.x < f.x + f.w) bad.push(`backwards ${e.from}->${e.to}`);
-      seg.push([f.x + f.w, f.y + f.h / 2, t.x, t.y + t.h / 2]);
-    }
-    for (const n of g.nodes) {
-      const p = L.pos.get(n.key), l = L.lanes.find((x) => x.id === n.lane);
-      if (p.layer && !g.edges.some((e) => e.from === n.key || e.to === n.key)) bad.push(`lone ${n.key} not in column 0`);
-      if (p.y < l.y || p.y + p.h > l.y + l.h) bad.push(`lane ${n.key}`);
-    }
-    if (L.lanes.map((l) => l.id).join() !== g.lanes.map((l) => l.id).join()) bad.push("lane order");
-    const side = (ax, ay, bx, by, cx, cy) => Math.sign((bx - ax) * (cy - ay) - (by - ay) * (cx - ax));
-    let crossings = 0;
-    for (let i = 0; i < seg.length; i++) for (let j = i + 1; j < seg.length; j++) {
-      const [a, b] = [seg[i], seg[j]];
-      if (side(...a, b[0], b[1]) * side(...a, b[2], b[3]) < 0 && side(...b, a[0], a[1]) * side(...b, a[2], a[3]) < 0) crossings++;
-    }
-    return {bad, crossings, edges: seg.length};
-  };
-  return {small: check(graph(24, 7)), big: check(graph(60, 11))};
-}"""
-
-
-async def mission(browser, devices, secret: str) -> None:
-    """The mission map (Agents > Tools): the layout of a seeded graph keeps tasks apart, edges left to right and
-    tasks in their lane; the view opens from the tools menu, a task opens its panel, Esc goes back; on a phone the
-    chains list fits the screen. Read-only (nothing is approved). Skipped on a server without it."""
-    ctx, pg, errors = await page(browser, secret, viewport={"width": 1440, "height": 900})
-    await pg.wait_for_selector("#note", state="attached")
-    await pg.wait_for_timeout(500)
-    if await pg.evaluate("typeof missionLayout") != "function":
-        print("skip mission map (server without it)")
-        await ctx.close()
-        return
-    res = await pg.evaluate(MISSION_LAYOUT_CHECK)
-    check(not res["small"]["bad"] and not res["big"]["bad"], f"mission layout: no overlaps, edges left to right, lanes kept {res['small']['bad'][:3]} {res['big']['bad'][:3]}")
-    print(f"     mission layout crossings: {res['small']['crossings']}/{res['small']['edges']} edges at 24 tasks, {res['big']['crossings']}/{res['big']['edges']} at 60")
-    if await is_shell(pg):  # Tasks > Flow
-        await route(pg, "#/tasks?view=flow", "#mission .ms-n, #mission .ms-empty")
-        if await pg.locator("#mission .ms-n").count():
-            await pg.locator("#mission .ms-n").first.click()
-            check(await pg.locator("#ms-panel").is_visible() and bool(await pg.locator("#ms-panel .ms-line").inner_text()), "a task opens its panel with the full line")
-            await pg.keyboard.press("Escape")
-            check(not await pg.locator("#ms-panel").is_visible() and await pg.evaluate("location.hash === '#/tasks?view=flow'"), "Esc closes the panel, the view stays")
-        check(not errors, f"no page errors in the mission map {errors[:2]}")
-        await ctx.close()
-        ctx, pg, errors = await page(browser, secret, "/ui#/tasks?view=flow", **devices["iPhone 14"])
-        await pg.wait_for_selector("#mission .ms-c, #mission .ms-empty", timeout=10000)
-        check(await pg.evaluate("document.documentElement.scrollWidth <= innerWidth && $('ms-stage').hidden && !$('ms-list').hidden"),
-              "phone mission map: chains as a list, fits the screen")
-        check(not errors, f"no page errors in the phone mission map {errors[:2]}")
-        await ctx.close()
-        return
-    await pg.click("#cockpit-btn")
-    await pg.click("#ck-tools-menu summary")
-    await pg.click('#ck-tools-menu [data-go="mission"]')
-    await pg.wait_for_selector("#mission .ms-n, #mission .ms-empty", timeout=10000)
-    check(await pg.evaluate("!$('mission').hidden && !$('cockpit').hidden"), "Tools > Mission map opens the map over the cockpit")
-    if await pg.locator("#mission .ms-n").count():
-        await pg.locator("#mission .ms-n").first.click()
-        check(await pg.locator("#ms-panel").is_visible() and bool(await pg.locator("#ms-panel .ms-line").inner_text()), "a task opens its panel with the full line")
-        await pg.keyboard.press("Escape")
-        check(not await pg.locator("#ms-panel").is_visible(), "Esc closes the panel first")
-    await pg.keyboard.press("Alt+KeyF")
-    await pg.keyboard.press("Escape")
-    check(await pg.evaluate("$('mission').hidden && !$('cockpit').hidden"), "Esc goes back to the cockpit")
-    check(not errors, f"no page errors in the mission map {errors[:2]}")
-    await ctx.close()
-    ctx, pg, errors = await page(browser, secret, **devices["iPhone 14"])
-    await pg.wait_for_selector("#cockpit-btn")
-    await pg.evaluate("openCockpit(true); openMission(true)")
-    await pg.wait_for_selector("#mission .ms-c, #mission .ms-empty", timeout=10000)
-    check(await pg.evaluate("document.documentElement.scrollWidth <= screen.width && $('ms-stage').hidden && !$('ms-list').hidden"),
-          "phone mission map: chains as a list, fits the screen")
-    check(not errors, f"no page errors in the phone mission map {errors[:2]}")
     await ctx.close()
 
 
@@ -1605,7 +1492,7 @@ DS_JS = """() => {
     const h = Math.round(f.getBoundingClientRect().height);
     if (![36, 28, 44].includes(h)) out.bad.push(`field ${tag(f)} ${h}px`);
   }
-  for (const c of document.querySelectorAll('.chip, .pill, .badge, .ck-count, .ms-chip, .cmp-chip')) {
+  for (const c of document.querySelectorAll('.chip, .pill, .badge, .ck-count, .cmp-chip')) {
     if (!vis(c)) continue; const s = getComputedStyle(c);
     if (s.cursor === 'pointer' || parseFloat(s.borderTopWidth) > 0) out.bad.push(`chip ${tag(c)} looks clickable`);
   }
@@ -1697,9 +1584,6 @@ async def one_lamp(browser, secret: str) -> None:
       return {lines: document.querySelectorAll('.mx-offline .mx-line').length, columns: document.querySelectorAll('.mx-offline .mx-pc').length,
               last: first === -1 || kids.slice(first + 1).every((k) => !k.matches('.mx-wrap'))}; }""")
     check(fold["columns"] == 0 and fold["last"], f"offline pcs of your own come after the comparison, one line each {fold}")
-    await route(pg, "#/tasks", "#tasks > *", 1000)
-    spill = await pg.evaluate("""() => { const t = $('tasks').textContent; return {none: /No tasks in /.test(t), others: /In your other projects/.test(t), rows: document.querySelectorAll('#tasks li.task').length, badge: $('tasks-count').textContent}; }""")
-    check(not spill["others"] or (spill["rows"] > 0 and spill["badge"] != ""), f"a project without tasks shows the work elsewhere, and the badge counts it {spill}")
     await route(pg, "#/chats", "", 1500)
     send = await pg.evaluate("""async () => { const f = [...document.querySelectorAll('.ck-box')].find((b) => b.offsetParent); if (!f) return null; const t = f.querySelector('textarea'), s = f.querySelector('.ck-send'), was = t.value, bg = () => getComputedStyle(s).backgroundColor;
       t.value = ''; await new Promise((r) => setTimeout(r, 300)); const empty = bg(); t.value = 'x'; await new Promise((r) => setTimeout(r, 300)); const typed = bg(); t.value = was; return {empty, typed}; }""")
@@ -1783,7 +1667,7 @@ async def design_system(browser, devices, secret: str) -> None:
     if not await pg.locator("#page-head .btn").count():
         print("skip design system (server older than 0.21)")
         return await ctx.close()
-    views = ["#/chats", "#/chats?view=list", "#/tasks", "#/machines", "#/notes", "#/changes", "#/health"]
+    views = ["#/chats", "#/chats?view=list", "#/machines", "#/notes", "#/changes", "#/health"]
     for v in views:
         await route(pg, v, "", 900)
         r = await pg.evaluate(DS_JS)
@@ -1796,7 +1680,7 @@ async def design_system(browser, devices, secret: str) -> None:
     await ctx.close()
     ctx, pg, errors = await page(browser, secret, "/ui#/notes", **{**devices["iPhone 14"], "viewport": {"width": 390, "height": 844}})
     await pg.wait_for_timeout(1500)
-    for v in ("#/chats", "#/notes", "#/tasks"):
+    for v in ("#/chats", "#/notes", "#/map"):
         await route(pg, v, "", 900)
         small = await pg.evaluate("() => [...document.querySelectorAll('.btn')].filter((b) => b.offsetParent && b.getBoundingClientRect().height && b.getBoundingClientRect().height < 43.5).map((b) => b.id || b.textContent.trim().slice(0, 20))")
         check(not small, f"phone design system {v}: every button a 44 px touch target {small[:4]}")
@@ -2395,8 +2279,8 @@ async def settings(browser, secret: str) -> None:
         await pg.press(box, "Shift+Enter")
         await pg.wait_for_function("document.querySelector('#ck-canvas .ck-form textarea').value === ''", timeout=5000)
         check(len(sent) == before + 1, f"Settings: Shift+Enter sends {sent}")
-    await pg.evaluate("me.prefs.start_page = 'tasks'; location.hash = ''")
-    check(await pg.evaluate("startRoute()") == "#/tasks", "Settings: the start page decides where the app opens")
+    await pg.evaluate("me.prefs.start_page = 'machines'; location.hash = ''")
+    check(await pg.evaluate("startRoute()") == "#/machines", "Settings: the start page decides where the app opens")
     check(not errors, f"no page errors in settings {errors[:2]}")
     await ctx.close()
 
@@ -2416,7 +2300,6 @@ async def main() -> None:
         await cockpit(browser, p.devices, secret)
         await approvals(browser, p.devices, secret)
         await review(browser, p.devices, secret)
-        await mission(browser, p.devices, secret)
         await shell(browser, p.devices, secret)
         await knowledge(browser, p.devices, secret)
         await agents_pages(browser, p.devices, secret)
