@@ -2720,13 +2720,15 @@ def plugin_latest() -> tuple[str, float] | None:
     return (latest["v"], latest["since"]) if latest else None
 
 
-# Where each agent program's newest version is published; agy says it nowhere public, so it has none.
-AGENT_LATEST_URLS = {a: f"https://registry.npmjs.org/-/package/{p}/dist-tags" for a, p in (("claude", "@anthropic-ai/claude-code"), ("codex", "@openai/codex"))}
+# Where each agent program's newest version is published: npm's dist-tags, and for agy the manifest its own installer reads.
+# shortcut: agy's linux_amd64 manifest stands for every platform; read the pc's own platform if they ever differ.
+AGENT_LATEST_URLS = {**{a: f"https://registry.npmjs.org/-/package/{p}/dist-tags" for a, p in (("claude", "@anthropic-ai/claude-code"), ("codex", "@openai/codex"))},
+                     "agy": "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_amd64.json"}
 _agents_latest: dict = {"at": 0.0, "v": {}}
 
 
 def agents_latest() -> dict:
-    """{"claude": {"latest": "2.1.319", "stable": "2.1.311"}, "codex": {"latest": "0.167.0"}}, checked at most hourly;
+    """{"claude": {"latest": "2.1.319", "stable": "2.1.311"}, "codex": {"latest": "0.167.0"}, "agy": {"latest": "1.5.3"}}, at most hourly;
     an agent whose registry did not answer keeps its last answer."""
     if time.time() - _agents_latest["at"] > 3600:
         _agents_latest["at"] = time.time()
@@ -2734,6 +2736,7 @@ def agents_latest() -> dict:
             try:
                 with urllib.request.urlopen(url, timeout=5) as r:
                     tags = json.loads(r.read().decode())
+                tags = {"latest": tags["version"]} if "version" in tags else tags  # agy's manifest: one version
                 _agents_latest["v"][a] = {k: str(tags[k])[:20] for k in ("latest", "stable") if k in tags}
             except (OSError, ValueError, KeyError) as e:
                 print(f"{a} version check failed: {e}", flush=True)

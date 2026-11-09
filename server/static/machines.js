@@ -48,7 +48,7 @@ function pluginBehind(m) { // an agent that waits for itself to close (agy open 
   const newest = newestPlugin(), later = m.companion?.self?.later || [];
   return [m.companion?.version, ...Object.entries(m.agents || {}).filter(([a]) => !later.includes(a)).map(([, ag]) => ag.plugin)].some((v) => v && versionNewer(newest, v)) ? newest : "";
 }
-// The agent program itself (Claude Code 2.1.319): the newest of its own update channel, "" when nobody publishes one (agy).
+// The agent program itself (Claude Code 2.1.319): the newest of its own update channel, "" while the server does not know it.
 const agentNewest = (m, a) => { const t = machinesRes?.newestAgents?.[a] || {}; return t[m.agents?.[a]?.channel] || t.latest || ""; };
 const agentBehind = (m, a) => { const v = m.agents?.[a]?.cli, n = agentNewest(m, a); return v && n && versionNewer(n, v) ? n : ""; };
 const agentsBehind = (m) => AGENT_ORDER.filter((a) => agentBehind(m, a));

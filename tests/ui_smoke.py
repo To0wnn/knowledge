@@ -733,7 +733,7 @@ async def shell(browser, devices, secret: str) -> None:
       const pc = {agents: {claude: {cli: '2.1.5', channel: 'stable'}, codex: {cli: '0.8.0'}, agy: {cli: '1.0.0'}}};
       const out = [agentBehind(pc, 'claude'), agentBehind(pc, 'codex'), agentBehind(pc, 'agy'), agentBehind({agents: {claude: {cli: '2.1.5', channel: 'latest'}}}, 'claude')];
       machinesRes = was; return out; }""")
-    check(cli == ["", "0.9.0", "", "2.1.9"], f"Machines: an agent program is behind only against its own update channel, and agy (no feed) never {cli}")
+    check(cli == ["", "0.9.0", "", "2.1.9"], f"Machines: an agent program is behind only against its own update channel, and never while its newest is unknown {cli}")
     notes = await pg.evaluate("""() => { const cache = machinesCache, was = machinesRes, now = Date.now() / 1000, pc = (self) => ({id: 'x', label: 'pc', actions: [], agents: {}, companion: {version: '1.0.0', self}});
       machinesCache = [{id: 'n', agents: {}, actions: [], companion: {version: '2.0.0'}}]; machinesRes = {newest: '2.0.0', machines: machinesCache};  // the server's newest wins
       const out = [selfNote(pc({from: 'checkout', disk: '2.0.0', waits: 'the next check (within a minute)'})), selfNote(pc({from: 'copy', disk: '1.0.0', waits: ''})), selfNote(pc({from: 'checkout', disk: '1.0.0', waits: ''}))];
