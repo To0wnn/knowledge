@@ -6067,7 +6067,8 @@ def chat_choice(row: dict, agent: str, model: str, effort: str) -> tuple:
     if effort and effort not in levels:
         raise ValueError(f"effort {effort} is not one {agent} offers here" + (f" for {model}" if model else ""))
     return model, effort
-CHAT_KINDS = ("text", "tool", "refused", "error", "info", "sub", "usage")  # sub: a subagent opens or ends (its id in "sub"); usage: tokens
+# refused: a permission denied; failed: a tool call that errored, which its agent saw (not a reason to need you)
+CHAT_KINDS = ("text", "tool", "refused", "failed", "error", "info", "sub", "usage")  # sub: a subagent opens or ends (its id in "sub"); usage: tokens
 SUB_ID = re.compile(r"[\w.:-]{1,120}")
 SUB_STATES = ("running", "done", "failed")
 
@@ -6075,7 +6076,8 @@ SUB_STATES = ("running", "done", "failed")
 def chat_events(b: dict) -> list:
     """A batch's events as (kind, text, extra): extra keeps a subagent's id ("sub") and, on a sub event, its status.
     Raises ValueError on an unknown kind."""
-    out = [(str(e.get("kind")), str(e.get("text", "")),
+    # a companion sends "failed" as refused + failed: true, which an older server takes as refused
+    out = [("failed" if e.get("kind") == "refused" and e.get("failed") is True else str(e.get("kind")), str(e.get("text", "")),
             {**({"sub": str(e["sub"])} if SUB_ID.fullmatch(str(e.get("sub") or "")) else {}),
              **({"status": e["status"]} if e.get("kind") == "sub" and e.get("status") in SUB_STATES else {}),
              **({"aid": str(e["aid"])} if e.get("kind") == "sub" and SUB_ID.fullmatch(str(e.get("aid") or "")) else {}),  # how its agent reaches it
@@ -7354,8 +7356,8 @@ async def machine_chat_events(request: Request):
                 stopped = any(k == "info" and t.startswith("Stopped") for k, t, _ in events)
                 if c.pop("close_after", None) and not stopped:  # Archive: the memos are written, the chat closes
                     last = max((i for i, e in enumerate(c["events"]) if e["kind"] == "user"), default=-1)
-                    # only a failed turn (usage limit, crash) blocks: a failed tool call (agy's or Codex's "refused") is one the agent
-                    # saw and worked around, and blocking on it re-ran the whole wrap-up at the next Archive
+                    # only a failed turn (usage limit, crash) blocks: a failed or refused tool call is one the agent saw and worked
+                    # around, and blocking on it re-ran the whole wrap-up at the next Archive
                     if any(e["kind"] == "error" for e in c["events"][last + 1:]):  # not written: it stays, under Needs you
                         chat_add(c, "info", "Not archived: the turn that records this chat in the memos failed. Fix that, then Archive again.")
                     else:

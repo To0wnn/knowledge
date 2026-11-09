@@ -8,6 +8,12 @@ if [ -n "$(git status --porcelain)" ]; then git status --short >&2; echo "deploy
 # Sessions work side by side: a checkout without the newest main would silently take other sessions' fixes off the server.
 git fetch -q origin main
 git merge-base --is-ancestor FETCH_HEAD HEAD || { echo "deploy refused: this checkout lacks commits of origin/main; rebase first" >&2; exit 1; }
+# A pc updates its plugin only to a new version: two sessions that each bumped to the same number would leave one
+# change out on every pc that already had the other.
+pv() { git show "$1:plugin/.claude-plugin/plugin.json" | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p'; }
+if ! git diff --quiet FETCH_HEAD HEAD -- plugin && [ "$(pv FETCH_HEAD)" = "$(pv HEAD)" ]; then
+  echo "deploy refused: plugin/ differs from origin/main but both are version $(pv HEAD); bump it in both plugin.json files and server.json" >&2; exit 1
+fi
 # The checks do not parse the web UI's JavaScript: a stopped rebase once went live with conflict markers in it.
 if [ -n "$(git ls-files -u)" ] || git grep -qE '^(<<<<<<<|>>>>>>>) ' -- server plugin clients watcher; then echo "deploy refused: unresolved merge conflict in this checkout" >&2; exit 1; fi
 [ -f local.env ] || { echo "local.env missing: copy local.env.example and fill in the addresses" >&2; exit 1; }

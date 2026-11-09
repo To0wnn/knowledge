@@ -179,7 +179,8 @@ def first_line(text) -> str:
 
 def parse(agent: str, line: str, st: dict) -> list:
     """The chat events [(kind, text)] in one line of the agent's JSON stream; st keeps the session id and the turn's
-    state. Kinds: text (appended to the answer), tool, refused, error, info."""
+    state. Kinds: text (appended to the answer), tool, refused (a permission denied), failed (a tool call that errored,
+    which the agent sees and works around), error (the turn failed), info."""
     try:
         e = json.loads(line)
     except ValueError:
@@ -295,7 +296,7 @@ def parse(agent: str, line: str, st: dict) -> list:
             if k == "agent_message" and item.get("text"):
                 out.append(("text", item["text"] + "\n\n"))
             elif k == "command_execution" and item.get("exit_code") not in (0, None):
-                out.append(("refused", f"exit {item['exit_code']}: {first_line(item.get('aggregated_output')) or item.get('command', '')}"))
+                out.append(("failed", f"exit {item['exit_code']}: {first_line(item.get('aggregated_output')) or item.get('command', '')}"))
             elif k == "file_change":
                 out.append(("tool", "edit: " + ", ".join(str(c.get("path", "")) for c in item.get("changes") or [])[:200]))
             elif k == "mcp_tool_call":
@@ -334,7 +335,7 @@ def parse(agent: str, line: str, st: dict) -> list:
                 if s.get("state") == "ACTIVE":
                     out.append(("tool", f"{s.get('tool_name')}: {summary(info.get('parameters'))}".rstrip(": ")))
                 elif s.get("state") == "ERROR":
-                    out.append(("refused", f"{s.get('tool_name')}: {first_line((info.get('error') or {}).get('message'))}"))
+                    out.append(("failed", f"{s.get('tool_name')}: {first_line((info.get('error') or {}).get('message'))}"))
         elif ev == "result":
             r = e.get("result") or {}
             if isinstance(r.get("usage"), dict):
@@ -506,7 +507,7 @@ def agy_handlers(cid: str, folder: str, live: list):
         if k == "tool_call":
             return [("tool", f"{u.get('name') or u.get('title')}: {summary(u.get('rawInput') or u.get('args'))}".rstrip(": "))]
         if k == "tool_call_update" and u.get("status") == "failed":
-            return [("refused", f"{u.get('name') or u.get('title')}: failed")]
+            return [("failed", f"{u.get('name') or u.get('title')}: failed")]
         return []
 
     def request(method, params):
@@ -544,7 +545,9 @@ def merged(events: list) -> list:
         if out and k == "text" and not sub and out[-1]["kind"] == "text" and not out[-1].get("sub"):
             out[-1]["text"] += t
         else:
-            out.append({"kind": k, "text": t, **({"sub": sub} if sub else {}), **({"status": status} if status else {}), **(nums or {})})
+            # "failed" goes as refused + failed: a server before 0.43.17 refuses a batch with a kind it does not know
+            wire = {"kind": "refused", "failed": True} if k == "failed" else {"kind": k}
+            out.append({**wire, "text": t, **({"sub": sub} if sub else {}), **({"status": status} if status else {}), **(nums or {})})
     return out
 
 
@@ -708,7 +711,7 @@ def codex_handlers(cid: str, folder: str, st: dict):
                 out, said[0] = ([("text", it.get("text", "") + "\n\n")] if it.get("text") and not said[0] else [("text", "\n\n")]), False
                 return out
             if k == "commandExecution" and it.get("exitCode") not in (0, None):
-                return [("refused", f"exit {it['exitCode']}: {first_line(it.get('aggregatedOutput')) or it.get('command', '')}")]
+                return [("failed", f"exit {it['exitCode']}: {first_line(it.get('aggregatedOutput')) or it.get('command', '')}")]
             if k == "fileChange":
                 return [("tool", "edit: " + ", ".join(str(c.get("path", "")) for c in it.get("changes") or [])[:200])]
             if k == "mcpToolCall":
@@ -2073,7 +2076,7 @@ def self_test():
              '{"type":"item.completed","item":{"type":"command_execution","command":"ls","exit_code":1,"aggregated_output":"denied\\n"}}',
              '{"type":"item.completed","item":{"type":"agent_message","text":"Done"}}', '{"type":"turn.completed"}']
     ev = [e for ln in lines for e in parse("codex", ln, st)]
-    assert ev == [("tool", "$ ls"), ("refused", "exit 1: denied"), ("text", "Done\n\n")] and st == {"session": "T1", "result": True}, ev
+    assert ev == [("tool", "$ ls"), ("failed", "exit 1: denied"), ("text", "Done\n\n")] and st == {"session": "T1", "result": True}, ev
     st = {}
     lines = ['{"event":"init","conversation_id":"C1"}',
              '{"event":"step_update","step_update":{"conversation_id":"C1","step_type":"tool","state":"ACTIVE","tool_name":"run_command","tool_info":{"parameters":{"CommandLine":"ls"}}}}',
@@ -2081,8 +2084,9 @@ def self_test():
              '{"event":"step_update","step_update":{"conversation_id":"C1","step_type":"agent_response","text_delta":"42"}}',
              '{"event":"result","result":{"conversation_id":"C1","status":"SUCCESS"}}', "jetski: plain text"]
     ev = [e for ln in lines for e in parse("agy", ln, st)]
-    assert ev == [("tool", "run_command: ls"), ("refused", "run_command: user denied"), ("text", "42"), ("info", "jetski: plain text")], ev
+    assert ev == [("tool", "run_command: ls"), ("failed", "run_command: user denied"), ("text", "42"), ("info", "jetski: plain text")], ev
     assert st["session"] == "C1" and st["result"]
+    assert merged([("failed", "exit 1: x")]) == [{"kind": "refused", "failed": True, "text": "exit 1: x"}], "a server before 0.43.17 knows no failed kind"
     assert merged([("text", "a"), ("text", "b"), ("tool", "x"), ("text", "c")]) == [
         {"kind": "text", "text": "ab"}, {"kind": "tool", "text": "x"}, {"kind": "text", "text": "c"}]
     # What needs no approval, and what may be allowed once at most.

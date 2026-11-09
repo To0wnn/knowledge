@@ -721,6 +721,7 @@ body.admin-page { display: block; overflow-y: auto; }
 .ck-msg.agent pre { overflow-x: auto; }
 .ck-line { font: 12px/1.45 var(--mono); color: var(--muted); padding-left: 10px; border-left: 2px solid var(--line-hi); overflow-wrap: anywhere; }
 .ck-line.refused { color: var(--warn); border-left-color: var(--warn); }
+.ck-line.failed { border-left-color: var(--warn); }
 .ck-line.error { color: var(--bad); border-left-color: var(--bad); }
 .ck-line.info { font-family: var(--font); font-style: italic; }
 .ck-card.worker { grid-template-rows: auto auto minmax(0, 1fr) auto auto; }
