@@ -3912,6 +3912,11 @@ def main():
         assert "project trade" in body and "trade bot rules" in body and "Bot plan" in body and "Item 1 " not in body, body[:500]
         assert "project anpitek" in http("GET", "/context/1?project=/home/x/anpitek/boekhouding")[1]
         assert "laptop edit memory/fact.md" in (tmp / "audit.log").read_text()
+        # A deploy stops this server (SIGTERM): a held long poll answers at once, not a 500 once uvicorn's 3 s grace is up.
+        box, pc = [], {"X-Knowledge-Machine": "cccccccccccccccc", "X-Knowledge-Machine-Label": "garage"}
+        th = threading.Thread(target=lambda: box.append(http("GET", "/machine/actions?wait=20", token=fr, headers=pc)))
+        th.start(); time.sleep(1); t0 = time.time(); proc.terminate(); th.join(15)
+        assert box and box[0][0] == 200 and json.loads(box[0][1])["actions"] == [] and time.time() - t0 < 2.5, (box, time.time() - t0)
         print(f"ok ({len(parts)} context parts)")
     finally:
         proc.terminate()
