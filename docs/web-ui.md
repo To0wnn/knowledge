@@ -64,7 +64,8 @@ means something. `server/test_server.py` checks the contrast of the tokens in bo
 
 Type is Atkinson Hyperlegible Next and its Mono, self-hosted in `static/vendor` (SIL OFL, latin subset, 34 and 18 kB;
 other scripts fall back to the system font): chosen because it keeps l, I, 1 and 0, O apart in the ids and paths this
-tool is full of. Sizes are 11, 12, 13, 14, 16, 20 and 26 px; headings are in sentence case.
+tool is full of. Sizes are 11, 12, 13, 14, 16, 20 and 26 px and weights 400, 500, 600 (headings) and 700, also on
+the companion page; headings are in sentence case.
 
 One small set of controls in `server/static/app.css` ("Controls"), shared by the companion page (`.cmp-btn`,
 `.cmp-iconbtn`, same sizes) through the token block both files carry (`--r-sm`, `--h-btn`, `--h-btn-sm`):

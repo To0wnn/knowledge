@@ -643,6 +643,7 @@ _graph_cache: dict[tuple, tuple[int, dict]] = {}
 _graph_lock = threading.Lock()
 
 
+UVICORN = None  # the running uvicorn.Server: its should_exit says the server is stopping
 INSTANCE = os.environ.get("KNOWLEDGE_INSTANCE", "")  # blue / green sharing :8766 (compose.yaml, swap.sh); "" = alone
 
 
@@ -6020,7 +6021,8 @@ async def machine_actions_route(request: Request):
     while True:
         if mine(read_json(MACHINE_ACTIONS, {})):  # read first: no write (and no lock) while nothing waits
             await asyncio.to_thread(update_state, MACHINE_ACTIONS, change)
-        if out or time.time() >= end or await request.is_disconnected():
+        # stopping (a deploy's switch-over): answer now, before uvicorn's 3 s grace cancels this and sends a 500
+        if out or time.time() >= end or getattr(UVICORN, "should_exit", False) or await request.is_disconnected():
             return JSONResponse({"actions": out, "waited": wait})
         await asyncio.sleep(1)
 
@@ -8282,10 +8284,11 @@ if __name__ == "__main__":
     if listening:
         listening.write_text(str(os.getpid()))  # swap.sh waits for this before it stops the other server
     try:
-        uvicorn.Server(uvicorn.Config(
+        UVICORN = uvicorn.Server(uvicorn.Config(
             build_app(), log_level="warning", proxy_headers=True,
             forwarded_allow_ips=os.environ.get("KNOWLEDGE_PROXY_IPS", "127.0.0.1"),
-            timeout_graceful_shutdown=3)).run(sockets=[sock])  # open live streams (browser tabs) must not hold up a stop
+            timeout_graceful_shutdown=3))
+        UVICORN.run(sockets=[sock])  # open live streams (browser tabs) must not hold up a stop
     finally:
         if listening:
             listening.unlink(missing_ok=True)
