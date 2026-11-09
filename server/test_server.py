@@ -1101,7 +1101,7 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     st, _, body = ui("/ui/api/chat/close", {"machine": mid, "id": mc})
     assert st == 200 and json.loads(body)["recording"] is True and chat()["status"] == "queued" and not chat()["closed"], body
     got = json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])
-    assert any(w["chat"] == mc and "archived" in w["text"] for w in got["work"]), "the wrap-up is the next turn"
+    assert any(w["chat"] == mc and "archived" in w["text"] and w.get("git") is True for w in got["work"]), "the wrap-up is the next turn, and asks for git"
     http("POST", "/machine/chats/events", {"chat": mc, "events": [{"kind": "text", "text": "Wrote it to memo x."}], "done": True}, token=fr, headers=pc)
     assert chat()["closed"] is True and chat()["status"] == "idle" and not on_board(), "recorded, then archived"
     assert ui("/ui/api/chat/close", {"machine": mid, "id": mc, "closed": False})[0] == 200

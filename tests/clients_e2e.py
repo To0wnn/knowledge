@@ -2084,6 +2084,10 @@ def chat_e2e(tok: str, tmp: Path):
             Path(wt, f"own-{agent}.txt").write_text("own\n")
             gitp("add", f"own-{agent}.txt", cwd=wt)
             gitp("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", f"own {agent}", cwd=wt)
+            http("POST", "/ui/api/chat/close", {"machine": mid, "id": auto}, ui)  # Archive: the wrap-up turn, then its end's git
+            kept = wait_for(lambda: any(e["text"].startswith("Not archived") and "not in main" in e["text"] for e in chat(auto)["events"]), 30)
+            check(kept and not chat(auto)["chat"].get("closed"), f"chat {agent}: Archive keeps a chat open while its branch has commits not in main",
+                  json.dumps(chat(auto)["events"])[-400:])
             for c in (alone, off, dirty, auto):
                 http("POST", "/ui/api/chat/close", {"machine": mid, "id": c, "record": False}, ui)
             card = lambda: next((i for i in cards() if i["kind"] == "review" and i.get("chat") == auto and i.get("can_merge")), None)

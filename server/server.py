@@ -7370,7 +7370,8 @@ async def machine_chats(request: Request):
                     msg = {**msg, "text": (msg.get("text") or "") + CHAT_TITLE_ASK.format(chat=cid)}
                 out["work"].append({"chat": cid, "agent": c["agent"], "folder": c["folder"], "session": c.get("session", ""),
                                     "model": c.get("model", ""), "effort": c.get("effort", ""),
-                                    "allow": c.get("allow", []), **({"worktree": True} if c.get("worktree") else {}), **extra, **msg})
+                                    "allow": c.get("allow", []), **({"worktree": True} if c.get("worktree") else {}),
+                                    **({"git": True} if c.get("close_after") else {}), **extra, **msg})
                 e["busy"] = True
     if q_path.exists():
         await asyncio.to_thread(update_state, q_path, change)

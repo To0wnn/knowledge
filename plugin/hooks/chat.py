@@ -788,7 +788,7 @@ def codex_default(call, folder: str, model: str, effort: str) -> tuple:
 # way (a control_request), the process stays. Measured 2 Nov 2026 with Claude Code 2.1.314. Idle for IDLE_CLOSE with no
 # subagent running, the process ends; the next message resumes the same conversation.
 remember_branch = lambda cid, where: None  # the companion's: what a chat's Merge needs later
-git_now = lambda folder: None  # the companion's: a folder's git {branch, base, ahead, ...} when a turn ends (Archive checks it)
+git_now = lambda folder: None  # the companion's: a folder's git {branch, base, ahead, ...} when an Archive turn ends
 
 
 def codex_worktree_config(folder: str) -> dict:
@@ -1315,7 +1315,7 @@ class Live:
         if err:
             self.buf.append(("error", err))
         # a background subagent goes on after the turn: the server keeps it running
-        g = None if err else git_now(self.folder)
+        g = git_now(self.folder) if getattr(self, "want_git", False) and not err else None
         self.flush(done=True, **({"error": err} if err else {}), **({"running_subs": sorted(self.subs)} if self.subs and not err else {}), **({"git": g} if g else {}))
 
     def gone(self):
@@ -1923,6 +1923,7 @@ def _start_live(item: dict, post, log, linked, yolo):
                 steer_path(cid).unlink(missing_ok=True)
                 lv = LIVE[cid] = {"codex": CodexLive, "agy": AgyLive}.get(item["agent"], Live)(item, post, log, yolo(item["agent"]))
         lv.rec["allow"] = [x for x in item.get("allow") or [] if isinstance(x, dict)]  # "for this chat" answers since it started
+        lv.want_git = bool(item.get("git"))  # the Archive turn: its end carries the folder's git (only then: git slows a turn's end)
         lv.send(item, item.get("mode", ""))
     except Exception as e:
         log("error", f"{AGENT_NAMES.get(item.get('agent'), '?')}: chat turn failed", f"chat {cid}: {e}"[:300])
