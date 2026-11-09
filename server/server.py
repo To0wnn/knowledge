@@ -6520,7 +6520,9 @@ def board_items() -> list[dict]:
             items.append({**closable, "line": f"for {t['owner']}: done, more time, or cancel?"})
             continue
         if not agent:  # a project's, device's or pc's name: a session there takes it at its next turn
-            if not t["done"]:
+            if not t["done"] and t["can_approve"]:
+                items.append({**task, "col": "needs", "line": f"for a session of {t['owner']} · waits for your approval", "approve": True})
+            elif not t["done"]:
                 items.append({**task, "col": "open", "line": f"for a session of {t['owner']}" + (f" · {t['waiting_reason']}" if t["waiting_reason"] else "")})
             continue
         if t["done"]:

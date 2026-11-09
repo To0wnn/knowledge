@@ -1991,6 +1991,9 @@ def flow_contract(tmp, ck, fr, raw, heard):
     # Once in date, a project's line queues for a session there; a person's line needs that person, with the same answers.
     assert board()["task:garden/FL-10"]["col"] == "open" and board()["task:garden/FL-10"]["line"].startswith("for a session of trade"), board()["task:garden/FL-10"]
     assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": "- open until 2099-01-01 [Sam, FL-12] from Codex, start now: pick the colour\n## Keuzes"}, fr)[0]
+    assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": "- open until 2099-01-01 [trade, FL-13] from Sam, start after approval: for the trade project\n## Keuzes"}, fr)[0]
+    c = board()["task:garden/FL-13"]
+    assert c["col"] == "needs" and c["approve"], "a project's line that waits for approval has Approve"
     c = board()["task:garden/FL-12"]
     assert c["col"] == "needs" and c["closable"] and c["line"].startswith("for Sam:"), c
     assert "- [Sam, FL-11-done]: cancelled by alice: forgotten\n" in (tmp / "projects/garden/memory/project_tasks.md").read_text()
