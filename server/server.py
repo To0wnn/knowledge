@@ -5701,8 +5701,10 @@ def chat_held(t: dict, project: str) -> bool:
 
 
 def held_now(t: dict, lease: dict | None, now: float) -> bool:
-    """A worker or session has the task: claimed in its line, or a lease that has not run out."""
-    return t["claimed"] or bool(lease) and lease.get("until", 0) >= now
+    """A worker or session has the task: a lease that has not run out, or claimed in its line. A claim on a line past
+    its due date without a live lease is a leftover (the session that claimed it never removed it): not held."""
+    live = bool(lease) and lease.get("until", 0) >= now
+    return live or t["claimed"] and not (t["due"] and t["due"] < date.today())
 
 
 def task_rows() -> list[dict]:
@@ -5719,7 +5721,7 @@ def task_rows() -> list[dict]:
                   "can_cancel": approver and not held_now(t, leases.get(t["id"]), now),
                   "runs": task_where(name, t, leases.get(t["id"]), now) if t["startable"] else "",
                   "due": t["due"].isoformat() if t["due"] else "", "overdue": bool(t["due"] and t["due"] < today),
-                  "done": False, "can_approve": approver and t["needs_approval"]} for t in tasks]
+                  "held": held_now(t, leases.get(t["id"]), now), "done": False, "can_approve": approver and t["needs_approval"]} for t in tasks]
         rows += [{**b, "due": "", "overdue": False, "done": True, "claimed": False, "since": done_since(name, b)} for b in back]
     return rows
 
@@ -6505,11 +6507,16 @@ def board_items() -> list[dict]:
                           "key": key if t["done"] else f"handover:{t['project']}/{t['id']}", "sig": sig, "result": True})
             if t["done"]:
                 continue
-        if not agent or (t["project"], t["id"]) in working:  # a person's line is not an agent's work; a running worker shows it
-            continue
         task = {"kind": "task", "id": t["id"], "agent": agent, "project": t["project"], "title": f"{t['id']} · {t['text'][:120]}",
                 "path": t["path"], "line": "", "at": 0, "owner": t["owner"], "key": key, "sig": sig, "can_cancel": t.get("can_cancel", False),
                 "due": t["due"], "overdue": t["overdue"], "approve_warning": t.get("approve_warning", "")}
+        if t["overdue"] and not t["done"] and not to_person and not t["held"] and (t["project"], t["id"]) not in working:
+            # past its date and nobody on it (any owner: an agent, a person or a project): finished, more time, or cancel
+            items.append({**task, "col": "needs", "stale": True, "task_line": t["line"], "can_close": may_approve(t["project"]),
+                          "line": f"past its date ({t['due']}) and nobody works on it: finished, more time, or cancel?"})
+            continue
+        if not agent or (t["project"], t["id"]) in working:  # a person's line is not an agent's work; a running worker shows it
+            continue
         if t["done"]:
             if now - (t.get("since") or 0) < BOARD_DONE:
                 items.append({**task, "col": "done", "line": f"handed back to {t['owner']}", "at": t.get("since") or 0})
@@ -7861,6 +7868,33 @@ async def ui_task_assign(request: Request):
     except (ToolError, OSError) as e:
         return JSONResponse({"error": str(e)}, status_code=409)
     audit("task-assign", f"{project}/{tid} -> {owner}{'@' + dev_pin if dev_pin else ''}")
+    return JSONResponse({"ok": True, "line": new})
+
+
+@server.custom_route("/ui/api/task/extend", methods=["POST"])
+async def ui_task_extend(request: Request):
+    """{"project", "id", "days"}: the project's owner or an admin moves an open task's "open until" date to today +
+    days (1-90), for a task past its date that is still wanted."""
+    try:
+        body = await request.json()
+        project, tid, days = str(body.get("project", "")), str(body.get("id", "")), int(body.get("days", 7))
+    except (ValueError, TypeError, AttributeError):
+        return JSONResponse({"error": "send JSON {project, id, days}"}, status_code=400)
+    if not 1 <= days <= 90:
+        return JSONResponse({"error": "days: 1 to 90"}, status_code=400)
+    if project not in PROJECTS or not in_scope(PROJECTS[project][1] + "/"):
+        return JSONResponse({"error": f"unknown project {project}"}, status_code=404)
+    if not may_approve(project):
+        return JSONResponse({"error": "only the project's owner or an admin may extend a task"}, status_code=403)
+    if not (t := next((t for t in (await asyncio.to_thread(project_tasks, project))[0] if t["id"] == tid), None)):
+        return JSONResponse({"error": f"no open task {tid} in {project}"}, status_code=404)
+    due = date.today() + timedelta(days=days)
+    new = kb_lint.OPEN_DUE.sub(lambda m: m.group(0).replace(m.group(1), f"{due.day} {due.strftime('%b')} {due.year}", 1), t["line"], count=1)
+    try:
+        await knowledge_edit(t["path"], t["line"], new)
+    except (ToolError, OSError) as e:
+        return JSONResponse({"error": str(e)}, status_code=409)
+    audit("task-extend", f"{project}/{tid} -> {due.isoformat()}")
     return JSONResponse({"ok": True, "line": new})
 
 

@@ -27,7 +27,7 @@ Moved from the README; [back to the README](../README.md).
   `[<requester>, <ID>-done]: cancelled by <user>: <reason>` (a hand-over `<ID>-cont` cancels `<ID>`), so its requester
   hears it and a task that starts after it waits for a decision instead of starting, also after the result line is
   read and removed (the server keeps the cancellation; approving the waiting task lets it start, a new line with that ID
-  reopens it). A task a worker or session holds is not cancelled: stop the worker first. A write refuses a new task line whose date has no year (it would be no
+  reopens it). A task a worker or session holds is not cancelled: stop the worker first (a claim marker on a line past its date does not count as a hold). A write refuses a new task line whose date has no year (it would be no
   task) or whose "start after <ID>" names an ID the project never had (it would start at once); a file written
   straight to disk gets the same message as a notice at that device's next turn. A line that waits for approval
   says so in the write's answer. Searches in the web UI that find nothing (exact and by meaning, where the person
