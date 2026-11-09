@@ -15,8 +15,13 @@ Moved from the README; [back to the README](../README.md).
   print a `skip:` line; `KNOWLEDGE_SMOKE_SHOTS=<dir>` keeps screenshots. Against a real server, set `KNOWLEDGE_URL`,
   `KNOWLEDGE_TEST_USER` and `KNOWLEDGE_PROXY_SECRET` and run `tests/ui_smoke.py` itself
   (`KNOWLEDGE_SMOKE_BROWSER=chromium` when there is no system Chrome).
-- A change to the plugin needs a version bump in `plugin/.claude-plugin/plugin.json` and
-  `plugin/.codex-plugin/plugin.json` (the test checks they match), or installed copies never update.
+- A change to the plugin needs a new version, or installed copies never update. `deploy.sh` hands out the next patch
+  number in both `plugin.json` files and `server.json` (the test checks they match), under its lock, so two sessions
+  never take the same one; set a minor or major bump by hand.
+- `deploy.sh` is also how work lands: it refuses while CI on main is red (`--fix-main` for the fix), then, under a lock
+  on the Docker host, merges `origin/main` in, sets the version, runs the check on the combined tree, pushes to `main`
+  and deploys. A deploy that stops before the push takes back its own merge and version commits.
+  `tests/deploy_landing.py` proves this with a fake ssh, rsync and gh.
 
 Browser libraries are vendored with their licences in `server/static/vendor/` (force-graph, marked, DOMPurify); no CDN.
 
