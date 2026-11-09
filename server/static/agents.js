@@ -789,7 +789,7 @@ function ckCard(meta) {
       }
       else {
         // only a choice made here: a saved model the pc no longer lists must not turn into Default unasked
-        const pick = card.pick?.touched ? { model: card.pick.id, effort: card.pick.effort } : {};
+        const pick = card.pick?.touched ? { model: card.pick.id, effort: card.pick.effort, ...(card.pick.agent !== card.meta.agent ? { agent: card.pick.agent } : {}) } : {};
         // mode: Send into the turn (a live agent) or after it (others); Queue or Force from their buttons
         await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, text, mode, ...pick }) });
         Object.assign(card.meta, pick); card.pick = null;
@@ -1029,7 +1029,8 @@ function ckDrop(k) { ck.cards.delete(k); if (ck.view === k) ck.view = ""; }
 const CK_EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"]; // the server's EFFORTS, in order
 // The model picker: one chip under the box ("Opus · high ▾"), a panel with the models grouped by family and the chosen
 // model's effort levels. Picking a model sets its own default effort; the agent (Claude Code, Codex, agy) follows from
-// the model. In a running chat only its agent's models are open: a conversation cannot move to another agent.
+// the model. In a running chat another agent's model continues the chat there (when its own limit is used up): the
+// server hands the new agent the chat so far as text, and it starts its own session.
 const CK_FAMILY = [[/^(claude|fable|opus|sonnet|haiku)/i, "Claude", "claude"], [/^(gpt|o\d|codex)/i, "GPT", "codex"], [/^gemini/i, "Gemini", "agy"]];
 const ckFamily = (id) => (CK_FAMILY.find(([re]) => re.test(id)) || [0, "Other"])[1];
 function ckCatalog(pcs) { // one entry per agent and model: [{agent, id, name, efforts, default, pcs}]
@@ -1084,8 +1085,8 @@ function ckPicker(card) {
     for (const m of card.catalog.filter((y) => ckFamily(y.id) === fam)) {
       const b = el("button", "ck-mopt"), other = !draft && m.agent !== card.meta.agent;
       b.type = "button"; b.append(document.createTextNode(m.name), el("small", null, AGENT_NAME[m.agent] || m.agent));
-      b.setAttribute("aria-pressed", String(m === x)); b.disabled = other;
-      b.title = other ? `${AGENT_NAME[m.agent] || m.agent}: start a new chat for this model` : m.id;
+      b.setAttribute("aria-pressed", String(m === x));
+      b.title = other ? `${AGENT_NAME[m.agent] || m.agent}: continue this chat there (it gets the chat so far and starts its own session)` : m.id;
       b.onclick = (e) => {
         e.stopPropagation(); // the chip is rebuilt: the outside-click listener would see a detached button and close it
         card.pick = { agent: m.agent, id: m.id, effort: m.default || "", touched: true }; ckPicker(card); ckDraftWhere(card);
