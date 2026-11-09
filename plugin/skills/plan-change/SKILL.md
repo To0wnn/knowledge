@@ -10,7 +10,9 @@ effort: high
    earlier decisions or pitfalls on the subject.
 2. Write the plan short, in the conversation (not a new file unless the user wants one):
    - **Goal**: one sentence, from the user's side.
-   - **Files**: what changes where, including tests, docs and config the change must reach.
+   - **Files**: what changes where, each marked create, modify or delete, including tests, docs and config the change
+     must reach. This list is the allowlist: a file or new dependency outside it means updating the plan first.
+   - **Choice** (only when a real alternative existed): one line "X over Y because ...".
    - **Out of scope**: what you deliberately leave alone.
    - **Verify**: the check command plus the one end-to-end test that proves the goal (on the OS it runs on).
    - **Measure** (when the change should improve something): the number before, and how you get it after.

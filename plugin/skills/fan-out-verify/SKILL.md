@@ -13,9 +13,11 @@ effort: high
    may read, what it must not do (read-only unless the user asked for changes) and the output: one finding per entry
    with where, what and the evidence.
 3. **Verify** every finding with a fresh agent that did not make it, read-only, told to refute it against the source or
-   the live system: "confirmed" only with evidence, else "rejected" or "unsure".
-4. **Report** only confirmed findings, most severe first, each with its evidence; give the number rejected and say what
-   was not covered.
+   the live system: "confirmed" only with evidence, else "rejected", or "unsure" naming the one missing fact that would settle it (no
+   such fact: "rejected").
+4. **Report** only confirmed findings, most severe first, each with its evidence; give the number rejected. List every
+   item as done (with evidence), deferred (with a reason) or not reached. A worker that failed, timed out or returned
+   nothing did not cover its items: retry it once, then report them as not reached, never as clean.
 5. **Per agent**, same steps and same report: Claude Code with parallel subagents, or the Workflow tool when the user
    asked for a workflow; Codex by asking for subagents (fixed roles in `~/.codex/agents/`); agy with `invoke_subagent`
    (several at once).
