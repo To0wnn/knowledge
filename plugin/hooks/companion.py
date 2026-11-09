@@ -1482,6 +1482,7 @@ def remember_chat_branch(cid: str, where: dict):
 
 
 chat.remember_branch = remember_chat_branch
+chat.git_now = lambda folder: bounded(folder, lambda: git_state(folder)) if folder else None
 chat.limit = lambda: (settings()["maxAgents"], sum(1 for w in load("workers.json", {}).values() if w.get("status") == "running"))
 
 

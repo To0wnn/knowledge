@@ -6067,7 +6067,11 @@ CHAT_WRAP_UP = ("This chat is being archived. Before it closes, record what it e
                 "house rules: for each subject, knowledge_search first and knowledge_edit the memo that already covers it "
                 "(knowledge_new_memo only for a genuinely new subject). What is true now goes under '## Status', each decision "
                 "under '## Decisions' (what, date, who, why, what was rejected), unfinished work as 'open until <date>: ...' lines, "
-                "a correction or mistake with knowledge_lesson. Record only what this chat itself established: do not infer or guess "
+                "a correction or mistake with knowledge_lesson. First, when this chat committed work that is not yet in the main branch "
+                "(`git log main..HEAD`, or unpushed on main): land it the way the project's AGENTS.md says (bring in main, run the check, "
+                "merge or deploy), and if that needs the owner's approval, ask and leave it; work that is not landed is written as "
+                "'open until <date>: land branch <name>', never as done or live. The chat stays open while its branch holds unlanded "
+                "commits. Record only what this chat itself established: do not infer or guess "
                 "the state of anything outside it, and mark a fact '(checked <date>)' only when you checked it on the live system, else "
                 "'(as of <date>, not re-checked)'. Do not store the conversation itself, what the code, git history or a doc already "
                 "records, or any secret. Nothing worth keeping: say so in one line. End with one line: what you wrote where.")
@@ -7496,8 +7500,12 @@ async def machine_chat_events(request: Request):
                     last = max((i for i, e in enumerate(c["events"]) if e["kind"] == "user"), default=-1)
                     # only a failed turn (usage limit, crash) blocks: a failed or refused tool call is one the agent saw and worked
                     # around, and blocking on it re-ran the whole wrap-up at the next Archive
+                    g = b.get("git") if isinstance(b.get("git"), dict) else {}  # the chat folder's git right at the turn's end (companion 0.43.40+)
                     if any(e["kind"] == "error" for e in c["events"][last + 1:]):  # not written: it stays, under Needs you
                         chat_add(c, "info", "Not archived: the turn that records this chat in the memos failed. Fix that, then Archive again.")
+                    elif type(g.get("ahead")) is int and g["ahead"] > 0:  # memos that call it done while it sits on a branch: twice in Nov 2026
+                        chat_add(c, "info", f"Not archived: {g.get('branch') or 'its branch'} has {g['ahead']} commit(s) not in "
+                                 f"{g.get('base') or 'main'}. Land them (merge or deploy), then Archive again; Force archive closes it as it is.")
                     else:
                         c["closed"] = True
         if worked and not chat_works(c) and not any(k == "info" and t.startswith("Stopped") for k, t, _ in events):  # the owner's own stop: nothing to come back to

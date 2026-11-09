@@ -788,6 +788,7 @@ def codex_default(call, folder: str, model: str, effort: str) -> tuple:
 # way (a control_request), the process stays. Measured 2 Nov 2026 with Claude Code 2.1.314. Idle for IDLE_CLOSE with no
 # subagent running, the process ends; the next message resumes the same conversation.
 remember_branch = lambda cid, where: None  # the companion's: what a chat's Merge needs later
+git_now = lambda folder: None  # the companion's: a folder's git {branch, base, ahead, ...} when a turn ends (Archive checks it)
 
 
 def codex_worktree_config(folder: str) -> dict:
@@ -1314,7 +1315,8 @@ class Live:
         if err:
             self.buf.append(("error", err))
         # a background subagent goes on after the turn: the server keeps it running
-        self.flush(done=True, **({"error": err} if err else {}), **({"running_subs": sorted(self.subs)} if self.subs and not err else {}))
+        g = None if err else git_now(self.folder)
+        self.flush(done=True, **({"error": err} if err else {}), **({"running_subs": sorted(self.subs)} if self.subs and not err else {}), **({"git": g} if g else {}))
 
     def gone(self):
         """The process ended (idle close, a crash, a kill): a turn that ran ends with it."""

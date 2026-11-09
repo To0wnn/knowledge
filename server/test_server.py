@@ -1101,6 +1101,13 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert ui("/ui/api/chat/close", {"machine": mid, "id": mc, "closed": False})[0] == 200
     assert ui("/ui/api/chat/close", {"machine": mid, "id": mc})[0] == 200 and chat()["status"] == "queued"
     http("GET", "/machine/chats", token=fr, headers=pc)
+    http("POST", "/machine/chats/events", {"chat": mc, "events": [{"kind": "text", "text": "Memos say it is live."}], "done": True,
+         "git": {"branch": "chat/x", "base": "main", "ahead": 3, "behind": 0, "changed": 0}}, token=fr, headers=pc)
+    got = json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])
+    assert got["chat"]["closed"] is False and on_board() and "3 commit(s) not in main" in got["events"][-1]["text"], "unlanded commits keep the chat open"
+    assert ui("/ui/api/chat/close", {"machine": mid, "id": mc, "closed": False})[0] == 200
+    assert ui("/ui/api/chat/close", {"machine": mid, "id": mc})[0] == 200 and chat()["status"] == "queued"
+    http("GET", "/machine/chats", token=fr, headers=pc)
     http("POST", "/machine/chats/events", {"chat": mc, "events": [{"kind": "refused", "failed": True, "text": "call_mcp_tool: path is required"},
          {"kind": "text", "text": "Wrote it to memo x."}], "done": True}, token=fr, headers=pc)
     assert chat()["closed"] is True and not on_board(), "a tool call that failed during the wrap-up does not block the archive"
