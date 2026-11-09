@@ -682,17 +682,17 @@ async def shell(browser, devices, secret: str) -> None:
             current: document.querySelector('#sidebar [aria-current=page]')?.dataset.nav, title: $('title').textContent})""", {"el": VIEW_EL[v]})
         check(st["shown"] and st["only"] and st["current"] == v, f"route #/{v}: its view alone, its nav item current {st}")
     await route(pg, "#/machines", ms=1500)
-    # Pcs: one column per pc of your own, a switch per agent for YOLO, workers and chats at a time a Limit switch with a number, Forget behind More
+    # Pcs: one column per pc of your own, a switch per agent for YOLO, one Limit switch per pc (agents at once), Forget behind More
     yolo = await pg.evaluate("""() => ({switches: document.querySelectorAll('.mx-c .yolo-switch input[role=switch]').length,
         heads: document.querySelectorAll('.mx-head .mx-pc').length, more: document.querySelectorAll('.mx-pc-acts .machine-more').length,
         forget: [...document.querySelectorAll('#machines .mx-c button')].some(b => /Forget/.test(b.textContent) && !b.closest('.menu-list'))})""")
     if yolo["switches"]:
         check(yolo["heads"] >= 1 and yolo["more"] >= 1 and not yolo["forget"], f"Machines: YOLO is a switch per agent, pc actions in its column head, Forget behind More {yolo}")
-        most = await pg.evaluate("""() => { const n = document.querySelector('.mx-c input[type=number][aria-label^="Workers of"]'); if (!n) return null;
+        most = await pg.evaluate("""() => { const n = document.querySelector('.mx-head input[type=number][aria-label^="Agents at once"]'); if (!n) return null;
           const sw = n.closest('.mx-limit').querySelector('input[role=switch]');
-          return {min: n.min, max: n.max, on: sw.checked, shown: !n.hidden, chats: /Chats at a time/.test(document.querySelector('.mx-head').textContent)}; }""")
-        check(most and most["min"] == "1" and most["max"] == "99" and most["on"] == most["shown"] and most["chats"],
-              f"Machines: workers and chats at a time are a Limit switch with a number 1 to 99 {most}")
+          return {min: n.min, max: n.max, on: sw.checked, shown: !n.hidden, perAgent: !!document.querySelector('.mx-c input[aria-label^="Workers of"]')}; }""")
+        check(most and most["min"] == "1" and most["max"] == "" and most["on"] == most["shown"] and not most["perAgent"],
+              f"Machines: one Limit switch per pc with a number from 1 up, none per agent {most}")
     # A tool's panel a person opened stays open when the list refreshes; each tool is labelled skill or program.
     tabs = await pg.evaluate("""async () => { const b = document.querySelector('.mx-cellbtn'); const kinds = [...document.querySelectorAll('.mx-tool small')].map((k) => k.textContent);
       if (!b) return {skip: true, kinds}; const key = b.dataset.key; b.click(); await loadMachines();

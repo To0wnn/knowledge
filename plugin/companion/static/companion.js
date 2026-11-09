@@ -5,7 +5,7 @@
 try { const t = localStorage.getItem("kn_theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch { /* storage blocked: follow the system */ }
 
 // The state of this pc as the companion's local API reports it; filled by load().
-const EMPTY = { status: {}, agents: [], tasks: { ready: [], waiting: [], stalled: [] }, activity: [], settings: { token: {}, workersAllowed: false, maxWorkers: {} } };
+const EMPTY = { status: {}, agents: [], tasks: { ready: [], waiting: [], stalled: [] }, activity: [], settings: { token: {}, workersAllowed: false, maxAgents: 4 } };
 let S = EMPTY;
 
 // The key the local API wants for changes: the shortcut opens this page with #key=..., kept for the next visit.
@@ -214,8 +214,8 @@ function renderSettings() {
       h("legend", {}, "Workers"),
       h("small", {}, "A worker is a fresh session per ready task, in its own git worktree, started here. Off by default: turn it on only on a pc that may work on its own (not a work laptop or a shared family pc)." + (s.game ? ` Now: no workers while ${s.game}.` : "")),
       h("label", { class: "cmp-switch" }, h("input", { type: "checkbox", name: "workersAllowed", checked: !!s.workersAllowed }), "Workers allowed on this pc"),
-      S.agents.filter((a) => a.installed).map((a) => h("label", { class: "cmp-switch" },
-        h("input", { type: "number", name: `max-${a.id}`, min: 0, required: true, value: s.maxWorkers[a.id] ?? 1, style: "width:4em" }), `at most this many ${a.name} workers at once (0: no limit)`))),
+      h("label", { class: "cmp-switch" },
+        h("input", { type: "number", name: "maxAgents", min: 0, required: true, value: s.maxAgents ?? 4, style: "width:4em" }), "at most this many agents at once, chats and workers together (0: no limit)")),
     h("div", { class: "cmp-settings-foot" }, h("button", { class: "cmp-btn cmp-btn--primary", type: "submit" }, "Save settings")));
 }
 
@@ -336,7 +336,6 @@ document.addEventListener("DOMContentLoaded", () => {
   $("settings").addEventListener("submit", (e) => {
     e.preventDefault();
     const f = e.target.elements;
-    const maxWorkers = Object.fromEntries(S.agents.filter((a) => f[`max-${a.id}`]).map((a) => [a.id, Number(f[`max-${a.id}`].value)]));
-    act("/local/api/settings", { workersAllowed: !!f.workersAllowed?.checked, maxWorkers }, "Saved settings");
+    act("/local/api/settings", { workersAllowed: !!f.workersAllowed?.checked, maxAgents: Number(f.maxAgents.value) }, "Saved settings");
   });
 });

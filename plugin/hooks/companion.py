@@ -922,11 +922,9 @@ def report_errors(st: dict, tok: str, now: float):
 
 def settings() -> dict:
     """Workers: off on a new pc (a work laptop or the family's gaming pc must never run them by surprise); at most one
-    per agent unless the owner says more; 0: no limit. Web chats: at most 4 turns at once unless the owner says otherwise."""
+    maxAgents: chat turns and workers at once on this pc together, 4 unless the owner says otherwise; 0: no limit."""
     s = load("settings.json", {})
-    return {"workersAllowed": s.get("workersAllowed") is True,
-            "maxWorkers": {a: max(0, int((s.get("maxWorkers") or {}).get(a, 1))) for a in AGENTS},
-            "maxChats": max(0, int(s.get("maxChats", 4)))}
+    return {"workersAllowed": s.get("workersAllowed") is True, "maxAgents": max(0, int(s.get("maxAgents", s.get("maxChats", 4))))}  # maxChats: 0.43.21's setting, kept
 
 
 def save_settings(change: dict):
@@ -934,11 +932,8 @@ def save_settings(change: dict):
         s = load("settings.json", {})
         if "workersAllowed" in change:
             s["workersAllowed"] = change["workersAllowed"] is True
-        for a, n in (change.get("maxWorkers") or {}).items():
-            if a in AGENTS:
-                s.setdefault("maxWorkers", {})[a] = max(0, int(n))
-        if "maxChats" in change:
-            s["maxChats"] = max(0, int(change["maxChats"]))
+        if "maxAgents" in change:
+            s["maxAgents"] = max(0, int(change["maxAgents"]))
         save("settings.json", s)
 
 
@@ -1099,6 +1094,38 @@ def _agy_token() -> tuple:
     return str(tok.get("access_token") or ""), agent_hooks.limits.epoch(tok.get("expiry")) or 0
 
 
+_AGY_REFRESH = {}  # the OAuth client of agy that renewed its token, and the token: in memory only
+
+
+def _agy_refresh() -> tuple:
+    """(access token, expiry) renewed from agy's saved refresh token, or ("", 0). On a pc without a keyring agy keeps a
+    renewed token in memory only (agy 1.5.3, 9 Nov 2026), so its file stays expired after the first hour. Uses agy's own
+    OAuth client, read from the installed agy binary at run time (never stored here): the pair that renews is kept."""
+    if _AGY_REFRESH.get("expiry", 0) > time.time() + 60:
+        return _AGY_REFRESH["access"], _AGY_REFRESH["expiry"]
+    refresh = (json.loads(_agy_token_text() or "{}").get("token") or {}).get("refresh_token")
+    exe = shutil.which("agy")
+    if not refresh or not exe:
+        return "", 0
+    pairs = [_AGY_REFRESH["client"]] if "client" in _AGY_REFRESH else []
+    if not pairs:
+        data = Path(os.path.realpath(exe)).read_bytes()
+        pairs = [(i.decode(), c.decode()) for i in sorted(set(re.findall(rb"\d+-[a-z0-9]{32}\.apps\.googleusercontent\.com", data)))
+                 for c in sorted(set(re.findall(rb"GOCSPX-[A-Za-z0-9_-]{28}", data)))]
+    for cid, secret in pairs:
+        body = urllib.parse.urlencode({"client_id": cid, "client_secret": secret, "refresh_token": refresh,
+                                       "grant_type": "refresh_token"}).encode()
+        try:
+            with urllib.request.urlopen("https://oauth2.googleapis.com/token", body, timeout=15) as r:
+                got = json.loads(r.read().decode("utf-8"))
+        except (OSError, ValueError):
+            continue
+        if got.get("access_token"):
+            _AGY_REFRESH.update(client=(cid, secret), access=got["access_token"], expiry=time.time() + int(got.get("expires_in") or 0))
+            return _AGY_REFRESH["access"], _AGY_REFRESH["expiry"]
+    return "", 0
+
+
 def _agy_rate_ask(f, last_error: str):
     got, err = None, ""
     try:
@@ -1110,8 +1137,10 @@ def _agy_rate_ask(f, last_error: str):
             subprocess.run(cmd, capture_output=True, timeout=60, stdin=subprocess.DEVNULL,
                            **({"creationflags": workers.WIN_FLAGS} if os.name == "nt" else {}))  # renews the token, asks no model
             access, expiry = _agy_token()
-        if not access:
-            raise LookupError("agy has no access token (signed out?)")
+        if not access or expiry < time.time() + 60:  # agy kept the renewed token to itself
+            access, expiry = _agy_refresh() or (access, expiry)
+        if not access or expiry < time.time() + 60:
+            raise LookupError("agy's token expired and could not be renewed (signed out?)")
         # proxies from the environment only: macOS's system proxy lookup can hang in a background thread (CI, 2 Nov 2026)
         opener = urllib.request.build_opener(urllib.request.ProxyHandler(urllib.request.getproxies_environment()))
 
@@ -1198,9 +1227,11 @@ def why_not(t: dict, ws: dict, s: dict, lim: dict, game: str) -> str:
         return f"No workers while {game}"
     if (lim.get(a) or 0) >= 90:
         return f"waiting for limit: {AGENTS[a][0]} is at {lim[a]:.0f}% of its usage limit"
-    cap = s["maxWorkers"][a] if lim.get(a) is not None else 1  # unknown limit: one at most; 0: no limit
-    if cap and sum(1 for w in ws.values() if w["agent"] == a and w["status"] == "running") >= cap:
-        return f"{AGENTS[a][0]} runs {cap} worker(s) already, its maximum here" + ("" if lim.get(a) is not None else " (limit unknown: 1)")
+    if lim.get(a) is None and any(w["agent"] == a and w["status"] == "running" for w in ws.values()):
+        return f"{AGENTS[a][0]} runs a worker already (limit unknown: 1)"
+    running = sum(1 for w in ws.values() if w["status"] == "running") + chat.busy_turns()
+    if (most := s["maxAgents"]) and running >= most:  # 0: no limit
+        return f"{running} agents run on this pc already, its maximum here (Machines: Limit)"
     if not project_folders().get(t["project"]):
         return (f"No folder linked to project {t['project']} on this pc: link one under Machines → this pc → Folders "
                 "(or the companion page), then a worker knows where to work") + (
@@ -1434,7 +1465,7 @@ def remember_chat_branch(cid: str, where: dict):
 
 
 chat.remember_branch = remember_chat_branch
-chat.max_turns = lambda: settings()["maxChats"]
+chat.limit = lambda: (settings()["maxAgents"], sum(1 for w in load("workers.json", {}).values() if w.get("status") == "running"))
 
 
 def chat_busy(cid: str) -> bool:
@@ -1640,7 +1671,7 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
     yolo, folders, s = load("yolo.json", {}), sorted(project_folders().values()), settings()
     links, gits = with_git(folder_links(), ws, now)
     chat_gits = {cid: chat_git(cid, f) for cid, f in load("chat_worktrees.json", {}).items()}
-    body = {"version": version(), "self": self_state(), "workersAllowed": s["workersAllowed"], "maxWorkers": s["maxWorkers"], "maxChats": s["maxChats"], "game": workers.game_session(),
+    body = {"version": version(), "self": self_state(), "workersAllowed": s["workersAllowed"], "maxAgents": s["maxAgents"], "game": workers.game_session(),
             "live": list(chat.LIVE_AGENTS),  # agents whose chats run live: a message while they work goes in at once
             "agents": {a: {"yolo": bool(yolo.get(a, {}).get("on")), "trusted": not untrusted(a, folders), "limit": lim.get(a),
                      "resets": (resets or {}).get(a), "windows": (windows or {}).get(a, []), **({"plugin": v} if (v := plugin_version(a)) else {}),  # known before a session
@@ -1931,12 +1962,9 @@ def run_action(a: dict) -> str:
     if act == "workers_allowed":
         save_settings({"workersAllowed": args.get("on") is True})
         return f"workers {'allowed' if args.get('on') is True else 'off'}"
-    if act == "max_workers":
-        save_settings({"maxWorkers": {agent: args["n"]}})
-        return f"at most {args['n']} {AGENTS[agent][0]} worker(s)"
-    if act == "max_chats":
-        save_settings({"maxChats": args["n"]})
-        return f"at most {args['n']} chat turn(s) at once" if args["n"] else "no limit on chat turns"
+    if act == "max_agents":
+        save_settings({"maxAgents": args["n"]})
+        return f"at most {args['n']} agent(s) at once" if args["n"] else "no limit on agents at once"
     raise ValueError(f"unknown action {act}")
 
 
@@ -1968,7 +1996,7 @@ def actions_round():
     return "waited" in got  # a server before the long poll answers at once: then the loop waits itself
 
 
-STATE_ACTIONS = {"install_tool", "remove_tool", "tool_auto", "yolo", "workers_allowed", "max_workers", "max_chats", "link_folder", "unlink_folder", "trust_hooks", "stop_worker", "restart", "merge", "takeover", "archive_worker", "apply_models"}
+STATE_ACTIONS = {"install_tool", "remove_tool", "tool_auto", "yolo", "workers_allowed", "max_agents", "link_folder", "unlink_folder", "trust_hooks", "stop_worker", "restart", "merge", "takeover", "archive_worker", "apply_models"}
 
 
 # ---------------------------------------------------------------- the page
@@ -2303,7 +2331,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/local/api/settings":
                 if o != SELF:  # whether this pc runs workers is for this pc's own page (or its owner, remotely)
                     return self.send(403, {"error": "Worker settings can only be changed on the companion page itself"}, origin=o)
-                save_settings({k: body[k] for k in ("workersAllowed", "maxWorkers", "maxChats") if k in body})
+                save_settings({k: body[k] for k in ("workersAllowed", "maxAgents") if k in body})
                 return self.send(200, {"ok": True, **settings()}, origin=o)
             if path == "/local/api/link":
                 chosen = body.get("chosen") is True
@@ -2906,7 +2934,7 @@ def main(argv: list):
         # Whether this pc may start a worker: off by default, game, limit (unknown: one), max, a linked folder.
         g, task, workers_mod = globals(), {"agent": "codex", "project": "p", "id": "T-1"}, workers
         g.update(project_folders=lambda: {"p": "/x"})
-        on = {"workersAllowed": True, "maxWorkers": {"claude": 1, "codex": 2, "agy": 1}}
+        on = {"workersAllowed": True, "maxAgents": 2}
         run = {"k": {"agent": "codex", "status": "running"}}
         assert why_not(task, {}, {**on, "workersAllowed": False}, {}, "").startswith("Workers are off")
         assert mask("export API_KEY=gategategate and token: gategate") == "export API_KEY=‹masked› and token: ‹masked›", mask("export API_KEY=gategategate and token: gategate")
@@ -2929,8 +2957,15 @@ def main(argv: list):
         assert why_not({**task, "id": "T-1-cont"}, old, on, {"codex": 10.0}, "").startswith("T-1 still runs"), "a hand-over waits for the old worker"
         assert why_not(task, run, on, {"codex": None}, "").endswith("(limit unknown: 1)"), "unknown limit: one worker at most"
         assert why_not(task, run, on, {"codex": 40.0}, "") == "", "known limit: up to its max"
-        assert why_not(task, run, {**on, "maxWorkers": {"codex": 1}}, {"codex": 40.0}, "").endswith("its maximum here"), "at its max: waits"
-        free = {**on, "maxWorkers": {"codex": 0}}
+        assert why_not(task, run, {**on, "maxAgents": 1}, {"codex": 40.0}, "").endswith("(Machines: Limit)"), "at its max: waits"
+        other = {"o": {"agent": "claude", "status": "running"}, **run}
+        assert why_not(task, other, on, {"codex": 40.0}, "").endswith("(Machines: Limit)"), "every agent's workers count together"
+        keep_busy, chat.busy_turns = chat.busy_turns, lambda: 1
+        try:
+            assert why_not(task, run, on, {"codex": 40.0}, "").endswith("(Machines: Limit)"), "a chat turn counts too"
+        finally:
+            chat.busy_turns = keep_busy
+        free = {**on, "maxAgents": 0}
         assert why_not(task, {str(i): run["k"] for i in range(50)}, free, {"codex": 40.0}, "") == "", "0: no limit"
         assert why_not(task, run, free, {"codex": None}, "").endswith("(limit unknown: 1)"), "0 does not lift the rule for an unknown limit"
         assert why_not(task, {}, free, {"codex": 90.0}, "").startswith("waiting for limit"), "0 does not lift the usage stop"
