@@ -170,7 +170,7 @@
 .cmp .cmp-state--ok { color: var(--ok); }
 .cmp .cmp-state--warn { color: var(--warn); }
 .cmp .cmp-state--bad { color: var(--bad); }
-.cmp .cmp-sessions { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.cmp .cmp-sessions { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; margin: 0; padding: 0; list-style: none; }
 .cmp .cmp-sessions li {
   display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--r-md);
   background: color-mix(in srgb, var(--panel-hi) 60%, transparent); border: 1px solid var(--line);

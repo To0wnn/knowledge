@@ -568,11 +568,15 @@ async function loadMachines() {
   machinesCache = Array.isArray(res) ? res : res.machines || [];
   machinesRes = { ...res, machines: machinesCache };
   if (machinesBusy() && $("machines").childNodes.length) return machinesSoon(); // machineAction still reads machinesCache
-  if (!localMachine) await probeCompanion();
-  const sha = async (t) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t)))].map((b) => b.toString(16).padStart(2, "0")).join("");
-  machinesHere = localMachine && crypto.subtle ? (await Promise.all(machinesCache.map(async (m) => (await sha(m.id)) === localMachine ? m.id : ""))).find(Boolean) || "" : "";
+  await markHere();
   drawMachines();
   machinesSoon();
+  // never before the first draw: without a companion, a refused 127.0.0.1 takes ~2 s on Windows
+  if (!localMachine) probeCompanion().then(async (ok) => { if (ok && !machinesBusy()) { await markHere(); drawMachines(); } });
+}
+async function markHere() { // which row is the pc this page runs on (its companion's machine hash)
+  const sha = async (t) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t)))].map((b) => b.toString(16).padStart(2, "0")).join("");
+  machinesHere = localMachine && crypto.subtle ? (await Promise.all(machinesCache.map(async (m) => (await sha(m.id)) === localMachine ? m.id : ""))).find(Boolean) || "" : "";
 }
 function drawMachines() {
   const res = machinesRes, here = machinesHere, box = $("machines"), parts = [];
