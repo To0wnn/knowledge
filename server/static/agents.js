@@ -100,7 +100,7 @@ async function ckSummary() {
 // those; the API calls an archived chat closed). A dot and a word say a chat's state (not colour alone). Every card
 // has its actions right there.
 const CK_STATE = { needs: "needs you", running: "running", idle: "idle", closed: "archived" };
-const CK_SECS = [["needs", "Needs you"], ["review", "Review"], ["running", "Working"], ["done", "Done today"]];
+const CK_SECS = [["needs", "Needs you"], ["review", "Review"], ["running", "Working"], ["open", "Queued"], ["done", "Done today"]];
 const ckSec = (i) => (i.kind === "review" ? "review" : i.col); // Review: a branch with work to merge; a finished worker is done
 function ckState(c) { // an approval waiting in a running turn needs you too
   const needs = (ck.board || []).some((i) => i.col === "needs" && i.machine === c.machine && (i.kind === "chat" ? i.id : i.kind === "ask" ? i.chat : "") === c.id);
@@ -158,7 +158,7 @@ function ckList() {
   // a half-typed reply or reason, or an open menu, outlives the refresh: the list waits until it is sent or closed
   if (side.querySelector(".ck-reply, .ck-reject, .ck-snooze[open]")) return;
   const had = side.contains(document.activeElement) && document.activeElement.dataset.row;
-  const items = (ck.board || []).filter((i) => i.col !== "open" && ckScope(i) && !(i.kind === "chat" && i.col === "done")); // a read chat is an earlier chat
+  const items = (ck.board || []).filter((i) => ckScope(i) && !(i.kind === "chat" && i.col === "done")); // a read chat is an earlier chat
   const pcs = ckOnlinePc(), fresh = ck.ready && !pcs && !ck.chats.length;
   side.querySelector(".ck-sec-earlier").hidden = !ck.ready || fresh; // nothing to filter yet
   if (!ck.ready) { box.replaceChildren(ck.error ? errorState(`Chats did not load: ${ck.error}`, () => { ck.error = ""; ckList(); ckRun(true); }) : loadingState()); return; }
@@ -387,8 +387,8 @@ function ckLayout() {
 }
 
 // Items that say the same thing (eleven tasks waiting for the same missing pc) fold into one group with a count.
-// A task past its date is never folded: each needs its own answer.
-const ckSame = (i) => (i.kind === "ask" || i.kind === "chat" || i.stale ? "" : `${i.kind}|${i.col}|${i.kind === "worker" ? `${i.status}|${i.why || (i.offline_since ? "offline" : "")}` : i.line}`);
+// A task past its date, or a person's, is never folded: each needs its own answer.
+const ckSame = (i) => (i.kind === "ask" || i.kind === "chat" || i.closable ? "" : `${i.kind}|${i.col}|${i.kind === "worker" ? `${i.status}|${i.why || (i.offline_since ? "offline" : "")}` : i.line}`);
 function ckBunches(list) {
   const by = new Map();
   for (const i of list) { const k = ckSame(i) || `one|${i.key}`; by.set(k, [...(by.get(k) || []), i]); }
@@ -410,7 +410,6 @@ function ckFocus() {
   ck.focus = "";
   const i = (ck.board || []).find((x) => x.key === key);
   if (i && (i.kind === "chat" || i.kind === "ask")) return go(`#/chats/${encodeURIComponent(i.kind === "ask" ? i.chat : i.id)}`, true);
-  if (i && i.col === "open") { history.replaceState(history.state, "", "#/tasks"); return applyRoute(); } // Tasks has open lines
   if (!i) { // gone or dismissed: the plain list
     ck.hit = "";
     for (const c of $("ck-list").querySelectorAll(".ck-item.hit")) c.classList.remove("hit");
@@ -480,7 +479,7 @@ function ckItem(i) {
     if (i.can_merge) act("Merge", `git merge --no-ff ${i.branch} into ${i.into} on ${i.label}`, () => ckMerge(i));
     act("Reject", i.chat ? "Keep the branch, take the card off the list" : "Keep the branch, take the card off the list; optionally send it back to the agent", () => ckReject(card, i));
   }
-  if (i.stale && i.can_close) { // past its date, nobody on it: the three answers, right here
+  if (i.closable && i.can_close) { // past its date or a person's: the three answers, right here
     act("Finished", "It is done: remove the line from its memo (its history keeps it)", () => ckDo("/ui/api/task/done", { path: i.path, line: i.task_line }), "btn small primary");
     act("+7 days", "Still wanted: move its date a week from today", () => ckDo("/ui/api/task/extend", { project: i.project, id: i.id, days: 7 }));
     act("Cancel", "Not wanted: its requester gets it back as a result", () => {
@@ -497,6 +496,10 @@ function ckItem(i) {
       later.push([text, "Take it off the list for a while", () => ckDo("/ui/api/board/dismiss", { key: i.key, sig: i.sig, until: Math.round(until()) })]);
     later.push(["Dismiss", "Take it off the list until it changes again", () => ckDo("/ui/api/board/dismiss", { key: i.key, sig: i.sig })]);
   }
+  if (i.kind === "task" && i.col === "open" && i.can_cancel) later.push(["Cancel task", "Not wanted: its requester gets it back as a result", () => {
+    const why = prompt(`Cancel ${i.id}? Why (optional):`, "");
+    if (why !== null) ckDo("/ui/api/task/cancel", { project: i.project, id: i.id, reason: why });
+  }]);
   if (i.kind === "chat" && !ckBusy(i.status)) later.push(["Archive", "The agent records it in the memos, then it goes off the list (under Earlier, Archived); a new message opens it again",
     () => ckDo("/ui/api/chat/close", { machine: i.machine, id: i.id, closed: true })]);
   if (i.kind === "chat") later.push(["Force archive", "Close right away without wrap-up (e.g. when quota is exhausted or agent is stuck)",
