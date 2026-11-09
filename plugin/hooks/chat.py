@@ -80,7 +80,7 @@ def _ask_models(agent: str):
             found = [{"id": m, "name": m.capitalize(), "efforts": list(EFFORTS[:5])} for m in CLAUDE_MODELS]
         elif (exe := shutil.which(agent)) and agent == "codex":
             out = subprocess.run(workers.shim_line([exe, "debug", "models"]) if exe.lower().endswith((".cmd", ".bat")) else [exe, "debug", "models"],
-                                 capture_output=True, text=True, timeout=30).stdout
+                                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30).stdout  # UTF-8, never the ANSI code page
             found = [{"id": m["slug"], "name": str(m.get("display_name") or m["slug"])[:80],
                       "efforts": [e["effort"] for e in m.get("supported_reasoning_levels") or [] if e.get("effort") in EFFORTS],
                       **({"default": m["default_reasoning_level"]} if m.get("default_reasoning_level") in EFFORTS else {})}
@@ -88,7 +88,7 @@ def _ask_models(agent: str):
         elif agent == "agy" and _AGY_ACP:
             found = list(_AGY_ACP)
         elif exe and agent == "agy":
-            out = subprocess.run([exe, "models"], capture_output=True, text=True, timeout=30).stdout
+            out = subprocess.run([exe, "models"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30).stdout
             # no effort of its own: Gemini's names carry the level (-low/-high), the others refuse --effort
             found = [{"id": i, "name": n.strip()[:80], "efforts": []} for i, _, n in (ln.partition("\t") for ln in out.splitlines()) if n and MODEL_ID.fullmatch(i)]
     except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError, AttributeError):
