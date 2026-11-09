@@ -1206,8 +1206,20 @@ async function loadTasks(render = true) {
 const AGENT_NAME = { claude: "Claude Code", codex: "Codex", agy: "agy" };
 // An agent's usage windows that have not reset, soonest reset first: Claude and Codex 5h and 7d, agy one per quota pool
 // ("Gemini", "Claude/GPT-OSS"); [percent, name, resets_at]. An older companion sends only its fullest window.
-const usageWindows = (ag) => (ag.windows || []).filter((w) => !w[2] || w[2] > Date.now() / 1000).sort((a, b) => (a[2] || Infinity) - (b[2] || Infinity));
-const usageText = (ag) => usageWindows(ag).map(([p, n]) => `${n} ${Math.round(p)}%`).join(" · ") || `${Math.round(ag.limit)}%`;
+// A window's model group ("Gemini 7d" -> "Gemini"; Claude's and Codex's plain "7d" -> "") and its length.
+const usageGroup = (n) => n.replace(/(^| )(5h|7d|30d)$/, "");
+const usageSpan = (n) => (n.match(/(?:^| )(5h|7d|30d)$/) || [, ""])[1];
+// Live windows, each model group together (fullest group first), the longest window first: "Gemini 7d · 5h".
+function usageWindows(ag) {
+  const wins = (ag.windows || []).filter((w) => !w[2] || w[2] > Date.now() / 1000), top = {};
+  for (const [p, n] of wins) top[usageGroup(n)] = Math.max(top[usageGroup(n)] ?? -1, p);
+  const rank = { "30d": 0, "7d": 1, "5h": 2 };
+  return wins.sort((a, b) => top[usageGroup(b[1])] - top[usageGroup(a[1])] || usageGroup(a[1]).localeCompare(usageGroup(b[1]))
+    || (rank[usageSpan(a[1])] ?? 3) - (rank[usageSpan(b[1])] ?? 3));
+}
+// "7d 82% · 5h 12%"; agy names each group once: "Gemini 7d 25% · 5h 57% · Claude/GPT 7d 0% · 5h 0%"
+const usageText = (ag) => usageWindows(ag).map(([p, n], i, all) =>
+  `${i && usageGroup(all[i - 1][1]) === usageGroup(n) ? usageSpan(n) || n : n} ${Math.round(p)}%`).join(" · ") || `${Math.round(ag.limit)}%`;
 // A running worker's progress from its companion: newest commit, commits, changed files, the last log lines.
 function workerProgress(p) {
   const box = el("span", "progress");

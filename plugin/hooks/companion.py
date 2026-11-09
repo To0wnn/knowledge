@@ -961,7 +961,8 @@ def usage_info(agent: str, ws: dict, now: float) -> list:
     got = usage_live(agent, ws, now)
     if got:
         if agent == "agy":  # agy's cloud call has no Gemini week: keep an earlier reading's windows until they reset
-            got = agent_hooks.limits.merge(got, kept_windows(f, now))
+            # only "<group> 5h|7d": a window kept under an older plugin's name ("Gemini") would show twice
+            got = agent_hooks.limits.merge(got, [w for w in kept_windows(f, now) if w[1].endswith((" 5h", " 7d"))])
         try:
             write_json(f, {"windows": got, "at": now})
         except OSError:
