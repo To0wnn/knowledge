@@ -186,7 +186,7 @@ const differs = (text) => val(text, "mx-diff"); // a value that is not like the 
 function meters(pcs, a) {
   const by = {};
   for (const m of pcs) for (const w of usageWindows(m.agents?.[a] || {})) if (!by[w[1]] || w[0] > by[w[1]][0]) by[w[1]] = w;
-  const wins = Object.values(by).sort((x, y) => (x[2] || Infinity) - (y[2] || Infinity));
+  const wins = usageWindows({ windows: Object.values(by) });
   const box = el("div", "mx-meters");
   if (!wins.length) { box.append(val("Usage not known yet: it shows after a session or within 15 minutes.", "muted")); return box; }
   // agy names a window after its model group: "Gemini 5h", "Claude/GPT 7d"

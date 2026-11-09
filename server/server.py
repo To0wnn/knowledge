@@ -1352,6 +1352,8 @@ async def knowledge_edit(path: str = "", old_string: str = "", new_string: str =
     target = (path or file or name).strip()
     if not target:
         raise ToolError("path is required, e.g. 'memory/MEMORY.md'")
+    if not old_string:  # an empty one "occurs" len+1 times; a client that sent other argument names lands here
+        raise ToolError("old_string is required: the exact text to replace (arguments: path, old_string, new_string)")
     full, rel = await asyncio.to_thread(resolve, target)
     await asyncio.to_thread(check_writable, rel)
     refuse_mirror(rel)
