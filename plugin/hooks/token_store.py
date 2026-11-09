@@ -65,7 +65,10 @@ def from_windows() -> str:
     """The generic credential "knowledge" from the Windows Credential Manager (stored as UTF-16, as cmdkey does)."""
     ctypes, advapi, CREDENTIAL = _windows()
     cred = ctypes.POINTER(CREDENTIAL)()
-    if not advapi.CredReadW(SERVICE, 1, 0, ctypes.byref(cred)):  # 1 = CRED_TYPE_GENERIC; not found: no token
+    if not advapi.CredReadW(SERVICE, 1, 0, ctypes.byref(cred)):  # 1 = CRED_TYPE_GENERIC
+        code = ctypes.get_last_error()
+        if code != 1168:  # 1168 = not found: no token; anything else (1312 = no logon session over SSH) is said
+            raise OSError(f"the Windows Credential Manager answered error {code}")
         return ""
     try:
         blob = ctypes.string_at(cred.contents.CredentialBlob, cred.contents.CredentialBlobSize)
@@ -74,12 +77,22 @@ def from_windows() -> str:
     return blob.decode("utf-16-le", "replace").strip("\x00").strip()
 
 
+KEYRING_ERROR = ""  # why the last from_keyring() found no token although there may be one: said with NO_TOKEN
+
+
+def no_token() -> str:
+    return NO_TOKEN + (f" (Reading it failed: {KEYRING_ERROR}.)" if KEYRING_ERROR else "")
+
+
 def from_keyring() -> str:
     """The stored token of this device, or "" (no keyring, nothing stored, or the keyring is locked)."""
+    global KEYRING_ERROR
     if os.name == "nt":
         try:
+            KEYRING_ERROR = ""
             return from_windows()
-        except (OSError, AttributeError, ValueError):
+        except (OSError, AttributeError, ValueError) as e:
+            KEYRING_ERROR = str(e)[:200]
             return ""
     if sys.platform == "darwin":
         try:

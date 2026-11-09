@@ -564,6 +564,16 @@ function bdRender() {
     t.setAttribute("aria-expanded", String(!f.shut)); t.title = f.shut ? `Show the chats of ${name}` : `Fold ${name} away`;
     box.setAttribute("aria-label", `${name}: ${f.n} chat${f.n === 1 ? "" : "s"}`);
     box.classList.toggle("shut", f.shut);
+    // the project's queued tasks: one line of chips under the title; a chip opens the task in the list
+    const queued = (ck.board || []).filter((i) => i.kind === "task" && i.col === "open" && (i.project || "") === f.project);
+    let strip = box.querySelector(".bd-queue");
+    if (queued.length && !f.shut) {
+      if (!strip) { strip = el("div", "bd-queue"); box.append(strip); }
+      strip.replaceChildren(el("span", "muted", `Queued ${queued.length}:`), ...queued.map((i) => {
+        const b = el("a", "chip", i.id); b.href = `#/inbox/${encodeURIComponent(i.key)}`; b.title = `${i.title}\n${i.line}`;
+        return b;
+      }));
+    } else strip?.remove();
     keep.add(box);
   }
   for (const [p, box] of bd.frames) if (!keep.has(box)) { box.remove(); bd.frames.delete(p); }

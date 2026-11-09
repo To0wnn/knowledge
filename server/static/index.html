@@ -154,11 +154,16 @@
       </form>
       <form id="set-matrix" class="admin-form" hidden>
         <h3>Matrix <span class="set-saved muted" id="set-matrix-saved" role="status"></span></h3>
-        <p class="muted">The room the server's messages to admins go to (Needs you, a stalled task, a failed job). Invite the
-          server's bot into the room first. Empty: the room of KNOWLEDGE_MATRIX_ROOM.</p>
+        <p class="muted">Where the server's messages to you go (Needs you, a stalled task, a failed job). Empty fields use the
+          server's own (.env). Another homeserver needs your own bot's access token; invite that bot into the room first.</p>
+        <label for="set-matrix-url">Homeserver</label>
+        <input id="set-matrix-url" type="url" autocomplete="off" spellcheck="false">
         <label for="set-matrix-room">Room id</label>
-        <input id="set-matrix-room" placeholder="!abc123:example.org" autocomplete="off" spellcheck="false">
-        <div class="actions"><button type="submit" class="btn primary">Save room</button></div>
+        <input id="set-matrix-room" autocomplete="off" spellcheck="false">
+        <label for="set-matrix-token">Bot access token</label>
+        <input id="set-matrix-token" type="password" autocomplete="off" spellcheck="false">
+        <label class="check"><input type="checkbox" id="set-matrix-token-clear"> Remove my token (use the server's bot)</label>
+        <div class="actions"><button type="submit" class="btn primary">Save Matrix</button> <button type="button" class="btn" id="set-matrix-test">Send a test message</button></div>
       </form>
       <form id="set-notify" class="admin-form">
         <h3>In this browser</h3>

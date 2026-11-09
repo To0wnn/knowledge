@@ -24,5 +24,8 @@ for f in sys.argv[1:]:
     sys.path[:0] = [os.path.dirname(f)]
     s = u.spec_from_file_location(os.path.basename(f)[:-3].replace('-', '_'), f)
     s.loader.exec_module(u.module_from_spec(s))" ../clients/*.py ../plugin/hooks/*.py
+# the web UI's scripts: a syntax error stops a whole view in the browser and no Python test would see it (a comment
+# once cut a line of agents.js in half, and live showed "ck is not defined")
+for f in static/*.js; do node --check "$f" || exit 1; done
 uv run --quiet graph.py && uv run --quiet lint.py && uv run --quiet tasks.py && uv run --quiet external_skills.py && uv run --quiet test_server.py && uv run --quiet python ../tests/backup_restore.py || exit 1  # set -e ignores a failure before the last && of a list
 if [ -n "$tree" ]; then echo "$tree" > "$stamp"; fi

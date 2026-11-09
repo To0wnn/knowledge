@@ -1226,6 +1226,11 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert ui("/ui/api/me/prefs", {"matrix_room": "!abc:example.org"})[0] == 200 and json.loads(ui("/ui/api/me")[2])["prefs"]["matrix_room"] == "!abc:example.org"
     assert ui("/ui/api/me/prefs", {"matrix_room": "!BENlZH1P1P7_00"})[0] == 200  # room v12: no :server
     assert ui("/ui/api/me/prefs", {"matrix_room": ""})[0] == 200 and "matrix_room" not in json.loads(ui("/ui/api/me")[2])["prefs"]
+    assert ui("/ui/api/me/prefs", {"matrix_url": "ftp://x"})[0] == 400 and ui("/ui/api/me/prefs", {"matrix_token": "has space in it"})[0] == 400
+    assert ui("/ui/api/me/prefs", {"matrix_url": "https://matrix.example.org/", "matrix_token": "syt_secret_value"})[0] == 200
+    me = json.loads(ui("/ui/api/me")[2])
+    assert me["prefs"]["matrix_url"] == "https://matrix.example.org" and me["matrix"]["own_token"] and "syt_secret_value" not in json.dumps(me), me  # the token never goes back
+    assert ui("/ui/api/me/prefs", {"matrix_url": "", "matrix_token": ""})[0] == 200 and not json.loads(ui("/ui/api/me")[2])["matrix"]["own_token"]
     assert ui("/ui/api/me/prefs", {"keys": {"new_chat": "Alt+Shift+T", "digits": "Ctrl+Shift+#"}, "send_key": "shift"})[0] == 200
     assert json.loads(ui("/ui/api/me")[2])["prefs"]["keys"] == {"new_chat": "Alt+Shift+T", "digits": "Ctrl+Shift+#"}
     assert ui("/ui/api/me/prefs", {"keys": {"fit": "Alt+G"}})[0] == 200  # a change leaves the others: a stale tab overwrites nothing
@@ -1714,7 +1719,8 @@ def board_contract(tmp, ck, fr, raw, er, et):
     assert hosts["BRD-1"] == [{"machine": mid, "label": "garage"}] and hosts["BRD-2"] == [], hosts
     assert col("task", "BRD-2") == "needs" and items[("task", "BRD-2")]["approve"], items.get(("task", "BRD-2"))
     assert col("task", "BRD-9-done") == "done", "a result handed back today is done"
-    assert ("task", "BRD-3") not in items and ("task", "BRD-4") not in items, "a person's line and a task its worker shows"
+    assert ("task", "BRD-4") not in items, "a task its worker shows"
+    assert col("task", "BRD-3") == "needs" and items[("task", "BRD-3")]["closable"], "a person's line needs that person"
     # A glance on the board (peek) leaves it under "Needs you"; opening the chat reads it: off "Needs you", into "Done".
     ui(f"/ui/api/chat?machine={mid}&id={cids[0]}&peek=1")
     assert {(i["kind"], i["id"]): i["col"] for i in board()}[("chat", cids[0])] == "needs"
@@ -1974,14 +1980,19 @@ def flow_contract(tmp, ck, fr, raw, heard):
     b = board()
     for tid in ("FL-10", "FL-11"):
         c = b[f"task:garden/{tid}"]
-        assert c["col"] == "needs" and c["stale"] and c["can_close"] and c["task_line"].endswith(old[0 if tid == "FL-10" else 1][2:]), c
+        assert c["col"] == "needs" and c["closable"] and c["can_close"] and c["task_line"].endswith(old[0 if tid == "FL-10" else 1][2:]), c
     assert rows()["FL-11"]["can_cancel"] and not rows()["FL-11"]["held"], rows()["FL-11"]
     assert ui("/ui/api/task/extend", {"project": "garden", "id": "FL-10", "days": 0})[0] == 400
     st, _, body = ui("/ui/api/task/extend", {"project": "garden", "id": "FL-10", "days": 7})
     due = date.today() + timedelta(days=7)
     assert st == 200 and f"open until {due.day} {due.strftime('%b')} {due.year} [trade, FL-10]" in json.loads(body)["line"], body
-    assert rows()["FL-10"]["due"] == due.isoformat() and "task:garden/FL-10" not in {k for k, v in board().items() if v.get("stale")}
+    assert rows()["FL-10"]["due"] == due.isoformat() and "task:garden/FL-10" not in {k for k, v in board().items() if v.get("closable")}
     assert ui("/ui/api/task/cancel", {"project": "garden", "id": "FL-11", "reason": "forgotten"})[0] == 200
+    # Once in date, a project's line queues for a session there; a person's line needs that person, with the same answers.
+    assert board()["task:garden/FL-10"]["col"] == "open" and board()["task:garden/FL-10"]["line"].startswith("for a session of trade"), board()["task:garden/FL-10"]
+    assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": "- open until 2099-01-01 [Sam, FL-12] from Codex, start now: pick the colour\n## Keuzes"}, fr)[0]
+    c = board()["task:garden/FL-12"]
+    assert c["col"] == "needs" and c["closable"] and c["line"].startswith("for Sam:"), c
     assert "- [Sam, FL-11-done]: cancelled by alice: forgotten\n" in (tmp / "projects/garden/memory/project_tasks.md").read_text()
     # A pc that sleeps and wakes with a worker running is one message per worker run, not one per nap.
     pc = {"X-Knowledge-Machine": "ffffffffffffffff", "X-Knowledge-Machine-Label": "sleepy"}
@@ -2424,16 +2435,44 @@ def main():
             def log_message(self, *_): pass
         stand_in = hs.HTTPServer(("127.0.0.1", 0), Ntfy)
         __import__("threading").Thread(target=stand_in.serve_forever, daemon=True).start()
-        # Matrix rooms: what admins picked on Settings, else KNOWLEDGE_MATRIX_ROOM; a non-admin's pick is ignored.
-        saved_prefs, saved_admins, saved_room = srv.PREFS_FILE, set(srv.ADMINS), os.environ.get("KNOWLEDGE_MATRIX_ROOM")
-        srv.PREFS_FILE = Path(tempfile.mkdtemp()) / "prefs.json"
-        srv.ADMINS.clear(); srv.ADMINS.add("ann")
-        os.environ["KNOWLEDGE_MATRIX_ROOM"] = "!env:x"
-        assert srv.matrix_rooms() == ["!env:x"]
-        srv.PREFS_FILE.write_text(json.dumps({"ann": {"matrix_room": "!mine:x"}, "bob": {"matrix_room": "!bob:x"}}))
-        assert srv.matrix_rooms() == ["!mine:x"]
-        srv.PREFS_FILE = saved_prefs; srv.ADMINS.clear(); srv.ADMINS.update(saved_admins)
-        os.environ.pop("KNOWLEDGE_MATRIX_ROOM") if saved_room is None else os.environ.update(KNOWLEDGE_MATRIX_ROOM=saved_room)
+        # Matrix: each admin's own homeserver/room/token over .env's; the .env bot token never goes to another homeserver;
+        # one broken target does not keep the message from the others, and shows on System.
+        import http.server as hs
+        got = []
+        class Mx(hs.BaseHTTPRequestHandler):
+            def do_PUT(self):
+                got.append((urllib.parse.unquote(self.path.split("/")[5]), self.headers["Authorization"]))
+                self.rfile.read(int(self.headers["Content-Length"]))
+                self.send_response(403 if "bad" in self.path else 200); self.end_headers(); self.wfile.write(b"{}")
+            def log_message(self, *_): pass
+        mx = hs.HTTPServer(("127.0.0.1", 0), Mx)
+        __import__("threading").Thread(target=mx.serve_forever, daemon=True).start()
+        mxurl = f"http://127.0.0.1:{mx.server_port}"
+        saved_mx = (srv.PREFS_FILE, srv.MATRIX_TOKENS_FILE, set(srv.ADMINS), {k: os.environ.get(k) for k in ("KNOWLEDGE_MATRIX_URL", "KNOWLEDGE_MATRIX_ROOM", "KNOWLEDGE_MATRIX_TOKEN")})
+        d = Path(tempfile.mkdtemp())
+        srv.PREFS_FILE, srv.MATRIX_TOKENS_FILE = d / "prefs.json", d / "mt.json"
+        srv.ADMINS.clear(); srv.ADMINS.update({"ann", "cas", "dee"})
+        os.environ.update(KNOWLEDGE_MATRIX_URL=mxurl + "/", KNOWLEDGE_MATRIX_ROOM="!env:x", KNOWLEDGE_MATRIX_TOKEN="envtok")
+        assert srv.matrix_targets() == [(mxurl, "!env:x", "envtok")]  # three admins on the defaults: one message
+        srv.PREFS_FILE.write_text(json.dumps({"ann": {"matrix_room": "!mine:x"}, "bob": {"matrix_room": "!bob:x"},
+                                              "cas": {"matrix_url": "https://other.example"}, "dee": {"matrix_room": "!bad"}}))
+        assert srv.matrix_target("cas") is None  # another homeserver without its own token: nothing, never the .env bot's token
+        srv.MATRIX_TOKENS_FILE.write_text(json.dumps({"cas": "castok"}))
+        assert srv.matrix_target("cas") == ("https://other.example", "!env:x", "castok") and srv.matrix_target("ann") == (mxurl, "!mine:x", "envtok")
+        srv.PREFS_FILE.write_text(json.dumps({"ann": {"matrix_room": "!mine:x"}, "bob": {"matrix_room": "!bob:x"}, "dee": {"matrix_room": "!bad"}}))
+        srv.BACKGROUND.pop("matrix", None)
+        srv.notify("to everyone")
+        for _ in range(100):
+            if "matrix" in srv.BACKGROUND:
+                break
+            time.sleep(0.05)
+        assert sorted(got) == [("!bad", "Bearer envtok"), ("!env:x", "Bearer castok"), ("!mine:x", "Bearer envtok")], got  # bob is no admin
+        assert "!bad" in srv.BACKGROUND["matrix"]["error"], srv.BACKGROUND["matrix"]
+        mx.shutdown(); mx.server_close()
+        srv.PREFS_FILE, srv.MATRIX_TOKENS_FILE = saved_mx[0], saved_mx[1]; srv.ADMINS.clear(); srv.ADMINS.update(saved_mx[2])
+        for k, v in saved_mx[3].items():
+            os.environ.pop(k, None) if v is None else os.environ.update({k: v})
+        srv.BACKGROUND.pop("matrix", None)
         saved_env = {k: os.environ.pop(k, None) for k in ("KNOWLEDGE_MATRIX_URL", "KNOWLEDGE_NTFY_URL", "KNOWLEDGE_NTFY_TOKEN")}
         os.environ.update(KNOWLEDGE_NTFY_URL=f"http://127.0.0.1:{stand_in.server_port}/topic", KNOWLEDGE_NTFY_TOKEN="tk")
         srv.notify("Needs you: tést")
@@ -2729,7 +2768,9 @@ def main():
         assert raw("POST", "/ui/login", "password=gategategate", form)[0] == 429  # also the right one, until the minute passed
         assert raw("GET", "/", headers=ck)[1].get("location") == "/ui"
         assert raw("GET", "/ui", headers=ck)[0] == 200
-        assert json.loads(raw("GET", "/ui/api/me", headers=ck)[2]) == {"user": "alice", "admin": True, "projects": ["homelab", "trade"], "writable": ["homelab", "trade"], "labels": {}, "sections": ["## Stand", "## Keuzes"], "prefs": {}, "agents": True, "stt": True, "matrix": True}  # anpitek is empty here: no tab; the server's (nl) sections for "+ Add memo"
+        me = json.loads(raw("GET", "/ui/api/me", headers=ck)[2])
+        assert me.pop("matrix") == {"url": ghurl, "room": "!room:example", "own_token": False}, me  # an admin sees the server's defaults, never its token
+        assert me == {"user": "alice", "admin": True, "projects": ["homelab", "trade"], "writable": ["homelab", "trade"], "labels": {}, "sections": ["## Stand", "## Keuzes"], "prefs": {}, "agents": True, "stt": True}  # anpitek is empty here: no tab; the server's (nl) sections for "+ Add memo"
         g = json.loads(raw("GET", "/ui/api/graph", headers=ck)[2])
         assert g["nodes"] and not any(n["id"].endswith("/MEMORY.md") for n in g["nodes"]), g["nodes"][:3]  # index not drawn, still readable below
         assert {n["project"] for n in g["nodes"] if n["id"].startswith("trade")} == {"trade"}
@@ -2817,7 +2858,9 @@ def main():
         assert admin("/ui/api/admin/user", {"username": "alice", "projects": {}})[0] == 400  # admins come from the config
         assert admin("/ui/api/admin/user", {"username": "bob", "projects": {"trade": "read", "homelab": "none"}})[0] == 200
         ro = user("bob")
-        assert json.loads(raw("GET", "/ui/api/me", headers=ro)[2]) == {"user": "bob", "admin": False, "projects": ["trade"], "writable": [], "labels": {}, "sections": ["## Stand", "## Keuzes"], "prefs": {}, "agents": False, "stt": True, "matrix": True}
+        assert json.loads(raw("GET", "/ui/api/me", headers=ro)[2]) == {"user": "bob", "admin": False, "projects": ["trade"], "writable": [], "labels": {}, "sections": ["## Stand", "## Keuzes"], "prefs": {}, "agents": False, "stt": True, "matrix": None}
+        assert raw("POST", "/ui/api/me/prefs", json.dumps({"matrix_room": "!x:y"}), headers={**ro, "X-Knowledge-UI": "1", "Content-Type": "application/json"})[0] == 400  # Matrix is for admins
+        assert raw("POST", "/ui/api/me/matrix_test", "{}", headers={**ro, "X-Knowledge-UI": "1"})[0] == 403
         # A display name for a project: set by an admin, shown to everyone who sees the project; empty restores the name.
         assert admin("/ui/api/admin/project-label", {"name": "trade", "label": "Trading"}, ro)[0] == 403
         assert admin("/ui/api/admin/project-label", {"name": "nope", "label": "X"})[0] == 400

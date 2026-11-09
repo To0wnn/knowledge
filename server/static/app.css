@@ -922,6 +922,8 @@ dialog.ck-diff { width: min(980px, calc(100vw - 32px)); }
 .bd-frame-title:hover { background: var(--hover); }
 .bd-frame-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bd-frame-title .ck-count { cursor: default; } /* a count, not a second button */
+.bd-queue { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 2px 10px 6px; font-size: 13px; }
+.bd-queue .chip { text-decoration: none; }
 #ck-view .n { margin-left: 6px; color: var(--act-text); font-weight: 650; font-variant-numeric: tabular-nums; }
 #bd-parts { display: inline-flex; gap: 2px; }
 #bd-parts:empty { display: none; }
