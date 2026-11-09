@@ -3484,7 +3484,11 @@ def main():
         assert "trade-memory/" in call("knowledge_semantic_search", {"query": "entry timing", "root": "trade-memory"})[1]
         assert re.search(r"trade-memory/\S+ \(\d\.\d+, \d+\.\d KB", call("knowledge_semantic_search", {"query": "entry timing", "root": "trade-memory"})[1])  # size per hit
         # A weak answer tells the agent, in the result, to add the search words as an alias where it finds the answer.
-        weak = call("knowledge_semantic_search", {"query": "zzqx plumbing quantum walrus"})[1]
+        for _ in range(40):  # while edits above are still being embedded the server names no gap (vec.pending): wait for that
+            weak = call("knowledge_semantic_search", {"query": "zzqx plumbing quantum walrus"})[1]
+            if "(no semantic results" in weak or "'aliases:' frontmatter line" in weak:
+                break
+            time.sleep(0.5)
         assert "(no semantic results" in weak or "'aliases:' frontmatter line" in weak, weak[-300:]
         assert "'aliases:'" not in call("knowledge_semantic_search", {"query": "walrus feeding schedule", "root": "trade-memory"})[1]  # walrus.md: nothing edits it, so its score stays high
         assert not call("knowledge_related", {"path": "trade-memory/plan.md"})[0]

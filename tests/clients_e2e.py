@@ -1466,7 +1466,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         wait_for(lambda: done()[-1]["status"] in ("done", "failed"), 30)
         wait_for(lambda: tool_row().get("installed") or call("POST", "/local/api/tick", {}) and False, 30)
         check(done()[-1]["status"] == "done" and tool_mark.read_text(encoding="utf-8") == "KC" and tool_row().get("version") == "1.0.0"
-              and tool_row().get("ok") is True and "not ok: engine" in tool_row().get("detail", ""),
+              and tool_row().get("ok") is True and tool_row().get("detail") == "optional, not set up: engine",
               "tools: install runs the manifest's steps (a .cmd on Windows, a step per agent), its check and version reach the Machines list",
               json.dumps(done()[-1]) + json.dumps(tool_row()))
         act("install_tool", {"tool": "nope"})
