@@ -924,6 +924,8 @@ dialog.ck-diff { width: min(980px, calc(100vw - 32px)); }
 .bd-frame-title .ck-count { cursor: default; } /* a count, not a second button */
 .bd-queue { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 2px 10px 6px; font-size: 13px; }
 .bd-queue .chip { text-decoration: none; }
+.bd-workers { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 8px; padding: 0 10px 8px; }
+.bd-workers .ck-item { margin: 0; border-color: var(--line); }
 #ck-view .n { margin-left: 6px; color: var(--act-text); font-weight: 650; font-variant-numeric: tabular-nums; }
 #bd-parts { display: inline-flex; gap: 2px; }
 #bd-parts:empty { display: none; }

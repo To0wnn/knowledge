@@ -222,8 +222,14 @@ function bdRender() {
     b.title = `${i.title}\n${i.line}`;
     return b;
   }));
-  const order = queued.length ? [bd.queue] : [];
+  // workers (a chat nobody types in) that run, or stopped and need you: one strip of compact cards (progress, Follow, Stop);
+  // rebuilt each render, which is fine: nothing is typed in them
+  const workers = (ck.board || []).filter((i) => i.kind === "worker" && i.col !== "done" && ckScope(i));
+  bd.workers ||= el("div", "bd-workers");
+  bd.workers.replaceChildren(...workers.map(ckItem));
+  const order = [...(queued.length ? [bd.queue] : []), ...(workers.length ? [bd.workers] : [])];
   if (!queued.length) bd.queue.remove();
+  if (!workers.length) bd.workers.remove();
   for (const f of frames) {
     order.push(bd.frames.get(f.project));
     for (const { c, st } of rows.filter(({ c }) => together || (c.project || "") === f.project)) {
