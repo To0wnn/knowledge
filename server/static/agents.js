@@ -936,13 +936,15 @@ async function loadSettings() {
   const mx = me.matrix; // null for a non-admin: only admins get the server's messages
   $("set-matrix").hidden = !mx;
   if (mx) {
-    $("set-matrix-url").value = me.prefs?.matrix_url || ""; $("set-matrix-url").placeholder = mx.url || "https://matrix.example.org";
-    $("set-matrix-room").value = me.prefs?.matrix_room || ""; $("set-matrix-room").placeholder = mx.room || "!abc123:example.org";
+    // filled with what is used now; the server's own value is saved as "" so a later .env change still reaches you
+    $("set-matrix-url").value = me.prefs?.matrix_url || mx.url; $("set-matrix-url").placeholder = "https://matrix.example.org";
+    $("set-matrix-room").value = me.prefs?.matrix_room || mx.room; $("set-matrix-room").placeholder = "!abc123:example.org";
     const tokenHint = () => ($("set-matrix-token").placeholder = me.matrix.own_token ? "saved (type to replace)" : "the server's bot"); tokenHint();
     $("set-matrix-token").value = ""; $("set-matrix-token-clear").checked = false; $("set-matrix-token-clear").hidden = !mx.own_token;
     $("set-matrix").onsubmit = async (e) => {
       e.preventDefault();
-      const body = { matrix_url: $("set-matrix-url").value.trim(), matrix_room: $("set-matrix-room").value.trim() }, tok = $("set-matrix-token").value.trim();
+      const own = (v, dflt) => (v === dflt ? "" : v), url = $("set-matrix-url").value.trim().replace(/\/+$/, "");
+      const body = { matrix_url: own(url, mx.url.replace(/\/+$/, "")), matrix_room: own($("set-matrix-room").value.trim(), mx.room) }, tok = $("set-matrix-token").value.trim();
       if (tok) body.matrix_token = tok; else if ($("set-matrix-token-clear").checked) body.matrix_token = "";
       try {
         me.prefs = (await api("/ui/api/me/prefs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).prefs;
