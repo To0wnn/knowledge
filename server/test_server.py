@@ -16,6 +16,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import date, timedelta
 from pathlib import Path
 
 def free_port() -> int:
@@ -1957,6 +1958,25 @@ def flow_contract(tmp, ck, fr, raw, heard):
     assert ui("/ui/api/task/cancel", {"project": "garden", "id": "FL-6-cont"})[0] == 200
     assert "- [Sam, FL-6-done]: cancelled by alice\n" in (tmp / "projects/garden/memory/project_tasks.md").read_text()
     assert rows()["FL-7"]["waiting_reason"].startswith("FL-6 was cancelled"), rows()["FL-7"]
+    # A line past its date that nobody works on is a Needs-you card with three answers, whoever owns it (an agent with
+    # a leftover claim, or a project name); a claim on such a line no longer blocks Cancel.
+    old = ["- open until 2020-01-02 [trade, FL-10]: a legacy line for a project",
+           "- open until 2020-01-02 [Codex, FL-11] from Sam, start now (claimed Codex, 1 Jan 2020): claimed and forgotten"]
+    f = tmp / "projects/garden/memory/project_tasks.md"  # on disk, as old lines are: a write now refuses them
+    f.write_text(f.read_text().replace("## Keuzes", "\n".join(old) + "\n## Keuzes"))
+    assert wait(lambda: {"FL-10", "FL-11"} <= set(rows())), rows()
+    b = board()
+    for tid in ("FL-10", "FL-11"):
+        c = b[f"task:garden/{tid}"]
+        assert c["col"] == "needs" and c["stale"] and c["can_close"] and c["task_line"].endswith(old[0 if tid == "FL-10" else 1][2:]), c
+    assert rows()["FL-11"]["can_cancel"] and not rows()["FL-11"]["held"], rows()["FL-11"]
+    assert ui("/ui/api/task/extend", {"project": "garden", "id": "FL-10", "days": 0})[0] == 400
+    st, _, body = ui("/ui/api/task/extend", {"project": "garden", "id": "FL-10", "days": 7})
+    due = date.today() + timedelta(days=7)
+    assert st == 200 and f"open until {due.day} {due.strftime('%b')} {due.year} [trade, FL-10]" in json.loads(body)["line"], body
+    assert rows()["FL-10"]["due"] == due.isoformat() and "task:garden/FL-10" not in {k for k, v in board().items() if v.get("stale")}
+    assert ui("/ui/api/task/cancel", {"project": "garden", "id": "FL-11", "reason": "forgotten"})[0] == 200
+    assert "- [Sam, FL-11-done]: cancelled by alice: forgotten\n" in (tmp / "projects/garden/memory/project_tasks.md").read_text()
     # A pc that sleeps and wakes with a worker running is one message per worker run, not one per nap.
     pc = {"X-Knowledge-Machine": "ffffffffffffffff", "X-Knowledge-Machine-Label": "sleepy"}
     nap = lambda: http("POST", "/machine/report", {"version": "0.18.1", "workersAllowed": True, "agents": {"codex": {}}, "workers": [

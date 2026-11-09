@@ -957,9 +957,11 @@ def usage_info(agent: str, ws: dict, now: float) -> list:
     """The agent's usage windows as (percent, window, resets_at), fullest first; [] when unknown. Codex and agy only
     tell it while a session runs, so the last reading is kept until its window resets: usage does not go down before
     that."""
-    got = usage_live(agent, ws, now)
     f = STATE / f"usage-{agent}.json"
+    got = usage_live(agent, ws, now)
     if got:
+        if agent == "agy":  # agy's cloud call has no Gemini week: keep an earlier reading's windows until they reset
+            got = agent_hooks.limits.merge(got, kept_windows(f, now))
         try:
             write_json(f, {"windows": got, "at": now})
         except OSError:
@@ -1030,11 +1032,12 @@ def _codex_rate_ask(f):
 
 
 AGY_TOKEN = HOME / ".gemini" / "antigravity-cli" / "antigravity-oauth-token"
-AGY_QUOTA_URL = "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"  # agy's own --cloud_code_endpoint
+AGY_QUOTA_URL = "https://daily-cloudcode-pa.googleapis.com/v1internal"  # agy's own --cloud_code_endpoint
 
 
 def agy_rate_read(now: float):
-    """agy's quota without a running agy: the cloud call agy itself makes (fetchAvailableModels, no prompt, no tokens)
+    """agy's quota without a running agy: the cloud calls agy itself makes (retrieveUserQuotaSummary, and
+    fetchAvailableModels for Gemini's 5-hour window; no prompt, no tokens)
     with the OAuth token agy keeps; when that token expired, `agy models` (no prompt, no conversation) renews it first.
     In the background at most every CODEX_READ_EVERY; the last answer until then, None when unknown. Undocumented API:
     a failure goes to the activity log once per new error."""
@@ -1094,18 +1097,27 @@ def _agy_rate_ask(f, last_error: str):
             access, expiry = _agy_token()
         if not access:
             raise LookupError("agy has no access token (signed out?)")
-        req = urllib.request.Request(AGY_QUOTA_URL, data=b"{}", method="POST",
-                                     headers={"Authorization": f"Bearer {access}", "Content-Type": "application/json",
-                                              "User-Agent": "antigravity-cli"})  # Python's own agent gets 403 PERMISSION_DENIED
         # proxies from the environment only: macOS's system proxy lookup can hang in a background thread (CI, 2 Nov 2026)
         opener = urllib.request.build_opener(urllib.request.ProxyHandler(urllib.request.getproxies_environment()))
-        with opener.open(req, timeout=15) as r:
-            models = json.loads(r.read().decode("utf-8") or "{}").get("models") or {}
-        configs = [{"label": m["displayName"], "quotaInfo": m["quotaInfo"]} for m in models.values()
-                   if isinstance(m, dict) and m.get("displayName") and isinstance(m.get("quotaInfo"), dict)]
-        if not configs:
-            raise ValueError("no model with a quota in the answer (the API changed?)")
-        got = agent_hooks.limits.agy_used({"userStatus": {"cascadeModelConfigData": {"clientModelConfigs": configs}}}, time.time())
+
+        def ask(method: str) -> dict:
+            req = urllib.request.Request(f"{AGY_QUOTA_URL}:{method}", data=b"{}", method="POST",
+                                         headers={"Authorization": f"Bearer {access}", "Content-Type": "application/json",
+                                                  "User-Agent": "antigravity-cli"})  # Python's own agent gets 403 PERMISSION_DENIED
+            with opener.open(req, timeout=15) as r:
+                return json.loads(r.read().decode("utf-8") or "{}")
+        now = time.time()
+        got = agent_hooks.limits.agy_summary(ask("retrieveUserQuotaSummary"), now)
+        if not any(n.startswith("Gemini ") for _, n, _ in got):
+            # shortcut: the cloud summary leaves out the Gemini group (only agy's language server has it, 9 Nov 2026), so
+            # its 5-hour window comes from the per-model quota; its weekly one only from a running agy (usage_info keeps it)
+            models = ask("fetchAvailableModels").get("models") or {}
+            configs = [{"label": m["displayName"], "quotaInfo": m["quotaInfo"]} for m in models.values()
+                       if isinstance(m, dict) and str(m.get("displayName", "")).startswith("Gemini") and isinstance(m.get("quotaInfo"), dict)]
+            gemini = agent_hooks.limits.agy_used({"userStatus": {"cascadeModelConfigData": {"clientModelConfigs": configs}}}, now)
+            got = agent_hooks.limits.merge(got, [(p, "Gemini 5h", r) for p, _, r in gemini[:1]])
+        if not got:
+            raise ValueError("no quota in the answer (the API changed?)")
     except (OSError, ValueError, LookupError, KeyError, TypeError, subprocess.SubprocessError) as e:
         err = f"{type(e).__name__}: {e}"[:300]
         if err != last_error:
@@ -1134,8 +1146,8 @@ def usage_live(agent: str, ws: dict, now: float):
             files = [f for d in days for f in CODEX.glob(f"sessions/{d.tm_year:04d}/{d.tm_mon:02d}/{d.tm_mday:02d}/rollout-*.jsonl")
                      if now - f.stat().st_mtime < 900]
             return (agent_hooks.limits.codex_used(str(max(files, key=lambda f: f.stat().st_mtime)), now) if files else []) or codex_rate_read(now)
-        try:  # a running agy's own language server first; else agy's cloud quota (agy_rate_read)
-            return agent_hooks.limits.agy_used(agent_hooks.agy_status(), now) or agy_rate_read(now)
+        try:  # a running agy's own language server first (the only one with Gemini's weekly window); else the cloud
+            return agent_hooks.limits.agy_summary(agent_hooks.agy_status("RetrieveUserQuotaSummary"), now) or agy_rate_read(now)
         except LookupError:
             return agy_rate_read(now)
     except Exception:  # no numbers: unknown, which allows one worker

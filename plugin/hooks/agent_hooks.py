@@ -388,11 +388,12 @@ def agy_call(entry: dict, method: str, body: dict, timeout: float = 3) -> dict:
         return json.loads(r.read().decode("utf-8") or "{}")
 
 
-def agy_status() -> dict:
-    """GetUserStatus (plan, quota per model) from any running agy that registered: the quota is per account."""
+def agy_status(method: str = "GetUserStatus") -> dict:
+    """GetUserStatus (plan, quota per model), or another method such as RetrieveUserQuotaSummary, from any running agy
+    that registered: the quota is per account."""
     for _, entry in read_entries("agy-ls-*.json"):
         try:
-            return agy_call(entry, "GetUserStatus", {})
+            return agy_call(entry, method, {}, timeout=3 if method == "GetUserStatus" else 20)
         except Exception:
             continue
     raise LookupError("no registered agy answers")

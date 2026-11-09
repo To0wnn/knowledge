@@ -1894,7 +1894,8 @@ def chat_e2e(tok: str, tmp: Path):
                  "    def do_POST(self):\n"
                  "        self.rfile.read(int(self.headers.get('Content-Length') or 0))\n"  # read the body first: an unread one can reset the socket (macOS)
                  "        ok = self.headers.get('Authorization') == 'Bearer gategate' and self.headers.get('User-Agent') == 'antigravity-cli'\n"
-                 "        body = json.dumps({'models': {'g': {'displayName': 'Gemini X', 'quotaInfo': {'remainingFraction': 0.25, 'resetTime': '2099-01-01T00:00:00Z'}}, 'tab': {'quotaInfo': {'remainingFraction': 1}}}}).encode()\n"
+                 "        body = json.dumps({'models': {'g': {'displayName': 'Gemini X', 'quotaInfo': {'remainingFraction': 0.25, 'resetTime': '2099-01-01T00:00:00Z'}}, 'tab': {'quotaInfo': {'remainingFraction': 1}}}}\n"
+                 "                          if self.path.endswith(':fetchAvailableModels') else {'groups': [{'displayName': 'Claude and GPT models', 'buckets': [{'window': 'weekly', 'remainingFraction': 0.6, 'resetTime': '2099-01-02T00:00:00Z'}]}]}).encode()\n"
                  "        self.send_response(200 if ok else 403); self.end_headers(); self.wfile.write(body if ok else b'{}')\n"
                  "    def log_message(self, *a): pass\n"
                  "s = companion.LocalServer(('127.0.0.1', 0), H); threading.Thread(target=s.serve_forever, daemon=True).start()\n"
@@ -1904,7 +1905,7 @@ def chat_e2e(tok: str, tmp: Path):
                  "for _ in range(300):\n    got = companion.agy_rate_read(time.time())\n    if got: break\n    time.sleep(0.2)\n"
                  "print(got)")
         code, out, err = run([sys.executable, "-c", probe], "", {**env, "PYTHONPATH": str(hooks)}, cwd=str(hooks), timeout=150)
-        check(code == 0 and "75" in out and "Gemini X" in out, "companion: agy's limit from its cloud quota with agy's own token (no running agy)", out + err[-6000:])
+        check(code == 0 and "75.0, 'Gemini 5h'" in out and "40.0, 'Claude/GPT 7d'" in out, "companion: agy's limit from its cloud quota with agy's own token (no running agy)", out + err[-6000:])
         tokf.unlink()  # the running companion must never send a test token to Google
         # Model and effort: the pc reports what each agent offers; a chat's choice reaches the turn the agent's own way
         # (Claude flags, Codex turn/start, agy session/set_model + thought_level).

@@ -92,10 +92,17 @@ const allWorkers = (m) => Object.entries(m.agents || {}).flatMap(([a, ag]) => (a
 // ---------------------------------------------------------------- the folder chooser of a pc of your own
 // One level at a time, asked of its companion the same way as a diff.
 let chooseAsk = 0, chooseMachine = null, choosePath = "";
-function chooseFolder(m, project = "") {
-  chooseMachine = m;
-  $("choose-project").replaceChildren(...m.companion.projects.map((p) => { const o = el("option", null, p); o.value = p; return o; }));
-  if (project) $("choose-project").value = project;
+// pcs: the pcs to choose from in the dialog; switching one starts its folder list over, with its own projects
+function chooseFolder(m, project = "", pcs = [m]) {
+  const pick = $("choose-pc"), use = (x) => {
+    chooseMachine = x;
+    $("choose-project").replaceChildren(...x.companion.projects.map((p) => { const o = el("option", null, p); o.value = p; return o; }));
+    if (project && x.companion.projects.includes(project)) $("choose-project").value = project;
+  };
+  pick.replaceChildren(...pcs.map((x) => { const o = el("option", null, x.label); o.value = x.id; return o; }));
+  pick.value = m.id;
+  pick.onchange = () => { use(pcs.find((x) => x.id === pick.value)); chooseGo(""); };
+  use(m);
   $("choose-dialog").showModal();
   chooseGo("");
 }
@@ -181,7 +188,8 @@ function meters(pcs, a) {
   const wins = Object.values(by).sort((x, y) => (x[2] || Infinity) - (y[2] || Infinity));
   const box = el("div", "mx-meters");
   if (!wins.length) { box.append(val("Usage not known yet: it shows after a session or within 15 minutes.", "muted")); return box; }
-  const name = (n) => ({ "5h": "5 hours", "7d": "This week", "30d": "This month" }[n] || n);
+  // agy names a window after its model group: "Gemini 5h", "Claude/GPT 7d"
+  const name = (n) => ({ "5h": "5 hours", "7d": "This week", "30d": "This month" }[n] || n.replace(/ 5h$/, " · 5 hours").replace(/ 7d$/, " · this week"));
   for (const [pct, n, resets] of wins) {
     const mt = el("div", "mx-meter"), lab = el("div", "mx-meter-lab"), track = el("div", "mx-track"), fill = el("i");
     lab.append(el("span", null, name(n)), el("b", null, `${Math.round(pct)}%`));
@@ -481,18 +489,15 @@ function offlineSection(title, pcs, res) {
 function foldersView(res) {
   const own = res.machines.filter((m) => m.mine && !m.old && m.companion), parts = [];
   for (const s of res.stuck || []) parts.push(el("p", "machine-stuck", `${s.tasks} task${s.tasks > 1 ? "s" : ""} of ${s.project} cannot start by itself: none of your pcs has a folder linked to that project.`));
-  parts.push(el("p", "muted mx-lede", "Which folder on which pc belongs to which project. An agent started in a linked folder gets that project's memory and docs, and workers of that project may start there."));
+  const lede = el("div", "mx-proj-head mx-link-bar"), hosts = own.filter((m) => steers(m) && (m.companion.projects || []).length);
+  lede.append(el("p", "muted", "Which folder on which pc belongs to which project. An agent started in a linked folder gets that project's memory and docs, and workers of that project may start there."));
+  // one way to link: the dialog asks for the pc, a folder on it, then the project
+  if (hosts.length) lede.append(machineButton("Link a folder", "Choose a pc, a folder on it, then its project", () => chooseFolder(hosts.find((m) => m.id === machinesHere) || hosts[0], "", hosts)));
+  parts.push(lede);
   const projects = [...new Set(own.flatMap((m) => [...(m.companion.projects || []), ...(m.companion.folders?.linked || []).map((f) => f.project)]))].sort();
   for (const p of projects) {
     const box = el("section", "mx-proj"), head = el("div", "mx-proj-head");
     head.append(el("h3", null, p));
-    const hosts = own.filter((m) => steers(m) && (m.companion.projects || []).includes(p));
-    if (hosts.length === 1) head.append(machineButton("Link a folder", `Choose a folder on ${hosts[0].label}`, () => chooseFolder(hosts[0], p)));
-    else if (hosts.length > 1) {
-      const pick = el("select", "small"); pick.setAttribute("aria-label", `Pc to link a folder of ${p} on`);
-      for (const m of hosts) { const o = el("option", null, m.label); o.value = m.id; pick.append(o); }
-      head.append(pick, machineButton("Link a folder", "Choose a folder on that pc", () => chooseFolder(hosts.find((m) => m.id === pick.value), p)));
-    }
     box.append(head);
     const rows = own.flatMap((m) => (m.companion.folders?.linked || []).filter((f) => f.project === p).map((f) => [m, f]));
     if (!rows.length) box.append(el("p", "muted mx-empty", `No folder linked yet. Link one to give agents in that folder the memory of ${p}.`));
@@ -501,20 +506,6 @@ function foldersView(res) {
       r.append(el("span", null, m.label), el("code", null, f.path));
       r.append(m.online && m.own ? machineButton("Unlink", "Remove its .knowledge-project file (nothing else)", () => confirm(`Unlink ${f.path} on ${m.label}?`) && machineAction(m, "unlink_folder", { path: f.path }),
         pendingAction(m, "unlink_folder", (x) => x.path === f.path), "btn small quiet") : el("span", "muted", m.online ? "" : "pc offline"));
-      box.append(r);
-    }
-    parts.push(box);
-  }
-  const cand = own.filter((m) => steers(m)).flatMap((m) => (m.companion.folders?.candidates || []).map((f) => [m, f]));
-  if (cand.length) {
-    const box = el("section", "mx-proj"), head = el("div", "mx-proj-head");
-    head.append(el("h3", null, "Not linked, but looks like a project"));
-    box.append(head);
-    for (const [m, f] of cand) {
-      const r = el("div", "mx-frow"), proj = el("select", "small");
-      proj.setAttribute("aria-label", `Project for ${f.path}`);
-      for (const p of m.companion.projects || []) { const o = el("option", null, p); o.value = p; proj.append(o); }
-      r.append(el("span", null, m.label), el("code", null, f.path), proj, machineButton("Link", "Write .knowledge-project in that folder", () => machineAction(m, "link_folder", { path: f.path, project: proj.value }), pendingAction(m, "link_folder", (x) => x.path === f.path)));
       box.append(r);
     }
     parts.push(box);

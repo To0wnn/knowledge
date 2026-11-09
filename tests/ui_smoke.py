@@ -743,7 +743,7 @@ async def shell(browser, devices, secret: str) -> None:
     check(split["lines"] == [" test-vm 3 reports"], f"Machines: a pc set up again (same name and token) is one offline line with its reports counted {split}")
     words = await pg.evaluate("""() => { const now = Date.now() / 1000; return [workerNeedsYou({online: true}, {status: 'failed', owner_stopped: true}), workerNeedsYou({online: true}, {status: 'failed'})]; }""")
     check(words == [False, True], f"Machines: a worker stopped by its owner does not need you, one that failed does {words}")
-    await route(pg, "#/machines?view=folders", ms=1500)  # Link a folder sits under Folders, per project
+    await route(pg, "#/machines?view=folders", ms=1500)  # Link a folder sits on top of Folders: a folder first, then its project
     if await pg.get_by_role("button", name="Link a folder").count():
         tree = {"": {"path": "", "parent": None, "linkable": False, "dirs": [{"name": "C:\\", "path": "C:\\"}, {"name": "D:\\", "path": "D:\\"}]},
                 "D:\\": {"path": "D:\\", "parent": "", "linkable": False, "dirs": [{"name": "Sim", "path": "D:\\Sim"}]},
@@ -765,6 +765,8 @@ async def shell(browser, devices, secret: str) -> None:
         d_drive = pg.locator("#choose-list").get_by_role("button", name="D:\\")
         await d_drive.wait_for(timeout=8000)
         check(await pg.locator("#choose-list").get_by_role("button", name="C:\\").count() == 1, "Machines: the folder chooser starts at the drives, C: and D:")
+        pcs = await pg.evaluate("[...document.getElementById('choose-pc').options].map((o) => o.value)")
+        check(len(pcs) >= 1 and await pg.locator("#choose-pc").input_value() in pcs, f"Machines: the folder chooser asks for the pc too {pcs}")
         await d_drive.click()
         sim = pg.locator("#choose-list").get_by_role("button", name="Sim")
         await sim.wait_for(timeout=8000)
