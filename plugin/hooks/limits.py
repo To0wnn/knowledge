@@ -5,7 +5,8 @@ agent's usage limit is used, and refuses new subagents from 95% on. Each agent's
   (put there by `limits.py install` at session start), keeps rate_limits in ~/.knowledge/limits-claude.json and passes
   everything on unchanged;
 - Codex writes rate_limits into its rollout (token_count events);
-- agy answers GetUserStatus on its language server (at the address its register step stored).
+- agy answers GetUserStatus on its language server (at the address its register step stored); the companion asks it
+  RetrieveUserQuotaSummary for the 5-hour and weekly window of each model group (agy_summary).
 Unknown numbers mean: say nothing, allow everything. Standard library only; never fails a session.
   limits.py statusline   status line command (Claude Code)
   limits.py install      SessionStart (Claude Code): put the status line tap in front of the configured one, once
@@ -101,6 +102,27 @@ def plain(text) -> str:
     return "".join(c for c in str(text).lower() if c.isalnum())
 
 
+def fraction(q):
+    """quotaInfo's remainingFraction; proto3 JSON leaves out a 0, so an exhausted quota has only its resetTime."""
+    if not isinstance(q, dict):
+        return None
+    f = q.get("remainingFraction", 0 if q.get("resetTime") else None)
+    return f if isinstance(f, (int, float)) and not isinstance(f, bool) else None
+
+
+def agy_summary(answer: dict, now: float) -> list:
+    """agy's RetrieveUserQuotaSummary (the language server wraps it in "response"; the cloud call does not): per model
+    group a 5-hour and a weekly window, named "<group> 5h" and "<group> 7d" ("Gemini", "Claude/GPT"), fullest first."""
+    out = []
+    for g in (answer.get("response", answer) or {}).get("groups") or []:
+        group = " ".join(w for w in str(g.get("displayName", "")).split() if w.lower() != "models").replace(" and ", "/")
+        for b in g.get("buckets") or []:
+            f = fraction(b)
+            if group and b.get("window") and f is not None and not b.get("disabled"):
+                out.append((f"{group} {'7d' if b['window'] == 'weekly' else b['window']}", round((1 - f) * 100), epoch(b.get("resetTime"))))
+    return live(out, now)
+
+
 def agy_used(status: dict, now: float, model: str = "") -> list:
     """agy's quota pools, fullest first: models that share a quota have the same reset time (Gemini models one, Claude
     and GPT-OSS another); a pool is named after its model, or the first word of each of its models ("Claude/GPT-OSS").
@@ -113,9 +135,9 @@ def agy_used(status: dict, now: float, model: str = "") -> list:
     pools = {}
     for c in configs:
         q = c.get("quotaInfo")
-        if c.get("label") and isinstance(q, dict) and isinstance(q.get("remainingFraction"), (int, float)) \
-                and (q["remainingFraction"] < 1 or q.get("resetTime")):
-            pools.setdefault((q.get("resetTime"), q["remainingFraction"]), []).append(str(c["label"]))
+        f = fraction(q)
+        if c.get("label") and f is not None and (f < 1 or q.get("resetTime")):
+            pools.setdefault((q.get("resetTime"), f), []).append(str(c["label"]))
     name = lambda ls: ls[0] if len(set(ls)) == 1 else "/".join(dict.fromkeys(x.split()[0] for x in ls))
     return live([(name(ls), round((1 - f) * 100), epoch(r)) for (r, f), ls in pools.items()], now)
 
@@ -258,6 +280,15 @@ def self_test():
         {"label": "GPT-OSS 120B", "quotaInfo": {"remainingFraction": 1, "resetTime": "2099-01-02T00:00:00Z"}},
         {"label": "Tab", "quotaInfo": {"remainingFraction": 1}}]}}}, now)
     assert [(p, n) for p, n, _ in pools] == [(25, "Gemini"), (0, "Claude/GPT-OSS")], pools
+    assert agy_used({"userStatus": {"cascadeModelConfigData": {"clientModelConfigs": [
+        {"label": "Gemini 3 Flash", "quotaInfo": {"resetTime": "2099-01-01T00:00:00Z"}}]}}}, now)[0][:2] == (100, "Gemini 3 Flash"), "a left-out 0 is exhausted"
+    summary = {"response": {"groups": [
+        {"displayName": "Gemini Models", "buckets": [{"window": "weekly", "remainingFraction": 0.75, "resetTime": "2099-01-05T00:00:00Z"},
+                                                     {"window": "5h", "resetTime": "2099-01-01T00:00:00Z"}]},
+        {"displayName": "Claude and GPT models", "buckets": [{"window": "weekly", "remainingFraction": 1, "resetTime": "2099-01-06T00:00:00Z"},
+                                                             {"window": "5h", "remainingFraction": 0.5, "disabled": True}]}]}}
+    assert [(p, n) for p, n, _ in agy_summary(summary, now)] == [(100, "Gemini 5h"), (25, "Gemini 7d"), (0, "Claude/GPT 7d")]
+    assert agy_summary(summary["response"], now) == agy_summary(summary, now) and agy_summary({}, now) == []
     with tempfile.TemporaryDirectory() as t:
         STATE = Path(t)
         CLAUDE_FILE, SAID, ORIGINAL, TAP = STATE / "c.json", STATE / "s.json", STATE / "o.json", STATE / "limits.py"
