@@ -120,6 +120,7 @@ def codex_text(text: str, plan: dict) -> str:
 
 
 def write(path: Path, text: str, home: Path) -> None:
+    path = Path(os.path.realpath(path))  # a symlinked config (dotfiles) is changed where it lives, the link stays
     if path.exists():
         backup = home / ".knowledge" / "backups" / f"models-{time.strftime('%Y%m%d-%H%M%S')}"
         backup.mkdir(parents=True, exist_ok=True)
@@ -217,6 +218,12 @@ def self_test() -> None:
         s = json.loads((h / ".claude/settings.json").read_text())
         assert (s["model"], s["effortLevel"], s["env"], s["other"]) == ("opus", "high", {"KEEP": "1", "CLAUDE_CODE_SUBAGENT_MODEL": "sonnet"}, True), s
         assert list((h / ".knowledge/backups").glob("*/.claude-settings.json")), "a copy of the old file"
+        if os.name != "nt":  # a symlinked config (dotfiles): the file it points to changes, the link stays
+            (h / "dots").mkdir()
+            (h / ".claude/settings.json").rename(h / "dots/settings.json")
+            (h / ".claude/settings.json").symlink_to(h / "dots/settings.json")
+            apply("claude", {"lead": "sonnet"}, home=h)
+            assert (h / ".claude/settings.json").is_symlink() and json.loads((h / "dots/settings.json").read_text())["model"] == "sonnet"
         (h / ".codex").mkdir()
         (h / ".codex/config.toml").write_text('personality = "p"\nmodel = "a"\n\n[projects."x"]\ntrust_level = "trusted"\n')
         apply("codex", {"lead": "gpt-x", "lead_effort": "medium", "reader": "gpt-y", "reader_effort": "low"}, home=h)

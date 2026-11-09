@@ -112,7 +112,7 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   release; a fetch skips what is current. A failed install or update keeps the tool as it was, shows red in the list
   and goes once to the admins' Matrix/ntfy (again only after it was fixed and failed anew). No cooldown after a
   release and no automatic rollback: the newest version goes in, and a red check says when it broke something.
-- **Adding a tool:** a new manifest (with its `kind`: a registry draft is a `program`) plus a plugin version bump;
+- **Adding a tool:** a new manifest (with its `kind`: a registry draft is a `program`) plus a new plugin version (`deploy.sh` sets it);
   `tools.py --self-test` validates every manifest. A
   draft is only a proposal: a person reads it and commits it, nothing installs it before that (the companion only
   runs manifests its plugin shipped). Two ways to get a draft:
@@ -130,8 +130,8 @@ fixed remote actions and relays chats. Installing it is part of the client setup
     `python3 plugin/hooks/tools.py --validate plugin/tools/<id>.json`.
 
   Review with `--validate`: it checks the manifest and lists every command per action, agent and OS; a `!` marks a
-  step that runs a shell or inline code (`-c`, `-e`), which deserves a second look. Approve by merging, with the plugin
-  version bump; try it first on one pc.
+  step that runs a shell or inline code (`-c`, `-e`), which deserves a second look. Approve by merging (`deploy.sh` sets the plugin
+  version); try it first on one pc.
 
 ## The admins' own devices
 

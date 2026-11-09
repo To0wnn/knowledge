@@ -714,6 +714,16 @@ def machines_contract(tmp, ck, fr, raw, er, et, heard):
     adm("/ui/api/admin/user", {"username": "erin", "projects": {**cur_p, "garden": "read"}})
     er_runs = {t["id"]: t["runs"] for t in json.loads(raw("GET", "/ui/api/tasks", headers=er)[2])["tasks"] if t["project"] == "garden" and not t["done"]}
     assert er_runs["MC-4"] == "running in a worker on another pc", er_runs
+    import server as srv  # a token caller has no "user": the holder's owner is compared with the token's owner
+    toks, was = {"admin-pc": {"self": True}, "guest-pc": {"owner": "erin"}, "erin-2": {"owner": "erin"}}, srv.read_json
+    srv.read_json = lambda p, d: toks if p == srv.TOKENS_FILE else was(p, d)
+    try:
+        for holder, want in (("admin-pc", "another pc"), ("erin-2", "erin-2 on x"), ("guest-pc#1", "guest-pc on x")):
+            tk = srv.device.set({"name": "guest-pc", "admin": False})
+            assert srv.holder_name({"device": holder, "label": "x"}) == want, (holder, srv.holder_name({"device": holder, "label": "x"}))
+            srv.device.reset(tk)
+    finally:
+        srv.read_json = was
     assert er_runs["MC-3"].startswith("goes to a worker; waits there:"), er_runs
     adm("/ui/api/admin/user", {"username": "erin", "projects": cur_p})
     # A task nobody takes (no lease) for KNOWLEDGE_TASK_IDLE: one Matrix notice, saying where it waits.
@@ -814,6 +824,13 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={cid}")[2])["chat"]["title"] == "hello <b>agent</b>", "a short reply keeps the title"
     # A chat goes by the owner's latest message of four words or more: its first line, at most 60 characters, cut at a word.
     long = "please refactor the whole storage layer so that every write goes through one function\nmore"
+    # the board line of an unread turn: a refusal it ended on needs the owner; one the agent got past does not
+    card = lambda *ev: srv.chat_card({"status": "done", "seen": 0, "next": 1, "updated": time.time(),
+                                      "events": [{"kind": "user", "text": "go"}, *({"kind": k, "text": t} for k, t in ev)]})
+    assert card(("tool", "Bash: ls"), ("refused", "Bash rm x")) == ("needs", "refused: Bash rm x")
+    assert card(("refused", "Bash rm x"), ("tool", "Bash: rm y"), ("text", "Done it another way.")) == \
+        ("needs", "replied: Done it another way."), card(("refused", "Bash rm x"), ("tool", "Bash: rm y"), ("text", "Done it another way."))
+    assert card(("refused", "Bash rm x"), ("text", "I could not.")) == ("needs", "refused: Bash rm x")
     assert srv.chat_title(long, "hello") == "please refactor the whole storage layer so that every write…", srv.chat_title(long, "hello")
     assert srv.chat_title("ok go on", "old title") == "old title" and srv.chat_title("yes") == "yes" and len(srv.chat_title("x" * 80)) == 60
     assert srv.chat_title("\n  - fix the  login page bug now", "old") == "fix the login page bug now"
@@ -3279,6 +3296,7 @@ def main():
             srv.ROOTS, srv.EXTERNAL_FILE = was_roots, was_file
         run_mm(senv)
         assert (skills / "x/SKILL.md").read_text() == "skill\n" and not (skills / "synced").exists() and not (skills / "toolskill").exists()
+        assert (tmp / "agent-skills/x/SKILL.md").exists() and (tmp / "agy-skills/x/SKILL.md").exists(), "Codex and agy copies beside the moved skills folder, never in the real home"
         (skills / "y/scripts").mkdir(parents=True); (skills / "y/SKILL.md").write_text(SK("new skill"))
         (skills / "y/scripts/run.py").write_text("print(1)\n"); (skills / "y/blob.bin").write_bytes(b"\0")
         (tmp / "elsewhere").mkdir(); (tmp / "elsewhere/SKILL.md").write_text("local only\n")

@@ -2129,11 +2129,13 @@ KNOWLEDGE_RETRY = 1800  # seconds between two tries of the same update by itself
 def knowledge_update_due(newest: str, have: list, busy: bool, last: float, now: float) -> bool:
     """A newer Knowledge than this companion or one of its agents' plugins runs (agents waiting to close left out):
     update by itself, as the Update button does, when nothing runs here and the last try is a while ago."""
-    try:
-        want = tuple(map(int, newest.split(".")))
-        behind = any(v and tuple(map(int, v.split("."))) < want for v in have)
-    except ValueError:
-        return False
+    def num(v):  # a commit as version (Claude Code lists one for a git install) says nothing about behind: skipped
+        try:
+            return tuple(map(int, v.split(".")))
+        except (ValueError, AttributeError):
+            return None
+    want = num(newest)
+    behind = want is not None and any((n := num(v)) is not None and n < want for v in have)
     return behind and not busy and now - last >= KNOWLEDGE_RETRY and os.environ.get("KNOWLEDGE_AUTO_UPDATE") != "0"
 
 
@@ -2953,6 +2955,7 @@ def main(argv: list):
         due = lambda newest, have, busy=False, last=0: knowledge_update_due(newest, have, busy, last, 10_000)
         assert due("1.2.3", ["1.2.2", "1.2.3"]) and not due("1.2.3", ["1.2.3", ""]), "behind: by itself; current: not"
         assert not due("1.2.3", ["1.2.2"], busy=True) and not due("1.2.3", ["1.2.2"], last=9_000) and not due("", ["1.2.2"]), "busy, just tried, or no word"
+        assert due("1.2.3", ["abc123", "1.2.2"]) and not due("1.2.3", ["abc123", "1.2.3"]), "a commit as version does not stop the update"
         real_run, real_up, calls = agy_running, self_update.run, []  # agy open on Windows: its update waits, then runs once it closed
         globals()["agy_running"], self_update.run = (lambda: True), (lambda a, have=None: calls.append(a) or None)
         write_json(STATE / AGY_LATER, {"at": 1})

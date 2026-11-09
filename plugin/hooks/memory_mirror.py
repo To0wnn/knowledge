@@ -20,6 +20,7 @@ import hashlib
 import json
 import token_store
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -29,6 +30,12 @@ from pathlib import Path
 MIRROR = Path(os.environ.get("KNOWLEDGE_MIRROR") or Path(os.environ.get("KNOWLEDGE_HOME") or Path.home() / ".knowledge") / "mirror")
 STATE, LOCK = MIRROR / ".state.json", MIRROR / ".lock"
 SKILLS = Path(os.environ.get("KNOWLEDGE_SKILLS") or Path.home() / ".claude" / "skills")
+# what Codex reads, and agy (its global skills, the agy binary's own docs); a test that moves SKILLS gets these beside
+# it, never the real home's
+MOVED = bool(os.environ.get("KNOWLEDGE_SKILLS"))
+AGENT_SKILLS = Path(os.environ.get("KNOWLEDGE_AGENT_SKILLS") or (SKILLS.parent / "agent-skills" if MOVED else Path.home() / ".agents" / "skills"))
+AGY_SKILLS = Path(os.environ.get("KNOWLEDGE_AGY_SKILLS") or (SKILLS.parent / "agy-skills" if MOVED else Path.home() / ".gemini" / "config" / "skills"))
+FROM_CLAUDE = ".from-claude-skills"  # marks a copy share_skills() made: only those it updates or removes
 MAX_REMOVALS = 5  # more skills or memos gone from the server in one sync looks like an accident: hold and say so
 NOT_SHARED = ".not-shared"  # a skill folder holding it stays on this pc (a tool add-on's skill; = tools.py, server.py)
 SKILL_EXT = {".md", ".py", ".sh", ".json", ".txt", ".yaml", ".yml", ".toml", ".js", ".html", ".css", ".xml", ".xsd"}  # = server
@@ -160,6 +167,44 @@ def sync() -> str:
     return "\n".join(report)
 
 
+def skill_files(d: Path) -> dict:
+    return {p.relative_to(d).as_posix(): p.read_bytes() for p in sorted(d.rglob("*"))
+            if p.is_file() and not linked(p) and not any(x.startswith(".") for x in p.relative_to(d).parts)}
+
+
+def share_skills(dest: Path = None) -> list:
+    """Codex reads ~/.agents/skills and agy ~/.gemini/config/skills, not Claude Code's folder: every skill in
+    ~/.claude/skills (the shared ones from the server and those made here) gets a copy in dest, kept the same; a copy
+    whose skill is gone goes too. A folder there without our mark (the plugin's own skills, one made in Codex) is never
+    touched. An edit in a copy is overwritten: change the skill in ~/.claude/skills. Returns the names left alone
+    because another folder has them."""
+    dest = dest or AGENT_SKILLS
+    # a tool's skill (.not-shared: never to the server) is copied too: it stays on this pc, and its installer may miss
+    # agy (skills 1.7.6 writes only ~/.agents/skills for antigravity-cli: vercel-labs/skills#1874)
+    want = {d.name: d for d in sorted(SKILLS.iterdir()) if d.is_dir() and not linked(d) and d.name != "synced"
+            and not d.name.startswith(".") and (d / "SKILL.md").is_file()} if SKILLS.is_dir() else {}
+    skipped = []
+    for name, src in want.items():
+        dst, files = dest / name, skill_files(src)
+        if dst.exists() and not (dst / FROM_CLAUDE).exists():
+            skipped.append(name)
+            continue
+        if dst.exists() and skill_files(dst) == files:
+            continue
+        tmp = dest / f".{name}.new"
+        shutil.rmtree(tmp, ignore_errors=True)
+        for rel, data in files.items():
+            (tmp / rel).parent.mkdir(parents=True, exist_ok=True)
+            (tmp / rel).write_bytes(data)
+        (tmp / FROM_CLAUDE).write_text("a copy of ~/.claude/skills/" + name + " made by the knowledge plugin\n", encoding="utf-8")
+        shutil.rmtree(dst, ignore_errors=True)
+        tmp.rename(dst)
+    for d in sorted(dest.iterdir()) if dest.is_dir() else ():
+        if d.name not in want and not linked(d) and (d / FROM_CLAUDE).exists():
+            shutil.rmtree(d)
+    return skipped
+
+
 def sync_locked():
     MIRROR.mkdir(parents=True, exist_ok=True)
     try:
@@ -175,6 +220,12 @@ def sync_locked():
         log.write_text(report + "\n", encoding="utf-8") if report else log.unlink(missing_ok=True)
     except Exception as e:  # offline or server down: the copy stays as it is, the next session tries again
         (MIRROR / "last-sync.log").write_text(f"sync failed {time.strftime('%d %b %Y %H:%M')}: {e}\n", encoding="utf-8")
+    try:  # also offline: the skills already here reach Codex and agy
+        for dest in (AGENT_SKILLS, AGY_SKILLS):
+            share_skills(dest)
+    except OSError as e:
+        with open(MIRROR / "last-sync.log", "a", encoding="utf-8") as f:
+            f.write(f"skills for Codex and agy not copied: {e}\n")
     finally:
         LOCK.unlink(missing_ok=True)
 
@@ -255,6 +306,23 @@ if __name__ == "__main__":
             (SKILLS / "own" / "SKILL.md").write_text("y")
             assert target("claude/skills/tool-skill/SKILL.md") is None, "a tool's skill is never written or removed by the sync"
             assert list(local_skills()) == ["claude/skills/own/SKILL.md"], "and never goes up"
+            AGENT_SKILLS = Path(t) / "agents"
+            (AGENT_SKILLS / "plugin-skill").mkdir(parents=True)
+            (AGENT_SKILLS / "plugin-skill" / "SKILL.md").write_text("plugin")
+            (SKILLS / "plugin-skill").mkdir()
+            (SKILLS / "plugin-skill" / "SKILL.md").write_text("server")
+            (SKILLS / "own" / "scripts").mkdir()
+            (SKILLS / "own" / "scripts" / "a.py").write_text("print(1)")
+            assert share_skills() == ["plugin-skill"], "a folder Codex or agy has that we did not make stays"
+            assert (AGENT_SKILLS / "own" / "scripts" / "a.py").read_text() == "print(1)" and (AGENT_SKILLS / "own" / FROM_CLAUDE).exists()
+            assert (AGENT_SKILLS / "tool-skill" / "SKILL.md").read_text() == "x", "a tool's skill stays on this pc, but reaches the other agents"
+            assert (AGENT_SKILLS / "plugin-skill" / "SKILL.md").read_text() == "plugin"
+            (SKILLS / "own" / "SKILL.md").write_text("y2")
+            share_skills()
+            assert (AGENT_SKILLS / "own" / "SKILL.md").read_text() == "y2", "an edit in Claude Code's folder reaches the copy"
+            shutil.rmtree(SKILLS / "own")
+            share_skills()
+            assert not (AGENT_SKILLS / "own").exists() and (AGENT_SKILLS / "plugin-skill").exists(), "a removed skill's copy goes, nothing else"
         SKILLS = real_skills
         for bad in ("claude/CLAUDE.md", "claude/skills/synced/x/SKILL.md", "claude/skills/s/.x/a.md", "claude/skills/s/a.bin", "g/a.py"):
             try:

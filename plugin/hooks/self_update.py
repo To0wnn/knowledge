@@ -219,7 +219,7 @@ def keep_agy() -> Path | None:
 
 def lock_agy() -> Path | None:
     """One keep, install and restore at a time, also across processes: a second one would copy the half-deleted folder
-    and put that back. None when another runs; a lock left by a crash counts for INSTALL_TIME + HOOK_WAIT only."""
+    and put that back. None when another runs; a lock left by a crash counts for INSTALL_TIME + HOOK_WAIT + 5 minutes only."""
     lock = STATE.with_name("agy-update.lock")
     lock.parent.mkdir(parents=True, exist_ok=True)
     for _ in range(2):
@@ -228,7 +228,7 @@ def lock_agy() -> Path | None:
             return lock
         except FileExistsError:
             try:
-                if time.time() - lock.stat().st_mtime < INSTALL_TIME + HOOK_WAIT:
+                if time.time() - lock.stat().st_mtime < INSTALL_TIME + HOOK_WAIT + 300:  # + copying the plugin out and back
                     return None
                 lock.unlink()
             except OSError:
