@@ -1292,6 +1292,7 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     ui("/ui/api/chat/send", {"machine": mid, "id": hid, "text": "build the parser"})
     http("GET", "/machine/chats", token=fr, headers=pc)
     assert ui("/ui/api/chat/send", {"machine": mid, "id": hid, "text": "go on", "agent": "claude"})[0] == 409  # still working
+    http("POST", "/machine/chats/events", {"chat": hid, "events": [{"kind": "usage", "text": "", "tokens": 100, "ctx": 50}]}, token=fr, headers=pc)
     http("POST", "/machine/chats/events", {"chat": hid, "session": "th-9", "events": [{"kind": "text", "text": "half the parser done"},
                                           {"kind": "error", "text": "usage limit reached"}], "done": True}, token=fr, headers=pc)
     assert ui("/ui/api/chat/send", {"machine": mid, "id": hid, "text": "go on", "agent": "agy"})[0] == 400  # not installed there
@@ -1307,6 +1308,11 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     # the old agent posts late (a shell ended): its session never lands on the new agent's chat
     http("POST", "/machine/chats/events", {"chat": hid, "session": "th-9", "agent": "codex", "events": []}, token=fr, headers=pc)
     assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={hid}")[2])["chat"]["session"] == "", "an old agent's session stays out"
+    # tokens per agent: the new one starts at 0 with no context; a late count of the old one stays the old one's
+    http("POST", "/machine/chats/events", {"chat": hid, "agent": "codex", "events": [{"kind": "usage", "text": "", "total": 500, "ctx": 400}]}, token=fr, headers=pc)
+    http("POST", "/machine/chats/events", {"chat": hid, "agent": "claude", "events": [{"kind": "usage", "text": "", "tokens": 30, "ctx": 20}]}, token=fr, headers=pc)
+    m = json.loads(ui(f"/ui/api/chat?machine={mid}&id={hid}")[2])["chat"]
+    assert (m["used"], m["ctx"], m["used_by"]) == (30, 20, {"codex": 500}), m
     w = [x for x in json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["work"] if x["chat"] == hid][0]
     assert w["agent"] == "claude" and w["session"] == "" and w["allow"] == [], w
     assert w["text"].startswith("(knowledge web UI: this chat ran in Codex") and "half the parser done" in w["text"] and "build the parser" in w["text"], w["text"]
