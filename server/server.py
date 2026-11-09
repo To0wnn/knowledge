@@ -7354,8 +7354,10 @@ async def machine_chat_events(request: Request):
                 stopped = any(k == "info" and t.startswith("Stopped") for k, t, _ in events)
                 if c.pop("close_after", None) and not stopped:  # Archive: the memos are written, the chat closes
                     last = max((i for i, e in enumerate(c["events"]) if e["kind"] == "user"), default=-1)
-                    if any(e["kind"] in ("error", "refused") for e in c["events"][last + 1:]):  # not written: it stays, under Needs you
-                        chat_add(c, "info", "Not archived: the turn that records this chat in the memos hit an error or a refused tool call. Fix that, then Archive again.")
+                    # only a failed turn (usage limit, crash) blocks: a failed tool call (agy's or Codex's "refused") is one the agent
+                    # saw and worked around, and blocking on it re-ran the whole wrap-up at the next Archive
+                    if any(e["kind"] == "error" for e in c["events"][last + 1:]):  # not written: it stays, under Needs you
+                        chat_add(c, "info", "Not archived: the turn that records this chat in the memos failed. Fix that, then Archive again.")
                     else:
                         c["closed"] = True
         if worked and not chat_works(c) and not any(k == "info" and t.startswith("Stopped") for k, t, _ in events):  # the owner's own stop: nothing to come back to
