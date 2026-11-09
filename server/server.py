@@ -36,6 +36,7 @@ except ImportError:  # Windows (the e2e test server)
     fcntl = None
 import time
 import urllib.parse
+import unicodedata
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
@@ -61,6 +62,14 @@ from starlette.requests import Request
 from starlette.responses import (FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response,
                                  StreamingResponse)
 from starlette.staticfiles import NotModifiedResponse
+
+# Accented Latin letters -> their base letter, one char for one char (é -> e, ï -> i), so a search typed without
+# accents finds "geïnstalleerd" and offsets in the folded copy still match the original text.
+FOLD = {c: d[0] for c in range(0xC0, 0x250) if len(d := unicodedata.normalize("NFD", chr(c))) > 1 and d[0].isascii()}
+
+
+def fold(s: str) -> str:
+    return s.lower().translate(FOLD)
 
 HOME = Path.home()
 cc_memory = lambda folder: HOME / ".claude/projects" / re.sub(r"[^A-Za-z0-9]", "-", str(HOME / folder)) / "memory"  # Claude Code's naming
@@ -414,7 +423,7 @@ class Index:
                 keep_version(rel, old, "", removed=True, full=full)
                 skill_changed(rel, "removed")
             return
-        low = text.lower()
+        low = fold(text)
         old = self.files.get(rel)
         if old is not None and old[2] != text and tracked(rel):
             keep_version(rel, old, text, full=full)
@@ -734,7 +743,7 @@ def weak_answer(query: str, hits: list[dict]) -> bool:
         return True
     entry = index.files.get(hits[0]["path"])
     text = (entry[3] or entry[2].lower()) if entry else ""
-    return hits[0]["score"] < DOUBT_SCORE and kb_lint.query_coverage(query, text) < MIN_COVERAGE
+    return hits[0]["score"] < DOUBT_SCORE and kb_lint.query_coverage(query.translate(FOLD), text)  # case kept: it spots acronyms (PA, VM) < MIN_COVERAGE
 
 
 def gaps_summary(n: int = 30) -> list[dict]:
@@ -1293,9 +1302,9 @@ def knowledge_search(pattern: str = "", query: str = "", search: str = "", text:
     # costs at most SEARCH_SECONDS instead of freezing the whole server (security review 20 Oct 2026).
     try:
         rx_i = regex.compile(target, regex.I | regex.M | regex.V0)
-        # Fast path: lowercase pattern on the lowercase copy. Not when the pattern has uppercase escapes (\S, \W, \D,
-        # \B, \A, \Z), whose meaning would change by lowercasing.
-        rx_low = None if re.search(r"\\[A-Z]", target) else regex.compile(target.lower(), regex.M | regex.V0)
+        # Fast path: folded pattern on the folded copy (accents do not count). Not when the pattern has uppercase escapes
+        # (\S, \W, \D, \B, \A, \Z), code escapes (\x, \u, \p) or a class ([à-ÿ]), whose meaning folding would change.
+        rx_low = None if re.search(r"\\[A-Zxup]|\[", target) else regex.compile(fold(target), regex.M | regex.V0)
     except regex.error as e:
         raise ToolError(f"invalid regex: {e}")
     try:
@@ -1857,7 +1866,7 @@ def related_memos(text: str, limit: int = 6) -> list[str]:
              and in_scope(rel)]
     if not memos:
         return []
-    words = set(w for w in re.findall(r"[a-zà-ÿ][a-zà-ÿ0-9-]{3,}", text.lower()[:50000]) if w not in STOPWORDS)
+    words = set(w for w in re.findall(r"[a-z][a-z0-9-]{3,}", fold(text[:50000])) if w not in STOPWORDS)
     n = len(memos)
     weights = {}
     for w in words:
@@ -5701,15 +5710,15 @@ def search_notes(q: str, roots: tuple, limit: int = 40) -> list[dict]:
     """Web UI search: one result per note, every word must occur in it (case-insensitive, literal), ranked so the
     note about the subject comes first: words in the path or title, then memo > doc > skill > archive/source, then
     the number of matching lines. Up to 3 matching lines per note."""
-    words = [w for w in q.lower().split() if w][:8]
+    words = [w for w in fold(q).split() if w][:8]
     if not words:
         return []
     candidates = []
     for rel, text, low in index.items(",".join(roots)):
         if not in_scope(rel):
             continue
-        hay = low if low is not None else text.lower()
-        rel_low = rel.lower()
+        hay = low if low is not None else fold(text)
+        rel_low = fold(rel)
         if not all(w in hay or w in rel_low for w in words):
             continue
         head = hay[:400]
@@ -5732,7 +5741,7 @@ def search_notes(q: str, roots: tuple, limit: int = 40) -> list[dict]:
     for score, rel, text, low in candidates:
         found = []
         for n, line in enumerate(text.splitlines(), 1):
-            ll = line.lower()
+            ll = fold(line)
             match = (w0 in ll) if n_words == 1 else (w0 in ll or w1 in ll) if n_words == 2 else any(w in ll for w in words)
             if match:
                 is_phrase = phrase in ll
@@ -6805,6 +6814,50 @@ async def ui_chat_commands(request: Request):
     return JSONResponse({"commands": ((comp.get("agents") or {}).get(agent) or {}).get("commands", []), "version": comp.get("version") or ""})
 
 
+# Watch a background shell: the agent's shell (Claude Code's run_in_background) writes to a file on its pc. While a
+# page polls /ui/api/chat/shell, the companion's chat poll hears "shells" and sends the file's tail. Both live only in
+# RAM: a tail is seconds old and worthless after a restart, and a write per send would churn the chat file.
+SHELL_WATCH_SECONDS, SHELL_TAIL_BYTES = 10, 8000
+SHELL_WATCH: dict = {}  # (machine, chat, shell id) -> watched until
+SHELL_TAILS: dict = {}  # (machine, chat, shell id) -> {"text", "size", "at"}
+
+
+@server.custom_route("/ui/api/chat/shell", methods=["GET"])
+async def ui_chat_shell(request: Request):
+    """?machine=&id=&shell=: the newest output of one of the chat's background shells, as its pc last sent it
+    (text "" and at 0 until it did); asking keeps it watched for SHELL_WATCH_SECONDS."""
+    try:
+        row, b, f, c = await chat_request(request, False)
+        sid = str(b.get("shell", ""))
+        if sid not in {x["id"] for x in c.get("bg_list") or []}:
+            raise ValueError("no such shell running in this chat")
+    except (ValueError, AttributeError, TypeError, PermissionError) as e:
+        return chat_error(e)
+    now, key = time.time(), (str(b["machine"]), c["id"], sid)
+    for k in [k for k, t in SHELL_WATCH.items() if t < now]:
+        SHELL_WATCH.pop(k)
+        SHELL_TAILS.pop(k, None)
+    SHELL_WATCH[key] = now + SHELL_WATCH_SECONDS
+    return JSONResponse({**SHELL_TAILS.get(key, {"text": "", "size": 0, "at": 0}), "online": row["online"], "now": now})
+
+
+@server.custom_route("/machine/chats/shell", methods=["POST"])
+async def machine_chat_shell(request: Request):
+    """{chat, id, text, size}: the tail of a watched background shell's output (only one someone watches is kept)."""
+    if no := remote_refused():
+        return no
+    try:
+        b = await request.json()
+        key = (device.get().get("machine", ""), str(b["chat"]), str(b["id"]))
+        text, size = str(b.get("text", ""))[-SHELL_TAIL_BYTES:], int(b.get("size") or 0)
+    except (ValueError, KeyError, AttributeError, TypeError) as e:
+        return JSONResponse({"error": str(e) or "send JSON {chat, id, text, size}"}, status_code=400)
+    if SHELL_WATCH.get(key, 0) < time.time():  # also how a machine is kept to its own chats: only owners mark a watch
+        return JSONResponse({"error": "nobody watches this shell"}, status_code=404)
+    SHELL_TAILS[key] = {"text": "(withheld: contains a known secret value)" if contains_secret(text) else text, "size": size, "at": time.time()}
+    return JSONResponse({"ok": True})
+
+
 @server.custom_route("/ui/api/chat/send", methods=["POST"])
 async def ui_chat_send(request: Request):
     """{machine, id, text[, model, effort]}: the next message; its pc's companion runs it as the chat's next turn, with
@@ -7280,7 +7333,9 @@ async def machine_chats(request: Request):
     follow = [k for k, v in read_json(q_path.parent / "follow.json", {}).items() if v.get("until", 0) > now and dev["name"] in v.get("tokens", [])]
     if follow:  # workers someone watches in the web UI now: their companion sends their new output (an older one ignores it)
         out["follow"] = follow
-    out["active"] = bool(out["busy"] or out["work"] or follow or steer)
+    if shells := [{"chat": k[1], "id": k[2]} for k, t in list(SHELL_WATCH.items()) if k[0] == mid and t > now]:
+        out["shells"] = shells  # background shells someone watches: their companion sends the tail (an older one ignores it)
+    out["active"] = bool(out["busy"] or out["work"] or follow or steer or shells)
     if time.time() - (read_json(MACHINES_FILE, {}).get(mid) or {}).get("at", 0) > 30:  # online in the Machines list
         await asyncio.to_thread(mark_machine, dev)
     return JSONResponse(out)

@@ -800,6 +800,8 @@ def codex_worktree_config(folder: str) -> dict:
 
 
 LIVE: dict = {}  # chat id -> Live
+# Claude Code's answer to a background Bash call names the file its output goes to (a JSON string in the stream line)
+BG_OUT = re.compile(r'background with ID: (\w+)\. Output is being written to: ((?:[^"\\]|\\.)+?\.output)')
 LIVE_AGENTS = ("claude", "codex", "agy")
 AGENT_NAMES = {"claude": "Claude Code", "codex": "Codex", "agy": "agy"}
 IDLE_CLOSE = 15 * 60
@@ -1068,7 +1070,7 @@ class Live:
         self.slash = set()  # which messages written (1 = the first) are slash commands: a local one comes back unechoed
         self.after_interrupt, self.closing, self.stop_asked = [], False, False
         self.subs = set()  # its subagents running now: not idle while one works
-        self.snap, self.save_lock, self.asking, self.bg = None, threading.Lock(), {}, {}  # bg: Claude's background shells running  # asking: approval request id -> where its line starts
+        self.snap, self.save_lock, self.asking, self.bg, self.bg_out = None, threading.Lock(), {}, {}, {}  # bg: Claude's background shells running, bg_out: their output files  # asking: approval request id -> where its line starts
 
     def command(self, exe: str) -> list:
         return live_argv(exe, self.yolo, self.st["session"], self.cid, *self.pick)
@@ -1080,7 +1082,8 @@ class Live:
         still unanswered holds the place: the new companion reads its request again and asks again."""
         o = self.p.stdout
         at = o.end if o.end and threading.get_ident() == getattr(self, "reader", None) else o.offset
-        return {"offset": min([at, *self.asking.values()]), "taken": self.taken, "subs": sorted(self.subs), "bg": dict(self.bg), "echoed": self.echoed}
+        return {"offset": min([at, *self.asking.values()]), "taken": self.taken, "subs": sorted(self.subs), "bg": dict(self.bg), "echoed": self.echoed,
+                "bg_out": dict(self.bg_out)}
 
     def live_state(self) -> dict:
         """What was written to the agent, kept at every write."""
@@ -1107,7 +1110,7 @@ class Live:
         self.setup({"chat": s["chat"], "agent": s["agent"], "folder": s["folder"], "session": s["session"]}, post, log, s["yolo"])
         self.pick, self.asked = tuple(s["pick"]), tuple(s["asked"])
         self.written, self.taken, self.turn_open, self.busy, self.subs = s["written"], s["taken"], s["turn_open"], s["busy"], set(s["subs"])
-        self.bg = dict(s.get("bg") or {})
+        self.bg, self.bg_out = dict(s.get("bg") or {}), dict(s.get("bg_out") or {})
         self.echoed, self.slash = bool(s.get("echoed")), set(s.get("slash") or [])
         self.st["bg"] = dict.fromkeys(self.bg, 1)  # their ends, read after the restart, still match
         self.p = Hosted(d, offset=s["offset"])
@@ -1245,6 +1248,8 @@ class Live:
             if (ev.get("response") or {}).get("request_id") == "commands":
                 seen_commands(self.agent, ((ev["response"].get("response") or {}).get("commands")) or [])
             return
+        if kind == "user" and (m := BG_OUT.search(line)):
+            self.bg_out.setdefault(m[1], json.loads(f'"{m[2]}"'))  # the first: Claude Code's own launch answer, not a file quoting it
         evs = parse(self.agent, line, self.st)
         if any(e[0] == "bg" for e in evs):  # background shells: only their number goes to the server
             for e in evs:
@@ -1253,6 +1258,7 @@ class Live:
                         self.bg[e[2]] = e[1][:120]
                     else:
                         self.bg.pop(e[2], None)
+                        self.bg_out.pop(e[2], None)
             evs = [e for e in evs if e[0] != "bg"]
             self.flush()
         if kind in ("assistant", "stream_event") and not ev.get("parent_tool_use_id"):  # the main agent at work
@@ -2059,6 +2065,10 @@ def self_test():
     ev = parse("claude", json.dumps({"type": "system", "subtype": "task_started", "task_id": "b1", "task_type": "local_bash", "description": "wait"}), bst)
     ev += parse("claude", json.dumps({"type": "system", "subtype": "task_notification", "task_id": "b1", "tool_use_id": "toolu_0123456780", "status": "completed", "summary": "ok"}), bst)
     assert ev == [("bg", "wait", "b1", "running"), ("bg", "ok", "b1", "done")], ev
+    out_line = json.dumps({"type": "user", "message": {"content": [{"type": "tool_result", "content":  # its output file, a Windows path too
+        "Command running in background with ID: b1. Output is being written to: C:\\Temp\\claude\\tasks\\b1.output. You will be notified"}]}})
+    m = BG_OUT.search(out_line)
+    assert m and m[1] == "b1" and json.loads(f'"{m[2]}"') == "C:\\Temp\\claude\\tasks\\b1.output", m
     st = {}  # in the background: the launch keeps it running, the task-notification (tool-use-id, or task-id) ends it
     for tu, note in (("tu7", "<tool-use-id>tu7</tool-use-id>"), ("tu8", "<task-id>ag8</task-id>")):
         lines = ['{"type":"assistant","message":{"content":[{"type":"tool_use","id":"%s","name":"Agent","input":{"description":"bg"}}]}}' % tu,

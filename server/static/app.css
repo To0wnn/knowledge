@@ -762,7 +762,10 @@ body.admin-page { display: block; overflow-y: auto; }
 .ck-subbar { display: flex; gap: 6px; flex-wrap: wrap; padding: 6px 12px; border-top: 1px solid var(--line); background: var(--panel); }
 .ck-subbar[hidden] { display: none; }
 .ck-subpin { display: inline-flex; gap: 6px; align-items: center; max-width: 100%; padding: 3px 10px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--r-md); background: var(--panel); color: var(--ink); font-size: 13px; cursor: pointer; }
-.ck-shellpin { cursor: default; border-left-color: var(--muted); }
+.ck-shellpin { border-left-color: var(--muted); }
+.ck-shellpin[aria-expanded="true"] { border-color: var(--line-hi); background: var(--hover); }
+.ck-shell-out { flex-basis: 100%; margin: 0; max-height: 40vh; overflow-y: auto; }
+.ck-shell-out[hidden] { display: none; }
 .ck-subpin small, .ck-sub-tok { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .ck-subpin .ck-dot.live { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: kn-pulse 1.6s ease-in-out infinite; flex: none; }
 .ck-tok { font-variant-numeric: tabular-nums; }

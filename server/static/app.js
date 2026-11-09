@@ -607,7 +607,7 @@ function markInNote(words) {
   const md = $("note").querySelector(".md"); if (!md) return;
   const walk = document.createTreeWalker(md, NodeFilter.SHOW_TEXT);
   for (let t = walk.nextNode(); t; t = walk.nextNode()) {
-    const low = t.data.toLowerCase(), w = words.find((x) => low.includes(x));
+    const low = fold(t.data), w = words.find((x) => low.includes(x));
     if (!w) continue;
     const at = low.indexOf(w), range = document.createRange();
     range.setStart(t, at); range.setEnd(t, at + w.length);
@@ -859,8 +859,8 @@ async function runSearch() {
   if (!q) { $("hits").replaceChildren(); $("sem").replaceChildren(); $("titles").replaceChildren(); $("hits-empty").hidden = true; return; }
   $("sem").replaceChildren(); $("sem-head").hidden = true;
   if (!$("hits").childNodes.length) $("hits").replaceChildren(el("li", null, loadingState()));
-  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
-  const titles = data.nodes.filter((n) => words.every((w) => `${n.label} ${n.id}`.toLowerCase().includes(w)))
+  const words = fold(q).split(/\s+/).filter(Boolean);
+  const titles = data.nodes.filter((n) => words.every((w) => fold(`${n.label} ${n.id}`).includes(w)))
     .sort((a, b) => (inProject(b.project) - inProject(a.project)) || (b.degree - a.degree)).slice(0, 6);
   $("titles-head").hidden = !titles.length;
   $("titles").replaceChildren(...titles.map((n) => hitItem(noteName(n.id).title, `${shown(n.project)} · ${n.id}`, () => openNote(n.id))));
@@ -885,9 +885,12 @@ async function runSearch() {
   $("sem-head").textContent = sem.hits.length ? "By meaning" : `By meaning: ${sem.status}`;
   $("sem").replaceChildren(...extra.map((h) => hitItem(nameEl(h.path), `${h.path}:${h.line} — ${h.text}`, () => openNote(h.path))));
 }
+// Lowercase without accents, one char for one char (é -> e), so "geinstalleerd" finds "geïnstalleerd" and indexes
+// into the folded text still point into the original; the server folds the same way (server.py fold).
+const fold = (s) => s.toLowerCase().replace(/[\u00C0-\u024F]/g, (c) => c.normalize("NFD")[0]);
 // A search line as text with the query words in <mark>, built from text nodes (never innerHTML).
 function marked_(text, words) {
-  const span = el("span", "hit-text"), low = text.toLowerCase();
+  const span = el("span", "hit-text"), low = fold(text);
   let i = 0;
   while (i < text.length) {
     let at = -1, len = 0;
