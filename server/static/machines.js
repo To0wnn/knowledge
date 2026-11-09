@@ -92,10 +92,17 @@ const allWorkers = (m) => Object.entries(m.agents || {}).flatMap(([a, ag]) => (a
 // ---------------------------------------------------------------- the folder chooser of a pc of your own
 // One level at a time, asked of its companion the same way as a diff.
 let chooseAsk = 0, chooseMachine = null, choosePath = "";
-function chooseFolder(m, project = "") {
-  chooseMachine = m;
-  $("choose-project").replaceChildren(...m.companion.projects.map((p) => { const o = el("option", null, p); o.value = p; return o; }));
-  if (project) $("choose-project").value = project;
+// pcs: the pcs to choose from in the dialog; switching one starts its folder list over, with its own projects
+function chooseFolder(m, project = "", pcs = [m]) {
+  const pick = $("choose-pc"), use = (x) => {
+    chooseMachine = x;
+    $("choose-project").replaceChildren(...x.companion.projects.map((p) => { const o = el("option", null, p); o.value = p; return o; }));
+    if (project && x.companion.projects.includes(project)) $("choose-project").value = project;
+  };
+  pick.replaceChildren(...pcs.map((x) => { const o = el("option", null, x.label); o.value = x.id; return o; }));
+  pick.value = m.id;
+  pick.onchange = () => { use(pcs.find((x) => x.id === pick.value)); chooseGo(""); };
+  use(m);
   $("choose-dialog").showModal();
   chooseGo("");
 }
@@ -483,12 +490,8 @@ function foldersView(res) {
   for (const s of res.stuck || []) parts.push(el("p", "machine-stuck", `${s.tasks} task${s.tasks > 1 ? "s" : ""} of ${s.project} cannot start by itself: none of your pcs has a folder linked to that project.`));
   const lede = el("div", "mx-proj-head mx-link-bar"), hosts = own.filter((m) => steers(m) && (m.companion.projects || []).length);
   lede.append(el("p", "muted", "Which folder on which pc belongs to which project. An agent started in a linked folder gets that project's memory and docs, and workers of that project may start there."));
-  // one way to link: choose a pc (when there are several), a folder on it, then the project in the same dialog
-  if (hosts.length > 1) {
-    const pick = el("select", "small"); pick.setAttribute("aria-label", "Pc to link a folder on");
-    for (const m of hosts) { const o = el("option", null, m.label); o.value = m.id; pick.append(o); }
-    lede.append(pick, machineButton("Link a folder", "Choose a folder on that pc, then its project", () => chooseFolder(hosts.find((m) => m.id === pick.value))));
-  } else if (hosts.length) lede.append(machineButton("Link a folder", `Choose a folder on ${hosts[0].label}, then its project`, () => chooseFolder(hosts[0])));
+  // one way to link: the dialog asks for the pc, a folder on it, then the project
+  if (hosts.length) lede.append(machineButton("Link a folder", "Choose a pc, a folder on it, then its project", () => chooseFolder(hosts.find((m) => m.id === machinesHere) || hosts[0], "", hosts)));
   parts.push(lede);
   const projects = [...new Set(own.flatMap((m) => [...(m.companion.projects || []), ...(m.companion.folders?.linked || []).map((f) => f.project)]))].sort();
   for (const p of projects) {
