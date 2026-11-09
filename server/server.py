@@ -343,13 +343,14 @@ def shared_files(root: str):
                 continue
             try:
                 resolve(f"{root}/{p.relative_to(base).as_posix()}", scoped=False)
-                if p.stat().st_size > MAX_BYTES:
+                st = p.stat()
+                if st.st_size > MAX_BYTES:
                     continue
             except (ToolError, OSError) as e:
                 if getattr(e, "errno", None) in OUTAGE_ERRNOS:
                     raise
                 continue
-            yield p
+            yield p, st
 
 
 class Index:
@@ -370,6 +371,8 @@ class Index:
         self.gen = 0  # bumped on every change; the UI graph cache keys on it
         self.loaded = False  # set after the startup scan: from then on a file that appears is new, not just unseen
         self.root_gen: dict[str, int] = {}  # changes per root, so a user only hears about their own roots
+        self._cached_snap: list[tuple[str, tuple[int, int, str, str | None]]] | None = None
+        self._cached_snap_gen = -1
         # Without session logs (97 % of the writes on a busy day, and not in the graph, lint or context): what the page
         # and those caches key on, so an agent ending a session rebuilds nothing.
         self.note_gen = 0
@@ -428,16 +431,17 @@ class Index:
 
     def rescan(self):
         seen = set()
-        found = [(f"{root}/{p.relative_to(ROOTS[root]).as_posix()}", p)
-                 for root in list(ROOTS) for p in shared_files(root)]  # a copy of ROOTS: the UI may add a project meanwhile
-        for rel, p in found + list(plugin_skill_files()):
-            seen.add(rel)
+        found = [(f"{root}/{p.relative_to(ROOTS[root]).as_posix()}", p, st)
+                 for root in list(ROOTS) for p, st in shared_files(root)]  # a copy of ROOTS: the UI may add a project meanwhile
+        skills = []
+        for rel, p in plugin_skill_files():
             try:
-                st = p.stat()
+                skills.append((rel, p, p.stat()))
             except OSError as e:
-                if e.errno in OUTAGE_ERRNOS:
+                if getattr(e, "errno", None) in OUTAGE_ERRNOS:
                     raise
-                continue
+        for rel, p, st in found + skills:
+            seen.add(rel)
             hit = self.files.get(rel)
             if not hit or hit[0] != st.st_mtime_ns or hit[1] != st.st_size:
                 if self.loaded and WATCH_DEVICE and mem_of(rel) and time.time() - st.st_mtime < JUST_WRITTEN:
@@ -465,7 +469,10 @@ class Index:
 
     def items(self, root: str = ""):
         with self.lock:
-            snap = sorted(self.files.items())
+            if self._cached_snap_gen != self.gen:
+                self._cached_snap = sorted(self.files.items())
+                self._cached_snap_gen = self.gen
+            snap = self._cached_snap
         prefixes = tuple(r.strip() + "/" for r in root.split(","))  # "trade,trade-memory" = several roots
         return [(rel, v[2], v[3]) for rel, v in snap if not root or rel.startswith(prefixes)]
 
@@ -2252,17 +2259,19 @@ def project_owner(project: str) -> str:
     return next((u for u, c in read_json(USERS_FILE, {}).items() if project in c.get("created", [])), "")
 
 
-def trusted_writer(project: str, by: str) -> bool:
+def trusted_writer(project: str, by: str, _tokens: dict | None = None, _writers: list | None = None, _owner: str | None = None) -> bool:
     """Whether a task line `by` wrote may start without approval. The admin page may list the writers per project;
     by default: admins, the admins' own devices (admin-made tokens marked "self"), the project's owner and that person's
     tokens. Another admin-made token (a friend's, a PA's) is not trusted by default."""
-    tokens = read_json(TOKENS_FILE, {})
+    tokens = _tokens if _tokens is not None else read_json(TOKENS_FILE, {})
     user = by.removeprefix("user:") if by.startswith("user:") else (tokens.get(by) or {}).get("owner", "")
-    if (writers := read_json(TASK_WRITERS, {}).get(project)) is not None:
+    writers = _writers if _writers is not None else read_json(TASK_WRITERS, {}).get(project)
+    if writers is not None:
         return by in writers or bool(user) and user in writers
     if not by.startswith("user:") and by not in tokens:
         return False  # revoked, or never a token
-    return user in ADMINS or user == project_owner(project) if user else bool(tokens.get(by, {}).get("self"))
+    owner = _owner if _owner is not None else project_owner(project)
+    return user in ADMINS or user == owner if user else bool(tokens.get(by, {}).get("self"))
 
 
 def project_tasks(project: str) -> tuple[list[dict], list[dict]]:
@@ -2283,6 +2292,7 @@ def project_tasks(project: str) -> tuple[list[dict], list[dict]]:
     # cancelled (ui_task_cancel): what starts after it waits for a decision, also once its result line was read and removed
     cancelled = {re.sub(r"-done$", "", b["id"], flags=re.I) for b in back if CANCELLED.match(b["text"])} | set(read_json(TASK_CANCELLED, {}).get(project, {}))
     authors, approvals, wakes, leases = (read_json(f, {}).get(project, {}) for f in (TASK_AUTHORS, TASK_APPROVALS, TASK_WAKES, TASK_LEASES))
+    tokens, writers, owner = read_json(TOKENS_FILE, {}), read_json(TASK_WRITERS, {}).get(project), project_owner(project)
     today, now = date.today(), time.time()
     for t in tasks:
         # a worker's claim holds while its companion renews the lease (every minute while it runs): a worker that
@@ -2295,7 +2305,7 @@ def project_tasks(project: str) -> tuple[list[dict], list[dict]]:
         start, by, approved = t["start"].lower(), rec["by"] if rec and fits(rec) else "", bool(ok) and fits(ok)
         after = t["start"][6:].strip() if start.startswith("after ") and start != "after approval" else ""
         when = kb_lint.latest_date(t["start"]) if not after and start not in ("now", "after approval") else None
-        trusted = (t["legacy"] and not rec) or bool(by) and trusted_writer(project, by)  # unknown legacy: as before
+        trusted = (t["legacy"] and not rec) or bool(by) and trusted_writer(project, by, _tokens=tokens, _writers=writers, _owner=owner)  # unknown legacy: as before
         t["trusted"] = trusted
         why = [r for r, waits in (
             ("waits for approval", start == "after approval" and not approved),
@@ -5608,23 +5618,40 @@ def search_notes(q: str, roots: tuple, limit: int = 40) -> list[dict]:
     words = [w for w in q.lower().split() if w][:8]
     if not words:
         return []
-    out = []
+    candidates = []
     for rel, text, low in index.items(",".join(roots)):
         if not in_scope(rel):
             continue
         hay = low if low is not None else text.lower()
-        if not all(w in hay or w in rel.lower() for w in words):
+        rel_low = rel.lower()
+        if not all(w in hay or w in rel_low for w in words):
             continue
         head = hay[:400]
-        score = 100 * all(w in rel.lower() for w in words) + 50 * all(w in head for w in words)
+        score = 100 * all(w in rel_low for w in words) + 50 * all(w in head for w in words)
         score += 30 if mem_of(rel) and rel.count("/") == 1 else 20 if rel.endswith(".md") and "/skills/" not in rel else 10
         if is_archive(rel, text) or rel.startswith(SOURCES):
             score -= 40
-        phrase, found = " ".join(words), []
+        candidates.append((score, rel, text, low))
+    if not candidates:
+        return []
+    candidates.sort(key=lambda c: (-c[0], c[1]))
+    if len(candidates) > limit:
+        min_competing = candidates[limit - 1][0] - 10
+        candidates = [c for c in candidates if c[0] >= min_competing]
+    phrase = " ".join(words)
+    n_words = len(words)
+    w0 = words[0]
+    w1 = words[1] if n_words > 1 else None
+    out = []
+    for score, rel, text, low in candidates:
+        found = []
         for n, line in enumerate(text.splitlines(), 1):
             ll = line.lower()
-            if any(w in ll for w in words):  # best lines first: the whole phrase, then all words, then any word
-                found.append((-(2 if phrase in ll else 1 if all(w in ll for w in words) else 0), n, line))
+            match = (w0 in ll) if n_words == 1 else (w0 in ll or w1 in ll) if n_words == 2 else any(w in ll for w in words)
+            if match:
+                is_phrase = phrase in ll
+                is_all = is_phrase or all(w in ll for w in words)
+                found.append((-(2 if is_phrase else 1 if is_all else 0), n, line))
         best = sorted(found)[:3]
         out.append({"path": rel, "project": kb_graph.project_of(rel), "score": score + min(len(found), 10),
                     "hits": [{"line": n, "text": shown(line.strip()[:240])} for _, n, line in sorted(best, key=lambda b: b[1])],
@@ -7327,8 +7354,10 @@ async def machine_chat_events(request: Request):
                 stopped = any(k == "info" and t.startswith("Stopped") for k, t, _ in events)
                 if c.pop("close_after", None) and not stopped:  # Archive: the memos are written, the chat closes
                     last = max((i for i, e in enumerate(c["events"]) if e["kind"] == "user"), default=-1)
-                    if any(e["kind"] in ("error", "refused") for e in c["events"][last + 1:]):  # not written: it stays, under Needs you
-                        chat_add(c, "info", "Not archived: the turn that records this chat in the memos hit an error or a refused tool call. Fix that, then Archive again.")
+                    # only a failed turn (usage limit, crash) blocks: a failed tool call (agy's or Codex's "refused") is one the agent
+                    # saw and worked around, and blocking on it re-ran the whole wrap-up at the next Archive
+                    if any(e["kind"] == "error" for e in c["events"][last + 1:]):  # not written: it stays, under Needs you
+                        chat_add(c, "info", "Not archived: the turn that records this chat in the memos failed. Fix that, then Archive again.")
                     else:
                         c["closed"] = True
         if worked and not chat_works(c) and not any(k == "info" and t.startswith("Stopped") for k, t, _ in events):  # the owner's own stop: nothing to come back to

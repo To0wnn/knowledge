@@ -1059,6 +1059,12 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert any(w["chat"] == mc and "archived" in w["text"] for w in got["work"]), "the wrap-up is the next turn"
     http("POST", "/machine/chats/events", {"chat": mc, "events": [{"kind": "text", "text": "Wrote it to memo x."}], "done": True}, token=fr, headers=pc)
     assert chat()["closed"] is True and chat()["status"] == "idle" and not on_board(), "recorded, then archived"
+    assert ui("/ui/api/chat/close", {"machine": mid, "id": mc, "closed": False})[0] == 200
+    assert ui("/ui/api/chat/close", {"machine": mid, "id": mc})[0] == 200 and chat()["status"] == "queued"
+    http("GET", "/machine/chats", token=fr, headers=pc)
+    http("POST", "/machine/chats/events", {"chat": mc, "events": [{"kind": "refused", "text": "call_mcp_tool: path is required"},
+         {"kind": "text", "text": "Wrote it to memo x."}], "done": True}, token=fr, headers=pc)
+    assert chat()["closed"] is True and not on_board(), "a tool call that failed during the wrap-up does not block the archive"
     assert ui("/ui/api/chat/close", {"machine": mid, "id": mc})[0] == 200 and chat()["status"] == "queued"
     assert ui("/ui/api/chat/send", {"machine": mid, "id": mc, "text": "one more thing"})[0] == 200
     http("GET", "/machine/chats", token=fr, headers=pc)
