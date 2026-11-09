@@ -997,8 +997,6 @@ def usage_info(agent: str, ws: dict, now: float) -> list:
     f = STATE / f"usage-{agent}.json"
     got = usage_live(agent, ws, now)
     if got:
-        if agent == "agy":  # agy's cloud call has no Gemini week: keep an earlier reading's windows until they reset
-            got = agent_hooks.limits.merge(got, kept_agy(f, now))
         try:
             write_json(f, {"windows": got, "at": now})
         except OSError:
@@ -1073,8 +1071,8 @@ AGY_QUOTA_URL = "https://daily-cloudcode-pa.googleapis.com/v1internal"  # agy's 
 
 
 def agy_rate_read(now: float):
-    """agy's quota without a running agy: the cloud calls agy itself makes (retrieveUserQuotaSummary, and
-    fetchAvailableModels for Gemini's 5-hour window; no prompt, no tokens)
+    """agy's quota without a running agy: the cloud call agy itself makes (retrieveUserQuotaSummary; no prompt, no
+    tokens)
     with the OAuth token agy keeps; when that token expired, `agy models` (no prompt, no conversation) renews it first.
     In the background at most every CODEX_READ_EVERY; the last answer until then, None when unknown. Undocumented API:
     a failure goes to the activity log once per new error."""
@@ -1170,26 +1168,18 @@ def _agy_rate_ask(f, last_error: str):
             raise LookupError("agy's token expired and could not be renewed (signed out?)")
         # proxies from the environment only: macOS's system proxy lookup can hang in a background thread (CI, 2 Nov 2026)
         opener = urllib.request.build_opener(urllib.request.ProxyHandler(urllib.request.getproxies_environment()))
+        # agy's own User-Agent: Python's gets 403, and only a recent agy version gets the Gemini group (9 Nov 2026: 1.5.3
+        # does, 0.0.1 and "antigravity-cli" get only Claude/GPT). shortcut: 1.5.3 when `agy --version` says nothing
+        ua = f"antigravity/cli/{cli_version('agy') or '1.5.3'}"
 
         def ask(method: str) -> dict:
             req = urllib.request.Request(f"{AGY_QUOTA_URL}:{method}", data=b"{}", method="POST",
                                          headers={"Authorization": f"Bearer {access}", "Content-Type": "application/json",
-                                                  "User-Agent": "antigravity-cli"})  # Python's own agent gets 403 PERMISSION_DENIED
+                                                  "User-Agent": ua})
             with opener.open(req, timeout=15) as r:
                 return json.loads(r.read().decode("utf-8") or "{}")
         now = time.time()
         got = agent_hooks.limits.agy_summary(ask("retrieveUserQuotaSummary"), now)
-        if not any(n.startswith("Gemini ") for _, n, _ in got):
-            # shortcut: the cloud summary leaves out the Gemini group (only agy's language server has it, 9 Nov 2026), so
-            # its 5-hour window comes from the per-model quota; its weekly one only from a running agy (usage_info keeps it)
-            models = ask("fetchAvailableModels").get("models") or {}
-            configs = [{"label": m["displayName"], "quotaInfo": m["quotaInfo"]} for m in models.values()
-                       if isinstance(m, dict) and str(m.get("displayName", "")).startswith("Gemini") and isinstance(m.get("quotaInfo"), dict)]
-            # a full quota has no resetTime: then 0%, not nothing
-            left = [(agent_hooks.limits.fraction(c["quotaInfo"]), c["quotaInfo"].get("resetTime")) for c in configs]
-            if left := [x for x in left if x[0] is not None]:
-                frac, r = min(left, key=lambda x: x[0])
-                got = agent_hooks.limits.merge(got, agent_hooks.limits.live([("Gemini 5h", round((1 - frac) * 100), agent_hooks.limits.epoch(r))], now))
         if not got:
             raise ValueError("no quota in the answer (the API changed?)")
     except (OSError, ValueError, LookupError, KeyError, TypeError, subprocess.SubprocessError) as e:
@@ -1220,7 +1210,7 @@ def usage_live(agent: str, ws: dict, now: float):
             files = [f for d in days for f in CODEX.glob(f"sessions/{d.tm_year:04d}/{d.tm_mon:02d}/{d.tm_mday:02d}/rollout-*.jsonl")
                      if now - f.stat().st_mtime < 900]
             return (agent_hooks.limits.codex_used(str(max(files, key=lambda f: f.stat().st_mtime)), now) if files else []) or codex_rate_read(now)
-        try:  # a running agy's own language server first (the only one with Gemini's weekly window); else the cloud
+        try:  # a running agy's own language server first; else the cloud
             return agent_hooks.limits.agy_summary(agent_hooks.agy_status("RetrieveUserQuotaSummary"), now) or agy_rate_read(now)
         except LookupError:
             return agy_rate_read(now)
