@@ -1297,7 +1297,7 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert ui("/ui/api/chat/send", {"machine": mid, "id": hid, "text": "go on", "agent": "agy"})[0] == 400  # not installed there
     st, _, b = ui("/ui/api/chat/send", {"machine": mid, "id": hid, "text": "go on", "agent": "claude"})
     assert st == 409 and b"update the knowledge plugin" in b, b  # an older companion would resume the old agent's session
-    http("POST", "/machine/report", {"version": "0.43.33", "agents": {"codex": {}, "claude": {}},
+    http("POST", "/machine/report", {"version": "0.43.38", "agents": {"codex": {}, "claude": {}},
                                      "folders": {"linked": [{"path": "/home/x/garden", "project": "garden"}]}}, token=fr, headers=pc)
     http("POST", "/machine/chats/events", {"chat": hid, "events": [], "bg": 1}, token=fr, headers=pc)  # a shell of the old agent still runs
     assert ui("/ui/api/chat/send", {"machine": mid, "id": hid, "text": "go on", "agent": "claude"})[0] == 409

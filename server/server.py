@@ -6901,8 +6901,8 @@ async def ui_chat_send(request: Request):
     live = c.get("agent") in ((row.get("companion") or {}).get("live") or [])
     busy, msg = [], {"text": text, "by": device.get().get("user", ""), "at": time.time()}
     if agent != c["agent"]:
-        if plugin_version((row.get("companion") or {}).get("version") or "") < (0, 43, 33):  # older: it would resume the old session
-            return JSONResponse({"error": f"update the knowledge plugin on {row['label']} first (0.43.33 or newer continues a chat in another agent)"}, status_code=409)
+        if plugin_version((row.get("companion") or {}).get("version") or "") < (0, 43, 38):  # older: it would resume the old session, or not say which agent posts
+            return JSONResponse({"error": f"update the knowledge plugin on {row['label']} first (0.43.38 or newer continues a chat in another agent)"}, status_code=409)
     elif live and mode in ("now", "force") and c.get("status") in ("queued", "running"):
         return await chat_live_message(f, c, {**msg, **pick}, mode, text)
 
