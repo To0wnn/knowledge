@@ -949,10 +949,15 @@ dialog.ck-diff { width: min(980px, calc(100vw - 32px)); }
   .ck-side { border-right: 0; padding: 10px 12px; }
   .ck-resize { display: none; }
   body:not(.in-chat) .ck-canvas, body.in-chat .ck-side { display: none; }
-  body.in-chat .ck-canvas { height: 100dvh; padding: 0; grid-template-columns: 100%; }
+  body.in-chat .ck-canvas { height: 100%; min-height: 0; padding: 0; grid-template-columns: 100%; }
   /* An open chat on a phone: no page header above it; the chat's head is the top bar, back (‹) on the left, the
      title on its own line's full width, the state as a dot, tokens and Close small on a second line. */
   body.in-chat .head { display: none; }
+  body.app.in-chat { height: 100dvh; overflow: hidden; }
+  body.in-chat .main { display: flex; flex-direction: column; height: 100dvh; min-height: 0; overflow: hidden; }
+  body.in-chat #content { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  body.in-chat #cockpit { flex: 1; min-height: 0; height: 100%; overflow: hidden; }
+  body.in-chat .ck-chats { height: 100%; min-height: 0; }
   body.in-chat .ck-head { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; grid-template-areas: "x mark title state" ". meta meta close";
     column-gap: 8px; row-gap: 2px; padding: calc(6px + env(safe-area-inset-top)) 10px 6px 4px; }
   body.in-chat .ck-head > .ck-x:not(.bd-only) { grid-area: x; order: 0; width: 36px; height: 36px; font-size: 0; }
@@ -973,9 +978,13 @@ dialog.ck-diff { width: min(980px, calc(100vw - 32px)); }
 .ck-home { display: none; }
 body.app.solo { grid-template-columns: minmax(0, 1fr); }
 body.solo .sidebar, body.solo .tabbar, body.solo .head, body.solo .ck-side, body.solo .ck-resize { display: none; }
-body.solo .ck-chats { display: block; height: 100dvh; }
-body.solo .ck-canvas { height: 100dvh; padding: 0; }
-body.solo .ck-card { border: 0; border-radius: 0; }
+body.solo .main { grid-template-rows: minmax(0, 1fr); }
+body.solo:has(#impersonate-bar:not([hidden])) .main,
+body.solo.is-impersonating .main { grid-template-rows: auto minmax(0, 1fr) !important; }
+body.solo #cockpit { overflow: hidden; }
+body.solo .ck-chats { display: block; height: 100%; min-height: 0; }
+body.solo .ck-canvas { height: 100%; min-height: 0; padding: 0; }
+body.solo .ck-card { border: 0; border-radius: 0; height: 100%; min-height: 0; }
 body.solo .ck-home { display: inline-flex; align-items: center; gap: 8px; flex: none; margin-right: 6px; color: var(--ink); font-weight: 650; text-decoration: none; }
 body.solo .ck-home::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--act); }
 body.solo .ck-home:hover { text-decoration: underline; text-underline-offset: 2px; }
