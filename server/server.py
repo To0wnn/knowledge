@@ -7797,8 +7797,8 @@ async def machine_report(request: Request):
     raw = await request.body()
     if not dev.get("machine") or len(raw) > 128_000:  # room for the slash command lists of all agents at once (~30 kB)
         return JSONResponse({"error": "needs X-Knowledge-Machine and a body under 128 kB"}, status_code=400)
-    try:
-        b = json.loads(raw)
+    try:  # NaN/Infinity read as null: stored, they would make every later JSON answer with this machine fail (allow_nan=False)
+        b = json.loads(raw, parse_constant=lambda c: None)
         me = b.get("self") if isinstance(b.get("self"), dict) else {}
         report = {"version": str(b.get("version", ""))[:20], "workersAllowed": b.get("workersAllowed") is True,
                   # where the companion runs from and a newer version of it waiting on disk (companion.self_state)

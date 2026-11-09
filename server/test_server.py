@@ -662,6 +662,12 @@ def machines_contract(tmp, ck, fr, raw, er, et, heard):
     assert m["online"] and cx["yolo"] and cx["limit"] == 91.5 and cx["workers"][0]["id"] == "MC-1" and m["companion"]["workersAllowed"] and m["companion"]["maxAgents"] == 700, m
     assert m["agents"]["claude"]["trusted"] is False and m["agents"]["claude"]["limit"] is None and m["agents"]["claude"]["windows"] == []
     assert cx["windows"] == [[91.5, "5h", 2e9], [20.0, "7d", None]], cx["windows"]  # malformed windows dropped
+    inf = {**rep, "agents": {"codex": {"limit": float("inf"), "windows": [[float("inf"), "5h", None]]}}}  # json.dumps writes Infinity
+    assert http("POST", "/machine/report", inf, token=fr, headers=pc)[0] == 200
+    assert raw("GET", "/ui/api/admin", headers=ck)[0] == 200
+    cx = {r["id"]: r for r in json.loads(raw("GET", "/ui/api/machines", headers=ck)[2])["machines"]}["cccccccccccccccc"]["agents"]["codex"]
+    assert cx["limit"] is None and cx["windows"] == [], cx
+    http("POST", "/machine/report", rep, token=fr, headers=pc)
     assert json.loads((tmp / "machines.json").read_text())["cccccccccccccccc"]["limit_told"] == ["MC-2"]  # told once
     old = {**rep, "limitWait": [], "workers": [{"id": "MC-0", "project": "garden", "agent": "codex", "status": "finished",
                                                   "started": time.time() - 9 * 86400, "ended": time.time() - 8 * 86400, "branch": "task/MC-0"}]}
