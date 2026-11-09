@@ -50,6 +50,9 @@ The companion that starts workers is described in [companion.md](companion.md); 
   startable. `[<Owner>@<device>, <ID>]` pins a task to one device (the token's name, any case; token names are unique
   ignoring case, and a new line pinned to an unknown device is refused); others see it as reserved. A woken task nobody claims within 30 minutes
   shows as stalled and sends one Matrix message.
+- **Past its date.** An open line past its "open until" date that no worker or session holds (a claim marker on such a
+  line is a leftover, not a hold) is a Needs-you card in Agents, whoever owns it: **Finished** removes the line,
+  **+7 days** moves its date (`POST /ui/api/task/extend`, owner or admin), **Cancel** hands it back to its requester.
 
 ## Results handed back
 

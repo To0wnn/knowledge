@@ -479,6 +479,14 @@ function ckItem(i) {
     if (i.can_merge) act("Merge", `git merge --no-ff ${i.branch} into ${i.into} on ${i.label}`, () => ckMerge(i));
     act("Reject", i.chat ? "Keep the branch, take the card off the list" : "Keep the branch, take the card off the list; optionally send it back to the agent", () => ckReject(card, i));
   }
+  if (i.stale && i.can_close) { // past its date, nobody on it: the three answers, right here
+    act("Finished", "It is done: remove the line from its memo (its history keeps it)", () => ckDo("/ui/api/task/done", { path: i.path, line: i.task_line }), "btn small primary");
+    act("+7 days", "Still wanted: move its date a week from today", () => ckDo("/ui/api/task/extend", { project: i.project, id: i.id, days: 7 }));
+    act("Cancel", "Not wanted: its requester gets it back as a result", () => {
+      const why = prompt(`Cancel ${i.id}? Why (optional):`, "");
+      if (why !== null) ckDo("/ui/api/task/cancel", { project: i.project, id: i.id, reason: why });
+    }, "btn small quiet risky");
+  }
   if (i.result) act("Open memo", "Read the whole line in its memo; remove it there (or under Tasks) once read", () => main.click());
   if (i.kind === "chat" && i.col === "needs") act("Reply", "Answer in one line without opening the chat (Enter sends, Esc closes)", () => ckReply(card, i), "btn small primary");
   if (ckSec(i) === "needs" && i.kind !== "ask") { // an approval is answered, not put off: its turn waits on it
