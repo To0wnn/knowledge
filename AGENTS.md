@@ -17,20 +17,22 @@ Antigravity, plus a web UI with a graph. Server in `server/` (Python, one Docker
 - a really hanging disk (Linux with FUSE; not in the check): `systemd-run --user --scope -q -p MemoryMax=3G uv run --project server --with fusepy python tests/storage_hang.py`
 - a really hanging disk under the companion (Linux with FUSE; not in the check): `systemd-run --user --scope -q -p MemoryMax=3G uv run --project server --with fusepy python tests/companion_hang.py`
 - a really blocked NFS mount (Linux with an NFS server and passwordless sudo; not in the check; about 2 min): `uv run --project server python tests/nfs_outage.py`
-- deploy: `./deploy.sh` (runs the check first; routine). It rsyncs the working tree, so it refuses uncommitted changes (with
-  someone else's changes in the checkout, deploy from your own worktree) and a checkout without the commit that is live
-  (merge it first; `--replace-live` takes it off the server on purpose). It pushes the commit to `origin/main` before it
-  goes live (live is always in main; a refused push means main moved on: merge it, deploy again), and holds a lock on
-  forge so two deploys never overlap (a dead deploy's lock expires after 30 minutes); it refuses a plugin/ change whose version
-  equals main's (two parallel bumps to one number)
+- deploy: `./deploy.sh` (routine; it is also how work lands). It rsyncs the working tree, so it refuses uncommitted changes
+  (with someone else's changes in the checkout, deploy from your own worktree; a worktree uses the main checkout's
+  `local.env`). It refuses while CI is red on main (`--fix-main` for the deploy that fixes it). Under a lock on forge (a
+  dead deploy's lock expires after 30 minutes) it merges `origin/main` in (a conflict: merge it yourself, deploy again),
+  hands out the next plugin version when `plugin/` changed, runs the check on the combined tree, refuses a checkout
+  without the live commit (`--replace-live` takes it off the server on purpose) and pushes to `origin/main` before it
+  goes live (live is always in main)
 - roll back: `git revert <commit>` and `./deploy.sh`
 
 ## Project rules
 - Public repo: no names, user names, home paths or LAN addresses in code, tests or docs; installation values live in
   `local.env`. Commit author is the GitHub noreply address.
 - Plugin parity: every plugin feature works the same in Claude Code, Codex and Antigravity, with a check per agent in
-  `tests/clients_e2e.py`. Bump the version in both `plugin/.claude-plugin/plugin.json` and
-  `plugin/.codex-plugin/plugin.json` on any plugin change.
+  `tests/clients_e2e.py`. Do not bump the plugin version yourself: `deploy.sh` hands out
+  the next patch number under its lock (two sessions once took the same one 8 times in a day); set a minor or major
+  bump by hand in both `plugin.json` files and `server.json`.
 - New logic in `graph.py`, `lint.py`, `tasks.py` or `vectors.py` gets an assert in its `__main__` self-check.
 - Check a test's own exit code, never through a pipe (`| tail` hides a failure).
 - Design defaults: all text in RAM; file watcher for instant updates plus a 60 s stat rescan; embeddings local (ONNX);

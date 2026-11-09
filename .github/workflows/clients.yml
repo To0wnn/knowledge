@@ -27,10 +27,12 @@ on:
       - "server/static/**"
       - "tests/ui_*"
   workflow_dispatch:
-# A newer push replaces a run in progress: it tests everything the older one would have.
+# On a branch a newer push replaces a run in progress. On main a run always finishes (a newer push waits; only the
+# queued one is replaced): sessions deploy minutes apart, and cancelling there left main unproven (9 Nov 2026: 27 of
+# 44 clients runs on main cancelled, 7 green).
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 permissions:
   contents: read
 jobs:

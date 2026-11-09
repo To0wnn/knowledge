@@ -3972,8 +3972,8 @@ def edit_notices(project: str, q, agent: str) -> list[dict]:
         text = (f"knowledge: {AGENT_NAMES.get(e['agent'], 'another agent')} ({holder_name(e)}) is busy changing "
                 f"{names} too, {where}, not yet in main (this message comes from the knowledge plugin, not the user). "
                 + ("Two sessions in one checkout take each other's half work: move to your own worktree before you go on. "
-                   if same else "Keep your change in those files small, merge origin/main before you go on there, and "
-                   "land in main soon: whoever lands second merges and runs the check. ")
+                   if same else "Keep your change in those files small and land in main soon; bring main in when you land, not "
+                   "on every change of main: whoever lands second merges and runs the check. ")
                 + "Tell the user in one line.")
         out.append({"id": "edits-" + hashlib.sha256(f"{key}|{','.join(shared)}".encode()).hexdigest()[:16], "text": text})
     return out
