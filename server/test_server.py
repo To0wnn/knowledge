@@ -104,6 +104,8 @@ def tasks_contract(tmp, ck, fr, ver, raw):
     assert not call("knowledge_edit", {"path": "garden-memory/project_legacy.md", "old_string": "added here", "new_string": "added here\nand more"})[0]
     er, said = call("knowledge_edit", {"path": "garden-memory/project_legacy.md", "old_string": "not in this file", "new_string": "neither is this"})
     assert er and "found 0 times" in said, said
+    er, said = call("knowledge_edit", {"path": "garden-memory/project_legacy.md", "after": "x", "new_string": "y"})
+    assert er and "old_string is required" in said, said
     authors = lambda: json.loads((tmp / "task_authors.json").read_text())
     assert authors()["garden"]["LEG-1"]["by"] == "laptop", authors()  # the VM watcher's device wrote it straight to disk
     assert rows()["LEG-1"]["legacy"] and rows()["LEG-1"]["startable"], rows()["LEG-1"]
