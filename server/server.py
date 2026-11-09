@@ -7500,7 +7500,7 @@ async def machine_chat_events(request: Request):
                     last = max((i for i, e in enumerate(c["events"]) if e["kind"] == "user"), default=-1)
                     # only a failed turn (usage limit, crash) blocks: a failed or refused tool call is one the agent saw and worked
                     # around, and blocking on it re-ran the whole wrap-up at the next Archive
-                    g = b.get("git") if isinstance(b.get("git"), dict) else {}  # the chat folder's git right at the turn's end (companion 0.43.40+)
+                    g = b.get("git") if isinstance(b.get("git"), dict) else {}  # the chat folder's git right at the turn's end (companion 0.43.41+)
                     if any(e["kind"] == "error" for e in c["events"][last + 1:]):  # not written: it stays, under Needs you
                         chat_add(c, "info", "Not archived: the turn that records this chat in the memos failed. Fix that, then Archive again.")
                     elif type(g.get("ahead")) is int and g["ahead"] > 0:  # memos that call it done while it sits on a branch: twice in Nov 2026
