@@ -10,6 +10,7 @@ const AGENT_MARK = { claude: "C", codex: "X", agy: "A" };
 const ck = { cards: new Map(), machines: [], chats: [], board: [], view: "", timer: 0, summaryAt: 0, doneOpen: false, focus: "", hit: "", boardAt: 0, filter: "", waits: new Map() };
 const ckKey = (c) => `${c.machine}/${c.id}`;
 const ckBusy = (s) => s === "running" || s === "queued";
+const FORCE_BUSY = "This chat is working: force archive stops its turn, drops its queued messages and skips the wrap-up. Go on?";
 const ckShort = (path) => (path || "").split(/[\\/]/).filter(Boolean).pop() || path;
 const ckScope = (x) => !agentProject || x.project === agentProject; // the header's project filter
 
@@ -509,7 +510,7 @@ function ckItem(i) {
   if (i.kind === "chat" && !ckBusy(i.status)) later.push(["Archive", "The agent records it in the memos, then it goes off the list (under Earlier, Archived); a new message opens it again",
     () => ckDo("/ui/api/chat/close", { machine: i.machine, id: i.id, closed: true })]);
   if (i.kind === "chat") later.push(["Force archive", "Close right away without wrap-up (e.g. when quota is exhausted or agent is stuck)",
-    () => ckDo("/ui/api/chat/close", { machine: i.machine, id: i.id, closed: true, force: true, record: false })]);
+    () => (!ckBusy(i.status) || confirm(FORCE_BUSY)) && ckDo("/ui/api/chat/close", { machine: i.machine, id: i.id, closed: true, force: true, record: false })]);
   if (i.kind === "chat" && ckBusy(i.status)) act("Stop", "Stop this turn", () => ckDo("/ui/api/chat/stop", { machine: i.machine, id: i.id }));
   if (later.length) acts.append(ckMore(later, i.title));
   if (acts.childNodes.length) card.append(acts);
@@ -800,6 +801,7 @@ function ckCard(meta) {
   close.onclick = async (e) => { // archive: the agent records the chat in the memos, then it goes off the board and the list (Archived); a new message opens it again
     const closed = !card.meta.closed;
     const force = closed && (Boolean(e?.shiftKey) || Boolean(card.failedWrap));
+    if (force && ckBusy(card.meta.status) && !confirm(FORCE_BUSY)) return;
     try {
       const r = await api("/ui/api/chat/close", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, closed, ...(force ? { force: true, record: false } : {}) }) });
       ck.summaryAt = 0;
