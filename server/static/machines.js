@@ -481,18 +481,19 @@ function offlineSection(title, pcs, res) {
 function foldersView(res) {
   const own = res.machines.filter((m) => m.mine && !m.old && m.companion), parts = [];
   for (const s of res.stuck || []) parts.push(el("p", "machine-stuck", `${s.tasks} task${s.tasks > 1 ? "s" : ""} of ${s.project} cannot start by itself: none of your pcs has a folder linked to that project.`));
-  parts.push(el("p", "muted mx-lede", "Which folder on which pc belongs to which project. An agent started in a linked folder gets that project's memory and docs, and workers of that project may start there."));
+  const lede = el("div", "mx-proj-head mx-link-bar"), hosts = own.filter((m) => steers(m) && (m.companion.projects || []).length);
+  lede.append(el("p", "muted", "Which folder on which pc belongs to which project. An agent started in a linked folder gets that project's memory and docs, and workers of that project may start there."));
+  // one way to link: choose a pc (when there are several), a folder on it, then the project in the same dialog
+  if (hosts.length > 1) {
+    const pick = el("select", "small"); pick.setAttribute("aria-label", "Pc to link a folder on");
+    for (const m of hosts) { const o = el("option", null, m.label); o.value = m.id; pick.append(o); }
+    lede.append(pick, machineButton("Link a folder", "Choose a folder on that pc, then its project", () => chooseFolder(hosts.find((m) => m.id === pick.value))));
+  } else if (hosts.length) lede.append(machineButton("Link a folder", `Choose a folder on ${hosts[0].label}, then its project`, () => chooseFolder(hosts[0])));
+  parts.push(lede);
   const projects = [...new Set(own.flatMap((m) => [...(m.companion.projects || []), ...(m.companion.folders?.linked || []).map((f) => f.project)]))].sort();
   for (const p of projects) {
     const box = el("section", "mx-proj"), head = el("div", "mx-proj-head");
     head.append(el("h3", null, p));
-    const hosts = own.filter((m) => steers(m) && (m.companion.projects || []).includes(p));
-    if (hosts.length === 1) head.append(machineButton("Link a folder", `Choose a folder on ${hosts[0].label}`, () => chooseFolder(hosts[0], p)));
-    else if (hosts.length > 1) {
-      const pick = el("select", "small"); pick.setAttribute("aria-label", `Pc to link a folder of ${p} on`);
-      for (const m of hosts) { const o = el("option", null, m.label); o.value = m.id; pick.append(o); }
-      head.append(pick, machineButton("Link a folder", "Choose a folder on that pc", () => chooseFolder(hosts.find((m) => m.id === pick.value), p)));
-    }
     box.append(head);
     const rows = own.flatMap((m) => (m.companion.folders?.linked || []).filter((f) => f.project === p).map((f) => [m, f]));
     if (!rows.length) box.append(el("p", "muted mx-empty", `No folder linked yet. Link one to give agents in that folder the memory of ${p}.`));
@@ -501,20 +502,6 @@ function foldersView(res) {
       r.append(el("span", null, m.label), el("code", null, f.path));
       r.append(m.online && m.own ? machineButton("Unlink", "Remove its .knowledge-project file (nothing else)", () => confirm(`Unlink ${f.path} on ${m.label}?`) && machineAction(m, "unlink_folder", { path: f.path }),
         pendingAction(m, "unlink_folder", (x) => x.path === f.path), "btn small quiet") : el("span", "muted", m.online ? "" : "pc offline"));
-      box.append(r);
-    }
-    parts.push(box);
-  }
-  const cand = own.filter((m) => steers(m)).flatMap((m) => (m.companion.folders?.candidates || []).map((f) => [m, f]));
-  if (cand.length) {
-    const box = el("section", "mx-proj"), head = el("div", "mx-proj-head");
-    head.append(el("h3", null, "Not linked, but looks like a project"));
-    box.append(head);
-    for (const [m, f] of cand) {
-      const r = el("div", "mx-frow"), proj = el("select", "small");
-      proj.setAttribute("aria-label", `Project for ${f.path}`);
-      for (const p of m.companion.projects || []) { const o = el("option", null, p); o.value = p; proj.append(o); }
-      r.append(el("span", null, m.label), el("code", null, f.path), proj, machineButton("Link", "Write .knowledge-project in that folder", () => machineAction(m, "link_folder", { path: f.path, project: proj.value }), pendingAction(m, "link_folder", (x) => x.path === f.path)));
       box.append(r);
     }
     parts.push(box);
