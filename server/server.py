@@ -2711,6 +2711,26 @@ def plugin_latest() -> tuple[str, float] | None:
     return (latest["v"], latest["since"]) if latest else None
 
 
+# Where each agent program's newest version is published; agy says it nowhere public, so it has none.
+AGENT_LATEST_URLS = {a: f"https://registry.npmjs.org/-/package/{p}/dist-tags" for a, p in (("claude", "@anthropic-ai/claude-code"), ("codex", "@openai/codex"))}
+_agents_latest: dict = {"at": 0.0, "v": {}}
+
+
+def agents_latest() -> dict:
+    """{"claude": {"latest": "2.1.319", "stable": "2.1.311"}, "codex": {"latest": "0.167.0"}}, checked at most hourly;
+    an agent whose registry did not answer keeps its last answer."""
+    if time.time() - _agents_latest["at"] > 3600:
+        _agents_latest["at"] = time.time()
+        for a, url in AGENT_LATEST_URLS.items():
+            try:
+                with urllib.request.urlopen(url, timeout=5) as r:
+                    tags = json.loads(r.read().decode())
+                _agents_latest["v"][a] = {k: str(tags[k])[:20] for k in ("latest", "stable") if k in tags}
+            except (OSError, ValueError, KeyError) as e:
+                print(f"{a} version check failed: {e}", flush=True)
+    return _agents_latest["v"]
+
+
 def mark_plugin(name: str, agent: str, v: str, default_url: bool = False, checked: float = 0, error: str = ""):
     """Which plugin version each token runs per agent, for the admin page and the weekly report; default_url: the
     device names no server and leans on the plugin's default (shown so that default can be removed safely);
@@ -5826,7 +5846,7 @@ async def ui_machines(request: Request):
         rows = machine_rows()
         # the newest plugin on GitHub: what "behind" means, never the highest a pc reports (a test pc may say anything)
         return {"machines": rows, "stuck": stuck_projects(task_rows(), rows), "admin": bool(device.get().get("admin")), "now": time.time(),
-                "newest": (plugin_latest() or ("",))[0]}
+                "newest": (plugin_latest() or ("",))[0], "newestAgents": agents_latest()}
     return JSONResponse({**await asyncio.to_thread(build)})
 
 
@@ -7737,6 +7757,9 @@ async def machine_report(request: Request):
                                              and isinstance(w[0], (int, float)) and not isinstance(w[0], bool)] if isinstance(v.get("windows"), list) else [],
                                  # the installed plugin, read from disk by the companion: shown before the agent's first session
                                  **({"plugin": v["plugin"][:20]} if isinstance(v.get("plugin"), str) and re.fullmatch(r"[\w.+-]{1,20}", v["plugin"]) else {}),
+                                 # the agent program's own version and (Claude Code) its update channel: Machines shows what an update gets
+                                 **({"cli": v["cli"]} if isinstance(v.get("cli"), str) and re.fullmatch(r"[\w.+-]{1,20}", v["cli"]) else {}),
+                                 **({"channel": v["channel"]} if v.get("channel") in ("latest", "stable") else {}),
                                  **({"models": report_models(v["models"])} if "models" in v else {}),
                                  **({"commands": report_commands(v["commands"])} if "commands" in v else {}),
                                  **({"current": {k: str(x)[:80] for k, x in v["current"].items() if k in ("lead", "lead_effort", "reader", "reader_effort")}}

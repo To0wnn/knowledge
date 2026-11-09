@@ -922,6 +922,11 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     me = [a for a in json.loads(ui("/ui/api/machines")[2])["machines"] if a["id"] == mid][0]["companion"]["self"]
     assert me == {"from": "checkout", "disk": "9.9.9", "waits": "the next check", "later": []}, me  # where it runs from, a newer one waiting
     assert "newest" in json.loads(ui("/ui/api/machines")[2]), "the page's newest version comes from the server, not from the highest a pc reports"
+    assert http("POST", "/machine/report", {**mrep, "agents": {"claude": {"cli": "2.1.311", "channel": "stable"}, "codex": {"cli": "<b>", "channel": "beta"}}}, token=fr, headers=pc)[0] == 200
+    ags = [a for a in json.loads(ui("/ui/api/machines")[2])["machines"] if a["id"] == mid][0]["agents"]
+    assert ags["claude"]["cli"] == "2.1.311" and ags["claude"]["channel"] == "stable", ags["claude"]  # the agent program's version: Machines offers its update
+    assert "cli" not in ags["codex"] and "channel" not in ags["codex"], ags["codex"]  # only a version and a known channel get in
+    assert "newestAgents" in json.loads(ui("/ui/api/machines")[2]), "the newest of each agent program comes from the server"
     assert "newest" in json.loads(http("POST", "/machine/report", mrep, token=fr, headers=pc)[1]), "a companion hears the newest version, to update by itself"
     assert http("POST", "/machine/report", {**mrep, "self": {"from": "<b>", "disk": 1}}, token=fr, headers=pc)[0] == 200
     me = [a for a in json.loads(ui("/ui/api/machines")[2])["machines"] if a["id"] == mid][0]["companion"]["self"]

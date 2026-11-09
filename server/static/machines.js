@@ -48,6 +48,10 @@ function pluginBehind(m) { // an agent that waits for itself to close (agy open 
   const newest = newestPlugin(), later = m.companion?.self?.later || [];
   return [m.companion?.version, ...Object.entries(m.agents || {}).filter(([a]) => !later.includes(a)).map(([, ag]) => ag.plugin)].some((v) => v && versionNewer(newest, v)) ? newest : "";
 }
+// The agent program itself (Claude Code 2.1.319): the newest of its own update channel, "" when nobody publishes one (agy).
+const agentNewest = (m, a) => { const t = machinesRes?.newestAgents?.[a] || {}; return t[m.agents?.[a]?.channel] || t.latest || ""; };
+const agentBehind = (m, a) => { const v = m.agents?.[a]?.cli, n = agentNewest(m, a); return v && n && versionNewer(n, v) ? n : ""; };
+const agentsBehind = (m) => AGENT_ORDER.filter((a) => agentBehind(m, a));
 // A switch that sends an action: it shows the state the pc reported, and waits while the change is on its way.
 function machineSwitch(label, on, busy, aria, onchange) {
   const l = el("label", "check machine-switch"), c = el("input"); c.type = "checkbox"; c.setAttribute("role", "switch"); c.checked = !!on;
@@ -220,6 +224,9 @@ function pcHead(m, here) {
   if (behind && steers(m)) acts.append(machineButton(`Update to ${behind}`, "Update the knowledge plugin of every agent there and its companion (it restarts by itself)", () => machineAction(m, "update_plugin", { target: behind }), updating(m), "btn small primary"));
   // an admin may update the plugin on someone else's pc, nothing else there (the server checks its remote-control switch)
   if (behind && me.admin && !m.own && !m.old && m.online && c) acts.append(machineButton(`Update to ${behind} (admin)`, "Update the knowledge plugin there; its owner's settings stay as they are", () => machineAction(m, "update_plugin", { target: behind }), updating(m), "btn small primary"));
+  const old = agentsBehind(m);
+  if (old.length && steers(m)) acts.append(machineButton("Update agents", `Update ${old.map((a) => AGENT_NAME[a] || a).join(", ")} with each one's own update command (a running session keeps its version until it restarts)`,
+    () => machineAction(m, "update_agents"), pendingAction(m, "update_agents"), "btn small primary"));
   if (steers(m) && (c.agents || []).length && (c.folders?.linked || []).length) acts.append(machineButton("Chat", "Talk to an agent on this pc (Chats)", async () => { go("#/chats"); if (!ck.machines.length) await ckSummary().catch(() => {}); ckNewChat(m.id); }));
   if (m.mine) acts.append(pcMore(m));
   if (acts.childNodes.length) box.append(acts);
@@ -274,6 +281,14 @@ function pluginCell(m, a) {
   if (!ag || !(m.companion?.agents || Object.keys(m.agents || {})).includes(a)) return val("Not installed", "muted");
   if (!ag.plugin) return val("No plugin", "mx-diff");
   return versionNewer(newestPlugin(), ag.plugin) ? differs(ag.plugin) : val(ag.plugin, "ok");
+}
+function versionCell(m, a) {
+  const ag = m.agents?.[a];
+  if (!ag) return null;
+  if (!ag.cli) return val("Not reported", "muted"); // a companion before this report, or an agent that does not say
+  const to = agentBehind(m, a);
+  if (to) { const v = differs(`${ag.cli} → ${to}`); v.title = `${ag.cli} is installed; ${to} is the newest${ag.channel === "stable" ? " on the stable channel" : ""}`; return v; }
+  return val(ag.cli, agentNewest(m, a) ? "ok" : "");
 }
 function hooksCell(m, a) {
   const ag = m.agents?.[a];
@@ -368,6 +383,7 @@ function compareTable(pcs, here, mine) {
     const head = mxRow("mx-agent", name, []);
     head.insertBefore(meters(pcs, a), head.lastChild);
     grid.append(head);
+    grid.append(row("", "Version", pcs.map((m) => versionCell(m, a))));
     grid.append(row("", "Plugin", pcs.map((m) => pluginCell(m, a))));
     grid.append(row("", "Hooks", pcs.map((m) => hooksCell(m, a))));
     grid.append(row("", "YOLO", pcs.map((m) => yoloCell(m, a))));
@@ -436,6 +452,11 @@ function machinesStatus(res, own, online) {
     if (note && !m.companion.self?.waits) { items.push([`${m.label}: ${note} `, actionButton("see Activity", () => pcActivity(m), "btn small quiet")]); continue; }
     items.push([versionNewer(newestPlugin(), m.companion.version || "0") ? `${m.label} runs an older Knowledge (${m.companion.version}).`
     : `The plugin of ${Object.entries(m.agents || {}).filter(([, ag]) => ag.plugin && versionNewer(newestPlugin(), ag.plugin)).map(([a]) => AGENT_NAME[a] || a).join(" and ")} on ${m.label} is older than its Knowledge.`]);
+  }
+  for (const m of online.filter(steers)) {
+    const old = agentsBehind(m);
+    if (old.length) items.push([`On ${m.label} an agent can update: ${old.map((a) => `${AGENT_NAME[a] || a} ${m.agents[a].cli} → ${agentBehind(m, a)}`).join(", ")}. `,
+      machineButton("Update agents", `Update the agents on ${m.label}`, () => machineAction(m, "update_agents"), pendingAction(m, "update_agents"), "btn small")]);
   }
   for (const m of online) for (const [a, ag] of Object.entries(m.agents || {})) {
     if (ag.trusted === false) items.push([`${AGENT_NAME[a] || a} on ${m.label} does not trust the knowledge hooks yet.`]);

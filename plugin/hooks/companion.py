@@ -285,6 +285,33 @@ def plugin_version(agent: str) -> str:
         return ""
 
 
+CLI_SEEN: dict = {}  # agent -> (when, version): `--version` costs a process start, so at most every 6 hours
+
+
+def cli_version(agent: str, now: float = 0) -> str:
+    """The agent program's own version ("2.1.319"), for the Machines page; "" when it does not say."""
+    now = now or time.time()
+    if agent in CLI_SEEN and now - CLI_SEEN[agent][0] < 6 * 3600:
+        return CLI_SEEN[agent][1]
+    v = ""
+    if exe := shutil.which(agent):
+        try:
+            r = subprocess.run([exe, "--version"], capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL, timeout=30)
+            v = m.group(0) if (m := re.search(r"\d+\.\d+\.\d+[\w.+-]*", r.stdout + r.stderr)) else ""
+        except (OSError, subprocess.SubprocessError):
+            pass
+    CLI_SEEN[agent] = (now, v[:20])
+    return v[:20]
+
+
+def claude_channel() -> str:
+    """Claude Code's update channel: "stable" trails "latest" by about a week, so it is behind only against its own."""
+    try:
+        return "stable" if json.loads((CLAUDE_DIR / "settings.json").read_text(encoding="utf-8")).get("autoUpdatesChannel") == "stable" else "latest"
+    except (OSError, ValueError, AttributeError):
+        return "latest"
+
+
 def running(agent: str) -> bool:
     name = PROCESS[agent]
     if os.name == "nt":
@@ -1675,6 +1702,7 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
             "live": list(chat.LIVE_AGENTS),  # agents whose chats run live: a message while they work goes in at once
             "agents": {a: {"yolo": bool(yolo.get(a, {}).get("on")), "trusted": not untrusted(a, folders), "limit": lim.get(a),
                      "resets": (resets or {}).get(a), "windows": (windows or {}).get(a, []), **({"plugin": v} if (v := plugin_version(a)) else {}),  # known before a session
+                     **({"cli": v} if (v := cli_version(a, now)) else {}), **({"channel": claude_channel()} if a == "claude" else {}),
                      "models": chat.models(a),  # what a chat may pick (cached for hours)
                      # the slash commands its last live chat here offered: long, so only when changed (the server keeps them)
                      **({"commands": c} if (c := chat.commands(a)) != _COMMANDS_SENT.get(a, (0, None))[1] or now - _COMMANDS_SENT[a][0] > 6 * 3600 else {}),
@@ -2080,6 +2108,7 @@ def update_agents() -> list:
             out, ok = mask((r.stdout + r.stderr).strip())[-300:], r.returncode == 0
         except (OSError, subprocess.SubprocessError) as e:
             out, ok = f"{type(e).__name__}: {e}"[:300], False
+        CLI_SEEN.pop(a, None)  # the next report reads the version it now has
         log("sync" if ok else "error", f"{name}: {'its update command ran' if ok else 'the update failed'}", out)
         if not ok:
             failed.append(f"{name}: {out}")
