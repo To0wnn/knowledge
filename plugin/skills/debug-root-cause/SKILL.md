@@ -8,9 +8,12 @@ effort: high
 
 1. **Reproduce** it, with the exact input and the exact error. Can't reproduce it: gather evidence (logs, versions,
    state) before guessing.
-2. **Make it a failing test** when possible (or a script that shows it). It must fail now.
-3. **Find the cause**: follow the data from input to wrong output; change one thing at a time; read the code, not
-   only the error. A cause is proven when you can say why it fails and the test confirms it.
+2. **Make it a failing test** when possible (or a script that shows it). It must fail now, with the user's exact
+   symptom, not a nearby failure. Take the expected value from an independent source (a known-good literal, the spec,
+   a worked example), never computed the way the code computes it, or the test passes by construction.
+3. **Find the cause**: when it is not obvious, first write 2-4 candidate causes, each with a prediction ("if X, then
+   changing Y makes it go away"), and rule them out with evidence. Follow the data from input to wrong output; change
+   one thing at a time; read the code, not only the error. A cause is proven when you can say why it fails and the test confirms it.
 4. **Fix the cause once**, in the shared code, not at every caller. No silencing (broad try/except, retries, skipping
    the test).
 5. **Verify**: the failing test passes, the project's check passes; show the output.

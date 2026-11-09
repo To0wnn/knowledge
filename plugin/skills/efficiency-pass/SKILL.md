@@ -9,7 +9,9 @@ description: Make a program, service or page faster or lighter the measured way 
 Baseline on real data first: wall time or p50/p95 latency, throughput, CPU %, RSS, GPU use. Profile to find the hot
 spot (Python: `py-spy top/record`, `scalene`; startup: `python -X importtime`; browser: DevTools Performance).
 Change one thing, measure with the same load, keep it only when it clearly wins (rule of thumb > 10 % and no fragile
-complexity). Record before/after in the commit or the project's Decisions. A pure guess is not a reason.
+complexity); a result within the noise is reverted, not kept. A gain that comes from skipping needed work (a
+validation, a cache that must be fresh, an `await` that orders writes) is a regression. Record before/after in the
+commit or the project's Decisions. A pure guess is not a reason.
 
 ## Checklist (when it pays, how you see it worked, the trap)
 
