@@ -1536,6 +1536,13 @@ def worker_follow_contract(tmp, ck, fr, raw, er, et):
     assert "(claimed alice via chat, " in line and "Claude worker" not in line, line
     t = next(t for t in json.loads(ui("/ui/api/tasks")[2])["tasks"] if t["id"] == "WF-1")
     assert not t["startable"] or t["claimed"], t
+    # Continued in another agent (the worker's one ran out): the line names that agent, its chat keeps holding it.
+    m("POST", "/machine/report", {"version": "0.43.38", "agents": {"claude": {}, "codex": {}}, "workers": [wk],
+                                  "folders": {"linked": [{"path": "/home/x/wt/garden", "project": "garden"}]}})
+    st, _, b = ui("/ui/api/chat/send", {"machine": mid, "id": cid, "text": "go on", "agent": "codex"})
+    assert st == 200, b
+    line = next(ln for ln in (tmp / "projects/garden/memory/project_tasks.md").read_text().splitlines() if "WF-1" in ln)
+    assert "[Codex, WF-1]" in line and "(claimed alice via chat, " in line, line
     # The owner may still cancel (or assign) a line her own chat holds.
     st, _, b = ui("/ui/api/task/cancel", {"project": "garden", "id": "WF-1", "reason": "done by hand"})
     assert st == 200, b

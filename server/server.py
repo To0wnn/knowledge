@@ -4103,6 +4103,23 @@ async def tasks_ready_route(request: Request):
     return JSONResponse({"tasks": out})
 
 
+async def switch_owner(project: str, t: dict, agent: str):
+    """Another agent does task t ('pak <ID>', or a taken-over worker's chat continued in another agent): its line
+    follows, so the Tasks tab, owner notices and hand-backs name who works on it. A device pin stays; a person's line
+    is left alone."""
+    if not (was := owner_agent(t["owner"])) or was == agent:
+        return
+    tid = t["id"]
+    if not (m := re.search(r"\[[^,\]@]+(@[^,\]]*)?,\s*" + re.escape(tid) + r"\]", t["line"])):
+        return
+    new = t["line"][:m.start()] + f"[{REVIEW_OWNERS[agent]}{m.group(1) or ''}, {tid}]" + t["line"][m.end():]
+    try:
+        await knowledge_edit(t["path"], t["line"], new)
+        audit("task-switch", f"{project}/{tid} {t['owner']} -> {REVIEW_OWNERS[agent]}")
+    except (ToolError, OSError) as e:  # whoever holds it keeps it; only the line shows the old owner
+        audit("task-switch-failed", f"{project}/{tid}: {e}"[:200])
+
+
 @server.custom_route("/tasks/woken", methods=["POST"])
 async def tasks_woken_route(request: Request):
     """{"project", "id", "agent", "session"}: this device wants to wake a session for this task. The first device takes
@@ -4127,15 +4144,7 @@ async def tasks_woken_route(request: Request):
     ok, lease = await asyncio.to_thread(claim_task, project, t, agent, wake["device"], wake["session"], start)
     if not ok:
         return JSONResponse({"held_by": held_by(lease)}, status_code=409)
-    if (was := owner_agent(t["owner"])) and was != agent:  # 'pak <ID>' in another agent's chat: the line follows who does it
-        m = re.search(r"\[[^,\]@]+(@[^,\]]*)?,\s*" + re.escape(tid) + r"\]", t["line"])
-        if m:
-            new = t["line"][:m.start()] + f"[{REVIEW_OWNERS[agent]}{m.group(1) or ''}, {tid}]" + t["line"][m.end():]
-            try:
-                await knowledge_edit(t["path"], t["line"], new)
-                audit("task-switch", f"{project}/{tid} {t['owner']} -> {REVIEW_OWNERS[agent]}")
-            except (ToolError, OSError) as e:  # the lease holds it anyway; only the Tasks tab shows the old owner
-                audit("task-switch-failed", f"{project}/{tid}: {e}"[:200])
+    await switch_owner(project, t, agent)  # 'pak <ID>' in another agent's chat
     # a wake again keeps the first time and whether the admin heard it: else every new try hides the stall
     await asyncio.to_thread(update_state, TASK_WAKES, lambda d: d.setdefault(project, {}).setdefault(
         tid, {"at": int(time.time())}).update(wake))
@@ -6996,6 +7005,9 @@ async def ui_chat_send(request: Request):
         return JSONResponse({"error": "the agent or its background work is still running: stop it first, then continue in another agent"}, status_code=409)
     if agent != c["agent"]:
         audit("chat-continue", f"{c['id']} {c['agent']} -> {agent}")
+        project, _, tid = str(c.get("worker") or "").partition("/")  # a chat that took over a worker holds its task
+        if project in PROJECTS and (t := next((x for x in (await asyncio.to_thread(project_tasks, project))[0] if x["id"] == tid), None)):
+            await switch_owner(project, t, agent)
     if busy == ["full"]:
         return JSONResponse({"error": f"{CHAT_PENDING} messages wait already: wait for the agent, or stop it"}, status_code=409)
     if busy:

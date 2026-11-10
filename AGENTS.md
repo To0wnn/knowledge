@@ -5,7 +5,8 @@ Antigravity, plus a web UI with a graph. Server in `server/` (Python, one Docker
 
 ## Commands
 - check (must pass before "done"; the pre-commit hook runs it; about 50 s): `./check.sh`; `./check.sh --unless-passed` skips
-  it when this exact tree passed on this checkout already (deploy.sh uses that)
+  it when this exact tree passed on this checkout already (deploy.sh uses that); in an agent session run it (and deploy.sh) under
+  `env -u KNOWLEDGE_URL -u KNOWLEDGE_TOKEN -u KNOWLEDGE_CHAT`, or the session's own server settings break the docs sync test (401)
 - run: deployed as a Docker stack; there is no local dev server
 - test one thing: `cd server && uv run test_server.py` (or `uv run lint.py`, `uv run graph.py` for their self-checks)
 - UI test: `uv run --project server --with playwright python tests/ui_ci.py` (a seeded throwaway server; CI runs it too),
