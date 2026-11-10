@@ -4090,6 +4090,15 @@ async def tasks_woken_route(request: Request):
     ok, lease = await asyncio.to_thread(claim_task, project, t, agent, wake["device"], wake["session"], start)
     if not ok:
         return JSONResponse({"held_by": held_by(lease)}, status_code=409)
+    if (was := owner_agent(t["owner"])) and was != agent:  # 'pak <ID>' in another agent's chat: the line follows who does it
+        m = re.search(r"\[[^,\]@]+(@[^,\]]*)?,\s*" + re.escape(tid) + r"\]", t["line"])
+        if m:
+            new = t["line"][:m.start()] + f"[{REVIEW_OWNERS[agent]}{m.group(1) or ''}, {tid}]" + t["line"][m.end():]
+            try:
+                await knowledge_edit(t["path"], t["line"], new)
+                audit("task-switch", f"{project}/{tid} {t['owner']} -> {REVIEW_OWNERS[agent]}")
+            except (ToolError, OSError) as e:  # the lease holds it anyway; only the Tasks tab shows the old owner
+                audit("task-switch-failed", f"{project}/{tid}: {e}"[:200])
     # a wake again keeps the first time and whether the admin heard it: else every new try hides the stall
     await asyncio.to_thread(update_state, TASK_WAKES, lambda d: d.setdefault(project, {}).setdefault(
         tid, {"at": int(time.time())}).update(wake))

@@ -385,6 +385,14 @@ def lease_contract(tmp, ck, fr, raw):
     st, body = http("POST", "/tasks/woken", {"project": "garden", "id": "PIN-1", "agent": "codex", "session": "y"}, token=fr2)
     assert st == 409 and json.loads(body)["held_by"]["device"] == "FRIEND-PC", body
     assert http("POST", "/tasks/woken", {"project": "garden", "id": "PIN-1", "agent": "codex", "session": "y"}, token=fr)[0] == 200
+    # 'pak SW-1' in a Claude chat on the pinned pc: the line switches to Claude, the pin stays
+    sw = "- open until 2099-01-01 [agy@FRIEND-PC, SW-1] from Claude, start now: switch me\n"
+    assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": sw + "## Keuzes"}, fr)[0]
+    assert http("POST", "/tasks/woken", {"project": "garden", "id": "SW-1", "agent": "claude", "session": "z"}, token=fr)[0] == 200
+    text = call("knowledge_read", {"path": path}, fr)[1]
+    assert "[Claude@FRIEND-PC, SW-1]" in text and "[agy@" not in text, "owner not switched"
+    assert not call("knowledge_edit", {"path": path, "old_string": sw.replace("agy@", "Claude@"), "new_string": ""}, fr)[0]
+    l = json.loads((tmp / "task_leases.json").read_text()); l["garden"].pop("SW-1"); (tmp / "task_leases.json").write_text(json.dumps(l))
     # Per turn: two sessions on two devices; a wake (claim=0) takes nothing.
     assert "LT-1" not in leases() and http("GET", "/tasks?project=x&agent=codex&v=2&claim=0&session=w", token=fr2)[0] == 200
     assert "LT-1" not in leases()
