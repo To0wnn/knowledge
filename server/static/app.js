@@ -127,7 +127,7 @@ function visibleData() {
 
 function applyView(refit = false) {
   if (refit) loadGraph.fitted = false;
-  const v = visibleData();
+  const v = mapData();
   Graph.graphData(v); settling = true; // new data reheats the layout
   set3dData();
 }
@@ -221,9 +221,10 @@ function drawNode(node, ctx, scale) {
   node.__s = calm ? target : (node.__s || 1) + (target - (node.__s || 1)) * 0.25;
   const r = baseRadius(node) * node.__s;
   const lit = focusSet.size === 0 || focusSet.has(node.id);
+  ctx.globalAlpha = node.gone ? 0.4 : 1; // a removed note in the replay: translucent
   if (lit && nodeColor(node)) { const g = r * 4.5; ctx.drawImage(glowOf(nodeColor(node)), node.x - g, node.y - g, 2 * g, 2 * g); }
   drawPulse(node, ctx, scale, r);
-  ctx.globalAlpha = lit ? 1 : 0.15;
+  ctx.globalAlpha = (lit ? 1 : 0.15) * (node.gone ? 0.4 : 1);
   ctx.beginPath(); ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
   ctx.fillStyle = nodeColor(node);
   if (node.id === hover) { ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 20; }
@@ -397,7 +398,7 @@ async function loadGraph() {
       clearTimeout(hoverTimer);
       if (!selected && !goingHome) hoverTimer = setTimeout(() => (hover ? gather(hover, 0.3) : releaseFocus()), hover ? 150 : 250);
     })
-    .onNodeClick((n) => (selected === n.id ? go(noteRoute(n.id)) : openNote(n.id))) // a second click reads it
+    .onNodeClick((n) => (n.gone ? ghostSays(n) : selected === n.id ? go(noteRoute(n.id)) : openNote(n.id))) // a second click reads it
     .onBackgroundClick(() => deselect())
     .onLinkClick(() => deselect()); // lines cross the empty space; a click on one is a click beside the nodes
   // More room than the force-graph defaults (-30 / 30) so labels do not pile up.
@@ -436,7 +437,36 @@ async function loadGraph() {
 // history version, else the file time), a handle to drag through time, play/pause and a speed. Notes born up to the
 // handle's moment are shown; the ones that just appeared pulse.
 let replay = null; // {t0, t1, t, k, playing, id}
-const shownAt = (n) => !replay || !n || (n.born ?? 0) <= replay.t; // !n: a link end force-graph has not resolved yet
+const shownAt = (n) => !replay || !n || ((n.born ?? 0) <= replay.t && !(n.gone && n.gone <= replay.t)); // !n: a link end force-graph has not resolved yet
+
+// With removed notes: the replay also shows the notes that were archived, merged, renamed or deleted since (server
+// ?history=1: their last text, born and gone), translucent, from their birth until their removal. Only while the
+// replay is open; a click on one says when it went. The choice stays per browser (kn_replay_archive).
+let ghostData = null; // {nodes, links} for this project, or null
+function mapData() {
+  const v = visibleData();
+  if (replay && ghostData) { v.nodes = v.nodes.concat(ghostData.nodes); v.links = v.links.concat(ghostData.links); }
+  return v;
+}
+async function loadGhosts() {
+  const h = await api("/ui/api/graph?history=1"), cur = new Set(visibleData().nodes.map((n) => n.id));
+  const ghosts = h.nodes.filter((n) => n.gone && nodeIn(n)), ids = new Set(ghosts.map((n) => n.id)), known = (id) => ids.has(id) || cur.has(id);
+  const links = h.links.filter((l) => (ids.has(l.source) || ids.has(l.target)) && known(l.source) && known(l.target));
+  for (const g of ghosts) { // start beside a linked note, not in the middle of the map
+    const l = links.find((x) => (x.source === g.id && cur.has(x.target)) || (x.target === g.id && cur.has(x.source)));
+    const n = l && byId.get(l.source === g.id ? l.target : l.source);
+    if (n?.x != null) Object.assign(g, { x: n.x + (Math.random() - 0.5) * 40, y: n.y + (Math.random() - 0.5) * 40 });
+  }
+  ghostData = { nodes: ghosts, links };
+}
+const ghostSays = (n) => toast(`${n.label}: removed on ${fmtDay(n.gone)}. History or Trash still has it.`, false);
+// keep the map where it is while notes come or go: the next layout only places the new ones (as refreshData does)
+function holdMap() { for (const n of Graph.graphData().nodes) if (n.x != null && !home.has(n)) Object.assign(n, { fx: n.x, fy: n.y, held: true }); }
+function replayRange() {
+  const ts = Graph.graphData().nodes.flatMap((n) => (n.gone ? [n.born ?? 0, n.gone] : [n.born ?? 0]));
+  replay.t0 = Math.min(...ts) - 1; replay.t1 = Math.max(...ts);
+  replay.bins = replayBins();
+}
 const BINS = 72;
 function replayBins() {
   const bins = new Array(BINS).fill(0), span = Math.max(1, replay.t1 - replay.t0);
@@ -486,13 +516,13 @@ function playReplay(on) {
   };
   requestAnimationFrame(step);
 }
-function startReplay() {
+async function startReplay() {
   stopReplay();
-  if (!Graph) return; // the map data is still loading
-  const borns = Graph.graphData().nodes.map((n) => n.born ?? 0);
-  if (!borns.length) return;
-  replay = { t0: Math.min(...borns) - 1, t1: Math.max(...borns), t: 0, k: 0, playing: false, id: null };
-  replay.bins = replayBins();
+  if (!Graph || !Graph.graphData().nodes.length) return; // the map data is still loading
+  replay = { t0: 0, t1: 0, t: 0, k: 0, playing: false, id: null };
+  if ($("time-archive").checked) await withGhosts(true);
+  if (!replay) return; // closed meanwhile
+  replayRange();
   $("map-time").hidden = false; $("map-replay").setAttribute("aria-pressed", "true");
   (map3d && G3 ? G3 : Graph).zoomToFit(400, fitPad());
   Graph.autoPauseRedraw(false);
@@ -501,6 +531,7 @@ function startReplay() {
 function stopReplay() {
   if (!replay) return;
   replay = null;
+  if (ghostData) { ghostData = null; holdMap(); applyView(); }
   $("map-time").hidden = true; $("map-replay").setAttribute("aria-pressed", "false");
   if (G3) G3.nodeVisibility(G3.nodeVisibility()).linkVisibility(G3.linkVisibility());
   prunePulses(); animateHover();
@@ -508,6 +539,19 @@ function stopReplay() {
 $("time-play").onclick = () => playReplay(!replay?.playing);
 $("time-pos").oninput = () => { if (replay) { playReplay(false); replayAt(Number($("time-pos").value) / 1000); } };
 $("time-close").onclick = () => stopReplay();
+async function withGhosts(on) {
+  if (on) { try { await loadGhosts(); } catch (e) { toast(`The removed notes did not load: ${e.message}`); $("time-archive").checked = false; ghostData = null; return; } }
+  else ghostData = null;
+  if (!replay) return;
+  holdMap(); applyView();
+}
+$("time-archive").checked = localStorage.getItem("kn_replay_archive") === "1";
+$("time-archive").onchange = async () => {
+  localStorage.setItem("kn_replay_archive", $("time-archive").checked ? "1" : "0");
+  if (!replay) return;
+  await withGhosts($("time-archive").checked);
+  if (replay) { replayRange(); replayAt(replay.k); }
+};
 $("time-speed").value = localStorage.getItem("kn_replay_speed") || "30";
 $("time-speed").onchange = () => localStorage.setItem("kn_replay_speed", $("time-speed").value);
 
@@ -542,7 +586,7 @@ function refresh3d() {
 }
 function set3dData() {
   if (!G3) return;
-  const v = visibleData(), old = new Map(G3.graphData().nodes.map((n) => [n.id, n]));
+  const v = mapData(), old = new Map(G3.graphData().nodes.map((n) => [n.id, n]));
   const nodes = v.nodes.map((n) => Object.assign(old.get(n.id) || { id: n.id }, { src: n }));
   G3.graphData({ nodes, links: v.links.map((l) => ({ source: linkId(l.source), target: linkId(l.target), w: l.w, keep: l.keep })) });
 }
@@ -566,7 +610,7 @@ async function build3d() {
     .backgroundColor(tok("--canvas")).showNavInfo(false)
     .nodeId("id").nodeLabel((n) => el("span", null, n.src.label)) // an element, not an HTML string: titles come from guests too
     .nodeVal((n) => 1 + (n.src.degree || 0)).nodeRelSize(2.4).nodeResolution(14).nodeOpacity(0.95)
-    .nodeColor((n) => (!focusSet.size || focusSet.has(n.id) ? nodeColor(n.src) : hexA(nodeColor(n.src), 0.12)))
+    .nodeColor((n) => (!focusSet.size || focusSet.has(n.id) ? (n.src.gone ? hexA(nodeColor(n.src), 0.4) : nodeColor(n.src)) : hexA(nodeColor(n.src), 0.12)))
     .nodeVisibility((n) => shownAt(n.src))
     .linkVisibility((l) => shownAt(l.source.src || {}) && shownAt(l.target.src || {}) && (linkLit(l) || l.keep || same(l) || linkW(l) >= 0.2))
     .linkColor((l) => (linkLit(l) ? tok("--accent") : same(l) ? hexA(nodeColor(l.source.src), 0.45) : tok("--link-cross")))
@@ -581,7 +625,7 @@ async function build3d() {
       hover = n ? n.id : null; if (!selected) setFocus(hover);
       box.style.cursor = n ? "pointer" : "";
     })
-    .onNodeClick((n) => (selected === n.id ? go(noteRoute(n.id)) : openNote(n.id)))
+    .onNodeClick((n) => (n.src.gone ? ghostSays(n.src) : selected === n.id ? go(noteRoute(n.id)) : openNote(n.id)))
     .onBackgroundClick(() => deselect());
   G3.d3Force("charge").strength(-50);
   // a weak pull to the middle: without it loose groups drift off and the view never fits (2D has its island anchors)

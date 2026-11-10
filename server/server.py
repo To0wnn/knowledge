@@ -675,17 +675,44 @@ def born_of(rel: str) -> int:
     return _born[rel]
 
 
-def get_graph() -> dict:
+def ghosts() -> dict[str, tuple[str, int]]:
+    """Notes that existed once and were removed since (archived, merged, renamed, deleted), from the history: its last
+    version is "<who>-removed". rel -> (the last text, when it was removed). For the map's replay with removed notes."""
+    out = {}
+    with index.lock:
+        now = set(index.files)
+    for d in HISTORY.iterdir() if HISTORY.is_dir() else []:
+        if not (rel := flat_rel(d.name)) or not rel.endswith(".md") or rel in now or not in_scope(rel):
+            continue
+        try:
+            with os.scandir(d) as it:
+                names = sorted(e.name for e in it if e.name.endswith(".md"))  # by name = by time (local time: DST aside)
+            if len(names) < 2 or not names[-1].endswith("-removed.md"):
+                continue
+            gone, text = int(os.stat(d / names[-1]).st_mtime), (d / names[-2]).read_text(errors="replace")
+        except OSError:
+            continue
+        if text.strip():
+            out[rel] = (text, gone)
+    return out
+
+
+def get_graph(history: bool = False) -> dict:
     """The graph with communities and insights over what this device may see, rebuilt only after a change
-    (index.note_gen). Built from the visible files only, so names outside the scope never show up in links or insights."""
-    scope = tuple(device.get().get("roots") or ())
+    (index.note_gen). Built from the visible files only, so names outside the scope never show up in links or insights.
+    history: also the removed notes (ghosts) with their last text, each with "gone" (when it was removed)."""
+    scope = (tuple(device.get().get("roots") or ()), history)
     with _graph_lock:  # tabs asking at once wait for one build instead of each making their own
         hit = _graph_cache.get(scope)
         if not hit or hit[0] != index.note_gen:
             gen = index.note_gen
-            hit = (gen, kb_graph.build({rel: text for rel, text, _ in index.items() if in_scope(rel)}))
+            files = {rel: text for rel, text, _ in index.items() if in_scope(rel)}
+            gone = ghosts() if history else {}
+            hit = (gen, kb_graph.build(files | {rel: text for rel, (text, _) in gone.items()}))
             for n in hit[1]["nodes"]:
                 n["born"] = born_of(n["id"])
+                if n["id"] in gone:
+                    n["gone"] = gone[n["id"]][1]
             _graph_cache[scope] = hit
     return hit[1]
 
@@ -5568,10 +5595,11 @@ async def ui_graph(request: Request):
     # The graph only changes with the index generation; per boot (gen restarts) and per scope (users see different
     # graphs), so a cached graph of someone else never validates.
     scope = hashlib.sha256(",".join(device.get().get("roots") or ()).encode()).hexdigest()[:8]
-    etag = f'"g{BOOT}-{scoped_gen()}-{scope}"'
+    history = request.query_params.get("history") == "1"
+    etag = f'"g{BOOT}-{scoped_gen()}-{scope}{"-h" * history}"'
     if request.headers.get("if-none-match") == etag:
         return Response(status_code=304, headers={"ETag": etag})
-    return JSONResponse(await asyncio.to_thread(get_graph), headers={"ETag": etag, "Cache-Control": "private, no-cache"})
+    return JSONResponse(await asyncio.to_thread(get_graph, history), headers={"ETag": etag, "Cache-Control": "private, no-cache"})
 
 
 @server.custom_route("/ui/api/events", methods=["GET"])
@@ -8386,7 +8414,12 @@ def trash_rel(name: str) -> str:
     """The shared path a delete copy came from: "20261101-120000_memory__archive__x.md" -> "memory/archive/x.md". A
     "__" stays in the name where no folder of that name exists ("memory/a__b.md"). "" for anything else."""
     m = TRASH_NAME.fullmatch(name)
-    parts = m.group(2).split("__") if m else []
+    return flat_rel(m.group(2)) if m else ""
+
+
+def flat_rel(flat: str) -> str:
+    """A path flattened with "__" (trash copies, history folders) back to the shared path, folder-aware; "" if no root."""
+    parts = flat.split("__")
     if len(parts) < 2 or parts[0] not in ROOTS:
         return ""
     sub = parts[1]
