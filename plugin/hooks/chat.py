@@ -80,7 +80,7 @@ def _ask_models(agent: str):
             found = [{"id": m, "name": m.capitalize(), "efforts": list(EFFORTS[:5])} for m in CLAUDE_MODELS]
         elif (exe := shutil.which(agent)) and agent == "codex":
             out = subprocess.run(workers.shim_line([exe, "debug", "models"]) if exe.lower().endswith((".cmd", ".bat")) else [exe, "debug", "models"],
-                                 capture_output=True, text=True, timeout=30).stdout
+                                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30).stdout  # UTF-8, never the ANSI code page
             found = [{"id": m["slug"], "name": str(m.get("display_name") or m["slug"])[:80],
                       "efforts": [e["effort"] for e in m.get("supported_reasoning_levels") or [] if e.get("effort") in EFFORTS],
                       **({"default": m["default_reasoning_level"]} if m.get("default_reasoning_level") in EFFORTS else {})}
@@ -88,7 +88,7 @@ def _ask_models(agent: str):
         elif agent == "agy" and _AGY_ACP:
             found = list(_AGY_ACP)
         elif exe and agent == "agy":
-            out = subprocess.run([exe, "models"], capture_output=True, text=True, timeout=30).stdout
+            out = subprocess.run([exe, "models"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30).stdout
             # no effort of its own: Gemini's names carry the level (-low/-high), the others refuse --effort
             found = [{"id": i, "name": n.strip()[:80], "efforts": []} for i, _, n in (ln.partition("\t") for ln in out.splitlines()) if n and MODEL_ID.fullmatch(i)]
     except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError, AttributeError):
@@ -788,6 +788,7 @@ def codex_default(call, folder: str, model: str, effort: str) -> tuple:
 # way (a control_request), the process stays. Measured 2 Nov 2026 with Claude Code 2.1.314. Idle for IDLE_CLOSE with no
 # subagent running, the process ends; the next message resumes the same conversation.
 remember_branch = lambda cid, where: None  # the companion's: what a chat's Merge needs later
+git_now = lambda folder: None  # the companion's: a folder's git {branch, base, ahead, ...} when an Archive turn ends
 
 
 def codex_worktree_config(folder: str) -> dict:
@@ -1314,7 +1315,8 @@ class Live:
         if err:
             self.buf.append(("error", err))
         # a background subagent goes on after the turn: the server keeps it running
-        self.flush(done=True, **({"error": err} if err else {}), **({"running_subs": sorted(self.subs)} if self.subs and not err else {}))
+        g = git_now(self.folder) if getattr(self, "want_git", False) and not err else None
+        self.flush(done=True, **({"error": err} if err else {}), **({"running_subs": sorted(self.subs)} if self.subs and not err else {}), **({"git": g} if g else {}))
 
     def gone(self):
         """The process ended (idle close, a crash, a kill): a turn that ran ends with it."""
@@ -1921,6 +1923,7 @@ def _start_live(item: dict, post, log, linked, yolo):
                 steer_path(cid).unlink(missing_ok=True)
                 lv = LIVE[cid] = {"codex": CodexLive, "agy": AgyLive}.get(item["agent"], Live)(item, post, log, yolo(item["agent"]))
         lv.rec["allow"] = [x for x in item.get("allow") or [] if isinstance(x, dict)]  # "for this chat" answers since it started
+        lv.want_git = bool(item.get("git"))  # the Archive turn: its end carries the folder's git (only then: git slows a turn's end)
         lv.send(item, item.get("mode", ""))
     except Exception as e:
         log("error", f"{AGENT_NAMES.get(item.get('agent'), '?')}: chat turn failed", f"chat {cid}: {e}"[:300])

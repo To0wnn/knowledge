@@ -1828,7 +1828,7 @@ def chat_e2e(tok: str, tmp: Path):
             return
         row = next(r for r in machines() if r["id"] == mid)
         got = next((f.get("git") for f in row["companion"]["folders"]["linked"] if Path(f["path"]).resolve() == pill.resolve()), None)
-        check(got == {"branch": "task/KN-12", "base": "main", "changed": 3, "ahead": 2, "behind": 0},
+        check(got == {"branch": "task/KN-12", "base": "main", "changed": 3, "ahead": 2, "behind": 0, "loose": []},
               "board: the companion reports a folder's git pill (branch, 3 changed, 2 ahead of main, 0 behind)", json.dumps(got))
         new = lambda agent, folder: json.loads(http("POST", "/ui/api/chats", {"machine": mid, "agent": agent, "folder": str(folder), "worktree": False}, ui)[1]).get("chat", {}).get("id")
         chat = lambda cid: json.loads(http("GET", f"/ui/api/chat?machine={mid}&id={cid}", headers=ui)[1])
@@ -2084,6 +2084,10 @@ def chat_e2e(tok: str, tmp: Path):
             Path(wt, f"own-{agent}.txt").write_text("own\n")
             gitp("add", f"own-{agent}.txt", cwd=wt)
             gitp("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", f"own {agent}", cwd=wt)
+            http("POST", "/ui/api/chat/close", {"machine": mid, "id": auto}, ui)  # Archive: the wrap-up turn, then its end's git
+            kept = wait_for(lambda: any(e["text"].startswith("Not archived") and "not in main" in e["text"] for e in chat(auto)["events"]), 30)
+            check(kept and not chat(auto)["chat"].get("closed"), f"chat {agent}: Archive keeps a chat open while its branch has commits not in main",
+                  json.dumps(chat(auto)["events"])[-400:])
             for c in (alone, off, dirty, auto):
                 http("POST", "/ui/api/chat/close", {"machine": mid, "id": c, "record": False}, ui)
             card = lambda: next((i for i in cards() if i["kind"] == "review" and i.get("chat") == auto and i.get("can_merge")), None)

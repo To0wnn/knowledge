@@ -1059,6 +1059,29 @@ def knowledge_projects() -> str:
 AGENT_NAMES = {"claude": "Claude Code", "codex": "Codex", "agy": "agy"}
 
 
+def chat_unlanded(c: dict, g) -> str:
+    """Why a chat may not be archived yet: commits not in its base, or (own worktree) files not committed; "" when none
+    or its git is unknown (an older companion). g: the chat folder's git as the companion reports it."""
+    g = g if isinstance(g, dict) else {}
+    if type(g.get("ahead")) is int and g["ahead"] > 0:
+        return f"{g.get('branch') or 'its branch'} has {g['ahead']} commit(s) not in {g.get('base') or 'main'}"
+    if c.get("worktree") and type(g.get("changed")) is int and g["changed"] > 0:
+        return f"its worktree has {g['changed']} uncommitted file(s)"
+    # a branch committed to since the chat began that nobody has checked out: the agent went back to main without merging
+    left = [x["branch"] for x in g.get("loose") or [] if isinstance(x, dict) and type(x.get("at")) is int and x["at"] >= (c.get("created") or 0)]
+    if left:
+        return f"branch {', '.join(str(b)[:120] for b in left)} has commits not in {g.get('base') or 'main'} and is checked out nowhere"
+    return ""
+
+
+def chat_git_of(mid: str, c: dict):
+    """The chat folder's git from its pc's last report (a round old at most): its own worktree's, else the folder's."""
+    comp = next((r.get("companion") or {} for r in machine_rows() if r["id"] == mid), {})
+    if c.get("worktree"):
+        return (comp.get("chats") or {}).get(c["id"])
+    return next((f.get("git") for f in (comp.get("folders") or {}).get("linked", []) if f.get("path") == c.get("folder")), None)
+
+
 def own_chats() -> list:
     """(machine, chat) for every chat on the pcs of this token: the ones it reports from, and those of the same person's
     other tokens (a person's own, or the admins' own devices marked "self", as machine_key binds them); never a token
@@ -1147,6 +1170,9 @@ def knowledge_chat_close(chat: str = "", chat_id: str = "", id: str = "", force:
     if open:
         update_state(f, lambda c: (c.update(closed=False), chat_add(c, "info", f"Opened again by {who}.")))
         return f"Chat {c['id']} ('{c.get('title') or 'untitled'}') opened again."
+    if why := chat_unlanded(c, chat_git_of(mid, c)):  # an agent closing a chat skips the wrap-up, so the turn-end check too
+        raise ToolError(f"not archived: {why} (as of the pc's last report, at most a minute old). Land that work first (merge or "
+                        "deploy), or the owner uses Force archive in the web UI")
     note = f"Archived by {who}" + (f": {reason}" if reason else ".")
     if not force and record:
         mrow = next((mr for mr in machine_rows() if mr["id"] == mid), None)
@@ -1775,6 +1801,7 @@ def lint_all() -> dict[str, list[str]]:
     if in_scope("claude/"):  # the owner's report: a device whose auto-update stopped working
         report["plugin_behind"] = plugins_behind()
         report["worker_unmerged"] = workers_unmerged()
+        report["branch_unlanded"] = branches_unlanded()
         rows = []
         for x in USAGE.read_text().splitlines() if USAGE.exists() else []:
             try:  # a line cut off by a crash or a full disk must not cost the whole lint
@@ -2944,7 +2971,17 @@ def workers_unmerged() -> list[str]:
             f"{w.get('branch')} not merged" for mid, m in read_json(MACHINES_FILE, {}).items()
             for w in (m.get("companion") or {}).get("workers", []) if w.get("branch") and not w.get("merged")
             and w.get("status") in ("finished", "failed", "stopped") and isinstance(w.get("ended"), (int, float))
-            and now - w["ended"] > 7 * 86400]
+            and 0 < w["ended"] < now - 7 * 86400]  # a nonsense time from a report would make localtime() raise and take lint down
+
+
+def branches_unlanded() -> list[str]:
+    """Branches in a linked folder with commits not in its base, checked out nowhere, last commit over 2 days ago: work
+    an agent called done (in a memo or a hand-back) that never reached main."""
+    now = time.time()
+    return [f"{m.get('label', mid)}: {f.get('path')}: {x['branch']} has commits not in {g.get('base') or 'main'} "
+            f"(last {time.strftime('%Y-%m-%d', time.localtime(x['at']))})" for mid, m in read_json(MACHINES_FILE, {}).items()
+            for f in ((m.get("companion") or {}).get("folders") or {}).get("linked", []) if isinstance(g := f.get("git"), dict)
+            for x in g.get("loose") or [] if isinstance(x, dict) and type(x.get("at")) is int and now - x["at"] > 2 * 86400]
 
 
 def agents_on(cfg: dict) -> bool:
@@ -6076,7 +6113,11 @@ CHAT_WRAP_UP = ("This chat is being archived. Before it closes, record what it e
                 "house rules: for each subject, knowledge_search first and knowledge_edit the memo that already covers it "
                 "(knowledge_new_memo only for a genuinely new subject). What is true now goes under '## Status', each decision "
                 "under '## Decisions' (what, date, who, why, what was rejected), unfinished work as 'open until <date>: ...' lines, "
-                "a correction or mistake with knowledge_lesson. Record only what this chat itself established: do not infer or guess "
+                "a correction or mistake with knowledge_lesson. First, when this chat committed work that is not yet in the main branch "
+                "(`git log main..HEAD`, or unpushed on main): land it the way the project's AGENTS.md says (bring in main, run the check, "
+                "merge or deploy), and if that needs the owner's approval, ask and leave it; work that is not landed is written as "
+                "'open until <date>: land branch <name>', never as done or live. The chat stays open while its branch holds unlanded "
+                "commits. Record only what this chat itself established: do not infer or guess "
                 "the state of anything outside it, and mark a fact '(checked <date>)' only when you checked it on the live system, else "
                 "'(as of <date>, not re-checked)'. Do not store the conversation itself, what the code, git history or a doc already "
                 "records, or any secret. Nothing worth keeping: say so in one line. End with one line: what you wrote where.")
@@ -7339,7 +7380,8 @@ async def machine_chats(request: Request):
                     msg = {**msg, "text": (msg.get("text") or "") + CHAT_TITLE_ASK.format(chat=cid)}
                 out["work"].append({"chat": cid, "agent": c["agent"], "folder": c["folder"], "session": c.get("session", ""),
                                     "model": c.get("model", ""), "effort": c.get("effort", ""),
-                                    "allow": c.get("allow", []), **({"worktree": True} if c.get("worktree") else {}), **extra, **msg})
+                                    "allow": c.get("allow", []), **({"worktree": True} if c.get("worktree") else {}),
+                                    **({"git": True} if c.get("close_after") else {}), **extra, **msg})
                 e["busy"] = True
     if q_path.exists():
         await asyncio.to_thread(update_state, q_path, change)
@@ -7461,6 +7503,10 @@ async def machine_chat_events(request: Request):
         return JSONResponse({"error": "not a chat of this machine"}, status_code=404)
 
     auto = b.get("auto") is True and not b.get("done")  # the agent went on by itself (a live chat): a turn without a message
+    # an Archive turn's end without git (a companion restart in the turn, a hung git, a companion before 0.43.41): the
+    # pc's last report, a round old at most, so the check never fails open
+    git = b.get("git") if isinstance(b.get("git"), dict) else \
+        await asyncio.to_thread(chat_git_of, dev.get("machine", ""), c) if b.get("done") is True and c.get("close_after") else None
 
     def change(c):
         worked = chat_works(c)
@@ -7507,6 +7553,9 @@ async def machine_chat_events(request: Request):
                     # around, and blocking on it re-ran the whole wrap-up at the next Archive
                     if any(e["kind"] == "error" for e in c["events"][last + 1:]):  # not written: it stays, under Needs you
                         chat_add(c, "info", "Not archived: the turn that records this chat in the memos failed. Fix that, then Archive again.")
+                    # the chat folder's git right at the turn's end (companion 0.43.41+); memos once called work live that sat on a branch
+                    elif why := chat_unlanded(c, git):
+                        chat_add(c, "info", f"Not archived: {why}. Land it (merge or deploy), then Archive again; Force archive closes it as it is.")
                     else:
                         c["closed"] = True
         if worked and not chat_works(c) and not any(k == "info" and t.startswith("Stopped") for k, t, _ in events):  # the owner's own stop: nothing to come back to
@@ -7793,7 +7842,9 @@ def git_pill(g) -> dict | None:
         return None
     num = lambda k: max(0, min(int(g[k]), 10**6)) if type(g.get(k)) is int else 0
     return {"branch": str(g.get("branch") or "")[:120], "base": str(g.get("base") or "")[:120],
-            "changed": num("changed"), "ahead": num("ahead"), "behind": num("behind")}
+            "changed": num("changed"), "ahead": num("ahead"), "behind": num("behind"),
+            "loose": [{"branch": str(x.get("branch") or "")[:120], "at": x["at"]} for x in (g.get("loose") if isinstance(g.get("loose"), list) else [])[:5]
+                      if isinstance(x, dict) and type(x.get("at")) is int and 0 < x["at"] < time.time() + 86400]}  # localtime() overflows outside it
 
 
 def report_asks(asks) -> list:
