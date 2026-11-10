@@ -157,7 +157,12 @@ body:not(.no-agents) .sidebar:has(.inbox-count:not(:empty)) .brand::before { bac
 /* force-graph paints the canvas background inline (--canvas); the dotted grid goes on top of that colour. */
 #g2d canvas { background-image: radial-gradient(var(--dots) 1px, transparent 1.4px) !important; background-size: 22px 22px !important; }
 #graph[hidden], #note[hidden], #results[hidden] { display: none; }
-#g2d { position: absolute; inset: 0; }
+#g2d, #g3d { position: absolute; inset: 0; }
+#g2d[hidden], #g3d[hidden] { display: none; }
+/* Replay and 2D/3D, bottom right: the topic list floats on the left, the note card opens on the right. */
+.map-tools { position: absolute; right: 12px; bottom: 12px; z-index: 2; display: flex; align-items: center; gap: 6px; }
+.map-date { padding: 4px 10px; border-radius: var(--r-sm); background: var(--panel); color: var(--ink); font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.map-date[hidden] { display: none; }
 .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .check { display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: 13px; color: var(--ink); cursor: pointer; } /* a label: a click ticks its box */
 input[type=checkbox], input[type=radio] { accent-color: var(--act); }
@@ -351,12 +356,8 @@ body.home[data-view="notes"] .kn > .right { display: none; }
   body[data-view="map"] .kn > .left { position: absolute; z-index: 3; top: 12px; left: 12px; width: 240px; max-height: calc(100% - 24px); padding: 6px; border: 1px solid var(--line-hi); border-radius: var(--r-lg); background: var(--panel-solid); }
   body[data-view="map"] .kn:has(> .right .map-card) > .left, body[data-view="map"] .kn > .right:not(:has(.map-card)) { display: none; }
   body[data-view="map"] .kn > .right { max-height: none; border-top: 0; border-left: 1px solid var(--line); }
-  /* folded to its colour dots, a legend that covers nothing; pointer or keyboard unfolds it */
-  body[data-view="map"] .kn > .left:has(.topic):not(:hover, :focus-within) { width: 34px; padding: 6px 0; overflow: hidden; }
-  body[data-view="map"] .kn > .left:has(.topic):not(:hover, :focus-within) .topic summary { justify-content: center; min-height: 24px; padding: 0; font-size: 0; }
-  body[data-view="map"] .kn > .left:has(.topic):not(:hover, :focus-within) .topic summary::before,
-  body[data-view="map"] .kn > .left:has(.topic):not(:hover, :focus-within) .topic summary .n,
-  body[data-view="map"] .kn > .left:has(.topic):not(:hover, :focus-within) .topic .hits { display: none; }
+  /* the topic names stand in colour by their nebulas; the full list only on request (Topics, bottom right) */
+  body[data-view="map"]:not(.map-topics) .kn > .left { display: none; }
 }
 
 /* narrower screens: connected notes under the note */
@@ -375,6 +376,7 @@ body.home[data-view="notes"] .kn > .right { display: none; }
   .left .topic summary { min-height: 44px; font-size: 14px; }
   .left .topic .hits li .row-link { min-height: 40px; }
   body[data-view="notes"]:not(.kn-detail) .kn > :not(.left), body.kn-detail .kn > .left, body[data-view="map"] .kn > .left, body.kn-search .kn > .right { display: none; }
+  #map-topics { display: none; } /* a phone has the topic list on its own page */
   body.kn-detail .head .back { display: inline-grid; }
   .right { padding: 18px 16px; border-top: 1px solid var(--line); }
   #note, #results { padding: 18px 16px; }

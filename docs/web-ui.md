@@ -80,7 +80,7 @@ One small set of controls in `server/static/app.css` ("Controls"), shared by the
 - **Status chips** (`.chip`, `.pill`, `.badge`, counts) are small labels with 4 px corners and never look clickable: no
   border, the default cursor. One focus ring everywhere: 2 px spruce, outside the element (inside only where a box clips it).
 
-**Layout that follows the content:** the map takes the whole page with the topic list floating over it, folded to its colour dots until you point at it, and a chosen note's card opens as a column beside it; the Notes
+**Layout that follows the content:** the map takes the whole page (the topic names stand in colour by their islands; **Topics**, bottom right, shows the full list over it, remembered per browser), and a chosen note's card opens as a column beside it; the Notes
 overview has no right column, what changed lately comes first and then the notes per topic; a project without tasks
 shows the open tasks of your other projects instead of an empty page (the sidebar count follows); the Deleted section of Changes shows only with
 something in it; an agent's prose stops at 78 characters while its code and tool lines keep the whole width.
@@ -108,3 +108,19 @@ tried on a phone with this server). The installed app shares Chrome's cookies, s
 usually never sent there. A manifest cannot put another origin in scope (`scope` must be on the app's own origin), so
 the fix is a long proxy session, not the manifest. iOS home-screen apps keep their own cookies: the first start signs
 in once.
+
+## The map's look, live pulse, replay and 3D
+
+- **Look:** every topic is a soft nebula of its colour under its notes, every note has a glow (one pre-drawn sprite per
+  colour, not a canvas `shadowBlur`, which is too slow for a thousand notes), and links inside a topic take its colour.
+  Light theme: the same, softer.
+- **Live:** when the knowledge changes, a note that is new or whose size changed sends out rings and its links flow for
+  8 s (an edit that keeps the exact length is missed). Off with reduced motion.
+- **Replay** (bottom right): the map grows note by note in 30 s, oldest first, with the date in the corner. Order by
+  the graph's `born` per note (server `born_of`: the oldest kept history version, else the file time; history keeps 200
+  versions, so a very often edited note looks younger). By rank, not clock time, so the notes from before the history
+  do not all appear in the first frame.
+- **3D** (bottom right): the same notes in 3d-force-graph (three.js, vendored, 1.4 MB, loaded on the first switch only),
+  with its own node copies, a weak pull to the middle and the same focus, particles and replay; no nebulas or glow.
+  The pick stays per browser (`kn_map3d`); only the visible map runs its frame loop.
+

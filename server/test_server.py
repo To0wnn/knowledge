@@ -2869,7 +2869,8 @@ def main():
         g = json.loads(raw("GET", "/ui/api/graph", headers=ck)[2])
         assert g["nodes"] and not any(n["id"].endswith("/MEMORY.md") for n in g["nodes"]), g["nodes"][:3]  # index not drawn, still readable below
         assert {n["project"] for n in g["nodes"] if n["id"].startswith("trade")} == {"trade"}
-        th = json.loads(raw("GET", "/ui/api/search?q=entry%20timing&project=trade", headers=ck)[2])["notes"]
+        assert all(1e9 < n["born"] <= time.time() + 1 for n in g["nodes"]), g["nodes"][:3]  # the map's replay orders notes by it
+        th =json.loads(raw("GET", "/ui/api/search?q=entry%20timing&project=trade", headers=ck)[2])["notes"]
         assert th and all(h["project"] == "trade" for h in th), th
         assert not json.loads(raw("GET", "/ui/api/search?q=entry%20timing&project=homelab", headers=ck)[2])["notes"]
         note = json.loads(raw("GET", "/ui/api/note?path=memory/MEMORY.md", headers=ck)[2])

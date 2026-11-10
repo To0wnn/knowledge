@@ -16,9 +16,10 @@ let tokens = {};
 const tok = (v) => tokens[v] || (tokens[v] = css(v)); // an empty read (stylesheet not applied yet) is not cached
 // The theme changed (system, or the viewer's pick in the user menu): re-read the tokens and recolour the map.
 function themeChanged() {
-  tokens = {};
+  tokens = {}; glows.clear();
   if (!Graph) return;
   indexGraph(); renderTopics(); Graph.backgroundColor(tok("--canvas"));
+  if (G3) { G3.backgroundColor(tok("--canvas")); refresh3d(); }
 }
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", themeChanged);
 const decode = (s) => { try { return decodeURIComponent(s); } catch { return s; } }; // a literal % is not an escape
@@ -87,6 +88,10 @@ const nodeColor = (n) => clusterColor.get(groupOf(n)) || tok("--g-doc");
 const linkId = (end) => end.id || end;
 const linkW = (l) => l.w ?? 0.5; // an older server sends no weight
 const fade = (color, f) => color.replace(/rgba\(([^)]+),\s*([\d.]+)\)/, (_, rgb, a) => `rgba(${rgb}, ${(a * f).toFixed(3)})`);
+// "#rrggbb" + alpha 0..1 as "#rrggbbaa" (the topic colours are hex tokens; canvas and three.js both read the 8-digit form)
+// On a light canvas the glow and nebulas are softer: colour on white turns muddy sooner than light on dark.
+const darkCanvas = () => parseInt(tok("--canvas").slice(1, 3), 16) < 128;
+const hexA = (hex, a) => (/^#[0-9a-f]{6}$/i.test(hex) ? hex + Math.round(a * 255).toString(16).padStart(2, "0") : hex);
 
 // ---------------------------------------------------------------- graph data
 function indexGraph() {
@@ -124,6 +129,7 @@ function applyView(refit = false) {
   if (refit) loadGraph.fitted = false;
   const v = visibleData();
   Graph.graphData(v); settling = true; // new data reheats the layout
+  set3dData();
 }
 
 async function refreshData() {
@@ -134,6 +140,8 @@ async function refreshData() {
   data = await api("/ui/api/graph");
   for (const n of data.nodes) { const o = old.get(n.id); if (o) Object.assign(n, { x: o.x, y: o.y, vx: 0, vy: 0 }, settled || o.held ? { fx: o.x, fy: o.y, held: true } : {}); }
   indexGraph(); renderProjects(); renderTopics(); applyView();
+  // a new note or one whose text changed pulses (size is the cheap tell; an edit of the same length is missed)
+  if (old.size) for (const n of data.nodes) if (nodeIn(n) && (!old.has(n.id) || old.get(n.id).size !== n.size)) pulse(n.id);
 }
 
 // ---------------------------------------------------------------- map rendering
@@ -142,12 +150,79 @@ const touch = matchMedia("(hover: none)").matches; // phones: a tap selects, the
 if (touch) $("q").placeholder = "Search titles, text and meaning…"; // no "/" key on a phone
 const baseRadius = (n) => 3 + Math.sqrt(n.degree || 0) * 1.6;
 
+// A soft glow behind every note: one pre-drawn sprite per colour (a canvas shadowBlur per note per frame is too slow
+// for a thousand notes).
+const glows = new Map();
+function glowOf(color) {
+  let g = glows.get(color);
+  if (!g) {
+    g = document.createElement("canvas"); g.width = g.height = 64;
+    const c = g.getContext("2d"), grd = c.createRadialGradient(32, 32, 0, 32, 32, 32);
+    const f = darkCanvas() ? 1 : 0.55;
+    grd.addColorStop(0, hexA(color, 0.85 * f)); grd.addColorStop(0.3, hexA(color, 0.35 * f)); grd.addColorStop(1, hexA(color, 0));
+    c.fillStyle = grd; c.fillRect(0, 0, 64, 64); glows.set(color, g);
+  }
+  return g;
+}
+
+// Live: a note that just changed (any agent, any device) sends out rings and its links flow for a while.
+const PULSE_MS = 8000;
+const pulses = new Map(); // id -> {t0, ms, flow}
+function pulse(id, ms = PULSE_MS, flow = true) { // flow: its links flow too (not in the replay: a thousand notes)
+  if (calm || !Graph) return;
+  pulses.set(id, { t0: performance.now(), ms, flow });
+  if (!flow) return;
+  animateHover(ms);
+  clearTimeout(pulse.timer); // the links stop flowing once the last pulse is over
+  pulse.timer = setTimeout(() => { prunePulses(); Graph.linkDirectionalParticles(Graph.linkDirectionalParticles()); refresh3d(); }, ms + 50);
+}
+const pulseLive = (p) => p && performance.now() - p.t0 < p.ms;
+// drawPulse removes a pulse only when 2D draws its note; a hidden map or 3D draws nothing, so expired ones go here too
+function prunePulses() { for (const [id, p] of pulses) if (!pulseLive(p)) pulses.delete(id); }
+function drawPulse(node, ctx, scale, r) {
+  const p = pulses.get(node.id);
+  if (!p) return;
+  const k = (performance.now() - p.t0) / p.ms;
+  if (k >= 1) { pulses.delete(node.id); return; }
+  ctx.strokeStyle = nodeColor(node); ctx.lineWidth = 2 / scale;
+  for (const off of [0, 0.5]) { // two rings, half a beat apart
+    const kk = (k * (p.ms / 2000) + off) % 1;
+    ctx.globalAlpha = (1 - kk) * (1 - k * 0.6);
+    ctx.beginPath(); ctx.arc(node.x, node.y, r * (1.3 + kk * 4), 0, 2 * Math.PI); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// Each topic as a soft nebula of its colour under its notes: the islands and the empty space between them read at a
+// glance. Shared by the nebulas and the topic names: [{name, ns, cx, cy, spread}], biggest first.
+function islands() {
+  const groups = new Map();
+  for (const n of Graph.graphData().nodes) if (groupOf(n) && n.x != null && shownAt(n)) (groups.get(groupOf(n)) || groups.set(groupOf(n), []).get(groupOf(n))).push(n);
+  return [...groups].filter(([, ns]) => ns.length >= 2).sort((a, b) => b[1].length - a[1].length).map(([name, ns]) => {
+    const cx = ns.reduce((s, n) => s + n.x, 0) / ns.length, cy = ns.reduce((s, n) => s + n.y, 0) / ns.length;
+    return { name, ns, cx, cy, spread: ns.reduce((s, n) => s + Math.hypot(n.x - cx, n.y - cy), 0) / ns.length };
+  });
+}
+function drawNebulas(ctx) {
+  ctx.globalAlpha = focusSet.size ? 0.35 : 1;
+  for (const { name, cx, cy, spread } of islands()) {
+    const color = clusterColor.get(name) || tok("--g-doc"), R = spread * 2.2 + 50, f = darkCanvas() ? 1 : 0.6;
+    if (!color) continue; // the stylesheet is not applied yet
+    const grd = ctx.createRadialGradient(cx, cy, 0, cx, cy, R);
+    grd.addColorStop(0, hexA(color, 0.34 * f)); grd.addColorStop(0.5, hexA(color, 0.13 * f)); grd.addColorStop(1, hexA(color, 0));
+    ctx.fillStyle = grd; ctx.beginPath(); ctx.arc(cx, cy, R, 0, 2 * Math.PI); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
 function drawNode(node, ctx, scale) {
   // Hover: the node eases up to 2.4x with a glow, its neighbours to 1.4x.
   const target = node.id === hover ? 2.4 : hover && focusSet.has(node.id) ? 1.4 : 1;
   node.__s = calm ? target : (node.__s || 1) + (target - (node.__s || 1)) * 0.25;
   const r = baseRadius(node) * node.__s;
   const lit = focusSet.size === 0 || focusSet.has(node.id);
+  if (lit && nodeColor(node)) { const g = r * 4.5; ctx.drawImage(glowOf(nodeColor(node)), node.x - g, node.y - g, 2 * g, 2 * g); }
+  drawPulse(node, ctx, scale, r);
   ctx.globalAlpha = lit ? 1 : 0.15;
   ctx.beginPath(); ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
   ctx.fillStyle = nodeColor(node);
@@ -162,7 +237,7 @@ function drawLabels(ctx, scale) {
   const overview = !focusSet.size && scale < 1.3;
   if (overview) drawTopics(ctx, scale);
   const rank = (n) => n.id === hover ? 3 : n.id === selected ? 2 : focusSet.has(n.id) ? 1 : 0;
-  const wanted = Graph.graphData().nodes.filter((n) => n.x != null && (rank(n) ||
+  const wanted = Graph.graphData().nodes.filter((n) => n.x != null && shownAt(n) && (rank(n) ||
     (!focusSet.size && !overview && (scale > 2.2 || ((n.degree || 0) >= labelMin && scale > 0.6)))));
   wanted.sort((a, b) => rank(b) - rank(a) || (b.degree || 0) - (a.degree || 0));
   const taken = [];
@@ -187,14 +262,9 @@ function drawLabels(ctx, scale) {
 // Zoomed out: one name per topic in the topic colour, just above the island's core (mean distance from its
 // centre, so a stray note does not push the name away); larger topics first, names that would overlap skipped.
 function drawTopics(ctx, scale) {
-  const groups = new Map();
-  for (const n of Graph.graphData().nodes) if (groupOf(n) && n.x != null) (groups.get(groupOf(n)) || groups.set(groupOf(n), []).get(groupOf(n))).push(n);
   const size = 15 / scale, taken = [];
   ctx.font = `650 ${size}px ${tok("--font")}`; ctx.textAlign = "center"; ctx.textBaseline = "bottom";
-  for (const [name, ns] of [...groups].sort((a, b) => b[1].length - a[1].length)) {
-    if (ns.length < 2) continue;
-    const cx = ns.reduce((s, n) => s + n.x, 0) / ns.length, cy = ns.reduce((s, n) => s + n.y, 0) / ns.length;
-    const spread = ns.reduce((s, n) => s + Math.hypot(n.x - cx, n.y - cy), 0) / ns.length;
+  for (const { name, cx, cy, spread } of islands()) {
     const y = cy - spread - 6 / scale, w = ctx.measureText(name).width, box = [cx - w / 2, y - size, w, size];
     if (taken.some((t) => box[0] < t[0] + t[2] && t[0] < box[0] + box[2] && box[1] < t[1] + t[3] && t[1] < box[1] + box[3])) continue;
     taken.push(box);
@@ -207,10 +277,10 @@ function drawTopics(ctx, scale) {
 // redraws when idle. A selection flows for a few seconds, then pauses to spare phone batteries.
 let settleTimer;
 function animateHover(ms = 400) {
-  if (calm) { if (!tweening) Graph.autoPauseRedraw(true); return; }
+  if (calm) { if (!tweening && !replay) Graph.autoPauseRedraw(true); return; }
   Graph.linkDirectionalParticles(Graph.linkDirectionalParticles()); // re-evaluate which links flow
   Graph.autoPauseRedraw(false); clearTimeout(settleTimer);
-  if (!hover) settleTimer = setTimeout(() => { if (!tweening) Graph.autoPauseRedraw(true); }, ms);
+  if (!hover) settleTimer = setTimeout(() => { if (!tweening && !replay) Graph.autoPauseRedraw(true); }, ms);
 }
 
 // The overview fit: topic names are drawn at a fixed screen size and stick out past the outer notes, so pad by half
@@ -276,9 +346,12 @@ function releaseFocus({ instant = false } = {}) {
 
 function setFocus(id) {
   focusSet = id ? new Set([id, ...(neighbors.get(id) || [])]) : new Set();
+  refresh3d();
 }
 
 const linkLit = (l) => focusSet.size && focusSet.has(linkId(l.source)) && focusSet.has(linkId(l.target));
+// Links flow from a note in focus, and from a note that just changed.
+const particles = (l) => (!calm && mapOn && (((hover || selected) && linkLit(l)) || [l.source, l.target].some((e) => { const p = pulses.get(linkId(e)); return p?.flow && pulseLive(p); })) ? 2 : 0);
 
 async function loadGraph() {
   data = await api("/ui/api/graph");
@@ -295,12 +368,13 @@ async function loadGraph() {
     // strength, so a strong relation reads at a glance. The weakest links between topics are hidden until their
     // note is in focus, except a note's strongest link (visibleData): less spaghetti between the islands, and no
     // note looks unlinked (24 Oct 2026: before this, 27 notes looked unlinked).
-    .linkColor((l) => (linkLit(l) ? tok("--accent") : groupOf(l.source) === groupOf(l.target) ? fade(tok("--link-in"), 0.55 + 0.45 * linkW(l))
+    .linkColor((l) => (linkLit(l) ? tok("--accent") : groupOf(l.source) === groupOf(l.target) ? (clusterColor.has(groupOf(l.source)) ? hexA(nodeColor(l.source), 0.3 + 0.4 * linkW(l)) : fade(tok("--link-in"), 0.55 + 0.45 * linkW(l)))
       : allMode() ? tok("--accent") + "99" : fade(tok("--link-cross"), 0.6 + 0.4 * linkW(l))))
     .linkWidth((l) => (linkLit(l) ? 1 + 1.6 * linkW(l) : allMode() && groupOf(l.source) !== groupOf(l.target) ? 1.2
       : groupOf(l.source) === groupOf(l.target) ? 0.5 + 1.6 * linkW(l) : 0.4 + 0.9 * linkW(l)))
-    .linkVisibility((l) => linkLit(l) || l.keep || allMode() || groupOf(l.source) === groupOf(l.target) || linkW(l) >= 0.2)
-    .linkDirectionalParticles((l) => (!calm && mapOn && (hover || selected) && linkLit(l) ? 2 : 0)) // particles keep force-graph drawing every frame
+    .nodeVisibility(shownAt) // the replay shows the notes in the order they were born
+    .linkVisibility((l) => shownAt(l.source) && shownAt(l.target) && (linkLit(l) || l.keep || allMode() || groupOf(l.source) === groupOf(l.target) || linkW(l) >= 0.2))
+    .linkDirectionalParticles(particles) // particles keep force-graph drawing every frame
     .linkDirectionalParticleWidth(2.2).linkDirectionalParticleSpeed(0.006)
     .linkDirectionalParticleColor(() => tok("--accent"))
     .backgroundColor(tok("--canvas"))
@@ -312,7 +386,7 @@ async function loadGraph() {
       else if (!loadGraph.fitted) Graph.zoomToFit(400, fitPad());
       zoomToFocus.again = false; loadGraph.fitted = true;
       // a hidden map, laid out and fitted: stop force-graph's frame loop (60 a second on every other view); setMap resumes it
-      setTimeout(() => { if (!mapOn) Graph.pauseAnimation(); }, 500);
+      setTimeout(() => { if (!mapOn || map3d) Graph.pauseAnimation(); }, 500);
     })
     .onNodeHover((n) => {
       if (touch) return;
@@ -352,10 +426,133 @@ async function loadGraph() {
       [c, { x: step * Math.sqrt(i) * Math.cos(i * 2.4), y: step * Math.sqrt(i) * Math.sin(i * 2.4) }]));
   };
   Graph.d3Force("gravity", gravity);
-  Graph.onRenderFramePost(drawLabels);
+  Graph.onRenderFramePre(drawNebulas).onRenderFramePost(drawLabels);
   new ResizeObserver(() => { const w = $("graph").clientWidth, h = $("graph").clientHeight; if (w && h) Graph.width(w).height(h); }).observe($("graph"));
   renderProjects(); renderTopics(); applyView(true);
 }
+
+// ---------------------------------------------------------------- replay
+// Replay: the map grows note by note in the order the notes were born (server: oldest kept version), in 30 s, with
+// the date in the corner. By rank, not by clock time: most notes predate the history, so by time they would all pop
+// up in the first frame.
+let replay = null; // {order, i, t}: notes born up to t are shown
+const shownAt = (n) => !replay || !n || (n.born ?? 0) <= replay.t; // !n: a link end force-graph has not resolved yet
+function startReplay() {
+  stopReplay();
+  if (!Graph) return; // the map data is still loading
+  const order = [...Graph.graphData().nodes].sort((a, b) => (a.born ?? 0) - (b.born ?? 0));
+  if (!order.length) return;
+  const t0 = performance.now(), ms = 30000, id = {};
+  replay = { t: (order[0].born ?? 0) - 1, id };
+  $("map-replay").textContent = "■ Stop"; $("map-replay").setAttribute("aria-pressed", "true"); $("map-date").hidden = false;
+  (map3d && G3 ? G3 : Graph).zoomToFit(400, fitPad());
+  Graph.autoPauseRedraw(false);
+  let shown = 0, synced3d = 0;
+  const step = (now) => {
+    if (replay?.id !== id) return;
+    const k = Math.max(0, Math.min(1, (now - t0) / ms)), i = Math.min(order.length - 1, Math.floor(k * order.length)); // a frame stamp can predate t0
+    replay.t = order[i].born ?? 0;
+    $("map-date").textContent = fmtDay(replay.t);
+    if (i + 1 > shown) { // only the notes that just appeared pulse, briefly
+      for (const n of order.slice(shown, i + 1)) pulse(n.id, 1500, false);
+      shown = i + 1;
+    }
+    // 3D rebuilds its objects on a visibility change: four times a second is smooth enough
+    if (G3 && map3d && now - synced3d > 250) { synced3d = now; G3.nodeVisibility(G3.nodeVisibility()).linkVisibility(G3.linkVisibility()); }
+    if (k < 1) requestAnimationFrame(step); else stopReplay(2500);
+  };
+  requestAnimationFrame(step);
+}
+function stopReplay(keepDate = 0) {
+  if (!replay) return;
+  replay = null;
+  $("map-replay").textContent = "▶ Replay"; $("map-replay").setAttribute("aria-pressed", "false");
+  setTimeout(() => { if (!replay) $("map-date").hidden = true; }, keepDate);
+  if (G3) G3.nodeVisibility(G3.nodeVisibility()).linkVisibility(G3.linkVisibility());
+  prunePulses(); animateHover();
+}
+
+// ---------------------------------------------------------------- 3D
+// The same notes in 3D (3d-force-graph, three.js): loaded on the first switch, so the 2D map stays light. Its own
+// node copies ({id, src}), since both maps write positions into their nodes. The choice stays per browser (kn_map3d).
+let G3 = null, map3d = false;
+function loadScript(src) {
+  return new Promise((ok, bad) => { const s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = () => bad(new Error("The 3D map did not load")); document.head.append(s); });
+}
+// Only the visible map runs its frame loop (a hidden one cost 60 frames a second on every view).
+function syncAnim() {
+  if (Graph) mapOn && !map3d ? Graph.resumeAnimation() : Graph.pauseAnimation();
+  if (G3) mapOn && map3d ? G3.resumeAnimation() : G3.pauseAnimation();
+}
+async function setMap3d(on) {
+  map3d = on; localStorage.setItem("kn_map3d", on ? "1" : "0");
+  $("map-3d").setAttribute("aria-pressed", String(on));
+  $("g2d").hidden = on; $("g3d").hidden = !on;
+  if (on) {
+    try { await build3d(); } catch (e) { toast(e.message); return setMap3d(false); }
+    refresh3d();
+    if (selected) fly3d(selected); else G3.zoomToFit(400, 40);
+  } else if (Graph && mapOn) Graph.zoomToFit(400, fitPad());
+  syncAnim();
+}
+function refresh3d() {
+  if (!G3 || !map3d) return; // a hidden 3D map is restyled when it is switched on
+  G3.nodeColor(G3.nodeColor()).linkColor(G3.linkColor()).linkWidth(G3.linkWidth()).linkDirectionalParticles(G3.linkDirectionalParticles());
+}
+function set3dData() {
+  if (!G3) return;
+  const v = visibleData(), old = new Map(G3.graphData().nodes.map((n) => [n.id, n]));
+  const nodes = v.nodes.map((n) => Object.assign(old.get(n.id) || { id: n.id }, { src: n }));
+  G3.graphData({ nodes, links: v.links.map((l) => ({ source: linkId(l.source), target: linkId(l.target), w: l.w, keep: l.keep })) });
+}
+function fly3d(id) {
+  const n = G3?.graphData().nodes.find((x) => x.id === id);
+  if (!n || n.x == null) return;
+  const d = 90, k = 1 + d / Math.max(1, Math.hypot(n.x, n.y, n.z));
+  G3.cameraPosition({ x: n.x * k, y: n.y * k, z: n.z * k }, n, 800);
+}
+async function build3d() {
+  if (G3) return set3dData();
+  if (!window.ForceGraph3D) await loadScript("/ui/static/vendor/3d-force-graph-1.80.2.js");
+  const box = $("g3d"), same = (l) => !!(l.source.src && l.target.src) && groupOf(l.source.src) === groupOf(l.target.src); // ends are ids until the first tick
+  G3 = new ForceGraph3D(box, { controlType: "orbit" })
+    .width($("graph").clientWidth).height($("graph").clientHeight)
+    .backgroundColor(tok("--canvas")).showNavInfo(false)
+    .nodeId("id").nodeLabel((n) => el("span", null, n.src.label)) // an element, not an HTML string: titles come from guests too
+    .nodeVal((n) => 1 + (n.src.degree || 0)).nodeRelSize(2.4).nodeResolution(14).nodeOpacity(0.95)
+    .nodeColor((n) => (!focusSet.size || focusSet.has(n.id) ? nodeColor(n.src) : hexA(nodeColor(n.src), 0.12)))
+    .nodeVisibility((n) => shownAt(n.src))
+    .linkVisibility((l) => shownAt(l.source.src || {}) && shownAt(l.target.src || {}) && (linkLit(l) || l.keep || same(l) || linkW(l) >= 0.2))
+    .linkColor((l) => (linkLit(l) ? tok("--accent") : same(l) ? hexA(nodeColor(l.source.src), 0.45) : tok("--link-cross")))
+    .linkWidth((l) => (linkLit(l) ? 1.2 : 0)).linkOpacity(0.5)
+    .linkDirectionalParticles(particles).linkDirectionalParticleWidth(1.8).linkDirectionalParticleSpeed(0.006)
+    .linkDirectionalParticleColor(() => tok("--accent"))
+    .cooldownTicks(200)
+    .onEngineStop(() => { if (!fly3d.done) { fly3d.done = true; selected ? fly3d(selected) : G3.zoomToFit(600, 40); } }) // the first layout, then the view
+    .onNodeHover((n) => {
+      if (touch) return;
+      hover = n ? n.id : null; if (!selected) setFocus(hover);
+      box.style.cursor = n ? "pointer" : "";
+    })
+    .onNodeClick((n) => (selected === n.id ? go(noteRoute(n.id)) : openNote(n.id)))
+    .onBackgroundClick(() => deselect());
+  G3.d3Force("charge").strength(-50);
+  // a weak pull to the middle: without it loose groups drift off and the view never fits (2D has its island anchors)
+  let g3n = [];
+  G3.d3Force("middle", Object.assign((alpha) => { for (const n of g3n) { n.vx -= n.x * 0.03 * alpha; n.vy -= n.y * 0.03 * alpha; n.vz -= n.z * 0.03 * alpha; } },
+    { initialize: (ns) => { g3n = ns; } }));
+  new ResizeObserver(() => { const w = $("graph").clientWidth, h = $("graph").clientHeight; if (w && h) G3.width(w).height(h); }).observe($("graph"));
+  set3dData();
+}
+$("map-3d").onclick = () => setMap3d(!map3d);
+// The topic list over the map, on request; the choice stays per browser.
+function showTopics(on) {
+  document.body.classList.toggle("map-topics", on); $("map-topics").setAttribute("aria-pressed", String(on));
+  localStorage.setItem("kn_map_topics", on ? "1" : "0");
+}
+showTopics(localStorage.getItem("kn_map_topics") === "1");
+$("map-topics").onclick = () => showTopics(!document.body.classList.contains("map-topics"));
+$("map-replay").onclick = () => (replay ? stopReplay() : startReplay());
 
 // ---------------------------------------------------------------- side panel controls
 // The project of the knowledge views: a picker in the sidebar and in the phone's More sheet, with its note count.
@@ -371,7 +568,7 @@ function renderProjects() {
 }
 
 function switchProject(p, refit = true) {
-  releaseFocus({ instant: true });
+  releaseFocus({ instant: true }); stopReplay();
   if (p === project || (p !== ALL && !PROJECTS.includes(p))) return;
   project = p; navProject.set(p);
   setAgentProject(p === ALL ? "" : p); // one project picker for every view
@@ -430,8 +627,10 @@ function setMap(on) {
   mapOn = on;
   $("graph").hidden = !on; $("note").hidden = on;
   if (current) renderSide();
-  if (Graph) { Graph.linkDirectionalParticles(Graph.linkDirectionalParticles()); on ? Graph.resumeAnimation() : Graph.pauseAnimation(); }
-  if (!on) return;
+  if (Graph) Graph.linkDirectionalParticles(Graph.linkDirectionalParticles());
+  syncAnim();
+  if (!on) { stopReplay(); return; }
+  if ((localStorage.getItem("kn_map3d") === "1") !== map3d) setMap3d(!map3d); // the last pick of this browser
   requestAnimationFrame(() => { // once the map has its size
     if (!Graph) return; // the map data is still loading: loadGraph sizes it
     Graph.width($("graph").clientWidth).height($("graph").clientHeight);
@@ -492,7 +691,7 @@ function deselect({ push = true } = {}) {
   $("side").replaceChildren(); markActive();
   homeView();
   const back = releaseFocus(); homeTween = tweenId;
-  back.then(() => { if (!selected && mapOn) Graph.zoomToFit(600, fitPad()); }); // home, then the overview
+  back.then(() => { if (!selected && mapOn) (map3d && G3 ? G3 : Graph).zoomToFit(600, fitPad()); }); // home, then the overview
 }
 
 // With nothing selected the middle shows the project's MEMORY.md: the user's own table of contents.
@@ -591,6 +790,7 @@ async function openNote(id, { push = true, find = null } = {}) {
     applyRoute(); // also within Notes: a phone swaps the list for the note
   }
   selected = byId.has(note.path) ? note.path : null; setFocus(selected); markActive(); if (Graph) animateHover(6000);
+  if (map3d && mapOn && selected) fly3d(selected);
   const n = byId.get(note.path);
   if (mapOn && n && n.x != null) {
     loadGraph.fitted = true; // the reader chose a view: no overview fit after the layout settles
@@ -1062,7 +1262,7 @@ async function loadTrash(p) {
 
 function highlight(ids) {
   // Show a set of notes in the graph: dim the rest and zoom to them.
-  focusSet = new Set(ids);
+  focusSet = new Set(ids); refresh3d();
   const pts = ids.map((i) => byId.get(i)).filter((n) => n && n.x != null);
   if (pts.length) { animateHover(); Graph.zoomToFit(600, 80, (n) => focusSet.has(n.id)); }
 }

@@ -89,7 +89,11 @@
           <h3 id="sem-head" class="sub" hidden>By meaning</h3>
           <ol id="sem" class="hits"></ol>
         </section>
-        <div id="graph" aria-label="Map of the project" hidden><div id="g2d"></div></div>
+        <div id="graph" aria-label="Map of the project" hidden><div id="g2d"></div><div id="g3d" hidden></div>
+          <div class="map-tools"><span id="map-date" class="map-date" aria-live="polite" hidden></span>
+            <button id="map-topics" class="btn small" type="button" aria-pressed="false" aria-controls="topics-pane" title="Show the list of topics and notes">Topics</button>
+            <button id="map-replay" class="btn small" type="button" aria-pressed="false" title="Replay how the map grew, note by note">▶ Replay</button>
+            <button id="map-3d" class="btn small" type="button" aria-pressed="false" title="Switch between the flat map and 3D">3D</button></div></div>
       </div>
       <aside class="right" id="side" aria-label="Connected notes"></aside>
     </div>
