@@ -620,7 +620,7 @@ function filesProject() { if (machinesMode === "files" && !$("tab-machines").hid
 const filesBusy = () => filesBox.querySelector("textarea.editor") || [...filesBox.querySelectorAll("audio, video")].some((v) => !v.paused);
 
 async function filesOpen(m, path) {
-  if (filesBusy() && !confirm("Leave this file? What plays stops and unsaved edits are lost.")) return;
+  if (filesBox.querySelector("textarea.editor") && !confirm("Leave this file? Your unsaved edits are lost.")) return;
   filesBox.replaceChildren(el("p", "muted", `Asking ${m.label}…`));
   let res;
   try { res = await filesApi(m, { op: "list", path }); } catch (e) { return filesFail(m, e, () => filesOpen(m, path)); }
