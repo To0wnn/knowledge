@@ -2547,6 +2547,8 @@ def chats_round() -> bool:
     fetch = lambda ref: server_file(tok, ref)
     for a in r.get("answers", []):  # the owner's answers to tool approvals (before the stops: a stop denies the rest)
         chat.answer(a)
+    for cid in r.get("end", []):  # a shared chat whose share was taken back or changed: its live agent ends too
+        chat.end(str(cid))
     for cid in r.get("stop", []):
         if stop_is_news(cid, chat.stop(cid), time.time()):
             post({"chat": cid, "events": [{"kind": "info", "text": "Stopped (no turn ran here any more)."}], "done": True})
@@ -2566,8 +2568,9 @@ def chats_round() -> bool:
         log("remote", f"Chat message from {item.get('by') or '?'} for {AGENTS.get(item.get('agent'), ('?',))[0]}", f"chat {item.get('chat')} in {item.get('folder')}")
         if item.get("worktree") and (wts := load("chat_worktrees.json", {})).get(item["chat"]) != item.get("folder"):  # for its git pill
             save("chat_worktrees.json", dict(list({**wts, item["chat"]: item.get("folder")}.items())[-50:]))
-        # a guest's chat (this pc shared with them by its owner) never runs YOLO: every tool call asks
-        chat.start(item, post, log, linked, (lambda agent: False) if item.get("guest") else yolo, fetch)
+        # a guest's chat (this pc shared with them by its owner) runs without YOLO, every tool call asked, unless the
+        # owner shared it with YOLO (guest_yolo): then this pc's own switch counts
+        chat.start(item, post, log, linked, (lambda agent: False) if item.get("guest") and not item.get("guest_yolo") else yolo, fetch)
     for d in r.get("diffs", []):  # after the turns (handed out once: never lost to a diff); read-only, linked folders and workers only
         try:
             if "dirs" in d:  # the owner's folder chooser in the web UI, on the same way as a diff: never kept in a log
@@ -3397,7 +3400,8 @@ def main(argv: list):
         started, real = [], (globals()["server"], globals()["folder_links"], chat.start)
         def fake_server(method, path, tok, body=None):
             if path == "/machine/chats":
-                return {"work": [{"chat": "c1", "agent": "codex", "folder": "/x"}, {"chat": "c2", "agent": "codex", "folder": "/x", "guest": True}],
+                return {"work": [{"chat": "c1", "agent": "codex", "folder": "/x"}, {"chat": "c2", "agent": "codex", "folder": "/x", "guest": True},
+                                 {"chat": "c3", "agent": "codex", "folder": "/x", "guest": True, "guest_yolo": True}],
                         "diffs": [{"id": "d1", "folder": "/not-linked"}]}
             raise OSError("server away")
         globals().update(server=fake_server, folder_links=lambda: {"linked": [{"path": "/x", "project": "p"}], "candidates": []})
@@ -3409,7 +3413,7 @@ def main(argv: list):
             globals().update(server=real[0], folder_links=real[1])
             chat.start = real[2]
         save("yolo.json", {})
-        assert started == [("c1", True), ("c2", False)], started
+        assert started == [("c1", True), ("c2", False), ("c3", True)], started
         hook_status.ERRORS = Path(tmp_state) / "hook-errors.jsonl"  # a damaged state file says so, once; a missing one does not
         STATE.mkdir(parents=True, exist_ok=True); (STATE / "damaged.json").write_text("", encoding="utf-8")
         assert load("gone.json", {"d": 1}) == {"d": 1} and not hook_status.ERRORS.exists()

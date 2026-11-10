@@ -290,7 +290,7 @@ async function pcShare(m) {
       for (const [v, t] of Object.entries(SHARE_WORDS)) sel.append(new Option(t, v));
       sel.value = u.mode || "";
       sel.onchange = async () => {
-        if (sel.value === "use" && !confirm(`Let ${u.user} run agents on ${m.label} in ${p.project}?\n\nTheir agents run as you on this pc (files, network, your agent subscription). Every tool call asks them first.`)) { sel.value = u.mode || ""; return; }
+        if (sel.value === "use" && !confirm(`Let ${u.user} run agents on ${m.label} in ${p.project}?\n\nTheir agents run as you on this pc (files, network, your agent subscription). Every tool call asks them first, and they answer it themselves: give this only to someone you would give a shell.`)) { sel.value = u.mode || ""; return; }
         if (sel.value === "yolo" && prompt(`${u.user}'s chats on ${m.label} (${p.project}) then run with this pc's YOLO switch: no tool call asked, as you on this pc, on your agent subscription; risky actions are flagged, never stopped. Type YOLO to allow it.`) !== "YOLO") { sel.value = u.mode || ""; return; }
         try {
           await api("/ui/api/machine/share", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: m.id, project: p.project, user: u.user, mode: sel.value }) });

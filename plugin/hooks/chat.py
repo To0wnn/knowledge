@@ -1795,6 +1795,14 @@ def close_all():
         threading.Thread(target=lv.close, daemon=True).start()
 
 
+def end(cid: str):
+    """End one chat here (its share was taken back or changed): a running turn stops and its live agent ends, with its
+    background work, so nothing starts a turn by itself any more; the next message resumes it."""
+    stop(cid)
+    if lv := LIVE.pop(cid, None):
+        threading.Thread(target=lv.close, daemon=True).start()
+
+
 def stop(cid: str) -> bool:
     """Stop a running turn, and drop its messages still fetching their files; False when neither is here."""
     with PENDING_LOCK:
@@ -1895,6 +1903,8 @@ def _start_live(item: dict, post, log, linked, yolo):
                 raise RuntimeError(f"unknown agent {item.get('agent')}")
             if item.get("folder", "") not in linked():
                 raise RuntimeError(f"{item.get('folder', '')} is not a folder linked to a project on this pc")
+            if item.get("guest") and not item.get("worktree"):
+                raise RuntimeError("a shared chat runs only in a worktree of its own")
             if item.get("worktree"):  # its own git worktree and branch, made at its first message, reused after
                 where = workers.worktree(item["folder"], cid, prefix="chat")
                 remember_branch(cid, where)
@@ -1903,6 +1913,8 @@ def _start_live(item: dict, post, log, linked, yolo):
                                                    "Commit there. Close the chat when it is done: it gets a Review card with Merge, and its worktree goes once nothing is left to merge."}]})
                 elif not where.get("worktree") and not item.get("session") and cid not in LIVE:
                     post({"chat": cid, "events": [{"kind": "info", "text": "The folder is not in a git repository: it works in the folder itself."}]})
+                if item.get("guest") and not where.get("worktree"):  # a guest never works in the owner's own folder
+                    raise RuntimeError("a shared chat runs only in a worktree of its own, and this folder is not in a git repository")
                 item = {**item, "folder": where["cwd"]}
             lv = LIVE.get(cid)
             if lv and getattr(lv, "restarting", False):  # agy restarting for a Force: this goes along to the new one

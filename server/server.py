@@ -1087,6 +1087,8 @@ def own_chats() -> list:
     other tokens (a person's own, or the admins' own devices marked "self", as machine_key binds them); never a token
     that is nobody's but its own (a friend's, a PA's); the newest first."""
     dev = device.get()
+    if dev.get("guest_chat"):  # a guest's chat turn runs on the owner's token: the owner's chats are not theirs to read
+        return []
     key = machine_key(dev.get("name", "")) or (f"user:{dev['user']}" if dev.get("user") else "")
     mine = lambda n: n == dev.get("name") or bool(key) and not key.startswith("token:") and machine_key(n) == key
     out = []
@@ -3036,6 +3038,22 @@ def shares_for(mid: str, user: str, m: dict | None = None, tokens: dict | None =
     return got
 
 
+def guest_device(dev: dict) -> dict:
+    """A turn of a guest's chat calls the server with the pc owner's token: there it reaches only the chat's project,
+    writes only when the guest may write it, and lists or reads no chats (the owner's other chats and projects stay
+    theirs). Any other turn: the device as it is."""
+    try:
+        c = read_json(chat_file(dev["machine"], dev["chat"]), None) or {}
+    except ValueError:
+        return dev
+    if not c.get("guest"):
+        return dev
+    p, by = c.get("project") or "", c.get("by", "")
+    roots = [r for r in PROJECTS.get(p, ()) if not dev.get("roots") or r in dev["roots"]] or ["\0none"]  # never [] (= everything)
+    may_write = by in ADMINS or read_json(USERS_FILE, {}).get(by, {}).get("projects", {}).get(p) == "write"
+    return {**dev, "roots": roots, "write": bool(dev.get("write")) and may_write, "skills": False, "guest_chat": by}
+
+
 def shared_row(mid: str, m: dict, shared: dict, now: float) -> dict:
     """The Machines row of someone else's pc shared with this person: only what the share needs (online, the agents and
     folders of the projects they may use), never the owner's sessions, errors, workers or other folders."""
@@ -3564,6 +3582,8 @@ class BearerAuth:
         if chat := headers.get(b"x-knowledge-chat", b"").decode("latin-1"):
             # a chat turn from the web UI: no tasks in its context, no lease, no notices; plugin 0.42+ sends the chat id
             dev = {**dev, "webchat": True, **({"chat": chat} if re.fullmatch(r"[0-9a-f]{12}", chat) else {})}
+            if dev.get("chat") and dev.get("machine"):
+                dev = guest_device(dev)
         device.set(dev)
         return await self.app(scope, receive, send)
 
@@ -6032,6 +6052,9 @@ async def ui_machine_share(request: Request, body: dict):
     cands = {c["project"]: {m["user"] for m in c["members"]} for c in await asyncio.to_thread(share_candidates, row, me)}
     if mode and user not in cands.get(project, set()):
         raise ValueError(f"{user or 'that person'} is not another member of {project or 'that project'} linked on this pc")
+    machines, tokens = read_json(MACHINES_FILE, {}), read_json(TOKENS_FILE, {})
+    if (by := (read_json(SHARES_FILE, {}).get(mid) or {}).get("by")) not in (None, me) and share_tokens(mid, machines.get(mid) or {}, tokens, by):
+        return JSONResponse({"error": f"{by} shares this pc; a pc with tokens of two people is shared by the one who shared it first"}, status_code=409)
 
     def change(d):
         s = d.get(mid) or {}
@@ -6043,6 +6066,11 @@ async def ui_machine_share(request: Request, body: dict):
         else:
             d.pop(mid, None)
     await asyncio.to_thread(update_state, SHARES_FILE, change)
+    d = CHATS_DIR / mid  # a change of mode ends that person's live agents there: the next turn runs the new way (YOLO or not)
+    ends = [f.stem for f in (d.glob(CHAT_GLOB) if d.is_dir() else []) if (c := read_json(f, None) or {}).get("guest")
+            and c.get("by") == user and c.get("project") == project]
+    if ends:
+        await asyncio.to_thread(update_state, d / "queue.json", lambda q: [q.setdefault(k, {}).update(end_once=True) for k in ends])
     audit("machine-share", f"{mid} {project} {user} {mode or 'off'}")
     return JSONResponse({"ok": True})
 
@@ -7270,8 +7298,8 @@ ASK_SAID = {"once": "Allowed once", "chat": "Allowed for this chat", "deny": "De
 
 @server.custom_route("/ui/api/chat/approve", methods=["POST"])
 async def ui_chat_approve(request: Request):
-    """{machine, id, ask, decision: once|chat|deny}: the owner's answer to a tool approval of a running turn (only the
-    machine's owner gets this far); its companion gets it with the next poll. "chat" also allows the same call for the
+    """{machine, id, ask, decision: once|chat|deny}: the answer to a tool approval of a running turn, by the machine's
+    owner or, in a chat of their own, a guest the owner shared the pc with for use (chat_rights); its companion gets it with the next poll. "chat" also allows the same call for the
     rest of the chat; refused for what may only be allowed once (git push, a path outside the chat's folder)."""
     try:
         row, b, f, c = await chat_request(request, True)
@@ -7317,8 +7345,8 @@ async def ui_git_diff(request: Request):
         b = (await request.json()) if request.method == "POST" else dict(request.query_params)
         mid = str(b.get("machine", ""))
         row = await asyncio.to_thread(chat_machine, mid)
-        if not row or not row["own"] and not (request.method == "GET" or b.get("chat")):  # a shared pc: only a chat's diff
-            raise PermissionError(await asyncio.to_thread(not_own, mid))
+        if not row or not row["own"] and not (request.method == "GET" or b.get("chat") and "dirs" not in b and "worker" not in b):
+            raise PermissionError(await asyncio.to_thread(not_own, mid))  # a shared pc: only a chat's diff
         q = chat_file(mid, "0" * 12).parent / "diffs.json"
         guest_tokens = None
         if request.method == "GET":
@@ -7534,6 +7562,8 @@ async def machine_chats(request: Request):
         return JSONResponse({"work": [], "stop": [], "busy": [], "active": False, "agents": False})
     q_path, out = CHATS_DIR / mid / "queue.json", {"work": [], "stop": [], "busy": []}
     all_prefs, revoked = read_json(PREFS_FILE, {}), []
+    guests_ok = bool(((read_json(MACHINES_FILE, {}).get(mid) or {}).get("companion") or {}).get("guests"))
+    now0 = time.time()
 
     def change(q):
         for cid, e in list(q.items()):
@@ -7545,14 +7575,25 @@ async def machine_chats(request: Request):
                 if not c:
                     q.pop(cid)
                 continue
-            if c.get("guest") and not chat_token_ok(c, dev):  # the share or membership went: nothing more runs, a running turn stops
-                if e.get("busy"):
+            if e.pop("end_once", None):  # its share changed mode: the live agent ends, the next message starts it the new way
+                out.setdefault("end", []).append(cid)
+            if c.get("guest") and (not chat_token_ok(c, dev) or not guests_ok):
+                # the share or membership went (or the companion can no longer keep it from YOLO): nothing more runs,
+                # and its agent ends, also one that would start a turn by itself; said again for 10 minutes
+                if not e.get("ended"):
+                    revoked.append(cid)
+                    e.clear()
+                    e["ended"] = now0
+                if now0 - e["ended"] > 600:
+                    q.pop(cid)
+                else:
                     out["stop"].append(cid)
-                q.pop(cid)
-                revoked.append(cid)
+                    out.setdefault("end", []).append(cid)
                 continue
-            # its companion runs it without YOLO, unless the owner shared it with YOLO (then the pc's own switch counts)
-            extra_guest = {"guest": True} if c.get("guest") and share_mode(mid, c.get("project") or "", c.get("by", "")) != "yolo" else {}
+            # a guest's chat: its own worktree only, and without YOLO unless the owner shared it with YOLO (guest_yolo: then
+            # the pc's own switch counts)
+            extra_guest = ({"guest": True, **({"guest_yolo": True} if share_mode(mid, c.get("project") or "", c.get("by", "")) == "yolo" else {})}
+                           if c.get("guest") else {})
             rdr = (all_prefs.get(c.get("by", "") or "", {}).get("chat_reader") or {}).get("id") or ""
             extra = {**({"reader": rdr} if rdr else {}), **extra_guest}
             if e.get("busy"):
@@ -7583,7 +7624,7 @@ async def machine_chats(request: Request):
         await asyncio.to_thread(update_state, q_path, change)
     for cid in revoked:  # after the queue's lock: update_state's lock is not reentrant
         await asyncio.to_thread(update_state, chat_file(mid, cid), lambda c: (c.update(status="idle", pending=[]),
-                                chat_add(c, "info", "Stopped: this pc is no longer shared with you for this project.")))
+                                chat_add(c, "info", "Stopped: this pc is no longer shared with you for this project (or its knowledge plugin is too old for a shared chat).")))
     diffs = []
 
     def hand_out(d):

@@ -12,15 +12,21 @@ from a phone. The pc side runs in the companion ([companion.md](companion.md)).
   never marks it read for the owner, attachments only of those chats, a chat's diff but no folder chooser, workers or
   actions); nothing of the owner's other projects, sessions, errors or workers shows (a trimmed Machines row, pill
   "shared: ..."). **Use** also lets them start chats there in that project and steer those (send, stop, approve,
-  archive), never the owner's own chats. A guest's chat (`guest: true`) always gets its own worktree, so it never
-  works in the owner's checkout. Under use it never runs YOLO: the work item carries `guest` and the companion (one
+  archive), never the owner's own chats. The guest answers their own chat's tool approvals (the owner can too): use
+  means they can have anything run as the owner on that pc, so share it only with someone you would give a shell. A
+  guest's chat (`guest: true`) always gets its own worktree, so it never works in the owner's checkout (the companion
+  refuses one in a folder outside git). Its turns call the server with the owner's token, so the server narrows that
+  token for them (`guest_device`, by the turn's `X-Knowledge-Chat`): only the chat's project, writing only when the
+  guest may write it, and no `knowledge_chats` / `knowledge_chat_read` / `knowledge_chat_close`. Under use it never runs YOLO: the work item carries `guest` and the companion (one
   that reports `guests: true`, else the start is refused) runs it with every tool call asked. **Use with YOLO**
-  (`yolo`, the owner types YOLO to give it) leaves that mark off, so the pc's own YOLO switch counts as for the
-  owner's chats; a change of mode holds from the guest's next turn. It runs as the owner on that pc, on
+  (`yolo`, the owner types YOLO to give it) adds `guest_yolo`, so the pc's own YOLO switch counts as for the owner's
+  chats; a change of mode ends that person's live agents there once (`end` in the poll), so the next turn runs the
+  new way. It runs as the owner on that pc, on
   the owner's agent subscription and token. The owner sees it in their own list ("by <person>"), can stop and approve
   it, and the admin hears on Matrix when someone starts one on an admin's pc. Taking it back (Off), the person leaving
-  the project or the owner's token turning remote control off ends it at once: the next poll stops a running turn,
-  hands out nothing more, marks the chat idle with a line saying why, and refuses its events. Not shared: MCP
+  the project, the owner's token turning remote control off, or the companion no longer reporting `guests` ends it at
+  once: the next poll stops a running turn and ends its live agent with its background work (`stop` and `end`, said
+  again for 10 minutes), hands out nothing more, marks the chat idle with a line saying why, and refuses its events. Not shared: MCP
   `knowledge_chats` and `knowledge_chat_read` still list only your own pcs' chats.
 
 - **Terminal sessions under Needs you:** a session you started yourself shows on the board when it waits for your approval: the plugin's hook leaves a mark in `~/.knowledge/asks`, and the companion reports a mark that stayed 2 minutes in its next report. The row names the tool and its command and offers Dismiss and Snooze, no Allow or Deny: you answer in that terminal. Claude Code and Codex have a `PermissionRequest` event, but none for "approved", so a long command you allowed looks the same until it ends; the row says so. agy has no such event: its mark comes from `PreToolUse` on every tool (not under YOLO, where nothing waits), stays 5 minutes before it shows, and says "may wait". A mark goes when the tool ran, the turn ended (Esc at a prompt: Claude Code's `idle_prompt` after a minute, Codex's `Interrupt`), the next prompt came, that agent no longer runs on the pc (an npm install of Claude Code on Windows runs as node, so it shows no terminal rows), or after a day (agy: an hour, because Esc at its prompt sends no hook, so until then a refused prompt can show as "may wait"; Dismiss takes it away). A row needs a companion report of the last 5 minutes. Needs the companion on that pc.

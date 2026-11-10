@@ -1433,10 +1433,19 @@ def share_contract(tmp, ck, fr, raw, er):
     http("POST", "/machine/chats/events", {"chat": g["id"], "events": [], "done": True}, token=fr, headers=pc)
     assert share("yolo")[0] == 200 and rows(er)[mid]["shared"] == {"garden": "yolo"}
     assert ui("/ui/api/chat/send", {"machine": mid, "id": g["id"], "text": "go"}, er)[0] == 200
-    assert "guest" not in {w["chat"]: w for w in poll()["work"]}[g["id"]]
+    assert {w["chat"]: w for w in poll()["work"]}[g["id"]]["guest_yolo"] is True  # the pc's own YOLO switch counts
     http("POST", "/machine/chats/events", {"chat": g["id"], "events": [], "done": True}, token=fr, headers=pc)
     assert share("use")[0] == 200 and ui("/ui/api/chat/send", {"machine": mid, "id": g["id"], "text": "careful"}, er)[0] == 200
-    assert {w["chat"]: w for w in poll()["work"]}[g["id"]]["guest"] is True
+    back = poll()  # the mode changed: her live agent ends once, the next turn runs without YOLO
+    assert g["id"] in back.get("end", []) and "guest_yolo" not in {w["chat"]: w for w in back["work"]}[g["id"]], back
+    assert g["id"] not in poll().get("end", [])
+    # Her turn calls the server with the owner's token: there only her project, no write as a read member, no chats.
+    turn = {**pc, "X-Knowledge-Chat": g["id"]}
+    assert "(no chats" in call("knowledge_chats", {}, token=fr, headers=turn)[1]
+    assert mine in call("knowledge_chats", {}, token=fr, headers={**pc, "X-Knowledge-Chat": mine})[1]  # the owner's own turn as before
+    err, text = call("knowledge_write", {"path": "garden-memory/guest_try.md", "content": memo("x\n", "guest_try")}, token=fr, headers=turn)
+    assert err, text
+    assert not call("knowledge_read", {"path": "garden-memory/MEMORY.md"}, token=fr, headers=turn)[0]
     owner_list = {c["id"]: c for c in json.loads(ui("/ui/api/chats")[2])["chats"] if c["machine"] == mid}
     assert owner_list[g["id"]]["guest"] and owner_list[g["id"]]["rights"] == "act", owner_list  # the owner sees and can stop it
     assert any(i["kind"] == "chat" and i["id"] == g["id"] for i in json.loads(ui("/ui/api/board", h=er)[2])["items"])
@@ -1444,7 +1453,8 @@ def share_contract(tmp, ck, fr, raw, er):
     assert share("")[0] == 200 and mid not in rows(er) and "abababababababab" not in json.loads((tmp / "machine_shares.json").read_text())
     assert ui("/ui/api/chat/send", {"machine": mid, "id": g["id"], "text": "more"}, er)[0] == 403
     got = poll()
-    assert g["id"] in got["stop"] and g["id"] not in got["busy"], got
+    assert g["id"] in got["stop"] and g["id"] in got["end"] and g["id"] not in got["busy"], got
+    assert g["id"] in poll()["end"]  # said again for a while: a lost answer must not leave its agent running
     c = json.loads(ui(f"/ui/api/chat?machine={mid}&id={g['id']}")[2])
     assert c["chat"]["status"] == "idle" and "no longer shared" in c["events"][-1]["text"], c
     assert http("POST", "/machine/chats/events", {"chat": g["id"], "events": [{"kind": "text", "text": "x"}]}, token=fr, headers=pc)[0] != 200
