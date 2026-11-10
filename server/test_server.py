@@ -1380,6 +1380,74 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     http("POST", "/machine/report", {"version": "0.16.0"}, token=fr, headers=pc)
 
 
+def share_contract(tmp, ck, fr, raw, er):
+    """A pc shared per project: only its owner shares, only with a member; view shows that project's chats there and
+    nothing else, use also starts chats of their own (always a worktree, never YOLO); taking it back stops them."""
+    mid, pc = "abababababababab", {"X-Knowledge-Machine": "abababababababab", "X-Knowledge-Machine-Label": "attic"}
+    ui = lambda path, body=None, h=ck: raw("POST" if body is not None else "GET", path, None if body is None else json.dumps(body),
+                                          {**h, "X-Knowledge-UI": "1", "Content-Type": "application/json"})
+    rep = {"version": "0.50.0", "guests": True, "agents": {"codex": {"models": [{"id": "gpt-x"}]}},
+           "folders": {"linked": [{"path": "/home/x/garden", "project": "garden"}, {"path": "/home/x/trade", "project": "trade"}]}}
+    http("POST", "/machine/report", rep, token=fr, headers=pc)
+    poll = lambda: json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])
+    mine = json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/x/garden"})[2])["chat"]["id"]
+    other = json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/x/trade"})[2])["chat"]["id"]
+    rows = lambda h: {r["id"]: r for r in json.loads(ui("/ui/api/machines", h=h)[2])["machines"]}
+    assert mid not in rows(er) and ui(f"/ui/api/chat?machine={mid}&id={mine}", h=er)[0] == 403  # not shared yet
+    share = lambda mode, h=ck, user="erin", project="garden": ui("/ui/api/machine/share", {"machine": mid, "project": project, "user": user, "mode": mode}, h)
+    assert share("use", er)[0] == 403  # only the pc's owner shares it
+    assert share("use")[0] == 400  # erin is no member of garden yet
+    was = json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["users"]["erin"]["projects"]
+    ui("/ui/api/admin/user", {"username": "erin", "projects": {**was, "garden": "read"}})
+    assert share("root")[0] == 400 and share("use", user="alice")[0] == 400  # a mode that does not exist; not yourself
+    cands = json.loads(ui(f"/ui/api/machine/share?machine={mid}")[2])["projects"]
+    assert {c["project"] for c in cands} >= {"garden"} and {"user": "erin", "mode": ""} in next(c for c in cands if c["project"] == "garden")["members"], cands
+    assert share("view")[0] == 200
+    assert rows(ck)[mid]["shares"] == {"garden": {"erin": "view"}}
+    r = rows(er)[mid]  # trimmed: none of the owner's tokens, sessions, workers or other folders
+    assert r["shared"] == {"garden": "view"} and r["tokens"] == [] and r["agents"] == {} and r["companion"]["folders"]["linked"] == [] and not r["own"], r
+    seen = {c["id"]: c["rights"] for c in json.loads(ui("/ui/api/chats", h=er)[2])["chats"] if c["machine"] == mid}
+    assert seen == {mine: "view"}, seen  # the garden chat, not the trade one
+    c = json.loads(ui(f"/ui/api/chat?machine={mid}&id={mine}", h=er)[2])
+    assert c["chat"]["rights"] == "view", c
+    assert ui(f"/ui/api/chat?machine={mid}&id={other}", h=er)[0] == 400
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": mine, "text": "hi"}, er)[0] == 403  # read only
+    assert ui("/ui/api/chat/stop", {"machine": mid, "id": mine}, er)[0] == 403
+    assert ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/x/garden"}, er)[0] == 400  # view: no folder offered
+    assert share("use")[0] == 200 and [f["path"] for f in rows(er)[mid]["companion"]["folders"]["linked"]] == ["/home/x/garden"], rows(er)[mid]
+    http("POST", "/machine/report", {**rep, "guests": None}, token=fr, headers=pc)
+    assert ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/x/garden"}, er)[0] == 409  # an older companion
+    http("POST", "/machine/report", rep, token=fr, headers=pc)
+    assert ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/x/trade"}, er)[0] == 400  # not shared for trade
+    st, _, b = ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/x/garden", "worktree": False}, er)
+    assert st == 200, b
+    g = json.loads(b)["chat"]
+    assert g["guest"] and g["worktree"] and g["by"] == "erin", g  # always its own worktree, never the owner's checkout
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": g["id"], "text": "look around"}, er)[0] == 200
+    work = {w["chat"]: w for w in poll()["work"]}
+    assert work[g["id"]]["guest"] is True and work[g["id"]]["worktree"] is True, work  # its companion runs it without YOLO
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": mine, "text": "mine"})[0] == 200
+    assert "guest" not in {w["chat"]: w for w in poll()["work"]}[mine]  # the owner's own chat as before
+    http("POST", "/machine/chats/events", {"chat": mine, "events": [], "done": True}, token=fr, headers=pc)
+    owner_list = {c["id"]: c for c in json.loads(ui("/ui/api/chats")[2])["chats"] if c["machine"] == mid}
+    assert owner_list[g["id"]]["guest"] and owner_list[g["id"]]["rights"] == "act", owner_list  # the owner sees and can stop it
+    assert any(i["kind"] == "chat" and i["id"] == g["id"] for i in json.loads(ui("/ui/api/board", h=er)[2])["items"])
+    # Taken back: off her list at once; the running turn stops at the next poll and nothing more runs.
+    assert share("")[0] == 200 and mid not in rows(er) and "abababababababab" not in json.loads((tmp / "machine_shares.json").read_text())
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": g["id"], "text": "more"}, er)[0] == 403
+    got = poll()
+    assert g["id"] in got["stop"] and g["id"] not in got["busy"], got
+    c = json.loads(ui(f"/ui/api/chat?machine={mid}&id={g['id']}")[2])
+    assert c["chat"]["status"] == "idle" and "no longer shared" in c["events"][-1]["text"], c
+    assert http("POST", "/machine/chats/events", {"chat": g["id"], "events": [{"kind": "text", "text": "x"}]}, token=fr, headers=pc)[0] != 200
+    # Membership gone with the share still on: the share counts for nothing.
+    assert share("use")[0] == 200 and mid in rows(er)
+    ui("/ui/api/admin/user", {"username": "erin", "projects": was})
+    assert mid not in rows(er)
+    assert json.loads(raw("GET", "/ui/api/machine/share?machine=" + mid, headers=er)[2]).get("error")
+    share("")
+
+
 def tool_requests_contract(tmp, ck, raw, er):
     """Anyone asks for a tool or skill; only an admin decides, and a draft is a task line whose request text stays data."""
     post = lambda path, body, h: raw("POST", path, json.dumps(body), {**h, "X-Knowledge-UI": "1", "Content-Type": "application/json"})
@@ -3506,6 +3574,7 @@ def main():
         assert {"erinproj", "erinproj-memory"} <= set(roots), roots  # her devices reach her new project at once
         machines_contract(tmp, ck, fr, raw, er, et, heard)
         chats_contract(tmp, ck, fr, raw, er, et)
+        share_contract(tmp, ck, fr, raw, er)
         tool_requests_contract(tmp, ck, raw, er)
         remote_toggle_contract(tmp, ck, raw, er, et)
         # Speech to text: the page's recording goes on to the configured server with model, language, prompt and key;

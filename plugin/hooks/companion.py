@@ -1714,6 +1714,7 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
     chat_gits = {cid: chat_git(cid, f) for cid, f in load("chat_worktrees.json", {}).items()}
     body = {"version": version(), "self": self_state(), "workersAllowed": s["workersAllowed"], "maxAgents": s["maxAgents"], "game": workers.game_session(),
             "live": list(chat.LIVE_AGENTS),  # agents whose chats run live: a message while they work goes in at once
+            "guests": True,  # a chat someone else started here (a pc shared per project) runs without YOLO
             "agents": {a: {"yolo": bool(yolo.get(a, {}).get("on")), "trusted": not untrusted(a, folders), "limit": lim.get(a),
                      "resets": (resets or {}).get(a), "windows": (windows or {}).get(a, []), **({"plugin": v} if (v := plugin_version(a)) else {}),  # known before a session
                      **({"cli": v} if (v := cli_version(a, now)) else {}), **({"channel": claude_channel()} if a == "claude" else {}),
@@ -2565,7 +2566,8 @@ def chats_round() -> bool:
         log("remote", f"Chat message from {item.get('by') or '?'} for {AGENTS.get(item.get('agent'), ('?',))[0]}", f"chat {item.get('chat')} in {item.get('folder')}")
         if item.get("worktree") and (wts := load("chat_worktrees.json", {})).get(item["chat"]) != item.get("folder"):  # for its git pill
             save("chat_worktrees.json", dict(list({**wts, item["chat"]: item.get("folder")}.items())[-50:]))
-        chat.start(item, post, log, linked, yolo, fetch)
+        # a guest's chat (this pc shared with them by its owner) never runs YOLO: every tool call asks
+        chat.start(item, post, log, linked, (lambda agent: False) if item.get("guest") else yolo, fetch)
     for d in r.get("diffs", []):  # after the turns (handed out once: never lost to a diff); read-only, linked folders and workers only
         try:
             if "dirs" in d:  # the owner's folder chooser in the web UI, on the same way as a diff: never kept in a log
@@ -3395,16 +3397,19 @@ def main(argv: list):
         started, real = [], (globals()["server"], globals()["folder_links"], chat.start)
         def fake_server(method, path, tok, body=None):
             if path == "/machine/chats":
-                return {"work": [{"chat": "c1", "agent": "codex", "folder": "/x"}], "diffs": [{"id": "d1", "folder": "/not-linked"}]}
+                return {"work": [{"chat": "c1", "agent": "codex", "folder": "/x"}, {"chat": "c2", "agent": "codex", "folder": "/x", "guest": True}],
+                        "diffs": [{"id": "d1", "folder": "/not-linked"}]}
             raise OSError("server away")
         globals().update(server=fake_server, folder_links=lambda: {"linked": [{"path": "/x", "project": "p"}], "candidates": []})
-        chat.start = lambda item, *a: started.append(item["chat"])
+        chat.start = lambda item, post, log, linked, yolo, *a: started.append((item["chat"], yolo("codex")))
+        save("yolo.json", {"codex": {"on": True}})  # YOLO on for this pc's codex: a guest's chat still runs without it
         try:
             chats_round()
         finally:
             globals().update(server=real[0], folder_links=real[1])
             chat.start = real[2]
-        assert started == ["c1"], started
+        save("yolo.json", {})
+        assert started == [("c1", True), ("c2", False)], started
         hook_status.ERRORS = Path(tmp_state) / "hook-errors.jsonl"  # a damaged state file says so, once; a missing one does not
         STATE.mkdir(parents=True, exist_ok=True); (STATE / "damaged.json").write_text("", encoding="utf-8")
         assert load("gone.json", {"d": 1}) == {"d": 1} and not hook_status.ERRORS.exists()

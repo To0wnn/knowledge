@@ -2999,6 +2999,50 @@ def own_token(cfg: dict, dev: dict, steer: bool = True) -> bool:
 
 REMOTE_OFF = "remote control is off for this pc's token"
 
+# A pc shared per project with other members of that project, by its owner only (Tailscale-style consent): "view" shows
+# them the pc's chats in that project, "use" also lets them start chats there and go on in their own. A guest's chat
+# never runs YOLO (its companion asks every tool call) and stops at the next poll once the share or membership goes.
+SHARES_FILE = ADMIN_DIR / "machine_shares.json"  # {machine: {"by": owner, "projects": {project: {person: "view" | "use"}}}}
+SHARE_MODES = ("view", "use")
+
+
+def member_of(user: str, project: str) -> bool:
+    """This person may see the project: an admin, or someone an admin gave it (read or write)."""
+    return bool(user) and project in PROJECTS and (user in ADMINS or project in read_json(USERS_FILE, {}).get(user, {}).get("projects", {}))
+
+
+def share_tokens(mid: str, m: dict, tokens: dict, by: str) -> list[str]:
+    """The tokens of the pc that belong to the person who shared it, with remote control on: a guest's chat runs under
+    those. None left (another owner, remote control off): the share counts for nothing."""
+    owner = {"user": by, "admin": by in ADMINS}
+    return [n for n in m.get("tokens", {}) if n in tokens and own_token(tokens[n], owner)]
+
+
+def shares_for(mid: str, user: str, m: dict | None = None, tokens: dict | None = None) -> dict:
+    """{project: "view" | "use"}: what the owner of pc `mid` shared with this person there, only while they are still a
+    member of the project and the owner's token on that pc still allows remote control."""
+    s = read_json(SHARES_FILE, {}).get(mid) or {}
+    got = {p: g.get(user) for p, g in (s.get("projects") or {}).items() if user and user != s.get("by") and g.get(user) in SHARE_MODES}
+    got = {p: x for p, x in got.items() if member_of(user, p)}
+    if got and m is not None and not share_tokens(mid, m, tokens if tokens is not None else read_json(TOKENS_FILE, {}), s.get("by", "")):
+        return {}
+    return got
+
+
+def shared_row(mid: str, m: dict, shared: dict, now: float) -> dict:
+    """The Machines row of someone else's pc shared with this person: only what the share needs (online, the agents and
+    folders of the projects they may use), never the owner's sessions, errors, workers or other folders."""
+    comp, use = m.get("companion") or {}, {p for p, x in shared.items() if x == "use"}
+    linked = [f for f in (comp.get("folders") or {}).get("linked", []) if f.get("project") in use]
+    agents = sorted(comp.get("agents") or {}) if use else []
+    return {"id": mid, "label": m.get("label", mid), "at": m.get("at", 0), "online": now - m.get("at", 0) < ONLINE, "tokens": [],
+            "own": False, "mine": False, "shared": shared, "agents": {},
+            "companion": {"version": comp.get("version"), "live": comp.get("live"), "guests": comp.get("guests"), "agents": agents,
+                          "folders": {"linked": linked},
+                          "models": {a: v.get("models", []) for a, v in (comp.get("agents") or {}).items() if a in agents},
+                          "current": {}} if comp else None,
+            "actions": []}
+
 
 def remote_refused() -> JSONResponse | None:
     """The answer for a pc whose token has remote control off, on a route that steers it from the web UI; else None."""
@@ -3012,9 +3056,13 @@ def machine_rows() -> list[dict]:
     dev, now, tokens = device.get(), time.time(), read_json(TOKENS_FILE, {})
     seen = lambda n: n in tokens and (dev.get("admin") or tokens[n].get("owner") == dev.get("user"))
     queue, rows, advice, chosen = read_json(MACHINE_ACTIONS, {}), [], advice_data(), read_json(MODEL_CHOICE, {})
+    all_shares = read_json(SHARES_FILE, {})
     for mid, m in read_json(MACHINES_FILE, {}).items():
         names = [n for n in m.get("tokens", {}) if seen(n)]
+        shared = shares_for(mid, dev.get("user", ""), m, tokens) if dev.get("user") and mid in all_shares else {}
         if not names:
+            if shared:
+                rows.append(shared_row(mid, m, shared, now))
             continue
         comp = m.get("companion") or {}
         agents = {}
@@ -3033,8 +3081,8 @@ def machine_rows() -> list[dict]:
                          "sessions": [{k: s.get(k, "") for k in ("project", "task", "at", "worker")} for s in sessions]}
         rows.append({"id": mid, "label": m.get("label", mid), "at": m.get("at", 0), "online": now - m.get("at", 0) < ONLINE,
                      "tokens": names, "own": any(own_token(tokens[n], dev) for n in names), "agents": agents,
-                     "mine": any(own_token(tokens[n], dev, steer=False) for n in names),
-                     "companion": {**{k: comp.get(k) for k in ("version", "self", "at", "workersAllowed", "game", "maxAgents", "folders", "projects", "token", "live", "chats", "chatReviews", "asks", "tools")},
+                     "mine": any(own_token(tokens[n], dev, steer=False) for n in names), "shared": shared,
+                     "companion": {**{k: comp.get(k) for k in ("version", "self", "at", "workersAllowed", "game", "maxAgents", "folders", "projects", "token", "live", "chats", "chatReviews", "asks", "tools", "guests")},
                                    "agents": sorted(comp.get("agents") or {}),
                                    "models": {a: v.get("models", []) for a, v in (comp.get("agents") or {}).items()},
                                    "current": {a: v.get("current", {}) for a, v in (comp.get("agents") or {}).items()}} if comp else None,
@@ -3043,6 +3091,8 @@ def machine_rows() -> list[dict]:
                      "actions": queue.get(mid, [])[-10:]})
         if rows[-1]["companion"] and not rows[-1]["own"]:  # a raw command that waits is its owner's, also for an admin
             rows[-1]["companion"].pop("asks", None)
+        if rows[-1]["mine"]:  # whom its owner shared it with, per project (Machines: Share)
+            rows[-1]["shares"] = (all_shares.get(mid) or {}).get("projects", {})
     for n, cfg in tokens.items():  # plugins before 0.15.0: one row per token, from clients.json
         old = [c for s, c in read_json(CLIENTS_FILE, {}).get(n, {}).items() if now - c.get("at", 0) < SESSION_KEEP]
         if old and seen(n):
@@ -5945,6 +5995,51 @@ async def ui_machine_forget(request: Request):
     return JSONResponse({"ok": True})
 
 
+def share_candidates(row: dict, me: str) -> list[dict]:
+    """Per project linked on the owner's pc that the owner sees: the project's other members and what each was given."""
+    s = (read_json(SHARES_FILE, {}).get(row["id"]) or {})
+    given = (s.get("projects") or {}) if s.get("by") == me else {}
+    users = read_json(USERS_FILE, {})
+    linked = sorted({f.get("project") for f in ((row.get("companion") or {}).get("folders") or {}).get("linked", []) if f.get("project") in PROJECTS})
+    return [{"project": p, "members": [{"user": u, "mode": (given.get(p) or {}).get(u, "")}
+                                       for u in sorted({u for u, c in users.items() if p in c.get("projects", {})} | ADMINS) if u != me]}
+            for p in linked if member_of(me, p)]
+
+
+@server.custom_route("/ui/api/machine/share", methods=["GET", "POST"])
+@signed_in
+async def ui_machine_share(request: Request, body: dict):
+    """GET ?machine=: per project linked on that pc, its other members and what each may (share_candidates).
+    POST {machine, project, user, mode: "view" | "use" | ""}: the pc's owner shares it with one member for one project,
+    or takes that back ("", at once: a running guest turn stops at the next poll)."""
+    b = body if request.method == "POST" else dict(request.query_params)
+    mid, me = str(b.get("machine", "")), device.get().get("user", "")
+    row = next((r for r in await asyncio.to_thread(machine_rows) if r["id"] == mid), None)
+    if not row or not row["mine"] or row.get("old") or not me:
+        return JSONResponse({"error": "only the owner of a pc shares it"}, status_code=403)
+    if request.method == "GET":
+        return JSONResponse({"projects": await asyncio.to_thread(share_candidates, row, me)})
+    project, user, mode = str(b.get("project", "")), str(b.get("user", "")), str(b.get("mode") or "")
+    if mode and mode not in SHARE_MODES:
+        raise ValueError("mode is view, use or empty")
+    cands = {c["project"]: {m["user"] for m in c["members"]} for c in await asyncio.to_thread(share_candidates, row, me)}
+    if mode and user not in cands.get(project, set()):
+        raise ValueError(f"{user or 'that person'} is not another member of {project or 'that project'} linked on this pc")
+
+    def change(d):
+        s = d.get(mid) or {}
+        projects = (s.get("projects") or {}) if s.get("by") == me else {}  # a pc that changed owner starts again
+        got = {k: v for k, v in (projects.get(project) or {}).items() if k != user}
+        projects = {**{k: v for k, v in projects.items() if k != project}, **({project: {**got, user: mode} if mode else got} if (got or mode) else {})}
+        if projects:
+            d[mid] = {"by": me, "projects": projects}
+        else:
+            d.pop(mid, None)
+    await asyncio.to_thread(update_state, SHARES_FILE, change)
+    audit("machine-share", f"{mid} {project} {user} {mode or 'off'}")
+    return JSONResponse({"ok": True})
+
+
 def action_args(action: str, args: dict) -> dict:
     """The fixed remote actions and their arguments, checked; anything else raises ValueError. No free text reaches a
     pc: the companion runs each of these with its own code."""
@@ -6259,6 +6354,7 @@ def chat_works(c: dict) -> bool:
 
 def chat_meta(c: dict) -> dict:
     return {**{k: c.get(k) for k in ("id", "agent", "folder", "project", "title", "by", "created", "updated", "status", "session")},
+            "guest": bool(c.get("guest")),  # started by someone the pc's owner shared it with
             "raised": c.get("raised") or c.get("updated"),  # when it last wanted you: the grid's order
             "subs": sum(1 for s in (c.get("subs") or {}).values() if s == "running"),  # subagents running now
             "closed": bool(c.get("closed")),
@@ -6285,7 +6381,9 @@ def chat_token_ok(c: dict, dev: dict) -> bool:
     still one its owner may steer machines with (own_token today, not only the snapshot taken then)."""
     cfg = read_json(TOKENS_FILE, {}).get(dev.get("name", ""))
     by = c.get("by", "")
-    return dev.get("name") in c.get("tokens", []) and bool(cfg) and own_token(cfg, {"user": by, "admin": by in ADMINS})
+    if not (dev.get("name") in c.get("tokens", []) and cfg):
+        return False
+    return guest_chat_ok(c, dev.get("machine", ""), cfg) if c.get("guest") else own_token(cfg, {"user": by, "admin": by in ADMINS})
 
 
 def asks_open(c: dict, now: float) -> list:
@@ -6362,26 +6460,57 @@ def own_machine(mid: str) -> dict | None:
     return row if row and row["own"] and not row.get("old") else None
 
 
+def chat_machine(mid: str) -> dict | None:
+    """The Machines row of `mid` when this person may steer it or it was shared with them for a project, else None."""
+    row = next((r for r in machine_rows() if r["id"] == mid), None)
+    return row if row and not row.get("old") and (row["own"] or row.get("shared")) else None
+
+
+def chat_rights(row: dict, c: dict) -> str:
+    """What this person may do with chat `c` on pc `row`: "act" (send, stop, approve, archive) on their own pc and in a
+    chat they started there as a guest with "use"; "view" in the other chats of a project shared with them; else ""."""
+    if row["own"]:
+        return "act"
+    mode = (row.get("shared") or {}).get(c.get("project") or "")
+    if not mode:
+        return ""
+    return "act" if mode == "use" and c.get("guest") and c.get("by") == device.get().get("user") else "view"
+
+
+def guest_chat_ok(c: dict, mid: str, cfg: dict) -> bool:
+    """A guest's chat may still run under this token: the owner still shares the project with its starter for "use",
+    the starter is still a member, and the token is the sharing owner's with remote control on."""
+    s = read_json(SHARES_FILE, {}).get(mid) or {}
+    by = c.get("by", "")
+    return (bool(c.get("guest")) and ((s.get("projects") or {}).get(c.get("project") or "") or {}).get(by) == "use"
+            and by != s.get("by") and member_of(by, c.get("project") or "") and own_token(cfg, {"user": s.get("by", ""), "admin": s.get("by") in ADMINS}))
+
+
 def not_own(mid: str) -> str:
     """Why this person may not steer `mid`: their own pc whose tokens all have remote control off, or not theirs."""
     row = next((r for r in machine_rows() if r["id"] == mid), None)
     return REMOTE_OFF if row and row["mine"] and not row.get("old") else "not a machine of your own tokens (with plugin 0.15.0 or newer)"
 
 
-async def chat_request(request: Request, need_body: bool) -> tuple:
-    """(row, body, chat file, chat) for a UI chat route on one of this person's own machines; raises PermissionError
-    or ValueError."""
+async def chat_request(request: Request, need_body: bool, act: bool = True) -> tuple:
+    """(row, body, chat file, chat) for a UI chat route on one of this person's own machines, or a chat they may see
+    (act=False) or steer (act) on a pc shared with them (chat_rights); raises PermissionError or ValueError."""
     b = (await request.json()) if need_body else dict(request.query_params)
     if not isinstance(b, dict):
         raise ValueError("send JSON")
     mid, cid = str(b.get("machine", "")), str(b.get("id", ""))
-    row = await asyncio.to_thread(own_machine, mid)
+    row = await asyncio.to_thread(chat_machine, mid)
     if not row:
         raise PermissionError(await asyncio.to_thread(not_own, mid))
     f = chat_file(mid, cid)
     c = await asyncio.to_thread(read_json, f, None)
     if not c:
         raise ValueError("unknown chat")
+    rights = chat_rights(row, c)
+    if not rights:
+        raise ValueError("unknown chat")  # a chat of a project not shared with them: as if it did not exist
+    if act and rights != "act":
+        raise PermissionError("you may read this chat, not steer it: it is not yours (start your own chat on this pc)")
     return row, b, f, c
 
 
@@ -6395,22 +6524,23 @@ async def ui_chats(request: Request):
     each with its machine). POST {machine, agent, folder}: a new chat with an agent installed there, in a folder linked
     there (as the companion reports them)."""
     if request.method == "GET" and "machine" not in request.query_params:
-        rows = [r for r in await asyncio.to_thread(machine_rows) if r["own"] and not r.get("old")]
-        chats = [{**chat_meta(c), "machine": r["id"], "label": r["label"], "online": r["online"]} for r in rows
+        rows = [r for r in await asyncio.to_thread(machine_rows) if (r["own"] or r.get("shared")) and not r.get("old")]
+        chats = [{**chat_meta(c), "machine": r["id"], "label": r["label"], "online": r["online"], "rights": rights} for r in rows
                  for f in ((CHATS_DIR / r["id"]).glob(CHAT_GLOB) if (CHATS_DIR / r["id"]).is_dir() else [])
-                 if (c := read_json(f, None))]
+                 if (c := read_json(f, None)) and (rights := chat_rights(r, c))]
         return JSONResponse({"chats": sorted(chats, key=lambda c: -(c.get("updated") or 0))})
     try:
         b = await request.json() if request.method == "POST" else dict(request.query_params)
         mid = str(b.get("machine", ""))
-        row = await asyncio.to_thread(own_machine, mid)
+        row = await asyncio.to_thread(chat_machine, mid)
         if not row:
             raise PermissionError(await asyncio.to_thread(not_own, mid))
         d = CHATS_DIR / chat_file(mid, "0" * 12).parent.name
     except (ValueError, AttributeError, TypeError, PermissionError) as e:
         return chat_error(e)
     if request.method == "GET":
-        chats = [chat_meta(c) for f in (d.glob(CHAT_GLOB) if d.is_dir() else []) if (c := read_json(f, None))]
+        chats = [{**chat_meta(c), "rights": rights} for f in (d.glob(CHAT_GLOB) if d.is_dir() else [])
+                 if (c := read_json(f, None)) and (rights := chat_rights(row, c))]
         return JSONResponse({"chats": sorted(chats, key=lambda c: -(c.get("updated") or 0)), "online": row["online"]})
     comp = row.get("companion") or {}
     agent, folder = str(b.get("agent", "")), str(b.get("folder", ""))
@@ -6420,12 +6550,25 @@ async def ui_chats(request: Request):
     if not project:
         return JSONResponse({"error": "pick a folder linked to a project on that pc"}, status_code=400)
     dev, tokens, now = device.get(), read_json(TOKENS_FILE, {}), time.time()
+    guest = not row["own"]
+    if guest:  # someone else's pc: only in a project its owner shared with this person for "use", on a companion that keeps it safe
+        if (row.get("shared") or {}).get(project) != "use":
+            return JSONResponse({"error": f"{row['label']} is not shared with you for {project} (its owner shares it under Machines)"}, status_code=403)
+        if not comp.get("guests"):
+            return JSONResponse({"error": f"the knowledge plugin on {row['label']} is too old for a shared chat: its owner updates it first"}, status_code=409)
+        by = (read_json(SHARES_FILE, {}).get(mid) or {}).get("by", "")
+        owned = share_tokens(mid, read_json(MACHINES_FILE, {}).get(mid) or {}, tokens, by)
+    else:
+        owned = [n for n in row["tokens"] if n in tokens and own_token(tokens[n], dev)]
     cid = secrets.token_hex(6)
     c = {"id": cid, "agent": agent, "folder": folder, "project": project, "title": "", "by": dev.get("user", ""), "created": now,
-         "updated": now, "status": "idle", "session": "", "next": 0, "seen": 0, "events": [],
-         "tokens": [n for n in row["tokens"] if n in tokens and own_token(tokens[n], dev)],
-         **({"worktree": True} if b.get("worktree") is True else {})}  # its own git worktree and branch (chat/<id>) on the pc
-    why_own = await asyncio.to_thread(checkout_in_use, comp, d, folder, now) if "worktree" not in b else ""
+         "updated": now, "status": "idle", "session": "", "next": 0, "seen": 0, "events": [], "tokens": owned,
+         # a guest always works in a worktree of its own: never in the owner's checkout, and its branch gets a Review card there
+         **({"worktree": True} if b.get("worktree") is True or guest else {}), **({"guest": True} if guest else {})}
+    if guest:
+        chat_add(c, "info", f"A chat on {row['label']}, shared with you for {project}: its owner sees it, every tool call asks first "
+                            "(never YOLO), and it runs on the owner's agent subscription.")
+    why_own = await asyncio.to_thread(checkout_in_use, comp, d, folder, now) if "worktree" not in b and not guest else ""
     if why_own:  # nobody chose: a second writer in one checkout takes the other's half work along in its commits
         c["worktree"] = True
         chat_add(c, "info", f"Own branch by itself: {why_own}. Close the chat when it is done: its branch gets a Review card.")
@@ -6439,7 +6582,9 @@ async def ui_chats(request: Request):
             update_state(d / "queue.json", lambda q, k=f.stem: q.pop(k, None))
         write_json(chat_file(mid, cid), c)
     await asyncio.to_thread(create)
-    audit("chat-new", f"{mid} {agent} {folder}")
+    audit("chat-new", f"{mid} {agent} {folder}" + (f" guest {c['by']}" if guest else ""))
+    if guest and (by in ADMINS or not by):  # the admin hears it on Matrix; another owner sees it at the top of their chat list
+        notify(f"Knowledge: {c['by']} started a {AGENT_NAMES.get(agent, agent)} chat on your pc {row['label']} ({project}).")
     return JSONResponse({"ok": True, "chat": chat_meta(c)})
 
 
@@ -6552,13 +6697,13 @@ def board_items() -> list[dict]:
     """The Agents cockpit's start screen: chats and workers on this person's own pcs, task lines in the projects they
     see, each in a column: needs (needs you), running, open, done (last 24 h)."""
     now, items = time.time(), []
-    rows = [r for r in machine_rows() if r["own"] and not r.get("old")]
+    rows = [r for r in machine_rows() if (r["own"] or r.get("shared")) and not r.get("old")]
     for r in rows:
         comp, base = r.get("companion") or {}, {"machine": r["id"], "label": r["label"], "online": r["online"]}
         git, chat_git = {f["path"]: f.get("git") for f in (comp.get("folders") or {}).get("linked", [])}, comp.get("chats") or {}
         d = CHATS_DIR / r["id"]
         for f in (d.glob(CHAT_GLOB) if d.is_dir() else []):
-            if not (c := read_json(f, None)):
+            if not (c := read_json(f, None)) or chat_rights(r, c) != "act":  # on a shared pc: only the chats they started there
                 continue
             col, line = chat_card(c)
             if col:
@@ -6567,7 +6712,7 @@ def board_items() -> list[dict]:
                               "title": c.get("title") or "New chat", "folder": c.get("folder"), "at": c.get("updated") or 0, "status": c.get("status"),
                               "line": line, "git": chat_git.get(c["id"]) if c.get("worktree") else git.get(c.get("folder")), "outcome": chat_outcome(c),
                               "subs": sum(1 for s in (c.get("subs") or {}).values() if s == "running")})
-            if rv := chat_review_item(r, c):
+            if r["own"] and (rv := chat_review_item(r, c)):  # Merge is the owner's
                 items.append(rv)
             for a in asks_open(c, now):  # one Needs-you item per open approval, answered right there
                 items.append({**base, "kind": "ask", "col": "needs", "id": a["id"], "chat": c["id"], "agent": c.get("agent"),
@@ -6583,7 +6728,7 @@ def board_items() -> list[dict]:
                           "key": f"terminal:{r['id']}/{a['agent']}/{a['session']}", "sig": str(a["at"]), "title": " ".join(x for x in (a["tool"], a["detail"]) if x)[:160],
                           "at": a["at"], "line": "a terminal session may wait for your approval; a command you allowed may also still run" if a["agent"] == "agy"
                           else "a terminal session asks your approval, or still runs what you allowed: answer it in that terminal"})
-        for a, ag in r["agents"].items():
+        for a, ag in (r["agents"] if r["own"] else {}).items():  # a shared pc: its owner's workers stay theirs
             for w in ag.get("workers", []):
                 st, ended = w.get("status"), w.get("ended") or w.get("started") or 0
                 lost = st == "running" and not r["online"]  # its pc went offline: nobody knows whether it still runs
@@ -6870,17 +7015,18 @@ async def ui_chat(request: Request):
     """?machine=&id=&after=<n>: one chat, its events after n, and whether its pc is online. &tail=<k>: only the newest k
     of them ("older": more came before); &before=<n>&tail=<k>: the k before event n (a long chat loads as you scroll)."""
     try:
-        row, b, f, c = await chat_request(request, False)
+        row, b, f, c = await chat_request(request, False, act=False)
         after, before, tail = int(b.get("after") or 0), int(b.get("before") or 0), max(0, min(int(b.get("tail") or 0), 1000))
     except (ValueError, AttributeError, TypeError, PermissionError) as e:
         return chat_error(e)
-    if c.get("next", 0) > c.get("seen", 0) and not b.get("peek"):  # opened: its newest output is seen, off "Needs you"
+    rights = chat_rights(row, c)
+    if c.get("next", 0) > c.get("seen", 0) and not b.get("peek") and rights == "act":  # opened: its newest output is seen, off "Needs you"
         await asyncio.to_thread(update_state, f, lambda d: d.update(seen=max(d.get("seen", 0), c.get("next", 0))))
     asks = [{k: a.get(k) for k in ("id", "tool", "detail", "reason", "once_only", "at", "expires")} for a in asks_open(c, time.time())]
     events = [e for e in c.get("events", []) if (e["n"] < before if before else e["n"] > after)]
     older = bool(tail) and len(events) > tail and (bool(before) or not after)
     events = events[-tail:] if older else events
-    return JSONResponse({"chat": chat_meta(c), "events": events, "older": older, "trimmed": bool(c.get("trimmed")),
+    return JSONResponse({"chat": {**chat_meta(c), "rights": rights}, "events": events, "older": older, "trimmed": bool(c.get("trimmed")),
                          "online": row["online"], "at": row["at"], "label": row["label"], "asks": asks, "now": time.time(),
                          "models": ((row.get("companion") or {}).get("models") or {}).get(c.get("agent"), [])})
 
@@ -6889,7 +7035,8 @@ async def ui_chat(request: Request):
 async def ui_chat_commands(request: Request):
     """?machine=&agent=: the slash commands that agent offers on that pc (one of this person's own), for the chat box."""
     mid, agent = request.query_params.get("machine", ""), request.query_params.get("agent", "")
-    if not await asyncio.to_thread(own_machine, mid):
+    row = await asyncio.to_thread(chat_machine, mid)
+    if not row or not (row["own"] or "use" in (row.get("shared") or {}).values()):
         return JSONResponse({"error": await asyncio.to_thread(not_own, mid)}, status_code=403)
     m = (await asyncio.to_thread(read_json, MACHINES_FILE, {})).get(mid) or {}
     comp = m.get("companion") or {}  # its version: a plugin before 0.43.0 lists none, which the box says
@@ -6909,7 +7056,7 @@ async def ui_chat_shell(request: Request):
     """?machine=&id=&shell=: the newest output of one of the chat's background shells, as its pc last sent it
     (text "" and at 0 until it did); asking keeps it watched for SHELL_WATCH_SECONDS."""
     try:
-        row, b, f, c = await chat_request(request, False)
+        row, b, f, c = await chat_request(request, False, act=False)
         sid = str(b.get("shell", ""))
         if sid not in {x["id"] for x in c.get("bg_list") or []}:
             raise ValueError("no such shell running in this chat")
@@ -7161,13 +7308,16 @@ async def ui_git_diff(request: Request):
     try:
         b = (await request.json()) if request.method == "POST" else dict(request.query_params)
         mid = str(b.get("machine", ""))
-        row = await asyncio.to_thread(own_machine, mid)
-        if not row:
+        row = await asyncio.to_thread(chat_machine, mid)
+        if not row or not row["own"] and not (request.method == "GET" or b.get("chat")):  # a shared pc: only a chat's diff
             raise PermissionError(await asyncio.to_thread(not_own, mid))
         q = chat_file(mid, "0" * 12).parent / "diffs.json"
+        guest_tokens = None
         if request.method == "GET":
             d = read_json(q, {}).get(str(b.get("id", "")))
             if not d:
+                raise ValueError("unknown diff request")
+            if not row["own"] and d.get("by") != device.get().get("user"):
                 raise ValueError("unknown diff request")
             if "dirs" in d and d.get("status") == "done":  # the names on someone's disk stay on the server no longer than needed
                 await asyncio.to_thread(update_state, q, lambda x: x.pop(str(b.get("id", "")), None))
@@ -7178,6 +7328,10 @@ async def ui_git_diff(request: Request):
             target = {"dirs": str(b["dirs"])}
         elif b.get("chat"):
             c = read_json(chat_file(mid, str(b["chat"])), None) or {}
+            if not row["own"]:
+                if not (c and chat_rights(row, c)):
+                    raise ValueError("unknown chat")
+                guest_tokens = c.get("tokens", [])  # the owner's tokens the chat runs under
             target = {"folder": c.get("folder"), **({"chat": c["id"]} if c.get("worktree") else {})}  # its companion diffs that chat's worktree
         elif re.fullmatch(r"\w[\w.-]{0,79}/\w[\w.-]{0,79}", str(b.get("worker", ""))):
             target = {"worker": b["worker"]}
@@ -7194,7 +7348,8 @@ async def ui_git_diff(request: Request):
     def add(d):
         for k in [k for k, v in d.items() if now - v.get("at", 0) > DIFF_KEEP]:
             d.pop(k)
-        d[rid] = {**target, "status": "waiting", "at": now, "tokens": [n for n in row["tokens"] if n in tokens and own_token(tokens[n], dev)]}
+        d[rid] = {**target, "status": "waiting", "at": now, "by": dev.get("user", ""),
+                  "tokens": guest_tokens if guest_tokens is not None else [n for n in row["tokens"] if n in tokens and own_token(tokens[n], dev)]}
     q.parent.mkdir(parents=True, exist_ok=True)
     await asyncio.to_thread(update_state, q, add)
     return JSONResponse({"ok": True, "id": rid})
@@ -7298,16 +7453,29 @@ def file_response(f: Path) -> Response:
                         filename=f.name, headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=86400"})
 
 
+def file_in_view(row: dict, ref: str) -> bool:
+    """The attachment `ref` (<id>/<name>) appears in a chat on that pc this person may see."""
+    d, mark = CHATS_DIR / row["id"], f"⟦file:{ref}⟧"
+    return bool(ref) and any((c := read_json(f, None)) and chat_rights(row, c) and mark in json.dumps(c.get("events", []), ensure_ascii=False)
+                             for f in (d.glob(CHAT_GLOB) if d.is_dir() else []))
+
+
 @server.custom_route("/ui/api/chat/file", methods=["GET", "POST"])
 async def ui_chat_file(request: Request):
     """POST ?machine= (body: the file, X-Filename header): attach a file for a message to a chat there; answers the
     mark to put in the message. GET ?machine=&file=<id>/<name>: the file again (an image in the chat)."""
     try:
         mid = request.query_params.get("machine", "")
-        if not await asyncio.to_thread(own_machine, mid):
+        row = await asyncio.to_thread(chat_machine, mid)
+        if not row:
             raise PermissionError("not a machine of your own tokens")
         if request.method == "GET":
-            return file_response(await asyncio.to_thread(chat_file_path, mid, request.query_params.get("file", "")))
+            ref = request.query_params.get("file", "")
+            if not row["own"] and not await asyncio.to_thread(file_in_view, row, ref):  # a shared pc: only files of chats they may see
+                raise PermissionError("not a file of a chat you may see")
+            return file_response(await asyncio.to_thread(chat_file_path, mid, ref))
+        if not row["own"] and "use" not in (row.get("shared") or {}).values():
+            raise PermissionError("this pc is shared with you to read, not to chat")
         data = await request.body()
         if not data or len(data) > CHAT_FILE_MAX:
             return JSONResponse({"error": "a file is 1 byte to 10 MB"}, status_code=413)
@@ -7357,7 +7525,7 @@ async def machine_chats(request: Request):
     if dev.get("agents") is False:  # remote control off: no work, stops, diffs or answers for this pc
         return JSONResponse({"work": [], "stop": [], "busy": [], "active": False, "agents": False})
     q_path, out = CHATS_DIR / mid / "queue.json", {"work": [], "stop": [], "busy": []}
-    all_prefs = read_json(PREFS_FILE, {})
+    all_prefs, revoked = read_json(PREFS_FILE, {}), []
 
     def change(q):
         for cid, e in list(q.items()):
@@ -7369,8 +7537,15 @@ async def machine_chats(request: Request):
                 if not c:
                     q.pop(cid)
                 continue
+            if c.get("guest") and not chat_token_ok(c, dev):  # the share or membership went: nothing more runs, a running turn stops
+                if e.get("busy"):
+                    out["stop"].append(cid)
+                q.pop(cid)
+                revoked.append(cid)
+                continue
+            extra_guest = {"guest": True} if c.get("guest") else {}  # its companion runs it without YOLO
             rdr = (all_prefs.get(c.get("by", "") or "", {}).get("chat_reader") or {}).get("id") or ""
-            extra = {"reader": rdr} if rdr else {}
+            extra = {**({"reader": rdr} if rdr else {}), **extra_guest}
             if e.get("busy"):
                 out["busy"].append(cid)
                 if e.get("stop"):
@@ -7397,6 +7572,9 @@ async def machine_chats(request: Request):
                 e["busy"] = True
     if q_path.exists():
         await asyncio.to_thread(update_state, q_path, change)
+    for cid in revoked:  # after the queue's lock: update_state's lock is not reentrant
+        await asyncio.to_thread(update_state, chat_file(mid, cid), lambda c: (c.update(status="idle", pending=[]),
+                                chat_add(c, "info", "Stopped: this pc is no longer shared with you for this project.")))
     diffs = []
 
     def hand_out(d):
@@ -7513,6 +7691,8 @@ async def machine_chat_events(request: Request):
     c = await asyncio.to_thread(read_json, f, None)
     if not c or dev["name"] not in c.get("tokens", []):
         return JSONResponse({"error": "not a chat of this machine"}, status_code=404)
+    if c.get("guest") and not await asyncio.to_thread(chat_token_ok, c, dev):  # its share was taken back: nothing more lands
+        return JSONResponse({"error": "this chat's share was taken back"}, status_code=403)
 
     auto = b.get("auto") is True and not b.get("done")  # the agent went on by itself (a live chat): a turn without a message
     # an Archive turn's end without git (a companion restart in the turn, a hung git, a companion before 0.43.41): the
@@ -7923,6 +8103,7 @@ async def machine_report(request: Request):
                            "waits": str(me.get("waits") or "")[:80],
                            "later": [a for a in (me.get("later") or []) if a in AGENT_OWNERS] if isinstance(me.get("later"), list) else []},
                   "live": [a for a in (b.get("live") or []) if a in AGENT_OWNERS],  # chats that take a message while they work
+                  "guests": b.get("guests") is True,  # runs a guest's chat without YOLO (a pc shared per project)
                   "maxAgents": int(b["maxAgents"]) if isinstance(b.get("maxAgents"), int) else None,  # None: a companion before the setting
                   "game": str(b.get("game") or "")[:80],
                   "agents": {a: {"yolo": v.get("yolo") is True, "trusted": v.get("trusted") if isinstance(v.get("trusted"), bool) else None,

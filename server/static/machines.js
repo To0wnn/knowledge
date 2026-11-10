@@ -213,6 +213,10 @@ function pcHead(m, here) {
   name.append(dot, el("h3", null, m.label));
   if (here && m.id === here) name.append(el("span", "pill this", "This pc"));
   if (m.mine && !m.own) { const p = el("span", "pill", "remote control off"); p.title = "Your pc, but its token does not allow steering it from here (Admin › Tokens)"; name.append(p); }
+  else if (!m.own && Object.keys(m.shared || {}).length) { // its owner shared it with you for some projects
+    const sh = Object.entries(m.shared), p = el("span", "pill", `shared: ${sh.map(([k, v]) => `${shown(k)} (${v})`).join(", ")}`);
+    p.title = "Its owner shared it with you: view shows its chats in that project, use also lets you start your own chats there (Chats)"; name.append(p);
+  }
   else if (!m.own) { const p = el("span", "pill", "view only"); p.title = "Someone else's pc, or one not marked as your own device: you see it, you cannot steer it"; name.append(p); }
   const behind = pluginBehind(m), meta = el("div", "mx-pc-meta");
   meta.append(behind ? differs(`Knowledge ${c?.version || "?"}`) : val(`Knowledge ${c?.version || "?"}`));
@@ -227,7 +231,8 @@ function pcHead(m, here) {
   const old = agentsBehind(m);
   if (old.length && steers(m)) acts.append(machineButton("Update agents", `Update ${old.map((a) => AGENT_NAME[a] || a).join(", ")} with each one's own update command (a running session keeps its version until it restarts)`,
     () => machineAction(m, "update_agents"), pendingAction(m, "update_agents"), "btn small primary"));
-  if (steers(m) && (c.agents || []).length && (c.folders?.linked || []).length) acts.append(machineButton("Chat", "Talk to an agent on this pc (Chats)", async () => { go("#/chats"); if (!ck.machines.length) await ckSummary().catch(() => {}); ckNewChat(m.id); }));
+  const sharedUse = !m.own && m.online && Object.values(m.shared || {}).includes("use") && (c?.folders?.linked || []).some((f) => m.shared[f.project] === "use");
+  if ((steers(m) || sharedUse) && (c.agents || []).length && (c.folders?.linked || []).length) acts.append(machineButton("Chat", "Talk to an agent on this pc (Chats)", async () => { go("#/chats"); if (!ck.machines.length) await ckSummary().catch(() => {}); ckNewChat(m.id); }));
   if (m.mine) acts.append(pcMore(m));
   if (acts.childNodes.length) box.append(acts);
   if (c) box.append(steers(m) ? machineSwitch("Runs workers", c.workersAllowed, pendingAction(m, "workers_allowed"), `Workers on ${m.label}`, (on) => {
@@ -250,6 +255,7 @@ function pcMore(m) {
   const item = (text, fn) => list.append(actionButton(text, () => { menu.open = false; fn(); }, ""));
   if (steers(m)) item("Update agents", () => machineAction(m, "update_agents"));
   item("Activity…", () => pcActivity(m));
+  if (!m.old) item("Share…", () => pcShare(m));
   item("Forget this pc…", () => forgetPc(m));
   menu.append(sum, list);
   return menu;
@@ -258,6 +264,41 @@ async function forgetPc(m) {
   if (!confirm(`Forget ${m.label}? It leaves this list and comes back when it reports again; its actions, history and chats on the server go.`)) return;
   try { await api("/ui/api/machines/forget", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: m.id }) }); } catch (e) { toast(e.message); }
   loadMachines();
+}
+// Share this pc per project with its other members: View shows them its chats in that project, Use also lets them start
+// chats there (never YOLO, every tool call asks them, on your agent subscription). Off takes it back at once.
+const SHARE_WORDS = { "": "Off", view: "View chats", use: "View and use" };
+async function pcShare(m) {
+  const d = el("dialog", "mx-dialog"), h = el("h3", null, `Share ${m.label}`), body = el("div");
+  const close = el("button", "btn", "Close"); close.type = "button"; close.onclick = () => d.close();
+  d.append(h, el("p", "muted", "Per project linked on this pc, with the project's other members. View: they see this pc's chats in that project. "
+    + "Use: they can also start chats here in that project. Their chats always ask before each tool call (never YOLO), run as you on this pc, "
+    + "on your agent subscription, in a worktree of their own; you see those chats and can stop them. Off takes it back at once."), body, close);
+  d.onclose = () => { d.remove(); loadMachines(); };
+  document.body.append(d); d.showModal();
+  let res;
+  try { res = await api(`/ui/api/machine/share?machine=${encodeURIComponent(m.id)}`); } catch (e) { body.append(el("p", "machine-error", e.message)); return; }
+  const projects = (res.projects || []).filter((p) => p.members.length);
+  if (!projects.length) { body.append(el("p", "muted", "No project linked on this pc has other members: an admin adds people to a project on the admin page.")); return; }
+  for (const p of projects) {
+    const sec = el("section"), ul = el("ul", "machine-list");
+    sec.append(el("h4", null, shown(p.project)));
+    for (const u of p.members) {
+      const li = el("li"), sel = el("select", "small");
+      sel.setAttribute("aria-label", `${u.user} on ${p.project}`);
+      for (const [v, t] of Object.entries(SHARE_WORDS)) sel.append(new Option(t, v));
+      sel.value = u.mode || "";
+      sel.onchange = async () => {
+        if (sel.value === "use" && !confirm(`Let ${u.user} run agents on ${m.label} in ${p.project}?\n\nTheir agents run as you on this pc (files, network, your agent subscription). Every tool call asks them first.`)) { sel.value = u.mode || ""; return; }
+        try {
+          await api("/ui/api/machine/share", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: m.id, project: p.project, user: u.user, mode: sel.value }) });
+          u.mode = sel.value; toast(`${u.user}: ${SHARE_WORDS[sel.value]} on ${m.label} (${p.project})`, false);
+        } catch (e) { sel.value = u.mode || ""; toast(e.message); }
+      };
+      li.append(el("span", null, u.user), " ", sel); ul.append(li);
+    }
+    sec.append(ul); body.append(sec);
+  }
 }
 // What was asked of a pc and how it went, in a dialog: it is looked at rarely.
 function pcActivity(m) {

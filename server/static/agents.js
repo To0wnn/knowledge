@@ -37,6 +37,8 @@ async function ckSummary() {
   ck.summaryAt = Date.now();
   const [ms, cs, bd] = await Promise.all([api("/ui/api/machines"), api("/ui/api/chats"), api("/ui/api/board").catch(() => null)]);
   ck.machines = ms.machines.filter((m) => m.own && !m.old); ck.ready = true; ck.error = "";
+  // someone else's pcs shared with you for a project to "use": new chats there too (Machines: Share, on the owner's side)
+  ck.shared = ms.machines.filter((m) => !m.own && !m.old && Object.values(m.shared || {}).includes("use"));
   for (const m of ck.machines) for (const x of m.actions || []) { // a Merge queued from a card: say how it went on the pc
     const what = ck.waits.get(x.id);
     if (what && (x.status === "done" || x.status === "failed")) { ck.waits.delete(x.id); toast(`${what}: ${x.result || x.status}`, x.status === "failed"); }
@@ -129,6 +131,8 @@ function ckSubRows(c) { // a chat's subagents, each a chat of its own, under it:
   return rows;
 }
 const ckOnlinePc = () => ck.machines.some((m) => m.online && m.companion);
+const ckPc = (id) => ck.machines.find((m) => m.id === id) || (ck.shared || []).find((m) => m.id === id); // own, else shared with you
+const ckLinked = (m) => (m.companion?.folders?.linked || []).filter((f) => m.own || m.shared?.[f.project] === "use");
 // Getting started, instead of an empty list: the help page's install line for this pc's system (help.html#install),
 // then linking a folder and the first chat.
 const INSTALL_CMD = {
@@ -196,7 +200,8 @@ function ckList() {
   hist.replaceChildren();
   for (const c of rows.slice(0, 60)) {
     const st = ckState(c), li = el("li"), b = el("a", `ck-chat ${st}`), out = (ck.board || []).find((i) => i.kind === "chat" && ckKey(i) === ckKey(c))?.outcome;
-    const meta = `${CK_STATE[st]} · ${AGENT_NAME[c.agent] || c.agent} · ${c.label} · ${ckShort(c.folder)} · ${ago(c.updated)}`;
+    const who = c.rights === "view" || c.guest ? ` · by ${c.by || "?"}` : ""; // someone else's chat, or a guest's on your pc
+    const meta = `${CK_STATE[st]} · ${AGENT_NAME[c.agent] || c.agent} · ${c.label}${who} · ${ckShort(c.folder)} · ${ago(c.updated)}`;
     b.href = `#/chats/${encodeURIComponent(c.id)}?solo=1`; b.dataset.row = `chat:${ckKey(c)}`; // a click opens it here; Ctrl, Cmd or the middle button in a tab of its own
     b.append(el("span", "ck-dot", ""), el("span", "ck-chat-title", c.title || "(no message yet)"), el("small", null, out || meta));
     if (out) b.title = meta;
@@ -1051,7 +1056,7 @@ function ckCatalog(pcs) { // one entry per agent and model: [{agent, id, name, e
 const levels = (m) => CK_EFFORTS.filter((e) => (m.efforts || []).includes(e));
 const ckModelOf = (card) => (card.catalog || []).find((x) => x.agent === card.pick?.agent && x.id === card.pick?.id);
 function ckPicker(card) {
-  const draft = card.meta.draft, mine = ck.machines.find((m) => m.id === card.meta.machine);
+  const draft = card.meta.draft, mine = ckPc(card.meta.machine);
   card.catalog = ckCatalog(draft ? ckDraftPcs() : mine ? [mine] : []);
   if (!draft && !card.catalog.some((x) => x.agent === card.meta.agent)) { card.picks.hidden = true; return; }
   if (!card.pick?.touched) {
@@ -1126,14 +1131,14 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !documen
 // A new chat is a draft in the chat pane (#/chats/new): an empty box with the model chip and the folder; the chat is
 // made on the first message. The project is the sidebar's; the pc follows from the model and the folder.
 const CK_DRAFT = { machine: "draft", id: "new", draft: true, agent: "", title: "", folder: "", label: "", status: "idle" };
-function ckDraftPcs() { // own pcs online with a companion that reports models and has a linked folder in the project
-  return ck.machines.filter((m) => m.own !== false && m.online && (m.companion?.agents || []).length
-    && (m.companion?.folders?.linked || []).some((f) => !agentProject || f.project === agentProject));
+function ckDraftPcs() { // own and shared pcs online with a companion that reports models and has a linked folder in the project
+  return [...ck.machines, ...(ck.shared || [])].filter((m) => m.online && (m.companion?.agents || []).length
+    && ckLinked(m).some((f) => !agentProject || f.project === agentProject));
 }
 function ckDraftFolders(card) { // [{machine, label, path, project}] that can run the chosen model
   const x = ckModelOf(card), pcs = ckDraftPcs().filter((m) => x ? x.pcs.includes(m.id) : (m.companion.agents || []).includes(card.pick?.agent));
-  return pcs.flatMap((m) => (m.companion.folders.linked || []).filter((f) => !agentProject || f.project === agentProject)
-    .map((f) => ({ machine: m.id, label: m.label, path: f.path, project: f.project })));
+  return pcs.flatMap((m) => ckLinked(m).filter((f) => !agentProject || f.project === agentProject)
+    .map((f) => ({ machine: m.id, label: m.own ? m.label : `${m.label} (shared)`, path: f.path, project: f.project })));
 }
 function ckDraftFolder(card) {
   const list = ckDraftFolders(card), sel = el("select", "small"), many = new Set(list.map((f) => f.machine)).size > 1;
@@ -1148,7 +1153,7 @@ function ckDraftFolder(card) {
 }
 function ckDraftWhere(card) {
   if (!card.meta.draft) return;
-  const [machine, folder] = (card.where_ || "").split("\n"), m = ck.machines.find((y) => y.id === machine);
+  const [machine, folder] = (card.where_ || "").split("\n"), m = ckPc(machine);
   const project = ckDraftFolders(card).find((f) => `${f.machine}\n${f.path}` === card.where_)?.project ?? agentProject ?? ""; // its frame on the grid
   card.meta = { ...card.meta, machine: "draft", agent: card.pick?.agent || "", folder: folder || "", label: m?.label || "", target: machine || "", project };
   ckPaint(card);
@@ -1164,7 +1169,7 @@ function ckDraft(machine = "") {
     }
     const f = ckDraftFolders(card).find((y) => y.machine === machine);
     if (f) card.where_ = `${f.machine}\n${f.path}`;
-    else { card.note.className = "ck-note bad"; card.note.textContent = `${ck.machines.find((m) => m.id === machine)?.label || "That pc"} has no folder linked to ${agentProject ? shown(agentProject) : "a project"}: pick another project in the sidebar, or link one under Machines.`; }
+    else { card.note.className = "ck-note bad"; card.note.textContent = `${ckPc(machine)?.label || "That pc"} has no folder linked to ${agentProject ? shown(agentProject) : "a project"}: pick another project in the sidebar, or link one under Machines.`; }
     delete card.picks.dataset.sig; ckPicker(card);
   }
   ckDraftWhere(card);
@@ -1177,7 +1182,7 @@ async function ckStart(card, text) { // the draft's first message: make the chat
   card.starting = true;
   try {
     const res = await api("/ui/api/chats", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine, agent: p.agent, folder, ...(card.worktree === undefined ? {} : { worktree: card.worktree }) }) });
-    const m = ck.machines.find((y) => y.id === machine);
+    const m = ckPc(machine);
     let failed = "";
     try {
       await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine, id: res.chat.id, text, model: p.id, effort: p.effort }) });
@@ -1317,6 +1322,9 @@ async function ckPoll(card) {
   catch (e) { card.note.className = "ck-note bad"; card.note.textContent = e.message; return; }
   if (!card.after) { card.older = res.older; card.first = res.events[0]?.n || 0; ckOlderMark(card); }
   card.meta = { ...card.meta, ...res.chat, label: res.label }; card.online = res.online; card.at = res.at;
+  if (card.meta.rights === "view" && !card.input.disabled) { // a chat of someone else on a pc shared with you: read only
+    card.input.disabled = true; card.input.placeholder = "Read only: this chat is someone else's. Start your own chat to work here.";
+  }
   ckPicker(card);
   ckEvents(card, res);
   if (!card.meta.subs) ckSubsEnded(card); // the server knows none runs (its turn ended, or it was lost): no block says running
@@ -1567,7 +1575,7 @@ function ckSub(card, e) {
   ckSubbar(card);
   function report(x, ev) { x.report.innerHTML = renderMd(ev.text); }
 }
-const ckLive = (m) => (ck.machines.find((x) => x.id === m.machine)?.companion?.live || []).includes(m.agent); // its pc runs this agent live
+const ckLive = (m) => (ckPc(m.machine)?.companion?.live || []).includes(m.agent); // its pc runs this agent live
 function ckSubsEnded(card) {
   for (const b of (card.subs || new Map()).values()) {
     if (b.status !== "running") continue;

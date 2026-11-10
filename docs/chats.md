@@ -5,6 +5,22 @@ from a phone. The pc side runs in the companion ([companion.md](companion.md)).
 
 ## Agents
 
+- **A pc shared per project** (Machines, a pc's **More › Share…**, `GET/POST /ui/api/machine/share`): the pc's owner,
+  and only they, shares it per project linked there with one other member of that project at a time
+  (`admin/machine_shares.json`: `{machine: {by, projects: {project: {person: view | use}}}}`). **View** lists that pc's
+  chats of that project in the other person's Agents view, read only (`rights: "view"`, the box is disabled, opening it
+  never marks it read for the owner, attachments only of those chats, a chat's diff but no folder chooser, workers or
+  actions); nothing of the owner's other projects, sessions, errors or workers shows (a trimmed Machines row, pill
+  "shared: ..."). **Use** also lets them start chats there in that project and steer those (send, stop, approve,
+  archive), never the owner's own chats. A guest's chat (`guest: true`) always gets its own worktree, so it never
+  works in the owner's checkout; it never runs YOLO: the work item carries `guest` and the companion (one that reports
+  `guests: true`, else the start is refused) runs it with every tool call asked; it runs as the owner on that pc, on
+  the owner's agent subscription and token. The owner sees it in their own list ("by <person>"), can stop and approve
+  it, and the admin hears on Matrix when someone starts one on an admin's pc. Taking it back (Off), the person leaving
+  the project or the owner's token turning remote control off ends it at once: the next poll stops a running turn,
+  hands out nothing more, marks the chat idle with a line saying why, and refuses its events. Not shared: MCP
+  `knowledge_chats` and `knowledge_chat_read` still list only your own pcs' chats.
+
 - **Terminal sessions under Needs you:** a session you started yourself shows on the board when it waits for your approval: the plugin's hook leaves a mark in `~/.knowledge/asks`, and the companion reports a mark that stayed 2 minutes in its next report. The row names the tool and its command and offers Dismiss and Snooze, no Allow or Deny: you answer in that terminal. Claude Code and Codex have a `PermissionRequest` event, but none for "approved", so a long command you allowed looks the same until it ends; the row says so. agy has no such event: its mark comes from `PreToolUse` on every tool (not under YOLO, where nothing waits), stays 5 minutes before it shows, and says "may wait". A mark goes when the tool ran, the turn ended (Esc at a prompt: Claude Code's `idle_prompt` after a minute, Codex's `Interrupt`), the next prompt came, that agent no longer runs on the pc (an npm install of Claude Code on Windows runs as node, so it shows no terminal rows), or after a day (agy: an hour, because Esc at its prompt sends no hook, so until then a refused prompt can show as "may wait"; Dismiss takes it away). A row needs a companion report of the last 5 minutes. Needs the companion on that pc.
 
 - **Agents (chat with your agents):** only for a person with at least one token whose "Agents (remote control)"
