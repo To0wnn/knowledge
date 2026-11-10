@@ -1603,7 +1603,16 @@ async def one_lamp(browser, secret: str) -> None:
         scrub = await pg.evaluate("""() => { const r = $('time-pos'); r.value = '0'; r.dispatchEvent(new Event('input')); const at0 = Graph.graphData().nodes.filter(shownAt).length;
           r.value = '1000'; r.dispatchEvent(new Event('input')); return {at0, end: Graph.graphData().nodes.filter(shownAt).length, all: Graph.graphData().nodes.length, playing: replay.playing}; }""")
         check(scrub["at0"] <= 1 and scrub["end"] == scrub["all"] and not scrub["playing"], f"dragging the time bar shows the map at that moment {scrub}")
+        before = await pg.evaluate("Graph.graphData().nodes.length")
+        await pg.click("#time-archive")
+        await pg.wait_for_function("ghostData !== null || !$('time-archive').checked", timeout=15000)
+        arch = await pg.evaluate("""() => ({ghosts: ghostData ? ghostData.nodes.length : -1, nodes: Graph.graphData().nodes.length,
+          gone: (ghostData?.nodes || []).every((n) => n.gone >= n.born), range: replay.t1 >= Math.max(0, ...(ghostData?.nodes || []).map((n) => n.gone))})""")
+        check(arch["ghosts"] >= 0 and arch["nodes"] == before + arch["ghosts"] and arch["gone"] and arch["range"], f"Removed notes adds the removed notes to the replay, each until it went {arch}")
+        await pg.click("#time-archive")
         await pg.click("#time-close")
+        check(await pg.evaluate(f"Graph.graphData().nodes.length === {before} && ghostData === null"), "closing the replay takes the removed notes off the map")
+        await pg.evaluate("localStorage.removeItem('kn_replay_archive')")
         check(await pg.evaluate("Graph.graphData().nodes.every(shownAt) && $('map-time').hidden && $('map-replay').getAttribute('aria-pressed') === 'false'"), "closing the replay shows the whole map again")
         await pg.click("#map-3d")
         await pg.wait_for_function("G3 && G3.graphData().nodes.length && !$('g3d').hidden", timeout=15000)

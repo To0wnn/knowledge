@@ -121,7 +121,7 @@ in once.
   play/pause and a speed (0.5× to 4× of 30 s, remembered per browser, `kn_replay_speed`). Notes born up to the handle
   are shown; the ones that just appeared pulse. Births come from the graph's `born` per note (server `born_of`: the
   oldest kept history version, else the file time; history keeps 200 versions, so a very often edited note looks
-  younger). Only notes that exist now are in it: archived and removed notes are not replayed.
+  younger). **Removed notes** (a box in the bar, remembered per browser, `kn_replay_archive`) adds the notes that were archived, merged, renamed or deleted since: the graph API with `?history=1` (server `ghosts()`) finds them in the history (last version `<who>-removed`), builds the graph with their last text and gives each `gone`; the map shows them translucent from birth until removal, placed beside a linked note, and a click says when it went. Only while the replay is open.
 - **3D** (top right): the same notes in 3d-force-graph, loaded on the first switch only: three.js 0.186 as a module
   (`vendor/three-0.186.0/`, the revision the bundle was built with, so the bundle uses it through `window.THREE`), then
   the bundle (1.4 MB). Every note has a glow sprite in its colour (additive on dark, plain on light), the best-connected

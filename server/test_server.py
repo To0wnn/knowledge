@@ -2978,6 +2978,14 @@ def main():
         assert g["nodes"] and not any(n["id"].endswith("/MEMORY.md") for n in g["nodes"]), g["nodes"][:3]  # index not drawn, still readable below
         assert {n["project"] for n in g["nodes"] if n["id"].startswith("trade")} == {"trade"}
         assert all(1e9 < n["born"] <= time.time() + 1 for n in g["nodes"]), g["nodes"][:3]  # the map's replay orders notes by it
+        gd = tmp / "history" / "memory__ghost_memo.md"  # a memo that was removed: its history ends with "<who>-removed"
+        gd.mkdir(parents=True)
+        (gd / "20261001-120000.000000_before.md").write_text("old memo, links [[project_garage_door]]\n")
+        (gd / "20261002-120000.000000_pc-removed.md").write_text("")
+        os.utime(gd / "20261001-120000.000000_before.md", (1790000000, 1790000000)); os.utime(gd / "20261002-120000.000000_pc-removed.md", (1790090000, 1790090000))
+        ghost_graph = {n["id"]: n for n in json.loads(raw("GET", "/ui/api/graph?history=1", headers=ck)[2])["nodes"]}
+        assert "memory/ghost_memo.md" not in {n["id"] for n in g["nodes"]} and (ghost_graph["memory/ghost_memo.md"]["born"], ghost_graph["memory/ghost_memo.md"]["gone"]) == (1790000000, 1790090000), ghost_graph.get("memory/ghost_memo.md")  # a removed memo is a ghost in the replay with removed notes
+        assert all("gone" not in n for i, n in ghost_graph.items() if i != "memory/ghost_memo.md" and i in {m["id"] for m in g["nodes"]})
         th =json.loads(raw("GET", "/ui/api/search?q=entry%20timing&project=trade", headers=ck)[2])["notes"]
         assert th and all(h["project"] == "trade" for h in th), th
         assert not json.loads(raw("GET", "/ui/api/search?q=entry%20timing&project=homelab", headers=ck)[2])["notes"]
