@@ -19,7 +19,7 @@ function themeChanged() {
   tokens = {}; glows.clear();
   if (!Graph) return;
   indexGraph(); renderTopics(); Graph.backgroundColor(tok("--canvas"));
-  if (G3) { G3.backgroundColor(tok("--canvas")); refresh3d(); }
+  if (G3) { G3.backgroundColor(tok("--canvas")).nodeThreeObject(node3d); refresh3d(); } // sprites carry theme colours
 }
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", themeChanged);
 const decode = (s) => { try { return decodeURIComponent(s); } catch { return s; } }; // a literal % is not an escape
@@ -170,7 +170,7 @@ const PULSE_MS = 8000;
 const pulses = new Map(); // id -> {t0, ms, flow}
 function pulse(id, ms = PULSE_MS, flow = true) { // flow: its links flow too (not in the replay: a thousand notes)
   if (calm || !Graph) return;
-  pulses.set(id, { t0: performance.now(), ms, flow });
+  pulses.set(id, { t0: performance.now(), ms, flow }); pulse3d();
   if (!flow) return;
   animateHover(ms);
   clearTimeout(pulse.timer); // the links stop flowing once the last pulse is over
@@ -432,45 +432,84 @@ async function loadGraph() {
 }
 
 // ---------------------------------------------------------------- replay
-// Replay: the map grows note by note in the order the notes were born (server: oldest kept version), in 30 s, with
-// the date in the corner. By rank, not by clock time: most notes predate the history, so by time they would all pop
-// up in the first frame.
-let replay = null; // {order, i, t}: notes born up to t are shown
+// Replay: a time bar along the bottom (as in Cosmograph): a histogram of when the notes were born (server: oldest kept
+// history version, else the file time), a handle to drag through time, play/pause and a speed. Notes born up to the
+// handle's moment are shown; the ones that just appeared pulse.
+let replay = null; // {t0, t1, t, k, playing, id}
 const shownAt = (n) => !replay || !n || (n.born ?? 0) <= replay.t; // !n: a link end force-graph has not resolved yet
-function startReplay() {
-  stopReplay();
-  if (!Graph) return; // the map data is still loading
-  const order = [...Graph.graphData().nodes].sort((a, b) => (a.born ?? 0) - (b.born ?? 0));
-  if (!order.length) return;
-  const t0 = performance.now(), ms = 30000, id = {};
-  replay = { t: (order[0].born ?? 0) - 1, id };
-  $("map-replay").textContent = "■ Stop"; $("map-replay").setAttribute("aria-pressed", "true"); $("map-date").hidden = false;
-  (map3d && G3 ? G3 : Graph).zoomToFit(400, fitPad());
-  Graph.autoPauseRedraw(false);
-  let shown = 0, synced3d = 0;
+const BINS = 72;
+function replayBins() {
+  const bins = new Array(BINS).fill(0), span = Math.max(1, replay.t1 - replay.t0);
+  for (const n of Graph.graphData().nodes) bins[Math.min(BINS - 1, Math.floor(((n.born ?? replay.t0) - replay.t0) / span * BINS))]++;
+  return bins;
+}
+function drawTimeBar() {
+  const c = $("time-hist"), w = c.clientWidth, h = c.clientHeight, dpr = devicePixelRatio || 1;
+  if (!w) return;
+  if (c.width !== w * dpr) { c.width = w * dpr; c.height = h * dpr; }
+  const ctx = c.getContext("2d"), bins = replay.bins, top = Math.max(1, ...bins), bw = w / BINS;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
+  for (let i = 0; i < BINS; i++) {
+    if (!bins[i]) continue;
+    const bh = Math.max(2, (h - 2) * Math.sqrt(bins[i] / top)); // sqrt: one big import day does not flatten the rest
+    ctx.fillStyle = (i + 0.5) / BINS <= replay.k ? tok("--accent") : hexA(tok("--muted").startsWith("#") ? tok("--muted") : "#888888", 0.45);
+    ctx.fillRect(i * bw + 1, h - bh, Math.max(1, bw - 2), bh);
+  }
+}
+function replayAt(k) {
+  const was = replay.t;
+  replay.k = Math.max(0, Math.min(1, k));
+  replay.t = replay.t0 + (replay.t1 - replay.t0) * replay.k;
+  $("time-pos").value = String(Math.round(replay.k * 1000));
+  $("map-date").textContent = fmtDay(replay.t);
+  if (replay.t > was) for (const n of Graph.graphData().nodes) if ((n.born ?? 0) > was && (n.born ?? 0) <= replay.t) pulse(n.id, 1500, false);
+  drawTimeBar();
+  if (G3 && map3d) G3.nodeVisibility(G3.nodeVisibility()).linkVisibility(G3.linkVisibility());
+}
+function playReplay(on) {
+  if (!replay) return;
+  if (on && replay.k >= 1) replayAt(0); // at the end, play starts over
+  replay.playing = on;
+  $("time-play").textContent = on ? "❚❚" : "▶"; $("time-play").setAttribute("aria-label", on ? "Pause" : "Play");
+  if (!on) return;
+  const id = replay.id = {};
+  let last = null, synced = 0;
   const step = (now) => {
-    if (replay?.id !== id) return;
-    const k = Math.max(0, Math.min(1, (now - t0) / ms)), i = Math.min(order.length - 1, Math.floor(k * order.length)); // a frame stamp can predate t0
-    replay.t = order[i].born ?? 0;
-    $("map-date").textContent = fmtDay(replay.t);
-    if (i + 1 > shown) { // only the notes that just appeared pulse, briefly
-      for (const n of order.slice(shown, i + 1)) pulse(n.id, 1500, false);
-      shown = i + 1;
-    }
-    // 3D rebuilds its objects on a visibility change: four times a second is smooth enough
-    if (G3 && map3d && now - synced3d > 250) { synced3d = now; G3.nodeVisibility(G3.nodeVisibility()).linkVisibility(G3.linkVisibility()); }
-    if (k < 1) requestAnimationFrame(step); else stopReplay(2500);
+    if (!replay?.playing || replay.id !== id) return;
+    const dt = last == null ? 0 : Math.max(0, now - last); last = now; // a frame stamp can predate the click
+    const k = replay.k + dt / (Number($("time-speed").value) * 1000);
+    if (G3 && map3d && now - synced < 250 && k < 1) { // 3D rebuilds its objects on a visibility change: four times a second
+      replay.k = k; replay.t = replay.t0 + (replay.t1 - replay.t0) * k; $("map-date").textContent = fmtDay(replay.t);
+      $("time-pos").value = String(Math.round(k * 1000));
+    } else { synced = now; replayAt(k); }
+    if (k < 1) requestAnimationFrame(step); else playReplay(false);
   };
   requestAnimationFrame(step);
 }
-function stopReplay(keepDate = 0) {
+function startReplay() {
+  stopReplay();
+  if (!Graph) return; // the map data is still loading
+  const borns = Graph.graphData().nodes.map((n) => n.born ?? 0);
+  if (!borns.length) return;
+  replay = { t0: Math.min(...borns) - 1, t1: Math.max(...borns), t: 0, k: 0, playing: false, id: null };
+  replay.bins = replayBins();
+  $("map-time").hidden = false; $("map-replay").setAttribute("aria-pressed", "true");
+  (map3d && G3 ? G3 : Graph).zoomToFit(400, fitPad());
+  Graph.autoPauseRedraw(false);
+  replayAt(0); playReplay(true);
+}
+function stopReplay() {
   if (!replay) return;
   replay = null;
-  $("map-replay").textContent = "▶ Replay"; $("map-replay").setAttribute("aria-pressed", "false");
-  setTimeout(() => { if (!replay) $("map-date").hidden = true; }, keepDate);
+  $("map-time").hidden = true; $("map-replay").setAttribute("aria-pressed", "false");
   if (G3) G3.nodeVisibility(G3.nodeVisibility()).linkVisibility(G3.linkVisibility());
   prunePulses(); animateHover();
 }
+$("time-play").onclick = () => playReplay(!replay?.playing);
+$("time-pos").oninput = () => { if (replay) { playReplay(false); replayAt(Number($("time-pos").value) / 1000); } };
+$("time-close").onclick = () => stopReplay();
+$("time-speed").value = localStorage.getItem("kn_replay_speed") || "30";
+$("time-speed").onchange = () => localStorage.setItem("kn_replay_speed", $("time-speed").value);
 
 // ---------------------------------------------------------------- 3D
 // The same notes in 3D (3d-force-graph, three.js): loaded on the first switch, so the 2D map stays light. Its own
@@ -498,6 +537,8 @@ async function setMap3d(on) {
 function refresh3d() {
   if (!G3 || !map3d) return; // a hidden 3D map is restyled when it is switched on
   G3.nodeColor(G3.nodeColor()).linkColor(G3.linkColor()).linkWidth(G3.linkWidth()).linkDirectionalParticles(G3.linkDirectionalParticles());
+  const dark = darkCanvas();
+  for (const n of G3.graphData().nodes) if (n.__glow) n.__glow.material.opacity = (!focusSet.size || focusSet.has(n.id) ? 1 : 0.08) * (dark ? 0.9 : 0.45);
 }
 function set3dData() {
   if (!G3) return;
@@ -513,7 +554,12 @@ function fly3d(id) {
 }
 async function build3d() {
   if (G3) return set3dData();
-  if (!window.ForceGraph3D) await loadScript("/ui/static/vendor/3d-force-graph-1.80.2.js");
+  if (!window.ForceGraph3D) {
+    // three.js as a module first: the 3d-force-graph bundle then uses it (window.THREE) instead of its own copy, so
+    // the glow and label sprites below are from the same three.js as the scene. Same revision as the bundle's (r186).
+    window.THREE = await import("/ui/static/vendor/three-0.186.0/three.module.js").catch(() => { throw new Error("The 3D map did not load"); });
+    await loadScript("/ui/static/vendor/3d-force-graph-1.80.2.js");
+  }
   const box = $("g3d"), same = (l) => !!(l.source.src && l.target.src) && groupOf(l.source.src) === groupOf(l.target.src); // ends are ids until the first tick
   G3 = new ForceGraph3D(box, { controlType: "orbit" })
     .width($("graph").clientWidth).height($("graph").clientHeight)
@@ -527,6 +573,7 @@ async function build3d() {
     .linkWidth((l) => (linkLit(l) ? 1.2 : 0)).linkOpacity(0.5)
     .linkDirectionalParticles(particles).linkDirectionalParticleWidth(1.8).linkDirectionalParticleSpeed(0.006)
     .linkDirectionalParticleColor(() => tok("--accent"))
+    .nodeThreeObjectExtend(true).nodeThreeObject(node3d)
     .cooldownTicks(200)
     .onEngineStop(() => { if (!fly3d.done) { fly3d.done = true; selected ? fly3d(selected) : G3.zoomToFit(600, 40); } }) // the first layout, then the view
     .onNodeHover((n) => {
@@ -542,7 +589,62 @@ async function build3d() {
   G3.d3Force("middle", Object.assign((alpha) => { for (const n of g3n) { n.vx -= n.x * 0.03 * alpha; n.vy -= n.y * 0.03 * alpha; n.vz -= n.z * 0.03 * alpha; } },
     { initialize: (ns) => { g3n = ns; } }));
   new ResizeObserver(() => { const w = $("graph").clientWidth, h = $("graph").clientHeight; if (w && h) G3.width(w).height(h); }).observe($("graph"));
+  // Idle orbit (as in brain-graph): after a few seconds without input the camera slowly circles; any input stops it.
+  const controls = G3.controls(), idle = () => { clearTimeout(idle.t); controls.autoRotate = false; if (!calm) idle.t = setTimeout(() => { controls.autoRotate = true; }, 6000); };
+  controls.autoRotateSpeed = 0.5;
+  for (const ev of ["pointerdown", "wheel", "pointermove"]) box.addEventListener(ev, idle, { passive: true });
+  idle();
   set3dData();
+}
+
+// 3D look: a soft glow sprite behind every note (one white texture, tinted per note) and the names of the best-connected
+// notes as text sprites. Drawn on a canvas, so a title is never HTML.
+let glowTex = null;
+function glowTexture() {
+  if (!glowTex) {
+    const c = document.createElement("canvas"); c.width = c.height = 128;
+    const g = c.getContext("2d"), grd = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+    grd.addColorStop(0, "rgba(255,255,255,1)"); grd.addColorStop(0.2, "rgba(255,255,255,0.5)"); grd.addColorStop(0.5, "rgba(255,255,255,0.12)"); grd.addColorStop(1, "rgba(255,255,255,0)");
+    g.fillStyle = grd; g.fillRect(0, 0, 128, 128);
+    glowTex = new THREE.CanvasTexture(c);
+  }
+  return glowTex;
+}
+const radius3d = (n) => Math.cbrt(1 + (n.src.degree || 0)) * 2.4; // 3d-force-graph's own sphere radius: cbrt(val) * relSize
+function node3d(n) {
+  const group = new THREE.Group(), dark = darkCanvas();
+  const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: nodeColor(n.src) || "#888888", transparent: true,
+    depthWrite: false, blending: dark ? THREE.AdditiveBlending : THREE.NormalBlending, opacity: dark ? 0.9 : 0.45 }));
+  n.__gs = radius3d(n) * 7; glow.scale.set(n.__gs, n.__gs, 1); n.__glow = glow; group.add(glow);
+  if ((n.src.degree || 0) >= labelMin) group.add(label3d(n.src.label, radius3d(n)));
+  return group;
+}
+function label3d(text, r) {
+  const c = document.createElement("canvas"), g = c.getContext("2d"), font = `600 36px ${tok("--font")}`;
+  g.font = font; c.width = Math.ceil(g.measureText(text).width) + 20; c.height = 52;
+  g.font = font; g.textBaseline = "middle"; g.lineJoin = "round";
+  g.lineWidth = 8; g.strokeStyle = tok("--canvas"); g.strokeText(text, 10, 26);
+  g.fillStyle = tok("--ink"); g.fillText(text, 10, 26);
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+  sp.scale.set(c.width / 3.2, c.height / 3.2, 1); sp.position.y = -(r + 10); sp.renderOrder = 2;
+  return sp;
+}
+// A pulse in 3D: the note's glow breathes while it lasts.
+function pulse3d() {
+  if (pulse3d.on || !G3 || !map3d) return;
+  pulse3d.on = true;
+  const step = () => {
+    let any = false;
+    for (const n of G3.graphData().nodes) {
+      if (!n.__glow) continue;
+      const p = pulses.get(n.id), live = pulseLive(p);
+      const k = live ? 1 + 0.9 * Math.abs(Math.sin((performance.now() - p.t0) / 260)) * (1 - (performance.now() - p.t0) / p.ms) : 1;
+      n.__glow.scale.set(n.__gs * k, n.__gs * k, 1); any ||= live;
+    }
+    if (any && map3d) requestAnimationFrame(step); else pulse3d.on = false;
+  };
+  requestAnimationFrame(step);
 }
 $("map-3d").onclick = () => setMap3d(!map3d);
 // The topic list over the map, on request; the choice stays per browser.

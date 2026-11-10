@@ -1595,11 +1595,16 @@ async def one_lamp(browser, secret: str) -> None:
         await pg.click("#map-topics")
         await pg.click("#map-replay")
         await pg.wait_for_timeout(1500)
-        rp = await pg.evaluate("""() => ({date: !$('map-date').hidden && $('map-date').textContent, shown: Graph.graphData().nodes.filter(shownAt).length,
-          all: Graph.graphData().nodes.length, born: Graph.graphData().nodes.every((n) => n.born > 1e9), ages: new Set(Graph.graphData().nodes.map((n) => n.born)).size})""")
-        check(rp["date"] and rp["born"] and (rp["shown"] < rp["all"] or rp["ages"] == 1), f"Replay grows the map note by note with the date in the corner {rp}")
-        await pg.click("#map-replay")
-        check(await pg.evaluate("Graph.graphData().nodes.every(shownAt) && $('map-replay').getAttribute('aria-pressed') === 'false'"), "Stop shows the whole map again")
+        rp = await pg.evaluate("""() => ({date: !$('map-time').hidden && $('map-date').textContent, shown: Graph.graphData().nodes.filter(shownAt).length,
+          all: Graph.graphData().nodes.length, born: Graph.graphData().nodes.every((n) => n.born > 1e9), ages: new Set(Graph.graphData().nodes.map((n) => n.born)).size,
+          bars: $('time-hist').width > 0, pos: Number($('time-pos').value)})""")
+        check(rp["date"] and rp["born"] and rp["bars"] and rp["pos"] > 0 and (rp["shown"] < rp["all"] or rp["ages"] == 1), f"Replay plays the time bar and grows the map with the date {rp}")
+        await pg.click("#time-play")  # pause
+        scrub = await pg.evaluate("""() => { const r = $('time-pos'); r.value = '0'; r.dispatchEvent(new Event('input')); const at0 = Graph.graphData().nodes.filter(shownAt).length;
+          r.value = '1000'; r.dispatchEvent(new Event('input')); return {at0, end: Graph.graphData().nodes.filter(shownAt).length, all: Graph.graphData().nodes.length, playing: replay.playing}; }""")
+        check(scrub["at0"] <= 1 and scrub["end"] == scrub["all"] and not scrub["playing"], f"dragging the time bar shows the map at that moment {scrub}")
+        await pg.click("#time-close")
+        check(await pg.evaluate("Graph.graphData().nodes.every(shownAt) && $('map-time').hidden && $('map-replay').getAttribute('aria-pressed') === 'false'"), "closing the replay shows the whole map again")
         await pg.click("#map-3d")
         await pg.wait_for_function("G3 && G3.graphData().nodes.length && !$('g3d').hidden", timeout=15000)
         d3 = await pg.evaluate("""() => ({nodes: G3.graphData().nodes.length, flat: Graph.graphData().nodes.length, hidden2d: $('g2d').hidden, pick: localStorage.getItem('kn_map3d')})""")

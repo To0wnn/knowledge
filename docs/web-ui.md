@@ -116,11 +116,17 @@ in once.
   Light theme: the same, softer.
 - **Live:** when the knowledge changes, a note that is new or whose size changed sends out rings and its links flow for
   8 s (an edit that keeps the exact length is missed). Off with reduced motion.
-- **Replay** (bottom right): the map grows note by note in 30 s, oldest first, with the date in the corner. Order by
-  the graph's `born` per note (server `born_of`: the oldest kept history version, else the file time; history keeps 200
-  versions, so a very often edited note looks younger). By rank, not clock time, so the notes from before the history
-  do not all appear in the first frame.
-- **3D** (bottom right): the same notes in 3d-force-graph (three.js, vendored, 1.4 MB, loaded on the first switch only),
-  with its own node copies, a weak pull to the middle and the same focus, particles and replay; no nebulas or glow.
-  The pick stays per browser (`kn_map3d`); only the visible map runs its frame loop.
+- **Replay** (top right, with Topics and 3D): a time bar along the bottom as in Cosmograph: bars of how many notes were
+  born per period (square root, so one big import day does not flatten the rest), a handle to drag through time,
+  play/pause and a speed (0.5× to 4× of 30 s, remembered per browser, `kn_replay_speed`). Notes born up to the handle
+  are shown; the ones that just appeared pulse. Births come from the graph's `born` per note (server `born_of`: the
+  oldest kept history version, else the file time; history keeps 200 versions, so a very often edited note looks
+  younger). Only notes that exist now are in it: archived and removed notes are not replayed.
+- **3D** (top right): the same notes in 3d-force-graph, loaded on the first switch only: three.js 0.186 as a module
+  (`vendor/three-0.186.0/`, the revision the bundle was built with, so the bundle uses it through `window.THREE`), then
+  the bundle (1.4 MB). Every note has a glow sprite in its colour (additive on dark, plain on light), the best-connected
+  notes carry their names (canvas text, never HTML), a changed note's glow breathes, and after 6 s without input the
+  camera slowly circles (idle orbit, idea from brain-graph; off with reduced motion). Own node copies, a weak pull to the
+  middle, the same focus, particles and replay; no nebulas. The pick stays per browser (`kn_map3d`); only the visible
+  map runs its frame loop.
 

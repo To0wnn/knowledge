@@ -90,10 +90,17 @@
           <ol id="sem" class="hits"></ol>
         </section>
         <div id="graph" aria-label="Map of the project" hidden><div id="g2d"></div><div id="g3d" hidden></div>
-          <div class="map-tools"><span id="map-date" class="map-date" aria-live="polite" hidden></span>
+          <div class="map-tools">
             <button id="map-topics" class="btn small" type="button" aria-pressed="false" aria-controls="topics-pane" title="Show the list of topics and notes">Topics</button>
-            <button id="map-replay" class="btn small" type="button" aria-pressed="false" title="Replay how the map grew, note by note">▶ Replay</button>
-            <button id="map-3d" class="btn small" type="button" aria-pressed="false" title="Switch between the flat map and 3D">3D</button></div></div>
+            <button id="map-replay" class="btn small" type="button" aria-pressed="false" aria-controls="map-time" title="Replay how the map grew">▶ Replay</button>
+            <button id="map-3d" class="btn small" type="button" aria-pressed="false" title="Switch between the flat map and 3D">3D</button></div>
+          <div id="map-time" class="map-time" role="group" aria-label="Replay" hidden>
+            <button id="time-play" class="btn small icon" type="button" aria-label="Pause">❚❚</button>
+            <div class="time-track"><canvas id="time-hist" aria-hidden="true"></canvas><input id="time-pos" type="range" min="0" max="1000" value="0" aria-label="Moment in time"></div>
+            <span id="map-date" class="map-date" aria-live="off"></span>
+            <select id="time-speed" class="small" aria-label="Replay speed" title="Replay speed"><option value="60">0.5×</option><option value="30">1×</option><option value="15">2×</option><option value="7.5">4×</option></select>
+            <button id="time-close" class="btn small quiet icon" type="button" aria-label="Close the replay" title="Close the replay">✕</button>
+          </div></div>
       </div>
       <aside class="right" id="side" aria-label="Connected notes"></aside>
     </div>
