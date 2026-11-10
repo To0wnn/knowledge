@@ -23,7 +23,7 @@ Moved from the README; [back to the README](../README.md).
   and deploys. A deploy that stops before the push takes back its own merge and version commits.
   `tests/deploy_landing.py` proves this with a fake ssh, rsync and gh.
 
-Browser libraries are vendored with their licences in `server/static/vendor/` (force-graph, marked, DOMPurify); no CDN.
+Browser libraries are vendored with their licences in `server/static/vendor/` (force-graph, 3d-force-graph, three.js, marked, DOMPurify); no CDN.
 
 The screenshot in the README uses made-up demo notes from `demo/`; regenerate with
 `uv run --project server --with playwright python demo/screenshot.py`.

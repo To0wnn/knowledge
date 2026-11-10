@@ -652,6 +652,29 @@ def instance_ready() -> bool:
     return bool(getattr(index, "loaded", False)) and vec.matrix is not None
 
 
+_born: dict[str, int] = {}
+
+
+def born_of(rel: str) -> int:
+    """When a note first showed up (epoch s), for the map's replay: its oldest kept version, else its file time.
+    Cached per note (a birth does not move), so a rebuild of the graph stats only new notes."""
+    # shortcut: history keeps 200 versions per file, so a note edited more often than that looks younger than it is;
+    # good enough for a replay, upgrade to a stored first-seen date if the replay must be exact.
+    if rel not in _born:
+        try:
+            # the oldest by name (local time, so off by up to an hour around a DST change): one listing, one stat
+            with os.scandir(history_dir(rel)) as it:
+                first = min((e.path for e in it if e.name.endswith(".md")), default=None)
+        except OSError:  # no history yet, or the folder went away meanwhile
+            first = None
+        try:
+            t = os.stat(first).st_mtime if first else index.files[rel][0] / 1e9
+        except (OSError, KeyError):
+            return int(time.time())
+        _born[rel] = int(t)
+    return _born[rel]
+
+
 def get_graph() -> dict:
     """The graph with communities and insights over what this device may see, rebuilt only after a change
     (index.note_gen). Built from the visible files only, so names outside the scope never show up in links or insights."""
@@ -661,6 +684,8 @@ def get_graph() -> dict:
         if not hit or hit[0] != index.note_gen:
             gen = index.note_gen
             hit = (gen, kb_graph.build({rel: text for rel, text, _ in index.items() if in_scope(rel)}))
+            for n in hit[1]["nodes"]:
+                n["born"] = born_of(n["id"])
             _graph_cache[scope] = hit
     return hit[1]
 

@@ -1584,7 +1584,34 @@ async def one_lamp(browser, secret: str) -> None:
     check(wide["right"] == "none" and wide["note"] > 800 and wide["recent"], f"the notes overview takes the width, what changed lately first {wide}")
     await route(pg, "#/map", "#g2d canvas", 1500)
     map_ = await pg.evaluate("""() => ({w: $('graph').getBoundingClientRect().width, main: document.querySelector('.main').getBoundingClientRect().width, left: getComputedStyle($('topics-pane')).display, right: getComputedStyle($('side')).display})""")
-    check(map_["w"] >= map_["main"] - 2 and map_["left"] != "none" and map_["right"] == "none", f"the map takes the whole page, the topic list floats over it {map_}")
+    if not await pg.query_selector("#map-3d"):
+        check(map_["w"] >= map_["main"] - 2 and map_["left"] != "none" and map_["right"] == "none", f"the map takes the whole page, the topic list floats over it {map_}")
+    if not await pg.query_selector("#map-3d"):
+        print("skip replay and 3D (server older than the fancy map)")
+    else:
+        check(map_["w"] >= map_["main"] - 2 and map_["left"] == "none" and map_["right"] == "none", f"the map takes the whole page, no topic list over it {map_}")
+        await pg.click("#map-topics")
+        check(await pg.evaluate("getComputedStyle($('topics-pane')).display !== 'none'"), "Topics shows the topic list over the map")
+        await pg.click("#map-topics")
+        await pg.click("#map-replay")
+        await pg.wait_for_timeout(1500)
+        rp = await pg.evaluate("""() => ({date: !$('map-time').hidden && $('map-date').textContent, shown: Graph.graphData().nodes.filter(shownAt).length,
+          all: Graph.graphData().nodes.length, born: Graph.graphData().nodes.every((n) => n.born > 1e9), ages: new Set(Graph.graphData().nodes.map((n) => n.born)).size,
+          bars: $('time-hist').width > 0, pos: Number($('time-pos').value)})""")
+        check(rp["date"] and rp["born"] and rp["bars"] and rp["pos"] > 0 and (rp["shown"] < rp["all"] or rp["ages"] == 1), f"Replay plays the time bar and grows the map with the date {rp}")
+        await pg.click("#time-play")  # pause
+        scrub = await pg.evaluate("""() => { const r = $('time-pos'); r.value = '0'; r.dispatchEvent(new Event('input')); const at0 = Graph.graphData().nodes.filter(shownAt).length;
+          r.value = '1000'; r.dispatchEvent(new Event('input')); return {at0, end: Graph.graphData().nodes.filter(shownAt).length, all: Graph.graphData().nodes.length, playing: replay.playing}; }""")
+        check(scrub["at0"] <= 1 and scrub["end"] == scrub["all"] and not scrub["playing"], f"dragging the time bar shows the map at that moment {scrub}")
+        await pg.click("#time-close")
+        check(await pg.evaluate("Graph.graphData().nodes.every(shownAt) && $('map-time').hidden && $('map-replay').getAttribute('aria-pressed') === 'false'"), "closing the replay shows the whole map again")
+        await pg.click("#map-3d")
+        await pg.wait_for_function("G3 && G3.graphData().nodes.length && !$('g3d').hidden", timeout=15000)
+        d3 = await pg.evaluate("""() => ({nodes: G3.graphData().nodes.length, flat: Graph.graphData().nodes.length, hidden2d: $('g2d').hidden, pick: localStorage.getItem('kn_map3d')})""")
+        check(d3["nodes"] == d3["flat"] and d3["hidden2d"] and d3["pick"] == "1", f"3D shows the same notes and the browser remembers the pick {d3}")
+        await pg.click("#map-3d")
+        check(await pg.evaluate("!$('g2d').hidden && $('g3d').hidden && localStorage.getItem('kn_map3d') === '0'"), "back to the flat map")
+        check(not errors, f"no page errors in replay and 3D {errors[:2]}")
     await route(pg, "#/machines", "#machines > *", 800)
     fold = await pg.evaluate("""() => { const kids = [...$('machines').children], first = kids.findIndex((k) => k.matches('.mx-offline'));
       return {lines: document.querySelectorAll('.mx-offline .mx-line').length, columns: document.querySelectorAll('.mx-offline .mx-pc').length,

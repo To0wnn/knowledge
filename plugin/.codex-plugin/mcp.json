@@ -4,7 +4,7 @@
       "command": "./python3",
       "args": ["-X", "utf8", "./hooks/agent_hooks.py", "mcp"],
       "cwd": ".",
-      "env_vars": ["KNOWLEDGE_TOKEN", "KNOWLEDGE_URL"],
+      "env_vars": ["KNOWLEDGE_TOKEN", "KNOWLEDGE_URL", "KNOWLEDGE_CHAT", "KNOWLEDGE_WORKER", "KNOWLEDGE_HOME"],
       "startup_timeout_sec": 15,
       "default_tools_approval_mode": "writes"
     }
