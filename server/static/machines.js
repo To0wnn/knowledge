@@ -3,7 +3,8 @@
 // Pcs (#/machines): your own online pcs side by side, one column each, so a value that differs shows at a glance; then
 // other people's pcs (each its own column: their accounts never mix with yours) and the pcs that are offline.
 // Folders (#/machines?view=folders): per project the folders linked on each pc. Workers live in Agents, not here.
-// Files (#/machines?view=files): browse, read, edit and play the files in those folders (the project picker scopes it).
+// Files (#/files, its own sidebar item): browse, read, edit and play the files in those folders, also on a pc whose
+// owner shared a project with you for use (only that project's folders); the project picker scopes it.
 
 const YOLO_WARNING = "YOLO changes this agent's own global setting on that pc (Claude Code: bypassPermissions, Codex: approval never + no sandbox, agy: always-proceed), so EVERY session of it there runs every command and edits every file without asking: the owner's own sessions too, not only workers and chats, also for tasks other people wrote. Risky actions are flagged, never stopped. Turning it off puts the previous settings back.";
 const WORKERS_WARNING = "Allow workers on this pc? For every ready task in a linked project it may then start a fresh agent session on its own, in a git worktree of its own, without anyone watching (at most the max per agent). Only for a pc that may work by itself: not a work laptop or a shared family pc.";
@@ -602,19 +603,20 @@ const filesApi = (m, body) => api("/ui/api/files", { method: "POST", headers: { 
 
 function filesRoots() {
   filesAt = null;
-  const own = (machinesRes?.machines || []).filter((m) => steers(m));
-  const rows = own.flatMap((m) => (m.companion.folders?.linked || []).filter((f) => allMode() || f.project === project).map((f) => [m, f]));
+  const usable = (m, f) => m.own || ["use", "yolo"].includes(m.shared?.[f.project]); // a pc shared with you: that project's folders
+  const own = (machinesRes?.machines || []).filter((m) => m.online && !m.old && m.companion && (steers(m) || m.shared));
+  const rows = own.flatMap((m) => (m.companion.folders?.linked || []).filter((f) => usable(m, f) && (allMode() || f.project === project)).map((f) => [m, f]));
   const box = el("section", "mx-proj"), head = el("div", "mx-proj-head");
   head.append(el("h3", null, allMode() ? "Linked folders" : `Linked folders of ${project}`));
   box.append(head);
   for (const [m, f] of rows) {
     const r = el("button", "fm-row"); r.type = "button";
-    r.append(el("span", "fm-name", f.path), el("span", "muted", `${m.label} · ${f.project}`));
+    r.append(el("span", "fm-name", f.path), el("span", "muted", `${m.label}${m.own ? "" : " (shared with you)"} · ${f.project}`));
     r.onclick = () => filesOpen(m, f.path);
     box.append(r);
   }
-  if (!rows.length) box.append(el("p", "muted mx-empty", own.length ? "No folder of this project is linked on a pc of yours that is online. Link one under Folders." : "None of your pcs is online with remote control on."));
-  filesBox.replaceChildren(el("p", "muted", "Browse, read, edit and play the files of the folders linked on your own pcs. git's own files, .env files and keys stay hidden."), box);
+  if (!rows.length) box.append(el("p", "muted mx-empty", own.length ? "No folder of this project is linked on a pc of yours, or one shared with you, that is online. Link one under Machines > Folders." : "No pc of yours or shared with you is online with remote control on."));
+  filesBox.replaceChildren(el("p", "muted", "Browse, read, edit and play the files of the folders linked on your pcs, and of a project someone shared with you for use on theirs. git's own files, .env files and keys stay hidden."), box);
 }
 function filesProject() { if (machinesMode === "files" && !$("tab-machines").hidden && !filesBusy()) filesRoots(); }
 const filesBusy = () => filesBox.querySelector("textarea.editor") || [...filesBox.querySelectorAll("audio, video")].some((v) => !v.paused);

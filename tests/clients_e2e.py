@@ -1717,7 +1717,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         st, body = files({"op": "write", "path": str(app / "notes.md"), "text": "new\n", "base": {"mtime": "1", "size": read.get("size")}})
         check(st == 400 and "changed" in body, "files: a save over a file that changed since it was read is refused", body[:300])
         st, body = files({"op": "write", "path": str(app / "notes.md"), "text": "new\n", "base": {"mtime": read.get("mtime"), "size": read.get("size")}})
-        check(st == 200 and (app / "notes.md").read_bytes() == b"new\n" and any(home.glob("backups/knowledge-companion/*/files/*-notes.md")),
+        check(st == 200 and (app / "notes.md").read_bytes().replace(b"\r\n", b"\n") == b"new\n" and any(home.glob("backups/knowledge-companion/*/files/*-notes.md")),
               "files: the web UI saves a text file, its old version in the companion's backups", body[:300])
         (app / "win.txt").write_bytes(b"one\r\ntwo\r\n")
         read = json.loads(files({"op": "read", "path": str(app / "win.txt")})[1])

@@ -1419,6 +1419,19 @@ def share_contract(tmp, ck, fr, raw, er):
     assert ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/x/garden"}, er)[0] == 409  # an older companion
     http("POST", "/machine/report", rep, token=fr, headers=pc)
     assert ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/x/trade"}, er)[0] == 400  # not shared for trade
+    # Files on a pc shared for use: only that project's folders, the request names the project for the companion, and
+    # the owner's token answers it.
+    files = lambda path, op="list": ui("/ui/api/files", {"machine": mid, "op": op, "path": path}, er)
+    assert files("/home/x/trade")[0] == 403 and files("/home/x/garden/../trade")[0] == 403 and files("/home/x/gardenx")[0] == 403
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(2) as ex:
+        held = ex.submit(http, "GET", "/machine/actions?wait=8", None, fr, pc)
+        time.sleep(0.3)
+        page = ex.submit(files, "/home/x/garden/beds")
+        f = json.loads(held.result()[1])["files"][0]
+        assert (f["path"], f["project"]) == ("/home/x/garden/beds", "garden"), f
+        assert http("POST", "/machine/files/answer", {"id": f["id"], "path": "/home/x/garden/beds", "entries": []}, token=fr, headers=pc)[0] == 200
+        assert page.result()[0] == 200
     st, _, b = ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/x/garden", "worktree": False}, er)
     assert st == 200, b
     g = json.loads(b)["chat"]

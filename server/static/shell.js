@@ -1,6 +1,6 @@
 // App shell: the sidebar (desktop; [ folds it to an icon rail, below 1000 px it is the rail unless opened), the
 // bottom tab bar and More sheet (phone), one page header per view, and a hash route per view: #/chats (Agents),
-// #/inbox/<item key> (the same view, that item marked; #/inbox is an older name of #/chats), #/chats/<chat id>, #/chats/worker/<project>/<ID> (follow a worker), #/chats?view=list (the attention list a desktop otherwise shows beside an open chat), #/tasks, #/tasks?view=flow, #/machines, #/notes, #/notes/<path>, #/notes?q=<search>, #/map, #/map/<path>,
+// #/inbox/<item key> (the same view, that item marked; #/inbox is an older name of #/chats), #/chats/<chat id>, #/chats/worker/<project>/<ID> (follow a worker), #/chats?view=list (the attention list a desktop otherwise shows beside an open chat), #/tasks, #/tasks?view=flow, #/machines, #/machines?view=folders, #/files, #/notes, #/notes/<path>, #/notes?q=<search>, #/map, #/map/<path>,
 // #/changes, #/health, #/thispc. #/chats/<id>?solo=1 is one chat alone, in a tab of its own (a grid card's ↗): no sidebar, no list, no header; its logo goes home, × closes the tab. The URL is the only record of the view (refresh, back and forward work); an old
 // #<note path> link becomes #/notes/<path>. Paths in routes are encoded per part (encPath), decoded here. The views themselves are app.js's, agents.js's and mission.js's; this file shows one
 // at a time and asks it to load. The sidebar, More sheet and theme are nav.js's. Uses app.js globals ($, el, store, decode, pushHash, ck, Graph, mapOn, current, …).
@@ -9,14 +9,14 @@
 // view -> where it lives (element id), its section label and title
 const VIEWS = {
   inbox: ["cockpit", "Agents", "Agents"], chats: ["cockpit", "Agents", "Agents"], tasks: ["tab-tasks", "Agents", "Tasks"],
-  machines: ["tab-machines", "Agents", "Machines"], notes: ["kn", "Knowledge", "Notes"], map: ["kn", "Knowledge", "Map"],
+  machines: ["tab-machines", "Agents", "Machines"], files: ["tab-machines", "Agents", "Files"], notes: ["kn", "Knowledge", "Notes"], map: ["kn", "Knowledge", "Map"],
   changes: ["tab-changes", "Knowledge", "Changes"], health: ["tab-lint", "Knowledge", "Health"], thispc: ["tab-thispc", "This pc", "This pc"],
   settings: ["tab-settings", "You", "Settings"],
 };
 const PHONE_TABS = ["chats", "machines", "notes", "map"]; // the rest sit behind More
 // Without a token whose pc may be steered from here (me.agents false) the page is the knowledge part only: the agent
 // views go to Notes, and Map and Changes take their places in the tab bar (nav.html ag-on / ag-off).
-const AGENT_VIEWS = ["inbox", "chats", "machines"];
+const AGENT_VIEWS = ["inbox", "chats", "machines", "files"];
 const agentsOff = () => me.agents === false;
 const phoneTabs = () => (agentsOff() ? ["tasks", "notes", "map", "changes"] : PHONE_TABS);
 const startRoute = () => { const v = me.prefs?.start_page || "chats"; return agentsOff() && AGENT_VIEWS.includes(v) ? "#/notes" : `#/${v}`; }; // Settings
@@ -107,9 +107,10 @@ function applyRoute() {
   ckRun(agents);
   if (r.view === "tasks") viewLoad("tasks", "Tasks", () => loadTasks(true));
   // Machines: Pcs (the comparison) or Folders (per project); one load, two drawings of it
-  machinesMode = r.view === "machines" && ["folders", "files"].includes(r.q.get("view")) ? r.q.get("view") : "pcs";
+  // Files (#/files) is the same view's third drawing, with its own place in the sidebar
+  machinesMode = r.view === "files" ? "files" : r.view === "machines" && r.q.get("view") === "folders" ? "folders" : "pcs";
   for (const b of $("machines-mode").querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.mode === machinesMode));
-  if (r.view === "machines") viewLoad("machines", "Machines", loadMachines);
+  if (r.view === "machines" || r.view === "files") viewLoad("machines", VIEWS[r.view][2], loadMachines);
   // Notes and Map: the topic list and right column, the note, the search results or the map in the middle. On a
   // phone the list and the note are two pages: a note or a search hides the list and shows the Back arrow.
   const q = r.view === "notes" ? r.q.get("q") : null; // null: no search; "" an empty search page
@@ -205,7 +206,7 @@ function needsNotify(items) {
 // when notifications are on, which is when they matter).
 setInterval(() => { if ($("cockpit").hidden && (!document.hidden || notifyOn()) && me.user && !agentsOff()) ckSummary().catch(() => {}); }, 30000);
 
-for (const b of $("machines-mode").querySelectorAll("button")) b.onclick = () => go(b.dataset.mode === "pcs" ? "#/machines" : `#/machines?view=${b.dataset.mode}`);
+for (const b of $("machines-mode").querySelectorAll("button")) b.onclick = () => go(b.dataset.mode === "folders" ? "#/machines?view=folders" : "#/machines");
 
 // Search or jump: the command palette (palette.js).
 $("jump").onclick = () => openPalette();

@@ -2026,16 +2026,19 @@ _linked_roots = {"at": 0.0, "roots": []}
 
 
 def linked_roots() -> list:
-    """The real paths of the folders linked on this pc, looked up at most every 30 s (folder_links runs git)."""
+    """(real path, project) of the folders linked on this pc, looked up at most every 30 s (folder_links runs git)."""
     if time.time() - _linked_roots["at"] > 30:
-        _linked_roots.update(at=time.time(), roots=[Path(os.path.realpath(f["path"])) for f in folder_links()["linked"]])
+        _linked_roots.update(at=time.time(), roots=[(Path(os.path.realpath(f["path"])), f["project"]) for f in folder_links()["linked"]])
     return _linked_roots["roots"]
 
 
-def files_path(path: str) -> tuple:
-    """(real path, its linked folder) for a path inside a folder linked here; ValueError for anything else."""
+def files_path(path: str, project: str | None = None) -> tuple:
+    """(real path, its linked folder) for a path inside a folder linked here (of `project` only, for someone the owner
+    shared that project with); ValueError for anything else."""
     p = Path(os.path.realpath(path))
-    for root in linked_roots():
+    for root, of in linked_roots():
+        if project and of != project:
+            continue
         if p == root or root in p.parents:
             # on Windows a colon names a file's alternate data stream (.env::$DATA is .env)
             if any(FILES_PRIVATE.fullmatch(x) or os.name == "nt" and ":" in x for x in p.relative_to(root).parts):
@@ -2046,7 +2049,7 @@ def files_path(path: str) -> tuple:
 
 def file_answer(f: dict) -> dict:
     """The answer to a list, read or write request (file_request streams)."""
-    p, root = files_path(str(f.get("path", "")))
+    p, root = files_path(str(f.get("path", "")), f.get("project"))
     op = f.get("op")
     if op == "list":
         entries = []
@@ -2105,7 +2108,7 @@ def file_request(tok: str, f: dict):
     """Answer one file request: a stream posts the asked range as the request body, the rest answer in JSON."""
     try:
         if f.get("op") == "stream":
-            p, _ = files_path(str(f.get("path", "")))
+            p, _ = files_path(str(f.get("path", "")), f.get("project"))
             size = p.stat().st_size
             start, end = f.get("start"), f.get("end")
             if start is None and end is not None:  # bytes=-N: the last N bytes

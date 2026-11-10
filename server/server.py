@@ -41,7 +41,7 @@ import unicodedata
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import regex
 import uvicorn
@@ -6342,7 +6342,7 @@ async def files_ask(mid: str, req: dict, stream: bool = False) -> tuple:
     if device.get().get("impersonator"):
         raise PermissionError("viewing as someone else: the files on their pcs stay theirs")
     row = await asyncio.to_thread(chat_machine, mid)
-    if not row or not row["own"]:  # never a guest: a shared pc shares chats, not its disk
+    if not row:
         raise PermissionError(await asyncio.to_thread(not_own, mid))
     if not row["online"]:
         raise ValueError(f"{row['label']} is offline")
@@ -6350,10 +6350,18 @@ async def files_ask(mid: str, req: dict, stream: bool = False) -> tuple:
     if not isinstance(path, str) or not path or len(path) > FILES_PATH or any(c in path for c in "\0\n\r"):
         raise ValueError("send the full path of a file or folder on the pc")
     dev, tokens = device.get(), read_json(TOKENS_FILE, {})
+    if row["own"]:
+        answer_by = [n for n in row["tokens"] if n in tokens and own_token(tokens[n], dev)]
+    else:  # a pc shared with this person for use: only the folders of that project, answered under the owner's tokens
+        project = files_project(row, path)
+        if not project:
+            raise PermissionError("not inside a folder of a project its owner shared with you for use on this pc")
+        req = {**req, "project": project}  # the companion keeps to that project's folders too
+        answer_by = share_tokens(mid, read_json(MACHINES_FILE, {}).get(mid) or {}, tokens, (read_json(SHARES_FILE, {}).get(mid) or {}).get("by", ""))
     rid, now = secrets.token_hex(8), time.time()
     for k in [k for k, v in FILES_OPEN.items() if now - v["at"] > 3600 and "chunks" in v]:  # a stream no page read
         FILES_OPEN.pop(k, None)
-    FILES_OPEN[rid] = {"machine": mid, "at": now, "tokens": [n for n in row["tokens"] if n in tokens and own_token(tokens[n], dev)],
+    FILES_OPEN[rid] = {"machine": mid, "at": now, "tokens": answer_by,
                        "answer": asyncio.get_running_loop().create_future(),
                        **({"chunks": asyncio.Queue(16), "gone": asyncio.Event()} if stream else {})}
     FILES_QUEUED.setdefault(mid, []).append({**req, "id": rid, "at": now})
@@ -6367,6 +6375,20 @@ async def files_ask(mid: str, req: dict, stream: bool = False) -> tuple:
     finally:
         if not stream:
             FILES_OPEN.pop(rid, None)
+
+
+def files_project(row: dict, path: str) -> str:
+    """The project shared with this person for use on pc `row` whose linked folder (as the pc reports it) holds `path`,
+    else "". Windows paths compare without case; a path with .. never counts."""
+    flavour = PureWindowsPath if re.match(r"[A-Za-z]:[\\/]|\\\\", path) else PurePosixPath
+    p = flavour(path)
+    if ".." in p.parts:
+        return ""
+    for f in ((row.get("companion") or {}).get("folders") or {}).get("linked") or []:
+        root = flavour(str(f.get("path", "")))
+        if (row.get("shared") or {}).get(f.get("project")) in USES and (p == root or root in p.parents):
+            return f["project"]
+    return ""
 
 
 def files_error(e: Exception) -> JSONResponse:
