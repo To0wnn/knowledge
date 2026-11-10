@@ -1490,6 +1490,23 @@ def share_contract(tmp, ck, fr, raw, er):
     assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={jc}")[2])["chat"]["typing"] == ["erin"]
     assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={jc}", h=er)[2])["chat"]["typing"] == []
     assert ui("/ui/api/chat/typing", {"machine": mid, "id": other}, er)[0] == 400  # a chat of a project not shared with her
+    # Live typing (on by default): the others see her box as she types; never a known secret; gone once she sends.
+    look = lambda: json.loads(ui(f"/ui/api/chat?machine={mid}&id={jc}")[2])["chat"]
+    ui("/ui/api/chat/typing", {"machine": mid, "id": jc, "text": "let's check the flaps"}, er)
+    assert look()["drafts"] == {"erin": "let's check the flaps"} and look()["typing"] == ["erin"]
+    ui("/ui/api/chat/typing", {"machine": mid, "id": jc, "text": "pw Sup3rSecret99"}, er)
+    assert look()["drafts"] == {} and look()["typing"] == ["erin"]
+    ui("/ui/api/chat/typing", {"machine": mid, "id": jc, "text": ""}, er)
+    assert look()["typing"] == [] and look()["drafts"] == {}  # the box emptied: no longer typing
+    assert ui("/ui/api/me/prefs", {"live_typing": "off"}, er)[0] == 200
+    ui("/ui/api/chat/typing", {"machine": mid, "id": jc, "text": "private draft"}, er)
+    assert look()["drafts"] == {} and look()["typing"] == ["erin"]  # off: only that she types
+    assert ui("/ui/api/me/prefs", {"live_typing": "on"}, er)[0] == 200
+    ui("/ui/api/chat/typing", {"machine": mid, "id": jc, "text": "sending now"}, er)
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": jc, "text": "sending now"}, er)[0] == 200
+    assert look()["drafts"] == {} and look()["typing"] == []
+    poll()
+    http("POST", "/machine/chats/events", {"chat": jc, "events": [], "done": True}, token=fr, headers=pc)
     assert ui("/ui/api/chat/join", {"machine": mid, "id": jc, "leave": True}, er)[0] == 200
     assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={jc}", h=er)[2])["chat"]["rights"] == "view"
     assert ui("/ui/api/chat/send", {"machine": mid, "id": jc, "text": "gone?"}, er)[0] == 403

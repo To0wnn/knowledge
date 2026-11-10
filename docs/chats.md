@@ -23,7 +23,10 @@ from a phone. The pc side runs in the companion ([companion.md](companion.md)).
   in it has `yolo`, so a YOLO turn running at a join under use stops first; its agent reaches only that project and
   writes only when every guest may); a guest whose share ends leaves by themselves at the next poll. **Typing**: in a
   chat someone else may see (`watched`), the page says `POST /ui/api/chat/typing` at most every 3 s while you type, and
-  the others see "<name> is typing…" for 6 s (`typing` with the chat; RAM only). When the
+  the others see "<name> is typing…" for 6 s (`typing` with the chat; RAM only). With Settings "show what I type" on
+  (`live_typing`, the default) the ping carries the box's text, at most every second plus the last words, and the
+  others see it live above their box (`drafts`; a text with a known secret value is never passed on, an emptied box
+  ends it, sending clears it); off, only that you type. When the
   share ends it goes back to whoever had it (`taken_from`) as their own chat again. The guest answers their own chat's tool approvals (the owner can too): use
   means they can have anything run as the owner on that pc, so share it only with someone you would give a shell. A
   guest's chat (`guest: true`) always gets its own worktree, so it never works in the owner's checkout (the companion

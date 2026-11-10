@@ -940,7 +940,7 @@ async function loadSettings() {
   const getLead = setupRolePick("set-model", "set-effort", me.prefs?.chat_default, "The one I used last");
   const getReader = setupRolePick("set-reader-model", "set-reader-effort", me.prefs?.chat_reader);
   const getReview = setupRolePick("set-review-model", "set-review-effort", me.prefs?.chat_review);
-  for (const [id, key, dflt] of [["set-start", "start_page", "chats"], ["set-grid", "grid_open", "tab"], ["set-group", "grid_group", "project"], ["set-send", "send_key", "ctrl"]]) {
+  for (const [id, key, dflt] of [["set-start", "start_page", "chats"], ["set-grid", "grid_open", "tab"], ["set-group", "grid_group", "project"], ["set-send", "send_key", "ctrl"], ["set-live-typing", "live_typing", "on"]]) {
     const pick = $(id); pick.value = me.prefs?.[key] || dflt;
     pick.onchange = async () => {
       try {
@@ -1333,17 +1333,36 @@ function ckShareBar(card, ro) {
   }
   card.shareBar = bar; card.form.prepend(bar);
 }
-function ckTypingLine(card) { // "<name> is typing…" from the others in this chat
-  const who = card.meta.typing || [], text = who.length ? `${who.join(", ")} ${who.length > 1 ? "are" : "is"} typing…` : "";
-  if (!card.typingEl) { card.typingEl = el("div", "ck-typing muted"); card.typingEl.setAttribute("aria-live", "polite"); card.form.prepend(card.typingEl); }
+function ckTypingLine(card) { // "<name> is typing…" from the others in this chat, and what they type when they share it
+  const who = card.meta.typing || [], drafts = card.meta.drafts || {};
+  const text = who.length ? `${who.join(", ")} ${who.length > 1 ? "are" : "is"} typing…` : "";
+  if (!card.typingEl) {
+    card.typingEl = el("div", "ck-typing muted"); card.typingEl.setAttribute("aria-live", "polite");
+    card.draftsEl = el("div", "ck-drafts"); card.form.prepend(card.draftsEl, card.typingEl);
+  }
   if (card.typingEl.textContent !== text) card.typingEl.textContent = text;
   card.typingEl.hidden = !text;
-  if (!card.typingHooked) { // say you type, at most every 3 s, only in a chat someone else may see
+  const sig = JSON.stringify(drafts);
+  if (card.draftsSig !== sig) { // live: the other one's box as they type it (Settings: Show what I type)
+    card.draftsSig = sig;
+    card.draftsEl.replaceChildren(...Object.entries(drafts).map(([u, t]) => {
+      const d = el("div", "ck-draft-live"); d.append(el("span", "ck-by", u), el("span", null, t.length > 600 ? `…${t.slice(-600)}` : t)); return d;
+    }));
+  }
+  card.draftsEl.hidden = !Object.keys(drafts).length;
+  if (!card.typingHooked) { // say you type, only in a chat someone else may see: with the text at most every second, else every 3 s
     card.typingHooked = true;
+    const send = () => {
+      card.typedAt = Date.now(); clearTimeout(card.typeTimer);
+      const live = (me.prefs?.live_typing || "on") === "on";
+      api("/ui/api/chat/typing", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, ...(live ? { text: card.input.value } : {}) }) }).catch(() => {});
+    };
     card.input.addEventListener("input", () => {
-      if (!card.meta.watched || card.meta.rights === "view" || card.meta.draft || Date.now() - (card.typedAt || 0) < 3000) return;
-      card.typedAt = Date.now();
-      api("/ui/api/chat/typing", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id }) }).catch(() => {});
+      if (!card.meta.watched || card.meta.rights === "view" || card.meta.draft) return;
+      const gap = (me.prefs?.live_typing || "on") === "on" ? 1000 : 3000, wait = gap - (Date.now() - (card.typedAt || 0));
+      clearTimeout(card.typeTimer);
+      if (wait <= 0) send(); else if (gap === 1000) card.typeTimer = setTimeout(send, wait); // the last words go too
     });
   }
 }

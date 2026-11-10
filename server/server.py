@@ -4612,7 +4612,8 @@ async def ui_transcribe(request: Request):
 
 
 PREFS_FILE = ADMIN_DIR / "user_prefs.json"  # per person, set on the Settings page: {user: {chat_default: {agent, id, effort}, keys: {action: combo}, matrix_room, <PREF_CHOICES key>: value}}
-PREF_CHOICES = {"grid_open": ("tab", "here"), "grid_group": ("project", "together"), "send_key": ("ctrl", "enter", "shift"), "start_page": ("chats", "tasks", "notes", "map")}  # the first is the default: not stored
+PREF_CHOICES = {"grid_open": ("tab", "here"), "grid_group": ("project", "together"), "send_key": ("ctrl", "enter", "shift"), "start_page": ("chats", "tasks", "notes", "map"),
+                "live_typing": ("on", "off")}  # the first is the default: not stored. live_typing: others in a shared chat see what you type
 
 MATRIX_TOKENS_FILE = ADMIN_DIR / "matrix_tokens.json"  # {user: token} for an admin's own homeserver; never sent back to the page
 MATRIX_URL = re.compile(r"https?://[^\s/?#]{1,255}(/[^\s?#]{0,200})?")
@@ -7127,11 +7128,12 @@ async def ui_chat(request: Request):
     older = bool(tail) and len(events) > tail and (bool(before) or not after)
     events = events[-tail:] if older else events
     me, now = device.get().get("user", ""), time.time()
-    typing = sorted(u for u, t in TYPING.get((row["id"], c["id"]), {}).items() if u != me and now - t < TYPING_SECONDS)
+    live = {u: x for u, x in TYPING.get((row["id"], c["id"]), {}).items() if u != me and now - x[0] < TYPING_SECONDS}
+    typing, drafts = sorted(u for u, (_, x) in live.items() if x != ""), {u: x for u, (_, x) in live.items() if x}
     # someone else may see this chat: the page then says when you type
     watched = bool(c.get("guest") or c.get("joined") or ((read_json(SHARES_FILE, {}).get(row["id"]) or {}).get("projects") or {}).get(c.get("project") or ""))
     return JSONResponse({"chat": {**chat_meta(c), "rights": rights, "takeover": may_take_over(row, c), "joined": c.get("joined") or [],
-                                  "watched": watched, "typing": typing}, "events": events, "older": older, "trimmed": bool(c.get("trimmed")),
+                                  "watched": watched, "typing": typing, "drafts": drafts}, "events": events, "older": older, "trimmed": bool(c.get("trimmed")),
                          "online": row["online"], "at": row["at"], "label": row["label"], "asks": asks, "now": time.time(),
                          "models": ((row.get("companion") or {}).get("models") or {}).get(c.get("agent"), [])})
 
@@ -7216,6 +7218,7 @@ async def ui_chat_send(request: Request):
     mode = str(b.get("mode") or "now")  # while it works: now (into the turn), queue (after it), force (stop the step, then this)
     live = c.get("agent") in ((row.get("companion") or {}).get("live") or [])
     busy, msg = [], {"text": text, "by": device.get().get("user", ""), "at": time.time()}
+    TYPING.get((row["id"], c["id"]), {}).pop(msg["by"], None)  # sent: no longer typing, and the others' preview goes
     if agent != c["agent"]:
         if plugin_version((row.get("companion") or {}).get("version") or "") < (0, 43, 38):  # older: it would resume the old session, or not say which agent posts
             return JSONResponse({"error": f"update the knowledge plugin on {row['label']} first (0.43.38 or newer continues a chat in another agent)"}, status_code=409)
@@ -7343,22 +7346,27 @@ async def ui_chat_join(request: Request):
     return JSONResponse({"ok": True, "stopped": stop})
 
 
-TYPING: dict = {}  # (machine, chat) -> {person: when they last typed}; RAM only, seconds old
-TYPING_SECONDS = 6
+TYPING: dict = {}  # (machine, chat) -> {person: (when they last typed, what the box holds or None)}; RAM only, seconds old
+TYPING_SECONDS, TYPING_TEXT = 6, 4000
 
 
 @server.custom_route("/ui/api/chat/typing", methods=["POST"])
 async def ui_chat_typing(request: Request):
-    """{machine, id}: this person types in that chat now (the page says so every few seconds while they type); the
-    others in it see "<name> is typing" with the chat."""
+    """{machine, id[, text]}: this person types in that chat now (the page says so every few seconds while they type);
+    the others in it see "<name> is typing" with the chat, and what the box holds when the writer has live typing on
+    (Settings; on by default). A text with a known secret value in it is never passed on."""
     try:
         row, b, f, c = await chat_request(request, True)
     except (ValueError, AttributeError, TypeError, PermissionError) as e:
         return chat_error(e)
     now = time.time()
-    for k in [k for k, v in TYPING.items() if all(now - t > TYPING_SECONDS for t in v.values())]:
+    for k in [k for k, v in TYPING.items() if all(now - t > TYPING_SECONDS for t, _ in v.values())]:
         TYPING.pop(k)
-    TYPING.setdefault((row["id"], c["id"]), {})[device.get().get("user", "")] = now
+    me = device.get().get("user", "")
+    text = b.get("text") if isinstance(b.get("text"), str) else None
+    if text is not None and (read_json(PREFS_FILE, {}).get(me, {}).get("live_typing") == "off" or contains_secret(text)):
+        text = None
+    TYPING.setdefault((row["id"], c["id"]), {})[me] = (now, text[-TYPING_TEXT:] if text else text)
     return JSONResponse({"ok": True})
 
 

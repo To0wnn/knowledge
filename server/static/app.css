@@ -1289,3 +1289,6 @@ body.iv { display: flex; flex-direction: column; height: 100dvh; margin: 0; over
 .ck-msg .ck-by { display: block; font-size: .78em; font-weight: 600; opacity: .7; margin-bottom: 2px; }
 .ck-sharebar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
 .ck-typing { font-size: .82em; font-style: italic; margin-bottom: 4px; }
+.ck-drafts { display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; }
+.ck-draft-live { font-size: .88em; font-style: italic; opacity: .8; white-space: pre-wrap; border-left: 2px solid currentColor; padding-left: 8px; }
+.ck-draft-live .ck-by { display: block; font-style: normal; font-weight: 600; font-size: .85em; }
