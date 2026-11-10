@@ -1463,8 +1463,9 @@ function ckMic(card, btn) {
 }
 // A message of the owner, or a tool line naming an image the agent looked at: its text, each file a thumbnail
 // (images) or a download link.
-function ckUserMsg(card, text, box = el("div", "ck-msg user")) {
+function ckUserMsg(card, text, box = el("div", "ck-msg user"), by = "") {
   let at = 0;
+  if (by && by !== me.user) box.append(el("span", "ck-by", by)); // someone else wrote it: a chat two people share
   for (const m of text.matchAll(CK_REF)) {
     box.append(text.slice(at, m.index)); at = m.index + m[0].length;
     const a = el("a", "ck-file"), url = `/ui/api/chat/file?machine=${encodeURIComponent(card.meta.machine)}&file=${encodeURIComponent(`${m[1]}/${m[2]}`)}`;
@@ -1526,7 +1527,7 @@ function ckEvents(card, res) {
       dirty.add(msg);
     } else {
       if (e.kind === "user") card.failedWrap = false; // a new message or a retried Archive: only the newest wrap-up counts
-      card.log.append(e.kind === "user" ? ckUserMsg(card, e.text) : ckLine(card, e));
+      card.log.append(e.kind === "user" ? ckUserMsg(card, e.text, undefined, e.by) : ckLine(card, e));
     }
   }
   for (const msg of dirty) msg.innerHTML = renderMd(msg.dataset.raw.replace(/^\n+/, ""));

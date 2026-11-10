@@ -6498,7 +6498,7 @@ async def chat_live_message(f: Path, c: dict, msg: dict, mode: str, text: str, a
     def note(c):
         c["closed"] = False
         if not added:
-            chat_add(c, "user", text)
+            chat_add(c, "user", text, extra={"by": msg.get("by") or ""})  # who wrote it: two people may share one chat
             c["title"] = chat_title(text, c.get("title") or "", c.get("titled"))
         chat_add(c, "info", "Sent into the running turn." if mode == "now" else "Force: this step stops and your message goes in.")
     await asyncio.to_thread(update_state, f, note)
@@ -7229,12 +7229,12 @@ async def ui_chat_send(request: Request):
             c.update(pick)
             line.append(msg)
             busy.append("queued")
-            chat_add(c, "user", text)
+            chat_add(c, "user", text, extra={"by": msg["by"]})
             c["title"] = chat_title(text, c.get("title") or "", c.get("titled"))
             chat_add(c, "info", "Queued: the agent gets this when its current turn ends.")
             return
         c.update(pick)
-        chat_add(c, "user", text)
+        chat_add(c, "user", text, extra={"by": msg["by"]})
         c.update(status="queued", title=chat_title(text, c.get("title") or "", c.get("titled")))
     await asyncio.to_thread(update_state, f, change)
     if busy == ["working"]:
@@ -7641,6 +7641,14 @@ async def machine_chat_file(request: Request):
     return JSONResponse({"ref": ref, "size": len(data)})
 
 
+def signed(c: dict, msg: dict) -> dict:
+    """A message in a chat that was taken over (two people steer it: the taker and the pc's owner) names its writer for
+    the agent, so it knows who asks what."""
+    if not c.get("taken") or not msg.get("by") or msg.get("text") == CHAT_WRAP_UP:
+        return msg
+    return {**msg, "text": f"[from {msg['by']}] {msg.get('text') or ''}"}
+
+
 @server.custom_route("/machine/chats", methods=["GET"])
 async def machine_chats(request: Request):
     """The companion asks every ~2 s while a chat is active (else ~10 s): new messages for it to run (handed out
@@ -7703,6 +7711,7 @@ async def machine_chats(request: Request):
                 if e.get("stop"):
                     out["stop"].append(cid)
                 for m in e.pop("live", []):  # a live chat's message while it works: into its running agent (now or force)
+                    m = signed(c, m)
                     out["work"].append({"chat": cid, "agent": c["agent"], "folder": c["folder"], "session": c.get("session", ""),
                                         "model": c.get("model", ""), "effort": c.get("effort", ""), "allow": c.get("allow", []),
                                         **({"worktree": True} if c.get("worktree") else {}), **extra, **m})
@@ -7710,7 +7719,7 @@ async def machine_chats(request: Request):
                     s = e.pop("steer")
                     out.setdefault("steer", []).extend({"chat": cid, **x} for x in (s if isinstance(s, list) else [s]))
             elif "msg" in e:
-                msg = e.pop("msg")
+                msg = signed(c, e.pop("msg"))
                 if (h := c.get("handoff")) and not c.get("session"):  # continued in another agent: until it has a session of its own
                     old = {**c, "events": [x for x in c.get("events") or [] if x.get("n", 0) <= h.get("upto", 0)]}
                     msg = {**msg, "text": CHAT_HANDOFF.format(old=h.get("from", "?"), transcript=chat_transcript(old, 40000)) + (msg.get("text") or "")}

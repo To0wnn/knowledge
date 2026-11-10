@@ -1461,9 +1461,12 @@ def share_contract(tmp, ck, fr, raw, er):
     assert ui("/ui/api/chat/send", {"machine": mid, "id": mine, "text": "taking it from here"}, er)[0] == 200
     w = {x["chat"]: x for x in poll()["work"]}[mine]
     assert w["guest"] and w["taken"] and "guest_yolo" not in w, w  # under "use": without YOLO, in its own folder
+    assert w["text"].startswith("[from erin] taking it from here"), w  # two people steer it: the agent hears who asks
     http("POST", "/machine/chats/events", {"chat": mine, "events": [], "done": True}, token=fr, headers=pc)
     assert ui("/ui/api/chat/send", {"machine": mid, "id": mine, "text": "still mine"})[0] == 200  # the pc's owner can still steer it
-    poll()
+    assert {x["chat"]: x for x in poll()["work"]}[mine]["text"].startswith("[from alice] still mine")
+    said = [(e["text"], e.get("by")) for e in json.loads(ui(f"/ui/api/chat?machine={mid}&id={mine}", h=er)[2])["events"] if e["kind"] == "user"]
+    assert said[-2:] == [("taking it from here", "erin"), ("still mine", "alice")], said  # each message names its writer
     http("POST", "/machine/chats/events", {"chat": mine, "events": [], "done": True}, token=fr, headers=pc)
     # Taken back: off her list at once; the running turn stops at the next poll and nothing more runs.
     assert share("")[0] == 200 and mid not in rows(er) and "abababababababab" not in json.loads((tmp / "machine_shares.json").read_text())
