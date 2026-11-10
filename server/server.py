@@ -3090,6 +3090,13 @@ def shares_for(mid: str, user: str, m: dict | None = None, tokens: dict | None =
     return got
 
 
+def joined_ok(mid: str, c: dict) -> list[str]:
+    """The people who joined chat `c` (on pc `mid`) and still may: its project still shared with them there for use,
+    and still a member."""
+    p = c.get("project") or ""
+    return [u for u in c.get("joined") or [] if share_mode(mid, p, u) in USES and member_of(u, p)]
+
+
 def guest_device(dev: dict) -> dict:
     """A turn of a guest's chat calls the server with the pc owner's token: there it reaches only the chat's project,
     writes only when the guest may write it, and lists or reads no chats (the owner's other chats and projects stay
@@ -3098,12 +3105,15 @@ def guest_device(dev: dict) -> dict:
         c = read_json(chat_file(dev["machine"], dev["chat"]), None) or {}
     except ValueError:
         return dev
-    if not c.get("guest"):
+    joined = joined_ok(dev["machine"], c)
+    if not c.get("guest") and not joined:
         return dev
     p, by = c.get("project") or "", c.get("by", "")
+    people = ([by] if c.get("guest") else []) + joined  # a joined chat: what every guest in it may, not more
     roots = [r for r in PROJECTS.get(p, ()) if not dev.get("roots") or r in dev["roots"]] or ["\0none"]  # never [] (= everything)
-    may_write = by in ADMINS or read_json(USERS_FILE, {}).get(by, {}).get("projects", {}).get(p) == "write"
-    return {**dev, "roots": roots, "write": bool(dev.get("write")) and may_write, "skills": False, "guest_chat": by}
+    users = read_json(USERS_FILE, {})
+    may_write = all(u in ADMINS or users.get(u, {}).get("projects", {}).get(p) == "write" for u in people)
+    return {**dev, "roots": roots, "write": bool(dev.get("write")) and may_write, "skills": False, "guest_chat": ", ".join(people)}
 
 
 def shared_row(mid: str, m: dict, shared: dict, now: float) -> dict:
@@ -6562,7 +6572,8 @@ def chat_rights(row: dict, c: dict) -> str:
     mode = (row.get("shared") or {}).get(c.get("project") or "")
     if not mode:
         return ""
-    return "act" if mode in USES and c.get("guest") and c.get("by") == device.get().get("user") else "view"
+    me = device.get().get("user")
+    return "act" if mode in USES and (c.get("guest") and c.get("by") == me or me in (c.get("joined") or [])) else "view"
 
 
 def guest_chat_ok(c: dict, mid: str, cfg: dict) -> bool:
@@ -7115,7 +7126,12 @@ async def ui_chat(request: Request):
     events = [e for e in c.get("events", []) if (e["n"] < before if before else e["n"] > after)]
     older = bool(tail) and len(events) > tail and (bool(before) or not after)
     events = events[-tail:] if older else events
-    return JSONResponse({"chat": {**chat_meta(c), "rights": rights, "takeover": may_take_over(row, c)}, "events": events, "older": older, "trimmed": bool(c.get("trimmed")),
+    me, now = device.get().get("user", ""), time.time()
+    typing = sorted(u for u, t in TYPING.get((row["id"], c["id"]), {}).items() if u != me and now - t < TYPING_SECONDS)
+    # someone else may see this chat: the page then says when you type
+    watched = bool(c.get("guest") or c.get("joined") or ((read_json(SHARES_FILE, {}).get(row["id"]) or {}).get("projects") or {}).get(c.get("project") or ""))
+    return JSONResponse({"chat": {**chat_meta(c), "rights": rights, "takeover": may_take_over(row, c), "joined": c.get("joined") or [],
+                                  "watched": watched, "typing": typing}, "events": events, "older": older, "trimmed": bool(c.get("trimmed")),
                          "online": row["online"], "at": row["at"], "label": row["label"], "asks": asks, "now": time.time(),
                          "models": ((row.get("companion") or {}).get("models") or {}).get(c.get("agent"), [])})
 
@@ -7288,6 +7304,61 @@ async def ui_chat_take(request: Request):
     audit("chat-take", f"{row['id']} {c['id']} {was} -> {me}")
     if by in ADMINS:
         notify(f"Knowledge: {me} took over a chat on your pc {row['label']} ({c.get('project')}).")
+    return JSONResponse({"ok": True})
+
+
+@server.custom_route("/ui/api/chat/join", methods=["POST"])
+async def ui_chat_join(request: Request):
+    """{machine, id[, leave]}: join someone else's chat on a pc shared with you for use (both steer it, it stays
+    theirs), or leave it. While you are in it, it runs under your share (YOLO only when every guest in it has "yolo")
+    and its agent reaches only that project; when your share ends you leave it by yourself."""
+    try:
+        row, b, f, c = await chat_request(request, True, act=False)
+    except (ValueError, AttributeError, TypeError, PermissionError) as e:
+        return chat_error(e)
+    me = device.get().get("user", "")
+    if b.get("leave"):
+        if me not in (c.get("joined") or []):
+            return JSONResponse({"error": "you are not in this chat"}, status_code=409)
+        await asyncio.to_thread(update_state, f, lambda c: (c.update(joined=[u for u in c.get("joined") or [] if u != me]),
+                                                            chat_add(c, "info", f"{me} left this chat.")))
+        await asyncio.to_thread(update_state, f.parent / "queue.json", lambda q: q.setdefault(c["id"], {}).update(end_once=True))
+        audit("chat-leave", f"{row['id']} {c['id']} {me}")
+        return JSONResponse({"ok": True})
+    if not may_take_over(row, c):
+        return JSONResponse({"error": "this chat cannot be joined: the pc is not shared with you for use, or its plugin is older than 0.43.46"}, status_code=403)
+    comp_agents = (((read_json(MACHINES_FILE, {}).get(row["id"]) or {}).get("companion") or {}).get("agents") or {})
+    mode, agent_yolo = row["shared"][c["project"]], bool((comp_agents.get(c.get("agent")) or {}).get("yolo"))
+
+    def change(c):
+        c["joined"] = sorted({*(c.get("joined") or []), me})
+        chat_add(c, "info", f"{me} joined this chat: you both steer it now; each message names its writer.")
+    await asyncio.to_thread(update_state, f, change)
+    # its agent restarts under the stricter settings; a YOLO turn running now stops when the guest may not have YOLO
+    stop = mode != "yolo" and agent_yolo and c.get("status") in ("queued", "running")
+    await asyncio.to_thread(update_state, f.parent / "queue.json", lambda q: q.setdefault(c["id"], {}).update(end_once=True, **({"stop": True} if stop else {})))
+    audit("chat-join", f"{row['id']} {c['id']} {me}")
+    if (by := (read_json(SHARES_FILE, {}).get(row["id"]) or {}).get("by", "")) in ADMINS:
+        notify(f"Knowledge: {me} joined a chat on your pc {row['label']} ({c.get('project')}).")
+    return JSONResponse({"ok": True, "stopped": stop})
+
+
+TYPING: dict = {}  # (machine, chat) -> {person: when they last typed}; RAM only, seconds old
+TYPING_SECONDS = 6
+
+
+@server.custom_route("/ui/api/chat/typing", methods=["POST"])
+async def ui_chat_typing(request: Request):
+    """{machine, id}: this person types in that chat now (the page says so every few seconds while they type); the
+    others in it see "<name> is typing" with the chat."""
+    try:
+        row, b, f, c = await chat_request(request, True)
+    except (ValueError, AttributeError, TypeError, PermissionError) as e:
+        return chat_error(e)
+    now = time.time()
+    for k in [k for k, v in TYPING.items() if all(now - t > TYPING_SECONDS for t in v.values())]:
+        TYPING.pop(k)
+    TYPING.setdefault((row["id"], c["id"]), {})[device.get().get("user", "")] = now
     return JSONResponse({"ok": True})
 
 
@@ -7644,7 +7715,7 @@ async def machine_chat_file(request: Request):
 def signed(c: dict, msg: dict) -> dict:
     """A message in a chat that was taken over (two people steer it: the taker and the pc's owner) names its writer for
     the agent, so it knows who asks what."""
-    if not c.get("taken") or not msg.get("by") or msg.get("text") == CHAT_WRAP_UP:
+    if not (c.get("taken") or c.get("joined")) or not msg.get("by") or msg.get("text") == CHAT_WRAP_UP:
         return msg
     return {**msg, "text": f"[from {msg['by']}] {msg.get('text') or ''}"}
 
@@ -7661,7 +7732,7 @@ async def machine_chats(request: Request):
     if dev.get("agents") is False:  # remote control off: no work, stops, diffs or answers for this pc
         return JSONResponse({"work": [], "stop": [], "busy": [], "active": False, "agents": False})
     q_path, out = CHATS_DIR / mid / "queue.json", {"work": [], "stop": [], "busy": []}
-    all_prefs, revoked, handback = read_json(PREFS_FILE, {}), [], []
+    all_prefs, revoked, handback, pruned = read_json(PREFS_FILE, {}), [], [], []
     guests_ok = bool(((read_json(MACHINES_FILE, {}).get(mid) or {}).get("companion") or {}).get("guests"))
     now0 = time.time()
 
@@ -7702,8 +7773,15 @@ async def machine_chats(request: Request):
                 continue
             # a guest's chat: its own worktree only, and without YOLO unless the owner shared it with YOLO (guest_yolo: then
             # the pc's own switch counts)
-            extra_guest = ({"guest": True, **({"guest_yolo": True} if share_mode(mid, c.get("project") or "", c.get("by", "")) == "yolo" else {}),
-                            **({"taken": True} if c.get("taken") else {})} if c.get("guest") else {})
+            joined = joined_ok(mid, c) if guests_ok else []  # a companion that cannot keep YOLO off: nobody stays in
+            if joined != (c.get("joined") or []):  # someone's share ended: they leave the chat (after the lock)
+                pruned.append((cid, joined))
+            people = ([c.get("by", "")] if c.get("guest") else []) + joined
+            yolo_all = all(share_mode(mid, c.get("project") or "", u) == "yolo" for u in people)
+            # a chat a guest runs or joined: without YOLO unless every guest in it has "yolo"; a taken or joined one goes
+            # on in the folder it ran in
+            extra_guest = ({"guest": True, **({"guest_yolo": True} if yolo_all else {}),
+                            **({"taken": True} if c.get("taken") or joined else {})} if people else {})
             rdr = (all_prefs.get(c.get("by", "") or "", {}).get("chat_reader") or {}).get("id") or ""
             extra = {**({"reader": rdr} if rdr else {}), **extra_guest}
             if e.get("busy"):
@@ -7735,6 +7813,12 @@ async def machine_chats(request: Request):
         await asyncio.to_thread(update_state, q_path, change)
     owner_tokens = lambda by: [n for n in (read_json(MACHINES_FILE, {}).get(mid) or {}).get("tokens", {})
                                if (cfg := read_json(TOKENS_FILE, {}).get(n)) and own_token(cfg, {"user": by, "admin": by in ADMINS}, steer=False)]
+    for cid, joined in pruned:  # after the queue's lock
+        def prune(c, joined=joined):
+            for u in set(c.get("joined") or []) - set(joined):
+                chat_add(c, "info", f"{u} left this chat: the pc is no longer shared with them for this project.")
+            c["joined"] = joined
+        await asyncio.to_thread(update_state, chat_file(mid, cid), prune)
     for cid in handback:  # after the queue's lock: back to whoever had it, as their own chat again
         def back(c):
             was = c.get("by", "")

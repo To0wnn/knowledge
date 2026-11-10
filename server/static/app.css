@@ -1287,3 +1287,5 @@ body.iv { display: flex; flex-direction: column; height: 100dvh; margin: 0; over
 
 /* the writer of a message in a chat two people share */
 .ck-msg .ck-by { display: block; font-size: .78em; font-weight: 600; opacity: .7; margin-bottom: 2px; }
+.ck-sharebar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+.ck-typing { font-size: .82em; font-style: italic; margin-bottom: 4px; }

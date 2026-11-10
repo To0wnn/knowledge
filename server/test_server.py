@@ -1468,6 +1468,33 @@ def share_contract(tmp, ck, fr, raw, er):
     said = [(e["text"], e.get("by")) for e in json.loads(ui(f"/ui/api/chat?machine={mid}&id={mine}", h=er)[2])["events"] if e["kind"] == "user"]
     assert said[-2:] == [("taking it from here", "erin"), ("still mine", "alice")], said  # each message names its writer
     http("POST", "/machine/chats/events", {"chat": mine, "events": [], "done": True}, token=fr, headers=pc)
+    # Join: both steer the owner's chat, it stays the owner's; under "use" a YOLO turn running now stops first.
+    http("POST", "/machine/report", {**rep, "guests": 2, "agents": {"codex": {"yolo": True, "models": [{"id": "gpt-x"}]}}}, token=fr, headers=pc)
+    jc = json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/x/garden", "worktree": False})[2])["chat"]["id"]
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": jc, "text": "start"})[0] == 200
+    assert "guest" not in {x["chat"]: x for x in poll()["work"]}[jc]  # the owner's own, YOLO as the pc has it
+    st, _, b = ui("/ui/api/chat/join", {"machine": mid, "id": jc}, er)
+    assert st == 200 and json.loads(b)["stopped"] is True, b
+    got = poll()
+    assert jc in got["stop"] and jc in got["end"], got
+    http("POST", "/machine/chats/events", {"chat": jc, "events": [], "done": True}, token=fr, headers=pc)
+    j = json.loads(ui(f"/ui/api/chat?machine={mid}&id={jc}", h=er)[2])["chat"]
+    assert j["rights"] == "act" and j["by"] == "alice" and j["joined"] == ["erin"] and j["watched"], j
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": jc, "text": "me too"}, er)[0] == 200
+    w = {x["chat"]: x for x in poll()["work"]}[jc]
+    assert w["guest"] and w["taken"] and "guest_yolo" not in w and w["text"].startswith("[from erin] me too"), w  # no YOLO while she is in it
+    assert "(no chats" in call("knowledge_chats", {}, token=fr, headers={**pc, "X-Knowledge-Chat": jc})[1]  # its agent: only her reach
+    http("POST", "/machine/chats/events", {"chat": jc, "events": [], "done": True}, token=fr, headers=pc)
+    # Typing: the others see it for a few seconds, never their own.
+    assert ui("/ui/api/chat/typing", {"machine": mid, "id": jc}, er)[0] == 200
+    assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={jc}")[2])["chat"]["typing"] == ["erin"]
+    assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={jc}", h=er)[2])["chat"]["typing"] == []
+    assert ui("/ui/api/chat/typing", {"machine": mid, "id": other}, er)[0] == 400  # a chat of a project not shared with her
+    assert ui("/ui/api/chat/join", {"machine": mid, "id": jc, "leave": True}, er)[0] == 200
+    assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={jc}", h=er)[2])["chat"]["rights"] == "view"
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": jc, "text": "gone?"}, er)[0] == 403
+    assert ui("/ui/api/chat/join", {"machine": mid, "id": jc}, er)[0] == 200  # in again, for the share ending below
+    poll()
     # Taken back: off her list at once; the running turn stops at the next poll and nothing more runs.
     assert share("")[0] == 200 and mid not in rows(er) and "abababababababab" not in json.loads((tmp / "machine_shares.json").read_text())
     assert ui("/ui/api/chat/send", {"machine": mid, "id": g["id"], "text": "more"}, er)[0] == 403
@@ -1481,6 +1508,7 @@ def share_contract(tmp, ck, fr, raw, er):
     assert ui("/ui/api/chat/send", {"machine": mid, "id": mine, "text": "mine again"})[0] == 200
     w = {x["chat"]: x for x in poll()["work"]}[mine]
     assert "guest" not in w and "taken" not in w, w
+    assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={jc}")[2])["chat"]["joined"] == []  # her share ended: she left it
     http("POST", "/machine/chats/events", {"chat": mine, "events": [], "done": True}, token=fr, headers=pc)
     assert http("POST", "/machine/chats/events", {"chat": g["id"], "events": [{"kind": "text", "text": "x"}]}, token=fr, headers=pc)[0] != 200
     # Membership gone with the share still on: the share counts for nothing.

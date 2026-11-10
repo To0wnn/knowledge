@@ -1308,6 +1308,45 @@ function ckPaint(card) {
     card.note.textContent = !card.online ? `${m.label} is offline${card.at ? ` since ${ago(card.at)}` : ""}: a chat needs its companion running.` : "";
   }
 }
+// A chat on a pc shared with you: Join (both steer it, it stays theirs) or Take over (it becomes yours); Leave when you
+// joined. One small bar above the box, redrawn only when what it offers changes.
+function ckShareBar(card, ro) {
+  const me_ = me.user, joined = (card.meta.joined || []).includes(me_);
+  const want = ro && card.meta.takeover ? "offer" : joined ? "joined" : "";
+  if (want === (card.shareWant || "")) return;
+  card.shareWant = want; card.shareBar?.remove(); card.shareBar = null;
+  if (!want) return;
+  const bar = el("div", "ck-sharebar"), post = (path, body, then) => async () => {
+    try { await api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, ...body }) }); }
+    catch (e) { toast(e.message); return; }
+    then?.(); ck.summaryAt = 0; ckPoll(card);
+  };
+  const btn = (text, title, fn, cls = "btn small") => { const b = el("button", cls, text); b.type = "button"; b.title = title; b.onclick = fn; bar.append(b); };
+  if (want === "offer") {
+    btn("Join", "Work in this chat together: you both steer it and every message names its writer; it stays theirs", post("/ui/api/chat/join", {}), "btn small primary");
+    btn("Take over", "Make this chat yours: the same conversation goes on here, on that pc, under your share; its owner still sees it",
+      () => confirm(`Take over "${card.meta.title || "this chat"}" from ${card.meta.by || "its owner"}?\n\nIts running turn stops; the conversation goes on as yours on ${card.meta.label}, with your share's settings. When the share ends it goes back.`)
+        && post("/ui/api/chat/take", {})());
+  } else {
+    bar.append(el("span", "muted", `You are in ${card.meta.by || "their"}'s chat`));
+    btn("Leave", "Stop steering this chat; you can still read it", post("/ui/api/chat/join", { leave: true }));
+  }
+  card.shareBar = bar; card.form.prepend(bar);
+}
+function ckTypingLine(card) { // "<name> is typing…" from the others in this chat
+  const who = card.meta.typing || [], text = who.length ? `${who.join(", ")} ${who.length > 1 ? "are" : "is"} typing…` : "";
+  if (!card.typingEl) { card.typingEl = el("div", "ck-typing muted"); card.typingEl.setAttribute("aria-live", "polite"); card.form.prepend(card.typingEl); }
+  if (card.typingEl.textContent !== text) card.typingEl.textContent = text;
+  card.typingEl.hidden = !text;
+  if (!card.typingHooked) { // say you type, at most every 3 s, only in a chat someone else may see
+    card.typingHooked = true;
+    card.input.addEventListener("input", () => {
+      if (!card.meta.watched || card.meta.rights === "view" || card.meta.draft || Date.now() - (card.typedAt || 0) < 3000) return;
+      card.typedAt = Date.now();
+      api("/ui/api/chat/typing", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id }) }).catch(() => {});
+    });
+  }
+}
 async function ckPoll(card) {
   if (!card) return;
   if (card.worker) return ckWorkerPoll(card);
@@ -1328,17 +1367,8 @@ async function ckPoll(card) {
     card.input.placeholder = ro ? "Read only: this chat is someone else's." + (card.meta.takeover ? " Take over to go on in it yourself." : "") : "Message the agent…";
     if (!ro) ckSendHints(card);
   }
-  if (ro && card.meta.takeover && !card.takeBtn) {
-    const b = el("button", "btn small primary", "Take over"); b.type = "button";
-    b.title = "Make this chat yours: the same conversation goes on here, on that pc, under your share; its owner still sees it";
-    b.onclick = async () => {
-      if (!confirm(`Take over "${card.meta.title || "this chat"}" from ${card.meta.by || "its owner"}?\n\nIts running turn stops; the conversation goes on as yours on ${card.meta.label}, with your share's settings. When the share ends it goes back.`)) return;
-      try { await api("/ui/api/chat/take", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id }) }); }
-      catch (e) { toast(e.message); return; }
-      b.remove(); card.takeBtn = null; ck.summaryAt = 0; ckPoll(card);
-    };
-    card.takeBtn = b; card.form.prepend(b);
-  } else if (card.takeBtn && !(ro && card.meta.takeover)) { card.takeBtn.remove(); card.takeBtn = null; }
+  ckShareBar(card, ro);
+  ckTypingLine(card);
   ckPicker(card);
   ckEvents(card, res);
   if (!card.meta.subs) ckSubsEnded(card); // the server knows none runs (its turn ended, or it was lost): no block says running
