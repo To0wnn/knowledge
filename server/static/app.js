@@ -450,7 +450,7 @@ function startReplay() {
   let shown = 0, synced3d = 0;
   const step = (now) => {
     if (replay?.id !== id) return;
-    const k = Math.min(1, (now - t0) / ms), i = Math.min(order.length - 1, Math.floor(k * order.length));
+    const k = Math.max(0, Math.min(1, (now - t0) / ms)), i = Math.min(order.length - 1, Math.floor(k * order.length)); // a frame stamp can predate t0
     replay.t = order[i].born ?? 0;
     $("map-date").textContent = fmtDay(replay.t);
     if (i + 1 > shown) { // only the notes that just appeared pulse, briefly
