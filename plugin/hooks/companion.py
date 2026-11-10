@@ -52,6 +52,7 @@ import chat  # noqa: E402  (chats from the web UI)
 import hook_status  # noqa: E402  (failures reported to the server)
 import project_marker  # noqa: E402
 import self_update  # noqa: E402
+import sysstats  # noqa: E402  (CPU, GPU, RAM and VRAM for the Machines list)
 import tools  # noqa: E402  (tool add-ons from plugin/tools)
 import token_store  # noqa: E402
 import workers  # noqa: E402  (a fresh agent session per task)
@@ -1712,7 +1713,10 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
     yolo, folders, s = load("yolo.json", {}), sorted(project_folders().values()), settings()
     links, gits = with_git(folder_links(), ws, now)
     chat_gits = {cid: chat_git(cid, f) for cid, f in load("chat_worktrees.json", {}).items()}
-    body = {"version": version(), "self": self_state(), "workersAllowed": s["workersAllowed"], "maxAgents": s["maxAgents"], "game": workers.game_session(),
+    samples = [x for x in load("stats.json", []) if isinstance(x, list) and len(x) == 7 and isinstance(x[0], (int, float)) and now - x[0] < sysstats.KEEP] + [sysstats.sample(now)]
+    with contextlib.suppress(OSError):  # a full disk must not cost the report
+        write_json(STATE / "stats.json", samples, indent=None)  # kept on disk: the companion restarts with every plugin update
+    body = {"stats": sysstats.summary(samples, now), "version": version(), "self": self_state(), "workersAllowed": s["workersAllowed"], "maxAgents": s["maxAgents"], "game": workers.game_session(),
             "live": list(chat.LIVE_AGENTS),  # agents whose chats run live: a message while they work goes in at once
             "guests": 2,  # a guest's chat runs without YOLO (a pc shared per project); 2: also one taken over (in its own folder)
             "agents": {a: {"yolo": bool(yolo.get(a, {}).get("on")), "trusted": not untrusted(a, folders), "limit": lim.get(a),

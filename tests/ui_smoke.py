@@ -709,6 +709,13 @@ async def shell(browser, devices, secret: str) -> None:
       if (menu) menu.open = false; return out; }""")
     check(more.get("skip") or (more["panel"] and more["closed"] and more["open"]), f"Machines: a click beside an open tool panel closes it and opens what it clicked {more}")
     # A pc of yours whose token has remote control off stays with yours (read-only), never under other people's pcs.
+    load = await pg.evaluate("""async () => { const d = document.querySelector('#machines .mx-stat');
+      if (!d) return {skip: true}; d.querySelector('summary').click(); await new Promise((r) => setTimeout(r, 50)); drawMachines();  // toggle fires a task later
+      const again = document.querySelector('#machines .mx-stat');
+      return {rows: document.querySelectorAll('#machines .mx-stat').length, open: again.open, lines: again.querySelectorAll('svg polyline').length, text: again.querySelector('summary').textContent}; }""")
+    if os.environ.get("KNOWLEDGE_SMOKE_SHOTS") and not load.get("skip"):
+        await pg.locator("#machines .mx-wrap").first.screenshot(path=os.path.join(os.environ["KNOWLEDGE_SMOKE_SHOTS"], "machines-load.png"))
+    check(load.get("skip") or (load["open"] and load["lines"] >= 1 and "avg" in load["text"]), f"Machines: a load row opens a chart that stays open when the list refreshes {load}")
     split = await pg.evaluate("""() => { const was = machinesRes, now = Date.now() / 1000;
       const pc = (id, label, mine, own) => ({id, label, mine, own, online: true, at: now, tokens: [label], actions: [], agents: {claude: {plugin: '1.0.0', trusted: true, workers: []}}, companion: {version: '1.0.0', agents: ['claude'], tools: {}}});
       const gone = (id) => ({...pc(id, 'test-vm', true, true), online: false});

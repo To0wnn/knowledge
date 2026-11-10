@@ -97,7 +97,7 @@ logon). With it:
 - **Approvals.** Without YOLO, an agent in a chat may edit files in its folder and asks you for anything else:
   **Allow once**, **Allow for this chat** or **Deny**, on the phone or in the Inbox. [docs/chats.md](docs/chats.md)
 - **Inbox and Machines.** One board of what needs you, what runs and what is done; per PC its agents, workers,
-  usage and a fixed set of remote actions (no remote shell). [docs/companion.md](docs/companion.md)
+  usage, CPU/GPU/RAM load over 24 hours and a fixed set of remote actions (no remote shell). [docs/companion.md](docs/companion.md)
 
 To use it from your phone, the server must be reachable from the phone over HTTPS. Link a project folder once by
 asking your agent to run the skill `knowledge-init`.

@@ -3170,7 +3170,7 @@ def machine_rows() -> list[dict]:
         rows.append({"id": mid, "label": m.get("label", mid), "at": m.get("at", 0), "online": now - m.get("at", 0) < ONLINE,
                      "tokens": names, "own": any(own_token(tokens[n], dev) for n in names), "agents": agents,
                      "mine": any(own_token(tokens[n], dev, steer=False) for n in names), "shared": shared,
-                     "companion": {**{k: comp.get(k) for k in ("version", "self", "at", "workersAllowed", "game", "maxAgents", "folders", "projects", "token", "live", "chats", "chatReviews", "asks", "tools", "guests")},
+                     "companion": {**{k: comp.get(k) for k in ("version", "self", "at", "workersAllowed", "game", "stats", "maxAgents", "folders", "projects", "token", "live", "chats", "chatReviews", "asks", "tools", "guests")},
                                    "agents": sorted(comp.get("agents") or {}),
                                    "models": {a: v.get("models", []) for a, v in (comp.get("agents") or {}).items()},
                                    "current": {a: v.get("current", {}) for a, v in (comp.get("agents") or {}).items()}} if comp else None,
@@ -8568,6 +8568,20 @@ def report_tools(t) -> dict:
             for k, v in list(t.items())[:50] if re.fullmatch(r"[a-z0-9][a-z0-9-]{0,39}", str(k)) and isinstance(v, dict)}
 
 
+def report_stats(st) -> dict:
+    """The companion's CPU, GPU, RAM and VRAM over 24 hours (sysstats.summary): numbers only, at most 144 points each."""
+    num = lambda x: float(x) if isinstance(x, (int, float)) and not isinstance(x, bool) and 0 <= x < 1e9 else None  # noqa: E731
+    if not isinstance(st, dict):
+        return {}
+    out = {"bucket": num(st.get("bucket")) or 600, "total": {k: num(v) for k, v in (st.get("total") or {}).items() if k in ("ram", "vram") and num(v)}
+           if isinstance(st.get("total"), dict) else {}}
+    for k in ("cpu", "gpu", "ram", "vram"):
+        m = st.get(k)
+        if isinstance(m, dict) and isinstance(m.get("series"), list) and num(m.get("now")) is not None:
+            out[k] = {**{f: num(m.get(f)) for f in ("min", "max", "avg", "now")}, "series": [num(x) for x in m["series"][:144]]}
+    return out
+
+
 @server.custom_route("/machine/report", methods=["POST"])
 async def machine_report(request: Request):
     """The companion's state every round: version, workers allowed, max workers, game session, per agent YOLO, hooks
@@ -8589,6 +8603,7 @@ async def machine_report(request: Request):
                   "guests": 2 if b.get("guests") == 2 and b.get("guests") is not True else b.get("guests") is True,
                   "maxAgents": int(b["maxAgents"]) if isinstance(b.get("maxAgents"), int) else None,  # None: a companion before the setting
                   "game": str(b.get("game") or "")[:80],
+                  "stats": report_stats(b.get("stats")),
                   "agents": {a: {"yolo": v.get("yolo") is True, "trusted": v.get("trusted") if isinstance(v.get("trusted"), bool) else None,
                                  "limit": float(v["limit"]) if isinstance(v.get("limit"), (int, float)) else None,
                                  "resets": float(v["resets"]) if isinstance(v.get("resets"), (int, float)) else None,

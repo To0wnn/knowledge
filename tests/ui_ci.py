@@ -89,6 +89,9 @@ def seed() -> None:
     report = {"version": "0.21.1", "maxAgents": 4, "agents": {"codex": {}, "claude": {"models": [
         {"id": "opus", "name": "Opus", "efforts": ["low", "high"], "default": "high"}, {"id": "sonnet", "name": "Sonnet", "efforts": ["low"]}],
         "commands": [{"name": "compact", "description": "Clear history, keep a summary", "hint": ""}, {"name": "verify-done", "description": "Prove a task is done", "hint": ""}]}},
+        "stats": {"bucket": 600, "total": {"ram": 32000, "vram": 12000},  # 24 h of load, with the pc off for a while
+                  **{k: {"min": lo, "max": hi, "avg": (lo + hi) / 2, "now": lo, "series": [None if 40 < i < 60 else lo + (hi - lo) * (i * 7 % 13) / 13 for i in range(144)]}
+                     for k, lo, hi in (("cpu", 2, 97), ("gpu", 0, 88), ("ram", 8000, 21000), ("vram", 500, 9000))}},
         "folders": {"linked": [{"path": "/home/x/lab", "project": "homelab"}], "candidates": []}, "projects": ["garden"],
         "tools": {"rea": {"name": "REA", "kind": "program", "installed": True, "ok": True, "version": "6.8.0"},
                   "no-ai-slop": {"name": "No AI Slop", "kind": "skill", "installed": False}}}

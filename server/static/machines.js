@@ -208,6 +208,38 @@ function meters(pcs, a) {
   return box;
 }
 
+// A pc's load over the last 24 hours (the companion's sysstats): min, average and max, a chart when opened.
+const STAT_OPEN = new Set(); // which charts are open: the page is redrawn on every refresh
+const STAT_NAME = { cpu: "CPU", gpu: "GPU", ram: "RAM", vram: "VRAM" };
+function statCell(m, k) {
+  const st = m.companion?.stats?.[k], total = m.companion?.stats?.total?.[k];
+  if (!st) return null;
+  const gb = (x) => `${(x / 1024).toFixed(x < 10240 ? 1 : 0)}`, fmt = total ? (x) => gb(x) : (x) => `${Math.round(x)}%`;
+  const box = el("details", "mx-stat"), sum = el("summary"), key = `${m.id}:${k}`;
+  box.open = STAT_OPEN.has(key);
+  box.ontoggle = () => box.open ? STAT_OPEN.add(key) : STAT_OPEN.delete(key);
+  sum.append(el("b", null, total ? `${gb(st.now)} / ${gb(total)} GB` : fmt(st.now)),
+    val(` min ${fmt(st.min)} · avg ${fmt(st.avg)} · max ${fmt(st.max)}`, "muted"));
+  sum.title = "Now, then the lowest, average and highest of the last 24 hours";
+  box.append(sum, sparkline(st.series, total || 100, `${STAT_NAME[k]} on ${m.label}, last 24 hours: min ${fmt(st.min)}, average ${fmt(st.avg)}, max ${fmt(st.max)}`));
+  return box;
+}
+function sparkline(series, top, label) {
+  const ns = "http://www.w3.org/2000/svg", w = 240, h = 40, svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", `0 0 ${w} ${h}`); svg.setAttribute("class", "mx-spark"); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", label);
+  const step = w / Math.max(1, series.length - 1), y = (v) => (h - 1 - (h - 2) * Math.min(1, v / top)).toFixed(1);
+  let pts = [];
+  const flush = () => { // a gap where the pc was off: no line drawn across it
+    if (pts.length) { const l = document.createElementNS(ns, "polyline"); l.setAttribute("points", (pts.length > 1 ? pts : [pts[0], pts[0].replace(/^[\d.]+/, (x) => +x + 1)]).join(" ")); svg.append(l); }
+    pts = [];
+  };
+  series.forEach((v, i) => { if (v == null) flush(); else pts.push(`${(i * step).toFixed(1)},${y(v)}`); });
+  flush();
+  const axis = el("div", "mx-spark-axis"); axis.append(el("span", null, "24 h ago"), el("span", null, "now"));
+  const wrap = el("div", "mx-spark-box"); wrap.append(svg, axis);
+  return wrap;
+}
+
 // The head of a pc's column: its name, its Knowledge version, what acts on the whole pc, and whether workers may start.
 function pcHead(m, here) {
   const c = m.companion, box = el("div", "mx-pc"), name = el("div", "mx-pc-name");
@@ -419,6 +451,9 @@ function compareTable(pcs, here, mine) {
   wrap.append(grid);
   const names = pcs.length > 1 ? pcs.map((m) => m.label) : [], row = (cls, label, cells, end) => mxRow(cls, label, cells, end, names);
   grid.append(mxRow("mx-head", null, pcs.map((m) => pcHead(m, here))));
+  const stats = ["cpu", "gpu", "ram", "vram"].filter((k) => pcs.some((m) => m.companion?.stats?.[k]));
+  if (stats.length) grid.append(mxRow("mx-sec", "Load, last 24 h", pcs.map(() => null)));
+  for (const k of stats) grid.append(row("", STAT_NAME[k], pcs.map((m) => statCell(m, k) || val("—", "muted"))));
   const agents = AGENT_ORDER.filter((a) => pcs.some((m) => m.agents?.[a]));
   for (const a of agents) {
     const name = el("div", "mx-agent-name"), mark = el("span", "mx-mark", AGENT_MARK[a] || a[0].toUpperCase());
