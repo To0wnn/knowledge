@@ -7087,7 +7087,7 @@ async def ui_chat(request: Request):
     events = [e for e in c.get("events", []) if (e["n"] < before if before else e["n"] > after)]
     older = bool(tail) and len(events) > tail and (bool(before) or not after)
     events = events[-tail:] if older else events
-    return JSONResponse({"chat": {**chat_meta(c), "rights": rights}, "events": events, "older": older, "trimmed": bool(c.get("trimmed")),
+    return JSONResponse({"chat": {**chat_meta(c), "rights": rights, "takeover": may_take_over(row, c)}, "events": events, "older": older, "trimmed": bool(c.get("trimmed")),
                          "online": row["online"], "at": row["at"], "label": row["label"], "asks": asks, "now": time.time(),
                          "models": ((row.get("companion") or {}).get("models") or {}).get(c.get("agent"), [])})
 
@@ -7221,6 +7221,45 @@ async def ui_chat_send(request: Request):
     if busy:
         return JSONResponse({"ok": True, "queued": True})
     await asyncio.to_thread(update_state, f.parent / "queue.json", lambda q: q.setdefault(c["id"], {}).update(msg=msg, stop=False))
+    return JSONResponse({"ok": True})
+
+
+def may_take_over(row: dict, c: dict) -> bool:
+    """Someone else's chat on a pc shared with this person for use in its project, on a companion that goes on with it
+    in its own folder (guests 2): Take over makes it theirs."""
+    return (not row["own"] and chat_rights(row, c) == "view" and (row.get("shared") or {}).get(c.get("project") or "") in USES
+            and (row.get("companion") or {}).get("guests") == 2)
+
+
+@server.custom_route("/ui/api/chat/take", methods=["POST"])
+async def ui_chat_take(request: Request):
+    """{machine, id}: take over someone else's chat on a pc shared with you for use: the same chat (session, folder,
+    branch) goes on as yours, under your share (YOLO only with "yolo"); a running turn stops and its agent restarts the
+    new way. The pc's owner keeps seeing and steering it; when the share ends it goes back to whoever had it."""
+    try:
+        row, b, f, c = await chat_request(request, True, act=False)
+    except (ValueError, AttributeError, TypeError, PermissionError) as e:
+        return chat_error(e)
+    if not may_take_over(row, c):
+        why = ("update the knowledge plugin on that pc first (0.43.46 or newer)" if (row.get("shared") or {}).get(c.get("project") or "") in USES
+               else "this pc is not shared with you for use in that project")
+        return JSONResponse({"error": why}, status_code=403 if "shared" in why else 409)
+    me, was = device.get().get("user", ""), c.get("by", "")
+    by = (read_json(SHARES_FILE, {}).get(row["id"]) or {}).get("by", "")
+    owned = share_tokens(row["id"], read_json(MACHINES_FILE, {}).get(row["id"]) or {}, read_json(TOKENS_FILE, {}), by)
+
+    def change(c):
+        # whose it was: the owner gets it back when the share ends (a chat taken from another guest goes to the owner)
+        c["taken_from"] = c.get("taken_from") or (was if not c.get("guest") else by)
+        c.update(by=me, guest=True, taken=True, tokens=owned, allow=[])  # "for this chat" answers were someone else's
+        chat_add(c, "info", f"Taken over by {me}: it goes on here as their chat, under their share of {row['label']}.")
+    await asyncio.to_thread(update_state, f, change)
+    if c.get("status") in ("queued", "running"):
+        await asyncio.to_thread(update_state, f.parent / "queue.json", lambda q: q.setdefault(c["id"], {}).update(stop=True))
+    await asyncio.to_thread(update_state, f.parent / "queue.json", lambda q: q.setdefault(c["id"], {}).update(end_once=True))
+    audit("chat-take", f"{row['id']} {c['id']} {was} -> {me}")
+    if by in ADMINS:
+        notify(f"Knowledge: {me} took over a chat on your pc {row['label']} ({c.get('project')}).")
     return JSONResponse({"ok": True})
 
 
@@ -7586,7 +7625,7 @@ async def machine_chats(request: Request):
     if dev.get("agents") is False:  # remote control off: no work, stops, diffs or answers for this pc
         return JSONResponse({"work": [], "stop": [], "busy": [], "active": False, "agents": False})
     q_path, out = CHATS_DIR / mid / "queue.json", {"work": [], "stop": [], "busy": []}
-    all_prefs, revoked = read_json(PREFS_FILE, {}), []
+    all_prefs, revoked, handback = read_json(PREFS_FILE, {}), [], []
     guests_ok = bool(((read_json(MACHINES_FILE, {}).get(mid) or {}).get("companion") or {}).get("guests"))
     now0 = time.time()
 
@@ -7602,6 +7641,16 @@ async def machine_chats(request: Request):
                 continue
             if e.pop("end_once", None):  # its share changed mode: the live agent ends, the next message starts it the new way
                 out.setdefault("end", []).append(cid)
+            if c.get("taken") and c.get("guest") and (not chat_token_ok(c, dev) or not guests_ok):
+                # a chat taken over: its share ended, so it goes back to whoever had it; its agent ends once, the next
+                # message resumes it as theirs
+                for k in ("msg", "live", "steer"):
+                    e.pop(k, None)
+                if e.pop("busy", None):
+                    out["stop"].append(cid)
+                out.setdefault("end", []).append(cid)
+                handback.append(cid)
+                continue
             if c.get("guest") and (not chat_token_ok(c, dev) or not guests_ok):
                 # the share or membership went (or the companion can no longer keep it from YOLO): nothing more runs,
                 # and its agent ends, also one that would start a turn by itself; said again for 10 minutes
@@ -7617,8 +7666,8 @@ async def machine_chats(request: Request):
                 continue
             # a guest's chat: its own worktree only, and without YOLO unless the owner shared it with YOLO (guest_yolo: then
             # the pc's own switch counts)
-            extra_guest = ({"guest": True, **({"guest_yolo": True} if share_mode(mid, c.get("project") or "", c.get("by", "")) == "yolo" else {})}
-                           if c.get("guest") else {})
+            extra_guest = ({"guest": True, **({"guest_yolo": True} if share_mode(mid, c.get("project") or "", c.get("by", "")) == "yolo" else {}),
+                            **({"taken": True} if c.get("taken") else {})} if c.get("guest") else {})
             rdr = (all_prefs.get(c.get("by", "") or "", {}).get("chat_reader") or {}).get("id") or ""
             extra = {**({"reader": rdr} if rdr else {}), **extra_guest}
             if e.get("busy"):
@@ -7647,6 +7696,16 @@ async def machine_chats(request: Request):
                 e["busy"] = True
     if q_path.exists():
         await asyncio.to_thread(update_state, q_path, change)
+    owner_tokens = lambda by: [n for n in (read_json(MACHINES_FILE, {}).get(mid) or {}).get("tokens", {})
+                               if (cfg := read_json(TOKENS_FILE, {}).get(n)) and own_token(cfg, {"user": by, "admin": by in ADMINS}, steer=False)]
+    for cid in handback:  # after the queue's lock: back to whoever had it, as their own chat again
+        def back(c):
+            was = c.get("by", "")
+            c.update(by=c.get("taken_from") or "", status="idle", pending=[], allow=[], tokens=owner_tokens(c.get("taken_from") or ""))
+            for k in ("guest", "taken", "taken_from"):
+                c.pop(k, None)
+            chat_add(c, "info", f"Back with {c['by'] or 'the owner'}: {was} no longer has this pc shared for this project.")
+        await asyncio.to_thread(update_state, chat_file(mid, cid), back)
     for cid in revoked:  # after the queue's lock: update_state's lock is not reentrant
         await asyncio.to_thread(update_state, chat_file(mid, cid), lambda c: (c.update(status="idle", pending=[]),
                                 chat_add(c, "info", "Stopped: this pc is no longer shared with you for this project (or its knowledge plugin is too old for a shared chat).")))
@@ -8178,7 +8237,8 @@ async def machine_report(request: Request):
                            "waits": str(me.get("waits") or "")[:80],
                            "later": [a for a in (me.get("later") or []) if a in AGENT_OWNERS] if isinstance(me.get("later"), list) else []},
                   "live": [a for a in (b.get("live") or []) if a in AGENT_OWNERS],  # chats that take a message while they work
-                  "guests": b.get("guests") is True,  # runs a guest's chat without YOLO (a pc shared per project)
+                  # runs a guest's chat without YOLO (a pc shared per project); 2: also one taken over from the owner
+                  "guests": 2 if b.get("guests") == 2 and b.get("guests") is not True else b.get("guests") is True,
                   "maxAgents": int(b["maxAgents"]) if isinstance(b.get("maxAgents"), int) else None,  # None: a companion before the setting
                   "game": str(b.get("game") or "")[:80],
                   "agents": {a: {"yolo": v.get("yolo") is True, "trusted": v.get("trusted") if isinstance(v.get("trusted"), bool) else None,

@@ -12,7 +12,11 @@ from a phone. The pc side runs in the companion ([companion.md](companion.md)).
   never marks it read for the owner, attachments only of those chats, a chat's diff but no folder chooser, workers or
   actions); nothing of the owner's other projects, sessions, errors or workers shows (a trimmed Machines row, pill
   "shared: ..."). **Use** also lets them start chats there in that project and steer those (send, stop, approve,
-  archive), never the owner's own chats. The guest answers their own chat's tool approvals (the owner can too): use
+  archive), and **Take over** (`POST /ui/api/chat/take`, a button in a read-only chat) makes someone else's chat there
+  theirs: the same chat, session, folder and branch go on (`taken: true`, so it may stay in the owner's checkout where
+  it ran; a companion that reports `guests: 2`, plugin 0.43.46+), a running turn stops, its live agent restarts under
+  the taker's share, "for this chat" approvals are cleared, and the owner of the pc still sees and steers it. When the
+  share ends it goes back to whoever had it (`taken_from`) as their own chat again. The guest answers their own chat's tool approvals (the owner can too): use
   means they can have anything run as the owner on that pc, so share it only with someone you would give a shell. A
   guest's chat (`guest: true`) always gets its own worktree, so it never works in the owner's checkout (the companion
   refuses one in a folder outside git). Its turns call the server with the owner's token, so the server narrows that

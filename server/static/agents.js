@@ -1322,9 +1322,23 @@ async function ckPoll(card) {
   catch (e) { card.note.className = "ck-note bad"; card.note.textContent = e.message; return; }
   if (!card.after) { card.older = res.older; card.first = res.events[0]?.n || 0; ckOlderMark(card); }
   card.meta = { ...card.meta, ...res.chat, label: res.label }; card.online = res.online; card.at = res.at;
-  if (card.meta.rights === "view" && !card.input.disabled) { // a chat of someone else on a pc shared with you: read only
-    card.input.disabled = true; card.input.placeholder = "Read only: this chat is someone else's. Start your own chat to work here.";
+  const ro = card.meta.rights === "view"; // a chat of someone else on a pc shared with you: read only, unless you take it over
+  if (ro !== !!card.readOnly) {
+    card.readOnly = ro; card.input.disabled = ro;
+    card.input.placeholder = ro ? "Read only: this chat is someone else's." + (card.meta.takeover ? " Take over to go on in it yourself." : "") : "Message the agent…";
+    if (!ro) ckSendHints(card);
   }
+  if (ro && card.meta.takeover && !card.takeBtn) {
+    const b = el("button", "btn small primary", "Take over"); b.type = "button";
+    b.title = "Make this chat yours: the same conversation goes on here, on that pc, under your share; its owner still sees it";
+    b.onclick = async () => {
+      if (!confirm(`Take over "${card.meta.title || "this chat"}" from ${card.meta.by || "its owner"}?\n\nIts running turn stops; the conversation goes on as yours on ${card.meta.label}, with your share's settings. When the share ends it goes back.`)) return;
+      try { await api("/ui/api/chat/take", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id }) }); }
+      catch (e) { toast(e.message); return; }
+      b.remove(); card.takeBtn = null; ck.summaryAt = 0; ckPoll(card);
+    };
+    card.takeBtn = b; card.form.prepend(b);
+  } else if (card.takeBtn && !(ro && card.meta.takeover)) { card.takeBtn.remove(); card.takeBtn = null; }
   ckPicker(card);
   ckEvents(card, res);
   if (!card.meta.subs) ckSubsEnded(card); // the server knows none runs (its turn ended, or it was lost): no block says running

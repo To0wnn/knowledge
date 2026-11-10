@@ -1449,6 +1449,22 @@ def share_contract(tmp, ck, fr, raw, er):
     owner_list = {c["id"]: c for c in json.loads(ui("/ui/api/chats")[2])["chats"] if c["machine"] == mid}
     assert owner_list[g["id"]]["guest"] and owner_list[g["id"]]["rights"] == "act", owner_list  # the owner sees and can stop it
     assert any(i["kind"] == "chat" and i["id"] == g["id"] for i in json.loads(ui("/ui/api/board", h=er)[2])["items"])
+    # Take over: the owner's own chat becomes hers (same chat, folder, session), only on a companion that can (guests 2).
+    assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={mine}", h=er)[2])["chat"]["takeover"] is False  # this companion says guests: true
+    assert ui("/ui/api/chat/take", {"machine": mid, "id": mine}, er)[0] == 409
+    http("POST", "/machine/report", {**rep, "guests": 2}, token=fr, headers=pc)
+    assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={mine}", h=er)[2])["chat"]["takeover"] is True
+    assert ui("/ui/api/chat/take", {"machine": mid, "id": mine})[0] == 403  # the owner's own: nothing to take
+    assert ui("/ui/api/chat/take", {"machine": mid, "id": mine}, er)[0] == 200
+    t = json.loads(ui(f"/ui/api/chat?machine={mid}&id={mine}", h=er)[2])["chat"]
+    assert t["rights"] == "act" and t["by"] == "erin" and t["guest"] and not t["worktree"], t  # goes on in its own folder
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": mine, "text": "taking it from here"}, er)[0] == 200
+    w = {x["chat"]: x for x in poll()["work"]}[mine]
+    assert w["guest"] and w["taken"] and "guest_yolo" not in w, w  # under "use": without YOLO, in its own folder
+    http("POST", "/machine/chats/events", {"chat": mine, "events": [], "done": True}, token=fr, headers=pc)
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": mine, "text": "still mine"})[0] == 200  # the pc's owner can still steer it
+    poll()
+    http("POST", "/machine/chats/events", {"chat": mine, "events": [], "done": True}, token=fr, headers=pc)
     # Taken back: off her list at once; the running turn stops at the next poll and nothing more runs.
     assert share("")[0] == 200 and mid not in rows(er) and "abababababababab" not in json.loads((tmp / "machine_shares.json").read_text())
     assert ui("/ui/api/chat/send", {"machine": mid, "id": g["id"], "text": "more"}, er)[0] == 403
@@ -1457,6 +1473,12 @@ def share_contract(tmp, ck, fr, raw, er):
     assert g["id"] in poll()["end"]  # said again for a while: a lost answer must not leave its agent running
     c = json.loads(ui(f"/ui/api/chat?machine={mid}&id={g['id']}")[2])
     assert c["chat"]["status"] == "idle" and "no longer shared" in c["events"][-1]["text"], c
+    back = json.loads(ui(f"/ui/api/chat?machine={mid}&id={mine}")[2])["chat"]  # the taken chat went back to its owner
+    assert back["by"] == "alice" and not back["guest"] and mine in got["end"], (back, got)
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": mine, "text": "mine again"})[0] == 200
+    w = {x["chat"]: x for x in poll()["work"]}[mine]
+    assert "guest" not in w and "taken" not in w, w
+    http("POST", "/machine/chats/events", {"chat": mine, "events": [], "done": True}, token=fr, headers=pc)
     assert http("POST", "/machine/chats/events", {"chat": g["id"], "events": [{"kind": "text", "text": "x"}]}, token=fr, headers=pc)[0] != 200
     # Membership gone with the share still on: the share counts for nothing.
     assert share("use")[0] == 200 and mid in rows(er)

@@ -1714,7 +1714,7 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
     chat_gits = {cid: chat_git(cid, f) for cid, f in load("chat_worktrees.json", {}).items()}
     body = {"version": version(), "self": self_state(), "workersAllowed": s["workersAllowed"], "maxAgents": s["maxAgents"], "game": workers.game_session(),
             "live": list(chat.LIVE_AGENTS),  # agents whose chats run live: a message while they work goes in at once
-            "guests": True,  # a chat someone else started here (a pc shared per project) runs without YOLO
+            "guests": 2,  # a guest's chat runs without YOLO (a pc shared per project); 2: also one taken over (in its own folder)
             "agents": {a: {"yolo": bool(yolo.get(a, {}).get("on")), "trusted": not untrusted(a, folders), "limit": lim.get(a),
                      "resets": (resets or {}).get(a), "windows": (windows or {}).get(a, []), **({"plugin": v} if (v := plugin_version(a)) else {}),  # known before a session
                      **({"cli": v} if (v := cli_version(a, now)) else {}), **({"channel": claude_channel()} if a == "claude" else {}),
