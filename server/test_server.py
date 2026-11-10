@@ -650,7 +650,7 @@ def machines_contract(tmp, ck, fr, raw, er, et, heard):
     # A long poll: with nothing waiting the server holds the ask for ?wait= seconds and says it did; an old-style ask
     # (no wait) answers at once.
     t0 = time.time(); held = json.loads(http("GET", "/machine/actions?wait=0.5", token=fr, headers=pc)[1])
-    assert held == {"actions": [], "waited": 0.5} and 0.4 <= time.time() - t0 < 5, (held, time.time() - t0)
+    assert held == {"actions": [], "waited": 0.5, "live": False} and 0.4 <= time.time() - t0 < 5, (held, time.time() - t0)
     t0 = time.time(); json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1]); assert time.time() - t0 < 1.5
     assert http("POST", "/machine/actions/result", {"id": got[0]["id"], "ok": True, "result": "on"}, token=fr, headers=pc)[0] == 200
     assert http("POST", "/machine/actions/result", {"id": got[1]["id"], "ok": True}, token=et, headers=pc)[0] == 404  # not her machine: her own record has no such action
@@ -671,12 +671,21 @@ def machines_contract(tmp, ck, fr, raw, er, et, heard):
     assert m["agents"]["claude"]["trusted"] is False and m["agents"]["claude"]["limit"] is None and m["agents"]["claude"]["windows"] == []
     assert cx["windows"] == [[91.5, "5h", 2e9], [20.0, "7d", None]], cx["windows"]  # malformed windows dropped
     # CPU/GPU/RAM/VRAM over 24 h: numbers kept, junk and unknown metrics dropped, the series capped at 144 points
-    stats = {"bucket": 600, "total": {"ram": 16000, "evil": 1}, "cpu": {"min": 1, "max": 90, "avg": 20.5, "now": 7, "series": [None, 5, "x", True] + [1] * 200},
+    stats = {"bucket": 600, "total": {"ram": 16000, "evil": 1}, "cpu": {"min": 1, "max": 90, "avg": 20.5, "now": 7, "series": [None, 5, "x", True] + [1] * 200, "hour": [3] * 99, "windows": {"1h": [1, 9, 4], "6h": [1, 2], "evil": [1, 2, 3]}},
              "gpu": {"now": "hot", "series": []}, "disk": {"now": 1, "series": [1]}}
     assert http("POST", "/machine/report", {**rep, "stats": stats}, token=fr, headers=pc)[0] == 200
     got = {r["id"]: r for r in json.loads(raw("GET", "/ui/api/machines", headers=ck)[2])["machines"]}["cccccccccccccccc"]["companion"]["stats"]
     assert got["total"] == {"ram": 16000.0} and set(got) == {"bucket", "total", "cpu"} and got["cpu"]["series"][:4] == [None, 5.0, None, None], got
     assert len(got["cpu"]["series"]) == 144 and got["cpu"]["max"] == 90.0, got
+    assert len(got["cpu"]["hour"]) == 60 and got["cpu"]["windows"] == {"1h": [1.0, 9.0, 4.0]}, got["cpu"]
+    # live load: only while someone watches Machines, only for machines that person may see, junk dropped
+    assert json.loads(http("GET", "/machine/actions?wait=0", token=fr, headers=pc)[1]).get("live") is False
+    assert http("POST", "/machine/live", {"cpu": 12.5, "gpu": True, "ram": [4000, 16000], "vram": [1, "x"]}, token=fr, headers=pc)[0] == 200
+    live = json.loads(raw("GET", "/ui/api/machines/live?ids=cccccccccccccccc,ffffffffffffffff", headers=ck)[2])["live"]
+    assert list(live) == ["cccccccccccccccc"] and live["cccccccccccccccc"]["cpu"] == 12.5 and live["cccccccccccccccc"]["gpu"] is None, live
+    assert live["cccccccccccccccc"]["ram"] == [4000.0, 16000.0] and live["cccccccccccccccc"]["vram"] is None, live
+    assert json.loads(http("GET", "/machine/actions?wait=0", token=fr, headers=pc)[1]).get("live") is True  # now someone watches
+    assert http("POST", "/machine/live", {"cpu": 1}, token=fr)[0] == 400  # no machine header
     inf = {**rep, "agents": {"codex": {"limit": float("inf"), "windows": [[float("inf"), "5h", None]]}}}  # json.dumps writes Infinity
     assert http("POST", "/machine/report", inf, token=fr, headers=pc)[0] == 200
     assert raw("GET", "/ui/api/admin", headers=ck)[0] == 200

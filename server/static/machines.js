@@ -211,20 +211,51 @@ function meters(pcs, a) {
 // A pc's load over the last 24 hours (the companion's sysstats): min, average and max, a chart when opened.
 const STAT_OPEN = new Set(); // which charts are open: the page is redrawn on every refresh
 const STAT_NAME = { cpu: "CPU", gpu: "GPU", ram: "RAM", vram: "VRAM" };
+let STAT_ZOOM = "24h"; // one zoom for every chart: comparing pcs side by side
+const STAT_ZOOMS = { "1h": "1 h", "6h": "6 h", "24h": "24 h" };
 function statCell(m, k) {
   const st = m.companion?.stats?.[k], total = m.companion?.stats?.total?.[k];
   if (!st) return null;
   const gb = (x) => `${(x / 1024).toFixed(x < 10240 ? 1 : 0)}`, fmt = total ? (x) => gb(x) : (x) => `${Math.round(x)}%`;
   const box = el("details", "mx-stat"), sum = el("summary"), key = `${m.id}:${k}`;
+  // a companion before zooming sends only 24 h: its chart stays at 24 h
+  const z = STAT_ZOOM !== "24h" && st.hour?.length ? STAT_ZOOM : "24h", [lo, hi, avg] = st.windows?.[z] || [st.min, st.max, st.avg];
+  const series = z === "1h" ? st.hour : z === "6h" ? st.series.slice(-36) : st.series;
   box.open = STAT_OPEN.has(key);
   box.ontoggle = () => box.open ? STAT_OPEN.add(key) : STAT_OPEN.delete(key);
-  sum.append(el("b", null, total ? `${gb(st.now)} / ${gb(total)} GB` : fmt(st.now)),
-    val(` min ${fmt(st.min)} · avg ${fmt(st.avg)} · max ${fmt(st.max)}`, "muted"));
-  sum.title = "Now, then the lowest, average and highest of the last 24 hours";
-  box.append(sum, sparkline(st.series, total || 100, `${STAT_NAME[k]} on ${m.label}, last 24 hours: min ${fmt(st.min)}, average ${fmt(st.avg)}, max ${fmt(st.max)}`));
+  const now = el("b", null, total ? `${gb(st.now)} / ${gb(total)} GB` : fmt(st.now));
+  now.dataset.live = key; statLiveShow(now);
+  sum.append(now, val(` min ${fmt(lo)} · avg ${fmt(avg)} · max ${fmt(hi)}`, "muted"));
+  sum.title = `Now, then the lowest, average and highest of the last ${STAT_ZOOMS[z]}`;
+  const zoom = el("div", "mx-zoom");
+  for (const [w, label] of Object.entries(STAT_ZOOMS)) {
+    const b = el("button", `btn small${w === z ? " on" : " quiet"}`, label);
+    b.type = "button"; b.setAttribute("aria-pressed", String(w === z));
+    b.onclick = () => { STAT_ZOOM = w; drawMachines(); };
+    zoom.append(b);
+  }
+  box.append(sum, zoom, sparkline(series, total || 100, `${STAT_NAME[k]} on ${m.label}, last ${STAT_ZOOMS[z]}: min ${fmt(lo)}, average ${fmt(avg)}, max ${fmt(hi)}`, `${STAT_ZOOMS[z]} ago`));
   return box;
 }
-function sparkline(series, top, label) {
+// Live load: every few seconds while Machines is open (the companions send it only while someone asks)
+let statLive = {}, statLiveTimer = 0;
+function statLiveShow(b) {
+  const [id, k] = b.dataset.live.split(":"), x = statLive[id]?.[k];
+  if (x == null) return;
+  b.textContent = Array.isArray(x) ? `${(x[0] / 1024).toFixed(x[0] < 10240 ? 1 : 0)} / ${(x[1] / 1024).toFixed(x[1] < 10240 ? 1 : 0)} GB` : `${Math.round(x)}%`;
+  b.classList.add("mx-live"); b.title = "Live, every few seconds";
+}
+async function statLiveTick() {
+  clearTimeout(statLiveTimer);
+  const ids = [...new Set([...document.querySelectorAll("#machines [data-live]")].map((b) => b.dataset.live.split(":")[0]))];
+  if ($("tab-machines").hidden) { statLiveTimer = 0; return; } // loadMachines starts it again
+  if (ids.length && !document.hidden) {
+    try { statLive = (await api(`/ui/api/machines/live?ids=${ids.join(",")}`)).live || {}; } catch { statLive = {}; }
+    document.querySelectorAll("#machines [data-live]").forEach(statLiveShow);
+  }
+  statLiveTimer = setTimeout(statLiveTick, 3000);
+}
+function sparkline(series, top, label, from) {
   const ns = "http://www.w3.org/2000/svg", w = 240, h = 40, svg = document.createElementNS(ns, "svg");
   svg.setAttribute("viewBox", `0 0 ${w} ${h}`); svg.setAttribute("class", "mx-spark"); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", label);
   const step = w / Math.max(1, series.length - 1), y = (v) => (h - 1 - (h - 2) * Math.min(1, v / top)).toFixed(1);
@@ -235,7 +266,7 @@ function sparkline(series, top, label) {
   };
   series.forEach((v, i) => { if (v == null) flush(); else pts.push(`${(i * step).toFixed(1)},${y(v)}`); });
   flush();
-  const axis = el("div", "mx-spark-axis"); axis.append(el("span", null, "24 h ago"), el("span", null, "now"));
+  const axis = el("div", "mx-spark-axis"); axis.append(el("span", null, from), el("span", null, "now"));
   const wrap = el("div", "mx-spark-box"); wrap.append(svg, axis);
   return wrap;
 }
@@ -452,7 +483,7 @@ function compareTable(pcs, here, mine) {
   const names = pcs.length > 1 ? pcs.map((m) => m.label) : [], row = (cls, label, cells, end) => mxRow(cls, label, cells, end, names);
   grid.append(mxRow("mx-head", null, pcs.map((m) => pcHead(m, here))));
   const stats = ["cpu", "gpu", "ram", "vram"].filter((k) => pcs.some((m) => m.companion?.stats?.[k]));
-  if (stats.length) grid.append(mxRow("mx-sec", "Load, last 24 h", pcs.map(() => null)));
+  if (stats.length) grid.append(mxRow("mx-sec", "Load", pcs.map(() => null)));
   for (const k of stats) grid.append(row("", STAT_NAME[k], pcs.map((m) => statCell(m, k) || val("—", "muted"))));
   const agents = AGENT_ORDER.filter((a) => pcs.some((m) => m.agents?.[a]));
   for (const a of agents) {
@@ -771,6 +802,7 @@ async function loadMachines() {
   await markHere();
   drawMachines();
   machinesSoon();
+  if (!statLiveTimer) statLiveTick();
   // never before the first draw: without a companion, a refused 127.0.0.1 takes ~2 s on Windows
   if (!localMachine) probeCompanion().then(async (ok) => { if (ok && !machinesBusy()) { await markHere(); drawMachines(); } });
 }

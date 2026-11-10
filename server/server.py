@@ -6067,6 +6067,34 @@ async def ui_machines(request: Request):
     return JSONResponse({**await asyncio.to_thread(build)})
 
 
+@server.custom_route("/machine/live", methods=["POST"])
+async def machine_live(request: Request):
+    """A companion's few-second load sample while someone watches Machines: {"cpu", "gpu" %, "ram", "vram" [used, total] MB}."""
+    dev = device.get()
+    try:
+        b = json.loads((await request.body())[:2000], parse_constant=lambda c: None)
+    except ValueError:
+        b = None
+    if not dev.get("machine") or not isinstance(b, dict):
+        return JSONResponse({"error": "needs X-Knowledge-Machine and a JSON body"}, status_code=400)
+    num = lambda x: float(x) if isinstance(x, (int, float)) and not isinstance(x, bool) and 0 <= x < 1e9 else None  # noqa: E731
+    pair = lambda x: [num(x[0]), num(x[1])] if isinstance(x, list) and len(x) == 2 and None not in (num(x[0]), num(x[1])) else None  # noqa: E731
+    LIVE_LOAD[dev["machine"]] = {"cpu": num(b.get("cpu")), "gpu": num(b.get("gpu")), "ram": pair(b.get("ram")), "vram": pair(b.get("vram")), "at": time.time()}
+    return JSONResponse({"ok": True, "live": LIVE_WANTED["until"] > time.time()})
+
+
+@server.custom_route("/ui/api/machines/live", methods=["GET"])
+async def ui_machines_live(request: Request):
+    """?ids=<id>,<id>: the live load of those machines (only the ones this person may see); asking keeps it coming."""
+    if LIVE_WANTED["until"] < time.time():  # the companions' held polls answer at once and start sending
+        for e in MACHINE_WAKE.values():
+            e.set()
+    LIVE_WANTED["until"] = time.time() + 20
+    rows = {r["id"] for r in await asyncio.to_thread(machine_rows)}
+    want = [i for i in request.query_params.get("ids", "").split(",")[:50] if i in rows]
+    return JSONResponse({"live": {i: LIVE_LOAD[i] for i in want if i in LIVE_LOAD and time.time() - LIVE_LOAD[i]["at"] < 15}})
+
+
 @server.custom_route("/ui/api/machines/forget", methods=["POST"])
 async def ui_machine_forget(request: Request):
     """{"machine"}: drop a machine (or an old plugin's token row) from the list; it comes back when it reports again."""
@@ -6276,13 +6304,15 @@ async def machine_actions_route(request: Request):
             out.append({k: a[k] for k in ("id", "action", "args", "by", "at")})
     await asyncio.to_thread(mark_machine, dev)
     end, wake = time.time() + wait, MACHINE_WAKE.setdefault(dev["machine"], asyncio.Event())
+    live = lambda: LIVE_WANTED["until"] > time.time()  # noqa: E731
+    was_live = live()
     while True:
         files = files_for(dev)
         if mine(read_json(MACHINE_ACTIONS, {})):  # read first: no write (and no lock) while nothing waits
             await asyncio.to_thread(update_state, MACHINE_ACTIONS, change)
         # stopping (a deploy's switch-over): answer now, before uvicorn's 3 s grace cancels this and sends a 500
-        if out or files or time.time() >= end or getattr(UVICORN, "should_exit", False) or await request.is_disconnected():
-            return JSONResponse({"actions": out, **({"files": files} if files else {}), "waited": wait})
+        if out or files or live() != was_live or time.time() >= end or getattr(UVICORN, "should_exit", False) or await request.is_disconnected():
+            return JSONResponse({"actions": out, **({"files": files} if files else {}), "waited": wait, "live": live()})
         # a click on this server wakes the poll at once; the file read once a second still finds what the other server
         # of a switch-over queued
         with contextlib.suppress(TimeoutError):
@@ -6316,6 +6346,9 @@ async def machine_action_result(request: Request):
 # file's bytes stream from the pc through this server one Range at a time, never kept. All in memory: a request made
 # during a deploy's switch-over may reach the other server, then the page says so and the person tries again.
 MACHINE_WAKE: dict = {}  # machine id -> asyncio.Event: its held long poll answers at once
+# shortcut: live load is in this server's memory only (a switch-over starts it empty), and any watcher makes every pc send it
+LIVE_LOAD: dict = {}  # machine id -> {"cpu", "gpu", "ram", "vram", "at"}: the newest few-second sample
+LIVE_WANTED = {"until": 0.0}  # someone has the Machines page open until then: the companions send live load
 FILES_QUEUED: dict = {}  # machine id -> [request] the pc has not fetched yet
 FILES_OPEN: dict = {}  # request id -> {"machine", "tokens", "answer": Future, "chunks": Queue (a stream), "gone": Event}
 FILES_WAIT, FILES_TEXT, FILES_PATH = 20, 1_000_000, 1000  # seconds a page waits for its pc; characters of a text; of a path
@@ -8578,7 +8611,10 @@ def report_stats(st) -> dict:
     for k in ("cpu", "gpu", "ram", "vram"):
         m = st.get(k)
         if isinstance(m, dict) and isinstance(m.get("series"), list) and num(m.get("now")) is not None:
-            out[k] = {**{f: num(m.get(f)) for f in ("min", "max", "avg", "now")}, "series": [num(x) for x in m["series"][:144]]}
+            w = m.get("windows") if isinstance(m.get("windows"), dict) else {}
+            out[k] = {**{f: num(m.get(f)) for f in ("min", "max", "avg", "now")}, "series": [num(x) for x in m["series"][:144]],
+                      "hour": [num(x) for x in m["hour"][:60]] if isinstance(m.get("hour"), list) else [],
+                      "windows": {n: [num(x) for x in v] for n, v in w.items() if n in ("1h", "6h") and isinstance(v, list) and len(v) == 3}}
     return out
 
 

@@ -712,10 +712,13 @@ async def shell(browser, devices, secret: str) -> None:
     load = await pg.evaluate("""async () => { const d = document.querySelector('#machines .mx-stat');
       if (!d) return {skip: true}; d.querySelector('summary').click(); await new Promise((r) => setTimeout(r, 50)); drawMachines();  // toggle fires a task later
       const again = document.querySelector('#machines .mx-stat');
-      return {rows: document.querySelectorAll('#machines .mx-stat').length, open: again.open, lines: again.querySelectorAll('svg polyline').length, text: again.querySelector('summary').textContent}; }""")
+      const one = [...again.querySelectorAll('.mx-zoom button')].find((b) => b.textContent === '1 h'); one.click();
+      const zoomed = document.querySelector('#machines .mx-stat'), axis = zoomed.querySelector('.mx-spark-axis span').textContent;
+      const pressed = zoomed.querySelector('.mx-zoom [aria-pressed=true]')?.textContent;
+      return {axis, pressed, rows: document.querySelectorAll('#machines .mx-stat').length, open: again.open, lines: again.querySelectorAll('svg polyline').length, text: again.querySelector('summary').textContent}; }""")
     if os.environ.get("KNOWLEDGE_SMOKE_SHOTS") and not load.get("skip"):
         await pg.locator("#machines .mx-wrap").first.screenshot(path=os.path.join(os.environ["KNOWLEDGE_SMOKE_SHOTS"], "machines-load.png"))
-    check(load.get("skip") or (load["open"] and load["lines"] >= 1 and "avg" in load["text"]), f"Machines: a load row opens a chart that stays open when the list refreshes {load}")
+    check(load.get("skip") or (load["open"] and load["lines"] >= 1 and "avg" in load["text"] and load["axis"] == "1 h ago" and load["pressed"] == "1 h"), f"Machines: a load row opens a chart that stays open when the list refreshes and zooms to 1 h {load}")
     split = await pg.evaluate("""() => { const was = machinesRes, now = Date.now() / 1000;
       const pc = (id, label, mine, own) => ({id, label, mine, own, online: true, at: now, tokens: [label], actions: [], agents: {claude: {plugin: '1.0.0', trusted: true, workers: []}}, companion: {version: '1.0.0', agents: ['claude'], tools: {}}});
       const gone = (id) => ({...pc(id, 'test-vm', true, true), online: false});
@@ -1674,6 +1677,8 @@ async def update_button(browser, secret: str) -> None:
             sent.append(req.post_data_json)
             polls["n"] = 1
             return await route.fulfill(json={"ok": True, "id": "a1"})
+        if "/ui/api/machines/live" in req.url:  # the live load beside it: not what this test fakes
+            return await route.continue_()
         res = await route.fetch()
         data = await res.json()
         polls.setdefault("pc", next((m["id"] for m in data["machines"] if m.get("companion")), None))  # one pc: live their order changes with each report

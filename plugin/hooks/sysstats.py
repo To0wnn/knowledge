@@ -14,7 +14,7 @@ import sys
 
 KEEP = 24 * 3600
 BUCKET = 600
-_PREV: list = []  # the last CPU counters [busy, total]: the CPU share is the change since the previous round
+_PREV: dict = {}  # per caller the last CPU counters [busy, total]: the CPU share is the change since its previous call
 
 
 def _run(cmd: list) -> str:
@@ -40,13 +40,12 @@ def _cpu_counters():
     return None
 
 
-def cpu() -> float | None:
-    global _PREV
+def cpu(key: str = "round") -> float | None:
     c = _cpu_counters()
     if c is None:  # macOS: the processes' share, summed over all cores
         out = _run(["ps", "-A", "-o", "%cpu="])
         return min(100.0, sum(float(x) for x in out.split() if re.fullmatch(r"[\d.]+", x)) / (os.cpu_count() or 1)) if out else None
-    prev, _PREV = _PREV, c
+    prev, _PREV[key] = _PREV.get(key), c
     if not prev or c[1] <= prev[1]:
         return None  # the first round has nothing to compare with
     return round(100 * (c[0] - prev[0]) / (c[1] - prev[1]), 1)
@@ -116,7 +115,7 @@ def gpu() -> tuple:
     return None, None
 
 
-def sample(now: float) -> list:
+def sample(now: float, key: str = "round") -> list:
     """[time, cpu %, ram MB, ram total, gpu %, vram MB, vram total]; None where unknown."""
     def safe(f):
         try:
@@ -124,7 +123,7 @@ def sample(now: float) -> list:
         except (OSError, ValueError, KeyError, AttributeError, IndexError):
             return None
     r, (g, v) = safe(ram) or [None, None], safe(gpu) or (None, None)
-    return [int(now), safe(cpu), *r, g, *(v or [None, None])]
+    return [int(now), safe(lambda: cpu(key)), *r, g, *(v or [None, None])]
 
 
 def summary(samples: list, now: float) -> dict:
@@ -140,8 +139,14 @@ def summary(samples: list, now: float) -> dict:
         for t, x in vals:
             series[min(len(series) - 1, int((KEEP - (now - t)) // BUCKET))].append(x)
         xs = [x for _, x in vals]
+        hour = [None] * 60  # the last hour per minute, for zooming in
+        for t, x in vals:
+            if now - t < 3600:
+                hour[min(59, int((3600 - (now - t)) // 60))] = x
+        win = {w: [x for t, x in vals if now - t < sec] for w, sec in (("1h", 3600), ("6h", 6 * 3600))}
         out[name] = {"min": min(xs), "max": max(xs), "avg": round(sum(xs) / len(xs), 1), "now": last[i] if last[i] is not None else xs[-1],
-                     "series": [round(sum(b) / len(b), 1) if b else None for b in series]}
+                     "series": [round(sum(b) / len(b), 1) if b else None for b in series], "hour": hour,
+                     "windows": {w: [min(v), max(v), round(sum(v) / len(v), 1)] for w, v in win.items() if v}}
         if ti is not None and last[ti]:
             out["total"][name] = last[ti]
     return out
@@ -154,6 +159,7 @@ if __name__ == "__main__" and sys.argv[1:] == ["--self-test"]:
     assert len(s1) == 7 and s1[0] == int(now)
     s2 = sample(now + 1)
     assert s2[1] is None or 0 <= s2[1] <= 100, s2
+    assert sample(now, "live")[1] is None or not sys.platform.startswith(("linux", "win")), "the live sampler keeps its own counters"
     if sys.platform.startswith("linux"):
         assert s1[2] and s1[3] and s1[2] <= s1[3], s1  # /proc/meminfo always answers
     # the summary: min/max/avg over raw samples, a 10-minute series, old samples dropped, missing metrics left out
@@ -162,6 +168,8 @@ if __name__ == "__main__" and sys.argv[1:] == ["--self-test"]:
     got = summary(fake, now)
     assert got["cpu"]["min"] == 10 and got["cpu"]["max"] == 30 and got["cpu"]["avg"] == 20.0 and got["cpu"]["now"] == 20, got
     assert len(got["cpu"]["series"]) == 144 and got["cpu"]["series"][-1] == 25.0 and got["cpu"]["series"][-2] == 10, got["cpu"]["series"][-3:]
+    assert got["cpu"]["hour"][-1] == 20 and got["cpu"]["hour"][40] == 10 and got["cpu"]["hour"].count(None) == 58, got["cpu"]["hour"][-3:]
+    assert got["cpu"]["windows"] == {"1h": [10, 30, 20.0], "6h": [10, 30, 20.0]}, got["cpu"]["windows"]
     assert got["total"] == {"ram": 8000} and "gpu" not in got and "vram" not in got, got
     assert summary([], now) == {"bucket": BUCKET, "total": {}}
     print("sysstats self-test ok", s1)

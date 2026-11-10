@@ -499,7 +499,8 @@ body.admin-page { display: block; overflow-y: auto; }
 .mx-meter-lab b { color: var(--ink); font-size: 13px; }
 .mx-track { height: 8px; margin-top: 3px; border-radius: 4px; background: var(--line); overflow: hidden; }
 .mx-track i { display: block; height: 100%; border-radius: 4px; background: var(--act); }
-.mx-stat summary { cursor: pointer; } .mx-stat summary b { font-weight: 600; }
+.mx-stat summary { cursor: pointer; } .mx-live::after { content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 5px; border-radius: 50%; background: var(--ok); vertical-align: 2px; } .mx-stat summary b { font-weight: 600; }
+.mx-zoom { display: flex; gap: 4px; margin-top: 6px; } .mx-zoom .btn.on { background: var(--act-soft); color: var(--act-text); }
 .mx-spark-box { margin-top: 6px; max-width: 260px; }
 .mx-spark { display: block; width: 100%; height: 40px; border-bottom: 1px solid var(--line); }
 .mx-spark polyline { fill: none; stroke: var(--act); stroke-width: 1.5; vector-effect: non-scaling-stroke; stroke-linejoin: round; }

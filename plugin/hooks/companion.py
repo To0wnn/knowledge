@@ -2153,6 +2153,7 @@ def actions_round():
     got = server("GET", f"/machine/actions?wait={ACTIONS_WAIT:g}", tok, timeout=ACTIONS_WAIT + 15)
     if remote_off(got.get("agents") is False):
         return False
+    LIVE["until"] = time.time() + ACTIONS_WAIT + 10 if got.get("live") else 0  # someone has Machines open: send live load
     for f in got.get("files", []):  # each on its own thread: a long action (a merge) never holds up a click in Files
         threading.Thread(target=file_request, args=(tok, f), daemon=True).start()
     for a in got.get("actions", []):
@@ -2174,6 +2175,20 @@ def actions_round():
     if changed:  # the page shows the new state at once, not at the next minute's report
         threading.Thread(target=tick, daemon=True).start()
     return "waited" in got  # a server before the long poll answers at once: then the loop waits itself
+
+
+LIVE = {"until": 0.0}
+LIVE_EVERY = 3
+
+
+def live_loop():
+    """While someone has the Machines page open, CPU, GPU, RAM and VRAM every few seconds (nothing otherwise)."""
+    while True:
+        if time.time() < LIVE["until"]:
+            with contextlib.suppress(Exception):  # live is a nicety: the minute report is the record
+                t, c, r, _, g, v, _ = sysstats.sample(time.time(), "live")
+                server("POST", "/machine/live", token_store.token(), {"cpu": c, "ram": r, "gpu": g, "vram": v}, timeout=5)
+        time.sleep(LIVE_EVERY)
 
 
 STATE_ACTIONS = {"install_tool", "remove_tool", "tool_auto", "yolo", "workers_allowed", "max_agents", "link_folder", "unlink_folder", "trust_hooks", "stop_worker", "restart", "merge", "takeover", "archive_worker", "apply_models"}
@@ -3023,6 +3038,7 @@ def serve():
         sys.exit(f"knowledge companion: {SELF} is taken, so another companion (or program) runs here: {e}")
     threading.Thread(target=loop, daemon=True).start()
     threading.Thread(target=actions_loop, daemon=True).start()
+    threading.Thread(target=live_loop, daemon=True).start()
     threading.Thread(target=chats_loop, daemon=True).start()
     threading.Thread(target=update_watch, daemon=True).start()
     threading.Thread(target=detect_tools, daemon=True).start()
