@@ -1700,6 +1700,33 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         row = next((r for r in machines() if r["id"] == mid), {})
         check({"path": str(app), "project": "garden"} in [{k: f[k] for k in ("path", "project")} for f in (row.get("companion") or {}).get("folders", {}).get("linked", [])],
               "folders: the Machines list shows the pc's linked folders", json.dumps((row.get("companion") or {}).get("folders"))[:400])
+        # Machines > Files: the owner lists, reads, saves and plays the files of a linked folder through the server.
+        (app / ".env").write_text("TOKEN=x\n", encoding="utf-8")
+        song = bytes(range(256)) * 4
+        (app / "song.mp3").write_bytes(song)
+        files = lambda body: http("POST", "/ui/api/files", {"machine": mid, **body}, ui)
+        st, body = files({"op": "list", "path": str(app)})
+        names = [e["name"] for e in json.loads(body).get("entries", [])] if st == 200 else []
+        check(st == 200 and "notes.md" in names and "song.mp3" in names and ".env" not in names, "files: the web UI lists a linked folder on the pc, without .env", body[:400])
+        st, body = files({"op": "read", "path": str(app / ".env")})
+        check(st == 400 and "private" in body, "files: .env files stay private", body[:300])
+        st, body = files({"op": "list", "path": str(outside)})
+        check(st == 400 and "not inside" in body, "files: nothing outside a linked folder", body[:300])
+        st, body = files({"op": "read", "path": str(app / "notes.md")})
+        read = json.loads(body) if st == 200 else {}
+        st, body = files({"op": "write", "path": str(app / "notes.md"), "text": "new\n", "base": {"mtime": "1", "size": read.get("size")}})
+        check(st == 400 and "changed" in body, "files: a save over a file that changed since it was read is refused", body[:300])
+        st, body = files({"op": "write", "path": str(app / "notes.md"), "text": "new\n", "base": {"mtime": read.get("mtime"), "size": read.get("size")}})
+        check(st == 200 and (app / "notes.md").read_bytes() == b"new\n" and any(home.glob("backups/knowledge-companion/*/*notes.md")),
+              "files: the web UI saves a text file, its old version in the companion's backups", body[:300])
+        req = urllib.request.Request(BASE + "/ui/api/files/raw?" + urllib.parse.urlencode({"machine": mid, "path": str(app / "song.mp3")}),
+                                     headers={**ui, "Range": "bytes=10-519"})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                got = (r.status, r.headers.get("Content-Range"), r.read())
+        except urllib.error.HTTPError as e:
+            got = (e.code, "", e.read()[:300])
+        check(got == (206, f"bytes 10-519/{len(song)}", song[10:520]), "files: a media file streams from the pc as a Range (206)", str(got)[:300])
         # The folder chooser in the web UI: the same list and link, through the server, and the answer is not kept.
         def remote_dirs(path):
             rid = json.loads(http("POST", "/ui/api/git/diff", {"machine": mid, "dirs": path}, ui)[1])["id"]

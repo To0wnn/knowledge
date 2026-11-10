@@ -2017,6 +2017,118 @@ def run_action(a: dict) -> str:
     raise ValueError(f"unknown action {act}")
 
 
+# Files (Machines > Files in the web UI): the owner's requests to list, read, save or play a file, only inside a folder
+# linked on this pc (symlinks resolved), never git's own files, .env files or keys.
+FILES_PRIVATE = re.compile(r"\.git|\.env(\..*)?|\.netrc|\.pgpass|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?|.*\.(pem|key|p12|pfx|kdbx)", re.I)
+FILES_TEXT, FILES_LIST, FILES_CHUNK = 1_000_000, 2000, 256 * 1024  # bytes of a text shown; entries of a folder; a stream's piece
+_linked_roots = {"at": 0.0, "roots": []}
+
+
+def linked_roots() -> list:
+    """The real paths of the folders linked on this pc, looked up at most every 30 s (folder_links runs git)."""
+    if time.time() - _linked_roots["at"] > 30:
+        _linked_roots.update(at=time.time(), roots=[Path(os.path.realpath(f["path"])) for f in folder_links()["linked"]])
+    return _linked_roots["roots"]
+
+
+def files_path(path: str) -> tuple:
+    """(real path, its linked folder) for a path inside a folder linked here; ValueError for anything else."""
+    p = Path(os.path.realpath(path))
+    for root in linked_roots():
+        if p == root or root in p.parents:
+            if any(FILES_PRIVATE.fullmatch(x) for x in p.relative_to(root).parts):
+                raise ValueError("this stays private: git's own files, .env files and keys are never shown")
+            return p, root
+    raise ValueError("not inside a folder linked on this pc")
+
+
+def file_answer(f: dict) -> dict:
+    """The answer to a list, read or write request (file_request streams)."""
+    p, root = files_path(str(f.get("path", "")))
+    op = f.get("op")
+    if op == "list":
+        entries = []
+        with os.scandir(p) as it:
+            for e in it:
+                if FILES_PRIVATE.fullmatch(e.name):
+                    continue
+                try:
+                    d = e.is_dir()
+                    st = e.stat()
+                except OSError:  # a broken link, a file gone meanwhile
+                    continue
+                entries.append({"name": e.name, "path": e.path, "dir": d, "size": 0 if d else st.st_size, "mtime": int(st.st_mtime)})
+        entries.sort(key=lambda x: (not x["dir"], x["name"].lower()))
+        return {"path": str(p), "root": str(root), "parent": None if p == root else str(p.parent), "sep": os.sep,
+                "entries": entries[:FILES_LIST], "more": max(0, len(entries) - FILES_LIST)}
+    st = p.stat()
+    if op == "read":
+        if st.st_size > FILES_TEXT:
+            raise ValueError(f"too big to show here ({st.st_size} bytes, at most {FILES_TEXT})")
+        data = p.read_bytes()
+        if b"\0" in data[:8192]:
+            raise ValueError("not a text file")
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            raise ValueError("not UTF-8 text") from None
+        return {"path": str(p), "root": str(root), "text": text, "mtime": str(st.st_mtime_ns), "size": st.st_size}
+    if op == "write":
+        base = f.get("base") or {}
+        if [str(st.st_mtime_ns), st.st_size] != [str(base.get("mtime")), base.get("size")]:
+            raise ValueError("the file changed on the pc since you opened it (an agent?): open it again, then edit")
+        text = str(f.get("text", ""))
+        if b"\r\n" in p.read_bytes():  # a browser sends \n only: keep the file's Windows line ends
+            text = text.replace("\r\n", "\n").replace("\n", "\r\n")
+        backup(p)
+        tmp = p.with_name(f".{p.name}.knowledge-tmp")
+        tmp.write_bytes(text.encode("utf-8"))
+        shutil.copymode(p, tmp)
+        os.replace(tmp, p)
+        st = p.stat()
+        log("remote", "File saved from the web UI", str(p))
+        return {"path": str(p), "mtime": str(st.st_mtime_ns), "size": st.st_size}
+    raise ValueError(f"unknown file request {op}")
+
+
+def file_request(tok: str, f: dict):
+    """Answer one file request: a stream posts the asked range as the request body, the rest answer in JSON."""
+    try:
+        if f.get("op") == "stream":
+            p, _ = files_path(str(f.get("path", "")))
+            size = p.stat().st_size
+            start, end = f.get("start"), f.get("end")
+            if start is None and end is not None:  # bytes=-N: the last N bytes
+                start, end = max(0, size - end), None
+            start, end = start or 0, size - 1 if end is None else min(end, size - 1)
+            if start >= size or end < start:
+                return server("POST", "/machine/files/answer", tok, {"id": f["id"], "error": "the range lies outside the file", "size": size})
+
+            def chunks():
+                with open(p, "rb") as fh:
+                    fh.seek(start)
+                    left = end - start + 1
+                    while left > 0 and (b := fh.read(min(FILES_CHUNK, left))):
+                        left -= len(b)
+                        yield b
+            q = urllib.parse.urlencode({"id": f["id"], "size": size, "start": start, "end": end})
+            req = urllib.request.Request(token_store.url() + "/machine/files/stream?" + q, method="POST", data=chunks(),
+                                         headers={**token_store.headers(tok), "Content-Type": "application/octet-stream", "Content-Length": str(end - start + 1)})
+            try:
+                with urllib.request.urlopen(req, timeout=90) as r:
+                    r.read()
+            except (ConnectionError, urllib.error.URLError, TimeoutError, OSError):
+                pass  # the player went away (a seek, a closed page): the server ends the upload
+            return
+        answer = file_answer(f)
+    except (OSError, ValueError) as e:
+        answer = {"error": str(e)[:300]}
+    try:
+        server("POST", "/machine/files/answer", tok, {"id": f.get("id"), **answer})
+    except Exception as e:
+        log("error", "Could not send a file answer to the web UI", f"{type(e).__name__}: {e}"[:300])
+
+
 def actions_round():
     """Fetch the waiting actions for this machine, run each, report how it went; all in the activity log."""
     tok, changed = token_store.token(), False
@@ -2024,6 +2136,8 @@ def actions_round():
     got = server("GET", f"/machine/actions?wait={ACTIONS_WAIT:g}", tok, timeout=ACTIONS_WAIT + 15)
     if remote_off(got.get("agents") is False):
         return False
+    for f in got.get("files", []):  # each on its own thread: a long action (a merge) never holds up a click in Files
+        threading.Thread(target=file_request, args=(tok, f), daemon=True).start()
     for a in got.get("actions", []):
         changed = changed or a.get("action") in STATE_ACTIONS
         log("remote", f"Remote action {a.get('action')} from {a.get('by') or '?'}", json.dumps(a.get("args") or {})[:200])

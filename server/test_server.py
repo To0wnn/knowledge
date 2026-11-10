@@ -1898,6 +1898,51 @@ def review_contract(tmp, ck, fr, raw, er):
     assert ("review", "REV-1") not in after and ("task", "REV-1-done") in after and "REV-1-done" in call("knowledge_read", {"path": path}, fr)[1]
 
 
+def files_contract(ck, fr, raw, er, et):
+    """Machines > Files: only the owner asks; the pc's held long poll wakes at once with the request and only that pc's
+    token answers; a read is masked, a masked text is never written back; a media Range streams through as 206."""
+    import concurrent.futures
+    pc, mid = {"X-Knowledge-Machine": "cccccccccccccccc", "X-Knowledge-Machine-Label": "garage"}, "cccccccccccccccc"
+    ui = lambda body, h=ck: raw("POST", "/ui/api/files", json.dumps(body), {**h, "X-Knowledge-UI": "1", "Content-Type": "application/json"})
+    assert http("POST", "/machine/report", {"version": "0.43.0"}, token=fr, headers=pc)[0] == 200
+    assert ui({"machine": mid, "op": "list", "path": "/home/x/garden"}, er)[0] == 403, "another person never sees his disk"
+    assert ui({"machine": mid, "op": "delete", "path": "/home/x/garden"})[0] == 400
+    assert ui({"machine": mid, "op": "list", "path": "a\nb"})[0] == 400
+    assert ui({"machine": mid, "op": "write", "path": "/home/x/a.md", "text": "pw ‹secret›", "base": {}})[0] == 400, "the mask never lands on disk"
+    assert raw("GET", f"/ui/api/files/raw?machine={mid}&path=/home/x/a.md", None, ck)[0] == 400, "only media stream raw"
+    with concurrent.futures.ThreadPoolExecutor(2) as ex:
+        def asked(what):  # a long poll held by the pc, then the click: the poll answers at once with it
+            t0 = time.time()
+            poll = ex.submit(http, "GET", "/machine/actions?wait=8", None, fr, pc)
+            time.sleep(0.3)
+            page = ex.submit(what)
+            got = json.loads(poll.result()[1])
+            assert time.time() - t0 < 3, "a click wakes the held poll, no waiting for the next round"
+            return got["files"], page
+        files, page = asked(lambda: ui({"machine": mid, "op": "read", "path": "/home/x/garden/a.md"}))
+        assert [(f["op"], f["path"]) for f in files] == [("read", "/home/x/garden/a.md")] and "tokens" not in files[0], files
+        assert http("POST", "/machine/files/answer", {"id": files[0]["id"], "text": "x"}, token=et, headers=pc)[0] == 404
+        assert http("POST", "/machine/files/answer", {"id": files[0]["id"], "text": "pw Sup3rSecret99\n", "mtime": "17", "size": 17}, token=fr, headers=pc)[0] == 200
+        st, _, b = page.result()
+        a = json.loads(b)
+        assert st == 200 and a["masked"] and "Sup3rSecret99" not in a["text"] and a["mtime"] == "17", b
+        files, page = asked(lambda: raw("GET", f"/ui/api/files/raw?machine={mid}&path=/home/x/garden/song.mp3", None, {**ck, "Range": "bytes=2-"}))
+        f = files[0]
+        assert (f["op"], f["start"], f["end"]) == ("stream", 2, None), f
+        req = urllib.request.Request(f"{BASE}/machine/files/stream?id={f['id']}&size=10&start=2&end=9", method="POST", data=b"cdefghij",
+                                     headers={**pc, "Authorization": f"Bearer {fr}", "Content-Type": "application/octet-stream"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            assert r.status == 200
+        st, hd, body = page.result()
+        hd = {k.lower(): v for k, v in hd.items()}
+        assert st == 206 and body == b"cdefghij" and hd["content-range"] == "bytes 2-9/10" and hd["content-type"] == "audio/mpeg", (st, hd, body)
+        assert "sandbox" in hd["content-security-policy"], hd
+        files, page = asked(lambda: raw("GET", f"/ui/api/files/raw?machine={mid}&path=/home/x/garden/song.mp3", None, {**ck, "Range": "bytes=50-"}))
+        http("POST", "/machine/files/answer", {"id": files[0]["id"], "error": "the range lies outside the file", "size": 10}, token=fr, headers=pc)
+        st, hd, _ = page.result()
+        assert st == 416 and {k.lower(): v for k, v in hd.items()}["content-range"] == "bytes */10", (st, hd)
+
+
 def board_contract(tmp, ck, fr, raw, er, et):
     """The Agents board: chats and workers of the owner's own pcs and task lines of the projects they see, each in one
     column (needs you, running, open, done), with the companion's git numbers; another person sees none of it; a diff
@@ -3686,6 +3731,7 @@ def main():
         assert json.loads(raw("GET", "/ui/api/me", None, ck)[2])["stt"] is True
         worker_follow_contract(tmp, ck, fr, raw, er, et)
         board_contract(tmp, ck, fr, raw, er, et)
+        files_contract(ck, fr, raw, er, et)
         needs_contract(tmp, ck, fr, raw, heard)
         approvals_contract(tmp, ck, fr, raw, er, et)
         flow_contract(tmp, ck, fr, raw, heard)

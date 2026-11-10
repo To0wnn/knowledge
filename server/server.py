@@ -23,6 +23,7 @@ import hmac
 import html
 import json
 import logging
+import mimetypes
 import os
 import re
 from datetime import date, timedelta
@@ -6238,6 +6239,7 @@ async def ui_machine_action(request: Request):
     item = {"id": secrets.token_hex(6), "action": action, "args": args, "by": dev.get("user", ""), "at": time.time(),
             "status": "waiting", "tokens": [n for n in row["tokens"] if steer(n)]}
     await asyncio.to_thread(update_state, MACHINE_ACTIONS, lambda d: d.__setitem__(mid, (d.get(mid, []) + [item])[-50:]))
+    wake_machine(mid)
     audit("machine-action", f"{mid} {action} {json.dumps(args)}")
     return JSONResponse({"ok": True, "id": item["id"]})
 
@@ -6272,14 +6274,19 @@ async def machine_actions_route(request: Request):
             a["status"] = "running"
             out.append({k: a[k] for k in ("id", "action", "args", "by", "at")})
     await asyncio.to_thread(mark_machine, dev)
-    end = time.time() + wait
+    end, wake = time.time() + wait, MACHINE_WAKE.setdefault(dev["machine"], asyncio.Event())
     while True:
+        files = files_for(dev)
         if mine(read_json(MACHINE_ACTIONS, {})):  # read first: no write (and no lock) while nothing waits
             await asyncio.to_thread(update_state, MACHINE_ACTIONS, change)
         # stopping (a deploy's switch-over): answer now, before uvicorn's 3 s grace cancels this and sends a 500
-        if out or time.time() >= end or getattr(UVICORN, "should_exit", False) or await request.is_disconnected():
-            return JSONResponse({"actions": out, "waited": wait})
-        await asyncio.sleep(1)
+        if out or files or time.time() >= end or getattr(UVICORN, "should_exit", False) or await request.is_disconnected():
+            return JSONResponse({"actions": out, **({"files": files} if files else {}), "waited": wait})
+        # a click on this server wakes the poll at once; the file read once a second still finds what the other server
+        # of a switch-over queued
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(wake.wait(), max(0.0, min(1.0, end - time.time())))
+        wake.clear()
 
 
 @server.custom_route("/machine/actions/result", methods=["POST"])
@@ -6300,6 +6307,193 @@ async def machine_action_result(request: Request):
                 found.append(a)
     await asyncio.to_thread(update_state, MACHINE_ACTIONS, change)
     return JSONResponse({"ok": bool(found)}, status_code=200 if found else 404)
+
+
+
+# Files (Machines > Files): the owner browses, reads, edits and plays the files of a folder linked on one of their own
+# pcs. A request goes to the pc on its actions long poll (woken at once) and the page waits for the answer; a media
+# file's bytes stream from the pc through this server one Range at a time, never kept. All in memory: a request made
+# during a deploy's switch-over may reach the other server, then the page says so and the person tries again.
+MACHINE_WAKE: dict = {}  # machine id -> asyncio.Event: its held long poll answers at once
+FILES_QUEUED: dict = {}  # machine id -> [request] the pc has not fetched yet
+FILES_OPEN: dict = {}  # request id -> {"machine", "tokens", "answer": Future, "chunks": Queue (a stream), "gone": Event}
+FILES_WAIT, FILES_TEXT, FILES_PATH = 20, 1_000_000, 1000  # seconds a page waits for its pc; characters of a text; of a path
+FILES_PLAY = ("image/", "audio/", "video/")  # what streams raw; anything else is read as text (an SVG too: no script)
+
+
+def wake_machine(mid: str):
+    if e := MACHINE_WAKE.get(mid):
+        e.set()
+
+
+def files_for(dev: dict) -> list:
+    """The file requests waiting for this companion's machine that its token may answer, handed out once."""
+    mid, now = dev["machine"], time.time()
+    q = [r for r in FILES_QUEUED.get(mid, []) if now - r["at"] < FILES_WAIT]
+    out = [r for r in q if dev["name"] in FILES_OPEN.get(r["id"], {}).get("tokens", [])]
+    FILES_QUEUED[mid] = [r for r in q if r not in out]
+    return [{k: v for k, v in r.items() if k != "at"} for r in out]
+
+
+async def files_ask(mid: str, req: dict, stream: bool = False) -> tuple:
+    """Queue a file request for one of this person's own online pcs; (request id, the pc's answer). Raises
+    PermissionError, ValueError, or TimeoutError when the pc did not answer in FILES_WAIT seconds."""
+    row = await asyncio.to_thread(chat_machine, mid)
+    if not row or not row["own"]:  # never a guest: a shared pc shares chats, not its disk
+        raise PermissionError(await asyncio.to_thread(not_own, mid))
+    if not row["online"]:
+        raise ValueError(f"{row['label']} is offline")
+    path = req.get("path")
+    if not isinstance(path, str) or not path or len(path) > FILES_PATH or any(c in path for c in "\0\n\r"):
+        raise ValueError("send the full path of a file or folder on the pc")
+    dev, tokens = device.get(), read_json(TOKENS_FILE, {})
+    rid, now = secrets.token_hex(8), time.time()
+    for k in [k for k, v in FILES_OPEN.items() if now - v["at"] > 3600 and "chunks" in v]:  # a stream no page read
+        FILES_OPEN.pop(k, None)
+    FILES_OPEN[rid] = {"machine": mid, "at": now, "tokens": [n for n in row["tokens"] if n in tokens and own_token(tokens[n], dev)],
+                       "answer": asyncio.get_running_loop().create_future(),
+                       **({"chunks": asyncio.Queue(16), "gone": asyncio.Event()} if stream else {})}
+    FILES_QUEUED.setdefault(mid, []).append({**req, "id": rid, "at": now})
+    wake_machine(mid)
+    try:
+        return rid, await asyncio.wait_for(asyncio.shield(FILES_OPEN[rid]["answer"]), FILES_WAIT)
+    except TimeoutError:
+        FILES_OPEN.pop(rid, None)
+        raise TimeoutError(f"{row['label']} did not answer in {FILES_WAIT} s: its Knowledge plugin may be older than "
+                           "the Files view (update it under Pcs), or a deploy just switched servers; try again") from None
+    finally:
+        if not stream:
+            FILES_OPEN.pop(rid, None)
+
+
+def files_error(e: Exception) -> JSONResponse:
+    return JSONResponse({"error": str(e) or "bad request"}, status_code=504 if isinstance(e, TimeoutError) else 403 if isinstance(e, PermissionError) else 400)
+
+
+@server.custom_route("/ui/api/files", methods=["POST"])
+async def ui_files(request: Request):
+    """{machine, op: "list" | "read" | "write", path, text, base}: a folder's entries, a text file (known secret values
+    masked; a masked text cannot be saved) or saving one, on one of this person's own pcs, inside a folder linked
+    there. write: `base` is the {mtime, size} its read gave; the pc refuses when the file changed since."""
+    try:
+        b = await request.json()
+        op = b.get("op")
+        req = {"op": op, "path": b.get("path")}
+        if op == "write":
+            text, base = b.get("text"), b.get("base")
+            if not isinstance(text, str) or len(text) > FILES_TEXT or not isinstance(base, dict):
+                raise ValueError(f"send the text (at most {FILES_TEXT} characters) and the base its read gave")
+            if "‹secret›" in text:  # would write the mask over the real value
+                raise ValueError("the text holds a masked secret (‹secret›): edit that file on the pc itself")
+            req |= {"text": text, "base": {"mtime": str(base.get("mtime", "")), "size": base.get("size")}}
+        elif op not in ("list", "read"):
+            raise ValueError("op must be list, read or write")
+        _, a = await files_ask(str(b.get("machine", "")), req)
+    except (ValueError, AttributeError, TypeError, PermissionError, TimeoutError) as e:
+        return files_error(e)
+    if a.get("error"):
+        return JSONResponse({"error": str(a["error"])[:300]}, status_code=400)
+    if op == "read":
+        text = str(a.get("text", ""))[:FILES_TEXT]
+        shown = await asyncio.to_thread(redact, text)
+        a = {**a, "text": shown, "masked": shown != text}
+    if op == "write":
+        audit("files-write", f"{b.get('machine')} {req['path']}")
+    return JSONResponse(a)
+
+
+@server.custom_route("/ui/api/files/raw", methods=["GET"])
+async def ui_files_raw(request: Request):
+    """?machine=&path=: an image, audio or video file streamed from the pc; a Range header (one range) gives 206, as a
+    <video> asks when it starts or seeks."""
+    q = request.query_params
+    path = q.get("path", "")
+    kind = mimetypes.guess_type(path)[0] or ""
+    if not kind.startswith(FILES_PLAY) or kind == "image/svg+xml":
+        return JSONResponse({"error": "only images, audio and video stream; open other files as text"}, status_code=400)
+    rng = re.fullmatch(r"bytes=(\d*)-(\d*)", request.headers.get("range", "").strip())
+    start = int(rng[1]) if rng and rng[1] else None
+    end = int(rng[2]) if rng and rng[2] else None
+    if rng and start is None and end is None:
+        rng = None
+    try:
+        rid, head = await files_ask(q.get("machine", ""), {"op": "stream", "path": path, "start": start, "end": end}, stream=True)
+    except (ValueError, PermissionError, TimeoutError) as e:
+        return files_error(e)
+    s = FILES_OPEN.get(rid)
+    if head.get("error") or not s:
+        FILES_OPEN.pop(rid, None)
+        if head.get("size") is not None:  # the range starts past the end
+            return Response(status_code=416, headers={"Content-Range": f"bytes */{head['size']}"})
+        return JSONResponse({"error": str(head.get("error") or "the stream ended")[:300]}, status_code=404)
+
+    async def body():
+        try:
+            while (chunk := await asyncio.wait_for(s["chunks"].get(), 60)) is not None:
+                yield chunk
+        except TimeoutError:  # the pc stopped sending: end the response, the player asks again
+            pass
+        finally:
+            s["gone"].set()
+            FILES_OPEN.pop(rid, None)
+    size, a, z = head["size"], head["start"], head["end"]
+    headers = {"Accept-Ranges": "bytes", "Content-Length": str(z - a + 1), "Cache-Control": "private, no-store",
+               "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox", "Content-Disposition": "inline"}
+    if rng:
+        headers["Content-Range"] = f"bytes {a}-{z}/{size}"
+    return StreamingResponse(body(), status_code=206 if rng else 200, media_type=kind, headers=headers)
+
+
+def files_request(rid: str) -> dict | None:
+    """The open file request `rid` when this companion's machine and token may answer it."""
+    dev, s = device.get(), FILES_OPEN.get(rid)
+    return s if s and s["machine"] == dev.get("machine") and dev.get("name") in s["tokens"] and not s["answer"].done() else None
+
+
+@server.custom_route("/machine/files/answer", methods=["POST"])
+async def machine_files_answer(request: Request):
+    """{id, ...}: the companion's answer to a file request (an error, a listing, a text, a write's result)."""
+    if no := remote_refused():
+        return no
+    try:
+        b = await request.json()
+        s = files_request(str(b.get("id", "")))
+    except (ValueError, AttributeError) as e:
+        return JSONResponse({"error": str(e) or "send JSON {id, ...}"}, status_code=400)
+    if not s:
+        return JSONResponse({"error": "unknown file request"}, status_code=404)
+    s["answer"].set_result({k: v for k, v in b.items() if k != "id"})
+    return JSONResponse({"ok": True})
+
+
+@server.custom_route("/machine/files/stream", methods=["POST"])
+async def machine_files_stream(request: Request):
+    """?id=&size=&start=&end=, body = those bytes of the file: piped to the page that asked, as it reads them (a full
+    queue holds the pc back; a page that went away ends it)."""
+    if no := remote_refused():
+        return no
+    q = request.query_params
+    s = files_request(q.get("id", ""))
+    if not s or "chunks" not in s:
+        return JSONResponse({"error": "unknown stream request"}, status_code=404)
+    try:
+        size, a, z = int(q["size"]), int(q["start"]), int(q["end"])
+    except (KeyError, ValueError):
+        return JSONResponse({"error": "send size, start and end"}, status_code=400)
+    s["answer"].set_result({"size": size, "start": a, "end": z})
+    try:
+        async for chunk in request.stream():
+            if s["gone"].is_set():
+                break
+            if chunk:
+                await asyncio.wait_for(s["chunks"].put(chunk), 60)
+    except TimeoutError:
+        pass
+    finally:
+        if not s["gone"].is_set():  # the end mark waits its turn behind the last chunks
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(s["chunks"].put(None), 60)
+    return JSONResponse({"ok": True, "gone": s["gone"].is_set()})
 
 
 # Chats: the owner talks to an agent on one of their pcs from the web UI. The server only stores and relays: the UI

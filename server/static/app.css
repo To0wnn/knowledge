@@ -551,6 +551,15 @@ body.admin-page { display: block; overflow-y: auto; }
 .mx-link-bar { padding: 0 0 10px; border: 0; } .mx-link-bar p { flex: 1; margin: 0; }
 .mx-frow { display: grid; grid-template-columns: 200px 1fr auto auto; gap: 12px; align-items: center; padding: 8px 14px; font-size: 13px; }
 .mx-frow + .mx-frow { border-top: 1px solid var(--line); }
+.fm { display: grid; gap: 12px; }
+.fm-bar, .fm-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.fm-row { display: flex; width: 100%; gap: 12px; align-items: baseline; justify-content: space-between; padding: 8px 14px; border: 0; background: transparent; color: var(--ink); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.fm-row + .fm-row { border-top: 1px solid var(--line); }
+.fm-row:hover { background: var(--hover); }
+.fm-name { overflow-wrap: anywhere; }
+.fm-text { margin: 0; padding: 12px; max-height: 75vh; overflow: auto; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel); white-space: pre-wrap; overflow-wrap: anywhere; }
+.fm-media { display: block; max-width: 100%; max-height: 75vh; border-radius: var(--r-md); }
+audio.fm-media { width: 100%; }
 .mx-frow code { overflow-wrap: anywhere; }
 .mx-empty { margin: 0; padding: 10px 14px; }
 .mx-ask { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }

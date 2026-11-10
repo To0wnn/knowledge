@@ -729,6 +729,7 @@ function switchProject(p, refit = true) {
   loadLint(!$("tab-lint").hidden);
   loadRecent();
   paintHead();
+  filesProject(); // Machines > Files lists the new project's folders
 }
 
 // Every topic of the project with its notes, biggest first; the topic of the open note is unfolded. On the map,

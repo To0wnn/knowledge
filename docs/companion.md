@@ -149,11 +149,19 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   queued as its own start), roll a YOLO worker back, trust hooks, update the plugin (every agent's plugin, and the companion's own git checkout when the one-line installer set it up: fast-forward only, never a reset, so a checkout with commits of its own stays and the button says why; the result names the plugin versions and the companion's state, the companion reports where it runs from (`self`: checkout or plugin copy, the version on disk, what a restart waits for) and restarts as soon as the result is sent; the newest version is read at main's commit via the GitHub API, since raw.githubusercontent.com serves main up to 5 minutes old; on Windows agy holds its own plugin folder while it runs, so with agy open its plugin is not forced: the update says so and the companion updates it in the first minute agy is closed. A companion also updates by itself, as Update does, once the server's answer names a newer Knowledge than it or one of its agents' plugins runs, when no worker or game runs there (a chat goes on through the restart; at most every 30 minutes; `KNOWLEDGE_AUTO_UPDATE=0` turns it off with the daily agent update); the server checks GitHub every 10 minutes), install or remove a tool and turn its daily update on or off (`tool_auto`; see Tools above), YOLO on or off per agent
   (on needs the word YOLO typed in a dialog), workers allowed, agents at once (chat turns and workers together, 0: no limit), link or unlink a folder (only folders the
   companion listed itself). The server queues them per machine (`POST /ui/api/machines/action`); the companion pulls
-  them about every 10 seconds (`GET /machine/actions`), runs them with its own code and reports the result; an
+  them with a long poll (`GET /machine/actions?wait=25`: the server holds it and answers the moment a click queues
+  something, woken in memory, plus a read of the queue once a second for the other server of a deploy's switch-over),
+  runs them with its own code and reports the result; an
   offline machine's action shows "waiting for machine". One exception to "the owner only": an admin may update the
   knowledge plugin on anyone's pc (button "Update plugin (admin)"), nothing else there, and only while its token has
   remote control on. Every action is logged with who and when, and shows in the
-  companion's activity log. There is no free-text command anywhere; free text reaches a pc only as a chat message
+  companion's activity log. The same long poll carries the Files view's requests (list, read, write, stream;
+  `POST /ui/api/files`, `GET /ui/api/files/raw`), each on its own thread so a long action never holds up a click: only
+  inside a folder linked on the pc (symlinks resolved), never `.git`, `.env` files or keys; a write only when the
+  file's mtime and size still match what was read, after a copy to the backups folder, keeping CRLF line ends; a
+  stream posts just the asked byte range (`POST /machine/files/stream`) and the server pipes it to the page through a
+  small queue, so a big video never sits in memory. These requests live in the server's memory: one made during a
+  deploy's switch-over can time out (the page says so; try again). There is no free-text command anywhere; free text reaches a pc only as a chat message
   to an agent (below), which runs with that agent's own permissions.
 
 ## Agents (remote control) per token

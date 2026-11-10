@@ -107,7 +107,7 @@ function applyRoute() {
   ckRun(agents);
   if (r.view === "tasks") viewLoad("tasks", "Tasks", () => loadTasks(true));
   // Machines: Pcs (the comparison) or Folders (per project); one load, two drawings of it
-  machinesMode = r.view === "machines" && r.q.get("view") === "folders" ? "folders" : "pcs";
+  machinesMode = r.view === "machines" && ["folders", "files"].includes(r.q.get("view")) ? r.q.get("view") : "pcs";
   for (const b of $("machines-mode").querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.mode === machinesMode));
   if (r.view === "machines") viewLoad("machines", "Machines", loadMachines);
   // Notes and Map: the topic list and right column, the note, the search results or the map in the middle. On a
@@ -205,7 +205,7 @@ function needsNotify(items) {
 // when notifications are on, which is when they matter).
 setInterval(() => { if ($("cockpit").hidden && (!document.hidden || notifyOn()) && me.user && !agentsOff()) ckSummary().catch(() => {}); }, 30000);
 
-for (const b of $("machines-mode").querySelectorAll("button")) b.onclick = () => go(b.dataset.mode === "folders" ? "#/machines?view=folders" : "#/machines");
+for (const b of $("machines-mode").querySelectorAll("button")) b.onclick = () => go(b.dataset.mode === "pcs" ? "#/machines" : `#/machines?view=${b.dataset.mode}`);
 
 // Search or jump: the command palette (palette.js).
 $("jump").onclick = () => openPalette();

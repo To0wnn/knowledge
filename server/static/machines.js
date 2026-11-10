@@ -3,6 +3,7 @@
 // Pcs (#/machines): your own online pcs side by side, one column each, so a value that differs shows at a glance; then
 // other people's pcs (each its own column: their accounts never mix with yours) and the pcs that are offline.
 // Folders (#/machines?view=folders): per project the folders linked on each pc. Workers live in Agents, not here.
+// Files (#/machines?view=files): browse, read, edit and play the files in those folders (the project picker scopes it).
 
 const YOLO_WARNING = "YOLO changes this agent's own global setting on that pc (Claude Code: bypassPermissions, Codex: approval never + no sandbox, agy: always-proceed), so EVERY session of it there runs every command and edits every file without asking: the owner's own sessions too, not only workers and chats, also for tasks other people wrote. Risky actions are flagged, never stopped. Turning it off puts the previous settings back.";
 const WORKERS_WARNING = "Allow workers on this pc? For every ready task in a linked project it may then start a fresh agent session on its own, in a git worktree of its own, without anyone watching (at most the max per agent). Only for a pc that may work by itself: not a work laptop or a shared family pc.";
@@ -142,7 +143,7 @@ $("choose-ok").onclick = () => {
 };
 
 // ---------------------------------------------------------------- Pcs: the comparison
-let machinesMode = "pcs"; // or "folders" (shell.js sets it from the route)
+let machinesMode = "pcs"; // or "folders" or "files" (shell.js sets it from the route)
 const machinesOpen = new Set(); // the tool panels a person opened: the page is redrawn every refresh
 const AGENT_ORDER = ["claude", "codex", "agy"];
 const TOOL_KIND = { skill: ["skill", "Instructions an agent loads when a task fits"], program: ["program", "Software installed on this pc that agents run, such as an MCP server"] };
@@ -589,6 +590,124 @@ function foldersView(res) {
   return parts;
 }
 
+// ---------------------------------------------------------------- Files: the folders linked on your pcs, in the browser
+// Each click asks the pc (its companion answers at once on its long poll); media stream from the pc with Range
+// requests, so a <video> seeks. The box lives across the page's refreshes: a refresh would stop what plays.
+const filesBox = el("div", "fm");
+let filesAt = null; // {m, path} of the folder open; null: the list of linked folders
+const FILE_KIND = { image: /\.(png|jpe?g|gif|webp|avif|bmp|ico)$/i, audio: /\.(mp3|m4a|aac|flac|ogg|oga|opus|wav)$/i, video: /\.(mp4|m4v|webm|ogv|mov|mkv)$/i };
+const fileKind = (name) => Object.keys(FILE_KIND).find((k) => FILE_KIND[k].test(name)) || "";
+const fileSize = (n) => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : n < 1073741824 ? `${(n / 1048576).toFixed(1)} MB` : `${(n / 1073741824).toFixed(2)} GB`;
+const filesApi = (m, body) => api("/ui/api/files", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: m.id, ...body }) });
+
+function filesRoots() {
+  filesAt = null;
+  const own = (machinesRes?.machines || []).filter((m) => steers(m));
+  const rows = own.flatMap((m) => (m.companion.folders?.linked || []).filter((f) => allMode() || f.project === project).map((f) => [m, f]));
+  const box = el("section", "mx-proj"), head = el("div", "mx-proj-head");
+  head.append(el("h3", null, allMode() ? "Linked folders" : `Linked folders of ${project}`));
+  box.append(head);
+  for (const [m, f] of rows) {
+    const r = el("button", "fm-row"); r.type = "button";
+    r.append(el("span", "fm-name", f.path), el("span", "muted", `${m.label} · ${f.project}`));
+    r.onclick = () => filesOpen(m, f.path);
+    box.append(r);
+  }
+  if (!rows.length) box.append(el("p", "muted mx-empty", own.length ? "No folder of this project is linked on a pc of yours that is online. Link one under Folders." : "None of your pcs is online with remote control on."));
+  filesBox.replaceChildren(el("p", "muted", "Browse, read, edit and play the files of the folders linked on your own pcs. git's own files, .env files and keys stay hidden."), box);
+}
+function filesProject() { if (machinesMode === "files" && !$("tab-machines").hidden && !filesBusy()) filesRoots(); }
+const filesBusy = () => filesBox.querySelector("textarea.editor") || [...filesBox.querySelectorAll("audio, video")].some((v) => !v.paused);
+
+async function filesOpen(m, path) {
+  if (filesBusy() && !confirm("Leave this file? What plays stops and unsaved edits are lost.")) return;
+  filesBox.replaceChildren(el("p", "muted", `Asking ${m.label}…`));
+  let res;
+  try { res = await filesApi(m, { op: "list", path }); } catch (e) { return filesFail(m, e, () => filesOpen(m, path)); }
+  filesAt = { m, path: res.path };
+  const top = el("div", "fm-bar");
+  const roots = el("button", "btn small quiet", "All folders"); roots.type = "button"; roots.onclick = filesRoots;
+  top.append(roots, filesCrumbs(m, res));
+  const list = el("section", "mx-proj fm-list");
+  if (res.parent) list.append(filesEntry("..", "up", () => filesOpen(m, res.parent)));
+  for (const e of res.entries) list.append(filesEntry(e.name, e.dir ? "" : `${fileSize(e.size)} · ${ago(e.mtime)}`, () => e.dir ? filesOpen(m, e.path) : filesShow(m, e), e.dir));
+  if (!res.entries.length) list.append(el("p", "muted mx-empty", "This folder is empty."));
+  if (res.more) list.append(el("p", "muted mx-empty", `${res.more} more not shown.`));
+  filesBox.replaceChildren(top, list);
+}
+function filesCrumbs(m, res) {
+  const nav = el("nav", "fm-crumbs"), rel = res.path.slice(res.root.length).split(res.sep).filter(Boolean);
+  nav.setAttribute("aria-label", "Folder");
+  let at = res.root;
+  const step = (name, path) => { const b = el("button", "btn small quiet", name); b.type = "button"; b.onclick = () => filesOpen(m, path); return b; };
+  nav.append(el("span", "muted", `${m.label}:`), step(res.root, res.root));
+  for (const part of rel) { at = at.endsWith(res.sep) ? at + part : at + res.sep + part; nav.append(el("span", "muted", res.sep), step(part, at)); }
+  return nav;
+}
+function filesEntry(name, info, onclick, dir = false) {
+  const r = el("button", "fm-row"); r.type = "button";
+  r.append(el("span", "fm-name", (dir ? "📁 " : "") + name), el("span", "muted", info));
+  r.onclick = onclick;
+  return r;
+}
+function filesFail(m, e, again) {
+  const retry = el("button", "btn small", "Try again"); retry.type = "button"; retry.onclick = again;
+  const back = el("button", "btn small quiet", "All folders"); back.type = "button"; back.onclick = filesRoots;
+  const bar = el("div", "fm-bar"); bar.append(retry, back);
+  filesBox.replaceChildren(el("p", "machine-stuck", `${m.label}: ${e.message}`), bar);
+}
+
+// One file: media play from the pc, everything else opens as text (and can be edited when nothing in it was masked).
+async function filesShow(m, e) {
+  const folder = filesAt.path, kind = fileKind(e.name), bar = el("div", "fm-bar");
+  const back = el("button", "btn small quiet", "← Folder"); back.type = "button"; back.onclick = () => filesOpen(m, folder);
+  bar.append(back, el("strong", "fm-name", e.name), el("span", "muted", fileSize(e.size)));
+  if (kind) {
+    const src = `/ui/api/files/raw?${new URLSearchParams({ machine: m.id, path: e.path })}`;
+    const media = el(kind === "image" ? "img" : kind, "fm-media");
+    media.src = src;
+    if (kind !== "image") { media.controls = true; media.preload = "metadata"; }
+    else media.alt = e.name;
+    const note = el("p", "muted");
+    media.onerror = () => { note.textContent = kind === "image" ? "This image could not be shown." : "This browser cannot play this file (its format or codec: MKV, HEVC and AC3 often fail), or the pc stopped answering."; };
+    const open = el("a", "btn small quiet", "Open in a new tab"); open.href = src; open.target = "_blank"; open.rel = "noopener";
+    bar.append(open);
+    filesBox.replaceChildren(bar, media, note);
+    if (kind !== "image") media.play().catch(() => {});
+    return;
+  }
+  filesBox.replaceChildren(bar, el("p", "muted", `Asking ${m.label}…`));
+  let res;
+  try { res = await filesApi(m, { op: "read", path: e.path }); } catch (err) { return filesFail(m, err, () => filesShow(m, e)); }
+  const pre = el("pre", "fm-text", res.text);
+  if (res.masked) bar.append(el("span", "muted", "A known secret is masked: edit this file on the pc itself."));
+  else {
+    const edit = el("button", "btn small", "Edit"); edit.type = "button";
+    edit.onclick = () => filesEdit(m, e, res, bar, pre);
+    bar.append(edit);
+  }
+  filesBox.replaceChildren(bar, pre);
+}
+function filesEdit(m, e, res, bar, pre) {
+  const area = el("textarea", "editor"); area.value = res.text; area.spellcheck = false;
+  area.setAttribute("aria-label", `Edit ${e.name}`);
+  const save = el("button", "btn small primary", "Save"); save.type = "button";
+  const cancel = el("button", "btn small quiet", "Cancel"); cancel.type = "button";
+  cancel.onclick = () => { if (area.value === res.text || confirm("Discard your unsaved changes?")) filesShow(m, e); };
+  save.onclick = async () => {
+    save.disabled = true;
+    try {
+      await filesApi(m, { op: "write", path: res.path, text: area.value, base: { mtime: res.mtime, size: res.size } });
+      toast(`Saved on ${m.label} (the old version is in its backups folder)`, false);
+      filesShow(m, e);
+    } catch (err) { toast(err.message); save.disabled = false; }
+  };
+  for (const b of bar.querySelectorAll("button:not(:first-child)")) b.remove();
+  bar.append(save, cancel);
+  pre.replaceWith(area);
+  area.focus();
+}
+
 // ---------------------------------------------------------------- the page
 let machinesTimer = 0, machinesRes = null, machinesHere = "";
 const MACHINE_REFRESH = 20000, MACHINE_REFRESH_UPDATING = 5000; // a pc reports about every 10 s; an update shows sooner
@@ -624,6 +743,11 @@ async function markHere() { // which row is the pc this page runs on (its compan
 function drawMachines() {
   const res = machinesRes, here = machinesHere, box = $("machines"), parts = [];
   if (!res) return;
+  if (machinesMode === "files") { // drawn once: a refresh leaves an open folder and what plays alone
+    if (filesBox.isConnected) return;
+    if (!filesAt) filesRoots();
+    return box.replaceChildren(filesBox);
+  }
   if (machinesMode === "folders") parts.push(...foldersView(res));
   else if (!res.machines.length) {
     const how = el("a", "btn small", "How to install"); how.href = "/ui/help#install";
