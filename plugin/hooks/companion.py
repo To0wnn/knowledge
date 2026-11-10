@@ -2019,7 +2019,8 @@ def run_action(a: dict) -> str:
 
 # Files (Machines > Files in the web UI): the owner's requests to list, read, save or play a file, only inside a folder
 # linked on this pc (symlinks resolved), never git's own files, .env files or keys.
-FILES_PRIVATE = re.compile(r"\.git|\.env(\..*)?|\.netrc|\.pgpass|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?|.*\.(pem|key|p12|pfx|kdbx)", re.I)
+FILES_PRIVATE = re.compile(r"\.git|\.git-credentials|\.env(\..*)?|\.envrc|\.netrc|\.npmrc|\.pypirc|\.pgpass|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?"
+                           r"|.*\.(pem|key|p12|pfx|kdbx)", re.I)
 FILES_TEXT, FILES_LIST, FILES_CHUNK = 1_000_000, 2000, 256 * 1024  # bytes of a text shown; entries of a folder; a stream's piece
 _linked_roots = {"at": 0.0, "roots": []}
 
@@ -2036,7 +2037,8 @@ def files_path(path: str) -> tuple:
     p = Path(os.path.realpath(path))
     for root in linked_roots():
         if p == root or root in p.parents:
-            if any(FILES_PRIVATE.fullmatch(x) for x in p.relative_to(root).parts):
+            # on Windows a colon names a file's alternate data stream (.env::$DATA is .env)
+            if any(FILES_PRIVATE.fullmatch(x) or os.name == "nt" and ":" in x for x in p.relative_to(root).parts):
                 raise ValueError("this stays private: git's own files, .env files and keys are never shown")
             return p, root
     raise ValueError("not inside a folder linked on this pc")
@@ -2077,14 +2079,22 @@ def file_answer(f: dict) -> dict:
         base = f.get("base") or {}
         if [str(st.st_mtime_ns), st.st_size] != [str(base.get("mtime")), base.get("size")]:
             raise ValueError("the file changed on the pc since you opened it (an agent?): open it again, then edit")
-        text = str(f.get("text", ""))
-        if b"\r\n" in p.read_bytes():  # a browser sends \n only: keep the file's Windows line ends
+        text, old = str(f.get("text", "")), p.read_bytes()
+        if old.count(b"\r\n") and old.count(b"\r\n") == old.count(b"\n"):  # a browser sends \n only: keep Windows line ends
             text = text.replace("\r\n", "\n").replace("\n", "\r\n")
-        backup(p)
+        # every save its own copy (backup() keeps one a day, by name): <day>/files/<time>-<path hash>-<name>
+        keep = BACKUPS / time.strftime("%Y-%m-%d") / "files"
+        keep.mkdir(parents=True, exist_ok=True)
+        os.chmod(BACKUPS, 0o700)
+        shutil.copy2(p, keep / f"{time.strftime('%H%M%S')}-{hashlib.sha256(str(p).encode()).hexdigest()[:8]}-{p.name}")
         tmp = p.with_name(f".{p.name}.knowledge-tmp")
-        tmp.write_bytes(text.encode("utf-8"))
-        shutil.copymode(p, tmp)
-        os.replace(tmp, p)
+        try:
+            tmp.write_bytes(text.encode("utf-8"))
+            shutil.copymode(p, tmp)
+            os.replace(tmp, p)
+        finally:
+            with contextlib.suppress(OSError):
+                tmp.unlink()
         st = p.stat()
         log("remote", "File saved from the web UI", str(p))
         return {"path": str(p), "mtime": str(st.st_mtime_ns), "size": st.st_size}

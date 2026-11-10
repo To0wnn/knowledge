@@ -693,12 +693,13 @@ function filesEdit(m, e, res, bar, pre) {
   area.setAttribute("aria-label", `Edit ${e.name}`);
   const save = el("button", "btn small primary", "Save"); save.type = "button";
   const cancel = el("button", "btn small quiet", "Cancel"); cancel.type = "button";
-  cancel.onclick = () => { if (area.value === res.text || confirm("Discard your unsaved changes?")) filesShow(m, e); };
+  const start = area.value; // the textarea's own line ends (\n): a CRLF file compares equal until edited
+  cancel.onclick = () => { if (area.value === start || confirm("Discard your unsaved changes?")) filesShow(m, e); };
   save.onclick = async () => {
     save.disabled = true;
     try {
       await filesApi(m, { op: "write", path: res.path, text: area.value, base: { mtime: res.mtime, size: res.size } });
-      toast(`Saved on ${m.label} (the old version is in its backups folder)`, false);
+      toast(`Saved on ${m.label} (the old version is in its backups folder, under files)`, false);
       filesShow(m, e);
     } catch (err) { toast(err.message); save.disabled = false; }
   };

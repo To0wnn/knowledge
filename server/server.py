@@ -3623,7 +3623,8 @@ class BearerAuth:
             return await JSONResponse({"error": f"the server's shared folders have not answered for {silent} s; try again later"},
                                       status_code=503, headers={"Retry-After": "30"})(scope, receive, send)
         headers = dict(scope["headers"])
-        if scope["method"] not in ("GET", "HEAD"):
+        # a media stream from a pc is piped through a small queue, never buffered: the only body without the cap
+        if scope["method"] not in ("GET", "HEAD") and path != "/machine/files/stream":
             receive = self.capped(receive)
             if int(headers.get(b"content-length", b"0") or 0) > MAX_BODY:
                 return await JSONResponse({"error": "request body too large"}, status_code=413)(scope, receive, send)
@@ -6338,6 +6339,8 @@ def files_for(dev: dict) -> list:
 async def files_ask(mid: str, req: dict, stream: bool = False) -> tuple:
     """Queue a file request for one of this person's own online pcs; (request id, the pc's answer). Raises
     PermissionError, ValueError, or TimeoutError when the pc did not answer in FILES_WAIT seconds."""
+    if device.get().get("impersonator"):
+        raise PermissionError("viewing as someone else: the files on their pcs stay theirs")
     row = await asyncio.to_thread(chat_machine, mid)
     if not row or not row["own"]:  # never a guest: a shared pc shares chats, not its disk
         raise PermissionError(await asyncio.to_thread(not_own, mid))

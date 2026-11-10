@@ -157,10 +157,11 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   remote control on. Every action is logged with who and when, and shows in the
   companion's activity log. The same long poll carries the Files view's requests (list, read, write, stream;
   `POST /ui/api/files`, `GET /ui/api/files/raw`), each on its own thread so a long action never holds up a click: only
-  inside a folder linked on the pc (symlinks resolved), never `.git`, `.env` files or keys; a write only when the
-  file's mtime and size still match what was read, after a copy to the backups folder, keeping CRLF line ends; a
+  inside a folder linked on the pc (symlinks resolved, on Windows no alternate data streams), never `.git`, `.env`
+  files or keys; a write only when the file's mtime and size still match what was read, after a copy of each save
+  under `~/backups/knowledge-companion/<day>/files/`, keeping CRLF line ends of an all-CRLF file; a
   stream posts just the asked byte range (`POST /machine/files/stream`) and the server pipes it to the page through a
-  small queue, so a big video never sits in memory. These requests live in the server's memory: one made during a
+  small queue, so a big video never sits in memory (the one request body without the server's 12 MB cap). These requests live in the server's memory: one made during a
   deploy's switch-over can time out (the page says so; try again). There is no free-text command anywhere; free text reaches a pc only as a chat message
   to an agent (below), which runs with that agent's own permissions.
 
