@@ -1423,22 +1423,33 @@ def git_state(path) -> dict | None:
         # "-- .": this folder only, also when it sits inside a bigger repo (a home folder kept in git)
         changed = sum(1 for ln in run("status", "--porcelain", "--", ".").stdout.splitlines() if ln.strip())
         base, ahead, behind = git_base(path, branch), 0, 0
+        landed = landed_in(path, base or (branch if branch in ("main", "master") else ""))
         if base:
             n = run("rev-list", "--left-right", "--count", f"{base}...HEAD").stdout.split()
-            behind, ahead = (int(n[0]), int(n[1])) if len(n) == 2 else (0, 0)
-        return {"branch": branch, "base": base, "changed": changed, "ahead": ahead, "behind": behind, "loose": loose_branches(path, base or (branch if branch in ("main", "master") else ""))}
+            behind = int(n[0]) if len(n) == 2 else 0
+            ahead = int(run("rev-list", "--count", "HEAD", *(f"^{b}" for b in landed)).stdout.strip() or 0)
+        return {"branch": branch, "base": base, "changed": changed, "ahead": ahead, "behind": behind, "loose": loose_branches(path, landed)}
     except (OSError, subprocess.SubprocessError, ValueError):
         return None
 
 
-def loose_branches(path: str, base: str) -> list:
-    """Local branches with commits not in the base that no worktree has checked out: work someone left behind (an
-    agent that went back to main without merging), newest 5 with their last commit time."""
+def landed_in(path: str, base: str) -> list:
+    """Where landed work is: the base and its upstream. A deploy pushes to origin/main and leaves the local main behind,
+    so work only the upstream holds is landed too."""
     if not base:
+        return []
+    up = workers.git(path, "rev-parse", "--abbrev-ref", "-q", f"{base}@{{upstream}}", env=GIT_RO, timeout=10)
+    return [base] + ([up.stdout.strip()] if up.returncode == 0 and up.stdout.strip() else [])
+
+
+def loose_branches(path: str, landed: list) -> list:
+    """Local branches with commits in none of `landed` that no worktree has checked out: work someone left behind (an
+    agent that went back to main without merging), newest 5 with their last commit time."""
+    if not landed:
         return []
     run = lambda *a: workers.git(path, *a, env=GIT_RO, timeout=10).stdout.splitlines()
     used = {ln[len("branch refs/heads/"):] for ln in run("worktree", "list", "--porcelain") if ln.startswith("branch refs/heads/")}
-    refs = (ln.rsplit(" ", 1) for ln in run("for-each-ref", f"--no-merged={base}", "--sort=-committerdate",
+    refs = (ln.rsplit(" ", 1) for ln in run("for-each-ref", *(f"--no-merged={b}" for b in landed), "--sort=-committerdate",
                                              "--format=%(refname:short) %(committerdate:unix)", "refs/heads") if " " in ln)
     return [{"branch": n, "at": int(t)} for n, t in refs if n not in used and t.isdigit()][:5]
 
@@ -3352,6 +3363,16 @@ def main(argv: list):
                     g("checkout", "-q", "main")
                     loose = git_state(tmp + "/r")["loose"]
                     assert [x["branch"] for x in loose] == ["side"] and loose[0]["at"] > 0, loose  # chat/0123456789ab: checked out, so not loose
+                    g("remote", "add", "origin", tmp + "/r")
+                    g("update-ref", "refs/remotes/origin/main", "side")  # pushed (a deploy), the local main left behind
+                    g("branch", "-q", "--set-upstream-to=origin/main", "main")
+                    assert git_state(tmp + "/r")["loose"] == [] and chat_git("0123456789ab", tmp + "/r")["ahead"] == 0, "work in the upstream is landed"
+                    wt2 = workers.worktree(tmp + "/r", "0123456789ab", prefix="chat")["cwd"]
+                    workers.git(wt2, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "merge", "-q", "--ff-only", "side", check=True)
+                    assert chat_git("0123456789ab", tmp + "/r")["ahead"] == 0, "landed via origin, the local main behind: not ahead"
+                    workers.git(wt2, "reset", "-q", "--hard", "main", check=True)
+                    g("branch", "-q", "--unset-upstream", "main")
+                    g("remote", "remove", "origin")
                     g("branch", "-q", "-D", "side")
                 finally:
                     workers.WORKTREES = real_wt

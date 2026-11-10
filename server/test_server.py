@@ -674,9 +674,11 @@ def machines_contract(tmp, ck, fr, raw, er, et, heard):
     assert http("POST", "/machine/report", old, token=fr, headers=pc)[0] == 200
     assert any("MC-0" in i and "task/MC-0 not merged" in i for i in json.loads(http("GET", "/lint")[1]).get("worker_unmerged", [])), http("GET", "/lint")[1][:500]
     rep2 = {**old, "folders": {"linked": [{"path": "/home/x/garden", "project": "garden", "git": {"branch": "main", "base": "origin/main", "ahead": 0,
-            "loose": [{"branch": "feat/old", "at": int(time.time() - 3 * 86400)}, {"branch": "feat/new", "at": int(time.time())}]}}]}}
+            "loose": [{"branch": "feat/old", "at": int(time.time() - 3 * 86400)}, {"branch": "feat/new", "at": int(time.time())}, {"branch": "bad", "at": -10**20}]}}]}}
     assert http("POST", "/machine/report", rep2, token=fr, headers=pc)[0] == 200
-    bl = json.loads(http("GET", "/lint")[1]).get("branch_unlanded", [])
+    st, raw_lint = http("GET", "/lint")
+    assert st == 200, ("a nonsense time in a report must not take lint down", raw_lint[:300])
+    bl = json.loads(raw_lint).get("branch_unlanded", [])
     assert any("feat/old has commits not in origin/main" in i for i in bl) and not any("feat/new" in i for i in bl), bl
     assert http("POST", "/machine/report", old, token=fr, headers=pc)[0] == 200
     # a worker its owner stopped from the page ended "failed": it says so and does not wait in Needs you
@@ -1177,6 +1179,11 @@ def chats_contract(tmp, ck, fr, raw, er, et):
                            "git": {"branch": "feat", "base": "main", "ahead": n, "behind": 0, "changed": 0}}]}}, token=fr, headers=pc)
     ahead(2)
     assert "feat has 2 commit(s) not in main" in call("knowledge_chat_close", {"chat": mc, "force": True}, fr)[1] and not chat()["closed"], "an agent cannot close past unlanded work"
+    assert ui("/ui/api/chat/close", {"machine": mid, "id": mc})[0] == 200 and chat()["status"] == "queued"
+    http("GET", "/machine/chats", token=fr, headers=pc)
+    http("POST", "/machine/chats/events", {"chat": mc, "events": [{"kind": "text", "text": "Recorded."}], "done": True}, token=fr, headers=pc)
+    got = json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])
+    assert not got["chat"]["closed"] and "feat has 2 commit(s)" in got["events"][-1]["text"], "a wrap-up end without git (a restart) falls back on the report"
     ahead(0)
     assert "force-archived" in call("knowledge_chat_close", {"chat": mc, "force": True, "reason": "limit reached"}, fr)[1]
     assert chat()["closed"] is True and not on_board()

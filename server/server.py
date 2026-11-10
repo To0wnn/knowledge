@@ -1171,7 +1171,8 @@ def knowledge_chat_close(chat: str = "", chat_id: str = "", id: str = "", force:
         update_state(f, lambda c: (c.update(closed=False), chat_add(c, "info", f"Opened again by {who}.")))
         return f"Chat {c['id']} ('{c.get('title') or 'untitled'}') opened again."
     if why := chat_unlanded(c, chat_git_of(mid, c)):  # an agent closing a chat skips the wrap-up, so the turn-end check too
-        raise ToolError(f"not archived: {why}. Land that work first (merge or deploy), or the owner uses Force archive in the web UI")
+        raise ToolError(f"not archived: {why} (as of the pc's last report, at most a minute old). Land that work first (merge or "
+                        "deploy), or the owner uses Force archive in the web UI")
     note = f"Archived by {who}" + (f": {reason}" if reason else ".")
     if not force and record:
         mrow = next((mr for mr in machine_rows() if mr["id"] == mid), None)
@@ -2970,7 +2971,7 @@ def workers_unmerged() -> list[str]:
             f"{w.get('branch')} not merged" for mid, m in read_json(MACHINES_FILE, {}).items()
             for w in (m.get("companion") or {}).get("workers", []) if w.get("branch") and not w.get("merged")
             and w.get("status") in ("finished", "failed", "stopped") and isinstance(w.get("ended"), (int, float))
-            and now - w["ended"] > 7 * 86400]
+            and 0 < w["ended"] < now - 7 * 86400]  # a nonsense time from a report would make localtime() raise and take lint down
 
 
 def branches_unlanded() -> list[str]:
@@ -7493,6 +7494,10 @@ async def machine_chat_events(request: Request):
         return JSONResponse({"error": "not a chat of this machine"}, status_code=404)
 
     auto = b.get("auto") is True and not b.get("done")  # the agent went on by itself (a live chat): a turn without a message
+    # an Archive turn's end without git (a companion restart in the turn, a hung git, a companion before 0.43.41): the
+    # pc's last report, a round old at most, so the check never fails open
+    git = b.get("git") if isinstance(b.get("git"), dict) else \
+        await asyncio.to_thread(chat_git_of, dev.get("machine", ""), c) if b.get("done") is True and c.get("close_after") else None
 
     def change(c):
         worked = chat_works(c)
@@ -7540,7 +7545,7 @@ async def machine_chat_events(request: Request):
                     if any(e["kind"] == "error" for e in c["events"][last + 1:]):  # not written: it stays, under Needs you
                         chat_add(c, "info", "Not archived: the turn that records this chat in the memos failed. Fix that, then Archive again.")
                     # the chat folder's git right at the turn's end (companion 0.43.41+); memos once called work live that sat on a branch
-                    elif why := chat_unlanded(c, b.get("git")):
+                    elif why := chat_unlanded(c, git):
                         chat_add(c, "info", f"Not archived: {why}. Land it (merge or deploy), then Archive again; Force archive closes it as it is.")
                     else:
                         c["closed"] = True
@@ -7830,7 +7835,7 @@ def git_pill(g) -> dict | None:
     return {"branch": str(g.get("branch") or "")[:120], "base": str(g.get("base") or "")[:120],
             "changed": num("changed"), "ahead": num("ahead"), "behind": num("behind"),
             "loose": [{"branch": str(x.get("branch") or "")[:120], "at": x["at"]} for x in (g.get("loose") if isinstance(g.get("loose"), list) else [])[:5]
-                      if isinstance(x, dict) and type(x.get("at")) is int]}
+                      if isinstance(x, dict) and type(x.get("at")) is int and 0 < x["at"] < time.time() + 86400]}  # localtime() overflows outside it
 
 
 def report_asks(asks) -> list:
