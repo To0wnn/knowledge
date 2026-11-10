@@ -3000,10 +3000,17 @@ def own_token(cfg: dict, dev: dict, steer: bool = True) -> bool:
 REMOTE_OFF = "remote control is off for this pc's token"
 
 # A pc shared per project with other members of that project, by its owner only (Tailscale-style consent): "view" shows
-# them the pc's chats in that project, "use" also lets them start chats there and go on in their own. A guest's chat
-# never runs YOLO (its companion asks every tool call) and stops at the next poll once the share or membership goes.
-SHARES_FILE = ADMIN_DIR / "machine_shares.json"  # {machine: {"by": owner, "projects": {project: {person: "view" | "use"}}}}
-SHARE_MODES = ("view", "use")
+# them the pc's chats in that project, "use" also lets them start chats there and go on in their own, every tool call
+# asked (never YOLO); "yolo" is use with the pc's own YOLO switch, as the owner's chats run. A guest's chat stops at the
+# next poll once the share or membership goes.
+SHARES_FILE = ADMIN_DIR / "machine_shares.json"  # {machine: {"by": owner, "projects": {project: {person: "view" | "use" | "yolo"}}}}
+SHARE_MODES = ("view", "use", "yolo")
+USES = ("use", "yolo")  # the modes that start chats
+
+
+def share_mode(mid: str, project: str, user: str) -> str:
+    """What the owner of pc `mid` gave this person for this project there ("" none), as stored."""
+    return (((read_json(SHARES_FILE, {}).get(mid) or {}).get("projects") or {}).get(project) or {}).get(user, "")
 
 
 def member_of(user: str, project: str) -> bool:
@@ -3019,7 +3026,7 @@ def share_tokens(mid: str, m: dict, tokens: dict, by: str) -> list[str]:
 
 
 def shares_for(mid: str, user: str, m: dict | None = None, tokens: dict | None = None) -> dict:
-    """{project: "view" | "use"}: what the owner of pc `mid` shared with this person there, only while they are still a
+    """{project: "view" | "use" | "yolo"}: what the owner of pc `mid` shared with this person there, only while they are still a
     member of the project and the owner's token on that pc still allows remote control."""
     s = read_json(SHARES_FILE, {}).get(mid) or {}
     got = {p: g.get(user) for p, g in (s.get("projects") or {}).items() if user and user != s.get("by") and g.get(user) in SHARE_MODES}
@@ -3032,7 +3039,7 @@ def shares_for(mid: str, user: str, m: dict | None = None, tokens: dict | None =
 def shared_row(mid: str, m: dict, shared: dict, now: float) -> dict:
     """The Machines row of someone else's pc shared with this person: only what the share needs (online, the agents and
     folders of the projects they may use), never the owner's sessions, errors, workers or other folders."""
-    comp, use = m.get("companion") or {}, {p for p, x in shared.items() if x == "use"}
+    comp, use = m.get("companion") or {}, {p for p, x in shared.items() if x in USES}
     linked = [f for f in (comp.get("folders") or {}).get("linked", []) if f.get("project") in use]
     agents = sorted(comp.get("agents") or {}) if use else []
     return {"id": mid, "label": m.get("label", mid), "at": m.get("at", 0), "online": now - m.get("at", 0) < ONLINE, "tokens": [],
@@ -6010,7 +6017,7 @@ def share_candidates(row: dict, me: str) -> list[dict]:
 @signed_in
 async def ui_machine_share(request: Request, body: dict):
     """GET ?machine=: per project linked on that pc, its other members and what each may (share_candidates).
-    POST {machine, project, user, mode: "view" | "use" | ""}: the pc's owner shares it with one member for one project,
+    POST {machine, project, user, mode: "view" | "use" | "yolo" | ""}: the pc's owner shares it with one member for one project,
     or takes that back ("", at once: a running guest turn stops at the next poll)."""
     b = body if request.method == "POST" else dict(request.query_params)
     mid, me = str(b.get("machine", "")), device.get().get("user", "")
@@ -6021,7 +6028,7 @@ async def ui_machine_share(request: Request, body: dict):
         return JSONResponse({"projects": await asyncio.to_thread(share_candidates, row, me)})
     project, user, mode = str(b.get("project", "")), str(b.get("user", "")), str(b.get("mode") or "")
     if mode and mode not in SHARE_MODES:
-        raise ValueError("mode is view, use or empty")
+        raise ValueError("mode is view, use, yolo or empty")
     cands = {c["project"]: {m["user"] for m in c["members"]} for c in await asyncio.to_thread(share_candidates, row, me)}
     if mode and user not in cands.get(project, set()):
         raise ValueError(f"{user or 'that person'} is not another member of {project or 'that project'} linked on this pc")
@@ -6468,21 +6475,21 @@ def chat_machine(mid: str) -> dict | None:
 
 def chat_rights(row: dict, c: dict) -> str:
     """What this person may do with chat `c` on pc `row`: "act" (send, stop, approve, archive) on their own pc and in a
-    chat they started there as a guest with "use"; "view" in the other chats of a project shared with them; else ""."""
+    chat they started there as a guest with "use" or "yolo"; "view" in the other chats of a project shared with them; else ""."""
     if row["own"]:
         return "act"
     mode = (row.get("shared") or {}).get(c.get("project") or "")
     if not mode:
         return ""
-    return "act" if mode == "use" and c.get("guest") and c.get("by") == device.get().get("user") else "view"
+    return "act" if mode in USES and c.get("guest") and c.get("by") == device.get().get("user") else "view"
 
 
 def guest_chat_ok(c: dict, mid: str, cfg: dict) -> bool:
-    """A guest's chat may still run under this token: the owner still shares the project with its starter for "use",
+    """A guest's chat may still run under this token: the owner still shares the project with its starter for use,
     the starter is still a member, and the token is the sharing owner's with remote control on."""
     s = read_json(SHARES_FILE, {}).get(mid) or {}
     by = c.get("by", "")
-    return (bool(c.get("guest")) and ((s.get("projects") or {}).get(c.get("project") or "") or {}).get(by) == "use"
+    return (bool(c.get("guest")) and ((s.get("projects") or {}).get(c.get("project") or "") or {}).get(by) in USES
             and by != s.get("by") and member_of(by, c.get("project") or "") and own_token(cfg, {"user": s.get("by", ""), "admin": s.get("by") in ADMINS}))
 
 
@@ -6552,7 +6559,7 @@ async def ui_chats(request: Request):
     dev, tokens, now = device.get(), read_json(TOKENS_FILE, {}), time.time()
     guest = not row["own"]
     if guest:  # someone else's pc: only in a project its owner shared with this person for "use", on a companion that keeps it safe
-        if (row.get("shared") or {}).get(project) != "use":
+        if (row.get("shared") or {}).get(project) not in USES:
             return JSONResponse({"error": f"{row['label']} is not shared with you for {project} (its owner shares it under Machines)"}, status_code=403)
         if not comp.get("guests"):
             return JSONResponse({"error": f"the knowledge plugin on {row['label']} is too old for a shared chat: its owner updates it first"}, status_code=409)
@@ -6566,8 +6573,9 @@ async def ui_chats(request: Request):
          # a guest always works in a worktree of its own: never in the owner's checkout, and its branch gets a Review card there
          **({"worktree": True} if b.get("worktree") is True or guest else {}), **({"guest": True} if guest else {})}
     if guest:
-        chat_add(c, "info", f"A chat on {row['label']}, shared with you for {project}: its owner sees it, every tool call asks first "
-                            "(never YOLO), and it runs on the owner's agent subscription.")
+        chat_add(c, "info", f"A chat on {row['label']}, shared with you for {project}: its owner sees it, "
+                            + ("it runs with that pc's YOLO setting" if row["shared"][project] == "yolo" else "every tool call asks first (never YOLO)")
+                            + ", and it runs on the owner's agent subscription.")
     why_own = await asyncio.to_thread(checkout_in_use, comp, d, folder, now) if "worktree" not in b and not guest else ""
     if why_own:  # nobody chose: a second writer in one checkout takes the other's half work along in its commits
         c["worktree"] = True
@@ -7036,7 +7044,7 @@ async def ui_chat_commands(request: Request):
     """?machine=&agent=: the slash commands that agent offers on that pc (one of this person's own), for the chat box."""
     mid, agent = request.query_params.get("machine", ""), request.query_params.get("agent", "")
     row = await asyncio.to_thread(chat_machine, mid)
-    if not row or not (row["own"] or "use" in (row.get("shared") or {}).values()):
+    if not row or not (row["own"] or any(x in USES for x in (row.get("shared") or {}).values())):
         return JSONResponse({"error": await asyncio.to_thread(not_own, mid)}, status_code=403)
     m = (await asyncio.to_thread(read_json, MACHINES_FILE, {})).get(mid) or {}
     comp = m.get("companion") or {}  # its version: a plugin before 0.43.0 lists none, which the box says
@@ -7474,7 +7482,7 @@ async def ui_chat_file(request: Request):
             if not row["own"] and not await asyncio.to_thread(file_in_view, row, ref):  # a shared pc: only files of chats they may see
                 raise PermissionError("not a file of a chat you may see")
             return file_response(await asyncio.to_thread(chat_file_path, mid, ref))
-        if not row["own"] and "use" not in (row.get("shared") or {}).values():
+        if not row["own"] and not any(x in USES for x in (row.get("shared") or {}).values()):
             raise PermissionError("this pc is shared with you to read, not to chat")
         data = await request.body()
         if not data or len(data) > CHAT_FILE_MAX:
@@ -7543,7 +7551,8 @@ async def machine_chats(request: Request):
                 q.pop(cid)
                 revoked.append(cid)
                 continue
-            extra_guest = {"guest": True} if c.get("guest") else {}  # its companion runs it without YOLO
+            # its companion runs it without YOLO, unless the owner shared it with YOLO (then the pc's own switch counts)
+            extra_guest = {"guest": True} if c.get("guest") and share_mode(mid, c.get("project") or "", c.get("by", "")) != "yolo" else {}
             rdr = (all_prefs.get(c.get("by", "") or "", {}).get("chat_reader") or {}).get("id") or ""
             extra = {**({"reader": rdr} if rdr else {}), **extra_guest}
             if e.get("busy"):

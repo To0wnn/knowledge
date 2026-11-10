@@ -38,7 +38,7 @@ async function ckSummary() {
   const [ms, cs, bd] = await Promise.all([api("/ui/api/machines"), api("/ui/api/chats"), api("/ui/api/board").catch(() => null)]);
   ck.machines = ms.machines.filter((m) => m.own && !m.old); ck.ready = true; ck.error = "";
   // someone else's pcs shared with you for a project to "use": new chats there too (Machines: Share, on the owner's side)
-  ck.shared = ms.machines.filter((m) => !m.own && !m.old && Object.values(m.shared || {}).includes("use"));
+  ck.shared = ms.machines.filter((m) => !m.own && !m.old && Object.values(m.shared || {}).some((x) => x === "use" || x === "yolo"));
   for (const m of ck.machines) for (const x of m.actions || []) { // a Merge queued from a card: say how it went on the pc
     const what = ck.waits.get(x.id);
     if (what && (x.status === "done" || x.status === "failed")) { ck.waits.delete(x.id); toast(`${what}: ${x.result || x.status}`, x.status === "failed"); }
@@ -132,7 +132,7 @@ function ckSubRows(c) { // a chat's subagents, each a chat of its own, under it:
 }
 const ckOnlinePc = () => ck.machines.some((m) => m.online && m.companion);
 const ckPc = (id) => ck.machines.find((m) => m.id === id) || (ck.shared || []).find((m) => m.id === id); // own, else shared with you
-const ckLinked = (m) => (m.companion?.folders?.linked || []).filter((f) => m.own || m.shared?.[f.project] === "use");
+const ckLinked = (m) => (m.companion?.folders?.linked || []).filter((f) => m.own || ["use", "yolo"].includes(m.shared?.[f.project]));
 // Getting started, instead of an empty list: the help page's install line for this pc's system (help.html#install),
 // then linking a folder and the first chat.
 const INSTALL_CMD = {

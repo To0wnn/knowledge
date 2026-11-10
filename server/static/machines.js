@@ -231,7 +231,7 @@ function pcHead(m, here) {
   const old = agentsBehind(m);
   if (old.length && steers(m)) acts.append(machineButton("Update agents", `Update ${old.map((a) => AGENT_NAME[a] || a).join(", ")} with each one's own update command (a running session keeps its version until it restarts)`,
     () => machineAction(m, "update_agents"), pendingAction(m, "update_agents"), "btn small primary"));
-  const sharedUse = !m.own && m.online && Object.values(m.shared || {}).includes("use") && (c?.folders?.linked || []).some((f) => m.shared[f.project] === "use");
+  const sharedUse = !m.own && m.online && (c?.folders?.linked || []).some((f) => usesShare(m.shared?.[f.project]));
   if ((steers(m) || sharedUse) && (c.agents || []).length && (c.folders?.linked || []).length) acts.append(machineButton("Chat", "Talk to an agent on this pc (Chats)", async () => { go("#/chats"); if (!ck.machines.length) await ckSummary().catch(() => {}); ckNewChat(m.id); }));
   if (m.mine) acts.append(pcMore(m));
   if (acts.childNodes.length) box.append(acts);
@@ -267,13 +267,14 @@ async function forgetPc(m) {
 }
 // Share this pc per project with its other members: View shows them its chats in that project, Use also lets them start
 // chats there (never YOLO, every tool call asks them, on your agent subscription). Off takes it back at once.
-const SHARE_WORDS = { "": "Off", view: "View chats", use: "View and use" };
+const SHARE_WORDS = { "": "Off", view: "View chats", use: "View and use", yolo: "Use with YOLO" };
+const usesShare = (x) => x === "use" || x === "yolo";
 async function pcShare(m) {
   const d = el("dialog", "mx-dialog"), h = el("h3", null, `Share ${m.label}`), body = el("div");
   const close = el("button", "btn", "Close"); close.type = "button"; close.onclick = () => d.close();
   d.append(h, el("p", "muted", "Per project linked on this pc, with the project's other members. View: they see this pc's chats in that project. "
-    + "Use: they can also start chats here in that project. Their chats always ask before each tool call (never YOLO), run as you on this pc, "
-    + "on your agent subscription, in a worktree of their own; you see those chats and can stop them. Off takes it back at once."), body, close);
+    + "Use: they can also start chats here in that project; each tool call asks them first. Use with YOLO: their chats follow this pc's YOLO switch, as yours do. "
+    + "Their chats run as you on this pc, on your agent subscription, in a worktree of their own; you see those chats and can stop them. Off takes it back at once."), body, close);
   d.onclose = () => { d.remove(); loadMachines(); };
   document.body.append(d); d.showModal();
   let res;
@@ -290,6 +291,7 @@ async function pcShare(m) {
       sel.value = u.mode || "";
       sel.onchange = async () => {
         if (sel.value === "use" && !confirm(`Let ${u.user} run agents on ${m.label} in ${p.project}?\n\nTheir agents run as you on this pc (files, network, your agent subscription). Every tool call asks them first.`)) { sel.value = u.mode || ""; return; }
+        if (sel.value === "yolo" && prompt(`${u.user}'s chats on ${m.label} (${p.project}) then run with this pc's YOLO switch: no tool call asked, as you on this pc, on your agent subscription; risky actions are flagged, never stopped. Type YOLO to allow it.`) !== "YOLO") { sel.value = u.mode || ""; return; }
         try {
           await api("/ui/api/machine/share", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: m.id, project: p.project, user: u.user, mode: sel.value }) });
           u.mode = sel.value; toast(`${u.user}: ${SHARE_WORDS[sel.value]} on ${m.label} (${p.project})`, false);

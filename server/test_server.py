@@ -1429,6 +1429,14 @@ def share_contract(tmp, ck, fr, raw, er):
     assert ui("/ui/api/chat/send", {"machine": mid, "id": mine, "text": "mine"})[0] == 200
     assert "guest" not in {w["chat"]: w for w in poll()["work"]}[mine]  # the owner's own chat as before
     http("POST", "/machine/chats/events", {"chat": mine, "events": [], "done": True}, token=fr, headers=pc)
+    # Use with YOLO: her next turn goes without the guest mark, so the pc's own YOLO switch counts; back to use, marked again.
+    http("POST", "/machine/chats/events", {"chat": g["id"], "events": [], "done": True}, token=fr, headers=pc)
+    assert share("yolo")[0] == 200 and rows(er)[mid]["shared"] == {"garden": "yolo"}
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": g["id"], "text": "go"}, er)[0] == 200
+    assert "guest" not in {w["chat"]: w for w in poll()["work"]}[g["id"]]
+    http("POST", "/machine/chats/events", {"chat": g["id"], "events": [], "done": True}, token=fr, headers=pc)
+    assert share("use")[0] == 200 and ui("/ui/api/chat/send", {"machine": mid, "id": g["id"], "text": "careful"}, er)[0] == 200
+    assert {w["chat"]: w for w in poll()["work"]}[g["id"]]["guest"] is True
     owner_list = {c["id"]: c for c in json.loads(ui("/ui/api/chats")[2])["chats"] if c["machine"] == mid}
     assert owner_list[g["id"]]["guest"] and owner_list[g["id"]]["rights"] == "act", owner_list  # the owner sees and can stop it
     assert any(i["kind"] == "chat" and i["id"] == g["id"] for i in json.loads(ui("/ui/api/board", h=er)[2])["items"])

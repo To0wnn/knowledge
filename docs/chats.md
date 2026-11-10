@@ -13,8 +13,10 @@ from a phone. The pc side runs in the companion ([companion.md](companion.md)).
   actions); nothing of the owner's other projects, sessions, errors or workers shows (a trimmed Machines row, pill
   "shared: ..."). **Use** also lets them start chats there in that project and steer those (send, stop, approve,
   archive), never the owner's own chats. A guest's chat (`guest: true`) always gets its own worktree, so it never
-  works in the owner's checkout; it never runs YOLO: the work item carries `guest` and the companion (one that reports
-  `guests: true`, else the start is refused) runs it with every tool call asked; it runs as the owner on that pc, on
+  works in the owner's checkout. Under use it never runs YOLO: the work item carries `guest` and the companion (one
+  that reports `guests: true`, else the start is refused) runs it with every tool call asked. **Use with YOLO**
+  (`yolo`, the owner types YOLO to give it) leaves that mark off, so the pc's own YOLO switch counts as for the
+  owner's chats; a change of mode holds from the guest's next turn. It runs as the owner on that pc, on
   the owner's agent subscription and token. The owner sees it in their own list ("by <person>"), can stop and approve
   it, and the admin hears on Matrix when someone starts one on an admin's pc. Taking it back (Off), the person leaving
   the project or the owner's token turning remote control off ends it at once: the next poll stops a running turn,
