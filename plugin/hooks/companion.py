@@ -3014,7 +3014,7 @@ class LocalServer(ThreadingHTTPServer):
 
 # Windows keeps an exclusive port taken after its process ended, until that process's connections are gone (Microsoft,
 # "Using SO_REUSEADDR and SO_EXCLUSIVEADDRUSE"; 10048 in CI right after a restart): a restart that gave up there leaves no companion.
-BIND_WAIT = 30 if os.name == "nt" else 0
+BIND_WAIT = float(os.environ.get("KNOWLEDGE_COMPANION_BIND_WAIT") or (30 if os.name == "nt" else 0))  # env: tests
 
 
 def bind_local(addr: tuple, wait: float) -> LocalServer:

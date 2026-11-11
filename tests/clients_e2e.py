@@ -1213,8 +1213,9 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         check(up, "companion: serve answers on 127.0.0.1 and its first round reached the server", (home / "companion.log").read_text(errors="replace")[-600:])
         if not up:
             return
-        second = subprocess.run([sys.executable, str(hooks / "agent_hooks.py"), "serve"], env=env, stdin=subprocess.DEVNULL,
-                                capture_output=True, text=True, timeout=60)  # on Windows it waits 30 s for the port
+        # a held port waits 30 s on Windows (a restart's old connections); this one is held by a live companion: 2 s do
+        second = subprocess.run([sys.executable, str(hooks / "agent_hooks.py"), "serve"], env={**env, "KNOWLEDGE_COMPANION_BIND_WAIT": "2"},
+                                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
         check(second.returncode != 0, "companion: a second one on this pc cannot bind the port (one minute loop per pc, also on Windows)",
               second.stdout[-300:] + second.stderr[-300:])
         # Only this pc's pages: a foreign origin, a rebound host name, a POST without Origin or not as JSON get nothing.
