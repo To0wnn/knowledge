@@ -89,7 +89,9 @@ The companion that starts workers is described in [companion.md](companion.md); 
   but left its task open (not claimed, not handed back) counts as failed: an error in the activity log and the
   stalled lane, plus the server's idle notice. Its prompt holds the task line and the rules: claim it, commit
   on the branch, never merge or push, hand back with `[<requester>, <ID>-done]: <result>; branch <name>; done: ...;
-  left: ...` (the server refuses a worker's hand-back without branch, done and left). Every worker is a new session; a
+  left: ...` (the server refuses a worker's hand-back without branch, done and left). A worker that cannot start yet
+  (a device it needs is offline) sets the line's `start` to tomorrow's date with the reason and ends: it then counts as
+  finished, not failed, and the task wakes again on that date. Every worker is a new session; a
   hand-over `<ID>-cont` goes on in the same worktree and branch, and the branch, the memo and the last hand-over line
   are all it knows. Workers are off on a new pc ("Workers allowed" in the companion's settings), at most one per
   agent unless its maximum says more, one while its usage limit is unknown, none while a Wolf game session runs (its
@@ -99,7 +101,7 @@ The companion that starts workers is described in [companion.md](companion.md); 
   renews the task's lease, so such a task shows as startable again (and gets the idle notice) instead of staying stuck. The companion knows a worker by its pid and that process's start time,
   so after a reboot a recorded worker counts as ended and a stop never hits a reused pid. A worker records the branch its
   worktree was made from (`base_branch`). When it ended and its result line `[<requester>, <ID>-done]` names its branch,
-  the Inbox shows a **Review** card under Needs you (`kind: review`): commits ahead of that branch, changed files, the
+  the Inbox of that pc's owner shows a **Review** card under Needs you (`kind: review`; not for an admin or a guest of a shared pc): commits ahead of that branch, changed files, the
   newest commit, the worker's done/left and the clause of its done text about tests (the server runs nothing).
   **Merge** is the machine action `merge` (owner only): in the main checkout `git merge --no-ff -m "Merge task/<ID>"`
   without hooks, fsmonitor or signing, only when that checkout is on that branch, has no uncommitted changes and no

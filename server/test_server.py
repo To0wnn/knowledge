@@ -1969,6 +1969,10 @@ def review_contract(tmp, ck, fr, raw, er):
     assert ("worker", "REV-1") not in items and ("task", "REV-1-done") not in items, "the card is the worker and its result"
     assert ("worker", "REV-2") in items and not [i for k, i in items.items() if k[0] == "review" and i["machine"] != mid]
     assert ("review", "REV-1") not in board(er), "another person never sees his pc's review"
+    import server as srv  # an admin sees every pc's workers, but a shared pc's Merge is its owner's: no card for the admin
+    row = {"id": mid, "label": "garage", "online": True, "tokens": ["t"], "agents": {"claude": {"workers": [w("REV-1")]}}}
+    done = [{"project": "garden", "id": "REV-1-done", "done": True, "path": path, "line": lines[0], "owner": "Sam", "text": lines[0].split(": ", 1)[1]}]
+    assert len(srv.review_items([{**row, "own": True}], done)) == 1 and srv.review_items([{**row, "own": False}], done) == []
     # Merge: a fixed action with a task id, the pc's owner only; the companion gets exactly that.
     act = lambda args, h=ck: ui("/ui/api/machines/action", {"machine": mid, "action": "merge", "args": args}, h)
     assert act({"project": "garden", "id": "../x"})[0] == 400 and act({"project": "nope", "id": "REV-1"})[0] == 400
