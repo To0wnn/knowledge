@@ -59,7 +59,8 @@ The companion that starts workers is described in [companion.md](companion.md); 
 - **Where tasks show.** With Agents (remote control on) the sidebar has no Tasks entry and `#/tasks` opens the Agents
   list; the Tasks list stays for a person without Agents. In Agents: Needs you: approvals, results for a person, lines past their date, and a person's
   own lines ("for <name>", the same three answers). Queued: the open lines that wait or may start, with "Start on <pc>";
-  Assign… and Cancel task in the ⋯ menu, Remove (read) on a person's result. On the desktop grid, on top: the running workers (and stopped ones that need you) as compact cards with their
+  Assign…, Give to chat: <title> (an open chat of yours in that project gets `pak <ID>` after its turn), Give to a new
+  chat (a draft with `pak <ID>` typed in, in a folder of that project) and Cancel task in the ⋯ menu, Remove (read) on a person's result. On the desktop grid, on top: the running workers (and stopped ones that need you) as compact cards with their
   progress, Follow and Stop, and one line of chips that lists the queued tasks of the picked
   project (all projects: with the project's name; a chip opens the task in the list). An owner that is a project, device token or pc name (`trade`, `gema`) is
   no person: a session there takes the line at its next turn (`agent_owner`), so it queues "for a session of <name>".
@@ -103,9 +104,11 @@ The companion that starts workers is described in [companion.md](companion.md); 
   renews the task's lease, so such a task shows as startable again (and gets the idle notice) instead of staying stuck. The companion knows a worker by its pid and that process's start time,
   so after a reboot a recorded worker counts as ended and a stop never hits a reused pid. A worker records the branch its
   worktree was made from (`base_branch`). When it ended and its result line `[<requester>, <ID>-done]` names its branch,
-  the Inbox of that pc's owner shows a **Review** card under Needs you (`kind: review`; not for an admin or a guest of a shared pc): commits ahead of that branch, changed files, the
+  the Inbox shows a **Review** card under Needs you (`kind: review`) to that pc's owner and to whom the pc is shared
+  with for use in that project (Share "use" or "yolo"; not "view", and an admin's view of the pc gives none): commits ahead of that branch, changed files, the
   newest commit, the worker's done/left and the clause of its done text about tests (the server runs nothing).
-  **Merge** is the machine action `merge` (owner only): in the main checkout `git merge --no-ff -m "Merge task/<ID>"`
+  **Merge** is the machine action `merge` (the owner, or a member it is shared with for use in that project: only
+  this action, sent to the companion under the owner's token): in the main checkout `git merge --no-ff -m "Merge task/<ID>"`
   without hooks, fsmonitor or signing, only when that checkout is on that branch, has no uncommitted changes and no
   merge, cherry-pick, revert or rebase of its own going on, and no file the branch adds is already on disk (an ignored
   `.env` would be replaced). Never when the branch changes `.gitattributes`, `.gitmodules` or `.lfsconfig` or
@@ -117,7 +120,8 @@ The companion that starts workers is described in [companion.md](companion.md); 
   worktree (also of a finished worker that committed nothing and left it clean); unmerged a week after the worker ended: lint `worker_unmerged`. A branch in a linked folder with commits not in its base, checked out nowhere and last committed over 2 days ago (work handed back or written down as done that never reached main): lint `branch_unlanded`, from the companion's `loose` branches in its report. While an online pc runs an agent's workers
   for the project (workers allowed, a maximum above 0, the agent installed, a folder linked), that agent's interactive
   sessions (`chat=1`) take no lease: they hear a new task once as "runs in workers" and where one runs; when the user
-  says `pak <ID>` (or `take <ID>`) the plugin takes that task for the chat (agy, whose hooks never see the user's words,
+  says `pak <ID>` (or `take <ID>`; an ID without a digit, like BK-LOCK, only with its capital prefix as the line
+  spells it, so `pak e-mail` stays a sentence) the plugin takes that task for the chat (agy, whose hooks never see the user's words,
   runs `agent_hooks.py take agy <ID>`), and no worker starts it. With no such pc, that agent's chats take and start
   its tasks themselves, as before 0.15. The Tasks tab says per task where it runs or why it waits there; a task that
   may start but that nobody took for 30 minutes (`KNOWLEDGE_TASK_IDLE`) gives one Matrix notice. A knowledge write

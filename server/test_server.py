@@ -1980,10 +1980,39 @@ def review_contract(tmp, ck, fr, raw, er):
     assert ("worker", "REV-1") not in items and ("task", "REV-1-done") not in items, "the card is the worker and its result"
     assert ("worker", "REV-2") in items and not [i for k, i in items.items() if k[0] == "review" and i["machine"] != mid]
     assert ("review", "REV-1") not in board(er), "another person never sees his pc's review"
-    import server as srv  # an admin sees every pc's workers, but a shared pc's Merge is its owner's: no card for the admin
+    import server as srv  # someone else's pc: a card only for a project shared with you for use there (an admin's row has all workers)
     row = {"id": mid, "label": "garage", "online": True, "tokens": ["t"], "agents": {"claude": {"workers": [w("REV-1")]}}}
     done = [{"project": "garden", "id": "REV-1-done", "done": True, "path": path, "line": lines[0], "owner": "Sam", "text": lines[0].split(": ", 1)[1]}]
-    assert len(srv.review_items([{**row, "own": True}], done)) == 1 and srv.review_items([{**row, "own": False}], done) == []
+    cards = lambda **k: srv.review_items([{**row, "own": False, **k}], done)
+    assert len(cards(own=True)) == 1 and cards() == [] and cards(shared={"garden": "view"}) == [] and cards(shared={"trade": "yolo"}) == []
+    assert len(cards(shared={"garden": "use"})) == 1
+    got = cards(tokens=[], agents={}, workers=[w("REV-1")], companion={"token": "friend-pc"}, shared={"garden": "yolo"})
+    assert len(got) == 1 and got[0]["pin"] == "friend-pc", "a guest's row has no tokens: the -fix line pins the pc's own token"
+    # A member the pc is shared with for use sees the card and may merge it; the companion gets it under the owner's token.
+    assert http("POST", "/machine/report", {**rep, "folders": {"linked": [{"path": "/home/x/garden", "project": "garden"}]}}, token=fr, headers=pc)[0] == 200
+    st, _, b = ui("/ui/api/machine/share", {"machine": mid, "project": "garden", "user": "erin", "mode": "use"})
+    if st == 400:  # erin is no member of garden at this point: make her one for this check
+        was = json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["users"]["erin"]["projects"]
+        ui("/ui/api/admin/user", {"username": "erin", "projects": {**was, "garden": "read"}})
+        st, _, b = ui("/ui/api/machine/share", {"machine": mid, "project": "garden", "user": "erin", "mode": "use"})
+    else:
+        was = None
+    assert st == 200, b
+    assert ("review", "REV-1") in board(er), "shared for use: her card too"
+    st, _, b = ui("/ui/api/machines/action", {"machine": mid, "action": "merge", "args": {"project": "garden", "id": "REV-1"}}, er)
+    assert st == 200, b
+    st, _, b = ui("/ui/api/machines/action", {"machine": mid, "action": "rollback", "args": {"project": "garden", "id": "REV-1"}}, er)
+    assert st == 403, "only Merge, nothing else of his pc"
+    got = json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"]
+    assert [(a["action"], a["args"]) for a in got] == [("merge", {"project": "garden", "id": "REV-1"})], got
+    for a in got:
+        http("POST", "/machine/actions/result", {"id": a["id"], "ok": False, "result": "conflict: merge by hand"}, token=fr, headers=pc)
+    assert ui("/ui/api/machine/share", {"machine": mid, "project": "garden", "user": "erin", "mode": "view"})[0] == 200
+    assert ("review", "REV-1") not in board(er), "view only: no card"
+    assert ui("/ui/api/machines/action", {"machine": mid, "action": "merge", "args": {"project": "garden", "id": "REV-1"}}, er)[0] == 403
+    assert ui("/ui/api/machine/share", {"machine": mid, "project": "garden", "user": "erin", "mode": ""})[0] == 200
+    if was is not None:
+        ui("/ui/api/admin/user", {"username": "erin", "projects": was})
     # Merge: a fixed action with a task id, the pc's owner only; the companion gets exactly that.
     act = lambda args, h=ck: ui("/ui/api/machines/action", {"machine": mid, "action": "merge", "args": args}, h)
     assert act({"project": "garden", "id": "../x"})[0] == 400 and act({"project": "nope", "id": "REV-1"})[0] == 400
