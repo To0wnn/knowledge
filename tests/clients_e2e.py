@@ -722,7 +722,8 @@ def look():  # LOOK: the agent looks at an image (the chat shows it under the to
     f = os.path.abspath(calls + "." + name + ".png")
     open(f, "wb").write(b"PNG " + name.encode())
     return f
-rec = lambda x: open(calls, "a", encoding="utf-8").write(json.dumps(x) + "\\n")
+PROC = os.urandom(6).hex()  # this process, also when Windows hands its pid to a later one
+rec = lambda x: open(calls, "a", encoding="utf-8").write(json.dumps({**x, "proc": PROC}) + "\\n")
 if args == ["update"]:  # the companion's agent update
     rec({"update": name})
     print("agent update " + name)
@@ -1919,17 +1920,17 @@ def chat_e2e(tok: str, tmp: Path):
         send(cid, "start in claude")
         idle(cid, 3)
         for agent in ("codex", "agy", "claude"):
-            before = {c.get("pid") for c in recorded() if c["chat"] == cid}
+            before = {c.get("proc") for c in recorded() if c["chat"] == cid}  # not the pid: Windows reuses it
             st = http("POST", "/ui/api/chat/send", {"machine": mid, "id": cid, "text": f"go on in {agent}", "agent": agent}, ui)[0]
             done = wait_for(lambda: (c := chat(cid))["chat"]["status"] == "idle" and c["chat"]["session"] == "sess-" + agent, 30)
             turn = ([c for c in recorded() if c["chat"] == cid] or [{}])[-1]
             stdin = turn.get("stdin", "")
-            check(st == 200 and done and chat(cid)["chat"]["agent"] == agent and turn.get("pid") not in before
+            check(st == 200 and done and chat(cid)["chat"]["agent"] == agent and turn.get("proc") not in before
                   and turn.get("argv", [""])[0] == agent and "--resume" not in turn.get("argv", []) and not turn.get("load")
                   and stdin.startswith(f"(knowledge web UI: this chat ran in {AGENT_LABEL[prev]}") and "echo: start in claude" in stdin
                   and stdin.rstrip().endswith(f"go on in {agent}"),
                   f"chat: continue {prev} -> {agent}: a new {agent} process and session, the chat so far before the message",
-                  json.dumps([st, done, turn])[:900])
+                  json.dumps([st, done, turn.get("proc"), sorted(map(str, before)), stdin[:200], stdin[-60:], turn.get("argv")])[:900])
             prev = agent
         # Codex's usage limit without a session: the companion asks `codex app-server` (account/rateLimits/read, no
         # prompt) in the background and reports the answer; here no rollout exists.
@@ -2061,7 +2062,7 @@ def chat_e2e(tok: str, tmp: Path):
         send(live, "SLOW agy")
         ok = running(live) and wait_for(lambda: any(c.get("chat") == live and c.get("stdin") == "SLOW agy" for c in recorded()), 20)
         check(ok and sendm(live, "instead", "force") == 200 and wait_for(lambda: "echo: instead" in "".join(e["text"] for e in chat(live)["events"]), 30)
-              and [c["pid"] for c in recorded() if c.get("chat") == live][-1] != turns[0]["pid"] and any("Stopped this step" in e["text"] for e in chat(live)["events"]),
+              and [c["proc"] for c in recorded() if c.get("chat") == live][-1] != turns[0]["proc"] and any("Stopped this step" in e["text"] for e in chat(live)["events"]),
               "live agy: Force ends that agy and a new one answers in the same conversation", json.dumps(chat(live)["events"])[-500:])
         idle(live, 2)
         send(live, "SLOW again")
