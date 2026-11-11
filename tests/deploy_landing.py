@@ -1,6 +1,6 @@
 """deploy.sh as the landing step, in throwaway git repos with a fake ssh, rsync and gh: two sessions that both changed
 plugin/ land one after the other and get different versions, a hand-set minor bump stays, a conflict with main is
-refused with the tree clean and the lock freed, a red main refuses unless --fix-main, a held lock refuses, and a
+refused with the tree clean and the lock freed, a red main refuses unless --fix-main, a held lock is waited for, and a
 worktree without local.env uses the main checkout's. Run: python3 tests/deploy_landing.py (part of ./check.sh)."""
 import json
 import os
@@ -117,13 +117,16 @@ def main():
     assert p.returncode and "CI clients.yml is red on main since abc1234 (failure)" in p.stderr, p.stderr
     sh("./deploy.sh --fix-main", b, GH_RED="clients.yml")
     assert sh("./deploy.sh --nope", b, ok=False).returncode
-    # a lock held by another deploy refuses, and is not taken away from it
+    # a lock held by another deploy is waited for; past the wait it refuses, and is not taken away from it
     lock.mkdir()
     (lock / "by").write_text("other-deploy\n")
     edit(b, "server/app.py", "x", "y", "c")
-    p = sh("./deploy.sh", b, ok=False)
-    assert p.returncode and "another deploy is running (other-deploy)" in p.stderr and lock.exists(), p.stderr
-    shutil.rmtree(lock)
+    p = sh("./deploy.sh", b, ok=False, DEPLOY_LOCK_WAIT="0")
+    assert p.returncode and "another deploy is still running after 0s (other-deploy)" in p.stderr and lock.exists(), p.stderr
+    # freed while this one waits: it takes the lock and lands
+    p = sh(f"(sleep 3; rm -rf {lock}) & ./deploy.sh", b)
+    assert "waiting for another deploy (other-deploy)" in p.stderr and "got the lock after" in p.stdout, p.stdout + p.stderr
+    assert not lock.exists()
     # a worktree has no local.env: it uses the main checkout's
     sh(f"git worktree add -q {T / 'wt'} -b wt", b)
     edit(T / "wt", "server/app.py", "y", "z", "wt")
