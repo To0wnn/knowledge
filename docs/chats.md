@@ -32,7 +32,7 @@ from a phone. The pc side runs in the companion ([companion.md](companion.md)).
   guest's chat (`guest: true`) always gets its own worktree, so it never works in the owner's checkout (the companion
   refuses one in a folder outside git). Its turns call the server with the owner's token, so the server narrows that
   token for them (`guest_device`, by the turn's `X-Knowledge-Chat`): only the chat's project, writing only when the
-  guest may write it, and no `knowledge_chats` / `knowledge_chat_read` / `knowledge_chat_close`. Under use it never runs YOLO: the work item carries `guest` and the companion (one
+  guest may write it, and `knowledge_chats` / `knowledge_chat_read` / `knowledge_chat_close` reach only the chats on that pc every guest in it may steer (their own, taken over or joined), never the owner's other chats. Under use it never runs YOLO: the work item carries `guest` and the companion (one
   that reports `guests: true`, else the start is refused) runs it with every tool call asked. **Use with YOLO**
   (`yolo`, the owner types YOLO to give it) adds `guest_yolo`, so the pc's own YOLO switch counts as for the owner's
   chats; a change of mode ends that person's live agents there once (`end` in the poll), so the next turn runs the
