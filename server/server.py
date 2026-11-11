@@ -7211,7 +7211,8 @@ def review_items(rows: list[dict], tasks: list[dict]) -> list[dict]:
     done = {(t["project"], t["id"].removesuffix("-done")): t for t in tasks if t["done"]}
     out = {}
     for r in rows:
-        for a, ag in r["agents"].items():
+        # a shared pc (an admin sees its workers too): Merge is its owner's, so the card is theirs, as in board_items
+        for a, ag in (r["agents"] if r["own"] else {}).items():
             for w in ag.get("workers", []):
                 rv, base = w.get("review"), REVIEW_BASE.sub("", w.get("id") or "")
                 t = done.get((w.get("project"), base))
