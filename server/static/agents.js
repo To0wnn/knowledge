@@ -475,6 +475,7 @@ function ckItem(i) {
     for (const [d, text, title] of ckAskButtons(i).filter(([d]) => i.full !== false || d === "deny")) act(text, title, () => ckDo("/ui/api/chat/approve", { machine: i.machine, id: i.chat, ask: i.id, decision: d }));
     if (i.full === false) act("Open chat", "The request is longer than the list shows: read it whole in its chat", () => main.click());
   }
+  if (!(i.hosts || []).length && i.no_host) act("Start", `No pc can start it: ${i.no_host}`, null).disabled = true;
   for (const h of i.hosts || []) act(`Start on ${h.label}`, "Start a worker for this task there now",
     () => ckDo("/ui/api/machines/action", { machine: h.machine, action: "start_worker", args: { project: i.project, id: i.id } }));
   if (i.kind === "worker") act("Follow", "Watch this worker, steer it or take it over", () => ckFollow(i));

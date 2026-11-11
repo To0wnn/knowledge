@@ -1013,6 +1013,14 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     import server as srv  # a pc with only the MCP server: no workers, so no task is stuck
     srv.device.set({"user": "x"})
     assert srv.stuck_projects([{"done": False, "owner": "Codex", "startable": True, "project": "p"}], [{"own": True, "companion": None}]) == []
+    # a greyed Start says the first thing no own pc has: online companion, workers allowed, the agent, a linked folder
+    nh_t = {"done": False, "owner": "Claude", "startable": True, "runs": "", "project": "p"}
+    nh_pc = lambda **c: {"own": True, "online": True, "companion": {"workersAllowed": True, "agents": ["claude"], "folders": {"linked": [{"project": "q"}]}, **c}}
+    assert srv.no_host(nh_t, [{"own": True, "online": False, "companion": {}}]).startswith("none of your pcs")
+    assert srv.no_host(nh_t, [nh_pc(workersAllowed=False)]).startswith("no pc allows workers")
+    assert srv.no_host(nh_t, [nh_pc(agents=["codex"])]) == "no pc has claude installed"
+    assert srv.no_host(nh_t, [nh_pc()]).startswith("no pc has a folder linked to p")
+    assert srv.no_host(nh_t, [nh_pc(folders={"linked": [{"project": "p"}]})]) == "" and srv.no_host({**nh_t, "startable": False}, []) == ""
     advice = tmp / "claude" / "model_advice.json"
     advice.write_text(json.dumps({"measured_on": "1 Nov", "note": "n", "roles": [
         {"key": "read", "role": "Read", "agents": {"claude": [{"model": "gone", "score": "9/9"}, {"model": "opus", "effort": "max", "score": "1/2"}], "codex": [{"model": "elsewhere"}]}},

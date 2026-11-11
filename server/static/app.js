@@ -1580,6 +1580,7 @@ async function loadTasks(render = true) {
     const approve = run(() => post("/ui/api/task/approve", { project: t.project, id: t.id }));
     if (t.can_approve) act("Approve", "Let this task start (it waits for the project owner's or an admin's approval)" + (t.approve_warning ? `\n\n${t.approve_warning}` : ""),
       () => (!t.approve_warning || confirm(`${t.approve_warning}\n\nApprove ${t.id} anyway?`)) && approve());
+    if (!(t.hosts || []).length && t.no_host) act("Start", `No pc can start it: ${t.no_host}`, null).disabled = true;
     for (const h of t.hosts || []) act(`Start on ${h.label}`, "Start a worker for this task there now",
       run(async () => { await post("/ui/api/machines/action", { machine: h.machine, action: "start_worker", args: { project: t.project, id: t.id } }); toast(`Asked ${h.label} to start ${t.id}`, false); }));
     for (const { w, m } of workersOf(t)) { // its worker: where, how far, and Stop / Restart right here

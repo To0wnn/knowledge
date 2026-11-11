@@ -6093,7 +6093,7 @@ async def ui_tasks(request: Request):
         tasks = task_rows()
         if request.query_params.get("hosts") == "1":
             pcs = machine_rows()
-            tasks = [{**t, "hosts": task_hosts(t, pcs)} for t in tasks]
+            tasks = [{**t, "hosts": task_hosts(t, pcs), "no_host": no_host(t, pcs)} for t in tasks]
         return tasks
     return JSONResponse({"tasks": await asyncio.to_thread(rows), "sessions": task_sessions()})
 
@@ -7084,6 +7084,24 @@ def task_hosts(t: dict, rows: list[dict]) -> list[dict]:
             and any(f.get("project") == t["project"] for f in (c.get("folders") or {}).get("linked", []))]
 
 
+def no_host(t: dict, rows: list[dict]) -> str:
+    """Why no pc offers "Start on <pc>" for a task that may start now ("" when one does, or it may not start): the
+    first condition that no own pc meets, so the UI shows a greyed Start that says what to fix."""
+    agent = owner_agent(t["owner"])
+    if not agent or t["done"] or not t["startable"] or t["runs"].startswith(("running in", "taken by")):
+        return ""
+    pcs = [r for r in rows if r["own"] and not r.get("old")]
+    steps = (("none of your pcs is online with the companion", lambda r: r["online"] and r.get("companion")),
+             ("no pc allows workers (Machines, Settings)", lambda r: (r.get("companion") or {}).get("workersAllowed")),
+             (f"no pc has {agent} installed", lambda r: agent in ((r.get("companion") or {}).get("agents") or [])),
+             (f"no pc has a folder linked to {t['project']} (Machines, Folders: Link)",
+              lambda r: any(f.get("project") == t["project"] for f in ((r.get("companion") or {}).get("folders") or {}).get("linked", []))))
+    for why, ok in steps:
+        if not (pcs := [r for r in pcs if ok(r)]):
+            return why
+    return ""
+
+
 def stuck_projects(tasks: list[dict], rows: list[dict]) -> list[dict]:
     """Tasks that wait for a worker here while none can start. Without a companion on any own pc there are no workers at
     all (an open chat of the owner takes the task), so nothing is stuck; a project on someone else's token runs there."""
@@ -7198,7 +7216,7 @@ def board_items() -> list[dict]:
             items.append({**task, "col": "needs", "line": "woken, but nobody took it within 30 minutes"})
         else:
             held = t["runs"].startswith(("running in", "taken by"))
-            items.append({**task, "col": "running" if held else "open", "hosts": task_hosts(t, rows),
+            items.append({**task, "col": "running" if held else "open", "hosts": task_hosts(t, rows), "no_host": no_host(t, rows),
                           "line": t["runs"] or t["waiting_reason"] or (f"due {t['due']}" if t["due"] else f"start {t['start']}")})
     gone = read_json(BOARD_DISMISSED, {}).get(device.get().get("user", ""), {})  # dismissed until the item changes (or snoozed until "until")
     items = [i for i in items if not (i["col"] == "needs" and (g := gone.get(i["key"], {})).get("sig") == i["sig"] and now < (g.get("until") or float("inf")))]
