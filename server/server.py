@@ -3534,7 +3534,7 @@ NO_ACCESS = """<!doctype html><html lang="en"><meta charset="utf-8"><meta name="
 # A hard NFS mount makes every read wait until the file server is back (15 minutes on 5 Nov 2026, with /health green).
 # One thread does the waiting; requests look at when it last got an answer and fail at once instead of piling up.
 STORAGE_TIMEOUT = 10  # seconds
-STORAGE_EVERY = 2
+STORAGE_EVERY = float(os.environ.get("KNOWLEDGE_STORAGE_EVERY", 2))  # seconds; the tests use less
 _storage = {"ok": time.monotonic(), "down": False}
 
 
@@ -4986,6 +4986,10 @@ def system_state() -> dict:
             {"name": "External skills", "what": f"compares each skill from GitHub with its source every {EXTERNAL_EVERY // 86400} days",
              "last": BACKGROUND["external"]["at"] if "external" in BACKGROUND else None,
              "detail": (BACKGROUND["external"].get("error") or BACKGROUND["external"]["detail"]) if "external" in BACKGROUND else "not run since this start"},
+            # "last" is when a pass started (the tests wait for a pass after their change instead of a fixed time)
+            *([{"name": "Task check", "what": "stalled woken tasks, tasks nobody takes, worker leases (Matrix notice)",
+                "last": BACKGROUND["tasks"]["at"], "detail": BACKGROUND["tasks"].get("error") or BACKGROUND["tasks"]["detail"]}]
+              if "tasks" in BACKGROUND else []),
             *([{"name": "Needs you", "what": "Matrix message per new 'Needs you' item of an admin (Settings: needs_per_hour)",
                 "last": BACKGROUND["needs"]["at"], "detail": BACKGROUND["needs"].get("error") or BACKGROUND["needs"]["detail"]}]
               if "needs" in BACKGROUND else []),
