@@ -60,7 +60,9 @@ jobs:
           sudo apt-get update -o Acquire::http::Timeout=10
       - name: Playwright Chromium
         working-directory: ${{ runner.temp }}  # not the repo root: its token.py would shadow Python's own token module
-        run: uv run --project "$GITHUB_WORKSPACE/server" --frozen --with playwright python -m playwright install --with-deps chromium
+        run: |
+          sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g' /etc/apt/sources.list.d/* /etc/apt/sources.list /etc/apt/apt-mirrors.txt 2>/dev/null || true
+          uv run --project "$GITHUB_WORKSPACE/server" --frozen --with playwright python -m playwright install chromium
       - name: UI smoke test
         env:
           KNOWLEDGE_SMOKE_SHOTS: ${{ runner.temp }}/shots
