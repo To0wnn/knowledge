@@ -531,18 +531,30 @@ async def approvals(browser, devices, secret: str) -> None:
         await pg.locator("#ck-canvas .ck-ask").first.get_by_role("button", name="Allow once").click()
         await pg.wait_for_timeout(500)
         check(sent and sent[-1] == {"machine": chat["machine"], "id": chat["id"], "ask": ask["id"], "decision": "once", "_path": "/ui/api/chat/approve"}, f"Allow once answers that approval {sent[-1:]}")
-        # Archive: right-click (desktop) or a long press (phone) force archives, once, and the click after the press does nothing more
+        # Archive: right-click (desktop) or a long press (phone) opens a menu; only its red button force archives, once
         pg.on("dialog", lambda d: asyncio.ensure_future(d.accept()))  # the chat runs: force archive asks first
-        before = len(sent)
-        if dev.get("is_mobile"):
-            await pg.evaluate("""() => { const b = ck.cards.get(ck.view).close, o = {pointerType: 'touch', bubbles: true};
-              b.dispatchEvent(new PointerEvent('pointerdown', o)); setTimeout(() => { b.dispatchEvent(new PointerEvent('pointerup', o)); b.click(); }, 700); }""")
-        else:
-            await pg.evaluate("ck.cards.get(ck.view).close.dispatchEvent(new MouseEvent('contextmenu', {bubbles: true, cancelable: true}))")
-        await pg.wait_for_timeout(1200)
-        closes = [x for x in sent[before:] if x["_path"] == "/ui/api/chat/close"]
-        check(len(closes) == 1 and closes[0].get("force") is True and closes[0].get("record") is False,
-              f"Archive: {'a long press' if dev.get('is_mobile') else 'right-click'} force archives once {closes}")
+        how = "a long press" if dev.get("is_mobile") else "right-click"
+        async def press():
+            if dev.get("is_mobile"):
+                await pg.evaluate("""() => { const b = ck.cards.get(ck.view).close, o = {pointerType: 'touch', bubbles: true};
+                  b.dispatchEvent(new PointerEvent('pointerdown', o)); setTimeout(() => { b.dispatchEvent(new PointerEvent('pointerup', o)); b.click(); }, 700); }""")
+            else:
+                await pg.evaluate("ck.cards.get(ck.view).close.dispatchEvent(new MouseEvent('contextmenu', {bubbles: true, cancelable: true}))")
+            await pg.wait_for_timeout(1200)
+        start = len(sent)  # sent is shared by both devices
+        closes = lambda: [x for x in sent[start:] if x["_path"] == "/ui/api/chat/close"]
+        await press()
+        pop = pg.locator(".ck-forcepop")
+        check(await pop.is_visible() and not closes() and await pop.locator("button.ck-force-go").count() == 1,
+              f"Archive: {how} opens a menu with a red Force archive, nothing archived yet {closes()}")
+        await pop.get_by_role("button", name="Cancel").click()
+        await pg.wait_for_timeout(300)  # the popover's toggle event comes after the click
+        check(not await pop.count() and not closes(), "Archive: Cancel closes the menu without archiving")
+        await press()
+        await pg.locator(".ck-forcepop button.ck-force-go").click()
+        await pg.wait_for_timeout(500)
+        check(len(closes()) == 1 and closes()[0].get("force") is True and closes()[0].get("record") is False,
+              f"Archive: the menu's red button force archives once {closes()}")
         check(not errors, f"no page errors with approvals {errors[:2]}")
         await ctx.close()
 

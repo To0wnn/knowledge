@@ -827,11 +827,24 @@ function ckCard(meta) {
       ckTick();
     } catch (err) { note.className = "ck-note bad"; note.textContent = err.message; }
   };
-  // right-click or long press on Archive: force archive (iOS fires no contextmenu on a long press, hence the timer)
+  // right-click or long press on Archive: a small menu whose red button force archives, a second deliberate step
+  // (iOS fires no contextmenu on a long press, hence the timer); Esc or a tap elsewhere closes it (popover)
   const forceClose = (e) => {
     e?.preventDefault?.();
     if (card.meta.closed || Date.now() - (close.forcedAt || 0) < 1000) return;
-    close.forcedAt = Date.now(); close.onclick({ force: true });
+    close.forcedAt = Date.now();
+    document.querySelector(".ck-forcepop")?.remove();
+    const pop = el("div", "menu-list ck-forcepop"), go = el("button", "ck-force-go", "Force archive"), no = el("button", null, "Cancel");
+    pop.popover = "auto"; go.type = no.type = "button";
+    pop.append(el("p", "ck-forcepop-why", "Close now, without the agent recording this chat in the memos."), go, no);
+    go.onclick = () => { pop.hidePopover(); close.onclick({ force: true }); };
+    no.onclick = () => pop.hidePopover();
+    pop.addEventListener("toggle", (t) => { if (t.newState === "closed") pop.remove(); });
+    document.body.append(pop);
+    const r = close.getBoundingClientRect();
+    pop.style.top = `${Math.min(r.bottom + 6, innerHeight - 160)}px`;
+    pop.style.left = `${Math.max(8, Math.min(r.right - 260, innerWidth - 268))}px`;
+    pop.showPopover(); no.focus(); // the safe choice has the focus: Enter does not archive
   };
   close.addEventListener("contextmenu", forceClose);
   close.addEventListener("pointerdown", (e) => { if (e.pointerType === "touch") close.hold = setTimeout(forceClose, 500); });
@@ -1285,11 +1298,11 @@ function ckPaint(card) {
   if (card.failedWrap && !m.closed) {
     card.close.textContent = "Force archive";
     card.close.className = "btn small bad ck-close";
-    card.close.title = "Wrap-up failed: click to force archive without wrap-up (or Shift+click, right-click, long press)";
+    card.close.title = "Wrap-up failed: click to force archive without wrap-up (or Shift+click)";
   } else {
     card.close.textContent = m.closed ? "Open again" : "Archive";
     card.close.className = "btn small quiet ck-close";
-    card.close.title = m.closed ? "Back in the list" : "The agent records this chat in the memos, then it goes off the list (under Earlier, Archived); Shift-click, right-click or long press to force archive without wrap-up";
+    card.close.title = m.closed ? "Back in the list" : "The agent records this chat in the memos, then it goes off the list (under Earlier, Archived); Shift-click to force archive without wrap-up; right-click or long press for a menu with it";
   }
   card.name.textContent = ckTitle(m, card);
   card.branch.hidden = true;
