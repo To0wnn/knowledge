@@ -144,10 +144,8 @@ body:not(.no-agents) .sidebar:has(.inbox-count:not(:empty)) .brand::before { bac
 .menu-list button:hover, .menu-list a:hover { background: var(--hover); }
 .menu-list [hidden] { display: none; }
 /* right-click / long press on a chat's Archive: a menu by the button (a popover, so in the top layer) */
-.ck-forcepop { position: fixed; inset: auto; margin: 0; width: 260px; min-width: 0; color: var(--ink); }
+.ck-forcepop { position: fixed; inset: auto; margin: 0; width: 260px; min-width: 0; color: var(--ink); outline: none; }
 .ck-forcepop-why { margin: 4px 12px 8px; color: var(--muted); font-size: 13px; white-space: normal; }
-.menu-list button.ck-force-go { background: var(--bad); color: #fff; font-weight: 600; }
-.menu-list button.ck-force-go:hover { background: var(--bad); filter: brightness(1.1); }
 
 /* Notes and Map (#kn): the topic list on the left, the note, the search results or the map in the middle, connected
    notes on the right. */

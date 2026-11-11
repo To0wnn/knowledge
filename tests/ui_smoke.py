@@ -531,7 +531,7 @@ async def approvals(browser, devices, secret: str) -> None:
         await pg.locator("#ck-canvas .ck-ask").first.get_by_role("button", name="Allow once").click()
         await pg.wait_for_timeout(500)
         check(sent and sent[-1] == {"machine": chat["machine"], "id": chat["id"], "ask": ask["id"], "decision": "once", "_path": "/ui/api/chat/approve"}, f"Allow once answers that approval {sent[-1:]}")
-        # Archive: right-click (desktop) or a long press (phone) opens a menu; only its red button force archives, once
+        # Archive: right-click (desktop) or a long press (phone) opens a menu; only its Force archive does it, once
         pg.on("dialog", lambda d: asyncio.ensure_future(d.accept()))  # the chat runs: force archive asks first
         how = "a long press" if dev.get("is_mobile") else "right-click"
         async def press():
@@ -546,15 +546,16 @@ async def approvals(browser, devices, secret: str) -> None:
         await press()
         pop = pg.locator(".ck-forcepop")
         check(await pop.is_visible() and not closes() and await pop.locator("button.ck-force-go").count() == 1,
-              f"Archive: {how} opens a menu with a red Force archive, nothing archived yet {closes()}")
-        await pop.get_by_role("button", name="Cancel").click()
-        await pg.wait_for_timeout(300)  # the popover's toggle event comes after the click
-        check(not await pop.count() and not closes(), "Archive: Cancel closes the menu without archiving")
+              f"Archive: {how} opens a menu with Force archive, nothing archived yet {closes()}")
+        await pg.keyboard.press("Enter")  # the menu has the focus, not its button
+        await pg.keyboard.press("Escape")  # as a click elsewhere: the popover closes itself
+        await pg.wait_for_timeout(300)  # its toggle event comes after the key
+        check(not await pop.count() and not closes(), "Archive: Enter does nothing, Esc closes the menu without archiving")
         await press()
         await pg.locator(".ck-forcepop button.ck-force-go").click()
         await pg.wait_for_timeout(500)
         check(len(closes()) == 1 and closes()[0].get("force") is True and closes()[0].get("record") is False,
-              f"Archive: the menu's red button force archives once {closes()}")
+              f"Archive: the menu's Force archive force archives once {closes()}")
         check(not errors, f"no page errors with approvals {errors[:2]}")
         await ctx.close()
 
