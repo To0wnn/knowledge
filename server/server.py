@@ -7867,7 +7867,9 @@ async def machine_chat_diff(request: Request):
 # message by a mark the companion turns into a local path; swept after CHAT_FILE_DAYS.
 CHAT_FILE_MAX, CHAT_FILE_DAYS, CHAT_FILES_MAX = 10 * 1024 * 1024, 30, 200
 FILE_REF = re.compile(r"⟦file:([0-9a-f]{12})/([\w(][\w .()+-]{0,119})⟧")
-INLINE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
+INLINE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
+                ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".ogg": "audio/ogg", ".opus": "audio/ogg", ".wav": "audio/wav", ".flac": "audio/flac",
+                ".mp4": "video/mp4", ".m4v": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime"}
 
 
 def chat_files_dir(mid: str) -> Path:
@@ -7931,7 +7933,7 @@ def chat_file_path(mid: str, ref: str) -> Path:
 
 
 def file_response(f: Path) -> Response:
-    """Images shown inline; anything else only as a download (never rendered as a page of this site)."""
+    """Images, audio and video inline (the chat plays them in place); anything else only as a download (never rendered as a page of this site)."""
     kind = INLINE_TYPES.get(f.suffix.lower())
     return FileResponse(f, media_type=kind or "application/octet-stream", content_disposition_type="inline" if kind else "attachment",
                         filename=f.name, headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=86400"})

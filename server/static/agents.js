@@ -669,6 +669,7 @@ function ckCard(meta) {
     const href = a.getAttribute("href") || "";
     if (/^https?:/.test(href)) { a.target = "_blank"; a.rel = "noopener noreferrer"; }
   });
+  log.addEventListener("play", (e) => { for (const p of log.querySelectorAll("audio, video")) if (p !== e.target) p.pause(); }, true); // only one plays at a time
   log.addEventListener("scroll", () => {
     if (log.scrollTop < 300 && card.older) ckOlder(card); // near the top of a long chat: the part before
     const dist = log.scrollHeight - log.scrollTop - log.clientHeight;
@@ -1424,7 +1425,7 @@ const CK_ICON = { // inline, in the text colour
   mic: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>',
 };
 // Attachments: at most CK_FILES of 10 MB each per message, shown as chips until it is sent.
-const CK_FILES = 5, CK_FILE_MB = 10, CK_REF = /⟦file:([0-9a-f]{12})\/([^⟧]+)⟧/g, CK_IMG = /\.(png|jpe?g|gif|webp)$/i;
+const CK_FILES = 5, CK_FILE_MB = 10, CK_REF = /⟦file:([0-9a-f]{12})\/([^⟧]+)⟧/g, CK_IMG = /\.(png|jpe?g|gif|webp)$/i, CK_MEDIA = /\.(?:(mp3|m4a|ogg|opus|wav|flac)|mp4|m4v|webm|mov)$/i;
 function ckAddFiles(card, list) {
   for (const f of list) {
     if (f.size > CK_FILE_MB * 1024 * 1024) { card.note.className = "ck-note bad"; card.note.textContent = `${f.name}: larger than ${CK_FILE_MB} MB`; continue; }
@@ -1541,6 +1542,11 @@ function ckUserMsg(card, text, box = el("div", "ck-msg user"), by = "") {
   for (const m of text.matchAll(CK_REF)) {
     box.append(text.slice(at, m.index)); at = m.index + m[0].length;
     const a = el("a", "ck-file"), url = `/ui/api/chat/file?machine=${encodeURIComponent(card.meta.machine)}&file=${encodeURIComponent(`${m[1]}/${m[2]}`)}`;
+    const media = m[2].match(CK_MEDIA);
+    if (media) { // played here in the chat, not in a new tab
+      const p = el(media[1] ? "audio" : "video", "ck-media"); p.src = url; p.controls = true; p.preload = "metadata"; p.setAttribute("playsinline", ""); p.title = m[2];
+      box.append(p); continue;
+    }
     a.href = CK_IMG.test(m[2]) ? `/ui/images?machine=${encodeURIComponent(card.meta.machine)}&id=${encodeURIComponent(card.meta.parent || card.meta.id)}&file=${encodeURIComponent(`${m[1]}/${m[2]}`)}` : url;
     a.target = "_blank"; a.rel = "noopener";
     if (CK_IMG.test(m[2])) { const img = el("img", "ck-img"); img.src = url; img.alt = m[2]; img.loading = "lazy"; a.append(img); }

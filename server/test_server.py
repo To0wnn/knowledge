@@ -1223,14 +1223,17 @@ def chats_contract(tmp, ck, fr, raw, er, et):
         assert st == 200, b
         assert (mc in call("knowledge_chats", {}, json.loads(b)["token"])[1]) == sees, name
         assert ui("/ui/api/admin/token", {"name": name, "revoke": True})[0] == 200
-    # Attachments: up as raw bytes to one's own machine, a safe name, back as a mark; the page shows images inline and
-    # anything else only as a download; the companion of that machine (and no other) fetches them.
+    # Attachments: up as raw bytes to one's own machine, a safe name, back as a mark; the page shows images, audio and video
+    # inline and anything else only as a download; the companion of that machine (and no other) fetches them.
     up = lambda name, data, h=ck: raw("POST", f"/ui/api/chat/file?machine={mid}", data, {**h, "X-Knowledge-UI": "1", "X-Filename": name})
     st, _, b = up("..%2F..%2Fevil%3Ename.png", b"\x89PNG img")
     ref = json.loads(b)["ref"]
     assert st == 200 and re.fullmatch(r"⟦file:[0-9a-f]{12}/[\w .()+-]+⟧", ref) and "/.." not in ref and "evil_name.png" in ref, b
     st, h, b = raw("GET", f"/ui/api/chat/file?machine={mid}&file={urllib.parse.quote(ref[6:-1])}", None, ck)
     assert st == 200 and b == b"\x89PNG img" and h["content-type"] == "image/png" and h["content-disposition"].startswith("inline"), h
+    refm = json.loads(up("song.mp3", b"ID3 0123456789")[2])["ref"]  # audio and video play in the chat itself, and seek
+    st, h, b = raw("GET", f"/ui/api/chat/file?machine={mid}&file={urllib.parse.quote(refm[6:-1])}", None, {**ck, "Range": "bytes=4-7"})
+    assert st == 206 and b == b"0123" and h["content-type"] == "audio/mpeg" and h["content-disposition"].startswith("inline"), (st, h, b)
     ref2 = json.loads(up("page.html", b"<script>x</script>")[2])["ref"]
     h = raw("GET", f"/ui/api/chat/file?machine={mid}&file={urllib.parse.quote(ref2[6:-1])}", None, ck)[1]
     assert h["content-type"] == "application/octet-stream" and h["content-disposition"].startswith("attachment") and h["x-content-type-options"] == "nosniff", h
