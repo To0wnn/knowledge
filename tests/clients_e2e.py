@@ -38,6 +38,7 @@ import urllib.request
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+FOLLOW = 3  # seconds a follow of a worker lasts after the viewer's last poll (the server's KNOWLEDGE_WORKER_FOLLOW_SECONDS)
 CLIENT = REPO  # replaced in main() by a copy under a path with a space, like C:\Users\Test Usér\...
 def free_port() -> int:
     """A port nobody uses now, so several checks can run at once (parallel agents, a commit hook)."""
@@ -105,11 +106,12 @@ def run(argv, stdin: str = "", env=None, cwd=None, timeout=60):
 
 
 def wait_for(cond, seconds=30.0) -> bool:
-    end = time.time() + seconds
+    end, pause = time.time() + seconds, 0.05
     while time.time() < end:
         if cond():
             return True
-        time.sleep(0.5)
+        time.sleep(pause)
+        pause = min(pause * 1.5, 0.5)  # quick for what is nearly there, no busy loop on a slow one (spawning checks on Windows)
     return cond()
 
 
@@ -296,7 +298,7 @@ def start_server(tmp: Path):
            "KNOWLEDGE_PROXY_SECRET": "proxy-secret", "KNOWLEDGE_ADMINS": "alice", "KNOWLEDGE_AUDIT": str(tmp / "audit.log"),
            "KNOWLEDGE_PORT": str(PORT), "KNOWLEDGE_BIND": "127.0.0.1", "KNOWLEDGE_RESCAN": "3600", "KNOWLEDGE_EMBED_MODEL": "hash",
            "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"),
-           "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}", "PYTHONUTF8": "1", "KNOWLEDGE_WORKER_FOLLOW_SECONDS": "3", "KNOWLEDGE_CHAT_ASK_MINUTE": "3",
+           "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}", "PYTHONUTF8": "1", "KNOWLEDGE_WORKER_FOLLOW_SECONDS": str(FOLLOW), "KNOWLEDGE_CHAT_ASK_MINUTE": "3",
            "KNOWLEDGE_GITHUB_RAW": "http://127.0.0.1:9"}  # no newest-version lookup on GitHub from a test
     log = open(tmp / "server.log", "wb")
     proc = subprocess.Popen([sys.executable, str(REPO / "server" / "server.py")], env=env, stdout=log, stderr=subprocess.STDOUT)
@@ -833,6 +835,7 @@ if name == "codex" and args[:1] == ["app-server"] and os.environ.get("KNOWLEDGE_
                             break
                     elif x.get("method") == "turn/interrupt":
                         send({"id": x["id"], "result": {}})
+                        rec({"interrupted": os.environ["KNOWLEDGE_CHAT"]})  # the test waits on it (not "chat": recorded() counts turns)
                         status = "interrupted"
                         break
                     elif "id" in x:
@@ -886,8 +889,10 @@ elif os.environ.get("KNOWLEDGE_CHAT") and name == "agy" and args[:1] == ["acp"]:
             rec({"chat": os.environ["KNOWLEDGE_CHAT"], "argv": [name] + args, "cwd": os.getcwd(), "stdin": text, "load": loaded, "pid": os.getpid(), "pick": pick})
             if "SLOW" in text:  # works on; agy has no interrupt, a Force or Stop ends this process
                 time.sleep(90)
-            if "PAUSE" in text:  # a turn that takes a while (a companion restart falls in it)
-                time.sleep(8)
+            if "PAUSE" in text:  # a turn that waits until the test releases it (a companion restart falls in it)
+                end = time.time() + 60
+                while time.time() < end and not os.path.exists(calls + "." + os.environ["KNOWLEDGE_CHAT"] + ".release"):
+                    time.sleep(0.05)
             upd({"sessionUpdate": "tool_call", "toolCallId": "c1", "name": "run_command", "kind": "execute", "rawInput": {"CommandLine": "git status"}})
             if "LOOK" in text:
                 upd({"sessionUpdate": "tool_call", "toolCallId": "c9", "name": "view_file", "kind": "read", "rawInput": {"AbsolutePath": look()}})
@@ -961,6 +966,7 @@ elif name == "claude" and "--input-format" in args and os.environ.get("KNOWLEDGE
                     continue
                 if x.get("type") == "control_request":
                     out({"type": "control_response", "response": {"subtype": "success", "request_id": x.get("request_id")}})
+                    rec({"interrupted": os.environ["KNOWLEDGE_CHAT"]})  # the test waits on it (not "chat": recorded() counts turns)
                     stopped = True
                     break
                 texts.append(x["message"]["content"])
@@ -1437,8 +1443,6 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         check("-cont" not in out_h and parked.exists(), "limit 90%: another agy conversation's next turn does not get that note", out_h[:300])
         check("CMP-CX3" in json.loads((tmp / "machines.json").read_text(encoding="utf-8")).get(mid, {}).get("limit_told", []),
               "limit 90%: a task that waits for the limit gets one notice")
-        time.sleep(1.5)  # KNOWLEDGE_WORKER_GRACE=1
-        call("POST", "/local/api/tick", {})
         wfile = home / ".knowledge" / "companion" / "workers.json"
         wait_for(lambda: (call("POST", "/local/api/tick", {}) and False) or all(
             w["status"] == "stopped" for w in json.loads(wfile.read_text(encoding="utf-8")).values() if w["agent"] == "codex"), 20)
@@ -2174,8 +2178,11 @@ def chat_e2e(tok: str, tmp: Path):
             if agent == "claude":  # the list this pc knew is gone: the chat that runs on lists it again
                 listed.unlink(missing_ok=True)
             restart_companion()
-            if agent != "agy":
-                time.sleep(3)  # the new companion picked it up (its first poll), then the turn's end goes into the same agent
+            # the new companion picked it up, then the turn's end goes into the same agent
+            ok = ok and wait_for(lambda: any(a["detail"] == f"chat {live}" and "picked up again" in a["text"] for a in state_of(home, "activity.json")), 30)
+            if agent == "agy":
+                Path(f"{calls}.{live}.release").write_text("", encoding="utf-8")
+            else:
                 ok = ok and sendm(live, "DONE", "now") == 200
             said = lambda: "".join(e["text"] for e in chat(live)["events"] if e["kind"] == "text")
             want = "echo: PAUSE across a restart" if agent == "agy" else "echo: SLOW across a restart + DONE"
@@ -2284,8 +2291,8 @@ def chat_e2e(tok: str, tmp: Path):
             send(cid, "LATE SLOW")
             started = wait_for(lambda: any(c.get("chat") == cid for c in recorded()), 30)
             http("POST", "/ui/api/chat/stop", {"machine": mid, "id": cid}, ui)
-            time.sleep(4)  # the agent took it by now
-            check(started and idle(cid, 2) and chat(cid)["events"][-1]["text"] == "Stopped." and not any("by itself" in e["text"] for e in chat(cid)["events"]),
+            interrupted = wait_for(lambda: f'"interrupted": "{cid}"' in calls.read_text(encoding="utf-8"), 30)  # it took the message, then was interrupted
+            check(started and interrupted and idle(cid, 2) and chat(cid)["events"][-1]["text"] == "Stopped." and not any("by itself" in e["text"] for e in chat(cid)["events"]),
                   f"chat {agent}: stop before the agent took the message interrupts its turn when it starts", json.dumps(chat(cid)["events"])[-400:])
         # A folder unlinked after the chat began: the companion refuses the turn, loudly (chat and activity log).
         second = repos["Second repo"]
@@ -2367,10 +2374,22 @@ def follow_e2e(tok: str, tmp: Path):
         if not check(ok, "follow: one worker per agent runs and is reported", json.dumps({"started": [x.get("worker") for x in started()], "reported": {i: (w.get("status"), w.get("agent"), w.get("why")) for i, w in workers_of().items()}, "at": row().get("at"), "now": time.time(), "actions": [(a["action"], a["status"], str(a.get("result"))[:120]) for a in row().get("actions", [])][-6:]})
                      + (home / "companion.log").read_text(errors="replace")[-600:] + (home / ".knowledge" / "companion" / "activity.json").read_text(errors="replace")[:1500]):
             return
-        view = lambda a, peek=False, after=0: json.loads(http("GET", f"/ui/api/worker?machine={mid}&worker=garden/{ids[a]}&after={after}" + ("&peek=1" if peek else ""), headers=ui)[1])
+        followed = {}  # agent -> when the test last followed it (a viewer's poll): the follow lasts FOLLOW seconds after that
+
+        def view(a, peek=False, after=0):
+            got = json.loads(http("GET", f"/ui/api/worker?machine={mid}&worker=garden/{ids[a]}&after={after}" + ("&peek=1" if peek else ""), headers=ui)[1])
+            if not peek:
+                followed[a] = time.time()
+            return got
         texts = lambda a, peek=False: "".join(e["text"] for e in view(a, peek)["events"])
-        time.sleep(4)
-        check(all(not view(a, peek=True)["events"] for a in ids), "follow: running workers nobody follows upload nothing",
+
+        def rounds(n=2):  # n whole chat rounds of the companion since now: a folder listing asked through the chats comes back each round
+            for _ in range(n + 1):  # an answer comes before that round's follow part: one more round-trip makes that round whole
+                rid = json.loads(http("POST", "/ui/api/git/diff", {"machine": mid, "dirs": ""}, ui)[1]).get("id")
+                if not wait_for(lambda: json.loads(http("GET", f"/ui/api/git/diff?machine={mid}&id={rid}", headers=ui)[1]).get("status") == "done", 30):
+                    return False
+            return True
+        check(rounds() and all(not view(a, peek=True)["events"] for a in ids), "follow: running workers nobody follows upload nothing",
               json.dumps({a: view(a, peek=True)["events"][:3] for a in ids})[:600])
         for a in ids:
             got = wait_for(lambda: f"{a} starts {ids[a]}" in texts(a) and (a == "agy" or any(e["kind"] == "tool" and "git status" in e["text"] for e in view(a)["events"])), 30)
@@ -2391,11 +2410,15 @@ def follow_e2e(tok: str, tmp: Path):
             t = texts(a)
             check(got and "hunter22hunter" not in t and "Sup3rSecret99" not in t, f"follow {a}: new output streams in, secrets masked", t[-300:])
         # Codex and agy end while nobody follows: nothing until the companion's round sees them end, then their last events.
-        time.sleep(5)  # the follow runs out (3 s in this test)
+        # the follow runs out on the server's clock (KNOWLEDGE_WORKER_FOLLOW_SECONDS, 3 s here), which it does not show:
+        # waited for until then, then a companion round that no longer hears "follow"
+        time.sleep(max(0.0, max(followed[a] for a in ("codex", "agy")) + FOLLOW - time.time()))
+        gone = rounds(1)
         for a in ("codex", "agy"):
             (Path(f"{calls}.{ids[a]}.end")).write_text("", encoding="utf-8")
-        time.sleep(4)
-        check(all(f"end {ids[a]}" not in texts(a, peek=True) for a in ("codex", "agy")), "follow: output of a worker nobody follows is not sent while it runs")
+        pid = lambda a: next((w.get("pid") for w in started() if w["worker"] == ids[a]), None)
+        gone = gone and wait_for(lambda: not any(_alive(pid(a)) for a in ("codex", "agy")), 30) and rounds()  # they ended, the companion polled on
+        check(gone and all(f"end {ids[a]}" not in texts(a, peek=True) for a in ("codex", "agy")), "follow: output of a worker nobody follows is not sent while it runs")
         local("/local/api/tick", {})
         for a in ("codex", "agy"):
             v = view(a, peek=True)
