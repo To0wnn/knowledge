@@ -21,7 +21,8 @@ Antigravity, plus a web UI with a graph. Server in `server/` (Python, one Docker
 - deploy: `./deploy.sh` (routine; it is also how work lands). It rsyncs the working tree, so it refuses uncommitted changes
   (with someone else's changes in the checkout, deploy from your own worktree; a worktree uses the main checkout's
   `local.env`). It refuses while CI is red on main (`--fix-main` for the deploy that fixes it), unless a newer run on main
-  is still going: then it waits for that one (up to 30 minutes). Under a lock on forge (a
+  is still going: then it waits for that one (up to 30 minutes); with nothing newer going it re-runs the red run's failed
+  jobs once, and green then is a flaky test (told on stderr and in Matrix, the deploy goes on). Under a lock on forge (a
   dead deploy's lock expires after 30 minutes; a held one is waited for up to 10 minutes, so start a deploy in the
   background (its waits outlast a 10-minute foreground call), never retry it in a loop yourself) it merges `origin/main` in (a conflict: merge it yourself, deploy again),
   hands out the next plugin version when `plugin/` changed, runs the check on the combined tree, refuses a checkout
