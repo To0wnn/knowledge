@@ -2908,6 +2908,7 @@ def main():
         # First start: one admin token on a fresh installation only; never again, never over existing tokens.
         fresh = tmp / "fresh" / "tokens.json"
         first = srv.first_token(fresh)
+        assert not any(srv.new_token().startswith("-") for _ in range(2000)), "Windows' cmdkey cannot store a token that starts with -"
         cfg = json.loads(fresh.read_text())["admin"]
         assert first and first not in fresh.read_text() and cfg["sha256"] == h(first), cfg
         assert cfg["self"] and cfg["write"] and cfg["roots"] == [] and not cfg["redact"], cfg

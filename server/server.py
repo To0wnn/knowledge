@@ -5561,7 +5561,7 @@ async def ui_admin_token(request: Request, body: dict):
         raise ToolError(f"unknown root: {', '.join(sorted(set(roots) - set(ROOTS)))}")
     if body.get("skills") and (not body.get("write") or body.get("redact") or (roots and "claude" not in roots)):
         raise ToolError("shared skills need 'May write memos', no masking, and the shared skills ticked (or all projects)")
-    token = secrets.token_urlsafe(32)
+    token = new_token()
     tokens[name] = {"sha256": hashlib.sha256(token.encode()).hexdigest(), "write": bool(body.get("write")),
                     "watch": bool(body.get("watch")),  # the VM's file watcher (/invalidate)
                     "skills": bool(body.get("skills")),  # may sync and change claude/skills (write_refusal)
@@ -8979,13 +8979,21 @@ def build_app():
     return BearerAuth(GZipMiddleware(app, minimum_size=1024))
 
 
+def new_token() -> str:
+    """A device token that never starts with "-": Windows' cmdkey /pass:-... asks for a password instead of storing it
+    (and exits 0 without a terminal), so 1 in 64 tokens could not be put in the Credential Manager (tested 11 Nov 2026)."""
+    while (token := secrets.token_urlsafe(32)).startswith("-"):
+        pass
+    return token
+
+
 def first_token(path: Path = TOKENS_FILE) -> str | None:
     """A fresh installation (no tokens file yet) gets one admin token, so the first agent connects without the web UI.
     Never on a server that ever had tokens (the file stays, also when every token was revoked), and never an existing
     token: the file holds hashes only. The caller prints it once."""
     if path.exists():
         return None
-    token = secrets.token_urlsafe(32)
+    token = new_token()
     write_json(path, {"admin": {"sha256": hashlib.sha256(token.encode()).hexdigest(), "write": True, "watch": False,
                                 "skills": False, "self": True, "roots": [], "redact": False,
                                 "created": time.strftime("%Y-%m-%d"), "by": "first start"}})

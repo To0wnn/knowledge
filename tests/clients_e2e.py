@@ -2621,7 +2621,7 @@ def script_mcp(tok: str, home: Path):
     env = user_env(home, KNOWLEDGE_URL=BASE)  # no KNOWLEDGE_TOKEN: the relay finds the token itself
     if WIN:
         code, out, err = run(["cmdkey", "/generic:knowledge", "/user:knowledge", f"/pass:{tok}"], "", env)
-        check(code == 0, "windows: cmdkey stores the token in the Credential Manager", out + err)
+        check(code == 0 and "success" in out.lower(), "windows: cmdkey stores the token in the Credential Manager", out + err)  # it exits 0 also when it stored nothing
         sys.path.insert(0, str(CLIENT / "plugin" / "hooks"))
         import token_store  # the reader the relays and the headersHelper use: it must see the token before they run
         check(wait_for(lambda: token_store.from_keyring() == tok, 15), "windows: the Credential Manager returns the token cmdkey stored",
