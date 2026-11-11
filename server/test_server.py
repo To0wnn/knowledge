@@ -2485,7 +2485,21 @@ def share_on_loop(source: str) -> list[str]:
     return [name for name, f in funcs.items() if isinstance(f, ast.AsyncFunctionDef) and reach & set(calls(f)) and name != "ui_static"]
 
 
+# The slow contracts mostly wait on the server's timers: check.sh runs them side by side, each shard its own process
+# with its own server (--shard i/n). The setup between them runs in every shard; a contract not listed is shard 0's.
+SHARD_OF = {"flow_contract": 1, "needs_contract": 2, "chats_contract": 3, "board_contract": 3, "ui_gap_contract": 3, "tasks_contract": 4,
+            "lease_contract": 4, "handback_contract": 4, "machines_contract": 4}
+
+
+def keep_shard(me: int) -> None:
+    for name in [n for n in globals() if n.endswith("_contract")]:
+        if SHARD_OF.get(name, 0) != me:
+            globals()[name] = lambda *a, **k: None
+
+
 def main():
+    if "--shard" in sys.argv:
+        keep_shard(int(sys.argv[sys.argv.index("--shard") + 1]))
     on_loop = share_on_loop(Path(__file__).with_name("server.py").read_text())
     assert not on_loop, on_loop
     assert share_on_loop("def resolve(p): pass\ndef helper(): resolve(1)\nasync def bad(): helper()\nasync def good(): await to_thread(helper)\n") == ["bad"]

@@ -4,7 +4,7 @@ A self-hosted knowledge server for AI coding agents: live docs and memory over M
 Antigravity, plus a web UI with a graph. Server in `server/` (Python, one Docker container), clients in `plugin/`.
 
 ## Commands
-- check (must pass before "done"; the pre-commit hook runs it; about 50 s): `./check.sh`; `./check.sh --unless-passed` skips
+- check (must pass before "done"; the pre-commit hook runs it; about 35 s, its steps and `test_server.py --shard i/5` side by side): `./check.sh`; `./check.sh --unless-passed` skips
   it when this exact tree passed on this checkout already (deploy.sh uses that); in an agent session run it (and deploy.sh) under
   `env -u KNOWLEDGE_URL -u KNOWLEDGE_TOKEN -u KNOWLEDGE_CHAT`, or the session's own server settings break the docs sync test (401)
 - run: deployed as a Docker stack; there is no local dev server
