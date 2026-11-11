@@ -63,8 +63,12 @@ def _bind_without_dns(self):
 http_server.HTTPServer.server_bind = _bind_without_dns
 
 
+T0 = time.monotonic()
+
+
 def check(ok: bool, what: str, detail: str = "") -> bool:
-    print(("ok   " if ok else "FAIL ") + what + ("" if ok or not detail else f"\n     {detail[:800]}"), flush=True)
+    # the seconds since start: a slow step on one OS shows as a jump between two lines
+    print(f"{time.monotonic() - T0:6.1f} " + ("ok   " if ok else "FAIL ") + what + ("" if ok or not detail else f"\n     {detail[:800]}"), flush=True)
     if not ok:
         failures.append(what)
     return ok
@@ -3589,7 +3593,8 @@ assert "claude plugin install: ... fine" in out.getvalue() and "slow-tool ... ok
 
 # The phases mostly wait (on fake agents, companions, follow windows): run without arguments, this script starts one
 # process per shard side by side (--shard i), each with its own server and temp home; a phase not listed is shard 0's.
-PHASE_SHARD = {"chat_e2e": 1, "follow_e2e": 2, "companion_e2e": 2, "installer": 2, "installer_progress": 2, "companion_setup": 2}
+# By the CI times per phase (11 Nov 2026, Windows): companion 300 s, chat 165 s, shard 0 230 s, the rest 65 s.
+PHASE_SHARD = {"chat_e2e": 1, "companion_e2e": 2, "follow_e2e": 3, "installer": 3, "installer_progress": 3, "companion_setup": 3}
 SHARDS = max(PHASE_SHARD.values()) + 1
 
 
