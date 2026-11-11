@@ -1572,12 +1572,18 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
             def poke():
                 nonlocal down, up
                 try:
-                    call("POST", "/local/api/tick", {})
+                    call("GET", "/local/api/hello")
                     if down and not up:
                         up = time.time()
                 except (OSError, http_client.HTTPException):
                     if not down:
                         down = time.time()
+                if down:  # once it went down, poking tick on the new companion reports the new state to the server
+                    try:
+                        call("POST", "/local/api/tick", {})
+                    except Exception:
+                        pass
+                return False
             fn_change()
             wait_for(lambda: cond_done() or poke(), seconds)
             dt = time.time() - t0
@@ -1593,7 +1599,8 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         def set_version_1():
             for m, t in before.items():
                 m.write_text(re.sub(r'"version": "[^"]+"', '"version": "9.8.7"', t), encoding="utf-8")
-            act("workers_allowed", {"on": True})  # a round reports soon after the restart
+            with contextlib.suppress(Exception):
+                call("POST", "/local/api/wake", {})
 
         note1 = measure_restart(set_version_1, lambda: reported() == "9.8.7", 60)
         check(reported() == "9.8.7", "companion: an updated plugin restarts it, and the list shows the code that runs" + note1, str(reported()))
@@ -1601,6 +1608,8 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         def set_version_2():
             for m, t in before.items():
                 m.write_text(t, encoding="utf-8")
+            with contextlib.suppress(Exception):
+                call("POST", "/local/api/wake", {})
 
         note2 = measure_restart(set_version_2, lambda: reported() != "9.8.7", 60)
         check(reported() != "9.8.7", "companion: after going back it restarts again" + note2, str(reported()))
@@ -1823,6 +1832,8 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
                     def set_version_3():
                         for f, t in manifest_text.items():
                             f.write_text(re.sub(r'"version": "[^"]+"', '"version": "9.8.6"', t), encoding="utf-8")
+                        with contextlib.suppress(Exception):
+                            call("POST", "/local/api/wake", {})
 
                     note3 = measure_restart(set_version_3, lambda: reported() == "9.8.6", 90)
                     state = subprocess.run(["schtasks", "/Query", "/TN", name, "/FO", "LIST"], capture_output=True, text=True).stdout

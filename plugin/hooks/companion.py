@@ -2542,9 +2542,11 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/local/api/unlink":
                 return self.send(200, {"result": unlink_folder(str(body.get("path", "")))}, origin=o)
             if path == "/local/api/tick":
+                UPDATE_NOW.set()
                 return self.send(200, tick(), origin=o)
             if path == "/local/api/wake":  # the wake hook: no waiting for a round, which may wait for one already running
                 WAKE.set()
+                UPDATE_NOW.set()
                 return self.send(200, {"woken": True}, origin=o)
             if path == "/local/api/update-agents":
                 update_agents_soon()
@@ -2579,7 +2581,8 @@ def restart() -> None:
     under_task = subprocess.run(["schtasks", "/Query", "/TN", TASK_NAME], capture_output=True).returncode == 0
     again = f'schtasks /Run /TN "{TASK_NAME}"' if under_task else subprocess.list2cmdline([sys.executable, *sys.argv])
     log("info", "Spawning companion restart helper", f"under_task={under_task}")
-    helper = lambda f: subprocess.Popen(f"cmd /c ping -n 4 127.0.0.1 >nul & {again}", shell=False, stdin=subprocess.DEVNULL,
+    cmd = f"cmd /c ping -n 2 127.0.0.1 >nul & {again}" if under_task else [sys.executable, *sys.argv]
+    helper = lambda f: subprocess.Popen(cmd, shell=False, stdin=subprocess.DEVNULL,
                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=f)
     try:
         helper(flags | subprocess.CREATE_BREAKAWAY_FROM_JOB)
