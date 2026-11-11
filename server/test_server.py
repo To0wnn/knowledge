@@ -2958,7 +2958,7 @@ def main():
         __import__("threading").Thread(target=mx.serve_forever, daemon=True).start()
         mxurl = f"http://127.0.0.1:{mx.server_port}"
         saved_mx = (srv.PREFS_FILE, srv.MATRIX_TOKENS_FILE, set(srv.ADMINS), {k: os.environ.get(k) for k in ("KNOWLEDGE_MATRIX_URL", "KNOWLEDGE_MATRIX_ROOM", "KNOWLEDGE_MATRIX_TOKEN")})
-        d = Path(tempfile.mkdtemp())
+        d = Path(tempfile.mkdtemp(dir=tmp))
         srv.PREFS_FILE, srv.MATRIX_TOKENS_FILE = d / "prefs.json", d / "mt.json"
         srv.ADMINS.clear(); srv.ADMINS.update({"ann", "cas", "dee"})
         os.environ.update(KNOWLEDGE_MATRIX_URL=mxurl + "/", KNOWLEDGE_MATRIX_ROOM="!env:x", KNOWLEDGE_MATRIX_TOKEN="envtok")
@@ -4467,6 +4467,8 @@ def main():
     finally:
         proc.terminate()
         proc.wait()
+        # 7 MB per run, 8 shards per check: left behind, they filled the /tmp quota (2453 folders on 11 Nov 2026)
+        __import__("shutil").rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":
