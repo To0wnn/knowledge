@@ -700,12 +700,29 @@ def hook_errors(tmp: Path, project: Path):
 
 FAKE_AGENT = """import io, json, os, re, sys, time
 calls, name, args = os.environ["KN_FAKE_CALLS"], sys.argv[1], sys.argv[2:]
+def _append(line):  # one writer at a time: Windows appends by seek-to-end then write, so two fakes at once lost a line
+    for _ in range(300):
+        try:
+            os.mkdir(calls + ".lock")
+            break
+        except FileExistsError:
+            time.sleep(0.01)
+    else:
+        pass  # 3 s and still locked: a writer killed mid-write (Force) left it; write anyway and clear it
+    try:
+        with open(calls, "a", encoding="utf-8") as f:
+            f.write(line + chr(10))
+    finally:
+        try:
+            os.rmdir(calls + ".lock")
+        except OSError:
+            pass
 # the server asks for a chat title on a chat's first turn: noted once (title_ask), then dropped, so checks see the message
 _ASK = re.compile("(" + re.escape(chr(92) + "n" + chr(92) + "n") + "|" + chr(10) * 2 + ")" + re.escape("(knowledge web UI: ") + "[^)]*" + re.escape(")"))
 def _cut(text):
     out = _ASK.sub("", text)
     if out != text:
-        open(calls, "a", encoding="utf-8").write(json.dumps({"title_ask": os.environ.get("KNOWLEDGE_CHAT", "")}) + chr(10))
+        _append(json.dumps({"title_ask": os.environ.get("KNOWLEDGE_CHAT", "")}))
     return out
 class _In:
     def __init__(self, f):
@@ -723,7 +740,7 @@ def look():  # LOOK: the agent looks at an image (the chat shows it under the to
     open(f, "wb").write(b"PNG " + name.encode())
     return f
 PROC = os.urandom(6).hex()  # this process, also when Windows hands its pid to a later one
-rec = lambda x: open(calls, "a", encoding="utf-8").write(json.dumps({**x, "proc": PROC}) + "\\n")
+rec = lambda x: _append(json.dumps({**x, "proc": PROC}))
 if args == ["update"]:  # the companion's agent update
     rec({"update": name})
     print("agent update " + name)
