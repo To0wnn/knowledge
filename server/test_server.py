@@ -2885,7 +2885,8 @@ def main():
             return (sent[0]["status"] if sent else 0), reached
         time.sleep(0.4)
         t0 = time.time()
-        assert asyncio.run(asked("/mcp"))[0] == 503 and time.time() - t0 < 0.5
+        # at once = not after the hung probe (it never returns); 3 s leaves room for a busy CI runner (0.5 s failed there)
+        assert asyncio.run(asked("/mcp"))[0] == 503 and time.time() - t0 < 3, time.time() - t0
         assert asyncio.run(asked("/ui/api/recent"))[0] == 503
         assert asyncio.run(asked("/health"))[0] == 200 and asyncio.run(asked("/health", b"disk=1"))[0] == 503
         assert asyncio.run(asked("/ui/static/app.js"))[1] == ["/ui/static/app.js"]  # the page itself needs no shared folder
