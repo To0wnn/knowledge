@@ -622,9 +622,16 @@ body.admin-page { display: block; overflow-y: auto; }
 .fm-media { display: block; max-width: 100%; max-height: calc(100dvh - 220px); object-fit: contain; }
 audio.fm-media { width: 100%; }
 .fm-editor { min-height: 60vh; }
-@media (max-width: 999.98px) { /* the list or the file, one at a time */
+/* the audio player under the list: it stays in view while the list scrolls */
+.fm-player { position: sticky; bottom: 0; z-index: 5; display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 4px; align-items: center;
+  margin-top: 12px; padding: 8px 10px; border: 1px solid var(--line-hi); border-radius: var(--r-lg); background: var(--panel-solid); box-shadow: var(--shadow); }
+.fm-pname { overflow: hidden; color: var(--ink); font-size: 14px; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; text-decoration: none; }
+.fm-pname:hover { text-decoration: underline; }
+.fm-player audio { grid-column: 1 / -1; width: 100%; height: 40px; }
+@media (max-width: 999.98px) { /* the list or the file, one at a time; audio keeps the list (the player plays it) */
   .fm-split.has-file { grid-template-columns: minmax(0, 1fr); }
-  .fm-split.has-file > .fm-folder { display: none; }
+  .fm-split.has-file:not(.audio) > .fm-folder { display: none; }
+  .fm-split.has-file.audio > .fm-file { display: none; }
   .fm-file { position: static; max-height: none; overflow: visible; }
 }
 @media (max-width: 699.98px) {
@@ -636,6 +643,8 @@ audio.fm-media { width: 100%; }
   .fm-editor { font-size: 16px; } /* iOS zooms into smaller text in a field */
   .fm-media { max-height: 70dvh; }
   body.fm-detail .head .back { display: inline-grid; }
+  .fm-player { position: fixed; inset: auto 8px calc(68px + env(safe-area-inset-bottom)) 8px; margin: 0; } /* a mini player over the tab bar */
+  .fm:has(+ .fm-player:not([hidden])) { padding-bottom: 110px; } /* the last rows scroll out from under it */
 }
 .mx-frow code { overflow-wrap: anywhere; }
 .mx-empty { margin: 0; padding: 10px 14px; }

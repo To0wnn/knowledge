@@ -444,7 +444,7 @@ async def approvals(browser, devices, secret: str) -> None:
                                                         {"n": 3, "at": now, "kind": "sub", "text": "Explore · find the tests", "sub": "tu1", "status": "running"},
                                                         {"n": 4, "at": now, "kind": "tool", "text": "Bash: ls tests", "sub": "tu1"},
                                                         {"n": 5, "at": now, "kind": "sub", "text": "Found **3** test files", "sub": "tu1", "status": "done"},
-                                                        {"n": 6, "at": now, "kind": "text", "text": "Running them now."},
+                                                        {"n": 6, "at": now, "kind": "text", "text": "Running them now: `beds/water.py:3`, not `origin/main`."},
                                                         {"n": 7, "at": now, "kind": "usage", "text": "", "sub": "tu1", "total": 8645},
                                                         {"n": 8, "at": now, "kind": "sub", "text": "Plan · check the docs", "sub": "tu2", "status": "running"},
                                                         {"n": 9, "at": now, "kind": "usage", "text": "", "sub": "tu2", "total": 5949}],
@@ -507,6 +507,9 @@ async def approvals(browser, devices, secret: str) -> None:
           d.querySelector('.ck-sub-label').textContent, d.querySelector('.ck-sub-tools').textContent, d.querySelector('.ck-sub-report strong')?.textContent,
           d.querySelector('summary .chip').textContent, [...document.querySelectorAll('#ck-canvas .ck-msg.agent')].some(m => m.textContent.includes('Running them'))]; })()""")
         check(sub and sub[:5] == [2, "Explore · find the tests", "Bash: ls tests", "3", "done"] and sub[5], f"chat: a subagent is one folded block with its tool line and report, apart from the answer {sub}")
+        links = await pg.evaluate("[...document.querySelectorAll('#ck-canvas .ck-msg.agent a.ck-file')].map(a => [a.textContent, a.getAttribute('href')])")
+        check(len(links) == 1 and links[0][0] == "beds/water.py:3" and "p=%2Fhome%2Fx%2Fgarden%2Fbeds&f=%2Fhome%2Fx%2Fgarden%2Fbeds%2Fwater.py" in links[0][1],
+              f"chat: a project path in an answer opens in Files, a branch name stays text {links}")
         pins = await pg.evaluate("""[[...document.querySelectorAll('#ck-canvas .ck-subbar .ck-subpin')].map(b => b.textContent),
           document.querySelector('#ck-canvas .ck-sub .ck-sub-tok')?.textContent, document.querySelector('#ck-canvas .ck-tok')?.textContent]""")
         check(pins[0] == ["Plan · check the docs5.9k tokens"] and pins[1] == "8.6k tokens" and pins[2] == "35k context · 71k used",
@@ -797,7 +800,9 @@ async def shell(browser, devices, secret: str) -> None:
     # (the pc's answers intercepted: read-only, no pc needed).
     listing = {"path": "/r/app", "root": "/r", "parent": "/r", "sep": "/", "more": 0, "entries": [
         {"name": "src", "path": "/r/app/src", "dir": True, "size": 0, "mtime": 1790000000},
-        {"name": "main.py", "path": "/r/app/main.py", "dir": False, "size": 12, "mtime": 1790000000}]}
+        {"name": "main.py", "path": "/r/app/main.py", "dir": False, "size": 12, "mtime": 1790000000},
+        {"name": "one.mp3", "path": "/r/app/one.mp3", "dir": False, "size": 9, "mtime": 1790000000},
+        {"name": "two.mp3", "path": "/r/app/two.mp3", "dir": False, "size": 9, "mtime": 1790000000}]}
 
     async def fake_files(r):
         op = json.loads(r.request.post_data)["op"]
@@ -805,7 +810,7 @@ async def shell(browser, devices, secret: str) -> None:
     await pg.route("**/ui/api/files", fake_files)
     await route(pg, "#/files?m=x&p=%2Fr%2Fapp", ".fm-folder", 300)
     names = await pg.locator(".fm-folder .fm-name").all_inner_texts()
-    check(names == ["src", "main.py"] and await pg.locator(".fm-crumbs").inner_text() != "", f"Files: a folder lists folders first, with its path {names}")
+    check(names == ["src", "main.py", "one.mp3", "two.mp3"] and await pg.locator(".fm-crumbs").inner_text() != "", f"Files: a folder lists folders first, with its path {names}")
     await pg.locator(".fm-row", has_text="main.py").click()
     await pg.wait_for_selector(".fm-code", timeout=10000)
     check("f=%2Fr%2Fapp%2Fmain.py" in await pg.evaluate("location.hash") and await pg.locator(".fm-gutter").inner_text() == "1\n2",
@@ -813,6 +818,22 @@ async def shell(browser, devices, secret: str) -> None:
     await pg.go_back()
     await pg.wait_for_timeout(300)
     check(await pg.locator(".fm-code").count() == 0 and await pg.locator(".fm-folder").count() == 1, "Files: Back closes the file, the folder stays")
+    # the Back arrow goes up to the folder, not to the file before; audio plays on in the player under the list
+    await pg.route("**/ui/api/files/raw**", lambda r: r.abort())
+    await pg.locator(".fm-row", has_text="main.py").click()
+    await pg.wait_for_selector(".fm-code", timeout=10000)
+    await pg.locator(".fm-row", has_text="one.mp3").click()
+    await pg.wait_for_selector(".fm-player:not([hidden])", timeout=10000)
+    bar = await pg.evaluate("[fp.name.textContent, fp.prev.disabled, fp.next.disabled]")
+    check(bar == ["one.mp3", True, False], f"Files: an audio file plays in the player bar, Next leads to the next one {bar}")
+    await pg.evaluate("$('back').click()")
+    await pg.wait_for_timeout(300)
+    up = await pg.evaluate("[location.hash, !!document.querySelector('.fm-player:not([hidden])')]")
+    check(up == ["#/files?m=x&p=%2Fr%2Fapp", True], f"Files: the Back arrow goes to the folder (not the file before) and the player stays {up}")
+    await pg.evaluate("fp.audio.onended()")
+    check(await pg.evaluate("fp.name.textContent") == "two.mp3", "Files: when a track ends the next one in the folder plays")
+    await pg.evaluate("filesPlayerClose()")
+    await pg.unroute("**/ui/api/files/raw**")
     await pg.unroute("**/ui/api/files", fake_files)
     await route(pg, "#/machines?view=folders", ms=1500)  # Link a folder sits on top of Folders: a folder first, then its project
     if await pg.get_by_role("button", name="Link a folder").count():

@@ -66,8 +66,9 @@ DOMPurify.addHook("afterSanitizeAttributes", (n) => {
 const renderMd = (text) => DOMPurify.sanitize(marked.parse(text, { gfm: true }), PURIFY);
 const post = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* blocked */ } } };
-// A new history entry for a route (shell.js); the count lets Back stay inside the app instead of leaving it.
-const pushHash = (h) => { if (location.hash !== h) history.pushState({ n: (history.state?.n || 0) + 1 }, "", h); };
+// A new history entry for a route (shell.js); the count lets Back stay inside the app instead of leaving it, and `from`
+// tells Back whether the entry before is the page it should go up to (goBack).
+const pushHash = (h) => { if (location.hash !== h) history.pushState({ n: (history.state?.n || 0) + 1, from: location.hash }, "", h); };
 // A note path inside a route or link: each part encoded, so "?", "#", "%", spaces and accents survive a refresh and
 // match location.hash as the browser keeps it; parseRoute decodes it again.
 const encPath = (p) => p.split("/").map(encodeURIComponent).join("/");

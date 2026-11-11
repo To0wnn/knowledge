@@ -228,7 +228,7 @@ $("ck-side").addEventListener("keydown", (e) => { // up and down go through the 
 });
 // Open one chat (its route), or go back from it when `meta` is empty.
 function ckShow(meta) {
-  if (!meta) return solo() ? ckCloseTab() : goBack("#/chats");
+  if (!meta) return solo() ? ckCloseTab() : goBack("#/chats", (h) => { const r = parseRoute(h); return r?.view === "chats" && !r.arg; }); // the chat list, not the chat before
   go(`#/chats/${encodeURIComponent(ckCard(meta).meta.id)}`);
 }
 // The pill over the end of a chat you scrolled up in; it also says when more came in below.
@@ -1550,6 +1550,26 @@ function ckUserMsg(card, text, box = el("div", "ck-msg user"), by = "") {
   box.append(text.slice(at));
   return box;
 }
+// A project path in an answer (`server/app.js:12`, a folder as `docs/`) opens in Files: the file beside its folder, Back goes to the
+// folder. Relative paths count from the chat's linked folder (a worktree chat shows the main checkout's copy there);
+// an absolute one only inside it. One without a "/" stays text: `app.js` alone says too little about where it is.
+const CK_PATH = /^(?:\.\/)?([\w.@+-]+(?:\/[\w.@+-]+)+\/?|[\w.@+-]+\/)(?::\d+(?:[:-]\d+)?)?$/;
+function ckFileLinks(m, box) {
+  const root = m.folder, mid = m.machine;
+  if (!root || !mid || agentsOff()) return;
+  const sep = root.includes("\\") && !root.includes("/") ? "\\" : "/", top = root.replace(/[\\/]+$/, "");
+  for (const code of box.querySelectorAll("code")) {
+    if (code.closest("pre, a")) continue;
+    const t = code.textContent.trim(), abs = t.startsWith(top + sep);
+    const hit = abs ? [t, t.slice(top.length + 1).replace(/:\d+(?:[:-]\d+)?$/, "")] : CK_PATH.exec(t);
+    if (!hit || hit[1].split(/[\\/]/).includes("..")) continue;
+    const folder = hit[1].endsWith("/") || hit[1].endsWith("\\");
+    if (!folder && !/\.\w+$/.test(hit[1])) continue; // origin/main, chat/<id>: a branch, not a path
+    const rel = hit[1].replace(/[\\/]$/, "").split(/[\\/]/), full = [top, ...rel].join(sep), dir = rel.length > 1 ? [top, ...rel.slice(0, -1)].join(sep) : top;
+    const a = el("a", "ck-file"); a.href = folder ? filesUrl(mid, full) : filesUrl(mid, dir, full); a.title = `Open in Files: ${full}`;
+    code.replaceWith(a); a.append(code);
+  }
+}
 function ckLine(card, e) {
   if (e.kind === "tool" && e.text.includes("⟦file:")) return ckUserMsg(card, e.text, el("div", "ck-line tool"));
   const line = el("div", `ck-line ${e.kind}`, e.text);
@@ -1603,7 +1623,7 @@ function ckEvents(card, res) {
       card.log.append(e.kind === "user" ? ckUserMsg(card, e.text, undefined, e.by) : ckLine(card, e));
     }
   }
-  for (const msg of dirty) if (selecting(msg)) card.held = msg; else msg.innerHTML = renderMd(msg.dataset.raw.replace(/^\n+/, "")); // text being selected waits for the next poll
+  for (const msg of dirty) if (selecting(msg)) card.held = msg; else { msg.innerHTML = renderMd(msg.dataset.raw.replace(/^\n+/, "")); ckFileLinks(card.meta, msg); } // text being selected waits for the next poll
   if (res.events.length) {
     const hasUser = res.events.some((e) => e.kind === "user");
     if (near || hasUser) ckScrollBottom(card, hasUser);
