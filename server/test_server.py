@@ -174,7 +174,7 @@ def tasks_contract(tmp, ck, fr, ver, raw):
     direct = tmp / "projects/garden/memory/project_direct.md"
     direct.write_text(memo("- open until 2099-01-01 [Codex, VM-1] from Claude, start now: written on the vm\n", "direct"))
     deadline = time.time() + 20
-    while "VM-1" not in rows() and time.time() < deadline:
+    while ("VM-1" not in rows() or not rows()["VM-1"].get("author")) and time.time() < deadline:
         time.sleep(0.1)
     http("POST", "/invalidate", {"paths": ["garden-memory/project_direct.md"]}, token="watch-token")  # the late report
     assert rows()["VM-1"]["author"] == "laptop" and rows()["VM-1"]["startable"], rows()["VM-1"]
@@ -2766,7 +2766,7 @@ def main():
     try:
         for _ in range(200):
             try:
-                if http("GET", "/health", token=None)[0] == 200:
+                if http("GET", "/health?ready=1", token=None)[0] == 200:
                     break
             except OSError:
                 time.sleep(0.05)
@@ -2776,6 +2776,7 @@ def main():
         assert http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, token="wrong")[0] == 401
 
         st, body = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        assert st == 200, (st, body)
         hints = {x["name"]: x.get("annotations", {}) for x in json.loads(body)["result"]["tools"]}
         assert hints["knowledge_read"]["readOnlyHint"] and hints["knowledge_search"]["readOnlyHint"], hints["knowledge_read"]
         assert not hints["knowledge_write"]["readOnlyHint"] and hints["knowledge_delete"]["destructiveHint"], hints["knowledge_write"]
