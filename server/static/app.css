@@ -861,6 +861,10 @@ audio.fm-media { width: 100%; }
 .ck-history .ck-subrow .ck-chat { padding-left: 22px; font-size: 13px; } /* a subagent's chat, under its chat */
 .ck-history .ck-subchat .ck-chat-title { color: var(--muted); }
 /* the subagents running now, pinned between the log and the box */
+.ck-player { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 6px 12px; border-top: 1px solid var(--line); background: var(--panel); }
+.ck-player[hidden] { display: none; }
+.ck-pname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ck-pmedia { flex-basis: 100%; width: 100%; max-height: 240px; }
 .ck-subbar { display: flex; gap: 6px; flex-wrap: wrap; padding: 6px 12px; border-top: 1px solid var(--line); background: var(--panel); }
 .ck-subbar[hidden] { display: none; }
 .ck-subpin { display: inline-flex; gap: 6px; align-items: center; max-width: 100%; padding: 3px 10px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--r-md); background: var(--panel); color: var(--ink); font-size: 13px; cursor: pointer; }

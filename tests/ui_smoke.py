@@ -567,6 +567,14 @@ async def approvals(browser, devices, secret: str) -> None:
         win = await pg.evaluate("""() => { const m = {machine: 'w', folder: 'C:\\\\Repo'}; return [ckFileUrl(m, 'c:/repo/voice/LEESMIJ.md'), ckFileUrl(m, 'voice/a.wav:3'), ckFileUrl(m, 'voice/'), ckFileUrl(m, 'D:/x/y.md')]; }""")
         check(win[0] == "#/files?m=w&p=C%3A%5CRepo%5Cvoice&f=C%3A%5CRepo%5Cvoice%5CLEESMIJ.md" and win[1].endswith("f=C%3A%5CRepo%5Cvoice%5Ca.wav") and win[2] == "#/files?m=w&p=C%3A%5CRepo%5Cvoice" and win[3] == "",
               f"chat: a Windows path (any case, / or \\) inside the chat's folder links to Files, one outside does not {win}")
+        hash0 = await pg.evaluate("""() => { const b = document.createElement('div'); b.className = 'ck-msg agent'; b.innerHTML = '<code>media/song.mp3</code>';
+          document.querySelector('#ck-canvas .ck-card .ck-log').append(b); ckFileLinks({machine: 'm1', folder: '/home/x/garden'}, b); return location.hash; }""")
+        await pg.locator('#ck-canvas .ck-card .ck-log a[data-play="audio"]').click()
+        got = await pg.evaluate("""[location.hash, !document.querySelector('#ck-canvas .ck-card .ck-player').hidden,
+          document.querySelector('#ck-canvas .ck-card .ck-player audio')?.getAttribute('src') || '']""")
+        check(got[0] == hash0 and got[1] and got[2].startswith("/ui/api/files/raw?") and "song.mp3" in got[2],
+              f"chat: a click on a media path plays it in the chat's player, the chat stays {got}")
+        await pg.locator('#ck-canvas .ck-card .ck-player button').click()
         pins = await pg.evaluate("""[[...document.querySelectorAll('#ck-canvas .ck-subbar .ck-subpin')].map(b => b.textContent),
           document.querySelector('#ck-canvas .ck-sub .ck-sub-tok')?.textContent, document.querySelector('#ck-canvas .ck-tok')?.textContent]""")
         check(pins[0] == ["Plan · check the docs5.9k tokens"] and pins[1] == "8.6k tokens" and pins[2] == "35k context · 71k used",

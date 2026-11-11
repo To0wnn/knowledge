@@ -677,8 +677,9 @@ function ckCard(meta) {
     const a = e.target.closest("a"); if (!a) return;
     const href = a.getAttribute("href") || "";
     if (/^https?:/.test(href)) { a.target = "_blank"; a.rel = "noopener noreferrer"; }
+    // a media file the answer names plays in the chat's player; Alt goes to Files here, Ctrl/Cmd/middle a new tab (native)
+    if (a.dataset.play && !e.button && !e.ctrlKey && !e.metaKey && !e.shiftKey) { e.preventDefault(); if (e.altKey) go(href); else ckPlay(card, a); }
   });
-  log.addEventListener("play", (e) => { for (const p of log.querySelectorAll("audio, video")) if (p !== e.target) p.pause(); }, true); // only one plays at a time
   log.addEventListener("scroll", () => {
     if (log.scrollTop < 300 && card.older) ckOlder(card); // near the top of a long chat: the part before
     const dist = log.scrollHeight - log.scrollTop - log.clientHeight;
@@ -731,8 +732,10 @@ function ckCard(meta) {
   const asks = el("div", "ck-asks"); asks.hidden = true; asks.setAttribute("aria-live", "assertive");
   const subbar = el("div", "ck-subbar"); subbar.hidden = true; subbar.setAttribute("aria-label", "Subagents running now");
   const find = ckFindBar(); find.btn = findBtn;
-  root.append(head, find.bar, log, jump, subbar, asks, form);
-  const card = { meta: { ...meta }, x, openTab: open, root, find, name, where, git, state, log, jump, jumpText, asks, form, input, stop, send, note, picks, mark, close, tok, subbar, queueBtn, forceBtn, more, branch, filesBox: files, files: [], mode: "", pick: null, after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
+  const player = el("div", "ck-player"); player.hidden = true; player.setAttribute("role", "region"); player.setAttribute("aria-label", "Player");
+  root.append(head, find.bar, log, jump, subbar, player, asks, form);
+  root.addEventListener("play", (e) => { for (const p of root.querySelectorAll("audio, video")) if (p !== e.target) p.pause(); }, true); // only one plays at a time
+  const card = { meta: { ...meta }, x, openTab: open, root, find, name, where, git, state, log, jump, jumpText, asks, form, input, stop, send, note, picks, mark, close, tok, subbar, player, queueBtn, forceBtn, more, branch, filesBox: files, files: [], mode: "", pick: null, after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
   card.sized = sized; card.mut = mut;
   findBtn.onclick = () => (find.bar.hidden ? ckFindOpen(card) : ckFindClose(card));
   open.onclick = (e) => { if (me.prefs?.grid_open === "here" && !e.ctrlKey && !e.metaKey && !e.shiftKey) { e.preventDefault(); ckShow(card.meta); } }; // Settings
@@ -1590,7 +1593,11 @@ function ckFileUrl(m, path) {
 }
 function ckFileLinks(m, box) {
   if (!m.folder || !m.machine || agentsOff()) return;
-  const link = (a, url, path) => { a.href = url; a.classList.add("ck-file"); a.removeAttribute("target"); a.title = `Open in Files: ${path}`; };
+  const link = (a, url, path) => {
+    a.href = url; a.classList.add("ck-file"); a.removeAttribute("target"); a.title = `Open in Files: ${path}`;
+    const kind = /[?&]f=/.test(url) && fileKind(path);
+    if (kind === "audio" || kind === "video") { a.dataset.play = kind; a.title = `Play here in the chat: ${path}\nAlt+click: open in Files; Ctrl+click: Files in a new tab`; }
+  };
   for (const a of box.querySelectorAll("a")) {
     const href = a.dataset.file || a.getAttribute("href") || "";
     if (!a.dataset.file && (!href || /^([a-z][\w+.-]*:|#|\/\/)/i.test(href))) continue; // a web link, an anchor
@@ -1607,6 +1614,19 @@ function ckFileLinks(m, box) {
     const a = el("a"); link(a, url, t);
     code.replaceWith(a); a.append(code);
   }
+}
+// The chat's player, above the box: a media file the answer names plays here from the pc (Files' raw stream, Range,
+// so it seeks) and keeps playing while the chat scrolls or updates; × stops it. One at a time per chat.
+function ckPlay(card, a) {
+  const q = new URLSearchParams(a.getAttribute("href").split("?")[1] || ""), path = q.get("f") || "", kind = a.dataset.play;
+  const name = el("a", "ck-pname", path.split(/[\\/]/).pop()), x = el("button", "btn small quiet icon", "×"), media = el(kind, "ck-pmedia");
+  name.href = a.getAttribute("href"); name.title = `Open in Files: ${path}`;
+  x.type = "button"; x.title = "Stop and close the player"; x.setAttribute("aria-label", x.title);
+  x.onclick = () => { media.pause(); media.removeAttribute("src"); media.load(); card.player.replaceChildren(); card.player.hidden = true; };
+  media.controls = true; media.preload = "metadata"; media.setAttribute("playsinline", ""); media.src = filesRaw(q.get("m"), path);
+  media.onerror = () => { name.textContent = `${name.textContent}: this browser cannot play it, or the pc stopped answering`; };
+  card.player.replaceChildren(name, x, media); card.player.hidden = false;
+  media.play().catch(() => {});
 }
 function ckLine(card, e) {
   if (e.kind === "tool" && e.text.includes("⟦file:")) return ckUserMsg(card, e.text, el("div", "ck-line tool"));
