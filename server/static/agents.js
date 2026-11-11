@@ -508,6 +508,13 @@ function ckItem(i) {
     const to = (prompt(`${i.id} goes to (Claude, Codex, Gemini or a person's name; add @<pc> to pin it):`, i.owner || "") || "").trim();
     if (to) { const [owner, device = ""] = to.split("@"); ckDo("/ui/api/task/assign", { project: i.project, id: i.id, owner: owner.trim(), device: device.trim() }); }
   }]);
+  if (i.kind === "task" && !i.result && i.col === "open") { // hand it over: an open chat in its project takes it ('pak <ID>'), or a new one
+    for (const c of ck.chats.filter((c) => c.project === i.project && !c.closed && !c.parent && c.online && c.rights === "act").slice(0, 5))
+      later.push([`Give to chat: ${ckTitle(c)}`.slice(0, 60), `That chat takes ${i.id} ('pak ${i.id}'): after its current turn, its line names that chat's agent`,
+        () => ckDo("/ui/api/chat/send", { machine: c.machine, id: c.id, text: `pak ${i.id}`, mode: "queue" }).then((ok) => ok && toast(`${i.id} → ${ckTitle(c)}`, false))]);
+    later.push(["Give to a new chat", `A new chat with 'pak ${i.id}' typed in, in a folder of ${shown(i.project)}: pick the model, then send`,
+      () => { ckDrop(ckKey(CK_DRAFT)); ck.draftTask = i; ckNewChat(); }]);
+  }
   if (i.result && me.writable?.includes(i.project) && i.line_text) later.push(["Remove (read)", "Take the result line out of its memo (its history keeps it)",
     () => ckDo("/ui/api/task/done", { path: i.path, line: i.line_text })]);
   if (i.kind === "task" && i.col === "open" && i.can_cancel) later.push(["Cancel task", "Not wanted: its requester gets it back as a result", () => {
@@ -1194,6 +1201,11 @@ function ckDraft(machine = "") {
     if (f) card.where_ = `${f.machine}\n${f.path}`;
     else { card.note.className = "ck-note bad"; card.note.textContent = `${ckPc(machine)?.label || "That pc"} has no folder linked to ${agentProject ? shown(agentProject) : "a project"}: pick another project in the sidebar, or link one under Machines.`; }
     delete card.picks.dataset.sig; ckPicker(card);
+  }
+  if (ck.draftTask) { // "Give to a new chat": the task's take typed in, a folder of its project picked
+    const t = ck.draftTask, f = ckDraftFolders(card).find((y) => y.project === t.project); ck.draftTask = null;
+    card.input.value = `pak ${t.id}`;
+    if (f) { card.where_ = `${f.machine}\n${f.path}`; delete card.picks.dataset.sig; ckPicker(card); }
   }
   ckDraftWhere(card);
   return card;

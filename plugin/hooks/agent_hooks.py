@@ -148,11 +148,13 @@ def short(text: str) -> str:
 
 
 NAMES = {"claude": "Claude", "codex": "Codex", "agy": "Gemini"}
-# "pak KN-12": do that task in this chat. Any case (the user types "pak kn-12"), but a task ID holds a digit (KN-12,
-# ET-eval2), so "pak e-mail van Sam" or "take follow-up actions" asks the server nothing
-PAK = re.compile(r"(?i)(?:^|\s)(?:pak|take)\s+((?=[\w.-]*\d)[a-z][a-z0-9.]*-[\w.-]*\w)")
-assert [m.group(1) for m in PAK.finditer("Pak KN-12 en take ET-eval2; pak kn-13, pak Kn-14; pak e-mail, take follow-up, take built-in")] \
-    == ["KN-12", "ET-eval2", "kn-13", "Kn-14"]
+# "pak KN-12": do that task in this chat. An ID with a digit in any case (the user types "pak kn-12"); one without a
+# digit (BK-LOCK, DYNPA-voxcpm) only with its capital prefix, so "pak e-mail van Sam" or "take follow-up actions"
+# asks the server nothing
+PAK = re.compile(r"(?:^|\s)(?i:pak|take)\s+((?i:(?=[\w.-]*\d)[a-z][a-z0-9.]*-[\w.-]*\w)|[A-Z][A-Z0-9.]+-[\w.-]*\w)")
+assert [m.group(1) for m in PAK.finditer("Pak KN-12 en take ET-eval2; pak kn-13, pak Kn-14; pak e-mail, take follow-up, take built-in"
+                                         "; pak BK-LOCK, TAKE DYNPA-voxcpm; pak bk-lock")] \
+    == ["KN-12", "ET-eval2", "kn-13", "Kn-14", "BK-LOCK", "DYNPA-voxcpm"]
 
 
 def task_id(typed: str, answer: dict) -> str:
