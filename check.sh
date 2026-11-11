@@ -20,7 +20,7 @@ PATH="$HOME/.local/bin:$PATH"  # uv lives there; shells started at boot may lack
 logs=$(mktemp -d); trap 'rm -rf "$logs"' EXIT
 step() { name=$1; shift; : >"$logs/$name.rc"; ( "$@" >"$logs/$name" 2>&1 && echo 0 >"$logs/$name.rc" ) & }  # no 0 in .rc = failed
 hooks() { for h in limits secret-guard self_update companion model_settings workers chat watch tools sysstats; do
-  python3 "../plugin/hooks/$h.py" --self-test || return 1; done; }
+  python3 "../plugin/hooks/$h.py" --self-test || return 1; done; python3 ../plugin/hooks/docs-sync.py --selftest; }
 step hooks hooks
 # client code also runs on macOS's /usr/bin/python3 (3.9): an f-string with a backslash in {} once broke the setup there,
 # and an `X | None` annotation only fails on import, so each file is imported, not just compiled
