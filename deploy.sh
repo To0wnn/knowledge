@@ -32,9 +32,19 @@ fi
 # outlived its lock never frees the next one's.
 LOCK=/root/docker/knowledge/deploy.lock
 me="$(hostname)-$(git rev-parse --short HEAD)-$$-$(date +%s)"
-got=$(ssh "$FORGE" "find $LOCK -maxdepth 0 -mmin +30 -exec rm -rf {} + 2>/dev/null; if mkdir $LOCK 2>/dev/null; then echo $me > $LOCK/by && echo ok; else cat $LOCK/by 2>/dev/null || echo unknown; fi") \
-  || { echo "deploy refused: forge did not answer over ssh" >&2; exit 1; }
-[ "$got" = ok ] || { echo "deploy refused: another deploy is running ($got); run it again when that one is done" >&2; exit 1; }
+# A held lock is waited for (DEPLOY_LOCK_WAIT seconds, default 10 minutes): sessions working side by side often finish
+# at the same moment, and a refusal made each of them poll and retry by hand. The wait loop runs here, not on forge, so
+# a deploy killed while it waits leaves nothing behind that could take the lock after it is gone.
+waited=0
+while :; do
+  got=$(ssh "$FORGE" "find $LOCK -maxdepth 0 -mmin +30 -exec rm -rf {} + 2>/dev/null; if mkdir $LOCK 2>/dev/null; then echo $me > $LOCK/by && echo ok; else cat $LOCK/by 2>/dev/null || echo unknown; fi") \
+    || { echo "deploy refused: forge did not answer over ssh" >&2; exit 1; }
+  [ "$got" != ok ] || break
+  [ "$waited" -lt "${DEPLOY_LOCK_WAIT:-600}" ] || { echo "deploy refused: another deploy is still running after ${waited}s ($got); run it again when that one is done" >&2; exit 1; }
+  [ "$waited" -gt 0 ] || echo "deploy: waiting for another deploy ($got)" >&2
+  sleep 5; waited=$((waited + 5))
+done
+[ "$waited" = 0 ] || echo "deploy: got the lock after ${waited}s"
 # A deploy that stops before its push takes back its own merge and version commits: left behind, the version lines
 # would conflict with main at the next try.
 pre=$(git rev-parse HEAD)
