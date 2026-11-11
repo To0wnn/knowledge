@@ -31,6 +31,7 @@ import socket
 import socketserver
 import tempfile
 import http.server as http_server  # not 'import http': that hides http() below
+import http.client as http_client
 import threading
 import time
 import urllib.request
@@ -1168,18 +1169,19 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
     con.commit()
     con.close()
     fake_agy = fake_codex = None
+    fake_names = (f"kna{os.getpid()}", f"knc{os.getpid()}")  # per run (pgrep -x, at most 15 characters): a copy of this test running beside it has its own
     if not WIN:  # a process named like agy, ended later: YOLO for agy waits for it
-        shutil.copy(shutil.which("sleep"), bin_dir / "knfakeagy")
-        fake_agy = subprocess.Popen([str(bin_dir / "knfakeagy"), "300"])
-        shutil.copy(shutil.which("sleep"), bin_dir / "knfakecodex")  # a running Codex: its registered sessions count as open
-        fake_codex = subprocess.Popen([str(bin_dir / "knfakecodex"), "300"])
+        shutil.copy(shutil.which("sleep"), bin_dir / fake_names[0])
+        fake_agy = subprocess.Popen([str(bin_dir / fake_names[0]), "300"])
+        shutil.copy(shutil.which("sleep"), bin_dir / fake_names[1])  # a running Codex: its registered sessions count as open
+        fake_codex = subprocess.Popen([str(bin_dir / fake_names[1]), "300"])
     port = free_port()
     self_url = f"http://127.0.0.1:{port}"
     env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, PATH=str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
                    KNOWLEDGE_COMPANION_PORT=str(port), KNOWLEDGE_COMPANION_EVERY="3600", KN_FAKE_CALLS=str(calls),
                    KNOWLEDGE_COMPANION_ACTIONS_EVERY="0.2", KNOWLEDGE_TOOLS_DIR=str(tools_dir), KNOWLEDGE_COMPANION_UPDATE_EVERY="1", KNOWLEDGE_WORKER_GRACE="1", KNOWLEDGE_COMPANION_SCAN_EVERY="0",
-                   KNOWLEDGE_AGY_PROCESS="knfakeagy" if fake_agy else Path(sys.executable).stem,
-                   KNOWLEDGE_CODEX_PROCESS="knfakecodex" if fake_codex else Path(sys.executable).stem)
+                   KNOWLEDGE_AGY_PROCESS=fake_names[0] if fake_agy else Path(sys.executable).stem,
+                   KNOWLEDGE_CODEX_PROCESS=fake_names[1] if fake_codex else Path(sys.executable).stem)
 
     key_file = home / ".knowledge" / "companion" / "api-key"
 
@@ -1560,7 +1562,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         def poke():  # the port is closed for a moment while it restarts
             try:
                 call("POST", "/local/api/tick", {})
-            except OSError:
+            except (OSError, http_client.HTTPException):  # or it goes away in the middle of an answer
                 pass
         wait_for(lambda: reported() == "9.8.7" or poke(), 60)
         check(reported() == "9.8.7", "companion: an updated plugin restarts it, and the list shows the code that runs", str(reported()))
