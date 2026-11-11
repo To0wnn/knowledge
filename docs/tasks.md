@@ -35,7 +35,9 @@ The companion that starts workers is described in [companion.md](companion.md); 
   (`open tot` also works). A new line without `from`/`start` is refused at write time; older lines keep working as
   "start now" and show as legacy. The server records who added each line; a task starts by itself only when its start
   condition is met and its writer is trusted (per project on the admin page; by default the project's owner and their
-  tokens, admins and the admins' own devices), otherwise the owner or an admin approves it in the Tasks tab. Only tasks
+  tokens, admins and the admins' own devices; any writer for a line pinned to its own device token,
+  `[<Owner>@<that token>, <ID>]`, since it steers only the pc that wrote it), otherwise the owner or an admin approves
+  it in the Tasks tab. A write that adds a line that waits for approval says so, and suggests that pin. Only tasks
   that may start reach an agent as "start now" (`/tasks`, the wake, `GET /tasks/ready`); the others are listed with the
   reason. One task is started on one machine only: the first device to take it holds a 30-minute lease
   (`state/task_leases.json`). `POST /tasks/woken` takes the lease (200 `{"lease"}`, or 409 `{"held_by"}` when another

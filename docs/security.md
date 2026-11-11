@@ -14,7 +14,8 @@ described in full on the linked page.
   A guest's chat runs as the owner (the guest approves its tool calls: give use only to someone you would give a
   shell), in a worktree of its own, with the owner's token narrowed to that project, and stops at the next poll once the share or the membership ends. [chats.md](chats.md#agents)
 - **Who may start a task.** A task line starts by itself only when its writer is trusted for that project; otherwise
-  the owner or an admin approves it. Text by an untrusted writer reaches agents marked as data, not instructions.
+  the owner or an admin approves it. A line pinned to its writer's own device starts by itself: it runs only on the pc
+  that wrote it. Text by an untrusted writer reaches agents marked as data, not instructions.
   [tasks.md](tasks.md#task-lines-and-leases), [companion.md](companion.md#yolo-safety-without-blocking)
 - **Whose words.** A note someone else wrote reaches your agents as data, and semantic search shows your own notes first.
   A token that went wrong: revoke it, then undo what it changed, per file, on the admin page. Nothing later is
