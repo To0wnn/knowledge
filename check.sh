@@ -16,7 +16,7 @@ fi
 cd server
 PATH="$HOME/.local/bin:$PATH"  # uv lives there; shells started at boot may lack it
 # Every step below is independent: they run side by side, each with its own log, shown when all are done (about
-# 35 s on 8 cores instead of 80 s one after the other). test_server.py runs as shards, see SHARD_OF there.
+# 25 s on 8 cores instead of 80 s one after the other). test_server.py runs as shards, see SHARD_OF there.
 logs=$(mktemp -d); trap 'rm -rf "$logs"' EXIT
 step() { name=$1; shift; : >"$logs/$name.rc"; ( "$@" >"$logs/$name" 2>&1 && echo 0 >"$logs/$name.rc" ) & }  # no 0 in .rc = failed
 hooks() { for h in limits secret-guard self_update companion model_settings workers chat watch tools sysstats; do
@@ -34,7 +34,7 @@ for f in sys.argv[1:]:
 # once cut a line of agents.js in half, and live showed "ck is not defined")
 step js sh -c 'for f in static/*.js; do node --check "$f" || exit 1; done'
 step selfchecks sh -c 'uv run --quiet graph.py && uv run --quiet lint.py && uv run --quiet tasks.py && uv run --quiet external_skills.py'
-for i in 0 1 2 3 4; do step "test_server-$i" uv run --quiet test_server.py --shard $i; done
+for i in 0 1 2 3 4 5 6 7; do step "test_server-$i" uv run --quiet test_server.py --shard $i; done
 step backup_restore uv run --quiet python ../tests/backup_restore.py
 step deploy_landing python3 ../tests/deploy_landing.py
 wait
