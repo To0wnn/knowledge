@@ -228,7 +228,7 @@ $("ck-side").addEventListener("keydown", (e) => { // up and down go through the 
 });
 // Open one chat (its route), or go back from it when `meta` is empty.
 function ckShow(meta) {
-  if (!meta) return solo() ? ckCloseTab() : goBack("#/chats");
+  if (!meta) return solo() ? ckCloseTab() : goBack("#/chats", (h) => { const r = parseRoute(h); return r?.view === "chats" && !r.arg; }); // the chat list, not the chat before
   go(`#/chats/${encodeURIComponent(ckCard(meta).meta.id)}`);
 }
 // The pill over the end of a chat you scrolled up in; it also says when more came in below.
@@ -475,6 +475,7 @@ function ckItem(i) {
     for (const [d, text, title] of ckAskButtons(i).filter(([d]) => i.full !== false || d === "deny")) act(text, title, () => ckDo("/ui/api/chat/approve", { machine: i.machine, id: i.chat, ask: i.id, decision: d }));
     if (i.full === false) act("Open chat", "The request is longer than the list shows: read it whole in its chat", () => main.click());
   }
+  if (!(i.hosts || []).length && i.no_host) act("Start", `No pc can start it: ${i.no_host}`, null).disabled = true;
   for (const h of i.hosts || []) act(`Start on ${h.label}`, "Start a worker for this task there now",
     () => ckDo("/ui/api/machines/action", { machine: h.machine, action: "start_worker", args: { project: i.project, id: i.id } }));
   if (i.kind === "worker") act("Follow", "Watch this worker, steer it or take it over", () => ckFollow(i));
@@ -504,10 +505,18 @@ function ckItem(i) {
       later.push([text, "Take it off the list for a while", () => ckDo("/ui/api/board/dismiss", { key: i.key, sig: i.sig, until: Math.round(until()) })]);
     later.push(["Dismiss", "Take it off the list until it changes again", () => ckDo("/ui/api/board/dismiss", { key: i.key, sig: i.sig })]);
   }
-  if (i.kind === "task" && !i.result && i.can_cancel) later.push(["Assign…", "Give it to another agent or person (owner@pc pins it to one pc)", () => {
-    const to = (prompt(`${i.id} goes to (Claude, Codex, Gemini or a person's name; add @<pc> to pin it):`, i.owner || "") || "").trim();
-    if (to) { const [owner, device = ""] = to.split("@"); ckDo("/ui/api/task/assign", { project: i.project, id: i.id, owner: owner.trim(), device: device.trim() }); }
-  }]);
+  if (i.kind === "task" && !i.result && i.can_cancel) // picked, never typed; a pc pin or a person: Assign… in the Tasks list
+    for (const owner of ["Claude", "Codex", "Gemini"].filter((o) => o.toLowerCase() !== (i.owner || "").split("@")[0].trim().toLowerCase()))
+      later.push([`Assign to ${owner}`, `The line names ${owner}: its worker or chat takes it (New … chat below starts one now)`,
+        () => ckDo("/ui/api/task/assign", { project: i.project, id: i.id, owner, device: "" })]);
+  if (i.kind === "task" && !i.result && i.col === "open") { // hand it over: an open chat in its project takes it ('pak <ID>'), or a new one
+    for (const c of ck.chats.filter((c) => c.project === i.project && !c.closed && !c.parent && c.online && c.rights === "act").slice(0, 5))
+      later.push([`Give to chat: ${ckTitle(c)}`.slice(0, 60), `That chat takes ${i.id} ('pak ${i.id}'): after its current turn, its line names that chat's agent`,
+        () => ckDo("/ui/api/chat/send", { machine: c.machine, id: c.id, text: `pak ${i.id}`, mode: "queue" }).then((ok) => ok && toast(`${i.id} → ${ckTitle(c)}`, false))]);
+    for (const agent of ckTaskAgents(i.project))
+      later.push([`New ${AGENT_NAME[agent] || agent} chat takes it`, `Starts a chat in a folder of ${shown(i.project)} that takes ${i.id} right away ('pak ${i.id}'); its line then names that agent`,
+        () => ckTaskChat(i.project, i.id, agent)]);
+  }
   if (i.result && me.writable?.includes(i.project) && i.line_text) later.push(["Remove (read)", "Take the result line out of its memo (its history keeps it)",
     () => ckDo("/ui/api/task/done", { path: i.path, line: i.line_text })]);
   if (i.kind === "task" && i.col === "open" && i.can_cancel) later.push(["Cancel task", "Not wanted: its requester gets it back as a result", () => {
@@ -679,7 +688,8 @@ function ckCard(meta) {
   }, { passive: true });
   // the distance to the end also changes without a scroll: an image loads, a block unfolds, the card gets another size
   const sized = new ResizeObserver(() => ckJump(card)); sized.observe(log);
-  new MutationObserver((changes) => { for (const c of changes) for (const n of c.addedNodes) if (n.nodeType === 1) sized.observe(n); }).observe(log, { childList: true });
+  const mut = new MutationObserver((changes) => { for (const c of changes) for (const n of c.addedNodes) if (n.nodeType === 1) sized.observe(n); });
+  mut.observe(log, { childList: true });
   const jump = el("div", "ck-jump"), jumpBtn = el("button", "btn small ck-jump-btn"), jumpText = el("span");
   jump.hidden = true; jumpBtn.type = "button";
   jumpBtn.append(jumpText, ckKeyEl("jump", "muted ck-jump-key", "{key}")); jump.append(jumpBtn);
@@ -723,6 +733,7 @@ function ckCard(meta) {
   const find = ckFindBar(); find.btn = findBtn;
   root.append(head, find.bar, log, jump, subbar, asks, form);
   const card = { meta: { ...meta }, x, openTab: open, root, find, name, where, git, state, log, jump, jumpText, asks, form, input, stop, send, note, picks, mark, close, tok, subbar, queueBtn, forceBtn, more, branch, filesBox: files, files: [], mode: "", pick: null, after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
+  card.sized = sized; card.mut = mut;
   findBtn.onclick = () => (find.bar.hidden ? ckFindOpen(card) : ckFindClose(card));
   open.onclick = (e) => { if (me.prefs?.grid_open === "here" && !e.ctrlKey && !e.metaKey && !e.shiftKey) { e.preventDefault(); ckShow(card.meta); } }; // Settings
   ckSendHints(card);
@@ -828,24 +839,24 @@ function ckCard(meta) {
       ckTick();
     } catch (err) { note.className = "ck-note bad"; note.textContent = err.message; }
   };
-  // right-click or long press on Archive: a small menu whose red button force archives, a second deliberate step
+  // right-click or long press on Archive: a small menu whose Force archive is a second deliberate step
   // (iOS fires no contextmenu on a long press, hence the timer); Esc or a tap elsewhere closes it (popover)
   const forceClose = (e) => {
     e?.preventDefault?.();
     if (card.meta.closed || Date.now() - (close.forcedAt || 0) < 1000) return;
     close.forcedAt = Date.now();
     document.querySelector(".ck-forcepop")?.remove();
-    const pop = el("div", "menu-list ck-forcepop"), go = el("button", "ck-force-go", "Force archive"), no = el("button", null, "Cancel");
-    pop.popover = "auto"; go.type = no.type = "button";
-    pop.append(el("p", "ck-forcepop-why", "Close now, without the agent recording this chat in the memos."), go, no);
+    const pop = el("div", "menu-list ck-forcepop"), go = el("button", "ck-force-go", "Force archive");
+    pop.popover = "auto"; pop.tabIndex = -1; go.type = "button";
+    pop.append(el("p", "ck-forcepop-why", "Close now, without the agent recording this chat in the memos."), go);
     go.onclick = () => { pop.hidePopover(); close.onclick({ force: true }); };
-    no.onclick = () => pop.hidePopover();
+    pop.onkeydown = (k) => { if (k.key === "Escape") k.stopPropagation(); }; // the popover closes itself; the chat stays open
     pop.addEventListener("toggle", (t) => { if (t.newState === "closed") pop.remove(); });
     document.body.append(pop);
     const r = close.getBoundingClientRect();
     pop.style.top = `${Math.min(r.bottom + 6, innerHeight - 160)}px`;
     pop.style.left = `${Math.max(8, Math.min(r.right - 260, innerWidth - 268))}px`;
-    pop.showPopover(); no.focus(); // the safe choice has the focus: Enter does not archive
+    pop.showPopover(); pop.focus(); // not the button: Enter does not archive
   };
   close.addEventListener("contextmenu", forceClose);
   close.addEventListener("pointerdown", (e) => { if (e.pointerType === "touch") close.hold = setTimeout(forceClose, 500); });
@@ -1056,7 +1067,11 @@ async function ckSubPoll(card) {
   card.stop.hidden = card.queueBtn.hidden = card.forceBtn.hidden = true; card.send.textContent = "Send";
   if (!card.note.classList.contains("bad")) card.note.textContent = readOnly ? "agy names this subagent's conversation once it has ended: then you can write to it here." : "Your message goes to the main agent, which passes it on to this subagent.";
 }
-function ckDrop(k) { ck.cards.delete(k); if (ck.view === k) ck.view = ""; }
+function ckDrop(k) {
+  const c = ck.cards.get(k);
+  if (c) { c.sized?.disconnect(); c.mut?.disconnect(); }
+  ck.cards.delete(k); if (ck.view === k) ck.view = "";
+}
 const CK_EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"]; // the server's EFFORTS, in order
 // The model picker: one chip under the box ("Opus · high ▾"), a panel with the models grouped by family and the chosen
 // model's effort levels. Picking a model sets its own default effort; the agent (Claude Code, Codex, agy) follows from
@@ -1556,6 +1571,43 @@ function ckUserMsg(card, text, box = el("div", "ck-msg user"), by = "") {
   box.append(text.slice(at));
   return box;
 }
+// A project path in an answer opens in Files: in backticks with a "/" (`server/app.js:12`, a folder as `docs/`), a
+// Markdown link to it (relative, or file:///C:/repo/x as agy writes them), or an absolute path inside the chat's folder.
+// The file opens beside its folder, Back goes to the folder. Relative paths count from the chat's linked folder (a
+// worktree chat shows the main checkout's copy there). `app.js` alone stays text: it says too little about where it is.
+const CK_PATH = /^(?:\.\/)?([\w.@+-]+(?:\/[\w.@+-]+)+\/?|[\w.@+-]+\/)(?::\d+(?:[:-]\d+)?)?$/;
+function ckFileUrl(m, path) {
+  const root = m.folder || "", win = /^[A-Za-z]:|^\\\\/.test(root), sep = win ? "\\" : "/", top = root.replace(/[\\/]+$/, "");
+  path = path.replace(/:\d+(?:[:-]\d+)?$/, ""); // a line number
+  if (win) path = path.replace(/\//g, "\\");
+  const abs = win ? /^[A-Za-z]:\\|^\\\\/.test(path) : path.startsWith("/"), head = path.slice(0, top.length + 1);
+  if (abs && (win ? head.toLowerCase() !== (top + sep).toLowerCase() : head !== top + sep)) return ""; // outside the chat's folder
+  const rel = abs ? path.slice(top.length + 1) : path.replace(/^\.[\\/]/, ""), parts = rel.split(/[\\/]/).filter(Boolean);
+  const folder = /[\\/]$/.test(rel);
+  if (!parts.length || parts.includes("..") || (!folder && !/\.\w+$/.test(parts[parts.length - 1]))) return ""; // origin/main: a branch
+  const full = [top, ...parts].join(sep);
+  return folder ? filesUrl(m.machine, full) : filesUrl(m.machine, [top, ...parts.slice(0, -1)].join(sep), full);
+}
+function ckFileLinks(m, box) {
+  if (!m.folder || !m.machine || agentsOff()) return;
+  const link = (a, url, path) => { a.href = url; a.classList.add("ck-file"); a.removeAttribute("target"); a.title = `Open in Files: ${path}`; };
+  for (const a of box.querySelectorAll("a")) {
+    const href = a.dataset.file || a.getAttribute("href") || "";
+    if (!a.dataset.file && (!href || /^([a-z][\w+.-]*:|#|\/\/)/i.test(href))) continue; // a web link, an anchor
+    let path = href;
+    try { path = a.dataset.file ? decodeURIComponent(new URL(href).pathname).replace(/^\/(?=[A-Za-z]:)/, "") : decodeURIComponent(href); } catch { continue; }
+    const url = ckFileUrl(m, path);
+    if (url) link(a, url, path); else a.removeAttribute("href"); // not in the chat's folder: text, not a link that leads nowhere
+  }
+  for (const code of box.querySelectorAll("code")) {
+    if (code.closest("pre, a")) continue;
+    const t = code.textContent.trim(), rel = CK_PATH.exec(t)?.[1];
+    const url = /^(\/|[A-Za-z]:[\\/])/.test(t) ? ckFileUrl(m, t) : rel ? ckFileUrl(m, rel) : "";
+    if (!url) continue;
+    const a = el("a"); link(a, url, t);
+    code.replaceWith(a); a.append(code);
+  }
+}
 function ckLine(card, e) {
   if (e.kind === "tool" && e.text.includes("⟦file:")) return ckUserMsg(card, e.text, el("div", "ck-line tool"));
   const line = el("div", `ck-line ${e.kind}`, e.text);
@@ -1609,7 +1661,7 @@ function ckEvents(card, res) {
       card.log.append(e.kind === "user" ? ckUserMsg(card, e.text, undefined, e.by) : ckLine(card, e));
     }
   }
-  for (const msg of dirty) if (selecting(msg)) card.held = msg; else msg.innerHTML = renderMd(msg.dataset.raw.replace(/^\n+/, "")); // text being selected waits for the next poll
+  for (const msg of dirty) if (selecting(msg)) card.held = msg; else { msg.innerHTML = renderMd(msg.dataset.raw.replace(/^\n+/, "")); ckFileLinks(card.meta, msg); } // text being selected waits for the next poll
   if (res.events.length) {
     const hasUser = res.events.some((e) => e.kind === "user");
     if (near || hasUser) ckScrollBottom(card, hasUser);
@@ -1872,6 +1924,23 @@ function ckAsks(card, asks, skew) {
   }));
 }
 
+// A task to a new chat in one click: a pc (yours, or shared to use) online with that agent and a folder of the project.
+function ckTaskPcs(project, agent, token = "") {
+  return [...ck.machines, ...(ck.shared || [])].filter((m) => m.online && !m.old && (m.companion?.agents || []).includes(agent)
+    && (!token || (m.tokens || []).includes(token))).flatMap((m) => ckLinked(m).filter((f) => f.project === project).map((f) => ({ m, f })));
+}
+const ckTaskAgents = (project) => ["claude", "codex", "agy"].filter((a) => ckTaskPcs(project, a).length);
+async function ckTaskChat(project, id, agent, token = "") { // the chat says 'pak <ID>': the plugin takes it there, the line follows
+  if (!ck.machines.length) await ckSummary().catch(() => {});
+  const hit = ckTaskPcs(project, agent, token).sort((a, b) => b.m.own - a.m.own)[0];
+  if (!hit) return toast(`No pc${token ? ` ${token}` : ""} online with ${AGENT_NAME[agent] || agent} and a folder of ${shown(project)} (Machines, Folders)`);
+  try {
+    const res = await api("/ui/api/chats", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: hit.m.id, agent, folder: hit.f.path }) });
+    await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: hit.m.id, id: res.chat.id, text: `pak ${id}` }) });
+    toast(`${id} → new ${AGENT_NAME[agent] || agent} chat on ${hit.m.label}`, false);
+    ck.summaryAt = 0; go(`#/chats/${encodeURIComponent(res.chat.id)}`);
+  } catch (e) { toast(e.message); }
+}
 // New chat: a pc of your own with a companion, an agent installed there, a folder linked there.
 function ckNewChat(machine = "") {
   if (machine || !bdOn()) { ck.draftFor = machine; return go("#/chats/new"); } // a draft in the chat pane (ckDraft)
