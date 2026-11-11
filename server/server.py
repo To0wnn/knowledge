@@ -3356,8 +3356,11 @@ def read_json(path: Path, default):
     hit = _json_cache.get(path)
     # the inode too: two writes of one size within a clock tick (4 ms) have the same time, and the later one would never be read
     if not hit or hit[:3] != (st.st_mtime_ns, st.st_size, st.st_ino):
-        hit = (st.st_mtime_ns, st.st_size, st.st_ino, json.loads(path.read_text()))
-        _json_cache[path] = hit
+        try:
+            hit = (st.st_mtime_ns, st.st_size, st.st_ino, json.loads(path.read_text()))
+            _json_cache[path] = hit
+        except (json.JSONDecodeError, ValueError):
+            return hit[3] if hit else default
     return hit[3]
 
 
