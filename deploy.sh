@@ -18,19 +18,49 @@ FORGE=$(set -a; . "$ENVF"; printf %s "$KNOWLEDGE_FORGE_SSH")
 if ! has --fix-main; then
   if command -v gh >/dev/null 2>&1; then
     red_of() { gh run list --workflow "$1" --branch main --limit 15 --json status,conclusion,headSha,displayTitle --jq \
-      'map(select(.status == "completed" and .conclusion != "cancelled" and .conclusion != "skipped"))[0] | select(.conclusion != "success") | "\(.headSha[0:7]) (\(.conclusion)) \(.displayTitle)"' 2>/dev/null; }
+      'map(select(.status == "completed" and .conclusion != "cancelled" and .conclusion != "skipped"))[0] // empty | select(.conclusion != "success") | "\(.headSha[0:7]) (\(.conclusion)) \(.displayTitle)"' 2>/dev/null; }
+    red_id() { gh run list --workflow "$1" --branch main --limit 15 --json status,conclusion,databaseId --jq \
+      'map(select(.status == "completed" and .conclusion != "cancelled" and .conclusion != "skipped"))[0] // empty | select(.conclusion != "success") | .databaseId' 2>/dev/null; }
+    flaky() {  # loud, so the flaky test still gets fixed: on stderr and in the Matrix room of local.env (when set up)
+      msg="knowledge deploy: CI $1 on main failed at ${2%% *} and passed when its failed jobs ran again: a flaky test, fix it ($(gh run view "$3" --json url --jq .url 2>/dev/null))"
+      echo "deploy: warning: $msg" >&2
+      mx=$(set -a; . "$ENVF"; printf '%s %s' "${KNOWLEDGE_MATRIX_URL:-}" "${KNOWLEDGE_MATRIX_ROOM:-}")
+      if [ -z "${mx% *}" ] || [ -z "${mx#* }" ] || ! command -v secret >/dev/null 2>&1; then
+        echo "deploy: warning: no Matrix set up here (local.env, secret): only told on this screen" >&2
+      else curl -fsS -o /dev/null -X PUT -H "Authorization: Bearer $(secret MATRIX_BOT_TOKEN)" -H "Content-Type: application/json" \
+          --data "$(jq -n --arg b "$msg" '{msgtype: "m.text", body: $b}')" \
+          "${mx% *}/_matrix/client/v3/rooms/$(jq -rn --arg r "${mx#* }" '$r|@uri')/send/m.room.message/deploy-flaky-$(date +%s%N)" \
+          || echo "deploy: warning: could not tell Matrix about the flaky test" >&2
+      fi
+    }
     for w in check.yml clients.yml; do
       red=$(red_of "$w") \
         || { echo "warning: could not ask GitHub whether main is green ($w)" >&2; continue; }
       # Red, but a newer run on main is still going (often the fix, or a flaky test run again): wait for it rather than
-      # refuse; on 11 Nov 2026 every deploy was refused for nearly 2 hours while the fixing run was already in CI.
-      run=$(gh run list --workflow "$w" --branch main --limit 5 --json status,databaseId,headSha --jq \
-        'map(select(.status != "completed"))[0] // empty | "\(.databaseId) \(.headSha[0:7])"' 2>/dev/null || true)
-      if [ -n "$red" ] && [ -n "$run" ]; then
-        echo "deploy: CI $w is red on main since ${red%% *}; waiting for the newer run on ${run#* } (up to ${DEPLOY_CI_WAIT:-1800}s)" >&2
+      # refuse; on 11 Nov 2026 every deploy was refused for nearly 2 hours while the fixing run was already in CI. Looked
+      # at again every 30 s, not one run waited for: GitHub cancels a queued run on main when a newer push comes.
+      running() { gh run list --workflow "$w" --branch main --limit 5 --json status,headSha --jq \
+        'map(select(.status != "completed"))[0] // empty | .headSha[0:7]' 2>/dev/null || true; }
+      t=0
+      while [ -n "$red" ] && [ "$t" -lt "${DEPLOY_CI_WAIT:-1800}" ] && run=$(running) && [ -n "$run" ]; do
+        [ "$t" -gt 0 ] || echo "deploy: CI $w is red on main since ${red%% *}; waiting for the newer run on $run (up to ${DEPLOY_CI_WAIT:-1800}s)" >&2
+        sleep "${DEPLOY_CI_POLL:-30}"; t=$((t + 30)); red=$(red_of "$w") || red=
+      done
+      [ "$t" = 0 ] || red=$(red_of "$w") || red=  # the last run may have finished between the two looks
+      # Red and nothing newer going: its failed jobs run once more (GitHub's own re-run, first attempt only). Green then
+      # is a flaky test, which must not stop every deploy until someone fixes it, so it is told loudly and the deploy
+      # goes on; red again is a broken main and refuses as before.
+      id=; [ -z "$red" ] || id=$(red_id "$w") || id=
+      if [ -n "$id" ] && [ "$(gh api "repos/{owner}/{repo}/actions/runs/$id" --jq .run_attempt 2>/dev/null)" = 1 ] \
+          && gh run rerun "$id" --failed >/dev/null 2>&1; then
+        echo "deploy: CI $w is red on main since ${red%% *}; re-running its failed jobs once to tell a flaky test from a broken main" >&2
+        t=0  # the re-run first has to show as going, then finish
+        while [ "$(gh run view "$id" --json status --jq .status 2>/dev/null)" = completed ] && [ "$t" -lt 60 ]; do sleep 2; t=$((t + 2)); done
         t=0
-        until [ "$(gh run view "${run%% *}" --json status --jq .status 2>/dev/null)" = completed ] || [ "$t" -ge "${DEPLOY_CI_WAIT:-1800}" ]; do sleep 30; t=$((t + 30)); done
-        red=$(red_of "$w") || red=
+        while [ "$(gh run view "$id" --json status --jq .status 2>/dev/null)" != completed ] && [ "$t" -lt "${DEPLOY_CI_WAIT:-1800}" ]; do
+          sleep "${DEPLOY_CI_POLL:-10}"; t=$((t + 10)); done
+        was=$red; red=$(red_of "$w") || red=
+        [ -n "$red" ] || flaky "$w" "$was" "$id"
       fi
       [ -z "$red" ] || { echo "deploy refused: CI $w is red on main since $red; fix that first (gh run list --workflow $w --branch main), and deploy the fix with --fix-main" >&2; exit 1; }
     done

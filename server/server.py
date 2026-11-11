@@ -2328,6 +2328,9 @@ def approval_hint(rel: str, before: str, after: str) -> str:
         return ""
     mine = [t for t in project_tasks(project)[0] if t["id"] in new and t["path"] == rel]
     out = "".join(f"\nTask {t['id']} waits for the owner's approval in the Tasks tab ({t['waiting_reason']})." for t in mine if t["needs_approval"])
+    if (me := device.get().get("name", "")) and (pin := [t["id"] for t in mine if t["needs_approval"] and not t["trusted"] and not t["device"]]):
+        out += (f"\nIf {', '.join(pin)} is for this pc, pin it here instead: '[<Owner>@{me}, <ID>]' starts without approval, "
+                "and only on this pc.")
     if not device.get().get("worker") and (free := [t["id"] for t in mine if not t["claimed"]]):
         # the duplicate work of 8 Nov 2026: a chat wrote a task, did it itself, and a worker started the same task
         out += (f"\nNot claimed: {', '.join(free)}. If you do it in this session yourself, claim it now: add "
@@ -2430,6 +2433,8 @@ def project_tasks(project: str) -> tuple[list[dict], list[dict]]:
         after = t["start"][6:].strip() if start.startswith("after ") and start != "after approval" else ""
         when = kb_lint.latest_date(t["start"]) if not after and start not in ("now", "after approval") else None
         trusted = (t["legacy"] and not rec) or bool(by) and trusted_writer(project, by, _tokens=tokens, _writers=writers, _owner=owner)  # unknown legacy: as before
+        # pinned to its writer's own device token: it only steers the pc that wrote it, which that writer steers anyway
+        trusted = trusted or bool(by) and by in tokens and t["device"].lower() == by.lower()
         t["trusted"] = trusted
         why = [r for r, waits in (
             ("waits for approval", start == "after approval" and not approved),
@@ -3144,13 +3149,15 @@ def guest_device(dev: dict) -> dict:
 
 def shared_row(mid: str, m: dict, shared: dict, now: float) -> dict:
     """The Machines row of someone else's pc shared with this person: only what the share needs (online, the agents and
-    folders of the projects they may use), never the owner's sessions, errors, workers or other folders."""
+    folders of the projects they may use, the workers of those projects for their Review cards), never the owner's
+    sessions, errors, other workers or other folders."""
     comp, use = m.get("companion") or {}, {p for p, x in shared.items() if x in USES}
     linked = [f for f in (comp.get("folders") or {}).get("linked", []) if f.get("project") in use]
     agents = sorted(comp.get("agents") or {}) if use else []
     return {"id": mid, "label": m.get("label", mid), "at": m.get("at", 0), "online": now - m.get("at", 0) < ONLINE, "tokens": [],
             "own": False, "mine": False, "shared": shared, "agents": {},
-            "companion": {"version": comp.get("version"), "live": comp.get("live"), "guests": comp.get("guests"), "agents": agents,
+            "workers": [w for w in comp.get("workers", []) if w.get("project") in use],
+            "companion": {"version": comp.get("version"), "token": comp.get("token"), "live": comp.get("live"), "guests": comp.get("guests"), "agents": agents,
                           "folders": {"linked": linked},
                           "models": {a: v.get("models", []) for a, v in (comp.get("agents") or {}).items() if a in agents},
                           "current": {}} if comp else None,
@@ -3356,8 +3363,11 @@ def read_json(path: Path, default):
     hit = _json_cache.get(path)
     # the inode too: two writes of one size within a clock tick (4 ms) have the same time, and the later one would never be read
     if not hit or hit[:3] != (st.st_mtime_ns, st.st_size, st.st_ino):
-        hit = (st.st_mtime_ns, st.st_size, st.st_ino, json.loads(path.read_text()))
-        _json_cache[path] = hit
+        try:
+            hit = (st.st_mtime_ns, st.st_size, st.st_ino, json.loads(path.read_text()))
+            _json_cache[path] = hit
+        except (json.JSONDecodeError, ValueError):
+            return hit[3] if hit else default
     return hit[3]
 
 
@@ -3534,7 +3544,7 @@ NO_ACCESS = """<!doctype html><html lang="en"><meta charset="utf-8"><meta name="
 # A hard NFS mount makes every read wait until the file server is back (15 minutes on 5 Nov 2026, with /health green).
 # One thread does the waiting; requests look at when it last got an answer and fail at once instead of piling up.
 STORAGE_TIMEOUT = 10  # seconds
-STORAGE_EVERY = 2
+STORAGE_EVERY = float(os.environ.get("KNOWLEDGE_STORAGE_EVERY", 2))  # seconds; the tests use less
 _storage = {"ok": time.monotonic(), "down": False}
 
 
@@ -4978,7 +4988,7 @@ def system_state() -> dict:
             *([{"name": "Weekly lint report", "what": "VM timer, Monday 08:00, posts new findings to Matrix", "last": used("vm-lint-report"), "detail": "last call of the vm-lint-report token"}] if used("vm-lint-report") else []),
             *([{"name": "Session logs", "what": "SessionEnd/PreCompact hooks of Claude Code, Stop of agy, SessionEnd of Codex", "last": used("vm-sessions"), "detail": "last call of the vm-sessions token (VM)"}] if used("vm-sessions") else []),
             *([{"name": "Duplicate check", "what": f"judges similar memo pairs with a reranker every {DUPES_EVERY // 60} min (lint possible_duplicate)",
-                "last": BACKGROUND.get("duplicates", {}).get("at"),
+                "last": BACKGROUND.get("duplicates", {}).get("at"), "failed": "error" in BACKGROUND.get("duplicates", {}),
                 "detail": BACKGROUND["duplicates"].get("error") or BACKGROUND["duplicates"]["detail"] if "duplicates" in BACKGROUND else f"first run {DUPES_DELAY // 60} min after the start"}]
               if kb_rerank.MODEL_DIR else []),
             {"name": "History", "what": f"keeps up to {HISTORY_KEEP} versions per file", "last": None,
@@ -4986,8 +4996,12 @@ def system_state() -> dict:
             {"name": "External skills", "what": f"compares each skill from GitHub with its source every {EXTERNAL_EVERY // 86400} days",
              "last": BACKGROUND["external"]["at"] if "external" in BACKGROUND else None,
              "detail": (BACKGROUND["external"].get("error") or BACKGROUND["external"]["detail"]) if "external" in BACKGROUND else "not run since this start"},
+            # "last" is when a pass started (the tests wait for a pass after their change instead of a fixed time)
+            *([{"name": "Task check", "what": "stalled woken tasks, tasks nobody takes, worker leases (Matrix notice)",
+                "last": BACKGROUND["tasks"]["at"], "failed": "error" in BACKGROUND["tasks"], "detail": BACKGROUND["tasks"].get("error") or BACKGROUND["tasks"]["detail"]}]
+              if "tasks" in BACKGROUND else []),
             *([{"name": "Needs you", "what": "Matrix message per new 'Needs you' item of an admin (Settings: needs_per_hour)",
-                "last": BACKGROUND["needs"]["at"], "detail": BACKGROUND["needs"].get("error") or BACKGROUND["needs"]["detail"]}]
+                "last": BACKGROUND["needs"]["at"], "failed": "error" in BACKGROUND["needs"], "detail": BACKGROUND["needs"].get("error") or BACKGROUND["needs"]["detail"]}]
               if "needs" in BACKGROUND else []),
             *([{"name": "Settings", "what": "settings.json", "last": BACKGROUND["settings"]["at"], "detail": BACKGROUND["settings"]["error"]}] if "settings" in BACKGROUND else []),
             *([{"name": "Matrix", "what": "tells the admin about projects and tokens people made", "last": BACKGROUND["matrix"]["at"],
@@ -6262,10 +6276,17 @@ async def ui_machine_action(request: Request):
     # an admin may update the knowledge plugin on anyone's pc, nothing else there, and only while its token allows
     # remote control (8 Nov 2026): the pc's own settings, agents and folders stay its owner's
     admin_update = action == "update_plugin" and bool(dev.get("admin")) and bool(row) and not row["own"]
+    # a member of a project shared on this pc for use merges that project's worker branches there, as its owner may
+    share = read_json(SHARES_FILE, {}).get(mid) or {}
+    shared_merge = action == "merge" and bool(row) and not row["own"] and not args.get("chat") \
+        and (row.get("shared") or {}).get(args.get("project")) in USES
+    by_owner = share_tokens(mid, read_json(MACHINES_FILE, {}).get(mid, {}), tokens, share.get("by", "")) if shared_merge else []
     steer = lambda n: n in tokens and (own_token(tokens[n], dev) or admin_update and agents_on(tokens[n]))
     if admin_update and not any(steer(n) for n in row["tokens"]):
         return JSONResponse({"error": REMOTE_OFF}, status_code=403)
-    if not row or not (row["own"] or admin_update) or row.get("old"):
+    if shared_merge and not by_owner:
+        return JSONResponse({"error": REMOTE_OFF}, status_code=403)
+    if not row or not (row["own"] or admin_update or shared_merge) or row.get("old"):
         return JSONResponse({"error": REMOTE_OFF if row and row["mine"] and not row.get("old")
                              else "not a machine of your own tokens (with plugin 0.15.0 or newer)"}, status_code=403)
     if action == "restart":  # a worker that ended: start it again now, past the companion's RESTART_AFTER hold
@@ -6291,7 +6312,7 @@ async def ui_machine_action(request: Request):
         tf.parent.mkdir(parents=True, exist_ok=True)
         await asyncio.to_thread(update_state, tf, lambda d: d.__setitem__(key, pending))
     item = {"id": secrets.token_hex(6), "action": action, "args": args, "by": dev.get("user", ""), "at": time.time(),
-            "status": "waiting", "tokens": [n for n in row["tokens"] if steer(n)]}
+            "status": "waiting", "tokens": by_owner or [n for n in row["tokens"] if steer(n)]}  # a guest's row lists no tokens
     await asyncio.to_thread(update_state, MACHINE_ACTIONS, lambda d: d.__setitem__(mid, (d.get(mid, []) + [item])[-50:]))
     wake_machine(mid)
     audit("machine-action", f"{mid} {action} {json.dumps(args)}")
@@ -7204,36 +7225,41 @@ def chat_review_item(r: dict, c: dict) -> dict | None:
 
 
 def review_items(rows: list[dict], tasks: list[dict]) -> list[dict]:
-    """A Review card (Needs you) per finished worker on this person's own pcs whose result line ([<requester>,
+    """A Review card (Needs you) per finished worker on this person's own pcs (and on a pc shared with them for use in
+    that worker's project) whose result line ([<requester>,
     <ID>-done]) names its branch: what the pc's companion reports of the branch (commits ahead of the branch the
     worktree was made from, changed files, newest commit) plus the worker's own done/left and what it said of tests.
     The server never runs anything of it; Merge goes to that pc's companion."""
     done = {(t["project"], t["id"].removesuffix("-done")): t for t in tasks if t["done"]}
     out = {}
     for r in rows:
-        for a, ag in r["agents"].items():
-            for w in ag.get("workers", []):
-                rv, base = w.get("review"), REVIEW_BASE.sub("", w.get("id") or "")
-                t = done.get((w.get("project"), base))
-                if not rv or not rv.get("ahead") or w.get("status") in ("running", "merged") or not t or not w.get("branch") \
-                        or not re.search(rf"\bbranch\s+{re.escape(w['branch'])}(?![\w/.-])", t["text"]):
-                    continue
-                key = f"review:{r['id']}/{w['project']}/{base}"
-                if key in out and (out[key]["at"] or 0) >= (w.get("ended") or 0):  # a hand-over's sessions share the branch: the newest
-                    continue
-                part = lambda k: (m.group(1).strip() if (m := re.search(rf"\b{k}:\s*(.*?)\s*(?:;\s*(?:done|left):|$)", t["text"], re.I | re.S)) else "")
-                tests = TESTS_SAID.search(part("done") or t["text"])
-                out[key] = {"machine": r["id"], "label": r["label"], "online": r["online"], "kind": "review", "col": "needs", "id": w["id"], "task": base,
-                            "agent": a, "project": w["project"], "key": key, "path": t["path"], "done_line": t["line"],
-                            "sig": hashlib.sha256(f"{t['line']}|{rv['commit']}|{rv['ahead']}".encode()).hexdigest()[:16],
-                            "title": f"Review {base} · {t['text'][:100]}", "at": w.get("ended") or 0, "owner": t["owner"],
-                            "line": f"{rv['ahead']} commit{'s' * (rv['ahead'] != 1)} on {w['branch']} for {rv['into']}, {rv['nfiles']} file{'s' * (rv['nfiles'] != 1)} changed",
-                            "branch": w["branch"], "into": rv["into"], "commits": rv["ahead"], "files": rv["files"], "nfiles": rv["nfiles"],
-                            "commit": rv["commit"], "done": part("done")[:300], "left": part("left")[:300],
-                            "tests": tests.group(0).strip()[:200] if tests else "", "git": w.get("git"),
-                            "blocked": rv.get("blocked", ""), "can_merge": r["online"] and not rv.get("blocked"),
-                            # the -fix line goes to this pc only: the branch is here (the token its companion claims with)
-                            "pin": (r.get("companion") or {}).get("token") if (r.get("companion") or {}).get("token") in r["tokens"] else r["tokens"][0]}
+        # a pc shared for use in a project: its members may merge that project's work there, as its owner may
+        use = {p for p, x in (r.get("shared") or {}).items() if x in USES}
+        found = [(a, w) for a, ag in r["agents"].items() for w in ag.get("workers", [])] + [(w.get("agent"), w) for w in r.get("workers", [])]
+        for a, w in found:
+            if not r["own"] and w.get("project") not in use:
+                continue
+            rv, base = w.get("review"), REVIEW_BASE.sub("", w.get("id") or "")
+            t = done.get((w.get("project"), base))
+            if not rv or not rv.get("ahead") or w.get("status") in ("running", "merged") or not t or not w.get("branch") \
+                    or not re.search(rf"\bbranch\s+{re.escape(w['branch'])}(?![\w/.-])", t["text"]):
+                continue
+            key = f"review:{r['id']}/{w['project']}/{base}"
+            if key in out and (out[key]["at"] or 0) >= (w.get("ended") or 0):  # a hand-over's sessions share the branch: the newest
+                continue
+            part = lambda k: (m.group(1).strip() if (m := re.search(rf"\b{k}:\s*(.*?)\s*(?:;\s*(?:done|left):|$)", t["text"], re.I | re.S)) else "")
+            tests = TESTS_SAID.search(part("done") or t["text"])
+            out[key] = {"machine": r["id"], "label": r["label"], "online": r["online"], "kind": "review", "col": "needs", "id": w["id"], "task": base,
+                        "agent": a, "project": w["project"], "key": key, "path": t["path"], "done_line": t["line"],
+                        "sig": hashlib.sha256(f"{t['line']}|{rv['commit']}|{rv['ahead']}".encode()).hexdigest()[:16],
+                        "title": f"Review {base} · {t['text'][:100]}", "at": w.get("ended") or 0, "owner": t["owner"],
+                        "line": f"{rv['ahead']} commit{'s' * (rv['ahead'] != 1)} on {w['branch']} for {rv['into']}, {rv['nfiles']} file{'s' * (rv['nfiles'] != 1)} changed",
+                        "branch": w["branch"], "into": rv["into"], "commits": rv["ahead"], "files": rv["files"], "nfiles": rv["nfiles"],
+                        "commit": rv["commit"], "done": part("done")[:300], "left": part("left")[:300],
+                        "tests": tests.group(0).strip()[:200] if tests else "", "git": w.get("git"),
+                        "blocked": rv.get("blocked", ""), "can_merge": r["online"] and not rv.get("blocked"),
+                        # the -fix line goes to this pc only: the branch is here (the token its companion claims with)
+                        "pin": tok if (tok := (r.get("companion") or {}).get("token")) in r["tokens"] or not r["tokens"] else r["tokens"][0]}
     return list(out.values())
 
 

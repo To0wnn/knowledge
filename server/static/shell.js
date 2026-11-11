@@ -36,8 +36,9 @@ function go(hash, replace = false) {
   if (replace) history.replaceState(history.state, "", hash); else pushHash(hash);
   applyRoute();
 }
-// Back inside the app (a phone's back button does the same); the fallback when this page was the first.
-function goBack(fallback) { if (history.state?.n > 0) history.back(); else go(fallback, true); }
+// The Back arrow goes up to `up` (a chat to the chat list, a file to its folder), never to whatever came before: the
+// browser's own Back when the entry before is that page (`ok` also accepts another URL of it), else a step to it.
+function goBack(up, ok = (h) => h === up) { if (history.state?.n > 0 && ok(history.state.from || "")) history.back(); else go(up); }
 
 // Where you were per view (its last route, and how far its lists were scrolled), for this tab: the sidebar goes back
 // there, not to the view's start. Clicking the view you are on goes to its start.
@@ -108,6 +109,7 @@ function applyRoute() {
   if (r.view === "tasks") viewLoad("tasks", "Tasks", () => loadTasks(true));
   // Machines: Pcs (the comparison) or Folders (per project); one load, two drawings of it
   // Files (#/files) is the same view's third drawing, with its own place in the sidebar
+  if (r.view !== "files") fp.audio.pause(); // the player shows in Files only: nothing plays out of sight
   machinesMode = r.view === "files" ? "files" : r.view === "machines" && r.q.get("view") === "folders" ? "folders" : "pcs";
   for (const b of $("machines-mode").querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.mode === machinesMode));
   if (r.view === "files" && !changed && machinesRes) drawMachines(); // a step inside Files: the pc list stays
@@ -168,7 +170,8 @@ function paintHead() {
   if (phoneTabs().includes(r.view)) $("more-btn").removeAttribute("aria-current"); else $("more-btn").setAttribute("aria-current", "page");
 }
 $("back").onclick = () => (shellRoute.view === "chats" && ck.view ? ckShow(null) : shellRoute.view === "files" ? (!filesDirty() || confirm("Leave this file? Your unsaved edits are lost.")) && goBack(filesUp())
-  : goBack(shellRoute.view === "notes" ? "#/notes" : startRoute()));
+  : shellRoute.view === "notes" ? goBack("#/notes", (h) => { const r = parseRoute(h); return r?.view === "notes" && !r.arg; }) // the list, or the search you came from
+  : goBack(startRoute()));
 
 // The Agents views follow the one project picker (sidebar, More sheet; "" = all projects); the Needs-you badge counts all.
 function setAgentProject(p) {

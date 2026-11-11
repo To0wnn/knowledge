@@ -35,7 +35,9 @@ The companion that starts workers is described in [companion.md](companion.md); 
   (`open tot` also works). A new line without `from`/`start` is refused at write time; older lines keep working as
   "start now" and show as legacy. The server records who added each line; a task starts by itself only when its start
   condition is met and its writer is trusted (per project on the admin page; by default the project's owner and their
-  tokens, admins and the admins' own devices), otherwise the owner or an admin approves it in the Tasks tab. Only tasks
+  tokens, admins and the admins' own devices; any writer for a line pinned to its own device token,
+  `[<Owner>@<that token>, <ID>]`, since it steers only the pc that wrote it), otherwise the owner or an admin approves
+  it in the Tasks tab. A write that adds a line that waits for approval says so, and suggests that pin. Only tasks
   that may start reach an agent as "start now" (`/tasks`, the wake, `GET /tasks/ready`); the others are listed with the
   reason. One task is started on one machine only: the first device to take it holds a 30-minute lease
   (`state/task_leases.json`). `POST /tasks/woken` takes the lease (200 `{"lease"}`, or 409 `{"held_by"}` when another
@@ -90,7 +92,9 @@ The companion that starts workers is described in [companion.md](companion.md); 
   but left its task open (not claimed, not handed back) counts as failed: an error in the activity log and the
   stalled lane, plus the server's idle notice. Its prompt holds the task line and the rules: claim it, commit
   on the branch, never merge or push, hand back with `[<requester>, <ID>-done]: <result>; branch <name>; done: ...;
-  left: ...` (the server refuses a worker's hand-back without branch, done and left). Every worker is a new session; a
+  left: ...` (the server refuses a worker's hand-back without branch, done and left). A worker that cannot start yet
+  (a device it needs is offline) sets the line's `start` to tomorrow's date with the reason and ends: it then counts as
+  finished, not failed, and the task wakes again on that date. Every worker is a new session; a
   hand-over `<ID>-cont` goes on in the same worktree and branch, and the branch, the memo and the last hand-over line
   are all it knows. Workers are off on a new pc ("Workers allowed" in the companion's settings), at most one per
   agent unless its maximum says more, one while its usage limit is unknown, none while a Wolf game session runs (its
@@ -100,9 +104,11 @@ The companion that starts workers is described in [companion.md](companion.md); 
   renews the task's lease, so such a task shows as startable again (and gets the idle notice) instead of staying stuck. The companion knows a worker by its pid and that process's start time,
   so after a reboot a recorded worker counts as ended and a stop never hits a reused pid. A worker records the branch its
   worktree was made from (`base_branch`). When it ended and its result line `[<requester>, <ID>-done]` names its branch,
-  the Inbox shows a **Review** card under Needs you (`kind: review`): commits ahead of that branch, changed files, the
+  the Inbox shows a **Review** card under Needs you (`kind: review`) to that pc's owner and to whom the pc is shared
+  with for use in that project (Share "use" or "yolo"; not "view", and an admin's view of the pc gives none): commits ahead of that branch, changed files, the
   newest commit, the worker's done/left and the clause of its done text about tests (the server runs nothing).
-  **Merge** is the machine action `merge` (owner only): in the main checkout `git merge --no-ff -m "Merge task/<ID>"`
+  **Merge** is the machine action `merge` (the owner, or a member it is shared with for use in that project: only
+  this action, sent to the companion under the owner's token): in the main checkout `git merge --no-ff -m "Merge task/<ID>"`
   without hooks, fsmonitor or signing, only when that checkout is on that branch, has no uncommitted changes and no
   merge, cherry-pick, revert or rebase of its own going on, and no file the branch adds is already on disk (an ignored
   `.env` would be replaced). Never when the branch changes `.gitattributes`, `.gitmodules` or `.lfsconfig` or
