@@ -10,7 +10,8 @@ described in full on the linked page.
   through a reverse proxy with forward auth and a shared secret. Use HTTPS for anything beyond one machine: over plain
   HTTP the password and tokens cross the network readable. [server.md](server.md)
 - **Sharing a pc.** Only a pc's owner shares it, per project and per member: view (its chats of that project, read
-  only), use (also chats of their own there, every tool call asked) or use with YOLO (the pc's own YOLO switch counts).
+  only), use (also chats of their own there, every tool call asked, and Merge of that project's finished worker
+  branches there) or use with YOLO (the pc's own YOLO switch counts).
   A guest's chat runs as the owner (the guest approves its tool calls: give use only to someone you would give a
   shell), in a worktree of its own, with the owner's token narrowed to that project, and stops at the next poll once the share or the membership ends. [chats.md](chats.md#agents)
 - **Who may start a task.** A task line starts by itself only when its writer is trusted for that project; otherwise

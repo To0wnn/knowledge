@@ -3149,13 +3149,15 @@ def guest_device(dev: dict) -> dict:
 
 def shared_row(mid: str, m: dict, shared: dict, now: float) -> dict:
     """The Machines row of someone else's pc shared with this person: only what the share needs (online, the agents and
-    folders of the projects they may use), never the owner's sessions, errors, workers or other folders."""
+    folders of the projects they may use, the workers of those projects for their Review cards), never the owner's
+    sessions, errors, other workers or other folders."""
     comp, use = m.get("companion") or {}, {p for p, x in shared.items() if x in USES}
     linked = [f for f in (comp.get("folders") or {}).get("linked", []) if f.get("project") in use]
     agents = sorted(comp.get("agents") or {}) if use else []
     return {"id": mid, "label": m.get("label", mid), "at": m.get("at", 0), "online": now - m.get("at", 0) < ONLINE, "tokens": [],
             "own": False, "mine": False, "shared": shared, "agents": {},
-            "companion": {"version": comp.get("version"), "live": comp.get("live"), "guests": comp.get("guests"), "agents": agents,
+            "workers": [w for w in comp.get("workers", []) if w.get("project") in use],
+            "companion": {"version": comp.get("version"), "token": comp.get("token"), "live": comp.get("live"), "guests": comp.get("guests"), "agents": agents,
                           "folders": {"linked": linked},
                           "models": {a: v.get("models", []) for a, v in (comp.get("agents") or {}).items() if a in agents},
                           "current": {}} if comp else None,
@@ -6274,10 +6276,17 @@ async def ui_machine_action(request: Request):
     # an admin may update the knowledge plugin on anyone's pc, nothing else there, and only while its token allows
     # remote control (8 Nov 2026): the pc's own settings, agents and folders stay its owner's
     admin_update = action == "update_plugin" and bool(dev.get("admin")) and bool(row) and not row["own"]
+    # a member of a project shared on this pc for use merges that project's worker branches there, as its owner may
+    share = read_json(SHARES_FILE, {}).get(mid) or {}
+    shared_merge = action == "merge" and bool(row) and not row["own"] and not args.get("chat") \
+        and (row.get("shared") or {}).get(args.get("project")) in USES
+    by_owner = share_tokens(mid, read_json(MACHINES_FILE, {}).get(mid, {}), tokens, share.get("by", "")) if shared_merge else []
     steer = lambda n: n in tokens and (own_token(tokens[n], dev) or admin_update and agents_on(tokens[n]))
     if admin_update and not any(steer(n) for n in row["tokens"]):
         return JSONResponse({"error": REMOTE_OFF}, status_code=403)
-    if not row or not (row["own"] or admin_update) or row.get("old"):
+    if shared_merge and not by_owner:
+        return JSONResponse({"error": REMOTE_OFF}, status_code=403)
+    if not row or not (row["own"] or admin_update or shared_merge) or row.get("old"):
         return JSONResponse({"error": REMOTE_OFF if row and row["mine"] and not row.get("old")
                              else "not a machine of your own tokens (with plugin 0.15.0 or newer)"}, status_code=403)
     if action == "restart":  # a worker that ended: start it again now, past the companion's RESTART_AFTER hold
@@ -6303,7 +6312,7 @@ async def ui_machine_action(request: Request):
         tf.parent.mkdir(parents=True, exist_ok=True)
         await asyncio.to_thread(update_state, tf, lambda d: d.__setitem__(key, pending))
     item = {"id": secrets.token_hex(6), "action": action, "args": args, "by": dev.get("user", ""), "at": time.time(),
-            "status": "waiting", "tokens": [n for n in row["tokens"] if steer(n)]}
+            "status": "waiting", "tokens": by_owner or [n for n in row["tokens"] if steer(n)]}  # a guest's row lists no tokens
     await asyncio.to_thread(update_state, MACHINE_ACTIONS, lambda d: d.__setitem__(mid, (d.get(mid, []) + [item])[-50:]))
     wake_machine(mid)
     audit("machine-action", f"{mid} {action} {json.dumps(args)}")
@@ -7216,37 +7225,41 @@ def chat_review_item(r: dict, c: dict) -> dict | None:
 
 
 def review_items(rows: list[dict], tasks: list[dict]) -> list[dict]:
-    """A Review card (Needs you) per finished worker on this person's own pcs whose result line ([<requester>,
+    """A Review card (Needs you) per finished worker on this person's own pcs (and on a pc shared with them for use in
+    that worker's project) whose result line ([<requester>,
     <ID>-done]) names its branch: what the pc's companion reports of the branch (commits ahead of the branch the
     worktree was made from, changed files, newest commit) plus the worker's own done/left and what it said of tests.
     The server never runs anything of it; Merge goes to that pc's companion."""
     done = {(t["project"], t["id"].removesuffix("-done")): t for t in tasks if t["done"]}
     out = {}
     for r in rows:
-        # a shared pc (an admin sees its workers too): Merge is its owner's, so the card is theirs, as in board_items
-        for a, ag in (r["agents"] if r["own"] else {}).items():
-            for w in ag.get("workers", []):
-                rv, base = w.get("review"), REVIEW_BASE.sub("", w.get("id") or "")
-                t = done.get((w.get("project"), base))
-                if not rv or not rv.get("ahead") or w.get("status") in ("running", "merged") or not t or not w.get("branch") \
-                        or not re.search(rf"\bbranch\s+{re.escape(w['branch'])}(?![\w/.-])", t["text"]):
-                    continue
-                key = f"review:{r['id']}/{w['project']}/{base}"
-                if key in out and (out[key]["at"] or 0) >= (w.get("ended") or 0):  # a hand-over's sessions share the branch: the newest
-                    continue
-                part = lambda k: (m.group(1).strip() if (m := re.search(rf"\b{k}:\s*(.*?)\s*(?:;\s*(?:done|left):|$)", t["text"], re.I | re.S)) else "")
-                tests = TESTS_SAID.search(part("done") or t["text"])
-                out[key] = {"machine": r["id"], "label": r["label"], "online": r["online"], "kind": "review", "col": "needs", "id": w["id"], "task": base,
-                            "agent": a, "project": w["project"], "key": key, "path": t["path"], "done_line": t["line"],
-                            "sig": hashlib.sha256(f"{t['line']}|{rv['commit']}|{rv['ahead']}".encode()).hexdigest()[:16],
-                            "title": f"Review {base} · {t['text'][:100]}", "at": w.get("ended") or 0, "owner": t["owner"],
-                            "line": f"{rv['ahead']} commit{'s' * (rv['ahead'] != 1)} on {w['branch']} for {rv['into']}, {rv['nfiles']} file{'s' * (rv['nfiles'] != 1)} changed",
-                            "branch": w["branch"], "into": rv["into"], "commits": rv["ahead"], "files": rv["files"], "nfiles": rv["nfiles"],
-                            "commit": rv["commit"], "done": part("done")[:300], "left": part("left")[:300],
-                            "tests": tests.group(0).strip()[:200] if tests else "", "git": w.get("git"),
-                            "blocked": rv.get("blocked", ""), "can_merge": r["online"] and not rv.get("blocked"),
-                            # the -fix line goes to this pc only: the branch is here (the token its companion claims with)
-                            "pin": (r.get("companion") or {}).get("token") if (r.get("companion") or {}).get("token") in r["tokens"] else r["tokens"][0]}
+        # a pc shared for use in a project: its members may merge that project's work there, as its owner may
+        use = {p for p, x in (r.get("shared") or {}).items() if x in USES}
+        found = [(a, w) for a, ag in r["agents"].items() for w in ag.get("workers", [])] + [(w.get("agent"), w) for w in r.get("workers", [])]
+        for a, w in found:
+            if not r["own"] and w.get("project") not in use:
+                continue
+            rv, base = w.get("review"), REVIEW_BASE.sub("", w.get("id") or "")
+            t = done.get((w.get("project"), base))
+            if not rv or not rv.get("ahead") or w.get("status") in ("running", "merged") or not t or not w.get("branch") \
+                    or not re.search(rf"\bbranch\s+{re.escape(w['branch'])}(?![\w/.-])", t["text"]):
+                continue
+            key = f"review:{r['id']}/{w['project']}/{base}"
+            if key in out and (out[key]["at"] or 0) >= (w.get("ended") or 0):  # a hand-over's sessions share the branch: the newest
+                continue
+            part = lambda k: (m.group(1).strip() if (m := re.search(rf"\b{k}:\s*(.*?)\s*(?:;\s*(?:done|left):|$)", t["text"], re.I | re.S)) else "")
+            tests = TESTS_SAID.search(part("done") or t["text"])
+            out[key] = {"machine": r["id"], "label": r["label"], "online": r["online"], "kind": "review", "col": "needs", "id": w["id"], "task": base,
+                        "agent": a, "project": w["project"], "key": key, "path": t["path"], "done_line": t["line"],
+                        "sig": hashlib.sha256(f"{t['line']}|{rv['commit']}|{rv['ahead']}".encode()).hexdigest()[:16],
+                        "title": f"Review {base} · {t['text'][:100]}", "at": w.get("ended") or 0, "owner": t["owner"],
+                        "line": f"{rv['ahead']} commit{'s' * (rv['ahead'] != 1)} on {w['branch']} for {rv['into']}, {rv['nfiles']} file{'s' * (rv['nfiles'] != 1)} changed",
+                        "branch": w["branch"], "into": rv["into"], "commits": rv["ahead"], "files": rv["files"], "nfiles": rv["nfiles"],
+                        "commit": rv["commit"], "done": part("done")[:300], "left": part("left")[:300],
+                        "tests": tests.group(0).strip()[:200] if tests else "", "git": w.get("git"),
+                        "blocked": rv.get("blocked", ""), "can_merge": r["online"] and not rv.get("blocked"),
+                        # the -fix line goes to this pc only: the branch is here (the token its companion claims with)
+                        "pin": tok if (tok := (r.get("companion") or {}).get("token")) in r["tokens"] or not r["tokens"] else r["tokens"][0]}
     return list(out.values())
 
 

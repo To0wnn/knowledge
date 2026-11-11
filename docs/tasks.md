@@ -103,9 +103,11 @@ The companion that starts workers is described in [companion.md](companion.md); 
   renews the task's lease, so such a task shows as startable again (and gets the idle notice) instead of staying stuck. The companion knows a worker by its pid and that process's start time,
   so after a reboot a recorded worker counts as ended and a stop never hits a reused pid. A worker records the branch its
   worktree was made from (`base_branch`). When it ended and its result line `[<requester>, <ID>-done]` names its branch,
-  the Inbox of that pc's owner shows a **Review** card under Needs you (`kind: review`; not for an admin or a guest of a shared pc): commits ahead of that branch, changed files, the
+  the Inbox shows a **Review** card under Needs you (`kind: review`) to that pc's owner and to whom the pc is shared
+  with for use in that project (Share "use" or "yolo"; not "view", and an admin's view of the pc gives none): commits ahead of that branch, changed files, the
   newest commit, the worker's done/left and the clause of its done text about tests (the server runs nothing).
-  **Merge** is the machine action `merge` (owner only): in the main checkout `git merge --no-ff -m "Merge task/<ID>"`
+  **Merge** is the machine action `merge` (the owner, or a member it is shared with for use in that project: only
+  this action, sent to the companion under the owner's token): in the main checkout `git merge --no-ff -m "Merge task/<ID>"`
   without hooks, fsmonitor or signing, only when that checkout is on that branch, has no uncommitted changes and no
   merge, cherry-pick, revert or rebase of its own going on, and no file the branch adds is already on disk (an ignored
   `.env` would be replaced). Never when the branch changes `.gitattributes`, `.gitmodules` or `.lfsconfig` or
