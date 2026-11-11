@@ -272,6 +272,17 @@ def tasks_contract(tmp, ck, fr, ver, raw):
     assert writers(["alice"]) == 200 and writers(["bad name!"]) == 400
     assert not add("- open until 2099-01-01 [Codex, UNT-1] from Gemini, start now: untrusted")[0]
     assert rows()["UNT-1"]["waiting_reason"].startswith("waits for approval: written by"), rows()["UNT-1"]
+    # Pinned to the writer's own device it steers only the pc that wrote it: no approval; another pin still waits.
+    err, said = add("- open until 2099-01-01 [Codex, UNT-U] from Gemini, start now: unpinned")
+    assert not err and "pin it here instead: '[<Owner>@friend-pc, <ID>]'" in said, said
+    assert not add("- open until 2099-01-01 [Codex@friend-pc, UNT-P] from Gemini, start now: my own pc")[0]
+    other = next(n for n in json.loads((tmp / "tokens.json").read_text()) if n != "friend-pc")
+    assert not add(f"- open until 2099-01-01 [Codex@{other}, UNT-Q] from Gemini, start now: another pc")[0]
+    r = rows()
+    assert not r["UNT-P"]["waiting_reason"] and r["UNT-P"]["startable"], r["UNT-P"]
+    assert r["UNT-Q"]["waiting_reason"].startswith("waits for approval: written by"), r["UNT-Q"]
+    for tid in ("UNT-U", "UNT-P", "UNT-Q"):
+        call("knowledge_edit", {"path": path, "old_string": next(l for l in call("knowledge_read", {"path": path}, fr)[1].splitlines() if f", {tid}]" in l).split("\t", 1)[-1] + "\n", "new_string": ""}, fr)
     # A result is something an agent is told to act on: from an untrusted writer its words stay data.
     res = "- [Codex, UNT-R-done]: from the guest\n"
     assert not add(res)[0]

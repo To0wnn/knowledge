@@ -2328,6 +2328,9 @@ def approval_hint(rel: str, before: str, after: str) -> str:
         return ""
     mine = [t for t in project_tasks(project)[0] if t["id"] in new and t["path"] == rel]
     out = "".join(f"\nTask {t['id']} waits for the owner's approval in the Tasks tab ({t['waiting_reason']})." for t in mine if t["needs_approval"])
+    if (me := device.get().get("name", "")) and (pin := [t["id"] for t in mine if t["needs_approval"] and not t["trusted"] and not t["device"]]):
+        out += (f"\nIf {', '.join(pin)} is for this pc, pin it here instead: '[<Owner>@{me}, <ID>]' starts without approval, "
+                "and only on this pc.")
     if not device.get().get("worker") and (free := [t["id"] for t in mine if not t["claimed"]]):
         # the duplicate work of 8 Nov 2026: a chat wrote a task, did it itself, and a worker started the same task
         out += (f"\nNot claimed: {', '.join(free)}. If you do it in this session yourself, claim it now: add "
@@ -2430,6 +2433,8 @@ def project_tasks(project: str) -> tuple[list[dict], list[dict]]:
         after = t["start"][6:].strip() if start.startswith("after ") and start != "after approval" else ""
         when = kb_lint.latest_date(t["start"]) if not after and start not in ("now", "after approval") else None
         trusted = (t["legacy"] and not rec) or bool(by) and trusted_writer(project, by, _tokens=tokens, _writers=writers, _owner=owner)  # unknown legacy: as before
+        # pinned to its writer's own device token: it only steers the pc that wrote it, which that writer steers anyway
+        trusted = trusted or bool(by) and by in tokens and t["device"].lower() == by.lower()
         t["trusted"] = trusted
         why = [r for r, waits in (
             ("waits for approval", start == "after approval" and not approved),
