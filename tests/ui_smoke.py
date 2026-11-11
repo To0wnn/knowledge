@@ -746,6 +746,9 @@ async def shell(browser, devices, secret: str) -> None:
         meter: z.querySelector('.mx-stat-meter i').style.width, area: !!z.querySelector('.mx-spark-area[d^=M]'),
         pressed: document.querySelector('#machines .mx-zoom [aria-pressed=true]')?.textContent};
       return out; }""")
+    bridge = await pg.evaluate("""() => [statBridge([1, null, 3]), statBridge([1, null, null, 5]), statBridge([1, null, null, null, 5]), statBridge([null, 1, 2, null])]""")
+    check(bridge == [[1, 2, 3], [1, 3, 3, 5], [1, None, None, None, 5], [None, 1, 2, None]],
+          f"Machines: a chart draws through a missed minute or two, not through the pc being off {bridge}")
     if os.environ.get("KNOWLEDGE_SMOKE_SHOTS") and not load.get("skip"):
         await pg.locator("#machines .mx-wrap").first.screenshot(path=os.path.join(os.environ["KNOWLEDGE_SMOKE_SHOTS"], "machines-load.png"))
     check(load.get("skip") or (load["area"] and load["meter"].endswith("%") and load["pressed"] == "1 h" and load["range1h"] != load["range24"]
@@ -2421,39 +2424,62 @@ async def settings(browser, secret: str) -> None:
     await ctx.close()
 
 
+# Seconds per check (local run, 11 Nov 2026): tests/ui_ci.py runs the checks as shards side by side, longest first.
+SECONDS = {"shell": 27, "desktop": 22, "phone": 16, "design_system": 13, "csp": 12, "approvals": 11, "update_button": 10,
+           "one_lamp": 10, "knowledge": 8, "cockpit": 14, "agents_pages": 7, "chat_tabs": 6,
+           "live_refresh": 6, "follow": 6}
+
+
+def shard_of(checks: list) -> list:
+    """KNOWLEDGE_SMOKE_SHARD=i/n: this shard's checks (longest first onto the shard with least time), in the usual order."""
+    if not os.environ.get("KNOWLEDGE_SMOKE_SHARD"):
+        return checks
+    me, n = map(int, os.environ["KNOWLEDGE_SMOKE_SHARD"].split("/"))
+    assert 0 <= me < n, f"KNOWLEDGE_SMOKE_SHARD={me}/{n}"
+    load, mine = [0] * n, []
+    for c in sorted(checks, key=lambda c: -SECONDS.get(c[0].__name__, 3)):
+        i = load.index(min(load))
+        load[i] += SECONDS.get(c[0].__name__, 3)
+        if i == me:
+            mine.append(c)
+    return [c for c in checks if c in mine]
+
+
 async def main() -> None:
     secret = os.environ.get("KNOWLEDGE_PROXY_SECRET") or subprocess.run(["secret", "KNOWLEDGE_PROXY_SECRET"], check=True, capture_output=True, text=True).stdout.strip()
     async with async_playwright() as p:
         # system Chrome by default; KNOWLEDGE_SMOKE_BROWSER=chromium takes Playwright's own (CI, tests/ui_ci.py)
         chan = os.environ.get("KNOWLEDGE_SMOKE_BROWSER", "chrome")
         browser = await p.chromium.launch(channel=None if chan == "chromium" else chan)
-        await csp(browser, secret)
-        await desktop(browser, secret)
-        await search(browser, secret)
-        await phone(browser, p.devices, secret)
-        await admin(browser, secret)
-        await project_pick_pages(browser, secret)
-        await cockpit(browser, p.devices, secret)
-        await approvals(browser, p.devices, secret)
-        await review(browser, p.devices, secret)
-        await shell(browser, p.devices, secret)
-        await knowledge(browser, p.devices, secret)
-        await agents_pages(browser, p.devices, secret)
-        await shell_pages(browser, p.devices, secret)
-        await no_agents(browser, secret)
-        await images(browser, secret)
-        await chat_tabs(browser, secret)
-        await selection_kept(browser, secret)
-        await settings(browser, secret)
-        await chat_drafts(browser, secret)
-        await grid_groups(browser, secret)
-        await board(browser, p.devices, secret)
-        await follow(browser, p.devices, secret)
-        await live_refresh(browser, secret)
-        await two_windows(browser, secret)
-        await update_button(browser, secret)
-        await design_system(browser, p.devices, secret)
-        await one_lamp(browser, secret)
+        checks = [(csp, browser, secret),
+                  (desktop, browser, secret),
+                  (search, browser, secret),
+                  (phone, browser, p.devices, secret),
+                  (admin, browser, secret),
+                  (project_pick_pages, browser, secret),
+                  (cockpit, browser, p.devices, secret),
+                  (approvals, browser, p.devices, secret),
+                  (review, browser, p.devices, secret),
+                  (shell, browser, p.devices, secret),
+                  (knowledge, browser, p.devices, secret),
+                  (agents_pages, browser, p.devices, secret),
+                  (shell_pages, browser, p.devices, secret),
+                  (no_agents, browser, secret),
+                  (images, browser, secret),
+                  (chat_tabs, browser, secret),
+                  (selection_kept, browser, secret),
+                  (settings, browser, secret),
+                  (chat_drafts, browser, secret),
+                  (grid_groups, browser, secret),
+                  (board, browser, p.devices, secret),
+                  (follow, browser, p.devices, secret),
+                  (live_refresh, browser, secret),
+                  (two_windows, browser, secret),
+                  (update_button, browser, secret),
+                  (design_system, browser, p.devices, secret),
+                  (one_lamp, browser, secret)]
+        for fn, *args in shard_of(checks):
+            await fn(*args)
         await browser.close()
     print("ok" if not failures else f"{len(failures)} failed")
     sys.exit(1 if failures else 0)

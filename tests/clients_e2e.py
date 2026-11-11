@@ -3562,7 +3562,34 @@ assert "claude plugin install: ... fine" in out.getvalue() and "slow-tool ... ok
     check(rc == 0, "installer: a slow step says what it does before it starts", out + err[-500:])
 
 
+# The phases mostly wait (on fake agents, companions, follow windows): run without arguments, this script starts one
+# process per shard side by side (--shard i), each with its own server and temp home; a phase not listed is shard 0's.
+PHASE_SHARD = {"chat_e2e": 1, "follow_e2e": 2, "companion_e2e": 2}
+SHARDS = max(PHASE_SHARD.values()) + 1
+
+
+def shards() -> int:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # the shards' logs carry non-ASCII; a Windows pipe is cp1252
+    runs = []
+    with tempfile.TemporaryDirectory() as t:
+        for i in range(SHARDS):
+            log = open(Path(t) / f"shard{i}.log", "w+", encoding="utf-8")
+            runs.append((subprocess.Popen([sys.executable, __file__, "--shard", str(i)], stdout=log, stderr=subprocess.STDOUT,
+                                          env={**os.environ, "PYTHONIOENCODING": "utf-8"}), log))
+        codes = [proc.wait() for proc, _ in runs]
+        for i, (_, log) in enumerate(runs):
+            log.seek(0)
+            print(f"---- shard {i}/{SHARDS}: {'ok' if not codes[i] else 'FAILED'} ----\n{log.read()}", flush=True)
+            log.close()
+    return 1 if any(codes) else 0  # a shard killed by a signal has a negative code
+
+
 def main():
+    me = int(sys.argv[sys.argv.index("--shard") + 1])
+    assert 0 <= me < SHARDS, f"--shard {me}: there are {SHARDS}"
+    for name, f in list(globals().items()):  # the other shards' phases do nothing here
+        if callable(f) and name in PHASES and PHASE_SHARD.get(name, 0) != me:
+            globals()[name] = lambda *a, **k: None
     compile(FAKE_AGENT, "FAKE_AGENT", "exec")  # a broken stand-in fails every agent test: say so at once
     import faulthandler  # a hang prints every thread's stack before the CI job's 20 min limit cancels it without a log
     faulthandler.dump_traceback_later(15 * 60, exit=True)
@@ -3583,8 +3610,9 @@ def main():
     try:
         print(f"platform {sys.platform}, python {sys.version.split()[0]}, home {home}")
         mirror = claude_plugin(tok, home, project, garden)
-        time.sleep(max(0, started + 12 - time.monotonic()))  # past the server's STORAGE_TIMEOUT
-        check(http("GET", "/health?disk=1")[0] == 200, "the server's check of its folders works on this system (else every request gets 503)")
+        if me == 0:
+            time.sleep(max(0, started + 12 - time.monotonic()))  # past the server's STORAGE_TIMEOUT
+            check(http("GET", "/health?disk=1")[0] == 200, "the server's check of its folders works on this system (else every request gets 503)")
         folder_link(tmp / "Link Usér")
         offline(tok, home, project, garden, mirror)
         skills(tmp, home)
@@ -3624,5 +3652,13 @@ def main():
     sys.exit(1 if failures else 0)
 
 
+PHASES = {"claude_plugin", "folder_link", "offline", "skills", "agents", "script_mcp", "codex_plugin", "agy_plugin",
+          "no_session_log_e2e", "limits_e2e", "plugin_versions", "relay_errors", "honest_errors", "hook_errors", "terminal_asks",
+          "knowledge_home", "companion_e2e", "chat_e2e", "follow_e2e", "background_flags", "import_e2e", "installer",
+          "installer_progress", "companion_setup", "checkout_update", "claude_stored_token", "codex_worker_sandbox", "real_clis"}
+
+
 if __name__ == "__main__":
-    main()
+    if "--shard" in sys.argv:
+        main()
+    sys.exit(shards())

@@ -4,7 +4,7 @@ A self-hosted knowledge server for AI coding agents: live docs and memory over M
 Antigravity, plus a web UI with a graph. Server in `server/` (Python, one Docker container), clients in `plugin/`.
 
 ## Commands
-- check (must pass before "done"; the pre-commit hook runs it; about 50 s): `./check.sh`; `./check.sh --unless-passed` skips
+- check (must pass before "done"; the pre-commit hook runs it; about 25 s, its steps and `test_server.py --shard i` side by side, see SHARD_OF): `./check.sh`; `./check.sh --unless-passed` skips
   it when this exact tree passed on this checkout already (deploy.sh uses that); in an agent session run it (and deploy.sh) under
   `env -u KNOWLEDGE_URL -u KNOWLEDGE_TOKEN -u KNOWLEDGE_CHAT`, or the session's own server settings break the docs sync test (401)
 - run: deployed as a Docker stack; there is no local dev server
@@ -13,7 +13,7 @@ Antigravity, plus a web UI with a graph. Server in `server/` (Python, one Docker
   or `env -u KNOWLEDGE_URL uv run -q --with playwright python tests/ui_smoke.py` (read-only against the live server;
   an agent session has the public KNOWLEDGE_URL set, which would win over local.env and land on the sign-in page)
 - load test of the web UI against a server on a copy of real data, before and after a change: `tests/ui_load.py`
-- client test (about 2.5 min; `KNOWLEDGE_E2E_KEEP=1` keeps its temp folder): `uv run --project server python tests/clients_e2e.py`; CI runs it on Windows, macOS and Linux
+- client test (about 1.5 min on Linux, its phases in 3 processes side by side, see PHASE_SHARD; `KNOWLEDGE_E2E_KEEP=1` keeps its temp folder): `uv run --project server python tests/clients_e2e.py`; CI runs it on Windows, macOS and Linux
   (`clients.yml`, not for a push of only docs or web UI files; `check.yml` runs the check and the UI test)
 - a really hanging disk (Linux with FUSE; not in the check): `systemd-run --user --scope -q -p MemoryMax=3G uv run --project server --with fusepy python tests/storage_hang.py`
 - a really hanging disk under the companion (Linux with FUSE; not in the check): `systemd-run --user --scope -q -p MemoryMax=3G uv run --project server --with fusepy python tests/companion_hang.py`

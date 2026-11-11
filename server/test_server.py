@@ -2402,6 +2402,12 @@ def ui_gap_contract(tmp, ck, raw):
     typing: the queries on the way there are not; one that finds notes is not."""
     ask = lambda q: [raw("GET", f"/ui/api/{kind}?q={urllib.parse.quote(q)}&project=garden", headers=ck) for kind in ("search", "semantic")]
     gaps = lambda: [ln.split("\t") for ln in (tmp / "gaps.log").read_text().splitlines()] if (tmp / "gaps.log").exists() else []
+    # A gap is logged only once the semantic index caught up with the writes before (not vec.pending): on a busy machine
+    # it lags, and then nothing is logged at all (seen with the check's shards beside a UI test).
+    status = lambda: json.loads(raw("GET", "/ui/api/semantic?q=ready&project=garden&gap=0", headers=ck)[2])["status"]
+    deadline = time.time() + 30
+    while ("being" in status() or "chunks" not in status()) and time.time() < deadline:
+        time.sleep(0.1)
     ask("qwzx")
     ask("qwzxvb plorkt")
     time.sleep(1.2)
@@ -2490,10 +2496,37 @@ def share_on_loop(source: str) -> list[str]:
     return [name for name, f in funcs.items() if isinstance(f, ast.AsyncFunctionDef) and reach & set(calls(f)) and name != "ui_static"]
 
 
+# The slow contracts mostly wait on the server's timers: check.sh runs them side by side, each shard its own process
+# with its own server (--shard i/n). The setup between them runs in every shard; a contract not listed is shard 0's.
+# Slow self-contained blocks of main() run under `if own(i):`. check.sh starts one process per shard.
+SHARD_OF = {"flow_contract": 1, "needs_contract": 2, "chats_contract": 3, "board_contract": 3, "ui_gap_contract": 4,
+            "share_on_loop": 4, "tasks_contract": 5, "handback_contract": 5, "lease_contract": 6, "machines_contract": 6, "redos": 6, "duplicates": 7}
+SHARD = None  # None: run everything (a plain `uv run test_server.py`)
+
+
+def own(i: int) -> bool:
+    return SHARD in (None, i)
+
+
+def keep_shard(me: int) -> None:
+    global SHARD
+    assert 0 <= me <= max(SHARD_OF.values()), f"--shard {me}: no such shard"
+    SHARD = me
+    for name in [n for n in globals() if n.endswith("_contract")]:
+        if SHARD_OF.get(name, 0) != me:
+            globals()[name] = lambda *a, **k: None
+
+
 def main():
-    on_loop = share_on_loop(Path(__file__).with_name("server.py").read_text())
-    assert not on_loop, on_loop
-    assert share_on_loop("def resolve(p): pass\ndef helper(): resolve(1)\nasync def bad(): helper()\nasync def good(): await to_thread(helper)\n") == ["bad"]
+    if "--shard" in sys.argv:
+        keep_shard(int(sys.argv[sys.argv.index("--shard") + 1]))
+    # A shard missing from check.sh would be skipped without a sound.
+    shards = " ".join(map(str, range(max(SHARD_OF.values()) + 1)))
+    assert f"for i in {shards}; do step" in (Path(__file__).parent.parent / "check.sh").read_text(), f"check.sh: run shards {shards}"
+    if own(SHARD_OF["share_on_loop"]):
+        on_loop = share_on_loop(Path(__file__).with_name("server.py").read_text())
+        assert not on_loop, on_loop
+        assert share_on_loop("def resolve(p): pass\ndef helper(): resolve(1)\nasync def bad(): helper()\nasync def good(): await to_thread(helper)\n") == ["bad"]
     # Every command block on the help page must paste in one go: zsh runs a "# ..." line as a command (help 23 Oct 2026).
     import html as _html
     # The page scripts share one scope: a second top-level function of the same name silently replaces the first.
@@ -2851,8 +2884,9 @@ def main():
             await srv.BearerAuth(inner)({"type": "http", "path": path, "method": "GET", "headers": [], "query_string": query}, recv, send)
             return (sent[0]["status"] if sent else 0), reached
         time.sleep(0.4)
-        t0 = time.time()
-        assert asyncio.run(asked("/mcp"))[0] == 503 and time.time() - t0 < 0.5
+        # Event-based, not a stopwatch: the answer comes while the probe still hangs (it never returns on its own), so it
+        # did not wait for it; the 30 s only turns a hang into a loud failure (a 0.5 s bound failed on a busy CI runner).
+        assert asyncio.run(asyncio.wait_for(asked("/mcp"), 30))[0] == 503 and not hang.is_set()
         assert asyncio.run(asked("/ui/api/recent"))[0] == 503
         assert asyncio.run(asked("/health"))[0] == 200 and asyncio.run(asked("/health", b"disk=1"))[0] == 503
         assert asyncio.run(asked("/ui/static/app.js"))[1] == ["/ui/static/app.js"]  # the page itself needs no shared folder
@@ -3013,38 +3047,39 @@ def main():
         assert "trade/STATUS.md: no topic" in lint_out and "trade/NOTES.md:" not in lint_out and "trade/CLAUDE.md" not in lint_out, lint_out
         assert "trade/NOTES.md (0 link)" in lint_out, lint_out  # a loose doc is a loose dot on the map too
         assert "index_points_to_missing_file (120)" in lint_out, lint_out[:300]
-        # Background duplicate check (test reranker = word overlap): two memos with the same body end up in lint.
-        body = "the garage door opener runs on a relay with a reed contact for the closed state\n"
-        for n in ("dup_a", "dup_b"):
-            assert not call("knowledge_write", {"path": f"memory/{n}.md", "content": memo(body, n)})[0]
-        deadline = time.time() + 60
-        while "dup_a.md ↔ dup_b.md" not in (lint_out := call("knowledge_lint", {})[1]) and time.time() < deadline:
-            time.sleep(0.2)
-        assert "possible_duplicate" in lint_out and "dup_a.md ↔ dup_b.md (0." in lint_out, lint_out[-800:]
-        # The writing device hears it at its next turn, without waiting for lint (judge_soon -> tell_writers).
-        deadline, notes = time.time() + 60, []
-        while not notes and time.time() < deadline:
-            notes = json.loads(http("GET", "/tasks?project=homelab&agent=claude&v=2")[1])["notices"] or time.sleep(0.2) or []
-        assert notes and "looks like the same subject as" in notes[0]["text"] and "[[dup_" in notes[0]["text"], notes
-        assert "it is about: d" in notes[0]["text"], notes
-        # One notice per pair: a later edit of a known duplicate does not repeat it.
-        assert not call("knowledge_edit", {"path": "memory/dup_a.md", "old_string": "closed state", "new_string": "closed state too"})[0]
-        time.sleep(2.2)  # past a whole pass: the pair is judged again within 2 s (vector sync 0.2 s, pass every 1 s)
-        assert not json.loads(http("GET", "/tasks?project=homelab&agent=claude&v=2")[1])["notices"]
-        # A memo file written directly (a VM session, reported by the watcher) is judged and told too.
-        (mem / "dup_c.md").write_text(memo(body, "dup_c"))
-        http("POST", "/invalidate", {"paths": ["memory/dup_c.md"]}, token="watch-token")
-        deadline, notes = time.time() + 60, []
-        while not notes and time.time() < deadline:
-            notes = json.loads(http("GET", "/tasks?project=homelab&agent=claude&v=2")[1])["notices"] or time.sleep(0.2) or []
-        assert notes and "dup_c.md" in notes[0]["text"], notes
-        (mem / "dup_c.md").unlink()
-        http("POST", "/invalidate", {"paths": ["memory/dup_c.md"]}, token="watch-token")
-        # Linked memos are kept apart on purpose: no longer reported.
-        assert not call("knowledge_edit", {"path": "memory/dup_b.md", "old_string": "## Keuzes", "new_string": "See [[dup_a]].\n## Keuzes"})[0]
-        assert "dup_a.md ↔ dup_b.md" not in call("knowledge_lint", {})[1]
-        for n in ("dup_a", "dup_b"):
-            (mem / f"{n}.md").unlink()
+        if own(SHARD_OF["duplicates"]):  # slow and self-contained, see SHARD_OF
+            # Background duplicate check (test reranker = word overlap): two memos with the same body end up in lint.
+            body = "the garage door opener runs on a relay with a reed contact for the closed state\n"
+            for n in ("dup_a", "dup_b"):
+                assert not call("knowledge_write", {"path": f"memory/{n}.md", "content": memo(body, n)})[0]
+            deadline = time.time() + 60
+            while "dup_a.md ↔ dup_b.md" not in (lint_out := call("knowledge_lint", {})[1]) and time.time() < deadline:
+                time.sleep(0.2)
+            assert "possible_duplicate" in lint_out and "dup_a.md ↔ dup_b.md (0." in lint_out, lint_out[-800:]
+            # The writing device hears it at its next turn, without waiting for lint (judge_soon -> tell_writers).
+            deadline, notes = time.time() + 60, []
+            while not notes and time.time() < deadline:
+                notes = json.loads(http("GET", "/tasks?project=homelab&agent=claude&v=2")[1])["notices"] or time.sleep(0.2) or []
+            assert notes and "looks like the same subject as" in notes[0]["text"] and "[[dup_" in notes[0]["text"], notes
+            assert "it is about: d" in notes[0]["text"], notes
+            # One notice per pair: a later edit of a known duplicate does not repeat it.
+            assert not call("knowledge_edit", {"path": "memory/dup_a.md", "old_string": "closed state", "new_string": "closed state too"})[0]
+            time.sleep(2.2)  # past a whole pass: the pair is judged again within 2 s (vector sync 0.2 s, pass every 1 s)
+            assert not json.loads(http("GET", "/tasks?project=homelab&agent=claude&v=2")[1])["notices"]
+            # A memo file written directly (a VM session, reported by the watcher) is judged and told too.
+            (mem / "dup_c.md").write_text(memo(body, "dup_c"))
+            http("POST", "/invalidate", {"paths": ["memory/dup_c.md"]}, token="watch-token")
+            deadline, notes = time.time() + 60, []
+            while not notes and time.time() < deadline:
+                notes = json.loads(http("GET", "/tasks?project=homelab&agent=claude&v=2")[1])["notices"] or time.sleep(0.2) or []
+            assert notes and "dup_c.md" in notes[0]["text"], notes
+            (mem / "dup_c.md").unlink()
+            http("POST", "/invalidate", {"paths": ["memory/dup_c.md"]}, token="watch-token")
+            # Linked memos are kept apart on purpose: no longer reported.
+            assert not call("knowledge_edit", {"path": "memory/dup_b.md", "old_string": "## Keuzes", "new_string": "See [[dup_a]].\n## Keuzes"})[0]
+            assert "dup_a.md ↔ dup_b.md" not in call("knowledge_lint", {})[1]
+            for n in ("dup_a", "dup_b"):
+                (mem / f"{n}.md").unlink()
         # Case-insensitive fast path, uppercase-escape fallback, and a file whose lowercase form changes length.
         (mem / "case.md").write_text("Mixed CASE Velux\nİstanbul Velux\n")
         http("POST", "/invalidate", {"paths": ["memory/case.md"]}, token="watch-token")
@@ -3153,21 +3188,22 @@ def main():
         assert not err and "memory/project_accent.md:5:" in text, text
         err, text = call("knowledge_search", {"pattern": "ge[ïí]nstalleerd|[ø-ÿ]berall"})  # a class keeps its meaning (no fold)
         assert not err and "memory/project_accent.md:5:" in text, text
-        # A catastrophic regex costs at most a few seconds and never blocks other requests.
-        t0 = time.time()
-        err, text = call("knowledge_search", {"pattern": "(a+)+$"})
-        assert time.time() - t0 < 6, time.time() - t0
-        (mem / "redos.md").write_text("a" * 30000 + "!\n")
-        http("POST", "/invalidate", {"paths": ["memory/redos.md"]}, token="watch-token")
         import threading
-        res = {}
-        th_ = threading.Thread(target=lambda: res.update(r=call("knowledge_search", {"pattern": "(a+)+$"})))
-        th_.start(); time.sleep(0.5)
-        t1 = time.time(); assert http("GET", "/health", token=None)[0] == 200 and time.time() - t1 < 1.5
-        th_.join()
-        assert res["r"][0] and "longer than" in res["r"][1], res
-        (mem / "redos.md").unlink()
-        http("POST", "/invalidate", {"paths": ["memory/redos.md"]}, token="watch-token")
+        if own(SHARD_OF["redos"]):  # slow and self-contained, see SHARD_OF
+            # A catastrophic regex costs at most a few seconds and never blocks other requests.
+            t0 = time.time()
+            err, text = call("knowledge_search", {"pattern": "(a+)+$"})
+            assert time.time() - t0 < 6, time.time() - t0
+            (mem / "redos.md").write_text("a" * 30000 + "!\n")
+            http("POST", "/invalidate", {"paths": ["memory/redos.md"]}, token="watch-token")
+            res = {}
+            th_ = threading.Thread(target=lambda: res.update(r=call("knowledge_search", {"pattern": "(a+)+$"})))
+            th_.start(); time.sleep(0.5)
+            t1 = time.time(); assert http("GET", "/health", token=None)[0] == 200 and time.time() - t1 < 1.5
+            th_.join()
+            assert res["r"][0] and "longer than" in res["r"][1], res
+            (mem / "redos.md").unlink()
+            http("POST", "/invalidate", {"paths": ["memory/redos.md"]}, token="watch-token")
         assert isinstance(json.loads(raw("GET", "/ui/api/lint", headers=ck)[2]), dict)
         v2 = json.loads(raw("GET", "/ui/api/lint?v=2", headers=ck)[2])  # report + groups (usage apart, collapsed) + hints in the server's language
         assert isinstance(v2["report"], dict) and {"id": "usage", "title": "Token usage", "checks": ["usage_outlier"], "collapsed": True} in v2["groups"], v2["groups"]
