@@ -272,7 +272,17 @@ function statZoom() {
   return zoom;
 }
 // An area chart: a 2px line over a light wash, a gap where the pc was off; hover shows the time and value there.
+// A round is "every minute" plus its own work, so now and then a minute holds no sample: a gap of one or two buckets
+// between samples is drawn through (the average of its neighbours); a longer one is the pc being off.
+const statBridge = (series) => series.map((v, i) => {
+  if (v != null) return v;
+  let l = i, r = i;
+  while (l >= 0 && series[l] == null) l--;
+  while (r < series.length && series[r] == null) r++;
+  return l >= 0 && r < series.length && r - l - 1 <= 2 ? (series[l] + series[r]) / 2 : null;
+});
 function sparkline(series, top, step, fmt, label) {
+  series = statBridge(series);
   const ns = "http://www.w3.org/2000/svg", w = 240, h = 44, svg = document.createElementNS(ns, "svg");
   svg.setAttribute("viewBox", `0 0 ${w} ${h}`); svg.setAttribute("preserveAspectRatio", "none");
   svg.setAttribute("class", "mx-spark"); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", label);
