@@ -1,6 +1,6 @@
 """deploy.sh as the landing step, in throwaway git repos with a fake ssh, rsync and gh: two sessions that both changed
 plugin/ land one after the other and get different versions, a hand-set minor bump stays, a conflict with main is
-refused with the tree clean and the lock freed, a red main refuses unless --fix-main or a newer run on main turns green, a held lock is waited for, and a
+refused with the tree clean and the lock freed, a red main refuses unless --fix-main, a newer run on main turns green or a re-run of its failed jobs does (flaky, told loudly), a held lock is waited for, and a
 worktree without local.env uses the main checkout's. Run: python3 tests/deploy_landing.py (part of ./check.sh)."""
 import json
 import os
@@ -43,6 +43,12 @@ def setup():
     (BIN / "gh").write_text(f'#!/bin/sh\nn=$(cat {T}/ci_looks 2>/dev/null || echo 0)\ncase "$*" in\n'
                             f'*\'!= "completed"\'*) [ -n "$GH_RUNNING" ] || exit 0; echo $((n + 1)) > {T}/ci_looks\n'
                             f'  case $n in 0) echo aaa1111;; 1) echo bbb2222;; *) touch {T}/ci_done;; esac;;\n'
+                            # the red run's re-run (GH_FLAKY: green then); GH_ATTEMPT: the attempt the red run is at
+                            f'*databaseId*) [ -n "$GH_RED" ] && [ ! -e {T}/ci_done ] && echo 4242;;\n'
+                            f'*run_attempt*) echo "${{GH_ATTEMPT:-1}}";;\n'
+                            f'"run rerun 4242 --failed") rm -f {T}/rerun_seen; touch {T}/rerun; [ -z "$GH_FLAKY" ] || touch {T}/ci_done;;\n'
+                            f'"run view 4242 --json status"*) if [ -e {T}/rerun ] && [ ! -e {T}/rerun_seen ]; then touch {T}/rerun_seen; echo in_progress; else echo completed; fi;;\n'
+                            f'"run view 4242 --json url"*) echo https://example.invalid/runs/4242;;\n'
                             f'*"$GH_RED"*) [ -n "$GH_RED" ] && [ ! -e {T}/ci_done ] && echo "abc1234 (failure) broke it";;\nesac\nexit 0\n')
     for f in BIN.iterdir():
         f.chmod(0o755)
@@ -119,12 +125,21 @@ def main():
     # red main refuses, --fix-main goes on
     p = sh("./deploy.sh", b, ok=False, GH_RED="clients.yml")
     assert p.returncode and "CI clients.yml is red on main since abc1234 (failure)" in p.stderr, p.stderr
+    assert "re-running its failed jobs once" in p.stderr and (T / "rerun").exists(), "red once: re-run, red again: refused"
+    (T / "rerun").unlink()
+    p = sh("./deploy.sh", b, ok=False, GH_RED="clients.yml", GH_ATTEMPT="2")
+    assert p.returncode and not (T / "rerun").exists() and "re-running" not in p.stderr, "a run re-run once is not re-run again"
     sh("./deploy.sh --fix-main", b, GH_RED="clients.yml")
     # red, but a newer run is still going: it waits for that run and lands once main is green
     edit(b, "server/app.py", "2", "3", "after red")
     # (the first run it waits for is cancelled, as GitHub does to a queued run on a newer push: it waits for the next)
     p = sh("./deploy.sh", b, GH_RED="clients.yml", GH_RUNNING="1", DEPLOY_CI_POLL="0")
     assert "waiting for the newer run on aaa1111" in p.stderr and (T / "ci_done").exists(), p.stderr
+    # red, nothing newer going, green when its failed jobs run again: a flaky test, told loudly, and the deploy lands
+    (T / "ci_done").unlink()
+    edit(b, "server/app.py", "3", "4", "after flaky")
+    p = sh("./deploy.sh", b, GH_RED="check.yml", GH_FLAKY="1")
+    assert "a flaky test, fix it (https://example.invalid/runs/4242)" in p.stderr and "only told on this screen" in p.stderr, p.stderr
     assert sh("./deploy.sh --nope", b, ok=False).returncode
     # a lock held by another deploy is waited for; past the wait it refuses, and is not taken away from it
     lock.mkdir()
