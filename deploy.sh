@@ -17,10 +17,21 @@ FORGE=$(set -a; . "$ENVF"; printf %s "$KNOWLEDGE_FORGE_SSH")
 # for about 13 hours while sessions kept deploying. --fix-main: this deploy is that fix.
 if ! has --fix-main; then
   if command -v gh >/dev/null 2>&1; then
+    red_of() { gh run list --workflow "$1" --branch main --limit 15 --json status,conclusion,headSha,displayTitle --jq \
+      'map(select(.status == "completed" and .conclusion != "cancelled" and .conclusion != "skipped"))[0] | select(.conclusion != "success") | "\(.headSha[0:7]) (\(.conclusion)) \(.displayTitle)"' 2>/dev/null; }
     for w in check.yml clients.yml; do
-      red=$(gh run list --workflow "$w" --branch main --limit 15 --json status,conclusion,headSha,displayTitle --jq \
-        'map(select(.status == "completed" and .conclusion != "cancelled" and .conclusion != "skipped"))[0] | select(.conclusion != "success") | "\(.headSha[0:7]) (\(.conclusion)) \(.displayTitle)"' 2>/dev/null) \
+      red=$(red_of "$w") \
         || { echo "warning: could not ask GitHub whether main is green ($w)" >&2; continue; }
+      # Red, but a newer run on main is still going (often the fix, or a flaky test run again): wait for it rather than
+      # refuse; on 11 Nov 2026 every deploy was refused for nearly 2 hours while the fixing run was already in CI.
+      run=$(gh run list --workflow "$w" --branch main --limit 5 --json status,databaseId,headSha --jq \
+        'map(select(.status != "completed"))[0] // empty | "\(.databaseId) \(.headSha[0:7])"' 2>/dev/null || true)
+      if [ -n "$red" ] && [ -n "$run" ]; then
+        echo "deploy: CI $w is red on main since ${red%% *}; waiting for the newer run on ${run#* } (up to ${DEPLOY_CI_WAIT:-1800}s)" >&2
+        t=0
+        until [ "$(gh run view "${run%% *}" --json status --jq .status 2>/dev/null)" = completed ] || [ "$t" -ge "${DEPLOY_CI_WAIT:-1800}" ]; do sleep 30; t=$((t + 30)); done
+        red=$(red_of "$w") || red=
+      fi
       [ -z "$red" ] || { echo "deploy refused: CI $w is red on main since $red; fix that first (gh run list --workflow $w --branch main), and deploy the fix with --fix-main" >&2; exit 1; }
     done
   else echo "warning: gh missing, not checked whether CI on main is green" >&2; fi

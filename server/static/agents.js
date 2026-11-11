@@ -163,7 +163,7 @@ function ckGetStarted() {
 function ckList() {
   const box = $("ck-list"), hist = $("ck-history"), side = $("ck-side");
   // a half-typed reply or reason, or an open menu, outlives the refresh: the list waits until it is sent or closed
-  if (side.querySelector(".ck-reply, .ck-reject, .ck-snooze[open]")) return;
+  if (side.querySelector(".ck-reply, .ck-reject, .ck-snooze[open]") || selecting(side)) return;
   const had = side.contains(document.activeElement) && document.activeElement.dataset.row;
   const items = (ck.board || []).filter((i) => ckScope(i) && !(i.kind === "chat" && i.col === "done")); // a read chat is an earlier chat
   const pcs = ckOnlinePc(), fresh = ck.ready && !pcs && !ck.chats.length;
@@ -1276,10 +1276,10 @@ function ckPaint(card) {
   if (card.worker) return ckWorkerPaint(card);
   if (card.meta.parent) return; // a subagent's chat: painted by its poll (ckSubPoll)
   const m = card.meta, busy = ckBusy(m.status);
-  card.mark.textContent = AGENT_MARK[m.agent] || "+";
+  setText(card.mark, AGENT_MARK[m.agent] || "+");
   if (m.draft) {
-    card.name.textContent = "New chat";
-    card.where.textContent = m.folder ? `${AGENT_NAME[m.agent] || m.agent} · ${m.label} · ${ckShort(m.folder)}` : "";
+    setText(card.name, "New chat");
+    setText(card.where, m.folder ? `${AGENT_NAME[m.agent] || m.agent} · ${m.label} · ${ckShort(m.folder)}` : "");
     card.where.title = m.folder || ""; card.state.hidden = true; card.stop.hidden = true; card.send.textContent = "Send"; card.send.disabled = !!card.starting;
     card.branch.hidden = false;
     if (!card.note.classList.contains("bad")) card.note.textContent = !ckDraftPcs().length
@@ -1290,8 +1290,8 @@ function ckPaint(card) {
   card.state.hidden = false;
   const before = Object.entries(m.used_by || {}); // agents this chat ran in before (continued elsewhere): each its own count
   card.tok.hidden = !m.used && !m.ctx && !before.length; // the conversation's tokens: its context now and all it used
-  card.tok.textContent = [m.ctx && `${ckNum(m.ctx)} context`, m.used && `${ckNum(m.used)} used${before.length ? ` (${AGENT_NAME[m.agent] || m.agent})` : ""}`,
-    ...before.map(([a, n]) => `${ckNum(n)} (${AGENT_NAME[a] || a})`)].filter(Boolean).join(" · ");
+  setText(card.tok, [m.ctx && `${ckNum(m.ctx)} context`, m.used && `${ckNum(m.used)} used${before.length ? ` (${AGENT_NAME[m.agent] || m.agent})` : ""}`,
+    ...before.map(([a, n]) => `${ckNum(n)} (${AGENT_NAME[a] || a})`)].filter(Boolean).join(" · "));
   card.tok.title = "Context: what the agent sent for its last step. Used: every token of this chat so far, cache reads included"
     + (before.length ? "; per agent, since the chat continued in another one." : ".");
   card.close.hidden = busy && !card.failedWrap;
@@ -1304,16 +1304,16 @@ function ckPaint(card) {
     card.close.className = "btn small quiet ck-close";
     card.close.title = m.closed ? "Back in the list" : "The agent records this chat in the memos, then it goes off the list (under Earlier, Archived); Shift-click to force archive without wrap-up; right-click or long press for a menu with it";
   }
-  card.name.textContent = ckTitle(m, card);
+  setText(card.name, ckTitle(m, card));
   card.branch.hidden = true;
-  card.where.textContent = `${AGENT_NAME[m.agent] || m.agent} · ${m.label} · ${ckShort(m.folder)}${m.project ? ` (${m.project})` : ""}${m.worktree ? ` · branch chat/${m.id}` : ""}`;
+  setText(card.where, `${AGENT_NAME[m.agent] || m.agent} · ${m.label} · ${ckShort(m.folder)}${m.project ? ` (${m.project})` : ""}${m.worktree ? ` · branch chat/${m.id}` : ""}`);
   card.where.title = m.folder || "";
   const item = (ck.board || []).find((i) => i.kind === "chat" && `${i.machine}/${i.id}` === ckKey(m));
   if (card.git.dataset.v !== JSON.stringify(item?.git || null)) {
     card.git.dataset.v = JSON.stringify(item?.git || null); card.git.replaceChildren(...(item?.git ? [ckGitPill(item)] : []));
   }
   card.state.className = `ck-state ${!card.online ? "offline" : busy ? "running" : ""}`;
-  card.state.textContent = !card.online ? "pc offline" : m.status === "queued" ? "waiting for the pc" : busy ? "working" : "ready";
+  setText(card.state, !card.online ? "pc offline" : m.status === "queued" ? "waiting for the pc" : busy ? "working" : "ready");
   card.root.classList.toggle("running", busy);
   // while the agent answers, a message waits in line (the server keeps up to 5) and goes in when this turn ends
   // with messages waiting and nothing typed the button forces: the turn stops and the first waiting message goes in
@@ -1322,13 +1322,13 @@ function ckPaint(card) {
   card.stop.hidden = !busy; card.send.disabled = !card.online; card.send.classList.toggle("force", force);
   card.queueBtn.hidden = card.forceBtn.hidden = card.more.hidden = !(live && busy && typed); // a live agent at work: three ways in
   card.send.classList.toggle("split", !card.more.hidden);
-  card.send.textContent = force ? "Force" : busy && !live ? "Queue" : "Send";
+  setText(card.send, force ? "Force" : busy && !live ? "Queue" : "Send");
   card.send.title = force ? `Send the first of ${m.waiting} waiting message${m.waiting > 1 ? "s" : ""} into the turn${live ? ": its step stops and it goes in" : ": the agent reads it after its next step"} (Stop ends the turn)`
     : busy && live ? (m.agent === "agy" ? `Right after this turn, in the same agy (it takes no message mid-turn) (${ckSendKey()})` : `Into this turn: the agent takes it in as it works (${ckSendKey()})`)
     : busy ? "The agent gets this when its current turn ends" : "";
   if (!card.note.classList.contains("bad") || busy) {
     card.note.className = "ck-note";
-    card.note.textContent = !card.online ? `${m.label} is offline${card.at ? ` since ${ago(card.at)}` : ""}: a chat needs its companion running.` : "";
+    setText(card.note, !card.online ? `${m.label} is offline${card.at ? ` since ${ago(card.at)}` : ""}: a chat needs its companion running.` : "");
   }
 }
 // A chat on a pc shared with you: Join (both steer it, it stays theirs) or Take over (it becomes yours); Leave when you
@@ -1587,7 +1587,8 @@ const CK_PAGE = 200; // events a chat opens with, and loads per step when you sc
 function ckEvents(card, res) {
   if (res.trimmed && !card.after && !res.older && res.events.length) card.log.append(el("p", "ck-line info", "Older output was trimmed (the chat keeps its newest part)."));
   const near = card.stickToBottom !== false || (card.log.scrollHeight - card.log.scrollTop - card.log.clientHeight < 120);
-  const dirty = new Set(); // a long answer comes in many pieces: its Markdown is rendered once, at the end
+  const dirty = new Set(card.held ? [card.held] : []); // a long answer comes in many pieces: its Markdown is rendered once, at the end
+  card.held = null;
   for (const e of res.events) {
     if (e.n <= card.after) continue; // two polls crossed (board + chat): never append an event twice
     card.after = Math.max(card.after, e.n);
@@ -1602,7 +1603,7 @@ function ckEvents(card, res) {
       card.log.append(e.kind === "user" ? ckUserMsg(card, e.text, undefined, e.by) : ckLine(card, e));
     }
   }
-  for (const msg of dirty) msg.innerHTML = renderMd(msg.dataset.raw.replace(/^\n+/, ""));
+  for (const msg of dirty) if (selecting(msg)) card.held = msg; else msg.innerHTML = renderMd(msg.dataset.raw.replace(/^\n+/, "")); // text being selected waits for the next poll
   if (res.events.length) {
     const hasUser = res.events.some((e) => e.kind === "user");
     if (near || hasUser) ckScrollBottom(card, hasUser);
