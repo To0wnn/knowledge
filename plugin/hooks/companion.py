@@ -3366,6 +3366,7 @@ def main(argv: list):
                 raise AssertionError("an older session's rollback would drop the hand-over's commits")
             except RuntimeError as e:
                 assert "roll back T-1-cont instead" in str(e), e
+        g["STATE"] = Path(tmp_state)  # back: the checks below would write into the removed folder and leave it in /tmp
         # The board's git pill: a branch 2 commits ahead of main, 3 changed files; the diff shows commits and edits.
         globals()["workers"] = workers_mod
         if shutil.which("git"):
