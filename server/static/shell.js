@@ -110,7 +110,9 @@ function applyRoute() {
   // Files (#/files) is the same view's third drawing, with its own place in the sidebar
   machinesMode = r.view === "files" ? "files" : r.view === "machines" && r.q.get("view") === "folders" ? "folders" : "pcs";
   for (const b of $("machines-mode").querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.mode === machinesMode));
-  if (r.view === "machines" || r.view === "files") viewLoad("machines", VIEWS[r.view][2], loadMachines);
+  if (r.view === "files" && !changed && machinesRes) drawMachines(); // a step inside Files: the pc list stays
+  else if (r.view === "machines" || r.view === "files") viewLoad("machines", VIEWS[r.view][2], loadMachines);
+  document.body.classList.toggle("fm-detail", r.view === "files" && r.q.has("p")); // a phone shows the Back arrow
   // Notes and Map: the topic list and right column, the note, the search results or the map in the middle. On a
   // phone the list and the note are two pages: a note or a search hides the list and shows the Back arrow.
   const q = r.view === "notes" ? r.q.get("q") : null; // null: no search; "" an empty search page
@@ -165,7 +167,8 @@ function paintHead() {
   }
   if (phoneTabs().includes(r.view)) $("more-btn").removeAttribute("aria-current"); else $("more-btn").setAttribute("aria-current", "page");
 }
-$("back").onclick = () => (shellRoute.view === "chats" && ck.view ? ckShow(null) : goBack(shellRoute.view === "notes" ? "#/notes" : startRoute()));
+$("back").onclick = () => (shellRoute.view === "chats" && ck.view ? ckShow(null) : shellRoute.view === "files" ? (!filesDirty() || confirm("Leave this file? Your unsaved edits are lost.")) && goBack(filesUp())
+  : goBack(shellRoute.view === "notes" ? "#/notes" : startRoute()));
 
 // The Agents views follow the one project picker (sidebar, More sheet; "" = all projects); the Needs-you badge counts all.
 function setAgentProject(p) {

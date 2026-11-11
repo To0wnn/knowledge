@@ -1468,9 +1468,13 @@ def share_contract(tmp, ck, fr, raw, er, et):
     back = poll()  # the mode changed: her live agent ends once, the next turn runs without YOLO
     assert g["id"] in back.get("end", []) and "guest_yolo" not in {w["chat"]: w for w in back["work"]}[g["id"]], back
     assert g["id"] not in poll().get("end", [])
-    # Her turn calls the server with the owner's token: there only her project, no write as a read member, no chats.
+    # Her turn calls the server with the owner's token: there only her project, no write as a read member, and of the
+    # chats only those she may steer there (her own), never the owner's.
     turn = {**pc, "X-Knowledge-Chat": g["id"]}
-    assert "(no chats" in call("knowledge_chats", {}, token=fr, headers=turn)[1]
+    listed = call("knowledge_chats", {}, token=fr, headers=turn)[1]
+    assert g["id"] in listed and mine not in listed and other not in listed, listed
+    assert not call("knowledge_chat_read", {"chat": g["id"]}, token=fr, headers=turn)[0]
+    assert "no such chat" in call("knowledge_chat_read", {"chat": mine}, token=fr, headers=turn)[1]
     assert mine in call("knowledge_chats", {}, token=fr, headers={**pc, "X-Knowledge-Chat": mine})[1]  # the owner's own turn as before
     err, text = call("knowledge_write", {"path": "garden-memory/guest_try.md", "content": memo("x\n", "guest_try")}, token=fr, headers=turn)
     assert err, text
@@ -1512,7 +1516,8 @@ def share_contract(tmp, ck, fr, raw, er, et):
     assert ui("/ui/api/chat/send", {"machine": mid, "id": jc, "text": "me too"}, er)[0] == 200
     w = {x["chat"]: x for x in poll()["work"]}[jc]
     assert w["guest"] and w["taken"] and "guest_yolo" not in w and w["text"].startswith("[from erin] me too"), w  # no YOLO while she is in it
-    assert "(no chats" in call("knowledge_chats", {}, token=fr, headers={**pc, "X-Knowledge-Chat": jc})[1]  # its agent: only her reach
+    listed = call("knowledge_chats", {}, token=fr, headers={**pc, "X-Knowledge-Chat": jc})[1]  # its agent: only her reach
+    assert jc in listed and g["id"] in listed and other not in listed, listed
     http("POST", "/machine/chats/events", {"chat": jc, "events": [], "done": True}, token=fr, headers=pc)
     # Typing: the others see it for a few seconds, never their own.
     assert ui("/ui/api/chat/typing", {"machine": mid, "id": jc}, er)[0] == 200
@@ -2485,7 +2490,21 @@ def share_on_loop(source: str) -> list[str]:
     return [name for name, f in funcs.items() if isinstance(f, ast.AsyncFunctionDef) and reach & set(calls(f)) and name != "ui_static"]
 
 
+# The slow contracts mostly wait on the server's timers: check.sh runs them side by side, each shard its own process
+# with its own server (--shard i/n). The setup between them runs in every shard; a contract not listed is shard 0's.
+SHARD_OF = {"flow_contract": 1, "needs_contract": 2, "chats_contract": 3, "board_contract": 3, "ui_gap_contract": 3, "tasks_contract": 4,
+            "lease_contract": 4, "handback_contract": 4, "machines_contract": 4}
+
+
+def keep_shard(me: int) -> None:
+    for name in [n for n in globals() if n.endswith("_contract")]:
+        if SHARD_OF.get(name, 0) != me:
+            globals()[name] = lambda *a, **k: None
+
+
 def main():
+    if "--shard" in sys.argv:
+        keep_shard(int(sys.argv[sys.argv.index("--shard") + 1]))
     on_loop = share_on_loop(Path(__file__).with_name("server.py").read_text())
     assert not on_loop, on_loop
     assert share_on_loop("def resolve(p): pass\ndef helper(): resolve(1)\nasync def bad(): helper()\nasync def good(): await to_thread(helper)\n") == ["bad"]

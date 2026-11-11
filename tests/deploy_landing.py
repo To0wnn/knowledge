@@ -1,6 +1,6 @@
 """deploy.sh as the landing step, in throwaway git repos with a fake ssh, rsync and gh: two sessions that both changed
 plugin/ land one after the other and get different versions, a hand-set minor bump stays, a conflict with main is
-refused with the tree clean and the lock freed, a red main refuses unless --fix-main, a held lock refuses, and a
+refused with the tree clean and the lock freed, a red main refuses unless --fix-main or a newer run on main turns green, a held lock is waited for, and a
 worktree without local.env uses the main checkout's. Run: python3 tests/deploy_landing.py (part of ./check.sh)."""
 import json
 import os
@@ -38,8 +38,11 @@ def setup():
                              f'exec sh -c "$(printf %s "$*" | sed "s#/root/#{ROOT}/#g")"\n')
     (BIN / "rsync").write_text("#!/bin/sh\nexit 0\n")
     (BIN / "chown").write_text("#!/bin/sh\nexit 0\n")  # forge's chown 1000:1000 runs as root there; a CI runner (uid 1001) may not
-    # gh: GH_RED names a workflow whose last finished run on main failed
-    (BIN / "gh").write_text('#!/bin/sh\ncase "$*" in *"$GH_RED"*) [ -n "$GH_RED" ] && echo "abc1234 (failure) broke it";; esac\nexit 0\n')
+    # gh: GH_RED names a workflow whose last finished run on main failed; with GH_RUNNING a newer run is still going,
+    # and it ends green (the file "ci_done") once deploy.sh asks for its status
+    (BIN / "gh").write_text(f'#!/bin/sh\ncase "$*" in\n*"run view"*) touch {T}/ci_done; echo completed;;\n'
+                            f'*\'!= "completed"\'*) [ -n "$GH_RUNNING" ] && [ ! -e {T}/ci_done ] && echo "123 def5678";;\n'
+                            f'*"$GH_RED"*) [ -n "$GH_RED" ] && [ ! -e {T}/ci_done ] && echo "abc1234 (failure) broke it";;\nesac\nexit 0\n')
     for f in BIN.iterdir():
         f.chmod(0o755)
     (ROOT / "docker/knowledge").mkdir(parents=True)
@@ -116,14 +119,21 @@ def main():
     p = sh("./deploy.sh", b, ok=False, GH_RED="clients.yml")
     assert p.returncode and "CI clients.yml is red on main since abc1234 (failure)" in p.stderr, p.stderr
     sh("./deploy.sh --fix-main", b, GH_RED="clients.yml")
+    # red, but a newer run is still going: it waits for that run and lands once it is green
+    edit(b, "server/app.py", "2", "3", "after red")
+    p = sh("./deploy.sh", b, GH_RED="clients.yml", GH_RUNNING="1")
+    assert "waiting for the newer run on def5678" in p.stderr and (T / "ci_done").exists(), p.stderr
     assert sh("./deploy.sh --nope", b, ok=False).returncode
-    # a lock held by another deploy refuses, and is not taken away from it
+    # a lock held by another deploy is waited for; past the wait it refuses, and is not taken away from it
     lock.mkdir()
     (lock / "by").write_text("other-deploy\n")
     edit(b, "server/app.py", "x", "y", "c")
-    p = sh("./deploy.sh", b, ok=False)
-    assert p.returncode and "another deploy is running (other-deploy)" in p.stderr and lock.exists(), p.stderr
-    shutil.rmtree(lock)
+    p = sh("./deploy.sh", b, ok=False, DEPLOY_LOCK_WAIT="0")
+    assert p.returncode and "another deploy is still running after 0s (other-deploy)" in p.stderr and lock.exists(), p.stderr
+    # freed while this one waits: it takes the lock and lands
+    p = sh(f"(sleep 3; rm -rf {lock}) & ./deploy.sh", b)
+    assert "waiting for another deploy (other-deploy)" in p.stderr and "got the lock after" in p.stdout, p.stdout + p.stderr
+    assert not lock.exists()
     # a worktree has no local.env: it uses the main checkout's
     sh(f"git worktree add -q {T / 'wt'} -b wt", b)
     edit(T / "wt", "server/app.py", "y", "z", "wt")

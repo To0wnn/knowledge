@@ -4,7 +4,7 @@ A self-hosted knowledge server for AI coding agents: live docs and memory over M
 Antigravity, plus a web UI with a graph. Server in `server/` (Python, one Docker container), clients in `plugin/`.
 
 ## Commands
-- check (must pass before "done"; the pre-commit hook runs it; about 50 s): `./check.sh`; `./check.sh --unless-passed` skips
+- check (must pass before "done"; the pre-commit hook runs it; about 35 s, its steps and `test_server.py --shard i/5` side by side): `./check.sh`; `./check.sh --unless-passed` skips
   it when this exact tree passed on this checkout already (deploy.sh uses that); in an agent session run it (and deploy.sh) under
   `env -u KNOWLEDGE_URL -u KNOWLEDGE_TOKEN -u KNOWLEDGE_CHAT`, or the session's own server settings break the docs sync test (401)
 - run: deployed as a Docker stack; there is no local dev server
@@ -20,8 +20,10 @@ Antigravity, plus a web UI with a graph. Server in `server/` (Python, one Docker
 - a really blocked NFS mount (Linux with an NFS server and passwordless sudo; not in the check; about 2 min): `uv run --project server python tests/nfs_outage.py`
 - deploy: `./deploy.sh` (routine; it is also how work lands). It rsyncs the working tree, so it refuses uncommitted changes
   (with someone else's changes in the checkout, deploy from your own worktree; a worktree uses the main checkout's
-  `local.env`). It refuses while CI is red on main (`--fix-main` for the deploy that fixes it). Under a lock on forge (a
-  dead deploy's lock expires after 30 minutes) it merges `origin/main` in (a conflict: merge it yourself, deploy again),
+  `local.env`). It refuses while CI is red on main (`--fix-main` for the deploy that fixes it), unless a newer run on main
+  is still going: then it waits for that one (up to 30 minutes). Under a lock on forge (a
+  dead deploy's lock expires after 30 minutes; a held one is waited for up to 10 minutes, so start a deploy in the
+  background or with a long timeout, never retry it in a loop yourself) it merges `origin/main` in (a conflict: merge it yourself, deploy again),
   hands out the next plugin version when `plugin/` changed, runs the check on the combined tree, refuses a checkout
   without the live commit (`--replace-live` takes it off the server on purpose) and pushes to `origin/main` before it
   goes live (live is always in main)
