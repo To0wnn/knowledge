@@ -18,9 +18,9 @@ FORGE=$(set -a; . "$ENVF"; printf %s "$KNOWLEDGE_FORGE_SSH")
 if ! has --fix-main; then
   if command -v gh >/dev/null 2>&1; then
     red_of() { gh run list --workflow "$1" --branch main --limit 15 --json status,conclusion,headSha,displayTitle --jq \
-      'map(select(.status == "completed" and .conclusion != "cancelled" and .conclusion != "skipped"))[0] | select(.conclusion != "success") | "\(.headSha[0:7]) (\(.conclusion)) \(.displayTitle)"' 2>/dev/null; }
+      'map(select(.status == "completed" and .conclusion != "cancelled" and .conclusion != "skipped"))[0] // empty | select(.conclusion != "success") | "\(.headSha[0:7]) (\(.conclusion)) \(.displayTitle)"' 2>/dev/null; }
     red_id() { gh run list --workflow "$1" --branch main --limit 15 --json status,conclusion,databaseId --jq \
-      'map(select(.status == "completed" and .conclusion != "cancelled" and .conclusion != "skipped"))[0] | select(.conclusion != "success") | .databaseId' 2>/dev/null; }
+      'map(select(.status == "completed" and .conclusion != "cancelled" and .conclusion != "skipped"))[0] // empty | select(.conclusion != "success") | .databaseId' 2>/dev/null; }
     flaky() {  # loud, so the flaky test still gets fixed: on stderr and in the Matrix room of local.env (when set up)
       msg="knowledge deploy: CI $1 on main failed at ${2%% *} and passed when its failed jobs ran again: a flaky test, fix it ($(gh run view "$3" --json url --jq .url 2>/dev/null))"
       echo "deploy: warning: $msg" >&2

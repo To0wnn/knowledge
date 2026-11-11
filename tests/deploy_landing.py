@@ -52,6 +52,16 @@ def setup():
                             f'*"$GH_RED"*) [ -n "$GH_RED" ] && [ ! -e {T}/ci_done ] && echo "abc1234 (failure) broke it";;\nesac\nexit 0\n')
     for f in BIN.iterdir():
         f.chmod(0o755)
+    # The real jq filters of the CI gate (red_of, red_id) on GitHub's shapes: no finished run at all (all cancelled, or
+    # none yet) is not red; it once read as "red since null (null) null" and refused every deploy (11 Nov 2026).
+    import re
+    filters = re.findall(r"--jq \\\n\s+'(map\(select\(\.status == \"completed\".*?)' 2>", (REPO / "deploy.sh").read_text())
+    assert len(filters) == 2, f"red_of and red_id filters not found in deploy.sh: {len(filters)}"
+    for filt in filters:
+        jq = lambda runs: subprocess.run(["jq", "-r", filt], input=json.dumps(runs), capture_output=True, text=True, check=True).stdout
+        done = lambda c, i=1: {"status": "completed", "conclusion": c, "headSha": "abc1234567", "displayTitle": "t", "databaseId": i}
+        assert jq([]) == jq([done("cancelled"), done("skipped")]) == jq([{"status": "in_progress", "conclusion": None}]) == "", filt
+        assert jq([done("success"), done("failure")]) == "" and jq([done("cancelled"), done("failure", 7), done("success")]).strip() in ("abc1234 (failure) t", "7"), filt
     (ROOT / "docker/knowledge").mkdir(parents=True)
     sh("git init -q --bare origin.git", T)
     src = T / "a"
