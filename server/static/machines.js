@@ -766,8 +766,11 @@ async function filesRoute(q = shellRoute.q) {
   filesDraw(m, f);
 }
 function filesProject() { if (machinesMode === "files" && !$("tab-machines").hidden && !shellRoute.q.get("p")) { filesKey = ""; filesRoute(); } }
+// A path that is not there (a link from a chat to a file renamed since, or one only in a chat's own worktree) in words.
+const filesWhy = (m, e) => /No such file|cannot find the (file|path)/i.test(e.message)
+  ? `This is not on ${m.label}: it may have been moved or deleted, or exist only on a chat's own branch (worktree) that is not merged yet.` : e.message;
 function filesFail(m, e) {
-  filesBox.replaceChildren(errorState(`${m.label}: ${e.message}`, () => { filesKey = ""; filesList = null; filesRoute(); }));
+  filesBox.replaceChildren(errorState(`${m.label}: ${filesWhy(m, e)}`, () => { filesKey = ""; filesList = null; filesRoute(); }));
 }
 
 // The start: the linked folders, grouped by pc.
@@ -895,7 +898,7 @@ async function filesShow(m, res, path, pane) {
   tools.append(close);
   pane.append(wait);
   let txt;
-  try { txt = await filesApi(m, { op: "read", path }); } catch (err) { return wait.replaceWith(errorState(err.message, () => { pane.replaceChildren(); filesShow(m, res, path, pane); })); }
+  try { txt = await filesApi(m, { op: "read", path }); } catch (err) { return wait.replaceWith(errorState(filesWhy(m, err), () => { pane.replaceChildren(); filesShow(m, res, path, pane); })); }
   if (!pane.isConnected) return;
   const code = filesCode(txt.text);
   wait.replaceWith(code);

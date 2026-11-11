@@ -886,6 +886,8 @@ async def shell(browser, devices, secret: str) -> None:
     check(up == ["#/files?m=x&p=%2Fr%2Fapp", True], f"Files: the Back arrow goes to the folder (not the file before) and the player stays {up}")
     await pg.evaluate("fp.audio.onended()")
     check(await pg.evaluate("fp.name.textContent") == "two.mp3", "Files: when a track ends the next one in the folder plays")
+    why = await pg.evaluate("""[filesWhy({label: 'pc'}, {message: "[Errno 2] No such file or directory: '/r/x.py'"}), filesWhy({label: 'pc'}, {message: '[WinError 3] The system cannot find the path specified'}), filesWhy({label: 'pc'}, {message: 'timeout'})]""")
+    check(why[0].startswith("This is not on pc") and why[1].startswith("This is not on pc") and why[2] == "timeout", f"Files: a path that is not there is said in words, other errors as they are {why}")
     await pg.evaluate("filesPlayerClose()")
     await pg.unroute("**/ui/api/files/raw**")
     await pg.unroute("**/ui/api/files", fake_files)
