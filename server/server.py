@@ -1138,7 +1138,8 @@ def chat_git_of(mid: str, c: dict):
 def own_chats() -> list:
     """(machine, chat) for every chat on the pcs of this token: the ones it reports from, and those of the same person's
     other tokens (a person's own, or the admins' own devices marked "self", as machine_key binds them); never a token
-    that is nobody's but its own (a friend's, a PA's); the newest first."""
+    that is nobody's but its own (a friend's, a PA's); plus that person's chats on a pc shared with them that they may
+    steer (chat_rights "act"); the newest first."""
     dev = device.get()
     if dev.get("guest_chat"):  # a guest's chat turn runs on the owner's token: the owner's chats are not theirs to read
         return []
@@ -1151,12 +1152,27 @@ def own_chats() -> list:
             # only chats in a project this token may read (a token for one project sees no other project's chats)
             out += [({"id": mid, "label": m.get("label") or mid}, c) for f in d.glob(CHAT_GLOB) if (c := read_json(f, None))
                     and c.get("project") in PROJECTS and in_scope(PROJECTS[c["project"]][1] + "/")]
+    # someone else's pc shared with this token's person: the chats they may steer there, as in the web UI (chat_rights "act")
+    cfg = read_json(TOKENS_FILE, {}).get(dev.get("name", ""), {})
+    for person in [cfg["owner"]] if cfg.get("owner") else sorted(ADMINS) if cfg.get("self") else []:
+        if not (as_person := user_device(person)):
+            continue
+        tok, hits = device.set(as_person), []
+        try:  # machine_rows and chat_rights read the person from the device, a token carries none
+            for r in machine_rows():
+                if not r["own"] and not r.get("mine") and r.get("shared") and (d := CHATS_DIR / r["id"]).is_dir():
+                    hits += [({"id": r["id"], "label": r.get("label") or r["id"]}, c) for f in d.glob(CHAT_GLOB)
+                             if (c := read_json(f, None)) and chat_rights(r, c) == "act"]
+        finally:
+            device.reset(tok)
+        out += [(r, c) for r, c in hits if c.get("project") in PROJECTS and in_scope(PROJECTS[c["project"]][1] + "/")
+                and all(c["id"] != o["id"] for _, o in out)]
     return sorted(out, key=lambda x: -(x[1].get("updated") or x[1].get("created") or 0))
 
 
 @server.tool(annotations=READ)
 def knowledge_chats(project: str = "", limit: int = 20) -> str:
-    """Your chats with agents in the web UI (on your own pcs), the newest first: id, agent, project, title, state. Read
+    """Your chats with agents in the web UI (on your own pcs, and those you may steer on a pc shared with you), the newest first: id, agent, project, title, state. Read
     one with knowledge_chat_read, e.g. to build on what another agent found or decided."""
     rows = [(r, c) for r, c in own_chats() if not project or c.get("project") == project][:max(1, min(limit, 100))]
     return "\n".join(f"{c['id']}: {AGENT_NAMES.get(c.get('agent'), c.get('agent'))} in {c.get('project') or '?'} on {r['label']}, "

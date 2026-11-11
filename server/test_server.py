@@ -1396,7 +1396,7 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     http("POST", "/machine/report", {"version": "0.16.0"}, token=fr, headers=pc)
 
 
-def share_contract(tmp, ck, fr, raw, er):
+def share_contract(tmp, ck, fr, raw, er, et):
     """A pc shared per project: only its owner shares, only with a member; view shows that project's chats there and
     nothing else, use also starts chats of their own (always a worktree, never YOLO); taking it back stops them."""
     mid, pc = "abababababababab", {"X-Knowledge-Machine": "abababababababab", "X-Knowledge-Machine-Label": "attic"}
@@ -1541,6 +1541,21 @@ def share_contract(tmp, ck, fr, raw, er):
     assert ui("/ui/api/chat/send", {"machine": mid, "id": jc, "text": "gone?"}, er)[0] == 403
     assert ui("/ui/api/chat/join", {"machine": mid, "id": jc}, er)[0] == 200  # in again, for the share ending below
     poll()
+    # Her own agents (a token of hers) reach the chats she may steer on this pc, as the web UI does: list, force close.
+    ui("/ui/api/admin/user", {"username": "erin", "projects": {**was, "garden": "write"}})
+    toks = json.loads((tmp / "tokens.json").read_text())
+    held = toks["erin.laptop"]["roots"]
+    toks["erin.laptop"]["roots"] = held + ["garden", "garden-memory"]
+    (tmp / "tokens.json").write_text(json.dumps(toks))
+    g2 = json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/x/garden"}, er)[2])["chat"]["id"]
+    listed = call("knowledge_chats", {}, et)[1]
+    assert g2 in listed and jc in listed and g["id"] in listed and other not in listed, listed
+    assert "force-archived" in call("knowledge_chat_close", {"chat": g2, "reason": "stuck"}, et)[1]
+    assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={g2}")[2])["chat"]["closed"]
+    assert "opened again" in call("knowledge_chat_close", {"chat": g2, "open": True}, et)[1]
+    ui("/ui/api/admin/user", {"username": "erin", "projects": {**was, "garden": "read"}})
+    toks["erin.laptop"]["roots"] = held
+    (tmp / "tokens.json").write_text(json.dumps(toks))
     # Taken back: off her list at once; the running turn stops at the next poll and nothing more runs.
     assert share("")[0] == 200 and mid not in rows(er) and "abababababababab" not in json.loads((tmp / "machine_shares.json").read_text())
     assert ui("/ui/api/chat/send", {"machine": mid, "id": g["id"], "text": "more"}, er)[0] == 403
@@ -3745,7 +3760,7 @@ def main():
         assert {"erinproj", "erinproj-memory"} <= set(roots), roots  # her devices reach her new project at once
         machines_contract(tmp, ck, fr, raw, er, et, heard)
         chats_contract(tmp, ck, fr, raw, er, et)
-        share_contract(tmp, ck, fr, raw, er)
+        share_contract(tmp, ck, fr, raw, er, et)
         tool_requests_contract(tmp, ck, raw, er)
         remote_toggle_contract(tmp, ck, raw, er, et)
         # Speech to text: the page's recording goes on to the configured server with model, language, prompt and key;

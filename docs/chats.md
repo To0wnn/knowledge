@@ -41,8 +41,10 @@ from a phone. The pc side runs in the companion ([companion.md](companion.md)).
   it, and the admin hears on Matrix when someone starts one on an admin's pc. Taking it back (Off), the person leaving
   the project, the owner's token turning remote control off, or the companion no longer reporting `guests` ends it at
   once: the next poll stops a running turn and ends its live agent with its background work (`stop` and `end`, said
-  again for 10 minutes), hands out nothing more, marks the chat idle with a line saying why, and refuses its events. Not shared: MCP
-  `knowledge_chats` and `knowledge_chat_read` still list only your own pcs' chats.
+  again for 10 minutes), hands out nothing more, marks the chat idle with a line saying why, and refuses its events. MCP
+  `knowledge_chats`, `knowledge_chat_read` and `knowledge_chat_close` reach, besides your own pcs' chats, the chats you
+  may steer on a pc shared with you (your own guest chats and those you joined), so your own agents can read or
+  force-archive them; the person comes from the token's owner (an admin's "self" token: the admins).
 
 - **Terminal sessions under Needs you:** a session you started yourself shows on the board when it waits for your approval: the plugin's hook leaves a mark in `~/.knowledge/asks`, and the companion reports a mark that stayed 2 minutes in its next report. The row names the tool and its command and offers Dismiss and Snooze, no Allow or Deny: you answer in that terminal. Claude Code and Codex have a `PermissionRequest` event, but none for "approved", so a long command you allowed looks the same until it ends; the row says so. agy has no such event: its mark comes from `PreToolUse` on every tool (not under YOLO, where nothing waits), stays 5 minutes before it shows, and says "may wait". A mark goes when the tool ran, the turn ended (Esc at a prompt: Claude Code's `idle_prompt` after a minute, Codex's `Interrupt`), the next prompt came, that agent no longer runs on the pc (an npm install of Claude Code on Windows runs as node, so it shows no terminal rows), or after a day (agy: an hour, because Esc at its prompt sends no hook, so until then a refused prompt can show as "may wait"; Dismiss takes it away). A row needs a companion report of the last 5 minutes. Needs the companion on that pc.
 
