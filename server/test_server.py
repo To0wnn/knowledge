@@ -2058,6 +2058,12 @@ def files_contract(tmp, ck, fr, raw, er, et):
         hd = {k.lower(): v for k, v in hd.items()}
         assert st == 206 and body == b"cdefghij" and hd["content-range"] == "bytes 2-9/10" and hd["content-type"] == "audio/mpeg", (st, hd, body)
         assert "sandbox" in hd["content-security-policy"], hd
+        files, page = asked(lambda: raw("GET", f"/ui/api/files/raw?machine={mid}&path=/home/x/garden/take.WAV", None, {**ck, "Range": "bytes=0-"}))
+        req = urllib.request.Request(f"{BASE}/machine/files/stream?id={files[0]['id']}&size=2&start=0&end=1", method="POST", data=b"ab",
+                                     headers={**pc, "Authorization": f"Bearer {fr}", "Content-Type": "application/octet-stream"})
+        urllib.request.urlopen(req, timeout=10).close()
+        st, hd, _ = page.result()
+        assert st == 206 and {k.lower(): v for k, v in hd.items()}["content-type"] == "audio/wav", (st, hd)  # never audio/vnd.wave: Safari and Firefox refuse it
         files, page = asked(lambda: raw("GET", f"/ui/api/files/raw?machine={mid}&path=/home/x/garden/song.mp3", None, {**ck, "Range": "bytes=50-"}))
         http("POST", "/machine/files/answer", {"id": files[0]["id"], "error": "the range lies outside the file", "size": 10}, token=fr, headers=pc)
         st, hd, _ = page.result()

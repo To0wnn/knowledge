@@ -6390,6 +6390,11 @@ FILES_QUEUED: dict = {}  # machine id -> [request] the pc has not fetched yet
 FILES_OPEN: dict = {}  # request id -> {"machine", "tokens", "answer": Future, "chunks": Queue (a stream), "gone": Event}
 FILES_WAIT, FILES_TEXT, FILES_PATH = 20, 1_000_000, 1000  # seconds a page waits for its pc; characters of a text; of a path
 FILES_PLAY = ("image/", "audio/", "video/")  # what streams raw; anything else is read as text (an SVG too: no script)
+# The media types the Files view plays, fixed: the system's table differs per image (Debian's gives .wav audio/vnd.wave,
+# which Safari and Firefox refuse to play, .m4v video/x-m4v, and nothing for .oga); images keep the guessed type.
+FILES_MEDIA = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".aac": "audio/aac", ".flac": "audio/flac",
+               ".ogg": "audio/ogg", ".oga": "audio/ogg", ".opus": "audio/ogg", ".mp4": "video/mp4", ".m4v": "video/mp4",
+               ".webm": "video/webm", ".ogv": "video/ogg", ".mov": "video/quicktime", ".mkv": "video/x-matroska"}
 
 
 def wake_machine(mid: str):
@@ -6503,7 +6508,7 @@ async def ui_files_raw(request: Request):
     <video> asks when it starts or seeks."""
     q = request.query_params
     path = q.get("path", "")
-    kind = mimetypes.guess_type(path)[0] or ""
+    kind = FILES_MEDIA.get(PurePosixPath(path.replace("\\", "/")).suffix.lower()) or mimetypes.guess_type(path)[0] or ""
     if not kind.startswith(FILES_PLAY) or kind == "image/svg+xml":
         return JSONResponse({"error": "only images, audio and video stream; open other files as text"}, status_code=400)
     rng = re.fullmatch(r"bytes=(\d*)-(\d*)", request.headers.get("range", "").strip())
