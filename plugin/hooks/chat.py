@@ -989,6 +989,8 @@ class Hosted:
             return int((self.d / "exit").read_text(encoding="utf-8") or 0)
         except FileNotFoundError:
             pass
+        except PermissionError:  # Windows: the host's os.replace of exit is under way; the next poll reads it
+            return None
         except ValueError:
             return -1
         # the host writes exit when it ends; that it died without (killed) is looked for at most every 2 s: on macOS
