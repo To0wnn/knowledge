@@ -208,42 +208,47 @@ function meters(pcs, a) {
   return box;
 }
 
-// A pc's load over the last 24 hours (the companion's sysstats): min, average and max, a chart when opened.
-const STAT_OPEN = new Set(); // which charts are open: the page is redrawn on every refresh
+// A pc's load (the companion's sysstats) as a stat tile: the value now, a meter, a chart that is always there (hover
+// for a moment's value) and min/avg/max of the zoomed window. While Machines is open the value and meter go live.
 const STAT_NAME = { cpu: "CPU", gpu: "GPU", ram: "RAM", vram: "VRAM" };
 let STAT_ZOOM = "24h"; // one zoom for every chart: comparing pcs side by side
 const STAT_ZOOMS = { "1h": "1 h", "6h": "6 h", "24h": "24 h" };
+const statGb = (x) => (x / 1024).toFixed(x < 10240 ? 1 : 0);
 function statCell(m, k) {
   const st = m.companion?.stats?.[k], total = m.companion?.stats?.total?.[k];
   if (!st) return null;
-  const gb = (x) => `${(x / 1024).toFixed(x < 10240 ? 1 : 0)}`, fmt = total ? (x) => gb(x) : (x) => `${Math.round(x)}%`;
-  const box = el("details", "mx-stat"), sum = el("summary"), key = `${m.id}:${k}`;
+  const fmt = total ? (x) => `${statGb(x)} GB` : (x) => `${Math.round(x)}%`;
   // a companion before zooming sends only 24 h: its chart stays at 24 h
   const z = STAT_ZOOM !== "24h" && st.hour?.length ? STAT_ZOOM : "24h", [lo, hi, avg] = st.windows?.[z] || [st.min, st.max, st.avg];
   const series = z === "1h" ? st.hour : z === "6h" ? st.series.slice(-36) : st.series;
-  box.open = STAT_OPEN.has(key);
-  box.ontoggle = () => box.open ? STAT_OPEN.add(key) : STAT_OPEN.delete(key);
-  const now = el("b", null, total ? `${gb(st.now)} / ${gb(total)} GB` : fmt(st.now));
-  now.dataset.live = key; statLiveShow(now);
-  sum.append(now, val(` min ${fmt(lo)} · avg ${fmt(avg)} · max ${fmt(hi)}`, "muted"));
-  sum.title = `Now, then the lowest, average and highest of the last ${STAT_ZOOMS[z]}`;
-  const zoom = el("div", "mx-zoom");
-  for (const [w, label] of Object.entries(STAT_ZOOMS)) {
-    const b = el("button", `btn small${w === z ? " on" : " quiet"}`, label);
-    b.type = "button"; b.setAttribute("aria-pressed", String(w === z));
-    b.onclick = () => { STAT_ZOOM = w; drawMachines(); };
-    zoom.append(b);
-  }
-  box.append(sum, zoom, sparkline(series, total || 100, `${STAT_NAME[k]} on ${m.label}, last ${STAT_ZOOMS[z]}: min ${fmt(lo)}, average ${fmt(avg)}, max ${fmt(hi)}`, `${STAT_ZOOMS[z]} ago`));
-  return box;
+  const tile = el("div", "mx-stat"), head = el("div", "mx-stat-head"), v = el("b", "mx-stat-v"), of = el("span", "muted");
+  const track = el("div", "mx-track mx-stat-meter"), fill = el("i");
+  track.append(fill); track.setAttribute("aria-hidden", "true");
+  head.append(v, of); tile.dataset.live = `${m.id}:${k}`;
+  tile.append(head, track, sparkline(series, total || 100, z === "1h" ? 60 : m.companion.stats.bucket || 600, fmt,
+    `${STAT_NAME[k]} on ${m.label}, last ${STAT_ZOOMS[z]}: min ${fmt(lo)}, average ${fmt(avg)}, max ${fmt(hi)}`),
+    val(`min ${fmt(lo)} · avg ${fmt(avg)} · max ${fmt(hi)}`, "mx-stat-range"));
+  statValue(tile, total ? [st.now, total] : st.now);
+  statLiveShow(tile);
+  return tile;
+}
+function statValue(tile, x) { // x: a % or [used, total] MB
+  const [v, of] = tile.querySelector(".mx-stat-head").children, fill = tile.querySelector(".mx-stat-meter i");
+  const pct = Array.isArray(x) ? 100 * x[0] / x[1] : x;
+  v.textContent = Array.isArray(x) ? statGb(x[0]) : `${Math.round(x)}%`;
+  of.textContent = Array.isArray(x) ? ` / ${statGb(x[1])} GB` : "";
+  fill.style.width = `${Math.min(100, Math.max(0, pct))}%`; fill.className = pct >= 95 ? "bad" : pct >= 80 ? "warn" : "";
 }
 // Live load: every few seconds while Machines is open (the companions send it only while someone asks)
 let statLive = {}, statLiveTimer = 0;
-function statLiveShow(b) {
-  const [id, k] = b.dataset.live.split(":"), x = statLive[id]?.[k];
-  if (x == null) return;
-  b.textContent = Array.isArray(x) ? `${(x[0] / 1024).toFixed(x[0] < 10240 ? 1 : 0)} / ${(x[1] / 1024).toFixed(x[1] < 10240 ? 1 : 0)} GB` : `${Math.round(x)}%`;
-  b.classList.add("mx-live"); b.title = "Live, every few seconds";
+function statLiveShow(tile) {
+  const [id, k] = tile.dataset.live.split(":"), x = statLive[id]?.[k];
+  if (x != null) statValue(tile, x);
+}
+function statLivePill(p) {
+  const on = !!statLive[p.dataset.pc];
+  p.className = `pill mx-livepill${on ? " on" : ""}`; p.textContent = on ? "Live" : "Every minute";
+  p.title = on ? "The values update every few seconds" : "No live values from this pc (its companion is older, or it is away): the values are from its last minute report";
 }
 async function statLiveTick() {
   clearTimeout(statLiveTimer);
@@ -252,22 +257,49 @@ async function statLiveTick() {
   if (ids.length && !document.hidden) {
     try { statLive = (await api(`/ui/api/machines/live?ids=${ids.join(",")}`)).live || {}; } catch { statLive = {}; }
     document.querySelectorAll("#machines [data-live]").forEach(statLiveShow);
+    document.querySelectorAll("#machines .mx-livepill").forEach(statLivePill);
   }
   statLiveTimer = setTimeout(statLiveTick, 3000);
 }
-function sparkline(series, top, label, from) {
-  const ns = "http://www.w3.org/2000/svg", w = 240, h = 40, svg = document.createElementNS(ns, "svg");
-  svg.setAttribute("viewBox", `0 0 ${w} ${h}`); svg.setAttribute("class", "mx-spark"); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", label);
-  const step = w / Math.max(1, series.length - 1), y = (v) => (h - 1 - (h - 2) * Math.min(1, v / top)).toFixed(1);
-  let pts = [];
-  const flush = () => { // a gap where the pc was off: no line drawn across it
-    if (pts.length) { const l = document.createElementNS(ns, "polyline"); l.setAttribute("points", (pts.length > 1 ? pts : [pts[0], pts[0].replace(/^[\d.]+/, (x) => +x + 1)]).join(" ")); svg.append(l); }
-    pts = [];
+function statZoom() {
+  const zoom = el("div", "mx-zoom");
+  for (const [w, label] of Object.entries(STAT_ZOOMS)) {
+    const b = el("button", `btn small${w === STAT_ZOOM ? " on" : " quiet"}`, label);
+    b.type = "button"; b.setAttribute("aria-pressed", String(w === STAT_ZOOM));
+    b.onclick = () => { STAT_ZOOM = w; drawMachines(); };
+    zoom.append(b);
+  }
+  return zoom;
+}
+// An area chart: a 2px line over a light wash, a gap where the pc was off; hover shows the time and value there.
+function sparkline(series, top, step, fmt, label) {
+  const ns = "http://www.w3.org/2000/svg", w = 240, h = 44, svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", `0 0 ${w} ${h}`); svg.setAttribute("preserveAspectRatio", "none");
+  svg.setAttribute("class", "mx-spark"); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", label);
+  const dx = w / Math.max(1, series.length - 1), y = (v) => (h - 1 - (h - 4) * Math.min(1, v / top)).toFixed(1);
+  let line = "", area = "", run = [];
+  const flush = () => {
+    if (run.length === 1) run.push([run[0][0] + 1, run[0][1]]); // a lone point stays visible
+    if (run.length) {
+      line += `M${run.map((p) => p.join(",")).join("L")}`;
+      area += `M${run[0][0]},${h}L${run.map((p) => p.join(",")).join("L")}L${run[run.length - 1][0]},${h}Z`;
+    }
+    run = [];
   };
-  series.forEach((v, i) => { if (v == null) flush(); else pts.push(`${(i * step).toFixed(1)},${y(v)}`); });
+  series.forEach((v, i) => { if (v == null) flush(); else run.push([(i * dx).toFixed(1), y(v)]); });
   flush();
-  const axis = el("div", "mx-spark-axis"); axis.append(el("span", null, from), el("span", null, "now"));
-  const wrap = el("div", "mx-spark-box"); wrap.append(svg, axis);
+  const path = (d, cls) => { const p = document.createElementNS(ns, "path"); p.setAttribute("d", d); p.setAttribute("class", cls); return p; };
+  const cross = path(`M0,0L0,${h}`, "mx-spark-x");
+  svg.append(path(area, "mx-spark-area"), path(line, "mx-spark-line"), cross);
+  const wrap = el("div", "mx-spark-box"), tip = el("span", "mx-spark-tip");
+  svg.onpointermove = (e) => {
+    const r = svg.getBoundingClientRect(), i = Math.round((e.clientX - r.left) / r.width * (series.length - 1));
+    const at = new Date(Date.now() - (series.length - 1 - i) * step * 1000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+    cross.setAttribute("transform", `translate(${(i * dx).toFixed(1)},0)`); wrap.classList.add("hover");
+    tip.textContent = `${at} · ${series[i] == null ? "off" : fmt(series[i])}`;
+  };
+  svg.onpointerleave = () => wrap.classList.remove("hover");
+  wrap.append(svg, tip);
   return wrap;
 }
 
@@ -483,7 +515,13 @@ function compareTable(pcs, here, mine) {
   const names = pcs.length > 1 ? pcs.map((m) => m.label) : [], row = (cls, label, cells, end) => mxRow(cls, label, cells, end, names);
   grid.append(mxRow("mx-head", null, pcs.map((m) => pcHead(m, here))));
   const stats = ["cpu", "gpu", "ram", "vram"].filter((k) => pcs.some((m) => m.companion?.stats?.[k]));
-  if (stats.length) grid.append(mxRow("mx-sec", "Load", pcs.map(() => null)));
+  if (stats.length) {
+    const lab = el("div", "mx-load-lab"); lab.append(el("span", null, "Load"), statZoom());
+    grid.append(mxRow("mx-sec", lab, pcs.map((m) => {
+      if (!m.companion?.stats?.cpu) return null;
+      const p = el("span"); p.dataset.pc = m.id; statLivePill(p); return p;
+    })));
+  }
   for (const k of stats) grid.append(row("", STAT_NAME[k], pcs.map((m) => statCell(m, k) || val("—", "muted"))));
   const agents = AGENT_ORDER.filter((a) => pcs.some((m) => m.agents?.[a]));
   for (const a of agents) {

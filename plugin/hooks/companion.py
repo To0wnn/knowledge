@@ -2186,8 +2186,7 @@ def live_loop():
     while True:
         if time.time() < LIVE["until"]:
             with contextlib.suppress(Exception):  # live is a nicety: the minute report is the record
-                t, c, r, _, g, v, _ = sysstats.sample(time.time(), "live")
-                server("POST", "/machine/live", token_store.token(), {"cpu": c, "ram": r, "gpu": g, "vram": v}, timeout=5)
+                server("POST", "/machine/live", token_store.token(), sysstats.live(sysstats.sample(time.time(), "live")), timeout=5)
         time.sleep(LIVE_EVERY)
 
 

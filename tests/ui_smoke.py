@@ -709,16 +709,23 @@ async def shell(browser, devices, secret: str) -> None:
       if (menu) menu.open = false; return out; }""")
     check(more.get("skip") or (more["panel"] and more["closed"] and more["open"]), f"Machines: a click beside an open tool panel closes it and opens what it clicked {more}")
     # A pc of yours whose token has remote control off stays with yours (read-only), never under other people's pcs.
-    load = await pg.evaluate("""async () => { const d = document.querySelector('#machines .mx-stat');
-      if (!d) return {skip: true}; d.querySelector('summary').click(); await new Promise((r) => setTimeout(r, 50)); drawMachines();  // toggle fires a task later
-      const again = document.querySelector('#machines .mx-stat');
-      const one = [...again.querySelectorAll('.mx-zoom button')].find((b) => b.textContent === '1 h'); one.click();
-      const zoomed = document.querySelector('#machines .mx-stat'), axis = zoomed.querySelector('.mx-spark-axis span').textContent;
-      const pressed = zoomed.querySelector('.mx-zoom [aria-pressed=true]')?.textContent;
-      return {axis, pressed, rows: document.querySelectorAll('#machines .mx-stat').length, open: again.open, lines: again.querySelectorAll('svg polyline').length, text: again.querySelector('summary').textContent}; }""")
+    load = await pg.evaluate("""async () => { const t = document.querySelector('#machines .mx-stat');
+      if (!t) return {skip: true};
+      const range24 = t.querySelector('.mx-stat-range').textContent;
+      [...document.querySelectorAll('#machines .mx-zoom button')].find((b) => b.textContent === '1 h').click();
+      const z = document.querySelector('#machines .mx-stat'), svg = z.querySelector('svg');
+      const r = svg.getBoundingClientRect();
+      svg.dispatchEvent(new PointerEvent('pointermove', {clientX: r.right - 1, clientY: r.top + 5, bubbles: true}));
+      const tip = z.querySelector('.mx-spark-tip').textContent, pill = document.querySelector('#machines .mx-livepill')?.textContent;
+      const out = {range24, range1h: z.querySelector('.mx-stat-range').textContent, tip, pill, value: z.querySelector('.mx-stat-v').textContent,
+        meter: z.querySelector('.mx-stat-meter i').style.width, area: !!z.querySelector('.mx-spark-area[d^=M]'),
+        pressed: document.querySelector('#machines .mx-zoom [aria-pressed=true]')?.textContent};
+      return out; }""")
     if os.environ.get("KNOWLEDGE_SMOKE_SHOTS") and not load.get("skip"):
         await pg.locator("#machines .mx-wrap").first.screenshot(path=os.path.join(os.environ["KNOWLEDGE_SMOKE_SHOTS"], "machines-load.png"))
-    check(load.get("skip") or (load["open"] and load["lines"] >= 1 and "avg" in load["text"] and load["axis"] == "1 h ago" and load["pressed"] == "1 h"), f"Machines: a load row opens a chart that stays open when the list refreshes and zooms to 1 h {load}")
+    check(load.get("skip") or (load["area"] and load["meter"].endswith("%") and load["pressed"] == "1 h" and load["range1h"] != load["range24"]
+                               and " · " in load["tip"] and load["pill"] in ("Live", "Every minute")),
+          f"Machines: a load tile shows value, meter, chart with hover, zooms to 1 h with its own min/avg/max, one live label per pc {load}")
     split = await pg.evaluate("""() => { const was = machinesRes, now = Date.now() / 1000;
       const pc = (id, label, mine, own) => ({id, label, mine, own, online: true, at: now, tokens: [label], actions: [], agents: {claude: {plugin: '1.0.0', trusted: true, workers: []}}, companion: {version: '1.0.0', agents: ['claude'], tools: {}}});
       const gone = (id) => ({...pc(id, 'test-vm', true, true), online: false});

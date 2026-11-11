@@ -126,6 +126,12 @@ def sample(now: float, key: str = "round") -> list:
     return [int(now), safe(lambda: cpu(key)), *r, g, *(v or [None, None])]
 
 
+def live(s: list) -> dict:
+    """A sample as POST /machine/live takes it: CPU and GPU in %, RAM and VRAM as [used, total] MB."""
+    pair = lambda used, total: [used, total] if used is not None and total else None  # noqa: E731
+    return {"cpu": s[1], "ram": pair(s[2], s[3]), "gpu": s[4], "vram": pair(s[5], s[6])}
+
+
 def summary(samples: list, now: float) -> dict:
     """Per metric [min, max, avg, now] over the last 24 hours and its 10-minute averages, oldest first (None: no
     sample then); totals from the newest sample. Metrics no sample knows are left out."""
@@ -172,4 +178,6 @@ if __name__ == "__main__" and sys.argv[1:] == ["--self-test"]:
     assert got["cpu"]["windows"] == {"1h": [10, 30, 20.0], "6h": [10, 30, 20.0]}, got["cpu"]["windows"]
     assert got["total"] == {"ram": 8000} and "gpu" not in got and "vram" not in got, got
     assert summary([], now) == {"bucket": BUCKET, "total": {}}
+    assert live([0, 5.0, 100, 200, None, 7, 9]) == {"cpu": 5.0, "ram": [100, 200], "gpu": None, "vram": [7, 9]}  # pairs, as the server checks
+    assert live([0, None, None, None, None, None, None])["ram"] is None
     print("sysstats self-test ok", s1)
