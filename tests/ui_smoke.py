@@ -745,6 +745,9 @@ async def shell(browser, devices, secret: str) -> None:
         meter: z.querySelector('.mx-stat-meter i').style.width, area: !!z.querySelector('.mx-spark-area[d^=M]'),
         pressed: document.querySelector('#machines .mx-zoom [aria-pressed=true]')?.textContent};
       return out; }""")
+    bridge = await pg.evaluate("""() => [statBridge([1, null, 3]), statBridge([1, null, null, 5]), statBridge([1, null, null, null, 5]), statBridge([null, 1, 2, null])]""")
+    check(bridge == [[1, 2, 3], [1, 3, 3, 5], [1, None, None, None, 5], [None, 1, 2, None]],
+          f"Machines: a chart draws through a missed minute or two, not through the pc being off {bridge}")
     if os.environ.get("KNOWLEDGE_SMOKE_SHOTS") and not load.get("skip"):
         await pg.locator("#machines .mx-wrap").first.screenshot(path=os.path.join(os.environ["KNOWLEDGE_SMOKE_SHOTS"], "machines-load.png"))
     check(load.get("skip") or (load["area"] and load["meter"].endswith("%") and load["pressed"] == "1 h" and load["range1h"] != load["range24"]
