@@ -452,7 +452,7 @@ async def approvals(browser, devices, secret: str) -> None:
 
     async def fake(route):
         path = urlsplit(route.request.url).path
-        if path in ("/ui/api/chat/approve", "/ui/api/chat/send", "/ui/api/board/dismiss"):  # nothing reaches a pc
+        if path in ("/ui/api/chat/approve", "/ui/api/chat/send", "/ui/api/board/dismiss", "/ui/api/chat/close"):  # nothing reaches a pc
             sent.append({**json.loads(route.request.post_data or "{}"), "_path": path})
             return await route.fulfill(json={"ok": True})
         if path in routes and route.request.method == "GET":
@@ -531,6 +531,18 @@ async def approvals(browser, devices, secret: str) -> None:
         await pg.locator("#ck-canvas .ck-ask").first.get_by_role("button", name="Allow once").click()
         await pg.wait_for_timeout(500)
         check(sent and sent[-1] == {"machine": chat["machine"], "id": chat["id"], "ask": ask["id"], "decision": "once", "_path": "/ui/api/chat/approve"}, f"Allow once answers that approval {sent[-1:]}")
+        # Archive: right-click (desktop) or a long press (phone) force archives, once, and the click after the press does nothing more
+        pg.on("dialog", lambda d: asyncio.ensure_future(d.accept()))  # the chat runs: force archive asks first
+        before = len(sent)
+        if dev.get("is_mobile"):
+            await pg.evaluate("""() => { const b = ck.cards.get(ck.view).close, o = {pointerType: 'touch', bubbles: true};
+              b.dispatchEvent(new PointerEvent('pointerdown', o)); setTimeout(() => { b.dispatchEvent(new PointerEvent('pointerup', o)); b.click(); }, 700); }""")
+        else:
+            await pg.evaluate("ck.cards.get(ck.view).close.dispatchEvent(new MouseEvent('contextmenu', {bubbles: true, cancelable: true}))")
+        await pg.wait_for_timeout(1200)
+        closes = [x for x in sent[before:] if x["_path"] == "/ui/api/chat/close"]
+        check(len(closes) == 1 and closes[0].get("force") is True and closes[0].get("record") is False,
+              f"Archive: {'a long press' if dev.get('is_mobile') else 'right-click'} force archives once {closes}")
         check(not errors, f"no page errors with approvals {errors[:2]}")
         await ctx.close()
 
@@ -766,6 +778,27 @@ async def shell(browser, devices, secret: str) -> None:
     check(split["lines"] == [" test-vm 3 reports"], f"Machines: a pc set up again (same name and token) is one offline line with its reports counted {split}")
     words = await pg.evaluate("""() => { const now = Date.now() / 1000; return [workerNeedsYou({online: true}, {status: 'failed', owner_stopped: true}), workerNeedsYou({online: true}, {status: 'failed'})]; }""")
     check(words == [False, True], f"Machines: a worker stopped by its owner does not need you, one that failed does {words}")
+    # Files: a folder and a file have their own URL; folders first, a file opens beside the list with line numbers
+    # (the pc's answers intercepted: read-only, no pc needed).
+    listing = {"path": "/r/app", "root": "/r", "parent": "/r", "sep": "/", "more": 0, "entries": [
+        {"name": "src", "path": "/r/app/src", "dir": True, "size": 0, "mtime": 1790000000},
+        {"name": "main.py", "path": "/r/app/main.py", "dir": False, "size": 12, "mtime": 1790000000}]}
+
+    async def fake_files(r):
+        op = json.loads(r.request.post_data)["op"]
+        await r.fulfill(json=listing if op == "list" else {"path": "/r/app/main.py", "text": "one\ntwo\n", "mtime": "1", "size": 8, "masked": False})
+    await pg.route("**/ui/api/files", fake_files)
+    await route(pg, "#/files?m=x&p=%2Fr%2Fapp", ".fm-folder", 300)
+    names = await pg.locator(".fm-folder .fm-name").all_inner_texts()
+    check(names == ["src", "main.py"] and await pg.locator(".fm-crumbs").inner_text() != "", f"Files: a folder lists folders first, with its path {names}")
+    await pg.locator(".fm-row", has_text="main.py").click()
+    await pg.wait_for_selector(".fm-code", timeout=10000)
+    check("f=%2Fr%2Fapp%2Fmain.py" in await pg.evaluate("location.hash") and await pg.locator(".fm-gutter").inner_text() == "1\n2",
+          "Files: a file opens at its own URL, with line numbers")
+    await pg.go_back()
+    await pg.wait_for_timeout(300)
+    check(await pg.locator(".fm-code").count() == 0 and await pg.locator(".fm-folder").count() == 1, "Files: Back closes the file, the folder stays")
+    await pg.unroute("**/ui/api/files", fake_files)
     await route(pg, "#/machines?view=folders", ms=1500)  # Link a folder sits on top of Folders: a folder first, then its project
     if await pg.get_by_role("button", name="Link a folder").count():
         tree = {"": {"path": "", "parent": None, "linkable": False, "dirs": [{"name": "C:\\", "path": "C:\\"}, {"name": "D:\\", "path": "D:\\"}]},

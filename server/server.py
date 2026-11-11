@@ -1135,15 +1135,34 @@ def chat_git_of(mid: str, c: dict):
     return next((f.get("git") for f in (comp.get("folders") or {}).get("linked", []) if f.get("path") == c.get("folder")), None)
 
 
+def steerable(person: str, mid: str = "") -> list:
+    """(machine, chat) for the chats `person` may steer (chat_rights "act") on pcs shared with them, or on pc `mid` only."""
+    if not (as_person := user_device(person)):
+        return []
+    tok, hits = device.set(as_person), []
+    try:  # machine_rows and chat_rights read the person from the device, a token carries none
+        for r in machine_rows():
+            if (not mid or r["id"] == mid) and not r["own"] and not r.get("mine") and r.get("shared") and (d := CHATS_DIR / r["id"]).is_dir():
+                hits += [({"id": r["id"], "label": r.get("label") or r["id"]}, c) for f in d.glob(CHAT_GLOB)
+                         if (c := read_json(f, None)) and chat_rights(r, c) == "act"]
+    finally:
+        device.reset(tok)
+    return hits
+
+
 def own_chats() -> list:
     """(machine, chat) for every chat on the pcs of this token: the ones it reports from, and those of the same person's
     other tokens (a person's own, or the admins' own devices marked "self", as machine_key binds them); never a token
     that is nobody's but its own (a friend's, a PA's); plus that person's chats on a pc shared with them that they may
     steer (chat_rights "act"); the newest first."""
     dev = device.get()
-    if dev.get("guest_chat"):  # a guest's chat turn runs on the owner's token: the owner's chats are not theirs to read
-        return []
-    key = machine_key(dev.get("name", "")) or (f"user:{dev['user']}" if dev.get("user") else "")
+    if people := [p for p in dev.get("guest_chat", "").split(", ") if p]:
+        # a guest's chat turn runs on the owner's token: only the chats on this pc that every guest in it may steer, never the owner's
+        per = [{c["id"]: (r, c) for r, c in steerable(p, dev.get("machine", ""))} for p in people]
+        out = [x for i, x in per[0].items() if all(i in o for o in per[1:]) and x[1].get("project") in PROJECTS
+               and in_scope(PROJECTS[x[1]["project"]][1] + "/")]
+        return sorted(out, key=lambda x: -(x[1].get("updated") or x[1].get("created") or 0))
+    key =machine_key(dev.get("name", "")) or (f"user:{dev['user']}" if dev.get("user") else "")
     mine = lambda n: n == dev.get("name") or bool(key) and not key.startswith("token:") and machine_key(n) == key
     out = []
     for mid, m in read_json(MACHINES_FILE, {}).items():
@@ -1155,17 +1174,7 @@ def own_chats() -> list:
     # someone else's pc shared with this token's person: the chats they may steer there, as in the web UI (chat_rights "act")
     cfg = read_json(TOKENS_FILE, {}).get(dev.get("name", ""), {})
     for person in [cfg["owner"]] if cfg.get("owner") else sorted(ADMINS) if cfg.get("self") else []:
-        if not (as_person := user_device(person)):
-            continue
-        tok, hits = device.set(as_person), []
-        try:  # machine_rows and chat_rights read the person from the device, a token carries none
-            for r in machine_rows():
-                if not r["own"] and not r.get("mine") and r.get("shared") and (d := CHATS_DIR / r["id"]).is_dir():
-                    hits += [({"id": r["id"], "label": r.get("label") or r["id"]}, c) for f in d.glob(CHAT_GLOB)
-                             if (c := read_json(f, None)) and chat_rights(r, c) == "act"]
-        finally:
-            device.reset(tok)
-        out += [(r, c) for r, c in hits if c.get("project") in PROJECTS and in_scope(PROJECTS[c["project"]][1] + "/")
+        out += [(r, c) for r, c in steerable(person) if c.get("project") in PROJECTS and in_scope(PROJECTS[c["project"]][1] + "/")
                 and all(c["id"] != o["id"] for _, o in out)]
     return sorted(out, key=lambda x: -(x[1].get("updated") or x[1].get("created") or 0))
 
@@ -3116,8 +3125,8 @@ def joined_ok(mid: str, c: dict) -> list[str]:
 
 def guest_device(dev: dict) -> dict:
     """A turn of a guest's chat calls the server with the pc owner's token: there it reaches only the chat's project,
-    writes only when the guest may write it, and lists or reads no chats (the owner's other chats and projects stay
-    theirs). Any other turn: the device as it is."""
+    writes only when the guest may write it, and lists or reads only the chats there the guest may steer (the owner's other
+    chats and projects stay theirs). Any other turn: the device as it is."""
     try:
         c = read_json(chat_file(dev["machine"], dev["chat"]), None) or {}
     except ValueError:

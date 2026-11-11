@@ -697,121 +697,222 @@ function foldersView(res) {
 
 // ---------------------------------------------------------------- Files: the folders linked on your pcs, in the browser
 // Each click asks the pc (its companion answers at once on its long poll); media stream from the pc with Range
-// requests, so a <video> seeks. The box lives across the page's refreshes: a refresh would stop what plays.
+// requests, so a <video> seeks. Every folder and file has its own URL (#/files?m=<pc>&p=<folder>&f=<file>), so Back,
+// reload and a link work. A desktop shows the list beside the open file; a phone one page at a time (the Back arrow).
+// The box lives across the page's 20 s refreshes: a redraw would stop what plays.
 const filesBox = el("div", "fm");
-let filesAt = null; // {m, path} of the folder open; null: the list of linked folders
+let filesKey = "", filesList = null; // the route drawn; {mid, p, res, el} of the folder listed
 const FILE_KIND = { image: /\.(png|jpe?g|gif|webp|avif|bmp|ico)$/i, audio: /\.(mp3|m4a|aac|flac|ogg|oga|opus|wav)$/i, video: /\.(mp4|m4v|webm|ogv|mov|mkv)$/i };
 const fileKind = (name) => Object.keys(FILE_KIND).find((k) => FILE_KIND[k].test(name)) || "";
 const fileSize = (n) => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : n < 1073741824 ? `${(n / 1048576).toFixed(1)} MB` : `${(n / 1073741824).toFixed(2)} GB`;
 const filesApi = (m, body) => api("/ui/api/files", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: m.id, ...body }) });
+const FILE_ICON = { // 24 px line icons in the sidebar's style; a folder in the accent, the rest muted
+  dir: '<path d="M3.5 6.5h6l2 2h9v10h-17z"/>',
+  image: '<rect x="4" y="4.5" width="16" height="15" rx="2"/><circle cx="9" cy="9.5" r="1.5"/><path d="M20 16l-5-5-8.5 8.5"/>',
+  audio: '<path d="M9 17.5V6l10-2v11.5"/><circle cx="6.5" cy="17.5" r="2.5"/><circle cx="16.5" cy="15.5" r="2.5"/>',
+  video: '<rect x="3.5" y="6" width="12" height="12" rx="2"/><path d="M15.5 10.5l5-3v9l-5-3z"/>',
+  file: '<path d="M6 3.5h8l4 4v13H6z"/><path d="M14 3.5v4h4"/>',
+};
+function fileIcon(kind) {
+  const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  s.setAttribute("viewBox", "0 0 24 24"); s.setAttribute("class", `i fm-ic ${kind}`); s.setAttribute("aria-hidden", "true");
+  s.innerHTML = FILE_ICON[kind];
+  return s;
+}
+const filesUrl = (mid, p, f) => `#/files?${new URLSearchParams({ m: mid, p, ...(f ? { f } : {}) })}`;
+const filesMachine = (mid) => (machinesRes?.machines || []).find((m) => m.id === mid) || { id: mid, label: "the pc" };
+const baseName = (path, sep) => path.split(sep || (path.includes("\\") ? "\\" : "/")).filter(Boolean).pop() || path;
+const filesDirty = () => { const a = filesBox.querySelector("textarea.editor"); return a && a.value !== a.dataset.start; };
+function filesGo(url) { if (filesDirty() && !confirm("Leave this file? Your unsaved edits are lost.")) return; go(url); }
+// A link that opens in the app (a middle click still opens a new tab).
+function filesLink(cls, url, ...kids) {
+  const a = el("a", cls); a.href = url; a.append(...kids);
+  a.onclick = (e) => { if (e.ctrlKey || e.metaKey || e.shiftKey || e.button) return; e.preventDefault(); filesGo(url); };
+  return a;
+}
+// Where Back goes: from a file to its folder, from a folder to its parent, from a linked folder to the list.
+function filesUp() {
+  const q = shellRoute.q, mid = q.get("m"), p = q.get("p");
+  if (q.get("f")) return filesUrl(mid, p);
+  const res = filesList?.mid === mid && filesList.p === p ? filesList.res : null;
+  return res?.parent ? filesUrl(mid, res.parent) : "#/files";
+}
 
-function filesRoots() {
-  filesAt = null;
-  const usable = (m, f) => m.own || ["use", "yolo"].includes(m.shared?.[f.project]); // a pc shared with you: that project's folders
-  const own = (machinesRes?.machines || []).filter((m) => m.online && !m.old && m.companion && (steers(m) || m.shared));
-  const rows = own.flatMap((m) => (m.companion.folders?.linked || []).filter((f) => usable(m, f) && (allMode() || f.project === project)).map((f) => [m, f]));
-  const box = el("section", "mx-proj"), head = el("div", "mx-proj-head");
-  head.append(el("h3", null, allMode() ? "Linked folders" : `Linked folders of ${project}`));
-  box.append(head);
-  for (const [m, f] of rows) {
-    const r = el("button", "fm-row"); r.type = "button";
-    r.append(el("span", "fm-name", f.path), el("span", "muted", `${m.label}${m.own ? "" : " (shared with you)"} · ${f.project}`));
-    r.onclick = () => filesOpen(m, f.path);
-    box.append(r);
+// Draws what the URL asks for; a refresh of the page with the same URL leaves it alone.
+async function filesRoute(q = shellRoute.q) {
+  const mid = q.get("m") || "", p = q.get("p") || "", f = q.get("f") || "", key = `${mid}\n${p}\n${f}`;
+  if (key === filesKey && filesBox.childNodes.length) return;
+  filesKey = key;
+  if (!machinesRes) return; // drawn once the pc list is in
+  if (!p) return filesRoots();
+  const m = filesMachine(mid);
+  if (filesList?.mid !== mid || filesList.p !== p) {
+    filesBox.replaceChildren(el("p", "empty loading", `Asking ${m.label}…`));
+    let res;
+    try { res = await filesApi(m, { op: "list", path: p }); } catch (e) { if (filesKey === key) filesFail(m, e); return; }
+    if (filesKey !== key) return; // the person went on meanwhile
+    filesList = { mid, p, res, el: null };
   }
-  if (!rows.length) box.append(el("p", "muted mx-empty", own.length ? "No folder of this project is linked on a pc of yours, or one shared with you, that is online. Link one under Machines > Folders." : "No pc of yours or shared with you is online with remote control on."));
-  filesBox.replaceChildren(el("p", "muted", "Browse, read, edit and play the files of the folders linked on your pcs, and of a project someone shared with you for use on theirs. git's own files, .env files and keys stay hidden."), box);
+  filesDraw(m, f);
 }
-function filesProject() { if (machinesMode === "files" && !$("tab-machines").hidden && !filesBusy()) filesRoots(); }
-const filesBusy = () => filesBox.querySelector("textarea.editor") || [...filesBox.querySelectorAll("audio, video")].some((v) => !v.paused);
+function filesProject() { if (machinesMode === "files" && !$("tab-machines").hidden && !shellRoute.q.get("p")) { filesKey = ""; filesRoute(); } }
+function filesFail(m, e) {
+  filesBox.replaceChildren(errorState(`${m.label}: ${e.message}`, () => { filesKey = ""; filesList = null; filesRoute(); }));
+}
 
-async function filesOpen(m, path) {
-  if (filesBox.querySelector("textarea.editor") && !confirm("Leave this file? Your unsaved edits are lost.")) return;
-  filesBox.replaceChildren(el("p", "muted", `Asking ${m.label}…`));
-  let res;
-  try { res = await filesApi(m, { op: "list", path }); } catch (e) { return filesFail(m, e, () => filesOpen(m, path)); }
-  filesAt = { m, path: res.path };
-  const top = el("div", "fm-bar");
-  const roots = el("button", "btn small quiet", "All folders"); roots.type = "button"; roots.onclick = filesRoots;
-  top.append(roots, filesCrumbs(m, res));
-  const list = el("section", "mx-proj fm-list");
-  if (res.parent) list.append(filesEntry("..", "up", () => filesOpen(m, res.parent)));
-  for (const e of res.entries) list.append(filesEntry(e.name, e.dir ? "" : `${fileSize(e.size)} · ${ago(e.mtime)}`, () => e.dir ? filesOpen(m, e.path) : filesShow(m, e), e.dir));
-  if (!res.entries.length) list.append(el("p", "muted mx-empty", "This folder is empty."));
-  if (res.more) list.append(el("p", "muted mx-empty", `${res.more} more not shown.`));
-  filesBox.replaceChildren(top, list);
+// The start: the linked folders, grouped by pc.
+function filesRoots() {
+  const usable = (m, f) => m.own || ["use", "yolo"].includes(m.shared?.[f.project]); // a pc shared with you: that project's folders
+  const pcs = (machinesRes?.machines || []).filter((m) => m.online && !m.old && m.companion && (steers(m) || m.shared))
+    .sort((a, b) => (b.id === machinesHere) - (a.id === machinesHere) || b.own - a.own || a.label.localeCompare(b.label));
+  const parts = [el("p", "muted fm-lede", "The folders linked on your pcs, and those of a project someone shared with you on theirs. git's own files, .env files and keys stay hidden.")];
+  for (const m of pcs) {
+    const folders = (m.companion.folders?.linked || []).filter((f) => usable(m, f) && (allMode() || f.project === project));
+    if (!folders.length) continue;
+    const sec = el("section", "fm-group"), h = el("h2", "mx-h", m.label);
+    if (m.id === machinesHere) h.append(el("span", "chip", "this pc"));
+    if (!m.own) h.append(el("span", "chip", "shared with you"));
+    const ul = el("ul", "fm-rows");
+    for (const f of folders) {
+      const main = el("span", "fm-main");
+      main.append(el("span", "fm-name", baseName(f.path)), el("span", "fm-sub", f.path));
+      const pill = el("span", "pill topic", f.project);
+      const li = el("li"); li.append(filesLink("fm-row", filesUrl(m.id, f.path), fileIcon("dir"), main, pill));
+      ul.append(li);
+    }
+    sec.append(h, ul);
+    parts.push(sec);
+  }
+  if (parts.length === 1) parts.push(emptyState(pcs.length ? `No folder${allMode() ? "" : ` of ${project}`} is linked on a pc of yours, or one shared with you, that is online. Link one under Machines, Folders.` : "No pc of yours, or shared with you, is online with remote control on."));
+  filesList = null;
+  filesBox.replaceChildren(...parts);
 }
+
+// A folder: its path, then the list; with a file open, the file beside it (desktop) or instead of it (phone).
+function filesDraw(m, f) {
+  const { res } = filesList;
+  if (!filesList.el) filesList.el = filesFolder(m, res);
+  for (const r of filesList.el.querySelectorAll(".fm-row[data-path]")) {
+    if (r.dataset.path === f) r.setAttribute("aria-current", "true"); else r.removeAttribute("aria-current");
+  }
+  const split = el("div", "fm-split" + (f ? " has-file" : ""));
+  split.append(filesList.el);
+  if (f) {
+    const pane = el("article", "fm-file");
+    split.append(pane);
+    filesShow(m, res, f, pane);
+  }
+  filesBox.replaceChildren(split);
+}
+function filesFolder(m, res) {
+  const box = el("section", "fm-folder"), head = el("div", "fm-head"), title = el("div", "fm-title");
+  title.append(el("h2", null, baseName(res.path, res.sep)), filesCrumbs(m, res));
+  const reload = el("button", "btn small quiet icon", "↻"); reload.type = "button"; reload.title = "Read this folder again"; reload.setAttribute("aria-label", "Reload");
+  reload.onclick = () => { filesList = null; filesKey = ""; filesRoute(); };
+  head.append(title, el("span", "muted fm-count", `${res.entries.length + res.more} item${res.entries.length + res.more === 1 ? "" : "s"}`), reload);
+  const cols = el("div", "fm-cols"); cols.setAttribute("aria-hidden", "true");
+  cols.append(el("span"), el("span", null, "Name"), el("span", null, "Modified"), el("span", null, "Size"));
+  const ul = el("ul", "fm-rows");
+  for (const e of res.entries) {
+    const kind = e.dir ? "dir" : fileKind(e.name) || "file", when = ago(e.mtime);
+    const main = el("span", "fm-main");
+    main.append(el("span", "fm-name", e.name), el("span", "fm-sub", e.dir ? when : `${fileSize(e.size)} · ${when}`));
+    const a = filesLink("fm-row" + (e.name.startsWith(".") ? " dot" : ""), e.dir ? filesUrl(m.id, e.path) : filesUrl(m.id, res.path, e.path),
+      fileIcon(kind), main, el("span", "fm-date", when), el("span", "fm-size", e.dir ? "" : fileSize(e.size)));
+    a.title = e.name;
+    if (!e.dir) a.dataset.path = e.path;
+    const li = el("li"); li.append(a); ul.append(li);
+  }
+  box.append(head, cols, ul);
+  if (!res.entries.length) box.append(emptyState("This folder is empty."));
+  if (res.more) box.append(emptyState(`${res.more} more not shown (a folder shows its first ${res.entries.length}).`));
+  return box;
+}
+// Files › pc: linked folder › … › parent; the folder itself is the title above it.
 function filesCrumbs(m, res) {
-  const nav = el("nav", "fm-crumbs"), rel = res.path.slice(res.root.length).split(res.sep).filter(Boolean);
-  nav.setAttribute("aria-label", "Folder");
+  const nav = el("nav", "fm-crumbs"); nav.setAttribute("aria-label", "Path");
+  const rel = res.path.slice(res.root.length).split(res.sep).filter(Boolean);
+  const steps = [[baseName(res.root, res.sep), res.root]];
   let at = res.root;
-  const step = (name, path) => { const b = el("button", "btn small quiet", name); b.type = "button"; b.onclick = () => filesOpen(m, path); return b; };
-  nav.append(el("span", "muted", `${m.label}:`), step(res.root, res.root));
-  for (const part of rel) { at = at.endsWith(res.sep) ? at + part : at + res.sep + part; nav.append(el("span", "muted", res.sep), step(part, at)); }
+  for (const part of rel) { at = at.endsWith(res.sep) ? at + part : at + res.sep + part; steps.push([part, at]); }
+  steps.pop(); // the folder itself
+  const shown = steps.length > 4 ? [steps[0], ["…", steps[steps.length - 3][1], steps.slice(1, -2).map((s) => s[0]).join(res.sep)], ...steps.slice(-2)] : steps;
+  nav.append(filesLink("fm-crumb", "#/files", "Files"), el("span", "fm-sep", "›"), el("span", "fm-pc", `${m.label}:`));
+  shown.forEach(([name, path, hidden], i) => {
+    if (i) nav.append(el("span", "fm-sep", "›"));
+    const a = filesLink("fm-crumb", filesUrl(m.id, path), name);
+    if (hidden) a.title = hidden;
+    nav.append(a);
+  });
   return nav;
 }
-function filesEntry(name, info, onclick, dir = false) {
-  const r = el("button", "fm-row"); r.type = "button";
-  r.append(el("span", "fm-name", (dir ? "📁 " : "") + name), el("span", "muted", info));
-  r.onclick = onclick;
-  return r;
-}
-function filesFail(m, e, again) {
-  const retry = el("button", "btn small", "Try again"); retry.type = "button"; retry.onclick = again;
-  const back = el("button", "btn small quiet", "All folders"); back.type = "button"; back.onclick = filesRoots;
-  const bar = el("div", "fm-bar"); bar.append(retry, back);
-  filesBox.replaceChildren(el("p", "machine-stuck", `${m.label}: ${e.message}`), bar);
-}
 
-// One file: media play from the pc, everything else opens as text (and can be edited when nothing in it was masked).
-async function filesShow(m, e) {
-  const folder = filesAt.path, kind = fileKind(e.name), bar = el("div", "fm-bar");
-  const back = el("button", "btn small quiet", "← Folder"); back.type = "button"; back.onclick = () => filesOpen(m, folder);
-  bar.append(back, el("strong", "fm-name", e.name), el("span", "muted", fileSize(e.size)));
+// One file: media play from the pc, everything else opens as text with line numbers, editable unless a secret was masked.
+async function filesShow(m, res, path, pane) {
+  const e = res.entries.find((x) => x.path === path) || { name: baseName(path, res.sep), path, size: 0, mtime: 0 };
+  const kind = fileKind(e.name), head = el("div", "note-head fm-file-head"), tools = el("div", "note-tools");
+  head.append(el("h2", null, e.name));
+  const meta = el("p", "muted fm-meta", [e.size ? fileSize(e.size) : "", e.mtime ? `changed ${ago(e.mtime)}` : "", m.label].filter(Boolean).join(" · "));
+  const close = filesLink("btn small quiet fm-close", filesUrl(m.id, res.path), "Close"); close.title = "Back to the folder";
+  pane.append(head, meta, tools);
   if (kind) {
-    const src = `/ui/api/files/raw?${new URLSearchParams({ machine: m.id, path: e.path })}`;
+    const src = `/ui/api/files/raw?${new URLSearchParams({ machine: m.id, path })}`;
     const media = el(kind === "image" ? "img" : kind, "fm-media");
     media.src = src;
-    if (kind !== "image") { media.controls = true; media.preload = "metadata"; }
-    else media.alt = e.name;
-    const note = el("p", "muted");
+    if (kind === "image") media.alt = e.name;
+    else { media.controls = true; media.preload = "metadata"; media.setAttribute("playsinline", ""); }
+    const stage = el("div", `fm-stage ${kind}`), note = el("p", "muted");
     media.onerror = () => { note.textContent = kind === "image" ? "This image could not be shown." : "This browser cannot play this file (its format or codec: MKV, HEVC and AC3 often fail), or the pc stopped answering."; };
-    const open = el("a", "btn small quiet", "Open in a new tab"); open.href = src; open.target = "_blank"; open.rel = "noopener";
-    bar.append(open);
-    filesBox.replaceChildren(bar, media, note);
-    if (kind !== "image") media.play().catch(() => {});
+    const open = el("a", "btn small", "Open in a new tab"); open.href = src; open.target = "_blank"; open.rel = "noopener";
+    tools.append(open, close);
+    stage.append(media);
+    pane.append(stage, note);
     return;
   }
-  filesBox.replaceChildren(bar, el("p", "muted", `Asking ${m.label}…`));
-  let res;
-  try { res = await filesApi(m, { op: "read", path: e.path }); } catch (err) { return filesFail(m, err, () => filesShow(m, e)); }
-  const pre = el("pre", "fm-text", res.text);
-  if (res.masked) bar.append(el("span", "muted", "A known secret is masked: edit this file on the pc itself."));
+  const wait = el("p", "empty loading", `Asking ${m.label}…`);
+  tools.append(close);
+  pane.append(wait);
+  let txt;
+  try { txt = await filesApi(m, { op: "read", path }); } catch (err) { return wait.replaceWith(errorState(err.message, () => { pane.replaceChildren(); filesShow(m, res, path, pane); })); }
+  if (!pane.isConnected) return;
+  const code = filesCode(txt.text);
+  wait.replaceWith(code);
+  if (txt.masked) pane.insertBefore(el("p", "muted", "A known secret is masked here, so this file is read-only: edit it on the pc itself."), code);
   else {
     const edit = el("button", "btn small", "Edit"); edit.type = "button";
-    edit.onclick = () => filesEdit(m, e, res, bar, pre);
-    bar.append(edit);
+    edit.onclick = () => filesEdit(m, txt, tools, code);
+    tools.prepend(edit);
   }
-  filesBox.replaceChildren(bar, pre);
 }
-function filesEdit(m, e, res, bar, pre) {
-  const area = el("textarea", "editor"); area.value = res.text; area.spellcheck = false;
-  area.setAttribute("aria-label", `Edit ${e.name}`);
-  const save = el("button", "btn small primary", "Save"); save.type = "button";
+// Text with a line-number gutter; long lines scroll sideways, as in a code view, so the numbers stay beside their lines.
+function filesCode(text) {
+  const box = el("div", "fm-code"), lines = text.split("\n");
+  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+  const gutter = el("pre", "fm-gutter", lines.map((_, i) => i + 1).join("\n")); gutter.setAttribute("aria-hidden", "true");
+  box.append(gutter, el("pre", "fm-lines", lines.join("\n")));
+  return box;
+}
+function filesEdit(m, txt, tools, code) {
+  const area = el("textarea", "editor fm-editor"); area.value = txt.text; area.spellcheck = false; area.setAttribute("aria-label", "Edit the file");
+  area.dataset.start = area.value; // the textarea's own line ends (\n): a CRLF file compares equal until edited
+  const save = el("button", "btn small primary", "Save"); save.type = "button"; save.disabled = true;
   const cancel = el("button", "btn small quiet", "Cancel"); cancel.type = "button";
-  const start = area.value; // the textarea's own line ends (\n): a CRLF file compares equal until edited
-  cancel.onclick = () => { if (area.value === start || confirm("Discard your unsaved changes?")) filesShow(m, e); };
+  area.oninput = () => { save.disabled = area.value === area.dataset.start; };
+  const done = () => { filesKey = ""; filesRoute(); }; // read the file again
+  cancel.onclick = () => { if (!filesDirty() || confirm("Discard your unsaved changes?")) { area.dataset.start = area.value; done(); } };
   save.onclick = async () => {
     save.disabled = true;
     try {
-      await filesApi(m, { op: "write", path: res.path, text: area.value, base: { mtime: res.mtime, size: res.size } });
+      await filesApi(m, { op: "write", path: txt.path, text: area.value, base: { mtime: txt.mtime, size: txt.size } });
+      area.dataset.start = area.value;
       toast(`Saved on ${m.label} (the old version is in its backups folder, under files)`, false);
-      filesShow(m, e);
+      if (filesList) filesList.el = null; // its size and date changed
+      filesList = null; done();
     } catch (err) { toast(err.message); save.disabled = false; }
   };
-  for (const b of bar.querySelectorAll("button:not(:first-child)")) b.remove();
-  bar.append(save, cancel);
-  pre.replaceWith(area);
+  for (const b of tools.querySelectorAll("button")) b.remove();
+  tools.prepend(save, cancel);
+  code.replaceWith(area);
   area.focus();
 }
 
@@ -851,10 +952,9 @@ async function markHere() { // which row is the pc this page runs on (its compan
 function drawMachines() {
   const res = machinesRes, here = machinesHere, box = $("machines"), parts = [];
   if (!res) return;
-  if (machinesMode === "files") { // drawn once: a refresh leaves an open folder and what plays alone
-    if (filesBox.isConnected) return;
-    if (!filesAt) filesRoots();
-    return box.replaceChildren(filesBox);
+  if (machinesMode === "files") { // drawn from its URL; a refresh leaves an open folder and what plays alone
+    if (!filesBox.isConnected) box.replaceChildren(filesBox);
+    return filesRoute();
   }
   if (machinesMode === "folders") parts.push(...foldersView(res));
   else if (!res.machines.length) {
