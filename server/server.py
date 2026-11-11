@@ -3356,8 +3356,11 @@ def read_json(path: Path, default):
     hit = _json_cache.get(path)
     # the inode too: two writes of one size within a clock tick (4 ms) have the same time, and the later one would never be read
     if not hit or hit[:3] != (st.st_mtime_ns, st.st_size, st.st_ino):
-        hit = (st.st_mtime_ns, st.st_size, st.st_ino, json.loads(path.read_text()))
-        _json_cache[path] = hit
+        try:
+            hit = (st.st_mtime_ns, st.st_size, st.st_ino, json.loads(path.read_text()))
+            _json_cache[path] = hit
+        except (json.JSONDecodeError, ValueError):
+            return hit[3] if hit else default
     return hit[3]
 
 
@@ -3534,7 +3537,7 @@ NO_ACCESS = """<!doctype html><html lang="en"><meta charset="utf-8"><meta name="
 # A hard NFS mount makes every read wait until the file server is back (15 minutes on 5 Nov 2026, with /health green).
 # One thread does the waiting; requests look at when it last got an answer and fail at once instead of piling up.
 STORAGE_TIMEOUT = 10  # seconds
-STORAGE_EVERY = 2
+STORAGE_EVERY = float(os.environ.get("KNOWLEDGE_STORAGE_EVERY", 2))  # seconds; the tests use less
 _storage = {"ok": time.monotonic(), "down": False}
 
 
@@ -4978,7 +4981,7 @@ def system_state() -> dict:
             *([{"name": "Weekly lint report", "what": "VM timer, Monday 08:00, posts new findings to Matrix", "last": used("vm-lint-report"), "detail": "last call of the vm-lint-report token"}] if used("vm-lint-report") else []),
             *([{"name": "Session logs", "what": "SessionEnd/PreCompact hooks of Claude Code, Stop of agy, SessionEnd of Codex", "last": used("vm-sessions"), "detail": "last call of the vm-sessions token (VM)"}] if used("vm-sessions") else []),
             *([{"name": "Duplicate check", "what": f"judges similar memo pairs with a reranker every {DUPES_EVERY // 60} min (lint possible_duplicate)",
-                "last": BACKGROUND.get("duplicates", {}).get("at"),
+                "last": BACKGROUND.get("duplicates", {}).get("at"), "failed": "error" in BACKGROUND.get("duplicates", {}),
                 "detail": BACKGROUND["duplicates"].get("error") or BACKGROUND["duplicates"]["detail"] if "duplicates" in BACKGROUND else f"first run {DUPES_DELAY // 60} min after the start"}]
               if kb_rerank.MODEL_DIR else []),
             {"name": "History", "what": f"keeps up to {HISTORY_KEEP} versions per file", "last": None,
@@ -4986,8 +4989,12 @@ def system_state() -> dict:
             {"name": "External skills", "what": f"compares each skill from GitHub with its source every {EXTERNAL_EVERY // 86400} days",
              "last": BACKGROUND["external"]["at"] if "external" in BACKGROUND else None,
              "detail": (BACKGROUND["external"].get("error") or BACKGROUND["external"]["detail"]) if "external" in BACKGROUND else "not run since this start"},
+            # "last" is when a pass started (the tests wait for a pass after their change instead of a fixed time)
+            *([{"name": "Task check", "what": "stalled woken tasks, tasks nobody takes, worker leases (Matrix notice)",
+                "last": BACKGROUND["tasks"]["at"], "failed": "error" in BACKGROUND["tasks"], "detail": BACKGROUND["tasks"].get("error") or BACKGROUND["tasks"]["detail"]}]
+              if "tasks" in BACKGROUND else []),
             *([{"name": "Needs you", "what": "Matrix message per new 'Needs you' item of an admin (Settings: needs_per_hour)",
-                "last": BACKGROUND["needs"]["at"], "detail": BACKGROUND["needs"].get("error") or BACKGROUND["needs"]["detail"]}]
+                "last": BACKGROUND["needs"]["at"], "failed": "error" in BACKGROUND["needs"], "detail": BACKGROUND["needs"].get("error") or BACKGROUND["needs"]["detail"]}]
               if "needs" in BACKGROUND else []),
             *([{"name": "Settings", "what": "settings.json", "last": BACKGROUND["settings"]["at"], "detail": BACKGROUND["settings"]["error"]}] if "settings" in BACKGROUND else []),
             *([{"name": "Matrix", "what": "tells the admin about projects and tokens people made", "last": BACKGROUND["matrix"]["at"],

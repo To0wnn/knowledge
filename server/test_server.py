@@ -59,6 +59,62 @@ def call(tool, args, token="rw-token", headers=None):
     return res.get("isError", False), text
 
 
+def bg_last(raw, ck, job) -> float:
+    """When the last finished pass of a background job (its row on the admin page) started, 0 for none. A pass that
+    failed is no pass: a check waiting on it would pass without the job having run."""
+    row = next((b for b in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["system"]["background"] if b["name"] == job), {})
+    assert not row.get("failed"), f"{job} failed: {row.get('detail')}"
+    return row.get("last") or 0
+
+
+def bg_pass(raw, ck, job, after, what, limit=30.0) -> float:
+    """Wait for a pass of a background job that started after `after` and finished; returns its start. A pass after a
+    change has seen it: no fixed sleep that a busy machine outlasts. Fails naming what it awaited."""
+    end = time.time() + limit
+    while (last := bg_last(raw, ck, job)) <= after:
+        assert time.time() < end, f"no {job} pass within {limit} s after {what}"
+        time.sleep(0.05)
+    return last
+
+
+def bg_passes(raw, ck, job, what, n=2) -> None:
+    """n whole passes after now. Negative checks wait for two: a message the first one sent (notify() sends in a thread
+    of its own) has a whole pass to arrive."""
+    after = time.time()
+    for _ in range(n):
+        after = bg_pass(raw, ck, job, after, what)
+
+
+BOARD_POLLED = [0.0]  # when the tests last asked /ui/api/board: an admin's open board holds "Needs you" messages back
+
+
+def raw(method, path, body=None, headers=None):
+    c = httpc.HTTPConnection("127.0.0.1", PORT, timeout=15)
+    c.request(method, path, body=body, headers=headers or {})
+    r = c.getresponse()
+    if path.split("?")[0] == "/ui/api/board":
+        BOARD_POLLED[0] = time.time()
+    return r.status, dict(r.getheaders()), r.read()
+
+
+def board_quiet() -> None:
+    """Past the board's quiet window (KNOWLEDGE_NEEDS_QUIET, 1 s here) since the last poll: a clock, no event to wait for."""
+    time.sleep(max(0.0, BOARD_POLLED[0] + 1.0 - time.time()) + 0.02)
+
+
+def poll_held(tmp, mid, after, what, limit=15.0):
+    """Wait until the server took a long poll of pc `mid` sent after `after` (it marks the pc seen before it waits)."""
+    end = time.time() + limit
+    while time.time() < end:
+        try:
+            if json.loads((tmp / "machines.json").read_text())[mid]["at"] >= after:
+                return
+        except (OSError, ValueError, KeyError):
+            pass
+        time.sleep(0.02)
+    raise AssertionError(f"the long poll of {what} never reached the server within {limit} s")
+
+
 def refusal_arrives():
     """A refusal (here a bad token) waits for the body. Answered and closed before it, the body arriving then resets the
     connection, and on Windows the client loses the answer (WinError 10053 in the client test; Linux keeps it, so this
@@ -118,8 +174,8 @@ def tasks_contract(tmp, ck, fr, ver, raw):
     direct = tmp / "projects/garden/memory/project_direct.md"
     direct.write_text(memo("- open until 2099-01-01 [Codex, VM-1] from Claude, start now: written on the vm\n", "direct"))
     deadline = time.time() + 20
-    while "VM-1" not in rows() and time.time() < deadline:
-        time.sleep(0.5)
+    while ("VM-1" not in rows() or not rows()["VM-1"].get("author")) and time.time() < deadline:
+        time.sleep(0.1)
     http("POST", "/invalidate", {"paths": ["garden-memory/project_direct.md"]}, token="watch-token")  # the late report
     assert rows()["VM-1"]["author"] == "laptop" and rows()["VM-1"]["startable"], rows()["VM-1"]
     direct.unlink()
@@ -392,7 +448,7 @@ def lease_contract(tmp, ck, fr, raw):
     text = call("knowledge_read", {"path": path}, fr)[1]
     assert "[Claude@FRIEND-PC, SW-1]" in text and "[agy@" not in text, "owner not switched"
     assert not call("knowledge_edit", {"path": path, "old_string": sw.replace("agy@", "Claude@"), "new_string": ""}, fr)[0]
-    l = json.loads((tmp / "task_leases.json").read_text()); l["garden"].pop("SW-1"); (tmp / "task_leases.json").write_text(json.dumps(l))
+    l = json.loads((tmp / "task_leases.json").read_text()); l["garden"].pop("SW-1", None); (tmp / "task_leases.json").write_text(json.dumps(l))  # or the background check dropped it already (its line is gone)
     # Per turn: two sessions on two devices; a wake (claim=0) takes nothing.
     assert "LT-1" not in leases() and http("GET", "/tasks?project=x&agent=codex&v=2&claim=0&session=w", token=fr2)[0] == 200
     assert "LT-1" not in leases()
@@ -541,7 +597,8 @@ def lease_contract(tmp, ck, fr, raw):
     assert http("POST", "/tasks/woken", {"project": "garden", "id": "LW-1", "agent": "codex", "session": "worker:w"}, token=fr)[0] == 200
     lw = lambda: next(t for t in json.loads(raw("GET", "/ui/api/tasks", headers=ck)[2])["tasks"] if t["id"] == "LW-1")
     assert lw()["claimed"] and not lw()["startable"], lw()
-    time.sleep(0.8)  # the background check runs several times meanwhile: the lease of a worker-claimed task stays
+    # two whole background checks meanwhile: the lease of a worker-claimed task stays
+    bg_passes(raw, ck, "Task check", "the worker's claim")
     assert "LW-1" in leases() and lw()["claimed"], leases()
     l = json.loads((tmp / "task_leases.json").read_text()); l["garden"]["LW-1"]["until"] = 0; (tmp / "task_leases.json").write_text(json.dumps(l))
     assert not lw()["claimed"] and lw()["startable"] and "LW-1" in ready(fr), lw()
@@ -549,7 +606,7 @@ def lease_contract(tmp, ck, fr, raw):
     assert not call("knowledge_edit", {"path": path, "old_string": "per turn", "new_string": "per turn (claimed Codex, 2026-10-31)"}, fr)[0]
     end = time.time() + 10
     while "LT-1" in leases() and time.time() < end:
-        time.sleep(0.3)
+        time.sleep(0.1)
     assert "LT-1" not in leases(), leases()
     text = (tmp / "projects/garden/memory/project_tasks.md").read_text()
     for line in [ln for ln in text.splitlines() if any(i in ln for i in ("LM-1", "LS-1", "PIN-1", "LT-1", "LT-2", "LC-1", "LC-2", "LH-1", "LN-1", "LR-1", "LW-1"))]:
@@ -764,7 +821,7 @@ def machines_contract(tmp, ck, fr, raw, er, et, heard):
         == "no pc runs Gemini workers for this project: the next Gemini chat in it starts the task"
     deadline = time.time() + 10
     while "MC-6" not in json.loads((tmp / "task_idle.json").read_text() if (tmp / "task_idle.json").exists() else "{}").get("garden", {}) and time.time() < deadline:
-        time.sleep(0.3)
+        time.sleep(0.1)
     idle = json.loads((tmp / "task_idle.json").read_text()); idle["garden"]["MC-6"]["at"] -= 3600; (tmp / "task_idle.json").write_text(json.dumps(idle))
     deadline = time.time() + 10
     told = lambda: [m for m in heard if "MC-6" in m and "nobody took it" in m]
@@ -772,7 +829,7 @@ def machines_contract(tmp, ck, fr, raw, er, et, heard):
         time.sleep(0.1)
     assert told() and "no pc runs Gemini workers" in told()[0], told()
     assert json.loads((tmp / "task_idle.json").read_text())["garden"]["MC-6"]["noticed"]  # on disk: a restart does not tell it again
-    time.sleep(0.8)  # past the next background checks: one notice, not one per check
+    bg_passes(raw, ck, "Task check", "the idle notice")  # one notice, not one per check
     assert len(told()) == 1, told()
     # A worker (X-Knowledge-Worker) leases its own task only, and its start context is not the chat's.
     wk = {**pc, "X-Knowledge-Worker": "MC-3"}
@@ -1006,7 +1063,7 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     before = tf.read_text()
     for own in (False, True):
         tf.write_text(json.dumps({**json.loads(before), name: {**json.loads(before)[name], "self": own}}))
-        time.sleep(1.1)  # read_json sees a write by its time stamp
+        # read_json sees the write by its size ("self": false / true), so no wait for a new time stamp
         answer = json.loads(http("POST", "/machine/report", {**mrep, "tools": tools}, token=fr, headers=pc)[1])
         assert answer.get("github_token") == ("gh-read-only" if own else None), (own, answer)
     tf.write_text(before)
@@ -1441,8 +1498,8 @@ def share_contract(tmp, ck, fr, raw, er, et):
     assert files("/home/x/trade")[0] == 403 and files("/home/x/garden/../trade")[0] == 403 and files("/home/x/gardenx")[0] == 403
     import concurrent.futures
     with concurrent.futures.ThreadPoolExecutor(2) as ex:
-        held = ex.submit(http, "GET", "/machine/actions?wait=8", None, fr, pc)
-        time.sleep(0.3)
+        t0 = time.time(); held = ex.submit(http, "GET", "/machine/actions?wait=8", None, fr, pc)
+        poll_held(tmp, mid, t0, "the shared pc")
         page = ex.submit(files, "/home/x/garden/beds")
         f = json.loads(held.result()[1])["files"][0]
         assert (f["path"], f["project"]) == ("/home/x/garden/beds", "garden"), f
@@ -1951,7 +2008,7 @@ def review_contract(tmp, ck, fr, raw, er):
     assert ("review", "REV-1") not in after and ("task", "REV-1-done") in after and "REV-1-done" in call("knowledge_read", {"path": path}, fr)[1]
 
 
-def files_contract(ck, fr, raw, er, et):
+def files_contract(tmp, ck, fr, raw, er, et):
     """Machines > Files: only the owner asks; the pc's held long poll wakes at once with the request and only that pc's
     token answers; a read is masked, a masked text is never written back; a media Range streams through as 206."""
     import concurrent.futures
@@ -1967,7 +2024,7 @@ def files_contract(ck, fr, raw, er, et):
         def asked(what):  # a long poll held by the pc, then the click: the poll answers at once with it
             t0 = time.time()
             poll = ex.submit(http, "GET", "/machine/actions?wait=8", None, fr, pc)
-            time.sleep(0.3)
+            poll_held(tmp, mid, t0, "the garage pc")
             page = ex.submit(what)
             got = json.loads(poll.result()[1])
             assert time.time() - t0 < 3, "a click wakes the held poll, no waiting for the next round"
@@ -2185,9 +2242,10 @@ def board_contract(tmp, ck, fr, raw, er, et):
     assert back.get("col") == "needs" and back["line"] == "refused: git push -f", back
     # Snooze (until): hidden until that time or until the item changes, whichever comes first.
     shows = lambda: ("chat", cids[1]) in {(i["kind"], i["id"]) for i in board()}
-    assert ui("/ui/api/board/dismiss", {"key": back["key"], "sig": back["sig"], "until": time.time() + 1})[0] == 200
+    until = time.time() + 1
+    assert ui("/ui/api/board/dismiss", {"key": back["key"], "sig": back["sig"], "until": until})[0] == 200
     assert not shows(), "a snoozed item is hidden"
-    time.sleep(1.2)
+    time.sleep(max(0.0, until - time.time()) + 0.02)  # a clock, no event: just past the snooze's end
     assert shows(), "a snooze that ran out shows the item again"
     assert ui("/ui/api/board/dismiss", {"key": back["key"], "sig": back["sig"], "until": time.time() + 600})[0] == 200
     assert not shows()
@@ -2241,12 +2299,12 @@ def needs_contract(tmp, ck, fr, raw, heard):
     line = lambda i: f"- open until 2099-01-01 [Codex, NT-{i}] from Claude, start after approval: needs test {i}\n"
     add = lambda *ids: call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": "".join(map(line, ids)) + "## Keuzes"}, fr)
     about = lambda tid: [m for m in heard if m.startswith(f"Knowledge needs you: NT-{tid} ")]
-    wait = lambda cond, t=8: next((True for _ in range(int(t / 0.2)) if cond() or time.sleep(0.2)), cond())
-    time.sleep(1.2)  # past the quiet window of the polls before
+    wait = lambda cond, t=8: next((True for _ in range(int(t / 0.05)) if cond() or time.sleep(0.05)), cond())
+    board_quiet()  # past the quiet window of the polls before
     add(1)
     assert wait(lambda: about(1)), heard
     assert "waits for your approval" in about(1)[0] and about(1)[0].endswith("https://kn.example/ui#/inbox/task:garden/NT-1"), about(1)
-    time.sleep(0.8)
+    bg_passes(raw, ck, "Needs you", "the message about NT-1")
     assert len(about(1)) == 1, "one message per item"
     # A chat reply links to its own item in the inbox too.
     pc = {"X-Knowledge-Machine": "cccccccccccccccc", "X-Knowledge-Machine-Label": "garage"}
@@ -2259,18 +2317,24 @@ def needs_contract(tmp, ck, fr, raw, heard):
     http("POST", "/machine/chats/events", {"chat": cid, "events": [{"kind": "text", "text": "pong"}], "done": True}, token=fr, headers=pc)
     assert wait(lambda: any(m.endswith(f"https://kn.example/ui#/inbox/chat:cccccccccccccccc/{cid}") and "replied: pong" in m for m in heard)), heard
     # The board is open (polled): the item shows there, so no message, also not after the board closes.
-    end = time.time() + 1.5
+    raw("GET", "/ui/api/board", headers=ck)  # open before the item comes
     add(2)
-    while time.time() < end:
-        raw("GET", "/ui/api/board", headers=ck); time.sleep(0.2)
-    time.sleep(1.5)
+    after = time.time()
+    for _ in range(2):  # open over two whole passes after the item came
+        end = time.time() + 30
+        while (last := bg_last(raw, ck, "Needs you")) <= after:
+            assert time.time() < end, "no Needs you pass while the board was open"
+            raw("GET", "/ui/api/board", headers=ck); time.sleep(0.1)
+        after = last
+    board_quiet()
+    bg_passes(raw, ck, "Needs you", "the board closed")
     assert not about(2), heard
     # One slot left this hour: three at once give one summary; then the hour is full and the next waits.
     add(3, 4, 5)
     assert wait(lambda: any("3 new items need you" in m for m in heard)), heard
     assert not about(3) and not about(4), heard
     add(6)
-    time.sleep(1.5)
+    bg_passes(raw, ck, "Needs you", "NT-6 over the hourly limit")
     assert not about(6) and not any("NT-6" in m for m in heard), heard
     assert json.loads(state.read_text())["items"].get("task:garden/NT-6") is None, "held back, still to tell"
     http("POST", "/machine/report", {"version": "0.16.0"}, token=fr, headers=pc)
@@ -2289,11 +2353,11 @@ def flow_contract(tmp, ck, fr, raw, heard):
                                           {**h, "X-Knowledge-UI": "1", "Content-Type": "application/json"})
     board = lambda: {i["key"]: i for i in json.loads(ui("/ui/api/board")[2])["items"]}
     rows = lambda: {t["id"]: t for t in json.loads(ui("/ui/api/tasks")[2])["tasks"] if t["project"] == "garden"}
-    wait = lambda cond, t=8: next((True for _ in range(int(t / 0.2)) if cond() or time.sleep(0.2)), cond())
+    wait = lambda cond, t=8: next((True for _ in range(int(t / 0.05)) if cond() or time.sleep(0.05)), cond())
     state = tmp / "needs_notified.json"
     assert ui("/ui/api/admin/settings", {"needs_per_hour": 60})[0] == 200
     assert wait(state.exists)
-    time.sleep(1.2)  # past the quiet window of the board polls before
+    board_quiet()
     path = "garden-memory/project_tasks.md"
     lines = ["- [Sam, FL-1-done]: the beds are built",
              "- [Claude, FL-2-done]: for an agent",
@@ -2388,10 +2452,10 @@ def flow_contract(tmp, ck, fr, raw, heard):
         d = json.loads((tmp / "machines.json").read_text())
         d["ffffffffffffffff"]["at"] -= 3600; d["ffffffffffffffff"]["companion"]["at"] -= 3600
         (tmp / "machines.json").write_text(json.dumps(d))
-    time.sleep(1.2)  # past the quiet window of the board polls above
+    board_quiet()
     nap(); sleep_pc()
     assert wait(lambda: said("FL-W1")), heard
-    nap(); time.sleep(1.2); sleep_pc(); time.sleep(1.5)
+    nap(); bg_passes(raw, ck, "Needs you", "the pc woke", 1); sleep_pc(); bg_passes(raw, ck, "Needs you", "the pc slept again")
     assert len(said("FL-W1")) == 1, said("FL-W1")
     http("POST", "/machine/report", {"version": "0.18.1"}, token=fr, headers=pc)
     for line in ("- [Sam, FL-1-done]: the beds are built", "- [Claude, FL-2-done]: for an agent", "- [Sam, FL-6-done]: cancelled by alice",
@@ -2401,23 +2465,44 @@ def flow_contract(tmp, ck, fr, raw, heard):
     assert wait(lambda: not state.exists())
 
 
-def ui_gap_contract(tmp, ck, raw):
+def ui_gap_contract(tmp, ck, raw, other):
     """A web UI search that finds nothing (exact and by meaning) is a gap like an agent's, logged once the person stopped
     typing: the queries on the way there are not; one that finds notes is not."""
     ask = lambda q: [raw("GET", f"/ui/api/{kind}?q={urllib.parse.quote(q)}&project=garden", headers=ck) for kind in ("search", "semantic")]
     gaps = lambda: [ln.split("\t") for ln in (tmp / "gaps.log").read_text().splitlines()] if (tmp / "gaps.log").exists() else []
+    # A gap is logged only once the semantic index caught up with the writes before (not vec.pending): on a busy machine
+    # it lags, and then nothing is logged at all (seen with the check's shards beside a UI test).
+    status = lambda: json.loads(raw("GET", "/ui/api/semantic?q=ready&project=garden&gap=0", headers=ck)[2])["status"]
+    deadline = time.time() + 30
+    while ("being" in status() or "chunks" not in status()) and time.time() < deadline:
+        time.sleep(0.1)
+    # The server's timers fire in the order they were set: a gap logged means every earlier wait is over.
+    def logged(q):
+        end = time.time() + 30
+        while q not in [g[4] for g in gaps() if g[2] == "ui"]:
+            assert time.time() < end, f"the gap {q!r} never logged: {gaps()}"
+            time.sleep(0.05)
+    # A barrier after each case: another person's search that finds nothing, set after alice's pending one, so once it
+    # is logged alice's wait for that case is over (timers fire in order). From alice herself it would replace her
+    # pending query and the "not a gap" checks could never fail.
+    n = iter(range(1, 9))
+    def barrier():
+        q = f"vbplork zqxw {next(n)}"
+        for kind in ("search", "semantic"):
+            raw("GET", f"/ui/api/{kind}?q={urllib.parse.quote(q)}&project=erinproj", headers=other)
+        logged(q)
     ask("qwzx")
     ask("qwzxvb plorkt")
-    time.sleep(1.2)
+    barrier()
     raw("GET", "/ui/api/semantic?q=toggle%20theme%20qwzx&project=garden&gap=0", headers=ck)  # the palette matched an action
-    time.sleep(1.2)
+    barrier()
     ask("togle qwzx")  # a typo, then the palette's match within the wait: neither is a gap
     raw("GET", "/ui/api/semantic?q=toggle%20qwzx&project=garden&gap=0", headers=ck)
-    time.sleep(1.2)
+    barrier()
     ask("garden")  # finds notes
-    time.sleep(1.2)
+    barrier()
     ui = [g for g in gaps() if g[2] == "ui"]
-    assert [g[4] for g in ui] == ["qwzxvb plorkt"] and ui[0][1] == "user:alice", ui
+    assert [g[4] for g in ui if g[1] == "user:alice"] == ["qwzxvb plorkt"] and [g[1] for g in ui if g[4] == "vbplork zqxw"] != ["user:alice"], ui
 
 
 def no_held(beat: dict) -> dict:
@@ -2496,11 +2581,20 @@ def share_on_loop(source: str) -> list[str]:
 
 # The slow contracts mostly wait on the server's timers: check.sh runs them side by side, each shard its own process
 # with its own server (--shard i/n). The setup between them runs in every shard; a contract not listed is shard 0's.
-SHARD_OF = {"flow_contract": 1, "needs_contract": 2, "chats_contract": 3, "board_contract": 3, "ui_gap_contract": 3, "tasks_contract": 4,
-            "lease_contract": 4, "handback_contract": 4, "machines_contract": 4}
+# Slow self-contained blocks of main() run under `if own(i):`. check.sh starts one process per shard.
+SHARD_OF = {"flow_contract": 1, "needs_contract": 2, "chats_contract": 3, "board_contract": 3, "ui_gap_contract": 4,
+            "share_on_loop": 4, "tasks_contract": 5, "handback_contract": 5, "lease_contract": 6, "machines_contract": 6, "redos": 0, "duplicates": 7}
+SHARD = None  # None: run everything (a plain `uv run test_server.py`)
+
+
+def own(i: int) -> bool:
+    return SHARD in (None, i)
 
 
 def keep_shard(me: int) -> None:
+    global SHARD
+    assert 0 <= me <= max(SHARD_OF.values()), f"--shard {me}: no such shard"
+    SHARD = me
     for name in [n for n in globals() if n.endswith("_contract")]:
         if SHARD_OF.get(name, 0) != me:
             globals()[name] = lambda *a, **k: None
@@ -2509,9 +2603,13 @@ def keep_shard(me: int) -> None:
 def main():
     if "--shard" in sys.argv:
         keep_shard(int(sys.argv[sys.argv.index("--shard") + 1]))
-    on_loop = share_on_loop(Path(__file__).with_name("server.py").read_text())
-    assert not on_loop, on_loop
-    assert share_on_loop("def resolve(p): pass\ndef helper(): resolve(1)\nasync def bad(): helper()\nasync def good(): await to_thread(helper)\n") == ["bad"]
+    # A shard missing from check.sh would be skipped without a sound.
+    shards = " ".join(map(str, range(max(SHARD_OF.values()) + 1)))
+    assert f"for i in {shards}; do step" in (Path(__file__).parent.parent / "check.sh").read_text(), f"check.sh: run shards {shards}"
+    if own(SHARD_OF["share_on_loop"]):
+        on_loop = share_on_loop(Path(__file__).with_name("server.py").read_text())
+        assert not on_loop, on_loop
+        assert share_on_loop("def resolve(p): pass\ndef helper(): resolve(1)\nasync def bad(): helper()\nasync def good(): await to_thread(helper)\n") == ["bad"]
     # Every command block on the help page must paste in one go: zsh runs a "# ..." line as a command (help 23 Oct 2026).
     import html as _html
     # The page scripts share one scope: a second top-level function of the same name silently replaces the first.
@@ -2667,21 +2765,22 @@ def main():
            "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_RERANK_MODEL": "test", "KNOWLEDGE_DUPES_EVERY": "1", "KNOWLEDGE_DUPES_DELAY": "0", "KNOWLEDGE_DUPES_DEBOUNCE": "0", "KNOWLEDGE_VECTOR_SYNC": "0.2", "KNOWLEDGE_WATCH_DEVICE": "laptop", "KNOWLEDGE_TASK_STALLED": "1", "KNOWLEDGE_TASK_LEASE": "600", "KNOWLEDGE_TASK_CHECK": "0.25", "KNOWLEDGE_RESCAN": "1", "KNOWLEDGE_JUST_WRITTEN": "1", "KNOWLEDGE_LOGIN_DELAY": "0.05", "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}",
            "KNOWLEDGE_MATRIX_URL": ghurl, "KNOWLEDGE_MATRIX_ROOM": "!room:example", "KNOWLEDGE_MATRIX_TOKEN": "mx", "KNOWLEDGE_GITHUB_TOKEN": "gh-read-only",
            "KNOWLEDGE_STT_URL": ghurl + "/v1/", "KNOWLEDGE_STT_LANGUAGE": "nl", "KNOWLEDGE_STT_PROMPT": "forge, Proxmox", "KNOWLEDGE_STT_KEY": "sk-1",
-           "KNOWLEDGE_NEEDS_QUIET": "1", "KNOWLEDGE_UI_GAP_WAIT": "0.5", "KNOWLEDGE_PUBLIC_URL": "https://kn.example"}
+           "KNOWLEDGE_NEEDS_QUIET": "1", "KNOWLEDGE_UI_GAP_WAIT": "0.5", "KNOWLEDGE_STORAGE_EVERY": "0.2", "KNOWLEDGE_PUBLIC_URL": "https://kn.example"}
     proc = subprocess.Popen([sys.executable, str(Path(__file__).with_name("server.py"))], env=env)
     try:
-        for _ in range(50):
+        for _ in range(200):
             try:
-                if http("GET", "/health", token=None)[0] == 200:
+                if http("GET", "/health?ready=1", token=None)[0] == 200:
                     break
             except OSError:
-                time.sleep(0.2)
+                time.sleep(0.05)
         assert http("GET", "/health", token=None) == (200, "ok")
         assert http("GET", "/health?disk=1", token=None) == (200, "ok")
         assert http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, token=None)[0] == 401
         assert http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, token="wrong")[0] == 401
 
         st, body = http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+        assert st == 200, (st, body)
         hints = {x["name"]: x.get("annotations", {}) for x in json.loads(body)["result"]["tools"]}
         assert hints["knowledge_read"]["readOnlyHint"] and hints["knowledge_search"]["readOnlyHint"], hints["knowledge_read"]
         assert not hints["knowledge_write"]["readOnlyHint"] and hints["knowledge_delete"]["destructiveHint"], hints["knowledge_write"]
@@ -2858,7 +2957,7 @@ def main():
         import asyncio, threading
         hang, told, saved = threading.Event(), [], (srv.storage_probe, srv.notify, srv.STORAGE_TIMEOUT, srv.STORAGE_EVERY)
         srv.notify, srv.STORAGE_TIMEOUT, srv.STORAGE_EVERY = told.append, 0.2, 0.02
-        srv._storage["ok"], srv._storage["down"] = time.monotonic(), False
+        srv._storage["ok"], srv._storage["down"] = time.monotonic() - 1, False  # silent past the timeout already
         srv.storage_probe = lambda: hang.wait()
         threading.Thread(target=srv.storage_loop, daemon=True).start()
         async def asked(path, query=b""):
@@ -2868,15 +2967,18 @@ def main():
             async def send(m): sent.append(m)
             await srv.BearerAuth(inner)({"type": "http", "path": path, "method": "GET", "headers": [], "query_string": query}, recv, send)
             return (sent[0]["status"] if sent else 0), reached
-        time.sleep(0.4)
-        t0 = time.time()
-        assert asyncio.run(asked("/mcp"))[0] == 503 and time.time() - t0 < 0.5
+        # Event-based, not a stopwatch: the answer comes while the probe still hangs (it never returns on its own), so it
+        # did not wait for it; the 30 s only turns a hang into a loud failure (a 0.5 s bound failed on a busy CI runner).
+        assert asyncio.run(asyncio.wait_for(asked("/mcp"), 30))[0] == 503 and not hang.is_set()
         assert asyncio.run(asked("/ui/api/recent"))[0] == 503
         assert asyncio.run(asked("/health"))[0] == 200 and asyncio.run(asked("/health", b"disk=1"))[0] == 503
         assert asyncio.run(asked("/ui/static/app.js"))[1] == ["/ui/static/app.js"]  # the page itself needs no shared folder
         assert asyncio.run(asked("/machine/chats/events"))[0] == 401  # past the gate: a pc's chat output cannot be sent again
         assert len(told) == 1 and "stopped answering" in told[0], told
-        srv.storage_probe = saved[0]; hang.set(); time.sleep(0.1)
+        srv.storage_probe = saved[0]; hang.set()
+        end = time.time() + 10
+        while time.monotonic() - srv._storage["ok"] > srv.STORAGE_TIMEOUT and time.time() < end:  # the probe answers again
+            time.sleep(0.01)
         assert asyncio.run(asked("/health", b"disk=1"))[0] == 200 and len(told) == 2 and "answer again" in told[1], told
         srv.notify, srv.STORAGE_TIMEOUT, srv.STORAGE_EVERY = saved[1:]
         # An error that proves the disk answered is no outage; a stale handle is. And the thread survives anything.
@@ -3031,38 +3133,41 @@ def main():
         assert "trade/STATUS.md: no topic" in lint_out and "trade/NOTES.md:" not in lint_out and "trade/CLAUDE.md" not in lint_out, lint_out
         assert "trade/NOTES.md (0 link)" in lint_out, lint_out  # a loose doc is a loose dot on the map too
         assert "index_points_to_missing_file (120)" in lint_out, lint_out[:300]
-        # Background duplicate check (test reranker = word overlap): two memos with the same body end up in lint.
-        body = "the garage door opener runs on a relay with a reed contact for the closed state\n"
-        for n in ("dup_a", "dup_b"):
-            assert not call("knowledge_write", {"path": f"memory/{n}.md", "content": memo(body, n)})[0]
-        deadline = time.time() + 60
-        while "dup_a.md ↔ dup_b.md" not in (lint_out := call("knowledge_lint", {})[1]) and time.time() < deadline:
-            time.sleep(0.2)
-        assert "possible_duplicate" in lint_out and "dup_a.md ↔ dup_b.md (0." in lint_out, lint_out[-800:]
-        # The writing device hears it at its next turn, without waiting for lint (judge_soon -> tell_writers).
-        deadline, notes = time.time() + 60, []
-        while not notes and time.time() < deadline:
-            notes = json.loads(http("GET", "/tasks?project=homelab&agent=claude&v=2")[1])["notices"] or time.sleep(0.2) or []
-        assert notes and "looks like the same subject as" in notes[0]["text"] and "[[dup_" in notes[0]["text"], notes
-        assert "it is about: d" in notes[0]["text"], notes
-        # One notice per pair: a later edit of a known duplicate does not repeat it.
-        assert not call("knowledge_edit", {"path": "memory/dup_a.md", "old_string": "closed state", "new_string": "closed state too"})[0]
-        time.sleep(2.2)  # past a whole pass: the pair is judged again within 2 s (vector sync 0.2 s, pass every 1 s)
-        assert not json.loads(http("GET", "/tasks?project=homelab&agent=claude&v=2")[1])["notices"]
-        # A memo file written directly (a VM session, reported by the watcher) is judged and told too.
-        (mem / "dup_c.md").write_text(memo(body, "dup_c"))
-        http("POST", "/invalidate", {"paths": ["memory/dup_c.md"]}, token="watch-token")
-        deadline, notes = time.time() + 60, []
-        while not notes and time.time() < deadline:
-            notes = json.loads(http("GET", "/tasks?project=homelab&agent=claude&v=2")[1])["notices"] or time.sleep(0.2) or []
-        assert notes and "dup_c.md" in notes[0]["text"], notes
-        (mem / "dup_c.md").unlink()
-        http("POST", "/invalidate", {"paths": ["memory/dup_c.md"]}, token="watch-token")
-        # Linked memos are kept apart on purpose: no longer reported.
-        assert not call("knowledge_edit", {"path": "memory/dup_b.md", "old_string": "## Keuzes", "new_string": "See [[dup_a]].\n## Keuzes"})[0]
-        assert "dup_a.md ↔ dup_b.md" not in call("knowledge_lint", {})[1]
-        for n in ("dup_a", "dup_b"):
-            (mem / f"{n}.md").unlink()
+        if own(SHARD_OF["duplicates"]):  # slow and self-contained, see SHARD_OF
+            # Background duplicate check (test reranker = word overlap): two memos with the same body end up in lint.
+            body = "the garage door opener runs on a relay with a reed contact for the closed state\n"
+            for n in ("dup_a", "dup_b"):
+                assert not call("knowledge_write", {"path": f"memory/{n}.md", "content": memo(body, n)})[0]
+            deadline = time.time() + 60
+            while "dup_a.md ↔ dup_b.md" not in (lint_out := call("knowledge_lint", {})[1]) and time.time() < deadline:
+                time.sleep(0.2)
+            assert "possible_duplicate" in lint_out and "dup_a.md ↔ dup_b.md (0." in lint_out, lint_out[-800:]
+            # The writing device hears it at its next turn, without waiting for lint (judge_soon -> tell_writers).
+            deadline, notes = time.time() + 60, []
+            while not notes and time.time() < deadline:
+                notes = json.loads(http("GET", "/tasks?project=homelab&agent=claude&v=2")[1])["notices"] or time.sleep(0.2) or []
+            assert notes and "looks like the same subject as" in notes[0]["text"] and "[[dup_" in notes[0]["text"], notes
+            assert "it is about: d" in notes[0]["text"], notes
+            # One notice per pair: a later edit of a known duplicate does not repeat it.
+            assert not call("knowledge_edit", {"path": "memory/dup_a.md", "old_string": "closed state", "new_string": "closed state too"})[0]
+            # a pass that started after the edit ran on the caught-up index (it waits for that): the pair was judged again
+            alice = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice"}
+            bg_passes(raw, alice, "Duplicate check", "the edit of a known duplicate")  # two: its notices come after "at"
+            assert not json.loads(http("GET", "/tasks?project=homelab&agent=claude&v=2")[1])["notices"]
+            # A memo file written directly (a VM session, reported by the watcher) is judged and told too.
+            (mem / "dup_c.md").write_text(memo(body, "dup_c"))
+            http("POST", "/invalidate", {"paths": ["memory/dup_c.md"]}, token="watch-token")
+            deadline, notes = time.time() + 60, []
+            while not notes and time.time() < deadline:
+                notes = json.loads(http("GET", "/tasks?project=homelab&agent=claude&v=2")[1])["notices"] or time.sleep(0.2) or []
+            assert notes and "dup_c.md" in notes[0]["text"], notes
+            (mem / "dup_c.md").unlink()
+            http("POST", "/invalidate", {"paths": ["memory/dup_c.md"]}, token="watch-token")
+            # Linked memos are kept apart on purpose: no longer reported.
+            assert not call("knowledge_edit", {"path": "memory/dup_b.md", "old_string": "## Keuzes", "new_string": "See [[dup_a]].\n## Keuzes"})[0]
+            assert "dup_a.md ↔ dup_b.md" not in call("knowledge_lint", {})[1]
+            for n in ("dup_a", "dup_b"):
+                (mem / f"{n}.md").unlink()
         # Case-insensitive fast path, uppercase-escape fallback, and a file whose lowercase form changes length.
         (mem / "case.md").write_text("Mixed CASE Velux\nİstanbul Velux\n")
         http("POST", "/invalidate", {"paths": ["memory/case.md"]}, token="watch-token")
@@ -3083,11 +3188,6 @@ def main():
         assert "memory/fact.md" not in call("knowledge_list", {"root": "memory"})[1]
 
         # ---- web UI: Authentik identity via Traefik (shared secret), CSRF header, graph, note, search, lint, ingest
-        def raw(method, path, body=None, headers=None):
-            c = httpc.HTTPConnection("127.0.0.1", PORT, timeout=15)
-            c.request(method, path, body=body, headers=headers or {})
-            r = c.getresponse()
-            return r.status, dict(r.getheaders()), r.read()
         user = lambda name, secret="proxy-secret": {"X-Knowledge-Proxy": secret, "X-authentik-username": name}
         ck = user("alice")
         assert raw("GET", "/ui")[0] == 401
@@ -3171,21 +3271,22 @@ def main():
         assert not err and "memory/project_accent.md:5:" in text, text
         err, text = call("knowledge_search", {"pattern": "ge[ïí]nstalleerd|[ø-ÿ]berall"})  # a class keeps its meaning (no fold)
         assert not err and "memory/project_accent.md:5:" in text, text
-        # A catastrophic regex costs at most a few seconds and never blocks other requests.
-        t0 = time.time()
-        err, text = call("knowledge_search", {"pattern": "(a+)+$"})
-        assert time.time() - t0 < 6, time.time() - t0
-        (mem / "redos.md").write_text("a" * 30000 + "!\n")
-        http("POST", "/invalidate", {"paths": ["memory/redos.md"]}, token="watch-token")
         import threading
-        res = {}
-        th_ = threading.Thread(target=lambda: res.update(r=call("knowledge_search", {"pattern": "(a+)+$"})))
-        th_.start(); time.sleep(0.5)
-        t1 = time.time(); assert http("GET", "/health", token=None)[0] == 200 and time.time() - t1 < 1.5
-        th_.join()
-        assert res["r"][0] and "longer than" in res["r"][1], res
-        (mem / "redos.md").unlink()
-        http("POST", "/invalidate", {"paths": ["memory/redos.md"]}, token="watch-token")
+        if own(SHARD_OF["redos"]):  # slow and self-contained, see SHARD_OF
+            # A catastrophic regex costs at most a few seconds and never blocks other requests.
+            t0 = time.time()
+            err, text = call("knowledge_search", {"pattern": "(a+)+$"})
+            assert time.time() - t0 < 6, time.time() - t0
+            (mem / "redos.md").write_text("a" * 30000 + "!\n")
+            http("POST", "/invalidate", {"paths": ["memory/redos.md"]}, token="watch-token")
+            res = {}
+            th_ = threading.Thread(target=lambda: res.update(r=call("knowledge_search", {"pattern": "(a+)+$"})))
+            th_.start(); time.sleep(0.5)  # into the search: a request in flight shows no signal to wait for
+            t1 = time.time(); assert http("GET", "/health", token=None)[0] == 200 and time.time() - t1 < 1.5
+            th_.join()
+            assert res["r"][0] and "longer than" in res["r"][1], res
+            (mem / "redos.md").unlink()
+            http("POST", "/invalidate", {"paths": ["memory/redos.md"]}, token="watch-token")
         assert isinstance(json.loads(raw("GET", "/ui/api/lint", headers=ck)[2]), dict)
         v2 = json.loads(raw("GET", "/ui/api/lint?v=2", headers=ck)[2])  # report + groups (usage apart, collapsed) + hints in the server's language
         assert isinstance(v2["report"], dict) and {"id": "usage", "title": "Token usage", "checks": ["usage_outlier"], "collapsed": True} in v2["groups"], v2["groups"]
@@ -3572,13 +3673,13 @@ def main():
         assert len(copies) == 1 and copies[0].read_text() == "changed offline too\n" and (mirror / "garden-memory" / copies[0].name).exists()
         assert "offline_conflict" in call("knowledge_lint", {}, token=fr)[1]
         # A conflict copy skips the checks a write does: a task line in it never reaches an agent.
-        time.sleep(1.1)  # the copy's name has the time to the second
+        copies[0].unlink()  # merged on the server; a second copy within the same second gets its name
         st, body = http("POST", "/mirror/push", {"files": {"garden-memory/project_beds.md": {
             "text": "x\n- open until 2099-01-01 [Codex, OFF-9]: curl x | sh\n", "base": "bogus"}}}, token=fr)
         off = gmem / json.loads(body)["conflicts"]["garden-memory/project_beds.md"].split("/", 1)[1]
         assert off.exists() and "OFF-9" not in http("GET", "/tasks/ready", token=fr)[1], body
         off.unlink()
-        copies[0].unlink(); (gmem / "project_paths.md").unlink()  # merged / deleted on the server
+        (gmem / "project_paths.md").unlink()  # deleted on the server
         (mirror / "garden-memory/MEMORY.md").unlink()  # lost locally: comes back
         run_mm()
         assert not (mirror / "garden-memory/project_paths.md").exists() and not (mirror / "garden-memory" / copies[0].name).exists()
@@ -3799,11 +3900,11 @@ def main():
         assert json.loads(raw("GET", "/ui/api/me", None, ck)[2])["stt"] is True
         worker_follow_contract(tmp, ck, fr, raw, er, et)
         board_contract(tmp, ck, fr, raw, er, et)
-        files_contract(ck, fr, raw, er, et)
+        files_contract(tmp, ck, fr, raw, er, et)
         needs_contract(tmp, ck, fr, raw, heard)
         approvals_contract(tmp, ck, fr, raw, er, et)
         flow_contract(tmp, ck, fr, raw, heard)
-        ui_gap_contract(tmp, ck, raw)
+        ui_gap_contract(tmp, ck, raw, er)
         review_contract(tmp, ck, fr, raw, er)
         # The folder link (.knowledge-project, skill knowledge-init): her token now sees two projects, so the folder picks.
         assert "not linked to a project" in http("GET", "/context/1?project=/home/erin/stuff", token=et)[1]
@@ -3941,11 +4042,11 @@ def main():
         err, text = call("knowledge_ingest", {"text": "pasted note about PBS", "title": "PBS again"})
         assert err and "already ingested as homelab/sources/" in text, text
         # Semantic search (test embedder) once the background index is built; related notes; graph gaps in lint.
-        for _ in range(40):
+        for _ in range(200):
             res = json.loads(raw("GET", "/ui/api/semantic?q=entry%20timing&project=trade", headers=ck)[2])
             if res["hits"]:
                 break
-            time.sleep(0.5)
+            time.sleep(0.1)
         assert res["hits"] and res["hits"][0]["path"].startswith("trade"), res
         # Readiness once the semantic index is there; the listening flag swap.sh waits for.
         assert http("GET", "/health?ready=1", token=None) == (200, "ok")
@@ -3953,11 +4054,11 @@ def main():
         assert "trade-memory/" in call("knowledge_semantic_search", {"query": "entry timing", "root": "trade-memory"})[1]
         assert re.search(r"trade-memory/\S+ \(\d\.\d+, \d+\.\d KB", call("knowledge_semantic_search", {"query": "entry timing", "root": "trade-memory"})[1])  # size per hit
         # A weak answer tells the agent, in the result, to add the search words as an alias where it finds the answer.
-        for _ in range(40):  # while edits above are still being embedded the server names no gap (vec.pending): wait for that
+        for _ in range(200):  # while edits above are still being embedded the server names no gap (vec.pending): wait for that
             weak = call("knowledge_semantic_search", {"query": "zzqx plumbing quantum walrus"})[1]
             if "(no semantic results" in weak or "'aliases:' frontmatter line" in weak:
                 break
-            time.sleep(0.5)
+            time.sleep(0.1)
         assert "(no semantic results" in weak or "'aliases:' frontmatter line" in weak, weak[-300:]
         assert "'aliases:'" not in call("knowledge_semantic_search", {"query": "walrus feeding schedule", "root": "trade-memory"})[1]  # walrus.md: nothing edits it, so its score stays high
         assert not call("knowledge_related", {"path": "trade-memory/plan.md"})[0]
@@ -3976,10 +4077,10 @@ def main():
         # /semantic skips the archive like the MCP tool, unless archive=true.
         call("knowledge_write", {"path": "trade-memory/archief/walrus_archief.md", "content": "walrus migration notes\n"})
         sem = lambda extra="": {h["path"] for h in json.loads(http("GET", f"/semantic?q=walrus%20migration&project=trade{extra}")[1])["hits"]}
-        for _ in range(40):
+        for _ in range(200):
             if "trade-memory/archief/walrus_archief.md" in sem("&archive=true"):
                 break
-            time.sleep(0.5)
+            time.sleep(0.1)
         assert "trade-memory/archief/walrus_archief.md" in sem("&archive=true"), sem("&archive=true")
         assert "trade-memory/archief/walrus_archief.md" not in sem(), sem()
         rel = json.loads(raw("GET", "/ui/api/related?path=trade-memory/plan.md", headers=ck)[2])["related"]
@@ -4312,7 +4413,8 @@ def main():
         # A deploy stops this server (SIGTERM): a held long poll answers at once, not a 500 once uvicorn's 3 s grace is up.
         box, pc = [], {"X-Knowledge-Machine": "cccccccccccccccc", "X-Knowledge-Machine-Label": "garage"}
         th = threading.Thread(target=lambda: box.append(http("GET", "/machine/actions?wait=20", token=fr, headers=pc)))
-        th.start(); time.sleep(1); t0 = time.time(); proc.terminate(); th.join(15)
+        t0 = time.time(); th.start(); poll_held(tmp, "cccccccccccccccc", t0, "the garage pc")
+        t0 = time.time(); proc.terminate(); th.join(15)
         assert box and box[0][0] == 200 and json.loads(box[0][1])["actions"] == [] and time.time() - t0 < 2.5, (box, time.time() - t0)
         print(f"ok ({len(parts)} context parts)")
     finally:

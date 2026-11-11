@@ -228,7 +228,7 @@ $("ck-side").addEventListener("keydown", (e) => { // up and down go through the 
 });
 // Open one chat (its route), or go back from it when `meta` is empty.
 function ckShow(meta) {
-  if (!meta) return solo() ? ckCloseTab() : goBack("#/chats");
+  if (!meta) return solo() ? ckCloseTab() : goBack("#/chats", (h) => { const r = parseRoute(h); return r?.view === "chats" && !r.arg; }); // the chat list, not the chat before
   go(`#/chats/${encodeURIComponent(ckCard(meta).meta.id)}`);
 }
 // The pill over the end of a chat you scrolled up in; it also says when more came in below.
@@ -678,7 +678,8 @@ function ckCard(meta) {
   }, { passive: true });
   // the distance to the end also changes without a scroll: an image loads, a block unfolds, the card gets another size
   const sized = new ResizeObserver(() => ckJump(card)); sized.observe(log);
-  new MutationObserver((changes) => { for (const c of changes) for (const n of c.addedNodes) if (n.nodeType === 1) sized.observe(n); }).observe(log, { childList: true });
+  const mut = new MutationObserver((changes) => { for (const c of changes) for (const n of c.addedNodes) if (n.nodeType === 1) sized.observe(n); });
+  mut.observe(log, { childList: true });
   const jump = el("div", "ck-jump"), jumpBtn = el("button", "btn small ck-jump-btn"), jumpText = el("span");
   jump.hidden = true; jumpBtn.type = "button";
   jumpBtn.append(jumpText, ckKeyEl("jump", "muted ck-jump-key", "{key}")); jump.append(jumpBtn);
@@ -722,6 +723,7 @@ function ckCard(meta) {
   const find = ckFindBar(); find.btn = findBtn;
   root.append(head, find.bar, log, jump, subbar, asks, form);
   const card = { meta: { ...meta }, x, openTab: open, root, find, name, where, git, state, log, jump, jumpText, asks, form, input, stop, send, note, picks, mark, close, tok, subbar, queueBtn, forceBtn, more, branch, filesBox: files, files: [], mode: "", pick: null, after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
+  card.sized = sized; card.mut = mut;
   findBtn.onclick = () => (find.bar.hidden ? ckFindOpen(card) : ckFindClose(card));
   open.onclick = (e) => { if (me.prefs?.grid_open === "here" && !e.ctrlKey && !e.metaKey && !e.shiftKey) { e.preventDefault(); ckShow(card.meta); } }; // Settings
   ckSendHints(card);
@@ -827,24 +829,24 @@ function ckCard(meta) {
       ckTick();
     } catch (err) { note.className = "ck-note bad"; note.textContent = err.message; }
   };
-  // right-click or long press on Archive: a small menu whose red button force archives, a second deliberate step
+  // right-click or long press on Archive: a small menu whose Force archive is a second deliberate step
   // (iOS fires no contextmenu on a long press, hence the timer); Esc or a tap elsewhere closes it (popover)
   const forceClose = (e) => {
     e?.preventDefault?.();
     if (card.meta.closed || Date.now() - (close.forcedAt || 0) < 1000) return;
     close.forcedAt = Date.now();
     document.querySelector(".ck-forcepop")?.remove();
-    const pop = el("div", "menu-list ck-forcepop"), go = el("button", "ck-force-go", "Force archive"), no = el("button", null, "Cancel");
-    pop.popover = "auto"; go.type = no.type = "button";
-    pop.append(el("p", "ck-forcepop-why", "Close now, without the agent recording this chat in the memos."), go, no);
+    const pop = el("div", "menu-list ck-forcepop"), go = el("button", "ck-force-go", "Force archive");
+    pop.popover = "auto"; pop.tabIndex = -1; go.type = "button";
+    pop.append(el("p", "ck-forcepop-why", "Close now, without the agent recording this chat in the memos."), go);
     go.onclick = () => { pop.hidePopover(); close.onclick({ force: true }); };
-    no.onclick = () => pop.hidePopover();
+    pop.onkeydown = (k) => { if (k.key === "Escape") k.stopPropagation(); }; // the popover closes itself; the chat stays open
     pop.addEventListener("toggle", (t) => { if (t.newState === "closed") pop.remove(); });
     document.body.append(pop);
     const r = close.getBoundingClientRect();
     pop.style.top = `${Math.min(r.bottom + 6, innerHeight - 160)}px`;
     pop.style.left = `${Math.max(8, Math.min(r.right - 260, innerWidth - 268))}px`;
-    pop.showPopover(); no.focus(); // the safe choice has the focus: Enter does not archive
+    pop.showPopover(); pop.focus(); // not the button: Enter does not archive
   };
   close.addEventListener("contextmenu", forceClose);
   close.addEventListener("pointerdown", (e) => { if (e.pointerType === "touch") close.hold = setTimeout(forceClose, 500); });
@@ -1055,7 +1057,11 @@ async function ckSubPoll(card) {
   card.stop.hidden = card.queueBtn.hidden = card.forceBtn.hidden = true; card.send.textContent = "Send";
   if (!card.note.classList.contains("bad")) card.note.textContent = readOnly ? "agy names this subagent's conversation once it has ended: then you can write to it here." : "Your message goes to the main agent, which passes it on to this subagent.";
 }
-function ckDrop(k) { ck.cards.delete(k); if (ck.view === k) ck.view = ""; }
+function ckDrop(k) {
+  const c = ck.cards.get(k);
+  if (c) { c.sized?.disconnect(); c.mut?.disconnect(); }
+  ck.cards.delete(k); if (ck.view === k) ck.view = "";
+}
 const CK_EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"]; // the server's EFFORTS, in order
 // The model picker: one chip under the box ("Opus · high ▾"), a panel with the models grouped by family and the chosen
 // model's effort levels. Picking a model sets its own default effort; the agent (Claude Code, Codex, agy) follows from
@@ -1550,6 +1556,26 @@ function ckUserMsg(card, text, box = el("div", "ck-msg user"), by = "") {
   box.append(text.slice(at));
   return box;
 }
+// A project path in an answer (`server/app.js:12`, a folder as `docs/`) opens in Files: the file beside its folder, Back goes to the
+// folder. Relative paths count from the chat's linked folder (a worktree chat shows the main checkout's copy there);
+// an absolute one only inside it. One without a "/" stays text: `app.js` alone says too little about where it is.
+const CK_PATH = /^(?:\.\/)?([\w.@+-]+(?:\/[\w.@+-]+)+\/?|[\w.@+-]+\/)(?::\d+(?:[:-]\d+)?)?$/;
+function ckFileLinks(m, box) {
+  const root = m.folder, mid = m.machine;
+  if (!root || !mid || agentsOff()) return;
+  const sep = root.includes("\\") && !root.includes("/") ? "\\" : "/", top = root.replace(/[\\/]+$/, "");
+  for (const code of box.querySelectorAll("code")) {
+    if (code.closest("pre, a")) continue;
+    const t = code.textContent.trim(), abs = t.startsWith(top + sep);
+    const hit = abs ? [t, t.slice(top.length + 1).replace(/:\d+(?:[:-]\d+)?$/, "")] : CK_PATH.exec(t);
+    if (!hit || hit[1].split(/[\\/]/).includes("..")) continue;
+    const folder = hit[1].endsWith("/") || hit[1].endsWith("\\");
+    if (!folder && !/\.\w+$/.test(hit[1])) continue; // origin/main, chat/<id>: a branch, not a path
+    const rel = hit[1].replace(/[\\/]$/, "").split(/[\\/]/), full = [top, ...rel].join(sep), dir = rel.length > 1 ? [top, ...rel.slice(0, -1)].join(sep) : top;
+    const a = el("a", "ck-file"); a.href = folder ? filesUrl(mid, full) : filesUrl(mid, dir, full); a.title = `Open in Files: ${full}`;
+    code.replaceWith(a); a.append(code);
+  }
+}
 function ckLine(card, e) {
   if (e.kind === "tool" && e.text.includes("⟦file:")) return ckUserMsg(card, e.text, el("div", "ck-line tool"));
   const line = el("div", `ck-line ${e.kind}`, e.text);
@@ -1603,7 +1629,7 @@ function ckEvents(card, res) {
       card.log.append(e.kind === "user" ? ckUserMsg(card, e.text, undefined, e.by) : ckLine(card, e));
     }
   }
-  for (const msg of dirty) if (selecting(msg)) card.held = msg; else msg.innerHTML = renderMd(msg.dataset.raw.replace(/^\n+/, "")); // text being selected waits for the next poll
+  for (const msg of dirty) if (selecting(msg)) card.held = msg; else { msg.innerHTML = renderMd(msg.dataset.raw.replace(/^\n+/, "")); ckFileLinks(card.meta, msg); } // text being selected waits for the next poll
   if (res.events.length) {
     const hasUser = res.events.some((e) => e.kind === "user");
     if (near || hasUser) ckScrollBottom(card, hasUser);
