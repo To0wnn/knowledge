@@ -806,8 +806,9 @@ function ckCard(meta) {
     ckPaint(card); await ckPoll(card); clearTimeout(ck.timer); ck.timer = setTimeout(ckTick, 1500);
   };
   close.onclick = async (e) => { // archive: the agent records the chat in the memos, then it goes off the board and the list (Archived); a new message opens it again
+    if (!e?.force && Date.now() - (close.forcedAt || 0) < 1000) return; // the click that ends a long press
     const closed = !card.meta.closed;
-    const force = closed && (Boolean(e?.shiftKey) || Boolean(card.failedWrap));
+    const force = closed && (Boolean(e?.shiftKey) || Boolean(e?.force) || Boolean(card.failedWrap));
     if (force && ckBusy(card.meta.status) && !confirm(FORCE_BUSY)) return;
     try {
       const r = await api("/ui/api/chat/close", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: card.meta.machine, id: card.meta.id, closed, ...(force ? { force: true, record: false } : {}) }) });
@@ -826,6 +827,15 @@ function ckCard(meta) {
       ckTick();
     } catch (err) { note.className = "ck-note bad"; note.textContent = err.message; }
   };
+  // right-click or long press on Archive: force archive (iOS fires no contextmenu on a long press, hence the timer)
+  const forceClose = (e) => {
+    e?.preventDefault?.();
+    if (card.meta.closed || Date.now() - (close.forcedAt || 0) < 1000) return;
+    close.forcedAt = Date.now(); close.onclick({ force: true });
+  };
+  close.addEventListener("contextmenu", forceClose);
+  close.addEventListener("pointerdown", (e) => { if (e.pointerType === "touch") close.hold = setTimeout(forceClose, 500); });
+  for (const ev of ["pointerup", "pointercancel", "pointerleave"]) close.addEventListener(ev, () => clearTimeout(close.hold));
   queueBtn.onclick = () => { more.open = false; card.mode = "queue"; form.requestSubmit(); };
   forceBtn.onclick = () => { more.open = false; card.mode = "force"; form.requestSubmit(); };
   stop.onclick = async () => {
@@ -1275,11 +1285,11 @@ function ckPaint(card) {
   if (card.failedWrap && !m.closed) {
     card.close.textContent = "Force archive";
     card.close.className = "btn small bad ck-close";
-    card.close.title = "Wrap-up failed: click to force archive without wrap-up (or Shift+click)";
+    card.close.title = "Wrap-up failed: click to force archive without wrap-up (or Shift+click, right-click, long press)";
   } else {
     card.close.textContent = m.closed ? "Open again" : "Archive";
     card.close.className = "btn small quiet ck-close";
-    card.close.title = m.closed ? "Back in the list" : "The agent records this chat in the memos, then it goes off the list (under Earlier, Archived); Shift-click to force archive without wrap-up";
+    card.close.title = m.closed ? "Back in the list" : "The agent records this chat in the memos, then it goes off the list (under Earlier, Archived); Shift-click, right-click or long press to force archive without wrap-up";
   }
   card.name.textContent = ckTitle(m, card);
   card.branch.hidden = true;
