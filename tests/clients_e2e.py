@@ -3615,6 +3615,14 @@ def main():
     for name, f in list(globals().items()):  # the other shards' phases do nothing here
         if callable(f) and name in PHASES and PHASE_SHARD.get(name, 0) != me:
             globals()[name] = lambda *a, **k: None
+        elif callable(f) and name in PHASES:  # each phase says how long it took: where a slow OS spends its time
+            def timed(*a, _f=f, _name=name, **k):
+                t0 = time.monotonic()
+                try:
+                    return _f(*a, **k)
+                finally:
+                    print(f"phase {_name}: {time.monotonic() - t0:.1f} s", flush=True)
+            globals()[name] = timed
     compile(FAKE_AGENT, "FAKE_AGENT", "exec")  # a broken stand-in fails every agent test: say so at once
     import faulthandler  # a hang prints every thread's stack before the CI job's 20 min limit cancels it without a log
     faulthandler.dump_traceback_later(15 * 60, exit=True)
