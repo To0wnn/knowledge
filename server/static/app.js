@@ -63,6 +63,11 @@ const PURIFY = { FORBID_TAGS: ["style", "form", "input", "textarea", "select", "
 DOMPurify.addHook("afterSanitizeAttributes", (n) => {
   if (n.tagName === "IMG" && !/^(\/(?!\/)|data:image\/)/.test(n.getAttribute("src") || "")) n.removeAttribute("src");
 });
+// A link to a file on the agent's pc (agy writes [`x`](file:///C:/repo/x)): the sanitizer drops file: URLs, so its
+// path is kept aside as data-file (a chat turns it into a Files link, ckFileLinks).
+DOMPurify.addHook("beforeSanitizeAttributes", (n) => {
+  if (n.tagName === "A" && /^file:/i.test(n.getAttribute("href") || "")) n.setAttribute("data-file", n.getAttribute("href"));
+});
 const renderMd = (text) => DOMPurify.sanitize(marked.parse(text, { gfm: true }), PURIFY);
 const post = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* blocked */ } } };

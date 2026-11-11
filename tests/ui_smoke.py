@@ -495,7 +495,7 @@ async def approvals(browser, devices, secret: str) -> None:
                                                         {"n": 3, "at": now, "kind": "sub", "text": "Explore · find the tests", "sub": "tu1", "status": "running"},
                                                         {"n": 4, "at": now, "kind": "tool", "text": "Bash: ls tests", "sub": "tu1"},
                                                         {"n": 5, "at": now, "kind": "sub", "text": "Found **3** test files", "sub": "tu1", "status": "done"},
-                                                        {"n": 6, "at": now, "kind": "text", "text": "Running them now: `beds/water.py:3`, not `origin/main`."},
+                                                        {"n": 6, "at": now, "kind": "text", "text": "Running them now: `beds/water.py:3`, not `origin/main`; [`plan.md`](file:///home/x/garden/docs/plan.md), [elsewhere](file:///etc/hosts), [web](https://example.com)."},
                                                         {"n": 7, "at": now, "kind": "usage", "text": "", "sub": "tu1", "total": 8645},
                                                         {"n": 8, "at": now, "kind": "sub", "text": "Plan · check the docs", "sub": "tu2", "status": "running"},
                                                         {"n": 9, "at": now, "kind": "usage", "text": "", "sub": "tu2", "total": 5949}],
@@ -561,8 +561,12 @@ async def approvals(browser, devices, secret: str) -> None:
           d.querySelector('summary .chip').textContent, [...document.querySelectorAll('#ck-canvas .ck-msg.agent')].some(m => m.textContent.includes('Running them'))]; })()""")
         check(sub and sub[:5] == [2, "Explore · find the tests", "Bash: ls tests", "3", "done"] and sub[5], f"chat: a subagent is one folded block with its tool line and report, apart from the answer {sub}")
         links = await pg.evaluate("[...document.querySelectorAll('#ck-canvas .ck-msg.agent a.ck-file')].map(a => [a.textContent, a.getAttribute('href')])")
-        check(len(links) == 1 and links[0][0] == "beds/water.py:3" and "p=%2Fhome%2Fx%2Fgarden%2Fbeds&f=%2Fhome%2Fx%2Fgarden%2Fbeds%2Fwater.py" in links[0][1],
-              f"chat: a project path in an answer opens in Files, a branch name stays text {links}")
+        check(len(links) == 2 and links[0][0] == "beds/water.py:3" and "p=%2Fhome%2Fx%2Fgarden%2Fbeds&f=%2Fhome%2Fx%2Fgarden%2Fbeds%2Fwater.py" in links[0][1]
+              and links[1][0] == "plan.md" and links[1][1].endswith("f=%2Fhome%2Fx%2Fgarden%2Fdocs%2Fplan.md"),
+              f"chat: a project path in an answer or a file:// link to it opens in Files, a branch name and a file elsewhere stay text {links}")
+        win = await pg.evaluate("""() => { const m = {machine: 'w', folder: 'C:\\\\Repo'}; return [ckFileUrl(m, 'c:/repo/voice/LEESMIJ.md'), ckFileUrl(m, 'voice/a.wav:3'), ckFileUrl(m, 'voice/'), ckFileUrl(m, 'D:/x/y.md')]; }""")
+        check(win[0] == "#/files?m=w&p=C%3A%5CRepo%5Cvoice&f=C%3A%5CRepo%5Cvoice%5CLEESMIJ.md" and win[1].endswith("f=C%3A%5CRepo%5Cvoice%5Ca.wav") and win[2] == "#/files?m=w&p=C%3A%5CRepo%5Cvoice" and win[3] == "",
+              f"chat: a Windows path (any case, / or \\) inside the chat's folder links to Files, one outside does not {win}")
         pins = await pg.evaluate("""[[...document.querySelectorAll('#ck-canvas .ck-subbar .ck-subpin')].map(b => b.textContent),
           document.querySelector('#ck-canvas .ck-sub .ck-sub-tok')?.textContent, document.querySelector('#ck-canvas .ck-tok')?.textContent]""")
         check(pins[0] == ["Plan · check the docs5.9k tokens"] and pins[1] == "8.6k tokens" and pins[2] == "35k context · 71k used",
