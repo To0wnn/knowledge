@@ -60,8 +60,11 @@ def call(tool, args, token="rw-token", headers=None):
 
 
 def bg_last(raw, ck, job) -> float:
-    """When the last finished pass of a background job (its row on the admin page) started, 0 for none."""
-    return next((b["last"] or 0 for b in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["system"]["background"] if b["name"] == job), 0)
+    """When the last finished pass of a background job (its row on the admin page) started, 0 for none. A pass that
+    failed is no pass: a check waiting on it would pass without the job having run."""
+    row = next((b for b in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["system"]["background"] if b["name"] == job), {})
+    assert not row.get("failed"), f"{job} failed: {row.get('detail')}"
+    return row.get("last") or 0
 
 
 def bg_pass(raw, ck, job, after, what, limit=30.0) -> float:
@@ -2458,7 +2461,7 @@ def flow_contract(tmp, ck, fr, raw, heard):
     assert wait(lambda: not state.exists())
 
 
-def ui_gap_contract(tmp, ck, raw):
+def ui_gap_contract(tmp, ck, raw, other):
     """A web UI search that finds nothing (exact and by meaning) is a gap like an agent's, logged once the person stopped
     typing: the queries on the way there are not; one that finds notes is not."""
     ask = lambda q: [raw("GET", f"/ui/api/{kind}?q={urllib.parse.quote(q)}&project=garden", headers=ck) for kind in ("search", "semantic")]
@@ -2475,17 +2478,27 @@ def ui_gap_contract(tmp, ck, raw):
         while q not in [g[4] for g in gaps() if g[2] == "ui"]:
             assert time.time() < end, f"the gap {q!r} never logged: {gaps()}"
             time.sleep(0.05)
+    # A barrier after each case: another person's search that finds nothing, set after alice's pending one, so once it
+    # is logged alice's wait for that case is over (timers fire in order). From alice herself it would replace her
+    # pending query and the "not a gap" checks could never fail.
+    n = iter(range(1, 9))
+    def barrier():
+        q = f"vbplork zqxw {next(n)}"
+        for kind in ("search", "semantic"):
+            raw("GET", f"/ui/api/{kind}?q={urllib.parse.quote(q)}&project=erinproj", headers=other)
+        logged(q)
     ask("qwzx")
     ask("qwzxvb plorkt")
-    logged("qwzxvb plorkt")
+    barrier()
     raw("GET", "/ui/api/semantic?q=toggle%20theme%20qwzx&project=garden&gap=0", headers=ck)  # the palette matched an action
+    barrier()
     ask("togle qwzx")  # a typo, then the palette's match within the wait: neither is a gap
     raw("GET", "/ui/api/semantic?q=toggle%20qwzx&project=garden&gap=0", headers=ck)
+    barrier()
     ask("garden")  # finds notes
-    ask("vbplork zqxw")  # the last one: once it is logged, the waits of all the searches before it are over
-    logged("vbplork zqxw")
+    barrier()
     ui = [g for g in gaps() if g[2] == "ui"]
-    assert [g[4] for g in ui] == ["qwzxvb plorkt", "vbplork zqxw"] and ui[0][1] == "user:alice", ui
+    assert [g[4] for g in ui if g[1] == "user:alice"] == ["qwzxvb plorkt"] and [g[1] for g in ui if g[4] == "vbplork zqxw"] != ["user:alice"], ui
 
 
 def no_held(beat: dict) -> dict:
@@ -3134,7 +3147,7 @@ def main():
             assert not call("knowledge_edit", {"path": "memory/dup_a.md", "old_string": "closed state", "new_string": "closed state too"})[0]
             # a pass that started after the edit ran on the caught-up index (it waits for that): the pair was judged again
             alice = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice"}
-            bg_pass(raw, alice, "Duplicate check", time.time(), "the edit of a known duplicate")
+            bg_passes(raw, alice, "Duplicate check", "the edit of a known duplicate")  # two: its notices come after "at"
             assert not json.loads(http("GET", "/tasks?project=homelab&agent=claude&v=2")[1])["notices"]
             # A memo file written directly (a VM session, reported by the watcher) is judged and told too.
             (mem / "dup_c.md").write_text(memo(body, "dup_c"))
@@ -3886,7 +3899,7 @@ def main():
         needs_contract(tmp, ck, fr, raw, heard)
         approvals_contract(tmp, ck, fr, raw, er, et)
         flow_contract(tmp, ck, fr, raw, heard)
-        ui_gap_contract(tmp, ck, raw)
+        ui_gap_contract(tmp, ck, raw, er)
         review_contract(tmp, ck, fr, raw, er)
         # The folder link (.knowledge-project, skill knowledge-init): her token now sees two projects, so the folder picks.
         assert "not linked to a project" in http("GET", "/context/1?project=/home/erin/stuff", token=et)[1]
