@@ -766,6 +766,27 @@ async def shell(browser, devices, secret: str) -> None:
     check(split["lines"] == [" test-vm 3 reports"], f"Machines: a pc set up again (same name and token) is one offline line with its reports counted {split}")
     words = await pg.evaluate("""() => { const now = Date.now() / 1000; return [workerNeedsYou({online: true}, {status: 'failed', owner_stopped: true}), workerNeedsYou({online: true}, {status: 'failed'})]; }""")
     check(words == [False, True], f"Machines: a worker stopped by its owner does not need you, one that failed does {words}")
+    # Files: a folder and a file have their own URL; folders first, a file opens beside the list with line numbers
+    # (the pc's answers intercepted: read-only, no pc needed).
+    listing = {"path": "/r/app", "root": "/r", "parent": "/r", "sep": "/", "more": 0, "entries": [
+        {"name": "src", "path": "/r/app/src", "dir": True, "size": 0, "mtime": 1790000000},
+        {"name": "main.py", "path": "/r/app/main.py", "dir": False, "size": 12, "mtime": 1790000000}]}
+
+    async def fake_files(r):
+        op = json.loads(r.request.post_data)["op"]
+        await r.fulfill(json=listing if op == "list" else {"path": "/r/app/main.py", "text": "one\ntwo\n", "mtime": "1", "size": 8, "masked": False})
+    await pg.route("**/ui/api/files", fake_files)
+    await route(pg, "#/files?m=x&p=%2Fr%2Fapp", ".fm-folder", 300)
+    names = await pg.locator(".fm-folder .fm-name").all_inner_texts()
+    check(names == ["src", "main.py"] and await pg.locator(".fm-crumbs").inner_text() != "", f"Files: a folder lists folders first, with its path {names}")
+    await pg.locator(".fm-row", has_text="main.py").click()
+    await pg.wait_for_selector(".fm-code", timeout=10000)
+    check("f=%2Fr%2Fapp%2Fmain.py" in await pg.evaluate("location.hash") and await pg.locator(".fm-gutter").inner_text() == "1\n2",
+          "Files: a file opens at its own URL, with line numbers")
+    await pg.go_back()
+    await pg.wait_for_timeout(300)
+    check(await pg.locator(".fm-code").count() == 0 and await pg.locator(".fm-folder").count() == 1, "Files: Back closes the file, the folder stays")
+    await pg.unroute("**/ui/api/files", fake_files)
     await route(pg, "#/machines?view=folders", ms=1500)  # Link a folder sits on top of Folders: a folder first, then its project
     if await pg.get_by_role("button", name="Link a folder").count():
         tree = {"": {"path": "", "parent": None, "linkable": False, "dirs": [{"name": "C:\\", "path": "C:\\"}, {"name": "D:\\", "path": "D:\\"}]},
