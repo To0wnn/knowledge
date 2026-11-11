@@ -2542,9 +2542,11 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/local/api/unlink":
                 return self.send(200, {"result": unlink_folder(str(body.get("path", "")))}, origin=o)
             if path == "/local/api/tick":
+                UPDATE_NOW.set()
                 return self.send(200, tick(), origin=o)
             if path == "/local/api/wake":  # the wake hook: no waiting for a round, which may wait for one already running
                 WAKE.set()
+                UPDATE_NOW.set()
                 return self.send(200, {"woken": True}, origin=o)
             if path == "/local/api/update-agents":
                 update_agents_soon()
@@ -2571,13 +2573,16 @@ TASK_NAME = "Knowledge companion"  # the Scheduled Task knowledge-agent.py insta
 
 def restart() -> None:
     if os.name != "nt":
+        log("info", "Re-executing companion process", "execv")
         os.execv(sys.executable, [sys.executable, *sys.argv])
     # Windows: exec would leave the exclusive port taken for a moment. Under the Scheduled Task the task must stay the owner,
     # or uninstalling could not stop it, so a detached helper asks the task to run again once this process has gone.
     flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
     under_task = subprocess.run(["schtasks", "/Query", "/TN", TASK_NAME], capture_output=True).returncode == 0
     again = f'schtasks /Run /TN "{TASK_NAME}"' if under_task else subprocess.list2cmdline([sys.executable, *sys.argv])
-    helper = lambda f: subprocess.Popen(f"cmd /c ping -n 4 127.0.0.1 >nul & {again}", shell=False, stdin=subprocess.DEVNULL,
+    log("info", "Spawning companion restart helper", f"under_task={under_task}")
+    cmd = f"cmd /c ping -n 2 127.0.0.1 >nul & {again}" if under_task else [sys.executable, *sys.argv]
+    helper = lambda f: subprocess.Popen(cmd, shell=False, stdin=subprocess.DEVNULL,
                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=f)
     try:
         helper(flags | subprocess.CREATE_BREAKAWAY_FROM_JOB)
@@ -3018,12 +3023,23 @@ BIND_WAIT = float(os.environ.get("KNOWLEDGE_COMPANION_BIND_WAIT") or (30 if os.n
 
 
 def bind_local(addr: tuple, wait: float) -> LocalServer:
+    t0 = time.monotonic()
+    retries = 0
+    last_err = None
     end = time.time() + wait
     while True:
         try:
-            return LocalServer(addr, Handler)
-        except OSError:
+            srv = LocalServer(addr, Handler)
+            waited = time.monotonic() - t0
+            msg = f"Bound {addr[0]}:{addr[1]} after {waited:.1f} s ({retries} retries)" if (retries > 0 or waited > 0.5) else f"Bound {addr[0]}:{addr[1]} instantly"
+            log("sync", msg, str(last_err) if last_err else "")
+            return srv
+        except OSError as e:
+            retries += 1
+            last_err = e
             if time.time() >= end:
+                waited = time.monotonic() - t0
+                log("error", f"Could not bind {addr[0]}:{addr[1]} after {waited:.1f} s ({retries} retries)", str(e)[:300])
                 raise
             time.sleep(0.5)
 

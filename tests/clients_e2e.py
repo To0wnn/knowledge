@@ -1565,20 +1565,54 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         manifests = [hooks.parent / m / "plugin.json" for m in (".claude-plugin", ".codex-plugin") if (hooks.parent / m / "plugin.json").exists()]
         before = {m: m.read_text(encoding="utf-8") for m in manifests}
         reported = lambda: next((r for r in machines() if r["id"] == mid), {}).get("companion", {}).get("version")
-        for m, t in before.items():
-            m.write_text(re.sub(r'"version": "[^"]+"', '"version": "9.8.7"', t), encoding="utf-8")
-        act("workers_allowed", {"on": True})  # a round reports soon after the restart
-        def poke():  # the port is closed for a moment while it restarts
+
+        def measure_restart(fn_change, cond_done, seconds=60):
+            t0 = time.time()
+            down = up = None
+            def poke():
+                nonlocal down, up
+                try:
+                    call("GET", "/local/api/hello")
+                    if down and not up:
+                        up = time.time()
+                except (OSError, http_client.HTTPException):
+                    if not down:
+                        down = time.time()
+                if down:  # once it went down, poking tick on the new companion reports the new state to the server
+                    try:
+                        call("POST", "/local/api/tick", {})
+                    except Exception:
+                        pass
+                return False
+            fn_change()
+            wait_for(lambda: cond_done() or poke(), seconds)
+            dt = time.time() - t0
+            t_down_s = f"detect {down - t0:.1f}s, port-out {up - down:.1f}s" if (down and up) else ("port never down" if not down else "port stayed down")
             try:
-                call("POST", "/local/api/tick", {})
-            except (OSError, http_client.HTTPException):  # or it goes away in the middle of an answer
-                pass
-        wait_for(lambda: reported() == "9.8.7" or poke(), 60)
-        check(reported() == "9.8.7", "companion: an updated plugin restarts it, and the list shows the code that runs", str(reported()))
-        for m, t in before.items():
-            m.write_text(t, encoding="utf-8")
-        wait_for(lambda: reported() != "9.8.7" or poke(), 60)
-        check(reported() != "9.8.7", "companion: after going back it restarts again", str(reported()))
+                acts = [a for a in state_of(home, "activity.json")
+                        if a.get("at", 0) >= t0 and any(k in a.get("text", "") for k in ("Bound ", "Restarting", "restart helper"))]
+            except Exception:
+                acts = []
+            trail = "; ".join(f"{a['text']}" + (f" ({a['detail']})" if a.get("detail") else "") for a in reversed(acts))
+            return f" (restart {dt:.1f}s: {t_down_s}; {trail or 'bind instant'})"
+
+        def set_version_1():
+            for m, t in before.items():
+                m.write_text(re.sub(r'"version": "[^"]+"', '"version": "9.8.7"', t), encoding="utf-8")
+            with contextlib.suppress(Exception):
+                call("POST", "/local/api/wake", {})
+
+        note1 = measure_restart(set_version_1, lambda: reported() == "9.8.7", 60)
+        check(reported() == "9.8.7", "companion: an updated plugin restarts it, and the list shows the code that runs" + note1, str(reported()))
+
+        def set_version_2():
+            for m, t in before.items():
+                m.write_text(t, encoding="utf-8")
+            with contextlib.suppress(Exception):
+                call("POST", "/local/api/wake", {})
+
+        note2 = measure_restart(set_version_2, lambda: reported() != "9.8.7", 60)
+        check(reported() != "9.8.7", "companion: after going back it restarts again" + note2, str(reported()))
         code, out, err = run([sys.executable, str(hooks / "workers.py"), "--self-test"], "", env)
         check(code == 0 and out.strip() == "ok", "review: workers.py self-test on a real repository (clean merge, conflict aborted and said, "
               "dirty or other branch refused)", out[-400:] + err[-800:])
@@ -1795,11 +1829,15 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
             else:
                 manifest_text = {f: f.read_text(encoding="utf-8") for f in manifests}  # `before` means something else by now
                 try:
-                    for f, t in manifest_text.items():
-                        f.write_text(re.sub(r'"version": "[^"]+"', '"version": "9.8.6"', t), encoding="utf-8")
-                    wait_for(lambda: reported() == "9.8.6" or poke(), 90)
+                    def set_version_3():
+                        for f, t in manifest_text.items():
+                            f.write_text(re.sub(r'"version": "[^"]+"', '"version": "9.8.6"', t), encoding="utf-8")
+                        with contextlib.suppress(Exception):
+                            call("POST", "/local/api/wake", {})
+
+                    note3 = measure_restart(set_version_3, lambda: reported() == "9.8.6", 90)
                     state = subprocess.run(["schtasks", "/Query", "/TN", name, "/FO", "LIST"], capture_output=True, text=True).stdout
-                    check(reported() == "9.8.6" and "Running" in state, "companion on Windows: the Scheduled Task runs it again after an update", f"{reported()} {state[:300]}")
+                    check(reported() == "9.8.6" and "Running" in state, "companion on Windows: the Scheduled Task runs it again after an update" + note3, f"{reported()} {state[:300]}")
                 finally:
                     subprocess.run(["schtasks", "/End", "/TN", name], capture_output=True)
                     subprocess.run(["schtasks", "/Delete", "/F", "/TN", name], capture_output=True)
