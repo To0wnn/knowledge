@@ -2402,6 +2402,12 @@ def ui_gap_contract(tmp, ck, raw):
     typing: the queries on the way there are not; one that finds notes is not."""
     ask = lambda q: [raw("GET", f"/ui/api/{kind}?q={urllib.parse.quote(q)}&project=garden", headers=ck) for kind in ("search", "semantic")]
     gaps = lambda: [ln.split("\t") for ln in (tmp / "gaps.log").read_text().splitlines()] if (tmp / "gaps.log").exists() else []
+    # A gap is logged only once the semantic index caught up with the writes before (not vec.pending): on a busy machine
+    # it lags, and then nothing is logged at all (seen with the check's shards beside a UI test).
+    status = lambda: json.loads(raw("GET", "/ui/api/semantic?q=ready&project=garden&gap=0", headers=ck)[2])["status"]
+    deadline = time.time() + 30
+    while ("being" in status() or "chunks" not in status()) and time.time() < deadline:
+        time.sleep(0.1)
     ask("qwzx")
     ask("qwzxvb plorkt")
     time.sleep(1.2)
