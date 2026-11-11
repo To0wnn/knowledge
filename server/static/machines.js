@@ -235,8 +235,8 @@ function statCell(m, k) {
 function statValue(tile, x) { // x: a % or [used, total] MB
   const [v, of] = tile.querySelector(".mx-stat-head").children, fill = tile.querySelector(".mx-stat-meter i");
   const pct = Array.isArray(x) ? 100 * x[0] / x[1] : x;
-  v.textContent = Array.isArray(x) ? statGb(x[0]) : `${Math.round(x)}%`;
-  of.textContent = Array.isArray(x) ? ` / ${statGb(x[1])} GB` : "";
+  setText(v, Array.isArray(x) ? statGb(x[0]) : `${Math.round(x)}%`);
+  setText(of, Array.isArray(x) ? ` / ${statGb(x[1])} GB` : "");
   fill.style.width = `${Math.min(100, Math.max(0, pct))}%`; fill.className = pct >= 95 ? "bad" : pct >= 80 ? "warn" : "";
 }
 // Live load: every few seconds while Machines is open (the companions send it only while someone asks)
@@ -247,7 +247,7 @@ function statLiveShow(tile) {
 }
 function statLivePill(p) {
   const on = !!statLive[p.dataset.pc];
-  p.className = `pill mx-livepill${on ? " on" : ""}`; p.textContent = on ? "Live" : "Every minute";
+  p.className = `pill mx-livepill${on ? " on" : ""}`; setText(p, on ? "Live" : "Every minute");
   p.title = on ? "The values update every few seconds" : "No live values from this pc (its companion is older, or it is away): the values are from its last minute report";
 }
 async function statLiveTick() {
@@ -822,7 +822,7 @@ const MACHINE_REFRESH = 20000, MACHINE_REFRESH_UPDATING = 5000; // a pc reports 
 function machinesBusy() {
   const box = $("machines"), a = document.activeElement;
   const typing = box.contains(a) && (/^(SELECT|TEXTAREA)$/.test(a.tagName) || (a.tagName === "INPUT" && !/^(checkbox|radio)$/.test(a.type)));
-  return typing || box.querySelector(".menu[open]") || document.querySelector("dialog[open]");
+  return typing || box.querySelector(".menu[open]") || document.querySelector("dialog[open]") || selecting(box);
 }
 function machinesSoon() {
   clearTimeout(machinesTimer);

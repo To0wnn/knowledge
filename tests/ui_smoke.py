@@ -1835,6 +1835,35 @@ async def images(browser, secret: str) -> None:
     await ctx.close()
 
 
+async def selection_kept(browser, secret: str) -> None:
+    """A live refresh leaves text someone selects alone (the chat list, a chat's header, Machines). Read-only: the
+    chat polls are aborted, so a live chat is never marked read."""
+    ctx, pg, errors = await page(browser, secret, "/ui#/chats", viewport={"width": 1440, "height": 900})
+    await ctx.route("**/ui/api/chat?*", lambda r: r.abort())
+    await pg.wait_for_function("ck.summaryAt > 0 && ck.ready", timeout=15000)
+    select = """(sel) => { const n = document.querySelector(sel); if (!n || !n.textContent.trim()) return '';
+        getSelection().selectAllChildren(n); return getSelection().toString(); }"""
+    kept = "(was) => getSelection().toString() === was"
+    cid = await pg.evaluate("ck.chats.find((c) => !c.closed && !c.parent)?.id")
+    if cid:
+        await pg.evaluate(f"go('#/chats/{cid}')")
+        await pg.wait_for_selector("#ck-canvas .ck-card .ck-title strong", timeout=5000)
+        was = await pg.evaluate(select, "#ck-list")
+        await pg.evaluate("async () => { await ckSummary(); ckList(); }")
+        check(bool(was) and await pg.evaluate(kept, was), "Chats: a refresh of the list keeps a selection in it")
+        was = await pg.evaluate(select, "#ck-canvas .ck-card .ck-title strong")
+        await pg.evaluate("ckPaint(ck.cards.get(ck.view))")
+        check(bool(was) and await pg.evaluate(kept, was), "Chat: a repaint keeps a selection in its header")
+    else:
+        print("skip selection in chats (no open chat)")
+    await route(pg, "#/machines", ms=1500)
+    was = await pg.evaluate(select, "#machines h2, #machines p")
+    await pg.evaluate("loadMachines()")
+    check(bool(was) and await pg.evaluate(kept, was), "Machines: a refresh waits while text on it is selected")
+    check(not errors, f"no page errors while selecting {errors[:2]}")
+    await ctx.close()
+
+
 async def chat_tabs(browser, secret: str) -> None:
     """A chat in a tab of its own. Read-only: the chat polls are aborted, so a live chat is never marked read."""
     ctx, pg, errors = await page(browser, secret, "/ui#/chats", viewport={"width": 1440, "height": 900})
@@ -2368,6 +2397,7 @@ async def main() -> None:
         await no_agents(browser, secret)
         await images(browser, secret)
         await chat_tabs(browser, secret)
+        await selection_kept(browser, secret)
         await settings(browser, secret)
         await chat_drafts(browser, secret)
         await grid_groups(browser, secret)
