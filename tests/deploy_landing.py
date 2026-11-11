@@ -38,10 +38,11 @@ def setup():
                              f'exec sh -c "$(printf %s "$*" | sed "s#/root/#{ROOT}/#g")"\n')
     (BIN / "rsync").write_text("#!/bin/sh\nexit 0\n")
     (BIN / "chown").write_text("#!/bin/sh\nexit 0\n")  # forge's chown 1000:1000 runs as root there; a CI runner (uid 1001) may not
-    # gh: GH_RED names a workflow whose last finished run on main failed; with GH_RUNNING a newer run is still going,
-    # and it ends green (the file "ci_done") once deploy.sh asks for its status
-    (BIN / "gh").write_text(f'#!/bin/sh\ncase "$*" in\n*"run view"*) touch {T}/ci_done; echo completed;;\n'
-                            f'*\'!= "completed"\'*) [ -n "$GH_RUNNING" ] && [ ! -e {T}/ci_done ] && echo "123 def5678";;\n'
+    # gh: GH_RED names a workflow whose last finished run on main failed. With GH_RUNNING a newer run is going on the
+    # first look, that one is cancelled and a next one is going on the second, and main is green after that (ci_done)
+    (BIN / "gh").write_text(f'#!/bin/sh\nn=$(cat {T}/ci_looks 2>/dev/null || echo 0)\ncase "$*" in\n'
+                            f'*\'!= "completed"\'*) [ -n "$GH_RUNNING" ] || exit 0; echo $((n + 1)) > {T}/ci_looks\n'
+                            f'  case $n in 0) echo aaa1111;; 1) echo bbb2222;; *) touch {T}/ci_done;; esac;;\n'
                             f'*"$GH_RED"*) [ -n "$GH_RED" ] && [ ! -e {T}/ci_done ] && echo "abc1234 (failure) broke it";;\nesac\nexit 0\n')
     for f in BIN.iterdir():
         f.chmod(0o755)
@@ -119,10 +120,11 @@ def main():
     p = sh("./deploy.sh", b, ok=False, GH_RED="clients.yml")
     assert p.returncode and "CI clients.yml is red on main since abc1234 (failure)" in p.stderr, p.stderr
     sh("./deploy.sh --fix-main", b, GH_RED="clients.yml")
-    # red, but a newer run is still going: it waits for that run and lands once it is green
+    # red, but a newer run is still going: it waits for that run and lands once main is green
     edit(b, "server/app.py", "2", "3", "after red")
-    p = sh("./deploy.sh", b, GH_RED="clients.yml", GH_RUNNING="1")
-    assert "waiting for the newer run on def5678" in p.stderr and (T / "ci_done").exists(), p.stderr
+    # (the first run it waits for is cancelled, as GitHub does to a queued run on a newer push: it waits for the next)
+    p = sh("./deploy.sh", b, GH_RED="clients.yml", GH_RUNNING="1", DEPLOY_CI_POLL="0")
+    assert "waiting for the newer run on aaa1111" in p.stderr and (T / "ci_done").exists(), p.stderr
     assert sh("./deploy.sh --nope", b, ok=False).returncode
     # a lock held by another deploy is waited for; past the wait it refuses, and is not taken away from it
     lock.mkdir()

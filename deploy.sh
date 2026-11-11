@@ -23,15 +23,16 @@ if ! has --fix-main; then
       red=$(red_of "$w") \
         || { echo "warning: could not ask GitHub whether main is green ($w)" >&2; continue; }
       # Red, but a newer run on main is still going (often the fix, or a flaky test run again): wait for it rather than
-      # refuse; on 11 Nov 2026 every deploy was refused for nearly 2 hours while the fixing run was already in CI.
-      run=$(gh run list --workflow "$w" --branch main --limit 5 --json status,databaseId,headSha --jq \
-        'map(select(.status != "completed"))[0] // empty | "\(.databaseId) \(.headSha[0:7])"' 2>/dev/null || true)
-      if [ -n "$red" ] && [ -n "$run" ]; then
-        echo "deploy: CI $w is red on main since ${red%% *}; waiting for the newer run on ${run#* } (up to ${DEPLOY_CI_WAIT:-1800}s)" >&2
-        t=0
-        until [ "$(gh run view "${run%% *}" --json status --jq .status 2>/dev/null)" = completed ] || [ "$t" -ge "${DEPLOY_CI_WAIT:-1800}" ]; do sleep 30; t=$((t + 30)); done
-        red=$(red_of "$w") || red=
-      fi
+      # refuse; on 11 Nov 2026 every deploy was refused for nearly 2 hours while the fixing run was already in CI. Looked
+      # at again every 30 s, not one run waited for: GitHub cancels a queued run on main when a newer push comes.
+      running() { gh run list --workflow "$w" --branch main --limit 5 --json status,headSha --jq \
+        'map(select(.status != "completed"))[0] // empty | .headSha[0:7]' 2>/dev/null || true; }
+      t=0
+      while [ -n "$red" ] && [ "$t" -lt "${DEPLOY_CI_WAIT:-1800}" ] && run=$(running) && [ -n "$run" ]; do
+        [ "$t" -gt 0 ] || echo "deploy: CI $w is red on main since ${red%% *}; waiting for the newer run on $run (up to ${DEPLOY_CI_WAIT:-1800}s)" >&2
+        sleep "${DEPLOY_CI_POLL:-30}"; t=$((t + 30)); red=$(red_of "$w") || red=
+      done
+      [ "$t" = 0 ] || red=$(red_of "$w") || red=  # the last run may have finished between the two looks
       [ -z "$red" ] || { echo "deploy refused: CI $w is red on main since $red; fix that first (gh run list --workflow $w --branch main), and deploy the fix with --fix-main" >&2; exit 1; }
     done
   else echo "warning: gh missing, not checked whether CI on main is green" >&2; fi
