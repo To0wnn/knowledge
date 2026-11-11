@@ -3589,7 +3589,7 @@ assert "claude plugin install: ... fine" in out.getvalue() and "slow-tool ... ok
 
 # The phases mostly wait (on fake agents, companions, follow windows): run without arguments, this script starts one
 # process per shard side by side (--shard i), each with its own server and temp home; a phase not listed is shard 0's.
-PHASE_SHARD = {"chat_e2e": 1, "follow_e2e": 2, "companion_e2e": 2}
+PHASE_SHARD = {"chat_e2e": 1, "follow_e2e": 2, "companion_e2e": 2, "installer": 2, "installer_progress": 2, "companion_setup": 2}
 SHARDS = max(PHASE_SHARD.values()) + 1
 
 
