@@ -2884,9 +2884,9 @@ def main():
             await srv.BearerAuth(inner)({"type": "http", "path": path, "method": "GET", "headers": [], "query_string": query}, recv, send)
             return (sent[0]["status"] if sent else 0), reached
         time.sleep(0.4)
-        t0 = time.time()
-        # at once = not after the hung probe (it never returns); 3 s leaves room for a busy CI runner (0.5 s failed there)
-        assert asyncio.run(asked("/mcp"))[0] == 503 and time.time() - t0 < 3, time.time() - t0
+        # Event-based, not a stopwatch: the answer comes while the probe still hangs (it never returns on its own), so it
+        # did not wait for it; the 30 s only turns a hang into a loud failure (a 0.5 s bound failed on a busy CI runner).
+        assert asyncio.run(asyncio.wait_for(asked("/mcp"), 30))[0] == 503 and not hang.is_set()
         assert asyncio.run(asked("/ui/api/recent"))[0] == 503
         assert asyncio.run(asked("/health"))[0] == 200 and asyncio.run(asked("/health", b"disk=1"))[0] == 503
         assert asyncio.run(asked("/ui/static/app.js"))[1] == ["/ui/static/app.js"]  # the page itself needs no shared folder
