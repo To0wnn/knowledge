@@ -55,9 +55,9 @@ jobs:
         run: uv sync --project server --frozen --no-dev
       - name: Reliable apt mirrors and DNS
         run: |
-          sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g' /etc/apt/sources.list* /etc/apt/apt-mirrors.txt /etc/apt/sources.list.d/* 2>/dev/null || true
-          printf "nameserver 8.8.8.8\nnameserver 1.1.1.1\n" | sudo tee -a /etc/resolv.conf >/dev/null || true
-          echo 'Acquire::Retries "3";' | sudo tee /etc/apt/apt.conf.d/80-retries >/dev/null || true
+          printf "91.189.91.81 azure.archive.ubuntu.com archive.ubuntu.com security.ubuntu.com\n" | sudo tee -a /etc/hosts
+          grep -rl azure.archive.ubuntu.com /etc/apt 2>/dev/null | xargs -r sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' || true
+          sudo apt-get update -o Acquire::http::Timeout=10
       - name: Playwright Chromium
         working-directory: ${{ runner.temp }}  # not the repo root: its token.py would shadow Python's own token module
         run: uv run --project "$GITHUB_WORKSPACE/server" --frozen --with playwright python -m playwright install --with-deps chromium
