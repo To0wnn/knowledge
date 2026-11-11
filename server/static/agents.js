@@ -512,8 +512,9 @@ function ckItem(i) {
     for (const c of ck.chats.filter((c) => c.project === i.project && !c.closed && !c.parent && c.online && c.rights === "act").slice(0, 5))
       later.push([`Give to chat: ${ckTitle(c)}`.slice(0, 60), `That chat takes ${i.id} ('pak ${i.id}'): after its current turn, its line names that chat's agent`,
         () => ckDo("/ui/api/chat/send", { machine: c.machine, id: c.id, text: `pak ${i.id}`, mode: "queue" }).then((ok) => ok && toast(`${i.id} → ${ckTitle(c)}`, false))]);
-    later.push(["Give to a new chat", `A new chat with 'pak ${i.id}' typed in, in a folder of ${shown(i.project)}: pick the model, then send`,
-      () => { ckDrop(ckKey(CK_DRAFT)); ck.draftTask = i; ckNewChat(); }]);
+    for (const agent of ckTaskAgents(i.project))
+      later.push([`New ${AGENT_NAME[agent] || agent} chat takes it`, `Starts a chat in a folder of ${shown(i.project)} that takes ${i.id} right away ('pak ${i.id}'); its line then names that agent`,
+        () => ckTaskChat(i.project, i.id, agent)]);
   }
   if (i.result && me.writable?.includes(i.project) && i.line_text) later.push(["Remove (read)", "Take the result line out of its memo (its history keeps it)",
     () => ckDo("/ui/api/task/done", { path: i.path, line: i.line_text })]);
@@ -1207,11 +1208,6 @@ function ckDraft(machine = "") {
     if (f) card.where_ = `${f.machine}\n${f.path}`;
     else { card.note.className = "ck-note bad"; card.note.textContent = `${ckPc(machine)?.label || "That pc"} has no folder linked to ${agentProject ? shown(agentProject) : "a project"}: pick another project in the sidebar, or link one under Machines.`; }
     delete card.picks.dataset.sig; ckPicker(card);
-  }
-  if (ck.draftTask) { // "Give to a new chat": the task's take typed in, a folder of its project picked
-    const t = ck.draftTask, f = ckDraftFolders(card).find((y) => y.project === t.project); ck.draftTask = null;
-    card.input.value = `pak ${t.id}`;
-    if (f) { card.where_ = `${f.machine}\n${f.path}`; delete card.picks.dataset.sig; ckPicker(card); }
   }
   ckDraftWhere(card);
   return card;
@@ -1921,6 +1917,23 @@ function ckAsks(card, asks, skew) {
   }));
 }
 
+// A task to a new chat in one click: a pc (yours, or shared to use) online with that agent and a folder of the project.
+function ckTaskPcs(project, agent, token = "") {
+  return [...ck.machines, ...(ck.shared || [])].filter((m) => m.online && !m.old && (m.companion?.agents || []).includes(agent)
+    && (!token || (m.tokens || []).includes(token))).flatMap((m) => ckLinked(m).filter((f) => f.project === project).map((f) => ({ m, f })));
+}
+const ckTaskAgents = (project) => ["claude", "codex", "agy"].filter((a) => ckTaskPcs(project, a).length);
+async function ckTaskChat(project, id, agent, token = "") { // the chat says 'pak <ID>': the plugin takes it there, the line follows
+  if (!ck.machines.length) await ckSummary().catch(() => {});
+  const hit = ckTaskPcs(project, agent, token).sort((a, b) => b.m.own - a.m.own)[0];
+  if (!hit) return toast(`No pc${token ? ` ${token}` : ""} online with ${AGENT_NAME[agent] || agent} and a folder of ${shown(project)} (Machines, Folders)`);
+  try {
+    const res = await api("/ui/api/chats", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: hit.m.id, agent, folder: hit.f.path }) });
+    await api("/ui/api/chat/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: hit.m.id, id: res.chat.id, text: `pak ${id}` }) });
+    toast(`${id} → new ${AGENT_NAME[agent] || agent} chat on ${hit.m.label}`, false);
+    ck.summaryAt = 0; go(`#/chats/${encodeURIComponent(res.chat.id)}`);
+  } catch (e) { toast(e.message); }
+}
 // New chat: a pc of your own with a companion, an agent installed there, a folder linked there.
 function ckNewChat(machine = "") {
   if (machine || !bdOn()) { ck.draftFor = machine; return go("#/chats/new"); } // a draft in the chat pane (ckDraft)

@@ -447,7 +447,8 @@ def lease_contract(tmp, ck, fr, raw):
     # The lease runs out: the other device gets it.
     l = json.loads((tmp / "task_leases.json").read_text()); l["garden"]["LS-1"]["until"] = int(time.time()) - 5
     (tmp / "task_leases.json").write_text(json.dumps(l))
-    assert http("POST", "/tasks/woken", {"project": "garden", "id": "LS-1", "agent": "codex", "session": "x"}, token=lose)[0] == 200
+    st, body = http("POST", "/tasks/woken", {"project": "garden", "id": "ls-1", "agent": "codex", "session": "x"}, token=lose)
+    assert st == 200 and json.loads(body)["id"] == "LS-1", body  # any case: the answer spells it as its line does
     # A pinned line: only its device may take it.
     st, body = http("POST", "/tasks/woken", {"project": "garden", "id": "PIN-1", "agent": "codex", "session": "y"}, token=fr2)
     assert st == 409 and json.loads(body)["held_by"]["device"] == "FRIEND-PC", body

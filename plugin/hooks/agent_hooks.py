@@ -232,6 +232,7 @@ def take(agent: str, tok: str, tid: str, sid: str, cwd: str) -> str:
     project, tid = answer.get("project", ""), task_id(tid, answer)
     code, answer = task_post(tok, "/tasks/woken", {"project": project, "id": tid, "agent": agent, "session": sid[:80]})
     if code == 200:
+        tid = answer.get("id") or tid  # the ID as its line spells it (the server matches any case)
         return (f"knowledge: the user took task {tid} into this chat ('pak {tid}'); the server gave it to this session, so no "
                 f"worker starts it. Claim it now: add '(claimed {NAMES[agent]}, {time.strftime('%Y-%m-%d')})' to its line with "
                 "knowledge_edit, then do it here. Done: remove the line, and hand the result back to the agent that waits on it "

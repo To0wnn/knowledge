@@ -1604,7 +1604,12 @@ async function loadTasks(render = true) {
         const owner = who.value === "Someone else…" ? (prompt("Who gets it? A person's name, as task lines write it:", "") || "").trim() : who.value;
         if (!owner) return;
         await post("/ui/api/task/assign", { project: t.project, id: t.id, owner, device: where.value }); toast(`${t.id} → ${owner}${where.value ? "@" + where.value : ""}`, false); });
-      form.append(who, where, save);
+      const now = el("button", "btn small", "Start chat now"); now.type = "button"; // assign and start in one go: a new chat of that agent takes it
+      now.title = "A new chat of this agent (on the picked pc, else any of yours with a folder of this project) takes it right away";
+      const agentOf = { Claude: "claude", Codex: "codex", Gemini: "agy" };
+      who.onchange = () => { now.disabled = !agentOf[who.value]; }; who.onchange();
+      now.onclick = () => ckTaskChat(t.project, t.id, agentOf[who.value], where.value);
+      form.append(who, where, save, now);
       const b = act("Assign…", "Give this task to another agent or person, optionally on one pc", () => { form.hidden = !form.hidden; }, "btn small quiet");
       if (!t.can_cancel) { b.disabled = true; b.title = "Only the project's owner or an admin, and not while it is being worked on"; }
       acts.append(form);

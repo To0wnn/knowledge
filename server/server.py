@@ -4314,8 +4314,10 @@ async def tasks_woken_route(request: Request):
         return JSONResponse({"error": "taking a task needs a token that may write this project's memos"}, status_code=403)
     if agent not in AGENT_OWNERS:
         return JSONResponse({"error": f"agent must be one of {sorted(AGENT_OWNERS)}"}, status_code=400)
-    if not (t := next((t for t in (await asyncio.to_thread(project_tasks, project))[0] if t["id"] == tid), None)):
+    # any case: 'pak dynpa-voxcpm' or the plugin's upper-case guess for a task of another agent is DYNPA-voxcpm
+    if not (t := next((t for t in (await asyncio.to_thread(project_tasks, project))[0] if t["id"].lower() == tid.lower()), None)):
         return JSONResponse({"error": f"no open task {tid} in {project}"}, status_code=404)
+    tid = t["id"]
     wake = {"agent": agent, "session": session[:80], "device": dev_key(), "label": device.get().get("machine_label", "")}
     ok, lease = await asyncio.to_thread(claim_task, project, t, agent, wake["device"], wake["session"], start)
     if not ok:
@@ -4326,7 +4328,7 @@ async def tasks_woken_route(request: Request):
         tid, {"at": int(time.time())}).update(wake))
     if session:
         await asyncio.to_thread(mark_machine, device.get(), agent, session, project, tid)
-    return JSONResponse({"ok": True, "lease": lease})
+    return JSONResponse({"ok": True, "lease": lease, "id": tid})
 
 
 @server.custom_route("/tasks/release", methods=["POST"])
