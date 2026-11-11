@@ -176,9 +176,10 @@ function pulse(id, ms = PULSE_MS, flow = true) { // flow: its links flow too (no
   if (calm || !Graph) return;
   pulses.set(id, { t0: performance.now(), ms, flow }); pulse3d();
   if (!flow) return;
+  wakeMap(ms);
   animateHover(ms);
   clearTimeout(pulse.timer); // the links stop flowing once the last pulse is over
-  pulse.timer = setTimeout(() => { prunePulses(); Graph.linkDirectionalParticles(Graph.linkDirectionalParticles()); refresh3d(); }, ms + 50);
+  pulse.timer = setTimeout(() => { prunePulses(); if (Graph) { Graph.linkDirectionalParticles(Graph.linkDirectionalParticles()); wakeMap(1000); } refresh3d(); }, ms + 50);
 }
 const pulseLive = (p) => p && performance.now() - p.t0 < p.ms;
 // drawPulse removes a pulse only when 2D draws its note; a hidden map or 3D draws nothing, so expired ones go here too
@@ -279,13 +280,31 @@ function drawTopics(ctx, scale) {
 }
 
 // Keep redrawing while hover/selection animations run (link particles, easing); force-graph pauses
-// redraws when idle. A selection flows for a few seconds, then pauses to spare phone batteries.
-let settleTimer;
+// redraws and its animation loop when idle to spare phone batteries, CPU and GPU.
+let settleTimer, mapSleepTimer = 0;
+function wakeMap(ms = 2000) {
+  if (!Graph || !mapOn || map3d || document.hidden) return;
+  Graph.resumeAnimation();
+  clearTimeout(mapSleepTimer);
+  if (!settling && !tweening && !replay?.playing && !hover && pulses.size === 0) {
+    mapSleepTimer = setTimeout(() => {
+      if (Graph && mapOn && !map3d && !settling && !tweening && !replay?.playing && !hover && pulses.size === 0) {
+        Graph.pauseAnimation();
+      }
+    }, ms);
+  }
+}
 function animateHover(ms = 400) {
   if (calm) { if (!tweening && !replay) Graph.autoPauseRedraw(true); return; }
   Graph.linkDirectionalParticles(Graph.linkDirectionalParticles()); // re-evaluate which links flow
   Graph.autoPauseRedraw(false); clearTimeout(settleTimer);
-  if (!hover) settleTimer = setTimeout(() => { if (!tweening && !replay) Graph.autoPauseRedraw(true); }, ms);
+  wakeMap(ms + 1000);
+  if (!hover) settleTimer = setTimeout(() => {
+    if (!tweening && !replay) {
+      Graph.autoPauseRedraw(true);
+      wakeMap(1000);
+    }
+  }, ms);
 }
 
 // The overview fit: topic names are drawn at a fixed screen size and stick out past the outer notes, so pad by half
@@ -316,10 +335,10 @@ function tween(moves, done) {
     const k = ms ? Math.min(1, (now - t0) / ms) : 1, e = 1 - Math.pow(1 - k, 3); // ease-out cubic
     for (const m of moves) { m.n.x = m.n.fx = m.x0 + (m.x1 - m.x0) * e; m.n.y = m.n.fy = m.y0 + (m.y1 - m.y0) * e; m.n.vx = m.n.vy = 0; }
     if (k < 1) return requestAnimationFrame(step);
-    tweening = false; animateHover(selected ? 6000 : 400); // redraw pauses again once idle
+    tweening = false; animateHover(selected ? 4000 : 400); // redraw pauses again once idle
     if (done) done();
   };
-  tweening = true; Graph.autoPauseRedraw(false); requestAnimationFrame(step);
+  tweening = true; Graph.autoPauseRedraw(false); wakeMap(ms + 1500); requestAnimationFrame(step);
 }
 
 function gather(id, strength) {
@@ -355,8 +374,9 @@ function setFocus(id) {
 }
 
 const linkLit = (l) => focusSet.size && focusSet.has(linkId(l.source)) && focusSet.has(linkId(l.target));
-// Links flow from a note in focus, and from a note that just changed.
-const particles = (l) => (!calm && mapOn && (((hover || selected) && linkLit(l)) || [l.source, l.target].some((e) => { const p = pulses.get(linkId(e)); return p?.flow && pulseLive(p); })) ? 2 : 0);
+// Links flow from a note in focus (flowing for a few seconds after selection then pausing to rest), and from a note that just changed.
+let selectFlowUntil = 0;
+const particles = (l) => (!calm && mapOn && (((hover || (selected && performance.now() < selectFlowUntil)) && linkLit(l)) || [l.source, l.target].some((e) => { const p = pulses.get(linkId(e)); return p?.flow && pulseLive(p); })) ? 2 : 0);
 
 async function loadGraph() {
   data = await api("/ui/api/graph");
@@ -383,22 +403,23 @@ async function loadGraph() {
     .linkDirectionalParticleWidth(2.2).linkDirectionalParticleSpeed(0.006)
     .linkDirectionalParticleColor(() => tok("--accent"))
     .backgroundColor(tok("--canvas"))
-    .cooldownTicks(250) // the layout settles, then the simulation stops: no CPU while idle
+    .cooldownTicks(200) // the layout settles, then the simulation stops: no CPU while idle
     .onEngineStop(() => {
       settling = false;
       for (const n of data.nodes) if (n.held) { n.held = false; if (!home.has(n)) n.fx = n.fy = undefined; } // refreshData; a gathered node goes back with its focus
       if (zoomToFocus.again && selected) zoomToFocus();
-      else if (!loadGraph.fitted) Graph.zoomToFit(400, fitPad());
+      else if (!loadGraph.fitted) Graph.zoomToFit(mapOn ? 400 : 0, fitPad());
       zoomToFocus.again = false; loadGraph.fitted = true;
-      // a hidden map, laid out and fitted: stop force-graph's frame loop (60 a second on every other view); setMap resumes it
-      setTimeout(() => { if (!mapOn || map3d) Graph.pauseAnimation(); }, 500);
+      // a hidden map, laid out and fitted: stop force-graph's frame loop (60 a second on every other view); setMap resumes it.
+      // _animationCycle schedules requestAnimationFrame AFTER tickFrame/onEngineStop returns, so defer pauseAnimation past this frame.
+      setTimeout(() => { if (!mapOn || map3d) Graph.pauseAnimation(); else wakeMap(2000); }, 20);
     })
     .onNodeHover((n) => {
       if (touch) return;
       // a note gliding home under a still mouse is no hover: its gather would take over the way home, and the zoom out never comes
       const goingHome = tweening && tweenId === homeTween;
       hover = n ? n.id : null; if (!selected && !goingHome) setFocus(hover);
-      $("g2d").style.cursor = n ? "pointer" : ""; animateHover(selected ? 6000 : 400);
+      $("g2d").style.cursor = n ? "pointer" : ""; animateHover(selected ? 4000 : 400);
       clearTimeout(hoverTimer);
       if (!selected && !goingHome) hoverTimer = setTimeout(() => (hover ? gather(hover, 0.3) : releaseFocus()), hover ? 150 : 250);
     })
@@ -432,7 +453,8 @@ async function loadGraph() {
   };
   Graph.d3Force("gravity", gravity);
   Graph.onRenderFramePre(drawNebulas).onRenderFramePost(drawLabels);
-  new ResizeObserver(() => { const w = $("graph").clientWidth, h = $("graph").clientHeight; if (w && h) Graph.width(w).height(h); }).observe($("graph"));
+  for (const ev of ["pointerdown", "pointermove", "wheel", "touchstart"]) $("g2d").addEventListener(ev, () => wakeMap(), { passive: true });
+  new ResizeObserver(() => { const w = $("graph").clientWidth, h = $("graph").clientHeight; if (w && h) { Graph.width(w).height(h); wakeMap(1000); } }).observe($("graph"));
   renderProjects(); renderTopics(); applyView(true);
 }
 
@@ -567,9 +589,24 @@ function loadScript(src) {
   return new Promise((ok, bad) => { const s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = () => bad(new Error("The 3D map did not load")); document.head.append(s); });
 }
 // Only the visible map runs its frame loop (a hidden one cost 60 frames a second on every view).
+let g3SleepTimer = 0;
+function wake3d(ms = 20000) {
+  if (!G3 || !mapOn || !map3d || document.hidden) return;
+  G3.resumeAnimation();
+  clearTimeout(g3SleepTimer);
+  g3SleepTimer = setTimeout(() => {
+    if (!G3) return;
+    const c = G3.controls?.();
+    if (c) c.autoRotate = false;
+    if (G3 && mapOn && map3d && !hover && pulses.size === 0 && !replay?.playing) {
+      G3.pauseAnimation();
+    }
+  }, ms);
+}
 function syncAnim() {
-  if (Graph) mapOn && !map3d ? Graph.resumeAnimation() : Graph.pauseAnimation();
-  if (G3) mapOn && map3d ? G3.resumeAnimation() : G3.pauseAnimation();
+  const active = mapOn && !document.hidden;
+  if (Graph) active && !map3d ? wakeMap(2000) : Graph.pauseAnimation();
+  if (G3) active && map3d ? wake3d(20000) : G3.pauseAnimation();
 }
 async function setMap3d(on) {
   map3d = on; localStorage.setItem("kn_map3d", on ? "1" : "0");
@@ -579,7 +616,11 @@ async function setMap3d(on) {
     try { await build3d(); } catch (e) { toast(e.message); return setMap3d(false); }
     refresh3d();
     if (selected) fly3d(selected); else G3.zoomToFit(400, 40);
-  } else if (Graph && mapOn) Graph.zoomToFit(400, fitPad());
+    wake3d(20000);
+  } else if (Graph && mapOn) {
+    Graph.zoomToFit(400, fitPad());
+    wakeMap(2000);
+  }
   syncAnim();
 }
 function refresh3d() {
@@ -636,13 +677,34 @@ async function build3d() {
   let g3n = [];
   G3.d3Force("middle", Object.assign((alpha) => { for (const n of g3n) { n.vx -= n.x * 0.03 * alpha; n.vy -= n.y * 0.03 * alpha; n.vz -= n.z * 0.03 * alpha; } },
     { initialize: (ns) => { g3n = ns; } }));
-  new ResizeObserver(() => { const w = $("graph").clientWidth, h = $("graph").clientHeight; if (w && h) G3.width(w).height(h); }).observe($("graph"));
+  G3.renderer().setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+  new ResizeObserver(() => { const w = $("graph").clientWidth, h = $("graph").clientHeight; if (w && h) { G3.width(w).height(h); wake3d(1000); } }).observe($("graph"));
   // Idle orbit (as in brain-graph): after a few seconds without input the camera slowly circles; any input stops it.
-  const controls = G3.controls(), idle = () => { clearTimeout(idle.t); controls.autoRotate = false; if (!calm) idle.t = setTimeout(() => { controls.autoRotate = true; }, 6000); };
+  const controls = G3.controls(), idle = () => {
+    clearTimeout(idle.t);
+    controls.autoRotate = false;
+    wake3d(20000);
+    if (!calm) idle.t = setTimeout(() => {
+      controls.autoRotate = true;
+      wake3d(20000);
+    }, 6000);
+  };
   controls.autoRotateSpeed = 0.5;
-  for (const ev of ["pointerdown", "wheel", "pointermove"]) box.addEventListener(ev, idle, { passive: true });
+  for (const ev of ["pointerdown", "wheel", "pointermove", "touchstart"]) box.addEventListener(ev, idle, { passive: true });
   idle();
   set3dData();
+}
+
+function dispose3d(obj) {
+  if (!obj) return;
+  obj.traverse((child) => {
+    if (child.__dispose) child.__dispose();
+    if (child.geometry) child.geometry.dispose();
+    if (child.material) {
+      if (child.material.map && child.material.map !== glowTex) child.material.map.dispose();
+      child.material.dispose();
+    }
+  });
 }
 
 // 3D look: a soft glow sprite behind every note (one white texture, tinted per note) and the names of the best-connected
@@ -660,11 +722,13 @@ function glowTexture() {
 }
 const radius3d = (n) => Math.cbrt(1 + (n.src.degree || 0)) * 2.4; // 3d-force-graph's own sphere radius: cbrt(val) * relSize
 function node3d(n) {
+  if (n.__group) dispose3d(n.__group);
   const group = new THREE.Group(), dark = darkCanvas();
   const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: nodeColor(n.src) || "#888888", transparent: true,
     depthWrite: false, blending: dark ? THREE.AdditiveBlending : THREE.NormalBlending, opacity: dark ? 0.9 : 0.45 }));
   n.__gs = radius3d(n) * 7; glow.scale.set(n.__gs, n.__gs, 1); n.__glow = glow; group.add(glow);
   if ((n.src.degree || 0) >= labelMin) group.add(label3d(n.src.label, radius3d(n)));
+  n.__group = group;
   return group;
 }
 function label3d(text, r) {
@@ -674,14 +738,17 @@ function label3d(text, r) {
   g.lineWidth = 8; g.strokeStyle = tok("--canvas"); g.strokeText(text, 10, 26);
   g.fillStyle = tok("--ink"); g.fillText(text, 10, 26);
   const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
-  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
+  const sp = new THREE.Sprite(mat);
   sp.scale.set(c.width / 3.2, c.height / 3.2, 1); sp.position.y = -(r + 10); sp.renderOrder = 2;
+  sp.__dispose = () => { tex.dispose(); mat.dispose(); };
   return sp;
 }
 // A pulse in 3D: the note's glow breathes while it lasts.
 function pulse3d() {
   if (pulse3d.on || !G3 || !map3d) return;
   pulse3d.on = true;
+  wake3d(20000);
   const step = () => {
     let any = false;
     for (const n of G3.graphData().nodes) {
@@ -785,6 +852,7 @@ function setMap(on) {
   requestAnimationFrame(() => { // once the map has its size
     if (!Graph) return; // the map data is still loading: loadGraph sizes it
     Graph.width($("graph").clientWidth).height($("graph").clientHeight);
+    wakeMap(2500);
     if (selected) { gather(selected, 1).then(zoomToFocus); if (settling) zoomToFocus.again = true; } else Graph.zoomToFit(400, fitPad());
   });
 }
@@ -835,7 +903,7 @@ function inlineCode(text, cls = "hit-text") {
 // Clicking empty canvas clears the selection and the note in the URL, so a refresh opens nothing.
 function deselect({ push = true } = {}) {
   if (editing) return; // keep unsaved edits on screen
-  selected = null; current = null; setFocus(null); animateHover();
+  selected = null; current = null; selectFlowUntil = 0; setFocus(null); animateHover();
   // other views have no note in their route; go() so a phone's note page and the search page give way to the list
   if (push && (shellRoute.view === "notes" || shellRoute.view === "map") && location.hash !== (mapOn ? "#/map" : "#/notes")) go(mapOn ? "#/map" : "#/notes");
   $("note").replaceChildren(el("div", "note-empty muted", "Pick a note from the list or search."));
@@ -940,7 +1008,10 @@ async function openNote(id, { push = true, find = null } = {}) {
     pushHash(noteRoute(note.path, mapOn ? "map" : "notes"));
     applyRoute(); // also within Notes: a phone swaps the list for the note
   }
-  selected = byId.has(note.path) ? note.path : null; setFocus(selected); markActive(); if (Graph) animateHover(6000);
+  selected = byId.has(note.path) ? note.path : null;
+  if (selected) selectFlowUntil = performance.now() + 4000;
+  setFocus(selected); markActive();
+  if (Graph) { animateHover(selected ? 4000 : 400); wakeMap(4500); }
   if (map3d && mapOn && selected) fly3d(selected);
   const n = byId.get(note.path);
   if (mapOn && n && n.x != null) {
@@ -1670,7 +1741,10 @@ async function onChanged() {
     if (liveAgain) { liveAgain = false; onChanged(); }
   }
 }
-document.addEventListener("visibilitychange", () => { if (!document.hidden && liveAgain) { liveAgain = false; onChanged(); } });
+document.addEventListener("visibilitychange", () => {
+  syncAnim();
+  if (!document.hidden && liveAgain) { liveAgain = false; onChanged(); }
+});
 async function liveRefresh() {
   await refreshData(); // first: the Changes list names notes from the graph
   const done = await Promise.allSettled([loadRecent(), loadLint(!$("tab-lint").hidden), loadTasks(!$("tab-tasks").hidden), liveNote()]);
