@@ -504,10 +504,10 @@ function ckItem(i) {
       later.push([text, "Take it off the list for a while", () => ckDo("/ui/api/board/dismiss", { key: i.key, sig: i.sig, until: Math.round(until()) })]);
     later.push(["Dismiss", "Take it off the list until it changes again", () => ckDo("/ui/api/board/dismiss", { key: i.key, sig: i.sig })]);
   }
-  if (i.kind === "task" && !i.result && i.can_cancel) later.push(["Assign…", "Give it to another agent or person (owner@pc pins it to one pc)", () => {
-    const to = (prompt(`${i.id} goes to (Claude, Codex, Gemini or a person's name; add @<pc> to pin it):`, i.owner || "") || "").trim();
-    if (to) { const [owner, device = ""] = to.split("@"); ckDo("/ui/api/task/assign", { project: i.project, id: i.id, owner: owner.trim(), device: device.trim() }); }
-  }]);
+  if (i.kind === "task" && !i.result && i.can_cancel) // picked, never typed; a pc pin or a person: Assign… in the Tasks list
+    for (const owner of ["Claude", "Codex", "Gemini"].filter((o) => o.toLowerCase() !== (i.owner || "").split("@")[0].trim().toLowerCase()))
+      later.push([`Assign to ${owner}`, `The line names ${owner}: its worker or chat takes it (New … chat below starts one now)`,
+        () => ckDo("/ui/api/task/assign", { project: i.project, id: i.id, owner, device: "" })]);
   if (i.kind === "task" && !i.result && i.col === "open") { // hand it over: an open chat in its project takes it ('pak <ID>'), or a new one
     for (const c of ck.chats.filter((c) => c.project === i.project && !c.closed && !c.parent && c.online && c.rights === "act").slice(0, 5))
       later.push([`Give to chat: ${ckTitle(c)}`.slice(0, 60), `That chat takes ${i.id} ('pak ${i.id}'): after its current turn, its line names that chat's agent`,

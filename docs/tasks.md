@@ -59,7 +59,7 @@ The companion that starts workers is described in [companion.md](companion.md); 
 - **Where tasks show.** With Agents (remote control on) the sidebar has no Tasks entry and `#/tasks` opens the Agents
   list; the Tasks list stays for a person without Agents. In Agents: Needs you: approvals, results for a person, lines past their date, and a person's
   own lines ("for <name>", the same three answers). Queued: the open lines that wait or may start, with "Start on <pc>";
-  Assign…, Give to chat: <title> (an open chat of yours in that project gets `pak <ID>` after its turn), New <agent> chat
+  Assign to Claude / Codex / Gemini (picked, not typed), Give to chat: <title> (an open chat of yours in that project gets `pak <ID>` after its turn), New <agent> chat
   takes it (one click: a chat of that agent starts in a folder of that project and says `pak <ID>`; the Tasks list has
   the same as "Start chat now" next to Assign…) and Cancel task in the ⋯ menu, Remove (read) on a person's result. On the desktop grid, on top: the running workers (and stopped ones that need you) as compact cards with their
   progress, Follow and Stop, and one line of chips that lists the queued tasks of the picked
