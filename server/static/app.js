@@ -24,6 +24,10 @@ function themeChanged() {
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", themeChanged);
 const decode = (s) => { try { return decodeURIComponent(s); } catch { return s; } }; // a literal % is not an escape
 const $ = (id) => document.getElementById(id);
+// A live refresh must not take away text someone is selecting: redraws wait while a selection touches their box,
+// and text that did not change is not written again (a rewrite drops the selection in it, and costs a layout)
+const selecting = (box) => { const s = getSelection(); return !!s && !s.isCollapsed && s.containsNode(box, true); };
+const setText = (node, text) => { if (node.textContent !== text) node.textContent = text; };
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text instanceof Node) e.append(text); else if (text != null) e.textContent = text; return e; };
 // One empty state and one loading state for every list; a toast instead of alert() (errors stay longer, a click
 // dismisses), announced by the #toasts live region.
