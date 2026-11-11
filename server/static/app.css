@@ -144,10 +144,8 @@ body:not(.no-agents) .sidebar:has(.inbox-count:not(:empty)) .brand::before { bac
 .menu-list button:hover, .menu-list a:hover { background: var(--hover); }
 .menu-list [hidden] { display: none; }
 /* right-click / long press on a chat's Archive: a menu by the button (a popover, so in the top layer) */
-.ck-forcepop { position: fixed; inset: auto; margin: 0; width: 260px; min-width: 0; color: var(--ink); }
+.ck-forcepop { position: fixed; inset: auto; margin: 0; width: 260px; min-width: 0; color: var(--ink); outline: none; }
 .ck-forcepop-why { margin: 4px 12px 8px; color: var(--muted); font-size: 13px; white-space: normal; }
-.menu-list button.ck-force-go { background: var(--bad); color: #fff; font-weight: 600; }
-.menu-list button.ck-force-go:hover { background: var(--bad); filter: brightness(1.1); }
 
 /* Notes and Map (#kn): the topic list on the left, the note, the search results or the map in the middle, connected
    notes on the right. */
@@ -519,7 +517,7 @@ body.admin-page { display: block; overflow-y: auto; }
 .mx-load-lab { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .mx-zoom { display: flex; gap: 2px; } .mx-zoom .btn.on { background: var(--act-soft); color: var(--act-text); }
 .mx-livepill::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: var(--muted); vertical-align: 1px; }
-.mx-livepill.on::before { background: var(--ok); animation: mx-pulse 2s ease-in-out infinite; }
+.mx-livepill.on::before { background: var(--ok); animation: mx-pulse 2s ease-in-out infinite; will-change: opacity; }
 @keyframes mx-pulse { 50% { opacity: 0.35; } }
 @media (prefers-reduced-motion: reduce) { .mx-livepill.on::before { animation: none; } }
 .mx-track i.warn { background: var(--warn); } .mx-track i.bad { background: var(--bad); }
@@ -793,7 +791,7 @@ audio.fm-media { width: 100%; }
 .ck-chat small { grid-column: 2; }
 .ck-chat.needs .ck-dot, .bd-card.needs .ck-dot { background: var(--amber); box-shadow: 0 0 0 3px var(--amber-soft); }
 .ck-chat.needs .ck-chat-title { font-weight: 600; }
-.ck-chat.running .ck-dot, .bd-card.running .ck-dot { background: var(--act); animation: kn-pulse 1.8s ease-in-out infinite; }
+.ck-chat.running .ck-dot, .bd-card.running .ck-dot { background: var(--act); animation: kn-pulse 1.8s ease-in-out infinite; will-change: opacity; }
 .ck-chat.idle .ck-dot, .bd-card.idle .ck-dot { background: transparent; border: 1.5px solid var(--muted); }
 .ck-history .ck-chat[aria-current="true"] { background: var(--act-soft); color: var(--act-text); }
 .ck-pick { align-self: center; justify-self: center; text-align: center; }
@@ -871,7 +869,7 @@ audio.fm-media { width: 100%; }
 .ck-shell-out { flex-basis: 100%; margin: 0; max-height: 40vh; overflow-y: auto; }
 .ck-shell-out[hidden] { display: none; }
 .ck-subpin small, .ck-sub-tok { color: var(--muted); font-size: 12px; white-space: nowrap; }
-.ck-subpin .ck-dot.live { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: kn-pulse 1.6s ease-in-out infinite; flex: none; }
+.ck-subpin .ck-dot.live { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: kn-pulse 1.6s ease-in-out infinite; flex: none; will-change: opacity; }
 .ck-tok { font-variant-numeric: tabular-nums; }
 .ck-tok[hidden] { display: none; }
 /* a subagent in the chat: a folded block with its task and state; its tool lines and report inside */
@@ -881,7 +879,7 @@ audio.fm-media { width: 100%; }
 .ck-sub-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ck-sub-tools, .ck-sub-report { padding: 0 12px 8px 22px; }
 .ck-sub-report:empty, .ck-sub-tools:empty { display: none; }
-.ck-sub.running > summary .chip { animation: kn-pulse 1.6s ease-in-out infinite; }
+.ck-sub.running > summary .chip { animation: kn-pulse 1.6s ease-in-out infinite; will-change: opacity; }
 .chip.live { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
 .ck-form .ck-files { display: flex; gap: 6px; flex-wrap: wrap; }
 /* find in a chat (agents.js ckFindBar): a bar under the head, hits marked without touching the log's nodes */

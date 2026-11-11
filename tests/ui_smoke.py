@@ -69,6 +69,7 @@ async def page(browser, secret: str, path: str = "/ui", **opts):
         answer = await route.fetch()
         await route.fulfill(response=answer, json={**await answer.json(), "prefs": {}})
     await ctx.route("**/ui/api/me", default_prefs)
+    await ctx.add_init_script(BUSY_JS)
     pg = await ctx.new_page()
     errors = []
     pg.on("pageerror", lambda e: errors.append(str(e)))
@@ -76,8 +77,21 @@ async def page(browser, secret: str, path: str = "/ui", **opts):
     return ctx, pg, errors
 
 
-async def comes_true(pg, expression, arg=None, timeout=5000) -> bool:
-    """For what a busy live server takes a moment over: a fixed wait fails now and then on a slow answer."""
+# Counts the page's requests in flight, a response's body included (the app renders after it), for quiet(). Added to
+# every context, before the page's own scripts.
+BUSY_JS = """(() => { const b = window.__busy = {n: 0, at: 0}, done = () => setTimeout(() => { b.n--; b.at = performance.now(); });
+  const count = (p) => { b.n++; b.at = performance.now(); p.then(done, done); return p; }, f = window.fetch;
+  window.fetch = function (...a) { return count(f.apply(this, a)); };
+  for (const k of ['text', 'json', 'blob', 'arrayBuffer', 'formData']) { const o = Response.prototype[k]; Response.prototype[k] = function () { return count(o.call(this)); }; } })()"""
+# Until the finite animations and CSS transitions (a view's fade-in, the rail folding) have run, then two frames.
+STILL_JS = """async () => { for (let i = 0; i < 20; i++) {
+    const a = document.getAnimations().filter((x) => x.playState === 'running' && x.effect?.getComputedTiming().iterations !== Infinity);
+    if (!a.length) break; await Promise.all(a.map((x) => x.finished.catch(() => 0))); }
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))); }"""
+
+
+async def comes_true(pg, expression, arg=None, timeout=15000) -> bool:
+    """Until the expression holds; the timeout is only a watchdog, so a hang fails instead of a slow answer."""
     try:
         await pg.wait_for_function(expression, arg=arg, timeout=timeout)
         return True
@@ -85,11 +99,54 @@ async def comes_true(pg, expression, arg=None, timeout=5000) -> bool:
         return False
 
 
-async def click_node(pg, box, sc):
+async def until(cond, timeout=15) -> bool:
+    """comes_true for a condition on this side (requests a route saw)."""
+    end = asyncio.get_running_loop().time() + timeout
+    while not cond():
+        if asyncio.get_running_loop().time() > end:
+            return False
+        await asyncio.sleep(0.03)
+    return True
+
+
+async def quiet(pg, ms=150, timeout=15) -> None:
+    """Until no request of the page has been in flight for ms, counted from now: what an action asked for came back and
+    was drawn, and a request it should not have sent would have reached its route by then. A loop of evaluate, not
+    wait_for_function: csp() runs under the real policy."""
+    await pg.evaluate("window.__busy.from = performance.now()")
+    end = asyncio.get_running_loop().time() + timeout
+    while not await pg.evaluate(f"__busy.n === 0 && performance.now() - Math.max(__busy.at, __busy.from) >= {ms}"):
+        if asyncio.get_running_loop().time() > end:
+            raise TimeoutError(f"the page kept requests in flight for {timeout} s")
+        await asyncio.sleep(0.03)
+
+
+async def next_frames(pg, n=2) -> None:
+    """n painted frames: what a change draws in its next frame (a pill, a resize) is on screen."""
+    await pg.evaluate("(n) => new Promise((r) => { const f = () => (n-- > 0 ? requestAnimationFrame(f) : r()); f(); })", n)
+
+
+async def settled(pg) -> None:
+    """The page answered and drew: no request in flight, the animations run, two frames."""
+    await quiet(pg)
+    await asyncio.wait_for(pg.evaluate(STILL_JS), 15)
+
+
+async def map_still(pg, pre="true") -> bool:
+    """Until the map is at rest: pre holds, no layout or tween runs, and the zoom and centre have not moved for 20
+    frames (force-graph's zoom transitions have no end event)."""
+    ok = await comes_true(pg, f"!settling && !tweening && ({pre})", timeout=30000)
+    await asyncio.wait_for(pg.evaluate("""() => new Promise((r) => { let last = '', same = 0; const f = () => {
+        const c = Graph.centerAt(), k = [Graph.zoom(), c.x, c.y].map((v) => v.toFixed(4)).join();
+        same = k === last ? same + 1 : 0; last = k; if (same >= 20) r(); else requestAnimationFrame(f); }; requestAnimationFrame(f); })"""), 30)
+    return ok
+
+
+async def click_node(pg, box, sc, nid):
     """Like a person: move onto the node first. force-graph finds the node under the pointer in its next frame, so a
-    click in the same instant as the move can land "beside" it when nothing else is animating."""
+    click in the same instant as the move can land "beside" it: wait until it hovers that node."""
     await pg.mouse.move(box["x"] + sc["x"], box["y"] + sc["y"])
-    await pg.wait_for_timeout(300)
+    await comes_true(pg, "(id) => hover === id", nid)
     await pg.mouse.click(box["x"] + sc["x"], box["y"] + sc["y"])
 
 
@@ -105,11 +162,11 @@ async def is_shell(pg) -> bool:
     return await pg.locator("#sidebar").count() > 0
 
 
-async def route(pg, hash_: str, wait: str = "", ms: int = 300) -> None:
+async def route(pg, hash_: str, wait: str = "") -> None:
     await pg.evaluate("(h) => go(h)", hash_)
     if wait:
         await pg.wait_for_selector(wait, timeout=10000)
-    await pg.wait_for_timeout(ms)
+    await settled(pg)
 
 
 EMPTY_POINT = """() => { const w = Graph.width(), h = Graph.height(), ns = Graph.graphData().nodes.map(n => Graph.graph2ScreenCoords(n.x, n.y));
@@ -133,8 +190,7 @@ async def desktop(browser, secret: str) -> None:
     other = await pg.evaluate("PROJECTS.find(p => p !== project && p !== projectOf(current.path))")
     if other:
         await pg.evaluate("(p) => switchProject(p)", other)
-        await pg.wait_for_timeout(300)
-        check(await pg.evaluate("(shell) => (shell ? location.hash === '#/notes' : !location.hash) && !current", shell), "switching project drops the open note from the URL")
+        check(await comes_true(pg, "(shell) => (shell ? location.hash === '#/notes' : !location.hash) && !current", shell), "switching project drops the open note from the URL")
         await pg.reload()
         await pg.wait_for_function("typeof Graph !== 'undefined' && Graph && Graph.graphData().nodes.length > 0", timeout=20000)
         check(await pg.evaluate("(p) => !current && project === p", other), "after a refresh the new project's home shows, not the old note")
@@ -150,21 +206,14 @@ async def desktop(browser, secret: str) -> None:
     if shell:  # with Agents, tasks live there: no Tasks entry, and #/tasks opens the Agents list
         check(not await pg.locator(nav("tasks")).is_visible(), "with Agents the sidebar has no Tasks entry")
         await pg.evaluate("location.hash = '#/tasks'")
-        await pg.wait_for_timeout(500)
-        check(await pg.evaluate("location.hash") == "#/chats?view=list", "#/tasks opens the Agents list")
+        check(await comes_true(pg, "location.hash === '#/chats?view=list'"), "#/tasks opens the Agents list")
     # The map.
     await pg.keyboard.press("Escape")
     await pg.click(nav("map") if shell else "#map-btn")
-    await pg.wait_for_timeout(500)
-    check(await pg.evaluate("!$('graph').hidden && $('note').hidden"), "Map swaps the middle column to the map")
+    check(await comes_true(pg, "!$('graph').hidden && $('note').hidden"), "Map swaps the middle column to the map")
     nid = await pg.evaluate("Graph.graphData().nodes.find(n => (neighbors.get(n.id) || new Set()).size >= 4).id")
     box = await pg.evaluate("$('g2d').getBoundingClientRect().toJSON()")
-    await pg.wait_for_timeout(2000)
-    try:  # the layout has settled (a slow CI runner takes longer than a fixed wait), then its overview fit
-        await pg.wait_for_function("!settling && loadGraph.fitted", timeout=30000)
-    except Exception:
-        pass
-    await pg.wait_for_timeout(1000)
+    await map_still(pg, "loadGraph.fitted")  # the layout has settled, then its overview fit
     home = await pg.evaluate("Object.fromEntries(Graph.graphData().nodes.map(n => [n.id, [n.x, n.y]]))")
     overview = await pg.evaluate("Graph.zoom()")
     await pg.evaluate("refreshData().then(() => 0)")  # what every change to a note does
@@ -173,14 +222,11 @@ async def desktop(browser, secret: str) -> None:
     moved = max(abs(kept[k][0] - v[0]) + abs(kept[k][1] - v[1]) for k, v in home.items() if k in kept)
     check(moved < 0.01 and not any(v[2] is not None for v in kept.values()), f"a change to a note leaves the map where it is (moved {moved:.3f})")
     sc = await pg.evaluate("(id) => { const n = byId.get(id); return Graph.graph2ScreenCoords(n.x, n.y); }", nid)
-    await click_node(pg, box, sc)
+    await click_node(pg, box, sc, nid)
     ring = """(id) => { const c = byId.get(id); const r = [...neighbors.get(id)].map(i => byId.get(i)).filter(n => n.x != null)
         .map(n => Math.round(Math.hypot(n.x - c.x, n.y - c.y))); return selected === id && new Set(r).size === 1; }"""
-    try:  # the neighbours gather, then the view zooms to them
-        await pg.wait_for_function(ring, arg=nid, timeout=10000)
-    except Exception:
-        pass
-    await pg.wait_for_timeout(1500)
+    await comes_true(pg, ring, nid)  # the neighbours gather, then the view zooms to them
+    await map_still(pg)
     zoom = await pg.evaluate("Graph.zoom()")
     radii = await pg.evaluate("""(id) => { const c = byId.get(id); return [...neighbors.get(id)].map(i => byId.get(i))
         .filter(n => n.x != null).map(n => Math.round(Math.hypot(n.x - c.x, n.y - c.y))); }""", nid)
@@ -191,7 +237,7 @@ async def desktop(browser, secret: str) -> None:
     check(in_view, "note and all neighbours in view")
     pt = await pg.evaluate(EMPTY_POINT)
     await pg.mouse.click(box["x"] + pt["x"], box["y"] + pt["y"])
-    await pg.wait_for_timeout(2000)
+    await map_still(pg, "selected === null && home.size === 0")  # home, then the zoom out
     after = await pg.evaluate("Object.fromEntries(Graph.graphData().nodes.map(n => [n.id, [n.x, n.y, n.fx]]))")
     drift = max(abs(after[k][0] - v[0]) + abs(after[k][1] - v[1]) for k, v in home.items() if k in after)  # live: a note may have gone
     check(await pg.evaluate("selected") is None, "click beside the nodes deselects")
@@ -199,23 +245,26 @@ async def desktop(browser, secret: str) -> None:
     check(abs(await pg.evaluate("Graph.zoom()") - overview) < 0.05, "zoomed back to the overview")
     # A note gliding home under a still mouse hovers: that must not take over from the way home, which zooms out at its end.
     sc = await pg.evaluate("(id) => { const n = byId.get(id); return Graph.graph2ScreenCoords(n.x, n.y); }", nid)
-    await click_node(pg, box, sc)
-    await pg.wait_for_timeout(1500)
+    await click_node(pg, box, sc, nid)
+    await comes_true(pg, ring, nid)
+    await map_still(pg)
     pt = await pg.evaluate(EMPTY_POINT)
     await pg.mouse.move(box["x"] + pt["x"], box["y"] + pt["y"])  # still, and on no note once zoomed out: a real hover after the way home is fine
     await pg.evaluate("(id) => { deselect(); setTimeout(() => Graph.onNodeHover()(byId.get(id)), 50); }", nid)
-    await pg.wait_for_timeout(2000)
+    # the hover's lean would start 200 ms in, inside the 450 ms way home: once home is empty and the zoom out has
+    # stopped, that moment has passed (with the old bug home never empties and the wait ends at its watchdog)
+    await map_still(pg, "selected === null && home.size === 0")
     state = await pg.evaluate("[home.size, focusSet.size, Math.abs(Graph.zoom() - %f) < 0.05]" % overview)
     await pg.evaluate("Graph.onNodeHover()(null)")
-    await pg.wait_for_timeout(500)
     check(state == [0, 0, True], f"a note passing under the mouse on the way home leaves the map free and zoomed out {state}")
     sc = await pg.evaluate("(id) => { const n = byId.get(id); return Graph.graph2ScreenCoords(n.x, n.y); }", nid)
-    await click_node(pg, box, sc)
-    await pg.wait_for_timeout(1500)
-    check(await pg.evaluate("!!$('side').querySelector('.map-card')"), "on the map the right column shows the note card")
+    await click_node(pg, box, sc, nid)
+    check(await comes_true(pg, "!!$('side').querySelector('.map-card')"), "on the map the right column shows the note card")
+    await comes_true(pg, ring, nid)
+    await map_still(pg)
     sc = await pg.evaluate("(id) => { const n = byId.get(id); return Graph.graph2ScreenCoords(n.x, n.y); }", nid)
-    await click_node(pg, box, sc)
-    await pg.wait_for_timeout(500)
+    await click_node(pg, box, sc, nid)
+    await comes_true(pg, "(id) => $('graph').hidden && current && current.path === id", nid)
     state = await pg.evaluate("({map: !$('graph').hidden, note: current && current.path, selected, hover})")
     check(not state["map"] and state["note"] == nid, f"a second click reads the note {state if state['note'] != nid or state['map'] else ''}")
     check(not errors, f"no page errors on desktop {errors[:2]}")
@@ -238,13 +287,11 @@ async def search(browser, secret: str) -> None:
     check(len(paths) == len(set(paths)) and any(WORD in p for p in paths[:3]), f"search: one row per note, the memo near the top {paths[:3]}")
     check(await pg.locator("#hits mark").count() > 0, "search marks the words")
     await pg.locator("#hits li button").first.click()
-    await pg.wait_for_timeout(1200)
-    check(await pg.locator("#note .md mark").count() == 1, "opening a hit marks the word in the note")
+    check(await comes_true(pg, "document.querySelectorAll('#note .md mark').length === 1"), "opening a hit marks the word in the note")
     # + Add: both dialogs open from the menu and close again (nothing is submitted).
     await pg.click("#add-menu summary")
     await pg.click("#new-memo")
-    await pg.wait_for_timeout(500)
-    check(await pg.locator("#new-dialog").is_visible() and await pg.locator("#new-heading option").count() > 1,
+    check(await comes_true(pg, "$('new-dialog').checkVisibility() && document.querySelectorAll('#new-heading option').length > 1"),
           "+ Add → New memo opens with the index headings")
     await pg.click("#new-cancel")
     await pg.click("#add-menu summary")
@@ -272,14 +319,13 @@ async def phone(browser, devices, secret: str) -> None:
         check(await pg.evaluate("!!$('topics').offsetParent && !$('note').offsetParent && $('graph').hidden"), "phone Notes: the topic list alone, no note, no map")
         await pg.locator("#topics summary").first.tap()
         await pg.locator("#topics details[open] .hits button").first.tap()
-        await pg.wait_for_timeout(1500)
-        check(await pg.evaluate("!!current && !!$('note').offsetParent && !$('topics').offsetParent && getComputedStyle($('back')).display !== 'none' && $('note').getBoundingClientRect().top < 80"),
+        check(await comes_true(pg, "!!current && !!$('note').offsetParent && !$('topics').offsetParent && getComputedStyle($('back')).display !== 'none' && $('note').getBoundingClientRect().top < 80"),
               "phone: a note replaces the list, at the top, with a Back arrow")
         await pg.tap("#back")
-        await pg.wait_for_timeout(600)
-        check(await pg.evaluate("location.hash === '#/notes' && !!$('topics').offsetParent && !$('note').offsetParent"), "phone: Back returns to the topic list")
+        check(await comes_true(pg, "location.hash === '#/notes' && !!$('topics').offsetParent && !$('note').offsetParent"), "phone: Back returns to the topic list")
         await pg.locator("#topics details[open] .hits button").first.tap()
-        await pg.wait_for_timeout(1200)
+        await comes_true(pg, "!!current && !!$('note').offsetParent")
+        await settled(pg)
     else:
         # Phone layout: search and lists first, then the note; the map only on request.
         check(await pg.evaluate("$('tab-notes').getBoundingClientRect().top < $('note').getBoundingClientRect().top && $('graph').hidden"),
@@ -296,13 +342,18 @@ async def phone(browser, devices, secret: str) -> None:
         await route(pg, "#/map")
     else:
         await pg.tap("#map-btn")
-    await pg.wait_for_timeout(8000)
+    await map_still(pg, "loadGraph.fitted")
     await pg.evaluate("$('graph').scrollIntoView()")
     t = await pg.evaluate("""() => { const r = $('g2d').getBoundingClientRect(), n = Graph.graphData().nodes.find(n => n.id !== selected && (neighbors.get(n.id) || new Set()).size >= 4),
         s = Graph.graph2ScreenCoords(n.x, n.y); return {x: r.x + s.x, y: r.y + s.y, id: n.id}; }""")
-    await pg.touchscreen.tap(t["x"], t["y"])
-    await pg.wait_for_timeout(2500)
-    check(await pg.evaluate("selected") is not None, "tap on the map selects a note")
+    # a finger that rests until force-graph has the note under it: it picks from a canvas it redraws at most every
+    # 800 ms, so a tap right after the map moved can land on the old picture
+    await pg.evaluate("() => { const h = Graph.onNodeHover(); window.__hov = null; Graph.onNodeHover((n, p) => { window.__hov = n ? n.id : null; h(n, p); }); }")
+    cdp = await ctx.new_cdp_session(pg)
+    await cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": t["x"], "y": t["y"]}]})
+    await comes_true(pg, "(id) => window.__hov === id", t["id"])
+    await cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+    check(await comes_true(pg, "selected !== null"), "tap on the map selects a note")
     check(not errors, f"no page errors on the phone {errors[:2]}")
     await ctx.close()
 
@@ -463,6 +514,7 @@ async def approvals(browser, devices, secret: str) -> None:
                                         extra_http_headers={"X-Knowledge-Proxy": secret, "X-authentik-username": USER})
         await ctx.route("**/ui/api/**", fake)
         await ctx.add_init_script("localStorage.setItem('kn_project', 'all')")  # the fake items' project: the one picker scopes the Agents list too
+        await ctx.add_init_script(BUSY_JS)
         pg = await ctx.new_page()
         errors = []
         pg.on("pageerror", lambda e: errors.append(str(e)))
@@ -495,7 +547,8 @@ async def approvals(browser, devices, secret: str) -> None:
         check(await box.count() == 1 and await box.evaluate("i => document.activeElement === i"), "Reply: a one-line box opens on the row, focused")
         await box.fill("not sent")
         await box.press("Escape")
-        await pg.wait_for_timeout(300)
+        await comes_true(pg, "(k) => !document.querySelector(`#ck-list .ck-item[data-key=\"${k}\"] .ck-reply`)", reply["key"])
+        await quiet(pg)  # a send would have reached the route by now
         check(not await row.locator(".ck-reply").count() and not any(x["_path"] == "/ui/api/chat/send" for x in sent),
               "Reply: Esc closes the box without sending")
         await pg.locator("#ck-list .ck-sec-needs .ck-item-main").first.click()
@@ -515,7 +568,9 @@ async def approvals(browser, devices, secret: str) -> None:
         check(pins[0] == ["Plan · check the docs5.9k tokens"] and pins[1] == "8.6k tokens" and pins[2] == "35k context · 71k used",
               f"chat: running subagents pinned above the box with their tokens; tokens per subagent and for the chat {pins}")
         if not dev.get("is_mobile"):  # desktop: the list beside the chat
-            await pg.evaluate("location.hash = '#/chats?view=list'"); await pg.wait_for_timeout(800)
+            await pg.evaluate("location.hash = '#/chats?view=list'")
+            await comes_true(pg, "location.hash === '#/chats?view=list'")
+            await settled(pg)
             rows = await pg.evaluate("[...document.querySelectorAll('#ck-history .ck-subchat .ck-chat-title')].map(x => x.textContent)")
             check(rows == ["↳ Plan · check the docs"], f"chat list: only the running subagents under a chat {rows}")
             await pg.locator("#ck-history .ck-submore").first.click()  # the finished ones on request
@@ -532,32 +587,36 @@ async def approvals(browser, devices, secret: str) -> None:
         check(await more.count() == 1 and (await more.locator("code").text_content()).endswith("| sh"),
               "chat card: a long request is shown whole (folded), its end included")
         await pg.locator("#ck-canvas .ck-ask").first.get_by_role("button", name="Allow once").click()
-        await pg.wait_for_timeout(500)
+        await quiet(pg)
         check(sent and sent[-1] == {"machine": chat["machine"], "id": chat["id"], "ask": ask["id"], "decision": "once", "_path": "/ui/api/chat/approve"}, f"Allow once answers that approval {sent[-1:]}")
-        # Archive: right-click (desktop) or a long press (phone) opens a menu; only its red button force archives, once
+        # Archive: right-click (desktop) or a long press (phone) opens a menu; only its Force archive does it, once
         pg.on("dialog", lambda d: asyncio.ensure_future(d.accept()))  # the chat runs: force archive asks first
         how = "a long press" if dev.get("is_mobile") else "right-click"
-        async def press():
+        async def press():  # a second press within a second of the last is the same one (iOS sends both a timer and a contextmenu)
+            await comes_true(pg, "Date.now() - (ck.cards.get(ck.view).close.forcedAt || 0) >= 1000")
             if dev.get("is_mobile"):
-                await pg.evaluate("""() => { const b = ck.cards.get(ck.view).close, o = {pointerType: 'touch', bubbles: true};
-                  b.dispatchEvent(new PointerEvent('pointerdown', o)); setTimeout(() => { b.dispatchEvent(new PointerEvent('pointerup', o)); b.click(); }, 700); }""")
+                await pg.evaluate("""() => new Promise((r) => { const b = ck.cards.get(ck.view).close, o = {pointerType: 'touch', bubbles: true};
+                  b.dispatchEvent(new PointerEvent('pointerdown', o)); setTimeout(() => { b.dispatchEvent(new PointerEvent('pointerup', o)); b.click(); r(); }, 700); })""")
             else:
                 await pg.evaluate("ck.cards.get(ck.view).close.dispatchEvent(new MouseEvent('contextmenu', {bubbles: true, cancelable: true}))")
-            await pg.wait_for_timeout(1200)
+            await comes_true(pg, "!!document.querySelector('.ck-forcepop')?.checkVisibility()")
+            await quiet(pg)  # an archive would have reached the route by now
         start = len(sent)  # sent is shared by both devices
         closes = lambda: [x for x in sent[start:] if x["_path"] == "/ui/api/chat/close"]
         await press()
         pop = pg.locator(".ck-forcepop")
         check(await pop.is_visible() and not closes() and await pop.locator("button.ck-force-go").count() == 1,
-              f"Archive: {how} opens a menu with a red Force archive, nothing archived yet {closes()}")
-        await pop.get_by_role("button", name="Cancel").click()
-        await pg.wait_for_timeout(300)  # the popover's toggle event comes after the click
-        check(not await pop.count() and not closes(), "Archive: Cancel closes the menu without archiving")
+              f"Archive: {how} opens a menu with Force archive, nothing archived yet {closes()}")
+        await pg.keyboard.press("Enter")  # the menu has the focus, not its button
+        await pg.keyboard.press("Escape")  # as a click elsewhere: the popover closes itself
+        await comes_true(pg, "!document.querySelector('.ck-forcepop')")  # its toggle event comes after the key
+        await quiet(pg)
+        check(not await pop.count() and not closes(), "Archive: Enter does nothing, Esc closes the menu without archiving")
         await press()
         await pg.locator(".ck-forcepop button.ck-force-go").click()
-        await pg.wait_for_timeout(500)
+        await quiet(pg)
         check(len(closes()) == 1 and closes()[0].get("force") is True and closes()[0].get("record") is False,
-              f"Archive: the menu's red button force archives once {closes()}")
+              f"Archive: the menu's Force archive force archives once {closes()}")
         check(not errors, f"no page errors with approvals {errors[:2]}")
         await ctx.close()
 
@@ -568,7 +627,7 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
     the rows; on a phone the list first, a chat full screen with the tab bar gone."""
     ctx, pg, errors = await page(browser, secret, "/ui#/inbox", viewport={"width": 1440, "height": 900})
     await pg.wait_for_function("ck.boardAt > 0", timeout=15000)
-    await pg.wait_for_timeout(300)
+    await settled(pg)
     check(await pg.evaluate("location.hash === '#/chats?view=list' && !$('cockpit').hidden && $('title').textContent === 'Agents'"), "#/inbox opens the Agents list")
     heads = await pg.locator("#ck-list .ck-sec-head > span:first-child").all_text_contents()
     check(heads[:1] == ["Needs you"] and heads == [h for h in ("Needs you", "Review", "Working") if h in heads], f"groups: Needs you first, then Review and Working {heads}")
@@ -645,22 +704,20 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
         await pg.wait_for_selector("#ck-canvas .ck-card", timeout=15000)
         check(await pg.evaluate("(id) => ck.cards.get(ck.view)?.meta.id === id", cid), "a #/chats/<chat id> link (and a refresh) opens that chat")
         await pg.goto(f"{URL}/ui#/chats/no-such-chat")
-        await pg.wait_for_timeout(2500)
-        check(await pg.evaluate("location.hash === '#/chats' && !!$('ck-canvas').querySelector('.ck-pick')"), "a link to a missing chat falls back to #/chats")
+        check(await comes_true(pg, "location.hash === '#/chats' && !!$('ck-canvas').querySelector('.ck-pick')"), "a link to a missing chat falls back to #/chats")
         await route(pg, "#/chats?view=list", "#ck-history li")
         await pg.locator(chat_row).first.click()
         await pg.wait_for_selector("#ck-canvas .ck-card", timeout=10000)
         await pg.locator("#title").focus()
         await pg.keyboard.press("Escape")
-        await pg.wait_for_timeout(300)
-        check(await pg.evaluate("location.hash === '#/chats?view=list' && !!$('ck-canvas').querySelector('.ck-pick')"), "Esc goes back from a chat to the list")
+        check(await comes_true(pg, "location.hash === '#/chats?view=list' && !!$('ck-canvas').querySelector('.ck-pick')"), "Esc goes back from a chat to the list")
     else:
         print("skip: no chat in the list: opening a chat, its link and Esc are not checked")
     check(not errors, f"no page errors in the Agents view {errors[:2]}")
     await ctx.close()
     ctx, pg, errors = await page(browser, secret, "/ui#/inbox", **devices["iPhone 14"])
     await pg.wait_for_function("ck.boardAt > 0", timeout=15000)
-    await pg.wait_for_timeout(500)
+    await settled(pg)
     check(await pg.evaluate("location.hash === '#/chats?view=list' && !!$('ck-side').offsetParent && !$('ck-canvas').offsetParent"), "phone: the list is the start screen")
     tops = await pg.evaluate("[...document.querySelectorAll('#ck-side .ck-sec')].map(c => c.getBoundingClientRect().top)")
     check(tops == sorted(tops) and len(set(tops)) == len(tops), f"phone: the groups one under the other, Earlier last {tops}")
@@ -679,8 +736,7 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
         check(await pg.evaluate("getComputedStyle($('tabbar')).display === 'none' && !!document.querySelector('#ck-canvas .ck-head > .ck-x:not(.bd-only)')?.offsetParent && document.documentElement.scrollWidth <= innerWidth"),
               "phone chat: tab bar and page header hidden, the chat's own back button shown, fits")
         await pg.tap("#ck-canvas .ck-head > .ck-x:not(.bd-only)")
-        await pg.wait_for_timeout(400)
-        check(await pg.evaluate("location.hash === '#/chats' && getComputedStyle($('tabbar')).display !== 'none'"), "phone chat: back returns to the list and the tab bar")
+        check(await comes_true(pg, "location.hash === '#/chats' && getComputedStyle($('tabbar')).display !== 'none'"), "phone chat: back returns to the list and the tab bar")
     else:
         print("skip: no chat in the list: the phone chat view is not checked")
     check(not errors, f"no page errors in the phone Agents view {errors[:2]}")
@@ -701,14 +757,13 @@ async def shell(browser, devices, secret: str) -> None:
         await ctx.close()
         return
     await pg.wait_for_function("typeof Graph !== 'undefined' && Graph && Graph.graphData().nodes.length > 0", timeout=20000)
-    await pg.wait_for_timeout(500)
-    check(await pg.evaluate("location.hash === '#/chats' && !$('cockpit').hidden"), "the default route is the Agents view")
+    check(await comes_true(pg, "location.hash === '#/chats' && !$('cockpit').hidden"), "the default route is the Agents view")
     for v in ("chats", "machines", "notes", "map", "changes", "health"):
         await route(pg, f"#/{v}")
         st = await pg.evaluate("""(a) => ({shown: !$(a.el).hidden, only: [...document.querySelectorAll('#content > .view')].filter(e => !e.hidden).length === 1,
             current: document.querySelector('#sidebar [aria-current=page]')?.dataset.nav, title: $('title').textContent})""", {"el": VIEW_EL[v]})
         check(st["shown"] and st["only"] and st["current"] == v, f"route #/{v}: its view alone, its nav item current {st}")
-    await route(pg, "#/machines", ms=1500)
+    await route(pg, "#/machines")
     # Pcs: one column per pc of your own, a switch per agent for YOLO, one Limit switch per pc (agents at once), Forget behind More
     yolo = await pg.evaluate("""() => ({switches: document.querySelectorAll('.mx-c .yolo-switch input[role=switch]').length,
         heads: document.querySelectorAll('.mx-head .mx-pc').length, more: document.querySelectorAll('.mx-pc-acts .machine-more').length,
@@ -730,8 +785,8 @@ async def shell(browser, devices, secret: str) -> None:
         check(tabs and sorted(set(tabs.get("kinds") or [])) == ["program", "skill"], f"Machines: each tool is labelled skill or program {tabs}")
     # A click beside an open tool panel closes it and still does what it clicked: More opens at the first click.
     more = await pg.evaluate("""async () => { const b = document.querySelector('.mx-cellbtn'), more = () => document.querySelector('.mx-pc-acts .machine-more > summary');
-      if (!b || !more()) return {skip: true}; b.click(); await new Promise((r) => setTimeout(r, 50));
-      const panel = !!document.querySelector('.mx-pop'); more().click(); await new Promise((r) => setTimeout(r, 50));
+      if (!b || !more()) return {skip: true}; b.click(); await new Promise(requestAnimationFrame);
+      const panel = !!document.querySelector('.mx-pop'); more().click(); await new Promise(requestAnimationFrame);
       const menu = document.querySelector('.mx-pc-acts .machine-more[open]'), out = {panel, closed: !document.querySelector('.mx-pop'), open: !!menu};
       if (menu) menu.open = false; return out; }""")
     check(more.get("skip") or (more["panel"] and more["closed"] and more["open"]), f"Machines: a click beside an open tool panel closes it and opens what it clicked {more}")
@@ -789,7 +844,7 @@ async def shell(browser, devices, secret: str) -> None:
           f"Machines: why a companion is not on the newest version, from what it reports about itself {notes}")
     check(upd["fresh"] == "Working…" and upd["stale"] == "Update to 2.0.0" and upd["said"], f"Machines: an update that is still settling shows as working after a page switch; one that said done but did not take is said {upd}")
     ask = await pg.evaluate("""async () => { const link = [...document.querySelectorAll('.mx-ask a, .mx-ask button')].map((b) => b.textContent);
-      askTool(); await new Promise((r) => setTimeout(r, 300)); const d = document.querySelector('dialog.mx-dialog[open]');
+      askTool(); await new Promise(requestAnimationFrame); const d = document.querySelector('dialog.mx-dialog[open]');
       const out = {link, fields: d ? d.querySelectorAll('input, textarea').length : 0, list: !!d?.querySelector('.mx-ask-list')}; d?.close(); return out; }""")
     check(ask["fields"] == 2 and ask["list"] and (ask["link"] == ["Add a tool or skill"] or ask["link"] == ["Ask for a tool or skill…"] or not ask["link"]),
           f"Machines: an admin adds a tool in Admin, anyone else asks for one, with their requests in the same dialog {ask}")
@@ -808,7 +863,7 @@ async def shell(browser, devices, secret: str) -> None:
         op = json.loads(r.request.post_data)["op"]
         await r.fulfill(json=listing if op == "list" else {"path": "/r/app/main.py", "text": "one\ntwo\n", "mtime": "1", "size": 8, "masked": False})
     await pg.route("**/ui/api/files", fake_files)
-    await route(pg, "#/files?m=x&p=%2Fr%2Fapp", ".fm-folder", 300)
+    await route(pg, "#/files?m=x&p=%2Fr%2Fapp", ".fm-folder")
     names = await pg.locator(".fm-folder .fm-name").all_inner_texts()
     check(names == ["src", "main.py", "one.mp3", "two.mp3"] and await pg.locator(".fm-crumbs").inner_text() != "", f"Files: a folder lists folders first, with its path {names}")
     await pg.locator(".fm-row", has_text="main.py").click()
@@ -816,8 +871,7 @@ async def shell(browser, devices, secret: str) -> None:
     check("f=%2Fr%2Fapp%2Fmain.py" in await pg.evaluate("location.hash") and await pg.locator(".fm-gutter").inner_text() == "1\n2",
           "Files: a file opens at its own URL, with line numbers")
     await pg.go_back()
-    await pg.wait_for_timeout(300)
-    check(await pg.locator(".fm-code").count() == 0 and await pg.locator(".fm-folder").count() == 1, "Files: Back closes the file, the folder stays")
+    check(await comes_true(pg, "!document.querySelector('.fm-code') && document.querySelectorAll('.fm-folder').length === 1"), "Files: Back closes the file, the folder stays")
     # the Back arrow goes up to the folder, not to the file before; audio plays on in the player under the list
     await pg.route("**/ui/api/files/raw**", lambda r: r.abort())
     await pg.locator(".fm-row", has_text="main.py").click()
@@ -827,7 +881,7 @@ async def shell(browser, devices, secret: str) -> None:
     bar = await pg.evaluate("[fp.name.textContent, fp.prev.disabled, fp.next.disabled]")
     check(bar == ["one.mp3", True, False], f"Files: an audio file plays in the player bar, Next leads to the next one {bar}")
     await pg.evaluate("$('back').click()")
-    await pg.wait_for_timeout(300)
+    await comes_true(pg, "!location.hash.includes('f=')")
     up = await pg.evaluate("[location.hash, !!document.querySelector('.fm-player:not([hidden])')]")
     check(up == ["#/files?m=x&p=%2Fr%2Fapp", True], f"Files: the Back arrow goes to the folder (not the file before) and the player stays {up}")
     await pg.evaluate("fp.audio.onended()")
@@ -835,7 +889,7 @@ async def shell(browser, devices, secret: str) -> None:
     await pg.evaluate("filesPlayerClose()")
     await pg.unroute("**/ui/api/files/raw**")
     await pg.unroute("**/ui/api/files", fake_files)
-    await route(pg, "#/machines?view=folders", ms=1500)  # Link a folder sits on top of Folders: a folder first, then its project
+    await route(pg, "#/machines?view=folders")  # Link a folder sits on top of Folders: a folder first, then its project
     if await pg.get_by_role("button", name="Link a folder").count():
         tree = {"": {"path": "", "parent": None, "linkable": False, "dirs": [{"name": "C:\\", "path": "C:\\"}, {"name": "D:\\", "path": "D:\\"}]},
                 "D:\\": {"path": "D:\\", "parent": "", "linkable": False, "dirs": [{"name": "Sim", "path": "D:\\Sim"}]},
@@ -866,7 +920,7 @@ async def shell(browser, devices, secret: str) -> None:
         await sim.click()
         await pg.wait_for_function("!document.getElementById('choose-ok').disabled", timeout=8000)
         await pg.locator("#choose-ok").click()
-        await pg.wait_for_timeout(300)
+        await quiet(pg)
         check(len(linked) == 1 and linked[0]["action"] == "link_folder" and linked[0]["args"]["path"] == "D:\\Sim" and linked[0]["args"]["chosen"] is True and not await pg.evaluate("document.getElementById('choose-dialog').open"),
               f"Machines: the chooser links the chosen folder as the owner's action {linked}")
         await pg.unroute("**/ui/api/git/diff*")
@@ -885,22 +939,20 @@ async def shell(browser, devices, secret: str) -> None:
     await route(pg, "#/notes")
     await route(pg, "#/machines")
     await pg.go_back()
-    await pg.wait_for_timeout(400)
-    check(await pg.evaluate("location.hash === '#/notes' && !$('kn').hidden"), "Back returns to the previous view")
+    check(await comes_true(pg, "location.hash === '#/notes' && !$('kn').hidden"), "Back returns to the previous view")
     await pg.go_forward()
-    await pg.wait_for_timeout(400)
-    check(await pg.evaluate("location.hash === '#/machines' && !$('tab-machines').hidden"), "Forward goes to the next view")
+    check(await comes_true(pg, "location.hash === '#/machines' && !$('tab-machines').hidden"), "Forward goes to the next view")
     # back in a view its scroll position returns, but scrolling yourself right away is not undone by the late retries
-    await route(pg, "#/settings", ms=800)
+    await route(pg, "#/settings")
     await pg.evaluate("$('tab-settings').scrollTop = 100")
     await pg.locator('#sidebar a.nav[data-nav="notes"]').click()
-    await pg.wait_for_timeout(300)
+    await comes_true(pg, "!$('kn').hidden")
     await pg.evaluate("go('#/settings')")
-    await pg.wait_for_timeout(100)
+    await next_frames(pg)  # the first put is in the next frame
     back = await pg.evaluate("$('tab-settings').scrollTop")
     await pg.mouse.move(800, 500)
     await pg.mouse.wheel(0, 150)
-    await pg.wait_for_timeout(1500)
+    await pg.wait_for_timeout(1500)  # fixed: the late retries are timers (400 and 1200 ms after the route) with no event of their own
     after = await pg.evaluate("$('tab-settings').scrollTop")
     check(back == 100 and after > 200, f"back in a view: its scroll returns and your own scrolling then stays ({back}, then {after})")
     await route(pg, "#/changes")
@@ -922,26 +974,28 @@ async def shell(browser, devices, secret: str) -> None:
         await pg.wait_for_function("(id) => current && current.path === id", arg=odd, timeout=15000)
         n0 = await pg.evaluate("history.length")
         await pg.evaluate("(p) => openNote(p)", odd)
-        await pg.wait_for_timeout(600)
+        await settled(pg)
         check(await pg.evaluate("(n) => history.length === n", n0), f"a note named {odd!r} opens by link, survives a refresh, no duplicate history entry")
     else:
         print("skip: no note with a space, ?, #, % or accent in its name: the live round trip is not checked")
     await pg.locator("#title").focus()
     await pg.keyboard.press("Alt+BracketLeft")
-    await pg.wait_for_timeout(300)
+    await comes_true(pg, "document.body.classList.contains('rail')")
+    await settled(pg)
     rail = await pg.evaluate("[document.body.classList.contains('rail'), $('sidebar').getBoundingClientRect().width, localStorage.getItem('kn_rail')]")
     await pg.keyboard.press("Alt+BracketLeft")
-    await pg.wait_for_timeout(300)
+    await comes_true(pg, "!document.body.classList.contains('rail')")
     check(rail[0] and rail[1] < 80 and rail[2] == "1" and not await pg.evaluate("document.body.classList.contains('rail')"), f"[ folds the sidebar to a rail and back {rail}")
     size = "Graph.width() === $('graph').clientWidth && Graph.height() === $('graph').clientHeight && $('graph').clientWidth > 0"
-    await route(pg, "#/map", ms=800)
+    await route(pg, "#/map")
     ok1 = await pg.evaluate(size)
     await pg.keyboard.press("Alt+BracketLeft")
-    await pg.wait_for_timeout(800)
+    await comes_true(pg, "document.body.classList.contains('rail')")
+    await settled(pg)
     ok2 = await pg.evaluate(size)
     await pg.keyboard.press("Alt+BracketLeft")
     await route(pg, "#/notes")
-    await route(pg, "#/map", ms=800)
+    await route(pg, "#/map")
     check(ok1 and ok2 and await pg.evaluate(size), f"the map follows its box on every route and rail change {[ok1, ok2]}")
     check(not await pg.evaluate("['kn_tab', 'kn_cockpit', 'kn_map', 'kn_ck_view'].some(k => localStorage.getItem(k) !== null)"), "the view is not kept in localStorage")
     check(not errors, f"no page errors in the shell {errors[:2]}")
@@ -953,7 +1007,7 @@ async def shell(browser, devices, secret: str) -> None:
     check(not small, f"phone: tab bar targets are at least 44 px {small}")
     wide = []
     for v in ("inbox", "chats", "tasks", "machines", "notes", "map", "changes", "health"):
-        await route(pg, f"#/{v}", ms=900)
+        await route(pg, f"#/{v}")
         if await pg.evaluate("document.documentElement.scrollWidth > innerWidth"):
             wide.append(v)
     check(not wide, f"phone: no sideways scroll at 390 px {wide}")
@@ -962,11 +1016,9 @@ async def shell(browser, devices, secret: str) -> None:
     await pg.locator("#more-btn").dispatch_event("click")  # fixed bar: see the tab bar note above
     await pg.wait_for_selector("#more-sheet[open]")
     await pg.locator('#more-sheet [data-nav="changes"]').dispatch_event("click")
-    await pg.wait_for_timeout(400)
-    check(await pg.evaluate("location.hash === '#/changes' && !$('more-sheet').open && $('more-btn').getAttribute('aria-current') === 'page'"), "phone: More opens a sheet whose links go to their view")
+    check(await comes_true(pg, "location.hash === '#/changes' && !$('more-sheet').open && $('more-btn').getAttribute('aria-current') === 'page'"), "phone: More opens a sheet whose links go to their view")
     await pg.go_back()
-    await pg.wait_for_timeout(400)
-    check(await pg.evaluate("location.hash === '#/chats'"), "phone: back goes to the previous view")
+    check(await comes_true(pg, "location.hash === '#/chats'"), "phone: back goes to the previous view")
     check(not errors, f"no page errors in the phone shell {errors[:2]}")
     await ctx.close()
 
@@ -983,7 +1035,7 @@ async def agents_pages(browser, devices, secret: str) -> None:
         await ctx.close()
         return
     await pg.wait_for_function("ck.boardAt > 0", timeout=15000)
-    await pg.wait_for_timeout(300)
+    await settled(pg)
     check(not await pg.evaluate("[...document.querySelectorAll('#ck-list .ck-item')].some(c => ck.board.find(x => x.key === c.dataset.key)?.col === 'open')"),
           "Agents: no open task lines (they live under Tasks)")
     bunches = await pg.evaluate("[...document.querySelectorAll('#ck-list .ck-bunch')].map(d => [parseInt(d.querySelector('summary .ck-count').textContent), d.querySelectorAll('.ck-item').length])")
@@ -1012,24 +1064,23 @@ async def agents_pages(browser, devices, secret: str) -> None:
         print("skip: no board item to deep-link: #/inbox/<key> is not checked")
     await pg.goto(f"{URL}/ui#/inbox/task:nowhere/NOPE-1")
     await pg.wait_for_function("ck.boardAt > 0", timeout=15000)
-    await pg.wait_for_timeout(500)
+    await settled(pg)  # the board is in: a key it knew would be marked now
     check(await pg.evaluate("location.hash === '#/chats?view=list' && !document.querySelector('.ck-item.hit')"), "an unknown #/inbox/<key> leaves the plain list")
-    await route(pg, "#/chats?view=list", "#ck-history li", 500)
+    await route(pg, "#/chats?view=list", "#ck-history li")
     st = await pg.evaluate("[...document.querySelectorAll('#ck-history .ck-chat:not(.ck-subchat)')].map(b => ['needs', 'running', 'idle'].findIndex(c => b.classList.contains(c)))")
     check(-1 not in st, f"Earlier: a state per chat {st}")
     if st:
         await pg.fill("#ck-filter", "zzz-no-such-chat")
-        await pg.wait_for_timeout(400)
-        check(await pg.locator("#ck-history .ck-chat").count() == 0, "Earlier: the filter narrows the list")
+        check(await comes_true(pg, "!document.querySelector('#ck-history .ck-chat')"), "Earlier: the filter narrows the list")
         await pg.fill("#ck-filter", "")
     await pg.click("#ck-closed")
-    await pg.wait_for_timeout(200)
+    await settled(pg)
     closed = await pg.evaluate("[$('ck-closed').getAttribute('aria-pressed'), [...document.querySelectorAll('#ck-history .ck-chat:not(.ck-subchat)')].every(b => b.classList.contains('closed') || b.classList.contains('needs') || b.classList.contains('running'))]")
     check(closed[0] == "true" and closed[1], f"Earlier: Closed shows the closed chats {closed}")
     await pg.click("#ck-closed")
-    await route(pg, "#/machines", "#machines > *", 800)
+    await route(pg, "#/machines", "#machines > *")
     check(await pg.evaluate("getComputedStyle($('machines')).gridTemplateColumns.split(' ').length === 1"), "Machines: one block under the other, full width")
-    await route(pg, "#/changes", "#recent", 500)
+    await route(pg, "#/changes", "#recent")
     await pg.wait_for_selector("#trash", state="attached", timeout=10000)
     check(await pg.evaluate("$('trash').tagName === 'DETAILS' && $('trash').querySelector('summary').textContent.startsWith('Deleted') && $('trash').hidden === ($('trash').querySelector('.badge').textContent === '0')"), "Changes: a Deleted section, only with something in it")
     check(not errors, f"no page errors on the agents pages {errors[:2]}")
@@ -1037,7 +1088,7 @@ async def agents_pages(browser, devices, secret: str) -> None:
     ctx, pg, errors = await page(browser, secret, "/ui#/inbox", **devices["iPhone 14"])
     wide = []
     for v in ("chats", "machines", "changes"):
-        await route(pg, f"#/{v}", ms=900)
+        await route(pg, f"#/{v}")
         if await pg.evaluate("document.documentElement.scrollWidth > innerWidth"):
             wide.append(v)
     check(not wide, f"phone: the agents pages fit 390 px {wide}")
@@ -1060,15 +1111,14 @@ async def knowledge(browser, devices, secret: str) -> None:
     await route(pg, "#/notes", "#topics summary")
     await pg.locator("#topics summary").first.click()
     await pg.locator("#topics details[open] .hits button").first.click()
-    await pg.wait_for_timeout(800)
-    check(await pg.evaluate("(() => { const l = $('topics-pane').getBoundingClientRect(), n = $('note').getBoundingClientRect(); return l.width > 200 && n.left >= l.right - 1 && !!current; })()"),
+    check(await comes_true(pg, "(() => { const l = $('topics-pane').getBoundingClientRect(), n = $('note').getBoundingClientRect(); return l.width > 200 && n.left >= l.right - 1 && !!current; })()"),
           "Notes: the topic list and the note side by side")
-    await route(pg, "#/changes", "#recent .card, #recent .empty", 500)
+    await route(pg, "#/changes", "#recent .card, #recent .empty")
     check(await pg.evaluate("$('recent').getBoundingClientRect().width > 600 && $('topics-pane').offsetParent === null"), "Changes is a full-width page")
     if await pg.evaluate("me.admin"):
-        await route(pg, "#/health", "#lint .card, #lint .empty", 500)
+        await route(pg, "#/health", "#lint .card, #lint .empty")
         check(await pg.evaluate("$('lint').getBoundingClientRect().width > 600"), "Health is a full-width page")
-    await route(pg, f"#/notes?q={WORD}", "#hits li button, #hits-empty:not([hidden])", 500)
+    await route(pg, f"#/notes?q={WORD}", "#hits li button, #hits-empty:not([hidden])")
     check(await pg.evaluate("(w) => !$('results').hidden && $('note').hidden && $('q').value === w && $('results').getBoundingClientRect().width > 400", WORD),
           "the search page shows in the middle, in place of the note")
     check(await pg.evaluate("""() => { const s = Date.now() / 1000; return ago(s - 7200) === '2 h ago' && ago(s - 3 * 86400) === fmtDay(s - 3 * 86400)
@@ -1085,7 +1135,7 @@ async def knowledge(browser, devices, secret: str) -> None:
     check(roles["focus"] and roles["combo"] == "combobox" and roles["list"] == "listbox" and roles["act"] and roles["views"] >= 8, f"Ctrl+K opens the palette: combobox, listbox, active item, views and actions {roles}")
     await pg.keyboard.type(WORD)
     await pg.wait_for_selector("#pal-list .pal-opt", timeout=5000)
-    await pg.wait_for_timeout(700)
+    await comes_true(pg, "(q) => pal.server?.q === q", WORD)  # the note search answered and redrew the list
     check(await pg.evaluate("!pal.items[0].hint || !!$('pal-o-0').querySelector('small')"), "a palette row shows its hint (where the note is)")
     first = await pg.evaluate("$('pal-q').getAttribute('aria-activedescendant')")
     await pg.keyboard.press("ArrowDown")
@@ -1101,22 +1151,20 @@ async def knowledge(browser, devices, secret: str) -> None:
     await pg.wait_for_selector("#palette[open]")
     check(await pg.evaluate("(id) => pal.items[0] && pal.items[0].id === id && $('pal-list').textContent.includes('Recent')", target["id"]), "the empty palette lists recent picks first")
     await pg.keyboard.type("changes")
-    await pg.wait_for_timeout(1000)  # the note search answers late and redraws the list: select after it
+    await comes_true(pg, "pal.server?.q === 'changes'")  # the note search answers late and redraws the list: select after it
     await pg.evaluate("palSelect(pal.items.findIndex(i => i.kind === 'view' && i.id === 'changes'))")
     await pg.keyboard.press("Enter")
     check(await comes_true(pg, "location.hash === '#/changes' && !$('palette').open"), "the palette jumps to a view")
     theme = await pg.evaluate("document.documentElement.dataset.theme || 'auto'")
     await pg.keyboard.press("Control+k")
     await pg.keyboard.type("toggle theme")
-    await pg.wait_for_timeout(1000)  # as above: meaning hits for the words can arrive late and lead the list
+    await comes_true(pg, "pal.server?.q === 'toggle theme'")  # as above: meaning hits for the words can arrive late and lead the list
     await pg.evaluate("palSelect(pal.items.findIndex(i => i.kind === 'action' && i.id === 'theme'))")
     await pg.keyboard.press("Enter")
-    await pg.wait_for_timeout(300)
-    check(await pg.evaluate("(t) => (document.documentElement.dataset.theme || 'auto') !== t", theme), "the palette runs an action (theme)")
+    check(await comes_true(pg, "(t) => (document.documentElement.dataset.theme || 'auto') !== t", theme), "the palette runs an action (theme)")
     await pg.keyboard.press("Control+k")
     await pg.keyboard.press("Escape")
-    await pg.wait_for_timeout(200)
-    check(not await pg.evaluate("$('palette').open"), "Esc closes the palette")
+    check(await comes_true(pg, "!$('palette').open"), "Esc closes the palette")
     await pg.locator("#title").focus()
     await pg.keyboard.press("Alt+Slash")
     await pg.wait_for_selector("#palette[open]")
@@ -1150,14 +1198,16 @@ async def csp(browser, secret: str) -> None:
     for path in ("/ui", "/ui/admin", "/ui/help"):
         ctx = await browser.new_context(ignore_https_errors=True,
                                         extra_http_headers={"X-Knowledge-Proxy": secret, "X-authentik-username": USER})
+        await ctx.add_init_script(BUSY_JS)
         pg, blocked = await ctx.new_page(), []
         pg.on("console", lambda m: blocked.append(m.text) if "Content Security Policy" in m.text else None)
         pg.on("pageerror", lambda e: blocked.append(str(e)))
         await pg.goto(URL + path)
-        await pg.wait_for_timeout(2500)
+        await settled(pg)  # every script ran and every request it made came back
         if path == "/ui" and await pg.locator("#sidebar").count():
             await pg.click('#sidebar [data-nav="map"]')
-            await pg.wait_for_timeout(1500)
+            await pg.wait_for_selector("#g2d canvas")
+            await settled(pg)
         elif path == "/ui":
             await pg.click("#map-btn")
             await pg.wait_for_timeout(1500)
@@ -1168,13 +1218,13 @@ async def csp(browser, secret: str) -> None:
                                     extra_http_headers={"X-Knowledge-Proxy": secret, "X-authentik-username": USER})
     pg = await ctx.new_page()
     await pg.goto(URL + "/ui")
-    await pg.wait_for_timeout(1500)
+    await pg.wait_for_function("typeof renderMd === 'function' && typeof DOMPurify !== 'undefined'", timeout=15000)
     html = await pg.evaluate("""async () => {
         const d = document.createElement("div");
         d.innerHTML = renderMd(`<img src=x onerror="window.__xss=1"><script>window.__xss=1</scr` + `ipt>
 [a](javascript:window.__xss=1) <svg onload="window.__xss=1"></svg> <iframe srcdoc="<script>parent.__xss=1</scr` + `ipt>"></iframe>`);
         document.body.append(d);
-        await new Promise((r) => setTimeout(r, 500));
+        await new Promise((r) => setTimeout(r, 500));  // fixed: a handler that slipped through runs on an error or load event, and a removed one never comes
         const out = (window.__xss ? "RAN " : "") + d.innerHTML;
         d.remove();
         return out;
@@ -1193,6 +1243,7 @@ async def no_agents(browser, secret: str) -> None:
         resp = await r.fetch()
         await r.fulfill(response=resp, json={**await resp.json(), "agents": False})
     await ctx.route("**/ui/api/me", fake)
+    await ctx.add_init_script(BUSY_JS)
     pg = await ctx.new_page()
     errors = []
     pg.on("pageerror", lambda e: errors.append(str(e)))
@@ -1246,8 +1297,7 @@ async def shell_pages(browser, devices, secret: str) -> None:
     check("admins only (smoke test)" in await pg.locator("#error").inner_text(), "admin: a refusal shows the server's own message")
     await pg.route("**/ui/api/admin/settings", lambda r: r.fulfill(status=400, content_type="text/plain", body="bad value (smoke test)"))
     await pg.click("#settings-form button[type=submit]")
-    await pg.wait_for_timeout(500)
-    check("bad value (smoke test)" in await pg.locator("#error").inner_text(), "admin: a plain-text refusal shows its text")
+    check(await comes_true(pg, "$('error').innerText.includes('bad value (smoke test)')"), "admin: a plain-text refusal shows its text")
     check(not errors, f"no page errors on admin and help {errors[:2]}")
     await ctx.close()
     # Phone: the tab bar, no sideways scroll, 44 px touch targets for buttons and tabs.
@@ -1255,7 +1305,7 @@ async def shell_pages(browser, devices, secret: str) -> None:
     for path in ("/ui/admin", "/ui/admin#settings", "/ui/help"):
         await pg.goto(URL + path)
         await pg.wait_for_selector("#who .avatar", timeout=10000, state="attached")
-        await pg.wait_for_timeout(500)
+        await settled(pg)
         small = await pg.evaluate("""() => [...document.querySelectorAll('button, summary, select, .tabbar a')].filter((b) => {
             const r = b.getBoundingClientRect(); return r.width && r.height && b.offsetParent !== null && getComputedStyle(b).visibility !== 'hidden' && r.height < 43.5;
           }).map((b) => (b.id || b.className || b.tagName) + ':' + Math.round(b.getBoundingClientRect().height)).slice(0, 5)""")
@@ -1347,7 +1397,7 @@ async def board(browser, devices, secret: str) -> None:
         check(not cut, f"Grid: no chip in a card head has its text cut {cut}")
         # the pill follows the log's height, not only scrolling: an image that loads or a card that gets smaller
         await pg.evaluate("ckEvents(ck.cards.get([...bd.wraps.keys()][0]), {events: Array.from({length: 80}, (_, i) => ({n: 100000 + i, kind: 'info', text: 'line'}))})")
-        await pg.wait_for_timeout(100)
+        await next_frames(pg)  # a pill it would show is drawn by now
         wrap = pg.locator(f"""#bd .bd-card[data-id="{await pg.evaluate('[...bd.wraps.values()][0].dataset.id')}"]""")
         pill = wrap.locator(".ck-jump button")
         check(not await pill.is_visible(), "Grid: no pill at the end of a card")
@@ -1380,7 +1430,7 @@ async def board(browser, devices, secret: str) -> None:
     ctx, pg, errors = await page(browser, secret, "/ui#/chats?view=grid", **devices["iPhone 14"])
     await pg.route("**/ui/api/chat?*", lambda r: r.abort())
     await pg.wait_for_selector("#ck-history", state="attached")
-    await pg.wait_for_timeout(800)
+    await settled(pg)
     check(await pg.evaluate("(!$('bd') || !$('bd').offsetParent) && !!$('ck-history').offsetParent && !$('ck-view').offsetParent"), "phone: #/chats?view=grid shows the list, no grid or List link")
     check(not errors, f"no page errors on the phone chat list {errors[:2]}")
     await ctx.close()
@@ -1417,6 +1467,7 @@ async def review(browser, devices, secret: str) -> None:
                                         extra_http_headers={"X-Knowledge-Proxy": secret, "X-authentik-username": USER})
         await ctx.route("**/ui/api/**", fake)
         await ctx.add_init_script("localStorage.setItem('kn_project', 'all')")  # the fake items' project: the one picker scopes the Agents list too
+        await ctx.add_init_script(BUSY_JS)
         pg = await ctx.new_page()
         errors = []
         pg.on("pageerror", lambda e: errors.append(str(e)))
@@ -1439,7 +1490,7 @@ async def review(browser, devices, secret: str) -> None:
             await pg.screenshot(path=os.path.join(shots, f"review-{name}.png"), full_page=name == "phone")
         await card.hover()  # a pointer sees a row's actions on hover
         await card.get_by_role("button", name="Merge").click()
-        await pg.wait_for_timeout(400)
+        await quiet(pg)
         check(asked and "task/KN-42" in asked[-1] and "into main" in asked[-1] and "smoke-pc" in asked[-1], f"{name}: Merge asks first, naming branch, target and pc")
         check(sent and sent[-1] == ("/ui/api/machines/action", {"machine": item["machine"], "action": "merge", "args": {"project": "garden", "id": "KN-42"}}),
               f"{name}: Merge queues the pc's merge action {sent[-1:]}")
@@ -1450,7 +1501,7 @@ async def review(browser, devices, secret: str) -> None:
         if shots and name == "desktop":
             await pg.screenshot(path=os.path.join(shots, "review-reject-desktop.png"))
         await card.locator(".ck-reject button").click()
-        await pg.wait_for_timeout(400)
+        await quiet(pg)
         check(sent[-1] == ("/ui/api/review/reject", {"key": item["key"], "reason": "water less often", "send_back": True}),
               f"{name}: Reject sends the reason and send back {sent[-1:]}")
         check(not errors, f"{name}: no page errors on the review card {errors[:2]}")
@@ -1500,6 +1551,7 @@ async def follow(browser, devices, secret: str) -> None:
                                         extra_http_headers={"X-Knowledge-Proxy": secret, "X-authentik-username": USER})
         await ctx.route("**/ui/api/**", fake)
         await ctx.add_init_script("localStorage.setItem('kn_project', 'all')")  # the fake items' project: the one picker scopes the Agents list too
+        await ctx.add_init_script(BUSY_JS)
         pg = await ctx.new_page()
         errors = []
         pg.on("pageerror", lambda e: errors.append(str(e)))
@@ -1530,7 +1582,7 @@ async def follow(browser, devices, secret: str) -> None:
         grow = "(from) => ckEvents(ck.cards.get(ck.view), {events: Array.from({length: 80}, (_, i) => ({n: from + i, kind: 'info', text: 'line'}))})"
         up = "document.querySelector('#ck-canvas .ck-card.worker .ck-log').scrollTop = 0"
         await pg.evaluate(grow, 100000)
-        await pg.wait_for_timeout(100)
+        await next_frames(pg)  # a pill it would show is drawn by now
         check(not await pill.is_visible(), f"{name}: no pill at the end of a chat")
         await pg.evaluate(up)
         await pill.wait_for(timeout=2000)
@@ -1555,12 +1607,12 @@ async def follow(browser, devices, secret: str) -> None:
         check(acts == ["Stop", "Take over"], f"{name}: a running worker offers Stop and Take over {acts}")
         await pg.locator("#ck-canvas .ck-form textarea").fill("prefer the soil sensor")
         await pg.locator("#ck-canvas .ck-form button[type=submit]").click()
-        await pg.wait_for_timeout(500)
+        await quiet(pg)
         check(("/ui/api/worker/steer", {"machine": mid, "worker": "garden/KN-8", "text": "prefer the soil sensor"}) in sent, f"{name}: Steer posts the message {sent[-1:]}")
         if shots:
             await pg.screenshot(path=os.path.join(shots, f"follow-{name}-running.png"))
         await pg.get_by_role("button", name="Take over").click()
-        await pg.wait_for_timeout(400)
+        await quiet(pg)
         check(sent[-1] == ("/ui/api/machines/action", {"machine": mid, "action": "takeover", "args": {"project": "garden", "id": "KN-8"}}),
               f"{name}: Take over asks first and queues the pc's takeover {sent[-1:]}")
         check(not errors, f"{name}: no page errors on the worker view {errors[:2]}")
@@ -1598,7 +1650,7 @@ async def live_refresh(browser, secret: str) -> None:
     slow server never gets a growing pile of requests (read-only: only reads, slowed down with page.route)."""
     ctx, pg, errors = await page(browser, secret)
     await pg.wait_for_function("typeof onChanged === 'function'")
-    await pg.wait_for_timeout(2000)  # the page's own first load is done
+    await quiet(pg)  # the page's own first load is done
     seen, busy, most = [], 0, 0
 
     async def slow(route):
@@ -1611,15 +1663,15 @@ async def live_refresh(browser, secret: str) -> None:
         busy -= 1
     await pg.route("**/ui/api/recent*", slow)
     await pg.evaluate("onChanged(); onChanged(); onChanged()")
-    await pg.wait_for_timeout(2000)
+    await quiet(pg)  # the refresh and the one after it are done
     # not an exact count: on a live server a real change may add a refresh, never an overlapping one
     check(len(seen) >= 2 and most == 1, f"changes during a refresh wait for it and make one more ({len(seen)} requests, {most} at once)")
     seen.clear()
     await pg.evaluate("Object.defineProperty(document, 'hidden', {configurable: true, get: () => true}); onChanged()")
-    await pg.wait_for_timeout(600)
+    await quiet(pg)  # a refresh it started would have reached the route
     check(not seen, "a background tab refreshes nothing")
     await pg.evaluate("delete document.hidden; document.dispatchEvent(new Event('visibilitychange'))")
-    await pg.wait_for_timeout(1000)
+    await quiet(pg)
     check(len(seen) == 1, f"the tab catches up once when shown, not {len(seen)} times")
     check(not errors, f"no page errors during live refreshes: {errors}")
     await ctx.close()
@@ -1657,7 +1709,7 @@ async def two_windows(browser, secret: str) -> None:
 async def one_lamp(browser, secret: str) -> None:
     ctx, pg, errors = await page(browser, secret, "/ui#/notes", viewport={"width": 1400, "height": 820})
     await pg.wait_for_selector(".home-card, #topics summary", timeout=20000)
-    await pg.wait_for_timeout(1000)
+    await settled(pg)
     if not await pg.evaluate("getComputedStyle(document.documentElement).getPropertyValue('--act') !== ''"):
         print("skip the one lamp (server older than 0.37)")
         return await ctx.close()
@@ -1668,7 +1720,7 @@ async def one_lamp(browser, secret: str) -> None:
     check(lamp["on"] == lamp["amber"] and lamp["off"] != lamp["amber"], f"the lamp lights only when something needs you {lamp}")
     wide = await pg.evaluate("""() => ({right: getComputedStyle($('side')).display, note: $('note').getBoundingClientRect().width, recent: !!document.querySelector('.home-recent')})""")
     check(wide["right"] == "none" and wide["note"] > 800 and wide["recent"], f"the notes overview takes the width, what changed lately first {wide}")
-    await route(pg, "#/map", "#g2d canvas", 1500)
+    await route(pg, "#/map", "#g2d canvas")
     map_ = await pg.evaluate("""() => ({w: $('graph').getBoundingClientRect().width, main: document.querySelector('.main').getBoundingClientRect().width, left: getComputedStyle($('topics-pane')).display, right: getComputedStyle($('side')).display})""")
     if not await pg.query_selector("#map-3d"):
         check(map_["w"] >= map_["main"] - 2 and map_["left"] != "none" and map_["right"] == "none", f"the map takes the whole page, the topic list floats over it {map_}")
@@ -1680,7 +1732,7 @@ async def one_lamp(browser, secret: str) -> None:
         check(await pg.evaluate("getComputedStyle($('topics-pane')).display !== 'none'"), "Topics shows the topic list over the map")
         await pg.click("#map-topics")
         await pg.click("#map-replay")
-        await pg.wait_for_timeout(1500)
+        await comes_true(pg, "!$('map-time').hidden && Number($('time-pos').value) > 0")  # it plays
         rp = await pg.evaluate("""() => ({date: !$('map-time').hidden && $('map-date').textContent, shown: Graph.graphData().nodes.filter(shownAt).length,
           all: Graph.graphData().nodes.length, born: Graph.graphData().nodes.every((n) => n.born > 1e9), ages: new Set(Graph.graphData().nodes.map((n) => n.born)).size,
           bars: $('time-hist').width > 0, pos: Number($('time-pos').value)})""")
@@ -1707,14 +1759,15 @@ async def one_lamp(browser, secret: str) -> None:
         await pg.click("#map-3d")
         check(await pg.evaluate("!$('g2d').hidden && $('g3d').hidden && localStorage.getItem('kn_map3d') === '0'"), "back to the flat map")
         check(not errors, f"no page errors in replay and 3D {errors[:2]}")
-    await route(pg, "#/machines", "#machines > *", 800)
+    await route(pg, "#/machines", "#machines > *")
     fold = await pg.evaluate("""() => { const kids = [...$('machines').children], first = kids.findIndex((k) => k.matches('.mx-offline'));
       return {lines: document.querySelectorAll('.mx-offline .mx-line').length, columns: document.querySelectorAll('.mx-offline .mx-pc').length,
               last: first === -1 || kids.slice(first + 1).every((k) => !k.matches('.mx-wrap'))}; }""")
     check(fold["columns"] == 0 and fold["last"], f"offline pcs of your own come after the comparison, one line each {fold}")
-    await route(pg, "#/chats", "", 1500)
+    await route(pg, "#/chats", "")
     send = await pg.evaluate("""async () => { const f = [...document.querySelectorAll('.ck-box')].find((b) => b.offsetParent); if (!f) return null; const t = f.querySelector('textarea'), s = f.querySelector('.ck-send'), was = t.value, bg = () => getComputedStyle(s).backgroundColor;
-      t.value = ''; await new Promise((r) => setTimeout(r, 300)); const empty = bg(); t.value = 'x'; await new Promise((r) => setTimeout(r, 300)); const typed = bg(); t.value = was; return {empty, typed}; }""")
+      const calm = async () => { bg(); await Promise.all(s.getAnimations().map((a) => a.finished.catch(() => 0))); }; // its colour fades
+      t.value = ''; await calm(); const empty = bg(); t.value = 'x'; await calm(); const typed = bg(); t.value = was; return {empty, typed}; }""")
     if send is None:
         print("skip Send wakes up (no open chat)")
     else:
@@ -1724,7 +1777,7 @@ async def one_lamp(browser, secret: str) -> None:
     # a wide table scrolls inside its own box: the page itself never moves sideways, also not for a keyboard user
     ctx, pg, errors = await page(browser, secret, "/ui/admin#tokens", viewport={"width": 800, "height": 900})
     await pg.wait_for_selector("#tokens table, .token-table", timeout=10000)
-    await pg.wait_for_timeout(800)
+    await settled(pg)
     wide = await pg.evaluate("() => ({doc: document.scrollingElement.scrollWidth, win: innerWidth})")
     check(wide["doc"] <= wide["win"], f"admin tokens at 800 px: the page does not scroll sideways {wide}")
     if os.environ.get("KNOWLEDGE_SMOKE_WRITES"):  # only on a throwaway server: this really undoes what a device wrote
@@ -1799,19 +1852,20 @@ async def design_system(browser, devices, secret: str) -> None:
         return await ctx.close()
     views = ["#/chats", "#/chats?view=list", "#/machines", "#/notes", "#/changes", "#/health"]
     for v in views:
-        await route(pg, v, "", 900)
+        await route(pg, v, "")
         r = await pg.evaluate(DS_JS)
         check(r["n"] > 0 and not r["bad"], f"design system {v}: {r['n']} buttons, all 36/28 px with a 6 px radius, fields alike, chips quiet {r['bad'][:4]}")
     check(not await pg.locator("#ck-resets").is_visible(), "the usage-limit reset chip stays off a view outside Agents")
     for path in ("/ui/admin", "/ui/help"):
-        await pg.goto(URL + path); await pg.wait_for_timeout(1200)
+        await pg.goto(URL + path)
+        await settled(pg)
         r = await pg.evaluate(DS_JS)
         check(r["n"] > 0 and not r["bad"], f"design system {path}: {r['n']} buttons in the system {r['bad'][:4]}")
     await ctx.close()
     ctx, pg, errors = await page(browser, secret, "/ui#/notes", **{**devices["iPhone 14"], "viewport": {"width": 390, "height": 844}})
-    await pg.wait_for_timeout(1500)
+    await settled(pg)
     for v in ("#/chats", "#/notes", "#/map"):
-        await route(pg, v, "", 900)
+        await route(pg, v, "")
         small = await pg.evaluate("() => [...document.querySelectorAll('.btn')].filter((b) => b.offsetParent && b.getBoundingClientRect().height && b.getBoundingClientRect().height < 43.5).map((b) => b.id || b.textContent.trim().slice(0, 20))")
         check(not small, f"phone design system {v}: every button a 44 px touch target {small[:4]}")
     check(not errors, f"no page errors on the design-system views {errors[:2]}")
@@ -1857,7 +1911,7 @@ async def images(browser, secret: str) -> None:
     pct = lambda: iv.locator("#iv-pct").inner_text()
     await iv.mouse.move(640, 400)
     await iv.mouse.wheel(0, 100)
-    await iv.wait_for_timeout(250)
+    await comes_true(iv, "document.getElementById('iv-count').textContent === '3 / 4'")
     check(await count() == "3 / 4", "images: scrolling goes to the next image")
     await iv.keyboard.press("ArrowLeft")
     check(await count() == "2 / 4", "images: an arrow key goes back")
@@ -1884,16 +1938,17 @@ async def images(browser, secret: str) -> None:
     await iv.keyboard.press("End")  # zoomed in, on to an image the server no longer has
     await iv.locator("#iv-msg").wait_for()
     await iv.mouse.move(640, 400)
-    await iv.wait_for_timeout(200)
+    await comes_true(iv, "performance.now() - wheelLast > 160")  # wheel events closer than 150 ms are one gesture
     await iv.mouse.wheel(0, -100)
-    await iv.wait_for_timeout(250)
+    await comes_true(iv, "document.getElementById('iv-count').textContent === '3 / 4'")
     check(await count() == "3 / 4", "images: a file that is gone says so, and the wheel still goes through the images")
     await iv.keyboard.press("Home")
     await iv.wait_for_function("document.getElementById('iv-img').naturalWidth > 0 && !document.getElementById('iv-img').hidden")
     width = await iv.evaluate("[document.documentElement.scrollWidth, innerWidth]")
     check(width[0] <= width[1] and not iv_errors, f"images: no sideways scroll, no page errors {width} {iv_errors}")
     await iv.set_viewport_size({"width": 390, "height": 800})
-    await iv.wait_for_timeout(100)
+    await comes_true(iv, "innerWidth === 390")
+    await next_frames(iv)
     check(await iv.locator("#iv-close").is_visible() and await iv.evaluate("document.documentElement.scrollWidth <= innerWidth"), "images: on a phone the close button stays, no sideways scroll")
     closed = asyncio.ensure_future(iv.wait_for_event("close", timeout=3000))
     with contextlib.suppress(Exception):  # the tab may go before the click returns
@@ -1925,7 +1980,7 @@ async def selection_kept(browser, secret: str) -> None:
         check(bool(was) and await pg.evaluate(kept, was), "Chat: a repaint keeps a selection in its header")
     else:
         print("skip selection in chats (no open chat)")
-    await route(pg, "#/machines", ms=1500)
+    await route(pg, "#/machines")
     was = await pg.evaluate(select, "#machines h2, #machines p")
     await pg.evaluate("loadMachines()")
     check(bool(was) and await pg.evaluate(kept, was), "Machines: a refresh waits while text on it is selected")
@@ -1950,12 +2005,12 @@ async def chat_tabs(browser, secret: str) -> None:
     await pg.evaluate("Object.defineProperty(document, 'hidden', {get: () => window.fakeHidden, configurable: true}); window.fakeHidden = true")
     await pg.evaluate(f"go('#/chats/{cid}')")
     await pg.wait_for_function("document.body.classList.contains('in-chat')", timeout=5000)
-    await pg.wait_for_timeout(600)
+    await until(lambda: polls)
+    await quiet(pg)
     check(bool(polls) and all("peek=1" in u for u in polls), f"Chat tab: out of view its polls leave the chat under Needs you ({len(polls)} polls)")
     polls.clear()
     await pg.evaluate("window.fakeHidden = false; document.dispatchEvent(new Event('visibilitychange'))")
-    await pg.wait_for_timeout(600)
-    check(any("peek=1" not in u for u in polls), "Chat tab: back in view it catches up at once and counts as read")
+    check(await until(lambda: any("peek=1" not in u for u in polls)), "Chat tab: back in view it catches up at once and counts as read")
     check(not errors, f"no page errors on a chat tab {errors[:2]}")
     await ctx.close()
 
@@ -1981,7 +2036,7 @@ async def chat_tabs(browser, secret: str) -> None:
     check(await pg.evaluate("location.hash") == grid_hash, "Chat tab: the grid's ↗ leaves the grid where it is")
     gone = await tab.evaluate("['#sidebar', '#tabbar', '#page-head', '#ck-side'].map((s) => getComputedStyle(document.querySelector(s)).display)")
     check(gone == ["none"] * 4, f"Chat tab: no sidebar, tab bar, header or list {gone}")
-    await tab.wait_for_timeout(500)  # the view's fade-in
+    await settled(tab)  # the view's fade-in
     box = await tab.evaluate("(() => { const c = document.querySelector('#ck-canvas .ck-card').getBoundingClientRect(); return [c.left, c.top, c.width, c.bottom]; })()")
     check(box[:2] == [0, 0] and box[2] == tab.viewport_size["width"] and box[3] == tab.viewport_size["height"], f"Chat tab: the chat fills the tab {box} {tab.viewport_size}")
     title = await tab.title()
@@ -2024,7 +2079,7 @@ async def chat_tabs(browser, secret: str) -> None:
     await tab.evaluate("window.closed_ = 0; window.close = () => { window.closed_++; }; 0")  # evaluate would call a function it gets back
     await tab.evaluate("(() => { const d = document.querySelector('#ck-canvas details.ck-model') || document.body.appendChild(Object.assign(document.createElement('details'), {className: 'menu'})); d.open = true; })()")
     await tab.keyboard.press("Escape")
-    await tab.wait_for_timeout(300)
+    await next_frames(tab)  # closing the tab calls window.close() in the key's own handler (counted above)
     check(await tab.evaluate("window.closed_") == 0 and "solo=1" in await tab.evaluate("location.hash"), "Chat tab: Esc on an open menu leaves the tab open")
     await tab.evaluate("document.querySelectorAll('details[open]').forEach((d) => { d.open = false; })")
     check(await pg.evaluate("store.get('kn_last_chat')") == last, "Chat tab: other tabs keep their last chat")
@@ -2037,12 +2092,12 @@ async def chat_tabs(browser, secret: str) -> None:
     tab.on("pageerror", lambda e: tab_errors.append(str(e)))
     await tab.goto(f"{URL}/ui#/chats/{cid}?solo=1")
     await tab.wait_for_function(is_solo, timeout=15000)
-    await tab.evaluate("window.close = () => {}")  # a browser that refuses: the app in this tab
+    await tab.evaluate("window.closed_ = 0; window.close = () => { window.closed_++; }; 0")  # a browser that refuses: the app in this tab
     await tab.wait_for_function("document.activeElement === document.querySelector('#ck-canvas .ck-form textarea')", timeout=5000)
     await tab.evaluate("(() => { const c = ck.cards.get(ck.view); c.files = [{name: 'x'}]; })()")
     await tab.keyboard.press("Escape")
-    await tab.wait_for_timeout(300)
-    check("solo=1" in await tab.evaluate("location.hash"), "Chat tab: Esc with a file attached does not close it (a file is not kept)")
+    await next_frames(tab)  # closing calls window.close() in the key's own handler, counted here
+    check(await tab.evaluate("window.closed_") == 0 and "solo=1" in await tab.evaluate("location.hash"), "Chat tab: Esc with a file attached does not close it (a file is not kept)")
     await tab.evaluate("ck.cards.get(ck.view).files = []")
     await tab.keyboard.press("Escape")  # from the text box, where a new tab starts
     await tab.wait_for_function("!document.body.classList.contains('solo') && location.hash === '#/chats'", timeout=5000)
@@ -2234,7 +2289,7 @@ async def grid_groups(browser, secret: str) -> None:
     check(True, "Parts: the buttons say which other part needs you")
     board[0] = {**board[0], "id": chats[3]["id"]}
     scrolled = await other.evaluate("""(async () => { const card = ck.cards.get('x/000000000001'); for (let i = 0; i < 200; i++) card.log.append(el('p', '', 'line'));
-      card.log.scrollTop = 500; await new Promise((r) => setTimeout(r, 50)); const top = card.log.scrollTop;
+      card.log.scrollTop = 500; await new Promise(requestAnimationFrame); const top = card.log.scrollTop;
       bdPartShow(2); const gone = !card.root.isConnected; bdPartShow(1); await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame);
       return [gone, top > 0, card.log.scrollTop === top]; })()""")
     check(scrolled == [True, True, True], f"Parts: a chat you scrolled in is still there when you come back to its part {scrolled}")
@@ -2426,7 +2481,7 @@ async def settings(browser, secret: str) -> None:
         await pg.route("**/ui/api/chat/stop", lambda r: (stopped.append(1), r.fulfill(json={"ok": True}))[1])
         await pg.evaluate("(() => { const c = ck.cards.get(ck.view); c.meta.status = 'running'; c.meta.waiting = 1; ckPaint(c); })()")
         await pg.press(box, "Enter")
-        await pg.wait_for_timeout(300)
+        await quiet(pg)  # a stop would have reached its route by now
         check(not stopped, "Settings: Enter on an empty box does not stop the agent's step")
         await pg.evaluate("me.prefs.send_key = 'shift'; ckSendHints(ck.cards.get(ck.view))")
         check("Shift+Enter sends" in await pg.get_attribute(box, "aria-label"), "Settings: the box says Shift+Enter sends")
@@ -2444,39 +2499,63 @@ async def settings(browser, secret: str) -> None:
     await ctx.close()
 
 
+# Seconds per check (local run, 11 Nov 2026): tests/ui_ci.py runs the checks as shards side by side, longest first.
+SECONDS = {"desktop": 19, "shell": 12, "update_button": 10, "approvals": 7, "phone": 5, "csp": 5, "cockpit": 4, "follow": 4,
+           "chat_tabs": 4, "knowledge": 4, "agents_pages": 3, "design_system": 3, "one_lamp": 3, "review": 3, "board": 2,
+           "grid_groups": 2, "live_refresh": 2, "search": 2, "settings": 2, "chat_drafts": 2, "shell_pages": 2, "admin": 1,
+           "project_pick_pages": 1, "images": 1, "selection_kept": 1, "two_windows": 1, "no_agents": 1}
+
+
+def shard_of(checks: list) -> list:
+    """KNOWLEDGE_SMOKE_SHARD=i/n: this shard's checks (longest first onto the shard with least time), in the usual order."""
+    if not os.environ.get("KNOWLEDGE_SMOKE_SHARD"):
+        return checks
+    me, n = map(int, os.environ["KNOWLEDGE_SMOKE_SHARD"].split("/"))
+    assert 0 <= me < n, f"KNOWLEDGE_SMOKE_SHARD={me}/{n}"
+    load, mine = [0] * n, []
+    for c in sorted(checks, key=lambda c: -SECONDS.get(c[0].__name__, 3)):
+        i = load.index(min(load))
+        load[i] += SECONDS.get(c[0].__name__, 3)
+        if i == me:
+            mine.append(c)
+    return [c for c in checks if c in mine]
+
+
 async def main() -> None:
     secret = os.environ.get("KNOWLEDGE_PROXY_SECRET") or subprocess.run(["secret", "KNOWLEDGE_PROXY_SECRET"], check=True, capture_output=True, text=True).stdout.strip()
     async with async_playwright() as p:
         # system Chrome by default; KNOWLEDGE_SMOKE_BROWSER=chromium takes Playwright's own (CI, tests/ui_ci.py)
         chan = os.environ.get("KNOWLEDGE_SMOKE_BROWSER", "chrome")
         browser = await p.chromium.launch(channel=None if chan == "chromium" else chan)
-        await csp(browser, secret)
-        await desktop(browser, secret)
-        await search(browser, secret)
-        await phone(browser, p.devices, secret)
-        await admin(browser, secret)
-        await project_pick_pages(browser, secret)
-        await cockpit(browser, p.devices, secret)
-        await approvals(browser, p.devices, secret)
-        await review(browser, p.devices, secret)
-        await shell(browser, p.devices, secret)
-        await knowledge(browser, p.devices, secret)
-        await agents_pages(browser, p.devices, secret)
-        await shell_pages(browser, p.devices, secret)
-        await no_agents(browser, secret)
-        await images(browser, secret)
-        await chat_tabs(browser, secret)
-        await selection_kept(browser, secret)
-        await settings(browser, secret)
-        await chat_drafts(browser, secret)
-        await grid_groups(browser, secret)
-        await board(browser, p.devices, secret)
-        await follow(browser, p.devices, secret)
-        await live_refresh(browser, secret)
-        await two_windows(browser, secret)
-        await update_button(browser, secret)
-        await design_system(browser, p.devices, secret)
-        await one_lamp(browser, secret)
+        checks = [(csp, browser, secret),
+                  (desktop, browser, secret),
+                  (search, browser, secret),
+                  (phone, browser, p.devices, secret),
+                  (admin, browser, secret),
+                  (project_pick_pages, browser, secret),
+                  (cockpit, browser, p.devices, secret),
+                  (approvals, browser, p.devices, secret),
+                  (review, browser, p.devices, secret),
+                  (shell, browser, p.devices, secret),
+                  (knowledge, browser, p.devices, secret),
+                  (agents_pages, browser, p.devices, secret),
+                  (shell_pages, browser, p.devices, secret),
+                  (no_agents, browser, secret),
+                  (images, browser, secret),
+                  (chat_tabs, browser, secret),
+                  (selection_kept, browser, secret),
+                  (settings, browser, secret),
+                  (chat_drafts, browser, secret),
+                  (grid_groups, browser, secret),
+                  (board, browser, p.devices, secret),
+                  (follow, browser, p.devices, secret),
+                  (live_refresh, browser, secret),
+                  (two_windows, browser, secret),
+                  (update_button, browser, secret),
+                  (design_system, browser, p.devices, secret),
+                  (one_lamp, browser, secret)]
+        for fn, *args in shard_of(checks):
+            await fn(*args)
         await browser.close()
     print("ok" if not failures else f"{len(failures)} failed")
     sys.exit(1 if failures else 0)

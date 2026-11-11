@@ -678,7 +678,8 @@ function ckCard(meta) {
   }, { passive: true });
   // the distance to the end also changes without a scroll: an image loads, a block unfolds, the card gets another size
   const sized = new ResizeObserver(() => ckJump(card)); sized.observe(log);
-  new MutationObserver((changes) => { for (const c of changes) for (const n of c.addedNodes) if (n.nodeType === 1) sized.observe(n); }).observe(log, { childList: true });
+  const mut = new MutationObserver((changes) => { for (const c of changes) for (const n of c.addedNodes) if (n.nodeType === 1) sized.observe(n); });
+  mut.observe(log, { childList: true });
   const jump = el("div", "ck-jump"), jumpBtn = el("button", "btn small ck-jump-btn"), jumpText = el("span");
   jump.hidden = true; jumpBtn.type = "button";
   jumpBtn.append(jumpText, ckKeyEl("jump", "muted ck-jump-key", "{key}")); jump.append(jumpBtn);
@@ -722,6 +723,7 @@ function ckCard(meta) {
   const find = ckFindBar(); find.btn = findBtn;
   root.append(head, find.bar, log, jump, subbar, asks, form);
   const card = { meta: { ...meta }, x, openTab: open, root, find, name, where, git, state, log, jump, jumpText, asks, form, input, stop, send, note, picks, mark, close, tok, subbar, queueBtn, forceBtn, more, branch, filesBox: files, files: [], mode: "", pick: null, after: 0, online: meta.online !== false, stickToBottom: true, savedScrollTop: null };
+  card.sized = sized; card.mut = mut;
   findBtn.onclick = () => (find.bar.hidden ? ckFindOpen(card) : ckFindClose(card));
   open.onclick = (e) => { if (me.prefs?.grid_open === "here" && !e.ctrlKey && !e.metaKey && !e.shiftKey) { e.preventDefault(); ckShow(card.meta); } }; // Settings
   ckSendHints(card);
@@ -827,24 +829,24 @@ function ckCard(meta) {
       ckTick();
     } catch (err) { note.className = "ck-note bad"; note.textContent = err.message; }
   };
-  // right-click or long press on Archive: a small menu whose red button force archives, a second deliberate step
+  // right-click or long press on Archive: a small menu whose Force archive is a second deliberate step
   // (iOS fires no contextmenu on a long press, hence the timer); Esc or a tap elsewhere closes it (popover)
   const forceClose = (e) => {
     e?.preventDefault?.();
     if (card.meta.closed || Date.now() - (close.forcedAt || 0) < 1000) return;
     close.forcedAt = Date.now();
     document.querySelector(".ck-forcepop")?.remove();
-    const pop = el("div", "menu-list ck-forcepop"), go = el("button", "ck-force-go", "Force archive"), no = el("button", null, "Cancel");
-    pop.popover = "auto"; go.type = no.type = "button";
-    pop.append(el("p", "ck-forcepop-why", "Close now, without the agent recording this chat in the memos."), go, no);
+    const pop = el("div", "menu-list ck-forcepop"), go = el("button", "ck-force-go", "Force archive");
+    pop.popover = "auto"; pop.tabIndex = -1; go.type = "button";
+    pop.append(el("p", "ck-forcepop-why", "Close now, without the agent recording this chat in the memos."), go);
     go.onclick = () => { pop.hidePopover(); close.onclick({ force: true }); };
-    no.onclick = () => pop.hidePopover();
+    pop.onkeydown = (k) => { if (k.key === "Escape") k.stopPropagation(); }; // the popover closes itself; the chat stays open
     pop.addEventListener("toggle", (t) => { if (t.newState === "closed") pop.remove(); });
     document.body.append(pop);
     const r = close.getBoundingClientRect();
     pop.style.top = `${Math.min(r.bottom + 6, innerHeight - 160)}px`;
     pop.style.left = `${Math.max(8, Math.min(r.right - 260, innerWidth - 268))}px`;
-    pop.showPopover(); no.focus(); // the safe choice has the focus: Enter does not archive
+    pop.showPopover(); pop.focus(); // not the button: Enter does not archive
   };
   close.addEventListener("contextmenu", forceClose);
   close.addEventListener("pointerdown", (e) => { if (e.pointerType === "touch") close.hold = setTimeout(forceClose, 500); });
@@ -1055,7 +1057,11 @@ async function ckSubPoll(card) {
   card.stop.hidden = card.queueBtn.hidden = card.forceBtn.hidden = true; card.send.textContent = "Send";
   if (!card.note.classList.contains("bad")) card.note.textContent = readOnly ? "agy names this subagent's conversation once it has ended: then you can write to it here." : "Your message goes to the main agent, which passes it on to this subagent.";
 }
-function ckDrop(k) { ck.cards.delete(k); if (ck.view === k) ck.view = ""; }
+function ckDrop(k) {
+  const c = ck.cards.get(k);
+  if (c) { c.sized?.disconnect(); c.mut?.disconnect(); }
+  ck.cards.delete(k); if (ck.view === k) ck.view = "";
+}
 const CK_EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"]; // the server's EFFORTS, in order
 // The model picker: one chip under the box ("Opus · high ▾"), a panel with the models grouped by family and the chosen
 // model's effort levels. Picking a model sets its own default effort; the agent (Claude Code, Codex, agy) follows from
