@@ -125,7 +125,7 @@ def shards(n: int) -> int:
         for i, (_, log) in enumerate(runs):
             log.seek(0)
             print(f"---- shard {i}/{n}: {'ok' if not codes[i] else 'FAILED'} ----\n{log.read()}", flush=True)
-    return max(codes)
+    return 1 if any(codes) else 0  # a shard killed by a signal has a negative code
 
 
 if __name__ == "__main__":

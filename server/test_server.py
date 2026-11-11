@@ -2504,6 +2504,7 @@ def own(i: int) -> bool:
 
 def keep_shard(me: int) -> None:
     global SHARD
+    assert 0 <= me <= max(SHARD_OF.values()), f"--shard {me}: no such shard"
     SHARD = me
     for name in [n for n in globals() if n.endswith("_contract")]:
         if SHARD_OF.get(name, 0) != me:

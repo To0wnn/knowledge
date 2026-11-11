@@ -2434,6 +2434,7 @@ def shard_of(checks: list) -> list:
     if not os.environ.get("KNOWLEDGE_SMOKE_SHARD"):
         return checks
     me, n = map(int, os.environ["KNOWLEDGE_SMOKE_SHARD"].split("/"))
+    assert 0 <= me < n, f"KNOWLEDGE_SMOKE_SHARD={me}/{n}"
     load, mine = [0] * n, []
     for c in sorted(checks, key=lambda c: -SECONDS.get(c[0].__name__, 3)):
         i = load.index(min(load))

@@ -3569,6 +3569,7 @@ SHARDS = max(PHASE_SHARD.values()) + 1
 
 
 def shards() -> int:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # the shards' logs carry non-ASCII; a Windows pipe is cp1252
     runs = []
     with tempfile.TemporaryDirectory() as t:
         for i in range(SHARDS):
@@ -3580,11 +3581,12 @@ def shards() -> int:
             log.seek(0)
             print(f"---- shard {i}/{SHARDS}: {'ok' if not codes[i] else 'FAILED'} ----\n{log.read()}", flush=True)
             log.close()
-    return max(codes)
+    return 1 if any(codes) else 0  # a shard killed by a signal has a negative code
 
 
 def main():
     me = int(sys.argv[sys.argv.index("--shard") + 1])
+    assert 0 <= me < SHARDS, f"--shard {me}: there are {SHARDS}"
     for name, f in list(globals().items()):  # the other shards' phases do nothing here
         if callable(f) and name in PHASES and PHASE_SHARD.get(name, 0) != me:
             globals()[name] = lambda *a, **k: None
