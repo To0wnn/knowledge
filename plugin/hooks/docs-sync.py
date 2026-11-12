@@ -23,8 +23,85 @@ from pathlib import Path
 
 SKIP = {"venv", "node_modules", "__pycache__", "dist", "build", "site-packages"}  # plus every dot-folder
 MAX_FILE, MAX_FILES = 300_000, 2000
-PENDING = Path(os.environ.get("KNOWLEDGE_HOME") or Path.home() / ".knowledge") / "pending-hints.txt"  # agy: shown by agent_hooks.py hints at the next turn
+KN_HOME = Path(os.environ.get("KNOWLEDGE_HOME") or Path.home() / ".knowledge")
+PENDING = KN_HOME / "pending-hints.txt"  # agy: shown by agent_hooks.py hints at the next turn
+PENDING_SYNC = KN_HOME / "pending-sync.json"  # files that failed to sync, retried on next edit
+NOSYNC_FILE = KN_HOME / "nosync-projects.json"  # projects/devices that don't mirror docs (admin or builtin)
 PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update) File: (.+)$|^\*\*\* Move to: (.+)$", re.M)
+
+
+def is_nosync(project: str) -> bool:
+    try:
+        return project in json.loads(NOSYNC_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+
+
+def mark_nosync(project: str) -> None:
+    try:
+        NOSYNC_FILE.parent.mkdir(parents=True, exist_ok=True)
+        known = set(json.loads(NOSYNC_FILE.read_text(encoding="utf-8"))) if NOSYNC_FILE.exists() else set()
+        known.add(project)
+        NOSYNC_FILE.write_text(json.dumps(sorted(known)), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def load_pending(project: str) -> dict:
+    try:
+        if PENDING_SYNC.exists():
+            return json.loads(PENDING_SYNC.read_text(encoding="utf-8")).get(project) or {}
+    except Exception:
+        pass
+    return {}
+
+
+def save_pending(project: str, files: dict) -> None:
+    if not files:
+        return
+    try:
+        PENDING_SYNC.parent.mkdir(parents=True, exist_ok=True)
+        cur = json.loads(PENDING_SYNC.read_text(encoding="utf-8")) if PENDING_SYNC.exists() else {}
+        cur.setdefault(project, {}).update(files)
+        PENDING_SYNC.write_text(json.dumps(cur), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def clear_pending(project: str, synced_keys: list = None) -> None:
+    try:
+        if not PENDING_SYNC.exists():
+            return
+        cur = json.loads(PENDING_SYNC.read_text(encoding="utf-8"))
+        if project in cur:
+            if synced_keys is None:
+                del cur[project]
+            else:
+                for k in synced_keys:
+                    cur[project].pop(k, None)
+                if not cur[project]:
+                    del cur[project]
+            if cur:
+                PENDING_SYNC.write_text(json.dumps(cur), encoding="utf-8")
+            else:
+                PENDING_SYNC.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def report(event: str, hook: dict, text: str) -> None:
+    """Report a message or error loudly to the agent/user: startup context, agy pending hint, or PostToolUse additionalContext."""
+    if event == "SessionEnd":
+        return
+    if event == "SessionStart":
+        print(text)
+    elif "toolCall" in hook:  # agy: its PostToolUse output must be {}; the next PostInvocation shows it
+        PENDING.parent.mkdir(parents=True, exist_ok=True)
+        with PENDING.open("a", encoding="utf-8") as f:
+            f.write(text + "\n")
+        print("{}")
+    else:  # Claude Code and Codex
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": text}}))
 
 
 def edited_paths(hook: dict) -> list:
@@ -83,7 +160,9 @@ def main():
     event = hook.get("hook_event_name") or ("PostToolUse" if "toolCall" in hook else "SessionStart")  # agy names no event
     cwd = os.environ.get("CLAUDE_PROJECT_DIR") or hook.get("cwd") or (hook.get("workspacePaths") or ["."])[0]
     root, project = project_root(Path(cwd).resolve())
-    if not root or not project:
+    if not root or not project or is_nosync(project):
+        if "toolCall" in hook:
+            print("{}")
         return
     if event in ("SessionStart", "SessionEnd"):
         payload = {"project": project, "files": markdown_files(root), "full": True}
@@ -91,30 +170,59 @@ def main():
         changed = [p for p in (Path(cwd, f).resolve() for f in edited_paths(hook))  # Codex patch paths can be relative
                    if p.suffix == ".md" and root in p.parents and p.is_file()
                    and not any(nested_repo(q) for q in p.parents if root in q.parents)]
-        if not changed:
+        file_map = {p.relative_to(root).as_posix(): p.read_text(encoding="utf-8", errors="replace")
+                    for p in changed}
+        # Pick up any previously failed files for this project ("beter oppakken")
+        for rel in list(load_pending(project)):
+            p = root / rel
+            if p.is_file() and rel not in file_map and p.stat().st_size <= MAX_FILE:
+                file_map[rel] = p.read_text(encoding="utf-8", errors="replace")
+        if not file_map:
+            if "toolCall" in hook:
+                print("{}")
             return
-        payload = {"project": project, "files": {p.relative_to(root).as_posix(): p.read_text(encoding="utf-8", errors="replace")
-                                                 for p in changed}}
+        payload = {"project": project, "files": file_map}
     try:
         res = post(payload)
-    except Exception as e:  # offline, server down, token wrong: say so once, never fail the session
-        print(f"knowledge docs sync for {project} failed: {e}", file=sys.stderr if event != "SessionStart" else sys.stdout)
+    except urllib.error.HTTPError as e:
+        err_data = {}
+        try:
+            err_data = json.loads(e.read().decode(encoding="utf-8", errors="replace"))
+        except Exception:
+            pass
+        if e.code == 403 and (err_data.get("admin") or err_data.get("builtin") or (project in ("knowledge", "homelab", "anpitek", "trade") and "sync needs a write token" in err_data.get("error", ""))):
+            mark_nosync(project)
+            if "toolCall" in hook:
+                print("{}")
+            return
+        err_detail = f": {err_data['error']}" if err_data.get("error") else ""
+        err_msg = f"knowledge docs sync for {project} failed: {e}{err_detail}"
+        if event != "SessionStart":
+            print(err_msg, file=sys.stderr)
+        if event != "SessionStart" and "files" in payload:
+            save_pending(project, payload["files"])
+        report(event, hook, err_msg)
         return
+    except Exception as e:  # offline, server down: report loudly, queue for retry
+        err_msg = f"knowledge docs sync for {project} failed: {e}"
+        if event != "SessionStart":
+            print(err_msg, file=sys.stderr)
+        if event != "SessionStart" and "files" in payload:
+            save_pending(project, payload["files"])
+        report(event, hook, err_msg)
+        return
+    clear_pending(project, list(payload.get("files", {}).keys()) if not payload.get("full") else None)
     if res.get("refused"):
-        print(f"knowledge docs sync for {project}: refused {', '.join(res['refused'][:5])}",
-              file=sys.stderr if event != "SessionStart" else sys.stdout)
+        ref_msg = f"knowledge docs sync for {project}: refused {', '.join(res['refused'][:5])}"
+        if event != "SessionStart":
+            print(ref_msg, file=sys.stderr)
+        report(event, hook, ref_msg)
+        return
     if not (text := hint_text(res)):
+        if "toolCall" in hook:
+            print("{}")
         return
-    if event == "SessionEnd":  # nobody reads it now; an archive move is told by the server at the next turn
-        return
-    if event == "SessionStart":
-        print(text)  # becomes part of the startup context (Claude: SessionStart stdout; Codex/agy: agent_hooks context)
-    elif "toolCall" in hook:  # agy: its PostToolUse output must be {}; the next PostInvocation shows it
-        PENDING.parent.mkdir(parents=True, exist_ok=True)
-        with PENDING.open("a", encoding="utf-8") as f:  # secret-guard may have left a notice there too
-            f.write(text + "\n")
-    else:  # Claude Code and Codex read the same PostToolUse JSON
-        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": text}}))
+    report(event, hook, text)
 
 
 if __name__ == "__main__":
@@ -166,6 +274,34 @@ if __name__ == "__main__":
         assert edited_paths({"toolCall": {"args": {"TargetFile": '"/p/c.md"'}}}) == ["/p/c.md"]
         assert edited_paths({"toolCall": {"name": "edit_file", "args": {"Path": '"/p/e.md"'}}}) == ["/p/e.md"]
         assert edited_paths({"tool_input": {"file_path": "/p/d.md"}}) == ["/p/d.md"]
+        # Pending sync and nosync tracking:
+        with tempfile.TemporaryDirectory() as td:
+            old_kh = globals()["KN_HOME"]
+            old_p = globals()["PENDING"]
+            old_ps = globals()["PENDING_SYNC"]
+            old_ns = globals()["NOSYNC_FILE"]
+            try:
+                globals()["KN_HOME"] = Path(td)
+                globals()["PENDING"] = Path(td) / "pending-hints.txt"
+                globals()["PENDING_SYNC"] = Path(td) / "pending-sync.json"
+                globals()["NOSYNC_FILE"] = Path(td) / "nosync-projects.json"
+                assert not is_nosync("prj")
+                mark_nosync("prj")
+                assert is_nosync("prj")
+                assert load_pending("prj") == {}
+                save_pending("prj", {"a.md": "content a"})
+                assert load_pending("prj") == {"a.md": "content a"}
+                save_pending("prj", {"b.md": "content b"})
+                assert load_pending("prj") == {"a.md": "content a", "b.md": "content b"}
+                clear_pending("prj", ["a.md"])
+                assert load_pending("prj") == {"b.md": "content b"}
+                clear_pending("prj")
+                assert load_pending("prj") == {}
+            finally:
+                globals()["KN_HOME"] = old_kh
+                globals()["PENDING"] = old_p
+                globals()["PENDING_SYNC"] = old_ps
+                globals()["NOSYNC_FILE"] = old_ns
         print("ok")
     else:
         main()

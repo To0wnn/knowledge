@@ -4081,8 +4081,13 @@ async def sync_route(request: Request):
     removed here (a copy is kept in state/deleted/, like knowledge_delete)."""
     b = await request.json()
     dev = device.get()
-    if not (project := docs_sync_project(b.get("project"))):
-        return JSONResponse({"error": "sync needs a write token for the folder's project (.knowledge-project)"}, status_code=403)
+    asked = b.get("project")
+    if in_scope("claude/"):
+        return JSONResponse({"error": "admin device: docs are local/authoritative and not mirrored via /sync", "admin": True}, status_code=403)
+    if not (project := docs_sync_project(asked)):
+        if asked and asked in BUILTIN_PROJECTS:
+            return JSONResponse({"error": f"{asked} is a built-in project: docs are server-native and not mirrored via /sync", "builtin": True}, status_code=403)
+        return JSONResponse({"error": f"sync needs a write token for {asked or 'this project'} (.knowledge-project)"}, status_code=403)
     docs = PROJECTS[project][0]
     if b.get("project") not in (None, project):  # the folder's .knowledge-project names another project
         return JSONResponse({"error": f"this folder is marked for project {b.get('project')}, the token is for {project}"},
@@ -6471,14 +6476,25 @@ async def machine_action_result(request: Request):
                 a.update(status="done" if ok else "failed", result=result, done_at=time.time())
                 found.append(a)
     act = next((a for a in read_json(MACHINE_ACTIONS, {}).get(dev.get("machine", ""), []) if mine(a)), None)
-    rb = act["args"] if act and ok and act["action"] == "rollback" and act["args"].get("chat") and act.get("status") not in ("done", "failed") else None  # a resent result: said once
+    chat_act = act["args"] if act and act["action"] in ("rollback", "merge") and act["args"].get("chat") and act.get("status") not in ("done", "failed") else None  # a resent result: said once
     # the chat first, then "done": whoever sees the action end must find the chat as it now is (Undo or not)
-    if rb:  # an "Own branch" chat rolled back (or undone): said in its log, and the page offers Undo until the next message
+    if chat_act:  # an "Own branch" chat action (rollback or merge): said in its log
+        action_name = act["action"]
+
         def note(c):
-            c["rolled_back"] = not rb.get("undo")
-            chat_add(c, "info", result)
+            if action_name == "rollback":
+                if ok:
+                    c["rolled_back"] = not chat_act.get("undo")
+                    chat_add(c, "info", result)
+                else:
+                    chat_add(c, "info", f"Roll back failed: {result}")
+            elif action_name == "merge":
+                if ok:
+                    chat_add(c, "info", f"Merge: {result}")
+                else:
+                    chat_add(c, "info", f"Merge failed: {result}")
         with contextlib.suppress(ValueError):
-            if (f := chat_file(dev["machine"], rb["id"])).exists():
+            if (f := chat_file(dev["machine"], chat_act["id"])).exists():
                 await asyncio.to_thread(update_state, f, note)
     await asyncio.to_thread(update_state, MACHINE_ACTIONS, change)
     return JSONResponse({"ok": bool(found)}, status_code=200 if found else 404)

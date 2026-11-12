@@ -2430,6 +2430,12 @@ def board_contract(tmp, ck, fr, raw, er, et):
     assert not json.loads(ui(f"/ui/api/chat?machine={mid}&id={wid}")[2])["chat"]["rolled_back"], "a new turn: no Undo any more"
     http("GET", "/machine/chats", token=fr, headers=pc)
     http("POST", "/machine/chats/events", {"chat": wid, "events": [], "done": True}, token=fr, headers=pc)
+    # A failed roll back reports loudly to the chat log too:
+    assert rbk(wid)[0] == 200
+    got = json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"]
+    http("POST", "/machine/actions/result", {"id": got[0]["id"], "ok": False, "result": "dirty worktree"}, token=fr, headers=pc)
+    r = json.loads(ui(f"/ui/api/chat?machine={mid}&id={wid}")[2])
+    assert r["events"][-1]["kind"] == "info" and "Roll back failed: dirty worktree" in r["events"][-1]["text"], r["events"][-1]
     # Closed, an Own-branch chat gets a Review card (not before), its pc hears it is closed, and Merge names the chat.
     rv = {"into": "main", "ahead": 2, "nfiles": 1, "files": ["b.txt"], "commit": "feat: beds Sup3rSecret99", "blocked": ""}
     wrep = {**rep, "chats": {wid: {**wpill, "ahead": 2}}, "chatReviews": {wid: rv, "../x": rv}}
