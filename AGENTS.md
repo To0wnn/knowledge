@@ -4,7 +4,7 @@ A self-hosted knowledge server for AI coding agents: live docs and memory over M
 Antigravity, plus a web UI with a graph. Server in `server/` (Python, one Docker container), clients in `plugin/`.
 
 ## Commands
-- check (must pass before "done"; the pre-commit hook runs it; about 35 s, its steps and `test_server.py --shard i/5` side by side): `./check.sh`; `./check.sh --unless-passed` skips
+- check (must pass before "done"; the pre-commit hook runs it; about 25 s, its steps and `test_server.py --shard i` side by side, see SHARD_OF): `./check.sh`; `./check.sh --unless-passed` skips
   it when this exact tree passed on this checkout already (deploy.sh uses that); in an agent session run it (and deploy.sh) under
   `env -u KNOWLEDGE_URL -u KNOWLEDGE_TOKEN -u KNOWLEDGE_CHAT`, or the session's own server settings break the docs sync test (401)
 - run: deployed as a Docker stack; there is no local dev server
@@ -13,7 +13,7 @@ Antigravity, plus a web UI with a graph. Server in `server/` (Python, one Docker
   or `env -u KNOWLEDGE_URL uv run -q --with playwright python tests/ui_smoke.py` (read-only against the live server;
   an agent session has the public KNOWLEDGE_URL set, which would win over local.env and land on the sign-in page)
 - load test of the web UI against a server on a copy of real data, before and after a change: `tests/ui_load.py`
-- client test (about 2.5 min; `KNOWLEDGE_E2E_KEEP=1` keeps its temp folder): `uv run --project server python tests/clients_e2e.py`; CI runs it on Windows, macOS and Linux
+- client test (about 1.5 min on Linux, its phases in 3 processes side by side, see PHASE_SHARD; `KNOWLEDGE_E2E_KEEP=1` keeps its temp folder): `uv run --project server python tests/clients_e2e.py`; CI runs it on Windows, macOS and Linux
   (`clients.yml`, not for a push of only docs or web UI files; `check.yml` runs the check and the UI test)
 - a really hanging disk (Linux with FUSE; not in the check): `systemd-run --user --scope -q -p MemoryMax=3G uv run --project server --with fusepy python tests/storage_hang.py`
 - a really hanging disk under the companion (Linux with FUSE; not in the check): `systemd-run --user --scope -q -p MemoryMax=3G uv run --project server --with fusepy python tests/companion_hang.py`
@@ -21,9 +21,10 @@ Antigravity, plus a web UI with a graph. Server in `server/` (Python, one Docker
 - deploy: `./deploy.sh` (routine; it is also how work lands). It rsyncs the working tree, so it refuses uncommitted changes
   (with someone else's changes in the checkout, deploy from your own worktree; a worktree uses the main checkout's
   `local.env`). It refuses while CI is red on main (`--fix-main` for the deploy that fixes it), unless a newer run on main
-  is still going: then it waits for that one (up to 30 minutes). Under a lock on forge (a
+  is still going: then it waits for that one (up to 30 minutes); with nothing newer going it re-runs the red run's failed
+  jobs once, and green then is a flaky test (told on stderr and in Matrix, the deploy goes on). Under a lock on forge (a
   dead deploy's lock expires after 30 minutes; a held one is waited for up to 10 minutes, so start a deploy in the
-  background or with a long timeout, never retry it in a loop yourself) it merges `origin/main` in (a conflict: merge it yourself, deploy again),
+  background (its waits outlast a 10-minute foreground call), never retry it in a loop yourself) it merges `origin/main` in (a conflict: merge it yourself, deploy again),
   hands out the next plugin version when `plugin/` changed, runs the check on the combined tree, refuses a checkout
   without the live commit (`--replace-live` takes it off the server on purpose) and pushes to `origin/main` before it
   goes live (live is always in main)

@@ -48,6 +48,7 @@ HOOKS = Path(__file__).resolve().parent
 sys.path.insert(0, str(HOOKS))
 import model_settings  # noqa: E402  (next to this file)
 import agent_hooks  # noqa: E402  (the wake code and the session registry)
+import awake  # noqa: E402  (no idle sleep while an agent works)
 import chat  # noqa: E402  (chats from the web UI)
 import hook_status  # noqa: E402  (failures reported to the server)
 import project_marker  # noqa: E402
@@ -1517,6 +1518,64 @@ def chat_busy(cid: str) -> bool:
     return cid in chat.PENDING or (bool(lv.busy or lv.turn_open or lv.subs or lv.bg) if lv and lv.alive() else cid in chat.RUNNING)
 
 
+ROLLBACK_NOTE = ("(knowledge web UI: the files in your worktree were rolled back to before your last turn; that turn's changes "
+                 "are gone (kept as {ref}). Re-read files before relying on them.)\n\n")
+
+
+def chat_turn_start(cid: str, cwd: str, text: str) -> str:
+    """A turn of an "Own branch" chat starts (chat.py, under START_LOCK): a checkpoint of its worktree, which Roll back
+    goes back to, and the message with the note of a roll back since its last turn in front."""
+    try:
+        workers.checkpoint(cwd, "chat-" + cid)
+    except (OSError, subprocess.SubprocessError) as e:
+        log("error", "Could not checkpoint a chat's worktree: Roll back would go back further than its last turn", f"chat {cid}: {e}"[:300])
+    if text.lstrip().startswith("/"):  # a slash command must stay first: the note waits for the next message
+        return text
+    with LOCK:
+        rbs = load("chat_rollbacks.json", {})
+        if not (rbs.get(cid) or {}).get("note"):
+            return text
+        rbs[cid]["note"] = False
+        save("chat_rollbacks.json", rbs)
+    return ROLLBACK_NOTE.format(ref=workers.CKPT + "chat-" + cid + "-undo") + text
+
+
+chat.turn_start = chat_turn_start
+
+
+def chat_rollback(cid: str, undo: bool) -> str:
+    """Roll an "Own branch" chat's worktree back to before its last turn (files and branch; the conversation stays), or
+    undo that while no turn ran since. Only its own linked worktree on its chat/ branch, never a checkout, and only
+    while nothing of it runs or waits; the state before is kept on the -undo checkpoint."""
+    name = "chat-" + cid
+    with chat.START_LOCK:  # a message for this chat starts its turn (and its checkpoint) under the same lock
+        if chat_busy(cid):
+            raise RuntimeError(f"chat {cid} is working: roll back once its turn, subagents and shells have ended")
+        folder = load("chat_worktrees.json", {}).get(cid)
+        where = workers.worktree(folder, cid, prefix="chat", make=False) if folder else {}
+        wt = project_marker.worktree(Path(where["cwd"])) if where.get("cwd") else None
+        if not wt or Path(wt[0]).resolve() != Path(where["worktree"]).resolve() \
+                or workers.git(wt[0], "symbolic-ref", "--short", "-q", "HEAD").stdout.strip() != f"chat/{workers.safe(cid)}":
+            raise RuntimeError(f"chat {cid} has no worktree of its own on this pc (Own branch)")
+        ck = workers.git(wt[0], "rev-parse", "-q", "--verify", workers.CKPT + name).stdout.strip()
+        if not ck:
+            raise RuntimeError(f"chat {cid} has no checkpoint yet: no turn ran in its worktree since this plugin version")
+        with LOCK:
+            rec = load("chat_rollbacks.json", {}).get(cid) or {}
+        back = rec.get("ck") == ck and not rec.get("undone")  # rolled back, and no turn since (a turn makes a new checkpoint)
+        if undo and not back:
+            raise RuntimeError(f"nothing to undo in chat {cid}: no roll back since its last turn")
+        if not undo and back:
+            raise RuntimeError(f"chat {cid} is rolled back to before its last turn already (Undo roll back puts it back)")
+        workers.rollback(wt[0], name + "-undo" if undo else name)
+        with LOCK:
+            save("chat_rollbacks.json", dict(list({**load("chat_rollbacks.json", {}), cid: {"ck": ck, "undone": undo, "note": not undo}}.items())[-50:]))
+    if undo:
+        return "Roll back undone: the files are as they were before it."
+    return (f"Rolled back the files and branch to before the last turn; the state before is kept as {workers.CKPT}{name}-undo "
+            "(Undo roll back, until the next turn). The agent is told with your next message.")
+
+
 def chat_reviews(now: float, gits: dict) -> dict:
     """For the review card of a closed "Own branch" chat: its branch against the branch it was made from. Only those
     with commits, the newest 20: the report has a size limit and this runs git every round."""
@@ -1873,6 +1932,10 @@ def one_round(only: str = "") -> dict:
     ws_now, later = load("workers.json", {}), self_state()["later"]
     # a chat runs in its own process and goes on through the companion's restart: only a game or a worker holds it back
     busy = workers.game_session() or any(w["status"] == "running" for w in ws_now.values())
+    working = any(w["status"] == "running" for w in ws_now.values()) or any(chat_busy(c) for c in {*chat.LIVE, *chat.RUNNING, *chat.PENDING})
+    if (why := awake.hold(working and not awake.off())) != st.get("awake_error", ""):  # said once, and once when it works again
+        log("error" if why else "sync", f"Could not keep this pc awake while an agent works: {why}" if why else "This pc is kept awake while an agent works again")
+        st["awake_error"] = why
     if knowledge_update_due(NEWEST["v"], [version(), *(plugin_version(a) for a in AGENTS if installed(a) and a not in later)], bool(busy), st.get("knowledge_updated", 0), now):
         st["knowledge_updated"] = now
         knowledge_update_soon()
@@ -1953,6 +2016,8 @@ def run_action(a: dict) -> str:
             w["archived"] = True
             save("workers.json", ws)
         return f"archived {args['id']}"
+    if act == "rollback" and args.get("chat"):  # an "Own branch" chat's worktree
+        return chat_rollback(str(args["id"]), args.get("undo") is True)
     if act == "rollback":
         with LOCK:
             ws = load("workers.json", {})
@@ -2542,9 +2607,11 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/local/api/unlink":
                 return self.send(200, {"result": unlink_folder(str(body.get("path", "")))}, origin=o)
             if path == "/local/api/tick":
+                UPDATE_NOW.set()
                 return self.send(200, tick(), origin=o)
             if path == "/local/api/wake":  # the wake hook: no waiting for a round, which may wait for one already running
                 WAKE.set()
+                UPDATE_NOW.set()
                 return self.send(200, {"woken": True}, origin=o)
             if path == "/local/api/update-agents":
                 update_agents_soon()
@@ -2570,14 +2637,18 @@ TASK_NAME = "Knowledge companion"  # the Scheduled Task knowledge-agent.py insta
 
 
 def restart() -> None:
+    awake.hold(False)  # execv keeps the pid, so the hold's watch would never see this process end; the next round takes it again
     if os.name != "nt":
+        log("info", "Re-executing companion process", "execv")
         os.execv(sys.executable, [sys.executable, *sys.argv])
     # Windows: exec would leave the exclusive port taken for a moment. Under the Scheduled Task the task must stay the owner,
     # or uninstalling could not stop it, so a detached helper asks the task to run again once this process has gone.
     flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
     under_task = subprocess.run(["schtasks", "/Query", "/TN", TASK_NAME], capture_output=True).returncode == 0
     again = f'schtasks /Run /TN "{TASK_NAME}"' if under_task else subprocess.list2cmdline([sys.executable, *sys.argv])
-    helper = lambda f: subprocess.Popen(f"cmd /c ping -n 4 127.0.0.1 >nul & {again}", shell=False, stdin=subprocess.DEVNULL,
+    log("info", "Spawning companion restart helper", f"under_task={under_task}")
+    cmd = f"cmd /c ping -n 2 127.0.0.1 >nul & {again}" if under_task else [sys.executable, *sys.argv]
+    helper = lambda f: subprocess.Popen(cmd, shell=False, stdin=subprocess.DEVNULL,
                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=f)
     try:
         helper(flags | subprocess.CREATE_BREAKAWAY_FROM_JOB)
@@ -3014,16 +3085,27 @@ class LocalServer(ThreadingHTTPServer):
 
 # Windows keeps an exclusive port taken after its process ended, until that process's connections are gone (Microsoft,
 # "Using SO_REUSEADDR and SO_EXCLUSIVEADDRUSE"; 10048 in CI right after a restart): a restart that gave up there leaves no companion.
-BIND_WAIT = 30 if os.name == "nt" else 0
+BIND_WAIT = float(os.environ.get("KNOWLEDGE_COMPANION_BIND_WAIT") or (30 if os.name == "nt" else 0))  # env: tests
 
 
 def bind_local(addr: tuple, wait: float) -> LocalServer:
+    t0 = time.monotonic()
+    retries = 0
+    last_err = None
     end = time.time() + wait
     while True:
         try:
-            return LocalServer(addr, Handler)
-        except OSError:
+            srv = LocalServer(addr, Handler)
+            waited = time.monotonic() - t0
+            msg = f"Bound {addr[0]}:{addr[1]} after {waited:.1f} s ({retries} retries)" if (retries > 0 or waited > 0.5) else f"Bound {addr[0]}:{addr[1]} instantly"
+            log("sync", msg, str(last_err) if last_err else "")
+            return srv
+        except OSError as e:
+            retries += 1
+            last_err = e
             if time.time() >= end:
+                waited = time.monotonic() - t0
+                log("error", f"Could not bind {addr[0]}:{addr[1]} after {waited:.1f} s ({retries} retries)", str(e)[:300])
                 raise
             time.sleep(0.5)
 
@@ -3350,6 +3432,7 @@ def main(argv: list):
                 raise AssertionError("an older session's rollback would drop the hand-over's commits")
             except RuntimeError as e:
                 assert "roll back T-1-cont instead" in str(e), e
+        g["STATE"] = Path(tmp_state)  # back: the checks below would write into the removed folder and leave it in /tmp
         # The board's git pill: a branch 2 commits ahead of main, 3 changed files; the diff shows commits and edits.
         globals()["workers"] = workers_mod
         if shutil.which("git"):
@@ -3525,6 +3608,51 @@ def main(argv: list):
                     g("branch", "-q", "--unset-upstream", "main")
                     g("remote", "remove", "origin")
                     g("branch", "-q", "-D", "side")
+                    # Roll back an Own-branch chat: a checkpoint per turn start, files and branch back, refused while it
+                    # works or outside its worktree, Undo once, and the note goes in front of the next message.
+                    cid, rpath = "0123456789ab", workers.CKPT + "chat-0123456789ab"
+                    save("chat_worktrees.json", {cid: tmp + "/r", "fedcba987654": tmp + "/r"})
+                    wtc = Path(wt2)
+                    workers.git(wtc, "reset", "-q", "--hard", check=True)
+                    assert chat_turn_start(cid, str(wtc), "first") == "first" and workers.git(wtc, "rev-parse", "-q", "--verify", rpath).returncode == 0
+                    (wtc / "a.txt").write_text("turn\n")
+                    (wtc / "made.txt").write_text("new\n")
+                    workers.git(wtc, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qam", "in the turn", check=True)
+                    head_turn = workers.git(wtc, "rev-parse", "HEAD").stdout
+                    chat.PENDING[cid] = [None]
+                    try:
+                        run_action({"action": "rollback", "args": {"project": "p", "id": cid, "chat": True}})
+                        raise AssertionError("never while a message of it waits")
+                    except RuntimeError as e:
+                        assert "working" in str(e), e
+                    finally:
+                        chat.PENDING.pop(cid)
+                    try:
+                        run_action({"action": "rollback", "args": {"project": "p", "id": "fedcba987654", "chat": True}})
+                        raise AssertionError("a chat without a worktree of its own")
+                    except RuntimeError as e:
+                        assert "no worktree of its own" in str(e), e
+                    assert "Rolled back" in run_action({"action": "rollback", "args": {"project": "p", "id": cid, "chat": True}})
+                    assert (wtc / "a.txt").read_text() == "one\n" and not (wtc / "made.txt").exists() and workers.git(wtc, "rev-parse", "HEAD").stdout != head_turn
+                    assert git_state(tmp + "/r")["changed"] == 0, "the folder's own checkout is untouched"
+                    try:
+                        run_action({"action": "rollback", "args": {"project": "p", "id": cid, "chat": True}})
+                        raise AssertionError("twice would overwrite the undo with the rolled back state")
+                    except RuntimeError as e:
+                        assert "already" in str(e), e
+                    assert "undone" in run_action({"action": "rollback", "args": {"project": "p", "id": cid, "chat": True, "undo": True}})
+                    assert (wtc / "a.txt").read_text() == "turn\n" and (wtc / "made.txt").exists() and workers.git(wtc, "rev-parse", "HEAD").stdout == head_turn
+                    assert chat_turn_start(cid, str(wtc), "x") == "x", "undone before a message: no note"
+                    run_action({"action": "rollback", "args": {"project": "p", "id": cid, "chat": True}})
+                    assert chat_turn_start(cid, str(wtc), "/compact") == "/compact", "a slash command stays first"
+                    told = chat_turn_start(cid, str(wtc), "next")
+                    assert told == ROLLBACK_NOTE.format(ref=rpath + "-undo") + "next" and chat_turn_start(cid, str(wtc), "more") == "more", told
+                    try:
+                        run_action({"action": "rollback", "args": {"project": "p", "id": cid, "chat": True, "undo": True}})
+                        raise AssertionError("a turn ran since: Undo would throw that turn away")
+                    except RuntimeError as e:
+                        assert "nothing to undo" in str(e), e
+                    workers.git(wtc, "reset", "-q", "--hard", "main", check=True)
                 finally:
                     workers.WORKTREES = real_wt
         # A finished worker's tail: its last FOLLOW_TAIL_LINES lines, said cut, the offset at the log's end.
