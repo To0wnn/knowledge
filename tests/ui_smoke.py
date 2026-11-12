@@ -416,6 +416,30 @@ async def admin(browser, secret: str) -> None:
     else:
         print("skip token screen checks (server older than the onboarding change)")
     check(not await pg.locator("#error").is_visible(), "admin page shows no error")
+    # Rename: on every project made in the UI for an admin, and for a person on the ones they made. The server's answers
+    # are faked here, so nothing is renamed (this also runs read-only against the live server).
+    built = await pg.evaluate("state.projects.filter((p) => !p.builtin).length")
+    await pg.click('[data-sec="projects"]')
+    renames = await pg.locator("#project-rows button", has_text="Rename").count()
+    check(renames == built, f"admin: a Rename button on each project made in the UI ({renames} of {built})")
+    fake = {"admin": False, "user": "erin", "tokens": [], "limits": {"projects": 3, "tokens": 5, "project_mb": 20, "created": 1},
+            "projects": [{"name": "erinproj", "docs": "erinproj", "memory": "erinproj-memory", "builtin": False, "label": None, "mode": "write", "mine": True, "was": ["oldname"]},
+                         {"name": "shared1", "docs": "shared1", "memory": "shared1-memory", "builtin": False, "label": None, "mode": "read", "mine": False, "was": []}]}
+    sent = []
+    await pg.route("**/ui/api/admin", lambda r: r.fulfill(status=200, json=fake) if r.request.method == "GET" else r.continue_())
+    await pg.route("**/ui/api/admin/project-rename", lambda r: (sent.append(r.request.post_data_json), r.fulfill(status=200, json={
+        "ok": True, "project": "erinnew", "state_files": 3, "history": 2, "memos": [], "relinked": []}))[1])
+    await pg.evaluate("load()")
+    rows = await pg.locator("#project-rows tr").all_inner_texts()
+    mine = pg.locator("#project-rows tr", has_text="erinproj").locator("button", has_text="Rename")
+    check(await mine.count() == 1 and await pg.locator("#project-rows tr", has_text="shared1").locator("button").count() == 0
+          and "was oldname" in rows[0], f"a person: Rename only on the project they made, with its old name {rows}")
+    pg.once("dialog", lambda d: asyncio.ensure_future(d.accept("erinnew")))
+    await mine.click()
+    check(await comes_true(pg, "$('toasts').innerText.includes('Renamed erinproj to erinnew')") and sent == [{"name": "erinproj", "to": "erinnew"}],
+          f"a person: Rename asks the new name and sends it {sent}")
+    await pg.unroute("**/ui/api/admin")
+    await pg.unroute("**/ui/api/admin/project-rename")
     check(not errors, f"no page errors on the admin page {errors[:2]}")
     await ctx.close()
 
