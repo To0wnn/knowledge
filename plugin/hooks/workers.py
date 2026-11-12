@@ -512,11 +512,14 @@ def merge(w: dict) -> str:
 
 
 def remove(w: dict) -> str:
-    """The worktree and branch of a merged worker: git refuses a worktree with changes, so nothing is lost."""
+    """The worktree and branch of a merged worker (merged() said so). A worktree with uncommitted or untracked files
+    stays: --force (needed for a locked one) would delete them. -D: a squash-landed branch is not an ancestor."""
+    if Path(w["worktree"]).is_dir() and git(w["worktree"], "status", "--porcelain").stdout.strip():
+        return "worktree kept: it has uncommitted files"
     r = git(w["repo"], "worktree", "remove", "--force", w["worktree"])
     if r.returncode:
         return f"worktree kept: {(r.stderr or r.stdout).strip()[:160]}"
-    git(w["repo"], "branch", "-d", w["branch"])
+    git(w["repo"], "branch", "-D", w["branch"])
     return "worktree and branch removed"
 
 
@@ -728,6 +731,9 @@ def self_test():
         git(repo, "commit", "-qm", "squashed", check=True)
         git(repo, "branch", "-q", "--set-upstream-to=squash", "main", check=True)
         assert merged(w), "work landed by a squash merge is merged too"
+        (Path(w["cwd"]) / "late.txt").write_text("x\n")
+        assert remove(w) == "worktree kept: it has uncommitted files" and Path(w["worktree"]).is_dir(), "uncommitted work is never removed"
+        (Path(w["cwd"]) / "late.txt").unlink()
         git(repo, "branch", "-q", "--unset-upstream", "main", check=True)
         git(repo, "checkout", "-q", "main", check=True)
         git(repo, "branch", "-q", "-D", "squash", check=True)

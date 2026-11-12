@@ -1444,6 +1444,9 @@ def landed_in(path: str, base: str) -> list:
     return [base] + ([up.stdout.strip()] if up.returncode == 0 and up.stdout.strip() else [])
 
 
+_HOLDS: dict = {}  # (branch commit, landed commit) -> workers.holds(): commits never change, so it never goes stale
+
+
 def loose_branches(path: str, landed: list) -> list:
     """Local branches with work in none of `landed` that nobody watches: checked out nowhere (an agent that went back
     to main without merging), or only in a worktree the companion did not make (a Claude Code or Codex subagent's,
@@ -1460,11 +1463,20 @@ def loose_branches(path: str, landed: list) -> list:
             used[ln[len("branch refs/heads/"):]] = first or own in at.resolve().parents  # True: someone watches it
         elif not ln:
             first = False
-    refs = (ln.rsplit(" ", 1) for ln in run("for-each-ref", *(f"--no-merged={b}" for b in landed), "--sort=-committerdate",
-                                             "--format=%(refname:short) %(committerdate:unix)", "refs/heads") if " " in ln)
+    refs = (ln for ln in run("for-each-ref", *(f"--no-merged={b}" for b in landed), "--sort=-committerdate",
+                                             "--format=%(objectname) %(committerdate:unix) %(refname:short)", "refs/heads") if ln.count(" ") >= 2)
+    tips = {b: (run("rev-parse", "-q", "--verify", f"{b}^{{commit}}") or [""])[0] for b in landed}
+    if len(_HOLDS) > 2000:
+        _HOLDS.clear()
+
+    def held(c: str) -> bool:  # landed by content (a squash, rebase or PR); asked each round per repo, so remembered
+        for t in filter(None, tips.values()):
+            if (c, t) not in _HOLDS:
+                _HOLDS[(c, t)] = workers.holds(path, c, t)
+        return any(_HOLDS[(c, t)] for t in filter(None, tips.values()))
     out = []
-    for n, t in list(refs)[:20]:  # shortcut: the newest 20 only (each costs a merge-tree); raise when repos keep more
-        if t.isdigit() and not used.get(n) and not any(workers.holds(path, n, b) for b in landed):
+    for c, t, n in (ln.split(" ", 2) for ln in list(refs)[:50]):  # shortcut: the newest 50 only (held() is remembered, so cheap); raise when repos keep more
+        if t.isdigit() and not used.get(n) and not held(c):
             out.append({"branch": n, "at": int(t), **({"worktree": True} if n in used else {})})
     return out[:5]
 
