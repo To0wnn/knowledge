@@ -3703,6 +3703,13 @@ def main():
         assert [(x["action"], x["args"]) for x in acts] == [("link_folder", {"path": "/home/x/apples", "project": "grove"})], acts
         assert http("POST", "/machine/report", orep, token=ot, headers=opc)[0] == 200  # still the old name: asked once, not again
         assert json.loads(http("GET", "/machine/actions", token=ot, headers=opc)[1])["actions"] == []
+        # An admin links and unlinks folders on anyone's pc (and browses its folders for that); nobody else does.
+        assert admin("/ui/api/machines/action", {"machine": "eeeeeeeeeeeeeeee", "action": "unlink_folder", "args": {"path": "/home/x/apples"}})[0] == 200
+        assert admin("/ui/api/machines/action", {"machine": "eeeeeeeeeeeeeeee", "action": "unlink_folder", "args": {"path": "/home/x/apples"}}, user("erin"))[0] != 200
+        assert admin("/ui/api/git/diff", {"machine": "eeeeeeeeeeeeeeee", "dirs": ""})[0] == 200
+        assert admin("/ui/api/git/diff", {"machine": "eeeeeeeeeeeeeeee", "dirs": ""}, user("erin"))[0] != 200
+        acts = json.loads(http("GET", "/machine/actions", token=ot, headers=opc)[1])["actions"]
+        assert [(x["action"], x["by"]) for x in acts] == [("unlink_folder", "alice")], acts
         barn = next(m for m in json.loads(raw("GET", "/ui/api/machines", headers=ck)[2])["machines"] if m["id"] == "eeeeeeeeeeeeeeee")
         assert [w["project"] for a in barn["agents"].values() for w in a["workers"]] == ["grove"], barn["agents"]  # reported under the old name
         assert admin("/ui/api/admin/project", {"name": "orchard"})[0] == 400  # the old name stays reserved for its links

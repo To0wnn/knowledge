@@ -980,8 +980,10 @@ async def shell(browser, devices, secret: str) -> None:
       const box = [...document.querySelectorAll('#machines .mx-proj')].find((b) => b.querySelector('h3')?.textContent === 'friendproj');
       const out = box ? [box.innerText, box.querySelectorAll('button').length] : null;
       machinesRes = was; drawMachines(); return out; })()""")
-    check(bool(other) and "friend-pc" in other[0] and "C:\\Friend" in other[0] and "view only" in other[0] and "No folder linked" not in other[0] and other[1] == 0,
-          f"Machines › Folders: a folder on someone else's pc shows, read-only {other}")
+    admin = await pg.evaluate("me.admin")  # an admin may unlink there too; anyone else only sees it
+    check(bool(other) and "friend-pc" in other[0] and "C:\\Friend" in other[0] and "No folder linked" not in other[0]
+          and (("their pc" in other[0] and other[1] == 1) if admin else ("view only" in other[0] and other[1] == 0)),
+          f"Machines › Folders: a folder on someone else's pc shows ({'admin: Unlink' if admin else 'read-only'}) {other}")
     pill = await pg.evaluate("""(() => { const p = el('span', 'pill yolo', 'YOLO'); document.body.append(p); const s = getComputedStyle(p), b = s.backgroundColor, c = s.color;
       const d = el('span'); d.style.color = 'var(--bad)'; document.body.append(d); const bad = getComputedStyle(d).color; p.remove(); d.remove(); return [b, bad, c]; })()""")
     check(pill[2] == pill[1] and pill[0] != "rgba(0, 0, 0, 0)", f"Machines: the YOLO label is red and stands out {pill}")

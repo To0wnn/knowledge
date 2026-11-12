@@ -6590,9 +6590,10 @@ async def ui_machine_action(request: Request):
         return JSONResponse({"error": str(e) or "send JSON {machine, action, args}"}, status_code=400)
     row = next((r for r in await asyncio.to_thread(machine_rows) if r["id"] == mid), None)
     dev, tokens = device.get(), read_json(TOKENS_FILE, {})
-    # an admin may update the knowledge plugin on anyone's pc, nothing else there, and only while its token allows
-    # remote control (8 Nov 2026): the pc's own settings, agents and folders stay its owner's
-    admin_update = action == "update_plugin" and bool(dev.get("admin")) and bool(row) and not row["own"]
+    # an admin may update the knowledge plugin on anyone's pc and link or unlink its folders, nothing else there, and only
+    # while its token allows remote control: its settings, agents and chats stay its owner's (8 Nov 2026; folders added
+    # 12 Nov 2026, an admin manages every pc's links without View as)
+    admin_update = action in ("update_plugin", "link_folder", "unlink_folder") and bool(dev.get("admin")) and bool(row) and not row["own"]
     # a member of a project shared on this pc for use merges that project's worker branches there, as its owner may
     share = read_json(SHARES_FILE, {}).get(mid) or {}
     shared_merge = action == "merge" and bool(row) and not row["own"] and not args.get("chat") \
@@ -7320,6 +7321,16 @@ def own_machine(mid: str) -> dict | None:
     """The Machines row of `mid` when this person may steer it (as for remote actions), else None."""
     row = next((r for r in machine_rows() if r["id"] == mid), None)
     return row if row and row["own"] and not row.get("old") else None
+
+
+def admin_row(mid: str) -> dict | None:
+    """For an admin: the Machines row of anyone's pc whose token allows remote control, marked admin_reach (link and
+    unlink its folders, update its plugin); else None."""
+    tokens = read_json(TOKENS_FILE, {})
+    row = next((r for r in machine_rows() if r["id"] == mid), None) if device.get().get("admin") else None
+    if not row or row.get("old") or not any(n in tokens and agents_on(tokens[n]) for n in row["tokens"]):
+        return None
+    return {**row, "admin_reach": True}
 
 
 def chat_machine(mid: str) -> dict | None:
@@ -8384,7 +8395,11 @@ async def ui_git_diff(request: Request):
         b = (await request.json()) if request.method == "POST" else dict(request.query_params)
         mid = str(b.get("machine", ""))
         row = await asyncio.to_thread(chat_machine, mid)
-        if not row or not row["own"] and not (request.method == "GET" or b.get("chat") and "dirs" not in b and "worker" not in b):
+        # an admin links and unlinks folders on anyone's pc (Machines › Folders), so may browse its folders for that
+        admin_dirs = device.get().get("admin") and (request.method == "GET" or "dirs" in b) and (not row or not row["own"])
+        if admin_dirs and (reach := await asyncio.to_thread(admin_row, mid)):
+            row = reach
+        if not row or not row["own"] and not (request.method == "GET" or admin_dirs or b.get("chat") and "dirs" not in b and "worker" not in b):
             raise PermissionError(await asyncio.to_thread(not_own, mid))  # a shared pc: only a chat's diff
         q = chat_file(mid, "0" * 12).parent / "diffs.json"
         guest_tokens = None
@@ -8424,7 +8439,8 @@ async def ui_git_diff(request: Request):
         for k in [k for k, v in d.items() if now - v.get("at", 0) > DIFF_KEEP]:
             d.pop(k)
         d[rid] = {**target, "status": "waiting", "at": now, "by": dev.get("user", ""),
-                  "tokens": guest_tokens if guest_tokens is not None else [n for n in row["tokens"] if n in tokens and own_token(tokens[n], dev)]}
+                  "tokens": guest_tokens if guest_tokens is not None else [n for n in row["tokens"] if n in tokens and (
+                      own_token(tokens[n], dev) or row.get("admin_reach") and agents_on(tokens[n]))]}
     q.parent.mkdir(parents=True, exist_ok=True)
     await asyncio.to_thread(update_state, q, add)
     return JSONResponse({"ok": True, "id": rid})
