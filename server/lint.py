@@ -105,7 +105,7 @@ HINTS = {
     "big_memo_without_archive": ["Big memo without archive", f"Move the history to {W['archive']}/<name>_{W['archive']}.md."],
     "stale_unchecked_fact": ["Fact unchecked for long", f"Check it on the live system, then mark it ({W['checked']} <date>)."],
     "open_overdue": ["Open item overdue", f"An item marked '{W['open']} <date>' passed its date: do it, or move the date with a reason."],
-    "review_due": ["Due for a check", f"IPs or versions not checked for a while: check them on the live system, then mark ({W['checked']} <date>)."],
+    "review_due": ["Due for a check", f"Facts not checked for a while (45 days with IPs or versions, 90 without): check them on the live system, then mark ({W['checked']} <date>)."],
 }
 # Findings that are notes, not problems: the Health page shows each group apart and collapsed, so they never bury the rest.
 GROUPS = [{"id": "usage", "title": "Token usage", "checks": ["usage_outlier"], "collapsed": True}]
@@ -136,6 +136,9 @@ STALE_UNCHECKED_DAYS = 60
 CHANGEABLE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b|\bv?\d+\.\d+\.\d+\b")
 CHECKED = re.compile(r"\b(?:gecontroleerd|checked) (\d[^)]*?)\)", re.I)
 REVIEW_AFTER_DAYS = 45  # Guru-style review cycle; measured 21 Oct 2026: 8 of 68 such memos were older
+# Memos without IPs/versions still hold facts that drift (which host runs what, a setting); measured 12 Nov 2026:
+# 18 such memos (homelab, anpitek, trade), all dated and none older than 90 days, so nothing was flagged yet.
+REVIEW_PLAIN_AFTER_DAYS = 90
 
 
 # Question words and fillers (Dutch and English) that say nothing about the subject of a search.
@@ -339,11 +342,12 @@ def lint(files: dict[str, str], today: date | None = None, mem: str = "memory") 
             report["missing_structure"].append(f"{name}: no {' / '.join(gone)}")
         check_decisions(report, name, text, today)
         # The whole text: IPs and versions usually sit in `code`.
-        facts = len(CHANGEABLE.findall(text)) if memo_type(text) not in ("feedback", "user") else 0
-        checked = last_checked(text, today) if facts else None
-        if facts and (not checked or (today - checked).days > REVIEW_AFTER_DAYS):
-            since = f"not checked since {checked.isoformat()}" if checked else "never checked (no date)"
-            report["review_due"].append(f"{name}: {since} ({facts} addresses/versions)")
+        if memo_type(text) not in ("feedback", "user"):
+            facts = len(CHANGEABLE.findall(text))
+            checked = last_checked(text, today)
+            if not checked or (today - checked).days > (REVIEW_AFTER_DAYS if facts else REVIEW_PLAIN_AFTER_DAYS):
+                since = f"not checked since {checked.isoformat()}" if checked else "never checked (no date)"
+                report["review_due"].append(f"{name}: {since} ({facts} addresses/versions)" if facts else f"{name}: {since}")
         hits = sum(1 for m in SECRET_HINT.finditer(re.sub(r"‹[^›\n]*›", "", text)) if looks_secret(m.group(0)))
         if hits:
             report["possible_secret_in_memo"].append(f"{name}: {hits} line(s) (values not shown)")
@@ -485,7 +489,10 @@ if __name__ == "__main__":  # self-check
     assert r7["review_due"] == ["o.md: not checked since 2026-08-01 (1 addresses/versions)",
                                 "v.md: not checked since 2026-06-01 (1 addresses/versions)",
                                 "w.md: never checked (no date) (1 addresses/versions)"], r7  # 2029 is no check
-    assert not r6["review_due"], r6  # k.md: IP, but a decision of 20 Oct
+    assert r6["review_due"] == ["n.md: never checked (no date)"], r6  # k.md: IP, but a decision of 20 Oct; n.md: no date at all
+    plain = "---\nmetadata:\n  type: project\n---\nhost forge runs the stack (gecontroleerd 1 jul 2026)\n"
+    r8 = lint({"memory/MEMORY.md": "", "memory/p.md": plain, "memory/q.md": plain.replace("1 jul", "1 sep")}, today=date(2026, 10, 20))
+    assert r8["review_due"] == ["p.md: not checked since 2026-07-01"], r8  # no IPs/versions: due after 90 days, not 45
     od = lint({"memory/MEMORY.md": "", "memory/d.md": "- open tot 21 okt 2026: HA-herhaling weghalen\n- Open tot 2026-10-30: later\n"
                "- open tot 19 okt 2026: rol `pa_egress` op modus `log`\n"
                "- open tot 20 okt 2026 zonder dubbele punt\n```\nopen tot 1 jan 2026: in code\n```\n"}, today=date(2026, 10, 22))
