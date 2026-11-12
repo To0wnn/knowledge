@@ -35,7 +35,9 @@ The companion that starts workers is described in [companion.md](companion.md); 
   (`open tot` also works). A new line without `from`/`start` is refused at write time; older lines keep working as
   "start now" and show as legacy. The server records who added each line; a task starts by itself only when its start
   condition is met and its writer is trusted (per project on the admin page; by default the project's owner and their
-  tokens, admins and the admins' own devices), otherwise the owner or an admin approves it in the Tasks tab. Only tasks
+  tokens, admins and the admins' own devices; any writer for a line pinned to its own device token,
+  `[<Owner>@<that token>, <ID>]`, since it steers only the pc that wrote it), otherwise the owner or an admin approves
+  it in the Tasks tab. A write that adds a line that waits for approval says so, and suggests that pin. Only tasks
   that may start reach an agent as "start now" (`/tasks`, the wake, `GET /tasks/ready`); the others are listed with the
   reason. One task is started on one machine only: the first device to take it holds a 30-minute lease
   (`state/task_leases.json`). `POST /tasks/woken` takes the lease (200 `{"lease"}`, or 409 `{"held_by"}` when another
@@ -57,10 +59,49 @@ The companion that starts workers is described in [companion.md](companion.md); 
 - **Where tasks show.** With Agents (remote control on) the sidebar has no Tasks entry and `#/tasks` opens the Agents
   list; the Tasks list stays for a person without Agents. In Agents: Needs you: approvals, results for a person, lines past their date, and a person's
   own lines ("for <name>", the same three answers). Queued: the open lines that wait or may start, with "Start on <pc>";
-  Assign… and Cancel task in the ⋯ menu, Remove (read) on a person's result. On the desktop grid, on top: the running workers (and stopped ones that need you) as compact cards with their
+  Assign to Claude / Codex / Gemini (picked, not typed), Give to chat: <title> (an open chat of yours in that project gets `pak <ID>` after its turn), New <agent> chat
+  takes it (one click: a chat of that agent starts in a folder of that project and says `pak <ID>`; the Tasks list has
+  the same as "Start chat now" next to Assign…) and Cancel task… in the ⋯ menu. On the desktop grid, on top: a Needs-you strip (the cards above), the running workers (and stopped ones that need you) as compact cards with their
   progress, Follow and Stop, and one line of chips that lists the queued tasks of the picked
   project (all projects: with the project's name; a chip opens the task in the list). An owner that is a project, device token or pc name (`trade`, `gema`) is
   no person: a session there takes the line at its next turn (`agent_owner`), so it queues "for a session of <name>".
+
+## Answering on the card
+
+Every Needs-you card is answered where it is, with the same few verbs (`ckItem` in `agents.js`); a click on a task card
+unfolds the whole line, from whom and for whom, its memo (Open in memo) and, when its writer is not trusted, "Written by
+<writer>, not by you or the project's owner".
+
+| Card | Main answer | Second | In ⋯ |
+|---|---|---|---|
+| Task waiting for approval | Approve, or Approve on <pc> only | Send back… (to its requester, with a remark) | Decline…, Always trust…, Later |
+| Result for you | Done (removes the line) | Send back… (to an agent, with a remark) | Later |
+| Review of a branch | Merge | View diff, Send back… (`<ID>-fix`) | Reject…, Later |
+| Line past its date, a person's line | Finished | +7 days | Cancel…, Later |
+
+- **Send back an approval** (`POST /ui/api/task/cancel` with `back: true` and a reason): the line becomes
+  `[<requester>, <ID>-done]: sent back by <user>: <remark>`, so the requester hears why and may write it again;
+  like a cancel, a task that starts after it waits.
+- **Send back a result** (`POST /ui/api/task/redo {project, id, agent, remark}`, owner or admin): the result line
+  becomes `- open until <+7 days> [<Agent>, <ID>-fix] from <user>, start now: <remark> (sent back: …)` in one edit
+  (not the result's own words: its writer may be someone the project does not trust; a cancelled result has nothing to redo);
+  a worker goes on on the task's branch (`-fix` like a hand-over). With no pc of yours running that agent's workers
+  for the project, a new chat of that agent takes it right away (`pak <ID>-fix`).
+- **Later** is one menu: in 1 hour, tomorrow 08:00, or hide until it changes (`/ui/api/board/dismiss`).
+- **Only mine / Everyone** (a switch in the Needs-you heading, list and grid; `needs_scope`, kept per person): Only
+  mine hides the person lines (tasks, results) for other names, Everyone (+n) shows them, marked `others`. Only mine
+  needs the names task lines give you (Settings, "My names in task lines", `task_names`; the switch asks once); without
+  names everything shows. The sidebar badge, the browser title and the Matrix messages count what the switch shows.
+- **Approve on <pc> only** (an approval from someone the project does not trust, written from a device token and not
+  pinned): the line is pinned to that pc (`[<Owner>@<token>, <ID>]`, through `/ui/api/task/assign`) and approved, so it
+  runs only where it was written, never on your own pcs, and their other lines still ask. The safe default for a
+  guest's own work in a shared project.
+- **Always trust <writer> in <project>…** (⋯ on an approval from a writer the project does not trust; owner or admin,
+  `POST /ui/api/task/trust`, only for a writer with a line waiting there): the writer joins the project's task
+  writers and the task is approved. Every other waiting line of theirs in the project starts too, and their words then
+  count as trusted: the confirm names those lines first (`writer_waiting`). "default" is never a writer's name. A project without a
+  list gets `["default", <writer>]`: "default" in a list keeps the default trust (owner, admins, own devices) and adds
+  to it; a list without it replaces the default, as before. The admin page (Projects, task writers) takes it away.
 
 ## Results handed back
 
@@ -89,7 +130,9 @@ The companion that starts workers is described in [companion.md](companion.md); 
   but left its task open (not claimed, not handed back) counts as failed: an error in the activity log and the
   stalled lane, plus the server's idle notice. Its prompt holds the task line and the rules: claim it, commit
   on the branch, never merge or push, hand back with `[<requester>, <ID>-done]: <result>; branch <name>; done: ...;
-  left: ...` (the server refuses a worker's hand-back without branch, done and left). Every worker is a new session; a
+  left: ...` (the server refuses a worker's hand-back without branch, done and left). A worker that cannot start yet
+  (a device it needs is offline) sets the line's `start` to tomorrow's date with the reason and ends: it then counts as
+  finished, not failed, and the task wakes again on that date. Every worker is a new session; a
   hand-over `<ID>-cont` goes on in the same worktree and branch, and the branch, the memo and the last hand-over line
   are all it knows. Workers are off on a new pc ("Workers allowed" in the companion's settings), at most one per
   agent unless its maximum says more, one while its usage limit is unknown, none while a Wolf game session runs (its
@@ -99,9 +142,11 @@ The companion that starts workers is described in [companion.md](companion.md); 
   renews the task's lease, so such a task shows as startable again (and gets the idle notice) instead of staying stuck. The companion knows a worker by its pid and that process's start time,
   so after a reboot a recorded worker counts as ended and a stop never hits a reused pid. A worker records the branch its
   worktree was made from (`base_branch`). When it ended and its result line `[<requester>, <ID>-done]` names its branch,
-  the Inbox shows a **Review** card under Needs you (`kind: review`): commits ahead of that branch, changed files, the
+  the Inbox shows a **Review** card under Needs you (`kind: review`) to that pc's owner and to whom the pc is shared
+  with for use in that project (Share "use" or "yolo"; not "view", and an admin's view of the pc gives none): commits ahead of that branch, changed files, the
   newest commit, the worker's done/left and the clause of its done text about tests (the server runs nothing).
-  **Merge** is the machine action `merge` (owner only): in the main checkout `git merge --no-ff -m "Merge task/<ID>"`
+  **Merge** is the machine action `merge` (the owner, or a member it is shared with for use in that project: only
+  this action, sent to the companion under the owner's token): in the main checkout `git merge --no-ff -m "Merge task/<ID>"`
   without hooks, fsmonitor or signing, only when that checkout is on that branch, has no uncommitted changes and no
   merge, cherry-pick, revert or rebase of its own going on, and no file the branch adds is already on disk (an ignored
   `.env` would be replaced). Never when the branch changes `.gitattributes`, `.gitmodules` or `.lfsconfig` or
@@ -113,7 +158,8 @@ The companion that starts workers is described in [companion.md](companion.md); 
   worktree (also of a finished worker that committed nothing and left it clean); unmerged a week after the worker ended: lint `worker_unmerged`. A branch in a linked folder with commits not in its base, checked out nowhere and last committed over 2 days ago (work handed back or written down as done that never reached main): lint `branch_unlanded`, from the companion's `loose` branches in its report. While an online pc runs an agent's workers
   for the project (workers allowed, a maximum above 0, the agent installed, a folder linked), that agent's interactive
   sessions (`chat=1`) take no lease: they hear a new task once as "runs in workers" and where one runs; when the user
-  says `pak <ID>` (or `take <ID>`) the plugin takes that task for the chat (agy, whose hooks never see the user's words,
+  says `pak <ID>` (or `take <ID>`; an ID without a digit, like BK-LOCK, only with its capital prefix as the line
+  spells it, so `pak e-mail` stays a sentence; the server matches the ID in any case) the plugin takes that task for the chat (agy, whose hooks never see the user's words,
   runs `agent_hooks.py take agy <ID>`), and no worker starts it. With no such pc, that agent's chats take and start
   its tasks themselves, as before 0.15. The Tasks tab says per task where it runs or why it waits there; a task that
   may start but that nobody took for 30 minutes (`KNOWLEDGE_TASK_IDLE`) gives one Matrix notice. A knowledge write

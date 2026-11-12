@@ -26,6 +26,11 @@ checks them against a few house rules, so a growing pile of agent memory stays f
 - **Session start context:** each agent gets the shared instructions, the house rules and the memory index of the
   project it works in, plus open items whose date has passed, hand-over tasks between agents and the project's
   fixable lint findings (at most 12), which the agent clears once the user's request is done.
+  Claude Code takes it in 6 hook outputs of at most 9000 characters (`PART_CHARS`); past 54k the end (the memory index,
+  the tasks) would be dropped without a word, so lint reports `context_near_limit` per project from 40k characters on
+  (and "cut off" past 6 parts). Short, specific rules pay; bulk costs: an AGENTS.md cut median runtime 28.6% in
+  [arXiv 2601.20404](https://arxiv.org/abs/2601.20404), while overview text raised cost over 20% in
+  [arXiv 2602.11988](https://arxiv.org/abs/2602.11988).
 
 ## Projects, lint and the archive
 

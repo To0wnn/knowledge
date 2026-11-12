@@ -5,7 +5,7 @@ pc with a companion report, a chat with events and a task line. What CI runs on 
   uv run --project server --with playwright python tests/ui_ci.py
 (needs Playwright's Chromium once: `uv run --with playwright python -m playwright install chromium`)
 
-Exit code is the smoke test's. KNOWLEDGE_SMOKE_SHOTS=<dir> also keeps screenshots; the server log is printed on a failure.
+Runs as 6 shards side by side (KNOWLEDGE_SMOKE_SHARDS=n to change). Exit code is the smoke test's. KNOWLEDGE_SMOKE_SHOTS=<dir> also keeps screenshots; the server log is printed on a failure.
 """
 import json
 import os
@@ -112,7 +112,26 @@ def seed() -> None:
         {"kind": "tool", "text": "Bash: ls beds"}, {"kind": "text", "text": "The two south beds need water."}]}, pc), "chat events")
 
 
+def shards(n: int, script: str = __file__) -> int:
+    """Run n copies of this script side by side, each with its own server and a share of the checks (the checks mostly
+    wait, so this cuts the wall time to about the longest shard); print each one's output, fail when one fails.
+    ui_smoke.py uses it too against the live server (script: itself, no server of its own)."""
+    with tempfile.TemporaryDirectory() as t:
+        runs = []
+        for i in range(n):
+            log = open(Path(t) / f"shard{i}.log", "w+")
+            runs.append((subprocess.Popen([sys.executable, script], env={**os.environ, "KNOWLEDGE_SMOKE_SHARD": f"{i}/{n}"},
+                                          stdout=log, stderr=subprocess.STDOUT), log))
+        codes = [proc.wait() for proc, _ in runs]
+        for i, (_, log) in enumerate(runs):
+            log.seek(0)
+            print(f"---- shard {i}/{n}: {'ok' if not codes[i] else 'FAILED'} ----\n{log.read()}", flush=True)
+    return 1 if any(codes) else 0  # a shard killed by a signal has a negative code
+
+
 if __name__ == "__main__":
+    if not os.environ.get("KNOWLEDGE_SMOKE_SHARD"):
+        sys.exit(shards(int(os.environ.get("KNOWLEDGE_SMOKE_SHARDS", "6"))))
     with tempfile.TemporaryDirectory() as t:
         server = start(Path(t))
         try:

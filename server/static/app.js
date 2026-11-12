@@ -63,11 +63,17 @@ const PURIFY = { FORBID_TAGS: ["style", "form", "input", "textarea", "select", "
 DOMPurify.addHook("afterSanitizeAttributes", (n) => {
   if (n.tagName === "IMG" && !/^(\/(?!\/)|data:image\/)/.test(n.getAttribute("src") || "")) n.removeAttribute("src");
 });
+// A link to a file on the agent's pc (agy writes [`x`](file:///C:/repo/x)): the sanitizer drops file: URLs, so its
+// path is kept aside as data-file (a chat turns it into a Files link, ckFileLinks).
+DOMPurify.addHook("beforeSanitizeAttributes", (n) => {
+  if (n.tagName === "A" && /^file:/i.test(n.getAttribute("href") || "")) n.setAttribute("data-file", n.getAttribute("href"));
+});
 const renderMd = (text) => DOMPurify.sanitize(marked.parse(text, { gfm: true }), PURIFY);
 const post = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* blocked */ } } };
-// A new history entry for a route (shell.js); the count lets Back stay inside the app instead of leaving it.
-const pushHash = (h) => { if (location.hash !== h) history.pushState({ n: (history.state?.n || 0) + 1 }, "", h); };
+// A new history entry for a route (shell.js); the count lets Back stay inside the app instead of leaving it, and `from`
+// tells Back whether the entry before is the page it should go up to (goBack).
+const pushHash = (h) => { if (location.hash !== h) history.pushState({ n: (history.state?.n || 0) + 1, from: location.hash }, "", h); };
 // A note path inside a route or link: each part encoded, so "?", "#", "%", spaces and accents survive a refresh and
 // match location.hash as the browser keeps it; parseRoute decodes it again.
 const encPath = (p) => p.split("/").map(encodeURIComponent).join("/");
@@ -146,6 +152,8 @@ async function refreshData() {
   indexGraph(); renderProjects(); renderTopics(); applyView();
   // a new note or one whose text changed pulses (size is the cheap tell; an edit of the same length is missed)
   if (old.size) for (const n of data.nodes) if (nodeIn(n) && (!old.has(n.id) || old.get(n.id).size !== n.size)) pulse(n.id);
+  // the release above cut a click's gather short (its promise never ends): gather again, and zoom if that was still owed
+  if (selected && mapOn && byId.get(selected)?.x != null) gather(selected, 1).then(() => { if (selected && zoomOwed) { zoomOwed = false; zoomToFocus(); } });
 }
 
 // ---------------------------------------------------------------- map rendering
@@ -176,9 +184,10 @@ function pulse(id, ms = PULSE_MS, flow = true) { // flow: its links flow too (no
   if (calm || !Graph) return;
   pulses.set(id, { t0: performance.now(), ms, flow }); pulse3d();
   if (!flow) return;
+  wakeMap(ms);
   animateHover(ms);
   clearTimeout(pulse.timer); // the links stop flowing once the last pulse is over
-  pulse.timer = setTimeout(() => { prunePulses(); Graph.linkDirectionalParticles(Graph.linkDirectionalParticles()); refresh3d(); }, ms + 50);
+  pulse.timer = setTimeout(() => { prunePulses(); if (Graph) { Graph.linkDirectionalParticles(Graph.linkDirectionalParticles()); wakeMap(1000); } refresh3d(); }, ms + 50);
 }
 const pulseLive = (p) => p && performance.now() - p.t0 < p.ms;
 // drawPulse removes a pulse only when 2D draws its note; a hidden map or 3D draws nothing, so expired ones go here too
@@ -279,13 +288,31 @@ function drawTopics(ctx, scale) {
 }
 
 // Keep redrawing while hover/selection animations run (link particles, easing); force-graph pauses
-// redraws when idle. A selection flows for a few seconds, then pauses to spare phone batteries.
-let settleTimer;
+// redraws and its animation loop when idle to spare phone batteries, CPU and GPU.
+let settleTimer, mapSleepTimer = 0;
+function wakeMap(ms = 2000) {
+  if (!Graph || !mapOn || map3d || document.hidden) return;
+  Graph.resumeAnimation();
+  clearTimeout(mapSleepTimer);
+  if (!settling && !tweening && !replay?.playing && !hover && pulses.size === 0) {
+    mapSleepTimer = setTimeout(() => {
+      if (Graph && mapOn && !map3d && !settling && !tweening && !replay?.playing && !hover && pulses.size === 0) {
+        Graph.pauseAnimation();
+      }
+    }, ms);
+  }
+}
 function animateHover(ms = 400) {
   if (calm) { if (!tweening && !replay) Graph.autoPauseRedraw(true); return; }
   Graph.linkDirectionalParticles(Graph.linkDirectionalParticles()); // re-evaluate which links flow
   Graph.autoPauseRedraw(false); clearTimeout(settleTimer);
-  if (!hover) settleTimer = setTimeout(() => { if (!tweening && !replay) Graph.autoPauseRedraw(true); }, ms);
+  wakeMap(ms + 1000);
+  if (!hover) settleTimer = setTimeout(() => {
+    if (!tweening && !replay) {
+      Graph.autoPauseRedraw(true);
+      wakeMap(1000);
+    }
+  }, ms);
 }
 
 // The overview fit: topic names are drawn at a fixed screen size and stick out past the outer notes, so pad by half
@@ -307,7 +334,7 @@ function zoomToFocus() {
 // beside the nodes sends everything home. Positions are animated, not simulated, so the island map comes back
 // exactly as it was and the rest of the map does not shift.
 const home = new Map(); // node -> {x, y} before focus mode moved it
-let tweenId = 0, hoverTimer, tweening = false, homeTween = 0; // homeTween: deselect's way home, which ends with the zoom out
+let tweenId = 0, hoverTimer, tweening = false, homeTween = 0, zoomOwed = false; // homeTween: deselect's way home, which ends with the zoom out
 
 function tween(moves, done) {
   const id = ++tweenId, t0 = performance.now(), ms = calm ? 0 : 450;
@@ -316,10 +343,10 @@ function tween(moves, done) {
     const k = ms ? Math.min(1, (now - t0) / ms) : 1, e = 1 - Math.pow(1 - k, 3); // ease-out cubic
     for (const m of moves) { m.n.x = m.n.fx = m.x0 + (m.x1 - m.x0) * e; m.n.y = m.n.fy = m.y0 + (m.y1 - m.y0) * e; m.n.vx = m.n.vy = 0; }
     if (k < 1) return requestAnimationFrame(step);
-    tweening = false; animateHover(selected ? 6000 : 400); // redraw pauses again once idle
+    tweening = false; animateHover(selected ? 4000 : 400); // redraw pauses again once idle
     if (done) done();
   };
-  tweening = true; Graph.autoPauseRedraw(false); requestAnimationFrame(step);
+  tweening = true; Graph.autoPauseRedraw(false); wakeMap(ms + 1500); requestAnimationFrame(step);
 }
 
 function gather(id, strength) {
@@ -355,8 +382,9 @@ function setFocus(id) {
 }
 
 const linkLit = (l) => focusSet.size && focusSet.has(linkId(l.source)) && focusSet.has(linkId(l.target));
-// Links flow from a note in focus, and from a note that just changed.
-const particles = (l) => (!calm && mapOn && (((hover || selected) && linkLit(l)) || [l.source, l.target].some((e) => { const p = pulses.get(linkId(e)); return p?.flow && pulseLive(p); })) ? 2 : 0);
+// Links flow from a note in focus (flowing for a few seconds after selection then pausing to rest), and from a note that just changed.
+let selectFlowUntil = 0;
+const particles = (l) => (!calm && mapOn && (((hover || (selected && performance.now() < selectFlowUntil)) && linkLit(l)) || [l.source, l.target].some((e) => { const p = pulses.get(linkId(e)); return p?.flow && pulseLive(p); })) ? 2 : 0);
 
 async function loadGraph() {
   data = await api("/ui/api/graph");
@@ -383,22 +411,23 @@ async function loadGraph() {
     .linkDirectionalParticleWidth(2.2).linkDirectionalParticleSpeed(0.006)
     .linkDirectionalParticleColor(() => tok("--accent"))
     .backgroundColor(tok("--canvas"))
-    .cooldownTicks(250) // the layout settles, then the simulation stops: no CPU while idle
+    .cooldownTicks(200) // the layout settles, then the simulation stops: no CPU while idle
     .onEngineStop(() => {
       settling = false;
       for (const n of data.nodes) if (n.held) { n.held = false; if (!home.has(n)) n.fx = n.fy = undefined; } // refreshData; a gathered node goes back with its focus
       if (zoomToFocus.again && selected) zoomToFocus();
-      else if (!loadGraph.fitted) Graph.zoomToFit(400, fitPad());
+      else if (!loadGraph.fitted) Graph.zoomToFit(mapOn ? 400 : 0, fitPad());
       zoomToFocus.again = false; loadGraph.fitted = true;
-      // a hidden map, laid out and fitted: stop force-graph's frame loop (60 a second on every other view); setMap resumes it
-      setTimeout(() => { if (!mapOn || map3d) Graph.pauseAnimation(); }, 500);
+      // a hidden map, laid out and fitted: stop force-graph's frame loop (60 a second on every other view); setMap resumes it.
+      // _animationCycle schedules requestAnimationFrame AFTER tickFrame/onEngineStop returns, so defer pauseAnimation past this frame.
+      setTimeout(() => { if (!mapOn || map3d) Graph.pauseAnimation(); else wakeMap(2000); }, 20);
     })
     .onNodeHover((n) => {
       if (touch) return;
       // a note gliding home under a still mouse is no hover: its gather would take over the way home, and the zoom out never comes
       const goingHome = tweening && tweenId === homeTween;
       hover = n ? n.id : null; if (!selected && !goingHome) setFocus(hover);
-      $("g2d").style.cursor = n ? "pointer" : ""; animateHover(selected ? 6000 : 400);
+      $("g2d").style.cursor = n ? "pointer" : ""; animateHover(selected ? 4000 : 400);
       clearTimeout(hoverTimer);
       if (!selected && !goingHome) hoverTimer = setTimeout(() => (hover ? gather(hover, 0.3) : releaseFocus()), hover ? 150 : 250);
     })
@@ -432,7 +461,8 @@ async function loadGraph() {
   };
   Graph.d3Force("gravity", gravity);
   Graph.onRenderFramePre(drawNebulas).onRenderFramePost(drawLabels);
-  new ResizeObserver(() => { const w = $("graph").clientWidth, h = $("graph").clientHeight; if (w && h) Graph.width(w).height(h); }).observe($("graph"));
+  for (const ev of ["pointerdown", "pointermove", "wheel", "touchstart"]) $("g2d").addEventListener(ev, () => wakeMap(), { passive: true });
+  new ResizeObserver(() => { const w = $("graph").clientWidth, h = $("graph").clientHeight; if (w && h) { Graph.width(w).height(h); wakeMap(1000); } }).observe($("graph"));
   renderProjects(); renderTopics(); applyView(true);
 }
 
@@ -567,9 +597,24 @@ function loadScript(src) {
   return new Promise((ok, bad) => { const s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = () => bad(new Error("The 3D map did not load")); document.head.append(s); });
 }
 // Only the visible map runs its frame loop (a hidden one cost 60 frames a second on every view).
+let g3SleepTimer = 0;
+function wake3d(ms = 20000) {
+  if (!G3 || !mapOn || !map3d || document.hidden) return;
+  G3.resumeAnimation();
+  clearTimeout(g3SleepTimer);
+  g3SleepTimer = setTimeout(() => {
+    if (!G3) return;
+    const c = G3.controls?.();
+    if (c) c.autoRotate = false;
+    if (G3 && mapOn && map3d && !hover && pulses.size === 0 && !replay?.playing) {
+      G3.pauseAnimation();
+    }
+  }, ms);
+}
 function syncAnim() {
-  if (Graph) mapOn && !map3d ? Graph.resumeAnimation() : Graph.pauseAnimation();
-  if (G3) mapOn && map3d ? G3.resumeAnimation() : G3.pauseAnimation();
+  const active = mapOn && !document.hidden;
+  if (Graph) active && !map3d ? wakeMap(2000) : Graph.pauseAnimation();
+  if (G3) active && map3d ? wake3d(20000) : G3.pauseAnimation();
 }
 async function setMap3d(on) {
   map3d = on; localStorage.setItem("kn_map3d", on ? "1" : "0");
@@ -579,7 +624,11 @@ async function setMap3d(on) {
     try { await build3d(); } catch (e) { toast(e.message); return setMap3d(false); }
     refresh3d();
     if (selected) fly3d(selected); else G3.zoomToFit(400, 40);
-  } else if (Graph && mapOn) Graph.zoomToFit(400, fitPad());
+    wake3d(20000);
+  } else if (Graph && mapOn) {
+    Graph.zoomToFit(400, fitPad());
+    wakeMap(2000);
+  }
   syncAnim();
 }
 function refresh3d() {
@@ -636,13 +685,34 @@ async function build3d() {
   let g3n = [];
   G3.d3Force("middle", Object.assign((alpha) => { for (const n of g3n) { n.vx -= n.x * 0.03 * alpha; n.vy -= n.y * 0.03 * alpha; n.vz -= n.z * 0.03 * alpha; } },
     { initialize: (ns) => { g3n = ns; } }));
-  new ResizeObserver(() => { const w = $("graph").clientWidth, h = $("graph").clientHeight; if (w && h) G3.width(w).height(h); }).observe($("graph"));
+  G3.renderer().setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+  new ResizeObserver(() => { const w = $("graph").clientWidth, h = $("graph").clientHeight; if (w && h) { G3.width(w).height(h); wake3d(1000); } }).observe($("graph"));
   // Idle orbit (as in brain-graph): after a few seconds without input the camera slowly circles; any input stops it.
-  const controls = G3.controls(), idle = () => { clearTimeout(idle.t); controls.autoRotate = false; if (!calm) idle.t = setTimeout(() => { controls.autoRotate = true; }, 6000); };
+  const controls = G3.controls(), idle = () => {
+    clearTimeout(idle.t);
+    controls.autoRotate = false;
+    wake3d(20000);
+    if (!calm) idle.t = setTimeout(() => {
+      controls.autoRotate = true;
+      wake3d(20000);
+    }, 6000);
+  };
   controls.autoRotateSpeed = 0.5;
-  for (const ev of ["pointerdown", "wheel", "pointermove"]) box.addEventListener(ev, idle, { passive: true });
+  for (const ev of ["pointerdown", "wheel", "pointermove", "touchstart"]) box.addEventListener(ev, idle, { passive: true });
   idle();
   set3dData();
+}
+
+function dispose3d(obj) {
+  if (!obj) return;
+  obj.traverse((child) => {
+    if (child.__dispose) child.__dispose();
+    if (child.geometry) child.geometry.dispose();
+    if (child.material) {
+      if (child.material.map && child.material.map !== glowTex) child.material.map.dispose();
+      child.material.dispose();
+    }
+  });
 }
 
 // 3D look: a soft glow sprite behind every note (one white texture, tinted per note) and the names of the best-connected
@@ -660,11 +730,13 @@ function glowTexture() {
 }
 const radius3d = (n) => Math.cbrt(1 + (n.src.degree || 0)) * 2.4; // 3d-force-graph's own sphere radius: cbrt(val) * relSize
 function node3d(n) {
+  if (n.__group) dispose3d(n.__group);
   const group = new THREE.Group(), dark = darkCanvas();
   const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: nodeColor(n.src) || "#888888", transparent: true,
     depthWrite: false, blending: dark ? THREE.AdditiveBlending : THREE.NormalBlending, opacity: dark ? 0.9 : 0.45 }));
   n.__gs = radius3d(n) * 7; glow.scale.set(n.__gs, n.__gs, 1); n.__glow = glow; group.add(glow);
   if ((n.src.degree || 0) >= labelMin) group.add(label3d(n.src.label, radius3d(n)));
+  n.__group = group;
   return group;
 }
 function label3d(text, r) {
@@ -674,14 +746,17 @@ function label3d(text, r) {
   g.lineWidth = 8; g.strokeStyle = tok("--canvas"); g.strokeText(text, 10, 26);
   g.fillStyle = tok("--ink"); g.fillText(text, 10, 26);
   const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
-  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
+  const sp = new THREE.Sprite(mat);
   sp.scale.set(c.width / 3.2, c.height / 3.2, 1); sp.position.y = -(r + 10); sp.renderOrder = 2;
+  sp.__dispose = () => { tex.dispose(); mat.dispose(); };
   return sp;
 }
 // A pulse in 3D: the note's glow breathes while it lasts.
 function pulse3d() {
   if (pulse3d.on || !G3 || !map3d) return;
   pulse3d.on = true;
+  wake3d(20000);
   const step = () => {
     let any = false;
     for (const n of G3.graphData().nodes) {
@@ -785,7 +860,8 @@ function setMap(on) {
   requestAnimationFrame(() => { // once the map has its size
     if (!Graph) return; // the map data is still loading: loadGraph sizes it
     Graph.width($("graph").clientWidth).height($("graph").clientHeight);
-    if (selected) { gather(selected, 1).then(zoomToFocus); if (settling) zoomToFocus.again = true; } else Graph.zoomToFit(400, fitPad());
+    wakeMap(2500);
+    if (selected) { zoomOwed = true; gather(selected, 1).then(() => { zoomOwed = false; zoomToFocus(); }); if (settling) zoomToFocus.again = true; } else Graph.zoomToFit(400, fitPad());
   });
 }
 addEventListener("kn-theme", themeChanged); // the viewer switched the theme (nav.js)
@@ -835,7 +911,7 @@ function inlineCode(text, cls = "hit-text") {
 // Clicking empty canvas clears the selection and the note in the URL, so a refresh opens nothing.
 function deselect({ push = true } = {}) {
   if (editing) return; // keep unsaved edits on screen
-  selected = null; current = null; setFocus(null); animateHover();
+  selected = null; current = null; selectFlowUntil = 0; setFocus(null); animateHover();
   // other views have no note in their route; go() so a phone's note page and the search page give way to the list
   if (push && (shellRoute.view === "notes" || shellRoute.view === "map") && location.hash !== (mapOn ? "#/map" : "#/notes")) go(mapOn ? "#/map" : "#/notes");
   $("note").replaceChildren(el("div", "note-empty muted", "Pick a note from the list or search."));
@@ -940,13 +1016,17 @@ async function openNote(id, { push = true, find = null } = {}) {
     pushHash(noteRoute(note.path, mapOn ? "map" : "notes"));
     applyRoute(); // also within Notes: a phone swaps the list for the note
   }
-  selected = byId.has(note.path) ? note.path : null; setFocus(selected); markActive(); if (Graph) animateHover(6000);
+  selected = byId.has(note.path) ? note.path : null;
+  if (selected) selectFlowUntil = performance.now() + 4000;
+  setFocus(selected); markActive();
+  if (Graph) { animateHover(selected ? 4000 : 400); wakeMap(4500); }
   if (map3d && mapOn && selected) fly3d(selected);
   const n = byId.get(note.path);
   if (mapOn && n && n.x != null) {
     loadGraph.fitted = true; // the reader chose a view: no overview fit after the layout settles
     clearTimeout(hoverTimer);
-    gather(n.id, 1).then(() => { if (selected === n.id) zoomToFocus(); });
+    zoomOwed = true;
+    gather(n.id, 1).then(() => { if (selected === n.id) { zoomOwed = false; zoomToFocus(); } });
     if (settling) zoomToFocus.again = true; // nodes still move: fit once more when they stop
   } else if (Graph) releaseFocus({ instant: !mapOn }); // no ring of the previous note
   renderNote();
@@ -1064,7 +1144,8 @@ function wordDiff(a, b) {
 
 // A unified diff as a <pre>: removed and added lines as rows; where a block of removed lines is followed by as many
 // added ones, the pairs show only the words that changed (an appended note no longer looks like a rewritten line).
-function diffView(text) {
+// With `comment(at, n, span)` each line inside a hunk is focusable and calls it on a click or Enter.
+function diffView(text, { comment } = {}) {
   const pre = el("pre", "diff"), lines = text.split("\n");
   const kind = (l) => (l.startsWith("+") && !l.startsWith("+++") ? "add" : l.startsWith("-") && !l.startsWith("---") ? "del" : null);
   const row = (cls, parts) => { const span = el("span", cls); // .add/.del are blocks: their own line break would add a row
@@ -1079,7 +1160,32 @@ function diffView(text) {
     adds.forEach((l, n) => pre.append(pairs[n] ? row("add", [["+", false], ...pairs[n][1]]) : el("span", "add", l)));
     i = a;
   }
+  if (comment) diffLines(lines).forEach((at, n) => { // one span per line: child n is line n
+    if (!at) return;
+    const span = pre.children[n];
+    span.tabIndex = 0; span.classList.add("diff-at"); span.dataset.at = at; span.title = `${at} · comment on this line`;
+    span.onclick = () => comment(at, n, span);
+    span.onkeydown = (e) => { if (e.key === "Enter" && e.target === span) { e.preventDefault(); comment(at, n, span); } };
+  });
   return pre;
+}
+// Where each line of a unified diff sits: "path:12" on the new side, "path:old line 7" for a removed line, null outside
+// a hunk (the stat, headers, untracked names, the cut note).
+function diffLines(lines) {
+  let path = "", old = 0, now = 0, hunk = false;
+  return lines.map((l) => {
+    const h = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(l);
+    if (h) { [old, now, hunk] = [+h[1], +h[2], !!path]; return null; }
+    if (hunk && l[0] === "+") return `${path}:${now++}`;
+    if (hunk && l[0] === "-") return `${path}:old line ${old++}`;
+    if (hunk && l[0] === " ") { old++; return `${path}:${now++}`; }
+    if (hunk && l[0] === "\\") return null; // "\ No newline at end of file"
+    hunk = false;
+    if (l.startsWith("diff --git ")) path = "";
+    else if (l.startsWith("--- ") && l !== "--- /dev/null") path = l.slice(4).replace(/^a\//, "");
+    else if (l.startsWith("+++ ") && l !== "+++ /dev/null") path = l.slice(4).replace(/^b\//, ""); // a deleted file keeps its --- name
+    return null;
+  });
 }
 
 async function showHistory(open = null) {
@@ -1503,6 +1609,7 @@ async function loadTasks(render = true) {
     const approve = run(() => post("/ui/api/task/approve", { project: t.project, id: t.id }));
     if (t.can_approve) act("Approve", "Let this task start (it waits for the project owner's or an admin's approval)" + (t.approve_warning ? `\n\n${t.approve_warning}` : ""),
       () => (!t.approve_warning || confirm(`${t.approve_warning}\n\nApprove ${t.id} anyway?`)) && approve());
+    if (!(t.hosts || []).length && t.no_host) act("Start", `No pc can start it: ${t.no_host}`, null).disabled = true;
     for (const h of t.hosts || []) act(`Start on ${h.label}`, "Start a worker for this task there now",
       run(async () => { await post("/ui/api/machines/action", { machine: h.machine, action: "start_worker", args: { project: t.project, id: t.id } }); toast(`Asked ${h.label} to start ${t.id}`, false); }));
     for (const { w, m } of workersOf(t)) { // its worker: where, how far, and Stop / Restart right here
@@ -1527,7 +1634,12 @@ async function loadTasks(render = true) {
         const owner = who.value === "Someone else…" ? (prompt("Who gets it? A person's name, as task lines write it:", "") || "").trim() : who.value;
         if (!owner) return;
         await post("/ui/api/task/assign", { project: t.project, id: t.id, owner, device: where.value }); toast(`${t.id} → ${owner}${where.value ? "@" + where.value : ""}`, false); });
-      form.append(who, where, save);
+      const now = el("button", "btn small", "Start chat now"); now.type = "button"; // assign and start in one go: a new chat of that agent takes it
+      now.title = "A new chat of this agent (on the picked pc, else any of yours with a folder of this project) takes it right away";
+      const agentOf = { Claude: "claude", Codex: "codex", Gemini: "agy" };
+      who.onchange = () => { now.disabled = !agentOf[who.value]; }; who.onchange();
+      now.onclick = () => ckTaskChat(t.project, t.id, agentOf[who.value], where.value);
+      form.append(who, where, save, now);
       const b = act("Assign…", "Give this task to another agent or person, optionally on one pc", () => { form.hidden = !form.hidden; }, "btn small quiet");
       if (!t.can_cancel) { b.disabled = true; b.title = "Only the project's owner or an admin, and not while it is being worked on"; }
       acts.append(form);
@@ -1609,6 +1721,7 @@ const LINT_INFO = {
   unprocessed_source: ["Source not turned into memos yet", "Ask Claude to process it."],
   index_line_without_heading: ["Index line outside a heading", "Move it under a ## heading."],
   index_near_load_limit: ["MEMORY.md near Claude Code's load limit", "Shorten or merge index lines."],
+  context_near_limit: ["Start context near what Claude Code loads", "Past 6 parts of 9000 characters the rest is dropped: shorten the index, the CLAUDE.md files or the open items."],
   relative_date: ["Relative date", "Write the absolute date."],
   missing_structure: ["Missing ## Stand / ## Keuzes", "Add the two sections."],
   doc_without_topic: ["Doc without topic", "Add topic: (a MEMORY.md heading) to its frontmatter."],
@@ -1670,7 +1783,10 @@ async function onChanged() {
     if (liveAgain) { liveAgain = false; onChanged(); }
   }
 }
-document.addEventListener("visibilitychange", () => { if (!document.hidden && liveAgain) { liveAgain = false; onChanged(); } });
+document.addEventListener("visibilitychange", () => {
+  syncAnim();
+  if (!document.hidden && liveAgain) { liveAgain = false; onChanged(); }
+});
 async function liveRefresh() {
   await refreshData(); // first: the Changes list names notes from the graph
   const done = await Promise.allSettled([loadRecent(), loadLint(!$("tab-lint").hidden), loadTasks(!$("tab-tasks").hidden), liveNote()]);
