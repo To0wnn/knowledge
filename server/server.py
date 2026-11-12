@@ -1243,17 +1243,15 @@ def chat_search(pairs: list, text: str, limit: int = CHAT_SEARCH_MAX) -> list:
     `text` (case-insensitive): at most 3 snippets each, cut from the masked message, so a secret value never shows."""
     q, out = text.lower(), []
     for r, c in sorted(pairs, key=lambda x: -(x[1].get("updated") or x[1].get("created") or 0)):
-        msgs = [t for k, t in chat_parts(c) if k in ("user", "text") and q in t.lower()]
+        # masked first: a hit inside a secret neither shows, nor counts, nor keeps a chat in (no guessing it by prefixes)
+        msgs = [m for k, t in chat_parts(c) if k in ("user", "text") and q in t.lower() and q in (m := redact(t)).lower()]
         if not msgs:
             continue
         snips = []
         for m in msgs[:3]:
-            m = redact(m)
             if (i := m.lower().find(q)) >= 0:
                 a, b = max(0, i - CHAT_SNIPPET), i + len(q) + CHAT_SNIPPET
                 snips.append("…" * (a > 0) + " ".join(m[a:b].split()) + "…" * (b < len(m)))
-        if not snips:  # every hit lay inside a masked value: the search must not confirm a secret
-            continue
         out.append((r, c, sum(m.lower().count(q) for m in msgs), snips))
         if len(out) >= limit:
             break
@@ -7486,7 +7484,7 @@ async def ui_review_reject(request: Request):
         b = await request.json()
         key, back = str(b.get("key", "")), b.get("send_back") is True
         # one line, and no "(claimed" that would mark the new task line taken; long enough for the diff's line comments
-        reason = re.sub(r"\(\s*(claimed|bezig)", r"\1", " ".join(str(b.get("reason", "")).split()), flags=re.I)[:2000]
+        reason = redact(re.sub(r"\(\s*(claimed|bezig)", r"\1", " ".join(str(b.get("reason", "")).split()), flags=re.I))[:2000]  # a quoted diff line may hold a secret
     except (ValueError, AttributeError):
         return JSONResponse({"error": "send JSON {key, reason, send_back}"}, status_code=400)
     if back and not reason:

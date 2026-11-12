@@ -805,6 +805,7 @@ $("ck-diff-send").onclick = async () => {
   b.disabled = false;
 };
 async function ckRollback(i, undo) {
+  if (!ckDiffShut()) return; // its unsent line comments
   if (!confirm(undo ? `Undo the roll back of "${i.title}"?\n\nIts worktree gets back the files and commits it had before the roll back; what changed there since is kept as a checkpoint.`
     : `Roll "${i.title}" back to before its last turn?\n\nLost from its worktree: every change since that turn began, the agent's and your own edits there, and commits made in it (the branch moves back). They are kept as a checkpoint: Undo roll back brings them back until the next message.\n\nKept: the conversation (the agent is told with your next message) and files git ignores.`)) return;
   try {
