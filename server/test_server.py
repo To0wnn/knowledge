@@ -2141,15 +2141,21 @@ def inbox_contract(tmp, ck, fr, raw, er):
     st, _, b = ui("/ui/api/task/redo", {"project": "garden", "id": "INB-4-done", "agent": "codex", "remark": "also the (claimed x) south beds"})
     assert st == 200 and json.loads(b)["id"] == "INB-4-fix", b
     text = mem.read_text()
-    assert "INB-4-done" not in text and "[Codex, INB-4-fix] from alice, start now: also the claimed x) south beds (result was: the beds are watered" in text, text
+    assert "INB-4-done" not in text and "[Codex, INB-4-fix] from alice, start now: also the claimed x) south beds (sent back: the result of INB-4" in text, text
+    assert "the beds are watered" not in text, "the result's own words never become the owner's instruction"
+    assert ui("/ui/api/task/redo", {"project": "garden", "id": "INB-2-done", "agent": "codex", "remark": "x"})[0] == 409, "a sent-back task has nothing to redo"
+    assert not board()["INB-2-done"].get("can_send_back")
     fix = next(t for t in json.loads(ui("/ui/api/tasks")[2])["tasks"] if t["id"] == "INB-4-fix")
     assert fix["startable"] and fix["owner"] == "Codex", fix
     # Names: with "alice" set, Sam's result leaves her board; empty again, everyone's shows.
+    hand = "- open until 2099-01-01 [Codex, INB-5-cont] from Sam, start after approval: go on with the beds"
+    assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": hand + "\n## Keuzes"}, fr)[0]
     assert "INB-3-done" in board()
     assert ui("/ui/api/me/prefs", {"task_names": "Alice, a;b"})[0] == 400
     assert ui("/ui/api/me/prefs", {"task_names": " Alice , alice,Al"})[0] == 200
     assert json.loads(ui("/ui/api/me")[2])["prefs"]["task_names"] == ["alice", "al"]
     assert "INB-3-done" not in board(), "another person's result"
+    assert board()["INB-5-cont"]["approve"], "a hand-over for another person still waits for approval as an agent task"
     assert ui("/ui/api/me/prefs", {"task_names": ""})[0] == 200 and "task_names" not in json.loads(ui("/ui/api/me")[2])["prefs"]
     assert "INB-3-done" in board()
     for ln in [ln for ln in mem.read_text().splitlines() if "INB-" in ln]:  # leave the memo as the next contract expects it

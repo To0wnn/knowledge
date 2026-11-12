@@ -83,7 +83,8 @@ unfolds the whole line, from whom and for whom, its memo (Open in memo) and, whe
   `[<requester>, <ID>-done]: sent back by <user>: <remark>`, so the requester hears why and may write it again;
   like a cancel, a task that starts after it waits.
 - **Send back a result** (`POST /ui/api/task/redo {project, id, agent, remark}`, owner or admin): the result line
-  becomes `- open until <+7 days> [<Agent>, <ID>-fix] from <user>, start now: <remark> (result was: …)` in one edit;
+  becomes `- open until <+7 days> [<Agent>, <ID>-fix] from <user>, start now: <remark> (sent back: …)` in one edit
+  (not the result's own words: its writer may be someone the project does not trust; a cancelled result has nothing to redo);
   a worker goes on on the task's branch (`-fix` like a hand-over). With no pc of yours running that agent's workers
   for the project, a new chat of that agent takes it right away (`pak <ID>-fix`).
 - **Later** is one menu: in 1 hour, tomorrow 08:00, or hide until it changes (`/ui/api/board/dismiss`).

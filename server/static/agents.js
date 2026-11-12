@@ -1041,7 +1041,6 @@ async function loadSettings() {
     try {
       me.prefs = (await api("/ui/api/me/prefs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ task_names: $("set-task-names").value }) })).prefs;
       $("set-task-names").value = (me.prefs?.task_names || []).join(", ");
-  $("set-use").onsubmit = (e) => { e.preventDefault(); $("set-task-names").blur(); }; // Enter saves (blur fires change), never a page load
       $("set-use-saved").textContent = "Saved"; setTimeout(() => ($("set-use-saved").textContent = ""), 2000);
       ck.summaryAt = 0; ckTick();
     } catch (err) { toast(err.message, true); }

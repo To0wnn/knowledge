@@ -7195,14 +7195,16 @@ def board_items() -> list[dict]:
         key = f"task:{t['project']}/{t['id']}"
         sig = hashlib.sha256(f"{t['line']}|{t.get('stalled')}|{t['done']}".encode()).hexdigest()[:16]
         to_person = t["done"] and not agent_owner(t["owner"]) or not t["done"] and re.search(r"-cont$", t["id"], re.I) and t["from"] and not agent_owner(t["from"])
-        if to_person and someone_else(t["owner"]):  # another person's result: theirs to read
-            continue
+        if to_person and someone_else(t["owner"] if t["done"] else t["from"]):  # another person's result or hand-over: theirs to read
+            if t["done"]:
+                continue
+            to_person = False  # a hand-over still runs as the agent task it is
         if to_person:  # handed back (or over) to a person: they read it, then remove the line; it never starts anything
             what = (f"result for {t['owner']}: " if t["done"] else f"handed over to {t['owner']} for {t['from']}: ") + t["text"][:140]
             items.append({"kind": "task", "col": "needs", "id": t["id"], "agent": agent, "project": t["project"], "path": t["path"],
                           "title": f"{t['id']} · {t['text'][:120]}", "line": what, "at": t.get("since") or 0, "owner": t["owner"],
                           "key": key if t["done"] else f"handover:{t['project']}/{t['id']}", "sig": sig, "result": True, "line_text": t["line"],
-                          "text": t["text"], "from": t.get("from") or "", "can_send_back": t["done"] and may_approve(t["project"])})
+                          "text": t["text"], "from": t.get("from") or "", "can_send_back": t["done"] and not CANCELLED.match(t["text"]) and may_approve(t["project"])})
             if t["done"]:
                 continue
         task = {"kind": "task", "id": t["id"], "agent": agent, "project": t["project"], "title": f"{t['id']} · {t['text'][:120]}",
@@ -8864,7 +8866,8 @@ async def ui_task_redo(request: Request):
     """{"project", "id", "agent", "remark"}: the project's owner or an admin sends a result back ("not good like this").
     Its result line [<requester>, <ID>-done] becomes a task line for that agent in one edit, "[<Agent>, <ID>-fix] from
     <user>, start now: <remark> (result was: ...)", which a worker or a chat takes as any task; a worker goes on on the
-    task's branch (REVIEW_BASE). The reverse of handing it back, so the memo never holds both lines."""
+    task's branch (REVIEW_BASE). The reverse of handing it back, so the memo never holds both lines. A cancelled result
+    has nothing to redo (409)."""
     try:
         body = await request.json()
         project, rid, agent = str(body.get("project", "")), str(body.get("id", "")), str(body.get("agent", ""))
@@ -8879,11 +8882,14 @@ async def ui_task_redo(request: Request):
         return JSONResponse({"error": "only the project's owner or an admin may write it a task line"}, status_code=403)
     if not (b := next((b for b in (await asyncio.to_thread(project_tasks, project))[1] if b["id"].lower() == rid.lower()), None)):
         return JSONResponse({"error": f"no result {rid} in {project}"}, status_code=404)
+    if CANCELLED.match(b["text"]):  # nothing was done to redo; its "start after" tasks wait for a decision
+        return JSONResponse({"error": f"{rid} was cancelled or sent back: write a new task line instead"}, status_code=409)
     user, base = device.get().get("user", "") or "?", REVIEW_BASE.sub("", re.sub(r"-done$", "", b["id"], flags=re.I))
-    was = " ".join(re.sub(r"\(\s*(claimed|bezig)", r"\1", b["text"], flags=re.I).split())
     lead = b["line"][:len(b["line"]) - len(b["line"].lstrip())]
+    # not the result's own words: whoever wrote them (maybe someone the project does not trust) would become the owner's
+    # instruction; the memo's history keeps them, the branch has the work
     line = (f"{lead}- open until {(date.today() + timedelta(days=7)).isoformat()} [{REVIEW_OWNERS[agent]}, {base}-fix] from {user}, "
-            f"start now: {remark} (result was: {was[:200] + ('…' if len(was) > 200 else '')})")
+            f"start now: {remark} (sent back: the result of {base} was not good; its branch and the memo history have it)")
     try:
         await knowledge_edit(b["path"], b["line"], line)
     except (ToolError, OSError) as e:
