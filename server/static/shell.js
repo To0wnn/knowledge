@@ -202,7 +202,7 @@ function needsNotify(items) {
       n.onclick = () => { window.focus(); if (!solo() || to !== `#/chats/${encodeURIComponent(shellRoute.arg)}`) go(to); n.close(); }; // a chat alone in its tab stays alone
     } catch { /* a browser that only notifies from a service worker (Android): Matrix covers phones */ }
   };
-  for (const i of fresh.slice(0, 3)) say(`Needs you: ${i.title || "an item"}`, [i.label || i.project, i.line].filter(Boolean).join(" · "), i.key,
+  for (const i of fresh.slice(0, 3)) say(`Needs you: ${i.title || "an item"}`, [i.label || shown(i.project), i.line].filter(Boolean).join(" · "), i.key,
     i.kind === "chat" && i.id ? `#/chats/${encodeURIComponent(i.id)}` : `#/inbox/${encodeURIComponent(i.key)}`);
   if (fresh.length > 3) say(`Needs you: and ${fresh.length - 3} more`, fresh.slice(3, 8).map((i) => i.title).filter(Boolean).join(" · "), "kn-needs-more", "#/chats");
   notifySeen = new Set(needs.map(sig));

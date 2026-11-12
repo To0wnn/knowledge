@@ -1358,7 +1358,7 @@ function ckDraftFolders(card) { // [{machine, label, path, project}] that can ru
 function ckDraftFolder(card) {
   const list = ckDraftFolders(card), sel = el("select", "small"), many = new Set(list.map((f) => f.machine)).size > 1;
   sel.setAttribute("aria-label", "Folder"); sel.title = "Where it runs: a folder linked to the project on that pc";
-  for (const f of list) sel.append(new Option(`${f.project} · ${ckShort(f.path)}${many ? ` · ${f.label}` : ""}`, `${f.machine}\n${f.path}`));
+  for (const f of list) sel.append(new Option(`${shown(f.project)} · ${ckShort(f.path)}${many ? ` · ${f.label}` : ""}`, `${f.machine}\n${f.path}`));
   const want = card.where_ || (card.pick?.folder ? `${card.pick.machine}\n${card.pick.folder}` : "");
   if ([...sel.options].some((o) => o.value === want)) sel.value = want;
   card.where_ = sel.value;
@@ -1498,7 +1498,7 @@ function ckPaint(card) {
   }
   setText(card.name, ckTitle(m, card));
   card.branch.hidden = true;
-  setText(card.where, `${AGENT_NAME[m.agent] || m.agent} · ${m.label} · ${ckShort(m.folder)}${m.project ? ` (${m.project})` : ""}${m.worktree ? ` · branch chat/${m.id}` : ""}`);
+  setText(card.where, `${AGENT_NAME[m.agent] || m.agent} · ${m.label} · ${ckShort(m.folder)}${m.project ? ` (${shown(m.project)})` : ""}${m.worktree ? ` · branch chat/${m.id}` : ""}`);
   card.where.title = m.folder || "";
   const item = (ck.board || []).find((i) => i.kind === "chat" && `${i.machine}/${i.id}` === ckKey(m));
   if (card.git.dataset.v !== JSON.stringify(item?.git || null)) {
@@ -2131,7 +2131,7 @@ async function ckWorkerPoll(card) {
 function ckWorkerPaint(card) {
   const m = card.meta, w = card.w, run = w.status === "running", live = run && card.online;
   card.name.textContent = `Worker ${w.id}`;
-  card.where.textContent = `${AGENT_NAME[w.agent] || w.agent} · ${m.label}${w.branch ? ` · ${w.branch}` : ""}${w.project ? ` (${w.project})` : ""}`;
+  card.where.textContent = `${AGENT_NAME[w.agent] || w.agent} · ${m.label}${w.branch ? ` · ${w.branch}` : ""}${w.project ? ` (${shown(w.project)})` : ""}`;
   card.state.className = `ck-state ${!card.online ? "offline" : run ? "running" : ""}`;
   card.state.textContent = !card.online ? "pc offline" : run ? "working" : w.chat ? "taken over" : w.status;
   card.root.classList.toggle("running", run);
