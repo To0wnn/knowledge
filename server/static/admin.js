@@ -257,7 +257,20 @@ function labelCell(p) {
   input.onchange = () => run(() => api("/ui/api/admin/project-label", { name: p.name, label: input.value.trim() }), input, `Saved: display name of ${p.name}`);
   td.append(input);
   if (p.label) td.append(el("div", "muted mono", p.name));
+  if ((p.was || []).length) td.append(el("div", "muted", `was ${p.was.join(", ")}`));
+  if (!p.builtin) td.append(renameButton(p));
   return td;
+}
+
+// The project name itself (folders, roots, tokens, history, linked folders); the old name keeps working as an alias.
+// An admin for any project made in the UI, a person for the ones they made.
+function renameButton(p) {
+  const b = el("button", "btn small quiet", "Rename…"); b.type = "button"; b.setAttribute("aria-label", `Rename project ${p.name}`);
+  b.title = "Change the project name itself (folders, roots, tokens, history, linked folders); a backup is made first and the old name keeps working";
+  b.onclick = () => { const to = (prompt(`New name for ${p.name} (2-24 lowercase letters or digits). Everything moves along; a backup is made first and ${p.name} keeps working as an alias.`, "") || "").trim();
+    if (to) run(async () => { const r = await api("/ui/api/admin/project-rename", { name: p.name, to });
+      toast(`Renamed ${p.name} to ${r.project}: ${r.state_files} state files, ${r.history} history folders, ${r.memos.length} memos; ${r.relinked.length} pc(s) asked to relink`); }, b); };
+  return b;
 }
 
 // Whose new task lines may start without approval; empty = the default (the project's owner and their tokens, admins
@@ -277,7 +290,10 @@ function writersCell(p) {
 function renderProjects() {
   if (!state.admin) {
     $("project-rows").replaceChildren(...state.projects.map((p) => { const tr = el("tr");
-      tr.append(el("td", "", p.name), el("td", "mono", p.docs + "/"), el("td", "mono", p.memory + "/"), el("td", "num", "—"), el("td", "num", "—"),
+      const name = el("td", "", p.label || p.name);
+      if ((p.was || []).length) name.append(el("div", "muted", `was ${p.was.join(", ")}`));
+      if (p.mine) name.append(renameButton(p));
+      tr.append(name, el("td", "mono", p.docs + "/"), el("td", "mono", p.memory + "/"), el("td", "num", "—"), el("td", "num", "—"),
         el("td", "", p.mode === "write" ? "you: read + write" : "you: read"), el("td", "muted", "—"), el("td", "muted", p.builtin ? "VM (built in)" : "server"));
       return tr; }));
     return;

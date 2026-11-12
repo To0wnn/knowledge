@@ -32,6 +32,7 @@ import re
 from datetime import date, timedelta
 import secrets
 import shutil
+import tarfile
 import tempfile
 import threading
 try:
@@ -201,6 +202,8 @@ def resolve(path: str, scoped: bool = True) -> tuple[Path, str]:
         elif len(hits) > 1:
             raise ToolError(f"multiple files named '{clean}': {hits}")
     root, _, rest = clean.partition("/")
+    if root not in ROOTS and "ALIASES_FILE" in globals() and (now := canon(root.removesuffix("-memory"))) in PROJECTS:
+        root = PROJECTS[now][root.endswith("-memory")]  # a path from before a rename (rename_project)
     if root not in ROOTS or not rest:
         raise ToolError(f"path must start with one of {sorted(r for r in ROOTS if in_scope(r + '/'))}/, e.g. memory/MEMORY.md")
     if unsafe_path(rest):
@@ -1603,7 +1606,7 @@ async def knowledge_new_memo(title: str = "", description: str = "", type: str =
     project: default this device's project (a guest's own), else homelab."""
     title = title or name
     status = status or body
-    proj = project or token_project() or "homelab"
+    proj = canon(project) or token_project() or "homelab"
     if proj not in PROJECTS:
         raise ToolError(f"project must be one of {sorted(PROJECTS)}")
     if type not in ("project", "reference", "feedback", "user"):
@@ -1863,7 +1866,7 @@ def knowledge_lesson(what: str, why: str, prevent: str, project: str = "") -> st
     probation. Do not edit rules or memos for it yourself. project: default this device's project, else homelab."""
     if not device.get().get("write"):
         raise ToolError("this device token is read-only")
-    proj = project or token_project() or "homelab"
+    proj = canon(project) or token_project() or "homelab"
     if proj not in PROJECTS:
         raise ToolError(f"project must be one of {sorted(PROJECTS)}")
     fields = {k: " ".join(str(v).split())[:500] for k, v in (("what", what), ("why", why), ("prevent", prevent))}
@@ -2183,13 +2186,13 @@ def project_for(directory: str) -> str:
     """Project of a session from its working directory (the plugin sends $CLAUDE_PROJECT_DIR), e.g.
     ~/trade_bot -> trade, ~/anpitek/boekhouding -> anpitek; anything else is homelab."""
     parts = [x.lower() for x in PurePosixPath(directory).parts]
-    if directory in PROJECTS:
-        return directory
+    if canon(directory) in PROJECTS:  # a name, also one from before a rename
+        return canon(directory)
     if "trade" in PROJECTS and any(x.startswith("trade") for x in parts):
         return "trade"
     # UI projects match a directory name below the home directory (deepest first), never /home or the user name.
     below = parts[3:] if parts[1:2] == ["home"] else parts[1:]
-    extra = next((d for d in reversed(below) if d in PROJECTS and d not in BUILTIN_PROJECTS), None)
+    extra = next((canon(d) for d in reversed(below) if canon(d) in PROJECTS and canon(d) not in BUILTIN_PROJECTS), None)
     if extra:
         return extra
     return "anpitek" if "anpitek" in PROJECTS and "anpitek" in parts else "homelab"
@@ -2199,7 +2202,7 @@ def docs_sync_project(asked) -> str | None:
     """The project whose docs this device mirrors from the folder `asked` names, or None. One rule for /sync and for
     /tasks asking a session to sync: they once differed, and the admin's pc was asked every few minutes for a sync that
     /sync then refused (403)."""
-    project = token_project()
+    project, asked = token_project(), canon(asked) if isinstance(asked, str) else asked
     if not project and asked in PROJECTS and asked not in BUILTIN_PROJECTS and in_scope(PROJECTS[asked][0] + "/") \
             and not in_scope("claude/"):  # a person's device with several projects (never the admin's: one source per docs)
         project = asked  # the folder's link picks one
@@ -3062,7 +3065,7 @@ def worker_machines(project: str, agent: str, pin: str = "") -> list[tuple[str, 
                   if (c := m.get("companion")) and c.get("workersAllowed")
                   and (not pin or pin.lower() in {n.lower() for n in m.get("tokens") or {}})
                   and agent in (c.get("agents") or {})
-                  and any(f.get("project") == project for f in (c.get("folders") or {}).get("linked", [])))
+                  and any(canon(f.get("project", "")) == project for f in (c.get("folders") or {}).get("linked", [])))
 
 
 def worker_hosts(project: str, agent: str, pin: str = "") -> list[str]:
@@ -3478,12 +3481,7 @@ def load_projects():
 
 
 def create_project(name: str):
-    if not PROJECT_NAME.match(name):
-        raise ToolError("project name: 2-24 lowercase letters or digits, starting with a letter")
-    if name == "shared":
-        raise ToolError("'shared' is taken: the UI uses it for the shared skills")
-    if name in kb_graph.ALL_BUILTIN or name in ROOTS or f"{name}-memory" in ROOTS:  # built-ins also when off (folder rules)
-        raise ToolError(f"{name} already exists")
+    check_new_name(name)
     base = PROJECTS_DIR / name
     (base / "docs").mkdir(parents=True, exist_ok=True)
     (base / "memory").mkdir(parents=True, exist_ok=True)
@@ -3493,6 +3491,219 @@ def create_project(name: str):
     write_json(PROJECTS_FILE, sorted({*read_json(PROJECTS_FILE, []), name}))
     mount_project(name)
     index.refresh(f"{name}-memory/MEMORY.md")
+
+
+# ---------------------------------------------------------------- renaming a UI project
+ALIASES_FILE = ADMIN_DIR / "project_aliases.json"  # {old name: new name}: what rename_project left behind for old links
+# JSON fields whose string values are project or root names (or "<project>/<task id>"); everything else (chat text,
+# titles) stays as it was written.
+RENAME_VALUE_KEYS = {"project", "projects", "roots", "write_roots", "created", "worker", "key"}
+
+
+def canon(name: str) -> str:
+    """A project's current name: a linked folder, client or link that still says a name from before a rename gets the
+    project it became; any other name comes back as it was."""
+    aliases = read_json(ALIASES_FILE, {})
+    for _ in range(10):  # a project renamed twice: a350 -> b -> c
+        if name in PROJECTS or name not in aliases:
+            break
+        name = aliases[name]
+    return name
+
+
+def check_new_name(name: str, renaming: str = ""):
+    if not PROJECT_NAME.match(name):
+        raise ToolError("project name: 2-24 lowercase letters or digits, starting with a letter")
+    if name == "shared":
+        raise ToolError("'shared' is taken: the UI uses it for the shared skills")
+    if name in kb_graph.ALL_BUILTIN or name in ROOTS or f"{name}-memory" in ROOTS:  # built-ins also when off (folder rules)
+        raise ToolError(f"{name} already exists")
+    if name in read_json(ALIASES_FILE, {}) and canon(name) != renaming:  # its own old name may come back
+        raise ToolError(f"{name} was renamed to {read_json(ALIASES_FILE, {})[name]}; its old links still point there")
+
+
+def rename_state_files() -> list[Path]:
+    """Every JSON file of the server's own state that may hold a project name (admin dir, chats, workers, task state)."""
+    files = [*ADMIN_DIR.glob("*.json"), *CHATS_DIR.glob("*/*.json"), *CHATS_DIR.glob("*/workers/*.json"), *AUDIT.parent.glob("*.json"), TOKENS_FILE]
+    return sorted({f for f in files if f.is_file() and f != SECRETS_FILE})
+
+
+def rename_project(old: str, new: str) -> dict:
+    """Rename a project made in the web UI, keeping everything: a tar of all it touches first, then its folder, history,
+    trash copies, every state file (tokens, people, shares, tasks, chats, workers, linked folders), the paths in memos,
+    and the index in RAM (no file looks new or removed, so the history gets no fork). The old name stays an alias, so a
+    folder whose .knowledge-project still says it, a client with old paths, or a link in a mirrored doc keep working;
+    the companions are asked to rewrite their folders' .knowledge-project. A failure before the memos are touched puts
+    everything back as it was; the tar is the way back after that. Runs under _admin_lock (one admin change at a time)."""
+    if old not in PROJECTS or old in BUILTIN_PROJECTS:
+        raise ToolError(f"{old}: only a project made in the web UI can be renamed")
+    check_new_name(new, renaming=old)
+    roots = {old: new, f"{old}-memory": f"{new}-memory"}
+    flat = lambda n: next((roots[r] + n[len(r):] for r in roots if n.startswith(r + "__")), None)  # noqa: E731
+    hist = [(d, HISTORY / f) for d in (HISTORY.iterdir() if HISTORY.is_dir() else []) if (f := flat(d.name))]
+    trash = [(t, TRASH / (m.group(1) + "_" + f)) for t in (TRASH.iterdir() if TRASH.is_dir() else [])
+             if (m := TRASH_NAME.fullmatch(t.name)) and (f := flat(m.group(2)))]
+    if (PROJECTS_DIR / new).exists() or any(dst.exists() for _, dst in hist + trash):
+        raise ToolError(f"{new}: there are files of an earlier project with that name; pick another name")
+    pat = re.compile(rf"(^|[:/\t]){re.escape(old)}(-memory)?(?=/|$)")
+    sub = lambda s: pat.sub(lambda m: m[1] + new + (m[2] or ""), s)  # noqa: E731
+    # top-level keys there name tokens, people or pcs (a token may well be called like its project)
+    by_name = {TOKENS_FILE, CLIENTS_FILE, USERS_FILE, MACHINES_FILE, LAST_USED_FILE, PLUGIN_SEEN_FILE, REVOKED_TOKENS, STATUS_FILE}
+
+    def walk(x, key: str = "", top: bool = False):
+        if isinstance(x, dict):
+            names = top or key == "tokens"  # a pc's token list, keyed by token name
+            return {(k if names else sub(k)): walk(v, k) for k, v in x.items()}
+        if isinstance(x, list):
+            return [walk(v, key) for v in x]
+        return sub(x) if isinstance(x, str) and key in RENAME_VALUE_KEYS else x
+
+    # 1. the way back: the folder, history and trash copies (only this function touches them), then the state files
+    # under the lock, so a task write never waits on the slow part
+    backups = AUDIT.parent / "backups"
+    backups.mkdir(parents=True, exist_ok=True)
+    for x in backups.glob("rename-*.tar.gz"):  # kept 30 days (dev rule 5); only this folder's own rename tars
+        if x.parent == backups and time.time() - x.stat().st_mtime > 30 * 86400:
+            x.unlink()
+    backup = backups / f"rename-{old}-{new}-{time.strftime('%Y%m%d-%H%M%S')}.tar.gz"
+    tar = tarfile.open(backup, "w:gz")
+    tar.add(PROJECTS_DIR / old, f"projects/{old}")
+    for src, _ in hist:
+        tar.add(src, f"history/{src.name}")
+    for src, _ in trash:
+        tar.add(src, f"deleted/{src.name}")
+    undo: list = []  # (kind, a, b): what to reverse when a later step fails
+    with _task_lock, notices_locked(), index.refreshing:  # no task state, notice or index change in between
+        try:
+            files = rename_state_files()
+            for f in files + [PROJECTS_FILE, ALIASES_FILE]:
+                if f.is_file():
+                    tar.add(f, f"state/{f.relative_to(f.anchor)}")
+            tar.close()
+            # the folders the companions report as linked to the old name, before machines.json says the new one
+            linked = [(mid, f["path"]) for mid, m in read_json(MACHINES_FILE, {}).items()
+                      for f in ((m.get("companion") or {}).get("folders") or {}).get("linked") or [] if f.get("project") == old]
+            # 2. every new state first, in RAM; nothing on disk changed yet
+            writes: list[tuple[Path, Path, object]] = []  # (old file, new file, data)
+            for f in files:
+                try:
+                    raw_text = f.read_text()
+                    data = json.loads(raw_text)
+                except (OSError, ValueError):
+                    continue
+                out = walk(data, top=f in by_name)
+                if out != data:  # a worker transcript's file name is a hash of "<project>/<id>"
+                    dst = worker_file(f.parent.parent.name, out["key"]) if f.parent.name == "workers" and isinstance(out, dict) \
+                        and out.get("key") != data.get("key") and WORKER_KEY.fullmatch(str(out.get("key"))) \
+                        and re.fullmatch(r"[0-9a-f]{16}", f.parent.parent.name) else f
+                    writes.append((f, dst, out))
+                    undo.append(("bytes", f, raw_text))
+            aliases = {k: (new if v == old else v) for k, v in read_json(ALIASES_FILE, {}).items() if k != new}
+            for f in (PROJECTS_FILE, ALIASES_FILE):
+                undo.append(("bytes", f, f.read_text() if f.is_file() else None))
+            # 3. the old roots leave RAM first: a write landing now gets a clear error, not a file in a folder that is
+            # about to be gone; then the folders on disk
+            undo.append(("ram", (dict(ROOTS), list(WRITABLE), set(MD_ONLY), set(kb_graph.MEMORY_ROOTS), dict(PROJECTS)), None))
+            for r in roots:
+                ROOTS.pop(r, None)
+                kb_graph.MEMORY_ROOTS.discard(r)
+                MD_ONLY.discard(r)
+            PROJECTS.pop(old, None)
+            WRITABLE[:] = [w for w in WRITABLE if w.split("/", 1)[0] not in roots]
+            os.rename(PROJECTS_DIR / old, PROJECTS_DIR / new)
+            undo.append(("move", PROJECTS_DIR / new, PROJECTS_DIR / old))
+            for src, dst in hist + trash:
+                os.rename(src, dst)
+                undo.append(("move", dst, src))
+            # 4. state files
+            for f, dst, out in writes:
+                write_json(dst, out)
+                if dst != f:
+                    undo.append(("drop", dst, None))
+                    f.unlink()
+            write_json(PROJECTS_FILE, sorted({*read_json(PROJECTS_FILE, []), new} - {old}))
+            write_json(ALIASES_FILE, {**aliases, old: new})
+        except BaseException:
+            for kind, x, y in reversed(undo):
+                with contextlib.suppress(OSError):
+                    if kind == "ram":
+                        for live, was in zip((ROOTS, WRITABLE, MD_ONLY, kb_graph.MEMORY_ROOTS, PROJECTS), x):
+                            live.clear()
+                            live.update(was) if not isinstance(live, list) else live.extend(was)
+                    elif kind == "move":
+                        os.rename(x, y)
+                    elif kind == "drop":
+                        x.unlink()
+                    elif y is None:
+                        x.unlink(missing_ok=True)
+                    else:  # atomic, like write_json: a crash here must never leave tokens.json empty
+                        fd, tmp = tempfile.mkstemp(dir=x.parent, prefix=".knowledge-")
+                        with os.fdopen(fd, "w") as fh:
+                            fh.write(y)
+                        os.chmod(tmp, 0o600)
+                        os.replace(tmp, x)
+            with contextlib.suppress(Exception):
+                tar.close()
+            raise
+        # 5. RAM: the index entries move as they are (same text, mtime and size), then the roots change; the rescan
+        # waits on index.refreshing, so it never sees the roots half changed
+        with index.lock:
+            for rel in [r for r in index.files if r.split("/", 1)[0] in roots]:
+                root, _, rest = rel.partition("/")
+                index.files[f"{roots[root]}/{rest}"] = index.files.pop(rel)
+                index.bump(f"{roots[root]}/{rest}")
+        mount_project(new)
+    # anything that still landed under the old name (it should not: the old roots left RAM first) is told, not lost
+    left = [str(x) for x in [PROJECTS_DIR / old, *HISTORY.glob(f"{old}__*"), *HISTORY.glob(f"{old}-memory__*")] if x.exists()]
+    # 6. paths in live memos of every project: "<old>-memory/x.md" always, "<old>/x" only where that docs path exists; never
+    # in a task line (its words are signed: a changed line would lose its writer and approval), a local path or a URL
+    link = re.compile(rf"(?<![\w.\-/~:\\]){re.escape(old)}(-memory)?/([^\s`'\"()<>\[\]]*)")
+    docs = PROJECTS_DIR / new / "docs"
+    fix = lambda m: f"{new}-memory/{m[2]}" if m[1] else (  # noqa: E731
+        f"{new}/{m[2]}" if m[2] and (docs / m[2].split("/")[0]).exists() else m[0])
+    owner = re.compile(r"\[[^,\]\n]+,[^\]\n]+\]")
+    rewrite = lambda text: "".join(line if TASK_LIKE.match(line) or owner.search(line) else link.sub(fix, line)  # noqa: E731
+                                   for line in text.splitlines(keepends=True))
+    memos, failed = [], []
+    for rel, text, _ in index.items():
+        # session logs and archives are history: kept as written (their old paths still resolve through the alias)
+        if not mem_of(rel) or is_archive(rel) or rel.split("/")[1:2] == ["sessions"] or old not in text or rewrite(text) == text:
+            continue
+        try:
+            full, rel = resolve(rel, scoped=False)
+            for _ in range(5):  # compare-and-swap, like knowledge_edit: a write landing in between is never lost
+                data = read_if_there(full)
+                if data is None or replace_if_unchanged(full, data, rewrite(data.decode("utf-8")).encode()):
+                    break
+            else:
+                raise OSError("kept changing")
+            index.refresh(rel)  # keeps the old text as a version
+            memos.append(rel)
+        except (ToolError, OSError, UnicodeDecodeError) as e:
+            failed.append(f"{rel}: {e}")
+    relinked = [mid for mid, path in linked if relink_folder(mid, path, new)]
+    audit("admin-project-rename", f"{old} -> {new}")
+    return {"ok": True, "project": new, "backup": str(backup), "state_files": len(writes), "history": len(hist),
+            "trash": len(trash), "memos": memos, "memos_failed": failed, "relinked": relinked, "left_behind": left}
+
+
+def relink_folder(mid: str, path: str, project: str) -> bool:
+    """Ask a pc's companion to rewrite a folder's .knowledge-project to the project's current name (once: not while
+    the same request waits). Until it has, the old name still works through the alias."""
+    tokens = read_json(TOKENS_FILE, {})
+    mine = [n for n in (read_json(MACHINES_FILE, {}).get(mid) or {}).get("tokens", {}) if n in tokens and agents_on(tokens[n])]
+    if not mine:
+        return False
+    args = {"path": path, "project": project}
+    item = {"id": secrets.token_hex(6), "action": "link_folder", "args": args, "by": "rename", "at": time.time(),
+            "status": "waiting", "tokens": mine}
+
+    def change(d):
+        if not any(a.get("action") == "link_folder" and a.get("args") == args for a in d.get(mid, [])):  # asked once; a failure shows on Machines
+            d[mid] = (d.get(mid, []) + [item])[-50:]
+    update_state(MACHINE_ACTIONS, change)
+    wake_machine(mid)
+    return True
 
 
 # ---------------------------------------------------------------- web UI users (identity from Authentik)
@@ -4092,7 +4303,7 @@ async def sync_route(request: Request):
             return JSONResponse({"error": f"{asked} is a built-in project: docs are server-native and not mirrored via /sync", "builtin": True}, status_code=403)
         return JSONResponse({"error": f"sync needs a write token for {asked or 'this project'} (.knowledge-project)"}, status_code=403)
     docs = PROJECTS[project][0]
-    if b.get("project") not in (None, project):  # the folder's .knowledge-project names another project
+    if b.get("project") is not None and canon(str(b["project"])) != project:  # the folder's .knowledge-project names another project
         return JSONResponse({"error": f"this folder is marked for project {b.get('project')}, the token is for {project}"},
                             status_code=409)
     files = b.get("files") if isinstance(b.get("files"), dict) else {}
@@ -4203,7 +4414,7 @@ async def house_rules_route(request: Request):
 
 def session_project(request: Request) -> tuple[str, str]:
     """The project a session gets, and a note when that is not the one its folder asked for."""
-    asked, linked = request.query_params.get("project", ""), request.query_params.get("linked") == "1"
+    asked, linked = canon(request.query_params.get("project", "")), request.query_params.get("linked") == "1"
     project, note = token_project() or project_for(asked), ""
     if not in_scope(PROJECTS[project][1] + "/"):
         mine = [p for p, (_, m) in PROJECTS.items() if in_scope(m + "/")]
@@ -4377,6 +4588,7 @@ async def tasks_woken_route(request: Request):
         return JSONResponse({"error": "send JSON {project, id, agent, session}"}, status_code=400)
     if session.startswith("worker:") and (no := remote_refused()):  # a worker; "pak <ID>" in a session at the pc still may
         return no
+    project = canon(project)  # a client still on a name from before a rename
     if project not in PROJECTS or not in_scope(PROJECTS[project][1] + "/"):
         return JSONResponse({"error": f"unknown project {project}"}, status_code=404)
     if not may_lease(device.get(), project):
@@ -4409,6 +4621,7 @@ async def tasks_release_route(request: Request):
         project, tid = str(b.get("project", "")), str(b.get("id", ""))
     except (ValueError, AttributeError):
         return JSONResponse({"error": "send JSON {project, id}"}, status_code=400)
+    project = canon(project)  # a client still on a name from before a rename
     if project not in PROJECTS or not in_scope(PROJECTS[project][1] + "/"):
         return JSONResponse({"error": f"unknown project {project}"}, status_code=404)
     dev, out = dev_key(), []
@@ -4616,7 +4829,7 @@ async def semantic_route(request: Request):
     """Search by meaning for device tokens (the plugin's memory-check hook): {"hits": [...]} like the web UI. Archive
     folders are skipped unless archive=true, as in knowledge_semantic_search: their old copies of a memo otherwise
     took the top places (retrieval eval 25 Oct 2026)."""
-    project = request.query_params.get("project", "")
+    project = canon(request.query_params.get("project", ""))
     roots = tuple(r + "/" for r in PROJECTS[project] + ("claude",)) if project in PROJECTS else ()
     q = request.query_params.get("q", "").strip()[:500]
     skip = None if request.query_params.get("archive") == "true" else is_archive_line
@@ -5435,7 +5648,9 @@ async def ui_admin_state(request: Request, _):
         return JSONResponse({
             "admin": False, "user": dev["user"],
             "projects": [{"name": p, "docs": d, "memory": m, "builtin": p in BUILTIN_PROJECTS, "label": labels.get(p),
-                          "mode": me.get("projects", {}).get(p)} for p, (d, m) in list(PROJECTS.items()) if d in dev["roots"]],
+                          "mode": me.get("projects", {}).get(p), "mine": p in me.get("created", []),
+                          "was": sorted(k for k in read_json(ALIASES_FILE, {}) if canon(k) == p)}
+                         for p, (d, m) in list(PROJECTS.items()) if d in dev["roots"]],
             "tokens": [{"name": n, **{k: v for k, v in cfg.items() if k != "sha256"}, "last_used": last_used(n), "plugin": plugin_seen(n),
                         "clients": clients_seen(n)}
                        for n, cfg in sorted(tokens.items()) if cfg.get("owner") == dev["user"]],
@@ -5446,7 +5661,8 @@ async def ui_admin_state(request: Request, _):
         "admins": sorted(ADMINS),
         "users": read_json(USERS_FILE, {}),
         "projects": [{"name": p, "docs": d, "memory": m, "builtin": p in BUILTIN_PROJECTS, "label": labels.get(p),
-                      "task_writers": read_json(TASK_WRITERS, {}).get(p), "owner": project_owner(p)}
+                      "task_writers": read_json(TASK_WRITERS, {}).get(p), "owner": project_owner(p),
+                      "was": sorted(k for k in read_json(ALIASES_FILE, {}) if canon(k) == p)}
                      for p, (d, m) in PROJECTS.items()],
         "roots": sorted(ROOTS),
         "tokens": [{"name": n, **{k: v for k, v in cfg.items() if k != "sha256"}, "last_used": last_used(n), "plugin": plugin_seen(n),
@@ -5530,6 +5746,19 @@ async def ui_admin_project_label(request: Request, body: dict):
     write_json(LABELS_FILE, {**labels, **({name: label} if label and label != name else {})})
     audit("admin-project-label", name)
     return JSONResponse({"ok": True})
+
+
+@server.custom_route("/ui/api/admin/project-rename", methods=["POST"])
+@signed_in
+async def ui_admin_project_rename(request: Request, body: dict):
+    """{"name": "<project>", "to": "<new name>"}: rename a project made in the web UI (rename_project); the old name
+    stays an alias. An admin any such project, a person the ones they made themselves."""
+    dev = device.get()
+    if not dev.get("admin") and project_owner(str(body.get("name", ""))) != dev.get("user"):
+        return JSONResponse({"error": "only the person who made a project (or an admin) may rename it"}, status_code=403)
+    res = await asyncio.to_thread(rename_project, str(body.get("name", "")), str(body.get("to", "")).strip())
+    notify(f"Knowledge: project {body['name']} is now {res['project']} (backup {res['backup']}).")
+    return JSONResponse(res)
 
 
 @server.custom_route("/ui/api/admin/task-writers", methods=["POST"])
@@ -5785,7 +6014,7 @@ async def ui_history(request: Request):
 
 @server.custom_route("/ui/api/semantic", methods=["GET"])
 async def ui_semantic(request: Request):
-    project = request.query_params.get("project", "")
+    project = canon(request.query_params.get("project", ""))
     roots = tuple(r + "/" for r in PROJECTS[project] + ("claude",)) if project in PROJECTS else ()
     q = request.query_params.get("q", "").strip()[:500]
     hits = [h for h in await asyncio.to_thread(vec.search, q, roots, 30) if in_scope(h["path"])][:15] if q else []
@@ -7347,7 +7576,7 @@ def task_hosts(t: dict, rows: list[dict]) -> list[dict]:
     return [{"machine": r["id"], "label": r["label"]} for r in rows if r["own"] and not r.get("old") and r["online"]
             and (not pin or pin in {n.lower() for n in r.get("tokens") or []})
             and (c := r.get("companion")) and c.get("workersAllowed") and agent in (c.get("agents") or [])
-            and any(f.get("project") == t["project"] for f in (c.get("folders") or {}).get("linked", []))]
+            and any(canon(f.get("project", "")) == t["project"] for f in (c.get("folders") or {}).get("linked", []))]
 
 
 def no_host(t: dict, rows: list[dict]) -> str:
@@ -7361,7 +7590,7 @@ def no_host(t: dict, rows: list[dict]) -> str:
              ("no pc allows workers (Machines, Settings)", lambda r: (r.get("companion") or {}).get("workersAllowed")),
              (f"no pc has {agent} installed", lambda r: agent in ((r.get("companion") or {}).get("agents") or [])),
              (f"no pc has a folder linked to {t['project']} (Machines, Folders: Link)",
-              lambda r: any(f.get("project") == t["project"] for f in ((r.get("companion") or {}).get("folders") or {}).get("linked", []))))
+              lambda r: any(canon(f.get("project", "")) == t["project"] for f in ((r.get("companion") or {}).get("folders") or {}).get("linked", []))))
     for why, ok in steps:
         if not (pcs := [r for r in pcs if ok(r)]):
             return why
@@ -8693,6 +8922,8 @@ WORKER_KEY = re.compile(r"\w[\w.-]{0,79}/\w[\w.-]{0,79}")  # <project>/<task id>
 def worker_file(mid: str, key: str) -> Path:
     if not re.fullmatch(r"[0-9a-f]{16}", mid) or not WORKER_KEY.fullmatch(key):
         raise ValueError("unknown worker")
+    project, _, tid = key.partition("/")
+    key = f"{canon(project)}/{tid}"  # a companion may report a worker under its project's name from before a rename
     return CHATS_DIR / mid / "workers" / (hashlib.sha256(key.encode()).hexdigest()[:24] + ".json")
 
 
@@ -9065,6 +9296,9 @@ async def machine_report(request: Request):
     except (ValueError, AttributeError, TypeError) as e:
         return JSONResponse({"error": f"bad report: {e}"}, status_code=400)
     await asyncio.to_thread(mark_machine, dev, report=report)
+    for f in report["folders"]["linked"]:  # a folder still linked to a project's name from before a rename
+        if (now := canon(f["project"])) != f["project"] and now in PROJECTS:
+            await asyncio.to_thread(relink_folder, dev["machine"], f["path"], now)
     if isinstance(b.get("workers"), list):  # an older companion that sends none keeps its transcripts; all it sent, not only the 40 kept
         await asyncio.to_thread(prune_worker_transcripts, dev["machine"], [w for w in b["workers"][:1000] if isinstance(w, dict)])
     told, broken = [], []
@@ -9101,6 +9335,7 @@ async def ui_task_approve(request: Request):
         project, tid = str(body.get("project", "")), str(body.get("id", ""))
     except (ValueError, AttributeError):
         return JSONResponse({"error": "send JSON {project, id}"}, status_code=400)
+    project = canon(project)  # a client still on a name from before a rename
     if project not in PROJECTS or not in_scope(PROJECTS[project][1] + "/"):
         return JSONResponse({"error": f"unknown project {project}"}, status_code=404)
     if not may_approve(project):
@@ -9127,6 +9362,7 @@ async def ui_task_cancel(request: Request):
         return JSONResponse({"error": "send JSON {project, id, reason}"}, status_code=400)
     if back and not reason:
         return JSONResponse({"error": "sending it back needs a reason: the requester only gets that line"}, status_code=400)
+    project = canon(project)  # a client still on a name from before a rename
     if project not in PROJECTS or not in_scope(PROJECTS[project][1] + "/"):
         return JSONResponse({"error": f"unknown project {project}"}, status_code=404)
     if not may_approve(project):
@@ -9162,6 +9398,7 @@ async def ui_task_redo(request: Request):
         return JSONResponse({"error": "send JSON {project, id, agent, remark}"}, status_code=400)
     if not remark or agent not in REVIEW_OWNERS:
         return JSONResponse({"error": "sending it back needs a remark and an agent (claude, codex or agy)"}, status_code=400)
+    project = canon(project)  # a client still on a name from before a rename
     if project not in PROJECTS or not in_scope(PROJECTS[project][1] + "/"):
         return JSONResponse({"error": f"unknown project {project}"}, status_code=404)
     if not may_approve(project):
@@ -9194,6 +9431,7 @@ async def ui_task_trust(request: Request):
         project, writer = str(body.get("project", "")), str(body.get("writer", "")).strip()
     except (ValueError, AttributeError):
         return JSONResponse({"error": "send JSON {project, writer}"}, status_code=400)
+    project = canon(project)  # a client still on a name from before a rename
     if project not in PROJECTS or not in_scope(PROJECTS[project][1] + "/"):
         return JSONResponse({"error": f"unknown project {project}"}, status_code=404)
     if not may_approve(project):
@@ -9225,6 +9463,7 @@ async def ui_task_assign(request: Request):
         return JSONResponse({"error": "send JSON {project, id, owner, device?}"}, status_code=400)
     if not re.fullmatch(r"[\w .-]{1,40}", owner) or dev_pin and not re.fullmatch(r"[\w.-]{1,60}", dev_pin):
         return JSONResponse({"error": "owner: a name (letters, digits, space, . -); device: a token name"}, status_code=400)
+    project = canon(project)  # a client still on a name from before a rename
     if project not in PROJECTS or not in_scope(PROJECTS[project][1] + "/"):
         return JSONResponse({"error": f"unknown project {project}"}, status_code=404)
     if not may_approve(project):
@@ -9262,6 +9501,7 @@ async def ui_task_extend(request: Request):
         return JSONResponse({"error": "send JSON {project, id, days}"}, status_code=400)
     if not 1 <= days <= 90:
         return JSONResponse({"error": "days: 1 to 90"}, status_code=400)
+    project = canon(project)  # a client still on a name from before a rename
     if project not in PROJECTS or not in_scope(PROJECTS[project][1] + "/"):
         return JSONResponse({"error": f"unknown project {project}"}, status_code=404)
     if not may_approve(project):

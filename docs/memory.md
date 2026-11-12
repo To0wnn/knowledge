@@ -37,6 +37,15 @@ checks them against a few house rules, so a growing pile of agent memory stays f
 - **Projects:** each project has a docs root and a memory root. A session picks its project from its working folder;
   a token can also be limited to one project (a guest). A new server has one project (`homelab`, docs in
   `data/docs`, memory in `data/memory`); the admin page makes more and gives a project the name the web UI shows.
+- **Renaming a project** (admin page, Projects, Rename…; an admin, or the person who made it; `POST /ui/api/admin/project-rename {name, to}`): only a
+  project made on the admin page. It first writes a tar of everything it changes to `state/backups/` (kept 30 days),
+  then moves the project's folder, history and trash copies, rewrites the name in every state file (tokens, people,
+  shares, tasks, chats, workers, linked folders) and the paths `<old>-memory/...` and `<old>/...` in live memos (not in
+  session logs or archives, a task line, a local path or a URL). The old name stays an alias: a folder whose `.knowledge-project` still says it, a
+  client or a link with old paths keeps working, and each pc's companion is asked once to rewrite its folder's
+  `.knowledge-project`. A failure before the memos are touched puts everything back; after that, the tar is the way
+  back (stop the server, unpack `projects/`, `history/`, `deleted/` and `state/` over the data folders, start it).
+  The display name alone (no rename) is the field next to it.
 - **Lint:** deterministic checks in ~80 ms: dead links, index lines without a file and the reverse, missing frontmatter
   or sections, oversized memos, overdue open items, probable secrets (never shown), raw sources not yet processed.
 - **Bounds:** a file keeps up to 200 versions and 25 MB of history (always the newest 10). A month's session log goes on

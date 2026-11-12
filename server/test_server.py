@@ -3658,6 +3658,51 @@ def main():
         assert "raised" in call("knowledge_read", {"path": "garden-memory/project_beds.md"})[1]
         assert "garden" in json.loads(raw("GET", "/ui/api/me", headers=ck)[2])["projects"]
         assert "project garden" in http("GET", "/context/1?project=/home/x/garden")[1]
+        # Renaming a project made in the UI: a backup first, then everything moves along, and the old name keeps working.
+        assert admin("/ui/api/admin/project", {"name": "orchard"})[0] == 200
+        ot = json.loads(admin("/ui/api/admin/token", {"name": "orchard-pc", "write": True, "roots": ["orchard", "orchard-memory"]})[2])["token"]
+        assert http("POST", "/sync", {"files": {"docs/plan.md": "---\ntopic: General\n---\nplan\n"}}, token=ot)[0] == 200
+        trees = ("apples: orchard-memory/project_pears.md, orchard/docs/plan.md; not orchardx/y, orchard/nothere.md, ~/orchard/docs/plan.md or C:/orchard/x\n"
+                 "- open until 1 Jan 2099 [Codex, OR-1] from Claude, start now: read orchard-memory/project_pears.md\n")
+        assert not call("knowledge_write", {"path": "orchard-memory/project_trees.md", "content": memo(trees, "trees")}, token=ot)[0]
+        assert not call("knowledge_edit", {"path": "orchard-memory/project_trees.md", "old_string": "apples", "new_string": "apples and plums"}, token=ot)[0]
+        assert admin("/ui/api/admin/project-label", {"name": "orchard", "label": "Orchard Co"})[0] == 200
+        assert admin("/ui/api/admin/task-writers", {"name": "orchard", "writers": ["orchard-pc"]})[0] == 200
+        opc = {"X-Knowledge-Machine": "eeeeeeeeeeeeeeee", "X-Knowledge-Machine-Label": "barn"}
+        orep = {"version": "0.15.0", "folders": {"linked": [{"path": "/home/x/apples", "project": "orchard"}]}}
+        assert http("POST", "/machine/report", orep, token=ot, headers=opc)[0] == 200
+        assert admin("/ui/api/admin/project-rename", {"name": "garden", "to": "orchard"})[0] == 400  # taken
+        assert admin("/ui/api/admin/project-rename", {"name": "trade", "to": "bourse"})[0] == 400  # built in
+        assert admin("/ui/api/admin/project-rename", {"name": "orchard", "to": "Bad-Name"})[0] == 400
+        st, _, res = admin("/ui/api/admin/project-rename", {"name": "orchard", "to": "grove"})
+        res = json.loads(res)
+        assert st == 200 and res["project"] == "grove" and res["memos"] == ["grove-memory/project_trees.md"] and res["relinked"] == ["eeeeeeeeeeeeeeee"], res
+        assert res["history"] >= 2 and Path(res["backup"]).stat().st_size > 0 and res["memos_failed"] == [] and res["left_behind"] == [], res
+        import tarfile
+        with tarfile.open(res["backup"]) as tar:
+            names = tar.getnames()
+        assert "projects/orchard/memory/project_trees.md" in names and any(n.startswith("history/orchard-memory__") for n in names), names
+        assert not (tmp / "projects/orchard").exists() and (tmp / "projects/grove/docs/docs/plan.md").exists()
+        text = call("knowledge_read", {"path": "grove-memory/project_trees.md"}, token=ot)[1]
+        assert "apples and plums: grove-memory/project_pears.md, grove/docs/plan.md; not orchardx/y, orchard/nothere.md, ~/orchard/docs/plan.md or C:/orchard/x" in text, text
+        assert "start now: read orchard-memory/project_pears.md" in text, text  # a task line keeps its signed words (and its writer)
+        assert "apples and plums" in call("knowledge_read", {"path": "orchard-memory/project_trees.md"}, token=ot)[1]  # an old link still reads
+        hist = call("knowledge_history", {"path": "grove-memory/project_trees.md"}, token=ot)[1]
+        assert hist.count("\n") >= 3, hist  # the versions from before the rename moved along
+        a = json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])
+        grove = next(p for p in a["projects"] if p["name"] == "grove")
+        assert grove["label"] == "Orchard Co" and grove["task_writers"] == ["orchard-pc"] and grove["was"] == ["orchard"], grove
+        assert not any(p["name"] == "orchard" for p in a["projects"])
+        assert next(t for t in a["tokens"] if t["name"] == "orchard-pc")["roots"] == ["grove", "grove-memory"]
+        assert "project grove" in http("GET", "/context/1?project=orchard&linked=1", token=ot)[1]
+        assert "project grove" in http("GET", "/context/1?project=/home/x/orchard")[1]  # a folder named after the old name
+        assert http("POST", "/sync", {"files": {"docs/plan.md": "---\ntopic: General\n---\nplan v2\n"}}, token=ot)[0] == 200
+        assert (tmp / "projects/grove/docs/docs/plan.md").read_text().endswith("plan v2\n")
+        acts = json.loads(http("GET", "/machine/actions", token=ot, headers=opc)[1])["actions"]
+        assert [(x["action"], x["args"]) for x in acts] == [("link_folder", {"path": "/home/x/apples", "project": "grove"})], acts
+        assert http("POST", "/machine/report", orep, token=ot, headers=opc)[0] == 200  # still the old name: asked once, not again
+        assert json.loads(http("GET", "/machine/actions", token=ot, headers=opc)[1])["actions"] == []
+        assert admin("/ui/api/admin/project", {"name": "orchard"})[0] == 400  # the old name stays reserved for its links
         # A guest (a friend's Windows pc): a write token limited to garden. The project comes from the token, the context
         # carries the house rules and nothing of the owner, and /sync mirrors the Markdown of the guest's folder.
         ctx = http("GET", "/context/1?project=" + urllib.parse.quote("C:\\Users\\Bob\\A350Copilot"), token=fr)[1]
@@ -4135,6 +4180,14 @@ def main():
         assert "erinproj" in json.loads(raw("GET", "/ui/api/me", headers=er)[2])["writable"]
         roots = next(t["roots"] for t in json.loads(raw("GET", "/ui/api/admin", headers=er)[2])["tokens"] if t["name"] == "erin.laptop")
         assert {"erinproj", "erinproj-memory"} <= set(roots), roots  # her devices reach her new project at once
+        # She may rename what she made (and take its old name back), nothing else.
+        assert admin("/ui/api/admin/project-rename", {"name": "grove", "to": "erinsgrove"}, er)[0] == 403
+        assert next(p for p in json.loads(raw("GET", "/ui/api/admin", headers=er)[2])["projects"] if p["name"] == "erinproj")["mine"] is True
+        assert admin("/ui/api/admin/project-rename", {"name": "erinproj", "to": "erintmp"}, er)[0] == 200
+        assert "erintmp" in json.loads(raw("GET", "/ui/api/me", headers=er)[2])["writable"]
+        st, _, res = admin("/ui/api/admin/project-rename", {"name": "erintmp", "to": "erinproj"}, er)
+        assert st == 200 and json.loads(res)["left_behind"] == [], res
+        assert "erinproj" in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["users"]["erin"]["created"]
         machines_contract(tmp, ck, fr, raw, er, et, heard)
         chats_contract(tmp, ck, fr, raw, er, et)
         share_contract(tmp, ck, fr, raw, er, et)
