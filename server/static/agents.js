@@ -44,7 +44,7 @@ async function ckSummary() {
     if (what && (x.status === "done" || x.status === "failed")) { ck.waits.delete(x.id); toast(`${what}: ${x.result || x.status}`, x.status === "failed"); }
   }
   ck.chats = cs.chats;
-  if (bd) { ck.board = bd.items; ck.boardAt = Date.now(); inboxCount(ck.board); } // a failed board keeps the last one: an empty one would notify it all again
+  if (bd) { ck.board = bd.items; ck.boardAt = Date.now(); ck.scope = { scope: bd.scope || "all", names: bd.names || [], others: bd.others || 0 }; inboxCount(ck.board); } // a failed board keeps the last one: an empty one would notify it all again
   const now = Date.now() / 1000;
   let live = ck.chats.filter((c) => ckBusy(c.status)).length;
   const worst = {}; // per agent its fullest usage window over the pcs
@@ -186,7 +186,7 @@ function ckList() {
       fold.setAttribute("aria-expanded", String(ck.doneOpen));
       fold.onclick = () => { ck.doneOpen = !ck.doneOpen; ckList(); $("ck-list").querySelector(".ck-done-toggle")?.focus(); };
       head.append(fold);
-    } else head.append(el("span", null, name), el("span", "ck-count", String(list.length)));
+    } else head.append(el("span", null, name), el("span", "ck-count", String(list.length)), ...(id === "needs" ? [ckScopeSwitch()] : []));
     sec.append(head);
     if (!list.length) sec.append(el("p", "ck-none", "Nothing waits for you."));
     if (id !== "done" || ck.doneOpen) sec.append(...ckBunches(list));
@@ -478,6 +478,11 @@ function ckItem(i) {
       () => ckAnswer(card, { label: `Send ${i.id} back to ${i.from}`, hint: "What should change? (it goes back as their result)", go: "Send back", need: true },
         (text) => ckDo("/ui/api/task/cancel", { project: i.project, id: i.id, reason: text, back: true })));
     later.push(["Decline…", "Not wanted: its requester gets it back as a result", () => ckCancel(card, i)]);
+    if (i.writer) later.push([`Always trust ${i.writer} in ${shown(i.project)}…`, "Their task lines in this project start without asking you from now on",
+      async () => {
+        if (!confirm(`Trust ${i.writer} in ${shown(i.project)}?\n\nTask lines they write there then start without your approval. The admin page (Projects, task writers) takes it away again.\n\nThis also approves ${i.id}.`)) return;
+        if (await ckDo("/ui/api/task/trust", { project: i.project, writer: i.writer })) ckDo("/ui/api/task/approve", { project: i.project, id: i.id });
+      }]);
   }
   if (i.kind === "ask") { // the board shows a short title: Allow only when that title is the whole request
     for (const [d, text, title] of ckAskButtons(i).filter(([d]) => i.full !== false || d === "deny")) act(text, title, () => ckDo("/ui/api/chat/approve", { machine: i.machine, id: i.chat, ask: i.id, decision: d }));
@@ -539,6 +544,25 @@ function ckItem(i) {
   if (acts.childNodes.length) card.append(acts);
   if (i.kind === "chat" && chat?.sub_list?.length) card.append(ckItemSubs(chat));
   return card;
+}
+// Needs you: only your own task lines and results, or everyone's in your projects (a shared project has the others'
+// too). "Only mine" needs the names task lines give you: asked once, then saved in Settings (task_names).
+function ckScopeSwitch() {
+  const s = ck.scope || { scope: "all", names: [], others: 0 }, mine = s.scope === "mine" && s.names.length > 0;
+  const box = el("span", "seg ck-scope"); box.setAttribute("role", "group"); box.setAttribute("aria-label", "Whose tasks and results");
+  const pick = (text, on, title, fn) => { const b = el("button", null, text); b.type = "button"; b.title = title; b.setAttribute("aria-pressed", String(on)); b.onclick = (e) => { e.stopPropagation(); if (!on) fn(); }; box.append(b); };
+  const save = async (body) => {
+    try { me.prefs = (await api("/ui/api/me/prefs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).prefs; }
+    catch (e) { return toast(e.message); }
+    ck.summaryAt = 0; ckTick();
+  };
+  pick("Only mine", mine, s.names.length ? `Only the task lines and results for ${s.names.join(", ")} (Settings: My names in task lines)` : "Only your own task lines and results: asks once for the names task lines give you", () => {
+    if (s.names.length) return save({ needs_scope: "mine" });
+    const names = (prompt("The names task lines give you, comma-separated (e.g. Anthony, To0wnn):", "") || "").trim();
+    if (names) save({ task_names: names, needs_scope: "mine" });
+  });
+  pick(`Everyone${s.others ? ` (+${s.others})` : ""}`, !mine, "Also the other people's task lines and results in your projects", () => save({ needs_scope: "all" }));
+  return box;
 }
 // A row's less frequent actions in a small menu (⋯); Esc closes it and gives the focus back.
 function ckMore(list, what) {

@@ -88,8 +88,14 @@ unfolds the whole line, from whom and for whom, its memo (Open in memo) and, whe
   a worker goes on on the task's branch (`-fix` like a hand-over). With no pc of yours running that agent's workers
   for the project, a new chat of that agent takes it right away (`pak <ID>-fix`).
 - **Later** is one menu: in 1 hour, tomorrow 08:00, or hide until it changes (`/ui/api/board/dismiss`).
-- **My names in task lines** (Settings, `task_names`, comma-separated): set, Needs you shows only the person lines
-  (tasks, results, hand-overs) for those names, not those of the others in a shared project; empty, everyone's.
+- **Only mine / Everyone** (a switch in the Needs-you heading, list and grid; `needs_scope`, kept per person): Only
+  mine hides the person lines (tasks, results) for other names, Everyone (+n) shows them, marked `others`. Only mine
+  needs the names task lines give you (Settings, "My names in task lines", `task_names`; the switch asks once); without
+  names everything shows. The sidebar badge, the browser title and the Matrix messages count what the switch shows.
+- **Always trust <writer> in <project>…** (⋯ on an approval from a writer the project does not trust; owner or admin,
+  `POST /ui/api/task/trust`): the writer joins the project's task writers and the task is approved. A project without a
+  list gets `["default", <writer>]`: "default" in a list keeps the default trust (owner, admins, own devices) and adds
+  to it; a list without it replaces the default, as before. The admin page (Projects, task writers) takes it away.
 
 ## Results handed back
 

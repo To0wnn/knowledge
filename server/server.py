@@ -2392,12 +2392,15 @@ def project_owner(project: str) -> str:
 def trusted_writer(project: str, by: str, _tokens: dict | None = None, _writers: list | None = None, _owner: str | None = None) -> bool:
     """Whether a task line `by` wrote may start without approval. The admin page may list the writers per project;
     by default: admins, the admins' own devices (admin-made tokens marked "self"), the project's owner and that person's
-    tokens. Another admin-made token (a friend's, a PA's) is not trusted by default."""
+    tokens. Another admin-made token (a friend's, a PA's) is not trusted by default. A list with "default" in it adds its
+    writers to the default (what Trust on a Needs-you card writes)."""
     tokens = _tokens if _tokens is not None else read_json(TOKENS_FILE, {})
     user = by.removeprefix("user:") if by.startswith("user:") else (tokens.get(by) or {}).get("owner", "")
     writers = _writers if _writers is not None else read_json(TASK_WRITERS, {}).get(project)
-    if writers is not None:
-        return by in writers or bool(user) and user in writers
+    if writers is not None and (by in writers or bool(user) and user in writers):
+        return True
+    if writers is not None and "default" not in writers:  # a list replaces the default, unless it names "default" too
+        return False
     if not by.startswith("user:") and by not in tokens:
         return False  # revoked, or never a token
     owner = _owner if _owner is not None else project_owner(project)
@@ -4655,7 +4658,7 @@ async def ui_transcribe(request: Request):
 
 PREFS_FILE = ADMIN_DIR / "user_prefs.json"  # per person, set on the Settings page: {user: {chat_default: {agent, id, effort}, keys: {action: combo}, matrix_room, <PREF_CHOICES key>: value}}
 PREF_CHOICES = {"grid_open": ("tab", "here"), "grid_group": ("project", "together"), "send_key": ("ctrl", "enter", "shift"), "start_page": ("chats", "tasks", "notes", "map"),
-                "live_typing": ("on", "off")}  # the first is the default: not stored. live_typing: others in a shared chat see what you type
+                "live_typing": ("on", "off"), "needs_scope": ("mine", "all")}  # the first is the default: not stored. live_typing: others in a shared chat see what you type
 
 MATRIX_TOKENS_FILE = ADMIN_DIR / "matrix_tokens.json"  # {user: token} for an admin's own homeserver; never sent back to the page
 MATRIX_URL = re.compile(r"https?://[^\s/?#]{1,255}(/[^\s?#]{0,200})?")
@@ -7198,26 +7201,27 @@ def board_items() -> list[dict]:
         key = f"task:{t['project']}/{t['id']}"
         sig = hashlib.sha256(f"{t['line']}|{t.get('stalled')}|{t['done']}".encode()).hexdigest()[:16]
         to_person = t["done"] and not agent_owner(t["owner"]) or not t["done"] and re.search(r"-cont$", t["id"], re.I) and t["from"] and not agent_owner(t["from"])
-        if to_person and someone_else(t["owner"] if t["done"] else t["from"]):  # another person's result or hand-over: theirs to read
-            if t["done"]:
-                continue
-            to_person = False  # a hand-over still runs as the agent task it is
+        theirs = to_person and someone_else(t["owner"] if t["done"] else t["from"])  # another person's result or hand-over
+        if theirs and not t["done"]:
+            to_person = False  # a hand-over for someone else still runs as the agent task it is
         if to_person:  # handed back (or over) to a person: they read it, then remove the line; it never starts anything
             what = (f"result for {t['owner']}: " if t["done"] else f"handed over to {t['owner']} for {t['from']}: ") + t["text"][:140]
             items.append({"kind": "task", "col": "needs", "id": t["id"], "agent": agent, "project": t["project"], "path": t["path"],
                           "title": f"{t['id']} · {t['text'][:120]}", "line": what, "at": t.get("since") or 0, "owner": t["owner"],
                           "key": key if t["done"] else f"handover:{t['project']}/{t['id']}", "sig": sig, "result": True, "line_text": t["line"],
-                          "text": t["text"], "from": t.get("from") or "", "can_send_back": t["done"] and not CANCELLED.match(t["text"]) and may_approve(t["project"])})
+                          "text": t["text"], "from": t.get("from") or "", "can_send_back": t["done"] and not CANCELLED.match(t["text"]) and may_approve(t["project"]),
+                          "others": bool(theirs)})
             if t["done"]:
                 continue
         task = {"kind": "task", "id": t["id"], "agent": agent, "project": t["project"], "title": f"{t['id']} · {t['text'][:120]}",
                 "path": t["path"], "line": "", "at": 0, "owner": t["owner"], "key": key, "sig": sig, "can_cancel": t.get("can_cancel", False),
                 "due": t["due"], "overdue": t["overdue"], "approve_warning": t.get("approve_warning", ""),
                 # the whole line on the card, so it is read where it is answered; who wrote it when that is not trusted
-                "text": t["text"], "from": t.get("from") or "", "author": "" if t.get("trusted", True) else t.get("author") or "an unknown writer"}
+                "text": t["text"], "from": t.get("from") or "", "author": "" if t.get("trusted", True) else t.get("author") or "an unknown writer",
+                # an untrusted writer the approver may choose to trust from now on (a token or user:<name>, not "an unknown writer")
+                "writer": t.get("author", "") if not t.get("trusted", True) and t.get("can_approve") else "",
+                "others": not t["done"] and not agent and not agent_owner(t["owner"]) and someone_else(t["owner"])}  # another person's line
         if (t["project"], t["id"]) in working:  # a running worker shows it
-            continue
-        if not t["done"] and not agent and not agent_owner(t["owner"]) and someone_else(t["owner"]):  # another person's task, also past its date
             continue
         closable = {**task, "col": "needs", "closable": True, "task_line": t["line"], "can_close": may_approve(t["project"])}
         if t["overdue"] and not t["done"] and not to_person and not t["held"]:
@@ -7316,10 +7320,19 @@ def review_items(rows: list[dict], tasks: list[dict]) -> list[dict]:
     return list(out.values())
 
 
+def board_view(items: list[dict]) -> dict:
+    """What this person sees of the board: with names set (task_names) and "Only mine" (needs_scope, the default), not
+    the other people's task lines and results; "others" counts what that hides, for the switch."""
+    prefs = read_json(PREFS_FILE, {}).get(device.get().get("user", ""), {})
+    scope, hidden = prefs.get("needs_scope", "mine"), [i for i in items if i.get("others")]
+    return {"items": [i for i in items if scope == "all" or not i.get("others")], "scope": scope,
+            "names": prefs.get("task_names") or [], "others": sum(1 for i in hidden if i["col"] == "needs")}
+
+
 @server.custom_route("/ui/api/board", methods=["GET"])
 async def ui_board(request: Request):
     BOARD_SEEN[device.get().get("user", "")] = time.time()  # the board is open: no Matrix message for what it shows
-    return JSONResponse({"items": await asyncio.to_thread(board_items), "now": time.time()})
+    return JSONResponse({**board_view(await asyncio.to_thread(board_items)), "now": time.time()})
 
 
 @server.custom_route("/ui/api/board/dismiss", methods=["POST"])
@@ -7434,7 +7447,7 @@ def needs_check(now: float) -> int:
     for user in sorted(ADMINS):
         tok = device.set(user_device(user))
         try:
-            mine = [i for i in board_items() if i["col"] == "needs"
+            mine = [i for i in board_view(board_items())["items"] if i["col"] == "needs"
                     and not (i["kind"] == "task" and not (i.get("approve") or i.get("result") or i.get("blocked")))]  # a stalled task has its own notice (stalled_check)
         finally:
             device.reset(tok)
@@ -8899,6 +8912,32 @@ async def ui_task_redo(request: Request):
         return JSONResponse({"error": str(e)}, status_code=409)
     audit("task-redo", f"{project}/{base}-fix to {agent}")
     return JSONResponse({"ok": True, "id": f"{base}-fix", "line": line})
+
+
+@server.custom_route("/ui/api/task/trust", methods=["POST"])
+async def ui_task_trust(request: Request):
+    """{"project", "writer"}: the project's owner or an admin trusts a writer's task lines in this project from now on
+    (they start without approval). Added to the project's list of task writers; without a list, the list becomes
+    ["default", writer], so everyone trusted by default stays trusted. Taken away again on the admin page (Projects)."""
+    try:
+        body = await request.json()
+        project, writer = str(body.get("project", "")), str(body.get("writer", "")).strip()
+    except (ValueError, AttributeError):
+        return JSONResponse({"error": "send JSON {project, writer}"}, status_code=400)
+    if project not in PROJECTS or not in_scope(PROJECTS[project][1] + "/"):
+        return JSONResponse({"error": f"unknown project {project}"}, status_code=404)
+    if not may_approve(project):
+        return JSONResponse({"error": "only the project's owner or an admin may trust a writer"}, status_code=403)
+    users = {u.lower() for u in [*read_json(USERS_FILE, {}), *ADMINS]}  # admins are not in users.json
+    if not (writer in read_json(TOKENS_FILE, {}) or writer.startswith("user:") and writer[5:].lower() in users):
+        return JSONResponse({"error": f"{writer or '?'} is not a token or user:<name> of this server"}, status_code=400)
+
+    def change(d):
+        now = d.get(project)
+        d[project] = sorted(set(["default"] if now is None else now) | {writer})
+    await asyncio.to_thread(update_state, TASK_WRITERS, change)
+    audit("task-trust", f"{project}: {writer}")
+    return JSONResponse({"ok": True, "writers": read_json(TASK_WRITERS, {}).get(project)})
 
 
 @server.custom_route("/ui/api/task/assign", methods=["POST"])

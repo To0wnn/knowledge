@@ -283,6 +283,16 @@ def tasks_contract(tmp, ck, fr, ver, raw):
     assert r["UNT-Q"]["waiting_reason"].startswith("waits for approval: written by"), r["UNT-Q"]
     for tid in ("UNT-U", "UNT-P", "UNT-Q"):
         call("knowledge_edit", {"path": path, "old_string": next(l for l in call("knowledge_read", {"path": path}, fr)[1].splitlines() if f", {tid}]" in l).split("\t", 1)[-1] + "\n", "new_string": ""}, fr)
+    # "default" in a list keeps the default trust and adds to it; Trust (a Needs-you card) adds one writer that way.
+    assert writers(["default"]) == 200 and rows()["UNT-1"]["startable"], rows()["UNT-1"]
+    assert writers(["alice"]) == 200 and not rows()["UNT-1"]["startable"]
+    trust = lambda w, h=ui: raw("POST", "/ui/api/task/trust", json.dumps({"project": "garden", "writer": w}), h)
+    assert trust("nobody-such")[0] == 400 and trust("user:ghost")[0] == 400
+    st, _, b = trust("friend-pc")
+    assert st == 200 and json.loads(b)["writers"] == ["alice", "friend-pc"] and rows()["UNT-1"]["startable"], (b, rows()["UNT-1"])
+    assert writers(None) == 200 and trust("user:Alice")[0] == 200
+    assert json.loads((tmp / "task_writers.json").read_text())["garden"] == ["default", "user:Alice"], "no list yet: the default stays"
+    assert writers(["alice"]) == 200
     # A result is something an agent is told to act on: from an untrusted writer its words stay data.
     res = "- [Codex, UNT-R-done]: from the guest\n"
     assert not add(res)[0]
@@ -2155,6 +2165,10 @@ def inbox_contract(tmp, ck, fr, raw, er):
     assert ui("/ui/api/me/prefs", {"task_names": " Alice , alice,Al"})[0] == 200
     assert json.loads(ui("/ui/api/me")[2])["prefs"]["task_names"] == ["alice", "al"]
     assert "INB-3-done" not in board(), "another person's result"
+    whole = json.loads(ui("/ui/api/board")[2])
+    assert whole["scope"] == "mine" and whole["names"] == ["alice", "al"] and whole["others"] >= 1, {k: whole[k] for k in ("scope", "names", "others")}
+    assert ui("/ui/api/me/prefs", {"needs_scope": "all"})[0] == 200 and board()["INB-3-done"]["others"], "Everyone: the others' show, marked"
+    assert ui("/ui/api/me/prefs", {"needs_scope": "mine"})[0] == 200 and "INB-3-done" not in board()
     assert board()["INB-5-cont"]["approve"], "a hand-over for another person still waits for approval as an agent task"
     assert ui("/ui/api/me/prefs", {"task_names": ""})[0] == 200 and "task_names" not in json.loads(ui("/ui/api/me")[2])["prefs"]
     assert "INB-3-done" in board()

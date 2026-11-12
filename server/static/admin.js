@@ -266,7 +266,7 @@ function writersCell(p) {
   const td = el("td"), input = el("input");
   input.type = "text"; input.value = (p.task_writers || []).join(", "); input.placeholder = "default";
   input.setAttribute("aria-label", `Trusted task writers of ${p.name}`);
-  input.title = "Token names or users, comma-separated. Empty: the project's owner" + (p.owner ? ` (${p.owner})` : "") + " and their tokens, admins and tokens an admin made";
+  input.title = "Token names or users, comma-separated. Empty: the project's owner" + (p.owner ? ` (${p.owner})` : "") + " and their tokens, admins and tokens an admin made; \"default\" in the list keeps those and adds the rest (Trust on a Needs-you card writes it so)";
   input.onkeydown = (e) => { if (e.key === "Enter") input.blur(); };
   input.onchange = () => { const w = input.value.split(",").map((x) => x.trim()).filter(Boolean);
     run(() => api("/ui/api/admin/task-writers", { name: p.name, writers: w.length ? w : null }), input, `Saved: task writers of ${p.name}`); };

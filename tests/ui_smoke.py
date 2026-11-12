@@ -1414,6 +1414,14 @@ async def board(browser, devices, secret: str) -> None:
     check(cards == [["Approve", "Send back…"], ["Decline…", "Later: in 1 hour", "Later: tomorrow 08:00", "Hide until it changes"],
                     ["Done", "Send back…"], ["Later: in 1 hour", "Later: tomorrow 08:00", "Hide until it changes"], True, True, "claude,codex,agy"],
           f"Needs you: a task card answers Approve / Send back (Decline and Later in ⋯), a result Done / Send back with an agent to pick; a click unfolds the whole line and its writer {cards}")
+    switch = await pg.evaluate("""(() => { const keep = ck.scope, read = (b) => [...b.querySelectorAll('button')].map((x) => [x.textContent, x.getAttribute('aria-pressed')]);
+      ck.scope = { scope: 'mine', names: ['anthony'], others: 2 }; const a = read(ckScopeSwitch());
+      ck.scope = { scope: 'mine', names: [], others: 0 }; const b = read(ckScopeSwitch());
+      const t = ckItem({ col: 'needs', kind: 'task', project: 'p', path: 'p-memory/x.md', at: 0, sig: 's', id: 'T-1', key: 'task:p/T-1', title: 'T-1', line: '', approve: true,
+        owner: 'Codex', from: 'Rick', author: 'rick.pc', writer: 'rick.pc', text: 'x' });
+      ck.scope = keep; return [a, b, [...t.querySelectorAll('.menu-list button')].some((x) => x.textContent.startsWith('Always trust rick.pc in'))]; })()""")
+    check(switch == [[["Only mine", "true"], ["Everyone (+2)", "false"]], [["Only mine", "false"], ["Everyone", "true"]], True],
+          f"Needs you: the Only mine / Everyone switch says what it hides, and without names it shows everyone; an untrusted writer can be trusted from the card {switch}")
     await pg.click("#ck-view")
     await pg.wait_for_function("location.hash === '#/chats?view=list' && $('bd').hidden && !!$('ck-side').offsetParent", timeout=5000)
     check(await pg.evaluate("$('ck-view').textContent === 'Grid'"), "the List link opens the list, instead of the grid, and offers Grid back")

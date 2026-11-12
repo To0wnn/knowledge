@@ -239,12 +239,14 @@ function bdRender() {
   if (!bd.needs.querySelector(".ck-answer, .ck-reply, details[open]") && !selecting(bd.needs)) {
     const had = bd.needs.contains(document.activeElement) && document.activeElement.dataset.row; // the redraw keeps your place
     const h = el("h2", "bd-needs-head", `Needs you · ${needs.length}`);
+    h.append(" ", ckScopeSwitch());
     bd.needs.setAttribute("aria-label", `Needs you: ${needs.length}`);
     bd.needs.replaceChildren(h, ...ckBunches(needs));
     if (had) bd.needs.querySelector(`[data-row="${CSS.escape(had)}"]`)?.focus({ preventScroll: true });
   }
-  const order = [...(needs.length ? [bd.needs] : []), ...(queued.length ? [bd.queue] : []), ...(workers.length ? [bd.workers] : [])];
-  if (!needs.length) bd.needs.remove();
+  const strip = needs.length || ck.scope?.others; // nothing of yours, the others' hidden: the switch stays in reach
+  const order = [...(strip ? [bd.needs] : []), ...(queued.length ? [bd.queue] : []), ...(workers.length ? [bd.workers] : [])];
+  if (!strip) bd.needs.remove();
   if (!queued.length) bd.queue.remove();
   if (!workers.length) bd.workers.remove();
   for (const f of frames) {
