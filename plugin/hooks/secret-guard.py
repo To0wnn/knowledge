@@ -13,7 +13,9 @@ New text per agent: Claude Edit|Write|MultiEdit (content, new_string, edits), Co
 patch), agy (every string in toolCall.args except the old text and the path: CLI write_file Content, edit_file
 Replacement; app write_to_file CodeContent, replace_file_content ReplacementContent).
 The project folder: the git checkout around the session's folder plus, for a linked worktree, its main checkout; the
-agents' own folders (~/.claude, ~/.codex, ~/.gemini, the knowledge home) and the temp folder stay writable too.
+agents' own folders (~/.claude, ~/.codex, ~/.gemini, the knowledge home) and the temp folder stay writable too. Outside
+those only a file or folder the owner named in this chat or task (KNOWLEDGE_ASKS, written by the companion), never a
+drive root, the home folder or above it.
 shortcut: only the edit tools are checked; a shell command can still write elsewhere (Codex without YOLO has its sandbox).
 """
 import hashlib
@@ -134,18 +136,42 @@ def within(path: str, root: str) -> bool:
     return p == r or p.startswith(r.rstrip(os.sep) + os.sep)
 
 
+def asked_for(path: str, asks: str) -> bool:
+    """Whether the owner named `path` or a folder holding it (deeper than the home folder, never a root) in `asks`."""
+    flat = lambda x: (x.lower() if os.name == "nt" else x).replace("\\", "/").rstrip("/")
+    text, home = flat(asks), flat(str(Path.home()))
+    p = os.path.abspath(path)
+    while True:
+        up = os.path.dirname(p)
+        f = flat(p)
+        if up == p or f == home or home.startswith(f + "/"):  # a root, the home folder or above: too broad to count
+            return False
+        for name in {f, "~" + f[len(home):]} if f.startswith(home + "/") else {f}:
+            if re.search(re.escape(name) + r"(?![\w.-]|/[\w.-])", text, re.I if os.name == "nt" else 0):
+                return True
+        p = up
+
+
 def scope(agent: str, hook: dict, env) -> str:
     """The deny JSON when a companion-started session writes outside its project folder, else ''."""
     if not (env.get("KNOWLEDGE_CHAT") or env.get("KNOWLEDGE_WORKER")):
         return ""  # a person's own terminal session: theirs to steer
     cwd = env.get("CLAUDE_PROJECT_DIR") or hook.get("cwd") or os.getcwd()
-    ok = roots(cwd, env)
+    ok, asks = roots(cwd, env), None
     for t in targets(agent, hook):
         path = os.path.join(cwd, os.path.expanduser(t))  # a relative path is relative to the session's folder
-        if not any(within(path, r) for r in ok):
-            return deny(agent, f"{t} is outside this session's project folder ({cwd}). A chat or worker "
-                               "the companion started only writes inside its project: put the file there, and do not work "
-                               "around this with a shell command. If it really belongs elsewhere, tell the user so they can do it.")
+        if any(within(path, r) for r in ok):
+            continue
+        if asks is None:
+            try:
+                asks = Path(env["KNOWLEDGE_ASKS"]).read_text(encoding="utf-8", errors="replace") if env.get("KNOWLEDGE_ASKS") else ""
+            except OSError:
+                asks = ""
+        if not asked_for(path, asks):
+            return deny(agent, f"{t} is outside this session's project folder ({cwd}). A chat or worker the companion "
+                               "started writes outside its project only where the user explicitly named that folder or file "
+                               "in this chat or task. Put the file in the project, or ask the user and have them name the full "
+                               "folder; do not work around this with a shell command.")
     return ""
 
 
@@ -203,6 +229,19 @@ def self_test():
         assert scope("codex", {"tool_input": {"command": "*** Add File: x/y.py\n+1"}}, env) == ""
         assert json.loads(scope("agy", {"toolCall": {"args": {"TargetFile": str(outer)}}}, env))["decision"] == "deny"
         assert scope("agy", {"toolCall": {"args": {"TargetFile": json.dumps(str(main / "x"))}}}, env) == "", "agy: a JSON-encoded path"
+        asks = Path(t) / "asks.txt"
+        named = Path(os.path.abspath(os.sep)) / "Games" / "Site"
+        asks.write_text(f"zet het in {named} graag\nen {Path.home() / 'Desktop'}\n", encoding="utf-8")
+        env = {**env, "KNOWLEDGE_ASKS": str(asks)}
+        for ok in (named / "a.html", named / "css" / "b.css", Path.home() / "Desktop" / "x.txt"):
+            assert scope("claude", {"tool_input": {"file_path": str(ok)}}, env) == "", f"named by the owner: {ok}"
+        for bad in (named.parent / "Other" / "a.html", Path(str(named) + "2") / "a", Path.home() / "Documents" / "x", Path.home() / "x"):
+            assert scope("claude", {"tool_input": {"file_path": str(bad)}}, env), f"not named: {bad}"
+        asks.write_text(f"alles mag in {Path.home()} en {Path(os.path.abspath(os.sep))}\n", encoding="utf-8")
+        assert scope("claude", {"tool_input": {"file_path": str(Path.home() / "Documents" / "x")}}, env), "the home folder is too broad"
+        assert scope("claude", {"tool_input": {"file_path": str(named / "a")}}, env), "a drive root is too broad"
+        asks.write_text("put it in ~/Desktop please\n", encoding="utf-8")
+        assert scope("claude", {"tool_input": {"file_path": str(Path.home() / "Desktop" / "y.txt")}}, env) == "", "~/ counts"
     print("ok")
 
 
