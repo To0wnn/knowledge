@@ -1141,6 +1141,11 @@ def _companion(tok: str, tmp: Path, project: Path, name: str = "Companion Usér"
         else:
             (bin_dir / name).write_text(f'#!/bin/sh\nexec "{sys.executable}" "{bin_dir / "fakeagent.py"}" {name} "$@"\n', encoding="utf-8")
             (bin_dir / name).chmod(0o755)
+    if not WIN:  # the OS keyring belongs to the user, not to a test HOME: on a developer's pc with a real agy login the
+        # companion read its real quota from the cloud and ran a second agy worker (12 Nov 2026); here it finds nothing
+        for tool in ("secret-tool", "security"):
+            (bin_dir / tool).write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+            (bin_dir / tool).chmod(0o755)
     tools_dir = home / "tools"  # the tool add-on fixture (KNOWLEDGE_TOOLS_DIR) and its command, a .cmd on Windows
     tools_dir.mkdir()
     (bin_dir / "kntool.py").write_text("import os\nopen(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tool-mark.txt'), 'a').write('K')\n", encoding="utf-8")
