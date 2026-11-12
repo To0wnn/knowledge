@@ -6631,7 +6631,8 @@ async def machine_files_stream(request: Request):
 # there and posts the output back (POST /machine/chats/events); the UI polls for new events. One file per chat under
 # chats/<machine>/, plus a small queue.json per machine that the companion's poll reads.
 CHATS_DIR = ADMIN_DIR / "chats"
-CHAT_KEEP, CHAT_EVENTS, CHAT_BYTES, CHAT_TEXT = 50, 4000, 1_000_000, 20_000  # chats per machine, events and bytes per chat, chars per message
+CHAT_KEEP, CHAT_EVENTS, CHAT_BYTES, CHAT_TEXT = 50, 4000, 1_000_000, 20_000  # open chats per machine, events and bytes per chat, chars per message
+CHAT_CLOSED_DAYS = 90  # an archived chat stays this long after its last activity, outside CHAT_KEEP
 CHAT_PENDING = 5  # messages a chat keeps in line while its agent answers
 # Archive: the agent's last turn records the chat in the memos before the chat closes (the house rules, not the transcript)
 CHAT_TITLE_ASK = ("\n\n(knowledge web UI: first, together with your first other tool call, name this chat with the tool "
@@ -7000,9 +7001,21 @@ async def ui_chats(request: Request):
 
     def create():
         d.mkdir(parents=True, exist_ok=True)
-        q = read_json(d / "queue.json", {})
-        old = sorted((f for f in d.glob(CHAT_GLOB) if not q.get(f.stem, {}).get("busy")), key=lambda f: f.stat().st_mtime)
-        for f in old[:max(0, len(old) - CHAT_KEEP + 1)]:  # the oldest go: at most CHAT_KEEP per machine
+        q, root = read_json(d / "queue.json", {}), CHATS_DIR.resolve()
+        live, stale = [], []
+        for f in d.glob(CHAT_GLOB):
+            if q.get(f.stem, {}).get("busy"):
+                continue
+            o = read_json(f, None) or {}
+            # an archived chat counts for nothing until it is CHAT_CLOSED_DAYS quiet; a new message opens it again
+            if not o.get("closed"):
+                live.append(f)
+            elif (o.get("updated") or f.stat().st_mtime) < now - CHAT_CLOSED_DAYS * 86400:
+                stale.append(f)
+        live.sort(key=lambda f: f.stat().st_mtime)
+        for f in live[:max(0, len(live) - CHAT_KEEP + 1)] + stale:  # the oldest open ones go: at most CHAT_KEEP per machine
+            if f.resolve().parent.parent != root:  # only a chat file right under chats/<machine>/, never a path a link points elsewhere
+                continue
             f.unlink(missing_ok=True)
             update_state(d / "queue.json", lambda q, k=f.stem: q.pop(k, None))
         write_json(chat_file(mid, cid), c)

@@ -123,8 +123,10 @@ from a phone. The pc side runs in the companion ([companion.md](companion.md)).
   a sandboxed run change git hooks and config). A chat turn says it is one (`KNOWLEDGE_CHAT`, header `X-Knowledge-Chat`): like a worker it
   hears no task lists or "start your tasks", takes no lease, task or notice, and agy is not asked to register. Only the machine's owner sees or posts (admins
   too only on their own machines); a chat needs its pc online and says so. One file per chat under the state
-  directory (`chats/<machine>/`), at most 50 chats per machine (the oldest go) and 1 MB per chat (the oldest output
-  goes). Every turn, stop and failure is in the companion's activity log; a failure also shows in the chat.
+  directory (`chats/<machine>/`), at most 50 open chats per machine (the oldest go when a new one starts) and 1 MB per
+  chat (the oldest output goes). An archived chat does not count toward the 50: it stays until it has been quiet for
+  90 days (`CHAT_CLOSED_DAYS`, swept when a new chat starts on that pc); a new message opens it again, and then it
+  counts as open. Every turn, stop and failure is in the companion's activity log; a failure also shows in the chat.
 - **Workers in the chat view:** Follow on a worker opens its transcript as a chat card
   (`#/chats/worker/<project>/<ID>`), with Steer and Take over for its owner; a worker taken over continues as an
   ordinary chat in its worktree. How it works: [tasks.md](tasks.md#follow-steer-and-take-over-a-worker).

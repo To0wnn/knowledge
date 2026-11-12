@@ -994,9 +994,17 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     http("POST", "/machine/chats/events", {"chat": cid, "events": big, "done": True}, token=fr, headers=pc)
     data = json.loads((tmp / "chats" / mid / f"{cid}.json").read_text())
     assert data["trimmed"] and sum(len(e["text"]) for e in data["events"]) < 1_000_000 and data["events"][-1]["n"] == before + 60, len(data["events"])
+    # An archived chat is outside that cap: it stays CHAT_CLOSED_DAYS after its last activity, however old its file looks.
+    kept, stale = tmp / "chats" / mid / "a0000000000a.json", tmp / "chats" / mid / "a0000000000b.json"
+    for f, days in ((kept, srv.CHAT_CLOSED_DAYS - 1), (stale, srv.CHAT_CLOSED_DAYS + 1)):
+        f.write_text(json.dumps({"id": f.stem, "agent": "codex", "folder": "/home/x/garden", "project": "garden", "title": "old",
+                                 "closed": True, "updated": time.time() - days * 86400, "events": []}))
+        os.utime(f, (1, 1))  # the oldest files: the count-only rule took these first
     for _ in range(50):
         assert ui("/ui/api/chats", {"machine": mid, "agent": "claude", "folder": "/home/x/garden"})[0] == 200
-    assert len(json.loads(ui(f"/ui/api/chats?machine={mid}")[2])["chats"]) == 50 and not (tmp / "chats" / mid / f"{cid}.json").exists()
+    left = json.loads(ui(f"/ui/api/chats?machine={mid}")[2])["chats"]
+    assert sum(not c["closed"] for c in left) == 50 and not (tmp / "chats" / mid / f"{cid}.json").exists(), len(left)
+    assert kept.exists() and not stale.exists(), "an archived chat goes after 90 quiet days, not by count"
     # A chat turn (X-Knowledge-Chat, set by the companion) gets no task list in its start context, takes no lease and
     # no notice: tasks run in workers, never in a web UI chat.
     path = "garden-memory/project_tasks.md"
@@ -2399,7 +2407,8 @@ def board_contract(tmp, ck, fr, raw, er, et):
     assert ("chat", cids[1]) not in {(i["kind"], i["id"]) for i in board()}, "an unread chat older than a week needs nobody"
     chats = json.loads(ui(f"/ui/api/chats?machine={mid}")[2])["chats"]
     busy = sum(1 for c in chats if c["status"] in ("queued", "running"))  # a chat at work is never swept: it comes on top
-    assert 50 <= len(chats) <= 50 + busy, ("diffs.json is no chat", len(chats), busy)
+    shut = sum(1 for c in chats if c["closed"])  # archived chats are outside the cap of 50
+    assert 50 <= len(chats) - shut <= 50 + busy, ("diffs.json is no chat", len(chats), shut, busy)
     text = (tmp / "projects/garden/memory/project_tasks.md").read_text()
     for line in lines:
         assert line in text
