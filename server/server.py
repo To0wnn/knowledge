@@ -2998,19 +2998,21 @@ def mark_machine(dev: dict, agent: str = "", session: str = "", project: str = "
         print(f"machines not saved: {e}", flush=True)
 
 
-def worker_machines(project: str, agent: str) -> list[tuple[str, float]]:
+def worker_machines(project: str, agent: str, pin: str = "") -> list[tuple[str, float]]:
     """(label, last report) of every pc whose companion last said it runs workers of `agent` for `project` (workers
-    allowed, the agent installed, a folder linked to the project), online or not."""
+    allowed, the agent installed, a folder linked to the project), online or not; with a pin only the pcs of that
+    device token (/tasks/ready gives a pinned line to no other)."""
     return sorted((m.get("label", mid), c.get("at", 0)) for mid, m in read_json(MACHINES_FILE, {}).items()
                   if (c := m.get("companion")) and c.get("workersAllowed")
+                  and (not pin or pin.lower() in {n.lower() for n in m.get("tokens") or {}})
                   and agent in (c.get("agents") or {})
                   and any(f.get("project") == project for f in (c.get("folders") or {}).get("linked", [])))
 
 
-def worker_hosts(project: str, agent: str) -> list[str]:
+def worker_hosts(project: str, agent: str, pin: str = "") -> list[str]:
     """The online pcs of worker_machines. None: that agent's chats take its tasks themselves (as 0.14)."""
     now = time.time()
-    return [label for label, at in worker_machines(project, agent) if now - at < ONLINE]
+    return [label for label, at in worker_machines(project, agent, pin) if now - at < ONLINE]
 
 
 def since(at: float) -> str:
@@ -3041,14 +3043,17 @@ def task_where(project: str, t: dict, lease: dict | None, now: float) -> str:
                 return any(tokens.get(n, {}).get("owner") == dev.get("user") for n in m.get("tokens", {}))
         return False
 
-    if hosts := worker_hosts(project, agent):
+    pin = t.get("device") or ""
+    if hosts := worker_hosts(project, agent, pin):
         visible_hosts = [h for h in hosts if host_visible(h)]
         why = sorted({w for mid, m in read_json(MACHINES_FILE, {}).items() if m.get("label", mid) in hosts  # not an offline pc's old reason
                       if (w := ((m.get("companion") or {}).get("waiting") or {}).get(f"{project}/{t['id']}"))})
         if visible_hosts:
             return f"goes to a worker on {', '.join(visible_hosts)}" + (f"; waits there: {'; '.join(why)}" if why else "")
         return "goes to a worker" + (f"; waits there: {'; '.join(why)}" if why else "")
-    if gone := worker_machines(project, agent):  # its worker pcs are all offline: say which, not "none"
+    if pin and not worker_machines(project, agent, pin):  # pinned: no other pc takes it, whatever runs elsewhere
+        return f"pinned to {pin}: the next {name} session there starts the task"
+    if gone := worker_machines(project, agent, pin):  # its worker pcs are all offline: say which, not "none"
         visible_gone = [f"{lbl} offline since {since(at)}" for lbl, at in gone if host_visible(lbl)]
         if visible_gone:
             return (", ".join(visible_gone) + f": until one is back, the next {name} chat in this project starts the task")
@@ -7099,7 +7104,9 @@ def task_hosts(t: dict, rows: list[dict]) -> list[dict]:
     agent = owner_agent(t["owner"])
     if not agent or t["done"] or not t["startable"] or t["runs"].startswith(("running in", "taken by")):
         return []
+    pin = (t.get("device") or "").lower()  # a pinned line: only a pc of that token (the others' companions would be refused)
     return [{"machine": r["id"], "label": r["label"]} for r in rows if r["own"] and not r.get("old") and r["online"]
+            and (not pin or pin in {n.lower() for n in r.get("tokens") or []})
             and (c := r.get("companion")) and c.get("workersAllowed") and agent in (c.get("agents") or [])
             and any(f.get("project") == t["project"] for f in (c.get("folders") or {}).get("linked", []))]
 
