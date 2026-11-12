@@ -1141,7 +1141,8 @@ function wordDiff(a, b) {
 
 // A unified diff as a <pre>: removed and added lines as rows; where a block of removed lines is followed by as many
 // added ones, the pairs show only the words that changed (an appended note no longer looks like a rewritten line).
-function diffView(text) {
+// With `comment(at, n, span)` each line inside a hunk is focusable and calls it on a click or Enter.
+function diffView(text, { comment } = {}) {
   const pre = el("pre", "diff"), lines = text.split("\n");
   const kind = (l) => (l.startsWith("+") && !l.startsWith("+++") ? "add" : l.startsWith("-") && !l.startsWith("---") ? "del" : null);
   const row = (cls, parts) => { const span = el("span", cls); // .add/.del are blocks: their own line break would add a row
@@ -1156,7 +1157,32 @@ function diffView(text) {
     adds.forEach((l, n) => pre.append(pairs[n] ? row("add", [["+", false], ...pairs[n][1]]) : el("span", "add", l)));
     i = a;
   }
+  if (comment) diffLines(lines).forEach((at, n) => { // one span per line: child n is line n
+    if (!at) return;
+    const span = pre.children[n];
+    span.tabIndex = 0; span.classList.add("diff-at"); span.dataset.at = at; span.title = `${at} · comment on this line`;
+    span.onclick = () => comment(at, n, span);
+    span.onkeydown = (e) => { if (e.key === "Enter" && e.target === span) { e.preventDefault(); comment(at, n, span); } };
+  });
   return pre;
+}
+// Where each line of a unified diff sits: "path:12" on the new side, "path:old line 7" for a removed line, null outside
+// a hunk (the stat, headers, untracked names, the cut note).
+function diffLines(lines) {
+  let path = "", old = 0, now = 0, hunk = false;
+  return lines.map((l) => {
+    const h = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(l);
+    if (h) { [old, now, hunk] = [+h[1], +h[2], !!path]; return null; }
+    if (hunk && l[0] === "+") return `${path}:${now++}`;
+    if (hunk && l[0] === "-") return `${path}:old line ${old++}`;
+    if (hunk && l[0] === " ") { old++; return `${path}:${now++}`; }
+    if (hunk && l[0] === "\\") return null; // "\ No newline at end of file"
+    hunk = false;
+    if (l.startsWith("diff --git ")) path = "";
+    else if (l.startsWith("--- ") && l !== "--- /dev/null") path = l.slice(4).replace(/^a\//, "");
+    else if (l.startsWith("+++ ") && l !== "+++ /dev/null") path = l.slice(4).replace(/^b\//, ""); // a deleted file keeps its --- name
+    return null;
+  });
 }
 
 async function showHistory(open = null) {
