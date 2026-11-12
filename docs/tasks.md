@@ -93,7 +93,9 @@ unfolds the whole line, from whom and for whom, its memo (Open in memo) and, whe
   needs the names task lines give you (Settings, "My names in task lines", `task_names`; the switch asks once); without
   names everything shows. The sidebar badge, the browser title and the Matrix messages count what the switch shows.
 - **Always trust <writer> in <project>…** (⋯ on an approval from a writer the project does not trust; owner or admin,
-  `POST /ui/api/task/trust`): the writer joins the project's task writers and the task is approved. A project without a
+  `POST /ui/api/task/trust`, only for a writer with a line waiting there): the writer joins the project's task
+  writers and the task is approved. Every other waiting line of theirs in the project starts too, and their words then
+  count as trusted: the confirm names those lines first (`writer_waiting`). "default" is never a writer's name. A project without a
   list gets `["default", <writer>]`: "default" in a list keeps the default trust (owner, admins, own devices) and adds
   to it; a list without it replaces the default, as before. The admin page (Projects, task writers) takes it away.
 

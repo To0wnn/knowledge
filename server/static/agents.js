@@ -480,7 +480,8 @@ function ckItem(i) {
     later.push(["Decline…", "Not wanted: its requester gets it back as a result", () => ckCancel(card, i)]);
     if (i.writer) later.push([`Always trust ${i.writer} in ${shown(i.project)}…`, "Their task lines in this project start without asking you from now on",
       async () => {
-        if (!confirm(`Trust ${i.writer} in ${shown(i.project)}?\n\nTask lines they write there then start without your approval. The admin page (Projects, task writers) takes it away again.\n\nThis also approves ${i.id}.`)) return;
+        const rest = (i.writer_waiting || []).filter((x) => x !== i.id);
+        if (!confirm(`Trust ${i.writer} in ${shown(i.project)}?\n\nTask lines they write there start without your approval from now on, and their words count as yours. The admin page (Projects, task writers) takes it away again.\n\nThis approves ${i.id}` + (rest.length ? ` and starts their other waiting line${rest.length > 1 ? "s" : ""} too: ${rest.join(", ")}.` : "."))) return;
         if (await ckDo("/ui/api/task/trust", { project: i.project, writer: i.writer })) ckDo("/ui/api/task/approve", { project: i.project, id: i.id });
       }]);
   }

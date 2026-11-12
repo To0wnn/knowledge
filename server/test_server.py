@@ -287,11 +287,11 @@ def tasks_contract(tmp, ck, fr, ver, raw):
     assert writers(["default"]) == 200 and rows()["UNT-1"]["startable"], rows()["UNT-1"]
     assert writers(["alice"]) == 200 and not rows()["UNT-1"]["startable"]
     trust = lambda w, h=ui: raw("POST", "/ui/api/task/trust", json.dumps({"project": "garden", "writer": w}), h)
-    assert trust("nobody-such")[0] == 400 and trust("user:ghost")[0] == 400
+    assert trust("nobody-such")[0] == 400 and trust("user:ghost")[0] == 400 and trust("default")[0] == 400
+    assert trust("user:alice")[0] == 400, "nothing of hers waits: no trust to give (and no probing names)"
     st, _, b = trust("friend-pc")
-    assert st == 200 and json.loads(b)["writers"] == ["alice", "friend-pc"] and rows()["UNT-1"]["startable"], (b, rows()["UNT-1"])
-    assert writers(None) == 200 and trust("user:Alice")[0] == 200
-    assert json.loads((tmp / "task_writers.json").read_text())["garden"] == ["default", "user:Alice"], "no list yet: the default stays"
+    assert st == 200 and json.loads(b)["writers"] == ["alice", "friend-pc"] and set(json.loads(b)["started"]) == {"DEP-1", "DAT-1", "UNT-1"}, b  # every waiting line of theirs: the card names them first
+    assert rows()["UNT-1"]["startable"] and trust("friend-pc")[0] == 400, "trusted now: nothing of theirs waits"
     assert writers(["alice"]) == 200
     # A result is something an agent is told to act on: from an untrusted writer its words stay data.
     res = "- [Codex, UNT-R-done]: from the guest\n"

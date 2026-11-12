@@ -2397,7 +2397,7 @@ def trusted_writer(project: str, by: str, _tokens: dict | None = None, _writers:
     tokens = _tokens if _tokens is not None else read_json(TOKENS_FILE, {})
     user = by.removeprefix("user:") if by.startswith("user:") else (tokens.get(by) or {}).get("owner", "")
     writers = _writers if _writers is not None else read_json(TASK_WRITERS, {}).get(project)
-    if writers is not None and (by in writers or bool(user) and user in writers):
+    if writers is not None and (by != "default" and by in writers or user not in ("", "default") and user in writers):  # "default" is the marker, never a name
         return True
     if writers is not None and "default" not in writers:  # a list replaces the default, unless it names "default" too
         return False
@@ -7196,6 +7196,10 @@ def board_items() -> list[dict]:
     names = set(read_json(PREFS_FILE, {}).get(device.get().get("user", ""), {}).get("task_names") or [])
     someone_else = lambda owner: bool(names) and owner.partition("@")[0].strip().lower() not in names
     items += review_items(rows, tasks)
+    by_writer: dict = {}  # (project, untrusted writer) -> the IDs of their lines that wait for approval: Trust starts them all
+    for t in tasks:
+        if t.get("can_approve") and not t.get("trusted", True) and t.get("author"):
+            by_writer.setdefault((t["project"], t["author"]), []).append(t["id"])
     for t in tasks:
         agent = owner_agent(t["owner"])
         key = f"task:{t['project']}/{t['id']}"
@@ -7220,6 +7224,7 @@ def board_items() -> list[dict]:
                 "text": t["text"], "from": t.get("from") or "", "author": "" if t.get("trusted", True) else t.get("author") or "an unknown writer",
                 # an untrusted writer the approver may choose to trust from now on (a token or user:<name>, not "an unknown writer")
                 "writer": t.get("author", "") if not t.get("trusted", True) and t.get("can_approve") else "",
+                "writer_waiting": by_writer.get((t["project"], t.get("author", "")), []) if not t.get("trusted", True) and t.get("can_approve") else [],
                 "others": not t["done"] and not agent and not agent_owner(t["owner"]) and someone_else(t["owner"])}  # another person's line
         if (t["project"], t["id"]) in working:  # a running worker shows it
             continue
@@ -8928,16 +8933,17 @@ async def ui_task_trust(request: Request):
         return JSONResponse({"error": f"unknown project {project}"}, status_code=404)
     if not may_approve(project):
         return JSONResponse({"error": "only the project's owner or an admin may trust a writer"}, status_code=403)
-    users = {u.lower() for u in [*read_json(USERS_FILE, {}), *ADMINS]}  # admins are not in users.json
-    if not (writer in read_json(TOKENS_FILE, {}) or writer.startswith("user:") and writer[5:].lower() in users):
-        return JSONResponse({"error": f"{writer or '?'} is not a token or user:<name> of this server"}, status_code=400)
+    # only the writer of a line that waits here: no probing for names, no trusting someone with nothing waiting
+    waiting = [t["id"] for t in (await asyncio.to_thread(project_tasks, project))[0] if t["needs_approval"] and not t["trusted"] and t["author"] == writer]
+    if writer == "default" or not waiting:
+        return JSONResponse({"error": f"no line of {writer or '?'} waits for approval in {project}"}, status_code=400)
 
     def change(d):
         now = d.get(project)
         d[project] = sorted(set(["default"] if now is None else now) | {writer})
     await asyncio.to_thread(update_state, TASK_WRITERS, change)
     audit("task-trust", f"{project}: {writer}")
-    return JSONResponse({"ok": True, "writers": read_json(TASK_WRITERS, {}).get(project)})
+    return JSONResponse({"ok": True, "writers": read_json(TASK_WRITERS, {}).get(project), "started": waiting})
 
 
 @server.custom_route("/ui/api/task/assign", methods=["POST"])
