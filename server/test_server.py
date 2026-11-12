@@ -1005,9 +1005,17 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     http("POST", "/machine/chats/events", {"chat": cid, "events": big, "done": True}, token=fr, headers=pc)
     data = json.loads((tmp / "chats" / mid / f"{cid}.json").read_text())
     assert data["trimmed"] and sum(len(e["text"]) for e in data["events"]) < 1_000_000 and data["events"][-1]["n"] == before + 60, len(data["events"])
+    # An archived chat is outside that cap: it stays CHAT_CLOSED_DAYS after its last activity, however old its file looks.
+    kept, stale = tmp / "chats" / mid / "a0000000000a.json", tmp / "chats" / mid / "a0000000000b.json"
+    for f, days in ((kept, srv.CHAT_CLOSED_DAYS - 1), (stale, srv.CHAT_CLOSED_DAYS + 1)):
+        f.write_text(json.dumps({"id": f.stem, "agent": "codex", "folder": "/home/x/garden", "project": "garden", "title": "old",
+                                 "closed": True, "updated": time.time() - days * 86400, "events": []}))
+        os.utime(f, (1, 1))  # the oldest files: the count-only rule took these first
     for _ in range(50):
         assert ui("/ui/api/chats", {"machine": mid, "agent": "claude", "folder": "/home/x/garden"})[0] == 200
-    assert len(json.loads(ui(f"/ui/api/chats?machine={mid}")[2])["chats"]) == 50 and not (tmp / "chats" / mid / f"{cid}.json").exists()
+    left = json.loads(ui(f"/ui/api/chats?machine={mid}")[2])["chats"]
+    assert sum(not c["closed"] for c in left) == 50 and not (tmp / "chats" / mid / f"{cid}.json").exists(), len(left)
+    assert kept.exists() and not stale.exists(), "an archived chat goes after 90 quiet days, not by count"
     # A chat turn (X-Knowledge-Chat, set by the companion) gets no task list in its start context, takes no lease and
     # no notice: tasks run in workers, never in a web UI chat.
     path = "garden-memory/project_tasks.md"
@@ -1527,6 +1535,28 @@ def share_contract(tmp, ck, fr, raw, er, et):
     assert r["shared"] == {"garden": "view"} and r["tokens"] == [] and r["agents"] == {} and r["companion"]["folders"]["linked"] == [] and not r["own"], r
     seen = {c["id"]: c["rights"] for c in json.loads(ui("/ui/api/chats", h=er)[2])["chats"] if c["machine"] == mid}
     assert seen == {mine: "view"}, seen  # the garden chat, not the trade one
+    # Search in chat text: the owner's and the agent's words (not tool lines), archived chats too, the same chats and
+    # rights as the list, a secret value never in a snippet, at least 3 characters.
+    def say(cid, *ev, **extra):
+        f = tmp / "chats" / mid / f"{cid}.json"
+        c = json.loads(f.read_text())
+        for k, t in ev:
+            c["next"] += 1
+            c["events"].append({"n": c["next"], "at": time.time(), "kind": k, "text": t})
+        f.write_text(json.dumps({**c, **extra}))
+    say(mine, ("user", "where is the Quokkafile kept? pw Sup3rSecret99 " + "x" * 200), ("text", "The quokkafile "), ("text", "is in the attic."),
+        ("tool", "Bash: cat wombatline"), closed=True)
+    say(other, ("text", "the quokkafile of trade"))
+    found = lambda q, h=ck: json.loads(ui(f"/ui/api/chats/search?q={q}", h=h)[2])["chats"]
+    hits = {c["id"]: c for c in found("QUOKKAFILE")}
+    assert set(hits) == {mine, other} and hits[mine]["hits"] == 2 and hits[mine]["closed"] and hits[mine]["machine"] == mid, hits
+    assert hits[mine]["snippets"][0].startswith("where is the Quokkafile") and hits[mine]["snippets"][0].endswith("…"), hits[mine]
+    assert "Sup3rSecret99" not in json.dumps(hits) and "‹secret›" in hits[mine]["snippets"][0], hits[mine]
+    assert found("Sup3rSecret99") == [], "a hit only inside a masked value is no hit"
+    assert [(c["id"], c["rights"]) for c in found("quokkafile", er)] == [(mine, "view")], "erin: the shared garden chat, read only"
+    assert found("wombatline") == [], "tool lines are not searched"
+    assert ui("/ui/api/chats/search?q=qu")[0] == 400 and ui("/ui/api/chats/search?q=quokkafile", h=er)[0] == 200
+    say(mine, closed=False)
     c = json.loads(ui(f"/ui/api/chat?machine={mid}&id={mine}", h=er)[2])
     assert c["chat"]["rights"] == "view", c
     assert ui(f"/ui/api/chat?machine={mid}&id={other}", h=er)[0] == 400
@@ -1658,6 +1688,13 @@ def share_contract(tmp, ck, fr, raw, er, et):
     g2 = json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/x/garden"}, er)[2])["chat"]["id"]
     listed = call("knowledge_chats", {}, et)[1]
     assert g2 in listed and jc in listed and g["id"] in listed and other not in listed, listed
+    say(g2, ("text", "found the quokkafile too"))
+    alices = json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/x/garden"})[2])["chat"]["id"]
+    say(alices, ("user", "is the quokkafile safe?"))
+    assert [c["rights"] for c in json.loads(ui("/ui/api/chats/search?q=quokkafile", h=er)[2])["chats"] if c["id"] == alices] == ["view"]
+    listed = call("knowledge_chats", {"query": "Quokkafile"}, et)[1]  # over MCP never a "view" chat, though the UI search shows it
+    assert g2 in listed and "(1 hit)" in listed and "found the quokkafile too" in listed and alices not in listed and other not in listed, listed
+    assert call("knowledge_chats", {"q": "qu"}, et)[0]
     assert "force-archived" in call("knowledge_chat_close", {"chat": g2, "reason": "stuck"}, et)[1]
     assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={g2}")[2])["chat"]["closed"]
     assert "opened again" in call("knowledge_chat_close", {"chat": g2, "open": True}, et)[1]
@@ -2410,7 +2447,8 @@ def board_contract(tmp, ck, fr, raw, er, et):
     assert ("chat", cids[1]) not in {(i["kind"], i["id"]) for i in board()}, "an unread chat older than a week needs nobody"
     chats = json.loads(ui(f"/ui/api/chats?machine={mid}")[2])["chats"]
     busy = sum(1 for c in chats if c["status"] in ("queued", "running"))  # a chat at work is never swept: it comes on top
-    assert 50 <= len(chats) <= 50 + busy, ("diffs.json is no chat", len(chats), busy)
+    shut = sum(1 for c in chats if c["closed"])  # archived chats are outside the cap of 50
+    assert 50 <= len(chats) - shut <= 50 + busy, ("diffs.json is no chat", len(chats), shut, busy)
     text = (tmp / "projects/garden/memory/project_tasks.md").read_text()
     for line in lines:
         assert line in text

@@ -796,6 +796,7 @@ audio.fm-media { width: 100%; }
 .ck-history .ck-chat { display: grid; grid-template-columns: 10px minmax(0, 1fr); column-gap: 8px; align-items: baseline; }
 .ck-chat .ck-dot { align-self: center; }
 .ck-chat small { grid-column: 2; }
+.ck-hits-head { margin: 10px 6px 2px; font-size: 12px; font-weight: 600; color: var(--muted); }
 .ck-chat.needs .ck-dot, .bd-card.needs .ck-dot { background: var(--amber); box-shadow: 0 0 0 3px var(--amber-soft); }
 .ck-chat.needs .ck-chat-title { font-weight: 600; }
 .ck-chat.running .ck-dot, .bd-card.running .ck-dot { background: var(--act); animation: kn-pulse 1.8s ease-in-out infinite; will-change: opacity; }

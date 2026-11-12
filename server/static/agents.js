@@ -210,6 +210,21 @@ function ckList() {
     li.append(b); hist.append(li, ...ckSubRows(c));
   }
   $("ck-earlier-n").textContent = rows.length;
+  // 3 characters or more also search inside the chats (open and archived): a second group under the title matches
+  const q = ck.filter.trim(), listed = new Set(rows.slice(0, 60).map(ckKey));
+  if (q.length < 3) ck.textQ = "";
+  else if (ck.textQ !== q) { ck.textQ = q; ck.textHits = null; ckTextSearch(q); }
+  const inText = q.length >= 3 ? (ck.textHits || []).filter((c) => ckScope(c) && !listed.has(ckKey(c))) : [];
+  if (inText.length) hist.append(el("li", "ck-hits-head", "In chat text"));
+  for (const c of inText) {
+    const li = el("li"), b = el("a", `ck-chat ck-hit ${ckState(c)}`);
+    b.href = `#/chats/${encodeURIComponent(c.id)}?solo=1`; b.dataset.row = `hit:${ckKey(c)}`;
+    b.append(el("span", "ck-dot", ""), el("span", "ck-chat-title", c.title || "(no message yet)"),
+      el("small", null, `${c.hits} hit${c.hits > 1 ? "s" : ""}${c.closed ? " · archived" : ""} · ${c.label} · ${ago(c.updated)}`),
+      ...c.snippets.slice(0, 1).map((x) => el("small", "muted", x)));
+    b.onclick = (e) => { if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return; e.preventDefault(); ckCard(c).findQ = q; ckShow(c); }; // opens with Find on the words
+    li.append(b); hist.append(li);
+  }
   if (!hist.childNodes.length) hist.append(!ck.chats.length && pcs ? el("li", null, emptyState("No chats yet: talk to an agent on one of your pcs.", actionButton("New chat", () => $("ck-new").click(), "btn small primary")))
     : el("li", "muted ck-none", !ck.chats.length ? "No chats yet." : words.length ? "No chat matches." : closed ? "No archived chats." : "No earlier chats here."));
   if (had) side.querySelector(`[data-row="${CSS.escape(had)}"]`)?.focus({ preventScroll: true }); // the refresh keeps your place
@@ -219,6 +234,11 @@ function ckList() {
   ckFocus();
 }
 let ckFilterTimer;
+async function ckTextSearch(q) {
+  let hits = [];
+  try { hits = (await api(`/ui/api/chats/search?q=${encodeURIComponent(q)}`)).chats; } catch { /* the title matches still show */ }
+  if (ck.textQ === q) { ck.textHits = hits; ckList(); } // typed on meanwhile: that search answers
+}
 $("ck-filter").oninput = () => { clearTimeout(ckFilterTimer); ckFilterTimer = setTimeout(() => { ck.filter = $("ck-filter").value; ckList(); }, 120); };
 $("ck-closed").onclick = () => { $("ck-closed").setAttribute("aria-pressed", String($("ck-closed").getAttribute("aria-pressed") !== "true")); ckList(); };
 $("ck-side").addEventListener("keydown", (e) => { // up and down go through the rows; Enter opens one (it is a button)
@@ -1571,6 +1591,7 @@ async function ckPoll(card) {
   ckSubbar(card); // its background shells come with the chat's meta
   ckAsks(card, res.asks || [], (res.now || Date.now() / 1000) - Date.now() / 1000);
   ckPaint(card);
+  if (card.findQ) { card.find.q.value = card.findQ; card.findQ = ""; ckFindOpen(card); } // opened from a hit in chat text
 }
 const CK_ICON = { // inline, in the text colour
   find: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg>',
