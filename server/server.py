@@ -7252,6 +7252,8 @@ def board_items() -> list[dict]:
                 items.append({**task, "col": "done", "line": f"handed back to {t['owner']}", "at": t.get("since") or 0})
         elif "was cancelled" in t["waiting_reason"]:
             items.append({**task, "col": "needs", "line": t["waiting_reason"], "blocked": True, "approve": may_approve(t["project"])})
+        elif t["can_approve"] and t["claimed"]:  # a session took it and does it: nothing is left to start, so nothing to approve
+            items.append({**task, "col": "open", "line": "a session claimed it and works on it; an approval only matters if it puts it down"})
         elif t["can_approve"]:
             items.append({**task, "col": "needs", "line": "waits for your approval", "approve": True})
         elif t["stalled"]:

@@ -2294,6 +2294,12 @@ def board_contract(tmp, ck, fr, raw, er, et):
     hosts = {t["id"]: t.get("hosts") for t in json.loads(raw("GET", "/ui/api/tasks?hosts=1", headers=ck)[2])["tasks"]}
     assert hosts["BRD-1"] == [{"machine": mid, "label": "garage"}] and hosts["BRD-2"] == [], hosts
     assert col("task", "BRD-2") == "needs" and items[("task", "BRD-2")]["approve"], items.get(("task", "BRD-2"))
+    # Claimed by a session (it does the work itself): no approval card, it is not going to be started by anyone.
+    brd2 = lines[1]
+    assert not call("knowledge_edit", {"path": path, "old_string": brd2, "new_string": brd2 + " (claimed Codex, 2026-11-12)"}, fr)[0]
+    got = {(i["kind"], i["id"]): i for i in board()}[("task", "BRD-2")]
+    assert got["col"] == "open" and not got.get("approve") and "claimed" in got["line"], got
+    assert not call("knowledge_edit", {"path": path, "old_string": brd2 + " (claimed Codex, 2026-11-12)", "new_string": brd2}, fr)[0]
     assert col("task", "BRD-9-done") == "done", "a result handed back today is done"
     assert ("task", "BRD-4") not in items, "a task its worker shows"
     assert col("task", "BRD-3") == "needs" and items[("task", "BRD-3")]["closable"], "a person's line needs that person"
