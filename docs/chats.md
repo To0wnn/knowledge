@@ -15,11 +15,12 @@ from a phone. The pc side runs in the companion ([companion.md](companion.md)).
   archive), and **Take over** (`POST /ui/api/chat/take`, a button in a read-only chat) makes someone else's chat there
   theirs: the same chat, session, folder and branch go on (`taken: true`, so it may stay in the owner's checkout where
   it ran; a companion that reports `guests: 2`, plugin 0.43.46+), a running turn stops, its live agent restarts under
-  the taker's share, "for this chat" approvals are cleared, and the owner of the pc still sees and steers it, so both
-  work in it at once: every message carries its writer (`by` on the event, shown above someone else's message), the
-  agent gets it as `[from <name>] ...`, and messages sent meanwhile queue in order as always. **Join** (`POST
-  /ui/api/chat/join`, `leave: true` to leave; buttons above the box) does the same without taking it: the chat stays
-  the owner's and the guest is in `joined`; while anyone is in it, it runs as a guest's chat (no YOLO unless every guest
+  the taker's share, "for this chat" approvals are cleared, and it is the taker's alone: the pc's owner and whoever had
+  joined (`joined` is cleared) only read it and get Take over (no Join) to take it back in turn; the pc's owner taking
+  it back gets it as their own chat again. **Join** (`POST /ui/api/chat/join`, `leave: true` to leave; buttons above
+  the box; not for the pc's owner) lets both steer it: the chat stays the owner's and the guest is in `joined`; in a
+  joined or taken chat every message carries its writer (`by` on the event, shown above someone else's message), the
+  agent gets it as `[from <name>] ...`, and messages sent meanwhile queue in order as always; while anyone is in it, it runs as a guest's chat (no YOLO unless every guest
   in it has `yolo`, so a YOLO turn running at a join under use stops first; its agent reaches only that project and
   writes only when every guest may); a guest whose share ends leaves by themselves at the next poll. **Typing**: in a
   chat someone else may see (`watched`), the page says `POST /ui/api/chat/typing` at most every 3 s while you type, and
