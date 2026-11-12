@@ -3666,6 +3666,7 @@ def main():
         assert beat["tasks"][0].endswith("[Codex, CX-2] from Claude, start now: VOORRANG mow") and beat["sync"] is True and beat["notices"] == [], beat
         assert json.loads(http("GET", "/tasks?project=x&agent=agy&v=2", token=fr)[1])["sync"] is False  # one session syncs
         assert json.loads(http("GET", "/tasks?agent=codex&v=2")[1])["sync"] is False  # the admin's own projects: no mirror
+        assert json.loads(http("GET", "/tasks?project=x&agent=codex&v=2")[1])["sync"] is False  # nor a guest project: /sync would refuse (403)
         # UI Tasks tab: the same task lines parsed into fields, plus a result handed back; Done removes just that line.
         call("knowledge_edit", {"path": "garden-memory/project_tasks.md", "old_string": "[Codex, CX-1] from Claude, start now: prune\n",
                                 "new_string": "[Codex, CX-1] from Claude, start now: prune\n- [Claude, CX-0-done]: pruned already\n"})

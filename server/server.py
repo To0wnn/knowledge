@@ -2191,6 +2191,20 @@ def project_for(directory: str) -> str:
     return "anpitek" if "anpitek" in PROJECTS and "anpitek" in parts else "homelab"
 
 
+def docs_sync_project(asked) -> str | None:
+    """The project whose docs this device mirrors from the folder `asked` names, or None. One rule for /sync and for
+    /tasks asking a session to sync: they once differed, and the admin's pc was asked every few minutes for a sync that
+    /sync then refused (403)."""
+    project = token_project()
+    if not project and asked in PROJECTS and asked not in BUILTIN_PROJECTS and in_scope(PROJECTS[asked][0] + "/") \
+            and not in_scope("claude/"):  # a person's device with several projects (never the admin's: one source per docs)
+        project = asked  # the folder's link picks one
+    dev = device.get()
+    if not project or not dev.get("write") or (dev.get("write_roots") is not None and PROJECTS[project][0] not in dev["write_roots"]):
+        return None
+    return project
+
+
 def token_project() -> str | None:
     """The project a device token is limited to, when its roots belong to exactly one project (e.g. a friend's pc with
     roots garden + garden-memory). Such a session always works in that project, whatever its directory is called; a
@@ -4065,12 +4079,8 @@ async def sync_route(request: Request):
     the guest's machine is the source: full = the list is the whole folder, so mirrored files that are gone there are
     removed here (a copy is kept in state/deleted/, like knowledge_delete)."""
     b = await request.json()
-    project, asked = token_project(), b.get("project")
-    if not project and asked in PROJECTS and asked not in BUILTIN_PROJECTS and in_scope(PROJECTS[asked][0] + "/") \
-            and not in_scope("claude/"):  # a person's device with several projects (never the admin's: one source per docs)
-        project = asked  # the folder's link picks one
     dev = device.get()
-    if not project or not dev.get("write") or (dev.get("write_roots") is not None and PROJECTS[project][0] not in dev["write_roots"]):
+    if not (project := docs_sync_project(b.get("project"))):
         return JSONResponse({"error": "sync needs a write token for the folder's project (.knowledge-project)"}, status_code=403)
     docs = PROJECTS[project][0]
     if b.get("project") not in (None, project):  # the folder's .knowledge-project names another project
@@ -4301,7 +4311,7 @@ async def tasks_route(request: Request):
     notices += edit_notices(project, q, agent)  # also for web chats and workers: they write files too
     if behind:  # each agent its own plugin, so not claimed
         notices.append({"id": "plugin-" + (plugin_latest() or ("", 0))[0], "text": behind})
-    sync = claim and project not in BUILTIN_PROJECTS and bool(dev.get("write")) \
+    sync = claim and project not in BUILTIN_PROJECTS and docs_sync_project(project) == project \
         and time.time() - _full_synced.get(key, 0) > DOCS_SYNC_MINUTES * 60
     if sync:  # handed to this session only; if its sync fails, the next turn after DOCS_SYNC_MINUTES asks again
         _full_synced[key] = time.time()
