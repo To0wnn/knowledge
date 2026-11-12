@@ -31,7 +31,7 @@ permissions:
 jobs:
   check:
     # The project check (./check.sh: hook self-tests, graph, lint, server tests), as before a commit or deploy.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -44,7 +44,7 @@ jobs:
   ui-smoke:
     # tests/ui_ci.py starts a throwaway server on the demo notes, seeds a project, token, pc, chat and task line,
     # and runs tests/ui_smoke.py against it with Playwright's Chromium; any FAIL line exits non-zero.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -53,9 +53,16 @@ jobs:
           python-version: "3.14"
       - name: Server dependencies
         run: uv sync --project server --frozen --no-dev
+      - name: Reliable apt mirrors and DNS
+        run: |
+          printf "91.189.91.81 azure.archive.ubuntu.com archive.ubuntu.com security.ubuntu.com\n" | sudo tee -a /etc/hosts
+          grep -rl azure.archive.ubuntu.com /etc/apt 2>/dev/null | xargs -r sudo sed -i 's/azure\.archive\.ubuntu\.com/archive.ubuntu.com/g' || true
+          sudo apt-get update -o Acquire::http::Timeout=10
       - name: Playwright Chromium
         working-directory: ${{ runner.temp }}  # not the repo root: its token.py would shadow Python's own token module
-        run: uv run --project "$GITHUB_WORKSPACE/server" --frozen --with playwright python -m playwright install --with-deps chromium
+        run: |
+          sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g' /etc/apt/sources.list.d/* /etc/apt/sources.list /etc/apt/apt-mirrors.txt 2>/dev/null || true
+          uv run --project "$GITHUB_WORKSPACE/server" --frozen --with playwright python -m playwright install chromium
       - name: UI smoke test
         env:
           KNOWLEDGE_SMOKE_SHOTS: ${{ runner.temp }}/shots

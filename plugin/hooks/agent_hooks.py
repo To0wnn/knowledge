@@ -148,11 +148,13 @@ def short(text: str) -> str:
 
 
 NAMES = {"claude": "Claude", "codex": "Codex", "agy": "Gemini"}
-# "pak KN-12": do that task in this chat. Any case (the user types "pak kn-12"), but a task ID holds a digit (KN-12,
-# ET-eval2), so "pak e-mail van Sam" or "take follow-up actions" asks the server nothing
-PAK = re.compile(r"(?i)(?:^|\s)(?:pak|take)\s+((?=[\w.-]*\d)[a-z][a-z0-9.]*-[\w.-]*\w)")
-assert [m.group(1) for m in PAK.finditer("Pak KN-12 en take ET-eval2; pak kn-13, pak Kn-14; pak e-mail, take follow-up, take built-in")] \
-    == ["KN-12", "ET-eval2", "kn-13", "Kn-14"]
+# "pak KN-12": do that task in this chat. An ID with a digit in any case (the user types "pak kn-12"); one without a
+# digit (BK-LOCK, DYNPA-voxcpm) only with its capital prefix, so "pak e-mail van Sam" or "take follow-up actions"
+# asks the server nothing
+PAK = re.compile(r"(?:^|\s)(?i:pak|take)\s+((?i:(?=[\w.-]*\d)[a-z][a-z0-9.]*-[\w.-]*\w)|[A-Z][A-Z0-9.]+-[\w.-]*\w)")
+assert [m.group(1) for m in PAK.finditer("Pak KN-12 en take ET-eval2; pak kn-13, pak Kn-14; pak e-mail, take follow-up, take built-in"
+                                         "; pak BK-LOCK, TAKE DYNPA-voxcpm; pak bk-lock")] \
+    == ["KN-12", "ET-eval2", "kn-13", "Kn-14", "BK-LOCK", "DYNPA-voxcpm"]
 
 
 def task_id(typed: str, answer: dict) -> str:
@@ -230,6 +232,7 @@ def take(agent: str, tok: str, tid: str, sid: str, cwd: str) -> str:
     project, tid = answer.get("project", ""), task_id(tid, answer)
     code, answer = task_post(tok, "/tasks/woken", {"project": project, "id": tid, "agent": agent, "session": sid[:80]})
     if code == 200:
+        tid = answer.get("id") or tid  # the ID as its line spells it (the server matches any case)
         return (f"knowledge: the user took task {tid} into this chat ('pak {tid}'); the server gave it to this session, so no "
                 f"worker starts it. Claim it now: add '(claimed {NAMES[agent]}, {time.strftime('%Y-%m-%d')})' to its line with "
                 "knowledge_edit, then do it here. Done: remove the line, and hand the result back to the agent that waits on it "

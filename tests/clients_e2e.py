@@ -31,12 +31,14 @@ import socket
 import socketserver
 import tempfile
 import http.server as http_server  # not 'import http': that hides http() below
+import http.client as http_client
 import threading
 import time
 import urllib.request
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+FOLLOW = 3  # seconds a follow of a worker lasts after the viewer's last poll (the server's KNOWLEDGE_WORKER_FOLLOW_SECONDS)
 CLIENT = REPO  # replaced in main() by a copy under a path with a space, like C:\Users\Test Usér\...
 def free_port() -> int:
     """A port nobody uses now, so several checks can run at once (parallel agents, a commit hook)."""
@@ -61,8 +63,12 @@ def _bind_without_dns(self):
 http_server.HTTPServer.server_bind = _bind_without_dns
 
 
+T0 = time.monotonic()
+
+
 def check(ok: bool, what: str, detail: str = "") -> bool:
-    print(("ok   " if ok else "FAIL ") + what + ("" if ok or not detail else f"\n     {detail[:800]}"), flush=True)
+    # the seconds since start: a slow step on one OS shows as a jump between two lines
+    print(f"{time.monotonic() - T0:6.1f} " + ("ok   " if ok else "FAIL ") + what + ("" if ok or not detail else f"\n     {detail[:800]}"), flush=True)
     if not ok:
         failures.append(what)
     return ok
@@ -104,11 +110,12 @@ def run(argv, stdin: str = "", env=None, cwd=None, timeout=60):
 
 
 def wait_for(cond, seconds=30.0) -> bool:
-    end = time.time() + seconds
+    end, pause = time.time() + seconds, 0.05
     while time.time() < end:
         if cond():
             return True
-        time.sleep(0.5)
+        time.sleep(pause)
+        pause = min(pause * 1.5, 0.5)  # quick for what is nearly there, no busy loop on a slow one (spawning checks on Windows)
     return cond()
 
 
@@ -295,7 +302,7 @@ def start_server(tmp: Path):
            "KNOWLEDGE_PROXY_SECRET": "proxy-secret", "KNOWLEDGE_ADMINS": "alice", "KNOWLEDGE_AUDIT": str(tmp / "audit.log"),
            "KNOWLEDGE_PORT": str(PORT), "KNOWLEDGE_BIND": "127.0.0.1", "KNOWLEDGE_RESCAN": "3600", "KNOWLEDGE_EMBED_MODEL": "hash",
            "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"),
-           "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}", "PYTHONUTF8": "1", "KNOWLEDGE_WORKER_FOLLOW_SECONDS": "3", "KNOWLEDGE_CHAT_ASK_MINUTE": "3",
+           "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}", "PYTHONUTF8": "1", "KNOWLEDGE_WORKER_FOLLOW_SECONDS": str(FOLLOW), "KNOWLEDGE_CHAT_ASK_MINUTE": "3",
            "KNOWLEDGE_GITHUB_RAW": "http://127.0.0.1:9"}  # no newest-version lookup on GitHub from a test
     log = open(tmp / "server.log", "wb")
     proc = subprocess.Popen([sys.executable, str(REPO / "server" / "server.py")], env=env, stdout=log, stderr=subprocess.STDOUT)
@@ -832,6 +839,7 @@ if name == "codex" and args[:1] == ["app-server"] and os.environ.get("KNOWLEDGE_
                             break
                     elif x.get("method") == "turn/interrupt":
                         send({"id": x["id"], "result": {}})
+                        rec({"interrupted": os.environ["KNOWLEDGE_CHAT"]})  # the test waits on it (not "chat": recorded() counts turns)
                         status = "interrupted"
                         break
                     elif "id" in x:
@@ -885,8 +893,10 @@ elif os.environ.get("KNOWLEDGE_CHAT") and name == "agy" and args[:1] == ["acp"]:
             rec({"chat": os.environ["KNOWLEDGE_CHAT"], "argv": [name] + args, "cwd": os.getcwd(), "stdin": text, "load": loaded, "pid": os.getpid(), "pick": pick})
             if "SLOW" in text:  # works on; agy has no interrupt, a Force or Stop ends this process
                 time.sleep(90)
-            if "PAUSE" in text:  # a turn that takes a while (a companion restart falls in it)
-                time.sleep(8)
+            if "PAUSE" in text:  # a turn that waits until the test releases it (a companion restart falls in it)
+                end = time.time() + 60
+                while time.time() < end and not os.path.exists(calls + "." + os.environ["KNOWLEDGE_CHAT"] + ".release"):
+                    time.sleep(0.05)
             upd({"sessionUpdate": "tool_call", "toolCallId": "c1", "name": "run_command", "kind": "execute", "rawInput": {"CommandLine": "git status"}})
             if "LOOK" in text:
                 upd({"sessionUpdate": "tool_call", "toolCallId": "c9", "name": "view_file", "kind": "read", "rawInput": {"AbsolutePath": look()}})
@@ -960,6 +970,7 @@ elif name == "claude" and "--input-format" in args and os.environ.get("KNOWLEDGE
                     continue
                 if x.get("type") == "control_request":
                     out({"type": "control_response", "response": {"subtype": "success", "request_id": x.get("request_id")}})
+                    rec({"interrupted": os.environ["KNOWLEDGE_CHAT"]})  # the test waits on it (not "chat": recorded() counts turns)
                     stopped = True
                     break
                 texts.append(x["message"]["content"])
@@ -1168,18 +1179,19 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
     con.commit()
     con.close()
     fake_agy = fake_codex = None
+    fake_names = (f"kna{os.getpid()}", f"knc{os.getpid()}")  # per run (pgrep -x, at most 15 characters): a copy of this test running beside it has its own
     if not WIN:  # a process named like agy, ended later: YOLO for agy waits for it
-        shutil.copy(shutil.which("sleep"), bin_dir / "knfakeagy")
-        fake_agy = subprocess.Popen([str(bin_dir / "knfakeagy"), "300"])
-        shutil.copy(shutil.which("sleep"), bin_dir / "knfakecodex")  # a running Codex: its registered sessions count as open
-        fake_codex = subprocess.Popen([str(bin_dir / "knfakecodex"), "300"])
+        shutil.copy(shutil.which("sleep"), bin_dir / fake_names[0])
+        fake_agy = subprocess.Popen([str(bin_dir / fake_names[0]), "300"])
+        shutil.copy(shutil.which("sleep"), bin_dir / fake_names[1])  # a running Codex: its registered sessions count as open
+        fake_codex = subprocess.Popen([str(bin_dir / fake_names[1]), "300"])
     port = free_port()
     self_url = f"http://127.0.0.1:{port}"
     env = user_env(home, KNOWLEDGE_URL=BASE, KNOWLEDGE_TOKEN=tok, PATH=str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
                    KNOWLEDGE_COMPANION_PORT=str(port), KNOWLEDGE_COMPANION_EVERY="3600", KN_FAKE_CALLS=str(calls),
                    KNOWLEDGE_COMPANION_ACTIONS_EVERY="0.2", KNOWLEDGE_TOOLS_DIR=str(tools_dir), KNOWLEDGE_COMPANION_UPDATE_EVERY="1", KNOWLEDGE_WORKER_GRACE="1", KNOWLEDGE_COMPANION_SCAN_EVERY="0",
-                   KNOWLEDGE_AGY_PROCESS="knfakeagy" if fake_agy else Path(sys.executable).stem,
-                   KNOWLEDGE_CODEX_PROCESS="knfakecodex" if fake_codex else Path(sys.executable).stem)
+                   KNOWLEDGE_AGY_PROCESS=fake_names[0] if fake_agy else Path(sys.executable).stem,
+                   KNOWLEDGE_CODEX_PROCESS=fake_names[1] if fake_codex else Path(sys.executable).stem)
 
     key_file = home / ".knowledge" / "companion" / "api-key"
 
@@ -1201,8 +1213,9 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         check(up, "companion: serve answers on 127.0.0.1 and its first round reached the server", (home / "companion.log").read_text(errors="replace")[-600:])
         if not up:
             return
-        second = subprocess.run([sys.executable, str(hooks / "agent_hooks.py"), "serve"], env=env, stdin=subprocess.DEVNULL,
-                                capture_output=True, text=True, timeout=60)  # on Windows it waits 30 s for the port
+        # a held port waits 30 s on Windows (a restart's old connections); this one is held by a live companion: 2 s do
+        second = subprocess.run([sys.executable, str(hooks / "agent_hooks.py"), "serve"], env={**env, "KNOWLEDGE_COMPANION_BIND_WAIT": "2"},
+                                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
         check(second.returncode != 0, "companion: a second one on this pc cannot bind the port (one minute loop per pc, also on Windows)",
               second.stdout[-300:] + second.stderr[-300:])
         # Only this pc's pages: a foreign origin, a rebound host name, a POST without Origin or not as JSON get nothing.
@@ -1435,8 +1448,6 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         check("-cont" not in out_h and parked.exists(), "limit 90%: another agy conversation's next turn does not get that note", out_h[:300])
         check("CMP-CX3" in json.loads((tmp / "machines.json").read_text(encoding="utf-8")).get(mid, {}).get("limit_told", []),
               "limit 90%: a task that waits for the limit gets one notice")
-        time.sleep(1.5)  # KNOWLEDGE_WORKER_GRACE=1
-        call("POST", "/local/api/tick", {})
         wfile = home / ".knowledge" / "companion" / "workers.json"
         wait_for(lambda: (call("POST", "/local/api/tick", {}) and False) or all(
             w["status"] == "stopped" for w in json.loads(wfile.read_text(encoding="utf-8")).values() if w["agent"] == "codex"), 20)
@@ -1554,20 +1565,54 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         manifests = [hooks.parent / m / "plugin.json" for m in (".claude-plugin", ".codex-plugin") if (hooks.parent / m / "plugin.json").exists()]
         before = {m: m.read_text(encoding="utf-8") for m in manifests}
         reported = lambda: next((r for r in machines() if r["id"] == mid), {}).get("companion", {}).get("version")
-        for m, t in before.items():
-            m.write_text(re.sub(r'"version": "[^"]+"', '"version": "9.8.7"', t), encoding="utf-8")
-        act("workers_allowed", {"on": True})  # a round reports soon after the restart
-        def poke():  # the port is closed for a moment while it restarts
+
+        def measure_restart(fn_change, cond_done, seconds=60):
+            t0 = time.time()
+            down = up = None
+            def poke():
+                nonlocal down, up
+                try:
+                    call("GET", "/local/api/hello")
+                    if down and not up:
+                        up = time.time()
+                except (OSError, http_client.HTTPException):
+                    if not down:
+                        down = time.time()
+                if down:  # once it went down, poking tick on the new companion reports the new state to the server
+                    try:
+                        call("POST", "/local/api/tick", {})
+                    except Exception:
+                        pass
+                return False
+            fn_change()
+            wait_for(lambda: cond_done() or poke(), seconds)
+            dt = time.time() - t0
+            t_down_s = f"detect {down - t0:.1f}s, port-out {up - down:.1f}s" if (down and up) else ("port never down" if not down else "port stayed down")
             try:
-                call("POST", "/local/api/tick", {})
-            except OSError:
-                pass
-        wait_for(lambda: reported() == "9.8.7" or poke(), 60)
-        check(reported() == "9.8.7", "companion: an updated plugin restarts it, and the list shows the code that runs", str(reported()))
-        for m, t in before.items():
-            m.write_text(t, encoding="utf-8")
-        wait_for(lambda: reported() != "9.8.7" or poke(), 60)
-        check(reported() != "9.8.7", "companion: after going back it restarts again", str(reported()))
+                acts = [a for a in state_of(home, "activity.json")
+                        if a.get("at", 0) >= t0 and any(k in a.get("text", "") for k in ("Bound ", "Restarting", "restart helper"))]
+            except Exception:
+                acts = []
+            trail = "; ".join(f"{a['text']}" + (f" ({a['detail']})" if a.get("detail") else "") for a in reversed(acts))
+            return f" (restart {dt:.1f}s: {t_down_s}; {trail or 'bind instant'})"
+
+        def set_version_1():
+            for m, t in before.items():
+                m.write_text(re.sub(r'"version": "[^"]+"', '"version": "9.8.7"', t), encoding="utf-8")
+            with contextlib.suppress(Exception):
+                call("POST", "/local/api/wake", {})
+
+        note1 = measure_restart(set_version_1, lambda: reported() == "9.8.7", 60)
+        check(reported() == "9.8.7", "companion: an updated plugin restarts it, and the list shows the code that runs" + note1, str(reported()))
+
+        def set_version_2():
+            for m, t in before.items():
+                m.write_text(t, encoding="utf-8")
+            with contextlib.suppress(Exception):
+                call("POST", "/local/api/wake", {})
+
+        note2 = measure_restart(set_version_2, lambda: reported() != "9.8.7", 60)
+        check(reported() != "9.8.7", "companion: after going back it restarts again" + note2, str(reported()))
         code, out, err = run([sys.executable, str(hooks / "workers.py"), "--self-test"], "", env)
         check(code == 0 and out.strip() == "ok", "review: workers.py self-test on a real repository (clean merge, conflict aborted and said, "
               "dirty or other branch refused)", out[-400:] + err[-800:])
@@ -1784,11 +1829,15 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
             else:
                 manifest_text = {f: f.read_text(encoding="utf-8") for f in manifests}  # `before` means something else by now
                 try:
-                    for f, t in manifest_text.items():
-                        f.write_text(re.sub(r'"version": "[^"]+"', '"version": "9.8.6"', t), encoding="utf-8")
-                    wait_for(lambda: reported() == "9.8.6" or poke(), 90)
+                    def set_version_3():
+                        for f, t in manifest_text.items():
+                            f.write_text(re.sub(r'"version": "[^"]+"', '"version": "9.8.6"', t), encoding="utf-8")
+                        with contextlib.suppress(Exception):
+                            call("POST", "/local/api/wake", {})
+
+                    note3 = measure_restart(set_version_3, lambda: reported() == "9.8.6", 90)
                     state = subprocess.run(["schtasks", "/Query", "/TN", name, "/FO", "LIST"], capture_output=True, text=True).stdout
-                    check(reported() == "9.8.6" and "Running" in state, "companion on Windows: the Scheduled Task runs it again after an update", f"{reported()} {state[:300]}")
+                    check(reported() == "9.8.6" and "Running" in state, "companion on Windows: the Scheduled Task runs it again after an update" + note3, f"{reported()} {state[:300]}")
                 finally:
                     subprocess.run(["schtasks", "/End", "/TN", name], capture_output=True)
                     subprocess.run(["schtasks", "/Delete", "/F", "/TN", name], capture_output=True)
@@ -2172,8 +2221,11 @@ def chat_e2e(tok: str, tmp: Path):
             if agent == "claude":  # the list this pc knew is gone: the chat that runs on lists it again
                 listed.unlink(missing_ok=True)
             restart_companion()
-            if agent != "agy":
-                time.sleep(3)  # the new companion picked it up (its first poll), then the turn's end goes into the same agent
+            # the new companion picked it up, then the turn's end goes into the same agent
+            ok = ok and wait_for(lambda: any(a["detail"] == f"chat {live}" and "picked up again" in a["text"] for a in state_of(home, "activity.json")), 30)
+            if agent == "agy":
+                Path(f"{calls}.{live}.release").write_text("", encoding="utf-8")
+            else:
                 ok = ok and sendm(live, "DONE", "now") == 200
             said = lambda: "".join(e["text"] for e in chat(live)["events"] if e["kind"] == "text")
             want = "echo: PAUSE across a restart" if agent == "agy" else "echo: SLOW across a restart + DONE"
@@ -2282,8 +2334,8 @@ def chat_e2e(tok: str, tmp: Path):
             send(cid, "LATE SLOW")
             started = wait_for(lambda: any(c.get("chat") == cid for c in recorded()), 30)
             http("POST", "/ui/api/chat/stop", {"machine": mid, "id": cid}, ui)
-            time.sleep(4)  # the agent took it by now
-            check(started and idle(cid, 2) and chat(cid)["events"][-1]["text"] == "Stopped." and not any("by itself" in e["text"] for e in chat(cid)["events"]),
+            interrupted = wait_for(lambda: f'"interrupted": "{cid}"' in calls.read_text(encoding="utf-8"), 30)  # it took the message, then was interrupted
+            check(started and interrupted and idle(cid, 2) and chat(cid)["events"][-1]["text"] == "Stopped." and not any("by itself" in e["text"] for e in chat(cid)["events"]),
                   f"chat {agent}: stop before the agent took the message interrupts its turn when it starts", json.dumps(chat(cid)["events"])[-400:])
         # A folder unlinked after the chat began: the companion refuses the turn, loudly (chat and activity log).
         second = repos["Second repo"]
@@ -2365,10 +2417,22 @@ def follow_e2e(tok: str, tmp: Path):
         if not check(ok, "follow: one worker per agent runs and is reported", json.dumps({"started": [x.get("worker") for x in started()], "reported": {i: (w.get("status"), w.get("agent"), w.get("why")) for i, w in workers_of().items()}, "at": row().get("at"), "now": time.time(), "actions": [(a["action"], a["status"], str(a.get("result"))[:120]) for a in row().get("actions", [])][-6:]})
                      + (home / "companion.log").read_text(errors="replace")[-600:] + (home / ".knowledge" / "companion" / "activity.json").read_text(errors="replace")[:1500]):
             return
-        view = lambda a, peek=False, after=0: json.loads(http("GET", f"/ui/api/worker?machine={mid}&worker=garden/{ids[a]}&after={after}" + ("&peek=1" if peek else ""), headers=ui)[1])
+        followed = {}  # agent -> when the test last followed it (a viewer's poll): the follow lasts FOLLOW seconds after that
+
+        def view(a, peek=False, after=0):
+            got = json.loads(http("GET", f"/ui/api/worker?machine={mid}&worker=garden/{ids[a]}&after={after}" + ("&peek=1" if peek else ""), headers=ui)[1])
+            if not peek:
+                followed[a] = time.time()
+            return got
         texts = lambda a, peek=False: "".join(e["text"] for e in view(a, peek)["events"])
-        time.sleep(4)
-        check(all(not view(a, peek=True)["events"] for a in ids), "follow: running workers nobody follows upload nothing",
+
+        def rounds(n=2):  # n whole chat rounds of the companion since now: a folder listing asked through the chats comes back each round
+            for _ in range(n + 1):  # an answer comes before that round's follow part: one more round-trip makes that round whole
+                rid = json.loads(http("POST", "/ui/api/git/diff", {"machine": mid, "dirs": ""}, ui)[1]).get("id")
+                if not wait_for(lambda: json.loads(http("GET", f"/ui/api/git/diff?machine={mid}&id={rid}", headers=ui)[1]).get("status") == "done", 30):
+                    return False
+            return True
+        check(rounds() and all(not view(a, peek=True)["events"] for a in ids), "follow: running workers nobody follows upload nothing",
               json.dumps({a: view(a, peek=True)["events"][:3] for a in ids})[:600])
         for a in ids:
             got = wait_for(lambda: f"{a} starts {ids[a]}" in texts(a) and (a == "agy" or any(e["kind"] == "tool" and "git status" in e["text"] for e in view(a)["events"])), 30)
@@ -2389,11 +2453,15 @@ def follow_e2e(tok: str, tmp: Path):
             t = texts(a)
             check(got and "hunter22hunter" not in t and "Sup3rSecret99" not in t, f"follow {a}: new output streams in, secrets masked", t[-300:])
         # Codex and agy end while nobody follows: nothing until the companion's round sees them end, then their last events.
-        time.sleep(5)  # the follow runs out (3 s in this test)
+        # the follow runs out on the server's clock (KNOWLEDGE_WORKER_FOLLOW_SECONDS, 3 s here), which it does not show:
+        # waited for until then, then a companion round that no longer hears "follow"
+        time.sleep(max(0.0, max(followed[a] for a in ("codex", "agy")) + FOLLOW - time.time()))
+        gone = rounds(1)
         for a in ("codex", "agy"):
             (Path(f"{calls}.{ids[a]}.end")).write_text("", encoding="utf-8")
-        time.sleep(4)
-        check(all(f"end {ids[a]}" not in texts(a, peek=True) for a in ("codex", "agy")), "follow: output of a worker nobody follows is not sent while it runs")
+        pid = lambda a: next((w.get("pid") for w in started() if w["worker"] == ids[a]), None)
+        gone = gone and wait_for(lambda: not any(_alive(pid(a)) for a in ("codex", "agy")), 30) and rounds()  # they ended, the companion polled on
+        check(gone and all(f"end {ids[a]}" not in texts(a, peek=True) for a in ("codex", "agy")), "follow: output of a worker nobody follows is not sent while it runs")
         local("/local/api/tick", {})
         for a in ("codex", "agy"):
             v = view(a, peek=True)
@@ -3562,7 +3630,43 @@ assert "claude plugin install: ... fine" in out.getvalue() and "slow-tool ... ok
     check(rc == 0, "installer: a slow step says what it does before it starts", out + err[-500:])
 
 
+# The phases mostly wait (on fake agents, companions, follow windows): run without arguments, this script starts one
+# process per shard side by side (--shard i), each with its own server and temp home; a phase not listed is shard 0's.
+# By the CI times per phase (11 Nov 2026, Windows): companion 300 s, chat 165 s, shard 0 230 s, the rest 65 s.
+PHASE_SHARD = {"chat_e2e": 1, "companion_e2e": 2, "follow_e2e": 3, "installer": 3, "installer_progress": 3, "companion_setup": 3}
+SHARDS = max(PHASE_SHARD.values()) + 1
+
+
+def shards() -> int:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # the shards' logs carry non-ASCII; a Windows pipe is cp1252
+    runs = []
+    with tempfile.TemporaryDirectory() as t:
+        for i in range(SHARDS):
+            log = open(Path(t) / f"shard{i}.log", "w+", encoding="utf-8")
+            runs.append((subprocess.Popen([sys.executable, __file__, "--shard", str(i)], stdout=log, stderr=subprocess.STDOUT,
+                                          env={**os.environ, "PYTHONIOENCODING": "utf-8"}), log))
+        codes = [proc.wait() for proc, _ in runs]
+        for i, (_, log) in enumerate(runs):
+            log.seek(0)
+            print(f"---- shard {i}/{SHARDS}: {'ok' if not codes[i] else 'FAILED'} ----\n{log.read()}", flush=True)
+            log.close()
+    return 1 if any(codes) else 0  # a shard killed by a signal has a negative code
+
+
 def main():
+    me = int(sys.argv[sys.argv.index("--shard") + 1])
+    assert 0 <= me < SHARDS, f"--shard {me}: there are {SHARDS}"
+    for name, f in list(globals().items()):  # the other shards' phases do nothing here
+        if callable(f) and name in PHASES and PHASE_SHARD.get(name, 0) != me:
+            globals()[name] = lambda *a, **k: None
+        elif callable(f) and name in PHASES:  # each phase says how long it took: where a slow OS spends its time
+            def timed(*a, _f=f, _name=name, **k):
+                t0 = time.monotonic()
+                try:
+                    return _f(*a, **k)
+                finally:
+                    print(f"phase {_name}: {time.monotonic() - t0:.1f} s", flush=True)
+            globals()[name] = timed
     compile(FAKE_AGENT, "FAKE_AGENT", "exec")  # a broken stand-in fails every agent test: say so at once
     import faulthandler  # a hang prints every thread's stack before the CI job's 20 min limit cancels it without a log
     faulthandler.dump_traceback_later(15 * 60, exit=True)
@@ -3583,8 +3687,9 @@ def main():
     try:
         print(f"platform {sys.platform}, python {sys.version.split()[0]}, home {home}")
         mirror = claude_plugin(tok, home, project, garden)
-        time.sleep(max(0, started + 12 - time.monotonic()))  # past the server's STORAGE_TIMEOUT
-        check(http("GET", "/health?disk=1")[0] == 200, "the server's check of its folders works on this system (else every request gets 503)")
+        if me == 0:
+            time.sleep(max(0, started + 12 - time.monotonic()))  # past the server's STORAGE_TIMEOUT
+            check(http("GET", "/health?disk=1")[0] == 200, "the server's check of its folders works on this system (else every request gets 503)")
         folder_link(tmp / "Link Usér")
         offline(tok, home, project, garden, mirror)
         skills(tmp, home)
@@ -3624,5 +3729,13 @@ def main():
     sys.exit(1 if failures else 0)
 
 
+PHASES = {"claude_plugin", "folder_link", "offline", "skills", "agents", "script_mcp", "codex_plugin", "agy_plugin",
+          "no_session_log_e2e", "limits_e2e", "plugin_versions", "relay_errors", "honest_errors", "hook_errors", "terminal_asks",
+          "knowledge_home", "companion_e2e", "chat_e2e", "follow_e2e", "background_flags", "import_e2e", "installer",
+          "installer_progress", "companion_setup", "checkout_update", "claude_stored_token", "codex_worker_sandbox", "real_clis"}
+
+
 if __name__ == "__main__":
-    main()
+    if "--shard" in sys.argv:
+        main()
+    sys.exit(shards())

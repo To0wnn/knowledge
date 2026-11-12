@@ -766,8 +766,11 @@ async function filesRoute(q = shellRoute.q) {
   filesDraw(m, f);
 }
 function filesProject() { if (machinesMode === "files" && !$("tab-machines").hidden && !shellRoute.q.get("p")) { filesKey = ""; filesRoute(); } }
+// A path that is not there (a link from a chat to a file renamed since, or one only in a chat's own worktree) in words.
+const filesWhy = (m, e) => /No such file|cannot find the (file|path)/i.test(e.message)
+  ? `This is not on ${m.label}: it may have been moved or deleted, or exist only on a chat's own branch (worktree) that is not merged yet.` : e.message;
 function filesFail(m, e) {
-  filesBox.replaceChildren(errorState(`${m.label}: ${e.message}`, () => { filesKey = ""; filesList = null; filesRoute(); }));
+  filesBox.replaceChildren(errorState(`${m.label}: ${filesWhy(m, e)}`, () => { filesKey = ""; filesList = null; filesRoute(); }));
 }
 
 // The start: the linked folders, grouped by pc.
@@ -805,7 +808,7 @@ function filesDraw(m, f) {
   for (const r of filesList.el.querySelectorAll(".fm-row[data-path]")) {
     if (r.dataset.path === f) r.setAttribute("aria-current", "true"); else r.removeAttribute("aria-current");
   }
-  const split = el("div", "fm-split" + (f ? " has-file" : ""));
+  const split = el("div", "fm-split" + (f ? " has-file" : "") + (fileKind(f) === "audio" ? " audio" : "")); // audio: a phone keeps the list
   split.append(filesList.el);
   if (f) {
     const pane = el("article", "fm-file");
@@ -865,12 +868,24 @@ async function filesShow(m, res, path, pane) {
   const meta = el("p", "muted fm-meta", [e.size ? fileSize(e.size) : "", e.mtime ? `changed ${ago(e.mtime)}` : "", m.label].filter(Boolean).join(" · "));
   const close = filesLink("btn small quiet fm-close", filesUrl(m.id, res.path), "Close"); close.title = "Back to the folder";
   pane.append(head, meta, tools);
+  if (kind === "audio") { // it plays in the player under the list, so browsing on does not stop it
+    filesPlay(m, res, path);
+    const open = el("a", "btn small", "Open in a new tab"); open.href = filesRaw(m.id, path); open.target = "_blank"; open.rel = "noopener";
+    tools.append(open, close);
+    pane.append(el("p", "muted", "Playing in the player below; the next file in this folder follows when it ends."));
+    return;
+  }
   if (kind) {
-    const src = `/ui/api/files/raw?${new URLSearchParams({ machine: m.id, path })}`;
+    const src = filesRaw(m.id, path);
     const media = el(kind === "image" ? "img" : kind, "fm-media");
     media.src = src;
     if (kind === "image") media.alt = e.name;
-    else { media.controls = true; media.preload = "metadata"; media.setAttribute("playsinline", ""); }
+    else { // opened by a click or the one before it ended: it plays at once, and the next video follows
+      media.controls = true; media.preload = "metadata"; media.setAttribute("playsinline", "");
+      if (fp.audio.src) filesPlayerClose(); // one thing plays at a time
+      media.play().catch(() => {}); // a reload has no click: the browser refuses, the controls stay
+      media.onended = () => { const n = filesSibling(res, path, 1); if (n && shellRoute.q.get("f") === path) go(filesUrl(m.id, res.path, n), true); };
+    }
     const stage = el("div", `fm-stage ${kind}`), note = el("p", "muted");
     media.onerror = () => { note.textContent = kind === "image" ? "This image could not be shown." : "This browser cannot play this file (its format or codec: MKV, HEVC and AC3 often fail), or the pc stopped answering."; };
     const open = el("a", "btn small", "Open in a new tab"); open.href = src; open.target = "_blank"; open.rel = "noopener";
@@ -883,7 +898,7 @@ async function filesShow(m, res, path, pane) {
   tools.append(close);
   pane.append(wait);
   let txt;
-  try { txt = await filesApi(m, { op: "read", path }); } catch (err) { return wait.replaceWith(errorState(err.message, () => { pane.replaceChildren(); filesShow(m, res, path, pane); })); }
+  try { txt = await filesApi(m, { op: "read", path }); } catch (err) { return wait.replaceWith(errorState(filesWhy(m, err), () => { pane.replaceChildren(); filesShow(m, res, path, pane); })); }
   if (!pane.isConnected) return;
   const code = filesCode(txt.text);
   wait.replaceWith(code);
@@ -894,6 +909,45 @@ async function filesShow(m, res, path, pane) {
     tools.prepend(edit);
   }
 }
+// The audio player: one <audio> under the folder list that keeps playing while you browse (on a phone the list stays
+// in view and this is its mini player); when a track ends the next audio file of its folder plays. It lives in the
+// Files view only: leaving it takes the bar out of the page, which pauses it.
+const filesRaw = (mid, path) => `/ui/api/files/raw?${new URLSearchParams({ machine: mid, path })}`;
+const filesSibling = (res, path, by) => { // the next (1) or previous (-1) file of the same kind in the folder listed
+  const kind = fileKind(path), list = res.entries.filter((x) => !x.dir && fileKind(x.name) === kind).map((x) => x.path);
+  return list[list.indexOf(path) + by] || "";
+};
+const fp = { bar: el("div", "fm-player"), audio: el("audio"), name: el("a", "fm-pname"), prev: el("button", "btn small quiet icon", "⏮"),
+  next: el("button", "btn small quiet icon", "⏭"), close: el("button", "btn small quiet icon", "×"), track: null }; // track: {m, res, path}
+fp.bar.hidden = true; fp.audio.controls = true; fp.audio.preload = "metadata";
+for (const [b, label] of [[fp.prev, "Previous file"], [fp.next, "Next file"], [fp.close, "Stop and close the player"]]) { b.type = "button"; b.title = label; b.setAttribute("aria-label", label); }
+fp.bar.setAttribute("role", "region"); fp.bar.setAttribute("aria-label", "Player");
+fp.bar.append(fp.name, fp.prev, fp.next, fp.close, fp.audio);
+fp.name.onclick = (e) => { if (e.ctrlKey || e.metaKey || e.shiftKey || e.button) return; e.preventDefault(); filesGo(fp.name.getAttribute("href")); };
+function filesPlay(m, res, path) {
+  const t = fp.track, same = t && t.m.id === m.id && t.path === path;
+  fp.track = { m, res, path };
+  fp.name.textContent = baseName(path, res.sep); fp.name.href = filesUrl(m.id, res.path, path); fp.name.title = path;
+  fp.prev.disabled = !filesSibling(res, path, -1); fp.next.disabled = !filesSibling(res, path, 1);
+  fp.bar.hidden = false;
+  if (!fp.bar.isConnected) filesBox.after(fp.bar);
+  if (same) return; // the same file drawn again (a refresh): it plays on
+  fp.audio.src = filesRaw(m.id, path);
+  fp.audio.play().catch(() => {}); // a reload has no click: the browser refuses, the play button stays
+}
+// To the next or previous track: the list marks it when it shows the track that played, else it only plays.
+function filesStep(by) {
+  const t = fp.track, n = t && filesSibling(t.res, t.path, by);
+  if (!n) return;
+  if (shellRoute.view === "files" && shellRoute.q.get("f") === t.path) go(filesUrl(t.m.id, t.res.path, n), true);
+  else filesPlay(t.m, t.res, n);
+}
+function filesPlayerClose() { fp.audio.pause(); fp.audio.removeAttribute("src"); fp.audio.load(); fp.track = null; fp.bar.hidden = true; }
+fp.prev.onclick = () => filesStep(-1);
+fp.next.onclick = () => filesStep(1);
+fp.close.onclick = filesPlayerClose;
+fp.audio.onended = () => filesStep(1);
+
 // Text with a line-number gutter; long lines scroll sideways, as in a code view, so the numbers stay beside their lines.
 function filesCode(text) {
   const box = el("div", "fm-code"), lines = text.split("\n");
@@ -963,7 +1017,7 @@ function drawMachines() {
   const res = machinesRes, here = machinesHere, box = $("machines"), parts = [];
   if (!res) return;
   if (machinesMode === "files") { // drawn from its URL; a refresh leaves an open folder and what plays alone
-    if (!filesBox.isConnected) box.replaceChildren(filesBox);
+    if (!filesBox.isConnected) box.replaceChildren(filesBox, ...(fp.track ? [fp.bar] : []));
     return filesRoute();
   }
   if (machinesMode === "folders") parts.push(...foldersView(res));
