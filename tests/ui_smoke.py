@@ -1418,9 +1418,10 @@ async def board(browser, devices, secret: str) -> None:
       ck.scope = { scope: 'mine', names: ['anthony'], others: 2 }; const a = read(ckScopeSwitch());
       ck.scope = { scope: 'mine', names: [], others: 0 }; const b = read(ckScopeSwitch());
       const t = ckItem({ col: 'needs', kind: 'task', project: 'p', path: 'p-memory/x.md', at: 0, sig: 's', id: 'T-1', key: 'task:p/T-1', title: 'T-1', line: '', approve: true,
-        owner: 'Codex', from: 'Rick', author: 'rick.pc', writer: 'rick.pc', text: 'x' });
-      ck.scope = keep; return [a, b, [...t.querySelectorAll('.menu-list button')].some((x) => x.textContent.startsWith('Always trust rick.pc in'))]; })()""")
-    check(switch == [[["Only mine", "true"], ["Everyone (+2)", "false"]], [["Only mine", "false"], ["Everyone", "true"]], True],
+        owner: 'Codex', from: 'Rick', author: 'rick.pc', writer: 'rick.pc', pin_to: 'rick.pc', text: 'x' });
+      ck.scope = keep; return [a, b, [...t.querySelectorAll('.menu-list button')].some((x) => x.textContent.startsWith('Always trust rick.pc in')),
+        [...t.querySelectorAll('.ck-item-acts > button')].map((x) => x.textContent).join('|')]; })()""")
+    check(switch == [[["Only mine", "true"], ["Everyone (+2)", "false"]], [["Only mine", "false"], ["Everyone", "true"]], True, "Approve|Approve on rick.pc only|Send back…"],
           f"Needs you: the Only mine / Everyone switch says what it hides, and without names it shows everyone; an untrusted writer can be trusted from the card {switch}")
     await pg.click("#ck-view")
     await pg.wait_for_function("location.hash === '#/chats?view=list' && $('bd').hidden && !!$('ck-side').offsetParent", timeout=5000)

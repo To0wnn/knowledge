@@ -289,6 +289,8 @@ def tasks_contract(tmp, ck, fr, ver, raw):
     trust = lambda w, h=ui: raw("POST", "/ui/api/task/trust", json.dumps({"project": "garden", "writer": w}), h)
     assert trust("nobody-such")[0] == 400 and trust("user:ghost")[0] == 400 and trust("default")[0] == 400
     assert trust("user:alice")[0] == 400, "nothing of hers waits: no trust to give (and no probing names)"
+    card = next(i for i in json.loads(raw("GET", "/ui/api/board", None, {**ui, "X-Knowledge-UI": "1"})[2])["items"] if i["id"] == "UNT-1")
+    assert card["pin_to"] == "friend-pc" and set(card["writer_waiting"]) >= {"UNT-1"}, card  # Approve on friend-pc only, or Trust
     st, _, b = trust("friend-pc")
     assert st == 200 and json.loads(b)["writers"] == ["alice", "friend-pc"] and set(json.loads(b)["started"]) == {"DEP-1", "DAT-1", "UNT-1"}, b  # every waiting line of theirs: the card names them first
     assert rows()["UNT-1"]["startable"] and trust("friend-pc")[0] == 400, "trusted now: nothing of theirs waits"

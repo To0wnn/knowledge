@@ -74,7 +74,7 @@ unfolds the whole line, from whom and for whom, its memo (Open in memo) and, whe
 
 | Card | Main answer | Second | In ⋯ |
 |---|---|---|---|
-| Task waiting for approval | Approve | Send back… (to its requester, with a remark) | Decline…, Later |
+| Task waiting for approval | Approve, or Approve on <pc> only | Send back… (to its requester, with a remark) | Decline…, Always trust…, Later |
 | Result for you | Done (removes the line) | Send back… (to an agent, with a remark) | Later |
 | Review of a branch | Merge | View diff, Send back… (`<ID>-fix`) | Reject…, Later |
 | Line past its date, a person's line | Finished | +7 days | Cancel…, Later |
@@ -92,6 +92,10 @@ unfolds the whole line, from whom and for whom, its memo (Open in memo) and, whe
   mine hides the person lines (tasks, results) for other names, Everyone (+n) shows them, marked `others`. Only mine
   needs the names task lines give you (Settings, "My names in task lines", `task_names`; the switch asks once); without
   names everything shows. The sidebar badge, the browser title and the Matrix messages count what the switch shows.
+- **Approve on <pc> only** (an approval from someone the project does not trust, written from a device token and not
+  pinned): the line is pinned to that pc (`[<Owner>@<token>, <ID>]`, through `/ui/api/task/assign`) and approved, so it
+  runs only where it was written, never on your own pcs, and their other lines still ask. The safe default for a
+  guest's own work in a shared project.
 - **Always trust <writer> in <project>…** (⋯ on an approval from a writer the project does not trust; owner or admin,
   `POST /ui/api/task/trust`, only for a writer with a line waiting there): the writer joins the project's task
   writers and the task is approved. Every other waiting line of theirs in the project starts too, and their words then

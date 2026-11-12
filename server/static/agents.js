@@ -474,6 +474,8 @@ function ckItem(i) {
   if (i.approve) {
     act("Approve", "Let this task start" + (i.approve_warning ? `\n\n${i.approve_warning}` : ""),
       () => (!i.approve_warning || confirm(`${i.approve_warning}\n\nApprove ${i.id} anyway?`)) && ckDo("/ui/api/task/approve", { project: i.project, id: i.id }), "btn small primary");
+    if (i.pin_to) act(`Approve on ${i.pin_to} only`, `Let it start, but only on the pc it was written from (${i.pin_to}): never on your pcs, and no trust for their other lines`,
+      async () => (await ckDo("/ui/api/task/assign", { project: i.project, id: i.id, owner: i.owner, device: i.pin_to })) && ckDo("/ui/api/task/approve", { project: i.project, id: i.id }));
     if (i.from) act("Send back…", `Not like this: ${i.from} gets it back with your remark and may write it again`,
       () => ckAnswer(card, { label: `Send ${i.id} back to ${i.from}`, hint: "What should change? (it goes back as their result)", go: "Send back", need: true },
         (text) => ckDo("/ui/api/task/cancel", { project: i.project, id: i.id, reason: text, back: true })));

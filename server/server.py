@@ -6080,7 +6080,7 @@ def task_rows() -> list[dict]:
         tasks, back = project_tasks(name)
         approver, leases = may_approve(name), read_json(TASK_LEASES, {}).get(name, {})
         rows += [{**{k: t[k] for k in ("project", "path", "line", "owner", "id", "claimed", "text", "from", "start", "legacy",
-                                        "author", "trusted", "startable", "waiting_reason", "stalled", "approved", "approve_warning")},
+                                        "author", "trusted", "device", "startable", "waiting_reason", "stalled", "approved", "approve_warning")},
                   "can_cancel": approver and not held_now(t, leases.get(t["id"]), now),
                   "runs": task_where(name, t, leases.get(t["id"]), now) if t["startable"] else "",
                   "due": t["due"].isoformat() if t["due"] else "", "overdue": bool(t["due"] and t["due"] < today),
@@ -7196,6 +7196,7 @@ def board_items() -> list[dict]:
     names = set(read_json(PREFS_FILE, {}).get(device.get().get("user", ""), {}).get("task_names") or [])
     someone_else = lambda owner: bool(names) and owner.partition("@")[0].strip().lower() not in names
     items += review_items(rows, tasks)
+    token_names = set(read_json(TOKENS_FILE, {}))
     by_writer: dict = {}  # (project, untrusted writer) -> the IDs of their lines that wait for approval: Trust starts them all
     for t in tasks:
         if t.get("can_approve") and not t.get("trusted", True) and t.get("author"):
@@ -7224,6 +7225,9 @@ def board_items() -> list[dict]:
                 "text": t["text"], "from": t.get("from") or "", "author": "" if t.get("trusted", True) else t.get("author") or "an unknown writer",
                 # an untrusted writer the approver may choose to trust from now on (a token or user:<name>, not "an unknown writer")
                 "writer": t.get("author", "") if not t.get("trusted", True) and t.get("can_approve") else "",
+                # not pinned yet and written from a device token: "Approve on <that pc> only" pins it there, no trust in general
+                "pin_to": t.get("author", "") if not t.get("trusted", True) and t.get("can_approve") and not t.get("device")
+                          and t.get("author", "") in token_names else "",
                 "writer_waiting": by_writer.get((t["project"], t.get("author", "")), []) if not t.get("trusted", True) and t.get("can_approve") else [],
                 "others": not t["done"] and not agent and not agent_owner(t["owner"]) and someone_else(t["owner"])}  # another person's line
         if (t["project"], t["id"]) in working:  # a running worker shows it
