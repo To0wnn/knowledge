@@ -506,7 +506,7 @@ async def approvals(browser, devices, secret: str) -> None:
         sub = await pg.evaluate("""(() => { const d = document.querySelector('#ck-canvas .ck-sub'); return d && [document.querySelectorAll('#ck-canvas .ck-sub').length,
           d.querySelector('.ck-sub-label').textContent, d.querySelector('.ck-sub-tools').textContent, d.querySelector('.ck-sub-report strong')?.textContent,
           d.querySelector('summary .chip').textContent, [...document.querySelectorAll('#ck-canvas .ck-msg.agent')].some(m => m.textContent.includes('Running them'))]; })()""")
-        check(sub and sub[:5] == [2, "Explore · find the tests", "Bash: ls tests", "3", "done"] and sub[5], f"chat: a subagent is one folded block with its tool line and report, apart from the answer {sub}")
+        check(sub and sub[:5] == [2, "Explore · find the tests", "Ran ls tests", "3", "done"] and sub[5], f"chat: a subagent is one folded block with its tool line and report, apart from the answer {sub}")
         pins = await pg.evaluate("""[[...document.querySelectorAll('#ck-canvas .ck-subbar .ck-subpin')].map(b => b.textContent),
           document.querySelector('#ck-canvas .ck-sub .ck-sub-tok')?.textContent, document.querySelector('#ck-canvas .ck-tok')?.textContent]""")
         check(pins[0] == ["Plan · check the docs5.9k tokens"] and pins[1] == "8.6k tokens" and pins[2] == "35k context · 71k used",
@@ -522,7 +522,7 @@ async def approvals(browser, devices, secret: str) -> None:
             await pg.wait_for_function("location.hash.includes('/sub/tu1') && document.querySelector('#ck-canvas .ck-card .ck-title strong')?.textContent === 'Explore · find the tests'", timeout=10000)
             sub = await pg.evaluate("""[document.querySelector('#ck-canvas .ck-card .ck-title span').textContent, [...document.querySelectorAll('#ck-canvas .ck-card .ck-line.tool')].map(x => x.textContent),
               document.querySelector('#ck-canvas .ck-card .ck-msg.agent')?.textContent.includes('Found'), !document.querySelector('#ck-canvas .ck-card textarea').disabled]""")
-            check(sub[0].startswith("Subagent of") and sub[1] == ["Bash: ls tests"] and sub[2] and sub[3], f"subagent chat: its own output only, and you can write to it {sub}")
+            check(sub[0].startswith("Subagent of") and sub[1] == ["Ran ls tests"] and sub[2] and sub[3], f"subagent chat: its own output only, and you can write to it {sub}")
             await pg.evaluate("location.hash = '#/chats/0123456789ab'")  # back to the main chat for the checks below
             await pg.wait_for_selector("#ck-canvas .ck-ask", timeout=10000)
         more = pg.locator("#ck-canvas .ck-ask").nth(1).locator("details.ck-ask-more")
@@ -1491,14 +1491,21 @@ async def follow(browser, devices, secret: str) -> None:
         await route(pg, "#/chats/worker/garden/KN-7")
         card = pg.locator("#ck-canvas .ck-card.worker")
         await card.wait_for(timeout=15000)
-        await pg.wait_for_function("document.querySelectorAll('#ck-canvas .ck-log > *').length >= 6", timeout=15000)
+        await pg.wait_for_function("document.querySelectorAll('#ck-canvas .ck-log > *').length >= 5", timeout=15000)
         banner = await card.locator(".ck-banner-text").inner_text()
         acts = await card.locator(".ck-banner-acts button").all_inner_texts()
         check("KN-7" in banner and "smoke-pc" in banner and "Read only" in banner, f"{name}: an ended worker opens read only with its banner ({banner})")
         check(not await card.locator(".ck-form").is_visible() and acts == ["Restart", "Review", "Take over", "Archive"], f"{name}: no composer; Restart, Review, Take over, Archive (moved here from Machines) {acts}")
         log = await card.locator(".ck-log").inner_text()
-        check(all(x in log for x in ("watering", "Bash: git status", "refused: Bash npm test", "use the soil sensor", "Delivered")),
-              f"{name}: text, tool, refused, user and info lines show like a chat")
+        check(all(x in log for x in ("watering", "Refused Bash npm test", "2 steps", "1 refused", "use the soil sensor", "Delivered")) and "git status" not in log,
+              f"{name}: text, user and info lines show like a chat; the steps between are one closed line naming the newest step and the refusal")
+        work = card.locator(".ck-work").first
+        if shots:
+            await pg.screenshot(path=os.path.join(shots, f"follow-{name}-steps-closed.png"))
+        await work.locator("summary").click()
+        steps = await work.locator(".ck-work-steps .ck-line").all_inner_texts()
+        check(steps == ["Ran git status", "Refused Bash npm test"] and await work.evaluate("w => !w.classList.contains('live')"),
+              f"{name}: a click opens the steps, each as a verb and what it acted on; an ended turn does not pulse {steps}")
         check(await pg.evaluate("document.documentElement.scrollWidth <= innerWidth"), f"{name}: the worker view fits the screen")
         empty = await pg.locator("#ck-side").text_content()
         check("[object" not in empty and "No chats yet" in empty, f"{name}: the empty chat list says so in words")

@@ -283,7 +283,7 @@ async function ckFindRun(card, keep = false) {
   }
   const hits = [], walk = document.createTreeWalker(card.log, NodeFilter.SHOW_TEXT);
   for (let n = walk.nextNode(); n; n = walk.nextNode()) {
-    if (n.parentElement?.closest(".ck-older")) continue;
+    if (n.parentElement?.closest(".ck-older, .ck-work > summary")) continue; // a fold's line repeats its newest step
     const t = n.data.toLowerCase();
     for (let i = t.indexOf(word); i >= 0; i = t.indexOf(word, i + word.length)) { const r = new Range(); r.setStart(n, i); r.setEnd(n, i + word.length); hits.push(r); }
   }
@@ -1550,8 +1550,31 @@ function ckUserMsg(card, text, box = el("div", "ck-msg user"), by = "") {
   box.append(text.slice(at));
   return box;
 }
+// A step as a person says it: "Ran npm test", "Read src/a.ts", from the companion's "<tool>: <what>" (Claude, agy),
+// "$ <cmd>" / "edit: <paths>" / "<server>.<tool>" (Codex). An unknown tool keeps its own name as the verb.
+const CK_VERBS = [
+  [/^(Bash|run_command|shell|exec_command|\$)$/i, "Ran"], [/^(Read|view_file|view_image|read_file|NotebookRead)$/i, "Read"],
+  [/^(Edit|Write|MultiEdit|NotebookEdit|edit|write_to_file|replace_file_content|multi_replace_file_content|apply_patch)$/i, "Edited"],
+  [/^(Grep|Glob|LS|search|grep_search|find_by_name|list_dir|codebase_search)$/i, "Searched"],
+  [/^(WebFetch|read_url_content)$/i, "Fetched"], [/^(WebSearch|search_web)$/i, "Searched the web"]];
+function ckStep(e) {
+  const t = e.text || "";
+  if (e.kind === "refused") return ["Refused", t.replace(/^refused:\s*/, "")];
+  if (e.kind === "failed") return ["Failed", t];
+  const m = /^(\$|[\w.-]+):? (.*)$/s.exec(t) || /^([\w-]+\.[\w.-]+)()$/.exec(t); // "Name: what", "$ cmd", or Codex's "server.tool"
+  if (!m) return ["", t];
+  const name = m[1].replace(/^mcp__.*?__/, ""), verb = CK_VERBS.find(([re]) => re.test(name))?.[1];
+  return verb ? [verb, m[2]] : [name, m[2]];
+}
+const CK_STEP = new Set(["tool", "failed", "refused"]);
 function ckLine(card, e) {
   if (e.kind === "tool" && e.text.includes("⟦file:")) return ckUserMsg(card, e.text, el("div", "ck-line tool"));
+  if (CK_STEP.has(e.kind)) {
+    const [verb, what] = ckStep(e), line = el("div", `ck-line ${e.kind}`);
+    if (verb) line.append(el("span", "ck-verb", verb), " ");
+    line.append(what); line.title = e.text; // the companion's own words, for a hover
+    return line;
+  }
   const line = el("div", `ck-line ${e.kind}`, e.text);
   if (e.kind === "info" && (e.text || "").startsWith("Not archived:")) {
     card.failedWrap = true;
@@ -1600,9 +1623,13 @@ function ckEvents(card, res) {
       dirty.add(msg);
     } else {
       if (e.kind === "user") card.failedWrap = false; // a new message or a retried Archive: only the newest wrap-up counts
-      card.log.append(e.kind === "user" ? ckUserMsg(card, e.text, undefined, e.by) : ckLine(card, e));
+      if (CK_STEP.has(e.kind) && !e.text.includes("⟦file:")) ckWork(card, last).append(ckLine(card, e)); // an image it looked at stays in view
+      else card.log.append(e.kind === "user" ? ckUserMsg(card, e.text, undefined, e.by) : ckLine(card, e));
     }
   }
+  for (const w of dirtyWork) ckWorkSum(w);
+  dirtyWork.clear();
+  ckWorkLive(card);
   for (const msg of dirty) if (selecting(msg)) card.held = msg; else msg.innerHTML = renderMd(msg.dataset.raw.replace(/^\n+/, "")); // text being selected waits for the next poll
   if (res.events.length) {
     const hasUser = res.events.some((e) => e.kind === "user");
@@ -1611,6 +1638,38 @@ function ckEvents(card, res) {
   }
 }
 
+// A turn's steps between two pieces of text as one quiet line: the newest step, how many, and a failure or refusal
+// named on the line so the fold never hides it; a click opens the steps. One step shows as itself and does not open.
+// shortcut: a run of steps cut by a page boundary (scrolling up) shows as two folds; fine, both still read right.
+const dirtyWork = new Set();
+function ckWork(card, last) {
+  let w = last?.classList.contains("ck-work") ? last : null;
+  if (!w) {
+    w = el("details", "ck-work"); const sum = el("summary");
+    sum.append(el("span", "ck-work-last"), el("span", "ck-work-n"));
+    sum.addEventListener("click", (ev) => { if (w.classList.contains("one")) ev.preventDefault(); });
+    w.append(sum, el("div", "ck-work-steps"));
+    card.log.append(w);
+  }
+  dirtyWork.add(w);
+  return w.lastElementChild;
+}
+function ckWorkSum(w) {
+  const steps = [...w.lastElementChild.children], n = steps.length, last = steps[n - 1], sum = w.firstElementChild;
+  const fail = steps.filter((x) => x.classList.contains("failed")).length, ref = steps.filter((x) => x.classList.contains("refused")).length;
+  sum.firstElementChild.replaceChildren(...[...last.childNodes].map((x) => x.cloneNode(true)));
+  sum.firstElementChild.className = `ck-work-last ${last.classList.contains("tool") ? "" : last.classList.contains("failed") ? "failed" : "refused"}`;
+  const chips = [...(n > 1 ? [el("span", "chip", `${n} steps`)] : []), ...(fail ? [el("span", "chip bad", `${fail} failed`)] : []), ...(ref ? [el("span", "chip warn", `${ref} refused`)] : [])];
+  sum.lastElementChild.replaceChildren(...chips);
+  w.classList.toggle("one", n === 1);
+  sum.title = n > 1 ? "Show or hide the steps" : last.title;
+}
+function ckWorkLive(card) { // the newest fold pulses while its turn still runs
+  if (!card.log.isConnected) return; // an older page being built apart
+  const end = card.log.lastElementChild, busy = ckBusy(card.meta?.status) && end?.classList.contains("ck-work");
+  for (const w of card.log.querySelectorAll(":scope > .ck-work.live")) if (w !== end || !busy) w.classList.remove("live");
+  if (busy) end.classList.add("live");
+}
 // Scrolling up in a long chat: the CK_PAGE events before the oldest shown are rendered apart (their own subagent
 // blocks) and put on top, the view kept where it was.
 function ckOlderMark(card) {

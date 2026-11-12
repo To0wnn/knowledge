@@ -821,6 +821,18 @@ audio.fm-media { width: 100%; }
 .ck-line.failed { border-left-color: var(--warn); }
 .ck-line.error { color: var(--bad); border-left-color: var(--bad); }
 .ck-line.info { font-family: var(--font); font-style: italic; }
+.ck-verb { color: var(--ink); }
+.ck-work > summary { display: flex; gap: 8px; align-items: center; font: 12px/1.45 var(--mono); color: var(--muted); padding-left: 10px; border-left: 2px solid var(--line-hi); }
+.ck-work.one > summary { cursor: default; background: none; } /* the house chevron and hover: only when it opens */
+.ck-work.one > summary::before { visibility: hidden; }
+.ck-work.one > .ck-work-steps { display: none; }
+.ck-work > summary:hover .ck-work-last { color: var(--ink); }
+.ck-work-last { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ck-work-last.failed, .ck-work-last.refused { color: var(--warn); }
+.ck-work-n { display: inline-flex; gap: 4px; flex: none; font-family: var(--font); }
+.ck-work-n:empty { display: none; }
+.ck-work-steps { display: grid; gap: 2px; padding: 4px 0 4px 14px; }
+.ck-work.live > summary .ck-work-last { animation: kn-pulse 1.6s ease-in-out infinite; }
 .ck-card.worker { grid-template-rows: auto auto minmax(0, 1fr) auto auto; }
 .ck-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel-hi); font-size: 13px; }
 .ck-banner-text { margin: 0; flex: 1 1 240px; color: var(--muted); }
