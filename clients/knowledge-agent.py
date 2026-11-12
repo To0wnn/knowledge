@@ -158,11 +158,42 @@ def check(tok: str) -> str:
     return rules
 
 
-def ensure_token(name: str) -> str:
+def ensure_secret_tool(answer=input) -> bool:
+    """Offer to install secret-tool on Linux when missing, so the token can be stored in the keyring."""
+    if sys.platform != "linux" or shutil.which("secret-tool") or not sys.stdin.isatty():
+        return bool(shutil.which("secret-tool"))
+    if answer("secret-tool is missing (needed to save the token in the keyring). Install it? [Y/n] ").strip().lower() not in ("", *YES):
+        return False
+    sudo = [] if hasattr(os, "geteuid") and os.geteuid() == 0 else ["sudo"]
+    if sudo and not shutil.which("sudo"):
+        print("sudo is missing: cannot install secret-tool.")
+        return False
+    pm_cmds = [
+        ("apt-get", [*sudo, "apt-get", "install", "-y", "libsecret-tools"]),
+        ("dnf", [*sudo, "dnf", "install", "-y", "libsecret"]),
+        ("pacman", [*sudo, "pacman", "-S", "--noconfirm", "libsecret"]),
+        ("zypper", [*sudo, "zypper", "install", "-y", "libsecret-tools"]),
+        ("apk", [*sudo, "apk", "add", "libsecret"]),
+    ]
+    for pm, cmd in pm_cmds:
+        if shutil.which(pm):
+            try:
+                subprocess.run(cmd, check=True)
+                return bool(shutil.which("secret-tool"))
+            except (subprocess.SubprocessError, OSError) as e:
+                print(f"Could not install secret-tool via {pm} ({e}).")
+                return False
+    print("Could not find a supported package manager to install secret-tool.")
+    return False
+
+
+def ensure_token(name: str, answer=input) -> str:
     """The token for the setup. A vault name (the VM) is used as is. Otherwise the stored one; in a terminal the setup
     asks for it (hidden) when there is none or the person wants a new one, checks it and saves it in the keyring."""
     if name != "-":
         return token(name)
+    if sys.platform == "linux" and not shutil.which("secret-tool"):
+        ensure_secret_tool(answer)
     env, stored = os.environ.get("KNOWLEDGE_TOKEN", ""), token_store.from_keyring()
     if env:
         print("Using KNOWLEDGE_TOKEN from this shell (it wins over the keyring).")
@@ -1366,6 +1397,7 @@ if __name__ == "__main__":
                                                ([], None, True, "n", False), ([], None, True, "", True), ([], None, False, "n", True)):
             assert want_companion("install", flags, saved, tty, lambda q: reply) is want, (flags, saved, tty, reply)
         assert want_companion("update", [], None, True, lambda q: "n") is True  # update never asks
+        assert ensure_secret_tool(lambda q: "n") == bool(shutil.which("secret-tool"))
         assert claude_folder("C--Users-u-x", {"C:\\Users\\u\\x"}) == "C:\\Users\\u\\x" and claude_folder("-y", {"/x"}) == ""
         print("ok")
     else:

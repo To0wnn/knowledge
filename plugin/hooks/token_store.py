@@ -151,8 +151,8 @@ def claude_option(name: str) -> str:
 
 
 def token() -> str:
-    return os.environ.get("KNOWLEDGE_TOKEN") or from_keyring() \
-        or os.environ.get("CLAUDE_PLUGIN_OPTION_TOKEN") or os.environ.get("CLAUDE_PLUGIN_OPTION_token") or claude_option("token")
+    return os.environ.get("KNOWLEDGE_TOKEN") or os.environ.get("CLAUDE_PLUGIN_OPTION_TOKEN") or os.environ.get("CLAUDE_PLUGIN_OPTION_token") \
+        or from_keyring() or claude_option("token")
 
 
 def url() -> str:
