@@ -563,10 +563,11 @@ def folder_links() -> dict:
         except (OSError, subprocess.SubprocessError):
             continue
     # One folder under two names (a junction or symlink, e.g. C:\\NewName -> C:\\OldName) is one folder: listed
-    # once, as its real path, or unlinking one name would also unlink the other (they share one .knowledge-project).
+    # once, or unlinking one name would also unlink the other (they share one .knowledge-project). Under the name its
+    # owner linked it by, else its real path.
     real = lambda p: os.path.normcase(os.path.realpath(p))  # noqa: E731
-    one = {}
-    for k in sorted(linked, key=lambda k: (real(k) != os.path.normcase(os.path.abspath(k)), k)):  # the real path first
+    chose, one = set(load("linked.json", [])), {}
+    for k in sorted(linked, key=lambda k: (k not in chose, real(k) != os.path.normcase(os.path.abspath(k)), k)):
         one.setdefault(real(k), k)
     linked = {k: linked[k] for k in one.values()}
     cands = sorted({c for c in cands if c not in linked and real(c) not in one and linkable(Path(c)) and (under_home(Path(c)) or not scratch(Path(c)))})
@@ -3544,6 +3545,11 @@ def main(argv: list):
                     assert [c[2] for c in calls] == [str(h / "repo" / "sub")], calls
                     assert f1["linked"] == [{"path": str(h / "lk"), "project": "p"}], f1
                     assert [c["path"] for c in f1["candidates"]] == [str(h / "plain"), str(h / "repo")], f1
+                    if "alias" in names:  # linked by its second name: listed once, under the name its owner chose
+                        was = load("linked.json", [])
+                        save("linked.json", [str(h / "alias")])
+                        assert folder_links()["linked"] == [{"path": str(h / "alias"), "project": "p"}], folder_links()
+                        save("linked.json", was)
                     # Outside the home folder: a folder an agent worked in counts (not in the temp folder), never a root,
                     # the home folder or above it, or a system folder; the chooser shows it and links it.
                     away = Path(tmp2).resolve() / "away"
