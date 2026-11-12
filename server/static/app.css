@@ -258,6 +258,13 @@ pre.diff .del { color: var(--bad); background: var(--bad-soft); display: block; 
 pre.diff mark { color: inherit; border-radius: 3px; }
 pre.diff .add mark { background: color-mix(in srgb, var(--ok) 30%, transparent); }
 pre.diff .del mark { background: color-mix(in srgb, var(--bad) 30%, transparent); text-decoration: line-through; }
+/* review comments on diff lines (the Agents diff dialog): a spruce bar marks the line under the pointer and a commented one */
+pre.diff .diff-at { cursor: pointer; }
+pre.diff .diff-at:hover, pre.diff .diff-at.noted { box-shadow: inset 3px 0 var(--act); }
+pre.diff .diff-note { margin: 4px 0 8px; padding: 8px; background: var(--canvas); border: 1px solid var(--line); border-radius: var(--r-sm); font: 13px/1.45 var(--font); color: var(--ink); white-space: normal; }
+pre.diff .diff-note textarea { display: block; resize: vertical; }
+pre.diff .diff-note.saved { cursor: pointer; white-space: pre-wrap; border-left: 3px solid var(--act); }
+.diff-note-acts { display: flex; gap: 8px; margin-top: 6px; }
 .version { margin-top: 12px; display: grid; gap: 8px; justify-items: start; }
 .editor { width: 100%; min-height: 60vh; padding: 12px; border: 1px solid var(--line-hi); border-radius: var(--r-md); background: var(--panel-hi); color: var(--ink); font: 13px/1.5 var(--mono); resize: vertical; tab-size: 2; }
 .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }

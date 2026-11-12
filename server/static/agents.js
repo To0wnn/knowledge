@@ -711,6 +711,7 @@ async function ckDiff(i) {
   $("ck-diff-title").textContent = `Changes · ${i.title}`;
   $("ck-diff-where").textContent = `${i.label} · ${i.chat ? i.branch : i.kind === "worker" || i.kind === "review" ? `worker ${i.id}` : i.folder}${i.git ? ` · ${ckGitText(i.git)}` : ""}`;
   say("muted", `Asking ${i.label}…`);
+  ckDiffTo = ckDiffTarget(i); ckNotes.clear(); ckNotesCount();
   if (!$("ck-diff-dialog").open) $("ck-diff-dialog").showModal();
   try {
     const { id } = await api("/ui/api/git/diff", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -720,12 +721,62 @@ async function ckDiff(i) {
       const d = await api(`/ui/api/git/diff?machine=${i.machine}&id=${id}`);
       if (d.status !== "done") continue;
       if (d.error) return say("error", d.error);
-      return body.replaceChildren(d.text.trim() ? diffView(d.text) : el("p", "muted", "No changes."));
+      return body.replaceChildren(d.text.trim() ? diffView(d.text, ckDiffTo ? { comment: ckNote } : {}) : el("p", "muted", "No changes."));
     }
     if (ask === ckDiffAsk && $("ck-diff-dialog").open) say("error", `${i.label} did not answer: its companion may be older than 0.17 or busy.`);
   } catch (e) { say("error", e.message); }
 }
-$("ck-diff-close").onclick = () => $("ck-diff-dialog").close();
+// Comments on a diff's lines go back as one message to whoever made it: a chat gets its next message (a closed one
+// opens again), a running worker a steer, a finished one's Review card sends it back as <ID>-fix. Anything else (a
+// folder, someone else's chat you may only read, a worker with no card) gets no comment UI.
+function ckDiffTarget(i) {
+  const post = (path, body) => (text) => ckDo(path, { ...body, text });
+  if (i.kind === "review" && i.chat) return { branch: i.branch, send: post("/ui/api/chat/send", { machine: i.machine, id: i.chat }) };
+  if (i.kind === "chat" && (ck.chats || []).find((c) => ckKey(c) === ckKey(i))?.rights === "act") return { branch: i.git?.branch, send: post("/ui/api/chat/send", { machine: i.machine, id: i.id }) };
+  if (i.kind === "worker" && i.status === "running") return { branch: i.git?.branch, send: post("/ui/api/worker/steer", { machine: i.machine, worker: `${i.project}/${i.id}` }) };
+  const card = i.kind === "review" ? i : i.kind === "worker" && (ck.board || []).find((r) => r.kind === "review" && !r.chat && r.machine === i.machine && r.project === i.project && r.id === i.id);
+  return card ? { branch: card.branch, send: (text) => ckRejectPost(card, text, true) } : null;
+}
+let ckDiffTo = null;
+const ckNotes = new Map(); // line index in the open diff -> {at, line, text}
+function ckNotesText(branch) {
+  return [`Review comments${branch ? ` on branch ${branch}` : ""}:`,
+    ...[...ckNotes].sort((a, b) => a[0] - b[0]).map(([, c]) => `\n${c.at}\n> ${c.line}\n${c.text}`)].join("\n");
+}
+function ckNotesCount() {
+  const b = $("ck-diff-send"), n = ckNotes.size;
+  b.hidden = !n; b.textContent = `Send ${n} comment${n === 1 ? "" : "s"}`;
+}
+// The note box under a diff line: typing keeps the note, Done or Esc folds it to its text (a click opens it again).
+function ckNote(at, n, span) {
+  span.nextElementSibling?.classList.contains("diff-note") && span.nextElementSibling.remove();
+  const box = el("div", "diff-note"), input = el("textarea"), done = el("button", "btn small", "Done"), drop = el("button", "btn small quiet", "Remove");
+  done.type = drop.type = "button"; input.rows = 2; input.maxLength = 2000; input.placeholder = "What should change here?";
+  input.setAttribute("aria-label", `Comment on ${at}`); input.value = ckNotes.get(n)?.text || "";
+  const shut = () => {
+    const text = input.value.trim();
+    if (text) ckNotes.set(n, { at, line: span.textContent.replace(/\n$/, ""), text }); else ckNotes.delete(n);
+    span.classList.toggle("noted", !!text); ckNotesCount();
+    if (text) { const shown = el("div", "diff-note saved", text); shown.title = "Edit this comment"; shown.onclick = () => ckNote(at, n, span); box.replaceWith(shown); }
+    else box.remove();
+    span.focus();
+  };
+  done.onclick = shut;
+  drop.onclick = () => { input.value = ""; shut(); };
+  input.onkeydown = (e) => { if (e.key === "Escape" && !e.isComposing) { e.preventDefault(); e.stopPropagation(); shut(); } };
+  const acts = el("div", "diff-note-acts"); acts.append(done, drop);
+  box.append(input, acts); span.after(box); input.focus();
+}
+const ckDiffShut = () => !ckNotes.size || confirm(`Close without sending ${ckNotes.size === 1 ? "your comment" : `your ${ckNotes.size} comments`}?`);
+$("ck-diff-close").onclick = () => ckDiffShut() && $("ck-diff-dialog").close();
+$("ck-diff-dialog").addEventListener("cancel", (e) => { if (!ckDiffShut()) e.preventDefault(); });
+$("ck-diff-send").onclick = async () => {
+  const b = $("ck-diff-send"), to = ckDiffTo;
+  if (!to || !ckNotes.size || b.disabled) return;
+  b.disabled = true;
+  if (await to.send(ckNotesText(to.branch))) { toast(`Sent ${b.textContent.slice(5)}`, false); ckNotes.clear(); ckNotesCount(); $("ck-diff-dialog").close(); }
+  b.disabled = false;
+};
 
 const CK_CMDS = Object.assign(new Map(), { seq: 0 }); // "machine/agent" -> {at, list: Promise}; seq: a box's list id
 function ckCard(meta) {
@@ -2037,7 +2088,7 @@ function ckWorkerPaint(card) {
     const act = (text, title, fn) => { const b = el("button", "btn small", text); b.type = "button"; b.title = title; b.onclick = fn; card.acts.append(b); };
     if (card.online && run) act("Stop", "Stop this worker (this pc keeps its lease until it runs out)", () => ckWorkerAct(card, "stop_worker"));
     if (card.online && w.status === "failed") act("Restart", "Start this worker again now", () => ckWorkerAct(card, "restart"));
-    if (w.review || w.git) act("Review", "The changes on its branch, read on that pc", () => ckDiff({ kind: "worker", machine: m.machine, project: w.project, id: w.id, title: w.id, label: m.label }));
+    if (w.review || w.git) act("Review", "The changes on its branch, read on that pc", () => ckDiff({ kind: "worker", machine: m.machine, project: w.project, id: w.id, title: w.id, label: m.label, status: w.status }));
     if (card.online && !w.chat && w.status !== "merged") act("Take over", "Stop the worker and go on with its conversation as a chat on that pc", () => ckWorkerAct(card, "takeover"));
     if (w.chat) act("Open chat", "The chat this worker became", () => go(`#/chats/${encodeURIComponent(w.chat)}`));
     if (!run && !w.merged && w.checkpoint) act("Roll back", "Put its worktree back as it was before its last turn (a checkpoint of now is kept)", () => confirm(`Roll ${w.id} back to before its last turn?`) && ckWorkerAct(card, "rollback"));

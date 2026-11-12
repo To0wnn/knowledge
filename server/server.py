@@ -7392,8 +7392,8 @@ async def ui_review_reject(request: Request):
     try:
         b = await request.json()
         key, back = str(b.get("key", "")), b.get("send_back") is True
-        # one line, and no "(claimed" that would mark the new task line taken
-        reason = re.sub(r"\(\s*(claimed|bezig)", r"\1", " ".join(str(b.get("reason", "")).split()), flags=re.I)[:300]
+        # one line, and no "(claimed" that would mark the new task line taken; long enough for the diff's line comments
+        reason = re.sub(r"\(\s*(claimed|bezig)", r"\1", " ".join(str(b.get("reason", "")).split()), flags=re.I)[:2000]
     except (ValueError, AttributeError):
         return JSONResponse({"error": "send JSON {key, reason, send_back}"}, status_code=400)
     if back and not reason:
