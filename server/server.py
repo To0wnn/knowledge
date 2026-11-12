@@ -1120,10 +1120,11 @@ def chat_unlanded(c: dict, g) -> str:
         return f"{g.get('branch') or 'its branch'} has {g['ahead']} commit(s) not in {g.get('base') or 'main'}"
     if c.get("worktree") and type(g.get("changed")) is int and g["changed"] > 0:
         return f"its worktree has {g['changed']} uncommitted file(s)"
-    # a branch committed to since the chat began that nobody has checked out: the agent went back to main without merging
-    left = [x["branch"] for x in g.get("loose") or [] if isinstance(x, dict) and type(x.get("at")) is int and x["at"] >= (c.get("created") or 0)]
+    # a branch committed to since the chat began that nobody watches: the agent went back to main without merging, or a
+    # subagent's own worktree (Claude Code, Codex) was never merged
+    left = [str(x["branch"])[:120] + (" (in a subagent's worktree)" if x.get("worktree") else "") for x in g.get("loose") or [] if isinstance(x, dict) and type(x.get("at")) is int and x["at"] >= (c.get("created") or 0)]
     if left:
-        return f"branch {', '.join(str(b)[:120] for b in left)} has commits not in {g.get('base') or 'main'} and is checked out nowhere"
+        return f"branch {', '.join(left)} has commits not in {g.get('base') or 'main'} and nobody watches it"
     return ""
 
 
@@ -3124,10 +3125,10 @@ def workers_unmerged() -> list[str]:
 
 
 def branches_unlanded() -> list[str]:
-    """Branches in a linked folder with commits not in its base, checked out nowhere, last commit over 2 days ago: work
-    an agent called done (in a memo or a hand-back) that never reached main."""
+    """Branches in a linked folder with work not in its base, checked out nowhere or only in a subagent's own worktree,
+    last commit over 2 days ago: work an agent called done (in a memo or a hand-back) that never reached main."""
     now = time.time()
-    return [f"{m.get('label', mid)}: {f.get('path')}: {x['branch']} has commits not in {g.get('base') or 'main'} "
+    return [f"{m.get('label', mid)}: {f.get('path')}: {x['branch']}{' (in a subagent worktree)' if x.get('worktree') else ''} has commits not in {g.get('base') or 'main'} "
             f"(last {time.strftime('%Y-%m-%d', time.localtime(x['at']))})" for mid, m in read_json(MACHINES_FILE, {}).items()
             for f in ((m.get("companion") or {}).get("folders") or {}).get("linked", []) if isinstance(g := f.get("git"), dict)
             for x in g.get("loose") or [] if isinstance(x, dict) and type(x.get("at")) is int and now - x["at"] > 2 * 86400]
@@ -8808,7 +8809,7 @@ def git_pill(g) -> dict | None:
     num = lambda k: max(0, min(int(g[k]), 10**6)) if type(g.get(k)) is int else 0
     return {"branch": str(g.get("branch") or "")[:120], "base": str(g.get("base") or "")[:120],
             "changed": num("changed"), "ahead": num("ahead"), "behind": num("behind"),
-            "loose": [{"branch": str(x.get("branch") or "")[:120], "at": x["at"]} for x in (g.get("loose") if isinstance(g.get("loose"), list) else [])[:5]
+            "loose": [{"branch": str(x.get("branch") or "")[:120], "at": x["at"], **({"worktree": True} if x.get("worktree") is True else {})} for x in (g.get("loose") if isinstance(g.get("loose"), list) else [])[:5]
                       if isinstance(x, dict) and type(x.get("at")) is int and 0 < x["at"] < time.time() + 86400]}  # localtime() overflows outside it
 
 
@@ -8952,8 +8953,9 @@ async def machine_report(request: Request):
         notify(f"Knowledge: task {tid} waits on {dev.get('machine_label')}: every agent there is at 90% of its usage limit.")
     for e in broken:
         notify(f"Knowledge: a tool on {dev.get('machine_label')} failed (Machines page, Tools): {e}"[:500])
-    # its "Own branch" chats that are closed: the companion removes what has nothing left to merge
-    closed = await asyncio.to_thread(lambda: [k for k in report["chats"] if (read_json(chat_file(dev["machine"], k), None) or {}).get("closed")])
+    # its "Own branch" chats that are closed, or gone from the server (else their worktree stays for good): the companion
+    # removes what has nothing left to merge
+    closed = await asyncio.to_thread(lambda: [k for k in report["chats"] if (read_json(chat_file(dev["machine"], k), None) or {"closed": True}).get("closed")])
     # the read-only GitHub token for tool downloads: only to the admins' own devices, never a friend's or a guest's
     gh = os.environ.get("KNOWLEDGE_GITHUB_TOKEN", "") if read_json(TOKENS_FILE, {}).get(dev.get("name", ""), {}).get("self") else ""
     # the newest plugin: a companion behind it updates itself when nothing runs there (companion.knowledge_update_due)

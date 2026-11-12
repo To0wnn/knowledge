@@ -437,8 +437,18 @@ def merged(w: dict) -> bool:
     if not tip or (tip == w.get("base") and (w.get("status") != "finished" or not Path(w.get("worktree") or "").is_dir()
                                              or git(w["worktree"], "status", "--porcelain").stdout.strip())):
         return False
-    return any(git(w["repo"], "merge-base", "--is-ancestor", tip, f"refs/heads/{b}").returncode == 0 for b in dict.fromkeys(("main", "master", w.get("base_branch")))
-               if b and git(w["repo"], "rev-parse", "-q", "--verify", f"refs/heads/{b}").returncode == 0)
+    # its upstream counts too: a deploy pushes to origin/main and leaves the local main behind
+    return any(holds(w["repo"], tip, ref) for b in dict.fromkeys(("main", "master", w.get("base_branch")))
+               if b and git(w["repo"], "rev-parse", "-q", "--verify", f"refs/heads/{b}").returncode == 0 for ref in (f"refs/heads/{b}", f"{b}@{{upstream}}"))
+
+
+def holds(repo, tip: str, ref: str) -> bool:
+    """`ref` already has what `tip` brings: tip is in its history, or merging tip into it would change nothing (landed
+    by a squash, rebase or cherry-pick, a GitHub PR say, whose commits differ). Needs git 2.38+, else only the first."""
+    if git(repo, "merge-base", "--is-ancestor", tip, ref).returncode == 0:
+        return True
+    m = git(repo, "merge-tree", "--write-tree", ref, tip)
+    return m.returncode == 0 and m.stdout.split()[:1] == [git(repo, "rev-parse", f"{ref}^{{tree}}").stdout.strip()]
 
 
 def config_hash(repo) -> str:
@@ -502,11 +512,14 @@ def merge(w: dict) -> str:
 
 
 def remove(w: dict) -> str:
-    """The worktree and branch of a merged worker: git refuses a worktree with changes, so nothing is lost."""
+    """The worktree and branch of a merged worker (merged() said so). A worktree with uncommitted or untracked files
+    stays: --force (needed for a locked one) would delete them. -D: a squash-landed branch is not an ancestor."""
+    if Path(w["worktree"]).is_dir() and git(w["worktree"], "status", "--porcelain").stdout.strip():
+        return "worktree kept: it has uncommitted files"
     r = git(w["repo"], "worktree", "remove", "--force", w["worktree"])
     if r.returncode:
         return f"worktree kept: {(r.stderr or r.stdout).strip()[:160]}"
-    git(w["repo"], "branch", "-d", w["branch"])
+    git(w["repo"], "branch", "-D", w["branch"])
     return "worktree and branch removed"
 
 
@@ -708,6 +721,22 @@ def self_test():
         git(w["cwd"], "add", "b.txt", check=True)
         git(w["cwd"], "commit", "-qm", "work", check=True)
         assert not merged(w)
+        git(repo, "branch", "-q", "up", w["branch"], check=True)  # stands in for origin/main after a deploy pushed
+        git(repo, "branch", "-q", "--set-upstream-to=up", "main", check=True)
+        assert merged(w), "work only main's upstream holds is merged too"
+        git(repo, "branch", "-q", "--unset-upstream", "main", check=True)
+        git(repo, "branch", "-q", "-D", "up", check=True)
+        git(repo, "checkout", "-q", "-b", "squash", "main", check=True)  # a squash merge: other commits, same content
+        git(repo, "merge", "-q", "--squash", w["branch"], check=True)
+        git(repo, "commit", "-qm", "squashed", check=True)
+        git(repo, "branch", "-q", "--set-upstream-to=squash", "main", check=True)
+        assert merged(w), "work landed by a squash merge is merged too"
+        (Path(w["cwd"]) / "late.txt").write_text("x\n")
+        assert remove(w) == "worktree kept: it has uncommitted files" and Path(w["worktree"]).is_dir(), "uncommitted work is never removed"
+        (Path(w["cwd"]) / "late.txt").unlink()
+        git(repo, "branch", "-q", "--unset-upstream", "main", check=True)
+        git(repo, "checkout", "-q", "main", check=True)
+        git(repo, "branch", "-q", "-D", "squash", check=True)
         git(repo, "merge", "-q", "--ff-only", w["branch"], check=True)
         assert merged(w) and remove(w) == "worktree and branch removed" and not Path(w["worktree"]).exists()
         assert w["base_branch"] == "main"
