@@ -577,8 +577,8 @@ async def approvals(browser, devices, secret: str) -> None:
         await pg.locator('#ck-canvas .ck-card .ck-player button').click()
         pins = await pg.evaluate("""[[...document.querySelectorAll('#ck-canvas .ck-subbar .ck-subpin')].map(b => b.textContent),
           document.querySelector('#ck-canvas .ck-sub .ck-sub-tok')?.textContent, document.querySelector('#ck-canvas .ck-tok')?.textContent]""")
-        check(pins[0] == ["Plan · check the docs5.9k tokens"] and pins[1] == "8.6k tokens" and pins[2] == "35k context · 71k used",
-              f"chat: running subagents pinned above the box with their tokens; tokens per subagent and for the chat {pins}")
+        check(len(pins[0]) == 1 and re.fullmatch(r"Plan · check the docs\d+ s5\.9k tokens", pins[0][0]) and pins[1] == "8.6k tokens" and pins[2] == "35k context · 71k used",
+              f"chat: running subagents pinned above the box with how long they run and their tokens; tokens per subagent and for the chat {pins}")
         if not dev.get("is_mobile"):  # desktop: the list beside the chat
             await pg.evaluate("location.hash = '#/chats?view=list'")
             await comes_true(pg, "location.hash === '#/chats?view=list'")
@@ -1607,6 +1607,8 @@ async def follow(browser, devices, secret: str) -> None:
               {"n": 3, "kind": "refused", "text": "refused: Bash npm test"}, {"n": 4, "kind": "user", "text": "use the soil sensor"},
               {"n": 5, "kind": "info", "text": "Delivered: the worker read your message after its last step."},
               {"n": 6, "kind": "text", "text": "Switching to the soil sensor as asked."}]
+    for e in events:  # the first three yesterday, the rest today: a day line between them
+        e["at"] = now - 86400 if e["n"] <= 3 else now - 60
 
     async def fake(route):
         u = urlsplit(route.request.url)
@@ -1659,6 +1661,10 @@ async def follow(browser, devices, secret: str) -> None:
         steps = await work.locator(".ck-work-steps .ck-line").all_inner_texts()
         check(steps == ["Ran git status", "Refused Bash npm test"] and await work.evaluate("w => !w.classList.contains('live')"),
               f"{name}: a click opens the steps, each as a verb and what it acted on; an ended turn does not pulse {steps}")
+        days = await card.locator(".ck-day").all_inner_texts()
+        clock = await card.locator(".ck-msg.user").first.evaluate("x => [x.dataset.at, getComputedStyle(x, '::after').content, x.textContent]")
+        check(days == ["Yesterday", "Today"] and re.fullmatch(r"\d\d:\d\d", clock[0] or "") and clock[1] == f'"{clock[0]}"' and clock[2] == "use the soil sensor",
+              f"{name}: a day line where the day changes; the clock in your message, not in its text ({days}, {clock})")
         check(await pg.evaluate("document.documentElement.scrollWidth <= innerWidth"), f"{name}: the worker view fits the screen")
         empty = await pg.locator("#ck-side").text_content()
         check("[object" not in empty and "No chats yet" in empty, f"{name}: the empty chat list says so in words")

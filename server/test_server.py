@@ -1181,7 +1181,11 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["chat"]["subs"] == 1, "a background subagent the pc says still runs stays running"
     http("POST", "/machine/chats/events", {"chat": mc, "events": [], "bg": 2, "bg_list": [{"id": "b1", "label": "gh run watch"}, {"id": "b2", "label": "x" * 300}]}, token=fr, headers=pc)
     shells = json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["chat"]["bg_list"]
-    assert shells[0] == {"id": "b1", "label": "gh run watch"} and len(shells[1]["label"]) == 120, shells
+    assert shells[0]["id"] == "b1" and shells[0]["label"] == "gh run watch" and len(shells[1]["label"]) == 120 and shells[0]["at"] > 0, shells
+    http("POST", "/machine/chats/events", {"chat": mc, "events": [], "bg": 2, "bg_list": [{"id": "b1", "label": "gh run watch"}, {"id": "b3", "label": "y"}]}, token=fr, headers=pc)
+    again = json.loads(ui(f"/ui/api/chat?machine={mid}&id={mc}")[2])["chat"]["bg_list"]
+    assert again[0]["at"] == shells[0]["at"] and again[1]["at"] >= shells[0]["at"], "a shell keeps the time it was first seen; a new one gets its own"
+    http("POST", "/machine/chats/events", {"chat": mc, "events": [], "bg": 2, "bg_list": [{"id": "b1", "label": "gh run watch"}, {"id": "b2", "label": "x" * 300}]}, token=fr, headers=pc)
     # Watch a shell: the page asks, the pc's poll hears it, sends the tail, the page gets it. Unwatched, a tail is refused.
     sh = lambda shell: json.loads(ui(f"/ui/api/chat/shell?machine={mid}&id={mc}&shell={shell}")[2])
     assert http("POST", "/machine/chats/shell", {"chat": mc, "id": "b1", "text": "x"}, token=fr, headers=pc)[0] == 404, "nobody watches it yet"

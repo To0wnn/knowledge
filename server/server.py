@@ -8474,8 +8474,9 @@ async def machine_chat_events(request: Request):
             c.pop("handoff", None)  # the new agent has its own session now: it got the chat so far
         if type(b.get("bg")) is int:  # the agent's shells left running in the background (Claude Code), counted by the pc
             c["bg"] = max(0, min(b["bg"], 99))
-            c["bg_list"] = [{"id": str(x.get("id", ""))[:40], "label": str(x.get("label", ""))[:120]} for x in (b.get("bg_list") or [])[:20]
-                            if isinstance(x, dict)] if isinstance(b.get("bg_list"), list) else []
+            seen = {x["id"]: x.get("at") for x in c.get("bg_list") or []}  # when this server first saw each shell: its start, to a flush
+            c["bg_list"] = [{"id": i, "label": str(x.get("label", ""))[:120], "at": seen.get(i) or time.time()}
+                            for x in (b.get("bg_list") or [])[:20] if isinstance(x, dict) for i in [str(x.get("id", ""))[:40]]] if isinstance(b.get("bg_list"), list) else []
         if b.get("done") is True and (s := steering(c)):
             c.pop("steering", None)
             # the companion counts what its hook did not hand over (the last ones parked); an older companion: all or none

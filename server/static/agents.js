@@ -1857,6 +1857,17 @@ function ckLine(card, e) {
   }
   return line;
 }
+// Times in a chat, kept quiet: a day line where the day changes, the clock in your own messages, the full time on
+// hover over the other lines. An agent's answer has none (a tooltip over text you read is in the way).
+const ckDay = (sec) => new Date(sec * 1000).toDateString();
+function ckDayMark(sec) {
+  const d = new Date(sec * 1000), days = Math.round((new Date().setHours(0, 0, 0, 0) - new Date(d).setHours(0, 0, 0, 0)) / 864e5);
+  const m = el("div", "ck-day", days === 0 ? "Today" : days === 1 ? "Yesterday" : d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" }));
+  m.dataset.day = ckDay(sec);
+  return m;
+}
+// How long something has run: "12 s", "4 min", "2 h 5 min".
+const ckRan = (sec) => { const d = Math.max(0, Math.round(Date.now() / 1000 - sec)); return d < 60 ? `${d} s` : d < 3600 ? `${Math.floor(d / 60)} min` : `${Math.floor(d / 3600)} h ${Math.floor(d % 3600 / 60)} min`; };
 // New events into a card's log: text as sanitized Markdown, the rest as lines; never one twice.
 const CK_PAGE = 200; // events a chat opens with, and loads per step when you scroll up
 function ckEvents(card, res) {
@@ -1867,16 +1878,19 @@ function ckEvents(card, res) {
   for (const e of res.events) {
     if (e.n <= card.after) continue; // two polls crossed (board + chat): never append an event twice
     card.after = Math.max(card.after, e.n);
-    const last = card.log.lastElementChild;
     if (e.sub) { ckSub(card, e); continue; }
+    if (e.at && ckDay(e.at) !== card.day) { card.day = ckDay(e.at); card.log.append(ckDayMark(e.at)); }
+    const last = card.log.lastElementChild;
     if (e.kind === "text") { // Markdown, sanitized as a note is (DOMPurify): an agent's output never becomes script
       const msg = last && last.classList.contains("agent") ? last : card.log.appendChild(el("div", "ck-msg agent md"));
       msg.dataset.raw = (msg.dataset.raw || "") + e.text;
       dirty.add(msg);
     } else {
       if (e.kind === "user") card.failedWrap = false; // a new message or a retried Archive: only the newest wrap-up counts
-      if (CK_STEP.has(e.kind) && !e.text.includes("⟦file:")) ckWork(card, last).append(ckLine(card, e)); // an image it looked at stays in view
-      else card.log.append(e.kind === "user" ? ckUserMsg(card, e.text, undefined, e.by) : ckLine(card, e));
+      const node = e.kind === "user" ? ckUserMsg(card, e.text, undefined, e.by) : ckLine(card, e);
+      if (e.at) { node.title ||= fmtTime(e.at); if (e.kind === "user") node.dataset.at = fmtClock(e.at); } // the time as CSS content: never in its text
+      if (CK_STEP.has(e.kind) && !e.text.includes("⟦file:")) ckWork(card, last).append(node); // an image it looked at stays in view
+      else card.log.append(node);
     }
   }
   for (const w of dirtyWork) ckWorkSum(w);
@@ -1937,9 +1951,11 @@ async function ckOlder(card) {
   card.loadingOlder = true;
   try {
     const res = await api(`/ui/api/chat?machine=${card.meta.machine}&id=${card.meta.id}&before=${card.first}&tail=${CK_PAGE}&peek=1`);
-    const part = el("div"), shadow = { ...card, log: part, subs: new Map(), subbar: el("div"), after: 0, stickToBottom: false, jump: null };
+    const part = el("div"), shadow = { ...card, log: part, subs: new Map(), subbar: el("div"), after: 0, day: "", stickToBottom: false, jump: null };
     ckEvents(shadow, { ...res, trimmed: false });
     const log = card.log, keep = log.scrollHeight - log.scrollTop, mark = log.querySelector(":scope > .ck-older");
+    const seam = log.querySelector(":scope > .ck-day");
+    if (seam && seam.dataset.day === shadow.day) seam.remove(); // the shown part opened with a day line: the same day goes on
     (mark ? mark.after.bind(mark) : log.prepend.bind(log))(...part.childNodes);
     log.scrollTop = log.scrollHeight - keep; // the message you were reading stays in place
     card.older = res.older; card.first = res.events[0]?.n || card.first;
@@ -1960,7 +1976,7 @@ function ckSub(card, e) {
     const tools = el("div", "ck-sub-tools"), report = el("div", "ck-sub-report md");
     d.append(sum, tools, report);
     card.log.append(d);
-    b = { d, label, st, tools, report, tk };
+    b = { d, label, st, tools, report, tk, at: e.at };
     card.subs.set(e.sub, b);
   }
   if (e.kind === "usage") { b.tokens = e.total ?? (b.tokens || 0) + (e.tokens || 0); b.tk.textContent = `${ckNum(b.tokens)} tokens`; return ckSubbar(card); }
@@ -1994,15 +2010,15 @@ function ckSubbar(card) {
   if (card.shell && !list.some((s) => s.id === card.shell)) ckShellClose(card); // it ended
   const shells = list.map((s) => {
     const x = el("button", "ck-subpin ck-shellpin"); x.type = "button"; x.setAttribute("aria-expanded", String(card.shell === s.id));
-    x.append(el("span", "ck-dot live"), el("span", "ck-sub-label", `shell: ${s.label}`));
-    x.title = "A shell the agent left running in the background: show what it prints";
+    x.append(el("span", "ck-dot live"), el("span", "ck-sub-label", `shell: ${s.label}`), ...(s.at ? [el("small", null, ckRan(s.at))] : []));
+    x.title = `A shell the agent left running in the background${s.at ? ` since ${fmtClock(s.at)}` : ""}: show what it prints`;
     x.onclick = () => { if (card.shell === s.id) ckShellClose(card); else ckShellOpen(card, s.id); ckSubbar(card); };
     return x;
   });
   const pins = [...shells, ...run.map((b) => {
     const x = el("button", "ck-subpin"); x.type = "button";
-    x.append(el("span", "ck-dot live"), el("span", "ck-sub-label", b.label.textContent), ...(b.tokens ? [el("small", null, `${ckNum(b.tokens)} tokens`)] : []));
-    x.title = "Open this subagent's block";
+    x.append(el("span", "ck-dot live"), el("span", "ck-sub-label", b.label.textContent), ...(b.at ? [el("small", null, ckRan(b.at))] : []), ...(b.tokens ? [el("small", null, `${ckNum(b.tokens)} tokens`)] : []));
+    x.title = `Open this subagent's block${b.at ? ` (started ${fmtClock(b.at)})` : ""}`;
     x.onclick = () => { b.d.open = true; b.d.scrollIntoView({ block: "nearest", behavior: "smooth" }); };
     return x;
   })];
@@ -2101,7 +2117,7 @@ async function ckWorkerPoll(card) {
   let res;
   try { res = await api(`/ui/api/worker?machine=${card.meta.machine}&worker=${encodeURIComponent(card.worker)}&after=${card.after}${ck.view === ckKey(card.meta) ? "" : "&peek=1"}`); }
   catch (e) { card.note.className = "ck-note bad"; card.note.textContent = e.message; return; }
-  if (card.started !== undefined && res.worker.started !== card.started) { card.log.replaceChildren(); card.after = 0; card.subs = null; } // a new run of the task
+  if (card.started !== undefined && res.worker.started !== card.started) { card.log.replaceChildren(); card.after = 0; card.day = ""; card.subs = null; } // a new run of the task
   card.started = res.worker.started; card.w = { ...card.w, ...res.worker };
   card.meta = { ...card.meta, status: res.worker.status, label: res.label }; card.online = res.online; card.at = res.at;
   ckEvents(card, res);

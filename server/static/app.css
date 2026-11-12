@@ -836,6 +836,8 @@ audio.fm-media { width: 100%; }
 .ck-line.failed { border-left-color: var(--warn); }
 .ck-line.error { color: var(--bad); border-left-color: var(--bad); }
 .ck-line.info { font-family: var(--font); font-style: italic; }
+.ck-day { align-self: center; font-size: 12px; color: var(--muted); padding: 2px 10px; border-radius: 999px; background: var(--panel-hi); }
+.ck-msg.user[data-at]::after { content: attr(data-at); float: right; margin: 4px 0 -2px 12px; font-size: 11px; line-height: 1.6; color: var(--muted); }
 .ck-verb { color: var(--ink); }
 .ck-work > summary { display: flex; gap: 8px; align-items: center; font: 12px/1.45 var(--mono); color: var(--muted); padding-left: 10px; border-left: 2px solid var(--line-hi); }
 .ck-work.one > summary { cursor: default; background: none; } /* the house chevron and hover: only when it opens */
