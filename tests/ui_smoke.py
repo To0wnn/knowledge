@@ -32,6 +32,8 @@ import re
 import os
 import subprocess
 import sys
+import time
+import urllib.request
 
 from playwright.async_api import async_playwright
 
@@ -223,6 +225,10 @@ async def desktop(browser, secret: str) -> None:
     check(moved < 0.01 and not any(v[2] is not None for v in kept.values()), f"a change to a note leaves the map where it is (moved {moved:.3f})")
     sc = await pg.evaluate("(id) => { const n = byId.get(id); return Graph.graph2ScreenCoords(n.x, n.y); }", nid)
     await click_node(pg, box, sc, nid)
+    # a note changes live while the neighbours gather (agents write all day): the refresh once cut the gather short and
+    # the zoom never came (0.44 -> 0.44 on live, 12 Nov 2026); ring and zoom must still come
+    await pg.wait_for_function("home.size > 0 && tweening", timeout=5000)
+    await pg.evaluate("refreshData()")
     ring = """(id) => { const c = byId.get(id); const r = [...neighbors.get(id)].map(i => byId.get(i)).filter(n => n.x != null)
         .map(n => Math.round(Math.hypot(n.x - c.x, n.y - c.y))); return selected === id && new Set(r).size === 1; }"""
     await comes_true(pg, ring, nid)  # the neighbours gather, then the view zooms to them
@@ -642,7 +648,8 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
     await settled(pg)
     check(await pg.evaluate("location.hash === '#/chats?view=list' && !$('cockpit').hidden && $('title').textContent === 'Agents'"), "#/inbox opens the Agents list")
     heads = await pg.locator("#ck-list .ck-sec-head > span:first-child").all_text_contents()
-    check(heads[:1] == ["Needs you"] and heads == [h for h in ("Needs you", "Review", "Working") if h in heads], f"groups: Needs you first, then Review and Working {heads}")
+    order = await pg.evaluate("CK_SECS.map(s => s[1])")  # Queued since 9 Nov; only shown when live has task lines waiting
+    check(heads[:1] == ["Needs you"] and heads == [h for h in order if h in heads], f"groups: Needs you first, then the rest in the list's order {heads}")
     check(await pg.evaluate("!!$('ck-earlier-h') && !!$('ck-filter') && !!$('ck-closed') && !$('ck-only') && !$('ck-board')"),
           "Earlier below with its filter and Closed; no state chips and no separate board")
     check("What needs you" in await pg.locator("#ck-side .ck-lede").inner_text(), "a lede says what the view is")
@@ -1050,8 +1057,8 @@ async def agents_pages(browser, devices, secret: str) -> None:
         return
     await pg.wait_for_function("ck.boardAt > 0", timeout=15000)
     await settled(pg)
-    check(not await pg.evaluate("[...document.querySelectorAll('#ck-list .ck-item')].some(c => ck.board.find(x => x.key === c.dataset.key)?.col === 'open')"),
-          "Agents: no open task lines (they live under Tasks)")
+    check(not await pg.evaluate("[...document.querySelectorAll('#ck-list .ck-item')].some(c => ck.board.find(x => x.key === c.dataset.key)?.col === 'open' && !c.closest('.ck-sec-open'))"),
+          "Agents: open task lines only under Queued")
     bunches = await pg.evaluate("[...document.querySelectorAll('#ck-list .ck-bunch')].map(d => [parseInt(d.querySelector('summary .ck-count').textContent), d.querySelectorAll('.ck-item').length])")
     check(all(a == b and b > 1 for a, b in bunches), f"Agents: a group's count is the number of items in it {bunches}")
     loose = await pg.evaluate("""(() => { const items = ck.board.filter(x => x.col !== 'open' && ckScope(x)), id = (x) => [x.col, x.project || '', ckSame(x)].join('|');
@@ -2668,7 +2675,20 @@ def shard_of(checks: list) -> list:
     return [c for c in checks if c in mine]
 
 
+def wait_ready(seconds: int = 120) -> None:
+    """A run started during a deploy's container switch-over hung in its first page (a request held on the server going
+    away): wait until the server says it is ready, as deploy.sh does."""
+    for _ in range(seconds):
+        with contextlib.suppress(OSError):
+            with urllib.request.urlopen(URL + "/health?ready=1", timeout=5) as r:
+                if r.status == 200:
+                    return
+        time.sleep(1)
+    print(f"server at {URL} not ready after {seconds} s; testing anyway")
+
+
 async def main() -> None:
+    wait_ready()
     secret = os.environ.get("KNOWLEDGE_PROXY_SECRET") or subprocess.run(["secret", "KNOWLEDGE_PROXY_SECRET"], check=True, capture_output=True, text=True).stdout.strip()
     async with async_playwright() as p:
         # system Chrome by default; KNOWLEDGE_SMOKE_BROWSER=chromium takes Playwright's own (CI, tests/ui_ci.py)

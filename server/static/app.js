@@ -152,6 +152,8 @@ async function refreshData() {
   indexGraph(); renderProjects(); renderTopics(); applyView();
   // a new note or one whose text changed pulses (size is the cheap tell; an edit of the same length is missed)
   if (old.size) for (const n of data.nodes) if (nodeIn(n) && (!old.has(n.id) || old.get(n.id).size !== n.size)) pulse(n.id);
+  // the release above cut a click's gather short (its promise never ends): gather again, and zoom if that was still owed
+  if (selected && mapOn && byId.get(selected)?.x != null) gather(selected, 1).then(() => { if (selected && zoomOwed) { zoomOwed = false; zoomToFocus(); } });
 }
 
 // ---------------------------------------------------------------- map rendering
@@ -332,7 +334,7 @@ function zoomToFocus() {
 // beside the nodes sends everything home. Positions are animated, not simulated, so the island map comes back
 // exactly as it was and the rest of the map does not shift.
 const home = new Map(); // node -> {x, y} before focus mode moved it
-let tweenId = 0, hoverTimer, tweening = false, homeTween = 0; // homeTween: deselect's way home, which ends with the zoom out
+let tweenId = 0, hoverTimer, tweening = false, homeTween = 0, zoomOwed = false; // homeTween: deselect's way home, which ends with the zoom out
 
 function tween(moves, done) {
   const id = ++tweenId, t0 = performance.now(), ms = calm ? 0 : 450;
@@ -1023,7 +1025,8 @@ async function openNote(id, { push = true, find = null } = {}) {
   if (mapOn && n && n.x != null) {
     loadGraph.fitted = true; // the reader chose a view: no overview fit after the layout settles
     clearTimeout(hoverTimer);
-    gather(n.id, 1).then(() => { if (selected === n.id) zoomToFocus(); });
+    zoomOwed = true;
+    gather(n.id, 1).then(() => { if (selected === n.id) { zoomOwed = false; zoomToFocus(); } });
     if (settling) zoomToFocus.again = true; // nodes still move: fit once more when they stop
   } else if (Graph) releaseFocus({ instant: !mapOn }); // no ring of the previous note
   renderNote();
