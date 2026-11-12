@@ -41,6 +41,20 @@ def safe(text: str) -> str:
     return re.sub(r"[^\w.-]", "-", text)[:60]
 
 
+ASKS = DIR.parent / "asks"  # what the owner asked, per chat or task: secret-guard.py lets an edit outside the project through only to a folder named there
+ASKS_MAX = 500_000  # characters kept per file, the newest
+
+
+def remember_ask(name: str, text: str) -> str:
+    """Add the owner's words to the asks file of chat or task `name`; its path (KNOWLEDGE_ASKS for the agent's hooks).
+    shortcut: the files stay after a chat ends (a few KB each); prune them when there are thousands."""
+    ASKS.mkdir(parents=True, exist_ok=True)
+    f = ASKS / f"{safe(name)}.txt"
+    old = f.read_text(encoding="utf-8", errors="replace") if f.exists() else ""
+    f.write_text((old + str(text or "") + "\n")[-ASKS_MAX:], encoding="utf-8")
+    return str(f)
+
+
 def base_id(tid: str) -> str:
     """KN-12-cont-cont -> KN-12: a hand-over (-cont) or a review sent back (-fix) continues the task's branch."""
     return re.sub(r"(?:-cont|-fix)+$", "", tid, flags=re.I)
@@ -360,7 +374,8 @@ def start(agent: str, task: dict, machine: str, where: dict, yolo: bool, nonce: 
         raise RuntimeError(f"{agent} is not on PATH")
     DIR.mkdir(parents=True, exist_ok=True)
     log = DIR / f"{safe(task['project'])}-{safe(task['id'])}-{int(time.time())}.log"
-    env = {**os.environ, "KNOWLEDGE_WORKER": task["id"], "KNOWLEDGE_START_NONCE": nonce, "KNOWLEDGE_YOLO": "1" if yolo else ""}
+    env = {**os.environ, "KNOWLEDGE_WORKER": task["id"], "KNOWLEDGE_START_NONCE": nonce, "KNOWLEDGE_YOLO": "1" if yolo else "",
+           "KNOWLEDGE_ASKS": remember_ask(f"task-{task['project']}-{task['id']}", task.get("text") or "")}
     env = env if yolo else git_safe_env(env)
     ckpt = checkpoint(where["cwd"], task["id"]) if yolo and where.get("branch") else ""
     cmd, note = argv(agent, exe, prompt(task, agent, machine, where, yolo), yolo, where), ""

@@ -1040,7 +1040,7 @@ class Live:
         cmd = self.command(exe)
         if os.name == "nt" and exe.lower().endswith((".cmd", ".bat")):
             cmd = workers.shim_line(cmd)
-        env = {**os.environ, "KNOWLEDGE_CHAT": self.cid}
+        env = {**os.environ, "KNOWLEDGE_CHAT": self.cid, "KNOWLEDGE_ASKS": str(workers.ASKS / f"{workers.safe(self.cid)}.txt")}
         if item.get("reader"):
             env["CLAUDE_CODE_SUBAGENT_MODEL"] = str(item["reader"])
         self.p = Hosted(LIVE_DIR / f"{self.cid}-{secrets.token_hex(4)}", cmd, self.folder, env if yolo else workers.git_safe_env(env))
@@ -1879,6 +1879,7 @@ def start(item: dict, post, log, linked, yolo, fetch=None):
     def job():
         if fetch:
             item["text"] = attach(item.get("text", ""), fetch)
+        workers.remember_ask(cid, item.get("text", ""))  # before the agent sees it: a folder named here may be written
         told = False  # a new agent at the pc's limit: wait for a free place (or a Stop), not fail
         while not ((lv := LIVE.get(cid)) and lv.alive()) and STOPS.get(cid, [gen])[0] == gen and full():
             if not told:
@@ -1954,6 +1955,10 @@ def _start_live(item: dict, post, log, linked, yolo):
 
 
 def self_test():
+    asks_tmp = tempfile.TemporaryDirectory()  # never the real companion's asks folder
+    workers.ASKS = Path(asks_tmp.name)
+    f = workers.remember_ask("c-x", "zet het in D:\\Games")
+    assert Path(f).read_text(encoding="utf-8") == "zet het in D:\\Games\n" and Path(f).parent == workers.ASKS
     # A background job that ended during a turn is no message of ours: it must not interrupt that turn; a real one counts.
     lv, stops = Live.__new__(Live), []
     lv.written, lv.taken, lv.stop_asked, lv.turn_open, lv.interrupt = 1, 1, False, True, lambda: stops.append(1)

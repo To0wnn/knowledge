@@ -145,7 +145,9 @@ broad job over subagents, have every finding refuted by a fresh verifier, report
   added in the Vaultwarden web UI needs a manual push). Only new text counts, so removing a secret is allowed.
 - **Project folder guard:** the same hook refuses a session the companion started (a web UI chat or a worker,
   YOLO included) an edit outside its project folder: its git checkout, for a linked worktree the main checkout too, the
-  agents' own folders (`~/.claude`, `~/.codex`, `~/.gemini`, the knowledge home) and the temp folder. A person's own
+  agents' own folders (`~/.claude`, `~/.codex`, `~/.gemini`, the knowledge home) and the temp folder. Elsewhere only
+  where the owner explicitly named the folder or file in that chat (or the task's text): the companion keeps their words
+  in `companion/asks/` (`KNOWLEDGE_ASKS`); a drive root, the home folder or above never count. A person's own
   terminal session is not limited. Only the edit tools are checked; a shell command can still write elsewhere.
 - **Scripted runs:** set `KNOWLEDGE_NO_SESSION_LOG=1` for a measurement or a one-off reader: every agent's hook then skips
   the session log, which is for sessions someone looks back on.
