@@ -685,16 +685,22 @@ function foldersView(res) {
   // one way to link: the dialog asks for the pc, a folder on it, then the project
   if (hosts.length) lede.append(machineButton("Link a folder", "Choose a pc, a folder on it, then its project", () => chooseFolder(hosts.find((m) => m.id === machinesHere) || hosts[0], "", hosts)));
   parts.push(lede);
-  const projects = [...new Set(own.flatMap((m) => [...(m.companion.projects || []), ...(m.companion.folders?.linked || []).map((f) => f.project)]))].sort();
+  // other people's pcs this person sees (an admin: all; a member: the ones shared with them): their links, read-only, so
+  // a project linked only on someone else's pc does not look unlinked
+  const theirs = res.machines.filter((m) => !m.mine && !m.old && m.companion);
+  const projects = [...new Set([...own.flatMap((m) => [...(m.companion.projects || []), ...(m.companion.folders?.linked || []).map((f) => f.project)]),
+    ...theirs.flatMap((m) => (m.companion.folders?.linked || []).map((f) => f.project))])].sort();
   for (const p of projects) {
     const box = el("section", "mx-proj"), head = el("div", "mx-proj-head");
     head.append(el("h3", null, shown(p)));
     box.append(head);
-    const rows = own.flatMap((m) => (m.companion.folders?.linked || []).filter((f) => f.project === p).map((f) => [m, f]));
+    const rows = [...own, ...theirs].flatMap((m) => (m.companion.folders?.linked || []).filter((f) => f.project === p).map((f) => [m, f]));
     if (!rows.length) box.append(el("p", "muted mx-empty", `No folder linked yet. Link one to give agents in that folder the memory of ${shown(p)}.`));
     for (const [m, f] of rows) {
       const r = el("div", "mx-frow");
-      r.append(el("span", null, m.label), el("code", null, f.path));
+      const who = el("span", null, m.label);
+      if (!m.mine) { const pill = el("span", "pill", "view only"); pill.title = "Someone else's pc: its owner links and unlinks its folders"; who.append(" ", pill); }
+      r.append(who, el("code", null, f.path));
       r.append(m.online && m.own ? machineButton("Unlink", "Remove its .knowledge-project file (nothing else)", () => confirm(`Unlink ${f.path} on ${m.label}?`) && machineAction(m, "unlink_folder", { path: f.path }),
         pendingAction(m, "unlink_folder", (x) => x.path === f.path), "btn small quiet") : el("span", "muted", m.online ? "" : "pc offline"));
       box.append(r);

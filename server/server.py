@@ -3504,7 +3504,7 @@ def canon(name: str) -> str:
     """A project's current name: a linked folder, client or link that still says a name from before a rename gets the
     project it became; any other name comes back as it was."""
     aliases = read_json(ALIASES_FILE, {})
-    for _ in range(10):  # a project renamed twice: a350 -> b -> c
+    for _ in range(10):  # a project renamed twice: a -> b -> c
         if name in PROJECTS or name not in aliases:
             break
         name = aliases[name]
@@ -9295,6 +9295,8 @@ async def machine_report(request: Request):
         waits = [str(i)[:60] for i in (b.get("limitWait") or [])][:20]
     except (ValueError, AttributeError, TypeError) as e:
         return JSONResponse({"error": f"bad report: {e}"}, status_code=400)
+    for w in report["workers"]:  # a worker that ran before a rename: under the project's name now, like its task
+        w["project"] = canon(w["project"]) if isinstance(w.get("project"), str) else w.get("project")
     await asyncio.to_thread(mark_machine, dev, report=report)
     for f in report["folders"]["linked"]:  # a folder still linked to a project's name from before a rename
         if (now := canon(f["project"])) != f["project"] and now in PROJECTS:

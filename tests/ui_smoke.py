@@ -972,6 +972,16 @@ async def shell(browser, devices, secret: str) -> None:
         await pg.unroute("**/ui/api/machines/action")
     else:
         check(False, "Machines: no Link a folder button for a project of a pc of your own")
+    # A folder linked only on someone else's pc shows under its project, read-only (no Unlink), never as "not linked".
+    other = await pg.evaluate("""(() => { const was = machinesRes;
+      machinesRes = {...was, machines: [...was.machines, {id: 'f'.repeat(16), label: 'friend-pc', mine: false, own: false, online: true, at: Date.now() / 1000,
+        tokens: ['friend'], agents: {}, actions: [], companion: {projects: [], folders: {linked: [{path: 'C:\\\\Friend', project: 'friendproj'}]}}}]};
+      drawMachines();
+      const box = [...document.querySelectorAll('#machines .mx-proj')].find((b) => b.querySelector('h3')?.textContent === 'friendproj');
+      const out = box ? [box.innerText, box.querySelectorAll('button').length] : null;
+      machinesRes = was; drawMachines(); return out; })()""")
+    check(bool(other) and "friend-pc" in other[0] and "C:\\Friend" in other[0] and "view only" in other[0] and "No folder linked" not in other[0] and other[1] == 0,
+          f"Machines › Folders: a folder on someone else's pc shows, read-only {other}")
     pill = await pg.evaluate("""(() => { const p = el('span', 'pill yolo', 'YOLO'); document.body.append(p); const s = getComputedStyle(p), b = s.backgroundColor, c = s.color;
       const d = el('span'); d.style.color = 'var(--bad)'; document.body.append(d); const bad = getComputedStyle(d).color; p.remove(); d.remove(); return [b, bad, c]; })()""")
     check(pill[2] == pill[1] and pill[0] != "rgba(0, 0, 0, 0)", f"Machines: the YOLO label is red and stands out {pill}")

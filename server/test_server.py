@@ -3669,7 +3669,8 @@ def main():
         assert admin("/ui/api/admin/project-label", {"name": "orchard", "label": "Orchard Co"})[0] == 200
         assert admin("/ui/api/admin/task-writers", {"name": "orchard", "writers": ["orchard-pc"]})[0] == 200
         opc = {"X-Knowledge-Machine": "eeeeeeeeeeeeeeee", "X-Knowledge-Machine-Label": "barn"}
-        orep = {"version": "0.15.0", "folders": {"linked": [{"path": "/home/x/apples", "project": "orchard"}]}}
+        orep = {"version": "0.15.0", "folders": {"linked": [{"path": "/home/x/apples", "project": "orchard"}]},
+                "workers": [{"id": "OR-1", "project": "orchard", "agent": "codex", "status": "merged"}]}
         assert http("POST", "/machine/report", orep, token=ot, headers=opc)[0] == 200
         assert admin("/ui/api/admin/project-rename", {"name": "garden", "to": "orchard"})[0] == 400  # taken
         assert admin("/ui/api/admin/project-rename", {"name": "trade", "to": "bourse"})[0] == 400  # built in
@@ -3702,6 +3703,8 @@ def main():
         assert [(x["action"], x["args"]) for x in acts] == [("link_folder", {"path": "/home/x/apples", "project": "grove"})], acts
         assert http("POST", "/machine/report", orep, token=ot, headers=opc)[0] == 200  # still the old name: asked once, not again
         assert json.loads(http("GET", "/machine/actions", token=ot, headers=opc)[1])["actions"] == []
+        barn = next(m for m in json.loads(raw("GET", "/ui/api/machines", headers=ck)[2])["machines"] if m["id"] == "eeeeeeeeeeeeeeee")
+        assert [w["project"] for a in barn["agents"].values() for w in a["workers"]] == ["grove"], barn["agents"]  # reported under the old name
         assert admin("/ui/api/admin/project", {"name": "orchard"})[0] == 400  # the old name stays reserved for its links
         # A guest (a friend's Windows pc): a write token limited to garden. The project comes from the token, the context
         # carries the house rules and nothing of the owner, and /sync mirrors the Markdown of the guest's folder.
