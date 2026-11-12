@@ -61,6 +61,7 @@ if __name__ == "__main__":
     if "--self-test" in sys.argv:
         import tempfile
         c = Path(tempfile.mkdtemp())
+        __import__("atexit").register(__import__("shutil").rmtree, c, True)  # a check per commit: never left in /tmp
         (c / "plugins").mkdir()
         assert not enable(c), "no marketplace known: no change"
         src = {"source": "github", "repo": "owner/knowledge"}

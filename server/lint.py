@@ -39,6 +39,17 @@ FRONT = re.compile(r"\A---\r?\n(.*?)\r?\n---\r?\n", re.S)  # \r: files written o
 BIG_MEMO = 15_000
 # Claude Code loads only the first 200 lines / 25 KB of MEMORY.md and silently drops the rest; warn well before.
 INDEX_WARN_LINES, INDEX_WARN_BYTES = 150, 20_000
+CONTEXT_HOOKS, CONTEXT_WARN = 6, 40_000  # Claude Code loads the start context in 6 hook outputs; warn well before they are full
+
+
+def context_budget(project: str, parts: list[str]) -> str:
+    """A project's start context that does not fit, or nearly: past CONTEXT_HOOKS parts Claude Code drops the rest
+    without a word (the memory index and tasks come last)."""
+    total = sum(map(len, parts))
+    if len(parts) > CONTEXT_HOOKS:
+        return (f"{project}: start context {total // 1000}k characters in {len(parts)} parts; Claude Code loads "
+                f"{CONTEXT_HOOKS}, so the end is cut off")
+    return f"{project}: start context {total // 1000}k characters, near what Claude Code loads" if total >= CONTEXT_WARN else ""
 # Relative dates go stale the day after they are written; memos need absolute dates.
 RELATIVE_DATE = re.compile(r"\b(eergisteren|gisteren|overmorgen|morgen|vandaag|vanavond|vannacht|vanochtend|vanmiddag|"
                            r"(?:volgende|vorige|deze|afgelopen) (?:week|maand)|yesterday|tomorrow|today|tonight|"
@@ -403,6 +414,8 @@ def render(report: dict[str, list[str]]) -> str:
 
 
 if __name__ == "__main__":  # self-check
+    assert context_budget("p", ["x" * 9000] * 3) == "" and "near" in context_budget("p", ["x" * 9000] * 5)
+    assert "cut off" in context_budget("p", ["x"] * 7)
     m = lambda k: f"---\nname: a\n---\n## Stand\nVervangt in Stand telt niet\n## Keuzes\n{k}"
     assert replaced_decision(m(""), m("- **Worktrees** (25 okt 2026): x. Vervangt main-only van 23 okt.")) == REPLACED_HINT
     assert replaced_decision(m("- **A** (1 okt): replaces B"), m("- **A** (1 okt): replaces B\n- **C** (2 okt): y")) == ""

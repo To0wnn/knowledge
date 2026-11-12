@@ -144,10 +144,8 @@ body:not(.no-agents) .sidebar:has(.inbox-count:not(:empty)) .brand::before { bac
 .menu-list button:hover, .menu-list a:hover { background: var(--hover); }
 .menu-list [hidden] { display: none; }
 /* right-click / long press on a chat's Archive: a menu by the button (a popover, so in the top layer) */
-.ck-forcepop { position: fixed; inset: auto; margin: 0; width: 260px; min-width: 0; color: var(--ink); }
+.ck-forcepop { position: fixed; inset: auto; margin: 0; width: 260px; min-width: 0; color: var(--ink); outline: none; }
 .ck-forcepop-why { margin: 4px 12px 8px; color: var(--muted); font-size: 13px; white-space: normal; }
-.menu-list button.ck-force-go { background: var(--bad); color: #fff; font-weight: 600; }
-.menu-list button.ck-force-go:hover { background: var(--bad); filter: brightness(1.1); }
 
 /* Notes and Map (#kn): the topic list on the left, the note, the search results or the map in the middle, connected
    notes on the right. */
@@ -260,6 +258,13 @@ pre.diff .del { color: var(--bad); background: var(--bad-soft); display: block; 
 pre.diff mark { color: inherit; border-radius: 3px; }
 pre.diff .add mark { background: color-mix(in srgb, var(--ok) 30%, transparent); }
 pre.diff .del mark { background: color-mix(in srgb, var(--bad) 30%, transparent); text-decoration: line-through; }
+/* review comments on diff lines (the Agents diff dialog): a spruce bar marks the line under the pointer and a commented one */
+pre.diff .diff-at { cursor: pointer; }
+pre.diff .diff-at:hover, pre.diff .diff-at.noted { box-shadow: inset 3px 0 var(--act); }
+pre.diff .diff-note { margin: 4px 0 8px; padding: 8px; background: var(--canvas); border: 1px solid var(--line); border-radius: var(--r-sm); font: 13px/1.45 var(--font); color: var(--ink); white-space: normal; }
+pre.diff .diff-note textarea { display: block; resize: vertical; }
+pre.diff .diff-note.saved { cursor: pointer; white-space: pre-wrap; border-left: 3px solid var(--act); }
+.diff-note-acts { display: flex; gap: 8px; margin-top: 6px; }
 .version { margin-top: 12px; display: grid; gap: 8px; justify-items: start; }
 .editor { width: 100%; min-height: 60vh; padding: 12px; border: 1px solid var(--line-hi); border-radius: var(--r-md); background: var(--panel-hi); color: var(--ink); font: 13px/1.5 var(--mono); resize: vertical; tab-size: 2; }
 .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
@@ -519,7 +524,7 @@ body.admin-page { display: block; overflow-y: auto; }
 .mx-load-lab { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .mx-zoom { display: flex; gap: 2px; } .mx-zoom .btn.on { background: var(--act-soft); color: var(--act-text); }
 .mx-livepill::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: var(--muted); vertical-align: 1px; }
-.mx-livepill.on::before { background: var(--ok); animation: mx-pulse 2s ease-in-out infinite; }
+.mx-livepill.on::before { background: var(--ok); animation: mx-pulse 2s ease-in-out infinite; will-change: opacity; }
 @keyframes mx-pulse { 50% { opacity: 0.35; } }
 @media (prefers-reduced-motion: reduce) { .mx-livepill.on::before { animation: none; } }
 .mx-track i.warn { background: var(--warn); } .mx-track i.bad { background: var(--bad); }
@@ -622,9 +627,16 @@ body.admin-page { display: block; overflow-y: auto; }
 .fm-media { display: block; max-width: 100%; max-height: calc(100dvh - 220px); object-fit: contain; }
 audio.fm-media { width: 100%; }
 .fm-editor { min-height: 60vh; }
-@media (max-width: 999.98px) { /* the list or the file, one at a time */
+/* the audio player under the list: it stays in view while the list scrolls */
+.fm-player { position: sticky; bottom: 0; z-index: 5; display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 4px; align-items: center;
+  margin-top: 12px; padding: 8px 10px; border: 1px solid var(--line-hi); border-radius: var(--r-lg); background: var(--panel-solid); box-shadow: var(--shadow); }
+.fm-pname { overflow: hidden; color: var(--ink); font-size: 14px; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; text-decoration: none; }
+.fm-pname:hover { text-decoration: underline; }
+.fm-player audio { grid-column: 1 / -1; width: 100%; height: 40px; }
+@media (max-width: 999.98px) { /* the list or the file, one at a time; audio keeps the list (the player plays it) */
   .fm-split.has-file { grid-template-columns: minmax(0, 1fr); }
-  .fm-split.has-file > .fm-folder { display: none; }
+  .fm-split.has-file:not(.audio) > .fm-folder { display: none; }
+  .fm-split.has-file.audio > .fm-file { display: none; }
   .fm-file { position: static; max-height: none; overflow: visible; }
 }
 @media (max-width: 699.98px) {
@@ -636,6 +648,8 @@ audio.fm-media { width: 100%; }
   .fm-editor { font-size: 16px; } /* iOS zooms into smaller text in a field */
   .fm-media { max-height: 70dvh; }
   body.fm-detail .head .back { display: inline-grid; }
+  .fm-player { position: fixed; inset: auto 8px calc(68px + env(safe-area-inset-bottom)) 8px; margin: 0; } /* a mini player over the tab bar */
+  .fm:has(+ .fm-player:not([hidden])) { padding-bottom: 110px; } /* the last rows scroll out from under it */
 }
 .mx-frow code { overflow-wrap: anywhere; }
 .mx-empty { margin: 0; padding: 10px 14px; }
@@ -782,9 +796,10 @@ audio.fm-media { width: 100%; }
 .ck-history .ck-chat { display: grid; grid-template-columns: 10px minmax(0, 1fr); column-gap: 8px; align-items: baseline; }
 .ck-chat .ck-dot { align-self: center; }
 .ck-chat small { grid-column: 2; }
+.ck-hits-head { margin: 10px 6px 2px; font-size: 12px; font-weight: 600; color: var(--muted); }
 .ck-chat.needs .ck-dot, .bd-card.needs .ck-dot { background: var(--amber); box-shadow: 0 0 0 3px var(--amber-soft); }
 .ck-chat.needs .ck-chat-title { font-weight: 600; }
-.ck-chat.running .ck-dot, .bd-card.running .ck-dot { background: var(--act); animation: kn-pulse 1.8s ease-in-out infinite; }
+.ck-chat.running .ck-dot, .bd-card.running .ck-dot { background: var(--act); animation: kn-pulse 1.8s ease-in-out infinite; will-change: opacity; }
 .ck-chat.idle .ck-dot, .bd-card.idle .ck-dot { background: transparent; border: 1.5px solid var(--muted); }
 .ck-history .ck-chat[aria-current="true"] { background: var(--act-soft); color: var(--act-text); }
 .ck-pick { align-self: center; justify-self: center; text-align: center; }
@@ -821,6 +836,20 @@ audio.fm-media { width: 100%; }
 .ck-line.failed { border-left-color: var(--warn); }
 .ck-line.error { color: var(--bad); border-left-color: var(--bad); }
 .ck-line.info { font-family: var(--font); font-style: italic; }
+.ck-day { align-self: center; font-size: 12px; color: var(--muted); padding: 2px 10px; border-radius: 999px; background: var(--panel-hi); }
+.ck-msg.user[data-at]::after { content: attr(data-at); float: right; margin: 4px 0 -2px 12px; font-size: 11px; line-height: 1.6; color: var(--muted); }
+.ck-verb { color: var(--ink); }
+.ck-work > summary { display: flex; gap: 8px; align-items: center; font: 12px/1.45 var(--mono); color: var(--muted); padding-left: 10px; border-left: 2px solid var(--line-hi); }
+.ck-work.one > summary { cursor: default; background: none; } /* the house chevron and hover: only when it opens */
+.ck-work.one > summary::before { visibility: hidden; }
+.ck-work.one > .ck-work-steps { display: none; }
+.ck-work > summary:hover .ck-work-last { color: var(--ink); }
+.ck-work-last { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ck-work-last.failed, .ck-work-last.refused { color: var(--warn); }
+.ck-work-n { display: inline-flex; gap: 4px; flex: none; font-family: var(--font); }
+.ck-work-n:empty { display: none; }
+.ck-work-steps { display: grid; gap: 2px; padding: 4px 0 4px 14px; }
+.ck-work.live > summary .ck-work-last { animation: kn-pulse 1.6s ease-in-out infinite; }
 .ck-card.worker { grid-template-rows: auto auto minmax(0, 1fr) auto auto; }
 .ck-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel-hi); font-size: 13px; }
 .ck-banner-text { margin: 0; flex: 1 1 240px; color: var(--muted); }
@@ -854,6 +883,10 @@ audio.fm-media { width: 100%; }
 .ck-history .ck-subrow .ck-chat { padding-left: 22px; font-size: 13px; } /* a subagent's chat, under its chat */
 .ck-history .ck-subchat .ck-chat-title { color: var(--muted); }
 /* the subagents running now, pinned between the log and the box */
+.ck-player { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 6px 12px; border-top: 1px solid var(--line); background: var(--panel); }
+.ck-player[hidden] { display: none; }
+.ck-pname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ck-pmedia { flex-basis: 100%; width: 100%; max-height: 240px; }
 .ck-subbar { display: flex; gap: 6px; flex-wrap: wrap; padding: 6px 12px; border-top: 1px solid var(--line); background: var(--panel); }
 .ck-subbar[hidden] { display: none; }
 .ck-subpin { display: inline-flex; gap: 6px; align-items: center; max-width: 100%; padding: 3px 10px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--r-md); background: var(--panel); color: var(--ink); font-size: 13px; cursor: pointer; }
@@ -862,7 +895,7 @@ audio.fm-media { width: 100%; }
 .ck-shell-out { flex-basis: 100%; margin: 0; max-height: 40vh; overflow-y: auto; }
 .ck-shell-out[hidden] { display: none; }
 .ck-subpin small, .ck-sub-tok { color: var(--muted); font-size: 12px; white-space: nowrap; }
-.ck-subpin .ck-dot.live { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: kn-pulse 1.6s ease-in-out infinite; flex: none; }
+.ck-subpin .ck-dot.live { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: kn-pulse 1.6s ease-in-out infinite; flex: none; will-change: opacity; }
 .ck-tok { font-variant-numeric: tabular-nums; }
 .ck-tok[hidden] { display: none; }
 /* a subagent in the chat: a folded block with its task and state; its tool lines and report inside */
@@ -872,7 +905,7 @@ audio.fm-media { width: 100%; }
 .ck-sub-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ck-sub-tools, .ck-sub-report { padding: 0 12px 8px 22px; }
 .ck-sub-report:empty, .ck-sub-tools:empty { display: none; }
-.ck-sub.running > summary .chip { animation: kn-pulse 1.6s ease-in-out infinite; }
+.ck-sub.running > summary .chip { animation: kn-pulse 1.6s ease-in-out infinite; will-change: opacity; }
 .chip.live { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
 .ck-form .ck-files { display: flex; gap: 6px; flex-wrap: wrap; }
 /* find in a chat (agents.js ckFindBar): a bar under the head, hits marked without touching the log's nodes */
@@ -893,6 +926,7 @@ audio.fm-media { width: 100%; }
 .ck-mic.rec { color: var(--bad, #c33); font-variant-numeric: tabular-nums; }
 .ck-form.drop .ck-box { border-style: dashed; border-color: var(--accent); }
 .ck-msg.user .ck-file, .ck-line.tool .ck-file { display: block; margin: 6px 0 0; }
+.ck-media { display: block; margin: 6px 0 0; max-width: min(480px, 100%); max-height: 360px; border-radius: 6px; }
 .ck-msg.user .ck-img, .ck-line.tool .ck-img { display: block; max-width: min(360px, 100%); max-height: 260px; border-radius: 6px; border: 1px solid var(--line); }
 .ck-form .ck-picks { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; min-width: 0; }
 .ck-form .ck-picks .ck-model > summary { border-color: transparent; background: transparent; color: var(--muted); }
@@ -994,9 +1028,14 @@ audio.fm-media { width: 100%; }
 .ck-subs { list-style: none; margin: 0 0 4px; padding: 0; }
 .ck-review-row { overflow-wrap: anywhere; }
 .ck-review-row b { color: var(--ink); font-weight: 600; }
-.ck-reject { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 8px 8px; font-size: 13px; }
-.ck-reject input:not([type]) { flex: 1 1 220px; min-width: 0; }
-.ck-reject-back { display: flex; align-items: center; gap: 6px; }
+.ck-answer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 8px 8px; font-size: 13px; }
+.ck-answer input { flex: 1 1 220px; min-width: 0; }
+.ck-answer-label { flex-basis: 100%; color: var(--ink); font-weight: 600; }
+.ck-detail { margin: 0 8px 8px; padding: 8px 10px; border-left: 3px solid var(--line); font-size: 13px; }
+.ck-detail p { margin: 0 0 6px; overflow-wrap: anywhere; }
+.ck-detail-text { white-space: pre-wrap; color: var(--ink); }
+.ck-detail-warn { color: var(--amber-ink); }
+.ck-detail-meta { margin-bottom: 0 !important; }
 .ck-git { display: block; max-width: 100%; font-family: var(--mono); font-weight: 400; line-height: var(--h-btn-sm); overflow: hidden; text-overflow: ellipsis; }
 .ck-git-slot { display: flex; min-width: 0; max-width: 40%; }
 dialog.ck-diff { width: min(980px, calc(100vw - 32px)); }
@@ -1024,6 +1063,11 @@ dialog.ck-diff { width: min(980px, calc(100vw - 32px)); }
 .bd-queue .chip { text-decoration: none; }
 .bd-workers { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 8px; padding: 0 10px 8px; }
 .bd-workers .ck-item { margin: 0; border-color: var(--line); }
+.bd-needs { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 8px; padding: 0 10px 8px; align-items: start; }
+.bd-needs-head { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; margin: 0; font-size: 13px; font-weight: 600; color: var(--amber-ink); }
+.ck-scope { display: inline-flex; padding: 2px; margin-left: auto; text-transform: none; letter-spacing: normal; font-weight: 400; }
+.ck-scope button { height: 24px; font-size: 12px; }
+.bd-needs .ck-item { margin: 0; }
 #ck-view .n { margin-left: 6px; color: var(--act-text); font-weight: 600; font-variant-numeric: tabular-nums; }
 #bd-parts { display: inline-flex; gap: 2px; }
 #bd-parts:empty { display: none; }

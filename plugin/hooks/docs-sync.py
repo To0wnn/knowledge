@@ -41,10 +41,15 @@ def edited_paths(hook: dict) -> list:
     return [a or b for a, b in PATCH_FILE.findall(str(inp.get("command") or inp.get("patch") or ""))]
 
 
+def nested_repo(d: Path) -> bool:
+    """A git clone or submodule inside the project (e.g. vendor/VoxCPM): someone else's docs, never mirrored."""
+    return (d / ".git").exists()  # a folder in a clone, a file in a submodule or worktree
+
+
 def markdown_files(root: Path) -> dict:
     out = {}
     for dirpath, dirs, names in os.walk(root):
-        dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in SKIP)
+        dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in SKIP and not nested_repo(Path(dirpath, d)))
         for n in sorted(names):
             p = Path(dirpath) / n
             if n.endswith(".md") and p.stat().st_size <= MAX_FILE:
@@ -84,7 +89,8 @@ def main():
         payload = {"project": project, "files": markdown_files(root), "full": True}
     else:
         changed = [p for p in (Path(cwd, f).resolve() for f in edited_paths(hook))  # Codex patch paths can be relative
-                   if p.suffix == ".md" and root in p.parents and p.is_file()]
+                   if p.suffix == ".md" and root in p.parents and p.is_file()
+                   and not any(nested_repo(q) for q in p.parents if root in q.parents)]
         if not changed:
             return
         payload = {"project": project, "files": {p.relative_to(root).as_posix(): p.read_text(encoding="utf-8", errors="replace")
@@ -130,6 +136,8 @@ if __name__ == "__main__":
             (r / MARKER).write_bytes(b"\xef\xbb\xbfa350\r\n")  # Set-Content -Encoding utf8
             assert project_root(r / "docs") == (r, "a350")
             assert markdown_files(r) == {"docs/x.md": "x"}, markdown_files(r)
+            (r / "vendor" / "lib" / ".git").mkdir(parents=True); (r / "vendor" / "lib" / "README.md").write_text("theirs")
+            assert markdown_files(r) == {"docs/x.md": "x"}, markdown_files(r)  # a nested clone stays out
             assert project_root(Path(tempfile.gettempdir()).parent) == (None, None)
             # a worktree, even with its own stale marker, syncs from its main checkout: it never overwrites main's docs
             import subprocess

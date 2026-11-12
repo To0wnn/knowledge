@@ -330,6 +330,7 @@ if __name__ == "__main__":
         m = RAW_MAIN.fullmatch(LATEST)  # the default source is read at main's commit, never the 5-minute cache
         assert m and m[1] == "To0wnn/knowledge" and m[2] == "plugin/.claude-plugin/plugin.json", LATEST
         STATE = Path(tempfile.mkdtemp()) / "auto-update.json"
+        __import__("atexit").register(__import__("shutil").rmtree, STATE.parent, True)  # a check per commit: never left in /tmp
         AGY_DIR = STATE.parent / "no-agy"
         started = []
         first = notice("agy", now=1000.0, spawn=started.append)

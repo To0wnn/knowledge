@@ -788,6 +788,7 @@ def codex_default(call, folder: str, model: str, effort: str) -> tuple:
 # way (a control_request), the process stays. Measured 2 Nov 2026 with Claude Code 2.1.314. Idle for IDLE_CLOSE with no
 # subagent running, the process ends; the next message resumes the same conversation.
 remember_branch = lambda cid, where: None  # the companion's: what a chat's Merge needs later
+turn_start = lambda cid, cwd, text: text  # the companion's: a worktree chat's checkpoint, and the note of a roll back
 git_now = lambda folder: None  # the companion's: a folder's git {branch, base, ahead, ...} when an Archive turn ends
 
 
@@ -1898,7 +1899,7 @@ def start(item: dict, post, log, linked, yolo, fetch=None):
 
 def _start_live(item: dict, post, log, linked, yolo):
     """Into its running agent, or a new one (resumed) when none runs, or its model, effort or YOLO setting changed."""
-    cid, lv = item["chat"], None
+    cid, lv, own = item["chat"], None, ""
     try:
         with START_LOCK:
             if item.get("agent") not in LIVE_AGENTS:
@@ -1918,6 +1919,7 @@ def _start_live(item: dict, post, log, linked, yolo):
                 if item.get("guest") and not where.get("worktree") and not item.get("taken"):  # a guest never works in the owner's own folder
                     raise RuntimeError("a shared chat runs only in a worktree of its own, and this folder is not in a git repository")
                 item = {**item, "folder": where["cwd"]}
+                own = where.get("worktree") and where["cwd"]
             lv = LIVE.get(cid)
             if lv and getattr(lv, "restarting", False):  # agy restarting for a Force: this goes along to the new one
                 lv.send(item, "")
@@ -1936,6 +1938,8 @@ def _start_live(item: dict, post, log, linked, yolo):
                     raise RuntimeError(f"{limit()[0]} agents run on this pc already (Machines: Limit); send again later")
                 steer_path(cid).unlink(missing_ok=True)
                 lv = LIVE[cid] = {"codex": CodexLive, "agy": AgyLive}.get(item["agent"], Live)(item, post, log, yolo(item["agent"]))
+            if own and not lv.busy and not lv.turn_open:  # a new turn, not a message into the one that runs
+                item = {**item, "text": turn_start(cid, own, item.get("text", ""))}
         lv.rec["allow"] = [x for x in item.get("allow") or [] if isinstance(x, dict)]  # "for this chat" answers since it started
         lv.want_git = bool(item.get("git"))  # the Archive turn: its end carries the folder's git (only then: git slows a turn's end)
         lv.send(item, item.get("mode", ""))
