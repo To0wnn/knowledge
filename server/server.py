@@ -6447,14 +6447,16 @@ async def machine_action_result(request: Request):
     except (ValueError, AttributeError):
         return JSONResponse({"error": "send JSON {id, ok, result}"}, status_code=400)
     found = []
+    mine = lambda a: a["id"] == aid and dev["name"] in a.get("tokens", [])
 
     def change(d):
         for a in d.get(dev.get("machine", ""), []):
-            if a["id"] == aid and dev["name"] in a.get("tokens", []):
+            if mine(a):
                 a.update(status="done" if ok else "failed", result=result, done_at=time.time())
                 found.append(a)
-    await asyncio.to_thread(update_state, MACHINE_ACTIONS, change)
-    rb = found[0]["args"] if found and ok and found[0]["action"] == "rollback" and found[0]["args"].get("chat") else None
+    act = next((a for a in read_json(MACHINE_ACTIONS, {}).get(dev.get("machine", ""), []) if mine(a)), None)
+    rb = act["args"] if act and ok and act["action"] == "rollback" and act["args"].get("chat") and act.get("status") not in ("done", "failed") else None  # a resent result: said once
+    # the chat first, then "done": whoever sees the action end must find the chat as it now is (Undo or not)
     if rb:  # an "Own branch" chat rolled back (or undone): said in its log, and the page offers Undo until the next message
         def note(c):
             c["rolled_back"] = not rb.get("undo")
@@ -6462,6 +6464,7 @@ async def machine_action_result(request: Request):
         with contextlib.suppress(ValueError):
             if (f := chat_file(dev["machine"], rb["id"])).exists():
                 await asyncio.to_thread(update_state, f, note)
+    await asyncio.to_thread(update_state, MACHINE_ACTIONS, change)
     return JSONResponse({"ok": bool(found)}, status_code=200 if found else 404)
 
 
