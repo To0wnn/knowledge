@@ -61,10 +61,35 @@ The companion that starts workers is described in [companion.md](companion.md); 
   own lines ("for <name>", the same three answers). Queued: the open lines that wait or may start, with "Start on <pc>";
   Assign to Claude / Codex / Gemini (picked, not typed), Give to chat: <title> (an open chat of yours in that project gets `pak <ID>` after its turn), New <agent> chat
   takes it (one click: a chat of that agent starts in a folder of that project and says `pak <ID>`; the Tasks list has
-  the same as "Start chat now" next to Assign…) and Cancel task in the ⋯ menu, Remove (read) on a person's result. On the desktop grid, on top: the running workers (and stopped ones that need you) as compact cards with their
+  the same as "Start chat now" next to Assign…) and Cancel task… in the ⋯ menu. On the desktop grid, on top: a Needs-you strip (the cards above), the running workers (and stopped ones that need you) as compact cards with their
   progress, Follow and Stop, and one line of chips that lists the queued tasks of the picked
   project (all projects: with the project's name; a chip opens the task in the list). An owner that is a project, device token or pc name (`trade`, `gema`) is
   no person: a session there takes the line at its next turn (`agent_owner`), so it queues "for a session of <name>".
+
+## Answering on the card
+
+Every Needs-you card is answered where it is, with the same few verbs (`ckItem` in `agents.js`); a click on a task card
+unfolds the whole line, from whom and for whom, its memo (Open in memo) and, when its writer is not trusted, "Written by
+<writer>, not by you or the project's owner".
+
+| Card | Main answer | Second | In ⋯ |
+|---|---|---|---|
+| Task waiting for approval | Approve | Send back… (to its requester, with a remark) | Decline…, Later |
+| Result for you | Done (removes the line) | Send back… (to an agent, with a remark) | Later |
+| Review of a branch | Merge | View diff, Send back… (`<ID>-fix`) | Reject…, Later |
+| Line past its date, a person's line | Finished | +7 days | Cancel…, Later |
+
+- **Send back an approval** (`POST /ui/api/task/cancel` with `back: true` and a reason): the line becomes
+  `[<requester>, <ID>-done]: sent back by <user>: <remark>`, so the requester hears why and may write it again;
+  like a cancel, a task that starts after it waits.
+- **Send back a result** (`POST /ui/api/task/redo {project, id, agent, remark}`, owner or admin): the result line
+  becomes `- open until <+7 days> [<Agent>, <ID>-fix] from <user>, start now: <remark> (sent back: …)` in one edit
+  (not the result's own words: its writer may be someone the project does not trust; a cancelled result has nothing to redo);
+  a worker goes on on the task's branch (`-fix` like a hand-over). With no pc of yours running that agent's workers
+  for the project, a new chat of that agent takes it right away (`pak <ID>-fix`).
+- **Later** is one menu: in 1 hour, tomorrow 08:00, or hide until it changes (`/ui/api/board/dismiss`).
+- **My names in task lines** (Settings, `task_names`, comma-separated): set, Needs you shows only the person lines
+  (tasks, results, hand-overs) for those names, not those of the others in a shared project; empty, everyone's.
 
 ## Results handed back
 

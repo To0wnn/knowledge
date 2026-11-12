@@ -1018,9 +1018,14 @@ audio.fm-media { width: 100%; }
 .ck-subs { list-style: none; margin: 0 0 4px; padding: 0; }
 .ck-review-row { overflow-wrap: anywhere; }
 .ck-review-row b { color: var(--ink); font-weight: 600; }
-.ck-reject { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 8px 8px; font-size: 13px; }
-.ck-reject input:not([type]) { flex: 1 1 220px; min-width: 0; }
-.ck-reject-back { display: flex; align-items: center; gap: 6px; }
+.ck-answer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 8px 8px; font-size: 13px; }
+.ck-answer input { flex: 1 1 220px; min-width: 0; }
+.ck-answer-label { flex-basis: 100%; color: var(--ink); font-weight: 600; }
+.ck-detail { margin: 0 8px 8px; padding: 8px 10px; border-left: 3px solid var(--line); font-size: 13px; }
+.ck-detail p { margin: 0 0 6px; overflow-wrap: anywhere; }
+.ck-detail-text { white-space: pre-wrap; color: var(--ink); }
+.ck-detail-warn { color: var(--amber-ink); }
+.ck-detail-meta { margin-bottom: 0 !important; }
 .ck-git { display: block; max-width: 100%; font-family: var(--mono); font-weight: 400; line-height: var(--h-btn-sm); overflow: hidden; text-overflow: ellipsis; }
 .ck-git-slot { display: flex; min-width: 0; max-width: 40%; }
 dialog.ck-diff { width: min(980px, calc(100vw - 32px)); }
@@ -1048,6 +1053,9 @@ dialog.ck-diff { width: min(980px, calc(100vw - 32px)); }
 .bd-queue .chip { text-decoration: none; }
 .bd-workers { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 8px; padding: 0 10px 8px; }
 .bd-workers .ck-item { margin: 0; border-color: var(--line); }
+.bd-needs { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 8px; padding: 0 10px 8px; align-items: start; }
+.bd-needs-head { grid-column: 1 / -1; margin: 0; font-size: 13px; font-weight: 600; color: var(--amber-ink); }
+.bd-needs .ck-item { margin: 0; }
 #ck-view .n { margin-left: 6px; color: var(--act-text); font-weight: 600; font-variant-numeric: tabular-nums; }
 #bd-parts { display: inline-flex; gap: 2px; }
 #bd-parts:empty { display: none; }

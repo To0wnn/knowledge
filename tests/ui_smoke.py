@@ -534,12 +534,12 @@ async def approvals(browser, devices, secret: str) -> None:
         acts = [t.strip() for t in await needs.nth(1).locator(".ck-item-acts button").all_text_contents()]
         check(acts == ["Deny", "Open chat"], f"list: a request longer than its title can only be denied there {acts}")
         check("2 approvals waiting" in await pg.locator("#ck-needs-live").text_content(), "list: the approvals are counted")
-        # a chat that answered: why up top, the agent's last sentence below, Reply on the row, Snooze / Dismiss / Archive under its ⋯ menu
+        # a chat that answered: why up top, the agent's last sentence below, Reply on the row, Later / Hide / Archive under its ⋯ menu
         row = pg.locator(f'#ck-list .ck-sec-needs .ck-item[data-key="{reply["key"]}"]')
         got = await row.evaluate("""r => [r.querySelector('.ck-item-where').textContent, r.querySelector('.ck-item-line').textContent,
           [...r.querySelectorAll('.ck-item-acts > button, .ck-item-acts summary, .ck-item-acts .menu-list button')].map(b => b.textContent.trim()),
           !!r.querySelector('.ck-item-acts > button.primary'), r.querySelector('.ck-rowmore > summary')?.getAttribute('aria-label') || '']""")
-        check(got[0].startswith("answered, not read") and got[1] == "The docs are fixed." and all(any(x.startswith(a) for x in got[2]) for a in ("Reply", "Snooze", "Dismiss", "Archive"))
+        check(got[0].startswith("answered, not read") and got[1] == "The docs are fixed." and all(any(x.startswith(a) for x in got[2]) for a in ("Reply", "Later: in 1 hour", "Hide until it changes", "Archive"))
               and got[3] and got[4].startswith("More actions"), f"list: a chat that needs you says why, its outcome, Reply first and the rest in a labelled ⋯ menu {got}")
         await row.hover()
         await row.get_by_role("button", name="Reply").click()
@@ -1389,11 +1389,31 @@ async def board(browser, devices, secret: str) -> None:
     for old in ("grid", "board"):
         await route(pg, f"#/chats?view={old}")
         check(await pg.evaluate(shows), f"Grid: an old ?view={old} link opens the grid")
-    count = await pg.evaluate("""(() => { const keep = ck.board, c = ck.chats.find(ckScope), a = $('ck-view');
-      ck.board = [{col: 'needs', kind: 'task', machine: 'x', id: 't', project: ''}, {col: 'done', kind: 'task', machine: 'x', id: 'u', project: ''}]; bdLink();
-      const one = a.textContent; if (c) ck.board.push({col: 'needs', kind: 'ask', machine: c.machine, chat: c.id, project: c.project}); bdLink();
-      const out = [one, a.textContent, a.getAttribute('aria-label')]; ck.board = []; bdLink(); out.push(a.textContent); ck.board = keep; bdLink(); return out; })()""")
-    check(count == ["List1", "List1", "List, 1 needs you", "List"], f"Grid: the List link counts what needs you without a card here, not what has one {count}")
+    count = await pg.evaluate("""(() => { const keep = [ck.board, agentProject], a = $('ck-view'); agentProject = 'p';
+      ck.board = [{col: 'needs', kind: 'task', machine: 'x', id: 't', project: 'p', key: 'task:p/t'}, {col: 'needs', kind: 'task', machine: 'x', id: 'o', project: 'q', key: 'task:q/o'},
+        {col: 'done', kind: 'task', machine: 'x', id: 'u', project: 'q', key: 'task:q/u'}, {col: 'needs', kind: 'worker', machine: 'x', id: 'w', project: 'p', key: 'worker:x/p/w'}];
+      bdLink(); const out = [a.textContent, a.getAttribute('aria-label'), bdNeeds().map((i) => i.id).join(',')];
+      ck.board = []; bdLink(); out.push(a.textContent); [ck.board, agentProject] = keep; bdLink(); return out; })()""")
+    check(count == ["List1", "List, 1 in other projects needs you", "t", "List"],
+          f"Grid: the strip holds what needs you here without a chat card (no worker: its own strip), the List link counts the other projects {count}")
+    cards = await pg.evaluate("""(() => { const keep = me.writable; me.writable = [...(me.writable || []), 'p'];
+      const base = { col: 'needs', kind: 'task', project: 'p', path: 'p-memory/x.md', at: 0, sig: 's' };
+      const ask = ckItem({ ...base, id: 'A-1', key: 'task:p/A-1', title: 'A-1 · short', line: 'waits for your approval', approve: true, owner: 'Codex',
+        from: 'Rick', author: 'rick.pc', text: 'the whole long line of A-1' });
+      const res = ckItem({ ...base, id: 'B-1-done', key: 'task:p/B-1-done', title: 'B-1-done · r', line: 'result for Anthony: r', result: true,
+        owner: 'Anthony', text: 'r', line_text: '- [Anthony, B-1-done]: r', can_send_back: true });
+      const btns = (c) => [...c.querySelectorAll('.ck-item-acts > button')].map((b) => b.textContent);
+      const menu = (c) => [...c.querySelectorAll('.menu-list button')].map((b) => b.textContent);
+      ck.detailOpen.add('task:p/A-1'); const open = ckItem({ ...base, id: 'A-1', key: 'task:p/A-1', title: 'A-1 · short', line: '', approve: true, owner: 'Codex', from: 'Rick', author: 'rick.pc', text: 'the whole long line of A-1' });
+      ck.detailOpen.delete('task:p/A-1');
+      const d = open.querySelector('.ck-detail')?.textContent || '';
+      document.body.append(res); [...res.querySelectorAll('.ck-item-acts > button')].find((b) => b.textContent === 'Send back…').click();
+      const form = res.querySelector('.ck-answer'), agents = form ? [...form.querySelectorAll('option')].map((o) => o.value).join(',') : ''; res.remove();
+      me.writable = keep;
+      return [btns(ask), menu(ask), btns(res), menu(res), !ask.querySelector('.ck-detail'), d.includes('the whole long line') && d.includes('Written by rick.pc') && d.includes('Open in memo'), agents]; })()""")
+    check(cards == [["Approve", "Send back…"], ["Decline…", "Later: in 1 hour", "Later: tomorrow 08:00", "Hide until it changes"],
+                    ["Done", "Send back…"], ["Later: in 1 hour", "Later: tomorrow 08:00", "Hide until it changes"], True, True, "claude,codex,agy"],
+          f"Needs you: a task card answers Approve / Send back (Decline and Later in ⋯), a result Done / Send back with an agent to pick; a click unfolds the whole line and its writer {cards}")
     await pg.click("#ck-view")
     await pg.wait_for_function("location.hash === '#/chats?view=list' && $('bd').hidden && !!$('ck-side').offsetParent", timeout=5000)
     check(await pg.evaluate("$('ck-view').textContent === 'Grid'"), "the List link opens the list, instead of the grid, and offers Grid back")
@@ -1494,7 +1514,7 @@ async def review(browser, devices, secret: str) -> None:
         card = pg.locator(f'#ck-list .ck-sec-review .ck-item[data-key="{item["key"]}"]')
         await card.wait_for(timeout=15000)
         acts = await card.locator(".ck-item-acts button.btn:not(.ck-git)").all_inner_texts()
-        check(acts == ["View diff", "Merge", "Reject"], f"{name}: a review card has View diff, Merge and Reject {acts}")
+        check(acts[:3] == ["Merge", "View diff", "Send back…"], f"{name}: a review card has Merge, View diff and Send back… (Reject… under ⋯) {acts}")
         text = await card.inner_text()
         check(all(x in text for x in ("task/KN-42", "feat(beds): water by soil moisture", "beds/schedule.py", "tests pass (pytest)", "nothing")),
               f"{name}: the card shows branch, last commit, files, tests and what is left")
@@ -1509,15 +1529,14 @@ async def review(browser, devices, secret: str) -> None:
         check(sent and sent[-1] == ("/ui/api/machines/action", {"machine": item["machine"], "action": "merge", "args": {"project": "garden", "id": "KN-42"}}),
               f"{name}: Merge queues the pc's merge action {sent[-1:]}")
         await card.hover()
-        await card.get_by_role("button", name="Reject").click()
-        await card.locator(".ck-reject input:not([type])").fill("water less often")
-        await card.locator(".ck-reject input[type=checkbox]").check()
+        await card.get_by_role("button", name="Send back…").click()
+        await card.locator(".ck-answer input").fill("water less often")
         if shots and name == "desktop":
             await pg.screenshot(path=os.path.join(shots, "review-reject-desktop.png"))
-        await card.locator(".ck-reject button").click()
+        await card.locator(".ck-answer button[type=submit]").click()
         await quiet(pg)
         check(sent[-1] == ("/ui/api/review/reject", {"key": item["key"], "reason": "water less often", "send_back": True}),
-              f"{name}: Reject sends the reason and send back {sent[-1:]}")
+              f"{name}: Send back sends the remark and send back {sent[-1:]}")
         check(not errors, f"{name}: no page errors on the review card {errors[:2]}")
         await ctx.close()
 

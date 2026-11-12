@@ -127,16 +127,22 @@ function bdBuild() {
   });
 }
 
-// The header link between grid and list. On the grid it counts what needs you but has no card here: the sidebar's badge
-// counts those too, and only the list shows them (reviews, tasks, workers, other projects).
+// What needs you but has no chat card on the grid (reviews, tasks to approve, results to read, an approval of a chat
+// in another part): the Needs-you strip on top of the grid shows it, the same cards and answers as the list.
+function bdNeeds() {
+  const cards = new Set(bdChats().map(({ c }) => ckKey(c)));
+  return (ck.board || []).filter((i) => i.col === "needs" && i.kind !== "worker" && ckScope(i) // workers: their own strip
+    && !cards.has(`${i.machine}/${i.kind === "chat" ? i.id : i.kind === "ask" ? i.chat : ""}`));
+}
+// The header link between grid and list. On the grid it counts what needs you in other projects: the strip shows the rest.
 function bdLink() {
-  const on = bdOn(), a = $("ck-view"), cards = new Set(on ? bdChats().map(({ c }) => ckKey(c)) : []);
+  const on = bdOn(), a = $("ck-view");
   bdPartBar(on);
-  const n = on ? (ck.board || []).filter((i) => i.col === "needs" && !cards.has(`${i.machine}/${i.kind === "chat" ? i.id : i.kind === "ask" ? i.chat : ""}`)).length : 0;
+  const n = on ? (ck.board || []).filter((i) => i.col === "needs" && !ckScope(i)).length : 0;
   a.href = on ? "#/chats?view=list" : "#/chats";
   a.replaceChildren(on ? "List" : "Grid", ...(n ? [el("span", "n", String(n))] : []));
-  a.title = on ? "Review, workers, tasks, earlier and archived chats" : "Back to the grid";
-  if (n) a.setAttribute("aria-label", `List, ${n} need${n > 1 ? "" : "s"} you`); else a.removeAttribute("aria-label");
+  a.title = on ? "Review, workers, tasks, earlier and archived chats" + (n ? `; ${n} in other projects need${n > 1 ? "" : "s"} you` : "") : "Back to the grid";
+  if (n) a.setAttribute("aria-label", `List, ${n} in other projects need${n > 1 ? "" : "s"} you`); else a.removeAttribute("aria-label");
 }
 
 // Shown or hidden by the route (ckLayout); the cockpit hides the list while it shows.
@@ -227,7 +233,18 @@ function bdRender() {
   const workers = (ck.board || []).filter((i) => i.kind === "worker" && i.col !== "done" && ckScope(i));
   bd.workers ||= el("div", "bd-workers");
   bd.workers.replaceChildren(...workers.map(ckItem));
-  const order = [...(queued.length ? [bd.queue] : []), ...(workers.length ? [bd.workers] : [])];
+  // what needs you first, on top of everything: answered right here (an answer being typed or a menu open keeps it as it is)
+  const needs = bdNeeds();
+  bd.needs ||= el("section", "bd-needs");
+  if (!bd.needs.querySelector(".ck-answer, .ck-reply, details[open]") && !selecting(bd.needs)) {
+    const had = bd.needs.contains(document.activeElement) && document.activeElement.dataset.row; // the redraw keeps your place
+    const h = el("h2", "bd-needs-head", `Needs you · ${needs.length}`);
+    bd.needs.setAttribute("aria-label", `Needs you: ${needs.length}`);
+    bd.needs.replaceChildren(h, ...ckBunches(needs));
+    if (had) bd.needs.querySelector(`[data-row="${CSS.escape(had)}"]`)?.focus({ preventScroll: true });
+  }
+  const order = [...(needs.length ? [bd.needs] : []), ...(queued.length ? [bd.queue] : []), ...(workers.length ? [bd.workers] : [])];
+  if (!needs.length) bd.needs.remove();
   if (!queued.length) bd.queue.remove();
   if (!workers.length) bd.workers.remove();
   for (const f of frames) {
