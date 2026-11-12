@@ -6845,12 +6845,12 @@ def chat_machine(mid: str) -> dict | None:
 def chat_rights(row: dict, c: dict) -> str:
     """What this person may do with chat `c` on pc `row`: "act" (send, stop, approve, archive) on their own pc and in a
     chat they started there as a guest with "use" or "yolo"; "view" in the other chats of a project shared with them; else ""."""
-    if row["own"]:
-        return "act"
+    me = device.get().get("user")
+    if row["own"]:  # a chat a guest took over is theirs alone: its pc's owner reads it and may take it back
+        return "view" if c.get("taken") and c.get("guest") and c.get("by") != me else "act"
     mode = (row.get("shared") or {}).get(c.get("project") or "")
     if not mode:
         return ""
-    me = device.get().get("user")
     return "act" if mode in USES and (c.get("guest") and c.get("by") == me or me in (c.get("joined") or [])) else "view"
 
 
@@ -6889,6 +6889,12 @@ async def chat_request(request: Request, need_body: bool, act: bool = True) -> t
     if act and rights != "act":
         raise PermissionError("you may read this chat, not steer it: it is not yours (start your own chat on this pc)")
     return row, b, f, c
+
+
+def owner_tokens(mid: str, by: str) -> list:
+    """The tokens of pc `mid` that are `by`'s own: a chat given back to them runs under these."""
+    return [n for n in (read_json(MACHINES_FILE, {}).get(mid) or {}).get("tokens", {})
+            if (cfg := read_json(TOKENS_FILE, {}).get(n)) and own_token(cfg, {"user": by, "admin": by in ADMINS}, steer=False)]
 
 
 def chat_error(e: Exception) -> JSONResponse:
@@ -7409,7 +7415,7 @@ async def ui_chat(request: Request):
     typing, drafts = sorted(u for u, (_, x) in live.items() if x != ""), {u: x for u, (_, x) in live.items() if x}
     # someone else may see this chat: the page then says when you type
     watched = bool(c.get("guest") or c.get("joined") or ((read_json(SHARES_FILE, {}).get(row["id"]) or {}).get("projects") or {}).get(c.get("project") or ""))
-    return JSONResponse({"chat": {**chat_meta(c), "rights": rights, "takeover": may_take_over(row, c), "joined": c.get("joined") or [],
+    return JSONResponse({"chat": {**chat_meta(c), "rights": rights, "takeover": (take := may_take_over(row, c)), "join": take and not row["own"], "joined": c.get("joined") or [],
                                   "watched": watched, "typing": typing, "drafts": drafts}, "events": events, "older": older, "trimmed": bool(c.get("trimmed")),
                          "online": row["online"], "at": row["at"], "label": row["label"], "asks": asks, "now": time.time(),
                          "models": ((row.get("companion") or {}).get("models") or {}).get(c.get("agent"), [])})
@@ -7550,8 +7556,10 @@ async def ui_chat_send(request: Request):
 
 def may_take_over(row: dict, c: dict) -> bool:
     """Someone else's chat on a pc shared with this person for use in its project, on a companion that goes on with it
-    in its own folder (guests 2): Take over makes it theirs."""
-    return (not row["own"] and chat_rights(row, c) == "view" and (row.get("shared") or {}).get(c.get("project") or "") in USES
+    in its own folder (guests 2): Take over makes it theirs. The pc's owner may take back a chat a guest took over."""
+    if row["own"]:
+        return chat_rights(row, c) == "view"
+    return (chat_rights(row, c) == "view" and (row.get("shared") or {}).get(c.get("project") or "") in USES
             and (row.get("companion") or {}).get("guests") == 2)
 
 
@@ -7559,7 +7567,8 @@ def may_take_over(row: dict, c: dict) -> bool:
 async def ui_chat_take(request: Request):
     """{machine, id}: take over someone else's chat on a pc shared with you for use: the same chat (session, folder,
     branch) goes on as yours, under your share (YOLO only with "yolo"); a running turn stops and its agent restarts the
-    new way. The pc's owner keeps seeing and steering it; when the share ends it goes back to whoever had it."""
+    new way. It is theirs alone: who steered it before (the pc's owner, who joined it) reads it and may take it over in
+    turn (the owner: back as their own); when the share ends it goes back to whoever had it."""
     try:
         row, b, f, c = await chat_request(request, True, act=False)
     except (ValueError, AttributeError, TypeError, PermissionError) as e:
@@ -7570,13 +7579,21 @@ async def ui_chat_take(request: Request):
         return JSONResponse({"error": why}, status_code=403 if "shared" in why else 409)
     me, was = device.get().get("user", ""), c.get("by", "")
     by = (read_json(SHARES_FILE, {}).get(row["id"]) or {}).get("by", "")
-    owned = share_tokens(row["id"], read_json(MACHINES_FILE, {}).get(row["id"]) or {}, read_json(TOKENS_FILE, {}), by)
 
     def change(c):
+        if row["own"]:  # the pc's owner takes it back: their own chat again, as when the share ends
+            c.update(by=me, tokens=owner_tokens(row["id"], me), allow=[], joined=[])
+            for k in ("guest", "taken", "taken_from"):
+                c.pop(k, None)
+            chat_add(c, "info", f"Taken back by {me}: it is their own chat again; {was} can read it.")
+            return
         # whose it was: the owner gets it back when the share ends (a chat taken from another guest goes to the owner)
         c["taken_from"] = c.get("taken_from") or (was if not c.get("guest") else by)
-        c.update(by=me, guest=True, taken=True, tokens=owned, allow=[])  # "for this chat" answers were someone else's
-        chat_add(c, "info", f"Taken over by {me}: it goes on here as their chat, under their share of {row['label']}.")
+        owned = share_tokens(row["id"], read_json(MACHINES_FILE, {}).get(row["id"]) or {}, read_json(TOKENS_FILE, {}), by)
+        # theirs alone: who steered it (its owner, who joined) now reads it and may take it over in turn
+        c.update(by=me, guest=True, taken=True, tokens=owned, allow=[], joined=[])  # "for this chat" answers were someone else's
+        chat_add(c, "info", f"Taken over by {me}: it goes on here as their chat alone, under their share of {row['label']}; "
+                            f"the others read it and may take it over in turn.")
     await asyncio.to_thread(update_state, f, change)
     if c.get("status") in ("queued", "running"):
         await asyncio.to_thread(update_state, f.parent / "queue.json", lambda q: q.setdefault(c["id"], {}).update(stop=True))
@@ -7605,7 +7622,7 @@ async def ui_chat_join(request: Request):
         await asyncio.to_thread(update_state, f.parent / "queue.json", lambda q: q.setdefault(c["id"], {}).update(end_once=True))
         audit("chat-leave", f"{row['id']} {c['id']} {me}")
         return JSONResponse({"ok": True})
-    if not may_take_over(row, c):
+    if row["own"] or not may_take_over(row, c):
         return JSONResponse({"error": "this chat cannot be joined: the pc is not shared with you for use, or its plugin is older than 0.43.46"}, status_code=403)
     comp_agents = (((read_json(MACHINES_FILE, {}).get(row["id"]) or {}).get("companion") or {}).get("agents") or {})
     mode, agent_yolo = row["shared"][c["project"]], bool((comp_agents.get(c.get("agent")) or {}).get("yolo"))
@@ -8096,8 +8113,6 @@ async def machine_chats(request: Request):
                 e["busy"] = True
     if q_path.exists():
         await asyncio.to_thread(update_state, q_path, change)
-    owner_tokens = lambda by: [n for n in (read_json(MACHINES_FILE, {}).get(mid) or {}).get("tokens", {})
-                               if (cfg := read_json(TOKENS_FILE, {}).get(n)) and own_token(cfg, {"user": by, "admin": by in ADMINS}, steer=False)]
     for cid, joined in pruned:  # after the queue's lock
         def prune(c, joined=joined):
             for u in set(c.get("joined") or []) - set(joined):
@@ -8107,7 +8122,7 @@ async def machine_chats(request: Request):
     for cid in handback:  # after the queue's lock: back to whoever had it, as their own chat again
         def back(c):
             was = c.get("by", "")
-            c.update(by=c.get("taken_from") or "", status="idle", pending=[], allow=[], tokens=owner_tokens(c.get("taken_from") or ""))
+            c.update(by=c.get("taken_from") or "", status="idle", pending=[], allow=[], tokens=owner_tokens(mid, c.get("taken_from") or ""))
             for k in ("guest", "taken", "taken_from"):
                 c.pop(k, None)
             chat_add(c, "info", f"Back with {c['by'] or 'the owner'}: {was} no longer has this pc shared for this project.")

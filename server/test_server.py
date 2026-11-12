@@ -1496,11 +1496,23 @@ def share_contract(tmp, ck, fr, raw, er, et):
     assert w["guest"] and w["taken"] and "guest_yolo" not in w, w  # under "use": without YOLO, in its own folder
     assert w["text"].startswith("[from erin] taking it from here"), w  # two people steer it: the agent hears who asks
     http("POST", "/machine/chats/events", {"chat": mine, "events": [], "done": True}, token=fr, headers=pc)
-    assert ui("/ui/api/chat/send", {"machine": mid, "id": mine, "text": "still mine"})[0] == 200  # the pc's owner can still steer it
-    assert {x["chat"]: x for x in poll()["work"]}[mine]["text"].startswith("[from alice] still mine")
+    # Taken over is hers alone (unlike Join): the pc's owner reads it, may not steer it, but may take it back
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": mine, "text": "still mine"})[0] == 403
+    o = json.loads(ui(f"/ui/api/chat?machine={mid}&id={mine}")[2])["chat"]
+    assert o["rights"] == "view" and o["takeover"] is True and o["join"] is False, o
+    assert ui("/ui/api/chat/join", {"machine": mid, "id": mine})[0] == 403
+    assert ui("/ui/api/chat/take", {"machine": mid, "id": mine})[0] == 200
+    o = json.loads(ui(f"/ui/api/chat?machine={mid}&id={mine}")[2])["chat"]
+    assert o["rights"] == "act" and o["by"] == "alice" and not o["guest"], o
+    t = json.loads(ui(f"/ui/api/chat?machine={mid}&id={mine}", h=er)[2])["chat"]
+    assert t["rights"] == "view" and t["takeover"] is True and t["join"] is True, t  # now she reads it and may take it again
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": mine, "text": "still mine"})[0] == 200
+    assert {x["chat"]: x for x in poll()["work"]}[mine]["text"].startswith("still mine")  # the owner's own again: unsigned
+    http("POST", "/machine/chats/events", {"chat": mine, "events": [], "done": True}, token=fr, headers=pc)
     said = [(e["text"], e.get("by")) for e in json.loads(ui(f"/ui/api/chat?machine={mid}&id={mine}", h=er)[2])["events"] if e["kind"] == "user"]
     assert said[-2:] == [("taking it from here", "erin"), ("still mine", "alice")], said  # each message names its writer
-    http("POST", "/machine/chats/events", {"chat": mine, "events": [], "done": True}, token=fr, headers=pc)
+    assert ui("/ui/api/chat/take", {"machine": mid, "id": mine}, er)[0] == 200  # hers again, for the share ending below
+    poll()
     # Join: both steer the owner's chat, it stays the owner's; under "use" a YOLO turn running now stops first.
     http("POST", "/machine/report", {**rep, "guests": 2, "agents": {"codex": {"yolo": True, "models": [{"id": "gpt-x"}]}}}, token=fr, headers=pc)
     jc = json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/x/garden", "worktree": False})[2])["chat"]["id"]
