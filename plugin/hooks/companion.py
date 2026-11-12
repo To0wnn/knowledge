@@ -3575,9 +3575,13 @@ def main(argv: list):
                 subprocess.run(["git", "init", "-q", str(h / "repo")], check=True)
                 (h / "lk" / project_marker.MARKER).write_text("p\n")
                 names = ["repo", "repo/sub", "plain", "lk"]
-                with contextlib.suppress(OSError):  # Windows without the symlink privilege: the junction case untested here
-                    (h / "alias").symlink_to(h / "lk", target_is_directory=True)  # the same folder under a second name
-                    names.append("alias")
+                # the same folder under a second name: on Windows a junction, as a user makes one (mklink /J needs no
+                # privilege, so it must work there); elsewhere a symlink
+                if os.name == "nt":
+                    subprocess.run(["cmd", "/c", "mklink", "/J", str(h / "alias"), str(h / "lk")], check=True, capture_output=True)
+                else:
+                    (h / "alias").symlink_to(h / "lk", target_is_directory=True)
+                names.append("alias")
                 globals().update(HOME=h, known_folders=lambda: {str(h / d) for d in names}, git_repos=lambda: [])
                 subprocess.run = lambda a, *k, **kw: calls.append(a) or real[3](a, *k, **kw)
                 try:
