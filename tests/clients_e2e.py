@@ -1616,6 +1616,9 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         code, out, err = run([sys.executable, str(hooks / "workers.py"), "--self-test"], "", env)
         check(code == 0 and out.strip() == "ok", "review: workers.py self-test on a real repository (clean merge, conflict aborted and said, "
               "dirty or other branch refused)", out[-400:] + err[-800:])
+        code, out, err = run([sys.executable, str(hooks / "awake.py"), "--self-test"], "", env)
+        check(code == 0 and out.strip() == "ok", "awake: an idle-sleep hold is taken, listed by the OS (logind, powercfg, pmset) and "
+              "released again", out[-400:] + err[-800:])
         Path(str(calls) + ".sleep").unlink()
         for w in json.loads(wfile.read_text(encoding="utf-8")).values():
             if w["status"] == "running":

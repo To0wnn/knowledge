@@ -48,6 +48,7 @@ HOOKS = Path(__file__).resolve().parent
 sys.path.insert(0, str(HOOKS))
 import model_settings  # noqa: E402  (next to this file)
 import agent_hooks  # noqa: E402  (the wake code and the session registry)
+import awake  # noqa: E402  (no idle sleep while an agent works)
 import chat  # noqa: E402  (chats from the web UI)
 import hook_status  # noqa: E402  (failures reported to the server)
 import project_marker  # noqa: E402
@@ -1873,6 +1874,10 @@ def one_round(only: str = "") -> dict:
     ws_now, later = load("workers.json", {}), self_state()["later"]
     # a chat runs in its own process and goes on through the companion's restart: only a game or a worker holds it back
     busy = workers.game_session() or any(w["status"] == "running" for w in ws_now.values())
+    working = any(w["status"] == "running" for w in ws_now.values()) or any(chat_busy(c) for c in {*chat.LIVE, *chat.RUNNING, *chat.PENDING})
+    if (why := awake.hold(working and not awake.off())) != st.get("awake_error", ""):  # said once, and once when it works again
+        log("error" if why else "sync", f"Could not keep this pc awake while an agent works: {why}" if why else "This pc is kept awake while an agent works again")
+        st["awake_error"] = why
     if knowledge_update_due(NEWEST["v"], [version(), *(plugin_version(a) for a in AGENTS if installed(a) and a not in later)], bool(busy), st.get("knowledge_updated", 0), now):
         st["knowledge_updated"] = now
         knowledge_update_soon()
@@ -2572,6 +2577,7 @@ TASK_NAME = "Knowledge companion"  # the Scheduled Task knowledge-agent.py insta
 
 
 def restart() -> None:
+    awake.hold(False)  # execv keeps the pid, so the hold's watch would never see this process end; the next round takes it again
     if os.name != "nt":
         log("info", "Re-executing companion process", "execv")
         os.execv(sys.executable, [sys.executable, *sys.argv])
