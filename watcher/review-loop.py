@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Weekly unattended check of the memos that lint reports as review_due (addresses/versions not checked for 45 days).
+"""Weekly unattended check of the memos that lint reports as review_due (facts not checked for 45 days with
+addresses/versions, 90 days without).
 
 A loop of fresh `claude -p` passes, two memos each. The loop decides by what is in the files, never by what the agent
 says: a memo counts as done only when it carries a "(gecontroleerd <today>)" mark afterwards; the agent may report a
@@ -66,10 +67,11 @@ def checked_on(text: str, day: date) -> bool:
 
 def prompt(memos: list[Path], day: date) -> str:
     names = "\n".join(f"- {m}" for m in memos)
-    return f"""Unattended weekly check of memos whose addresses and versions have not been checked for 45 days:
+    return f"""Unattended weekly check of memos whose facts have not been checked for a while:
 {names}
 
-For each memo, check every IP address, host, port and version in it against the live system, read-only: ssh/curl/API
+For each memo, check every fact in it that can change (IP address, host, port, version, which host runs what, a
+setting, a state, a path) against the live system or the code, read-only: ssh/curl/API
 GET requests and status commands only. Never change, restart or reconfigure anything on any host; never touch OPNsense
 beyond reading. Then edit only that memo file:
 - a fact that is right: mark it "(gecontroleerd {today_nl(day)})";

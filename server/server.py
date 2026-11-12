@@ -4962,6 +4962,7 @@ SETTINGS = {  # key: (type, min, max, label, help); the label is short, the help
     "history_keep": (int, 10, 2000, "Versions kept per file", "History: older versions of a file beyond this number are removed."),
     "stale_unchecked_days": (int, 7, 365, "Unchecked fact age (days)", "Lint reports a fact marked 'not re-checked' after this many days."),
     "review_after_days": (int, 7, 365, "Review after (days)", "Lint: a memo with addresses or versions is due for a check after this many days without one."),
+    "review_plain_after_days": (int, 7, 730, "Review after, other memos (days)", "Lint: a memo without addresses or versions is due for a check after this many days without one."),
     "big_memo": (int, 5000, 100000, "Big memo (bytes)", "Lint: from this size a memo should move its history to the archive."),
     "rescan_seconds": (int, 15, 3600, "Rescan interval (seconds)", "Safety-net rescan of all files; the file watcher reports changes at once."),
     "user_max_projects": (int, 0, 50, "Projects per person", "Projects a person who is not an admin may create."),
@@ -4976,7 +4977,7 @@ SETTINGS = {  # key: (type, min, max, label, help); the label is short, the help
 
 def current_settings() -> dict:
     return {"similar_hint": SIMILAR_HINT, "rerank_threshold": kb_rerank.THRESHOLD, "history_keep": HISTORY_KEEP, "stale_unchecked_days": kb_lint.STALE_UNCHECKED_DAYS,
-            "review_after_days": kb_lint.REVIEW_AFTER_DAYS,
+            "review_after_days": kb_lint.REVIEW_AFTER_DAYS, "review_plain_after_days": kb_lint.REVIEW_PLAIN_AFTER_DAYS,
             "big_memo": kb_lint.BIG_MEMO, "rescan_seconds": RESCAN_SECONDS, "user_max_projects": USER_MAX_PROJECTS,
             "user_max_tokens": USER_MAX_TOKENS, "project_max_mb": PROJECT_MAX_MB,
             "docs_sync_minutes": DOCS_SYNC_MINUTES, "needs_per_hour": NEEDS_PER_HOUR, "chat_approval_minutes": CHAT_ASK_MINUTES, "quiet_minutes": QUIET_MINUTES, "extra_admins": sorted(ADMINS - CONFIG_ADMINS)}
@@ -5021,6 +5022,7 @@ def apply_settings(values: dict):
     kb_lint.STALE_UNCHECKED_DAYS = values.get("stale_unchecked_days", kb_lint.STALE_UNCHECKED_DAYS)
     kb_lint.BIG_MEMO = values.get("big_memo", kb_lint.BIG_MEMO)
     kb_lint.REVIEW_AFTER_DAYS = values.get("review_after_days", kb_lint.REVIEW_AFTER_DAYS)
+    kb_lint.REVIEW_PLAIN_AFTER_DAYS = values.get("review_plain_after_days", kb_lint.REVIEW_PLAIN_AFTER_DAYS)
     if "extra_admins" in values:
         ADMINS.clear(); ADMINS.update(CONFIG_ADMINS | set(values["extra_admins"]))
 
