@@ -2352,15 +2352,43 @@ def origin_of(url: str) -> str:
 AGENT_UPDATE_EVERY = 86400
 
 
+def _mise_tool(mise_bin: str, agent: str, exe: str) -> str | None:
+    """The mise tool name if this agent is managed by mise, else None."""
+    posix = Path(exe).as_posix().lower()
+    in_mise_dir = "/mise/" in posix or "\\mise\\" in posix
+    candidates = ["antigravity-cli", "agy"] if agent == "agy" else [agent]
+    if in_mise_dir:
+        for c in candidates:
+            if f"/{c}/" in posix or f"\\{c}\\" in posix:
+                return c
+        return candidates[0]
+    for c in candidates:
+        try:
+            r = subprocess.run([mise_bin, "ls", c], capture_output=True, text=True, timeout=5,
+                               **({"creationflags": workers.WIN_FLAGS} if os.name == "nt" else {}))
+            if r.returncode == 0 and c in r.stdout:
+                return c
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return None
+
+
 def update_agents() -> list:
-    """Each agent here with its own update command (`claude update`, `codex update`, `agy update`), then its knowledge
-    plugin: a running session stays on its version until its next start. Returns the failures, which also stand in Activity."""
+    """Each agent here with its own update command (`claude update`, `codex update`, `agy update`, or `mise up <tool>`
+    when mise manages it), then its knowledge plugin: a running session stays on its version until its next start.
+    Returns the failures, which also stand in Activity."""
     failed = []
+    mise = shutil.which("mise")
     for a, (name, _) in AGENTS.items():
         if not (exe := shutil.which(a)):
             continue
+        tool = _mise_tool(mise, a, exe) if mise else None
+        cmd = [mise, "up", tool] if tool else [exe, "update"]
+        env = {**os.environ, "MISE_MINIMUM_RELEASE_AGE": "0"} if tool else os.environ
         try:
-            r = subprocess.run([exe, "update"], capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL, timeout=600)
+            r = subprocess.run(cmd, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                               stdin=subprocess.DEVNULL, timeout=600,
+                               **({"creationflags": workers.WIN_FLAGS} if os.name == "nt" else {}))
             out, ok = mask((r.stdout + r.stderr).strip())[-300:], r.returncode == 0
         except (OSError, subprocess.SubprocessError) as e:
             out, ok = f"{type(e).__name__}: {e}"[:300], False
@@ -3572,6 +3600,10 @@ def main(argv: list):
                     time.sleep(0.3)
                     here["update_agents"], here["update_tools"] = real_update, real_tools
                     assert not AGENTS_UPDATING.locked()
+                    assert _mise_tool("/nonexistent/mise", "claude", "/home/x/.local/share/mise/shims/claude") == "claude"
+                    assert _mise_tool("/nonexistent/mise", "codex", "/home/x/.local/share/mise/shims/codex") == "codex"
+                    assert _mise_tool("/nonexistent/mise", "agy", "/home/x/.local/share/mise/shims/agy") == "antigravity-cli"
+                    assert _mise_tool("/nonexistent/mise", "claude", "/usr/bin/claude") is None
                     # A report that fails with the server there: said once, not every round; after it worked again, again.
                     said, real_log, real_server = [], here["log"], here["server"]
                     real_workers, real_report, real_due, real_errors = here["run_workers"], here["report"], here["agents_update_due"], here["report_errors"]
