@@ -2436,6 +2436,8 @@ def board_contract(tmp, ck, fr, raw, er, et):
     assert not review(), "open: no card"
     assert ui("/ui/api/chat/close", {"machine": mid, "id": wid, "record": False})[0] == 200
     assert json.loads(http("POST", "/machine/report", wrep, token=fr, headers=pc)[1])["closed_chats"] == [wid]
+    gone = {**wrep, "chats": {**wrep["chats"], "0123456789ab": wpill}}
+    assert json.loads(http("POST", "/machine/report", gone, token=fr, headers=pc)[1])["closed_chats"] == [wid, "0123456789ab"], "a chat the server no longer has counts as closed"
     card = review()
     assert card["can_merge"] and card["uncommitted"] == 1 and card["branch"] == f"chat/{wid}" and "2 commits" in card["line"] and "Sup3rSecret99" not in card["commit"], card
     assert ui("/ui/api/review/reject", {"key": card["key"], "reason": "no", "send_back": True})[0] == 400, "a chat has no task line to send back"

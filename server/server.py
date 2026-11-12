@@ -8952,8 +8952,9 @@ async def machine_report(request: Request):
         notify(f"Knowledge: task {tid} waits on {dev.get('machine_label')}: every agent there is at 90% of its usage limit.")
     for e in broken:
         notify(f"Knowledge: a tool on {dev.get('machine_label')} failed (Machines page, Tools): {e}"[:500])
-    # its "Own branch" chats that are closed: the companion removes what has nothing left to merge
-    closed = await asyncio.to_thread(lambda: [k for k in report["chats"] if (read_json(chat_file(dev["machine"], k), None) or {}).get("closed")])
+    # its "Own branch" chats that are closed, or gone from the server (else their worktree stays for good): the companion
+    # removes what has nothing left to merge
+    closed = await asyncio.to_thread(lambda: [k for k in report["chats"] if (read_json(chat_file(dev["machine"], k), None) or {"closed": True}).get("closed")])
     # the read-only GitHub token for tool downloads: only to the admins' own devices, never a friend's or a guest's
     gh = os.environ.get("KNOWLEDGE_GITHUB_TOKEN", "") if read_json(TOKENS_FILE, {}).get(dev.get("name", ""), {}).get("self") else ""
     # the newest plugin: a companion behind it updates itself when nothing runs there (companion.knowledge_update_due)
