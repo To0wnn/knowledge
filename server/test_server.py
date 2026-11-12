@@ -2330,6 +2330,13 @@ def board_contract(tmp, ck, fr, raw, er, et):
     assert (items[("task", "BRD-1")]["due"], items[("task", "BRD-1")]["overdue"]) == ("2099-01-01", False), items[("task", "BRD-1")]
     hosts = {t["id"]: t.get("hosts") for t in json.loads(raw("GET", "/ui/api/tasks?hosts=1", headers=ck)[2])["tasks"]}
     assert hosts["BRD-1"] == [{"machine": mid, "label": "garage"}] and hosts["BRD-2"] == [], hosts
+    # Pinned to another device token: no worker on this pc takes it (/tasks/ready), so the Tasks tab never says it does.
+    other = next(n for n in json.loads((tmp / "tokens.json").read_text()) if n != "friend-pc")
+    pin_line = f"- open until 2099-01-01 [Codex@{other}, BRD-PIN] from Claude, start now: only on the other pc"
+    assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": pin_line + "\n## Keuzes"})[0]
+    runs = next(t for t in json.loads(raw("GET", "/ui/api/tasks", headers=ck)[2])["tasks"] if t["id"] == "BRD-PIN")["runs"]
+    assert runs.startswith(f"pinned to {other}:") and "garage" not in runs, runs
+    assert not call("knowledge_edit", {"path": path, "old_string": pin_line + "\n", "new_string": ""})[0]
     assert col("task", "BRD-2") == "needs" and items[("task", "BRD-2")]["approve"], items.get(("task", "BRD-2"))
     # Claimed by a session (it does the work itself): no approval card, it is not going to be started by anyone.
     brd2 = lines[1]
