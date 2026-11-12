@@ -10,7 +10,8 @@ Antigravity, plus a web UI with a graph. Server in `server/` (Python, one Docker
 - run: deployed as a Docker stack; there is no local dev server
 - test one thing: `cd server && uv run test_server.py` (or `uv run lint.py`, `uv run graph.py` for their self-checks)
 - UI test: `uv run --project server --with playwright python tests/ui_ci.py` (a seeded throwaway server; CI runs it too),
-  or `env -u KNOWLEDGE_URL uv run -q --with playwright python tests/ui_smoke.py` (read-only against the live server;
+  or `env -u KNOWLEDGE_URL uv run -q --with playwright python tests/ui_smoke.py` (read-only against the live server, 6 shards
+  side by side: ~40 s instead of ~165 s one after the other (12 Nov 2026), `KNOWLEDGE_SMOKE_SHARDS=1` for one; it waits for `/health?ready=1` first;
   an agent session has the public KNOWLEDGE_URL set, which would win over local.env and land on the sign-in page)
 - load test of the web UI against a server on a copy of real data, before and after a change: `tests/ui_load.py`
 - client test (about 1.5 min on Linux, its phases in 3 processes side by side, see PHASE_SHARD; `KNOWLEDGE_E2E_KEEP=1` keeps its temp folder): `uv run --project server python tests/clients_e2e.py`; CI runs it on Windows, macOS and Linux

@@ -112,14 +112,15 @@ def seed() -> None:
         {"kind": "tool", "text": "Bash: ls beds"}, {"kind": "text", "text": "The two south beds need water."}]}, pc), "chat events")
 
 
-def shards(n: int) -> int:
+def shards(n: int, script: str = __file__) -> int:
     """Run n copies of this script side by side, each with its own server and a share of the checks (the checks mostly
-    wait, so this cuts the wall time to about the longest shard); print each one's output, fail when one fails."""
+    wait, so this cuts the wall time to about the longest shard); print each one's output, fail when one fails.
+    ui_smoke.py uses it too against the live server (script: itself, no server of its own)."""
     with tempfile.TemporaryDirectory() as t:
         runs = []
         for i in range(n):
             log = open(Path(t) / f"shard{i}.log", "w+")
-            runs.append((subprocess.Popen([sys.executable, __file__], env={**os.environ, "KNOWLEDGE_SMOKE_SHARD": f"{i}/{n}"},
+            runs.append((subprocess.Popen([sys.executable, script], env={**os.environ, "KNOWLEDGE_SMOKE_SHARD": f"{i}/{n}"},
                                           stdout=log, stderr=subprocess.STDOUT), log))
         codes = [proc.wait() for proc, _ in runs]
         for i, (_, log) in enumerate(runs):

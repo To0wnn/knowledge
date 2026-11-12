@@ -2730,4 +2730,9 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    if (n := int(os.environ.get("KNOWLEDGE_SMOKE_SHARDS", "6"))) > 1 and not os.environ.get("KNOWLEDGE_SMOKE_SHARD"):
+        # the checks mostly wait (one run: 163 s at 29% CPU), so side by side as ui_ci.py runs them
+        from ui_ci import shards
+        wait_ready()
+        sys.exit(shards(n, __file__))
     asyncio.run(main())
