@@ -732,6 +732,13 @@ async function ckDiff(i) {
   $("ck-diff-where").textContent = `${i.label} · ${i.chat ? i.branch : i.kind === "worker" || i.kind === "review" ? `worker ${i.id}` : i.folder}${i.git ? ` · ${ckGitText(i.git)}` : ""}`;
   say("muted", `Asking ${i.label}…`);
   ckDiffTo = ckDiffTarget(i); ckNotes.clear(); ckNotesCount();
+  // an "Own branch" chat on your own pc, idle: Roll back its last turn (files only), or Undo that until the next message
+  const c = i.kind === "chat" && ck.machines.some((m) => m.id === i.machine) && ck.chats.find((x) => ckKey(x) === `${i.machine}/${i.id}`);
+  const rb = $("ck-diff-rollback");
+  rb.hidden = !(c?.worktree && i.online && !ckBusy(c.status));
+  rb.textContent = c?.rolled_back ? "Undo roll back" : "Roll back last turn";
+  rb.className = c?.rolled_back ? "btn" : "btn danger";
+  rb.onclick = () => ckRollback(i, !!c?.rolled_back);
   if (!$("ck-diff-dialog").open) $("ck-diff-dialog").showModal();
   try {
     const { id } = await api("/ui/api/git/diff", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -797,6 +804,16 @@ $("ck-diff-send").onclick = async () => {
   if (await to.send(ckNotesText(to.branch))) { toast(`Sent ${b.textContent.slice(5)}`, false); ckNotes.clear(); ckNotesCount(); $("ck-diff-dialog").close(); }
   b.disabled = false;
 };
+async function ckRollback(i, undo) {
+  if (!confirm(undo ? `Undo the roll back of "${i.title}"?\n\nIts worktree gets back the files and commits it had before the roll back; what changed there since is kept as a checkpoint.`
+    : `Roll "${i.title}" back to before its last turn?\n\nLost from its worktree: every change since that turn began, the agent's and your own edits there, and commits made in it (the branch moves back). They are kept as a checkpoint: Undo roll back brings them back until the next message.\n\nKept: the conversation (the agent is told with your next message) and files git ignores.`)) return;
+  try {
+    await api("/ui/api/machines/action", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ machine: i.machine, action: "rollback", args: { project: i.project, id: i.id, chat: true, ...(undo ? { undo: true } : {}) } }) });
+    $("ck-diff-dialog").close(); toast(`Asked ${i.label} to ${undo ? "undo the roll back" : "roll back the last turn"}; the chat says when it is done`, false);
+  } catch (e) { toast(e.message); }
+  ck.summaryAt = 0; ckTick();
+}
 
 const CK_CMDS = Object.assign(new Map(), { seq: 0 }); // "machine/agent" -> {at, list: Promise}; seq: a box's list id
 function ckCard(meta) {

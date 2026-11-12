@@ -2153,6 +2153,34 @@ def chat_e2e(tok: str, tmp: Path):
         check(ok and Path(cwd).resolve() != pill.resolve() and "worktrees" in cwd and f"chat/{own}" in branches
               and any(f"branch chat/{own}" in e["text"] for e in chat(own)["events"]),
               "chat: Own branch runs the agent in a worktree of its own on branch chat/<id>", cwd + " | " + branches + json.dumps(chat(own)["events"])[-400:])
+        # Roll back that chat's last turn (files only): a checkpoint at each turn's start, files and branch back, the
+        # pc's answer in the chat, Undo once, and the agent told first thing in the next message.
+        owt, ref = Path(cwd), f"refs/knowledge/checkpoints/chat-{own}"
+        gito = lambda *args: subprocess.run(["git", "-C", str(owt), "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
+                                            capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout.strip()
+        first_ck, head0 = gito("rev-parse", "-q", "--verify", ref), gito("rev-parse", "HEAD")
+        check(bool(first_ck), "chat rollback: a turn of an Own-branch chat starts with a checkpoint of its worktree", ref)
+        (owt / "by-turn.txt").write_text("turn\n", encoding="utf-8")  # what its turn made, committed too
+        gito("add", "by-turn.txt")
+        gito("commit", "-qm", "the turn's work")
+        acts = lambda: next((r for r in machines() if r["id"] == mid), {}).get("actions", [])
+        def roll(**k):
+            n = len(acts())
+            st = http("POST", "/ui/api/machines/action", {"machine": mid, "action": "rollback", "args": {"project": "garden", "id": own, "chat": True, **k}}, ui)[0]
+            return st == 200 and wait_for(lambda: len(acts()) > n and acts()[-1]["status"] in ("done", "failed"), 30) and acts()[-1]["status"] == "done"
+        ok = roll()
+        check(ok and not (owt / "by-turn.txt").exists() and gito("rev-parse", "HEAD") == head0 and chat(own)["chat"].get("rolled_back")
+              and chat(own)["events"][-1]["text"].startswith("Rolled back"),
+              "chat rollback: files and branch go back to before the last turn, said in the chat", json.dumps(acts()[-1:]) + json.dumps(chat(own)["events"][-1:]))
+        ok = roll(undo=True)
+        check(ok and (owt / "by-turn.txt").exists() and gito("rev-parse", "HEAD") != head0 and not chat(own)["chat"].get("rolled_back"),
+              "chat rollback: Undo roll back brings the turn's files and commit back", json.dumps(acts()[-1:]))
+        roll()
+        send(own, "after the roll back")
+        idle(own, 2)
+        last = [c.get("stdin", "") for c in recorded() if c.get("chat") == own][-1]
+        check(last.startswith("(knowledge web UI: the files in your worktree were rolled back") and f"{ref}-undo" in last and last.endswith("after the roll back")
+              and gito("rev-parse", "-q", "--verify", ref) != first_ck, "chat rollback: the next message tells the agent first, and its turn takes a new checkpoint", last[:300])
         # The agents' own update: once a day by itself, once more by hand, each agent with its own command.
         updates = lambda: [json.loads(ln)["update"] for ln in calls.read_text(encoding="utf-8").splitlines() if '"update"' in ln]
         for a in ("claude", "codex", "agy"):
