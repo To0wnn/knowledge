@@ -1694,6 +1694,60 @@ DS_JS = """() => {
 }"""
 
 
+async def chat_text_search(browser, secret: str) -> None:
+    """Search in chat text: 3+ characters in the chat filter add a group "In chat text" under the title matches (GET
+    /ui/api/chats/search); a click opens the chat with Find filled in and run. All requests are intercepted. Skipped on
+    a server without it."""
+    import json
+    import time
+    from urllib.parse import urlsplit, parse_qs
+    now, asked, mid = time.time(), [], "d" * 16
+    pc = {"id": mid, "label": "smoke-pc", "online": True, "own": True, "at": now, "tokens": ["smoke"], "actions": [],
+          "companion": {"agents": ["claude"], "folders": {"linked": []}}, "agents": {}}
+    chat = {"id": "0a0b0c0d0e0f", "agent": "claude", "folder": "/home/x/garden", "project": "garden", "title": "Fix the docs", "status": "idle",
+            "machine": mid, "label": "smoke-pc", "online": True, "updated": now - 3600, "closed": True, "sub_list": [], "subs": 0, "rights": "act"}
+    events = [{"n": 1, "at": now, "kind": "user", "text": "where does the quokka sleep?"}, {"n": 2, "at": now, "kind": "text", "text": "The Quokka sleeps in the shed."}]
+
+    async def fake(route):
+        u = urlsplit(route.request.url)
+        if u.path == "/ui/api/chats/search":
+            asked.append(parse_qs(u.query)["q"][0])
+            return await route.fulfill(json={"chats": [{**chat, "hits": 2, "snippets": ["where does the quokka sleep?"]}]})
+        replies = {"/ui/api/machines": {"machines": [pc]}, "/ui/api/chats": {"chats": [chat]}, "/ui/api/board": {"items": [], "now": now},
+                   "/ui/api/chat": {"chat": chat, "events": events, "trimmed": False, "online": True, "at": now, "label": "smoke-pc", "asks": [], "now": now}}
+        if u.path in replies and route.request.method == "GET":
+            return await route.fulfill(json=replies[u.path])
+        await route.continue_()
+    ctx = await browser.new_context(ignore_https_errors=True, bypass_csp=True, viewport={"width": 1440, "height": 900},
+                                    extra_http_headers={"X-Knowledge-Proxy": secret, "X-authentik-username": USER})
+    await ctx.route("**/ui/api/**", fake)
+    await ctx.add_init_script("localStorage.setItem('kn_project', 'all')")
+    await ctx.add_init_script(BUSY_JS)
+    pg = await ctx.new_page()
+    errors = []
+    pg.on("pageerror", lambda e: errors.append(str(e)))
+    await pg.goto(URL + "/ui#/chats?view=list")
+    await pg.wait_for_selector("#ck-filter", state="attached")
+    if not await pg.evaluate("typeof ckTextSearch === 'function'"):
+        print("skip chat text search (server without it)")
+        return await ctx.close()
+    await pg.wait_for_function("ck.ready", timeout=15000)
+    await pg.fill("#ck-filter", "qu")
+    await quiet(pg, 400)
+    check(not asked and not await pg.locator(".ck-hits-head").count(), "chat text search: not under 3 characters")
+    await pg.fill("#ck-filter", "quokka")
+    await pg.wait_for_selector(".ck-hits-head", timeout=15000)
+    row = await pg.evaluate("[...document.querySelectorAll('#ck-history .ck-hit')].map(b => b.textContent)")
+    check(asked[-1:] == ["quokka"] and len(row) == 1 and "Fix the docs" in row[0] and "2 hits · archived" in row[0] and "quokka sleep" in row[0],
+          f"chat text search: a group In chat text with the chat, its hits, archived, a snippet {asked} {row}")
+    await pg.locator("#ck-history .ck-hit").click()
+    ok = await comes_true(pg, """(() => { const c = ck.cards.get(ck.view), f = c && c.find;
+      return !!f && !f.bar.hidden && f.q.value === 'quokka' && f.count.textContent === '2 of 2'; })()""")
+    check(ok, "chat text search: a click opens the chat with Find on the words, its hits counted")
+    check(not errors, f"chat text search: no page errors {errors}")
+    await ctx.close()
+
+
 async def live_refresh(browser, secret: str) -> None:
     """Changes during a refresh make one more after it, and a background tab asks nothing until it is looked at, so a
     slow server never gets a growing pile of requests (read-only: only reads, slowed down with page.route)."""
@@ -2598,6 +2652,7 @@ async def main() -> None:
                   (grid_groups, browser, secret),
                   (board, browser, p.devices, secret),
                   (follow, browser, p.devices, secret),
+                  (chat_text_search, browser, secret),
                   (live_refresh, browser, secret),
                   (two_windows, browser, secret),
                   (update_button, browser, secret),

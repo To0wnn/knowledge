@@ -127,6 +127,18 @@ from a phone. The pc side runs in the companion ([companion.md](companion.md)).
   chat (the oldest output goes). An archived chat does not count toward the 50: it stays until it has been quiet for
   90 days (`CHAT_CLOSED_DAYS`, swept when a new chat starts on that pc); a new message opens it again, and then it
   counts as open. Every turn, stop and failure is in the companion's activity log; a failure also shows in the chat.
+- **Search in chat text:** the chat list's filter matches titles, pcs, folders and agents; from 3 characters it also
+  searches inside the chats (`GET /ui/api/chats/search?q=`, 3 to 200 characters) and shows a second group "In chat
+  text" under the title matches: the owner's and the agent's messages (not tool lines, not subagents), open and
+  archived chats, the same chats and rights as the list (a chat shared with you to view too), case-insensitive, the
+  newest 30 with their hit count and a snippet of 80 characters each side. A click opens the chat with Find filled in
+  with the words. Snippets are cut from the masked message (known secret values become `‹secret›`); a chat whose only
+  hits lie inside a masked value is not listed. Over MCP `knowledge_chats` takes `query` (or `q`, `search`) for the
+  same search over the chats it lists (never a chat you may only view). Measured on a synthetic worst case (3 pcs ×
+  (50 open + 200 archived) chats of ~60 kB, one of 1 MB, 55 MB, 8 cores, 12 Nov 2026): reading all chat files 155 ms
+  the first time (the list pays this already; later reads come from the in-memory JSON cache, 1 ms), a search for a
+  word in no chat 52 ms, a common word (stops at 30 chats) 23 ms; off the event loop. The UI keeps a search's result
+  until the filter changes.
 - **Workers in the chat view:** Follow on a worker opens its transcript as a chat card
   (`#/chats/worker/<project>/<ID>`), with Steer and Take over for its owner; a worker taken over continues as an
   ordinary chat in its worktree. How it works: [tasks.md](tasks.md#follow-steer-and-take-over-a-worker).
