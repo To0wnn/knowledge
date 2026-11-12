@@ -1538,9 +1538,9 @@ function ckShareBar(card, ro) {
   };
   const btn = (text, title, fn, cls = "btn small") => { const b = el("button", cls, text); b.type = "button"; b.title = title; b.onclick = fn; bar.append(b); };
   if (want === "offer") {
-    btn("Join", "Work in this chat together: you both steer it and every message names its writer; it stays theirs", post("/ui/api/chat/join", {}), "btn small primary");
-    btn("Take over", "Make this chat yours: the same conversation goes on here, on that pc, under your share; its owner still sees it",
-      () => confirm(`Take over "${card.meta.title || "this chat"}" from ${card.meta.by || "its owner"}?\n\nIts running turn stops; the conversation goes on as yours on ${card.meta.label}, with your share's settings. When the share ends it goes back.`)
+    if (card.meta.join) btn("Join", "Work in this chat together: you both steer it and every message names its writer; it stays theirs", post("/ui/api/chat/join", {}), "btn small primary");
+    btn("Take over", "Make this chat yours alone: the same conversation goes on here, on that pc; the others read it and may take it over in turn",
+      () => confirm(`Take over "${card.meta.title || "this chat"}" from ${card.meta.by || "its owner"}?\n\nIts running turn stops; the conversation goes on as yours alone on ${card.meta.label}${card.meta.join ? ", with your share's settings. When the share ends it goes back" : ""}.`)
         && post("/ui/api/chat/take", {})());
   } else {
     bar.append(el("span", "muted", `You are in ${card.meta.by || "their"}'s chat`));
