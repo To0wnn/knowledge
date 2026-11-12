@@ -283,17 +283,29 @@ def run(agent: str, mode: str = "plugin", quiet: bool = False, have: tuple | Non
         lock.unlink(missing_ok=True)
 
 
+# Windows refused a file another process held a moment (Rust's io errors, the same in every Windows language): Codex
+# backing up its plugin cache while a Codex session started or its own update ran (12 Nov 2026: "failed to back up
+# plugin cache entry: Toegang geweigerd. (os error 5)", fine a minute later)
+HELD = re.compile(r"os error (5|32)\b")
+HELD_WAIT = float(os.environ.get("KNOWLEDGE_HELD_WAIT", 15))
+
+
 def install(agent: str, mode: str, new: str, keep: Path | None) -> str:
-    """The update commands; on a failure the kept copy comes back first, whatever happens to the bookkeeping after."""
+    """The update commands; on a failure the kept copy comes back first, whatever happens to the bookkeeping after.
+    Codex's command that hit a file held for a moment runs once more after HELD_WAIT."""
     fail = None
     for cmd in commands(agent, mode):
-        try:
-            p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300,
-                               stdin=subprocess.DEVNULL)
-            out = (p.stdout + p.stderr).strip()
-            ok = p.returncode == 0 or "already" in out.lower() or "not configured as a git" in out.lower()  # a local checkout, as the setup
-        except (OSError, subprocess.TimeoutExpired) as e:
-            ok, out = False, str(e)
+        for attempt in (1, 2):
+            try:
+                p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300,
+                                   stdin=subprocess.DEVNULL)
+                out = (p.stdout + p.stderr).strip()
+                ok = p.returncode == 0 or "already" in out.lower() or "not configured as a git" in out.lower()  # a local checkout, as the setup
+            except (OSError, subprocess.TimeoutExpired) as e:
+                ok, out = False, str(e)
+            if ok or agent != "codex" or attempt == 2 or not HELD.search(out):
+                break
+            time.sleep(HELD_WAIT)
         if not ok:
             fail = f"{' '.join(cmd[1:])}: {out}"
             break
@@ -376,6 +388,13 @@ if __name__ == "__main__":
         assert not STATE.with_name("agy-plugin-before-update").exists(), "the copy goes once it is back"
         commands = lambda agent, mode="plugin": [[sys.executable, "-c", ""]]
         assert "updated to 99.0.0" in run("agy") and not STATE.with_name("agy-plugin-before-update").exists()
+        # Codex hits a file held a moment (os error 5): once more after the wait, then fine; held for good: it says so
+        HELD_WAIT, mark = 0, STATE.parent / "held-once"
+        held = f"import pathlib,sys; m = pathlib.Path(r'{mark}'); sys.exit(0) if m.exists() else (m.write_text('x'), sys.exit('failed to back up plugin cache entry: Toegang geweigerd. (os error 5)'))"
+        commands = lambda agent, mode="plugin": [[sys.executable, "-c", held]]
+        assert "updated to 9.9.9" in install("codex", "plugin", "9.9.9", None) and mark.exists()
+        commands = lambda agent, mode="plugin": [[sys.executable, "-c", "import sys; sys.exit('Access denied (os error 5)')"]]
+        assert "failed" in install("codex", "plugin", "9.9.9", None) and "failed" in install("claude", "plugin", "9.9.9", None)
         del os.environ["KNOWLEDGE_AUTO_UPDATE"]
         (AGY_DIR.parent.parent / "hooks.json").unlink(missing_ok=True)
         which, shutil.which = shutil.which, lambda name: "/x/" + name
