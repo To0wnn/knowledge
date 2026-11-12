@@ -13,6 +13,7 @@ Config: tokens.json with hashes only: {"<device>": {"sha256": "<hex of sha256(to
 Run:    uv run server.py   (systemd user unit knowledge-server.service)
 """
 import asyncio
+import base64
 import contextlib
 import difflib
 import errno
@@ -24,6 +25,8 @@ import html
 import json
 import logging
 import mimetypes
+import ntpath
+import posixpath
 import os
 import re
 from datetime import date, timedelta
@@ -6625,27 +6628,110 @@ async def ui_files(request: Request):
     return JSONResponse(a)
 
 
-# A page's preview: its scripts run, but in an opaque origin (no cookies, no API of this site) and with no network at all,
-# so a page from a pc cannot reach out or phone home; its own images, CSS and scripts by relative path do not load.
-FILES_PREVIEW_CSP = ("sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
-                     "img-src data: blob:; font-src data:; media-src data: blob:; form-action 'none'; base-uri 'none'; frame-ancestors 'self'")
+# A page's preview, drawn as a browser would: the page's own CSS, scripts, images and fonts by relative path are fetched
+# from the pc and put into the page as data: URLs, since the sandboxed frame has an opaque origin and sends no sign-in
+# cookie (nor Authentik's), so it could not load them from this site. Its scripts run there with no network at all and
+# no reach into this site, so a page from a pc cannot phone home. shortcut: what a script loads itself (fetch, an ES
+# module's imports) and srcset stay unloaded; a server-side bundler would be the upgrade if pages need that.
+FILES_PREVIEW_CSP = ("sandbox allow-scripts allow-modals; default-src 'none'; script-src 'unsafe-inline' data:; "
+                     "style-src 'unsafe-inline' data:; img-src data: blob:; font-src data:; media-src data: blob:; "
+                     "form-action 'none'; base-uri 'none'; frame-ancestors 'self'")
+SITE_TAG = re.compile(r"<(?:link|script|img|source|video|audio|track|image|input|use)\b[^>]*>", re.I)
+SITE_ATTR = re.compile(r"""(\b(?:src|href|poster|xlink:href)\s*=\s*)(["'])([^"'<>]+)\2""", re.I)
+SITE_URL = re.compile(r"""url\(\s*(["']?)([^"')]+)\1\s*\)""", re.I)
+SITE_TEXT = {".css": "text/css", ".js": "text/javascript", ".mjs": "text/javascript", ".json": "application/json",
+             ".svg": "image/svg+xml", ".txt": "text/plain"}  # read as text, known secrets masked; the rest as bytes
+SITE_FILES, SITE_BYTES = 60, 25_000_000  # files and bytes one preview pulls from the pc
+
+
+def site_path(base: str, ref: str) -> str:
+    """The path on the pc of a relative `ref` in a file in folder `base`, else '' (a URL, data:, an anchor, or /root)."""
+    ref = urllib.parse.unquote(ref.split("#")[0].split("?")[0].strip())
+    if not ref or re.match(r"[a-z][\w+.-]*:|[/\\]", ref, re.I):
+        return ""
+    win = re.match(r"[A-Za-z]:[\\/]|\\\\", base)
+    return ntpath.normpath(ntpath.join(base, ref)) if win else posixpath.normpath(posixpath.join(base, ref))
+
+
+def site_dir(path: str) -> str:
+    return str((PureWindowsPath if re.match(r"[A-Za-z]:[\\/]|\\\\", path) else PurePosixPath)(path).parent)
+
+
+async def site_file(mid: str, path: str) -> bytes | None:
+    """One file of the page from the pc, None when it is not there or too big."""
+    ext = PurePosixPath(path.replace("\\", "/")).suffix.lower()
+    try:
+        if ext in SITE_TEXT:
+            _, a = await files_ask(mid, {"op": "read", "path": path})
+            return None if a.get("error") else (await asyncio.to_thread(redact, str(a.get("text", ""))[:FILES_TEXT])).encode()
+        rid, head = await files_ask(mid, {"op": "stream", "path": path, "start": None, "end": None}, stream=True)
+    except (ValueError, PermissionError, TimeoutError):
+        return None
+    s, out = FILES_OPEN.get(rid), bytearray()
+    try:
+        if head.get("error") or not s or head.get("size", 0) > SITE_BYTES:
+            return None
+        while (chunk := await asyncio.wait_for(s["chunks"].get(), 60)) is not None:
+            out += chunk
+        return bytes(out)
+    except TimeoutError:
+        return None
+    finally:
+        if s:
+            s["gone"].set()
+        FILES_OPEN.pop(rid, None)
+
+
+async def site_inline(mid: str, path: str, page: str) -> str:
+    """The page with its relative resources (tags' src/href, CSS url(), one level of CSS inside CSS) as data: URLs."""
+    got: dict = {}
+
+    async def pull(paths):
+        paths = [p for p in dict.fromkeys(paths) if p and p not in got][:max(0, SITE_FILES - len(got))]
+        for p, b in zip(paths, await asyncio.gather(*(site_file(mid, p) for p in paths))):
+            got[p] = b
+    base = site_dir(path)
+    refs = [site_path(base, m[3]) for t in SITE_TAG.findall(page) for m in SITE_ATTR.finditer(t)]
+    await pull(refs + [site_path(base, m[2]) for m in SITE_URL.finditer(page)])
+    css = {p: b.decode("utf-8", "replace") for p, b in got.items() if b and p.lower().endswith(".css")}
+    await pull([site_path(site_dir(p), m[2]) for p, t in css.items() for m in SITE_URL.finditer(t)])
+    total = 0
+
+    def data(p: str, b: bytes | None) -> str:
+        nonlocal total
+        if b is None or total + len(b) > SITE_BYTES:
+            return ""
+        total += len(b)
+        kind = SITE_TEXT.get(PurePosixPath(p.replace("\\", "/")).suffix.lower()) or mimetypes.guess_type(p)[0] or "application/octet-stream"
+        return f"data:{kind};base64,{base64.b64encode(b).decode()}"
+
+    def css_urls(text: str, folder: str) -> str:
+        return SITE_URL.sub(lambda m: f'url("{data(q, got.get(q)) or m[2]}")' if (q := site_path(folder, m[2])) in got else m[0], text)
+    for p, t in css.items():
+        got[p] = css_urls(t, site_dir(p)).encode()
+
+    def attr(m):
+        q = site_path(base, m[3])
+        return f"{m[1]}{m[2]}{data(q, got.get(q)) or m[3]}{m[2]}" if q in got else m[0]
+    page = SITE_TAG.sub(lambda t: SITE_ATTR.sub(attr, t[0]), page)
+    return css_urls(page, base)
 
 
 @server.custom_route("/ui/api/files/preview", methods=["GET"])
 async def ui_files_preview(request: Request):
-    """?machine=&path=: an .html file from the pc as a page for the Files view's preview frame, known secrets masked
-    as in its text view, under FILES_PREVIEW_CSP."""
+    """?machine=&path=: an .html file from the pc as a page for the Files view's preview frame (or a tab of its own),
+    its relative resources inlined (site_inline), known secrets masked as in its text view, under FILES_PREVIEW_CSP."""
     q = request.query_params
-    path = q.get("path", "")
+    path, mid = q.get("path", ""), q.get("machine", "")
     if not re.search(r"\.html?$", path, re.I):
         return JSONResponse({"error": "only .html files have a preview"}, status_code=400)
     try:
-        _, a = await files_ask(q.get("machine", ""), {"op": "read", "path": path})
+        _, a = await files_ask(mid, {"op": "read", "path": path})
     except (ValueError, PermissionError, TimeoutError) as e:
         return files_error(e)
     if a.get("error"):
         return JSONResponse({"error": str(a["error"])[:300]}, status_code=400)
-    text = await asyncio.to_thread(redact, str(a.get("text", ""))[:FILES_TEXT])
+    text = await site_inline(mid, path, await asyncio.to_thread(redact, str(a.get("text", ""))[:FILES_TEXT]))
     return HTMLResponse(text, headers={"Content-Security-Policy": FILES_PREVIEW_CSP, "Cache-Control": "private, no-store",
                                        "X-Content-Type-Options": "nosniff"})
 

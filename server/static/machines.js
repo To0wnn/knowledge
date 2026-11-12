@@ -903,12 +903,16 @@ async function filesShow(m, res, path, pane) {
   const code = filesCode(txt.text);
   wait.replaceWith(code);
   if (/\.html?$/i.test(e.name)) { // a page: its preview first, the code one click away
-    const frame = el("iframe", "fm-preview"), flip = el("button", "btn small", "Code");
-    frame.setAttribute("sandbox", "allow-scripts"); // opaque origin: no cookies or API of this site (the server's CSP sandboxes it too)
-    frame.title = `Preview of ${e.name}`; frame.src = `/ui/api/files/preview?${new URLSearchParams({ machine: m.id, path })}`;
+    const frame = el("iframe", "fm-preview"), flip = el("button", "btn small", "Code"), again = el("button", "btn small quiet icon", "↻");
+    const src = `/ui/api/files/preview?${new URLSearchParams({ machine: m.id, path })}`;
+    frame.setAttribute("sandbox", "allow-scripts allow-modals"); // opaque origin: no cookies or API of this site (the server's CSP sandboxes it too)
+    frame.title = `Preview of ${e.name}`; frame.src = src;
     flip.type = "button"; flip.title = "Switch between the page and its code";
     flip.onclick = () => { code.hidden = !code.hidden; frame.hidden = !frame.hidden; flip.textContent = frame.hidden ? "Preview" : "Code"; };
-    code.hidden = true; code.after(frame); tools.prepend(flip);
+    again.type = "button"; again.title = "Draw the page again (after an edit on the pc)"; again.setAttribute("aria-label", "Reload the preview");
+    again.onclick = () => { frame.src = "about:blank"; setTimeout(() => { frame.src = src; }); };
+    const open = el("a", "btn small", "Open in a new tab"); open.href = src; open.target = "_blank"; open.rel = "noopener";
+    code.hidden = true; code.after(frame); tools.prepend(flip, again, open);
   }
   if (txt.masked) pane.insertBefore(el("p", "muted", "A known secret is masked here, so this file is read-only: edit it on the pc itself."), code);
   else {
