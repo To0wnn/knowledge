@@ -438,8 +438,17 @@ def merged(w: dict) -> bool:
                                              or git(w["worktree"], "status", "--porcelain").stdout.strip())):
         return False
     # its upstream counts too: a deploy pushes to origin/main and leaves the local main behind
-    return any(git(w["repo"], "merge-base", "--is-ancestor", tip, ref).returncode == 0 for b in dict.fromkeys(("main", "master", w.get("base_branch")))
+    return any(holds(w["repo"], tip, ref) for b in dict.fromkeys(("main", "master", w.get("base_branch")))
                if b and git(w["repo"], "rev-parse", "-q", "--verify", f"refs/heads/{b}").returncode == 0 for ref in (f"refs/heads/{b}", f"{b}@{{upstream}}"))
+
+
+def holds(repo, tip: str, ref: str) -> bool:
+    """`ref` already has what `tip` brings: tip is in its history, or merging tip into it would change nothing (landed
+    by a squash, rebase or cherry-pick, a GitHub PR say, whose commits differ). Needs git 2.38+, else only the first."""
+    if git(repo, "merge-base", "--is-ancestor", tip, ref).returncode == 0:
+        return True
+    m = git(repo, "merge-tree", "--write-tree", ref, tip)
+    return m.returncode == 0 and m.stdout.split()[:1] == [git(repo, "rev-parse", f"{ref}^{{tree}}").stdout.strip()]
 
 
 def config_hash(repo) -> str:
@@ -714,6 +723,14 @@ def self_test():
         assert merged(w), "work only main's upstream holds is merged too"
         git(repo, "branch", "-q", "--unset-upstream", "main", check=True)
         git(repo, "branch", "-q", "-D", "up", check=True)
+        git(repo, "checkout", "-q", "-b", "squash", "main", check=True)  # a squash merge: other commits, same content
+        git(repo, "merge", "-q", "--squash", w["branch"], check=True)
+        git(repo, "commit", "-qm", "squashed", check=True)
+        git(repo, "branch", "-q", "--set-upstream-to=squash", "main", check=True)
+        assert merged(w), "work landed by a squash merge is merged too"
+        git(repo, "branch", "-q", "--unset-upstream", "main", check=True)
+        git(repo, "checkout", "-q", "main", check=True)
+        git(repo, "branch", "-q", "-D", "squash", check=True)
         git(repo, "merge", "-q", "--ff-only", w["branch"], check=True)
         assert merged(w) and remove(w) == "worktree and branch removed" and not Path(w["worktree"]).exists()
         assert w["base_branch"] == "main"

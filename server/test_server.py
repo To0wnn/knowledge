@@ -790,12 +790,14 @@ def machines_contract(tmp, ck, fr, raw, er, et, heard):
     assert http("POST", "/machine/report", old, token=fr, headers=pc)[0] == 200
     assert any("MC-0" in i and "task/MC-0 not merged" in i for i in json.loads(http("GET", "/lint")[1]).get("worker_unmerged", [])), http("GET", "/lint")[1][:500]
     rep2 = {**old, "folders": {"linked": [{"path": "/home/x/garden", "project": "garden", "git": {"branch": "main", "base": "origin/main", "ahead": 0,
-            "loose": [{"branch": "feat/old", "at": int(time.time() - 3 * 86400)}, {"branch": "feat/new", "at": int(time.time())}, {"branch": "bad", "at": -10**20}]}}]}}
+            "loose": [{"branch": "feat/old", "at": int(time.time() - 3 * 86400)}, {"branch": "feat/new", "at": int(time.time())}, {"branch": "bad", "at": -10**20},
+                     {"branch": "worktree-agent-1", "at": int(time.time() - 3 * 86400), "worktree": True}]}}]}}
     assert http("POST", "/machine/report", rep2, token=fr, headers=pc)[0] == 200
     st, raw_lint = http("GET", "/lint")
     assert st == 200, ("a nonsense time in a report must not take lint down", raw_lint[:300])
     bl = json.loads(raw_lint).get("branch_unlanded", [])
     assert any("feat/old has commits not in origin/main" in i for i in bl) and not any("feat/new" in i for i in bl), bl
+    assert any("worktree-agent-1 (in a subagent worktree) has commits" in i for i in bl), ("a subagent's unmerged worktree is reported", bl)
     assert http("POST", "/machine/report", old, token=fr, headers=pc)[0] == 200
     # a worker its owner stopped from the page ended "failed": it says so and does not wait in Needs you
     stopped = {**rep, "limitWait": [], "workers": [*rep["workers"], {"id": "MC-5", "project": "garden", "agent": "codex", "status": "failed",
@@ -1307,8 +1309,8 @@ def chats_contract(tmp, ck, fr, raw, er, et):
     assert srv.chat_unlanded({"worktree": True}, {"ahead": 0, "changed": 1}) == "its worktree has 1 uncommitted file(s)"
     assert srv.chat_unlanded({}, {"ahead": 0, "changed": 4}) == "", "the folder's own checkout: its files may be someone else's"
     assert srv.chat_unlanded({}, None) == "", "an older companion sends no git: not checked"
-    loose = {"ahead": 0, "base": "main", "loose": [{"branch": "feat", "at": 2000}, {"branch": "old", "at": 500}]}
-    assert srv.chat_unlanded({"created": 1000}, loose) == "branch feat has commits not in main and is checked out nowhere", "only branches of this chat's time"
+    loose = {"ahead": 0, "base": "main", "loose": [{"branch": "feat", "at": 2000}, {"branch": "old", "at": 500}, {"branch": "sub", "at": 2000, "worktree": True}]}
+    assert srv.chat_unlanded({"created": 1000}, loose) == "branch feat, sub (in a subagent's worktree) has commits not in main and nobody watches it", "only branches of this chat's time"
     assert srv.chat_unlanded({"created": 3000}, loose) == ""
     # Another agent archives the chat (MCP)
     ahead = lambda n: http("POST", "/machine/report", {"version": "0.43.41", "folders": {"linked": [{"path": "/home/x/garden", "project": "garden",

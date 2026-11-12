@@ -1445,15 +1445,28 @@ def landed_in(path: str, base: str) -> list:
 
 
 def loose_branches(path: str, landed: list) -> list:
-    """Local branches with commits in none of `landed` that no worktree has checked out: work someone left behind (an
-    agent that went back to main without merging), newest 5 with their last commit time."""
+    """Local branches with work in none of `landed` that nobody watches: checked out nowhere (an agent that went back
+    to main without merging), or only in a worktree the companion did not make (a Claude Code or Codex subagent's,
+    marked `worktree`); the main checkout and the chat and worker worktrees have their own pill and Review card.
+    Newest 5 with their last commit time."""
     if not landed:
         return []
     run = lambda *a: workers.git(path, *a, env=GIT_RO, timeout=10).stdout.splitlines()
-    used = {ln[len("branch refs/heads/"):] for ln in run("worktree", "list", "--porcelain") if ln.startswith("branch refs/heads/")}
+    used, own, first, at = {}, workers.WORKTREES.resolve(), True, None
+    for ln in run("worktree", "list", "--porcelain"):
+        if ln.startswith("worktree "):
+            at = Path(ln[len("worktree "):])
+        elif ln.startswith("branch refs/heads/"):
+            used[ln[len("branch refs/heads/"):]] = first or own in at.resolve().parents  # True: someone watches it
+        elif not ln:
+            first = False
     refs = (ln.rsplit(" ", 1) for ln in run("for-each-ref", *(f"--no-merged={b}" for b in landed), "--sort=-committerdate",
                                              "--format=%(refname:short) %(committerdate:unix)", "refs/heads") if " " in ln)
-    return [{"branch": n, "at": int(t)} for n, t in refs if n not in used and t.isdigit()][:5]
+    out = []
+    for n, t in list(refs)[:20]:  # shortcut: the newest 20 only (each costs a merge-tree); raise when repos keep more
+        if t.isdigit() and not used.get(n) and not any(workers.holds(path, n, b) for b in landed):
+            out.append({"branch": n, "at": int(t), **({"worktree": True} if n in used else {})})
+    return out[:5]
 
 
 def git_diff(path: str) -> str:
@@ -3593,10 +3606,20 @@ def main(argv: list):
                     assert chat_git("0123456789ab", tmp + "/r") == {"branch": "chat/0123456789ab", "base": "main", "changed": 1, "ahead": 0, "behind": 0, "loose": []}
                     assert git_state(tmp + "/r")["changed"] == 0, "the folder's own checkout is untouched"
                     g("checkout", "-q", "-b", "side")
-                    g("commit", "-q", "--allow-empty", "-m", "left behind")
+                    Path(tmp, "r", "side.txt").write_text("side\n")
+                    g("add", "side.txt")
+                    g("commit", "-q", "-m", "left behind")
                     g("checkout", "-q", "main")
                     loose = git_state(tmp + "/r")["loose"]
                     assert [x["branch"] for x in loose] == ["side"] and loose[0]["at"] > 0, loose  # chat/0123456789ab: checked out, so not loose
+                    g("worktree", "add", "-q", "-b", "agent-x", tmp + "/agent")  # a subagent's worktree the companion did not make
+                    Path(tmp, "agent", "x.txt").write_text("x\n")
+                    workers.git(tmp + "/agent", "add", "x.txt", check=True)
+                    workers.git(tmp + "/agent", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "x", check=True)
+                    loose = git_state(tmp + "/r")["loose"]
+                    assert {x["branch"]: x.get("worktree") for x in loose} == {"side": None, "agent-x": True}, loose
+                    g("worktree", "remove", "--force", tmp + "/agent")
+                    g("branch", "-q", "-D", "agent-x")
                     g("remote", "add", "origin", tmp + "/r")
                     g("update-ref", "refs/remotes/origin/main", "side")  # pushed (a deploy), the local main left behind
                     g("branch", "-q", "--set-upstream-to=origin/main", "main")
