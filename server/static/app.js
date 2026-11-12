@@ -861,7 +861,7 @@ function setMap(on) {
     if (!Graph) return; // the map data is still loading: loadGraph sizes it
     Graph.width($("graph").clientWidth).height($("graph").clientHeight);
     wakeMap(2500);
-    if (selected) { gather(selected, 1).then(zoomToFocus); if (settling) zoomToFocus.again = true; } else Graph.zoomToFit(400, fitPad());
+    if (selected) { zoomOwed = true; gather(selected, 1).then(() => { zoomOwed = false; zoomToFocus(); }); if (settling) zoomToFocus.again = true; } else Graph.zoomToFit(400, fitPad());
   });
 }
 addEventListener("kn-theme", themeChanged); // the viewer switched the theme (nav.js)

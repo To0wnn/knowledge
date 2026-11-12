@@ -224,11 +224,11 @@ async def desktop(browser, secret: str) -> None:
     moved = max(abs(kept[k][0] - v[0]) + abs(kept[k][1] - v[1]) for k, v in home.items() if k in kept)
     check(moved < 0.01 and not any(v[2] is not None for v in kept.values()), f"a change to a note leaves the map where it is (moved {moved:.3f})")
     sc = await pg.evaluate("(id) => { const n = byId.get(id); return Graph.graph2ScreenCoords(n.x, n.y); }", nid)
-    await click_node(pg, box, sc, nid)
     # a note changes live while the neighbours gather (agents write all day): the refresh once cut the gather short and
-    # the zoom never came (0.44 -> 0.44 on live, 12 Nov 2026); ring and zoom must still come
-    await pg.wait_for_function("home.size > 0 && tweening", timeout=5000)
-    await pg.evaluate("refreshData()")
+    # the zoom never came (0.44 -> 0.44 on live, 12 Nov 2026); ring and zoom must still come. The click's own gather
+    # starts the refresh, so it lands mid-gather every time.
+    await pg.evaluate("(() => { const g = gather; gather = (...a) => { const p = g(...a); if (a[1] === 1) { gather = g; refreshData(); } return p; }; })()")  # 1: a click, not a hover
+    await click_node(pg, box, sc, nid)
     ring = """(id) => { const c = byId.get(id); const r = [...neighbors.get(id)].map(i => byId.get(i)).filter(n => n.x != null)
         .map(n => Math.round(Math.hypot(n.x - c.x, n.y - c.y))); return selected === id && new Set(r).size === 1; }"""
     await comes_true(pg, ring, nid)  # the neighbours gather, then the view zooms to them
