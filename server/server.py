@@ -2455,7 +2455,7 @@ def project_tasks(project: str) -> tuple[list[dict], list[dict]]:
 
 
 SESSION_WARN = 6 * 3600  # how long the approve buttons warn that a session wrote the line (it may be doing it itself)
-CANCELLED = re.compile(r"cancelled by ", re.I)  # the text of a result line cancel_task writes
+CANCELLED = re.compile(r"(?:cancelled|sent back) by ", re.I)  # the text of a result line ui_task_cancel writes
 
 
 STALE_HANDBACK_DAYS = 7  # a result nobody read and removed this long is a lint finding
@@ -4659,20 +4659,22 @@ MATRIX_URL = re.compile(r"https?://[^\s/?#]{1,255}(/[^\s?#]{0,200})?")
 MATRIX_TOKEN = re.compile(r"[\x21-\x7e]{8,512}")
 MATRIX_ROOM_ID = re.compile(r"![^\s:/]{1,255}(:[^\s/]{1,255})?")  # a room id, not an alias: the bot sends by id; room v12 ids have no :server
 PREF_KEY_ACTION = re.compile(r"[a-z_]{1,20}")
+TASK_NAME = re.compile(r"[\w][\w .-]{0,39}")
 PREF_KEY_COMBO = re.compile(r"(Ctrl\+|Alt\+)(Shift\+)?(\+|[^\s+]{1,12})")  # without Ctrl or Alt a key would be text in a box; Ctrl+Alt is AltGr
 
 
 @server.custom_route("/ui/api/me/prefs", methods=["POST"])
 async def ui_me_prefs(request: Request):
     """Any of {chat_default: {agent, id, effort} | null, chat_reader: {agent, id, effort} | null, chat_review: {agent, id, effort} | null,
-    keys: {action: combo}, matrix_room, matrix_url, matrix_token (admins; the token is stored apart and never sent back), grid_open, grid_group, send_key, start_page}, for this person on every device. keys: the shortcuts that change,
+    keys: {action: combo}, matrix_room, matrix_url, matrix_token (admins; the token is stored apart and never sent back), grid_open, grid_group, send_key, start_page,
+    task_names ("Anthony, To0wnn": the names task lines give this person; Needs you then shows only their person lines)}, for this person on every device. keys: the shortcuts that change,
     null = back to the default; checked for shape only: the page owns the actions. chat_default, chat_reader, chat_review: the models for
     new chats, reading/subagents, and review ("" id or effort = the agent's own); checked for shape only: a pc that does not run it falls
     back in the page. Keys left out stay as they are."""
     user = device.get().get("user") or ""
     try:
         b = await request.json()
-        if not isinstance(b, dict) or not b or set(b) - {"chat_default", "chat_reader", "chat_review", "keys", "matrix_room", "matrix_url", "matrix_token", *PREF_CHOICES}:
+        if not isinstance(b, dict) or not b or set(b) - {"chat_default", "chat_reader", "chat_review", "keys", "matrix_room", "matrix_url", "matrix_token", "task_names", *PREF_CHOICES}:
             raise ValueError("unknown setting")
         for k, allowed in PREF_CHOICES.items():
             if k in b and b[k] not in allowed:
@@ -4692,6 +4694,13 @@ async def ui_me_prefs(request: Request):
             raise ValueError("matrix_token is an access token without spaces, or empty")
         if "matrix_room" in b and not (b["matrix_room"] == "" or (isinstance(b["matrix_room"], str) and MATRIX_ROOM_ID.fullmatch(b["matrix_room"]))):
             raise ValueError("matrix_room is a room id like !abc:example.org, or empty")
+        if "task_names" in b:  # "Anthony, To0wnn": the names task lines give this person; only their own cards then
+            if not isinstance(b["task_names"], str) or len(b["task_names"]) > 200:
+                raise ValueError("task_names is the names task lines give you, comma-separated")
+            names = [n.strip().lower() for n in b["task_names"].split(",") if n.strip()]
+            if len(names) > 8 or not all(TASK_NAME.fullmatch(n) for n in names):
+                raise ValueError("task_names: at most 8 names of letters, digits, space, dot, dash or underscore")
+            b["task_names"] = list(dict.fromkeys(names))
         if "keys" in b and not (isinstance(b["keys"], dict) and len(b["keys"]) <= 40 and all(
                 PREF_KEY_ACTION.fullmatch(a) and (c is None or (isinstance(c, str) and PREF_KEY_COMBO.fullmatch(c))) for a, c in b["keys"].items())):
             raise ValueError("keys is {action: combo with Ctrl or Alt}")
@@ -4712,6 +4721,10 @@ async def ui_me_prefs(request: Request):
                 mine.pop(k, None)
                 if b[k]:
                     mine[k] = b[k].rstrip("/")
+        if "task_names" in b:
+            mine.pop("task_names", None)
+            if b["task_names"]:
+                mine["task_names"] = b["task_names"]
         if "keys" in b:
             keys = {**mine.pop("keys", {}), **b["keys"]}
             keys = {a: c for a, c in keys.items() if c}
@@ -6061,7 +6074,7 @@ def task_rows() -> list[dict]:
         tasks, back = project_tasks(name)
         approver, leases = may_approve(name), read_json(TASK_LEASES, {}).get(name, {})
         rows += [{**{k: t[k] for k in ("project", "path", "line", "owner", "id", "claimed", "text", "from", "start", "legacy",
-                                        "author", "startable", "waiting_reason", "stalled", "approved", "approve_warning")},
+                                        "author", "trusted", "startable", "waiting_reason", "stalled", "approved", "approve_warning")},
                   "can_cancel": approver and not held_now(t, leases.get(t["id"]), now),
                   "runs": task_where(name, t, leases.get(t["id"]), now) if t["startable"] else "",
                   "due": t["due"].isoformat() if t["due"] else "", "overdue": bool(t["due"] and t["due"] < today),
@@ -7173,23 +7186,33 @@ def board_items() -> list[dict]:
                                   "why": w.get("why") or "", "progress": w.get("progress") if st == "running" else None})
     working = {(i["project"], i["id"]) for i in items if i["kind"] == "worker" and (i["col"] == "running" or i.get("quiet"))}
     tasks = task_rows()
+    # the names this person goes by in task lines (Settings); none set: every person's lines show, as before
+    names = set(read_json(PREFS_FILE, {}).get(device.get().get("user", ""), {}).get("task_names") or [])
+    someone_else = lambda owner: bool(names) and owner.partition("@")[0].strip().lower() not in names
     items += review_items(rows, tasks)
     for t in tasks:
         agent = owner_agent(t["owner"])
         key = f"task:{t['project']}/{t['id']}"
         sig = hashlib.sha256(f"{t['line']}|{t.get('stalled')}|{t['done']}".encode()).hexdigest()[:16]
         to_person = t["done"] and not agent_owner(t["owner"]) or not t["done"] and re.search(r"-cont$", t["id"], re.I) and t["from"] and not agent_owner(t["from"])
+        if to_person and someone_else(t["owner"]):  # another person's result: theirs to read
+            continue
         if to_person:  # handed back (or over) to a person: they read it, then remove the line; it never starts anything
             what = (f"result for {t['owner']}: " if t["done"] else f"handed over to {t['owner']} for {t['from']}: ") + t["text"][:140]
             items.append({"kind": "task", "col": "needs", "id": t["id"], "agent": agent, "project": t["project"], "path": t["path"],
                           "title": f"{t['id']} · {t['text'][:120]}", "line": what, "at": t.get("since") or 0, "owner": t["owner"],
-                          "key": key if t["done"] else f"handover:{t['project']}/{t['id']}", "sig": sig, "result": True, "line_text": t["line"]})
+                          "key": key if t["done"] else f"handover:{t['project']}/{t['id']}", "sig": sig, "result": True, "line_text": t["line"],
+                          "text": t["text"], "from": t.get("from") or "", "can_send_back": t["done"] and may_approve(t["project"])})
             if t["done"]:
                 continue
         task = {"kind": "task", "id": t["id"], "agent": agent, "project": t["project"], "title": f"{t['id']} · {t['text'][:120]}",
                 "path": t["path"], "line": "", "at": 0, "owner": t["owner"], "key": key, "sig": sig, "can_cancel": t.get("can_cancel", False),
-                "due": t["due"], "overdue": t["overdue"], "approve_warning": t.get("approve_warning", "")}
+                "due": t["due"], "overdue": t["overdue"], "approve_warning": t.get("approve_warning", ""),
+                # the whole line on the card, so it is read where it is answered; who wrote it when that is not trusted
+                "text": t["text"], "from": t.get("from") or "", "author": "" if t.get("trusted", True) else t.get("author") or "an unknown writer"}
         if (t["project"], t["id"]) in working:  # a running worker shows it
+            continue
+        if not t["done"] and not agent and not agent_owner(t["owner"]) and someone_else(t["owner"]):  # another person's task, also past its date
             continue
         closable = {**task, "col": "needs", "closable": True, "task_line": t["line"], "can_close": may_approve(t["project"])}
         if t["overdue"] and not t["done"] and not to_person and not t["held"]:
@@ -8804,14 +8827,18 @@ async def ui_task_approve(request: Request):
 
 @server.custom_route("/ui/api/task/cancel", methods=["POST"])
 async def ui_task_cancel(request: Request):
-    """{"project", "id", "reason"}: the project's owner or an admin cancels an open task. Its line becomes a result for
-    its requester, "[<requester>, <ID>-done]: cancelled by <user>: <reason>", in one edit: the requester hears it like
-    any result, and a task that starts after <ID> waits for a decision instead of starting as on a plain removal."""
+    """{"project", "id", "reason", "back"?}: the project's owner or an admin cancels an open task. Its line becomes a
+    result for its requester, "[<requester>, <ID>-done]: cancelled by <user>: <reason>", in one edit: the requester hears
+    it like any result, and a task that starts after <ID> waits for a decision instead of starting as on a plain removal.
+    With back (a reason needed) it says "sent back by <user>": not wanted like this, the requester may write it again."""
     try:
         body = await request.json()
         project, tid, reason = str(body.get("project", "")), str(body.get("id", "")), " ".join(str(body.get("reason", "")).split())[:300]
+        back = body.get("back") is True
     except (ValueError, AttributeError):
         return JSONResponse({"error": "send JSON {project, id, reason}"}, status_code=400)
+    if back and not reason:
+        return JSONResponse({"error": "sending it back needs a reason: the requester only gets that line"}, status_code=400)
     if project not in PROJECTS or not in_scope(PROJECTS[project][1] + "/"):
         return JSONResponse({"error": f"unknown project {project}"}, status_code=404)
     if not may_approve(project):
@@ -8822,7 +8849,7 @@ async def ui_task_cancel(request: Request):
         return JSONResponse({"error": f"{tid} is being worked on: stop the worker first (Machines), then cancel"}, status_code=409)
     user, base = device.get().get("user", "") or "?", CONT.sub("", tid)  # a hand-over X-cont cancels X: its result is X-done
     lead = t["line"][:len(t["line"]) - len(t["line"].lstrip())]
-    done = f"{lead}- [{t['from'] or t['owner']}, {base}-done]: cancelled by {user}" + (f": {reason}" if reason else "")
+    done = f"{lead}- [{t['from'] or t['owner']}, {base}-done]: {'sent back' if back else 'cancelled'} by {user}" + (f": {reason}" if reason else "")
     try:
         await knowledge_edit(t["path"], t["line"], done)
     except (ToolError, OSError) as e:
@@ -8830,6 +8857,39 @@ async def ui_task_cancel(request: Request):
     await asyncio.to_thread(update_state, TASK_CANCELLED, lambda d: d.setdefault(project, {}).update({base: {"by": user, "at": int(time.time())}}))
     audit("task-cancel", f"{project}/{tid}")
     return JSONResponse({"ok": True, "line": done})
+
+
+@server.custom_route("/ui/api/task/redo", methods=["POST"])
+async def ui_task_redo(request: Request):
+    """{"project", "id", "agent", "remark"}: the project's owner or an admin sends a result back ("not good like this").
+    Its result line [<requester>, <ID>-done] becomes a task line for that agent in one edit, "[<Agent>, <ID>-fix] from
+    <user>, start now: <remark> (result was: ...)", which a worker or a chat takes as any task; a worker goes on on the
+    task's branch (REVIEW_BASE). The reverse of handing it back, so the memo never holds both lines."""
+    try:
+        body = await request.json()
+        project, rid, agent = str(body.get("project", "")), str(body.get("id", "")), str(body.get("agent", ""))
+        remark = re.sub(r"\(\s*(claimed|bezig)", r"\1", " ".join(str(body.get("remark", "")).split()), flags=re.I)[:300]  # no claim marker
+    except (ValueError, AttributeError):
+        return JSONResponse({"error": "send JSON {project, id, agent, remark}"}, status_code=400)
+    if not remark or agent not in REVIEW_OWNERS:
+        return JSONResponse({"error": "sending it back needs a remark and an agent (claude, codex or agy)"}, status_code=400)
+    if project not in PROJECTS or not in_scope(PROJECTS[project][1] + "/"):
+        return JSONResponse({"error": f"unknown project {project}"}, status_code=404)
+    if not may_approve(project):
+        return JSONResponse({"error": "only the project's owner or an admin may write it a task line"}, status_code=403)
+    if not (b := next((b for b in (await asyncio.to_thread(project_tasks, project))[1] if b["id"].lower() == rid.lower()), None)):
+        return JSONResponse({"error": f"no result {rid} in {project}"}, status_code=404)
+    user, base = device.get().get("user", "") or "?", REVIEW_BASE.sub("", re.sub(r"-done$", "", b["id"], flags=re.I))
+    was = " ".join(re.sub(r"\(\s*(claimed|bezig)", r"\1", b["text"], flags=re.I).split())
+    lead = b["line"][:len(b["line"]) - len(b["line"].lstrip())]
+    line = (f"{lead}- open until {(date.today() + timedelta(days=7)).isoformat()} [{REVIEW_OWNERS[agent]}, {base}-fix] from {user}, "
+            f"start now: {remark} (result was: {was[:200] + ('…' if len(was) > 200 else '')})")
+    try:
+        await knowledge_edit(b["path"], b["line"], line)
+    except (ToolError, OSError) as e:
+        return JSONResponse({"error": str(e)}, status_code=409)
+    audit("task-redo", f"{project}/{base}-fix to {agent}")
+    return JSONResponse({"ok": True, "id": f"{base}-fix", "line": line})
 
 
 @server.custom_route("/ui/api/task/assign", methods=["POST"])

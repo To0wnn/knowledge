@@ -2111,6 +2111,51 @@ def files_contract(tmp, ck, fr, raw, er, et):
         assert st == 416 and {k.lower(): v for k, v in hd.items()}["content-range"] == "bytes */10", (st, hd)
 
 
+def inbox_contract(tmp, ck, fr, raw, er):
+    """Needs you, answered on the card: the whole line and who wrote it; a task sent back to its requester with a
+    remark; a result sent back to an agent as <ID>-fix; with names set, only this person's own tasks and results."""
+    ui = lambda path, body=None, h=ck: raw("POST" if body is not None else "GET", path, None if body is None else json.dumps(body),
+                                          {**h, "X-Knowledge-UI": "1", "Content-Type": "application/json"})
+    board = lambda: {i["id"]: i for i in json.loads(ui("/ui/api/board")[2])["items"] if i["kind"] == "task"}
+    path, mem = "garden-memory/project_tasks.md", tmp / "projects/garden/memory/project_tasks.md"
+    lines = ["- open until 2099-01-01 [Codex, INB-1] from Claude, start after approval: " + "a long line " * 20 + "end",
+             "- open until 2099-01-01 [Codex, INB-2] from Claude, start after approval: send me back",
+             "- [Sam, INB-3-done]: result for Sam; left: nothing",
+             "- [Alice, INB-4-done]: the beds are watered; branch task/INB-4; left: nothing"]
+    assert not call("knowledge_edit", {"path": path, "old_string": "## Keuzes", "new_string": "\n".join(lines) + "\n## Keuzes"}, fr)[0]
+    items = board()
+    one = items["INB-1"]
+    assert one["approve"] and one["text"].endswith("end") and len(one["text"]) > 200 and one["from"] == "Claude" and one["author"] == "", one
+    res = items["INB-4-done"]
+    assert res["result"] and res["text"].startswith("the beds") and res["can_send_back"] and res["line_text"] == lines[3], res
+    # Send back an approval: a remark is needed; its requester gets it as a result that says so, and it does not start.
+    assert ui("/ui/api/task/cancel", {"project": "garden", "id": "INB-2", "reason": "", "back": True})[0] == 400
+    assert ui("/ui/api/task/cancel", {"project": "garden", "id": "INB-2", "reason": "only the north beds", "back": True})[0] == 200
+    assert "- [Claude, INB-2-done]: sent back by alice: only the north beds" in mem.read_text()
+    assert "INB-2" not in board() and board()["INB-2-done"]["col"] == "done", "an agent's result: no card for a person"
+    # Send back a result: it becomes a task line for the agent picked, on the task's branch; others may not.
+    assert ui("/ui/api/task/redo", {"project": "garden", "id": "INB-4-done", "agent": "codex", "remark": ""})[0] == 400
+    assert ui("/ui/api/task/redo", {"project": "garden", "id": "INB-4-done", "agent": "bash", "remark": "x"})[0] == 400
+    assert ui("/ui/api/task/redo", {"project": "garden", "id": "NOPE-done", "agent": "codex", "remark": "x"})[0] == 404
+    assert ui("/ui/api/task/redo", {"project": "garden", "id": "INB-4-done", "agent": "codex", "remark": "x"}, er)[0] in (403, 404)
+    st, _, b = ui("/ui/api/task/redo", {"project": "garden", "id": "INB-4-done", "agent": "codex", "remark": "also the (claimed x) south beds"})
+    assert st == 200 and json.loads(b)["id"] == "INB-4-fix", b
+    text = mem.read_text()
+    assert "INB-4-done" not in text and "[Codex, INB-4-fix] from alice, start now: also the claimed x) south beds (result was: the beds are watered" in text, text
+    fix = next(t for t in json.loads(ui("/ui/api/tasks")[2])["tasks"] if t["id"] == "INB-4-fix")
+    assert fix["startable"] and fix["owner"] == "Codex", fix
+    # Names: with "alice" set, Sam's result leaves her board; empty again, everyone's shows.
+    assert "INB-3-done" in board()
+    assert ui("/ui/api/me/prefs", {"task_names": "Alice, a;b"})[0] == 400
+    assert ui("/ui/api/me/prefs", {"task_names": " Alice , alice,Al"})[0] == 200
+    assert json.loads(ui("/ui/api/me")[2])["prefs"]["task_names"] == ["alice", "al"]
+    assert "INB-3-done" not in board(), "another person's result"
+    assert ui("/ui/api/me/prefs", {"task_names": ""})[0] == 200 and "task_names" not in json.loads(ui("/ui/api/me")[2])["prefs"]
+    assert "INB-3-done" in board()
+    for ln in [ln for ln in mem.read_text().splitlines() if "INB-" in ln]:  # leave the memo as the next contract expects it
+        assert not call("knowledge_edit", {"path": path, "old_string": ln + "\n", "new_string": ""}, fr)[0]
+
+
 def board_contract(tmp, ck, fr, raw, er, et):
     """The Agents board: chats and workers of the owner's own pcs and task lines of the projects they see, each in one
     column (needs you, running, open, done), with the companion's git numbers; another person sees none of it; a diff
@@ -3964,6 +4009,7 @@ def main():
         flow_contract(tmp, ck, fr, raw, heard)
         ui_gap_contract(tmp, ck, raw, er)
         review_contract(tmp, ck, fr, raw, er)
+        inbox_contract(tmp, ck, fr, raw, er)
         # The folder link (.knowledge-project, skill knowledge-init): her token now sees two projects, so the folder picks.
         assert "not linked to a project" in http("GET", "/context/1?project=/home/erin/stuff", token=et)[1]
         ctx = http("GET", "/context/1?project=erinproj&linked=1", token=et)[1]

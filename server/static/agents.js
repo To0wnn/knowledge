@@ -7,7 +7,7 @@
 // text (textContent): nothing an agent prints becomes markup. The view is #/chats (shell.js; #/inbox is the same):
 // #/chats/<chat id> is one chat (its card is keyed by pc and chat id).
 const AGENT_MARK = { claude: "C", codex: "X", agy: "A" };
-const ck = { cards: new Map(), machines: [], chats: [], board: [], view: "", timer: 0, summaryAt: 0, doneOpen: false, focus: "", hit: "", boardAt: 0, filter: "", waits: new Map() };
+const ck = { cards: new Map(), machines: [], chats: [], board: [], view: "", timer: 0, summaryAt: 0, doneOpen: false, focus: "", hit: "", boardAt: 0, filter: "", waits: new Map(), detailOpen: new Set() };
 const ckKey = (c) => `${c.machine}/${c.id}`;
 const ckBusy = (s) => s === "running" || s === "queued";
 const FORCE_BUSY = "This chat is working: force archive stops its turn, drops its queued messages and skips the wrap-up. Go on?";
@@ -163,7 +163,7 @@ function ckGetStarted() {
 function ckList() {
   const box = $("ck-list"), hist = $("ck-history"), side = $("ck-side");
   // a half-typed reply or reason, or an open menu, outlives the refresh: the list waits until it is sent or closed
-  if (side.querySelector(".ck-reply, .ck-reject, .ck-snooze[open]") || selecting(side)) return;
+  if (side.querySelector(".ck-reply, .ck-answer, .ck-snooze[open]") || selecting(side)) return;
   const had = side.contains(document.activeElement) && document.activeElement.dataset.row;
   const items = (ck.board || []).filter((i) => ckScope(i) && !(i.kind === "chat" && i.col === "done")); // a read chat is an earlier chat
   const pcs = ckOnlinePc(), fresh = ck.ready && !pcs && !ck.chats.length;
@@ -457,20 +457,28 @@ function ckItem(i) {
   if (i.progress) main.append(workerProgress(i.progress));
   if (i.kind === "review") main.append(ckReview(i));
   card.append(main);
-  main.title = i.kind === "terminal" ? "Answer it in that terminal" : i.kind === "chat" || i.kind === "ask" ? "Open this chat" : i.kind === "task" || i.kind === "review" ? "Open its line in the memo" : "Follow this worker";
+  const open = i.kind === "task" && ck.detailOpen.has(i.key);
+  if (i.kind === "task") { main.setAttribute("aria-expanded", String(open)); if (open) card.append(ckDetail(i)); }
+  main.title = i.kind === "terminal" ? "Answer it in that terminal" : i.kind === "chat" || i.kind === "ask" ? "Open this chat" : i.kind === "task" ? (open ? "Fold the line away" : "Show the whole line, who wrote it and where") : i.kind === "review" ? "Open its line in the memo" : "Follow this worker";
   main.onclick = () => {
     if (i.kind === "terminal") return; // nothing to open here: it is answered in that terminal
     if (i.kind === "chat") return ckShow(chat || i);
     if (i.kind === "ask") return ckShow(chat);
-    if (i.kind === "task") { return openNote(i.path, { find: [i.id.toLowerCase()] }); }
+    if (i.kind === "task") { ck.detailOpen[open ? "delete" : "add"](i.key); return ckRefresh(); } // read where it is answered
     if (i.kind === "review") return openNote(i.path, { find: [`${i.task.toLowerCase()}-done`] });
     return ckFollow(i); // a worker opens as a chat nobody types in: its transcript, steer, take over
   };
   const acts = el("div", "ck-item-acts"), act = (text, title, fn, cls = "btn small quiet") => { const b = el("button", cls, text); b.type = "button"; b.title = title; b.onclick = fn; acts.append(b); return b; };
   const later = []; // Snooze, Dismiss and Archive: behind one ⋯ menu, so the row's answer stands out
   if (i.git) acts.append(ckGitPill(i));
-  if (i.approve) act("Approve", "Let this task start" + (i.approve_warning ? `\n\n${i.approve_warning}` : ""),
-    () => (!i.approve_warning || confirm(`${i.approve_warning}\n\nApprove ${i.id} anyway?`)) && ckDo("/ui/api/task/approve", { project: i.project, id: i.id }));
+  if (i.approve) {
+    act("Approve", "Let this task start" + (i.approve_warning ? `\n\n${i.approve_warning}` : ""),
+      () => (!i.approve_warning || confirm(`${i.approve_warning}\n\nApprove ${i.id} anyway?`)) && ckDo("/ui/api/task/approve", { project: i.project, id: i.id }), "btn small primary");
+    if (i.from) act("Send back…", `Not like this: ${i.from} gets it back with your remark and may write it again`,
+      () => ckAnswer(card, { label: `Send ${i.id} back to ${i.from}`, hint: "What should change? (it goes back as their result)", go: "Send back", need: true },
+        (text) => ckDo("/ui/api/task/cancel", { project: i.project, id: i.id, reason: text, back: true })));
+    later.push(["Decline…", "Not wanted: its requester gets it back as a result", () => ckCancel(card, i)]);
+  }
   if (i.kind === "ask") { // the board shows a short title: Allow only when that title is the whole request
     for (const [d, text, title] of ckAskButtons(i).filter(([d]) => i.full !== false || d === "deny")) act(text, title, () => ckDo("/ui/api/chat/approve", { machine: i.machine, id: i.chat, ask: i.id, decision: d }));
     if (i.full === false) act("Open chat", "The request is longer than the list shows: read it whole in its chat", () => main.click());
@@ -484,26 +492,30 @@ function ckItem(i) {
   if (i.kind === "worker" && i.status === "failed" && i.can_restart) act("Restart", "Start this worker again now",
     () => ckDo("/ui/api/machines/action", { machine: i.machine, action: "restart", args: { project: i.project, id: i.id } }));
   if (i.kind === "review") {
+    if (i.can_merge) act("Merge", `git merge --no-ff ${i.branch} into ${i.into} on ${i.label}`, () => ckMerge(i), "btn small primary");
     act("View diff", `The changes on ${i.branch}, read on ${i.label}`, () => ckDiff(i));
-    if (i.can_merge) act("Merge", `git merge --no-ff ${i.branch} into ${i.into} on ${i.label}`, () => ckMerge(i));
-    act("Reject", i.chat ? "Keep the branch, take the card off the list" : "Keep the branch, take the card off the list; optionally send it back to the agent", () => ckReject(card, i));
+    if (!i.chat) act("Send back…", `Not good yet: ${AGENT_NAME[i.agent] || i.agent} gets your remark as ${i.task}-fix and goes on on ${i.branch}`,
+      () => ckAnswer(card, { label: `Send ${i.task} back to ${AGENT_NAME[i.agent] || i.agent}`, hint: "What should change?", go: "Send back", need: true },
+        (text) => ckRejectPost(i, text, true)));
+    later.push(["Reject…", "Keep the branch, take the card off the list", () => ckAnswer(card, { label: `Reject ${i.chat ? "this chat's branch" : i.task}`, hint: "Why (optional)", go: "Reject", danger: true },
+      (text) => ckRejectPost(i, text, false))]);
   }
   if (i.closable && i.can_close) { // past its date or a person's: the three answers, right here
     act("Finished", "It is done: remove the line from its memo (its history keeps it)", () => ckDo("/ui/api/task/done", { path: i.path, line: i.task_line }), "btn small primary");
     act("+7 days", "Still wanted: move its date a week from today", () => ckDo("/ui/api/task/extend", { project: i.project, id: i.id, days: 7 }));
-    act("Cancel", "Not wanted: its requester gets it back as a result", () => {
-      const why = prompt(`Cancel ${i.id}? Why (optional):`, "");
-      if (why !== null) ckDo("/ui/api/task/cancel", { project: i.project, id: i.id, reason: why });
-    }, "btn small quiet risky");
+    later.push(["Cancel…", "Not wanted: its requester gets it back as a result", () => ckCancel(card, i)]);
   }
-  if (i.result) act("Open memo", "Read the whole line in its memo; remove it there (or under Tasks) once read", () => main.click());
+  if (i.result && me.writable?.includes(i.project) && i.line_text) act("Done", "Read: take the line out of its memo (its history keeps it)",
+    () => ckDo("/ui/api/task/done", { path: i.path, line: i.line_text }), "btn small primary");
+  if (i.result && i.can_send_back) act("Send back…", "Not good like this: an agent gets your remark as a task and works on it again",
+    () => ckRedo(card, i));
   if (i.kind === "chat" && i.col === "needs") act("Reply", "Answer in one line without opening the chat (Enter sends, Esc closes)", () => ckReply(card, i), "btn small primary");
   if (ckSec(i) === "needs" && i.kind !== "ask") { // an approval is answered, not put off: its turn waits on it
     // Off the list for a while: it comes back at `until` (Unix seconds), or sooner when it changes.
     const tomorrow = () => { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(8, 0, 0, 0); return d.getTime() / 1000; };
-    for (const [text, until] of [["Snooze 1 hour", () => Date.now() / 1000 + 3600], ["Snooze until tomorrow 08:00", tomorrow]])
-      later.push([text, "Take it off the list for a while", () => ckDo("/ui/api/board/dismiss", { key: i.key, sig: i.sig, until: Math.round(until()) })]);
-    later.push(["Dismiss", "Take it off the list until it changes again", () => ckDo("/ui/api/board/dismiss", { key: i.key, sig: i.sig })]);
+    for (const [text, until] of [["Later: in 1 hour", () => Date.now() / 1000 + 3600], ["Later: tomorrow 08:00", tomorrow]])
+      later.push([text, "Off the list until then, or sooner when it changes", () => ckDo("/ui/api/board/dismiss", { key: i.key, sig: i.sig, until: Math.round(until()) })]);
+    later.push(["Hide until it changes", "Off the list; it comes back when it changes", () => ckDo("/ui/api/board/dismiss", { key: i.key, sig: i.sig })]);
   }
   if (i.kind === "task" && !i.result && i.can_cancel) // picked, never typed; a pc pin or a person: Assign… in the Tasks list
     for (const owner of ["Claude", "Codex", "Gemini"].filter((o) => o.toLowerCase() !== (i.owner || "").split("@")[0].trim().toLowerCase()))
@@ -517,12 +529,7 @@ function ckItem(i) {
       later.push([`New ${AGENT_NAME[agent] || agent} chat takes it`, `Starts a chat in a folder of ${shown(i.project)} that takes ${i.id} right away ('pak ${i.id}'); its line then names that agent`,
         () => ckTaskChat(i.project, i.id, agent)]);
   }
-  if (i.result && me.writable?.includes(i.project) && i.line_text) later.push(["Remove (read)", "Take the result line out of its memo (its history keeps it)",
-    () => ckDo("/ui/api/task/done", { path: i.path, line: i.line_text })]);
-  if (i.kind === "task" && i.col === "open" && i.can_cancel) later.push(["Cancel task", "Not wanted: its requester gets it back as a result", () => {
-    const why = prompt(`Cancel ${i.id}? Why (optional):`, "");
-    if (why !== null) ckDo("/ui/api/task/cancel", { project: i.project, id: i.id, reason: why });
-  }]);
+  if (i.kind === "task" && i.col === "open" && i.can_cancel) later.push(["Cancel task…", "Not wanted: its requester gets it back as a result", () => ckCancel(card, i)]);
   if (i.kind === "chat" && !ckBusy(i.status)) later.push(["Archive", "The agent records it in the memos, then it goes off the list (under Earlier, Archived); a new message opens it again",
     () => ckDo("/ui/api/chat/close", { machine: i.machine, id: i.id, closed: true })]);
   if (i.kind === "chat") later.push(["Force archive", "Close right away without wrap-up (e.g. when quota is exhausted or agent is stuck)",
@@ -598,28 +605,68 @@ async function ckMerge(i) {
   } catch (e) { toast(e.message); }
   ck.summaryAt = 0; ckTick();
 }
-function ckReject(card, i) {
-  const old = card.querySelector(".ck-reject");
-  if (old) return old.remove();
-  const form = el("form", "ck-reject"), reason = el("input", "small"), lab = el("label", "ck-reject-back"), back = el("input"), go = el("button", "btn small danger", "Reject");
-  reason.placeholder = "Why (optional; needed to send it back)"; reason.maxLength = 300; reason.setAttribute("aria-label", "Reason");
-  back.type = "checkbox"; lab.append(back, ` send back to ${AGENT_NAME[i.agent] || i.agent} as ${i.task}-fix`);
-  go.type = "submit";
-  reason.placeholder = i.chat ? "Why (optional)" : reason.placeholder;
-  form.append(reason, ...(i.chat ? [] : [lab]), go);
+// One answer typed on the card itself (send back, reject, decline): Enter sends, Esc closes. The list waits while it is open.
+function ckAnswer(card, { label, hint, go = "Send", need = false, danger = false, extra = [] }, send) {
+  const old = card.querySelector(".ck-answer");
+  if (old) { old.remove(); return ckRefresh(); }
+  const form = el("form", "ck-answer"), input = el("input", "small"), btn = el("button", `btn small ${danger ? "danger" : "primary"}`, go);
+  input.placeholder = hint; input.maxLength = 300; input.setAttribute("aria-label", label); btn.type = "submit";
+  const shut = () => { form.remove(); card.querySelector(".ck-item-main")?.focus(); ckRefresh(); };
+  const quit = el("button", "btn small quiet", "Close"); quit.type = "button"; quit.onclick = shut;
+  form.onkeydown = (e) => { if (e.key === "Escape" && !e.isComposing) { e.preventDefault(); e.stopPropagation(); shut(); } };
   form.onsubmit = async (e) => {
     e.preventDefault();
-    if (back.checked && !reason.value.trim()) return toast("Sending it back needs a reason: the agent only gets that line.");
-    go.disabled = true;
-    try {
-      await api("/ui/api/review/reject", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: i.key, reason: reason.value, send_back: back.checked }) });
-      toast(back.checked ? `Sent ${i.task} back to ${AGENT_NAME[i.agent] || i.agent}` : `Review of ${i.task} rejected; the branch stays`, false);
-    } catch (err) { toast(err.message); go.disabled = false; return; }
-    form.remove(); // the list waits while a reason is being typed
-    ck.summaryAt = 0; ckTick();
+    const text = input.value.trim();
+    if (need && !text) return toast("Say what should change: that line is all the other side gets.");
+    btn.disabled = true;
+    if (await send(text)) { form.remove(); ckRefresh(); } else { btn.disabled = false; input.focus(); }
   };
-  card.append(form); reason.focus();
+  form.append(el("span", "ck-answer-label", label), input, ...extra, btn, quit); card.append(form); input.focus();
 }
+function ckCancel(card, i) {
+  ckAnswer(card, { label: `Cancel ${i.id}`, hint: "Why (optional)", go: "Cancel task", danger: true },
+    (text) => ckDo("/ui/api/task/cancel", { project: i.project, id: i.id, reason: text }));
+}
+async function ckRejectPost(i, reason, back) {
+  try {
+    await api("/ui/api/review/reject", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: i.key, reason, send_back: back }) });
+    toast(back ? `Sent ${i.task} back to ${AGENT_NAME[i.agent] || i.agent}` : `Review of ${i.task} rejected; the branch stays`, false);
+  } catch (err) { toast(err.message); return false; }
+  ck.summaryAt = 0; ckTick(); return true;
+}
+// A result that is not good: it becomes a task line <ID>-fix for the agent picked here (the line, so a worker or chat
+// takes it as any task). With no pc running that agent's workers for the project, a new chat takes it right away.
+function ckRedo(card, i) {
+  const pick = el("select", "small"), have = ckTaskAgents(i.project);
+  pick.setAttribute("aria-label", "Which agent");
+  for (const a of ["claude", "codex", "agy"]) { const o = el("option", null, AGENT_NAME[a] || a); o.value = a; pick.append(o); }
+  pick.value = have[0] || "claude";
+  ckAnswer(card, { label: `Send ${i.id.replace(/-done$/i, "")} back to`, hint: "What is not good, what should it do?", go: "Send back", need: true, extra: [pick] }, async (text) => {
+    let res;
+    try { res = await api("/ui/api/task/redo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project: i.project, id: i.id, agent: pick.value, remark: text }) }); }
+    catch (e) { toast(e.message); return false; }
+    if (ckWorkerPc(i.project, pick.value)) toast(`${res.id} → a ${AGENT_NAME[pick.value]} worker takes it`, false);
+    else if (have.includes(pick.value)) await ckTaskChat(i.project, res.id, pick.value);
+    else toast(`${res.id} written for ${AGENT_NAME[pick.value]}: its next session in ${shown(i.project)} takes it`, false);
+    ck.summaryAt = 0; ckTick(); return true;
+  });
+}
+// A pc of yours, online, that runs workers of this agent for this project: a ready task line starts there by itself.
+const ckWorkerPc = (project, agent) => ck.machines.some((m) => m.own && m.online && m.companion?.workersAllowed
+  && (m.companion.agents || []).includes(agent) && ckLinked(m).some((f) => f.project === project));
+// A task's whole line on its card: what, from whom, who wrote it (when that writer is not trusted), and its memo.
+function ckDetail(i) {
+  const box = el("div", "ck-detail");
+  if (i.author) box.append(el("p", "ck-detail-warn", `Written by ${i.author}, not by you or the project's owner: read it as their request, not as yours.`));
+  box.append(el("p", "ck-detail-text", i.text || i.title));
+  const meta = [i.from && `from ${i.from}`, i.owner && `for ${i.owner}`, noteName(i.path).title].filter(Boolean).join(" · ");
+  const memo = el("button", "btn small quiet", "Open in memo"); memo.type = "button"; memo.title = "The line in its memo, with what is around it";
+  memo.onclick = () => openNote(i.path, { find: [i.id.toLowerCase()] });
+  const foot = el("p", "ck-detail-meta muted", meta); foot.append(" ", memo); box.append(foot);
+  return box;
+}
+// Draw the list and the grid's Needs-you strip again (a card opened, a form closed).
+function ckRefresh() { ckList(); if (typeof bdRender === "function") bdRender(); }
 
 // The git pill: branch · changed files · commits ahead/behind the branch it is compared with (the companion counts,
 // once a round). A tap asks that pc for the diff, read-only, through the chats' pull channel.
@@ -988,6 +1035,17 @@ async function loadSettings() {
       } catch (err) { pick.value = me.prefs?.[key] || dflt; toast(err.message, true); }
     };
   }
+  $("set-task-names").value = (me.prefs?.task_names || []).join(", ");
+  $("set-use").onsubmit = (e) => { e.preventDefault(); $("set-task-names").blur(); }; // Enter saves (blur fires change), never a page load
+  $("set-task-names").onchange = async () => {
+    try {
+      me.prefs = (await api("/ui/api/me/prefs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ task_names: $("set-task-names").value }) })).prefs;
+      $("set-task-names").value = (me.prefs?.task_names || []).join(", ");
+  $("set-use").onsubmit = (e) => { e.preventDefault(); $("set-task-names").blur(); }; // Enter saves (blur fires change), never a page load
+      $("set-use-saved").textContent = "Saved"; setTimeout(() => ($("set-use-saved").textContent = ""), 2000);
+      ck.summaryAt = 0; ckTick();
+    } catch (err) { toast(err.message, true); }
+  };
   $("set-start").querySelector('[value="chats"]').hidden = agentsOff();
   $("set-start").querySelector('[value="tasks"]').hidden = !agentsOff(); // with Agents, tasks are there
   const mx = me.matrix; // null for a non-admin: only admins get the server's messages
