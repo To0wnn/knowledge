@@ -84,7 +84,7 @@ const ACTION_WORDS = {
   workers_allowed: (a) => (a.on ? "Allow workers" : "Turn workers off"),
   max_agents: (a) => (a.n ? `At most ${a.n} agents at once` : "No limit on agents at once"),
   yolo: (a) => `YOLO ${a.on ? "on" : "off"} for ${AGENT_NAME[a.agent] || a.agent}`, trust_hooks: (a) => `Trust the hooks of ${AGENT_NAME[a.agent] || a.agent}`,
-  link_folder: (a) => `Link ${a.path} to ${a.project}`, unlink_folder: (a) => `Unlink ${a.path}`,
+  link_folder: (a) => `Link ${a.path} to ${shown(a.project)}`, unlink_folder: (a) => `Unlink ${a.path}`,
   install_tool: (a) => `Install ${a.tool}`, remove_tool: (a) => `Remove ${a.tool}`, tool_auto: (a) => `Daily update of ${a.tool} ${a.on ? "on" : "off"}`,
   start_worker: (a) => `Start a worker for ${a.id}`, stop_worker: (a) => `Stop the worker of ${a.id}`, restart: (a) => `Restart the worker of ${a.id}`,
   rollback: (a) => (a.undo ? `Undo the roll back of chat ${a.id}` : `Roll back ${a.chat ? "chat " : ""}${a.id}`), archive_worker: (a) => `Archive the worker of ${a.id}`, merge: (a) => `Merge ${a.id}`, takeover: (a) => `Take over ${a.id}`,
@@ -102,7 +102,7 @@ let chooseAsk = 0, chooseMachine = null, choosePath = "";
 function chooseFolder(m, project = "", pcs = [m]) {
   const pick = $("choose-pc"), use = (x) => {
     chooseMachine = x;
-    $("choose-project").replaceChildren(...x.companion.projects.map((p) => { const o = el("option", null, p); o.value = p; return o; }));
+    $("choose-project").replaceChildren(...x.companion.projects.map((p) => { const o = el("option", null, shown(p)); o.value = p; return o; }));
     if (project && x.companion.projects.includes(project)) $("choose-project").value = project;
   };
   pick.replaceChildren(...pcs.map((x) => { const o = el("option", null, x.label); o.value = x.id; return o; }));
@@ -393,15 +393,15 @@ async function pcShare(m) {
     sec.append(el("h4", null, shown(p.project)));
     for (const u of p.members) {
       const li = el("li"), sel = el("select", "small");
-      sel.setAttribute("aria-label", `${u.user} on ${p.project}`);
+      sel.setAttribute("aria-label", `${u.user} on ${shown(p.project)}`);
       for (const [v, t] of Object.entries(SHARE_WORDS)) sel.append(new Option(t, v));
       sel.value = u.mode || "";
       sel.onchange = async () => {
-        if (sel.value === "use" && !confirm(`Let ${u.user} run agents on ${m.label} in ${p.project}?\n\nTheir agents run as you on this pc (files, network, your agent subscription). Every tool call asks them first, and they answer it themselves: give this only to someone you would give a shell.`)) { sel.value = u.mode || ""; return; }
-        if (sel.value === "yolo" && prompt(`${u.user}'s chats on ${m.label} (${p.project}) then run with this pc's YOLO switch: no tool call asked, as you on this pc, on your agent subscription; risky actions are flagged, never stopped. Type YOLO to allow it.`) !== "YOLO") { sel.value = u.mode || ""; return; }
+        if (sel.value === "use" && !confirm(`Let ${u.user} run agents on ${m.label} in ${shown(p.project)}?\n\nTheir agents run as you on this pc (files, network, your agent subscription). Every tool call asks them first, and they answer it themselves: give this only to someone you would give a shell.`)) { sel.value = u.mode || ""; return; }
+        if (sel.value === "yolo" && prompt(`${u.user}'s chats on ${m.label} (${shown(p.project)}) then run with this pc's YOLO switch: no tool call asked, as you on this pc, on your agent subscription; risky actions are flagged, never stopped. Type YOLO to allow it.`) !== "YOLO") { sel.value = u.mode || ""; return; }
         try {
           await api("/ui/api/machine/share", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ machine: m.id, project: p.project, user: u.user, mode: sel.value }) });
-          u.mode = sel.value; toast(`${u.user}: ${SHARE_WORDS[sel.value]} on ${m.label} (${p.project})`, false);
+          u.mode = sel.value; toast(`${u.user}: ${SHARE_WORDS[sel.value]} on ${m.label} (${shown(p.project)})`, false);
         } catch (e) { sel.value = u.mode || ""; toast(e.message); }
       };
       li.append(el("span", null, u.user), " ", sel); ul.append(li);
@@ -632,7 +632,7 @@ function machinesStatus(res, own, online) {
   }
   const waiting = own.reduce((n, m) => n + allWorkers(m).filter((w) => workerNeedsYou(m, w)).length, 0);
   if (waiting) { const link = el("a", null, "Agents"); link.href = "#/chats"; items.push([`${waiting} worker${waiting > 1 ? "s need" : " needs"} you, in `, link, "."]); }
-  for (const s of res.stuck || []) items.push([`${s.tasks} task${s.tasks > 1 ? "s" : ""} of ${s.project} cannot start by itself: none of your pcs has a folder linked to that project.`]);
+  for (const s of res.stuck || []) items.push([`${s.tasks} task${s.tasks > 1 ? "s" : ""} of ${shown(s.project)} cannot start by itself: none of your pcs has a folder linked to that project.`]);
   text.append(lead);
   if (items.length) { const ul = el("ul", "mx-items"); for (const parts of items) { const li = el("li"); li.append(...parts); ul.append(li); } text.append(ul); }
   else if (online.length) text.append(el("p", "muted", "Everything is up to date."));
@@ -679,7 +679,7 @@ function offlineSection(title, pcs, res) {
 // ---------------------------------------------------------------- Folders: per project, the folders on each pc
 function foldersView(res) {
   const own = res.machines.filter((m) => m.mine && !m.old && m.companion), parts = [];
-  for (const s of res.stuck || []) parts.push(el("p", "machine-stuck", `${s.tasks} task${s.tasks > 1 ? "s" : ""} of ${s.project} cannot start by itself: none of your pcs has a folder linked to that project.`));
+  for (const s of res.stuck || []) parts.push(el("p", "machine-stuck", `${s.tasks} task${s.tasks > 1 ? "s" : ""} of ${shown(s.project)} cannot start by itself: none of your pcs has a folder linked to that project.`));
   const lede = el("div", "mx-proj-head mx-link-bar"), hosts = own.filter((m) => steers(m) && (m.companion.projects || []).length);
   lede.append(el("p", "muted", "Which folder on which pc belongs to which project. An agent started in a linked folder gets that project's memory and docs, and workers of that project may start there."));
   // one way to link: the dialog asks for the pc, a folder on it, then the project
@@ -688,10 +688,10 @@ function foldersView(res) {
   const projects = [...new Set(own.flatMap((m) => [...(m.companion.projects || []), ...(m.companion.folders?.linked || []).map((f) => f.project)]))].sort();
   for (const p of projects) {
     const box = el("section", "mx-proj"), head = el("div", "mx-proj-head");
-    head.append(el("h3", null, p));
+    head.append(el("h3", null, shown(p)));
     box.append(head);
     const rows = own.flatMap((m) => (m.companion.folders?.linked || []).filter((f) => f.project === p).map((f) => [m, f]));
-    if (!rows.length) box.append(el("p", "muted mx-empty", `No folder linked yet. Link one to give agents in that folder the memory of ${p}.`));
+    if (!rows.length) box.append(el("p", "muted mx-empty", `No folder linked yet. Link one to give agents in that folder the memory of ${shown(p)}.`));
     for (const [m, f] of rows) {
       const r = el("div", "mx-frow");
       r.append(el("span", null, m.label), el("code", null, f.path));
@@ -789,14 +789,14 @@ function filesRoots() {
     for (const f of folders) {
       const main = el("span", "fm-main");
       main.append(el("span", "fm-name", baseName(f.path)), el("span", "fm-sub", f.path));
-      const pill = el("span", "pill topic", f.project);
+      const pill = el("span", "pill topic", shown(f.project));
       const li = el("li"); li.append(filesLink("fm-row", filesUrl(m.id, f.path), fileIcon("dir"), main, pill));
       ul.append(li);
     }
     sec.append(h, ul);
     parts.push(sec);
   }
-  if (parts.length === 1) parts.push(emptyState(pcs.length ? `No folder${allMode() ? "" : ` of ${project}`} is linked on a pc of yours, or one shared with you, that is online. Link one under Machines, Folders.` : "No pc of yours, or shared with you, is online with remote control on."));
+  if (parts.length === 1) parts.push(emptyState(pcs.length ? `No folder${allMode() ? "" : ` of ${shown(project)}`} is linked on a pc of yours, or one shared with you, that is online. Link one under Machines, Folders.` : "No pc of yours, or shared with you, is online with remote control on."));
   filesList = null;
   filesBox.replaceChildren(...parts);
 }
