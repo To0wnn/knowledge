@@ -6625,6 +6625,31 @@ async def ui_files(request: Request):
     return JSONResponse(a)
 
 
+# A page's preview: its scripts run, but in an opaque origin (no cookies, no API of this site) and with no network at all,
+# so a page from a pc cannot reach out or phone home; its own images, CSS and scripts by relative path do not load.
+FILES_PREVIEW_CSP = ("sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+                     "img-src data: blob:; font-src data:; media-src data: blob:; form-action 'none'; base-uri 'none'; frame-ancestors 'self'")
+
+
+@server.custom_route("/ui/api/files/preview", methods=["GET"])
+async def ui_files_preview(request: Request):
+    """?machine=&path=: an .html file from the pc as a page for the Files view's preview frame, known secrets masked
+    as in its text view, under FILES_PREVIEW_CSP."""
+    q = request.query_params
+    path = q.get("path", "")
+    if not re.search(r"\.html?$", path, re.I):
+        return JSONResponse({"error": "only .html files have a preview"}, status_code=400)
+    try:
+        _, a = await files_ask(q.get("machine", ""), {"op": "read", "path": path})
+    except (ValueError, PermissionError, TimeoutError) as e:
+        return files_error(e)
+    if a.get("error"):
+        return JSONResponse({"error": str(a["error"])[:300]}, status_code=400)
+    text = await asyncio.to_thread(redact, str(a.get("text", ""))[:FILES_TEXT])
+    return HTMLResponse(text, headers={"Content-Security-Policy": FILES_PREVIEW_CSP, "Cache-Control": "private, no-store",
+                                       "X-Content-Type-Options": "nosniff"})
+
+
 @server.custom_route("/ui/api/files/raw", methods=["GET"])
 async def ui_files_raw(request: Request):
     """?machine=&path=: an image, audio or video file streamed from the pc; a Range header (one range) gives 206, as a

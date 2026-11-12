@@ -902,6 +902,14 @@ async function filesShow(m, res, path, pane) {
   if (!pane.isConnected) return;
   const code = filesCode(txt.text);
   wait.replaceWith(code);
+  if (/\.html?$/i.test(e.name)) { // a page: its preview first, the code one click away
+    const frame = el("iframe", "fm-preview"), flip = el("button", "btn small", "Code");
+    frame.setAttribute("sandbox", "allow-scripts"); // opaque origin: no cookies or API of this site (the server's CSP sandboxes it too)
+    frame.title = `Preview of ${e.name}`; frame.src = `/ui/api/files/preview?${new URLSearchParams({ machine: m.id, path })}`;
+    flip.type = "button"; flip.title = "Switch between the page and its code";
+    flip.onclick = () => { code.hidden = !code.hidden; frame.hidden = !frame.hidden; flip.textContent = frame.hidden ? "Preview" : "Code"; };
+    code.hidden = true; code.after(frame); tools.prepend(flip);
+  }
   if (txt.masked) pane.insertBefore(el("p", "muted", "A known secret is masked here, so this file is read-only: edit it on the pc itself."), code);
   else {
     const edit = el("button", "btn small", "Edit"); edit.type = "button";
@@ -976,6 +984,7 @@ function filesEdit(m, txt, tools, code) {
   };
   for (const b of tools.querySelectorAll("button")) b.remove();
   tools.prepend(save, cancel);
+  code.parentNode.querySelector(".fm-preview")?.remove();
   code.replaceWith(area);
   area.focus();
 }

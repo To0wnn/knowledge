@@ -622,6 +622,8 @@ body.admin-page { display: block; overflow-y: auto; }
 .fm-code { display: grid; grid-template-columns: auto minmax(0, 1fr); overflow: auto; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel); }
 .fm-code pre { margin: 0; padding: 12px; font: 13px/1.5 var(--mono); white-space: pre; }
 .fm-gutter { position: sticky; left: 0; color: var(--muted); text-align: right; user-select: none; background: var(--panel); border-right: 1px solid var(--line); }
+.fm-code[hidden], .fm-preview[hidden] { display: none; }
+.fm-preview { width: 100%; height: 75vh; border: 1px solid var(--line); border-radius: var(--r-md); background: #fff; }
 .fm-stage { display: grid; place-items: center; overflow: hidden; border-radius: var(--r-md); background: #0d1210; }
 .fm-stage.audio { padding: 24px 16px; background: var(--panel); border: 1px solid var(--line); }
 .fm-media { display: block; max-width: 100%; max-height: calc(100dvh - 220px); object-fit: contain; }

@@ -2166,6 +2166,15 @@ def files_contract(tmp, ck, fr, raw, er, et):
         st, _, b = page.result()
         a = json.loads(b)
         assert st == 200 and a["masked"] and "Sup3rSecret99" not in a["text"] and a["mtime"] == "17", b
+        assert raw("GET", f"/ui/api/files/preview?machine={mid}&path=/home/x/a.md", None, ck)[0] == 400, "only .html has a preview"
+        files, page = asked(lambda: raw("GET", f"/ui/api/files/preview?machine={mid}&path=/home/x/garden/p.HTML", None, ck))
+        assert [(f["op"], f["path"]) for f in files] == [("read", "/home/x/garden/p.HTML")], files
+        http("POST", "/machine/files/answer", {"id": files[0]["id"], "text": "<p>pw Sup3rSecret99</p>", "mtime": "1", "size": 1}, token=fr, headers=pc)
+        st, hd, b = page.result()
+        hd = {k.lower(): v for k, v in hd.items()}
+        assert st == 200 and b"Sup3rSecret99" not in b and hd["content-type"].startswith("text/html"), (st, hd, b)
+        csp = hd["content-security-policy"]  # scripts run, but in an opaque origin without any network
+        assert "sandbox allow-scripts;" in csp and "allow-same-origin" not in csp and "default-src 'none'" in csp, csp
         files, page = asked(lambda: raw("GET", f"/ui/api/files/raw?machine={mid}&path=/home/x/garden/song.mp3", None, {**ck, "Range": "bytes=2-"}))
         f = files[0]
         assert (f["op"], f["start"], f["end"]) == ("stream", 2, None), f

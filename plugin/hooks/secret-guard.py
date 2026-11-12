@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""PreToolUse hook on the file-edit tools: refuse writing a known secret value into a file.
+"""PreToolUse hook on the file-edit tools: refuse writing a known secret value into a file, and refuse a session the
+companion started (a web UI chat or a worker: KNOWLEDGE_CHAT / KNOWLEDGE_WORKER) a file outside its project folder.
 
   secret-guard.py [claude|codex|agy]   (default claude)
 
@@ -11,12 +12,16 @@ milliseconds.
 New text per agent: Claude Edit|Write|MultiEdit (content, new_string, edits), Codex apply_patch (the + lines of the
 patch), agy (every string in toolCall.args except the old text and the path: CLI write_file Content, edit_file
 Replacement; app write_to_file CodeContent, replace_file_content ReplacementContent).
+The project folder: the git checkout around the session's folder plus, for a linked worktree, its main checkout; the
+agents' own folders (~/.claude, ~/.codex, ~/.gemini, the knowledge home) and the temp folder stay writable too.
+shortcut: only the edit tools are checked; a shell command can still write elsewhere (Codex without YOLO has its sandbox).
 """
 import hashlib
 import json
 import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 HASHES = Path.home() / ".config/knowledge-server/secret-hashes.json"
@@ -78,11 +83,70 @@ def new_text(agent: str, hook: dict) -> str:
     return "\n".join(t for t in texts if isinstance(t, str) and t)
 
 
-def deny(agent: str) -> str:
+def deny(agent: str, reason: str = REASON) -> str:
     if agent == "agy":
-        return json.dumps({"decision": "deny", "reason": REASON})
+        return json.dumps({"decision": "deny", "reason": reason})
     return json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
-                                              "permissionDecisionReason": REASON}})
+                                              "permissionDecisionReason": reason}})
+
+
+PATCH_FILE = re.compile(r"^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$", re.M)
+AGY_PATHS = ("Path", "TargetFile", "AbsolutePath", "path", "file_path")
+
+
+def targets(agent: str, hook: dict) -> list:
+    """The files an edit writes: Claude's file_path, the files a Codex patch names, agy's path arguments."""
+    if agent == "agy":
+        args = (hook.get("toolCall") or {}).get("args") or {}
+        return [str(args[k]).strip('"') for k in AGY_PATHS if isinstance(args.get(k), str) and args[k].strip('"')]
+    inp = hook.get("tool_input") or {}
+    if isinstance(inp, str):
+        inp = {"command": inp}
+    patch = inp.get("command") or inp.get("patch")
+    if isinstance(patch, str):
+        return [m.strip() for m in PATCH_FILE.findall(patch)]
+    return [str(inp[k]) for k in ("file_path", "notebook_path") if isinstance(inp.get(k), str) and inp[k]]
+
+
+def roots(cwd: str, env) -> list:
+    """Where a companion-started session may write: its checkout (the main one too, for a linked worktree), the
+    agents' own folders and the temp folder."""
+    home = Path.home()
+    out = [cwd, str(home / ".claude"), str(home / ".codex"), str(home / ".gemini"),
+           env.get("KNOWLEDGE_HOME") or str(home / ".knowledge"), tempfile.gettempdir()]
+    for d in (Path(cwd), *Path(cwd).parents):
+        git = d / ".git"
+        if git.is_dir():
+            out.append(str(d))
+            break
+        if git.is_file():  # a linked worktree: "gitdir: <main>/.git/worktrees/<name>"
+            out.append(str(d))
+            m = re.match(r"gitdir:\s*(.+)", git.read_text(encoding="utf-8", errors="replace").strip())
+            parts = Path(m[1]).parts if m else ()
+            if ".git" in parts:
+                out.append(str(Path(*parts[:parts.index(".git")])))
+            break
+    return out
+
+
+def within(path: str, root: str) -> bool:
+    p, r = (os.path.normcase(os.path.abspath(x)) for x in (path, root))
+    return p == r or p.startswith(r.rstrip(os.sep) + os.sep)
+
+
+def scope(agent: str, hook: dict, env) -> str:
+    """The deny JSON when a companion-started session writes outside its project folder, else ''."""
+    if not (env.get("KNOWLEDGE_CHAT") or env.get("KNOWLEDGE_WORKER")):
+        return ""  # a person's own terminal session: theirs to steer
+    cwd = env.get("CLAUDE_PROJECT_DIR") or hook.get("cwd") or os.getcwd()
+    ok = roots(cwd, env)
+    for t in targets(agent, hook):
+        path = os.path.join(cwd, os.path.expanduser(t))  # a relative path is relative to the session's folder
+        if not any(within(path, r) for r in ok):
+            return deny(agent, f"{t} is outside this session's project folder ({cwd}). A chat or worker "
+                               "the companion started only writes inside its project: put the file there, and do not work "
+                               "around this with a shell command. If it really belongs elsewhere, tell the user so they can do it.")
+    return ""
 
 
 def check(agent: str, hook: dict, hashes: set) -> str:
@@ -122,13 +186,31 @@ def self_test():
     chunks = json.dumps([{"TargetContent": secret, "ReplacementContent": "‹secret:X›"}])
     assert check("agy", {"toolCall": {"args": {"ReplacementChunks": chunks, "Instruction": f"remove {secret}"}}}, hashes) == "", \
         "agy: removing a secret, chunks encoded and named in the instruction, is allowed"
+    with tempfile.TemporaryDirectory() as t:  # a chat in a linked worktree of <main>: both checkouts, nothing else
+        main, wt = Path(t) / "main", Path(t) / "main" / ".worktrees" / "c1"
+        (main / ".git" / "worktrees" / "c1").mkdir(parents=True)
+        wt.mkdir(parents=True)
+        (wt / ".git").write_text(f"gitdir: {main / '.git' / 'worktrees' / 'c1'}\n")
+        outer = Path(os.path.abspath(os.sep)) / "elsewhere-x" / "a.txt"  # not under the temp folder, which is allowed
+        env = {"KNOWLEDGE_CHAT": "c1", "CLAUDE_PROJECT_DIR": str(wt / "sub")}
+        for ok in ("a.txt", str(wt / "b.py"), str(main / "c.md"), str(Path.home() / ".claude" / "plans" / "p.md")):
+            assert scope("claude", {"tool_input": {"file_path": ok}}, env) == "", f"inside: {ok}"
+        for bad in (str(outer), "../" * 40 + "x.txt"):
+            assert json.loads(scope("claude", {"tool_input": {"file_path": bad}}, env))["hookSpecificOutput"]["permissionDecision"] == "deny", bad
+        assert scope("claude", {"tool_input": {"file_path": str(outer)}}, {}) == "", "a person's own session is not limited"
+        patch = f"*** Begin Patch\n*** Update File: a.py\n*** Move to: {outer}\n*** End Patch"
+        assert scope("codex", {"tool_input": {"command": patch}}, env), "codex: a move out of the project"
+        assert scope("codex", {"tool_input": {"command": "*** Add File: x/y.py\n+1"}}, env) == ""
+        assert json.loads(scope("agy", {"toolCall": {"args": {"TargetFile": str(outer)}}}, env))["decision"] == "deny"
+        assert scope("agy", {"toolCall": {"args": {"TargetFile": json.dumps(str(main / "x"))}}}, env) == "", "agy: a JSON-encoded path"
     print("ok")
 
 
 def main(agent: str):
-    if not HASHES.exists():
-        return
-    out = check(agent, json.load(sys.stdin), set(json.loads(HASHES.read_text())))
+    hook = json.load(sys.stdin)
+    out = scope(agent, hook, os.environ)
+    if not out and HASHES.exists():
+        out = check(agent, hook, set(json.loads(HASHES.read_text())))
     if out:
         print(out)
 
@@ -141,7 +223,7 @@ if __name__ == "__main__":
     try:
         main(agent)
     except Exception as err:  # never block normal work, but say so: a silent failure would let secrets through
-        msg = f"secret-guard could not check this edit ({type(err).__name__}: {err}); secrets are not being caught until it is fixed."
+        msg = f"secret-guard could not check this edit ({type(err).__name__}: {err}); secrets and writes outside the project are not being caught until it is fixed."
         if agent == "agy":  # any output is a deny for agy: the hint goes out at the next turn instead
             try:
                 PENDING.parent.mkdir(parents=True, exist_ok=True)

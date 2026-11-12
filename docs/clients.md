@@ -143,6 +143,10 @@ broad job over subagents, have every finding refuted by a fresh verifier, report
 - **Secret guard:** an edit that writes a known secret value into a file is refused (Claude Code Edit/Write, Codex
   apply_patch, agy's file tools), where `token.py push-secrets` left the hash file (`secret set` and `secret rm` run it themselves; a value
   added in the Vaultwarden web UI needs a manual push). Only new text counts, so removing a secret is allowed.
+- **Project folder guard:** the same hook refuses a session the companion started (a web UI chat or a worker,
+  YOLO included) an edit outside its project folder: its git checkout, for a linked worktree the main checkout too, the
+  agents' own folders (`~/.claude`, `~/.codex`, `~/.gemini`, the knowledge home) and the temp folder. A person's own
+  terminal session is not limited. Only the edit tools are checked; a shell command can still write elsewhere.
 - **Scripted runs:** set `KNOWLEDGE_NO_SESSION_LOG=1` for a measurement or a one-off reader: every agent's hook then skips
   the session log, which is for sessions someone looks back on.
 - **Token use:** the session log also sends the tokens of each logged part (uncached input, cache writes, cache reads,
