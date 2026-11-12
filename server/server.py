@@ -2456,7 +2456,8 @@ def project_tasks(project: str) -> tuple[list[dict], list[dict]]:
                                 "start it now, and both would do the same work.") if fresh else ""
         t.update(author=by, approved=approved, startable=not t["claimed"] and not why, waiting_reason="; ".join(why),
                  needs_approval=not approved and (start == "after approval" or not trusted),
-                 stalled=bool(w) and not t["claimed"] and now - w.get("at", 0) > STALLED_AFTER)
+                 # only what may start now: a worker that put it off (start <date>) or a line waiting for approval is not stalled
+                 stalled=bool(w) and not t["claimed"] and not why and now - w.get("at", 0) > STALLED_AFTER)
     return tasks, back
 
 
@@ -4377,8 +4378,8 @@ def stalled_check() -> int:
     for project, ids in wakes.items():
         tasks = {t["id"]: t for t in project_tasks(project)[0]} if project in PROJECTS else {}
         for tid, w in ids.items():
-            if (t := tasks.get(tid)) is None:
-                gone.append((project, tid))
+            if (t := tasks.get(tid)) is None or not t["claimed"] and t["waiting_reason"]:
+                gone.append((project, tid))  # gone, or put off / waiting: its stall clock starts again at the next wake
             elif t["stalled"] and not w.get("noticed"):
                 notify(f"Knowledge: task {tid} ({project}, for {t['owner']}) was woken on {holder_name(w) or '?'} "
                        f"{int((time.time() - w.get('at', 0)) // 60)} min ago, but nobody claimed it: {t['text'][:120]}"

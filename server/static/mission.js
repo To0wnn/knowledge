@@ -239,12 +239,14 @@ function bdRender() {
   if (!bd.needs.querySelector(".ck-answer, .ck-reply, details[open]") && !selecting(bd.needs)) {
     const had = bd.needs.contains(document.activeElement) && document.activeElement.dataset.row; // the redraw keeps your place
     const h = el("h2", "bd-needs-head", `Needs you · ${needs.length}`);
+    const away = (ck.board || []).filter((i) => i.col === "needs" && !ckScope(i)).length; // as the list says it: never hidden without a word
+    if (away) { const b = el("button", "btn small ck-elsewhere", `${away} more in other projects: show all`); b.type = "button"; b.onclick = () => switchProject(ALL); h.append(" ", b); }
     h.append(" ", ckScopeSwitch());
     bd.needs.setAttribute("aria-label", `Needs you: ${needs.length}`);
     bd.needs.replaceChildren(h, ...ckBunches(needs));
     if (had) bd.needs.querySelector(`[data-row="${CSS.escape(had)}"]`)?.focus({ preventScroll: true });
   }
-  const strip = needs.length || ck.scope?.others; // nothing of yours, the others' hidden: the switch stays in reach
+  const strip = needs.length || ck.scope?.others || (ck.board || []).some((i) => i.col === "needs" && !ckScope(i)); // the switch and "other projects" stay in reach
   const order = [...(strip ? [bd.needs] : []), ...(queued.length ? [bd.queue] : []), ...(workers.length ? [bd.workers] : [])];
   if (!strip) bd.needs.remove();
   if (!queued.length) bd.queue.remove();

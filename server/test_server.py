@@ -413,6 +413,17 @@ def tasks_contract(tmp, ck, fr, ver, raw):
     while "nobody claimed it" not in matrix().get("detail", "") and time.time() < deadline:
         time.sleep(0.2)
     assert "CX-2" in matrix()["detail"] and "nobody claimed it" in matrix()["detail"], matrix()
+    # Put off by its worker (start <a later date>, the ZSH-EQ case of 12 Nov 2026): no longer stalled, and its old wake
+    # is forgotten, so the stall clock starts again when the date comes.
+    cx2 = rows()["CX-2"]["line"]
+    later = re.sub(r"start now", "start 2098-01-01", cx2)
+    assert later != cx2 and not call("knowledge_edit", {"path": path, "old_string": cx2, "new_string": later})[0]
+    assert not rows()["CX-2"]["stalled"], rows()["CX-2"]
+    deadline = time.time() + 15
+    while "CX-2" in json.loads((tmp / "task_wakes.json").read_text()).get("garden", {}) and time.time() < deadline:
+        time.sleep(0.3)
+    assert "CX-2" not in json.loads((tmp / "task_wakes.json").read_text()).get("garden", {}), "a put-off task's wake is forgotten"
+    assert not call("knowledge_edit", {"path": path, "old_string": later, "new_string": cx2})[0]
     # Hook errors a device reports: kept per token and agent, secrets masked, shown with its sessions (agy: the
     # codex errors of this token are checked later in main()).
     st = lambda b: http("POST", "/status", b, token=fr)[0]
