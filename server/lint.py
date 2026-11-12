@@ -137,7 +137,7 @@ CHANGEABLE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b|\bv?\d+\.\d+\.\d+\b")
 CHECKED = re.compile(r"\b(?:gecontroleerd|checked) (\d[^)]*?)\)", re.I)
 REVIEW_AFTER_DAYS = 45  # Guru-style review cycle; measured 21 Oct 2026: 8 of 68 such memos were older
 # Memos without IPs/versions still hold facts that drift (which host runs what, a setting); measured 12 Nov 2026:
-# 45 such memos, 14 without any date (never flagged before), none older than 90 days.
+# 18 such memos (homelab, anpitek, trade), all dated and none older than 90 days, so nothing was flagged yet.
 REVIEW_PLAIN_AFTER_DAYS = 90
 
 
