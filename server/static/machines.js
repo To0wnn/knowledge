@@ -767,7 +767,7 @@ async function filesRoute(q = shellRoute.q) {
 }
 function filesProject() { if (machinesMode === "files" && !$("tab-machines").hidden && !shellRoute.q.get("p")) { filesKey = ""; filesRoute(); } }
 // A path that is not there (a link from a chat to a file renamed since, or one only in a chat's own worktree) in words.
-const filesWhy = (m, e) => /No such file|cannot find the (file|path)/i.test(e.message)
+const filesWhy = (m, e) => /No such file|cannot find the (file|path)|WinError [23]\]/i.test(e.message) // WinError: any Windows language
   ? `This is not on ${m.label}: it may have been moved or deleted, or exist only on a chat's own branch (worktree) that is not merged yet.` : e.message;
 function filesFail(m, e) {
   filesBox.replaceChildren(errorState(`${m.label}: ${filesWhy(m, e)}`, () => { filesKey = ""; filesList = null; filesRoute(); }));
