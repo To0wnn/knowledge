@@ -1861,7 +1861,7 @@ def topic_problem(text: str, headings: list[str]) -> str:
     return "" if topic in headings else f"topic '{topic}' is no heading" if topic else "no topic"
 
 
-def lint_all() -> dict[str, list[str]]:
+def lint_all(context: bool = True) -> dict[str, list[str]]:
     """Lint every project's memory root (findings outside the homelab memory carry their root as prefix), plus the
     knowledge gaps from the graph: isolated notes and topics whose notes barely link to each other."""
     files = {rel: text for rel, text, _ in index.items() if in_scope(rel)}  # a scoped token lints only its roots
@@ -1880,6 +1880,9 @@ def lint_all() -> dict[str, list[str]]:
             report.setdefault(check, []).extend(f"claude/skills/{i}" for i in items)
     if in_scope("claude/"):  # the owner's report: a device whose auto-update stopped working
         report["plugin_behind"] = plugins_behind()
+        if context:  # building a context runs project_lint, which calls this without the check: no loop
+            report["context_near_limit"] = [x for name in list(PROJECTS)
+                                            if (x := kb_lint.context_budget(name, shared_context_parts(name, "", False, False)))]
         report["worker_unmerged"] = workers_unmerged()
         report["branch_unlanded"] = branches_unlanded()
         rows = []
@@ -2740,7 +2743,7 @@ def project_lint(mem: str) -> list[str]:
         return hit
     roots = {mem} | {d for d, m in PROJECTS.values() if m == mem}
     try:  # a lint bug must not cost a session its context
-        report = lint_all()
+        report = lint_all(context=False)
     except Exception as e:
         print(f"project_lint {mem} failed: {type(e).__name__}: {e}", flush=True)
         return []

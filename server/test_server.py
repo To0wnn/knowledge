@@ -4200,7 +4200,8 @@ def main():
         rows = [json.loads(x) for x in (tmp / "usage.jsonl").read_text().splitlines()]
         assert [(r["agent"], r["session"], r["project"], r.get("in"), r.get("out"), "cache_read" in r) for r in rows] == \
             [("codex", "use1", "trade", 5, 2, False)], rows
-        assert json.loads(http("GET", "/lint")[1])["usage_outlier"] == []
+        lint = json.loads(http("GET", "/lint")[1])
+        assert lint["usage_outlier"] == [] and lint["context_near_limit"] == [], lint["context_near_limit"]  # every project's start context built and measured
         assert http("POST", "/sessions", {"prompts": ["huge"], "cwd": "/", "session_id": "use3", "agent": "codex",
                                           "usage": {"in": -5, "out": 10 ** 400}})[0] == 200
         row = json.loads((tmp / "usage.jsonl").read_text().splitlines()[-1])

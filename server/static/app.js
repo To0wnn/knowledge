@@ -1692,6 +1692,7 @@ const LINT_INFO = {
   unprocessed_source: ["Source not turned into memos yet", "Ask Claude to process it."],
   index_line_without_heading: ["Index line outside a heading", "Move it under a ## heading."],
   index_near_load_limit: ["MEMORY.md near Claude Code's load limit", "Shorten or merge index lines."],
+  context_near_limit: ["Start context near what Claude Code loads", "Past 6 parts of 9000 characters the rest is dropped: shorten the index, the CLAUDE.md files or the open items."],
   relative_date: ["Relative date", "Write the absolute date."],
   missing_structure: ["Missing ## Stand / ## Keuzes", "Add the two sections."],
   doc_without_topic: ["Doc without topic", "Add topic: (a MEMORY.md heading) to its frontmatter."],
