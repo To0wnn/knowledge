@@ -434,8 +434,9 @@ def merged(w: dict) -> bool:
     if not tip or (tip == w.get("base") and (w.get("status") != "finished" or not Path(w.get("worktree") or "").is_dir()
                                              or git(w["worktree"], "status", "--porcelain").stdout.strip())):
         return False
-    return any(git(w["repo"], "merge-base", "--is-ancestor", tip, f"refs/heads/{b}").returncode == 0 for b in dict.fromkeys(("main", "master", w.get("base_branch")))
-               if b and git(w["repo"], "rev-parse", "-q", "--verify", f"refs/heads/{b}").returncode == 0)
+    # its upstream counts too: a deploy pushes to origin/main and leaves the local main behind
+    return any(git(w["repo"], "merge-base", "--is-ancestor", tip, ref).returncode == 0 for b in dict.fromkeys(("main", "master", w.get("base_branch")))
+               if b and git(w["repo"], "rev-parse", "-q", "--verify", f"refs/heads/{b}").returncode == 0 for ref in (f"refs/heads/{b}", f"{b}@{{upstream}}"))
 
 
 def config_hash(repo) -> str:
@@ -705,6 +706,11 @@ def self_test():
         git(w["cwd"], "add", "b.txt", check=True)
         git(w["cwd"], "commit", "-qm", "work", check=True)
         assert not merged(w)
+        git(repo, "branch", "-q", "up", w["branch"], check=True)  # stands in for origin/main after a deploy pushed
+        git(repo, "branch", "-q", "--set-upstream-to=up", "main", check=True)
+        assert merged(w), "work only main's upstream holds is merged too"
+        git(repo, "branch", "-q", "--unset-upstream", "main", check=True)
+        git(repo, "branch", "-q", "-D", "up", check=True)
         git(repo, "merge", "-q", "--ff-only", w["branch"], check=True)
         assert merged(w) and remove(w) == "worktree and branch removed" and not Path(w["worktree"]).exists()
         assert w["base_branch"] == "main"

@@ -109,7 +109,7 @@ The companion that starts workers is described in [companion.md](companion.md); 
   is aborted and reported as "conflict: merge by hand"; never pushed. **Reject** (`POST /ui/api/review/reject {key, reason,
   send_back}`) keeps the branch and takes the card off with its reason; with "send back" and a reason the result line
   becomes `- open until <date> [<agent>@<that pc's token>, <ID>-fix] from <user>, start now: ...`, which a worker on
-  that pc continues on the same branch (`<ID>-fix` keeps `start after <ID>` waiting, like `-cont`). Once the requester merged the branch into main, master or that base branch, the companion removes the
+  that pc continues on the same branch (`<ID>-fix` keeps `start after <ID>` waiting, like `-cont`). Once the requester merged the branch into main, master or that base branch (or its upstream, where a deploy pushes), the companion removes the
   worktree (also of a finished worker that committed nothing and left it clean); unmerged a week after the worker ended: lint `worker_unmerged`. A branch in a linked folder with commits not in its base, checked out nowhere and last committed over 2 days ago (work handed back or written down as done that never reached main): lint `branch_unlanded`, from the companion's `loose` branches in its report. While an online pc runs an agent's workers
   for the project (workers allowed, a maximum above 0, the agent installed, a folder linked), that agent's interactive
   sessions (`chat=1`) take no lease: they hear a new task once as "runs in workers" and where one runs; when the user
