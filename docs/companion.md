@@ -14,7 +14,8 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   with a `.knowledge-project`. Its Folders section lists the linked folders and candidates (git checkouts up to three
   levels under your home folder and folders agents worked in, also elsewhere on the pc, not in the temp folder) and
   links one to a project the token may write by writing `.knowledge-project`, as the knowledge-init skill does; unlink
-  removes only that file. "Choose a folder" browses the pc's drives and links any folder, on the companion page and in the web UI's Machines
+  removes only that file. One folder under two names (a junction or symlink, e.g. `C:\NewName` to `C:\OldName`)
+  is listed once, as its real path: the two names share one `.knowledge-project`, so unlinking one would unlink both. "Choose a folder" browses the pc's drives and links any folder, on the companion page and in the web UI's Machines
   list (the machine's owner only, as every remote action, answered through the same channel as a diff and not kept). A
   drive root, the home folder or above it and system folders are never linked. A YOLO switch per
   agent writes its native "run without asking" settings and unchecking restores the previous values (agy's only while

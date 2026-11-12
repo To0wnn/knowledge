@@ -562,7 +562,14 @@ def folder_links() -> dict:
                 cands.append(next((str(q) for q in (p, *p.parents) if q.resolve() == top.resolve()), str(top)) if top else str(p))
         except (OSError, subprocess.SubprocessError):
             continue
-    cands = sorted({c for c in cands if c not in linked and linkable(Path(c)) and (under_home(Path(c)) or not scratch(Path(c)))})
+    # One folder under two names (a junction or symlink, e.g. C:\\NewName -> C:\\OldName) is one folder: listed
+    # once, as its real path, or unlinking one name would also unlink the other (they share one .knowledge-project).
+    real = lambda p: os.path.normcase(os.path.realpath(p))  # noqa: E731
+    one = {}
+    for k in sorted(linked, key=lambda k: (real(k) != os.path.normcase(os.path.abspath(k)), k)):  # the real path first
+        one.setdefault(real(k), k)
+    linked = {k: linked[k] for k in one.values()}
+    cands = sorted({c for c in cands if c not in linked and real(c) not in one and linkable(Path(c)) and (under_home(Path(c)) or not scratch(Path(c)))})
     return {"linked": [{"path": k, "project": v} for k, v in sorted(linked.items())], "candidates": [{"path": c, "project": ""} for c in cands]}
 
 
@@ -3526,7 +3533,11 @@ def main(argv: list):
                     (h / d).mkdir(parents=True)
                 subprocess.run(["git", "init", "-q", str(h / "repo")], check=True)
                 (h / "lk" / project_marker.MARKER).write_text("p\n")
-                globals().update(HOME=h, known_folders=lambda: {str(h / d) for d in ("repo", "repo/sub", "plain", "lk")}, git_repos=lambda: [])
+                names = ["repo", "repo/sub", "plain", "lk"]
+                with contextlib.suppress(OSError):  # Windows without the symlink privilege: the junction case untested here
+                    (h / "alias").symlink_to(h / "lk", target_is_directory=True)  # the same folder under a second name
+                    names.append("alias")
+                globals().update(HOME=h, known_folders=lambda: {str(h / d) for d in names}, git_repos=lambda: [])
                 subprocess.run = lambda a, *k, **kw: calls.append(a) or real[3](a, *k, **kw)
                 try:
                     f1 = folder_links()
