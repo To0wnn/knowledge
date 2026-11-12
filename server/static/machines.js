@@ -681,8 +681,8 @@ function foldersView(res) {
   const own = res.machines.filter((m) => m.mine && !m.old && m.companion), parts = [];
   for (const s of res.stuck || []) parts.push(el("p", "machine-stuck", `${s.tasks} task${s.tasks > 1 ? "s" : ""} of ${shown(s.project)} cannot start by itself: none of your pcs has a folder linked to that project.`));
   // an admin links and unlinks on anyone's online pc too (the server checks its token allows remote control)
-  const theirs = res.machines.filter((m) => !m.mine && !m.old && m.companion), reach = (m) => m.own || (me.admin && !m.mine && m.online);
-  const lede = el("div", "mx-proj-head mx-link-bar"), hosts = [...own.filter((m) => steers(m)), ...theirs.filter((m) => me.admin && m.online)]
+  const theirs = res.machines.filter((m) => !m.mine && !m.old && m.companion), reach = (m) => m.own || (me.admin && !m.mine && m.online && m.remote !== false);
+  const lede = el("div", "mx-proj-head mx-link-bar"), hosts = [...own.filter((m) => steers(m)), ...theirs.filter((m) => me.admin && m.online && m.remote !== false)]
     .filter((m) => (m.companion.projects || []).length);
   lede.append(el("p", "muted", "Which folder on which pc belongs to which project. An agent started in a linked folder gets that project's memory and docs, and workers of that project may start there."));
   // one way to link: the dialog asks for the pc, a folder on it, then the project

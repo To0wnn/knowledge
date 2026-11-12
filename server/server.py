@@ -3274,6 +3274,8 @@ def machine_rows() -> list[dict]:
         rows.append({"id": mid, "label": m.get("label", mid), "at": m.get("at", 0), "online": now - m.get("at", 0) < ONLINE,
                      "tokens": names, "own": any(own_token(tokens[n], dev) for n in names), "agents": agents,
                      "mine": any(own_token(tokens[n], dev, steer=False) for n in names), "shared": shared,
+                     # its token allows remote control: what an admin may do there (link, unlink, update the plugin)
+                     "remote": any(agents_on(tokens[n]) for n in names),
                      "companion": {**{k: comp.get(k) for k in ("version", "self", "at", "workersAllowed", "game", "stats", "maxAgents", "folders", "projects", "token", "live", "chats", "chatReviews", "asks", "tools", "guests")},
                                    "agents": sorted(comp.get("agents") or {}),
                                    "models": {a: v.get("models", []) for a, v in (comp.get("agents") or {}).items()},

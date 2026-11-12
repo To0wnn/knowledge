@@ -3712,6 +3712,12 @@ def main():
         assert admin("/ui/api/machines/action", {"machine": "eeeeeeeeeeeeeeee", "action": "unlink_folder", "args": {"path": "/home/x/apples"}})[0] == 200
         assert admin("/ui/api/machines/action", {"machine": "eeeeeeeeeeeeeeee", "action": "unlink_folder", "args": {"path": "/home/x/apples"}}, user("erin"))[0] != 200
         assert admin("/ui/api/git/diff", {"machine": "eeeeeeeeeeeeeeee", "dirs": ""})[0] == 200
+        barn = lambda: next(m for m in json.loads(raw("GET", "/ui/api/machines", headers=ck)[2])["machines"] if m["id"] == "eeeeeeeeeeeeeeee")  # noqa: E731
+        assert barn()["remote"] is True
+        assert admin("/ui/api/admin/token", {"name": "orchard-pc", "update": True, "agents": False})[0] == 200  # remote control off
+        assert barn()["remote"] is False and admin("/ui/api/git/diff", {"machine": "eeeeeeeeeeeeeeee", "dirs": ""})[0] != 200
+        assert admin("/ui/api/machines/action", {"machine": "eeeeeeeeeeeeeeee", "action": "unlink_folder", "args": {"path": "/x"}})[0] == 403
+        assert admin("/ui/api/admin/token", {"name": "orchard-pc", "update": True, "agents": True})[0] == 200
         assert admin("/ui/api/git/diff", {"machine": "eeeeeeeeeeeeeeee", "dirs": ""}, user("erin"))[0] != 200
         acts = json.loads(http("GET", "/machine/actions", token=ot, headers=opc)[1])["actions"]
         assert [(x["action"], x["by"]) for x in acts] == [("unlink_folder", "alice")], acts
