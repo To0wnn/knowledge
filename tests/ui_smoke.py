@@ -1495,14 +1495,22 @@ async def review(browser, devices, secret: str) -> None:
             "files": ["beds/schedule.py", "beds/test_schedule.py", "README.md"], "commit": "feat(beds): water by soil moisture",
             "done": "schedule reads the soil sensor, tests pass (pytest)", "left": "nothing", "tests": "tests pass (pytest)",
             "git": {"branch": "task/KN-42", "base": "main", "changed": 0, "ahead": 3, "behind": 0}, "can_merge": True}
+    chat = {**item, "id": "c" * 12, "chat": "c" * 12, "task": "c" * 12, "key": "review:" + "f" * 16 + "/garden/chat-" + "c" * 12, "sig": "s2",
+            "title": "Review chat · soil sensor", "line": "1 commit on the chat branch for main", "branch": "chat/" + "c" * 12, "commits": 1, "nfiles": 1, "files": ["beds/schedule.py"]}
+    # the stat line starts with a space as a context line does, and an untracked name: neither may be commented
+    diff = ("task/KN-42 against main: 3 ahead, 0 behind, 0 changed\n\n beds/schedule.py | 3 ++-\n 1 file changed\n ?? beds/notes.txt\n\n"
+            "diff --git a/beds/schedule.py b/beds/schedule.py\nindex 1111111..2222222 100644\n--- a/beds/schedule.py\n+++ b/beds/schedule.py\n"
+            "@@ -10,3 +12,4 @@ def plan():\n keep = 1\n-    every = 24\n+    every = 48\n+    check(soil)\n done = 2\n")
 
     async def fake(route):
         path = urlsplit(route.request.url).path
-        if route.request.method == "POST" and path in ("/ui/api/machines/action", "/ui/api/review/reject"):
+        if route.request.method == "POST" and path in ("/ui/api/machines/action", "/ui/api/review/reject", "/ui/api/chat/send"):
             sent.append((path, json.loads(route.request.post_data or "{}")))
             return await route.fulfill(json={"ok": True, "id": "abc123", "line": ""})
+        if path == "/ui/api/git/diff":
+            return await route.fulfill(json={"id": "d1"} if route.request.method == "POST" else {"status": "done", "text": diff, "error": None})
         if path == "/ui/api/board" and route.request.method == "GET":
-            return await route.fulfill(json={"items": [item], "now": now})
+            return await route.fulfill(json={"items": [item, chat], "now": now})
         await route.continue_()
     shots = os.environ.get("KNOWLEDGE_SMOKE_SHOTS", "")
     for name, dev in (("desktop", {"viewport": {"width": 1440, "height": 900}}), ("phone", devices["iPhone 14"])):
@@ -1546,6 +1554,36 @@ async def review(browser, devices, secret: str) -> None:
         await quiet(pg)
         check(sent[-1] == ("/ui/api/review/reject", {"key": item["key"], "reason": "water less often", "send_back": True}),
               f"{name}: Send back sends the remark and send back {sent[-1:]}")
+        # comments on diff lines: a worker's card sends them back as its -fix reason, a chat's as the chat's next message
+        lines = pg.locator("#ck-diff-body pre.diff .diff-at")
+        for it, route, want in ((item, "/ui/api/review/reject", lambda text: {"key": item["key"], "reason": text, "send_back": True}),
+                                (chat, "/ui/api/chat/send", lambda text: {"machine": chat["machine"], "id": chat["chat"], "text": text})):
+            c = pg.locator(f'#ck-list .ck-sec-review .ck-item[data-key="{it["key"]}"]')
+            await c.hover()
+            await c.get_by_role("button", name="View diff").click()
+            await lines.first.wait_for(timeout=15000)
+            at = await lines.evaluate_all("els => els.map((e) => e.dataset.at)")
+            check(at == ["beds/schedule.py:12", "beds/schedule.py:old line 11", "beds/schedule.py:13", "beds/schedule.py:14", "beds/schedule.py:15"],
+                  f"{name}: line numbers from the hunk header, the removed line on the old side, no stat or untracked line {at}")
+            await lines.nth(2).click()
+            note = pg.locator("#ck-diff-body .diff-note textarea")
+            check(await note.evaluate("(e) => e === document.activeElement"), f"{name}: a click on a line opens a focused note box")
+            await note.fill("48 is too long")
+            await note.press("Escape")
+            check(await pg.locator("#ck-diff-dialog").evaluate("(d) => d.open") and await pg.locator("#ck-diff-body .diff-note.saved").count() == 1,
+                  f"{name}: Esc folds the note box to its text and leaves the dialog open")
+            await lines.nth(1).focus()
+            await lines.nth(1).press("Enter")
+            await note.fill("why not 36?")
+            await pg.locator("#ck-diff-body .diff-note").get_by_role("button", name="Done").click()
+            send = pg.locator("#ck-diff-send")
+            check(await send.inner_text() == "Send 2 comments", f"{name}: the send button counts the comments {await send.inner_text()!r}")
+            await send.click()
+            await quiet(pg)
+            text = (f"Review comments on branch {it['branch']}:\n\nbeds/schedule.py:old line 11\n> -    every = 24\nwhy not 36?"
+                    "\n\nbeds/schedule.py:13\n> +    every = 48\n48 is too long")
+            check(sent[-1] == (route, want(text)), f"{name}: the comments go as one message to {route} {sent[-1:]}")
+            check(not await pg.locator("#ck-diff-dialog").evaluate("(d) => d.open"), f"{name}: sent, the diff closes")
         check(not errors, f"{name}: no page errors on the review card {errors[:2]}")
         await ctx.close()
 
@@ -1692,6 +1730,60 @@ DS_JS = """() => {
   for (const a of document.querySelectorAll('a[href]')) if (vis(a) && getComputedStyle(a).color === 'rgb(0, 0, 238)') out.bad.push(`blue link ${a.textContent.trim().slice(0, 30)}`);
   return out;
 }"""
+
+
+async def chat_text_search(browser, secret: str) -> None:
+    """Search in chat text: 3+ characters in the chat filter add a group "In chat text" under the title matches (GET
+    /ui/api/chats/search); a click opens the chat with Find filled in and run. All requests are intercepted. Skipped on
+    a server without it."""
+    import json
+    import time
+    from urllib.parse import urlsplit, parse_qs
+    now, asked, mid = time.time(), [], "d" * 16
+    pc = {"id": mid, "label": "smoke-pc", "online": True, "own": True, "at": now, "tokens": ["smoke"], "actions": [],
+          "companion": {"agents": ["claude"], "folders": {"linked": []}}, "agents": {}}
+    chat = {"id": "0a0b0c0d0e0f", "agent": "claude", "folder": "/home/x/garden", "project": "garden", "title": "Fix the docs", "status": "idle",
+            "machine": mid, "label": "smoke-pc", "online": True, "updated": now - 3600, "closed": True, "sub_list": [], "subs": 0, "rights": "act"}
+    events = [{"n": 1, "at": now, "kind": "user", "text": "where does the quokka sleep?"}, {"n": 2, "at": now, "kind": "text", "text": "The Quokka sleeps in the shed."}]
+
+    async def fake(route):
+        u = urlsplit(route.request.url)
+        if u.path == "/ui/api/chats/search":
+            asked.append(parse_qs(u.query)["q"][0])
+            return await route.fulfill(json={"chats": [{**chat, "hits": 2, "snippets": ["where does the quokka sleep?"]}]})
+        replies = {"/ui/api/machines": {"machines": [pc]}, "/ui/api/chats": {"chats": [chat]}, "/ui/api/board": {"items": [], "now": now},
+                   "/ui/api/chat": {"chat": chat, "events": events, "trimmed": False, "online": True, "at": now, "label": "smoke-pc", "asks": [], "now": now}}
+        if u.path in replies and route.request.method == "GET":
+            return await route.fulfill(json=replies[u.path])
+        await route.continue_()
+    ctx = await browser.new_context(ignore_https_errors=True, bypass_csp=True, viewport={"width": 1440, "height": 900},
+                                    extra_http_headers={"X-Knowledge-Proxy": secret, "X-authentik-username": USER})
+    await ctx.route("**/ui/api/**", fake)
+    await ctx.add_init_script("localStorage.setItem('kn_project', 'all')")
+    await ctx.add_init_script(BUSY_JS)
+    pg = await ctx.new_page()
+    errors = []
+    pg.on("pageerror", lambda e: errors.append(str(e)))
+    await pg.goto(URL + "/ui#/chats?view=list")
+    await pg.wait_for_selector("#ck-filter", state="attached")
+    if not await pg.evaluate("typeof ckTextSearch === 'function'"):
+        print("skip chat text search (server without it)")
+        return await ctx.close()
+    await pg.wait_for_function("ck.ready", timeout=15000)
+    await pg.fill("#ck-filter", "qu")
+    await quiet(pg, 400)
+    check(not asked and not await pg.locator(".ck-hits-head").count(), "chat text search: not under 3 characters")
+    await pg.fill("#ck-filter", "quokka")
+    await pg.wait_for_selector(".ck-hits-head", timeout=15000)
+    row = await pg.evaluate("[...document.querySelectorAll('#ck-history .ck-hit')].map(b => b.textContent)")
+    check(asked[-1:] == ["quokka"] and len(row) == 1 and "Fix the docs" in row[0] and "2 hits · archived" in row[0] and "quokka sleep" in row[0],
+          f"chat text search: a group In chat text with the chat, its hits, archived, a snippet {asked} {row}")
+    await pg.locator("#ck-history .ck-hit").click()
+    ok = await comes_true(pg, """(() => { const c = ck.cards.get(ck.view), f = c && c.find;
+      return !!f && !f.bar.hidden && f.q.value === 'quokka' && f.count.textContent === '2 of 2'; })()""")
+    check(ok, "chat text search: a click opens the chat with Find on the words, its hits counted")
+    check(not errors, f"chat text search: no page errors {errors}")
+    await ctx.close()
 
 
 async def live_refresh(browser, secret: str) -> None:
@@ -2598,6 +2690,7 @@ async def main() -> None:
                   (grid_groups, browser, secret),
                   (board, browser, p.devices, secret),
                   (follow, browser, p.devices, secret),
+                  (chat_text_search, browser, secret),
                   (live_refresh, browser, secret),
                   (two_windows, browser, secret),
                   (update_button, browser, secret),

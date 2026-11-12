@@ -210,6 +210,21 @@ function ckList() {
     li.append(b); hist.append(li, ...ckSubRows(c));
   }
   $("ck-earlier-n").textContent = rows.length;
+  // 3 characters or more also search inside the chats (open and archived): a second group under the title matches
+  const q = ck.filter.trim(), listed = new Set(rows.slice(0, 60).map(ckKey));
+  if (q.length < 3) ck.textQ = "";
+  else if (ck.textQ !== q) { ck.textQ = q; ck.textHits = null; ckTextSearch(q); }
+  const inText = q.length >= 3 ? (ck.textHits || []).filter((c) => ckScope(c) && !listed.has(ckKey(c))) : [];
+  if (inText.length) hist.append(el("li", "ck-hits-head", "In chat text"));
+  for (const c of inText) {
+    const li = el("li"), b = el("a", `ck-chat ck-hit ${ckState(c)}`);
+    b.href = `#/chats/${encodeURIComponent(c.id)}?solo=1`; b.dataset.row = `hit:${ckKey(c)}`;
+    b.append(el("span", "ck-dot", ""), el("span", "ck-chat-title", c.title || "(no message yet)"),
+      el("small", null, `${c.hits} hit${c.hits > 1 ? "s" : ""}${c.closed ? " · archived" : ""} · ${c.label} · ${ago(c.updated)}`),
+      ...c.snippets.slice(0, 1).map((x) => el("small", "muted", x)));
+    b.onclick = (e) => { if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return; e.preventDefault(); ckCard(c).findQ = q; ckShow(c); }; // opens with Find on the words
+    li.append(b); hist.append(li);
+  }
   if (!hist.childNodes.length) hist.append(!ck.chats.length && pcs ? el("li", null, emptyState("No chats yet: talk to an agent on one of your pcs.", actionButton("New chat", () => $("ck-new").click(), "btn small primary")))
     : el("li", "muted ck-none", !ck.chats.length ? "No chats yet." : words.length ? "No chat matches." : closed ? "No archived chats." : "No earlier chats here."));
   if (had) side.querySelector(`[data-row="${CSS.escape(had)}"]`)?.focus({ preventScroll: true }); // the refresh keeps your place
@@ -219,6 +234,11 @@ function ckList() {
   ckFocus();
 }
 let ckFilterTimer;
+async function ckTextSearch(q) {
+  let hits = [];
+  try { hits = (await api(`/ui/api/chats/search?q=${encodeURIComponent(q)}`)).chats; } catch { /* the title matches still show */ }
+  if (ck.textQ === q) { ck.textHits = hits; ckList(); } // typed on meanwhile: that search answers
+}
 $("ck-filter").oninput = () => { clearTimeout(ckFilterTimer); ckFilterTimer = setTimeout(() => { ck.filter = $("ck-filter").value; ckList(); }, 120); };
 $("ck-closed").onclick = () => { $("ck-closed").setAttribute("aria-pressed", String($("ck-closed").getAttribute("aria-pressed") !== "true")); ckList(); };
 $("ck-side").addEventListener("keydown", (e) => { // up and down go through the rows; Enter opens one (it is a button)
@@ -711,6 +731,14 @@ async function ckDiff(i) {
   $("ck-diff-title").textContent = `Changes · ${i.title}`;
   $("ck-diff-where").textContent = `${i.label} · ${i.chat ? i.branch : i.kind === "worker" || i.kind === "review" ? `worker ${i.id}` : i.folder}${i.git ? ` · ${ckGitText(i.git)}` : ""}`;
   say("muted", `Asking ${i.label}…`);
+  ckDiffTo = ckDiffTarget(i); ckNotes.clear(); ckNotesCount();
+  // an "Own branch" chat on your own pc, idle: Roll back its last turn (files only), or Undo that until the next message
+  const c = i.kind === "chat" && ck.machines.some((m) => m.id === i.machine) && ck.chats.find((x) => ckKey(x) === `${i.machine}/${i.id}`);
+  const rb = $("ck-diff-rollback");
+  rb.hidden = !(c?.worktree && i.online && !ckBusy(c.status));
+  rb.textContent = c?.rolled_back ? "Undo roll back" : "Roll back last turn";
+  rb.className = c?.rolled_back ? "btn" : "btn danger";
+  rb.onclick = () => ckRollback(i, !!c?.rolled_back);
   if (!$("ck-diff-dialog").open) $("ck-diff-dialog").showModal();
   try {
     const { id } = await api("/ui/api/git/diff", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -720,12 +748,73 @@ async function ckDiff(i) {
       const d = await api(`/ui/api/git/diff?machine=${i.machine}&id=${id}`);
       if (d.status !== "done") continue;
       if (d.error) return say("error", d.error);
-      return body.replaceChildren(d.text.trim() ? diffView(d.text) : el("p", "muted", "No changes."));
+      return body.replaceChildren(d.text.trim() ? diffView(d.text, ckDiffTo ? { comment: ckNote } : {}) : el("p", "muted", "No changes."));
     }
     if (ask === ckDiffAsk && $("ck-diff-dialog").open) say("error", `${i.label} did not answer: its companion may be older than 0.17 or busy.`);
   } catch (e) { say("error", e.message); }
 }
-$("ck-diff-close").onclick = () => $("ck-diff-dialog").close();
+// Comments on a diff's lines go back as one message to whoever made it: a chat gets its next message (a closed one
+// opens again), a running worker a steer, a finished one's Review card sends it back as <ID>-fix. Anything else (a
+// folder, someone else's chat you may only read, a worker with no card) gets no comment UI.
+function ckDiffTarget(i) {
+  const post = (path, body) => (text) => ckDo(path, { ...body, text });
+  if (i.kind === "review" && i.chat) return { branch: i.branch, send: post("/ui/api/chat/send", { machine: i.machine, id: i.chat }) };
+  if (i.kind === "chat" && (ck.chats || []).find((c) => ckKey(c) === ckKey(i))?.rights === "act") return { branch: i.git?.branch, send: post("/ui/api/chat/send", { machine: i.machine, id: i.id }) };
+  if (i.kind === "worker" && i.status === "running") return { branch: i.git?.branch, send: post("/ui/api/worker/steer", { machine: i.machine, worker: `${i.project}/${i.id}` }) };
+  const card = i.kind === "review" ? i : i.kind === "worker" && (ck.board || []).find((r) => r.kind === "review" && !r.chat && r.machine === i.machine && r.project === i.project && r.id === i.id);
+  return card ? { branch: card.branch, send: (text) => ckRejectPost(card, text, true) } : null;
+}
+let ckDiffTo = null;
+const ckNotes = new Map(); // line index in the open diff -> {at, line, text}
+function ckNotesText(branch) {
+  return [`Review comments${branch ? ` on branch ${branch}` : ""}:`,
+    ...[...ckNotes].sort((a, b) => a[0] - b[0]).map(([, c]) => `\n${c.at}\n> ${c.line}\n${c.text}`)].join("\n");
+}
+function ckNotesCount() {
+  const b = $("ck-diff-send"), n = ckNotes.size;
+  b.hidden = !n; b.textContent = `Send ${n} comment${n === 1 ? "" : "s"}`;
+}
+// The note box under a diff line: typing keeps the note, Done or Esc folds it to its text (a click opens it again).
+function ckNote(at, n, span) {
+  span.nextElementSibling?.classList.contains("diff-note") && span.nextElementSibling.remove();
+  const box = el("div", "diff-note"), input = el("textarea"), done = el("button", "btn small", "Done"), drop = el("button", "btn small quiet", "Remove");
+  done.type = drop.type = "button"; input.rows = 2; input.maxLength = 2000; input.placeholder = "What should change here?";
+  input.setAttribute("aria-label", `Comment on ${at}`); input.value = ckNotes.get(n)?.text || "";
+  const shut = () => {
+    const text = input.value.trim();
+    if (text) ckNotes.set(n, { at, line: span.textContent.replace(/\n$/, ""), text }); else ckNotes.delete(n);
+    span.classList.toggle("noted", !!text); ckNotesCount();
+    if (text) { const shown = el("div", "diff-note saved", text); shown.title = "Edit this comment"; shown.onclick = () => ckNote(at, n, span); box.replaceWith(shown); }
+    else box.remove();
+    span.focus();
+  };
+  done.onclick = shut;
+  drop.onclick = () => { input.value = ""; shut(); };
+  input.onkeydown = (e) => { if (e.key === "Escape" && !e.isComposing) { e.preventDefault(); e.stopPropagation(); shut(); } };
+  const acts = el("div", "diff-note-acts"); acts.append(done, drop);
+  box.append(input, acts); span.after(box); input.focus();
+}
+const ckDiffShut = () => !ckNotes.size || confirm(`Close without sending ${ckNotes.size === 1 ? "your comment" : `your ${ckNotes.size} comments`}?`);
+$("ck-diff-close").onclick = () => ckDiffShut() && $("ck-diff-dialog").close();
+$("ck-diff-dialog").addEventListener("cancel", (e) => { if (!ckDiffShut()) e.preventDefault(); });
+$("ck-diff-send").onclick = async () => {
+  const b = $("ck-diff-send"), to = ckDiffTo;
+  if (!to || !ckNotes.size || b.disabled) return;
+  b.disabled = true;
+  if (await to.send(ckNotesText(to.branch))) { toast(`Sent ${b.textContent.slice(5)}`, false); ckNotes.clear(); ckNotesCount(); $("ck-diff-dialog").close(); }
+  b.disabled = false;
+};
+async function ckRollback(i, undo) {
+  if (!ckDiffShut()) return; // its unsent line comments
+  if (!confirm(undo ? `Undo the roll back of "${i.title}"?\n\nIts worktree gets back the files and commits it had before the roll back; what changed there since is kept as a checkpoint.`
+    : `Roll "${i.title}" back to before its last turn?\n\nLost from its worktree: every change since that turn began, the agent's and your own edits there, and commits made in it (the branch moves back). They are kept as a checkpoint: Undo roll back brings them back until the next message.\n\nKept: the conversation (the agent is told with your next message) and files git ignores.`)) return;
+  try {
+    await api("/ui/api/machines/action", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ machine: i.machine, action: "rollback", args: { project: i.project, id: i.id, chat: true, ...(undo ? { undo: true } : {}) } }) });
+    $("ck-diff-dialog").close(); toast(`Asked ${i.label} to ${undo ? "undo the roll back" : "roll back the last turn"}; the chat says when it is done`, false);
+  } catch (e) { toast(e.message); }
+  ck.summaryAt = 0; ckTick();
+}
 
 const CK_CMDS = Object.assign(new Map(), { seq: 0 }); // "machine/agent" -> {at, list: Promise}; seq: a box's list id
 function ckCard(meta) {
@@ -1520,6 +1609,7 @@ async function ckPoll(card) {
   ckSubbar(card); // its background shells come with the chat's meta
   ckAsks(card, res.asks || [], (res.now || Date.now() / 1000) - Date.now() / 1000);
   ckPaint(card);
+  if (card.findQ) { card.find.q.value = card.findQ; card.findQ = ""; ckFindOpen(card); } // opened from a hit in chat text
 }
 const CK_ICON = { // inline, in the text colour
   find: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg>',
@@ -2037,7 +2127,7 @@ function ckWorkerPaint(card) {
     const act = (text, title, fn) => { const b = el("button", "btn small", text); b.type = "button"; b.title = title; b.onclick = fn; card.acts.append(b); };
     if (card.online && run) act("Stop", "Stop this worker (this pc keeps its lease until it runs out)", () => ckWorkerAct(card, "stop_worker"));
     if (card.online && w.status === "failed") act("Restart", "Start this worker again now", () => ckWorkerAct(card, "restart"));
-    if (w.review || w.git) act("Review", "The changes on its branch, read on that pc", () => ckDiff({ kind: "worker", machine: m.machine, project: w.project, id: w.id, title: w.id, label: m.label }));
+    if (w.review || w.git) act("Review", "The changes on its branch, read on that pc", () => ckDiff({ kind: "worker", machine: m.machine, project: w.project, id: w.id, title: w.id, label: m.label, status: w.status }));
     if (card.online && !w.chat && w.status !== "merged") act("Take over", "Stop the worker and go on with its conversation as a chat on that pc", () => ckWorkerAct(card, "takeover"));
     if (w.chat) act("Open chat", "The chat this worker became", () => go(`#/chats/${encodeURIComponent(w.chat)}`));
     if (!run && !w.merged && w.checkpoint) act("Roll back", "Put its worktree back as it was before its last turn (a checkpoint of now is kept)", () => confirm(`Roll ${w.id} back to before its last turn?`) && ckWorkerAct(card, "rollback"));
