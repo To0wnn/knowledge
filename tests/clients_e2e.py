@@ -3716,6 +3716,31 @@ PHASE_SHARD = {"chat_e2e": 1, "companion_e2e": 2,
                "claude_stored_token": 3, "folder_link": 3,
                "companion_tools_e2e": 4, "companion_folders_e2e": 4, "honest_errors": 4, "hook_errors": 4}
 SHARDS = max(PHASE_SHARD.values()) + 1
+# Phases that put a token in the real OS keyring: the Windows Credential Manager and the macOS Keychain belong to the OS
+# user, not to a test HOME, so all shards share them. Run side by side, the installer saw script_mcp's token there, left
+# Claude's option unset and failed (12 Nov 2026); they take turns under a lock file the shards share.
+KEYRING_PHASES = {"script_mcp", "installer"}
+
+
+@contextlib.contextmanager
+def keyring_turn():
+    lock = os.environ.get("KNOWLEDGE_E2E_KEYRING_LOCK")
+    if not lock:
+        yield
+        return
+    until = time.monotonic() + 600
+    while True:
+        try:
+            os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            break
+        except FileExistsError:
+            if time.monotonic() > until:
+                raise TimeoutError(f"another shard held {lock} for 10 minutes")
+            time.sleep(0.2)
+    try:
+        yield
+    finally:
+        os.unlink(lock)
 
 
 def shards() -> int:
@@ -3725,7 +3750,7 @@ def shards() -> int:
         for i in range(SHARDS):
             log = open(Path(t) / f"shard{i}.log", "w+", encoding="utf-8")
             runs.append((subprocess.Popen([sys.executable, __file__, "--shard", str(i)], stdout=log, stderr=subprocess.STDOUT,
-                                          env={**os.environ, "PYTHONIOENCODING": "utf-8"}), log))
+                                          env={**os.environ, "PYTHONIOENCODING": "utf-8", "KNOWLEDGE_E2E_KEYRING_LOCK": str(Path(t) / "keyring.lock")}), log))
         codes = [proc.wait() for proc, _ in runs]
         for i, (_, log) in enumerate(runs):
             log.seek(0)
@@ -3744,7 +3769,8 @@ def main():
             def timed(*a, _f=f, _name=name, **k):
                 t0 = time.monotonic()
                 try:
-                    return _f(*a, **k)
+                    with keyring_turn() if _name in KEYRING_PHASES else contextlib.nullcontext():
+                        return _f(*a, **k)
                 finally:
                     print(f"phase {_name}: {time.monotonic() - t0:.1f} s", flush=True)
             globals()[name] = timed
@@ -3816,6 +3842,7 @@ PHASES = {"claude_plugin", "folder_link", "offline", "skills", "agents", "script
           "no_session_log_e2e", "limits_e2e", "plugin_versions", "relay_errors", "honest_errors", "hook_errors", "terminal_asks",
           "knowledge_home", "companion_e2e", "companion_tools_e2e", "companion_folders_e2e", "chat_e2e", "follow_e2e", "background_flags", "import_e2e", "installer",
           "installer_progress", "companion_setup", "checkout_update", "claude_stored_token", "codex_worker_sandbox", "real_clis"}
+assert KEYRING_PHASES <= PHASES, KEYRING_PHASES - PHASES
 
 
 if __name__ == "__main__":
