@@ -202,7 +202,8 @@ def resolve(path: str, scoped: bool = True) -> tuple[Path, str]:
         elif len(hits) > 1:
             raise ToolError(f"multiple files named '{clean}': {hits}")
     root, _, rest = clean.partition("/")
-    if root not in ROOTS and "ALIASES_FILE" in globals() and (now := canon(root.removesuffix("-memory"))) in PROJECTS:
+    if root not in ROOTS and "ALIASES_FILE" in globals() and root.removesuffix("-memory") in read_json(ALIASES_FILE, {}) \
+            and (now := canon(root.removesuffix("-memory"))) in PROJECTS:
         root = PROJECTS[now][root.endswith("-memory")]  # a path from before a rename (rename_project)
     if root not in ROOTS or not rest:
         raise ToolError(f"path must start with one of {sorted(r for r in ROOTS if in_scope(r + '/'))}/, e.g. memory/MEMORY.md")
@@ -2192,7 +2193,7 @@ def project_for(directory: str) -> str:
         return "trade"
     # UI projects match a directory name below the home directory (deepest first), never /home or the user name.
     below = parts[3:] if parts[1:2] == ["home"] else parts[1:]
-    extra = next((canon(d) for d in reversed(below) if canon(d) in PROJECTS and canon(d) not in BUILTIN_PROJECTS), None)
+    extra = next((d for d in reversed(below) if d in PROJECTS and d not in BUILTIN_PROJECTS), None)
     if extra:
         return extra
     return "anpitek" if "anpitek" in PROJECTS and "anpitek" in parts else "homelab"
@@ -3528,13 +3529,15 @@ def rename_state_files() -> list[Path]:
     return sorted({f for f in files if f.is_file() and f != SECRETS_FILE})
 
 
-def rename_project(old: str, new: str) -> dict:
+def rename_project(old: str, new: str, memo_roots: set | None = None) -> dict:
     """Rename a project made in the web UI, keeping everything: a tar of all it touches first, then its folder, history,
     trash copies, every state file (tokens, people, shares, tasks, chats, workers, linked folders), the paths in memos,
     and the index in RAM (no file looks new or removed, so the history gets no fork). The old name stays an alias, so a
     folder whose .knowledge-project still says it, a client with old paths, or a link in a mirrored doc keep working;
-    the companions are asked to rewrite their folders' .knowledge-project. A failure before the memos are touched puts
-    everything back as it was; the tar is the way back after that. Runs under _admin_lock (one admin change at a time)."""
+    the companions count those folders and workers under the new name (the report's answer carries the aliases). A
+    failure before the memos are touched puts everything back as it was; the tar is the way back after that.
+    `memo_roots`: rewrite paths only in these memory roots (a person renaming: the projects they may write), None = all.
+    Runs under _admin_lock (one admin change at a time)."""
     if old not in PROJECTS or old in BUILTIN_PROJECTS:
         raise ToolError(f"{old}: only a project made in the web UI can be renamed")
     check_new_name(new, renaming=old)
@@ -3548,7 +3551,8 @@ def rename_project(old: str, new: str) -> dict:
     pat = re.compile(rf"(^|[:/\t]){re.escape(old)}(-memory)?(?=/|$)")
     sub = lambda s: pat.sub(lambda m: m[1] + new + (m[2] or ""), s)  # noqa: E731
     # top-level keys there name tokens, people or pcs (a token may well be called like its project)
-    by_name = {TOKENS_FILE, CLIENTS_FILE, USERS_FILE, MACHINES_FILE, LAST_USED_FILE, PLUGIN_SEEN_FILE, REVOKED_TOKENS, STATUS_FILE}
+    by_name = {TOKENS_FILE, CLIENTS_FILE, USERS_FILE, MACHINES_FILE, LAST_USED_FILE, PLUGIN_SEEN_FILE, REVOKED_TOKENS, STATUS_FILE,
+               PREFS_FILE, MATRIX_TOKENS_FILE, BOARD_DISMISSED}
 
     def walk(x, key: str = "", top: bool = False):
         if isinstance(x, dict):
@@ -3567,6 +3571,7 @@ def rename_project(old: str, new: str) -> dict:
             x.unlink()
     backup = backups / f"rename-{old}-{new}-{time.strftime('%Y%m%d-%H%M%S')}.tar.gz"
     tar = tarfile.open(backup, "w:gz")
+    os.chmod(backup, 0o600)  # chats and people's state: as private as the files it copies
     tar.add(PROJECTS_DIR / old, f"projects/{old}")
     for src, _ in hist:
         tar.add(src, f"history/{src.name}")
@@ -3576,13 +3581,6 @@ def rename_project(old: str, new: str) -> dict:
     with _task_lock, notices_locked(), index.refreshing:  # no task state, notice or index change in between
         try:
             files = rename_state_files()
-            for f in files + [PROJECTS_FILE, ALIASES_FILE]:
-                if f.is_file():
-                    tar.add(f, f"state/{f.relative_to(f.anchor)}")
-            tar.close()
-            # the folders the companions report as linked to the old name, before machines.json says the new one
-            linked = [(mid, f["path"]) for mid, m in read_json(MACHINES_FILE, {}).items()
-                      for f in ((m.get("companion") or {}).get("folders") or {}).get("linked") or [] if f.get("project") == old]
             # 2. every new state first, in RAM; nothing on disk changed yet
             writes: list[tuple[Path, Path, object]] = []  # (old file, new file, data)
             for f in files:
@@ -3598,6 +3596,10 @@ def rename_project(old: str, new: str) -> dict:
                         and re.fullmatch(r"[0-9a-f]{16}", f.parent.parent.name) else f
                     writes.append((f, dst, out))
                     undo.append(("bytes", f, raw_text))
+            for f in [f for f, _, _ in writes] + [PROJECTS_FILE, ALIASES_FILE]:  # only the state files this changes
+                if f.is_file():
+                    tar.add(f, f"state/{f.relative_to(f.anchor)}")
+            tar.close()
             aliases = {k: (new if v == old else v) for k, v in read_json(ALIASES_FILE, {}).items() if k != new}
             for f in (PROJECTS_FILE, ALIASES_FILE):
                 undo.append(("bytes", f, f.read_text() if f.is_file() else None))
@@ -3667,7 +3669,8 @@ def rename_project(old: str, new: str) -> dict:
     memos, failed = [], []
     for rel, text, _ in index.items():
         # session logs and archives are history: kept as written (their old paths still resolve through the alias)
-        if not mem_of(rel) or is_archive(rel) or rel.split("/")[1:2] == ["sessions"] or old not in text or rewrite(text) == text:
+        if not mem_of(rel) or is_archive(rel) or rel.split("/")[1:2] == ["sessions"] or old not in text or rewrite(text) == text \
+                or memo_roots is not None and rel.split("/", 1)[0] not in memo_roots | {roots[f"{old}-memory"]}:
             continue
         try:
             full, rel = resolve(rel, scoped=False)
@@ -3681,29 +3684,9 @@ def rename_project(old: str, new: str) -> dict:
             memos.append(rel)
         except (ToolError, OSError, UnicodeDecodeError) as e:
             failed.append(f"{rel}: {e}")
-    relinked = [mid for mid, path in linked if relink_folder(mid, path, new)]
-    audit("admin-project-rename", f"{old} -> {new}")
+    audit("admin-project-rename", f"{old} -> {new}" + (f"; left behind {left}" if left else "") + (f"; memos not rewritten {failed}" if failed else ""))
     return {"ok": True, "project": new, "backup": str(backup), "state_files": len(writes), "history": len(hist),
-            "trash": len(trash), "memos": memos, "memos_failed": failed, "relinked": relinked, "left_behind": left}
-
-
-def relink_folder(mid: str, path: str, project: str) -> bool:
-    """Ask a pc's companion to rewrite a folder's .knowledge-project to the project's current name (once: not while
-    the same request waits). Until it has, the old name still works through the alias."""
-    tokens = read_json(TOKENS_FILE, {})
-    mine = [n for n in (read_json(MACHINES_FILE, {}).get(mid) or {}).get("tokens", {}) if n in tokens and agents_on(tokens[n])]
-    if not mine:
-        return False
-    args = {"path": path, "project": project}
-    item = {"id": secrets.token_hex(6), "action": "link_folder", "args": args, "by": "rename", "at": time.time(),
-            "status": "waiting", "tokens": mine}
-
-    def change(d):
-        if not any(a.get("action") == "link_folder" and a.get("args") == args for a in d.get(mid, [])):  # asked once; a failure shows on Machines
-            d[mid] = (d.get(mid, []) + [item])[-50:]
-    update_state(MACHINE_ACTIONS, change)
-    wake_machine(mid)
-    return True
+            "trash": len(trash), "memos": memos, "memos_failed": failed, "left_behind": left}
 
 
 # ---------------------------------------------------------------- web UI users (identity from Authentik)
@@ -5756,9 +5739,22 @@ async def ui_admin_project_rename(request: Request, body: dict):
     dev = device.get()
     if not dev.get("admin") and project_owner(str(body.get("name", ""))) != dev.get("user"):
         return JSONResponse({"error": "only the person who made a project (or an admin) may rename it"}, status_code=403)
-    res = await asyncio.to_thread(rename_project, str(body.get("name", "")), str(body.get("to", "")).strip())
-    notify(f"Knowledge: project {body['name']} is now {res['project']} (backup {res['backup']}).")
+    if not dev.get("admin"):  # each one writes a backup tar and keeps the old name reserved for good
+        # shortcut: counted in RAM, so a deploy forgets it; persist it if people ever rename in a loop
+        done = [t for t in _renames.get(dev["user"], []) if time.time() - t < 86400]
+        if len(done) >= RENAMES_PER_DAY:
+            return JSONResponse({"error": f"you may rename {RENAMES_PER_DAY} times a day; ask the admin"}, status_code=429)
+        _renames[dev["user"]] = done + [time.time()]
+    res = await asyncio.to_thread(rename_project, str(body.get("name", "")), str(body.get("to", "")).strip(),
+                                  None if dev.get("admin") else {r for r in dev.get("write_roots") or [] if r.endswith("-memory")})
+    trouble = (f" Left under the old name: {', '.join(res['left_behind'])}." if res["left_behind"] else "") + \
+        (f" Memos not rewritten: {'; '.join(res['memos_failed'])}." if res["memos_failed"] else "")
+    notify(f"Knowledge: {dev.get('user')} renamed project {body['name']} to {res['project']} (backup {res['backup']}).{trouble}"[:900])
     return JSONResponse(res)
+
+
+RENAMES_PER_DAY = 3  # per person who is not an admin
+_renames: dict[str, list[float]] = {}
 
 
 @server.custom_route("/ui/api/admin/task-writers", methods=["POST"])
@@ -8416,6 +8412,8 @@ async def ui_git_diff(request: Request):
             if len(str(b["dirs"])) > 500 or "\n" in str(b["dirs"]):
                 raise ValueError("path too long")
             target = {"dirs": str(b["dirs"])}
+            if row.get("admin_reach"):  # someone else's pc: on the record, like the link that may follow
+                audit("admin-dirs", f"{mid} {target['dirs'] or '(drives)'}")
         elif b.get("chat"):
             c = read_json(chat_file(mid, str(b["chat"])), None) or {}
             if not row["own"]:
@@ -9311,12 +9309,11 @@ async def machine_report(request: Request):
         waits = [str(i)[:60] for i in (b.get("limitWait") or [])][:20]
     except (ValueError, AttributeError, TypeError) as e:
         return JSONResponse({"error": f"bad report: {e}"}, status_code=400)
-    for w in report["workers"]:  # a worker that ran before a rename: under the project's name now, like its task
+    # a worker that ran before a rename, and a folder whose .knowledge-project still says the old name (a companion
+    # from before it knew the aliases): under the project's name now, like its tasks
+    for w in [*report["workers"], *report["folders"]["linked"]]:
         w["project"] = canon(w["project"]) if isinstance(w.get("project"), str) else w.get("project")
     await asyncio.to_thread(mark_machine, dev, report=report)
-    for f in report["folders"]["linked"]:  # a folder still linked to a project's name from before a rename
-        if (now := canon(f["project"])) != f["project"] and now in PROJECTS:
-            await asyncio.to_thread(relink_folder, dev["machine"], f["path"], now)
     if isinstance(b.get("workers"), list):  # an older companion that sends none keeps its transcripts; all it sent, not only the 40 kept
         await asyncio.to_thread(prune_worker_transcripts, dev["machine"], [w for w in b["workers"][:1000] if isinstance(w, dict)])
     told, broken = [], []
@@ -9340,8 +9337,11 @@ async def machine_report(request: Request):
     # the read-only GitHub token for tool downloads: only to the admins' own devices, never a friend's or a guest's
     gh = os.environ.get("KNOWLEDGE_GITHUB_TOKEN", "") if read_json(TOKENS_FILE, {}).get(dev.get("name", ""), {}).get("self") else ""
     # the newest plugin: a companion behind it updates itself when nothing runs there (companion.knowledge_update_due)
+    # project names from before a rename, of the projects this token sees: the companion counts its folders and workers
+    # under the new name (old .knowledge-project files stay as they are)
+    aliases = {k: canon(k) for k in read_json(ALIASES_FILE, {}) if canon(k) in PROJECTS and in_scope(PROJECTS[canon(k)][1] + "/")}
     return JSONResponse({"ok": True, "closed_chats": closed, "newest": (await asyncio.to_thread(plugin_latest) or ("",))[0],
-                         **({"github_token": gh} if gh else {})})
+                         **({"github_token": gh} if gh else {}), **({"aliases": aliases} if aliases else {})})
 
 
 @server.custom_route("/ui/api/task/approve", methods=["POST"])

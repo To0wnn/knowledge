@@ -269,7 +269,8 @@ function renameButton(p) {
   b.title = "Change the project name itself (folders, roots, tokens, history, linked folders); a backup is made first and the old name keeps working";
   b.onclick = () => { const to = (prompt(`New name for ${p.name} (2-24 lowercase letters or digits). Everything moves along; a backup is made first and ${p.name} keeps working as an alias.`, "") || "").trim();
     if (to) run(async () => { const r = await api("/ui/api/admin/project-rename", { name: p.name, to });
-      toast(`Renamed ${p.name} to ${r.project}: ${r.state_files} state files, ${r.history} history folders, ${r.memos.length} memos; ${r.relinked.length} pc(s) asked to relink`); }, b); };
+      const trouble = [...(r.left_behind || []).map((x) => `left under the old name: ${x}`), ...(r.memos_failed || []).map((x) => `not rewritten: ${x}`)];
+      toast(`Renamed ${p.name} to ${r.project}: ${r.state_files} state files, ${r.history} history folders, ${r.memos.length} memos` + (trouble.length ? `. Check: ${trouble.join("; ")}` : "")); }, b); };
   return b;
 }
 

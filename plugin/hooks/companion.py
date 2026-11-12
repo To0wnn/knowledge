@@ -440,6 +440,7 @@ def project_folders() -> dict:
             continue
         except OSError:
             continue
+        name = canon(name)
         # a project linked in several folders: a worker needs a git checkout for its own worktree, so that one wins
         if name not in out or (in_git(root) and not in_git(Path(out[name]))):
             out[name] = str(root)
@@ -550,7 +551,7 @@ def folder_links() -> dict:
             p = Path(os.path.abspath(c))
             root, name = project_marker.project_root(p)
             if root and name and linkable(root):
-                linked.setdefault(str(root), name)
+                linked.setdefault(str(root), canon(name))
             elif not root and p.is_dir() and linkable(p):
                 # git only for a folder inside a checkout: no .git up the tree, or .git right here, means the folder itself
                 git = next((q for q in (p, *p.parents) if (q / ".git").exists()), p) != p
@@ -574,10 +575,18 @@ def folder_links() -> dict:
     return {"linked": [{"path": k, "project": v} for k, v in sorted(linked.items())], "candidates": [{"path": c, "project": ""} for c in cands]}
 
 
+def same_folder(a: str, b: str) -> bool:
+    """Two names of one folder (a junction or symlink), or the same name."""
+    try:
+        return a == b or os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+    except (OSError, ValueError):
+        return False
+
+
 def link_folder(path: str, project: str, chosen: bool = False) -> str:
     """Link a folder to a project this token may write: the .knowledge-project file, as the knowledge-init skill writes
-    it. A folder the companion listed (candidate or already linked), or, `chosen`, one its owner picked in a folder
-    chooser (this page, or the web UI: the owner's remote control only)."""
+    it. A folder the companion listed (candidate or already linked), or, `chosen`, one picked in a folder chooser (this
+    page, or the web UI: its owner, or an admin while the token allows remote control)."""
     _scan["at"] = 0
     if chosen:
         if not Path(path).is_absolute() or not Path(path).is_dir() or not linkable(Path(path)):
@@ -592,8 +601,8 @@ def link_folder(path: str, project: str, chosen: bool = False) -> str:
         raise ValueError(f"this token may not write project {project}; one of: {', '.join(projects) or 'none'}")
     marker = Path(path) / project_marker.MARKER
     marker.write_text(project + "\n", encoding="utf-8")
-    with LOCK:
-        save("linked.json", sorted(set(load("linked.json", [])) | {path}))
+    with LOCK:  # the folder's other names (a junction) go: the name linked last is the one shown
+        save("linked.json", sorted({p for p in load("linked.json", []) if not same_folder(p, path)} | {path}))
     _scan["at"] = 0
     note = (" The file holds only the name, so it may be committed (git add .knowledge-project), or kept out."
             if (Path(path) / ".git").exists() else "")
@@ -606,8 +615,8 @@ def unlink_folder(path: str) -> str:
     if path not in {x["path"] for x in folder_links()["linked"]}:
         raise ValueError("only a linked folder from the companion's own list can be unlinked")
     (Path(path) / project_marker.MARKER).unlink()
-    with LOCK:
-        save("linked.json", [p for p in load("linked.json", []) if p != path])
+    with LOCK:  # under each of its names
+        save("linked.json", [p for p in load("linked.json", []) if not same_folder(p, path)])
     log("folder", f"Unlinked {path}", "Only its .knowledge-project file was removed")
     return f"unlinked {path}"
 
@@ -1826,6 +1835,7 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
             "tools": tool_state(), "limitWait": wait, "waiting": waiting or {}, "asks": terminal_asks(now), "folders": links, "chats": chat_gits, "chatReviews": chat_reviews(now, chat_gits), "projects": load("state.json", {}).get("projects", [])}
     answer = server("POST", "/machine/report", tok, body)
     NEWEST["v"] = str(answer.get("newest") or "")
+    adopt_aliases(answer.get("aliases"))
     _COMMANDS_SENT.update({a: (now, v["commands"]) for a, v in body["agents"].items() if "commands" in v})
     tools.TOKEN = str(answer.get("github_token") or "")  # for tool downloads only: agents keep their own gh login
     try:
@@ -2409,6 +2419,36 @@ def update_agents() -> list:
 
 
 NEWEST = {"v": ""}  # the newest plugin, as the server last said in its answer to the report
+# {old project name: its name now} after a rename on the server (its answer to the report): a folder whose
+# .knowledge-project still says the old name, and a worker started under it, count under the new one
+ALIASES: dict = {}
+
+
+def canon(name: str) -> str:
+    for _ in range(10):  # renamed twice: a -> b -> c
+        if name not in ALIASES:
+            break
+        name = ALIASES[name]
+    return name
+
+
+def adopt_aliases(given) -> None:
+    """Take the server's aliases; workers recorded under an old name move to the new one, so Stop, Merge and Roll back
+    from the web UI (which name the project as it is now) find them. Called in a round, after its own save."""
+    new = {str(k): str(v) for k, v in given.items() if re.fullmatch(r"[a-z][a-z0-9]{1,23}", str(k)) and re.fullmatch(r"[a-z][a-z0-9]{1,23}", str(v))} \
+        if isinstance(given, dict) else {}
+    if new == ALIASES:
+        return
+    ALIASES.clear()
+    ALIASES.update(new)
+    with LOCK:
+        ws = load("workers.json", {})
+        moved = {}
+        for k, w in ws.items():
+            p = canon(str(w.get("project", "")))
+            moved[f"{p}/{w['id']}" if p != w.get("project") and w.get("id") else k] = {**w, "project": p} if p != w.get("project") else w
+        if moved != ws:
+            save("workers.json", moved)
 KNOWLEDGE_RETRY = 1800  # seconds between two tries of the same update by itself (a failing one must not loop)
 
 
@@ -3547,9 +3587,20 @@ def main(argv: list):
                     assert [c["path"] for c in f1["candidates"]] == [str(h / "plain"), str(h / "repo")], f1
                     if "alias" in names:  # linked by its second name: listed once, under the name its owner chose
                         was = load("linked.json", [])
-                        save("linked.json", [str(h / "alias")])
-                        assert folder_links()["linked"] == [{"path": str(h / "alias"), "project": "p"}], folder_links()
+                        save("linked.json", [str(h / "lk"), str(h / "alias")])  # both names linked once: the real path
+                        assert folder_links()["linked"] == [{"path": str(h / "lk"), "project": "p"}], folder_links()
+                        save("linked.json", [p for p in load("linked.json", []) if not same_folder(p, str(h / "alias"))] + [str(h / "alias")])
+                        assert load("linked.json", []) == [str(h / "alias")] and folder_links()["linked"] == [{"path": str(h / "alias"), "project": "p"}], folder_links()
                         save("linked.json", was)
+                    ALIASES.update(p="q")  # a marker from before a rename counts under the project's name now
+                    assert folder_links()["linked"][0]["project"] == "q", folder_links()  # (project_folders is stubbed in this self-test)
+                    ALIASES.clear()
+                    was = load("workers.json", {})  # a worker recorded under the old name moves to the new one
+                    save("workers.json", {"pp/X": {"id": "X", "project": "pp", "status": "merged"}, "oo/Y": {"id": "Y", "project": "oo"}})
+                    adopt_aliases({"pp": "qq", "Bad": "xx"})
+                    assert ALIASES == {"pp": "qq"} and load("workers.json", {}) == {"qq/X": {"id": "X", "project": "qq", "status": "merged"}, "oo/Y": {"id": "Y", "project": "oo"}}, load("workers.json", {})
+                    adopt_aliases(None)
+                    save("workers.json", was)
                     # Outside the home folder: a folder an agent worked in counts (not in the temp folder), never a root,
                     # the home folder or above it, or a system folder; the chooser shows it and links it.
                     away = Path(tmp2).resolve() / "away"

@@ -3677,8 +3677,9 @@ def main():
         assert admin("/ui/api/admin/project-rename", {"name": "orchard", "to": "Bad-Name"})[0] == 400
         st, _, res = admin("/ui/api/admin/project-rename", {"name": "orchard", "to": "grove"})
         res = json.loads(res)
-        assert st == 200 and res["project"] == "grove" and res["memos"] == ["grove-memory/project_trees.md"] and res["relinked"] == ["eeeeeeeeeeeeeeee"], res
+        assert st == 200 and res["project"] == "grove" and res["memos"] == ["grove-memory/project_trees.md"] and "relinked" not in res, res
         assert res["history"] >= 2 and Path(res["backup"]).stat().st_size > 0 and res["memos_failed"] == [] and res["left_behind"] == [], res
+        assert Path(res["backup"]).stat().st_mode & 0o777 == 0o600  # chats and people's state: private
         import tarfile
         with tarfile.open(res["backup"]) as tar:
             names = tar.getnames()
@@ -3696,13 +3697,17 @@ def main():
         assert not any(p["name"] == "orchard" for p in a["projects"])
         assert next(t for t in a["tokens"] if t["name"] == "orchard-pc")["roots"] == ["grove", "grove-memory"]
         assert "project grove" in http("GET", "/context/1?project=orchard&linked=1", token=ot)[1]
-        assert "project grove" in http("GET", "/context/1?project=/home/x/orchard")[1]  # a folder named after the old name
         assert http("POST", "/sync", {"files": {"docs/plan.md": "---\ntopic: General\n---\nplan v2\n"}}, token=ot)[0] == 200
         assert (tmp / "projects/grove/docs/docs/plan.md").read_text().endswith("plan v2\n")
-        acts = json.loads(http("GET", "/machine/actions", token=ot, headers=opc)[1])["actions"]
-        assert [(x["action"], x["args"]) for x in acts] == [("link_folder", {"path": "/home/x/apples", "project": "grove"})], acts
-        assert http("POST", "/machine/report", orep, token=ot, headers=opc)[0] == 200  # still the old name: asked once, not again
+        # The pc's .knowledge-project still says orchard: nothing rewrites it; the report's answer tells the companion the
+        # alias, and the server files that folder under grove meanwhile
         assert json.loads(http("GET", "/machine/actions", token=ot, headers=opc)[1])["actions"] == []
+        st, body = http("POST", "/machine/report", orep, token=ot, headers=opc)
+        assert st == 200 and json.loads(body).get("aliases") == {"orchard": "grove"}, body
+        assert "aliases" not in json.loads(http("POST", "/machine/report", {"version": "0.15.0"}, token=fr, headers={"X-Knowledge-Machine": "0123456789abcdef"})[1])  # not its project
+        barn = next(m for m in json.loads(raw("GET", "/ui/api/machines", headers=ck)[2])["machines"] if m["id"] == "eeeeeeeeeeeeeeee")
+        assert [(f["path"], f["project"]) for f in barn["companion"]["folders"]["linked"]] == [("/home/x/apples", "grove")], barn["companion"]["folders"]
+        assert "project grove" not in http("GET", "/context/1?project=/home/x/orchard")[1]  # a folder name never matches through an alias
         # An admin links and unlinks folders on anyone's pc (and browses its folders for that); nobody else does.
         assert admin("/ui/api/machines/action", {"machine": "eeeeeeeeeeeeeeee", "action": "unlink_folder", "args": {"path": "/home/x/apples"}})[0] == 200
         assert admin("/ui/api/machines/action", {"machine": "eeeeeeeeeeeeeeee", "action": "unlink_folder", "args": {"path": "/home/x/apples"}}, user("erin"))[0] != 200
@@ -4193,10 +4198,14 @@ def main():
         # She may rename what she made (and take its old name back), nothing else.
         assert admin("/ui/api/admin/project-rename", {"name": "grove", "to": "erinsgrove"}, er)[0] == 403
         assert next(p for p in json.loads(raw("GET", "/ui/api/admin", headers=er)[2])["projects"] if p["name"] == "erinproj")["mine"] is True
+        call("knowledge_write", {"path": "memory/project_erinlink.md", "content": memo("see erinproj-memory/x.md\n", "erinlink")})
         assert admin("/ui/api/admin/project-rename", {"name": "erinproj", "to": "erintmp"}, er)[0] == 200
+        assert "see erinproj-memory/x.md" in call("knowledge_read", {"path": "memory/project_erinlink.md"})[1]  # not her project: untouched
         assert "erintmp" in json.loads(raw("GET", "/ui/api/me", headers=er)[2])["writable"]
         st, _, res = admin("/ui/api/admin/project-rename", {"name": "erintmp", "to": "erinproj"}, er)
         assert st == 200 and json.loads(res)["left_behind"] == [], res
+        assert admin("/ui/api/admin/project-rename", {"name": "erinproj", "to": "Bad-Name"}, er)[0] == 400  # the third today
+        assert admin("/ui/api/admin/project-rename", {"name": "erinproj", "to": "erinnew"}, er)[0] == 429  # a fourth waits a day
         assert "erinproj" in json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["users"]["erin"]["created"]
         machines_contract(tmp, ck, fr, raw, er, et, heard)
         chats_contract(tmp, ck, fr, raw, er, et)
