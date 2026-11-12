@@ -195,7 +195,8 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   `rm -rf` outside the project, `curl | sh`, reading key or token files, reading the vault) in the companion's activity
   log and once per session and kind as a Matrix notice; it never refuses. A YOLO worker gets a git checkpoint of its
   whole worktree per turn on `refs/knowledge/checkpoints/<ID>`; "roll back" puts it back as before its last turn and
-  keeps the state before as `<ID>-undo`.
+  keeps the state before as `<ID>-undo`. An "Own branch" chat gets one at the start of each turn on `chat-<chat id>`, taken
+  by the companion itself, and rolls back the same way ([chats.md](chats.md), Own branch).
 
 ## Hook failures
 

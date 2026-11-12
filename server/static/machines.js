@@ -87,7 +87,7 @@ const ACTION_WORDS = {
   link_folder: (a) => `Link ${a.path} to ${a.project}`, unlink_folder: (a) => `Unlink ${a.path}`,
   install_tool: (a) => `Install ${a.tool}`, remove_tool: (a) => `Remove ${a.tool}`, tool_auto: (a) => `Daily update of ${a.tool} ${a.on ? "on" : "off"}`,
   start_worker: (a) => `Start a worker for ${a.id}`, stop_worker: (a) => `Stop the worker of ${a.id}`, restart: (a) => `Restart the worker of ${a.id}`,
-  rollback: (a) => `Roll back ${a.id}`, archive_worker: (a) => `Archive the worker of ${a.id}`, merge: (a) => `Merge ${a.id}`, takeover: (a) => `Take over ${a.id}`,
+  rollback: (a) => (a.undo ? `Undo the roll back of chat ${a.id}` : `Roll back ${a.chat ? "chat " : ""}${a.id}`), archive_worker: (a) => `Archive the worker of ${a.id}`, merge: (a) => `Merge ${a.id}`, takeover: (a) => `Take over ${a.id}`,
 };
 const actionWords = (x) => (ACTION_WORDS[x.action] || ((a) => `${x.action} ${Object.values(a).join(" ")}`.trim()))(x.args || {});
 const ACTION_STATE = { waiting: "waiting for the pc", running: "running", done: "done", failed: "failed" };

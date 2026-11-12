@@ -2328,6 +2328,29 @@ def board_contract(tmp, ck, fr, raw, er, et):
     rid = json.loads(ui("/ui/api/git/diff", {"machine": mid, "chat": wid})[2])["id"]
     assert json.loads(http("GET", "/machine/chats", token=fr, headers=pc)[1])["diffs"] == [{"id": rid, "folder": "/home/x/garden", "chat": wid}]
     http("POST", "/machine/chats/events", {"chat": wid, "events": [], "done": True}, token=fr, headers=pc)  # its turn ends: no busy chat left
+    # Roll back an Own-branch chat's last turn: the pc's owner only, a worktree chat only, never while it works; the pc's
+    # answer lands in the chat's log, and Undo is offered until the next message.
+    rbk = lambda cid, h=ck, **k: ui("/ui/api/machines/action", {"machine": mid, "action": "rollback", "args": {"project": "garden", "id": cid, "chat": True, **k}}, h)
+    assert rbk(wid, er)[0] in (400, 403), "not her pc, nor her project"
+    assert rbk(cids[0])[0] == 409 and rbk("0" * 12)[0] == 409, "a chat in the checkout, or none: nothing to roll back"
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": wid, "text": "again"})[0] == 200
+    assert rbk(wid)[0] == 409, "not while its turn waits or runs"
+    http("GET", "/machine/chats", token=fr, headers=pc)
+    http("POST", "/machine/chats/events", {"chat": wid, "events": [], "done": True}, token=fr, headers=pc)
+    for undo in (False, True):
+        assert rbk(wid, **({"undo": True} if undo else {}))[0] == 200
+        got = json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"]
+        assert [(x["action"], x["args"]) for x in got] == [("rollback", {"project": "garden", "id": wid, "chat": True, **({"undo": True} if undo else {})})], got
+        http("POST", "/machine/actions/result", {"id": got[0]["id"], "ok": True, "result": f"done {undo}"}, token=fr, headers=pc)
+        r = json.loads(ui(f"/ui/api/chat?machine={mid}&id={wid}")[2])
+        assert r["chat"]["rolled_back"] is (not undo) and r["events"][-1]["kind"] == "info" and r["events"][-1]["text"] == f"done {undo}", r["events"][-1]
+    assert rbk(wid)[0] == 200
+    got = json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"]
+    http("POST", "/machine/actions/result", {"id": got[0]["id"], "ok": True, "result": "back"}, token=fr, headers=pc)
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": wid, "text": "go on"})[0] == 200
+    assert not json.loads(ui(f"/ui/api/chat?machine={mid}&id={wid}")[2])["chat"]["rolled_back"], "a new turn: no Undo any more"
+    http("GET", "/machine/chats", token=fr, headers=pc)
+    http("POST", "/machine/chats/events", {"chat": wid, "events": [], "done": True}, token=fr, headers=pc)
     # Closed, an Own-branch chat gets a Review card (not before), its pc hears it is closed, and Merge names the chat.
     rv = {"into": "main", "ahead": 2, "nfiles": 1, "files": ["b.txt"], "commit": "feat: beds Sup3rSecret99", "blocked": ""}
     wrep = {**rep, "chats": {wid: {**wpill, "ahead": 2}}, "chatReviews": {wid: rv, "../x": rv}}

@@ -6244,7 +6244,9 @@ def action_args(action: str, args: dict) -> dict:
     if action in ("start_worker", "stop_worker", "rollback", "restart", "merge", "takeover", "archive_worker"):  # a task id is unique per project only
         if args.get("project") not in PROJECTS or not in_scope(PROJECTS[args["project"]][1] + "/"):
             raise ValueError("unknown project")
-        return {"project": args["project"], "id": tid(), **({"chat": True} if action == "merge" and args.get("chat") is True else {})}
+        chat = action in ("merge", "rollback") and args.get("chat") is True  # an "Own branch" chat's id instead of a task's
+        return {"project": args["project"], "id": tid(), **({"chat": True} if chat else {}),
+                **({"undo": True} if chat and action == "rollback" and args.get("undo") is True else {})}
     if action == "trust_hooks":
         return {"agent": agent()}
     if action in ("install_tool", "remove_tool", "tool_auto"):  # an id only: the steps ship with the pc's own plugin (plugin/tools)
@@ -6315,6 +6317,15 @@ async def ui_machine_action(request: Request):
                    for a in row["agents"].values() for w in a.get("workers", [])):
             return JSONResponse({"error": f"no ended worker for {args['id']} on this machine"}, status_code=409)
         action = "start_worker"  # the companion's own start (any version): `only` skips the hold
+    if action == "rollback" and args.get("chat"):  # files only: refused while the chat works, checked again on the pc
+        try:
+            c = await asyncio.to_thread(read_json, chat_file(mid, args["id"]), None)
+        except ValueError:
+            c = None
+        if not c or not c.get("worktree") or c.get("project") != args["project"]:
+            return JSONResponse({"error": "no chat with a worktree of its own (Own branch) on this machine"}, status_code=409)
+        if chat_works(c):
+            return JSONResponse({"error": "the chat is working: roll back once its turn, subagents and shells have ended"}, status_code=409)
     if action == "apply_models":
         plan = model_plan(row.get("advice") or {})
         if not plan:
@@ -6404,6 +6415,14 @@ async def machine_action_result(request: Request):
                 a.update(status="done" if ok else "failed", result=result, done_at=time.time())
                 found.append(a)
     await asyncio.to_thread(update_state, MACHINE_ACTIONS, change)
+    rb = found[0]["args"] if found and ok and found[0]["action"] == "rollback" and found[0]["args"].get("chat") else None
+    if rb:  # an "Own branch" chat rolled back (or undone): said in its log, and the page offers Undo until the next message
+        def note(c):
+            c["rolled_back"] = not rb.get("undo")
+            chat_add(c, "info", result)
+        with contextlib.suppress(ValueError):
+            if (f := chat_file(dev["machine"], rb["id"])).exists():
+                await asyncio.to_thread(update_state, f, note)
     return JSONResponse({"ok": bool(found)}, status_code=200 if found else 404)
 
 
@@ -6785,6 +6804,7 @@ def chat_meta(c: dict) -> dict:
             "used": c.get("used", 0), "ctx": c.get("ctx", 0),  # the conversation's tokens so far, its context now
             "used_by": {a: n for a, n in (c.get("used_by") or {}).items() if a != c.get("agent") and n},  # other agents this chat ran in
             "model": c.get("model", ""), "effort": c.get("effort", ""), "worktree": bool(c.get("worktree")), "bg": int(c.get("bg") or 0), "bg_list": c.get("bg_list") or [],
+            "rolled_back": bool(c.get("rolled_back")),  # its worktree was rolled back and no message went since: Undo
             "waiting": len(c.get("pending") or [])}
 
 
@@ -7617,6 +7637,7 @@ async def ui_chat_send(request: Request):
             chat_add(c, "info", f"Continued in {AGENT_NAMES.get(agent, agent)}: {old} could not go on. "
                                 "The chat so far goes along as text; the new agent starts its own session.")
         c["closed"] = False  # a new message opens a closed chat again
+        c.pop("rolled_back", None)  # its turn makes a new checkpoint: no Undo of the roll back any more
         c.pop("close_after", None)
         if c.get("status") in ("queued", "running"):
             line = c.setdefault("pending", [])
