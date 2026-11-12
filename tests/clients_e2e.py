@@ -36,6 +36,7 @@ import threading
 import time
 import urllib.request
 from pathlib import Path
+from types import SimpleNamespace
 
 REPO = Path(__file__).resolve().parents[1]
 FOLLOW = 3  # seconds a follow of a worker lasts after the viewer's last poll (the server's KNOWLEDGE_WORKER_FOLLOW_SECONDS)
@@ -1123,15 +1124,12 @@ def knowledge_home(tok: str, tmp: Path, project: Path):
     return env, kh
 
 
-def companion_e2e(tok: str, tmp: Path, project: Path):
-    """The local companion (plugin/hooks/companion.py, started as `agent_hooks.py serve`) in a home of its own with fake
-    agents: its local API answers only this pc's pages, it trusts the knowledge hooks the agents' own way (Codex through
-    app-server hooks/list + config/batchWrite, again after a plugin update), YOLO writes each agent's native settings and
-    unchecking restores them byte for byte (agy only while agy is closed), workers (a fresh headless session per ready
-    task in its own worktree; off by default, limits, the 90% hand-over, remote actions, roll back, merged cleanup), and
-    hook failures the agents log themselves reach the Machines list."""
+def _companion(tok: str, tmp: Path, project: Path, name: str = "Companion Usér", say_up: bool = False):
+    """A home of its own with fake agents and the local companion (plugin/hooks/companion.py, `agent_hooks.py serve`)
+    started in it; its handles in a namespace, stop() ends it. Each companion phase starts its own, so they can run on
+    separate shards."""
     hooks = CLIENT / "plugin" / "hooks"
-    home = tmp / "Companion Usér"
+    home = tmp / name
     bin_dir, calls = home / "bin", home / "calls.jsonl"
     bin_dir.mkdir(parents=True)
     (bin_dir / "fakeagent.py").write_text(FAKE_AGENT, encoding="utf-8")
@@ -1208,10 +1206,53 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
     recorded = lambda: [json.loads(ln) for ln in calls.read_text(encoding="utf-8").splitlines()] if calls.exists() else []
     log = open(home / "companion.log", "wb")
     proc = subprocess.Popen([sys.executable, str(hooks / "agent_hooks.py"), "serve"], env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
-    try:
-        up = wait_for(lambda: _quiet(lambda: call("GET", "/local/api/state")[0] == 200 and json.loads(call("GET", "/local/api/state")[2])["status"].get("synced")), 30)
+    up = wait_for(lambda: _quiet(lambda: call("GET", "/local/api/state")[0] == 200 and json.loads(call("GET", "/local/api/state")[2])["status"].get("synced")), 30)
+    if say_up or not up:
         check(up, "companion: serve answers on 127.0.0.1 and its first round reached the server", (home / "companion.log").read_text(errors="replace")[-600:])
-        if not up:
+    mid = _quiet(lambda: json.loads(call("GET", "/local/api/hello")[2]).get("machine", "")) if up else ""
+    mcp = lambda args: http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_edit" if "old_string" in args else "knowledge_write",
+                            "arguments": args}}, {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})
+    argvs = lambda n=0: [c for c in recorded()[n:] if "argv" in c and c["argv"][0] in ("codex", "claude", "agy") and c["argv"][1:2] != ["app-server"]]
+    ui = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice", "X-Knowledge-UI": "1"}
+    act = lambda action, args: http("POST", "/ui/api/machines/action", {"machine": mid, "action": action, "args": args}, ui)
+    done = lambda: [a for a in next((r for r in machines() if r["id"] == mid), {}).get("actions", [])]
+    wfile = home / ".knowledge" / "companion" / "workers.json"
+
+    def stop():
+        proc.kill()
+        for p in (fake_codex, fake_agy):
+            if p:
+                p.kill()
+    return SimpleNamespace(**locals())
+
+
+def _garden_repo(cp) -> Path:
+    """A git checkout linked to project garden in the companion's home, where a Codex session ran."""
+    repo = cp.home / "Garden repo"
+    repo.mkdir()
+    (repo / ".knowledge-project").write_text("garden\n", encoding="utf-8")
+    (repo / "README.md").write_text("garden\n", encoding="utf-8")
+    (repo / ".gitignore").write_text(".env\n", encoding="utf-8")
+    (repo / ".worktreeinclude").write_text(".env\n", encoding="utf-8")
+    (repo / ".env").write_text("X=1\n", encoding="utf-8")
+    for args in (["init", "-q", "-b", "main"], ["config", "user.name", "t"], ["config", "user.email", "t@x"], ["add", "-A"], ["commit", "-qm", "one"]):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+    run([sys.executable, str(cp.hooks / "agent_hooks.py"), "tasks", "codex"], json.dumps({"session_id": "cmp-cx", "cwd": str(repo)}), cp.env, cwd=str(repo))
+    return repo
+
+
+def companion_e2e(tok: str, tmp: Path, project: Path):
+    """The companion's local API answers only this pc's pages, it trusts the knowledge hooks the agents' own way (Codex
+    through app-server hooks/list + config/batchWrite, again after a plugin update), YOLO writes each agent's native
+    settings and unchecking restores them byte for byte (agy only while agy is closed), and workers (a fresh headless
+    session per ready task in its own worktree; off by default, limits, the 90% hand-over, remote actions, roll back,
+    merge, merged cleanup)."""
+    cp = _companion(tok, tmp, project, say_up=True)
+    (hooks, home, calls, claude_json, claude_settings, codex_cfg, toml, agy_dir, fake_agy, port, env, key_file, call, recorded,
+     mcp, argvs, act, done, wfile) = (cp.hooks, cp.home, cp.calls, cp.claude_json, cp.claude_settings, cp.codex_cfg, cp.toml, cp.agy_dir,
+                                      cp.fake_agy, cp.port, cp.env, cp.key_file, cp.call, cp.recorded, cp.mcp, cp.argvs, cp.act, cp.done, cp.wfile)
+    try:
+        if not cp.up:
             return
         # a held port waits 30 s on Windows (a restart's old connections); this one is held by a live companion: 2 s do
         second = subprocess.run([sys.executable, str(hooks / "agent_hooks.py"), "serve"], env={**env, "KNOWLEDGE_COMPANION_BIND_WAIT": "2"},
@@ -1317,25 +1358,11 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         else:
             print("skip agy YOLO after closing agy (no stand-in process on Windows)")
         # Workers: a fresh headless session per ready task, in its own git worktree; off until the owner allows them.
-        repo = home / "Garden repo"
-        repo.mkdir()
-        (repo / ".knowledge-project").write_text("garden\n", encoding="utf-8")
-        (repo / "README.md").write_text("garden\n", encoding="utf-8")
-        (repo / ".gitignore").write_text(".env\n", encoding="utf-8")
-        (repo / ".worktreeinclude").write_text(".env\n", encoding="utf-8")
-        (repo / ".env").write_text("X=1\n", encoding="utf-8")
-        for args in (["init", "-q", "-b", "main"], ["config", "user.name", "t"], ["config", "user.email", "t@x"], ["add", "-A"], ["commit", "-qm", "one"]):
-            subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
-        run([sys.executable, str(hooks / "agent_hooks.py"), "tasks", "codex"], json.dumps({"session_id": "cmp-cx", "cwd": str(repo)}), env, cwd=str(repo))
-        mid = json.loads((home / ".knowledge" / "machine.json").read_text(encoding="utf-8"))["id"]
-        pc = {"Authorization": f"Bearer {tok}", "X-Knowledge-Machine": mid}
-        mcp = lambda args: http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "knowledge_edit" if "old_string" in args else "knowledge_write",
-                                "arguments": args}}, {"Authorization": f"Bearer {tok}", "Accept": "application/json, text/event-stream"})
+        repo = _garden_repo(cp)
         tasks = "".join(f"- open tot 1 jan 2099 [{o}, {i}] from Claude, start now: worker test {i} \"a & b > c\n"
                         for o, i in (("Codex", "CMP-CODEX"), ("Codex", "CMP-CX2"), ("Gemini", "CMP-GEMINI"), ("Claude", "CMP-CLAUDE")))
         mcp({"path": "garden-memory/project_companion.md", "content": "---\nname: c\ndescription: d\nmetadata:\n  type: project\n---\n"
              f"## Stand\n{tasks}\n## Keuzes\n"})
-        argvs = lambda n=0: [c for c in recorded()[n:] if "argv" in c and c["argv"][0] in ("codex", "claude", "agy") and c["argv"][1:2] != ["app-server"]]
         st, _, body = call("POST", "/local/api/tick", {})
         out = json.loads(body) if st == 200 else {}
         check(not argvs() and all(w.startswith("Workers are off") for k, w in out.get("waiting", {}).items() if k.startswith("garden/CMP-")) and out.get("waiting"),
@@ -1408,9 +1435,9 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         # YOLO watch: a risky action is flagged (activity log, once to the server), never refused.
         code, out_w, err = run([sys.executable, str(hooks / "watch.py"), "codex"], json.dumps({"session_id": "yolo-1", "cwd": str(repo),
                                "tool_name": "Bash", "tool_input": {"command": "git push --force origin main"}}), {**env, "KNOWLEDGE_YOLO": "1"})
-        act = json.loads(call("GET", "/local/api/state")[2])["activity"]
+        activity = json.loads(call("GET", "/local/api/state")[2])["activity"]
         flags = json.loads((tmp / "machines.json").read_text(encoding="utf-8")).get(mid, {}).get("flags", [])
-        check(code == 0 and out_w.strip() == "{}" and any(a["kind"] == "risk" and "force-push" in a["text"] for a in act) and "codex:yolo-1:force-push" in flags,
+        check(code == 0 and out_w.strip() == "{}" and any(a["kind"] == "risk" and "force-push" in a["text"] for a in activity) and "codex:yolo-1:force-push" in flags,
               "YOLO watch: a force push is flagged in the activity log and to the server, never refused", out_w + err + json.dumps(flags))
         # 90%: no new worker, the running ones are told to hand over to an agent with room, then stopped.
         (home / ".knowledge" / "limits-claude.json").write_text(json.dumps({"at": time.time(), "rate_limits": {"five_hour": {
@@ -1448,7 +1475,6 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         check("-cont" not in out_h and parked.exists(), "limit 90%: another agy conversation's next turn does not get that note", out_h[:300])
         check("CMP-CX3" in json.loads((tmp / "machines.json").read_text(encoding="utf-8")).get(mid, {}).get("limit_told", []),
               "limit 90%: a task that waits for the limit gets one notice")
-        wfile = home / ".knowledge" / "companion" / "workers.json"
         wait_for(lambda: (call("POST", "/local/api/tick", {}) and False) or all(
             w["status"] == "stopped" for w in json.loads(wfile.read_text(encoding="utf-8")).values() if w["agent"] == "codex"), 20)
         ws = json.loads(wfile.read_text(encoding="utf-8"))
@@ -1480,9 +1506,6 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         check("asked the companion" in out_w and wait_for(lambda: synced() > before, 20),
               "workers: a knowledge write asks the companion here to look now", out_w + err)
         # Remote actions (Machines list): pulled every few seconds, run with the companion's own code, result reported.
-        ui = {"X-Knowledge-Proxy": "proxy-secret", "X-authentik-username": "alice", "X-Knowledge-UI": "1"}
-        act = lambda action, args: http("POST", "/ui/api/machines/action", {"machine": mid, "action": action, "args": args}, ui)
-        done = lambda: [a for a in next((r for r in machines() if r["id"] == mid), {}).get("actions", [])]
         act("stop_worker", {"project": "garden", "id": "CMP-GEMINI"})
         act("yolo", {"agent": "claude", "on": True, "confirm": "YOLO"})
         act("workers_allowed", {"on": False})
@@ -1497,28 +1520,6 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         check(any(a["kind"] == "remote" and "yolo" in a["text"] and "alice" in a["text"] for a in act_log), "remote: every action is in the activity log, with who asked")
         act("yolo", {"agent": "claude", "on": False})
         wait_for(lambda: done()[-1]["status"] != "waiting", 20)
-        # A tool add-on: installed from the pc's own manifest (a .cmd on Windows, a step per agent), checked, listed, removed.
-        tool_mark = home / "tool-mark.txt"
-        put = lambda text: [sys.executable, "-c", f"open({str(tool_mark)!r}, 'a').write({text!r})"]
-        (tools_dir / "fixture.json").write_text(json.dumps({"name": "Fixture", "kind": "program", "description": "a test tool", "needs": ["kntool"],
-            "install": [{"run": ["kntool"]}, {"run": put("C"), "agent": "claude"}],
-            "check": [{"run": [sys.executable, "-c", "import json, sys; print(json.dumps({'checks': [{'name': 'engine', 'ok': False}]})); sys.exit(1)"], "info": True}],
-            "version": {"run": [sys.executable, "-c", "print('1.0.0')"]}, "remove": [{"run": put("R")}]}), encoding="utf-8")
-        tool_row = lambda: (next((r for r in machines() if r["id"] == mid), {}).get("companion") or {}).get("tools", {}).get("fixture", {})
-        act("install_tool", {"tool": "fixture"})
-        wait_for(lambda: done()[-1]["status"] in ("done", "failed"), 30)
-        wait_for(lambda: tool_row().get("installed") or call("POST", "/local/api/tick", {}) and False, 30)
-        check(done()[-1]["status"] == "done" and tool_mark.read_text(encoding="utf-8") == "KC" and tool_row().get("version") == "1.0.0"
-              and tool_row().get("ok") is True and tool_row().get("detail") == "optional, not set up: engine",
-              "tools: install runs the manifest's steps (a .cmd on Windows, a step per agent), its check and version reach the Machines list",
-              json.dumps(done()[-1]) + json.dumps(tool_row()))
-        act("install_tool", {"tool": "nope"})
-        wait_for(lambda: done()[-1]["status"] in ("done", "failed"), 30)
-        check(done()[-1]["status"] == "failed" and "no tool nope" in done()[-1].get("result", ""), "tools: an id the pc's plugin does not know is refused there", json.dumps(done()[-1]))
-        act("remove_tool", {"tool": "fixture"})
-        wait_for(lambda: done()[-1]["status"] in ("done", "failed"), 30)
-        wait_for(lambda: tool_row().get("installed") is False or call("POST", "/local/api/tick", {}) and False, 30)
-        check(tool_mark.read_text(encoding="utf-8") == "KCR" and tool_row().get("installed") is False, "tools: remove runs its steps and the list says so", json.dumps(tool_row()))
         # Roll back a YOLO worker's last turn; once its branch is merged, the companion removes the worktree.
         call("POST", "/local/api/tick", {})
         gwt = home / ".knowledge" / "worktrees" / f"Garden-repo-{tag}-CMP-GEMINI"
@@ -1561,64 +1562,6 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         ws = json.loads(wfile.read_text(encoding="utf-8"))
         check(done()[-1]["status"] == "done" and ws["garden/CMP-GEMINI"].get("archived") is True, "workers: Archive keeps the record, marked", json.dumps(done()[-1]))
         check(ws["garden/CMP-GEMINI"].get("title"), "workers: a worker keeps its task's text as its title", json.dumps(ws["garden/CMP-GEMINI"])[:300])
-        # An updated plugin takes effect in the running companion: it restarts itself and reports the new version.
-        manifests = [hooks.parent / m / "plugin.json" for m in (".claude-plugin", ".codex-plugin") if (hooks.parent / m / "plugin.json").exists()]
-        before = {m: m.read_text(encoding="utf-8") for m in manifests}
-        reported = lambda: next((r for r in machines() if r["id"] == mid), {}).get("companion", {}).get("version")
-
-        def measure_restart(fn_change, cond_done, seconds=60):
-            t0 = time.time()
-            down = up = None
-            def poke():
-                nonlocal down, up
-                try:
-                    call("GET", "/local/api/hello")
-                    if down and not up:
-                        up = time.time()
-                except (OSError, http_client.HTTPException):
-                    if not down:
-                        down = time.time()
-                if down:  # once it went down, poking tick on the new companion reports the new state to the server
-                    try:
-                        call("POST", "/local/api/tick", {})
-                    except Exception:
-                        pass
-                return False
-            fn_change()
-            wait_for(lambda: cond_done() or poke(), seconds)
-            dt = time.time() - t0
-            t_down_s = f"detect {down - t0:.1f}s, port-out {up - down:.1f}s" if (down and up) else ("port never down" if not down else "port stayed down")
-            try:
-                acts = [a for a in state_of(home, "activity.json")
-                        if a.get("at", 0) >= t0 and any(k in a.get("text", "") for k in ("Bound ", "Restarting", "restart helper"))]
-            except Exception:
-                acts = []
-            trail = "; ".join(f"{a['text']}" + (f" ({a['detail']})" if a.get("detail") else "") for a in reversed(acts))
-            return f" (restart {dt:.1f}s: {t_down_s}; {trail or 'bind instant'})"
-
-        def set_version_1():
-            for m, t in before.items():
-                m.write_text(re.sub(r'"version": "[^"]+"', '"version": "9.8.7"', t), encoding="utf-8")
-            with contextlib.suppress(Exception):
-                call("POST", "/local/api/wake", {})
-
-        note1 = measure_restart(set_version_1, lambda: reported() == "9.8.7", 60)
-        check(reported() == "9.8.7", "companion: an updated plugin restarts it, and the list shows the code that runs" + note1, str(reported()))
-
-        def set_version_2():
-            for m, t in before.items():
-                m.write_text(t, encoding="utf-8")
-            with contextlib.suppress(Exception):
-                call("POST", "/local/api/wake", {})
-
-        note2 = measure_restart(set_version_2, lambda: reported() != "9.8.7", 60)
-        check(reported() != "9.8.7", "companion: after going back it restarts again" + note2, str(reported()))
-        code, out, err = run([sys.executable, str(hooks / "workers.py"), "--self-test"], "", env)
-        check(code == 0 and out.strip() == "ok", "review: workers.py self-test on a real repository (clean merge, conflict aborted and said, "
-              "dirty or other branch refused)", out[-400:] + err[-800:])
-        code, out, err = run([sys.executable, str(hooks / "awake.py"), "--self-test"], "", env)
-        check(code == 0 and out.strip() == "ok", "awake: an idle-sleep hold is taken, listed by the OS (logind, powercfg, pmset) and "
-              "released again", out[-400:] + err[-800:])
         Path(str(calls) + ".sleep").unlink()
         for w in json.loads(wfile.read_text(encoding="utf-8")).values():
             if w["status"] == "running":
@@ -1630,9 +1573,59 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
                           "Bash(git branch --show-current)", "Bash(git diff)", "Bash(git diff --stat)", "Bash(git diff --cached)", "Bash(git log)",
                           "Bash(git log --oneline)", "Bash(git log -1)", "Bash(git log --stat -1)"],
               "workers: Claude without YOLO may use the knowledge tools, git status/add/commit and diff/log only in fixed forms (no --output), nothing else (no push, no git -C)", json.dumps(cl["argv"][3:]))
-        yolo_file.write_text(json.dumps({}), encoding="utf-8")
-        mcp({"path": "garden-memory/project_companion.md", "old_string": "## Keuzes",
-             "new_string": "- open tot 1 jan 2099 [Gemini, CMP-QUIT] from Claude, start now: a worker that does nothing\n## Keuzes"})
+        # A plugin update (a new cache folder) makes the companion trust Codex's hooks again by itself.
+        manifest = home / ".codex" / "plugins" / "cache" / "knowledge" / "knowledge" / "9.9.9" / ".codex-plugin" / "plugin.json"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text('{"name": "knowledge", "version": "9.9.9"}', encoding="utf-8")
+        call("POST", "/local/api/tick", {})
+        writes = [c for c in recorded() if c.get("rpc", {}).get("method") == "config/batchWrite"]
+        codex_state = next(a for a in json.loads(call("GET", "/local/api/state")[2])["agents"] if a["id"] == "codex")
+        check(len(writes) == 2 and codex_state["version"] == "9.9.9" and codex_state["hooksTrusted"],
+              "companion: after a Codex plugin update the hooks are trusted again automatically", json.dumps(codex_state)[:300])
+    finally:
+        cp.stop()
+
+
+def companion_tools_e2e(tok: str, tmp: Path, project: Path):
+    """The companion: tool add-ons installed and removed remotely, a worker that quits with its task open, the trust
+    command going on after an agent failed, hook failures from the agents' own logs, and a task another pc holds."""
+    cp = _companion(tok, tmp, project, "Tools Usér")
+    hooks, home, calls, tools_dir, agy_dir, env, call, recorded, mcp, argvs, act, done, wfile, mid = (
+        cp.hooks, cp.home, cp.calls, cp.tools_dir, cp.agy_dir, cp.env, cp.call, cp.recorded, cp.mcp, cp.argvs, cp.act, cp.done, cp.wfile, cp.mid)
+    try:
+        if not cp.up:
+            return
+        repo = _garden_repo(cp)
+        # A tool add-on: installed from the pc's own manifest (a .cmd on Windows, a step per agent), checked, listed, removed.
+        tool_mark = home / "tool-mark.txt"
+        put = lambda text: [sys.executable, "-c", f"open({str(tool_mark)!r}, 'a').write({text!r})"]
+        (tools_dir / "fixture.json").write_text(json.dumps({"name": "Fixture", "kind": "program", "description": "a test tool", "needs": ["kntool"],
+            "install": [{"run": ["kntool"]}, {"run": put("C"), "agent": "claude"}],
+            "check": [{"run": [sys.executable, "-c", "import json, sys; print(json.dumps({'checks': [{'name': 'engine', 'ok': False}]})); sys.exit(1)"], "info": True}],
+            "version": {"run": [sys.executable, "-c", "print('1.0.0')"]}, "remove": [{"run": put("R")}]}), encoding="utf-8")
+        tool_row = lambda: (next((r for r in machines() if r["id"] == mid), {}).get("companion") or {}).get("tools", {}).get("fixture", {})
+        act("install_tool", {"tool": "fixture"})
+        wait_for(lambda: done()[-1]["status"] in ("done", "failed"), 30)
+        wait_for(lambda: tool_row().get("installed") or call("POST", "/local/api/tick", {}) and False, 30)
+        check(done()[-1]["status"] == "done" and tool_mark.read_text(encoding="utf-8") == "KC" and tool_row().get("version") == "1.0.0"
+              and tool_row().get("ok") is True and tool_row().get("detail") == "optional, not set up: engine",
+              "tools: install runs the manifest's steps (a .cmd on Windows, a step per agent), its check and version reach the Machines list",
+              json.dumps(done()[-1]) + json.dumps(tool_row()))
+        act("install_tool", {"tool": "nope"})
+        wait_for(lambda: done()[-1]["status"] in ("done", "failed"), 30)
+        check(done()[-1]["status"] == "failed" and "no tool nope" in done()[-1].get("result", ""), "tools: an id the pc's plugin does not know is refused there", json.dumps(done()[-1]))
+        act("remove_tool", {"tool": "fixture"})
+        wait_for(lambda: done()[-1]["status"] in ("done", "failed"), 30)
+        wait_for(lambda: tool_row().get("installed") is False or call("POST", "/local/api/tick", {}) and False, 30)
+        check(tool_mark.read_text(encoding="utf-8") == "KCR" and tool_row().get("installed") is False, "tools: remove runs its steps and the list says so", json.dumps(tool_row()))
+        code, out, err = run([sys.executable, str(hooks / "workers.py"), "--self-test"], "", env)
+        check(code == 0 and out.strip() == "ok", "review: workers.py self-test on a real repository (clean merge, conflict aborted and said, "
+              "dirty or other branch refused)", out[-400:] + err[-800:])
+        code, out, err = run([sys.executable, str(hooks / "awake.py"), "--self-test"], "", env)
+        check(code == 0 and out.strip() == "ok", "awake: an idle-sleep hold is taken, listed by the OS (logind, powercfg, pmset) and "
+              "released again", out[-400:] + err[-800:])
+        mcp({"path": "garden-memory/project_companion.md", "content": "---\nname: c\ndescription: d\nmetadata:\n  type: project\n---\n"
+             "## Stand\n- open tot 1 jan 2099 [Gemini, CMP-QUIT] from Claude, start now: a worker that does nothing\n## Keuzes\n"})
         call("POST", "/local/api/settings", {"workersAllowed": True})
         n = len(recorded())
         call("POST", "/local/api/tick", {})
@@ -1711,6 +1704,19 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         activity = state_of(home, "activity.json")
         check(code == 0 and not argvs(n) and "Held by other-pc" in out and any("Held by other-pc" in a["text"] for a in activity),
               "workers: a 409 from /tasks/woken (another pc holds the task) starts nothing and logs who holds it", out[-400:] + err[-400:])
+    finally:
+        cp.stop()
+
+
+def companion_folders_e2e(tok: str, tmp: Path, project: Path):
+    """The companion: folders linked from its page or remotely, Machines > Files, and an updated plugin restarting it (on
+    Windows also under its Scheduled Task)."""
+    cp = _companion(tok, tmp, project, "Folders Usér")
+    hooks, home, env, call, mid = cp.hooks, cp.home, cp.env, cp.call, cp.mid
+    try:
+        if not cp.up:
+            return
+        repo = _garden_repo(cp)
         # Folders: link a folder to a project from the companion page or remotely, only folders from its own list.
         app = home / "code" / "new app"
         outside = tmp / "Outside repo"
@@ -1813,15 +1819,58 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
         wait_for(lambda: (picked / ".knowledge-project").exists(), 30)
         check((picked / ".knowledge-project").exists(), "folders: the web UI links a folder its owner chose, also outside the home folder")
         call("POST", "/local/api/unlink", {"path": str(picked)})
-        # A plugin update (a new cache folder) makes the companion trust Codex's hooks again by itself.
-        manifest = home / ".codex" / "plugins" / "cache" / "knowledge" / "knowledge" / "9.9.9" / ".codex-plugin" / "plugin.json"
-        manifest.parent.mkdir(parents=True)
-        manifest.write_text('{"name": "knowledge", "version": "9.9.9"}', encoding="utf-8")
-        call("POST", "/local/api/tick", {})
-        writes = [c for c in recorded() if c.get("rpc", {}).get("method") == "config/batchWrite"]
-        codex_state = next(a for a in json.loads(call("GET", "/local/api/state")[2])["agents"] if a["id"] == "codex")
-        check(len(writes) == 2 and codex_state["version"] == "9.9.9" and codex_state["hooksTrusted"],
-              "companion: after a Codex plugin update the hooks are trusted again automatically", json.dumps(codex_state)[:300])
+        # An updated plugin takes effect in the running companion: it restarts itself and reports the new version.
+        manifests = [hooks.parent / m / "plugin.json" for m in (".claude-plugin", ".codex-plugin") if (hooks.parent / m / "plugin.json").exists()]
+        before = {m: m.read_text(encoding="utf-8") for m in manifests}
+        reported = lambda: next((r for r in machines() if r["id"] == mid), {}).get("companion", {}).get("version")
+
+        def measure_restart(fn_change, cond_done, seconds=60):
+            t0 = time.time()
+            down = up = None
+            def poke():
+                nonlocal down, up
+                try:
+                    call("GET", "/local/api/hello")
+                    if down and not up:
+                        up = time.time()
+                except (OSError, http_client.HTTPException):
+                    if not down:
+                        down = time.time()
+                if down:  # once it went down, poking tick on the new companion reports the new state to the server
+                    try:
+                        call("POST", "/local/api/tick", {})
+                    except Exception:
+                        pass
+                return False
+            fn_change()
+            wait_for(lambda: cond_done() or poke(), seconds)
+            dt = time.time() - t0
+            t_down_s = f"detect {down - t0:.1f}s, port-out {up - down:.1f}s" if (down and up) else ("port never down" if not down else "port stayed down")
+            try:
+                acts = [a for a in state_of(home, "activity.json")
+                        if a.get("at", 0) >= t0 and any(k in a.get("text", "") for k in ("Bound ", "Restarting", "restart helper"))]
+            except Exception:
+                acts = []
+            trail = "; ".join(f"{a['text']}" + (f" ({a['detail']})" if a.get("detail") else "") for a in reversed(acts))
+            return f" (restart {dt:.1f}s: {t_down_s}; {trail or 'bind instant'})"
+
+        def set_version_1():
+            for m, t in before.items():
+                m.write_text(re.sub(r'"version": "[^"]+"', '"version": "9.8.7"', t), encoding="utf-8")
+            with contextlib.suppress(Exception):
+                call("POST", "/local/api/wake", {})
+
+        note1 = measure_restart(set_version_1, lambda: reported() == "9.8.7", 60)
+        check(reported() == "9.8.7", "companion: an updated plugin restarts it, and the list shows the code that runs" + note1, str(reported()))
+
+        def set_version_2():
+            for m, t in before.items():
+                m.write_text(t, encoding="utf-8")
+            with contextlib.suppress(Exception):
+                call("POST", "/local/api/wake", {})
+
+        note2 = measure_restart(set_version_2, lambda: reported() != "9.8.7", 60)
+        check(reported() != "9.8.7", "companion: after going back it restarts again" + note2, str(reported()))
         if WIN:  # the restart under the real Scheduled Task: the task stays the owner, so uninstalling can stop it
             wrapper = tmp / "task.cmd"
             wrapper.write_text("@echo off\r\nchcp 65001 >nul\r\n" + "".join(f'set "{k}={v}"\r\n' for k, v in env.items() if k.startswith(("KNOWLEDGE", "HOME", "USERPROFILE", "APPDATA", "PATH", "PYTHON"))) + subprocess.list2cmdline([sys.executable, str(hooks / "agent_hooks.py"), "serve"]) + "\r\n", encoding="utf-8")
@@ -1847,11 +1896,7 @@ def companion_e2e(tok: str, tmp: Path, project: Path):
                     for f, t in manifest_text.items():
                         f.write_text(t, encoding="utf-8")
     finally:
-        proc.kill()
-        if fake_codex:
-            fake_codex.kill()
-        if fake_agy:
-            fake_agy.kill()
+        cp.stop()
 
 
 AGENT_LABEL = {"claude": "Claude Code", "codex": "Codex", "agy": "agy"}  # the server's AGENT_NAMES
@@ -3663,8 +3708,13 @@ assert "claude plugin install: ... fine" in out.getvalue() and "slow-tool ... ok
 
 # The phases mostly wait (on fake agents, companions, follow windows): run without arguments, this script starts one
 # process per shard side by side (--shard i), each with its own server and temp home; a phase not listed is shard 0's.
-# By the CI times per phase (11 Nov 2026, Windows): companion 300 s, chat 165 s, shard 0 230 s, the rest 65 s.
-PHASE_SHARD = {"chat_e2e": 1, "companion_e2e": 2, "follow_e2e": 3, "installer": 3, "installer_progress": 3, "companion_setup": 3}
+# The Windows runner is CPU-bound with this many processes: six shards made every phase ~1.5x slower, so these five
+# are balanced by the Windows CI times per phase with four shards (12 Nov 2026): chat 136 s, companion 218 s (now three
+# phases: core ~130 s, tools ~50 s, folders ~35 s), shard 0 197 s of which ~80 s had a home of its own.
+PHASE_SHARD = {"chat_e2e": 1, "companion_e2e": 2,
+               "follow_e2e": 3, "installer": 3, "installer_progress": 3, "companion_setup": 3, "codex_plugin": 3, "checkout_update": 3,
+               "claude_stored_token": 3, "folder_link": 3,
+               "companion_tools_e2e": 4, "companion_folders_e2e": 4, "honest_errors": 4, "hook_errors": 4}
 SHARDS = max(PHASE_SHARD.values()) + 1
 
 
@@ -3737,6 +3787,8 @@ def main():
         terminal_asks(tmp)
         knowledge_home(tok, tmp, project)
         companion_e2e(tok, tmp, project)
+        companion_tools_e2e(tok, tmp, project)
+        companion_folders_e2e(tok, tmp, project)
         chat_e2e(tok, tmp)
         follow_e2e(tok, tmp)
         background_flags(tmp)
@@ -3762,7 +3814,7 @@ def main():
 
 PHASES = {"claude_plugin", "folder_link", "offline", "skills", "agents", "script_mcp", "codex_plugin", "agy_plugin",
           "no_session_log_e2e", "limits_e2e", "plugin_versions", "relay_errors", "honest_errors", "hook_errors", "terminal_asks",
-          "knowledge_home", "companion_e2e", "chat_e2e", "follow_e2e", "background_flags", "import_e2e", "installer",
+          "knowledge_home", "companion_e2e", "companion_tools_e2e", "companion_folders_e2e", "chat_e2e", "follow_e2e", "background_flags", "import_e2e", "installer",
           "installer_progress", "companion_setup", "checkout_update", "claude_stored_token", "codex_worker_sandbox", "real_clis"}
 
 
