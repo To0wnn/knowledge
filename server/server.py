@@ -7330,6 +7330,7 @@ async def chat_live_message(f: Path, c: dict, msg: dict, mode: str, text: str, a
     into the running agent ("now": the agent takes it into this turn) or interrupts the step first ("force")."""
     def note(c):
         c["closed"] = False
+        c.update({k: msg[k] for k in ("model", "effort", "account") if k in msg})  # a choice sent with it holds after this turn too
         if not added:
             chat_add(c, "user", text, extra={"by": msg.get("by") or ""})  # who wrote it: two people may share one chat
             c["title"] = chat_title(text, c.get("title") or "", c.get("titled"))

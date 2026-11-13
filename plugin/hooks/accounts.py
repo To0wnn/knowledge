@@ -75,18 +75,29 @@ def link(src: Path, dst: Path):
 
 
 def sync(d: Path):
-    """Link what the main folder has into account folder d (new entries too), and on Linux and Windows give it the
-    plugin's secret options (the knowledge token on a pc without a keyring), which live next to the sign-in."""
+    """Link what the main folder has into account folder d (new entries too). A file Claude replaced there (a write
+    by rename takes the place of the link) is linked again: the main folder's settings hold for every account."""
     d.mkdir(parents=True, exist_ok=True)
     for src in MAIN.iterdir() if MAIN.is_dir() else []:
         if src.name in NOT_LINKED or src.name.startswith(OWN):
             continue
         dst = d / src.name
-        if os.name == "nt" and src.is_file() and dst.is_file() and not is_link(dst) and src.stat().st_mtime > dst.stat().st_mtime:
-            shutil.copy2(src, dst)
+        if src.is_file() and dst.is_file() and not is_link(dst):
+            if os.name == "nt":
+                if src.stat().st_mtime > dst.stat().st_mtime:
+                    shutil.copy2(src, dst)
+            else:
+                dst.unlink()
+                link(src, dst)
         elif not (dst.exists() or is_link(dst)):
             link(src, dst)
-    if sys.platform == "darwin":  # shortcut: macOS keeps both in the Keychain; the knowledge token comes from the keyring there
+
+
+def plugin_secrets(d: Path):
+    """Give account folder d the plugin's secret options (the knowledge token on a pc without a keyring), which live
+    next to the sign-in; right after the sign-in only, so it never races Claude refreshing its token in a chat.
+    shortcut: a knowledge token changed later is not copied; sign the account in again (or use a keyring)."""
+    if sys.platform == "darwin":  # macOS keeps both in the Keychain; the knowledge token comes from the keyring there
         return
     try:
         secrets = json.loads((MAIN / ".credentials.json").read_text(encoding="utf-8")).get("pluginSecrets")
@@ -94,13 +105,12 @@ def sync(d: Path):
         cur = json.loads(mine.read_text(encoding="utf-8"))
     except (OSError, ValueError, AttributeError):
         return  # not signed in yet: the next run, after the sign-in, copies them
-    if secrets and cur.get("pluginSecrets") != secrets:  # once, not every run: Claude rewrites this file when it refreshes
+    if secrets and cur.get("pluginSecrets") != secrets:
         write(mine, {**cur, "pluginSecrets": secrets})
 
 
 def write(f: Path, data: dict):
-    tmp = f.with_name(f.name + ".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd, tmp = tempfile.mkstemp(dir=f.parent, prefix=f.name + ".")  # owner only, and two writers never share one
     with os.fdopen(fd, "w", encoding="utf-8") as out:
         json.dump(data, out)
     os.replace(tmp, f)
@@ -165,6 +175,9 @@ def status(d: Path, fresh: bool = False) -> dict:
 def _drop(name: str):
     rec = LOGINS.pop(name, None)
     if rec and rec["p"].poll() is None:
+        if os.name == "nt":  # the .cmd shim's cmd.exe: its node child would go on
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(rec["p"].pid)], capture_output=True, timeout=30,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         rec["p"].kill()
 
 
@@ -223,6 +236,7 @@ def code(name: str, text: str, wait: float = 90) -> str:
         write(d / INFO, {**info(d), "error": said[-300:]})
         raise RuntimeError(f"sign-in failed: {said[-200:]}")
     (d / TOKEN).unlink(missing_ok=True)  # a browser sign-in replaces a token
+    plugin_secrets(d)
     s = status(d, fresh=True)
     write(d / INFO, {**info(d), "kind": "login", "error": "", **s})
     return f"{name}: signed in" + (f" as {s['email']}" if s.get("email") else "")
@@ -234,8 +248,7 @@ def set_token(name: str, tok: str) -> str:
         raise ValueError("that is not a token from claude setup-token (sk-ant-oat01-...)")
     d = folder(name)
     sync(d)
-    tmp = d / (TOKEN + ".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=TOKEN + ".")
     with os.fdopen(fd, "w", encoding="utf-8") as out:
         out.write(tok)
     os.replace(tmp, d / TOKEN)
@@ -252,7 +265,8 @@ def remove(name: str) -> str:
         raise RuntimeError(f"there is no Claude account {name} on this pc")
     with LOCK:
         _drop(name)
-    if (d / ".credentials.json").exists() or sys.platform == "darwin":  # macOS: the sign-in is in the Keychain, per folder
+    # only a browser sign-in: a token account has none, and on macOS (the Keychain) its folder is the only trace
+    if (d / ".credentials.json").exists() or sys.platform == "darwin" and info(d).get("kind") == "login":
         e = {k: v for k, v in os.environ.items() if k != "CLAUDE_CODE_OAUTH_TOKEN"}
         try:
             subprocess.run(command("auth", "logout"), capture_output=True, timeout=30, env={**e, "CLAUDE_CONFIG_DIR": str(d)})
@@ -321,8 +335,14 @@ def self_test():
         assert not (d / ".credentials.json").exists() and not (d / "daemon.lock").exists(), "the sign-in and the daemon are not shared"
         (MAIN / "skills").mkdir()
         assert env("werk") == {"CLAUDE_CONFIG_DIR": str(d)} and (d / "skills").is_dir(), "a later entry is linked on the next run"
-        write(d / ".credentials.json", {"claudeAiOauth": {"accessToken": "werk"}})
+        (d / "settings.json").unlink()
+        (d / "settings.json").write_text('{"x": 1}', encoding="utf-8")  # Claude wrote it by rename: no longer the link
+        (MAIN / "settings.json").write_text('{"y": 2}', encoding="utf-8")
         sync(d)
+        assert (d / "settings.json").read_text(encoding="utf-8") == '{"y": 2}' and (MAIN / "settings.json").read_text(encoding="utf-8") == '{"y": 2}', \
+            "the main folder's settings come back, the main file untouched"
+        write(d / ".credentials.json", {"claudeAiOauth": {"accessToken": "werk"}})
+        plugin_secrets(d)
         creds = json.loads((d / ".credentials.json").read_text(encoding="utf-8"))
         if sys.platform != "darwin":
             assert creds == {"claudeAiOauth": {"accessToken": "werk"}, "pluginSecrets": {"knowledge@knowledge": {"token": "kt"}}}, creds
