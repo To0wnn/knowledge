@@ -64,6 +64,11 @@ the admin page to be given projects. `KNOWLEDGE_PROXY_IPS` are the addresses tru
   in memory, so search over a few thousand files takes tens of milliseconds. A watcher posts changed paths for instant
   updates; a stat-only rescan every 60 s is the safety net. Embeddings (for semantic search and related notes) run
   locally with ONNX; no data leaves the machine.
+- **Tool arguments for weaker models:** agy shows its model only the tool names, and smaller models guess argument
+  names (`file_path`, `new_text`, `start_line`). The server maps the common guesses onto the real names in one place
+  (`ARG_GUESSES` in `server.py`, `end_line` becomes `limit`), and a failed call names the tool's arguments and the
+  unknown ones sent. The start context lists the exact names of the most used tools (`tool_calls`). Measure the effect
+  with `tests/tool_errors_by_model.py` (failed knowledge calls per model from the chat logs).
 - **Clients** (`plugin/`): one folder that installs as a plugin in Claude Code, Codex and agy. It adds the MCP server,
   the session-start hook, a session log and a docs mirror for guest projects. Codex and agy reach the server through a
   small stdio relay, so the token never sits in a config file. `clients/knowledge-agent.py` sets everything up.

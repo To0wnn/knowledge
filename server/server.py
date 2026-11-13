@@ -1088,7 +1088,60 @@ def instructions() -> str:
         + house_rules("<memory root>"))
 
 
-server = MCPServer(
+# Weaker models guess argument names (Gemini Flash in agy sees only tool names, not their schema): file_path, new_text,
+# start_line. One table here instead of an alias per tool; measured 13 Nov 2026: 4.7% of agy-flash knowledge calls failed.
+ARG_GUESSES = {"filepath": "path", "filename": "path", "note": "path", "memo": "path", "notepath": "path",
+               "oldtext": "old_string", "oldstr": "old_string", "old": "old_string", "find": "old_string", "original": "old_string",
+               "newtext": "new_string", "newstr": "new_string", "new": "new_string", "replacement": "new_string",
+               "replace": "new_string", "replacewith": "new_string",
+               "startline": "offset", "start": "offset", "fromline": "offset", "line": "offset",
+               "text": "content", "newcontent": "content", "q": "query"}
+
+
+def _key(k: str) -> str:
+    return re.sub(r"[^a-z]", "", k.lower())
+
+
+def fit_args(params: dict, args: dict) -> tuple[dict, list[str]]:
+    """(arguments with guessed names mapped onto the tool's own, the names it still does not know). end_line becomes
+    limit next to offset."""
+    own = {_key(p): p for p in params}
+    out, unknown = {}, []
+    for k, v in args.items():
+        p = k if k in params else own.get(_key(k)) or ARG_GUESSES.get(_key(k))
+        if p in params and p not in args and p not in out:
+            out[p] = v
+        elif k in params:
+            out[k] = v
+        elif _key(k) in ("endline", "toline", "end") and "limit" in params:
+            out["_end"] = v
+        else:
+            unknown.append(k)
+    if (end := out.pop("_end", None)) is not None and "limit" not in out:
+        try:
+            out["limit"] = max(1, int(end) - int(out.get("offset", 1)) + 1)
+        except (TypeError, ValueError):
+            unknown.append("end_line")
+    return out, unknown
+
+
+class KnowledgeServer(MCPServer):
+    async def call_tool(self, name, arguments, context=None):
+        tool = self._tool_manager.get_tool(name)
+        if not tool:
+            return await super().call_tool(name, arguments, context)
+        props, req = tool.parameters.get("properties", {}), set(tool.parameters.get("required", []))
+        arguments, unknown = fit_args(props, arguments or {})
+        try:
+            return await super().call_tool(name, arguments, context)
+        except ToolError as e:
+            if not (unknown or "validation error" in str(e) or " is required" in str(e)):
+                raise
+            sig = ", ".join(f"{p} (required)" if p in req else p for p in props)
+            raise ToolError(f"{e}\n{name} takes: {sig}." + (f" Unknown argument(s) you sent: {', '.join(unknown)}." if unknown else "")) from e
+
+
+server = KnowledgeServer(
     name="knowledge",
     instructions=instructions(),
 )
@@ -2231,6 +2284,16 @@ WEBCHAT_NOTE = ("===== knowledge: a chat from the web UI =====\nThe user talks t
                 "message) at the start, together with your first other tool call, and when the subject changes.")
 
 
+def tool_calls(mem: str) -> str:
+    """The exact argument names of the tools agents use most: agy shows its model only tool names, and weaker models
+    guessed the rest (file_path, new_text) until a call failed. The self-check holds these names to the real tools."""
+    return ("Tool arguments (exact names): knowledge_read(path, offset, limit); knowledge_search(pattern, root); "
+            "knowledge_semantic_search(query, root); knowledge_edit(path, old_string, new_string), where old_string is "
+            "text copied from a fresh knowledge_read, unique in the file, without its line numbers; "
+            "knowledge_write(path, content, base_version); knowledge_new_memo(title, description, type, heading, status, "
+            f"decisions); knowledge_lesson(what, why, prevent). A path includes its root, e.g. '{mem}/MEMORY.md'.")
+
+
 def context_parts(project: str = "homelab", agent: str = "", chat: bool = False, webchat: bool = False) -> list[str]:
     """Startup context for the plugin's SessionStart hooks: what a VM session in that project gets loaded natively,
     split on line boundaries into parts that each fit one hook output, so nothing is cut off. The tasks handed to
@@ -2245,7 +2308,7 @@ def context_parts(project: str = "homelab", agent: str = "", chat: bool = False,
                 f"copies every .md to the server. Memory: {mem}/ with the index {mem}/MEMORY.md (below). Save and update "
                 f"memories there (knowledge_edit, or knowledge_write for a new file plus one index line), never in local "
                 "files. Search: knowledge_search, by meaning knowledge_semantic_search; housekeeping: knowledge_lint.",
-                house_rules(mem), *[r for r in [dev_rules()] if r]]
+                tool_calls(mem), house_rules(mem), *[r for r in [dev_rules()] if r]]
         with index.lock:
             empty = not any(r.startswith(mem + "/") and r != f"{mem}/MEMORY.md" for r in list(index.files))
         if empty:  # a new guest whose folder may already hold CLAUDE.md / AGENTS.md / GEMINI.md and notes
@@ -2275,7 +2338,8 @@ def context_parts(project: str = "homelab", agent: str = "", chat: bool = False,
         f"{secrets}; writes containing a known secret are refused. Search by meaning: "
         "knowledge_semantic_search; context of one note: knowledge_related. New raw material "
         "(a URL, PDF or pasted text): knowledge_ingest, then turn it into memos. Housekeeping: knowledge_lint."
-        + (f" Graph view for the user: {PUBLIC_URL}/ui" if PUBLIC_URL else "")
+        + (f" Graph view for the user: {PUBLIC_URL}/ui" if PUBLIC_URL else ""),
+        tool_calls(mem),
     ]
     for rel in ("claude/CLAUDE.md", f"{docs}/CLAUDE.md", f"{mem}/MEMORY.md"):
         try:

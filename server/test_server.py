@@ -163,6 +163,11 @@ def tasks_contract(tmp, ck, fr, ver, raw):
     assert er and "found 0 times" in said, said
     er, said = call("knowledge_edit", {"path": "garden-memory/project_legacy.md", "after": "x", "new_string": "y"})
     assert er and "old_string is required" in said, said
+    assert "knowledge_edit takes: " in said and "Unknown argument(s) you sent: after" in said, said  # a weak model learns the names
+    guessed = {"file_path": "garden-memory/project_legacy.md", "old_text": "and more", "replacement": "and more again"}
+    assert not call("knowledge_edit", guessed)[0] and legacy.read_text().count("and more again") == 1  # guessed names mapped
+    er, said = call("knowledge_lesson", {"lesson": "x"})
+    assert er and "knowledge_lesson takes: what (required), why (required), prevent (required)" in said, said
     authors = lambda: json.loads((tmp / "task_authors.json").read_text())
     assert authors()["garden"]["LEG-1"]["by"] == "laptop", authors()  # the VM watcher's device wrote it straight to disk
     assert rows()["LEG-1"]["legacy"] and rows()["LEG-1"]["startable"], rows()["LEG-1"]
@@ -3235,6 +3240,14 @@ def main():
         assert "Sup3rSecret99" in call("knowledge_read", {"name": "creds.md"})[1]  # resolves bare filename in scope
         assert "Sup3rSecret99" in call("knowledge_read", {"name": "creds"})[1]  # resolves bare filename without .md
         assert "Sup3rSecret99" in call("knowledge_read", {"path": "memory/creds"})[1]  # appends .md if missing
+        for guess in ({"file_path": "memory/creds.md"}, {"Path": "memory/creds.md"}, {"file_name": "creds.md"}):
+            assert "Sup3rSecret99" in call("knowledge_read", guess)[1], guess  # names weak models guess
+        text = call("knowledge_read", {"path": "memory/creds.md", "start_line": 2, "end_line": 3})[1]
+        assert re.findall(r"^\s*(\d+)\t", text, re.M) == ["2", "3"], text  # end_line becomes limit
+        import server as srv
+        names = {t["name"]: set(t["inputSchema"]["properties"]) for t in json.loads(http("POST", "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})[1])["result"]["tools"]}
+        for tool, args in re.findall(r"(knowledge_\w+)\(([^)]*)\)", srv.tool_calls("m")):
+            assert set(args.split(", ")) <= names[tool], (tool, args)  # the start context names only real arguments
         assert call("knowledge_list", {"dir": "memory/"})[1].count("fact.md") == 1  # list accepts dir alias and trailing slash
         err, text = call("knowledge_read", {"path": "memory/missing.md"})
         assert err and text.endswith("memory/missing.md does not exist"), text
