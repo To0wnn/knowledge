@@ -856,6 +856,11 @@ async def shell(browser, devices, secret: str) -> None:
     if any("work" in a for a in acc[0]):  # the seeded pc (ui_ci): own sign-in, a token account, one waiting for its code
         check(acc[0][0].startswith("own") and any("long-lived token" in a for a in acc[0]) and acc[1] == ["https://claude.com/cai/oauth/authorize?code=true"],
               f"Machines: Claude accounts with the sign-in link of the one that waits {acc}")
+        await pg.locator("#machines .mx-accounts button", has_text="Add account").first.click()
+        ways = await pg.evaluate("""(() => { const d = document.querySelector('dialog.mx-dialog[open]'), w = [...d.querySelectorAll('.seg button')];
+          const hidden = () => d.querySelector('input[type=password]').closest('label').hidden, got = [w.map((b) => b.textContent), hidden()];
+          w[2].click(); got.push(hidden(), d.querySelector('input[type=password]').placeholder); d.close(); return got; })()""")
+        check(ways == [["Browser", "Long-lived token", "API key"], True, False, "sk-ant-api03-…"], f"Machines: Add account offers browser, token and API key as buttons {ways}")
     if yolo["switches"]:
         check(yolo["heads"] >= 1 and yolo["more"] >= 1 and not yolo["forget"], f"Machines: YOLO is a switch per agent, pc actions in its column head, Forget behind More {yolo}")
         most = await pg.evaluate("""() => { const n = document.querySelector('.mx-head input[type=number][aria-label^="Agents at once"]'); if (!n) return null;

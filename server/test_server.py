@@ -754,13 +754,16 @@ def machines_contract(tmp, ck, fr, raw, er, et, heard):
     assert act({"action": "claude_login", "args": {"account": "../x"}})[0] == 400
     assert act({"action": "claude_token", "args": {"account": "werk", "token": "sk-ant-api03-" + "x" * 30}})[0] == 400
     assert act({"action": "claude_code", "args": {"account": "werk", "code": "a b"}})[0] == 400
-    sign_tok, sign_code = "sk-ant-oat01-" + "q" * 40, "abcdefgh#ijklmnop"
+    sign_tok, sign_code, sign_key = "sk-ant-oat01-" + "q" * 40, "abcdefgh#ijklmnop", "sk-ant-api03-" + "z" * 40
+    assert act({"action": "claude_key", "args": {"account": "werk", "key": sign_tok}})[0] == 400, "a token is not an API key"
     assert act({"action": "claude_token", "args": {"account": "werk", "token": sign_tok}})[0] == 200
     assert act({"action": "claude_code", "args": {"account": "werk", "code": sign_code}})[0] == 200
+    assert act({"action": "claude_key", "args": {"account": "werk", "key": sign_key}})[0] == 200
     shown = raw("GET", "/ui/api/machines", headers=ck)[2] + raw("GET", "/ui/api/admin", headers=ck)[2]
-    assert sign_tok.encode() not in shown and sign_code.encode() not in shown, "never shown on the page or in the audit log"
+    assert not any(x.encode() in shown for x in (sign_tok, sign_code, sign_key)), "never shown on the page or in the audit log"
     got = json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"]
-    assert [a["args"] for a in got] == [{"account": "werk", "token": sign_tok}, {"account": "werk", "code": sign_code}], got
+    assert [a["args"] for a in got] == [{"account": "werk", "token": sign_tok}, {"account": "werk", "code": sign_code}, {"account": "werk", "key": sign_key}], got
+    assert sign_key not in ((tmp / "machine_actions.json").read_text() + (tmp / "audit.log").read_text())
     assert sign_tok not in ((tmp / "machine_actions.json").read_text() + (tmp / "audit.log").read_text()), "handed out: gone from the queue file, never in the audit log"
     for a in got:
         http("POST", "/machine/actions/result", {"id": a["id"], "ok": True, "result": "ok"}, token=fr, headers=pc)

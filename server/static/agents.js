@@ -1340,7 +1340,7 @@ function ckPicker(card) {
     row.append(el("span", "ck-mfam", "Account"), seg);
     for (const a of [{ id: "" }, ...accounts]) {
       const b = el("button", null, a.id || "own"); b.type = "button";
-      b.title = a.id ? `${a.email || (a.kind === "token" ? "long-lived token" : "not signed in")}${usageWindows(a).length ? ` · ${usageText(a)}` : ""}` : "The pc's own Claude sign-in";
+      b.title = a.id ? `${a.email || ({ token: "long-lived token", apikey: "API key" })[a.kind] || "not signed in"}${usageWindows(a).length ? ` · ${usageText(a)}` : ""}` : "The pc's own Claude sign-in";
       b.setAttribute("aria-pressed", String((card.pick.account || "") === a.id));
       b.onclick = (e) => { e.stopPropagation(); card.pick = { ...card.pick, account: a.id, touched: true }; ckPicker(card); };
       seg.append(b);

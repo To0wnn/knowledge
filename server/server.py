@@ -6637,7 +6637,7 @@ async def ui_machine_share(request: Request, body: dict):
 
 
 CLAUDE_ACCOUNT = re.compile(r"[a-z0-9][a-z0-9-]{0,30}")  # = plugin accounts.py ID
-SECRET_ARGS = ("token", "code")  # a sign-in in an action: handed to the pc once, never kept, shown or logged
+SECRET_ARGS = ("token", "code", "key")  # a sign-in in an action: handed to the pc once, never kept, shown or logged
 
 
 def hide_secrets(args: dict) -> dict:
@@ -6652,7 +6652,7 @@ def report_accounts(v) -> list:
             continue
         login = str(a.get("login") or "")
         out.append({"id": a["id"], "email": str(a.get("email") or "")[:120], "plan": str(a.get("plan") or "")[:40],
-                    "kind": a["kind"] if a.get("kind") in ("login", "token") else "", "error": str(a.get("error") or "")[:300],
+                    "kind": a["kind"] if a.get("kind") in ("login", "token", "apikey") else "", "error": str(a.get("error") or "")[:300],
                     # the sign-in page of Claude Code's own OAuth: opened by the owner's browser
                     **({"login": login} if login.startswith(("https://claude.com/", "https://claude.ai/")) and len(login) < 2000 else {}),
                     "windows": report_windows(a.get("windows"))})
@@ -6686,7 +6686,7 @@ def action_args(action: str, args: dict) -> dict:
                 **({"undo": True} if chat and action == "rollback" and args.get("undo") is True else {})}
     if action == "trust_hooks":
         return {"agent": agent()}
-    if action in ("claude_login", "claude_code", "claude_token", "claude_remove"):  # an extra Claude account on the pc (accounts.py)
+    if action in ("claude_login", "claude_code", "claude_token", "claude_key", "claude_remove"):  # an extra Claude account on the pc (accounts.py)
         if not CLAUDE_ACCOUNT.fullmatch(str(args.get("account", ""))):
             raise ValueError("account must be a name of a-z, 0-9 and -, at most 31 characters")
         out = {"account": args["account"]}
@@ -6698,6 +6698,10 @@ def action_args(action: str, args: dict) -> dict:
             if not re.fullmatch(r"sk-ant-oat\d\d-[\w-]{20,400}", str(args.get("token", "")).strip()):
                 raise ValueError("paste the token claude setup-token printed (sk-ant-oat01-...)")
             out["token"] = str(args["token"]).strip()
+        if action == "claude_key":  # an Anthropic Console API key: billed per use, not the subscription
+            if not re.fullmatch(r"sk-ant-api\d\d-[\w-]{20,400}", str(args.get("key", "")).strip()):
+                raise ValueError("paste an API key from the Anthropic Console (sk-ant-api03-...)")
+            out["key"] = str(args["key"]).strip()
         return out
     if action in ("install_tool", "remove_tool", "tool_auto"):  # an id only: the steps ship with the pc's own plugin (plugin/tools)
         if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,39}", str(args.get("tool", ""))):

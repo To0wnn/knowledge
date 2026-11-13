@@ -1125,8 +1125,8 @@ class Live:
         env = {**os.environ, "KNOWLEDGE_CHAT": self.cid, "KNOWLEDGE_ASKS": str(workers.ASKS / f"{workers.safe(self.cid)}.txt")}
         if item.get("reader"):
             env["CLAUDE_CODE_SUBAGENT_MODEL"] = str(item["reader"])
-        if self.account:  # another Claude account: its own config folder, and its token when it has one, never the pc's
-            env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+        if self.account:  # another Claude account: its own config folder, and its token or API key when it has one, never the pc's
+            env = {k: v for k, v in env.items() if k not in accounts.AUTH_ENV}
             env.update(accounts.env(self.account))
         if self.admin is False:  # admin is on here, not for this chat (a guest's): it may not raise its rights (Linux)
             cmd = admin_rights.no_raise(cmd)

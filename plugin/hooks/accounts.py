@@ -9,6 +9,7 @@ Two ways to sign an account in from the web UI (Machines > Claude Code > Account
   comes back and goes to its stdin (the code only works with this run's own PKCE verifier).
 - long-lived token: `claude setup-token` run anywhere, the token pasted; kept here in the account's folder and given
   to a chat as CLAUDE_CODE_OAUTH_TOKEN (Claude Code prefers it over a stored sign-in).
+- API key (Anthropic Console, billed per use): pasted, kept the same way, given as ANTHROPIC_API_KEY.
 
   accounts.py --self-test   the checks of this file (a fake claude)
 Standard library only; Linux, macOS and Windows.
@@ -34,6 +35,10 @@ MAIN = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")  # t
 ID = re.compile(r"[a-z0-9][a-z0-9-]{0,30}")
 OWN = "knowledge-"  # our files in an account folder: never linked from the main folder
 INFO, TOKEN, USAGE = OWN + "account.json", OWN + "token", OWN + "usage.json"
+# kind -> (file, variable, form, what to paste); at most one of them per account
+SECRETS = {"token": (TOKEN, "CLAUDE_CODE_OAUTH_TOKEN", r"sk-ant-oat\d\d-[\w-]{20,400}", "a token from claude setup-token (sk-ant-oat01-...)"),
+           "apikey": (OWN + "api-key", "ANTHROPIC_API_KEY", r"sk-ant-api\d\d-[\w-]{20,400}", "an API key from the Anthropic Console (sk-ant-api03-...)")}
+AUTH_ENV = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")  # the pc's own, never passed to another account
 # never shared: the sign-in itself, Claude's per-account state (.claude.json and its backups), and the background
 # daemon, which would otherwise take a run of this account under the default one
 NOT_LINKED = {".credentials.json", ".claude.json", "backups", "daemon", "daemon.lock", "daemon.log", "daemon.status.json"}
@@ -136,11 +141,16 @@ def env(name: str) -> dict:
         raise RuntimeError(f"there is no Claude account {name} on this pc (Machines > Claude Code > Accounts)")
     sync(d)
     out = {"CLAUDE_CONFIG_DIR": str(d)}
-    try:
-        out["CLAUDE_CODE_OAUTH_TOKEN"] = (d / TOKEN).read_text(encoding="utf-8").strip()
-    except OSError:
-        pass
+    for f, var, _, _ in SECRETS.values():
+        try:
+            out[var] = (d / f).read_text(encoding="utf-8").strip()
+        except OSError:
+            pass
     return out
+
+
+def clean_env() -> dict:
+    return {k: v for k, v in os.environ.items() if k not in AUTH_ENV}
 
 
 def command(*args) -> list:
@@ -159,7 +169,7 @@ def status(d: Path, fresh: bool = False) -> dict:
     at, got = _STATUS.get(str(d), (0, None))
     if got is not None and not fresh and time.time() - at < STATUS_TTL:
         return got
-    e = {k: v for k, v in os.environ.items() if k != "CLAUDE_CODE_OAUTH_TOKEN"}
+    e = clean_env() if d != MAIN else dict(os.environ)  # the pc's own account is what its own environment says
     try:
         r = subprocess.run(command("auth", "status", "--json"), capture_output=True, text=True, timeout=30, encoding="utf-8",
                            env={**e, **({"CLAUDE_CONFIG_DIR": str(d)} if d != MAIN else {})})
@@ -187,7 +197,7 @@ def login(name: str, wait: float = 30) -> str:
     sync(d)
     with LOCK:
         _drop(name)
-        e = {k: v for k, v in os.environ.items() if k != "CLAUDE_CODE_OAUTH_TOKEN"}
+        e = clean_env()
         # BROWSER: a pc without a desktop session must not start one (xdg-open honours it); the page opens the link
         p = subprocess.Popen(command("auth", "login", "--claudeai"), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                              env={**e, "CLAUDE_CONFIG_DIR": str(d), "BROWSER": "true" if os.name != "nt" else e.get("BROWSER", "")},
@@ -235,27 +245,33 @@ def code(name: str, text: str, wait: float = 90) -> str:
         said = next((x for x in reversed(rec["out"]) if x.strip()), "no answer")
         write(d / INFO, {**info(d), "error": said[-300:]})
         raise RuntimeError(f"sign-in failed: {said[-200:]}")
-    (d / TOKEN).unlink(missing_ok=True)  # a browser sign-in replaces a token
+    for f, _, _, _ in SECRETS.values():  # a browser sign-in replaces a token or key
+        (d / f).unlink(missing_ok=True)
     plugin_secrets(d)
     s = status(d, fresh=True)
     write(d / INFO, {**info(d), "kind": "login", "error": "", **s})
     return f"{name}: signed in" + (f" as {s['email']}" if s.get("email") else "")
 
 
-def set_token(name: str, tok: str) -> str:
-    """A long-lived token (`claude setup-token`) for account `name`, kept in its folder (owner only)."""
-    if not re.fullmatch(r"sk-ant-oat\d\d-[\w-]{20,400}", tok or ""):
-        raise ValueError("that is not a token from claude setup-token (sk-ant-oat01-...)")
+def set_secret(name: str, kind: str, value: str) -> str:
+    """A long-lived token (`claude setup-token`) or an API key for account `name`, kept in its folder (owner only);
+    it replaces the other one, and a browser sign-in there stops counting (the variable wins over it)."""
+    f, _, form, what = SECRETS[kind]
+    if not re.fullmatch(form, value or ""):
+        raise ValueError(f"that is not {what}")
     d = folder(name)
     sync(d)
-    fd, tmp = tempfile.mkstemp(dir=d, prefix=TOKEN + ".")
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=f + ".")
     with os.fdopen(fd, "w", encoding="utf-8") as out:
-        out.write(tok)
-    os.replace(tmp, d / TOKEN)
+        out.write(value)
+    os.replace(tmp, d / f)
+    for other, *_ in SECRETS.values():
+        if other != f:
+            (d / other).unlink(missing_ok=True)
     with LOCK:
         _drop(name)
-    write(d / INFO, {**{k: v for k, v in info(d).items() if k not in ("email", "plan")}, "kind": "token", "error": ""})
-    return f"{name}: long-lived token saved"
+    write(d / INFO, {**{k: v for k, v in info(d).items() if k not in ("email", "plan")}, "kind": kind, "error": ""})
+    return f"{name}: {'long-lived token' if kind == 'token' else 'API key'} saved"
 
 
 def remove(name: str) -> str:
@@ -267,7 +283,7 @@ def remove(name: str) -> str:
         _drop(name)
     # only a browser sign-in: a token account has none, and on macOS (the Keychain) its folder is the only trace
     if (d / ".credentials.json").exists() or sys.platform == "darwin" and info(d).get("kind") == "login":
-        e = {k: v for k, v in os.environ.items() if k != "CLAUDE_CODE_OAUTH_TOKEN"}
+        e = clean_env()
         try:
             subprocess.run(command("auth", "logout"), capture_output=True, timeout=30, env={**e, "CLAUDE_CONFIG_DIR": str(d)})
         except (OSError, subprocess.SubprocessError, RuntimeError):
@@ -291,7 +307,8 @@ def listing(kept_windows=None, now: float = 0) -> list:
     out = [{"id": "", **status(MAIN)}]
     for n in names():
         d, i = ROOT / n, info(ROOT / n)
-        kind = "token" if (d / TOKEN).exists() else "login" if (d / ".credentials.json").exists() or sys.platform == "darwin" and i.get("email") else ""
+        kind = next((k for k, (f, *_) in SECRETS.items() if (d / f).exists()), "") \
+            or ("login" if (d / ".credentials.json").exists() or sys.platform == "darwin" and i.get("email") else "")
         s = status(d) if kind == "login" else {}
         out.append({"id": n, "kind": kind, "email": s.get("email") or "", "plan": s.get("plan") or "", "error": i.get("error") or "",
                     **({"login": LOGINS[n]["url"]} if n in LOGINS and LOGINS[n]["url"] else {}),
@@ -392,13 +409,22 @@ def self_test():
         # the long-lived token
         for bad in ("", "sk-ant-api03-" + "x" * 30, "sk-ant-oat01-short", "sk-ant-oat01-" + "x" * 30 + " y"):
             try:
-                set_token("werk", bad)
+                set_secret("werk", "token", bad)
                 raise AssertionError(f"{bad!r} must be refused")
             except ValueError:
                 pass
+        key = "sk-ant-api03-" + "k" * 40
+        try:
+            set_secret("werk", "apikey", "sk-ant-oat01-" + "a" * 40)
+            raise AssertionError("a token is not an API key")
+        except ValueError:
+            pass
+        set_secret("werk", "apikey", key)
+        assert env("werk")["ANTHROPIC_API_KEY"] == key and "CLAUDE_CODE_OAUTH_TOKEN" not in env("werk")
+        assert {a["id"]: a for a in listing()}["werk"]["kind"] == "apikey"
         tok = "sk-ant-oat01-" + "a" * 40
-        set_token("werk", tok)
-        assert env("werk")["CLAUDE_CODE_OAUTH_TOKEN"] == tok
+        set_secret("werk", "token", tok)
+        assert env("werk")["CLAUDE_CODE_OAUTH_TOKEN"] == tok and "ANTHROPIC_API_KEY" not in env("werk"), "a token replaces the key"
         if os.name != "nt":
             assert stat.S_IMODE((folder("werk") / TOKEN).stat().st_mode) == 0o600, "only the owner reads the token"
         keep_usage("werk", [[40.0, "5h", time.time() + 99]])

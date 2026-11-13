@@ -484,16 +484,16 @@ function workersCell(m, a) {
   const running = (ag.workers || []).filter((w) => w.status === "running").length;
   return val(running ? `${running} running` : "none running", "muted");
 }
-// Claude accounts on one pc: the pc's own sign-in and each extra one (accounts.py), with sign-in, a long-lived token
-// and Remove. A chat picks one in its model chip; the sign-in itself never leaves the pc.
+// Claude accounts on one pc: the pc's own sign-in and each extra one (accounts.py), signed in by browser, long-lived
+// token or API key, and Remove. A chat picks one in its model chip; the sign-in itself never leaves the pc.
 function accountsCell(m) {
   const ag = m.agents?.claude;
   if (!ag) return null;
   if (!ag.accounts) return val(steersAgent(m, "claude") ? "Update the plugin to add accounts" : "—", "muted");
   const box = el("div", "mx-accounts"), steer = steersAgent(m, "claude");
   for (const x of ag.accounts) {
-    const line = el("div", "mx-account"), who = x.email || (x.kind === "token" ? "long-lived token" : x.id ? "not signed in" : "unknown");
-    line.append(el("b", null, x.id || "own"), " ", val(who, x.email || x.kind === "token" ? "" : "mx-diff"));
+    const line = el("div", "mx-account"), who = x.email || ACCOUNT_KIND[x.kind] || (x.id ? "not signed in" : "unknown");
+    line.append(el("b", null, x.id || "own"), " ", val(who, x.email || ACCOUNT_KIND[x.kind] ? "" : "mx-diff"));
     if (x.plan) line.append(" ", val(x.plan, "muted"));
     if (usageWindows(x).length) line.append(" ", val(usageText(x), "muted"));
     if (x.error) line.append(el("p", "machine-error", x.error));
@@ -503,13 +503,14 @@ function accountsCell(m) {
         const a = el("a", "btn small", "Open sign-in"); a.href = x.login; a.target = "_blank"; a.rel = "noopener noreferrer";
         a.title = "Sign in with the account in a new tab; claude.com then shows a code to paste here";
         line.append(" ", a, " ", machineButton("Paste code…", "The code the sign-in page showed", () => accountCode(m, x.id), busy));
-      } else line.append(" ", machineButton(x.kind ? "Sign in again" : "Sign in", `Sign ${x.id} in with the browser`, () => machineAction(m, "claude_login", { account: x.id }), busy));
+      } else line.append(" ", machineButton(x.kind ? "Change sign-in…" : "Sign in…", `Sign ${x.id} in: browser, long-lived token or API key`, () => accountAdd(m, x.id),
+        busy || pendingAction(m, "claude_token", (y) => y.account === x.id) || pendingAction(m, "claude_key", (y) => y.account === x.id)));
       line.append(" ", machineButton("Remove", `Sign ${x.id} out on ${m.label} and remove it`, () => confirm(`Remove the Claude account ${x.id} from ${m.label}? Chats that use it go back to the pc's own account.`) && machineAction(m, "claude_remove", { account: x.id }),
         pendingAction(m, "claude_remove", (y) => y.account === x.id), "btn small quiet"));
     }
     box.append(line);
   }
-  if (steer) box.append(machineButton("Add account…", "Another Claude account on this pc, for chats to pick", () => accountAdd(m), pendingAction(m, "claude_token")));
+  if (steer) box.append(machineButton("Add account…", "Another Claude account on this pc, for chats to pick", () => accountAdd(m)));
   return box;
 }
 // A small form in a dialog (it is not redrawn with the list, so what is typed stays); done once closed or sent.
@@ -527,19 +528,32 @@ function accountForm(title, intro, fields, go, send) {
   document.body.append(d); d.showModal(); fields[0]?.[1].focus();
   return closed;
 }
-function accountAdd(m) {
-  const name = el("input"), how = el("select"), token = el("input");
+const ACCOUNT_KIND = { token: "long-lived token", apikey: "API key" };
+// How an account signs in: [value, button, what it is, what to paste (none: the browser), its form]
+const ACCOUNT_WAYS = [
+  ["login", "Browser", "Sign in with the account in your browser; claude.com then shows a code to paste here. Uses the account's subscription.", "", ""],
+  ["token", "Long-lived token", "Run claude setup-token in a terminal on any pc and paste the token it prints. It holds for a year and uses the account's subscription.", "sk-ant-oat01-…", "sk-ant-oat\\d\\d-[\\w\\-]{20,400}"],
+  ["apikey", "API key", "An API key from the Anthropic Console (console.anthropic.com > API keys). Billed per use, not the subscription.", "sk-ant-api03-…", "sk-ant-api\\d\\d-[\\w\\-]{20,400}"]];
+function accountAdd(m, account = "") {
+  const name = el("input"), secret = el("input"), ways = el("div", "seg"), about = el("p", "muted");
   name.required = true; name.pattern = "[a-z0-9][a-z0-9\\-]{0,30}"; name.placeholder = "e.g. work"; name.title = "a-z, 0-9 and -";
-  how.append(new Option("Sign in with the browser", "login"), new Option("Paste a long-lived token (claude setup-token)", "token"));
-  token.type = "password"; token.autocomplete = "off"; token.placeholder = "sk-ant-oat01-…";
-  const tokenLine = el("p", "muted", "Run claude setup-token in a terminal on any pc and paste the token it prints. It holds for a year and goes only to this pc; the server does not keep it.");
-  const sync = () => { token.closest("label").hidden = tokenLine.hidden = how.value !== "token"; token.required = how.value === "token"; };
-  how.onchange = sync;
-  const shown = accountForm(`Add a Claude account on ${m.label}`, ["Chats on this pc can then run under it (the model chip). Settings, plugins and skills stay the pc's own.", tokenLine],
-    [["Name", name], ["How", how], ["Token", token]], "Add", () => (how.value === "token"
-      ? machineAction(m, "claude_token", { account: name.value, token: token.value })
-      : machineAction(m, "claude_login", { account: name.value })));
-  sync();
+  if (account) { name.value = account; name.readOnly = true; }
+  secret.type = "password"; secret.autocomplete = "off";
+  ways.setAttribute("role", "group"); ways.setAttribute("aria-label", "How it signs in");
+  let way = ACCOUNT_WAYS[0];
+  const pick = (w) => {
+    way = w; about.textContent = `${w[2]} A token or key goes only to this pc; the server does not keep it.`;
+    for (const b of ways.children) b.setAttribute("aria-pressed", String(b.dataset.way === w[0]));
+    const lab = secret.closest("label"); if (lab) { lab.hidden = !w[3]; lab.firstChild.textContent = w[1]; }
+    secret.required = !!w[3]; secret.placeholder = w[3]; secret.pattern = w[4] || ".*"; secret.value = "";
+  };
+  for (const w of ACCOUNT_WAYS) { const b = el("button", null, w[1]); b.type = "button"; b.dataset.way = w[0]; b.onclick = () => pick(w); ways.append(b); }
+  const shown = accountForm(account ? `Sign ${account} in on ${m.label}` : `Add a Claude account on ${m.label}`,
+    [...(account ? [] : ["Chats on this pc can then run under it (the model chip). Settings, plugins and skills stay the pc's own."]), ways, about],
+    [...(account ? [] : [["Name", name]]), ["Token", secret]], account ? "Sign in" : "Add", () => (way[0] === "login"
+      ? machineAction(m, "claude_login", { account: name.value })
+      : machineAction(m, way[0] === "token" ? "claude_token" : "claude_key", { account: name.value, [way[0] === "token" ? "token" : "key"]: secret.value.trim() })));
+  pick(way);
   return shown;
 }
 function accountCode(m, account) {

@@ -2161,7 +2161,9 @@ def run_action(a: dict) -> str:
     if act == "claude_code":
         return accounts.code(str(args.get("account", "")), str(args.get("code", "")))
     if act == "claude_token":
-        return accounts.set_token(str(args.get("account", "")), str(args.get("token", "")))
+        return accounts.set_secret(str(args.get("account", "")), "token", str(args.get("token", "")))
+    if act == "claude_key":
+        return accounts.set_secret(str(args.get("account", "")), "apikey", str(args.get("key", "")))
     if act == "claude_remove":
         return accounts.remove(str(args.get("account", "")))
     if act == "trust_hooks":
@@ -2331,7 +2333,7 @@ def actions_round():
         threading.Thread(target=file_request, args=(tok, f), daemon=True).start()
     for a in got.get("actions", []):
         changed = changed or a.get("action") in STATE_ACTIONS
-        shown = {k: "(hidden)" if k in ("token", "code") else v for k, v in (a.get("args") or {}).items()}  # a sign-in never in the log
+        shown = {k: "(hidden)" if k in ("token", "code", "key") else v for k, v in (a.get("args") or {}).items()}  # a sign-in never in the log
         log("remote", f"Remote action {a.get('action')} from {a.get('by') or '?'}", json.dumps(shown)[:200])
         try:
             with ACTING:
@@ -2364,7 +2366,7 @@ def live_loop():
         time.sleep(LIVE_EVERY)
 
 
-STATE_ACTIONS = {"claude_login", "claude_code", "claude_token", "claude_remove", "install_tool", "remove_tool", "tool_auto", "yolo", "admin", "workers_allowed", "max_agents", "link_folder", "unlink_folder", "trust_hooks", "stop_worker", "restart", "merge", "takeover", "archive_worker", "apply_models"}
+STATE_ACTIONS = {"claude_login", "claude_code", "claude_token", "claude_key", "claude_remove", "install_tool", "remove_tool", "tool_auto", "yolo", "admin", "workers_allowed", "max_agents", "link_folder", "unlink_folder", "trust_hooks", "stop_worker", "restart", "merge", "takeover", "archive_worker", "apply_models"}
 
 
 # ---------------------------------------------------------------- the page
