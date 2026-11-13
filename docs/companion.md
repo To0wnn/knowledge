@@ -237,7 +237,9 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   - **Switch to long-lived token…:** runs `claude setup-token` in a pty on the pc; Open sign-in opens the authorization
     link in your browser, and pasting the code into the inline input and clicking Confirm saves the 1-year token. In a
     pty claude draws the link as an OSC 8 hyperlink (`ESC]8;;<url>BEL<text>`); the link is cut at the first control
-    character, else the page gets a broken `state` and says "Sign-in did not complete".
+    character, else the page gets a broken `state` and says "Sign-in did not complete". Its TUI reads raw keys, so the
+    code goes in with `\r` (Enter; `\n` does nothing), and the pty is 500 columns wide so the token is never wrapped; a
+    refused code ends the run at once with claude's own message.
   - **✕ beside a waiting sign-in:** stops it (`claude_cancel`: the waiting claude ends, the link leaves the page);
     the account stays as it was, so you can start over.
   - **Long-lived token / API key directly:** `sk-ant-oat01-…` from a terminal or `sk-ant-api03-…` Console key, pasted into

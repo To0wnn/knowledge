@@ -297,14 +297,19 @@ def login(name: str, wait: float = 30, by: str = "", setup: bool = False) -> str
         cmd = command("setup-token") if setup else command("auth", "login", "--claudeai")
         if setup and os.name != "nt":
             import pty
+            import fcntl
+            import struct
+            import termios
             master, slave = pty.openpty()
+            # wide, so claude never wraps the 1-year token over two lines
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 500, 0, 0))
             p = subprocess.Popen(cmd, stdin=slave, stdout=slave, stderr=slave,
                                  env={**e, "BROWSER": "true"}, close_fds=True)
             os.close(slave)
-            rec = LOGINS[name] = {"p": p, "master": master, "url": "", "out": [], "at": time.time(), "by": by, "setup": True}
+            rec = LOGINS[name] = {"p": p, "master": master, "url": "", "out": [], "raw": "", "at": time.time(), "by": by,
+                                  "setup": True}
 
             def read_pty():
-                seen = ""  # the link can be split over two reads: take it only once a character follows it
                 while True:
                     try:
                         chunk = os.read(master, 4096)
@@ -312,10 +317,9 @@ def login(name: str, wait: float = 30, by: str = "", setup: bool = False) -> str
                             break
                         text = chunk.decode("utf-8", errors="replace")
                         rec["out"].extend(line.rstrip() for line in text.splitlines())
-                        if not rec["url"]:
-                            seen += text
-                            if (m := URL.search(seen)) and m.end() < len(seen):
-                                rec["url"] = m.group(0)
+                        rec["raw"] += text  # the link and the token can be split over two reads: searched whole here
+                        if not rec["url"] and (m := URL.search(rec["raw"])) and m.end() < len(rec["raw"]):
+                            rec["url"] = m.group(0)
                     except OSError:
                         break
             threading.Thread(target=read_pty, daemon=True).start()
@@ -342,6 +346,18 @@ def login(name: str, wait: float = 30, by: str = "", setup: bool = False) -> str
     if name:
         write(d / INFO, {**owned(d, by), "kind": "token" if setup else "login", "error": ""})
     return rec["url"]
+
+
+def plain(text: str) -> str:
+    """Terminal output as text: cursor moves within a line become spaces, other escapes (colours, OSC 8 links) go."""
+    text = re.sub(r"\x1b\[\d*[CG]", " ", text)
+    return re.sub(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\r", "", text)
+
+
+def printed_token(rec: dict) -> str:
+    """The whole 1-year token claude setup-token printed, once a character after it shows it is complete."""
+    m = re.search(r"sk-ant-oat\d\d-[\w-]{20,400}(?=[^\w-])", rec.get("raw") or "\n".join(rec["out"]) + "\n")
+    return m.group(0) if m else ""
 
 
 def cancel(name: str) -> str:
@@ -373,7 +389,7 @@ def code(name: str, text: str, wait: float = 90) -> str:
         setup = rec.get("setup", False)
         if "master" in rec:
             try:
-                os.write(rec["master"], (clean + "\n").encode("utf-8"))
+                os.write(rec["master"], (clean + "\r").encode("utf-8"))  # claude's TUI reads raw keys: Enter is \r, \n does nothing
             except OSError as e:
                 raise RuntimeError(f"the sign-in ended: {e}") from e
         else:
@@ -389,9 +405,8 @@ def code(name: str, text: str, wait: float = 90) -> str:
 
     end = time.time() + wait
     if setup:
-        while rec["p"].poll() is None and time.time() < end:
-            if any(re.search(r"sk-ant-oat\d\d-[\w-]{20,400}", line) for line in rec["out"]):
-                break
+        while rec["p"].poll() is None and time.time() < end and not printed_token(rec) \
+                and "Press Enter to retry" not in rec.get("raw", ""):  # a refused code: claude waits for a retry forever
             time.sleep(0.1)
     else:
         try:
@@ -404,14 +419,15 @@ def code(name: str, text: str, wait: float = 90) -> str:
             _drop(name)
 
     # A 1-year token printed by claude setup-token:
-    token = next((m.group(0) for line in rec["out"] if (m := re.search(r"sk-ant-oat\d\d-[\w-]{20,400}", line))), None)
+    token = printed_token(rec)
     if token:
         set_secret(name, "token", token, by=by)
         s = status(MAIN) if not name else {}
         return f"{name or 'own'}: long-lived token saved" + (f" as {s['email']}" if s.get("email") else "")
 
     if setup:
-        said = next((x for x in reversed(rec["out"]) if x.strip()), "no answer")
+        lines = [x.strip() for x in plain(rec.get("raw") or "\n".join(rec["out"])).splitlines() if x.strip()]
+        said = next((x for x in reversed(lines) if "error" in x.lower()), lines[-1] if lines else "no answer")
         note(name, d, error=said[-300:])
         raise RuntimeError(f"setup-token failed: {said[-200:]}")
 
@@ -638,8 +654,9 @@ def self_test():
             "    print('Paste code here if prompted > ', end='', flush=True)\n"
             "    c = sys.stdin.readline().strip()\n"
             "    if c != 'good#code':\n"
-            "        print('Error: That code was not accepted.'); sys.exit(1)\n"
-            "    print('Long-lived authentication token created successfully!\\nYour OAuth token (valid for 1 year):\\nsk-ant-oat01-0123456789abcdef0123456789abcdef0123456789\\n')\n"
+            "        print('\\x1b[3AOAuth error:\\x1b[1CThat code was not accepted. Press Enter to retry.', flush=True); sys.stdin.readline(); sys.exit(1)\n"
+            "    sys.stdout.write('Long-lived authentication token created successfully!\\nYour OAuth token (valid for 1 year):\\nsk-ant-oat01-0123456789'); sys.stdout.flush()\n"
+            "    import time; time.sleep(0.3); print('abcdef0123456789abcdef0123456789\\n', flush=True)\n"
             "elif sys.argv[1:3] == ['auth', 'status']:\n"
             "    ok = not d or os.path.exists(os.path.join(d, '.credentials.json'))  # no folder: the default account\n"
             "    print(json.dumps({'loggedIn': ok, 'email': 'w@example.org' if 'accounts' in d else 'me@example.org', 'planTier': 'max_5x'}))\n"
@@ -670,10 +687,18 @@ def self_test():
         assert json.loads((MAIN / ".credentials.json").read_text())["claudeAiOauth"]["accessToken"] == "new"
         assert logout_own() == "own: signed out" and not (MAIN / ".credentials.json").exists()
         # setup-token creates a 1-year token directly via the browser flow
+        login("tok1", setup=True)
+        t0 = time.time()
+        try:
+            code("tok1", "bad")
+            raise AssertionError("a refused code must fail")
+        except RuntimeError as e:
+            assert "OAuth error: That code was not accepted" in str(e) and time.time() - t0 < 10, (str(e), time.time() - t0)
         u2 = login("tok1", setup=True)
         assert u2 == url and {a["id"]: a for a in listing()}["tok1"]["login"] == url
         assert code("tok1", "good#code").startswith("tok1: long-lived token saved")
         assert {a["id"]: a for a in listing()}["tok1"]["kind"] == "token"
+        assert (kept("tok1") / TOKEN).read_text(encoding="utf-8").endswith("abcdef0123456789"), "the whole token, though printed in two parts"
         remove("tok1")
         login("tok3", setup=True)
         p3 = LOGINS["tok3"]["p"]
