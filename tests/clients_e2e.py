@@ -304,7 +304,7 @@ def start_server(tmp: Path):
            "KNOWLEDGE_PORT": str(PORT), "KNOWLEDGE_BIND": "127.0.0.1", "KNOWLEDGE_RESCAN": "3600", "KNOWLEDGE_EMBED_MODEL": "hash",
            "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"), "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"),
            "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}", "PYTHONUTF8": "1", "KNOWLEDGE_WORKER_FOLLOW_SECONDS": str(FOLLOW), "KNOWLEDGE_CHAT_ASK_MINUTE": "3",
-           "KNOWLEDGE_GITHUB_RAW": "http://127.0.0.1:9"}  # no newest-version lookup on GitHub from a test
+           "KNOWLEDGE_GITHUB_RAW": "http://127.0.0.1:9", "KNOWLEDGE_GITHUB_API": "http://127.0.0.1:9"}  # no newest-version lookup on GitHub from a test
     log = open(tmp / "server.log", "wb")
     proc = subprocess.Popen([sys.executable, str(REPO / "server" / "server.py")], env=env, stdout=log, stderr=subprocess.STDOUT)
     if not wait_for(lambda: _health(), 60):

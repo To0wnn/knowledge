@@ -3011,8 +3011,10 @@ def main():
         def do_GET(self):
             path, _, q = self.path.partition("?")
             files = lambda c: gh["commits"][c]
-            if path.endswith("/main/plugin/.claude-plugin/plugin.json"):  # the newest plugin version
+            if path.endswith("/contents/plugin/.claude-plugin/plugin.json") and q == "ref=main":  # the newest plugin version, asked first
                 body = json.dumps({"version": "0.9.16"}).encode()
+            elif path.endswith("/main/plugin/.claude-plugin/plugin.json"):  # raw lags behind (its CDN cache): never the answer while the API has one
+                body = json.dumps({"version": "0.9.15"}).encode()
             elif path.startswith("/raw/"):
                 _, _, _, _, commit, *rest = path.split("/")
                 body = files(commit)["/".join(rest[2:])].encode()

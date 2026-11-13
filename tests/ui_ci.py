@@ -58,7 +58,7 @@ def start(tmp: Path) -> subprocess.Popen:
            "KNOWLEDGE_AUDIT": str(tmp / "audit.log"), "KNOWLEDGE_PORT": str(PORT), "KNOWLEDGE_BIND": "127.0.0.1",
            "KNOWLEDGE_ALLOWED_HOSTS": f"127.0.0.1:{PORT}", "KNOWLEDGE_EMBED_MODEL": "hash", "KNOWLEDGE_SECRETS": str(tmp / "secrets.json"),
            "KNOWLEDGE_VECTORS": str(tmp / "vectors.npz"), "KNOWLEDGE_RESCAN": "3600",
-           "KNOWLEDGE_GITHUB_RAW": "http://127.0.0.1:9"}  # no newest-version lookup on GitHub from a test
+           "KNOWLEDGE_GITHUB_RAW": "http://127.0.0.1:9", "KNOWLEDGE_GITHUB_API": "http://127.0.0.1:9"}  # no newest-version lookup on GitHub from a test
     proc = subprocess.Popen([sys.executable, str(REPO / "server" / "server.py")], env=env,
                             stdout=open(tmp / "server.log", "wb"), stderr=subprocess.STDOUT)
     for _ in range(300):

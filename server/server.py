@@ -2876,6 +2876,9 @@ def mark_used(name: str):
 
 PLUGIN_SEEN_FILE = ADMIN_DIR / "plugin_seen.json"
 PLUGIN_LATEST_URL = f"{ext.RAW}/To0wnn/knowledge/main/plugin/.claude-plugin/plugin.json"
+# the API first: raw.githubusercontent.com is cached 5 minutes, so the server a deploy starts right after its push read
+# the old version and kept it for its next 10 minutes (13 Nov 2026: pcs updated 10+ minutes late); the API caches 60 s
+PLUGIN_LATEST_API = f"{ext.API}/repos/To0wnn/knowledge/contents/plugin/.claude-plugin/plugin.json?ref=main"
 PLUGIN_GRACE = int(os.environ.get("KNOWLEDGE_PLUGIN_GRACE", 2 * 86400))  # Codex and agy check for updates once a day; only a device behind for longer is told
 PLUGIN_STALE = 30 * 86400  # a device not seen for this long is gone, not behind
 _plugin_latest: dict = {"at": 0.0}
@@ -2888,6 +2891,24 @@ def plugin_version(v: str) -> tuple:
         return ()
 
 
+def newest_plugin_json() -> dict:
+    """plugin.json on main: the GitHub API (with the server's GitHub token when it has one: 5000 calls an hour, not
+    60 per address), else raw.githubusercontent.com."""
+    tok = os.environ.get("KNOWLEDGE_GITHUB_TOKEN", "")
+    api = urllib.request.Request(PLUGIN_LATEST_API, headers={"Accept": "application/vnd.github.raw", **({"Authorization": f"Bearer {tok}"} if tok else {})})
+    failed: Exception = OSError("no source")
+    for src in (api, PLUGIN_LATEST_URL):
+        try:
+            with urllib.request.urlopen(src, timeout=5) as r:
+                got = json.loads(r.read().decode())
+            if isinstance(got, dict) and isinstance(got.get("version"), str):
+                return got
+            failed = ValueError(f"no version in {getattr(src, 'full_url', src)}")
+        except (OSError, ValueError) as e:
+            failed = e
+    raise failed
+
+
 def plugin_latest() -> tuple[str, float] | None:
     """The newest plugin version on GitHub and since when the server knows it, checked at most every 10 minutes.
     The "since" starts the grace period, so a fresh release does not make every device "behind" at once."""
@@ -2895,8 +2916,7 @@ def plugin_latest() -> tuple[str, float] | None:
     if time.time() - _plugin_latest["at"] > 600:  # every pc updates itself within minutes of a release
         _plugin_latest["at"] = time.time()
         try:
-            with urllib.request.urlopen(PLUGIN_LATEST_URL, timeout=5) as r:
-                v = json.loads(r.read().decode())["version"]
+            v = newest_plugin_json()["version"]
             if v != seen.get("_latest", {}).get("v") and plugin_version(v):
                 seen["_latest"] = {"v": v, "since": time.time()}
                 write_json(PLUGIN_SEEN_FILE, seen)
