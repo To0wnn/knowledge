@@ -1502,10 +1502,12 @@ SEARCH_SECONDS = 3
 
 
 @server.tool(annotations=READ)
-def knowledge_search(pattern: str = "", query: str = "", search: str = "", text: str = "", root: str = "", max_results: int = 60, archive: bool = False) -> str:
+async def knowledge_search(pattern: str = "", query: str = "", search: str = "", text: str = "", root: str = "", max_results: int = 60, archive: bool = False) -> str:
     """Case-insensitive regex search over shared files (all roots, or one or more comma-separated roots, e.g.
-    "trade,trade-memory"). Returns path:line: text. Archive folders (archief/, old/, history/ ...) and session-log
-    entries older than two weeks are skipped and only counted; archive=true searches them too."""
+    "trade,trade-memory"): one word or an exact phrase, alternatives as a|b. Returns path:line: text. Plain words
+    that match no line as one phrase get knowledge_semantic_search's hits instead. Archive folders (archief/, old/,
+    history/ ...) and session-log entries older than two weeks are skipped and only counted; archive=true searches
+    them too."""
     target = pattern or query or search or text
     if not target:
         raise ToolError("pattern is required (regex to search for)")
@@ -1519,9 +1521,15 @@ def knowledge_search(pattern: str = "", query: str = "", search: str = "", text:
     except regex.error as e:
         raise ToolError(f"invalid regex: {e}")
     try:
-        found = search_lines(rx_i, rx_low, root, max_results, archive)
+        found = await asyncio.to_thread(search_lines, rx_i, rx_low, root, max_results, archive)
         if found.startswith("(no matches)"):
-            log_gap("search", target)
+            # Weaker models (Haiku, Gemini Flash) send keyword lists such as "icing engine start pushback" here: half of
+            # all empty searches until 13 Nov 2026, after which they grepped local files instead of reading the memo.
+            if " " in target.strip() and not re.search(r"[|.*+?()\[\]{}^$\\]", target):
+                found += "\nNo line holds these words as one phrase; by meaning (knowledge_semantic_search):\n" + \
+                    await knowledge_semantic_search(query=target, root=root, archive=archive)  # it logs its own gap
+            else:
+                log_gap("search", target)
         return found
     except TimeoutError:
         raise ToolError(f"search took longer than {SEARCH_SECONDS} s; use a simpler pattern")

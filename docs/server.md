@@ -69,6 +69,10 @@ the admin page to be given projects. `KNOWLEDGE_PROXY_IPS` are the addresses tru
   (`ARG_GUESSES` in `server.py`, `end_line` becomes `limit`), and a failed call names the tool's arguments and the
   unknown ones sent. The start context lists the exact names of the most used tools (`tool_calls`). Measure the effect
   with `tests/tool_errors_by_model.py` (failed knowledge calls per model from the chat logs).
+- **Keywords in the regex search:** weaker models send keyword lists to `knowledge_search` ("icing engine start
+  pushback"), which as a regex matches no line; until 13 Nov 2026 that was half of all empty searches, and the agent
+  then grepped local files instead. Plain words (spaces, no regex characters) that match nothing now return
+  `knowledge_semantic_search`'s hits under the `(no matches)` line; only that search logs a knowledge gap then.
 - **Clients** (`plugin/`): one folder that installs as a plugin in Claude Code, Codex and agy. It adds the MCP server,
   the session-start hook, a session log and a docs mirror for guest projects. Codex and agy reach the server through a
   small stdio relay, so the token never sits in a config file. `clients/knowledge-agent.py` sets everything up.

@@ -3598,10 +3598,10 @@ def main():
         assert len([h for h in hits if h.startswith("memory/fact.md:")]) == 2, hits
         # A native edit on the VM is invisible until the watcher reports it; then it is visible at once.
         (mem / "fact.md").write_text("line one\nnative edit\n")
-        assert "native edit" not in call("knowledge_search", {"pattern": "native edit"})[1]
+        assert "native edit" not in call("knowledge_search", {"pattern": "native edit$"})[1]
         assert http("POST", "/invalidate", {"paths": ["memory/fact.md"]}, token="rw-token")[0] == 403
         assert http("POST", "/invalidate", {"paths": ["memory/fact.md"]}, token="watch-token")[0] == 200
-        assert "memory/fact.md:2" in call("knowledge_search", {"pattern": "native edit"})[1]
+        assert "memory/fact.md:2" in call("knowledge_search", {"pattern": "native edit$"})[1]
         (mem / "fact.md").unlink()
         http("POST", "/invalidate", {"paths": ["memory/fact.md"]}, token="watch-token")
         assert "memory/fact.md" not in call("knowledge_list", {"root": "memory"})[1]
@@ -4480,14 +4480,14 @@ def main():
         # Knowledge gaps: a search that finds nothing is listed once per query (case-insensitive), with its count;
         # also the very first line of a small log (it was skipped like a cut-off line).
         (tmp / "gaps.log").unlink(missing_ok=True)
-        for q in ("Pond Mowing Schedule", "pond mowing schedule"):
+        for q in ("Pond-Mowing-Schedule", "pond-mowing-schedule"):  # no spaces: plain words would fall back to meaning
             assert call("knowledge_search", {"pattern": q})[1] == "(no matches)"
         gaps = json.loads(raw("GET", "/ui/api/admin", headers=ck)[2])["system"]["gaps"]
-        assert gaps[0]["query"].lower() == "pond mowing schedule" and gaps[0]["count"] == 2 and gaps[0]["tool"] == "search", gaps
+        assert gaps[0]["query"].lower() == "pond-mowing-schedule" and gaps[0]["count"] == 2 and gaps[0]["tool"] == "search", gaps
         # A note opened soon after a failed search is kept as a (query, note) pair for the lesson loop's aliases, once.
         assert not call("knowledge_read", {"path": "homelab/overzicht.md"})[0]
         pairs = json.loads(http("GET", "/gap-answers")[1])
-        assert any(x["query"].lower() == "pond mowing schedule" and x["path"] == "homelab/overzicht.md" for x in pairs), pairs
+        assert any(x["query"].lower() == "pond-mowing-schedule" and x["path"] == "homelab/overzicht.md" for x in pairs), pairs
         n = len(pairs); call("knowledge_read", {"path": "homelab/overzicht.md"})
         assert len(json.loads(http("GET", "/gap-answers")[1])) == n  # the gap is used up
         assert http("GET", "/gap-answers", token="ro-token")[0] == 403
@@ -4588,6 +4588,10 @@ def main():
         assert (tmp / "listening-blue").read_text().strip().isdigit()
         assert "trade-memory/" in call("knowledge_semantic_search", {"query": "entry timing", "root": "trade-memory"})[1]
         assert re.search(r"trade-memory/\S+ \(\d\.\d+, \d+\.\d KB", call("knowledge_semantic_search", {"query": "entry timing", "root": "trade-memory"})[1])  # size per hit
+        # Plain keywords that are no phrase in any line fall back to search by meaning; a regex that finds nothing does not.
+        res = call("knowledge_search", {"pattern": "timing walrus entry", "root": "trade-memory"})[1]
+        assert res.startswith("(no matches)") and "by meaning" in res and "trade-memory/" in res, res
+        assert "by meaning" not in call("knowledge_search", {"pattern": "timing|zzqx walrus", "root": "trade-memory"})[1]
         # A weak answer tells the agent, in the result, to add the search words as an alias where it finds the answer.
         for _ in range(200):  # while edits above are still being embedded the server names no gap (vec.pending): wait for that
             weak = call("knowledge_semantic_search", {"query": "zzqx plumbing quantum walrus"})[1]
