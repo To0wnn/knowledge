@@ -865,12 +865,15 @@ async def shell(browser, devices, secret: str) -> None:
       return [accountOrder(l, 'rick').map((x) => x.id), accountGone(l[0], 'rick'), accountGone(l[0], ''), accountGone({id: '', email: 'e'}, 'rick'), accountUsage({id: 'b', windows: [[61, '7d', 0]]})]; })()""")
     check(order == [["rick", "a", "", "b"], True, False, False, ""],
           f"Accounts: main first, signed-out last and without old usage; a signed-out own one is hidden unless main {order}")
-    if any("work" in a for a in acc[0]):  # the seeded pc (ui_ci): own sign-in, a token account, one waiting for its code
+    if "https://claude.com/cai/oauth/authorize?code=true" in acc[1]:  # the seeded pc (ui_ci): own sign-in, a token account, one waiting for its code
         check(acc[0][0].startswith("own") and any("long-lived token" in a for a in acc[0]) and acc[1][0] == "https://claude.com/cai/oauth/authorize?code=true",
               f"Machines: Claude accounts with the sign-in link of the one that waits {acc}")
         gmail = next((a for a in acc[0] if a.startswith("gmail")), "")
         check(acc[1][1:] == ["https://accounts.google.com/o/oauth2/auth?client_id=x"] and "Confirm" in gmail and "Remove" in gmail,
               f"Machines: agy accounts with Google's sign-in link and a code to paste {gmail} {acc[1]}")
+        aikey, gwork = (next((a for a in acc[0] if a.startswith(n)), "") for n in ("aikey", "gwork"))
+        check("Gemini API key (AIzaSyAB…kkkk)" in aikey and "Change sign-in" in aikey and "g@example.org" in gwork and "30%" in gwork,
+              f"Machines: an agy API key account, and a Google one with its usage {aikey} {gwork}")
         work = next(a for a in acc[0] if a.startswith("work"))
         check("40%" in work and "Make main" in work and "$" not in work, f"Machines: an account shows its usage, and Make main {work}")
         api = next((a for a in acc[0] if a.startswith("cloud")), "")
@@ -2443,6 +2446,9 @@ async def grid_groups(browser, secret: str) -> None:
     box = "#bd .bd-card[data-id='000000000001'] textarea"
     await pg.locator(box).scroll_into_view_if_needed()
     await pg.fill(box, "typing here")
+    # the page settles first (a poll that lands right after the fill re-lays the grid out): the check is about the re-sort below
+    await pg.wait_for_function(f"""() => {{ const t = document.querySelector("{box}").closest('.bd-card').getBoundingClientRect().top, w = window.__still || (window.__still = {{t, at: Date.now()}});
+      if (w.t !== t) {{ window.__still = {{t, at: Date.now()}}; return false; }} return Date.now() - w.at > 500; }}""", polling=100, timeout=10000)
     top = await pg.evaluate(f"document.querySelector(\"{box}\").closest('.bd-card').getBoundingClientRect().top")  # the card: a failed poll's note moves the box inside it
     chats[0], chats[3] = {**chats[0], "raised": now + 1}, {**chats[3], "raised": now}  # ccc below the rest now, aaa stays
     chats[1] = {**chats[1], "raised": now + 9}

@@ -303,11 +303,11 @@ fixed remote actions and relays chats. Installing it is part of the client setup
 ## agy accounts per pc (Linux)
 
 - **More than one agy account on a Linux pc** (`plugin/hooks/agy_accounts.py`): Machines > agy > Accounts lists the
-  pc's own sign-in and each extra Google account. Add account… takes a name; the companion runs `agy acp --login`
+  pc's own sign-in and each extra Google account or Gemini API key. Add account… takes a name; the companion runs `agy acp --login`
   for it, its Google link shows in the row (Open sign-in), and the code Google's page shows (or the whole address of
   the page you land on) goes into the inline input and Confirm. ✕ stops a waiting sign-in, Remove takes an account
   off (after its running chats end, as for Claude). Who added it, who sees and picks it, Make main (that person's new
-  agy chats there start on it; `agy_main.json`) and the actions on a shared pc follow the Claude rules above.
+  agy chats there start on it, and the pc owner's main runs its workers; `agy_main.json`) and the actions on a shared pc follow the Claude rules above.
 - **How a chat uses it:** the model chip of an agy chat gets the Account row; a turn on an extra account always runs
   over `agy acp --gemini-dir ~/.knowledge/agy-accounts/<name>` (with YOLO as ACP's `--dangerously-skip-permissions`),
   because agy's own `-p` line takes no folder of its own. That folder links the folders of `~/.gemini` (`config` with
@@ -323,8 +323,22 @@ fixed remote actions and relays chats. Installing it is part of the client setup
 - **Checked after a sign-in:** agy must have left a token file in the account's own `antigravity-cli/` (not behind a
   link); otherwise the sign-in fails with that said, so a sign-in never quietly lands in a shared folder. A Force
   (a new agy takes the conversation on) keeps the chat's account and a guest's mark.
-- **Not (yet):** macOS and Windows (the Keychain and Credential Manager cannot be hidden from one process), workers
-  (they keep the pc's own sign-in), an API key (`GEMINI_API_KEY`), and the usage of an extra account.
+- **Gemini API key:** Add account… or Change sign-in… also takes a key from Google AI Studio (`AIza…`, billed per
+  use or the free tier). Its runs get `GEMINI_API_KEY`, and its `settings.json` becomes its own copy with
+  `modelProvider: "gemini"` (agy uses a key only then: changelog, and tested on 1.5.8: "authenticated via
+  gemini_api_key"). A Google sign-in afterwards drops the key and links the pc's own settings again.
+- **Workers:** Make main on the pc owner's own account also runs that pc's agy workers under it. `agy -p` takes no
+  `--gemini-dir` (and ignores `ANTIGRAVITY_GEMINI_DIR`) but honours `HOME`, so a worker gets a home of links
+  (`~/.knowledge/agy-accounts/<name>.home`: every entry of the real home linked, `.gemini` the account's folder) plus
+  the dead session bus; a file it writes new at the top of its home stays there. Remove waits for its workers too.
+- **Usage:** each Google account's 5-hour and weekly windows come from the cloud quota call with that account's own
+  token file (`antigravity-cli/antigravity-oauth-token` in its folder; renewed with its refresh token, never with
+  `agy models`, which would renew the pc's own), every 15 minutes; Machines shows them as bars, the model chip as what
+  is left. The worker cap and the limit chip follow the main account. An agy on an extra account never registers its
+  language server as the pc's own (`register_agy`). An API key has no quota to read.
+- **Not possible on macOS and Windows:** go-keyring reads the macOS Keychain (`/usr/bin/security`) and the Windows
+  Credential Manager directly, with no session bus to point elsewhere, so a second account there would always run as
+  the pc's own; the Accounts row says Linux only.
 
 ## Hook failures
 

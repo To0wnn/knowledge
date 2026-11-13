@@ -391,6 +391,17 @@ def agy_call(entry: dict, method: str, body: dict, timeout: float = 3) -> dict:
         return json.loads(r.read().decode("utf-8") or "{}")
 
 
+def on_extra_agy_account() -> bool:
+    """This runs in an agy on an extra account (agy_accounts.py: its dead session bus)."""
+    return "knowledge-agy-account-bus" in os.environ.get("DBUS_SESSION_BUS_ADDRESS", "")
+
+
+def own_agy_status():
+    """agy_status for the usage notice and gate, None on an extra account: the registered agy is the pc's own, whose
+    numbers are not this account's (no numbers: no notice, no refusal; the companion's cap still holds)."""
+    return None if on_extra_agy_account() else agy_status
+
+
 def agy_status(method: str = "GetUserStatus") -> dict:
     """GetUserStatus (plan, quota per model), or another method such as RetrieveUserQuotaSummary, from any running agy
     that registered: the quota is per account."""
@@ -430,6 +441,8 @@ def register_agy():
     address, csrf = os.environ.get("ANTIGRAVITY_LS_ADDRESS", ""), os.environ.get("ANTIGRAVITY_CSRF_TOKEN", "")
     if not address or not csrf:
         sys.exit("knowledge: not run by agy (no ANTIGRAVITY_LS_ADDRESS), nothing registered")
+    if on_extra_agy_account():
+        sys.exit("knowledge: an agy on an extra account (agy_accounts.py): its usage is read from its own sign-in, nothing registered")
     entry = {"address": address, "csrf": csrf, "cwd": os.getcwd(), "at": time.time()}
     try:
         agy_call(entry, "GetAllCascadeTrajectories", {})
@@ -632,7 +645,7 @@ def hints(tok: str):
             f.unlink()
         except OSError:
             pass
-    text = "\n\n".join(t for t in (text.strip(), news, limits.notice("agy", hook, agy_status)) if t)
+    text = "\n\n".join(t for t in (text.strip(), news, limits.notice("agy", hook, own_agy_status())) if t)
     print(json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": text}}]} if text.strip() else {}), flush=True)
     send_status("agy", tok)
 
@@ -664,7 +677,7 @@ def main(argv: list):
         # run by agy in its terminal on 'pak <ID>' (agy's hooks never see the user's words); the others take it themselves
         print(take(rest[0], token("-"), rest[1], os.environ.get("ANTIGRAVITY_CONVERSATION_ID") or os.environ.get("KNOWLEDGE_SESSION", ""), os.getcwd()))
     elif cmd == "gate" and rest[:1] and rest[0] in ("claude", "codex", "agy") and len(rest) <= 2:
-        out = limits.gate(rest[0], json.loads(sys.stdin.read() or "{}"), agy_status)
+        out = limits.gate(rest[0], json.loads(sys.stdin.read() or "{}"), own_agy_status())
         if out:
             print(out)
     elif cmd == "guard" and rest[:1] and rest[0] in ("claude", "codex", "agy") and len(rest) <= 2:

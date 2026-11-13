@@ -1026,6 +1026,8 @@ def save_settings(change: dict):
             s["maxAgents"] = max(0, int(change["maxAgents"]))
         if "claudeMain" in change:
             s["claudeMain"] = str(change["claudeMain"] or "")
+        if "agyMain" in change:
+            s["agyMain"] = str(change["agyMain"] or "")
         save("settings.json", s)
 
 
@@ -1034,6 +1036,24 @@ def claude_main() -> str:
     follows it; "" = the pc's own sign-in, also when that account is gone."""
     name = str(load("settings.json", {}).get("claudeMain") or "")
     return name if name in accounts.names() else ""
+
+
+def agy_main() -> str:
+    """The agy account this pc's owner made main: workers run under it and the usage limit follows it; "" = the pc's
+    own sign-in, also when that account is gone or agy accounts do not work here."""
+    name = str(load("settings.json", {}).get("agyMain") or "")
+    return name if agy_accounts.SUPPORTED and name in agy_accounts.names() else ""
+
+
+def agy_windows(name: str, now: float) -> list:
+    """One agy account's usage windows: an extra one's from its own token, the pc's own from a registered agy's
+    language server, else the cloud."""
+    if name:  # an API key has no quota to read
+        return [] if (agy_accounts.folder(name) / agy_accounts.KEY).exists() else agy_rate_read(now, name)
+    try:
+        return agent_hooks.limits.agy_summary(agent_hooks.agy_status("RetrieveUserQuotaSummary"), now) or agy_rate_read(now)
+    except LookupError:
+        return agy_rate_read(now)
 
 
 def claude_windows(name: str, ws: dict, now: float) -> list:
@@ -1075,7 +1095,8 @@ def claude_accounts(now: float, ws: dict) -> list:
 def agy_listing(now: float) -> list:
     """The agy accounts on this pc for the Machines list (agy_accounts.py); [] when they cannot be read now."""
     try:
-        return agy_accounts.listing(now)
+        main = agy_main()
+        return [{**a, **({"main": True} if a["id"] == main else {})} for a in agy_accounts.listing(now, lambda n: agy_windows(n, now))]
     except Exception as e:  # the report goes on without them
         log("error", "Could not read the agy accounts", f"{type(e).__name__}: {e}"[:300])
         return []
@@ -1098,7 +1119,7 @@ def usage_info(agent: str, ws: dict, now: float) -> list:
     tell it while a session runs, so the last reading is kept until its window resets: usage does not go down before
     that."""
     f = STATE / f"usage-{agent}.json"
-    acct = claude_main() if agent == "claude" else ""  # Claude's reading belongs to the main account it was taken under
+    acct = claude_main() if agent == "claude" else agy_main() if agent == "agy" else ""  # a reading belongs to the main account it was taken under
     got = usage_live(agent, ws, now)
     if got:
         try:
@@ -1179,26 +1200,29 @@ AGY_TOKEN = HOME / ".gemini" / "antigravity-cli" / "antigravity-oauth-token"
 AGY_QUOTA_URL = "https://daily-cloudcode-pa.googleapis.com/v1internal"  # agy's own --cloud_code_endpoint
 
 
-def agy_rate_read(now: float):
+def agy_rate_read(now: float, account: str = ""):
     """agy's quota without a running agy: the cloud call agy itself makes (retrieveUserQuotaSummary; no prompt, no
     tokens)
     with the OAuth token agy keeps; when that token expired, `agy models` (no prompt, no conversation) renews it first.
     In the background at most every CODEX_READ_EVERY; the last answer until then, None when unknown. Undocumented API:
     a failure goes to the activity log once per new error."""
-    f = STATE / "agy-rate.json"
+    f = STATE / (f"agy-rate-{account}.json" if account else "agy-rate.json")  # an extra account's (agy_accounts.py): its own
     try:
         old = json.loads(f.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         old = {}
     if now - old.get("at", 0) >= CODEX_READ_EVERY and installed("agy"):
         write_json(f, {**old, "at": now})
-        threading.Thread(target=_agy_rate_ask, args=(f, old.get("error", "")), daemon=True).start()
+        threading.Thread(target=_agy_rate_ask, args=(f, old.get("error", ""), account), daemon=True).start()
     return kept_windows(f, now)
 
 
-def _agy_token_text() -> str:
+def _agy_token_text(account: str = "") -> str:
     """agy's saved login (JSON): the OS keyring as go-keyring keeps it (service "gemini", user "antigravity"; seen in
-    Windows Credential Manager as "gemini:antigravity", 9 Nov 2026), else the file agy writes without a keyring."""
+    Windows Credential Manager as "gemini:antigravity", 9 Nov 2026), else the file agy writes without a keyring; an
+    extra account's only from its own folder."""
+    if account:
+        return agy_accounts.token_text(account)
     if AGY_TOKEN.exists():
         return AGY_TOKEN.read_text(encoding="utf-8")
     if os.name == "nt":
@@ -1222,22 +1246,23 @@ def _agy_token_text() -> str:
     return out
 
 
-def _agy_token() -> tuple:
+def _agy_token(account: str = "") -> tuple:
     """(access token, its expiry as epoch) from agy's saved login."""
-    tok = json.loads(_agy_token_text() or "{}").get("token") or {}
+    tok = json.loads(_agy_token_text(account) or "{}").get("token") or {}
     return str(tok.get("access_token") or ""), agent_hooks.limits.epoch(tok.get("expiry")) or 0
 
 
-_AGY_REFRESH = {}  # the OAuth client of agy that renewed its token, and the token: in memory only
+_AGY_REFRESH = {}  # the OAuth client of agy that renewed its token, and per account the token: in memory only
 
 
-def _agy_refresh() -> tuple:
+def _agy_refresh(account: str = "") -> tuple:
     """(access token, expiry) renewed from agy's saved refresh token, or ("", 0). On a pc without a keyring agy keeps a
     renewed token in memory only (agy 1.5.3, 9 Nov 2026), so its file stays expired after the first hour. Uses agy's own
     OAuth client, read from the installed agy binary at run time (never stored here): the pair that renews is kept."""
-    if _AGY_REFRESH.get("expiry", 0) > time.time() + 60:
-        return _AGY_REFRESH["access"], _AGY_REFRESH["expiry"]
-    refresh = (json.loads(_agy_token_text() or "{}").get("token") or {}).get("refresh_token")
+    mine = _AGY_REFRESH.setdefault(f"account:{account}", {})
+    if mine.get("expiry", 0) > time.time() + 60:
+        return mine["access"], mine["expiry"]
+    refresh = (json.loads(_agy_token_text(account) or "{}").get("token") or {}).get("refresh_token")
     exe = shutil.which("agy")
     if not refresh or not exe:
         return "", 0
@@ -1255,16 +1280,18 @@ def _agy_refresh() -> tuple:
         except (OSError, ValueError):
             continue
         if got.get("access_token"):
-            _AGY_REFRESH.update(client=(cid, secret), access=got["access_token"], expiry=time.time() + int(got.get("expires_in") or 0))
-            return _AGY_REFRESH["access"], _AGY_REFRESH["expiry"]
+            _AGY_REFRESH["client"] = (cid, secret)
+            mine.update(access=got["access_token"], expiry=time.time() + int(got.get("expires_in") or 0))
+            return mine["access"], mine["expiry"]
     return "", 0
 
 
-def _agy_rate_ask(f, last_error: str):
+def _agy_rate_ask(f, last_error: str, account: str = ""):
     got, err = None, ""
     try:
-        access, expiry = _agy_token()
-        if (not access or expiry < time.time() + 60) and (exe := shutil.which("agy")):
+        access, expiry = _agy_token(account)
+        # `agy models` renews the pc's own only (it takes no folder): an extra account renews by its refresh token
+        if (not access or expiry < time.time() + 60) and not account and (exe := shutil.which("agy")):
             cmd = [exe, "models"]
             if os.name == "nt" and exe.lower().endswith((".cmd", ".bat")):
                 cmd = workers.shim_line(cmd)
@@ -1272,7 +1299,7 @@ def _agy_rate_ask(f, last_error: str):
                            **({"creationflags": workers.WIN_FLAGS} if os.name == "nt" else {}))  # renews the token, asks no model
             access, expiry = _agy_token()
         if not access or expiry < time.time() + 60:  # agy kept the renewed token to itself
-            access, expiry = _agy_refresh() or (access, expiry)
+            access, expiry = _agy_refresh(account) or (access, expiry)
         if not access or expiry < time.time() + 60:
             raise LookupError("agy's token expired and could not be renewed (signed out?)")
         # proxies from the environment only: macOS's system proxy lookup can hang in a background thread (CI, 2 Nov 2026)
@@ -1294,7 +1321,7 @@ def _agy_rate_ask(f, last_error: str):
     except (OSError, ValueError, LookupError, KeyError, TypeError, subprocess.SubprocessError) as e:
         err = f"{type(e).__name__}: {e}"[:300]
         if err != last_error:
-            log("error", "Could not read agy's usage limit", err)
+            log("error", f"Could not read agy's usage limit{f' of account {account}' if account else ''}", err)
     try:
         write_json(f, {"at": time.time(), "windows": got or [], "error": err})
     except OSError:
@@ -1314,10 +1341,7 @@ def usage_live(agent: str, ws: dict, now: float):
             files = [f for d in days for f in CODEX.glob(f"sessions/{d.tm_year:04d}/{d.tm_mon:02d}/{d.tm_mday:02d}/rollout-*.jsonl")
                      if now - f.stat().st_mtime < 900]
             return (agent_hooks.limits.codex_used(str(max(files, key=lambda f: f.stat().st_mtime)), now) if files else []) or codex_rate_read(now)
-        try:  # a running agy's own language server first; else the cloud
-            return agent_hooks.limits.agy_summary(agent_hooks.agy_status("RetrieveUserQuotaSummary"), now) or agy_rate_read(now)
-        except LookupError:
-            return agy_rate_read(now)
+        return agy_windows(agy_main(), now)  # the account workers run under
     except Exception:  # no numbers: unknown, which allows one worker
         return []
 
@@ -1375,7 +1399,7 @@ def start_worker(t: dict, tok: str, now: float, ws: dict = None) -> tuple:
         where = {**where, **{k: first[k] for k in ("base", "base_branch", "config") if first.get(k)}} if first else where
         yolo = bool(load("yolo.json", {}).get(t["agent"], {}).get("on"))
         rec = workers.start(t["agent"], t, token_store.machine().get("label") or socket.gethostname(), where, yolo, nonce,
-                            account=claude_main() if t["agent"] == "claude" else "")
+                            account=claude_main() if t["agent"] == "claude" else agy_main() if t["agent"] == "agy" else "")
     except Exception as e:
         release(t, tok)
         raise RuntimeError(f"could not start a {AGENTS[t['agent']][0]} worker: {e}") from e
@@ -1935,6 +1959,8 @@ def report(tok: str, ws: dict, lim: dict, wait: list, now: float, waiting=None, 
     adopt_aliases(answer.get("aliases"))
     if isinstance(answer.get("claude_main"), str) and answer["claude_main"] != str(load("settings.json", {}).get("claudeMain") or ""):
         save_settings({"claudeMain": answer["claude_main"]})  # the owner's main account, chosen on the page
+    if isinstance(answer.get("agy_main"), str) and answer["agy_main"] != str(load("settings.json", {}).get("agyMain") or ""):
+        save_settings({"agyMain": answer["agy_main"]})
     _COMMANDS_SENT.update({a: (now, v["commands"]) for a, v in body["agents"].items() if "commands" in v})
     tools.TOKEN = str(answer.get("github_token") or "")  # for tool downloads only: agents keep their own gh login
     try:
@@ -2109,17 +2135,33 @@ def account_busy(name: str) -> list:
     """What runs on Claude account `name` now: its chats' ids and its workers' task ids."""
     with LOCK:
         ws = load("workers.json", {})
-    return chat.uses(name) + [w["id"] for w in ws.values() if w.get("account") == name and w.get("status") == "running"]
+    return chat.uses(name) + [w["id"] for w in ws.values() if w.get("agent", "claude") == "claude" and w.get("account") == name and w.get("status") == "running"]
+
+
+def agy_remove(name: str) -> str:
+    """Remove agy account `name` and what this companion kept of it: a new account of that name starts with no
+    usage reading or renewed token of the old one."""
+    said = agy_accounts.remove(name)
+    (STATE / f"agy-rate-{name}.json").unlink(missing_ok=True)
+    _AGY_REFRESH.pop(f"account:{name}", None)
+    return said
+
+
+def agy_busy(name: str) -> list:
+    """What runs on agy account `name` now: its chats' ids and its workers' task ids."""
+    with LOCK:
+        ws = load("workers.json", {})
+    return chat.uses(name, "agy") + [w["id"] for w in ws.values() if w.get("agent") == "agy" and w.get("account") == name and w.get("status") == "running"]
 
 
 def remove_waiting():
     """Remove each Claude or agy account whose Remove waited for its chats and workers; once, loudly when it fails."""
     for name in agy_accounts.removing():
-        if chat.uses(name, "agy"):
+        if agy_busy(name):
             continue
         try:
             chat.end_idle(name, "agy")
-            log("remote", "agy account removed after its chats ended", agy_accounts.remove(name))
+            log("remote", "agy account removed after its chats ended", agy_remove(name))
         except Exception as e:
             log("error", f"agy account {name} could not be removed", f"{type(e).__name__}: {e}"[:300])
             accounts.write(agy_accounts.folder(name) / agy_accounts.INFO, {**accounts.info(agy_accounts.folder(name)), "removing": False, "error": f"Remove failed: {e}"[:300]})
@@ -2253,7 +2295,7 @@ def run_action(a: dict) -> str:
             return accounts.remove_later(name)
         chat.end_idle(name)  # an idle live chat on it would hold its folder
         return accounts.remove(name)
-    if act in ("agy_login", "agy_cancel", "agy_code", "agy_remove"):  # extra agy accounts (agy_accounts.py)
+    if act in ("agy_login", "agy_cancel", "agy_code", "agy_key", "agy_remove"):  # extra agy accounts (agy_accounts.py)
         name = str(args.get("account", ""))
         agy_accounts.may(name, str(a.get("by") or ""), a.get("pc_owner") is True, act == "agy_remove")
         if act == "agy_login":
@@ -2263,10 +2305,12 @@ def run_action(a: dict) -> str:
             return agy_accounts.cancel(name)
         if act == "agy_code":
             return agy_accounts.code(name, str(args.get("code", "")))
-        if chat.uses(name, "agy"):  # in use: it goes once its chats end (remove_waiting)
+        if act == "agy_key":
+            return agy_accounts.set_key(name, str(args.get("key", "")), by=str(a.get("by") or ""))
+        if agy_busy(name):  # in use: it goes once its chats and workers end (remove_waiting)
             return agy_accounts.remove_later(name)
         chat.end_idle(name, "agy")
-        return agy_accounts.remove(name)
+        return agy_remove(name)
     if act == "trust_hooks":
         return trust(agent)
     if act == "link_folder":
@@ -2478,7 +2522,7 @@ def live_loop():
         time.sleep(LIVE_EVERY)
 
 
-STATE_ACTIONS = {"agy_login", "agy_cancel", "agy_code", "agy_remove", "claude_budget", "claude_cancel", "claude_logout", "claude_login", "claude_code", "claude_token", "claude_key", "claude_remove", "install_tool", "remove_tool", "tool_auto", "yolo", "admin", "workers_allowed", "max_agents", "link_folder", "unlink_folder", "trust_hooks", "stop_worker", "restart", "merge", "takeover", "archive_worker", "apply_models"}
+STATE_ACTIONS = {"agy_login", "agy_cancel", "agy_code", "agy_key", "agy_remove", "claude_budget", "claude_cancel", "claude_logout", "claude_login", "claude_code", "claude_token", "claude_key", "claude_remove", "install_tool", "remove_tool", "tool_auto", "yolo", "admin", "workers_allowed", "max_agents", "link_folder", "unlink_folder", "trust_hooks", "stop_worker", "restart", "merge", "takeover", "archive_worker", "apply_models"}
 
 
 # ---------------------------------------------------------------- the page
@@ -3449,6 +3493,13 @@ def main(argv: list):
         calls.clear(); assert update_plugins()[0].startswith("knowledge companion: its checkout"), "the companion's own checkout is part of the update"
         globals()["update_own_checkout"] = real_own
         globals()["installed"], globals()["plugin_version"], self_update.run, globals()["keep_trusted"] = real
+        # an extra agy account's usage: its own token file, never the pc's own keyring or file
+        real_tt = agy_accounts.token_text
+        agy_accounts.token_text = lambda n: json.dumps({"token": {"access_token": f"tok-{n}", "expiry": "2099-01-01T00:00:00Z"}}) if n == "werk" else ""
+        try:
+            assert _agy_token("werk") == ("tok-werk", agent_hooks.limits.epoch("2099-01-01T00:00:00Z")) and _agy_token("nobody") == ("", 0)
+        finally:
+            agy_accounts.token_text = real_tt
         # Remove of a Claude account in use: it waits for its chats and workers, then goes (remove_waiting)
         gone, in_use = [], {"werk": ["c1"]}
         real_acc = (accounts.removing, accounts.remove, accounts.remove_later, accounts.may, chat.uses, chat.end_idle, agy_accounts.removing, agy_accounts.remove)

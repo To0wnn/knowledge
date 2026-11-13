@@ -92,7 +92,8 @@ def seed() -> None:
         "accounts": [{"id": "", "email": "me@example.org", "plan": "max_5x"}, {"id": "work", "kind": "token", "windows": [[40, "5h", time.time() + 3600]]},
                      {"id": "home", "kind": "login", "login": "https://claude.com/cai/oauth/authorize?code=true"},
                      {"id": "cloud", "kind": "apikey", "spent": 2.5, "budget": 10}]},
-        "agy": {"accounts": [{"id": "", "kind": "login"}, {"id": "gmail", "login": "https://accounts.google.com/o/oauth2/auth?client_id=x"}]}},
+        "agy": {"accounts": [{"id": "", "kind": "login"}, {"id": "gmail", "login": "https://accounts.google.com/o/oauth2/auth?client_id=x"},
+                             {"id": "aikey", "kind": "apikey", "preview": "AIzaSyAB…kkkk"}, {"id": "gwork", "kind": "login", "email": "g@example.org", "windows": [[30, "Gemini 5h", time.time() + 3600]]}]}},
         "stats": {"bucket": 600, "total": {"ram": 32000, "vram": 12000},  # 24 h of load, with the pc off for a while
                   **{k: {"min": lo, "max": hi, "avg": (lo + hi) / 2, "now": lo, "series": [None if 40 < i < 60 else lo + (hi - lo) * (i * 7 % 13) / 13 for i in range(144)],
                          "hour": [lo + (hi - lo) * (i % 10) / 10 for i in range(60)], "windows": {"1h": [lo, hi * 0.9, lo + 1], "6h": [lo, hi, lo + 2]}}
