@@ -13,7 +13,7 @@ described in full on the linked page.
   only), use (also chats of their own there, every tool call asked, and Merge of that project's finished worker
   branches there) or use with YOLO (the pc's own YOLO switch counts).
   A guest's chat runs as the owner (the guest approves its tool calls: give use only to someone you would give a
-  shell), in a worktree of its own, with the owner's token narrowed to that project, and stops at the next poll once the share or the membership ends. [chats.md](chats.md#agents)
+  shell), in a worktree of its own, with the owner's token narrowed to the projects the guest may read themselves, and stops at the next poll once the share or the membership ends. [chats.md](chats.md#agents)
 - **Who may start a task.** A task line starts by itself only when its writer is trusted for that project; otherwise
   the owner or an admin approves it. A line pinned to its writer's own device starts by itself: it runs only on the pc
   that wrote it. Text by an untrusted writer reaches agents marked as data, not instructions.

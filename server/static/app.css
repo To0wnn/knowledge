@@ -547,7 +547,10 @@ body.admin-page { display: block; overflow-y: auto; }
 #machines .yolo-switch.on input[role="switch"] { background: var(--bad); }
 @media (prefers-reduced-motion: reduce) { #machines input[role="switch"], #machines input[role="switch"]::after { transition: none; } }
 .mx-tool small { font-size: 11px; }
-.mx-account { margin: 0 0 6px; overflow-wrap: anywhere; }
+.mx-account { margin: 0 0 8px; overflow-wrap: anywhere; }
+.mx-account .pill { margin-left: 4px; }
+.acc-bars { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 2px 0; }
+.acc-bar { width: 56px; height: 6px; display: inline-block; }
 .mx-busy { color: var(--act-text); font-weight: 600; }
 .mx-busy::before { content: ""; display: inline-block; width: 10px; height: 10px; margin-right: 7px; border: 2px solid var(--act-soft); border-top-color: var(--act); border-radius: 50%; vertical-align: -1px; animation: spin 0.9s linear infinite; }
 .mx-cellbtn { height: auto; padding: 3px 6px; margin: -3px -6px; border: 0; border-radius: var(--r-sm); background: none; font: inherit; font-weight: 600; cursor: pointer; }

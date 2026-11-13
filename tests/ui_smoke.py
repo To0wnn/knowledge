@@ -748,12 +748,12 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
     if draft[4]:  # a pc online that reports its models
         await pg.click("#ck-canvas .ck-model summary")
         got = await pg.evaluate("""[[...document.querySelectorAll('#ck-canvas .ck-model .ck-mfam')].map(x => x.textContent),
-          [...document.querySelectorAll('#ck-canvas .ck-mopt')].length, document.querySelectorAll('#ck-canvas .ck-mopt[aria-pressed=true]').length]""")
+          [...document.querySelectorAll('#ck-canvas .ck-mopt:not(.ck-acc)')].length, document.querySelectorAll('#ck-canvas .ck-mopt:not(.ck-acc)[aria-pressed=true]').length]""")
         check(len(got[0]) >= 1 and got[1] >= 1 and got[2] == 1, f"model chip: families, models, one picked {got}")
         box = await pg.evaluate("""(() => { const r = document.querySelector('#ck-canvas .ck-model-list').getBoundingClientRect();
           return [getComputedStyle(document.querySelector('#ck-canvas .ck-model-list')).position, r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight]; })()""")
         check(box == ["fixed", True], f"model chip: the panel is fixed and inside the window, never clipped by a small grid card {box}")
-        pick = pg.locator("#ck-canvas .ck-mopt:not([aria-pressed=true]):not(.ck-own)").first
+        pick = pg.locator("#ck-canvas .ck-mopt:not([aria-pressed=true]):not(.ck-own):not(.ck-acc)").first
         if await pick.count():
             await pick.click()
             label = await pg.locator("#ck-canvas .ck-model summary").inner_text()
@@ -768,10 +768,16 @@ async def cockpit_shell(browser, devices, secret: str) -> None:
         accs = await pg.evaluate("""(() => { const card = [...ck.cards.values()].find((c) => c.meta.draft); if (!card || !ckAccounts(card).length) return null;
           card.pick = { ...card.pick, agent: 'claude', account: '' }; delete card.picks.dataset.sig; ckPicker(card);
           document.querySelector('#ck-canvas details.ck-model').open = true;
-          const b = [...document.querySelectorAll('#ck-canvas .ck-account button')], names = b.map((x) => x.textContent);
+          const b = [...document.querySelectorAll('#ck-canvas .ck-account button')], names = b.map((x) => x.firstChild.textContent.replace(' (main)', ''));
           b[1]?.click(); return [names, document.querySelector('#ck-canvas .ck-model summary').textContent, card.pick.account]; })()""")
         if accs:
             check(accs[0][0] == "own" and len(accs[0]) >= 2 and accs[2] == accs[0][1] and accs[1].endswith(accs[0][1]), f"model chip: Account row, own first, the pick in the chip {accs}")
+            if os.environ.get("KNOWLEDGE_SMOKE_SHOTS"):
+                await pg.evaluate("document.querySelector('#ck-canvas details.ck-model').open = true")
+                await pg.locator("#ck-canvas .ck-model-list").screenshot(path=os.path.join(os.environ["KNOWLEDGE_SMOKE_SHOTS"], "chat-accounts.png"))
+            left = await pg.evaluate("[...document.querySelectorAll('#ck-canvas .ck-account button small')].map((x) => x.textContent)")
+            await pg.mouse.click(5, 5)
+            check(any("% left" in x for x in left), f"model chip: each account says what is left of it {left}")
             await pg.mouse.click(5, 5)
     else:
         print("skip: no pc reports its models: the model chip is not checked")
@@ -856,6 +862,13 @@ async def shell(browser, devices, secret: str) -> None:
     if any("work" in a for a in acc[0]):  # the seeded pc (ui_ci): own sign-in, a token account, one waiting for its code
         check(acc[0][0].startswith("own") and any("long-lived token" in a for a in acc[0]) and acc[1] == ["https://claude.com/cai/oauth/authorize?code=true"],
               f"Machines: Claude accounts with the sign-in link of the one that waits {acc}")
+        work = next(a for a in acc[0] if a.startswith("work"))
+        check("60% left" in work and "Make main" in work and "$" not in work, f"Machines: an account shows what is left of it, and Make main {work}")
+        api = next((a for a in acc[0] if a.startswith("cloud")), "")
+        check("$7.50 left of $10" in api and "Budget" in api, f"Machines: an API key shows what is left of its budget {api}")
+        check(await pg.locator("#machines .mx-accounts .acc-bar").count() >= 2, "Machines: what is left shows as bars")
+        if os.environ.get("KNOWLEDGE_SMOKE_SHOTS"):
+            await pg.locator("#machines .mx-accounts").first.screenshot(path=os.path.join(os.environ["KNOWLEDGE_SMOKE_SHOTS"], "machines-accounts.png"))
         await pg.locator("#machines .mx-accounts button", has_text="Add account").first.click()
         ways = await pg.evaluate("""(() => { const d = document.querySelector('dialog.mx-dialog[open]'), w = [...d.querySelectorAll('.seg button')];
           const hidden = () => d.querySelector('input[type=password]').closest('label').hidden, got = [w.map((b) => b.textContent), hidden()];
