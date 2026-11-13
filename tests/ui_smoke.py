@@ -1413,6 +1413,7 @@ async def shell_pages(browser, devices, secret: str) -> None:
               f"{path}: the app's views link to /ui")
     # Admin settings: short labels in plain English, the measured values in the help text under each.
     await pg.click('[data-sec="settings"]')
+    await pg.wait_for_selector("#settings-fields label", timeout=15000)  # the fields come with their data: never read them before
     labels = await pg.locator("#settings-fields label").all_inner_texts()
     helps = await pg.locator("#settings-fields .setting-help").count()
     check(bool(labels) and all(len(t) <= 40 and "calibrated" not in t.lower() and "measured" not in t.lower() for t in labels) and helps == len(labels),
