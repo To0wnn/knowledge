@@ -36,7 +36,8 @@ from a phone. The pc side runs in the companion ([companion.md](companion.md)).
   guest may write it, and `knowledge_chats` / `knowledge_chat_read` / `knowledge_chat_close` reach only the chats on that pc every guest in it may steer (their own, taken over or joined), never the owner's other chats. Under use it never runs YOLO: the work item carries `guest` and the companion (one
   that reports `guests: true`, else the start is refused) runs it with every tool call asked. **Use with YOLO**
   (`yolo`, the owner types YOLO to give it) adds `guest_yolo`, so the pc's own YOLO switch counts as for the owner's
-  chats; a change of mode ends that person's live agents there once (`end` in the poll), so the next turn runs the
+  chats; **YOLO and admin** (`admin`, typed ADMIN) also adds `guest_admin`: the pc's admin rights when its owner switched them on
+  ([companion.md](companion.md), Admin rights for chats); a change of mode ends that person's live agents there once (`end` in the poll), so the next turn runs the
   new way. It runs as the owner on that pc, on
   the owner's agent subscription and token. The owner sees it in their own list ("by <person>"), can stop and approve
   it, and the admin hears on Matrix when someone starts one on an admin's pc. Taking it back (Off), the person leaving

@@ -6,6 +6,7 @@ from where the old one got to.
     chat_host.py <dir>     <dir>/cmd.json {argv, cwd}; writes <dir>/pid, <dir>/out, <dir>/err and, at the end, <dir>/exit
 
 <dir>/close (made by the companion) closes the agent's stdin after every line written before it, so the agent ends.
+<dir>/kill stops the agent and what it started at once: an elevated host (admin.py) cannot be stopped by the companion.
 """
 import json
 import os
@@ -25,6 +26,13 @@ def main(d: Path):
     (d / "pid").write_text(str(p.pid), encoding="utf-8")
     pos, closed = 0, False
     while p.poll() is None:
+        if (d / "kill").exists():
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True, timeout=30)
+            else:
+                p.kill()
+            p.wait(30)
+            break
         if not closed:
             ending = (d / "close").exists()  # looked at first: every line written before it still goes in
             try:

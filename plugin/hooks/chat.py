@@ -34,6 +34,7 @@ from pathlib import Path
 HOOKS = Path(__file__).resolve().parent
 sys.path.insert(0, str(HOOKS))
 import workers  # noqa: E402
+import admin as admin_rights  # noqa: E402
 
 RUNNING: dict = {}  # chat id -> {pid, ident, stop, allow, folder}: the turns this companion runs now
 WAITS: dict = {}  # approval id -> {chat, done (Event), decision, by, expired}: asks waiting for the owner
@@ -916,6 +917,7 @@ def adopt(post, log) -> int:
             s = None
         try:
             h = json.loads((d / "host.json").read_text(encoding="utf-8"))
+            h = {**h, "dir": str(d)}
         except (OSError, ValueError):
             h = {}
         alive = bool(h) and not (d / "exit").exists() and workers.running(h)
@@ -996,9 +998,30 @@ class Hosted:
     process group (Windows: out of the companion's job), so a companion restart leaves it running; else an agent a
     companion before this one started, read on from `offset`. The host is the process: stopping it stops the agent."""
 
-    def __init__(self, d: Path, cmd=None, cwd: str = "", env=None, offset: int = 0):
-        self.d, self.host = d, None
-        if cmd is not None:
+    def __init__(self, d: Path, cmd=None, cwd: str = "", env=None, offset: int = 0, admin: bool = False):
+        self.d, self.host, self.admin = d, None, admin
+        if cmd is not None and admin:  # Windows: started elevated by the admin task (admin.py), which writes host.json
+            d.mkdir(parents=True)
+            (d / "cmd.json").write_text(json.dumps({"argv": cmd, "cwd": cwd}), encoding="utf-8")
+            admin_rights.ask_host(d, [sys.executable, str(HOOKS / "chat_host.py"), str(d)], cwd, dict(env or os.environ))
+            for _ in range(600):
+                if (d / "host.json").exists():
+                    break
+                time.sleep(0.05)
+            try:
+                h = json.loads((d / "host.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                (d / "admin.req").unlink(missing_ok=True)
+                raise RuntimeError("the admin task did not start the chat (is admin still on? see the companion page)")
+            self.pid, self.ident = h["pid"], h["ident"]
+            for _ in range(600):
+                if (d / "pid").exists() or not workers.running(self.kill_rec()):
+                    break
+                time.sleep(0.05)
+            if not (d / "pid").exists():
+                workers.kill(self.kill_rec(), hard=True)
+                raise RuntimeError(f"the chat host did not start the agent: {self.err_tail() or 'no output'}")
+        elif cmd is not None:
             d.mkdir(parents=True)
             (d / "cmd.json").write_text(json.dumps({"argv": cmd, "cwd": cwd}), encoding="utf-8")
             run = lambda **kw: subprocess.Popen([sys.executable, str(HOOKS / "chat_host.py"), str(d)], cwd=cwd or None, env=env,
@@ -1022,12 +1045,16 @@ class Hosted:
                     break
                 time.sleep(0.05)
             if not (d / "pid").exists():
-                workers.kill({"pid": self.pid, "ident": self.ident}, hard=True)
+                workers.kill(self.kill_rec(), hard=True)
                 raise RuntimeError(f"the chat host did not start the agent: {self.err_tail() or 'no output'}")
         else:
             h = json.loads((d / "host.json").read_text(encoding="utf-8"))
-            self.pid, self.ident = h["pid"], h["ident"]
+            self.pid, self.ident, self.admin = h["pid"], h["ident"], bool(h.get("admin"))
         self.stdin, self.stdout = HostIn(d), HostOut(self, offset)
+
+    def kill_rec(self) -> dict:
+        """What workers.kill needs to stop this host (an elevated one is told to stop itself)."""
+        return {"pid": self.pid, "ident": self.ident, **({"admin": True, "dir": str(self.d)} if self.admin else {})}
 
     def poll(self):
         if self.host is not None:
@@ -1045,7 +1072,7 @@ class Hosted:
         if time.time() - getattr(self, "checked", 0) < 2:
             return None
         self.checked = time.time()
-        return None if workers.running({"pid": self.pid, "ident": self.ident}) else -1
+        return None if workers.running(self.kill_rec()) else -1
 
     def wait(self, timeout: float | None = None) -> int:
         end = None if timeout is None else time.time() + timeout
@@ -1089,9 +1116,12 @@ class Live:
         env = {**os.environ, "KNOWLEDGE_CHAT": self.cid, "KNOWLEDGE_ASKS": str(workers.ASKS / f"{workers.safe(self.cid)}.txt")}
         if item.get("reader"):
             env["CLAUDE_CODE_SUBAGENT_MODEL"] = str(item["reader"])
-        self.p = Hosted(LIVE_DIR / f"{self.cid}-{secrets.token_hex(4)}", cmd, self.folder, env if yolo else workers.git_safe_env(env))
+        if self.admin is False:  # admin is on here, not for this chat (a guest's): it may not raise its rights (Linux)
+            cmd = admin_rights.no_raise(cmd)
+        self.p = Hosted(LIVE_DIR / f"{self.cid}-{secrets.token_hex(4)}", cmd, self.folder, env if yolo else workers.git_safe_env(env),
+                        admin=bool(self.admin) and os.name == "nt")
         # known to the companion for its whole life: its approvals (also a background subagent's between turns)
-        self.rec = RUNNING[self.cid] = {"pid": self.p.pid, "ident": self.p.ident, "stop": False, "folder": self.folder,
+        self.rec = RUNNING[self.cid] = {**self.p.kill_rec(), "stop": False, "folder": self.folder,
                                         "st": self.st, "allow": [x for x in item.get("allow") or [] if isinstance(x, dict)], "live": True}
         try:
             self.started()
@@ -1111,6 +1141,7 @@ class Live:
     def setup(self, item: dict, post, log, yolo: bool):
         self.cid, self.agent, self.folder = item["chat"], item["agent"], item.get("folder", "")
         self.post, self.log, self.yolo, self.pick = post, log, yolo, choice(item)
+        self.admin = item.get("admin")  # None: admin is off on this pc; True/False: this chat may (not) have it (admin.py)
         self.asked = self.pick  # the chat's own choice ("" = default); pick may name the default (Codex)
         self.st = {"session": item.get("session") or ""}
         self.lock, self.buf, self.flushed, self.last = threading.Lock(), [], time.time(), time.time()
@@ -1137,7 +1168,7 @@ class Live:
 
     def live_state(self) -> dict:
         """What was written to the agent, kept at every write."""
-        return {"chat": self.cid, "agent": self.agent, "folder": self.folder, "yolo": self.yolo, "pick": list(self.pick),
+        return {"chat": self.cid, "agent": self.agent, "folder": self.folder, "yolo": self.yolo, "admin": self.admin, "pick": list(self.pick),
                 "asked": list(self.asked), "session": self.st["session"], "allow": list(self.rec.get("allow", [])),
                 "in": in_size(self.p.d), "written": self.written, "turn_open": self.turn_open, "busy": self.busy,  # a send sets them
                 "slash": sorted(x for x in self.slash if x > self.taken)}
@@ -1157,14 +1188,14 @@ class Live:
     def adopt(cls, d: Path, s: dict, post, log):
         """The agent a companion before this one ran, read on from where that one saved."""
         self = cls.__new__(cls)
-        self.setup({"chat": s["chat"], "agent": s["agent"], "folder": s["folder"], "session": s["session"]}, post, log, s["yolo"])
+        self.setup({"chat": s["chat"], "agent": s["agent"], "folder": s["folder"], "session": s["session"], "admin": s.get("admin")}, post, log, s["yolo"])
         self.pick, self.asked = tuple(s["pick"]), tuple(s["asked"])
         self.written, self.taken, self.turn_open, self.busy, self.subs = s["written"], s["taken"], s["turn_open"], s["busy"], set(s["subs"])
         self.bg, self.bg_out = dict(s.get("bg") or {}), dict(s.get("bg_out") or {})
         self.echoed, self.slash = bool(s.get("echoed")), set(s.get("slash") or [])
         self.st["bg"] = dict.fromkeys(self.bg, 1)  # their ends, read after the restart, still match
         self.p = Hosted(d, offset=s["offset"])
-        self.rec = RUNNING[self.cid] = {"pid": self.p.pid, "ident": self.p.ident, "stop": False, "folder": self.folder,
+        self.rec = RUNNING[self.cid] = {**self.p.kill_rec(), "stop": False, "folder": self.folder,
                                         "st": self.st, "allow": s.get("allow", []), "live": True}
         self.resumed(s, in_lines(d, s["in"]))
         threading.Thread(target=self.relist, daemon=True).start()  # off the restart: Codex waits for its answer
@@ -1794,7 +1825,7 @@ class AgyLive(CodexLive):
             self.buf.append(("info", "Stopped this step; your message goes in now (agy has no interrupt: a new agy takes the conversation on)."))
             self.flush()
         item = {"chat": self.cid, "agent": "agy", "folder": self.folder, "session": self.st["session"], "text": text,
-                "model": self.asked[0], "effort": self.asked[1], "allow": self.rec.get("allow", [])}
+                "model": self.asked[0], "effort": self.asked[1], "allow": self.rec.get("allow", []), "admin": self.admin}
         try:  # the same server turn goes on in the new process (made outside START_LOCK: its start may take a while)
             lv = AgyLive(item, self.post, self.log, self.yolo)
         except Exception as e:
@@ -1975,9 +2006,9 @@ def _start_live(item: dict, post, log, linked, yolo):
                 LIVE.pop(cid, None)
                 lv.close()
                 lv = None
-            if lv and lv.alive() and (lv.asked != choice(item) or lv.yolo != yolo(item["agent"])) and not lv.busy and not lv.turn_open:
+            if lv and lv.alive() and (lv.asked != choice(item) or lv.yolo != yolo(item["agent"]) or lv.admin != item.get("admin")) and not lv.busy and not lv.turn_open:
                 LIVE.pop(cid, None)
-                lv.close()  # another model, effort or YOLO: the next process starts with it, the conversation resumes
+                lv.close()  # another model, effort, YOLO or admin: the next process starts with it, the conversation resumes
                 item = {**item, "session": lv.st["session"] or item.get("session", "")}
                 lv = None
             if not (lv and lv.alive()):

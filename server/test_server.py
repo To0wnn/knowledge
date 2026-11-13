@@ -1602,7 +1602,14 @@ def share_contract(tmp, ck, fr, raw, er, et):
     http("POST", "/machine/chats/events", {"chat": g["id"], "events": [], "done": True}, token=fr, headers=pc)
     assert share("yolo")[0] == 200 and rows(er)[mid]["shared"] == {"garden": "yolo"}
     assert ui("/ui/api/chat/send", {"machine": mid, "id": g["id"], "text": "go"}, er)[0] == 200
-    assert {w["chat"]: w for w in poll()["work"]}[g["id"]]["guest_yolo"] is True  # the pc's own YOLO switch counts
+    w = {w["chat"]: w for w in poll()["work"]}[g["id"]]
+    assert w["guest_yolo"] is True and "guest_admin" not in w, w  # the pc's own YOLO switch counts, its admin rights not
+    http("POST", "/machine/chats/events", {"chat": g["id"], "events": [], "done": True}, token=fr, headers=pc)
+    # YOLO and admin: also the pc's admin rights (when its owner switched them on there)
+    assert share("admin")[0] == 200 and rows(er)[mid]["shared"] == {"garden": "admin"}
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": g["id"], "text": "install it"}, er)[0] == 200
+    w = {w["chat"]: w for w in poll()["work"]}[g["id"]]
+    assert w["guest_yolo"] is True and w["guest_admin"] is True, w
     http("POST", "/machine/chats/events", {"chat": g["id"], "events": [], "done": True}, token=fr, headers=pc)
     assert share("use")[0] == 200 and ui("/ui/api/chat/send", {"machine": mid, "id": g["id"], "text": "careful"}, er)[0] == 200
     back = poll()  # the mode changed: her live agent ends once, the next turn runs without YOLO

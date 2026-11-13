@@ -201,6 +201,32 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   keeps the state before as `<ID>-undo`. An "Own branch" chat gets one at the start of each turn on `chat-<chat id>`, taken
   by the companion itself, and rolls back the same way ([chats.md](chats.md), Own branch).
 
+## Admin rights for chats
+
+- **One approval per pc, kept until switched off** (`plugin/hooks/admin.py`): the owner switches it on in the companion
+  page (Settings) or under Machines (types ADMIN). The pc then asks once, at the pc itself: the UAC prompt (Windows),
+  a polkit password dialog via `pkexec` or, without a desktop, `admin.py on` in a terminal (Linux), the admin password
+  via `osascript` (macOS). Nobody approving leaves it off and nothing waits on it: Windows' UAC says No by itself after
+  ~123 s; on a locked screen it waits for ever, so the companion stops waiting after 150 s (measured 13 Nov 2026 on
+  Windows 11 26H2).
+- **Windows:** the approval registers the task `Knowledge companion admin` (RunLevel HighestAvailable, this user, no
+  trigger), whose fixed action runs `~/.knowledge/companion/admin_launch.py` (rewritten by the companion after a plugin
+  update). An admin chat's host (`chat_host.py`) is started by that task: the companion writes `<live dir>/admin.req`
+  and runs the task (a process of the user may run it without a prompt, not change or delete it). The companion cannot
+  stop an elevated host itself: `workers.kill` leaves a `kill` file and the host stops its agent. Off: the task deletes
+  itself (`admin.off`), no second prompt. The user must be in Administrators.
+- **Linux, macOS:** the approval installs `/etc/sudoers.d/90-knowledge-admin-<user>` with `NOPASSWD: ALL` (checked with
+  `visudo -cf` first); agents run `sudo` as usual. sudo is tried only at on and off (every try is logged); between them
+  `~/.knowledge/companion/admin.on` says it is on. Off: `sudo -n rm`. Codex in its sandbox (no YOLO) cannot use sudo
+  (no_new_privs): it asks to run the command outside it.
+- **Guests:** a share "YOLO and admin" (`admin`) adds `guest_admin`; any other guest chat on a pc with admin on runs
+  without it: on Windows a normal (not elevated) host, on Linux under `setpriv --no-new-privs` (sudo cannot raise it).
+  macOS has no such switch: there every chat of the owner's user can sudo. This is no wall: a guest's chat runs as the
+  owner, so one that can run commands can still reach admin while it is on (`systemd-run --user sudo`, or the admin
+  task on Windows); the pages say so.
+- **The risk, said in the UI:** UAC is no security boundary and NOPASSWD sudo makes the user root, so while admin is on
+  every program of that user can become administrator, not only the agents. Uninstalling the companion switches it off.
+
 ## Hook failures
 
 - **Hook failures:** when one of the plugin's own hooks crashes or exits with an error, the device keeps it in
