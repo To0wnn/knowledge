@@ -1608,6 +1608,42 @@ def share_contract(tmp, ck, fr, raw, er, et):
     assert ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/x/garden"}, er)[0] == 409  # an older companion
     http("POST", "/machine/report", rep, token=fr, headers=pc)
     assert ui("/ui/api/chats", {"machine": mid, "agent": "codex", "folder": "/home/x/trade"}, er)[0] == 400  # not shared for trade
+    # Claude accounts on a shared pc: each person sees and uses only their own (the owner sees who added each); a
+    # guest adds their own there, never touches the pc's own sign-in; a main account per person.
+    accs = [{"id": "", "email": "alice@example.org", "plan": "max", "windows": [[30, "5h", 2e9]]}, {"id": "home", "kind": "token", "by": "alice"},
+            {"id": "erin", "kind": "apikey", "by": "erin", "spent": 1.5, "budget": 10}, {"id": "old", "kind": "login"}]
+    crep = {**rep, "agents": {**rep["agents"], "claude": {"accounts": accs}}}
+    answer = json.loads(http("POST", "/machine/report", crep, token=fr, headers=pc)[1])
+    assert answer["claude_main"] == "", answer
+    act = lambda action, args, h=ck: ui("/ui/api/machines/action", {"machine": mid, "action": action, "args": args}, h)[0]
+    theirs = rows(er)[mid]["agents"]["claude"]["accounts"]
+    assert [(a["id"], a["email"], a["mine"]) for a in theirs] == [("", "", True), ("erin", "", True)] and theirs[1]["spent"] == 1.5, theirs
+    assert not theirs[0]["windows"], "the owner's usage stays the owner's"
+    owner = {a["id"]: a["mine"] for a in rows(ck)[mid]["agents"]["claude"]["accounts"]}
+    assert owner == {"": True, "home": True, "erin": False, "old": True}, owner  # one added before owners were kept: the pc owner's
+    tok = "sk-ant-oat01-" + "e" * 40
+    assert act("claude_token", {"account": "home", "token": tok}, er) == 403, "someone else's account"
+    assert act("claude_login", {"account": ""}, er) == 403, "a guest never signs the pc's own in or out"
+    assert act("claude_token", {"account": "erin2", "token": tok}, er) == 200 and act("claude_remove", {"account": "erin"}, er) == 200
+    assert act("claude_token", {"account": "erin", "token": tok}) == 403 and act("claude_budget", {"account": "erin", "usd": 5}) == 403, \
+        "the owner does not sign in or budget a guest's account"
+    assert act("claude_remove", {"account": "erin"}) == 200, "but may take it off the pc"
+    assert act("claude_budget", {"account": "home", "usd": -1}) == 400 and act("claude_budget", {"account": "home", "usd": 25}) == 200
+    assert act("claude_logout", {"account": ""}) == 400 and act("claude_logout", {"account": "home", "confirm": "SIGN OUT"}) == 400
+    assert act("claude_logout", {"account": "", "confirm": "SIGN OUT"}) == 200 and act("claude_login", {"account": ""}) == 200
+    queued = [a for a in json.loads(http("GET", "/machine/actions", token=fr, headers=pc)[1])["actions"]]
+    assert [(a["action"], a["by"]) for a in queued][:2] == [("claude_token", "erin"), ("claude_remove", "erin")], queued
+    for a in queued:
+        http("POST", "/machine/actions/result", {"id": a["id"], "ok": True}, token=fr, headers=pc)
+    main = lambda acc, h=ck: ui("/ui/api/machines/claude-main", {"machine": mid, "account": acc}, h)[0]
+    assert main("home", er) == 400 and main("erin", er) == 200 and rows(er)[mid]["claudeMain"] == "erin"
+    assert main("erin") == 400 and main("home") == 200 and rows(ck)[mid]["claudeMain"] == "home" and rows(er)[mid]["claudeMain"] == "erin"
+    assert json.loads(http("POST", "/machine/report", crep, token=fr, headers=pc)[1])["claude_main"] == "home", "the owner's main goes to the pc for its workers"
+    made = json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "claude", "folder": "/home/x/garden"}, er)[2])["chat"]
+    assert made["account"] == "erin", made  # a new chat starts on that person's main account
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": made["id"], "text": "hi", "account": "home"}, er)[0] == 400, "never another person's account"
+    assert main("") == 200 and rows(ck)[mid]["claudeMain"] == ""
+    http("POST", "/machine/report", rep, token=fr, headers=pc)
     # Files on a pc shared for use: only that project's folders, the request names the project for the companion, and
     # the owner's token answers it.
     files = lambda path, op="list": ui("/ui/api/files", {"machine": mid, "op": op, "path": path}, er)

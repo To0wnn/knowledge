@@ -281,6 +281,8 @@ def parse(agent: str, line: str, st: dict) -> list:
         if t == "assistant" and not e.get("parent_tool_use_id") and isinstance((e.get("message") or {}).get("usage"), dict):
             u = e["message"]["usage"]  # the main agent's context now: what it sent for this step
             st["ctx"] = tokens(u) - int(u.get("output_tokens") or 0)
+        if t == "result" and st.get("account") and isinstance(e.get("total_cost_usd"), (int, float)):
+            accounts.add_spend(st["account"], float(e["total_cost_usd"]))  # an API key's money (a subscription's is not counted)
         if t == "result" and isinstance(e.get("usage"), dict):
             out.append(usage(tokens=tokens(e["usage"]), **({"ctx": st["ctx"]} if st.get("ctx") else {})))
         if t == "rate_limit_event":  # the account's usage as of this turn: the companion's limit chip and worker cap

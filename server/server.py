@@ -3249,7 +3249,9 @@ def shared_row(mid: str, m: dict, shared: dict, now: float) -> dict:
     linked = [f for f in (comp.get("folders") or {}).get("linked", []) if f.get("project") in use]
     agents = sorted(comp.get("agents") or {}) if use else []
     return {"id": mid, "label": m.get("label", mid), "at": m.get("at", 0), "online": now - m.get("at", 0) < ONLINE, "tokens": [],
-            "own": False, "mine": False, "shared": shared, "agents": {},
+            "own": False, "mine": False, "shared": shared,
+            "agents": {"claude": {"accounts": accs}} if (accs := claude_accounts_for(m, device.get().get("user", ""), False) if "claude" in agents else []) else {},
+            "claudeMain": claude_main_of(mid, device.get().get("user", ""), accs),
             "workers": [w for w in comp.get("workers", []) if w.get("project") in use],
             "companion": {"version": comp.get("version"), "token": comp.get("token"), "live": comp.get("live"), "guests": comp.get("guests"), "agents": agents,
                           "folders": {"linked": linked},
@@ -3307,8 +3309,9 @@ def machine_rows() -> list[dict]:
                      "actions": [{**x, "args": hide_secrets(x.get("args") or {})} for x in queue.get(mid, [])[-10:]]})
         if rows[-1]["companion"] and not rows[-1]["own"]:  # a raw command that waits is its owner's, also for an admin
             rows[-1]["companion"].pop("asks", None)
-        if not rows[-1]["own"] and "claude" in agents:  # who is signed in there, and a sign-in link, are its owner's only
-            agents["claude"].pop("accounts", None)
+        if "claude" in agents:  # who is signed in there and a sign-in link: each person sees only their own
+            agents["claude"]["accounts"] = accs = claude_accounts_for(m, dev.get("user", ""), rows[-1]["own"])
+            rows[-1]["claudeMain"] = claude_main_of(mid, dev.get("user", ""), accs)
         if rows[-1]["mine"]:  # whom its owner shared it with, per project (Machines: Share)
             rows[-1]["shares"] = (all_shares.get(mid) or {}).get("projects", {})
     for n, cfg in tokens.items():  # plugins before 0.15.0: one row per token, from clients.json
@@ -6655,8 +6658,30 @@ def report_accounts(v) -> list:
                     "kind": a["kind"] if a.get("kind") in ("login", "token", "apikey") else "", "error": str(a.get("error") or "")[:300],
                     # the sign-in page of Claude Code's own OAuth: opened by the owner's browser
                     **({"login": login} if login.startswith(("https://claude.com/", "https://claude.ai/")) and len(login) < 2000 else {}),
-                    "windows": report_windows(a.get("windows"))})
+                    "windows": report_windows(a.get("windows")), "by": str(a.get("by") or "")[:80], "main": a.get("main") is True,
+                    # an API key's money this month (Claude Code's total_cost_usd) and the budget its owner set
+                    **{k: round(float(a[k]), 4) for k in ("spent", "budget") if isinstance(a.get(k), (int, float)) and not isinstance(a[k], bool) and 0 <= a[k] < 1e7}})
     return out
+
+
+CLAUDE_MAIN_FILE = ADMIN_DIR / "claude_main.json"  # {machine: {person: account}}: the Claude account a person's chats there start on
+
+
+def claude_accounts_for(m: dict, user: str, own_pc: bool) -> list:
+    """The Claude accounts of pc record m as this person may see them: the pc's owner all (who added each, "mine" on
+    their own); anyone else the pc's own sign-in without who it is, plus the accounts they added themselves."""
+    accs = ((m.get("companion") or {}).get("agents") or {}).get("claude", {}).get("accounts") or []
+    mine = lambda a: a["id"] == "" or a.get("by") == user or (own_pc and not a.get("by"))
+    if own_pc:
+        return [{**a, "mine": mine(a)} for a in accs]
+    return [{"id": "", "email": "", "plan": "", "kind": "", "error": "", "windows": [], "by": "", "main": False, "mine": True, "pc": True}
+            if a["id"] == "" else {**a, "mine": True} for a in accs if mine(a)]
+
+
+def claude_main_of(mid: str, user: str, accs: list) -> str:
+    """This person's main Claude account on pc mid; "" (the pc's own sign-in) when none or no longer theirs."""
+    got = (read_json(CLAUDE_MAIN_FILE, {}).get(mid) or {}).get(user, "")
+    return got if any(a["id"] == got and a.get("mine") for a in accs) else ""
 
 
 def report_windows(v) -> list:
@@ -6686,10 +6711,20 @@ def action_args(action: str, args: dict) -> dict:
                 **({"undo": True} if chat and action == "rollback" and args.get("undo") is True else {})}
     if action == "trust_hooks":
         return {"agent": agent()}
-    if action in ("claude_login", "claude_code", "claude_token", "claude_key", "claude_remove"):  # an extra Claude account on the pc (accounts.py)
-        if not CLAUDE_ACCOUNT.fullmatch(str(args.get("account", ""))):
+    if action in ("claude_login", "claude_code", "claude_token", "claude_key", "claude_remove", "claude_budget", "claude_logout"):  # Claude accounts (accounts.py)
+        own = action in ("claude_login", "claude_code", "claude_logout") and args.get("account", "") == ""  # the pc's own sign-in
+        if action == "claude_logout" and not own:
+            raise ValueError("Sign out is for the pc's own sign-in; Remove takes an extra account away")
+        if not own and not CLAUDE_ACCOUNT.fullmatch(str(args.get("account", ""))):
             raise ValueError("account must be a name of a-z, 0-9 and -, at most 31 characters")
-        out = {"account": args["account"]}
+        if action == "claude_logout" and args.get("confirm") != "SIGN OUT":
+            raise ValueError("Sign out needs the words SIGN OUT typed in the confirm dialog")
+        out = {"account": str(args.get("account", ""))}
+        if action == "claude_budget":
+            usd = args.get("usd")
+            if not isinstance(usd, (int, float)) or isinstance(usd, bool) or not 0 <= usd < 1_000_000:
+                raise ValueError("usd must be 0 (no budget) up to 1000000")
+            out["usd"] = round(float(usd), 2)
         if action == "claude_code":  # what claude.com shows after signing in; it only works with that pc's own sign-in run
             if not re.fullmatch(r"[\w#.~-]{8,512}", str(args.get("code", "")).strip()):
                 raise ValueError("paste the whole code the sign-in page shows")
@@ -6762,13 +6797,20 @@ async def ui_machine_action(request: Request):
     share = read_json(SHARES_FILE, {}).get(mid) or {}
     shared_merge = action == "merge" and bool(row) and not row["own"] and not args.get("chat") \
         and (row.get("shared") or {}).get(args.get("project")) in USES
-    by_owner = share_tokens(mid, read_json(MACHINES_FILE, {}).get(mid, {}), tokens, share.get("by", "")) if shared_merge else []
+    # a person a pc is shared with for use adds, signs in and removes their own Claude accounts there (never its own sign-in)
+    guest_account = action.startswith("claude_") and bool(row) and not row["own"] and args.get("account") != "" \
+        and any(x in USES for x in (row.get("shared") or {}).values())
+    if action.startswith("claude_") and args.get("account") and row:
+        have = next((a for a in claude_accounts_for(read_json(MACHINES_FILE, {}).get(mid) or {}, dev.get("user", ""), True) if a["id"] == args["account"]), None)
+        if have and not have["mine"] and not (row["own"] and action == "claude_remove"):  # the pc's owner may take any account off
+            return JSONResponse({"error": f"the Claude account {args['account']} on {row['label']} is someone else's: pick another name"}, status_code=403)
+    by_owner = share_tokens(mid, read_json(MACHINES_FILE, {}).get(mid, {}), tokens, share.get("by", "")) if shared_merge or guest_account else []
     steer = lambda n: n in tokens and (own_token(tokens[n], dev) or admin_update and agents_on(tokens[n]))
     if admin_update and not any(steer(n) for n in row["tokens"]):
         return JSONResponse({"error": REMOTE_OFF}, status_code=403)
-    if shared_merge and not by_owner:
+    if (shared_merge or guest_account) and not by_owner:
         return JSONResponse({"error": REMOTE_OFF}, status_code=403)
-    if not row or not (row["own"] or admin_update or shared_merge) or row.get("old"):
+    if not row or not (row["own"] or admin_update or shared_merge or guest_account) or row.get("old"):
         return JSONResponse({"error": REMOTE_OFF if row and row["mine"] and not row.get("old")
                              else "not a machine of your own tokens (with plugin 0.15.0 or newer)"}, status_code=403)
     if action == "restart":  # a worker that ended: start it again now, past the companion's RESTART_AFTER hold
@@ -6810,6 +6852,26 @@ async def ui_machine_action(request: Request):
     wake_machine(mid)
     audit("machine-action", f"{mid} {action} {json.dumps(hide_secrets(args))}")
     return JSONResponse({"ok": True, "id": item["id"]})
+
+
+@server.custom_route("/ui/api/machines/claude-main", methods=["POST"])
+async def ui_claude_main(request: Request):
+    """{machine, account}: this person's main Claude account on that pc ("" = the pc's own sign-in): their new chats
+    there start on it, and on their own pc its workers run under it (the next report tells the companion)."""
+    try:
+        b = await request.json()
+        mid, acc = str(b.get("machine", "")), str(b.get("account", ""))
+    except (ValueError, AttributeError):
+        return JSONResponse({"error": "send JSON {machine, account}"}, status_code=400)
+    row = next((r for r in await asyncio.to_thread(machine_rows) if r["id"] == mid), None)
+    if not row or not (row["own"] or any(x in USES for x in (row.get("shared") or {}).values())):
+        return JSONResponse({"error": "not a pc of yours or shared with you for use"}, status_code=403)
+    if acc and not any(a["id"] == acc and a.get("mine") for a in ((row.get("agents") or {}).get("claude") or {}).get("accounts") or []):
+        return JSONResponse({"error": f"{acc} is not a Claude account of yours on {row['label']}"}, status_code=400)
+    user = device.get().get("user", "")
+    await asyncio.to_thread(update_state, CLAUDE_MAIN_FILE, lambda d: d.setdefault(mid, {}).__setitem__(user, acc))
+    audit("claude-main", f"{mid} {user} {acc or '(own)'}")  # the owner's pc hears it in the answer to its next report (a minute)
+    return JSONResponse({"ok": True, "main": acc})
 
 
 @server.custom_route("/machine/projects", methods=["GET"])
@@ -7629,7 +7691,8 @@ async def ui_chats(request: Request):
     c = {"id": cid, "agent": agent, "folder": folder, "project": project, "title": "", "by": dev.get("user", ""), "created": now,
          "updated": now, "status": "idle", "session": "", "next": 0, "seen": 0, "events": [], "tokens": owned,
          # a guest always works in a worktree of its own: never in the owner's checkout, and its branch gets a Review card there
-         **({"worktree": True} if b.get("worktree") is True or guest else {}), **({"guest": True} if guest else {})}
+         **({"worktree": True} if b.get("worktree") is True or guest else {}), **({"guest": True} if guest else {}),
+         **({"account": row["claudeMain"]} if agent == "claude" and row.get("claudeMain") else {})}  # this person's main account there
     if guest:
         chat_add(c, "info", f"A chat on {row['label']}, shared with you for {project}: its owner sees it, "
                             + ("it runs with that pc's YOLO setting" if row["shared"][project] in YOLOS else "every tool call asks first (never YOLO)")
@@ -8248,7 +8311,7 @@ async def ui_chat_send(request: Request):
             pick = dict(zip(("model", "effort"), chat_choice(row, agent, str(b.get("model") or ""), str(b.get("effort") or ""))))
         if "account" in b:  # an extra Claude account on that pc ("" = its own); from this turn on
             acc = str(b.get("account") or "")
-            if acc and not (agent == "claude" and any(x["id"] == acc for x in ((row.get("agents") or {}).get("claude") or {}).get("accounts") or [])):
+            if acc and not (agent == "claude" and any(x["id"] == acc and x.get("mine") for x in ((row.get("agents") or {}).get("claude") or {}).get("accounts") or [])):
                 raise ValueError(f"{acc} is not a Claude account on {row['label']}")
             pick["account"] = acc
     except (ValueError, AttributeError, TypeError, PermissionError) as e:
@@ -9520,7 +9583,12 @@ async def machine_report(request: Request):
     # project names from before a rename, of the projects this token sees: the companion counts its folders and workers
     # under the new name (old .knowledge-project files stay as they are)
     aliases = {k: canon(k) for k in read_json(ALIASES_FILE, {}) if canon(k) in PROJECTS and in_scope(PROJECTS[canon(k)][1] + "/")}
-    return JSONResponse({"ok": True, "closed_chats": closed, "newest": (await asyncio.to_thread(plugin_latest) or ("",))[0],
+    # the owner's main Claude account there: its workers run under it (companion.claude_main)
+    m, cfg = read_json(MACHINES_FILE, {}).get(dev.get("machine", "")) or {}, read_json(TOKENS_FILE, {}).get(dev.get("name", ""), {})
+    # whose token this is: its owner, or for an admins' own device the admin who chose a main there
+    main = next((claude_main_of(dev["machine"], u, claude_accounts_for(m, u, True)) for u in (read_json(CLAUDE_MAIN_FILE, {}).get(dev.get("machine", "")) or {})
+                 if own_token(cfg, {"user": u, "admin": u in ADMINS})), "")
+    return JSONResponse({"ok": True, "closed_chats": closed, "newest": (await asyncio.to_thread(plugin_latest) or ("",))[0], "claude_main": main,
                          **({"github_token": gh} if gh else {}), **({"aliases": aliases} if aliases else {})})
 
 
