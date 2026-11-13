@@ -875,10 +875,15 @@ async def shell(browser, devices, secret: str) -> None:
         check("Gemini API key (AIzaSyAB…kkkk)" in aikey and "Change sign-in" in aikey and "g@example.org" in gwork and "30%" in gwork,
               f"Machines: an agy API key account, and a Google one with its usage {aikey} {gwork}")
         work = next(a for a in acc[0] if a.startswith("work"))
-        check("40%" in work and "Make main" in work and "$" not in work, f"Machines: an account shows its usage, and Make main {work}")
         api = next((a for a in acc[0] if a.startswith("cloud")), "")
-        check("$2.50 of $10" in api and "Budget" in api, f"Machines: an API key shows its budget {api}")
-        check(await pg.locator("#machines .mx-accounts .acc-bar").count() >= 2, "Machines: what is used shows as bars")
+        heads = await pg.evaluate("[...document.querySelectorAll('#machines .mx-meter-group')].map((g) => g.textContent)")
+        hw, ha = next((h for h in heads if h.startswith("work")), ""), next((h for h in heads if h.startswith("cloud")), "")
+        check("40%" in hw and "$2.50 of $10" in ha and "Make main" in work and "Budget" in api and "%" not in work and "$2.50" not in api,
+              f"Machines: each Claude account's usage and budget once, in the agent's head; its row keeps who and what to do {hw} {ha} {work} {api}")
+        check(await pg.locator("#machines .mx-accounts .acc-bar").count() >= 1, "Machines: a non-main agy account's usage shows as bars in its row")
+        rows = await pg.evaluate("[...document.querySelectorAll('#machines .mx-row > .mx-k')].map((x) => x.textContent.trim())")
+        check("Plugin" not in rows and "Hooks" not in rows and "Workers" not in rows,
+              f"Machines: no Plugin, Hooks or Workers rows that only repeat the pc's version or say all is well {rows[:30]}")
         if os.environ.get("KNOWLEDGE_SMOKE_SHOTS"):
             await pg.locator("#machines .mx-accounts").first.screenshot(path=os.path.join(os.environ["KNOWLEDGE_SMOKE_SHOTS"], "machines-accounts.png"))
         await pg.locator("#machines .mx-accounts button", has_text="Add account").first.click()

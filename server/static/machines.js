@@ -215,7 +215,7 @@ function meters(pcs, a) {
         for (const w of usageWindows(acc)) if (!rec.by[w[1]] || w[0] > rec.by[w[1]][0]) rec.by[w[1]] = w;
       }
     }
-    if (accMap.size > 1) {
+    if (accMap.size > 1 || [...accMap.values()].some((x) => x.kind === "apikey")) {
       for (const [id, acc] of [...accMap].sort((x, y) => y[1].isMain - x[1].isMain)) {
         const grp = el("div", "mx-meter-group"), head = el("div", "mx-meter-group-head");
         head.append(el("b", null, id || "own"));
@@ -597,7 +597,7 @@ function accountsCell(m, agent = "claude") {
     if (!mine) line.append(" ", val(`added by ${x.by || "?"}`, "muted"));
     const timing = accountTiming(x);
     if (timing) line.append(" ", val(timing, "muted"));
-    if (!x.pc && accountSignedIn(x) && (usageWindows(x).length || x.kind === "apikey")) line.append(accountBars(x));
+    // the head shows every signed-in Claude account's usage (and an API key's budget): not a second time here
     if (x.error) line.append(el("p", "machine-error", x.error));
     const acts = [];
     if (steer && mine && x.id !== main) {
@@ -692,7 +692,7 @@ function agyAccountsCell(m) {
     line.append(el("b", null, x.id || "own"), " ", val(who, !x.id || x.kind ? "" : "mx-diff"));
     if (mine && x.id === main) { const p = el("span", "pill", "main"); p.title = "Default account for workers and your new agy chats on this pc"; line.append(p); }
     if (!mine) line.append(" ", val(`added by ${x.by || "?"}`, "muted"));
-    if (mine && accountSignedIn(x) && usageWindows(x).length) line.append(accountBars(x));
+    if (mine && x.id !== main && accountSignedIn(x) && usageWindows(x).length) line.append(accountBars(x)); // the head shows the main one's
     if (x.error) line.append(el("p", "machine-error", x.error));
     const acts = [], busy = ["agy_login", "agy_code", "agy_key"].some((k) => pendingAction(m, k, (y) => y.account === x.id));
     if (steer && mine && x.id !== main) {
@@ -879,16 +879,16 @@ function compareTable(pcs, here, mine) {
     mark.setAttribute("aria-hidden", "true");
     name.append(mark, el("span", null, AGENT_NAME[a] || a));
     const guest = pcs.every((m) => !m.own && !(m.tokens || []).length); // a pc shared with you: only your own accounts there
-    if (!mine && !guest) name.append(el("small", "muted", "their account"));
     const head = mxRow("mx-agent", name, []);
     if (!guest) head.insertBefore(meters(pcs, a), head.lastChild);
     grid.append(head);
     if (guest) { if (a === "claude" || a === "agy") grid.append(row("", "Accounts", pcs.map((m) => accountsCell(m, a)))); continue; }
     grid.append(row("", "Version", pcs.map((m) => versionCell(m, a))));
-    grid.append(row("", "Plugin", pcs.map((m) => pluginCell(m, a))));
-    grid.append(row("", "Hooks", pcs.map((m) => hooksCell(m, a))));
+    // rows that would only repeat what the pc's head says ("Knowledge 0.43.x") or say all is well show once there is news
+    if (pcs.some((m) => m.agents?.[a] && m.agents[a].plugin !== m.companion?.version)) grid.append(row("", "Plugin", pcs.map((m) => pluginCell(m, a))));
+    if (pcs.some((m) => m.agents?.[a] && (m.agents[a].trusted !== true || recentError(m.agents[a])))) grid.append(row("", "Hooks", pcs.map((m) => hooksCell(m, a))));
     grid.append(row("", "YOLO", pcs.map((m) => yoloCell(m, a))));
-    grid.append(row("", "Workers", pcs.map((m) => workersCell(m, a))));
+    if (pcs.some((m) => (m.agents?.[a]?.workers || []).some((w) => w.status === "running"))) grid.append(row("", "Workers", pcs.map((m) => workersCell(m, a))));
     if (a === "claude" || a === "agy") grid.append(row("", "Accounts", pcs.map((m) => accountsCell(m, a))));
   }
   const ids = [...new Set(pcs.flatMap((m) => Object.keys(m.companion?.tools || {})))].sort((x, y) => {

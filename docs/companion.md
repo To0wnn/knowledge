@@ -50,7 +50,9 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   on token + machine, so one token on two pcs is two holders. The server keeps per machine and agent the sessions of
   the last two hours (project, held task) and what the machine's companion reports; the Tasks tab lists them under
   "Machines": online or "offline since", per agent its plugin, a red YOLO label, hooks trusted, usage limit (or
-  "unknown"), last hook error, workers and recent sessions. A person sees the machines of their own tokens; an admin
+  "unknown"), last hook error, workers and recent sessions. The Plugin, Hooks and Workers rows show only when there is
+  news (a plugin other than the pc's own Knowledge version, hooks not trusted or a hook error, a worker running), and
+  each account's usage shows once, in the agent's head (an agy account other than the main one also on its row). A person sees the machines of their own tokens; an admin
   all. A machine id belongs to the person (or the admins) whose token first reported it; another
   person's token on the same pc gets a machine record of its own and never sees or steers the first one. Plugins before 0.15 show as one "old plugin" row per token.
 

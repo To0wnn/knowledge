@@ -86,13 +86,14 @@ def seed() -> None:
                "path": "memory/project_wireguard.md", "old_string": "split tunnel.", "new_string": "split tunnel.\nKeys rotate yearly."}}}, bearer), "edit")
     assert '"isError":false' in body, body  # an edit of a homelab memo: Changes shows its lines added/removed
     pc = {**bearer, "X-Knowledge-Machine": MID, "X-Knowledge-Machine-Label": "smoke-pc"}
-    report = {"version": "0.21.1", "maxAgents": 4, "agents": {"codex": {}, "claude": {"models": [
+    ok_agent = {"plugin": "0.21.1", "trusted": True}  # as a healthy pc reports: no Plugin or Hooks row repeats it
+    report = {"version": "0.21.1", "maxAgents": 4, "agents": {"codex": {**ok_agent}, "claude": {**ok_agent, "models": [
         {"id": "opus", "name": "Opus", "efforts": ["low", "high"], "default": "high"}, {"id": "sonnet", "name": "Sonnet", "efforts": ["low"]}],
         "commands": [{"name": "compact", "description": "Clear history, keep a summary", "hint": ""}, {"name": "verify-done", "description": "Prove a task is done", "hint": ""}],
         "accounts": [{"id": "", "email": "me@example.org", "plan": "max_5x"}, {"id": "work", "kind": "token", "windows": [[40, "5h", time.time() + 3600]]},
                      {"id": "home", "kind": "login", "login": "https://claude.com/cai/oauth/authorize?code=true"},
                      {"id": "cloud", "kind": "apikey", "spent": 2.5, "budget": 10}]},
-        "agy": {"accounts": [{"id": "", "kind": "login"}, {"id": "gmail", "login": "https://accounts.google.com/o/oauth2/auth?client_id=x"},
+        "agy": {**ok_agent, "accounts": [{"id": "", "kind": "login"}, {"id": "gmail", "login": "https://accounts.google.com/o/oauth2/auth?client_id=x"},
                              {"id": "aikey", "kind": "apikey", "preview": "AIzaSyAB…kkkk"}, {"id": "gwork", "kind": "login", "email": "g@example.org", "windows": [[30, "Gemini 5h", time.time() + 3600]]}]}},
         "stats": {"bucket": 600, "total": {"ram": 32000, "vram": 12000},  # 24 h of load, with the pc off for a while
                   **{k: {"min": lo, "max": hi, "avg": (lo + hi) / 2, "now": lo, "series": [None if 40 < i < 60 else lo + (hi - lo) * (i * 7 % 13) / 13 for i in range(144)],
