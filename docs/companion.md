@@ -238,6 +238,8 @@ fixed remote actions and relays chats. Installing it is part of the client setup
     link in your browser, and pasting the code into the inline input and clicking Confirm saves the 1-year token. In a
     pty claude draws the link as an OSC 8 hyperlink (`ESC]8;;<url>BEL<text>`); the link is cut at the first control
     character, else the page gets a broken `state` and says "Sign-in did not complete".
+  - **✕ beside a waiting sign-in:** stops it (`claude_cancel`: the waiting claude ends, the link leaves the page);
+    the account stays as it was, so you can start over.
   - **Long-lived token / API key directly:** `sk-ant-oat01-…` from a terminal or `sk-ant-api03-…` Console key, pasted into
     Add account or the inline input. Given to a chat as `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`.
 - **How a chat uses it:** the model chip of a Claude chat gets an Account row (own first, each with what is left of

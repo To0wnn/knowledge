@@ -2181,6 +2181,8 @@ def run_action(a: dict) -> str:
     if act == "claude_login":  # the sign-in link goes to the page with the next report
         accounts.login(str(args.get("account", "")), by=str(a.get("by") or ""), setup=args.get("setup") is True)
         return f"{args.get('account')}: open the sign-in link under Machines, then paste the code there"
+    if act == "claude_cancel":
+        return accounts.cancel(str(args.get("account", "")))
     if act == "claude_code":
         return accounts.code(str(args.get("account", "")), str(args.get("code", "")))
     if act == "claude_token":
@@ -2393,7 +2395,7 @@ def live_loop():
         time.sleep(LIVE_EVERY)
 
 
-STATE_ACTIONS = {"claude_budget", "claude_logout", "claude_login", "claude_code", "claude_token", "claude_key", "claude_remove", "install_tool", "remove_tool", "tool_auto", "yolo", "admin", "workers_allowed", "max_agents", "link_folder", "unlink_folder", "trust_hooks", "stop_worker", "restart", "merge", "takeover", "archive_worker", "apply_models"}
+STATE_ACTIONS = {"claude_budget", "claude_cancel", "claude_logout", "claude_login", "claude_code", "claude_token", "claude_key", "claude_remove", "install_tool", "remove_tool", "tool_auto", "yolo", "admin", "workers_allowed", "max_agents", "link_folder", "unlink_folder", "trust_hooks", "stop_worker", "restart", "merge", "takeover", "archive_worker", "apply_models"}
 
 
 # ---------------------------------------------------------------- the page

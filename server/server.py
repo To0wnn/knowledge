@@ -6731,7 +6731,7 @@ def action_args(action: str, args: dict) -> dict:
                 **({"undo": True} if chat and action == "rollback" and args.get("undo") is True else {})}
     if action == "trust_hooks":
         return {"agent": agent()}
-    if action in ("claude_login", "claude_code", "claude_token", "claude_key", "claude_remove", "claude_budget", "claude_logout"):  # Claude accounts (accounts.py)
+    if action in ("claude_login", "claude_cancel", "claude_code", "claude_token", "claude_key", "claude_remove", "claude_budget", "claude_logout"):  # Claude accounts (accounts.py)
         own = action != "claude_remove" and args.get("account", "") == ""  # the pc's own: sign in or out, a token or key behind it, its budget
         if action == "claude_logout" and not own:
             raise ValueError("Sign out is for the pc's own sign-in; Remove takes an extra account away")

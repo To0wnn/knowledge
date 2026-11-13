@@ -1637,6 +1637,7 @@ def share_contract(tmp, ck, fr, raw, er, et):
     assert act("claude_budget", {"account": "home", "usd": -1}) == 400 and act("claude_budget", {"account": "home", "usd": 25}) == 200
     assert act("claude_logout", {"account": ""}) == 400 and act("claude_logout", {"account": "home", "confirm": "SIGN OUT"}) == 400
     assert act("claude_logout", {"account": "", "confirm": "SIGN OUT"}) == 200 and act("claude_login", {"account": ""}) == 200
+    assert act("claude_cancel", {"account": "home"}) == 200 and act("claude_cancel", {"account": ""}, er) == 403, "only the owner stops a sign-in"
     assert act("claude_token", {"account": "", "token": tok}) == 200 and act("claude_budget", {"account": "", "usd": 9}) == 200, \
         "the owner puts the pc's own on a long-lived token or key (behind its sign-in)"
     assert act("claude_token", {"account": "", "token": tok}, er) == 403 and act("claude_remove", {"account": ""}) == 400, \

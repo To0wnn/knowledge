@@ -344,6 +344,13 @@ def login(name: str, wait: float = 30, by: str = "", setup: bool = False) -> str
     return rec["url"]
 
 
+def cancel(name: str) -> str:
+    """Stop a waiting sign-in of account `name`: its link leaves the page, the account stays as it was."""
+    with LOCK:
+        _drop(name)
+    return f"{name or 'own'}: sign-in cancelled"
+
+
 def code(name: str, text: str, wait: float = 90) -> str:
     """The code from the sign-in page into the waiting `claude setup-token` or `auth login`; who is signed in now."""
     clean = text.strip()
@@ -668,6 +675,12 @@ def self_test():
         assert code("tok1", "good#code").startswith("tok1: long-lived token saved")
         assert {a["id"]: a for a in listing()}["tok1"]["kind"] == "token"
         remove("tok1")
+        login("tok3", setup=True)
+        p3 = LOGINS["tok3"]["p"]
+        assert cancel("tok3") == "tok3: sign-in cancelled" and "login" not in {a["id"]: a for a in listing()}["tok3"], \
+            "a cancelled sign-in leaves the page"
+        assert p3.wait(timeout=10) is not None and cancel("tok3"), "its claude stops; cancelling again is harmless"
+        remove("tok3")
         # pasting a token directly into code() saves it without waiting for claude
         assert code("tok2", "sk-ant-oat01-" + "t" * 40).startswith("tok2: long-lived token saved")
         assert {a["id"]: a for a in listing()}["tok2"]["kind"] == "token"

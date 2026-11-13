@@ -623,7 +623,11 @@ function accountsCell(m) {
       const restartBtn = machineButton(x.setup ? "Switch to long-lived token…" : "Sign in again", "Restart the sign-in procedure",
         () => machineAction(m, "claude_login", { account: x.id, setup: !!x.setup }), busy, "btn small quiet");
 
-      acts.push(a, inp, confirmBtn, restartBtn);
+      const stopBtn = machineButton("✕", "Cancel this sign-in and start over", () => machineAction(m, "claude_cancel", { account: x.id }),
+        busy || pendingAction(m, "claude_cancel", (y) => y.account === x.id), "btn small quiet");
+      stopBtn.setAttribute("aria-label", "Cancel sign-in");
+
+      acts.push(a, inp, confirmBtn, restartBtn, stopBtn);
     } else if (steer && (mine || (x.id === "" && m.own))) {
       const isLogin = !x.kind || x.kind === "login";
       const isSigned = x.email || x.kind;
