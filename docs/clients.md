@@ -146,7 +146,7 @@ broad job over subagents, have every finding refuted by a fresh verifier, report
 - **Project folder guard:** the same hook refuses a session the companion started (a web UI chat or a worker,
   YOLO included) an edit (Edit, Write, MultiEdit, NotebookEdit, a Codex patch, agy's edits) outside its project folder:
   its git checkout, for a linked worktree the main checkout too (not for a guest's chat), the agents' own working
-  folders (`AGENT_DIRS`: Claude's plans, projects, todos and tasks, Codex's memories, agy's brain, scratch and knowledge;
+  folders (`AGENT_DIRS`, measured with `tests/guard_dirs_scan.py`: Claude's plans, projects, todos, tasks and jobs, Codex's memories, agy's brain, scratch and knowledge;
   never their settings, hooks, plugins or skills, nor the knowledge home with the asks files and the companion's state,
   which would let a session switch the guard off) and the temp folder. Paths are resolved (`realpath`), so a symlink
   or junction in the project counts where it points. Elsewhere only where the pc's owner explicitly named the folder

@@ -113,7 +113,7 @@ def targets(agent: str, hook: dict) -> list:
 # what an agent itself writes with its edit tools in its own folders (plans, memory, todos, agy's artifacts); never
 # their settings, hooks, plugins or skills, nor the knowledge home (the asks file, the companion's state): a session
 # that could write those could switch this guard off
-AGENT_DIRS = (".claude/plans", ".claude/projects", ".claude/todos", ".claude/tasks", ".codex/memories",
+AGENT_DIRS = (".claude/plans", ".claude/projects", ".claude/todos", ".claude/tasks", ".claude/jobs", ".codex/memories",
               ".gemini/antigravity-cli/brain", ".gemini/antigravity-cli/scratch", ".gemini/antigravity-cli/knowledge")
 
 
@@ -229,7 +229,7 @@ def self_test():
         (wt / ".git").write_text(f"gitdir: {main / '.git' / 'worktrees' / 'c1'}\n")
         outer = Path(os.path.abspath(os.sep)) / "elsewhere-x" / "a.txt"  # not under the temp folder, which is allowed
         env = {"KNOWLEDGE_CHAT": "c1", "CLAUDE_PROJECT_DIR": str(wt / "sub")}
-        for ok in ("a.txt", str(wt / "b.py"), str(main / "c.md"), str(Path.home() / ".claude" / "plans" / "p.md")):
+        for ok in ("a.txt", str(wt / "b.py"), str(main / "c.md"), str(Path.home() / ".claude" / "plans" / "p.md"), str(Path.home() / ".claude" / "jobs" / "j1" / "tmp" / "x.py")):
             assert scope("claude", {"tool_input": {"file_path": ok}}, env) == "", f"inside: {ok}"
         for bad in (str(outer), "../" * 40 + "x.txt"):
             assert json.loads(scope("claude", {"tool_input": {"file_path": bad}}, env))["hookSpecificOutput"]["permissionDecision"] == "deny", bad
