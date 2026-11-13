@@ -389,7 +389,11 @@ def code(name: str, text: str, wait: float = 90) -> str:
         setup = rec.get("setup", False)
         if "master" in rec:
             try:
-                os.write(rec["master"], (clean + "\r").encode("utf-8"))  # claude's TUI reads raw keys: Enter is \r, \n does nothing
+                # claude's TUI reads raw keys: Enter is \r (\n does nothing), and a long code with \r in one write is
+                # taken as a paste that swallows the Enter, so the Enter goes on its own
+                os.write(rec["master"], clean.encode("utf-8"))
+                time.sleep(0.5)
+                os.write(rec["master"], b"\r")
             except OSError as e:
                 raise RuntimeError(f"the sign-in ended: {e}") from e
         else:
