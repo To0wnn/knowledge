@@ -1,6 +1,6 @@
 # Versions pinned on purpose: updates are a deliberate bump + rebuild, never a surprise.
 # uv as a stage of its own: Dependabot reads FROM lines
-FROM ghcr.io/astral-sh/uv:0.13.7@sha256:96f40d3904aad8d0bd010539001d36c8e2188b981e1334471a90c4a1d93bb490 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.8@sha256:5cc1805e2426484abca4ad46ea783bab281fdb225fd82d8ce6d66a81254bac85 AS uv
 FROM python:3.14.10-slim-trixie@sha256:af8a5aa14780025dbfbcfbc81bd8a91ebd87711dd5b0f48ed71090949dd7cb1d
 COPY --from=uv /uv /usr/local/bin/uv
 WORKDIR /app
