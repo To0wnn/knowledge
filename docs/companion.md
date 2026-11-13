@@ -317,7 +317,11 @@ fixed remote actions and relays chats. Installing it is part of the client setup
   `OPENAI_API_KEY` / `CODEX_API_KEY`. That folder links everything of `~/.codex` (`config.toml`, plugins, skills,
   `AGENTS.md`, `sessions` with the rollouts), so a thread resumes after a switch (tested on codex 0.169:
   `thread/resume` from such a home); its sign-in (`auth.json`), databases (`*.sqlite`: a linked one would get a second
-  `-wal` beside the link), logs and app-server daemon are its own. On Windows folders are junctions and files copies.
+  `-wal` beside the link), logs, app-server daemon and MCP sign-ins without a keyring (`.credentials.json`) are its
+  own. Shared on purpose: `models_cache.json` and `installation_id` (OpenAI sees one installation). MCP sign-ins in
+  the OS keyring are per server, so every account on the pc uses those. A sign-in that `config.toml` keeps in the
+  keyring (`cli_auth_credentials_store`) leaves no `auth.json`: codex ending well counts as signed in. On Windows
+  folders are junctions and files copies (a file another codex holds open keeps the account's older copy).
 - **Usage:** an extra ChatGPT account's 5-hour and weekly windows come from `account/rateLimits/read` of a
   `codex app-server` under its own `CODEX_HOME`, every 15 minutes; the pc's own from its newest rollout as before,
   skipping the rollouts of chats on an extra account (their threads are kept in `codex-accounts/.threads.json`), as

@@ -34,7 +34,8 @@ ROOT = token_store.KN_HOME / "codex-accounts"
 MAIN = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")  # the pc's own
 ID = accounts.ID
 INFO = accounts.INFO
-NOT_LINKED = {"auth.json", "log", "tmp", "app-server-control", "app-server-daemon", "shell_snapshots", "thread-writer-locks"}
+# .credentials.json: codex's MCP sign-ins (OAuth) when there is no keyring; with one they are per server, shared anyway
+NOT_LINKED = {"auth.json", ".credentials.json", "log", "tmp", "app-server-control", "app-server-daemon", "shell_snapshots", "thread-writer-locks"}
 AUTH_ENV = ("OPENAI_API_KEY", "CODEX_API_KEY")  # the pc's own, never passed to another account
 KEY_FORM = r"sk-[\w-]{20,300}"
 URL = re.compile(r"https://auth\.openai\.com/[^\s\x00-\x1f\x7f]+")
@@ -76,7 +77,10 @@ def sync(d: Path):
             if os.name == "nt":
                 a, b = src.stat(), dst.stat()
                 if (a.st_size, a.st_mtime_ns) != (b.st_size, b.st_mtime_ns):
-                    shutil.copy2(src, dst)
+                    try:
+                        shutil.copy2(src, dst)
+                    except OSError:  # shortcut: open in another codex (Windows locks it): its older copy serves this run
+                        pass
                 continue
             dst.unlink()
         if not (dst.exists() or accounts.is_link(dst)):
@@ -148,7 +152,10 @@ def status(d: Path) -> dict:
 
 
 def _drop(name: str):
-    rec = LOGINS.pop(name, None)
+    _kill(LOGINS.pop(name, None))
+
+
+def _kill(rec):
     if rec and rec["p"].poll() is None:
         if os.name == "nt":  # the .cmd shim's cmd.exe: its node child would go on
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(rec["p"].pid)], capture_output=True, timeout=30,
@@ -169,7 +176,9 @@ def login(name: str, wait: float = 30, by: str = "") -> str:
     new = not d.is_dir()
     sync(d)
     with LOCK:
-        _drop(name)
+        old = LOGINS.pop(name, None)
+    _kill(old)  # outside LOCK: a taskkill on Windows takes seconds
+    with LOCK:
         p = subprocess.Popen(command("login", "--device-auth"), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                              stderr=subprocess.STDOUT, env={**clean_env(), "CODEX_HOME": str(d)}, text=True,
                              encoding="utf-8", errors="replace",
@@ -203,7 +212,9 @@ def finished(name: str, rec: dict):
     """A device sign-in whose codex ended: signed in, or why not (kept for the page)."""
     rec["reader"].join(5)
     d = folder(name)
-    if rec["p"].returncode == 0 and status(d)["kind"]:
+    if not d.is_dir():  # removed meanwhile
+        return
+    if rec["p"].returncode == 0:  # signed in (into auth.json, or the keyring when config.toml keeps it there)
         accounts.write(d / INFO, {**accounts.info(d), "kind": "login", "error": "", "at": int(time.time())})
     elif rec["p"].returncode is not None and rec["p"].returncode >= 0:  # a cancel kills it (negative or taskkill's 1)
         said = next((x for x in reversed(rec["out"]) if x.strip()), "no answer")
@@ -212,10 +223,10 @@ def finished(name: str, rec: dict):
 
 def cancel(name: str) -> str:
     with LOCK:
-        rec = LOGINS.get(name)
+        rec = LOGINS.pop(name, None)
         if rec:
             rec["cancelled"] = True
-        _drop(name)
+    _kill(rec)  # outside LOCK: a taskkill on Windows takes seconds
     return f"{name}: sign-in cancelled"
 
 
@@ -226,7 +237,8 @@ def set_key(name: str, key: str, by: str = "") -> str:
     d = folder(name)
     sync(d)
     with LOCK:
-        _drop(name)
+        rec = LOGINS.pop(name, None)
+    _kill(rec)  # outside LOCK: a taskkill on Windows takes seconds
     r = subprocess.run(command("login", "--with-api-key"), input=key, capture_output=True, text=True, timeout=60,
                        env={**clean_env(), "CODEX_HOME": str(d)}, encoding="utf-8", errors="replace")
     if r.returncode != 0:
@@ -255,7 +267,8 @@ def remove(name: str) -> str:
     if not d.is_dir():
         raise RuntimeError(f"there is no Codex account {name} on this pc")
     with LOCK:
-        _drop(name)
+        rec = LOGINS.pop(name, None)
+    _kill(rec)  # outside LOCK: a taskkill on Windows takes seconds
     if (d / "auth.json").exists():
         try:
             subprocess.run(command("logout"), capture_output=True, timeout=30, env={**clean_env(), "CODEX_HOME": str(d)})
@@ -263,7 +276,7 @@ def remove(name: str) -> str:
             pass
     for p in d.iterdir():
         if accounts.is_link(p):
-            os.rmdir(p) if os.name == "nt" and p.is_dir() else os.unlink(p)  # a junction goes with rmdir, its target stays
+            accounts.unlink(p)
     shutil.rmtree(d)
     forget_threads(name)
     return f"{name}: removed"
@@ -301,19 +314,21 @@ def listing(now: float = 0, windows_of=None) -> list:
     """The accounts for the Machines list: the pc's own first, then each extra one with who added it, its sign-in,
     a device sign-in waiting (its link and code) and its usage windows (windows_of(name))."""
     now = now or time.time()
-    with LOCK:
-        for n, rec in list(LOGINS.items()):
-            if rec["p"].poll() is not None:
-                LOGINS.pop(n, None)
-                if not rec.get("cancelled"):
-                    finished(n, rec)
-            elif now - rec["at"] > LOGIN_TTL:
-                _drop(n)
+    with LOCK:  # taken off here, waited for and ended below: LOCK is never held over a wait (a chat start needs it)
+        ended = [(n, LOGINS.pop(n)) for n, rec in list(LOGINS.items()) if rec["p"].poll() is not None]
+        stale = [LOGINS.pop(n) for n, rec in list(LOGINS.items()) if now - rec["at"] > LOGIN_TTL]
+    for n, rec in ended:
+        if not rec.get("cancelled"):
+            finished(n, rec)
+    for rec in stale:
+        _kill(rec)
     win = lambda n: [list(w) for w in windows_of(n)] if windows_of else []
     out = [{"id": "", **status(MAIN), "windows": win("")}]
     for n in names():
         d, i = ROOT / n, accounts.info(ROOT / n)
         s = status(d)
+        if not s["kind"] and i.get("kind") == "login":  # signed in into the keyring: no auth.json to read
+            s["kind"] = "login"
         rec = LOGINS.get(n)
         out.append({"id": n, **s, "at": int(i.get("at") or 0), "error": str(i.get("error") or ""), "by": str(i.get("by") or ""),
                     "windows": win(n) if s["kind"] == "login" else [], **({"removing": True} if i.get("removing") else {}),
@@ -329,7 +344,7 @@ def self_test():
         THREADS = ROOT / ".threads.json"
         for sub in ("sessions/2026/11/14", "plugins", "skills", "log", "app-server-daemon"):
             (MAIN / sub).mkdir(parents=True)
-        for f in ("config.toml", "AGENTS.md", "auth.json", "auth.json.lock", "state_5.sqlite", "state_5.sqlite-wal", "history.jsonl"):
+        for f in ("config.toml", "AGENTS.md", "auth.json", "auth.json.lock", ".credentials.json", "state_5.sqlite", "state_5.sqlite-wal", "history.jsonl"):
             (MAIN / f).write_text("x", encoding="utf-8")
         for bad in ("", "Werk", "../x", "a/b", "x" * 32):
             try:
@@ -347,8 +362,8 @@ def self_test():
         sync(d)
         assert all((d / f).exists() for f in ("sessions", "plugins", "skills", "config.toml", "AGENTS.md", "history.jsonl")), \
             "config, plugins, skills and the sessions are shared"
-        assert not any((d / f).exists() for f in ("auth.json", "auth.json.lock", "state_5.sqlite", "state_5.sqlite-wal", "log", "app-server-daemon")), \
-            "no sign-in, database, log or daemon of the pc's own"
+        assert not any((d / f).exists() for f in ("auth.json", "auth.json.lock", ".credentials.json", "state_5.sqlite", "state_5.sqlite-wal", "log", "app-server-daemon")), \
+            "no sign-in (also not its MCP sign-ins), database, log or daemon of the pc's own"
         os.environ["OPENAI_API_KEY"] = "sk-own"
         assert "OPENAI_API_KEY" not in run_env("werk") and run_env("werk")["CODEX_HOME"] == str(d), "never the pc's own key"
         del os.environ["OPENAI_API_KEY"]
@@ -368,6 +383,8 @@ def self_test():
             "    time.sleep(float(open(os.path.join(d, 'wait')).read()) if os.path.exists(os.path.join(d, 'wait')) else 0.5)\n"
             "    if os.path.exists(os.path.join(d, 'deny')):\n"
             "        print('Error: device code expired'); sys.exit(1)\n"
+            "    if os.path.exists(os.path.join(d, 'keyring')):\n"
+            "        print('Successfully logged in'); sys.exit(0)\n"
             f"    json.dump({{'auth_mode': 'chatgpt', 'tokens': {{'id_token': 'h.{claims}.s'}}}}, open(os.path.join(d, 'auth.json'), 'w'))\n"
             "elif sys.argv[1:] == ['login', '--with-api-key']:\n"
             "    json.dump({'auth_mode': 'apikey', 'OPENAI_API_KEY': sys.stdin.read().strip()}, open(os.path.join(d, 'auth.json'), 'w'))\n"
@@ -397,6 +414,13 @@ def self_test():
         LOGINS["thuis"]["p"].wait(20)
         assert "device code expired" in {x["id"]: x for x in listing()}["thuis"]["error"], "a sign-in that fails says why"
         (folder("thuis") / "deny").unlink()
+        (folder("thuis") / "auth.json").unlink()
+        (folder("thuis") / "keyring").write_text("", encoding="utf-8")  # config.toml keeps sign-ins in the keyring
+        login("thuis")
+        LOGINS["thuis"]["p"].wait(20)
+        a = {x["id"]: x for x in listing()}["thuis"]
+        assert (a["kind"], a["error"]) == ("login", ""), ("a sign-in into the keyring is one too", a)
+        (folder("thuis") / "keyring").unlink()
         (folder("thuis") / "wait").write_text("30", encoding="utf-8")
         login("thuis")
         p = LOGINS["thuis"]["p"]

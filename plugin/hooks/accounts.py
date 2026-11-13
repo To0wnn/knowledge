@@ -73,6 +73,15 @@ def is_link(p: Path) -> bool:
     return stat.S_ISLNK(st.st_mode) or bool(getattr(st, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
 
 
+def unlink(p: Path):
+    """Remove a link (symlink or junction) and never what it points to; a junction whose target is gone is no dir to
+    is_dir() but takes rmdir all the same."""
+    try:
+        os.unlink(p)
+    except OSError:
+        os.rmdir(p)
+
+
 def link(src: Path, dst: Path):
     if os.name != "nt":
         os.symlink(src, dst)
@@ -560,7 +569,7 @@ def remove(name: str) -> str:
             pass
     for p in d.iterdir():
         if is_link(p):
-            os.rmdir(p) if os.name == "nt" and p.is_dir() else os.unlink(p)  # a junction goes with rmdir, its target stays
+            unlink(p)
     shutil.rmtree(d)
     _STATUS.pop(str(d), None)
     return f"{name}: removed"

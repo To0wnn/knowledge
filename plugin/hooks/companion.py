@@ -1061,10 +1061,24 @@ def codex_windows(name: str, now: float) -> list:
     own from its newest rollout of the last 15 min that is no extra account's chat, else asked the same way."""
     if name:
         return codex_rate_read(now, name) if codex_accounts.status(codex_accounts.folder(name))["kind"] == "login" else []
-    days, theirs = [time.localtime(now - d * 86400) for d in (0, 1)], codex_accounts.threads()
+    days, theirs = [time.localtime(now - d * 86400) for d in (0, 1)], {**codex_accounts.threads(), **codex_worker_threads()}
     files = [f for d in days for f in CODEX.glob(f"sessions/{d.tm_year:04d}/{d.tm_mon:02d}/{d.tm_mday:02d}/rollout-*.jsonl")
              if now - f.stat().st_mtime < 900 and not any(t in f.name for t in theirs)]
     return (agent_hooks.limits.codex_used(str(max(files, key=lambda f: f.stat().st_mtime)), now) if files else []) or codex_rate_read(now)
+
+
+def codex_worker_threads() -> dict:
+    """thread id -> account of the Codex workers on an extra account (their `codex exec --json` log says it first)."""
+    out = {}
+    for w in load("workers.json", {}).values():
+        if w.get("agent") == "codex" and w.get("account") and w.get("log"):
+            try:
+                with open(w["log"], encoding="utf-8", errors="replace") as f:
+                    if m := re.search(r'"thread_id"\s*:\s*"([\w-]{8,80})"', f.read(65536)):
+                        out[m.group(1)] = w["account"]
+            except OSError:
+                pass
+    return out
 
 
 def codex_listing(now: float) -> list:
@@ -1229,7 +1243,7 @@ def _codex_rate_ask(f, account: str = ""):
                     rl = (m.get("result") or {}).get("rateLimits") or {}
                     got = agent_hooks.limits.live([(agent_hooks.limits.label(v.get("windowDurationMins")), v.get("usedPercent"), v.get("resetsAt"))
                                                     for v in (rl.get("primary"), rl.get("secondary")) if isinstance(v, dict)], time.time())
-        except (OSError, ValueError, TypeError):
+        except (OSError, ValueError, TypeError, RuntimeError):  # RuntimeError: its account is being removed
             got = None
     try:
         write_json(f, {"at": time.time(), "windows": got or []})
@@ -3563,6 +3577,13 @@ def main(argv: list):
         calls.clear(); assert update_plugins()[0].startswith("knowledge companion: its checkout"), "the companion's own checkout is part of the update"
         globals()["update_own_checkout"] = real_own
         globals()["installed"], globals()["plugin_version"], self_update.run, globals()["keep_trusted"] = real
+        # a Codex worker on an extra account: its thread (from its log) is not the pc's own usage
+        wlog = STATE / "w-codex.log"
+        wlog.write_text('{"type":"thread.started","thread_id":"0199feed-0000-7000-8000-00000000beef"}\n', encoding="utf-8")
+        save("workers.json", {"p/C-9": {"id": "C-9", "agent": "codex", "account": "werk", "log": str(wlog)},
+                              "p/C-8": {"id": "C-8", "agent": "codex", "log": str(wlog)}})
+        assert codex_worker_threads() == {"0199feed-0000-7000-8000-00000000beef": "werk"}, codex_worker_threads()
+        save("workers.json", {})
         # an extra agy account's usage: its own token file, never the pc's own keyring or file
         real_tt = agy_accounts.token_text
         agy_accounts.token_text = lambda n: json.dumps({"token": {"access_token": f"tok-{n}", "expiry": "2099-01-01T00:00:00Z"}}) if n == "werk" else ""
