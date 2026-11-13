@@ -1623,6 +1623,8 @@ def share_contract(tmp, ck, fr, raw, er, et):
     assert owner == {"": True, "home": True, "erin": False, "old": True}, owner  # one added before owners were kept: the pc owner's
     tok = "sk-ant-oat01-" + "e" * 40
     assert act("claude_token", {"account": "home", "token": tok}, er) == 403, "someone else's account"
+    assert act("claude_key", {"account": "old", "key": "sk-ant-api03-" + "e" * 40}, er) == 403 and act("claude_remove", {"account": "old"}, er) == 403, \
+        "one from before owners were kept is the pc owner's: a guest cannot take it over by its name"
     assert act("claude_login", {"account": ""}, er) == 403, "a guest never signs the pc's own in or out"
     assert act("claude_token", {"account": "erin2", "token": tok}, er) == 200 and act("claude_remove", {"account": "erin"}, er) == 200
     assert act("claude_token", {"account": "erin", "token": tok}) == 403 and act("claude_budget", {"account": "erin", "usd": 5}) == 403, \
@@ -1642,6 +1644,15 @@ def share_contract(tmp, ck, fr, raw, er, et):
     made = json.loads(ui("/ui/api/chats", {"machine": mid, "agent": "claude", "folder": "/home/x/garden"}, er)[2])["chat"]
     assert made["account"] == "erin", made  # a new chat starts on that person's main account
     assert ui("/ui/api/chat/send", {"machine": mid, "id": made["id"], "text": "hi", "account": "home"}, er)[0] == 400, "never another person's account"
+    turn_acc = lambda: [w.get("account") for w in poll()["work"] if w["chat"] == made["id"]]
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": made["id"], "text": "hi"}, er)[0] == 200 and turn_acc() == ["erin"], "her turn on her account"
+    http("POST", "/machine/chats/events", {"chat": made["id"], "events": [], "done": True}, token=fr, headers=pc)
+    gone = {**crep, "agents": {**crep["agents"], "claude": {"accounts": [a for a in accs if a["id"] != "erin"] + [{"id": "erin", "kind": "apikey", "by": "mallory"}]}}}
+    http("POST", "/machine/report", gone, token=fr, headers=pc)
+    assert ui("/ui/api/chat/send", {"machine": mid, "id": made["id"], "text": "again"}, er)[0] == 200 and turn_acc() == [""], \
+        "an account of that name added by someone else since: the turn runs on the pc's own sign-in, never on theirs"
+    http("POST", "/machine/chats/events", {"chat": made["id"], "events": [], "done": True}, token=fr, headers=pc)
+    http("POST", "/machine/report", crep, token=fr, headers=pc)
     assert main("") == 200 and rows(ck)[mid]["claudeMain"] == ""
     http("POST", "/machine/report", rep, token=fr, headers=pc)
     # Files on a pc shared for use: only that project's folders, the request names the project for the companion, and

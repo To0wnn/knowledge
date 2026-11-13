@@ -3218,7 +3218,8 @@ def take_over(args: dict, tok: str) -> str:
         session = worker_session_id(w)
         if not session:
             raise RuntimeError("its session id is unknown (it made no step yet); it was stopped: start it again or chat in its folder")
-        r = server("POST", "/machine/chats/adopt", tok, {"worker": key, "started": w.get("started"), "agent": w["agent"], "folder": w["cwd"], "session": session})
+        r = server("POST", "/machine/chats/adopt", tok, {"worker": key, "started": w.get("started"), "agent": w["agent"], "folder": w["cwd"], "session": session,
+                                                       **({"account": w["account"]} if w.get("account") else {})})  # it resumes under the account it ran on
         with LOCK:
             ws = load("workers.json", {})
             if key in ws:

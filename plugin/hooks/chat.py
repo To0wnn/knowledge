@@ -282,7 +282,11 @@ def parse(agent: str, line: str, st: dict) -> list:
             u = e["message"]["usage"]  # the main agent's context now: what it sent for this step
             st["ctx"] = tokens(u) - int(u.get("output_tokens") or 0)
         if t == "result" and st.get("account") and isinstance(e.get("total_cost_usd"), (int, float)):
-            accounts.add_spend(st["account"], float(e["total_cost_usd"]))  # an API key's money (a subscription's is not counted)
+            # an API key's money: total_cost_usd is the whole process so far (measured, claude 2.1.323: two turns gave
+            # 0.00061 then 0.00072), so only what this turn added; a subscription's is not counted (accounts.add_spend)
+            cost = float(e["total_cost_usd"])
+            accounts.add_spend(st["account"], cost - st.get("cost_seen", 0.0) if cost >= st.get("cost_seen", 0.0) else cost)
+            st["cost_seen"] = cost
         if t == "result" and isinstance(e.get("usage"), dict):
             out.append(usage(tokens=tokens(e["usage"]), **({"ctx": st["ctx"]} if st.get("ctx") else {})))
         if t == "rate_limit_event":  # the account's usage as of this turn: the companion's limit chip and worker cap
@@ -1178,7 +1182,7 @@ class Live:
         still unanswered holds the place: the new companion reads its request again and asks again."""
         o = self.p.stdout
         at = o.end if o.end and threading.get_ident() == getattr(self, "reader", None) else o.offset
-        return {"offset": min([at, *self.asking.values()]), "taken": self.taken, "subs": sorted(self.subs), "bg": dict(self.bg), "echoed": self.echoed,
+        return {"offset": min([at, *self.asking.values()]), "taken": self.taken, "cost_seen": self.st.get("cost_seen", 0.0), "subs": sorted(self.subs), "bg": dict(self.bg), "echoed": self.echoed,
                 "bg_out": dict(self.bg_out)}
 
     def live_state(self) -> dict:
@@ -1210,6 +1214,7 @@ class Live:
         self.bg, self.bg_out = dict(s.get("bg") or {}), dict(s.get("bg_out") or {})
         self.echoed, self.slash = bool(s.get("echoed")), set(s.get("slash") or [])
         self.st["bg"] = dict.fromkeys(self.bg, 1)  # their ends, read after the restart, still match
+        self.st["cost_seen"] = float(s.get("cost_seen") or 0.0)  # read on from the offset: what was counted stays counted
         self.p = Hosted(d, offset=s["offset"])
         self.rec = RUNNING[self.cid] = {**self.p.kill_rec(), "stop": False, "folder": self.folder,
                                         "st": self.st, "allow": s.get("allow", []), "live": True}
@@ -2049,6 +2054,13 @@ def _start_live(item: dict, post, log, linked, yolo):
 
 
 def self_test():
+    spent, real_add = [], accounts.add_spend
+    accounts.add_spend = lambda name, usd: spent.append((name, round(usd, 6)))
+    st = {"account": "werk"}
+    for cost in (0.25, 0.75, 0.1):  # the third: a new process starts counting again
+        parse("claude", json.dumps({"type": "result", "total_cost_usd": cost}), st)
+    accounts.add_spend = real_add
+    assert spent == [("werk", 0.25), ("werk", 0.5), ("werk", 0.1)], spent
     assert account_of({"agent": "claude", "account": "werk"}) == "werk", "a Claude chat runs under the account it picked"
     assert account_of({"agent": "codex", "account": "werk"}) == "" and account_of({"agent": "claude", "account": "../x"}) == "", \
         "only Claude has accounts, and only by a plain name"

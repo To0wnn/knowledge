@@ -568,7 +568,8 @@ def claude_usage(log: str, now: float):
 
 
 def claude_cost(log: str) -> float:
-    """What a `claude -p --output-format stream-json` run cost: the sum of its results' total_cost_usd (one per turn)."""
+    """What a `claude -p --output-format stream-json` run cost: its last result's total_cost_usd, which counts the whole
+    process so far (measured on claude 2.1.323), so the highest one."""
     total = 0.0
     try:
         with open(log, "rb") as f:
@@ -579,7 +580,7 @@ def claude_cost(log: str) -> float:
                     except ValueError:
                         continue
                     if e.get("type") == "result" and isinstance(e.get("total_cost_usd"), (int, float)):
-                        total += float(e["total_cost_usd"])
+                        total = max(total, float(e["total_cost_usd"]))
     except OSError:
         pass
     return total
@@ -860,7 +861,7 @@ def self_test():
     assert claude_usage(f.name, now) == [(93.0, "5h", now + 60), (50.0, "7d", now + 600)]
     with open(f.name, "a", encoding="utf-8") as out:
         out.write('{"type":"result","total_cost_usd":0.25}\nnot json total_cost_usd\n{"type":"result","total_cost_usd":1.5}\n{"type":"assistant","total_cost_usd":9}\n')
-    assert claude_cost(f.name) == 1.75 and claude_cost(f.name + ".gone") == 0.0, "a worker's cost: its results only"
+    assert claude_cost(f.name) == 1.5 and claude_cost(f.name + ".gone") == 0.0, "a worker's cost: its last (highest) result only"
     os.unlink(f.name)
     print("ok")
 

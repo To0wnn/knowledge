@@ -6678,6 +6678,18 @@ def claude_accounts_for(m: dict, user: str, own_pc: bool) -> list:
             if a["id"] == "" else {**a, "mine": True} for a in accs if mine(a)]
 
 
+def chat_account(mid: str, c: dict, who: str) -> str:
+    """The Claude account a chat's turn runs on: the chat's choice only when it is still an account of the person whose
+    message it is (an account removed and added again by someone else, or a person who joined the chat, runs on the
+    pc's own sign-in instead)."""
+    acc = c.get("account", "") if c.get("agent") == "claude" else ""
+    if not acc or not who:
+        return ""
+    m, tokens = read_json(MACHINES_FILE, {}).get(mid) or {}, read_json(TOKENS_FILE, {})
+    own_pc = any(n in tokens and own_token(tokens[n], {"user": who, "admin": who in ADMINS}, steer=False) for n in m.get("tokens", {}))
+    return acc if any(a["id"] == acc and a["mine"] for a in claude_accounts_for(m, who, own_pc)) else ""
+
+
 def claude_main_of(mid: str, user: str, accs: list) -> str:
     """This person's main Claude account on pc mid; "" (the pc's own sign-in) when none or no longer theirs."""
     got = (read_json(CLAUDE_MAIN_FILE, {}).get(mid) or {}).get(user, "")
@@ -6801,9 +6813,12 @@ async def ui_machine_action(request: Request):
     guest_account = action.startswith("claude_") and bool(row) and not row["own"] and args.get("account") != "" \
         and any(x in USES for x in (row.get("shared") or {}).values())
     if action.startswith("claude_") and args.get("account") and row:
-        have = next((a for a in claude_accounts_for(read_json(MACHINES_FILE, {}).get(mid) or {}, dev.get("user", ""), True) if a["id"] == args["account"]), None)
-        if have and not have["mine"] and not (row["own"] and action == "claude_remove"):  # the pc's owner may take any account off
-            return JSONResponse({"error": f"the Claude account {args['account']} on {row['label']} is someone else's: pick another name"}, status_code=403)
+        # every account there, each "mine" as this person sees it: one without an owner (from before owners were kept)
+        # is the pc owner's, never a guest's, so a guest can neither sign it in nor take it over by its name
+        have = next((a for a in claude_accounts_for(read_json(MACHINES_FILE, {}).get(mid) or {}, "", True) if a["id"] == args["account"]), None)
+        mine = bool(have) and (have.get("by") == dev.get("user") and bool(dev.get("user")) or row["own"] and not have.get("by"))
+        if have and not mine and not (row["own"] and action == "claude_remove"):  # the pc's owner may take any account off
+            return JSONResponse({"error": f"that account name is taken on {row['label']}: pick another name"}, status_code=403)
     by_owner = share_tokens(mid, read_json(MACHINES_FILE, {}).get(mid, {}), tokens, share.get("by", "")) if shared_merge or guest_account else []
     steer = lambda n: n in tokens and (own_token(tokens[n], dev) or admin_update and agents_on(tokens[n]))
     if admin_update and not any(steer(n) for n in row["tokens"]):
@@ -8924,7 +8939,8 @@ async def machine_chats(request: Request):
                 for m in e.pop("live", []):  # a live chat's message while it works: into its running agent (now or force)
                     m = signed(c, m)
                     out["work"].append({"chat": cid, "agent": c["agent"], "folder": c["folder"], "session": c.get("session", ""),
-                                        "model": c.get("model", ""), "effort": c.get("effort", ""), "allow": c.get("allow", []), "account": c.get("account", ""),
+                                        "model": c.get("model", ""), "effort": c.get("effort", ""), "allow": c.get("allow", []),
+                                        "account": chat_account(mid, c, m.get("by") or c.get("by", "")),
                                         **({"worktree": True} if c.get("worktree") else {}), **extra, **m})
                 if e.get("steer"):  # Force: once to the companion, which parks it for the running turn's hook
                     s = e.pop("steer")
@@ -8938,7 +8954,7 @@ async def machine_chats(request: Request):
                     # the start context asks too, but a session without the plugin's start hook never sees it
                     msg = {**msg, "text": (msg.get("text") or "") + CHAT_TITLE_ASK.format(chat=cid)}
                 out["work"].append({"chat": cid, "agent": c["agent"], "folder": c["folder"], "session": c.get("session", ""),
-                                    "model": c.get("model", ""), "effort": c.get("effort", ""), "account": c.get("account", ""),
+                                    "model": c.get("model", ""), "effort": c.get("effort", ""), "account": chat_account(mid, c, msg.get("by") or c.get("by", "")),
                                     "allow": c.get("allow", []), **({"worktree": True} if c.get("worktree") else {}),
                                     **({"git": True} if c.get("close_after") else {}), **extra, **msg})
                 e["busy"] = True
@@ -9349,6 +9365,8 @@ async def machine_chat_adopt(request: Request):
     t = await asyncio.to_thread(read_json, f, None) or {}
     cid, now = secrets.token_hex(6), time.time()
     c = {"id": cid, "agent": agent, "folder": folder, "project": project, "title": f"{tid} (taken over from its worker)", "by": p["by"],
+         # the account the worker ran under: its session goes on there (checked again at every turn, chat_account)
+         **({"account": acc} if agent == "claude" and CLAUDE_ACCOUNT.fullmatch(acc := str(b.get("account") or "")) else {}),
          "created": now, "updated": now, "status": "idle", "session": session, "next": 0, "seen": 0, "events": [], "tokens": p["tokens"],
          "worker": key}
     for e in (t.get("events") or [])[-200:] if t.get("started") == p.get("started") else []:
@@ -9586,8 +9604,9 @@ async def machine_report(request: Request):
     # the owner's main Claude account there: its workers run under it (companion.claude_main)
     m, cfg = read_json(MACHINES_FILE, {}).get(dev.get("machine", "")) or {}, read_json(TOKENS_FILE, {}).get(dev.get("name", ""), {})
     # whose token this is: its owner, or for an admins' own device the admin who chose a main there
-    main = next((claude_main_of(dev["machine"], u, claude_accounts_for(m, u, True)) for u in (read_json(CLAUDE_MAIN_FILE, {}).get(dev.get("machine", "")) or {})
-                 if own_token(cfg, {"user": u, "admin": u in ADMINS})), "")
+    # (shortcut: an admins' own device shared by several admins takes the first of them by name; one admin per pc in practice)
+    main = next((claude_main_of(dev["machine"], u, claude_accounts_for(m, u, True)) for u in sorted(read_json(CLAUDE_MAIN_FILE, {}).get(dev.get("machine", "")) or {})
+                 if own_token(cfg, {"user": u, "admin": u in ADMINS}, steer=False)), "")
     return JSONResponse({"ok": True, "closed_chats": closed, "newest": (await asyncio.to_thread(plugin_latest) or ("",))[0], "claude_main": main,
                          **({"github_token": gh} if gh else {}), **({"aliases": aliases} if aliases else {})})
 
