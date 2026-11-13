@@ -250,16 +250,20 @@ def _drop(name: str):
     rec = LOGINS.pop(name, None)
     if not rec:
         return
-    if "master" in rec:
-        try:
-            os.close(rec["master"])
-        except OSError:
-            pass
     if rec["p"].poll() is None:
         if os.name == "nt":  # the .cmd shim's cmd.exe: its node child would go on
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(rec["p"].pid)], capture_output=True, timeout=30,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         rec["p"].kill()
+    if "master" in rec:  # after the kill: on macOS close() of a pty waits for its reader's read(), which only ends then
+        try:
+            rec["p"].wait(5)
+        except subprocess.TimeoutExpired:
+            pass
+        try:
+            os.close(rec["master"])
+        except OSError:
+            pass
 
 
 def owned(d: Path, by: str) -> dict:
